@@ -503,7 +503,11 @@ impl ResolvedProgram {
             .buf::<String>(m.recovered_files.len())
             .strs(&m.recovered_files);
         for ids in b.parenless_calls.values() {
-            r.buf::<al_syntax::ir::ExprId>(ids.len());
+            r.buf::<al_syntax::ir::ExprId>(ids.parenless.len());
+            r.buf::<(
+                al_syntax::ir::ExprId,
+                crate::program::resolve::full::BareVerdict,
+            )>(ids.bare.len());
         }
         r
     }

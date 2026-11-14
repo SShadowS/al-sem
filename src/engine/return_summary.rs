@@ -90,198 +90,133 @@ pub struct R4FReturnSummaryProjection {
 // Internal CFG-walker types
 // ---------------------------------------------------------------------------
 
-/// Reachability of a CFN subtree: can control flow past the end (`has_normal`)?
-/// Do ALL paths end in Error() (`all_error`)?
+/// Reachability of a CFN subtree: can a normal return happen (`has_normal`: an
+/// `exit`, or running off the end)? Do ALL paths end in an error (`all_error`)?
 #[derive(Debug, Clone, Copy)]
-struct SubtreeReach {
-    has_normal: bool,
-    all_error: bool,
+pub(crate) struct SubtreeReach {
+    pub(crate) has_normal: bool,
+    pub(crate) all_error: bool,
 }
 
-/// Walk a `PCFNNode` subtree and return its reachability.
-///
-/// EXACTLY mirrors al-sem's `walkSubtree` function, case by case.
-fn walk_subtree(node: &crate::program::body::features::PCFNNode) -> SubtreeReach {
-    match node.kind.as_str() {
-        "error" => SubtreeReach {
-            has_normal: false,
-            all_error: true,
-        },
+/// How control can leave a CFN subtree (ENG-80, spec §4.3). A sequence goes on only
+/// through `falls`; `returns` (an `exit`), `raises` and `leaves_loop` (`break`,
+/// `continue`, consumed by the innermost loop) end it. Before, a statement that may
+/// return early was read as plain fall-through, so `if C then exit; Error('x')` read
+/// as "every path raises".
+#[derive(Debug, Clone, Copy, Default)]
+struct Outcomes {
+    falls: bool,
+    returns: bool,
+    raises: bool,
+    leaves_loop: bool,
+}
 
-        "exit" => SubtreeReach {
-            has_normal: true,
-            all_error: false,
-        },
-
-        "op" | "call" | "other" => SubtreeReach {
-            has_normal: true,
-            all_error: false,
-        },
-
-        "block" => {
-            let children = node.children.as_deref().unwrap_or(&[]);
-            if children.is_empty() {
-                return SubtreeReach {
-                    has_normal: true,
-                    all_error: false,
-                };
-            }
-            for child in children {
-                let child_reach = walk_subtree(child);
-                if child_reach.all_error {
-                    return SubtreeReach {
-                        has_normal: false,
-                        all_error: true,
-                    };
-                }
-            }
-            SubtreeReach {
-                has_normal: true,
-                all_error: false,
-            }
-        }
-
-        "if" => {
-            let then_children = node.children.as_deref().unwrap_or(&[]);
-            let else_children = node.else_children.as_deref().unwrap_or(&[]);
-
-            let then_reach = if !then_children.is_empty() {
-                walk_subtree_list(then_children)
-            } else {
-                SubtreeReach {
-                    has_normal: true,
-                    all_error: false,
-                }
-            };
-
-            let else_reach = if !else_children.is_empty() {
-                walk_subtree_list(else_children)
-            } else {
-                SubtreeReach {
-                    has_normal: true,
-                    all_error: false,
-                }
-            };
-
-            SubtreeReach {
-                has_normal: then_reach.has_normal || else_reach.has_normal,
-                all_error: then_reach.all_error && else_reach.all_error,
-            }
-        }
-
-        "case" => {
-            let branches = node.children.as_deref().unwrap_or(&[]);
-            if branches.is_empty() {
-                return SubtreeReach {
-                    has_normal: true,
-                    all_error: false,
-                };
-            }
-
-            let has_else_branch = node
-                .else_children
-                .as_ref()
-                .map(|v| !v.is_empty())
-                .unwrap_or(false);
-
-            let mut all_branches_error = true;
-            let mut some_normal = false;
-
-            for branch in branches {
-                let reach = walk_subtree(branch);
-                if reach.has_normal {
-                    some_normal = true;
-                }
-                if !reach.all_error {
-                    all_branches_error = false;
-                }
-            }
-
-            if has_else_branch {
-                let else_reach = walk_subtree_list(node.else_children.as_deref().unwrap_or(&[]));
-                if else_reach.has_normal {
-                    some_normal = true;
-                }
-                if !else_reach.all_error {
-                    all_branches_error = false;
-                }
-            } else {
-                // No else → no-match path falls through normally.
-                some_normal = true;
-                all_branches_error = false;
-            }
-
-            SubtreeReach {
-                has_normal: some_normal,
-                all_error: all_branches_error,
-            }
-        }
-
-        "case-branch" => {
-            let body = node.children.as_deref().unwrap_or(&[]);
-            walk_subtree_list(body)
-        }
-
-        "while" | "for" | "foreach" => {
-            // Loop body may execute 0 times → conservatively falls through.
-            SubtreeReach {
-                has_normal: true,
-                all_error: false,
-            }
-        }
-
-        "repeat" => {
-            // Repeat-until: body always executes at least once.
-            let body = node.children.as_deref().unwrap_or(&[]);
-            let body_reach = walk_subtree_list(body);
-            if body_reach.all_error {
-                SubtreeReach {
-                    has_normal: false,
-                    all_error: true,
-                }
-            } else {
-                SubtreeReach {
-                    has_normal: true,
-                    all_error: false,
-                }
-            }
-        }
-
-        "try" => SubtreeReach {
-            has_normal: true,
-            all_error: false,
-        },
-
-        _ => {
-            // Unknown / unrecognised node kind — conservative fall-through.
-            SubtreeReach {
-                has_normal: true,
-                all_error: false,
-            }
+impl Outcomes {
+    const FALLS: Self = Self {
+        falls: true,
+        returns: false,
+        raises: false,
+        leaves_loop: false,
+    };
+    fn or(self, o: Self) -> Self {
+        Self {
+            falls: self.falls || o.falls,
+            returns: self.returns || o.returns,
+            raises: self.raises || o.raises,
+            leaves_loop: self.leaves_loop || o.leaves_loop,
         }
     }
 }
 
-/// Walk a list of siblings as a sequential block. Mirrors `walkSubtreeList`.
-fn walk_subtree_list(nodes: &[crate::program::body::features::PCFNNode]) -> SubtreeReach {
-    if nodes.is_empty() {
-        return SubtreeReach {
-            has_normal: true,
-            all_error: false,
+fn outcomes_of_list(nodes: &[crate::program::body::features::PCFNNode]) -> Outcomes {
+    let mut acc = Outcomes::FALLS;
+    for n in nodes {
+        if !acc.falls {
+            break;
+        }
+        let o = outcomes(n);
+        acc = Outcomes {
+            falls: o.falls,
+            ..acc.or(Outcomes { falls: false, ..o })
         };
     }
-    for node in nodes {
-        let reach = walk_subtree(node);
-        if reach.all_error {
-            return SubtreeReach {
-                has_normal: false,
-                all_error: true,
+    acc
+}
+
+fn outcomes(node: &crate::program::body::features::PCFNNode) -> Outcomes {
+    use crate::program::body::features::{FlowFact, PathHint};
+    let kids = node.children.as_deref().unwrap_or(&[]);
+    let only = |f: fn(&mut Outcomes)| {
+        let mut o = Outcomes::default();
+        f(&mut o);
+        o
+    };
+    match node.kind.as_str() {
+        "error" => only(|o| o.raises = true),
+        "exit" => only(|o| o.returns = true),
+        "break" | "continue" => only(|o| o.leaves_loop = true),
+        "block" | "case-branch" => outcomes_of_list(kids),
+        "if" => {
+            let branch = |b: &[_]| {
+                if b.is_empty() {
+                    Outcomes::FALLS
+                } else {
+                    outcomes_of_list(b)
+                }
             };
+            branch(kids).or(branch(node.else_children.as_deref().unwrap_or(&[])))
         }
+        "case" => {
+            // A `case` with no `else` branch may match nothing and fall through.
+            let all = kids
+                .iter()
+                .map(outcomes)
+                .fold(Outcomes::default(), Outcomes::or);
+            if kids.iter().any(|b| b.is_case_else) {
+                all
+            } else {
+                all.or(Outcomes::FALLS)
+            }
+        }
+        // A `while`/`for`/`foreach` body may not run; the loop takes its body's
+        // `break`/`continue`.
+        "while" | "for" | "foreach" => Outcomes {
+            leaves_loop: false,
+            ..outcomes_of_list(kids).or(Outcomes::FALLS)
+        },
+        // A `repeat` body runs at least once; a `break`/`continue` ends the loop.
+        "repeat" => {
+            let o = outcomes_of_list(kids);
+            Outcomes {
+                falls: o.falls || o.leaves_loop,
+                leaves_loop: false,
+                ..o
+            }
+        }
+        "other" if matches!(node.path_hint, Some(PathHint::AssertError)) => {
+            // `asserterror` traps the body's error: control goes on after it.
+            let o = outcomes_of_list(kids);
+            Outcomes {
+                falls: o.falls || o.raises,
+                raises: false,
+                ..o
+            }
+        }
+        "other" if matches!(node.flow.as_deref(), Some(FlowFact::With)) => outcomes_of_list(kids),
+        // A call, an operation, `try`, anything else: control goes on (conservative).
+        _ => Outcomes::FALLS,
     }
+}
+
+/// Walk a `PCFNNode` subtree and return its reachability (ENG-80: from [`outcomes`]).
+/// One walker for this module and `dep_artifact_l4` (they were two al-sem ports).
+pub(crate) fn walk_subtree(node: &crate::program::body::features::PCFNNode) -> SubtreeReach {
+    let o = outcomes(node);
+    // At the routine's top level a stray `break`/`continue` cannot occur; read as falls.
+    let normal = o.falls || o.returns || o.leaves_loop;
     SubtreeReach {
-        has_normal: true,
-        all_error: false,
+        has_normal: normal,
+        all_error: o.raises && !normal,
     }
 }
 
@@ -1000,9 +935,13 @@ mod tests {
     /// case with else where all branches (incl. else) error → allBranchesError true.
     #[test]
     fn walk_case_with_else_all_error() {
+        // The CFN's encoding: a case's `else` is its last `case-branch`, marked
+        // `is_case_else` (ENG-80: the old walker read `else_children`, which the CFN
+        // never fills, so a case never read as exhaustive).
         let branch = cfn_with_children("case-branch", vec![cfn_leaf("error")]);
-        let mut node = cfn_with_children("case", vec![branch]);
-        node.else_children = Some(vec![cfn_leaf("error")]);
+        let mut else_branch = cfn_with_children("case-branch", vec![cfn_leaf("error")]);
+        else_branch.is_case_else = true;
+        let node = cfn_with_children("case", vec![branch, else_branch]);
         let reach = walk_subtree(&node);
         assert!(
             reach.all_error,
@@ -1120,7 +1059,6 @@ mod tests {
                 syntax_kind: "procedure".to_string(),
             },
             declaration_start_line: 0,
-            dead_marks_trusted: false,
             identifier_references: vec![],
             unreachable_statements: vec![],
             has_branching: false,

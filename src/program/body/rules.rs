@@ -15,13 +15,13 @@
 //!
 //! 1. [`build_rule_drafts`] (assembly) walks the IR and gives one
 //!    [`RuleDraft`] per check. What is known from the syntax alone is decided
-//!    here: the condition parts, the message, and `stops` when the message is an
-//!    `ErrorInfo` (or not proven Text) or the check sits under `asserterror`.
-//! 2. [`settle_rules`] (after call resolution) decides the one input syntax
-//!    cannot: whether a bare `Error(...)` binds to the builtin or to a procedure
-//!    named `Error` (#288). It then drops the `not C` parts an earlier check
-//!    contributed when that earlier check may not stop, and gives the final
-//!    [`PRule`]s.
+//!    here: the condition parts, the message, and `stops`. An `Error` stops
+//!    exactly when the body walk's reading says it raises on every run
+//!    (`ir_walk::ErrorReading`, ENG-80: the builtin by the resolver's verdict,
+//!    no `#if`-varying callee or argument, a Text argument), and never under
+//!    `asserterror`.
+//! 2. [`settle_rules`] drops the `not C` parts an earlier check contributed
+//!    when that earlier check may not stop, and gives the final [`PRule`]s.
 //!
 //! **On the path** (intent-evidence step 6). A rule counts as applied before
 //! a site of the same routine (a write, a call) only when every path to the
@@ -53,7 +53,8 @@ use al_syntax::ir::{
     Origin, RoutineDecl, StmtId, StmtKind, UnaryOp, VarDecl,
 };
 
-use super::features::{PAnchor, PCallSite};
+use super::features::PAnchor;
+use super::ir_walk::{ErrorReading, Unproven};
 use super::scope::{ScopeTier, scope_tier};
 
 /// What kind of check a rule is.
@@ -86,6 +87,10 @@ pub const REASON_UNPROVEN_TEXT: &str =
 /// `Error` returns.
 pub const REASON_OWN_ERROR: &str =
     "the bare Error may bind to a procedure named Error, which returns";
+/// The call or an argument varies by `#if` build (ENG-80): another build may
+/// pass an `ErrorInfo`.
+pub const REASON_BUILD_VARYING: &str =
+    "the call varies by #if build, so another build may pass an ErrorInfo that does not stop";
 /// Under `asserterror` the error is caught.
 pub const REASON_ASSERTERROR: &str = "inside asserterror, which catches the error";
 
@@ -297,57 +302,27 @@ pub struct RuleDraft {
     anchor: PAnchor,
     comment: Option<String>,
     message: Option<RuleMessage>,
-    /// Decided at assembly; `None` = `Always` unless a `builtin_sites` entry
-    /// binds elsewhere than the builtin.
+    /// Decided at assembly; `None` = `Always`.
     stops: Option<Stops>,
-    /// Call sites that must bind to the builtin alone for the check to stop,
-    /// each with the reason it may not stop otherwise: the bare `Error(...)`
-    /// itself (#288), and a one-argument `Error(StrSubstNo(..))`'s
-    /// `StrSubstNo` (Text only when it is the builtin). Settled after
-    /// resolution.
-    builtin_sites: Vec<(String, &'static str)>,
     parts: Vec<WhenPart>,
     on_path: Vec<PathSpan>,
     at_exit: bool,
 }
 
 impl RuleDraft {
-    /// The call-site ids [`settle_rules`] asks about.
-    pub fn builtin_sites(&self) -> impl Iterator<Item = &str> {
-        self.builtin_sites
-            .iter()
-            .filter(|_| self.stops.is_none())
-            .map(|(cs, _)| cs.as_str())
-    }
-
-    /// Rewrite the draft's own id and its call-site ids with `f` (a test
-    /// stating shared site ids by assignment,
-    /// `workspace::share_collided_site_ids`).
+    /// Rewrite the draft's own id with `f` (a test stating shared site ids by
+    /// assignment, `workspace::share_collided_site_ids`).
     pub(crate) fn rekey_ids(&mut self, f: &dyn Fn(&str) -> String) {
         self.id = f(&self.id);
-        for (cs, _) in &mut self.builtin_sites {
-            *cs = f(cs);
-        }
     }
 }
 
-/// Turn one routine's drafts into rules. `binds_builtin(callsite_id)` answers
-/// whether a call site binds only to the builtin (#288's resolution half).
-/// Drafts are settled in order, so an earlier check's `stops` is final before
-/// a later check reads it.
-pub fn settle_rules(drafts: &[RuleDraft], binds_builtin: impl Fn(&str) -> bool) -> Vec<PRule> {
+/// Turn one routine's drafts into rules. Drafts are settled in order, so an
+/// earlier check's `stops` is final before a later check reads it.
+pub fn settle_rules(drafts: &[RuleDraft]) -> Vec<PRule> {
     let mut out: Vec<PRule> = Vec::with_capacity(drafts.len());
     for d in drafts {
-        let stops = match &d.stops {
-            Some(s) => s.clone(),
-            None => d
-                .builtin_sites
-                .iter()
-                .find(|(cs, _)| !binds_builtin(cs))
-                .map_or(Stops::Always, |(_, reason)| Stops::MayNotStop {
-                    reason: (*reason).to_string(),
-                }),
-        };
+        let stops = d.stops.clone().unwrap_or(Stops::Always);
         // A `not C` from an earlier check holds only when that check stops.
         let kept: Vec<&WhenPart> = d
             .parts
@@ -383,20 +358,13 @@ pub struct RuleInputs<'a> {
     pub routine: &'a RoutineDecl,
     pub routine_id: &'a str,
     pub source: &'a str,
-    /// The routine's call sites and, parallel to them, each one's expression
-    /// index (`SiteExprs::calls`).
-    pub call_sites: &'a [PCallSite],
-    pub call_exprs: &'a [u32],
-    /// Parallel to `call_sites`: for a bare `Error(...)` site, whether #288
-    /// proves it takes the Text overload (`error_argument_proves_text`);
-    /// ignored for any other site.
-    pub error_text_proven: &'a [bool],
+    /// The body walk's reading of each bare `Error(...)` statement
+    /// (`ir_walk::error_readings`); a bare `Error` with none binds to a
+    /// procedure named `Error`.
+    pub error_readings: &'a std::collections::HashMap<ExprId, ErrorReading>,
     /// The routine's record variables (after global promotion): name as
     /// written, table name.
     pub record_variables: &'a [(String, Option<String>)],
-    /// Whether the whole object is free of preprocessor directives (#288's
-    /// rule for what a global proves).
-    pub object_clean: bool,
     /// The anchor of an IR origin, as the model spells anchors.
     pub anchor: &'a dyn Fn(&Origin) -> PAnchor,
     /// The first `rule` number: 0 for a routine's first declaration, the
@@ -1097,7 +1065,6 @@ impl Walker<'_, '_> {
                         Vec::new(),
                         message,
                         None,
-                        Vec::new(),
                     );
                 }
             }
@@ -1160,12 +1127,6 @@ impl Walker<'_, '_> {
         }
     }
 
-    /// The call site of call expression `e`.
-    fn call_site(&self, e: ExprId) -> Option<usize> {
-        let ix = u32::try_from(e.index()).ok()?;
-        self.cx.call_exprs.iter().position(|x| *x == ix)
-    }
-
     fn is_error_info(&self, e: ExprId) -> bool {
         let Some(n) = self.name_of(e) else {
             return false;
@@ -1190,43 +1151,35 @@ impl Walker<'_, '_> {
         let mut stops = ctx.asserterror.then(|| Stops::MayNotStop {
             reason: REASON_ASSERTERROR.to_string(),
         });
-        let mut builtin_sites = Vec::new();
         let mut own = Vec::new();
         let (kind, message) = match kind {
             RuleKind::Error => {
                 let message = args
                     .split_first()
                     .map(|(m, rest)| self.text_message(*m, rest));
-                let site = self.call_site(e);
-                if args.len() == 1 {
-                    let proven = site
-                        .and_then(|i| self.cx.error_text_proven.get(i).copied())
-                        .unwrap_or(false);
-                    // `Error(StrSubstNo(..))`: Text when that call is the builtin,
-                    // which only resolution can tell.
-                    let strsubstno = self.strsubstno_site(args[0]);
-                    if let (false, Some(cs)) = (proven, &strsubstno) {
-                        builtin_sites.push((cs.clone(), REASON_UNPROVEN_TEXT));
-                    } else if !proven && stops.is_none() {
-                        let reason = if message
+                // ENG-80 (spec §4.1): the one reading the CFN and the unreachable
+                // marks use. No reading: the call binds to a procedure named `Error`.
+                let reason = match self.cx.error_readings.get(&e) {
+                    Some(ErrorReading::Terminates) => None,
+                    Some(ErrorReading::MayRaise(Unproven::Text))
+                        if message
                             .as_ref()
-                            .is_some_and(|m| m.source == MessageSource::ErrorInfo)
-                        {
-                            REASON_ERROR_INFO
-                        } else {
-                            REASON_UNPROVEN_TEXT
-                        };
-                        stops = Some(Stops::MayNotStop {
-                            reason: reason.to_string(),
-                        });
+                            .is_some_and(|m| m.source == MessageSource::ErrorInfo) =>
+                    {
+                        Some(REASON_ERROR_INFO)
                     }
-                } else if args.is_empty() && stops.is_none() {
+                    Some(ErrorReading::MayRaise(Unproven::Text)) => Some(REASON_UNPROVEN_TEXT),
+                    Some(ErrorReading::MayRaise(Unproven::BuildVarying)) => {
+                        Some(REASON_BUILD_VARYING)
+                    }
+                    Some(ErrorReading::MayRaise(Unproven::Binding)) | None => {
+                        Some(REASON_OWN_ERROR)
+                    }
+                };
+                if let (None, Some(reason)) = (&stops, reason) {
                     stops = Some(Stops::MayNotStop {
-                        reason: REASON_UNPROVEN_TEXT.to_string(),
+                        reason: reason.to_string(),
                     });
-                }
-                if let Some(i) = site {
-                    builtin_sites.insert(0, (self.cx.call_sites[i].id.clone(), REASON_OWN_ERROR));
                 }
                 let kind = if ctx.confirm_false().is_some() {
                     RuleKind::ConfirmError
@@ -1316,27 +1269,7 @@ impl Walker<'_, '_> {
             }
             RuleKind::ConfirmError | RuleKind::ConfirmExit => unreachable!("not a call kind"),
         };
-        self.push(kind, s, ctx, owner_row, own, message, stops, builtin_sites);
-    }
-
-    /// The call-site id of `e` when it is a bare `StrSubstNo(..)` call.
-    fn strsubstno_site(&self, e: ExprId) -> Option<String> {
-        let e = self.unparen(e);
-        let ExprKind::Call { function, .. } = &self.ir().expr(e).kind else {
-            return None;
-        };
-        let is_bare = matches!(
-            self.ir().expr(*function).kind,
-            ExprKind::Identifier(_) | ExprKind::QuotedIdentifier(_)
-        );
-        if !is_bare
-            || !self
-                .name_of(*function)
-                .is_some_and(|f| f.eq_fold_identifier("StrSubstNo"))
-        {
-            return None;
-        }
-        self.call_site(e).map(|i| self.cx.call_sites[i].id.clone())
+        self.push(kind, s, ctx, owner_row, own, message, stops);
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1349,7 +1282,6 @@ impl Walker<'_, '_> {
         own: Vec<WhenPart>,
         message: Option<RuleMessage>,
         stops: Option<Stops>,
-        builtin_sites: Vec<(String, &'static str)>,
     ) {
         let origin = &self.ir().stmt(s).origin;
         let mut parts = ctx.parts.clone();
@@ -1380,7 +1312,6 @@ impl Walker<'_, '_> {
             comment: self.comment(origin.start.row, origin.end.row, owner_row),
             message,
             stops,
-            builtin_sites,
             parts,
         };
         self.drafts.push(draft);
@@ -1428,9 +1359,16 @@ impl Walker<'_, '_> {
     /// return value, locals, globals: [`scope_tier`], shared with #288). The
     /// G52 rule decides whether it proves its text: a local only when it is
     /// declared once and no global has the name; a global only when it is
-    /// declared once and the object is free of directives.
+    /// declared once. Either only when the lowerer read every level that could
+    /// declare it in full (`Ir::locals_complete` / `globals_complete`, ENG-80).
     fn lookup(&self, name: &str) -> NameRef<'_> {
         let r = self.cx.routine;
+        let (locals_complete, globals_complete) = r.body.map_or((false, false), |b| {
+            (
+                self.cx.file.ir.locals_complete(b),
+                self.cx.file.ir.globals_complete(b),
+            )
+        });
         let param = r
             .params
             .iter()
@@ -1459,15 +1397,38 @@ impl Walker<'_, '_> {
         ) {
             Some(ScopeTier::Parameter) => NameRef::Parameter(param.and_then(|p| p.ty.as_deref())),
             Some(ScopeTier::ReturnValue) => NameRef::ReturnValue(r.return_type.as_deref()),
+            // A declaration under a `#if` exists only in some builds (ENG-80, sol review).
             Some(ScopeTier::Local) => {
-                if locals.len() == 1 && globals.is_empty() {
+                if locals.len() == 1
+                    && globals.is_empty()
+                    && locals_complete
+                    && self
+                        .cx
+                        .file
+                        .ir
+                        .var_wrappers_from(&locals[0].origin, &self.cx.routine.origin)
+                        .next()
+                        .is_none()
+                {
                     NameRef::Proven(locals[0])
                 } else {
                     NameRef::Candidates(locals.into_iter().chain(globals).collect())
                 }
             }
+            // ENG-80: a global proves its text only when no level that could
+            // declare the name in another build was read in part.
             Some(ScopeTier::Global) => {
-                if globals.len() == 1 && self.cx.object_clean {
+                if globals.len() == 1
+                    && locals_complete
+                    && globals_complete
+                    && self
+                        .cx
+                        .file
+                        .ir
+                        .var_wrappers_from(&globals[0].origin, &self.cx.routine.origin)
+                        .next()
+                        .is_none()
+                {
                     NameRef::Proven(globals[0])
                 } else {
                     NameRef::Candidates(globals)

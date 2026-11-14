@@ -649,9 +649,16 @@ pub fn write_program(p: &ResolvedProgram, w: &mut dyn std::fmt::Write) -> std::f
         .parenless_calls
         .iter()
         .map(|(k, v)| {
-            let mut ids: Vec<usize> = v.iter().map(|e| e.index()).collect();
+            let mut ids: Vec<usize> = v.parenless.iter().map(|e| e.index()).collect();
             ids.sort_unstable();
-            (k.clone(), ids)
+            // ENG-80: the bare-call verdicts are part of what a refresh must match.
+            let mut bare: Vec<(usize, String)> = v
+                .bare
+                .iter()
+                .map(|(e, b)| (e.index(), format!("{b:?}")))
+                .collect();
+            bare.sort_unstable();
+            (k.clone(), ids, bare)
         })
         .collect();
     parenless.sort();
@@ -772,7 +779,11 @@ fn tally_edges(
 /// (the edges and site facts are shared by `Arc`).
 fn tally_parenless(t: &mut crate::engine::census::Tally, d: &DependencyBodyResolution) {
     for ids in d.parenless_calls.values() {
-        t.buf::<al_syntax::ir::ExprId>(ids.len());
+        t.buf::<al_syntax::ir::ExprId>(ids.parenless.len());
+        t.buf::<(
+            al_syntax::ir::ExprId,
+            crate::program::resolve::full::BareVerdict,
+        )>(ids.bare.len());
     }
 }
 

@@ -4805,13 +4805,11 @@ pub(crate) fn callsite_local_coverage_reasons<'e>(
 
 /// The call and operation sites that never run (#288), for the coverage fold
 /// and the cone's edges. A (routine id, site id) pair is dead when EVERY row of
-/// that id that holds the site marks it `unreachable` AND that row's marks are
-/// trusted ([`ModelRoutine::dead_marks_trusted`], which fails closed). Rows
-/// that lack the site do not vote: an edge for the site came from a row that
-/// holds it. A site no row holds, and an edge with no site, are never dead.
-///
-/// shortcut: rests on the per-row trust gate; upgrade when the reachability
-/// mark itself is sound (the split-off discovery D2) and the gate goes away.
+/// that id that holds the site marks it `unreachable`. The mark is sound
+/// (ENG-14/ENG-80: an untrusted row has no marks; only an `Error` proven to raise
+/// on every run ends a path). Rows that lack the site do not vote: an edge for
+/// the site came from a row that holds it. A site no row holds, and an edge with
+/// no site, are never dead.
 #[derive(Default)]
 pub(crate) struct DeadSites<'a>(HashSet<(&'a str, &'a str)>);
 

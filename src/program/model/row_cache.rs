@@ -40,7 +40,7 @@
 //! The order of the rows is the cold assembly's: the assembly walks files in
 //! the same order and appends each file's rows, reused or fresh, in place.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::workspace::{AbiRowIds, AssemblyNeeds, FilePopulation, ModelEntities};
@@ -52,7 +52,10 @@ use crate::program::site_key::FileIx;
 pub(crate) struct ProjectionInputs<'a> {
     pub(crate) text: &'a Arc<str>,
     pub(crate) population: &'a FilePopulation,
-    pub(crate) parenless: &'a HashSet<al_syntax::ir::ExprId>,
+    /// The file's [`crate::program::resolve::full::FileBindings`]: the parens-less calls
+    /// and (ENG-80) the bare-call verdicts the `Error` rule reads. A row whose bindings
+    /// changed (a `procedure Error` added elsewhere) is re-walked.
+    pub(crate) parenless: &'a crate::program::resolve::full::FileBindings,
     pub(crate) file: Option<FileIx>,
     pub(crate) needs: AssemblyNeeds,
     pub(crate) app_guid: &'a str,
@@ -63,7 +66,7 @@ pub(crate) struct ProjectionInputs<'a> {
 pub(crate) struct CachedFile {
     text: Arc<str>,
     population: FilePopulation,
-    parenless: HashSet<al_syntax::ir::ExprId>,
+    parenless: crate::program::resolve::full::FileBindings,
     file: Option<FileIx>,
     needs: AssemblyNeeds,
     app_guid: String,

@@ -397,6 +397,56 @@ Two landings, one branch each:
   so a two-head shape always has leftover items and is an unordered run anyway (its discrimination proof
   came back green, which showed the check was redundant).
 
+## 8.2 As built (part 2, ENG-80), where it differs from the text above
+
+- **The L2 projection reads the resolver's verdicts.** §4.1 said a graph-less path reads every bare
+  `Error` as may-raise. Built that way, 14 golden tests failed, 12 of them hand-written L2 vectors and
+  oracles (`tests/l2_ir/l2_{cc,order,cap}_*`, `l2_vectors`) whose fixtures test the semantics of a
+  terminating `Error` (the error-path context, the code after it dead, frame termination). Rebaselining
+  them would have left those code paths pinned nowhere. Instead `l2_workspace::project_workspace`
+  (`aldump --l2`, the r1a goldens) and the single-routine entries (`ir_features_for_named_routine`,
+  `project_named_routine`) build the program for the same inputs and pass each file ONLY its bare
+  verdicts (`workspace_bare_verdicts`; the parens-less set stays empty, as L2 never read it). L2 now
+  reads a bare `Error` as the Model does. Only `ir_l2_snapshot`, which calls
+  `project_routine_features_ir` directly with no program, keeps the graph-less reading (51 routines
+  move, every one holding a bare `Error`).
+- **One reading, rules included.** `ErrorReading::MayRaise` carries why (`Unproven::{Binding,
+  BuildVarying, Text}`), and the rules take `stops` from it at assembly (`RuleInputs::error_readings`).
+  `RuleDraft::builtin_sites` and the post-resolution half of `settle_rules` are gone; a new reason names
+  an `#if`-varying call.
+- **Text proof scope order.** The innermost level that declares the name decides (parameters, the named
+  return value, locals, globals), and every declaration there must be Text-family; reaching a level the
+  lowerer did not read in full proves nothing. (A first version required every declaration at every
+  level to be Text, which an ErrorInfo global shadowed by a Text named return refuted: G11u's control.)
+- **A user binding must exist in every build (review F1).** `resolve_in_object` narrows candidates by
+  build only when two or more remain, so a lone `#if X local procedure Error` is bound from a call
+  outside the arm. `BareVerdict::of` therefore gives `User` only when some copy of the target routine
+  carries no build condition the call site's own context lacks; otherwise `Unknown` (may raise). The
+  same holds for the inner Text calls (`StrSubstNo` …). The mirror (a call only in builds where the
+  procedure is absent) also reads `Unknown`: safe, a precision limit (engine limits L38).
+- **An undecided condition is kept whole (review r2).** A `#if` condition that decides no symbol
+  (`X or Y` true, `X and Y` false) used to leave the context empty, which reads as "every build", so
+  a lone `procedure Error` under it read `User` everywhere. `assume_preproc` now records it as one
+  entry named by its text (`("(X or Y)", true)`), which contradicts only its own opposite.
+- **Table scopes read their extensions (review F2).** The implicit-`Rec` table, and a table extension's
+  base, count as searched only when neither the table nor any extension of it is symbol-only
+  (`full::table_code_not_loaded`, ENG-16's rule): a symbol-only extension's symbols may not list a
+  `procedure Error`.
+- **Guards with no discriminating fixture (redundant for every modelled shape, kept as defence):** the
+  extension-base clears of `scope_complete` (a page or report extension's implicit `Rec` is its base's
+  table, and ABI pages carry no `SourceTable`, so the out-of-closure clear already fires; a table
+  extension's implicit `Rec` is its base table), the inner-call taint check (an `#if` inside an inner
+  call taints the outer `Error` through the subtree scan), and the quote-character check in the Text
+  proof (a quoted name matches only a quoted declaration).
+- **`aldump --l2` warns** on stderr when the program build fails and every bare `Error` falls back to
+  "may raise" (review F4); a test pins that the program's path keys equal the discovered paths.
+- **C3** holds by construction (§8.1's reasoning; the schema goes 14 → 15).
+- **Parens-less guard in `proves_text`.** No fixture can name a variable and a parens-less call alike
+  (a local or global sharing a procedure's name shadows it), so the guard has no discrimination proof;
+  it stays as defence.
+- **Found on the way:** a CR-only source file with a `#if` parses as one root ERROR (grammar), filed as
+  GRM-03. The #288 CR-only test (it tested the deleted directive scan) is removed.
+
 ## 9. r0 review: how each finding is answered
 
 | finding | answer |

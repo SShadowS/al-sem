@@ -963,6 +963,67 @@ fn dedup_objects(objects: &mut Vec<ObjectNode>) {
     });
 }
 
+/// The build context of the survivor of collapsed copies `copies` (the same declaration in
+/// several `#if` arms): the entries every copy shares, plus, when the copies' other entries
+/// do not cover every build (`#if X … #endif #if Y … #endif`, or `#if/#elif` with no
+/// `#else`), one opaque entry naming the arms, so the survivor never reads as present in
+/// every build while some build has no copy (ENG-80 review r3). Coverage is checked by
+/// enumerating the entries' names as independent booleans (a text-named condition is one
+/// more boolean), which can only miss a covering set, never invent one: the safe side.
+fn survivor_context(copies: &[&RoutineNode]) -> Box<[(String, bool)]> {
+    let mut common: Vec<(String, bool)> = copies[0]
+        .preproc_context
+        .iter()
+        .filter(|e| copies.iter().all(|o| o.preproc_context.contains(e)))
+        .cloned()
+        .collect();
+    let rests: Vec<Vec<&(String, bool)>> = copies
+        .iter()
+        .map(|o| {
+            o.preproc_context
+                .iter()
+                .filter(|e| !common.contains(e))
+                .collect()
+        })
+        .collect();
+    if !covers_every_build(&rests) {
+        let mut arms: Vec<String> = rests
+            .iter()
+            .map(|r| {
+                r.iter()
+                    .map(|(s, v)| format!("{s}={v}"))
+                    .collect::<Vec<_>>()
+                    .join("&")
+            })
+            .collect();
+        arms.sort();
+        arms.dedup();
+        common.push((format!("(one of {})", arms.join(" | ")), true));
+    }
+    common.into_boxed_slice()
+}
+
+/// Whether every assignment of the names in `rests` satisfies some rest (a rest with no
+/// entry is satisfied by all). More than 16 names: `false` (not proven).
+fn covers_every_build(rests: &[Vec<&(String, bool)>]) -> bool {
+    if rests.iter().any(Vec::is_empty) {
+        return true;
+    }
+    let mut names: Vec<&str> = rests.iter().flatten().map(|(s, _)| s.as_str()).collect();
+    names.sort_unstable();
+    names.dedup();
+    if names.len() > 16 {
+        return false;
+    }
+    (0u32..1 << names.len()).all(|bits| {
+        let value = |s: &str| {
+            let i = names.binary_search(&s).expect("a collected name");
+            bits & (1 << i) != 0
+        };
+        rests.iter().any(|r| r.iter().all(|(s, v)| value(s) == *v))
+    })
+}
+
 /// Collapse a SORTED `routines` vec's runs of equal `RoutineNodeId` down to
 /// one canonical entry PER DISTINCT parameter-type signature.
 ///
@@ -1100,21 +1161,13 @@ fn dedup_routines_preserving_genuine_overloads(routines: &mut Vec<RoutineNode>) 
                 .collect();
             // A collapsed duplicate (the same declaration in two `#if` arms)
             // exists under its own build conditions, so the survivor exists
-            // under either: it keeps only the symbols every collapsed copy
-            // decides alike (`RoutineNode::preproc_context`).
+            // under either (`survivor_context`).
             // #264: copies that disagree on the return type (two `#if` arms
             // that differ only there) leave the survivor with NO return type:
             // keeping the first arm's would type every caller by one build.
             let return_disagrees = r.tier != TrustTier::SymbolOnly
                 && copies.iter().any(|o| o.return_type != r.return_type);
-            contexts.push(Some((
-                r.preproc_context
-                    .iter()
-                    .filter(|e| copies.iter().all(|o| o.preproc_context.contains(e)))
-                    .cloned()
-                    .collect::<Box<[_]>>(),
-                return_disagrees,
-            )));
+            contexts.push(Some((survivor_context(&copies), return_disagrees)));
             // Issue #103: the same declaration in two `#if` arms can subscribe
             // to, or publish, different events; the survivor stands for every
             // arm, so it carries the event facts of all of them. Only for the
