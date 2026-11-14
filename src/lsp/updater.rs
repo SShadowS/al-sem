@@ -3456,6 +3456,12 @@ mod tests {
             (before.len(), before.modified().unwrap()),
             "precondition: length and mtime kept"
         );
+        // The identity check would catch a replaced file before ctime does.
+        assert_eq!(
+            (after.dev(), after.ino()),
+            (before.dev(), before.ino()),
+            "precondition: the same file (rewritten in place)"
+        );
         let got = updater.apply_batch(&base, &[ChangeEvent::PathChanged(src)]);
         let snap = got.as_ref().map_or(&base, |(s, _)| s);
         assert_eq!(

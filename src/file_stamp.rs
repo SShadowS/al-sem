@@ -12,8 +12,8 @@
 //! platform with none, or one stored before ctime was kept, is checked by
 //! length and mtime alone.
 //!
-//! **Stated residual** (what a stamp cannot see; each reader says it where it
-//! answers): a same-size rewrite within one timestamp tick of the stamp
+//! **Stated residual** (what a stamp cannot see; the resident engine states
+//! it in its answers' `residual`, the other readers point here): a same-size rewrite within one timestamp tick of the stamp
 //! (ctime and mtime unmoved); a file system without a real change time (FAT,
 //! some FUSE or network mounts); a platform whose standard library gives no
 //! change time (Windows), where any rewrite that keeps length and mtime is
@@ -24,7 +24,7 @@ use std::path::Path;
 use std::time::SystemTime;
 
 /// A file's length, modification time and change time when it was observed.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FileStamp {
     len: u64,
     mtime: Option<SystemTime>,
