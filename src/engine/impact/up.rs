@@ -911,14 +911,16 @@ fn classified(up: &Up<'_>, g: &SitedGraph) -> serde_json::Map<String, Value> {
             .iter()
             .filter(|(_, w)| classes.contains(&w.population()))
             .collect();
-        // Per (kind, its word for this entry: TLS-55, a configured job-queue
-        // procedure is no `codeunit OnRun`), in print order.
-        let mut kinds: BTreeMap<(EntryKind, &str), usize> = BTreeMap::new();
+        // Per kind word (TLS-55: the entry's own, `inv.word`), keyed by its
+        // print rank (`vocab::entry_word_rank`), so `page trigger` holds the
+        // API pages' and the configured page triggers' too.
+        let mut kinds: BTreeMap<(usize, &str), usize> = BTreeMap::new();
         let mut contexts: BTreeMap<&str, usize> = BTreeMap::new();
-        // Per kind and word, the nearest entry (class order, then arrival).
-        let mut firsts: BTreeMap<(EntryKind, &str), (u32, Witness)> = BTreeMap::new();
+        // Per word, the nearest entry (class order, then arrival).
+        let mut firsts: BTreeMap<(usize, &str), (u32, Witness)> = BTreeMap::new();
         for &&(e, w) in &mine {
-            let k = (inv.kind(e), inv.word(e));
+            let word = inv.word(e);
+            let k = (vocab::entry_word_rank(word), word);
             *kinds.entry(k).or_default() += 1;
             let ctx: BTreeSet<&str> = inv.kinds(e).filter_map(vocab::entry_context).collect();
             for c in ctx {
@@ -929,15 +931,8 @@ fn classified(up: &Up<'_>, g: &SitedGraph) -> serde_json::Map<String, Value> {
                 *f = (e, w);
             }
         }
-        // Kinds by their §8.1 words, merged (`page trigger` holds the API
-        // pages' triggers too), in print order.
-        let mut words: Vec<(&str, usize)> = Vec::new();
-        for (&(_, w), n) in &kinds {
-            match words.iter_mut().find(|(x, _)| *x == w) {
-                Some(x) => x.1 += n,
-                None => words.push((w, *n)),
-            }
-        }
+        // Kinds by their §8.1 words, in print order.
+        let words: Vec<(&str, usize)> = kinds.iter().map(|(&(_, w), &n)| (w, n)).collect();
         by_kind.insert(
             key.into(),
             Value::Object(
@@ -957,13 +952,8 @@ fn classified(up: &Up<'_>, g: &SitedGraph) -> serde_json::Map<String, Value> {
             ),
         );
         share.insert(key.into(), share_json(mine.len(), program));
-        let mut printed: Vec<&str> = Vec::new();
         let mut list: Vec<Value> = Vec::new();
         for (&(_, word), (e, w)) in &firsts {
-            if printed.contains(&word) {
-                continue;
-            }
-            printed.push(word);
             let mut v = witness_json(g, w);
             v["kind"] = json!(word);
             if let Some(a) = inv.action(*e) {
@@ -1001,17 +991,12 @@ fn classified(up: &Up<'_>, g: &SitedGraph) -> serde_json::Map<String, Value> {
         .count();
     share.insert("candidates".into(), share_json(candidates, program));
     share.insert("all".into(), share_json(entries.len(), program));
-    let program_by_kind: Vec<(&str, usize)> = {
-        let mut words: Vec<(&str, usize)> = Vec::new();
-        // The same set as `programEntries`: the changed routines left out.
-        for ((_, w), n) in inv.by_kind(|e| !up.shared.changed.contains(&e)) {
-            match words.iter_mut().find(|(x, _)| *x == w) {
-                Some(x) => x.1 += n,
-                None => words.push((w, n)),
-            }
-        }
-        words
-    };
+    // The same set as `programEntries`: the changed routines left out.
+    let program_by_kind: Vec<(&str, usize)> = inv
+        .by_kind(|e| !up.shared.changed.contains(&e))
+        .into_iter()
+        .map(|((_, w), n)| (w, n))
+        .collect();
     // `external:` belongs to the code population: the external callers whose
     // best state is established code.
     let external_code: Vec<Value> = up

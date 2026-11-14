@@ -487,8 +487,10 @@ fn impact_applies_the_roots_config_overlay() {
 /// `codeunit OnRun`); `entry_kind` mapping the config-only kinds back to
 /// `codeunit OnRun` fails "explain tells the procedure apart"; prove's
 /// witness line using the context key's word (`entry_key`) fails "prove
-/// names RunJob a procedure" (at the Runner line); the render reading
-/// `rootEntryKinds` again fails "the changed OnRun is a codeunit OnRun".
+/// names the configured OnRun a codeunit OnRun"; the render reading
+/// `rootEntryKinds` again fails "the changed OnRun is a codeunit OnRun";
+/// keying `firstByKind` by (first kind, word) again fails "one first per
+/// word" (the configured page trigger kept beside the nearer plain one).
 #[test]
 fn a_configured_procedure_entry_is_no_codeunit_onrun() {
     let t = tempfile::tempdir().unwrap();
@@ -511,8 +513,12 @@ fn a_configured_procedure_entry_is_no_codeunit_onrun() {
          Log: Record \"T54 Log\";\n        Core: Codeunit \"T54 Core\";\n    begin\n        \
          Log.Insert();\n        Core.Post();\n    end;\n}\n\n\
          page 50544 \"T54 Card\"\n{\n    trigger OnOpenPage()\n    var\n        \
-         Log: Record \"T54 Log\";\n        Core: Codeunit \"T54 Core\";\n    begin\n        \
-         Log.Insert();\n        Core.Post();\n    end;\n}\n",
+         Log: Record \"T54 Log\";\n    begin\n        \
+         Log.Insert();\n        Helper();\n    end;\n\n    \
+         local procedure Helper()\n    var\n        Core: Codeunit \"T54 Core\";\n    begin\n        \
+         Core.Post();\n    end;\n}\n\n\
+         page 50545 \"T54 Near\"\n{\n    trigger OnOpenPage()\n    var\n        \
+         Core: Codeunit \"T54 Core\";\n    begin\n        Core.Post();\n    end;\n}\n",
     )
     .unwrap();
     std::fs::write(
@@ -532,7 +538,7 @@ fn a_configured_procedure_entry_is_no_codeunit_onrun() {
         None,
     );
     let up = &v["roots"][0]["up"];
-    let words = serde_json::json!({"codeunit OnRun": 1, "page trigger": 1, "procedure": 1});
+    let words = serde_json::json!({"codeunit OnRun": 1, "page trigger": 2, "procedure": 1});
     assert_eq!(
         up["entriesByKind"]["code"], words,
         "impact tells the procedure apart: {up:#}"
@@ -580,6 +586,17 @@ fn a_configured_procedure_entry_is_no_codeunit_onrun() {
             )),
         "{firsts:?}"
     );
+    // One row per word, its nearest entry (sol r2): the plain page trigger
+    // at 1 hop, not the configured one at 2 (whose first kind,
+    // `web-service-exposed`, sorts earlier).
+    assert_eq!(firsts.len(), 3, "one first per word: {firsts:?}");
+    assert!(
+        firsts.contains(&(
+            "page trigger".into(),
+            "Page \"T54 Near\"::OnOpenPage".into()
+        )),
+        "the nearest page trigger: {firsts:?}"
+    );
     let out = Command::new(env!("CARGO_BIN_EXE_alsem"))
         .args(["explain"])
         .arg(ws)
@@ -609,16 +626,23 @@ fn a_configured_procedure_entry_is_no_codeunit_onrun() {
         .env("RUST_LOG", "off")
         .output()
         .unwrap();
+    assert!(out.status.success(), "{out:?}");
     let human = String::from_utf8_lossy(&out.stdout);
-    for line in [
-        "[local] procedure [context: background session or task (job queue)]: Codeunit \"T54 Jobs\"::RunJob",
-        "[local] codeunit OnRun [context: background session or task (job queue)]: Codeunit \"T54 Runner\"::OnRun",
-        "[local] page trigger [context: web service]: Page \"T54 Card\"::OnOpenPage",
+    for (what, line) in [
+        (
+            "prove names RunJob a procedure",
+            "[local] procedure [context: background session or task (job queue)]: Codeunit \"T54 Jobs\"::RunJob",
+        ),
+        (
+            "prove names the configured OnRun a codeunit OnRun",
+            "[local] codeunit OnRun [context: background session or task (job queue)]: Codeunit \"T54 Runner\"::OnRun",
+        ),
+        (
+            "prove names the configured page trigger a page trigger",
+            "[local] page trigger [context: web service]: Page \"T54 Card\"::OnOpenPage",
+        ),
     ] {
-        assert!(
-            human.contains(line),
-            "prove names RunJob a procedure: {line}\n{human}"
-        );
+        assert!(human.contains(line), "{what}: {line}\n{human}");
     }
 }
 

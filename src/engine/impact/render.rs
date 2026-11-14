@@ -719,14 +719,8 @@ fn kind_lines(up: &Value, key: &str, indent: &str) -> Vec<String> {
         let o = m.as_object()?;
         // Print order: the entry kinds' (a user or a job first), not the
         // JSON object's alphabetical one.
-        let rank = |k: &str| {
-            crate::program::impact_graph::reverse::EntryKind::ALL
-                .iter()
-                .position(|x| crate::engine::vocab::entry_kind(*x) == k)
-                .unwrap_or(usize::MAX)
-        };
         let mut rows: Vec<(&String, &Value)> = o.iter().collect();
-        rows.sort_by_key(|(k, _)| rank(k));
+        rows.sort_by_key(|(k, _)| crate::engine::vocab::entry_word_rank(k));
         (!o.is_empty()).then(|| {
             rows.iter()
                 .map(|(k, n)| {

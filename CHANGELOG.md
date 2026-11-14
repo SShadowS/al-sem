@@ -25,6 +25,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `up` gains `rootEntryWord` (the changed routine's own word, `null` when it is no entry), beside
   `rootEntryKinds`. Explain's and prove's JSON keep their legacy keys
   (`job-queue-entrypoint`); only their human words change.
+- Also: impact's `firstByKind` now lists one row per word, the nearest entry of that word
+  (before, two kinds sharing a word, such as an API page's trigger and a page trigger, could
+  list the farther one); words print in one canonical order (`vocab::entry_word_rank`) in impact
+  and its human view. Prove's non-interactive witness line names the entry by its first source
+  kind, as impact does (an API page's `OnAction` now reads `page action [context: API page]`,
+  where it read `page trigger`).
 
 ### Changed (TLS-54: `alsem impact` applies the `roots.config.json` overlay)
 

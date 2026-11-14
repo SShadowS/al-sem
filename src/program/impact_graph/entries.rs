@@ -268,16 +268,15 @@ impl EntryInventory {
         self.action[e as usize].as_deref()
     }
 
-    /// The count per kind and its word ([`Self::word`]) over the entries
-    /// `keep` accepts, in the kinds' order.
-    pub fn by_kind(
-        &self,
-        keep: impl Fn(u32) -> bool,
-    ) -> BTreeMap<(EntryKind, &'static str), usize> {
-        let mut out: BTreeMap<(EntryKind, &'static str), usize> = BTreeMap::new();
+    /// The count per kind word ([`Self::word`]) over the entries `keep`
+    /// accepts, keyed by the word's print rank (`vocab::entry_word_rank`).
+    pub fn by_kind(&self, keep: impl Fn(u32) -> bool) -> BTreeMap<(usize, &'static str), usize> {
+        let mut out: BTreeMap<(usize, &'static str), usize> = BTreeMap::new();
         for e in 0..self.len() as u32 {
             if keep(e) {
-                *out.entry((self.kind(e), self.word(e))).or_default() += 1;
+                let w = self.word(e);
+                *out.entry((crate::engine::vocab::entry_word_rank(w), w))
+                    .or_default() += 1;
             }
         }
         out

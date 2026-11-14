@@ -82,6 +82,18 @@ pub fn is_config_only(k: EntryKind) -> bool {
     )
 }
 
+/// A kind word's print rank: the position in [`EntryKind::ALL`] of the first
+/// kind whose word it is (`usize::MAX` for any other word). One order for
+/// every list of kind words, whatever kind an entry carries first (TLS-55: a
+/// configured page trigger's first kind is `web-service-exposed`).
+#[must_use]
+pub fn entry_word_rank(word: &str) -> usize {
+    EntryKind::ALL
+        .iter()
+        .position(|k| entry_kind(*k) == word)
+        .unwrap_or(usize::MAX)
+}
+
 /// The kind word of an entry with `kinds` (in [`EntryKind::ALL`] order),
 /// TLS-55's one home: its first source kind's word (a configured `OnRun`
 /// keeps `codeunit OnRun`, a configured page trigger `page trigger`), else
