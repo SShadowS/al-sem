@@ -55,7 +55,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   master); the additions-only rule, the dry run's parity on a deleted CHANGELOG, the
   number checks on `LAND_MEM_MIN_GB` / `LAND_MEM_TIMEOUT_S`, `git check-ref-format`
   on the name, error checks and an INT/TERM cleanup in the merge step came from the
-  same review.
+  same review. Review r2 (Fable): no child gets the lock's descriptor (merge-and-push's
+  background speed-check warm-up held it, so the next landing was refused; pinned by
+  a stub that leaves a background job, mutation: the push step keeps fd 9); a marker
+  the CHANGELOG step does not recognise is refused; an interrupted merge reports on
+  the terminal.
 - Checked on real history (a shared scratch clone, its master set back): `--dry-run`
   of the batch landings b7, b6, b4 and b3 predicted every merge; b7's predicted trees
   equal the real landing's. Replaying b4 and b3 in full with the CHANGELOG

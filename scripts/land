@@ -24,7 +24,9 @@
 #   ci        `bash scripts/ci-steps all` (stops here on a failure: cdo-gate
 #             never runs after a red ci).
 #   mem-wait  MemAvailable >= 35 GB and no other cdo-gate running (polls 15 s,
-#             gives up after 30 min).
+#             gives up after 30 min). "Running" is a `bash [<dir>/]scripts/cdo-gate`
+#             command line in this container; `bash -x ...` or a gate started
+#             from inside scripts/ is not seen.
 #   cdo       `bash scripts/cdo-gate <CDO_WS>`.
 #   recheck   (after ci and after cdo) the worktree is still on the landing
 #             commit the gates ran on, clean, `landing/<name>` still points
@@ -124,12 +126,16 @@ mem_timeout="${LAND_MEM_TIMEOUT_S:-1800}"
 command -v jq >/dev/null || die "jq is needed for the timing log"
 command -v flock >/dev/null || die "flock is needed for the worktree lock"
 
-G() { git -C "$worktree" "$@"; }
+# Children never get fd 9 (the lock: a background job a child leaves behind,
+# like merge-and-push's speed-check warm-up or a detached `git gc`, would hold
+# it after this run) nor 7/8 (the saved stdout/stderr, see merge_failed).
+G() { git -C "$worktree" "$@" 7>&- 8>&- 9>&-; }
 
 # union_changelog <base> <master's> <branch's> <out>: CHANGELOG.md's conflicts
 # resolved by keeping both sides' lines, master's first, when every conflict
 # is additions on both sides (an empty base part); 1 otherwise, with the reason
-# on stdout. Lines outside the conflicts are kept as git merged them.
+# on stdout. The lines outside the conflicts are merge-file's own three-way
+# merge of the same three versions.
 union_changelog() {
     local rc=0
     git merge-file --diff3 -p -L master -L base -L branch "$2" "$1" "$3" >"$4.diff3" 2>/dev/null || rc=$?
@@ -159,6 +165,12 @@ union_changelog() {
         echo "a CHANGELOG.md conflict changes a line both sides had (not only additions): resolve it by hand"
         return 1
     fi
+    # A marker the awk did not recognise (CRLF line ends, other labels) must not
+    # be committed.
+    if grep -qE '^(<<<<<<<|\|\|\|\|\|\|\||>>>>>>>)( |$)' "$4"; then
+        echo "CHANGELOG.md still holds a conflict marker after the merge: resolve it by hand"
+        return 1
+    fi
 }
 
 # ---- check ---------------------------------------------------------------
@@ -167,7 +179,7 @@ G rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "$worktree is not a git
 if ((!dry_run)); then
     # Two runs on one worktree would swap the tree under each other's gates.
     lock="$(G rev-parse --absolute-git-dir)/land.lock"
-    exec 9>"$lock"
+    exec 7>&1 8>&2 9>"$lock"
     flock -n 9 || die "another scripts/land run holds $worktree ($lock)"
 fi
 G rev-parse -q --verify MERGE_HEAD >/dev/null && die "a merge is in progress in $worktree"
@@ -298,6 +310,9 @@ start=$SECONDS
 mark merge start
 merge_failed() { # back to a clean, detached master, then stop
     trap - INT TERM
+    # A trap can fire inside a command whose output goes to merge.log: the
+    # verdict belongs on the terminal.
+    exec 1>&7 2>&8
     G merge --abort >/dev/null 2>&1 || true
     G switch --quiet --force --detach "$master" >/dev/null 2>&1 || true
     verdict merge 1 "$start"
@@ -345,7 +360,9 @@ recheck() {
         why="the gate worktree moved off the landing commit ${landed:0:8} (now ${now:0:8})"
     elif [[ "$(G rev-parse -q --verify "refs/heads/$landing" || true)" != "$landed" ]]; then
         why="$landing no longer points at ${landed:0:8}"
-    elif [[ -n "$(G status --porcelain | grep -v '^?? \.agent/' || true)" ]]; then
+    elif ! now=$(G status --porcelain); then
+        why="git status failed in the gate worktree"
+    elif [[ -n "$(grep -v '^?? \.agent/' <<<"$now" || true)" ]]; then
         why="the gate worktree is no longer clean"
     elif [[ "$(G rev-parse refs/heads/master)" != "$master" ]]; then
         why="master moved during the gates (${master:0:8} -> $(G rev-parse --short refs/heads/master)): land again on the new master"
@@ -360,7 +377,7 @@ recheck() {
 start=$SECONDS
 mark ci start
 rc=0
-(cd "$worktree" && bash scripts/ci-steps all) >"$run/ci.log" 2>&1 || rc=$?
+(cd "$worktree" && bash scripts/ci-steps all) >"$run/ci.log" 2>&1 7>&- 8>&- 9>&- || rc=$?
 verdict ci "$rc" "$start"
 ((rc == 0)) || die "FAIL at ci: cdo-gate not run, nothing pushed ($landing kept)"
 recheck ci
@@ -395,7 +412,7 @@ verdict mem-wait "$rc" "$start"
 start=$SECONDS
 mark cdo start
 rc=0
-(cd "$worktree" && bash scripts/cdo-gate "$cdo_ws") >"$run/cdo.log" 2>&1 || rc=$?
+(cd "$worktree" && bash scripts/cdo-gate "$cdo_ws") >"$run/cdo.log" 2>&1 7>&- 8>&- 9>&- || rc=$?
 verdict cdo "$rc" "$start"
 ((rc == 0)) || die "FAIL at cdo: nothing pushed ($landing kept)"
 recheck cdo
@@ -409,7 +426,7 @@ fi
 start=$SECONDS
 mark push start
 rc=0
-(cd "$main" && scripts/merge-and-push "$landing") >"$run/push.log" 2>&1 || rc=$?
+(cd "$main" && scripts/merge-and-push "$landing") >"$run/push.log" 2>&1 7>&- 8>&- 9>&- || rc=$?
 verdict push "$rc" "$start"
 ((rc == 0)) || die "FAIL at push: see $run/push.log"
 echo "land: PASS: $landing landed on master"

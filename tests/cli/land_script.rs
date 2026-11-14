@@ -274,8 +274,14 @@ fn land_gates_in_order_and_pushes_only_on_request() {
     assert_eq!(code, Some(1), "{text}");
     assert!(text.contains("FAIL at push"), "{text}");
 
+    // merge-and-push leaves a background job behind (its speed-check warm-up);
+    // the job must not hold the lock, or the next landing is refused (review
+    // r2, Fable).
     r.reset_calls();
-    let (code, text) = r.land(&["--push", "tools/tls-59-x"], &[]);
+    let (code, text) = r.land(
+        &["--push", "tools/tls-59-x"],
+        &[("STUB_MERGE_AND_PUSH_HOOK", "sleep 10 >/dev/null 2>&1 &")],
+    );
     assert_eq!(code, Some(0), "{text}");
     assert_eq!(
         r.calls(),
@@ -285,6 +291,8 @@ fn land_gates_in_order_and_pushes_only_on_request() {
             "merge-and-push landing/tls59-2"
         ]
     );
+    let (code, text) = r.land(&["tools/tls-58-x"], &[]);
+    assert_eq!(code, Some(0), "the next landing right after: {text}");
 
     let flow = std::fs::read_to_string(r.root.join("flow.jsonl")).unwrap();
     let mut open = std::collections::BTreeSet::new();
