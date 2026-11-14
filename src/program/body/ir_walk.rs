@@ -2741,6 +2741,43 @@ impl<'a> IrCfn<'a> {
     }
 }
 
+/// ENG-14 (§4.2 D): whether a block holds, at any depth, a statement the lowerer
+/// could not lower (`StmtKind::Unknown`). The match is exhaustive on purpose: a new
+/// statement kind must say whether it holds blocks.
+fn block_has_unknown(ir: &al_syntax::ir::Ir, b: BlockId) -> bool {
+    ir.block(b).items.iter().any(|item| match item {
+        BlockItem::Stmt(s) => stmt_has_unknown(ir, *s),
+        BlockItem::Preproc(g) => g.branches.iter().any(|b| block_has_unknown(ir, *b)),
+    })
+}
+
+fn stmt_has_unknown(ir: &al_syntax::ir::Ir, s: al_syntax::ir::StmtId) -> bool {
+    use StmtKind::*;
+    let has = |b: &Option<BlockId>| b.is_some_and(|b| block_has_unknown(ir, b));
+    match &ir.stmt(s).kind {
+        Unknown => true,
+        If {
+            then_block,
+            else_block,
+            ..
+        } => block_has_unknown(ir, *then_block) || has(else_block),
+        Case {
+            branches,
+            else_block,
+            ..
+        } => branches.iter().any(|br| block_has_unknown(ir, br.body)) || has(else_block),
+        Try { body, catch_block } => block_has_unknown(ir, *body) || has(catch_block),
+        While { body, .. }
+        | Repeat { body, .. }
+        | For { body, .. }
+        | Foreach { body, .. }
+        | With { body, .. }
+        | AssertError(body)
+        | Block(body) => block_has_unknown(ir, *body),
+        Assignment { .. } | Call(_) | Exit(_) | Break | Continue => false,
+    }
+}
+
 /// The slice of `PFeatures` the IR walk currently produces as REAL engine types.
 /// Grows toward full `PFeatures` as the rich call_site/record_operation payloads
 /// are threaded in subsequent increments.
@@ -2794,7 +2831,14 @@ pub fn routine_features_partial(
         parenless_calls,
         base,
     );
-    let statement_tree = routine.body.map(|b| {
+    // ENG-14 (§4.2 D): a routine whose control tree cannot be trusted (a parse error,
+    // or a statement the lowerer could not lower: an unmodelled shape, or the depth
+    // budget) has NO tree. Every reader then claims nothing from it: no dead mark, no
+    // `all_paths_error`, no dominance, no guard (docs/superpowers/notes/
+    // 2026-11-14-eng14-tree-readers.md). A dropped statement may have been an `exit`.
+    let untrusted =
+        routine.parse_incomplete || routine.body.is_some_and(|b| block_has_unknown(&file.ir, b));
+    let statement_tree = routine.body.filter(|_| !untrusted).map(|b| {
         let cfn = IrCfn {
             file,
             spine: &spine,
@@ -2924,7 +2968,9 @@ pub fn routine_features_partial(
 
     IrPartialFeatures {
         statement_tree,
-        has_branching: spine.has_branching,
+        // An untrusted body may have lost a branch; readers take `false` as a
+        // straight-line proof (record_types' RecordRef temp state, event_flow, d61).
+        has_branching: spine.has_branching || untrusted,
         nesting_depth,
         loops: spine.loops,
         field_accesses: spine.field_accesses,
@@ -2932,7 +2978,11 @@ pub fn routine_features_partial(
         var_assignments: spine.var_assignments,
         condition_references: spine.condition_references,
         identifier_references: spine.identifier_references,
-        unreachable_statements: spine.unreachable_statements,
+        unreachable_statements: if untrusted {
+            Vec::new()
+        } else {
+            spine.unreachable_statements
+        },
         record_operations,
         operation_sites: spine.operation_sites,
         call_sites,

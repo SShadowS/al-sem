@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (TLS-55: a configured job-queue or web-service procedure is no "codeunit OnRun")
+
+- The entry-kind words (output validation §8.1) called every job-queue and web-service entry
+  "codeunit OnRun". Those two kinds come only from `roots.config.json`, which may name any
+  routine (`internal procedure RunJob()`, a page's `OnOpenPage`): they say how a run starts, not
+  what the routine is. Now an entry's kind word is its routine's own source kind (a configured
+  `OnRun` stays "codeunit OnRun", a configured page trigger "page trigger"), and `procedure`
+  when the config is its only kind. Its context still says job queue or web service. One home:
+  `vocab::entry_word` (and `vocab::entry_kind` for a lone config kind), read by every reader:
+  impact's `entriesByKind`, `firstByKind`, `nearest.entry`, `programEntriesByKind` and its "the
+  changed routine is …" line; explain's callers-context counts (`codeunit OnRun 2` became
+  `codeunit OnRun 1, procedures 1`); prove's non-interactive witness lines
+  (`[local] procedure [context: background session or task (job queue)]: …`).
+- JSON: `procedure` is a new value among impact's entry-kind keys and `firstByKind[].kind` /
+  `nearest.entry` (impact only shows configured entries since TLS-54, unreleased); each root's
+  `up` gains `rootEntryWord` (the changed routine's own word, `null` when it is no entry), beside
+  `rootEntryKinds`. Explain's and prove's JSON keep their legacy keys
+  (`job-queue-entrypoint`); only their human words change.
+- Also: impact's `firstByKind` now lists one row per word, the nearest entry of that word
+  (before, two kinds sharing a word, such as an API page's trigger and a page trigger, could
+  list the farther one); words print in one canonical order (`vocab::entry_word_rank`) in impact
+  and its human view. Prove's non-interactive witness line names the entry by its first source
+  kind, as impact does (an API page's `OnAction` now reads `page action [context: API page]`,
+  where it read `page trigger`).
+
 ### Changed (TLS-54: `alsem impact` applies the `roots.config.json` overlay)
 
 - `alsem impact` ignored `roots.config.json`, so a routine the config names as an entry point
@@ -88,6 +113,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the 20 builtins on a typed receiver is a `run` site, and another that those 20 are
   every entry in the dispatching-builtin catalog that runs a page, report, XmlPort or
   query.
+
+### Fixed (ENG-14 part 1, #310: `#if` shapes and untrusted routines no longer prove code dead)
+
+- **A `#if` the lowerer could not keep as alternatives marked code dead that another build runs.**
+  Measured on master `a4072928` (probe sources in the spec): `if C then #if X exit; Foo(); #endif`
+  marked `Foo` unreachable (under X the code is `if C then exit; Foo();`), a split procedure body's
+  `#if X begin exit; #else begin #endif Call5();` marked `Call5` dead, and a split closing, a
+  cond-only head split, a two-head split if-else and a split `case` closing did the same; d20 reported
+  each. Now (spec `docs/superpowers/specs/2026-11-14-eng14-310-remainder-design.md` §4.2, §8.1):
+  - a split body's arms are a group of alternatives and its shared tail follows them; the tail is
+    unordered when a live arm ends with an `if <cond> then` guard, and that guard's condition is
+    lowered, so a call in it has a call site (it was dropped);
+  - where arm boundaries are lost (a broken one-statement slot in then, else, loop, `with`,
+    `asserterror` or `case` branch position; a split closing; a cond-only head; a two-head split
+    if-else; a split `case` closing), the routine is untrusted (below): its calls keep their sites,
+    and no mark, guard or dominance comes from it. Arranging the statements in some order is not
+    enough: in `if Flag then #if X exit; Commit(); #endif` the `Commit` runs under X whatever `Flag`
+    is, so a guard `Flag = true` would let a caller passing `false` prune a real commit;
+  - a `case` with a `#if` group among its branches fails closed the same way: its labels unioned
+    across builds and its `else` was a real else, so in `0: …; #if X 1: …; #else else Commit();
+    #endif` literal reachability ruled the commit out for `P(1)`, though without X it runs (and
+    `case I of 1: R.Get(); #if X else R.Get(); #endif end;` read as "every path loads `R`"). The rule
+    covers every place the grammar lets a `#if` sit in a `case`: its header, between branches, a
+    branch's labels (`#if X 1, #endif 2:`), a nested case, and a case split across `#if` (spec §8.1's
+    table, one test each); case groups nested past the lowering depth budget fail closed too. A
+    second `else` from another arm is kept with its calls (it was dropped).
+- **An untrusted routine has no control tree.** A parse-incomplete routine, or one holding a
+  statement the lowerer could not lower (the depth budget, an unmodelled wrapper), may have lost an
+  `exit`. It keeps no statement tree and no unreachable entries, so no dead mark, d20, dominance,
+  `all_paths_error` or literal pruning comes from it. `cfg_walker` gives it Unknown path facts (its
+  straight-line fallback claimed `dirty_at_exit: No`), `param_guard` no guard frame, and d43 reads
+  its `IsHandled := true` as "may set" (its no-branch fast path said "must set"). It also reads
+  `has_branching: true`, which RecordRef temp-state derivation, `event_flow` and d61 took as a
+  straight-line proof when `false`.
+- On CDO (`bc3ccb18`, against master `e86d73fd`): findings at both scopes and the call-graph
+  histogram (0 unknown edges) do not move. Of 34,205 routines with a body (5,479 in the workspace),
+  11 are untrusted, none parse-incomplete (`eng14_cdo_untrusted_census`):
+  - 7 (6 in Base Application, among them `Sales-Post::PostSalesLine`; 1 in System Application) are
+    one family: a `#if` arm that adds an `if C then` (or `if C then … else`) head in front of a
+    statement every build runs. A precise reading that invents no guard is ENG-77;
+  - 4 have a `#if` group among a `case`'s branches: 3 in Base Application and 1 in the workspace,
+    `CDO E-Mail::SetSendingMethodAndFromAddress` (a split case header: one label goes to different
+    branches per build). That routine's 8 call sites lose their control contexts and order in the
+    `alsem fingerprint` output (its old reading had no false claim: a precision loss, nothing else
+    in that output moves). A precise reading is ENG-79.
+- Left (pre-existing, not closed here): a `#if` inside a condition (`if #if X Flag #else not Flag
+  #endif then exit;`) is still read from its first arm, so every build gets that arm's guard
+  (ENG-78).
+- Goldens: only the r0 corpus's intentional parse error (`CSR Broken::Incomplete`) moves, in the
+  r1a L2 golden and the l2 snapshot: its call loses `top-level` and its dominance claim. The impact
+  cache schema goes 13 → 14. Schema 14 also covers ENG-19's summary change (`Report.RunRequestPage`
+  runs the request page), which did not bump it: an impact base cached between ENG-19's landing and
+  this one is rebuilt. Tests: `src/program/body/eng14_preproc_tests.rs` (A1-A6), plus unit tests in
+  `cfg_walker` and d43, each guard with a discrimination proof. Part 2 (the `Error` binding rule, the
+  summary composition, removing #288's trust gate) follows; `CurrReport.Skip`/`Break`/`Quit` is
+  ENG-74.
 
 ### Fixed (ENG-24: d50 misses a write the trap search counts)
 

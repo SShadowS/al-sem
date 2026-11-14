@@ -283,6 +283,7 @@
       },
       "relationRecorded": true,
       "rootEntryKinds": [],
+      "rootEntryWord": null,
       "rootUserOrJob": false,
       "stableId": "4b7e2d91-6c3a-4f58-a0d2-1e9c8b5f7a36:Codeunit:51400#81c17c9a2aeee9d00bd7820fcaccb88e39c54eb5b6f812184c979dbe654005b3",
       "states": 6,
@@ -544,6 +545,7 @@
       "rootEntryKinds": [
         "event-subscriber"
       ],
+      "rootEntryWord": "event subscriber",
       "rootUserOrJob": false,
       "stableId": "4b7e2d91-6c3a-4f58-a0d2-1e9c8b5f7a36:Codeunit:51400#f6c9f8d45c19c37415ec3eb8d87823274ae3035d8c82c5175b9778646f614b1d",
       "states": 5,
@@ -801,6 +803,7 @@
       },
       "relationRecorded": true,
       "rootEntryKinds": [],
+      "rootEntryWord": null,
       "rootUserOrJob": false,
       "stableId": "4b7e2d91-6c3a-4f58-a0d2-1e9c8b5f7a36:Codeunit:51400#d800ba134870623f51844fbfbb72920fc06f06a84586ecd7ce57881918fe0a9f",
       "states": 3,
@@ -1072,6 +1075,7 @@
       },
       "relationRecorded": true,
       "rootEntryKinds": [],
+      "rootEntryWord": null,
       "rootUserOrJob": false,
       "stableId": "4b7e2d91-6c3a-4f58-a0d2-1e9c8b5f7a36:Codeunit:51400#fe1aefe8188b436f7e9aa6de6bad5c41346e321d5f78210204a8c3afdffcb0a5",
       "states": 4,
@@ -1258,6 +1262,7 @@
       },
       "relationRecorded": true,
       "rootEntryKinds": [],
+      "rootEntryWord": null,
       "rootUserOrJob": false,
       "stableId": "4b7e2d91-6c3a-4f58-a0d2-1e9c8b5f7a36:Codeunit:51400#c723a99e303f0e7dcb2865b635356ddc3fa2671ddf23757bce1cc40012216b88",
       "states": 1,
@@ -1590,6 +1595,7 @@
     "rootEntryKinds": [
       "event-subscriber"
     ],
+    "rootEntryWord": "event subscriber",
     "rootUserOrJob": false,
     "states": 15,
     "userOrJobEntries": 4

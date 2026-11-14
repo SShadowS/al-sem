@@ -50,6 +50,12 @@ pub const RELATION_NAVIGATION: &str = "UI navigation";
 /// (`api-page`, `web-service-exposed`, `job-queue-entrypoint`,
 /// `background-start`); each of those is the kind of routine it starts
 /// (`codeunit OnRun`, `page trigger`) plus a context ([`entry_context`]).
+///
+/// TLS-55: `job-queue-entrypoint` and `web-service-exposed` come only from
+/// `roots.config.json` ([`is_config_only`]), which may name any procedure
+/// (`internal procedure RunJob()`): such a kind says how a run starts, not
+/// what routine it is, so alone it is a `procedure`. An entry's word is
+/// [`entry_word`], where any source kind of the routine wins.
 #[must_use]
 pub fn entry_kind(k: EntryKind) -> &'static str {
     match k {
@@ -60,12 +66,50 @@ pub fn entry_kind(k: EntryKind) -> &'static str {
         EntryKind::EventSubscriber => "event subscriber",
         EntryKind::InstallCodeunit => "install trigger",
         EntryKind::UpgradeCodeunit => "upgrade trigger",
-        EntryKind::OnrunCodeunit
-        | EntryKind::BackgroundStart
-        | EntryKind::JobQueueEntrypoint
-        | EntryKind::WebServiceExposed => "codeunit OnRun",
+        EntryKind::OnrunCodeunit | EntryKind::BackgroundStart => "codeunit OnRun",
+        EntryKind::JobQueueEntrypoint | EntryKind::WebServiceExposed => "procedure",
         EntryKind::TestProcedure => "test procedure",
     }
+}
+
+/// A kind only `roots.config.json` supplies (`root_classification`'s two
+/// overlay-only kinds): it tells the context, not the routine.
+#[must_use]
+pub fn is_config_only(k: EntryKind) -> bool {
+    matches!(
+        k,
+        EntryKind::JobQueueEntrypoint | EntryKind::WebServiceExposed
+    )
+}
+
+/// A kind word's print rank: the position in [`EntryKind::ALL`] of the first
+/// kind whose word it is (`usize::MAX` for any other word). One order for
+/// every list of kind words, whatever kind an entry carries first (TLS-55: a
+/// configured page trigger's first kind is `web-service-exposed`).
+#[must_use]
+pub fn entry_word_rank(word: &str) -> usize {
+    EntryKind::ALL
+        .iter()
+        .position(|k| entry_kind(*k) == word)
+        .unwrap_or(usize::MAX)
+}
+
+/// The kind word of an entry with `kinds` (in [`EntryKind::ALL`] order),
+/// TLS-55's one home: its first source kind's word (a configured `OnRun`
+/// keeps `codeunit OnRun`, a configured page trigger `page trigger`), else
+/// `procedure` (a routine only the config names).
+#[must_use]
+pub fn entry_word(kinds: impl IntoIterator<Item = EntryKind>) -> &'static str {
+    let mut config = false;
+    for k in kinds {
+        if is_config_only(k) {
+            config = true;
+        } else {
+            return entry_kind(k);
+        }
+    }
+    debug_assert!(config, "an entry has a kind");
+    "procedure"
 }
 
 /// The plural of an entry kind, for a count line (`page actions 3`).

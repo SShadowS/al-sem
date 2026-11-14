@@ -488,3 +488,118 @@ fn racing_evaluations_keep_one_answer_per_key() {
         "the third ask reads every kept answer and evaluates nothing"
     );
 }
+
+/// ENG-14 (sol's part-1 review, round 2): a `case` whose labels come from a `#if` group.
+/// Without X the case is `0: Work(); else Commit();`, so `P(1)` commits; a union read
+/// (`{0, 1}` plus a real `else`) would rule the commit out for `P(1)`. The case fails
+/// closed (its routine has no tree). Control: the same case with no `#if` (`0: …; 1: …;
+/// else Commit()`) does rule it out for `P(1)`, so the pruning is live in this fixture.
+/// Break: drop the case-group marker in `lower_case_body` (the commit is ruled out).
+#[test]
+fn eng14_case_labels_from_a_group_prune_nothing() {
+    const SRC: &str = r#"codeunit 50345 "Eng14 Case Labels"
+{
+    procedure CallPlain()
+    begin
+        Plain(1);
+    end;
+
+    procedure CallGroup()
+    begin
+        Group(1);
+    end;
+
+    procedure CallLabels()
+    begin
+        Labels(1);
+    end;
+
+    // sol, round 3: labels that vary by build inside one branch.
+    local procedure Labels(I: Integer)
+    begin
+        case I of
+#if X
+            1,
+#endif
+            2:
+                Work();
+            else
+                Commit();
+        end;
+    end;
+
+    local procedure Plain(I: Integer)
+    begin
+        case I of
+            0:
+                Work();
+            1:
+                Work();
+            else
+                Commit();
+        end;
+    end;
+
+    local procedure Group(I: Integer)
+    begin
+        case I of
+            0:
+                Work();
+#if X
+            1:
+                Work();
+#else
+            else
+                Commit();
+#endif
+        end;
+    end;
+
+    local procedure Work() begin end;
+}
+"#;
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("src")).unwrap();
+    std::fs::write(
+        dir.path().join("app.json"),
+        r#"{"id":"e1400000-0000-4000-8000-000000000016","name":"E14C","publisher":"t","version":"1.0.0.0"}"#,
+    )
+    .unwrap();
+    std::fs::write(dir.path().join("src/Case.al"), SRC).unwrap();
+    let (base, tree) = crate::engine::l5::digest::wave2_index_tests::tree_over(
+        dir.path(),
+        crate::engine::l4::cone_derived::WitnessScope::All,
+    );
+    let model = &base.resolved;
+    let ruled_out = |caller: &str| -> bool {
+        let root = model
+            .workspace
+            .routines
+            .iter()
+            .find(|r| r.name == caller)
+            .unwrap_or_else(|| panic!("precondition: {caller}"))
+            .stable_routine_id
+            .clone();
+        let fx = crate::engine::l5::digest::wave2_index_tests::effects_of(&tree, model, &root);
+        let commit = fx
+            .iter()
+            .position(|e| e.effect_type == "COMMIT")
+            .unwrap_or_else(|| panic!("precondition: {caller} reaches the commit"));
+        LiteralReach::new(&tree, model)
+            .unreachable_effects(&root, &fx, &[])
+            .0
+            .contains(&commit)
+    };
+    assert!(
+        ruled_out("CallPlain"),
+        "precondition: with no #if, P(1) rules the else's commit out"
+    );
+    assert!(
+        !ruled_out("CallGroup"),
+        "without X the case has no label 1 and P(1) commits"
+    );
+    assert!(
+        !ruled_out("CallLabels"),
+        "without X the branch has no label 1 and P(1) commits"
+    );
+}
