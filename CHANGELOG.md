@@ -323,6 +323,75 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rule (`resolve::edge::trigger_family`); `docs/al-compiler-callgraph-holes.md` A11 is now
   "Better".
 
+### Changed (TLS-49: one scope fact for the human and JSON query headers)
+
+- **`query effects` and `query touches` now state the same scope in `--format json` as in the
+  human header, in every case.** The body's scope lines are the one home. The JSON header
+  (`payload.result.scope.scope`) joins them with the dependencies clause, as the human header
+  does. What moved in JSON:
+  - a routine-scoped `query touches` now states its real scope ("dependency code: none
+    reached", or the full-cone text when the cone enters dependency code). Before, it said "per
+    operation, one routine into dependency code" whatever the answer;
+  - failed answers, which state no scope in human form, state no depth in JSON either
+    ("dependencies: N apps" only);
+  - the effects header carries the literal-arguments sentence the human one has;
+  - `query effects`' `payload.summary.scope` has a new value, `whole-cone`, when the cone
+    enters no dependency code (was `operations-one-routine-deep; …`). `QUERY_SCHEMA_VERSION`
+    is unchanged; the schema 4 and 5 mappings pass the new value through.
+- **`query effects` and `query touches` decide "the cone enters dependency code" with one
+  check** (`cone_enters`): a visited dependency routine, a dependency entry point or a
+  crossing site. Effects now also counts the last two, as touches did. In effects that moves
+  the families' depth and limits, `summary.scopes` and the absence lines to the
+  one-routine-deep wording, never the reverse. The task asked for a probe first; none was run.
+  The two counts were taken because explain's own "none reached" rule reads them, and a
+  crossing with no known target counts there with no routine visited (`routine_rollup.rs`).
+  Whether real code shows that shape is not measured. The rule is pinned by the hand-stated
+  `the_cone_enters_dependency_code_on_any_dependency_count`; its wiring for those two counts is
+  not (no fixture produces the shape).
+- **A cone search cut short at its limit is its own fact, not dependency entry** (review sol
+  r1). Effects used to count it as entry. In effects, a cut-short cone that enters no
+  dependency keeps the whole-cone scope and says "(not searched: beyond the cone's search
+  limit)". Its four operation families become `notExhaustive`, with a reason and the blocker
+  `searchCutShort: 1`; that key is present only when it happened. The header then reads
+  "analysis partial". The `beyondDependencyCalls` family, the cone's own read, gets the same
+  reason and key whenever the search was cut short, whether or not the cone enters dependency
+  code (review Fable r4). In touches the scope reads "dependency code: none reached (search cut
+  short)", and a miss past the cut is `unknown` with the reason `search-cut-short`, no longer
+  "no (every candidate decided)". Pinned by `query_cut_short_without_dependency_says_so`, a
+  70-routine workspace chain past the 64-hop limit, in both formats, with one discrimination
+  proof per rule (five).
+- **Fixed with it: a touches miss answered `unknown` now reads "analysis partial" in JSON too.**
+  The JSON header looked for `down.answer`, which no answer carries; the verdict lives at
+  `down.absence.answer`. So every `unknown` miss, including those on calls not resolved, said
+  "complete" in JSON while the human header said "partial" (review sol r3). No corpus golden
+  has such a miss.
+- **Test-app discovery reports the folders it skipped as git-ignored**: `ignoredByGit` in the
+  scope JSON (the tests document's `scope` too), and "N folders git ignores were not searched"
+  when no test app is found.
+- Pinned, each with a discrimination proof, by:
+  - `query_scope_is_one_fact_in_both_formats`: the whole query corpus, plus the output
+    fixture's effects and touches whose cone enters a dependency, human against JSON;
+  - the cone-not-read check in `digest_db_effects_carry_query_effects_temp_state`;
+  - `query_effects_whole_cone_with_an_unresolved_call_says_not_searched`, the "not searched"
+    variant, now with a fixture;
+  - `discovery_skips_folders_git_ignores`.
+- Goldens moved, against TLS-48:
+  - 21 query and batch JSON goldens;
+  - `ignoredByGit` in the impact `diff.json` and the tests `universe.post.json`;
+  - 4 human goldens, the workspace-wide touches answers (below). Their JSON is back at its old
+    text.
+
+  The CDO goldens were not run on this branch. The union, the touches miss line and the
+  workspace-wide scope line can move their human text.
+- **`query touches`' machine tokens follow the same fact.** `down.absence.index` is
+  `whole-cone` when the cone enters no dependency code (was always
+  `operations-one-routine-deep`), and the human miss line then drops "(per operation, one
+  routine into dependency code)". Pinned by `query_touches_miss_index_states_the_scope_fact`,
+  with a discrimination proof. The workspace-wide list reads no cone and stands on the
+  per-operation index, so it now prints "scope: per operation, one routine into dependency
+  code" in both headers, as its `note` and `index` say (the four `*.global` human goldens;
+  their JSON header states it as before). `down.absence.index` has a new value, `whole-cone`.
+
 ### Changed (TLS-48: engine limits B8, the last two small-output items)
 
 - **`query effects` no longer claims a dependency depth when no dependency code is entered.**
@@ -344,6 +413,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Pinned by `discovery_skips_folders_git_ignores`,
   `an_ignored_root_and_an_ignored_clone_are_still_searched` and (Linux)
   `an_ignored_non_utf8_folder_is_not_its_lossy_sibling`, with discrimination proofs.
+
+### Fixed (ENG-19, with ENG-21: a report's request page)
+
+- **`Report.RunRequestPage` runs the request page.** It resolved as a plain built-in, so a write
+  or `Commit()` in the request page's triggers answered `no` through it (re-probed on master
+  `1bd755fc`: `may-commit no`). It is now a start of the report, keyword and variable form, that
+  runs `OnInitReport` and the request page and stops: no `OnPreReport`, no data item, no
+  `OnPostReport`, no dataset (`dataset::starts_object`, `resolver::start_runs_trigger`; the
+  order was measured on the BC 28.4 Linux sidecar and confirmed on Windows, engine limits L20).
+- **A request page that may be cancelled makes `OnPreReport` and `OnPostReport` conditional.**
+  `Report.Run(X)` and `R.Run()`/`RunModal` show the request page unless the report says
+  `UseRequestPage = false` or the call passes a literal `false` `RequestWindow`; the user may
+  cancel it, which stops the run before `OnPreReport`. Master answered `commits-on-success-path
+  yes` for a `Commit()` there; it is now `unknown` (`SiteFacts::request_page_may_cancel`,
+  `TriggerFires::Maybe`). `Execute`, `Print` and `SaveAs*` are unchanged. The program graph keeps
+  a report's `UseRequestPage = false` (`DatasetNode::request_page_hidden`): **pack schema 19**,
+  so dependency packs rebuild once.
+- On CDO (`bc3ccb18`, base `1bd755fc`): findings and fingerprints do not move at either scope;
+  unknown edges stay 0. CDO's three `Report.RunRequestPage(<run-time id>, …)` calls (two pages and
+  `CDO E-Mail Template Management.GetReportParameters`) move from a built-in to an honest
+  dynamic run: `honestDynamic` 23 → 26 and `resolvedCatalog` 6,134 → 6,131 (whole program and
+  primary-scoped alike); `alsem fingerprint` reports them `dynamic-target` instead of `builtin`.
+  Routines that reach `GetReportParameters` (through `CreateReportsForRecord`) gain that open
+  run in prove/explain/digest. The L4 whole-program digest is re-frozen (`fde6e4f3…` →
+  `b2624796…`, reverse index unchanged): 1010 of 5479 routine summaries gain exactly one
+  `dynamic-dispatch` uncertainty on those three operations and nothing else
+  (`tests/l4-summary-baseline/README.md`).
+- `alsem impact`: `R.RunRequestPage()` is a `run` site now, no longer a `declaredRunnable` one.
+  Every dispatching built-in on a typed receiver now starts its object, so that rule has no source
+  shape left. Tests: `tests/cli/cli_eng19_request_page_runs.rs` (breaks recorded). Left (L20): a
+  variable's `UseRequestPage(false)` call is not read (the page may show); an XmlPort's request
+  page is not treated as cancellable.
 
 ### Added (TLS-41: witnesses for the grammar-v4 changes that alter a program's meaning)
 

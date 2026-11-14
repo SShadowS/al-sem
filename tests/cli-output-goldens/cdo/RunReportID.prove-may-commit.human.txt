@@ -1,6 +1,6 @@
 prove Codeunit "CDO E-Mail Handler"::RunReportID may-commit   [cross-app]
 answer: yes — COMMIT at ws:src/Features/Email/Templates/CDOEMailTemplateManagement.Codeunit.al:1241 (9 guards, 6 earlier exits on the route; 2 exits evaluated), and 21 more
-analysis partial (28 calls not resolved (9 in this workspace), 260 interface calls open world (7 in this workspace)) · assumptions: none (default world: an interface call may reach an implementation that is not loaded) · limits: none · scope: existing effects (what the routine and its callees already do); dependencies: 11 apps
+analysis partial (29 calls not resolved (10 in this workspace), 260 interface calls open world (7 in this workspace)) · assumptions: none (default world: an interface call may reach an implementation that is not loaded) · limits: none · scope: existing effects (what the routine and its callees already do); dependencies: 11 apps
 more: format: "json" for every evidence row and its hops
   evidence: 22 effects
     [COMMIT] at ws:src/Features/Email/Templates/CDOEMailTemplateManagement.Codeunit.al:1241

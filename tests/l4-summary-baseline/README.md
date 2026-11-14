@@ -286,6 +286,15 @@ CDO_WS=<path> ENFORCE_CDO_WS=1 L4_CANONICAL_DUMP=/tmp/l4-cdo.txt \
   operations sit in 199 routines; the other routines inherit them through their calls. Top
   tables: CDO 6175301 and 6175304, and `unknown` (RecordRef `Count`/`IsEmpty`). The reverse
   index moves with the same reads.
+- **2026-11-14, ENG-19** (`alsem/eng-19-request-page-runs`, engine limits L20). Whole-program
+  `fde6e4f3…` -> `b2624796…`; reverse index unchanged. Measured by dumping the canonical
+  serialization (`L4_CANONICAL_DUMP`) at master `6852a891` (matches the old digest) and at the
+  branch head `bc332bee`. 5479 routines throughout, none added or removed. 1010 move, each by
+  exactly one added `dynamic-dispatch` uncertainty and nothing else: no effect is added or removed.
+  The uncertainty sits on CDO's three `Report.RunRequestPage(<run-time id>, …)` operations, which
+  ENG-19 turns from a built-in into a dynamic run: `CDO E-Mail Template
+  Management.GetReportParameters` (itself and 1007 callers that inherit it), and one each on pages
+  6175306 and 6175409.
 - **2026-11-11, ENG-06** (`alsem/eng-06-b9-fieldref-validate`, engine limits B9/B10).
   Whole-program `46ef73cc…` -> `a0ce2366…`; reverse index unchanged. 5479 routines
   throughout, none added or removed. Exact single-variable attribution on the pinned

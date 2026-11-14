@@ -44,15 +44,32 @@ each. B3 also decides the escape line of L7 for isolated events. What is still o
 - B8: the query `scope:` line still says "one dependency routine deep" when no dependency code is
   entered. **Fixed by TLS-48** (2026-11-13): with no dependency code entered it reads "the whole
   cone, no dependency code entered" (plus "not searched: calls not resolved" when some are), as
-  the `locks:`/`reads:` absence lines do; the `--format json` header `scope`
-  (`query_scope_json`) says the same, read from the families' `depth`. ENG-40 (L1) builds on this
-  text.
+  the `locks:`/`reads:` absence lines do. **TLS-49** (2026-11-13): the human and JSON headers
+  state one scope in every case. Every body scope line goes through `push_scope`, and the JSON
+  header joins the recorded lines as the human one does. Before, the JSON stated a depth on its
+  own: in an answer whose cone was not read, in a failed answer, in workspace-wide touches, and
+  in every touches answer from a routine. `query effects`' `summary.scope` reads
+  `whole-cone` in the no-dependency case. `query touches` and `query effects` share one "enters
+  dependency code" check (a visited dependency routine, entry point or crossing site). It was
+  not probed on real code (see CHANGELOG TLS-49); its rule is pinned by a hand-stated test, its
+  wiring is not. A cone search cut short at its limit is its own fact, not entry: the whole-cone
+  answer says "not searched: beyond the cone's search limit", the cone's own
+  `beyondDependencyCalls` family is not exhaustive, and a touches miss past the cut is `unknown`
+  (`query_cut_short_without_dependency_says_so`). Left: an entering cone that is also cut short
+  names the cut only in its header's "analysis partial" reason, not in its body lines. Pinned by
+  `query_scope_is_one_fact_in_both_formats` (the query corpus and the output fixture's cone
+  entering a dependency) and, for a cone not read, by `digest_db_effects_carry_query_effects_temp_state`.
+  Touches' `down.absence.index` token and the depth phrase of the human miss line come from the
+  same fact (`index_depth`: `whole-cone` and no phrase when no dependency code is entered). The
+  workspace-wide list, which reads no cone, states its depth in both headers again, as its
+  `note` and `index` do. ENG-40 (L1) builds on this text.
 - B8: test-app discovery does not read `.gitignore`. **Fixed by TLS-48** (2026-11-13): a folder
   git ignores is not entered (one `git check-ignore` per folder read), unless it holds the
   workspace or a `.git` of its own (a nested clone is still read as an app); below an ignored
   folder that holds the workspace, and when the search root itself is ignored, nothing is skipped
-  as ignored. When git cannot answer, nothing is skipped, as before. Left: a skipped folder is not
-  listed in the scope, so "no dependent test app" and "your test app is ignored" read alike.
+  as ignored. When git cannot answer, nothing is skipped, as before. **TLS-49:** the scope counts
+  the skipped folders (`ignoredByGit`), and "no app … depends on this one" adds "N folders git
+  ignores were not searched", so it reads apart from "none exists".
 
 | # | What is wrong | Probe evidence | Size |
 |---|---|---|---|
@@ -751,11 +768,30 @@ Population: CDO has 14 reports, 1 query and 0 XmlPorts. CHANGELOG section: "engi
   Tests: `tests/cli/cli_eng08_xmlport_import_error.rs`.
 
 **Left.**
-- **`Report.RunRequestPage` is not a run: wrong answer left.** It runs the request page's `OnInit`,
-  `OnOpenPage`, `OnQueryClosePage` and `OnClosePage` (measured, above) but no `OnPreReport` and no
-  data item, and it resolves as a plain built-in, so a write in those triggers answers `no` through
-  it. CDO calls it twice, both with a run-time id. The fix needs the triggers one start method runs
-  (not the whole run's list), its keyword and variable forms, and B4's commit scope.
+- ~~**`Report.RunRequestPage` is not a run: wrong answer left.**~~ **Fixed by ENG-19**
+  (2026-11-13; re-probed on master `1bd755fc`: a `Commit()` in the request page's `OnOpenPage`
+  answered `may-commit no` through `Report.RunRequestPage(Report::X)` and `R.RunRequestPage()`).
+  It is now a start (`dataset::starts_object`), keyword and variable form, and runs only what it
+  measurably runs (`resolver::start_runs_trigger`): `OnInitReport` and the request page, no
+  `OnPreReport`, no data item, no `OnPostReport` (so an error in `OnPreReport` stays out of
+  `throws-error`), and no dataset. B4's commit scope reads it as a start, as for any run. CDO calls
+  it twice, both with a run-time id: an open run, as before.
+- ~~**A cancelled request page: `OnPreReport` stays `unconditional on success`.**~~ **Fixed by
+  ENG-19** (ENG-21 merged into it): `Run`/`RunModal` of a report whose request page may show
+  (`resolver::request_page_may_cancel`: not `UseRequestPage = false`, the new
+  `DatasetNode::request_page_hidden`, pack schema 19; not a literal `false` `RequestWindow`)
+  marks the report's own `OnPreReport`/`OnPostReport` `conditional` (`SiteFacts::
+  request_page_may_cancel`, the model's `TriggerFires::Maybe`); master answered
+  `commits-on-success-path yes` for a `Commit()` in `OnPreReport` through `Report.Run(X)`, now
+  `unknown`. `Execute`, `Print` and `SaveAs*` show no page and keep it unconditional. Left: a
+  variable's `UseRequestPage(false)` call before `R.Run()` is not read (the page may show: the
+  safe side; batch code often does this, ENG-72); an XmlPort's request page is not treated as
+  cancellable (not measured); `alsem impact` and `alsem graph` (the sited graph) still reach
+  every report trigger from a `RunRequestPage`, static or dynamic: a run is an edge to the
+  report's object node, whose lifecycle reaches all its triggers, and the run hubs
+  (`reverse::run_reaches_trigger`) read the full list too. It over-selects tests and never hides
+  one; keeping the subset needs a new edge shape in the `al-sem.callgraph` export, done with
+  bc-dev-mcp's parser (TLS-52, gpt-6.1-sol round 1).
 - Which request-page triggers one call runs is not read from the call: `RunModal(X, false)` (and a
   report with `UseRequestPage = false`) reaches `OnOpenPage`/`OnClosePage`, and `Execute` reaches
   `OnQueryClosePage`, all `conditional` (safe, imprecise).

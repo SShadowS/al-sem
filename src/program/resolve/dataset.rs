@@ -153,8 +153,11 @@ pub fn starts_object(kind: ObjectKind, method_lc: &str) -> bool {
     match kind {
         ObjectKind::Codeunit => method_lc == "run",
         ObjectKind::Page => matches!(method_lc, "run" | "runmodal"),
+        // ENG-19: `RunRequestPage` runs the report's request page (its own
+        // trigger subset, `resolver::start_runs_trigger`) and no dataset.
         ObjectKind::Report => {
-            matches!(method_lc, "run" | "runmodal") || is_report_output_method(method_lc)
+            matches!(method_lc, "run" | "runmodal" | "runrequestpage")
+                || is_report_output_method(method_lc)
         }
         ObjectKind::XmlPort => matches!(method_lc, "run" | "import" | "export"),
         ObjectKind::Query => dataset_mode(ObjectKind::Query, method_lc).is_some(),

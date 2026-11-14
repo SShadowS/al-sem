@@ -319,6 +319,25 @@ fn check_mode(single_app: bool) -> Vec<String> {
             true,
         );
         let qdoc: Value = serde_json::from_str(&q.json_text).expect("query json");
+        // TLS-49 (b): with no cone read (this entry passes `None`), the JSON
+        // header states the body's scope line, not a depth of its own.
+        // Discrimination (2026-11-13): `query_scope_json` ignoring the
+        // recorded lines fails here (JSON "dependencies: 0 apps"); restored,
+        // passes.
+        // The human text here is header form; its scope is the whole clause.
+        let body_scope = q
+            .human_text
+            .lines()
+            .find_map(|l| l.split(" · scope: ").nth(1))
+            .unwrap_or_default();
+        let json_scope = qdoc["payload"]["result"]["scope"]["scope"]
+            .as_str()
+            .unwrap_or_default();
+        if body_scope.is_empty() || json_scope != body_scope {
+            failures.push(format!(
+                "{name}: JSON scope {json_scope:?} is not the body's {body_scope:?}"
+            ));
+        }
         let mut query_states = BTreeSet::new();
         collect_temp_states(&qdoc, &mut query_states);
         for x in db {

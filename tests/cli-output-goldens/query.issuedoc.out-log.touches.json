@@ -81,7 +81,7 @@
         ],
         "limits": [],
         "reasons": [],
-        "scope": "per operation, one routine into dependency code; dependencies: 1 app",
+        "scope": "dependency code: full cone for physical writes, grouped per dependency routine entered; per-operation detail one routine deep; dependencies: 1 app",
         "universe": "cross-app"
       }
     },
