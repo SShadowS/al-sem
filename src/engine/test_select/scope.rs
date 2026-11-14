@@ -41,6 +41,17 @@
 //!    that is its own repository is still found. The cap stays as a safety
 //!    net.
 //!
+//!    **Ignored folders are not entered** (engine limits B8, TLS-48): a folder
+//!    git ignores (`.gitignore`, `.git/info/exclude`, the user's excludes
+//!    file; one `git check-ignore` per folder read) is skipped, unless it
+//!    holds the workspace or a `.git` of its own (a nested clone is usually
+//!    ignored by the outer repository; it is still read as an app). Below an
+//!    ignored folder that holds the workspace, and when the search root itself
+//!    is ignored, nothing is skipped as ignored (git reports all of it
+//!    ignored, the workspace's siblings too). When git cannot answer, nothing
+//!    is skipped. A folder with tracked files is not ignored. A skipped folder
+//!    is not listed in the scope.
+//!
 //! An app **qualifies** when its `app.json` lists the workspace app's `id` in
 //! `dependencies` AND one of its `.al` files declares a codeunit with
 //! `Subtype = Test`. A dependent with no `.al` file is skipped `no-source`
@@ -315,7 +326,11 @@ pub fn discover(workspace: &Path, req: &ScopeRequest) -> Scope {
         );
         return scope;
     };
-    walk(&mut scope, &root, &abs, 0);
+    // A root inside an ignored folder (a marked project folder, a fake `.git`
+    // in an ignored temporary folder): git reports all of it ignored, so
+    // ignore rules cannot tell projects apart there.
+    let honor_ignore = !root_is_ignored(&root);
+    walk(&mut scope, &root, &abs, 0, honor_ignore);
     scope.search_root = Some((root, git_top));
     scope
 }
@@ -500,7 +515,9 @@ fn other_project(dir: &Path, workspace: &Path) -> bool {
 }
 
 /// Depth-first, sorted, over `dir` at `depth` (see the module doc).
-fn walk(scope: &mut Scope, dir: &Path, workspace: &Path, depth: usize) {
+/// `honor_ignore` is false below an ignored folder that holds the workspace:
+/// git reports everything there as ignored, the workspace's siblings too.
+fn walk(scope: &mut Scope, dir: &Path, workspace: &Path, depth: usize, honor_ignore: bool) {
     if !scope.complete && scope.searched >= MAX_APP_JSON {
         return;
     }
@@ -541,13 +558,99 @@ fn walk(scope: &mut Scope, dir: &Path, workspace: &Path, depth: usize) {
             return;
         }
     };
+    // Engine limits B8 (TLS-48): a folder the repository's `.gitignore`
+    // rules ignore is not a project folder, unless it holds the workspace.
+    let ignored = if honor_ignore {
+        git_ignored(dir, &subdirs)
+    } else {
+        std::collections::HashSet::new()
+    };
+    // Kept although ignored: a folder holding the workspace, and a repository
+    // of its own (a nested clone is usually ignored by the outer repository;
+    // it is read as an app, else `other_project` stops there).
+    subdirs.retain(|d| !ignored.contains(d) || workspace.starts_with(d) || d.join(".git").exists());
     subdirs.sort();
     for d in subdirs {
-        walk(scope, &d, workspace, depth + 1);
+        let honor = honor_ignore && !ignored.contains(&d);
+        walk(scope, &d, workspace, depth + 1, honor);
         if scope.searched >= MAX_APP_JSON && !scope.complete {
             return;
         }
     }
+}
+
+/// Whether git ignores `root` itself (`git check-ignore -q .`: exit 0). No
+/// repository or no git: not ignored.
+fn root_is_ignored(root: &Path) -> bool {
+    crate::git_env::git_command()
+        .arg("-C")
+        .arg(root)
+        .args(["check-ignore", "-q", "."])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|s| s.code() == Some(0))
+}
+
+/// The folders among `subdirs` (children of `dir`) that git ignores, by one
+/// `git check-ignore` over them (the repository's `.gitignore` files,
+/// `.git/info/exclude` and the user's excludes file). Empty when there are
+/// none, or when git cannot answer (not installed, `dir` in no repository):
+/// the walk then reads every folder, as it did before this check.
+fn git_ignored(dir: &Path, subdirs: &[PathBuf]) -> std::collections::HashSet<PathBuf> {
+    use std::io::Write;
+    let mut set = std::collections::HashSet::new();
+    if subdirs.is_empty() {
+        return set;
+    }
+    // A trailing `/`: the names are folders (git also stats a name without it).
+    let mut input = Vec::new();
+    for d in subdirs {
+        if let Some(name) = d.file_name() {
+            input.extend_from_slice(name.as_encoded_bytes());
+            input.extend_from_slice(b"/\0");
+        }
+    }
+    let child = crate::git_env::git_command()
+        .arg("-C")
+        .arg(dir)
+        .args(["check-ignore", "--stdin", "-z"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+    let Ok(mut child) = child else {
+        return set;
+    };
+    // Write from a thread, so a large answer cannot block the write.
+    let stdin = child.stdin.take();
+    let writer = std::thread::spawn(move || {
+        if let Some(mut s) = stdin {
+            let _ = s.write_all(&input);
+        }
+    });
+    let Ok(out) = child.wait_with_output() else {
+        return set;
+    };
+    let _ = writer.join();
+    // Exit 0: some path is ignored; 1: none; anything else: git could not tell.
+    if out.status.code() != Some(0) {
+        return set;
+    }
+    // Match git's answer to the submitted folders by their raw name bytes: a
+    // lossy decode turned an ignored `tests-\xff` into a sibling `tests-\u{FFFD}`
+    // and skipped that one instead (TLS-48 review sol r1).
+    for name in out.stdout.split(|&b| b == 0).filter(|n| !n.is_empty()) {
+        let name = name.strip_suffix(b"/").unwrap_or(name);
+        if let Some(d) = subdirs
+            .iter()
+            .find(|d| d.file_name().is_some_and(|f| f.as_encoded_bytes() == name))
+        {
+            set.insert(d.clone());
+        }
+    }
+    set
 }
 
 fn cap(scope: &mut Scope) {

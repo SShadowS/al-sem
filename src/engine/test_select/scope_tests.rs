@@ -306,3 +306,148 @@ fn the_walk_does_not_enter_other_projects() {
     assert_eq!(names, ["Prod Tests Repo", "Prod Tests"]);
     assert_eq!(s.searched, 2, "TestRepo and work/Test only");
 }
+
+/// A REAL repository (`git init`): `check-ignore` needs one.
+fn git_repo() -> tempfile::TempDir {
+    let t = tempfile::tempdir().unwrap();
+    let ok = crate::git_env::git_command()
+        .arg("-C")
+        .arg(t.path())
+        .args(["init", "-q"])
+        .status()
+        .is_ok_and(|s| s.success());
+    assert!(ok, "git init failed");
+    t
+}
+
+/// A dependent test app at `dir`, named `name`.
+fn test_app(dir: &Path, id: &str, name: &str) {
+    app(dir, id, name, &[PROD]);
+    al(&dir.join("src"), "T.Codeunit.al", TEST_CU);
+}
+
+/// Engine limits B8 (TLS-48): auto-discovery does not enter a folder the
+/// repository's `.gitignore` ignores (a directory pattern, a bare name), and
+/// a folder that holds the workspace is entered even when ignored, with its
+/// workspace's siblings found.
+///
+/// DISCRIMINATION (2026-11-13): `walk` without the `retain` on `ignored`
+/// fails at the first `names` ("Copy Tests" and "Out Tests" found); passing
+/// `honor_ignore = true` to every child fails at the second (no "Scratch
+/// Tests"); restored, passes.
+#[test]
+fn discovery_skips_folders_git_ignores() {
+    let t = git_repo();
+    let r = t.path();
+    std::fs::write(r.join(".gitignore"), "build/\nOut\nscratch/\n").unwrap();
+    app(&r.join("App"), PROD, "Prod", &[]);
+    test_app(
+        &r.join("Test"),
+        "22222222-2222-2222-2222-222222222222",
+        "Prod Tests",
+    );
+    test_app(
+        &r.join("build/Copy"),
+        "33333333-3333-3333-3333-333333333333",
+        "Copy Tests",
+    );
+    test_app(
+        &r.join("Out"),
+        "44444444-4444-4444-4444-444444444444",
+        "Out Tests",
+    );
+    let s = discover(&r.join("App"), &ScopeRequest::default());
+    assert!(s.complete, "{:?}", s.incomplete);
+    let names: Vec<&str> = s.apps.iter().map(|a| a.name.as_str()).collect();
+    assert_eq!(names, ["Prod Tests"]);
+    assert_eq!(s.searched, 1, "Test only");
+
+    // A workspace in an ignored folder still finds its sibling there.
+    app(&r.join("scratch/App"), PROD, "Prod", &[]);
+    test_app(
+        &r.join("scratch/Tests"),
+        "55555555-5555-5555-5555-555555555555",
+        "Scratch Tests",
+    );
+    let s = discover(&r.join("scratch/App"), &ScopeRequest::default());
+    let names: Vec<&str> = s.apps.iter().map(|a| a.name.as_str()).collect();
+    assert_eq!(names, ["Prod Tests", "Scratch Tests"]);
+}
+
+/// TLS-48 review r1: a search root inside an ignored folder (here a marked
+/// project folder under an ignored `mark/`) still finds its siblings (git
+/// reports all of the root ignored), and an ignored sibling that is a
+/// repository of its own (a nested clone) is still read as an app.
+///
+/// DISCRIMINATION (2026-11-13): starting the walk with `honor_ignore = true`
+/// fails at the first `names` (empty); dropping the `.git` arm of the
+/// `retain` fails at the second (no "Clone Tests"); restored, passes.
+#[test]
+fn an_ignored_root_and_an_ignored_clone_are_still_searched() {
+    let t = git_repo();
+    let r = t.path();
+    std::fs::write(r.join(".gitignore"), "mark/\nclone/\n").unwrap();
+    std::fs::create_dir_all(r.join("mark")).unwrap();
+    std::fs::write(r.join("mark").join(PROJECTS_MARKER), "").unwrap();
+    app(&r.join("mark/p1/App"), PROD, "Prod", &[]);
+    test_app(
+        &r.join("mark/p1/T"),
+        "22222222-2222-2222-2222-222222222222",
+        "Marked Tests",
+    );
+    let s = discover(&r.join("mark/p1/App"), &ScopeRequest::default());
+    assert!(s.complete, "{:?}", s.incomplete);
+    let names: Vec<&str> = s.apps.iter().map(|a| a.name.as_str()).collect();
+    assert_eq!(names, ["Marked Tests"]);
+
+    app(&r.join("App"), PROD, "Prod", &[]);
+    test_app(
+        &r.join("clone"),
+        "33333333-3333-3333-3333-333333333333",
+        "Clone Tests",
+    );
+    let ok = crate::git_env::git_command()
+        .arg("-C")
+        .arg(r.join("clone"))
+        .args(["init", "-q"])
+        .status()
+        .is_ok_and(|s| s.success());
+    assert!(ok, "git init clone failed");
+    let s = discover(&r.join("App"), &ScopeRequest::default());
+    let names: Vec<&str> = s.apps.iter().map(|a| a.name.as_str()).collect();
+    assert_eq!(names, ["Clone Tests"]);
+}
+
+/// TLS-48 review sol r1: git's answer is matched by raw name bytes. An
+/// ignored folder whose name is not UTF-8 (`tests-\xff`) must not be confused
+/// with a sibling whose name holds U+FFFD (`tests-\u{FFFD}`, what a lossy
+/// decode of the first gives), so the real test app there is found.
+///
+/// DISCRIMINATION (2026-11-13): decoding git's output with
+/// `String::from_utf8_lossy` (the old code) finds "Ignored Tests" instead of
+/// "Real Tests"; restored, passes. Linux only: macOS (APFS) refuses a
+/// non-UTF-8 folder name.
+#[cfg(target_os = "linux")]
+#[test]
+fn an_ignored_non_utf8_folder_is_not_its_lossy_sibling() {
+    use std::os::unix::ffi::OsStrExt;
+    let t = git_repo();
+    let r = t.path();
+    let ignored = r.join(std::ffi::OsStr::from_bytes(b"tests-\xff"));
+    std::fs::write(r.join(".gitignore"), b"tests-\xff/\n").unwrap();
+    app(&r.join("App"), PROD, "Prod", &[]);
+    test_app(
+        &ignored,
+        "77777777-7777-7777-7777-777777777777",
+        "Ignored Tests",
+    );
+    test_app(
+        &r.join("tests-\u{FFFD}"),
+        "88888888-8888-8888-8888-888888888888",
+        "Real Tests",
+    );
+    let s = discover(&r.join("App"), &ScopeRequest::default());
+    assert!(s.complete, "{:?}", s.incomplete);
+    let names: Vec<&str> = s.apps.iter().map(|a| a.name.as_str()).collect();
+    assert_eq!(names, ["Real Tests"]);
+}

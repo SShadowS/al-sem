@@ -323,6 +323,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rule (`resolve::edge::trigger_family`); `docs/al-compiler-callgraph-holes.md` A11 is now
   "Better".
 
+### Changed (TLS-48: engine limits B8, the last two small-output items)
+
+- **`query effects` no longer claims a dependency depth when no dependency code is entered.**
+  Its `scope:` line (the human header) now reads "reads, locks, validate, writes: the whole
+  cone, no dependency code entered" (with "not searched: calls not resolved" when some are),
+  matching the `reads:`/`locks:` absence lines, instead of "one dependency routine deep, not
+  exhaustive beyond". The `--format json` header's `result.scope.scope` says the same. A cone
+  that enters dependency code prints the old text. Goldens moved: `d8.onafterpostsalesdoc` and
+  `r2a-record-types.declaredvars` (human and JSON), the batch `one-job` query golden, and the
+  CDO `UpdateLastUpload` query-effects golden (re-minted; only its scope clause moved). The
+  "not searched" variant has no fixture.
+- **Test-app auto-discovery skips folders git ignores** (`.gitignore`, `.git/info/exclude`,
+  the user's excludes file; one `git check-ignore` per folder read), unless the folder holds the
+  workspace or a `.git` of its own (a nested clone is still read as an app). Below an ignored
+  folder that holds the workspace, and when the search root itself is ignored, nothing is
+  skipped as ignored. When git cannot answer, every folder is read, as before. A skipped folder
+  is not listed in the scope. Git's answer is matched to the folders by their raw name bytes,
+  so an ignored folder whose name is not UTF-8 is never mistaken for a sibling (review sol r1).
+  Pinned by `discovery_skips_folders_git_ignores`,
+  `an_ignored_root_and_an_ignored_clone_are_still_searched` and (Linux)
+  `an_ignored_non_utf8_folder_is_not_its_lossy_sibling`, with discrimination proofs.
+
 ### Added (TLS-41: witnesses for the grammar-v4 changes that alter a program's meaning)
 
 - **The dangling `else` and the operator precedence repairs are now pinned.** Before, no test
