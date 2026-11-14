@@ -638,9 +638,17 @@ fn git_ignored(dir: &Path, subdirs: &[PathBuf]) -> std::collections::HashSet<Pat
     if out.status.code() != Some(0) {
         return set;
     }
+    // Match git's answer to the submitted folders by their raw name bytes: a
+    // lossy decode turned an ignored `tests-\xff` into a sibling `tests-\u{FFFD}`
+    // and skipped that one instead (TLS-48 review sol r1).
     for name in out.stdout.split(|&b| b == 0).filter(|n| !n.is_empty()) {
-        let name = String::from_utf8_lossy(name);
-        set.insert(dir.join(name.trim_end_matches('/')));
+        let name = name.strip_suffix(b"/").unwrap_or(name);
+        if let Some(d) = subdirs
+            .iter()
+            .find(|d| d.file_name().is_some_and(|f| f.as_encoded_bytes() == name))
+        {
+            set.insert(d.clone());
+        }
     }
     set
 }

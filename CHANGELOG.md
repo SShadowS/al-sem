@@ -289,8 +289,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   workspace or a `.git` of its own (a nested clone is still read as an app). Below an ignored
   folder that holds the workspace, and when the search root itself is ignored, nothing is
   skipped as ignored. When git cannot answer, every folder is read, as before. A skipped folder
-  is not listed in the scope. Pinned by `discovery_skips_folders_git_ignores` and
-  `an_ignored_root_and_an_ignored_clone_are_still_searched`, with discrimination proofs.
+  is not listed in the scope. Git's answer is matched to the folders by their raw name bytes,
+  so an ignored folder whose name is not UTF-8 is never mistaken for a sibling (review sol r1).
+  Pinned by `discovery_skips_folders_git_ignores`,
+  `an_ignored_root_and_an_ignored_clone_are_still_searched` and (Unix)
+  `an_ignored_non_utf8_folder_is_not_its_lossy_sibling`, with discrimination proofs.
 
 ### Added (TLS-41: witnesses for the grammar-v4 changes that alter a program's meaning)
 

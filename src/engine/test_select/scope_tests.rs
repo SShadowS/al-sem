@@ -417,3 +417,36 @@ fn an_ignored_root_and_an_ignored_clone_are_still_searched() {
     let names: Vec<&str> = s.apps.iter().map(|a| a.name.as_str()).collect();
     assert_eq!(names, ["Clone Tests"]);
 }
+
+/// TLS-48 review sol r1: git's answer is matched by raw name bytes. An
+/// ignored folder whose name is not UTF-8 (`tests-\xff`) must not be confused
+/// with a sibling whose name holds U+FFFD (`tests-\u{FFFD}`, what a lossy
+/// decode of the first gives), so the real test app there is found.
+///
+/// DISCRIMINATION (2026-11-13): decoding git's output with
+/// `String::from_utf8_lossy` (the old code) finds "Ignored Tests" instead of
+/// "Real Tests"; restored, passes.
+#[cfg(unix)]
+#[test]
+fn an_ignored_non_utf8_folder_is_not_its_lossy_sibling() {
+    use std::os::unix::ffi::OsStrExt;
+    let t = git_repo();
+    let r = t.path();
+    let ignored = r.join(std::ffi::OsStr::from_bytes(b"tests-\xff"));
+    std::fs::write(r.join(".gitignore"), b"tests-\xff/\n").unwrap();
+    app(&r.join("App"), PROD, "Prod", &[]);
+    test_app(
+        &ignored,
+        "77777777-7777-7777-7777-777777777777",
+        "Ignored Tests",
+    );
+    test_app(
+        &r.join("tests-\u{FFFD}"),
+        "88888888-8888-8888-8888-888888888888",
+        "Real Tests",
+    );
+    let s = discover(&r.join("App"), &ScopeRequest::default());
+    assert!(s.complete, "{:?}", s.incomplete);
+    let names: Vec<&str> = s.apps.iter().map(|a| a.name.as_str()).collect();
+    assert_eq!(names, ["Real Tests"]);
+}
