@@ -631,7 +631,12 @@ fn cdo_gate_runs_lane_two_beside_impact_only_with_the_memory() {
 /// writes its PID; the gate runs `--no-speed` on an empty folder.
 ///
 /// Mutation (2026-11-13): `run_phase` back to a foreground pipeline -> the
-/// trap waits for the 60 s build, and the gate misses the 20 s deadline.
+/// trap waits for the build, and the gate misses its deadline.
+///
+/// ⟨TLS-64⟩ The waits are 120 s, the stub's build 600 s: a gate that stops at
+/// once takes about a second idle, but a 20 s deadline failed a landing gate at
+/// host load ~500 (TLS-58's, 2026-11-14). A gate that waits for the build
+/// still misses 120 s by far, and so does a build process that survives it.
 #[cfg(target_os = "linux")]
 #[test]
 fn cdo_gate_stops_at_once_on_term_during_its_build() {
@@ -643,7 +648,7 @@ fn cdo_gate_stops_at_once_on_term_during_its_build() {
     std::fs::write(
         stub.path().join("cargo"),
         format!(
-            "#!/bin/sh\necho $$ > '{}'\nexec sleep 60\n",
+            "#!/bin/sh\necho $$ > '{}'\nexec sleep 600\n",
             pid_file.display()
         ),
     )
@@ -669,13 +674,15 @@ fn cdo_gate_stops_at_once_on_term_during_its_build() {
         .stderr(std::process::Stdio::null())
         .spawn()
         .expect("spawn bash scripts/cdo-gate");
+    // Every wait below; far under the stub's 600 s build.
+    let limit = std::time::Duration::from_secs(120);
     // The build phase is running when the stub has written its PID.
     let started = std::time::Instant::now();
     while !pid_file.exists() {
-        assert!(
-            started.elapsed() < std::time::Duration::from_secs(20),
-            "the gate never reached its build phase"
-        );
+        if started.elapsed() > limit {
+            let _ = gate.kill();
+            panic!("the gate never reached its build phase within {limit:?}");
+        }
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
     let build_pid: i32 = std::fs::read_to_string(&pid_file)
@@ -686,7 +693,8 @@ fn cdo_gate_stops_at_once_on_term_during_its_build() {
     let gate_pid = gate.id() as i32;
     // SAFETY: plain kill(2) on a child process this test owns.
     assert_eq!(unsafe { libc::kill(gate_pid, libc::SIGTERM) }, 0);
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    let termed = std::time::Instant::now();
+    let deadline = termed + limit;
     let status = loop {
         if let Some(s) = gate.try_wait().unwrap() {
             break s;
@@ -695,17 +703,29 @@ fn cdo_gate_stops_at_once_on_term_during_its_build() {
             let _ = gate.kill();
             // SAFETY: as above; clean up the stub's sleep.
             unsafe { libc::kill(build_pid, libc::SIGKILL) };
-            panic!("the gate did not stop within 20 s of a TERM");
+            panic!("the gate did not stop within {limit:?} of a TERM");
         }
         std::thread::sleep(std::time::Duration::from_millis(50));
     };
     assert_eq!(status.code(), Some(130));
-    std::thread::sleep(std::time::Duration::from_millis(300));
-    // SAFETY: signal 0 only probes whether the process exists.
-    let alive = unsafe { libc::kill(build_pid, 0) } == 0
-        && std::fs::read_to_string(format!("/proc/{build_pid}/stat"))
-            .is_ok_and(|s| !s.contains(") Z "));
-    assert!(!alive, "the build phase's process survived the gate");
+    // The build's process dies of the gate's TERM (a zombie counts as dead);
+    // under load that can take a while, so poll instead of one fixed pause.
+    let alive = || {
+        // SAFETY: signal 0 only probes whether the process exists.
+        let exists = unsafe { libc::kill(build_pid, 0) } == 0;
+        exists
+            && std::fs::read_to_string(format!("/proc/{build_pid}/stat"))
+                .is_ok_and(|s| !s.contains(") Z "))
+    };
+    while alive() {
+        if termed.elapsed() > limit {
+            // SAFETY: as above; clean up the stub's sleep.
+            unsafe { libc::kill(build_pid, libc::SIGKILL) };
+            panic!("the build phase's process survived the gate by {limit:?}");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    eprintln!("gate stopped {:?} after the TERM", termed.elapsed());
 }
 
 /// TLS-34 review r1 (sol): no test here may write the real speed cache
