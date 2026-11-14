@@ -568,6 +568,25 @@ const CASE_ROWS: &str = r#"codeunit 50347 "Eng14 Case Rows"
         end;
     end;
 
+    // Control (Fable, round 5): `#region` lines vary nothing; they attach inside a branch
+    // (between its label and `:`) and must not fail the case closed.
+    procedure RowRegion(I: Integer)
+    begin
+        case I of
+#region One
+            1:
+                Work();
+#endregion
+            2
+#region Two
+            :
+#endregion
+                Work();
+            else
+                Commit();
+        end;
+    end;
+
     // Row 1, the header: `expression` is a preproc_conditional_operand.
     procedure RowHeader(I: Integer; J: Integer)
     begin
@@ -770,6 +789,10 @@ fn eng14_case_rows() {
     );
     let kept = |name: &str| routine(&m, name).statement_tree.is_some();
     assert!(kept("RowPlain"), "control: a plain case keeps its tree");
+    assert!(
+        kept("RowRegion"),
+        "control: #region lines vary nothing, so the tree is kept"
+    );
     assert!(
         kept("RowBodyWellFormed"),
         "row 4a: a well-formed branch body is read precisely"

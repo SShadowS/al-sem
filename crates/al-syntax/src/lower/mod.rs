@@ -4173,12 +4173,24 @@ fn lower_case_body(
     (branches, else_block)
 }
 
-/// Whether `node` is, or holds anywhere below it, a preprocessor node (a `preproc_*`
-/// kind). Iterative, so a pathologically deep expression cannot overflow the stack.
+/// Whether `node` is, or holds anywhere below it, a preprocessor node that makes the
+/// code vary by build (a `preproc_*` kind). Iterative, so a pathologically deep
+/// expression cannot overflow the stack. The grammar's extras `#region`, `#endregion`,
+/// `#define` and `#undef`, and a pragma-only wrapper, attach almost anywhere (inside a
+/// `case_branch`, between its label and `:`) and vary nothing: they do not count.
 fn holds_preproc(node: RawNode) -> bool {
     let mut stack = vec![node];
     while let Some(n) = stack.pop() {
-        if n.kind_str().starts_with("preproc_") {
+        if n.kind_str().starts_with("preproc_")
+            && !matches!(
+                n.kind(),
+                RawKind::PreprocRegion
+                    | RawKind::PreprocEndregion
+                    | RawKind::PreprocDefine
+                    | RawKind::PreprocUndef
+                    | RawKind::PreprocPragmaOnly
+            )
+        {
             return true;
         }
         stack.extend(n.named_children());
