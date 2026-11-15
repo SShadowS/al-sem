@@ -323,7 +323,7 @@ fn on_mark(name: &'static str) {
 /// size), the expressions' string and Vec heap (capacities), the blocks' item Vecs; the rest
 /// of the measured IR drop is the remainder (statement heap, side tables, Vec slack).
 /// ENG-89: the dependency site facts (`HashMap<ObligationId, SiteFacts>`) split by part: the
-/// map's inline entries (capacity x (key + value + 1 control byte)), the keys' heap (the span's
+/// map's table (slots x (key + value + 1 control byte)), the keys' heap (the span's
 /// file path; caller ids are shared strings), and per `SiteFacts` field its heap (capacities)
 /// and how many sites use it. Then the measured drop of the whole map.
 fn split_site_facts(
@@ -336,12 +336,23 @@ fn split_site_facts(
     use al_sem::program::resolve::full::{ObligationId, SiteFacts};
     let (k, v) = (size_of::<ObligationId>(), size_of::<SiteFacts>());
     let mib = |b: usize| b as f64 / 1_048_576.0;
+    // `capacity()` is what the table holds before it grows: 7/8 of its slots (hashbrown,
+    // tables of 8+ slots). The allocation is every slot plus a control byte each (+16).
+    let slots = if m.capacity() == 0 {
+        0
+    } else {
+        (m.capacity() * 8 / 7).next_power_of_two()
+    };
+    let table = slots * (k + v) + slots + 16;
     println!(
-        "  site_facts: len {} cap {}; size_of ObligationId {k}, SiteFacts {v}; inline {:.2} MiB",
+        "  site_facts: len {} capacity {} slots {slots}; size_of ObligationId {k}, SiteFacts {v}, \
+         Option<ReceiverFact> {}; table {:.2} MiB",
         m.len(),
         m.capacity(),
-        mib(m.capacity() * (k + v + 1))
+        size_of::<Option<al_sem::program::resolve::full::ReceiverFact>>(),
+        mib(table)
     );
+    let mut rare_union = 0usize;
     let mut variants: HashMap<&'static str, usize> = HashMap::new();
     let (mut unit_heap, mut units) = (0usize, HashSet::new());
     let mut contexts = HashSet::new();
@@ -382,7 +393,7 @@ fn split_site_facts(
             open,
             table_event_raise,
             dataset_run,
-            starts_object: _,
+            starts_object,
             validate_field,
             request_page_may_cancel,
             bare_scope_complete,
@@ -394,6 +405,35 @@ fn split_site_facts(
             record_table_unresolved,
         } = sf;
         let vcap = |n: usize, sz: usize| n * sz;
+        // A site with any field beyond `receiver` and `bare_scope_complete` set (the cold part
+        // of ENG-91's proposed split).
+        let rare = interface.is_some()
+            || !interface_closed_over.is_empty()
+            || !interface_unmapped_enums.is_empty()
+            || interface_holder.is_some()
+            || !argument_codeunits.is_empty()
+            || run_target.is_some()
+            || !build_context.is_empty()
+            || !run_trigger_excluded.is_empty()
+            || *unqualified_record_op
+            || !open.is_empty()
+            || table_event_raise.is_some()
+            || dataset_run.is_some()
+            || *starts_object != Default::default()
+            || validate_field.is_some()
+            || *request_page_may_cancel
+            || start_method.is_some()
+            || field_ref_validate.is_some()
+            || call_result_record.is_some()
+            || *record_op_field_named
+            || *inherited_protected
+            || record_table_unresolved.is_some();
+        rare_union += usize::from(rare);
+        add(
+            "starts_object (not No)",
+            *starts_object != Default::default(),
+            0,
+        );
         add("interface", interface.is_some(), s(interface));
         add(
             "interface_closed_over",
@@ -432,7 +472,15 @@ fn split_site_facts(
         add(
             "receiver",
             receiver.is_some(),
-            receiver.as_ref().map_or(0, |r| s(&r.type_text)),
+            receiver.as_ref().map_or(0, |r| {
+                s(&r.type_text)
+                    + match &r.ty {
+                        al_sem::program::resolve::full::ReceiverFactType::Object {
+                            name, ..
+                        } => name.capacity(),
+                        _ => 0,
+                    }
+            }),
         );
         add("run_target", run_target.is_some(), 0);
         if !build_context.is_empty() {
@@ -504,6 +552,10 @@ fn split_site_facts(
     }
     println!("  key variants: {variants:?}");
     println!(
+        "  sites with any field beyond receiver and bare_scope_complete: {rare_union} of {}",
+        m.len()
+    );
+    println!(
         "  key span.unit heap {:.2} MiB over {} distinct files; distinct build contexts {}",
         mib(unit_heap),
         units.len(),
@@ -516,7 +568,7 @@ fn split_site_facts(
             mib(*heap)
         );
     }
-    let est = m.capacity() * (k + v + 1) + unit_heap + f.iter().map(|e| e.2).sum::<usize>();
+    let est = table + unit_heap + f.iter().map(|e| e.2).sum::<usize>();
     let (b, _) = step("session.dep_resolution.site_facts", m);
     println!(
         "    remainder after the estimates (unwalked heap, shared ids) {:>9.2} MiB",

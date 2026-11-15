@@ -1,16 +1,15 @@
-cdo-slot: waiting: MemAvailable below 35 GB
-cdo-slot: taken by engine (ENG-89 site facts census)
+cdo-slot: taken by engine (ENG-89 corrected site facts census)
 ######## resident /work/src/cdo-baseline/Cloud routine IssueReminder
   read                                     live       6.3 MiB  (+     6.3)  peak      48.9 MiB  allocs       2616  0.1s
-  build (session + target)                 live    3120.3 MiB  (+  3114.0)  peak    3130.2 MiB  allocs   26155480  46.4s
-  ask query (round 0) exit 0               live    5196.5 MiB  (+  2076.2)  peak    5549.8 MiB  allocs   35389522  69.4s
-  ask explain (round 0) exit 0             live    5222.8 MiB  (+    26.3)  peak    5329.6 MiB  allocs   35607954  6.7s
-  ask prove (round 0) exit 0               live    5490.4 MiB  (+   267.6)  peak    5634.1 MiB  allocs   37935501  3.1s
-  ask digest (round 0) exit 0              live    5490.4 MiB  (+     0.0)  peak    5576.9 MiB  allocs   37935502  0.4s
-  ask query (round 1) exit 0               live    5490.4 MiB  (+     0.0)  peak    5569.4 MiB  allocs   37935503  0.7s
-  ask explain (round 1) exit 0             live    5490.4 MiB  (+     0.0)  peak    5597.2 MiB  allocs   37935504  0.7s
-  ask prove (round 1) exit 0               live    5490.4 MiB  (+     0.0)  peak    5562.6 MiB  allocs   37935505  0.4s
-  ask digest (round 1) exit 0              live    5490.4 MiB  (+     0.0)  peak    5576.9 MiB  allocs   37935506  0.4s
+  build (session + target)                 live    3120.2 MiB  (+  3114.0)  peak    3130.2 MiB  allocs   26155471  26.1s
+  ask query (round 0) exit 0               live    5196.4 MiB  (+  2076.2)  peak    5549.7 MiB  allocs   35389515  23.0s
+  ask explain (round 0) exit 0             live    5222.7 MiB  (+    26.3)  peak    5329.5 MiB  allocs   35607947  2.6s
+  ask prove (round 0) exit 0               live    5490.3 MiB  (+   267.6)  peak    5643.9 MiB  allocs   37935494  2.8s
+  ask digest (round 0) exit 0              live    5490.3 MiB  (+     0.0)  peak    5576.8 MiB  allocs   37935495  0.4s
+  ask query (round 1) exit 0               live    5490.3 MiB  (+     0.0)  peak    5569.3 MiB  allocs   37935496  0.6s
+  ask explain (round 1) exit 0             live    5490.3 MiB  (+     0.0)  peak    5597.1 MiB  allocs   37935497  0.5s
+  ask prove (round 1) exit 0               live    5490.3 MiB  (+     0.0)  peak    5562.5 MiB  allocs   37935498  0.4s
+  ask digest (round 1) exit 0              live    5490.3 MiB  (+     0.0)  peak    5576.8 MiB  allocs   37935499  0.4s
   fills: {"det": 1, "explain_indexes": 1, "fold": 1, "l4": 1, "raw": 1, "run": 1, "tree": 1, "tree_base": 1, "witness": 1}
 -- drop deltas (MiB, allocs):
   fold.direct_full                                               56.32 MiB     234995 allocs
@@ -30,7 +29,7 @@ cdo-slot: taken by engine (ENG-89 site facts census)
   artifact.det (1 keys)                                         313.62 MiB    2284825 allocs
   artifact.raw (1 keys)                                           6.09 MiB      44923 allocs
   artifact.fold (0 keys)                                          0.00 MiB          0 allocs
-  artifact.l4 (1 keys)                                           83.06 MiB     668568 allocs
+  artifact.l4 (1 keys)                                           82.98 MiB     668568 allocs
   artifact.rules (0 keys)                                         0.00 MiB          0 allocs
   artifact.ordering (0 keys)                                      0.00 MiB          0 allocs
   probe's inputs handle                                           0.00 MiB          0 allocs
@@ -72,14 +71,14 @@ cdo-slot: taken by engine (ENG-89 site facts census)
   base rest (rel, field index, coverage, …)                      77.87 MiB     694238 allocs
   session.rows.abi                                                0.00 MiB          4 allocs
   session.rows.dependency.routines by field:
-    28726 routines, 559.0 MiB (size_of ModelRoutine 1064 B)
-    statement_tree                        143.77 MiB   25.7%    1012790 allocs
-    call_sites                            122.18 MiB   21.9%    1789562 allocs
-    record_variables                       83.46 MiB   14.9%    1350818 allocs
-    record_operations                      28.47 MiB    5.1%     403471 allocs
-    variables                              23.45 MiB    4.2%     372630 allocs
+    28726 routines, 550.7 MiB (size_of ModelRoutine 1064 B)
+    statement_tree                        143.77 MiB   26.1%    1012790 allocs
+    call_sites                            122.18 MiB   22.2%    1789562 allocs
+    record_variables                       83.46 MiB   15.2%    1350818 allocs
+    record_operations                      28.47 MiB    5.2%     403471 allocs
+    variables                              23.45 MiB    4.3%     372630 allocs
     condition_references                   15.40 MiB    2.8%     253977 allocs
-    field_accesses                         15.23 MiB    2.7%     257289 allocs
+    field_accesses                         15.23 MiB    2.8%     257289 allocs
     ids/names/strings                      13.43 MiB    2.4%     287260 allocs
     operation_sites                        13.19 MiB    2.4%     184695 allocs
     var_assignments                        12.29 MiB    2.2%     147707 allocs
@@ -101,10 +100,11 @@ cdo-slot: taken by engine (ENG-89 site facts census)
   session.retained.file_trees                                    31.88 MiB     199133 allocs
   dep edges: len 438823 cap 438823 size_of 368; routes len 325407 cap 325407 size_of 240
   session.dep_resolution.edges                                  289.69 MiB    1735767 allocs
-  site_facts: len 318982 cap 458752; size_of ObligationId 128, SiteFacts 592; inline 315.44 MiB
+  site_facts: len 318982 capacity 458752 slots 524288; size_of ObligationId 128, SiteFacts 592, Option<ReceiverFact> 56; table 360.50 MiB
   key variants: {"CallSite": 318982}
+  sites with any field beyond receiver and bare_scope_complete: 31067 of 318982
   key span.unit heap 16.12 MiB over 7003 distinct files; distinct build contexts 22
-    field receiver                                     used   141165  heap     4.48 MiB
+    field receiver                                     used   141165  heap     5.64 MiB
     field run_trigger_excluded                         used     3838  heap     1.05 MiB
     field dataset_run                                  used      649  heap     0.49 MiB
     field validate_field                               used     8146  heap     0.11 MiB
@@ -117,6 +117,7 @@ cdo-slot: taken by engine (ENG-89 site facts census)
     field argument_codeunits                           used       93  heap     0.00 MiB
     field bare_scope_complete                          used   152861  heap     0.00 MiB
     field unqualified_record_op                        used     9544  heap     0.00 MiB
+    field starts_object (not No)                       used     5944  heap     0.00 MiB
     field table_event_raise                            used     3292  heap     0.00 MiB
     field run_target                                   used      928  heap     0.00 MiB
     field request_page_may_cancel                      used      376  heap     0.00 MiB
@@ -127,7 +128,7 @@ cdo-slot: taken by engine (ENG-89 site facts census)
     field interface_unmapped_enums                     used        0  heap     0.00 MiB
     field record_op_field_named                        used        0  heap     0.00 MiB
   session.dep_resolution.site_facts                             384.93 MiB     550607 allocs
-    remainder after the estimates (unwalked heap, shared ids)     46.98 MiB
+    remainder after the estimates (unwalked heap, shared ids)      0.75 MiB
   session.dep_resolution.parenless                                1.12 MiB       7617 allocs
   session.retained.dependency_record                            114.44 MiB     536337 allocs
   session.retained.dependency_sources                             1.06 MiB      10893 allocs

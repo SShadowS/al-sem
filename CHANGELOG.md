@@ -10,11 +10,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added (ENG-89: what the 385 MiB of dependency site facts is)
 
 - `docs/superpowers/notes/2026-11-15-eng89-site-facts.md`: on CDO the retained dependency site
-  facts (`HashMap<ObligationId, SiteFacts>`, 318,982 sites) are 384.9 MiB, and 315.4 MiB of that
-  is the table's layout (458,752 slots × a 128 B key and a 592 B record). The facts themselves
-  are small: 21 of the 23 fields are used by under 3% of sites, and all field heap is about
-  6.5 MiB. Docs and census only, so no gain here; it proposes a hot record with a boxed rare part
-  and no second copy of the key (the edges already carry it), about 285 MiB, filed as ENG-91.
+  facts (`HashMap<ObligationId, SiteFacts>`, 318,982 sites) are 384.9 MiB, and 360.5 MiB of that
+  is the table's layout (524,288 slots × a 128 B key and a 592 B record). The facts themselves
+  are small: only `receiver` (44%) and `bare_scope_complete` (48%) are common, 31,067 sites
+  (9.7%) use any other field, and all field heap is 7.6 MiB. Docs and census only, so no gain
+  here; it proposes a hot record with a boxed rare part (~244 MiB) and no second copy of the key
+  (the edges already carry it; ~93 MiB), about 337 MiB in all, filed as ENG-91.
 - `tools/census-probe resident` splits the site facts by field (sites using each, heap), key and
   table; the CDO run is in `tools/census-probe/runs-eng89/`.
 
