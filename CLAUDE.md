@@ -163,7 +163,10 @@ Every test still runs before a merge; the tiers decide HOW OFTEN each one runs.
   three landings (MiB, container): `lib_cdo` (one test process at 4 threads) 27,633-28,568
   set the peak, then `output_cdo` 23,385-24,101 (3+ `alsem` processes of ~5.9 GB in its top
   three), `output_cdo_impact` 15,094-15,508, `program_resolve_harness` 8,081-8,268, `lsp`
-  and `l4_summary_differential` 3,113-4,043 (the gate's own at most 2,185).
+  and `l4_summary_differential` 3,113-4,043 (the gate's own at most 2,185). After TLS-35
+  (lib_cdo's retained emissions) and TLS-75 (output_cdo shares one engine), the 7f35cfa9
+  landing peaked at 16,426 MiB: `lib_cdo` 16,426, `output_cdo_impact` 14,040 (4 `alsem`),
+  `output_cdo` 11,266 (3 `alsem`), `program_resolve_harness` 7,573, `lsp` 3,206.
   TLS-35 cuts lib_cdo's largest test by ~14 GB, which leaves `output_cdo` the peak.
 - **`cdo-gate` checks speed and memory first (since 2026-11-09, engine limits L14).**
   Phase `speed` (`scripts/cdo-speed`, read its doc) builds the working tree's `alsem`
