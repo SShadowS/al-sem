@@ -1405,11 +1405,7 @@ impl ResolveIndex {
     /// / every in-memory test fixture), mirroring `object_extends`'s
     /// identical `graph.objects.binary_search_by` lookup pattern.
     fn find_object<'g>(graph: &'g ProgramGraph, id: &ObjectNodeId) -> Option<&'g ObjectNode> {
-        graph
-            .objects
-            .binary_search_by(|probe| probe.id.cmp(id))
-            .ok()
-            .map(|i| &graph.objects[i])
+        graph.objects.find(id).map(|i| &graph.objects[i])
     }
 
     /// Whether `from` is an extension object that DIRECTLY extends `target`,
@@ -1457,12 +1453,7 @@ impl ResolveIndex {
         // (`build_program_graph` Step 4 / every in-memory test fixture) —
         // binary-searchable, mirroring `lookup_routine_access`'s identical
         // `graph.routines.binary_search_by` lookup pattern (resolver.rs).
-        let Some(from_obj) = graph
-            .objects
-            .binary_search_by(|probe| probe.id.cmp(from))
-            .ok()
-            .map(|i| &graph.objects[i])
-        else {
+        let Some(from_obj) = graph.objects.find(from).map(|i| &graph.objects[i]) else {
             return false;
         };
         let Some(extends) = from_obj.extends_target.as_deref() else {

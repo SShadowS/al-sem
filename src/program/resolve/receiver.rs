@@ -7298,7 +7298,7 @@ codeunit 50100 "C"
 }
 "#;
         let file = al_syntax::parse(src);
-        let sites = extract_sites(&file, src, "C.al", &std::collections::HashSet::new());
+        let sites = extract_sites(&file, src, "C.al", &crate::fxhash::FxHashSet::default());
         let member_site = sites
             .iter()
             .find(|s| matches!(&s.shape, CalleeShape::Member { method, .. } if method.eq_ignore_ascii_case("m")))
@@ -7381,7 +7381,7 @@ codeunit 50100 "C"
         use crate::program::resolve::extract::{CalleeShape, extract_sites};
 
         let file = al_syntax::parse(src);
-        let sites = extract_sites(&file, src, "T.al", &std::collections::HashSet::new());
+        let sites = extract_sites(&file, src, "T.al", &crate::fxhash::FxHashSet::default());
         let site = sites
             .iter()
             .find(|s| matches!(&s.shape, CalleeShape::Member { method, .. } if method.eq_ignore_ascii_case(method_lc)))

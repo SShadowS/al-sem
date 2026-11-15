@@ -15,7 +15,8 @@
 //! Error() handling and any other classification residual vs L2 are MEASURED
 //! by the Phase-1 Task-4 site-parity gate.
 
-use std::collections::HashSet;
+// ENG-84: name sets, only looked up or merged into other sets (never iterated into output).
+use crate::fxhash::FxHashSet;
 
 use al_syntax::IdentifierFoldExt;
 use al_syntax::ir::{AlFile, BlockId, BlockItem, ExprId, ExprKind, RoutineDecl, StmtKind};
@@ -255,8 +256,8 @@ pub(crate) fn is_record_ty(ty: &str) -> bool {
 /// same name, so a call on them is no record operation (ENG-12 review: a local
 /// `X: array[2] of Codeunit W` under a global `X: Record T` made `X[1].Modify()`
 /// a record operation and hid the codeunit's call). Shared by both engines.
-pub(crate) fn routine_non_record_names(routine: &RoutineDecl) -> HashSet<String> {
-    let mut out: HashSet<String> = routine
+pub(crate) fn routine_non_record_names(routine: &RoutineDecl) -> FxHashSet<String> {
+    let mut out: FxHashSet<String> = routine
         .params
         .iter()
         .map(|p| (&p.name, p.ty.as_deref()))
@@ -281,8 +282,8 @@ pub(crate) fn routine_non_record_names(routine: &RoutineDecl) -> HashSet<String>
 pub(crate) fn this_receivers<'g>(
     globals: impl IntoIterator<Item = &'g String>,
     routine: &RoutineDecl,
-) -> HashSet<String> {
-    let declared: HashSet<String> = routine
+) -> FxHashSet<String> {
+    let declared: FxHashSet<String> = routine
         .params
         .iter()
         .map(|p| p.name.fold_identifier())
@@ -298,7 +299,10 @@ pub(crate) fn this_receivers<'g>(
 
 /// [`routine_rvars`] plus the object's record globals, less the names the
 /// routine shadows with a non-record declaration.
-fn routine_receivers(routine: &RoutineDecl, object_globals: &HashSet<String>) -> HashSet<String> {
+fn routine_receivers(
+    routine: &RoutineDecl,
+    object_globals: &FxHashSet<String>,
+) -> FxHashSet<String> {
     let mut rvars = routine_rvars(routine);
     rvars.extend(object_globals.iter().cloned());
     for n in routine_non_record_names(routine) {
@@ -309,8 +313,8 @@ fn routine_receivers(routine: &RoutineDecl, object_globals: &HashSet<String>) ->
     rvars
 }
 
-pub fn routine_rvars(routine: &RoutineDecl) -> HashSet<String> {
-    let mut rvars = HashSet::new();
+pub fn routine_rvars(routine: &RoutineDecl) -> FxHashSet<String> {
+    let mut rvars = FxHashSet::default();
     rvars.insert("rec".to_string());
     rvars.insert("xrec".to_string());
     for p in &routine.params {
@@ -433,7 +437,7 @@ fn classify_call(
     src: &str,
     function: ExprId,
     args: &[ExprId],
-    rvars: &HashSet<String>,
+    rvars: &FxHashSet<String>,
     ctx: WithCtx,
 ) -> CalleeShape {
     let fe = file.ir.expr(function);
@@ -601,7 +605,7 @@ impl WithCtx {
 
     /// Depth incremented on entry to a `StmtKind::With` body, whose implicit
     /// receiver is `receiver` when that is a record variable.
-    fn entered_with(self, file: &AlFile, receiver: ExprId, rvars: &HashSet<String>) -> WithCtx {
+    fn entered_with(self, file: &AlFile, receiver: ExprId, rvars: &FxHashSet<String>) -> WithCtx {
         // `with X do` or `with Recs[i] do` (ENG-12, L36).
         let is_record = crate::record_ops::receiver_variable(&file.ir, receiver)
             .is_some_and(|x| rvars.contains(&x.fold_identifier()));
@@ -766,7 +770,7 @@ fn collect_value_v2(
     eid: ExprId,
     unit: &str,
     caller: &str,
-    rvars: &HashSet<String>,
+    rvars: &FxHashSet<String>,
     ctx: WithCtx,
     out: &mut Vec<RawSiteV2>,
 ) {
@@ -803,7 +807,7 @@ fn collect_calls_v2(
     eid: ExprId,
     unit: &str,
     caller: &str,
-    rvars: &HashSet<String>,
+    rvars: &FxHashSet<String>,
     ctx: WithCtx,
     out: &mut Vec<RawSiteV2>,
 ) {
@@ -891,7 +895,7 @@ fn walk_block_v2(
     bid: BlockId,
     unit: &str,
     caller: &str,
-    rvars: &HashSet<String>,
+    rvars: &FxHashSet<String>,
     ctx: WithCtx,
     out: &mut Vec<RawSiteV2>,
 ) {
@@ -917,7 +921,7 @@ fn walk_stmt_v2(
     kind: &StmtKind,
     unit: &str,
     caller: &str,
-    rvars: &HashSet<String>,
+    rvars: &FxHashSet<String>,
     ctx: WithCtx,
     out: &mut Vec<RawSiteV2>,
 ) {
@@ -1041,7 +1045,7 @@ pub fn extract_sites(
     file: &AlFile,
     src: &str,
     unit: &str,
-    object_globals: &HashSet<String>,
+    object_globals: &FxHashSet<String>,
 ) -> Vec<RawSiteV2> {
     let mut out = Vec::new();
     for (obj_idx, obj) in file.objects.iter().enumerate() {
@@ -1079,7 +1083,7 @@ pub fn extract_sites_for_object(
     file: &AlFile,
     src: &str,
     unit: &str,
-    object_globals: &HashSet<String>,
+    object_globals: &FxHashSet<String>,
     obj_idx: usize,
 ) -> Vec<RawSiteV2> {
     let Some(obj) = file.objects.get(obj_idx) else {
@@ -1120,7 +1124,7 @@ pub fn extract_sites_for_routine(
     file: &AlFile,
     src: &str,
     unit: &str,
-    object_globals: &HashSet<String>,
+    object_globals: &FxHashSet<String>,
     obj_idx: usize,
     routine_idx: usize,
 ) -> Vec<RawSiteV2> {
@@ -1182,7 +1186,7 @@ mod tests {
         let (mut checked, mut crlf_sites) = (0usize, 0usize);
         for (name, src) in &sources {
             let file = al_syntax::parse(src);
-            for site in extract_sites(&file, src, "U.al", &HashSet::new()) {
+            for site in extract_sites(&file, src, "U.al", &FxHashSet::default()) {
                 let byte = file.ir.expr(site.expr).origin.byte();
                 assert_eq!(
                     (site.span.start, site.span.end),
@@ -1248,7 +1252,7 @@ codeunit 50102 "D"
 "#;
         let file = al_syntax::parse(src);
         // Parens-less value reads are candidates, not definite sites.
-        let sites: Vec<_> = extract_sites(&file, src, "C.al", &std::collections::HashSet::new())
+        let sites: Vec<_> = extract_sites(&file, src, "C.al", &FxHashSet::default())
             .into_iter()
             .filter(|s| !s.parenless)
             .collect();
@@ -1299,7 +1303,7 @@ codeunit 50100 "C"
 "#;
         let file = al_syntax::parse(src);
         // Parens-less value reads are candidates, not definite sites.
-        let sites: Vec<_> = extract_sites(&file, src, "C.al", &std::collections::HashSet::new())
+        let sites: Vec<_> = extract_sites(&file, src, "C.al", &FxHashSet::default())
             .into_iter()
             .filter(|s| !s.parenless)
             .collect();
@@ -1353,7 +1357,7 @@ codeunit 50100 "C"
 }
 "#;
         let file = al_syntax::parse(src);
-        let sites = extract_sites(&file, src, "C.al", &std::collections::HashSet::new());
+        let sites = extract_sites(&file, src, "C.al", &FxHashSet::default());
         let run: Vec<_> = sites.iter().filter(|s| s.caller_routine == "run").collect();
 
         let member_site = run
@@ -1411,7 +1415,7 @@ codeunit 50100 "C"
 "#;
         let file = al_syntax::parse(src);
         // Parens-less value reads are candidates, not definite sites.
-        let sites: Vec<_> = extract_sites(&file, src, "C.al", &std::collections::HashSet::new())
+        let sites: Vec<_> = extract_sites(&file, src, "C.al", &FxHashSet::default())
             .into_iter()
             .filter(|s| !s.parenless)
             .collect();
@@ -1444,7 +1448,7 @@ codeunit 50100 "C"
 "#;
         let file = al_syntax::parse(src);
         // Parens-less value reads are candidates, not definite sites.
-        let sites: Vec<_> = extract_sites(&file, src, "C.al", &std::collections::HashSet::new())
+        let sites: Vec<_> = extract_sites(&file, src, "C.al", &FxHashSet::default())
             .into_iter()
             .filter(|s| !s.parenless)
             .collect();
@@ -1567,7 +1571,7 @@ codeunit 50100 "C"
 }
 "#;
         let file = al_syntax::parse(src);
-        let sites = extract_sites(&file, src, "C.al", &std::collections::HashSet::new());
+        let sites = extract_sites(&file, src, "C.al", &FxHashSet::default());
         let site = sites
             .iter()
             .find(|s| s.caller_routine == "usesomeauth")
@@ -1600,7 +1604,7 @@ codeunit 50100 "C"
 }
 "#;
         let file = al_syntax::parse(src);
-        let sites = extract_sites(&file, src, "C.al", &std::collections::HashSet::new());
+        let sites = extract_sites(&file, src, "C.al", &FxHashSet::default());
         let site = sites
             .iter()
             .find(|s| matches!(&s.shape, CalleeShape::Bare { name } if name.eq_ignore_ascii_case("foo")))

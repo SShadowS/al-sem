@@ -266,10 +266,7 @@ impl GraphReads for ProgramGraph {
         self.objects.run_by(|o| o.id.cmp(id)).next()
     }
     fn routine(&self, rid: &RoutineNodeId) -> Option<&RoutineNode> {
-        self.routines
-            .binary_search_by(|probe| probe.id.cmp(rid))
-            .ok()
-            .map(|i| &self.routines[i])
+        self.routines.find(rid).map(|i| &self.routines[i])
     }
     fn routines_with_id(&self, rid: &RoutineNodeId) -> NodeSetIter<'_, RoutineNode> {
         self.routines.run_by(|r| r.id.cmp(rid))
