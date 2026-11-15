@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (ENG-86: slimmer IR nodes, 225 MiB less resident memory on CDO)
+
+- **Re-scoped bar.** The task's bar was the survey's estimate of 400-550 MiB. Step 0 split the
+  dependency syntax trees (940 MiB) by part with `tools/census-probe` and found about 180 MiB
+  reachable by layout: expressions 341 MiB inline, object declarations 255 MiB (strings, moved to
+  ENG-85), source text 120 MiB. The orchestrator approved a 150 MiB bar on 2026-11-15.
+- **`Origin` 48 → 28 bytes.** It holds the grammar's symbol id (u16) and the byte range as two
+  `u32`s. `kind_text()` and `byte()` give the old values; a table built once maps ids and names
+  (named kinds first; a name with two ids, like `procedure`, compares equal either way).
+  `PartialEq` and `Debug` behave as before.
+- **`member_origin` out of `ExprKind`.** A member expression's member-name origin lives in a side
+  arena on `Ir` (`Ir::member_origin`), so `Expr` is 72 bytes, was 128.
+- **Measured** (`census-probe resident`, one build and one ask of each kind; runs in
+  `tools/census-probe/runs-eng86/`): live memory 5,716.4 → 5,490.9 MiB (**-225.5 MiB**), the
+  dependency syntax trees 940.0 → 728.5 MiB (expressions 341 → 192, statements 50 → 41, blocks
+  19 → 15, declarations 255 → 225, comments 24 → 20). Left on purpose: `Box<str>` names and boxed
+  argument lists would save about 21 MiB more; the bar is met.
+- **Same answers.** The task gate (every golden), CDO `fingerprint` and `analyze` at both scopes
+  byte-identical to master's binary, and `cdo-gate --only harness,l4,output`. The pack format did
+  not change, so `PACK_SCHEMA` stays: a new test pins the sample pack's encoded bytes, and master
+  gives the same hash. A pack origin with a byte offset past `u32` now fails the decode instead of
+  panicking.
+- **Speed** (`cdo-speed`, base master `8bb270d0`, load 5-9): PASS. Peak memory of the server
+  processes 9,975 → 9,631 MiB (x0.965); the rounds x0.984, the test universe CPU x0.977. The
+  model build read x1.029 CPU, but its two passes disagree (x1.320 and x0.802), so no build
+  change is shown either way.
+
 ### Fixed (TLS-65: cdo-speed's warm-up no longer reads the second-built side as slow)
 
 - The warm-up's model build and test universe were timed once each, in a fixed order:
