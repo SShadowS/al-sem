@@ -1213,6 +1213,38 @@ mod tests {
         temp_state_suppresses,
     };
 
+    /// ENG-85: the anchor and vocabulary caches answer the text asked for, and share the
+    /// allocation only when the text is the same: alternating files and kinds never hand one
+    /// back for another.
+    #[test]
+    fn shared_text_caches_answer_the_text_asked_for() {
+        use super::{anchor_unit, shared_vocab};
+        use crate::program::str_pool::SharedStr;
+        let a1 = anchor_unit("ws:A.al");
+        let a2 = anchor_unit("ws:A.al");
+        let b = anchor_unit("ws:B.al");
+        let a3 = anchor_unit("ws:A.al");
+        assert_eq!(
+            (a1.as_str(), b.as_str(), a3.as_str()),
+            ("ws:A.al", "ws:B.al", "ws:A.al")
+        );
+        assert!(
+            SharedStr::ptr_eq(&a1, &a2),
+            "consecutive equal file ids share"
+        );
+        let k1 = shared_vocab("identifier");
+        let k2 = shared_vocab("call_expression");
+        let k3 = shared_vocab("identifier");
+        assert_eq!(
+            (k1.as_str(), k2.as_str()),
+            ("identifier", "call_expression")
+        );
+        assert!(
+            SharedStr::ptr_eq(&k1, &k3),
+            "a vocabulary text is one allocation"
+        );
+    }
+
     fn ts(kind: &str, value: Option<bool>, param: Option<u32>) -> PTempState {
         PTempState {
             kind: kind.to_string(),
