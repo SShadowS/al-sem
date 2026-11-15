@@ -567,7 +567,7 @@ impl<'a> SpineCtx<'a> {
 
     /// Exact raw source text of an IR node (via its byte span).
     fn raw(&self, origin: &Origin) -> &'a str {
-        &self.source[origin.byte().clone()]
+        &self.source[origin.byte()]
     }
 
     /// D1: a call's field-naming argument positions, when its function is a
@@ -1986,7 +1986,7 @@ impl<'a> IrCfn<'a> {
 
     /// An expression's source text as written.
     fn expr_text(&self, e: ExprId) -> &str {
-        &self.source[self.ir().expr(e).origin.byte().clone()]
+        &self.source[self.ir().expr(e).origin.byte()]
     }
 
     /// A loop's [`FlowFact::Loop`]: its condition as written (`raw`), folded
@@ -3852,7 +3852,7 @@ fn ir_classify_rhs(file: &AlFile, eid: ExprId, source: &str) -> serde_json::Valu
     use al_syntax::ir::Literal::*;
     use serde_json::json;
     let e = file.ir.expr(eid);
-    let text = &source[e.origin.byte().clone()];
+    let text = &source[e.origin.byte()];
     match &e.kind {
         ExprKind::Literal(Text(_)) => {
             let v = text.trim();
@@ -3866,7 +3866,7 @@ fn ir_classify_rhs(file: &AlFile, eid: ExprId, source: &str) -> serde_json::Valu
             json!({ "kind": "literal", "value": text.trim() })
         }
         ExprKind::QualifiedEnum { enum_type, value } => {
-            let en = &source[file.ir.expr(*enum_type).origin.byte().clone()];
+            let en = &source[file.ir.expr(*enum_type).origin.byte()];
             let en = en.trim().trim_matches('"');
             json!({ "kind": "enum", "enumName": en, "member": value })
         }
@@ -4107,7 +4107,7 @@ fn ir_attr_arg(file: &AlFile, eid: ExprId, source: &str) -> serde_json::Value {
     use al_syntax::ir::Literal as L;
     use serde_json::json;
     let e = file.ir.expr(eid);
-    let text = source[e.origin.byte().clone()].to_string();
+    let text = source[e.origin.byte()].to_string();
     let mut obj = serde_json::Map::new();
     let kind = match &e.kind {
         ExprKind::Literal(L::Bool(_)) => "boolean",
@@ -4132,7 +4132,7 @@ fn ir_attr_arg(file: &AlFile, eid: ExprId, source: &str) -> serde_json::Value {
         }
         "qualified_enum_value" => {
             if let ExprKind::QualifiedEnum { enum_type, value } = &e.kind {
-                let q = source[file.ir.expr(*enum_type).origin.byte().clone()].to_string();
+                let q = source[file.ir.expr(*enum_type).origin.byte()].to_string();
                 let m = strip(value);
                 obj.insert("value".into(), json!(m));
                 obj.insert("qualifier".into(), json!(q));
