@@ -9,11 +9,54 @@ GATE_SCRIPTS = ("scripts/ci-steps", "scripts/check-goldens", "scripts/cdo-gate")
 # `docs/…`, a `"docs"` path segment (`.join("docs")`), or `CHANGELOG`.
 _INERT_REF = re.compile("|".join([re.escape(GATE_INERT_DIR), r'"docs"', *(re.escape(s.split(".")[0])
                                                                         for s in GATE_INERT_EXACT)]))
-# Lines that NAME an inert path without reading it, each with its reason.
+# Lines that NAME an inert path without reading it, each with its reason. An entry
+# exempts every line of its file that contains its text, so each names the exact
+# expression (a fixture repo's join, an expected message), never the bare file name.
+_FIXTURE = "a tempdir fixture repo's CHANGELOG.md"
+_MESSAGE = "an expected message naming the file"
 _MENTIONS_ONLY = {
     ("src/server.rs", "docs/OUTSTANDING.md"): "a warn! message points the reader at the doc",
     ("scripts/ci-steps", "docs/*|*.md) ;;"): "task-affected's path map SKIPS prose paths; it reads none",
+    ("scripts/cdo-gate", "| CHANGELOG.md) ;;"): "product_paths SKIPS prose paths; it reads none",
+    ("tests/cli/gate_scripts.rs", '"docs/superpowers/notes/n.md",'): "a path string fed to product_paths",
+    ("tests/cli/gate_scripts.rs", '"CHANGELOG.md",'): "a path string fed to product_paths",
+    ("tests/cli/land_script.rs", 'main.join("CHANGELOG.md")'): _FIXTURE,
+    ("tests/cli/land_script.rs", 'gate.join("CHANGELOG.md")'): _FIXTURE,
+    ("tests/cli/land_script.rs", '("CHANGELOG.md", '): "a file in a fixture commit",
+    ("tests/cli/land_script.rs", '"rm", "-q", "CHANGELOG.md"'): "git rm in a fixture repo",
+    ("tests/cli/land_script.rs", "CHANGELOG.md conflicts: would keep"): _MESSAGE,
+    ("tests/cli/land_script.rs", '"CHANGELOG.md is missing on one side"'): _MESSAGE,
+    ("tests/cli/land_script.rs", '"cannot merge CHANGELOG.md"'): _MESSAGE,
+    ("tests/cli/changelog_merge.rs", 'p.join("CHANGELOG.md")'): _FIXTURE,
+    ("tests/cli/changelog_merge.rs", 'dir.path().join("CHANGELOG.md")'): _FIXTURE,
+    ("tests/cli/changelog_merge.rs", '"CHANGELOG.md merge=changelog\\n"'): "a fixture repo's .gitattributes",
+    ("tests/cli/changelog_merge.rs", '"check-attr", "merge", "CHANGELOG.md"'): (
+        "git check-attr on the real repo reads .gitattributes, not the file"),
+    ("tests/cli/changelog_merge.rs", '"CHANGELOG.md: merge: changelog"'): "check-attr's expected output",
 }
+
+
+def _inert_hits(rel, text, script=False):
+    """The lines of `text` (file `rel`) that name a gate-inert path in code, less `_MENTIONS_ONLY`."""
+    hits = []
+    for n, line in enumerate(text.splitlines(), 1):
+        if script:
+            code = "" if line.lstrip().startswith("#") else line
+        else:
+            code = line.split("//", 1)[0]
+        if _INERT_REF.search(code) and not any(f == rel and s in code for f, s in _MENTIONS_ONLY):
+            hits.append(f"{rel}:{n}: {line.strip()}")
+    return hits
+
+
+def _scanned():
+    """(rel, text, script) for every file the gate-inert scan reads."""
+    sources = [p for d in ("src", "tests", "benches", "crates", "tools")
+               for p in (REPO / d).rglob("*.rs") if "target" not in p.parts]
+    assert len(sources) > 100, "precondition: the scan found the Rust sources"
+    out = [(p.relative_to(REPO).as_posix(), p.read_text(encoding="utf-8", errors="replace"), False)
+           for p in sources]
+    return out + [(s, (REPO / s).read_text(encoding="utf-8"), True) for s in GATE_SCRIPTS]
 
 
 def test_gate_inert_is_prose_no_gate_reads():
@@ -31,22 +74,40 @@ def test_no_gate_reads_a_gate_inert_path():
     build scripts included) and the gate scripts themselves are scanned for a
     non-comment line naming one. A hit means a gate may read prose: take the
     path out of `GATE_INERT_*` or stop reading it."""
-    hits = []
-    sources = [p for d in ("src", "tests", "benches", "crates", "tools")
-               for p in (REPO / d).rglob("*.rs") if "target" not in p.parts]
-    assert len(sources) > 100, "precondition: the scan found the Rust sources"
-    for p in sources:
-        for n, line in enumerate(p.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
-            code = line.split("//", 1)[0]
-            rel = p.relative_to(REPO).as_posix()
-            if _INERT_REF.search(code) and not any(f == rel and s in code for f, s in _MENTIONS_ONLY):
-                hits.append(f"{rel}:{n}: {line.strip()}")
-    for s in GATE_SCRIPTS:
-        for n, line in enumerate((REPO / s).read_text(encoding="utf-8").splitlines(), 1):
-            if (not line.lstrip().startswith("#") and _INERT_REF.search(line)
-                    and not any(f == s and m in line for f, m in _MENTIONS_ONLY)):
-                hits.append(f"{s}:{n}: {line.strip()}")
+    hits = [h for rel, text, script in _scanned() for h in _inert_hits(rel, text, script)]
     assert hits == []
+
+
+def test_the_prose_the_agentflow_suite_reads_is_not_inert():
+    """`ci-steps all` runs `test_docs_drift`, which reads these documents: a change
+    to one after the gates can turn the gate red, so it must move the head.
+    Limit: the Rust scan above does not read the pytest files; this pins only the
+    drift test's own list."""
+    from agentflow.tests.test_docs_drift import DOCS, ISSUE
+    for p in (*DOCS, ISSUE):
+        rel = p.relative_to(REPO).as_posix()
+        assert not gate_inert(rel), rel
+
+
+def test_mentions_only_exempts_its_shape_and_no_more():
+    """The exemptions are per file and per text: a real read of prose, in a scanned
+    file or in an exempted file under another spelling, is still a hit."""
+    read = 'let s = std::fs::read_to_string(root.join("CHANGELOG.md")).unwrap();'
+    assert _inert_hits("tests/cli/other.rs", read) != []
+    assert _inert_hits("tests/cli/land_script.rs", read) != []
+    assert _inert_hits("tests/cli/land_script.rs", 'std::fs::write(r.main.join("CHANGELOG.md"), x)') == []
+    assert _inert_hits("tests/cli/land_script.rs", 'read_to_string(root.join("docs/x.md"))') != []
+    assert _inert_hits("tests/cli/gate_scripts.rs", read) != []
+    assert _inert_hits("scripts/cdo-gate", 'cat CHANGELOG.md', script=True) != []
+    assert _inert_hits("scripts/cdo-gate", '# cat CHANGELOG.md', script=True) == []
+    assert _inert_hits("src/a.rs", '// see docs/x.md') == []
+
+
+def test_every_mentions_only_entry_still_matches_a_line():
+    """A stale exemption (its line gone) is removed, not kept to hide a later read."""
+    texts = {rel: text for rel, text, _ in _scanned()}
+    stale = [(f, s) for f, s in _MENTIONS_ONLY if s not in texts.get(f, "")]
+    assert stale == []
 
 DIFF = """\
 diff --git a/src/lib.rs b/src/lib.rs
