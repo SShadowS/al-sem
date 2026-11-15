@@ -312,6 +312,12 @@ fn cdo_slot_guard_refuses_other_sessions_while_held() {
         "cat <<EOF-TEXT\ndoc\nEOF-TEXT\ncargo test",
         "watch -n 5 'cargo check'",
         "env -S 'cargo test'",
+        // Review r3 (sol): information modes only where the script reads them;
+        // shell options with operands before `-c`.
+        "bash scripts/ci-steps build --dry-run",
+        "bash scripts/ci-steps all --help",
+        "bash -euo pipefail -c 'cargo test'",
+        "bash -o pipefail -c 'cargo test 2>&1 | tee /tmp/t.log'",
     ];
     let free = [
         "grep -n x scripts/cdo-gate",

@@ -117,6 +117,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   not read (each alone), the mem-wait's process check restored (the queued-gate
   test now catches it), the probe reading any failure as held (via the PATH `flock`),
   land not printing a failed step's lines.
+- Review r3 (sol): an information mode exempts a script only where it reads it
+  (cdo-gate and land: any argument; ci-steps: only `fmt` as its first argument, so
+  `ci-steps build --dry-run` is caught); a shell's options are read with their
+  operands (`-o`/`-O` in a cluster take one), so `bash -euo pipefail -c 'cargo test'`
+  is caught. Mutations, each failing a test: information modes exempt for every
+  script; option operands not consumed.
 
 ### Added (TLS-59: `scripts/land`, the landing chain as one command)
 
