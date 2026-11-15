@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (TLS-76: `cdo-speed` judges load by CPU pressure, and runs labelled when it is high)
+
+- **The hole:** TLS-65's wait for a 1-min load of at most max(6, cores / 3) stopped every
+  `cdo-gate` with "cannot judge speed" (exit 2) on server1, a 22-core host shared by three
+  projects: other projects' bursty work kept the load at 50-230 while the CPU was ~78 % idle
+  and 5-12 threads were runnable (owner/kraken, q-20261115T181612-b2891501). It blocked
+  every landing.
+- **Now** `scripts/cdo-speed` uses CPU pressure (PSI) twice:
+  - admission: before each warm-up pass it waits for the host's `some avg60`
+    (`/proc/pressure/cpu`) to fall to 15 %; after 10 min the pass runs anyway;
+  - the label: it measures each timed block's (each warm-up pass, the rounds) CPU stall
+    share of this container's own tasks, from the cgroup `cpu.pressure` `some total=` at the
+    block's start and end. A block above 15 %, or a pass admitted by the timeout, puts
+    "UNDER LOAD" with the shares on the PASS or FAIL line (an early FAIL on a failed call
+    too), and the same limits judge it (principles 6 and 9: label, never hide; never weaken
+    the gate). No exit 2 for load any more. `speed.json` keeps the shares
+    (`stall_shares`, `under_load`, `admitted_by_timeout`) and the per-call `avg10`; the
+    1-min load is still logged. TLS-65's flipped warm-up and geometric mean stay.
+  - Reviews r1 (Fable and sol, independently): the first version read the container's
+    `avg10` before a pass only, which an idle cgroup reports as ~0 whatever the host does,
+    and labelled only on the admission timeout. The stall share over the block replaces it.
+- **Calibration** (server1, 2026-11-15, master `9059eda0` against itself):
+  - c1 (the old script, its wait off) and c2 (an intermediate version of this one) at a
+    1-min load of 11.5-24.1, above TLS-65's 7.3 throughout: both PASS. Judged ratios: model
+    build CPU x1.056 and x1.011, warm-tests x0.939 and x0.980, prove x0.850 and x0.998, round
+    total x0.897 and x1.026; memory x1.059 and x1.049 (so x0.85-x1.06). A 5 s sampler read the
+    container's `avg10` at median 1.8-2.1 % and at most 12.1 % (the host's 3.5-4.0 %, at most
+    24.5 %).
+  - c3 (this version, no test hooks): PASS; model build CPU x0.993, warm-tests x0.998, prove
+    x1.004, round total x0.987, memory x1.024. Stall shares 4.2 % and 2.7 % (warm-ups) and
+    0.0 % (rounds): unlabelled. Admission held warm-up 2 for 10 s (host avg60 15.7 % then
+    13.3 %).
+  - 15 % sits above every stall share and pressure median seen; no run has been timed with a
+    share above it, so what a labelled run's ratios look like is not measured.
+- Pinned by `gate_scripts::speed_runs_under_load_and_says_so`: the host held at 70 % (the run
+  goes ahead, labelled, and `cdo-gate`'s speed row shows it), the container's stall total
+  grown at ~80 % of wall time by a writer thread (labelled from the shares alone), and a calm
+  run (no label, at a 1-min load of 50). Breaking either source of the label fails it.
+
 ### Fixed (TLS-73: `scripts/perf-probe` checks what samply needs, not one small buffer)
 
 - **The hole:** after the 2026-11-15 redeploy (CAP_PERFMON) `scripts/perf-probe` exited 0

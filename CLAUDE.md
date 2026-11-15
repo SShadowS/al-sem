@@ -168,11 +168,16 @@ Every test still runs before a merge; the tiers decide HOW OFTEN each one runs.
   the geometric mean of the two: one fixed-order sample always put head second, and the
   side built second was measured once at x1.167 for a binary against itself at load ~9
   (ENG-81; not reproduced in TLS-65's loaded run, x1.02; one quiet run read x1.096 with
-  head second, x1.004 flipped). Before each pass it waits for the 1-min load to fall to
-  max(6, cores / 3) (checked before a pass, not during it); after 10 min it stops with
-  "cannot judge speed" (exit 2), which fails `cdo-gate`: never a PASS without speed. Cost
-  ~+3 min per check, more right after `cdo-gate`'s test build (the load must settle
-  first), and the wait holds the CDO slot. **It is Linux only (it reads `/proc`):
+  head second, x1.004 flipped). TLS-76 replaced the 1-min load (TLS-65's signal, which
+  read 50-230 on server1 from other projects while the CPU was ~78 % idle, and stopped
+  every gate) with CPU pressure, used twice: before each pass it waits (up to 10 min, then
+  runs anyway) for the host's `some avg60` (`/proc/pressure/cpu`) to fall to 15 %; and
+  it measures each timed block's stall share of this container's own tasks (cgroup
+  `cpu.pressure` `some total`, start to end; a pre-pass reading of an idle cgroup says
+  nothing). A block above 15 %, or a pass admitted by the timeout, labels the verdict
+  "UNDER LOAD" with the shares; the same limits judge it (label, never hide; never weaken
+  the gate). Shares and pressure are in `speed.json`; calibration in the CHANGELOG's
+  TLS-76 entry. Two passes cost ~+3 min per check, and the wait holds the CDO slot. **It is Linux only (it reads `/proc`):
   on the Windows machine every full `cdo-gate` run FAILS unless given `--no-speed`**
   (an `--only` subset never runs it).
   `--no-speed` skips it and prints that speed was not checked; a tree that lands without
