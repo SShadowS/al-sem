@@ -1,0 +1,13 @@
+pass	order	side	user_s	sys_s	wall_s	maxrss_kb	host_avg60	stall_pct	label
+1	base-first	base	58.08	1.24	14.13	3723740	10.56	7.7	calm
+1	base-first	head	56.48	1.17	12.25	3493672	10.71	6.1	calm
+2	head-first	head	54.72	1.16	12.07	3449644	10.11	4.4	calm
+2	head-first	base	54.08	1.60	11.92	3740908	9.19	4.4	calm
+3	base-first	base	53.69	1.24	11.81	3732100	8.13	4.4	calm
+3	base-first	head	54.48	1.13	12.07	3473368	7.65	4.2	calm
+4	head-first	head	54.76	1.00	12.08	3510860	7.02	3.6	calm
+4	head-first	base	52.83	1.40	11.7	3741352	6.65	3.4	calm
+5	base-first	base	53.66	0.98	11.38	3717628	6.13	3.6	calm
+5	base-first	head	53.76	1.00	11.77	3469752	5.84	3.2	calm
+6	head-first	head	54.08	1.08	12.18	3470804	5.42	4.7	calm
+6	head-first	base	53.13	1.06	10.9	3704296	5.37	3.9	calm

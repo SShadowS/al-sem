@@ -43,10 +43,14 @@ cargo build --profile release-fast  # Thin LTO (~3.5 min) — USE THIS for measu
                                     # re-measures cone memory; reference values: cone-memory spec §13
                                     # `aldump --session-refresh <ws-COPY> --verify` measures the
                                     # context server's incremental refresh per change type
-                                    # CPU profile: `samply record --save-only -o prof.json.gz -- <cmd>`
-                                    # (in the image since TLS-70; samples every thread; for function
-                                    # names without a browser add `--unstable-presymbolicate`, if
-                                    # `samply record --help` lists it). Recording needs perf_event_open:
+                                    # CPU profile: `scripts/profile [-o out.json.gz] <alsem|aldump> <args>`
+                                    # (TLS-77): builds the `profiling` profile (release-fast's code with
+                                    # symbols and line tables; release-fast strips symbols, so samply
+                                    # named nothing) and runs `samply record --save-only
+                                    # --unstable-presymbolicate` on it; it exits with the profiled
+                                    # command's code. No frame pointers needed: samply unwinds from
+                                    # .eh_frame (same stacks measured with and without them).
+                                    # Recording needs perf_event_open:
                                     # the host's kernel.perf_event_paranoid <= 1 (server1: 1 since
                                     # 2026-11-15, host-side, may revert on reboot) AND the container
                                     # letting the call through (CAP_PERFMON, `.kraken/project.yaml`)

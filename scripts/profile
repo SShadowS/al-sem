@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+# scripts/profile — record a CPU profile of `alsem` or `aldump` with samply (TLS-77).
+#
+#   scripts/profile [-o <out.json.gz>] [--dry-run] <alsem|aldump> [args...]
+#
+# Builds the binary in the `profiling` Cargo profile (release-fast's code, with its
+# symbols and line tables kept: `release` strips symbols, and samply then names
+# nothing), into `target/profiling/` (or `$CARGO_TARGET_DIR/profiling/`), then runs
+# `samply record --save-only --unstable-presymbolicate` on it: the profile plus a
+# `.syms.json` sidecar, so `samply load <out>` shows names without the binary. No
+# frame pointers: samply unwinds from the binary's unwind tables (TLS-77 measured the
+# same stacks with and without them).
+# Default output: profile.json.gz in the current folder. `--dry-run` prints the two
+# commands and runs nothing. Options go before the binary's name: everything after it
+# is the profiled command's own. samply exits 0 whatever the command did, so the script
+# records the command's exit code and exits with it (a profile of a usage error is no
+# result).
+#
+# Check first that samply can record here: `scripts/perf-probe` (CAP_PERFMON, the
+# host's perf_event_paranoid and perf_event_mlock_kb). A timed or CDO-sized run
+# belongs in the CDO slot: `scripts/cdo-slot run <owner> <reason> -- scripts/profile ...`.
+set -euo pipefail
+
+out=profile.json.gz
+dry=0
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -o)
+            if [[ $# -lt 2 ]]; then
+                echo "usage: scripts/profile: -o needs a file" >&2
+                exit 2
+            fi
+            out=$2
+            shift 2
+            ;;
+        --dry-run) dry=1; shift ;;
+        -h | --help) sed -n '2,/^set -euo/p' "$0" | sed '$d; s/^# \{0,1\}//'; exit 0 ;;
+        *) break ;;
+    esac
+done
+bin=${1:-}
+case "$bin" in
+    alsem | aldump) shift ;;
+    *)
+        echo "usage: scripts/profile [-o <out.json.gz>] [--dry-run] <alsem|aldump> [args...]" >&2
+        exit 2
+        ;;
+esac
+
+top=$(cd "$(dirname "$0")/.." && pwd)
+build=(cargo build --manifest-path "$top/Cargo.toml" --profile profiling --bin "$bin")
+exe="${CARGO_TARGET_DIR:-$top/target}/profiling/$bin"
+quoted() { local s; s=$(printf '%q ' "$@"); printf '%s' "${s% }"; }
+
+if [[ "$dry" -eq 1 ]]; then
+    echo "build: $(quoted "${build[@]}")"
+    echo "record: $(quoted samply record --save-only --unstable-presymbolicate -o "$out" -- "$exe" "$@")"
+    exit 0
+fi
+rcfile=$(mktemp)
+trap 'rm -f "$rcfile"' EXIT
+"${build[@]}"
+# The command runs under a tiny shell that writes its exit code (samply's own is 0).
+samply record --save-only --unstable-presymbolicate -o "$out" -- \
+    bash -c '"$@"; rc=$?; printf %s "$rc" > "$0"; exit "$rc"' "$rcfile" "$exe" "$@"
+rc=$(cat "$rcfile" 2>/dev/null || true)
+if ! [[ "$rc" =~ ^[0-9]+$ ]]; then
+    echo "scripts/profile: the profiled command's exit status is unavailable (it may not have run): $out is no result" >&2
+    exit 1
+fi
+if [[ "$rc" -ne 0 ]]; then
+    echo "scripts/profile: the profiled command exited $rc: $out profiles a failed run" >&2
+    exit "$rc"
+fi
+echo "scripts/profile: wrote $out (open it with: samply load $out)"

@@ -142,7 +142,11 @@ fn place(e: &Value) -> String {
 fn commit_places(ws: &Path, routine: &str) -> Vec<String> {
     let (code, stdout) = alsem(&["prove", ws.to_str().unwrap(), routine, "may-commit"]);
     assert_eq!(code, Some(0), "prove {routine}: {stdout}");
-    let v: Value = serde_json::from_str(&stdout).expect("prove JSON");
+    places_of(&serde_json::from_str(&stdout).expect("prove JSON"))
+}
+
+/// A may-commit prove document's COMMIT rows, sorted (its answer must be yes).
+fn places_of(v: &Value) -> Vec<String> {
     assert_eq!(v["payload"]["result"]["answer"], "yes", "{v}");
     let mut places: Vec<String> = v["payload"]["result"]["evidence"]
         .as_array()
@@ -380,7 +384,20 @@ pub(crate) fn cdo_run_report_id_lists_calc_sales_disc_commits() {
     let Some(ws) = crate::cdo::cdo_ws_or_enforce() else {
         return;
     };
-    let places = commit_places(&ws, "CDO E-Mail Handler::RunReportID");
+    // TLS-75: asked of the CDO server `output_cdo`'s tests share (one model).
+    let r = crate::output_cdo::with_cdo_server(&ws, |s| {
+        s.call(
+            9200,
+            "alsem_prove",
+            serde_json::json!({"routine": "CDO E-Mail Handler::RunReportID", "question": "may-commit", "format": "json"}),
+        )
+    });
+    // Read the bytes first: the last release ends the server and deletes its output
+    // folder, where a long answer is spilled (review TLS-75, sol).
+    let (stdout, stderr, exit) = crate::mcp_server::cli_bytes(&crate::mcp_server::envelope(&r));
+    crate::output_cdo::release_cdo_server("cdo_run_report_id_lists_calc_sales_disc_commits");
+    assert_eq!(exit, 0, "prove: {}", String::from_utf8_lossy(&stderr));
+    let places = places_of(&serde_json::from_slice(&stdout).expect("prove JSON"));
     for want in [
         "ws:src/Foundation/CDOFile.Table.al:128",
         "ws:src/Features/Email/Templates/CDOEMailTemplateManagement.Codeunit.al:1241",

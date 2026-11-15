@@ -1689,10 +1689,12 @@ pub(crate) fn cdo_round2_size_ratchets() {
             5_000,
         ),
     ];
-    let mut server = crate::mcp_server::Server::ready(&ws, None);
+    // TLS-75: the CDO server `output_cdo`'s tests share (one model, not one per test).
     let mut failures = Vec::new();
     for (i, (label, tool, args, budget)) in calls.iter().enumerate() {
-        let result = server.call(7000 + i as i64, tool, args.clone());
+        let result = crate::output_cdo::with_cdo_server(&ws, |s| {
+            s.call(7000 + i as i64, tool, args.clone())
+        });
         let (stdout, stderr, exit) =
             crate::mcp_server::cli_bytes(&crate::mcp_server::envelope(&result));
         assert_eq!(exit, 0, "{label}: {}", String::from_utf8_lossy(&stderr));
@@ -1701,6 +1703,6 @@ pub(crate) fn cdo_round2_size_ratchets() {
             failures.push(format!("{label}: {} > {budget}", stdout.len()));
         }
     }
-    assert!(server.finish().success());
+    crate::output_cdo::release_cdo_server("cdo_round2_size_ratchets");
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }

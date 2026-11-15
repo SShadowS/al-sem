@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (TLS-77: a `profiling` build and `scripts/profile`, so samply names what it samples)
+
+- **Why:** ENG-84's samply profile could read only self shares. The task assumed missing
+  frame pointers; measured, the cause is `strip = true` (`release`, which `release-fast`
+  inherits): samply 0.13.1 unwinds from the unwind tables (`.eh_frame`), which every build
+  has (review r1, Fable: mimalloc, which has no frame pointers, showed its exact callers).
+- **Now:** the Cargo profile `profiling` (`release-fast` plus `strip = false` and
+  `debug = "line-tables-only"`), and `scripts/profile [-o out.json.gz] [--dry-run]
+  <alsem|aldump> <args>`, which builds it (`target/profiling/`) and runs `samply record
+  --save-only --unstable-presymbolicate` on it. samply exits 0 whatever the command did, so
+  the script records the command's exit code and exits with it, with a warning that the
+  profile is of a failed run. Pinned by
+  `gate_scripts::profile_script_builds_symbols_and_passes_the_exit_code`: the dry run's
+  commands, usage errors, a real run against stub `cargo` and `samply` (clean and failed),
+  and the profile's `strip = false` and line tables in `Cargo.toml`; removing the exit-code
+  check fails it.
+- **Checked on CDO** (2026-11-15, `alsem fingerprint` on the pinned baseline, the profile
+  built twice):
+  - with `-C force-frame-pointers=yes`: 325,392 samples on 145 threads, stack depth median
+    23 (p10 19, p90 29); inclusive `alsem::main` 83.8 %, `FingerprintJob::compute` 83.5 %,
+    `fingerprint_query` 81.2 %;
+  - without: 405,584 samples, median depth 22 (p10 19, p90 28); `alsem::main` 88.0 %,
+    `FingerprintJob::compute` 87.7 %. The same stacks, so no frame pointers.
+  - Top self shares, both runs: `mi_page_free_list_extend` 23.6 / 23.2 %, SipHash
+    `Hasher::write` 19.6 / 21.1 %, `_madvise` 7.8 / 7.7 %, digest `HopCache::get` 2.9 /
+    3.5 % (passed to the engine lane). Another session's task gate ran beside part of the
+    first recording, which can shift shares (cache and memory contention): the depth and
+    nesting show the stacks are usable, not that these shares are exact.
+- **Overhead** (`cdo-speed`, master `e708f1f6`'s `release-fast` against a `profiling` build
+  of the same source with frame pointers, so frame pointers plus symbols, line tables and no
+  strip; unlabelled: container stall shares 3.5 %, 3.9 %, 0.1 %): CPU model build x0.989,
+  test universe x0.991, prove x0.983, round total x0.999; peak memory x1.023 (the binary is
+  197 MB against 47 MB). One run, resolving about ±10 % (the model build's passes read x1.214
+  and x0.806; prove's rounds disagreed); some small calls read slower (warm-query x1.258,
+  query x1.143), below the judged size. The shipped profile is the same minus frame
+  pointers: symbols do not change the code.
+- Not done: the linker's folding of identical functions into one symbol (ENG-84's other
+  complaint) is not switched off here.
+
 ### Fixed (TLS-76: `cdo-speed` judges load by CPU pressure, and runs labelled when it is high)
 
 - **The hole:** TLS-65's wait for a 1-min load of at most max(6, cores / 3) stopped every
@@ -94,6 +133,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is other agents). TLS-35 cuts lib_cdo's largest test by ~14 GB,
   which leaves `output_cdo` the peak; TLS-75 asks whether its tests, which each build the
   same CDO model, can share one engine.
+
+### Changed (TLS-75: `output_cdo`'s tests share one CDO server, ~12 GB less at its peak)
+
+- **What it was:** a process census of `output_cdo` alone (the gate's command, every 2 s,
+  2026-11-15) found three `alsem mcp` servers on the same CDO workspace with the same
+  arguments, each with its own engine child of 5.7-6.1 GB (`cdo_answers()`,
+  `cdo_explain_digest_and_prove_give_one_table_answer`, `cdo_round2_size_ratchets`), plus
+  one-shot `alsem tests` and `alsem prove` calls building the model again: 21,308 MiB in
+  `alsem` processes at the phase's peak.
+- **Now:** one shared server for the phase (`output_cdo::with_cdo_server`), used by those three
+  and by the CDO test-selection and commit-sites ratchets in place of their one-shot calls.
+  Each user calls `release_cdo_server` once; the last release closes the server and checks it
+  exits cleanly, as each server did before. The answers are the CLI's stdout (the MCP contract
+  tests pin that, on fixtures); the one human hint whose spelling the MCP surface changes
+  (`tier: "dependency"` for `--tier dependency`) is built from
+  `follow_up::Input::TierDependency`. Limits: on CDO the `alsem tests` and `alsem prove
+  may-commit` one-shot paths no longer run (the impact ratchets still run one-shot calls; the
+  fixture tests keep theirs); the selection ratchet's empty-stderr check now reads the
+  envelope's stderr, which holds what the command writes through its job output, not a
+  warning the engine prints itself (`eprintln!`, the logger), which the one-shot check also
+  caught (green on CDO; the rest is TLS-78); its hint is no longer a literal CLI spelling; under a
+  filter that runs fewer users, or after a panic before a release, the server closes at
+  process exit without the clean-exit check.
+- Measured:
+  - `output_cdo` alone, back to back (`cdo` profile, load ~80-130 from outside the
+    container): `alsem` processes at the peak 21,308 -> 9,209 MiB (one front end, a 7.3 GB
+    production engine and the 1.9 GB test universe); 22 tests pass; 208.6 s -> 201.8 s.
+  - In the gate's own terms (TLS-74's per-phase line): the landing gate on master `e708f1f6`
+    had `output_cdo` at 23,433 MiB (container), the gate 22,418, 8 `alsem` processes;
+    `cdo-gate --only output` on this branch: 11,124 MiB, the gate 9,976, 3 processes, 22
+    passed. Its 211 s against the landing gates' 143-189 s comes from runs at other times
+    under other load; the back-to-back pair above is the like-for-like time.
 
 ### Fixed (TLS-73: `scripts/perf-probe` checks what samply needs, not one small buffer)
 
