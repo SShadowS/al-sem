@@ -118,10 +118,18 @@ pub fn shared_vocab(kind: &str) -> crate::program::str_pool::SharedStr {
             return s.clone();
         }
         let s = SharedStr::from(kind);
-        kinds.insert(s.clone());
+        // Bounded however it is called: past the cap a text is no longer kept (it is still
+        // right, just not shared), so a long-running engine thread never grows this set.
+        if kinds.len() < SHARED_VOCAB_CAP {
+            kinds.insert(s.clone());
+        }
         s
     })
 }
+
+/// Texts [`shared_vocab`] keeps per thread: well above the grammar's kind names (~1,500)
+/// plus the expression and argument kinds.
+pub const SHARED_VOCAB_CAP: usize = 4096;
 
 impl PAnchor {
     /// 0-based containment: is `(line, column)` within `[start, end]` (inclusive)?
@@ -1243,6 +1251,30 @@ mod tests {
             SharedStr::ptr_eq(&k1, &k3),
             "a vocabulary text is one allocation"
         );
+    }
+
+    /// ENG-85: the per-thread vocabulary set is bounded (a resident engine's pool threads
+    /// live across every refresh): past `SHARED_VOCAB_CAP` texts a new text is still answered
+    /// right but no longer kept, while the texts kept before stay shared.
+    #[test]
+    fn the_shared_vocabulary_stops_growing_at_its_cap() {
+        use super::{SHARED_VOCAB_CAP, shared_vocab};
+        use crate::program::str_pool::SharedStr;
+        std::thread::spawn(|| {
+            for i in 0..SHARED_VOCAB_CAP {
+                shared_vocab(&format!("k{i}"));
+            }
+            let first = (shared_vocab("k0"), shared_vocab("k0"));
+            assert!(SharedStr::ptr_eq(&first.0, &first.1), "kept below the cap");
+            let past = (shared_vocab("past"), shared_vocab("past"));
+            assert_eq!(past.0.as_str(), "past");
+            assert!(
+                !SharedStr::ptr_eq(&past.0, &past.1),
+                "not kept past the cap"
+            );
+        })
+        .join()
+        .expect("the vocabulary thread");
     }
 
     fn ts(kind: &str, value: Option<bool>, param: Option<u32>) -> PTempState {
