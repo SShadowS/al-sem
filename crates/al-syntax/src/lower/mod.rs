@@ -58,6 +58,8 @@ pub fn lower_file(root: RawNode, source: &str) -> AlFile {
     let mut objects = Vec::new();
     // No range from another file (an unwinding lowering) may reach this one.
     CONDITIONAL_VARS.with(|v| v.borrow_mut().clear());
+    PREPROC_WALK.with(|f| f.set(root.has_error()));
+    PREPROC_RANGES.with(|s| *s.borrow_mut() = preproc_ranges(root, source));
     collect_objects(root, source, &mut ir, &mut issues, &mut objects);
     ir.mark_conditional_vars(CONDITIONAL_VARS.with(|v| std::mem::take(&mut *v.borrow_mut())));
     let comments = collect_comments(root, source);
@@ -2214,6 +2216,13 @@ thread_local! {
     /// ([`al_syntax::ir::Ir::var_wrapper`]).
     static CONDITIONAL_VARS: std::cell::RefCell<Vec<crate::ir::VarWrapper>> =
         const { std::cell::RefCell::new(Vec::new()) };
+    /// ENG-81: the byte ranges of the file being lowered's build-varying preproc nodes,
+    /// sorted by start ([`holds_preproc`]); set by `lower_file`.
+    static PREPROC_RANGES: std::cell::RefCell<Vec<(usize, usize)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+    /// ENG-81 (sol r1): the file being lowered has parse errors, so [`holds_preproc`] walks
+    /// (`holds_preproc_walk`) instead of reading `PREPROC_RANGES`; set by `lower_file`.
+    static PREPROC_WALK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// Lower `children` as one statement list (a `statement_block` or a `code_block`
@@ -4327,23 +4336,63 @@ fn lower_case_body(
 /// `#define` and `#undef`, and a pragma-only wrapper, attach almost anywhere (inside a
 /// `case_branch`, between its label and `:`) and vary nothing: they do not count.
 fn holds_preproc(node: RawNode) -> bool {
+    // ENG-81: one sorted list of the file's build-varying preproc nodes (their byte
+    // ranges), filled once per file in `lower_file`, instead of a walk of the subtree per
+    // call (a call's arguments were rescanned by every enclosing call). Tree ranges nest,
+    // so the subtree holds such a node when one lies inside its range (a zero-width
+    // MISSING node at its end included, as the walk saw it). In a file with parse errors a
+    // zero-width recovery node at a range's end may belong to an ancestor or a sibling
+    // (sol r1), so such a file keeps the exact walk.
+    if PREPROC_WALK.with(std::cell::Cell::get) {
+        return holds_preproc_walk(node);
+    }
+    let r = node.byte_range();
+    PREPROC_RANGES.with(|s| {
+        let s = s.borrow();
+        let from = s.partition_point(|&(b, _)| b < r.start);
+        s[from..]
+            .iter()
+            .take_while(|&&(b, _)| b <= r.end)
+            .any(|&(_, e)| e <= r.end)
+    })
+}
+
+/// Whether `node` or a named node below it is a build-varying preproc node, by walking
+/// the subtree: [`holds_preproc`] in a file with parse errors, and its test oracle.
+fn holds_preproc_walk(node: RawNode) -> bool {
     let mut stack = vec![node];
     while let Some(n) = stack.pop() {
-        if n.kind_str().starts_with("preproc_")
-            && !matches!(
-                n.kind(),
-                RawKind::PreprocRegion
-                    | RawKind::PreprocEndregion
-                    | RawKind::PreprocDefine
-                    | RawKind::PreprocUndef
-                    | RawKind::PreprocPragmaOnly
-            )
-        {
+        if is_varying_preproc(n) {
             return true;
         }
         stack.extend(n.named_children());
     }
     false
+}
+
+/// The ranges [`holds_preproc`] reads for the file `root` of `source`. A source with no
+/// `#` has no directive, so it skips the walk.
+fn preproc_ranges(root: RawNode, source: &str) -> Vec<(usize, usize)> {
+    if source.contains('#') {
+        root.named_ranges_where(is_varying_preproc)
+    } else {
+        Vec::new()
+    }
+}
+
+/// A preprocessor node that makes code vary by build: any `preproc_*` kind but the
+/// grammar extras that vary nothing (`#region`, `#endregion`, `#define`, `#undef`, a
+/// pragma-only wrapper).
+fn is_varying_preproc(n: RawNode) -> bool {
+    n.kind_str().starts_with("preproc_")
+        && !matches!(
+            n.kind(),
+            RawKind::PreprocRegion
+                | RawKind::PreprocEndregion
+                | RawKind::PreprocDefine
+                | RawKind::PreprocUndef
+                | RawKind::PreprocPragmaOnly
+        )
 }
 
 /// Recursive worker for [`lower_case_body`] (H-7, Tier-1.4 preproc plan): walks one
@@ -5016,6 +5065,172 @@ mod grammar_v4_tests;
 mod tests {
     use crate::ir::{ExprKind, Literal, StmtKind};
     use crate::parse;
+
+    use super::holds_preproc_walk;
+
+    /// Every named node of `src`: (`holds_preproc`, the subtree walk) disagreements, and how
+    /// many nodes hold a build-varying preproc node. `walk_on_errors` sets the fallback as
+    /// `lower_file` does (a file with parse errors walks); `false` forces the range lookup.
+    fn oracle_check_with(src: &str, walk_on_errors: bool) -> (Vec<String>, usize) {
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&crate::language::language())
+            .expect("load AL grammar");
+        let tree = parser.parse(src, None).expect("a parse");
+        let root = super::RawNode::new(tree.root_node());
+        super::PREPROC_WALK.with(|f| f.set(walk_on_errors && root.has_error()));
+        super::PREPROC_RANGES.with(|s| *s.borrow_mut() = super::preproc_ranges(root, src));
+        let (mut bad, mut holding) = (Vec::new(), 0);
+        let mut stack = vec![root];
+        while let Some(n) = stack.pop() {
+            let (new, old) = (super::holds_preproc(n), holds_preproc_walk(n));
+            holding += usize::from(old);
+            if new != old {
+                bad.push(format!(
+                    "{} {:?}: new {new}, old {old}",
+                    n.kind_str(),
+                    n.byte_range()
+                ));
+            }
+            stack.extend(n.named_children());
+        }
+        (bad, holding)
+    }
+
+    fn oracle_check(src: &str) -> (Vec<String>, usize) {
+        oracle_check_with(src, true)
+    }
+
+    /// ENG-81 (sol r1): in a file with parse errors a zero-width recovery node at a range's
+    /// end could belong to an ancestor or a sibling, so such a file keeps the exact walk.
+    /// No reproducer is known (the range lookup forced on every file, recovered ones
+    /// included, agreed with the walk over the r0 corpus and 11,465 dependency files on
+    /// 2026-11-15), so this pins the fallback's use: `lower_file` sets it for a file with
+    /// parse errors and clears it for a clean one. Break: never set it -> fails.
+    #[test]
+    fn a_recovered_file_keeps_the_exact_walk() {
+        let walking = || super::PREPROC_WALK.with(std::cell::Cell::get);
+        let broken = parse(
+            "codeunit 50001 \"Broken\"\n{\n    procedure P()\n    begin\n#if X\n        Foo(1)",
+        );
+        assert_eq!(
+            broken.parse_status,
+            crate::ir::ParseStatus::Recovered,
+            "precondition"
+        );
+        assert!(walking(), "a recovered file walks");
+        let clean =
+            parse("codeunit 50002 \"Clean\"\n{\n    procedure P()\n    begin\n    end;\n}\n");
+        assert_eq!(
+            clean.parse_status,
+            crate::ir::ParseStatus::Clean,
+            "precondition"
+        );
+        assert!(!walking(), "a clean file reads the ranges");
+    }
+
+    /// ENG-81 (Fable r1): the sorted-range lookup answers exactly what the subtree walk did,
+    /// on every named node of an inline source with many `#if` shapes and of every r0
+    /// corpus file (plus every `.al` under `$PREPROC_ORACLE_DIR` when set: a one-off sweep
+    /// over real BC source; 11,465 files, 859 with `#if`, agreed on 2026-11-15). Break:
+    /// drop the start bound (`b <= r.end`) -> a node before a `#if` reads as holding it.
+    /// The end check (`e <= r.end`) is exactness only: a preproc node starts at another
+    /// node's start only as that group's own directive, which the walk also counts.
+    #[test]
+    fn preproc_lookup_matches_the_subtree_walk() {
+        const SHAPES: &str = r#"codeunit 50000 "Shapes"
+{
+    var
+#if X
+        G: Text;
+#else
+        G: Integer;
+#endif
+
+#if not CLEAN25
+    procedure Old() begin end;
+#endif
+
+    procedure P(I: Integer; E: ErrorInfo)
+    var
+#if Y
+        L: Text;
+#endif
+    begin
+        Error(
+#if X
+            E
+#else
+            'txt'
+#endif
+        );
+        Message(Format(StrSubstNo('a',
+#if X
+            1
+#else
+            2
+#endif
+        )));
+#if X
+        Error('a',
+#else
+        Message('a',
+#endif
+            I);
+        case I of
+            1:
+                Old();
+#if X
+            2:
+                Old();
+#endif
+        end;
+        if I = 1 then
+#if X
+            exit;
+#else
+            Old();
+#endif
+        #region R
+        Old();
+        #endregion
+    end;
+}
+"#;
+        let (bad, holding) = oracle_check(SHAPES);
+        assert!(bad.is_empty(), "inline shapes:\n{}", bad.join("\n"));
+        assert!(
+            holding > 10,
+            "precondition: the shapes hold preproc nodes ({holding})"
+        );
+        let corpus = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/r0-corpus");
+        let mut dirs = vec![corpus];
+        if let Ok(d) = std::env::var("PREPROC_ORACLE_DIR") {
+            dirs.push(d.into());
+        }
+        let (mut files, mut failures) = (0, Vec::new());
+        while let Some(d) = dirs.pop() {
+            for e in std::fs::read_dir(&d).expect("a readable dir") {
+                let p = e.expect("an entry").path();
+                if p.is_dir() {
+                    dirs.push(p);
+                } else if p.extension().is_some_and(|x| x == "al") {
+                    let Ok(src) = std::fs::read_to_string(&p) else {
+                        continue;
+                    };
+                    files += 1;
+                    let (bad, _) = oracle_check(&src);
+                    failures.extend(bad.into_iter().map(|b| format!("{}: {b}", p.display())));
+                }
+            }
+        }
+        assert!(
+            files > 500,
+            "precondition: the corpus was found ({files} files)"
+        );
+        eprintln!("preproc oracle: {files} files agree");
+        assert!(failures.is_empty(), "\n{}", failures.join("\n"));
+    }
 
     /// Find the first `Case` statement in a parsed file.
     fn first_case(

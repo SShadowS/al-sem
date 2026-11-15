@@ -2102,7 +2102,9 @@ pub(crate) fn resolve_file_obligations(
                 }
                 // ENG-80: what a bare call to a name the `Error` rule reads binds to.
                 if let CalleeShape::Bare { name } = &site.shape
-                    && BARE_VERDICT_NAMES.contains(&name.fold_identifier().as_str())
+                    && BARE_VERDICT_NAMES
+                        .iter()
+                        .any(|n| name.eq_fold_identifier(n))
                 {
                     // A target routine exists in every build of the call when some
                     // copy of it carries no build condition the call's own context

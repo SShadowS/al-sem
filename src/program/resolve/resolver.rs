@@ -1967,7 +1967,11 @@ pub(crate) fn resolve_bare_with_args(
     scope_complete: &mut bool,
 ) -> (DispatchShape, Vec<Route>) {
     *scope_complete = with_state == WithState::NoWithProven;
-    if let Some(base_kind) = extension_base_kind(from_object.id.kind) {
+    // ENG-81: only the `Error` rule's names read `scope_complete` (`full::BareVerdict`), so
+    // only they pay for its scope checks; every other bare call skips them (each was a
+    // recorded index query per call site in a session).
+    let wants_scope = crate::program::resolve::full::BARE_VERDICT_NAMES.contains(&name_lc);
+    if wants_scope && let Some(base_kind) = extension_base_kind(from_object.id.kind) {
         let base = from_object
             .extends_target
             .as_deref()
@@ -2079,9 +2083,11 @@ pub(crate) fn resolve_bare_with_args(
             if let Some(table_id) = table_id {
                 // The table or any of its extensions symbol-only: its symbols may
                 // not list an internal procedure (ENG-80 review F2).
-                if graph.object(&table_id).is_none_or(|t| {
-                    crate::program::resolve::full::table_code_not_loaded(t, graph, index)
-                }) {
+                if wants_scope
+                    && graph.object(&table_id).is_none_or(|t| {
+                        crate::program::resolve::full::table_code_not_loaded(t, graph, index)
+                    })
+                {
                     *scope_complete = false;
                 }
                 // (3) Visibility-scoped table ∪ extensions search (Task 2):
