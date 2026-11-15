@@ -70,6 +70,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `gate_scripts::cdo_gate_runs_lane_two_beside_impact_only_with_the_memory` pins the new
   thresholds.
 
+### Added (TLS-74: `cdo-gate` reports peak memory per phase and the `alsem` count at it)
+
+- **Why:** the memory sampler printed one run peak (27.6, 28.1 and 28.6 GB in the three
+  2026-11-15 landings, container limit 48 GiB), not which phase reached it or how many CDO
+  engine processes (~5-6 GB each) were alive then.
+- **Now:** each sample in `memory.timeline` also counts the gate's `alsem` processes
+  (`engines=N`: one-shot CLI calls and engine hosts, which each hold a CDO model, and any
+  `alsem mcp` front end, which holds none). The summary prints one line per phase: its
+  highest container-unreclaimable sample while it ran (start <= t < end), the gate's own
+  MiB and the `alsem` count at that sample. Each phase's log ends with its own line. Phases
+  that ended before the sampler started (build, speed) are left out; one still open says
+  "(not ended)". `cdo-gate --summary=<run folder>` prints it for older runs too, with the
+  count as "?". Pinned by `gate_scripts::cdo_gate_summary_names_each_phases_peak_memory` (a
+  hand-written run folder; an inclusive end fails it) and, for the writer,
+  `cdo_gate_only_run_builds_and_runs_just_its_phases` (its stub runs a stand-in `alsem` and
+  waits for a sample that counts it; a hardcoded `engines=0` fails it).
+- **What it showed** (the three landings replayed, MiB, container): `lib_cdo` set the run
+  peak (27,633-28,568; one test process at 4 threads, 26,205-27,032 of it), then
+  `output_cdo` (23,385-24,101; three or more ~5.9 GB `alsem` processes), `output_cdo_impact`
+  (15,094-15,508), `program_resolve_harness` (8,081-8,268), `lsp` and
+  `l4_summary_differential` (3,113-4,043 container, the gate's own at most 2,185: the rest
+  is other agents). TLS-35 cuts lib_cdo's largest test by ~14 GB,
+  which leaves `output_cdo` the peak; TLS-75 asks whether its tests, which each build the
+  same CDO model, can share one engine.
+
 ### Fixed (TLS-73: `scripts/perf-probe` checks what samply needs, not one small buffer)
 
 - **The hole:** after the 2026-11-15 redeploy (CAP_PERFMON) `scripts/perf-probe` exited 0

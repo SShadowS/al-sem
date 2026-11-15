@@ -344,6 +344,50 @@ changed_paths() {
 # ran"): `cargo test` with a filter that matches nothing (a renamed member or
 # module) exits 0 on "0 passed". The speed phase cannot pass on zero either:
 # `cdo-speed` fails on any timed call that does not exit 0.
+#
+# ⟨TLS-74⟩ Per phase: the highest container-unreclaimable sample while it ran,
+# with the gate's own MiB and its count of `alsem` processes at that sample
+# (every one: one-shot CLI calls and engine hosts hold a CDO model, ~5-6 GB
+# each; an `alsem mcp` front end holds none). From `phases.times` and
+# `memory.timeline`, so `--summary=` of a past run shows it too (a timeline from
+# before TLS-74 has no count: "?"). The container figure includes other agents
+# (compare the gate's MiB), and a sample's time is taken after it, so one at a
+# phase's edge may belong to its neighbour. Phases that overlap (the parallel
+# layout) each count the shared samples. Phases that ended before the sampler
+# started (build, speed) are left out. One line per phase, or only `$2`'s.
+phase_memory() { # <logs> [phase]
+    [[ -f "$1/phases.times" && -f "$1/memory.timeline" ]] || return 0
+    awk -v only="${2:-}" '
+        FNR == NR {
+            if ($2 == "start" && (only == "" || $3 == only)) {
+                if (!($3 in start)) order[++n] = $3
+                start[$3] = $1
+            }
+            if ($2 == "end") end_[$3] = $1
+            next
+        }
+        {
+            if (first == "") first = $1
+            e = "?"
+            for (f = 4; f <= NF; f++) if ($f ~ /^engines=/) e = substr($f, 9)
+            for (i = 1; i <= n; i++) {
+                p = order[i]
+                if ($1 >= start[p] && (!(p in end_) || $1 < end_[p]) && (!(p in peak) || $2 + 0 > peak[p] + 0)) {
+                    peak[p] = $2; gate[p] = $3; eng[p] = e
+                }
+            }
+        }
+        END {
+            for (i = 1; i <= n; i++) {
+                p = order[i]
+                open = (p in end_) ? "" : " (not ended)"
+                if (p in peak)
+                    printf "cdo-gate:   memory %-24s peak %6d MiB (container, unreclaimable), the gate %6d MiB, alsem processes %s%s\n", p, peak[p], gate[p], eng[p], open
+                else if (!(p in end_) || first == "" || end_[p] > first)
+                    printf "cdo-gate:   memory %-24s no sample%s\n", p, open
+            }
+        }' "$1/phases.times" "$1/memory.timeline"
+}
 summarize() {
     local phases=(program_resolve_harness lsp l4_summary_differential lib_cdo output_cdo)
     # ⟨TLS-19⟩ A run that split the impact ratchets off says so (an older run's
@@ -410,6 +454,7 @@ summarize() {
         fi
         [[ -n "$gate" ]] && echo "cdo-gate:   the gate's own processes then: $gate MiB (RSS sum; the rest is other agents)"
     fi
+    phase_memory "$logs"
     if [[ -f "$logs/memory.events.start" && -f "$logs/memory.events.end" ]]; then
         echo "cdo-gate:   memory events this run: $(awk 'NR == FNR { s[$1] = $2; next }
             $1 == "max" || $1 == "oom" || $1 == "oom_kill" { printf "%s%s +%d", sep, $1, $2 - s[$1]; sep = ", " }' \
@@ -703,6 +748,7 @@ run_phase() {
     rc=$(cat "$logs/$name.rc" 2>/dev/null)
     [[ "$rc" =~ ^[0-9]+$ ]] || rc=1
     echo "$(date +%s) end $name" >> "$logs/phases.times"
+    phase_memory "$logs" "$name" >> "$logs/$name.log"
     echo "$rc $((SECONDS - start))" > "$logs/$name.status"
     if [[ "$rc" -eq 0 ]]; then
         echo "cdo-gate: [$name] ok ($((SECONDS - start)) s)"
@@ -957,7 +1003,8 @@ unreclaimable_bytes() {
 # Each sample also sums the RSS of the gate's own process tree (descendants of
 # this script; shared pages count once per process, so it over-counts a little)
 # and names its three largest processes, in `memory.timeline` (epoch seconds,
-# unreclaimable MiB, gate MiB, top three), beside `phases.times` (phase starts
+# unreclaimable MiB, gate MiB, `engines=N` (its `alsem` processes; TLS-74), top
+# three), beside `phases.times` (phase starts
 # and ends). The summary gives the gate's share at the container's peak.
 gate_tree_rss() {
     ps -e -o pid=,ppid=,rss=,comm= | awk -v root="$1" '
@@ -969,7 +1016,8 @@ gate_tree_rss() {
                 if (q == root) print rss[p], name[p] "/" p
             }
         }' | sort -rn | awk '{ kib += $1 } NR <= 3 { top = top " " $2 ":" int($1 / 1024) }
-                             END { print int(kib / 1024) top }'
+                             $2 ~ /^alsem\// { engines++ }
+                             END { print int(kib / 1024) " engines=" engines + 0 top }'
 }
 memory_sampler() {
     local cg=/sys/fs/cgroup peak=0 cur gate
