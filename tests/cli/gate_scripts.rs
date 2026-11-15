@@ -22,8 +22,8 @@ fn speed_gate_fails_when_a_timed_call_fails() {
         .args(["--base-exe", exe, "--head-exe", exe, "--out"])
         .arg(out.path())
         .env("ALSEM_SPEED_CACHE", out.path().join("cache"))
-        // TLS-65: no wait for a quiet machine (the test's own load is no issue).
-        .env("CDO_SPEED_QUIET_LOAD", "100000")
+        // TLS-65/TLS-76: no wait for a calm machine (the test's own load is no issue).
+        .env("CDO_SPEED_CALM_PRESSURE", "100")
         .output()
         .expect("spawn python3 scripts/cdo-speed");
     let text = format!(
@@ -70,9 +70,9 @@ fn speed_gate_refuses_more_rounds_than_routines() {
             ])
             .arg(out.path())
             .env("ALSEM_SPEED_CACHE", out.path().join("cache"))
-            // TLS-65 (Fable r1): no wait for a quiet machine, which on a busy box
-            // would stop the valid run with exit 2 after 10 min.
-            .env("CDO_SPEED_QUIET_LOAD", "100000")
+            // TLS-65 (Fable r1)/TLS-76: no wait for a calm machine, which on a busy
+            // box would hold the valid run for 10 min.
+            .env("CDO_SPEED_CALM_PRESSURE", "100")
             .output()
             .expect("spawn python3 scripts/cdo-speed");
         let text = format!(
@@ -1654,6 +1654,12 @@ fn speed_with_stub(
     let state = dir.join(format!("state-{}", extra.join("-")));
     std::fs::create_dir_all(&state).unwrap();
     std::fs::write(dir.join("loadavg"), load).unwrap();
+    // A calm machine unless a test passes its own pressure file.
+    std::fs::write(
+        dir.join("pressure"),
+        "some avg10=1.00 avg60=1.00 avg300=1.00 total=0\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0\n",
+    )
+    .unwrap();
     let ws = dir.join("ws");
     std::fs::create_dir_all(&ws).unwrap();
     let mut cmd = std::process::Command::new("python3");
@@ -1671,7 +1677,9 @@ fn speed_with_stub(
         .env("STUB_BUILD_S", "0.4")
         .env("CDO_SPEED_WARM_MIN_SECONDS", "0.2")
         .env("CDO_SPEED_LOADAVG_FILE", dir.join("loadavg"))
-        .env("CDO_SPEED_QUIET_LOAD", "6");
+        .env("CDO_SPEED_PRESSURE_FILE", dir.join("pressure"))
+        .env("CDO_SPEED_HOST_PRESSURE_FILE", dir.join("pressure"))
+        .env("CDO_SPEED_CALM_PRESSURE", "25");
     for (k, v) in env {
         cmd.env(k, v);
     }
@@ -1773,38 +1781,69 @@ fn speed_warm_up_cancels_the_second_side_penalty() {
     }
 }
 
-/// TLS-65: speed is never judged on a loaded machine and never skipped
-/// silently. With the 1-min load above QUIET_LOAD for the whole wait, the
-/// run stops before any server starts, with exit 2 and a FAIL line naming the
-/// load; cdo-gate's summary shows that line on its failed speed row.
+/// TLS-76 (replaces TLS-65's stop on a loaded machine). Admission waits on the
+/// host's pressure (avg60); the label comes from the stall share this container's
+/// own tasks saw over each timed block (`some total=`). Three cases, from
+/// hand-written PSI files:
+/// - the host stays at 70 % for the whole wait: the run goes ahead (never
+///   skipped, never exit 2), the verdict says "UNDER LOAD" naming both passes,
+///   speed.json lists them, and cdo-gate's summary shows it on the speed row;
+/// - the host is calm but a writer thread grows the container's stall total at
+///   ~80 % of wall time: the label names the blocks whose share passed 25 %
+///   (reviews r1, Fable and sol: a pre-pass reading alone sees an idle cgroup);
+/// - calm (both files flat at 1 %), with a 1-min load of 50 (TLS-65 refused
+///   that): no label.
 ///
-/// Mutation: the wait's timeout returning instead of raising -> the warm-up
-/// runs, PASS, exit 0.
+/// Mutations (2026-11-15): `wait_calm`'s timeout returning "not under load" ->
+/// no label in case 1; `under_load_label` ignoring the stall shares -> no label
+/// in case 2.
 #[cfg(target_os = "linux")]
 #[test]
-fn speed_waits_for_a_quiet_machine_and_fails_loudly() {
+fn speed_runs_under_load_and_says_so() {
+    // 1. The host stays loaded.
     let dir = tempfile::tempdir().unwrap();
+    let host = dir.path().join("host");
+    std::fs::write(&host, "some avg10=80.00 avg60=70.00 avg300=60.00 total=0\n").unwrap();
     let (code, text) = speed_with_stub(
         dir.path(),
         "50.0",
         &[],
         &[
-            ("CDO_SPEED_QUIET_WAIT_S", "1"),
-            ("CDO_SPEED_QUIET_POLL_S", "0.2"),
+            ("CDO_SPEED_HOST_PRESSURE_FILE", host.to_str().unwrap()),
+            ("CDO_SPEED_CALM_WAIT_S", "1"),
+            ("CDO_SPEED_CALM_POLL_S", "0.2"),
         ],
     );
-    assert_eq!(code, Some(2), "{text}");
+    let verdict_of = |text: &str| -> String {
+        text.lines()
+            .rfind(|l| l.contains("cdo-speed: PASS") || l.contains("cdo-speed: FAIL"))
+            .unwrap_or_else(|| panic!("a verdict line: {text}"))
+            .to_string()
+    };
+    let verdict = verdict_of(&text);
     assert!(
-        text.contains("cdo-speed: FAIL: cannot judge speed: the 1-min load stayed above 6.0"),
+        verdict.contains(
+            "UNDER LOAD: host pressure above 25.0 % for 1 s before warm-up pass(es) 1, 2"
+        ),
         "{text}"
     );
-    assert!(!text.contains("round 0"), "nothing was timed: {text}");
-    assert!(!text.contains("PASS"), "{text}");
+    assert!(code == Some(0) || code == Some(1), "{text}");
+    assert!(text.contains("round 0"), "the warm-up ran: {text}");
+    let json: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(dir.path().join("state-/out/speed.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        json["admitted_by_timeout"],
+        serde_json::json!([1, 2]),
+        "{json}"
+    );
+    assert_eq!(json["under_load"], true, "{json}");
 
-    // cdo-gate's summary of such a run: the speed row fails and says why.
+    // cdo-gate's summary of such a run: the label is on the speed row.
     let logs = dir.path().join("logs");
     std::fs::create_dir_all(&logs).unwrap();
-    std::fs::write(logs.join("speed.status"), "2 600\n").unwrap();
+    std::fs::write(logs.join("speed.status"), "0 600\n").unwrap();
     std::fs::write(logs.join("speed.log"), text.as_bytes()).unwrap();
     let out = std::process::Command::new("bash")
         .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-gate"))
@@ -1812,18 +1851,57 @@ fn speed_waits_for_a_quiet_machine_and_fails_loudly() {
         .output()
         .unwrap();
     let summary = String::from_utf8_lossy(&out.stdout);
-    assert_eq!(out.status.code(), Some(1), "{summary}");
-    // On the speed row itself (the other phases fail too: no status files).
     let speed_row = summary
         .lines()
         .find(|l| l.starts_with("cdo-gate:   speed "))
         .unwrap_or_else(|| panic!("a speed row: {summary}"));
-    assert!(
-        speed_row.contains("FAILED (2)") && speed_row.contains("FAIL: cannot judge speed"),
-        "{speed_row}"
+    assert!(speed_row.contains("UNDER LOAD"), "{speed_row}");
+
+    // 2. The host is calm; this container's own tasks stall ~80 % of the time.
+    let stalled = tempfile::tempdir().unwrap();
+    let own = stalled.path().join("own");
+    std::fs::write(&own, "some avg10=1.00 avg60=1.00 avg300=1.00 total=0\n").unwrap();
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let writer = {
+        let (own, stop) = (own.clone(), stop.clone());
+        std::thread::spawn(move || {
+            let t0 = std::time::Instant::now();
+            while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                let us = (t0.elapsed().as_micros() as f64 * 0.8) as u64;
+                let tmp = own.with_extension("tmp");
+                std::fs::write(
+                    &tmp,
+                    format!("some avg10=1.00 avg60=1.00 avg300=1.00 total={us}\n"),
+                )
+                .unwrap();
+                std::fs::rename(&tmp, &own).unwrap();
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+        })
+    };
+    let (_, text) = speed_with_stub(
+        stalled.path(),
+        "50.0",
+        &[],
+        &[("CDO_SPEED_PRESSURE_FILE", own.to_str().unwrap())],
     );
+    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    writer.join().unwrap();
+    let verdict = verdict_of(&text);
     assert!(
-        summary.contains("FAIL: cannot judge speed"),
-        "the reason on the speed row: {summary}"
+        // The warm-up passes only: the stub's rounds may end between two writer
+        // updates (20 ms) and read 0 % (review r2, sol).
+        verdict.contains("UNDER LOAD: stall share above 25.0 % in warm-up 1, warm-up 2"),
+        "{text}"
+    );
+    assert!(!verdict.contains("host pressure"), "{verdict}");
+
+    // 3. Calm (1 %), with the same 1-min load of 50: no label.
+    let calm = tempfile::tempdir().unwrap();
+    let (_, text) = speed_with_stub(calm.path(), "50.0", &[], &[]);
+    assert!(!text.contains("UNDER LOAD"), "{text}");
+    assert!(
+        text.contains("cdo-speed: PASS") || text.contains("cdo-speed: FAIL"),
+        "{text}"
     );
 }
