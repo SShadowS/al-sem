@@ -6,6 +6,8 @@ publish = false
 
 [dependencies]
 al-sem = { path = "../.." }
+# ENG-86: the IR types, to split the dependency syntax trees by part.
+al-syntax = { path = "../../crates/al-syntax" }
 # Large-allocation log: frames captured unresolved, resolved only when printed.
 backtrace = "=0.3.76"
 # `front-seq`: the child's status and ask params.
