@@ -157,3 +157,18 @@ working tree's build took 0 s.
   landed; TLS-18) was still running when TLS-33's gate began.
 - A landing's merge commit has exactly the tree its gate tested, and that gate already holds the
   tree's release-fast binary. Seeding the cache from it is TLS-34.
+
+## TLS-35 addendum (2026-11-15): the largest test is no longer 18,628 MiB
+
+The numbers above for `retained_emission_equals_a_composition_on_cdo` (18,628 MiB) and the
+budget built on them (18,700 at 1 thread, 23,300 at 2; needs 38,896 and 43,496) are superseded.
+- The test now compares one digest per subject and evicts the fold before the cold side.
+  Measured alone (`cdo` profile, one test per process, 3 alternating rounds, master `5ebeba07`
+  against TLS-35): peak RSS 18,541-18,717 MiB before, 4,444-4,449 MiB after; a fourth run of
+  the final version (with its eviction assert) peaked at 4,501.
+- The four largest lib CDO tests are now 4,552, 4,501, 4,499 and 4,252 MiB (the other three
+  from the census above). lib_cdo at n threads is budgeted at about the n largest summed:
+  4,600, 9,100, 13,600, 17,900 MiB for 1-4 threads (`lib_own_mib` in `scripts/cdo-gate`).
+- The opt-in parallel layout tries 4 threads down to 1: needs 38,096, 33,796, 29,296 and
+  28,596 MiB (impact 16,100 + lane 2's worst + 4,096; lane 2's worst is lib_cdo's, or the
+  8,400 of the harness/lsp/l4 phases before it when that is larger). Serial stays the default.

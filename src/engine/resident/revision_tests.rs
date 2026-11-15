@@ -2,7 +2,7 @@
 //! in sequence off ONE resident revision, each byte-equal to its cold
 //! standalone run, with the store's fill counters stated.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use super::*;
@@ -1855,6 +1855,14 @@ fn retained_emission_equals_a_composition_for_every_routine() {
 /// `ENFORCE_CDO_WS=1`): every primary routine and the first 200 dependency
 /// routines (by internal id) emitted from a resident fold's cones equal a
 /// composition's raw half over the same subjects.
+///
+/// TLS-35: compared as one digest per subject, with the fold and every other
+/// evictable artifact dropped before the cold composition, so the two sides are
+/// never held at once: peak RSS 18,541-18,717 MiB -> 4,444-4,501 MiB (one test
+/// per process, `cdo` profile, 2026-11-15).
+///
+/// DISCRIMINATION (2026-11-15): `emit_raw` skipping its 100th emitted subject
+/// -> fails, naming exactly that subject; reverted, green.
 #[test]
 fn retained_emission_equals_a_composition_on_cdo() {
     use crate::engine::l4::cone_derived::{ConeScope, WitnessScope};
@@ -1896,14 +1904,32 @@ fn retained_emission_equals_a_composition_on_cdo() {
             subjects.len() > primary,
             "precondition: dependency subjects"
         );
-        let (warm, report) = fold.cones.as_ref().expect("a cone store").emit_raw(
-            &model.workspace.routines,
-            &fold.caps.direct_full,
-            fold.caps.pd.as_ref(),
-            &subjects,
-            &|_| None,
-        );
+        let emit = |fold: &Fold, subjects: &BTreeSet<String>| {
+            fold.cones.as_ref().expect("a cone store").emit_raw(
+                &model.workspace.routines,
+                &fold.caps.direct_full,
+                fold.caps.pd.as_ref(),
+                subjects,
+                &|_| None,
+            )
+        };
+        let (warm, report) = emit(fold, &subjects);
         assert!(report.emitted as usize > primary, "{report:?}");
+        // TLS-35: per-subject digests, then the warm side's fold, cones and
+        // emission are dropped before the cold composition, so the two are never
+        // held at once (the test peaked at ~18,600 MiB with both, and both as text).
+        let warm_digests = raw_digests(&warm);
+        drop(warm);
+        drop(snap);
+        for kind in Revision::EVICTION_ORDER {
+            rev.evict_kind(kind);
+        }
+        // `evict` skips a pinned key silently; cdo-gate's memory plan counts on
+        // this test not holding the fold (TLS-35).
+        assert!(
+            rev.snapshot().get(&ArtifactKey::Fold).is_none(),
+            "the fold is evicted before the cold composition"
+        );
         let (_, cold) = crate::engine::session::compose_cone(
             model,
             &crate::engine::session::relation_of(rev.target()),
@@ -1912,12 +1938,66 @@ fn retained_emission_equals_a_composition_on_cdo() {
                 raw: WitnessScope::Subjects(subjects),
             },
         );
-        let (warm, cold) = (raw_text(&warm), raw_text(&cold));
-        assert!(
-            warm == cold,
-            "the retained emission equals the composition's on CDO"
+        let cold_digests = raw_digests(&cold);
+        if warm_digests == cold_digests {
+            return;
+        }
+        // The first differing subjects, rendered from both sides: cold's now,
+        // warm's re-emitted for them alone from a refilled fold (a fault that
+        // depends on the whole subject set may not reproduce there; the
+        // presence line comes from the digests).
+        let differing: BTreeSet<String> = warm_digests
+            .keys()
+            .chain(
+                cold_digests
+                    .keys()
+                    .filter(|k| !warm_digests.contains_key(*k)),
+            )
+            .filter(|k| warm_digests.get(*k) != cold_digests.get(*k))
+            .take(3)
+            .cloned()
+            .collect();
+        let render = |raw: &InheritedFacts| -> String {
+            differing
+                .iter()
+                .map(|k| match raw.get(k) {
+                    Some(e) => format!("{k} {:?}\n", e.materialize()),
+                    None => format!("{k} (absent)\n"),
+                })
+                .collect()
+        };
+        let cold_text = render(&cold);
+        drop(cold);
+        let snap = fold_of(&rev);
+        let Some(ArtifactValue::Fold(fold)) = snap.get(&ArtifactKey::Fold).map(|a| &a.value) else {
+            panic!("the fold is published again");
+        };
+        let warm_text = render(&emit(fold, &differing).0);
+        let present: Vec<_> = differing
+            .iter()
+            .map(|k| {
+                let side = |m: &BTreeMap<String, blake3::Hash>| m.contains_key(k);
+                (k, side(&warm_digests), side(&cold_digests))
+            })
+            .collect();
+        panic!(
+            "the retained emission differs from the composition's on CDO for {differing:?}\n\
+             (subject, in warm, in cold): {present:?}\n\
+             warm (re-emitted for these subjects alone):\n{warm_text}cold:\n{cold_text}"
         );
     });
+}
+
+/// `raw`'s entries as one digest per subject: equal maps exactly when the
+/// [`raw_text`]s are equal, short of a blake3 collision (TLS-35: digests
+/// instead of two whole texts on CDO).
+fn raw_digests(raw: &InheritedFacts) -> BTreeMap<String, blake3::Hash> {
+    raw.keys()
+        .map(|k| {
+            let text = format!("{:?}", raw.get(k).expect("listed").materialize());
+            (k.to_string(), blake3::hash(text.as_bytes()))
+        })
+        .collect()
 }
 
 /// Plan 2026-11-03 L6, on one revision: the fold emits no raw facts; a

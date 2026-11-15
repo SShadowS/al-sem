@@ -97,14 +97,19 @@ dry_run=0
 # The gate's own memory (its process tree's RSS, `memory.timeline`'s third
 # column; 12 gates, 2026-11-12/13): the impact phase at most 16,076 MiB.
 # lib_cdo's tests alone (TLS-32's census, `cdo` profile, one test per process):
-# `retained_emission_equals_a_composition_on_cdo` 18,628 MiB, every other one
-# at most 4,552. So lib_cdo is at most ~18,700 at 1 thread and ~23,300 at 2;
-# the harness, lsp and l4 (≤ ~8,400 own) run before it, one at a time.
+# the four largest 4,552, 4,501, 4,499 and 4,252 MiB (`retained_emission_equals_
+# a_composition_on_cdo` was 18,628 until TLS-35 dropped its fold before the cold
+# side: 4,444-4,501 on 2026-11-15; the census note's TLS-35 addendum). So lib_cdo
+# at n threads is about the n largest summed, rounded up (single runs; the 4 GiB
+# headroom covers their spread): ~4,600, 9,100, 13,600, 17,900 MiB for 1-4; the
+# harness, lsp and l4 (≤ ~8,400 own) run before it, one at a time.
 #
-# Beside the impact phase, the most threads (2, then 1) whose need fits both
+# Beside the impact phase, the most threads (4 down to 1) whose need fits both
 # bounds, read once when the section starts (after `output_cdo`, whose memory
 # is then freed, and before either part allocates):
-#   need = impact's own worst + lib_cdo's own worst at that count + 4 GiB;
+#   need = impact's own worst + lane 2's worst (lib_cdo's own worst at that
+#          count, or the harness/lsp/l4 phases' 8,400 before it, whichever is
+#          larger; review TLS-35, sol) + 4 GiB;
 #   - the container (`memory.max` minus what cannot be reclaimed now, which
 #     counts every agent in it): the owner's 4 GiB headroom rule;
 #   - the host (MemAvailable): the gate starts at >= 35 GB, sized for a serial
@@ -112,7 +117,8 @@ dry_run=0
 # Neither fits: lane 2 after the impact phase. Review r1 (sol and Opus): the
 # host alone said `parallel` while the container had ~42.7 GB free.
 impact_own_mib=16100
-lib_own_mib=(0 18700 23300)
+lib_own_mib=(0 4600 9100 13600 17900)
+lane2_before_lib_mib=8400
 headroom_mib=4096
 lib_threads=4
 lane2_beside=0
@@ -239,8 +245,12 @@ plan_layout() {
     local avail free t need
     avail=$(host_available_mib)
     free=$(container_free_mib)
-    for t in 2 1; do
-        need=$((impact_own_mib + lib_own_mib[t] + headroom_mib))
+    lane2_need() { # <lib threads>: lane 2's own worst
+        local lib=${lib_own_mib[$1]}
+        echo $((lib > lane2_before_lib_mib ? lib : lane2_before_lib_mib))
+    }
+    for t in 4 3 2 1; do
+        need=$((impact_own_mib + $(lane2_need "$t") + headroom_mib))
         if [[ "$avail" =~ ^[0-9]+$ ]] && ((avail >= need)) &&
             { [[ "$free" == unlimited ]] || { [[ "$free" =~ ^[0-9]+$ ]] && ((free >= need)); }; }; then
             lane2_beside=1
@@ -252,7 +262,7 @@ plan_layout() {
             return
         fi
     done
-    need=$((impact_own_mib + lib_own_mib[1] + headroom_mib))
+    need=$((impact_own_mib + $(lane2_need 1) + headroom_mib))
     layout_line="sequential: lane 2 after the impact phase (host MemAvailable ${avail:-unknown}, container free $free; 1 thread beside it needs $need MiB)"
 }
 usage() {
@@ -840,11 +850,12 @@ phase_l4() {
 # test outside that filter cannot hide: the shared gate (`crate::cdo::
 # cdo_ws_or_enforce`) panics in the task gate for any test the filter misses,
 # and `cdo_ws_is_read_only_through_the_gate` refuses a test that reads CDO_WS
-# around it. Threads: 4 when it runs alone; 2 or 1 beside the impact phase
-# (`plan_layout`, TLS-32). The CDO tests each build their own model; measured
+# around it. Threads: 4 when it runs alone; 4 down to 1 beside the impact phase
+# (`plan_layout`, TLS-32/TLS-35). The CDO tests each build their own model; measured
 # alone (TLS-32's census, 2026-11-13, cdo profile, one test per process):
-# `retained_emission_equals_a_composition_on_cdo` 18,628 MiB and 105 s, every
-# other test at most 4,552 MiB, 507 s summed (note `2026-11-13-lib-cdo-census.md`).
+# `retained_emission_equals_a_composition_on_cdo` 18,628 MiB and 105 s (~4,500 MiB
+# and 87-105 s since TLS-35), every other test at most 4,552 MiB, 507 s summed
+# (note `2026-11-13-lib-cdo-census.md`).
 #
 # ⟨TLS-36⟩ Longest first: libtest starts tests in name order, so the longest
 # (`retained_emission`, ~105 s alone) started last and left a tail. The phase
