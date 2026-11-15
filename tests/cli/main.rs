@@ -368,5 +368,6 @@ mod output_invariants;
 mod output_invariants_w3;
 mod output_shared_evidence;
 mod output_vocabulary;
+mod perf_probe;
 mod regen_atomic_writes;
 mod temp_storage_failure;
