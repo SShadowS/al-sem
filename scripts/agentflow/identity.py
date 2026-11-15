@@ -185,17 +185,35 @@ def identity_refusals(ctx: Ctx, git: Git, issue: int, merge_sha: str, commands: 
             out.append(f"no-record:{name}")
             continue
         env = r.get("env") or {}
-        check(f"record-other-command:{name}", lambda: not _same_command(r.get("argv"), cmd))
-        check(f"record-red:{name}", lambda: r.get("exit_code") != 0 or r.get("timed_out") is not False
-              or r.get("supervised") is not True)
-        check(f"record-dirty:{name}", lambda: r.get("clean_before") is not True or r.get("clean_after") is not True)
-        check(f"record-other-tree:{name}", lambda: r.get("tree") != h_tree)
+        # TLS-63: the same rule attest applies before the merge.
+        for code in record_refusals(name, r, cmd, h_tree):
+            out.append(code)
         check(f"rustc-changed:{name}", lambda: now["rustc"] is None or env.get("rustc") != now["rustc"])
         check(f"grammar-changed:{name}", lambda: grammar_now["commit"] is None or grammar_now["dirty"]
               or env.get("grammar") != grammar_now)
         if name == cli.CDO_GATE_KEY:
             check(f"cdo-identity-changed:{name}", lambda: now["cdo"]["path"] is None
                   or env.get("cdo") != now["cdo"])
+    return out
+
+
+def record_refusals(name: str, r: dict, cmd: list[str], h_tree: str | None) -> list[str]:
+    """⟨TLS-63⟩ Why a gate record is no evidence that `cmd` passed on the tree
+    `h_tree`; empty when it is. One rule for `attest` (before the merge) and
+    `post-merge` (after): the gate's own full command, supervised, exit code
+    exactly 0 (not `False`) and not timed out, a clean checkout before and
+    after, and the tree of the attested head."""
+    ec = r.get("exit_code")
+    out = []
+    if not _same_command(r.get("argv"), cmd):
+        out.append(f"record-other-command:{name}")
+    if (not isinstance(ec, int) or isinstance(ec, bool) or ec != 0
+            or r.get("timed_out") is not False or r.get("supervised") is not True):
+        out.append(f"record-red:{name}")
+    if r.get("clean_before") is not True or r.get("clean_after") is not True:
+        out.append(f"record-dirty:{name}")
+    if h_tree is None or r.get("tree") != h_tree:
+        out.append(f"record-other-tree:{name}")
     return out
 
 

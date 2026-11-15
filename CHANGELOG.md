@@ -58,9 +58,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `run` refuses another command under those names (`gate-command-mismatch`, exit 2,
     nothing spawned).
   - `attest` refuses (`gates-not-recorded`) unless each required gate's LATEST record in
-    the run's `gate-runs.jsonl` ran that command and exited 0. A later red run voids an
-    earlier green one, and a subset recorded after a full run voids it too.
-  - The interpreter is compared by file name, as post-merge's identity check does.
+    the run's `gate-runs.jsonl` is evidence for `--H`. A later red run voids an earlier
+    green one, and a subset recorded after a full run voids it too.
+  - "Evidence" is post-merge's own rule, now one function (`identity.record_refusals`)
+    shared by both. Review r1, Fable: a green run on an older head or on master's
+    checkout was the same hole, caught only after the merge. The record must have:
+    - the gate's full command;
+    - supervised, exit code exactly 0 (an `exit_code: false` used to pass) and not timed
+      out;
+    - a clean checkout before and after;
+    - the tree of `H`.
+  - `run` also refuses `cdo-gate` when `CDO_GATE_NO_SPEED` is set (review r1, Fable): the
+    exact argv would then skip the speed phase, and the record would not show it.
+  - In the record, the interpreter is compared by file name, as post-merge's identity
+    check does.
+  - Review r1, sol: three ways the exact command could still run something else are
+    closed in `run`.
+    - An attested gate must run from the top of its git checkout. A subfolder can hold a
+      shadow `scripts/cdo-gate` while git reports the clean parent tree.
+    - Its interpreter must be the same file as the bash `resolve_bash` picks, compared
+      by real path. A `bash` symlink to `true` matched by name.
+    - `BASH_ENV` and `ENV` are dropped from every gate child. A startup file with
+      `exit 0` turned any gate green under its exact command.
+  - A malformed record makes `attest` refuse with a reason (`error:record:<type>`), not
+    fail with a traceback.
+  - `--docs-only`, which waives the CDO gate, is checked against the diff `B..final_head`
+    (merge-gate's own `_docs_only`), not taken on the caller's word: a code change claiming
+    it is refused (`docs-only-claim-false`; review r2, sol).
+  - Every attested gate the caller claims green needs its record, not only the required
+    ones (review r3, sol). A docs-only attest claiming `"cdo-gate": 0` with no run could
+    otherwise close a `closes_by: gate/cdo-gate` register entry.
 - **Tests** (`scripts/agentflow/tests/test_cli_flow.py`):
   - attest refuses a cdo-gate recorded as `--only`, `--dry-run` or `true`;
   - attest takes the latest record (none, red, a subset then the full run);
@@ -71,7 +98,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     child. They now use a heavy name that is not attested (`check-goldens-regen`), or
     switch the own-command check off for that test, since they test queueing and the
     record's identity rather than the command.
-  - Mutations, each red: attest's check off; the first record deciding; run's check off.
+  - A test that a green full run is refused when it is from an older head, dirty,
+    unsupervised, or has `exit_code: false`. The docs-only test now records only the three
+    gates, so it pins `--docs-only` in the new check (review r1, Fable).
+  - Mutations, each red: attest's check off; the first record deciding; run's check off;
+    the tree check off; `exit_code` compared with `!= 0` only; the check ignoring
+    `--docs-only`; the `CDO_GATE_NO_SPEED` refusal off; the top-of-checkout check off;
+    the interpreter check off; `BASH_ENV` kept; the docs-only diff check off; claimed
+    gates not checked.
   - Two agentflow tests already failed on master before this task and still fail:
     `test_budget.py::test_caps_match_spec` and
     `test_protect.py::test_no_gate_reads_a_gate_inert_path`.

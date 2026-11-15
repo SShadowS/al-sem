@@ -21,7 +21,10 @@ from typing import Callable
 
 from .state import Ctx
 
-DROP_ENV = ("REGEN_TEMP_GOLDENS", "AGENTFLOW_NOW")
+# BASH_ENV / ENV (TLS-63 review r1, sol): a startup file a non-interactive bash
+# runs before the gate script, so one with `exit 0` would turn any gate green
+# under its exact command. No gate needs one.
+DROP_ENV = ("REGEN_TEMP_GOLDENS", "AGENTFLOW_NOW", "BASH_ENV", "ENV")
 
 
 @dataclass
