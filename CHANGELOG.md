@@ -133,6 +133,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on CDO (only aldump/alsem are matched by name), `$'...'` quoting, and `diff <(...)
   scripts/land` (refused).
 
+### Changed (ENG-81: ENG-80's model-build cost won back)
+
+- **What ENG-80 cost.** The landing gate's speed phase measured the CDO model build (the
+  resident `alsem mcp` path) at CPU x1.36 against master `630dd171` in one sample that started at
+  load 20; a quiet re-run gave x1.17. Re-measured for this task with `cdo-speed --rounds 1`, the
+  two binaries given: x1.08 and x1.14 at load ~7, x1.13 (wall x1.20) at load under 6. Peak memory
+  x1.06–1.08. The CLI `alsem analyze` build barely moved (CPU median 132.1 → 133.4 s over three
+  alternating pairs).
+- **Where it went** (span traces of one resident build per side): a little in each parallel part
+  that parses, lowers and resolves, no single span. Three per-site costs, all fixed:
+  - the lowerer's test of whether a call holds a `#if` walked the call's whole argument subtree,
+    allocating per node, and every enclosing call walked it again. Now one cursor walk per file
+    collects the sorted byte ranges of the build-varying preproc nodes, and the test is a binary
+    search (tree ranges nest); a source with no `#` at all skips the walk. A test keeps the old
+    walk as an oracle: both agree on every named node of the r0 corpus and, in a one-off sweep,
+    of 11,465 dependency source files (859 with `#if`);
+  - `resolve_bare_with_args` ran its extension-base and table scope checks for every bare call. In
+    a session each one is a recorded index query, which is why the resident path paid more than
+    the CLI. Only the `Error` rule's twelve names read `scope_complete`, so only they run them now;
+  - the verdict-name test compared a folded copy of each bare name; it now compares in place.
+- **After** (base `630dd171`, each run started at load under 6): five samples of build CPU
+  x1.032, x1.065, x1.069, x1.156 and x1.165 (median x1.07), wall median x1.05; with the pair
+  swapped (the fix as base) x1.00. ENG-80 itself, same conditions: x1.08, x1.13, x1.14 (median
+  x1.13). So about half of ENG-80's build cost is won back; the samples spread as widely (about
+  ±6%) as what is left, so "back to x1.0" is not shown. The last three samples are of the final
+  head (after both reviews), the earlier two of the head before the parse-error fallback, which
+  touches only files with parse errors (none of CDO's routines is parse-incomplete). ENG-82's
+  profile is the next step on the rest. Peak memory stays x1.04–1.07: a known cost of ENG-80's
+  retained facts (the per-file bare-call verdicts, taint and declaration-wrapper lists), under the
+  1.10 limit and left as is. Answers are byte-identical: the task gate and every golden, the
+  CDO `fingerprint` and `analyze` outputs against ENG-80's binary, and `cdo-gate --only
+  harness,l4,output`.
+- **Measurement note.** At load ~9 (just under `cdo-speed`'s waiting limit of 10) the second
+  build of a pair read about 15% high: this fix against ENG-80 showed x1.14, while the same fix
+  against itself read x0.996 and with the pair swapped x1.001. A single warm-up sample between two
+  different binaries is load-sensitive at that level.
+
 ### Added (TLS-59: `scripts/land`, the landing chain as one command)
 
 - `scripts/land [--push] [--dry-run] [--name <x>] [--worktree <dir>] <branch>...` runs
