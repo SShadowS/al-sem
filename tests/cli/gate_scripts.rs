@@ -533,6 +533,152 @@ fn speed_build_uses_the_gate_release_folder() {
     );
 }
 
+/// TLS-77: `scripts/profile` builds the `profiling` profile and records it with
+/// samply, and a profile of a failed command is not reported as a result.
+/// - `--dry-run`: the exact build and record commands, arguments quoted;
+/// - usage errors (another binary, `-o` with no file) exit 2;
+/// - a real run against stub `cargo` (it builds a fake binary that exits
+///   `STUB_RC`) and `samply` (it runs what follows `--`, as samply does, and exits
+///   0 whatever it did): exit 0 and "wrote" for a clean command; the command's own
+///   exit code and a warning for a failed one (review TLS-77, Fable: samply's 0
+///   made a usage error look like a profile);
+/// - the profile in Cargo.toml keeps what samply reads: symbols and line tables.
+///
+/// Mutations (2026-11-15): the exit-code check after `samply record` removed ->
+/// the failed command's run exits 0 and the test fails; the missing-status
+/// check removed -> the never-run command reads as "wrote", exit 0.
+#[cfg(unix)]
+#[test]
+fn profile_script_builds_symbols_and_passes_the_exit_code() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = env!("CARGO_MANIFEST_DIR");
+    let stub = tempfile::tempdir().unwrap();
+    let target = tempfile::tempdir().unwrap();
+    let log = stub.path().join("log");
+    for (name, body) in [
+        (
+            "cargo",
+            "printf 'cargo %s\\n' \"$*\" >> \"$STUB_LOG\"\n\
+             mkdir -p \"$CARGO_TARGET_DIR/profiling\"\n\
+             printf '#!/usr/bin/env bash\\nexit \"$STUB_RC\"\\n' > \"$CARGO_TARGET_DIR/profiling/alsem\"\n\
+             chmod +x \"$CARGO_TARGET_DIR/profiling/alsem\"",
+        ),
+        (
+            "samply",
+            "printf 'samply %s\\n' \"$*\" >> \"$STUB_LOG\"\n\
+             [ \"${STUB_NORUN:-}\" = 1 ] && exit 0\n\
+             while [ \"$1\" != -- ]; do shift; done; shift\n\
+             \"$@\"; exit 0",
+        ),
+    ] {
+        let p = stub.path().join(name);
+        std::fs::write(&p, format!("#!/usr/bin/env bash\n{body}\n")).unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let run = |args: &[&str], rc: &str| {
+        let _ = std::fs::remove_file(&log);
+        let out = std::process::Command::new("bash")
+            .arg(format!("{root}/scripts/profile"))
+            .args(args)
+            .current_dir(stub.path())
+            .env(
+                "PATH",
+                format!(
+                    "{}:{}",
+                    stub.path().display(),
+                    std::env::var("PATH").unwrap()
+                ),
+            )
+            .env("STUB_LOG", &log)
+            .env("STUB_RC", rc)
+            // "norun": samply exits 0 without running the command.
+            .env("STUB_NORUN", if rc == "norun" { "1" } else { "0" })
+            .env("CARGO_TARGET_DIR", target.path())
+            .output()
+            .expect("spawn bash scripts/profile");
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        (out.status.code(), text)
+    };
+    let exe = format!("{}/profiling/alsem", target.path().display());
+
+    let (code, text) = run(
+        &["--dry-run", "-o", "my out.gz", "alsem", "--x", "a b"],
+        "0",
+    );
+    assert_eq!(code, Some(0), "{text}");
+    assert!(
+        text.contains(&format!(
+            "build: cargo build --manifest-path {root}/Cargo.toml --profile profiling --bin alsem\n"
+        )),
+        "{text}"
+    );
+    assert!(
+        text.contains(&format!(
+            "record: samply record --save-only --unstable-presymbolicate -o my\\ out.gz -- {exe} --x a\\ b\n"
+        )),
+        "{text}"
+    );
+    assert!(!log.exists(), "a dry run runs nothing");
+    let (code, text) = run(&["--dry-run", "cargo"], "0");
+    assert_eq!(code, Some(2), "{text}");
+    assert!(text.contains("usage: scripts/profile"), "{text}");
+    let (code, text) = run(&["-o"], "0");
+    assert_eq!(code, Some(2), "{text}");
+
+    let (code, text) = run(&["-o", "p.json.gz", "alsem", "fingerprint", "ws"], "0");
+    assert_eq!(code, Some(0), "{text}");
+    assert!(text.contains("scripts/profile: wrote p.json.gz"), "{text}");
+    let calls = std::fs::read_to_string(&log).unwrap();
+    assert!(
+        calls.contains(&format!(
+            "cargo build --manifest-path {root}/Cargo.toml --profile profiling --bin alsem\n"
+        )),
+        "{calls}"
+    );
+    assert!(
+        calls.contains("samply record --save-only --unstable-presymbolicate -o p.json.gz -- "),
+        "{calls}"
+    );
+    assert!(calls.contains(&format!("{exe} fingerprint ws")), "{calls}");
+
+    let (code, text) = run(&["-o", "p.json.gz", "alsem", "fingerprint", "ws"], "3");
+    assert_eq!(code, Some(3), "{text}");
+    assert!(
+        text.contains("the profiled command exited 3: p.json.gz profiles a failed run"),
+        "{text}"
+    );
+    assert!(!text.contains("wrote p.json.gz"), "{text}");
+
+    // The command never ran (no exit status written): not a result either
+    // (review r2, sol).
+    let (code, text) = run(&["-o", "p.json.gz", "alsem", "fingerprint", "ws"], "norun");
+    assert_eq!(code, Some(1), "{text}");
+    assert!(text.contains("exit status is unavailable"), "{text}");
+    assert!(!text.contains("wrote p.json.gz"), "{text}");
+
+    // The profile itself keeps what samply reads: symbols and line tables.
+    let cargo_toml =
+        std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml")).unwrap();
+    let section = cargo_toml
+        .split("[profile.profiling]")
+        .nth(1)
+        .expect("a [profile.profiling] section")
+        .split("\n[")
+        .next()
+        .unwrap();
+    for want in [
+        "inherits = \"release-fast\"",
+        "debug = \"line-tables-only\"",
+        "strip = false",
+    ] {
+        assert!(section.contains(want), "{want}: {section}");
+    }
+}
+
 /// TLS-74: the summary's per-phase memory, from a hand-written run folder: each
 /// phase's peak is the highest container sample in [start, end) with that
 /// sample's gate MiB and `alsem` count; a sample at a phase's end second belongs

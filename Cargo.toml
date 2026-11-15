@@ -273,3 +273,13 @@ lto = false
 codegen-units = 16
 incremental = true
 strip = false
+
+# ⟨TLS-77⟩ For CPU profiles with samply (`scripts/profile`): `release-fast`'s code with
+# its symbols kept (`release` strips them, so samply named nothing) and line tables.
+# No frame pointers needed: samply 0.13.1 unwinds from the unwind tables (`.eh_frame`),
+# measured on CDO: the same stack depth (median 22-23) and nesting with and without
+# `-C force-frame-pointers=yes`.
+[profile.profiling]
+inherits = "release-fast"
+debug = "line-tables-only"
+strip = false

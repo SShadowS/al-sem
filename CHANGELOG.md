@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (TLS-77: a `profiling` build and `scripts/profile`, so samply names what it samples)
+
+- **Why:** ENG-84's samply profile could read only self shares. The task assumed missing
+  frame pointers; measured, the cause is `strip = true` (`release`, which `release-fast`
+  inherits): samply 0.13.1 unwinds from the unwind tables (`.eh_frame`), which every build
+  has (review r1, Fable: mimalloc, which has no frame pointers, showed its exact callers).
+- **Now:** the Cargo profile `profiling` (`release-fast` plus `strip = false` and
+  `debug = "line-tables-only"`), and `scripts/profile [-o out.json.gz] [--dry-run]
+  <alsem|aldump> <args>`, which builds it (`target/profiling/`) and runs `samply record
+  --save-only --unstable-presymbolicate` on it. samply exits 0 whatever the command did, so
+  the script records the command's exit code and exits with it, with a warning that the
+  profile is of a failed run. Pinned by
+  `gate_scripts::profile_script_builds_symbols_and_passes_the_exit_code`: the dry run's
+  commands, usage errors, a real run against stub `cargo` and `samply` (clean and failed),
+  and the profile's `strip = false` and line tables in `Cargo.toml`; removing the exit-code
+  check fails it.
+- **Checked on CDO** (2026-11-15, `alsem fingerprint` on the pinned baseline, the profile
+  built twice):
+  - with `-C force-frame-pointers=yes`: 325,392 samples on 145 threads, stack depth median
+    23 (p10 19, p90 29); inclusive `alsem::main` 83.8 %, `FingerprintJob::compute` 83.5 %,
+    `fingerprint_query` 81.2 %;
+  - without: 405,584 samples, median depth 22 (p10 19, p90 28); `alsem::main` 88.0 %,
+    `FingerprintJob::compute` 87.7 %. The same stacks, so no frame pointers.
+  - Top self shares, both runs: `mi_page_free_list_extend` 23.6 / 23.2 %, SipHash
+    `Hasher::write` 19.6 / 21.1 %, `_madvise` 7.8 / 7.7 %, digest `HopCache::get` 2.9 /
+    3.5 % (passed to the engine lane). Another session's task gate ran beside part of the
+    first recording, which can shift shares (cache and memory contention): the depth and
+    nesting show the stacks are usable, not that these shares are exact.
+- **Overhead** (`cdo-speed`, master `e708f1f6`'s `release-fast` against a `profiling` build
+  of the same source with frame pointers, so frame pointers plus symbols, line tables and no
+  strip; unlabelled: container stall shares 3.5 %, 3.9 %, 0.1 %): CPU model build x0.989,
+  test universe x0.991, prove x0.983, round total x0.999; peak memory x1.023 (the binary is
+  197 MB against 47 MB). One run, resolving about ±10 % (the model build's passes read x1.214
+  and x0.806; prove's rounds disagreed); some small calls read slower (warm-query x1.258,
+  query x1.143), below the judged size. The shipped profile is the same minus frame
+  pointers: symbols do not change the code.
+- Not done: the linker's folding of identical functions into one symbol (ENG-84's other
+  complaint) is not switched off here.
+
 ### Fixed (TLS-76: `cdo-speed` judges load by CPU pressure, and runs labelled when it is high)
 
 - **The hole:** TLS-65's wait for a 1-min load of at most max(6, cores / 3) stopped every
