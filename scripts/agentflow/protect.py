@@ -34,10 +34,15 @@ def evidence_files(issue: int) -> set[str]:
 # test_protect.test_no_gate_reads_a_gate_inert_path keeps this list true.
 GATE_INERT_EXACT = ("CHANGELOG.md",)
 GATE_INERT_DIR, GATE_INERT_SUFFIX = "docs/", ".md"
+# Prose under `docs/` that a gate DOES read: `ci-steps all` runs the agentflow suite
+# (TLS-71), whose `test_docs_drift` checks this spec's strings against the code.
+GATE_READ_DOCS = ("docs/superpowers/specs/2026-09-13-issue-orchestrator-design.md",)
 
 
 def gate_inert(path: str) -> bool:
     path = path.replace("\\", "/")
+    if path in GATE_READ_DOCS:
+        return False
     return path in GATE_INERT_EXACT or (path.startswith(GATE_INERT_DIR) and path.endswith(GATE_INERT_SUFFIX))
 
 

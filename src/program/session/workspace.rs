@@ -518,6 +518,8 @@ impl WorkspaceSession {
                         tally_edges(&mut copied, edges);
                         let ok = f::rematerialize_witnesses(edges, &surface);
                         debug_assert!(ok, "checked by witnesses_current");
+                        // ENG-92: the facts point into the copy, so the old edges are freed.
+                        d.site_facts = Arc::new(d.site_facts.with_edges(Arc::clone(&d.edges)));
                     }
                     if current.is_some() {
                         // The edges' ranges and the answers they were resolved
@@ -645,6 +647,19 @@ pub fn write_program(p: &ResolvedProgram, w: &mut dyn std::fmt::Write) -> std::f
     for f in facts {
         writeln!(w, "{f:?}")?;
     }
+    // ENG-92: each edge's own lookup, in edge order. The dependency facts find their key
+    // through an edge index, so a refresh that kept a stale index answers a miss here.
+    let hits: String = b
+        .all_edges()
+        .map(|e| {
+            if b.site_facts.get(&e.obligation_id).is_some() {
+                '1'
+            } else {
+                '0'
+            }
+        })
+        .collect();
+    writeln!(w, "-- site facts by edge {hits}")?;
     let mut parenless: Vec<_> = b
         .parenless_calls
         .iter()

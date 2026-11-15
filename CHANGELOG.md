@@ -7,6 +7,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (ENG-92: dependency site facts keyed through their edges, 84 MiB less resident memory on CDO)
+
+- **What it was.** After ENG-91 the retained dependency site facts were still a map keyed by
+  `ObligationId`: every one of 318,982 sites stored its 128-byte key again, beside the edge that
+  already holds it, in a table 39% empty.
+- **The change.** `DepSiteFacts` (`program::resolve::full`) is built once from the finished map and
+  the resolution's own edges, in both builders (cold `resolve_dependency_bodies`, the session's
+  `Assembly`), so the last insert of a duplicate key still wins: a hash → index map over a
+  `(edge index, SiteFacts)` list. A lookup checks the key against the edge, so a hash collision or
+  a stale edge vector can only miss, never answer another site's facts; a key with no edge or a
+  taken hash is kept whole (**0 such keys on CDO**). Readers are unchanged. A refresh that copies the
+  dependency edges to re-materialize witnesses re-points the facts at the copy (`with_edges`), and
+  building the program asserts the facts point into its own edges; otherwise the old vector stayed
+  alive beside the copy (Fable r1).
+- **Measured** (`census-probe resident`, base `df596fef`; runs in
+  `tools/census-probe/runs-eng92/`): live memory after one ask of each kind 5,235.0 → 5,151.2 MiB
+  (**-83.8 MiB**, bar 80), the dependency site facts 136.8 → 52.3 MiB.
+- **Same answers.** The task gate (every golden), `aldump --session-refresh --verify` on a CDO copy
+  in both memory modes (all 12 steps equal to a cold build each: body, newline, declaration, file
+  add and package changes and their restores), and the session tests, which now also compare each
+  edge's lookup with a cold build and check every dependency edge with facts after a partial
+  refresh.
+
+### Fixed (TLS-71: the agentflow suite is green and runs in `ci-steps all`)
+
+- **The hole:** no gate ran `scripts/agentflow/tests` (pytest): not `ci-steps`, `check-goldens`,
+  `cdo-gate`, the git hooks or GitHub CI. Two of its tests sat red on master unseen.
+- **`test_caps_match_spec`** still pinned the old 10 h wall-clock cap. The code's 24 h is the
+  operator's decision of 2026-10-24 (83ba322a: epic steps ran past 10 h and lost a restart plus an
+  overnight wait). The test and the orchestrator design spec now say 24 h.
+- **`test_no_gate_reads_a_gate_inert_path`** flagged 29 lines, none a real read of the
+  repository's prose. 24 use a CHANGELOG.md in a temp fixture repo, or name it in an expected
+  message (`tests/cli/land_script.rs`, `tests/cli/changelog_merge.rs`); two are a `git check-attr`
+  on the real repo and its expected output (it reads `.gitattributes`, not the file); two are path
+  strings fed to `cdo-gate --product-paths`; and `cdo-gate`'s `product_paths` has a `case` arm
+  that skips prose. Each exact expression (a fixture repo's join, an expected message) is now an
+  exemption with its reason, never the bare file name. Two new tests keep them honest: a real
+  read is still a hit (in another file, or in an exempted file), and an exemption whose line is
+  gone fails.
+- **`scripts/ci-steps agentflow`** runs the suite (`python3 -m pytest` from `scripts/`), and `all`
+  runs it after `gen-syntax`: ~1.5-2 min (521 tests on server1), too slow for `task`. CI does
+  not run it (no pytest on its runner), so `all`, the landing gate, is its one gate. A missing
+  pytest fails the step with a message naming the fix. Pinned by
+  `gate_scripts::ci_steps_all_runs_and_judges_the_agentflow_suite`. `gen-syntax`'s `git diff`
+  now names its path after `--`.
+- **A gate now reads prose:** the suite's `test_docs_drift` checks the orchestrator design spec
+  against the code. So `protect.GATE_READ_DOCS` takes that spec out of the gate-inert set (a
+  change to it after the gates moves the head), pinned by
+  `test_the_prose_the_agentflow_suite_reads_is_not_inert`. Limit: the inert-path scan reads the
+  Rust sources and the gate scripts, not the pytest files; a new prose read in a pytest test must
+  be added by hand.
+
 ### Added (TLS-70: samply in the image, for CPU profiles of every thread)
 
 - `.kraken/Dockerfile` installs samply 0.13.1 (`cargo install --locked`, pinned) in a late layer,
