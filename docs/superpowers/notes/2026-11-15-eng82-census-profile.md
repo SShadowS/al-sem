@@ -22,6 +22,14 @@ TLS-66/67, filed from a read-only survey whose gains were estimates) by measured
    The recorder insert itself (B7) is 0.2% too, but the logs' later use may reach ~3%. The
    lowerer's lookups (ENG-83) are 1-5%: small, not nothing.
 
+**Update (ENG-88, same day).** The `byte_to_pos` fix took the model build's CPU from 165.7 to
+109.4 s (`cdo-speed`, x0.654). The probe, rerun with a CPU total on the fixed build, kept only
+23.7% of the samples its CPU time should give, mostly the main thread's (57% of kept samples).
+So the shares below over-weight serial work and under-weight the parallel phases (parsing,
+lowering, resolution); read them as a ranking of hot spots, not as fractions of CPU. After the
+fix the kept samples rank lowering (16%), parsing (14%), `named_children` (5%), folding (4.9%),
+and SipHash about 7% self.
+
 ## How it was measured
 
 The raw outputs (`resident.out`, `probe.out`, `pprof.out`) and the two scratch probes' sources are

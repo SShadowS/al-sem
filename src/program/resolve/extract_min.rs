@@ -13,7 +13,7 @@
 use al_syntax::IdentifierFoldExt;
 use al_syntax::ir::{AlFile, BlockId, BlockItem, ExprId, ExprKind, StmtKind};
 
-use crate::program::resolve::edge::{CanonicalSpan, SourcePos};
+use crate::program::resolve::edge::CanonicalSpan;
 
 /// One call-expression site extracted from a routine body.
 #[derive(Debug, Clone)]
@@ -25,19 +25,6 @@ pub struct RawSite {
     pub callee_text: String,
     /// Source span of the whole call expression (callee + arg list).
     pub span: CanonicalSpan,
-}
-
-/// Convert a byte offset into a 0-based `(line, col)` source position by
-/// counting newlines in the prefix `src[..byte]`.
-fn byte_to_pos(src: &str, byte: usize) -> SourcePos {
-    let byte = byte.min(src.len());
-    let prefix = &src[..byte];
-    let line = prefix.bytes().filter(|&b| b == b'\n').count() as u32;
-    let col = match prefix.rfind('\n') {
-        Some(nl) => (byte - nl - 1) as u32,
-        None => byte as u32,
-    };
-    SourcePos { line, col }
 }
 
 /// Recursively collect every [`ExprKind::Call`] reachable from `eid`,
@@ -61,8 +48,8 @@ fn collect_calls(
             let callee_text = src[file.ir.expr(fn_id).origin.byte.clone()].to_string();
             let span = CanonicalSpan {
                 unit: unit.to_string(),
-                start: byte_to_pos(src, e.origin.byte.start),
-                end: byte_to_pos(src, e.origin.byte.end),
+                start: e.origin.start.into(),
+                end: e.origin.end.into(),
             };
             out.push(RawSite {
                 caller_routine: caller.to_string(),

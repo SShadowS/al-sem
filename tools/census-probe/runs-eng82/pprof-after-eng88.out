@@ -1,0 +1,146 @@
+build wall 12.4 s, samples 7030 (499 Hz across all threads)
+build CPU 59.4 s (user+system); expected samples 29626, kept 23.7%
+
+== top 60 by self samples
+  5.02%      353  copy_nonoverlapping<u8>
+  3.61%      254  write<core::hash::sip::Sip13Rounds>
+  3.40%      239  mi_page_malloc_zero
+  2.26%      159  rotate_left<u64>
+  2.12%      149  eq
+  2.11%      148  mi_block_set_nextx
+  1.66%      117  skip_to_escape
+  1.61%      113  cmp
+  1.37%       96  lowest_set_bit
+  1.32%       93  u8to64_le
+  1.28%       90  ts_tree_cursor_child_iterator_next
+  1.27%       89  prove_event_param_temps
+  1.27%       89  ts_lex
+  1.25%       88  to_ascii_lowercase
+  1.25%       88  ts_lexer__advance
+  0.98%       69  set_contains
+  0.94%       66  c_rounds
+  0.94%       66  peek
+  0.94%       66  wrapping_add
+  0.92%       65  ts_subtree_visible
+  0.91%       64  core::str::validations::run_utf8_validation
+  0.87%       61  find_or_find_insert_index<(alloc::string::String, ()), alloc::alloc::Global, hashbrown::map::equivalent_key::{closure_env#0}<alloc::string::String, alloc::string::String, ()>, hashbrown::map::make_hasher::{closure_env#0}<alloc::string::String, (), std::hash::random::RandomState>>
+  0.87%       61  is_ascii
+  0.87%       61  stack_node_new
+  0.81%       57  finish<core::hash::sip::Sip13Rounds>
+  0.78%       55  ignore_str
+  0.75%       53  atomic_dec
+  0.71%       50  mi_theap_malloc_zero_aligned_at
+  0.71%       50  runtime
+  0.70%       49  equal_same_length<u8, u8>
+  0.64%       45  ts_language_lookup
+  0.63%       44  _mi_page_map_at
+  0.63%       44  atomic_add<usize, usize>
+  0.61%       43  try_allocate_in<alloc::alloc::Global>
+  0.58%       41  build_hasher
+  0.58%       41  ts_tree_cursor_goto_sibling_internal
+  0.57%       40  _mi_wsize_from_size
+  0.57%       40  binary_search_by<usize, core::slice::{impl#0}::binary_search::{closure_env#0}<usize>>
+  0.57%       40  d_rounds
+  0.57%       40  ts_node_new
+  0.55%       39  all<u8, core::slice::ascii::is_ascii::runtime::{closure_env#0}>
+  0.55%       39  ts_language_field_id_for_name
+  0.51%       36  parse_whitespace<serde_json::read::StrRead>
+  0.51%       36  point_add
+  0.50%       35  atomic_inc
+  0.50%       35  ts_node_start_point
+  0.48%       34  atomic_sub<usize, usize>
+  0.47%       33  ts_subtree_retain
+  0.46%       32  is_ascii_uppercase
+  0.46%       32  min<usize>
+  0.46%       32  stack__iter
+  0.46%       32  ts_stack__add_version
+  0.46%       32  ts_subtree_extra
+  0.46%       32  ts_subtree_padding
+  0.46%       32  ts_subtree_summarize_children
+  0.46%       32  ts_tree_cursor_iterate_children
+  0.44%       31  <alloc::string::String as core::clone::Clone>::clone
+  0.44%       31  clone
+  0.44%       31  trailing_zeros
+  0.44%       31  ts_parser__advance
+
+== top 80 by inclusive samples
+ 57.31%     4029  <&dyn core::ops::function::Fn<(), Output = i32> + core::marker::Sync + core::panic::unwind_safe::RefUnwindSafe as core::ops::function::FnOnce<()>>::call_once
+ 57.31%     4029  __libc_start_main
+ 57.31%     4029  __rust_begin_short_backtrace<fn(), ()>
+ 57.31%     4029  _start
+ 57.31%     4029  al_sem::engine::resident::session::build_target
+ 57.31%     4029  build_target_with
+ 57.31%     4029  call_once<fn(), ()>
+ 57.31%     4029  main
+ 57.31%     4029  std::panic::catch_unwind::<&dyn core::ops::function::Fn<(), Output = i32> + core::marker::Sync + core::panic::unwind_safe::RefUnwindSafe, i32>
+ 57.31%     4029  std::panic::catch_unwind::<std::rt::lang_start_internal::{closure#0}, isize>
+ 57.31%     4029  std::panicking::catch_unwind::<i32, &dyn core::ops::function::Fn<(), Output = i32> + core::marker::Sync + core::panic::unwind_safe::RefUnwindSafe>
+ 57.31%     4029  std::panicking::catch_unwind::<isize, std::rt::lang_start_internal::{closure#0}>
+ 57.31%     4029  std::panicking::catch_unwind::do_call::<&dyn core::ops::function::Fn<(), Output = i32> + core::marker::Sync + core::panic::unwind_safe::RefUnwindSafe, i32>
+ 57.31%     4029  std::panicking::catch_unwind::do_call::<std::rt::lang_start_internal::{closure#0}, isize>
+ 57.31%     4029  std::rt::lang_start::{{closure}}
+ 57.31%     4029  std::rt::lang_start_internal
+ 57.31%     4029  std::rt::lang_start_internal::{closure#0}
+ 53.76%     3779  {closure#0}
+ 53.19%     3739  refresh_lending
+ 45.99%     3233  clone
+ 43.10%     3030  run
+ 42.38%     2979  <std::sys::thread::unix::Thread>::new::thread_start
+ 42.36%     2978  <alloc::boxed::Box<dyn core::ops::function::FnOnce<(), Output = ()> + core::marker::Send> as core::ops::function::FnOnce<()>>::call_once
+ 42.36%     2978  __rust_begin_short_backtrace<rayon_core::registry::{impl#2}::spawn::{closure_env#0}, ()>
+ 42.36%     2978  call_once<(), std::thread::lifecycle::spawn_unchecked::{closure#1}::{closure_env#0}<rayon_core::registry::{impl#2}::spawn::{closure_env#0}, ()>>
+ 42.36%     2978  call_once<std::thread::lifecycle::spawn_unchecked::{closure_env#1}<rayon_core::registry::{impl#2}::spawn::{closure_env#0}, ()>, ()>
+ 42.36%     2978  catch_unwind<(), core::panic::unwind_safe::AssertUnwindSafe<std::thread::lifecycle::spawn_unchecked::{closure#1}::{closure_env#0}<rayon_core::registry::{impl#2}::spawn::{closure_env#0}, ()>>>
+ 42.36%     2978  catch_unwind<core::panic::unwind_safe::AssertUnwindSafe<std::thread::lifecycle::spawn_unchecked::{closure#1}::{closure_env#0}<rayon_core::registry::{impl#2}::spawn::{closure_env#0}, ()>>, ()>
+ 42.36%     2978  do_call<core::panic::unwind_safe::AssertUnwindSafe<std::thread::lifecycle::spawn_unchecked::{closure#1}::{closure_env#0}<rayon_core::registry::{impl#2}::spawn::{closure_env#0}, ()>>, ()>
+ 42.36%     2978  main_loop
+ 42.36%     2978  {closure#0}<rayon_core::registry::{impl#2}::spawn::{closure_env#0}, ()>
+ 42.36%     2978  {closure#1}<rayon_core::registry::{impl#2}::spawn::{closure_env#0}, ()>
+ 42.35%     2977  wait_until<rayon_core::latch::OnceLatch>
+ 42.35%     2977  wait_until_cold
+ 42.35%     2977  wait_until_out_of_work
+ 42.30%     2974  execute
+ 34.44%     2421  cross_app_program_census
+ 34.44%     2421  cross_app_program_from_cached
+ 34.44%     2421  refresh_model
+ 30.70%     2158  parse
+ 30.70%     2158  parse_file
+ 29.50%     2074  helper<rayon::slice::IterProducer<al_sem::snapshot::embedded::SourceFile>, rayon::iter::map::MapConsumer<rayon::iter::collect::consumer::CollectConsumer<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::ParsedFile>)>, al_sem::program::dep_summary::parse_for_build_observed::{closure#1}::{closure_env#0}>>
+ 29.46%     2071  call_mut<(&al_sem::snapshot::embedded::SourceFile), al_sem::program::dep_summary::parse_for_build_observed::{closure#1}::{closure_env#0}>
+ 29.46%     2071  call_once<(&al_sem::snapshot::embedded::SourceFile), &al_sem::program::dep_summary::parse_for_build_observed::{closure#1}::{closure_env#0}>
+ 29.46%     2071  consume_iter<&al_sem::snapshot::embedded::SourceFile, (al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::ParsedFile>), rayon::iter::collect::consumer::CollectResult<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::ParsedFile>)>, al_sem::program::dep_summary::parse_for_build_observed::{closure#1}::{closure_env#0}, core::slice::iter::Iter<al_sem::snapshot::embedded::SourceFile>>
+ 29.46%     2071  consume_iter<rayon::iter::collect::consumer::CollectResult<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::ParsedFile>)>, (al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::ParsedFile>), core::iter::adapters::map::Map<core::slice::iter::Iter<al_sem::snapshot::embedded::SourceFile>, &al_sem::program::dep_summary::parse_for_build_observed::{closure#1}::{closure_env#0}>>
+ 29.46%     2071  fold_with<rayon::slice::IterProducer<al_sem::snapshot::embedded::SourceFile>, rayon::iter::map::MapFolder<rayon::iter::collect::consumer::CollectResult<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::ParsedFile>)>, al_sem::program::dep_summary::parse_for_build_observed::{closure#1}::{closure_env#0}>>
+ 29.46%     2071  map<&al_sem::snapshot::embedded::SourceFile, (al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::ParsedFile>), &mut &al_sem::program::dep_summary::parse_for_build_observed::{closure#1}::{closure_env#0}>
+ 29.46%     2071  next<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::ParsedFile>), core::slice::iter::Iter<al_sem::snapshot::embedded::SourceFile>, &al_sem::program::dep_summary::parse_for_build_observed::{closure#1}::{closure_env#0}>
+ 29.45%     2070  in_worker<rayon_core::join::join_context::{closure_env#0}<rayon::iter::plumbing::bridge_producer_consumer::helper::{closure_env#0}<rayon::slice::IterProducer<al_sem::snapshot::embedded::SourceFile>, rayon::iter::map::MapConsumer<rayon::iter::collect::consumer::CollectConsumer<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::ParsedFile>)>, al_sem::program::dep_summary::parse_for_build_observed::{closure#1}::{closure_env#0}>>, rayon::iter::plumbing::bridge_producer_consumer::helper::{closure_env#1}<rayon::slice::IterProducer<al_sem::snapshot::embedded::SourceFile>, rayon::iter::map::MapConsumer<rayon::iter::collect::consumer::CollectConsumer<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::ParsedFile>)>, al_sem::program::dep_summary::parse_for_build_observed::{closure#1}::{closure_env#0}>>, rayon::iter::collect::consumer::CollectResult<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::ParsedFile>)>, rayon::iter::collect::consumer::CollectResult<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::ParsedFile>)>>, (rayon::iter::collect::consumer::CollectResult<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::ParsedFile>)>, rayon::iter::collect::consumer::CollectResult<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::ParsedFile>)>)>
+ 29.45%     2070  join_context<rayon::iter::plumbing::bridge_producer_consumer::helper::{closure_env#0}<rayon::slice::IterProducer<al_sem::snapshot::embedded::SourceFile>, rayon::iter::map::MapConsumer<rayon::iter::collect::consumer::CollectConsumer<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::ParsedFile>)>, al_sem::program::dep_summary::parse_for_build_observed::{closure#1}::{closure_env#0}>>, rayon::iter::plumbing::bridge_producer_consumer::helper::{closure_env#1}<rayon::slice::IterProducer<al_sem::snapshot::embedded::SourceFile>, rayon::iter::map::MapConsumer<rayon::iter::collect::consumer::CollectConsumer<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::ParsedFile>)>, al_sem::program::dep_summary::parse_for_build_observed::{closure#1}::{closure_env#0}>>, rayon::iter::collect::consumer::CollectResult<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::ParsedFile>)>, rayon::iter::collect::consumer::CollectResult<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::ParsedFile>)>>
+ 29.45%     2070  {closure#0}<rayon::iter::plumbing::bridge_producer_consumer::helper::{closure_env#0}<rayon::slice::IterProducer<al_sem::snapshot::embedded::SourceFile>, rayon::iter::map::MapConsumer<rayon::iter::collect::consumer::CollectConsumer<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::ParsedFile>)>, al_sem::program::dep_summary::parse_for_build_observed::{closure#1}::{closure_env#0}>>, rayon::iter::plumbing::bridge_producer_consumer::helper::{closure_env#1}<rayon::slice::IterProducer<al_sem::snapshot::embedded::SourceFile>, rayon::iter::map::MapConsumer<rayon::iter::collect::consumer::CollectConsumer<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::ParsedFile>)>, al_sem::program::dep_summary::parse_for_build_observed::{closure#1}::{closure_env#0}>>, rayon::iter::collect::consumer::CollectResult<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::ParsedFile>)>, rayon::iter::collect::consumer::CollectResult<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::ParsedFile>)>>
+ 29.27%     2058  call<rayon::iter::collect::consumer::CollectResult<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::ParsedFile>)>, rayon_core::join::join_context::call_b::{closure_env#0}<rayon::iter::collect::consumer::CollectResult<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::ParsedFile>)>, rayon::iter::plumbing::bridge_producer_consumer::helper::{closure_env#1}<rayon::slice::IterProducer<al_sem::snapshot::embedded::SourceFile>, rayon::iter::map::MapConsumer<rayon::iter::collect::consumer::CollectConsumer<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::ParsedFile>)>, al_sem::program::dep_summary::parse_for_build_observed::{closure#1}::{closure_env#0}>>>>
+ 29.27%     2058  call_once<rayon::iter::collect::consumer::CollectResult<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::ParsedFile>)>, rayon_core::job::{impl#9}::call::{closure_env#0}<rayon::iter::collect::consumer::CollectResult<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::ParsedFile>)>, rayon_core::join::join_context::call_b::{closure_env#0}<rayon::iter::collect::consumer::CollectResult<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::ParsedFile>)>, rayon::iter::plumbing::bridge_producer_consumer::helper::{closure_env#1}<rayon::slice::IterProducer<al_sem::snapshot::embedded::SourceFile>, rayon::iter::map::MapConsumer<rayon::iter::collect::consumer::CollectConsumer<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::ParsedFile>)>, al_sem::program::dep_summary::parse_for_build_observed::{closure#1}::{closure_env#0}>>>>>
+ 29.27%     2058  catch_unwind<core::panic::unwind_safe::AssertUnwindSafe<rayon_core::job::{impl#9}::call::{closure_env#0}<rayon::iter::collect::consumer::CollectResult<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::ParsedFile>)>, rayon_core::join::join_context::call_b::{closure_env#0}<rayon::iter::collect::consumer::CollectResult<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::ParsedFile>)>, rayon::iter::plumbing::bridge_producer_consumer::helper::{closure_env#1}<rayon::slice::IterProducer<al_sem::snapshot::embedded::SourceFile>, rayon::iter::map::MapConsumer<rayon::iter::collect::consumer::CollectConsumer<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::ParsedFile>)>, al_sem::program::dep_summary::parse_for_build_observed::{closure#1}::{closure_env#0}>>>>>, rayon::iter::collect::consumer::CollectResult<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::ParsedFile>)>>
+ 29.27%     2058  catch_unwind<rayon::iter::collect::consumer::CollectResult<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::ParsedFile>)>, core::panic::unwind_safe::AssertUnwindSafe<rayon_core::job::{impl#9}::call::{closure_env#0}<rayon::iter::collect::consumer::CollectResult<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::ParsedFile>)>, rayon_core::join::join_context::call_b::{closure_env#0}<rayon::iter::collect::consumer::CollectResult<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::ParsedFile>)>, rayon::iter::plumbing::bridge_producer_consumer::helper::{closure_env#1}<rayon::slice::IterProducer<al_sem::snapshot::embedded::SourceFile>, rayon::iter::map::MapConsumer<rayon::iter::collect::consumer::CollectConsumer<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::ParsedFile>)>, al_sem::program::dep_summary::parse_for_build_observed::{closure#1}::{closure_env#0}>>>>>>
+ 29.27%     2058  do_call<core::panic::unwind_safe::AssertUnwindSafe<rayon_core::job::{impl#9}::call::{closure_env#0}<rayon::iter::collect::consumer::CollectResult<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::ParsedFile>)>, rayon_core::join::join_context::call_b::{closure_env#0}<rayon::iter::collect::consumer::CollectResult<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::ParsedFile>)>, rayon::iter::plumbing::bridge_producer_consumer::helper::{closure_env#1}<rayon::slice::IterProducer<al_sem::snapshot::embedded::SourceFile>, rayon::iter::map::MapConsumer<rayon::iter::collect::consumer::CollectConsumer<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::ParsedFile>)>, al_sem::program::dep_summary::parse_for_build_observed::{closure#1}::{closure_env#0}>>>>>, rayon::iter::collect::consumer::CollectResult<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::ParsedFile>)>>
+ 29.27%     2058  execute<rayon_core::latch::SpinLatch, rayon_core::join::join_context::call_b::{closure_env#0}<rayon::iter::collect::consumer::CollectResult<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::ParsedFile>)>, rayon::iter::plumbing::bridge_producer_consumer::helper::{closure_env#1}<rayon::slice::IterProducer<al_sem::snapshot::embedded::SourceFile>, rayon::iter::map::MapConsumer<rayon::iter::collect::consumer::CollectConsumer<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::ParsedFile>)>, al_sem::program::dep_summary::parse_for_build_observed::{closure#1}::{closure_env#0}>>>, rayon::iter::collect::consumer::CollectResult<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::ParsedFile>)>>
+ 29.27%     2058  halt_unwinding<rayon_core::job::{impl#9}::call::{closure_env#0}<rayon::iter::collect::consumer::CollectResult<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::ParsedFile>)>, rayon_core::join::join_context::call_b::{closure_env#0}<rayon::iter::collect::consumer::CollectResult<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::ParsedFile>)>, rayon::iter::plumbing::bridge_producer_consumer::helper::{closure_env#1}<rayon::slice::IterProducer<al_sem::snapshot::embedded::SourceFile>, rayon::iter::map::MapConsumer<rayon::iter::collect::consumer::CollectConsumer<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::ParsedFile>)>, al_sem::program::dep_summary::parse_for_build_observed::{closure#1}::{closure_env#0}>>>>, rayon::iter::collect::consumer::CollectResult<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::ParsedFile>)>>
+ 29.27%     2058  {closure#0}<rayon::iter::collect::consumer::CollectResult<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::ParsedFile>)>, rayon::iter::plumbing::bridge_producer_consumer::helper::{closure_env#1}<rayon::slice::IterProducer<al_sem::snapshot::embedded::SourceFile>, rayon::iter::map::MapConsumer<rayon::iter::collect::consumer::CollectConsumer<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::ParsedFile>)>, al_sem::program::dep_summary::parse_for_build_observed::{closure#1}::{closure_env#0}>>>
+ 29.27%     2058  {closure#0}<rayon::iter::collect::consumer::CollectResult<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::ParsedFile>)>, rayon_core::join::join_context::call_b::{closure_env#0}<rayon::iter::collect::consumer::CollectResult<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::ParsedFile>)>, rayon::iter::plumbing::bridge_producer_consumer::helper::{closure_env#1}<rayon::slice::IterProducer<al_sem::snapshot::embedded::SourceFile>, rayon::iter::map::MapConsumer<rayon::iter::collect::consumer::CollectConsumer<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::ParsedFile>)>, al_sem::program::dep_summary::parse_for_build_observed::{closure#1}::{closure_env#0}>>>>
+ 29.27%     2058  {closure#1}<rayon::slice::IterProducer<al_sem::snapshot::embedded::SourceFile>, rayon::iter::map::MapConsumer<rayon::iter::collect::consumer::CollectConsumer<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::ParsedFile>)>, al_sem::program::dep_summary::parse_for_build_observed::{closure#1}::{closure_env#0}>>
+ 29.23%     2055  call_once<rayon::iter::collect::consumer::CollectResult<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::ParsedFile>)>, rayon_core::join::join_context::call_a::{closure_env#0}<rayon::iter::collect::consumer::CollectResult<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::ParsedFile>)>, rayon::iter::plumbing::bridge_producer_consumer::helper::{closure_env#0}<rayon::slice::IterProducer<al_sem::snapshot::embedded::SourceFile>, rayon::iter::map::MapConsumer<rayon::iter::collect::consumer::CollectConsumer<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::ParsedFile>)>, al_sem::program::dep_summary::parse_for_build_observed::{closure#1}::{closure_env#0}>>>>
+ 29.23%     2055  catch_unwind<core::panic::unwind_safe::AssertUnwindSafe<rayon_core::join::join_context::call_a::{closure_env#0}<rayon::iter::collect::consumer::CollectResult<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::ParsedFile>)>, rayon::iter::plumbing::bridge_producer_consumer::helper::{closure_env#0}<rayon::slice::IterProducer<al_sem::snapshot::embedded::SourceFile>, rayon::iter::map::MapConsumer<rayon::iter::collect::consumer::CollectConsumer<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::ParsedFile>)>, al_sem::program::dep_summary::parse_for_build_observed::{closure#1}::{closure_env#0}>>>>, rayon::iter::collect::consumer::CollectResult<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::ParsedFile>)>>
+ 29.23%     2055  catch_unwind<rayon::iter::collect::consumer::CollectResult<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::ParsedFile>)>, core::panic::unwind_safe::AssertUnwindSafe<rayon_core::join::join_context::call_a::{closure_env#0}<rayon::iter::collect::consumer::CollectResult<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::ParsedFile>)>, rayon::iter::plumbing::bridge_producer_consumer::helper::{closure_env#0}<rayon::slice::IterProducer<al_sem::snapshot::embedded::SourceFile>, rayon::iter::map::MapConsumer<rayon::iter::collect::consumer::CollectConsumer<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::ParsedFile>)>, al_sem::program::dep_summary::parse_for_build_observed::{closure#1}::{closure_env#0}>>>>>
+ 29.23%     2055  do_call<core::panic::unwind_safe::AssertUnwindSafe<rayon_core::join::join_context::call_a::{closure_env#0}<rayon::iter::collect::consumer::CollectResult<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::ParsedFile>)>, rayon::iter::plumbing::bridge_producer_consumer::helper::{closure_env#0}<rayon::slice::IterProducer<al_sem::snapshot::embedded::SourceFile>, rayon::iter::map::MapConsumer<rayon::iter::collect::consumer::CollectConsumer<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::ParsedFile>)>, al_sem::program::dep_summary::parse_for_build_observed::{closure#1}::{closure_env#0}>>>>, rayon::iter::collect::consumer::CollectResult<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::ParsedFile>)>>
+ 29.23%     2055  halt_unwinding<rayon_core::join::join_context::call_a::{closure_env#0}<rayon::iter::collect::consumer::CollectResult<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::ParsedFile>)>, rayon::iter::plumbing::bridge_producer_consumer::helper::{closure_env#0}<rayon::slice::IterProducer<al_sem::snapshot::embedded::SourceFile>, rayon::iter::map::MapConsumer<rayon::iter::collect::consumer::CollectConsumer<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::ParsedFile>)>, al_sem::program::dep_summary::parse_for_build_observed::{closure#1}::{closure_env#0}>>>, rayon::iter::collect::consumer::CollectResult<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::ParsedFile>)>>
+ 29.23%     2055  {closure#0}<rayon::iter::collect::consumer::CollectResult<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::ParsedFile>)>, rayon::iter::plumbing::bridge_producer_consumer::helper::{closure_env#0}<rayon::slice::IterProducer<al_sem::snapshot::embedded::SourceFile>, rayon::iter::map::MapConsumer<rayon::iter::collect::consumer::CollectConsumer<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::ParsedFile>)>, al_sem::program::dep_summary::parse_for_build_observed::{closure#1}::{closure_env#0}>>>
+ 29.23%     2055  {closure#0}<rayon::slice::IterProducer<al_sem::snapshot::embedded::SourceFile>, rayon::iter::map::MapConsumer<rayon::iter::collect::consumer::CollectConsumer<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::ParsedFile>)>, al_sem::program::dep_summary::parse_for_build_observed::{closure#1}::{closure_env#0}>>
+ 27.57%     1938  cross_app_assemble_from
+ 25.99%     1827  assemble_and_resolve_cross_app_from_program_cached
+ 25.48%     1791  run_inline<rayon_core::latch::SpinLatch, rayon_core::join::join_context::call_b::{closure_env#0}<rayon::iter::collect::consumer::CollectResult<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::ParsedFile>)>, rayon::iter::plumbing::bridge_producer_consumer::helper::{closure_env#1}<rayon::slice::IterProducer<al_sem::snapshot::embedded::SourceFile>, rayon::iter::map::MapConsumer<rayon::iter::collect::consumer::CollectConsumer<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::ParsedFile>)>, al_sem::program::dep_summary::parse_for_build_observed::{closure#1}::{closure_env#0}>>>, rayon::iter::collect::consumer::CollectResult<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::ParsedFile>)>>
+ 23.04%     1620  append_dependency_rows
+ 20.54%     1444  project_ir
+ 20.10%     1413  {closure#21}
+ 18.75%     1318  refresh_program
+ 18.38%     1292  wait_until<rayon_core::latch::SpinLatch>
+ 16.97%     1193  {closure#1}
+ 16.34%     1149  lower_file
+ 14.28%     1004  project_routine_features_ir_with
