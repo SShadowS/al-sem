@@ -7,6 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (TLS-65: cdo-speed's warm-up no longer reads the second-built side as slow)
+
+- The warm-up's model build and test universe were timed once each, in a fixed order:
+  the model build always built head second. The side built second was measured once
+  reading ~15 % slow on a loaded machine (the engine lane, ENG-81: a binary against
+  itself x1.167 at load ~9, x0.996 at load 5), and ENG-80's landing gate failed on one
+  such sample (x1.36, started at load 20; quiet re-runs x1.13-1.17).
+- Now the warm-up runs twice, each pass on a fresh server pair (the model is built
+  once per server), the second with every call's side order flipped, and each warm-up
+  call is judged on the geometric mean of its passes: a second-side penalty falls once
+  on each side, and a factor k one way and 1/k the other cancels exactly (an
+  arithmetic mean would lean against head). The rounds run on the second pair.
+  `--warm-samples 1` keeps the single pass. The verdict shows each pass's ratio and
+  the load range; every timed call records its 1-min load (speed.json).
+- Before each warm-up pass, the 1-min load must fall to `QUIET_LOAD` (max(6, cores /
+  3); `CDO_SPEED_QUIET_LOAD`); after 10 min (`CDO_SPEED_QUIET_WAIT_S`) the run stops
+  with exit 2 and `FAIL: cannot judge speed: the 1-min load stayed above ...`, which
+  fails cdo-gate's speed phase (its summary row shows that line): never a PASS without
+  speed, and no warm-up pass starts on a loaded machine (the load is checked before
+  each pass, not during one: a load that rises mid-pass is recorded, not judged).
+  `--no-speed` stays the explicit way to skip. A test hook set in the environment
+  (`CDO_SPEED_*`) is named in the log.
+- Cost: one more model build and warm-up per side, ~+3 min per speed check (measured
+  +155 s loaded, +173 s quiet on CDO), more right after cdo-gate's test build (the load
+  must settle first); the wait holds the CDO slot.
+- Measured on CDO (2026-11-15, master 501ede3e's `alsem` on both sides, `--rounds 1`,
+  under the CDO slot): at load 16-18 (9 busy loops plus other work) the old script
+  read the model build x1.022 (one sample) and the new one x0.981 (x0.973 / x0.990);
+  quiet (load 6-8), the old x1.009 and the new x1.050 (x1.096 with head built second,
+  x1.004 flipped). So the loaded run did not reproduce the engine lane's x1.167; the
+  quiet run's two passes differ by ~9 % in the direction of the second-side effect,
+  one sample each, which single-sample noise could also explain; all four runs
+  passed. Two flipped passes are the guard either way.
+- Tests (`gate_scripts`): a stub server whose second side of a pair burns 50 % more
+  CPU on both judged calls (the model build and the test universe) fails one
+  fixed-order sample and passes the two flipped ones; speed.json shows each judged
+  call with two ratios, one each way, and a geometric mean near 1
+  (`speed_warm_up_cancels_the_second_side_penalty`; mutations: the second pass not
+  flipped -> FAIL x1.47; only the first call flipped -> warm-tests x0.67 both passes;
+  the warm-up judged on one pass -> one ratio); a load that stays high stops the run
+  with exit 2 before any server starts, and cdo-gate's speed row shows the reason
+  (`speed_waits_for_a_quiet_machine_and_fails_loudly`; mutation: the timeout passing
+  silently -> PASS). `CDO_SPEED_WARM_MIN_SECONDS` and `CDO_SPEED_LOADAVG_FILE` are test
+  hooks. Review r1 (Fable): the rounds test no longer waits for a quiet machine.
+  Review r1 (sol): the warm-up test pins the geometric mean exactly, for CPU and wall
+  (mutation: the plain mean -> x1.097 against x1.004), and judges only the
+  deterministic CPU outcome, not the host's wall time.
+
 ### Added (TLS-60: `scripts/cdo-slot`, one CDO slot instead of hold messages)
 
 - `scripts/cdo-slot acquire|release|status|run <owner> <reason>`: the one CDO slot of
