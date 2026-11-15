@@ -26,7 +26,7 @@ rounds):
     builds the CDO model (`build`), then one call of each tool builds the
     per-revision artifacts and the test universe (`warm-tests`). The second pass
     flips every call's side order, so each side is timed once building second
-    (worth ~15 % at load ~9). Before each pass the 1-min load must fall to
+    (measured once at x1.167 under load, ENG-81). Before each pass the 1-min load must fall to
     QUIET_LOAD (max(6, cores / 3)); after QUIET_WAIT_S (600 s) the run stops with
     exit 2, "cannot judge speed" (cdo-gate then fails: never a PASS without speed);
   rounds 1..N (default 3, at most 5, as many as ROUND_ROUTINES has; a larger --rounds is
