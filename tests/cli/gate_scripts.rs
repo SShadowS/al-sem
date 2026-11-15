@@ -297,7 +297,9 @@ fn cdo_gate_only_runs_and_judges_just_its_subset() {
 ///
 /// Mutations: drop `speed=0` from the `--only` branch -> the speed phase runs
 /// and the run is no longer the subset it claims; start `memory_sampler` only
-/// outside a subset -> `SAMPLED=no`.
+/// outside a subset -> `SAMPLED=no`; TLS-74: `gate_tree_rss` without its
+/// `engines=N` field, or counting nothing (`engines=0` written as is) -> no
+/// sample line matches -> `SAMPLED=no`.
 #[cfg(unix)]
 #[test]
 fn cdo_gate_only_run_builds_and_runs_just_its_phases() {
@@ -307,21 +309,26 @@ fn cdo_gate_only_run_builds_and_runs_just_its_phases() {
     let ws = tempfile::tempdir().unwrap();
     let calls = stub.path().join("calls");
     // The sampler starts once the build is done, and writes its first sample
-    // at once; each phase call waits (up to 10 s) to see it.
+    // at once; each phase call waits (up to 10 s) to see it. TLS-74: the phase
+    // call runs a stand-in `alsem` (bash under that name; `; :` keeps bash from
+    // replacing itself with `sleep`) meanwhile, so the
+    // sample it waits for must count one (`engines=` 1 or more).
     let sampler = std::fs::read_to_string("/sys/fs/cgroup/memory.stat").is_ok();
+    std::os::unix::fs::symlink("/bin/bash", stub.path().join("alsem")).unwrap();
     std::fs::write(
         stub.path().join("cargo"),
         format!(
             "#!/bin/sh\ns=''\n\
              case \" $* \" in *' --no-run '*) ;; *)\n\
                s=' SAMPLED=no'\n\
-               if [ '{sampler}' = true ]; then i=0; while [ $i -lt 100 ]; do\n\
-                 if ls \"$CARGO_TARGET_DIR\"/cdo-gate-logs/*/memory.timeline >/dev/null 2>&1; then s=' SAMPLED=yes'; break; fi\n\
-                 sleep 0.1; i=$((i + 1)); done; else s=''; fi ;;\n\
+               if [ '{sampler}' = true ]; then '{}' -c 'sleep 12; :' & a=$!; i=0; while [ $i -lt 100 ]; do\n\
+                 if grep -qsE '^[0-9]+ [0-9]+ [0-9]+ engines=[1-9][0-9]*' \"$CARGO_TARGET_DIR\"/cdo-gate-logs/*/memory.timeline; then s=' SAMPLED=yes'; break; fi\n\
+                 sleep 0.1; i=$((i + 1)); done; kill $a 2>/dev/null; else s=''; fi ;;\n\
              esac\n\
              echo \"ENFORCE=$ENFORCE_CDO_WS$s $*\" >> '{}'\n\
              CLAUDE_CODE_SESSION_ID=other CDO_SLOT_TOKEN= bash '{}' status >> '{}' 2>&1\n\
              echo 'test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s'\n",
+            stub.path().join("alsem").display(),
             calls.display(),
             concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-slot"),
             stub.path().join("slot-seen").display(),
@@ -524,6 +531,73 @@ fn speed_build_uses_the_gate_release_folder() {
         target.path().join("gate-release").display().to_string(),
         "the working tree is built in ci-steps' folder: {text}"
     );
+}
+
+/// TLS-74: the summary's per-phase memory, from a hand-written run folder: each
+/// phase's peak is the highest container sample in [start, end) with that
+/// sample's gate MiB and `alsem` count; a sample at a phase's end second belongs
+/// to the next phase; a timeline from before TLS-74 (no `engines=`) shows "?";
+/// a phase that ended before the first sample prints nothing; peaks compare as
+/// numbers (1000 over 900).
+///
+/// Mutation (2026-11-15): the window's end made inclusive (`<=`) -> phase a's
+/// peak becomes b's first sample (900 MiB, 4 processes) and the test fails.
+#[cfg(unix)]
+#[test]
+fn cdo_gate_summary_names_each_phases_peak_memory() {
+    let dir = tempfile::tempdir().unwrap();
+    let logs = dir.path();
+    std::fs::write(
+        logs.join("phases.times"),
+        "90 start z\n95 end z\n100 start a\n110 end a\n110 start b\n130 end b\n130 start c\n140 end c\n",
+    )
+    .unwrap();
+    std::fs::write(
+        logs.join("memory.timeline"),
+        "100 300 200 engines=1 alsem/1:150\n\
+         104 500 450 engines=2 alsem/1:200 alsem/2:200\n\
+         108 400 380 engines=2 alsem/1:190\n\
+         110 900 880 engines=4 alsem/3:220\n\
+         120 1000 950 engines=3 alsem/3:210\n\
+         132 600 550 x/9:500\n",
+    )
+    .unwrap();
+    for name in ["a", "b", "c"] {
+        std::fs::write(logs.join(format!("{name}.status")), "0 10\n").unwrap();
+    }
+    let out = std::process::Command::new("bash")
+        .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-gate"))
+        .arg(format!("--summary={}", logs.display()))
+        .output()
+        .expect("spawn bash scripts/cdo-gate --summary");
+    let text = String::from_utf8_lossy(&out.stdout);
+    let line = |phase: &str| {
+        text.lines()
+            .find(|l| l.contains(&format!("memory {phase} ")))
+            .unwrap_or_else(|| panic!("no memory line for {phase}: {text}"))
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    assert!(
+        line("a").ends_with(
+            "peak 500 MiB (container, unreclaimable), the gate 450 MiB, alsem processes 2"
+        ),
+        "{text}"
+    );
+    assert!(
+        line("b").ends_with(
+            "peak 1000 MiB (container, unreclaimable), the gate 950 MiB, alsem processes 3"
+        ),
+        "{text}"
+    );
+    assert!(
+        line("c").ends_with(
+            "peak 600 MiB (container, unreclaimable), the gate 550 MiB, alsem processes ?"
+        ),
+        "{text}"
+    );
+    assert!(!text.contains("memory z "), "{text}");
 }
 
 /// TLS-32: the test phases' layout (`cdo-gate --layout` prints what
