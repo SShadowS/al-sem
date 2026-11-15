@@ -41,3 +41,31 @@ arbitrary name (see the binary search below).
 B2 (~3% self) plus two items the task did not name: the routine-by-id lookups (~4%) and the
 remaining SipHash maps (~2%). Together roughly 6-9% of the build's CPU; B1 and B7 are dropped.
 Measure the result with `cdo-speed` (CPU ratio), not this profile.
+
+## Second profile, with frame pointers (the inclusive shares are real)
+
+The same probe rebuilt with `RUSTFLAGS='-C force-frame-pointers=yes'` (own target dir), recorded
+the same way: build wall 19.3 s, **67.3 s of thread CPU**. Inclusive shares from
+`tools/census-probe/runs-eng84/samply-shares.py` (each needle: the largest inclusive share of any
+name containing it):
+
+| Needle | Inclusive |
+|---|---:|
+| `lower_file` | 29.60% |
+| `ts_parser_parse` | 22.86% |
+| `resolve_recorded` | 19.10% |
+| `fold_identifier` (`eq_fold_identifier` alone: 1.74%) | 2.66% |
+| `Recorder` (B7) | 2.55% |
+| `DependencyGraph::closure` (B1) | 1.00% |
+
+The bare needle `closure` matches rayon's worker closures (78.85%) and says nothing about B1; B1
+was measured by its full name. Self shares on this profile: `fold_identifier` 1.58%,
+`eq_fold_identifier` 1.72%, `write<Sip13Rounds>` 2.39%, the folded `binary_search_by<RoutineNode>`
+1.74% + 0.73%.
+
+**Decision (confirms the first profile):** B1 dropped (1.0%, a one-off per build). B7 dropped
+(2.55% spread over every recorded read; its cost is cloning query keys, with no hot call site to
+fix). B2 kept: fold without allocating when the text is already folded, in the hot callers. The
+routine and object lookups by id now go through `NodeSet::find` (a hash index from id to
+position, built on first use; equal ids and hash collisions fall back to the binary search, so
+every answer is the binary search's).

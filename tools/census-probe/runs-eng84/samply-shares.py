@@ -1,9 +1,11 @@
 """ENG-84: CPU shares from a `samply record --unstable-presymbolicate` profile.
 
-Usage: shares.py <prof.json.gz> <prof.json.syms.json> [needle ...]
+Usage: shares.py <prof.json.gz> <prof.json.syms.json> [needle ...] [callers=<needle> ...]
 Weights each sample by its thread CPU delta (CPU time, not wall). Prints the top functions by
 self share (leaf) and by inclusive share (anywhere on the stack, inlined frames included), then
-the inclusive share of every name containing a given needle.
+for each needle the largest inclusive share of any name containing it. `callers=<needle>` also
+lists who calls the matching functions (the first non-generic frame above the first match).
+Inclusive shares need a frame-pointer build (`RUSTFLAGS='-C force-frame-pointers=yes'`).
 """
 import bisect
 import gzip
@@ -14,7 +16,9 @@ from collections import defaultdict
 
 prof = json.load(gzip.open(sys.argv[1]))
 syms = json.load(open(sys.argv[2]))
-needles = sys.argv[3:]
+needles = [n for n in sys.argv[3:] if not n.startswith("callers=")]
+caller_needles = [n[len("callers="):] for n in sys.argv[3:] if n.startswith("callers=")]
+callers = {n: defaultdict(float) for n in caller_needles}
 strings = syms["string_table"]
 tables = {}
 for d in syms["data"]:
@@ -93,18 +97,33 @@ for th in prof["threads"]:
                 leaf = names[0]
             seen.extend(names)
             cur = stk["prefix"][cur]
-        stack_cache[s] = (leaf, set(seen))
+        # For each caller needle: the first frame above the first match that is not itself a match
+        # nor a generic wrapper (the function that asked).
+        found = {}
+        for needle in caller_needles:
+            for i, n in enumerate(seen):
+                if needle in n:
+                    for m in seen[i + 1:]:
+                        if needle not in m and "<" not in m and not re.match(
+                            r"(core|alloc|std|hashbrown)::|\{closure|hash_one|hash$|write|fold$|next$|from_iter$", m
+                        ):
+                            found[needle] = m
+                            break
+                    break
+        stack_cache[s] = (leaf, set(seen), found)
         return stack_cache[s]
 
     deltas = samples.get("threadCPUDelta") or [1] * samples["length"]
     for s, w in zip(samples["stack"], deltas):
         if s is None or not w:
             continue
-        leaf, names = stack_names(s)
+        leaf, names, found = stack_names(s)
         total += w
         selfw[leaf] += w
         for n in names:
             inclw[n] += w
+        for needle, caller in found.items():
+            callers[needle][caller] += w
 
 print(f"CPU total {total / 1e6:.1f} s (thread CPU deltas, us)")
 print("\n== top 40 self")
@@ -113,8 +132,12 @@ for n, w in sorted(selfw.items(), key=lambda kv: -kv[1])[:40]:
 print("\n== top 60 inclusive")
 for n, w in sorted(inclw.items(), key=lambda kv: -kv[1])[:60]:
     print(f"{100 * w / total:6.2f}%  {n[:140]}")
+for needle, by_caller in callers.items():
+    print(f"\n== callers of {needle} (share of all CPU)")
+    for n, w in sorted(by_caller.items(), key=lambda kv: -kv[1])[:12]:
+        print(f"{100 * w / total:6.2f}%  {n[:140]}")
 if needles:
-    print("\n== needles (inclusive, summed over every name containing the needle)")
+    print("\n== needles (inclusive: the largest share of any name containing the needle)")
     for needle in needles:
         hits = {n: w for n, w in inclw.items() if needle in n}
         top = sorted(hits.items(), key=lambda kv: -kv[1])[:3]
