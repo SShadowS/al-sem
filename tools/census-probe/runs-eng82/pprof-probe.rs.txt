@@ -23,6 +23,16 @@ fn clean(name: &str) -> String {
     }
 }
 
+/// This process's user + system CPU seconds so far (`/proc/self/stat` fields 14 and 15, in
+/// clock ticks of 100 Hz).
+fn cpu_seconds() -> f64 {
+    let stat = std::fs::read_to_string("/proc/self/stat").expect("proc stat");
+    let after_comm = &stat[stat.rfind(')').expect("comm") + 2..];
+    let f: Vec<&str> = after_comm.split_whitespace().collect();
+    // after_comm starts at field 3, so utime (14) and stime (15) are at 11 and 12.
+    (f[11].parse::<f64>().unwrap() + f[12].parse::<f64>().unwrap()) / 100.0
+}
+
 fn main() {
     let mut args = std::env::args().skip(1);
     let ws = args
@@ -37,10 +47,12 @@ fn main() {
         .blocklist(&["libc", "libgcc", "pthread", "vdso"])
         .build()
         .expect("profiler");
+    let cpu0 = cpu_seconds();
     let t = std::time::Instant::now();
     let target = build_target(&mut session, &inputs, false)
         .unwrap_or_else(|_| panic!("the model did not build"));
     let wall = t.elapsed().as_secs_f64();
+    let cpu = cpu_seconds() - cpu0;
     let report = guard.report().build().expect("report");
     drop(guard);
 
@@ -68,6 +80,11 @@ fn main() {
         writeln!(folded, "{} {}", root_first.join(";"), count).expect("write");
     }
     println!("build wall {wall:.1} s, samples {total} (499 Hz across all threads)");
+    println!(
+        "build CPU {cpu:.1} s (user+system); expected samples {:.0}, kept {:.1}%",
+        cpu * 499.0,
+        100.0 * total as f64 / (cpu * 499.0)
+    );
     let top = |m: &HashMap<String, u64>, title: &str, n: usize| {
         let mut v: Vec<_> = m.iter().collect();
         v.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
