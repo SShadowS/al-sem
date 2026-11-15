@@ -326,12 +326,7 @@ fn on_mark(name: &'static str) {
 /// map's table (slots x (key + value + 1 control byte)), the keys' heap (the span's
 /// file path; caller ids are shared strings), and per `SiteFacts` field its heap (capacities)
 /// and how many sites use it. Then the measured drop of the whole map.
-fn split_site_facts(
-    m: HashMap<
-        al_sem::program::resolve::full::ObligationId,
-        al_sem::program::resolve::full::SiteFacts,
-    >,
-) {
+fn split_site_facts(m: al_sem::program::resolve::full::SiteFactsByObligation) {
     use al_sem::program::resolve::edge::OpenBound;
     use al_sem::program::resolve::full::{ObligationId, SiteFacts};
     let (k, v) = (size_of::<ObligationId>(), size_of::<SiteFacts>());
