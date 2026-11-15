@@ -696,7 +696,55 @@ fn split_bodies(bodies: Option<Arc<Vec<al_sem::snapshot::parse::ParsedUnit>>>) {
         comments.push(f.comments);
     }
     step("  bodies: source text + paths + provenance", texts);
-    step("  bodies: objects (declarations)", objects);
+    // ENG-85: the object declarations by field (strings, mostly).
+    let (o0, _) = live();
+    let mut of = Acc::default();
+    for file_objects in objects {
+        for o in file_objects {
+            let al_syntax::ir::ObjectDecl {
+                name,
+                routines,
+                globals,
+                protected_globals,
+                properties,
+                dataitems,
+                temporary_dataitems,
+                query_columns,
+                dataset_items,
+                extends_target,
+                implements,
+                page_controls,
+                fields,
+                keys,
+                run_objects,
+                enum_values,
+                actions,
+                ..
+            } = o;
+            of.drop_as("objects.routines", routines);
+            of.drop_as("objects.globals", (globals, protected_globals));
+            of.drop_as("objects.properties", properties);
+            of.drop_as("objects.fields", fields);
+            of.drop_as("objects.page_controls", page_controls);
+            of.drop_as("objects.actions", actions);
+            of.drop_as("objects.enum_values", enum_values);
+            of.drop_as(
+                "objects.dataitems/dataset/query",
+                (dataitems, temporary_dataitems, dataset_items, query_columns),
+            );
+            of.drop_as(
+                "objects.keys/implements/runs/name",
+                (keys, implements, run_objects, name, extends_target),
+            );
+        }
+        of.drop_as("objects.(vecs)", ());
+    }
+    let objects_total = o0 - live().0;
+    println!(
+        "  bodies: objects (declarations) {:>9.2} MiB, by field:",
+        mib(objects_total)
+    );
+    of.print(objects_total);
     let (ir_bytes, _) = step("  bodies: ir (exprs, stmts, blocks, side tables)", irs);
     println!(
         "    ir remainder after the estimates (stmt heap, side tables, Vec slack) {:>9.2} MiB",
@@ -1972,10 +2020,58 @@ fn routine_fields(routines: Vec<al_sem::program::model::workspace::ModelRoutine>
         rf.drop_as("attributes_parsed", attributes_parsed);
         rf.drop_as("parameters", parameters);
         rf.drop_as("variables", variables);
-        rf.drop_as("record_variables", record_variables);
+        // ENG-85: the two largest fields, split by subfield (anchor strings apart).
+        let mut record_variables = record_variables;
+        for v in record_variables.drain(..) {
+            let al_sem::program::model::workspace::ModelRecordVariable {
+                id,
+                name,
+                table_name,
+                table_id,
+                ..
+            } = v;
+            rf.drop_as("record_variables.id", id);
+            rf.drop_as("record_variables.name", name);
+            rf.drop_as("record_variables.table_name/id", (table_name, table_id));
+        }
+        rf.drop_as("record_variables.(vec)", record_variables);
         rf.drop_as("record_operations", record_operations);
         rf.drop_as("field_accesses", field_accesses);
-        rf.drop_as("call_sites", call_sites);
+        let mut call_sites = call_sites;
+        for c in call_sites.drain(..) {
+            let al_sem::program::body::features::PCallSite {
+                id,
+                operation_id,
+                callee_text,
+                callee,
+                argument_texts,
+                argument_infos,
+                argument_bindings,
+                loop_stack,
+                source_anchor,
+                control_context,
+                ..
+            } = c;
+            rf.drop_as("call_sites.id+operation_id", (id, operation_id));
+            rf.drop_as("call_sites.callee_text+callee", (callee_text, callee));
+            rf.drop_as("call_sites.argument_texts", argument_texts);
+            rf.drop_as(
+                "call_sites.argument_infos+bindings",
+                (argument_infos, argument_bindings),
+            );
+            rf.drop_as(
+                "call_sites.loop_stack+control",
+                (loop_stack, control_context),
+            );
+            let al_sem::program::body::features::PAnchor {
+                source_unit_id,
+                syntax_kind,
+                ..
+            } = source_anchor;
+            rf.drop_as("call_sites.anchor.source_unit_id", source_unit_id);
+            rf.drop_as("call_sites.anchor.syntax_kind", syntax_kind);
+        }
+        rf.drop_as("call_sites.(vec)", call_sites);
         rf.drop_as("operation_sites", operation_sites);
         rf.drop_as("statement_tree", statement_tree);
         rf.drop_as("loops", loops);
