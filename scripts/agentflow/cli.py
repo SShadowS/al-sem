@@ -108,6 +108,18 @@ def cdo_gate() -> tuple[str, list[str], int]:
     return (CDO_GATE_KEY, [resolve_bash(), "scripts/cdo-gate"], 45)
 
 
+def expected_gate_commands() -> dict[str, list[str]]:
+    """⟨TLS-63⟩ The one command each attested gate name stands for. `run` refuses
+    any other command under these names, and `attest` takes a gate as green only
+    from a recorded run of exactly this command: a `cdo-gate --only ...` subset,
+    `check-goldens --regen` or `-- true` recorded under the full gate's name would
+    otherwise be attested as the full gate."""
+    b = resolve_bash()
+    cmds = {name: argv for name, argv, _ in gates() + [cdo_gate()]}
+    cmds["check-goldens-coverage"] = [b, "scripts/check-goldens", "--verify-coverage"]
+    return cmds
+
+
 class Fail(Exception):
     def __init__(self, payload: dict, code: int = 1):
         super().__init__(json.dumps(payload))
@@ -733,6 +745,28 @@ def cmd_run(args, ctx, gh, git):
     # (spec 2026-10-18, post-merge identity skip). Bookkeeping never costs a
     # gate its verdict: a failed probe or record is reported, not raised.
     child = _with_bash(args.child)
+    # TLS-63: an attested gate name runs only its own command, so a cheaper
+    # variant cannot be recorded (and later attested) under the full gate's name.
+    # Only an attested name looks up its command (and resolves bash for it).
+    attested = args.name in (*REQUIRED_GATE_KEYS, CDO_GATE_KEY)
+    expected = expected_gate_commands().get(args.name) if attested else None
+    if expected is not None and not identity._same_command(child, expected):
+        return _emit({"error": "gate-command-mismatch", "name": args.name, "argv": child,
+                      "expected": expected}, 2)
+    if expected is not None:
+        # Review r1 (sol): the file-name match and the recorded tree are only
+        # evidence when the gate script is that tree's and bash is the real one:
+        # run from the checkout's top (a subfolder may hold a shadow
+        # `scripts/cdo-gate` while git still reports the clean parent tree), and
+        # with the interpreter `resolve_bash` picks (not a `bash` symlink to `true`).
+        why = _gate_launch_refusal(child, expected, cwd)
+        if why:
+            return _emit({"error": "gate-command-mismatch", "name": args.name, "detail": why}, 2)
+    # Review r1 (Fable): the full command with the speed phase switched off is a
+    # subset under the exact argv; the record would not show it.
+    if args.name == CDO_GATE_KEY and os.environ.get("CDO_GATE_NO_SPEED") == "1":
+        return _emit({"error": "gate-command-mismatch", "name": args.name,
+                      "detail": "CDO_GATE_NO_SPEED is set: cdo-gate would skip its speed phase"}, 2)
     cdo = args.name == CDO_GATE_KEY
     record_error = None
     try:
@@ -800,6 +834,58 @@ def _gate_failures(blob: dict, docs_only: bool) -> list[str]:
         if not isinstance(v, int) or isinstance(v, bool) or v != 0:
             bad.append(k)
     return bad
+
+
+def _gate_launch_refusal(child: list[str], expected: list[str], cwd: Path) -> str | None:
+    """⟨TLS-63⟩ Why an attested gate must not run as asked: its interpreter is
+    not the resolved bash (by real path), or `cwd` is not the top of its git
+    checkout. None when it may run."""
+    try:
+        same_bash = os.path.samefile(shutil.which(child[0]) or child[0], expected[0])
+    except OSError:
+        same_bash = False
+    if not same_bash:
+        return f"the interpreter {child[0]!r} is not {expected[0]!r}"
+    try:
+        top = subprocess.run(["git", "-C", str(cwd), "rev-parse", "--show-toplevel"],
+                             capture_output=True, text=True, check=True).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        return f"{cwd} is not in a git checkout"
+    if Path(top).resolve() != Path(cwd).resolve():
+        return f"run from the checkout's top ({top}), not {cwd}"
+    return None
+
+
+def _gate_unrecorded(ctx: Ctx, git: Git, H: str, docs_only: bool,
+                     claimed: dict | None = None) -> dict[str, list[str]]:
+    """⟨TLS-63⟩ The required gates whose latest record in this run's
+    `gate-runs.jsonl` is no evidence that the gate passed on `H`'s tree, each
+    with post-merge's own reasons (`identity.record_refusals`): another command
+    (a subset, a regen, `true`), not exit 0, a dirty checkout, or another tree
+    (an older head, master's checkout). Before the merge, not after it."""
+    required = [*REQUIRED_GATE_KEYS] + ([] if docs_only else [CDO_GATE_KEY])
+    expected = expected_gate_commands()
+    # Review r3 (sol): every attested gate the caller CLAIMS green needs evidence
+    # too, not only the required ones: a docs-only attest claiming `cdo-gate: 0`
+    # could otherwise close a `closes_by: gate/cdo-gate` entry with no run.
+    for k, v in (claimed or {}).items():
+        if k in expected and k not in required and v == 0 and not isinstance(v, bool):
+            required.append(k)
+    latest = identity.latest_records(ctx)
+    try:
+        h_tree = git.rev(f"{H}^{{tree}}")
+    except Exception:  # noqa: BLE001
+        h_tree = None
+    out = {}
+    for k in required:
+        rec = latest.get(k)
+        try:
+            why = ["no-record"] if rec is None else identity.record_refusals(k, rec, expected[k], h_tree)
+        except Exception as e:  # noqa: BLE001 -- a malformed record is no evidence (as post-merge)
+            why = [f"error:record:{type(e).__name__}"]
+        if why:
+            out[k] = why
+    return out
 
 
 DISPOSITIONS = ("open", "fixed", "refuted", "deferred")
@@ -1024,9 +1110,25 @@ def cmd_attest(args, ctx, gh, git):
     # "All gates green" and "the register converged" are the two merge
     # preconditions the conductor used to simply assert. They are checked here,
     # before the PR exists, so a refusal costs nothing to recover from.
+    # TLS-63 review r2 (sol): `--docs-only` waives the CDO gate, so it is checked
+    # against the diff, as merge-gate decides it (B..final_head), not taken on
+    # the caller's word. A diff it cannot read is no docs-only diff.
+    if args.docs_only:
+        try:
+            really = _docs_only(git, args.B, args.final_head)
+        except Exception:  # noqa: BLE001
+            really = False
+        if not really:
+            return _emit({"error": "docs-only-claim-false",
+                          "detail": "--docs-only, but B..final_head changes more than docs"}, 1)
     bad_gates = _gate_failures(json.loads(args.gates), args.docs_only)
     if bad_gates:
         return _emit({"error": "gates-not-green", "gates": bad_gates}, 1)
+    # TLS-63: the claimed exit codes are the caller's word; each required gate's
+    # LATEST record must also be evidence for H (`identity.record_refusals`).
+    unrecorded = _gate_unrecorded(ctx, git, args.H, args.docs_only, json.loads(args.gates))
+    if unrecorded:
+        return _emit({"error": "gates-not-recorded", "gates": unrecorded}, 1)
     # The attestation is posted verbatim as a PR comment on a public repo, so
     # the register is named RELATIVE to the worktree the claim recorded -- an
     # absolute path would publish this machine's drive letter and layout, and

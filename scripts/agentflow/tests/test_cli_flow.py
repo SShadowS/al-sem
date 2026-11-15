@@ -719,8 +719,58 @@ CONVERGED = json.dumps([{"id": "F1", "severity": "important", "disposition": "fi
                          "reviews": {"astra": "accepted", "flash": "accepted"}}])
 
 
+def _git_out(root, *args):
+    return subprocess.run(["git", "-C", str(root), "-c", "user.name=t", "-c", "user.email=t@t", *args],
+                          capture_output=True, text=True, check=True).stdout.strip()
+
+
+def repo_head(root):
+    """TLS-63: a real commit in `root` for attest's `--H` (attest compares each
+    gate record's tree with H's), made once as an empty commit."""
+    if not (root / ".git").exists():
+        _git_out(root, "init", "-q")
+        _git_out(root, "commit", "-q", "--allow-empty", "-m", "base")
+    return _git_out(root, "rev-parse", "HEAD")
+
+
+def docs_change(root):
+    """TLS-63: a real docs-only diff in `root`: (B, H), H adding docs/note.md."""
+    B = repo_head(root)
+    (root / "docs").mkdir(exist_ok=True)
+    (root / "docs" / "note.md").write_text("a note\n")
+    _git_out(root, "add", "docs/note.md")
+    _git_out(root, "commit", "-q", "-m", "docs")
+    return B, _git_out(root, "rev-parse", "HEAD")
+
+
+def record_gate(root, name, argv=None, exit_code=0, run_id="run-test", head=None, **fields):
+    """One `gate-runs.jsonl` record as `run` writes it for a supervised run on a
+    clean checkout of `head` (default: `repo_head`); `argv` defaults to the
+    gate's own full command (TLS-63); `fields` override any key."""
+    from agentflow import identity
+    ctx = Ctx(Paths(root), run_id=run_id)
+    head = head or repo_head(root)
+    rec = {"name": name, "argv": argv if argv is not None else cli.expected_gate_commands()[name],
+           "exit_code": exit_code, "timed_out": False, "supervised": True,
+           "clean_before": True, "clean_after": True,
+           "tree": _git_out(root, "rev-parse", f"{head}^{{tree}}")}
+    identity.append_record(ctx, {**rec, **fields})
+
+
+def record_full_gates(root, run_id="run-test", head=None):
+    """TLS-63: a green, full run of every attested gate, as attest now requires."""
+    for name in cli.expected_gate_commands():
+        record_gate(root, name, run_id=run_id, head=head)
+
+
 def attest(capsys, root, register, *, gates=GREEN_GATES, body_hash="abc123", extra=(),
-           B="b" * 40, H="c" * 40, final_head="f" * 40):
+           B="b" * 40, H=None, final_head="f" * 40, recorded=True):
+    # TLS-63: attest takes a gate as green only from a recorded run of its full
+    # command on H's tree; H defaults to a real commit in `root`, and the helper
+    # records the gates there unless a test sets up its own.
+    H = H if H is not None else repo_head(root)
+    if recorded:
+        record_full_gates(root)
     return run(capsys, root, "attest", "--issue", "8", "--B", B, "--H", H,
                "--final-head", final_head, "--register", str(register), "--gates", gates,
                "--body-hash", body_hash, *extra, gh_run=FakeRunner())
@@ -815,15 +865,164 @@ def test_attest_refuses_missing_and_red_gates(capsys, root, tmp_path):
     assert code == 1 and out["error"] == "gates-not-green" and out["gates"] == ["check-goldens"]
 
 
+@pytest.mark.parametrize("argv", [
+    ["bash", "scripts/cdo-gate", "--only", "harness,l4"],
+    ["bash", "scripts/cdo-gate", "--dry-run"],
+    ["true"],
+])
+def test_attest_refuses_a_cdo_gate_that_was_not_the_full_gate(capsys, root, tmp_path, argv):
+    # TLS-63: a cdo-gate subset, a dry run or `-- true` recorded under the full
+    # gate's name exits 0 and was attested as the CDO gate. The latest record of
+    # each required gate must be its own full command.
+    # Mutation (2026-11-15): attest's recorded-run check off (`unrecorded = {}`)
+    # -> all three cases attest, red (and the latest-record test too).
+    register = claimed_register(Ctx(Paths(root), run_id="run-test"), tmp_path)
+    for name in ("ci-steps-all", "check-goldens-coverage", "check-goldens"):
+        record_gate(root, name)
+    record_gate(root, "cdo-gate", argv=argv)
+    code, out = attest(capsys, root, register, recorded=False)
+    assert code == 1 and out["error"] == "gates-not-recorded"
+    assert out["gates"] == {"cdo-gate": ["record-other-command:cdo-gate"]}, out
+
+
+def test_attest_takes_the_latest_record_of_a_gate(capsys, root, tmp_path):
+    # TLS-63: a red run after a green one voids it; a full run after a subset
+    # makes the gate attestable; and no record at all is refused.
+    # Mutation (2026-11-15): the FIRST record decides (`setdefault`) -> the red
+    # run after the green one attests, red.
+    register = claimed_register(Ctx(Paths(root), run_id="run-test"), tmp_path)
+    for name in ("ci-steps-all", "check-goldens-coverage", "check-goldens"):
+        record_gate(root, name)
+    code, out = attest(capsys, root, register, recorded=False)
+    assert code == 1 and out["gates"] == {"cdo-gate": ["no-record"]}
+    record_gate(root, "cdo-gate")
+    record_gate(root, "cdo-gate", exit_code=1)
+    code, out = attest(capsys, root, register, recorded=False)
+    assert code == 1 and out["gates"] == {"cdo-gate": ["record-red:cdo-gate"]}
+    record_gate(root, "cdo-gate", argv=["bash", "scripts/cdo-gate", "--only", "harness"])
+    record_gate(root, "cdo-gate")
+    code, out = attest(capsys, root, register, recorded=False)
+    assert code == 0 and "path" in out
+
+
+def test_attest_refuses_a_gate_record_that_is_not_evidence_for_h(capsys, root, tmp_path):
+    # TLS-63 review r1 (Fable): a green full run is evidence only for the tree it
+    # ran on. One from an older head (a fix or rebase moved the branch since),
+    # from a dirty checkout, unsupervised, or with `exit_code: false` is refused,
+    # with post-merge's own reasons (`identity.record_refusals`).
+    # Mutations (2026-11-15): attest without the tree check (`h_tree` never
+    # compared) -> the older-head case attests, red; `exit_code` compared with
+    # `!= 0` only -> `false` attests, red.
+    register = claimed_register(Ctx(Paths(root), run_id="run-test"), tmp_path)
+    old = repo_head(root)
+    (root / "fix.txt").write_text("a fix after the gates\n")   # another tree, not only another commit
+    _git_out(root, "add", "fix.txt")
+    _git_out(root, "commit", "-q", "-m", "a fix after the gates")
+    for name in ("ci-steps-all", "check-goldens-coverage", "check-goldens"):
+        record_gate(root, name)
+    for fields, why in (({"head": old}, "record-other-tree:cdo-gate"),
+                        ({"clean_after": False}, "record-dirty:cdo-gate"),
+                        ({"supervised": False}, "record-red:cdo-gate"),
+                        ({"timed_out": True}, "record-red:cdo-gate"),
+                        ({"exit_code": False}, "record-red:cdo-gate"),
+                        ({"argv": [7, "scripts/cdo-gate"]}, "error:record:AttributeError")):
+        head = fields.pop("head", None)
+        record_gate(root, "cdo-gate", head=head, **fields)
+        code, out = attest(capsys, root, register, recorded=False)
+        assert code == 1 and out["gates"] == {"cdo-gate": [why]}, (why, out)
+
+
+def test_run_refuses_another_command_under_an_attested_gate_name(capsys, root, monkeypatch):
+    # TLS-63: the cheaper variant cannot even be recorded under the full gate's
+    # name, and nothing is spawned; the full command runs as before.
+    # Mutation (2026-11-15): run's command check off -> `cdo-gate --only` runs
+    # and exits 0, red.
+    seen = capture_child(monkeypatch)
+    code, out = run(capsys, root, "run", "--name", "cdo-gate", "--timeout", "1", "--",
+                     "bash", "scripts/cdo-gate", "--only", "harness", gh_run=FakeRunner(),
+                     run_id="solo-run")
+    assert code == 2 and out["error"] == "gate-command-mismatch"
+    assert "cmd" not in seen
+    code, out = run(capsys, root, "run", "--name", "check-goldens", "--timeout", "1", "--",
+                     "bash", "scripts/check-goldens", "--regen", gh_run=FakeRunner(),
+                     run_id="solo-run")
+    assert code == 2 and out["error"] == "gate-command-mismatch"
+    # Review r1 (Fable): the exact argv with the speed phase switched off is a
+    # subset too. Mutation (2026-11-15): the CDO_GATE_NO_SPEED check off -> it
+    # runs, red.
+    monkeypatch.setenv("CDO_GATE_NO_SPEED", "1")
+    code, out = run(capsys, root, "run", "--name", "cdo-gate", "--timeout", "1", "--",
+                     "bash", "scripts/cdo-gate", gh_run=FakeRunner(), run_id="solo-run")
+    assert code == 2 and out["error"] == "gate-command-mismatch" and "cmd" not in seen
+    monkeypatch.delenv("CDO_GATE_NO_SPEED")
+    repo_head(root)   # an attested gate runs only from the top of a git checkout
+    # Review r1 (sol): a subfolder cwd (git reports the parent's clean tree while
+    # bash runs a shadow scripts/cdo-gate there) and a `bash` that is really
+    # `true` are refused too. Mutations (2026-11-15): the top-of-checkout check
+    # off -> the subfolder case runs, red; the interpreter check off -> the
+    # symlink case runs, red.
+    shadow = root / "shadow"
+    (shadow / "scripts").mkdir(parents=True)
+    code, out = run(capsys, root, "run", "--name", "cdo-gate", "--timeout", "1", "--cwd", str(shadow),
+                     "--", "bash", "scripts/cdo-gate", gh_run=FakeRunner(), run_id="solo-run")
+    assert code == 2 and "checkout's top" in out["detail"] and "cmd" not in seen, out
+    fake = root / "fakebin" / "bash"
+    fake.parent.mkdir()
+    fake.symlink_to(shutil.which("true"))
+    code, out = run(capsys, root, "run", "--name", "cdo-gate", "--timeout", "1", "--",
+                     str(fake), "scripts/cdo-gate", gh_run=FakeRunner(), run_id="solo-run")
+    assert code == 2 and "interpreter" in out["detail"] and "cmd" not in seen, out
+    code, out = run(capsys, root, "run", "--name", "cdo-gate", "--timeout", "1", "--",
+                     "bash", "scripts/cdo-gate", gh_run=FakeRunner(), run_id="solo-run")
+    assert code == 0 and seen["cmd"][1:] == ["scripts/cdo-gate"]
+
+
+def test_gate_children_run_without_a_bash_startup_file():
+    # TLS-63 review r1 (sol): BASH_ENV (or ENV) names a file a non-interactive
+    # bash runs before the gate script; one with `exit 0` turns any gate green
+    # under its exact command. Mutation (2026-11-15): BASH_ENV out of DROP_ENV ->
+    # it survives, red.
+    env = supervise.sanitized_env({"BASH_ENV": "/tmp/x", "ENV": "/tmp/y", "PATH": "/bin"}, None)
+    assert "BASH_ENV" not in env and "ENV" not in env and env["PATH"] == "/bin"
+
+
 def test_attest_docs_only_does_not_require_the_cdo_gate(capsys, root, tmp_path):
     # A docs-only diff legitimately never runs cdo-gate, so demanding the key
     # would make the check unusable exactly where it is least needed.
+    # TLS-63 (review r1, Fable): only the three gates are RECORDED too, so the
+    # recorded-run check must honour --docs-only as well. Mutation (2026-11-15):
+    # `_gate_unrecorded` ignoring docs_only -> the docs-only attest is refused
+    # for a missing cdo-gate record, red.
+    # Review r2 (sol): --docs-only is checked against the diff B..final_head, so
+    # a code change cannot claim it. Mutation (2026-11-15): the diff check off ->
+    # the code change attests with no cdo-gate, red.
     register = claimed_register(Ctx(Paths(root), run_id="run-test"), tmp_path)
+    B, H = docs_change(root)
+    for name in ("ci-steps-all", "check-goldens-coverage", "check-goldens"):
+        record_gate(root, name, head=H)
     three = json.dumps({"ci-steps-all": 0, "check-goldens-coverage": 0, "check-goldens": 0})
-    code, out = attest(capsys, root, register, gates=three)
+    code, out = attest(capsys, root, register, gates=three, recorded=False, B=B, H=H, final_head=H)
     assert code == 1 and out["gates"] == ["cdo-gate"]
-    code, out = attest(capsys, root, register, gates=three, extra=("--docs-only",))
+    code, out = attest(capsys, root, register, gates=three, extra=("--docs-only",), recorded=False,
+                       B=B, H=H, final_head=H)
     assert code == 0 and "path" in out
+    # Review r3 (sol): a docs-only attest that CLAIMS cdo-gate green needs its
+    # record too. Mutation (2026-11-15): claimed gates not added -> it attests,
+    # red.
+    four = json.dumps({"ci-steps-all": 0, "check-goldens-coverage": 0, "check-goldens": 0,
+                       "cdo-gate": 0})
+    code, out = attest(capsys, root, register, gates=four, extra=("--docs-only",), recorded=False,
+                       B=B, H=H, final_head=H)
+    assert code == 1 and out["gates"] == {"cdo-gate": ["no-record"]}, out
+    (root / "code.rs").write_text("fn main() {}\n")
+    _git_out(root, "add", "code.rs")
+    _git_out(root, "commit", "-q", "-m", "code")
+    C = _git_out(root, "rev-parse", "HEAD")
+    for name in ("ci-steps-all", "check-goldens-coverage", "check-goldens"):
+        record_gate(root, name, head=C)
+    code, out = attest(capsys, root, register, gates=three, extra=("--docs-only",), recorded=False,
+                       B=B, H=C, final_head=C)
+    assert code == 1 and out["error"] == "docs-only-claim-false", out
 
 
 def test_attest_refuses_a_register_that_has_not_converged(capsys, root, tmp_path):
@@ -930,6 +1129,7 @@ def test_attest_binds_the_register_path_and_merge_refuses_a_changed_register(cap
     body = json.loads(ISSUES)[0][0]["body"]
     register = claimed_register(ctx, tmp_path, body_hash=mergeops.body_hash(body))
     B = Git(clone).rev("origin/master")
+    record_full_gates(clone, head=B)
     code, out = run(capsys, clone, "attest", "--issue", "8", "--B", B, "--H", B, "--final-head", B,
                      "--register", str(register), "--gates", GREEN_GATES,
                      "--body-hash", mergeops.body_hash(body), gh_run=FakeRunner())
@@ -999,6 +1199,7 @@ def ci_wait_gate(capsys, repo_pair, tmp_path):
     register = claimed_register(ctx, tmp_path, body_hash=mergeops.body_hash(body),
                                 contents=json.dumps([closes("F1-7", "ci-wait", "ci-wait")]))
     B = Git(clone).rev("origin/master")
+    record_full_gates(clone, head=B)
     code, out = run(capsys, clone, "attest", "--issue", "8", "--B", B, "--H", B, "--final-head", B,
                      "--register", str(register), "--gates", GREEN_GATES,
                      "--body-hash", mergeops.body_hash(body), gh_run=FakeRunner())
@@ -1028,7 +1229,9 @@ def test_a_docs_only_attest_does_not_let_closes_by_cite_the_cdo_gate_it_skipped(
         gates["cdo-gate"] = cdo
     register = claimed_register(Ctx(Paths(root), run_id="run-test"), tmp_path,
                                 contents=json.dumps([closes("X", "gate", "cdo-gate")]))
-    code, out = attest(capsys, root, register, gates=json.dumps(gates), extra=("--docs-only",))
+    B, H = docs_change(root)   # --docs-only is checked against the diff (TLS-63)
+    code, out = attest(capsys, root, register, gates=json.dumps(gates), extra=("--docs-only",),
+                       B=B, H=H, final_head=H)
     assert code == 1 and out["error"] == "register-not-converged" and out["entries"] == ["X"], out
 
 
@@ -1334,6 +1537,7 @@ def test_merge_records_what_it_merged_for_post_merge_to_verify(capsys, repo_pair
     body = json.loads(ISSUES)[0][0]["body"]
     register = claimed_register(ctx, tmp_path, body_hash=mergeops.body_hash(body))
     B = Git(clone).rev("origin/master")
+    record_full_gates(clone, head=B)
     code, _ = run(capsys, clone, "attest", "--issue", "8", "--B", B, "--H", B, "--final-head", B,
                   "--register", str(register), "--gates", GREEN_GATES,
                   "--body-hash", mergeops.body_hash(body), gh_run=FakeRunner())
@@ -4192,7 +4396,9 @@ def test_two_heavy_gates_do_not_overlap_and_the_second_reports_its_queue(root):
     `heavy_gates: 1`: the children's time windows do not overlap, and the
     one that waited says so in `queued_s`."""
     from agentflow.tests.conftest import run_concurrently
-    res = run_concurrently(root, GATE_CHILD, ["a", "b"], extra=["check-goldens"])
+    # A heavy name outside the attested ones: those run only their own command
+    # (TLS-63), and this child is a stand-in.
+    res = run_concurrently(root, GATE_CHILD, ["a", "b"], extra=["check-goldens-regen"])
     assert all(o.strip().endswith("EXIT 0") for _, o, _ in res), res
     (pa, sa, ea), (pb, sb, eb) = (_gate_window(o) for _, o, _ in res)
     assert ea <= sb or eb <= sa, (sa, ea, sb, eb)
@@ -4204,7 +4410,7 @@ def test_with_two_heavy_gate_slots_two_heavy_gates_run_at_once(root):
     so the semaphore is the config number, not a fixed one."""
     from agentflow.tests.conftest import run_concurrently
     (root / ".agent" / "config.json").write_text(json.dumps({"heavy_gates": 2}), encoding="utf-8")
-    res = run_concurrently(root, GATE_CHILD, ["a", "b"], extra=["ci-steps-all"])
+    res = run_concurrently(root, GATE_CHILD, ["a", "b"], extra=["check-goldens-regen"])
     (pa, sa, ea), (pb, sb, eb) = (_gate_window(o) for _, o, _ in res)
     assert sa < eb and sb < ea, (sa, ea, sb, eb)      # the windows overlap
 
@@ -4219,6 +4425,9 @@ def test_a_light_gate_never_queues_and_a_queued_heavy_gate_times_out_without_run
     anything `-on-revert`."""
     from agentflow.state import mutex
     monkeypatch.setattr(cli, "QUEUE_POLL_S", 0.01)
+    # The queueing of every heavy name is under test, with a stand-in child; the
+    # attested names' own-command check (TLS-63) has its own test.
+    monkeypatch.setattr(cli, "expected_gate_commands", lambda: {})
     (root / ".agent" / "config.json").write_text(json.dumps({"gate_wait_minutes": 0}), encoding="utf-8")
     marker = root / "child-ran"
     child = ("--", sys.executable, "-c", f"open({str(marker)!r}, 'w').close()")
@@ -4763,8 +4972,11 @@ def test_the_next_claim_carries_the_stand_ins_and_attest_fails_closed_without_th
     register.write_text(json.dumps([{**e, "reviews": {"sol": "accepted", "opus": "accepted"}}
                                     for e in STAND_IN_REGISTER]))
 
+    H = Git(clone).rev("HEAD")
+    record_full_gates(clone, run_id="run-2", head=H)
+
     def attest2(*extra):
-        return run(capsys, clone, "attest", "--issue", "8", "--B", "b" * 40, "--H", "c" * 40,
+        return run(capsys, clone, "attest", "--issue", "8", "--B", "b" * 40, "--H", H,
                    "--final-head", "f" * 40, "--register", str(register), "--gates", GREEN_GATES,
                    "--body-hash", claim["body_hash"], *extra, gh_run=FakeRunner(), run_id="run-2")
 
