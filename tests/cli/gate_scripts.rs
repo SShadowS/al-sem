@@ -1085,7 +1085,7 @@ fn speed_warm_seeds_a_commit_from_its_trees_gate_binary() {
     let head2 = t2.git("repo", &["rev-parse", "HEAD"]);
     let (code, text) = t2.speed(&["--warm", &head2], &cache2, false, &[]);
     assert_ne!(code, Some(0), "{text}");
-    assert!(text.contains("building (once per commit)"), "{text}");
+    assert!(text.contains("building alsem (once per commit)"), "{text}");
 }
 
 /// TLS-36: beside the impact phase, lane 2 is pinned by core type, read from a

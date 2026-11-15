@@ -7,6 +7,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (TLS-61: `scripts/cdo-before-after`, a CDO before/after in one command)
+
+- `scripts/cdo-before-after <base> [<head>|.]` replaces the hand steps of the
+  `cdo-measure` skill (build both sides, copy the binaries, run, compare). A revision's
+  release-fast `alsem` and `aldump` come from cdo-speed's cache (one cache: `cached_binary`
+  now keeps more binaries of the same build beside alsem, `bin/<sha>/aldump`, and builds
+  only the missing ones; cdo-speed still asks for alsem alone). `.` (the default head)
+  builds the working tree in `<target>/before-after-head`, never a shared target.
+- It refuses what it cannot compare: two sides with the same source tree (exit 2,
+  `--allow-same` for a noise run), two alsem binaries that came out the same (exit 1:
+  a build that did nothing), a failed build or command (exit 1, naming it and its
+  stderr), a census with no census line or one that failed for another reason than its
+  own ratchet, a histogram without a `wholeProgram` or `primaryScoped` section, and a
+  workspace whose sha, dirty count or edits (a hash of the tracked diff and the untracked
+  files' bytes) moved between or during the sides (read before and after each side; the
+  report says VOID, exit 1). The working tree's binaries are copied into the run's own
+  `head-bin/` under a lock, so a second run rebuilding that target cannot swap them; the
+  census runs a copy of each side's test executable built before the slot (never `cargo
+  test` at measure time, which would rebuild a working tree edited meanwhile), built and
+  copied under a lock on its target; `--out` is made absolute; one run per output folder
+  (a lock; the default folder name carries the PID).
+- It measures inside the CDO slot (`scripts/cdo-slot`, bound to itself; `--slot-timeout`),
+  base first, then head: `alsem fingerprint`, `analyze` (primary and `--scope all`),
+  `aldump --program-call-graph-stats`, and with `--census` the ENG14 untrusted census
+  (each side's lib test, built before the slot is taken). `report.md` and `report.json`
+  list the detectors that moved, the fingerprints added and removed, the call-graph
+  numbers that moved (wholeProgram and primaryScoped; unknown and realUnknownRate first),
+  `--pattern` matches, and the census lines that moved. `--dry-run` builds and measures
+  nothing and says what is cached.
+- Tests (`tests/cli/before_after.rs`, a throwaway repo with stub cargo, alsem and aldump):
+  the report's every part, the cache (only aldump built when alsem is cached; a second
+  run builds nothing), the working-tree head, the refusals listed in each test's doc
+  (same tree, equal binaries, a failed command, a failed working-tree build, a missing
+  or partial census, a histogram without a section, the workspace moving during either
+  side), measuring inside the slot, and leaving a shared hold in place; each of those
+  guards has a mutation recorded, red. Untested: the usage refusals (not a commit, `.`
+  as base, a bad `--pattern`, no workspace) and a failed census build.
+- Limits (in the script's doc): the equal-binaries check guards two revisions only (a
+  working-tree build embeds its path); the builds run before the slot is taken; the VOID
+  check reads the workspace's git state, not its `.alpackages`; both sides share alsem's
+  snapshot cache.
+- One real run (2026-11-15, server1, CDO `bc3ccb18`, clean on both sides):
+  `scripts/cdo-before-after --pattern ':Interface:[^"#]*' 630dd171 d0c215e5` (ENG-80's
+  landing). Both alsem came from the cache and only the two aldump were built; it waited
+  5 min for another session's `cdo-gate --only` hold, then measured (per side: fingerprint
+  ~9 s, each analyze ~22 s, the histogram 6-9 s; 13 min in all, peak RSS 5.4 GB). Result:
+  primary scope unchanged (2,308 findings, 2,301 fingerprints kept); `--scope all`
+  32,580 -> 32,579, `d20-unreachable-after-exit` 2 -> 1 (one fingerprint removed); the
+  call-graph histogram unchanged (unknown 0 both scopes); the interface pattern 14 / 7
+  distinct on both sides. The removed d20 finding is ENG-80's intended change: `CTS-CDN
+  Net. Profile Selector::GetReceiverRegistrationCache` runs `Error(ErrorInfo); exit(false);`
+  ("If the error was collected and not thrown"); since ENG-80, `Error(ErrorInfo)` no longer
+  ends the path, so the `exit` after it is no longer unreachable.
+- `scripts/claude-hooks/cdo-slot-guard` lets `cdo-before-after --dry-run` and `--help`
+  (anywhere on the line) run under another session's hold, as it does for `land` and
+  `cdo-gate`; a real run stays refused.
+
 ### Fixed (TLS-65: cdo-speed's warm-up no longer reads the second-built side as slow)
 
 - The warm-up's model build and test universe were timed once each, in a fixed order:

@@ -70,6 +70,14 @@ scripts/cdo-slot acquire|release|status|run <owner> <reason>  # The one CDO slot
                                # the PreToolUse hook scripts/claude-hooks/cdo-slot-guard (wired by the owner)
                                # refuses this session's cargo builds/tests, the gate scripts and aldump/alsem
                                # on CDO, naming the holder. `scripts/cdo-slot status` says who.
+scripts/cdo-before-after <base> [<head>|.]  # What a change moves on CDO (TLS-61): builds each side's
+                               # release-fast alsem + aldump (a revision once per commit, in cdo-speed's
+                               # cache beside its alsem; `.` = the working tree, in target/before-after-head),
+                               # refuses equal trees or equal binaries, then measures in the CDO slot, base
+                               # first: fingerprint, analyze (primary and --scope all), the call-graph
+                               # histogram (+ the ENG14 census with --census). report.md/.json: detector
+                               # moves, fingerprints added/removed, unknown buckets, --pattern matches;
+                               # VOID when the workspace moved. --dry-run builds and measures nothing
 scripts/sweep-builds           # Delete build output unused for 7 days (main + al-sem-issue-* worktrees;
                                # needs `cargo install cargo-sweep`). Run after an issue, before a release,
                                # or when `df -h /u` is low: U: has filled up three times

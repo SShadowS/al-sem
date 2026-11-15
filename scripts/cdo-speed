@@ -421,8 +421,11 @@ def _keep_tree_binary(repo, built, key_before):
         f"tree and grammar builds nothing)")
 
 
-def cached_binary(repo, rev, logf):
-    """The release-fast alsem of commit `rev`, built once per commit and cached."""
+def cached_binary(repo, rev, logf, extra=()):
+    """The release-fast alsem of commit `rev`, built once per commit and cached.
+    ⟨TLS-61⟩ `extra` names more binaries of the same build (`aldump` for
+    scripts/cdo-before-after), kept beside alsem in the same commit folder; only
+    the missing ones are built."""
     sha = git(repo, "rev-parse", "--verify", f"{rev}^{{commit}}")
     root = cache_root()
     exe = os.path.join(root, "bin", sha, "alsem")
@@ -430,8 +433,11 @@ def cached_binary(repo, rev, logf):
     # One build at a time per cache (two gates may want the same commit).
     with open(os.path.join(root, "lock"), "w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        if os.path.exists(exe):
-            log(f"{rev} = {sha[:10]}: cached binary {exe}")
+        missing = [b for b in ("alsem", *extra)
+                   if not os.path.exists(os.path.join(os.path.dirname(exe), b))]
+        if not missing:
+            log(f"{rev} = {sha[:10]}: cached binary {exe}"
+                + (f" (and {', '.join(extra)} beside it)" if extra else ""))
             return exe, sha
         # ⟨TLS-34⟩ A gate that timed this commit's exact tree left its binary
         # (`record_tree_binary`): a landing's merge commit has the tree its gate
@@ -439,16 +445,18 @@ def cached_binary(repo, rev, logf):
         key = build_key(repo, git(repo, "rev-parse", "--verify", f"{sha}^{{tree}}"),
                         grammar_dir(repo, archive=True))
         seeded = key and os.path.join(root, "trees", key, "alsem")
-        if seeded and os.path.exists(seeded):
+        if "alsem" in missing and seeded and os.path.exists(seeded):
             os.makedirs(os.path.dirname(exe), exist_ok=True)
             tmp = exe + ".tmp"
             shutil.copy2(seeded, tmp)
             os.replace(tmp, exe)
             log(f"{rev} = {sha[:10]}: seeded from a gate's build of its tree ({key[:10]}…) "
                 f"(no build) at {exe}")
-            return exe, sha
+            missing.remove("alsem")
+            if not missing:
+                return exe, sha
         src = os.path.join(root, "build", "src")
-        log(f"{rev} = {sha[:10]}: building (once per commit) in {src}")
+        log(f"{rev} = {sha[:10]}: building {', '.join(missing)} (once per commit) in {src}")
         shutil.rmtree(src, ignore_errors=True)
         os.makedirs(src)
         # `tar -m`: every file gets the current time, so cargo rebuilds the
@@ -468,7 +476,8 @@ def cached_binary(repo, rev, logf):
             # The same clone `build_key` reads for the seeding key (review r1, Opus).
             env["TREE_SITTER_AL_PATH"] = grammar_dir(repo, archive=True)
         t0 = time.monotonic()
-        rc = subprocess.run(["cargo", "build", "--profile", "release-fast", "--bin", "alsem"],
+        bins = [a for b in missing for a in ("--bin", b)]
+        rc = subprocess.run(["cargo", "build", "--profile", "release-fast", *bins],
                             cwd=src, env=env, stdout=logf, stderr=subprocess.STDOUT).returncode
         if rc != 0:
             raise SystemExit(
@@ -476,9 +485,11 @@ def cached_binary(repo, rev, logf):
                 "change since that commit stops its build (node-types.sha256); then pass a "
                 "--base that builds against the current grammar, or skip the speed check.")
         os.makedirs(os.path.dirname(exe), exist_ok=True)
-        tmp = exe + ".tmp"
-        shutil.copy2(os.path.join(env["CARGO_TARGET_DIR"], "release-fast", "alsem"), tmp)
-        os.replace(tmp, exe)
+        for b in missing:
+            dst = os.path.join(os.path.dirname(exe), b)
+            tmp = dst + ".tmp"
+            shutil.copy2(os.path.join(env["CARGO_TARGET_DIR"], "release-fast", b), tmp)
+            os.replace(tmp, dst)
         log(f"  built in {time.monotonic() - t0:.0f} s")
         return exe, sha
 
