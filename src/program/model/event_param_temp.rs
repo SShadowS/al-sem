@@ -23,7 +23,9 @@
 //!      `Known(true)` source.
 
 use al_syntax::IdentifierFoldExt;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
+
+use crate::fxhash::{FxHashMap, FxHashSet};
 
 use super::workspace::{Model, ModelRoutine};
 use crate::program::body::features::{PCallee, PTempState};
@@ -53,8 +55,8 @@ fn known_temp() -> PTempState {
 
 /// Every row index of each object id, in row order: the `complete(p)` index
 /// (context-server design §6.8 L8).
-fn rows_by_object(routines: &[ModelRoutine]) -> HashMap<&str, Vec<usize>> {
-    let mut by_object: HashMap<&str, Vec<usize>> = HashMap::new();
+fn rows_by_object(routines: &[ModelRoutine]) -> FxHashMap<&str, Vec<usize>> {
+    let mut by_object: FxHashMap<&str, Vec<usize>> = FxHashMap::default();
     for (i, r) in routines.iter().enumerate() {
         by_object.entry(r.object_id.as_str()).or_default().push(i);
     }
@@ -74,13 +76,19 @@ pub fn prove_event_param_temps(resolved: &mut Model) {
             super::projection::last_per_id_borrowed(&rows, (0..routines.len()).map(Some).collect());
         // Resolved per `(row, site)`: the rows of a collided id share site ids, so
         // one row's resolved site must not vouch for another row's.
-        let resolved_sites: HashSet<(usize, &str)> = calls
-            .edges
-            .iter()
-            .filter(|e| e.to.is_some())
-            .map(|e| (e.from_ix.get(), e.callsite_id.as_str()))
-            .collect();
-        let mut raises: HashMap<&str, Vec<(usize, &str)>> = HashMap::new();
+        // FxHash (TLS-66): `complete` asks this for every call site of an object.
+        // Sized up front: at most one entry per edge (a filtered `collect`
+        // cannot know, so it grew and rehashed).
+        let mut resolved_sites: FxHashSet<(usize, &str)> =
+            FxHashSet::with_capacity_and_hasher(calls.edges.len(), Default::default());
+        resolved_sites.extend(
+            calls
+                .edges
+                .iter()
+                .filter(|e| e.to.is_some())
+                .map(|e| (e.from_ix.get(), e.callsite_id.as_str())),
+        );
+        let mut raises: FxHashMap<&str, Vec<(usize, &str)>> = FxHashMap::default();
         for e in &calls.edges {
             if let Some(to) = &e.to {
                 raises

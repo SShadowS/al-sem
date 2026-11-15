@@ -18,7 +18,6 @@
 //! [`ProgramBody::all_edges`] and [`EdgeView::all_edges`] are the only ways a
 //! reader walks both.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::engine::census::{Kind, Tally};
@@ -28,7 +27,7 @@ use crate::program::profile::{BuildProfile, DependencyBodies};
 use crate::program::resolve::edge::Histogram;
 use crate::program::resolve::full::{
     ClassifiedEdge, Coverage, FreshCoverage, ObligationId, ParenlessCalls, ProgramContext,
-    ProgramReport, SiteFacts,
+    ProgramReport, SiteFacts, SiteFactsByObligation,
 };
 
 /// What a build resolves. The scope is a meaning, not a retention choice: it
@@ -118,17 +117,14 @@ pub struct ProgramBody {
 /// caller, and a dependency caller is never a workspace routine).
 #[derive(Default)]
 pub struct SiteFactsMap {
-    own: HashMap<ObligationId, SiteFacts>,
-    shared: Arc<HashMap<ObligationId, SiteFacts>>,
+    own: SiteFactsByObligation,
+    shared: Arc<SiteFactsByObligation>,
 }
 
 impl SiteFactsMap {
     /// The workspace facts over the dependency facts.
     #[must_use]
-    pub fn new(
-        own: HashMap<ObligationId, SiteFacts>,
-        shared: Arc<HashMap<ObligationId, SiteFacts>>,
-    ) -> Self {
+    pub fn new(own: SiteFactsByObligation, shared: Arc<SiteFactsByObligation>) -> Self {
         SiteFactsMap { own, shared }
     }
 
@@ -169,14 +165,14 @@ impl SiteFactsMap {
 /// A borrowed [`SiteFactsMap`] (or a plain map, `shared: None`). `Copy`.
 #[derive(Clone, Copy)]
 pub struct SiteFactsRef<'r> {
-    own: &'r HashMap<ObligationId, SiteFacts>,
-    shared: Option<&'r HashMap<ObligationId, SiteFacts>>,
+    own: &'r SiteFactsByObligation,
+    shared: Option<&'r SiteFactsByObligation>,
 }
 
 impl<'r> SiteFactsRef<'r> {
     /// A view over one plain map.
     #[must_use]
-    pub fn of(map: &'r HashMap<ObligationId, SiteFacts>) -> Self {
+    pub fn of(map: &'r SiteFactsByObligation) -> Self {
         SiteFactsRef {
             own: map,
             shared: None,
@@ -286,7 +282,7 @@ impl<'r> EdgeView<'r> {
         primary_app_ref: AppRef,
         edges: &'r [ClassifiedEdge],
         dependency_body_edges: &'r [ClassifiedEdge],
-        site_facts: &'r HashMap<ObligationId, SiteFacts>,
+        site_facts: &'r SiteFactsByObligation,
     ) -> EdgeView<'r> {
         EdgeView {
             primary_app_ref,

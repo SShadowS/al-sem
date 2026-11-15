@@ -445,7 +445,9 @@ pub fn program_event_graph(
     let primary = ctx.primary_app_ref;
     let registry = ctx.registry();
     let index = SubscriberIndex::build(graph);
-    let mut subs_by_node: HashMap<&RoutineNodeId, Vec<&Subscription>> = HashMap::new();
+    // FxHash (TLS-66): keyed by routine id over the whole graph.
+    let mut subs_by_node: crate::fxhash::FxHashMap<&RoutineNodeId, Vec<&Subscription>> =
+        crate::fxhash::FxHashMap::default();
     for s in index.subscriptions() {
         subs_by_node.entry(&s.subscriber).or_default().push(s);
     }
@@ -454,7 +456,11 @@ pub fn program_event_graph(
     let in_model = |app: crate::program::node::AppRef| {
         model_guids.contains(&graph.apps.resolve(app).guid.to_ascii_lowercase())
     };
-    let mut routine_by_id = HashMap::new();
+    // Sized up front (TLS-66): at most one entry per graph routine.
+    let mut routine_by_id = crate::fxhash::FxHashMap::with_capacity_and_hasher(
+        graph.routines.len(),
+        Default::default(),
+    );
     for r in &graph.routines {
         routine_by_id.entry(&r.id).or_insert(r);
     }
