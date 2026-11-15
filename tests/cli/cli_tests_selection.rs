@@ -547,22 +547,46 @@ fn named_test_apps_and_unresolved_routines() {
 /// false) whose subscriber exits on it first thing.
 /// DISCRIMINATION (2026-11-05, cdo profile): `render`'s `same` never true
 /// fails it ("through dependency code: 301 tests (--tier dependency lists
-/// them)"); restored, passes.
+/// them)", the CLI spelling; since TLS-75 the answer comes over MCP and spells
+/// the hint `tier: "dependency"`); restored, passes.
 /// Run by `output_cdo::cdo_test_selection_ratchets` (the module `cdo-gate`
 /// runs).
 pub(crate) fn cdo_selection_ratchets() {
     let Some(ws) = crate::cdo::cdo_ws_or_enforce() else {
         return;
     };
-    let (human, code) = tests(&ws, &["--routine", "CDO E-Mail Handler::RunReportID"]);
-    assert_eq!(code, 0, "{human}");
+    // TLS-75: asked of the CDO server `output_cdo`'s tests share (one model, not a
+    // one-shot build per call); its answers are the CLI's stdout with the MCP
+    // surface's follow-up wording.
+    let mut id = 9100;
+    let mut ask = |args: Value| -> String {
+        id += 1;
+        let r = crate::output_cdo::with_cdo_server(&ws, |s| s.call(id, "alsem_tests", args));
+        let (stdout, stderr, exit) = crate::mcp_server::cli_bytes(&crate::mcp_server::envelope(&r));
+        assert_eq!(exit, 0, "{}", String::from_utf8_lossy(&stderr));
+        String::from_utf8(stdout).expect("utf8")
+    };
+    let json = |text: String| -> Value { serde_json::from_str(&text).expect("al-sem.tests JSON") };
+    // Every question first, then the release, so a failed check below still lets
+    // the last user close the server and check its exit.
+    let human = ask(json!({"routines": ["CDO E-Mail Handler::RunReportID"]}));
+    let telemetry = json(ask(
+        json!({"routines": ["CDO Telemetry::UpdateLastUpload"], "format": "json"}),
+    ));
+    let both = json(ask(json!({
+        "routines": ["CDO E-Mail Handler::RunReportID", "CDO Issue Document::IssueReminder"],
+        "format": "json"
+    })));
+    crate::output_cdo::release_cdo_server("cdo_test_selection_ratchets");
+    let tier_hint = al_sem::engine::follow_up::Input::TierDependency
+        .on(al_sem::engine::follow_up::Surface::Mcp);
     assert!(
         human.lines().any(|l| l.starts_with("[via-dependency] 376 tests in ")
             && l.contains(" — a broad set: each one's path enters dependency code that may run more than half of the program")
-            && l.ends_with("; --tier dependency lists them")),
+            && l.ends_with(&format!("; {tier_hint} lists them"))),
         "{human}"
     );
-    let v = json(&ws, &["--routine", "CDO Telemetry::UpdateLastUpload"]);
+    let v = telemetry;
     let names: Vec<&str> = v["runFirst"]
         .as_array()
         .unwrap()
@@ -582,15 +606,7 @@ pub(crate) fn cdo_selection_ratchets() {
     ] {
         assert!(names.iter().any(|x| x.starts_with(n)), "{n}: {names:?}");
     }
-    let v = json(
-        &ws,
-        &[
-            "--routine",
-            "CDO E-Mail Handler::RunReportID",
-            "--routine",
-            "CDO Issue Document::IssueReminder",
-        ],
-    );
+    let v = both;
     let local: Vec<&Value> = v["runFirst"].as_array().unwrap().iter().collect();
     assert_eq!(local.len(), 68);
     let codeunits: std::collections::BTreeSet<&str> = local
