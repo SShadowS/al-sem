@@ -1,3 +1,10 @@
+# ⟨TLS-62⟩ CHANGELOG.md merges keep both sides' new entries (scripts/changelog-merge,
+# the rule scripts/land uses too); any other conflict stays a conflict. Active only
+# where the driver is configured (see `scripts/changelog-merge --help`); without
+# it git merges CHANGELOG.md as before. Not `merge=union`: measured, that drops the
+# blank line before a heading and merges a line both sides changed.
+CHANGELOG.md merge=changelog
+
 # Shell scripts run via Git Bash on Windows; force LF so autocrlf
 # (core.autocrlf=true on this checkout) does not corrupt the shebang line.
 scripts/** text eol=lf

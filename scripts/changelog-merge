@@ -1,0 +1,193 @@
+#!/usr/bin/env bash
+# scripts/changelog-merge — merge three versions of CHANGELOG.md the way the
+# lanes always resolved it by hand: keep both sides' new entries.
+#
+# ⟨TLS-62⟩ One rule, two users: `scripts/land` (which had it as `union_changelog`,
+# TLS-59) and git itself, as the merge driver `.gitattributes` names for
+# CHANGELOG.md, so a lane's rebase onto master merges CHANGELOG as a landing does.
+# git's built-in `merge=union` was measured against the 98 CHANGELOG merges on
+# master since 2026-11-01 and not used: it leaves no blank line before the next
+# entry's heading (62 of 70 conflicting merges), and it also merges a conflict
+# that changes a line both sides had, which this script refuses (one case in 70).
+#
+# The rule: a conflict whose base part is empty (both sides only added lines at
+# the same place) keeps both sides' lines, ours first, with a blank line between
+# an entry's last line and a heading that meet. Any other conflict is refused.
+# Lines outside the conflicts are git merge-file's own three-way merge.
+#
+#   changelog-merge BASE OURS THEIRS OUT
+#       Write the merged text to OUT and exit 0; on a refusal print the reason
+#       on stdout and exit 1 (OUT is then not a result). scripts/land's form.
+#   changelog-merge --driver BASE OURS THEIRS
+#       A git merge driver: the result replaces OURS. On a refusal OURS gets
+#       git's ordinary conflicted merge (markers included) and the exit is 1,
+#       so git reports the conflict as it would without this driver.
+#       Configure once per repository (worktrees share it):
+#         git config merge.changelog.name "keep both sides' CHANGELOG entries"
+#         git config merge.changelog.driver 'bash scripts/changelog-merge --driver %O %A %B'
+#       Without that config git ignores the attribute and merges as before.
+#   changelog-merge --self-test
+#       Run the built-in cases; exit 0 when all pass.
+set -euo pipefail
+
+usage() {
+    sed -n '/^#   changelog-merge BASE/,/^#       Run the built-in/p' "$0" | sed 's/^# \{0,1\}//'
+}
+
+# merge BASE OURS THEIRS OUT: the rule; on a refusal the reason on stdout, exit 1.
+merge() {
+    local rc=0
+    git merge-file --diff3 -p -L ours -L base -L theirs "$2" "$1" "$3" >"$4.diff3" 2>/dev/null || rc=$?
+    # Its exit is the conflict count; above 127 an error (binary content, ...).
+    if ((rc > 127)); then
+        echo "git merge-file cannot merge CHANGELOG.md (exit $rc)"
+        return 1
+    fi
+    # Two entries added at the same place meet as "- last line" + "### Heading":
+    # a blank line goes between (CHANGELOG.md has one before every heading).
+    if ! awk '
+        state == 0 && $0 == "<<<<<<< ours" { state = 1; no = 0; nt = 0; next }
+        state == 0 { print; next }
+        state == 1 && $0 == "||||||| base" { state = 2; next }
+        state == 1 { o[++no] = $0; next }
+        state == 2 && $0 == "=======" { state = 3; next }
+        state == 2 { bad = 1; exit }
+        state == 3 && $0 == ">>>>>>> theirs" {
+            for (i = 1; i <= no; i++) print o[i]
+            if (no > 0 && o[no] != "" && nt > 0 && t[1] ~ /^#/) print ""
+            for (i = 1; i <= nt; i++) print t[i]
+            state = 0
+            next
+        }
+        state == 3 { t[++nt] = $0; next }
+        END { if (bad || state != 0) exit 1 }' "$4.diff3" >"$4"; then
+        rm -f "$4.diff3"
+        echo "a CHANGELOG.md conflict changes a line both sides had (not only additions): resolve it by hand"
+        return 1
+    fi
+    rm -f "$4.diff3"
+    # A marker the awk did not recognise (CRLF line ends, other labels) must not
+    # be committed.
+    if grep -qE '^(<<<<<<<|\|\|\|\|\|\|\||>>>>>>>)( |$)' "$4"; then
+        echo "CHANGELOG.md still holds a conflict marker after the merge: resolve it by hand"
+        return 1
+    fi
+}
+
+# driver BASE OURS THEIRS: git's merge driver contract (result in OURS).
+driver() {
+    local out why
+    out=$(mktemp "${2}.changelog-merge.XXXXXX")
+    if why=$(merge "$1" "$2" "$3" "$out"); then
+        mv "$out" "$2"
+        return 0
+    fi
+    rm -f "$out"
+    echo "changelog-merge: $why" >&2
+    # git's ordinary conflicted merge, so the user sees the usual markers.
+    git merge-file -L ours -L base -L theirs "$2" "$1" "$3" >/dev/null 2>&1 || true
+    return 1
+}
+
+self_test() {
+    local d fails=0
+    d=$(mktemp -d)
+    trap 'rm -rf "$d"' RETURN
+    check() { # name, condition result
+        if [[ "$2" == ok ]]; then echo "ok   $1"; else echo "FAIL $1: $2"; fails=$((fails + 1)); fi
+    }
+    printf '# Changelog\n\n## [Unreleased]\n\n### Fixed (A)\n\n- old\n' >"$d/base"
+    printf '# Changelog\n\n## [Unreleased]\n\n### Added (M)\n\n- m entry\n\n### Fixed (A)\n\n- old\n' >"$d/ours"
+    printf '# Changelog\n\n## [Unreleased]\n\n### Added (B)\n\n- b entry\n\n### Fixed (A)\n\n- old\n' >"$d/theirs"
+    # 1. Additions at the same place: both kept, ours first, a blank line between.
+    if merge "$d/base" "$d/ours" "$d/theirs" "$d/out" >/dev/null &&
+        [[ "$(cat "$d/out")" == "$(printf '# Changelog\n\n## [Unreleased]\n\n### Added (M)\n\n- m entry\n\n### Added (B)\n\n- b entry\n\n### Fixed (A)\n\n- old')" ]]; then
+        check "additions on both sides keep both, ours first" ok
+    else
+        check "additions on both sides keep both, ours first" "got: $(cat "$d/out" 2>/dev/null)"
+    fi
+    # 1b. Ours' added part ends on an entry line and theirs' starts with a
+    # heading (one side adds a line to the list, the other a new section at the
+    # same place): the rule puts a blank line between. In --diff3 mode git keeps
+    # each side's own trailing blank inside the conflict, so the usual "both add
+    # a whole entry" case (1) never needs it; this shape does.
+    printf '### Fixed (A)\n\n- old\n' >"$d/base1b"
+    printf '### Fixed (A)\n\n- old\n- m\n' >"$d/ours1b"
+    printf '### Fixed (A)\n\n- old\n### Added (B)\n' >"$d/theirs1b"
+    if merge "$d/base1b" "$d/ours1b" "$d/theirs1b" "$d/out1b" >/dev/null &&
+        [[ "$(cat "$d/out1b")" == "$(printf '### Fixed (A)\n\n- old\n- m\n\n### Added (B)')" ]]; then
+        check "a heading after an entry gets its blank line" ok
+    else
+        check "a heading after an entry gets its blank line" "got: $(cat "$d/out1b" 2>/dev/null)"
+    fi
+    # 2. A line both sides changed: refused.
+    printf '# Changelog\n\n## [Unreleased]\n\n### Fixed (A)\n\n- old, ours\n' >"$d/ours2"
+    printf '# Changelog\n\n## [Unreleased]\n\n### Fixed (A)\n\n- old, theirs\n' >"$d/theirs2"
+    if merge "$d/base" "$d/ours2" "$d/theirs2" "$d/out2" >"$d/why2"; then
+        check "a line both sides changed is refused" "it merged"
+    elif grep -q 'changes a line both sides had' "$d/why2"; then
+        check "a line both sides changed is refused" ok
+    else
+        check "a line both sides changed is refused" "reason: $(cat "$d/why2")"
+    fi
+    # 3. CRLF line ends: the awk sees no marker it knows, the marker check refuses.
+    sed 's/$/\r/' "$d/ours2" >"$d/ours3"
+    sed 's/$/\r/' "$d/theirs2" >"$d/theirs3"
+    sed 's/$/\r/' "$d/base" >"$d/base3"
+    if merge "$d/base3" "$d/ours3" "$d/theirs3" "$d/out3" >"$d/why3"; then
+        check "a conflict it cannot read (CRLF) is refused" "it merged"
+    else
+        check "a conflict it cannot read (CRLF) is refused" ok
+    fi
+    # 4. No conflict: the plain three-way merge.
+    printf '# Changelog\n\n## [Unreleased]\n\n### Fixed (A)\n\n- old\n- new, theirs\n' >"$d/theirs4"
+    if merge "$d/base" "$d/base" "$d/theirs4" "$d/out4" >/dev/null && cmp -s "$d/out4" "$d/theirs4"; then
+        check "no conflict merges as git does" ok
+    else
+        check "no conflict merges as git does" "got: $(cat "$d/out4" 2>/dev/null)"
+    fi
+    # 5. Driver mode: a refusal leaves git's conflict markers in OURS, exit 1.
+    cp "$d/ours2" "$d/ours5"
+    if driver "$d/base" "$d/ours5" "$d/theirs2" 2>/dev/null; then
+        check "the driver leaves a refused conflict to git" "exit 0"
+    elif grep -q '^<<<<<<< ours' "$d/ours5" && grep -q '^>>>>>>> theirs' "$d/ours5"; then
+        check "the driver leaves a refused conflict to git" ok
+    else
+        check "the driver leaves a refused conflict to git" "no markers in OURS"
+    fi
+    # 6. Driver mode: a merge writes the result into OURS, exit 0.
+    cp "$d/ours" "$d/ours6"
+    if driver "$d/base" "$d/ours6" "$d/theirs" && cmp -s "$d/ours6" "$d/out"; then
+        check "the driver writes the merge into OURS" ok
+    else
+        check "the driver writes the merge into OURS" "exit or content differs"
+    fi
+    if ((fails)); then
+        echo "changelog-merge: self-test FAILED ($fails)"
+        return 1
+    fi
+    echo "changelog-merge: self-test passed"
+}
+
+case "${1:-}" in
+-h | --help)
+    usage
+    ;;
+--self-test)
+    self_test
+    ;;
+--driver)
+    [[ $# -eq 4 ]] || {
+        usage >&2
+        exit 2
+    }
+    driver "$2" "$3" "$4"
+    ;;
+*)
+    [[ $# -eq 4 ]] || {
+        usage >&2
+        exit 2
+    }
+    merge "$1" "$2" "$3" "$4"
+    ;;
+esac

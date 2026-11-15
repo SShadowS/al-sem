@@ -171,6 +171,8 @@ mod batch_records;
 mod before_after;
 #[cfg(unix)]
 mod cdo_slot;
+#[cfg(unix)]
+mod changelog_merge;
 mod cli_11b_policy_collision;
 mod cli_a_html_differential;
 mod cli_a_json_differential;
