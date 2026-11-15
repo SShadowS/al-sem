@@ -322,28 +322,28 @@ fn on_mark(name: &'static str) {
 /// (private fields), estimates from a walk: expressions, statements and blocks inline (len ×
 /// size), the expressions' string and Vec heap (capacities), the blocks' item Vecs; the rest
 /// of the measured IR drop is the remainder (statement heap, side tables, Vec slack).
-/// ENG-89: the dependency site facts (`HashMap<ObligationId, SiteFacts>`) split by part: the
-/// map's table (slots x (key + value + 1 control byte)), the keys' heap (the span's
-/// file path; caller ids are shared strings), and per `SiteFacts` field its heap (capacities)
-/// and how many sites use it. Then the measured drop of the whole map.
-fn split_site_facts(m: al_sem::program::resolve::full::SiteFactsByObligation) {
+/// ENG-89: the dependency site facts split by part, and per `SiteFacts` field its heap
+/// (capacities) and how many sites use it; then the measured drop of the whole. Since ENG-92
+/// they are a `DepSiteFacts`: a `(u32, SiteFacts)` per site plus a hash → index map, the keys
+/// living in the edges (the key heap below is the edges', not freed here). The layout figure is
+/// an estimate from `len` (exact capacities are private); the measured drop is the number.
+fn split_site_facts(m: al_sem::program::resolve::full::DepSiteFacts) {
     use al_sem::program::resolve::edge::OpenBound;
     use al_sem::program::resolve::full::{ObligationId, SiteFacts};
-    let (k, v) = (size_of::<ObligationId>(), size_of::<SiteFacts>());
     let mib = |b: usize| b as f64 / 1_048_576.0;
-    // `capacity()` is what the table holds before it grows: 7/8 of its slots (hashbrown,
-    // tables of 8+ slots). The allocation is every slot plus a control byte each (+16).
-    let slots = if m.capacity() == 0 {
+    let slots = if m.is_empty() {
         0
     } else {
-        (m.capacity() * 8 / 7).next_power_of_two()
+        (m.len() * 8 / 7).next_power_of_two()
     };
-    let table = slots * (k + v) + slots + 16;
+    let table = m.len() * size_of::<(u32, SiteFacts)>() + slots * (size_of::<(u64, u32)>() + 1);
     println!(
-        "  site_facts: len {} capacity {} slots {slots}; size_of ObligationId {k}, SiteFacts {v}, \
-         Option<ReceiverFact> {}; table {:.2} MiB",
+        "  site_facts: len {} spilled {}; size_of SiteFacts {}, (u32, SiteFacts) {}, \
+         Option<ReceiverFact> {}; layout about {:.2} MiB",
         m.len(),
-        m.capacity(),
+        m.spilled(),
+        size_of::<SiteFacts>(),
+        size_of::<(u32, SiteFacts)>(),
         size_of::<Option<al_sem::program::resolve::full::ReceiverFact>>(),
         mib(table)
     );
@@ -362,7 +362,7 @@ fn split_site_facts(m: al_sem::program::resolve::full::SiteFactsByObligation) {
             None => f.push((name, usize::from(used), heap)),
         };
     let s = |x: &Option<String>| x.as_ref().map_or(0, String::capacity);
-    for (key, sf) in &m {
+    for (key, sf) in m.iter() {
         let span = match key {
             ObligationId::CallSite { span, .. } => (variants.entry("CallSite"), Some(span)),
             ObligationId::Background { span, .. } => (variants.entry("Background"), Some(span)),
@@ -564,7 +564,8 @@ fn split_site_facts(m: al_sem::program::resolve::full::SiteFactsByObligation) {
         mib(boxes)
     );
     println!(
-        "  key span.unit heap {:.2} MiB over {} distinct files; distinct build contexts {}",
+        "  key span.unit heap (in the edges since ENG-92) {:.2} MiB over {} distinct files; \
+         distinct build contexts {}",
         mib(unit_heap),
         units.len(),
         contexts.len()
@@ -576,7 +577,7 @@ fn split_site_facts(m: al_sem::program::resolve::full::SiteFactsByObligation) {
             mib(*heap)
         );
     }
-    let est = table + boxes + unit_heap + f.iter().map(|e| e.2).sum::<usize>();
+    let est = table + boxes + f.iter().map(|e| e.2).sum::<usize>();
     let (b, _) = step("session.dep_resolution.site_facts", m);
     println!(
         "    remainder after the estimates (unwalked heap, shared ids) {:>9.2} MiB",
@@ -2253,13 +2254,15 @@ fn resident_mode(ws: PathBuf, routine: String, low_mem: bool) {
                         size_of::<ClassifiedEdge>(),
                         size_of::<Route>()
                     );
-                    step("session.dep_resolution.edges", d.edges);
+                    // ENG-92: the site facts hold a clone of the edges' `Arc`, so they drop
+                    // first, or the edges' bytes would be counted as theirs.
                     match Arc::try_unwrap(d.site_facts) {
                         Ok(m) => split_site_facts(m),
                         Err(shared) => {
                             step("session.dep_resolution.site_facts (shared Arc)", shared);
                         }
                     }
+                    step("session.dep_resolution.edges", d.edges);
                     step("session.dep_resolution.parenless", d.parenless_calls);
                 }
                 Err(d) => {

@@ -358,6 +358,42 @@ fn file_add_remove_rename(mode: MemoryMode) {
     assert_eq!(r.dependency_files_resolved, 1);
 }
 
+/// ENG-92: after a refresh that re-resolves one dependency file and keeps the others
+/// (`Assembly::fresh` and `kept`), every dependency edge whose site facts a cold build finds
+/// is still found, and equal: the dependency facts reach their key through the edges, and a
+/// miss would read as "no facts" (never a quiet wrong answer, mantra 5).
+fn dependency_site_facts_hit_after_a_partial_refresh(mode: MemoryMode) {
+    let ws = base_ws();
+    let mut s = WorkspaceSession::with_mode(mode);
+    refresh_and_compare(&mut s, &ws, "cold");
+    ws.write(
+        "Impl2.Codeunit.al",
+        "codeunit 50106 \"Impl2\" implements \"Dep I\"\n{\n    procedure M()\n    begin\n    end;\n}\n",
+    );
+    let r = refresh_and_compare(&mut s, &ws, "second implementer");
+    assert_eq!(
+        (r.dependency_files, r.dependency_files_resolved),
+        (DEP_FILES, 1),
+        "precondition: one dependency file fresh, the others kept"
+    );
+    let inputs = ws.inputs();
+    let session = s.refresh_program(&inputs).expect("session program");
+    let cold = ResolvedProgram::build(&inputs, ProgramScope::CrossApp).expect("cold program");
+    let mut with_facts = 0;
+    for e in cold.body().dependency_body_edges() {
+        if let Some(want) = cold.body().site_facts.get(&e.obligation_id) {
+            with_facts += 1;
+            assert_eq!(
+                session.body().site_facts.get(&e.obligation_id),
+                Some(want),
+                "{:?}",
+                e.obligation_id
+            );
+        }
+    }
+    assert!(with_facts > 0, "precondition: dependency sites carry facts");
+}
+
 /// The cold build's dependency-body edges, as text: what a whole
 /// re-resolution of the dependency bodies gives for the workspace on disk.
 fn dep_edges(ws: &Ws) -> String {
@@ -1593,6 +1629,7 @@ in_both_modes!(
     newline_before_a_callee_moves_every_witness,
     declaration_changes_reresolve_everything,
     file_add_remove_rename,
+    dependency_site_facts_hit_after_a_partial_refresh,
     first_implementer_seen_by_dependency_dispatch,
     implementer_method_changes_under_an_unchanged_implements_list,
     extension_added_and_removed,
