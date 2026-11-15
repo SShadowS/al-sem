@@ -95,6 +95,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   which leaves `output_cdo` the peak; TLS-75 asks whether its tests, which each build the
   same CDO model, can share one engine.
 
+### Changed (TLS-75: `output_cdo`'s tests share one CDO server, ~12 GB less at its peak)
+
+- **What it was:** a process census of `output_cdo` alone (the gate's command, every 2 s,
+  2026-11-15) found three `alsem mcp` servers on the same CDO workspace with the same
+  arguments, each with its own engine child of 5.7-6.1 GB (`cdo_answers()`,
+  `cdo_explain_digest_and_prove_give_one_table_answer`, `cdo_round2_size_ratchets`), plus
+  one-shot `alsem tests` and `alsem prove` calls building the model again: 21,308 MiB in
+  `alsem` processes at the phase's peak.
+- **Now:** one shared server for the phase (`output_cdo::with_cdo_server`), used by those three
+  and by the CDO test-selection and commit-sites ratchets in place of their one-shot calls.
+  Each user calls `release_cdo_server` once; the last release closes the server and checks it
+  exits cleanly, as each server did before. The answers are the CLI's stdout (the MCP contract
+  tests pin that, on fixtures); the one human hint whose spelling the MCP surface changes
+  (`tier: "dependency"` for `--tier dependency`) is built from
+  `follow_up::Input::TierDependency`. Limits: on CDO the `alsem tests` and `alsem prove
+  may-commit` one-shot paths no longer run (the impact ratchets still run one-shot calls; the
+  fixture tests keep theirs); the selection ratchet's empty-stderr check now reads the
+  envelope's stderr, which holds what the command writes through its job output, not a
+  warning the engine prints itself (`eprintln!`, the logger), which the one-shot check also
+  caught (green on CDO; the rest is TLS-78); its hint is no longer a literal CLI spelling; under a
+  filter that runs fewer users, or after a panic before a release, the server closes at
+  process exit without the clean-exit check.
+- Measured:
+  - `output_cdo` alone, back to back (`cdo` profile, load ~80-130 from outside the
+    container): `alsem` processes at the peak 21,308 -> 9,209 MiB (one front end, a 7.3 GB
+    production engine and the 1.9 GB test universe); 22 tests pass; 208.6 s -> 201.8 s.
+  - In the gate's own terms (TLS-74's per-phase line): the landing gate on master `e708f1f6`
+    had `output_cdo` at 23,433 MiB (container), the gate 22,418, 8 `alsem` processes;
+    `cdo-gate --only output` on this branch: 11,124 MiB, the gate 9,976, 3 processes, 22
+    passed. Its 211 s against the landing gates' 143-189 s comes from runs at other times
+    under other load; the back-to-back pair above is the like-for-like time.
+
 ### Fixed (TLS-73: `scripts/perf-probe` checks what samply needs, not one small buffer)
 
 - **The hole:** after the 2026-11-15 redeploy (CAP_PERFMON) `scripts/perf-probe` exited 0

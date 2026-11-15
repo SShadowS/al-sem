@@ -276,7 +276,63 @@ fn cdo_query_effects_writes_agree_with_the_cone() {
     assert_eq!(types, ["DB_DELETE", "DB_INSERT"], "prove's evidence");
 }
 
-/// Every routine's answers off one server, once per process; `None` without CDO.
+/// TLS-75: the tests that ask the CDO model, one server for all of them. Each
+/// `alsem mcp` server builds its own engine child (~5.9 GB on CDO): `output_cdo`
+/// held three servers' models plus one-shot `alsem tests` calls at once (census
+/// 2026-11-15: 21.3 GB in `alsem` processes at the phase's peak). Every user is
+/// in [`CDO_SERVER_USERS`] and calls [`release_cdo_server`] once when done; the
+/// last release closes the server and checks it exits cleanly. Under a filter that
+/// runs fewer users the server closes at process exit, unchecked.
+const CDO_SERVER_USERS: &[&str] = &[
+    "cdo_answers",
+    "cdo_explain_digest_and_prove_give_one_table_answer",
+    "cdo_round2_size_ratchets",
+    "cdo_test_selection_ratchets",
+    "cdo_run_report_id_lists_calc_sales_disc_commits",
+];
+
+static CDO_SERVER: OnceLock<std::sync::Mutex<(Option<Server>, usize)>> = OnceLock::new();
+
+/// Run `f` on the shared CDO server (started on first use), holding it for the
+/// call only; calls from parallel tests take turns.
+pub(crate) fn with_cdo_server<T>(ws: &std::path::Path, f: impl FnOnce(&mut Server) -> T) -> T {
+    let cell = CDO_SERVER.get_or_init(|| {
+        std::sync::Mutex::new((Some(Server::ready(ws, None)), CDO_SERVER_USERS.len()))
+    });
+    let mut guard = cell
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    f(guard
+        .0
+        .as_mut()
+        .expect("the shared CDO server is not closed yet"))
+}
+
+/// One user (`who`, from [`CDO_SERVER_USERS`]) is done with the shared server.
+/// Read every answer's bytes first (`cli_bytes`): the last release deletes the
+/// server's output folder, where a long answer is spilled.
+pub(crate) fn release_cdo_server(who: &str) {
+    assert!(
+        CDO_SERVER_USERS.contains(&who),
+        "{who} is not a CDO server user"
+    );
+    let Some(cell) = CDO_SERVER.get() else {
+        return;
+    };
+    let mut guard = cell
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    guard.1 -= 1;
+    if guard.1 == 0 {
+        let server = guard.0.take().expect("closed once");
+        assert!(
+            server.finish().success(),
+            "the shared CDO server exits cleanly"
+        );
+    }
+}
+
+/// Every routine's answers off the shared server, once per process; `None` without CDO.
 pub(crate) fn cdo_answers() -> Option<&'static CdoAnswers> {
     static ANSWERS: OnceLock<Option<CdoAnswers>> = OnceLock::new();
     ANSWERS
@@ -286,13 +342,12 @@ pub(crate) fn cdo_answers() -> Option<&'static CdoAnswers> {
             // (see `process_scratch`; ~12,000 files leaked per run before).
             let dump = crate::process_scratch("output-cdo-dependency-source");
             dump_dependency_source(&ws, &dump);
-            let mut server = Server::ready(&ws, None);
             let mut answers = BTreeMap::new();
             let mut id = 1000;
             for (label, sel, qsel, table, wtable) in ROUTINES {
                 for (call, tool, args) in calls(sel, qsel, table, wtable) {
                     id += 1;
-                    let result = server.call(id, tool, args.clone());
+                    let result = with_cdo_server(&ws, |s| s.call(id, tool, args.clone()));
                     let env = envelope(&result);
                     let (stdout, stderr, exit) = cli_bytes(&env);
                     assert_eq!(
@@ -311,7 +366,7 @@ pub(crate) fn cdo_answers() -> Option<&'static CdoAnswers> {
                     );
                 }
             }
-            assert!(server.finish().success(), "the server exits cleanly");
+            release_cdo_server("cdo_answers");
             Some(CdoAnswers { ws, dump, answers })
         })
         .as_ref()
@@ -614,11 +669,10 @@ fn cdo_explain_digest_and_prove_give_one_table_answer() {
         "Resource",
         "Territory",
     ];
-    let mut server = Server::ready(&ws, None);
     let mut id = 5000;
     let mut ask = |tool: &str, args: Value| -> Value {
         id += 1;
-        let result = server.call(id, tool, args);
+        let result = with_cdo_server(&ws, |s| s.call(id, tool, args));
         let (stdout, stderr, exit) = cli_bytes(&envelope(&result));
         assert_eq!(exit, 0, "{tool}: {}", String::from_utf8_lossy(&stderr));
         serde_json::from_slice(&stdout).expect("JSON")
@@ -702,7 +756,7 @@ fn cdo_explain_digest_and_prove_give_one_table_answer() {
             assert_eq!(key(&da[i]), key(pr), "{label} digest vs prove: {t}");
         }
     }
-    assert!(server.finish().success());
+    release_cdo_server("cdo_explain_digest_and_prove_give_one_table_answer");
 }
 
 // ---------------------------------------------------------------------------
