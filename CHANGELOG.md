@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (ENG-81: ENG-80's model-build cost won back)
+
+- **What ENG-80 cost.** The landing gate's speed phase measured the CDO model build (the
+  resident `alsem mcp` path) at CPU x1.36 against master `630dd171` in one sample that started at
+  load 20; a quiet re-run gave x1.17. Re-measured for this task with `cdo-speed --rounds 1`, the
+  two binaries given: x1.08 and x1.14 at load ~7, x1.13 (wall x1.20) at load under 6. Peak memory
+  x1.06–1.08. The CLI `alsem analyze` build barely moved (CPU median 132.1 → 133.4 s over three
+  alternating pairs).
+- **Where it went** (span traces of one resident build per side): a little in each parallel part
+  that parses, lowers and resolves, no single span. Three per-site costs, all fixed:
+  - the lowerer's test of whether a call holds a `#if` walked the call's whole argument subtree,
+    allocating per node, and every enclosing call walked it again. Now one cursor walk per file
+    collects the sorted start bytes of the build-varying preproc nodes, and the test is a binary
+    search (tree ranges nest). A file without `#if` pays nothing;
+  - `resolve_bare_with_args` ran its extension-base and table scope checks for every bare call. In
+    a session each one is a recorded index query, which is why the resident path paid more than
+    the CLI. Only the `Error` rule's twelve names read `scope_complete`, so only they run them now;
+  - the verdict-name test compared a folded copy of each bare name; it now compares in place.
+- **After** (base `630dd171`, load under 6): build CPU x1.065 and x1.032, wall x1.02 and x1.01;
+  with the pair swapped (the fix as base) x1.00. Against ENG-80 at the same load the build loses
+  about 17 s of CPU (168 → ~150 s). Peak memory stays x1.06–1.07 (ENG-80's retained bindings and
+  wrapper lists; not this change). Answers are byte-identical: the task gate and every golden, the
+  CDO `fingerprint` and `analyze` outputs against ENG-80's binary, and `cdo-gate --only
+  harness,l4,output`.
+- **Measurement note.** At load ~9 (just under `cdo-speed`'s waiting limit of 10) the second
+  build of a pair read about 15% high: this fix against ENG-80 showed x1.14, while the same fix
+  against itself read x0.996 and with the pair swapped x1.001. A single warm-up sample between two
+  different binaries is load-sensitive at that level.
+
 ### Added (TLS-59: `scripts/land`, the landing chain as one command)
 
 - `scripts/land [--push] [--dry-run] [--name <x>] [--worktree <dir>] <branch>...` runs
