@@ -25,8 +25,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   report says VOID, exit 1). The working tree's binaries are copied into the run's own
   `head-bin/` under a lock, so a second run rebuilding that target cannot swap them; the
   census runs a copy of each side's test executable built before the slot (never `cargo
-  test` at measure time, which would rebuild a working tree edited meanwhile); one run
-  per output folder (a lock; the default folder name carries the PID).
+  test` at measure time, which would rebuild a working tree edited meanwhile), built and
+  copied under a lock on its target; `--out` is made absolute; one run per output folder
+  (a lock; the default folder name carries the PID).
 - It measures inside the CDO slot (`scripts/cdo-slot`, bound to itself; `--slot-timeout`),
   base first, then head: `alsem fingerprint`, `analyze` (primary and `--scope all`),
   `aldump --program-call-graph-stats`, and with `--census` the ENG14 untrusted census
