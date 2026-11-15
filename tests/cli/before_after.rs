@@ -16,6 +16,10 @@ const SCRIPTS: [&str; 3] = ["cdo-before-after", "cdo-speed", "cdo-slot"];
 /// fails like a moved ratchet would. Every call is logged.
 const CARGO: &str = r#"#!/bin/sh
 echo "cargo $* | $CARGO_TARGET_DIR | $PWD" >> "$BA_LOG"
+for f in "$CARGO_TARGET_DIR"/.before-after*.lock; do
+  [ -e "$f" ] || continue
+  if flock -n "$f" true; then echo "lock $(basename "$f") free"; else echo "lock $(basename "$f") held"; fi >> "$BA_LOG"
+done
 [ -n "$BA_CARGO_FAIL" ] && exit 1
 side=$(cat side.txt)
 case "$1" in
@@ -388,19 +392,30 @@ fn before_after_reports_what_moved_and_caches_both_binaries() {
 /// of its own (`env = dict(os.environ)`) -> it builds into the main target and
 /// the run exits 1 (no binary in `before-after-head`); r2 (review r1, sol): it
 /// returning the shared target instead of its copy (`return built`) -> the
-/// head's binary path is not `out/head-bin/alsem`.
+/// head's binary path is not `out/head-bin/alsem`; r4 (review r3, sol): `out`
+/// not made absolute -> the relative `--out`'s census executable is not found
+/// (exit 1); the census build's lock not taken -> the stub reports
+/// `.before-after-census.lock` free; the head build's lock not taken -> it
+/// reports `.before-after.lock` free.
 #[test]
 fn before_after_head_defaults_to_the_working_tree() {
     let t = Ba::new();
     std::fs::write(t.path("repo/side.txt"), "C\n").unwrap();
     std::fs::write(t.path("repo/census.txt"), "untrusted in app X: 7\n").unwrap();
-    let out = t.out("out");
-    let (code, text) = t.run(&["--census", "--out", &out, &t.c2], &[]);
+    // A relative --out (the run's folder is the repo).
+    let (code, text) = t.run(&["--census", "--out", "out", &t.c2], &[]);
     assert_eq!(code, Some(0), "{text}");
+    std::fs::rename(t.path("repo/out"), t.path("out")).unwrap();
     assert_eq!(
         t.report("out")["census"]["added"],
         json!(["ENG14-CENSUS untrusted in app X: 7"])
     );
+    // Both working-tree builds ran holding their target's lock (review r3, sol).
+    let log = t.log();
+    for lock in [".before-after.lock", ".before-after-census.lock"] {
+        assert!(log.contains(&format!("lock {lock} held")), "{lock}: {log}");
+    }
+    assert!(!log.contains(" free"), "{log}");
     let head_target = format!("| {} |", t.path("target/before-after-head").display());
     assert!(
         t.log()
@@ -414,7 +429,7 @@ fn before_after_head_defaults_to_the_working_tree() {
     // Measured from this run's own copy, not the shared target (review r1, sol).
     assert_eq!(
         rep["head"]["alsem"],
-        json!(t.path("out/head-bin/alsem").to_str().unwrap()),
+        json!(t.path("repo/out/head-bin/alsem").to_str().unwrap()),
     );
     assert_eq!(rep["findings"]["analyze-primary"]["moved"], json!({}));
 }

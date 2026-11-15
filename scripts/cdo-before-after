@@ -182,25 +182,31 @@ def build_census(name, src, repo, logf, out):
         env["CARGO_TARGET_DIR"] = os.path.join(os.path.dirname(src), "target")
         env.setdefault("TREE_SITTER_AL_PATH", speed.grammar_dir(repo, archive=True))
     log(f"{name}: building the census test in {src}")
-    r = subprocess.run(["cargo", "test", "--profile", "cdo", "-p", "al-sem", "--lib",
-                        "--no-run", "--message-format=json"], cwd=src, env=env,
-                       stdout=subprocess.PIPE, stderr=logf, text=True)
-    exes = []
-    for line in r.stdout.splitlines():
-        try:
-            msg = json.loads(line)
-        except ValueError:
-            continue
-        if (msg.get("reason") == "compiler-artifact" and msg.get("executable")
-                and msg.get("profile", {}).get("test")
-                and "lib" in msg.get("target", {}).get("kind", [])):
-            exes.append(msg["executable"])
-    if r.returncode != 0 or len(exes) != 1:
-        fail(f"{name}: the census test's build failed (exit {r.returncode}, "
-             f"{len(exes)} lib test executables; log: {logf.name})")
-    kept = os.path.join(out, "census-bin", name)
-    os.makedirs(os.path.dirname(kept), exist_ok=True)
-    shutil.copy2(exes[0], kept)
+    # Build and copy under one lock on the target (review r3, sol): another run
+    # rebuilding it between this build and the copy would swap the executable.
+    target = env.get("CARGO_TARGET_DIR") or speed.target_dir(repo)
+    os.makedirs(target, exist_ok=True)
+    with open(os.path.join(target, ".before-after-census.lock"), "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        r = subprocess.run(["cargo", "test", "--profile", "cdo", "-p", "al-sem", "--lib",
+                            "--no-run", "--message-format=json"], cwd=src, env=env,
+                           stdout=subprocess.PIPE, stderr=logf, text=True)
+        exes = []
+        for line in r.stdout.splitlines():
+            try:
+                msg = json.loads(line)
+            except ValueError:
+                continue
+            if (msg.get("reason") == "compiler-artifact" and msg.get("executable")
+                    and msg.get("profile", {}).get("test")
+                    and "lib" in msg.get("target", {}).get("kind", [])):
+                exes.append(msg["executable"])
+        if r.returncode != 0 or len(exes) != 1:
+            fail(f"{name}: the census test's build failed (exit {r.returncode}, "
+                 f"{len(exes)} lib test executables; log: {logf.name})")
+        kept = os.path.join(out, "census-bin", name)
+        os.makedirs(os.path.dirname(kept), exist_ok=True)
+        shutil.copy2(exes[0], kept)
     return kept
 
 
@@ -451,7 +457,8 @@ def main():
     if base["tree"] is not None and base["tree"] == head["tree"] and not a.allow_same:
         fail(f"{base['label']} and {head['label']} have the same source tree: nothing to "
              "compare (--allow-same for a noise run)", 2)
-    out = a.out or os.path.join(speed.target_dir(repo), "before-after",
+    # Absolute (review r3, sol): the census runs from another folder.
+    out = os.path.abspath(a.out) if a.out else os.path.join(speed.target_dir(repo), "before-after",
                                 f"{base['label']}..{head['label']}-"
                                 f"{time.strftime('%Y%m%d-%H%M%S')}-{os.getpid()}")
 
