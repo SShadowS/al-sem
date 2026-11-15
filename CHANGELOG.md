@@ -57,7 +57,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   meets an entry. Any other conflict is refused, including (review r1, Fable) a conflict
   where both sides carry the same line: an entry already on master after a squash-merge or
   a cherry-pick, which keeping both sides would duplicate. In `--diff3` mode git keeps such
-  common lines inside the conflict, and land's old rule kept them twice.
+  common lines inside the conflict, and land's old rule kept them twice. Replayed on the 70
+  real conflicting merges: 67 merge; 3 are refused (the one edited line, and two
+  master-into-branch merges whose conflicts shared whole paragraphs of an entry, true
+  duplicates). The check compares whole non-blank lines, so two unrelated entries sharing a
+  stock line would also be refused (as a conflict, as before); none of the 70 did.
 - **As a git merge driver:** `.gitattributes` names it for CHANGELOG.md
   (`merge=changelog`), so a lane's rebase onto master resolves CHANGELOG as a landing
   does (master's entries first). A `git merge master` inside a lane puts the lane's first,
