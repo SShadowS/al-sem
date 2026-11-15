@@ -1889,8 +1889,8 @@ codeunit 50100 "Alpha"
 }
 
 /// Task-1 review finding (Fable, Medium): if the same `vp` appears TWICE in
-/// one rung-1 batch (`classify` pushes one `Planned::Save` per event with no
-/// vp dedup; the production coalescer dedupes by exact `PathBuf` only, and
+/// one rung-1 batch (when this test was written, `classify` pushed one
+/// `Planned::Save` per event with no vp dedup; the production coalescer dedupes by exact `PathBuf` only, and
 /// `classify_path`'s case-insensitive fallback can map two spellings to one
 /// vp), the per-save loop's removal pass must derive the file's OLD edge
 /// targets from the WORKING maps (iteration 1's fresh state), not from
