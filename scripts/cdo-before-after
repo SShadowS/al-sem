@@ -118,19 +118,30 @@ def head_target(repo):
     return os.path.join(speed.target_dir(repo), "before-after-head")
 
 
-def build_side(repo, side, logf):
-    """The folder holding this side's alsem and aldump."""
+def build_side(repo, side, logf, out):
+    """The folder holding this side's alsem and aldump. A revision's are the cache's
+    (never rewritten once there); the working tree's are copied into `out/head-bin`
+    under a lock on its target, so a second run that rebuilds that target while this
+    one waits for the slot cannot swap them (review r1, sol)."""
     if side["rev"] != ".":
         exe, _ = speed.cached_binary(repo, side["sha"], logf, extra=("aldump",))
         return os.path.dirname(exe)
     log("building the working tree (release-fast, alsem + aldump)")
     env = dict(os.environ, CARGO_TARGET_DIR=head_target(repo))
-    rc = subprocess.run(["cargo", "build", "--profile", "release-fast", "--bin", "alsem",
-                         "--bin", "aldump"], cwd=repo, env=env, stdout=logf,
-                        stderr=subprocess.STDOUT).returncode
-    if rc != 0:
-        fail(f"the working tree's build failed (log: {logf.name})")
-    return os.path.join(head_target(repo), "release-fast")
+    built = os.path.join(head_target(repo), "release-fast")
+    kept = os.path.join(out, "head-bin")
+    os.makedirs(head_target(repo), exist_ok=True)
+    with open(os.path.join(head_target(repo), ".before-after.lock"), "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        rc = subprocess.run(["cargo", "build", "--profile", "release-fast", "--bin", "alsem",
+                             "--bin", "aldump"], cwd=repo, env=env, stdout=logf,
+                            stderr=subprocess.STDOUT).returncode
+        if rc != 0:
+            fail(f"the working tree's build failed (log: {logf.name})")
+        os.makedirs(kept, exist_ok=True)
+        for b in ("alsem", "aldump"):
+            shutil.copy2(os.path.join(built, b), os.path.join(kept, b))
+    return kept
 
 
 def census_src(repo, side):
@@ -181,8 +192,19 @@ def sha256(path):
 
 
 def ws_state(ws):
+    """(commit, dirty path count, hash of the edits): the edits are the tracked diff
+    against HEAD and each untracked file's path and bytes, so a dirty file that changes
+    again keeps the count but not the hash (review r1, sol)."""
+    h = hashlib.sha256(subprocess.run(["git", "-C", ws, "diff", "HEAD", "--binary"],
+                                      capture_output=True, check=True).stdout)
+    others = subprocess.run(["git", "-C", ws, "ls-files", "--others", "--exclude-standard",
+                             "-z"], capture_output=True, check=True).stdout
+    for rel in sorted(p for p in others.split(b"\0") if p):
+        h.update(b"\0" + rel + b"\0")
+        h.update(sha256(os.path.join(ws.encode(), rel)).encode())
     return (git(ws, "rev-parse", "HEAD"),
-            len([ln for ln in git(ws, "status", "--porcelain").splitlines() if ln]))
+            len([ln for ln in git(ws, "status", "--porcelain").splitlines() if ln]),
+            h.hexdigest())
 
 
 def measure(name, bindir, ws, out, census, repo):
@@ -190,12 +212,14 @@ def measure(name, bindir, ws, out, census, repo):
     d = os.path.join(out, name)
     os.makedirs(d, exist_ok=True)
     alsem, aldump = os.path.join(bindir, "alsem"), os.path.join(bindir, "aldump")
-    ws_sha, dirty = ws_state(ws)
+    ws_sha, dirty, edits = ws_state(ws)
+    version = subprocess.run([alsem, "--version"], capture_output=True, text=True)
+    if version.returncode != 0:
+        fail(f"{name}: alsem --version exited {version.returncode}:\n{version.stderr[-1500:]}")
     meta = {"alsem": alsem, "alsem_sha256": sha256(alsem), "aldump_sha256": sha256(aldump),
-            "version": subprocess.run([alsem, "--version"], capture_output=True,
-                                      text=True).stdout.strip(),
+            "version": version.stdout.strip(),
             "workspace": ws, "workspace_sha": ws_sha, "workspace_dirty_paths": dirty,
-            "seconds": {}, "exit": {}}
+            "workspace_edits": edits, "seconds": {}, "exit": {}}
     env = speed.child_env()
     steps = [(n, [alsem, *argv(ws, os.path.join(d, f"{n}.json"))], n != "fingerprint",
               f"{n}.json") for n, argv in RUNS.items()]
@@ -237,7 +261,8 @@ def measure(name, bindir, ws, out, census, repo):
             fh.write("\n".join(lines) + "\n")
     # Read again after the side (review r1, Fable): a workspace that moves during
     # a side's commands must void the report too.
-    meta["workspace_sha_after"], meta["workspace_dirty_paths_after"] = ws_state(ws)
+    (meta["workspace_sha_after"], meta["workspace_dirty_paths_after"],
+     meta["workspace_edits_after"]) = ws_state(ws)
     _write_json(os.path.join(d, "meta.json"), meta)
     return meta
 
@@ -270,12 +295,12 @@ def compare(out, patterns, census):
     mb, mh = _read_json(os.path.join(b, "meta.json")), _read_json(os.path.join(h, "meta.json"))
     rep = {"base": mb, "head": mh, "void": None, "findings": {}, "histogram": {},
            "patterns": {}, "census": None}
-    reads = [(m[f"workspace_sha{s}"], m[f"workspace_dirty_paths{s}"])
+    reads = [(m[f"workspace_sha{s}"], m[f"workspace_dirty_paths{s}"], m[f"workspace_edits{s}"])
              for m in (mb, mh) for s in ("", "_after")]
     if len(set(reads)) != 1:
-        rep["void"] = ("the workspace moved during the run (sha, dirty paths; base before, "
-                       "after, head before, after): "
-                       + ", ".join(f"{sha[:12]} dirty={n}" for sha, n in reads))
+        rep["void"] = ("the workspace moved during the run (sha, dirty paths, edits; base "
+                       "before, after, head before, after): "
+                       + ", ".join(f"{sha[:12]} dirty={n} edits={e[:12]}" for sha, n, e in reads))
     for scope in ("analyze-primary", "analyze-all"):
         fb = _read_json(os.path.join(b, f"{scope}.json"))["payload"]["findings"]
         fh = _read_json(os.path.join(h, f"{scope}.json"))["payload"]["findings"]
@@ -434,7 +459,8 @@ def main():
         if os.path.exists(os.path.join(out, old)):
             os.remove(os.path.join(out, old))
     with open(os.path.join(out, "build.log"), "a") as logf:
-        dirs = {"base": build_side(repo, base, logf), "head": build_side(repo, head, logf)}
+        dirs = {"base": build_side(repo, base, logf, out),
+                "head": build_side(repo, head, logf, out)}
         sums = {k: sha256(os.path.join(d, "alsem")) for k, d in dirs.items()}
         if sums["base"] == sums["head"] and not a.allow_same:
             fail(f"the two alsem binaries are the same ({sums['base'][:12]}): the build "

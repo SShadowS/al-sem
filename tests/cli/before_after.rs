@@ -52,7 +52,7 @@ case "$tool $1" in
 "alsem --version") echo "alsem stub $side" ;;
 "alsem fingerprint") echo "slot: $(bash "$BA_SLOT" status 2>&1)" >> "$BA_LOG"; while [ $# -gt 0 ]; do [ "$1" = --out ] && cp "$F/fingerprint.json" "$2"; shift; done ;;
 "alsem analyze") case " $* " in *" --scope all "*) cat "$F/analyze-all.json" ;; *) cat "$F/analyze-primary.json" ;; esac ;;
-"aldump --program-call-graph-stats") cat "$F/stats.json"; [ -f "$F/dirty-ws" ] && touch "$2/moved.txt" ;;
+"aldump --program-call-graph-stats") cat "$F/stats.json"; [ -f "$F/dirty-ws" ] && touch "$2/moved.txt"; [ -f "$F/edit-ws" ] && echo again >> "$2/a.txt" ;;
 esac
 exit 0
 "#;
@@ -366,9 +366,11 @@ fn before_after_reports_what_moved_and_caches_both_binaries() {
 /// The head side defaults to `.`, the working tree with its edits, built in
 /// `<target>/before-after-head` (never the cache, never the main target).
 ///
-/// Mutation (2026-11-15): `build_side`'s `.` branch with no `CARGO_TARGET_DIR`
+/// Mutations (2026-11-15): `build_side`'s `.` branch with no `CARGO_TARGET_DIR`
 /// of its own (`env = dict(os.environ)`) -> it builds into the main target and
-/// the run exits 1 (no binary in `before-after-head`).
+/// the run exits 1 (no binary in `before-after-head`); r2 (review r1, sol): it
+/// returning the shared target instead of its copy (`return built`) -> the
+/// head's binary path is not `out/head-bin/alsem`.
 #[test]
 fn before_after_head_defaults_to_the_working_tree() {
     let t = Ba::new();
@@ -386,6 +388,11 @@ fn before_after_head_defaults_to_the_working_tree() {
     );
     assert!(t.log().contains("alsem C fingerprint"), "{}", t.log());
     let rep = t.report("out");
+    // Measured from this run's own copy, not the shared target (review r1, sol).
+    assert_eq!(
+        rep["head"]["alsem"],
+        json!(t.path("out/head-bin/alsem").to_str().unwrap()),
+    );
     assert_eq!(rep["findings"]["analyze-primary"]["moved"], json!({}));
 }
 
@@ -405,7 +412,9 @@ fn before_after_head_defaults_to_the_working_tree() {
 /// missing-`unknown` check off -> exits 0; the after-side workspace reads left
 /// out of `reads` -> the head-side move exits 0; the working tree's `if rc !=
 /// 0` off -> not named (dies on the missing binary); the old-report removal off
-/// -> the VOID report.json is still there.
+/// -> the VOID report.json is still there; r3 (review r1, sol): the edits hash
+/// left out of `reads` -> the same-count edit exits 0; the `--version` exit
+/// check off -> the failed `--version` is not named.
 #[test]
 fn before_after_refuses_what_it_cannot_compare() {
     let t = Ba::new();
@@ -478,6 +487,23 @@ fn before_after_refuses_what_it_cannot_compare() {
         std::fs::remove_file(t.path(&format!("fix/{side}/dirty-ws"))).unwrap();
         std::fs::remove_file(t.path("ws/moved.txt")).unwrap();
     }
+
+    // A file already dirty changes again: the dirty count stays, the edits hash
+    // does not (review r1, sol).
+    std::fs::write(t.path("ws/a.txt"), "dirty\n").unwrap();
+    std::fs::write(t.path("fix/A/edit-ws"), "").unwrap();
+    let (code, text) = t.run(&["--out", &out, &t.c1, &t.c2], &[]);
+    assert_eq!(code, Some(1), "{text}");
+    assert!(text.contains("VOID: the workspace moved"), "{text}");
+    std::fs::remove_file(t.path("fix/A/edit-ws")).unwrap();
+    t.git("ws", &["checkout", "--", "a.txt"]);
+
+    // `alsem --version` failing is a failed step too.
+    std::fs::write(t.path("fix/A/fail-alsem---version"), "").unwrap();
+    let (code, text) = t.run(&["--out", &out, &t.c1, &t.c2], &[]);
+    assert_eq!(code, Some(1), "{text}");
+    assert!(text.contains("base: alsem --version exited 3"), "{text}");
+    std::fs::remove_file(t.path("fix/A/fail-alsem---version")).unwrap();
 
     // The working tree's build fails (the base is cached by now): named, and the
     // earlier VOID report in the reused --out is gone.

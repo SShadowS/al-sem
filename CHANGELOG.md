@@ -18,8 +18,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - It refuses what it cannot compare: two sides with the same source tree (exit 2,
   `--allow-same` for a noise run), two alsem binaries that came out the same (exit 1:
   a build that did nothing), a failed build or command (exit 1, naming it and its
-  stderr), a census with no census line, and a workspace whose sha or dirty count moved
-  between the sides (the report says VOID, exit 1).
+  stderr), a census with no census line or one that failed for another reason than its
+  own ratchet, a histogram without a `wholeProgram` or `primaryScoped` section, and a
+  workspace whose sha, dirty count or edits (a hash of the tracked diff and the untracked
+  files' bytes) moved between or during the sides (read before and after each side; the
+  report says VOID, exit 1). The working tree's binaries are copied into the run's own
+  `head-bin/` under a lock, so a second run rebuilding that target cannot swap them.
 - It measures inside the CDO slot (`scripts/cdo-slot`, bound to itself; `--slot-timeout`),
   base first, then head: `alsem fingerprint`, `analyze` (primary and `--scope all`),
   `aldump --program-call-graph-stats`, and with `--census` the ENG14 untrusted census
