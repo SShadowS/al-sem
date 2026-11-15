@@ -471,6 +471,17 @@ Return value (the last line you print): `merged <merge_sha>`, `blocked <reason>`
       (`severity` `critical` or `important`, or `blocking: true`) left
       `deferred`, or any `closes_by` entry whose named record is not there
       (step 5).
+    - (since TLS-63) a gate whose latest `run` record is not evidence for `H`
+      (`gates-not-recorded`, with post-merge's own codes such as
+      `record-other-tree`): it must be the gate's full command, supervised, exit
+      exactly 0 and not timed out, on a clean checkout before and after, and on
+      `H`'s tree. `run` itself refuses (`gate-command-mismatch`) another command
+      under an attested `--name` (`--only`, `--dry-run`, `--regen`, `true`,
+      `cdo-gate` with `CDO_GATE_NO_SPEED=1`), a cwd other than the checkout's top,
+      or an interpreter that is not the resolved bash. A `--docs-only` claim is
+      checked against B..final_head (`docs-only-claim-false`). The fix for each
+      is the same: rerun the named gate in full on the final head, from
+      `--cwd <worktree>`, then attest again.
 
     **A reviewer stand-in is the operator's decision, never yours.** When a
     rostered reviewer is unreachable, `attest --substitute SLOT=REVIEWER`
