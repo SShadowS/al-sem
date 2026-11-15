@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (ENG-85: the routine rows share their repeated strings, 199 MiB less resident memory on CDO)
+
+- **Re-scoped bar.** The census (`tools/census-probe/runs-eng85/resident-split.out`) split the
+  model and dependency routine rows by field: the strings the task named (anchors, record-variable
+  ids, row ids, the call-site argument infos and bindings) were about 250-300 MiB, far from the
+  survey's 300-750 MiB estimate. The orchestrator set the bar at 120 MiB on 2026-11-15 and filed the
+  structural parts as ENG-94 (object declarations' routines), ENG-95 (statement trees) and ENG-96
+  (inline row sizes).
+- **The change.** These fields are `SharedStr` now (an `Arc<str>` that compares, hashes, orders,
+  prints and serializes exactly as its text, so no output moves): `PAnchor`'s file id and syntax
+  kind, `PExpressionInfo`'s kind, text, value, qualifier and member, `PCallArgumentBinding`'s source
+  kind and record-variable id, and the record variable's id (`RecordVariable`, `PRecordVariable`,
+  `ModelRecordVariable`). Builders share them: `anchor_unit` reuses the previous anchor's file id on
+  the thread, `shared_vocab` keeps one copy of each text of a closed vocabulary (grammar kinds,
+  expression and argument kinds; capped at 4,096 texts per thread, so a resident engine never grows
+  it), an expression's value shares its text, and every binding shares its variable's id.
+- **Measured** (`census-probe resident`, base `801cc6af`; runs in `tools/census-probe/runs-eng85/`):
+  live memory after one ask of each kind 5,151.2 → 4,951.8 MiB (**-199.4 MiB**, bar 120); the model
+  routine rows 473 → 353 MiB, the dependency routine rows 540 → 466 MiB.
+- **Same answers.** The task gate (every golden), `aldump --session-refresh --verify` on a CDO copy
+  in both memory modes (all 12 steps equal to a cold build each), and `scripts/cdo-before-after
+  801cc6af` (fingerprint, analyze at both scopes, the call-graph stats: nothing moved).
+- **Speed: not measured here.** `cdo-speed` needs a quiet machine and server1's load stayed at
+  60-190 from other projects; the landing gate's speed phase times it (TLS-76). Fable flagged the
+  one risk: shared texts make clones atomic reference-count updates, which could contend across
+  threads.
+
 ### Changed (ENG-92: dependency site facts keyed through their edges, 84 MiB less resident memory on CDO)
 
 - **What it was.** After ENG-91 the retained dependency site facts were still a map keyed by
