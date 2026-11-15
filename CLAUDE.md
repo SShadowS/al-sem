@@ -132,7 +132,12 @@ Every test still runs before a merge; the tiers decide HOW OFTEN each one runs.
   model build or test universe passes 1.30 in CPU or 1.60 in wall time (they are the
   parallel parts, so a change that loses parallelism shows there), or peak memory passes
   1.10. It runs ALONE before the test lanes (their load is noise to it); never run two
-  gates or a build beside it if you can help it. **It is Linux only (it reads `/proc`):
+  gates or a build beside it if you can help it. **The warm-up runs twice (TLS-65)**, on
+  fresh server pairs, the second with every call's side order flipped, and is judged on
+  the mean of the two: the side that builds second reads ~15 % slow at load ~9 (x1.167
+  for a binary against itself), and one fixed-order sample always put head second. It
+  first waits for the 1-min load to fall to max(6, cores / 3); after 10 min it stops
+  with "cannot judge speed" (exit 2), which fails `cdo-gate`: never a PASS without speed. **It is Linux only (it reads `/proc`):
   on the Windows machine every full `cdo-gate` run FAILS unless given `--no-speed`**
   (an `--only` subset never runs it).
   `--no-speed` skips it and prints that speed was not checked; a tree that lands without

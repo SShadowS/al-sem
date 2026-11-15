@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (TLS-65: cdo-speed's warm-up no longer reads the second-built side as slow)
+
+- The warm-up's model build and test universe were timed once each, in a fixed order:
+  the model build always built head second. The side built second reads ~15 % slow on
+  a loaded machine (the engine lane, ENG-81: a binary against itself x1.167 at load
+  ~9, x0.996 at load 5), and ENG-80's landing gate failed on one such sample (x1.36,
+  started at load 20; quiet re-runs x1.13-1.17).
+- Now the warm-up runs twice, each pass on a fresh server pair (the model is built
+  once per server), the second with every call's side order flipped, and each warm-up
+  call is judged on the median of its passes (the mean of the two): the second-side
+  penalty falls once on each side and cancels. The rounds run on the second pair.
+  `--warm-samples 1` keeps the single pass. The verdict shows each pass's ratio and
+  the load range; every timed call records its 1-min load (speed.json).
+- Before each warm-up pass, the 1-min load must fall to `QUIET_LOAD` (max(6, cores /
+  3); `CDO_SPEED_QUIET_LOAD`); after 10 min (`CDO_SPEED_QUIET_WAIT_S`) the run stops
+  with exit 2 and `FAIL: cannot judge speed: the 1-min load stayed above ...`, which
+  fails cdo-gate's speed phase (its summary row shows that line): never a PASS without
+  speed, never a loaded measurement. `--no-speed` stays the explicit way to skip.
+- Cost: one more model build and warm-up per side, about +2 min of a 3-5 min check.
+- Tests (`gate_scripts`): a stub server whose second-built side burns 50 % more CPU
+  fails one fixed-order sample and passes the two flipped ones
+  (`speed_warm_up_cancels_the_second_side_penalty`; mutation: the second pass not
+  flipped -> FAIL x1.47); a load that stays high stops the run with exit 2 before any
+  server starts, and cdo-gate's summary shows the reason
+  (`speed_waits_for_a_quiet_machine_and_fails_loudly`; mutation: the timeout passing
+  silently -> PASS). `CDO_SPEED_WARM_MIN_SECONDS` and `CDO_SPEED_LOADAVG_FILE` are test
+  hooks.
+
 ### Added (TLS-60: `scripts/cdo-slot`, one CDO slot instead of hold messages)
 
 - `scripts/cdo-slot acquire|release|status|run <owner> <reason>`: the one CDO slot of

@@ -22,6 +22,8 @@ fn speed_gate_fails_when_a_timed_call_fails() {
         .args(["--base-exe", exe, "--head-exe", exe, "--out"])
         .arg(out.path())
         .env("ALSEM_SPEED_CACHE", out.path().join("cache"))
+        // TLS-65: no wait for a quiet machine (the test's own load is no issue).
+        .env("CDO_SPEED_QUIET_LOAD", "100000")
         .output()
         .expect("spawn python3 scripts/cdo-speed");
     let text = format!(
@@ -31,7 +33,7 @@ fn speed_gate_fails_when_a_timed_call_fails() {
     );
     assert_eq!(run.status.code(), Some(1), "{text}");
     assert!(
-        text.contains("FAIL: r0 build (alsem_explain) on base exited 1"),
+        text.contains("FAIL: r0.1 build (alsem_explain) on base exited 1"),
         "{text}"
     );
     assert!(text.contains("  | "), "the call's stderr: {text}");
@@ -1515,5 +1517,165 @@ fn cdo_gate_skips_speed_only_when_no_product_code_changed() {
     assert!(
         !text.contains("cdo-gate: PASS\n"),
         "never a plain PASS: {text}"
+    );
+}
+
+/// A stub `alsem` MCP server for cdo-speed: it answers every call at once,
+/// except its first (`build`, the model build), which burns `STUB_BUILD_S`
+/// seconds of CPU, 50 % more when it is the second server of its pair to
+/// build (a shared counter in `STUB_DIR`): the "second side builds slower
+/// under load" bias of TLS-65, made deterministic.
+#[cfg(target_os = "linux")]
+const SPEED_STUB: &str = r#"#!/usr/bin/env python3
+import fcntl, json, os, sys, time
+first = True
+def burn(seconds):
+    end = time.process_time() + seconds
+    while time.process_time() < end:
+        pass
+for line in sys.stdin:
+    msg = json.loads(line)
+    if "id" not in msg:
+        continue
+    if msg.get("method") == "tools/call":
+        if first:
+            first = False
+            with open(os.path.join(os.environ["STUB_DIR"], "builds"), "a+") as f:
+                fcntl.flock(f, fcntl.LOCK_EX)
+                f.seek(0)
+                n = len(f.read())
+                f.write("x")
+            second = n % 2 == 1
+            burn(float(os.environ["STUB_BUILD_S"]) * (1.5 if second else 1.0))
+        result = {"structuredContent": {"exitCode": 0, "stdoutText": "ok"}}
+    else:
+        result = {}
+    print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": result}), flush=True)
+"#;
+
+#[cfg(target_os = "linux")]
+fn speed_with_stub(
+    dir: &std::path::Path,
+    load: &str,
+    extra: &[&str],
+    env: &[(&str, &str)],
+) -> (Option<i32>, String) {
+    use std::os::unix::fs::PermissionsExt;
+    let stub = dir.join("alsem");
+    std::fs::write(&stub, SPEED_STUB).unwrap();
+    std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let state = dir.join(format!("state-{}", extra.join("-")));
+    std::fs::create_dir_all(&state).unwrap();
+    std::fs::write(dir.join("loadavg"), load).unwrap();
+    let ws = dir.join("ws");
+    std::fs::create_dir_all(&ws).unwrap();
+    let mut cmd = std::process::Command::new("python3");
+    cmd.arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-speed"))
+        .arg(&ws)
+        .args(["--base-exe"])
+        .arg(&stub)
+        .arg("--head-exe")
+        .arg(&stub)
+        .args(["--rounds", "1", "--max-rounds", "1", "--out"])
+        .arg(state.join("out"))
+        .args(extra)
+        .env("ALSEM_SPEED_CACHE", dir.join("cache"))
+        .env("STUB_DIR", &state)
+        .env("STUB_BUILD_S", "0.4")
+        .env("CDO_SPEED_WARM_MIN_SECONDS", "0.2")
+        .env("CDO_SPEED_LOADAVG_FILE", dir.join("loadavg"))
+        .env("CDO_SPEED_QUIET_LOAD", "6");
+    for (k, v) in env {
+        cmd.env(k, v);
+    }
+    let out = cmd.output().expect("spawn python3 scripts/cdo-speed");
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    (out.status.code(), text)
+}
+
+/// TLS-65: the warm-up's model build is timed twice, on fresh server pairs,
+/// the second pass with the side order flipped, and judged on the mean of the
+/// two ratios. A stub that builds 50 % slower as the second side of its pair
+/// fails one fixed-order sample (head always built second: x1.50 against a
+/// 1.30 limit) and passes the two flipped ones (x1.50 and x0.67: x1.08).
+///
+/// Mutation: the second pass not flipped -> both samples x1.50 -> FAIL.
+#[cfg(target_os = "linux")]
+#[test]
+fn speed_warm_up_cancels_the_second_side_penalty() {
+    let dir = tempfile::tempdir().unwrap();
+    let (code, text) = speed_with_stub(dir.path(), "0.5", &["--warm-samples", "1"], &[]);
+    assert_eq!(
+        code,
+        Some(1),
+        "precondition: one fixed-order sample fails: {text}"
+    );
+    // x1.50 by design; the decimals move a little on a busy machine.
+    assert!(
+        text.contains("FAIL: build: CPU time x1.4") || text.contains("FAIL: build: CPU time x1.5"),
+        "{text}"
+    );
+
+    let (code, text) = speed_with_stub(dir.path(), "0.5", &[], &[]);
+    assert_eq!(code, Some(0), "two flipped samples pass: {text}");
+    assert!(text.contains("cdo-speed: PASS"), "{text}");
+    assert!(text.contains("by pass; load 0.5-0.5)"), "{text}");
+    assert!(
+        text.contains("head builds first"),
+        "the second pass flips: {text}"
+    );
+}
+
+/// TLS-65: speed is never judged on a loaded machine and never skipped
+/// silently. With the 1-min load above QUIET_LOAD for the whole wait, the
+/// run stops before any server starts, with exit 2 and a FAIL line naming the
+/// load; cdo-gate's summary shows that line on its failed speed row.
+///
+/// Mutation: the wait's timeout returning instead of raising -> the warm-up
+/// runs, PASS, exit 0.
+#[cfg(target_os = "linux")]
+#[test]
+fn speed_waits_for_a_quiet_machine_and_fails_loudly() {
+    let dir = tempfile::tempdir().unwrap();
+    let (code, text) = speed_with_stub(
+        dir.path(),
+        "50.0",
+        &[],
+        &[
+            ("CDO_SPEED_QUIET_WAIT_S", "1"),
+            ("CDO_SPEED_QUIET_POLL_S", "0.2"),
+        ],
+    );
+    assert_eq!(code, Some(2), "{text}");
+    assert!(
+        text.contains("cdo-speed: FAIL: cannot judge speed: the 1-min load stayed above 6.0"),
+        "{text}"
+    );
+    assert!(!text.contains("round 0"), "nothing was timed: {text}");
+    assert!(!text.contains("PASS"), "{text}");
+
+    // cdo-gate's summary of such a run: the speed row fails and says why.
+    let logs = dir.path().join("logs");
+    std::fs::create_dir_all(&logs).unwrap();
+    std::fs::write(logs.join("speed.status"), "2 600\n").unwrap();
+    std::fs::write(logs.join("speed.log"), text.as_bytes()).unwrap();
+    let out = std::process::Command::new("bash")
+        .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-gate"))
+        .arg(format!("--summary={}", logs.display()))
+        .output()
+        .unwrap();
+    let summary = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(out.status.code(), Some(1), "{summary}");
+    assert!(
+        summary.contains("speed") && summary.contains("FAILED (2)"),
+        "{summary}"
+    );
+    assert!(
+        summary.contains("FAIL: cannot judge speed"),
+        "the reason on the speed row: {summary}"
     );
 }
