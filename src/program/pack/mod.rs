@@ -213,10 +213,15 @@ impl PackedOrigin {
         })
     }
 
-    /// Infallible: every `RawKind` has a canonical kind string.
+    /// `None` when a byte offset does not fit the IR's `u32` (ENG-86): no parsed source is
+    /// that large, so only a corrupt or forged pack carries one, and it must fail the decode,
+    /// not panic. The kind cannot fail: every `RawKind` has a canonical kind string.
     #[must_use]
-    pub fn into_origin(self) -> Origin {
-        Origin::new(
+    pub fn into_origin(self) -> Option<Origin> {
+        if u32::try_from(self.byte_start).is_err() || u32::try_from(self.byte_end).is_err() {
+            return None;
+        }
+        Some(Origin::new(
             self.kind.as_str(),
             self.byte_start..self.byte_end,
             Point {
@@ -227,7 +232,7 @@ impl PackedOrigin {
                 row: self.end.0,
                 column: self.end.1,
             },
-        )
+        ))
     }
 }
 
@@ -295,7 +300,9 @@ pub mod origin_wire {
     }
 
     pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Origin, D::Error> {
-        Ok(PackedOrigin::deserialize(d)?.into_origin())
+        PackedOrigin::deserialize(d)?
+            .into_origin()
+            .ok_or_else(|| serde::de::Error::custom("origin byte offset past u32"))
     }
 }
 
@@ -669,8 +676,26 @@ mod tests {
                 start: (0, 1),
                 end: (0, 2),
             };
-            assert_eq!(packed.into_origin().kind_text(), kind.as_str());
+            assert_eq!(packed.into_origin().unwrap().kind_text(), kind.as_str());
         }
+    }
+
+    /// ENG-86 (sol r1): a byte offset past `u32` (only a corrupt or forged pack has one)
+    /// fails the decode with an error instead of panicking in `Origin`'s narrowing.
+    #[test]
+    fn an_origin_offset_past_u32_fails_the_decode() {
+        let packed = |end: usize| PackedOrigin {
+            kind: RawKind::Identifier,
+            byte_start: 1,
+            byte_end: end,
+            start: (0, 1),
+            end: (0, 2),
+        };
+        assert!(packed(u32::MAX as usize).into_origin().is_some());
+        assert!(packed(u32::MAX as usize + 1).into_origin().is_none());
+        let json = serde_json::to_value(packed(u32::MAX as usize + 1)).expect("to json");
+        let err = origin_wire::deserialize(json).expect_err("decode fails");
+        assert!(err.to_string().contains("past u32"), "{err}");
     }
 
     /// The `Origin` codec specifically: a decoded `kind_text` must be the same
@@ -682,7 +707,7 @@ mod tests {
         let o = origin("trigger_declaration", 7, 91);
         let packed = PackedOrigin::try_from_origin(&o).expect("named kind must encode");
         assert_eq!(packed.kind, RawKind::TriggerDeclaration);
-        let back = packed.into_origin();
+        let back = packed.into_origin().expect("in range");
         assert_eq!(back, o);
         // The decoded string is the grammar's own `&'static str`, not a copy —
         // this is the property that makes decode allocation-free.
