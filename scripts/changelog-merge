@@ -51,6 +51,13 @@ merge() {
     # after a squash-merge or cherry-pick): keeping both would duplicate it, and
     # --diff3 keeps such common lines inside the conflict.
     awk '
+        function depth(s,   n) {
+            n = 0
+            while (substr(s, n + 1, 1) == "#") n++
+            if (n == 0) return 0
+            if (length(s) == n || substr(s, n + 1, 1) == " " || substr(s, n + 1, 1) == "\t") return n
+            return 0
+        }
         state == 0 && $0 == "<<<<<<< ours" { state = 1; no = 0; nt = 0; next }
         state == 0 { print; next }
         state == 1 && $0 == "||||||| base" { state = 2; next }
@@ -73,16 +80,24 @@ merge() {
             # adds, so theirs heading at depth N is refused when ours adds a
             # heading of fewer #s (a "### Security" for [Unreleased] would land
             # under ours new "## [1.0.0]"); a sibling depth is fine.
+            # A heading is "#"s then a blank or the line end (a tab too, review
+            # r4, sol); depth() is its number of "#"s, 0 for no heading.
             oh = 0; ob = 0; ol = 0
             for (i = 1; i <= no; i++) {
                 if (o[i] != "") ob = 1
-                if (match(o[i], /^#+ /)) { oh = 1; if (ol == 0 || RLENGTH - 1 < ol) ol = RLENGTH - 1 }
+                if (depth(o[i])) { oh = 1; if (ol == 0 || depth(o[i]) < ol) ol = depth(o[i]) }
             }
             tf = ""; for (i = 1; i <= nt; i++) if (t[i] != "") { tf = t[i]; break }
-            if (ob && tf != "" && tf !~ /^#/ && (oh || tf !~ /^- /)) { orphan = 1; exit }
-            if (oh && match(tf, /^#+ /) && ol < RLENGTH - 1) { orphan = 1; exit }
+            if (ob && tf != "" && !depth(tf) && (oh || tf !~ /^- /)) { orphan = 1; exit }
+            if (oh && depth(tf) && ol < depth(tf)) { orphan = 1; exit }
+            # Review r4 (sol): a side whose added part ENDS on a heading claims the
+            # lines after the conflict (both sides inserting a heading above an
+            # existing item would file it under one of them). Refused.
+            ol_ = ""; for (i = no; i >= 1; i--) if (o[i] != "") { ol_ = o[i]; break }
+            tl_ = ""; for (i = nt; i >= 1; i--) if (t[i] != "") { tl_ = t[i]; break }
+            if (depth(ol_) || depth(tl_)) { orphan = 1; exit }
             for (i = 1; i <= no; i++) print o[i]
-            if (no > 0 && o[no] != "" && nt > 0 && t[1] ~ /^#/) print ""
+            if (no > 0 && o[no] != "" && nt > 0 && depth(t[1])) print ""
             for (i = 1; i <= nt; i++) print t[i]
             state = 0
             next
@@ -153,9 +168,9 @@ self_test() {
     # a whole entry" case (1) never needs it; this shape does.
     printf '### Fixed (A)\n\n- old\n' >"$d/base1b"
     printf '### Fixed (A)\n\n- old\n- m\n' >"$d/ours1b"
-    printf '### Fixed (A)\n\n- old\n### Added (B)\n' >"$d/theirs1b"
+    printf '### Fixed (A)\n\n- old\n### Added (B)\n\n- b\n' >"$d/theirs1b"
     if merge "$d/base1b" "$d/ours1b" "$d/theirs1b" "$d/out1b" >/dev/null &&
-        [[ "$(cat "$d/out1b")" == "$(printf '### Fixed (A)\n\n- old\n- m\n\n### Added (B)')" ]]; then
+        [[ "$(cat "$d/out1b")" == "$(printf '### Fixed (A)\n\n- old\n- m\n\n### Added (B)\n\n- b')" ]]; then
         check "a heading after an entry gets its blank line" ok
     else
         check "a heading after an entry gets its blank line" "got: $(cat "$d/out1b" 2>/dev/null)"
@@ -237,6 +252,23 @@ self_test() {
         check "a deeper heading after the other side's shallower one is refused" ok
     else
         check "a deeper heading after the other side's shallower one is refused" "reason: $(cat "$d/why2e")"
+    fi
+    # 2f. Review r4 (sol): case 2e with tab-separated headings in ours: refused.
+    printf '## [Unreleased]\n\n### Fixed (A)\n\n- a\n\n##\t[1.0.0]\n\n###\tAdded (R)\n\n- r\n' >"$d/o2f"
+    if merge "$d/b2e" "$d/o2f" "$d/t2e" "$d/out2f" >/dev/null; then
+        check "a tab-separated heading counts in the depth check" "it merged: $(tr '\n\t' '/>' <"$d/out2f")"
+    else
+        check "a tab-separated heading counts in the depth check" ok
+    fi
+    # 2g. Review r4 (sol): both insert a heading above an existing item: refused
+    # (the item would be filed under one of them).
+    printf '## [Unreleased]\n\n- API change\n' >"$d/b2g"
+    printf '## [Unreleased]\n\n### Added\n\n- API change\n' >"$d/o2g"
+    printf '## [Unreleased]\n\n### Removed\n\n- API change\n' >"$d/t2g"
+    if merge "$d/b2g" "$d/o2g" "$d/t2g" "$d/out2g" >/dev/null; then
+        check "a heading claiming the lines after the conflict is refused" "it merged: $(tr '\n' '/' <"$d/out2g")"
+    else
+        check "a heading claiming the lines after the conflict is refused" ok
     fi
     # 3. CRLF line ends: the awk sees no marker it knows, the marker check refuses.
     sed 's/$/\r/' "$d/ours2" >"$d/ours3"
