@@ -15,6 +15,24 @@ struct Repo {
     gate: PathBuf,
 }
 
+/// Whatever CDO slot holder a test leaves in its slot folder (a failing test,
+/// a mutation run) ends with it.
+impl Drop for Repo {
+    fn drop(&mut self) {
+        let holder = std::fs::read_to_string(self.root.join("slot/status"))
+            .ok()
+            .and_then(|s| {
+                s.lines()
+                    .find_map(|l| l.strip_prefix("holder_pid="))
+                    .and_then(|p| p.parse::<i32>().ok())
+            });
+        if let Some(pid) = holder {
+            // SAFETY: SIGKILL to the holder this test's slot started.
+            unsafe { libc::kill(pid, libc::SIGKILL) };
+        }
+    }
+}
+
 impl Repo {
     /// The stubs' calls, the temporary root cut out of each (`CDO_WS` is
     /// `<root>/cdo-ws`, so cdo-gate's call reads `cdo-gate /cdo-ws`).
@@ -72,12 +90,39 @@ impl Repo {
             .env("LAND_LOGS", self.root.join("logs"))
             .env("FLOW_LOG", self.root.join("flow.jsonl"))
             .env("LAND_MEM_MIN_GB", "0")
+            // A CDO slot of its own (TLS-60), held for this session.
+            .env("CDO_SLOT_DIR", self.root.join("slot"))
+            .env("CDO_SLOT_MEM_MIN_GB", "0")
+            .env("CDO_SLOT_POLL_S", "1")
+            .env("CLAUDE_CODE_SESSION_ID", "land-test")
+            .env_remove("CLAUDE_PID")
+            .env_remove("CDO_SLOT_TOKEN")
             .env("CDO_WS", self.root.join("cdo-ws"))
             .env("STUB_LOG", self.root.join("calls"));
         for (k, v) in env {
             cmd.env(k, v);
         }
         let out = cmd.output().expect("run scripts/land");
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        (out.status.code(), text)
+    }
+    /// `scripts/cdo-slot <args>` on this repo's slot, as Claude session
+    /// `session` (no Claude PID: never stale); (exit, stdout + stderr).
+    fn slot(&self, session: &str, args: &[&str]) -> (Option<i32>, String) {
+        let out = std::process::Command::new("bash")
+            .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-slot"))
+            .args(args)
+            .env("CDO_SLOT_DIR", self.root.join("slot"))
+            .env("CDO_SLOT_MEM_MIN_GB", "0")
+            .env("CLAUDE_CODE_SESSION_ID", session)
+            .env_remove("CLAUDE_PID")
+            .env_remove("CDO_SLOT_TOKEN")
+            .output()
+            .unwrap();
         let text = format!(
             "{}{}",
             String::from_utf8_lossy(&out.stdout),
@@ -262,12 +307,30 @@ fn land_gates_in_order_and_pushes_only_on_request() {
     assert_eq!(r.calls(), ["ci-steps all"], "no memory, no cdo-gate");
 
     r.reset_calls();
-    let (code, text) = r.land(&["--push", "tools/tls-58-x"], &[("STUB_CDO_GATE_RC", "1")]);
+    // The gate's own verdict lines are shown under land's (the orchestrator's
+    // wish after land's first real run): no need to open cdo.log.
+    let (code, text) = r.land(
+        &["--push", "tools/tls-58-x"],
+        &[
+            ("STUB_CDO_GATE_RC", "1"),
+            (
+                "STUB_CDO_GATE_HOOK",
+                "echo 'cdo-gate:   speed   FAIL   build CPU x1.36'; echo 'noise'; echo 'cdo-gate: FAIL'",
+            ),
+        ],
+    );
     assert_eq!(code, Some(1), "{text}");
     assert_eq!(
         r.calls(),
         ["ci-steps all", "cdo-gate /cdo-ws"],
         "a red cdo-gate never pushes"
+    );
+    assert!(text.contains("land: [cdo] FAILED, exit 1 ("), "{text}");
+    assert!(
+        text.contains(
+            "land:   | cdo-gate:   speed   FAIL   build CPU x1.36\nland:   | cdo-gate: FAIL\n"
+        ),
+        "the gate's FAIL lines, in order, without its noise: {text}"
     );
 
     r.reset_calls();
@@ -403,20 +466,39 @@ fn land_pushes_only_the_tree_its_gates_saw() {
     assert_eq!(r.calls(), ["ci-steps all"], "nothing after the move");
 
     let r = repo();
-    let lock =
-        PathBuf::from(r.git(&r.gate, &["rev-parse", "--absolute-git-dir"])).join("land.lock");
-    let held = std::fs::File::create(&lock).unwrap();
-    use std::os::fd::AsRawFd;
-    // SAFETY: flock(2) on a file this test opened and keeps open.
-    assert_eq!(
-        unsafe { libc::flock(held.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
-        0
+    // Another session holds the CDO slot (TLS-60): land waits for it, and with
+    // a limit gives up before it changes anything.
+    // Bound to a child this test owns, so the slot ends with it however the
+    // test ends.
+    struct Owned(std::process::Child);
+    impl Drop for Owned {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    let anchor = Owned(
+        std::process::Command::new("sleep")
+            .arg("600")
+            .spawn()
+            .unwrap(),
     );
-    let (code, text) = r.land(&["tools/tls-58-x"], &[]);
+    let pid = anchor.0.id().to_string();
+    let other = r.slot(
+        "other",
+        &["acquire", "engine", "a CDO measure", "--bind", &pid],
+    );
+    assert_eq!(other.0, Some(0), "{}", other.1);
+    let (code, text) = r.land(&["tools/tls-58-x"], &[("LAND_SLOT_TIMEOUT_S", "2")]);
     assert_eq!(code, Some(1), "{text}");
-    assert!(text.contains("another scripts/land run holds"), "{text}");
+    assert!(
+        text.contains("waiting: held by engine (a CDO measure)"),
+        "{text}"
+    );
+    assert!(text.contains("the CDO slot was not taken"), "{text}");
     assert!(r.calls().is_empty() && r.landing_branches().is_empty());
-    drop(held);
+    assert_eq!(r.slot("other", &["release"]).0, Some(0));
+    drop(anchor);
 
     // A tag with the landing name would win over the branch when
     // merge-and-push merges the name unqualified: the name counts as taken
@@ -431,6 +513,124 @@ fn land_pushes_only_the_tree_its_gates_saw() {
     let (code, text) = r.land(&["--name", "foo", "tools/tls-59-x"], &[]);
     assert_eq!(code, Some(0), "{text}");
     assert!(text.contains("landing branch: landing/foo-2"), "{text}");
+}
+
+/// TLS-60: land holds the CDO slot from its start to its end. While its ci
+/// runs, another session sees the slot held by land and the cdo-slot-guard hook
+/// refuses that session's `cargo test`; the cdo-gate land runs shares the hold
+/// (its acquire answers "already yours", exit 4); after the run the slot is
+/// free again.
+///
+/// Mutations: land without its acquire -> the other session sees `free` and
+/// its `cargo test` passes the hook; land without the token export -> the
+/// nested acquire waits on land's own hold.
+#[test]
+fn land_holds_the_cdo_slot_from_start_to_end() {
+    let r = repo();
+    let slot = concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-slot");
+    let guard = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/scripts/claude-hooks/cdo-slot-guard"
+    );
+    let ci = format!(
+        "CLAUDE_CODE_SESSION_ID=other CDO_SLOT_TOKEN= bash {slot} status >> \"$STUB_LOG\" 2>&1; \
+         printf '%s' '{{\"tool_name\":\"Bash\",\"session_id\":\"other\",\
+         \"tool_input\":{{\"command\":\"cargo test\"}}}}' \
+         | {guard} 2>/dev/null; echo \"guard $?\" >> \"$STUB_LOG\""
+    );
+    let cdo = format!(
+        // No session id: only land's exported token can make it "yours" (a
+        // land started outside Claude, by cron, has no session).
+        "CLAUDE_CODE_SESSION_ID= bash {slot} acquire cdo-gate nested --wait --timeout 3 >/dev/null 2>&1; \
+         echo \"nested $?\" >> \"$STUB_LOG\""
+    );
+    let (code, text) = r.land(
+        &["tools/tls-58-x"],
+        &[("STUB_CI_STEPS_HOOK", &ci), ("STUB_CDO_GATE_HOOK", &cdo)],
+    );
+    assert_eq!(code, Some(0), "{text}");
+    let calls = r.calls();
+    assert_eq!(calls.len(), 5, "{calls:?}");
+    assert_eq!(calls[0], "ci-steps all");
+    assert!(
+        calls[1].starts_with("held by land (landing tools/tls-58-x) since "),
+        "{calls:?}"
+    );
+    assert!(
+        calls[1].contains("session land-test, for PID "),
+        "bound to the land run: {calls:?}"
+    );
+    assert_eq!(calls[2], "guard 2", "the hook refuses the other session");
+    assert_eq!(calls[3], "cdo-gate /cdo-ws");
+    assert_eq!(
+        calls[4], "nested 4",
+        "the nested acquire shares land's hold"
+    );
+    let (code, text) = r.slot("other", &["status"]);
+    assert_eq!((code, text.trim()), (Some(0), "free"));
+}
+
+/// Review r1 (sol): land needs the slot to itself, and only the slot decides
+/// who gates. A slot its own session already holds by hand (which it would
+/// share) is refused before anything changes: two lands could otherwise run
+/// on one worktree. A cdo-gate process seen while land waits for memory (one
+/// queued behind this very landing) no longer holds land up.
+///
+/// Mutations: land accepting a shared hold (exit 4) -> the run goes on; the
+/// mem-wait's process check restored -> the run gives up at mem-wait.
+#[test]
+fn land_needs_the_slot_to_itself_and_waits_only_for_memory() {
+    let r = repo();
+    let (code, text) = r.slot("land-test", &["acquire", "tools", "by hand"]);
+    assert_eq!(code, Some(0), "{text}");
+    let (code, text) = r.land(&["tools/tls-58-x"], &[]);
+    assert_eq!(code, Some(1), "{text}");
+    assert!(text.contains("land needs it to itself"), "{text}");
+    assert!(r.calls().is_empty() && r.landing_branches().is_empty());
+    assert_eq!(r.slot("land-test", &["release"]).0, Some(0));
+
+    // A process whose command line is `bash <dir>/scripts/cdo-gate`.
+    let fake = r.root.join("other/scripts");
+    std::fs::create_dir_all(&fake).unwrap();
+    // No `exec`: the bash process keeps the command line `bash <dir>/scripts/
+    // cdo-gate` (review r2, sol). Its own process group, which the guard ends
+    // whole (bash and its `sleep`), with no output shared with the test.
+    std::fs::write(fake.join("cdo-gate"), "sleep 60\n").unwrap();
+    struct Group(std::process::Child);
+    impl Drop for Group {
+        fn drop(&mut self) {
+            // SAFETY: SIGKILL to the process group this test created.
+            unsafe { libc::kill(-(self.0.id() as i32), libc::SIGKILL) };
+            let _ = self.0.wait();
+        }
+    }
+    use std::os::unix::process::CommandExt;
+    let gate = Group(
+        std::process::Command::new("bash")
+            .arg(fake.join("cdo-gate"))
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .process_group(0)
+            .spawn()
+            .unwrap(),
+    );
+    // Ready: the process's command line names the gate.
+    let cmdline = format!("/proc/{}/cmdline", gate.0.id());
+    let start = std::time::Instant::now();
+    while !std::fs::read_to_string(&cmdline).is_ok_and(|s| s.contains("scripts/cdo-gate")) {
+        assert!(
+            start.elapsed().as_secs() < 10,
+            "the fake gate never started"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let (code, text) = r.land(
+        &["tools/tls-58-x"],
+        &[("LAND_MEM_MIN_GB", "1"), ("LAND_MEM_TIMEOUT_S", "0")],
+    );
+    assert_eq!(code, Some(0), "{text}");
+    assert_eq!(r.calls(), ["ci-steps all", "cdo-gate /cdo-ws"]);
 }
 
 /// Every refusal leaves nothing behind. A conflict outside CHANGELOG.md: the
