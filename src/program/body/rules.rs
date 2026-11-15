@@ -497,7 +497,7 @@ impl Walker<'_, '_> {
         let o = &self.ir().expr(e).origin;
         self.cx
             .source
-            .get(o.byte.clone())
+            .get(o.byte())
             .unwrap_or("")
             .trim()
             .to_string()

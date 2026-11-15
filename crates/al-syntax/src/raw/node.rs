@@ -33,6 +33,11 @@ impl<'t> RawNode<'t> {
             .expect("a parsed node's kind id is a symbol of its own grammar")
     }
 
+    /// The grammar symbol id behind [`RawNode::kind_str`] (what an `Origin` stores).
+    pub fn kind_id(self) -> u16 {
+        self.node.kind_id()
+    }
+
     /// tree-sitter node id. EPHEMERAL: only valid within one parse; tree-sitter
     /// recycles ids across re-parses. Used to key the L2 op/callsite maps during a
     /// single lowering pass — never persist or compare across parses.

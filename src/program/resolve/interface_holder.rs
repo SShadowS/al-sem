@@ -75,7 +75,7 @@ pub(crate) fn holder_sources(
             .file
             .issues
             .iter()
-            .any(|i| overlaps(&i.origin.byte, &obj.origin.byte))
+            .any(|i| overlaps(&i.origin.byte(), &obj.origin.byte()))
     {
         return None;
     }

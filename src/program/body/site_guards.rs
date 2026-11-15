@@ -166,7 +166,7 @@ struct Walker<'a> {
 impl Walker<'_> {
     fn src(&self, e: ExprId) -> &str {
         let o = &self.file.ir.expr(e).origin;
-        self.source.get(o.byte.clone()).unwrap_or("")
+        self.source.get(o.byte()).unwrap_or("")
     }
 
     fn push(

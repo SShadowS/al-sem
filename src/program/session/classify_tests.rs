@@ -156,9 +156,11 @@ fn exclusion_list_is_exactly_the_positions() {
         h.finish()
     };
     let mut moved = meta.clone();
-    moved.origin.byte = 1000..2000;
+    let rebyte =
+        |o: &al_syntax::ir::Origin, b| al_syntax::ir::Origin::new(o.kind_text(), b, o.start, o.end);
+    moved.origin = rebyte(&moved.origin, 1000..2000);
     moved.origin.start.row += 7;
-    moved.name_origin.byte = 1010..1011;
+    moved.name_origin = rebyte(&moved.name_origin, 1010..1011);
     assert_eq!(hash(&meta), hash(&moved));
     let mut changed = meta.clone();
     changed.try_function = !changed.try_function;

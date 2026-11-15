@@ -255,8 +255,8 @@ type CanonOrigin = (usize, usize, (u32, u32), (u32, u32));
 
 fn canon_origin(o: &al_syntax::ir::Origin) -> CanonOrigin {
     (
-        o.byte.start,
-        o.byte.end,
+        o.byte().start,
+        o.byte().end,
         (o.start.row, o.start.column),
         (o.end.row, o.end.column),
     )

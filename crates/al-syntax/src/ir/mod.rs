@@ -39,13 +39,125 @@ pub struct Point {
 /// `Origin` through a wire format can assert equality TOTALLY rather than
 /// field-by-field — a hand-listed comparison silently stops covering any field
 /// added later (`src/program/pack`'s codec tests rely on this).
-#[derive(Clone, Debug, PartialEq, Eq)]
+///
+/// ENG-86: 28 bytes, not 48 (one per expression, statement and block: about 3.9 M on CDO). The
+/// kind is the grammar's symbol id, read back through the same table `RawNode::kind_str` uses,
+/// and the byte range is two `u32`s; [`Origin::kind_text`] and [`Origin::byte`] give the old
+/// values. `PartialEq` and `Debug` read through them, so both behave as before.
+#[derive(Clone)]
 pub struct Origin {
-    /// The raw grammar kind string, fed verbatim to anchor `syntax_kind` (parity).
-    pub kind_text: &'static str,
-    pub byte: Range<usize>,
+    kind_id: u16,
+    byte_start: u32,
+    byte_end: u32,
     pub start: Point,
     pub end: Point,
+}
+
+impl Origin {
+    /// From a grammar kind id (what a parsed node carries).
+    #[must_use]
+    pub fn from_kind_id(kind_id: u16, byte: Range<usize>, start: Point, end: Point) -> Self {
+        let narrow = |b: usize| u32::try_from(b).expect("a source file under 4 GiB");
+        Origin {
+            kind_id,
+            byte_start: narrow(byte.start),
+            byte_end: narrow(byte.end),
+            start,
+            end,
+        }
+    }
+
+    /// From a grammar kind string (pack decode, tests). A name used by several ids (a named
+    /// and an anonymous `procedure`, say) takes the named one; [`PartialEq`] compares names,
+    /// so the choice is invisible. Panics on a string that is no kind of the grammar: an
+    /// `Origin` names a real node kind.
+    #[must_use]
+    pub fn new(kind_text: &str, byte: Range<usize>, start: Point, end: Point) -> Self {
+        let id = *kind_table()
+            .ids
+            .get(kind_text)
+            .unwrap_or_else(|| panic!("`{kind_text}` is not a kind of the grammar"));
+        Self::from_kind_id(id, byte, start, end)
+    }
+
+    /// The raw grammar kind string, fed verbatim to anchor `syntax_kind` (parity).
+    #[must_use]
+    pub fn kind_text(&self) -> &'static str {
+        match kind_table().names.get(usize::from(self.kind_id)) {
+            Some(name) => name,
+            // Ids past the symbol table: tree-sitter's builtin ERROR (65535).
+            None => crate::language::static_language()
+                .node_kind_for_id(self.kind_id)
+                .expect("an origin's kind id is a symbol of its own grammar"),
+        }
+    }
+
+    /// The node's byte range in its source.
+    #[must_use]
+    pub fn byte(&self) -> Range<usize> {
+        self.byte_start as usize..self.byte_end as usize
+    }
+}
+
+/// The grammar's kind names by id, and ids by name (named ids first), built once.
+struct KindTable {
+    names: Vec<&'static str>,
+    ids: std::collections::HashMap<&'static str, u16>,
+}
+
+fn kind_table() -> &'static KindTable {
+    static TABLE: std::sync::OnceLock<KindTable> = std::sync::OnceLock::new();
+    TABLE.get_or_init(|| {
+        let lang = crate::language::static_language();
+        let count = u16::try_from(lang.node_kind_count()).expect("under 65535 grammar symbols");
+        let names: Vec<&'static str> = (0..count)
+            .map(|id| lang.node_kind_for_id(id).unwrap_or(""))
+            .collect();
+        let mut ids = std::collections::HashMap::new();
+        for named in [true, false] {
+            // Id 0 is tree-sitter's `end` symbol, which no node carries.
+            for id in 1..count {
+                if lang.node_kind_is_named(id) == named && !names[usize::from(id)].is_empty() {
+                    ids.entry(names[usize::from(id)]).or_insert(id);
+                }
+            }
+        }
+        ids.insert("ERROR", u16::MAX);
+        KindTable { names, ids }
+    })
+}
+
+impl PartialEq for Origin {
+    fn eq(&self, other: &Self) -> bool {
+        // Destructured, so a field added later cannot be left out of the comparison.
+        let Origin {
+            kind_id,
+            byte_start,
+            byte_end,
+            start,
+            end,
+        } = self;
+        // Two ids can share a kind name (a named and an anonymous `procedure`), so ids that
+        // differ compare by name.
+        (*kind_id == other.kind_id || self.kind_text() == other.kind_text())
+            && *byte_start == other.byte_start
+            && *byte_end == other.byte_end
+            && *start == other.start
+            && *end == other.end
+    }
+}
+
+impl Eq for Origin {}
+
+impl std::fmt::Debug for Origin {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Origin")
+            .field("kind_text", &self.kind_text())
+            .field("byte", &self.byte())
+            .field("start", &self.start)
+            .field("end", &self.end)
+            .finish()
+    }
 }
 
 macro_rules! id_type {
@@ -63,6 +175,7 @@ macro_rules! id_type {
 id_type!(ExprId);
 id_type!(StmtId);
 id_type!(BlockId);
+id_type!(MemberOriginId);
 
 /// Preprocessor symbols a build condition decides: `(symbol, defined)`.
 ///
@@ -126,6 +239,9 @@ pub struct Ir {
     exprs: Vec<Expr>,
     stmts: Vec<Stmt>,
     blocks: Vec<Block>,
+    /// ENG-86: each `ExprKind::Member`'s member-name origin, out of the enum (one per
+    /// member expression; inline it doubled every expression's size).
+    member_origins: Vec<Origin>,
     /// Expression id ranges lowered under a non-empty build context, each with
     /// that whole context (enclosing branches and routine arm together). Ranges
     /// nest; [`Ir::preproc_context`] picks the innermost.
@@ -191,7 +307,7 @@ impl Ir {
     pub fn var_wrappers<'a>(&'a self, origin: &'a Origin) -> impl Iterator<Item = &'a VarWrapper> {
         self.conditional_vars
             .iter()
-            .filter(|w| w.byte.contains(&origin.byte.start))
+            .filter(|w| w.byte.contains(&origin.byte().start))
     }
 
     /// [`Ir::var_wrappers`] as seen from the routine declared at `routine`: a wrapper whose
@@ -206,7 +322,7 @@ impl Ir {
         self.var_wrappers(origin).filter(move |w| {
             !w.arms
                 .iter()
-                .any(|a| a.contains(&origin.byte.start) && a.contains(&routine.byte.start))
+                .any(|a| a.contains(&origin.byte().start) && a.contains(&routine.byte().start))
         })
     }
 
@@ -229,6 +345,7 @@ impl Ir {
         exact_size(&mut self.exprs);
         exact_size(&mut self.stmts);
         exact_size(&mut self.blocks);
+        exact_size(&mut self.member_origins);
         exact_size(&mut self.preproc_ranges);
         exact_size(&mut self.tainted_calls);
     }
@@ -260,6 +377,20 @@ impl Ir {
     #[inline]
     pub fn block(&self, id: BlockId) -> &Block {
         &self.blocks[id.index()]
+    }
+
+    pub fn add_member_origin(&mut self, o: Origin) -> MemberOriginId {
+        let id = MemberOriginId(
+            u32::try_from(self.member_origins.len()).expect("member origin arena overflow"),
+        );
+        self.member_origins.push(o);
+        id
+    }
+
+    /// The member-name origin of an `ExprKind::Member` (its `member_origin` id).
+    #[inline]
+    pub fn member_origin(&self, id: MemberOriginId) -> &Origin {
+        &self.member_origins[id.index()]
     }
 
     pub fn iter_exprs(&self) -> impl Iterator<Item = &Expr> {
@@ -330,4 +461,104 @@ pub struct AlFile {
     /// read from this list, and a later pass reads a check's trailing comment
     /// (`own_line == false`) or the comment above it from here.
     pub comments: Vec<SourceComment>,
+}
+
+#[cfg(test)]
+mod origin_tests {
+    use super::*;
+
+    /// ENG-86: the slim layout (28 bytes, was 48).
+    #[test]
+    fn origin_is_28_bytes() {
+        assert_eq!(std::mem::size_of::<Origin>(), 28);
+        // With `member_origin` out of the enum: was 128 (ExprKind 80 + Origin 48).
+        assert_eq!(std::mem::size_of::<Expr>(), 72);
+    }
+
+    /// ENG-86: a name with a named and an anonymous id (`procedure`) gives equal origins
+    /// either way, and every kind name of the grammar builds an origin that reads it back.
+    #[test]
+    fn kind_names_round_trip_and_shared_names_compare_equal() {
+        let lang = crate::language::static_language();
+        let (named, anon) = (
+            lang.id_for_node_kind("procedure", true),
+            lang.id_for_node_kind("procedure", false),
+        );
+        assert!(
+            named != 0 && anon != 0 && named != anon,
+            "two `procedure` ids"
+        );
+        let p = Point { row: 0, column: 0 };
+        let a = Origin::from_kind_id(anon, 0..9, p, p);
+        let n = Origin::new("procedure", 0..9, p, p);
+        assert_eq!(n.kind_id, named);
+        assert_eq!(a, n);
+        assert_ne!(a, Origin::new("comment", 0..9, p, p));
+        for id in 1..u16::try_from(lang.node_kind_count()).unwrap() {
+            let Some(name) = lang.node_kind_for_id(id) else {
+                continue;
+            };
+            if name.is_empty() {
+                continue;
+            }
+            let o = Origin::from_kind_id(id, 0..1, p, p);
+            assert_eq!(o.kind_text(), name);
+            assert_eq!(Origin::new(name, 0..1, p, p).kind_text(), name);
+        }
+        assert_eq!(Origin::new("ERROR", 0..1, p, p).kind_text(), "ERROR");
+    }
+
+    /// ENG-86: a member expression's member-name origin, now in the side table, is the
+    /// member node's own (kind and bytes), one per member expression.
+    #[test]
+    fn member_origin_is_the_member_node() {
+        let src = "codeunit 50100 C\n{\n    procedure P()\n    begin\n        if Rec.\"No.\" = A.B then;\n    end;\n}\n";
+        let file = crate::parse(src);
+        let members: Vec<_> = file
+            .ir
+            .iter_exprs()
+            .filter_map(|e| match &e.kind {
+                ExprKind::Member {
+                    member,
+                    member_origin,
+                    ..
+                } => Some((member.clone(), file.ir.member_origin(*member_origin))),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(members.len(), 2);
+        for (member, o) in members {
+            assert_eq!(&src[o.byte()], member);
+            let want = if member.starts_with('"') {
+                "quoted_identifier"
+            } else {
+                "identifier"
+            };
+            assert_eq!(o.kind_text(), want, "{member}");
+        }
+    }
+
+    /// ENG-86: every origin a parse makes reads back the node's own kind string and byte
+    /// range, and a kind string turns back into an equal origin.
+    #[test]
+    fn origin_reads_back_kind_and_bytes() {
+        let src = "codeunit 50100 C\n{\n    procedure P()\n    begin\n        Message('x', Rec.\"No.\");\n    end;\n}\n";
+        let file = crate::parse(src);
+        let mut seen = 0;
+        for e in file.ir.iter_exprs() {
+            let o = &e.origin;
+            let again = Origin::new(o.kind_text(), o.byte(), o.start, o.end);
+            assert_eq!(&again, o);
+            assert!(o.byte().end <= src.len() && o.byte().start <= o.byte().end);
+            seen += 1;
+        }
+        assert!(seen >= 4, "only {seen} expressions");
+        let call = file
+            .ir
+            .iter_exprs()
+            .find(|e| matches!(e.kind, ExprKind::Call { .. }));
+        let call = call.expect("a call");
+        assert_eq!(call.origin.kind_text(), "call_expression");
+        assert_eq!(&src[call.origin.byte()], "Message('x', Rec.\"No.\")");
+    }
 }

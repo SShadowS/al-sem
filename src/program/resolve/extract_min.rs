@@ -45,7 +45,7 @@ fn collect_calls(
             let arg_ids = args.to_vec();
 
             // Emit one site for this call expression.
-            let callee_text = src[file.ir.expr(fn_id).origin.byte.clone()].to_string();
+            let callee_text = src[file.ir.expr(fn_id).origin.byte()].to_string();
             let span = CanonicalSpan {
                 unit: unit.to_string(),
                 start: e.origin.start.into(),

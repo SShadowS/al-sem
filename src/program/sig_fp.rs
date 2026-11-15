@@ -175,12 +175,12 @@ mod tests {
     use al_syntax::ir::{Origin, Point, RoutineDecl};
 
     fn test_origin() -> Origin {
-        Origin {
-            kind_text: "",
-            byte: 0..0,
-            start: Point { row: 0, column: 0 },
-            end: Point { row: 0, column: 0 },
-        }
+        Origin::new(
+            "identifier",
+            0..0,
+            Point { row: 0, column: 0 },
+            Point { row: 0, column: 0 },
+        )
     }
 
     fn param(ty: &str, by_ref: bool) -> Param {

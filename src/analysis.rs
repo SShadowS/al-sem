@@ -414,7 +414,7 @@ fn file_metrics(
             .snap
             .decls_by_file
             .get(rel_posix)
-            .map(|decls| decls.iter().map(|d| (d.origin.byte.start, d)).collect())
+            .map(|decls| decls.iter().map(|d| (d.origin.byte().start, d)).collect())
             .unwrap_or_default();
         Some((g, entry.file.clone(), decl_at))
     });
@@ -470,7 +470,7 @@ fn file_metrics(
 
             let decl = in_snapshot
                 .as_ref()
-                .and_then(|(g, _, decl_at)| Some((*g, *decl_at.get(&r.origin.byte.start)?)));
+                .and_then(|(g, _, decl_at)| Some((*g, *decl_at.get(&r.origin.byte().start)?)));
             let counted = decl.filter(|_| !signature_only);
             if report_unused
                 && let Some((g, d)) = decl
@@ -500,7 +500,7 @@ fn file_metrics(
                 .then(|| crate::test_quality::body_counts(&file.ir, obj, r))
                 .flatten();
             if let Some(b) = &body {
-                own_at.push((r.origin.byte.start, b.own()));
+                own_at.push((r.origin.byte().start, b.own()));
             }
             if want_tests && crate::test_quality::is_test(r) {
                 let b = body.unwrap_or_default();
@@ -770,7 +770,7 @@ pub(crate) fn is_framework_invocation_attribute(name: &str) -> bool {
 /// definition here means neither module drifts, and Task 17 can delete
 /// `parser.rs` without orphaning anything `custom.rs` depends on.
 pub(crate) fn signature_ir(source: &str, r: &RoutineDecl) -> String {
-    let raw = &source[r.origin.byte.clone()];
+    let raw = &source[r.origin.byte()];
     let end = find_body_start(raw).unwrap_or(raw.len());
     normalize_signature_ws(&raw[..end])
 }

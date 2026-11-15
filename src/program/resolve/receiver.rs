@@ -3715,12 +3715,12 @@ mod tests {
     // -----------------------------------------------------------------------
 
     fn test_origin() -> Origin {
-        Origin {
-            kind_text: "",
-            byte: 0..0,
-            start: Point { row: 0, column: 0 },
-            end: Point { row: 0, column: 0 },
-        }
+        Origin::new(
+            "identifier",
+            0..0,
+            Point { row: 0, column: 0 },
+            Point { row: 0, column: 0 },
+        )
     }
 
     /// Build a minimal `ProgramGraph` with one app containing:

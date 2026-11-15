@@ -1087,7 +1087,7 @@ mod tests {
         // which carries `target` and no `name`; the lowerer captures it as an
         // enclosing member (see `lower/mod.rs`'s
         // `modify_action_modification_target_becomes_enclosing_member`, whose
-        // `origin.kind_text` assert is the executable join to this literal).
+        // `origin.kind_text()` assert is the executable join to this literal).
         assert_eq!(
             page_trigger_kinds(Some("modify_action_modification")),
             vec!["trigger-page".to_string(), "page-action".to_string()]

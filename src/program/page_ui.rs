@@ -205,11 +205,11 @@ pub fn editable_setters(file: &AlFile) -> Vec<Vec<EditableSetter>> {
             }
             _ => continue,
         };
-        let at = e.origin.byte.start;
+        let at = e.origin.byte().start;
         let owners: Vec<usize> = match file
             .objects
             .iter()
-            .position(|o| o.origin.byte.contains(&at))
+            .position(|o| o.origin.byte().contains(&at))
         {
             Some(i) => vec![i],
             None => (0..file.objects.len()).collect(),

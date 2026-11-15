@@ -641,9 +641,9 @@ fn extract_subscriber_display(
     ir: &Ir,
     attr: &AttributeIr,
 ) -> Option<(String, String, String)> {
-    let a0 = &source[ir.expr(attr.args[0]).origin.byte.clone()];
-    let a1 = &source[ir.expr(attr.args[1]).origin.byte.clone()];
-    let a2 = &source[ir.expr(attr.args[2]).origin.byte.clone()];
+    let a0 = &source[ir.expr(attr.args[0]).origin.byte()];
+    let a1 = &source[ir.expr(attr.args[1]).origin.byte()];
+    let a2 = &source[ir.expr(attr.args[2]).origin.byte()];
 
     // Fail-closed (mirrors legacy exactly): no `::` in arg 0 means this
     // isn't a recognizable `ObjectType::X` qualifier at all — never guess.
