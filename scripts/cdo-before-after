@@ -172,15 +172,36 @@ def _extract(repo, sha, src):
         open(os.path.join(src, ".extracted"), "w").close()
 
 
-def census_cmd(src, repo, no_run):
-    """The census test's command and environment for a side whose sources are in `src`."""
+def build_census(name, src, repo, logf, out):
+    """Build this side's lib tests (`cdo` profile) from `src` and copy the test
+    executable into `out/census-bin/<name>`: the census later runs that copy, so
+    sources that change while the run waits for the slot cannot reach it (review r2,
+    sol: `cargo test` at measure time rebuilt the live checkout)."""
     env = dict(speed.child_env())
     if src != repo:
         env["CARGO_TARGET_DIR"] = os.path.join(os.path.dirname(src), "target")
         env.setdefault("TREE_SITTER_AL_PATH", speed.grammar_dir(repo, archive=True))
-    cmd = ["cargo", "test", "--profile", "cdo", "-p", "al-sem", "--lib", CENSUS_TEST]
-    return (cmd + ["--no-run"] if no_run else
-            cmd + ["--", "--nocapture", "--test-threads=1"]), env
+    log(f"{name}: building the census test in {src}")
+    r = subprocess.run(["cargo", "test", "--profile", "cdo", "-p", "al-sem", "--lib",
+                        "--no-run", "--message-format=json"], cwd=src, env=env,
+                       stdout=subprocess.PIPE, stderr=logf, text=True)
+    exes = []
+    for line in r.stdout.splitlines():
+        try:
+            msg = json.loads(line)
+        except ValueError:
+            continue
+        if (msg.get("reason") == "compiler-artifact" and msg.get("executable")
+                and msg.get("profile", {}).get("test")
+                and "lib" in msg.get("target", {}).get("kind", [])):
+            exes.append(msg["executable"])
+    if r.returncode != 0 or len(exes) != 1:
+        fail(f"{name}: the census test's build failed (exit {r.returncode}, "
+             f"{len(exes)} lib test executables; log: {logf.name})")
+    kept = os.path.join(out, "census-bin", name)
+    os.makedirs(os.path.dirname(kept), exist_ok=True)
+    shutil.copy2(exes[0], kept)
+    return kept
 
 
 def sha256(path):
@@ -239,11 +260,12 @@ def measure(name, bindir, ws, out, census, repo):
                 tail = eh.read()[-1500:]
             fail(f"{name}: {step} exited {rc}:\n{tail}")
     if census:
-        cmd, cenv = census_cmd(census, repo, no_run=False)
-        cenv["CDO_WS"] = ws
+        exe, src = census
+        cenv = dict(speed.child_env(), CDO_WS=ws)
         log(f"{name}: census")
         t0 = time.monotonic()
-        r = subprocess.run(cmd, cwd=census, env=cenv, capture_output=True, text=True)
+        r = subprocess.run([exe, CENSUS_TEST, "--nocapture", "--test-threads=1"],
+                           cwd=src, env=cenv, capture_output=True, text=True)
         meta["seconds"]["census"] = round(time.monotonic() - t0, 1)
         meta["exit"]["census"] = r.returncode
         with open(os.path.join(d, "census.log"), "w") as fh:
@@ -430,7 +452,8 @@ def main():
         fail(f"{base['label']} and {head['label']} have the same source tree: nothing to "
              "compare (--allow-same for a noise run)", 2)
     out = a.out or os.path.join(speed.target_dir(repo), "before-after",
-                                f"{base['label']}..{head['label']}-{time.strftime('%Y%m%d-%H%M%S')}")
+                                f"{base['label']}..{head['label']}-"
+                                f"{time.strftime('%Y%m%d-%H%M%S')}-{os.getpid()}")
 
     if a.dry_run:
         for name, side in (("base", base), ("head", head)):
@@ -450,11 +473,19 @@ def main():
         log(f"measures, base then head, on {ws}: "
             + ", ".join([f"alsem {' '.join(argv(ws, '<out>'))}" for argv in RUNS.values()]
                         + [f"aldump --program-call-graph-stats {ws}"]
-                        + ([f"cargo test ... {CENSUS_TEST}"] if a.census else [])))
+                        + ([f"the {CENSUS_TEST} lib test (built before the slot)"]
+                           if a.census else [])))
         log(f"report: {out}")
         return 0
 
     os.makedirs(out, exist_ok=True)
+    # One run per output folder for the whole run (review r2, sol): a second run
+    # there would overwrite this one's copied binaries while it waits or measures.
+    out_lock = open(os.path.join(out, ".before-after.lock"), "w")
+    try:
+        fcntl.flock(out_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        fail(f"another cdo-before-after run is using {out}")
     for old in ("report.md", "report.json"):  # a reused --out must not keep an old verdict
         if os.path.exists(os.path.join(out, old)):
             os.remove(os.path.join(out, old))
@@ -470,12 +501,7 @@ def main():
         if a.census:
             for name, side in (("base", base), ("head", head)):
                 src = census_src(repo, side)
-                cmd, env = census_cmd(src, repo, no_run=True)
-                log(f"{name}: building the census test in {src}")
-                if subprocess.run(cmd, cwd=src, env=env, stdout=logf,
-                                  stderr=subprocess.STDOUT).returncode != 0:
-                    fail(f"{name}: the census test's build failed (log: {logf.name})")
-                census[name] = src
+                census[name] = (build_census(name, src, repo, logf, out), src)
 
     owned = take_slot(f"before-after {base['label']}..{head['label']}", a.slot_timeout)
     try:

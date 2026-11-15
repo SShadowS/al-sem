@@ -30,12 +30,20 @@ build)
     prev=$a
   done ;;
 test)
-  case " $* " in *" --no-run "*) exit 0 ;; esac
-  [ -f "$BA_FIX/$side/no-census" ] && exit 101
-  sed 's/^/ENG14-CENSUS /' census.txt
-  [ -f "$BA_FIX/$side/census-panic" ] && { echo "panicked: something else" >&2; exit 101; }
-  echo "untrusted routines per app moved: explain the change, then re-pin" >&2
-  exit 101 ;;
+  case " $* " in *" --no-run "*) ;; *) echo "cargo test at measure time" >&2; exit 1 ;; esac
+  exe="${CARGO_TARGET_DIR:-$PWD/target}/cdo/deps/al_sem-test"
+  mkdir -p "$(dirname "$exe")"
+  {
+    printf '#!/bin/sh\necho "census-bin $0 $*" >> "$BA_LOG"\nF="$BA_FIX/%s"\n' "$side"
+    printf '[ -f "$F/no-census" ] && exit 101\n'
+    sed "s/^/echo 'ENG14-CENSUS /; s/\$/'/" census.txt
+    printf '[ -f "$F/census-panic" ] && { echo "panicked: something else" >&2; exit 101; }\n'
+    printf 'echo "untrusted routines per app moved: explain the change, then re-pin" >&2\nexit 101\n'
+  } > "$exe"
+  chmod +x "$exe"
+  echo '{"reason":"compiler-artifact","target":{"kind":["bin"]},"profile":{"test":true},"executable":"/nonexistent"}'
+  printf '{"reason":"compiler-artifact","target":{"kind":["lib"]},"profile":{"test":true},"executable":"%s"}\n' "$exe"
+  echo '{"reason":"build-finished","success":true}' ;;
 esac
 "#;
 
@@ -234,7 +242,9 @@ fn exists(p: &Path) -> bool {
 /// the missing ones -> the aldump-only build check fails; every detector taken
 /// as moved (`if True`) -> `moved` holds d4; `flatten` skipping nested numbers
 /// -> `unknownByReason.r1` missing; the census sides swapped -> added and
-/// removed swapped.
+/// removed swapped; r4 (review r2, sol): the census run with `cargo test` at
+/// measure time again -> the stub refuses it, no census line, exit 1 (here, in
+/// the working-tree test and in the census refusals).
 #[test]
 fn before_after_reports_what_moved_and_caches_both_binaries() {
     let t = Ba::new();
@@ -311,6 +321,14 @@ fn before_after_reports_what_moved_and_caches_both_binaries() {
         ],
         "{log}"
     );
+    // The census ran from each side's copied test executable (review r2, sol).
+    for side in ["base", "head"] {
+        let bin = format!(
+            "census-bin {}",
+            t.path(&format!("out1/census-bin/{side}")).display()
+        );
+        assert!(log.contains(&bin), "{bin} not in {log}");
+    }
     // Each side measured while this run held the slot.
     let slot: Vec<&str> = log.lines().filter(|l| l.starts_with("slot: ")).collect();
     assert_eq!(slot.len(), 2, "{log}");
@@ -375,9 +393,14 @@ fn before_after_reports_what_moved_and_caches_both_binaries() {
 fn before_after_head_defaults_to_the_working_tree() {
     let t = Ba::new();
     std::fs::write(t.path("repo/side.txt"), "C\n").unwrap();
+    std::fs::write(t.path("repo/census.txt"), "untrusted in app X: 7\n").unwrap();
     let out = t.out("out");
-    let (code, text) = t.run(&["--out", &out, &t.c2], &[]);
+    let (code, text) = t.run(&["--census", "--out", &out, &t.c2], &[]);
     assert_eq!(code, Some(0), "{text}");
+    assert_eq!(
+        t.report("out")["census"]["added"],
+        json!(["ENG14-CENSUS untrusted in app X: 7"])
+    );
     let head_target = format!("| {} |", t.path("target/before-after-head").display());
     assert!(
         t.log()
@@ -414,7 +437,8 @@ fn before_after_head_defaults_to_the_working_tree() {
 /// 0` off -> not named (dies on the missing binary); the old-report removal off
 /// -> the VOID report.json is still there; r3 (review r1, sol): the edits hash
 /// left out of `reads` -> the same-count edit exits 0; the `--version` exit
-/// check off -> the failed `--version` is not named.
+/// check off -> the failed `--version` is not named; r4 (review r2, sol): the
+/// --out lock not taken -> the held --out runs and exits 0.
 #[test]
 fn before_after_refuses_what_it_cannot_compare() {
     let t = Ba::new();
@@ -497,6 +521,36 @@ fn before_after_refuses_what_it_cannot_compare() {
     assert!(text.contains("VOID: the workspace moved"), "{text}");
     std::fs::remove_file(t.path("fix/A/edit-ws")).unwrap();
     t.git("ws", &["checkout", "--", "a.txt"]);
+
+    // Another run holding the same --out (review r2, sol).
+    std::fs::create_dir_all(t.path("out")).unwrap();
+    // `-o`: only flock holds the lock (not its sleep), so killing it frees the lock.
+    let mut holder = std::process::Command::new("flock")
+        .arg("-o")
+        .arg(t.path("out/.before-after.lock"))
+        .args(["sleep", "60"])
+        .spawn()
+        .unwrap();
+    let start = std::time::Instant::now();
+    let mut code_text = (None, String::new());
+    while start.elapsed() < std::time::Duration::from_secs(10) {
+        code_text = t.run(&["--out", &out, &t.c1, &t.c2], &[]);
+        if code_text
+            .1
+            .contains("another cdo-before-after run is using")
+        {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    let _ = holder.kill();
+    let _ = holder.wait();
+    let (code, text) = code_text;
+    assert_eq!(code, Some(1), "{text}");
+    assert!(
+        text.contains("another cdo-before-after run is using"),
+        "{text}"
+    );
 
     // `alsem --version` failing is a failed step too.
     std::fs::write(t.path("fix/A/fail-alsem---version"), "").unwrap();
