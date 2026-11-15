@@ -1213,26 +1213,45 @@ pub(crate) fn recompute_file(
 /// rung 1 instead PATCHES this index for the touched file(s) only
 /// (`apply_rung1_core`) — see this module's amended ownership-law doc.
 ///
-/// **Duplicate-`RoutineNodeId` winner is UNSPECIFIED** (`decls_by_file` can
-/// hold the SAME id declared in >1 file — the
-/// `dedup_routines_preserving_genuine_overloads` population — and this
-/// function, iterating a `HashMap`, lets whichever file's entry is visited
-/// LAST win, which is already nondeterministic across builds/platforms). The
-/// only invariant callers may rely on: every id present in the UNION of
-/// `decls_by_file` maps to ONE of its declaring files' own entries. The
-/// rung-1 patch (`Updater::decl_multiplicity`) preserves this exact
-/// invariant rather than any specific winner — see `apply_rung1_core`'s doc.
+/// **Duplicate-`RoutineNodeId` winner** (`decls_by_file` can hold the SAME id
+/// declared in >1 file — the `dedup_routines_preserving_genuine_overloads`
+/// population): ⟨TLS-68⟩ the FIRST entry of the file with the SMALLEST
+/// `virtual_path` ([`decl_wins`]). It used to be whichever file this
+/// `HashMap` walk visited last, so the LSP's positions and URIs for such an id
+/// changed from process to process. The rule is the path, not the engine's
+/// "first in graph order": rung 2 appends new files at the end, so graph order
+/// is no stable key across edits. The rung-1 patch (`apply_rung1_core`) keeps
+/// the same winner through the same comparison, so a patched index equals a
+/// fresh one exactly.
 #[must_use]
 pub fn build_decl_by_id(
     decls_by_file: &HashMap<String, Arc<Vec<DeclEntry>>>,
 ) -> HashMap<RoutineNodeId, DeclEntry> {
-    let mut decl_by_id = HashMap::new();
+    let mut decl_by_id: HashMap<RoutineNodeId, DeclEntry> = HashMap::new();
     for decls in decls_by_file.values() {
         for d in decls.iter() {
-            decl_by_id.insert(d.id.clone(), d.clone());
+            match decl_by_id.entry(d.id.clone()) {
+                std::collections::hash_map::Entry::Vacant(e) => {
+                    e.insert(d.clone());
+                }
+                std::collections::hash_map::Entry::Occupied(mut e) => {
+                    if decl_wins(d, e.get()) {
+                        e.insert(d.clone());
+                    }
+                }
+            }
         }
     }
     decl_by_id
+}
+
+/// ⟨TLS-68⟩ Does `new` take a duplicated id from `cur`? Only from a file with a
+/// larger `virtual_path`. Two entries of one file never replace each other, so a
+/// walk of each file's list in order keeps that file's first entry; across
+/// files the smallest path wins whatever order the files are walked in.
+#[must_use]
+pub fn decl_wins(new: &DeclEntry, cur: &DeclEntry) -> bool {
+    new.virtual_path < cur.virtual_path
 }
 
 /// Count of DISTINCT declaring FILES per `RoutineNodeId` across
