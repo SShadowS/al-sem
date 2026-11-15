@@ -434,6 +434,29 @@ fn before_after_head_defaults_to_the_working_tree() {
     assert_eq!(rep["findings"]["analyze-primary"]["moved"], json!({}));
 }
 
+/// The default output folder under a relative `CARGO_TARGET_DIR` (the run's
+/// folder is the repo) still works with `--census`, whose base side runs from
+/// its archived sources.
+///
+/// Mutation (2026-11-15, review r4, sol): the default `out` not made absolute
+/// (`abspath` only around `a.out`) -> the base census executable is not found,
+/// exit 1.
+#[test]
+fn before_after_default_out_under_a_relative_target() {
+    let t = Ba::new();
+    let (code, text) = t.run(
+        &["--census", &t.c1, &t.c2],
+        &[("CARGO_TARGET_DIR", "rel-target")],
+    );
+    assert_eq!(code, Some(0), "{text}");
+    let runs: Vec<_> = std::fs::read_dir(t.path("repo/rel-target/before-after"))
+        .unwrap()
+        .collect();
+    assert_eq!(runs.len(), 1);
+    let run = runs[0].as_ref().unwrap().path();
+    assert!(run.join("report.md").exists(), "{}", run.display());
+}
+
 /// Every refusal exits non-zero and says why: the same tree (2); binaries that
 /// came out identical (1, nothing measured); a command that fails on base (head
 /// never measured); a census with no census line, or one that panicked for

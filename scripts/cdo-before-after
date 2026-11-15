@@ -457,10 +457,11 @@ def main():
     if base["tree"] is not None and base["tree"] == head["tree"] and not a.allow_same:
         fail(f"{base['label']} and {head['label']} have the same source tree: nothing to "
              "compare (--allow-same for a noise run)", 2)
-    # Absolute (review r3, sol): the census runs from another folder.
-    out = os.path.abspath(a.out) if a.out else os.path.join(speed.target_dir(repo), "before-after",
-                                f"{base['label']}..{head['label']}-"
-                                f"{time.strftime('%Y%m%d-%H%M%S')}-{os.getpid()}")
+    # Absolute, given or default (reviews r3-r4, sol): the census runs from another
+    # folder, and a relative CARGO_TARGET_DIR makes the default relative too.
+    out = os.path.abspath(a.out or os.path.join(
+        speed.target_dir(repo), "before-after",
+        f"{base['label']}..{head['label']}-{time.strftime('%Y%m%d-%H%M%S')}-{os.getpid()}"))
 
     if a.dry_run:
         for name, side in (("base", base), ("head", head)):
