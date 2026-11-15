@@ -1,0 +1,32 @@
+cdo-slot: taken by engine (ENG-82 count/size probe (untimed))
+== size_of (this build, stack size of the value; heap not included)
+size_of Origin                                48 B
+size_of Expr                                 128 B
+size_of ExprKind                              80 B
+size_of Stmt                                  88 B
+size_of Block                                 72 B
+size_of PAnchor                               64 B
+size_of PCFNNode                             424 B
+size_of PCallSite                            432 B
+size_of POperationSite                       184 B
+size_of ClassifiedEdge                       368 B
+size_of Edge                                 224 B
+size_of Route                                240 B
+size_of Condition                              1 B
+size_of al_sem::program::node::RoutineNodeId    72 B
+size_of ModelRoutine                        1064 B
+
+== parse trees: files, exprs, stmts, blocks, identifier uses, identifier bytes
+workspace     [582, 122411, 28424, 13063, 78054, 978604]
+dependencies  [10881, 2791331, 600787, 278478, 1838488, 24416634]
+
+== retained dependency call edges
+edges 438823  routes 325407 (capacity 325407)  single-route edges 306595
+conditions 13  routes with any condition 13
+inline bytes: edges 154 MiB, routes 74 MiB (as owned, heap of ids not included)
+
+== model rows (cross-app, EXPLAIN needs)
+routines 34205  call+operation sites 126814  CFN nodes 323588
+anchors 600851  source_unit_id strings 600851 (50 MiB)  syntax_kind bytes 8 MiB
+anchors inline 36 MiB (as owned, 64 B each)
+299.37 user 37.47 wall 5530964 KiB

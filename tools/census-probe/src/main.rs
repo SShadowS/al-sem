@@ -432,7 +432,9 @@ fn drop_root_by_field(r: Root) {
                         bodies,
                         lsp,
                         lsp_events,
+                        declarations,
                     } = n;
+                    step("SHARED dep tier: declarations", declarations);
                     step(
                         "SHARED dep tier: dependency event links",
                         lsp_events.into_inner(),
@@ -1212,7 +1214,9 @@ fn q6(ws: PathBuf) {
         dependency_diagnostics,
         calls,
         events,
+        page_ui_blocked,
     } = resolved;
+    drop(page_ui_blocked);
     let ModelEntities {
         objects,
         tables,
@@ -1653,7 +1657,12 @@ fn resident_mode(ws: PathBuf, routine: String, low_mem: bool) {
         generation: 1,
         inputs_stamp: "probe".into(),
     };
-    let rev = Revision::new(id, Arc::clone(&inputs), target);
+    let rev = Revision::new(
+        id,
+        Arc::clone(&inputs),
+        target,
+        al_sem::engine::resident::session::REVISION_NEEDS.assembly(),
+    );
     let ask = |name: &str| -> Box<dyn Job + '_> { resident_job(name, &inputs, &routine) };
     for round in 0..2 {
         for name in ["query", "explain", "prove", "digest"] {
@@ -1895,8 +1904,12 @@ fn resident_job<'a>(
             deterministic: true,
             single_app: false,
             closed_world: false,
+            assume_no_dependents: false,
             human: false,
+            detail: false,
             out: None,
+            slice: None,
+            surface: al_sem::engine::follow_up::Surface::default(),
         }),
         _ => Box::new(DigestJob::new(
             DigestRequest {
@@ -1909,7 +1922,7 @@ fn resident_job<'a>(
                 single_app: false,
                 tests: false,
                 include_reads: false,
-                diff_root: DiffRoot::Workspace,
+                diff_root: DiffRoot::Workspace.into(),
             },
             false,
             None,

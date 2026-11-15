@@ -1,0 +1,19 @@
+[package]
+name = "eng82-pprof-probe"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# ENG-82: an in-process CPU profile of the resident model build. `samply` needs
+# perf_event_paranoid <= 1 (the container has 2); pprof samples with SIGPROF timers and needs
+# no privilege. Scratch only, never part of the repo.
+[dependencies]
+al-sem = { path = "/work/alsem-wt/lane-engine" }
+pprof = "0.14"
+mimalloc = "0.1"
+
+[profile.release]
+debug = "line-tables-only"
+strip = false
+
+[workspace]

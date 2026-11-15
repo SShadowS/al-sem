@@ -1,0 +1,87 @@
+//! ENG-82: `eng82-pprof-probe <workspace> <out-dir>`: one resident model build (the engine
+//! child's path: `WorkspaceSession` + `build_target`) under a SIGPROF sampler. Writes
+//! `folded.txt` (one line per stack, root first, `;`-joined, then the sample count) and prints the
+//! top functions by self and by inclusive samples. Shares, not times: the sampler sees CPU time
+//! across every thread of the process.
+
+use std::collections::{HashMap, HashSet};
+use std::io::Write;
+use std::path::Path;
+
+use al_sem::engine::resident::session::{build_target, REVISION_READ};
+use al_sem::program::inputs::WorkspaceInputs;
+use al_sem::program::session::{MemoryMode, WorkspaceSession};
+
+#[global_allocator]
+static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
+/// A demangled name without its trailing `::h<hash>`.
+fn clean(name: &str) -> String {
+    match name.rfind("::h") {
+        Some(i) if name[i + 3..].chars().all(|c| c.is_ascii_hexdigit()) => name[..i].to_string(),
+        _ => name.to_string(),
+    }
+}
+
+fn main() {
+    let mut args = std::env::args().skip(1);
+    let ws = args
+        .next()
+        .expect("usage: eng82-pprof-probe <workspace> <out-dir>");
+    let out = args.next().expect("an output dir");
+    std::fs::create_dir_all(&out).expect("output dir");
+    let inputs = WorkspaceInputs::read(Path::new(&ws), &REVISION_READ);
+    let mut session = WorkspaceSession::with_mode(MemoryMode::Default);
+    let guard = pprof::ProfilerGuardBuilder::default()
+        .frequency(499)
+        .blocklist(&["libc", "libgcc", "pthread", "vdso"])
+        .build()
+        .expect("profiler");
+    let t = std::time::Instant::now();
+    let target = build_target(&mut session, &inputs, false)
+        .unwrap_or_else(|_| panic!("the model did not build"));
+    let wall = t.elapsed().as_secs_f64();
+    let report = guard.report().build().expect("report");
+    drop(guard);
+
+    let (mut total, mut selfs, mut incl) = (0u64, HashMap::new(), HashMap::new());
+    let mut folded = std::fs::File::create(Path::new(&out).join("folded.txt")).expect("folded");
+    for (frames, &count) in &report.data {
+        let count = count as u64;
+        total += count;
+        // Leaf first; each frame may list inlined symbols, innermost first.
+        let names: Vec<String> = frames
+            .frames
+            .iter()
+            .flat_map(|f| f.iter().map(|s| clean(&s.name())))
+            .collect();
+        if let Some(leaf) = names.first() {
+            *selfs.entry(leaf.clone()).or_insert(0u64) += count;
+        }
+        let mut seen = HashSet::new();
+        for n in &names {
+            if seen.insert(n.clone()) {
+                *incl.entry(n.clone()).or_insert(0u64) += count;
+            }
+        }
+        let root_first: Vec<&str> = names.iter().rev().map(String::as_str).collect();
+        writeln!(folded, "{} {}", root_first.join(";"), count).expect("write");
+    }
+    println!("build wall {wall:.1} s, samples {total} (499 Hz across all threads)");
+    let top = |m: &HashMap<String, u64>, title: &str, n: usize| {
+        let mut v: Vec<_> = m.iter().collect();
+        v.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
+        println!("\n== top {n} by {title}");
+        for (name, c) in v.into_iter().take(n) {
+            println!(
+                "{:6.2}%  {:>7}  {}",
+                100.0 * *c as f64 / total as f64,
+                c,
+                name
+            );
+        }
+    };
+    top(&selfs, "self samples", 60);
+    top(&incl, "inclusive samples", 80);
+    drop(target);
+}

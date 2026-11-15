@@ -1,0 +1,182 @@
+//! ENG-82 probe: `eng82-probe <workspace>`.
+//!
+//! Prints (1) `size_of` of the hot types; (2) per parse population (workspace, dependency bodies):
+//! files, IR expressions / statements / blocks, identifier-string bytes; (3) the retained dependency
+//! call edges: count, routes per edge, conditions per route; (4) the model rows: routines, anchors
+//! (`PAnchor`), anchor string bytes, CFN nodes, site ids.
+//!
+//! Conventions: counts are exact; string bytes are `len` (not capacity); nothing shared is counted
+//! twice except where a line says "as owned". (3) and (4) read real structures; (4) counts through
+//! each routine's `Debug` text (`ModelRoutine` has no `Serialize`), so it is a count of occurrences,
+//! not of distinct allocations.
+
+use std::mem::size_of;
+use std::path::Path;
+
+use al_sem::program::body::features::{PAnchor, PCFNNode, PCallSite, POperationSite};
+use al_sem::program::model::program_calls::assemble_and_resolve_cross_app_program;
+use al_sem::program::model::workspace::{AssemblyNeeds, ModelRoutine};
+use al_sem::program::resolve::edge::{Condition, Edge, Route};
+use al_sem::program::resolve::full::ClassifiedEdge;
+use al_sem::program::resolved::{ProgramScope, ResolvedProgram};
+use al_syntax::ir::{Block, Expr, ExprKind, Origin, Stmt};
+
+macro_rules! sz {
+    ($($t:ty),* $(,)?) => {
+        $(println!("size_of {:<34} {:>5} B", stringify!($t), size_of::<$t>());)*
+    };
+}
+
+/// Files, exprs, stmts, blocks, identifier bytes over parsed files.
+fn tree_counts<'a>(
+    files: impl Iterator<Item = &'a al_sem::snapshot::parse::ParsedFile>,
+) -> [usize; 6] {
+    let mut c = [0usize; 6];
+    for f in files {
+        let ir = &f.file.ir;
+        c[0] += 1;
+        c[1] += ir.expr_count();
+        c[2] += ir.stmt_count();
+        c[3] += ir.block_count();
+        for e in ir.iter_exprs() {
+            match &e.kind {
+                ExprKind::Identifier(s) | ExprKind::QuotedIdentifier(s) => {
+                    c[4] += 1;
+                    c[5] += s.len();
+                }
+                ExprKind::Member { member, .. } => {
+                    c[4] += 1;
+                    c[5] += member.len();
+                }
+                _ => {}
+            }
+        }
+    }
+    c
+}
+
+/// Occurrences of `needle` in `hay`, and the summed length of the quoted string that follows each
+/// `field: "` (for anchor text fields).
+fn quoted_len_after(hay: &str, field: &str) -> (usize, usize) {
+    let pat = format!("{field}: \"");
+    let (mut n, mut bytes) = (0, 0);
+    let mut rest = hay;
+    while let Some(i) = rest.find(&pat) {
+        rest = &rest[i + pat.len()..];
+        let end = rest.find('"').unwrap_or(0);
+        n += 1;
+        bytes += end;
+        rest = &rest[end..];
+    }
+    (n, bytes)
+}
+
+fn main() {
+    let ws = std::env::args()
+        .nth(1)
+        .expect("usage: eng82-probe <workspace>");
+    println!("== size_of (this build, stack size of the value; heap not included)");
+    sz!(
+        Origin,
+        Expr,
+        ExprKind,
+        Stmt,
+        Block,
+        PAnchor,
+        PCFNNode,
+        PCallSite,
+        POperationSite
+    );
+    sz!(
+        ClassifiedEdge,
+        Edge,
+        Route,
+        Condition,
+        al_sem::program::node::RoutineNodeId,
+        ModelRoutine
+    );
+
+    let inputs =
+        al_sem::program::inputs::WorkspaceInputs::read(Path::new(&ws), &Default::default());
+    let p = ResolvedProgram::build(&inputs, ProgramScope::CrossApp).expect("program build");
+    let ctx = &p.body().ctx;
+
+    println!("\n== parse trees: files, exprs, stmts, blocks, identifier uses, identifier bytes");
+    let ws_counts = tree_counts(ctx.parsed().iter().flat_map(|u| u.files.iter()));
+    println!("workspace     {ws_counts:?}");
+    match ctx.dep_bodies() {
+        Some(units) => {
+            let dep = tree_counts(units.iter().flat_map(|u| u.files.iter()));
+            println!("dependencies  {dep:?}");
+        }
+        None => println!("dependencies  (not kept by this build's profile)"),
+    }
+
+    println!("\n== retained dependency call edges");
+    let res = ctx.resolve_dependency_bodies();
+    let edges = &res.edges;
+    let routes: usize = edges.iter().map(|e| e.edge.routes.len()).sum();
+    let single = edges.iter().filter(|e| e.edge.routes.len() == 1).count();
+    let conds: usize = edges
+        .iter()
+        .flat_map(|e| e.edge.routes.iter())
+        .map(|r| r.conditions.len())
+        .sum();
+    let with_conds = edges
+        .iter()
+        .flat_map(|e| e.edge.routes.iter())
+        .filter(|r| !r.conditions.is_empty())
+        .count();
+    let route_cap: usize = edges.iter().map(|e| e.edge.routes.capacity()).sum();
+    println!(
+        "edges {}  routes {} (capacity {})  single-route edges {}",
+        edges.len(),
+        routes,
+        route_cap,
+        single
+    );
+    println!(
+        "conditions {}  routes with any condition {}",
+        conds, with_conds
+    );
+    println!(
+        "inline bytes: edges {} MiB, routes {} MiB (as owned, heap of ids not included)",
+        edges.len() * size_of::<ClassifiedEdge>() / 1_048_576,
+        route_cap * size_of::<Route>() / 1_048_576
+    );
+    drop(res);
+
+    println!("\n== model rows (cross-app, EXPLAIN needs)");
+    let cross = assemble_and_resolve_cross_app_program(&inputs, true, AssemblyNeeds::EXPLAIN)
+        .expect("cross-app model");
+    let rows: &Vec<ModelRoutine> = &cross.resolved.workspace.routines;
+    let (mut anchors, mut unit_n, mut unit_b, mut kind_b, mut cfn, mut sites) = (0, 0, 0, 0, 0, 0);
+    for r in rows {
+        let d = format!("{r:?}");
+        anchors += d.matches("PAnchor {").count();
+        let (n, b) = quoted_len_after(&d, "source_unit_id");
+        unit_n += n;
+        unit_b += b;
+        kind_b += quoted_len_after(&d, "syntax_kind").1;
+        cfn += d.matches("PCFNNode {").count();
+        sites += r.call_sites.len() + r.operation_sites.len();
+    }
+    println!(
+        "routines {}  call+operation sites {}  CFN nodes {}",
+        rows.len(),
+        sites,
+        cfn
+    );
+    println!(
+        "anchors {}  source_unit_id strings {} ({} MiB)  syntax_kind bytes {} MiB",
+        anchors,
+        unit_n,
+        unit_b / 1_048_576,
+        kind_b / 1_048_576
+    );
+    println!(
+        "anchors inline {} MiB (as owned, {} B each)",
+        anchors * size_of::<PAnchor>() / 1_048_576,
+        size_of::<PAnchor>()
+    );
+}
