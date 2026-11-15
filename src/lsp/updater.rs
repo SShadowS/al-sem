@@ -132,8 +132,8 @@ use rayon::prelude::*;
 use crate::lsp::def_surface::{DefSurface, def_surface_fingerprint};
 use crate::lsp::snapshot::{
     DeclEntry, LspEdge, LspSnapshot, ParsedFileEntry, build_decl_by_id, build_decl_multiplicity,
-    build_incoming, debug_assert_same_dep_links, edge_targets, push_edge_targets, recompute_file,
-    split_event_links,
+    build_incoming, debug_assert_same_dep_links, decl_wins, edge_targets, push_edge_targets,
+    recompute_file, split_event_links,
 };
 use crate::program::assemble_program_graph;
 use crate::program::dep_cache::DepCache;
@@ -993,7 +993,19 @@ impl Updater {
             return;
         }
         let pending = std::mem::take(&mut self.pending);
+        // ⟨TLS-68⟩ This map's hash order never reaches the file order: only
+        // rung 1 fills `pending`, and a brand-new file always takes rung 2
+        // (`decide`: its fingerprint counts as changed), so every pending file
+        // is already in the workspace and `splice_file` replaces it in place.
         for (_, pf) in pending {
+            debug_assert!(
+                self.workspace
+                    .files
+                    .iter()
+                    .any(|f| f.virtual_path == pf.virtual_path),
+                "a pending (rung-1) file is always an existing workspace file: {}",
+                pf.virtual_path
+            );
             splice_file(&mut self.workspace, pf);
         }
     }
@@ -1157,10 +1169,14 @@ fn apply_rung1_core(
                     // this file's own contribution is scanned below with its
                     // NEW decl list, which no longer declares `id`) for any
                     // surviving declaring file.
+                    // ⟨TLS-68⟩ The smallest-path file's first entry
+                    // (`decl_wins`), as `build_decl_by_id` picks; not the
+                    // first match in this map's hash order.
                     let winner = decls_by_file
                         .iter()
                         .filter(|(f, _)| f.as_str() != vp.as_str())
-                        .find_map(|(_, ds)| ds.iter().find(|d| &d.id == id));
+                        .filter_map(|(_, ds)| ds.iter().find(|d| &d.id == id))
+                        .reduce(|best, d| if decl_wins(d, best) { d } else { best });
                     if let Some(w) = winner {
                         decl_by_id.insert(id.clone(), w.clone());
                     }
@@ -1168,13 +1184,25 @@ fn apply_rung1_core(
             }
         }
 
-        // Added/overwritten: every id in the NEW list.
+        // Added/overwritten: every id in the NEW list. ⟨TLS-68⟩ This file's
+        // first entry for an id takes it when nobody holds it, when this file
+        // held it (its old entry), or when it wins by `decl_wins` (a smaller
+        // path); a smaller-path file keeps it. It used to take every id.
+        let mut taken_here: HashSet<&RoutineNodeId> = HashSet::new();
         for d in decls.iter() {
             affected_ids.insert(d.id.clone());
             if !old_ids.contains(&d.id) {
                 *mult.entry(d.id.clone()).or_insert(0) += 1;
             }
-            decl_by_id.insert(d.id.clone(), d.clone());
+            if !taken_here.insert(&d.id) {
+                continue; // a later entry of this file: the first one decided
+            }
+            let take = decl_by_id
+                .get(&d.id)
+                .is_none_or(|cur| cur.virtual_path == vp || decl_wins(d, cur));
+            if take {
+                decl_by_id.insert(d.id.clone(), d.clone());
+            }
         }
 
         // ---- incoming: remove this file's OLD edge targets, push NEW ----

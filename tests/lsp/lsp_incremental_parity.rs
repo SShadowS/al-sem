@@ -1828,21 +1828,15 @@ codeunit 50100 "Alpha"
         patched_ids, fresh_ids,
         "rung-1 patched decl_by_id's key set must match a fresh wholesale rebuild"
     );
+    // ⟨TLS-68⟩ Exactly the rebuild's entry (the smallest-path file's first),
+    // not merely "one of the declaring files'": that weaker check passed
+    // whichever file won.
     for id in &patched_ids {
-        let patched_entry = &new_snap.decl_by_id[*id];
-        let is_valid_winner = new_snap
-            .decls_by_file
-            .values()
-            .flat_map(|decls| decls.iter())
-            .any(|d| {
-                &d.id == *id
-                    && d.virtual_path == patched_entry.virtual_path
-                    && canon_decl(d) == canon_decl(patched_entry)
-            });
-        assert!(
-            is_valid_winner,
-            "decl_by_id[{id:?}] = {patched_entry:?} must be ONE of the declaring \
-             files' own DeclEntry values"
+        let (patched, fresh) = (&new_snap.decl_by_id[*id], &fresh_decl_by_id[*id]);
+        assert_eq!(
+            (canon_decl(patched), &patched.virtual_path),
+            (canon_decl(fresh), &fresh.virtual_path),
+            "rung-1 patched decl_by_id[{id:?}] must equal a fresh build_decl_by_id"
         );
     }
 
@@ -2141,4 +2135,132 @@ fn rung1_cross_file_duplicate_routine_id_survives_edit() {
         &fresh2,
         "cross-file-duplicate: after Dup2.al delete",
     );
+}
+
+/// ⟨TLS-68⟩ A routine id declared in two files resolves to the smallest
+/// path's entry: on every fresh build (a `HashMap` walk is ordered differently
+/// each time, so the old last-visited winner varied), after a rung-1 edit of
+/// the LOSING file (the patch used to hand the id to whichever file was just
+/// saved), and after a rung-1 edit of the winning file; the patched index
+/// equals a fresh `build_decl_by_id` exactly at each step.
+///
+/// Mutations (2026-11-15): `decl_wins` with `>` (the largest path wins) ->
+/// the fresh builds pick `Dup_b.al`; the patch taking every id again (`take =
+/// true`) -> the edit of `Dup_b.al` hands it the id; the patch never taking
+/// over its own old entry (`cur.virtual_path == vp` dropped) -> the edit of
+/// `Dup_a.al` keeps the stale pre-edit span. The rescan when a winning file
+/// stops declaring an id is not reachable through rung 1 (removing a
+/// declaration changes the surface fingerprint, so it is rung 2, which
+/// rebuilds); it uses the same `decl_wins` and has no test of its own.
+#[test]
+fn duplicate_routine_id_winner_is_the_smallest_path() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(
+        dir.path().join("app.json"),
+        r#"{
+    "id": "77777777-0000-0000-0000-000000000068",
+    "name": "TLS-68 Duplicate Winner Fixture",
+    "publisher": "probe",
+    "version": "1.0.0.0"
+}"#,
+    )
+    .expect("write app.json");
+    // `pad` blank lines before the procedure move its span, so each file's
+    // entry (and a pre- or post-edit one) is told apart by its line.
+    let body = |pad: usize| {
+        format!(
+            "codeunit 50100 \"Dup\"\n{{\n{}    procedure Shared()\n    begin\n    end;\n}}\n",
+            "\n".repeat(pad)
+        )
+    };
+    std::fs::write(dir.path().join("Dup_b.al"), body(1)).expect("write Dup_b.al");
+    std::fs::write(dir.path().join("Dup_a.al"), body(3)).expect("write Dup_a.al");
+    let line_of = |snap: &LspSnapshot, id: &RoutineNodeId| {
+        let d = &snap.decl_by_id[id];
+        (d.virtual_path.clone(), d.name_origin.start.row)
+    };
+    let assert_exact = |snap: &LspSnapshot, what: &str| {
+        let fresh = al_sem::lsp::snapshot::build_decl_by_id(&snap.decls_by_file);
+        assert_eq!(snap.decl_by_id.len(), fresh.len(), "{what}: key sets");
+        for (id, d) in &snap.decl_by_id {
+            let f = &fresh[id];
+            assert_eq!(
+                (canon_decl(d), &d.virtual_path),
+                (canon_decl(f), &f.virtual_path),
+                "{what}: decl_by_id[{id:?}] must equal a fresh build_decl_by_id"
+            );
+        }
+    };
+
+    let (base, parsed) = build_full_with_parsed(dir.path());
+    let shared_id = base.decls_by_file["Dup_a.al"]
+        .iter()
+        .find(|d| d.name == "Shared")
+        .expect("Dup_a.Shared")
+        .id
+        .clone();
+    assert!(
+        base.decls_by_file["Dup_b.al"]
+            .iter()
+            .any(|d| d.id == shared_id),
+        "precondition: both files declare the same RoutineNodeId"
+    );
+    // Fresh builds: the winner is Dup_a.al (line 2 + pad 3 = row 5) every time.
+    for i in 0..8 {
+        let snap = LspSnapshot::build_full(dir.path()).expect("build_full");
+        assert_eq!(
+            line_of(&snap, &shared_id),
+            ("Dup_a.al".to_string(), 5),
+            "fresh build {i}"
+        );
+        assert_exact(&snap, "fresh build");
+    }
+
+    // A rung-1 body edit of the LOSING file: Dup_a.al keeps the id.
+    let mut updater = Updater::new(dir.path().to_path_buf(), parsed);
+    std::fs::write(
+        dir.path().join("Dup_b.al"),
+        body(1).replace("    begin\n", "    begin\n        // edited\n"),
+    )
+    .expect("edit Dup_b.al");
+    let (snap1, rung1) = updater
+        .apply_batch(
+            &base,
+            &[ChangeEvent::FileSaved(dir.path().join("Dup_b.al"))],
+        )
+        .expect("apply_batch");
+    assert_eq!(rung1, Rung::One, "precondition: a body-only edit is rung 1");
+    assert_eq!(
+        line_of(&snap1, &shared_id),
+        ("Dup_a.al".to_string(), 5),
+        "an edit of the losing file must not hand it the id"
+    );
+    assert_exact(&snap1, "after editing Dup_b.al");
+
+    // A rung-1 body edit of the WINNING file that moves its span (two blank
+    // lines inside the body; the declaration line stays): it keeps the id,
+    // with its new entry (the declaration span's end moves).
+    std::fs::write(
+        dir.path().join("Dup_a.al"),
+        body(3).replace("    begin\n", "    begin\n\n\n"),
+    )
+    .expect("edit Dup_a.al");
+    let (snap2, rung2) = updater
+        .apply_batch(
+            &snap1,
+            &[ChangeEvent::FileSaved(dir.path().join("Dup_a.al"))],
+        )
+        .expect("apply_batch");
+    assert_eq!(rung2, Rung::One, "precondition: a body-only edit is rung 1");
+    let d = &snap2.decl_by_id[&shared_id];
+    let own = snap2.decls_by_file["Dup_a.al"]
+        .iter()
+        .find(|e| e.id == shared_id)
+        .expect("Dup_a's own entry");
+    assert_eq!(
+        (canon_decl(d), &d.virtual_path),
+        (canon_decl(own), &own.virtual_path),
+        "the winning file's edit must replace its own entry"
+    );
+    assert_exact(&snap2, "after editing Dup_a.al");
 }
