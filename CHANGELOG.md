@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (TLS-69: a test for the rung-1 patch's same-file-twice guard that can fail)
+
+- `rung1_duplicate_vp_in_one_batch_stays_equivalent` (tests/lsp) was meant to guard this:
+  when one file is saved twice in a rung-1 batch, the second save must read the file's old
+  decls and edges from the working maps, not from `cur`, or `incoming` keeps duplicate
+  refs. It could not fail, because `classify` merges two saves of one path before
+  `apply_rung1_core` sees them (found by sol in TLS-68's review). Measured: with the guard's
+  reads switched to `cur`, it still passed.
+- Two new unit tests in `lsp::updater::tests` call `apply_rung1_core` with two saves of
+  `Alpha.al` directly, one for each read of the guard:
+  - `rung1_same_path_twice_in_one_call_matches_a_rebuild` (the edges read): the edit adds
+    a call to `Gamma.Standalone`, a target the file's old edges lacked. It asserts one Alpha
+    → Standalone ref, and that `incoming` equals a rebuild. Mutation: the edges read from
+    `cur` gives two refs, red.
+  - `rung1_same_path_twice_with_different_decls_matches_a_rebuild` (the decls read; review
+    r1, Fable): save 1 adds a procedure `Extra`, save 2 drops it. It asserts `Extra` is
+    gone, and that the ids and winning files of `decl_by_id`, and the multiplicity, equal a
+    rebuild. Mutation: the decls read from `cur` leaves `Extra` behind, red.
+
+  Each mutation turns only its own test red.
+- The old test stays as an end-to-end smoke test of the public API; its doc says it does not
+  reach the guard and names the test that does.
+
 ### Fixed (TLS-68: the LSP answers for a routine declared in several files are deterministic)
 
 - When one routine id is declared in more than one workspace file (the same object in two
