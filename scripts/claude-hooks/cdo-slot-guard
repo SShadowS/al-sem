@@ -51,6 +51,8 @@ SCRIPTS = {
 INFO_ANYWHERE = {
     "cdo-gate": {"-h", "--help", "--dry-run", "--layout", "--product-paths"},
     "land": {"-h", "--help", "--dry-run"},
+    # argparse's own help: it exits before any build (review r4, sol).
+    "cdo-speed": {"-h", "--help"},
 }
 INFO_FIRST = {"ci-steps": {"fmt"}}
 SEPARATORS = {";", ";;", "&&", "||", "|", "|&", "&", "(", ")", "\n"}

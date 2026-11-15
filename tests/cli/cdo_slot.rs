@@ -344,6 +344,9 @@ fn cdo_slot_guard_refuses_other_sessions_while_held() {
         // Review r2 (sol): a quoted `;` is a word; a commit message with an
         // apostrophe and parentheses in a heredoc inside `$(...)`.
         "printf '%s\\n' ';' cargo test",
+        // Review r4 (sol): cdo-speed's argparse help builds nothing.
+        "scripts/cdo-speed --help",
+        "python3 scripts/cdo-speed --help",
         "git commit -m \"$(cat <<'EOF'\nfix: don't (really) run cargo test\n\nCo-Authored-By: x\nEOF\n)\"",
     ];
     for c in guarded.iter().chain(&free) {

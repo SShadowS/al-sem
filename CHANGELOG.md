@@ -122,7 +122,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ci-steps build --dry-run` is caught); a shell's options are read with their
   operands (`-o`/`-O` in a cluster take one), so `bash -euo pipefail -c 'cargo test'`
   is caught. Mutations, each failing a test: information modes exempt for every
-  script; option operands not consumed.
+  script; option operands not consumed. Review r4 (sol): `cdo-speed --help`
+  (argparse, exits before any build) passes again (mutation: its entry removed ->
+  refused).
 
 ### Added (TLS-59: `scripts/land`, the landing chain as one command)
 
