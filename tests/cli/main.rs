@@ -168,6 +168,8 @@ mod al2dump_smoke;
 mod aldump_smoke;
 mod batch_records;
 #[cfg(unix)]
+mod before_after;
+#[cfg(unix)]
 mod cdo_slot;
 mod cli_11b_policy_collision;
 mod cli_a_html_differential;
