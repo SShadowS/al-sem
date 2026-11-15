@@ -83,6 +83,18 @@ pub struct SourcePos {
     pub col: u32,
 }
 
+impl From<al_syntax::ir::Point> for SourcePos {
+    /// The parser's point: rows count `\n` only and the column is the UTF-8 byte offset since the
+    /// last `\n`, so it equals counting newlines in the source prefix (ENG-88: that count was 42%
+    /// of the CDO model build's CPU).
+    fn from(p: al_syntax::ir::Point) -> Self {
+        SourcePos {
+            line: p.row,
+            col: p.column,
+        }
+    }
+}
+
 /// Line/col span in a named source unit — the coordinate BOTH engines align on
 /// (L3 records line/col via `PAnchor`; the fresh side converts IR byte-origins).
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
