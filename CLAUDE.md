@@ -426,8 +426,9 @@ Testing Philosophy & Goldens below).
   lowerer's recursion — see `src/snapshot/parse.rs:84-95`). There are **no**
   thread-local parsers: `al_syntax::parse` constructs a fresh
   `tree_sitter::Parser` and calls `set_language` per file
-  (`crates/al-syntax/src/parse.rs:11-14`). Reusing a parser per worker thread is
-  an open, unmeasured optimisation — see the pack-cache spec §17.5.
+  (`crates/al-syntax/src/parse.rs:11-14`). Reusing a parser per worker thread was
+  measured and dropped (TLS-67, 2026-11-15): parser setup is ~0.015% of parse + lower on CDO,
+  and a warm reused parser showed no reliable 1% gain (pack-cache spec §17.5).
 - **Incremental updates** (`notify`): Only re-parse changed files
 
 ## Performance Targets
