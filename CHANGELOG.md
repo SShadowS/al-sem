@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (TLS-73: `scripts/perf-probe` checks what samply needs, not one small buffer)
+
+- **The hole:** after the 2026-11-15 redeploy (CAP_PERFMON) `scripts/perf-probe` exited 0
+  while a real `samply record` failed with "mmap failed". The probe opened one event with a
+  16-page ring buffer; samply 0.13.1 opens one sampling event per CPU, each with 256 data pages
+  plus a header page (1 MiB; its stack size 32,000 x 32 stacks, rounded up). The kernel lets
+  one user lock `kernel.perf_event_mlock_kb` x online CPUs for perf buffers, shared by all that
+  user's buffers (the host uid, so other containers' runs too); past that, each process may use
+  its own `ulimit -l`: 516 KiB x 22 + 8 MiB is less than 22 MiB.
+- **Now:** the probe opens a sampling event and maps samply's buffer on each CPU samply uses
+  (its count: the CPUs the process may run on, capped by its own cgroup v2's quota), and
+  when samply is on PATH it also runs `samply record --save-only -- true` and needs a profile
+  back. A buffer that does not map exits 1 with the fix named (`perf_event_mlock_kb=4096` on the
+  host, set by the owner on 2026-11-15 and lost on a reboot; or CAP_IPC_LOCK / a higher memlock
+  ulimit). On server1 today it passes: 257 pages on each of 22 CPUs, and samply writes a profile.
+  `PERF_PROBE_PAGES` and `PERF_PROBE_CPUS` override the page and CPU counts, for the test;
+  only EPERM on a mapping counts as the locked-memory gate.
+- Pinned by `perf_probe::perf_probe_refuses_when_samply_sized_buffers_do_not_map` (one buffer
+  sized past the user's whole budget, read from the machine; where perf cannot open at all it
+  checks only the exit code; where the check is exempt, CAP_IPC_LOCK, paranoid -1 or an
+  unlimited `ulimit -l`, it does not run).
+
 ### Changed (ENG-92: dependency site facts keyed through their edges, 84 MiB less resident memory on CDO)
 
 - **What it was.** After ENG-91 the retained dependency site facts were still a map keyed by
@@ -58,6 +80,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `test_the_prose_the_agentflow_suite_reads_is_not_inert`. Limit: the inert-path scan reads the
   Rust sources and the gate scripts, not the pytest files; a new prose read in a pytest test must
   be added by hand.
+
+### Added (TLS-67: two survey reuse ideas measured, neither worth landing)
+
+- **A tree-sitter parser per worker thread (survey B6): not landed, no gain of 1% shown.** On the
+  CDO baseline's 582 workspace files (`release-fast`, one thread, throwaway probes):
+  - Construction (`Parser::new` + `set_language`) took 86-117 µs for all files together
+    (~0.2 µs each) against 685-781 ms for parse + lower: 0.011-0.016%.
+  - A warm reused parser could save more than construction (its internal buffers). A
+    thread-local parser in `al_syntax::parse` was written and compared with a parser per file,
+    12 interleaved rounds per run, at load average 9-21: wall-time median ratio 0.94 (a build
+    from another session overlapped that run), then 1.06 (single rounds 0.85-1.57); thread CPU
+    time median 0.987 (single rounds 0.86-1.15, 7 of 12 faster). In the two wall-time runs the
+    side that called `parse()` was ~6% slower whichever parser it used, so wall time was
+    confounded by the code path and could not isolate reuse. Nothing reaches the 1% bar reliably, so the change was dropped.
+  - Recorded in the pack-cache spec §17.5 and CLAUDE.md, which called it unmeasured.
+- **One walk scratch per worker and one pool per process in test selection (survey B3): not
+  landed.** `alsem tests` on CDO with 80 codeunit files (1,161 roots), select phase via
+  `ALSEM_SELECT_TIMING`, warm-up plus 3 alternating rounds: before 6,811 / 5,643 / 8,188 ms,
+  after 5,847 / 7,425 / 11,102 ms, while the load average rose from 8 to 19; peak RSS
+  3.45-3.47 GiB on both; the first round's outputs byte-identical. No gain was demonstrated, so
+  the change was dropped; this run cannot bound a gain smaller than its noise. The survey's
+  "a new rayon pool per root" was wrong: the pool is built once per select call.
+- `reverse::tests::a_reused_scratch_walks_as_a_fresh_one`: a walk on a used `WalkScratch`
+  answers as on a fresh one, on the dense visited set and on the hash fallback (the reuse
+  `WalkScratch`'s doc promises, which impact's `Scratches` and the cone probe rely on). It does
+  not cover the action-entry and hidden-channel sets, or a scratch moved to a graph of another
+  size.
 
 ### Added (TLS-70: samply in the image, for CPU profiles of every thread)
 

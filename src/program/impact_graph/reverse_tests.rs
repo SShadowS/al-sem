@@ -385,6 +385,44 @@ impl ConeVisitor for PerRoot {
     }
 }
 
+/// TLS-67: a scratch serves any number of walks (`WalkScratch`'s doc), and
+/// impact's `Scratches` (`engine/impact/up.rs`) and the cone probe reuse one,
+/// so a walk on a used scratch must answer as on a fresh one. Two roots share a
+/// caller; the first walk marks it seen, and the second must still reach it.
+/// Run on the dense visited set and on the hash fallback (`seen_ext`).
+///
+/// DISCRIMINATION (2026-11-15): `WalkScratch::reset` without its `touched`
+/// drain -> the second walk finds the shared caller already seen and counts
+/// 1 state, not 2.
+#[test]
+fn a_reused_scratch_walks_as_a_fresh_one() {
+    let mut w = World::default();
+    let a = w.app("W");
+    let cu = w.obj(a, ObjectKind::Codeunit, 1, "Cu", TrustTier::Workspace);
+    let shared = w.rtn(&cu, "Shared");
+    let r0 = w.rtn(&cu, "R0");
+    let r1 = w.rtn(&cu, "R1");
+    w.call(&shared, &r0, 0);
+    w.call(&shared, &r1, 1);
+    let g = sited_of(&w, a, &[]);
+    let walk = |scratch: &mut WalkScratch, r: &RoutineNodeId| {
+        let mut per = PerRoot::default();
+        let stats = walk_one(&g, node(&g, r), &WalkOptions::default(), scratch, &mut per);
+        (stats.states, per.1)
+    };
+    for make in [WalkScratch::default, WalkScratch::hash_only] {
+        let fresh = walk(&mut make(), &r1);
+        assert_eq!(fresh, (2, 2), "R1 and its caller");
+        let mut used = make();
+        assert_eq!(
+            walk(&mut used, &r0),
+            (2, 2),
+            "R0 and the shared caller, now seen"
+        );
+        assert_eq!(walk(&mut used, &r1), fresh);
+    }
+}
+
 /// R0-6: a 1,000-root `walk_multi` labels each state once, with its nearest
 /// root (ties by root order), and its scratch stays O(states): a caller
 /// shared by every root is one state, labelled root 0.

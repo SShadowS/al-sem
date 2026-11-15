@@ -49,10 +49,14 @@ cargo build --profile release-fast  # Thin LTO (~3.5 min) — USE THIS for measu
                                     # `samply record --help` lists it). Recording needs perf_event_open:
                                     # the host's kernel.perf_event_paranoid <= 1 (server1: 1 since
                                     # 2026-11-15, host-side, may revert on reboot) AND the container
-                                    # letting the call through. As of 2026-11-15 it is refused (EPERM),
-                                    # likely by the seccomp filter (expected fix: CAP_PERFMON or a
-                                    # seccomp profile; owner ask q-20261115T112118-0e8509a6). Check with
-                                    # `scripts/perf-probe` (exit 0 = samply can record)
+                                    # letting the call through (CAP_PERFMON, `.kraken/project.yaml`)
+                                    # AND locked memory for samply's 1 MiB ring buffer per CPU: the
+                                    # host's kernel.perf_event_mlock_kb=4096 (set 2026-11-15; the 516
+                                    # default fails with "mmap failed"; resets on reboot). The budget
+                                    # is per host uid, so a peer lane's samply run uses it too. Check
+                                    # all three with
+                                    # `scripts/perf-probe` (exit 0 = samply can record; it runs a
+                                    # real `samply record -- true` too)
 cargo build --profile cdo --bin aldump  # No LTO, incremental — for CORRECTNESS loops only (the CDO
                                     # unknown count, scripts/cdo-gate). ~1 min rebuild after an edit vs
                                     # ~2 min for release-fast. Never quote timings or memory from it.
@@ -426,8 +430,9 @@ Testing Philosophy & Goldens below).
   lowerer's recursion — see `src/snapshot/parse.rs:84-95`). There are **no**
   thread-local parsers: `al_syntax::parse` constructs a fresh
   `tree_sitter::Parser` and calls `set_language` per file
-  (`crates/al-syntax/src/parse.rs:11-14`). Reusing a parser per worker thread is
-  an open, unmeasured optimisation — see the pack-cache spec §17.5.
+  (`crates/al-syntax/src/parse.rs:11-14`). Reusing a parser per worker thread was
+  measured and dropped (TLS-67, 2026-11-15): parser setup is ~0.015% of parse + lower on CDO,
+  and a warm reused parser showed no reliable 1% gain (pack-cache spec §17.5).
 - **Incremental updates** (`notify`): Only re-parse changed files
 
 ## Performance Targets

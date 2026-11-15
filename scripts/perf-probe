@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/perf-probe — can this process open a perf event on itself (what samply needs)?
+# scripts/perf-probe — can samply record here (perf events and their ring buffers)?
 #
 # ⟨TLS-70⟩ samply records through perf_event_open. Two things must allow it: the
 # host's kernel.perf_event_paranoid (<= 1 for a non-root user's own processes) and
@@ -9,13 +9,40 @@
 # container and the call still failed with EPERM (Seccomp: 2). This checks the
 # call itself.
 #
+# ⟨TLS-73⟩ A third gate: locked memory for the ring buffers. samply 0.13.1 maps
+# 256 data pages + 1 header page (1 MiB) per event, one sampling event per CPU
+# (its src/linux/profiler.rs:427 stack size 32,000 x 32 stacks, rounded up to a
+# power-of-two page count in perf_event.rs:361-367). The kernel lets one user lock
+# kernel.perf_event_mlock_kb x online CPUs for perf buffers, shared by all that
+# user's buffers (the host uid, so other containers' runs too); past that, each
+# process may use its own `ulimit -l`. CAP_IPC_LOCK (or paranoid -1) skips the
+# check. On 2026-11-15 the host had 516 KiB:
+# this probe passed (one event, 16 pages) and samply failed with "mmap failed".
+# The owner then set perf_event_mlock_kb=4096 on the host (it resets when server1
+# reboots). So the probe now maps samply's size on each CPU samply uses, then runs a real
+# `samply record` when samply is installed.
+#
 #   scripts/perf-probe     compile a tiny C probe (cc) in a temp folder, open a
-#                          software and a hardware event on itself, print the
-#                          result and what the process looks like (paranoid,
-#                          seccomp, capabilities). Exit 0: samply can record;
+#                          sampling event on itself on each CPU samply uses, map
+#                          samply's ring buffer on each, open a hardware event
+#                          (information only), print the result and what the
+#                          process looks like (paranoid, seccomp, capabilities,
+#                          mlock limits), then run `samply record -- true` if
+#                          samply is on PATH. Exit 0: samply can record;
 #                          1: it cannot (the output says which gate refused);
-#                          2: the probe could not be built.
+#                          2: the probe could not be built, or a bad
+#                          PERF_PROBE_PAGES.
+#   PERF_PROBE_PAGES=<n>   map n data pages per CPU instead of samply's 256
+#                          (a power of two; for tests).
+#   PERF_PROBE_CPUS=<n>    open events on CPUs 0..n-1 instead of samply's count
+#                          (for tests).
 #   scripts/perf-probe --help
+#
+# The CPU count is samply's: num_cpus 1.16's `get()`, the CPUs this process may
+# run on (affinity), capped by the CPU quota of the process's own cgroup v2, rounded
+# up; samply then opens CPUs 0..count (perf_group.rs:135). shortcut: cgroup v1 and
+# ancestor cgroups' quotas are not read, so under one this may check more buffers
+# than samply maps (the strict side); upgrade if that gives a false BLOCKED.
 set -euo pipefail
 
 if [[ "${1:-}" == -h || "${1:-}" == --help ]]; then
@@ -23,11 +50,36 @@ if [[ "${1:-}" == -h || "${1:-}" == --help ]]; then
     exit 0
 fi
 
+pages=${PERF_PROBE_PAGES:-256}
+if ! [[ "$pages" =~ ^[1-9][0-9]{0,6}$ ]]; then
+    echo "perf-probe: PERF_PROBE_PAGES must be a whole number from 1 to 9999999, not '$pages'" >&2
+    exit 2
+fi
+if [[ -n "${PERF_PROBE_CPUS:-}" ]]; then
+    cpus=$PERF_PROBE_CPUS
+    if ! [[ "$cpus" =~ ^[1-9][0-9]{0,3}$ ]]; then
+        echo "perf-probe: PERF_PROBE_CPUS must be a whole number from 1 to 9999, not '$cpus'" >&2
+        exit 2
+    fi
+else
+    cpus=$(env -u OMP_NUM_THREADS -u OMP_THREAD_LIMIT nproc)
+    # The process's own cgroup v2 (`0::<path>` in /proc/self/cgroup), as num_cpus reads it.
+    cg=$(sed -n 's/^0:://p' /proc/self/cgroup 2>/dev/null)
+    max=/sys/fs/cgroup${cg%/}/cpu.max
+    [[ -r "$max" ]] || max=/sys/fs/cgroup/cpu.max
+    read -r quota period <"$max" 2>/dev/null || quota=max
+    if [[ "$quota" =~ ^[0-9]+$ && "${period:-}" =~ ^[1-9][0-9]*$ ]]; then
+        capped=$(((quota + period - 1) / period))
+        ((capped >= 1 && capped < cpus)) && cpus=$capped
+    fi
+fi
+
 dir=$(mktemp -d)
 trap 'rm -rf "$dir"' EXIT
 cat >"$dir/probe.c" <<'EOF'
 #include <linux/perf_event.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <errno.h>
 #include <unistd.h>
@@ -36,10 +88,12 @@ cat >"$dir/probe.c" <<'EOF'
 
 /* What samply does, as far as it matters here: a SAMPLING event on itself with
    the kernel included (review r2, Fable: a user-only event opens even at
-   paranoid 2), and its ring buffer mapped (review r1, sol: the mmap can fail on
-   mlock limits after the open succeeded). Exit: 0 ok; 3 open EACCES; 4 open
-   EPERM; 5 open, other errno; 6 the ring buffer mmap failed. */
-static int try_open(unsigned type, unsigned long long config, const char *name) {
+   paranoid 2), one per online CPU, each with its ring buffer mapped (TLS-73:
+   the buffers' locked memory is what failed while one small buffer mapped).
+   Exit: 0 ok; 3 open EACCES; 4 open EPERM; 5 open, other errno; 6 a ring
+   buffer mmap failed. argv[1]: data pages per buffer. */
+#define MAX_CPUS 1024
+static int open_event(unsigned type, unsigned long long config, int cpu) {
     struct perf_event_attr a;
     memset(&a, 0, sizeof a);
     a.size = sizeof a;
@@ -48,29 +102,54 @@ static int try_open(unsigned type, unsigned long long config, const char *name) 
     a.disabled = 1;
     a.sample_period = 1000000;
     a.sample_type = PERF_SAMPLE_IP | PERF_SAMPLE_TID;
-    long fd = syscall(SYS_perf_event_open, &a, 0, -1, -1, 0);
-    if (fd < 0) {
-        int e = errno;
-        printf("perf-probe: %s: perf_event_open failed: %s (errno %d)\n", name, strerror(e), e);
-        return e == EACCES ? 3 : e == EPERM ? 4 : 5;
-    }
-    long page = sysconf(_SC_PAGESIZE);
-    void *ring = mmap(NULL, (size_t)(1 + 16) * (size_t)page, PROT_READ | PROT_WRITE, MAP_SHARED, (int)fd, 0);
-    if (ring == MAP_FAILED) {
-        int e = errno;
-        printf("perf-probe: %s: opened, but mapping its ring buffer failed: %s (errno %d)\n", name, strerror(e), e);
-        close((int)fd);
-        return 6;
-    }
-    printf("perf-probe: %s: perf_event_open and ring buffer ok\n", name);
-    munmap(ring, (size_t)(1 + 16) * (size_t)page);
-    close((int)fd);
-    return 0;
+    return (int)syscall(SYS_perf_event_open, &a, 0, cpu, -1, 0);
 }
 
-int main(void) {
-    int rc = try_open(PERF_TYPE_SOFTWARE, PERF_COUNT_SW_CPU_CLOCK, "software cpu-clock");
-    try_open(PERF_TYPE_HARDWARE, PERF_COUNT_HW_CPU_CYCLES, "hardware cycles");
+static int open_errno_rc(int e) { return e == EACCES ? 3 : e == EPERM ? 4 : 5; }
+
+int main(int argc, char **argv) {
+    long pages = argc > 1 ? atol(argv[1]) : 256;
+    long page = sysconf(_SC_PAGESIZE);
+    size_t len = (size_t)(1 + pages) * (size_t)page;
+    int ncpu = argc > 2 ? atoi(argv[2]) : (int)sysconf(_SC_NPROCESSORS_ONLN);
+    if (ncpu > MAX_CPUS) ncpu = MAX_CPUS;
+    static int fds[MAX_CPUS];
+    static void *maps[MAX_CPUS];
+    int n = 0, rc = 0;
+    for (int c = 0; c < ncpu; c++) {
+        int fd = open_event(PERF_TYPE_SOFTWARE, PERF_COUNT_SW_CPU_CLOCK, c);
+        if (fd < 0) {
+            int e = errno;
+            printf("perf-probe: software cpu-clock, cpu %d: perf_event_open failed: %s (errno %d)\n", c, strerror(e), e);
+            rc = open_errno_rc(e);
+            break;
+        }
+        void *m = mmap(NULL, len, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+        if (m == MAP_FAILED) {
+            int e = errno;
+            printf("perf-probe: software cpu-clock: %d of %d CPUs mapped %ld+1 pages each; cpu %d's ring buffer failed: %s (errno %d)\n",
+                   n, ncpu, pages, c, strerror(e), e);
+            close(fd);
+            rc = e == EPERM ? 6 : 5; /* EPERM is the locked-memory gate; EINVAL a bad size */
+            break;
+        }
+        fds[n] = fd;
+        maps[n] = m;
+        n++;
+    }
+    if (rc == 0)
+        printf("perf-probe: software cpu-clock: a sampling event and a %ld+1 page ring buffer on each of %d CPUs ok\n", pages, ncpu);
+    for (int i = 0; i < n; i++) {
+        munmap(maps[i], len);
+        close(fds[i]);
+    }
+    int hw = open_event(PERF_TYPE_HARDWARE, PERF_COUNT_HW_CPU_CYCLES, -1);
+    if (hw < 0)
+        printf("perf-probe: hardware cycles (information only): perf_event_open failed: %s (errno %d)\n", strerror(errno), errno);
+    else {
+        printf("perf-probe: hardware cycles (information only): opens\n");
+        close(hw);
+    }
     return rc;
 }
 EOF
@@ -81,14 +160,16 @@ if ! cc -O0 -o "$dir/probe" "$dir/probe.c" 2>"$dir/cc.log"; then
 fi
 
 paranoid=$(cat /proc/sys/kernel/perf_event_paranoid 2>/dev/null || echo "?")
+mlock_kb=$(cat /proc/sys/kernel/perf_event_mlock_kb 2>/dev/null || echo "?")
 echo "perf-probe: kernel.perf_event_paranoid = $paranoid"
+echo "perf-probe: kernel.perf_event_mlock_kb = $mlock_kb (per CPU), ulimit -l = $(ulimit -l) KiB"
 { grep -E '^(Seccomp|Seccomp_filters|NoNewPrivs|CapEff):' /proc/self/status || true; } | sed 's/^/perf-probe:   /'
 
 # The software event decides: a hardware counter may be absent in a VM even
 # where perf itself is allowed. The errno names the gate that refused (only the
 # first refusal is visible: seccomp is checked before the kernel's own rule).
 rc=0
-"$dir/probe" || rc=$?
+"$dir/probe" "$pages" "$cpus" || rc=$?
 # The cause is a likely one, weighed from the errno and what this process shows
 # (review r1, sol): a seccomp profile can return any errno, and "Seccomp: 2" says a
 # filter exists, not that it refused. Each line names what to check.
@@ -98,8 +179,16 @@ filtered=0
 grep -qE '^Seccomp:[[:space:]]*2' /proc/self/status && filtered=1
 case $rc in
 0)
-    echo "perf-probe: OK: a sampling perf event opens and its ring buffer maps; samply can record"
-    exit 0
+    if ! command -v samply >/dev/null; then
+        echo "perf-probe: OK: sampling events open and samply-sized ring buffers map on each CPU samply uses ($cpus) (samply is not on PATH, so it was not run)"
+        exit 0
+    fi
+    if samply record --save-only -o "$dir/probe.json.gz" -- true >"$dir/samply.log" 2>&1 && [[ -s "$dir/probe.json.gz" ]]; then
+        echo "perf-probe: OK: sampling events open, samply-sized ring buffers map on each CPU samply uses ($cpus), and \`samply record -- true\` wrote a profile; samply can record"
+        exit 0
+    fi
+    echo "perf-probe: BLOCKED: the probe's checks passed but \`samply record -- true\` failed:"
+    sed 's/^/perf-probe:   /' "$dir/samply.log"
     ;;
 3 | 4)
     echo "perf-probe: BLOCKED: perf_event_open refused (errno above). Likely cause:"
@@ -114,7 +203,9 @@ case $rc in
     fi
     ;;
 6)
-    echo "perf-probe: BLOCKED: the event opens but its ring buffer does not map: check \`ulimit -l\` and kernel.perf_event_mlock_kb ($(cat /proc/sys/kernel/perf_event_mlock_kb 2>/dev/null || echo ?))"
+    echo "perf-probe: BLOCKED: the events open but the ring buffers do not all map: not enough locked memory."
+    echo "perf-probe:   One user may lock kernel.perf_event_mlock_kb ($mlock_kb) x online CPUs for perf buffers, shared by all that user's runs (the host uid: other containers' samply runs too); past that, each process may use its own \`ulimit -l\`."
+    echo "perf-probe:   samply needs 1 MiB per CPU: kernel.perf_event_mlock_kb=4096 on the host is enough (it resets when the host reboots), or give the container CAP_IPC_LOCK or a higher memlock ulimit."
     ;;
 *)
     echo "perf-probe: BLOCKED: refused for another reason (see the errno above)"
