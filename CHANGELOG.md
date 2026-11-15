@@ -66,7 +66,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ours' additions is refused. So is an item that would land under ours' new section. And
   (r4) either side's added part may not END on a heading: such a heading claims the lines
   after the conflict (two headings inserted above one existing item would file it under
-  one). A heading is `#`s followed by a space, a tab or the end of the line. Replayed on the 70
+  one). A heading is up to three spaces, then `#`s, then a space, a tab or the end of the line
+  (r4-r5: as Markdown allows). Replayed on the 70
   real conflicting merges: 67 merge; 3 are refused (the one edited line, and two
   master-into-branch merges whose conflicts shared whole paragraphs of an entry, true
   duplicates). The check compares whole non-blank lines, so two unrelated entries sharing a
@@ -91,7 +92,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Above all, it would hide every CHANGELOG conflict from git, so land's check ("only
     additions, else stop") would never run.
 - **Tests:**
-  - `changelog-merge --self-test` (fourteen cases), run from `tests/cli/changelog_merge.rs`.
+  - `changelog-merge --self-test` (fifteen cases), run from `tests/cli/changelog_merge.rs`.
     The driver removes its temp files on any exit, including an interrupt (review r1,
     sol).
   - A real `git rebase` with the driver: two new entries rebase cleanly, master's first; an
@@ -108,7 +109,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     (the A fix lands under B); that refusal narrowed to headings only (a continuation
     attaches to the other side's new item); the heading-depth check removed (Security lands
     under 1.0.0); the ends-on-a-heading check removed (the item lands under Removed only);
-    a tab not accepted after the `#`s (case 2e with tabs merges); the refusal of a changed line
+    a tab not accepted after the `#`s (case 2e with tabs merges); no indent skipped before
+    the `#`s (case 2e with one-space indents merges); the refusal of a changed line
     off. That last one also fails
     `land_script::land_refuses_and_leaves_nothing_behind`, which shows land's cases run
     through the moved rule.

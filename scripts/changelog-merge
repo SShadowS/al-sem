@@ -51,7 +51,11 @@ merge() {
     # after a squash-merge or cherry-pick): keeping both would duplicate it, and
     # --diff3 keeps such common lines inside the conflict.
     awk '
-        function depth(s,   n) {
+        function depth(s,   n, k) {
+            # Markdown lets a heading start after up to three spaces (review r5, sol).
+            k = 0
+            while (k < 3 && substr(s, k + 1, 1) == " ") k++
+            s = substr(s, k + 1)
             n = 0
             while (substr(s, n + 1, 1) == "#") n++
             if (n == 0) return 0
@@ -255,20 +259,33 @@ self_test() {
     fi
     # 2f. Review r4 (sol): case 2e with tab-separated headings in ours: refused.
     printf '## [Unreleased]\n\n### Fixed (A)\n\n- a\n\n##\t[1.0.0]\n\n###\tAdded (R)\n\n- r\n' >"$d/o2f"
-    if merge "$d/b2e" "$d/o2f" "$d/t2e" "$d/out2f" >/dev/null; then
+    if merge "$d/b2e" "$d/o2f" "$d/t2e" "$d/out2f" >"$d/why2f"; then
         check "a tab-separated heading counts in the depth check" "it merged: $(tr '\n\t' '/>' <"$d/out2f")"
-    else
+    elif grep -q 'continue what precedes it' "$d/why2f"; then
         check "a tab-separated heading counts in the depth check" ok
+    else
+        check "a tab-separated heading counts in the depth check" "reason: $(cat "$d/why2f")"
+    fi
+    # 2h. Review r5 (sol): case 2e with headings indented by one space: refused.
+    printf '## [Unreleased]\n\n### Fixed (A)\n\n- a\n\n ## [1.0.0]\n\n ### Added (R)\n\n- r\n' >"$d/o2h"
+    if merge "$d/b2e" "$d/o2h" "$d/t2e" "$d/out2h" >"$d/why2h"; then
+        check "an indented heading counts in the depth check" "it merged: $(tr '\n' '/' <"$d/out2h")"
+    elif grep -q 'continue what precedes it' "$d/why2h"; then
+        check "an indented heading counts in the depth check" ok
+    else
+        check "an indented heading counts in the depth check" "reason: $(cat "$d/why2h")"
     fi
     # 2g. Review r4 (sol): both insert a heading above an existing item: refused
     # (the item would be filed under one of them).
     printf '## [Unreleased]\n\n- API change\n' >"$d/b2g"
     printf '## [Unreleased]\n\n### Added\n\n- API change\n' >"$d/o2g"
     printf '## [Unreleased]\n\n### Removed\n\n- API change\n' >"$d/t2g"
-    if merge "$d/b2g" "$d/o2g" "$d/t2g" "$d/out2g" >/dev/null; then
+    if merge "$d/b2g" "$d/o2g" "$d/t2g" "$d/out2g" >"$d/why2g"; then
         check "a heading claiming the lines after the conflict is refused" "it merged: $(tr '\n' '/' <"$d/out2g")"
-    else
+    elif grep -q 'continue what precedes it' "$d/why2g"; then
         check "a heading claiming the lines after the conflict is refused" ok
+    else
+        check "a heading claiming the lines after the conflict is refused" "reason: $(cat "$d/why2g")"
     fi
     # 3. CRLF line ends: the awk sees no marker it knows, the marker check refuses.
     sed 's/$/\r/' "$d/ours2" >"$d/ours3"
