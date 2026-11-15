@@ -149,7 +149,11 @@ Every test still runs before a merge; the tiers decide HOW OFTEN each one runs.
   2026-11-09 (Linux, 22 cores, `cdo` profile, warm, other agents loading the machine):
   1,164-1,184 s before (output_cdo 780-808 s, whole lib 290-317 s), 834-910 s after,
   peak memory 39.5 GB before, 51-58 GB after. The length is `output_cdo`'s impact
-  ratchets, whose one-shot `alsem impact` calls take 4-7 minutes each.
+  ratchets, whose one-shot `alsem impact` calls take 4-7 minutes each. With the serial
+  default the gate's peak is ~27-29 GB (container, unreclaimable; its own processes
+  ~26-27 GB): 27.6, 28.1 and 28.6 GB in three landings on 2026-11-15 (server1, 48 GiB
+  container). Each CDO engine process holds a whole cross-app model (~5-6 GB), and
+  several run at once. The sampler reports only the run's peak, not the phase.
 - **`cdo-gate` checks speed and memory first (since 2026-11-09, engine limits L14).**
   Phase `speed` (`scripts/cdo-speed`, read its doc) builds the working tree's `alsem`
   with `release-fast` and compares it with the merge base's (built once per commit,
