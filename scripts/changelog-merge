@@ -36,16 +36,21 @@ usage() {
 
 # merge BASE OURS THEIRS OUT: the rule; on a refusal the reason on stdout, exit 1.
 merge() {
-    local rc=0
+    local rc=0 awk_rc=0
     git merge-file --diff3 -p -L ours -L base -L theirs "$2" "$1" "$3" >"$4.diff3" 2>/dev/null || rc=$?
     # Its exit is the conflict count; above 127 an error (binary content, ...).
     if ((rc > 127)); then
+        rm -f "$4.diff3"
         echo "git merge-file cannot merge CHANGELOG.md (exit $rc)"
         return 1
     fi
     # Two entries added at the same place meet as "- last line" + "### Heading":
     # a blank line goes between (CHANGELOG.md has one before every heading).
-    if ! awk '
+    # Exit 1: a conflict changes a base line. Exit 2 (review r1, Fable): a
+    # non-blank line is on BOTH sides of a conflict (an entry carried by both, as
+    # after a squash-merge or cherry-pick): keeping both would duplicate it, and
+    # --diff3 keeps such common lines inside the conflict.
+    awk '
         state == 0 && $0 == "<<<<<<< ours" { state = 1; no = 0; nt = 0; next }
         state == 0 { print; next }
         state == 1 && $0 == "||||||| base" { state = 2; next }
@@ -53,6 +58,9 @@ merge() {
         state == 2 && $0 == "=======" { state = 3; next }
         state == 2 { bad = 1; exit }
         state == 3 && $0 == ">>>>>>> theirs" {
+            delete seen
+            for (i = 1; i <= no; i++) if (o[i] != "") seen[o[i]] = 1
+            for (i = 1; i <= nt; i++) if (t[i] != "" && (t[i] in seen)) { dup = 1; exit }
             for (i = 1; i <= no; i++) print o[i]
             if (no > 0 && o[no] != "" && nt > 0 && t[1] ~ /^#/) print ""
             for (i = 1; i <= nt; i++) print t[i]
@@ -60,12 +68,15 @@ merge() {
             next
         }
         state == 3 { t[++nt] = $0; next }
-        END { if (bad || state != 0) exit 1 }' "$4.diff3" >"$4"; then
-        rm -f "$4.diff3"
+        END { if (dup) exit 2; if (bad || state != 0) exit 1 }' "$4.diff3" >"$4" || awk_rc=$?
+    rm -f "$4.diff3"
+    if ((awk_rc == 2)); then
+        echo "a CHANGELOG.md line is on both sides of a conflict (an entry both carry): resolve it by hand"
+        return 1
+    elif ((awk_rc != 0)); then
         echo "a CHANGELOG.md conflict changes a line both sides had (not only additions): resolve it by hand"
         return 1
     fi
-    rm -f "$4.diff3"
     # A marker the awk did not recognise (CRLF line ends, other labels) must not
     # be committed.
     if grep -qE '^(<<<<<<<|\|\|\|\|\|\|\||>>>>>>>)( |$)' "$4"; then
@@ -130,6 +141,30 @@ self_test() {
     else
         check "a line both sides changed is refused" "reason: $(cat "$d/why2")"
     fi
+    # 2b. An entry both sides carry (review r1, Fable: after a squash-merge or a
+    # cherry-pick): refused, never kept twice. Base [A]; the four shapes measured.
+    local shape fails_before=$fails
+    for shape in "M E|E" "E|E+" "M E|E N" "E M|E"; do
+        printf '### A\n\n- a\n' >"$d/b2b"
+        : >"$d/o2b"
+        : >"$d/t2b"
+        for x in ${shape%%|*}; do printf '### %s\n\n- %s entry\n\n' "$x" "$x" >>"$d/o2b"; done
+        for x in ${shape##*|}; do
+            if [[ "$x" == "E+" ]]; then
+                printf '### E\n\n- E entry\n- E, one more line\n\n' >>"$d/t2b"
+            else
+                printf '### %s\n\n- %s entry\n\n' "$x" "$x" >>"$d/t2b"
+            fi
+        done
+        cat "$d/b2b" >>"$d/o2b"
+        cat "$d/b2b" >>"$d/t2b"
+        if merge "$d/b2b" "$d/o2b" "$d/t2b" "$d/out2b" >"$d/why2b"; then
+            check "an entry on both sides is refused ($shape)" "it merged: $(tr '\n' '/' <"$d/out2b")"
+        elif ! grep -q 'on both sides' "$d/why2b"; then
+            check "an entry on both sides is refused ($shape)" "reason: $(cat "$d/why2b")"
+        fi
+    done
+    ((fails == fails_before)) && check "an entry on both sides is refused (4 shapes)" ok
     # 3. CRLF line ends: the awk sees no marker it knows, the marker check refuses.
     sed 's/$/\r/' "$d/ours2" >"$d/ours3"
     sed 's/$/\r/' "$d/theirs2" >"$d/theirs3"

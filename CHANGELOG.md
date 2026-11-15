@@ -54,13 +54,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The script:** `scripts/changelog-merge` holds CHANGELOG.md's merge rule, moved out of
   `scripts/land`'s `union_changelog` (TLS-59), which now calls it. A conflict where both
   sides only added lines keeps both, ours first, with a blank line before a heading that
-  meets an entry. Any other conflict is refused.
+  meets an entry. Any other conflict is refused, including (review r1, Fable) a conflict
+  where both sides carry the same line: an entry already on master after a squash-merge or
+  a cherry-pick, which keeping both sides would duplicate. In `--diff3` mode git keeps such
+  common lines inside the conflict, and land's old rule kept them twice.
 - **As a git merge driver:** `.gitattributes` names it for CHANGELOG.md
-  (`merge=changelog`), so a lane's rebase or merge of master resolves CHANGELOG as a
-  landing does. A refused conflict stays git's ordinary conflict, markers included. The
-  driver must be configured once per repository:
+  (`merge=changelog`), so a lane's rebase onto master resolves CHANGELOG as a landing
+  does (master's entries first). A `git merge master` inside a lane puts the lane's first,
+  since there the lane is "ours". A refused conflict stays git's ordinary conflict, markers
+  included. The driver must be configured once per repository:
   `git config merge.changelog.driver 'bash scripts/changelog-merge --driver %O %A %B'`.
-  Without that line git ignores the attribute and merges as before.
+  Without that line git ignores the attribute and merges as before. Once it is set, git
+  resolves an additions-only CHANGELOG conflict inside land's own `git merge`, so land's
+  "both sides' entries kept" path runs only for what the driver leaves conflicted. land's
+  tests run in scratch repos without the config and so still exercise that path.
 - **Why not git's `merge=union`** (the task's first idea): it was measured on the 98 merges
   on master since 2026-11-01 where both sides changed CHANGELOG.md (70 with a real conflict),
   re-merging each and comparing with the committed text.
@@ -71,7 +78,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Above all, it would hide every CHANGELOG conflict from git, so land's check ("only
     additions, else stop") would never run.
 - **Tests:**
-  - `changelog-merge --self-test` (seven cases), run from `tests/cli/changelog_merge.rs`.
+  - `changelog-merge --self-test` (eight cases), run from `tests/cli/changelog_merge.rs`.
+  - A real `git rebase` with the driver: two new entries rebase cleanly, master's first; an
+    entry both sides carry stops the rebase with git's markers.
   - A real `git merge` in a scratch repo, three ways: additions merge through the
     configured driver; a changed line stays a conflict with markers; without the config
     git conflicts as before.
@@ -79,7 +88,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - land's existing CHANGELOG cases (`tests/cli/land_script.rs`) now run through the moved
     rule.
   - Mutations, each red: the blank-line rule dropped; the driver's marker fallback dropped;
-    the attribute removed; the refusal of a changed line off. That last one also fails
+    the attribute removed; the on-both-sides check removed (all four measured shapes merge
+    with the entry twice, and the rebase case goes through); the refusal of a changed line
+    off. That last one also fails
     `land_script::land_refuses_and_leaves_nothing_behind`, which shows land's cases run
     through the moved rule.
   - The blank-line rule's first self-test case did not catch its removal, so a case was

@@ -116,3 +116,68 @@ fn git_merges_changelog_through_the_driver_only_when_configured() {
         "without the driver configured, git conflicts as before"
     );
 }
+
+/// A lane's rebase onto master goes through the driver too (review r1, Fable):
+/// master's new entry and the lane's merge, master's first. But an entry master
+/// already carries (the lane's earlier commit squash-merged there) next to the
+/// lane's new one stops the rebase, rather than keeping the entry twice.
+///
+/// Mutation (2026-11-15): the awk's on-both-sides check removed -> the
+/// squash-merged case rebases cleanly with `E` twice, red here (and in the
+/// self-test's case 2b).
+#[test]
+fn a_rebase_merges_new_entries_and_stops_on_a_carried_one() {
+    let rebase = |master_text: &str, lane_text: &str| {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path();
+        let git = |args: &[&str]| crate::git::run(p, args);
+        git(&["init", "-q", "-b", "master"]);
+        git(&[
+            "config",
+            "merge.changelog.driver",
+            &format!("bash {SCRIPT} --driver %O %A %B"),
+        ]);
+        std::fs::write(p.join(".gitattributes"), "CHANGELOG.md merge=changelog\n").unwrap();
+        std::fs::write(p.join("CHANGELOG.md"), BASE).unwrap();
+        git(&["add", "-A"]);
+        git(&["commit", "-q", "-m", "base"]);
+        git(&["checkout", "-q", "-b", "lane"]);
+        std::fs::write(p.join("CHANGELOG.md"), lane_text).unwrap();
+        git(&["commit", "-q", "-am", "lane"]);
+        git(&["checkout", "-q", "master"]);
+        std::fs::write(p.join("CHANGELOG.md"), master_text).unwrap();
+        git(&["commit", "-q", "-am", "master"]);
+        git(&["checkout", "-q", "lane"]);
+        let ok = crate::git::scratch(p)
+            .args(["rebase", "-q", "master"])
+            .output()
+            .unwrap()
+            .status
+            .success();
+        let text = std::fs::read_to_string(p.join("CHANGELOG.md")).unwrap();
+        (dir, ok, text)
+    };
+
+    let (_d, ok, text) = rebase(&entry("M"), &entry("L"));
+    assert!(ok, "two new entries rebase cleanly:\n{text}");
+    assert!(
+        text.find("### Added (M)").unwrap() < text.find("### Added (L)").unwrap(),
+        "master's entry first:\n{text}"
+    );
+
+    // Master holds E (the lane's earlier work, squash-merged) and M; the lane
+    // still has E as a commit of its own plus N.
+    let with = |names: &[&str]| {
+        let mut s = String::from("# Changelog\n\n## [Unreleased]\n\n");
+        for n in names {
+            s.push_str(&format!("### Added ({n})\n\n- {n} entry\n\n"));
+        }
+        s + "### Fixed (A)\n\n- old\n"
+    };
+    let (_d, ok, text) = rebase(&with(&["M", "E"]), &with(&["E", "N"]));
+    assert!(
+        !ok,
+        "an entry both sides carry must stop the rebase, not be kept twice:\n{text}"
+    );
+    assert!(text.contains("<<<<<<< "), "git's conflict markers:\n{text}");
+}
