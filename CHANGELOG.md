@@ -22,7 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (**-255.5 MiB**), the dependency site facts 384.9 → 136.8 MiB (23,574 sites hold a box,
   11.9 MiB). The orchestrator counted ENG-91's bar (~286-339 MiB with step 2) as met by this step;
   dropping the map's second copy of each key (~93 MiB more) is ENG-92.
-- SPEED-PENDING
+- **Same answers.** The task gate (every golden), `cdo-gate --only harness,l4,output`, and
+  `scripts/cdo-before-after ce3276e3` (fingerprint, analyze at both scopes, the call-graph
+  stats). Speed is the landing gate's speed phase, not a separate run (a memory change).
 
 ### Fixed (TLS-68: the LSP answers for a routine declared in several files are deterministic)
 
