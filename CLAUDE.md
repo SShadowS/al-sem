@@ -78,6 +78,11 @@ scripts/cdo-before-after <base> [<head>|.]  # What a change moves on CDO (TLS-61
                                # histogram (+ the ENG14 census with --census). report.md/.json: detector
                                # moves, fingerprints added/removed, unknown buckets, --pattern matches;
                                # VOID when the workspace moved. --dry-run builds and measures nothing
+scripts/changelog-merge        # CHANGELOG.md's merge rule (TLS-62): keep both sides' added
+                               # entries, refuse any other conflict. scripts/land uses it, and git
+                               # does too as the `merge=changelog` driver (.gitattributes) once the
+                               # repo has `git config merge.changelog.driver 'bash scripts/changelog-merge
+                               # --driver %O %A %B'`; without that config git merges as before
 scripts/sweep-builds           # Delete build output unused for 7 days (main + al-sem-issue-* worktrees;
                                # needs `cargo install cargo-sweep`). Run after an issue, before a release,
                                # or when `df -h /u` is low: U: has filled up three times

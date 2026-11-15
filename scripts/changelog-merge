@@ -1,0 +1,350 @@
+#!/usr/bin/env bash
+# scripts/changelog-merge — merge three versions of CHANGELOG.md the way the
+# lanes always resolved it by hand: keep both sides' new entries.
+#
+# ⟨TLS-62⟩ One rule, two users: `scripts/land` (which had it as `union_changelog`,
+# TLS-59) and git itself, as the merge driver `.gitattributes` names for
+# CHANGELOG.md, so a lane's rebase onto master merges CHANGELOG as a landing does.
+# git's built-in `merge=union` was measured against the 98 CHANGELOG merges on
+# master since 2026-11-01 and not used: it leaves no blank line before the next
+# entry's heading (62 of 70 conflicting merges), and it also merges a conflict
+# that changes a line both sides had, which this script refuses (one case in 70).
+#
+# The rule: a conflict whose base part is empty (both sides only added lines at
+# the same place) keeps both sides' lines, ours first, with a blank line between
+# an entry's last line and a heading that meet. Any other conflict is refused.
+# Lines outside the conflicts are git merge-file's own three-way merge.
+#
+#   changelog-merge BASE OURS THEIRS OUT
+#       Write the merged text to OUT and exit 0; on a refusal print the reason
+#       on stdout and exit 1 (OUT is then not a result). scripts/land's form.
+#   changelog-merge --driver BASE OURS THEIRS
+#       A git merge driver: the result replaces OURS. On a refusal OURS gets
+#       git's ordinary conflicted merge (markers included) and the exit is 1,
+#       so git reports the conflict as it would without this driver.
+#       Configure once per repository (worktrees share it):
+#         git config merge.changelog.name "keep both sides' CHANGELOG entries"
+#         git config merge.changelog.driver 'bash scripts/changelog-merge --driver %O %A %B'
+#       Without that config git ignores the attribute and merges as before.
+#   changelog-merge --self-test
+#       Run the built-in cases; exit 0 when all pass.
+set -euo pipefail
+
+usage() {
+    sed -n '/^#   changelog-merge BASE/,/^#       Run the built-in/p' "$0" | sed 's/^# \{0,1\}//'
+}
+
+# merge BASE OURS THEIRS OUT: the rule; on a refusal the reason on stdout, exit 1.
+merge() {
+    local rc=0 awk_rc=0
+    git merge-file --diff3 -p -L ours -L base -L theirs "$2" "$1" "$3" >"$4.diff3" 2>/dev/null || rc=$?
+    # Its exit is the conflict count; above 127 an error (binary content, ...).
+    if ((rc > 127)); then
+        rm -f "$4.diff3"
+        echo "git merge-file cannot merge CHANGELOG.md (exit $rc)"
+        return 1
+    fi
+    # Two entries added at the same place meet as "- last line" + "### Heading":
+    # a blank line goes between (CHANGELOG.md has one before every heading).
+    # Exit 1: a conflict changes a base line. Exit 2 (review r1, Fable): a
+    # non-blank line is on BOTH sides of a conflict (an entry carried by both, as
+    # after a squash-merge or cherry-pick): keeping both would duplicate it, and
+    # --diff3 keeps such common lines inside the conflict.
+    awk '
+        function depth(s,   n, k) {
+            # Markdown lets a heading start after up to three spaces (review r5, sol).
+            k = 0
+            while (k < 3 && substr(s, k + 1, 1) == " ") k++
+            s = substr(s, k + 1)
+            n = 0
+            while (substr(s, n + 1, 1) == "#") n++
+            if (n == 0) return 0
+            if (length(s) == n || substr(s, n + 1, 1) == " " || substr(s, n + 1, 1) == "\t") return n
+            return 0
+        }
+        state == 0 && $0 == "<<<<<<< ours" { state = 1; no = 0; nt = 0; next }
+        state == 0 { print; next }
+        state == 1 && $0 == "||||||| base" { state = 2; next }
+        state == 1 { o[++no] = $0; next }
+        state == 2 && $0 == "=======" { state = 3; next }
+        state == 2 { bad = 1; exit }
+        state == 3 && $0 == ">>>>>>> theirs" {
+            delete seen
+            for (i = 1; i <= no; i++) if (o[i] != "") seen[o[i]] = 1
+            for (i = 1; i <= nt; i++) if (t[i] != "" && (t[i] in seen)) { dup = 1; exit }
+            # Reviews r1-r2 (sol): printed after ours, theirs lines must start a
+            # block of their own, or they attach to whatever ours added last.
+            # Theirs first non-blank line may be a heading (always), or a
+            # top-level "- " item unless ours adds a heading (the item would land
+            # under ours new section). Anything else (an indented continuation
+            # of the item above, a plain paragraph) belongs to what precedes the
+            # conflict: refused whenever ours added anything. Refused, not
+            # regrouped silently.
+            # Review r3 (sol): a heading nests under the shallowest heading ours
+            # adds, so theirs heading at depth N is refused when ours adds a
+            # heading of fewer #s (a "### Security" for [Unreleased] would land
+            # under ours new "## [1.0.0]"); a sibling depth is fine.
+            # A heading is "#"s then a blank or the line end (a tab too, review
+            # r4, sol); depth() is its number of "#"s, 0 for no heading.
+            oh = 0; ob = 0; ol = 0
+            for (i = 1; i <= no; i++) {
+                if (o[i] != "") ob = 1
+                if (depth(o[i])) { oh = 1; if (ol == 0 || depth(o[i]) < ol) ol = depth(o[i]) }
+            }
+            tf = ""; for (i = 1; i <= nt; i++) if (t[i] != "") { tf = t[i]; break }
+            if (ob && tf != "" && !depth(tf) && (oh || tf !~ /^- /)) { orphan = 1; exit }
+            if (oh && depth(tf) && ol < depth(tf)) { orphan = 1; exit }
+            # Review r4 (sol): a side whose added part ENDS on a heading claims the
+            # lines after the conflict (both sides inserting a heading above an
+            # existing item would file it under one of them). Refused.
+            ol_ = ""; for (i = no; i >= 1; i--) if (o[i] != "") { ol_ = o[i]; break }
+            tl_ = ""; for (i = nt; i >= 1; i--) if (t[i] != "") { tl_ = t[i]; break }
+            if (depth(ol_) || depth(tl_)) { orphan = 1; exit }
+            for (i = 1; i <= no; i++) print o[i]
+            if (no > 0 && o[no] != "" && nt > 0 && depth(t[1])) print ""
+            for (i = 1; i <= nt; i++) print t[i]
+            state = 0
+            next
+        }
+        state == 3 { t[++nt] = $0; next }
+        END { if (dup) exit 2; if (orphan) exit 3; if (bad || state != 0) exit 1 }' "$4.diff3" >"$4" || awk_rc=$?
+    rm -f "$4.diff3"
+    if ((awk_rc == 3)); then
+        echo "a CHANGELOG.md conflict adds lines that continue what precedes it, beside the other side's additions: resolve it by hand"
+        return 1
+    elif ((awk_rc == 2)); then
+        echo "a CHANGELOG.md line is on both sides of a conflict (an entry both carry): resolve it by hand"
+        return 1
+    elif ((awk_rc != 0)); then
+        echo "a CHANGELOG.md conflict changes a line both sides had (not only additions): resolve it by hand"
+        return 1
+    fi
+    # A marker the awk did not recognise (CRLF line ends, other labels) must not
+    # be committed.
+    if grep -qE '^(<<<<<<<|\|\|\|\|\|\|\||>>>>>>>)( |$)' "$4"; then
+        echo "CHANGELOG.md still holds a conflict marker after the merge: resolve it by hand"
+        return 1
+    fi
+}
+
+# driver BASE OURS THEIRS: git's merge driver contract (result in OURS).
+driver() {
+    local out why
+    out=$(mktemp "${2}.changelog-merge.XXXXXX")
+    # Review r1 (sol): an interrupted driver must not leave files at the repo top
+    # (land's clean-worktree check would then refuse). A script-level name, so the
+    # EXIT trap still sees it after this function returns.
+    driver_tmp=$out
+    trap '[[ -n "${driver_tmp:-}" ]] && rm -f "$driver_tmp" "$driver_tmp.diff3"; true' EXIT
+    trap 'exit 130' INT TERM
+    if why=$(merge "$1" "$2" "$3" "$out"); then
+        mv "$out" "$2"
+        return 0
+    fi
+    rm -f "$out"
+    echo "changelog-merge: $why" >&2
+    # git's ordinary conflicted merge, so the user sees the usual markers.
+    git merge-file -L ours -L base -L theirs "$2" "$1" "$3" >/dev/null 2>&1 || true
+    return 1
+}
+
+self_test() {
+    local d fails=0
+    d=$(mktemp -d)
+    trap 'rm -rf "$d"' RETURN
+    check() { # name, condition result
+        if [[ "$2" == ok ]]; then echo "ok   $1"; else echo "FAIL $1: $2"; fails=$((fails + 1)); fi
+    }
+    printf '# Changelog\n\n## [Unreleased]\n\n### Fixed (A)\n\n- old\n' >"$d/base"
+    printf '# Changelog\n\n## [Unreleased]\n\n### Added (M)\n\n- m entry\n\n### Fixed (A)\n\n- old\n' >"$d/ours"
+    printf '# Changelog\n\n## [Unreleased]\n\n### Added (B)\n\n- b entry\n\n### Fixed (A)\n\n- old\n' >"$d/theirs"
+    # 1. Additions at the same place: both kept, ours first, a blank line between.
+    if merge "$d/base" "$d/ours" "$d/theirs" "$d/out" >/dev/null &&
+        [[ "$(cat "$d/out")" == "$(printf '# Changelog\n\n## [Unreleased]\n\n### Added (M)\n\n- m entry\n\n### Added (B)\n\n- b entry\n\n### Fixed (A)\n\n- old')" ]]; then
+        check "additions on both sides keep both, ours first" ok
+    else
+        check "additions on both sides keep both, ours first" "got: $(cat "$d/out" 2>/dev/null)"
+    fi
+    # 1b. Ours' added part ends on an entry line and theirs' starts with a
+    # heading (one side adds a line to the list, the other a new section at the
+    # same place): the rule puts a blank line between. In --diff3 mode git keeps
+    # each side's own trailing blank inside the conflict, so the usual "both add
+    # a whole entry" case (1) never needs it; this shape does.
+    printf '### Fixed (A)\n\n- old\n' >"$d/base1b"
+    printf '### Fixed (A)\n\n- old\n- m\n' >"$d/ours1b"
+    printf '### Fixed (A)\n\n- old\n### Added (B)\n\n- b\n' >"$d/theirs1b"
+    if merge "$d/base1b" "$d/ours1b" "$d/theirs1b" "$d/out1b" >/dev/null &&
+        [[ "$(cat "$d/out1b")" == "$(printf '### Fixed (A)\n\n- old\n- m\n\n### Added (B)\n\n- b')" ]]; then
+        check "a heading after an entry gets its blank line" ok
+    else
+        check "a heading after an entry gets its blank line" "got: $(cat "$d/out1b" 2>/dev/null)"
+    fi
+    # 2. A line both sides changed: refused.
+    printf '# Changelog\n\n## [Unreleased]\n\n### Fixed (A)\n\n- old, ours\n' >"$d/ours2"
+    printf '# Changelog\n\n## [Unreleased]\n\n### Fixed (A)\n\n- old, theirs\n' >"$d/theirs2"
+    if merge "$d/base" "$d/ours2" "$d/theirs2" "$d/out2" >"$d/why2"; then
+        check "a line both sides changed is refused" "it merged"
+    elif grep -q 'changes a line both sides had' "$d/why2"; then
+        check "a line both sides changed is refused" ok
+    else
+        check "a line both sides changed is refused" "reason: $(cat "$d/why2")"
+    fi
+    # 2b. An entry both sides carry (review r1, Fable: after a squash-merge or a
+    # cherry-pick): refused, never kept twice. Base [A]; the four shapes measured.
+    local shape fails_before=$fails
+    for shape in "M E|E" "E|E+" "M E|E N" "E M|E"; do
+        printf '### A\n\n- a\n' >"$d/b2b"
+        : >"$d/o2b"
+        : >"$d/t2b"
+        for x in ${shape%%|*}; do printf '### %s\n\n- %s entry\n\n' "$x" "$x" >>"$d/o2b"; done
+        for x in ${shape##*|}; do
+            if [[ "$x" == "E+" ]]; then
+                printf '### E\n\n- E entry\n- E, one more line\n\n' >>"$d/t2b"
+            else
+                printf '### %s\n\n- %s entry\n\n' "$x" "$x" >>"$d/t2b"
+            fi
+        done
+        cat "$d/b2b" >>"$d/o2b"
+        cat "$d/b2b" >>"$d/t2b"
+        if merge "$d/b2b" "$d/o2b" "$d/t2b" "$d/out2b" >"$d/why2b"; then
+            check "an entry on both sides is refused ($shape)" "it merged: $(tr '\n' '/' <"$d/out2b")"
+        elif ! grep -q 'on both sides' "$d/why2b"; then
+            check "an entry on both sides is refused ($shape)" "reason: $(cat "$d/why2b")"
+        fi
+    done
+    ((fails == fails_before)) && check "an entry on both sides is refused (4 shapes)" ok
+    # 2c. One side adds a line to the section above, the other a new section
+    # (review r1, sol). Ours with the section: refused (theirs' line would land
+    # under it). Theirs with the section: merged, the line stays in its section.
+    printf '### Fixed (A)\n\n- old\n' >"$d/b2c"
+    printf '### Fixed (A)\n\n- old\n\n### Added (B)\n\n- b\n' >"$d/sec2c"
+    printf '### Fixed (A)\n\n- old\n- another A fix\n' >"$d/line2c"
+    if merge "$d/b2c" "$d/sec2c" "$d/line2c" "$d/out2c" >"$d/why2c"; then
+        check "a section line under the other side's new heading is refused" "it merged: $(tr '\n' '/' <"$d/out2c")"
+    elif grep -q 'continue what precedes it' "$d/why2c"; then
+        check "a section line under the other side's new heading is refused" ok
+    else
+        check "a section line under the other side's new heading is refused" "reason: $(cat "$d/why2c")"
+    fi
+    if merge "$d/b2c" "$d/line2c" "$d/sec2c" "$d/out2c2" >/dev/null &&
+        [[ "$(cat "$d/out2c2")" == "$(printf '### Fixed (A)\n\n- old\n- another A fix\n\n### Added (B)\n\n- b')" ]]; then
+        check "a section line before the other side's new heading merges" ok
+    else
+        check "a section line before the other side's new heading merges" "got: $(tr '\n' '/' <"$d/out2c2" 2>/dev/null)"
+    fi
+    # 2d. Ours adds an item, theirs a continuation of the item above (review r2,
+    # sol): refused, or the continuation would attach to ours' new item.
+    printf -- '- old fix\n' >"$d/b2d"
+    printf -- '- old fix\n- new fix\n' >"$d/o2d"
+    printf -- '- old fix\n  Details about the old fix.\n' >"$d/t2d"
+    if merge "$d/b2d" "$d/o2d" "$d/t2d" "$d/out2d" >"$d/why2d"; then
+        check "a continuation beside the other side's new item is refused" "it merged: $(tr '\n' '/' <"$d/out2d")"
+    elif grep -q 'continue what precedes it' "$d/why2d"; then
+        check "a continuation beside the other side's new item is refused" ok
+    else
+        check "a continuation beside the other side's new item is refused" "reason: $(cat "$d/why2d")"
+    fi
+    # 2e. Heading depth (review r3, sol): ours adds a release section "## [1.0.0]",
+    # theirs a "### Security" entry for [Unreleased]: refused. Two "###" siblings
+    # are case 1 (merged).
+    printf '## [Unreleased]\n\n### Fixed (A)\n\n- a\n' >"$d/b2e"
+    printf '## [Unreleased]\n\n### Fixed (A)\n\n- a\n\n## [1.0.0]\n\n### Added (R)\n\n- r\n' >"$d/o2e"
+    printf '## [Unreleased]\n\n### Fixed (A)\n\n- a\n\n### Security (C)\n\n- c\n' >"$d/t2e"
+    if merge "$d/b2e" "$d/o2e" "$d/t2e" "$d/out2e" >"$d/why2e"; then
+        check "a deeper heading after the other side's shallower one is refused" "it merged: $(tr '\n' '/' <"$d/out2e")"
+    elif grep -q 'continue what precedes it' "$d/why2e"; then
+        check "a deeper heading after the other side's shallower one is refused" ok
+    else
+        check "a deeper heading after the other side's shallower one is refused" "reason: $(cat "$d/why2e")"
+    fi
+    # 2f. Review r4 (sol): case 2e with tab-separated headings in ours: refused.
+    printf '## [Unreleased]\n\n### Fixed (A)\n\n- a\n\n##\t[1.0.0]\n\n###\tAdded (R)\n\n- r\n' >"$d/o2f"
+    if merge "$d/b2e" "$d/o2f" "$d/t2e" "$d/out2f" >"$d/why2f"; then
+        check "a tab-separated heading counts in the depth check" "it merged: $(tr '\n\t' '/>' <"$d/out2f")"
+    elif grep -q 'continue what precedes it' "$d/why2f"; then
+        check "a tab-separated heading counts in the depth check" ok
+    else
+        check "a tab-separated heading counts in the depth check" "reason: $(cat "$d/why2f")"
+    fi
+    # 2h. Review r5 (sol): case 2e with headings indented by one space: refused.
+    printf '## [Unreleased]\n\n### Fixed (A)\n\n- a\n\n ## [1.0.0]\n\n ### Added (R)\n\n- r\n' >"$d/o2h"
+    if merge "$d/b2e" "$d/o2h" "$d/t2e" "$d/out2h" >"$d/why2h"; then
+        check "an indented heading counts in the depth check" "it merged: $(tr '\n' '/' <"$d/out2h")"
+    elif grep -q 'continue what precedes it' "$d/why2h"; then
+        check "an indented heading counts in the depth check" ok
+    else
+        check "an indented heading counts in the depth check" "reason: $(cat "$d/why2h")"
+    fi
+    # 2g. Review r4 (sol): both insert a heading above an existing item: refused
+    # (the item would be filed under one of them).
+    printf '## [Unreleased]\n\n- API change\n' >"$d/b2g"
+    printf '## [Unreleased]\n\n### Added\n\n- API change\n' >"$d/o2g"
+    printf '## [Unreleased]\n\n### Removed\n\n- API change\n' >"$d/t2g"
+    if merge "$d/b2g" "$d/o2g" "$d/t2g" "$d/out2g" >"$d/why2g"; then
+        check "a heading claiming the lines after the conflict is refused" "it merged: $(tr '\n' '/' <"$d/out2g")"
+    elif grep -q 'continue what precedes it' "$d/why2g"; then
+        check "a heading claiming the lines after the conflict is refused" ok
+    else
+        check "a heading claiming the lines after the conflict is refused" "reason: $(cat "$d/why2g")"
+    fi
+    # 3. CRLF line ends: the awk sees no marker it knows, the marker check refuses.
+    sed 's/$/\r/' "$d/ours2" >"$d/ours3"
+    sed 's/$/\r/' "$d/theirs2" >"$d/theirs3"
+    sed 's/$/\r/' "$d/base" >"$d/base3"
+    if merge "$d/base3" "$d/ours3" "$d/theirs3" "$d/out3" >"$d/why3"; then
+        check "a conflict it cannot read (CRLF) is refused" "it merged"
+    else
+        check "a conflict it cannot read (CRLF) is refused" ok
+    fi
+    # 4. No conflict: the plain three-way merge.
+    printf '# Changelog\n\n## [Unreleased]\n\n### Fixed (A)\n\n- old\n- new, theirs\n' >"$d/theirs4"
+    if merge "$d/base" "$d/base" "$d/theirs4" "$d/out4" >/dev/null && cmp -s "$d/out4" "$d/theirs4"; then
+        check "no conflict merges as git does" ok
+    else
+        check "no conflict merges as git does" "got: $(cat "$d/out4" 2>/dev/null)"
+    fi
+    # 5. Driver mode: a refusal leaves git's conflict markers in OURS, exit 1.
+    cp "$d/ours2" "$d/ours5"
+    if driver "$d/base" "$d/ours5" "$d/theirs2" 2>/dev/null; then
+        check "the driver leaves a refused conflict to git" "exit 0"
+    elif grep -q '^<<<<<<< ours' "$d/ours5" && grep -q '^>>>>>>> theirs' "$d/ours5"; then
+        check "the driver leaves a refused conflict to git" ok
+    else
+        check "the driver leaves a refused conflict to git" "no markers in OURS"
+    fi
+    # 6. Driver mode: a merge writes the result into OURS, exit 0.
+    cp "$d/ours" "$d/ours6"
+    if driver "$d/base" "$d/ours6" "$d/theirs" && cmp -s "$d/ours6" "$d/out"; then
+        check "the driver writes the merge into OURS" ok
+    else
+        check "the driver writes the merge into OURS" "exit or content differs"
+    fi
+    if ((fails)); then
+        echo "changelog-merge: self-test FAILED ($fails)"
+        return 1
+    fi
+    echo "changelog-merge: self-test passed"
+}
+
+case "${1:-}" in
+-h | --help)
+    usage
+    ;;
+--self-test)
+    self_test
+    ;;
+--driver)
+    [[ $# -eq 4 ]] || {
+        usage >&2
+        exit 2
+    }
+    driver "$2" "$3" "$4"
+    ;;
+*)
+    [[ $# -eq 4 ]] || {
+        usage >&2
+        exit 2
+    }
+    merge "$1" "$2" "$3" "$4"
+    ;;
+esac
