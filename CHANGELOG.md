@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (TLS-68: the LSP answers for a routine declared in several files are deterministic)
+
+- When one routine id is declared in more than one workspace file (the same object in two
+  files), the LSP's declaration index (`decl_by_id`) used to pick whichever file a `HashMap`
+  walk visited last. That walk is ordered differently in every process, and the winner's
+  position and URI reach the prepare, incoming, outgoing, code lens and diagnostics answers.
+  The rung-1 incremental patch had rules of its own: the file just saved always took the id,
+  and a lost winner was replaced by the first match in hash order. So a patched index could
+  differ from a rebuild.
+- Now both use one comparison (`snapshot::decl_wins`): the first entry of the file with the
+  smallest `virtual_path`. The path, not the engine's "first in graph order", because rung 2
+  appends new files at the end, so graph order is no stable key across edits.
+- `Updater::flush_pending` (also flagged by TLS-66's audit) was checked and is no bug. Only
+  rung 1 fills `pending`, and a brand-new file always takes rung 2, so each pending file
+  already exists and is replaced in place; hash order never reaches the file order. A
+  `debug_assert!` and a comment pin it.
+- Tests (`tests/lsp/lsp_incremental_parity.rs`):
+  - New `duplicate_routine_id_winner_is_the_smallest_path`: eight fresh builds, a rung-1
+    edit of the losing file, and one of the winning file. Each step's patched index must
+    equal a fresh `build_decl_by_id` exactly.
+  - The existing rung-1 parity check is tightened from "one of the declaring files' entries",
+    which passed whichever file won, to exact equality.
+  - Mutations, each red: the largest path winning; the patch taking every id; the patch not
+    replacing its own old entry.
+- Limit: the rescan for a winning file that stops declaring an id is not reachable through
+  rung 1 (removing a declaration is rung 2, which rebuilds). It uses the same comparison but
+  has no test of its own.
+
 ### Changed (TLS-66: FxHash and pre-sizing for the model build's hottest maps)
 
 - **Why:** a SIGPROF profile of one resident CDO model build (`build_target`, master
@@ -41,6 +69,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Below the bar:** the 2.4% CPU gain is below the 3% CPU bar set at filing, waived by the
   orchestrator for the wall and memory gain. The wall gain (x0.943, both passes) is the one
   measured; the memory figure is noise, as above.
+- **Not reproduced after ENG-86/88** (noted with TLS-68): the landing gate's speed phase on
+  the then master (base build CPU ~92 s) read build CPU x1.036 (passes x1.205 and x0.891,
+  so noise) and wall x1.006. The gain measured on `e7848a85` did not show again there.
 - **Left for later:** cheaper keys for the `String`- and `Query`-keyed maps (FxHash still
   reads a string byte by byte), and the remaining smaller `String`-keyed sites.
 - **Output order:** every iteration over a switched map was checked by hand, iterator chains
