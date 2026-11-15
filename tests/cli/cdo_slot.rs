@@ -347,6 +347,8 @@ fn cdo_slot_guard_refuses_other_sessions_while_held() {
         // Review r4 (sol): cdo-speed's argparse help builds nothing.
         "scripts/cdo-speed --help",
         "python3 scripts/cdo-speed --help",
+        // Fable r3: a syntax check runs nothing.
+        "bash -n scripts/land && bash -n scripts/cdo-gate",
         "git commit -m \"$(cat <<'EOF'\nfix: don't (really) run cargo test\n\nCo-Authored-By: x\nEOF\n)\"",
     ];
     for c in guarded.iter().chain(&free) {

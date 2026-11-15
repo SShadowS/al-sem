@@ -374,6 +374,8 @@ def guarded_segment(words, line):
                     continue
                 if w.startswith("--"):
                     continue
+                if w[0] == "-" and "n" in w[1:]:
+                    return False  # `bash -n`: a syntax check runs nothing
                 want_c = want_c or "c" in w[1:]
                 i += sum(1 for ch in w[1:] if ch in "oO")
             if i < len(words) and words[i] == "--":
@@ -468,8 +470,10 @@ def main():
     said = p.stdout.strip()
     # This session's own hold, a bound one (its land or cdo-gate) included:
     # only another session's hold stops it.
-    own = re.search(r", session (\S+?)(?:,|$)", said)
-    if own and own.group(1) == session:
+    # The last ", session <id>": the reason comes earlier in the line and
+    # could hold that text itself.
+    owns = re.findall(r", session (\S+?)(?=,|$)", said)
+    if owns and owns[-1] == session:
         return 0
     if p.returncode == 1 and said.startswith("held by") and not said.endswith("(yours)"):
         print(f"cdo-slot-guard: the CDO slot is {said}. Not run: {hit}", file=sys.stderr)

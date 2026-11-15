@@ -125,6 +125,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   script; option operands not consumed. Review r4 (sol): `cdo-speed --help`
   (argparse, exits before any build) passes again (mutation: its entry removed ->
   refused).
+- Review r3 (Fable, READY): `bash -n <script>` (a syntax check) passes (mutation: the
+  rule dropped -> refused); the own-session match takes the last `, session <id>` of
+  the status line (a reason holding that text cannot lend a hold). Known limits,
+  left as they are (rare in agent use): a script fed to a shell on stdin (`bash
+  <<EOF`, `echo cmd | bash`), `find -execdir cargo ...`, a test binary run directly
+  on CDO (only aldump/alsem are matched by name), `$'...'` quoting, and `diff <(...)
+  scripts/land` (refused).
 
 ### Added (TLS-59: `scripts/land`, the landing chain as one command)
 
