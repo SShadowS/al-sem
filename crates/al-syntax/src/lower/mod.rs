@@ -58,6 +58,7 @@ pub fn lower_file(root: RawNode, source: &str) -> AlFile {
     let mut objects = Vec::new();
     // No range from another file (an unwinding lowering) may reach this one.
     CONDITIONAL_VARS.with(|v| v.borrow_mut().clear());
+    PREPROC_WALK.with(|f| f.set(root.has_error()));
     PREPROC_RANGES.with(|s| *s.borrow_mut() = preproc_ranges(root, source));
     collect_objects(root, source, &mut ir, &mut issues, &mut objects);
     ir.mark_conditional_vars(CONDITIONAL_VARS.with(|v| std::mem::take(&mut *v.borrow_mut())));
@@ -2219,6 +2220,9 @@ thread_local! {
     /// sorted by start ([`holds_preproc`]); set by `lower_file`.
     static PREPROC_RANGES: std::cell::RefCell<Vec<(usize, usize)>> =
         const { std::cell::RefCell::new(Vec::new()) };
+    /// ENG-81 (sol r1): the file being lowered has parse errors, so [`holds_preproc`] walks
+    /// (`holds_preproc_walk`) instead of reading `PREPROC_RANGES`; set by `lower_file`.
+    static PREPROC_WALK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// Lower `children` as one statement list (a `statement_block` or a `code_block`
@@ -4336,7 +4340,12 @@ fn holds_preproc(node: RawNode) -> bool {
     // ranges), filled once per file in `lower_file`, instead of a walk of the subtree per
     // call (a call's arguments were rescanned by every enclosing call). Tree ranges nest,
     // so the subtree holds such a node when one lies inside its range (a zero-width
-    // MISSING node at its end included, as the walk saw it).
+    // MISSING node at its end included, as the walk saw it). In a file with parse errors a
+    // zero-width recovery node at a range's end may belong to an ancestor or a sibling
+    // (sol r1), so such a file keeps the exact walk.
+    if PREPROC_WALK.with(std::cell::Cell::get) {
+        return holds_preproc_walk(node);
+    }
     let r = node.byte_range();
     PREPROC_RANGES.with(|s| {
         let s = s.borrow();
@@ -4346,6 +4355,19 @@ fn holds_preproc(node: RawNode) -> bool {
             .take_while(|&&(b, _)| b <= r.end)
             .any(|&(_, e)| e <= r.end)
     })
+}
+
+/// Whether `node` or a named node below it is a build-varying preproc node, by walking
+/// the subtree: [`holds_preproc`] in a file with parse errors, and its test oracle.
+fn holds_preproc_walk(node: RawNode) -> bool {
+    let mut stack = vec![node];
+    while let Some(n) = stack.pop() {
+        if is_varying_preproc(n) {
+            return true;
+        }
+        stack.extend(n.named_children());
+    }
+    false
 }
 
 /// The ranges [`holds_preproc`] reads for the file `root` of `source`. A source with no
@@ -5044,27 +5066,19 @@ mod tests {
     use crate::ir::{ExprKind, Literal, StmtKind};
     use crate::parse;
 
-    /// ENG-81: the per-node subtree walk `holds_preproc` replaced, kept as the oracle.
-    fn holds_preproc_walk(node: super::RawNode) -> bool {
-        let mut stack = vec![node];
-        while let Some(n) = stack.pop() {
-            if super::is_varying_preproc(n) {
-                return true;
-            }
-            stack.extend(n.named_children());
-        }
-        false
-    }
+    use super::holds_preproc_walk;
 
-    /// Every named node of `src`: (the new range lookup, the old walk) disagreements, and
-    /// how many nodes hold a build-varying preproc node.
-    fn oracle_check(src: &str) -> (Vec<String>, usize) {
+    /// Every named node of `src`: (`holds_preproc`, the subtree walk) disagreements, and how
+    /// many nodes hold a build-varying preproc node. `walk_on_errors` sets the fallback as
+    /// `lower_file` does (a file with parse errors walks); `false` forces the range lookup.
+    fn oracle_check_with(src: &str, walk_on_errors: bool) -> (Vec<String>, usize) {
         let mut parser = tree_sitter::Parser::new();
         parser
             .set_language(&crate::language::language())
             .expect("load AL grammar");
         let tree = parser.parse(src, None).expect("a parse");
         let root = super::RawNode::new(tree.root_node());
+        super::PREPROC_WALK.with(|f| f.set(walk_on_errors && root.has_error()));
         super::PREPROC_RANGES.with(|s| *s.borrow_mut() = super::preproc_ranges(root, src));
         let (mut bad, mut holding) = (Vec::new(), 0);
         let mut stack = vec![root];
@@ -5081,6 +5095,38 @@ mod tests {
             stack.extend(n.named_children());
         }
         (bad, holding)
+    }
+
+    fn oracle_check(src: &str) -> (Vec<String>, usize) {
+        oracle_check_with(src, true)
+    }
+
+    /// ENG-81 (sol r1): in a file with parse errors a zero-width recovery node at a range's
+    /// end could belong to an ancestor or a sibling, so such a file keeps the exact walk.
+    /// No reproducer is known (the range lookup forced on every file, recovered ones
+    /// included, agreed with the walk over the r0 corpus and 11,465 dependency files on
+    /// 2026-11-15), so this pins the fallback's use: `lower_file` sets it for a file with
+    /// parse errors and clears it for a clean one. Break: never set it -> fails.
+    #[test]
+    fn a_recovered_file_keeps_the_exact_walk() {
+        let walking = || super::PREPROC_WALK.with(std::cell::Cell::get);
+        let broken = parse(
+            "codeunit 50001 \"Broken\"\n{\n    procedure P()\n    begin\n#if X\n        Foo(1)",
+        );
+        assert_eq!(
+            broken.parse_status,
+            crate::ir::ParseStatus::Recovered,
+            "precondition"
+        );
+        assert!(walking(), "a recovered file walks");
+        let clean =
+            parse("codeunit 50002 \"Clean\"\n{\n    procedure P()\n    begin\n    end;\n}\n");
+        assert_eq!(
+            clean.parse_status,
+            crate::ir::ParseStatus::Clean,
+            "precondition"
+        );
+        assert!(!walking(), "a clean file reads the ranges");
     }
 
     /// ENG-81 (Fable r1): the sorted-range lookup answers exactly what the subtree walk did,
