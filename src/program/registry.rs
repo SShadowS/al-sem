@@ -80,13 +80,14 @@ pub struct DependencyRegistry<'g> {
     /// Dependency routines whose bodies the model analysed. Empty until S7/S8.
     analyzed: HashSet<RoutineNodeId>,
     /// Every graph routine by id (first wins on a shared id, graph order).
-    by_id: std::collections::HashMap<&'g RoutineNodeId, &'g RoutineNode>,
+    by_id: crate::fxhash::FxHashMap<&'g RoutineNodeId, &'g RoutineNode>,
 }
 
 impl<'g> DependencyRegistry<'g> {
     #[must_use]
     pub fn new(graph: &'g ProgramGraph, dep_meta: &'g DepMeta) -> Self {
-        let mut by_id = std::collections::HashMap::new();
+        // FxHash (TLS-66).
+        let mut by_id = crate::fxhash::FxHashMap::default();
         for n in graph.routines.iter() {
             by_id.entry(&n.id).or_insert(n);
         }

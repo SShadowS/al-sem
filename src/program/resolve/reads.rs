@@ -40,7 +40,7 @@
 //! query and is logged when it happens.
 
 use std::cell::{Cell, RefCell};
-use std::collections::{BTreeSet, HashSet};
+use std::collections::BTreeSet;
 
 use al_syntax::ir::ObjectKind;
 
@@ -561,7 +561,9 @@ pub struct Recorder<'a> {
     graph: &'a ProgramGraph,
     index: &'a ResolveIndex,
     surface: &'a DeclSurface,
-    log: RefCell<HashSet<Query>>,
+    // FxHash (TLS-66): logging these queries was the largest single hashing cost
+    // of the CDO model build.
+    log: RefCell<crate::fxhash::FxHashSet<Query>>,
 }
 
 impl<'a> Recorder<'a> {
@@ -571,13 +573,13 @@ impl<'a> Recorder<'a> {
             graph,
             index,
             surface,
-            log: RefCell::new(HashSet::new()),
+            log: RefCell::default(),
         }
     }
 
     /// The queries logged so far.
     #[must_use]
-    pub fn into_log(self) -> HashSet<Query> {
+    pub fn into_log(self) -> crate::fxhash::FxHashSet<Query> {
         self.log.into_inner()
     }
 

@@ -1258,7 +1258,9 @@ fn split_declarations(
 ) -> crate::program::split_decls::SplitDecls {
     use crate::program::split_decls::{Ordinals, SplitDecls, decl_id};
     debug_assert_eq!(routines.len(), units.len(), "one unit per routine");
-    let mut by_id: HashMap<&RoutineNodeId, Vec<usize>> = HashMap::new();
+    // FxHash (TLS-66).
+    let mut by_id: crate::fxhash::FxHashMap<&RoutineNodeId, Vec<usize>> =
+        crate::fxhash::FxHashMap::default();
     for (i, r) in routines.iter().enumerate() {
         if r.tier != TrustTier::SymbolOnly {
             by_id.entry(&r.id).or_default().push(i);

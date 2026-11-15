@@ -25,7 +25,9 @@
 //! witnesses, which the session re-materializes from the current surface for
 //! every kept edge, exactly as it does under B (§6.5).
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
+
+use crate::fxhash::{FxHashMap, FxHashSet};
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -38,7 +40,7 @@ use crate::program::node_extract::{ObjectNode, RoutineNode};
 use crate::program::resolve::decl_surface::DeclSurface;
 use crate::program::resolve::full::{
     ClassifiedEdge, DependencyBodyResolution, FileResolution, ObligationId, ParenlessCalls,
-    ProgramContext, SiteFacts,
+    ProgramContext, SiteFacts, SiteFactsByObligation,
 };
 use crate::program::resolve::index::{ObjectRefResolution, ResolveIndex};
 use crate::program::resolve::reads::{FACADE_VERSION, GraphReads, IndexReads, Query};
@@ -257,7 +259,7 @@ pub(crate) struct DepRecord {
 /// Interns queries into one table, keeping the digests known for them.
 #[derive(Default)]
 pub(crate) struct Interner {
-    ids: HashMap<Query, u32>,
+    ids: FxHashMap<Query, u32>,
     queries: Vec<Query>,
     digests: Vec<Option<Digest>>,
 }
@@ -340,7 +342,7 @@ fn query_heap(q: &Query) -> usize {
 /// its record.
 struct Assembly {
     edges: Vec<ClassifiedEdge>,
-    site_facts: HashMap<ObligationId, SiteFacts>,
+    site_facts: SiteFactsByObligation,
     parenless: ParenlessCalls,
     files: Vec<DepFile>,
     interner: Interner,
@@ -353,7 +355,7 @@ impl Assembly {
     fn new(edges: usize) -> Self {
         Assembly {
             edges: Vec::with_capacity(edges),
-            site_facts: HashMap::new(),
+            site_facts: SiteFactsByObligation::default(),
             parenless: ParenlessCalls::new(),
             files: Vec::new(),
             interner: Interner::default(),
@@ -362,7 +364,7 @@ impl Assembly {
     }
 
     fn facts(&mut self, facts: impl IntoIterator<Item = (ObligationId, SiteFacts)>) {
-        let mut own: HashSet<ObligationId> = HashSet::new();
+        let mut own: FxHashSet<ObligationId> = FxHashSet::default();
         for (k, v) in facts {
             let first_here = own.insert(k.clone());
             if self.site_facts.insert(k, v).is_some() && first_here {
@@ -378,7 +380,7 @@ impl Assembly {
         path: &str,
         file_ix: Option<FileIx>,
         r: FileResolution,
-        log: HashSet<Query>,
+        log: FxHashSet<Query>,
     ) {
         let start = self.edges.len();
         self.edges.extend(r.edges.into_iter().map(|mut e| {
@@ -489,7 +491,7 @@ fn resolve_recorded(
     which: &[usize],
     index: &ResolveIndex,
     surface: &DeclSurface,
-) -> Vec<(FileResolution, HashSet<Query>)> {
+) -> Vec<(FileResolution, FxHashSet<Query>)> {
     let maps = ctx.dependency_object_maps(files);
     crate::big_stack::big_stack_pool().install(|| {
         which
@@ -618,7 +620,7 @@ pub(crate) fn resolve_by_rule(
         }
         return Some((d, RecordAfter::Unchanged, outcome));
     }
-    let mut fresh: HashMap<usize, (FileResolution, HashSet<Query>)> = HashMap::new();
+    let mut fresh: HashMap<usize, (FileResolution, FxHashSet<Query>)> = HashMap::new();
     if !dirty.is_empty() {
         ctx.ensure_dep_bodies();
         let files = ctx.dependency_files();

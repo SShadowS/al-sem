@@ -1632,7 +1632,7 @@ pub(crate) mod tests {
         /// The second edge set (`EdgeView::dependency_body_edges`): `project`
         /// reads it after `edges`.
         pub(crate) dependency_body_edges: Vec<ClassifiedEdge>,
-        pub(crate) site_facts: HashMap<ObligationId, SiteFacts>,
+        pub(crate) site_facts: crate::program::resolve::full::SiteFactsByObligation,
         pub(crate) facts: SourceFacts,
         pub(crate) missing: Vec<ObligationId>,
     }

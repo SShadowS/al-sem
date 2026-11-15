@@ -50,6 +50,8 @@ pub mod file_stamp;
 /// `tests/fold-allowlist.txt` (TLS-43) — see the module doc.
 #[cfg(test)]
 mod fold_guard_tests;
+/// A fast, unkeyed hasher for the engine's hot maps (TLS-66) — see the module doc.
+pub mod fxhash;
 /// The one way to spawn `git`: without the repository variables a git hook
 /// exports — see the module doc.
 pub mod git_env;
