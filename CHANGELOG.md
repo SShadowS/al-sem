@@ -57,7 +57,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   meets an entry. Any other conflict is refused, including (review r1, Fable) a conflict
   where both sides carry the same line: an entry already on master after a squash-merge or
   a cherry-pick, which keeping both sides would duplicate. In `--diff3` mode git keeps such
-  common lines inside the conflict, and land's old rule kept them twice. Replayed on the 70
+  common lines inside the conflict, and land's old rule kept them twice. Also refused
+  (review r1, sol): one side adds lines to the section above the conflict while the other
+  adds a new section. With ours printed first, the section lines would land under ours's
+  new heading. The other way round merges, and the lines stay in their section. Replayed on the 70
   real conflicting merges: 67 merge; 3 are refused (the one edited line, and two
   master-into-branch merges whose conflicts shared whole paragraphs of an entry, true
   duplicates). The check compares whole non-blank lines, so two unrelated entries sharing a
@@ -82,7 +85,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Above all, it would hide every CHANGELOG conflict from git, so land's check ("only
     additions, else stop") would never run.
 - **Tests:**
-  - `changelog-merge --self-test` (eight cases), run from `tests/cli/changelog_merge.rs`.
+  - `changelog-merge --self-test` (ten cases), run from `tests/cli/changelog_merge.rs`.
+    The driver removes its temp files on any exit, including an interrupt (review r1,
+    sol).
   - A real `git rebase` with the driver: two new entries rebase cleanly, master's first; an
     entry both sides carry stops the rebase with git's markers.
   - A real `git merge` in a scratch repo, three ways: additions merge through the
@@ -93,7 +98,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     rule.
   - Mutations, each red: the blank-line rule dropped; the driver's marker fallback dropped;
     the attribute removed; the on-both-sides check removed (all four measured shapes merge
-    with the entry twice, and the rebase case goes through); the refusal of a changed line
+    with the entry twice, and the rebase case goes through); the section-line refusal removed
+    (the A fix lands under B); the refusal of a changed line
     off. That last one also fails
     `land_script::land_refuses_and_leaves_nothing_behind`, which shows land's cases run
     through the moved rule.

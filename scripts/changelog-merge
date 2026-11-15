@@ -61,6 +61,13 @@ merge() {
             delete seen
             for (i = 1; i <= no; i++) if (o[i] != "") seen[o[i]] = 1
             for (i = 1; i <= nt; i++) if (t[i] != "" && (t[i] in seen)) { dup = 1; exit }
+            # Review r1 (sol): theirs adds lines to the section above the
+            # conflict (its first non-blank line is no heading) while ours adds a
+            # heading: printed after ours, those lines would land under ours new
+            # section. Refused rather than regrouped silently.
+            oh = 0; for (i = 1; i <= no; i++) if (o[i] ~ /^#/) oh = 1
+            tf = ""; for (i = 1; i <= nt; i++) if (t[i] != "") { tf = t[i]; break }
+            if (oh && tf != "" && tf !~ /^#/) { orphan = 1; exit }
             for (i = 1; i <= no; i++) print o[i]
             if (no > 0 && o[no] != "" && nt > 0 && t[1] ~ /^#/) print ""
             for (i = 1; i <= nt; i++) print t[i]
@@ -68,9 +75,12 @@ merge() {
             next
         }
         state == 3 { t[++nt] = $0; next }
-        END { if (dup) exit 2; if (bad || state != 0) exit 1 }' "$4.diff3" >"$4" || awk_rc=$?
+        END { if (dup) exit 2; if (orphan) exit 3; if (bad || state != 0) exit 1 }' "$4.diff3" >"$4" || awk_rc=$?
     rm -f "$4.diff3"
-    if ((awk_rc == 2)); then
+    if ((awk_rc == 3)); then
+        echo "a CHANGELOG.md conflict adds lines to a section on one side and a new section on the other: resolve it by hand"
+        return 1
+    elif ((awk_rc == 2)); then
         echo "a CHANGELOG.md line is on both sides of a conflict (an entry both carry): resolve it by hand"
         return 1
     elif ((awk_rc != 0)); then
@@ -89,6 +99,12 @@ merge() {
 driver() {
     local out why
     out=$(mktemp "${2}.changelog-merge.XXXXXX")
+    # Review r1 (sol): an interrupted driver must not leave files at the repo top
+    # (land's clean-worktree check would then refuse). A script-level name, so the
+    # EXIT trap still sees it after this function returns.
+    driver_tmp=$out
+    trap '[[ -n "${driver_tmp:-}" ]] && rm -f "$driver_tmp" "$driver_tmp.diff3"; true' EXIT
+    trap 'exit 130' INT TERM
     if why=$(merge "$1" "$2" "$3" "$out"); then
         mv "$out" "$2"
         return 0
@@ -165,6 +181,25 @@ self_test() {
         fi
     done
     ((fails == fails_before)) && check "an entry on both sides is refused (4 shapes)" ok
+    # 2c. One side adds a line to the section above, the other a new section
+    # (review r1, sol). Ours with the section: refused (theirs' line would land
+    # under it). Theirs with the section: merged, the line stays in its section.
+    printf '### Fixed (A)\n\n- old\n' >"$d/b2c"
+    printf '### Fixed (A)\n\n- old\n\n### Added (B)\n\n- b\n' >"$d/sec2c"
+    printf '### Fixed (A)\n\n- old\n- another A fix\n' >"$d/line2c"
+    if merge "$d/b2c" "$d/sec2c" "$d/line2c" "$d/out2c" >"$d/why2c"; then
+        check "a section line under the other side's new heading is refused" "it merged: $(tr '\n' '/' <"$d/out2c")"
+    elif grep -q 'new section on the other' "$d/why2c"; then
+        check "a section line under the other side's new heading is refused" ok
+    else
+        check "a section line under the other side's new heading is refused" "reason: $(cat "$d/why2c")"
+    fi
+    if merge "$d/b2c" "$d/line2c" "$d/sec2c" "$d/out2c2" >/dev/null &&
+        [[ "$(cat "$d/out2c2")" == "$(printf '### Fixed (A)\n\n- old\n- another A fix\n\n### Added (B)\n\n- b')" ]]; then
+        check "a section line before the other side's new heading merges" ok
+    else
+        check "a section line before the other side's new heading merges" "got: $(tr '\n' '/' <"$d/out2c2" 2>/dev/null)"
+    fi
     # 3. CRLF line ends: the awk sees no marker it knows, the marker check refuses.
     sed 's/$/\r/' "$d/ours2" >"$d/ours3"
     sed 's/$/\r/' "$d/theirs2" >"$d/theirs3"
