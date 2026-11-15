@@ -1,0 +1,123 @@
+#!/usr/bin/env bash
+# scripts/perf-probe — can this process open a perf event on itself (what samply needs)?
+#
+# ⟨TLS-70⟩ samply records through perf_event_open. Two things must allow it: the
+# host's kernel.perf_event_paranoid (<= 1 for a non-root user's own processes) and
+# the container's seccomp filter (Docker's default filter allows perf_event_open
+# only when the container is given CAP_PERFMON or CAP_SYS_ADMIN). Reading the
+# paranoid setting alone is not enough: on 2026-11-15 it read 1 in the alsem
+# container and the call still failed with EPERM (Seccomp: 2). This checks the
+# call itself.
+#
+#   scripts/perf-probe     compile a tiny C probe (cc) in a temp folder, open a
+#                          software and a hardware event on itself, print the
+#                          result and what the process looks like (paranoid,
+#                          seccomp, capabilities). Exit 0: samply can record;
+#                          1: it cannot (the output says which gate refused);
+#                          2: the probe could not be built.
+#   scripts/perf-probe --help
+set -euo pipefail
+
+if [[ "${1:-}" == -h || "${1:-}" == --help ]]; then
+    sed -n '/^#   scripts\/perf-probe  /,/^#   scripts\/perf-probe --help/p' "$0" | sed 's/^# \{0,1\}//'
+    exit 0
+fi
+
+dir=$(mktemp -d)
+trap 'rm -rf "$dir"' EXIT
+cat >"$dir/probe.c" <<'EOF'
+#include <linux/perf_event.h>
+#include <stdio.h>
+#include <string.h>
+#include <errno.h>
+#include <unistd.h>
+#include <sys/syscall.h>
+#include <sys/mman.h>
+
+/* What samply does, as far as it matters here: a SAMPLING event on itself with
+   the kernel included (review r2, Fable: a user-only event opens even at
+   paranoid 2), and its ring buffer mapped (review r1, sol: the mmap can fail on
+   mlock limits after the open succeeded). Exit: 0 ok; 3 open EACCES; 4 open
+   EPERM; 5 open, other errno; 6 the ring buffer mmap failed. */
+static int try_open(unsigned type, unsigned long long config, const char *name) {
+    struct perf_event_attr a;
+    memset(&a, 0, sizeof a);
+    a.size = sizeof a;
+    a.type = type;
+    a.config = config;
+    a.disabled = 1;
+    a.sample_period = 1000000;
+    a.sample_type = PERF_SAMPLE_IP | PERF_SAMPLE_TID;
+    long fd = syscall(SYS_perf_event_open, &a, 0, -1, -1, 0);
+    if (fd < 0) {
+        int e = errno;
+        printf("perf-probe: %s: perf_event_open failed: %s (errno %d)\n", name, strerror(e), e);
+        return e == EACCES ? 3 : e == EPERM ? 4 : 5;
+    }
+    long page = sysconf(_SC_PAGESIZE);
+    void *ring = mmap(NULL, (size_t)(1 + 16) * (size_t)page, PROT_READ | PROT_WRITE, MAP_SHARED, (int)fd, 0);
+    if (ring == MAP_FAILED) {
+        int e = errno;
+        printf("perf-probe: %s: opened, but mapping its ring buffer failed: %s (errno %d)\n", name, strerror(e), e);
+        close((int)fd);
+        return 6;
+    }
+    printf("perf-probe: %s: perf_event_open and ring buffer ok\n", name);
+    munmap(ring, (size_t)(1 + 16) * (size_t)page);
+    close((int)fd);
+    return 0;
+}
+
+int main(void) {
+    int rc = try_open(PERF_TYPE_SOFTWARE, PERF_COUNT_SW_CPU_CLOCK, "software cpu-clock");
+    try_open(PERF_TYPE_HARDWARE, PERF_COUNT_HW_CPU_CYCLES, "hardware cycles");
+    return rc;
+}
+EOF
+if ! cc -O0 -o "$dir/probe" "$dir/probe.c" 2>"$dir/cc.log"; then
+    echo "perf-probe: cannot build the probe (cc):" >&2
+    cat "$dir/cc.log" >&2
+    exit 2
+fi
+
+paranoid=$(cat /proc/sys/kernel/perf_event_paranoid 2>/dev/null || echo "?")
+echo "perf-probe: kernel.perf_event_paranoid = $paranoid"
+{ grep -E '^(Seccomp|Seccomp_filters|NoNewPrivs|CapEff):' /proc/self/status || true; } | sed 's/^/perf-probe:   /'
+
+# The software event decides: a hardware counter may be absent in a VM even
+# where perf itself is allowed. The errno names the gate that refused (only the
+# first refusal is visible: seccomp is checked before the kernel's own rule).
+rc=0
+"$dir/probe" || rc=$?
+# The cause is a likely one, weighed from the errno and what this process shows
+# (review r1, sol): a seccomp profile can return any errno, and "Seccomp: 2" says a
+# filter exists, not that it refused. Each line names what to check.
+high=0
+[[ "$paranoid" =~ ^-?[0-9]+$ ]] && ((paranoid > 1)) && high=1
+filtered=0
+grep -qE '^Seccomp:[[:space:]]*2' /proc/self/status && filtered=1
+case $rc in
+0)
+    echo "perf-probe: OK: a sampling perf event opens and its ring buffer maps; samply can record"
+    exit 0
+    ;;
+3 | 4)
+    echo "perf-probe: BLOCKED: perf_event_open refused (errno above). Likely cause:"
+    if ((high)); then
+        echo "perf-probe:   perf_event_paranoid is $paranoid; it must be <= 1 (host-side)"
+    fi
+    if ((filtered)); then
+        echo "perf-probe:   a seccomp filter is active (Seccomp: 2); Docker's default refuses this call without CAP_PERFMON or CAP_SYS_ADMIN"
+    fi
+    if ((!high && !filtered)); then
+        echo "perf-probe:   neither paranoid nor seccomp explains it: likely a security module (AppArmor, SELinux)"
+    fi
+    ;;
+6)
+    echo "perf-probe: BLOCKED: the event opens but its ring buffer does not map: check \`ulimit -l\` and kernel.perf_event_mlock_kb ($(cat /proc/sys/kernel/perf_event_mlock_kb 2>/dev/null || echo ?))"
+    ;;
+*)
+    echo "perf-probe: BLOCKED: refused for another reason (see the errno above)"
+    ;;
+esac
+exit 1

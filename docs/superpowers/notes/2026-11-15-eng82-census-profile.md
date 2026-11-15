@@ -140,6 +140,24 @@ the 1.7× growth of the other shares are conditional until a rerun records the C
 (`getrusage`) beside the sample count. The sampler's blocklist drops samples inside libc
 (`memcpy`, system calls).
 
+**Later (TLS-66, TLS-70).** TLS-66's rerun recorded the CPU total: 14,735 samples were kept of
+the 47,555 expected at 499 Hz over 95.3 CPU-seconds (31%). So the loss is real, and these
+shares rank parallel work poorly. samply samples every thread through perf and is in the image
+since TLS-70: `samply record --save-only -o prof.json.gz -- <cmd>`. Recording needs
+`perf_event_open`, and two gates must allow it:
+- the host's `kernel.perf_event_paranoid` at 1 or below. server1 was set to 1 host-side on
+  2026-11-15; a reboot may revert it.
+- the container letting the call through. On 2026-11-15 the call still failed with EPERM at
+  paranoid 1, so samply cannot record here yet. The likely cause is the seccomp filter
+  (`Seccomp: 2`; Docker's default filter allows the call only with CAP_PERFMON or
+  CAP_SYS_ADMIN), though a security module refusing with EPERM would look the same from
+  inside. The expected fix is PERFMON or a seccomp profile that allows `perf_event_open`
+  (owner ask q-20261115T112118-0e8509a6).
+
+`scripts/perf-probe` checks the call itself: a sampling event on itself, kernel included,
+with its ring buffer mapped. It exits 0 when samply can record; otherwise it lists the likely
+causes from the settings it reads. It also confirms whether the fix worked.
+
 ## The survey's tasks, re-ranked
 
 | Rank | Task | Measured size | Verdict |

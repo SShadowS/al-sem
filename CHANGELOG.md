@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (TLS-70: samply in the image, for CPU profiles of every thread)
+
+- `.kraken/Dockerfile` installs samply 0.13.1 (`cargo install --locked`, pinned) in a late layer,
+  so a rebuild keeps it and a version bump rebuilds nothing before it. ENG-82's in-process
+  pprof sampler kept 31% of the expected samples in TLS-66's rerun, mostly on the main thread,
+  so its shares ranked parallel work poorly. samply samples every thread through perf:
+  `samply record --save-only -o prof.json.gz -- <cmd>`.
+- **Recording is still blocked in the alsem container**, found by Fable's review and measured.
+  - samply needs `perf_event_open`, and two gates must allow it: the host's
+    `kernel.perf_event_paranoid` at 1 or below, which the owner set on server1 host-side on
+    2026-11-15 (it may revert on reboot), and the container's seccomp filter.
+  - With paranoid at 1, opening a perf event on the process itself still fails with EPERM,
+    for a software and a hardware event alike. The process has `Seccomp: 2`, no
+    capabilities and no-new-privileges.
+  - The likely cause is that seccomp filter: Docker's default allows `perf_event_open` only
+    for a container with CAP_PERFMON (or CAP_SYS_ADMIN). Likely, not proven (review r2,
+    sol): a security module refusing with EPERM would look the same from inside.
+  - So the expected fix is PERFMON, or a seccomp profile allowing the call (owner ask
+    q-20261115T112118-0e8509a6). Whether it unblocks recording is known only when
+    `scripts/perf-probe` exits 0 after the change.
+  - The earlier reading, that paranoid 1 alone is enough, does not hold: the call is
+    refused at paranoid 1.
+- New `scripts/perf-probe` checks the call itself rather than the setting.
+  - It compiles a small C probe that does what samply needs: it opens a sampling event on
+    itself with the kernel included, and maps its ring buffer.
+    - A user-only event opens even at paranoid 2, a false OK found by review r2, Fable.
+    - An open alone hides mlock limits on the buffer (review r1, sol).
+  - It prints paranoid, seccomp and capabilities, and gives the likely cause from those and
+    the errno. It does not assert a cause, because a seccomp profile can return any errno
+    and `Seccomp: 2` proves a filter exists, not that it refused (review r1, sol).
+  - Exit 0: samply can record; 1: blocked, with the likely cause; 2: no compiler.
+  - Real run, 2026-11-15: open refused with EPERM. Likely cause: a seccomp filter is active
+    (`Seccomp: 2`). Exit 1.
+  - CLAUDE.md's measurement commands and the ENG-82 note name it as the check.
+- Not verified: samply's own run (the owner rebuilds the image), and the
+  `--unstable-presymbolicate` flag for function names without a browser (from memory of
+  0.13; the docs say to confirm it with `samply record --help`).
+
 ### Fixed (TLS-69: a test for the rung-1 patch's same-file-twice guard that can fail)
 
 - `rung1_duplicate_vp_in_one_batch_stays_equivalent` (tests/lsp) was meant to guard this:
