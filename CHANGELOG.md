@@ -57,6 +57,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Crate-wide, clippy's `iter_over_hash_type` flagged 127 `for` loops over hash types, triaged one by one. One confirmed risk (`lsp/snapshot.rs` `build_decl_by_id`, an existing and documented nondeterministic winner) and two possible ones became TLS-68 and ENG-90.
   - Limit: the lint sees `for` loops only; iterator chains over hash maps were not audited crate-wide.
 
+### Added (ENG-89: what the 385 MiB of dependency site facts is)
+
+- `docs/superpowers/notes/2026-11-15-eng89-site-facts.md`: on CDO the retained dependency site
+  facts (`HashMap<ObligationId, SiteFacts>`, 318,982 sites) are 384.9 MiB, and 360.5 MiB of that
+  is the table's layout (524,288 slots × a 128 B key and a 592 B record). The facts themselves
+  are small: only `receiver` (44%) and `bare_scope_complete` (48%) are common, 31,067 sites
+  (9.7%) use any other field, and all field heap is 7.6 MiB. Docs and census only, so no gain
+  here; it proposes a hot record with a boxed rare part (~246 MiB) and no second copy of the key
+  (the edges already carry it; ~93 MiB), about 339 MiB in all, filed as ENG-91.
+- `tools/census-probe resident` splits the site facts by field (sites using each, heap), key and
+  table; the CDO run is in `tools/census-probe/runs-eng89/`.
+
 ### Added (TLS-61: `scripts/cdo-before-after`, a CDO before/after in one command)
 
 - `scripts/cdo-before-after <base> [<head>|.]` replaces the hand steps of the
