@@ -58,12 +58,12 @@ pub fn cone_store_of(summaries: &HashMap<String, FullRoutineSummary>) -> ConeDer
 /// A throwaway anchor (positions are irrelevant to the L5 query substrate).
 pub fn dummy_anchor() -> PAnchor {
     PAnchor {
-        source_unit_id: "ws:test".to_string(),
+        source_unit_id: "ws:test".into(),
         start_line: 0,
         start_column: 0,
         end_line: 0,
         end_column: 0,
-        syntax_kind: "test".to_string(),
+        syntax_kind: "test".into(),
     }
 }
 

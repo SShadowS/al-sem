@@ -65,8 +65,10 @@ use serde::{Deserialize, Serialize};
 /// `enclosingRoutineId` is dropped (it embeds the modelInstanceId-dependent id).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PAnchor {
+    /// ENG-85: shared, not owned: every anchor of a file holds the same text
+    /// (`SharedStr` compares, prints and serializes as its text).
     #[serde(rename = "sourceUnitId")]
-    pub source_unit_id: String,
+    pub source_unit_id: crate::program::str_pool::SharedStr,
     #[serde(rename = "startLine")]
     pub start_line: u32,
     #[serde(rename = "startColumn")]
@@ -75,8 +77,49 @@ pub struct PAnchor {
     pub end_line: u32,
     #[serde(rename = "endColumn")]
     pub end_column: u32,
+    /// ENG-85: one shared text per grammar kind ([`syntax_kind_of`]).
     #[serde(rename = "syntaxKind")]
-    pub syntax_kind: String,
+    pub syntax_kind: crate::program::str_pool::SharedStr,
+}
+
+/// ENG-85: the file id for an anchor, shared with the previous anchor built on this thread
+/// when the text is the same (a walk builds one file's anchors in a row), so a file's anchors
+/// hold one allocation, not one each.
+pub fn anchor_unit(unit: &str) -> crate::program::str_pool::SharedStr {
+    use crate::program::str_pool::SharedStr;
+    thread_local! {
+        static LAST: std::cell::RefCell<Option<SharedStr>> = const { std::cell::RefCell::new(None) };
+    }
+    LAST.with(|last| {
+        let mut last = last.borrow_mut();
+        match last.as_ref() {
+            Some(s) if s.as_str() == unit => s.clone(),
+            _ => {
+                let s = SharedStr::from(unit);
+                *last = Some(s.clone());
+                s
+            }
+        }
+    })
+}
+
+/// ENG-85: the syntax kind for an anchor, one allocation per kind per thread (the grammar's
+/// kind names are a closed set, so this stays small).
+pub fn anchor_kind(kind: &str) -> crate::program::str_pool::SharedStr {
+    use crate::program::str_pool::SharedStr;
+    thread_local! {
+        static KINDS: std::cell::RefCell<crate::fxhash::FxHashSet<SharedStr>> =
+            std::cell::RefCell::new(crate::fxhash::FxHashSet::default());
+    }
+    KINDS.with(|kinds| {
+        let mut kinds = kinds.borrow_mut();
+        if let Some(s) = kinds.get(kind) {
+            return s.clone();
+        }
+        let s = SharedStr::from(kind);
+        kinds.insert(s.clone());
+        s
+    })
 }
 
 impl PAnchor {

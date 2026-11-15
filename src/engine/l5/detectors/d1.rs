@@ -2367,12 +2367,12 @@ mod memo_tests {
             temp_state: None,
             field_arguments: None,
             source_anchor: crate::program::body::features::PAnchor {
-                source_unit_id: "ws:test".to_string(),
+                source_unit_id: "ws:test".into(),
                 start_line: 0,
                 start_column: 0,
                 end_line: 0,
                 end_column: 0,
-                syntax_kind: "test".to_string(),
+                syntax_kind: "test".into(),
             },
             loop_stack: vec!["D/loop0".to_string()], // local_loop_depth = 1
             field_argument_infos: None,

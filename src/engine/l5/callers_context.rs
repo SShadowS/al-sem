@@ -328,7 +328,7 @@ fn own_write_site(r: &ModelRoutine, table: &str, op: &str) -> Option<(String, u3
         .min_by_key(|o| (o.source_anchor.start_line, o.source_anchor.start_column))
         .map(|o| {
             (
-                o.source_anchor.source_unit_id.clone(),
+                o.source_anchor.source_unit_id.to_string(),
                 o.source_anchor.start_line + 1,
             )
         })
@@ -1158,7 +1158,7 @@ impl<'a, 'c> Visitor<'a, 'c> {
                 if let Some(t) = tables.iter().next() {
                     let sd = self.ix.display(g, o.to);
                     let place = Some((
-                        sub.source_anchor.source_unit_id.clone(),
+                        sub.source_anchor.source_unit_id.to_string(),
                         sub.source_anchor.start_line + 1,
                     ));
                     self.witness(
@@ -1316,7 +1316,7 @@ impl<'a, 'c> Visitor<'a, 'c> {
                             .map_or_else(|| o.record_variable_name.clone(), |t| self.ix.table(t))
                     ),
                     Some((
-                        o.source_anchor.source_unit_id.clone(),
+                        o.source_anchor.source_unit_id.to_string(),
                         o.source_anchor.start_line + 1,
                     )),
                 ),
@@ -1345,7 +1345,7 @@ impl<'a, 'c> Visitor<'a, 'c> {
                             (
                                 detail,
                                 Some((
-                                    cs.source_anchor.source_unit_id.clone(),
+                                    cs.source_anchor.source_unit_id.to_string(),
                                     cs.source_anchor.start_line + 1,
                                 )),
                             )
@@ -1928,7 +1928,7 @@ impl Visitor<'_, '_> {
         let place = start.clone().or_else(|| {
             self.ix.row_for(g, s.node, None).map(|r| {
                 (
-                    r.source_anchor.source_unit_id.clone(),
+                    r.source_anchor.source_unit_id.to_string(),
                     r.source_anchor.start_line + 1,
                 )
             })

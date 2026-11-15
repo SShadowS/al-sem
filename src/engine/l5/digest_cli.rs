@@ -901,7 +901,7 @@ impl RoutineSpanIndex {
 pub fn build_routine_span_index(resolved: &Model) -> RoutineSpanIndex {
     let model_routines = resolved.workspace.routines.iter().map(|r| RoutineSpan {
         routine: r.stable_routine_id.clone(),
-        source_unit_id: r.source_anchor.source_unit_id.clone(),
+        source_unit_id: r.source_anchor.source_unit_id.to_string(),
         start: r.declaration_start_line,
         end: r.source_anchor.end_line,
         anchor_line: r.source_anchor.start_line,
@@ -915,7 +915,7 @@ pub fn build_routine_span_index(resolved: &Model) -> RoutineSpanIndex {
         .flat_map(|o| &o.declaration_only_routines)
         .map(|d| RoutineSpan {
             routine: d.stable_routine_id.clone(),
-            source_unit_id: d.source_anchor.source_unit_id.clone(),
+            source_unit_id: d.source_anchor.source_unit_id.to_string(),
             start: d.declaration_start_line,
             end: d.source_anchor.end_line,
             anchor_line: d.source_anchor.start_line,
@@ -2244,7 +2244,7 @@ impl<'t> FinishCx<'t> {
             .find(|cs| cs.id == callsite_id)
             .map(|cs| {
                 let a = &cs.source_anchor;
-                (a.source_unit_id.clone(), a.start_line, a.start_column)
+                (a.source_unit_id.to_string(), a.start_line, a.start_column)
             })
     }
 

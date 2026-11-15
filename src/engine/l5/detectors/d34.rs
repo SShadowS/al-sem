@@ -170,25 +170,25 @@ fn emit_direct(
     // The anchor_of helper needs an ModelRoutine; since we have the ids, build the anchors manually.
     // Use the routine's id as the enclosing_routine_id for both anchors.
     let loop_anchor = SourceAnchor {
-        source_unit_id: loop_info.source_anchor.source_unit_id.clone(),
+        source_unit_id: loop_info.source_anchor.source_unit_id.to_string(),
         start_line: loop_info.source_anchor.start_line,
         start_column: loop_info.source_anchor.start_column,
         end_line: loop_info.source_anchor.end_line,
         end_column: loop_info.source_anchor.end_column,
         enclosing_routine_id: routine_id.to_string(),
-        syntax_kind: loop_info.source_anchor.syntax_kind.clone(),
+        syntax_kind: loop_info.source_anchor.syntax_kind.to_string(),
         normalized_text_hash: None,
         leading_context_hash: None,
         trailing_context_hash: None,
     };
     let site_anchor = SourceAnchor {
-        source_unit_id: site.source_anchor.source_unit_id.clone(),
+        source_unit_id: site.source_anchor.source_unit_id.to_string(),
         start_line: site.source_anchor.start_line,
         start_column: site.source_anchor.start_column,
         end_line: site.source_anchor.end_line,
         end_column: site.source_anchor.end_column,
         enclosing_routine_id: routine_id.to_string(),
-        syntax_kind: site.source_anchor.syntax_kind.clone(),
+        syntax_kind: site.source_anchor.syntax_kind.to_string(),
         normalized_text_hash: None,
         leading_context_hash: None,
         trailing_context_hash: None,
@@ -282,13 +282,13 @@ fn emit_transitive(
     _resolved: &Model,
 ) {
     let loop_anchor = SourceAnchor {
-        source_unit_id: loop_info.source_anchor.source_unit_id.clone(),
+        source_unit_id: loop_info.source_anchor.source_unit_id.to_string(),
         start_line: loop_info.source_anchor.start_line,
         start_column: loop_info.source_anchor.start_column,
         end_line: loop_info.source_anchor.end_line,
         end_column: loop_info.source_anchor.end_column,
         enclosing_routine_id: routine_id.to_string(),
-        syntax_kind: loop_info.source_anchor.syntax_kind.clone(),
+        syntax_kind: loop_info.source_anchor.syntax_kind.to_string(),
         normalized_text_hash: None,
         leading_context_hash: None,
         trailing_context_hash: None,

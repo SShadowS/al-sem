@@ -234,12 +234,12 @@ pub(crate) fn dep_routine_to_l3(r: &ProjectedRoutine, object_type: &str) -> Mode
         // observed. If dep bodies ever become available, revisit these defaults
         // (empty identifier_references would otherwise read as d19 false-positives).
         source_anchor: crate::program::body::features::PAnchor {
-            source_unit_id: String::new(),
+            source_unit_id: "".into(),
             start_line: 0,
             start_column: 0,
             end_line: 0,
             end_column: 0,
-            syntax_kind: String::new(),
+            syntax_kind: "".into(),
         },
         declaration_start_line: 0,
         identifier_references: Vec::new(),

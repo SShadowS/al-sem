@@ -111,7 +111,7 @@ fn op_candidates(
         let entry = SnapshotOperationEvidence {
             operation_id: op.id.clone(),
             routine: stable.to_string(),
-            source_file: a.source_unit_id.clone(),
+            source_file: a.source_unit_id.to_string(),
             start_line: a.start_line,
             start_column: a.start_column,
             end_line: a.end_line,
@@ -139,7 +139,7 @@ fn op_candidates(
         let entry = SnapshotOperationEvidence {
             operation_id: ro.id.clone(),
             routine: stable.to_string(),
-            source_file: a.source_unit_id.clone(),
+            source_file: a.source_unit_id.to_string(),
             start_line: a.start_line,
             start_column: a.start_column,
             end_line: a.end_line,
@@ -173,7 +173,7 @@ fn site_candidates(
         out.push(SnapshotCallsiteEvidence {
             callsite_id: cs.id.clone(),
             routine: stable.to_string(),
-            source_file: a.source_unit_id.clone(),
+            source_file: a.source_unit_id.to_string(),
             start_line: a.start_line,
             start_column: a.start_column,
             end_line: a.end_line,

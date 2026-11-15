@@ -1564,13 +1564,13 @@ pub(crate) fn unquoted_field_name(info: &PExpressionInfo) -> String {
 /// stamps the routine's own id. Hash fields default to `None`.
 pub(crate) fn anchor_of(a: &PAnchor, routine: &ModelRoutine) -> SourceAnchor {
     SourceAnchor {
-        source_unit_id: a.source_unit_id.clone(),
+        source_unit_id: a.source_unit_id.to_string(),
         start_line: a.start_line,
         start_column: a.start_column,
         end_line: a.end_line,
         end_column: a.end_column,
         enclosing_routine_id: routine.id.clone(),
-        syntax_kind: a.syntax_kind.clone(),
+        syntax_kind: a.syntax_kind.to_string(),
         normalized_text_hash: None,
         leading_context_hash: None,
         trailing_context_hash: None,
@@ -2216,12 +2216,12 @@ mod tests {
             caller_source_parameter_is_var: None,
             source_temp_state: None,
             argument_anchor: PAnchor {
-                source_unit_id: "ws:x.al".to_string(),
+                source_unit_id: "ws:x.al".into(),
                 start_line: 1,
                 start_column: 1,
                 end_line: 1,
                 end_column: 1,
-                syntax_kind: "identifier".to_string(),
+                syntax_kind: "identifier".into(),
             },
         }
     }
@@ -2281,12 +2281,12 @@ mod issue21_predicate_tests {
                 .map(|v| v.iter().map(|i| i.text.clone()).collect()),
             field_argument_infos: args,
             source_anchor: PAnchor {
-                source_unit_id: "ws:probe.al".to_string(),
+                source_unit_id: "ws:probe.al".into(),
                 start_line: 1,
                 start_column: 1,
                 end_line: 1,
                 end_column: 9,
-                syntax_kind: "call_expression".to_string(),
+                syntax_kind: "call_expression".into(),
             },
             loop_stack: vec!["loop0".to_string()],
             in_until_condition: true,

@@ -315,7 +315,7 @@ pub struct SnapshotSourceAnchor {
 /// routine anchor's enclosing routine IS the routine it lives in.
 fn anchor_from_panchor(a: &PAnchor, enclosing_routine_id: &str) -> SnapshotSourceAnchor {
     SnapshotSourceAnchor {
-        source_unit_id: a.source_unit_id.clone(),
+        source_unit_id: a.source_unit_id.to_string(),
         range: SnapshotRange {
             start_line: a.start_line,
             start_column: a.start_column,
@@ -323,7 +323,7 @@ fn anchor_from_panchor(a: &PAnchor, enclosing_routine_id: &str) -> SnapshotSourc
             end_column: a.end_column,
         },
         enclosing_routine_id: enclosing_routine_id.to_string(),
-        syntax_kind: a.syntax_kind.clone(),
+        syntax_kind: a.syntax_kind.to_string(),
     }
 }
 
@@ -3260,7 +3260,7 @@ fn derive_operation_evidence<'r>(
             let entry = SnapshotOperationEvidence {
                 operation_id: op.id.clone(),
                 routine: stable.clone(),
-                source_file: a.source_unit_id.clone(),
+                source_file: a.source_unit_id.to_string(),
                 start_line: a.start_line,
                 start_column: a.start_column,
                 end_line: a.end_line,
@@ -3291,7 +3291,7 @@ fn derive_operation_evidence<'r>(
             let entry = SnapshotOperationEvidence {
                 operation_id: ro.id.clone(),
                 routine: stable.clone(),
-                source_file: a.source_unit_id.clone(),
+                source_file: a.source_unit_id.to_string(),
                 start_line: a.start_line,
                 start_column: a.start_column,
                 end_line: a.end_line,
@@ -3363,7 +3363,7 @@ fn derive_callsite_evidence<'r>(
             out.push(SnapshotCallsiteEvidence {
                 callsite_id: cs.id.clone(),
                 routine: stable.clone(),
-                source_file: a.source_unit_id.clone(),
+                source_file: a.source_unit_id.to_string(),
                 start_line: a.start_line,
                 start_column: a.start_column,
                 end_line: a.end_line,

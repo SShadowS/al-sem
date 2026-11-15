@@ -34,12 +34,12 @@ use al_sem::program::model::workspace::{ModelRoutine, RoutineVariables};
 
 fn p_anchor() -> PAnchor {
     PAnchor {
-        source_unit_id: "ws:x.al".to_string(),
+        source_unit_id: "ws:x.al".into(),
         start_line: 0,
         start_column: 0,
         end_line: 0,
         end_column: 0,
-        syntax_kind: "test".to_string(),
+        syntax_kind: "test".into(),
     }
 }
 

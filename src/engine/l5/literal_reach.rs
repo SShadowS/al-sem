@@ -3479,7 +3479,7 @@ impl<'a> LiteralReach<'a> {
         TrapAt {
             kind: TrapKind::TryRefusal,
             routine: owner.to_string(),
-            file: a.map(|a| a.source_unit_id.clone()),
+            file: a.map(|a| a.source_unit_id.to_string()),
             line: a.map(|a| a.start_line),
         }
     }
@@ -3515,7 +3515,7 @@ impl<'a> LiteralReach<'a> {
         let at = TrapAt {
             kind: TrapKind::TryRefusal,
             routine: owner.to_string(),
-            file: Some(a.source_unit_id.clone()),
+            file: Some(a.source_unit_id.to_string()),
             line: Some(a.start_line),
         };
         let outs = self.out.get(owner).map_or(&[][..], Vec::as_slice);
@@ -3640,7 +3640,7 @@ impl<'a> LiteralReach<'a> {
         Some(TrapAt {
             kind,
             routine: s.from.to_string(),
-            file: anchor.map(|a| a.source_unit_id.clone()),
+            file: anchor.map(|a| a.source_unit_id.to_string()),
             line: anchor.map(|a| a.start_line),
         })
     }
@@ -3988,7 +3988,7 @@ impl<'a> LiteralReach<'a> {
         let at = TrapAt {
             kind: TrapKind::RunCheck,
             routine: owner.to_string(),
-            file: anchor.map(|a| a.source_unit_id.clone()),
+            file: anchor.map(|a| a.source_unit_id.to_string()),
             line: anchor.map(|a| a.start_line),
         };
         let pending = points.map_or(RunPending::Unknown, |p| Self::run_pending(p, owner, site));
@@ -4173,7 +4173,7 @@ impl<'a> LiteralReach<'a> {
         TrapAt {
             kind: k,
             routine: s.from.to_string(),
-            file: anchor.map(|a| a.source_unit_id.clone()),
+            file: anchor.map(|a| a.source_unit_id.to_string()),
             line: anchor.map(|a| a.start_line),
         }
     }

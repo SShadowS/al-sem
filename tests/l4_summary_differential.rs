@@ -1292,12 +1292,12 @@ mod fixtures {
 
     fn anchor() -> PAnchor {
         PAnchor {
-            source_unit_id: "ws:test.al".to_string(),
+            source_unit_id: "ws:test.al".into(),
             start_line: 0,
             start_column: 0,
             end_line: 0,
             end_column: 0,
-            syntax_kind: "test".to_string(),
+            syntax_kind: "test".into(),
         }
     }
 

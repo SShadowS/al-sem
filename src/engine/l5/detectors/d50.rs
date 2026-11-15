@@ -76,13 +76,13 @@ pub fn detect_d50(
             .map_or_else(
                 || routine_anchor(seed_routine),
                 |cs| SourceAnchor {
-                    source_unit_id: cs.source_anchor.source_unit_id.clone(),
+                    source_unit_id: cs.source_anchor.source_unit_id.to_string(),
                     start_line: cs.source_anchor.start_line,
                     start_column: cs.source_anchor.start_column,
                     end_line: cs.source_anchor.end_line,
                     end_column: cs.source_anchor.end_column,
                     enclosing_routine_id: seed_routine.id.clone(),
-                    syntax_kind: cs.source_anchor.syntax_kind.clone(),
+                    syntax_kind: cs.source_anchor.syntax_kind.to_string(),
                     normalized_text_hash: None,
                     leading_context_hash: None,
                     trailing_context_hash: None,

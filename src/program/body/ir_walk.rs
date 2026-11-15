@@ -13,7 +13,7 @@ use super::features::{
     FLOW_TEXT_MAX, FlowExpr, FlowFact, PAnchor, PCFNNode, PCallArgumentBinding, PCallSite, PCallee,
     PConditionGuard, PConditionReference, PExpressionInfo, PFieldAccess, PLoop, POperationSite,
     PRecordOperation, PTempState, PUnreachableStatement, PVarAssignment, PathHint, ValueFact,
-    ValueLabel,
+    ValueLabel, anchor_kind, anchor_unit,
 };
 use super::node_util::Utf16Cols;
 use super::record_op::{FIELD_ARGS_OPS, record_op_type};
@@ -557,7 +557,7 @@ impl<'a> SpineCtx<'a> {
     /// legacy `Ctx::anchor`; `syntax_kind` = the raw grammar kind).
     fn anchor(&self, origin: &Origin) -> PAnchor {
         PAnchor {
-            source_unit_id: self.source_unit_id.to_string(),
+            source_unit_id: anchor_unit(self.source_unit_id),
             start_line: origin.start.row,
             start_column: self
                 .cols
@@ -566,7 +566,7 @@ impl<'a> SpineCtx<'a> {
             end_column: self
                 .cols
                 .col(origin.end.row as usize, origin.end.column as usize),
-            syntax_kind: origin.kind_text().to_string(),
+            syntax_kind: anchor_kind(origin.kind_text()),
         }
     }
 
@@ -3189,12 +3189,12 @@ pub fn routine_features_partial(
     // implicit-rec / local record / unknown / expression). Mirrors
     // extract_argument_bindings, using ir_record_variables + the IR params.
     let anchor = |o: &Origin| PAnchor {
-        source_unit_id: source_unit_id.to_string(),
+        source_unit_id: anchor_unit(source_unit_id),
         start_line: o.start.row,
         start_column: cols.col(o.start.row as usize, o.start.column as usize),
         end_line: o.end.row,
         end_column: cols.col(o.end.row as usize, o.end.column as usize),
-        syntax_kind: o.kind_text().to_string(),
+        syntax_kind: anchor_kind(o.kind_text()),
     };
     // param lc-name → (index, is_var).
     let param_by_lc: HashMap<String, (u32, bool)> = routine
@@ -3973,12 +3973,12 @@ pub fn ir_variables(
     use super::scope::canonicalize_type_text;
     let cols = Utf16Cols::new(source);
     let anchor = |origin: &Origin, kind: &str| PAnchor {
-        source_unit_id: source_unit_id.to_string(),
+        source_unit_id: anchor_unit(source_unit_id),
         start_line: origin.start.row,
         start_column: cols.col(origin.start.row as usize, origin.start.column as usize),
         end_line: origin.end.row,
         end_column: cols.col(origin.end.row as usize, origin.end.column as usize),
-        syntax_kind: kind.to_string(),
+        syntax_kind: anchor_kind(kind),
     };
     let mut out: Vec<PVariableSymbol> = Vec::new();
 
@@ -3992,12 +3992,12 @@ pub fn ir_variables(
             parameter_index: Some(i as u32),
             initializer: None,
             source_anchor: PAnchor {
-                source_unit_id: source_unit_id.to_string(),
+                source_unit_id: anchor_unit(source_unit_id),
                 start_line: 0,
                 start_column: 0,
                 end_line: 0,
                 end_column: 0,
-                syntax_kind: "parameter".to_string(),
+                syntax_kind: anchor_kind("parameter"),
             },
             fixed_local: None,
         });
@@ -4091,12 +4091,12 @@ pub fn ir_object_globals(
             parameter_index: None,
             initializer: None,
             source_anchor: PAnchor {
-                source_unit_id: source_unit_id.to_string(),
+                source_unit_id: anchor_unit(source_unit_id),
                 start_line: g.origin.start.row,
                 start_column: cols.col(g.origin.start.row as usize, g.origin.start.column as usize),
                 end_line: g.origin.end.row,
                 end_column: cols.col(g.origin.end.row as usize, g.origin.end.column as usize),
-                syntax_kind: "variable_declaration".to_string(),
+                syntax_kind: anchor_kind("variable_declaration"),
             },
         });
     }

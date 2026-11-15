@@ -743,8 +743,8 @@ pub fn census(model: &Model) -> serde_json::Value {
         std::mem::size_of_val(fa)
             + fa.record_variable_name.capacity()
             + fa.field_name.capacity()
-            + fa.source_anchor.source_unit_id.capacity()
-            + fa.source_anchor.syntax_kind.capacity()
+            + fa.source_anchor.source_unit_id.len()
+            + fa.source_anchor.syntax_kind.len()
     }
     let tables = table_by_id_preferring_real(&model.workspace.tables);
     let mut by_number: HashMap<i64, Option<&str>> = HashMap::new();

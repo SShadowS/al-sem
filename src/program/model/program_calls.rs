@@ -4439,7 +4439,7 @@ mod tests {
             assert!(r.file.is_some(), "precondition: the row had a file");
             r.file = None;
             r.source_anchor.source_unit_id =
-                "dep:dddddddd-0000-0000-0000-000000000099:src/m.al".to_string();
+                "dep:dddddddd-0000-0000-0000-000000000099:src/m.al".into();
         });
         assert_eq!(
             counts(&c),

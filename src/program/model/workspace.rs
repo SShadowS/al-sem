@@ -1193,12 +1193,12 @@ fn anchor_from_origin(
     cols: &Utf16Cols,
 ) -> crate::program::body::features::PAnchor {
     crate::program::body::features::PAnchor {
-        source_unit_id: source_unit_id.to_string(),
+        source_unit_id: crate::program::body::features::anchor_unit(source_unit_id),
         start_line: origin.start.row,
         start_column: cols.col(origin.start.row as usize, origin.start.column as usize),
         end_line: origin.end.row,
         end_column: cols.col(origin.end.row as usize, origin.end.column as usize),
-        syntax_kind: origin.kind_text().to_string(),
+        syntax_kind: crate::program::body::features::anchor_kind(origin.kind_text()),
     }
 }
 
@@ -2312,7 +2312,7 @@ fn join_routine_declarations(
         // (`file_site_blocks`).
         let units: Vec<String> = group
             .iter()
-            .map(|&i| rows[i].source_anchor.source_unit_id.clone())
+            .map(|&i| rows[i].source_anchor.source_unit_id.to_string())
             .collect();
         if units.iter().all(|u| *u == units[0]) {
             continue;
@@ -5145,7 +5145,7 @@ mod population_tests {
         );
         let at = |r: &ModelRoutine| {
             (
-                r.source_anchor.source_unit_id.clone(),
+                r.source_anchor.source_unit_id.to_string(),
                 r.source_anchor.start_line,
                 r.source_anchor.start_column,
             )
@@ -5177,7 +5177,7 @@ mod population_tests {
                 .flat_map(|o| &o.declaration_only_routines)
                 .map(|d| {
                     (
-                        d.source_anchor.source_unit_id.clone(),
+                        d.source_anchor.source_unit_id.to_string(),
                         d.source_anchor.start_line,
                     )
                 })
