@@ -51,6 +51,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`speed_waits_for_a_quiet_machine_and_fails_loudly`; mutation: the timeout passing
   silently -> PASS). `CDO_SPEED_WARM_MIN_SECONDS` and `CDO_SPEED_LOADAVG_FILE` are test
   hooks. Review r1 (Fable): the rounds test no longer waits for a quiet machine.
+  Review r1 (sol): the warm-up test pins the geometric mean exactly, for CPU and wall
+  (mutation: the plain mean -> x1.097 against x1.004), and judges only the
+  deterministic CPU outcome, not the host's wall time.
 
 ### Added (TLS-60: `scripts/cdo-slot`, one CDO slot instead of hold messages)
 

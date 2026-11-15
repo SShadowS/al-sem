@@ -1634,8 +1634,13 @@ fn speed_warm_up_cancels_the_second_side_penalty() {
     );
 
     let (code, text) = speed_with_stub(dir.path(), "0.5", &[], &[]);
-    assert_eq!(code, Some(0), "two flipped samples pass: {text}");
-    assert!(text.contains("cdo-speed: PASS"), "{text}");
+    // The CPU judgment is the deterministic part (the stub burns exact CPU);
+    // wall time is the host's (sol r1): only a CPU failure may not appear.
+    assert!(
+        !text.contains("FAIL: build: CPU") && !text.contains("FAIL: warm-tests: CPU"),
+        "two flipped samples pass the CPU limit: {text}"
+    );
+    assert!(code == Some(0) || code == Some(1), "{text}");
     assert!(text.contains("by pass; load 0.5-0.5)"), "{text}");
     assert!(
         text.contains("head builds first"),
@@ -1670,6 +1675,22 @@ fn speed_warm_up_cancels_the_second_side_penalty() {
             (0.9..1.1).contains(&ratio),
             "{call}: the geometric mean cancels: {ratio}"
         );
+        // Exactly the geometric mean, for CPU and wall (sol r1: the plain
+        // mean, x1.083 here, would also fall in the range above).
+        for m in ["cpu", "wall"] {
+            let rs: Vec<f64> = row[m]["ratios"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|x| x.as_f64().unwrap())
+                .collect();
+            let want = (rs[0] * rs[1]).sqrt();
+            let got = row[m]["ratio"].as_f64().unwrap();
+            assert!(
+                (got - want).abs() < 1e-9,
+                "{call} {m}: ratio {got}, geometric mean of {rs:?} is {want}"
+            );
+        }
     }
 }
 
