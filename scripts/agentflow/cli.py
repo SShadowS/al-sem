@@ -108,6 +108,18 @@ def cdo_gate() -> tuple[str, list[str], int]:
     return (CDO_GATE_KEY, [resolve_bash(), "scripts/cdo-gate"], 45)
 
 
+def expected_gate_commands() -> dict[str, list[str]]:
+    """⟨TLS-63⟩ The one command each attested gate name stands for. `run` refuses
+    any other command under these names, and `attest` takes a gate as green only
+    from a recorded run of exactly this command: a `cdo-gate --only ...` subset,
+    `check-goldens --regen` or `-- true` recorded under the full gate's name would
+    otherwise be attested as the full gate."""
+    b = resolve_bash()
+    cmds = {name: argv for name, argv, _ in gates() + [cdo_gate()]}
+    cmds["check-goldens-coverage"] = [b, "scripts/check-goldens", "--verify-coverage"]
+    return cmds
+
+
 class Fail(Exception):
     def __init__(self, payload: dict, code: int = 1):
         super().__init__(json.dumps(payload))
@@ -733,6 +745,12 @@ def cmd_run(args, ctx, gh, git):
     # (spec 2026-10-18, post-merge identity skip). Bookkeeping never costs a
     # gate its verdict: a failed probe or record is reported, not raised.
     child = _with_bash(args.child)
+    # TLS-63: an attested gate name runs only its own command, so a cheaper
+    # variant cannot be recorded (and later attested) under the full gate's name.
+    expected = expected_gate_commands().get(args.name)
+    if expected is not None and not identity._same_command(child, expected):
+        return _emit({"error": "gate-command-mismatch", "name": args.name, "argv": child,
+                      "expected": expected}, 2)
     cdo = args.name == CDO_GATE_KEY
     record_error = None
     try:
@@ -800,6 +818,34 @@ def _gate_failures(blob: dict, docs_only: bool) -> list[str]:
         if not isinstance(v, int) or isinstance(v, bool) or v != 0:
             bad.append(k)
     return bad
+
+
+def _gate_unrecorded(ctx: Ctx, docs_only: bool) -> dict[str, str]:
+    """⟨TLS-63⟩ The required gates whose latest record in this run's
+    `gate-runs.jsonl` is missing, ran another command (a subset, a regen,
+    `true`), or did not exit 0; each with the reason."""
+    required = [*REQUIRED_GATE_KEYS] + ([] if docs_only else [CDO_GATE_KEY])
+    expected = expected_gate_commands()
+    latest: dict[str, dict] = {}
+    path = ctx.run_dir / identity.GATE_RUNS
+    lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+    for line in lines:
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(rec, dict) and rec.get("name") in required:
+            latest[rec["name"]] = rec
+    out = {}
+    for k in required:
+        rec = latest.get(k)
+        if rec is None:
+            out[k] = "no recorded run"
+        elif not identity._same_command(rec.get("argv"), expected[k]):
+            out[k] = f"the latest run was not the full gate: {rec.get('argv')}"
+        elif rec.get("exit_code") != 0 or rec.get("timed_out"):
+            out[k] = f"the latest run exited {rec.get('exit_code')}"
+    return out
 
 
 DISPOSITIONS = ("open", "fixed", "refuted", "deferred")
@@ -1027,6 +1073,11 @@ def cmd_attest(args, ctx, gh, git):
     bad_gates = _gate_failures(json.loads(args.gates), args.docs_only)
     if bad_gates:
         return _emit({"error": "gates-not-green", "gates": bad_gates}, 1)
+    # TLS-63: the claimed exit codes are the caller's word; each required gate must
+    # also be a recorded run of its own full command whose LATEST record exited 0.
+    unrecorded = _gate_unrecorded(ctx, args.docs_only)
+    if unrecorded:
+        return _emit({"error": "gates-not-recorded", "gates": unrecorded}, 1)
     # The attestation is posted verbatim as a PR comment on a public repo, so
     # the register is named RELATIVE to the worktree the claim recorded -- an
     # absolute path would publish this machine's drive letter and layout, and

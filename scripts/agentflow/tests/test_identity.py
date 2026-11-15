@@ -137,6 +137,9 @@ def test_cdo_gate_record_carries_the_cdo_identity(capsys, repo_pair, monkeypatch
     ws = tmp_path / "ws"
     ws.mkdir()
     monkeypatch.setenv("CDO_WS", str(ws))
+    # The record's CDO identity is under test, with a stand-in child; the gate's
+    # own-command check (TLS-63) has its own test in test_cli_flow.
+    monkeypatch.setattr(cli, "expected_gate_commands", lambda: {})
     _run(capsys, clone, cli.CDO_GATE_KEY, sys.executable, "-c", "pass", run_id="solo-run")
     rec = json.loads(_records_file(clone, "solo-run").read_text().splitlines()[-1])
     assert rec["env"]["cdo"]["path"] == str(ws)
