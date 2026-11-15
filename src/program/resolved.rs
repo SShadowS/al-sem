@@ -26,8 +26,8 @@ use crate::program::node::AppRef;
 use crate::program::profile::{BuildProfile, DependencyBodies};
 use crate::program::resolve::edge::Histogram;
 use crate::program::resolve::full::{
-    ClassifiedEdge, Coverage, FreshCoverage, ObligationId, ParenlessCalls, ProgramContext,
-    ProgramReport, SiteFacts, SiteFactsByObligation,
+    ClassifiedEdge, Coverage, DepSiteFacts, FreshCoverage, ObligationId, ParenlessCalls,
+    ProgramContext, ProgramReport, SiteFacts, SiteFactsByObligation,
 };
 
 /// What a build resolves. The scope is a meaning, not a retention choice: it
@@ -118,13 +118,13 @@ pub struct ProgramBody {
 #[derive(Default)]
 pub struct SiteFactsMap {
     own: SiteFactsByObligation,
-    shared: Arc<SiteFactsByObligation>,
+    shared: Arc<DepSiteFacts>,
 }
 
 impl SiteFactsMap {
     /// The workspace facts over the dependency facts.
     #[must_use]
-    pub fn new(own: SiteFactsByObligation, shared: Arc<SiteFactsByObligation>) -> Self {
+    pub fn new(own: SiteFactsByObligation, shared: Arc<DepSiteFacts>) -> Self {
         SiteFactsMap { own, shared }
     }
 
@@ -166,7 +166,7 @@ impl SiteFactsMap {
 #[derive(Clone, Copy)]
 pub struct SiteFactsRef<'r> {
     own: &'r SiteFactsByObligation,
-    shared: Option<&'r SiteFactsByObligation>,
+    shared: Option<&'r DepSiteFacts>,
 }
 
 impl<'r> SiteFactsRef<'r> {
@@ -193,7 +193,7 @@ impl<'r> SiteFactsRef<'r> {
         shared.into_iter().flat_map(|s| s.iter()).chain(
             self.own
                 .iter()
-                .filter(move |(k, _)| shared.is_none_or(|s| !s.contains_key(*k))),
+                .filter(move |(k, _)| shared.is_none_or(|s| !s.contains_key(k))),
         )
     }
 }

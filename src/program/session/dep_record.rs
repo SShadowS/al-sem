@@ -475,9 +475,13 @@ impl Assembly {
     }
 
     fn finish(self, s: &EvalState) -> (DependencyBodyResolution, Option<DepRecord>) {
+        let edges = Arc::new(self.edges);
         let resolution = DependencyBodyResolution {
-            edges: Arc::new(self.edges),
-            site_facts: Arc::new(self.site_facts),
+            site_facts: Arc::new(crate::program::resolve::full::DepSiteFacts::new(
+                Arc::clone(&edges),
+                self.site_facts,
+            )),
+            edges,
             parenless_calls: self.parenless,
         };
         if self.collision {
