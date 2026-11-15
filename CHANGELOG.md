@@ -14,8 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is the table's layout (524,288 slots × a 128 B key and a 592 B record). The facts themselves
   are small: only `receiver` (44%) and `bare_scope_complete` (48%) are common, 31,067 sites
   (9.7%) use any other field, and all field heap is 7.6 MiB. Docs and census only, so no gain
-  here; it proposes a hot record with a boxed rare part (~244 MiB) and no second copy of the key
-  (the edges already carry it; ~93 MiB), about 337 MiB in all, filed as ENG-91.
+  here; it proposes a hot record with a boxed rare part (~246 MiB) and no second copy of the key
+  (the edges already carry it; ~93 MiB), about 339 MiB in all, filed as ENG-91.
 - `tools/census-probe resident` splits the site facts by field (sites using each, heap), key and
   table; the CDO run is in `tools/census-probe/runs-eng89/`.
 

@@ -53,10 +53,14 @@ up to the same 2^19.
 | `field_ref_validate` | 74 | (not walked) |
 | `interface_closed_over` | 69 | 0.0 |
 | `interface_holder` | 48 | 0.0 |
-| `call_result_record`, `inherited_protected` (bool) | 34 each | 0 |
-| `interface_unmapped_enums`, `record_op_field_named` (bool) | 0 | 0 |
+| `call_result_record` | 34 | (not walked) |
+| `inherited_protected` (bool) | 34 | 0 |
+| `interface_unmapped_enums` | 0 | 0 |
+| `record_op_field_named` (bool) | 0 | 0 |
 
-**31,067 sites (9.7%)** use any field beyond `receiver` and `bare_scope_complete`.
+**31,067 sites (9.7%)** use any field beyond `receiver` and `bare_scope_complete`. Counting only
+the 16 fields proposal 1 would box (not the bools or `starts_object`), their uses sum to 27,097,
+so at most 27,097 sites would need a box.
 
 ## Who reads it
 
@@ -74,10 +78,10 @@ a layout change. (`prove_slice.rs` has its own, unrelated `SiteFacts`.)
 ## Shrink proposals
 
 1. **A hot record and a boxed cold part** (the big one). Keep `receiver`, the 5 bools and
-   `starts_object` inline, and move the other 15 fields into one
+   `starts_object` inline, and move the other 16 fields into one
    `Option<Box<RareSiteFacts>>`. The record goes from 592 B to about 72 B (56 + 8 + the small
-   fields). In today's table that is 524,288 × 520 B ≈ **260 MiB**, less ~16 MiB of boxes for the
-   31,067 sites that have any rare field: **about 244 MiB**.
+   fields). In today's table that is 524,288 × 520 B ≈ **260 MiB**, less at most ~14 MiB of boxes
+   (≤ 27,097 sites × ~536 B): **at least ~246 MiB**.
 2. **No second copy of the key.** Every `ClassifiedEdge` already carries its `ObligationId`.
    Facts in a `Vec` indexed by a `u32` on the edge would drop the 128 B key, the table's empty
    39%, and the keys' file paths: after proposal 1, the 100.5 MiB table becomes ~22 MiB of values
@@ -89,8 +93,8 @@ a layout change. (`prove_slice.rs` has its own, unrelated `SiteFacts`.)
 3. **Not worth it on its own:** interning `build_context` (22 distinct contexts, 0.1 MiB) and the
    field strings (7.6 MiB in all).
 
-With 1 and 2 the 385 MiB becomes about 48 MiB (values 22, boxes 16, field heap 7.6, edge
-indices 1.7, remainder 0.8): **about 337 MiB** off live memory (the census's 5,490 MiB after
-the asks, with ENG-86), or ~284 MiB with the sorted-`Vec` variant of 2. After the dependency
+With 1 and 2 the 385 MiB becomes at most about 46 MiB (values 22, boxes ≤ 14, field heap 7.6,
+edge indices 1.7, remainder 0.8): **about 339 MiB** off live memory (the census's 5,490 MiB
+after the asks, with ENG-86), or ~286 MiB with the sorted-`Vec` variant of 2. After the dependency
 syntax trees (728 MiB), the cones (748 MiB) and the revision store (611 MiB), this is the largest
 item left. Filed as ENG-91 (over the ~100 MiB line).
