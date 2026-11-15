@@ -86,8 +86,11 @@ pub struct DependencyRegistry<'g> {
 impl<'g> DependencyRegistry<'g> {
     #[must_use]
     pub fn new(graph: &'g ProgramGraph, dep_meta: &'g DepMeta) -> Self {
-        // FxHash (TLS-66).
-        let mut by_id = crate::fxhash::FxHashMap::default();
+        // FxHash, sized up front (TLS-66): one entry per graph routine at most.
+        let mut by_id = crate::fxhash::FxHashMap::with_capacity_and_hasher(
+            graph.routines.len(),
+            Default::default(),
+        );
         for n in graph.routines.iter() {
             by_id.entry(&n.id).or_insert(n);
         }

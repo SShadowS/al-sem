@@ -456,7 +456,11 @@ pub fn program_event_graph(
     let in_model = |app: crate::program::node::AppRef| {
         model_guids.contains(&graph.apps.resolve(app).guid.to_ascii_lowercase())
     };
-    let mut routine_by_id = crate::fxhash::FxHashMap::default();
+    // Sized up front (TLS-66): at most one entry per graph routine.
+    let mut routine_by_id = crate::fxhash::FxHashMap::with_capacity_and_hasher(
+        graph.routines.len(),
+        Default::default(),
+    );
     for r in &graph.routines {
         routine_by_id.entry(&r.id).or_insert(r);
     }

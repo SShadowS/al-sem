@@ -77,12 +77,17 @@ pub fn prove_event_param_temps(resolved: &mut Model) {
         // Resolved per `(row, site)`: the rows of a collided id share site ids, so
         // one row's resolved site must not vouch for another row's.
         // FxHash (TLS-66): `complete` asks this for every call site of an object.
-        let resolved_sites: FxHashSet<(usize, &str)> = calls
-            .edges
-            .iter()
-            .filter(|e| e.to.is_some())
-            .map(|e| (e.from_ix.get(), e.callsite_id.as_str()))
-            .collect();
+        // Sized up front: at most one entry per edge (a filtered `collect`
+        // cannot know, so it grew and rehashed).
+        let mut resolved_sites: FxHashSet<(usize, &str)> =
+            FxHashSet::with_capacity_and_hasher(calls.edges.len(), Default::default());
+        resolved_sites.extend(
+            calls
+                .edges
+                .iter()
+                .filter(|e| e.to.is_some())
+                .map(|e| (e.from_ix.get(), e.callsite_id.as_str())),
+        );
         let mut raises: FxHashMap<&str, Vec<(usize, &str)>> = FxHashMap::default();
         for e in &calls.edges {
             if let Some(to) = &e.to {

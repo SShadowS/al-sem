@@ -60,8 +60,12 @@ pub fn cross_app_demand(
             }
         })
         .collect();
-    let mut forward: FxHashMap<&RoutineNodeId, Vec<&RoutineNodeId>> = FxHashMap::default();
-    let mut callers: FxHashMap<&RoutineNodeId, Vec<&RoutineNodeId>> = FxHashMap::default();
+    // Sized up front (TLS-66): at most one key per graph routine each.
+    let routines = graph.routines.len();
+    let mut forward: FxHashMap<&RoutineNodeId, Vec<&RoutineNodeId>> =
+        FxHashMap::with_capacity_and_hasher(routines, Default::default());
+    let mut callers: FxHashMap<&RoutineNodeId, Vec<&RoutineNodeId>> =
+        FxHashMap::with_capacity_and_hasher(routines, Default::default());
     let mut publishers_of: FxHashMap<&RoutineNodeId, Vec<&RoutineNodeId>> = FxHashMap::default();
     for ce in edges.all_edges() {
         // A background start's target runs in another session: no finding

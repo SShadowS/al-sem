@@ -352,19 +352,29 @@ struct Assembly {
 }
 
 impl Assembly {
-    fn new(edges: usize) -> Self {
+    /// Sized up front (TLS-66: growing these maps was 43% of the build's hashing):
+    /// `edges` and `facts` exactly, `queries` from the previous record when there
+    /// is one (a cold build has no count of distinct queries short of an upper
+    /// bound several times too large, so it grows as before).
+    fn new(edges: usize, facts: usize, queries: usize) -> Self {
         Assembly {
             edges: Vec::with_capacity(edges),
-            site_facts: SiteFactsByObligation::default(),
+            site_facts: SiteFactsByObligation::with_capacity_and_hasher(facts, Default::default()),
             parenless: ParenlessCalls::new(),
             files: Vec::new(),
-            interner: Interner::default(),
+            interner: Interner {
+                ids: FxHashMap::with_capacity_and_hasher(queries, Default::default()),
+                queries: Vec::with_capacity(queries),
+                digests: Vec::with_capacity(queries),
+            },
             collision: false,
         }
     }
 
     fn facts(&mut self, facts: impl IntoIterator<Item = (ObligationId, SiteFacts)>) {
-        let mut own: FxHashSet<ObligationId> = FxHashSet::default();
+        let facts = facts.into_iter();
+        let mut own: FxHashSet<ObligationId> =
+            FxHashSet::with_capacity_and_hasher(facts.size_hint().0, Default::default());
         for (k, v) in facts {
             let first_here = own.insert(k.clone());
             if self.site_facts.insert(k, v).is_some() && first_here {
@@ -517,7 +527,8 @@ pub(crate) fn resolve_whole(ctx: &ProgramContext) -> (DependencyBodyResolution, 
     let all: Vec<usize> = (0..files.len()).collect();
     let results = resolve_recorded(ctx, &files, &all, &index, &surface);
     let total = results.iter().map(|(r, _)| r.edges.len()).sum();
-    let mut a = Assembly::new(total);
+    let facts = results.iter().map(|(r, _)| r.site_facts.len()).sum();
+    let mut a = Assembly::new(total, facts, 0);
     for ((app, pf), (r, log)) in files.iter().zip(results) {
         a.fresh(
             *app,
@@ -636,7 +647,7 @@ pub(crate) fn resolve_by_rule(
         let results = resolve_recorded(ctx, &files, &dirty, &index, &surface);
         fresh = dirty.iter().copied().zip(results).collect();
     }
-    let mut a = Assembly::new(old.edges.len());
+    let mut a = Assembly::new(old.edges.len(), old.site_facts.len(), rec.queries.len());
     for (i, f) in rec.files.iter().enumerate() {
         match fresh.remove(&i) {
             Some((r, log)) => a.fresh(f.app, &f.path, file_ixs[i], r, log),

@@ -3286,8 +3286,12 @@ impl ProgramContext {
         // (context-server stage 3), and the per-file route vectors are
         // push-built with as much spare capacity again as they hold.
         let total: usize = results.iter().map(|r| r.edges.len()).sum();
-        let (mut edges, mut site_facts) =
-            (Vec::with_capacity(total), SiteFactsByObligation::default());
+        // Sized up front too (TLS-66): growing it rehashed every key.
+        let facts: usize = results.iter().map(|r| r.site_facts.len()).sum();
+        let (mut edges, mut site_facts) = (
+            Vec::with_capacity(total),
+            SiteFactsByObligation::with_capacity_and_hasher(facts, Default::default()),
+        );
         let mut parenless_calls = ParenlessCalls::new();
         for ((app, pf), r) in files.iter().zip(results) {
             edges.extend(r.edges.into_iter().map(|mut e| {
