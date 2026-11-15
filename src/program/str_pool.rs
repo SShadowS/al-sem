@@ -10,7 +10,6 @@
 
 use serde::{Deserialize, Serialize};
 use std::borrow::Borrow;
-use std::collections::HashSet;
 use std::fmt;
 use std::ops::Deref;
 use std::sync::Arc;
@@ -127,7 +126,8 @@ impl PartialEq<SharedStr> for String {
 /// One allocation per distinct text.
 #[derive(Default)]
 pub struct StrPool {
-    texts: HashSet<SharedStr>,
+    // FxHash (TLS-66): every node string of a dependency tier passes through here.
+    texts: crate::fxhash::FxHashSet<SharedStr>,
     seen: usize,
     merged: usize,
 }
@@ -202,7 +202,7 @@ mod tests {
         ];
         v.sort();
         assert_eq!(v, ["B", "a", "b"]);
-        let set: HashSet<SharedStr> = v.into_iter().collect();
+        let set: std::collections::HashSet<SharedStr> = v.into_iter().collect();
         assert!(set.contains("a"));
     }
 

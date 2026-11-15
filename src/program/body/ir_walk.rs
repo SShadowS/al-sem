@@ -24,6 +24,11 @@ use al_syntax::ir::{
 };
 use std::collections::{HashMap, HashSet};
 
+use crate::fxhash::{FxHashMap, FxHashSet};
+
+/// The scope's folded-name sets: FxHash (TLS-66), built per routine.
+type NameSet = FxHashSet<String>;
+
 /// Strip surrounding double-quotes from a quoted identifier's raw text.
 fn strip_quotes(s: &str) -> String {
     if s.len() >= 2 && s.starts_with('"') && s.ends_with('"') {
@@ -166,19 +171,19 @@ struct ImplicitFrame {
 /// record globals/params/locals); `frvars` = field-access record set (record_var_names
 /// semantics — Rec only for table methods).
 struct Scope {
-    rvars: HashSet<String>,
-    frvars: HashSet<String>,
+    rvars: NameSet,
+    frvars: NameSet,
     /// MCP output wave 3a (Q4): the lowercased names that resolve, lexically
     /// (parameters and locals before the object's globals), to a variable
     /// declared `RecordRef`. A subset of `rvars`.
-    record_ref_vars: HashSet<String>,
+    record_ref_vars: NameSet,
     /// Lowercased names of the object's procedures/triggers. A bare implicit-receiver
     /// call whose method name collides with one of these is a CALL to that procedure,
     /// not a record op (legacy `object_procedure_names` collision check).
-    object_procedure_names: HashSet<String>,
+    object_procedure_names: NameSet,
     /// Lowercased names a bare identifier resolves to before a field of the
     /// implicit record (see [`IrSpine::implicit_field_accesses`]).
-    declared_names: HashSet<String>,
+    declared_names: NameSet,
     /// #155: a declaration in lexical scope is named `Database` (a parameter,
     /// local, named return value, global, dataitem or, in a table, a field), so
     /// `Database.Commit()` calls that declaration's member, not the platform's
@@ -282,8 +287,8 @@ fn is_record_ref_ty(ty: Option<&str>) -> bool {
 /// variable: the object's globals first, then the routine's locals and
 /// parameters, each later declaration taking the name (a local shadows a
 /// global of another type).
-fn record_ref_names(o: &al_syntax::ir::ObjectDecl, routine: &RoutineDecl) -> HashSet<String> {
-    let mut by_name: HashMap<String, bool> = HashMap::new();
+fn record_ref_names(o: &al_syntax::ir::ObjectDecl, routine: &RoutineDecl) -> NameSet {
+    let mut by_name: FxHashMap<String, bool> = FxHashMap::default();
     for v in o.globals.iter().chain(routine.locals.iter()) {
         by_name.insert(v.name.fold_identifier(), is_record_ref_ty(v.ty.as_deref()));
     }
@@ -366,7 +371,7 @@ fn build_scope(
     source_table_name: Option<&str>,
 ) -> (Scope, bool) {
     let o = &file.objects[object_idx];
-    let object_procedure_names: HashSet<String> = o
+    let object_procedure_names: NameSet = o
         .routines
         .iter()
         .map(|r| r.name.fold_identifier())
@@ -381,7 +386,7 @@ fn build_scope(
         .iter()
         .map(|(name, _)| name.fold_identifier())
         .filter(|n| !object_procedure_names.contains(n));
-    let mut globals: HashSet<String> = o
+    let mut globals: NameSet = o
         .globals
         .iter()
         .filter(|v| is_record_ty(v))
@@ -391,7 +396,7 @@ fn build_scope(
     // Rec/xRec are record receivers by name convention regardless of object type.
     globals.insert("rec".to_string());
     globals.insert("xrec".to_string());
-    let explicit_globals: HashSet<String> = o
+    let explicit_globals: NameSet = o
         .globals
         .iter()
         .filter(|v| is_record_ty(v))
@@ -448,7 +453,7 @@ fn build_scope(
     // Every name a bare identifier can resolve to before a field of the
     // implicit record: parameters, locals, the object's globals of any type,
     // its dataitems and procedures, and `Rec` / `xRec` themselves.
-    let declared_names: HashSet<String> = routine
+    let declared_names: NameSet = routine
         .params
         .iter()
         .map(|p| p.name.fold_identifier())

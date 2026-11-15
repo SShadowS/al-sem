@@ -44,7 +44,7 @@ use crate::program::resolve::closed_enum::{
     ClosedEnumCx, admitted_writes, name_of, overlaps, unparen,
 };
 use crate::program::resolve::edge::{Evidence, RouteTarget, SetCompleteness};
-use crate::program::resolve::full::{ClassifiedEdge, ObligationId, SiteFacts};
+use crate::program::resolve::full::{ClassifiedEdge, ObligationId, SiteFactsByObligation};
 use crate::program::resolve::index::ObjectRefResolution;
 use crate::program::resolve::reads::{GraphReads, IndexReads};
 use crate::program::resolve::receiver::{
@@ -215,7 +215,7 @@ pub(crate) fn argument_codeunits(
 pub(crate) fn close_holder_sites(
     graph: &ProgramGraph,
     edges: &mut [ClassifiedEdge],
-    facts: &mut HashMap<ObligationId, SiteFacts>,
+    facts: &mut SiteFactsByObligation,
 ) {
     if !graph.workspace_friendless {
         return;
@@ -299,7 +299,7 @@ pub(crate) fn close_holder_sites(
 fn source_codeunits(
     graph: &ProgramGraph,
     callers: &HashMap<&RoutineNodeId, Vec<&ObligationId>>,
-    facts: &HashMap<ObligationId, SiteFacts>,
+    facts: &SiteFactsByObligation,
     source: &HolderSource,
 ) -> Option<Vec<ObjectNodeId>> {
     let (rid, p) = match source {

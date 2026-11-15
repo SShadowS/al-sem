@@ -364,6 +364,10 @@ pub struct SiteFacts {
     pub record_table_unresolved: Option<UnresolvedTable>,
 }
 
+/// The per-site facts keyed by obligation, hashed with FxHash (TLS-66: one of
+/// the CDO model build's hottest maps).
+pub type SiteFactsByObligation = crate::fxhash::FxHashMap<ObligationId, SiteFacts>;
+
 /// How a record operation's table failed to resolve (ENG-06).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnresolvedTable {
@@ -758,7 +762,7 @@ pub struct ProgramReport {
     /// Per member call site, keyed by its obligation: the interface it
     /// dispatched over (engine-switch S3.2) and its receiver (S6.0). The edge
     /// itself does not carry them; the B3 adapter needs them.
-    pub site_facts: HashMap<ObligationId, SiteFacts>,
+    pub site_facts: SiteFactsByObligation,
     /// See [`ParenlessCalls`]: the workspace files' parens-less calls.
     pub parenless_calls: ParenlessCalls,
 }
@@ -2587,11 +2591,11 @@ fn resolve_full_program_from_parts(
     Vec<ClassifiedEdge>,
     Coverage,
     BuiltinDispatchAudit,
-    HashMap<ObligationId, SiteFacts>,
+    SiteFactsByObligation,
     ParenlessCalls,
     Option<KeptResolutions>,
 ) {
-    let mut site_facts: HashMap<ObligationId, SiteFacts> = HashMap::new();
+    let mut site_facts = SiteFactsByObligation::default();
     // Quick ObjectNodeId → &ObjectNode lookup.
     let obj_node_map = app_object_map(graph, primary_app_ref);
 
@@ -3282,7 +3286,12 @@ impl ProgramContext {
         // (context-server stage 3), and the per-file route vectors are
         // push-built with as much spare capacity again as they hold.
         let total: usize = results.iter().map(|r| r.edges.len()).sum();
-        let (mut edges, mut site_facts) = (Vec::with_capacity(total), HashMap::new());
+        // Sized up front too (TLS-66): growing it rehashed every key.
+        let facts: usize = results.iter().map(|r| r.site_facts.len()).sum();
+        let (mut edges, mut site_facts) = (
+            Vec::with_capacity(total),
+            SiteFactsByObligation::with_capacity_and_hasher(facts, Default::default()),
+        );
         let mut parenless_calls = ParenlessCalls::new();
         for ((app, pf), r) in files.iter().zip(results) {
             edges.extend(r.edges.into_iter().map(|mut e| {
@@ -3359,7 +3368,7 @@ impl ProgramContext {
         obj_node_map: &HashMap<ObjectNodeId, &ObjectNode>,
     ) -> (
         FileResolution,
-        std::collections::HashSet<crate::program::resolve::reads::Query>,
+        crate::fxhash::FxHashSet<crate::program::resolve::reads::Query>,
         crate::program::resolve::reads::HookCounts,
     ) {
         use crate::program::resolve::reads::{Recorder, scope};
@@ -3379,7 +3388,7 @@ pub struct DependencyBodyResolution {
     /// Shared (a workspace session hands one resolution to many revisions).
     pub edges: Arc<Vec<ClassifiedEdge>>,
     /// The receiver/interface facts of those sites (see [`SiteFacts`]). Shared.
-    pub site_facts: Arc<HashMap<ObligationId, SiteFacts>>,
+    pub site_facts: Arc<SiteFactsByObligation>,
     /// See [`ParenlessCalls`]: the dependency files' parens-less calls.
     pub parenless_calls: ParenlessCalls,
 }

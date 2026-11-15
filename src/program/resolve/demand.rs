@@ -21,7 +21,9 @@
 //!   result's, ENG-12, `GetRef().Modify(true)`; a FieldRef's `Validate`,
 //!   ENG-06) reaches its triggers as a call and its table events as one.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
+
+use crate::fxhash::FxHashMap;
 
 use crate::program::graph::ProgramGraph;
 use crate::program::node::{AppRef, RoutineNodeId};
@@ -40,7 +42,8 @@ pub fn cross_app_demand(
     edges: EdgeView<'_>,
 ) -> HashSet<RoutineNodeId> {
     // The record operations only the site facts carry: (triggers, table events).
-    let fact_routes: HashMap<&ObligationId, (&[Route], &[Route])> = edges
+    // FxHash (TLS-66): these maps over every edge were hot in the CDO build.
+    let fact_routes: FxHashMap<&ObligationId, (&[Route], &[Route])> = edges
         .site_facts
         .iter()
         .filter_map(|(ob, f)| {
@@ -57,9 +60,13 @@ pub fn cross_app_demand(
             }
         })
         .collect();
-    let mut forward: HashMap<&RoutineNodeId, Vec<&RoutineNodeId>> = HashMap::new();
-    let mut callers: HashMap<&RoutineNodeId, Vec<&RoutineNodeId>> = HashMap::new();
-    let mut publishers_of: HashMap<&RoutineNodeId, Vec<&RoutineNodeId>> = HashMap::new();
+    // Sized up front (TLS-66): at most one key per graph routine each.
+    let routines = graph.routines.len();
+    let mut forward: FxHashMap<&RoutineNodeId, Vec<&RoutineNodeId>> =
+        FxHashMap::with_capacity_and_hasher(routines, Default::default());
+    let mut callers: FxHashMap<&RoutineNodeId, Vec<&RoutineNodeId>> =
+        FxHashMap::with_capacity_and_hasher(routines, Default::default());
+    let mut publishers_of: FxHashMap<&RoutineNodeId, Vec<&RoutineNodeId>> = FxHashMap::default();
     for ce in edges.all_edges() {
         // A background start's target runs in another session: no finding
         // of the starter's own execution reads it, and the model's calls
