@@ -13,8 +13,12 @@
 //! byte-compared output may depend on a hash map's order anyway (std's is random
 //! per process); this hasher does not make such an order meaningful.
 //!
-//! Use it only where the keys are not chosen by an adversary, and through the
-//! aliases [`FxHashMap`] and [`FxHashSet`].
+//! The trade (review r1, Fable): with no key, colliding names can be built offline,
+//! so a workspace or package crafted with very many of them could make a build
+//! slow (CPU only). That is accepted for maps keyed by workspace and package
+//! content: it needs a workspace the user chose to open, and a very large file
+//! costs as much. Keep std's `RandomState` for keys from anywhere else (a network
+//! peer). Use it through the aliases [`FxHashMap`] and [`FxHashSet`].
 
 use std::collections::{HashMap, HashSet};
 use std::hash::{BuildHasherDefault, Hasher};
@@ -39,8 +43,9 @@ impl FxHasher {
 impl Hasher for FxHasher {
     #[inline]
     fn write(&mut self, bytes: &[u8]) {
-        // Eight bytes at a time, then four, two and one, little-endian as
-        // rustc-hash 1.x reads them.
+        // Eight bytes at a time, then four, two and one, always little-endian:
+        // rustc-hash 1.x reads native-endian words, so this is its 64-bit
+        // little-endian variant (equal on x86-64 and aarch64; review r1, sol).
         let mut chunks = bytes.chunks_exact(8);
         for c in &mut chunks {
             self.add_to_hash(u64::from_le_bytes(c.try_into().expect("8 bytes")));
@@ -99,7 +104,7 @@ pub type FxHashSet<T> = HashSet<T, FxBuildHasher>;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::hash::{BuildHasher, Hash};
+    use std::hash::BuildHasher;
 
     fn fx(f: impl FnOnce(&mut FxHasher)) -> u64 {
         let mut h = FxHasher::default();
@@ -110,6 +115,12 @@ mod tests {
     /// The algorithm pinned on values derived by hand from rustc-hash 1.x's
     /// definition (`hash = (hash.rotl(5) ^ word) * SEED`, starting at 0), so a
     /// change to the rotate, the multiplier or the byte order fails here.
+    /// The exact value guards no output (iteration order never reaches one); it
+    /// keeps the hasher the one this doc names.
+    ///
+    /// Mutations (2026-11-15), each red here: the rotate 5 -> 6 (the exact
+    /// `[1, 2, 3]` value fails); the 8-byte word read big-endian (the 15-byte
+    /// case fails).
     #[test]
     fn fxhash_matches_its_definition() {
         // One word from 0: (0 ^ 1) * SEED = SEED.
@@ -151,8 +162,5 @@ mod tests {
         assert_eq!((m.len(), m["a"], m["b"]), (3, 3, 1));
         let mut s: FxHashSet<u64> = FxHashSet::with_capacity_and_hasher(4, Default::default());
         assert!(s.insert(7) && !s.insert(7));
-        let mut h = FxHasher::default();
-        "x".hash(&mut h);
-        assert_ne!(h.finish(), 0);
     }
 }

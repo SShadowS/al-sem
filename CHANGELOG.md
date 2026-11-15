@@ -7,6 +7,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (TLS-66: FxHash and pre-sizing for the model build's hottest maps)
+
+- **Why:** a SIGPROF profile of one resident CDO model build (`build_target`, master
+  `e7848a85`) put 12.6% of the kept samples in hashing. The share is uncertain: only 31% of
+  the samples expected at 499 Hz were kept. By key: `String` 23%, `reads::Query` 21%,
+  `ObligationId` 18%, `RoutineNodeId` 16%, `&str` ~13%. By operation, 43% was
+  `resize_inner`, i.e. rehashing every key as a map grew.
+- **The hasher:** `src/fxhash.rs` adds `FxHasher` and the `FxHashMap` / `FxHashSet`
+  aliases, written in the crate (no new dependency). It is rustc-hash 1.x's
+  multiply-rotate algorithm, unkeyed, so iteration order is the same in every process.
+  A unit test pins its output to values computed outside Rust.
+- **Maps switched** (about 2/3 of the profiled hashing):
+  - the reads recorder's `Query` log and the dependency record's query interner;
+  - `ObligationId` → `SiteFacts`, as the new alias `SiteFactsByObligation`;
+  - the routine scope's folded-name sets (`ir_walk`);
+  - `cross_app_demand`'s maps;
+  - the event-temp proof's sets;
+  - `StrPool`;
+  - the by-routine-id maps of `DependencyRegistry`, `split_declarations` and `program_event_graph`.
+- **Pre-sized from known counts:**
+  - the site facts, from the files' fact counts;
+  - the query interner, from the previous record, on a refresh only. A cold build has only an upper bound several times the ~499k distinct queries, so it still grows;
+  - the by-routine-id maps, from the routine count;
+  - `cross_app_demand`'s forward and caller maps;
+  - the event-temp resolved-site set.
+- **Measured** on server1 with `cdo-speed` on CDO, load 3.4-10 (mostly 5-7), all PASS:
+  - master → both commits: model build CPU 93.86 → 91.62 s (x0.976; its two passes, side order flipped, read x0.974 and x0.978), wall 30.09 → 28.39 s (x0.943); round total x0.980; peak memory 10,552 → 10,269 MiB (x0.973);
+  - the hasher alone: build CPU x1.017, but its two passes disagree (x1.161 and x0.890), so it is noise; peak memory x1.016;
+  - pre-sizing alone: build CPU x0.988 (passes x0.992 and x0.984), peak memory x0.956.
+  - How the gain splits between the two commits is not resolved: the hasher's own run was too noisy.
+  - Memory is inside the noise (review r1, Fable): the same master binary peaked at 10,191 MiB in one run and 10,552 MiB in another (3.5% apart), more than the -2.7% measured. So no memory gain is claimed. CPU and wall rest on two passes each.
+- **Below the bar:** the 2.4% CPU gain is below the 3% CPU bar set at filing, waived by the
+  orchestrator for the wall and memory gain. The wall gain (x0.943, both passes) is the one
+  measured; the memory figure is noise, as above.
+- **Left for later:** cheaper keys for the `String`- and `Query`-keyed maps (FxHash still
+  reads a string byte by byte), and the remaining smaller `String`-keyed sites.
+- **Output order:** every iteration over a switched map was checked by hand, iterator chains
+  included. Each is order-independent, or sorted before output; the interner's index order
+  stays internal to the record. All goldens are unchanged (the task gate on each commit, 6,019
+  tests). A side effect: std's random order used to vary between runs and could expose a
+  read that depended on it; these maps now have one fixed order, so such a read would pass
+  every time. The cold-against-refresh session tests remain a guard, since the two paths size
+  some maps differently.
+  - Hash flooding: FxHash has no key, so names that collide can be built offline. A workspace
+    or package crafted with very many colliding names could make the model build slow
+    (CPU only). This is accepted: it needs a workspace the user chose to open, and a very
+    large file costs as much.
+  - Crate-wide, clippy's `iter_over_hash_type` flagged 127 `for` loops over hash types, triaged one by one. One confirmed risk (`lsp/snapshot.rs` `build_decl_by_id`, an existing and documented nondeterministic winner) and two possible ones became TLS-68 and ENG-90.
+  - Limit: the lint sees `for` loops only; iterator chains over hash maps were not audited crate-wide.
+
 ### Added (TLS-61: `scripts/cdo-before-after`, a CDO before/after in one command)
 
 - `scripts/cdo-before-after <base> [<head>|.]` replaces the hand steps of the
