@@ -466,7 +466,7 @@ each is a CODE change outside that plan's scope. They must not be lost between p
 
 Four documentation/dead-code defects found while writing this spec, all inside territory it
 touches. Each was verified against source; none is speculative. §17.1–§17.4 are step 0.
-§17.5 is a code change tracked separately.
+§17.5 was a code change tracked separately (measured and closed by TLS-67, 2026-11-15).
 
 ### §17.1 — `preflight_cache.rs` claims a defect it half-inherited
 
@@ -515,7 +515,7 @@ same grammar node names, and therefore justify keeping `src/language.rs`'s dead 
 constants (`DEFINITIONS`/`CALLS`/`EVENT_SUBSCRIBERS`/`VARIABLES`, confirmed at zero call
 sites repo-wide). **Fix:** correct the paths only.
 
-### §17.5 — Per-file parser construction (separate deliverable)
+### §17.5 — Per-file parser construction (separate deliverable; measured and closed 2026-11-15, see the end)
 
 `al_syntax::parse` builds a fresh `tree_sitter::Parser` and calls `set_language` on every
 call (`crates/al-syntax/src/parse.rs:11-14`), so a DO run pays that ~11,856 times for
@@ -527,6 +527,20 @@ it must be measured, not asserted.**
 
 Worth doing independently of packs: a pack hit skips this entirely, but the miss path (the
 first analysis of any new base version) and every workspace file still pay it on every run.
+
+**Measured and closed (TLS-67, 2026-11-15): no gain of 1% shown, not landed.** A throwaway probe on the CDO
+baseline's 582 workspace files (`release-fast`, one thread, 3 rounds, load average ~21 from
+other work): `Parser::new` + `set_language` took 86-117 µs for all 582 files (~0.15-0.2 µs
+each), against 685-781 ms for parse + lower, so 0.011-0.016% of it. A reused parser's run
+(663-817 ms) was within the noise (about ±7%) of the fresh one. What warm internal buffers
+(the parse stack and subtree pools a fresh parser regrows) save was then measured directly: a
+thread-local parser in `al_syntax::parse` against a parser per file, 12 interleaved rounds per
+run, load average 9-21. Wall-time median ratio 0.94 (another session's build overlapped
+that run), then 1.06 (rounds 0.85-1.57); thread CPU time median 0.987 (rounds 0.86-1.15, 7 of
+12 faster). In both wall-time runs the side calling `parse()` was ~6% slower whichever parser
+it used, so wall time was confounded by the code path and could not isolate reuse. The bar was 1%; no run reached it
+reliably, and the change was dropped. At ~0.2 µs a file, the
+~11,856 dependency files add ~2 ms. The probe was deleted after the run.
 
 **Checked and found clean while hunting** — recorded so the sweep is not repeated: the
 grammar pin is genuinely v3.2.0; the goldens table's "30 golden directories / 9 test targets"
