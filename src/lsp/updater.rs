@@ -2440,6 +2440,123 @@ mod tests {
         assert_eq!(updater.pending.len(), 1, "both edits target the same file");
     }
 
+    /// ⟨TLS-69⟩ The same file saved twice in ONE `apply_rung1_core` call: the
+    /// second save must read the file's old decls and edges from the WORKING
+    /// maps (the first save's fresh state), not from `cur`. With `cur`, the
+    /// second save removes only `cur`'s old edges and re-pushes its own, so a
+    /// target the first save added and `cur` lacked (`Gamma.Standalone` here)
+    /// is pushed twice into `incoming`. Called directly, because
+    /// `apply_batch`'s `classify` merges two saves of one path into one
+    /// (`rung1_duplicate_vp_in_one_batch_stays_equivalent` in
+    /// tests/lsp cannot reach this).
+    ///
+    /// Mutation (2026-11-15): both reads from `cur` (`cur.edges_by_file` /
+    /// `cur.decls_by_file`) -> `incoming[Gamma.Standalone]` holds two refs, red.
+    #[test]
+    fn rung1_same_path_twice_in_one_call_matches_a_rebuild() {
+        let dir = fixture_dir();
+        let (base, parsed) = build(dir.path());
+        let mut updater = Updater::new(dir.path().to_path_buf(), parsed);
+        let ctx = Rung1Context::build(&base, &updater.workspace);
+        let text = r#"codeunit 50100 "Alpha"
+{
+    procedure DoWork()
+    var
+        Beta: Codeunit "Beta";
+        Gamma: Codeunit "Gamma";
+    begin
+        Beta.Process();
+        Gamma.Standalone();
+    end;
+}
+"#;
+        std::fs::write(dir.path().join("Alpha.al"), text).expect("rewrite Alpha.al");
+        let save = || {
+            (
+                "Alpha.al".to_string(),
+                ParsedFile {
+                    virtual_path: "Alpha.al".to_string(),
+                    file: Arc::new(al_syntax::parse(text)),
+                    provenance: updater.file_provenance(&base, "Alpha.al"),
+                    text: text.into(),
+                },
+            )
+        };
+        let saves = vec![save(), save()];
+        let snap = apply_rung1_core(
+            &base,
+            saves,
+            &ctx.index,
+            &ctx.surface,
+            &ctx.obj_node_map,
+            &mut updater.pending,
+            &mut updater.decl_multiplicity,
+        )
+        .0;
+
+        // Precondition: the edit added a target `cur` had no incoming edge
+        // from Alpha for.
+        let standalone = snap.decls_by_file["Gamma.al"]
+            .iter()
+            .find(|d| d.name == "Standalone")
+            .expect("Gamma.Standalone")
+            .id
+            .clone();
+        let from_alpha = |s: &LspSnapshot| {
+            s.ws_incoming
+                .get(&standalone)
+                .map_or(0, |v| v.iter().filter(|r| &*r.file == "Alpha.al").count())
+        };
+        assert_eq!(
+            from_alpha(&base),
+            0,
+            "precondition: base has no Alpha -> Standalone edge"
+        );
+        assert_eq!(
+            from_alpha(&snap),
+            1,
+            "one Alpha -> Standalone edge, not one per save"
+        );
+
+        // The whole patch equals a rebuild of the same per-file state.
+        let (fresh, _) = build_incoming(&snap.edges_by_file, &snap.ws_event_edges);
+        let refs = |v: Option<&Vec<crate::lsp::snapshot::EdgeRef>>| {
+            let mut v: Vec<(String, u32)> = v
+                .map(|v| v.iter().map(|r| (r.file.to_string(), r.idx)).collect())
+                .unwrap_or_default();
+            v.sort();
+            v
+        };
+        let mut targets: Vec<&RoutineNodeId> =
+            snap.ws_incoming.keys().chain(fresh.keys()).collect();
+        targets.sort();
+        targets.dedup();
+        for t in targets {
+            assert_eq!(
+                refs(snap.ws_incoming.get(t)),
+                refs(fresh.get(t)),
+                "incoming[{t:?}] must equal a fresh build_incoming"
+            );
+        }
+        let fresh_decls = build_decl_by_id(&snap.decls_by_file);
+        assert_eq!(
+            snap.decl_by_id.len(),
+            fresh_decls.len(),
+            "decl_by_id key sets"
+        );
+        for (id, d) in &snap.decl_by_id {
+            assert_eq!(
+                d.virtual_path, fresh_decls[id].virtual_path,
+                "decl_by_id[{id:?}]"
+            );
+        }
+        assert_eq!(
+            updater.decl_multiplicity.as_ref(),
+            Some(&build_decl_multiplicity(&snap.decls_by_file)),
+            "multiplicity"
+        );
+    }
+
     /// ⟨TLS-68, review r1 Fable⟩ The rung-1 patch's duplicate-id arms that a
     /// real rung-1 save cannot reach (adding or dropping a declaration changes
     /// the surface fingerprint, so `decide` sends it to rung 2), driven here by

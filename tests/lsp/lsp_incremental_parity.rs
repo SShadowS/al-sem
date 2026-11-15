@@ -1899,6 +1899,14 @@ codeunit 50100 "Alpha"
 /// `incoming` until the next rebuild. This test sends the SAME `FileSaved`
 /// event twice in one batch and asserts full sorted-multiset parity of
 /// `incoming` against a fresh wholesale `build_incoming`.
+///
+/// ⟨TLS-69⟩ Kept as an end-to-end smoke test (the public `apply_batch` accepts
+/// a duplicate event and stays equal to a rebuild), but it does NOT reach the
+/// guard above: `classify` now merges two saves of one path (`rc.plans` is
+/// keyed by vp), so `apply_rung1_core` sees one save. Measured: with the
+/// guard's reads switched to `cur`, this test still passes. The guard's test
+/// is `lsp::updater::tests::rung1_same_path_twice_in_one_call_matches_a_rebuild`,
+/// which calls `apply_rung1_core` with two saves directly.
 #[test]
 fn rung1_duplicate_vp_in_one_batch_stays_equivalent() {
     let dir = copy_fixture_to_tempdir();
