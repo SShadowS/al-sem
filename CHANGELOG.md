@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (TLS-73: `scripts/perf-probe` checks what samply needs, not one small buffer)
+
+- **The hole:** after the 2026-11-15 redeploy (CAP_PERFMON) `scripts/perf-probe` exited 0
+  while a real `samply record` failed with "mmap failed". The probe opened one event with a
+  16-page ring buffer; samply 0.13.1 opens one sampling event per CPU, each with 256 data pages
+  plus a header page (1 MiB; its stack size 32,000 x 32 stacks, rounded up). The kernel lets
+  one user lock `kernel.perf_event_mlock_kb` x online CPUs for perf buffers, shared by all that
+  user's buffers (the host uid, so other containers' runs too); past that, each process may use
+  its own `ulimit -l`: 516 KiB x 22 + 8 MiB is less than 22 MiB.
+- **Now:** the probe opens a sampling event and maps samply's buffer on each CPU samply uses
+  (its count: the CPUs the process may run on, capped by its own cgroup v2's quota), and
+  when samply is on PATH it also runs `samply record --save-only -- true` and needs a profile
+  back. A buffer that does not map exits 1 with the fix named (`perf_event_mlock_kb=4096` on the
+  host, set by the owner on 2026-11-15 and lost on a reboot; or CAP_IPC_LOCK / a higher memlock
+  ulimit). On server1 today it passes: 257 pages on each of 22 CPUs, and samply writes a profile.
+  `PERF_PROBE_PAGES` and `PERF_PROBE_CPUS` override the page and CPU counts, for the test;
+  only EPERM on a mapping counts as the locked-memory gate.
+- Pinned by `perf_probe::perf_probe_refuses_when_samply_sized_buffers_do_not_map` (one buffer
+  sized past the user's whole budget, read from the machine; where perf cannot open at all it
+  checks only the exit code; where the check is exempt, CAP_IPC_LOCK, paranoid -1 or an
+  unlimited `ulimit -l`, it does not run).
+
 ### Changed (ENG-92: dependency site facts keyed through their edges, 84 MiB less resident memory on CDO)
 
 - **What it was.** After ENG-91 the retained dependency site facts were still a map keyed by
