@@ -25,7 +25,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with exit 2 and `FAIL: cannot judge speed: the 1-min load stayed above ...`, which
   fails cdo-gate's speed phase (its summary row shows that line): never a PASS without
   speed, never a loaded measurement. `--no-speed` stays the explicit way to skip.
-- Cost: one more model build and warm-up per side, about +2 min of a 3-5 min check.
+- Cost: one more model build and warm-up per side, ~+3 min per speed check (measured
+  +155 s loaded, +173 s quiet on CDO).
+- Measured on CDO (2026-11-15, master 501ede3e's `alsem` on both sides, `--rounds 1`,
+  under the CDO slot): at load 16-18 (9 busy loops plus other work) the old script
+  read the model build x1.022 (one sample) and the new one x0.981 (x0.973 / x0.990);
+  quiet (load 6-8), the old x1.009 and the new x1.050 (x1.096 with head built second,
+  x1.004 flipped). So the loaded run did not reproduce the engine lane's x1.167, but
+  the quiet run shows the second-side effect (~9 % on one pass) and how the flipped
+  pass halves it; all four runs passed.
 - Tests (`gate_scripts`): a stub server whose second-built side burns 50 % more CPU
   fails one fixed-order sample and passes the two flipped ones
   (`speed_warm_up_cancels_the_second_side_penalty`; mutation: the second pass not
