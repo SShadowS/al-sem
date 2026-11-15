@@ -53,6 +53,8 @@ INFO_ANYWHERE = {
     "land": {"-h", "--help", "--dry-run"},
     # argparse's own help: it exits before any build (review r4, sol).
     "cdo-speed": {"-h", "--help"},
+    # argparse: --dry-run and --help, wherever given, build and measure nothing (TLS-61).
+    "cdo-before-after": {"-h", "--help", "--dry-run"},
 }
 INFO_FIRST = {"ci-steps": {"fmt"}}
 SEPARATORS = {";", ";;", "&&", "||", "|", "|&", "&", "(", ")", "\n"}

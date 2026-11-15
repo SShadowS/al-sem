@@ -1,0 +1,534 @@
+#!/usr/bin/env python3
+"""scripts/cdo-before-after: what a change moves on the pinned CDO workspace (TLS-61).
+
+Usage:
+  scripts/cdo-before-after [--ws WS] [--out DIR] [--pattern RE]... [--census]
+                           [--slot-timeout S] [--allow-same] [--dry-run] <base> [<head>]
+
+<base> is a revision; <head> is a revision or `.`, the working tree with its edits
+(the default). Steps, each of which stops the run with a non-zero exit when it fails:
+
+1. Resolve both sides. Two sides with the same source tree are refused (exit 2)
+   unless --allow-same (a noise run): comparing a tree with itself checks nothing.
+2. Build each side's release-fast `alsem` and `aldump` in its own place, never a
+   shared target folder: a revision through scripts/cdo-speed's cache (one build
+   per commit per machine, `bin/<sha>/` beside cdo-speed's own alsem; what is
+   cached is not built again); `.` in `<target>/before-after-head`. Then the two
+   alsem binaries must differ (sha256), unless --allow-same: equal binaries mean
+   a build that did nothing, and a report of no change would be a lie.
+3. With --census: build each side's lib tests (`cdo` profile; a revision from a
+   `git archive` copy kept beside the cache) before the slot is taken.
+4. Measure under the CDO slot (scripts/cdo-slot: waits for the holder and 35 GB
+   free; --slot-timeout gives up), base first, then head, one command at a time:
+   `alsem fingerprint`, `alsem analyze` (primary scope and --scope all), `aldump
+   --program-call-graph-stats`, and with --census the ENG14 untrusted census test
+   (its lines are kept; the test's own ratchet may fail on a side that moves it).
+5. Report in --out (default `<target>/before-after/<base>..<head>-<time>`):
+   `base/` and `head/` (raw outputs and meta.json: binary sha256, version,
+   workspace sha and dirty count, seconds and exit per command), `report.json` and
+   `report.md`: findings per detector that moved (both scopes), fingerprints
+   added, removed and kept, the call-graph histogram (wholeProgram and
+   primaryScoped: unknown and realUnknownRate, then every number that moved),
+   --pattern matches in the fingerprint output, and the census lines that moved.
+   The workspace sha and dirty count are read before and after each side; all
+   four readings must agree, or the report says VOID and the run exits 1.
+
+Limits (review r1, Fable): the equal-binaries check guards two revisions; a
+working-tree head always differs in bytes (its build path is embedded). The
+builds run before the slot is taken, so they can load the machine beside another
+holder's run. The VOID check sees the workspace's git state, not its gitignored
+`.alpackages`. Both sides share alsem's on-disk snapshot cache (keyed by content
+and extraction scheme, not by binary). The `.` label ignores untracked files.
+
+--dry-run resolves the sides and prints what would be built (and what is
+cached), the slot's status and the commands; it builds and measures nothing.
+Exit: 0 report written, 1 a step failed or a refusal, 2 usage or the same tree.
+"""
+import argparse
+import collections
+import fcntl
+import hashlib
+import importlib.machinery
+import importlib.util
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import time
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+DEFAULT_WS = "/work/src/cdo-baseline/Cloud"
+RUNS = {
+    "fingerprint": lambda ws, f: ["fingerprint", ws, "--format", "json", "--deterministic",
+                                  "--out", f],
+    "analyze-primary": lambda ws, f: ["analyze", ws, "--format", "json", "--deterministic"],
+    "analyze-all": lambda ws, f: ["analyze", ws, "--format", "json", "--deterministic",
+                                  "--scope", "all"],
+}
+CENSUS_TEST = "eng14_cdo_untrusted_census"
+CENSUS_TAG = "ENG14-CENSUS"
+# The census test's own ratchet message (src/program/body/eng14_preproc_tests.rs).
+CENSUS_RATCHET = "untrusted routines per app moved"
+
+
+def load_speed():
+    """scripts/cdo-speed as a module: its cache, key and lock are the one binary cache."""
+    loader = importlib.machinery.SourceFileLoader("cdo_speed", os.path.join(HERE, "cdo-speed"))
+    mod = importlib.util.module_from_spec(importlib.util.spec_from_loader("cdo_speed", loader))
+    loader.exec_module(mod)
+    return mod
+
+
+speed = load_speed()
+git = speed.git
+
+
+def log(msg):
+    print(f"cdo-before-after: {msg}", flush=True)
+
+
+def fail(msg, code=1):
+    print(f"cdo-before-after: {msg}", file=sys.stderr, flush=True)
+    sys.exit(code)
+
+
+def resolve(repo, rev):
+    """A side: its label, commit, and source tree (`None` for a working tree with
+    edits, whose tree no commit has)."""
+    head = git(repo, "rev-parse", "HEAD")
+    if rev == ".":
+        edited = bool(git(repo, "status", "--porcelain", "--untracked-files=no"))
+        return {"rev": ".", "sha": head, "label": head[:10] + ("+edits" if edited else ""),
+                "tree": None if edited else git(repo, "rev-parse", "HEAD^{tree}")}
+    try:
+        sha = git(repo, "rev-parse", "--verify", "--quiet", f"{rev}^{{commit}}")
+    except subprocess.CalledProcessError:
+        fail(f"'{rev}' is not a commit")
+    return {"rev": rev, "sha": sha, "label": sha[:10],
+            "tree": git(repo, "rev-parse", f"{sha}^{{tree}}")}
+
+
+def bin_dir_of(sha):
+    return os.path.join(speed.cache_root(), "bin", sha)
+
+
+def head_target(repo):
+    return os.path.join(speed.target_dir(repo), "before-after-head")
+
+
+def build_side(repo, side, logf, out):
+    """The folder holding this side's alsem and aldump. A revision's are the cache's
+    (never rewritten once there); the working tree's are copied into `out/head-bin`
+    under a lock on its target, so a second run that rebuilds that target while this
+    one waits for the slot cannot swap them (review r1, sol)."""
+    if side["rev"] != ".":
+        exe, _ = speed.cached_binary(repo, side["sha"], logf, extra=("aldump",))
+        return os.path.dirname(exe)
+    log("building the working tree (release-fast, alsem + aldump)")
+    env = dict(os.environ, CARGO_TARGET_DIR=head_target(repo))
+    built = os.path.join(head_target(repo), "release-fast")
+    kept = os.path.join(out, "head-bin")
+    os.makedirs(head_target(repo), exist_ok=True)
+    with open(os.path.join(head_target(repo), ".before-after.lock"), "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        rc = subprocess.run(["cargo", "build", "--profile", "release-fast", "--bin", "alsem",
+                             "--bin", "aldump"], cwd=repo, env=env, stdout=logf,
+                            stderr=subprocess.STDOUT).returncode
+        if rc != 0:
+            fail(f"the working tree's build failed (log: {logf.name})")
+        os.makedirs(kept, exist_ok=True)
+        for b in ("alsem", "aldump"):
+            shutil.copy2(os.path.join(built, b), os.path.join(kept, b))
+    return kept
+
+
+def census_src(repo, side):
+    """Where this side's lib tests build: the repo itself for `.`, else a `git
+    archive` copy of the commit kept beside the binary cache."""
+    if side["rev"] == ".":
+        return repo
+    root = os.path.join(os.path.dirname(speed.cache_root()), "before-after")
+    src = os.path.join(root, "src-" + side["sha"])
+    os.makedirs(root, exist_ok=True)
+    with open(os.path.join(root, "lock"), "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        _extract(repo, side["sha"], src)
+    return src
+
+
+def _extract(repo, sha, src):
+    """`git archive` of `sha` into `src`, once (two runs on one commit share it)."""
+    if not os.path.exists(os.path.join(src, ".extracted")):
+        shutil.rmtree(src, ignore_errors=True)
+        os.makedirs(src)
+        archive = subprocess.Popen(["git", "-C", repo, "archive", "--format=tar", sha],
+                                   stdout=subprocess.PIPE)
+        untar = subprocess.run(["tar", "-x", "-m", "-C", src], stdin=archive.stdout)
+        archive.stdout.close()
+        if archive.wait() != 0 or untar.returncode != 0:
+            fail(f"git archive {sha} failed")
+        open(os.path.join(src, ".extracted"), "w").close()
+
+
+def build_census(name, src, repo, logf, out):
+    """Build this side's lib tests (`cdo` profile) from `src` and copy the test
+    executable into `out/census-bin/<name>`: the census later runs that copy, so
+    sources that change while the run waits for the slot cannot reach it (review r2,
+    sol: `cargo test` at measure time rebuilt the live checkout)."""
+    env = dict(speed.child_env())
+    if src != repo:
+        env["CARGO_TARGET_DIR"] = os.path.join(os.path.dirname(src), "target")
+        env.setdefault("TREE_SITTER_AL_PATH", speed.grammar_dir(repo, archive=True))
+    log(f"{name}: building the census test in {src}")
+    # Build and copy under one lock on the target (review r3, sol): another run
+    # rebuilding it between this build and the copy would swap the executable.
+    target = env.get("CARGO_TARGET_DIR") or speed.target_dir(repo)
+    os.makedirs(target, exist_ok=True)
+    with open(os.path.join(target, ".before-after-census.lock"), "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        r = subprocess.run(["cargo", "test", "--profile", "cdo", "-p", "al-sem", "--lib",
+                            "--no-run", "--message-format=json"], cwd=src, env=env,
+                           stdout=subprocess.PIPE, stderr=logf, text=True)
+        exes = []
+        for line in r.stdout.splitlines():
+            try:
+                msg = json.loads(line)
+            except ValueError:
+                continue
+            if (msg.get("reason") == "compiler-artifact" and msg.get("executable")
+                    and msg.get("profile", {}).get("test")
+                    and "lib" in msg.get("target", {}).get("kind", [])):
+                exes.append(msg["executable"])
+        if r.returncode != 0 or len(exes) != 1:
+            fail(f"{name}: the census test's build failed (exit {r.returncode}, "
+                 f"{len(exes)} lib test executables; log: {logf.name})")
+        kept = os.path.join(out, "census-bin", name)
+        os.makedirs(os.path.dirname(kept), exist_ok=True)
+        shutil.copy2(exes[0], kept)
+    return kept
+
+
+def sha256(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def ws_state(ws):
+    """(commit, dirty path count, hash of the edits): the edits are the tracked diff
+    against HEAD and each untracked file's path and bytes, so a dirty file that changes
+    again keeps the count but not the hash (review r1, sol)."""
+    h = hashlib.sha256(subprocess.run(["git", "-C", ws, "diff", "HEAD", "--binary"],
+                                      capture_output=True, check=True).stdout)
+    others = subprocess.run(["git", "-C", ws, "ls-files", "--others", "--exclude-standard",
+                             "-z"], capture_output=True, check=True).stdout
+    for rel in sorted(p for p in others.split(b"\0") if p):
+        h.update(b"\0" + rel + b"\0")
+        h.update(sha256(os.path.join(ws.encode(), rel)).encode())
+    return (git(ws, "rev-parse", "HEAD"),
+            len([ln for ln in git(ws, "status", "--porcelain").splitlines() if ln]),
+            h.hexdigest())
+
+
+def measure(name, bindir, ws, out, census, repo):
+    """Run this side's commands into `out/<name>/`; stop the run on a failed one."""
+    d = os.path.join(out, name)
+    os.makedirs(d, exist_ok=True)
+    alsem, aldump = os.path.join(bindir, "alsem"), os.path.join(bindir, "aldump")
+    ws_sha, dirty, edits = ws_state(ws)
+    version = subprocess.run([alsem, "--version"], capture_output=True, text=True)
+    if version.returncode != 0:
+        fail(f"{name}: alsem --version exited {version.returncode}:\n{version.stderr[-1500:]}")
+    meta = {"alsem": alsem, "alsem_sha256": sha256(alsem), "aldump_sha256": sha256(aldump),
+            "version": version.stdout.strip(),
+            "workspace": ws, "workspace_sha": ws_sha, "workspace_dirty_paths": dirty,
+            "workspace_edits": edits, "seconds": {}, "exit": {}}
+    env = speed.child_env()
+    steps = [(n, [alsem, *argv(ws, os.path.join(d, f"{n}.json"))], n != "fingerprint",
+              f"{n}.json") for n, argv in RUNS.items()]
+    steps.append(("callgraph-stats", [aldump, "--program-call-graph-stats", ws], True,
+                  "callgraph-stats.json"))
+    for step, cmd, to_stdout, fname in steps:
+        log(f"{name}: {step}")
+        t0 = time.monotonic()
+        with open(os.path.join(d, fname if to_stdout else f"{step}.stdout"), "w") as fh, \
+                open(os.path.join(d, f"{step}.stderr"), "w") as eh:
+            rc = subprocess.run(cmd, stdout=fh, stderr=eh, env=env).returncode
+        meta["seconds"][step] = round(time.monotonic() - t0, 1)
+        meta["exit"][step] = rc
+        if rc != 0:
+            _write_json(os.path.join(d, "meta.json"), meta)
+            with open(os.path.join(d, f"{step}.stderr")) as eh:
+                tail = eh.read()[-1500:]
+            fail(f"{name}: {step} exited {rc}:\n{tail}")
+    if census:
+        exe, src = census
+        cenv = dict(speed.child_env(), CDO_WS=ws)
+        log(f"{name}: census")
+        t0 = time.monotonic()
+        r = subprocess.run([exe, CENSUS_TEST, "--nocapture", "--test-threads=1"],
+                           cwd=src, env=cenv, capture_output=True, text=True)
+        meta["seconds"]["census"] = round(time.monotonic() - t0, 1)
+        meta["exit"]["census"] = r.returncode
+        with open(os.path.join(d, "census.log"), "w") as fh:
+            fh.write(r.stdout + r.stderr)
+        lines = [ln for ln in r.stdout.splitlines() if ln.startswith(CENSUS_TAG)]
+        # A complete census passes, or fails only its own ratchet (review r1, Fable:
+        # a panic elsewhere would leave a partial census that compares as complete).
+        whole = r.returncode == 0 or CENSUS_RATCHET in r.stdout + r.stderr
+        if not lines or not whole:
+            _write_json(os.path.join(d, "meta.json"), meta)
+            fail(f"{name}: the census " + ("did not finish" if lines else
+                                           f"printed no {CENSUS_TAG} line")
+                 + f" (exit {r.returncode}; log {os.path.join(d, 'census.log')})")
+        with open(os.path.join(d, "census.txt"), "w") as fh:
+            fh.write("\n".join(lines) + "\n")
+    # Read again after the side (review r1, Fable): a workspace that moves during
+    # a side's commands must void the report too.
+    (meta["workspace_sha_after"], meta["workspace_dirty_paths_after"],
+     meta["workspace_edits_after"]) = ws_state(ws)
+    _write_json(os.path.join(d, "meta.json"), meta)
+    return meta
+
+
+def _write_json(path, value):
+    with open(path, "w") as f:
+        json.dump(value, f, indent=1)
+        f.write("\n")
+
+
+def _read_json(path):
+    with open(path) as f:
+        return json.load(f)
+
+
+def flatten(value, prefix=""):
+    """Every number under `value`, keyed by its dotted path."""
+    if isinstance(value, dict):
+        out = {}
+        for k, v in value.items():
+            out.update(flatten(v, f"{prefix}{k}."))
+        return out
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return {prefix[:-1]: value}
+    return {}
+
+
+def compare(out, patterns, census):
+    b, h = os.path.join(out, "base"), os.path.join(out, "head")
+    mb, mh = _read_json(os.path.join(b, "meta.json")), _read_json(os.path.join(h, "meta.json"))
+    rep = {"base": mb, "head": mh, "void": None, "findings": {}, "histogram": {},
+           "patterns": {}, "census": None}
+    reads = [(m[f"workspace_sha{s}"], m[f"workspace_dirty_paths{s}"], m[f"workspace_edits{s}"])
+             for m in (mb, mh) for s in ("", "_after")]
+    if len(set(reads)) != 1:
+        rep["void"] = ("the workspace moved during the run (sha, dirty paths, edits; base "
+                       "before, after, head before, after): "
+                       + ", ".join(f"{sha[:12]} dirty={n} edits={e[:12]}" for sha, n, e in reads))
+    for scope in ("analyze-primary", "analyze-all"):
+        fb = _read_json(os.path.join(b, f"{scope}.json"))["payload"]["findings"]
+        fh = _read_json(os.path.join(h, f"{scope}.json"))["payload"]["findings"]
+        cb = collections.Counter(f["detector"] for f in fb)
+        ch = collections.Counter(f["detector"] for f in fh)
+        pb, ph = {f["fingerprint"] for f in fb}, {f["fingerprint"] for f in fh}
+        rep["findings"][scope] = {
+            "total": [len(fb), len(fh)],
+            "moved": {d: [cb[d], ch[d]] for d in sorted(set(cb) | set(ch)) if cb[d] != ch[d]},
+            "fingerprints": {"added": sorted(ph - pb), "removed": sorted(pb - ph),
+                             "kept": len(pb & ph)}}
+    sb = _read_json(os.path.join(b, "callgraph-stats.json"))
+    sh = _read_json(os.path.join(h, "callgraph-stats.json"))
+    for sec in ("wholeProgram", "primaryScoped"):
+        xb, xh = flatten(sb.get(sec, {})), flatten(sh.get(sec, {}))
+        for side, x in (("base", xb), ("head", xh)):
+            if "unknown" not in x:
+                fail(f"{side}: the call-graph stats have no {sec}.unknown (see "
+                     f"{os.path.join(out, side, 'callgraph-stats.json')})")
+        rep["histogram"][sec] = {
+            "unknown": [xb.get("unknown"), xh.get("unknown")],
+            "realUnknownRate": [xb.get("realUnknownRate"), xh.get("realUnknownRate")],
+            "moved": {k: [xb.get(k), xh.get(k)] for k in sorted(set(xb) | set(xh))
+                      if xb.get(k) != xh.get(k)}}
+    if patterns:
+        with open(os.path.join(b, "fingerprint.json")) as f:
+            tb = f.read()
+        with open(os.path.join(h, "fingerprint.json")) as f:
+            th = f.read()
+        for p in patterns:
+            rx = re.compile(p)
+            xb, xh = rx.findall(tb), rx.findall(th)
+            rep["patterns"][p] = {"occurrences": [len(xb), len(xh)],
+                                  "distinct": [len(set(xb)), len(set(xh))],
+                                  "added": sorted(set(xh) - set(xb)),
+                                  "removed": sorted(set(xb) - set(xh))}
+    if census:
+        with open(os.path.join(b, "census.txt")) as f:
+            lb = f.read().splitlines()
+        with open(os.path.join(h, "census.txt")) as f:
+            lh = f.read().splitlines()
+        rep["census"] = {"added": [ln for ln in lh if ln not in lb],
+                         "removed": [ln for ln in lb if ln not in lh]}
+    return rep
+
+
+def render(rep, base, head):
+    """report.md: the moves first; an unmoved part says so in one line."""
+    md = [f"# CDO before/after: {base['label']} -> {head['label']}", ""]
+    for side, m in (("base", rep["base"]), ("head", rep["head"])):
+        md.append(f"- {side}: {m['version']} | alsem {m['alsem_sha256'][:12]} | ws "
+                  f"{m['workspace_sha'][:12]} dirty={m['workspace_dirty_paths']} | seconds "
+                  f"{m['seconds']}")
+    if rep["void"]:
+        md += ["", f"**VOID: {rep['void']}.** Nothing below is a comparison."]
+    for scope, f in rep["findings"].items():
+        fp = f["fingerprints"]
+        md += ["", f"## {scope}: {f['total'][0]} -> {f['total'][1]} findings",
+               f"fingerprints: {len(fp['added'])} added, {len(fp['removed'])} removed, "
+               f"{fp['kept']} kept"]
+        md += [f"- {d}: {x[0]} -> {x[1]}" for d, x in f["moved"].items()] or [
+            "- no detector moved"]
+    for sec, x in rep["histogram"].items():
+        md += ["", f"## call graph, {sec}",
+               f"unknown {x['unknown'][0]} -> {x['unknown'][1]}, realUnknownRate "
+               f"{x['realUnknownRate'][0]} -> {x['realUnknownRate'][1]}"]
+        md += [f"- {k}: {v[0]} -> {v[1]}" for k, v in x["moved"].items()] or [
+            "- no number moved"]
+    if rep["patterns"]:
+        md += ["", "## patterns in the fingerprint output"]
+        for p, x in rep["patterns"].items():
+            md.append(f"- `{p}`: {x['occurrences'][0]} occurrences / {x['distinct'][0]} "
+                      f"distinct -> {x['occurrences'][1]} / {x['distinct'][1]}")
+            md += [f"  - + {s}" for s in x["added"][:50]]
+            md += [f"  - - {s}" for s in x["removed"][:50]]
+    if rep["census"] is not None:
+        md += ["", "## census"]
+        md += [f"- + {ln}" for ln in rep["census"]["added"]]
+        md += [f"- - {ln}" for ln in rep["census"]["removed"]]
+        if not rep["census"]["added"] and not rep["census"]["removed"]:
+            md.append("- no census line moved")
+    return "\n".join(md) + "\n"
+
+
+def take_slot(reason, timeout):
+    """Hold the CDO slot (bound to this process); `True` when this run took it and
+    must release it, `False` when it shares a hold it is inside."""
+    os.environ.setdefault("CDO_SLOT_TOKEN", os.urandom(8).hex())
+    cmd = ["bash", os.path.join(HERE, "cdo-slot"), "acquire",
+           os.environ.get("CDO_SLOT_OWNER", "before-after"), reason, "--wait",
+           "--bind", str(os.getpid())]
+    if timeout:
+        cmd += ["--timeout", str(timeout)]
+    rc = subprocess.run(cmd).returncode
+    if rc not in (0, 4):
+        fail("the CDO slot was not taken (scripts/cdo-slot status)")
+    return rc == 0
+
+
+def main():
+    ap = argparse.ArgumentParser(
+        prog="scripts/cdo-before-after", description=__doc__.split("\n", 1)[1],
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("base")
+    ap.add_argument("head", nargs="?", default=".")
+    ap.add_argument("--ws", default=os.environ.get("CDO_WS") or DEFAULT_WS)
+    ap.add_argument("--out")
+    ap.add_argument("--pattern", action="append", default=[])
+    ap.add_argument("--census", action="store_true")
+    ap.add_argument("--slot-timeout", type=int)
+    ap.add_argument("--allow-same", action="store_true")
+    ap.add_argument("--dry-run", action="store_true")
+    a = ap.parse_args()
+    repo = os.path.dirname(HERE)
+    for p in a.pattern:
+        try:
+            re.compile(p)
+        except re.error as e:
+            fail(f"--pattern {p!r}: {e}", 2)
+    if a.base == ".":
+        fail("<base> must be a revision; `.` is only for <head>", 2)
+    ws = os.path.abspath(a.ws)
+    if subprocess.run(["git", "-C", ws, "rev-parse", "HEAD"], capture_output=True).returncode:
+        fail(f"no workspace (a folder in a git checkout) at {ws}")
+    base, head = resolve(repo, a.base), resolve(repo, a.head)
+    if base["tree"] is not None and base["tree"] == head["tree"] and not a.allow_same:
+        fail(f"{base['label']} and {head['label']} have the same source tree: nothing to "
+             "compare (--allow-same for a noise run)", 2)
+    # Absolute, given or default (reviews r3-r4, sol): the census runs from another
+    # folder, and a relative CARGO_TARGET_DIR makes the default relative too.
+    out = os.path.abspath(a.out or os.path.join(
+        speed.target_dir(repo), "before-after",
+        f"{base['label']}..{head['label']}-{time.strftime('%Y%m%d-%H%M%S')}-{os.getpid()}"))
+
+    if a.dry_run:
+        for name, side in (("base", base), ("head", head)):
+            if side["rev"] == ".":
+                log(f"{name} = the working tree ({side['label']}): cargo build --profile "
+                    f"release-fast --bin alsem --bin aldump in {head_target(repo)}")
+            else:
+                d = bin_dir_of(side["sha"])
+                have = [b for b in ("alsem", "aldump") if os.path.exists(os.path.join(d, b))]
+                log(f"{name} = {side['rev']} ({side['label']}): "
+                    + ("cached in " + d if len(have) == 2 else
+                       f"builds {', '.join(b for b in ('alsem', 'aldump') if b not in have)} "
+                       f"into {d}"))
+        slot = subprocess.run(["bash", os.path.join(HERE, "cdo-slot"), "status"],
+                              capture_output=True, text=True)
+        log(f"the CDO slot: {slot.stdout.strip() or slot.stderr.strip()}")
+        log(f"measures, base then head, on {ws}: "
+            + ", ".join([f"alsem {' '.join(argv(ws, '<out>'))}" for argv in RUNS.values()]
+                        + [f"aldump --program-call-graph-stats {ws}"]
+                        + ([f"the {CENSUS_TEST} lib test (built before the slot)"]
+                           if a.census else [])))
+        log(f"report: {out}")
+        return 0
+
+    os.makedirs(out, exist_ok=True)
+    # One run per output folder for the whole run (review r2, sol): a second run
+    # there would overwrite this one's copied binaries while it waits or measures.
+    out_lock = open(os.path.join(out, ".before-after.lock"), "w")
+    try:
+        fcntl.flock(out_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        fail(f"another cdo-before-after run is using {out}")
+    for old in ("report.md", "report.json"):  # a reused --out must not keep an old verdict
+        if os.path.exists(os.path.join(out, old)):
+            os.remove(os.path.join(out, old))
+    with open(os.path.join(out, "build.log"), "a") as logf:
+        dirs = {"base": build_side(repo, base, logf, out),
+                "head": build_side(repo, head, logf, out)}
+        sums = {k: sha256(os.path.join(d, "alsem")) for k, d in dirs.items()}
+        if sums["base"] == sums["head"] and not a.allow_same:
+            fail(f"the two alsem binaries are the same ({sums['base'][:12]}): the build "
+                 "changed nothing, so there is nothing to compare (--allow-same to measure "
+                 "anyway)")
+        census = {}
+        if a.census:
+            for name, side in (("base", base), ("head", head)):
+                src = census_src(repo, side)
+                census[name] = (build_census(name, src, repo, logf, out), src)
+
+    owned = take_slot(f"before-after {base['label']}..{head['label']}", a.slot_timeout)
+    try:
+        for name in ("base", "head"):
+            measure(name, dirs[name], ws, out, census.get(name), repo)
+    finally:
+        if owned:
+            subprocess.run(["bash", os.path.join(HERE, "cdo-slot"), "release"],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    rep = compare(out, a.pattern, a.census)
+    _write_json(os.path.join(out, "report.json"), rep)
+    md = render(rep, base, head)
+    with open(os.path.join(out, "report.md"), "w") as f:
+        f.write(md)
+    print(md, end="")
+    log(f"report: {out}")
+    return 1 if rep["void"] else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

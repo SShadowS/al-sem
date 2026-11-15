@@ -254,7 +254,8 @@ fn cdo_slot_frees_itself() {
 /// word) -> commit messages and greps naming `cargo test` are refused; the
 /// heredoc skip dropped -> a heredoc line `cargo test` is refused; the
 /// information modes dropped -> `land --dry-run` is refused; the own-session
-/// check dropped -> A is refused.
+/// check dropped -> A is refused; TLS-61: the `cdo-before-after` entry of
+/// `INFO_ANYWHERE` dropped -> its `--dry-run` and `--help` are refused.
 #[test]
 fn cdo_slot_guard_refuses_other_sessions_while_held() {
     let s = Slot::new();
@@ -318,6 +319,9 @@ fn cdo_slot_guard_refuses_other_sessions_while_held() {
         "bash scripts/ci-steps all --help",
         "bash -euo pipefail -c 'cargo test'",
         "bash -o pipefail -c 'cargo test 2>&1 | tee /tmp/t.log'",
+        // TLS-61: a before/after run builds and measures.
+        "scripts/cdo-before-after master",
+        "python3 scripts/cdo-before-after --census master~1 master",
     ];
     let free = [
         "grep -n x scripts/cdo-gate",
@@ -349,6 +353,9 @@ fn cdo_slot_guard_refuses_other_sessions_while_held() {
         "python3 scripts/cdo-speed --help",
         // Fable r3: a syntax check runs nothing.
         "bash -n scripts/land && bash -n scripts/cdo-gate",
+        // TLS-61: its --dry-run and --help, wherever given, run nothing.
+        "scripts/cdo-before-after master --dry-run",
+        "python3 scripts/cdo-before-after --help",
         "git commit -m \"$(cat <<'EOF'\nfix: don't (really) run cargo test\n\nCo-Authored-By: x\nEOF\n)\"",
     ];
     for c in guarded.iter().chain(&free) {
