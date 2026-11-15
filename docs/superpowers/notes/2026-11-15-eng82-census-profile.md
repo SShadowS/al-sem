@@ -8,7 +8,7 @@ TLS-66/67, filed from a read-only survey whose gains were estimates) by measured
 ## Headline
 
 1. **CPU: one function is 42% of `build_target`**, the first half of a resident first ask (session
-   and target, 18.4 s of its ~36 s wall; the fold and cone half was not profiled). `byte_to_pos`
+   and target, 18.3 s of its ~36 s wall; the fold and cone half was not profiled). `byte_to_pos`
    (`src/program/resolve/extract.rs:338`) turns a byte offset into a line and column by counting
    the newlines in the whole file prefix, and it is called twice per call expression
    (`extract.rs:800-801`, `840-841`; the same pattern in `extract_min.rs`). The cost grows with
@@ -25,12 +25,14 @@ TLS-66/67, filed from a read-only survey whose gains were estimates) by measured
 ## How it was measured
 
 The raw outputs (`resident.out`, `probe.out`, `pprof.out`) and the two scratch probes' sources are
-kept in `tools/census-probe/runs-eng82/` (the 337 MB folded stack file is not).
+kept in `tools/census-probe/runs-eng82/` (the 337 MB folded stack file is not). The inclusive
+shares by exact frame name come from `shares.sh` there (output in `shares.out`).
 
 - **Bytes:** `tools/census-probe resident <ws>` (counting global allocator, `--features
   mimalloc`): one resident build, then one ask of each kind, then live bytes and allocation counts
-  per bucket. The byte-census skill's conventions: lengths, not capacities; MiB; a shared
-  allocation counted once; allocator overhead not counted. The probe had drifted from five API
+  per bucket: the size each allocation REQUESTED (so capacity, not length), measured as the drop
+  delta of each bucket; MiB; allocator overhead not counted. The count probe's MiB figures below
+  (edges, routes, anchors, expressions) are lengths × `size_of` instead. The probe had drifted from five API
   changes; this branch fixes it (the only code change, in `tools/`, not part of the shipped crate).
 - **Counts and `size_of`:** a scratch probe (not committed) with path dependencies on this tree.
   It counts the parse trees, the retained dependency edges and the model's anchors.
@@ -124,8 +126,11 @@ first ask were not profiled; a "drop" here holds for cold `build_target` on CDO 
 1% rest on 20-40 samples (about ±20%). 12,445 samples at 499 Hz is 24.9 CPU-seconds in 18.3 s
 wall, which is low for a 22-thread pool: either the parallel work sits on a few big files, or the
 process-wide `ITIMER_PROF` lost samples while many threads ran. No CPU total was recorded to
-tell them apart; lost parallel samples would make the 42% an under-count. The sampler's
-blocklist drops samples inside libc (`memcpy`, system calls).
+tell them apart. Lost samples can bias any share either way (parsing and lowering run in
+parallel too), so the 42% is a share of the kept samples, and the "up to about 40%" saving and
+the 1.7× growth of the other shares are conditional until a rerun records the CPU total
+(`getrusage`) beside the sample count. The sampler's blocklist drops samples inside libc
+(`memcpy`, system calls).
 
 ## The survey's tasks, re-ranked
 
@@ -134,10 +139,10 @@ blocklist drops samples inside libc (`memcpy`, system calls).
 | 1 | **new: `byte_to_pos`** | ~42% of build CPU | file it; byte-identical positions must be proven |
 | 2 | ENG-86 slimmer IR nodes (A3) | dependency trees 940 MiB, ~341 MiB of it inline expressions, 1.84 M identifier strings | keep, the biggest memory item in reach |
 | 3 | **dependency site facts** (not filed) | 385 MiB over 0.55 M allocations (~700 B each); no per-field split | split it by field first, then decide |
-| 4 | ENG-87 smaller retained edges (A2) | 290 MiB; 70% of edges have exactly one route, 13 route conditions in the whole graph | keep; an inline single route and no empty condition vectors |
+| 4 | ENG-87 smaller retained edges (A2) | 290 MiB; 70% of edges have exactly one route, 13 route conditions in the whole graph | keep; but a `Route` is 240 B, so storing one inline in every edge would add about 90 MiB against the 74 MiB of route storage today. Shrink `Route` first and compute the net size; empty condition vectors already cost no heap |
 | 5 | TLS-66 fast hasher (A1) | SipHash 7-9% now, ~12% after rank 1 | keep, after rank 1 |
 | 6 | ENG-85 strings in anchors and rows (A4, A5 step 1) | anchor strings 58 MiB per copy of the rows | shrink: keep the row-string half, the anchor half is small |
-| 7 | ENG-84 cheap CPU batch (B1, B2, B7) | B2 folding 2.5-3.6%; B7 insert 0.24%, the logs' later use up to ~3%; B1 0.18% | **drop B1**; keep B2; narrow B7 to what is done with the logs, measured first |
+| 7 | ENG-84 cheap CPU batch (B1, B2, B7) | B2 folding 2.5-3.6%; B7 insert 0.24%, the logs' later use up to ~3%; B1 0.18% | **drop B1** (for a cold build; an S refresh asks every kept query again and was not profiled); keep B2; narrow B7 to what is done with the logs, measured first |
 | 8 | ENG-83 lowerer lookup by id (A6) | 1.1% (kind and field) to 4.6% (with `named_children`), about half of lowering | keep, small; after rank 1 it is 2-8% |
 | 9 | TLS-67 test selection, parser reuse (B3, B6) | not in the model build; parsing proper 8.4%, of which the parser setup per file is a small part | keep as tools work; measure on test selection, not here |
 
