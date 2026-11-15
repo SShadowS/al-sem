@@ -4727,9 +4727,11 @@ fn lower_expr(
             let member = member_node
                 .map(|m| m.text(source).to_string())
                 .unwrap_or_default();
-            let member_origin = member_node
-                .map(origin_of)
-                .unwrap_or_else(|| origin_of(node));
+            let member_origin = ir.add_member_origin(
+                member_node
+                    .map(origin_of)
+                    .unwrap_or_else(|| origin_of(node)),
+            );
             ExprKind::Member {
                 object,
                 member,

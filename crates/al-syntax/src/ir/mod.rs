@@ -133,6 +133,7 @@ macro_rules! id_type {
 id_type!(ExprId);
 id_type!(StmtId);
 id_type!(BlockId);
+id_type!(MemberOriginId);
 
 /// Preprocessor symbols a build condition decides: `(symbol, defined)`.
 ///
@@ -196,6 +197,9 @@ pub struct Ir {
     exprs: Vec<Expr>,
     stmts: Vec<Stmt>,
     blocks: Vec<Block>,
+    /// ENG-86: each `ExprKind::Member`'s member-name origin, out of the enum (one per
+    /// member expression; inline it doubled every expression's size).
+    member_origins: Vec<Origin>,
     /// Expression id ranges lowered under a non-empty build context, each with
     /// that whole context (enclosing branches and routine arm together). Ranges
     /// nest; [`Ir::preproc_context`] picks the innermost.
@@ -299,6 +303,7 @@ impl Ir {
         exact_size(&mut self.exprs);
         exact_size(&mut self.stmts);
         exact_size(&mut self.blocks);
+        exact_size(&mut self.member_origins);
         exact_size(&mut self.preproc_ranges);
         exact_size(&mut self.tainted_calls);
     }
@@ -330,6 +335,20 @@ impl Ir {
     #[inline]
     pub fn block(&self, id: BlockId) -> &Block {
         &self.blocks[id.index()]
+    }
+
+    pub fn add_member_origin(&mut self, o: Origin) -> MemberOriginId {
+        let id = MemberOriginId(
+            u32::try_from(self.member_origins.len()).expect("member origin arena overflow"),
+        );
+        self.member_origins.push(o);
+        id
+    }
+
+    /// The member-name origin of an `ExprKind::Member` (its `member_origin` id).
+    #[inline]
+    pub fn member_origin(&self, id: MemberOriginId) -> &Origin {
+        &self.member_origins[id.index()]
     }
 
     pub fn iter_exprs(&self) -> impl Iterator<Item = &Expr> {
@@ -410,6 +429,38 @@ mod origin_tests {
     #[test]
     fn origin_is_28_bytes() {
         assert_eq!(std::mem::size_of::<Origin>(), 28);
+        // With `member_origin` out of the enum: was 128 (ExprKind 80 + Origin 48).
+        assert_eq!(std::mem::size_of::<Expr>(), 72);
+    }
+
+    /// ENG-86: a member expression's member-name origin, now in the side table, is the
+    /// member node's own (kind and bytes), one per member expression.
+    #[test]
+    fn member_origin_is_the_member_node() {
+        let src = "codeunit 50100 C\n{\n    procedure P()\n    begin\n        if Rec.\"No.\" = A.B then;\n    end;\n}\n";
+        let file = crate::parse(src);
+        let members: Vec<_> = file
+            .ir
+            .iter_exprs()
+            .filter_map(|e| match &e.kind {
+                ExprKind::Member {
+                    member,
+                    member_origin,
+                    ..
+                } => Some((member.clone(), file.ir.member_origin(*member_origin))),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(members.len(), 2);
+        for (member, o) in members {
+            assert_eq!(&src[o.byte()], member);
+            let want = if member.starts_with('"') {
+                "quoted_identifier"
+            } else {
+                "identifier"
+            };
+            assert_eq!(o.kind_text(), want, "{member}");
+        }
     }
 
     /// ENG-86: every origin a parse makes reads back the node's own kind string and byte

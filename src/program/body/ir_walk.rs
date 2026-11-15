@@ -788,6 +788,7 @@ impl<'a> SpineCtx<'a> {
                 member_origin,
                 ..
             } => {
+                let member_origin = self.file.ir.member_origin(*member_origin);
                 if member_origin.kind_text() == "identifier" {
                     self.condition_references.push(PConditionReference {
                         identifier: member.fold_identifier(),
@@ -1552,7 +1553,9 @@ impl<'a> SpineCtx<'a> {
                 {
                     let record_variable_name =
                         self.raw(&self.file.ir.expr(*object).origin).to_string();
-                    let field_name = if member_origin.kind_text() == "quoted_identifier" {
+                    let quoted = self.file.ir.member_origin(*member_origin).kind_text()
+                        == "quoted_identifier";
+                    let field_name = if quoted {
                         strip_quotes(member)
                     } else {
                         member.clone()
