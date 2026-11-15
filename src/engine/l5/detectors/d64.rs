@@ -55,13 +55,13 @@ pub(crate) const DETECTOR: &str = "d64-api-page-write-surface";
 fn object_anchor(o: &crate::program::model::workspace::ModelObject) -> SourceAnchor {
     match &o.source_anchor {
         Some(a) => SourceAnchor {
-            source_unit_id: a.source_unit_id.clone(),
+            source_unit_id: a.source_unit_id.to_string(),
             start_line: a.start_line,
             start_column: a.start_column,
             end_line: a.end_line,
             end_column: a.end_column,
             enclosing_routine_id: o.id.clone(), // object-level: object id by convention
-            syntax_kind: a.syntax_kind.clone(),
+            syntax_kind: a.syntax_kind.to_string(),
             normalized_text_hash: None,
             leading_context_hash: None,
             trailing_context_hash: None,

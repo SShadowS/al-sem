@@ -703,8 +703,8 @@ fn callers(names: &Names<'_>, r: &ModelRoutine) -> Callers {
             c.first.push(CallerSite {
                 display: names.named(from),
                 file: site.map_or_else(
-                    || from.source_anchor.source_unit_id.clone(),
-                    |s| s.source_anchor.source_unit_id.clone(),
+                    || from.source_anchor.source_unit_id.to_string(),
+                    |s| s.source_anchor.source_unit_id.to_string(),
                 ),
                 line: site.map_or(from.source_anchor.start_line, |s| {
                     s.source_anchor.start_line
@@ -768,7 +768,7 @@ pub fn summarize(
         stable_id: stable_id.to_string(),
         display: names.display(r),
         handle: names.handle(r),
-        file: Some(r.source_anchor.source_unit_id.clone()),
+        file: Some(r.source_anchor.source_unit_id.to_string()),
         line: Some(r.source_anchor.start_line + 1),
         own,
         cone,

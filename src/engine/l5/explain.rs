@@ -1096,7 +1096,7 @@ fn resolve_field(model: &Model, table: &str, field: &str) -> Resolved {
         .collect();
     let declaring_unit = of_object
         .iter()
-        .map(|r| r.source_anchor.source_unit_id.clone())
+        .map(|r| r.source_anchor.source_unit_id.to_string())
         .find(|u| u.starts_with("ws:"));
     let on_validate = of_object
         .iter()
@@ -1138,7 +1138,7 @@ fn anchor_key(a: &PAnchor) -> (&str, u32, u32) {
 fn anchor_json(a: &PAnchor) -> Value {
     anchor_to_value(&FullAnchor {
         source_kind: "source",
-        file: Some(a.source_unit_id.clone()),
+        file: Some(a.source_unit_id.to_string()),
         line: Some(a.start_line),
         column: Some(a.start_column),
         excerpt: None,
@@ -1176,7 +1176,7 @@ impl Gap {
     fn new(kind: &str, anchor: Option<&PAnchor>, mut fields: Map<String, Value>) -> Gap {
         fields.insert("kind".into(), kind.into());
         let (file, line, col) = anchor.map_or((String::new(), 0, 0), |a| {
-            (a.source_unit_id.clone(), a.start_line, a.start_column)
+            (a.source_unit_id.to_string(), a.start_line, a.start_column)
         });
         if let Some(a) = anchor {
             fields.insert("anchor".into(), anchor_json(a));
@@ -3882,7 +3882,7 @@ impl RunBy {
                 continue;
             };
             sites.push((
-                op.source_anchor.source_unit_id.clone(),
+                op.source_anchor.source_unit_id.to_string(),
                 op.source_anchor.start_line + 1,
                 op.op.clone(),
                 ix.qualified(from),
@@ -5214,7 +5214,7 @@ impl Card {
         Card {
             sort_key: anchor
                 .as_ref()
-                .map(|a| (a.source_unit_id.clone(), a.start_line, a.start_column)),
+                .map(|a| (a.source_unit_id.to_string(), a.start_line, a.start_column)),
             routine,
             title,
             anchor,

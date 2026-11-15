@@ -1332,7 +1332,7 @@ impl<'a> RoutineJoin<'a> {
             display: r.name.clone(),
             object_display: object_display(&r.object_type, object_name),
             stable_id: r.stable_routine_id.clone(),
-            file: r.source_anchor.source_unit_id.clone(),
+            file: r.source_anchor.source_unit_id.to_string(),
             line: r.source_anchor.start_line,
             column: r.source_anchor.start_column,
             canonical: format_routine(&parts, false),
@@ -1494,7 +1494,7 @@ impl<'a> OperationJoin<'a> {
         let (r, op) = self.index.last_record_operation(operation_id)?;
         Some(OperationRef {
             owner: routines.of(r),
-            file: op.source_anchor.source_unit_id.clone(),
+            file: op.source_anchor.source_unit_id.to_string(),
             line: op.source_anchor.start_line,
             column: op.source_anchor.start_column,
             platform: op.dataset_reason.clone(),
@@ -2687,7 +2687,7 @@ fn render_query_touches_body(
                         if primary {
                             ws_routines.insert(r.stable_routine_id.as_str());
                             ws_sites.push(TableSite {
-                                file: o.source_anchor.source_unit_id.clone(),
+                                file: o.source_anchor.source_unit_id.to_string(),
                                 line: o.source_anchor.start_line + 1,
                                 op: "CalcFields".to_string(),
                                 who: names.display(&r.stable_routine_id),
@@ -2714,7 +2714,7 @@ fn render_query_touches_body(
                     if primary {
                         ws_routines.insert(r.stable_routine_id.as_str());
                         ws_sites.push(TableSite {
-                            file: o.source_anchor.source_unit_id.clone(),
+                            file: o.source_anchor.source_unit_id.to_string(),
                             line: o.source_anchor.start_line + 1,
                             op: o.op.clone(),
                             who: names.display(&r.stable_routine_id),
@@ -7529,7 +7529,7 @@ tableextension 50101 \"Cust Ext\" extends Cust
         end_line: u32,
     ) -> crate::program::body::features::PAnchor {
         let mut a = crate::engine::l5::test_support::dummy_anchor();
-        a.source_unit_id = file.to_string();
+        a.source_unit_id = file.into();
         a.start_line = start_line;
         a.end_line = end_line;
         a

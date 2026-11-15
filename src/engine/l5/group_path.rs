@@ -344,7 +344,7 @@ impl<'a> GroupPaths<'a> {
                 .get(s.to)
                 .cloned()
                 .unwrap_or_else(|| s.to.to_string()),
-            file: anchor.map(|a| a.source_unit_id.clone()),
+            file: anchor.map(|a| a.source_unit_id.to_string()),
             line: anchor.map(|a| a.start_line),
         }
     }
@@ -368,7 +368,7 @@ impl<'a> GroupPaths<'a> {
             });
         WitnessTerminal {
             operation_id: op.to_string(),
-            file: anchor.map(|a| a.source_unit_id.clone()),
+            file: anchor.map(|a| a.source_unit_id.to_string()),
             line: anchor.map(|a| a.start_line),
         }
     }

@@ -1844,12 +1844,12 @@ pub(crate) mod tests {
 
     fn pd_anchor() -> PAnchor {
         PAnchor {
-            source_unit_id: "ws:test".to_string(),
+            source_unit_id: "ws:test".into(),
             start_line: 0,
             start_column: 0,
             end_line: 0,
             end_column: 0,
-            syntax_kind: "test".to_string(),
+            syntax_kind: "test".into(),
         }
     }
 
@@ -1963,7 +1963,7 @@ pub(crate) mod tests {
     ) -> PCallArgumentBinding {
         PCallArgumentBinding {
             parameter_index,
-            source_kind: "variable".to_string(),
+            source_kind: "variable".into(),
             source_variable_name: Some("arg".to_string()),
             source_record_variable_id: None,
             source_parameter_index: None,

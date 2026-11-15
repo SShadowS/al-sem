@@ -490,7 +490,7 @@ mod tests {
         // A record variable "F" declared against the virtual/system table
         // "Field" — op_targets_virtual_system_table's G-6 exclusion signal.
         b.record_variables = vec![crate::program::model::workspace::ModelRecordVariable {
-            id: "B/rv0".to_string(),
+            id: "B/rv0".into(),
             name: "F".to_string(),
             table_name: Some("Field".to_string()),
             table_id: None,

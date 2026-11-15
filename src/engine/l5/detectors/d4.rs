@@ -92,8 +92,9 @@ pub fn detect_d4(resolved: &Model, ctx: &DetectorContext) -> Result<DetectorOutp
                 }
                 let key = key_info
                     .value
-                    .clone()
-                    .unwrap_or_else(|| key_info.text.clone());
+                    .as_ref()
+                    .unwrap_or(&key_info.text)
+                    .to_string();
                 candidates.push((op_idx, key));
             }
 

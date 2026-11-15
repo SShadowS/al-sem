@@ -394,7 +394,7 @@ fn artifact_from_model(
                 op.id.clone(),
                 DepOperationEvidence {
                     operation_id: op.id.clone(),
-                    source_file: a.source_unit_id.clone(),
+                    source_file: a.source_unit_id.to_string(),
                     start_line: a.start_line,
                     start_column: a.start_column,
                     end_line: a.end_line,
@@ -420,7 +420,7 @@ fn artifact_from_model(
                 ro.id.clone(),
                 DepOperationEvidence {
                     operation_id: ro.id.clone(),
-                    source_file: a.source_unit_id.clone(),
+                    source_file: a.source_unit_id.to_string(),
                     start_line: a.start_line,
                     start_column: a.start_column,
                     end_line: a.end_line,

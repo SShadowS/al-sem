@@ -1974,7 +1974,7 @@ fn collided_rows_share_one_role() {
     drop(build_detector_context(&m, substrate::ALL));
     assert_eq!(groups_mixed_role(), 0, "a natural group has one role");
     m.workspace.routines[rows[1]].source_anchor.source_unit_id =
-        "dep:dddddddd-0000-0000-0000-00000011b020:src/T.al".to_string();
+        "dep:dddddddd-0000-0000-0000-00000011b020:src/T.al".into();
     drop(build_detector_context(&m, substrate::ALL));
     assert_eq!(groups_mixed_role(), 1, "the mixed group is counted");
 }

@@ -54,12 +54,12 @@ fn stable_table(number: i64) -> String {
 /// Helper: a dummy PAnchor (all zeroes) for routine/op construction.
 fn dummy_anchor() -> PAnchor {
     PAnchor {
-        source_unit_id: "ws:src/main.al".to_string(),
+        source_unit_id: "ws:src/main.al".into(),
         start_line: 0,
         start_column: 0,
         end_line: 0,
         end_column: 0,
-        syntax_kind: "procedure".to_string(),
+        syntax_kind: "procedure".into(),
     }
 }
 

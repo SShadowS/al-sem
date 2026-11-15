@@ -38,13 +38,13 @@ const BOUNDS: WalkBounds = WalkBounds {
 /// Build a `SourceAnchor` from a `PAnchor` with an explicit enclosing routine id.
 fn anchor_from(a: &PAnchor, routine_id: &str) -> SourceAnchor {
     SourceAnchor {
-        source_unit_id: a.source_unit_id.clone(),
+        source_unit_id: a.source_unit_id.to_string(),
         start_line: a.start_line,
         start_column: a.start_column,
         end_line: a.end_line,
         end_column: a.end_column,
         enclosing_routine_id: routine_id.to_string(),
-        syntax_kind: a.syntax_kind.clone(),
+        syntax_kind: a.syntax_kind.to_string(),
         normalized_text_hash: None,
         leading_context_hash: None,
         trailing_context_hash: None,

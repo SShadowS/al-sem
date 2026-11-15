@@ -739,12 +739,14 @@ pub fn census(model: &Model) -> serde_json::Value {
         record_ref_field_not_literal: usize,
         record_ref_field_index: usize,
     }
+    // ENG-85: the anchor texts are shared (`SharedStr`), so this counts each one once per
+    // access: an upper bound for `--field-census`, not the heap they hold.
     fn bytes(fa: &crate::program::body::features::PFieldAccess) -> usize {
         std::mem::size_of_val(fa)
             + fa.record_variable_name.capacity()
             + fa.field_name.capacity()
-            + fa.source_anchor.source_unit_id.capacity()
-            + fa.source_anchor.syntax_kind.capacity()
+            + fa.source_anchor.source_unit_id.len()
+            + fa.source_anchor.syntax_kind.len()
     }
     let tables = table_by_id_preferring_real(&model.workspace.tables);
     let mut by_number: HashMap<i64, Option<&str>> = HashMap::new();

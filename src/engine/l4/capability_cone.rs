@@ -302,13 +302,15 @@ fn classify_value_source(
         "string_literal" => ValueSource::Literal {
             value: info
                 .value
-                .clone()
+                .as_ref()
+                .map(|s| s.to_string())
                 .unwrap_or_else(|| strip_single_quotes(&info.text)),
         },
         "integer" | "decimal" | "boolean" => ValueSource::Literal {
             value: info
                 .value
-                .clone()
+                .as_ref()
+                .map(|s| s.to_string())
                 .unwrap_or_else(|| info.text.trim().to_string()),
         },
         "qualified_enum_value" | "database_reference" => {
@@ -326,6 +328,7 @@ fn classify_value_source(
                 .member
                 .clone()
                 .or_else(|| info.value.clone())
+                .map(|s| s.to_string())
                 .or(Some(String::new()));
             ValueSource::Enum {
                 enum_name: enum_name.unwrap_or_default(),
@@ -342,7 +345,9 @@ fn classify_value_source(
         }
         "member_expression" => classify_member_expression(&info.text, variables),
         "unary_expression" => match &info.value {
-            Some(v) => ValueSource::Literal { value: v.clone() },
+            Some(v) => ValueSource::Literal {
+                value: v.to_string(),
+            },
             None => ValueSource::Expression,
         },
         _ => ValueSource::Expression,

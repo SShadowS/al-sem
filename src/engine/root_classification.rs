@@ -951,12 +951,12 @@ mod tests {
 
     fn anchor(syntax_kind: &str) -> PAnchor {
         PAnchor {
-            source_unit_id: "ws:test.al".to_string(),
+            source_unit_id: "ws:test.al".into(),
             start_line: 0,
             start_column: 0,
             end_line: 0,
             end_column: 0,
-            syntax_kind: syntax_kind.to_string(),
+            syntax_kind: syntax_kind.into(),
         }
     }
 
@@ -1550,12 +1550,12 @@ mod tests {
     /// An anchor in `ws:split.al` covering lines `from..=to`.
     fn span(from: u32, to: u32) -> PAnchor {
         PAnchor {
-            source_unit_id: "ws:split.al".to_string(),
+            source_unit_id: "ws:split.al".into(),
             start_line: from,
             start_column: 0,
             end_line: to,
             end_column: 0,
-            syntax_kind: String::new(),
+            syntax_kind: "".into(),
         }
     }
 

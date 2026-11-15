@@ -5030,7 +5030,7 @@ pub(crate) fn root_header(
         object_display,
         anchor: row.map(|r| {
             (
-                r.source_anchor.source_unit_id.clone(),
+                r.source_anchor.source_unit_id.to_string(),
                 r.source_anchor.start_line,
             )
         }),

@@ -40,13 +40,15 @@ fn classify_at_depth(
         "string_literal" => ValueSource::Literal {
             value: info
                 .value
-                .clone()
+                .as_ref()
+                .map(|s| s.to_string())
                 .unwrap_or_else(|| strip_single_quotes(&info.text)),
         },
         "integer" | "decimal" | "boolean" => ValueSource::Literal {
             value: info
                 .value
-                .clone()
+                .as_ref()
+                .map(|s| s.to_string())
                 .unwrap_or_else(|| info.text.trim().to_string()),
         },
 
@@ -61,6 +63,7 @@ fn classify_at_depth(
                 .member
                 .clone()
                 .or_else(|| info.value.clone())
+                .map(|s| s.to_string())
                 .unwrap_or_default();
             ValueSource::Enum { enum_name, member }
         }
@@ -80,7 +83,9 @@ fn classify_at_depth(
 
         // ── Unary expression (e.g. -3) — literal when operand numeric ──────
         "unary_expression" => match &info.value {
-            Some(v) => ValueSource::Literal { value: v.clone() },
+            Some(v) => ValueSource::Literal {
+                value: v.to_string(),
+            },
             None => ValueSource::Expression,
         },
 

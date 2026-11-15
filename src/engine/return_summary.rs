@@ -731,7 +731,7 @@ mod tests {
         try_fn.args.clear();
         let row = |attrs: Vec<AttributeInfo>| {
             let mut r = make_routine_with_attrs(attrs, false, None);
-            r.source_anchor.source_unit_id = "abi:test".to_string();
+            r.source_anchor.source_unit_id = "abi:test".into();
             r
         };
         let mut ws = crate::program::model::workspace::ModelEntities {
@@ -1051,12 +1051,12 @@ mod tests {
             file: None,
             site_exprs: Default::default(),
             source_anchor: PAnchor {
-                source_unit_id: "ws:test.al".to_string(),
+                source_unit_id: "ws:test.al".into(),
                 start_line: 0,
                 start_column: 0,
                 end_line: 0,
                 end_column: 0,
-                syntax_kind: "procedure".to_string(),
+                syntax_kind: "procedure".into(),
             },
             declaration_start_line: 0,
             identifier_references: vec![],
@@ -1183,12 +1183,12 @@ mod tests {
     #[test]
     fn bulk_icb_merge_reads_the_declaring_arm() {
         let span = |from: u32, to: u32| crate::program::body::features::PAnchor {
-            source_unit_id: "ws:f.al".to_string(),
+            source_unit_id: "ws:f.al".into(),
             start_line: from,
             start_column: 0,
             end_line: to,
             end_column: 0,
-            syntax_kind: String::new(),
+            syntax_kind: "".into(),
         };
         let mut first = make_object_with_icb(Some("ignore"));
         first.source_anchor = Some(span(0, 10));
