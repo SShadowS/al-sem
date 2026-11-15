@@ -489,9 +489,6 @@ impl ResolvedProgram {
         r.buf::<ClassifiedEdge>(b.edges.len())
             .buf::<ClassifiedEdge>(b.dependency_body_edges.len())
             .buf::<(ObligationId, SiteFacts)>(b.site_facts.len())
-            .buf::<crate::program::resolve::full::RareSiteFacts>(
-                b.site_facts.values().filter(|f| f.has_rare()).count(),
-            )
             .buf::<(
                 (AppRef, String),
                 std::collections::HashSet<al_syntax::ir::ExprId>,
@@ -501,6 +498,10 @@ impl ResolvedProgram {
             .buf::<ObligationId>(m.coverage_contract.extra.len())
             .buf::<String>(m.recovered_files.len())
             .strs(&m.recovered_files);
+        // ENG-91: each site's rare facts are a box (an allocation) of their own.
+        for _ in b.site_facts.values().filter(|f| f.has_rare()) {
+            r.buf::<crate::program::resolve::full::RareSiteFacts>(1);
+        }
         for ids in b.parenless_calls.values() {
             r.buf::<al_syntax::ir::ExprId>(ids.parenless.len());
             r.buf::<(
