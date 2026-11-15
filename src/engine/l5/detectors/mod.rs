@@ -1554,9 +1554,9 @@ pub(crate) fn is_known_temp_var(
 /// Shared across d18 (CalcFields-arg literal check) and d22 (CalcFields-arg coverage).
 pub(crate) fn unquoted_field_name(info: &PExpressionInfo) -> String {
     if let Some(v) = &info.value {
-        return v.clone();
+        return v.to_string();
     }
-    info.text.clone()
+    info.text.to_string()
 }
 
 /// Build the internal `SourceAnchor` from an L2 `PAnchor` + the owning routine.
@@ -1564,13 +1564,13 @@ pub(crate) fn unquoted_field_name(info: &PExpressionInfo) -> String {
 /// stamps the routine's own id. Hash fields default to `None`.
 pub(crate) fn anchor_of(a: &PAnchor, routine: &ModelRoutine) -> SourceAnchor {
     SourceAnchor {
-        source_unit_id: a.source_unit_id.clone(),
+        source_unit_id: a.source_unit_id.to_string(),
         start_line: a.start_line,
         start_column: a.start_column,
         end_line: a.end_line,
         end_column: a.end_column,
         enclosing_routine_id: routine.id.clone(),
-        syntax_kind: a.syntax_kind.clone(),
+        syntax_kind: a.syntax_kind.to_string(),
         normalized_text_hash: None,
         leading_context_hash: None,
         trailing_context_hash: None,
@@ -2189,7 +2189,7 @@ mod tests {
 
     fn rec_var(id: &str, name: &str, table_id: Option<&str>) -> ModelRecordVariable {
         ModelRecordVariable {
-            id: id.to_string(),
+            id: id.into(),
             name: name.to_string(),
             table_name: None,
             table_id: table_id.map(str::to_string),
@@ -2209,19 +2209,19 @@ mod tests {
     fn binding(var_id: Option<&str>, name: Option<&str>) -> PCallArgumentBinding {
         PCallArgumentBinding {
             parameter_index: 0,
-            source_kind: "local".to_string(),
+            source_kind: "local".into(),
             source_variable_name: name.map(str::to_string),
-            source_record_variable_id: var_id.map(str::to_string),
+            source_record_variable_id: var_id.map(Into::into),
             source_parameter_index: None,
             caller_source_parameter_is_var: None,
             source_temp_state: None,
             argument_anchor: PAnchor {
-                source_unit_id: "ws:x.al".to_string(),
+                source_unit_id: "ws:x.al".into(),
                 start_line: 1,
                 start_column: 1,
                 end_line: 1,
                 end_column: 1,
-                syntax_kind: "identifier".to_string(),
+                syntax_kind: "identifier".into(),
             },
         }
     }
@@ -2278,15 +2278,15 @@ mod issue21_predicate_tests {
             temp_state: None,
             field_arguments: args
                 .as_ref()
-                .map(|v| v.iter().map(|i| i.text.clone()).collect()),
+                .map(|v| v.iter().map(|i| i.text.to_string()).collect()),
             field_argument_infos: args,
             source_anchor: PAnchor {
-                source_unit_id: "ws:probe.al".to_string(),
+                source_unit_id: "ws:probe.al".into(),
                 start_line: 1,
                 start_column: 1,
                 end_line: 1,
                 end_column: 9,
-                syntax_kind: "call_expression".to_string(),
+                syntax_kind: "call_expression".into(),
             },
             loop_stack: vec!["loop0".to_string()],
             in_until_condition: true,
@@ -2302,9 +2302,9 @@ mod issue21_predicate_tests {
 
     fn info(kind: &str, value: &str) -> PExpressionInfo {
         PExpressionInfo {
-            kind: kind.to_string(),
-            text: value.to_string(),
-            value: Some(value.to_string()),
+            kind: kind.into(),
+            text: value.into(),
+            value: Some(value.into()),
             qualifier: None,
             member: None,
         }

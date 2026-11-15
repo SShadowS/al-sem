@@ -348,12 +348,12 @@ mod tests {
 
     fn dummy_anchor() -> PAnchor {
         PAnchor {
-            source_unit_id: "ws:test.al".to_string(),
+            source_unit_id: "ws:test.al".into(),
             start_line: 0,
             start_column: 0,
             end_line: 0,
             end_column: 0,
-            syntax_kind: "procedure".to_string(),
+            syntax_kind: "procedure".into(),
         }
     }
 

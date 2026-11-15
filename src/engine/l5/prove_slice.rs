@@ -840,7 +840,7 @@ fn route_sites<'a>(
             _ => (Vec::new(), 0),
         };
         out.push(RouteSite {
-            file: anchor.map(|a| a.source_unit_id.clone()),
+            file: anchor.map(|a| a.source_unit_id.to_string()),
             line: anchor.map(|a| a.start_line),
             shown,
             total,
@@ -1129,7 +1129,7 @@ pub(crate) fn compute_slice(
                 }
             }
             out.caught.push(CaughtSite {
-                file: anchor.map(|a| a.source_unit_id.clone()),
+                file: anchor.map(|a| a.source_unit_id.to_string()),
                 line: anchor.map(|a| a.start_line),
                 at: at.clone(),
             });
@@ -1171,7 +1171,7 @@ pub(crate) fn compute_slice(
             effect_type,
             op_id: ops[0].clone(),
             owner: rec.owner.to_string(),
-            file: anchor.map(|a| a.source_unit_id.clone()),
+            file: anchor.map(|a| a.source_unit_id.to_string()),
             line: anchor.map(|a| a.start_line),
             column: anchor.map(|a| a.start_column),
             op_name,
@@ -1211,7 +1211,7 @@ pub(crate) fn compute_slice(
                 effect_type: "ERROR_IMPLICIT",
                 op_id: op.to_string(),
                 owner: owner.to_string(),
-                file: anchor.map(|a| a.source_unit_id.clone()),
+                file: anchor.map(|a| a.source_unit_id.to_string()),
                 line: anchor.map(|a| a.start_line),
                 column: anchor.map(|a| a.start_column),
                 op_name: facts.as_ref().and_then(|f| f.op_name.clone()),

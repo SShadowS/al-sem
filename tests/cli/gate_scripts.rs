@@ -22,8 +22,8 @@ fn speed_gate_fails_when_a_timed_call_fails() {
         .args(["--base-exe", exe, "--head-exe", exe, "--out"])
         .arg(out.path())
         .env("ALSEM_SPEED_CACHE", out.path().join("cache"))
-        // TLS-65: no wait for a quiet machine (the test's own load is no issue).
-        .env("CDO_SPEED_QUIET_LOAD", "100000")
+        // TLS-65/TLS-76: no wait for a calm machine (the test's own load is no issue).
+        .env("CDO_SPEED_CALM_PRESSURE", "100")
         .output()
         .expect("spawn python3 scripts/cdo-speed");
     let text = format!(
@@ -70,9 +70,9 @@ fn speed_gate_refuses_more_rounds_than_routines() {
             ])
             .arg(out.path())
             .env("ALSEM_SPEED_CACHE", out.path().join("cache"))
-            // TLS-65 (Fable r1): no wait for a quiet machine, which on a busy box
-            // would stop the valid run with exit 2 after 10 min.
-            .env("CDO_SPEED_QUIET_LOAD", "100000")
+            // TLS-65 (Fable r1)/TLS-76: no wait for a calm machine, which on a busy
+            // box would hold the valid run for 10 min.
+            .env("CDO_SPEED_CALM_PRESSURE", "100")
             .output()
             .expect("spawn python3 scripts/cdo-speed");
         let text = format!(
@@ -297,7 +297,9 @@ fn cdo_gate_only_runs_and_judges_just_its_subset() {
 ///
 /// Mutations: drop `speed=0` from the `--only` branch -> the speed phase runs
 /// and the run is no longer the subset it claims; start `memory_sampler` only
-/// outside a subset -> `SAMPLED=no`.
+/// outside a subset -> `SAMPLED=no`; TLS-74: `gate_tree_rss` without its
+/// `engines=N` field, or counting nothing (`engines=0` written as is) -> no
+/// sample line matches -> `SAMPLED=no`.
 #[cfg(unix)]
 #[test]
 fn cdo_gate_only_run_builds_and_runs_just_its_phases() {
@@ -307,21 +309,26 @@ fn cdo_gate_only_run_builds_and_runs_just_its_phases() {
     let ws = tempfile::tempdir().unwrap();
     let calls = stub.path().join("calls");
     // The sampler starts once the build is done, and writes its first sample
-    // at once; each phase call waits (up to 10 s) to see it.
+    // at once; each phase call waits (up to 10 s) to see it. TLS-74: the phase
+    // call runs a stand-in `alsem` (bash under that name; `; :` keeps bash from
+    // replacing itself with `sleep`) meanwhile, so the
+    // sample it waits for must count one (`engines=` 1 or more).
     let sampler = std::fs::read_to_string("/sys/fs/cgroup/memory.stat").is_ok();
+    std::os::unix::fs::symlink("/bin/bash", stub.path().join("alsem")).unwrap();
     std::fs::write(
         stub.path().join("cargo"),
         format!(
             "#!/bin/sh\ns=''\n\
              case \" $* \" in *' --no-run '*) ;; *)\n\
                s=' SAMPLED=no'\n\
-               if [ '{sampler}' = true ]; then i=0; while [ $i -lt 100 ]; do\n\
-                 if ls \"$CARGO_TARGET_DIR\"/cdo-gate-logs/*/memory.timeline >/dev/null 2>&1; then s=' SAMPLED=yes'; break; fi\n\
-                 sleep 0.1; i=$((i + 1)); done; else s=''; fi ;;\n\
+               if [ '{sampler}' = true ]; then '{}' -c 'sleep 12; :' & a=$!; i=0; while [ $i -lt 100 ]; do\n\
+                 if grep -qsE '^[0-9]+ [0-9]+ [0-9]+ engines=[1-9][0-9]*' \"$CARGO_TARGET_DIR\"/cdo-gate-logs/*/memory.timeline; then s=' SAMPLED=yes'; break; fi\n\
+                 sleep 0.1; i=$((i + 1)); done; kill $a 2>/dev/null; else s=''; fi ;;\n\
              esac\n\
              echo \"ENFORCE=$ENFORCE_CDO_WS$s $*\" >> '{}'\n\
              CLAUDE_CODE_SESSION_ID=other CDO_SLOT_TOKEN= bash '{}' status >> '{}' 2>&1\n\
              echo 'test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s'\n",
+            stub.path().join("alsem").display(),
             calls.display(),
             concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-slot"),
             stub.path().join("slot-seen").display(),
@@ -526,11 +533,79 @@ fn speed_build_uses_the_gate_release_folder() {
     );
 }
 
+/// TLS-74: the summary's per-phase memory, from a hand-written run folder: each
+/// phase's peak is the highest container sample in [start, end) with that
+/// sample's gate MiB and `alsem` count; a sample at a phase's end second belongs
+/// to the next phase; a timeline from before TLS-74 (no `engines=`) shows "?";
+/// a phase that ended before the first sample prints nothing; peaks compare as
+/// numbers (1000 over 900).
+///
+/// Mutation (2026-11-15): the window's end made inclusive (`<=`) -> phase a's
+/// peak becomes b's first sample (900 MiB, 4 processes) and the test fails.
+#[cfg(unix)]
+#[test]
+fn cdo_gate_summary_names_each_phases_peak_memory() {
+    let dir = tempfile::tempdir().unwrap();
+    let logs = dir.path();
+    std::fs::write(
+        logs.join("phases.times"),
+        "90 start z\n95 end z\n100 start a\n110 end a\n110 start b\n130 end b\n130 start c\n140 end c\n",
+    )
+    .unwrap();
+    std::fs::write(
+        logs.join("memory.timeline"),
+        "100 300 200 engines=1 alsem/1:150\n\
+         104 500 450 engines=2 alsem/1:200 alsem/2:200\n\
+         108 400 380 engines=2 alsem/1:190\n\
+         110 900 880 engines=4 alsem/3:220\n\
+         120 1000 950 engines=3 alsem/3:210\n\
+         132 600 550 x/9:500\n",
+    )
+    .unwrap();
+    for name in ["a", "b", "c"] {
+        std::fs::write(logs.join(format!("{name}.status")), "0 10\n").unwrap();
+    }
+    let out = std::process::Command::new("bash")
+        .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-gate"))
+        .arg(format!("--summary={}", logs.display()))
+        .output()
+        .expect("spawn bash scripts/cdo-gate --summary");
+    let text = String::from_utf8_lossy(&out.stdout);
+    let line = |phase: &str| {
+        text.lines()
+            .find(|l| l.contains(&format!("memory {phase} ")))
+            .unwrap_or_else(|| panic!("no memory line for {phase}: {text}"))
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    assert!(
+        line("a").ends_with(
+            "peak 500 MiB (container, unreclaimable), the gate 450 MiB, alsem processes 2"
+        ),
+        "{text}"
+    );
+    assert!(
+        line("b").ends_with(
+            "peak 1000 MiB (container, unreclaimable), the gate 950 MiB, alsem processes 3"
+        ),
+        "{text}"
+    );
+    assert!(
+        line("c").ends_with(
+            "peak 600 MiB (container, unreclaimable), the gate 550 MiB, alsem processes ?"
+        ),
+        "{text}"
+    );
+    assert!(!text.contains("memory z "), "{text}");
+}
+
 /// TLS-32: the test phases' layout (`cdo-gate --layout` prints what
 /// `plan_layout` decides, the decision the gate makes after `output_cdo`).
-/// Lane 2 runs beside the impact phase at the most threads (2, then 1) whose
-/// need (impact's own worst 16,100 + lib_cdo's own worst at that count, 23,300
-/// or 18,700, + 4,096 MiB) fits BOTH the host's MemAvailable and the
+/// Lane 2 runs beside the impact phase at the most threads (4 down to 1) whose
+/// need (impact's own worst 16,100 + lane 2's worst: lib_cdo's own at that count,
+/// 17,900, 13,600 or 9,100 since TLS-35, but never under the 8,400 of the phases
+/// before it + 4,096 MiB) fits BOTH the host's MemAvailable and the
 /// container's free memory (`memory.max` minus what cannot be reclaimed);
 /// otherwise lane 2 runs after it; `CDO_GATE_SERIAL=1` wins over all. The host
 /// is a hand-written meminfo (`CDO_GATE_MEMINFO`) and the container a
@@ -541,6 +616,9 @@ fn speed_build_uses_the_gate_release_folder() {
 /// container reported `unlimited` instead of `unknown` (fail open) -> "no
 /// memory.stat" is called parallel; `container_free_mib` without its numeric
 /// check -> `anon garbage` reads as 0 and is called parallel at 2 threads.
+/// TLS-35 (2026-11-15): the thread loop back at `2 1` -> the free container
+/// is called parallel at 2 threads, not 4; lane 2's 8,400 floor dropped (the
+/// need from lib_cdo alone) -> 27,500 free MiB is called parallel at 1 thread.
 #[cfg(unix)]
 #[test]
 fn cdo_gate_runs_lane_two_beside_impact_only_with_the_memory() {
@@ -592,15 +670,17 @@ fn cdo_gate_runs_lane_two_beside_impact_only_with_the_memory() {
             "host {host} MiB, container use {used:?} MiB, serial {serial}: want {want:?}, got {got}"
         );
     };
-    let two = "parallel: lane 2 beside the impact phase, lib_cdo at 2 thread(s)";
-    let one = "parallel: lane 2 beside the impact phase, lib_cdo at 1 thread(s)";
-    // Needs: 2 threads 43,496 MiB, 1 thread 38,896 MiB.
-    check(60_000, Some(2_000), false, two); // container free 47,152
-    check(60_000, Some(8_000), false, one); // container free 41,152
-    check(60_000, Some(12_000), false, "sequential:"); // container free 37,152
-    check(41_000, Some(2_000), false, one); // the host is short for 2
-    check(30_000, Some(2_000), false, "sequential:"); // the host is short for 1
-    check(60_000, None, false, two); // no container limit: the host decides
+    let at = |n: u32| format!("parallel: lane 2 beside the impact phase, lib_cdo at {n} thread(s)");
+    // Needs: 4 threads 38,096 MiB, 3 33,796, 2 29,296, 1 28,596 (lane 2's
+    // phases before lib_cdo, 8,400, outweigh lib_cdo at 1 thread).
+    check(60_000, Some(2_000), false, &at(4)); // container free 47,152
+    check(60_000, Some(12_000), false, &at(3)); // container free 37,152
+    check(60_000, Some(18_000), false, &at(2)); // container free 31,152
+    check(60_000, Some(20_200), false, &at(1)); // container free 28,952
+    check(60_000, Some(21_652), false, "sequential:"); // container free 27,500
+    check(31_000, Some(2_000), false, &at(2)); // the host is short for 3
+    check(20_000, Some(2_000), false, "sequential:"); // the host is short for 1
+    check(60_000, None, false, &at(4)); // no container limit: the host decides
     check(60_000, Some(2_000), true, "serial:");
     // An unknown container is no room (review r2, sol: fail closed): a
     // `memory.stat` that cannot be read, or a `memory.max` that is no number.
@@ -641,10 +721,10 @@ fn cdo_gate_runs_lane_two_beside_impact_only_with_the_memory() {
         );
     }
     // Exactly at the need is enough; one MiB short is not.
-    check(60_000, Some(49_152 - 43_496), false, two);
-    check(60_000, Some(49_152 - 43_496 + 1), false, one);
-    check(43_496, Some(2_000), false, two);
-    check(43_495, Some(2_000), false, one);
+    check(60_000, Some(49_152 - 38_096), false, &at(4));
+    check(60_000, Some(49_152 - 38_096 + 1), false, &at(3));
+    check(38_096, Some(2_000), false, &at(4));
+    check(38_095, Some(2_000), false, &at(3));
 }
 
 /// TLS-32 review r3-r4 (sol): a TERM sent to the gate's PID alone, during its
@@ -1654,6 +1734,12 @@ fn speed_with_stub(
     let state = dir.join(format!("state-{}", extra.join("-")));
     std::fs::create_dir_all(&state).unwrap();
     std::fs::write(dir.join("loadavg"), load).unwrap();
+    // A calm machine unless a test passes its own pressure file.
+    std::fs::write(
+        dir.join("pressure"),
+        "some avg10=1.00 avg60=1.00 avg300=1.00 total=0\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0\n",
+    )
+    .unwrap();
     let ws = dir.join("ws");
     std::fs::create_dir_all(&ws).unwrap();
     let mut cmd = std::process::Command::new("python3");
@@ -1671,7 +1757,9 @@ fn speed_with_stub(
         .env("STUB_BUILD_S", "0.4")
         .env("CDO_SPEED_WARM_MIN_SECONDS", "0.2")
         .env("CDO_SPEED_LOADAVG_FILE", dir.join("loadavg"))
-        .env("CDO_SPEED_QUIET_LOAD", "6");
+        .env("CDO_SPEED_PRESSURE_FILE", dir.join("pressure"))
+        .env("CDO_SPEED_HOST_PRESSURE_FILE", dir.join("pressure"))
+        .env("CDO_SPEED_CALM_PRESSURE", "25");
     for (k, v) in env {
         cmd.env(k, v);
     }
@@ -1773,38 +1861,69 @@ fn speed_warm_up_cancels_the_second_side_penalty() {
     }
 }
 
-/// TLS-65: speed is never judged on a loaded machine and never skipped
-/// silently. With the 1-min load above QUIET_LOAD for the whole wait, the
-/// run stops before any server starts, with exit 2 and a FAIL line naming the
-/// load; cdo-gate's summary shows that line on its failed speed row.
+/// TLS-76 (replaces TLS-65's stop on a loaded machine). Admission waits on the
+/// host's pressure (avg60); the label comes from the stall share this container's
+/// own tasks saw over each timed block (`some total=`). Three cases, from
+/// hand-written PSI files:
+/// - the host stays at 70 % for the whole wait: the run goes ahead (never
+///   skipped, never exit 2), the verdict says "UNDER LOAD" naming both passes,
+///   speed.json lists them, and cdo-gate's summary shows it on the speed row;
+/// - the host is calm but a writer thread grows the container's stall total at
+///   ~80 % of wall time: the label names the blocks whose share passed 25 %
+///   (reviews r1, Fable and sol: a pre-pass reading alone sees an idle cgroup);
+/// - calm (both files flat at 1 %), with a 1-min load of 50 (TLS-65 refused
+///   that): no label.
 ///
-/// Mutation: the wait's timeout returning instead of raising -> the warm-up
-/// runs, PASS, exit 0.
+/// Mutations (2026-11-15): `wait_calm`'s timeout returning "not under load" ->
+/// no label in case 1; `under_load_label` ignoring the stall shares -> no label
+/// in case 2.
 #[cfg(target_os = "linux")]
 #[test]
-fn speed_waits_for_a_quiet_machine_and_fails_loudly() {
+fn speed_runs_under_load_and_says_so() {
+    // 1. The host stays loaded.
     let dir = tempfile::tempdir().unwrap();
+    let host = dir.path().join("host");
+    std::fs::write(&host, "some avg10=80.00 avg60=70.00 avg300=60.00 total=0\n").unwrap();
     let (code, text) = speed_with_stub(
         dir.path(),
         "50.0",
         &[],
         &[
-            ("CDO_SPEED_QUIET_WAIT_S", "1"),
-            ("CDO_SPEED_QUIET_POLL_S", "0.2"),
+            ("CDO_SPEED_HOST_PRESSURE_FILE", host.to_str().unwrap()),
+            ("CDO_SPEED_CALM_WAIT_S", "1"),
+            ("CDO_SPEED_CALM_POLL_S", "0.2"),
         ],
     );
-    assert_eq!(code, Some(2), "{text}");
+    let verdict_of = |text: &str| -> String {
+        text.lines()
+            .rfind(|l| l.contains("cdo-speed: PASS") || l.contains("cdo-speed: FAIL"))
+            .unwrap_or_else(|| panic!("a verdict line: {text}"))
+            .to_string()
+    };
+    let verdict = verdict_of(&text);
     assert!(
-        text.contains("cdo-speed: FAIL: cannot judge speed: the 1-min load stayed above 6.0"),
+        verdict.contains(
+            "UNDER LOAD: host pressure above 25.0 % for 1 s before warm-up pass(es) 1, 2"
+        ),
         "{text}"
     );
-    assert!(!text.contains("round 0"), "nothing was timed: {text}");
-    assert!(!text.contains("PASS"), "{text}");
+    assert!(code == Some(0) || code == Some(1), "{text}");
+    assert!(text.contains("round 0"), "the warm-up ran: {text}");
+    let json: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(dir.path().join("state-/out/speed.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        json["admitted_by_timeout"],
+        serde_json::json!([1, 2]),
+        "{json}"
+    );
+    assert_eq!(json["under_load"], true, "{json}");
 
-    // cdo-gate's summary of such a run: the speed row fails and says why.
+    // cdo-gate's summary of such a run: the label is on the speed row.
     let logs = dir.path().join("logs");
     std::fs::create_dir_all(&logs).unwrap();
-    std::fs::write(logs.join("speed.status"), "2 600\n").unwrap();
+    std::fs::write(logs.join("speed.status"), "0 600\n").unwrap();
     std::fs::write(logs.join("speed.log"), text.as_bytes()).unwrap();
     let out = std::process::Command::new("bash")
         .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-gate"))
@@ -1812,18 +1931,57 @@ fn speed_waits_for_a_quiet_machine_and_fails_loudly() {
         .output()
         .unwrap();
     let summary = String::from_utf8_lossy(&out.stdout);
-    assert_eq!(out.status.code(), Some(1), "{summary}");
-    // On the speed row itself (the other phases fail too: no status files).
     let speed_row = summary
         .lines()
         .find(|l| l.starts_with("cdo-gate:   speed "))
         .unwrap_or_else(|| panic!("a speed row: {summary}"));
-    assert!(
-        speed_row.contains("FAILED (2)") && speed_row.contains("FAIL: cannot judge speed"),
-        "{speed_row}"
+    assert!(speed_row.contains("UNDER LOAD"), "{speed_row}");
+
+    // 2. The host is calm; this container's own tasks stall ~80 % of the time.
+    let stalled = tempfile::tempdir().unwrap();
+    let own = stalled.path().join("own");
+    std::fs::write(&own, "some avg10=1.00 avg60=1.00 avg300=1.00 total=0\n").unwrap();
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let writer = {
+        let (own, stop) = (own.clone(), stop.clone());
+        std::thread::spawn(move || {
+            let t0 = std::time::Instant::now();
+            while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                let us = (t0.elapsed().as_micros() as f64 * 0.8) as u64;
+                let tmp = own.with_extension("tmp");
+                std::fs::write(
+                    &tmp,
+                    format!("some avg10=1.00 avg60=1.00 avg300=1.00 total={us}\n"),
+                )
+                .unwrap();
+                std::fs::rename(&tmp, &own).unwrap();
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+        })
+    };
+    let (_, text) = speed_with_stub(
+        stalled.path(),
+        "50.0",
+        &[],
+        &[("CDO_SPEED_PRESSURE_FILE", own.to_str().unwrap())],
     );
+    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    writer.join().unwrap();
+    let verdict = verdict_of(&text);
     assert!(
-        summary.contains("FAIL: cannot judge speed"),
-        "the reason on the speed row: {summary}"
+        // The warm-up passes only: the stub's rounds may end between two writer
+        // updates (20 ms) and read 0 % (review r2, sol).
+        verdict.contains("UNDER LOAD: stall share above 25.0 % in warm-up 1, warm-up 2"),
+        "{text}"
+    );
+    assert!(!verdict.contains("host pressure"), "{verdict}");
+
+    // 3. Calm (1 %), with the same 1-min load of 50: no label.
+    let calm = tempfile::tempdir().unwrap();
+    let (_, text) = speed_with_stub(calm.path(), "50.0", &[], &[]);
+    assert!(!text.contains("UNDER LOAD"), "{text}");
+    assert!(
+        text.contains("cdo-speed: PASS") || text.contains("cdo-speed: FAIL"),
+        "{text}"
     );
 }

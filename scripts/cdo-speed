@@ -26,9 +26,12 @@ rounds):
     builds the CDO model (`build`), then one call of each tool builds the
     per-revision artifacts and the test universe (`warm-tests`). The second pass
     flips every call's side order, so each side is timed once building second
-    (measured once at x1.167 under load, ENG-81). Before each pass the 1-min load must fall to
-    QUIET_LOAD (max(6, cores / 3)); after QUIET_WAIT_S (600 s) the run stops with
-    exit 2, "cannot judge speed" (cdo-gate then fails: never a PASS without speed);
+    (measured once at x1.167 under load, ENG-81). Before each pass the host's CPU
+    pressure (`some avg60`) must fall to CALM_PRESSURE; after CALM_WAIT_S (600 s) the
+    pass runs anyway. Each timed block's CPU stall share (this container's `some total`
+    over the block) is measured, and a block above CALM_PRESSURE (or a pass admitted by
+    the timeout) labels the verdict "UNDER LOAD" with the shares: the same limits judge
+    it, nothing is skipped (TLS-76);
   rounds 1..N (default 3, at most 5, as many as ROUND_ROUTINES has; a larger --rounds is
     refused before anything starts): one CDO routine per round, a different one each round
     (a resident answer is kept, so asking the same routine again measures
@@ -70,8 +73,8 @@ a ratio of failed calls (a wrong workspace answers in 0.01 s) measures nothing
 (TLS-10: a run on a wrong workspace once printed PASS).
 
 Exit: 0 pass, 1 fail (slower or larger, or a call failed), 2 cannot run (usage,
-build, an MCP request that failed or timed out, or the machine stayed too loaded to
-start a warm-up pass). Linux only (/proc).
+build, an MCP request that failed or timed out). A run under load exits as any other,
+labelled. Linux only (/proc).
 """
 import argparse
 import fcntl
@@ -111,22 +114,36 @@ WARM_MIN_SECONDS = float(os.environ.get("CDO_SPEED_WARM_MIN_SECONDS", "20.0"))
 # ~9 (ENG-81; not reproduced in TLS-65's own loaded run, x1.02), and one quiet
 # TLS-65 run read x1.096 with head second against x1.004 flipped.
 WARM_SAMPLES = 2
-# Before each warm-up pass, the 1-min load must be at most QUIET_LOAD; after
-# QUIET_WAIT_S of waiting the run stops with exit 2 ("cannot judge"), which
-# fails cdo-gate's speed phase: no warm-up pass starts on a loaded machine, and
-# speed is never skipped silently. (The load is checked before each pass, not
-# during one: a load that rises mid-pass is recorded, not judged.)
-QUIET_LOAD = float(os.environ.get("CDO_SPEED_QUIET_LOAD", max(6, (os.cpu_count() or 1) / 3)))
-QUIET_WAIT_S = float(os.environ.get("CDO_SPEED_QUIET_WAIT_S", "600"))
-QUIET_POLL_S = float(os.environ.get("CDO_SPEED_QUIET_POLL_S", "10"))
+# ⟨TLS-76⟩ CPU pressure, not the 1-min load average (TLS-65's signal), which
+# counts other projects' runnable work on this shared host: it read 50-230 while
+# the CPU was ~78 % idle and stopped every gate (owner q-20261115T181612-b2891501).
+# Two uses (reviews r1, Fable and sol: a cgroup's pressure counts only its own
+# tasks' stalls, so an idle container reads ~0 whatever the host does):
+# - Admission: before each warm-up pass, the HOST's `some avg60`
+#   (`/proc/pressure/cpu`; a minute, so one dip in bursty load does not pass) must
+#   be at most CALM_PRESSURE; after CALM_WAIT_S the pass runs anyway. This only
+#   lowers the odds of a loaded run.
+# - The label: the share of each timed block (each warm-up pass, the rounds) in
+#   which some task of THIS container waited for a CPU, from the cgroup's
+#   `some total=` stall microseconds at its start and end (exact over the block,
+#   no averaging window). A block above CALM_PRESSURE, or a pass admitted only by
+#   the timeout, labels the verdict "UNDER LOAD" with the shares; the same limits
+#   judge it (principle 6: label, never hide; 9: never weaken a gate).
+# Calibration: see the CHANGELOG's TLS-76 entry.
+CALM_PRESSURE = float(os.environ.get("CDO_SPEED_CALM_PRESSURE", "15"))
+CALM_WAIT_S = float(os.environ.get("CDO_SPEED_CALM_WAIT_S", "600"))
+CALM_POLL_S = float(os.environ.get("CDO_SPEED_CALM_POLL_S", "10"))
+HOST_PRESSURE = "/proc/pressure/cpu"
+OWN_PRESSURE = ("/sys/fs/cgroup/cpu.pressure", "/proc/pressure/cpu")
 
 
-TEST_HOOKS = ("CDO_SPEED_WARM_MIN_SECONDS", "CDO_SPEED_LOADAVG_FILE", "CDO_SPEED_QUIET_LOAD",
-              "CDO_SPEED_QUIET_WAIT_S", "CDO_SPEED_QUIET_POLL_S")
+TEST_HOOKS = ("CDO_SPEED_WARM_MIN_SECONDS", "CDO_SPEED_LOADAVG_FILE", "CDO_SPEED_PRESSURE_FILE",
+              "CDO_SPEED_HOST_PRESSURE_FILE", "CDO_SPEED_CALM_PRESSURE", "CDO_SPEED_CALM_WAIT_S",
+              "CDO_SPEED_CALM_POLL_S")
 
 
 def load_1min():
-    """The 1-min load average (CDO_SPEED_LOADAVG_FILE: a test hook read instead)."""
+    """The 1-min load average, recorded only (CDO_SPEED_LOADAVG_FILE: a test hook read instead)."""
     path = os.environ.get("CDO_SPEED_LOADAVG_FILE")
     if path:
         with open(path) as f:
@@ -134,29 +151,106 @@ def load_1min():
     return os.getloadavg()[0]
 
 
-class TooLoaded(Exception):
-    """The machine stayed above QUIET_LOAD for QUIET_WAIT_S."""
+def psi_some(paths, key):
+    """The `some` line's `key` (`avg10`, `avg60`, `total`) from the first readable
+    PSI file of `paths`, as (value, path), or (None, None)."""
+    for path in paths:
+        try:
+            with open(path) as f:
+                for line in f:
+                    fields = line.split()
+                    if fields and fields[0] == "some":
+                        for kv in fields[1:]:
+                            if kv.startswith(key + "="):
+                                return float(kv[len(key) + 1:]), path
+        except (OSError, ValueError):
+            continue
+    return None, None
 
 
-def wait_quiet(what):
-    """Wait until the 1-min load is at most QUIET_LOAD; its load then."""
+def host_files():
+    hook = os.environ.get("CDO_SPEED_HOST_PRESSURE_FILE")
+    return [hook] if hook else [HOST_PRESSURE]
+
+
+def own_files():
+    hook = os.environ.get("CDO_SPEED_PRESSURE_FILE")
+    return [hook] if hook else list(OWN_PRESSURE)
+
+
+def cpu_pressure():
+    """This container's `some avg10` (recorded per call), as (value, path)."""
+    return psi_some(own_files(), "avg10")
+
+
+class Stalls:
+    """This container's CPU stall share over one timed block: the `some total=`
+    microseconds at its start and end, over its wall time."""
+
+    def __init__(self):
+        self.total0, _ = psi_some(own_files(), "total")
+        self.t0 = time.monotonic()
+
+    def share(self):
+        """The share in percent, or None when no total can be read."""
+        total, _ = psi_some(own_files(), "total")
+        wall = time.monotonic() - self.t0
+        if total is None or self.total0 is None or wall <= 0:
+            return None
+        return 100.0 * (total - self.total0) / 1e6 / wall
+
+
+def shares_text(blocks):
+    """`warm-up 1 3.2 %, ...` (or "not readable" for a block with no total)."""
+    return ", ".join(f"{name} {'not readable' if s is None else f'{s:.1f} %'}"
+                     for name, s in blocks) or "none timed"
+
+
+def under_load_label(calm, blocks):
+    """The verdict's label: " UNDER LOAD: ..." when a timed block's stall share
+    passed CALM_PRESSURE or a pass was admitted only by the timeout; a note when
+    the pressure could not be read; else ""."""
+    high = [name for name, s in blocks if s is not None and s > CALM_PRESSURE]
+    timed_out = [i + 1 for i, (_, loaded) in enumerate(calm) if loaded]
+    if high or timed_out:
+        why = []
+        if high:
+            why.append(f"stall share above {CALM_PRESSURE:.1f} % in {', '.join(high)}")
+        if timed_out:
+            why.append(f"host pressure above {CALM_PRESSURE:.1f} % for {CALM_WAIT_S:.0f} s "
+                       f"before warm-up pass(es) {', '.join(map(str, timed_out))}")
+        return f" UNDER LOAD: {'; '.join(why)} (shares: {shares_text(blocks)})"
+    if any(loaded is None for _, loaded in calm) or any(s is None for _, s in blocks):
+        return f" (CPU pressure not fully readable: shares {shares_text(blocks)})"
+    return ""
+
+
+def wait_calm(what):
+    """Wait until the host's `some avg60` is at most CALM_PRESSURE. Returns (the
+    pressure then, True when the pass was admitted only by the CALM_WAIT_S timeout,
+    None when no host pressure can be read)."""
     start = time.monotonic()
     said = False
     while True:
-        load = load_1min()
-        if load <= QUIET_LOAD:
+        p, source = psi_some(host_files(), "avg60")
+        if p is None:
+            log(f"{what}: no host CPU pressure readable ({', '.join(host_files())}): not checked")
+            return None, None
+        if p <= CALM_PRESSURE:
             if said:
-                log(f"{what}: load {load:.1f}, quiet enough after {time.monotonic() - start:.0f} s")
-            return load
+                log(f"{what}: host CPU pressure {p:.1f} % (avg60, {source}), calm enough after "
+                    f"{time.monotonic() - start:.0f} s")
+            return p, False
         waited = time.monotonic() - start
-        if waited >= QUIET_WAIT_S:
-            raise TooLoaded(f"the 1-min load stayed above {QUIET_LOAD:.1f} for {waited:.0f} s "
-                            f"(now {load:.1f})")
+        if waited >= CALM_WAIT_S:
+            log(f"{what}: host CPU pressure {p:.1f} % (avg60) stayed above {CALM_PRESSURE:.1f} % "
+                f"for {waited:.0f} s: running anyway, UNDER LOAD")
+            return p, True
         if not said:
-            log(f"{what}: load {load:.1f} is above {QUIET_LOAD:.1f}: waiting (up to "
-                f"{QUIET_WAIT_S:.0f} s) for a quiet machine")
+            log(f"{what}: host CPU pressure {p:.1f} % (avg60, {source}) is above "
+                f"{CALM_PRESSURE:.1f} %: waiting (up to {CALM_WAIT_S:.0f} s)")
             said = True
-        time.sleep(QUIET_POLL_S)
+        time.sleep(CALM_POLL_S)
 
 RRID = "CDO E-Mail Handler::RunReportID"
 ISSUE = "CDO Issue Document::IssueReminder"
@@ -667,14 +761,16 @@ def run_round(rnd, servers, records, warm_pass=0):
         tag = f"r0.{warm_pass + 1}" if rnd == 0 else f"r{rnd}"
         for side in side_order:
             load = load_1min()
+            pressure, _ = cpu_pressure()
             wall, cpu, sha, code, err = servers[side].call(tool, args)
             exit_note = f"  exit {code}" if code != 0 else ""
+            shown = "?" if pressure is None else f"{pressure:.1f}"
             log(f"  {tag} {cid:<12} {side:<5} wall {wall:7.2f} s  cpu {cpu:7.2f} s"
-                f"  load {load:5.1f}{exit_note}")
+                f"  load {load:5.1f}  pressure {shown:>5}{exit_note}")
             if code != 0:
                 raise CallFailed(f"{tag} {cid} ({tool}) on {side} exited {code}", err)
             records.append(dict(call=cid, side=side, round=rnd, warm_pass=warm_pass,
-                                wall=wall, cpu=cpu, sha=sha, load=load))
+                                wall=wall, cpu=cpu, sha=sha, load=load, pressure=pressure))
 
 
 def judge(records):
@@ -818,24 +914,34 @@ def main():
     if hooks:
         log(f"test hooks set (a real gate sets none): {' '.join(hooks)}")
     load0 = load_1min()
+    pressure0, _ = cpu_pressure()
     records = []
     servers = {}
+    # Per warm-up pass: (the host's pressure then, admitted only by the timeout).
+    calm = []
+    # Per timed block (each warm-up pass, the rounds): (name, its stall share).
+    blocks = []
+    cur = None
     # The peak RSS over every server pair (the warm-up passes start fresh ones).
     peaks = {"base": 0.0, "head": 0.0}
     try:
         for p in range(args.warm_samples):
-            wait_quiet(f"warm-up {p + 1} of {args.warm_samples}")
+            calm.append(wait_calm(f"warm-up {p + 1} of {args.warm_samples}"))
+            cur = (f"warm-up {p + 1}", Stalls())
             servers["base"] = Server(base_exe, ws, outdir, f"base{p + 1}")
             servers["head"] = Server(head_exe, ws, outdir, f"head{p + 1}")
             first = "base" if p % 2 == 0 else "head"
             log(f"round 0, warm-up {p + 1} of {args.warm_samples} (fresh servers; "
                 f"{first} builds first)")
             run_round(0, servers, records, warm_pass=p)
+            blocks.append((cur[0], cur[1].share()))
+            cur = None
             if p + 1 < args.warm_samples:
                 for side, s in servers.items():
                     peaks[side] = max(peaks[side], s.peak_mib())
                     s.close()
                 servers = {}
+        cur = ("rounds", Stalls())
         rnd = 0
         while True:
             rnd += 1
@@ -847,18 +953,20 @@ def main():
                 log(f"the rounds disagree about {', '.join(noisy)}: one more round")
                 continue
             break
+        blocks.append((cur[0], cur[1].share()))
+        cur = None
         for side in servers:
             peaks[side] = max(peaks[side], servers[side].peak_mib())
-    except TooLoaded as e:
-        log(f"FAIL: cannot judge speed: {e.args[0]}; no warm-up pass was started on a loaded "
-            f"machine and nothing is judged (cdo-gate fails this phase; rerun on a quieter "
-            f"machine)")
-        return 2
     except CallFailed as e:
         what, err = e.args
+        if cur is not None:
+            blocks.append((cur[0], cur[1].share()))
         log(f"FAIL: {what}; nothing is judged on a failed call")
         for line in err or ["(no stderr)"]:
             log(f"  | {line}")
+        label = under_load_label(calm, blocks)
+        if label:
+            log(f"FAIL{label}")
         return 1
     finally:
         for s in servers.values():
@@ -923,6 +1031,9 @@ def main():
     if mem_ratio > MEM_LIMIT:
         failed.append(f"peak memory x{mem_ratio:.2f} (limit {MEM_LIMIT})")
     elapsed = time.monotonic() - t_start
+    label = under_load_label(calm, blocks)
+    under = [i + 1 for i, (_, loaded) in enumerate(calm) if loaded]
+    unknown = any(loaded is None for _, loaded in calm) or any(s is None for _, s in blocks)
     with open(os.path.join(outdir, "speed.json"), "w") as f:
         json.dump(dict(base=base_sha, head=head_label, workspace=ws, rounds=rnd,
                        limits=dict(cpu=CPU_LIMIT, wall=WALL_LIMIT, mem=MEM_LIMIT,
@@ -931,15 +1042,21 @@ def main():
                        build_s=t_built - t_start, timing_s=elapsed - (t_built - t_start),
                        peaks_mib=peaks, warm_rows=warm_rows, rows=rows, records=records,
                        failed=failed, loadavg_start=load0, loadavg_end=load_1min(),
-                       warm_samples=args.warm_samples, quiet_load=QUIET_LOAD),
+                       pressure_start=pressure0, pressure_end=cpu_pressure()[0],
+                       calm_pressure=CALM_PRESSURE, admitted_by_timeout=under,
+                       stall_shares=dict(blocks), under_load=bool(label.startswith(" UNDER")),
+                       pressure_unknown=unknown, warm_samples=args.warm_samples),
                   f, indent=1)
     log(f"build {t_built - t_start:.0f} s, timing {elapsed - (t_built - t_start):.0f} s, "
-        f"load average {load0:.1f} at the start, {load_1min():.1f} at the end")
+        f"load average {load0:.1f} at the start, {load_1min():.1f} at the end; "
+        f"CPU stall share of this container: {shares_text(blocks)}")
     if failed:
         for line in failed:
             log(f"FAIL: {line}")
+        if label:
+            log(f"FAIL{label}")
         return 1
-    log("PASS")
+    log(f"PASS{label}")
     return 0
 
 

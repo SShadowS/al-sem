@@ -154,7 +154,7 @@ pub(crate) fn dep_routine_to_l3(r: &ProjectedRoutine, object_type: &str) -> Mode
                 ts_known(false)
             };
             crate::program::model::workspace::ModelRecordVariable {
-                id: format!("{}/rv/{}", r.id, p.name.to_lowercase()),
+                id: format!("{}/rv/{}", r.id, p.name.to_lowercase()).into(),
                 name: p.name.clone(),
                 table_name: crate::program::model::record_types::record_table_name_of(&p.type_text),
                 table_id: None,
@@ -234,12 +234,13 @@ pub(crate) fn dep_routine_to_l3(r: &ProjectedRoutine, object_type: &str) -> Mode
         // observed. If dep bodies ever become available, revisit these defaults
         // (empty identifier_references would otherwise read as d19 false-positives).
         source_anchor: crate::program::body::features::PAnchor {
-            source_unit_id: String::new(),
+            // ENG-85: one shared empty text, not an allocation per symbol-only routine.
+            source_unit_id: crate::program::body::features::shared_vocab(""),
             start_line: 0,
             start_column: 0,
             end_line: 0,
             end_column: 0,
-            syntax_kind: String::new(),
+            syntax_kind: crate::program::body::features::shared_vocab(""),
         },
         declaration_start_line: 0,
         identifier_references: Vec::new(),

@@ -65,8 +65,10 @@ use serde::{Deserialize, Serialize};
 /// `enclosingRoutineId` is dropped (it embeds the modelInstanceId-dependent id).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PAnchor {
+    /// ENG-85: shared, not owned: every anchor of a file holds the same text
+    /// (`SharedStr` compares, prints and serializes as its text).
     #[serde(rename = "sourceUnitId")]
-    pub source_unit_id: String,
+    pub source_unit_id: crate::program::str_pool::SharedStr,
     #[serde(rename = "startLine")]
     pub start_line: u32,
     #[serde(rename = "startColumn")]
@@ -75,9 +77,59 @@ pub struct PAnchor {
     pub end_line: u32,
     #[serde(rename = "endColumn")]
     pub end_column: u32,
+    /// ENG-85: one shared text per grammar kind ([`syntax_kind_of`]).
     #[serde(rename = "syntaxKind")]
-    pub syntax_kind: String,
+    pub syntax_kind: crate::program::str_pool::SharedStr,
 }
+
+/// ENG-85: the file id for an anchor, shared with the previous anchor built on this thread
+/// when the text is the same (a walk builds one file's anchors in a row), so a file's anchors
+/// hold one allocation, not one each.
+pub fn anchor_unit(unit: &str) -> crate::program::str_pool::SharedStr {
+    use crate::program::str_pool::SharedStr;
+    thread_local! {
+        static LAST: std::cell::RefCell<Option<SharedStr>> = const { std::cell::RefCell::new(None) };
+    }
+    LAST.with(|last| {
+        let mut last = last.borrow_mut();
+        match last.as_ref() {
+            Some(s) if s.as_str() == unit => s.clone(),
+            _ => {
+                let s = SharedStr::from(unit);
+                *last = Some(s.clone());
+                s
+            }
+        }
+    })
+}
+
+/// ENG-85: a text from a closed vocabulary (an anchor's syntax kind, an expression's kind, an
+/// argument's source kind), one allocation per text per thread. Only for closed sets: the
+/// thread keeps every text it saw.
+pub fn shared_vocab(kind: &str) -> crate::program::str_pool::SharedStr {
+    use crate::program::str_pool::SharedStr;
+    thread_local! {
+        static KINDS: std::cell::RefCell<crate::fxhash::FxHashSet<SharedStr>> =
+            std::cell::RefCell::new(crate::fxhash::FxHashSet::default());
+    }
+    KINDS.with(|kinds| {
+        let mut kinds = kinds.borrow_mut();
+        if let Some(s) = kinds.get(kind) {
+            return s.clone();
+        }
+        let s = SharedStr::from(kind);
+        // Bounded however it is called: past the cap a text is no longer kept (it is still
+        // right, just not shared), so a long-running engine thread never grows this set.
+        if kinds.len() < SHARED_VOCAB_CAP {
+            kinds.insert(s.clone());
+        }
+        s
+    })
+}
+
+/// Texts [`shared_vocab`] keeps per thread: well above the grammar's kind names (~1,500)
+/// plus the expression and argument kinds.
+pub const SHARED_VOCAB_CAP: usize = 4096;
 
 impl PAnchor {
     /// 0-based containment: is `(line, column)` within `[start, end]` (inclusive)?
@@ -101,14 +153,16 @@ impl PAnchor {
 /// Structured expression classification (`model/expression.ts`).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PExpressionInfo {
-    pub kind: String,
-    pub text: String,
+    /// ENG-85: a closed vocabulary ([`shared_vocab`]).
+    pub kind: crate::program::str_pool::SharedStr,
+    /// ENG-85: shared with `value` when they are the same text.
+    pub text: crate::program::str_pool::SharedStr,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub value: Option<String>,
+    pub value: Option<crate::program::str_pool::SharedStr>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub qualifier: Option<String>,
+    pub qualifier: Option<crate::program::str_pool::SharedStr>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub member: Option<String>,
+    pub member: Option<crate::program::str_pool::SharedStr>,
 }
 
 /// Temp-state of a record variable / op.
@@ -182,15 +236,17 @@ pub enum PCallee {
 pub struct PCallArgumentBinding {
     #[serde(rename = "parameterIndex")]
     pub parameter_index: u32,
+    /// ENG-85: a closed vocabulary ([`shared_vocab`]).
     #[serde(rename = "sourceKind")]
-    pub source_kind: String,
+    pub source_kind: crate::program::str_pool::SharedStr,
     #[serde(rename = "sourceVariableName", skip_serializing_if = "Option::is_none")]
     pub source_variable_name: Option<String>,
+    /// ENG-85: shares the record variable's own id.
     #[serde(
         rename = "sourceRecordVariableId",
         skip_serializing_if = "Option::is_none"
     )]
-    pub source_record_variable_id: Option<String>,
+    pub source_record_variable_id: Option<crate::program::str_pool::SharedStr>,
     #[serde(
         rename = "sourceParameterIndex",
         skip_serializing_if = "Option::is_none"
@@ -547,7 +603,8 @@ impl Eq for PLoop {}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Eq)]
 pub struct PRecordVariable {
-    pub id: String,
+    /// ENG-85: the variable's shared id ([`super::scope::RecordVariable::id`]).
+    pub id: crate::program::str_pool::SharedStr,
     pub name: String,
     #[serde(rename = "tableName", skip_serializing_if = "Option::is_none")]
     pub table_name: Option<String>,
@@ -1164,6 +1221,62 @@ mod tests {
         temp_state_suppresses,
     };
 
+    /// ENG-85: the anchor and vocabulary caches answer the text asked for, and share the
+    /// allocation only when the text is the same: alternating files and kinds never hand one
+    /// back for another.
+    #[test]
+    fn shared_text_caches_answer_the_text_asked_for() {
+        use super::{anchor_unit, shared_vocab};
+        use crate::program::str_pool::SharedStr;
+        let a1 = anchor_unit("ws:A.al");
+        let a2 = anchor_unit("ws:A.al");
+        let b = anchor_unit("ws:B.al");
+        let a3 = anchor_unit("ws:A.al");
+        assert_eq!(
+            (a1.as_str(), b.as_str(), a3.as_str()),
+            ("ws:A.al", "ws:B.al", "ws:A.al")
+        );
+        assert!(
+            SharedStr::ptr_eq(&a1, &a2),
+            "consecutive equal file ids share"
+        );
+        let k1 = shared_vocab("identifier");
+        let k2 = shared_vocab("call_expression");
+        let k3 = shared_vocab("identifier");
+        assert_eq!(
+            (k1.as_str(), k2.as_str()),
+            ("identifier", "call_expression")
+        );
+        assert!(
+            SharedStr::ptr_eq(&k1, &k3),
+            "a vocabulary text is one allocation"
+        );
+    }
+
+    /// ENG-85: the per-thread vocabulary set is bounded (a resident engine's pool threads
+    /// live across every refresh): past `SHARED_VOCAB_CAP` texts a new text is still answered
+    /// right but no longer kept, while the texts kept before stay shared.
+    #[test]
+    fn the_shared_vocabulary_stops_growing_at_its_cap() {
+        use super::{SHARED_VOCAB_CAP, shared_vocab};
+        use crate::program::str_pool::SharedStr;
+        std::thread::spawn(|| {
+            for i in 0..SHARED_VOCAB_CAP {
+                shared_vocab(&format!("k{i}"));
+            }
+            let first = (shared_vocab("k0"), shared_vocab("k0"));
+            assert!(SharedStr::ptr_eq(&first.0, &first.1), "kept below the cap");
+            let past = (shared_vocab("past"), shared_vocab("past"));
+            assert_eq!(past.0.as_str(), "past");
+            assert!(
+                !SharedStr::ptr_eq(&past.0, &past.1),
+                "not kept past the cap"
+            );
+        })
+        .join()
+        .expect("the vocabulary thread");
+    }
+
     fn ts(kind: &str, value: Option<bool>, param: Option<u32>) -> PTempState {
         PTempState {
             kind: kind.to_string(),
@@ -1205,7 +1318,7 @@ mod tests {
         let info =
             |kind: &str, value: Option<&str>, q: Option<&str>, m: Option<&str>| PExpressionInfo {
                 kind: kind.into(),
-                text: String::new(),
+                text: "".into(),
                 value: value.map(Into::into),
                 qualifier: q.map(Into::into),
                 member: m.map(Into::into),
@@ -1275,7 +1388,7 @@ mod tests {
     #[test]
     fn receiver_flag_is_not_serialized_and_not_compared() {
         let row = PRecordVariable {
-            id: "r/rv/rec".to_string(),
+            id: "r/rv/rec".into(),
             name: "Rec".to_string(),
             table_name: None,
             temp_state: PTempState {

@@ -823,7 +823,7 @@ impl<'m> RollupCx<'m> {
     #[must_use]
     pub fn default_file(&self, stable_id: &str) -> Option<String> {
         let f = &self.names.row(stable_id)?.source_anchor.source_unit_id;
-        (!f.is_empty()).then(|| f.clone())
+        (!f.is_empty()).then(|| f.to_string())
     }
 
     /// The display of a stable routine id (V3 §2.1, [`format_routine`],

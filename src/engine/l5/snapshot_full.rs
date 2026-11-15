@@ -1605,7 +1605,7 @@ fn build_inventory_doc(
             let a = &r.source_anchor;
             let mut anchor: IndexMap<String, CborValue> = IndexMap::new();
             anchor.insert("column".into(), CborValue::Int(i64::from(a.start_column)));
-            anchor.insert("file".into(), CborValue::Text(a.source_unit_id.clone()));
+            anchor.insert("file".into(), CborValue::Text(a.source_unit_id.to_string()));
             anchor.insert(
                 "line".into(),
                 CborValue::Int(i64::from(crate::engine::line_base::shown(a.start_line))),

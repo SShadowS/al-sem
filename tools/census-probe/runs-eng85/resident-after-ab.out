@@ -1,0 +1,197 @@
+cdo-slot: waiting: held by tools (TLS-35 test memory before/after (6 runs of one CDO lib test, ~12 min)) since 2026-11-15T16:46:35Z (5 min), session d2bfaa88-a1b8-4b55-8bc1-15ddd941c4a9, for PID 1324115
+cdo-slot: waiting: held by tools (TLS-35 test memory before/after (6 runs of one CDO lib test, ~12 min)) since 2026-11-15T16:46:35Z (6 min), session d2bfaa88-a1b8-4b55-8bc1-15ddd941c4a9, for PID 1324115
+cdo-slot: waiting: held by tools (TLS-35 test memory before/after (6 runs of one CDO lib test, ~12 min)) since 2026-11-15T16:46:35Z (7 min), session d2bfaa88-a1b8-4b55-8bc1-15ddd941c4a9, for PID 1324115
+cdo-slot: waiting: held by tools (TLS-35 test memory before/after (6 runs of one CDO lib test, ~12 min)) since 2026-11-15T16:46:35Z (8 min), session d2bfaa88-a1b8-4b55-8bc1-15ddd941c4a9, for PID 1324115
+cdo-slot: waiting: held by tools (TLS-35 test memory before/after (6 runs of one CDO lib test, ~12 min)) since 2026-11-15T16:46:35Z (9 min), session d2bfaa88-a1b8-4b55-8bc1-15ddd941c4a9, for PID 1324115
+cdo-slot: waiting: held by tools (TLS-35 test memory before/after (6 runs of one CDO lib test, ~12 min)) since 2026-11-15T16:46:35Z (10 min), session d2bfaa88-a1b8-4b55-8bc1-15ddd941c4a9, for PID 1324115
+cdo-slot: waiting: held by tools (TLS-35 test memory before/after (6 runs of one CDO lib test, ~12 min)) since 2026-11-15T16:46:35Z (11 min), session d2bfaa88-a1b8-4b55-8bc1-15ddd941c4a9, for PID 1324115
+cdo-slot: taken by engine (ENG-85 census after A+B)
+######## resident /work/src/cdo-baseline/Cloud routine IssueReminder
+  read                                     live       6.3 MiB  (+     6.3)  peak      48.9 MiB  allocs       2616  0.1s
+  build (session + target)                 live    2581.1 MiB  (+  2574.9)  peak    2591.1 MiB  allocs   21880786  22.3s
+  ask query (round 0) exit 0               live    4657.9 MiB  (+  2076.8)  peak    5011.2 MiB  allocs   31114822  42.2s
+  ask explain (round 0) exit 0             live    4684.2 MiB  (+    26.3)  peak    4791.0 MiB  allocs   31333254  2.7s
+  ask prove (round 0) exit 0               live    4951.8 MiB  (+   267.6)  peak    5095.5 MiB  allocs   33660801  5.7s
+  ask digest (round 0) exit 0              live    4951.8 MiB  (+     0.0)  peak    5038.3 MiB  allocs   33660802  1.0s
+  ask query (round 1) exit 0               live    4951.8 MiB  (+     0.0)  peak    5030.8 MiB  allocs   33660803  1.6s
+  ask explain (round 1) exit 0             live    4951.8 MiB  (+     0.0)  peak    5058.6 MiB  allocs   33660804  1.4s
+  ask prove (round 1) exit 0               live    4951.8 MiB  (+     0.0)  peak    5024.0 MiB  allocs   33660805  0.8s
+  ask digest (round 1) exit 0              live    4951.8 MiB  (+     0.0)  peak    5038.3 MiB  allocs   33660806  1.0s
+  fills: {"det": 1, "explain_indexes": 1, "fold": 1, "l4": 1, "raw": 1, "run": 1, "tree": 1, "tree_base": 1, "witness": 1}
+-- drop deltas (MiB, allocs):
+  fold.direct_full                                               56.32 MiB     234995 allocs
+  fold.coverage                                                  46.57 MiB     469960 allocs
+  fold.derived                                                    0.00 MiB          1 allocs
+  pd: producers 2744 states 3359413 (cap 3359413, 88 B) links 4768419 (cap 4768419, 16 B) edges 17873 by_routine 9433
+  fold.pd.by_routine                                             26.27 MiB       9434 allocs
+  fold.pd.links                                                  72.76 MiB          1 allocs
+  fold.pd.states                                                283.78 MiB     113686 allocs
+  fold.pd.edges                                                   8.76 MiB      72066 allocs
+  fold.pd.producers                                               2.63 MiB      24697 allocs
+  fold.pd_digests                                                 6.20 MiB      34205 allocs
+  fold.cones                                                    747.79 MiB    2569021 allocs
+  artifact.witness (1 keys)                                      31.69 MiB     268895 allocs
+  artifact.explain_indexes (1 keys)                              26.24 MiB     218256 allocs
+  artifact.run (1 keys)                                          47.31 MiB      99132 allocs
+  artifact.det (1 keys)                                         313.62 MiB    2284825 allocs
+  artifact.raw (1 keys)                                           6.09 MiB      44923 allocs
+  artifact.fold (0 keys)                                          0.00 MiB          0 allocs
+  artifact.l4 (1 keys)                                           83.62 MiB     668568 allocs
+  artifact.rules (0 keys)                                         0.00 MiB          0 allocs
+  artifact.ordering (0 keys)                                      0.00 MiB          0 allocs
+  probe's inputs handle                                           0.00 MiB          0 allocs
+  revision.store                                                610.76 MiB    4667045 allocs
+  revision.rel                                                    0.00 MiB          1 allocs
+  revision.dependency_calls                                       0.00 MiB          1 allocs
+  revision.inputs                                                 0.23 MiB       1964 allocs
+  base.leaf_summaries                                            35.50 MiB     230897 allocs
+  base.direct_full                                               56.32 MiB     234994 allocs
+  base.direct_coverage                                            7.47 MiB      68791 allocs
+  base.dep_routine_ids                                            2.94 MiB      31338 allocs
+  base.fixed_roles                                                0.08 MiB        725 allocs
+  base.dependency_calls                                          72.58 MiB     309224 allocs
+  model.calls                                                    30.84 MiB     375898 allocs
+  model.events                                                   14.27 MiB     197905 allocs
+  model.routines by field:
+    34205 routines, 353.4 MiB (size_of ModelRoutine 1032 B)
+    record_variables.(vec)                 46.48 MiB   13.2%      29583 allocs
+    call_sites.(vec)                       39.37 MiB   11.1%      19531 allocs
+    call_sites.argument_infos+bindings     36.50 MiB   10.3%     232143 allocs
+    record_operations                      28.19 MiB    8.0%     327421 allocs
+    variables                              24.98 MiB    7.1%     370344 allocs
+    record_variables.table_name/id         17.11 MiB    4.8%     562854 allocs
+    call_sites.id+operation_id             16.57 MiB    4.7%     175736 allocs
+    ids/names/strings                      13.09 MiB    3.7%     273640 allocs
+    operation_sites                        12.07 MiB    3.4%     139169 allocs
+    var_assignments                         9.80 MiB    2.8%      81727 allocs
+    field_accesses                          8.79 MiB    2.5%     144982 allocs
+    condition_references                    7.96 MiB    2.3%     109334 allocs
+    parameters                              7.43 MiB    2.1%     188296 allocs
+    call_sites.argument_texts               6.17 MiB    1.7%     223062 allocs
+    attributes_parsed                       6.08 MiB    1.7%     147043 allocs
+    card_text                               5.84 MiB    1.7%      68685 allocs
+    rules+drafts                            5.44 MiB    1.5%      73522 allocs
+    call_sites.callee_text+callee           3.99 MiB    1.1%     216278 allocs
+    record_variables.name                   3.69 MiB    1.0%     287687 allocs
+    identifier_references                   3.68 MiB    1.0%     123192 allocs
+    call_sites.loop_stack+control           2.26 MiB    0.6%     105850 allocs
+    loops                                   0.95 MiB    0.3%      10971 allocs
+    unreachable_statements                  0.00 MiB    0.0%          3 allocs
+    record_variables.id                     0.00 MiB    0.0%          0 allocs
+    call_sites.anchor.source_unit_id        0.00 MiB    0.0%          0 allocs
+    call_sites.anchor.syntax_kind           0.00 MiB    0.0%          0 allocs
+    statement_tree                          0.00 MiB    0.0%          0 allocs
+    site_exprs                              0.00 MiB    0.0%          0 allocs
+    rest of the row                         0.00 MiB    0.0%          0 allocs
+  model.tables                                                   21.19 MiB     374088 allocs
+  model.objects                                                  11.30 MiB     120770 allocs
+  base rest (rel, field index, coverage, …)                      77.87 MiB     694238 allocs
+  session.rows.abi                                                0.00 MiB          4 allocs
+  session.rows.dependency.routines by field:
+    28726 routines, 465.7 MiB (size_of ModelRoutine 1032 B)
+    statement_tree                        143.77 MiB   30.9%    1012790 allocs
+    record_variables.(vec)                 44.43 MiB    9.5%      24827 allocs
+    call_sites.argument_infos+bindings     38.25 MiB    8.2%     368111 allocs
+    record_variables.id                    30.89 MiB    6.6%     274825 allocs
+    call_sites.(vec)                       28.70 MiB    6.2%      15060 allocs
+    record_operations                      23.91 MiB    5.1%     297578 allocs
+    variables                              23.45 MiB    5.0%     372630 allocs
+    call_sites.id+operation_id             11.77 MiB    2.5%     144690 allocs
+    ids/names/strings                      10.64 MiB    2.3%     229808 allocs
+    operation_sites                         9.27 MiB    2.0%     118133 allocs
+    field_accesses                          7.78 MiB    1.7%     133085 allocs
+    var_assignments                         7.40 MiB    1.6%      67949 allocs
+    parameters                              6.87 MiB    1.5%     174214 allocs
+    condition_references                    6.09 MiB    1.3%      91585 allocs
+    attributes_parsed                       5.70 MiB    1.2%     141385 allocs
+    call_sites.argument_texts               5.31 MiB    1.1%     189005 allocs
+    rules+drafts                            4.62 MiB    1.0%      56729 allocs
+    record_variables.table_name/id          4.35 MiB    0.9%     268395 allocs
+    card_text                               4.24 MiB    0.9%      51388 allocs
+    record_variables.name                   3.57 MiB    0.8%     277311 allocs
+    call_sites.callee_text+callee           3.33 MiB    0.7%     175218 allocs
+    identifier_references                   2.94 MiB    0.6%     100914 allocs
+    call_sites.loop_stack+control           1.60 MiB    0.3%      85378 allocs
+    loops                                   0.62 MiB    0.1%       8843 allocs
+    site_exprs                              0.52 MiB    0.1%      31206 allocs
+    call_sites.anchor.source_unit_id        0.00 MiB    0.0%          0 allocs
+    call_sites.anchor.syntax_kind           0.00 MiB    0.0%          0 allocs
+    unreachable_statements                  0.00 MiB    0.0%          0 allocs
+    rest of the row                         0.00 MiB    0.0%          0 allocs
+  session.rows.dependency.objects_tables                         29.98 MiB     496536 allocs
+  session.rows.dependency.inputs                                  6.05 MiB      49189 allocs
+  session.rows.dependency.texts                                   0.25 MiB          2 allocs
+  session.rows.dependency_ids                                    15.83 MiB     185575 allocs
+  session.rows.workspace                                         72.07 MiB     754757 allocs
+  session.retained.file_resolutions                              19.36 MiB     128558 allocs
+  session.retained.file_trees                                    31.88 MiB     199133 allocs
+  dep edges: len 438823 cap 438823 size_of 368; routes len 325407 cap 325407 size_of 240
+  site_facts: len 318982 spilled 0; size_of SiteFacts 72, (u32, SiteFacts) 80, Option<ReceiverFact> 56; layout about 32.84 MiB
+  key variants: {"CallSite": 318982}
+  sites with any field beyond receiver and bare_scope_complete: 31067 of 318982
+  sites holding a RareSiteFacts box: 23574 (size_of 528 B; 11.87 MiB)
+  key span.unit heap (in the edges since ENG-92) 16.12 MiB over 7003 distinct files; distinct build contexts 22
+    field receiver                                     used   141165  heap     5.64 MiB
+    field run_trigger_excluded                         used     3838  heap     1.05 MiB
+    field dataset_run                                  used      649  heap     0.49 MiB
+    field validate_field                               used     8146  heap     0.11 MiB
+    field build_context                                used     2729  heap     0.10 MiB
+    field open                                         used      579  heap     0.07 MiB
+    field start_method                                 used     5212  heap     0.03 MiB
+    field interface                                    used     1198  heap     0.02 MiB
+    field interface_holder                             used       48  heap     0.01 MiB
+    field interface_closed_over                        used       69  heap     0.01 MiB
+    field argument_codeunits                           used       93  heap     0.00 MiB
+    field bare_scope_complete                          used   152861  heap     0.00 MiB
+    field unqualified_record_op                        used     9544  heap     0.00 MiB
+    field starts_object (not No)                       used     5944  heap     0.00 MiB
+    field table_event_raise                            used     3292  heap     0.00 MiB
+    field run_target                                   used      928  heap     0.00 MiB
+    field request_page_may_cancel                      used      376  heap     0.00 MiB
+    field record_table_unresolved (heap not walked)    used      208  heap     0.00 MiB
+    field field_ref_validate (heap not walked)         used       74  heap     0.00 MiB
+    field call_result_record (heap not walked)         used       34  heap     0.00 MiB
+    field inherited_protected                          used       34  heap     0.00 MiB
+    field interface_unmapped_enums                     used        0  heap     0.00 MiB
+    field record_op_field_named                        used        0  heap     0.00 MiB
+  session.dep_resolution.site_facts                              52.31 MiB     234852 allocs
+    remainder after the estimates (unwalked heap, shared ids)      0.05 MiB
+  session.dep_resolution.edges                                  290.39 MiB    1756069 allocs
+  session.dep_resolution.parenless                                1.12 MiB       7617 allocs
+  session.retained.dependency_record                            114.44 MiB     536337 allocs
+  session.retained.dependency_sources                             1.06 MiB      10893 allocs
+  tier.bodies: 10 units, 10881 files, text 115.5 MiB
+  tier.bodies split: 10881 files (0 AlFile Arcs shared elsewhere)
+  exprs by kind: [("Identifier", 1190629), ("Member", 516780), ("Call", 431315), ("Literal", 258108), ("QuotedIdentifier", 131079), ("Binary", 112209), ("QualifiedEnum", 65547), ("Unary", 29463), ("Parenthesized", 26330), ("DatabaseReference", 18606), ("Index", 9015), ("List", 2066), ("RangeExpr", 112), ("Ternary", 48), ("TypeOp", 15), ("Unknown", 9)]
+  counts: exprs 2791331, stmts 600787, blocks 278478, members 516780, expr strings 2070497
+    est exprs inline (len x size_of Expr)                       191.67 MiB
+    est stmts inline (len x size_of Stmt)                        41.25 MiB
+    est blocks inline (len x size_of Block)                      14.87 MiB
+    est expr strings heap (capacity)                             25.10 MiB
+    est expr arg/list Vec heap (capacity)                         5.20 MiB
+    bodies: source text + paths + provenance                    120.37 MiB      76168 allocs
+  bodies: objects (declarations)    224.94 MiB, by field:
+    objects.routines                      159.07 MiB   70.7%    1097446 allocs
+    objects.fields                         21.73 MiB    9.7%     216860 allocs
+    objects.globals                        20.15 MiB    9.0%     166139 allocs
+    objects.actions                         8.04 MiB    3.6%      81464 allocs
+    objects.properties                      6.49 MiB    2.9%      86594 allocs
+    objects.enum_values                     1.64 MiB    0.7%       8975 allocs
+    objects.keys/implements/runs/name       1.36 MiB    0.6%      33315 allocs
+    objects.dataitems/dataset/query         0.87 MiB    0.4%      15298 allocs
+    objects.page_controls                   0.54 MiB    0.2%      11514 allocs
+    objects.(vecs)                          0.00 MiB    0.0%          0 allocs
+    bodies: ir (exprs, stmts, blocks, side tables)              364.46 MiB    2697459 allocs
+    ir remainder after the estimates (stmt heap, side tables, Vec slack)     86.36 MiB
+    bodies: issues                                                0.40 MiB         99 allocs
+    bodies: comments                                             20.22 MiB     190162 allocs
+    bodies: AlFile Arcs shared elsewhere                          0.00 MiB          0 allocs
+  session.tier.bodies                                           728.51 MiB    4703174 allocs
+  session.tier.routines                                           0.00 MiB          0 allocs
+  session.tier.objects                                            8.34 MiB      54232 allocs
+  session.tier.dep_meta                                          60.58 MiB     262355 allocs
+  session.tier.lsp                                                0.00 MiB          0 allocs
+  session.dep_cache                                               0.01 MiB        114 allocs
+  session                                                         0.06 MiB        583 allocs
+  remaining live       0.7 MiB
+rc=0

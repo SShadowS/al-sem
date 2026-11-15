@@ -327,7 +327,8 @@ pub fn table_by_id_preferring_real(
 /// A record variable with its (post-resolve) resolved internal table id.
 #[derive(Debug, Clone)]
 pub struct ModelRecordVariable {
-    pub id: String,
+    /// ENG-85: the variable's shared id (one allocation per variable, not per row).
+    pub id: crate::program::str_pool::SharedStr,
     pub name: String,
     /// Declared table name (unquoted), or None for a non-record / unparsed type.
     pub table_name: Option<String>,
@@ -1193,12 +1194,12 @@ fn anchor_from_origin(
     cols: &Utf16Cols,
 ) -> crate::program::body::features::PAnchor {
     crate::program::body::features::PAnchor {
-        source_unit_id: source_unit_id.to_string(),
+        source_unit_id: crate::program::body::features::anchor_unit(source_unit_id),
         start_line: origin.start.row,
         start_column: cols.col(origin.start.row as usize, origin.start.column as usize),
         end_line: origin.end.row,
         end_column: cols.col(origin.end.row as usize, origin.end.column as usize),
-        syntax_kind: origin.kind_text().to_string(),
+        syntax_kind: crate::program::body::features::shared_vocab(origin.kind_text()),
     }
 }
 
@@ -1750,7 +1751,7 @@ fn project_ir(
                         continue; // shadowed by the routine's own param/local
                     }
                     record_variables.push(ModelRecordVariable {
-                        id: format!("{}/rv/{}", routine_id, lc),
+                        id: format!("{}/rv/{}", routine_id, lc).into(),
                         name: g.name.clone(),
                         table_name: g.table_name.clone(),
                         table_id: None,
@@ -1920,7 +1921,10 @@ fn project_ir(
                                         // `source_variable_name` is already lowercased
                                         // at L2.
                                         if global_rv_by_lc.contains_key(name_lc) {
-                                            b.source_kind = "global".to_string();
+                                            b.source_kind =
+                                                crate::program::body::features::shared_vocab(
+                                                    "global",
+                                                );
                                         }
                                     }
                                 }
@@ -1947,7 +1951,8 @@ fn project_ir(
                                     {
                                         continue; // shadowed by a scalar param/local
                                     }
-                                    b.source_kind = "global".to_string();
+                                    b.source_kind =
+                                        crate::program::body::features::shared_vocab("global");
                                     b.source_variable_name = Some(lc.clone());
                                     b.source_record_variable_id = Some(g.id.clone());
                                     b.source_temp_state = Some(g.temp_state.clone());
@@ -2312,7 +2317,7 @@ fn join_routine_declarations(
         // (`file_site_blocks`).
         let units: Vec<String> = group
             .iter()
-            .map(|&i| rows[i].source_anchor.source_unit_id.clone())
+            .map(|&i| rows[i].source_anchor.source_unit_id.to_string())
             .collect();
         if units.iter().all(|u| *u == units[0]) {
             continue;
@@ -2700,7 +2705,7 @@ fn rewrite_routine_site_ids(r: &mut ModelRoutine, f: &dyn Fn(&str) -> String) {
     // leaves them as they are; a new routine id (a split declaration) moves
     // them with the sites.
     for v in &mut r.record_variables {
-        v.id = f(&v.id);
+        v.id = f(&v.id).into();
     }
     for o in r
         .record_operations
@@ -5145,7 +5150,7 @@ mod population_tests {
         );
         let at = |r: &ModelRoutine| {
             (
-                r.source_anchor.source_unit_id.clone(),
+                r.source_anchor.source_unit_id.to_string(),
                 r.source_anchor.start_line,
                 r.source_anchor.start_column,
             )
@@ -5177,7 +5182,7 @@ mod population_tests {
                 .flat_map(|o| &o.declaration_only_routines)
                 .map(|d| {
                     (
-                        d.source_anchor.source_unit_id.clone(),
+                        d.source_anchor.source_unit_id.to_string(),
                         d.source_anchor.start_line,
                     )
                 })

@@ -7,6 +7,94 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (TLS-76: `cdo-speed` judges load by CPU pressure, and runs labelled when it is high)
+
+- **The hole:** TLS-65's wait for a 1-min load of at most max(6, cores / 3) stopped every
+  `cdo-gate` with "cannot judge speed" (exit 2) on server1, a 22-core host shared by three
+  projects: other projects' bursty work kept the load at 50-230 while the CPU was ~78 % idle
+  and 5-12 threads were runnable (owner/kraken, q-20261115T181612-b2891501). It blocked
+  every landing.
+- **Now** `scripts/cdo-speed` uses CPU pressure (PSI) twice:
+  - admission: before each warm-up pass it waits for the host's `some avg60`
+    (`/proc/pressure/cpu`) to fall to 15 %; after 10 min the pass runs anyway;
+  - the label: it measures each timed block's (each warm-up pass, the rounds) CPU stall
+    share of this container's own tasks, from the cgroup `cpu.pressure` `some total=` at the
+    block's start and end. A block above 15 %, or a pass admitted by the timeout, puts
+    "UNDER LOAD" with the shares on the PASS or FAIL line (an early FAIL on a failed call
+    too), and the same limits judge it (principles 6 and 9: label, never hide; never weaken
+    the gate). No exit 2 for load any more. `speed.json` keeps the shares
+    (`stall_shares`, `under_load`, `admitted_by_timeout`) and the per-call `avg10`; the
+    1-min load is still logged. TLS-65's flipped warm-up and geometric mean stay.
+  - Reviews r1 (Fable and sol, independently): the first version read the container's
+    `avg10` before a pass only, which an idle cgroup reports as ~0 whatever the host does,
+    and labelled only on the admission timeout. The stall share over the block replaces it.
+- **Calibration** (server1, 2026-11-15, master `9059eda0` against itself):
+  - c1 (the old script, its wait off) and c2 (an intermediate version of this one) at a
+    1-min load of 11.5-24.1, above TLS-65's 7.3 throughout: both PASS. Judged ratios: model
+    build CPU x1.056 and x1.011, warm-tests x0.939 and x0.980, prove x0.850 and x0.998, round
+    total x0.897 and x1.026; memory x1.059 and x1.049 (so x0.85-x1.06). A 5 s sampler read the
+    container's `avg10` at median 1.8-2.1 % and at most 12.1 % (the host's 3.5-4.0 %, at most
+    24.5 %).
+  - c3 (this version, no test hooks): PASS; model build CPU x0.993, warm-tests x0.998, prove
+    x1.004, round total x0.987, memory x1.024. Stall shares 4.2 % and 2.7 % (warm-ups) and
+    0.0 % (rounds): unlabelled. Admission held warm-up 2 for 10 s (host avg60 15.7 % then
+    13.3 %).
+  - 15 % sits above every stall share and pressure median seen; no run has been timed with a
+    share above it, so what a labelled run's ratios look like is not measured.
+- Pinned by `gate_scripts::speed_runs_under_load_and_says_so`: the host held at 70 % (the run
+  goes ahead, labelled, and `cdo-gate`'s speed row shows it), the container's stall total
+  grown at ~80 % of wall time by a writer thread (labelled from the shares alone), and a calm
+  run (no label, at a 1-min load of 50). Breaking either source of the label fails it.
+
+### Changed (TLS-35: the largest lib CDO test peaks at ~4,500 MiB, not ~18,600 MiB)
+
+- **`retained_emission_equals_a_composition_on_cdo`** held the resident fold with its cone
+  store, the warm emission for every primary routine plus 200 dependency routines, a cold
+  `compose_cone`, and both emissions as one text each, all at once. It now takes one blake3
+  digest per subject of the warm side, drops the emission and the snapshot and evicts every
+  evictable artifact (the fold and its cones included; the model stays), then composes the
+  cold side and compares the digest maps. The subjects and the equality are the same. On a
+  mismatch it names up to three differing subjects, which side holds each, and renders them
+  (warm re-emitted for those subjects from a refilled fold).
+- Measured alone (`cdo` profile, one test per process, 3 alternating rounds, 2026-11-15):
+  peak RSS 18,541-18,717 MiB before, 4,444-4,449 MiB after (4,501 in a fourth run of the final
+  version, with the eviction assert); wall 98-196 s before, 87-112 s after (load average 56
+  falling to 5 during the rounds, so time is indicative only).
+  Discrimination: `emit_raw` skipping its 100th emitted subject fails the test, naming exactly
+  that subject.
+- **`scripts/cdo-gate`:** lib_cdo's own worst is now the n largest tests summed (~4,600, 9,100,
+  13,600, 17,900 MiB for 1-4 threads, was 18,700 and 23,300 for 1-2), and the opt-in parallel
+  layout picks up to 4 threads beside the impact phase (was at most 2) within the same 4 GiB
+  rule and host check. Lane 2's need is never below the 8,400 MiB of the harness/lsp/l4
+  phases it runs before lib_cdo (that floor did not matter while lib_cdo needed 18,700).
+  `gate_scripts::cdo_gate_runs_lane_two_beside_impact_only_with_the_memory` pins the new
+  thresholds.
+
+### Added (TLS-74: `cdo-gate` reports peak memory per phase and the `alsem` count at it)
+
+- **Why:** the memory sampler printed one run peak (27.6, 28.1 and 28.6 GB in the three
+  2026-11-15 landings, container limit 48 GiB), not which phase reached it or how many CDO
+  engine processes (~5-6 GB each) were alive then.
+- **Now:** each sample in `memory.timeline` also counts the gate's `alsem` processes
+  (`engines=N`: one-shot CLI calls and engine hosts, which each hold a CDO model, and any
+  `alsem mcp` front end, which holds none). The summary prints one line per phase: its
+  highest container-unreclaimable sample while it ran (start <= t < end), the gate's own
+  MiB and the `alsem` count at that sample. Each phase's log ends with its own line. Phases
+  that ended before the sampler started (build, speed) are left out; one still open says
+  "(not ended)". `cdo-gate --summary=<run folder>` prints it for older runs too, with the
+  count as "?". Pinned by `gate_scripts::cdo_gate_summary_names_each_phases_peak_memory` (a
+  hand-written run folder; an inclusive end fails it) and, for the writer,
+  `cdo_gate_only_run_builds_and_runs_just_its_phases` (its stub runs a stand-in `alsem` and
+  waits for a sample that counts it; a hardcoded `engines=0` fails it).
+- **What it showed** (the three landings replayed, MiB, container): `lib_cdo` set the run
+  peak (27,633-28,568; one test process at 4 threads, 26,205-27,032 of it), then
+  `output_cdo` (23,385-24,101; three or more ~5.9 GB `alsem` processes), `output_cdo_impact`
+  (15,094-15,508), `program_resolve_harness` (8,081-8,268), `lsp` and
+  `l4_summary_differential` (3,113-4,043 container, the gate's own at most 2,185: the rest
+  is other agents). TLS-35 cuts lib_cdo's largest test by ~14 GB,
+  which leaves `output_cdo` the peak; TLS-75 asks whether its tests, which each build the
+  same CDO model, can share one engine.
+
 ### Fixed (TLS-73: `scripts/perf-probe` checks what samply needs, not one small buffer)
 
 - **The hole:** after the 2026-11-15 redeploy (CAP_PERFMON) `scripts/perf-probe` exited 0
@@ -28,6 +116,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sized past the user's whole budget, read from the machine; where perf cannot open at all it
   checks only the exit code; where the check is exempt, CAP_IPC_LOCK, paranoid -1 or an
   unlimited `ulimit -l`, it does not run).
+
+### Changed (ENG-85: the routine rows share their repeated strings, 199 MiB less resident memory on CDO)
+
+- **Re-scoped bar.** The census (`tools/census-probe/runs-eng85/resident-split.out`) split the
+  model and dependency routine rows by field: the strings the task named (anchors, record-variable
+  ids, row ids, the call-site argument infos and bindings) were about 250-300 MiB, far from the
+  survey's 300-750 MiB estimate. The orchestrator set the bar at 120 MiB on 2026-11-15 and filed the
+  structural parts as ENG-94 (object declarations' routines), ENG-95 (statement trees) and ENG-96
+  (inline row sizes).
+- **The change.** These fields are `SharedStr` now (an `Arc<str>` that compares, hashes, orders,
+  prints and serializes exactly as its text, so no output moves): `PAnchor`'s file id and syntax
+  kind, `PExpressionInfo`'s kind, text, value, qualifier and member, `PCallArgumentBinding`'s source
+  kind and record-variable id, and the record variable's id (`RecordVariable`, `PRecordVariable`,
+  `ModelRecordVariable`). Builders share them: `anchor_unit` reuses the previous anchor's file id on
+  the thread, `shared_vocab` keeps one copy of each text of a closed vocabulary (grammar kinds,
+  expression and argument kinds; capped at 4,096 texts per thread, so a resident engine never grows
+  it), an expression's value shares its text, and every binding shares its variable's id.
+- **Measured** (`census-probe resident`, base `801cc6af`; runs in `tools/census-probe/runs-eng85/`):
+  live memory after one ask of each kind 5,151.2 → 4,951.8 MiB (**-199.4 MiB**, bar 120); the model
+  routine rows 473 → 353 MiB, the dependency routine rows 540 → 466 MiB.
+- **Same answers.** The task gate (every golden), `aldump --session-refresh --verify` on a CDO copy
+  in both memory modes (all 12 steps equal to a cold build each), and `scripts/cdo-before-after
+  801cc6af` (fingerprint, analyze at both scopes, the call-graph stats: nothing moved).
+- **Speed: not measured here.** `cdo-speed` needs a quiet machine and server1's load stayed at
+  60-190 from other projects; the landing gate's speed phase times it (TLS-76). Fable flagged the
+  one risk: shared texts make clones atomic reference-count updates, which could contend across
+  threads.
 
 ### Changed (ENG-92: dependency site facts keyed through their edges, 84 MiB less resident memory on CDO)
 

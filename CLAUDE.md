@@ -153,7 +153,14 @@ Every test still runs before a merge; the tiers decide HOW OFTEN each one runs.
   default the gate's peak is ~27-29 GB (container, unreclaimable; its own processes
   ~26-27 GB): 27.6, 28.1 and 28.6 GB in three landings on 2026-11-15 (server1, 48 GiB
   container). Each CDO engine process holds a whole cross-app model (~5-6 GB), and
-  several run at once. The sampler reports only the run's peak, not the phase.
+  several run at once. Since TLS-74 the summary (and each phase's log) gives every phase's
+  peak with the gate's MiB and its `alsem` process count (model holders plus any `alsem
+  mcp` front end); `--summary=<run folder>` shows it for older runs too (count "?"). In those
+  three landings (MiB, container): `lib_cdo` (one test process at 4 threads) 27,633-28,568
+  set the peak, then `output_cdo` 23,385-24,101 (3+ `alsem` processes of ~5.9 GB in its top
+  three), `output_cdo_impact` 15,094-15,508, `program_resolve_harness` 8,081-8,268, `lsp`
+  and `l4_summary_differential` 3,113-4,043 (the gate's own at most 2,185).
+  TLS-35 cuts lib_cdo's largest test by ~14 GB, which leaves `output_cdo` the peak.
 - **`cdo-gate` checks speed and memory first (since 2026-11-09, engine limits L14).**
   Phase `speed` (`scripts/cdo-speed`, read its doc) builds the working tree's `alsem`
   with `release-fast` and compares it with the merge base's (built once per commit,
@@ -168,11 +175,16 @@ Every test still runs before a merge; the tiers decide HOW OFTEN each one runs.
   the geometric mean of the two: one fixed-order sample always put head second, and the
   side built second was measured once at x1.167 for a binary against itself at load ~9
   (ENG-81; not reproduced in TLS-65's loaded run, x1.02; one quiet run read x1.096 with
-  head second, x1.004 flipped). Before each pass it waits for the 1-min load to fall to
-  max(6, cores / 3) (checked before a pass, not during it); after 10 min it stops with
-  "cannot judge speed" (exit 2), which fails `cdo-gate`: never a PASS without speed. Cost
-  ~+3 min per check, more right after `cdo-gate`'s test build (the load must settle
-  first), and the wait holds the CDO slot. **It is Linux only (it reads `/proc`):
+  head second, x1.004 flipped). TLS-76 replaced the 1-min load (TLS-65's signal, which
+  read 50-230 on server1 from other projects while the CPU was ~78 % idle, and stopped
+  every gate) with CPU pressure, used twice: before each pass it waits (up to 10 min, then
+  runs anyway) for the host's `some avg60` (`/proc/pressure/cpu`) to fall to 15 %; and
+  it measures each timed block's stall share of this container's own tasks (cgroup
+  `cpu.pressure` `some total`, start to end; a pre-pass reading of an idle cgroup says
+  nothing). A block above 15 %, or a pass admitted by the timeout, labels the verdict
+  "UNDER LOAD" with the shares; the same limits judge it (label, never hide; never weaken
+  the gate). Shares and pressure are in `speed.json`; calibration in the CHANGELOG's
+  TLS-76 entry. Two passes cost ~+3 min per check, and the wait holds the CDO slot. **It is Linux only (it reads `/proc`):
   on the Windows machine every full `cdo-gate` run FAILS unless given `--no-speed`**
   (an `--only` subset never runs it).
   `--no-speed` skips it and prints that speed was not checked; a tree that lands without

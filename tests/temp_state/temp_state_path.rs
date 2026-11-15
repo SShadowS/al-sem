@@ -34,12 +34,12 @@ use al_sem::program::model::workspace::{ModelRoutine, RoutineVariables};
 
 fn p_anchor() -> PAnchor {
     PAnchor {
-        source_unit_id: "ws:x.al".to_string(),
+        source_unit_id: "ws:x.al".into(),
         start_line: 0,
         start_column: 0,
         end_line: 0,
         end_column: 0,
-        syntax_kind: "test".to_string(),
+        syntax_kind: "test".into(),
     }
 }
 
@@ -123,7 +123,7 @@ fn call_site(id: &str, parameter_index: u32, source_temp_state: Option<PTempStat
         argument_infos: Vec::new(),
         argument_bindings: vec![PCallArgumentBinding {
             parameter_index,
-            source_kind: "variable".to_string(),
+            source_kind: "variable".into(),
             source_variable_name: Some("arg".to_string()),
             source_record_variable_id: None,
             source_parameter_index: None,

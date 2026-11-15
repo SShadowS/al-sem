@@ -92,7 +92,7 @@ mod tests {
 
     fn rec_var(name: &str, table_name: Option<&str>) -> ModelRecordVariable {
         ModelRecordVariable {
-            id: format!("rv/{name}"),
+            id: format!("rv/{name}").into(),
             name: name.to_string(),
             table_name: table_name.map(str::to_string),
             table_id: None,
