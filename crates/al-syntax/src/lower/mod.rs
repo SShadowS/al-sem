@@ -504,7 +504,7 @@ fn lower_object(
             let range = rp.byte_range();
             for b in routines
                 .iter()
-                .filter(|r| range.contains(&r.origin.byte.start))
+                .filter(|r| range.contains(&r.origin.byte().start))
                 .filter_map(|r| r.body)
             {
                 ir.mark_globals_incomplete(b);
@@ -621,11 +621,11 @@ fn link_action_triggers(actions: &mut [crate::ir::ActionDecl], routines: &[Routi
         if r.kind == RoutineKind::Trigger
             && let Some((_, member)) = &r.enclosing_member
         {
-            by_member.entry(member.byte.clone()).or_default().push(i);
+            by_member.entry(member.byte()).or_default().push(i);
         }
     }
     for a in actions {
-        a.triggers = by_member.get(&a.origin.byte).cloned().unwrap_or_default();
+        a.triggers = by_member.get(&a.origin.byte()).cloned().unwrap_or_default();
     }
 }
 
@@ -3674,18 +3674,18 @@ fn lower_stmt_seq(
 /// An [`Origin`] from the start of `from` to `to` (a byte offset and its point).
 fn span_origin(from: RawNode, to: (usize, tree_sitter::Point)) -> Origin {
     let s = from.start_position();
-    Origin {
-        kind_text: from.kind_str(),
-        byte: from.byte_range().start..to.0.max(from.byte_range().start),
-        start: Point {
+    Origin::from_kind_id(
+        from.kind_id(),
+        from.byte_range().start..to.0.max(from.byte_range().start),
+        Point {
             row: s.row as u32,
             column: s.column as u32,
         },
-        end: Point {
+        Point {
             row: to.1.row as u32,
             column: to.1.column as u32,
         },
-    }
+    )
 }
 
 /// One `#if` … `#endif` chain of a statement-position wrapper while it is read:
@@ -5044,18 +5044,18 @@ fn routine_name_text(n: RawNode, source: &str) -> String {
 pub(crate) fn origin_of(n: RawNode) -> Origin {
     let s = n.start_position();
     let e = n.end_position();
-    Origin {
-        kind_text: n.kind_str(),
-        byte: n.byte_range(),
-        start: Point {
+    Origin::from_kind_id(
+        n.kind_id(),
+        n.byte_range(),
+        Point {
             row: s.row as u32,
             column: s.column as u32,
         },
-        end: Point {
+        Point {
             row: e.row as u32,
             column: e.column as u32,
         },
-    }
+    )
 }
 
 #[cfg(test)]
@@ -5524,7 +5524,7 @@ query 50004 Q
                 ExprKind::Identifier(n) => n.clone(),
                 _ => panic!("callee is not an identifier"),
             },
-            _ => panic!("not a call: {}", af.ir.expr(id).origin.kind_text),
+            _ => panic!("not a call: {}", af.ir.expr(id).origin.kind_text()),
         };
         let mut seen = Vec::new();
         for e in af.ir.iter_exprs() {
@@ -5550,7 +5550,7 @@ query 50004 Q
                     );
                     seen.push(format!("list {first} {second} {}", items.len()));
                 }
-                ExprKind::Unknown => panic!("Unknown at {:?}", e.origin.kind_text),
+                ExprKind::Unknown => panic!("Unknown at {:?}", e.origin.kind_text()),
                 _ => {}
             }
         }
@@ -5842,7 +5842,7 @@ report 50102 T
     /// all, so two sibling action `modify()` blocks each declaring
     /// `OnAfterAction()` minted the SAME stable routine id.
     ///
-    /// The `origin.kind_text` assert is the ONE executable join between this
+    /// The `origin.kind_text()` assert is the ONE executable join between this
     /// lowerer test and the hand-stated `is_page_action_wrapper` test in
     /// `src/engine/root_classification.rs`: the classifier reads exactly this
     /// string (via `enclosing_member_range.syntax_kind`) to derive
@@ -5878,7 +5878,8 @@ pageextension 50110 "P Ext" extends "Customer Card"
             .expect("an action modify()'s Target must populate enclosing_member");
         assert_eq!(member_name, "MyAction");
         assert_eq!(
-            origin.kind_text, "modify_action_modification",
+            origin.kind_text(),
+            "modify_action_modification",
             "the origin must be the WRAPPER's node — this string is what \
              root_classification::is_page_action_wrapper matches on"
         );
@@ -8790,7 +8791,7 @@ pageextension 50117 PE extends P
                     .args
                     .get(i)
                     .unwrap_or_else(|| panic!("{name}: EventSubscriber has no args[{i}]"));
-                src[af.ir.expr(id).origin.byte.clone()].to_string()
+                src[af.ir.expr(id).origin.byte()].to_string()
             })
             .collect()
     }
@@ -10441,8 +10442,8 @@ pageextension 50133 PE extends "Customer List"
         let on_action = &page.routines[post.triggers[0]];
         assert_eq!(on_action.kind, crate::ir::RoutineKind::Trigger);
         assert_eq!(
-            on_action.enclosing_member.as_ref().unwrap().1.byte,
-            post.origin.byte
+            on_action.enclosing_member.as_ref().unwrap().1.byte(),
+            post.origin.byte()
         );
         assert_eq!(page.actions[1].caption, ["New"]);
         assert_eq!(page.actions[1].triggers.len(), 1);

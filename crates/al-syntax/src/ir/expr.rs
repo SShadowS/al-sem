@@ -69,7 +69,7 @@ pub enum ExprKind {
     /// `[a, b, ...]`, the right side of `in`.
     List(Vec<ExprId>),
     /// A syntactically present expression the lowerer does not yet model. The kind
-    /// is preserved via `Origin.kind_text`; a `SyntaxIssue` is recorded.
+    /// is preserved via `Origin::kind_text`; a `SyntaxIssue` is recorded.
     Unknown,
 }
 

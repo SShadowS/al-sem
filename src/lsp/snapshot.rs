@@ -527,7 +527,7 @@ pub struct LspSnapshot {
     /// Over [`Self::ws_event_edges`] only; read it with
     /// [`Self::publisher_fanout`], which adds [`Self::dep_events`]' part.
     pub ws_publisher_fanout: Arc<HashMap<RoutineNodeId, usize>>,
-    /// Sorted by `origin.byte.start` within each file. `Arc`-wrapped per file
+    /// Sorted by `origin.byte().start` within each file. `Arc`-wrapped per file
     /// (T3 Task 9) so an incremental rung-1/rung-2 rebuild can share every
     /// UNCHANGED file's decl list via a cheap `Arc::clone` instead of
     /// deep-cloning the whole `HashMap<String, Vec<DeclEntry>>` (every
@@ -1195,7 +1195,7 @@ pub(crate) fn recompute_file(
             });
         }
     }
-    decls.sort_by_key(|d| d.origin.byte.start);
+    decls.sort_by_key(|d| d.origin.byte().start);
 
     // The LSP's stored form (S10.5); every site of this file names it.
     let unit = SharedStr::from(pf.virtual_path.as_str());

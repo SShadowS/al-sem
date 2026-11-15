@@ -420,7 +420,7 @@ fn literal_expected(ir: &Ir, mut e: ExprId) -> bool {
             matches!(
                 ir.expr(*operand).kind,
                 ExprKind::Literal(Literal::Int(_) | Literal::Decimal(_))
-            ) || ir.expr(*operand).origin.kind_text == "biginteger_literal"
+            ) || ir.expr(*operand).origin.kind_text() == "biginteger_literal"
         }
         _ => false,
     }
@@ -428,10 +428,10 @@ fn literal_expected(ir: &Ir, mut e: ExprId) -> bool {
 
 /// The lowerer models no date, time, datetime or BigInteger literal
 /// (`0D`, `0T`, `0DT`, `20261023D`, `123L`): they are `Unknown`, with the
-/// grammar's kind kept in `origin.kind_text`.
+/// grammar's kind kept in `origin.kind_text()`.
 fn is_unmodelled_literal(ir: &Ir, e: ExprId) -> bool {
     matches!(
-        ir.expr(e).origin.kind_text,
+        ir.expr(e).origin.kind_text(),
         "date_literal" | "time_literal" | "datetime_literal" | "biginteger_literal"
     )
 }
@@ -460,7 +460,7 @@ impl<'s> CallMap<'s> {
             for d in decls.iter() {
                 let n = own_at
                     .get(path.as_str())
-                    .and_then(|m| m.get(&d.origin.byte.start))
+                    .and_then(|m| m.get(&d.origin.byte().start))
                     .copied()
                     .unwrap_or(0);
                 *own.entry((root.as_str(), &d.id)).or_default() += n;
@@ -644,7 +644,7 @@ mod tests {
     }
 
     /// F1: date, time, datetime and BigInteger literals lower to `Unknown`
-    /// with their grammar kind kept in `origin.kind_text`.
+    /// with their grammar kind kept in `origin.kind_text()`.
     #[test]
     fn unknown_literal_kinds_are_literal() {
         let src = "codeunit 50100 \"U\"\n{\n    var\n        Assert: Codeunit Assert;\n\n    procedure P()\n    var\n        X: Integer;\n    begin\n        Assert.AreEqual(0D, X, '');\n        Assert.AreEqual(0T, X, '');\n        Assert.AreEqual(0DT, X, '');\n        Assert.AreEqual(20261023D, X, '');\n        Assert.AreEqual(123L, X, '');\n        Assert.AreEqual(-123L, X, '');\n        Assert.AreEqual(X, X, '');\n    end;\n}\n";

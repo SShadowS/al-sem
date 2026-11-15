@@ -100,7 +100,7 @@ pub fn site_guards_cached(
         let mut out = Vec::new();
         for r in &obj.routines {
             if let Some(body) = r.body
-                && contains(&file.ir.block(body).origin.byte, start, end)
+                && contains(&file.ir.block(body).origin.byte(), start, end)
             {
                 walk(file, text, body, start, end, &mut out);
                 return Ok(out);
@@ -185,8 +185,8 @@ fn contains(r: &std::ops::Range<usize>, start: usize, end: usize) -> bool {
 }
 
 fn walk(file: &AlFile, text: &str, block: BlockId, start: usize, end: usize, out: &mut Vec<Guard>) {
-    let src = |e: al_syntax::ir::ExprId| text[file.ir.expr(e).origin.byte.clone()].to_string();
-    let inside = |b: BlockId| contains(&file.ir.block(b).origin.byte, start, end);
+    let src = |e: al_syntax::ir::ExprId| text[file.ir.expr(e).origin.byte()].to_string();
+    let inside = |b: BlockId| contains(&file.ir.block(b).origin.byte(), start, end);
     for item in &file.ir.block(block).items {
         match item {
             BlockItem::Preproc(p) => {
@@ -199,7 +199,7 @@ fn walk(file: &AlFile, text: &str, block: BlockId, start: usize, end: usize, out
             }
             BlockItem::Stmt(id) => {
                 let st = file.ir.stmt(*id);
-                if !contains(&st.origin.byte, start, end) {
+                if !contains(&st.origin.byte(), start, end) {
                     continue;
                 }
                 let line = st.origin.start.row;

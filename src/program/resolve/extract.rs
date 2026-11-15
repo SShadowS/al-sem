@@ -454,8 +454,7 @@ fn classify_call(
                 && rvars.contains(r_lc)
                 && crate::record_ops::record_op_type(&method_lc).is_some()
             {
-                let receiver_text =
-                    crate::record_ops::receiver_key_text(&src[obj.origin.byte.clone()]);
+                let receiver_text = crate::record_ops::receiver_key_text(&src[obj.origin.byte()]);
                 return CalleeShape::RecordOp {
                     receiver_text,
                     op: method_lc,
@@ -475,8 +474,8 @@ fn classify_call(
             // integer literal (the object's id) carries a static target; any
             // other argument (a variable, an expression, `0`) produces
             // `target_ref = None` (dynamic dispatch).
-            if obj.origin.kind_text == "keyword_identifier" {
-                let obj_text = &src[obj.origin.byte.clone()];
+            if obj.origin.kind_text() == "keyword_identifier" {
+                let obj_text = &src[obj.origin.byte()];
                 // The one list of the methods that start an object
                 // (`dataset::starts_object`, through its keyword form): a
                 // codeunit's `Run`, a page's or report's `Run`/`RunModal`, a
@@ -503,7 +502,7 @@ fn classify_call(
             }
 
             // --- Check 3: General Member ------------------------------------------
-            let receiver_text = src[obj.origin.byte.clone()].to_string();
+            let receiver_text = src[obj.origin.byte()].to_string();
             let method = strip_quote_chars(member);
             CalleeShape::Member {
                 receiver_text,
@@ -522,9 +521,7 @@ fn classify_call(
                 ImplicitRecv::NotRecord => None,
                 ImplicitRecv::Rec => Some(("Rec".to_string(), None)),
                 ImplicitRecv::With(r) => Some((
-                    crate::record_ops::receiver_key_text(
-                        src[file.ir.expr(r).origin.byte.clone()].trim(),
-                    ),
+                    crate::record_ops::receiver_key_text(src[file.ir.expr(r).origin.byte()].trim()),
                     Some(r),
                 )),
             };
@@ -592,7 +589,7 @@ impl WithCtx {
             || routine.dataitem_source_table.is_some();
         WithCtx {
             depth: 0,
-            scan_hit: routine_has_with_token(src, routine.origin.byte.clone()),
+            scan_hit: routine_has_with_token(src, routine.origin.byte()),
             implicit: if rec {
                 ImplicitRecv::Rec
             } else {
@@ -787,7 +784,7 @@ fn collect_value_v2(
                 start: e.origin.start.into(),
                 end: e.origin.end.into(),
             },
-            callee_text: src[e.origin.byte.clone()].to_string(),
+            callee_text: src[e.origin.byte()].to_string(),
             with_state: ctx.state(),
             args: Vec::new(),
             parenless: true,
@@ -821,7 +818,7 @@ fn collect_calls_v2(
             // callee_text = raw source bytes of the function expression (not the
             // arg list).  Mirrors extract_min.rs and L3's ir_walk classify_callee
             // so callee_fp agrees between the two sides of the harness.
-            let callee_text = src[file.ir.expr(fn_id).origin.byte.clone()].to_string();
+            let callee_text = src[file.ir.expr(fn_id).origin.byte()].to_string();
             let span = CanonicalSpan {
                 unit: unit.to_string(),
                 start: e.origin.start.into(),
@@ -1186,7 +1183,7 @@ mod tests {
         for (name, src) in &sources {
             let file = al_syntax::parse(src);
             for site in extract_sites(&file, src, "U.al", &HashSet::new()) {
-                let byte = &file.ir.expr(site.expr).origin.byte;
+                let byte = file.ir.expr(site.expr).origin.byte();
                 assert_eq!(
                     (site.span.start, site.span.end),
                     (

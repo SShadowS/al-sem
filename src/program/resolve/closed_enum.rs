@@ -109,12 +109,12 @@ pub(crate) fn closed_enum_sources(
     }
     // A Clean file can still hold code the lowerer read partly (an `#if` group
     // as an operand lowers one arm, with a `SyntaxIssue`), which may hide a write.
-    let span = &cx.routine.origin.byte;
+    let span = &cx.routine.origin.byte();
     if cx
         .file
         .issues
         .iter()
-        .any(|i| overlaps(&i.origin.byte, span))
+        .any(|i| overlaps(&i.origin.byte(), span))
     {
         return None;
     }

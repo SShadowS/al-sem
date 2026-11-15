@@ -205,9 +205,9 @@ impl PackedOrigin {
     #[must_use]
     pub fn try_from_origin(o: &Origin) -> Option<Self> {
         Some(PackedOrigin {
-            kind: RawKind::try_from_raw(o.kind_text)?,
-            byte_start: o.byte.start,
-            byte_end: o.byte.end,
+            kind: RawKind::try_from_raw(o.kind_text())?,
+            byte_start: o.byte().start,
+            byte_end: o.byte().end,
             start: (o.start.row, o.start.column),
             end: (o.end.row, o.end.column),
         })
@@ -216,18 +216,18 @@ impl PackedOrigin {
     /// Infallible: every `RawKind` has a canonical kind string.
     #[must_use]
     pub fn into_origin(self) -> Origin {
-        Origin {
-            kind_text: self.kind.as_str(),
-            byte: self.byte_start..self.byte_end,
-            start: Point {
+        Origin::new(
+            self.kind.as_str(),
+            self.byte_start..self.byte_end,
+            Point {
                 row: self.start.0,
                 column: self.start.1,
             },
-            end: Point {
+            Point {
                 row: self.end.0,
                 column: self.end.1,
             },
-        }
+        )
     }
 }
 
@@ -289,7 +289,7 @@ pub mod origin_wire {
             Some(p) => p.serialize(s),
             None => Err(serde::ser::Error::custom(format!(
                 "origin kind {:?} is not a named grammar kind",
-                o.kind_text
+                o.kind_text()
             ))),
         }
     }
@@ -369,11 +369,13 @@ fn unencodable_origin_report(pack: &DepPack) -> String {
     for file in &pack.files {
         for (_, meta) in &file.routine_meta {
             for (which, origin) in [("origin", &meta.origin), ("name_origin", &meta.name_origin)] {
-                if RawKind::try_from_raw(origin.kind_text).is_none() {
+                if RawKind::try_from_raw(origin.kind_text()).is_none() {
                     return format!(
                         "{}: routine {} {which} kind {:?} is not a named grammar kind, so this \
                          app is not packable",
-                        file.virtual_path, meta.name, origin.kind_text
+                        file.virtual_path,
+                        meta.name,
+                        origin.kind_text()
                     );
                 }
             }
@@ -448,12 +450,12 @@ mod tests {
     use al_syntax::ir::ObjectKind;
 
     fn origin(kind_text: &'static str, lo: usize, hi: usize) -> Origin {
-        Origin {
+        Origin::new(
             kind_text,
-            byte: lo..hi,
-            start: Point { row: 3, column: 4 },
-            end: Point { row: 5, column: 6 },
-        }
+            lo..hi,
+            Point { row: 3, column: 4 },
+            Point { row: 5, column: 6 },
+        )
     }
 
     fn sample_routine_id() -> RoutineNodeId {
@@ -652,7 +654,7 @@ mod tests {
         assert_eq!(back, o);
         // The decoded string is the grammar's own `&'static str`, not a copy —
         // this is the property that makes decode allocation-free.
-        assert_eq!(back.kind_text, RawKind::TriggerDeclaration.as_str());
+        assert_eq!(back.kind_text(), RawKind::TriggerDeclaration.as_str());
     }
 
     /// Fix round 1 (#M-8): the positional index is only safe where the pack
@@ -680,22 +682,29 @@ mod tests {
     /// grammar kind. Production cannot currently produce one (see
     /// `every_decl_origin_kind_is_a_named_grammar_kind`), which is exactly why
     /// the fixture is constructed literally rather than obtained from a parse.
+    /// Since ENG-86 an `Origin` holds a grammar symbol id, so the unencodable kind is a
+    /// real but ANONYMOUS one (the `addafter` token), not an invented string.
     #[test]
     fn an_unencodable_origin_kind_fails_the_pack_instead_of_panicking() {
         assert_eq!(
-            PackedOrigin::try_from_origin(&origin("definitely_not_a_real_kind", 0, 1)),
+            RawKind::try_from_raw("addafter"),
+            None,
+            "`addafter` is anonymous"
+        );
+        assert_eq!(
+            PackedOrigin::try_from_origin(&origin("addafter", 0, 1)),
             None
         );
 
         let mut pack = sample_pack();
-        pack.files[0].routine_meta[0].1.origin = origin("definitely_not_a_real_kind", 0, 1);
+        pack.files[0].routine_meta[0].1.origin = origin("addafter", 0, 1);
         pack.self_hash = compute_self_hash(&pack);
         match encode(&pack) {
             Err(PackError::Codec(msg)) => {
                 // Fail-closed AND diagnosable: the message must name the kind,
                 // or an unpackable app becomes a mystery cache-miss rate.
                 assert!(
-                    msg.contains("definitely_not_a_real_kind"),
+                    msg.contains("\"addafter\""),
                     "codec error must name the offending kind, got: {msg}"
                 );
                 assert!(
@@ -875,7 +884,11 @@ mod tests {
                 let name = &mut p.files[0].routine_meta[0].1.name;
                 *name = format!("{name}x").into();
             },
-            |p: &mut DepPack| p.files[0].routine_meta[0].1.origin.byte.end += 1,
+            |p: &mut DepPack| {
+                let o = &mut p.files[0].routine_meta[0].1.origin;
+                let b = o.byte();
+                *o = Origin::new(o.kind_text(), b.start..b.end + 1, o.start, o.end);
+            },
             |p: &mut DepPack| p.files[0].routine_meta[0].1.params[0].by_ref = false,
             |p: &mut DepPack| p.files[0].routine_meta[0].0.sig_fp += 1,
         ] {
@@ -920,18 +933,18 @@ mod tests {
             for obj in &file.objects {
                 for r in &obj.routines {
                     assert!(
-                        RawKind::try_from_raw(r.origin.kind_text).is_some(),
+                        RawKind::try_from_raw(r.origin.kind_text()).is_some(),
                         "{}: routine {} origin kind {:?} is not a named grammar kind",
                         path.display(),
                         r.name,
-                        r.origin.kind_text
+                        r.origin.kind_text()
                     );
                     assert!(
-                        RawKind::try_from_raw(r.name_origin.kind_text).is_some(),
+                        RawKind::try_from_raw(r.name_origin.kind_text()).is_some(),
                         "{}: routine {} name_origin kind {:?} is not a named grammar kind",
                         path.display(),
                         r.name,
-                        r.name_origin.kind_text
+                        r.name_origin.kind_text()
                     );
                     checked += 1;
                 }

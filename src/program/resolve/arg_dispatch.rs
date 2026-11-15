@@ -3517,12 +3517,12 @@ mod tests {
     // -- type_one_arg: caller-scope-EXACT shadowing --------------------------
 
     fn test_origin() -> al_syntax::ir::Origin {
-        al_syntax::ir::Origin {
-            kind_text: "",
-            byte: 0..0,
-            start: al_syntax::ir::Point { row: 0, column: 0 },
-            end: al_syntax::ir::Point { row: 0, column: 0 },
-        }
+        al_syntax::ir::Origin::new(
+            "identifier",
+            0..0,
+            al_syntax::ir::Point { row: 0, column: 0 },
+            al_syntax::ir::Point { row: 0, column: 0 },
+        )
     }
 
     fn param(name: &str, ty: &str) -> al_syntax::ir::Param {

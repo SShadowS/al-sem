@@ -186,7 +186,7 @@ impl TriggerSiteRule {
         let is_validate = op_lc == "validate";
         let validate_field = if is_validate {
             args.first()
-                .and_then(|&a| text.get(file.ir.expr(a).origin.byte.clone()))
+                .and_then(|&a| text.get(file.ir.expr(a).origin.byte()))
                 .map(|raw| {
                     crate::program::body::node_util::strip_quotes(raw)
                         .replace("\"\"", "\"")

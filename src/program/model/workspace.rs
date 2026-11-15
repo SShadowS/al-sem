@@ -1198,7 +1198,7 @@ fn anchor_from_origin(
         start_column: cols.col(origin.start.row as usize, origin.start.column as usize),
         end_line: origin.end.row,
         end_column: cols.col(origin.end.row as usize, origin.end.column as usize),
-        syntax_kind: origin.kind_text.to_string(),
+        syntax_kind: origin.kind_text().to_string(),
     }
 }
 
@@ -1328,7 +1328,7 @@ fn modify_all_field(
         return None;
     };
     let first = ir_file.ir.expr(*args.first()?);
-    source.get(first.origin.byte.clone()).map(str::to_string)
+    source.get(first.origin.byte()).map(str::to_string)
 }
 
 /// Project one ALREADY-PARSED file into `workspace` — [`project_file`] without the
