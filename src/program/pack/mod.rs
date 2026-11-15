@@ -543,6 +543,22 @@ mod tests {
         assert_eq!(back, pack);
     }
 
+    /// The encoded bytes of the sample pack, pinned: a change to the serialized form
+    /// fails here, and then needs a `PACK_SCHEMA` bump (and a new pin). ENG-86 changed
+    /// `Origin`'s in-memory layout only; the same test on master `e7848a85` gives the
+    /// same hash, so packs written before it still decode.
+    #[test]
+    fn the_sample_pack_encodes_to_pinned_bytes() {
+        let mut pack = sample_pack();
+        pack.self_hash = compute_self_hash(&pack);
+        let bytes = encode(&pack).expect("encode");
+        assert_eq!(
+            blake3::hash(&bytes).to_hex().as_str(),
+            "e4575752ead91bb6a12dee05f1f1db997283812ef263cbe41b292c3b2efefa4d",
+            "the pack's serialized form changed: bump PACK_SCHEMA and re-pin"
+        );
+    }
+
     /// Schemas 8 and 9: a routine's method ids are pack payload (the symbols'
     /// id on the node, the declared id and `[TryFunction]` flag on its meta),
     /// and so is an object's `Access = Internal` (schema 9) and a table's
