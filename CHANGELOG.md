@@ -133,6 +133,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on CDO (only aldump/alsem are matched by name), `$'...'` quoting, and `diff <(...)
   scripts/land` (refused).
 
+### Added (ENG-82: a byte census and a CPU profile of the CDO model build)
+
+- `docs/superpowers/notes/2026-11-15-eng82-census-profile.md` ranks where the resident CDO model
+  build spends bytes and CPU, and re-ranks the optimization survey's tasks (ENG-83..87,
+  TLS-66/67) by it. Docs only; no engine change, so no gain in this entry. The gain it points at:
+  **`byte_to_pos` (`src/program/resolve/extract.rs`) is 42% of the build's CPU** (a newline count
+  over the file prefix, twice per call expression), which the survey missed. Next come the
+  allocator 16%, tree-sitter 11.5% and SipHash 7%. The lowerer lookup (ENG-83, 0.3%) and ENG-84's
+  closure and recorder parts (under 0.1% each) are too small; the note says to drop them.
+- Bytes after one build and one ask of each kind: 5,716 MiB live. Dependency syntax trees
+  940 MiB, cones 748, revision store 611, dependency routine rows 548, model routines 473,
+  dependency site facts 385 (not in the survey), retained edges 290. The model's 600,851 anchors
+  are about 94 MiB, against the survey's 300-600 MiB estimate.
+- `tools/census-probe` builds again (five API changes since it was last run).
+- samply is not in the kraken image, and perf or samply need `perf_event_paranoid` ≤ 1 (the
+  container has 2); the profile used an in-process SIGPROF sampler in a scratch crate instead.
+
 ### Changed (ENG-81: ENG-80's model-build cost won back)
 
 - **What ENG-80 cost.** The landing gate's speed phase measured the CDO model build (the
