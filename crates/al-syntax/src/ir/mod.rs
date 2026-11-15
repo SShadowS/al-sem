@@ -67,15 +67,15 @@ impl Origin {
         }
     }
 
-    /// From a grammar kind string (pack decode, tests). Panics on a string that is no kind of
-    /// the grammar: an `Origin` names a real node kind.
+    /// From a grammar kind string (pack decode, tests). A name used by several ids (a named
+    /// and an anonymous `procedure`, say) takes the named one; [`PartialEq`] compares names,
+    /// so the choice is invisible. Panics on a string that is no kind of the grammar: an
+    /// `Origin` names a real node kind.
     #[must_use]
     pub fn new(kind_text: &str, byte: Range<usize>, start: Point, end: Point) -> Self {
-        let lang = crate::language::static_language();
-        let id = [true, false]
-            .into_iter()
-            .map(|named| lang.id_for_node_kind(kind_text, named))
-            .find(|&id| id != 0 && lang.node_kind_for_id(id) == Some(kind_text))
+        let id = *kind_table()
+            .ids
+            .get(kind_text)
             .unwrap_or_else(|| panic!("`{kind_text}` is not a kind of the grammar"));
         Self::from_kind_id(id, byte, start, end)
     }
@@ -83,9 +83,13 @@ impl Origin {
     /// The raw grammar kind string, fed verbatim to anchor `syntax_kind` (parity).
     #[must_use]
     pub fn kind_text(&self) -> &'static str {
-        crate::language::static_language()
-            .node_kind_for_id(self.kind_id)
-            .expect("an origin's kind id is a symbol of its own grammar")
+        match kind_table().names.get(usize::from(self.kind_id)) {
+            Some(name) => name,
+            // Ids past the symbol table: tree-sitter's builtin ERROR (65535).
+            None => crate::language::static_language()
+                .node_kind_for_id(self.kind_id)
+                .expect("an origin's kind id is a symbol of its own grammar"),
+        }
     }
 
     /// The node's byte range in its source.
@@ -95,13 +99,51 @@ impl Origin {
     }
 }
 
+/// The grammar's kind names by id, and ids by name (named ids first), built once.
+struct KindTable {
+    names: Vec<&'static str>,
+    ids: std::collections::HashMap<&'static str, u16>,
+}
+
+fn kind_table() -> &'static KindTable {
+    static TABLE: std::sync::OnceLock<KindTable> = std::sync::OnceLock::new();
+    TABLE.get_or_init(|| {
+        let lang = crate::language::static_language();
+        let count = u16::try_from(lang.node_kind_count()).expect("under 65535 grammar symbols");
+        let names: Vec<&'static str> = (0..count)
+            .map(|id| lang.node_kind_for_id(id).unwrap_or(""))
+            .collect();
+        let mut ids = std::collections::HashMap::new();
+        for named in [true, false] {
+            // Id 0 is tree-sitter's `end` symbol, which no node carries.
+            for id in 1..count {
+                if lang.node_kind_is_named(id) == named && !names[usize::from(id)].is_empty() {
+                    ids.entry(names[usize::from(id)]).or_insert(id);
+                }
+            }
+        }
+        ids.insert("ERROR", u16::MAX);
+        KindTable { names, ids }
+    })
+}
+
 impl PartialEq for Origin {
     fn eq(&self, other: &Self) -> bool {
-        // Two ids can share a kind name (grammar aliases), so ids that differ compare by text.
-        (self.kind_id == other.kind_id || self.kind_text() == other.kind_text())
-            && self.byte() == other.byte()
-            && self.start == other.start
-            && self.end == other.end
+        // Destructured, so a field added later cannot be left out of the comparison.
+        let Origin {
+            kind_id,
+            byte_start,
+            byte_end,
+            start,
+            end,
+        } = self;
+        // Two ids can share a kind name (a named and an anonymous `procedure`), so ids that
+        // differ compare by name.
+        (*kind_id == other.kind_id || self.kind_text() == other.kind_text())
+            && *byte_start == other.byte_start
+            && *byte_end == other.byte_end
+            && *start == other.start
+            && *end == other.end
     }
 }
 
@@ -431,6 +473,39 @@ mod origin_tests {
         assert_eq!(std::mem::size_of::<Origin>(), 28);
         // With `member_origin` out of the enum: was 128 (ExprKind 80 + Origin 48).
         assert_eq!(std::mem::size_of::<Expr>(), 72);
+    }
+
+    /// ENG-86: a name with a named and an anonymous id (`procedure`) gives equal origins
+    /// either way, and every kind name of the grammar builds an origin that reads it back.
+    #[test]
+    fn kind_names_round_trip_and_shared_names_compare_equal() {
+        let lang = crate::language::static_language();
+        let (named, anon) = (
+            lang.id_for_node_kind("procedure", true),
+            lang.id_for_node_kind("procedure", false),
+        );
+        assert!(
+            named != 0 && anon != 0 && named != anon,
+            "two `procedure` ids"
+        );
+        let p = Point { row: 0, column: 0 };
+        let a = Origin::from_kind_id(anon, 0..9, p, p);
+        let n = Origin::new("procedure", 0..9, p, p);
+        assert_eq!(n.kind_id, named);
+        assert_eq!(a, n);
+        assert_ne!(a, Origin::new("comment", 0..9, p, p));
+        for id in 1..u16::try_from(lang.node_kind_count()).unwrap() {
+            let Some(name) = lang.node_kind_for_id(id) else {
+                continue;
+            };
+            if name.is_empty() {
+                continue;
+            }
+            let o = Origin::from_kind_id(id, 0..1, p, p);
+            assert_eq!(o.kind_text(), name);
+            assert_eq!(Origin::new(name, 0..1, p, p).kind_text(), name);
+        }
+        assert_eq!(Origin::new("ERROR", 0..1, p, p).kind_text(), "ERROR");
     }
 
     /// ENG-86: a member expression's member-name origin, now in the side table, is the

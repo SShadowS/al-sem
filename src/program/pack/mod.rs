@@ -657,6 +657,22 @@ mod tests {
         assert_eq!(back, pack);
     }
 
+    /// ENG-86: `into_origin` is infallible only because every `RawKind` string is a kind
+    /// `Origin::new` knows; checked for all of them, not one.
+    #[test]
+    fn every_raw_kind_decodes_to_an_origin_naming_it() {
+        for kind in RawKind::ALL {
+            let packed = PackedOrigin {
+                kind,
+                byte_start: 1,
+                byte_end: 2,
+                start: (0, 1),
+                end: (0, 2),
+            };
+            assert_eq!(packed.into_origin().kind_text(), kind.as_str());
+        }
+    }
+
     /// The `Origin` codec specifically: a decoded `kind_text` must be the same
     /// `&'static str` the IR would have produced, and every position field must
     /// survive. `assert_eq!(back, pack)` above covers this too, but this test
