@@ -30,6 +30,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The old test stays as an end-to-end smoke test of the public API; its doc says it does not
   reach the guard and names the test that does.
 
+### Changed (ENG-91: site facts keep their hot facts inline, 255 MiB less resident memory on CDO)
+
+- **What it was.** ENG-89 measured the dependency site facts at 385 MiB on CDO, 360 MiB of it the
+  map's slots: every one of the 318,982 sites carried a 592-byte `SiteFacts`, though 16 of its 23
+  fields are set on under 8% of sites.
+- **The change.** `SiteFacts` keeps `receiver`, the five flags and `starts_object` inline (72
+  bytes) and moves the other 16 fields into one `Option<Box<RareSiteFacts>>`, read with `rare()`
+  and written with `rare_mut()`; the per-site builder drops a box left empty (`compact()`).
+  `PartialEq` and `Debug` read through `rare()`, so a site with an empty box and one without are
+  equal and print the pre-split 23-field shape. The census tallies count the boxes.
+- **Measured** (`census-probe resident`, base `ce3276e3`; runs in
+  `tools/census-probe/runs-eng91/`): live memory after one ask of each kind 5,490.4 → 5,234.9 MiB
+  (**-255.5 MiB**), the dependency site facts 384.9 → 136.8 MiB (23,574 sites hold a box,
+  11.9 MiB). The orchestrator counted ENG-91's bar (~286-339 MiB with step 2) as met by this step;
+  dropping the map's second copy of each key (~93 MiB more) is ENG-92.
+- **Same answers.** The task gate (every golden), `cdo-gate --only harness,l4,output`, and
+  `scripts/cdo-before-after ce3276e3` (fingerprint, analyze at both scopes, the call-graph
+  stats). Speed is the landing gate's speed phase, not a separate run (a memory change).
+
 ### Fixed (TLS-68: the LSP answers for a routine declared in several files are deterministic)
 
 - When one routine id is declared in more than one workspace file (the same object in two

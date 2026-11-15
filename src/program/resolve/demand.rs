@@ -47,6 +47,7 @@ pub fn cross_app_demand(
         .site_facts
         .iter()
         .filter_map(|(ob, f)| {
+            let f = f.rare();
             if let Some(cr) = &f.call_result_record {
                 return Some((ob, (&cr.triggers[..], &cr.table_events[..])));
             }
@@ -283,7 +284,7 @@ mod tests {
     /// validate trigger is demanded".
     #[test]
     fn a_call_result_record_op_demands_its_trigger_and_table_event() {
-        use crate::program::resolve::full::{CallResultRecord, SiteFacts};
+        use crate::program::resolve::full::{CallResultRecord, RareSiteFacts, SiteFacts};
         let mut w = World::default();
         let a = w.app("W");
         let d = w.app("D");
@@ -299,7 +300,7 @@ mod tests {
         let site = w.edge(&p, EdgeKind::Call, DispatchShape::Multicast, vec![], 1);
         w.site_facts.insert(
             site,
-            SiteFacts {
+            SiteFacts::from(RareSiteFacts {
                 call_result_record: Some(CallResultRecord {
                     op: "Modify",
                     table: table.clone(),
@@ -309,7 +310,7 @@ mod tests {
                     code_not_loaded: false,
                 }),
                 ..Default::default()
-            },
+            }),
         );
         // A FieldRef's decided `Validate` (ENG-06), on another site.
         let on_validate = w.trigger(&table, "OnValidate");
@@ -317,7 +318,7 @@ mod tests {
         let fr_site = w.edge(&q, EdgeKind::Call, DispatchShape::Multicast, vec![], 2);
         w.site_facts.insert(
             fr_site,
-            SiteFacts {
+            SiteFacts::from(RareSiteFacts {
                 field_ref_validate: Some(FieldRefValidate::Decided {
                     table: table.clone(),
                     field: "v".into(),
@@ -326,7 +327,7 @@ mod tests {
                     code_not_loaded: false,
                 }),
                 ..Default::default()
-            },
+            }),
         );
         let demand = w.with_inputs(a, |inp| cross_app_demand(a, inp.graph, inp.edges));
         assert!(

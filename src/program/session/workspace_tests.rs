@@ -758,7 +758,7 @@ fn setter_argument_holder_refinement(mode: MemoryMode) {
         p.body()
             .site_facts
             .values()
-            .find_map(|f| f.interface_holder.clone())
+            .find_map(|f| f.rare().interface_holder.clone())
     };
     let closed_x = site(&mut s);
     assert!(
@@ -1018,7 +1018,7 @@ fn app_json_friend_reopens_an_internal_interface(mode: MemoryMode) {
         p.body()
             .site_facts
             .values()
-            .any(|f| !f.interface_closed_over.is_empty())
+            .any(|f| !f.rare().interface_closed_over.is_empty())
     };
     assert!(
         closed(&ws),

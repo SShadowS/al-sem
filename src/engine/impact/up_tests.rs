@@ -15,7 +15,7 @@ use crate::program::impact_graph::{ObjectFacts, RoutineFacts, RunTarget};
 use crate::program::node::RoutineNodeId;
 use crate::program::node_extract::Access;
 use crate::program::resolve::edge::{DispatchShape, EdgeKind};
-use crate::program::resolve::full::SiteFacts;
+use crate::program::resolve::full::{RareSiteFacts, SiteFacts};
 use crate::snapshot::TrustTier;
 
 fn mask(kinds: &[&str]) -> u16 {
@@ -46,10 +46,10 @@ fn run(
     let ob = w.edge(from, EdgeKind::Call, DispatchShape::Exact, vec![], line);
     w.site_facts.insert(
         ob,
-        SiteFacts {
+        SiteFacts::from(RareSiteFacts {
             run_target: Some(target.clone()),
             ..Default::default()
-        },
+        }),
     );
 }
 
@@ -238,12 +238,12 @@ fn hub_world() -> (SitedGraph, NodeIx, NodeIx, NodeIx) {
     );
     w.site_facts.insert(
         s,
-        SiteFacts {
+        SiteFacts::from(RareSiteFacts {
             open: vec![OpenBound::Run {
                 kind: Some(ObjectKind::Page),
             }],
             ..Default::default()
-        },
+        }),
     );
     let g = sited_of(&w, a, &[]);
     let hub = (0..g.node_count() as u32)

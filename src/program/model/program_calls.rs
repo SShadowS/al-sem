@@ -1697,6 +1697,7 @@ fn convert<'a>(
         .collect();
     // B6: a dataset insert or modify raises table events too.
     let dataset_events = view.site_facts.iter().any(|(_, f)| {
+        let f = f.rare();
         f.dataset_run
             .as_ref()
             .is_some_and(|r| r.effects.iter().any(|e| !e.table_events.is_empty()))
@@ -1832,7 +1833,7 @@ fn convert<'a>(
             // B6: the platform's own operations on the run object's dataset.
             if let Some(run) = program_edge
                 .and_then(|ce| conv.site_facts.get(&ce.obligation_id))
-                .and_then(|f| f.dataset_run.as_ref())
+                .and_then(|f| f.rare().dataset_run.as_ref())
             {
                 let (ops, op_edges) = conv.dataset_operations(ix, r, cs, run, &event_flow, &mut c);
                 dataset_edges.extend(op_edges);
@@ -1849,7 +1850,7 @@ fn convert<'a>(
             // ENG-06 (B9): a `FieldRef.Validate(…)` validates a field.
             if let Some(frv) = program_edge
                 .and_then(|ce| conv.site_facts.get(&ce.obligation_id))
-                .and_then(|f| f.field_ref_validate.as_ref())
+                .and_then(|f| f.rare().field_ref_validate.as_ref())
             {
                 let (op, op_edges) =
                     conv.field_ref_validate_operation(ix, r, cs, frv, &event_flow, &mut c);
@@ -1868,7 +1869,7 @@ fn convert<'a>(
             // ENG-12: a record operation on a function's returned record.
             if let Some(cr) = program_edge
                 .and_then(|ce| conv.site_facts.get(&ce.obligation_id))
-                .and_then(|f| f.call_result_record.as_ref())
+                .and_then(|f| f.rare().call_result_record.as_ref())
             {
                 let (mut op, op_edges) =
                     conv.call_result_operation(ix, r, cs, cr, &event_flow, &mut c);
@@ -1892,7 +1893,7 @@ fn convert<'a>(
             if let Some(ce) = j.ops.get(&(ri, oi)) {
                 c.adapter_program_trigger_ops += 1;
                 // ENG-06: a trigger-capable op on a table that did not resolve.
-                if let Some(f) = conv.site_facts.get(&ce.obligation_id)
+                if let Some(f) = conv.site_facts.get(&ce.obligation_id).map(|f| f.rare())
                     && let Some(how) = f.record_table_unresolved
                 {
                     if conv.unknown_table_may_run(how, &f.open) {
@@ -2331,7 +2332,7 @@ impl<'a> Converter<'a> {
                 let target = self
                     .site_facts
                     .get(&ce.obligation_id)
-                    .and_then(|f| f.run_target.as_ref());
+                    .and_then(|f| f.rare().run_target.as_ref());
                 // A run of an object whose SOURCE is loaded and declares no
                 // trigger the run reaches (`resolver::run_triggers`) runs no
                 // AL code: the platform shows the page or runs the object,
@@ -2791,7 +2792,7 @@ impl<'a> Converter<'a> {
         }
         c.adapter_interface_dependency_impls += dependency.len();
 
-        let facts = self.site_facts.get(&ce.obligation_id);
+        let facts = self.site_facts.get(&ce.obligation_id).map(|f| f.rare());
         let name_lc = facts.and_then(|f| f.interface.clone()).unwrap_or_default();
         let interface_name = self
             .graph
@@ -3434,7 +3435,7 @@ impl Converter<'_> {
         let raise = self
             .site_facts
             .get(&ce.obligation_id)
-            .and_then(|f| f.table_event_raise)
+            .and_then(|f| f.rare().table_event_raise)
             .unwrap_or_default();
         self.table_event_edges(ix, r, op, &te.edge.routes, raise, event_flow, c)
     }
