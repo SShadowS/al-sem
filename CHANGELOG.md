@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (TLS-80: `aldump --session-refresh --verify` 1,489 → 217 s on CDO)
+
+- **Why:** the refresh check compared each step's session model with a cold build through
+  `model_fingerprint`, blake3 over the model's whole Debug text on one thread: ~50 s per
+  fingerprint on CDO, two per step, outside every step timer. A verify in both modes took
+  17-41 min and held the CDO slot; every engine task runs one.
+- **Now:**
+  - `model_parts` (`src/program/session/workspace.rs`) lists the model's parts in a fixed
+    order; `write_model` prints them and `model_fingerprint` hashes them in parallel, long
+    lists (objects, tables, routines, call edges, sorted bindings, event graph events and
+    edges) in chunks of 512 elements' `{:#?}` text, combined in order with each list's name
+    and length. Equal fingerprints need every part's text equal: the same fields as before
+    (checked by both reviewers against the old text), the same equality. `write_model`'s
+    text now prints lists element by element under a `name [len]` header.
+  - The harness reuses the cold fingerprint for a workspace state it already built (the
+    three files it edits, by content): `noop` and every `*-restore` step. Lost: those steps
+    no longer re-check that two cold builds of one state agree (the session tests and the
+    new test still do).
+  - Rows gain `fingerprintMs` and, on reused steps, `coldReused` (no `coldMs`).
+- **Measured on CDO** (the same `--file` and command as ENG-84's run):
+  - before (ENG-84's run, `995c75b1`, fingerprint code identical to master's; load 13-17):
+    default ~1,489 s wall, 291 s of it in the step timers; low-mem ~1,712 s, 322 s;
+  - after (master `7f35cfa9` + TLS-80, quiet machine, release-fast): default 217 s,
+    low-mem 209 s; all 24 steps `equalToCold`; 7 of 12 cold builds reused per mode; a
+    fingerprint 2.9-4.0 s. The two runs differ in binary and load, so the factor (~7-8x) is
+    indicative; the per-fingerprint drop (~50 s to ~3.5 s) is the change itself.
+- Test: `workspace::tests::model_fingerprint_sees_one_field_of_one_routine` (2 elements per
+  chunk under test, so the routines span several chunks): one field of the last routine, or
+  the call edges' order, changes the fingerprint; leaving out the chunk hashes, or only the
+  last chunk, fails it.
+- Found on the way: on CDO the harness's `body` step has never edited the file (CRLF line
+  endings; TLS-82), and the text never compared two `ResolvedCalls` fields (TLS-81).
+
 ### Added (TLS-77: a `profiling` build and `scripts/profile`, so samply names what it samples)
 
 - **Why:** ENG-84's samply profile could read only self shares. The task assumed missing
