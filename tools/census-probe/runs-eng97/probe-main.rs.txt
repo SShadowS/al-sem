@@ -1,0 +1,24 @@
+//! ENG-84: `eng84-build-probe <workspace>`: one resident model build (`WorkspaceSession` +
+//! `build_target`, the engine child's path), for `samply record`. Prints the wall time.
+
+use std::path::Path;
+
+use al_sem::engine::resident::session::{build_target, REVISION_READ};
+use al_sem::program::inputs::WorkspaceInputs;
+use al_sem::program::session::{MemoryMode, WorkspaceSession};
+
+#[global_allocator]
+static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
+fn main() {
+    let ws = std::env::args()
+        .nth(1)
+        .expect("usage: eng84-build-probe <workspace>");
+    let inputs = WorkspaceInputs::read(Path::new(&ws), &REVISION_READ);
+    let mut session = WorkspaceSession::with_mode(MemoryMode::Default);
+    let t = std::time::Instant::now();
+    let target = build_target(&mut session, &inputs, false)
+        .unwrap_or_else(|_| panic!("the model did not build"));
+    println!("build wall {:.1} s", t.elapsed().as_secs_f64());
+    drop(target);
+}
