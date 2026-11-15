@@ -1407,7 +1407,7 @@ mod fixtures {
     ) -> PCallArgumentBinding {
         PCallArgumentBinding {
             parameter_index,
-            source_kind: "variable".to_string(),
+            source_kind: "variable".into(),
             source_variable_name: Some("arg".to_string()),
             source_record_variable_id: None,
             source_parameter_index: None,

@@ -1554,9 +1554,9 @@ pub(crate) fn is_known_temp_var(
 /// Shared across d18 (CalcFields-arg literal check) and d22 (CalcFields-arg coverage).
 pub(crate) fn unquoted_field_name(info: &PExpressionInfo) -> String {
     if let Some(v) = &info.value {
-        return v.clone();
+        return v.to_string();
     }
-    info.text.clone()
+    info.text.to_string()
 }
 
 /// Build the internal `SourceAnchor` from an L2 `PAnchor` + the owning routine.
@@ -2189,7 +2189,7 @@ mod tests {
 
     fn rec_var(id: &str, name: &str, table_id: Option<&str>) -> ModelRecordVariable {
         ModelRecordVariable {
-            id: id.to_string(),
+            id: id.into(),
             name: name.to_string(),
             table_name: None,
             table_id: table_id.map(str::to_string),
@@ -2209,9 +2209,9 @@ mod tests {
     fn binding(var_id: Option<&str>, name: Option<&str>) -> PCallArgumentBinding {
         PCallArgumentBinding {
             parameter_index: 0,
-            source_kind: "local".to_string(),
+            source_kind: "local".into(),
             source_variable_name: name.map(str::to_string),
-            source_record_variable_id: var_id.map(str::to_string),
+            source_record_variable_id: var_id.map(Into::into),
             source_parameter_index: None,
             caller_source_parameter_is_var: None,
             source_temp_state: None,
@@ -2278,7 +2278,7 @@ mod issue21_predicate_tests {
             temp_state: None,
             field_arguments: args
                 .as_ref()
-                .map(|v| v.iter().map(|i| i.text.clone()).collect()),
+                .map(|v| v.iter().map(|i| i.text.to_string()).collect()),
             field_argument_infos: args,
             source_anchor: PAnchor {
                 source_unit_id: "ws:probe.al".into(),
@@ -2302,9 +2302,9 @@ mod issue21_predicate_tests {
 
     fn info(kind: &str, value: &str) -> PExpressionInfo {
         PExpressionInfo {
-            kind: kind.to_string(),
-            text: value.to_string(),
-            value: Some(value.to_string()),
+            kind: kind.into(),
+            text: value.into(),
+            value: Some(value.into()),
             qualifier: None,
             member: None,
         }

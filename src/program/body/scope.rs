@@ -21,7 +21,8 @@ pub struct ParameterSymbol {
 
 #[derive(Clone)]
 pub struct RecordVariable {
-    pub id: String,
+    /// ENG-85: shared by every row that names this variable (bindings, record rows).
+    pub id: crate::program::str_pool::SharedStr,
     pub name: String,
     pub table_name: Option<String>,
     pub temp_state: PTempState,

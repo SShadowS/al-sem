@@ -192,7 +192,7 @@ pub fn resolve_routine_record_types(
     for op in routine.record_operations.iter_mut() {
         if let Some(&vi) = var_index_by_name.get(&op_variable_lc(&op.record_variable_name)) {
             let variable = &routine.record_variables[vi];
-            op.record_variable_id = Some(variable.id.clone());
+            op.record_variable_id = Some(variable.id.to_string());
             if let Some(tid) = &variable.table_id {
                 op.table_id = Some(tid.clone());
             }
@@ -734,7 +734,7 @@ mod tests {
             let mut r = crate::engine::l4::db_effect_solver::tests::pd_routine("r");
             r.object_type = "Page".to_string();
             r.record_variables = vec![ModelRecordVariable {
-                id: "r/rv/rec".to_string(),
+                id: "r/rv/rec".into(),
                 name: "Rec".to_string(),
                 table_name: None,
                 table_id: None,

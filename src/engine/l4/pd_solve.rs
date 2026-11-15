@@ -1961,7 +1961,7 @@ mod tests {
         for (i, ts) in [(0, pd_ts_known(false)), (1, pd_ts_pd(1))] {
             publisher.record_variables.push(
                 crate::program::model::workspace::ModelRecordVariable {
-                    id: format!("rv{i}"),
+                    id: format!("rv{i}").into(),
                     name: if i == 0 { "A" } else { "B" }.to_string(),
                     table_name: Some("Item".to_string()),
                     table_id: None,
@@ -2253,7 +2253,7 @@ mod tests {
     #[test]
     fn solve_passes_the_caller_frame_to_the_guard_step() {
         let mut c = caller_passing("C", "cs1", pd_ts_known(true));
-        c.call_sites[0].argument_bindings[0].source_kind = "parameter".to_string();
+        c.call_sites[0].argument_bindings[0].source_kind = "parameter".into();
         c.call_sites[0].argument_bindings[0].source_parameter_index = Some(2);
         let h = pd_routine("H");
         let g = graph(vec![("C", edge("direct-call", Some("cs1"), "H"))]);

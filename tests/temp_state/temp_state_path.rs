@@ -123,7 +123,7 @@ fn call_site(id: &str, parameter_index: u32, source_temp_state: Option<PTempStat
         argument_infos: Vec::new(),
         argument_bindings: vec![PCallArgumentBinding {
             parameter_index,
-            source_kind: "variable".to_string(),
+            source_kind: "variable".into(),
             source_variable_name: Some("arg".to_string()),
             source_record_variable_id: None,
             source_parameter_index: None,

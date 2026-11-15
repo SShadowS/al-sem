@@ -103,9 +103,10 @@ pub fn anchor_unit(unit: &str) -> crate::program::str_pool::SharedStr {
     })
 }
 
-/// ENG-85: the syntax kind for an anchor, one allocation per kind per thread (the grammar's
-/// kind names are a closed set, so this stays small).
-pub fn anchor_kind(kind: &str) -> crate::program::str_pool::SharedStr {
+/// ENG-85: a text from a closed vocabulary (an anchor's syntax kind, an expression's kind, an
+/// argument's source kind), one allocation per text per thread. Only for closed sets: the
+/// thread keeps every text it saw.
+pub fn shared_vocab(kind: &str) -> crate::program::str_pool::SharedStr {
     use crate::program::str_pool::SharedStr;
     thread_local! {
         static KINDS: std::cell::RefCell<crate::fxhash::FxHashSet<SharedStr>> =
@@ -144,14 +145,16 @@ impl PAnchor {
 /// Structured expression classification (`model/expression.ts`).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PExpressionInfo {
-    pub kind: String,
-    pub text: String,
+    /// ENG-85: a closed vocabulary ([`shared_vocab`]).
+    pub kind: crate::program::str_pool::SharedStr,
+    /// ENG-85: shared with `value` when they are the same text.
+    pub text: crate::program::str_pool::SharedStr,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub value: Option<String>,
+    pub value: Option<crate::program::str_pool::SharedStr>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub qualifier: Option<String>,
+    pub qualifier: Option<crate::program::str_pool::SharedStr>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub member: Option<String>,
+    pub member: Option<crate::program::str_pool::SharedStr>,
 }
 
 /// Temp-state of a record variable / op.
@@ -225,15 +228,17 @@ pub enum PCallee {
 pub struct PCallArgumentBinding {
     #[serde(rename = "parameterIndex")]
     pub parameter_index: u32,
+    /// ENG-85: a closed vocabulary ([`shared_vocab`]).
     #[serde(rename = "sourceKind")]
-    pub source_kind: String,
+    pub source_kind: crate::program::str_pool::SharedStr,
     #[serde(rename = "sourceVariableName", skip_serializing_if = "Option::is_none")]
     pub source_variable_name: Option<String>,
+    /// ENG-85: shares the record variable's own id.
     #[serde(
         rename = "sourceRecordVariableId",
         skip_serializing_if = "Option::is_none"
     )]
-    pub source_record_variable_id: Option<String>,
+    pub source_record_variable_id: Option<crate::program::str_pool::SharedStr>,
     #[serde(
         rename = "sourceParameterIndex",
         skip_serializing_if = "Option::is_none"
@@ -590,7 +595,8 @@ impl Eq for PLoop {}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Eq)]
 pub struct PRecordVariable {
-    pub id: String,
+    /// ENG-85: the variable's shared id ([`super::scope::RecordVariable::id`]).
+    pub id: crate::program::str_pool::SharedStr,
     pub name: String,
     #[serde(rename = "tableName", skip_serializing_if = "Option::is_none")]
     pub table_name: Option<String>,
@@ -1248,7 +1254,7 @@ mod tests {
         let info =
             |kind: &str, value: Option<&str>, q: Option<&str>, m: Option<&str>| PExpressionInfo {
                 kind: kind.into(),
-                text: String::new(),
+                text: "".into(),
                 value: value.map(Into::into),
                 qualifier: q.map(Into::into),
                 member: m.map(Into::into),
@@ -1318,7 +1324,7 @@ mod tests {
     #[test]
     fn receiver_flag_is_not_serialized_and_not_compared() {
         let row = PRecordVariable {
-            id: "r/rv/rec".to_string(),
+            id: "r/rv/rec".into(),
             name: "Rec".to_string(),
             table_name: None,
             temp_state: PTempState {

@@ -466,9 +466,9 @@ mod tests {
 
     fn info(kind: &str, text: &str, value: Option<&str>) -> PExpressionInfo {
         PExpressionInfo {
-            kind: kind.to_string(),
-            text: text.to_string(),
-            value: value.map(str::to_string),
+            kind: kind.into(),
+            text: text.into(),
+            value: value.map(Into::into),
             qualifier: None,
             member: None,
         }

@@ -13,7 +13,7 @@ use super::features::{
     FLOW_TEXT_MAX, FlowExpr, FlowFact, PAnchor, PCFNNode, PCallArgumentBinding, PCallSite, PCallee,
     PConditionGuard, PConditionReference, PExpressionInfo, PFieldAccess, PLoop, POperationSite,
     PRecordOperation, PTempState, PUnreachableStatement, PVarAssignment, PathHint, ValueFact,
-    ValueLabel, anchor_kind, anchor_unit,
+    ValueLabel, anchor_unit, shared_vocab,
 };
 use super::node_util::Utf16Cols;
 use super::record_op::{FIELD_ARGS_OPS, record_op_type};
@@ -566,7 +566,7 @@ impl<'a> SpineCtx<'a> {
             end_column: self
                 .cols
                 .col(origin.end.row as usize, origin.end.column as usize),
-            syntax_kind: anchor_kind(origin.kind_text()),
+            syntax_kind: shared_vocab(origin.kind_text()),
         }
     }
 
@@ -1778,9 +1778,18 @@ pub fn walk_spine(
 fn expression_info(file: &AlFile, source: &str, eid: ExprId) -> PExpressionInfo {
     use ExprKind::*;
     let raw = |o: &Origin| &source[o.byte()];
+    use crate::program::str_pool::SharedStr;
     let e = file.ir.expr(eid);
-    let text = raw(&e.origin).to_string();
-    let strip_q = |s: &str| s.trim_matches(|c| c == '"' || c == '\'').to_string();
+    // ENG-85: one allocation for the text; `value`/`member` share it (or each other) when equal.
+    let text: SharedStr = raw(&e.origin).into();
+    let strip_q = |s: &str| -> SharedStr {
+        let t = s.trim_matches(|c| c == '"' || c == '\'');
+        if t == text.as_str() {
+            text.clone()
+        } else {
+            t.into()
+        }
+    };
     let mut value = None;
     let mut qualifier = None;
     let mut member = None;
@@ -1813,7 +1822,7 @@ fn expression_info(file: &AlFile, source: &str, eid: ExprId) -> PExpressionInfo 
             enum_type,
             value: v,
         } => {
-            qualifier = Some(raw(&file.ir.expr(*enum_type).origin).to_string());
+            qualifier = Some(raw(&file.ir.expr(*enum_type).origin).into());
             let m = strip_q(v);
             member = Some(m.clone());
             value = Some(m);
@@ -1821,7 +1830,7 @@ fn expression_info(file: &AlFile, source: &str, eid: ExprId) -> PExpressionInfo 
         }
         DatabaseReference(t) => {
             if let Some((kw, tn)) = t.split_once("::") {
-                qualifier = Some(kw.trim().to_string());
+                qualifier = Some(kw.trim().into());
                 let m = strip_q(tn.trim());
                 member = Some(m.clone());
                 value = Some(m);
@@ -1845,7 +1854,7 @@ fn expression_info(file: &AlFile, source: &str, eid: ExprId) -> PExpressionInfo 
         _ => "other",
     };
     PExpressionInfo {
-        kind: kind.to_string(),
+        kind: shared_vocab(kind),
         text,
         value,
         qualifier,
@@ -3179,7 +3188,7 @@ pub fn routine_features_partial(
     for op in &mut record_operations {
         if let Some(rv) = rv_by_lc.get(&op.record_variable_name.fold_identifier()) {
             if op.record_variable_id.is_none() {
-                op.record_variable_id = Some(rv.id.clone());
+                op.record_variable_id = Some(rv.id.to_string());
             }
             op.temp_state = rv.temp_state.clone();
         }
@@ -3194,7 +3203,7 @@ pub fn routine_features_partial(
         start_column: cols.col(o.start.row as usize, o.start.column as usize),
         end_line: o.end.row,
         end_column: cols.col(o.end.row as usize, o.end.column as usize),
-        syntax_kind: anchor_kind(o.kind_text()),
+        syntax_kind: shared_vocab(o.kind_text()),
     };
     // param lc-name → (index, is_var).
     let param_by_lc: HashMap<String, (u32, bool)> = routine
@@ -3237,7 +3246,7 @@ pub fn routine_features_partial(
                     _ => {
                         return PCallArgumentBinding {
                             parameter_index,
-                            source_kind: "expression".to_string(),
+                            source_kind: shared_vocab("expression"),
                             source_variable_name: None,
                             source_record_variable_id: None,
                             source_parameter_index: None,
@@ -3269,7 +3278,7 @@ pub fn routine_features_partial(
                 };
                 PCallArgumentBinding {
                     parameter_index,
-                    source_kind: source_kind.to_string(),
+                    source_kind: shared_vocab(source_kind),
                     source_variable_name: if source_kind == "unknown" {
                         None
                     } else {
@@ -3507,7 +3516,7 @@ pub fn ir_record_variables(
             ts_known(false)
         };
         out.push(PRecordVariable {
-            id: format!("{}/rv/{}", routine_id, p.name.to_lowercase()),
+            id: format!("{}/rv/{}", routine_id, p.name.to_lowercase()).into(),
             name: p.name.clone(),
             table_name: parse_record_table_name(ty),
             temp_state,
@@ -3528,7 +3537,7 @@ pub fn ir_record_variables(
             && (has_implicit_rec(o, source_table_name) || routine.dataitem_source_table.is_some()))
     {
         out.push(PRecordVariable {
-            id: format!("{}/rv/{}", routine_id, name.to_lowercase()),
+            id: format!("{}/rv/{}", routine_id, name.to_lowercase()).into(),
             name: name.to_string(),
             table_name: parse_record_table_name(ty),
             temp_state: ts_known(ty.to_ascii_lowercase().contains("temporary")),
@@ -3546,7 +3555,7 @@ pub fn ir_record_variables(
             continue;
         }
         out.push(PRecordVariable {
-            id: format!("{}/rv/{}", routine_id, v.name.to_lowercase()),
+            id: format!("{}/rv/{}", routine_id, v.name.to_lowercase()).into(),
             name: v.name.clone(),
             table_name: parse_record_table_name(ty),
             temp_state: ts_known(v.temporary),
@@ -3619,7 +3628,7 @@ pub fn ir_record_variables(
                 .as_deref()
                 .is_some_and(|n| n.eq_fold_identifier("rec"));
         out.push(PRecordVariable {
-            id: format!("{}/rv/rec", routine_id),
+            id: format!("{}/rv/rec", routine_id).into(),
             name: "Rec".to_string(),
             table_name: direct_rec_table,
             temp_state: rec_temp_state,
@@ -3643,7 +3652,7 @@ pub fn ir_record_variables(
                 continue;
             }
             out.push(PRecordVariable {
-                id: format!("{}/rv/dataitem/{}", routine_id, di_name),
+                id: format!("{}/rv/dataitem/{}", routine_id, di_name).into(),
                 name: di_name.clone(),
                 // The IR keeps a `""`; the model stores the LOGICAL name (#240).
                 table_name: Some(super::scope::unescape_al_identifier(di_table)),
@@ -3687,7 +3696,7 @@ pub fn ir_object_global_record_vars(
             continue;
         }
         out.push(PRecordVariable {
-            id: format!("{}/grv/{}", object_id, name_lc),
+            id: format!("{}/grv/{}", object_id, name_lc).into(),
             name: v.name.clone(),
             table_name: parse_record_table_name(ty),
             temp_state: ts_known(v.temporary),
@@ -3978,7 +3987,7 @@ pub fn ir_variables(
         start_column: cols.col(origin.start.row as usize, origin.start.column as usize),
         end_line: origin.end.row,
         end_column: cols.col(origin.end.row as usize, origin.end.column as usize),
-        syntax_kind: anchor_kind(kind),
+        syntax_kind: shared_vocab(kind),
     };
     let mut out: Vec<PVariableSymbol> = Vec::new();
 
@@ -3997,7 +4006,7 @@ pub fn ir_variables(
                 start_column: 0,
                 end_line: 0,
                 end_column: 0,
-                syntax_kind: anchor_kind("parameter"),
+                syntax_kind: shared_vocab("parameter"),
             },
             fixed_local: None,
         });
@@ -4096,7 +4105,7 @@ pub fn ir_object_globals(
                 start_column: cols.col(g.origin.start.row as usize, g.origin.start.column as usize),
                 end_line: g.origin.end.row,
                 end_column: cols.col(g.origin.end.row as usize, g.origin.end.column as usize),
-                syntax_kind: anchor_kind("variable_declaration"),
+                syntax_kind: shared_vocab("variable_declaration"),
             },
         });
     }
