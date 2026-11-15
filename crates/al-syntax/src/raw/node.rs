@@ -121,19 +121,19 @@ impl<'t> RawNode<'t> {
         }
     }
 
-    /// The start bytes of every named node of the subtree (this one included) that
-    /// `pred` accepts, in document order (nondecreasing), found with one cursor walk
-    /// and no allocation per node. A match IS descended into.
-    pub(crate) fn named_starts_where(
+    /// The byte ranges `(start, end)` of every named node of the subtree (this one
+    /// included) that `pred` accepts, in document order (starts nondecreasing), found
+    /// with one cursor walk and no allocation per node. A match IS descended into.
+    pub(crate) fn named_ranges_where(
         self,
         mut pred: impl FnMut(RawNode<'t>) -> bool,
-    ) -> Vec<usize> {
+    ) -> Vec<(usize, usize)> {
         let mut out = Vec::new();
         let mut cursor = self.node.walk();
         loop {
             let n = cursor.node();
             if n.is_named() && pred(RawNode::new(n)) {
-                out.push(n.start_byte());
+                out.push((n.start_byte(), n.end_byte()));
             }
             if cursor.goto_first_child() {
                 continue;

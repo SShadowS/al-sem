@@ -19,8 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that parses, lowers and resolves, no single span. Three per-site costs, all fixed:
   - the lowerer's test of whether a call holds a `#if` walked the call's whole argument subtree,
     allocating per node, and every enclosing call walked it again. Now one cursor walk per file
-    collects the sorted start bytes of the build-varying preproc nodes, and the test is a binary
-    search (tree ranges nest). A file without `#if` pays nothing;
+    collects the sorted byte ranges of the build-varying preproc nodes, and the test is a binary
+    search (tree ranges nest); a source with no `#` at all skips the walk. A test keeps the old
+    walk as an oracle: both agree on every named node of the r0 corpus and, in a one-off sweep,
+    of 11,465 dependency source files (859 with `#if`);
   - `resolve_bare_with_args` ran its extension-base and table scope checks for every bare call. In
     a session each one is a recorded index query, which is why the resident path paid more than
     the CLI. Only the `Error` rule's twelve names read `scope_complete`, so only they run them now;
