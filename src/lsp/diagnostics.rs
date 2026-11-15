@@ -232,7 +232,7 @@ fn compute_file(
     let table = entry.line_table();
 
     for decl in decls.iter() {
-        let Some(routine) = find_routine_by_origin(&entry.file, decl.origin.byte.start) else {
+        let Some(routine) = find_routine_by_origin(&entry.file, decl.origin.byte().start) else {
             continue;
         };
 

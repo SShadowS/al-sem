@@ -277,7 +277,7 @@ pub enum ObjectKind {
     PermissionSet,
     PermissionSetExtension,
     Profile,
-    /// Any other object construct, kind preserved via `Origin.kind_text`.
+    /// Any other object construct, kind preserved via `Origin::kind_text`.
     Other,
 }
 

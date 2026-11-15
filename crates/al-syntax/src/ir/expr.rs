@@ -3,7 +3,7 @@
 //! consumes. `Unknown` carries no payload — its `Origin` + a `SyntaxIssue` record
 //! the failure (never a silent drop).
 
-use super::{ExprId, Origin};
+use super::{ExprId, MemberOriginId, Origin};
 
 pub struct Expr {
     pub kind: ExprKind,
@@ -18,7 +18,8 @@ pub enum ExprKind {
     Member {
         object: ExprId,
         member: String,
-        member_origin: Origin,
+        /// Read it with [`super::Ir::member_origin`].
+        member_origin: MemberOriginId,
     },
     /// `function(args...)`
     Call {
@@ -69,7 +70,7 @@ pub enum ExprKind {
     /// `[a, b, ...]`, the right side of `in`.
     List(Vec<ExprId>),
     /// A syntactically present expression the lowerer does not yet model. The kind
-    /// is preserved via `Origin.kind_text`; a `SyntaxIssue` is recorded.
+    /// is preserved via `Origin::kind_text`; a `SyntaxIssue` is recorded.
     Unknown,
 }
 

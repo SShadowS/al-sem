@@ -49,7 +49,7 @@ pub fn code_lenses(
 
     let mut out = Vec::with_capacity(decls.len());
     for decl in decls.iter() {
-        let Some(routine) = find_routine_by_origin(&entry.file, decl.origin.byte.start) else {
+        let Some(routine) = find_routine_by_origin(&entry.file, decl.origin.byte().start) else {
             // Structurally shouldn't happen — every `DeclEntry` is built FROM
             // one of `entry.file`'s routines (see `recompute_file`) — but
             // fail closed by skipping rather than guessing at metrics.
@@ -152,7 +152,7 @@ pub(crate) fn find_routine_by_origin(
     file.objects
         .iter()
         .flat_map(|o| o.routines.iter())
-        .find(|r| r.origin.byte.start == origin_byte_start)
+        .find(|r| r.origin.byte().start == origin_byte_start)
 }
 
 /// Generalizes legacy's `CallGraph::get_incoming_call_count` (direct calls +
@@ -383,7 +383,7 @@ mod tests {
             .iter()
             .find(|d| d.name == "Branchy")
             .expect("Branchy decl");
-        let routine = find_routine_by_origin(&entry.file, branchy_decl.origin.byte.start)
+        let routine = find_routine_by_origin(&entry.file, branchy_decl.origin.byte().start)
             .expect("Branchy routine");
         let expected_complexity = crate::analysis::routine_complexity_ir(&entry.file.ir, routine);
         // Sanity: this fixture's nested-if body must have complexity > 1 so

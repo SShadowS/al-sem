@@ -2837,7 +2837,11 @@ pub(crate) fn witnesses_current(edges: &[ClassifiedEdge], surface: &DeclSurface)
             };
             let (meta, path) = surface.get_with_path(rid)?;
             current &= file.as_str() == path
-                && *span == (meta.origin.byte.start as u32, meta.origin.byte.end as u32);
+                && *span
+                    == (
+                        meta.origin.byte().start as u32,
+                        meta.origin.byte().end as u32,
+                    );
         }
     }
     Some(current)
@@ -2857,7 +2861,10 @@ pub(crate) fn rematerialize_witnesses(edges: &mut [ClassifiedEdge], surface: &De
             if file.as_str() != path {
                 *file = path.to_string();
             }
-            *span = (meta.origin.byte.start as u32, meta.origin.byte.end as u32);
+            *span = (
+                meta.origin.byte().start as u32,
+                meta.origin.byte().end as u32,
+            );
         }
     }
     true

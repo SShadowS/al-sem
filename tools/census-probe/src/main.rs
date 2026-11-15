@@ -317,6 +317,133 @@ fn on_mark(name: &'static str) {
 
 // ───────────────────────── drop steps (Q1/Q4/Q5) ─────────────────────────
 
+/// ENG-86: the dependency syntax trees (`session.tier.bodies`) split by part. Measured drops:
+/// source text and paths, objects, the IR, issues, comments, the file shells. Inside the IR
+/// (private fields), estimates from a walk: expressions, statements and blocks inline (len ×
+/// size), the expressions' string and Vec heap (capacities), the blocks' item Vecs; the rest
+/// of the measured IR drop is the remainder (statement heap, side tables, Vec slack).
+fn split_bodies(bodies: Option<Arc<Vec<al_sem::snapshot::parse::ParsedUnit>>>) {
+    use al_syntax::ir::{Block, Expr, ExprKind, Literal, Stmt};
+    let Some(bodies) = bodies else {
+        println!("  tier.bodies: none");
+        return;
+    };
+    let units = match Arc::try_unwrap(bodies) {
+        Ok(u) => u,
+        Err(shared) => {
+            step("session.tier.bodies (shared Arc, not split)", shared);
+            return;
+        }
+    };
+    let (mut texts, mut files, mut shared) = (Vec::new(), Vec::new(), Vec::new());
+    for u in units {
+        for f in u.files {
+            texts.push((f.virtual_path, f.text, f.provenance));
+            match Arc::try_unwrap(f.file) {
+                Ok(al) => files.push(al),
+                Err(a) => shared.push(a),
+            }
+        }
+    }
+    println!(
+        "  tier.bodies split: {} files ({} AlFile Arcs shared elsewhere)",
+        files.len() + shared.len(),
+        shared.len()
+    );
+    // Walk estimates before anything drops.
+    let (mut ne, mut ns, mut nb, mut nmember) = (0usize, 0usize, 0usize, 0usize);
+    let (mut str_heap, mut vec_heap, mut nstr) = (0usize, 0usize, 0usize);
+    let mut by_kind: HashMap<&'static str, usize> = HashMap::new();
+    for f in &files {
+        let ir = &f.ir;
+        ns += ir.stmt_count();
+        nb += ir.block_count();
+        for e in ir.iter_exprs() {
+            ne += 1;
+            let mut s = |x: &String| {
+                str_heap += x.capacity();
+                nstr += 1;
+            };
+            let k = match &e.kind {
+                ExprKind::Identifier(x) => (s(x), "Identifier").1,
+                ExprKind::QuotedIdentifier(x) => (s(x), "QuotedIdentifier").1,
+                ExprKind::Member { member, .. } => {
+                    nmember += 1;
+                    (s(member), "Member").1
+                }
+                ExprKind::Call { args, .. } => {
+                    vec_heap += args.capacity() * 4;
+                    "Call"
+                }
+                ExprKind::List(v) => {
+                    vec_heap += v.capacity() * 4;
+                    "List"
+                }
+                ExprKind::QualifiedEnum { value, .. } => (s(value), "QualifiedEnum").1,
+                ExprKind::DatabaseReference(x) => (s(x), "DatabaseReference").1,
+                ExprKind::TypeOp { ty, .. } => (s(ty), "TypeOp").1,
+                ExprKind::Literal(l) => match l {
+                    Literal::Int(x)
+                    | Literal::Decimal(x)
+                    | Literal::Text(x)
+                    | Literal::Date(x)
+                    | Literal::DateTime(x)
+                    | Literal::Time(x)
+                    | Literal::Other(x) => (s(x), "Literal").1,
+                    Literal::Bool(_) => "Literal",
+                },
+                ExprKind::Index { .. } => "Index",
+                ExprKind::Unary { .. } => "Unary",
+                ExprKind::Binary { .. } => "Binary",
+                ExprKind::Parenthesized(_) => "Parenthesized",
+                ExprKind::RangeExpr { .. } => "RangeExpr",
+                ExprKind::Ternary { .. } => "Ternary",
+                ExprKind::Unknown => "Unknown",
+            };
+            *by_kind.entry(k).or_default() += 1;
+        }
+    }
+    let m = |b: usize| b as f64 / 1_048_576.0;
+    let mut kinds: Vec<_> = by_kind.into_iter().collect();
+    kinds.sort_by(|a, b| b.1.cmp(&a.1));
+    println!("  exprs by kind: {kinds:?}");
+    let est = [
+        ("exprs inline (len x size_of Expr)", ne * size_of::<Expr>()),
+        ("stmts inline (len x size_of Stmt)", ns * size_of::<Stmt>()),
+        (
+            "blocks inline (len x size_of Block)",
+            nb * size_of::<Block>(),
+        ),
+        ("expr strings heap (capacity)", str_heap),
+        ("expr arg/list Vec heap (capacity)", vec_heap),
+    ];
+    println!(
+        "  counts: exprs {ne}, stmts {ns}, blocks {nb}, members {nmember}, expr strings {nstr}"
+    );
+    for (l, b) in est {
+        println!("    est {l:<52} {:>9.2} MiB", m(b));
+    }
+    let est_ir: usize = est.iter().map(|e| e.1).sum();
+    let (mut objects, mut irs, mut issues, mut comments) =
+        (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    for f in files {
+        objects.push(f.objects);
+        irs.push(f.ir);
+        issues.push(f.issues);
+        comments.push(f.comments);
+    }
+    step("  bodies: source text + paths + provenance", texts);
+    step("  bodies: objects (declarations)", objects);
+    let (ir_bytes, _) = step("  bodies: ir (exprs, stmts, blocks, side tables)", irs);
+    println!(
+        "    ir remainder after the estimates (stmt heap, side tables, Vec slack) {:>9.2} MiB",
+        m((ir_bytes.max(0) as usize).saturating_sub(est_ir))
+    );
+    step("  bodies: issues", issues);
+    step("  bodies: comments", comments);
+    step("  bodies: AlFile Arcs shared elsewhere", shared);
+}
+
 fn step<T>(label: &str, v: T) -> (isize, isize) {
     let (b0, a0) = live();
     drop(v);
@@ -1820,7 +1947,15 @@ fn resident_mode(ws: PathBuf, routine: String, low_mem: bool) {
                             mib(text as isize)
                         );
                     }
-                    step("session.tier.bodies", bodies);
+                    let (b0, a0) = live();
+                    split_bodies(bodies);
+                    let (b1, a1) = live();
+                    println!(
+                        "  {:<58} {:>9.2} MiB {:>10} allocs",
+                        "session.tier.bodies",
+                        mib(b0 - b1),
+                        a0 - a1
+                    );
                     step("session.tier.routines", routines);
                     step("session.tier.objects", objects);
                     step("session.tier.dep_meta", dep_meta);

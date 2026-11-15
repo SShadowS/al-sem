@@ -197,7 +197,7 @@ pub fn extract_source_facts(
                                 member_wrapper: routine
                                     .enclosing_member
                                     .as_ref()
-                                    .map(|m| m.1.kind_text),
+                                    .map(|m| m.1.kind_text()),
                                 object_subtype: subtype.filter(|_| object_type == "Codeunit"),
                                 page_type: page_type
                                     .filter(|_| matches!(object_type, "Page" | "PageExtension")),

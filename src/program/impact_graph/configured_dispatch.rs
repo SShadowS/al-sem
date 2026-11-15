@@ -316,7 +316,7 @@ fn arms_of(file: &AlFile, text: &str, s: StmtId) -> Vec<Arm> {
             let labels: Vec<String> = b
                 .patterns
                 .iter()
-                .map(|p| text_of(text, &file.ir.expr(*p).origin.byte))
+                .map(|p| text_of(text, &file.ir.expr(*p).origin.byte()))
                 .collect();
             let first = b
                 .patterns
@@ -641,7 +641,10 @@ pub fn candidates(
                                 obj.name,
                                 r.name
                             ),
-                            scrutinee: text_of(&pf.text, &pf.file.ir.expr(*scrutinee).origin.byte),
+                            scrutinee: text_of(
+                                &pf.text,
+                                &pf.file.ir.expr(*scrutinee).origin.byte(),
+                            ),
                             arms: arms.len(),
                             call_arms,
                             callees: callees.len(),

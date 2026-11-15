@@ -205,29 +205,34 @@ impl PackedOrigin {
     #[must_use]
     pub fn try_from_origin(o: &Origin) -> Option<Self> {
         Some(PackedOrigin {
-            kind: RawKind::try_from_raw(o.kind_text)?,
-            byte_start: o.byte.start,
-            byte_end: o.byte.end,
+            kind: RawKind::try_from_raw(o.kind_text())?,
+            byte_start: o.byte().start,
+            byte_end: o.byte().end,
             start: (o.start.row, o.start.column),
             end: (o.end.row, o.end.column),
         })
     }
 
-    /// Infallible: every `RawKind` has a canonical kind string.
+    /// `None` when a byte offset does not fit the IR's `u32` (ENG-86): no parsed source is
+    /// that large, so only a corrupt or forged pack carries one, and it must fail the decode,
+    /// not panic. The kind cannot fail: every `RawKind` has a canonical kind string.
     #[must_use]
-    pub fn into_origin(self) -> Origin {
-        Origin {
-            kind_text: self.kind.as_str(),
-            byte: self.byte_start..self.byte_end,
-            start: Point {
+    pub fn into_origin(self) -> Option<Origin> {
+        if u32::try_from(self.byte_start).is_err() || u32::try_from(self.byte_end).is_err() {
+            return None;
+        }
+        Some(Origin::new(
+            self.kind.as_str(),
+            self.byte_start..self.byte_end,
+            Point {
                 row: self.start.0,
                 column: self.start.1,
             },
-            end: Point {
+            Point {
                 row: self.end.0,
                 column: self.end.1,
             },
-        }
+        ))
     }
 }
 
@@ -289,13 +294,15 @@ pub mod origin_wire {
             Some(p) => p.serialize(s),
             None => Err(serde::ser::Error::custom(format!(
                 "origin kind {:?} is not a named grammar kind",
-                o.kind_text
+                o.kind_text()
             ))),
         }
     }
 
     pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Origin, D::Error> {
-        Ok(PackedOrigin::deserialize(d)?.into_origin())
+        PackedOrigin::deserialize(d)?
+            .into_origin()
+            .ok_or_else(|| serde::de::Error::custom("origin byte offset past u32"))
     }
 }
 
@@ -369,11 +376,13 @@ fn unencodable_origin_report(pack: &DepPack) -> String {
     for file in &pack.files {
         for (_, meta) in &file.routine_meta {
             for (which, origin) in [("origin", &meta.origin), ("name_origin", &meta.name_origin)] {
-                if RawKind::try_from_raw(origin.kind_text).is_none() {
+                if RawKind::try_from_raw(origin.kind_text()).is_none() {
                     return format!(
                         "{}: routine {} {which} kind {:?} is not a named grammar kind, so this \
                          app is not packable",
-                        file.virtual_path, meta.name, origin.kind_text
+                        file.virtual_path,
+                        meta.name,
+                        origin.kind_text()
                     );
                 }
             }
@@ -448,12 +457,12 @@ mod tests {
     use al_syntax::ir::ObjectKind;
 
     fn origin(kind_text: &'static str, lo: usize, hi: usize) -> Origin {
-        Origin {
+        Origin::new(
             kind_text,
-            byte: lo..hi,
-            start: Point { row: 3, column: 4 },
-            end: Point { row: 5, column: 6 },
-        }
+            lo..hi,
+            Point { row: 3, column: 4 },
+            Point { row: 5, column: 6 },
+        )
     }
 
     fn sample_routine_id() -> RoutineNodeId {
@@ -539,6 +548,22 @@ mod tests {
         // Total, not field-by-field: a field added to `DepPack`/`PackedFile`/
         // `RoutineMeta` later is covered without editing this assertion.
         assert_eq!(back, pack);
+    }
+
+    /// The encoded bytes of the sample pack, pinned: a change to the serialized form
+    /// fails here, and then needs a `PACK_SCHEMA` bump (and a new pin). ENG-86 changed
+    /// `Origin`'s in-memory layout only; the same test on master `e7848a85` gives the
+    /// same hash, so packs written before it still decode.
+    #[test]
+    fn the_sample_pack_encodes_to_pinned_bytes() {
+        let mut pack = sample_pack();
+        pack.self_hash = compute_self_hash(&pack);
+        let bytes = encode(&pack).expect("encode");
+        assert_eq!(
+            blake3::hash(&bytes).to_hex().as_str(),
+            "e4575752ead91bb6a12dee05f1f1db997283812ef263cbe41b292c3b2efefa4d",
+            "the pack's serialized form changed: bump PACK_SCHEMA and re-pin"
+        );
     }
 
     /// Schemas 8 and 9: a routine's method ids are pack payload (the symbols'
@@ -639,6 +664,40 @@ mod tests {
         assert_eq!(back, pack);
     }
 
+    /// ENG-86: `into_origin` is infallible only because every `RawKind` string is a kind
+    /// `Origin::new` knows; checked for all of them, not one.
+    #[test]
+    fn every_raw_kind_decodes_to_an_origin_naming_it() {
+        for kind in RawKind::ALL {
+            let packed = PackedOrigin {
+                kind,
+                byte_start: 1,
+                byte_end: 2,
+                start: (0, 1),
+                end: (0, 2),
+            };
+            assert_eq!(packed.into_origin().unwrap().kind_text(), kind.as_str());
+        }
+    }
+
+    /// ENG-86 (sol r1): a byte offset past `u32` (only a corrupt or forged pack has one)
+    /// fails the decode with an error instead of panicking in `Origin`'s narrowing.
+    #[test]
+    fn an_origin_offset_past_u32_fails_the_decode() {
+        let packed = |end: usize| PackedOrigin {
+            kind: RawKind::Identifier,
+            byte_start: 1,
+            byte_end: end,
+            start: (0, 1),
+            end: (0, 2),
+        };
+        assert!(packed(u32::MAX as usize).into_origin().is_some());
+        assert!(packed(u32::MAX as usize + 1).into_origin().is_none());
+        let json = serde_json::to_value(packed(u32::MAX as usize + 1)).expect("to json");
+        let err = origin_wire::deserialize(json).expect_err("decode fails");
+        assert!(err.to_string().contains("past u32"), "{err}");
+    }
+
     /// The `Origin` codec specifically: a decoded `kind_text` must be the same
     /// `&'static str` the IR would have produced, and every position field must
     /// survive. `assert_eq!(back, pack)` above covers this too, but this test
@@ -648,11 +707,11 @@ mod tests {
         let o = origin("trigger_declaration", 7, 91);
         let packed = PackedOrigin::try_from_origin(&o).expect("named kind must encode");
         assert_eq!(packed.kind, RawKind::TriggerDeclaration);
-        let back = packed.into_origin();
+        let back = packed.into_origin().expect("in range");
         assert_eq!(back, o);
         // The decoded string is the grammar's own `&'static str`, not a copy —
         // this is the property that makes decode allocation-free.
-        assert_eq!(back.kind_text, RawKind::TriggerDeclaration.as_str());
+        assert_eq!(back.kind_text(), RawKind::TriggerDeclaration.as_str());
     }
 
     /// Fix round 1 (#M-8): the positional index is only safe where the pack
@@ -680,22 +739,29 @@ mod tests {
     /// grammar kind. Production cannot currently produce one (see
     /// `every_decl_origin_kind_is_a_named_grammar_kind`), which is exactly why
     /// the fixture is constructed literally rather than obtained from a parse.
+    /// Since ENG-86 an `Origin` holds a grammar symbol id, so the unencodable kind is a
+    /// real but ANONYMOUS one (the `addafter` token), not an invented string.
     #[test]
     fn an_unencodable_origin_kind_fails_the_pack_instead_of_panicking() {
         assert_eq!(
-            PackedOrigin::try_from_origin(&origin("definitely_not_a_real_kind", 0, 1)),
+            RawKind::try_from_raw("addafter"),
+            None,
+            "`addafter` is anonymous"
+        );
+        assert_eq!(
+            PackedOrigin::try_from_origin(&origin("addafter", 0, 1)),
             None
         );
 
         let mut pack = sample_pack();
-        pack.files[0].routine_meta[0].1.origin = origin("definitely_not_a_real_kind", 0, 1);
+        pack.files[0].routine_meta[0].1.origin = origin("addafter", 0, 1);
         pack.self_hash = compute_self_hash(&pack);
         match encode(&pack) {
             Err(PackError::Codec(msg)) => {
                 // Fail-closed AND diagnosable: the message must name the kind,
                 // or an unpackable app becomes a mystery cache-miss rate.
                 assert!(
-                    msg.contains("definitely_not_a_real_kind"),
+                    msg.contains("\"addafter\""),
                     "codec error must name the offending kind, got: {msg}"
                 );
                 assert!(
@@ -875,7 +941,11 @@ mod tests {
                 let name = &mut p.files[0].routine_meta[0].1.name;
                 *name = format!("{name}x").into();
             },
-            |p: &mut DepPack| p.files[0].routine_meta[0].1.origin.byte.end += 1,
+            |p: &mut DepPack| {
+                let o = &mut p.files[0].routine_meta[0].1.origin;
+                let b = o.byte();
+                *o = Origin::new(o.kind_text(), b.start..b.end + 1, o.start, o.end);
+            },
             |p: &mut DepPack| p.files[0].routine_meta[0].1.params[0].by_ref = false,
             |p: &mut DepPack| p.files[0].routine_meta[0].0.sig_fp += 1,
         ] {
@@ -920,18 +990,18 @@ mod tests {
             for obj in &file.objects {
                 for r in &obj.routines {
                     assert!(
-                        RawKind::try_from_raw(r.origin.kind_text).is_some(),
+                        RawKind::try_from_raw(r.origin.kind_text()).is_some(),
                         "{}: routine {} origin kind {:?} is not a named grammar kind",
                         path.display(),
                         r.name,
-                        r.origin.kind_text
+                        r.origin.kind_text()
                     );
                     assert!(
-                        RawKind::try_from_raw(r.name_origin.kind_text).is_some(),
+                        RawKind::try_from_raw(r.name_origin.kind_text()).is_some(),
                         "{}: routine {} name_origin kind {:?} is not a named grammar kind",
                         path.display(),
                         r.name,
-                        r.name_origin.kind_text
+                        r.name_origin.kind_text()
                     );
                     checked += 1;
                 }

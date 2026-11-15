@@ -561,13 +561,13 @@ impl<'a> SpineCtx<'a> {
             end_column: self
                 .cols
                 .col(origin.end.row as usize, origin.end.column as usize),
-            syntax_kind: origin.kind_text.to_string(),
+            syntax_kind: origin.kind_text().to_string(),
         }
     }
 
     /// Exact raw source text of an IR node (via its byte span).
     fn raw(&self, origin: &Origin) -> &'a str {
-        &self.source[origin.byte.clone()]
+        &self.source[origin.byte()]
     }
 
     /// D1: a call's field-naming argument positions, when its function is a
@@ -654,7 +654,7 @@ impl<'a> SpineCtx<'a> {
             },
             Member { object, member, .. } => {
                 let obj = self.file.ir.expr(*object);
-                if obj.origin.kind_text == "keyword_identifier"
+                if obj.origin.kind_text() == "keyword_identifier"
                     && let Some(okind) = object_run_kind(self.raw(&obj.origin))
                     && member.eq_fold_identifier("run")
                 {
@@ -775,7 +775,7 @@ impl<'a> SpineCtx<'a> {
         use ExprKind::*;
         let e = self.file.ir.expr(eid);
         match &e.kind {
-            Identifier(name) if e.origin.kind_text == "identifier" => {
+            Identifier(name) if e.origin.kind_text() == "identifier" => {
                 self.condition_references.push(PConditionReference {
                     identifier: name.fold_identifier(),
                     condition_kind: kind.to_string(),
@@ -788,7 +788,8 @@ impl<'a> SpineCtx<'a> {
                 member_origin,
                 ..
             } => {
-                if member_origin.kind_text == "identifier" {
+                let member_origin = self.file.ir.member_origin(*member_origin);
+                if member_origin.kind_text() == "identifier" {
                     self.condition_references.push(PConditionReference {
                         identifier: member.fold_identifier(),
                         condition_kind: kind.to_string(),
@@ -1262,7 +1263,7 @@ impl<'a> SpineCtx<'a> {
             // subscript, so its origin kind is NOT `call_expression`. Legacy harvests
             // identifier-refs from a call's function subtree ONLY for real (parens)
             // call_expressions; a parenless call's receiver is not counted.
-            let is_parens_call = e.origin.kind_text == "call_expression";
+            let is_parens_call = e.origin.kind_text() == "call_expression";
             // Consume the one-shot chained-receiver flag: if set, this call is a
             // receiver and its bare function name is counted as an identifier-ref.
             let count_this_fn = self.count_next_call_fn;
@@ -1270,7 +1271,7 @@ impl<'a> SpineCtx<'a> {
             let fe = self.file.ir.expr(function);
             if count_this_fn
                 && let Identifier(n) = &fe.kind
-                && fe.origin.kind_text == "identifier"
+                && fe.origin.kind_text() == "identifier"
             {
                 self.identifier_ref_set.insert(n.fold_identifier());
             }
@@ -1518,7 +1519,7 @@ impl<'a> SpineCtx<'a> {
                 // `identifier` node in legacy — its main visit counts it as a value
                 // ref BEFORE the record-op routing. A parens `Foo()` callee is NOT
                 // counted (the call_expression is not an identifier node).
-                Identifier(n) if !is_parens_call && fe.origin.kind_text == "identifier" => {
+                Identifier(n) if !is_parens_call && fe.origin.kind_text() == "identifier" => {
                     self.identifier_ref_set.insert(n.fold_identifier());
                 }
                 Identifier(_) | QuotedIdentifier(_) => {}
@@ -1552,7 +1553,9 @@ impl<'a> SpineCtx<'a> {
                 {
                     let record_variable_name =
                         self.raw(&self.file.ir.expr(*object).origin).to_string();
-                    let field_name = if member_origin.kind_text == "quoted_identifier" {
+                    let quoted = self.file.ir.member_origin(*member_origin).kind_text()
+                        == "quoted_identifier";
+                    let field_name = if quoted {
                         strip_quotes(member)
                     } else {
                         member.clone()
@@ -1616,7 +1619,7 @@ impl<'a> SpineCtx<'a> {
             // Value-reference identifier (lc, deduped) — legacy counts only plain
             // `identifier` nodes, NOT keyword_identifier/quoted_identifier.
             Identifier(name) => {
-                if e.origin.kind_text == "identifier" {
+                if e.origin.kind_text() == "identifier" {
                     self.identifier_ref_set.insert(name.fold_identifier());
                 }
                 self.implicit_field_access(eid, name);
@@ -1769,7 +1772,7 @@ pub fn walk_spine(
 /// statement tree reads labels the same way).
 fn expression_info(file: &AlFile, source: &str, eid: ExprId) -> PExpressionInfo {
     use ExprKind::*;
-    let raw = |o: &Origin| &source[o.byte.clone()];
+    let raw = |o: &Origin| &source[o.byte()];
     let e = file.ir.expr(eid);
     let text = raw(&e.origin).to_string();
     let strip_q = |s: &str| s.trim_matches(|c| c == '"' || c == '\'').to_string();
@@ -1797,7 +1800,7 @@ fn expression_info(file: &AlFile, source: &str, eid: ExprId) -> PExpressionInfo 
             value = Some(text.clone());
             "boolean"
         }
-        Identifier(_) if e.origin.kind_text == "identifier" => {
+        Identifier(_) if e.origin.kind_text() == "identifier" => {
             value = Some(text.clone());
             "identifier"
         }
@@ -1983,7 +1986,7 @@ impl<'a> IrCfn<'a> {
 
     /// An expression's source text as written.
     fn expr_text(&self, e: ExprId) -> &str {
-        &self.source[self.ir().expr(e).origin.byte.clone()]
+        &self.source[self.ir().expr(e).origin.byte()]
     }
 
     /// A loop's [`FlowFact::Loop`]: its condition as written (`raw`), folded
@@ -2396,7 +2399,7 @@ impl<'a> IrCfn<'a> {
         }
         let x = self.ir().expr(e);
         match &x.kind {
-            Identifier(n) if x.origin.kind_text == "identifier" => Some(n.fold_identifier()),
+            Identifier(n) if x.origin.kind_text() == "identifier" => Some(n.fold_identifier()),
             QuotedIdentifier(n) => {
                 let t = n.trim();
                 let inner = t
@@ -2454,7 +2457,7 @@ impl<'a> IrCfn<'a> {
         use ExprKind::*;
         let e = self.ir().expr(cond);
         match &e.kind {
-            Identifier(n) if e.origin.kind_text == "identifier" => Some(PConditionGuard {
+            Identifier(n) if e.origin.kind_text() == "identifier" => Some(PConditionGuard {
                 identifier: n.fold_identifier(),
                 polarity: "positive".to_string(),
             }),
@@ -2462,7 +2465,7 @@ impl<'a> IrCfn<'a> {
                 op: UnaryOp::Not,
                 operand,
             } => match &self.ir().expr(*operand).kind {
-                Identifier(n) if self.ir().expr(*operand).origin.kind_text == "identifier" => {
+                Identifier(n) if self.ir().expr(*operand).origin.kind_text() == "identifier" => {
                     Some(PConditionGuard {
                         identifier: n.fold_identifier(),
                         polarity: "negative".to_string(),
@@ -2479,7 +2482,9 @@ impl<'a> IrCfn<'a> {
                     [*lhs, *rhs]
                         .into_iter()
                         .find_map(|s| match &self.ir().expr(s).kind {
-                            Identifier(n) if self.ir().expr(s).origin.kind_text == "identifier" => {
+                            Identifier(n)
+                                if self.ir().expr(s).origin.kind_text() == "identifier" =>
+                            {
                                 Some(n.fold_identifier())
                             }
                             _ => None,
@@ -2976,7 +2981,7 @@ impl TextProof<'_> {
         ) -> Decl<'a> {
             (
                 v.ty.as_deref(),
-                v.origin.byte.start,
+                v.origin.byte().start,
                 ir.var_wrappers_from(&v.origin, &routine.origin).collect(),
             )
         }
@@ -2985,7 +2990,7 @@ impl TextProof<'_> {
                 r.params
                     .iter()
                     .filter(|p| p.name.eq_fold_identifier(name))
-                    .map(|p| (p.ty.as_deref(), p.origin.byte.start, Vec::new()))
+                    .map(|p| (p.ty.as_deref(), p.origin.byte().start, Vec::new()))
                     .collect(),
                 signature_complete,
             ),
@@ -3184,7 +3189,7 @@ pub fn routine_features_partial(
         start_column: cols.col(o.start.row as usize, o.start.column as usize),
         end_line: o.end.row,
         end_column: cols.col(o.end.row as usize, o.end.column as usize),
-        syntax_kind: o.kind_text.to_string(),
+        syntax_kind: o.kind_text().to_string(),
     };
     // param lc-name → (index, is_var).
     let param_by_lc: HashMap<String, (u32, bool)> = routine
@@ -3221,7 +3226,7 @@ pub fn routine_features_partial(
                 let parameter_index = parameter_index as u32;
                 // Only bare-identifier args bind to a record/parameter symbol.
                 let lc = match &e.kind {
-                    ExprKind::Identifier(n) if e.origin.kind_text == "identifier" => {
+                    ExprKind::Identifier(n) if e.origin.kind_text() == "identifier" => {
                         n.fold_identifier()
                     }
                     _ => {
@@ -3788,7 +3793,7 @@ fn ir_is_temporary_error_guard(file: &AlFile, sid: al_syntax::ir::StmtId) -> Opt
         return None;
     };
     let call = file.ir.expr(*call_eid);
-    if call.origin.kind_text != "call_expression" {
+    if call.origin.kind_text() != "call_expression" {
         return None;
     }
     let ExprKind::Call { function, .. } = &call.kind else {
@@ -3847,7 +3852,7 @@ fn ir_classify_rhs(file: &AlFile, eid: ExprId, source: &str) -> serde_json::Valu
     use al_syntax::ir::Literal::*;
     use serde_json::json;
     let e = file.ir.expr(eid);
-    let text = &source[e.origin.byte.clone()];
+    let text = &source[e.origin.byte()];
     match &e.kind {
         ExprKind::Literal(Text(_)) => {
             let v = text.trim();
@@ -3861,11 +3866,11 @@ fn ir_classify_rhs(file: &AlFile, eid: ExprId, source: &str) -> serde_json::Valu
             json!({ "kind": "literal", "value": text.trim() })
         }
         ExprKind::QualifiedEnum { enum_type, value } => {
-            let en = &source[file.ir.expr(*enum_type).origin.byte.clone()];
+            let en = &source[file.ir.expr(*enum_type).origin.byte()];
             let en = en.trim().trim_matches('"');
             json!({ "kind": "enum", "enumName": en, "member": value })
         }
-        ExprKind::Identifier(n) if e.origin.kind_text == "identifier" => {
+        ExprKind::Identifier(n) if e.origin.kind_text() == "identifier" => {
             json!({ "kind": "constant-var", "varName": n.fold_identifier(), "initializer": { "kind": "unknown" } })
         }
         _ => json!({ "kind": "expression" }),
@@ -4102,13 +4107,13 @@ fn ir_attr_arg(file: &AlFile, eid: ExprId, source: &str) -> serde_json::Value {
     use al_syntax::ir::Literal as L;
     use serde_json::json;
     let e = file.ir.expr(eid);
-    let text = source[e.origin.byte.clone()].to_string();
+    let text = source[e.origin.byte()].to_string();
     let mut obj = serde_json::Map::new();
     let kind = match &e.kind {
         ExprKind::Literal(L::Bool(_)) => "boolean",
         ExprKind::Literal(L::Int(_)) => "integer",
         ExprKind::Literal(L::Text(_)) => "string_literal",
-        ExprKind::Identifier(_) if e.origin.kind_text == "identifier" => "identifier",
+        ExprKind::Identifier(_) if e.origin.kind_text() == "identifier" => "identifier",
         ExprKind::QuotedIdentifier(_) => "quoted_identifier",
         ExprKind::QualifiedEnum { .. } => "qualified_enum_value",
         ExprKind::DatabaseReference(_) => "database_reference",
@@ -4127,7 +4132,7 @@ fn ir_attr_arg(file: &AlFile, eid: ExprId, source: &str) -> serde_json::Value {
         }
         "qualified_enum_value" => {
             if let ExprKind::QualifiedEnum { enum_type, value } = &e.kind {
-                let q = source[file.ir.expr(*enum_type).origin.byte.clone()].to_string();
+                let q = source[file.ir.expr(*enum_type).origin.byte()].to_string();
                 let m = strip(value);
                 obj.insert("value".into(), json!(m));
                 obj.insert("qualifier".into(), json!(q));

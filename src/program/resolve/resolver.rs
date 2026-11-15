@@ -146,7 +146,10 @@ fn make_routine_route(
             conditions: vec![],
             witness: Witness::SourceSpan {
                 file: path.to_string(),
-                span: (meta.origin.byte.start as u32, meta.origin.byte.end as u32),
+                span: (
+                    meta.origin.byte().start as u32,
+                    meta.origin.byte().end as u32,
+                ),
             },
             receiver_tier: None,
         }
