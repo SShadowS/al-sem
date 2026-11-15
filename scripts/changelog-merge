@@ -69,10 +69,18 @@ merge() {
             # of the item above, a plain paragraph) belongs to what precedes the
             # conflict: refused whenever ours added anything. Refused, not
             # regrouped silently.
-            oh = 0; ob = 0
-            for (i = 1; i <= no; i++) { if (o[i] ~ /^#/) oh = 1; if (o[i] != "") ob = 1 }
+            # Review r3 (sol): a heading nests under the shallowest heading ours
+            # adds, so theirs heading at depth N is refused when ours adds a
+            # heading of fewer #s (a "### Security" for [Unreleased] would land
+            # under ours new "## [1.0.0]"); a sibling depth is fine.
+            oh = 0; ob = 0; ol = 0
+            for (i = 1; i <= no; i++) {
+                if (o[i] != "") ob = 1
+                if (match(o[i], /^#+ /)) { oh = 1; if (ol == 0 || RLENGTH - 1 < ol) ol = RLENGTH - 1 }
+            }
             tf = ""; for (i = 1; i <= nt; i++) if (t[i] != "") { tf = t[i]; break }
             if (ob && tf != "" && tf !~ /^#/ && (oh || tf !~ /^- /)) { orphan = 1; exit }
+            if (oh && match(tf, /^#+ /) && ol < RLENGTH - 1) { orphan = 1; exit }
             for (i = 1; i <= no; i++) print o[i]
             if (no > 0 && o[no] != "" && nt > 0 && t[1] ~ /^#/) print ""
             for (i = 1; i <= nt; i++) print t[i]
@@ -216,6 +224,19 @@ self_test() {
         check "a continuation beside the other side's new item is refused" ok
     else
         check "a continuation beside the other side's new item is refused" "reason: $(cat "$d/why2d")"
+    fi
+    # 2e. Heading depth (review r3, sol): ours adds a release section "## [1.0.0]",
+    # theirs a "### Security" entry for [Unreleased]: refused. Two "###" siblings
+    # are case 1 (merged).
+    printf '## [Unreleased]\n\n### Fixed (A)\n\n- a\n' >"$d/b2e"
+    printf '## [Unreleased]\n\n### Fixed (A)\n\n- a\n\n## [1.0.0]\n\n### Added (R)\n\n- r\n' >"$d/o2e"
+    printf '## [Unreleased]\n\n### Fixed (A)\n\n- a\n\n### Security (C)\n\n- c\n' >"$d/t2e"
+    if merge "$d/b2e" "$d/o2e" "$d/t2e" "$d/out2e" >"$d/why2e"; then
+        check "a deeper heading after the other side's shallower one is refused" "it merged: $(tr '\n' '/' <"$d/out2e")"
+    elif grep -q 'continue what precedes it' "$d/why2e"; then
+        check "a deeper heading after the other side's shallower one is refused" ok
+    else
+        check "a deeper heading after the other side's shallower one is refused" "reason: $(cat "$d/why2e")"
     fi
     # 3. CRLF line ends: the awk sees no marker it knows, the marker check refuses.
     sed 's/$/\r/' "$d/ours2" >"$d/ours3"
