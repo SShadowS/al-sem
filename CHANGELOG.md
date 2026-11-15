@@ -115,9 +115,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   gone (it read the CLI's stderr), and its hint is no longer a literal CLI spelling; under a
   filter that runs fewer users, or after a panic before a release, the server closes at
   process exit without the clean-exit check.
-- Measured (`output_cdo` alone, `cdo` profile, load ~80-130 from outside the container):
-  `alsem` processes at the peak 21,308 -> 9,209 MiB (one front end, a 7.3 GB production engine
-  and the 1.9 GB test universe); 22 tests pass; 208.6 s -> 201.8 s (indicative only).
+- Measured:
+  - `output_cdo` alone, back to back (`cdo` profile, load ~80-130 from outside the
+    container): `alsem` processes at the peak 21,308 -> 9,209 MiB (one front end, a 7.3 GB
+    production engine and the 1.9 GB test universe); 22 tests pass; 208.6 s -> 201.8 s.
+  - In the gate's own terms (TLS-74's per-phase line): the landing gate on master `e708f1f6`
+    had `output_cdo` at 23,433 MiB (container), the gate 22,418, 8 `alsem` processes;
+    `cdo-gate --only output` on this branch: 11,124 MiB, the gate 9,976, 3 processes, 22
+    passed. Its 211 s against the landing gates' 143-189 s comes from runs at other times
+    under other load; the back-to-back pair above is the like-for-like time.
 
 ### Fixed (TLS-73: `scripts/perf-probe` checks what samply needs, not one small buffer)
 
