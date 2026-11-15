@@ -19,8 +19,9 @@ A base binary is built from `git archive REV` and cached by commit under
 `${ALSEM_SPEED_CACHE:-~/.cache/al-sem/cdo-speed}/bin/<sha>/`, so each master
 commit is built once per machine, whatever worktree asks for it.
 
-What runs: one `alsem mcp` server per side (the resident path agents use), both
-alive for the whole run, asked the same calls in turn:
+What runs: one `alsem mcp` server per side (the resident path agents use), asked
+the same calls in turn (a fresh pair per warm-up pass; the last pair also runs the
+rounds):
   warm-up (round 0, two passes, each on a fresh server pair; TLS-65): the first ask
     builds the CDO model (`build`), then one call of each tool builds the
     per-revision artifacts and the test universe (`warm-tests`). The second pass
@@ -42,7 +43,7 @@ What is judged, per call, head over base:
     CPU_LIMIT and WALL_LIMIT. The round total (every call of a round summed) is
     judged the same way. These calls run on about one thread (CPU time is about
     their wall time), so their wall limit says little about lost parallelism;
-  warm-up: one sample per pass, the ratio the median (with two: the mean) of the
+  warm-up: one sample per pass, the ratio the geometric mean of the
     passes, only the calls of at least WARM_MIN_SECONDS (the model build and the
     test universe); the verdict line shows each pass's ratio and the load range.
     CPU time at most WARM_CPU_LIMIT, and
@@ -69,7 +70,8 @@ a ratio of failed calls (a wrong workspace answers in 0.01 s) measures nothing
 (TLS-10: a run on a wrong workspace once printed PASS).
 
 Exit: 0 pass, 1 fail (slower or larger, or a call failed), 2 cannot run (usage,
-build, an MCP request that failed or timed out). Linux only (/proc).
+build, an MCP request that failed or timed out, or the machine stayed too loaded to
+start a warm-up pass). Linux only (/proc).
 """
 import argparse
 import fcntl
@@ -87,7 +89,7 @@ import time
 # The limits, head over base. See the module doc.
 CPU_LIMIT = 1.20
 WALL_LIMIT = 1.30
-# The warm-up's calls have one sample each: wider limits. Its wall limit is
+# The warm-up's calls have one sample per pass: wider limits. Its wall limit is
 # above the worst single sample against the same binary (x1.32: the model build
 # beside a 22-core build; x1.31 beside 22 busy loops) and far below what losing
 # their parallelism costs (on one core, from their CPU over wall: the model
@@ -102,18 +104,25 @@ MIN_SECONDS = 2.0
 # (CDO_SPEED_WARM_MIN_SECONDS: a test hook, so a stub's short calls are judged.)
 WARM_MIN_SECONDS = float(os.environ.get("CDO_SPEED_WARM_MIN_SECONDS", "20.0"))
 # ⟨TLS-65⟩ The warm-up is timed twice, on two fresh server pairs, the second
-# with every call's side order flipped: a call's ratio is the mean of the two.
-# One sample in a fixed order always timed head's model build second, and the
-# side built second reads ~15 % slow at load ~9 (x1.167 for a binary against
-# itself; x0.996 at load 5).
+# with every call's side order flipped: a call's ratio is the geometric mean of
+# the two (it cancels a factor k on one pass and 1/k on the other exactly).
+# One sample in a fixed order always timed head's model build second; the side
+# built second was measured once at x1.167 for a binary against itself at load
+# ~9 (ENG-81; not reproduced in TLS-65's own loaded run, x1.02), and one quiet
+# TLS-65 run read x1.096 with head second against x1.004 flipped.
 WARM_SAMPLES = 2
 # Before each warm-up pass, the 1-min load must be at most QUIET_LOAD; after
 # QUIET_WAIT_S of waiting the run stops with exit 2 ("cannot judge"), which
-# fails cdo-gate's speed phase: speed is never judged on a loaded machine, and
-# never skipped silently.
+# fails cdo-gate's speed phase: no warm-up pass starts on a loaded machine, and
+# speed is never skipped silently. (The load is checked before each pass, not
+# during one: a load that rises mid-pass is recorded, not judged.)
 QUIET_LOAD = float(os.environ.get("CDO_SPEED_QUIET_LOAD", max(6, (os.cpu_count() or 1) / 3)))
 QUIET_WAIT_S = float(os.environ.get("CDO_SPEED_QUIET_WAIT_S", "600"))
 QUIET_POLL_S = float(os.environ.get("CDO_SPEED_QUIET_POLL_S", "10"))
+
+
+TEST_HOOKS = ("CDO_SPEED_WARM_MIN_SECONDS", "CDO_SPEED_LOADAVG_FILE", "CDO_SPEED_QUIET_LOAD",
+              "CDO_SPEED_QUIET_WAIT_S", "CDO_SPEED_QUIET_POLL_S")
 
 
 def load_1min():
@@ -794,6 +803,9 @@ def main():
         return 0
 
     log(f"base {base_sha[:10]} ({base_rev}) against head {head_label}; workspace {ws}")
+    hooks = [f"{k}={os.environ[k]}" for k in TEST_HOOKS if k in os.environ]
+    if hooks:
+        log(f"test hooks set (a real gate sets none): {' '.join(hooks)}")
     load0 = load_1min()
     records = []
     servers = {}
@@ -827,8 +839,9 @@ def main():
         for side in servers:
             peaks[side] = max(peaks[side], servers[side].peak_mib())
     except TooLoaded as e:
-        log(f"FAIL: cannot judge speed: {e.args[0]}; nothing was timed on a loaded "
-            f"machine (cdo-gate fails this phase; rerun on a quieter machine)")
+        log(f"FAIL: cannot judge speed: {e.args[0]}; no warm-up pass was started on a loaded "
+            f"machine and nothing is judged (cdo-gate fails this phase; rerun on a quieter "
+            f"machine)")
         return 2
     except CallFailed as e:
         what, err = e.args
@@ -840,14 +853,20 @@ def main():
         for s in servers.values():
             s.close()
 
-    warm = [r for r in records if r["round"] == 0]
+    warm_records = [r for r in records if r["round"] == 0]
     rows, noisy = judge([r for r in records if r["round"] > 0])
     # The warm-up's calls: one sample per pass, paired by pass; the ratio is
-    # the median over the passes (the mean of the two flipped ones).
-    warm_rows, _ = judge([dict(r, round=r["warm_pass"] + 1) for r in warm])
+    # the geometric mean over the passes (with the two flipped ones, a factor k
+    # on one and 1/k on the other cancels exactly; an arithmetic mean would
+    # lean against head).
+    warm_rows, _ = judge([dict(r, round=r["warm_pass"] + 1) for r in warm_records])
     warm_rows = [r for r in warm_rows if r["call"] != "round-total"]
     for row in warm_rows:
-        loads = [r["load"] for r in warm if r["call"] == row["call"]]
+        for m in ("cpu", "wall"):
+            ratios = row[m]["ratios"]
+            if ratios and min(ratios) > 0:
+                row[m]["ratio"] = statistics.geometric_mean(ratios)
+        loads = [r["load"] for r in warm_records if r["call"] == row["call"]]
         row["load"] = dict(min=min(loads), max=max(loads))
     failed = []
     log(f"verdict, head/base (limits: rounds cpu {CPU_LIMIT} and wall {WALL_LIMIT} on the "

@@ -70,6 +70,9 @@ fn speed_gate_refuses_more_rounds_than_routines() {
             ])
             .arg(out.path())
             .env("ALSEM_SPEED_CACHE", out.path().join("cache"))
+            // TLS-65 (Fable r1): no wait for a quiet machine, which on a busy box
+            // would stop the valid run with exit 2 after 10 min.
+            .env("CDO_SPEED_QUIET_LOAD", "100000")
             .output()
             .expect("spawn python3 scripts/cdo-speed");
         let text = format!(
@@ -1528,25 +1531,30 @@ fn cdo_gate_skips_speed_only_when_no_product_code_changed() {
 #[cfg(target_os = "linux")]
 const SPEED_STUB: &str = r#"#!/usr/bin/env python3
 import fcntl, json, os, sys, time
-first = True
+calls = 0
 def burn(seconds):
     end = time.process_time() + seconds
     while time.process_time() < end:
         pass
+def second(name):
+    # Whether this server is the second of its pair to make this call.
+    with open(os.path.join(os.environ["STUB_DIR"], name), "a+") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        f.seek(0)
+        n = len(f.read())
+        f.write("x")
+    return n % 2 == 1
 for line in sys.stdin:
     msg = json.loads(line)
     if "id" not in msg:
         continue
     if msg.get("method") == "tools/call":
-        if first:
-            first = False
-            with open(os.path.join(os.environ["STUB_DIR"], "builds"), "a+") as f:
-                fcntl.flock(f, fcntl.LOCK_EX)
-                f.seek(0)
-                n = len(f.read())
-                f.write("x")
-            second = n % 2 == 1
-            burn(float(os.environ["STUB_BUILD_S"]) * (1.5 if second else 1.0))
+        calls += 1
+        # The warm-up's two judged calls: the model build (1st) and the test
+        # universe (6th, `warm-tests`).
+        if calls in (1, 6):
+            name = "build" if calls == 1 else "tests"
+            burn(float(os.environ["STUB_BUILD_S"]) * (1.5 if second(name) else 1.0))
         result = {"structuredContent": {"exitCode": 0, "stdoutText": "ok"}}
     else:
         result = {}
@@ -1597,13 +1605,18 @@ fn speed_with_stub(
     (out.status.code(), text)
 }
 
-/// TLS-65: the warm-up's model build is timed twice, on fresh server pairs,
-/// the second pass with the side order flipped, and judged on the mean of the
-/// two ratios. A stub that builds 50 % slower as the second side of its pair
-/// fails one fixed-order sample (head always built second: x1.50 against a
-/// 1.30 limit) and passes the two flipped ones (x1.50 and x0.67: x1.08).
+/// TLS-65: the warm-up's judged calls (the model build and the test
+/// universe) are timed twice, on fresh server pairs, the second pass with
+/// every call's side order flipped, and judged on the geometric mean of the
+/// two ratios. A stub whose second side of a pair is 50 % slower on both calls
+/// fails one fixed-order sample (head always builds the model second: x1.50
+/// against a 1.30 limit) and passes the two flipped ones; speed.json shows
+/// each judged call with two ratios, one each way (> 1.3 and < 0.8), and a
+/// geometric mean near 1.
 ///
-/// Mutation: the second pass not flipped -> both samples x1.50 -> FAIL.
+/// Mutations: the second pass not flipped -> both build samples x1.50 ->
+/// FAIL; only the first call flipped in pass 2 -> warm-tests reads x0.67 both
+/// times; the warm-up judged on one pass (`round=1`) -> one ratio (Fable r1).
 #[cfg(target_os = "linux")]
 #[test]
 fn speed_warm_up_cancels_the_second_side_penalty() {
@@ -1628,6 +1641,36 @@ fn speed_warm_up_cancels_the_second_side_penalty() {
         text.contains("head builds first"),
         "the second pass flips: {text}"
     );
+    let json: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(dir.path().join("state-/out/speed.json")).unwrap(),
+    )
+    .unwrap();
+    for call in ["build", "warm-tests"] {
+        let row = json["warm_rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["call"] == call)
+            .unwrap_or_else(|| panic!("{call} in warm_rows"));
+        let ratios: Vec<f64> = row["cpu"]["ratios"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| x.as_f64().unwrap())
+            .collect();
+        assert_eq!(ratios.len(), 2, "{call}: one ratio per pass: {ratios:?}");
+        let hi = ratios.iter().cloned().fold(f64::MIN, f64::max);
+        let lo = ratios.iter().cloned().fold(f64::MAX, f64::min);
+        assert!(
+            hi > 1.3 && lo < 0.8,
+            "{call}: one pass each way: {ratios:?}"
+        );
+        let ratio = row["cpu"]["ratio"].as_f64().unwrap();
+        assert!(
+            (0.9..1.1).contains(&ratio),
+            "{call}: the geometric mean cancels: {ratio}"
+        );
+    }
 }
 
 /// TLS-65: speed is never judged on a loaded machine and never skipped
@@ -1670,9 +1713,14 @@ fn speed_waits_for_a_quiet_machine_and_fails_loudly() {
         .unwrap();
     let summary = String::from_utf8_lossy(&out.stdout);
     assert_eq!(out.status.code(), Some(1), "{summary}");
+    // On the speed row itself (the other phases fail too: no status files).
+    let speed_row = summary
+        .lines()
+        .find(|l| l.starts_with("cdo-gate:   speed "))
+        .unwrap_or_else(|| panic!("a speed row: {summary}"));
     assert!(
-        summary.contains("speed") && summary.contains("FAILED (2)"),
-        "{summary}"
+        speed_row.contains("FAILED (2)") && speed_row.contains("FAIL: cannot judge speed"),
+        "{speed_row}"
     );
     assert!(
         summary.contains("FAIL: cannot judge speed"),
