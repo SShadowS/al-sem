@@ -252,8 +252,11 @@ fn field_census_cmd(args: &[String]) -> ExitCode {
 /// newline on `app.json`, P) and its restore. Each line has the class, the
 /// files parsed and resolved, whether the dependency bodies were resolved
 /// again, `model.copied_bytes`, the program and whole-refresh wall times, and
-/// the resident set. With `--verify`, each step also builds the model cold
-/// and compares the two models' text fingerprints (`write_model`).
+/// the resident set. With `--verify`, each step also compares the session's
+/// model with a cold build's (`model_fingerprint`, over `write_model`'s parts;
+/// `fingerprintMs` times the session's). A workspace state already built cold
+/// (`noop` and every `*-restore` step return to the `cold` step's) reuses that
+/// fingerprint (`coldReused`, no `coldMs`); the others build cold (`coldMs`).
 ///
 /// The chosen file (`--file`, else the median-sized codeunit file with a
 /// procedure body) is restored after each pair, and the session's model
@@ -396,9 +399,9 @@ fn session_refresh_cmd(args: &[String]) -> ExitCode {
     // the next one replaces it, as a resident revision keeps it.
     let mut kept: Option<al_sem::program::impact_graph::SitedGraph> = None;
     // TLS-80: the cold model's fingerprint per workspace state. The harness edits
-    // only the target file, the probe file and `app.json`, and five of its steps
-    // restore a state already built (`noop` and every `*-restore` step equal
-    // `cold`): those reuse the cold fingerprint instead of building it again.
+    // only the target file, the probe file and `app.json`, and `noop` and every
+    // `*-restore` step return to the `cold` step's state: those reuse its cold
+    // fingerprint instead of building it again.
     let mut cold_fps: std::collections::HashMap<blake3::Hash, String> =
         std::collections::HashMap::new();
     let state_key = || {

@@ -720,11 +720,13 @@ impl<T: std::fmt::Debug + Sync> SeqItems for Vec<T> {
     }
 }
 
-/// The cross-app model in parts, in a fixed order: every field a consumer reads
-/// (rows, calls, bindings sorted by call site, diagnostics, external targets, the
-/// event graph and census, the declared and loaded dependencies, the coverage,
-/// the friends). [`write_model`] and [`model_fingerprint`] both read these, so
-/// they cover the same fields.
+/// The cross-app model in parts, in a fixed order: the rows, calls, bindings
+/// sorted by call site, diagnostics, external targets, the event graph and
+/// census, the declared and loaded dependencies, the coverage and the friends
+/// (the fields the text has covered since before TLS-80; `ResolvedCalls`'
+/// `background_starts` and `loaded_only_tables` are not in it, TLS-81).
+/// [`write_model`] and [`model_fingerprint`] both read these, so they cover the
+/// same fields.
 fn model_parts(x: &CrossAppProgram) -> Vec<Part<'_>> {
     let m = &x.resolved;
     let mut bindings: Vec<_> = m.calls.upgraded_bindings.iter().collect();
@@ -801,8 +803,9 @@ impl std::fmt::Write for HashSink {
     }
 }
 
-/// Elements per hashed chunk of a long part.
-const FINGERPRINT_CHUNK: usize = 512;
+/// Elements per hashed chunk of a long part (2 in tests, so a small fixture's
+/// lists span several chunks: review TLS-80, Fable).
+const FINGERPRINT_CHUNK: usize = if cfg!(test) { 2 } else { 512 };
 
 /// A fingerprint of [`write_model`]'s content: each of [`model_parts`] hashed
 /// on its own, a long list in parallel chunks of [`FINGERPRINT_CHUNK`] elements

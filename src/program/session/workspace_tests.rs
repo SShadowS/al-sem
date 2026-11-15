@@ -194,11 +194,13 @@ fn base_ws() -> Ws {
 /// TLS-80: `model_fingerprint` (the refresh `--verify`'s comparison, now hashed
 /// in parallel parts) is equal for two cold builds of one workspace and
 /// differs when one field of one routine differs (a late field of the last
-/// routine: the parallel chunks reach it) or when one call edge differs.
+/// routine, which sits in the last chunk: tests hash 2 elements per chunk, so
+/// the routines span several) or when one call edge differs.
 ///
-/// DISCRIMINATION (2026-11-15): `model_fingerprint` hashing only each list's
+/// DISCRIMINATIONS (2026-11-15): `model_fingerprint` hashing only each list's
 /// name and length (the chunk hashes left out) -> the routine and edge changes
-/// keep the fingerprint and the test fails.
+/// keep the fingerprint; the last chunk left out of each list (review TLS-80,
+/// Fable and sol) -> the last routine's change keeps it. Both fail the test.
 #[test]
 fn model_fingerprint_sees_one_field_of_one_routine() {
     let ws = base_ws();
@@ -206,6 +208,11 @@ fn model_fingerprint_sees_one_field_of_one_routine() {
     let a = assemble_and_resolve_cross_app_program(&inputs, false, AssemblyNeeds::BASE).unwrap();
     let mut b =
         assemble_and_resolve_cross_app_program(&inputs, false, AssemblyNeeds::BASE).unwrap();
+    assert!(
+        a.resolved.workspace.routines.len() > 2 * FINGERPRINT_CHUNK,
+        "precondition: the routines span more than two chunks ({})",
+        a.resolved.workspace.routines.len()
+    );
     let fp = model_fingerprint(&a);
     assert_eq!(
         fp,
