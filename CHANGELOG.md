@@ -46,6 +46,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   grown at ~80 % of wall time by a writer thread (labelled from the shares alone), and a calm
   run (no label, at a 1-min load of 50). Breaking either source of the label fails it.
 
+### Changed (TLS-35: the largest lib CDO test peaks at ~4,500 MiB, not ~18,600 MiB)
+
+- **`retained_emission_equals_a_composition_on_cdo`** held the resident fold with its cone
+  store, the warm emission for every primary routine plus 200 dependency routines, a cold
+  `compose_cone`, and both emissions as one text each, all at once. It now takes one blake3
+  digest per subject of the warm side, drops the emission and the snapshot and evicts every
+  evictable artifact (the fold and its cones included; the model stays), then composes the
+  cold side and compares the digest maps. The subjects and the equality are the same. On a
+  mismatch it names up to three differing subjects, which side holds each, and renders them
+  (warm re-emitted for those subjects from a refilled fold).
+- Measured alone (`cdo` profile, one test per process, 3 alternating rounds, 2026-11-15):
+  peak RSS 18,541-18,717 MiB before, 4,444-4,449 MiB after (4,501 in a fourth run of the final
+  version, with the eviction assert); wall 98-196 s before, 87-112 s after (load average 56
+  falling to 5 during the rounds, so time is indicative only).
+  Discrimination: `emit_raw` skipping its 100th emitted subject fails the test, naming exactly
+  that subject.
+- **`scripts/cdo-gate`:** lib_cdo's own worst is now the n largest tests summed (~4,600, 9,100,
+  13,600, 17,900 MiB for 1-4 threads, was 18,700 and 23,300 for 1-2), and the opt-in parallel
+  layout picks up to 4 threads beside the impact phase (was at most 2) within the same 4 GiB
+  rule and host check. Lane 2's need is never below the 8,400 MiB of the harness/lsp/l4
+  phases it runs before lib_cdo (that floor did not matter while lib_cdo needed 18,700).
+  `gate_scripts::cdo_gate_runs_lane_two_beside_impact_only_with_the_memory` pins the new
+  thresholds.
+
 ### Fixed (TLS-73: `scripts/perf-probe` checks what samply needs, not one small buffer)
 
 - **The hole:** after the 2026-11-15 redeploy (CAP_PERFMON) `scripts/perf-probe` exited 0

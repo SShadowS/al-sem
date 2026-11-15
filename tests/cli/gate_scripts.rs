@@ -528,9 +528,10 @@ fn speed_build_uses_the_gate_release_folder() {
 
 /// TLS-32: the test phases' layout (`cdo-gate --layout` prints what
 /// `plan_layout` decides, the decision the gate makes after `output_cdo`).
-/// Lane 2 runs beside the impact phase at the most threads (2, then 1) whose
-/// need (impact's own worst 16,100 + lib_cdo's own worst at that count, 23,300
-/// or 18,700, + 4,096 MiB) fits BOTH the host's MemAvailable and the
+/// Lane 2 runs beside the impact phase at the most threads (4 down to 1) whose
+/// need (impact's own worst 16,100 + lane 2's worst: lib_cdo's own at that count,
+/// 17,900, 13,600 or 9,100 since TLS-35, but never under the 8,400 of the phases
+/// before it + 4,096 MiB) fits BOTH the host's MemAvailable and the
 /// container's free memory (`memory.max` minus what cannot be reclaimed);
 /// otherwise lane 2 runs after it; `CDO_GATE_SERIAL=1` wins over all. The host
 /// is a hand-written meminfo (`CDO_GATE_MEMINFO`) and the container a
@@ -541,6 +542,9 @@ fn speed_build_uses_the_gate_release_folder() {
 /// container reported `unlimited` instead of `unknown` (fail open) -> "no
 /// memory.stat" is called parallel; `container_free_mib` without its numeric
 /// check -> `anon garbage` reads as 0 and is called parallel at 2 threads.
+/// TLS-35 (2026-11-15): the thread loop back at `2 1` -> the free container
+/// is called parallel at 2 threads, not 4; lane 2's 8,400 floor dropped (the
+/// need from lib_cdo alone) -> 27,500 free MiB is called parallel at 1 thread.
 #[cfg(unix)]
 #[test]
 fn cdo_gate_runs_lane_two_beside_impact_only_with_the_memory() {
@@ -592,15 +596,17 @@ fn cdo_gate_runs_lane_two_beside_impact_only_with_the_memory() {
             "host {host} MiB, container use {used:?} MiB, serial {serial}: want {want:?}, got {got}"
         );
     };
-    let two = "parallel: lane 2 beside the impact phase, lib_cdo at 2 thread(s)";
-    let one = "parallel: lane 2 beside the impact phase, lib_cdo at 1 thread(s)";
-    // Needs: 2 threads 43,496 MiB, 1 thread 38,896 MiB.
-    check(60_000, Some(2_000), false, two); // container free 47,152
-    check(60_000, Some(8_000), false, one); // container free 41,152
-    check(60_000, Some(12_000), false, "sequential:"); // container free 37,152
-    check(41_000, Some(2_000), false, one); // the host is short for 2
-    check(30_000, Some(2_000), false, "sequential:"); // the host is short for 1
-    check(60_000, None, false, two); // no container limit: the host decides
+    let at = |n: u32| format!("parallel: lane 2 beside the impact phase, lib_cdo at {n} thread(s)");
+    // Needs: 4 threads 38,096 MiB, 3 33,796, 2 29,296, 1 28,596 (lane 2's
+    // phases before lib_cdo, 8,400, outweigh lib_cdo at 1 thread).
+    check(60_000, Some(2_000), false, &at(4)); // container free 47,152
+    check(60_000, Some(12_000), false, &at(3)); // container free 37,152
+    check(60_000, Some(18_000), false, &at(2)); // container free 31,152
+    check(60_000, Some(20_200), false, &at(1)); // container free 28,952
+    check(60_000, Some(21_652), false, "sequential:"); // container free 27,500
+    check(31_000, Some(2_000), false, &at(2)); // the host is short for 3
+    check(20_000, Some(2_000), false, "sequential:"); // the host is short for 1
+    check(60_000, None, false, &at(4)); // no container limit: the host decides
     check(60_000, Some(2_000), true, "serial:");
     // An unknown container is no room (review r2, sol: fail closed): a
     // `memory.stat` that cannot be read, or a `memory.max` that is no number.
@@ -641,10 +647,10 @@ fn cdo_gate_runs_lane_two_beside_impact_only_with_the_memory() {
         );
     }
     // Exactly at the need is enough; one MiB short is not.
-    check(60_000, Some(49_152 - 43_496), false, two);
-    check(60_000, Some(49_152 - 43_496 + 1), false, one);
-    check(43_496, Some(2_000), false, two);
-    check(43_495, Some(2_000), false, one);
+    check(60_000, Some(49_152 - 38_096), false, &at(4));
+    check(60_000, Some(49_152 - 38_096 + 1), false, &at(3));
+    check(38_096, Some(2_000), false, &at(4));
+    check(38_095, Some(2_000), false, &at(3));
 }
 
 /// TLS-32 review r3-r4 (sol): a TERM sent to the gate's PID alone, during its
