@@ -1166,7 +1166,7 @@ mod tests {
     /// multibyte sample (a `\r` alone inside a string too).
     #[test]
     fn site_spans_match_the_newline_count() {
-        let sample = "codeunit 50100 \"Æble\"\r\n{\r\n    procedure Ø()\r\n    var\r\n        T: Text;\r\n    begin\r\n\t\tT := 'å\rb'; Message('ü %1', Format(T));\r\n        \"Æble Ø\"(Strlen('ß'));\r\n    end;\r\n}\r\n";
+        let sample = "codeunit 50100 \"Æble\"\r\n{\r\n    procedure Ø()\r\n    var\r\n        T: Text;\r\n    begin\r\n\t\tT := 'å\rb'; Message('ü %1', Format(T));\r\n        \"Æble Ø\"(Strlen('ß'));\r\n        Message('ø %1',\r\n            Format(\r\n                T));\r\n    end;\r\n}\r\n";
         let mut sources = vec![("sample.al".to_string(), sample.to_string())];
         let corpus = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/r0-corpus");
         let mut stack = vec![corpus];

@@ -96,7 +96,7 @@ impl From<al_syntax::ir::Point> for SourcePos {
 }
 
 /// Line/col span in a named source unit — the coordinate BOTH engines align on
-/// (L3 records line/col via `PAnchor`; the fresh side converts IR byte-origins).
+/// (L3 records line/col via `PAnchor`; the fresh side reads the IR origin's parser points).
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct CanonicalSpan {
     pub unit: String,
