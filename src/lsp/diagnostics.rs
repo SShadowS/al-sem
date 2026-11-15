@@ -177,8 +177,8 @@ pub fn compute_for_files(
 /// whole-branch review finding): a cross-file-duplicate `RoutineNodeId` is
 /// declared in MORE than one file, each carrying its own
 /// unused-procedure/high-fan-in verdict for the same shared id — and
-/// `decl_by_id`'s winner for such an id is explicitly UNSPECIFIED
-/// (`build_decl_by_id`'s doc), so resolving each affected id to that single
+/// `decl_by_id` holds ONE winner for such an id (the smallest path's, TLS-68;
+/// `build_decl_by_id`'s doc), so resolving each affected id to that single
 /// winner would leave every non-winner declaring file's flipped verdict
 /// stale until the next rung-2/3 swap. The scan visits every declaring
 /// file of every affected id by construction. Cost: one pass over all
@@ -1395,7 +1395,7 @@ mod tests {
 
     // ── Final whole-branch review finding: the cover must include EVERY ────
     // declaring file of a cross-file-duplicate RoutineNodeId, not just
-    // `decl_by_id`'s (unspecified) winner — both files carry an
+    // `decl_by_id`'s single winner — both files carry an
     // unused-procedure verdict for the SAME id, so both flip when the last
     // caller disappears.
 
@@ -1473,8 +1473,8 @@ mod tests {
             "the duplicate id's incoming entry changed; delta = {delta:?}"
         );
 
-        // BOTH declaring files must be covered — `decl_by_id`'s winner for a
-        // duplicate id is unspecified, so covering only one of them leaves
+        // BOTH declaring files must be covered — `decl_by_id` holds only one
+        // winner for a duplicate id, so covering only one of them leaves
         // the other's flipped verdict stale until the next full swap.
         let cover = rung1_cover(&new_snap, &delta);
         assert!(
