@@ -1,64 +1,89 @@
 # ENG-97: ENG-85's cost on the CDO model build, measured alone
 
-**Verdict: ENG-85 does not slow the model build.** Over six passes, head over base: CPU x1.006
-(geometric mean; range x0.972 to x1.028), wall x1.011, peak memory x0.933 (-6.7%). Nothing to fix.
+**Verdict: ENG-85 does not slow the model build. The landing's x1.232 was cdo-speed's order
+effect: the side that builds second costs about x1.28 CPU, whichever side it is.** Measured with
+cdo-speed itself (the `build` call: the first ask through `alsem mcp` and the engine child,
+`release-fast`), six passes, three with each side first. Comparing like with like, ENG-85 is
+level or faster: CPU x0.975 when built first and x0.969 when built second, wall x0.986 and
+x0.881. The server's peak memory falls slightly, x0.976 to x0.998. Nothing to fix in ENG-85; the
+order effect is TLS-79's.
 
 ## Why it was asked
 
 ENG-85 (shared row strings, `SharedStr`) landed in `e708f1f6`. The landing's speed check passed,
-but its model-build sample read CPU x1.232 and wall x1.495, and its two warm-up passes disagreed:
-x1.565 with base built first, x0.970 with head first. Fable had named a risk in review: many
-threads cloning the same `Arc<str>` contend on its reference count.
+but its `build` read CPU x1.232 and wall x1.495, the two warm-up passes disagreeing (x1.565 with
+base built first, x0.970 with head first; `cdo-gate-logs/20261115-193457-444307/speed.log`). In
+review, Fable had named a risk: many threads cloning the same `Arc<str>` contend on its count.
 
-## How it was measured
+## The measurement: cdo-speed, three runs
 
-- **Sides:** base `801cc6af` (master before ENG-85) and head `96d49041` (ENG-85's submitted head;
-  `801cc6af` is its merge base, so the diff is ENG-85 alone).
-- **What runs:** one resident model build of the pinned CDO baseline (`/work/src/cdo-baseline/Cloud`),
-  the engine child's path: `WorkspaceInputs::read`, `WorkspaceSession::with_mode(Default)`,
-  `build_target`. The same scratch probe as ENG-84's profile, built with `cargo build --release`
-  against each revision (same profile, same allocator, mimalloc), timed under `/usr/bin/time -v`.
-  CPU is user + system of the process.
-- **Order:** six passes, each timing both sides back to back, the order flipped every pass
-  (three base-first, three head-first).
-- **Admission (cdo-speed's, TLS-76):** before each pass, outside the CDO slot, the host's
-  `/proc/pressure/cpu` `some avg60` had to be at most 15% (wait up to 600 s, else run labelled).
-  Each run records its container stall share (`/sys/fs/cgroup/cpu.pressure` `some total` delta
-  over its wall time). Every pass was admitted at once (host 5.4-10.7%), and every run was calm
-  (stall share 3.2-7.7%). Each pass held the CDO slot for its two runs; tools paused its builds.
-- Script, raw table and the probe's source: `tools/census-probe/runs-eng97/` (`measure.sh`,
-  `runs.tsv`, `probe-main.rs.txt`; its Cargo.toml names `al-sem` by path, `mimalloc = "0.1"`,
-  `[profile.release] debug = "line-tables-only"`).
+- **Sides:** base `801cc6af` (master before ENG-85; it is ENG-85's merge base, and the landing's
+  other branches changed only a test file under `src/`), head `96d49041` (ENG-85's head). Both
+  `release-fast`, from cdo-speed's commit cache.
+- **Command** (`tools/census-probe/runs-eng97/speed-runs.sh`): `scripts/cdo-speed
+  /work/src/cdo-baseline/Cloud --base 801cc6af --head 96d49041 --rounds 1`, three times, each inside
+  `scripts/cdo-slot run`, each started once the host's `some avg60` was at most 15% (2.1-4.2%).
+  Each run's warm-up times `build` twice on fresh server pairs, base first, then head first
+  (TLS-65), with cdo-speed's own per-pass admission (TLS-76). Tools paused its builds throughout.
+- **Every pass was calm:** container stall share 3.1-6.2% per warm-up, load 9.0-19.0. All three
+  runs PASS. Logs and `speed.json`: `tools/census-probe/runs-eng97/cdo-speed-run{1,2,3}.{log,json}`.
 
-## Results (head over base)
+CPU seconds (user + system of the server and its engine children) and wall seconds of `build`:
 
-| Pass | Order | CPU | Wall | Peak RSS |
-|---:|---|---:|---:|---:|
-| 1 | base-first | x0.972 | x0.867 | x0.938 |
-| 2 | head-first | x1.004 | x1.013 | x0.922 |
-| 3 | base-first | x1.012 | x1.022 | x0.931 |
-| 4 | head-first | x1.028 | x1.032 | x0.938 |
-| 5 | base-first | x1.002 | x1.034 | x0.933 |
-| 6 | head-first | x1.018 | x1.117 | x0.937 |
+| Run | Pass | Built first | Base CPU | Head CPU | Base wall | Head wall |
+|---:|---:|---|---:|---:|---:|---:|
+| 1 | 1 | base | 107.39 | 142.96 | 41.01 | 52.08 |
+| 1 | 2 | head | 138.44 | 87.59 | 42.32 | 27.42 |
+| 2 | 1 | base | 93.98 | 109.51 | 32.78 | 36.16 |
+| 2 | 2 | head | 126.80 | 95.22 | 52.44 | 32.38 |
+| 3 | 1 | base | 97.05 | 119.94 | 33.45 | 41.57 |
+| 3 | 2 | head | 118.92 | 108.11 | 52.61 | 45.89 |
 
-| | Geomean | Median | Base-first | Head-first |
-|---|---:|---:|---:|---:|
-| CPU | x1.006 | x1.008 | x0.995 | x1.017 |
-| Wall | x1.011 | x1.027 | x0.971 | x1.053 |
-| Peak RSS | x0.933 | x0.935 | x0.934 | x0.932 |
+**The order effect.** The side built second is slower in all six passes: second over first,
+CPU x1.100 to x1.581 (geometric mean x1.282), wall x1.103 to x1.620 (x1.307). The per-pass
+head-over-base ratios therefore swing with the order: CPU x1.331, x1.165 and x1.236 when head
+builds second; x0.633, x0.751 and x0.909 when it builds first. The landing's two passes were one
+of each (x1.565, x0.970), and x1.232 is their geometric mean.
 
-Medians in seconds of CPU: base 54.8, head 55.7 (one build: ~55 s of CPU in ~11-12 s of wall).
-The side run second is a little slower in wall time in both orders (base-first wall x0.971,
-head-first x1.053), the same order effect TLS-65 named; CPU barely moves with order.
+**ENG-85, position for position** (means over three passes each):
 
-## What this says about the landing's x1.232
+| Built | Base CPU | Head CPU | Head/base | Base wall | Head wall | Head/base |
+|---|---:|---:|---:|---:|---:|---:|
+| first | 99.5 | 97.0 | x0.975 | 35.7 | 35.2 | x0.986 |
+| second | 128.1 | 124.1 | x0.969 | 49.1 | 43.3 | x0.881 |
 
-It was not ENG-85. The landing's sample came from one pass per order on a loaded machine, and
-the passes disagreed by x1.6; under calm admission and six passes the change sits inside
-x0.97-x1.03 in CPU. The refcount-contention risk does not show: it would cost CPU (cache-line
-traffic is CPU time), and CPU did not move. Peak memory falls 6.7% on this path, in line with
-ENG-85's census (-199.4 MiB).
+Geometric mean of all six per-pass ratios, which cancels the order when it is the same factor
+both ways: CPU x0.969, wall x0.920. cdo-speed's own per-run verdicts: x0.918, x0.935, x1.060 CPU.
+Peak memory (every server process's VmHWM, summed): x0.998, x0.988, x0.976.
 
-**Limits.** The probe is the engine child's build alone, not the whole `alsem mcp` warm-up
-(server start-up and the first ask's other work are not in it). `release` here, where cdo-speed
-builds `release-fast`; both sides share the profile, so the ratio holds, not the absolute seconds.
+**What this does and does not show.** Three samples per position, with a same-position spread of
+about ±10% (base built first: 94.0-107.4 s), can bound ENG-85's effect but not resolve a few
+percent: the data rule out a slowdown near the landing's x1.23 and are level within about ±10%.
+The reference-count risk would show as CPU; the build's CPU is level, so no cost is visible in the
+build. Clones at query time (prove, explain, the detectors) are outside `build` (cdo-speed's
+rounds cover them; the landing's rounds read x1.023).
+
+## A first, narrower probe (kept for the record)
+
+Before the cdo-speed runs, a scratch probe timed only `build_target`, the engine child's
+model build, six alternating passes (`measure.sh`, `runs.tsv`, `probe-main.rs.txt`, raw logs in
+`probe-time/`). Its result: CPU x1.006 (x0.972-x1.028), wall x1.011, max RSS x0.933. A Fable
+measurement audit found it too narrow to carry the verdict, and the points stand:
+
+- It covered about 55 s of CPU and 11-12 s of wall, half the CPU and a third of the wall of the
+  `build` call above, and ENG-85 changed code outside it (explain, the cone, the solver).
+- It was built as cargo's default release (its own workspace: no LTO, 16 codegen units) with plain
+  `MiMalloc`, not the repo's `release-fast` and the server's `ReleasingMiMalloc`.
+- Its first pass ran cold (the only major page faults). Without it the head was slightly
+  slower in all five remaining passes: CPU x1.013, wall x1.043. Its order effect ran the other way
+  from cdo-speed's: in that one process, the side run SECOND was the faster.
+- Its max RSS (x0.933, about -243 MiB) is the build-only process; the server's peak barely moves.
+
+The cdo-speed runs supersede it: they time the call the landing timed, in its binaries.
+
+## Leads for TLS-79 (the order effect)
+
+The second build of a pass runs while the first side's server is still alive and holds its model
+(cdo-speed keeps both servers of a pair up), so the second build shares the machine's memory
+bandwidth and cache with ~8 GB of resident model and that server's own threads. A one-process
+probe showed no such penalty. That is a guess to test, not a finding.
