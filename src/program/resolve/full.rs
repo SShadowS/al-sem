@@ -238,8 +238,188 @@ impl BareVerdict {
 /// What the resolver knew about one call site beyond its edge, for the B3
 /// adapter (engine-switch S3.2 interfaces, S6.0 receivers). Only member call
 /// sites get an entry.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+///
+/// ENG-91: the facts most sites carry (`receiver`, the flags, `starts_object`)
+/// are inline; the rest, which under 9% of sites use, sit in one box
+/// ([`SiteFacts::rare`], [`SiteFacts::rare_mut`]). On CDO this took a site's
+/// record from 592 to 72 bytes. `PartialEq` and `Debug` read through
+/// [`SiteFacts::rare`], so a site with no box and one with an empty box are equal
+/// and print the same, field for field, as before the split.
+#[derive(Clone, Default)]
 pub struct SiteFacts {
+    /// The member call's receiver as the resolver typed it.
+    pub receiver: Option<ReceiverFact>,
+    /// S9.0d: a record operation written without a receiver (`Insert(true)` on
+    /// the implicit `Rec`). The compiler's call graph has no trigger edges from
+    /// one.
+    pub unqualified_record_op: bool,
+    /// B4: the call starts an object (runs its entry triggers) rather than
+    /// calling one of its procedures: every keyword run (`Codeunit.Run(…)`,
+    /// `Report.SaveAsPdf(Report::X, …)`, `Xmlport.Import(…)`, …,
+    /// `extract::classify_call`) and every variable form the resolver
+    /// dispatches to the run triggers (`Rep.Run()`, `Rep.SaveAsPdf(…)`,
+    /// `Q.Open()`, …, [`crate::program::resolve::resolver::member_starts_object`]).
+    /// Both read one list of methods,
+    /// [`crate::program::resolve::dataset::starts_object`]. A variable form
+    /// whose binding (B6) the argument types do not decide is
+    /// [`ObjectStart::Undecided`](crate::program::resolve::dataset::ObjectStart),
+    /// never a definite answer. The model carries it on the call's edges
+    /// (`CallEdge::starts_object`).
+    pub starts_object: crate::program::resolve::dataset::ObjectStart,
+    /// ENG-21 (merged into ENG-19): the call runs a report whose request page
+    /// may show, so the user may cancel it before `OnPreReport`
+    /// ([`crate::program::resolve::resolver::request_page_may_cancel`]): the
+    /// report's `OnPreReport`/`OnPostReport` may not run (the model's
+    /// `TriggerFires::Maybe`).
+    pub request_page_may_cancel: bool,
+    /// ENG-80: a bare call's lookup searched every scope before the catalog in full
+    /// ([`crate::program::resolve::resolver::resolve_bare_with_args`]'s
+    /// `scope_complete`); read into the call's [`BareVerdict`]. `false` elsewhere.
+    pub bare_scope_complete: bool,
+    /// ENG-25: the record operation's table declares a FIELD of the method's
+    /// name (`Count`, `Next`, …), so a parens-less `R.Count` there reads the
+    /// field and is no call. `false` when the table is not known.
+    pub record_op_field_named: bool,
+    /// ENG-26: the receiver is a base object's `protected var` in an
+    /// extension, so a parens-less use of it is a record operation (kept by
+    /// the parens-less filter even when its table did not resolve).
+    pub inherited_protected: bool,
+    /// The facts few sites carry; `None` when every one is empty.
+    rare: Option<Box<RareSiteFacts>>,
+}
+
+impl SiteFacts {
+    /// The rarely set facts (all empty when the site has none).
+    #[must_use]
+    pub fn rare(&self) -> &RareSiteFacts {
+        static EMPTY: std::sync::LazyLock<RareSiteFacts> =
+            std::sync::LazyLock::new(RareSiteFacts::default);
+        self.rare.as_deref().unwrap_or(&EMPTY)
+    }
+
+    /// The rarely set facts, to write; makes the box on first use.
+    pub fn rare_mut(&mut self) -> &mut RareSiteFacts {
+        self.rare.get_or_insert_with(Box::default)
+    }
+
+    /// Whether the site holds a box of rare facts (the census counts them).
+    #[must_use]
+    pub fn has_rare(&self) -> bool {
+        self.rare.is_some()
+    }
+
+    /// Drop the box when every rare fact is empty (after a writer cleared them).
+    pub fn compact(&mut self) {
+        if self
+            .rare
+            .as_deref()
+            .is_some_and(|r| *r == RareSiteFacts::default())
+        {
+            self.rare = None;
+        }
+    }
+}
+
+impl From<RareSiteFacts> for SiteFacts {
+    /// A site with only rare facts (tests, fixtures).
+    fn from(rare: RareSiteFacts) -> Self {
+        let mut f = SiteFacts {
+            rare: Some(Box::new(rare)),
+            ..SiteFacts::default()
+        };
+        f.compact();
+        f
+    }
+}
+
+impl PartialEq for SiteFacts {
+    fn eq(&self, other: &Self) -> bool {
+        let SiteFacts {
+            receiver,
+            unqualified_record_op,
+            starts_object,
+            request_page_may_cancel,
+            bare_scope_complete,
+            record_op_field_named,
+            inherited_protected,
+            rare: _,
+        } = self;
+        *receiver == other.receiver
+            && *unqualified_record_op == other.unqualified_record_op
+            && *starts_object == other.starts_object
+            && *request_page_may_cancel == other.request_page_may_cancel
+            && *bare_scope_complete == other.bare_scope_complete
+            && *record_op_field_named == other.record_op_field_named
+            && *inherited_protected == other.inherited_protected
+            && self.rare() == other.rare()
+    }
+}
+
+impl Eq for SiteFacts {}
+
+impl std::fmt::Debug for SiteFacts {
+    /// The pre-split shape: one struct, every field in its old order.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Destructured, so a field added later cannot be left out of the print.
+        let SiteFacts {
+            receiver,
+            unqualified_record_op,
+            starts_object,
+            request_page_may_cancel,
+            bare_scope_complete,
+            record_op_field_named,
+            inherited_protected,
+            rare: _,
+        } = self;
+        let RareSiteFacts {
+            interface,
+            interface_closed_over,
+            interface_unmapped_enums,
+            interface_holder,
+            argument_codeunits,
+            run_target,
+            build_context,
+            run_trigger_excluded,
+            open,
+            table_event_raise,
+            dataset_run,
+            validate_field,
+            start_method,
+            field_ref_validate,
+            call_result_record,
+            record_table_unresolved,
+        } = self.rare();
+        f.debug_struct("SiteFacts")
+            .field("interface", interface)
+            .field("interface_closed_over", interface_closed_over)
+            .field("interface_unmapped_enums", interface_unmapped_enums)
+            .field("interface_holder", interface_holder)
+            .field("argument_codeunits", argument_codeunits)
+            .field("receiver", receiver)
+            .field("run_target", run_target)
+            .field("build_context", build_context)
+            .field("run_trigger_excluded", run_trigger_excluded)
+            .field("unqualified_record_op", unqualified_record_op)
+            .field("open", open)
+            .field("table_event_raise", table_event_raise)
+            .field("dataset_run", dataset_run)
+            .field("starts_object", starts_object)
+            .field("validate_field", validate_field)
+            .field("request_page_may_cancel", request_page_may_cancel)
+            .field("bare_scope_complete", bare_scope_complete)
+            .field("start_method", start_method)
+            .field("field_ref_validate", field_ref_validate)
+            .field("call_result_record", call_result_record)
+            .field("record_op_field_named", record_op_field_named)
+            .field("inherited_protected", inherited_protected)
+            .field("record_table_unresolved", record_table_unresolved)
+            .finish()
+    }
+}
+
+/// The facts of a [`SiteFacts`] that few sites carry (ENG-91), boxed.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RareSiteFacts {
     /// The interface (folded name) an interface-receiver call dispatched over.
     pub interface: Option<String>,
     /// #264: the closed enums an interface call's receiver provably holds a
@@ -265,8 +445,6 @@ pub struct SiteFacts {
     /// when the call's one target has an `Interface` parameter
     /// ([`crate::program::resolve::interface_holder::argument_codeunits`]).
     pub argument_codeunits: Vec<Option<ObjectNodeId>>,
-    /// The member call's receiver as the resolver typed it.
-    pub receiver: Option<ReceiverFact>,
     /// The object an object run (`Page.Run(Page::X)`, `PageVar.RunModal()`)
     /// runs, when its entry triggers resolved to an EMPTY set (S9.0d: the
     /// object's source declares none). The edge itself then names no routine;
@@ -280,10 +458,6 @@ pub struct SiteFacts {
     /// out). The compiler's call graph keeps such a trigger edge; the oracle
     /// audit reads this to tell that limit from a missing edge.
     pub run_trigger_excluded: Vec<RoutineNodeId>,
-    /// S9.0d: a record operation written without a receiver (`Insert(true)` on
-    /// the implicit `Rec`). The compiler's call graph has no trigger edges from
-    /// one.
-    pub unqualified_record_op: bool,
     /// #63: what this site may reach beyond its edge's routes, when the site is
     /// OPEN (see [`OpenBound`] and [`site_open_bounds`]). Empty for a site whose
     /// routes name every target. Read only by the call-graph export.
@@ -302,19 +476,6 @@ pub struct SiteFacts {
     /// ([`crate::program::resolve::dataset`]). `None` for any other call, and
     /// for a run whose target is not static.
     pub dataset_run: Option<DatasetRun>,
-    /// B4: the call starts an object (runs its entry triggers) rather than
-    /// calling one of its procedures: every keyword run (`Codeunit.Run(…)`,
-    /// `Report.SaveAsPdf(Report::X, …)`, `Xmlport.Import(…)`, …,
-    /// `extract::classify_call`) and every variable form the resolver
-    /// dispatches to the run triggers (`Rep.Run()`, `Rep.SaveAsPdf(…)`,
-    /// `Q.Open()`, …, [`crate::program::resolve::resolver::member_starts_object`]).
-    /// Both read one list of methods,
-    /// [`crate::program::resolve::dataset::starts_object`]. A variable form
-    /// whose binding (B6) the argument types do not decide is
-    /// [`ObjectStart::Undecided`](crate::program::resolve::dataset::ObjectStart),
-    /// never a definite answer. The model carries it on the call's edges
-    /// (`CallEdge::starts_object`).
-    pub starts_object: crate::program::resolve::dataset::ObjectStart,
     /// ENG-15 (sol round 3): the field a `Validate(Field, …)` site names,
     /// folded and unquoted as `TriggerSiteRule::validate_field` reads it from
     /// the call's own argument (a record operation's, a call result's). The
@@ -322,16 +483,6 @@ pub struct SiteFacts {
     /// field to be this one, so a route to another field's trigger is never
     /// explained away. `None` for any other call.
     pub validate_field: Option<String>,
-    /// ENG-21 (merged into ENG-19): the call runs a report whose request page
-    /// may show, so the user may cancel it before `OnPreReport`
-    /// ([`crate::program::resolve::resolver::request_page_may_cancel`]): the
-    /// report's `OnPreReport`/`OnPostReport` may not run (the model's
-    /// `TriggerFires::Maybe`).
-    pub request_page_may_cancel: bool,
-    /// ENG-80: a bare call's lookup searched every scope before the catalog in full
-    /// ([`crate::program::resolve::resolver::resolve_bare_with_args`]'s
-    /// `scope_complete`); read into the call's [`BareVerdict`]. `false` elsewhere.
-    pub bare_scope_complete: bool,
     /// TLS-52: the start method (folded) of a call that starts an object (a
     /// keyword run, or a variable form that may start it), as its routes'
     /// trigger subset was cut by
@@ -348,14 +499,6 @@ pub struct SiteFacts {
     /// `{call site}/callresult`), with these triggers and table events, as a
     /// `FieldRef.Validate(…)`'s. `None` for any other call.
     pub call_result_record: Option<CallResultRecord>,
-    /// ENG-25: the record operation's table declares a FIELD of the method's
-    /// name (`Count`, `Next`, …), so a parens-less `R.Count` there reads the
-    /// field and is no call. `false` when the table is not known.
-    pub record_op_field_named: bool,
-    /// ENG-26: the receiver is a base object's `protected var` in an
-    /// extension, so a parens-less use of it is a record operation (kept by
-    /// the parens-less filter even when its table did not resolve).
-    pub inherited_protected: bool,
     /// ENG-06: a record operation that can fire a table trigger (`Insert`,
     /// `Modify`, `Delete`, `Rename`, `Validate`, …) on a record whose table
     /// does not resolve, and how ([`UnresolvedTable`]). `None` for any other
@@ -1220,7 +1363,7 @@ fn resolve_call_site_obligation(
                     Some((surface, with_state)),
                 );
                 if let ReceiverType::Interface { name_lc } = &recv {
-                    facts_out.interface = Some(name_lc.clone());
+                    facts_out.rare_mut().interface = Some(name_lc.clone());
                 }
                 facts_out.receiver = Some(receiver_fact(
                     &recv,
@@ -1304,13 +1447,13 @@ fn resolve_call_site_obligation(
                                     _ => true,
                                 });
                                 triggers = trig;
-                                facts_out.validate_field = rule.validate_field.clone();
+                                facts_out.rare_mut().validate_field = rule.validate_field.clone();
                                 // ENG-15/16 (ENG-69 folded): the shared check.
                                 code_not_loaded = trigger_op_opens_unseen_code(
                                     &method_lc, &rule, table_node, graph, index,
                                 );
                             }
-                            facts_out.call_result_record = Some(CallResultRecord {
+                            facts_out.rare_mut().call_result_record = Some(CallResultRecord {
                                 op,
                                 table: table_node.id.clone(),
                                 // A protected var's declaration says whether it
@@ -1349,7 +1492,7 @@ fn resolve_call_site_obligation(
                 if r.iter().any(|rt| {
                     matches!(&rt.target, RouteTarget::Builtin(b) if b.0 == "FieldRef::validate")
                 }) {
-                    facts_out.field_ref_validate = Some(field_ref_validate(
+                    facts_out.rare_mut().field_ref_validate = Some(field_ref_validate(
                         *receiver, routine, obj, file, obj_node, caller_app, graph, index,
                         surface,
                     ));
@@ -1372,11 +1515,11 @@ fn resolve_call_site_obligation(
                             *kind, &method_lc, arity, &args_info, target, obj_node, graph, index,
                             surface,
                         );
-                    facts_out.dataset_run =
+                    facts_out.rare_mut().dataset_run =
                         member_dataset_run(*kind, &method_lc, target, facts_out.starts_object);
                     if facts_out.starts_object == crate::program::resolve::dataset::ObjectStart::Yes
                     {
-                        facts_out.start_method = Some(method_lc.clone());
+                        facts_out.rare_mut().start_method = Some(method_lc.clone());
                     }
                     // ENG-21: `Rep.Run()`/`Rep.RunModal()` may show the request
                     // page (a variable's `UseRequestPage(false)` is not read:
@@ -1394,7 +1537,7 @@ fn resolve_call_site_obligation(
                     && r.is_empty()
                     && let ReceiverType::Object { kind, name_lc, id } = &recv
                 {
-                    facts_out.run_target =
+                    facts_out.rare_mut().run_target =
                         crate::program::resolve::resolver::object_receiver_target(
                             kind,
                             name_lc,
@@ -1415,7 +1558,7 @@ fn resolve_call_site_obligation(
                         surface,
                         with_state,
                     };
-                    facts_out.interface_closed_over =
+                    facts_out.rare_mut().interface_closed_over =
                         crate::program::resolve::closed_enum::closed_over(
                             &cx, *receiver, name_lc, &r,
                         );
@@ -1425,22 +1568,22 @@ fn resolve_call_site_obligation(
                         !matches!(x.target, RouteTarget::Unresolved)
                             && !matches!(x.evidence, Evidence::Unknown(_))
                     };
-                    if facts_out.interface_closed_over.is_empty()
+                    if facts_out.rare().interface_closed_over.is_empty()
                         && !r.is_empty()
                         && r.iter().all(real)
                         && let Some(i) = index.unique_object(ObjectKind::Interface, name_lc)
                         && graph.is_closed_internal_interface(i)
                     {
-                        facts_out.interface_closed_over = vec![i.clone()];
+                        facts_out.rare_mut().interface_closed_over = vec![i.clone()];
                     }
                     // G30: an object global its own codeunit alone writes.
-                    if facts_out.interface_closed_over.is_empty() {
-                        facts_out.interface_holder =
+                    if facts_out.rare().interface_closed_over.is_empty() {
+                        facts_out.rare_mut().interface_holder =
                             crate::program::resolve::interface_holder::holder_sources(
                                 &cx, *receiver, name_lc,
                             );
                     }
-                    facts_out.interface_unmapped_enums =
+                    facts_out.rare_mut().interface_unmapped_enums =
                         index.unmapped_enum_implementers(graph, name_lc);
                 }
                 (s, r)
@@ -1479,7 +1622,7 @@ fn resolve_call_site_obligation(
             }
             // #264: an interface receiver proven to hold only closed-enum values
             // reaches exactly its routes (spec §4); routes are unchanged.
-            let completeness = if facts_out.interface_closed_over.is_empty() {
+            let completeness = if facts_out.rare().interface_closed_over.is_empty() {
                 completeness_for_shape(member_shape)
             } else {
                 SetCompleteness::Complete
@@ -1535,7 +1678,7 @@ fn resolve_call_site_obligation(
                 // A table with no lookup page: the platform shows a page of its
                 // own, which runs no AL code (`program_calls`' empty run).
                 if routes.is_empty() {
-                    facts_out.run_target = Some(table);
+                    facts_out.rare_mut().run_target = Some(table);
                 }
                 // A table extension outside the program may set another page.
                 (
@@ -1556,19 +1699,20 @@ fn resolve_call_site_obligation(
                     .fold_identifier();
                 if let (Some(mode), Some(t)) = (dataset_mode(okind, &method_lc), target_ref) {
                     let mode = xmlport_run_direction(mode, call_args, file);
-                    facts_out.dataset_run = crate::program::resolve::resolver::object_run_target(
-                        caller_app,
-                        okind,
-                        t,
-                        *target_is_name,
-                        graph,
-                        index,
-                    )
-                    .map(|o| DatasetRun {
-                        object: o.id.clone(),
-                        mode,
-                        effects: Vec::new(),
-                    });
+                    facts_out.rare_mut().dataset_run =
+                        crate::program::resolve::resolver::object_run_target(
+                            caller_app,
+                            okind,
+                            t,
+                            *target_is_name,
+                            graph,
+                            index,
+                        )
+                        .map(|o| DatasetRun {
+                            object: o.id.clone(),
+                            mode,
+                            effects: Vec::new(),
+                        });
                 }
                 let (shape, completeness, mut routes) = resolve_object_run(
                     caller_app,
@@ -1581,7 +1725,7 @@ fn resolve_call_site_obligation(
                 );
                 // ENG-19: `Report.RunRequestPage(…)` runs its request page only.
                 crate::program::resolve::resolver::retain_started_triggers(&mut routes, &method_lc);
-                facts_out.start_method = Some(method_lc.clone());
+                facts_out.rare_mut().start_method = Some(method_lc.clone());
                 // ENG-21: a request page shown may be cancelled before
                 // `OnPreReport`; the second argument is `RequestWindow`.
                 if okind == ObjectKind::Report
@@ -1613,15 +1757,16 @@ fn resolve_call_site_obligation(
                     && routes.is_empty()
                     && let Some(t) = target_ref
                 {
-                    facts_out.run_target = crate::program::resolve::resolver::object_run_target(
-                        caller_app,
-                        okind,
-                        t,
-                        *target_is_name,
-                        graph,
-                        index,
-                    )
-                    .map(|o| o.id.clone());
+                    facts_out.rare_mut().run_target =
+                        crate::program::resolve::resolver::object_run_target(
+                            caller_app,
+                            okind,
+                            t,
+                            *target_is_name,
+                            graph,
+                            index,
+                        )
+                        .map(|o| o.id.clone());
                 }
                 (EdgeKind::Run, shape, completeness, routes, None)
             } else {
@@ -1726,9 +1871,9 @@ fn resolve_call_site_obligation(
                 let rule = crate::program::resolve::applicability::TriggerSiteRule::of(
                     &op_lc, call_args, file, text,
                 );
-                facts_out.validate_field = rule.validate_field.clone();
+                facts_out.rare_mut().validate_field = rule.validate_field.clone();
                 if rule.run_trigger == Some(false) {
-                    facts_out.run_trigger_excluded = routes
+                    facts_out.rare_mut().run_trigger_excluded = routes
                         .iter()
                         .filter_map(|r| match &r.target {
                             RouteTarget::Routine(id) => Some(id.clone()),
@@ -1750,8 +1895,9 @@ fn resolve_call_site_obligation(
                 if let Some(op) = record_trigger_op(&op_lc)
                     && trigger_op_opens_unseen_code(&op_lc, &rule, table_node, graph, index)
                 {
-                    facts_out.open.push(OpenBound::record(op, &rule));
-                    facts_out.record_table_unresolved = Some(UnresolvedTable::CodeNotLoaded);
+                    facts_out.rare_mut().open.push(OpenBound::record(op, &rule));
+                    facts_out.rare_mut().record_table_unresolved =
+                        Some(UnresolvedTable::CodeNotLoaded);
                 }
                 // The platform table events: raised whatever the RunTrigger,
                 // so the site rule above never filters them.
@@ -1775,7 +1921,7 @@ fn resolve_call_site_obligation(
                         run_trigger_true: rule.run_trigger == Some(true),
                     };
                     if !ctx.is_empty() {
-                        facts_out.table_event_raise = Some(ctx);
+                        facts_out.rare_mut().table_event_raise = Some(ctx);
                     }
                 }
                 facts_out.unqualified_record_op = !callee_text.contains('.');
@@ -1791,8 +1937,8 @@ fn resolve_call_site_obligation(
                     let rule = crate::program::resolve::applicability::TriggerSiteRule::of(
                         &op_lc, call_args, file, text,
                     );
-                    facts_out.open.push(OpenBound::record(op, &rule));
-                    facts_out.record_table_unresolved = Some(if named_not_loaded {
+                    facts_out.rare_mut().open.push(OpenBound::record(op, &rule));
+                    facts_out.rare_mut().record_table_unresolved = Some(if named_not_loaded {
                         UnresolvedTable::NotLoaded
                     } else {
                         UnresolvedTable::AnyTable
@@ -2006,10 +2152,11 @@ pub(crate) fn resolve_file_obligations(
                     callee_fp: fp,
                 };
 
-                let mut facts = SiteFacts {
-                    build_context: pf.file.ir.preproc_context(site.expr).to_vec(),
-                    ..SiteFacts::default()
-                };
+                let mut facts = SiteFacts::default();
+                let build_context = pf.file.ir.preproc_context(site.expr);
+                if !build_context.is_empty() {
+                    facts.rare_mut().build_context = build_context.to_vec();
+                }
                 let mut table_events: Vec<Route> = Vec::new();
                 let (kind, shape, completeness, routes, finding) = resolve_call_site_obligation(
                     &site.shape,
@@ -2031,7 +2178,9 @@ pub(crate) fn resolve_file_obligations(
                     &mut table_events,
                 );
                 // B6: what the platform does with the run object's dataset.
-                if let Some(run) = facts.dataset_run.as_mut() {
+                if facts.rare().dataset_run.is_some()
+                    && let Some(run) = facts.rare_mut().dataset_run.as_mut()
+                {
                     run.effects = crate::program::resolve::dataset::dataset_effects(
                         &run.object,
                         run.mode,
@@ -2051,7 +2200,7 @@ pub(crate) fn resolve_file_obligations(
                     // ENG-26: a base object's protected record in an extension
                     // (`exit(Other.IsEmpty)`), unless its table has a field of
                     // that name (then a field read, as ENG-25's rule).
-                    || facts.call_result_record.as_ref().is_some_and(|cr| {
+                    || facts.rare().call_result_record.as_ref().is_some_and(|cr| {
                         let method_lc = match &site.shape {
                             CalleeShape::Member { method, .. } => method.fold_identifier(),
                             _ => return false,
@@ -2063,7 +2212,7 @@ pub(crate) fn resolve_file_obligations(
                     // A protected RecordRef (no fields) or a record of a table not
                     // loaded: kept, so its open or unresolved route answers
                     // `unknown`, never `no`.
-                    || (facts.inherited_protected && facts.call_result_record.is_none());
+                    || (facts.inherited_protected && facts.rare().call_result_record.is_none());
                 // ENG-26 (review): a bare name inside a `with` whose receiver
                 // this file does not resolve (a known record's frame makes a
                 // record operation instead), in an extension whose base has
@@ -2117,7 +2266,7 @@ pub(crate) fn resolve_file_obligations(
                         RouteTarget::Routine(rid) => graph.routines_with_id(rid).any(|n| {
                             n.preproc_context
                                 .iter()
-                                .all(|c| facts.build_context.contains(c))
+                                .all(|c| facts.rare().build_context.contains(c))
                         }),
                         _ => true,
                     };
@@ -2126,13 +2275,16 @@ pub(crate) fn resolve_file_obligations(
                         BareVerdict::of(&routes, facts.bare_scope_complete, in_every_build),
                     ));
                 }
-                if facts.open.is_empty() {
+                if facts.rare().open.is_empty() {
                     let rule = |method_lc: &str| {
                         crate::program::resolve::applicability::TriggerSiteRule::of(
                             method_lc, &site.args, &pf.file, &pf.text,
                         )
                     };
-                    facts.open = site_open_bounds(&site.shape, site.arity, shape, &routes, &rule);
+                    let open = site_open_bounds(&site.shape, site.arity, shape, &routes, &rule);
+                    if !open.is_empty() {
+                        facts.rare_mut().open = open;
+                    }
                 }
                 // F3: a background start (by the catalog id the call resolved
                 // to). Its literal codeunits get their own edge below; only a
@@ -2148,10 +2300,11 @@ pub(crate) fn resolve_file_obligations(
                     let any_codeunit = OpenBound::Run {
                         kind: Some(ObjectKind::Codeunit),
                     };
-                    facts.open.retain(|b| *b != any_codeunit);
+                    let open = &mut facts.rare_mut().open;
+                    open.retain(|b| *b != any_codeunit);
                     if *dynamic {
-                        facts.open.push(any_codeunit);
-                        facts.open.sort();
+                        open.push(any_codeunit);
+                        open.sort();
                     }
                 }
                 // G30: the codeunit variables passed to a routine's interface
@@ -2170,9 +2323,11 @@ pub(crate) fn resolve_file_obligations(
                         target,
                     );
                     if args.iter().any(Option::is_some) {
-                        facts.argument_codeunits = args;
+                        facts.rare_mut().argument_codeunits = args;
                     }
                 }
+                // A writer may have made the box and left every rare fact empty.
+                facts.compact();
                 if facts != SiteFacts::default() {
                     site_facts.push((obl_id.clone(), facts));
                 }
@@ -4317,6 +4472,76 @@ mod tests {
     use crate::program::resolve::edge::{Condition, SourcePos};
     use crate::snapshot::parse_snapshot;
 
+    /// ENG-91: the hot record stays small; the rare facts are boxed.
+    #[test]
+    fn site_facts_hot_record_is_small() {
+        assert!(
+            std::mem::size_of::<SiteFacts>() <= 72,
+            "SiteFacts is {} bytes",
+            std::mem::size_of::<SiteFacts>()
+        );
+    }
+
+    /// ENG-91: a site whose box holds only empty facts is the site without a box: equal,
+    /// printed the same, and `compact` drops the box. A set rare fact is seen through
+    /// `rare()`, makes the sites differ, and prints in its pre-split place.
+    #[test]
+    fn an_empty_rare_box_is_no_box_and_debug_keeps_the_old_shape() {
+        let plain = SiteFacts::default();
+        let mut boxed = SiteFacts::default();
+        boxed.rare_mut();
+        assert!(boxed.has_rare() && !plain.has_rare());
+        assert_eq!(boxed, plain);
+        assert_eq!(format!("{boxed:?}"), format!("{plain:?}"));
+        boxed.compact();
+        assert!(!boxed.has_rare());
+
+        let mut set = SiteFacts::default();
+        set.rare_mut().validate_field = Some("no.".into());
+        // Only a rare fact differs: equality must look inside the box.
+        assert_ne!(set, plain);
+        set.request_page_may_cancel = true;
+        assert_ne!(set, plain);
+        assert_eq!(set.rare().validate_field.as_deref(), Some("no."));
+        set.compact();
+        assert!(set.has_rare(), "a set rare fact keeps its box");
+        let shown = format!("{set:?}");
+        let names = [
+            "interface:",
+            "interface_closed_over:",
+            "interface_unmapped_enums:",
+            "interface_holder:",
+            "argument_codeunits:",
+            "receiver:",
+            "run_target:",
+            "build_context:",
+            "run_trigger_excluded:",
+            "unqualified_record_op:",
+            "open:",
+            "table_event_raise:",
+            "dataset_run:",
+            "starts_object:",
+            "validate_field: Some(\"no.\")",
+            "request_page_may_cancel: true",
+            "bare_scope_complete:",
+            "start_method:",
+            "field_ref_validate:",
+            "call_result_record:",
+            "record_op_field_named:",
+            "inherited_protected:",
+            "record_table_unresolved:",
+        ];
+        let at: Vec<usize> = names
+            .iter()
+            .map(|n| shown.find(n).unwrap_or_else(|| panic!("{n} in {shown}")))
+            .collect();
+        assert!(
+            at.windows(2).all(|w| w[0] < w[1]),
+            "old field order: {shown}"
+        );
+        assert!(shown.starts_with("SiteFacts {"), "{shown}");
+    }
+
     /// W2-7 (T-W2-12): a dependency location prints its app's name; two loaded
     /// apps with one name are told apart by the first 8 of the guid; `%20`
     /// prints as a space; an unknown guid and a non-location are left alone.
@@ -5897,7 +6122,7 @@ codeunit 50003 \"Check Dimensions\"
                     report
                         .site_facts
                         .get(&ce.obligation_id)
-                        .map(|f| f.open.clone())
+                        .map(|f| f.rare().open.clone())
                         .unwrap_or_default()
                 })
                 .collect();
@@ -6050,7 +6275,7 @@ codeunit 50003 \"Check Dimensions\"
                     report
                         .site_facts
                         .get(&ce.obligation_id)
-                        .map(|f| f.open.clone())
+                        .map(|f| f.rare().open.clone())
                         .unwrap_or_default()
                 })
                 .collect()

@@ -378,7 +378,7 @@ fn compiler_only_facts(ctx: &ProgramContext, report: &ProgramReport) -> Compiler
             let caller = anon_caller(&routine_of_node(&ce.edge.site.caller, apps));
             // Program lines are 0-based, the compiler's 1-based.
             let line = ce.edge.site.span.start.line + 1;
-            for t in &f.run_trigger_excluded {
+            for t in &f.rare().run_trigger_excluded {
                 let trigger = anon_target(&target_of_node(t, apps));
                 run_trigger_false_lines.insert((caller.clone(), trigger.clone(), line));
                 run_trigger_false.insert((caller.clone(), trigger));
@@ -463,6 +463,7 @@ fn classify_program_only(
             // of the pair validates THAT field (sol round 3): a route to
             // another field's trigger is a resolver bug, never this limit.
             let site_field = |f: &SiteFacts| -> Option<String> {
+                let f = f.rare();
                 f.validate_field
                     .clone()
                     .or_else(|| match &f.field_ref_validate {
@@ -511,6 +512,7 @@ fn classify_program_only(
         }
         EdgeClass::Call => {
             let outside_build = |f: &SiteFacts| {
+                let f = f.rare();
                 !f.build_context.is_empty()
                     && f.build_context
                         .iter()
