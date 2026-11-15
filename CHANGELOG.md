@@ -27,8 +27,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - the verdict-name test compared a folded copy of each bare name; it now compares in place.
 - **After** (base `630dd171`, load under 6): build CPU x1.065 and x1.032, wall x1.02 and x1.01;
   with the pair swapped (the fix as base) x1.00. Against ENG-80 at the same load the build loses
-  about 17 s of CPU (168 → ~150 s). Peak memory stays x1.06–1.07 (ENG-80's retained bindings and
-  wrapper lists; not this change). Answers are byte-identical: the task gate and every golden, the
+  about 17 s of CPU (168 → ~150 s). Peak memory stays x1.06–1.07: a known cost of ENG-80's
+  retained facts (the per-file bare-call verdicts, taint and declaration-wrapper lists), under the
+  1.10 limit and left as is. Answers are byte-identical: the task gate and every golden, the
   CDO `fingerprint` and `analyze` outputs against ENG-80's binary, and `cdo-gate --only
   harness,l4,output`.
 - **Measurement note.** At load ~9 (just under `cdo-speed`'s waiting limit of 10) the second
