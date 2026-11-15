@@ -1131,7 +1131,9 @@ fn apply_rung1_core(
         // `cur`'s stale list — otherwise `incoming` keeps duplicate
         // `EdgeRef`s until the next rebuild. On first occurrence the
         // working maps are identical to `cur`'s, so this is a pure
-        // idempotency fix.
+        // idempotency fix. ⟨TLS-69⟩ Defensive today: `classify` keys its
+        // plans by vp, so the production callers never pass one vp twice.
+        // Pinned by the direct-call tests `rung1_same_path_twice_*`.
         let old_decls = decls_by_file.get(&vp).cloned();
         let old_edges = edges_by_file.get(&vp).cloned();
 
@@ -2438,6 +2440,202 @@ mod tests {
             &snap2.edges_by_file["Beta.al"]
         ));
         assert_eq!(updater.pending.len(), 1, "both edits target the same file");
+    }
+
+    /// ⟨TLS-69⟩ The same file saved twice in ONE `apply_rung1_core` call: the
+    /// second save must read the file's old decls and edges from the WORKING
+    /// maps (the first save's fresh state), not from `cur`. With `cur`, the
+    /// second save removes only `cur`'s old edges and re-pushes its own, so a
+    /// target the first save added and `cur` lacked (`Gamma.Standalone` here)
+    /// is pushed twice into `incoming`. Called directly, because
+    /// `apply_batch`'s `classify` merges two saves of one path into one
+    /// (`rung1_duplicate_vp_in_one_batch_stays_equivalent` in
+    /// tests/lsp cannot reach this). This test pins the EDGES read: both saves
+    /// carry the same decls, so the decls read is pinned by
+    /// `rung1_same_path_twice_with_different_decls_matches_a_rebuild`.
+    ///
+    /// Mutation (2026-11-15): the edges read from `cur` (`cur.edges_by_file`)
+    /// -> `incoming[Gamma.Standalone]` holds two refs, red.
+    #[test]
+    fn rung1_same_path_twice_in_one_call_matches_a_rebuild() {
+        let dir = fixture_dir();
+        let (base, parsed) = build(dir.path());
+        let mut updater = Updater::new(dir.path().to_path_buf(), parsed);
+        let ctx = Rung1Context::build(&base, &updater.workspace);
+        let text = r#"codeunit 50100 "Alpha"
+{
+    procedure DoWork()
+    var
+        Beta: Codeunit "Beta";
+        Gamma: Codeunit "Gamma";
+    begin
+        Beta.Process();
+        Gamma.Standalone();
+    end;
+}
+"#;
+        // `apply_rung1_core` reads only the parses handed to it, not the disk.
+        let save = || {
+            (
+                "Alpha.al".to_string(),
+                ParsedFile {
+                    virtual_path: "Alpha.al".to_string(),
+                    file: Arc::new(al_syntax::parse(text)),
+                    provenance: updater.file_provenance(&base, "Alpha.al"),
+                    text: text.into(),
+                },
+            )
+        };
+        let saves = vec![save(), save()];
+        let snap = apply_rung1_core(
+            &base,
+            saves,
+            &ctx.index,
+            &ctx.surface,
+            &ctx.obj_node_map,
+            &mut updater.pending,
+            &mut updater.decl_multiplicity,
+        )
+        .0;
+
+        // Precondition: the edit added a target `cur` had no incoming edge
+        // from Alpha for.
+        let standalone = snap.decls_by_file["Gamma.al"]
+            .iter()
+            .find(|d| d.name == "Standalone")
+            .expect("Gamma.Standalone")
+            .id
+            .clone();
+        let from_alpha = |s: &LspSnapshot| {
+            s.ws_incoming
+                .get(&standalone)
+                .map_or(0, |v| v.iter().filter(|r| &*r.file == "Alpha.al").count())
+        };
+        assert_eq!(
+            from_alpha(&base),
+            0,
+            "precondition: base has no Alpha -> Standalone edge"
+        );
+        assert_eq!(
+            from_alpha(&snap),
+            1,
+            "one Alpha -> Standalone edge, not one per save"
+        );
+
+        // The whole patch equals a rebuild of the same per-file state.
+        let (fresh, _) = build_incoming(&snap.edges_by_file, &snap.ws_event_edges);
+        let refs = |v: Option<&Vec<crate::lsp::snapshot::EdgeRef>>| {
+            let mut v: Vec<(String, u32)> = v
+                .map(|v| v.iter().map(|r| (r.file.to_string(), r.idx)).collect())
+                .unwrap_or_default();
+            v.sort();
+            v
+        };
+        let mut targets: Vec<&RoutineNodeId> =
+            snap.ws_incoming.keys().chain(fresh.keys()).collect();
+        targets.sort();
+        targets.dedup();
+        for t in targets {
+            assert_eq!(
+                refs(snap.ws_incoming.get(t)),
+                refs(fresh.get(t)),
+                "incoming[{t:?}] must equal a fresh build_incoming"
+            );
+        }
+        let fresh_decls = build_decl_by_id(&snap.decls_by_file);
+        assert_eq!(
+            snap.decl_by_id.len(),
+            fresh_decls.len(),
+            "decl_by_id key sets"
+        );
+        for (id, d) in &snap.decl_by_id {
+            assert_eq!(
+                d.virtual_path, fresh_decls[id].virtual_path,
+                "decl_by_id[{id:?}]"
+            );
+        }
+        assert_eq!(
+            updater.decl_multiplicity.as_ref(),
+            Some(&build_decl_multiplicity(&snap.decls_by_file)),
+            "multiplicity"
+        );
+    }
+
+    /// ⟨TLS-69, review r1 Fable⟩ The DECLS half of the same guard: two saves
+    /// of one file in one call whose decls differ. Save 1 adds a procedure
+    /// `Extra`, save 2 drops it again. Save 2 must read its old decls from the
+    /// working map (save 1's, with `Extra`), so `Extra` leaves `decl_by_id` and
+    /// the multiplicity. Read from `cur` (no `Extra`), it would never be seen
+    /// as removed and would linger.
+    ///
+    /// Mutation (2026-11-15): the decls read from `cur` (`cur.decls_by_file`)
+    /// -> `Extra` is still in `decl_by_id`, red.
+    #[test]
+    fn rung1_same_path_twice_with_different_decls_matches_a_rebuild() {
+        let dir = fixture_dir();
+        let (base, parsed) = build(dir.path());
+        let mut updater = Updater::new(dir.path().to_path_buf(), parsed);
+        let ctx = Rung1Context::build(&base, &updater.workspace);
+        let alpha = |extra: bool| {
+            format!(
+                "codeunit 50100 \"Alpha\"\n{{\n    procedure DoWork()\n    var\n        Beta: \
+                 Codeunit \"Beta\";\n    begin\n        Beta.Process();\n    end;\n{}}}\n",
+                if extra {
+                    "\n    procedure Extra()\n    begin\n    end;\n"
+                } else {
+                    ""
+                }
+            )
+        };
+        // `apply_rung1_core` reads only the parses handed to it, not the disk.
+        let save = |text: String| {
+            (
+                "Alpha.al".to_string(),
+                ParsedFile {
+                    virtual_path: "Alpha.al".to_string(),
+                    file: Arc::new(al_syntax::parse(&text)),
+                    provenance: updater.file_provenance(&base, "Alpha.al"),
+                    text: text.into(),
+                },
+            )
+        };
+        let saves = vec![save(alpha(true)), save(alpha(false))];
+        let snap = apply_rung1_core(
+            &base,
+            saves,
+            &ctx.index,
+            &ctx.surface,
+            &ctx.obj_node_map,
+            &mut updater.pending,
+            &mut updater.decl_multiplicity,
+        )
+        .0;
+        assert!(
+            !base.decl_by_id.values().any(|d| d.name == "Extra"),
+            "precondition: base has no Extra"
+        );
+        assert!(
+            !snap.decl_by_id.values().any(|d| d.name == "Extra"),
+            "Extra, added by save 1 and dropped by save 2, must be gone"
+        );
+        let fresh = build_decl_by_id(&snap.decls_by_file);
+        let mut patched: Vec<(&RoutineNodeId, &str)> = snap
+            .decl_by_id
+            .iter()
+            .map(|(id, d)| (id, d.virtual_path.as_str()))
+            .collect();
+        let mut rebuilt: Vec<(&RoutineNodeId, &str)> = fresh
+            .iter()
+            .map(|(id, d)| (id, d.virtual_path.as_str()))
+            .collect();
+        patched.sort();
+        rebuilt.sort();
+        assert_eq!(patched, rebuilt, "decl_by_id must equal a rebuild");
+        assert_eq!(
+            updater.decl_multiplicity.as_ref(),
+            Some(&build_decl_multiplicity(&snap.decls_by_file)),
+            "multiplicity must equal a rebuild"
+        );
     }
 
     /// ⟨TLS-68, review r1 Fable⟩ The rung-1 patch's duplicate-id arms that a
