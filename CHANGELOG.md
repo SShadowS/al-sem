@@ -7,6 +7,132 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (TLS-60: `scripts/cdo-slot`, one CDO slot instead of hold messages)
+
+- `scripts/cdo-slot acquire|release|status|run <owner> <reason>`: the one CDO slot of
+  the tentacle (147 of the orchestrator's 316 messages were about holds; at least 9
+  times a lane's run had started before the hold arrived).
+  - Held or free is the flock on `/work/.al-sem/cdo-slot/lock` (`CDO_SLOT_DIR`)
+    alone, kept by a detached holder process (bash, holding no descriptor of its
+    caller). A `status` file only describes the holder (owner, reason, start, Claude
+    session and PID, bound PID, holder PID, token); it is written and removed under a
+    second lock, and only for a PID whose environment proves it is this slot's
+    holder, so a race or a reused PID never makes it lie or kills a stranger.
+  - `acquire` takes it when nobody holds the lock and MemAvailable >= 35 GB; without
+    `--wait` it refuses at once naming the holder, with `--wait` it polls and prints
+    the holder about every 60 s (`--timeout S` gives up; so does the death of the
+    process it binds to). Exit 4: already yours.
+  - Shared ("already yours") only by the holder's `CDO_SLOT_TOKEN` (which scripts
+    export to what they start: land -> cdo-gate), or by the same Claude session when
+    that session holds it unbound (by hand). A hold bound to a process is never
+    shared by session, so a second land from the same session waits.
+  - `--bind PID` (land, cdo-gate, `run`) ends the hold with that process even when it
+    is killed outright. An unbound hold whose Claude process is gone is STALE and the
+    next acquire takes over; a hold whose bound process lives is never stale. Outside
+    a Claude session an acquire must be bound (or come from `run`): nobody could
+    release it otherwise.
+- `scripts/land` takes the slot at its check step (no memory wait there: its
+  mem-wait step before cdo-gate does that, under the slot) and holds it to the end,
+  its `ci-steps all` included (it replaces land's per-worktree lock: one lock, not
+  two); `scripts/cdo-gate` takes it for its whole run, sharing land's hold inside a
+  landing. `LAND_SLOT_TIMEOUT_S` limits land's wait. TLS-61's `cdo-before-after` (to
+  come) takes it with `run`; `cdo-speed` times inside cdo-gate's hold.
+- `scripts/claude-hooks/cdo-slot-guard` (Python), a PreToolUse hook for the Bash
+  tool (the owner wires it): while another live session holds the slot it refuses
+  this session's cargo builds and tests (`build/test/check/clippy/nextest/run/bench/
+  install/rustc/doc/llvm-cov/miri` and the aliases), the gate scripts (`ci-steps`,
+  `cdo-gate`, `check-goldens`, `cdo-speed`, `land`, `merge-and-push`,
+  `intent-cdo-check`, `cdo-before-after`; not their `--help`/`--dry-run`/
+  `--layout`/`--summary=`/`--product-paths`/`ci-steps fmt`) and `aldump`/`alsem` runs
+  when the line names the CDO workspace, naming the holder. It reads the line as the
+  shell does (`shlex`: quotes, heredoc bodies, comments and line continuations), and
+  checks every command after `cd &&`, `VAR=x`, shell keywords and wrappers (`nice`,
+  `env`, `time`, `timeout`, `taskset`, `stdbuf`, `xargs`, `bash -c`, `eval` ...). Text
+  that names a build (a commit message, a grep pattern) is not a build. It fails open:
+  unreadable input, no session id or a failing `cdo-slot status` allows. Limits: it
+  sees Bash calls only (an `alsem_*` MCP call on CDO is not guarded).
+- Tests: `cli` members `cdo_slot` (one holder at a time; sharing by session and
+  token; stale takeover; `--bind`; `run` on success, failure and SIGKILL; the memory
+  gate; races: 8 acquirers at once, free and stale, give one winner whose status names
+  a live holder; a status naming a live stranger, with the lock free or held, never
+  kills it; a bound hold not shared by session and not stale while its process lives;
+  no-session acquire refused; a reason with backslashes kept as written; the hook on
+  28 guarded and 16 free command lines) and `land_script`
+  (`land_holds_the_cdo_slot_from_start_to_end`: another session sees land's hold
+  during its ci and the hook refuses its `cargo test`; the nested cdo-gate shares the
+  hold through the token alone; free afterwards), and `gate_scripts` (cdo-gate holds
+  the slot through every cargo call). Tests that run the real cdo-gate or land use a
+  slot folder of their own, and end any holder they leave. Mutations, each failing a
+  test: the session match, release's holder check, the stale check, the bound watch,
+  `run`'s release, the holder's flock, the is-holder check, session sharing of a bound
+  hold, the bound check in STALE, the no-session refusal, the hook's quote-aware
+  reading, heredoc skip, information modes, wrapper skipping, first-word rule and
+  own-session check, land's acquire and token export, cdo-gate's acquire.
+- Review r1 (Fable) found the first design unsafe (a concurrent stale takeover could
+  delete the winner's status; a recorded PID was trusted; session sharing removed
+  land's one-run guard; the hook missed most real shapes and refused commit messages);
+  the above is the redesign. Review r2 (Fable, READY) notes, taken: the hook passes a
+  session's commands under its own bound hold too (its land or cdo-gate; mutation:
+  that check dropped -> refused), and also catches `bash -lc`, command substitutions
+  quoted or not (`"$(cargo test)"`, backticks), `#` inside a word (`$#`, `${#a}`),
+  a here-string before a newline, `<(...)`, `rustup run`, `watch` and `agentflow
+  run`; the slot folder is resolved once (`realpath`), and a held lock whose status
+  is gone for more than 5 s reads "held by an unknown holder", so the hook refuses
+  and the message says how to find it. Left as is: an unbound session hold with no
+  Claude PID is never stale (real sessions set both).
+- Review r1 (sol), all taken:
+  - land refuses a hold it would share (its caller's token, or its session holding
+    by hand): it needs the slot to itself, so two lands never run on one worktree.
+  - land's mem-wait no longer waits for "no other cdo-gate": the slot already
+    serializes gates, and a cdo-gate queued behind the landing deadlocked it.
+  - A bound process counts as alive only while it is no zombie and has the start
+    time recorded at acquire (a reused PID is not it); the holder's watch and the
+    STALE check both use this.
+  - The lock probe reads only a timeout (`flock -E 75`) as held; any other failure
+    stops `status` with exit 5, and the hook allows.
+  - The hook reads the line with one quote-aware scanner: a comment is a `#`
+    starting a word outside quotes (`rg '# TODO' && cargo test` is caught); a heredoc
+    starts only outside quotes; an unquoted heredoc's body still runs its
+    substitutions (caught), a quoted one's does not; `$(...)` and backticks inside
+    single quotes run nothing (a commit message `'... $(cargo test)'` passes).
+  - Mutations, each failing a test: the zombie check in the holder's watch, the probe
+    reading any failure as held, land accepting a shared hold, the mem-wait's process
+    check restored, single quotes not tracked, heredoc-body substitutions dropped.
+- Review r2 (sol): the hook's reading is now one small shell lexer instead of
+  `shlex` plus a pre-scan, so it keeps whether a character was quoted: an operator
+  counts only outside quotes (`echo '>' && cargo test` is caught, `printf ';' ...`
+  passes); `$(...)` is matched with the quotes, escapes, nested substitutions and
+  heredoc bodies inside it skipped (a commit message with `don't (really)` in a
+  heredoc inside `$(...)` passes, `"$(printf ')'; cargo test)"` is caught); a heredoc
+  ends at its whole delimiter (`EOF-TEXT`); `watch` and `env -S` read their command
+  strings. The broken-probe test injects a failing `flock` on PATH (file permissions
+  do not stop a privileged user), and the queued-gate test keeps the bash process
+  whose command line names the gate.
+- From land's first real run (ENG-80's landing, which stopped correctly on a cdo-gate
+  speed failure): a failed step now prints that step's own FAIL and `error:` lines
+  (at most 8) under land's `[step] FAILED` line, so the reader need not open its log
+  (e.g. `land:   | cdo-gate:   speed ... FAIL ...`).
+- Mutations for the r2 round, each failing a test: single quotes not lexed, `$(...)`
+  matching that ignores quotes, a heredoc delimiter cut at `-`, `watch` and `env -S`
+  not read (each alone), the mem-wait's process check restored (the queued-gate
+  test now catches it), the probe reading any failure as held (via the PATH `flock`),
+  land not printing a failed step's lines.
+- Review r3 (sol): an information mode exempts a script only where it reads it
+  (cdo-gate and land: any argument; ci-steps: only `fmt` as its first argument, so
+  `ci-steps build --dry-run` is caught); a shell's options are read with their
+  operands (`-o`/`-O` in a cluster take one), so `bash -euo pipefail -c 'cargo test'`
+  is caught. Mutations, each failing a test: information modes exempt for every
+  script; option operands not consumed. Review r4 (sol): `cdo-speed --help`
+  (argparse, exits before any build) passes again (mutation: its entry removed ->
+  refused).
+- Review r3 (Fable, READY): `bash -n <script>` (a syntax check) passes (mutation: the
+  rule dropped -> refused); the own-session match takes the last `, session <id>` of
+  the status line (a reason holding that text cannot lend a hold). Known limits,
+  left as they are (rare in agent use): a script fed to a shell on stdin (`bash
+  <<EOF`, `echo cmd | bash`), `find -execdir cargo ...`, a test binary run directly
+  on CDO (only aldump/alsem are matched by name), `$'...'` quoting, and `diff <(...)
+  scripts/land` (refused).
+
 ### Added (TLS-59: `scripts/land`, the landing chain as one command)
 
 - `scripts/land [--push] [--dry-run] [--name <x>] [--worktree <dir>] <branch>...` runs

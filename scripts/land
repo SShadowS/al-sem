@@ -5,8 +5,9 @@
 # ⟨TLS-59⟩ One command for the chain the orchestrator typed by hand 31 times
 # (once it ran on into cdo-gate after ci-steps had failed). Steps, each with a
 # one-line verdict; the first failure stops the run:
-#   check     one land run per gate worktree at a time (a lock, held to the
-#             end); the worktree is clean (untracked `.agent/` aside) with no
+#   check     takes the CDO slot (scripts/cdo-slot, waiting for it; held to
+#             the end, so one landing at a time and no lane builds or tests
+#             under it); the worktree is clean (untracked `.agent/` aside) with no
 #             merge in progress; local master is not behind origin/master (as of
 #             the last fetch: no fetch here, merge-and-push fetches and checks
 #             again); every branch exists, is not master, is not yet in master
@@ -23,10 +24,8 @@
 #             (the worktree is then on a clean, detached master).
 #   ci        `bash scripts/ci-steps all` (stops here on a failure: cdo-gate
 #             never runs after a red ci).
-#   mem-wait  MemAvailable >= 35 GB and no other cdo-gate running (polls 15 s,
-#             gives up after 30 min). "Running" is a `bash [<dir>/]scripts/cdo-gate`
-#             command line in this container; `bash -x ...` or a gate started
-#             from inside scripts/ is not seen.
+#   mem-wait  MemAvailable >= 35 GB (polls 15 s, gives up after 30 min); no
+#             other gate can run meanwhile, since land holds the CDO slot.
 #   cdo       `bash scripts/cdo-gate <CDO_WS>`.
 #   recheck   (after ci and after cdo) the worktree is still on the landing
 #             commit the gates ran on, clean, `landing/<name>` still points
@@ -56,7 +55,10 @@
 #
 # Environment: LAND_WORKTREE (default /work/alsem-wt/orchestrator-gate), CDO_WS
 # (default /work/src/cdo-baseline/Cloud), LAND_LOGS, FLOW_LOG, LAND_MEM_MIN_GB
-# (default 35; 0 skips the whole wait, for tests), LAND_MEM_TIMEOUT_S (1800).
+# (default 35; 0 skips the whole wait, for tests), LAND_MEM_TIMEOUT_S (1800),
+# LAND_SLOT_TIMEOUT_S (how long to wait for the CDO slot; default: no limit),
+# CDO_SLOT_OWNER (the slot's owner label; default "land") and scripts/cdo-slot's
+# own CDO_SLOT_DIR / CDO_SLOT_MEM_MIN_GB.
 # Exit: 0 PASS (or a clean dry run); 1 refused or failed; 2 usage.
 set -euo pipefail
 
@@ -129,11 +131,11 @@ if ((!dry_run)); then
     [[ "$cdo_ws" == /* && -d "$cdo_ws" ]] || bad_usage "CDO_WS '$cdo_ws': an absolute path to an existing folder"
 fi
 command -v jq >/dev/null || die "jq is needed for the timing log"
-command -v flock >/dev/null || die "flock is needed for the worktree lock"
 
-# Children never get fd 9 (the lock: a background job a child leaves behind,
-# like merge-and-push's speed-check warm-up or a detached `git gc`, would hold
-# it after this run) nor 7/8 (the saved stdout/stderr, see merge_failed).
+# Children never get fds 7/8 (the saved stdout/stderr, see merge_failed): a
+# background job a child leaves behind, like merge-and-push's speed-check
+# warm-up or a detached `git gc`, would keep the caller's terminal open. Nor
+# fd 9, should a caller have opened one.
 G() { git -C "$worktree" "$@" 7>&- 8>&- 9>&-; }
 
 # union_changelog <base> <master's> <branch's> <out>: CHANGELOG.md's conflicts
@@ -182,10 +184,27 @@ union_changelog() {
 [[ -d "$worktree" ]] || die "no gate worktree at $worktree"
 G rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "$worktree is not a git worktree"
 if ((!dry_run)); then
-    # Two runs on one worktree would swap the tree under each other's gates.
-    lock="$(G rev-parse --absolute-git-dir)/land.lock"
-    exec 7>&1 8>&2 9>"$lock"
-    flock -n 9 || die "another scripts/land run holds $worktree ($lock)"
+    exec 7>&1 8>&2
+    # ⟨TLS-60⟩ The CDO slot (scripts/cdo-slot), from here to the end: no second
+    # land and no lane's build or test (the cdo-slot-guard hook) can run under
+    # this landing's gates. The token lets the cdo-gate it runs share the hold;
+    # bound to this process, so even a killed run frees it.
+    export CDO_SLOT_TOKEN=${CDO_SLOT_TOKEN:-$(od -An -N8 -tx8 /dev/urandom | tr -d ' ')}
+    slot="$(dirname "$0")/cdo-slot"
+    slot_args=(acquire "${CDO_SLOT_OWNER:-land}" "landing ${branches[*]}" --wait --bind "$$")
+    [[ -z "${LAND_SLOT_TIMEOUT_S:-}" ]] || slot_args+=(--timeout "$LAND_SLOT_TIMEOUT_S")
+    rc=0
+    # No memory wait here (ci-steps all needs none; the mem-wait step before
+    # cdo-gate does it, under the slot, so nothing can take the memory meanwhile).
+    CDO_SLOT_MEM_MIN_GB=0 bash "$slot" "${slot_args[@]}" 7>&- 8>&- || rc=$?
+    case "$rc" in
+        0) trap 'bash "$slot" release >/dev/null 2>&1 || true' EXIT ;;
+        # A shared hold (the caller's token, or its session holding by hand)
+        # would let two lands run on one worktree at once: land needs the slot
+        # to itself (review r1, sol).
+        4) die "the CDO slot is already held by this caller; land needs it to itself: release it first (scripts/cdo-slot release)" ;;
+        *) die "the CDO slot was not taken (scripts/cdo-slot status)" ;;
+    esac
 fi
 G rev-parse -q --verify MERGE_HEAD >/dev/null && die "a merge is in progress in $worktree"
 status=$(G status --porcelain) || die "git status failed in $worktree"
@@ -321,6 +340,11 @@ verdict() { # verdict <step> <exit> <start>
         echo "land: [$1] ok ($secs s)"
     else
         echo "land: [$1] FAILED, exit $2 ($secs s; log $run/$1.log)"
+        # The failing step's own verdict lines, so nobody needs to open its log
+        # (e.g. cdo-gate's "speed ... FAIL" summary line). At most the last 8.
+        if [[ -f "$run/$1.log" ]]; then
+            grep -E 'FAIL|error[:[]' "$run/$1.log" | tail -n 8 | sed 's/^/land:   | /' || true
+        fi
     fi
 }
 
@@ -416,15 +440,15 @@ if ((mem_min_gb > 0)); then
     deadline=$((SECONDS + mem_timeout))
     while :; do
         avail_kb=$(awk '/^MemAvailable:/ { print $2 }' /proc/meminfo)
-        # A running gate is `bash <path>/cdo-gate ...` (its shebang), not any
-        # command line that merely mentions it.
-        other=$(pgrep -f '^(/usr)?(/bin/)?bash [^ ]*scripts/cdo-gate( |$)' || true)
-        if ((avail_kb >= mem_min_gb * 1048576)) && [[ -z "$other" ]]; then
-            echo "MemAvailable $((avail_kb >> 20)) GB, no other cdo-gate" >"$run/mem-wait.log"
+        # No other gate can run: land holds the CDO slot, and cdo-gate takes it
+        # (a gate queued behind this landing is no reason to wait: it waits for
+        # us, review r1, sol).
+        if ((avail_kb >= mem_min_gb * 1048576)); then
+            echo "MemAvailable $((avail_kb >> 20)) GB" >"$run/mem-wait.log"
             break
         fi
         if ((SECONDS >= deadline)); then
-            echo "gave up: MemAvailable $((avail_kb >> 20)) GB (need $mem_min_gb), other cdo-gate: ${other:-none}" >"$run/mem-wait.log"
+            echo "gave up: MemAvailable $((avail_kb >> 20)) GB (need $mem_min_gb)" >"$run/mem-wait.log"
             rc=1
             break
         fi

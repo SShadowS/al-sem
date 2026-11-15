@@ -56,11 +56,20 @@ scripts/ci-steps task          # The per-task gate (see Test tiers below)
 scripts/ci-steps task-affected # `task` with only the tests the changed paths reach (agent inner loop)
 cargo bench -p al-sem-benches --bench lsp_pipeline  # Benches are their own package (benches/Cargo.toml)
 scripts/land [--push] [--dry-run] <branch>...  # The landing chain (TLS-59): merge the lane branches
-                               # (in order) into landing/<ids> in the gate worktree (a CHANGELOG conflict of
+                               # (in order) into landing/<ids> in the gate worktree, holding the CDO slot
+                               # (scripts/cdo-slot) from the start (a CHANGELOG conflict of
                                # additions keeps both sides, any other conflict stops), `ci-steps all`, wait
                                # for 35 GB free, `cdo-gate`, a recheck that master and the worktree did not
                                # move, then `merge-and-push` only with --push. Logs and verdicts under
                                # /work/.al-sem/land/; timings in flow-timings.jsonl
+scripts/cdo-slot acquire|release|status|run <owner> <reason>  # The one CDO slot (TLS-60): land and
+                               # cdo-gate hold it for their whole run; a lane's CDO measurement or timed run
+                               # (an output_cdo re-mint, a hand CDO probe; TLS-61's cdo-before-after) takes it
+                               # too: `run ... -- <cmd>`, or `acquire --wait` + `release` by hand (cdo-gate
+                               # --only inside such a hand hold shares it). While another session holds it,
+                               # the PreToolUse hook scripts/claude-hooks/cdo-slot-guard (wired by the owner)
+                               # refuses this session's cargo builds/tests, the gate scripts and aldump/alsem
+                               # on CDO, naming the holder. `scripts/cdo-slot status` says who.
 scripts/sweep-builds           # Delete build output unused for 7 days (main + al-sem-issue-* worktrees;
                                # needs `cargo install cargo-sweep`). Run after an issue, before a release,
                                # or when `df -h /u` is low: U: has filled up three times
