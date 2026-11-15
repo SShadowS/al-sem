@@ -1754,10 +1754,10 @@ fn every_dep_routine_route_target_resolves_via_dep_meta() {
 
 /// `decl_by_id`/`incoming` MUST be presentable as "a valid instance of a
 /// wholesale rebuild" after a rung-1 patch: `decl_by_id`'s key set matches
-/// `build_decl_by_id`'s key set, and every entry is SOME declaring file's own
-/// `DeclEntry` (winner is unspecified for a duplicate id — see
-/// `build_decl_by_id`'s doc — so this does not assert byte-identical maps,
-/// only the invariant the patch is allowed to preserve). `incoming` is
+/// `build_decl_by_id`'s key set, and every entry EQUALS the rebuild's
+/// (TLS-68: a duplicate id's winner is the smallest path's, the same in the
+/// patch and the rebuild; this used to accept SOME declaring file's entry,
+/// which passed whichever file won). `incoming` is
 /// compared as a genuine sorted-multiset equality against a fresh
 /// `build_incoming` (per the brief's step 1(a) ordering caveat:
 /// `build_incoming`'s per-target `Vec<EdgeRef>` order is ALREADY
@@ -1816,9 +1816,8 @@ codeunit 50100 "Alpha"
         .expect("apply_batch must succeed");
     assert_eq!(rung, Rung::One, "a body-only edit must take rung 1");
 
-    // ---- decl_by_id: key-set equality + "one of the declaring files' own
-    // entries" per id, against a fresh wholesale rebuild of the SAME
-    // post-edit decls_by_file. ----
+    // ---- decl_by_id: key-set equality + per-id equality against a fresh
+    // wholesale rebuild of the SAME post-edit decls_by_file. ----
     let fresh_decl_by_id = al_sem::lsp::snapshot::build_decl_by_id(&new_snap.decls_by_file);
     let mut patched_ids: Vec<&RoutineNodeId> = new_snap.decl_by_id.keys().collect();
     let mut fresh_ids: Vec<&RoutineNodeId> = fresh_decl_by_id.keys().collect();

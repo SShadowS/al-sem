@@ -31,9 +31,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     which passed whichever file won, to exact equality.
   - Mutations, each red: the largest path winning; the patch taking every id; the patch not
     replacing its own old entry.
-- Limit: the rescan for a winning file that stops declaring an id is not reachable through
-  rung 1 (removing a declaration is rung 2, which rebuilds). It uses the same comparison but
-  has no test of its own.
+  - New unit test `rung1_patch_duplicate_arms_match_a_rebuild` (review r1, Fable). Adding or
+    dropping a declaration is rung 2 for a real save, so some arms of the patch are unreachable
+    through `apply_batch`. This test drives `apply_rung1_core` directly with such a save:
+    - a smaller path gaining the id;
+    - the winner dropping it (the rescan picks the next smallest path);
+    - one file declaring it twice (its first entry wins, and it counts once).
+
+    Each step must match the rebuild's index and multiplicity. Mutations, each red: the take
+    arm without `decl_wins`; the rescan keeping the largest path; no first-entry guard; the
+    count per entry.
+- Also fixed (pre-existing, unreachable through rung 1): the patch counted an id declared
+  twice in one file as two declaring files; it now counts files, as
+  `build_decl_multiplicity` does.
 
 ### Changed (TLS-66: FxHash and pre-sizing for the model build's hottest maps)
 
@@ -69,9 +79,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Below the bar:** the 2.4% CPU gain is below the 3% CPU bar set at filing, waived by the
   orchestrator for the wall and memory gain. The wall gain (x0.943, both passes) is the one
   measured; the memory figure is noise, as above.
-- **Not reproduced after ENG-86/88** (noted with TLS-68): the landing gate's speed phase on
-  the then master (base build CPU ~92 s) read build CPU x1.036 (passes x1.205 and x0.891,
-  so noise) and wall x1.006. The gain measured on `e7848a85` did not show again there.
+- **Not reproduced after ENG-86** (noted with TLS-68; ENG-88 was already in `e7848a85`): the
+  landing gate's speed phase on `4dcf4b44` (base build CPU ~92 s) read build CPU x1.036 and
+  wall x1.006. Its two passes read x1.205 and x0.891: in each, the side built second was about
+  20% slower (the known side-order effect at load 6-8). So it is one loaded sample, not
+  evidence that ENG-86 removed the gain, nor that the gain held.
 - **Left for later:** cheaper keys for the `String`- and `Query`-keyed maps (FxHash still
   reads a string byte by byte), and the remaining smaller `String`-keyed sites.
 - **Output order:** every iteration over a switched map was checked by hand, iterator chains

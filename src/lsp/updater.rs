@@ -1191,11 +1191,13 @@ fn apply_rung1_core(
         let mut taken_here: HashSet<&RoutineNodeId> = HashSet::new();
         for d in decls.iter() {
             affected_ids.insert(d.id.clone());
-            if !old_ids.contains(&d.id) {
-                *mult.entry(d.id.clone()).or_insert(0) += 1;
-            }
             if !taken_here.insert(&d.id) {
                 continue; // a later entry of this file: the first one decided
+            }
+            // Once per file, as `build_decl_multiplicity` counts (it used to
+            // count every entry; review r1, Fable).
+            if !old_ids.contains(&d.id) {
+                *mult.entry(d.id.clone()).or_insert(0) += 1;
             }
             let take = decl_by_id
                 .get(&d.id)
@@ -2436,6 +2438,144 @@ mod tests {
             &snap2.edges_by_file["Beta.al"]
         ));
         assert_eq!(updater.pending.len(), 1, "both edits target the same file");
+    }
+
+    /// ⟨TLS-68, review r1 Fable⟩ The rung-1 patch's duplicate-id arms that a
+    /// real rung-1 save cannot reach (adding or dropping a declaration changes
+    /// the surface fingerprint, so `decide` sends it to rung 2), driven here by
+    /// handing `apply_rung1_core` such a save directly. After each, the patched
+    /// `decl_by_id` must equal `build_decl_by_id` and the multiplicity must
+    /// equal `build_decl_multiplicity`, both over the patched `decls_by_file`.
+    ///
+    /// Mutations (2026-11-15), each red here: the take arm without `||
+    /// decl_wins(d, cur)` -> case 1 keeps `Dup_b.al`; the rescan keeping the
+    /// LARGEST path (`decl_wins(best, d)`) -> case 2 picks `Dup_c.al`; no
+    /// `taken_here` (a later same-file entry takes over) -> case 3's winner is
+    /// the second declaration; the multiplicity bumped per entry again -> case
+    /// 3 counts 3.
+    #[test]
+    fn rung1_patch_duplicate_arms_match_a_rebuild() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join("app.json"),
+            r#"{"id": "77777777-0000-0000-0000-000000000168", "name": "TLS-68 arms",
+                "publisher": "probe", "version": "1.0.0.0"}"#,
+        )
+        .expect("app.json");
+        // `pad` blank lines before `Shared`, so each entry is told apart by its row.
+        let with_shared = |pad: usize, twice: bool| {
+            format!(
+                "codeunit 50100 \"Dup\"\n{{\n    procedure Keep()\n    begin\n    end;\n{}    \
+                 procedure Shared()\n    begin\n    end;\n{}}}\n",
+                "\n".repeat(pad),
+                if twice {
+                    "\n    procedure Shared()\n    begin\n    end;\n"
+                } else {
+                    ""
+                }
+            )
+        };
+        let without_shared =
+            "codeunit 50100 \"Dup\"\n{\n    procedure Keep()\n    begin\n    end;\n}\n".to_string();
+        let save = |updater: &Updater, cur: &LspSnapshot, vp: &str, text: String| {
+            std::fs::write(dir.path().join(vp), &text).expect("write");
+            (
+                vp.to_string(),
+                ParsedFile {
+                    virtual_path: vp.to_string(),
+                    file: Arc::new(al_syntax::parse(&text)),
+                    provenance: updater.file_provenance(cur, vp),
+                    text: text.into(),
+                },
+            )
+        };
+        let check = |snap: &LspSnapshot, mult: &HashMap<RoutineNodeId, u32>, what: &str| {
+            let fresh = build_decl_by_id(&snap.decls_by_file);
+            assert_eq!(snap.decl_by_id.len(), fresh.len(), "{what}: key sets");
+            for (id, d) in &snap.decl_by_id {
+                let f = &fresh[id];
+                assert_eq!(
+                    (&d.virtual_path, d.name_origin.start.row),
+                    (&f.virtual_path, f.name_origin.start.row),
+                    "{what}: decl_by_id[{id:?}]"
+                );
+            }
+            assert_eq!(
+                mult,
+                &build_decl_multiplicity(&snap.decls_by_file),
+                "{what}: multiplicity"
+            );
+        };
+        let winner = |snap: &LspSnapshot| {
+            let d = snap
+                .decl_by_id
+                .values()
+                .find(|d| d.name == "Shared")
+                .expect("Shared is declared");
+            (d.virtual_path.clone(), d.name_origin.start.row)
+        };
+        let run = |files: &[(&str, String)], vp: &str, text: String| {
+            for (f, t) in files {
+                std::fs::write(dir.path().join(f), t).expect("write");
+            }
+            let (base, parsed) = build(dir.path());
+            let mut updater = Updater::new(dir.path().to_path_buf(), parsed);
+            let ctx = Rung1Context::build(&base, &updater.workspace);
+            let s = save(&updater, &base, vp, text);
+            let snap = apply_rung1_core(
+                &base,
+                vec![s],
+                &ctx.index,
+                &ctx.surface,
+                &ctx.obj_node_map,
+                &mut updater.pending,
+                &mut updater.decl_multiplicity,
+            )
+            .0;
+            for (f, _) in files {
+                std::fs::remove_file(dir.path().join(f)).expect("cleanup");
+            }
+            (snap, updater.decl_multiplicity.expect("set by the patch"))
+        };
+
+        // Case 1: Dup_a.al gains `Shared`, held by Dup_b.al: the smaller path takes it.
+        let (snap, mult) = run(
+            &[
+                ("Dup_a.al", without_shared.clone()),
+                ("Dup_b.al", with_shared(0, false)),
+            ],
+            "Dup_a.al",
+            with_shared(2, false),
+        );
+        assert_eq!(winner(&snap), ("Dup_a.al".to_string(), 7), "case 1");
+        check(&snap, &mult, "case 1");
+
+        // Case 2: the winner Dup_a.al drops `Shared`, also held by Dup_b and
+        // Dup_c: the rescan picks the next smallest path, Dup_b.al.
+        let (snap, mult) = run(
+            &[
+                ("Dup_a.al", with_shared(0, false)),
+                ("Dup_b.al", with_shared(1, false)),
+                ("Dup_c.al", with_shared(2, false)),
+            ],
+            "Dup_a.al",
+            without_shared.clone(),
+        );
+        assert_eq!(winner(&snap), ("Dup_b.al".to_string(), 6), "case 2");
+        check(&snap, &mult, "case 2");
+
+        // Case 3: Dup_a.al, the smaller path, gains `Shared` twice: its FIRST
+        // entry wins, and it counts as one declaring file.
+        let (snap, mult) = run(
+            &[
+                ("Dup_a.al", without_shared.clone()),
+                ("Dup_b.al", with_shared(0, false)),
+            ],
+            "Dup_a.al",
+            with_shared(1, true),
+        );
+        assert_eq!(winner(&snap), ("Dup_a.al".to_string(), 6), "case 3");
+        check(&snap, &mult, "case 3");
     }
 
     // ── Step 3: debounce/coalesce — 5 rapid saves of one file → 1 apply ───
