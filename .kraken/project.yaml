@@ -3,7 +3,8 @@ name: alsem
 repo: https://github.com/SShadowS/al-sem.git
 image: .kraken/Dockerfile
 ssh_port: 2210 # server1's sshPorts range 2210-2299
-mem_limit: 32g # with the bc sidecar (sql 4g, its tmpfs inside that limit; bc 6g) 42g: server1's maxMemory must be >= 42g
+mem_limit: 48g # with the bc sidecar (sql 4g, its tmpfs inside that limit; bc 6g) 58g: server1's maxMemory must be >= 58g
+cap_add: [PERFMON] # TLS-70: Docker's default seccomp allows perf_event_open (samply) only with CAP_PERFMON
 agents:
   # Lanes run on kraken coord. Do not run /orchestrate here: agentflow's issue leases live in one
   # checkout's .agent/, so another worktree's /orchestrate would not see them.
