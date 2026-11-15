@@ -322,6 +322,208 @@ fn on_mark(name: &'static str) {
 /// (private fields), estimates from a walk: expressions, statements and blocks inline (len ×
 /// size), the expressions' string and Vec heap (capacities), the blocks' item Vecs; the rest
 /// of the measured IR drop is the remainder (statement heap, side tables, Vec slack).
+/// ENG-89: the dependency site facts (`HashMap<ObligationId, SiteFacts>`) split by part: the
+/// map's inline entries (capacity x (key + value + 1 control byte)), the keys' heap (the span's
+/// file path; caller ids are shared strings), and per `SiteFacts` field its heap (capacities)
+/// and how many sites use it. Then the measured drop of the whole map.
+fn split_site_facts(
+    m: HashMap<
+        al_sem::program::resolve::full::ObligationId,
+        al_sem::program::resolve::full::SiteFacts,
+    >,
+) {
+    use al_sem::program::resolve::edge::OpenBound;
+    use al_sem::program::resolve::full::{ObligationId, SiteFacts};
+    let (k, v) = (size_of::<ObligationId>(), size_of::<SiteFacts>());
+    let mib = |b: usize| b as f64 / 1_048_576.0;
+    println!(
+        "  site_facts: len {} cap {}; size_of ObligationId {k}, SiteFacts {v}; inline {:.2} MiB",
+        m.len(),
+        m.capacity(),
+        mib(m.capacity() * (k + v + 1))
+    );
+    let mut variants: HashMap<&'static str, usize> = HashMap::new();
+    let (mut unit_heap, mut units) = (0usize, HashSet::new());
+    let mut contexts = HashSet::new();
+    // (field, sites using it, heap bytes)
+    let mut f: Vec<(&'static str, usize, usize)> = Vec::new();
+    let mut add =
+        |name: &'static str, used: bool, heap: usize| match f.iter_mut().find(|e| e.0 == name) {
+            Some(e) => {
+                e.1 += usize::from(used);
+                e.2 += heap;
+            }
+            None => f.push((name, usize::from(used), heap)),
+        };
+    let s = |x: &Option<String>| x.as_ref().map_or(0, String::capacity);
+    for (key, sf) in &m {
+        let span = match key {
+            ObligationId::CallSite { span, .. } => (variants.entry("CallSite"), Some(span)),
+            ObligationId::Background { span, .. } => (variants.entry("Background"), Some(span)),
+            ObligationId::TableEvent { span, .. } => (variants.entry("TableEvent"), Some(span)),
+            ObligationId::Publisher(_) => (variants.entry("Publisher"), None),
+        };
+        *span.0.or_default() += 1;
+        if let Some(sp) = span.1 {
+            unit_heap += sp.unit.capacity();
+            units.insert(sp.unit.as_str());
+        }
+        let SiteFacts {
+            interface,
+            interface_closed_over,
+            interface_unmapped_enums,
+            interface_holder,
+            argument_codeunits,
+            receiver,
+            run_target,
+            build_context,
+            run_trigger_excluded,
+            unqualified_record_op,
+            open,
+            table_event_raise,
+            dataset_run,
+            starts_object: _,
+            validate_field,
+            request_page_may_cancel,
+            bare_scope_complete,
+            start_method,
+            field_ref_validate,
+            call_result_record,
+            record_op_field_named,
+            inherited_protected,
+            record_table_unresolved,
+        } = sf;
+        let vcap = |n: usize, sz: usize| n * sz;
+        add("interface", interface.is_some(), s(interface));
+        add(
+            "interface_closed_over",
+            !interface_closed_over.is_empty(),
+            vcap(
+                interface_closed_over.capacity(),
+                size_of::<al_sem::program::node::ObjectNodeId>(),
+            ),
+        );
+        add(
+            "interface_unmapped_enums",
+            !interface_unmapped_enums.is_empty(),
+            vcap(
+                interface_unmapped_enums.capacity(),
+                size_of::<al_sem::program::node::ObjectNodeId>(),
+            ),
+        );
+        add(
+            "interface_holder",
+            interface_holder.is_some(),
+            interface_holder.as_ref().map_or(0, |h| {
+                vcap(
+                    h.capacity(),
+                    size_of::<al_sem::program::resolve::interface_holder::HolderSource>(),
+                )
+            }),
+        );
+        add(
+            "argument_codeunits",
+            !argument_codeunits.is_empty(),
+            vcap(
+                argument_codeunits.capacity(),
+                size_of::<Option<al_sem::program::node::ObjectNodeId>>(),
+            ),
+        );
+        add(
+            "receiver",
+            receiver.is_some(),
+            receiver.as_ref().map_or(0, |r| s(&r.type_text)),
+        );
+        add("run_target", run_target.is_some(), 0);
+        if !build_context.is_empty() {
+            contexts.insert(format!("{build_context:?}"));
+        }
+        add(
+            "build_context",
+            !build_context.is_empty(),
+            vcap(build_context.capacity(), size_of::<(String, bool)>())
+                + build_context
+                    .iter()
+                    .map(|(x, _)| x.capacity())
+                    .sum::<usize>(),
+        );
+        add(
+            "run_trigger_excluded",
+            !run_trigger_excluded.is_empty(),
+            vcap(run_trigger_excluded.capacity(), size_of::<RoutineNodeId>()),
+        );
+        add("unqualified_record_op", *unqualified_record_op, 0);
+        add(
+            "open",
+            !open.is_empty(),
+            vcap(open.capacity(), size_of::<OpenBound>())
+                + open
+                    .iter()
+                    .map(|o| match o {
+                        OpenBound::Name { name_lc, .. } => name_lc.capacity(),
+                        _ => 0,
+                    })
+                    .sum::<usize>(),
+        );
+        add("table_event_raise", table_event_raise.is_some(), 0);
+        add(
+            "dataset_run",
+            dataset_run.is_some(),
+            dataset_run.as_ref().map_or(0, |d| {
+                vcap(
+                    d.effects.capacity(),
+                    size_of::<al_sem::program::resolve::dataset::DatasetEffect>(),
+                )
+            }),
+        );
+        add(
+            "validate_field",
+            validate_field.is_some(),
+            s(validate_field),
+        );
+        add("request_page_may_cancel", *request_page_may_cancel, 0);
+        add("bare_scope_complete", *bare_scope_complete, 0);
+        add("start_method", start_method.is_some(), s(start_method));
+        add(
+            "field_ref_validate (heap not walked)",
+            field_ref_validate.is_some(),
+            0,
+        );
+        add(
+            "call_result_record (heap not walked)",
+            call_result_record.is_some(),
+            0,
+        );
+        add("record_op_field_named", *record_op_field_named, 0);
+        add("inherited_protected", *inherited_protected, 0);
+        add(
+            "record_table_unresolved (heap not walked)",
+            record_table_unresolved.is_some(),
+            0,
+        );
+    }
+    println!("  key variants: {variants:?}");
+    println!(
+        "  key span.unit heap {:.2} MiB over {} distinct files; distinct build contexts {}",
+        mib(unit_heap),
+        units.len(),
+        contexts.len()
+    );
+    f.sort_by(|a, b| b.2.cmp(&a.2).then(b.1.cmp(&a.1)));
+    for (name, used, heap) in &f {
+        println!(
+            "    field {name:<44} used {used:>8}  heap {:>8.2} MiB",
+            mib(*heap)
+        );
+    }
+    let est = m.capacity() * (k + v + 1) + unit_heap + f.iter().map(|e| e.2).sum::<usize>();
+    let (b, _) = step("session.dep_resolution.site_facts", m);
+    println!(
+        "    remainder after the estimates (unwalked heap, shared ids) {:>9.2} MiB",
+        mib((b.max(0) as usize).saturating_sub(est))
+    );
+}
+
 fn split_bodies(bodies: Option<Arc<Vec<al_sem::snapshot::parse::ParsedUnit>>>) {
     use al_syntax::ir::{Block, Expr, ExprKind, Literal, Stmt};
     let Some(bodies) = bodies else {
@@ -1992,7 +2194,12 @@ fn resident_mode(ws: PathBuf, routine: String, low_mem: bool) {
                         size_of::<Route>()
                     );
                     step("session.dep_resolution.edges", d.edges);
-                    step("session.dep_resolution.site_facts", d.site_facts);
+                    match Arc::try_unwrap(d.site_facts) {
+                        Ok(m) => split_site_facts(m),
+                        Err(shared) => {
+                            step("session.dep_resolution.site_facts (shared Arc)", shared);
+                        }
+                    }
                     step("session.dep_resolution.parenless", d.parenless_calls);
                 }
                 Err(d) => {
