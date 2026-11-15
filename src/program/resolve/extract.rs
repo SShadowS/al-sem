@@ -20,7 +20,7 @@ use std::collections::HashSet;
 use al_syntax::IdentifierFoldExt;
 use al_syntax::ir::{AlFile, BlockId, BlockItem, ExprId, ExprKind, RoutineDecl, StmtKind};
 
-use crate::program::resolve::edge::{CanonicalSpan, SourcePos};
+use crate::program::resolve::edge::CanonicalSpan;
 
 /// Classified callee shape for a call expression, mirroring L3's
 /// `classify_callee` + record-op filter.
@@ -331,19 +331,6 @@ pub fn routine_rvars(routine: &RoutineDecl) -> HashSet<String> {
         rvars.insert(name.fold_identifier());
     }
     rvars
-}
-
-/// Convert a byte offset into a 0-based `(line, col)` source position by
-/// counting newlines in the prefix `src[..byte]`. Mirrors `extract_min.rs`.
-fn byte_to_pos(src: &str, byte: usize) -> SourcePos {
-    let byte = byte.min(src.len());
-    let prefix = &src[..byte];
-    let line = prefix.bytes().filter(|&b| b == b'\n').count() as u32;
-    let col = match prefix.rfind('\n') {
-        Some(nl) => (byte - nl - 1) as u32,
-        None => byte as u32,
-    };
-    SourcePos { line, col }
 }
 
 /// Strip one layer of surrounding double-quotes or single-quotes (mirrors L2's
@@ -797,8 +784,8 @@ fn collect_value_v2(
             arity: 0,
             span: CanonicalSpan {
                 unit: unit.to_string(),
-                start: byte_to_pos(src, e.origin.byte.start),
-                end: byte_to_pos(src, e.origin.byte.end),
+                start: e.origin.start.into(),
+                end: e.origin.end.into(),
             },
             callee_text: src[e.origin.byte.clone()].to_string(),
             with_state: ctx.state(),
@@ -837,8 +824,8 @@ fn collect_calls_v2(
             let callee_text = src[file.ir.expr(fn_id).origin.byte.clone()].to_string();
             let span = CanonicalSpan {
                 unit: unit.to_string(),
-                start: byte_to_pos(src, e.origin.byte.start),
-                end: byte_to_pos(src, e.origin.byte.end),
+                start: e.origin.start.into(),
+                end: e.origin.end.into(),
             };
             out.push(RawSiteV2 {
                 caller_routine: caller.to_string(),
@@ -1161,6 +1148,62 @@ pub fn extract_sites_for_routine(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::program::resolve::edge::SourcePos;
+
+    /// The pre-ENG-88 position rule, kept as the oracle: count `\n` in the prefix.
+    fn newline_count_pos(src: &str, byte: usize) -> SourcePos {
+        let prefix = &src[..byte.min(src.len())];
+        let line = prefix.bytes().filter(|&b| b == b'\n').count() as u32;
+        let col = match prefix.rfind('\n') {
+            Some(nl) => (prefix.len() - nl - 1) as u32,
+            None => prefix.len() as u32,
+        };
+        SourcePos { line, col }
+    }
+
+    /// ENG-88: every site's span, now read from the parser's points, equals the newline count
+    /// over its expression's byte range — over the whole r0 corpus and a CRLF, tab and
+    /// multibyte sample (a `\r` alone inside a string too).
+    #[test]
+    fn site_spans_match_the_newline_count() {
+        let sample = "codeunit 50100 \"Æble\"\r\n{\r\n    procedure Ø()\r\n    var\r\n        T: Text;\r\n    begin\r\n\t\tT := 'å\rb'; Message('ü %1', Format(T));\r\n        \"Æble Ø\"(Strlen('ß'));\r\n        Message('ø %1',\r\n            Format(\r\n                T));\r\n    end;\r\n}\r\n";
+        let mut sources = vec![("sample.al".to_string(), sample.to_string())];
+        let corpus = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/r0-corpus");
+        let mut stack = vec![corpus];
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(&dir).expect("r0 corpus") {
+                let path = entry.expect("entry").path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else if path.extension().is_some_and(|e| e == "al")
+                    && let Ok(text) = std::fs::read_to_string(&path)
+                {
+                    sources.push((path.display().to_string(), text));
+                }
+            }
+        }
+        let (mut checked, mut crlf_sites) = (0usize, 0usize);
+        for (name, src) in &sources {
+            let file = al_syntax::parse(src);
+            for site in extract_sites(&file, src, "U.al", &HashSet::new()) {
+                let byte = &file.ir.expr(site.expr).origin.byte;
+                assert_eq!(
+                    (site.span.start, site.span.end),
+                    (
+                        newline_count_pos(src, byte.start),
+                        newline_count_pos(src, byte.end)
+                    ),
+                    "{name}: `{}`",
+                    site.callee_text
+                );
+                checked += 1;
+                crlf_sites += usize::from(src.contains("\r\n"));
+            }
+        }
+        assert!(sources.len() > 500, "the corpus was found");
+        assert!(checked > 1000, "only {checked} sites checked");
+        assert!(crlf_sites >= 3, "the CRLF sample produced sites");
+    }
 
     /// S3.5: a bare record op is a `RecordOp` on the innermost implicit
     /// receiver (L2's rule), and a `Bare` call when that receiver is not a

@@ -181,6 +181,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on CDO (only aldump/alsem are matched by name), `$'...'` quoting, and `diff <(...)
   scripts/land` (refused).
 
+### Changed (ENG-88: call-site positions read from the parser, a third off the model build's CPU)
+
+- **What it cost.** Dependency body resolution turned every call site's byte range into line and
+  column by counting the newlines in the whole file prefix (`byte_to_pos`, `extract.rs` and
+  `extract_min.rs`), twice per call expression: a cost of file size times call count, which
+  ENG-82's profile put at 42% of `build_target`'s kept samples.
+- **The fix.** Every IR `Origin` already carries tree-sitter's start and end `Point`. Its row counts
+  `\n` only and its column is the UTF-8 byte offset since that `\n`: the same numbers. The six
+  calls now read the points (`impl From<Point> for SourcePos`), and `byte_to_pos` is gone.
+- **Same answers.** A new test, `site_spans_match_the_newline_count`, compares every site of the
+  r0 corpus (584 files) and a CRLF, tab, multibyte and multi-line sample with the old count;
+  pointing a span's end at its start fails it. The task gate is green. CDO `fingerprint` and
+  `analyze` (both scopes) are byte-identical to master `91871ab9`'s binary, and `cdo-gate --only
+  harness,l4,output` passes.
+- **After** (`cdo-speed`, base `91871ab9`, load 7-9): model build CPU 165.7 → 109.4 s (x0.654),
+  wall 37.9 → 33.2 s (x0.872); the test universe CPU x0.620, wall x0.758; the rounds x1.01; peak
+  memory x1.014. The two passes of the build differ (x0.833 and x0.513), so the build gain is
+  between a sixth and a half, about a third at the median.
+- **The profiler loses samples.** The ENG-82 probe, rerun with a CPU total, kept 7,030 of the
+  29,626 samples its 59.4 CPU-seconds should give (23.7%), and the kept ones are mostly the main
+  thread's (57%). So its shares over-weight serial work and under-weight the parallel phases.
+  The ENG-82 note says so now.
+
 ### Added (ENG-82: a byte census and a CPU profile of the CDO model build)
 
 - `docs/superpowers/notes/2026-11-15-eng82-census-profile.md` ranks where the resident CDO model
