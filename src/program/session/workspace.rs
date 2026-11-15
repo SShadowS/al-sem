@@ -518,6 +518,8 @@ impl WorkspaceSession {
                         tally_edges(&mut copied, edges);
                         let ok = f::rematerialize_witnesses(edges, &surface);
                         debug_assert!(ok, "checked by witnesses_current");
+                        // ENG-92: the facts point into the copy, so the old edges are freed.
+                        d.site_facts = Arc::new(d.site_facts.with_edges(Arc::clone(&d.edges)));
                     }
                     if current.is_some() {
                         // The edges' ranges and the answers they were resolved

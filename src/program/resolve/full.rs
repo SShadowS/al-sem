@@ -521,10 +521,21 @@ pub type SiteFactsByObligation = crate::fxhash::FxHashMap<ObligationId, SiteFact
 /// Built from a finished map ([`DepSiteFacts::new`]), so it answers exactly what that map
 /// answered, the last insert of a duplicate key included. On CDO this took the
 /// dependency site facts from 137 to 52 MiB.
-#[derive(Default)]
+///
+/// The index is shared (`Arc`) apart from the edges: a refresh that copies the resolution's
+/// edges (`Arc::make_mut` to re-materialize witnesses) must re-point the facts at the copy
+/// with [`DepSiteFacts::with_edges`], or the old vector stays alive beside it (Fable r1).
+#[derive(Default, Clone)]
 pub struct DepSiteFacts {
-    /// The edges the entries point into (the same `Arc` as the resolution's).
+    /// The edges the entries point into: the resolution's own `edges` `Arc`.
     edges: Arc<Vec<ClassifiedEdge>>,
+    index: Arc<DepIndex>,
+}
+
+#[derive(Default)]
+struct DepIndex {
+    /// The hash of a key, as `get` computes it (FxHash; a test injects collisions).
+    hash: Option<fn(&ObligationId) -> u64>,
     /// The key's hash → its entry in `facts` (keys with an edge, first come).
     by_hash: crate::fxhash::FxHashMap<u64, u32>,
     /// `(where the key is, facts)`: an edge index below `edges.len()`, else
@@ -535,51 +546,63 @@ pub struct DepSiteFacts {
     spill_keys: Vec<ObligationId>,
 }
 
+fn fx_hash(k: &ObligationId) -> u64 {
+    use std::hash::BuildHasher;
+    crate::fxhash::FxBuildHasher::default().hash_one(k)
+}
+
 impl DepSiteFacts {
     /// The facts of `map`, keyed through `edges` (the resolution's own).
     #[must_use]
     pub fn new(edges: Arc<Vec<ClassifiedEdge>>, map: SiteFactsByObligation) -> Self {
-        use std::hash::BuildHasher;
-        let hasher = crate::fxhash::FxBuildHasher::default();
+        Self::new_with_hash(edges, map, fx_hash)
+    }
+
+    fn new_with_hash(
+        edges: Arc<Vec<ClassifiedEdge>>,
+        mut map: SiteFactsByObligation,
+        hash: fn(&ObligationId) -> u64,
+    ) -> Self {
         let n = u32::try_from(edges.len()).expect("under 4 G dependency edges");
-        let mut edge_at: crate::fxhash::FxHashMap<u64, u32> =
-            crate::fxhash::FxHashMap::with_capacity_and_hasher(map.len(), Default::default());
-        for (i, e) in edges.iter().enumerate() {
-            if matches!(e.obligation_id, ObligationId::CallSite { .. }) {
-                edge_at
-                    .entry(hasher.hash_one(&e.obligation_id))
-                    .or_insert(i as u32);
-            }
-        }
-        let mut out = DepSiteFacts {
+        let mut index = DepIndex {
+            hash: Some(hash),
             by_hash: crate::fxhash::FxHashMap::with_capacity_and_hasher(
                 map.len(),
                 Default::default(),
             ),
             facts: Vec::with_capacity(map.len()),
-            ..DepSiteFacts::default()
+            ..DepIndex::default()
         };
-        for (k, v) in map {
-            let h = hasher.hash_one(&k);
-            let ix = u32::try_from(out.facts.len()).expect("under 4 G site facts");
-            let edge = edge_at
-                .get(&h)
-                .copied()
-                .filter(|&e| edges[e as usize].obligation_id == k);
-            match edge {
-                Some(e) if !out.by_hash.contains_key(&h) => {
-                    out.by_hash.insert(h, ix);
-                    out.facts.push((e, v));
-                }
-                _ => {
-                    let at = n + u32::try_from(out.spill_keys.len()).expect("small spill");
-                    out.facts.push((at, v));
-                    out.spill.insert(k.clone(), ix);
-                    out.spill_keys.push(k);
+        let mut spill_entries: Vec<(ObligationId, SiteFacts)> = Vec::new();
+        // Walk the edges: a key found here has its edge (the first edge with that id).
+        for (i, e) in edges.iter().enumerate() {
+            if let Some(v) = map.remove(&e.obligation_id) {
+                let ix = u32::try_from(index.facts.len()).expect("under 4 G site facts");
+                let h = hash(&e.obligation_id);
+                if let std::collections::hash_map::Entry::Vacant(slot) = index.by_hash.entry(h) {
+                    slot.insert(ix);
+                    index.facts.push((i as u32, v));
+                } else {
+                    // Another key took this hash: kept whole.
+                    spill_entries.push((e.obligation_id.clone(), v));
                 }
             }
         }
-        out.edges = edges;
+        // Keys with no edge, then the hash-collided ones: kept whole.
+        spill_entries.extend(map);
+        for (k, v) in spill_entries {
+            let ix = u32::try_from(index.facts.len()).expect("under 4 G site facts");
+            let at = n
+                .checked_add(u32::try_from(index.spill_keys.len()).expect("small spill"))
+                .expect("under 4 G dependency edges and spilled keys");
+            index.facts.push((at, v));
+            index.spill.insert(k.clone(), ix);
+            index.spill_keys.push(k);
+        }
+        let out = DepSiteFacts {
+            edges,
+            index: Arc::new(index),
+        };
         // A miss reads as "no facts", so every entry the build stored must be found again by
         // its own key (mantra 5: never a quiet wrong answer).
         debug_assert!(
@@ -590,25 +613,53 @@ impl DepSiteFacts {
         out
     }
 
+    /// The same facts over `edges`, a copy of this one's with only witnesses changed (the
+    /// same ids at the same positions): shares the index, so the old vector can be freed.
+    #[must_use]
+    pub fn with_edges(&self, edges: Arc<Vec<ClassifiedEdge>>) -> Self {
+        debug_assert_eq!(
+            edges.len(),
+            self.edges.len(),
+            "the same edges, re-materialized"
+        );
+        debug_assert!(
+            edges
+                .iter()
+                .zip(self.edges.iter())
+                .all(|(a, b)| a.obligation_id == b.obligation_id),
+            "the same obligation ids at the same positions"
+        );
+        DepSiteFacts {
+            edges,
+            index: Arc::clone(&self.index),
+        }
+    }
+
+    /// Whether these facts point into exactly `edges` (the same allocation).
+    #[must_use]
+    pub fn keyed_through(&self, edges: &Arc<Vec<ClassifiedEdge>>) -> bool {
+        Arc::ptr_eq(&self.edges, edges)
+    }
+
     fn key_of(&self, at: u32) -> &ObligationId {
         let n = self.edges.len();
         match (at as usize).checked_sub(n) {
             None => &self.edges[at as usize].obligation_id,
-            Some(i) => &self.spill_keys[i],
+            Some(i) => &self.index.spill_keys[i],
         }
     }
 
     #[must_use]
     pub fn get(&self, k: &ObligationId) -> Option<&SiteFacts> {
-        use std::hash::BuildHasher;
-        let h = crate::fxhash::FxBuildHasher::default().hash_one(k);
-        if let Some(&i) = self.by_hash.get(&h) {
-            let (at, f) = &self.facts[i as usize];
+        let ix = &self.index;
+        let h = ix.hash.unwrap_or(fx_hash)(k);
+        if let Some(&i) = ix.by_hash.get(&h) {
+            let (at, f) = &ix.facts[i as usize];
             if self.key_of(*at) == k {
                 return Some(f);
             }
         }
-        self.spill.get(k).map(|&i| &self.facts[i as usize].1)
+        ix.spill.get(k).map(|&i| &ix.facts[i as usize].1)
     }
 
     #[must_use]
@@ -618,27 +669,27 @@ impl DepSiteFacts {
 
     /// Every entry once, in build order (unordered, as the map's iteration was).
     pub fn iter(&self) -> impl Iterator<Item = (&ObligationId, &SiteFacts)> {
-        self.facts.iter().map(|(at, f)| (self.key_of(*at), f))
+        self.index.facts.iter().map(|(at, f)| (self.key_of(*at), f))
     }
 
     pub fn values(&self) -> impl Iterator<Item = &SiteFacts> {
-        self.facts.iter().map(|(_, f)| f)
+        self.index.facts.iter().map(|(_, f)| f)
     }
 
     #[must_use]
     pub fn len(&self) -> usize {
-        self.facts.len()
+        self.index.facts.len()
     }
 
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.facts.is_empty()
+        self.index.facts.is_empty()
     }
 
     /// Keys kept whole (no edge, or a hash another key took): the census reads it.
     #[must_use]
     pub fn spilled(&self) -> usize {
-        self.spill_keys.len()
+        self.index.spill_keys.len()
     }
 }
 
@@ -4704,10 +4755,12 @@ mod tests {
     }
 
     /// ENG-92: an entry points at an edge by index, so facts read through a rebuilt edge
-    /// vector (a refresh that kept the old indices) must never answer with another site's
-    /// facts: every lookup checks the key against the edge, so a stale index only misses
-    /// (and the session's cold-oracle comparison sees the miss). Built over the new
-    /// vector, every key answers again.
+    /// vector (a refresh that kept the old indices) must show it: the key check against the
+    /// edge turns a stale index into a miss, which the session's cold-oracle comparison sees
+    /// (dropping the check fails this test). Entries are found by the key's hash, so even a
+    /// stale vector never answers another site's facts. Built over the new vector, every key
+    /// answers again. (Production re-points the facts with `with_edges`; the edges-copy paths
+    /// are guarded by the `keyed_through` debug assertion in `ResolvedProgram`.)
     #[test]
     fn a_stale_edge_vector_never_answers_with_another_sites_facts() {
         let keys: Vec<ObligationId> = (1..=6).map(|l| call_site("p", l)).collect();
@@ -4734,6 +4787,32 @@ mod tests {
         for k in &keys {
             assert_eq!(fresh.get(k), map.get(k));
         }
+    }
+
+    /// ENG-92 (Fable r1): keys whose hashes collide. With every key hashing alike, the first
+    /// key with an edge takes the hash and the rest are kept whole; each answers its own
+    /// facts, and an absent key with the same hash answers nothing. The key check in `get`
+    /// is what tells them apart (dropping it answers the first key's facts for the others).
+    #[test]
+    fn colliding_hashes_answer_each_key_its_own_facts() {
+        let keys: Vec<ObligationId> = (1..=3).map(|l| call_site("p", l)).collect();
+        let edges: Vec<ClassifiedEdge> = keys.iter().map(edge_for).collect();
+        let mut map = SiteFactsByObligation::default();
+        for (i, k) in keys.iter().enumerate() {
+            map.insert(k.clone(), facts_named(&format!("f{i}")));
+        }
+        let dep = DepSiteFacts::new_with_hash(Arc::new(edges), map.clone(), |_| 7);
+        assert_eq!(dep.index.by_hash.len(), 1);
+        assert_eq!(dep.spilled(), 2);
+        for k in &keys {
+            assert_eq!(dep.get(k), map.get(k), "{k:?}");
+        }
+        assert_eq!(dep.get(&call_site("absent", 9)), None);
+        let mut got: Vec<_> = dep.iter().collect();
+        let mut want: Vec<_> = map.iter().collect();
+        got.sort_by(|x, y| x.0.cmp(y.0));
+        want.sort_by(|x, y| x.0.cmp(y.0));
+        assert_eq!(got, want);
     }
 
     /// ENG-91: the hot record stays small; the rare facts are boxed.

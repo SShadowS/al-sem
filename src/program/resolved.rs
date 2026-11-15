@@ -160,6 +160,14 @@ impl SiteFactsMap {
     pub fn is_empty(&self) -> bool {
         self.own.is_empty() && self.shared.is_empty()
     }
+
+    /// The census's view (ENG-92): the workspace layer is keyed (`(ObligationId,
+    /// SiteFacts)` per entry), the dependency layer a `(u32, SiteFacts)` per entry plus a
+    /// `(u64, u32)` hash index entry.
+    #[must_use]
+    pub fn layer_lens(&self) -> (usize, usize) {
+        (self.own.len(), self.shared.len())
+    }
 }
 
 /// A borrowed [`SiteFactsMap`] (or a plain map, `shared: None`). `Copy`.
@@ -358,6 +366,12 @@ impl ResolvedProgram {
         let (dependency_body_edges, dependency_site_facts) = match dependency {
             Some(dependency) => {
                 report.parenless_calls.extend(dependency.parenless_calls);
+                // ENG-92: the facts are keyed through these very edges, never an older copy.
+                debug_assert!(
+                    dependency.site_facts.is_empty()
+                        || dependency.site_facts.keyed_through(&dependency.edges),
+                    "the dependency site facts point into another edge vector"
+                );
                 (dependency.edges, dependency.site_facts)
             }
             None => (Arc::default(), Arc::default()),
@@ -486,9 +500,12 @@ impl ResolvedProgram {
     fn report_tally(&self) -> Tally {
         let (b, m) = (&self.body, &self.meta);
         let mut r = Tally::default();
+        let (own_facts, dep_facts) = b.site_facts.layer_lens();
         r.buf::<ClassifiedEdge>(b.edges.len())
             .buf::<ClassifiedEdge>(b.dependency_body_edges.len())
-            .buf::<(ObligationId, SiteFacts)>(b.site_facts.len())
+            .buf::<(ObligationId, SiteFacts)>(own_facts)
+            .buf::<(u32, SiteFacts)>(dep_facts)
+            .buf::<(u64, u32)>(dep_facts)
             .buf::<(
                 (AppRef, String),
                 std::collections::HashSet<al_syntax::ir::ExprId>,
