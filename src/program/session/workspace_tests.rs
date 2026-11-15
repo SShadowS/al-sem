@@ -191,6 +191,53 @@ fn base_ws() -> Ws {
     ])
 }
 
+/// TLS-80: `model_fingerprint` (the refresh `--verify`'s comparison, now hashed
+/// in parallel parts) is equal for two cold builds of one workspace and
+/// differs when one field of one routine differs (a late field of the last
+/// routine: the parallel chunks reach it) or when one call edge differs.
+///
+/// DISCRIMINATION (2026-11-15): `model_fingerprint` hashing only each list's
+/// name and length (the chunk hashes left out) -> the routine and edge changes
+/// keep the fingerprint and the test fails.
+#[test]
+fn model_fingerprint_sees_one_field_of_one_routine() {
+    let ws = base_ws();
+    let inputs = ws.inputs();
+    let a = assemble_and_resolve_cross_app_program(&inputs, false, AssemblyNeeds::BASE).unwrap();
+    let mut b =
+        assemble_and_resolve_cross_app_program(&inputs, false, AssemblyNeeds::BASE).unwrap();
+    let fp = model_fingerprint(&a);
+    assert_eq!(
+        fp,
+        model_fingerprint(&b),
+        "two cold builds of one workspace"
+    );
+    let last = b
+        .resolved
+        .workspace
+        .routines
+        .last_mut()
+        .expect("precondition: routines");
+    last.entry_temp_guard_receiver = Some(match last.entry_temp_guard_receiver.take() {
+        Some(s) => format!("{s}-tls80"),
+        None => "tls80".to_string(),
+    });
+    assert_ne!(fp, model_fingerprint(&b), "one field of the last routine");
+
+    let mut c =
+        assemble_and_resolve_cross_app_program(&inputs, false, AssemblyNeeds::BASE).unwrap();
+    let calls = std::sync::Arc::make_mut(&mut c.resolved.calls);
+    let edge = calls.edges.first_mut().expect("precondition: call edges");
+    let before = format!("{edge:?}");
+    let n = calls.edges.len();
+    calls.edges.swap(0, n - 1);
+    assert!(
+        calls.edges.len() > 1 && format!("{:?}", calls.edges[0]) != before,
+        "precondition: the swap changed the first edge"
+    );
+    assert_ne!(fp, model_fingerprint(&c), "the call edges' order");
+}
+
 /// The harness itself: two cold builds of one workspace give the same text
 /// (so a difference below is the session's, not the build's), and the first
 /// refresh is a cold build (P).
