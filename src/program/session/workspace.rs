@@ -756,6 +756,10 @@ fn tally_resolution(t: &mut crate::engine::census::Tally, r: &FileResolution) {
     use crate::program::resolve::full::{ClassifiedEdge, ObligationId, SiteFacts};
     t.buf::<ClassifiedEdge>(r.edges.len())
         .buf::<(ObligationId, SiteFacts)>(r.site_facts.len())
+        // ENG-91: a site's rare facts are a box of their own.
+        .buf::<crate::program::resolve::full::RareSiteFacts>(
+            r.site_facts.iter().filter(|(_, f)| f.has_rare()).count(),
+        )
         .buf::<al_syntax::ir::ExprId>(r.parenless.len());
     for e in &r.edges {
         t.buf::<Route>(e.edge.routes.len());

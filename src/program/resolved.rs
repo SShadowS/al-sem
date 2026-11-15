@@ -489,6 +489,9 @@ impl ResolvedProgram {
         r.buf::<ClassifiedEdge>(b.edges.len())
             .buf::<ClassifiedEdge>(b.dependency_body_edges.len())
             .buf::<(ObligationId, SiteFacts)>(b.site_facts.len())
+            .buf::<crate::program::resolve::full::RareSiteFacts>(
+                b.site_facts.values().filter(|f| f.has_rare()).count(),
+            )
             .buf::<(
                 (AppRef, String),
                 std::collections::HashSet<al_syntax::ir::ExprId>,

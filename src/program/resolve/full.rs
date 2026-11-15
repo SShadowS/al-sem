@@ -360,31 +360,59 @@ impl Eq for SiteFacts {}
 impl std::fmt::Debug for SiteFacts {
     /// The pre-split shape: one struct, every field in its old order.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let r = self.rare();
+        // Destructured, so a field added later cannot be left out of the print.
+        let SiteFacts {
+            receiver,
+            unqualified_record_op,
+            starts_object,
+            request_page_may_cancel,
+            bare_scope_complete,
+            record_op_field_named,
+            inherited_protected,
+            rare: _,
+        } = self;
+        let RareSiteFacts {
+            interface,
+            interface_closed_over,
+            interface_unmapped_enums,
+            interface_holder,
+            argument_codeunits,
+            run_target,
+            build_context,
+            run_trigger_excluded,
+            open,
+            table_event_raise,
+            dataset_run,
+            validate_field,
+            start_method,
+            field_ref_validate,
+            call_result_record,
+            record_table_unresolved,
+        } = self.rare();
         f.debug_struct("SiteFacts")
-            .field("interface", &r.interface)
-            .field("interface_closed_over", &r.interface_closed_over)
-            .field("interface_unmapped_enums", &r.interface_unmapped_enums)
-            .field("interface_holder", &r.interface_holder)
-            .field("argument_codeunits", &r.argument_codeunits)
-            .field("receiver", &self.receiver)
-            .field("run_target", &r.run_target)
-            .field("build_context", &r.build_context)
-            .field("run_trigger_excluded", &r.run_trigger_excluded)
-            .field("unqualified_record_op", &self.unqualified_record_op)
-            .field("open", &r.open)
-            .field("table_event_raise", &r.table_event_raise)
-            .field("dataset_run", &r.dataset_run)
-            .field("starts_object", &self.starts_object)
-            .field("validate_field", &r.validate_field)
-            .field("request_page_may_cancel", &self.request_page_may_cancel)
-            .field("bare_scope_complete", &self.bare_scope_complete)
-            .field("start_method", &r.start_method)
-            .field("field_ref_validate", &r.field_ref_validate)
-            .field("call_result_record", &r.call_result_record)
-            .field("record_op_field_named", &self.record_op_field_named)
-            .field("inherited_protected", &self.inherited_protected)
-            .field("record_table_unresolved", &r.record_table_unresolved)
+            .field("interface", interface)
+            .field("interface_closed_over", interface_closed_over)
+            .field("interface_unmapped_enums", interface_unmapped_enums)
+            .field("interface_holder", interface_holder)
+            .field("argument_codeunits", argument_codeunits)
+            .field("receiver", receiver)
+            .field("run_target", run_target)
+            .field("build_context", build_context)
+            .field("run_trigger_excluded", run_trigger_excluded)
+            .field("unqualified_record_op", unqualified_record_op)
+            .field("open", open)
+            .field("table_event_raise", table_event_raise)
+            .field("dataset_run", dataset_run)
+            .field("starts_object", starts_object)
+            .field("validate_field", validate_field)
+            .field("request_page_may_cancel", request_page_may_cancel)
+            .field("bare_scope_complete", bare_scope_complete)
+            .field("start_method", start_method)
+            .field("field_ref_validate", field_ref_validate)
+            .field("call_result_record", call_result_record)
+            .field("record_op_field_named", record_op_field_named)
+            .field("inherited_protected", inherited_protected)
+            .field("record_table_unresolved", record_table_unresolved)
             .finish()
     }
 }
@@ -4470,6 +4498,8 @@ mod tests {
 
         let mut set = SiteFacts::default();
         set.rare_mut().validate_field = Some("no.".into());
+        // Only a rare fact differs: equality must look inside the box.
+        assert_ne!(set, plain);
         set.request_page_may_cancel = true;
         assert_ne!(set, plain);
         assert_eq!(set.rare().validate_field.as_deref(), Some("no."));
