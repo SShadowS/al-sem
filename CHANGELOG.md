@@ -49,6 +49,77 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `scripts/cdo-before-after ce3276e3` (fingerprint, analyze at both scopes, the call-graph
   stats). Speed is the landing gate's speed phase, not a separate run (a memory change).
 
+### Added (TLS-62: CHANGELOG.md merges keep both sides' entries, in git as in land)
+
+- **The script:** `scripts/changelog-merge` holds CHANGELOG.md's merge rule, moved out of
+  `scripts/land`'s `union_changelog` (TLS-59), which now calls it. A conflict where both
+  sides only added lines keeps both, ours first, with a blank line before a heading that
+  meets an entry. Any other conflict is refused, including (review r1, Fable) a conflict
+  where both sides carry the same line: an entry already on master after a squash-merge or
+  a cherry-pick, which keeping both sides would duplicate. In `--diff3` mode git keeps such
+  common lines inside the conflict, and land's old rule kept them twice. Also refused
+  (reviews r1-r2, sol): theirs' added lines are printed after ours', so they must start a
+  block of their own, or they attach to whatever ours added last. That holds when their
+  first non-blank line is a heading no deeper than any heading ours adds (r3: a
+  `### Security` meant for `[Unreleased]` must not land under ours' new `## [1.0.0]`), or a
+  top-level `- ` item when ours adds no heading. An indented continuation or plain text after
+  ours' additions is refused. So is an item that would land under ours' new section. And
+  (r4) either side's added part may not END on a heading: such a heading claims the lines
+  after the conflict (two headings inserted above one existing item would file it under
+  one). A heading is up to three spaces, then `#`s, then a space, a tab or the end of the line
+  (r4-r5: as Markdown allows). Replayed on the 70
+  real conflicting merges: 67 merge; 3 are refused (the one edited line, and two
+  master-into-branch merges whose conflicts shared whole paragraphs of an entry, true
+  duplicates). The check compares whole non-blank lines, so two unrelated entries sharing a
+  stock line would also be refused (as a conflict, as before); none of the 70 did.
+- **As a git merge driver:** `.gitattributes` names it for CHANGELOG.md
+  (`merge=changelog`), so a lane's rebase onto master resolves CHANGELOG as a landing
+  does (master's entries first). A `git merge master` inside a lane puts the lane's first,
+  since there the lane is "ours". A refused conflict stays git's ordinary conflict, markers
+  included. The driver must be configured once per repository:
+  `git config merge.changelog.driver 'bash scripts/changelog-merge --driver %O %A %B'`.
+  Without that line git ignores the attribute and merges as before. Once it is set, git
+  resolves an additions-only CHANGELOG conflict inside land's own `git merge`, so land's
+  "both sides' entries kept" path runs only for what the driver leaves conflicted. land's
+  tests run in scratch repos without the config and so still exercise that path.
+- **Why not git's `merge=union`** (the task's first idea): it was measured on the 98 merges
+  on master since 2026-11-01 where both sides changed CHANGELOG.md (70 with a real conflict),
+  re-merging each and comparing with the committed text.
+  - It keeps both sides in order, but in 62 of the 70 the next entry's `###` heading lands on
+    the previous entry's last line.
+  - It also merges the one conflict that changed a line both sides had: 2df99827, where the
+    hand resolution dropped an entry that union would have kept.
+  - Above all, it would hide every CHANGELOG conflict from git, so land's check ("only
+    additions, else stop") would never run.
+- **Tests:**
+  - `changelog-merge --self-test` (fifteen cases), run from `tests/cli/changelog_merge.rs`.
+    The driver removes its temp files on any exit, including an interrupt (review r1,
+    sol).
+  - A real `git rebase` with the driver: two new entries rebase cleanly, master's first; an
+    entry both sides carry stops the rebase with git's markers.
+  - A real `git merge` in a scratch repo, three ways: additions merge through the
+    configured driver; a changed line stays a conflict with markers; without the config
+    git conflicts as before.
+  - `git check-attr` pins the attribute.
+  - land's existing CHANGELOG cases (`tests/cli/land_script.rs`) now run through the moved
+    rule.
+  - Mutations, each red: the blank-line rule dropped; the driver's marker fallback dropped;
+    the attribute removed; the on-both-sides check removed (all four measured shapes merge
+    with the entry twice, and the rebase case goes through); the section-line refusal removed
+    (the A fix lands under B); that refusal narrowed to headings only (a continuation
+    attaches to the other side's new item); the heading-depth check removed (Security lands
+    under 1.0.0); the ends-on-a-heading check removed (the item lands under Removed only);
+    a tab not accepted after the `#`s (case 2e with tabs merges); no indent skipped before
+    the `#`s (case 2e with one-space indents merges); the refusal of a changed line
+    off. That last one also fails
+    `land_script::land_refuses_and_leaves_nothing_behind`, which shows land's cases run
+    through the moved rule.
+  - The blank-line rule's first self-test case did not catch its removal, so a case was
+    added. In `--diff3` mode git keeps each side's trailing blank line inside the conflict,
+    so the rule only fires when one side's addition ends on an entry line and the other's
+    starts with a heading. Union mode moves the shared blank line out of the conflict, which
+    is why it glued headings.
+
 ### Fixed (TLS-68: the LSP answers for a routine declared in several files are deterministic)
 
 - When one routine id is declared in more than one workspace file (the same object in two
