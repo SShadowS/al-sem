@@ -56,7 +56,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   primary scope unchanged (2,308 findings, 2,301 fingerprints kept); `--scope all`
   32,580 -> 32,579, `d20-unreachable-after-exit` 2 -> 1 (one fingerprint removed); the
   call-graph histogram unchanged (unknown 0 both scopes); the interface pattern 14 / 7
-  distinct on both sides.
+  distinct on both sides. The removed d20 finding is ENG-80's intended change: `CTS-CDN
+  Net. Profile Selector::GetReceiverRegistrationCache` runs `Error(ErrorInfo); exit(false);`
+  ("If the error was collected and not thrown"); since ENG-80, `Error(ErrorInfo)` no longer
+  ends the path, so the `exit` after it is no longer unreachable.
+- `scripts/claude-hooks/cdo-slot-guard` lets `cdo-before-after --dry-run` and `--help`
+  (anywhere on the line) run under another session's hold, as it does for `land` and
+  `cdo-gate`; a real run stays refused.
 
 ### Fixed (TLS-65: cdo-speed's warm-up no longer reads the second-built side as slow)
 
