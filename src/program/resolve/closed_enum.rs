@@ -1386,10 +1386,14 @@ enum 50106 "Other Kind" implements "Other Strategy"
         let closed: Vec<_> = report
             .site_facts
             .values()
-            .filter(|f| !f.interface_closed_over.is_empty())
+            .filter(|f| !f.rare().interface_closed_over.is_empty())
             .collect();
         assert_eq!(closed.len(), 1, "one closed site");
-        assert_eq!(closed[0].interface_closed_over.len(), 2, "{closed:?}");
+        assert_eq!(
+            closed[0].rare().interface_closed_over.len(),
+            2,
+            "{closed:?}"
+        );
     }
 
     /// RF1: an enum variable declared by NUMBER, or by a namespace-qualified

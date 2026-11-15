@@ -230,7 +230,7 @@ pub(crate) fn close_holder_sites(
     }
     let mut closed: Vec<(ObligationId, Vec<ObjectNodeId>)> = Vec::new();
     for e in edges.iter() {
-        let Some(f) = facts.get(&e.obligation_id) else {
+        let Some(f) = facts.get(&e.obligation_id).map(|f| f.rare()) else {
             continue;
         };
         let (Some(sources), Some(interface_lc)) = (&f.interface_holder, &f.interface) else {
@@ -288,7 +288,7 @@ pub(crate) fn close_holder_sites(
         edge.routes
             .retain(|r| r.target_object().is_some_and(|t| over.contains(&t)));
         if let Some(f) = facts.get_mut(&o) {
-            f.interface_closed_over = over;
+            f.rare_mut().interface_closed_over = over;
         }
     }
 }
@@ -317,6 +317,6 @@ fn source_codeunits(
         .get(rid)
         .map_or(&[][..], Vec::as_slice)
         .iter()
-        .map(|c| facts.get(*c)?.argument_codeunits.get(p)?.clone())
+        .map(|c| facts.get(*c)?.rare().argument_codeunits.get(p)?.clone())
         .collect()
 }

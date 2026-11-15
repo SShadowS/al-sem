@@ -352,7 +352,7 @@ fn split_site_facts(
         size_of::<Option<al_sem::program::resolve::full::ReceiverFact>>(),
         mib(table)
     );
-    let mut rare_union = 0usize;
+    let (mut rare_union, mut boxed) = (0usize, 0usize);
     let mut variants: HashMap<&'static str, usize> = HashMap::new();
     let (mut unit_heap, mut units) = (0usize, HashSet::new());
     let mut contexts = HashSet::new();
@@ -379,31 +379,38 @@ fn split_site_facts(
             unit_heap += sp.unit.capacity();
             units.insert(sp.unit.as_str());
         }
+        // ENG-91: the hot record inline, the rare facts in a box (`rare()`).
         let SiteFacts {
+            receiver,
+            unqualified_record_op,
+            starts_object,
+            request_page_may_cancel,
+            bare_scope_complete,
+            record_op_field_named,
+            inherited_protected,
+            ..
+        } = sf;
+        let al_sem::program::resolve::full::RareSiteFacts {
             interface,
             interface_closed_over,
             interface_unmapped_enums,
             interface_holder,
             argument_codeunits,
-            receiver,
             run_target,
             build_context,
             run_trigger_excluded,
-            unqualified_record_op,
             open,
             table_event_raise,
             dataset_run,
-            starts_object,
             validate_field,
-            request_page_may_cancel,
-            bare_scope_complete,
             start_method,
             field_ref_validate,
             call_result_record,
-            record_op_field_named,
-            inherited_protected,
             record_table_unresolved,
-        } = sf;
+        } = sf.rare();
+        if sf.has_rare() {
+            boxed += 1;
+        }
         let vcap = |n: usize, sz: usize| n * sz;
         // A site with any field beyond `receiver` and `bare_scope_complete` set (the cold part
         // of ENG-91's proposed split).
@@ -555,6 +562,12 @@ fn split_site_facts(
         "  sites with any field beyond receiver and bare_scope_complete: {rare_union} of {}",
         m.len()
     );
+    let boxes = boxed * size_of::<al_sem::program::resolve::full::RareSiteFacts>();
+    println!(
+        "  sites holding a RareSiteFacts box: {boxed} (size_of {} B; {:.2} MiB)",
+        size_of::<al_sem::program::resolve::full::RareSiteFacts>(),
+        mib(boxes)
+    );
     println!(
         "  key span.unit heap {:.2} MiB over {} distinct files; distinct build contexts {}",
         mib(unit_heap),
@@ -568,7 +581,7 @@ fn split_site_facts(
             mib(*heap)
         );
     }
-    let est = table + unit_heap + f.iter().map(|e| e.2).sum::<usize>();
+    let est = table + boxes + unit_heap + f.iter().map(|e| e.2).sum::<usize>();
     let (b, _) = step("session.dep_resolution.site_facts", m);
     println!(
         "    remainder after the estimates (unwalked heap, shared ids) {:>9.2} MiB",

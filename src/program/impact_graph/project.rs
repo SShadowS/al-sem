@@ -460,7 +460,7 @@ impl<'a> Builder<'a> {
                     .edges
                     .site_facts
                     .get(&ce.obligation_id)
-                    .and_then(|f| f.start_method.as_deref()),
+                    .and_then(|f| f.rare().start_method.as_deref()),
                 _ => None,
             };
             let mut unknown = false;
@@ -527,7 +527,7 @@ impl<'a> Builder<'a> {
                     .edges
                     .site_facts
                     .get(&ce.obligation_id)
-                    .and_then(|f| f.run_target.as_ref())
+                    .and_then(|f| f.rare().run_target.as_ref())
             {
                 let to = self.run_key(t);
                 self.add(
@@ -552,6 +552,7 @@ impl<'a> Builder<'a> {
             if let ObligationId::CallSite { .. } = ce.obligation_id
                 && let Some(facts) = inp.edges.site_facts.get(&ce.obligation_id)
             {
+                let facts = facts.rare();
                 let mut ops: Vec<(&[Route], &[Route], Conf)> = Vec::new();
                 for eff in facts.dataset_run.iter().flat_map(|run| &run.effects) {
                     ops.push((&eff.triggers, &eff.table_events, Conf::OverApprox));
@@ -617,7 +618,7 @@ impl<'a> Builder<'a> {
                     .edges
                     .site_facts
                     .get(&ce.obligation_id)
-                    .map(|f| f.open.as_slice())
+                    .map(|f| f.rare().open.as_slice())
                     .unwrap_or(&[]),
                 // A background start's dynamic codeunits are its catalog
                 // call's open bound (`full::resolve_file_obligations`).
@@ -697,7 +698,7 @@ impl<'a> Builder<'a> {
                     span: span.clone(),
                     callee_fp: *callee_fp,
                 })
-                .and_then(|f| f.table_event_raise)
+                .and_then(|f| f.rare().table_event_raise)
                 .map_or(0, |c| c.as_exits().bits()),
             ObligationId::Publisher(p)
                 if self.rtn_by_id.get(p).is_some_and(|n| {
@@ -1617,7 +1618,7 @@ pub(crate) mod tests {
         SiteId, SourcePos, UnknownReason, Witness,
     };
     use crate::program::resolve::event::ParsedSubscriberArgs;
-    use crate::program::resolve::full::{ClassifiedEdge, SiteFacts};
+    use crate::program::resolve::full::{ClassifiedEdge, RareSiteFacts, SiteFacts};
     use crate::program::topology::DependencyGraph;
     use crate::snapshot::AppId;
 
@@ -2306,15 +2307,16 @@ pub(crate) mod tests {
             witness: Witness::None,
             receiver_tier: None,
         };
-        let typed = |kind: ObjectKind, name: &str| SiteFacts {
-            receiver: Some(ReceiverFact {
+        let typed = |kind: ObjectKind, name: &str| {
+            let mut f = SiteFacts::default();
+            f.receiver = Some(ReceiverFact {
                 type_text: Some(format!("{kind:?} {name}")),
                 ty: ReceiverFactType::Object {
                     kind,
                     name: name.into(),
                 },
-            }),
-            ..Default::default()
+            });
+            f
         };
         for (name, bid, recv, line) in [
             ("Print", "ReportInstance::saveaspdf", "Rep", 5),
@@ -2376,7 +2378,7 @@ pub(crate) mod tests {
         );
         w.site_facts.insert(
             s1,
-            SiteFacts {
+            SiteFacts::from(RareSiteFacts {
                 open: vec![
                     OpenBound::Name {
                         name_lc: "ping".into(),
@@ -2388,7 +2390,7 @@ pub(crate) mod tests {
                     OpenBound::Record { op: "insert" },
                 ],
                 ..Default::default()
-            },
+            }),
         );
         let o = w.project(a);
         assert_eq!(
@@ -2456,10 +2458,10 @@ pub(crate) mod tests {
             );
             w.site_facts.insert(
                 s,
-                SiteFacts {
+                SiteFacts::from(RareSiteFacts {
                     open: vec![bound],
                     ..Default::default()
-                },
+                }),
             );
         }
         let o = w.project(a);
@@ -2630,10 +2632,10 @@ pub(crate) mod tests {
         );
         w.site_facts.insert(
             site,
-            SiteFacts {
+            SiteFacts::from(RareSiteFacts {
                 open: vec![OpenBound::Record { op: "insert" }],
                 ..Default::default()
-            },
+            }),
         );
         // F1: a record op that raises the table's modify event (a `TableEvent`
         // edge, as the resolver emits it) clears that publisher's flag.
@@ -2928,10 +2930,10 @@ pub(crate) mod tests {
         w.dependency_body_edges.push(moved);
         w.site_facts.insert(
             site,
-            SiteFacts {
+            SiteFacts::from(RareSiteFacts {
                 open: vec![OpenBound::Any],
                 ..Default::default()
-            },
+            }),
         );
         let o = w.project(a);
         assert_eq!(o.edge("Dep.R", "h:any").2, "unresolved");
@@ -2965,7 +2967,7 @@ pub(crate) mod tests {
         guarded.conditions = vec![Condition::RunTriggerGuarded];
         w.site_facts.insert(
             site,
-            SiteFacts {
+            SiteFacts::from(RareSiteFacts {
                 call_result_record: Some(CallResultRecord {
                     op: "Modify",
                     table: table.clone(),
@@ -2975,7 +2977,7 @@ pub(crate) mod tests {
                     code_not_loaded: false,
                 }),
                 ..Default::default()
-            },
+            }),
         );
         let o = w.project(a);
         assert_eq!(
