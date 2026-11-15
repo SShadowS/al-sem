@@ -176,7 +176,7 @@ instructions to the flow. Concretely:
 | Rebase-driven re-gate | 1 | `blocked` |
 | CI fix attempt | 1, independent of the rebase budget | `blocked` |
 | Discoveries filed per issue | 5 | rest go to the ledger only |
-| Wall-clock per issue | 10 h from claim (4 h until 2026-10-14; a 5-round spec panel alone takes 3-4 h) | `blocked` |
+| Wall-clock per issue | 24 h from claim (4 h until 2026-10-14, when a 5-round spec panel alone took 3-4 h; 10 h until 2026-10-24, when epic steps ran past 10 h and lost a restart plus an overnight wait to the cap) | `blocked` |
 | Subagent dispatches per issue | 60 | `blocked` |
 | pi calls per issue | 20 (2 reviewers × up to 10 rounds; 14 until 2026-10-14) | `blocked` |
 | Per-gate timeout (supervised, below) | 45 min | gate fails |
@@ -275,7 +275,7 @@ Labels are a mirror for humans, not a lock. The lock is local:
   (`al-sem-issue-<N>-a<k>`) is fenced by issue N's lease only; of a
   verification worktree, by a LIVE merge-lane holder only.
 - **Deadline.** The executor computes elapsed time since claim on every call and
-  refuses new phases past the 10-hour cap, so the wall-clock budget is enforced by
+  refuses new phases past the 24-hour cap, so the wall-clock budget is enforced by
   code, not by the conductor remembering it.
 - **Stale** means heartbeat older than 30 minutes. There is no PID check: the
   conductor is a chat session, not a supervisable process, and a 30-minute silence
@@ -836,7 +836,9 @@ render of the ledger becomes the PR body.
     the only thing stopping a panel-fix edit from landing a protected path inside
     the approved diff. The only commits allowed after `H` are evidence commits
     touching nothing but the two `.agent/issue-N/` files, plus gate-inert prose:
-    `CHANGELOG.md` and `docs/**/*.md`, which no gate reads (`protect.gate_inert`;
+    `CHANGELOG.md` and `docs/**/*.md`, which no gate reads, except this spec:
+    `ci-steps all` runs the agentflow suite, whose `test_docs_drift` reads it, so
+    it is not inert (`protect.GATE_READ_DOCS`, 2026-11-15) (`protect.gate_inert`;
     `test_no_gate_reads_a_gate_inert_path` scans every Rust source and gate
     script to keep that true; added 2026-10-20 after #160 step 2 spent two full
     gate runs on panel wording fixes). The executor asserts

@@ -1345,6 +1345,85 @@ fn cdo_gate_is_serial_unless_parallel_is_asked() {
     assert!(got.starts_with("sequential:"), "{got}");
 }
 
+/// TLS-71: `ci-steps all` runs the agentflow suite (pytest, from `scripts/`)
+/// and fails when it fails. No gate ran it before, and two tests sat red on
+/// master. Run in a temp repo with `cargo`, `python3` and the helper scripts
+/// stubbed, so only the step wiring is under test.
+///
+/// Mutation (2026-11-15): `agentflow` taken out of `all`'s step loop -> the red
+/// suite gives exit 0 and the test fails.
+#[cfg(unix)]
+#[test]
+fn ci_steps_all_runs_and_judges_the_agentflow_suite() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let (repo, bin, grammar) = (
+        dir.path().join("repo"),
+        dir.path().join("bin"),
+        dir.path().join("grammar"),
+    );
+    let exe = |p: std::path::PathBuf, body: &str| {
+        std::fs::write(&p, format!("#!/usr/bin/env bash\n{body}\n")).unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+    };
+    std::fs::create_dir_all(repo.join("scripts")).unwrap();
+    std::fs::create_dir_all(&bin).unwrap();
+    std::fs::create_dir_all(grammar.join("src")).unwrap();
+    std::fs::write(grammar.join("src/node-types.json"), "[]").unwrap();
+    std::fs::copy(
+        concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/ci-steps"),
+        repo.join("scripts/ci-steps"),
+    )
+    .unwrap();
+    for s in ["tree-stamp", "require-rttime", "nextest-priority-check"] {
+        exe(repo.join("scripts").join(s), "echo stub");
+    }
+    exe(bin.join("cargo"), "exit 0");
+    exe(
+        bin.join("python3"),
+        r#"[ "$3" = --version ] && exit 0; echo "$PWD $*" >> "$PY_LOG"; exit "${PY_RC:-0}""#,
+    );
+    crate::git::run(&repo, &["init", "-q"]);
+    let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
+    let log = dir.path().join("py.log");
+    let run = |rc: &str| {
+        let _ = std::fs::remove_file(&log);
+        let out = std::process::Command::new("bash")
+            .arg(repo.join("scripts/ci-steps"))
+            .arg("all")
+            .current_dir(&repo)
+            .env("PATH", &path)
+            .env("TREE_SITTER_AL_PATH", &grammar)
+            .env("CARGO_TARGET_DIR", dir.path().join("target"))
+            .env("PY_LOG", &log)
+            .env("PY_RC", rc)
+            .output()
+            .expect("spawn bash scripts/ci-steps all");
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        (out.status.code(), text)
+    };
+    let (code, text) = run("0");
+    assert_eq!(code, Some(0), "{text}");
+    let called = std::fs::read_to_string(&log).unwrap_or_default();
+    assert!(
+        called
+            .trim_end()
+            .ends_with("/scripts -m pytest -q -p no:cacheprovider agentflow/tests"),
+        "{called}"
+    );
+    let (code, text) = run("1");
+    assert_eq!(
+        code,
+        Some(1),
+        "a red agentflow suite must fail `all`: {text}"
+    );
+    assert!(text.contains("FAILED at 'agentflow'"), "{text}");
+}
+
 /// A warm build folder written by hand: one dependency, plus the two folders
 /// `scripts/seed-target` leaves out.
 fn warm_target(src: &tempfile::TempDir) {
