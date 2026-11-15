@@ -111,8 +111,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`tier: "dependency"` for `--tier dependency`) is built from
   `follow_up::Input::TierDependency`. Limits: on CDO the `alsem tests` and `alsem prove
   may-commit` one-shot paths no longer run (the impact ratchets still run one-shot calls; the
-  fixture tests keep theirs); the selection ratchet's empty-stderr check on a clean call is
-  gone (it read the CLI's stderr), and its hint is no longer a literal CLI spelling; under a
+  fixture tests keep theirs); the selection ratchet's empty-stderr check now reads the
+  envelope's stderr, which holds what the command writes through its job output, not a
+  warning the engine prints itself (`eprintln!`, the logger), which the one-shot check also
+  caught (green on CDO; the rest is TLS-78); its hint is no longer a literal CLI spelling; under a
   filter that runs fewer users, or after a panic before a release, the server closes at
   process exit without the clean-exit check.
 - Measured:

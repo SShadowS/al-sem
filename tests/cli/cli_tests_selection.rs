@@ -564,6 +564,12 @@ pub(crate) fn cdo_selection_ratchets() {
         let r = crate::output_cdo::with_cdo_server(&ws, |s| s.call(id, "alsem_tests", args));
         let (stdout, stderr, exit) = crate::mcp_server::cli_bytes(&crate::mcp_server::envelope(&r));
         assert_eq!(exit, 0, "{}", String::from_utf8_lossy(&stderr));
+        // The one-shot call's guard, as far as MCP can keep it: the envelope's
+        // stderr is what the command writes through its job output. A warning
+        // the engine prints itself (`eprintln!`, the logger) goes to the engine
+        // child's own stderr instead and is not seen here (TLS-78).
+        let stderr = String::from_utf8_lossy(&stderr);
+        assert!(stderr.trim().is_empty(), "stderr: {stderr}");
         String::from_utf8(stdout).expect("utf8")
     };
     let json = |text: String| -> Value { serde_json::from_str(&text).expect("al-sem.tests JSON") };
