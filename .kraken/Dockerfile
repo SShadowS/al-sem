@@ -42,6 +42,15 @@ RUN printf '%s\n' 'export PATH=/opt/cargo/bin:/opt/dotnet:/opt/al-tool:$PATH' 'e
       'export RUSTUP_HOME=/opt/rustup' 'export DOTNET_CLI_TELEMETRY_OPTOUT=1' \
       'export PI_CODING_AGENT_DIR=/home/dev/.config/pi' > /etc/profile.d/al-sem-tools.sh \
     && chown -R dev:dev /opt/rustup /opt/cargo
+# samply: a sampling CPU profiler for every thread (TLS-70; the in-process pprof sampler kept 31% of
+# the expected samples in TLS-66's rerun). Recording needs perf_event_open: the host's
+# kernel.perf_event_paranoid <= 1 (server1 set to 1 host-side 2026-11-15; a reboot may revert it) AND a
+# container that lets the call through (Docker's default seccomp filter allows it only with
+# CAP_PERFMON or CAP_SYS_ADMIN). Check with scripts/perf-probe.
+# A late layer: a version bump rebuilds nothing before it. Pinned version; CARGO_HOME overrides the
+# base's ~/.cache one so the binary lands in /opt/cargo/bin.
+RUN CARGO_HOME=/opt/cargo cargo install samply --version 0.13.1 --locked \
+    && rm -rf /opt/cargo/registry /opt/cargo/git && chown -R dev:dev /opt/cargo && samply --version
 # ~/.al-sem (agentflow's retained runs, timings.jsonl) lives on the work volume: a rebuild keeps only /work,
 # /coord and a few home folders, so a plain ~/.al-sem was wiped every time. scripts/kraken-setup.sh makes
 # the target; the link is made here, not there, because kraken re-runs setup only when its inputs change.
