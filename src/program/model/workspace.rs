@@ -1773,7 +1773,8 @@ fn project_ir(
                 .map(std::sync::Arc::new)
                 .collect();
             // Task 3 (temp-state) PROMOTION + SHADOWING: append object-global record
-            // vars, re-keyed to a per-routine id, but ONLY those whose (lowercased)
+            // vars (ENG-99: the declaration's one shared row, object-level id
+            // `{object_id}/grv/{name}`), but ONLY those whose (lowercased)
             // name is NOT already declared by the routine's own params/locals — the
             // routine's own var shadows the global (innermost wins). Skipping
             // shadowed globals keeps `record_variables` NAME-UNIQUE, which preserves

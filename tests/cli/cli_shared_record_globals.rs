@@ -77,6 +77,18 @@ fn object_globals_are_shared_and_a_per_routine_write_stays_in_its_routine() {
                 .unwrap_or_else(|| panic!("{routine} has no G")),
         )
     };
+    // A shadowed global must not ride along behind the local (the list stays name-unique).
+    let shadow_rows = m
+        .workspace
+        .routines
+        .iter()
+        .find(|r| r.name == "Shadows")
+        .unwrap()
+        .record_variables
+        .iter()
+        .filter(|v| v.name == "G")
+        .count();
+    assert_eq!(shadow_rows, 1, "Shadows holds its own G only");
     let (guarded, plain, also, shadows) = (
         g_of("Guarded"),
         g_of("Plain"),
