@@ -2228,7 +2228,7 @@ pub(crate) fn resolve_file_obligations(
         let obj_node_opt: Option<&ObjectNode> = obj_node_map.get(&obj_node_id).copied();
 
         // Record-typed global variable names for RecordOp / receiver inference.
-        let globals_rec: HashSet<String> = obj
+        let globals_rec: crate::fxhash::FxHashSet<String> = obj
             .globals
             .iter()
             .filter(|v| {
@@ -2245,9 +2245,34 @@ pub(crate) fn resolve_file_obligations(
                 obj.dataitems
                     .iter()
                     .map(|(name, _)| name.fold_identifier())
-                    .filter(|n| !obj.globals.iter().any(|g| g.name.fold_identifier() == *n)),
+                    .filter(|n| !obj.globals.iter().any(|g| g.name.eq_fold_identifier(n))),
             )
             .collect();
+
+        // The object-level part of each routine's `shadows` below (its globals, and an
+        // extension's base `protected var`s), built once per object (ENG-84). Looked up only
+        // when the object has a routine, as before: on a dependency file the lookup is a
+        // recorded read, and a routine-less extension made none (Fable, ENG-84).
+        let base_object = obj_node_opt
+            .filter(|_| !obj.routines.is_empty())
+            .and_then(|o| {
+                crate::program::resolve::receiver::extension_base_object(o, graph, index).flatten()
+            });
+        let object_shadows: crate::fxhash::FxHashSet<String> = obj
+            .globals
+            .iter()
+            .map(|v| v.name.fold_identifier())
+            // An extension sees its base object's `protected var` globals
+            // as its own (receiver Step 2c).
+            .chain(
+                base_object
+                    .into_iter()
+                    .flat_map(|base| base.protected_vars.iter().map(|(n, _)| n.to_string())),
+            )
+            .collect();
+        // ENG-26 (review): the object extends a base that has protected
+        // vars, which a `with` frame here may name (see `with_inherited`).
+        let base_has_protected = base_object.is_some_and(|base| !base.protected_vars.is_empty());
 
         for (routine_idx, routine) in obj.routines.iter().enumerate() {
             let caller = decl_nodes[obj_idx][routine_idx].clone();
@@ -2262,36 +2287,19 @@ pub(crate) fn resolve_file_obligations(
             );
 
             // A declared variable shadows a same-named procedure, so a bare
-            // parens-less read of one is a variable read, never a call.
-            let shadows: HashSet<String> = routine
+            // parens-less read of one is a variable read, never a call. With
+            // `object_shadows`: the routine's own names.
+            let routine_shadows: crate::fxhash::FxHashSet<String> = routine
                 .params
                 .iter()
                 .map(|p| p.name.fold_identifier())
                 .chain(routine.locals.iter().map(|v| v.name.fold_identifier()))
                 .chain(routine.return_name.iter().map(|n| n.fold_identifier()))
-                .chain(obj.globals.iter().map(|v| v.name.fold_identifier()))
-                // An extension sees its base object's `protected var` globals
-                // as its own (receiver Step 2c).
-                .chain(
-                    obj_node_opt
-                        .and_then(|o| {
-                            crate::program::resolve::receiver::extension_base_object(
-                                o, graph, index,
-                            )
-                        })
-                        .flatten()
-                        .into_iter()
-                        .flat_map(|base| base.protected_vars.iter().map(|(n, _)| n.to_string())),
-                )
                 .collect();
+            let shadows = |name_lc: &str| {
+                routine_shadows.contains(name_lc) || object_shadows.contains(name_lc)
+            };
 
-            // ENG-26 (review): the object extends a base that has protected
-            // vars, which a `with` frame here may name (see `with_inherited`).
-            let base_has_protected = obj_node_opt.is_some_and(|o| {
-                crate::program::resolve::receiver::extension_base_object(o, graph, index)
-                    .flatten()
-                    .is_some_and(|base| !base.protected_vars.is_empty())
-            });
             for site in &sites {
                 // Inside such a `with`, the frame's record members come first,
                 // so a same-named variable does not settle the name.
@@ -2311,7 +2319,7 @@ pub(crate) fn resolve_file_obligations(
                 if site.parenless
                     && !inside_inherited_with
                     && let CalleeShape::Bare { name } = &site.shape
-                    && shadows.contains(&name.fold_identifier())
+                    && shadows(&name.fold_identifier())
                 {
                     continue;
                 }
@@ -2323,7 +2331,7 @@ pub(crate) fn resolve_file_obligations(
                     && let CalleeShape::RecordOp {
                         op, receiver: None, ..
                     } = &site.shape
-                    && shadows.contains(&op.fold_identifier())
+                    && shadows(&op.fold_identifier())
                 {
                     continue;
                 }
@@ -5147,6 +5155,146 @@ mod tests {
             calls("shadowed"),
             vec![],
             "a local named IsOn shadows the procedure"
+        );
+    }
+
+    /// An object GLOBAL shadows a same-named procedure too: on a page whose source table
+    /// declares `IsOn()`, a bare parens-less `IsOn` is the page's `IsOn: Boolean` global,
+    /// never a call to the table's procedure (ENG-84 pins the object-level shadow set, now
+    /// built once per object; the page with no such global still calls it).
+    #[test]
+    fn object_global_shadows_a_parenless_call() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_minimal_workspace(dir.path());
+        std::fs::write(
+            dir.path().join("P.al"),
+            "table 50001 R
+{
+    fields
+    {
+        field(1; Code; Code[20]) { }
+    }
+    procedure IsOn(): Boolean
+    begin
+        exit(true);
+    end;
+}
+page 50002 Shadowing
+{
+    SourceTable = R;
+    var
+        IsOn: Boolean;
+    procedure Caller()
+    begin
+        if IsOn then;
+    end;
+}
+page 50003 Plain
+{
+    SourceTable = R;
+    procedure Other()
+    begin
+        if IsOn then;
+    end;
+}
+",
+        )
+        .expect("write P.al");
+
+        let report = resolve_full_program(dir.path()).expect("resolve_full_program");
+        let calls = |caller: &str| -> Vec<String> {
+            let mut v: Vec<String> = report
+                .edges
+                .iter()
+                .filter(|ce| ce.edge.from.name_lc == caller && ce.edge.kind == EdgeKind::Call)
+                .flat_map(|ce| ce.edge.routes.iter().map(|r| format!("{:?}", r.target)))
+                .collect();
+            v.sort();
+            v
+        };
+        assert_eq!(
+            calls("other").len(),
+            1,
+            "without the global, the bare IsOn calls the table's procedure: {:?}",
+            calls("other")
+        );
+        assert_eq!(
+            calls("caller"),
+            Vec::<String>::new(),
+            "the page global IsOn shadows the table procedure"
+        );
+    }
+
+    /// The other half of the object-level shadow set: a page extension sees its base page's
+    /// `protected var IsOn` as its own, so a bare parens-less `IsOn` there is that variable,
+    /// not the source table's `IsOn()` (Fable, ENG-84; the extension of a page without the
+    /// variable still calls it).
+    #[test]
+    fn base_protected_var_shadows_a_parenless_call_in_an_extension() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_minimal_workspace(dir.path());
+        std::fs::write(
+            dir.path().join("P.al"),
+            "table 50001 R
+{
+    fields
+    {
+        field(1; Code; Code[20]) { }
+    }
+    procedure IsOn(): Boolean
+    begin
+        exit(true);
+    end;
+}
+page 50002 Base
+{
+    SourceTable = R;
+    protected var
+        IsOn: Boolean;
+}
+page 50003 Plain
+{
+    SourceTable = R;
+}
+pageextension 50010 BaseExt extends Base
+{
+    procedure Caller()
+    begin
+        if IsOn then;
+    end;
+}
+pageextension 50011 PlainExt extends Plain
+{
+    procedure Other()
+    begin
+        if IsOn then;
+    end;
+}
+",
+        )
+        .expect("write P.al");
+
+        let report = resolve_full_program(dir.path()).expect("resolve_full_program");
+        let calls = |caller: &str| -> Vec<String> {
+            let mut v: Vec<String> = report
+                .edges
+                .iter()
+                .filter(|ce| ce.edge.from.name_lc == caller && ce.edge.kind == EdgeKind::Call)
+                .flat_map(|ce| ce.edge.routes.iter().map(|r| format!("{:?}", r.target)))
+                .collect();
+            v.sort();
+            v
+        };
+        assert_eq!(
+            calls("other").len(),
+            1,
+            "without the protected var, the bare IsOn calls the table's procedure: {:?}",
+            calls("other")
+        );
+        assert_eq!(
+            calls("caller"),
+            Vec::<String>::new(),
+            "the base page's protected var IsOn shadows the table procedure"
         );
     }
 

@@ -306,7 +306,7 @@ fn source_codeunits(
         HolderSource::Codeunit(c) => return Some(vec![c.clone()]),
         HolderSource::Param(rid, p) => (rid, *p),
     };
-    let i = graph.routines.binary_search_by(|r| r.id.cmp(rid)).ok()?;
+    let i = graph.routines.find(rid)?;
     let node = &graph.routines[i];
     if !matches!(node.access, Access::Local | Access::Internal)
         || !node.event_subscribers.is_empty()

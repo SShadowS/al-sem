@@ -1027,7 +1027,7 @@ fn build_fan_out_site_context(
                     continue;
                 };
 
-                let globals_rec: HashSet<String> = obj
+                let globals_rec: crate::fxhash::FxHashSet<String> = obj
                     .globals
                     .iter()
                     .filter(|v| {
