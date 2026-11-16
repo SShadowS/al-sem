@@ -590,6 +590,40 @@ fn a_transcript_answers_what_the_cli_answers() {
 ///
 /// Discrimination (2026-11-06): see the V4 commit message (break: drop the
 /// flag from the front end).
+/// TLS-78: what the engine child prints itself during a call (a logger line,
+/// an `eprintln!`, a stray `println!`, none of them the command's own stderr)
+/// reaches the envelope as `engineStderr` `{bytes, text}`, and a call during
+/// which it prints nothing has no such field (the envelope is unchanged). The
+/// `stray-stdout-on-ask` hook makes the child print a line on every ask, which
+/// its stdout guard routes to its stderr.
+///
+/// DISCRIMINATION (2026-11-16): the pool not inserting `engineStderr` -> the
+/// hooked call has none and the test fails.
+#[test]
+fn an_engine_print_during_a_call_reaches_the_envelope() {
+    let ws = ws_explain();
+    let ask = |hook: Option<&str>| {
+        let mut s = Server::ready(&ws, hook);
+        let r = s.call(1, "alsem_explain", json!({"routines": ["PostOrder"]}));
+        let env = envelope(&r);
+        assert!(s.finish().success());
+        env
+    };
+    let hooked = ask(Some("stray-stdout-on-ask"));
+    assert_eq!(hooked["exitCode"], 0, "{hooked}");
+    let e = &hooked["engineStderr"];
+    assert!(
+        e["text"]
+            .as_str()
+            .is_some_and(|t| t.contains("engine test hook: a stray print to stdout")),
+        "{hooked}"
+    );
+    assert!(e["bytes"].as_u64().is_some_and(|b| b > 0), "{hooked}");
+    let clean = ask(None);
+    assert_eq!(clean["exitCode"], 0, "{clean}");
+    assert!(clean.get("engineStderr").is_none(), "{clean}");
+}
+
 #[test]
 fn mcp_answers_name_mcp_inputs_not_cli_flags() {
     let ws = ws_explain();

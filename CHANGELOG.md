@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (TLS-78: an MCP answer says when the engine printed something of its own)
+
+- **Why:** the envelope's `stderr` is what the command writes through its job output. A line
+  the engine prints itself (a logger warning, an `eprintln!`, a stray `println!`) goes to the
+  engine child's own stderr, which `EngineFront` kept only as a tail for crash reports. So
+  when TLS-75 moved the CDO test-selection and commit-sites ratchets from one-shot CLI calls
+  (which checked the whole process's stderr) to the shared MCP server, they could no longer
+  see an engine warning on real CDO input.
+- **Now:** the pool reads the child's stderr byte count before the call and, when it grew,
+  adds `engineStderr: {bytes, text}` (the newest 4 KiB) to the envelope
+  (`EngineFront::stderr_since`). A call during which the engine printed nothing has no such
+  field: every other envelope is unchanged. `src/mcp/mod.rs` documents the field. The LSP's
+  engine requests go through the same pool and carry it too.
+- `output_cdo::with_cdo_server` refuses a call whose envelope has `engineStderr`, for every
+  shared-server user (the CDO answers, the table-answer test, the round-2 size, selection and
+  commit-sites ratchets): the guard the one-shot calls had.
+- Pinned by `mcp_server::an_engine_print_during_a_call_reaches_the_envelope` (the
+  `stray-stdout-on-ask` hook prints on every ask: the field carries it; a plain call has
+  none); the pool not inserting the field fails it.
+- Limit: the count is per child, not per call. A line the child prints while it works on
+  something else in the same moment (a background refill) would be attributed to the call
+  that was running.
+
 ### Fixed (TLS-79: `cdo-speed`'s model-build reading resolves ~±8 %, not ~±20-50 %)
 
 - **The hole:** the side whose model was built second cost x1.28 CPU on average (x1.10-x1.58

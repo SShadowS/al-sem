@@ -293,19 +293,33 @@ const CDO_SERVER_USERS: &[&str] = &[
 
 static CDO_SERVER: OnceLock<std::sync::Mutex<(Option<Server>, usize)>> = OnceLock::new();
 
-/// Run `f` on the shared CDO server (started on first use), holding it for the
-/// call only; calls from parallel tests take turns.
-pub(crate) fn with_cdo_server<T>(ws: &std::path::Path, f: impl FnOnce(&mut Server) -> T) -> T {
+/// Run `f` (one tool call) on the shared CDO server (started on first use),
+/// holding it for the call only; calls from parallel tests take turns. The
+/// engine must print nothing of its own during the call (TLS-78: the envelope's
+/// `engineStderr`, a logger line or an `eprintln!`; the one-shot CLI calls these
+/// tests replaced checked the whole process's stderr).
+pub(crate) fn with_cdo_server(
+    ws: &std::path::Path,
+    f: impl FnOnce(&mut Server) -> serde_json::Value,
+) -> serde_json::Value {
     let cell = CDO_SERVER.get_or_init(|| {
         std::sync::Mutex::new((Some(Server::ready(ws, None)), CDO_SERVER_USERS.len()))
     });
     let mut guard = cell
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    f(guard
+    let result = f(guard
         .0
         .as_mut()
-        .expect("the shared CDO server is not closed yet"))
+        .expect("the shared CDO server is not closed yet"));
+    drop(guard);
+    let env = envelope(&result);
+    assert!(
+        env.get("engineStderr").is_none(),
+        "the engine printed during a CDO call: {}",
+        env["engineStderr"]
+    );
+    result
 }
 
 /// One user (`who`, from [`CDO_SERVER_USERS`]) is done with the shared server.

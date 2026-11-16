@@ -646,6 +646,26 @@ impl EngineFront {
             .map_or(0, |r| r.stderr.lock().expect("stderr tail").total)
     }
 
+    /// What the running child wrote to stderr since [`Self::stderr_total`]
+    /// read `since`: (the bytes written, the newest of them as text, at most
+    /// `max_text` bytes), or `None` when it wrote nothing (TLS-78: a front end
+    /// reports an engine warning per call). A child started again in between
+    /// counts from zero.
+    #[must_use]
+    pub fn stderr_since(&self, since: u64, max_text: usize) -> Option<(u64, String)> {
+        let r = self.running.as_ref()?;
+        let tail = r.stderr.lock().expect("stderr tail");
+        let since = if tail.total < since { 0 } else { since };
+        let written = tail.total - since;
+        if written == 0 {
+            return None;
+        }
+        let keep = (written.min(tail.bytes.len() as u64) as usize).min(max_text);
+        let start = tail.bytes.len() - keep;
+        let bytes: Vec<u8> = tail.bytes.iter().skip(start).copied().collect();
+        Some((written, String::from_utf8_lossy(&bytes).into_owned()))
+    }
+
     /// Leave the failed state (an explicit refresh).
     pub fn reset(&mut self) {
         self.failed_until = None;

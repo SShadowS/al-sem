@@ -2209,7 +2209,11 @@ fn run_command(
         progress: true,
         ..AskParams::default()
     };
+    // TLS-78: what the engine child prints itself during the call (a logger
+    // line, an `eprintln!`) goes to its own stderr, not the answer's.
+    let stderr_before = front.stderr_total();
     let answer = front.ask_with(params, &mut watch);
+    let engine_stderr = front.stderr_since(stderr_before, 4096);
     let compute_ms = started.elapsed().as_millis();
     let revision = answer.revision.clone();
     let meta = answer.meta.clone();
@@ -2348,7 +2352,7 @@ fn run_command(
         revision,
         meta,
     };
-    let extras = json!({
+    let mut extras = json!({
         "universe": call.universe.as_str(),
         "freshness": freshness,
         "timing": {
@@ -2358,6 +2362,11 @@ fn run_command(
             "computeMs": compute_ms,
         },
     });
+    // Only when the engine printed something during the call: an answer with
+    // none is unchanged (TLS-78).
+    if let Some((bytes, text)) = engine_stderr {
+        extras["engineStderr"] = json!({"bytes": bytes, "text": text});
+    }
     let wrap = |a: &Answer| {
         let mut envelope = serde_json::to_value(a).unwrap_or(Value::Null);
         let is_error = envelope["kind"] == "failed";
