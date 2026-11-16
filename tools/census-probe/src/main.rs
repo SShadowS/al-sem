@@ -2622,25 +2622,18 @@ fn resident_mode(ws: PathBuf, routine: String, low_mem: bool) {
                                 pd.producers.len(),
                                 pd.states.len(),
                                 pd.states.capacity(),
-                                size_of::<al_sem::engine::l4::pd_solve::ConeState>(),
+                                size_of::<al_sem::engine::l4::pd_solve::ArenaState>(),
                                 pd.links.len(),
                                 pd.links.capacity(),
-                                size_of::<al_sem::engine::l4::pd_solve::ConeLink>(),
+                                size_of::<al_sem::engine::l4::pd_solve::ArenaLink>(),
                                 pd.edges.len(),
                                 pd.by_routine.len()
                             );
-                            let al_sem::engine::l4::pd_solve::ConeArena {
-                                producers,
-                                states,
-                                links,
-                                edges,
-                                by_routine,
-                            } = pd;
-                            step("fold.pd.by_routine", by_routine);
-                            step("fold.pd.links", links);
-                            step("fold.pd.states", states);
-                            step("fold.pd.edges", edges);
-                            step("fold.pd.producers", producers);
+                            // ENG-104: the compact arena by part (the pre-ENG-104 counts that set
+                            // the bar are in runs-eng104/resident-before.out).
+                            for (n, p) in pd.into_census_parts() {
+                                step(n, p);
+                            }
                         }
                         continue;
                     }

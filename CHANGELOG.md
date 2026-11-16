@@ -41,6 +41,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     lookup, but its real callees are `reconstruct_witness_paths` and `compute_ordering`.
 - **Filed:** ENG-116 to ENG-121, one per hot spot of 3 % or more.
 
+### Changed (ENG-104: the producer-solve arena stores compact states, 229.3 MiB less resident memory on CDO)
+
+- **What changed** (`src/engine/l4/pd_solve.rs`; no output change). `ConeArena` keeps
+  `ArenaState` (24 B, was 88: the temp state, a `u32` producer, routine and distance, a `u16`
+  index into a table of the distinct requirement lists, the seed flag) and `ArenaLink` (two
+  `u32`s, 8 B, was 16); each state's link `Range` became one `u32` in `link_off` (state `i`'s links
+  are `links[link_off[i]..link_off[i + 1]]`). The routine names and requirement lists are tables
+  on the arena. The solver keeps `ConeState` as its working state; `finalize`, the serial oracle
+  and the incremental copy store through `ConeArena::push_state`, and readers use
+  `routine_of`, `reqs_of` and `links_of`.
+- **Limits** (in `ArenaState`'s doc): producers, routines, states, links, edges and distance at
+  most `u32::MAX`, distinct requirement lists at most 65,535 (`u16`). CDO uses 2,744 producers,
+  9,433 routines, 3.36 M states, 4.77 M links, distance 51 and 39 lists. Every conversion is
+  checked: a workspace past a limit panics with a message naming the limit and that the field
+  must be widened, never wraps.
+- **Measured** (`tools/census-probe resident`, release, master `9c1c099b` vs this branch, back to
+  back; `tools/census-probe/runs-eng104/`): live after one ask of each kind 4,393.8 → 4,164.5 MiB
+  (−229.3 MiB; peak the same), allocations −104,235. The arena's states 283.78 → 76.89 MiB plus
+  12.82 MiB of offsets, its links 72.76 → 36.38 MiB, the two tables 1.19 MiB. The bar was 180 MiB
+  (survey estimate 216). On CDO (`scripts/cdo-before-after 9c1c099b`, workspace `bc3ccb18` clean
+  on both sides) no finding or fingerprint moved at either scope and the call graph is unchanged
+  (0 unknown); `ConeArena::logical_lines` (`aldump --snapshot-memory --pd-dump`) is
+  byte-identical before and after (3,389,463 lines); `aldump --session-refresh --verify` gives a
+  model equal to a cold build after every change type, in the default and `--low-mem` modes.
+  `scripts/cdo-speed` (`497b0e14` against `f492eea5`) passed twice: the model build x1.030 and
+  x1.007, the round totals x1.099 and x1.005 (the first run started at a host load average of
+  17.1, the second calm), so no speed ratio is claimed; the servers' summed peak memory x0.967
+  and x0.953.
+- **Tests.** `arena_indices_convert_at_their_limit_and_panic_past_it` (each conversion at its
+  maximum, and one past it panics naming the limit) and
+  `push_state_refuses_more_requirement_lists_than_the_index_holds` (65,535 distinct lists store,
+  the 65,536th panics). Discrimination: an `as u16` in `push_state` wraps silently and turns the
+  second red. The `u32` limits are not crossed by a test (4.3 G items); the conversion helper's
+  test is their guard. Review (Fable): the two arena comparators the reuse tests use
+  (`arena_bytes`, `pd_text`) printed states by `Debug`, which now holds table indices; both read
+  `logical_lines` instead. And no reuse test had a guarded state, so a copy that dropped a
+  state's requirements left every test green (before this change too):
+  `a_reused_producers_guarded_state_keeps_its_requirements` reuses the guarded-seed fixture and
+  turns red under that break.
+
 ### Changed (ENG-106: `alsem fingerprint` builds its root blocks on 2 workers, wall x0.55 on CDO, CPU not higher)
 
 - **What changed** (`src/engine/l5/fingerprint_query.rs`, `digest.rs`, `fingerprint_cli.rs`,

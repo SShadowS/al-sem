@@ -237,9 +237,13 @@ pub(super) fn l4_and_cold(rev: &Revision) -> (L4Projection, L4Projection) {
 fn pd_text(pd: &crate::engine::l4::pd_solve::ConeArena) -> String {
     let by: std::collections::BTreeMap<&str, &Vec<usize>> =
         pd.by_routine.iter().map(|(k, v)| (&**k, v)).collect();
+    // ENG-104: states and links through `logical_lines`, which resolves every index (a state's
+    // Debug holds table indices; Fable, ENG-104 review).
     format!(
-        "{:?}\n{:?}\n{:?}\n{:?}\n{by:?}",
-        pd.producers, pd.states, pd.links, pd.edges
+        "{:?}\n{}\n{:?}\n{by:?}",
+        pd.producers,
+        pd.logical_lines().join("\n"),
+        pd.edges
     )
 }
 
