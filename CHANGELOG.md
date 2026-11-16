@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (ENG-98: the SipHash maps the CDO profiles found hot use FxHash)
+
+- **Found** (samply, `profiling` builds, the pinned CDO baseline, 2026-11-16; who hashes, by
+  the chain of frames above `Sip13`): `alsem fingerprint` spent 20.7 % of its 256.5 s CPU in
+  SipHash, 17.9 % in ONE set: `enumerate_proofs`' `key_ids` (`src/engine/l5/digest.rs`), an
+  `IndexSet<ProofKey>` whose keys hold every hop's projected JSON. `alsem analyze` spent 3.84 %
+  of 72.5 s, the largest parts in `pd_solve::solve_producer` (its `Incoming`, `ix_of` and
+  `edge_ix` maps) and `ResInterner::by_str` (`src/engine/l4/cone_derived.rs`).
+- **Now** those five use `crate::fxhash` (TLS-66). Order audit, each: the `IndexSet` keeps
+  insertion order whatever its hasher; `ix_of` and `edge_ix` are only looked up; `Incoming` is
+  iterated once, to sort each list on its own; `by_str` only to sum key lengths. None leaks an
+  order, so none hid a nondeterminism bug. `routines_by_id` (std, passed through 16 signatures)
+  stays: its share is small for that change.
+- **Same output:** `scripts/cdo-before-after 52d349ab 6d12dc5e`: no detector, fingerprint or
+  number moved.
+- **Measured:** the fingerprint re-profile: SipHash 20.7 % -> 2.84 %, CPU 256.5 -> 241.6 s
+  (-5.8 %, one run each). `cdo-speed` (PASS, not under load): model build CPU x0.975 (passes
+  x0.958 / x0.992: inside its ±8 % resolution, so no build gain is claimed); warm prove x0.748
+  (passes x0.886 / x0.632, both faster, wide spread); warm tests x0.980; rounds x1.011; peak
+  memory x0.989.
+- **Left:** hashing `ProofKey` with Fx is still 14.8 % of `fingerprint`'s CPU: Fx reads every
+  byte of every hop's JSON for every key. Interning each hop's JSON to an id is filed as ENG-100.
+- **Also found:** `analyze` gives some distinct findings one fingerprint (CDO primary: 2,308
+  findings, 2,301 fingerprints; d54 and d55), which is why `cdo-before-after` (distinct
+  fingerprints) reads 2301 / 32548 where a findings count reads 2308 / 32579. Filed as ENG-101.
+
 ### Changed (ENG-96: smaller call-site and record-variable rows, 88.5 MiB less resident memory on CDO)
 
 - **The census** (`tools/census-probe` resident mode, now field by field for both row types;
