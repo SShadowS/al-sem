@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (ENG-109: finished fact cones are flat sorted slices, 284.2 MiB less resident memory on CDO)
+
+- **What changed** (`src/engine/l4/capability_cone.rs`, `cone_walk_par.rs`; no output change). An
+  SCC's fact cone is still built as a `BTreeMap` (`merge_cone` needs it), then frozen into a
+  `FrozenCone`, one exactly sized `Box<[(Arc<str>, ConeFactEntry)]>` in the map's key order, at
+  both places a cone is finished (the serial fold and the parallel walk). Every reader iterates,
+  counts or folds it as before; none looks a key up, so it has no lookup.
+- **Measured** (`tools/census-probe resident`, release, master `350dbd30` vs this branch, back to
+  back; `tools/census-probe/runs-eng109/`): live after one ask of each kind 4,676.8 → 4,392.6 MiB
+  (−284.2 MiB; peak the same), allocations −922,066. The fact cones 666.68 → 382.65 MiB
+  (1,962,468 → 1,040,321 allocations) with the same 5,612,960 entries and 306,465 keys: the
+  bar was 150 MiB (ENG-107's ceiling for the B-tree layout, 336 MiB). On CDO
+  (`scripts/cdo-before-after 350dbd30`, workspace `bc3ccb18` clean on both sides) no finding or
+  fingerprint moved at either scope and the call graph is unchanged (0 unknown); `aldump
+  --session-refresh --verify` gives a model equal to a cold build after every change type, in the
+  default and `--low-mem` modes. `scripts/cdo-speed` (`350dbd30` against `8c40dae3`) passed
+  twice: the model build x0.962 and x1.008, the round totals x0.993 and x1.042, so no speed
+  ratio is claimed; the servers' summed peak memory x0.949 and x0.950.
+- **Tests.** The whole suite and every golden family pass unchanged. Discrimination: a freeze that
+  drops an entry turns six `--test r3` tests red (the r3a3/r3a5 goldens, oracles and the
+  temp-class parity). The frozen ORDER matters, and before this change no test pinned it: a
+  freeze that reversed it left the whole suite green (6,086 tests). Now
+  `a_frozen_cone_keeps_key_order_for_the_bfs_first_pick` does (a hand-built cone holding `K` and
+  its guarded copy; the reversed freeze turns it red). It can reach output: when two guarded
+  entries under one base key lose their guards to an untrackable argument, they tie on distance
+  and first hop, and `candidate_wins` keeps the first one met, so the order picks the
+  representative (its `witnessOperationId`); `ConeStore::emit_raw` and the recursive walk read
+  the same way (sol, ENG-109 review). The freeze keeps the map's key order by construction
+  (`BTreeMap::into_iter`), the order every reader saw before.
+
 ### Changed (ENG-105: `alsem fingerprint` takes 0.92× the CPU on CDO; witness memos by edge index)
 
 - **Found** (samply, `alsem fingerprint` on the pinned CDO baseline, master after ENG-100/102):

@@ -20,7 +20,7 @@ use std::sync::{Arc, Condvar, Mutex, OnceLock};
 
 use super::CapabilityFact;
 use super::{
-    ComposeStats, ConeFacts, ConeMap, CovMap, CoverageCone, CoverageRecord, GuardAnchor, MemoRows,
+    ComposeStats, ConeMap, CovMap, CoverageCone, CoverageRecord, FrozenCone, GuardAnchor, MemoRows,
     RoutineDirectCoverage, RoutineDirectFacts, TypedEdgeGraph, coverage_cone_for_scc,
     coverage_record, fact_cone_for_scc, frame_bound, inherited_facts_for_singleton,
 };
@@ -136,7 +136,7 @@ pub(super) struct Walked {
 /// A non-root SCC's cones, shared with its readers until the last one is done.
 #[derive(Clone)]
 struct Shared {
-    fact: Arc<ConeFacts>,
+    fact: Arc<FrozenCone>,
     cov: Arc<CoverageCone>,
     /// The closed-set memo row (#160 step 7b §4.3), built by the first reader
     /// that wants it.
@@ -496,7 +496,7 @@ fn task(i: usize, cx: &Cx<'_, '_, '_>) -> (Option<Shared>, SccOut) {
     // A root (nothing calls it) keeps no cone: nobody would read it.
     let root_scc = cx.readers[i].is_empty();
     let mut stats = ComposeStats::default();
-    let fcone: Option<ConeFacts> = (!root_scc).then(|| {
+    let fcone: Option<FrozenCone> = (!root_scc).then(|| {
         let t = census::start();
         let anchor = match scc_entry.members.as_slice() {
             [m] if !scc_entry.recursive => Some(GuardAnchor {
@@ -513,7 +513,7 @@ fn task(i: usize, cx: &Cx<'_, '_, '_>) -> (Option<Shared>, SccOut) {
         census::add_gated(&census::FACTCONE_ENTRIES, fcone.len() as u64);
         census::add_since(&census::FACTCONE_NANOS, t);
         census::add(&census::FACTCONE_CALLS, 1);
-        fcone
+        FrozenCone::freeze(fcone)
     });
     let t = census::start();
     let ccone = coverage_cone_for_scc(
@@ -563,10 +563,17 @@ fn task(i: usize, cx: &Cx<'_, '_, '_>) -> (Option<Shared>, SccOut) {
     // `emitted > 0` here: with no seed every member re-folds.
     let use_set = recursive && emitted > 0 && x.scope.derived;
     let t = use_set.then(census::start).flatten();
-    let root_set = (use_set && root_scc)
-        .then(|| fact_cone_for_scc(&scc_entry.members, succ_ids, &cones, x.direct, None));
+    let root_set = (use_set && root_scc).then(|| {
+        FrozenCone::freeze(fact_cone_for_scc(
+            &scc_entry.members,
+            succ_ids,
+            &cones,
+            x.direct,
+            None,
+        ))
+    });
     census::add_since(&census::BFS_WALK_NANOS, t);
-    let scc_set: Option<&ConeFacts> = if !use_set {
+    let scc_set: Option<&FrozenCone> = if !use_set {
         None
     } else if let Some(set) = &root_set {
         stats.scc_sets_built += 1;
