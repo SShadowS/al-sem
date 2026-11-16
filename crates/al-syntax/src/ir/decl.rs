@@ -450,6 +450,199 @@ pub struct LabelValue {
     pub translations: Vec<(String, String)>,
 }
 
+// ENG-94: the declarations keep no spare capacity. The lowerer push-builds them, and a
+// first push reserves four elements (a routine with one local held 4 x 192 B), so a
+// dependency tier kept by a resident session carried 49.6 MiB of unused capacity on CDO in
+// these lists alone. `lower_file` calls `exact_size` on each object once it is built. Each
+// method names every field (no `..`), so a field added later does not compile here until
+// someone decides whether it owns a list to trim (lowerer review, ENG-94).
+use super::exact_size;
+
+impl ObjectDecl {
+    /// Drop every list's spare capacity, this object's and its members' ([`exact_size`]).
+    pub fn exact_size(&mut self) {
+        let ObjectDecl {
+            kind: _,
+            id: _,
+            name: _,
+            routines,
+            globals,
+            protected_globals,
+            properties,
+            dataitems,
+            temporary_dataitems,
+            query_columns,
+            dataset_items,
+            extends_target: _,
+            implements,
+            page_controls,
+            fields,
+            keys,
+            run_objects,
+            enum_values,
+            actions,
+            origin: _,
+        } = self;
+        routines.iter_mut().for_each(RoutineDecl::exact_size);
+        globals.iter_mut().for_each(VarDecl::exact_size);
+        actions.iter_mut().for_each(ActionDecl::exact_size);
+        fields.iter_mut().for_each(FieldDecl::exact_size);
+        enum_values.iter_mut().for_each(EnumValueDecl::exact_size);
+        keys.iter_mut().for_each(exact_size);
+        exact_size(routines);
+        exact_size(globals);
+        exact_size(protected_globals);
+        exact_size(properties);
+        exact_size(dataitems);
+        exact_size(temporary_dataitems);
+        exact_size(query_columns);
+        exact_size(dataset_items);
+        exact_size(implements);
+        exact_size(page_controls);
+        exact_size(fields);
+        exact_size(keys);
+        exact_size(run_objects);
+        exact_size(enum_values);
+        exact_size(actions);
+    }
+}
+
+impl RoutineDecl {
+    /// Drop every list's spare capacity ([`exact_size`]).
+    pub fn exact_size(&mut self) {
+        let RoutineDecl {
+            kind: _,
+            name: _,
+            name_origin: _,
+            params,
+            return_type: _,
+            return_name: _,
+            locals,
+            attributes,
+            attributes_parsed,
+            access_modifier: _,
+            parse_incomplete: _,
+            dataitem_source_table: _,
+            enclosing_member: _,
+            in_dataset_modify_context: _,
+            preproc_context,
+            doc: _,
+            body: _,
+            origin: _,
+        } = self;
+        locals.iter_mut().for_each(VarDecl::exact_size);
+        attributes_parsed
+            .iter_mut()
+            .for_each(AttributeIr::exact_size);
+        exact_size(params);
+        exact_size(locals);
+        exact_size(attributes);
+        exact_size(attributes_parsed);
+        exact_size(preproc_context);
+    }
+}
+
+impl VarDecl {
+    /// Drop its label's lists' spare capacity ([`exact_size`]).
+    pub fn exact_size(&mut self) {
+        let VarDecl {
+            name: _,
+            ty: _,
+            temporary: _,
+            origin: _,
+            label,
+        } = self;
+        if let Some(LabelValue {
+            text: _,
+            locked: _,
+            comment: _,
+            max_length: _,
+            other,
+            translations,
+        }) = label
+        {
+            // Exact already today: the lowerer clones one label per declared name, and a
+            // clone has no spare capacity (sol's test gap, ENG-94: a break here stays green).
+            exact_size(other);
+            exact_size(translations);
+        }
+    }
+}
+
+impl AttributeIr {
+    /// Drop its argument list's spare capacity ([`exact_size`]).
+    pub fn exact_size(&mut self) {
+        let AttributeIr {
+            name: _,
+            raw: _,
+            args,
+            origin: _,
+            conditional: _,
+            another_declaration_lacks: _,
+        } = self;
+        exact_size(args);
+    }
+}
+
+impl EnumValueDecl {
+    /// Drop its implementations' spare capacity ([`exact_size`]).
+    pub fn exact_size(&mut self) {
+        let EnumValueDecl {
+            name: _,
+            implementations,
+            origin: _,
+        } = self;
+        exact_size(implementations);
+    }
+}
+
+impl ActionDecl {
+    /// Drop every list's spare capacity ([`exact_size`]).
+    pub fn exact_size(&mut self) {
+        let ActionDecl {
+            name: _,
+            kind: _,
+            caption,
+            tooltip,
+            run_object,
+            triggers,
+            doc: _,
+            origin: _,
+        } = self;
+        exact_size(caption);
+        exact_size(tooltip);
+        exact_size(run_object);
+        exact_size(triggers);
+    }
+}
+
+impl FieldDecl {
+    /// Drop every list's spare capacity ([`exact_size`]).
+    pub fn exact_size(&mut self) {
+        let FieldDecl {
+            number: _,
+            name: _,
+            data_type: _,
+            field_class: _,
+            is_blob_like: _,
+            obsolete_state,
+            obsolete_reason,
+            caption,
+            tooltip,
+            option_caption,
+            calc_formula,
+            doc: _,
+            origin: _,
+        } = self;
+        exact_size(obsolete_state);
+        exact_size(obsolete_reason);
+        exact_size(caption);
+        exact_size(tooltip);
+        exact_size(option_caption);
+        exact_size(calc_formula);
+    }
+}
+
 /// The text of an AL string literal (`'it''s'` is `it's`), or `None` when `raw`
 /// is not one plain, well-formed `'…'` literal.
 pub fn al_string_literal_text(raw: &str) -> Option<String> {

@@ -1,0 +1,11 @@
+cdo-speed:   r0.1 build        base  wall   44.42 s  cpu  109.78 s  load  11.4  pressure   0.0
+cdo-speed:   r0.1 build        head  wall   31.66 s  cpu   94.18 s  load  13.2  pressure   1.0
+cdo-speed:   r0.1 build        base  wall   32.72 s  cpu   92.96 s  (again, untimed: the server the remaining calls use)
+cdo-speed:   r0.2 build        head  wall   26.44 s  cpu   79.30 s  load  14.2  pressure   2.1
+cdo-speed:   r0.2 build        base  wall   29.56 s  cpu   89.75 s  load  11.6  pressure   1.1
+cdo-speed:   r0.2 build        head  wall   42.27 s  cpu  123.24 s  (again, untimed: the server the remaining calls use)
+cdo-speed:   build          cpu   99.77 ->   86.74 s x0.871   wall   36.99 ->   29.05 s x0.798   spread 1.03/1.25  (x0.858/x0.884 by pass; load 11.4-14.2)
+cdo-speed:   round-total    cpu   18.14 ->   18.09 s x0.964   wall   18.22 ->   18.16 s x0.963   spread 1.08/1.08
+cdo-speed:   peak memory    8675 -> 8089 MiB x0.932 (every server process's VmHWM, summed)
+cdo-speed: build 0 s, timing 405 s, load average 11.4 at the start, 4.5 at the end; CPU stall share of this container: warm-up 1 4.2 %, warm-up 2 2.5 %, rounds 0.0 %
+cdo-speed: PASS
