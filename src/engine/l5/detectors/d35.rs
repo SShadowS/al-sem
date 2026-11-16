@@ -747,7 +747,7 @@ mod tests {
     /// with control context `dead_cc`, both with an own edge.
     fn live_and_dead_site_finding(dead_cc: &str) -> Finding {
         let mut dead = site_at("cs-dead", "Dead", 6, 0);
-        dead.control_context = Some(dead_cc.to_string());
+        dead.control_context = Some(dead_cc.into());
         let mut sub = routine("sub", "event-subscriber");
         sub.call_sites = vec![site_at("cs1", "X", 4, 0), dead];
         let routines = vec![sub];

@@ -41,7 +41,7 @@ fn strip_quotes(s: &str) -> String {
 /// Pre-backfill record-op temp state (`{ kind: "unknown" }`).
 fn ts_unknown() -> PTempState {
     PTempState {
-        kind: "unknown".to_string(),
+        kind: "unknown".into(),
         value: None,
         parameter_index: None,
     }
@@ -1469,7 +1469,7 @@ impl<'a> SpineCtx<'a> {
                             .iter()
                             .rev()
                             .find(|f| f.is_record)
-                            .map(|f| f.text.clone())
+                            .map(|f| Box::new(f.text.clone()))
                     }
                     _ => None,
                 };
@@ -4764,7 +4764,7 @@ page 50007 Pg
                     .expect("implicit Rec");
                 got.push((
                     r.name.clone(),
-                    rec.temp_state.kind.clone(),
+                    rec.temp_state.kind.to_string(),
                     rec.temp_state.parameter_index,
                 ));
             }

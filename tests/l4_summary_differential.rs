@@ -1355,7 +1355,7 @@ mod fixtures {
 
     fn ts_known(value: bool) -> PTempState {
         PTempState {
-            kind: "known".to_string(),
+            kind: "known".into(),
             value: Some(value),
             parameter_index: None,
         }
@@ -1363,7 +1363,7 @@ mod fixtures {
 
     fn ts_pd(idx: u32) -> PTempState {
         PTempState {
-            kind: "parameter-dependent".to_string(),
+            kind: "parameter-dependent".into(),
             value: None,
             parameter_index: Some(idx),
         }

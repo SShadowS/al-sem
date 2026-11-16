@@ -588,7 +588,7 @@ pub fn apply_control_contexts(
 
     // Populate the projection field (absent when no entry).
     for cs in &mut features.call_sites {
-        cs.control_context = maps.by_callsite.get(&cs.id).map(|c| c.as_str().to_string());
+        cs.control_context = maps.by_callsite.get(&cs.id).map(|c| c.as_str().into());
     }
     for op in &mut features.operation_sites {
         op.control_context = by_operation.get(&op.id).map(|c| c.as_str().to_string());

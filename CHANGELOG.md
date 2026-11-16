@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (ENG-96: smaller call-site and record-variable rows, 88.5 MiB less resident memory on CDO)
+
+- **The census** (`tools/census-probe` resident mode, now field by field for both row types;
+  `tools/census-probe/runs-eng96/`): on CDO, 160,213 `PCallSite` x 416 B and 564,998
+  `ModelRecordVariable` x 168 B. `PTempState.kind` (in both) was a `String` holding one of three
+  words (40 B with the rest of the struct), `scope` one of three, `control_context` one of six;
+  `table_id` held 1,120 distinct texts in 287,687 copies; `order` was never set on a model row,
+  `implicit_receiver` on 4.
+- **The change.**
+  - `program::vocab::open_vocab!`: a 4-byte enum of a field's known words that keeps any other
+    word (`Other`, an index into a process-wide table of the unknown words, one leaked copy each;
+    every value comes from the engine's own literals today, so it stays empty). It compares,
+    orders, hashes, prints (`Debug` exactly a `String`'s, which the session fingerprint reads)
+    and serializes as its word, so no output moves.
+  - `PTempState.kind` is a `TempKind` (the struct 40 → 16 B wherever it appears),
+    `ModelRecordVariable.scope` a `VarScope`, `PCallSite.control_context` a `ControlContextWord`.
+  - `ModelRecordVariable.table_name` and `table_id` are shared texts, interned by
+    `features::shared_table_text` (its own per-thread set, capped at 16,384, so table names never
+    crowd the grammar's words out of `shared_vocab`).
+  - `PCallSite.order` and `implicit_receiver` are boxed; both are read, so neither was deleted.
+  - Sizes pinned by `row_sizes_stay_put`: `ModelRecordVariable` 168 → 104 B, `PCallSite` 416 → 344 B.
+- **Measured** (same probe, same corpus, back to back): live memory after one ask of each kind
+  4,951.2 → 4,862.7 MiB (**-88.5 MiB**, bar 70), 2.33 M fewer allocations; the model routine rows
+  353.4 → 302.4 MiB, the dependency routine rows 487.9 → 439.2 MiB; 287,687 table ids now sit in
+  1,120 allocations (0.05 MiB). `cdo-speed` (`743e5dc9` against the change): PASS, model build CPU
+  x0.999, rounds x1.016, the servers' peak memory 8,640 → 8,419 MiB (x0.974).
+- **Same answers.** The task gate (every golden byte-identical), `scripts/cdo-before-after 743e5dc9`
+  (fingerprint, analyze at both scopes, the call-graph stats: nothing moved), and
+  `aldump --session-refresh --verify` on a CDO copy in both memory modes (every step, the
+  body-only one included, equal to a cold build).
+- **Reviews.** Fable and sol found no output change on real input. Fixed from them: table texts
+  got their own interning set (they had shared `shared_vocab`'s cap with the grammar's words); the
+  cone census stopped counting a heap the temp kind no longer has; `Display` forwards to `str`'s,
+  so width and precision apply as to a `String`; the test pins `Debug`, `Display`, `Hash`, unknown
+  words through serde, each with a break that fails it. **A stated limit:** the unknown-word table
+  holds 65,536 words and then panics; nothing feeds it today (no AL text, cache or wire input
+  reaches these types), and a future untrusted path must bound it.
+- **Left for ENG-99:** 80% of the record-variable rows are object globals copied into every routine
+  of the object; the dependency rows' record-variable ids (30.9 MiB) are not shared yet.
+
 ### Fixed (ENG-93: `aldump --session-refresh` edits CRLF files, and fails on an edit that reaches nothing)
 
 - **The hole.** The harness's `body` edit inserted a line after `"\n    begin\n"`, and its file

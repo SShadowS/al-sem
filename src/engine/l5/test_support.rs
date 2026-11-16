@@ -312,7 +312,7 @@ pub fn call_site(id: &str, callee_name: &str, loop_stack: Vec<String>) -> PCallS
 /// A `known`/`parameter-dependent` `PTempState`.
 pub fn ts_known(value: bool) -> PTempState {
     PTempState {
-        kind: "known".to_string(),
+        kind: "known".into(),
         value: Some(value),
         parameter_index: None,
     }
@@ -320,7 +320,7 @@ pub fn ts_known(value: bool) -> PTempState {
 
 pub fn ts_pd(idx: u32) -> PTempState {
     PTempState {
-        kind: "parameter-dependent".to_string(),
+        kind: "parameter-dependent".into(),
         value: None,
         parameter_index: Some(idx),
     }

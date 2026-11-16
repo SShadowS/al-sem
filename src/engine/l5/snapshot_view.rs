@@ -179,8 +179,8 @@ fn site_candidates(
             end_line: a.end_line,
             end_column: a.end_column,
             callee_display: render_callee(&cs.callee),
-            control_context: cs.control_context.clone(),
-            order: collided.order(ri, cs.order),
+            control_context: cs.control_context.map(|c| c.to_string()),
+            order: collided.order(ri, cs.order.as_deref().copied()),
             under_asserterror: if cs.under_asserterror == Some(true) {
                 Some(true)
             } else {

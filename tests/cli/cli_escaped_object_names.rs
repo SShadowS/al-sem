@@ -262,7 +262,12 @@ fn every_raw_reference_shape_binds_the_escaped_object() {
         .record_variables
         .iter()
         .find(|v| v.name == "D")
-        .map(|v| (v.table_name.clone(), v.table_id.clone()));
+        .map(|v| {
+            (
+                v.table_name.as_deref().map(str::to_string),
+                v.table_id.as_deref().map(str::to_string),
+            )
+        });
 
     let base = m
         .workspace

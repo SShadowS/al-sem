@@ -324,6 +324,15 @@ pub fn table_by_id_preferring_real(
     map
 }
 
+crate::open_vocab!(
+    /// [`ModelRecordVariable::scope`]'s words (ENG-96); any other word is kept as `Other`.
+    pub VarScope {
+        Local => "local",
+        Parameter => "parameter",
+        Global => "global",
+    }
+);
+
 /// A record variable with its (post-resolve) resolved internal table id.
 #[derive(Debug, Clone)]
 pub struct ModelRecordVariable {
@@ -331,9 +340,11 @@ pub struct ModelRecordVariable {
     pub id: crate::program::str_pool::SharedStr,
     pub name: String,
     /// Declared table name (unquoted), or None for a non-record / unparsed type.
-    pub table_name: Option<String>,
+    /// ENG-96: shared (a table's name is held by every variable of that table).
+    pub table_name: Option<crate::program::str_pool::SharedStr>,
     /// Resolved internal TableId, set by `resolve_record_types`. None = unresolved.
-    pub table_id: Option<String>,
+    /// ENG-96: shared, as `table_name`.
+    pub table_id: Option<crate::program::str_pool::SharedStr>,
     /// True when this is a parameter record variable (from L2 body walk).
     /// Required by the R3a-2 summary engine to derive RecordRoleSummary per
     /// record parameter (mirrors al-sem `recVar.isParameter`).
@@ -350,8 +361,8 @@ pub struct ModelRecordVariable {
     /// Variable scope: `"local"` | `"parameter"` | `"global"`. `None` when not
     /// yet populated. Additive — forwarded from `PRecordVariable.scope`;
     /// the L3 record-type projection is field-allowlisted, so this never reaches
-    /// a golden. Populated by later tasks.
-    pub scope: Option<String>,
+    /// a golden. Populated by later tasks. ENG-96: a 4-byte word ([`VarScope`]).
+    pub scope: Option<VarScope>,
     /// #299: the implicit receiver `Rec` of a Table / TableExtension routine.
     /// Forwarded from `PRecordVariable.is_receiver`; unlike `temp_state` it is
     /// never rewritten by `record_types` (a temporary table or an entry guard
@@ -963,7 +974,7 @@ impl ModelRoutine {
             let cs = call_sites.iter().find(|cs| cs.id == site);
             return EffectOperationSite {
                 control_context: cs.and_then(|c| c.control_context.as_deref()),
-                order: cs.and_then(|c| c.order.as_ref()),
+                order: cs.and_then(|c| c.order.as_deref()),
                 under_asserterror: cs.is_some_and(|c| c.under_asserterror == Some(true)),
             };
         }
@@ -1716,12 +1727,15 @@ fn project_ir(
                 .map(|rv| ModelRecordVariable {
                     id: rv.id.clone(),
                     name: rv.name.clone(),
-                    table_name: rv.table_name.clone(),
+                    table_name: rv
+                        .table_name
+                        .as_deref()
+                        .map(crate::program::body::features::shared_table_text),
                     table_id: None,
                     is_parameter: rv.is_parameter,
                     parameter_index: rv.parameter_index,
                     temp_state: rv.temp_state.clone(),
-                    scope: rv.scope.clone(),
+                    scope: rv.scope.as_deref().map(VarScope::from),
                     is_receiver: rv.is_receiver,
                     is_implicit_rec: !declares_rec && rv.name.eq_fold_identifier("rec"),
                 })
@@ -1753,12 +1767,15 @@ fn project_ir(
                     record_variables.push(ModelRecordVariable {
                         id: format!("{}/rv/{}", routine_id, lc).into(),
                         name: g.name.clone(),
-                        table_name: g.table_name.clone(),
+                        table_name: g
+                            .table_name
+                            .as_deref()
+                            .map(crate::program::body::features::shared_table_text),
                         table_id: None,
                         is_parameter: g.is_parameter,
                         parameter_index: g.parameter_index,
                         temp_state: g.temp_state.clone(),
-                        scope: g.scope.clone(),
+                        scope: g.scope.as_deref().map(VarScope::from),
                         is_receiver: false,
                         is_implicit_rec: false,
                     });
@@ -2072,7 +2089,12 @@ fn project_ir(
                 );
                 let record_vars: Vec<(String, Option<String>)> = record_variables
                     .iter()
-                    .map(|rv| (rv.name.clone(), rv.table_name.clone()))
+                    .map(|rv| {
+                        (
+                            rv.name.clone(),
+                            rv.table_name.as_deref().map(str::to_string),
+                        )
+                    })
                     .collect();
                 let rule_base = next_base_by_id.get(&routine_id).map_or(0, |&(_, r)| r);
                 let drafts = crate::program::body::rules::build_rule_drafts(
@@ -2296,12 +2318,12 @@ fn join_routine_declarations(
         // 2. No row's site runs on every success path of the routine.
         for &i in &group {
             let r = &mut rows[i];
-            for c in r
-                .call_sites
-                .iter_mut()
-                .map(|s| &mut s.control_context)
-                .chain(r.operation_sites.iter_mut().map(|s| &mut s.control_context))
-            {
+            for c in r.call_sites.iter_mut().map(|s| &mut s.control_context) {
+                if c.as_deref() == Some(TOP) {
+                    *c = Some(COND.into());
+                }
+            }
+            for c in r.operation_sites.iter_mut().map(|s| &mut s.control_context) {
                 if c.as_deref() == Some(TOP) {
                     *c = Some(COND.to_string());
                 }
@@ -4210,7 +4232,7 @@ impl RoutineView<'_> {
             .record_variables
             .iter()
             .find(|v| v.name.fold_identifier() == want)
-            .and_then(|v| v.scope.clone())
+            .and_then(|v| v.scope.map(|s| s.to_string()))
     }
 
     /// The resolved `temp_state` Known value of the named record variable, or None

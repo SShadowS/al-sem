@@ -2894,12 +2894,12 @@ mod shadow_tests {
         b.record_variables = vec![crate::program::model::workspace::ModelRecordVariable {
             id: "B/rv0".into(),
             name: "F".to_string(),
-            table_name: Some("Field".to_string()),
+            table_name: Some("Field".into()),
             table_id: None,
             is_parameter: false,
             parameter_index: None,
             temp_state: crate::program::body::features::PTempState {
-                kind: "unknown".to_string(),
+                kind: "unknown".into(),
                 value: None,
                 parameter_index: None,
             },

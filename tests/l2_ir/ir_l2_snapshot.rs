@@ -208,7 +208,7 @@ fn debug_digest_catches_serde_skip_drift() {
         record_variable_name: "rec".to_string(),
         record_variable_id: None,
         temp_state: PTempState {
-            kind: "known".to_string(),
+            kind: "known".into(),
             value: Some(false),
             parameter_index: None,
         },

@@ -151,7 +151,7 @@ fn call_site(id: &str, parameter_index: u32, source_temp_state: Option<PTempStat
 
 fn ts_known(value: bool) -> PTempState {
     PTempState {
-        kind: "known".to_string(),
+        kind: "known".into(),
         value: Some(value),
         parameter_index: None,
     }
@@ -263,7 +263,7 @@ fn pd_chains_upward_two_frames() {
         "M/cs0",
         0,
         Some(PTempState {
-            kind: "parameter-dependent".to_string(),
+            kind: "parameter-dependent".into(),
             value: None,
             parameter_index: Some(1),
         }),
@@ -324,7 +324,7 @@ fn pd_resymbolized_to_root_param_is_unknown() {
         "R/cs0",
         0,
         Some(PTempState {
-            kind: "parameter-dependent".to_string(),
+            kind: "parameter-dependent".into(),
             value: None,
             parameter_index: Some(2),
         }),
@@ -404,7 +404,7 @@ fn uncertainty_sources_resolve_unknown() {
         "B/cs0",
         0,
         Some(PTempState {
-            kind: "unknown".to_string(),
+            kind: "unknown".into(),
             value: None,
             parameter_index: None,
         }),
