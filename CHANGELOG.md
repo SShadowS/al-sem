@@ -25,10 +25,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   back to back on CDO): live memory after one ask of each kind 4,862.7 → 4,778.8 MiB
   (**-83.9 MiB**, bar 60); the object declarations 224.9 → 144.1 MiB, the dependency trees 728.1
   → 647.2 MiB; the workspace's retained trees 3.5 MiB less.
-- **Speed.** `cdo-speed` (`52d349ab` against the change): PASS, model build CPU **x0.871** in both
-  passes (x0.858, x0.884; wall x0.798), rounds x0.964, the servers' peak memory 8,675 → 8,089 MiB
-  (x0.932). The trim copies each list once, yet the build gets cheaper, not dearer: the four-element
-  first reservations cost more than the moves (the cause is not profiled).
+- **Speed: not slower; a gain is not established.** Two `cdo-speed` runs against the same base
+  (`52d349ab`, ENG-83 included) disagree on the model build's CPU: x0.871 in the task's run (both
+  passes, x0.858 and x0.884) and x0.989 in the landing gate. Each is one two-pass run and the gap is
+  outside the check's ±8% resolution, so neither is quoted as the change's effect; both say it is
+  not slower (corrected after the landing; the first version of this entry claimed x0.871). Peak
+  memory agrees across both: the servers' peak x0.932 (8,675 → 8,089 MiB) and x0.943.
 - **Same answers.** The task gate (every golden byte-identical), `scripts/cdo-before-after
   52d349ab` (nothing moved) and `aldump --session-refresh --verify` on a CDO copy in both memory
   modes (every step equal to a cold build).
