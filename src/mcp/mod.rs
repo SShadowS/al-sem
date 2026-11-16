@@ -30,9 +30,13 @@
 //! false`) with `exitCode`, `stdoutText` XOR `stdoutFile`, `stderr` XOR
 //! `stderrFile`, `stale`, `changedPaths`, `universe`, `freshness`,
 //! `timing`, `revision` (always present, `null` until the child is
-//! resident), and `engineStderr` (`{bytes, text}`, only when the engine child
-//! printed to its own stderr during the call: a logger line or an `eprintln!`
-//! the command's own `stderr` does not carry; TLS-78); or `kind: "failed"` (`isError: true`), an infrastructure
+//! resident), and `engineStderr` (TLS-78: `{bytes, text}` when the engine
+//! child printed to its own stderr since its previous ask's answer, a logger
+//! line or an `eprintln!` the command's own `stderr` does not carry;
+//! `{unknown}`, a reason, when that cannot be told, as with an older child
+//! that writes no stderr marks; absent when it printed nothing or no child
+//! got the call; a composite joins its parts'); or `kind: "failed"`
+//! (`isError: true`), an infrastructure
 //! outcome (`engineError`, `refusedPath`, `busy`, `protocol`, ...). The
 //! envelope's JSON without `stdoutText` is the first text block, the inline
 //! stdout is the second text block exactly, and with a negotiated

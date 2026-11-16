@@ -296,8 +296,10 @@ static CDO_SERVER: OnceLock<std::sync::Mutex<(Option<Server>, usize)>> = OnceLoc
 /// Run `f` (one tool call) on the shared CDO server (started on first use),
 /// holding it for the call only; calls from parallel tests take turns. The
 /// engine must print nothing of its own during the call (TLS-78: the envelope's
-/// `engineStderr`, a logger line or an `eprintln!`; the one-shot CLI calls these
-/// tests replaced checked the whole process's stderr).
+/// `engineStderr`, a logger line or an `eprintln!`, or `{unknown}` when that
+/// cannot be told; the one-shot CLI calls these tests replaced checked the
+/// whole process's stderr). A refusal names the calling test's line.
+#[track_caller]
 pub(crate) fn with_cdo_server(
     ws: &std::path::Path,
     f: impl FnOnce(&mut Server) -> serde_json::Value,
@@ -316,7 +318,9 @@ pub(crate) fn with_cdo_server(
     let env = envelope(&result);
     assert!(
         env.get("engineStderr").is_none(),
-        "the engine printed during a CDO call: {}",
+        "the engine printed during a CDO call (revision {}, {} ms): {}",
+        env["revision"],
+        env["timing"]["computeMs"],
         env["engineStderr"]
     );
     result

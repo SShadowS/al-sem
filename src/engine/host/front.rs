@@ -344,11 +344,133 @@ fn pump(
     }
 }
 
-/// The newest bytes of the child's stderr.
+/// The newest bytes of the child's stderr, its stderr marks taken out.
 #[derive(Default)]
 struct StderrTail {
     bytes: VecDeque<u8>,
+    /// Bytes written in all, marks not counted.
     total: u64,
+    /// The newest marks: each request id (as JSON text) and `total` at it.
+    marks: VecDeque<(String, u64)>,
+    /// A mark was dropped from the front of `marks`.
+    dropped_marks: bool,
+    /// The start of what may be a mark, split across reads.
+    held: Vec<u8>,
+}
+
+/// How many marks a tail keeps (a front end reads its ask's mark at once).
+const MARKS_KEPT: usize = 32;
+
+impl StderrTail {
+    /// One read of the pipe: marks become [`StderrTail::marks`], the rest
+    /// is kept as text.
+    fn take(&mut self, chunk: &[u8]) {
+        use super::{STDERR_MARK_MAX, STDERR_MARK_PREFIX};
+        for &b in chunk {
+            if self.held.is_empty() && b != 0 {
+                self.keep(b);
+                continue;
+            }
+            self.held.push(b);
+            let h = &self.held;
+            let n = h.len().min(STDERR_MARK_PREFIX.len());
+            let failed =
+                h[..n] != STDERR_MARK_PREFIX[..n] || (h.len() >= STDERR_MARK_MAX && b != b'\n');
+            if failed {
+                // Not a mark: its bytes are text; the last byte may start one.
+                let held = std::mem::take(&mut self.held);
+                let (text, last) = held.split_at(held.len() - 1);
+                text.iter().for_each(|&c| self.keep(c));
+                self.take(last);
+            } else if b == b'\n' && h.len() > STDERR_MARK_PREFIX.len() {
+                let id = &h[STDERR_MARK_PREFIX.len()..h.len() - 1];
+                let id = String::from_utf8_lossy(id).into_owned();
+                self.held.clear();
+                if self.marks.len() == MARKS_KEPT {
+                    self.marks.pop_front();
+                    self.dropped_marks = true;
+                }
+                self.marks.push_back((id, self.total));
+            }
+        }
+        let over = self.bytes.len().saturating_sub(STDERR_RETAIN);
+        self.bytes.drain(..over);
+    }
+
+    fn keep(&mut self, b: u8) {
+        self.total += 1;
+        self.bytes.push_back(b);
+    }
+
+    /// `total` at request `id`'s mark, if it has arrived.
+    #[cfg(test)]
+    fn mark_of(&self, id: &str) -> Option<u64> {
+        self.marks
+            .iter()
+            .rev()
+            .find(|(m, _)| m == id)
+            .map(|&(_, at)| at)
+    }
+
+    /// Ask `id`'s window: from the previous ask's mark (`is_ask` tells an
+    /// ask's id from another response's; or the stream's start) to its
+    /// own. `None` until its mark has arrived; `Some(None)` when the
+    /// previous ask's mark may have been dropped ([`MARKS_KEPT`]).
+    fn window_of(&self, id: &str, is_ask: impl Fn(&str) -> bool) -> Option<Option<(u64, u64)>> {
+        let i = self.marks.iter().rposition(|(m, _)| m == id)?;
+        let to = self.marks[i].1;
+        let before = self.marks.range(..i).rev().find(|(m, _)| is_ask(m));
+        Some(match before {
+            Some(&(_, from)) => Some((from, to)),
+            None if self.dropped_marks => None,
+            None => Some((0, to)),
+        })
+    }
+
+    /// The newest `max_text` bytes of offsets `from..to`, as text (only
+    /// the retained ones).
+    fn text_between(&self, from: u64, to: u64, max_text: usize) -> String {
+        let len = self.bytes.len() as u64;
+        let end = len.saturating_sub(self.total - to);
+        let begin = end
+            .saturating_sub(to - from)
+            .max(end.saturating_sub(max_text as u64));
+        let bytes: Vec<u8> = (begin..end).map(|i| self.bytes[i as usize]).collect();
+        String::from_utf8_lossy(&bytes).into_owned()
+    }
+}
+
+/// What the engine child printed to its stderr for one ask (TLS-78).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AskStderr {
+    /// `bytes` bytes (0: nothing); `text` is their newest part.
+    Counted { bytes: u64, text: String },
+    /// The count is not known, and why.
+    Unknown(&'static str),
+    /// The ask reached no child (refused or failed before it was sent).
+    NotSent,
+}
+
+/// Why `ask`'s count cannot be known, given the running child's hello if
+/// it is still the child the ask went to.
+fn ask_unknown(ask: &LastAsk, child: Option<&Hello>) -> Option<&'static str> {
+    match child {
+        None => Some("the engine child stopped"),
+        Some(h) if !h.stderr_marks => {
+            Some("the engine child writes no stderr marks (an older build)")
+        }
+        Some(_) if ask.resent => Some("the ask was sent again to a new engine child"),
+        Some(_) => None,
+    }
+}
+
+/// The last ask sent: its id (as JSON text), the child it went to, and
+/// that child's stderr total when it was sent.
+struct LastAsk {
+    id: String,
+    instance: String,
+    /// Sent again to a new child (the first one's output is not counted).
+    resent: bool,
 }
 
 /// A started child.
@@ -412,6 +534,11 @@ pub struct EngineFront {
     /// The last call met the child's idle exit (its request was lost with
     /// it): the ask is sent once more to a new child.
     retired_mid_call: bool,
+    /// For [`EngineFront::last_ask_stderr`].
+    last_ask: Option<LastAsk>,
+    /// The newest asks' ids (as JSON text): an ask's window starts at the
+    /// previous ask's mark, not at a status or open response's.
+    ask_ids: VecDeque<String>,
 }
 
 /// A failure before an answer: its outcome and message.
@@ -444,6 +571,8 @@ impl EngineFront {
             last_failure: None,
             stats: FrontStats::default(),
             retired_mid_call: false,
+            last_ask: None,
+            ask_ids: VecDeque::new(),
         })
     }
 
@@ -549,6 +678,8 @@ impl EngineFront {
         params: AskParams,
         watch: &mut Watch<'_>,
     ) -> Result<Answer, Failure> {
+        // An ask that fails before it is sent must not report the last one's.
+        self.last_ask = None;
         self.ensure_running()?;
         let params = serde_json::to_value(params)
             .map_err(|e| (FailedOutcome::Protocol, format!("encoding the ask: {e}")))?;
@@ -646,24 +777,52 @@ impl EngineFront {
             .map_or(0, |r| r.stderr.lock().expect("stderr tail").total)
     }
 
-    /// What the running child wrote to stderr since [`Self::stderr_total`]
-    /// read `since`: (the bytes written, the newest of them as text, at most
-    /// `max_text` bytes), or `None` when it wrote nothing (TLS-78: a front end
-    /// reports an engine warning per call). A child started again in between
-    /// counts from zero.
+    /// What the child wrote to its stderr for the last ask (TLS-78): the
+    /// bytes between the child's previous stderr mark (or its start) and
+    /// this ask's mark, which it writes right before the answer. Both ends
+    /// are in the child's own stream order, so the count does not depend on
+    /// when the drain thread reads; it is a window on the child, so a line
+    /// its other threads print meanwhile, or while it was idle before the
+    /// ask, counts too. The mark is in the pipe before the answer is, so
+    /// this waits only for the drain thread to read it, at most `wait`. The
+    /// newest `max_text` bytes come as text.
     #[must_use]
-    pub fn stderr_since(&self, since: u64, max_text: usize) -> Option<(u64, String)> {
-        let r = self.running.as_ref()?;
-        let tail = r.stderr.lock().expect("stderr tail");
-        let since = if tail.total < since { 0 } else { since };
-        let written = tail.total - since;
-        if written == 0 {
-            return None;
+    pub fn last_ask_stderr(&self, max_text: usize, wait: Duration) -> AskStderr {
+        let Some(ask) = &self.last_ask else {
+            return AskStderr::NotSent;
+        };
+        let run = self
+            .running
+            .as_ref()
+            .filter(|r| r.hello.engine_instance_id == ask.instance);
+        if let Some(why) = ask_unknown(ask, run.map(|r| &r.hello)) {
+            return AskStderr::Unknown(why);
         }
-        let keep = (written.min(tail.bytes.len() as u64) as usize).min(max_text);
-        let start = tail.bytes.len() - keep;
-        let bytes: Vec<u8> = tail.bytes.iter().skip(start).copied().collect();
-        Some((written, String::from_utf8_lossy(&bytes).into_owned()))
+        let run = run.expect("checked by ask_unknown");
+        let deadline = Instant::now() + wait;
+        loop {
+            {
+                let tail = run.stderr.lock().expect("stderr tail");
+                match tail.window_of(&ask.id, |m| self.ask_ids.iter().any(|a| a == m)) {
+                    Some(Some((from, to))) => {
+                        return AskStderr::Counted {
+                            bytes: to - from,
+                            text: tail.text_between(from, to, max_text),
+                        };
+                    }
+                    Some(None) => {
+                        return AskStderr::Unknown(
+                            "the engine child's previous stderr mark was dropped",
+                        );
+                    }
+                    None => {}
+                }
+            }
+            if Instant::now() >= deadline {
+                return AskStderr::Unknown("the engine child's stderr mark did not arrive");
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
     }
 
     /// Leave the failed state (an explicit refresh).
@@ -765,6 +924,8 @@ impl EngineFront {
         self.last_failure.clone()
     }
 
+    /// Always a number: an id's JSON must fit a stderr mark
+    /// ([`super::STDERR_MARK_MAX`]).
     fn take_id(&mut self) -> serde_json::Value {
         let id = serde_json::json!(self.next_id);
         self.next_id += 1;
@@ -879,6 +1040,7 @@ impl EngineFront {
                 alsem_version: String::new(),
                 grammar_sha: String::new(),
                 pid: 0,
+                stderr_marks: false,
             },
             since,
             idle_notice: false,
@@ -962,6 +1124,19 @@ impl EngineFront {
         let run = self.running.as_mut().expect("a running child");
         if let Err(e) = run.stdin.write_all(&frame).and_then(|()| run.stdin.flush()) {
             return Err(self.died(format!("writing to the engine failed: {e}")));
+        }
+        if method == "session/ask" {
+            // Sent: its mark will come. A second send in one ask (to a
+            // new child after an idle exit) is a resend.
+            if self.ask_ids.len() == MARKS_KEPT {
+                self.ask_ids.pop_front();
+            }
+            self.ask_ids.push_back(id.to_string());
+            self.last_ask = Some(LastAsk {
+                id: id.to_string(),
+                instance: run.hello.engine_instance_id.clone(),
+                resent: self.last_ask.is_some(),
+            });
         }
         let deadline = timeout.map(|t| Instant::now() + t);
         let mut cancel_sent = false;
@@ -1129,13 +1304,7 @@ fn drain(mut pipe: impl Read, tail: &Mutex<StderrTail>) {
     loop {
         match pipe.read(&mut buf) {
             Ok(0) | Err(_) => return,
-            Ok(n) => {
-                let mut t = tail.lock().expect("stderr tail");
-                t.total += n as u64;
-                t.bytes.extend(&buf[..n]);
-                let over = t.bytes.len().saturating_sub(STDERR_RETAIN);
-                t.bytes.drain(..over);
-            }
+            Ok(n) => tail.lock().expect("stderr tail").take(&buf[..n]),
         }
     }
 }
@@ -1196,6 +1365,180 @@ mod tests {
             PROGRESS_METHOD,
             serde_json::json!({"id": request, "done": done}),
         ))
+    }
+
+    /// `chunks` read one after another into a fresh tail.
+    fn tail_of(chunks: &[&[u8]]) -> StderrTail {
+        let mut t = StderrTail::default();
+        chunks.iter().for_each(|c| t.take(c));
+        t
+    }
+
+    fn text(t: &StderrTail) -> String {
+        String::from_utf8_lossy(&t.bytes.iter().copied().collect::<Vec<_>>()).into_owned()
+    }
+
+    /// TLS-78: a mark (`\0alsem-mark <id>\n`) is taken out of the text and
+    /// recorded at the text's byte count, wherever it falls: split across
+    /// reads at every byte, in the middle of another thread's unfinished
+    /// line, or right after another mark. A NUL that does not start a mark,
+    /// or a mark-like run without its newline within [`STDERR_MARK_MAX`],
+    /// stays text.
+    ///
+    /// DISCRIMINATION (2026-11-16): see the TLS-78 commit message.
+    #[test]
+    fn stderr_marks_are_taken_out_and_counted_where_they_fall() {
+        let mark = |id: u64| super::super::stderr_mark(&serde_json::json!(id));
+        let mut stream = b"warn: half a li".to_vec();
+        stream.extend(mark(7));
+        stream.extend(b"ne\n");
+        stream.extend(mark(8));
+        stream.extend(mark(9));
+        // Every split of the stream into two reads gives the same tail.
+        for cut in 0..=stream.len() {
+            let t = tail_of(&[&stream[..cut], &stream[cut..]]);
+            assert_eq!(text(&t), "warn: half a line\n", "cut {cut}");
+            assert_eq!(t.total, 18, "cut {cut}");
+            assert_eq!(t.mark_of("7"), Some(15), "cut {cut}");
+            assert_eq!(t.mark_of("8"), Some(18), "cut {cut}");
+            assert_eq!(t.mark_of("9"), Some(18), "cut {cut}");
+            assert!(t.held.is_empty(), "cut {cut}");
+        }
+        let t = tail_of(&[b"a\0b", b"\0\0alsem-mark 3\n"]);
+        assert_eq!(text(&t), "a\0b\0");
+        assert_eq!(t.mark_of("3"), Some(4));
+        let long = [
+            b"\0alsem-mark ".as_slice(),
+            &[b'1'; super::super::STDERR_MARK_MAX],
+        ]
+        .concat();
+        let t = tail_of(&[&long, b"\n"]);
+        assert!(t.marks.is_empty());
+        assert_eq!(t.total as usize, long.len() + 1);
+    }
+
+    /// TLS-78, both directions of a version mix: an older child's hello (no
+    /// `stderrMarks`) reads as unmarked, so this front reports its count
+    /// unknown; an unmarked hello leaves the key out; and a hello with keys
+    /// this build does not know still reads (an older front meeting a newer
+    /// child ignores `stderrMarks`).
+    #[test]
+    fn hello_stderr_marks_across_versions() {
+        let old = serde_json::json!({"protocol": 1, "engineInstanceId": "i",
+            "alsemVersion": "v", "grammarSha": "g", "pid": 1});
+        let h: Hello = serde_json::from_value(old.clone()).unwrap();
+        assert!(!h.stderr_marks);
+        assert_eq!(serde_json::to_value(&h).unwrap(), old);
+        let mut new = old;
+        new["stderrMarks"] = serde_json::json!(true);
+        new["aKeyFromTheFuture"] = serde_json::json!(1);
+        let h: Hello = serde_json::from_value(new).unwrap();
+        assert!(h.stderr_marks);
+    }
+
+    /// TLS-78: an ask that fails before it reaches a child (here: the child
+    /// cannot start) reports its count unknown, never the previous ask's.
+    /// The previous ask is stated by assignment.
+    ///
+    /// DISCRIMINATION (2026-11-16): see the TLS-78 commit message.
+    #[test]
+    fn an_ask_that_never_reached_a_child_does_not_report_the_last_ones() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = FrontConfig::new(dir.path().join("no-such-engine"), dir.path());
+        let mut front = EngineFront::new(cfg).unwrap();
+        front.last_ask = Some(LastAsk {
+            id: "1".into(),
+            instance: "earlier".into(),
+            resent: false,
+        });
+        let _ = front.ask(AskParams::default());
+        assert!(front.hello().is_none(), "precondition: no child started");
+        assert_eq!(
+            front.last_ask_stderr(100, Duration::ZERO),
+            AskStderr::NotSent
+        );
+    }
+
+    /// TLS-78: an ask's window runs from the previous mark in the child's
+    /// stream (or its start) to its own mark: bytes the drain thread had not
+    /// read when the ask was sent still belong to it, and bytes after its
+    /// mark do not. No window before the mark arrives; none once the
+    /// previous mark was dropped.
+    ///
+    /// DISCRIMINATION (2026-11-16): see the TLS-78 commit message.
+    #[test]
+    fn an_asks_window_runs_from_the_previous_mark_to_its_own() {
+        let mark = |id: u64| super::super::stderr_mark(&serde_json::json!(id));
+        // Asks are 1, 3, 4; 2 is a status response between asks.
+        let asks = |m: &str| ["1", "3", "4"].contains(&m);
+        let mut stream = b"start\n".to_vec();
+        stream.extend(mark(1));
+        stream.extend(b"idle\n");
+        stream.extend(mark(2));
+        stream.extend(b"work\n");
+        stream.extend(mark(3));
+        stream.extend(b"after\n");
+        let t = tail_of(&[&stream]);
+        assert_eq!(t.window_of("1", asks), Some(Some((0, 6))));
+        assert_eq!(
+            t.window_of("3", asks),
+            Some(Some((6, 16))),
+            "the status mark does not cut the window"
+        );
+        assert_eq!(t.text_between(6, 16, 100), "idle\nwork\n");
+        assert_eq!(t.window_of("4", asks), None);
+        let mut many = Vec::new();
+        for id in 0..=MARKS_KEPT as u64 {
+            many.extend(mark(id));
+        }
+        let t = tail_of(&[&many]);
+        let all = |_: &str| true;
+        assert_eq!(t.window_of("1", all), Some(None), "mark 0 was dropped");
+        assert_eq!(t.window_of("2", all), Some(Some((0, 0))));
+    }
+
+    /// TLS-78: an ask's count is unknown when its child stopped (or was
+    /// replaced), writes no marks, or got the ask a second time.
+    ///
+    /// DISCRIMINATION (2026-11-16): see the TLS-78 commit message.
+    #[test]
+    fn an_asks_count_is_unknown_when_it_cannot_be_told() {
+        let ask = |resent| LastAsk {
+            id: "1".into(),
+            instance: "i".into(),
+            resent,
+        };
+        let hello = |marks| Hello {
+            protocol: 1,
+            engine_instance_id: "i".into(),
+            alsem_version: String::new(),
+            grammar_sha: String::new(),
+            pid: 1,
+            stderr_marks: marks,
+        };
+        assert_eq!(ask_unknown(&ask(false), Some(&hello(true))), None);
+        assert_eq!(
+            ask_unknown(&ask(false), None),
+            Some("the engine child stopped")
+        );
+        assert!(
+            ask_unknown(&ask(false), Some(&hello(false)))
+                .is_some_and(|w| w.contains("no stderr marks"))
+        );
+        assert!(
+            ask_unknown(&ask(true), Some(&hello(true))).is_some_and(|w| w.contains("sent again"))
+        );
+    }
+
+    /// TLS-78: the text between two offsets is only that range's newest
+    /// bytes, cut to `max_text`, from the retained part.
+    #[test]
+    fn stderr_text_between_two_offsets() {
+        let t = tail_of(&[b"0123456789"]);
+        assert_eq!(t.text_between(2, 6, 100), "2345");
+        assert_eq!(t.text_between(2, 6, 2), "45");
+        assert_eq!(t.text_between(6, 6, 100), "");
+        assert_eq!(t.text_between(0, 10, 100), "0123456789");
     }
 
     /// `stream` pumped into a fresh queue with these bounds, nobody taking.

@@ -4192,6 +4192,7 @@ mod engine {
         };
         let mut config = al_sem::engine::host::child::ServeConfig {
             idle_timeout,
+            stderr_marks: true,
             ..Default::default()
         };
         if let Some(ms) = h.idle_grace_ms {

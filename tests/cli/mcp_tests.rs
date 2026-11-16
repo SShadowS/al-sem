@@ -334,3 +334,51 @@ fn a_composite_answer_says_how_fresh_its_parts_were() {
     );
     assert!(s.finish().success());
 }
+
+/// TLS-78: a composite (`alsem_tests`) joins its parts' `engineStderr`: the
+/// `stray-stdout-on-ask` hook prints one line per engine ask, and the
+/// production and test parts each ask once, so the composite carries both
+/// lines, counted exactly. A composite whose parts printed nothing has none.
+///
+/// DISCRIMINATION (2026-11-16): see the TLS-78 commit message.
+#[test]
+fn a_composite_answer_carries_its_parts_engine_stderr() {
+    use crate::mcp_server::STRAY_LINE;
+    let t = repo();
+    let ws = t.path().join("App");
+    let q = json!({"routines": ["TU Core::Post"]});
+    let mut s = Server::ready(&ws, Some("stray-stdout-on-ask"));
+    let env = envelope(&s.call(1, "alsem_tests", q.clone()));
+    assert_eq!(env["kind"], "cli", "{env}");
+    let parts = 1 + env["revisions"]["tests"].as_array().map_or(0, Vec::len);
+    assert_eq!(
+        parts, 2,
+        "precondition: a production and a test part: {env}"
+    );
+    let e = &env["engineStderr"];
+    assert_eq!(e["bytes"], parts * STRAY_LINE.len(), "{env}");
+    assert_eq!(e["text"], STRAY_LINE.repeat(parts), "{env}");
+    assert!(s.finish().success());
+
+    let mut s = Server::ready(&ws, None);
+    let env = envelope(&s.call(1, "alsem_tests", q.clone()));
+    assert_eq!(env["kind"], "cli", "{env}");
+    assert!(env.get("engineStderr").is_none(), "{env}");
+    assert!(s.finish().success());
+
+    // A failed part still reports: its child died mid-ask, so its count is
+    // unknown, and the failed composite says so.
+    let mut s = Server::ready(&ws, Some("abort-on-ask"));
+    let env = envelope(&s.call(1, "alsem_tests", q));
+    assert_eq!(
+        env["kind"], "failed",
+        "precondition: the part failed: {env}"
+    );
+    assert!(
+        env["engineStderr"]["unknown"]
+            .as_str()
+            .is_some_and(|w| w.contains("stopped")),
+        "{env}"
+    );
+    let _ = s.finish();
+}
