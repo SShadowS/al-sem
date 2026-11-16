@@ -686,37 +686,110 @@ pub fn write_program(p: &ResolvedProgram, w: &mut dyn std::fmt::Write) -> std::f
     )
 }
 
-/// The cross-app model as text: every field a consumer reads (rows, calls,
-/// bindings sorted by call site, diagnostics, external targets, the event
-/// graph, the declared and loaded dependencies, the coverage, the friends).
-#[doc(hidden)]
-pub fn write_model(x: &CrossAppProgram, w: &mut dyn std::fmt::Write) -> std::fmt::Result {
+/// One part of the model's text: printed whole, or element by element (a long
+/// list; TLS-80: [`model_fingerprint`] hashes its elements in parallel).
+enum Part<'a> {
+    Text(Box<WritePart<'a>>),
+    Seq(&'static str, Box<dyn SeqItems + 'a>),
+}
+
+/// A part printed whole.
+type WritePart<'a> = dyn Fn(&mut dyn std::fmt::Write) -> std::fmt::Result + Sync + 'a;
+
+/// A list printed one `{:#?}` element at a time.
+trait SeqItems: Sync {
+    fn len(&self) -> usize;
+    fn write_item(&self, i: usize, w: &mut dyn std::fmt::Write) -> std::fmt::Result;
+}
+
+impl<T: std::fmt::Debug + Sync> SeqItems for &[T] {
+    fn len(&self) -> usize {
+        <[T]>::len(self)
+    }
+    fn write_item(&self, i: usize, w: &mut dyn std::fmt::Write) -> std::fmt::Result {
+        writeln!(w, "{:#?},", self[i])
+    }
+}
+
+impl<T: std::fmt::Debug + Sync> SeqItems for Vec<T> {
+    fn len(&self) -> usize {
+        Vec::len(self)
+    }
+    fn write_item(&self, i: usize, w: &mut dyn std::fmt::Write) -> std::fmt::Result {
+        writeln!(w, "{:#?},", self[i])
+    }
+}
+
+/// The cross-app model in parts, in a fixed order: the rows, calls, bindings
+/// sorted by call site, diagnostics, external targets, the event graph and
+/// census, the declared and loaded dependencies, the coverage and the friends
+/// (the fields the text has covered since before TLS-80; `ResolvedCalls`'
+/// `background_starts` and `loaded_only_tables` are not in it, TLS-81).
+/// [`write_model`] and [`model_fingerprint`] both read these, so they cover the
+/// same fields.
+fn model_parts(x: &CrossAppProgram) -> Vec<Part<'_>> {
     let m = &x.resolved;
     let mut bindings: Vec<_> = m.calls.upgraded_bindings.iter().collect();
     bindings.sort_by(|a, b| a.0.cmp(b.0));
     let mut friends: Vec<_> = x.friends.iter().collect();
     friends.sort();
-    writeln!(w, "{:#?}", m.workspace)?;
-    writeln!(w, "{:#?}", m.root_classifications)?;
-    writeln!(
-        w,
-        "{:?}\n{:?}\n{:?}\n{:?}",
-        m.primary_app, m.infra_diagnostics, m.workspace_diagnostics, m.dependency_diagnostics
-    )?;
-    writeln!(w, "{:#?}", m.calls.edges)?;
-    writeln!(w, "{bindings:#?}")?;
-    writeln!(
-        w,
-        "{:?}\n{:?}",
-        m.calls.diagnostics, m.calls.external_targets
-    )?;
-    writeln!(w, "{:#?}", m.events)?;
-    writeln!(w, "{:?}", m.page_ui_blocked)?;
-    writeln!(
-        w,
-        "{:?}\n{:?}\n{:?}\n{:?}\n{:?}",
-        x.declared_dependencies, x.dependency_apps, x.coverage, friends, x.loaded_apps
-    )
+    let ws = &m.workspace;
+    let ev = &m.events;
+    vec![
+        Part::Seq("workspace.objects", Box::new(&ws.objects[..])),
+        Part::Seq("workspace.tables", Box::new(&ws.tables[..])),
+        Part::Seq("workspace.routines", Box::new(&ws.routines[..])),
+        Part::Text(Box::new(move |w| {
+            writeln!(w, "{:#?}", m.root_classifications)
+        })),
+        Part::Text(Box::new(move |w| {
+            writeln!(
+                w,
+                "{:?}\n{:?}\n{:?}\n{:?}",
+                m.primary_app,
+                m.infra_diagnostics,
+                m.workspace_diagnostics,
+                m.dependency_diagnostics
+            )
+        })),
+        Part::Seq("calls.edges", Box::new(&m.calls.edges[..])),
+        Part::Seq("calls.upgraded_bindings", Box::new(bindings)),
+        Part::Text(Box::new(move |w| {
+            writeln!(
+                w,
+                "{:?}\n{:?}",
+                m.calls.diagnostics, m.calls.external_targets
+            )
+        })),
+        Part::Seq("events.graph.events", Box::new(&ev.graph.events[..])),
+        Part::Seq("events.graph.edges", Box::new(&ev.graph.edges[..])),
+        Part::Text(Box::new(move |w| writeln!(w, "{:#?}", ev.census))),
+        Part::Text(Box::new(move |w| writeln!(w, "{:?}", m.page_ui_blocked))),
+        Part::Text(Box::new(move |w| {
+            writeln!(
+                w,
+                "{:?}\n{:?}\n{:?}\n{:?}\n{:?}",
+                x.declared_dependencies, x.dependency_apps, x.coverage, friends, x.loaded_apps
+            )
+        })),
+    ]
+}
+
+/// The cross-app model as text ([`model_parts`], in order).
+#[doc(hidden)]
+pub fn write_model(x: &CrossAppProgram, w: &mut dyn std::fmt::Write) -> std::fmt::Result {
+    for part in model_parts(x) {
+        match part {
+            Part::Text(f) => f(w)?,
+            Part::Seq(name, items) => {
+                writeln!(w, "{name} [{}]", items.len())?;
+                for i in 0..items.len() {
+                    items.write_item(i, w)?;
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 /// A `fmt::Write` that hashes instead of storing (a CDO model's text runs to
@@ -730,13 +803,58 @@ impl std::fmt::Write for HashSink {
     }
 }
 
-/// blake3 of [`write_model`]'s text.
+/// Elements per hashed chunk of a long part (2 in tests, so a small fixture's
+/// lists span several chunks: review TLS-80, Fable).
+const FINGERPRINT_CHUNK: usize = if cfg!(test) { 2 } else { 512 };
+
+/// A fingerprint of [`write_model`]'s content: each of [`model_parts`] hashed
+/// on its own, a long list in parallel chunks of [`FINGERPRINT_CHUNK`] elements
+/// (each element's `{:#?}` text, as `write_model` prints it), and the part
+/// hashes combined in their fixed order with each list's name and length. Two
+/// fingerprints are equal only when every part's text is (TLS-80: hashing the
+/// one text on one thread took ~100 s per CDO model, twice per refresh step).
 #[doc(hidden)]
 #[must_use]
 pub fn model_fingerprint(x: &CrossAppProgram) -> String {
-    let mut h = HashSink(blake3::Hasher::new());
-    write_model(x, &mut h).expect("hashing cannot fail");
-    h.0.finalize().to_hex().to_string()
+    use rayon::prelude::*;
+    let text_hash = |f: &WritePart<'_>| {
+        let mut h = HashSink(blake3::Hasher::new());
+        f(&mut h).expect("hashing cannot fail");
+        h.0.finalize()
+    };
+    let parts = model_parts(x);
+    let hashes: Vec<blake3::Hash> = parts
+        .par_iter()
+        .map(|part| match part {
+            Part::Text(f) => text_hash(f.as_ref()),
+            Part::Seq(name, items) => {
+                let n = items.len();
+                let chunks: Vec<blake3::Hash> = (0..n.div_ceil(FINGERPRINT_CHUNK))
+                    .into_par_iter()
+                    .map(|c| {
+                        let mut h = HashSink(blake3::Hasher::new());
+                        for i in c * FINGERPRINT_CHUNK..((c + 1) * FINGERPRINT_CHUNK).min(n) {
+                            items.write_item(i, &mut h).expect("hashing cannot fail");
+                        }
+                        h.0.finalize()
+                    })
+                    .collect();
+                let mut h = blake3::Hasher::new();
+                h.update(name.as_bytes());
+                h.update(&(n as u64).to_le_bytes());
+                for c in &chunks {
+                    h.update(c.as_bytes());
+                }
+                h.finalize()
+            }
+        })
+        .collect();
+    let mut all = blake3::Hasher::new();
+    all.update(b"al-sem-model-fingerprint-v2");
+    for h in &hashes {
+        all.update(h.as_bytes());
+    }
+    all.finalize().to_hex().to_string()
 }
 
 /// The P inputs (§6.1): the root `app.json` bytes and every dependency's
