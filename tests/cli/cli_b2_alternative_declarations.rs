@@ -1748,3 +1748,94 @@ fn the_call_graph_carries_every_declarations_lines() {
         [("src/a.al".to_string(), 5), ("src/b.al".to_string(), 5)]
     );
 }
+
+// ---------------------------------------------------------------------------
+// ENG-103: a split routine's argument bindings name its own record variables
+// ---------------------------------------------------------------------------
+
+const USE_AND_TABLE: &str = r#"table 50484 "AD T"
+{
+    fields
+    {
+        field(1; K; Integer) { }
+    }
+}
+codeunit 50483 "AD Use"
+{
+    procedure Use(var R: Record "AD T")
+    begin
+    end;
+}
+"#;
+
+/// ENG-103: splitting a routine per declaration (`adopt_declaration_ids`) gives it a new id
+/// and moves every id that starts with the old one: its record variables' ids
+/// (`{id}/rv/{name}`) and its operations' `record_variable_id`. A call's argument binding
+/// holds the same kind of id (`source_record_variable_id`); it must move with them, or the
+/// binding names a variable the routine no longer has, and every reader matching a binding to
+/// its variable by id (`LoadPoint::is_variable`, `binding_source_table`, d37/d39) misreads it.
+/// Every shape (one file `#if`/`#else`, two files, each order), in the single-app model (the
+/// cross-app join runs the same rewrite).
+#[test]
+fn a_split_routines_argument_bindings_name_its_own_record_variables() {
+    use al_sem::program::model::program_calls::assemble_and_resolve_workspace_program;
+    let calls = sub_decl(
+        "AD Pub",
+        "OnX",
+        "",
+        "    var\n        U: Codeunit \"AD Use\";\n        R: Record \"AD T\";\n",
+        "        U.Use(R);\n",
+    );
+    let empty = sub_decl("AD Pub", "OnY", "", "", "");
+    for (shape, files) in decl_shapes(&calls, &empty) {
+        let mut all: Vec<(&str, &str)> = files
+            .iter()
+            .map(|(n, t)| (n.as_str(), t.as_str()))
+            .collect();
+        all.extend_from_slice(&[("p.al", PUB_XY), ("u.al", USE_AND_TABLE)]);
+        let t = workspace(&all);
+        let inputs =
+            al_sem::program::inputs::WorkspaceInputs::read(t.path(), &crate::fingerprint_needs());
+        let m = assemble_and_resolve_workspace_program(
+            &inputs,
+            false,
+            al_sem::program::model::workspace::AssemblyNeeds::BASE,
+        )
+        .expect("model");
+        let hs: Vec<_> = m
+            .workspace
+            .routines
+            .iter()
+            .filter(|r| r.name == "H")
+            .collect();
+        assert_eq!(hs.len(), 2, "{shape}: precondition: H split in two");
+        // sol: two rows are not yet a split; the ids must have been adopted per declaration.
+        assert_ne!(
+            hs[0].id, hs[1].id,
+            "{shape}: precondition: each declaration its own id"
+        );
+        for h in &hs {
+            assert!(
+                al_sem::program::model::workspace::split_origin(&h.stable_routine_id).is_some(),
+                "{shape}: precondition: {} is a split declaration's stable id",
+                h.stable_routine_id
+            );
+        }
+        let mut checked = 0;
+        for r in hs {
+            for b in r.call_sites.iter().flat_map(|c| &c.argument_bindings) {
+                let Some(id) = &b.source_record_variable_id else {
+                    continue;
+                };
+                checked += 1;
+                assert!(
+                    r.record_variables.iter().any(|v| v.id == *id),
+                    "{shape}: binding names {id}, not one of {}'s record variables {:?}",
+                    r.id,
+                    r.record_variables.iter().map(|v| &v.id).collect::<Vec<_>>()
+                );
+            }
+        }
+        assert_eq!(checked, 1, "{shape}: precondition: one binding to `R`");
+    }
+}
