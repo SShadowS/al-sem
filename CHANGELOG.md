@@ -28,6 +28,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   no procedure body (the run fails naming the edit, the file unchanged), and a file under
   `node_modules`, which the scan skips (the run fails with `noOpError` on the `body` step).
   Turning either guard off fails its test.
+- **On CDO** (a copy of the pinned baseline, no `--file`, `--verify`, both memory modes;
+  `tools/census-probe/runs-eng93/`): the harness now chooses a file itself
+  (`CDOABSAuthSettingsMgt.Codeunit.al`), the `body` step changes one file as `BodyOnly`, and every
+  step equals a cold build in both modes, with no `noOpError`: the body-only refresh path is
+  verified on CDO for the first time. The chosen file has no parameterless procedure, so there is
+  no `signature` step (nor was there in earlier CDO runs).
 
 ### Fixed (TLS-79: `cdo-speed`'s model-build reading resolves ~±8 %, not ~±20-50 %)
 
