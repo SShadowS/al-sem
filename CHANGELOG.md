@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (TLS-85: gdb and cargo-sweep in the kraken image; how to take a stack snapshot)
+
+- **What changed:** `.kraken/Dockerfile` installs two tools that were only installed live
+  before.
+  - `gdb` (apt): live stack snapshots of a running engine process, where samply cannot attach.
+    Owner request q-20261116T074643-71f6992c.
+  - `cargo-sweep` 0.8.0 (`cargo install --locked`, a late layer like samply's): what
+    `scripts/sweep-builds` runs. q-20261116T074635-f5e45cec.
+- **CLAUDE.md:**
+  - The kraken section says how to take a snapshot:
+    `gdb -p <pid> -batch -ex 'thread apply all bt'`.
+  - Attaching needs the host's `kernel.yama.ptrace_scope` at 0. Check it with
+    `cat /proc/sys/kernel/yama/ptrace_scope`. server1 was set to 0 host-side on 2026-11-16, and
+    the setting resets on a reboot, as `perf_event_paranoid` does.
+  - The `sweep-builds` line says the image has cargo-sweep.
+- **Checked:**
+  - The snapshot command attached to a live process in this container (`ptrace_scope` 0) and
+    printed every thread's stack.
+  - The image change takes effect at the next tentacle rebuild. It is checked by the Dockerfile
+    diff only; no image was built.
+
 ### Added (TLS-84: the tree-sitter CLI in the kraken image)
 
 - **What changed:** `.kraken/Dockerfile` downloads tree-sitter 0.27.0's release binary into

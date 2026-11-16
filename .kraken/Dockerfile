@@ -6,9 +6,10 @@ ARG DEBIAN_FRONTEND=noninteractive
 # commands and hooks call `python` (agentflow, run-timer); python3-psutil: scripts/bench_ab.py (no pip);
 # python3-pytest: scripts/agentflow/tests (no pip); libicu: .NET aborts without it;
 # time: GNU `/usr/bin/time -v` for peak-memory measurements (CLAUDE.md's `aldump --snapshot-memory`
-# recipe; the image lacked it, TLS-26)
+# recipe; the image lacked it, TLS-26); gdb: stack snapshots of a running engine process, where
+# samply cannot attach (TLS-85; attaching needs the host's kernel.yama.ptrace_scope 0, see CLAUDE.md)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      build-essential cmake pkg-config python3 python-is-python3 python3-psutil python3-pytest jq libicu-dev time \
+      build-essential cmake pkg-config python3 python-is-python3 python3-psutil python3-pytest jq libicu-dev time gdb \
       ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*
 # Rust as rust-toolchain.toml pins it, outside the cache volume (the base points CARGO_HOME at ~/.cache
@@ -51,6 +52,10 @@ RUN printf '%s\n' 'export PATH=/opt/cargo/bin:/opt/dotnet:/opt/al-tool:$PATH' 'e
 # base's ~/.cache one so the binary lands in /opt/cargo/bin.
 RUN CARGO_HOME=/opt/cargo cargo install samply --version 0.13.1 --locked \
     && rm -rf /opt/cargo/registry /opt/cargo/git && chown -R dev:dev /opt/cargo && samply --version
+# cargo-sweep: scripts/sweep-builds deletes build output unused for 7 days with it (TLS-85; installed
+# live as 0.8.0 before). Pinned version, same layout as samply's layer.
+RUN CARGO_HOME=/opt/cargo cargo install cargo-sweep --version 0.8.0 --locked \
+    && rm -rf /opt/cargo/registry /opt/cargo/git && chown -R dev:dev /opt/cargo && cargo-sweep sweep --version
 # tree-sitter CLI: `tree-sitter parse <file.al>` to check a grammar shape against real output (the
 # grammar-upgrade skill's rule; TLS-84: the image lacked it and agents built stand-ins). 0.27.0 is the
 # version tree-sitter-al generates with (tsal's image pins the same).
