@@ -441,7 +441,7 @@ fn lower_object(
     // Page controls (Page / PageExtension).
     let mut page_controls = Vec::new();
     if matches!(kind, ObjectKind::Page | ObjectKind::PageExtension) {
-        collect_page_controls(node, source, &mut page_controls);
+        collect_page_controls(node, source, &mut page_controls, issues);
     }
 
     // Table fields + keys (Table / TableExtension).
@@ -810,13 +810,26 @@ fn implements_clause_names(clause: RawNode, source: &str, out: &mut Vec<String>)
 /// Collect page `part` / `systempart` / `usercontrol` sections (name, kind, target),
 /// document order. Recurses the layout but NOT into routine bodies. Mirrors the legacy
 /// `extract_page_controls`.
-fn collect_page_controls(node: RawNode, source: &str, out: &mut Vec<crate::ir::PageControl>) {
+fn collect_page_controls(
+    node: RawNode,
+    source: &str,
+    out: &mut Vec<crate::ir::PageControl>,
+    issues: &mut Vec<SyntaxIssue>,
+) {
     // GRM-04 (grammar v5.3.0): a part/usercontrol header chosen per `#if` arm, the body
     // shared after `#endif`. Each arm holds its keyword, `name:` and `source:` in
-    // order; every arm's control is collected (a part that exists in some build is a
-    // target `CurrPage.<part>` may reach). A `chartpart` arm is skipped, as a plain
-    // `chartpart_section` is here.
+    // order; every arm's control is collected, in arm order. A consumer that looks a
+    // control up by name (`CurrPage.<part>`, `find_page_control`) takes the FIRST, so
+    // it reads the first arm's target only; the `SyntaxIssue` says so. A `chartpart`
+    // arm is skipped, as a plain `chartpart_section` is here, but still counted so
+    // the later arms keep their own name and target.
     if node.kind() == RawKind::PreprocSplitPart {
+        issues.push(SyntaxIssue {
+            message: "part or usercontrol header chosen per `#if` arm — every arm's control \
+                      is listed, and a lookup by name reads the first arm's target"
+                .to_string(),
+            origin: origin_of(node),
+        });
         let kinds = node.named_children().filter_map(|c| match c.kind() {
             RawKind::PartKeyword => Some(Some("part")),
             RawKind::SystempartKeyword => Some(Some("systempart")),
@@ -856,7 +869,7 @@ fn collect_page_controls(node: RawNode, source: &str, out: &mut Vec<crate::ir::P
         return;
     }
     for c in node.named_children() {
-        collect_page_controls(c, source, out);
+        collect_page_controls(c, source, out, issues);
     }
 }
 
@@ -887,7 +900,8 @@ fn collect_table_fields_keys(
                 collect_table_fields_keys(child, source, fields, keys, issues);
                 // GRM-04 (grammar v5.3.0): `preproc_split_table_field_open` may open the
                 // field in several arms (`#elif`/`#else`, or a nested group): the first
-                // arm's header is read ([`lower_field`]), so say so where arms differ.
+                // arm's header is read ([`lower_field`]), so say so where several arms open
+                // it (their headers may still be equal).
                 if child.kind() == RawKind::PreprocSplitTableFieldOpen
                     && (child.children_by_field(FieldName::Id).len() > 1
                         || child
@@ -949,6 +963,47 @@ fn key_members(key: RawNode, source: &str) -> Vec<String> {
 /// follows the grammar's inherited field entries into a nested group, so on a field
 /// whose first arm is a nested group it gives that group's first arm's `id`, `name`
 /// and `type`, the first-branch-wins header (measured on v5.3.0).
+/// A procedure modifier node's access (`local`/`internal`/`protected`); `None` is
+/// public.
+fn access_of(m: RawNode, source: &str) -> Option<String> {
+    match m.text(source).trim().to_ascii_lowercase().as_str() {
+        "local" => Some("local".to_string()),
+        "internal" => Some("internal".to_string()),
+        "protected" => Some("protected".to_string()),
+        _ => None,
+    }
+}
+
+/// The access a `preproc_conditional_modifier` group gives in EVERY build: each
+/// arm's modifier (a nested group's, read the same way), with a missing `#else`
+/// counted as an arm with none (public). When all arms agree, that access; when they
+/// differ, `None`, i.e. public, the widest, since `local`, `protected` and `internal`
+/// do not order into one widest restricted access (GRM-04).
+fn widest_access(group: RawNode, source: &str) -> Option<String> {
+    let mut arms: Vec<Option<String>> = Vec::new();
+    let mut cur: Option<Option<String>> = None;
+    let mut has_else = false;
+    for c in group.named_children() {
+        match c.kind() {
+            RawKind::PreprocIf => cur = Some(None),
+            RawKind::PreprocElif | RawKind::PreprocElse => {
+                arms.extend(cur.take());
+                has_else |= c.kind() == RawKind::PreprocElse;
+                cur = Some(None);
+            }
+            RawKind::PreprocEndif => arms.extend(cur.take()),
+            RawKind::ProcedureModifier => cur = Some(access_of(c, source)),
+            RawKind::PreprocConditionalModifier => cur = Some(widest_access(c, source)),
+            _ => {}
+        }
+    }
+    if !has_else {
+        arms.push(None);
+    }
+    let first = arms.first().cloned().flatten();
+    arms.iter().all(|a| *a == first).then_some(first).flatten()
+}
+
 fn field_bodies<'t>(node: RawNode<'t>, out: &mut Vec<RawNode<'t>>) {
     out.extend(node.children_by_field(FieldName::Body));
     for c in node.named_children() {
@@ -3079,38 +3134,31 @@ fn lower_routine<'t>(
         .map(|n| ident_text(n, source))
         .filter(|s| !s.is_empty());
 
+    // Access modifier (`local`/`internal`/`protected`); None = public / trigger.
     // GRM-04 (grammar v5.3.0): an `#if` group around the modifier
     // (`preproc_conditional_modifier`, an unfielded child like the return clause's
-    // group) leaves `procedure.modifier` absent; read the first arm this routine's
-    // build does not rule out, as the return clause does.
-    let conditional_modifier: Option<RawNode> = node
-        .named_children()
-        .find(|c| c.kind() == RawKind::PreprocConditionalModifier && in_arm(*c))
-        .and_then(|group| {
-            issues.push(SyntaxIssue {
-                message: "`#if` around a procedure's access modifier — the first arm \
-                          this routine's build does not rule out is read (the other \
-                          arms are not modelled)"
-                    .to_string(),
-                origin: origin_of(group),
-            });
-            let mut items = Vec::new();
-            conditional_list_arm(group, source, &mut Run::new(&header_guard), &mut items);
-            items
-                .into_iter()
-                .find(|c| c.kind() == RawKind::ProcedureModifier)
-        });
-    // Access modifier (`local`/`internal`/`protected`); None = public / trigger.
-    let access_modifier = arm_field(FieldName::Modifier)
-        .or(conditional_modifier)
-        .and_then(
-            |m| match m.text(source).trim().to_ascii_lowercase().as_str() {
-                "local" => Some("local".to_string()),
-                "internal" => Some("internal".to_string()),
-                "protected" => Some("protected".to_string()),
-                _ => None,
-            },
-        );
+    // group) leaves `procedure.modifier` absent. Its consumers read `local` as "every
+    // caller is in this object" (closed-world temp, d32), so the read is the WIDEST
+    // access a build can give ([`widest_access`]), never one arm's: one arm's
+    // `local` under another build's `public` would prove a closed world that build
+    // does not have (review GRM-04, Fable). Not part of `signature_varies` (ENG-80):
+    // that marks a call SIGNATURE one build may not have; the `SyntaxIssue` records it.
+    let access_modifier = match arm_field(FieldName::Modifier) {
+        Some(m) => access_of(m, source),
+        None => node
+            .named_children()
+            .find(|c| c.kind() == RawKind::PreprocConditionalModifier && in_arm(*c))
+            .and_then(|group| {
+                issues.push(SyntaxIssue {
+                    message: "`#if` around a procedure's access modifier — the widest \
+                              access a build gives is read (public when the arms differ \
+                              or one is empty)"
+                        .to_string(),
+                    origin: origin_of(group),
+                });
+                widest_access(group, source)
+            }),
+    };
 
     // Locals: var_section child(ren) of the routine (+ preproc-wrapped): this arm's
     // own (a split preamble's, at whichever level holds the arm) plus the shared
@@ -5040,7 +5088,15 @@ fn lower_arguments(
                 });
                 let mut arm = Vec::new();
                 conditional_list_arm(c, source, &mut Run::default(), &mut arm);
-                for a in arm.into_iter().filter(|n| !is_expr_continuation(n.kind())) {
+                // As in the list itself: a directive line or region marker in the arm is
+                // no argument (review GRM-04, lowerer-reviewer).
+                for a in arm.into_iter().filter(|n| {
+                    !is_expr_continuation(n.kind())
+                        && !matches!(
+                            n.kind(),
+                            RawKind::Pragma | RawKind::PreprocRegion | RawKind::PreprocEndregion
+                        )
+                }) {
                     args.push(lower_expr(a, ir, issues, source, depth + 1));
                 }
             }
