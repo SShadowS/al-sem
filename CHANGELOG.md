@@ -47,6 +47,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Left for ENG-99:** 80% of the record-variable rows are object globals copied into every routine
   of the object; the dependency rows' record-variable ids (30.9 MiB) are not shared yet.
 
+### Fixed (TLS-81: the model fingerprint covers background starts and loaded-only routines)
+
+- **The hole:** `model_parts` (`src/program/session/workspace.rs`), which feeds both
+  `write_model` and `model_fingerprint`, left out two fields of `ResolvedCalls`:
+  `background_starts` (what explain's and digest's `BACKGROUND_TASK` line names) and
+  `loaded_only_tables` (what prove states as a loaded-apps-only assumption). So the session
+  tests and `aldump --session-refresh --verify`, which compare a refreshed model with a cold
+  build by this text or fingerprint, could not see a refresh that got either one wrong.
+- **Now:** both are in the parts, sorted (one is a map, the other a set). And `model_parts`
+  destructures every struct it reads (`CrossAppProgram`, `Model`, `ModelEntities`,
+  `ResolvedCalls`, `ProgramEvents`, `EventGraph`) without `..`, so a field added to any of
+  them does not compile until it is placed in the parts. Every other field was already
+  covered.
+- No session fixture held a background start or a loaded-only routine, so the existing
+  session tests compared the two fields empty against empty (review, Fable). A new session
+  test, `background_starts_and_loaded_only_tables_follow_edits` (both memory modes), holds two
+  starts and a trigger-firing `RecordRef` write that no loaded table answers (preconditions
+  asserted on the cold model: 2 starts, 1 routine). A body edit retargets a start and a
+  declaration edit adds a second writer; each refresh equals a cold build, so the session
+  already rebuilds both fields correctly.
+- Pinned by `model_fingerprint_sees_background_starts_and_loaded_only_tables` (one more start,
+  or one more loaded-only routine, changes the fingerprint) and the session test above. Breaks,
+  each red then green restored: the starts' part emptied -> "one more background start" fails;
+  the loaded-only part printed as a constant -> "one more loaded-only routine" fails;
+  `loaded_only_tables` left out of the destructure -> the build fails with E0027; the
+  session's model entry (`cross_app_program_from_cached`) dropping one start -> the session
+  test fails in both modes at the body edit.
+- The model text's layout changed (two new parts), so a fingerprint from before this change
+  never equals one from after; nothing stores one across builds.
+
 ### Fixed (ENG-93: `aldump --session-refresh` edits CRLF files, and fails on an edit that reaches nothing)
 
 - **The hole.** The harness's `body` edit inserted a line after `"\n    begin\n"`, and its file
