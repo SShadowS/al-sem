@@ -3002,6 +3002,168 @@ struct EmitSource {
     changed: Option<HashSet<String>>,
 }
 
+/// ENG-107: the store's byte census (`tools/census-probe resident`). Read-only; no behaviour.
+#[doc(hidden)]
+impl ConeStore {
+    /// Counts taken before anything is dropped: the fact cones are SHARED between the SCC
+    /// records and the emit source (and their keys between cones), so a drop delta lands on
+    /// the last holder; these say what the parts hold, each allocation once.
+    pub fn census_lines(&self) -> Vec<String> {
+        use std::collections::HashSet as Set;
+        let mut out = Vec::new();
+        let records = self.sccs.len();
+        let (mut with_fact, mut with_cov) = (0usize, 0usize);
+        let mut facts: Vec<&Arc<ConeFacts>> = Vec::new();
+        let mut covs: Vec<&Arc<CoverageCone>> = Vec::new();
+        for r in self.sccs.values() {
+            if let Some(f) = &r.fact {
+                with_fact += 1;
+                facts.push(f);
+            }
+            if let Some(c) = &r.cov {
+                with_cov += 1;
+                covs.push(c);
+            }
+        }
+        let emit_cones: Vec<&Arc<ConeFacts>> = self
+            .emit
+            .iter()
+            .flat_map(|e| e.cones.iter().flatten())
+            .collect();
+        let mut seen = Set::new();
+        let distinct: Vec<&Arc<ConeFacts>> = facts
+            .iter()
+            .chain(emit_cones.iter())
+            .copied()
+            .filter(|f| seen.insert(Arc::as_ptr(f)))
+            .collect();
+        let only_emit = emit_cones
+            .iter()
+            .filter(|f| !facts.iter().any(|g| Arc::ptr_eq(f, g)))
+            .count();
+        let entries: usize = distinct.iter().map(|f| f.len()).sum();
+        let mut keys = Set::new();
+        let mut key_bytes = 0usize;
+        for f in &distinct {
+            for k in f.keys() {
+                if keys.insert(Arc::as_ptr(k) as *const u8) {
+                    key_bytes += k.len();
+                }
+            }
+        }
+        out.push(format!(
+            "    ENG-107 cones: {records} SCC records ({with_fact} with a fact cone, {with_cov} with a coverage cone); \
+             {} distinct fact cones ({} in the emit source, {only_emit} only there), {entries} entries \
+             (size_of key+entry {} B), {} distinct keys ({:.2} MiB text)",
+            distinct.len(),
+            emit_cones.len(),
+            size_of::<Arc<str>>() + size_of::<ConeFactEntry>(),
+            keys.len(),
+            key_bytes as f64 / 1048576.0
+        ));
+        let mut seen = Set::new();
+        let covs: Vec<&Arc<CoverageCone>> = covs
+            .into_iter()
+            .filter(|c| seen.insert(Arc::as_ptr(c)))
+            .collect();
+        let tally = |pick: fn(&CoverageCone) -> &Vec<String>| {
+            let (mut n, mut bytes, mut texts) = (0usize, 0usize, Set::new());
+            for c in &covs {
+                for s in pick(c) {
+                    n += 1;
+                    bytes += s.capacity();
+                    texts.insert(s.as_str());
+                }
+            }
+            let distinct_bytes: usize = texts.iter().map(|s| s.len()).sum();
+            (n, bytes, texts.len(), distinct_bytes)
+        };
+        for (what, (n, bytes, d, dbytes)) in [
+            ("reasons", tally(|c| &c.reasons)),
+            ("unknown targets", tally(|c| &c.unknown_targets)),
+        ] {
+            out.push(format!(
+                "      coverage {what}: {n} strings in {} distinct cones ({:.2} MiB heap), {d} distinct texts ({:.2} MiB)",
+                covs.len(),
+                bytes as f64 / 1048576.0,
+                dbytes as f64 / 1048576.0
+            ));
+        }
+        if let Some(e) = &self.emit {
+            let succ: usize = e.succ.iter().map(BTreeSet::len).sum();
+            let out_edges: usize = e.g.outgoing.values().map(Vec::len).sum();
+            out.push(format!(
+                "      emit: graph {} nodes, {out_edges} out-edges, {} unresolved; scc {} sccs; succ {} sets {succ} links; frames {}; changed {}",
+                e.g.nodes.len(),
+                e.g.unresolved_sources.len(),
+                e.scc.sccs.len(),
+                e.succ.len(),
+                e.frames.len(),
+                e.changed.as_ref().map_or(0, HashSet::len)
+            ));
+        }
+        out
+    }
+
+    /// The store's parts in the order a byte census drops them: the emit source's cones first
+    /// (so their delta is only the cones no SCC record holds), then the records' fact cones,
+    /// coverage cones and digests, then the emit source's graph, SCCs, `succ`, frames, `changed`.
+    pub fn into_census_parts(self) -> Vec<(&'static str, Box<dyn std::any::Any>)> {
+        let ConeStore { mut sccs, emit } = self;
+        // Taken out in place, so the map (its table and the digests) stays one part. The two
+        // lists are new allocations, exactly 8 B a record each (0.25 MiB on CDO), freed with
+        // their cones: the census's two record lines each carry that.
+        let (mut facts, mut covs) = (
+            Vec::with_capacity(sccs.len()),
+            Vec::with_capacity(sccs.len()),
+        );
+        for r in sccs.values_mut() {
+            let SccRecord {
+                input: _,
+                fingerprint: _,
+                fact,
+                cov,
+            } = r;
+            facts.push(fact.take());
+            covs.push(cov.take());
+        }
+        let mut parts: Vec<(&'static str, Box<dyn std::any::Any>)> = Vec::new();
+        let emit_rest = emit.map(|e| {
+            let EmitSource {
+                g,
+                scc,
+                succ,
+                cones,
+                frames,
+                changed,
+            } = e;
+            parts.push((
+                "cones.emit.cones (only the cones no record holds)",
+                Box::new(cones),
+            ));
+            (g, scc, succ, frames, changed)
+        });
+        parts.push(("cones.records.fact", Box::new(facts)));
+        parts.push(("cones.records.cov", Box::new(covs)));
+        parts.push(("cones.records.map (table + digests)", Box::new(sccs)));
+        if let Some((g, scc, succ, frames, changed)) = emit_rest {
+            let TypedEdgeGraph {
+                nodes,
+                outgoing,
+                unresolved_sources,
+            } = g;
+            parts.push(("cones.emit.g.nodes", Box::new(nodes)));
+            parts.push(("cones.emit.g.outgoing", Box::new(outgoing)));
+            parts.push(("cones.emit.g.unresolved", Box::new(unresolved_sources)));
+            parts.push(("cones.emit.scc", Box::new(scc)));
+            parts.push(("cones.emit.succ", Box::new(succ)));
+            parts.push(("cones.emit.frames", Box::new(frames)));
+            parts.push(("cones.emit.changed", Box::new(changed)));
+        }
+        parts
+    }
+}
+
 impl ConeStore {
     /// Whether `id`'s raw facts may have changed since the previous fold
     /// (see [`EmitSource::changed`]); true without one.
