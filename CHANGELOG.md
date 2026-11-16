@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (TLS-86: CPU profiles of `impact --diff`, `prove` and `explain` on CDO; five hot spots filed)
+
+- **The notes:** `docs/superpowers/notes/2026-11-16-tls86-profiles.md`. They hold samply profiles
+  (`scripts/profile`, master 9c1c099b, CDO `bc3ccb18`) of three commands: the gate's 699-root
+  `alsem impact --diff`, which took 536 s CPU, and a one-shot `prove` and `explain` of RunReportID,
+  81 and 76 s. They also record the ENG-98 analyze and fingerprint profiles and the ENG-100
+  fingerprint profile, with their binary commits.
+- **What each profile comes with.**
+  - The three new profiles: self and inclusive shares, the exact command, and the binary and
+    workspace SHAs.
+  - The ENG-98 and ENG-100 profiles: self shares and the command. The ENG-98 binaries are named
+    by SHA. The ENG-100 binary was a pre-rebase commit that no longer exists, so it cannot be
+    rebuilt by SHA.
+  - Every profile names its raw file on the persistent volume (`/work/.al-sem/profiles/2026-11-16-*`).
+    Raw profiles stay out of git: they go stale with every engine change.
+- **Both readers** (`samply-shares.py`, `samply-chains.py`) now refuse a profile without CPU
+  deltas, instead of counting samples as CPU. They also count CPU on a sample without a stack in
+  the total. No total in the notes moved: the five profiles have no such samples.
+- **Added `tools/census-probe/runs-eng84/samply-chains.py`:** the frames above any leaf in a
+  samply profile (ENG-98's SipHash reader with the needle made an argument).
+- **Found:**
+  - The two unnamed libc hot spots, by their code: `fun_1972e0` is AVX2 `memcmp` and
+    `fun_197a40` is `memcpy`.
+  - memcmp is 11.3 % of impact's CPU and 7-8 % of prove's and explain's. Its top callers in
+    impact are `ordering_inter::reconstruct_call_chains` and `compute_ordering`.
+  - SipHash is 10.3 % of impact and 5.0 % of prove. `walk_multi` is 21.5 % of impact inclusive.
+  - Tree-cursor stepping is 6.5 % of prove. The scans beside the lowering walk are about 1.7
+    points of the 3.7 % sibling-step share.
+  - Allocator page set-up and zeroing is 6.8 % of prove, and memcpy 3.3 %.
+  - A caution for reading samply: inline labels on a non-leaf frame can name the neighbouring
+    code. `digest_one_root`'s call-site frame looked like 27 % of string equality under one map
+    lookup, but its real callees are `reconstruct_witness_paths` and `compute_ordering`.
+- **Filed:** ENG-116 to ENG-121, one per hot spot of 3 % or more.
+
 ### Changed (ENG-106: `alsem fingerprint` builds its root blocks on 2 workers, wall x0.55 on CDO, CPU not higher)
 
 - **What changed** (`src/engine/l5/fingerprint_query.rs`, `digest.rs`, `fingerprint_cli.rs`,
