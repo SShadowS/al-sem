@@ -63,15 +63,16 @@ pub fn fold_identifier(s: &str) -> String {
 
 /// Case-insensitive AL identifier equality — the allocation-free comparison path
 /// mirroring `str::eq_ignore_ascii_case`'s role. ASCII fast path (both inputs ASCII):
-/// identical to `a.eq_ignore_ascii_case(b)`, no allocation. Mixed/non-ASCII path: folds
-/// both sides via [`fold_identifier`] and compares (the only case where this allocates —
-/// real AL source is overwhelmingly ASCII, so this path is rarely taken).
+/// identical to `a.eq_ignore_ascii_case(b)`. Mixed/non-ASCII path: compares the two folds
+/// char by char, which equals `fold_identifier(a) == fold_identifier(b)` because the fold
+/// maps every char to exactly one char. Never allocates (ENG-84: folding both sides into
+/// `String`s here was ~1.2% of the CDO model build's CPU, Danish names in scope lookups).
 #[inline]
 pub fn eq_fold_identifier(a: &str, b: &str) -> bool {
     if a.is_ascii() && b.is_ascii() {
         a.eq_ignore_ascii_case(b)
     } else {
-        fold_identifier(a) == fold_identifier(b)
+        a.chars().map(fold_char).eq(b.chars().map(fold_char))
     }
 }
 
@@ -250,6 +251,26 @@ mod tests {
             assert!(eq_fold_identifier(a, b), "{a:?} vs {b:?} should fold-equal");
         }
         assert!(!eq_fold_identifier("Løbenr", "Æble"));
+    }
+
+    /// ENG-84: the allocation-free char-by-char path answers exactly what comparing the two
+    /// folded strings answers, for every pair: prefixes, mixed ASCII/non-ASCII, a char whose
+    /// fold changes its byte length (`ẞ` 3 bytes → `ß` 2), and `İ` (`to_lowercase` is 2 chars).
+    #[test]
+    fn eq_fold_matches_folded_string_equality_on_every_pair() {
+        let samples = [
+            "", "a", "A", "Lobenr", "Løbenr", "LØBENR", "Løb", "Løbenrx", "Æble", "æble", "ẞ", "ß",
+            "SS", "İ", "i", "I", "ı", "Größe", "GRÖSSE", "Σ", "σ", "ς",
+        ];
+        for a in samples {
+            for b in samples {
+                assert_eq!(
+                    eq_fold_identifier(a, b),
+                    fold_identifier(a) == fold_identifier(b),
+                    "{a:?} vs {b:?}"
+                );
+            }
+        }
     }
 
     #[test]

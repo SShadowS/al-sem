@@ -42,7 +42,14 @@ pub struct NodeSet<T> {
     own: Vec<T>,
     /// Merged position of each `own` element, ascending (one per element).
     own_pos: Vec<usize>,
+    /// ENG-84: the key's hash → its merged position, built on the first [`NodeSet::find`]
+    /// and dropped by every mutation. `AMBIGUOUS` when several elements share the hash (a
+    /// duplicate key or a hash collision): those keys take the binary search.
+    index: std::sync::OnceLock<crate::fxhash::FxHashMap<u64, u32>>,
 }
+
+/// An index entry shared by several elements ([`NodeSet::find`] falls back to the search).
+const AMBIGUOUS: u32 = u32::MAX;
 
 impl<T> Default for NodeSet<T> {
     fn default() -> Self {
@@ -50,6 +57,7 @@ impl<T> Default for NodeSet<T> {
             shared: Arc::new(Vec::new()),
             own: Vec::new(),
             own_pos: Vec::new(),
+            index: std::sync::OnceLock::new(),
         }
     }
 }
@@ -63,6 +71,7 @@ impl<T: SortKey> NodeSet<T> {
             shared,
             own,
             own_pos: Vec::new(),
+            index: std::sync::OnceLock::new(),
         };
         set.reindex();
         set
@@ -81,6 +90,8 @@ impl<T: SortKey> NodeSet<T> {
     /// Recompute `own_pos`: an own element lands after every shared element
     /// whose key is <= its own (shared first on ties).
     fn reindex(&mut self) {
+        // Every mutation comes through here or drops the key index itself.
+        self.index = std::sync::OnceLock::new();
         let mut pos = Vec::with_capacity(self.own.len());
         let mut k = 0;
         for (i, o) in self.own.iter().enumerate() {
@@ -141,6 +152,46 @@ impl<T: SortKey> NodeSet<T> {
             Ordering::Equal => Ok(base),
             Ordering::Less => Err(base + 1),
             Ordering::Greater => Err(base),
+        }
+    }
+
+    /// The merged position of the element whose sort key is `key`: exactly what
+    /// `binary_search_by(|e| e.sort_key().cmp(key)).ok()` returns, but from a hash index for a
+    /// key held by one element (nearly all of them). A key held by several elements, or whose
+    /// hash another key shares, takes the binary search, so the same element of a run of equal
+    /// keys is returned as before (ENG-84: the resolver's routine lookups by id were 2-4% of
+    /// the CDO model build's CPU, string comparisons in a binary search).
+    pub fn find(&self, key: &T::Key) -> Option<usize>
+    where
+        T::Key: std::hash::Hash,
+    {
+        use std::hash::BuildHasher;
+        if self.len() >= AMBIGUOUS as usize {
+            // Positions would not fit the index (sol, ENG-84); far beyond any real graph.
+            return self.binary_search_by(|e| e.sort_key().cmp(key)).ok();
+        }
+        let hash = |k: &T::Key| crate::fxhash::FxBuildHasher::default().hash_one(k);
+        let index = self.index.get_or_init(|| {
+            let mut index =
+                crate::fxhash::FxHashMap::with_capacity_and_hasher(self.len(), Default::default());
+            for (pos, e) in self.iter().enumerate() {
+                let pos = u32::try_from(pos).expect("under 4 G nodes");
+                index
+                    .entry(hash(e.sort_key()))
+                    .and_modify(|p| *p = AMBIGUOUS)
+                    .or_insert(pos);
+            }
+            index
+        });
+        match index.get(&hash(key)) {
+            // A held key's hash is always in the index.
+            None => None,
+            Some(&AMBIGUOUS) => self.binary_search_by(|e| e.sort_key().cmp(key)).ok(),
+            // The one element with this hash; another key's hash means `key` is not held.
+            Some(&pos) => {
+                let pos = pos as usize;
+                (self[pos].sort_key() == key).then_some(pos)
+            }
         }
     }
 
@@ -209,6 +260,8 @@ impl<T: SortKey> Index<usize> for NodeSet<T> {
 /// tests.
 impl<T: SortKey + Clone> IndexMut<usize> for NodeSet<T> {
     fn index_mut(&mut self, i: usize) -> &mut T {
+        // The caller may change the element's key.
+        self.index = std::sync::OnceLock::new();
         match self.own_pos.binary_search(&i) {
             Ok(j) => &mut self.own[j],
             Err(j) => &mut Arc::make_mut(&mut self.shared)[i - j],
@@ -221,6 +274,7 @@ impl<T: SortKey + Clone> NodeSet<T> {
     /// `sort_by` afterwards, as with a `Vec`. Copies the shared part
     /// (copy-on-write).
     pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut T> {
+        self.index = std::sync::OnceLock::new();
         Arc::make_mut(&mut self.shared)
             .iter_mut()
             .chain(self.own.iter_mut())
@@ -229,6 +283,7 @@ impl<T: SortKey + Clone> NodeSet<T> {
 
 impl<T> NodeSet<T> {
     pub fn clear(&mut self) {
+        self.index = std::sync::OnceLock::new();
         self.shared = Arc::new(Vec::new());
         self.own.clear();
         self.own_pos.clear();
@@ -480,5 +535,101 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// ENG-84: `find` returns exactly `binary_search_by(..).ok()` — on ties (several elements
+    /// share a key: the binary search's pick, not the first), on keys absent from the set,
+    /// and on hash collisions (`Tens` hashes only the tens digit: the probe key 12 collides
+    /// with the held 11, and the held 31 and 33 collide with each other).
+    #[test]
+    fn find_matches_binary_search() {
+        let shapes: Vec<(Vec<N>, Vec<N>)> = vec![
+            (vec![N(1, "s"), N(2, "real")], vec![N(2, "synthetic")]),
+            (
+                vec![N(2, "s"), N(2, "s"), N(2, "s"), N(5, "s")],
+                vec![N(2, "o"), N(2, "o"), N(2, "o")],
+            ),
+            (
+                vec![N(0, "s"), N(1, "s"), N(1, "s"), N(6, "s"), N(6, "s")],
+                vec![N(1, "o"), N(6, "o"), N(6, "o"), N(6, "o"), N(8, "o")],
+            ),
+        ];
+        for (shared, own) in shapes {
+            let set = NodeSet::layered(Arc::new(shared), own);
+            for key in 0..10u32 {
+                assert_eq!(
+                    set.find(&key),
+                    set.binary_search_by(|n| n.0.cmp(&key)).ok(),
+                    "key {key} over {:?}",
+                    flat(&set)
+                );
+            }
+        }
+
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+        struct Tens(u32);
+        impl std::hash::Hash for Tens {
+            fn hash<H: std::hash::Hasher>(&self, h: &mut H) {
+                (self.0 / 10).hash(h);
+            }
+        }
+        #[derive(Debug, Clone)]
+        struct C(Tens);
+        impl SortKey for C {
+            type Key = Tens;
+            fn sort_key(&self) -> &Tens {
+                &self.0
+            }
+        }
+        // 11 is alone in its hash; 31 and 33 share one.
+        let set = NodeSet::layered(
+            Arc::new(vec![C(Tens(11)), C(Tens(31))]),
+            vec![C(Tens(25)), C(Tens(33))],
+        );
+        for key in 0..40u32 {
+            assert_eq!(
+                set.find(&Tens(key)),
+                set.binary_search_by(|c| c.0.cmp(&Tens(key))).ok(),
+                "key {key}"
+            );
+        }
+    }
+
+    /// ENG-84: every mutation drops the index `find` built, so a key added or moved after a
+    /// `find` is found where it now is.
+    #[test]
+    fn find_sees_every_mutation() {
+        let mut set: NodeSet<N> = vec![N(1, "a"), N(4, "a")].into();
+        assert_eq!(set.find(&4), Some(1));
+        set.push(N(2, "b"));
+        set.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(set.find(&2), Some(1));
+        assert_eq!(set.find(&4), Some(2));
+        set[0].0 = 9;
+        set.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(flat(&set), vec![N(2, "b"), N(4, "a"), N(9, "a")]);
+        assert_eq!(set.find(&9), Some(2));
+        assert_eq!(set.find(&1), None);
+        set.clear();
+        assert_eq!(set.find(&2), None);
+    }
+
+    /// ENG-84 (Fable): a key changed in place through `IndexMut` or `iter_mut`, keeping the set
+    /// sorted so no `sort_by` (and no `reindex`) follows, is found under its new key and not
+    /// under its old one: those two drop the index themselves.
+    #[test]
+    fn find_sees_in_place_key_changes() {
+        let mut set = NodeSet::layered(Arc::new(vec![N(4, "s")]), vec![N(1, "o"), N(7, "o")]);
+        assert_eq!(set.find(&1), Some(0));
+        set[0].0 = 0; // own element, order stays sorted
+        assert_eq!(set.find(&0), Some(0));
+        assert_eq!(set.find(&1), None);
+        assert_eq!(set.find(&4), Some(1));
+        for n in set.iter_mut() {
+            n.0 += 10; // every key moves, order kept
+        }
+        assert_eq!(set.find(&14), Some(1));
+        assert_eq!(set.find(&4), None);
+        assert_eq!(set.find(&17), Some(2));
     }
 }

@@ -106,6 +106,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Not done: the linker's folding of identical functions into one symbol (ENG-84's other
   complaint) is not switched off here.
 
+### Changed (ENG-84: resolution CPU — id lookups by a hash index, folding compares without allocating)
+
+- **Scope from a profile.** A samply profile of one resident CDO model build, every thread, with
+  frame pointers (`docs/superpowers/notes/2026-11-15-eng84-samply-profile.md`): the dependency
+  closure (B1) 1.0% and the resolver's read recorder (B7) 2.55% were dropped; the routine and
+  object lookups by id (a binary search comparing id strings, ~2.5% self), identifier folding
+  (B2, ~3.3% self with `eq_fold_identifier`) and the remaining SipHash maps (~2.4%) were kept.
+- **The change.**
+  - `NodeSet::find` (`program::node_set`): a hash index from a node's id to its position, built on
+    the first lookup and dropped by every change to the set. An id held by several nodes, or whose
+    hash another id shares, takes the binary search, so every answer equals
+    `binary_search_by(..).ok()` (on a tie the binary search picks a synthetic publisher, not the
+    first copy). The routine and object lookups by id use it (`reads`, `graph`, `index`,
+    `interface_holder`).
+  - `eq_fold_identifier` compares the two folds char by char instead of building two `String`s
+    (the fold maps each char to exactly one char, so the answer is the same); a Danish name in a
+    scope lookup folded both sides on every comparison.
+  - `resolve_file_obligations` builds the object-level names that shadow a parens-less call (the
+    object's globals, an extension base's `protected var`s) once per object, not once per routine.
+  - The extractor's name sets (`resolve::extract`) and those shadow sets use `FxHashSet`; they are
+    only looked up or merged, never iterated into output.
+- **Guards that had no test.** A page global shadowing a same-named source-table procedure in a
+  parens-less read (`object_global_shadows_a_parenless_call`), and a base page's `protected var`
+  doing the same in a page extension (`base_protected_var_shadows_a_parenless_call_in_an_extension`):
+  removing the object-level shadow check left the resolver tests and the ENG-26 suite green.
+  `find_sees_in_place_key_changes` pins the index reset in `IndexMut` and `iter_mut`.
+- **Reviews.** Fable and sol found no change in output. Fixed from them: the base-object lookup
+  runs only for an object with routines, as before (on a dependency file it is a recorded read,
+  and a routine-less extension made none; not pinned by a test, since more reads only cause a safe
+  re-resolution); `find` takes the binary search for a set of 4 G elements or more (positions are
+  `u32`); stale "binary search" comments.
+- **Same answers.** The task gate, `scripts/cdo-before-after e708f1f6` (fingerprint, analyze at both
+  scopes, the call-graph stats: nothing moved), and `aldump --session-refresh --verify` on a CDO
+  copy in both memory modes (all 12 steps equal to a cold build each; but on CDO the `body` step
+  edits nothing, the file being CRLF, so the body-only refresh path stays unverified there: ENG-93).
+- **Refresh speed.** Six alternating passes of the session refresh (default mode, master `e708f1f6`
+  against ENG-84, calm-admitted): every step's `programMs` head over base at most x0.88 (geometric
+  mean; Declaration steps x0.67-x0.73). One pass ran under load; without it the Declaration step
+  read x0.56-x1.02, so the size of the gain is not settled.
+- **Where the CPU moved** (samply over one resident CDO model build, the before-profile's probe,
+  master `7f35cfa9` and ENG-84 profiled twice each, in both orders; inclusive shares of the build's
+  CPU): the id lookups 4.2% / 3.9% → 0.8% / 0.7%, `eq_fold_identifier` 1.7% / 1.6% → 0.2% / 0.2%,
+  the resolver (`resolve_recorded`) 20.4% / 19.1% → 16.6% / 16.2%. **Not moved:** SipHash 1.7-2.2%
+  → 2.3-2.4% (the sets switched to `FxHashSet` were not where it sits) and `fold_identifier` (its
+  callers store the folded name). Total CPU per build is within noise (61-69 s on both sides).
+- **cdo-speed** (head over master `7f35cfa9`): PASS, model build CPU x0.998 / wall x0.981, round
+  total x0.957, peak memory x1.014 (+123 MiB; the same binary read 7,895-8,136 MiB across ENG-97's
+  runs). It resolves about ±20% on the build, so it shows ENG-84 is not slower, not its gain.
+- Artifacts: `tools/census-probe/runs-eng84/` (`after-probe-*.out`, `refresh-ab.tsv`,
+  `cdo-speed-verdict.txt`, `cdo-speed.json`).
+
 ### Fixed (TLS-76: `cdo-speed` judges load by CPU pressure, and runs labelled when it is high)
 
 - **The hole:** TLS-65's wait for a 1-min load of at most max(6, cores / 3) stopped every

@@ -1,0 +1,116 @@
+CPU total 67.3 s (thread CPU deltas, us)
+
+== top 40 self
+  4.07%  ts_tree_cursor_goto_sibling_internal
+  4.01%  ts_tree_cursor_goto_first_child_internal
+  3.02%  fun_19b8a0
+  2.70%  ts_lex
+  2.67%  mi_page_block_at
+  2.62%  fun_197a40
+  2.39%  write<core::hash::sip::Sip13Rounds>
+  2.33%  ts_stack_version_count
+  2.32%  ts_lexer__advance
+  2.16%  mi_page_malloc_zero
+  1.86%  fun_1972e0
+  1.81%  ts_subtree_release
+  1.74%  binary_search_by<al_sem::program::node_extract::RoutineNode, al_sem::program::resolve::interface_holder::source_codeunits::{closure_env#0}>
+  1.72%  eq_fold_identifier
+  1.58%  fold_identifier
+  1.57%  mi_free
+  1.55%  ts_language_table_entry
+  1.47%  stack__iter
+  1.47%  stack_node_new
+  1.39%  len<al_sem::program::node_extract::ObjectNode, alloc::alloc::Global>
+  1.38%  ts_tree_cursor_current_node
+  1.35%  partition_point<al_sem::program::node_extract::RoutineNode, al_sem::program::node_set::{impl#3}::run_by::{closure#0}::{closure_env#0}<al_sem
+  1.33%  try_from_raw
+  1.32%  core::str::converts::from_utf8
+  1.27%  ts_parser__lex
+  1.14%  ts_subtree_summarize_children
+  1.02%  ts_language_field_id_for_name
+  0.89%  contains_key<(usize, &str), (), core::hash::BuildHasherDefault<al_sem::fxhash::FxHasher>, alloc::alloc::Global, (usize, &str)>
+  0.83%  mi_theap_malloc_aligned
+  0.82%  ts_node_start_point
+  0.80%  fun_b3c60
+  0.80%  fun_19a7c0
+  0.74%  ts_node_child_by_field_id
+  0.73%  binary_search_by<al_sem::program::node_extract::RoutineNode, core::slice::{impl#0}::partition_point::{closure_env#0}<al_sem::program::node_e
+  0.72%  ts_subtree_retain
+  0.65%  ts_lex_keywords
+  0.62%  fun_b23c0
+  0.62%  insert<alloc::string::String, (), core::hash::BuildHasherDefault<al_sem::fxhash::FxHasher>, alloc::alloc::Global>
+  0.62%  fun_b22c0
+  0.60%  skip_to_escape
+
+== top 60 inclusive
+ 93.86%  std::sys::backtrace::__rust_begin_short_backtrace
+ 78.85%  {closure#0}
+ 77.08%  run
+ 77.00%  rayon_core::registry::WorkerThread::wait_until_cold
+ 77.00%  wait_until_cold
+ 77.00%  rayon::iter::plumbing::bridge_producer_consumer::helper
+ 76.95%  <rayon_core::job::StackJob<L,F,R> as rayon_core::job::Job>::execute
+ 76.93%  rayon::iter::plumbing::Folder::consume_iter
+ 76.87%  rayon_core::registry::ThreadBuilder::run
+ 76.87%  main_loop
+ 76.82%  fun_a3ac0
+ 76.81%  _rust_begin_short_backtrace<rayon_core::registry::{impl#2}::spawn::{closure_env#0}, ()>
+ 76.80%  call_once<std::thread::lifecycle::spawn_unchecked::{closure_env#1}<rayon_core::registry::{impl#2}::spawn::{closure_env#0}, ()>, ()>
+ 76.80%  {closure#0}<rayon_core::registry::{impl#2}::spawn::{closure_env#0}, ()>
+ 76.80%  catch_unwind<core::panic::unwind_safe::AssertUnwindSafe<std::thread::lifecycle::spawn_unchecked::{closure#1}::{closure_env#0}<rayon_core::re
+ 76.80%  core::ops::function::FnOnce::call_once{{vtable.shim}}
+ 76.80%  catch_unwind<(), core::panic::unwind_safe::AssertUnwindSafe<std::thread::lifecycle::spawn_unchecked::{closure#1}::{closure_env#0}<rayon_core
+ 76.80%  {closure#1}<rayon_core::registry::{impl#2}::spawn::{closure_env#0}, ()>
+ 76.80%  call_once<(), std::thread::lifecycle::spawn_unchecked::{closure#1}::{closure_env#0}<rayon_core::registry::{impl#2}::spawn::{closure_env#0}, 
+ 76.80%  do_call<core::panic::unwind_safe::AssertUnwindSafe<std::thread::lifecycle::spawn_unchecked::{closure#1}::{closure_env#0}<rayon_core::registr
+ 76.80%  rayon_core::join::join_context::{{closure}}
+ 76.80%  fun_13738e
+ 76.78%  <std::sys::thread::unix::Thread>::new::thread_start
+ 76.78%  <alloc::boxed::Box<dyn core::ops::function::FnOnce<(), Output = ()> + core::marker::Send> as core::ops::function::FnOnce<()>>::call_once
+ 75.64%  core::ops::function::impls::<impl core::ops::function::FnMut<A> for &F>::call_mut
+ 54.29%  al_sem::snapshot::parse::parse_file
+ 54.29%  parse_file
+ 54.28%  parse
+ 54.28%  al_syntax::parse::parse
+ 52.78%  consume_iter<&al_sem::snapshot::embedded::SourceFile, (al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::Pars
+ 52.78%  helper<rayon::slice::IterProducer<al_sem::snapshot::embedded::SourceFile>, rayon::iter::map::MapConsumer<rayon::iter::collect::consumer::Col
+ 52.78%  fold_with<rayon::slice::IterProducer<al_sem::snapshot::embedded::SourceFile>, rayon::iter::map::MapFolder<rayon::iter::collect::consumer::Co
+ 52.74%  call_once<(&al_sem::snapshot::embedded::SourceFile), &al_sem::program::dep_summary::parse_for_build_observed::{closure#1}::{closure_env#0}>
+ 52.74%  map<&al_sem::snapshot::embedded::SourceFile, (al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::ParsedFile>),
+ 52.74%  consume_iter<rayon::iter::collect::consumer::CollectResult<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse:
+ 52.74%  next<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::ParsedFile>), core::slice::iter::Iter<al_sem::snapsho
+ 52.74%  call_mut<(&al_sem::snapshot::embedded::SourceFile), al_sem::program::dep_summary::parse_for_build_observed::{closure#1}::{closure_env#0}>
+ 52.60%  call_once<rayon::iter::collect::consumer::CollectResult<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::Pa
+ 52.60%  catch_unwind<core::panic::unwind_safe::AssertUnwindSafe<rayon_core::join::join_context::call_a::{closure_env#0}<rayon::iter::collect::consum
+ 52.60%  {closure#0}<rayon::slice::IterProducer<al_sem::snapshot::embedded::SourceFile>, rayon::iter::map::MapConsumer<rayon::iter::collect::consumer
+ 52.60%  {closure#0}<rayon::iter::plumbing::bridge_producer_consumer::helper::{closure_env#0}<rayon::slice::IterProducer<al_sem::snapshot::embedded::
+ 52.60%  halt_unwinding<rayon_core::join::join_context::call_a::{closure_env#0}<rayon::iter::collect::consumer::CollectResult<(al_sem::program::pack:
+ 52.60%  {closure#0}<rayon::iter::collect::consumer::CollectResult<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::
+ 52.60%  catch_unwind<rayon::iter::collect::consumer::CollectResult<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse:
+ 52.60%  do_call<core::panic::unwind_safe::AssertUnwindSafe<rayon_core::join::join_context::call_a::{closure_env#0}<rayon::iter::collect::consumer::C
+ 50.89%  {closure#0}<rayon::iter::collect::consumer::CollectResult<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::
+ 50.89%  call_once<rayon::iter::collect::consumer::CollectResult<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::Pa
+ 50.89%  catch_unwind<core::panic::unwind_safe::AssertUnwindSafe<rayon_core::job::{impl#9}::call::{closure_env#0}<rayon::iter::collect::consumer::Col
+ 50.89%  do_call<core::panic::unwind_safe::AssertUnwindSafe<rayon_core::job::{impl#9}::call::{closure_env#0}<rayon::iter::collect::consumer::CollectR
+ 50.89%  execute<rayon_core::latch::SpinLatch, rayon_core::join::join_context::call_b::{closure_env#0}<rayon::iter::collect::consumer::CollectResult<
+ 50.89%  {closure#1}<rayon::slice::IterProducer<al_sem::snapshot::embedded::SourceFile>, rayon::iter::map::MapConsumer<rayon::iter::collect::consumer
+ 50.89%  {closure#0}<rayon::iter::collect::consumer::CollectResult<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::
+ 50.89%  catch_unwind<rayon::iter::collect::consumer::CollectResult<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse:
+ 50.89%  call<rayon::iter::collect::consumer::CollectResult<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::ParsedF
+ 50.89%  halt_unwinding<rayon_core::job::{impl#9}::call::{closure_env#0}<rayon::iter::collect::consumer::CollectResult<(al_sem::program::pack::Packed
+ 29.60%  al_syntax::lower::lower_file
+ 29.60%  lower_file
+ 22.89%  al_syntax::lower::collect_objects
+ 22.89%  collect_objects
+ 22.86%  ts_parser_parse
+
+== needles (inclusive, summed over every name containing the needle)
+closure                                  max  78.85%  e.g. ['{closure#0}', '_rust_begin_short_backtrace<rayon_core::registry::{impl#2}::spawn::{closure_env#']
+fold_identifier                          max   2.66%  e.g. ['fold_identifier', 'al_syntax::casing::fold_identifier']
+Recorder                                 max   2.55%  e.g. ['<al_sem::program::resolve::reads::Recorder as al_sem::program::resolve::reads::G', '<al_sem::program::resolve::reads::Recorder as al_sem::program::resolve::reads::G']
+resolve_recorded                         max  19.10%  e.g. ['{closure#0}<rayon::iter::plumbing::bridge_producer_consumer::helper::{closure_en', 'new<rayon_core::latch::SpinLatch, rayon_core::join::join_context::call_b::{closu']
+lower_file                               max  29.60%  e.g. ['al_syntax::lower::lower_file', 'lower_file']
+ts_parser_parse                          max  22.86%  e.g. ['ts_parser_parse', 'ts_parser_parse_with_options']
+== needles (inclusive, summed over every name containing the needle)
+DependencyGraph::closure                 max   1.00%  e.g. ['al_sem::program::topology::DependencyGraph::closure']
+eq_fold_identifier                       max   1.74%  e.g. ['eq_fold_identifier', 'al_syntax::casing::eq_fold_identifier']
