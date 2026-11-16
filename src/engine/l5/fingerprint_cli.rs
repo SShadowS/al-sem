@@ -795,6 +795,7 @@ fn fingerprint_view(
         roots_config_ignored,
         &owners,
         &|id| primary.contains(id),
+        &crate::engine::l5::digest_cli::default_reach_workers(),
     );
     Ok(emit_query(
         opts,
