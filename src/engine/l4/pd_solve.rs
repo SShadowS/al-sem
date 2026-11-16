@@ -2523,6 +2523,39 @@ mod tests {
         assert_eq!(arena.reqs_of(0), [(1, true)]);
     }
 
+    /// ENG-104: a REUSED producer's guarded state keeps its requirements through the
+    /// incremental copy, and the arena comparator sees them (it reads `logical_lines`; a
+    /// state's Debug holds only a table index). No other reuse test has a guarded state (they
+    /// solve with no frames). DISCRIMINATION: a copy that drops `reqs` fails this.
+    #[test]
+    fn a_reused_producers_guarded_state_keeps_its_requirements() {
+        let c = caller_passing("C", "cs1", pd_ts_known(true));
+        let h = pd_routine("H");
+        let routines = vec![c.clone(), h.clone()];
+        let by_id: HashMap<&str, &ModelRoutine> = [("C", &c), ("H", &h)].into();
+        let g = graph(vec![("C", edge("direct-call", Some("cs1"), "H"))]);
+        let frames: HashMap<String, FrameGuards> =
+            [frame("H", &[], &[("H/op1", vec![(1, true)])])].into();
+        let digests = crate::engine::l4::capability_cone::pd_input_digests(&g, &routines, &frames);
+        let (old, _) = solve(vec![producer("H")], &g, &by_id, &frames);
+        assert!(
+            (0..old.states.len()).any(|ix| !old.reqs_of(ix).is_empty()),
+            "precondition: the old arena has a guarded state"
+        );
+        let reuse = PdReuse {
+            old: &old,
+            old_digests: &digests,
+            new_digests: &digests,
+        };
+        let (a, r, report) = solve_seeded(vec![producer("H")], &g, &by_id, &frames, Some(&reuse));
+        assert_eq!(
+            report.reused, 1,
+            "precondition: the producer is copied, not re-solved"
+        );
+        let (full, full_r) = solve(vec![producer("H")], &g, &by_id, &frames);
+        assert_eq!(arena_bytes(&a, &r), arena_bytes(&full, &full_r));
+    }
+
     /// Guard step: the caller's requirements for the call site (`edge_reqs`)
     /// are conjoined into the caller's state.
     #[test]
