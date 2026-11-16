@@ -1956,6 +1956,48 @@ pub struct TreeBase {
     view: view::ViewBase,
 }
 
+impl TreeBase {
+    /// ENG-107: the base's fields for a byte census (`tools/census-probe resident`), in
+    /// declaration order. The `Arc` sections are shared with every tree built on this base, so
+    /// a census drops the trees first.
+    #[doc(hidden)]
+    pub fn into_census_parts(self) -> Vec<(&'static str, Box<dyn std::any::Any>)> {
+        let TreeBase {
+            identities,
+            typed_edges,
+            callsite_resolutions,
+            analysis_gaps,
+            coverage,
+            event_declarations,
+            root_classifications,
+            routine_order_frames,
+            boundary,
+            view,
+        } = self;
+        vec![
+            ("tree_base.identities", Box::new(identities)),
+            ("tree_base.typed_edges", Box::new(typed_edges)),
+            (
+                "tree_base.callsite_resolutions",
+                Box::new(callsite_resolutions),
+            ),
+            ("tree_base.analysis_gaps", Box::new(analysis_gaps)),
+            ("tree_base.coverage", Box::new(coverage)),
+            ("tree_base.event_declarations", Box::new(event_declarations)),
+            (
+                "tree_base.root_classifications",
+                Box::new(root_classifications),
+            ),
+            (
+                "tree_base.routine_order_frames",
+                Box::new(routine_order_frames),
+            ),
+            ("tree_base.boundary", Box::new(boundary)),
+            ("tree_base.view", Box::new(view)),
+        ]
+    }
+}
+
 /// The inputs every tree section reads (the borrowed half of
 /// [`TreeInputs`]), owned by the caller.
 struct TreeInputParts<'m> {

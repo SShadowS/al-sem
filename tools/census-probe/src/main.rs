@@ -2644,6 +2644,21 @@ fn resident_mode(ws: PathBuf, routine: String, low_mem: bool) {
                         }
                         continue;
                     }
+                    if name == "fold.cones" {
+                        // ENG-107: split by part (counts first: the cones are shared).
+                        let cones = part
+                            .downcast::<Option<al_sem::engine::l4::capability_cone::ConeStore>>()
+                            .expect("the cones part");
+                        if let Some(cones) = *cones {
+                            for l in cones.census_lines() {
+                                println!("{l}");
+                            }
+                            for (n, p) in cones.into_census_parts() {
+                                step(n, p);
+                            }
+                        }
+                        continue;
+                    }
                     step(name, part);
                 }
             }
@@ -2659,8 +2674,17 @@ fn resident_mode(ws: PathBuf, routine: String, low_mem: bool) {
         "l4",
         "rules",
         "ordering",
+        // ENG-107: what `revision.store` held. Trees before their base (they share its
+        // `Arc` sections), each split by field.
+        "tree",
+        "tree_base",
+        "sited",
     ] {
         let keys = rev.keys_where(|k| k.kind() == kind);
+        if matches!(kind, "det" | "tree" | "tree_base" | "sited") {
+            eng107_split(&rev, &keys, kind);
+            continue;
+        }
         let (b0, a0) = live();
         rev.evict(&keys);
         let (b1, a1) = live();
@@ -2812,6 +2836,197 @@ fn resident_mode(ws: PathBuf, routine: String, low_mem: bool) {
 
 /// One served ask over `inputs` for `routine`: `query`, `explain`, `prove`,
 /// else `digest` (the four kinds `resident` and `refresh-seq` ask).
+/// ENG-107: evict `keys` (all of one artifact `kind`) and drop each value field by field,
+/// then print the kind's total (comparable with the unsplit `artifact.<kind>` line). A value
+/// still shared after its eviction is dropped whole, and the probe says so.
+fn eng107_split(
+    rev: &al_sem::engine::resident::revision::Revision,
+    keys: &[al_sem::engine::resident::revision::ArtifactKey],
+    kind: &str,
+) {
+    use al_sem::engine::resident::revision::ArtifactValue;
+    let (b0, a0) = live();
+    let held: Vec<_> = keys
+        .iter()
+        .filter_map(|k| rev.snapshot().get(k).cloned())
+        .collect();
+    rev.evict(keys);
+    for artifact in held {
+        let Ok(a) = Arc::try_unwrap(artifact) else {
+            println!("    {kind}: artifact still shared after eviction; dropped whole below");
+            continue;
+        };
+        match a.value {
+            ArtifactValue::Det(d) => match Arc::try_unwrap(d) {
+                Ok(d) => {
+                    let al_sem::engine::l5::detector_context::DetectorArtifacts {
+                        demanded: _,
+                        graph,
+                        cone,
+                        event_graph,
+                        reverse_call_graph,
+                        entry_points,
+                        transaction_spans,
+                        resolved_call_edge_by_callsite,
+                        uncertainty_edges_by_from,
+                        dependency_uncertainty_edges_by_from,
+                        uncertainties_by_node,
+                        uncertainties,
+                        summaries,
+                        cone_derived,
+                        event_flow_indexes,
+                        parameter_roles_by_routine,
+                        upgraded_bindings_by_callsite,
+                        reachable_roots,
+                        internal_reachable_externally: _,
+                        root_classifications_by_routine,
+                        dep_routine_ids,
+                        declared_dependencies,
+                        app_versions,
+                        friends,
+                        closed_world_temp_params,
+                        summarize_diagnostics,
+                        reverse_effect_index,
+                        cross_extension_subscribers,
+                    } = d;
+                    step("det.reverse_effect_index", reverse_effect_index);
+                    step("det.dep_routine_ids", dep_routine_ids);
+                    step("det.closed_world_temp_params", closed_world_temp_params);
+                    step(
+                        "det.cross_extension_subscribers",
+                        cross_extension_subscribers,
+                    );
+                    step(
+                        "det.(declared deps, app versions, friends, diagnostics)",
+                        (
+                            declared_dependencies,
+                            app_versions,
+                            friends,
+                            summarize_diagnostics,
+                        ),
+                    );
+                    step("det.graph", graph);
+                    step("det.cone", cone);
+                    step("det.event_graph", event_graph);
+                    step("det.reverse_call_graph", reverse_call_graph);
+                    step("det.entry_points", entry_points);
+                    step("det.transaction_spans", transaction_spans);
+                    step(
+                        "det.resolved_call_edge_by_callsite",
+                        resolved_call_edge_by_callsite,
+                    );
+                    step("det.uncertainty_edges_by_from", uncertainty_edges_by_from);
+                    step(
+                        "det.dependency_uncertainty_edges_by_from",
+                        dependency_uncertainty_edges_by_from,
+                    );
+                    step("det.uncertainties_by_node", uncertainties_by_node);
+                    step("det.uncertainties", uncertainties);
+                    step("det.summaries", summaries);
+                    step("det.cone_derived", cone_derived);
+                    step("det.event_flow_indexes", event_flow_indexes);
+                    step("det.parameter_roles_by_routine", parameter_roles_by_routine);
+                    step(
+                        "det.upgraded_bindings_by_callsite",
+                        upgraded_bindings_by_callsite,
+                    );
+                    step("det.reachable_roots", reachable_roots);
+                    step(
+                        "det.root_classifications_by_routine",
+                        root_classifications_by_routine,
+                    );
+                }
+                Err(d) => {
+                    println!("    det: shared; dropped whole");
+                    step("det (whole)", d);
+                }
+            },
+            ArtifactValue::Tree(t) => match Arc::try_unwrap(t) {
+                Ok(t) => {
+                    let al_sem::engine::l5::snapshot::CapabilitySnapshot {
+                        identities,
+                        capability_facts,
+                        typed_edges,
+                        operation_index,
+                        callsite_index,
+                        callsite_resolutions,
+                        analysis_gaps,
+                        coverage,
+                        event_declarations,
+                        root_classifications,
+                        routine_order_frames,
+                        pd_solution,
+                        boundary,
+                        commit_scopes,
+                    } = t;
+                    println!(
+                        "    tree: {} capability facts, {} operations, {} callsites",
+                        capability_facts.len(),
+                        operation_index.len(),
+                        callsite_index.len()
+                    );
+                    step("tree.capability_facts", capability_facts);
+                    step("tree.operation_index", operation_index);
+                    step("tree.callsite_index", callsite_index);
+                    step("tree.pd_solution", pd_solution);
+                    step("tree.commit_scopes", commit_scopes);
+                    // Shared with the base: their bytes fall when the base drops.
+                    step(
+                        "tree.(base-shared sections)",
+                        (
+                            identities,
+                            typed_edges,
+                            callsite_resolutions,
+                            analysis_gaps,
+                            coverage,
+                            event_declarations,
+                            root_classifications,
+                            routine_order_frames,
+                            boundary,
+                        ),
+                    );
+                }
+                Err(t) => {
+                    println!("    tree: shared; dropped whole");
+                    step("tree (whole)", t);
+                }
+            },
+            ArtifactValue::TreeBase(b) => match Arc::try_unwrap(b) {
+                Ok(b) => {
+                    for (n, p) in b.into_census_parts() {
+                        step(n, p);
+                    }
+                }
+                Err(b) => {
+                    println!("    tree_base: shared; dropped whole");
+                    step("tree_base (whole)", b);
+                }
+            },
+            ArtifactValue::Sited(s) => match Arc::try_unwrap(s) {
+                Ok(s) => {
+                    for (n, p) in s.into_census_parts() {
+                        step(n, p);
+                    }
+                }
+                Err(s) => {
+                    println!("    sited: shared; dropped whole");
+                    step("sited (whole)", s);
+                }
+            },
+            other => {
+                step("(other value)", other);
+            }
+        }
+    }
+    let (b1, a1) = live();
+    println!(
+        "  {:<58} {:>9.2} MiB {:>10} allocs",
+        format!("artifact.{kind} ({} keys) TOTAL", keys.len()),
+        mib(b0 - b1),
+        a0 - a1
+    );
+}
+
 fn resident_job<'a>(
     name: &str,
     inputs: &'a Arc<al_sem::program::inputs::WorkspaceInputs>,
