@@ -249,8 +249,11 @@ fn field_census_cmd(args: &[String]) -> ExitCode {
 /// parameter, S) and its restore, `add` (a new file, F) and its removal,
 /// with `--implements <interface>` an `implementer` (a new codeunit
 /// implementing that interface, S) and its removal, `appjson` (a trailing
-/// newline on `app.json`, P) and its restore. Each line has the class, the
-/// files parsed and resolved, whether the dependency bodies were resolved
+/// newline on `app.json`, P) and its restore. Edits keep the file's own line
+/// ending (CRLF in CDO), and a run fails when an edit would change nothing or
+/// a step's refresh sees no changed file (`noOpError`; `noop` must see none):
+/// ENG-93, the `body` edit had matched nothing in every CRLF run before. Each
+/// line has the class, the files parsed and resolved, whether the dependency bodies were resolved
 /// again, `model.copied_bytes`, the program and whole-refresh wall times, and
 /// the resident set. With `--verify`, each step also compares the session's
 /// model with a cold build's (`model_fingerprint`, over `write_model`'s parts;
@@ -360,7 +363,8 @@ fn session_refresh_cmd(args: &[String]) -> ExitCode {
                 .into_iter()
                 .filter_map(|p| {
                     let t = std::fs::read_to_string(&p).ok()?;
-                    (t.contains("\n    begin\n")
+                    // `lines` strips `\r\n` too: a CRLF file qualifies (ENG-93).
+                    (t.lines().any(|l| l == "    begin")
                         && t.trim_start().to_lowercase().starts_with("codeunit"))
                     .then_some((t.len() as u64, p))
                 })
@@ -420,7 +424,10 @@ fn session_refresh_cmd(args: &[String]) -> ExitCode {
         }
         h.finalize()
     };
-    let mut step = |name: &str, session: &mut WorkspaceSession| {
+    // ENG-93: `expect_change` says whether the step's edit must reach the session (every
+    // step but `noop`); a step whose refresh saw no changed file, or `noop` seeing one,
+    // fails the run, so an edit that silently matched nothing cannot pass as verified.
+    let mut step = |name: &str, expect_change: bool, session: &mut WorkspaceSession| {
         let inputs = WorkspaceInputs::read(&ws, &Default::default());
         let state = state_key();
         let mut sited_ms = None;
@@ -456,6 +463,14 @@ fn session_refresh_cmd(args: &[String]) -> ExitCode {
             });
         }
         if let Some(r) = &r {
+            if r.changed.is_empty() == expect_change {
+                row["noOpError"] = json!(if expect_change {
+                    "the step's edit reached no file"
+                } else {
+                    "a step with no edit changed a file"
+                });
+                failed = true;
+            }
             row["class"] = json!(format!("{:?}", r.class));
             row["changed"] = json!(r.changed.len());
             row["parsed"] = json!(r.parsed);
@@ -519,33 +534,64 @@ fn session_refresh_cmd(args: &[String]) -> ExitCode {
         println!("{row}");
     };
     let write = |p: &Path, t: &str| std::fs::write(p, t).expect("write the workspace copy");
-    step("cold", &mut session);
-    step("noop", &mut session);
-    let body = original.replacen(
-        "\n    begin\n",
-        "\n    begin\n        // session probe\n",
-        1,
-    );
+    // ENG-93: an edit that leaves the file as it was would verify nothing (the `body`
+    // edit matched nothing in a CRLF file for every CDO run before this).
+    let edited = |name: &str, new: &str| {
+        if new == original {
+            eprintln!(
+                "aldump --session-refresh: the {name} edit changes nothing in {}",
+                target.display()
+            );
+            false
+        } else {
+            true
+        }
+    };
+    // The file's own line ending, so an edit never mixes `\n` into a CRLF file.
+    let eol = if original.contains("\r\n") {
+        "\r\n"
+    } else {
+        "\n"
+    };
+    step("cold", true, &mut session);
+    step("noop", false, &mut session);
+    // A comment line after the first procedure body's `begin` (4-space indent).
+    let mut body = String::with_capacity(original.len() + 32);
+    let mut done = false;
+    for l in original.split_inclusive('\n') {
+        body.push_str(l);
+        if !done && l.trim_end_matches(['\r', '\n']) == "    begin" {
+            body.push_str("        // session probe");
+            body.push_str(eol);
+            done = true;
+        }
+    }
+    if !edited("body", &body) {
+        return ExitCode::FAILURE;
+    }
     write(&target, &body);
-    step("body", &mut session);
+    step("body", true, &mut session);
     write(&target, &original);
-    step("body-restore", &mut session);
-    write(&target, &format!("\n\n{original}"));
-    step("newline", &mut session);
+    step("body-restore", true, &mut session);
+    write(&target, &format!("{eol}{eol}{original}"));
+    step("newline", true, &mut session);
     write(&target, &original);
-    step("newline-restore", &mut session);
+    step("newline-restore", true, &mut session);
     let decl = match original.rfind('}') {
         Some(i) => format!(
-            "{}\n    procedure SessionProbeAdded()\n    begin\n    end;\n{}",
+            "{}{eol}    procedure SessionProbeAdded(){eol}    begin{eol}    end;{eol}{}",
             &original[..i],
             &original[i..]
         ),
         None => original.clone(),
     };
+    if !edited("decl", &decl) {
+        return ExitCode::FAILURE;
+    }
     write(&target, &decl);
-    step("decl", &mut session);
+    step("decl", true, &mut session);
     write(&target, &original);
-    step("decl-restore", &mut session);
+    step("decl-restore", true, &mut session);
     // A signature change: the first parameterless procedure of the file
     // gains a parameter.
     let signature = original
@@ -564,32 +610,32 @@ fn session_refresh_cmd(args: &[String]) -> ExitCode {
         });
     if let Some(signature) = signature {
         write(&target, &signature);
-        step("signature", &mut session);
+        step("signature", true, &mut session);
         write(&target, &original);
-        step("signature-restore", &mut session);
+        step("signature-restore", true, &mut session);
     }
     write(
         &probe,
         "codeunit 99977 \"Session Probe\"\n{\n    procedure Run()\n    begin\n    end;\n}\n",
     );
-    step("add", &mut session);
+    step("add", true, &mut session);
     std::fs::remove_file(&probe).expect("remove the probe file");
-    step("add-restore", &mut session);
+    step("add-restore", true, &mut session);
     if let Some(interface) = &implements {
         write(
             &probe,
             &format!("codeunit 99978 \"Session Probe Impl\" implements \"{interface}\"\n{{\n}}\n"),
         );
-        step("implementer", &mut session);
+        step("implementer", true, &mut session);
         std::fs::remove_file(&probe).expect("remove the probe file");
-        step("implementer-restore", &mut session);
+        step("implementer-restore", true, &mut session);
     }
     let mut app = app_original.clone();
     app.push(b'\n');
     std::fs::write(&app_json, &app).expect("write app.json");
-    step("appjson", &mut session);
+    step("appjson", true, &mut session);
     std::fs::write(&app_json, &app_original).expect("restore app.json");
-    step("appjson-restore", &mut session);
+    step("appjson-restore", true, &mut session);
     if failed {
         ExitCode::FAILURE
     } else {

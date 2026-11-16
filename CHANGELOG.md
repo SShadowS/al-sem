@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (ENG-93: `aldump --session-refresh` edits CRLF files, and fails on an edit that reaches nothing)
+
+- **The hole.** The harness's `body` edit inserted a line after `"\n    begin\n"`, and its file
+  choice looked for the same text. A CRLF file (all of CDO) never contains it: without `--file`
+  the harness found no file, and with `--file` the `body` step wrote the file back unchanged, so
+  it refreshed an unchanged workspace and `--verify` called it equal to a cold build. The
+  body-only refresh path was never exercised on CDO. The `newline` and `decl` edits worked but
+  mixed `\n` into the CRLF file.
+- **Now.** The file choice and the `body` edit find the procedure body by its lines, and every edit
+  is written in the file's own line ending. Two guards: an edit that would leave the file as it was
+  stops the run with "the <step> edit changes nothing", before writing; and each step states
+  whether its refresh must see a changed file (every step but `noop`, which must see none), a
+  mismatch adding `noOpError` to the row and failing the run.
+- Pinned by `cli_session_refresh_crlf` (a CRLF workspace with no `--file`: every edit step
+  changes one file and the file is restored; a codeunit with no procedure body fails the run,
+  unchanged).
+
 ### Fixed (TLS-79: `cdo-speed`'s model-build reading resolves ~±8 %, not ~±20-50 %)
 
 - **The hole:** the side whose model was built second cost x1.28 CPU on average (x1.10-x1.58
