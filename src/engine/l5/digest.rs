@@ -1633,7 +1633,8 @@ impl DenseMemos {
     fn slot(&mut self, i: usize, build: impl FnOnce() -> NodeMemo) -> Rc<NodeMemo> {
         let slot = &mut self.slots[i];
         if slot.is_none() {
-            self.filled.push(i as u32);
+            self.filled
+                .push(u32::try_from(i).expect("edge index fits u32"));
         }
         Rc::clone(slot.get_or_insert_with(|| Rc::new(build())))
     }

@@ -681,7 +681,9 @@ fn build_block<'w>(
 /// ENG-106: at most this many root blocks are built at once, below the literal
 /// pass's [`ReachWorkers`] count. Measured on CDO (2026-11-16, `fingerprint`,
 /// release-fast; CPU against the serial base's 84.6 s mean, base wall 52-64 s):
-/// 2 workers CPU x1.00, wall 34 s; 4: x1.09, 24 s; 8: x1.25, 18.6 s. The
+/// 2 workers CPU x1.00, wall 34 s; 4: x1.09, 24 s; 8: x1.25, 18.6 s (against
+/// one clean base round or 1 worker, x1.09-x1.12, x1.15-x1.22 and x1.34-x1.40;
+/// the final head at 2: CPU x0.93-x0.98 of its base, wall about x0.55). The
 /// one-shot often runs beside other work, so the count is the cheapest in CPU
 /// that meets the wall bar (30-35 s).
 ///
@@ -2269,9 +2271,12 @@ mod tests {
         snap
     }
 
-    /// ENG-106: root blocks built on the pool equal the serial ones, run after
-    /// run (order must not hang on scheduling), and the pool really built them.
-    /// Hand-stated: 24 roots sharing one callee's carrier keys.
+    /// ENG-106: root blocks built on the pool (at the cap,
+    /// `FINGERPRINT_BLOCK_WORKERS`) equal the serial ones, run after run, and the
+    /// pool really built them. Hand-stated: 24 roots sharing one callee's carrier
+    /// keys. Each root walks its own edge, so a reused slot table is never read
+    /// back here (`hop_cache_reused_slot_table_starts_empty` pins that), and the
+    /// root ids are unique, so the sort hides the collect's order.
     ///
     /// DISCRIMINATION (2026-11-16): the parallel branch skipping its first root
     /// -> unequal blocks (red); the condition forced to the serial branch -> no
@@ -2300,7 +2305,8 @@ mod tests {
         );
         for _ in 0..5 {
             let probe = std::sync::Arc::new(PassProbe::default());
-            let parallel = run(&ReachWorkers::new(4).with_probe(std::sync::Arc::clone(&probe)));
+            let workers = ReachWorkers::new(FINGERPRINT_BLOCK_WORKERS);
+            let parallel = run(&workers.with_probe(std::sync::Arc::clone(&probe)));
             assert_eq!(parallel, serial);
             let threads = probe.block_threads.lock().unwrap().clone();
             assert_eq!(threads.len(), 24);
