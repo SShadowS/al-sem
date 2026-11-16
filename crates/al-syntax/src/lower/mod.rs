@@ -448,7 +448,7 @@ fn lower_object(
     let mut fields = Vec::new();
     let mut keys = Vec::new();
     if matches!(kind, ObjectKind::Table | ObjectKind::TableExtension) {
-        collect_table_fields_keys(node, source, &mut fields, &mut keys);
+        collect_table_fields_keys(node, source, &mut fields, &mut keys, issues);
     }
 
     // Object globals: var_sections under the declaration_body (not inside routines).
@@ -811,6 +811,31 @@ fn implements_clause_names(clause: RawNode, source: &str, out: &mut Vec<String>)
 /// document order. Recurses the layout but NOT into routine bodies. Mirrors the legacy
 /// `extract_page_controls`.
 fn collect_page_controls(node: RawNode, source: &str, out: &mut Vec<crate::ir::PageControl>) {
+    // GRM-04 (grammar v5.3.0): a part/usercontrol header chosen per `#if` arm, the body
+    // shared after `#endif`. Each arm holds its keyword, `name:` and `source:` in
+    // order; every arm's control is collected (a part that exists in some build is a
+    // target `CurrPage.<part>` may reach). A `chartpart` arm is skipped, as a plain
+    // `chartpart_section` is here.
+    if node.kind() == RawKind::PreprocSplitPart {
+        let kinds = node.named_children().filter_map(|c| match c.kind() {
+            RawKind::PartKeyword => Some(Some("part")),
+            RawKind::SystempartKeyword => Some(Some("systempart")),
+            RawKind::UsercontrolKeyword => Some(Some("usercontrol")),
+            RawKind::ChartpartKeyword => Some(None),
+            _ => None,
+        });
+        let names = node.children_by_field(FieldName::Name);
+        let sources = node.children_by_field(FieldName::Source);
+        for ((kind, name), src) in kinds.zip(names).zip(sources) {
+            if let Some(kind) = kind {
+                out.push(crate::ir::PageControl {
+                    name: ident_text(name, source),
+                    kind: kind.to_string(),
+                    target: ident_text(src, source),
+                });
+            }
+        }
+    }
     let kind = match node.kind() {
         RawKind::PartSection => Some("part"),
         RawKind::SystempartSection => Some("systempart"),
@@ -842,6 +867,7 @@ fn collect_table_fields_keys(
     source: &str,
     fields: &mut Vec<crate::ir::FieldDecl>,
     keys: &mut Vec<Vec<String>>,
+    issues: &mut Vec<SyntaxIssue>,
 ) {
     for child in node.named_children() {
         match child.kind() {
@@ -858,14 +884,31 @@ fn collect_table_fields_keys(
             // (2026-10) is the key analogue of `preproc_split_table_field`, which predates
             // them and was not read here before either.
             RawKind::PreprocSplitTableField | RawKind::PreprocSplitTableFieldOpen => {
-                collect_table_fields_keys(child, source, fields, keys);
+                collect_table_fields_keys(child, source, fields, keys, issues);
+                // GRM-04 (grammar v5.3.0): `preproc_split_table_field_open` may open the
+                // field in several arms (`#elif`/`#else`, or a nested group): the first
+                // arm's header is read ([`lower_field`]), so say so where arms differ.
+                if child.kind() == RawKind::PreprocSplitTableFieldOpen
+                    && (child.children_by_field(FieldName::Id).len() > 1
+                        || child
+                            .named_children()
+                            .any(|c| c.kind() == RawKind::PreprocConditionalTableFieldOpen))
+                {
+                    issues.push(SyntaxIssue {
+                        message: "table field opened in several `#if` arms — the first \
+                                  arm's id, name and type are read (the other arms' \
+                                  headers are not modelled)"
+                            .to_string(),
+                        origin: origin_of(child),
+                    });
+                }
                 fields.push(lower_field(child, source));
             }
             RawKind::PreprocSplitKey => {
-                collect_table_fields_keys(child, source, fields, keys);
+                collect_table_fields_keys(child, source, fields, keys, issues);
                 keys.push(key_members(child, source));
             }
-            _ => collect_table_fields_keys(child, source, fields, keys),
+            _ => collect_table_fields_keys(child, source, fields, keys, issues),
         }
     }
 }
@@ -897,6 +940,24 @@ fn key_members(key: RawNode, source: &str) -> Vec<String> {
     members
 }
 
+/// Every `body` of a field, the arms' own and the shared one, nested arm groups'
+/// included: grammar v5.3.0 keeps a nested `preproc_conditional_table_field_open`
+/// group's bodies on that group, and `children_by_field` (a cursor walk) does not
+/// reach them (GRM-04).
+///
+/// The HEADER needs no such walk: `.field()` (tree-sitter's `child_by_field_id`)
+/// follows the grammar's inherited field entries into a nested group, so on a field
+/// whose first arm is a nested group it gives that group's first arm's `id`, `name`
+/// and `type`, the first-branch-wins header (measured on v5.3.0).
+fn field_bodies<'t>(node: RawNode<'t>, out: &mut Vec<RawNode<'t>>) {
+    out.extend(node.children_by_field(FieldName::Body));
+    for c in node.named_children() {
+        if c.kind() == RawKind::PreprocConditionalTableFieldOpen {
+            field_bodies(c, out);
+        }
+    }
+}
+
 /// Lower a `field(<no>; <Name>; <Type>) { ... }` declaration.
 fn lower_field(node: RawNode, source: &str) -> crate::ir::FieldDecl {
     let number = node
@@ -913,11 +974,14 @@ fn lower_field(node: RawNode, source: &str) -> crate::ir::FieldDecl {
         .unwrap_or_default();
     // Field properties, read through `collect_properties`, which descends preproc
     // wrappers and whole-value `#if` arms (one value per arm). Every `body` is
-    // read: a `preproc_split_table_field_open` has two, before and after its
-    // `#endif`. Reading direct children only missed any `#if`-wrapped property
-    // (#26 for ObsoleteState, #62 for FieldClass).
+    // read: a `preproc_split_table_field_open` has one per arm and a shared one
+    // after its `#endif`, and a nested arm group keeps its own (v5.3.0). Reading
+    // direct children only missed any `#if`-wrapped property (#26 for
+    // ObsoleteState, #62 for FieldClass).
     let mut props = Vec::new();
-    for body in node.children_by_field(FieldName::Body) {
+    let mut bodies = Vec::new();
+    field_bodies(node, &mut bodies);
+    for body in bodies {
         for member in body.named_children() {
             collect_properties(member, source, false, &mut props);
         }
@@ -3015,15 +3079,38 @@ fn lower_routine<'t>(
         .map(|n| ident_text(n, source))
         .filter(|s| !s.is_empty());
 
+    // GRM-04 (grammar v5.3.0): an `#if` group around the modifier
+    // (`preproc_conditional_modifier`, an unfielded child like the return clause's
+    // group) leaves `procedure.modifier` absent; read the first arm this routine's
+    // build does not rule out, as the return clause does.
+    let conditional_modifier: Option<RawNode> = node
+        .named_children()
+        .find(|c| c.kind() == RawKind::PreprocConditionalModifier && in_arm(*c))
+        .and_then(|group| {
+            issues.push(SyntaxIssue {
+                message: "`#if` around a procedure's access modifier — the first arm \
+                          this routine's build does not rule out is read (the other \
+                          arms are not modelled)"
+                    .to_string(),
+                origin: origin_of(group),
+            });
+            let mut items = Vec::new();
+            conditional_list_arm(group, source, &mut Run::new(&header_guard), &mut items);
+            items
+                .into_iter()
+                .find(|c| c.kind() == RawKind::ProcedureModifier)
+        });
     // Access modifier (`local`/`internal`/`protected`); None = public / trigger.
-    let access_modifier = arm_field(FieldName::Modifier).and_then(|m| {
-        match m.text(source).trim().to_ascii_lowercase().as_str() {
-            "local" => Some("local".to_string()),
-            "internal" => Some("internal".to_string()),
-            "protected" => Some("protected".to_string()),
-            _ => None,
-        }
-    });
+    let access_modifier = arm_field(FieldName::Modifier)
+        .or(conditional_modifier)
+        .and_then(
+            |m| match m.text(source).trim().to_ascii_lowercase().as_str() {
+                "local" => Some("local".to_string()),
+                "internal" => Some("internal".to_string()),
+                "protected" => Some("protected".to_string()),
+                _ => None,
+            },
+        );
 
     // Locals: var_section child(ren) of the routine (+ preproc-wrapped): this arm's
     // own (a split preamble's, at whichever level holds the arm) plus the shared
@@ -4936,6 +5023,27 @@ fn lower_arguments(
                     args.push(lower_expr(a, ir, issues, source, depth + 1));
                 }
             }
+            // GRM-04 (grammar v5.3.0, tree-sitter-al #44): the list's `)` (and the
+            // statement's `;`) sit in every `#if` arm, each arm holding the list's last
+            // arguments. They are positional, so ONE arm is read, the first a build can
+            // take ([`conditional_list_arm`]), as for an `#if` operand: a union would be an
+            // arity no build has, and the call would miss its target. The other arms'
+            // calls are not modelled (the IR has no place for them); the call is tainted
+            // (ENG-80) since its arguments vary by build.
+            RawKind::PreprocSplitParenClose => {
+                issues.push(SyntaxIssue {
+                    message: "`)` inside every `#if` arm of an argument list — the first \
+                              arm a build can take gives the last arguments (the other \
+                              arms' calls are not modelled)"
+                        .to_string(),
+                    origin: origin_of(c),
+                });
+                let mut arm = Vec::new();
+                conditional_list_arm(c, source, &mut Run::default(), &mut arm);
+                for a in arm.into_iter().filter(|n| !is_expr_continuation(n.kind())) {
+                    args.push(lower_expr(a, ir, issues, source, depth + 1));
+                }
+            }
             _ => args.push(lower_expr(c, ir, issues, source, depth + 1)),
         }
     }
@@ -5047,6 +5155,8 @@ pub(crate) fn origin_of(n: RawNode) -> Origin {
 
 #[cfg(test)]
 mod grammar_v4_tests;
+#[cfg(test)]
+mod grammar_v5_3_tests;
 
 #[cfg(test)]
 mod tests {

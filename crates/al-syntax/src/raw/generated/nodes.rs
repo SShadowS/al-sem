@@ -6770,6 +6770,30 @@ impl<'t> RawPreprocConditionalMlPairs<'t> {
 }
 
 #[derive(Copy, Clone)]
+pub struct RawPreprocConditionalModifier<'t>(pub(super) RawNode<'t>);
+impl<'t> RawPreprocConditionalModifier<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::PreprocConditionalModifier {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+    pub fn modifier(self) -> Vec<RawProcedureModifier<'t>> {
+        self.0
+            .children_by_field(FieldName::Modifier)
+            .into_iter()
+            .filter_map(RawProcedureModifier::cast)
+            .collect()
+    }
+}
+
+#[derive(Copy, Clone)]
 pub struct RawPreprocConditionalMoveArgs<'t>(pub(super) RawNode<'t>);
 impl<'t> RawPreprocConditionalMoveArgs<'t> {
     #[inline]
@@ -7265,6 +7289,51 @@ impl<'t> RawPreprocConditionalStatement<'t> {
     #[inline]
     pub fn node(self) -> RawNode<'t> {
         self.0
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct RawPreprocConditionalTableFieldOpen<'t>(pub(super) RawNode<'t>);
+impl<'t> RawPreprocConditionalTableFieldOpen<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::PreprocConditionalTableFieldOpen {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+    pub fn body(self) -> Vec<RawDeclarationBody<'t>> {
+        self.0
+            .children_by_field(FieldName::Body)
+            .into_iter()
+            .filter_map(RawDeclarationBody::cast)
+            .collect()
+    }
+    pub fn id(self) -> Vec<RawInteger<'t>> {
+        self.0
+            .children_by_field(FieldName::Id)
+            .into_iter()
+            .filter_map(RawInteger::cast)
+            .collect()
+    }
+    pub fn name(self) -> Vec<IdentifierOrQuotedIdentifier<'t>> {
+        self.0
+            .children_by_field(FieldName::Name)
+            .into_iter()
+            .filter_map(IdentifierOrQuotedIdentifier::cast)
+            .collect()
+    }
+    pub fn r#type(self) -> Vec<RawTypeSpecification<'t>> {
+        self.0
+            .children_by_field(FieldName::Type)
+            .into_iter()
+            .filter_map(RawTypeSpecification::cast)
+            .collect()
     }
 }
 
@@ -8317,6 +8386,59 @@ impl<'t> RawPreprocSplitOpenStatement<'t> {
 }
 
 #[derive(Copy, Clone)]
+pub struct RawPreprocSplitParenClose<'t>(pub(super) RawNode<'t>);
+impl<'t> RawPreprocSplitParenClose<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::PreprocSplitParenClose {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct RawPreprocSplitPart<'t>(pub(super) RawNode<'t>);
+impl<'t> RawPreprocSplitPart<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::PreprocSplitPart {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+    pub fn body(self) -> Option<RawDeclarationBody<'t>> {
+        self.0
+            .field(FieldName::Body)
+            .and_then(RawDeclarationBody::cast)
+    }
+    pub fn name(self) -> Vec<IdentifierOrQuotedIdentifier<'t>> {
+        self.0
+            .children_by_field(FieldName::Name)
+            .into_iter()
+            .filter_map(IdentifierOrQuotedIdentifier::cast)
+            .collect()
+    }
+    pub fn source(self) -> Vec<IdentifierOrQuotedIdentifier<'t>> {
+        self.0
+            .children_by_field(FieldName::Source)
+            .into_iter()
+            .filter_map(IdentifierOrQuotedIdentifier::cast)
+            .collect()
+    }
+}
+
+#[derive(Copy, Clone)]
 pub struct RawPreprocSplitPermissionsProperty<'t>(pub(super) RawNode<'t>);
 impl<'t> RawPreprocSplitPermissionsProperty<'t> {
     #[inline]
@@ -8639,18 +8761,26 @@ impl<'t> RawPreprocSplitTableFieldOpen<'t> {
             .filter_map(RawDeclarationBody::cast)
             .collect()
     }
-    pub fn id(self) -> Option<RawInteger<'t>> {
-        self.0.field(FieldName::Id).and_then(RawInteger::cast)
-    }
-    pub fn name(self) -> Option<IdentifierOrQuotedIdentifier<'t>> {
+    pub fn id(self) -> Vec<RawInteger<'t>> {
         self.0
-            .field(FieldName::Name)
-            .and_then(IdentifierOrQuotedIdentifier::cast)
+            .children_by_field(FieldName::Id)
+            .into_iter()
+            .filter_map(RawInteger::cast)
+            .collect()
     }
-    pub fn r#type(self) -> Option<RawTypeSpecification<'t>> {
+    pub fn name(self) -> Vec<IdentifierOrQuotedIdentifier<'t>> {
         self.0
-            .field(FieldName::Type)
-            .and_then(RawTypeSpecification::cast)
+            .children_by_field(FieldName::Name)
+            .into_iter()
+            .filter_map(IdentifierOrQuotedIdentifier::cast)
+            .collect()
+    }
+    pub fn r#type(self) -> Vec<RawTypeSpecification<'t>> {
+        self.0
+            .children_by_field(FieldName::Type)
+            .into_iter()
+            .filter_map(RawTypeSpecification::cast)
+            .collect()
     }
 }
 

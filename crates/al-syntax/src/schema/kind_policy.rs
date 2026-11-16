@@ -217,6 +217,14 @@ pub fn class_of(k: RawKind) -> Class {
         | RawKind::PreprocSplitPermissionsProperty
         | RawKind::PreprocSplitTableFieldOpen
         | RawKind::PreprocSplitVarSectionTail
+        // v5.3.0 (9d155ee7, tree-sitter-al #44): preproc shapes the lowerer owns
+        // descent of (GRM-04): a call's `)` (and `;`) in every `#if` arm, an `#if`
+        // around a procedure's access modifier, a part/usercontrol header chosen per
+        // arm, and a nested arm group of `preproc_split_table_field_open`.
+        | RawKind::PreprocSplitParenClose
+        | RawKind::PreprocConditionalModifier
+        | RawKind::PreprocSplitPart
+        | RawKind::PreprocConditionalTableFieldOpen
         // Later 2026-10 `main` additions (8682cb5f, still package v4.4.1). Structure,
         // not keywords. `chartpart_section` is a page-layout part beside `part`/
         // `systempart` (deferred-work 32); `filter_group` is a parenthesised filter
