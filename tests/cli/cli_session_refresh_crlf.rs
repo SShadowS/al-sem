@@ -72,6 +72,16 @@ fn every_step_edits_a_crlf_file() {
             "{step} must change the CRLF file: {rows:?}"
         );
     }
+    // The point of the `body` and `newline` steps is the body-only path (Fable, ENG-93).
+    let class = |step: &str| rows.iter().find(|r| r["step"] == step).unwrap()["class"].clone();
+    for (step, want) in [
+        ("body", "BodyOnly"),
+        ("newline", "BodyOnly"),
+        ("decl", "Declaration"),
+        ("signature", "Declaration"),
+    ] {
+        assert_eq!(class(step), want, "{step}: {rows:?}");
+    }
     assert!(
         rows.iter().all(|r| r.get("noOpError").is_none()),
         "{rows:?}"

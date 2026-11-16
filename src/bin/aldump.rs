@@ -235,41 +235,6 @@ fn field_census_cmd(args: &[String]) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// `aldump --session-refresh <workspace-copy> [--file <rel>] [--verify]`:
-/// measure the stage-4 workspace session (context-server design §6,
-/// `program::session::WorkspaceSession`) per change type. It EDITS the
-/// workspace it is given, so it refuses a workspace inside a git checkout
-/// (the pinned CDO baseline is one): run it on a copy.
-///
-/// Steps, each one refresh, printed as one JSON line: `cold` (P, the first
-/// build), `noop`, `body` (a comment line inside the first procedure body of
-/// the chosen file, B) and its restore, `newline` (two lines prepended to the
-/// file, B) and its restore, `decl` (a procedure added to the file, S) and its
-/// restore, `signature` (the file's first parameterless procedure gains a
-/// parameter, S) and its restore, `add` (a new file, F) and its removal,
-/// with `--implements <interface>` an `implementer` (a new codeunit
-/// implementing that interface, S) and its removal, `appjson` (a trailing
-/// newline on `app.json`, P) and its restore. Edits keep the file's own line
-/// ending (CRLF in CDO), and a run fails when an edit would change nothing or
-/// a step's refresh sees no changed file (`noOpError`; `noop` must see none):
-/// ENG-93, the `body` edit had matched nothing in every CRLF run before. Each
-/// line has the class, the files parsed and resolved, whether the dependency bodies were resolved
-/// again, `model.copied_bytes`, the program and whole-refresh wall times, and
-/// the resident set. With `--verify`, each step also compares the session's
-/// model with a cold build's (`model_fingerprint`, over `write_model`'s parts;
-/// `fingerprintMs` times the session's). A workspace state already built cold
-/// (`noop` and every `*-restore` step return to the `cold` step's) reuses that
-/// fingerprint (`coldReused`, no `coldMs`); the others build cold (`coldMs`).
-///
-/// The chosen file (`--file`, else the median-sized codeunit file with a
-/// procedure body) is restored after each pair, and the session's model
-/// needs are `AssemblyNeeds::BASE` (what a default command builds).
-/// `--low-mem` measures a session that keeps no dependency tree
-/// (`MemoryMode::LowMem`); each line then also counts the dependency files
-/// parsed by the program build and by the model assembly. `--sited` also
-/// builds the sited graph off each step's program (agent-tasks design M0-1)
-/// and keeps it until the next step's replaces it; each line then has
-/// `sited: {ms, nodes, sites, bytes}` (its build is inside `refreshMs`).
 /// The process's user plus system CPU time in milliseconds (every thread).
 #[cfg(unix)]
 fn process_cpu_ms() -> Option<u64> {
@@ -289,6 +254,42 @@ fn process_cpu_ms() -> Option<u64> {
     None
 }
 
+/// `aldump --session-refresh <workspace-copy> [--file <rel>] [--verify]`:
+/// measure the stage-4 workspace session (context-server design §6,
+/// `program::session::WorkspaceSession`) per change type. It EDITS the
+/// workspace it is given, so it refuses a workspace inside a git checkout
+/// (the pinned CDO baseline is one): run it on a copy.
+///
+/// Steps, each one refresh, printed as one JSON line: `cold` (P, the first
+/// build), `noop`, `body` (a comment line inside the first procedure body of
+/// the chosen file, B) and its restore, `newline` (two lines prepended to the
+/// file, B) and its restore, `decl` (a procedure added to the file, S) and its
+/// restore, `signature` (the file's first parameterless procedure gains a
+/// parameter, S) and its restore, `add` (a new file, F) and its removal,
+/// with `--implements <interface>` an `implementer` (a new codeunit
+/// implementing that interface, S) and its removal, `appjson` (a trailing
+/// newline on `app.json`, P) and its restore. Edits to the chosen file keep its
+/// own line ending (CRLF in CDO), and a run fails, before its first build, when
+/// the `body` or `decl` edit would change nothing (the body edit needs a line
+/// that is exactly four spaces and `begin`), and at a step whose refresh sees no
+/// changed file (`noOpError`; `noop` must see none): ENG-93, the `body` edit had
+/// matched nothing in every CRLF run before. Each line has the class, the files
+/// parsed and resolved, whether the dependency bodies were resolved again, `model.copied_bytes`, the program and whole-refresh wall times, and
+/// the resident set. With `--verify`, each step also compares the session's
+/// model with a cold build's (`model_fingerprint`, over `write_model`'s parts;
+/// `fingerprintMs` times the session's). A workspace state already built cold
+/// (`noop` and every `*-restore` step return to the `cold` step's) reuses that
+/// fingerprint (`coldReused`, no `coldMs`); the others build cold (`coldMs`).
+///
+/// The chosen file (`--file`, else the median-sized codeunit file with a
+/// procedure body) is restored after each pair, and the session's model
+/// needs are `AssemblyNeeds::BASE` (what a default command builds).
+/// `--low-mem` measures a session that keeps no dependency tree
+/// (`MemoryMode::LowMem`); each line then also counts the dependency files
+/// parsed by the program build and by the model assembly. `--sited` also
+/// builds the sited graph off each step's program (agent-tasks design M0-1)
+/// and keeps it until the next step's replaces it; each line then has
+/// `sited: {ms, nodes, sites, bytes}` (its build is inside `refreshMs`).
 fn session_refresh_cmd(args: &[String]) -> ExitCode {
     use al_sem::program::inputs::WorkspaceInputs;
     use al_sem::program::model::workspace::AssemblyNeeds;
@@ -343,10 +344,12 @@ fn session_refresh_cmd(args: &[String]) -> ExitCode {
         for e in rd.flatten() {
             let p = e.path();
             if p.is_dir() {
-                if !p
-                    .file_name()
-                    .is_some_and(|n| n.to_string_lossy().starts_with('.'))
-                {
+                // Never a folder the workspace scan skips (ENG-93, Fable): an edit
+                // there would reach no refresh.
+                if !p.file_name().is_some_and(|n| {
+                    n.to_string_lossy().starts_with('.')
+                        || al_sem::source_text::is_skipped_dir_name(n)
+                }) {
                     al_files(&p, out);
                 }
             } else if p.extension().is_some_and(|x| x.eq_ignore_ascii_case("al")) {
@@ -365,7 +368,11 @@ fn session_refresh_cmd(args: &[String]) -> ExitCode {
                     let t = std::fs::read_to_string(&p).ok()?;
                     // `lines` strips `\r\n` too: a CRLF file qualifies (ENG-93).
                     (t.lines().any(|l| l == "    begin")
-                        && t.trim_start().to_lowercase().starts_with("codeunit"))
+                        // A byte-order mark is not text (29 of CDO's codeunit files).
+                        && t.trim_start_matches('\u{feff}')
+                            .trim_start()
+                            .to_lowercase()
+                            .starts_with("codeunit"))
                     .then_some((t.len() as u64, p))
                 })
                 .collect();
@@ -539,7 +546,7 @@ fn session_refresh_cmd(args: &[String]) -> ExitCode {
     let edited = |name: &str, new: &str| {
         if new == original {
             eprintln!(
-                "aldump --session-refresh: the {name} edit changes nothing in {}",
+                "aldump --session-refresh: the {name} edit changes nothing in {} (the body edit needs a line that is exactly four spaces and `begin`; the decl edit a closing `}}`)",
                 target.display()
             );
             false
@@ -553,8 +560,6 @@ fn session_refresh_cmd(args: &[String]) -> ExitCode {
     } else {
         "\n"
     };
-    step("cold", true, &mut session);
-    step("noop", false, &mut session);
     // A comment line after the first procedure body's `begin` (4-space indent).
     let mut body = String::with_capacity(original.len() + 32);
     let mut done = false;
@@ -566,17 +571,6 @@ fn session_refresh_cmd(args: &[String]) -> ExitCode {
             done = true;
         }
     }
-    if !edited("body", &body) {
-        return ExitCode::FAILURE;
-    }
-    write(&target, &body);
-    step("body", true, &mut session);
-    write(&target, &original);
-    step("body-restore", true, &mut session);
-    write(&target, &format!("{eol}{eol}{original}"));
-    step("newline", true, &mut session);
-    write(&target, &original);
-    step("newline-restore", true, &mut session);
     let decl = match original.rfind('}') {
         Some(i) => format!(
             "{}{eol}    procedure SessionProbeAdded(){eol}    begin{eol}    end;{eol}{}",
@@ -585,9 +579,20 @@ fn session_refresh_cmd(args: &[String]) -> ExitCode {
         ),
         None => original.clone(),
     };
-    if !edited("decl", &decl) {
+    // Checked before the first build: a refused edit costs no cold build (Fable).
+    if !edited("body", &body) || !edited("decl", &decl) {
         return ExitCode::FAILURE;
     }
+    step("cold", true, &mut session);
+    step("noop", false, &mut session);
+    write(&target, &body);
+    step("body", true, &mut session);
+    write(&target, &original);
+    step("body-restore", true, &mut session);
+    write(&target, &format!("{eol}{eol}{original}"));
+    step("newline", true, &mut session);
+    write(&target, &original);
+    step("newline-restore", true, &mut session);
     write(&target, &decl);
     step("decl", true, &mut session);
     write(&target, &original);

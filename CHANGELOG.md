@@ -16,8 +16,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   body-only refresh path was never exercised on CDO. The `newline` and `decl` edits worked but
   mixed `\n` into the CRLF file.
 - **Now.** The file choice and the `body` edit find the procedure body by its lines, and every edit
-  is written in the file's own line ending. Two guards: an edit that would leave the file as it was
-  stops the run with "the <step> edit changes nothing", before writing; and each step states
+  to the chosen file is written in its own line ending (the probe files and the `app.json` edit
+  stay LF). The file choice also skips the folders the workspace scan skips (`node_modules`,
+  `.alpackages`, `.snapshots`) and reads past a byte-order mark (29 of CDO's codeunit files have
+  one). Two guards: a `body` or `decl` edit that would leave the file as it was stops the run with
+  "the <step> edit changes nothing", before the first build and before writing; and each step states
   whether its refresh must see a changed file (every step but `noop`, which must see none), a
   mismatch adding `noOpError` to the row and failing the run.
 - Pinned by `cli_session_refresh_crlf`: a CRLF workspace with no `--file` (every edit step changes
