@@ -65,12 +65,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (0 unknown); `ConeArena::logical_lines` (`aldump --snapshot-memory --pd-dump`) is
   byte-identical before and after (3,389,463 lines); `aldump --session-refresh --verify` gives a
   model equal to a cold build after every change type, in the default and `--low-mem` modes.
+  `scripts/cdo-speed` (`497b0e14` against `f492eea5`) passed twice: the model build x1.030 and
+  x1.007, the round totals x1.099 and x1.005 (the first run started at a host load average of
+  17.1, the second calm), so no speed ratio is claimed; the servers' summed peak memory x0.967
+  and x0.953.
 - **Tests.** `arena_indices_convert_at_their_limit_and_panic_past_it` (each conversion at its
   maximum, and one past it panics naming the limit) and
   `push_state_refuses_more_requirement_lists_than_the_index_holds` (65,535 distinct lists store,
   the 65,536th panics). Discrimination: an `as u16` in `push_state` wraps silently and turns the
   second red. The `u32` limits are not crossed by a test (4.3 G items); the conversion helper's
-  test is their guard.
+  test is their guard. Review (Fable): the two arena comparators the reuse tests use
+  (`arena_bytes`, `pd_text`) printed states by `Debug`, which now holds table indices; both read
+  `logical_lines` instead. And no reuse test had a guarded state, so a copy that dropped a
+  state's requirements left every test green (before this change too):
+  `a_reused_producers_guarded_state_keeps_its_requirements` reuses the guarded-seed fixture and
+  turns red under that break.
 
 ### Changed (ENG-106: `alsem fingerprint` builds its root blocks on 2 workers, wall x0.55 on CDO, CPU not higher)
 
