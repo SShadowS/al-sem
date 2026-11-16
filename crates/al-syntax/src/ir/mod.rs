@@ -473,10 +473,13 @@ mod exact_size_tests {
     #[test]
     fn parsed_declarations_share_type_texts_and_box_only_rare_fields() {
         let file = crate::parse(
-            "codeunit 50103 \"Sh\"\n{\n    var\n        G: Record Customer;\n\n    procedure Plain(P: Record Customer)\n    var\n        L: Record Customer;\n    begin\n    end;\n\n    /// Says hello.\n    procedure Named() Ret: Record Customer\n    begin\n    end;\n}\n",
+            "codeunit 50103 \"Sh\"\n{\n    var\n        G: Record Customer;\n\n    procedure Plain(P: Record Customer)\n    var\n        L: Record Customer;\n    begin\n    end;\n\n    /// Says hello.\n    procedure Named() Ret: Record Customer\n    begin\n    end;\n\n    // Only a doc.\n    procedure DocOnly()\n    begin\n    end;\n}\n",
         );
         let o = &file.objects[0];
-        let (plain, named) = (&o.routines[0], &o.routines[1]);
+        let (plain, named, doc_only) = (&o.routines[0], &o.routines[1], &o.routines[2]);
+        // A doc alone boxes too (`set_doc` on a routine that has no box yet; sol, ENG-102).
+        assert_eq!(doc_only.doc(), Some("Only a doc."));
+        assert!(doc_only.return_name().is_none());
         let texts = [
             o.globals[0].ty.as_ref(),
             plain.params[0].ty.as_ref(),
