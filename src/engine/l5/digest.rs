@@ -1389,8 +1389,9 @@ fn enumerate_proofs<'i>(
     // prefix whose search touched no state a prefix can hold.
     let mut reach_memo: HashMap<(StateIx, usize), SeedReach> = HashMap::new();
     let no_states = std::collections::HashSet::new();
-    let mut seen: std::collections::HashSet<(Vec<EdgeIx>, usize)> =
-        std::collections::HashSet::new();
+    // Only inserted into (never iterated), so its hasher cannot reach output
+    // (ENG-105: SipHash here was ~2% of `alsem fingerprint`'s CPU).
+    let mut seen: crate::fxhash::FxHashSet<(Vec<EdgeIx>, usize)> = Default::default();
     // Each distinct key once, as a dense id (its index in `key_ids`): a pop
     // tests `found[id]` and never hashes the key again (#289: hashing it per
     // pop cost ≈4× CPU on CDO `h`). `IndexSet` keeps each entry's hash, so
@@ -1568,42 +1569,85 @@ struct NodeMemo {
 /// one root's witnesses walk the same edges again and again — so each is built
 /// once per root.
 ///
-/// Keyed by the edge's address. `'i` ties the cache to the borrow of the graph
-/// that owns the edges, so it cannot outlive them: a freed edge's address,
-/// reused by another edge, can never hit a stale memo.
+/// Keyed by the edge's index in `idx.typed_edges` ([`DenseMemos`]), or by its
+/// address for any other edge. Both name the edge's address. `'i` ties the cache
+/// to the borrow of the graph that owns the edges, so it cannot outlive them: a
+/// freed edge's address, reused by another edge, can never hit a stale memo.
+///
+/// shortcut: each cache (one per root) allocates a slot per edge of the whole
+/// slice on first use: 0.01 % of `fingerprint`'s CPU on CDO, peak RSS unchanged
+/// (ENG-105 notes). If it shows in a profile, share one slot table per worker.
 #[derive(Default)]
 pub struct HopCache<'i>(
+    /// Memos of edges outside the [`DenseMemos`] slice, by address.
     HashMap<*const SnapshotGraphEdge, Rc<NodeMemo>>,
     std::marker::PhantomData<&'i SnapshotGraphEdge>,
     /// Each distinct projected hop JSON's dense id ([`HopCache::json_id`]).
     crate::fxhash::FxHashMap<String, u32>,
+    /// ENG-105: memos by the edge's index in one `typed_edges` slice (the first
+    /// one asked about, its start address and length kept), no hashing. Every
+    /// walked edge lives there; the address map above serves any other edge.
+    DenseMemos,
 );
+
+/// [`HopCache`]'s memo slots by edge index, for one slice of edges.
+#[derive(Default)]
+struct DenseMemos {
+    base: usize,
+    len: usize,
+    slots: Vec<Option<Rc<NodeMemo>>>,
+}
+
+impl DenseMemos {
+    /// `edge`'s index in `edges` when this cache's slots are for `edges` (taken
+    /// for them on first use) and `edge` is one of them.
+    fn index_of(&mut self, edge: &SnapshotGraphEdge, edges: &[SnapshotGraphEdge]) -> Option<usize> {
+        let base = edges.as_ptr() as usize;
+        if self.slots.is_empty() && !edges.is_empty() {
+            self.base = base;
+            self.len = edges.len();
+            self.slots.resize(edges.len(), None);
+        }
+        if self.base != base || self.len != edges.len() {
+            return None;
+        }
+        let size = std::mem::size_of::<SnapshotGraphEdge>();
+        let offset = (edge as *const SnapshotGraphEdge as usize).checked_sub(base)?;
+        let i = offset / size;
+        (offset % size == 0 && i < self.slots.len() && std::ptr::eq(&edges[i], edge)).then_some(i)
+    }
+}
+
+/// `edge`'s memo: its hop and projection, built from the edge alone.
+fn build_memo(edge: &SnapshotGraphEdge, idx: &FingerprintIndexes) -> NodeMemo {
+    let hop = edge_to_hop(edge, idx).expect("only edges with a hop are walked (edge_has_hop)");
+    let from_id = edge_from(edge);
+    let from_display = idx
+        .routine_display_by_id
+        .get(from_id)
+        .cloned()
+        .unwrap_or_else(|| from_id.to_string());
+    let projected = project_hop(&hop, from_id, &from_display, idx).map(ProjHop::new);
+    NodeMemo {
+        hop: Rc::new(hop),
+        projected,
+        json_id: std::cell::OnceCell::new(),
+    }
+}
 
 impl<'i> HopCache<'i> {
     /// The memo of `edge`, built on first use. A hop leaves the routine its
     /// edge leaves, so the hop and its projection are a function of the edge
     /// alone — what makes keying by edge sound.
     fn get(&mut self, edge: &'i SnapshotGraphEdge, idx: &FingerprintIndexes) -> Rc<NodeMemo> {
+        if let Some(i) = self.3.index_of(edge, idx.typed_edges) {
+            let slot = &mut self.3.slots[i];
+            return Rc::clone(slot.get_or_insert_with(|| Rc::new(build_memo(edge, idx))));
+        }
         Rc::clone(
             self.0
                 .entry(edge as *const SnapshotGraphEdge)
-                .or_insert_with(|| {
-                    let hop = edge_to_hop(edge, idx)
-                        .expect("only edges with a hop are walked (edge_has_hop)");
-                    let from_id = edge_from(edge);
-                    let from_display = idx
-                        .routine_display_by_id
-                        .get(from_id)
-                        .cloned()
-                        .unwrap_or_else(|| from_id.to_string());
-                    let projected =
-                        project_hop(&hop, from_id, &from_display, idx).map(ProjHop::new);
-                    Rc::new(NodeMemo {
-                        hop: Rc::new(hop),
-                        projected,
-                        json_id: std::cell::OnceCell::new(),
-                    })
-                }),
+                .or_insert_with(|| Rc::new(build_memo(edge, idx))),
         )
     }
 
@@ -7956,6 +8000,40 @@ mod tests {
     // reach this code and would only re-verify plumbing already covered by the CDO
     // byte-compare; the divergence itself lives entirely in this helper).
     // -----------------------------------------------------------------------
+
+    /// ENG-105: a `HopCache`'s dense memo slots belong to ONE edge slice. Asked
+    /// about edge 0 of a second, equally long slice, it must not hand back the
+    /// first slice's edge-0 memo (an address key never collided; an index does).
+    /// Hand-stated: two indexes whose edge 0 leaves different routines.
+    ///
+    /// DISCRIMINATION (2026-11-16): `DenseMemos::index_of` without its slice check
+    /// -> the second edge reads the first one's hop (call site "cs-A1", not "cs-B1").
+    #[test]
+    fn hop_cache_slots_belong_to_one_edge_slice() {
+        let snapshot_with = |from: &str| {
+            let mut snap = empty_snapshot();
+            *std::sync::Arc::make_mut(&mut snap.typed_edges) = vec![
+                call_edge(from, "X", &format!("cs-{from}")),
+                call_edge("X", "Y", "cs-xy"),
+            ];
+            snap
+        };
+        let (sa, sb) = (snapshot_with("A1"), snapshot_with("B1"));
+        let (ia, ib) = (
+            build_fingerprint_indexes(&sa),
+            build_fingerprint_indexes(&sb),
+        );
+        assert_eq!(ia.typed_edges.len(), ib.typed_edges.len(), "precondition");
+        let mut hc = HopCache::default();
+        let site_of = |m: &NodeMemo| match &*m.hop {
+            WitnessHop::Call { callsite_id, .. } => callsite_id.clone(),
+            other => panic!("a call hop: {other:?}"),
+        };
+        let a = hc.get(&ia.typed_edges[0], &ia);
+        let b = hc.get(&ib.typed_edges[0], &ib);
+        assert_eq!(site_of(&a), "cs-A1");
+        assert_eq!(site_of(&b), "cs-B1", "the second slice's own edge");
+    }
 
     /// Minimal QueryWitnessHop for path-length/sort tests. Only `from_routine_id`
     /// varies, so the hop JSON (which `merge_normalize_via_paths` sorts and
