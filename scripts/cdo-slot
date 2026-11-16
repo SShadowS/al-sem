@@ -13,7 +13,9 @@
 #       35 GB (CDO_SLOT_MEM_MIN_GB). Without --wait it refuses at once (exit 1,
 #       naming the holder); with --wait it polls every 15 s, prints the holder
 #       about every 60 s, and gives up after --timeout seconds (default: never)
-#       or when the bound process ends.
+#       or when the bound process ends. Waiters are served in arrival order
+#       (TLS-88): a free slot goes to the oldest waiter still alive, and an
+#       acquire without --wait refuses while anyone waits.
 #       --bind PID: the hold ends with that process, even when it is killed
 #       outright (scripts bind their own PID; `run` binds itself). Outside a
 #       Claude session an acquire must be bound (or come from `run`).
@@ -163,6 +165,39 @@ describe() {
     [[ -n "$bound" ]] && who+=", for PID $bound"
     echo "held by $(field owner) ($(field reason)) since $since ($((age / 60)) min), $who"
 }
+# ⟨TLS-88⟩ The waiters' queue: a waiting acquire holds a ticket, and a free slot
+# goes to the oldest live ticket, so a holder that releases and acquires again
+# goes behind an earlier waiter (before: whoever polled first won). A ticket is
+# `$queue/<ns since epoch>.<pid>`, holding "<pid> <start time>"; one of a dead
+# process (or a reused PID) is dropped by whoever reads the queue.
+queue="$dir/queue"
+ticket=""
+enqueue() {
+    mkdir -p "$queue"
+    ticket="$queue/$(printf '%020d' "$(date +%s%N)").$$"
+    printf '%s %s\n' "$$" "$(proc_start $$)" >"$ticket"
+}
+dequeue() {
+    [[ -n "$ticket" ]] && rm -f "$ticket"
+    ticket=""
+}
+# ahead: the live tickets older than ours (every live one when we hold none),
+# as "<count> <oldest pid>"; drops dead tickets on the way.
+ahead() {
+    local t n=0 first="" pid start
+    for t in "$queue"/*; do
+        [[ -e "$t" ]] || continue
+        [[ "$t" == "$ticket" ]] && break
+        read -r pid start <"$t" 2>/dev/null || { rm -f "$t"; continue; }
+        if alive "$pid" "$start"; then
+            ((n += 1))
+            [[ -z "$first" ]] && first=$pid
+        else
+            rm -f "$t"
+        fi
+    done
+    echo "$n $first"
+}
 mem_ok() {
     ((mem_min == 0)) && return 0
     local kb
@@ -249,11 +284,16 @@ acquire() { # acquire <owner> <reason> <wait 0|1> <timeout or "">
     [[ -n "$me_session" || -n "$me_token" || -n "$bind" ]] \
         || die "outside a Claude session, bind the hold (--bind PID) or use 'run'; nobody could release it otherwise"
     mkdir -p "$dir"
-    local token=${me_token:-$(od -An -N8 -tx8 /dev/urandom | tr -d ' ')}
+    local token=${me_token:-$(od -An -N8 -tx8 /dev/urandom | tr -d ' ')} line
+    if ((wait)); then
+        enqueue
+        trap dequeue EXIT
+    fi
     while :; do
         state
         case "$st" in
             mine)
+                dequeue
                 echo "cdo-slot: already yours ($(describe)); nothing to do"
                 return 4
                 ;;
@@ -263,9 +303,14 @@ acquire() { # acquire <owner> <reason> <wait 0|1> <timeout or "">
                 continue
                 ;;
             free)
-                if ! mem_ok; then
+                read -r -a line <<<"$(ahead)"
+                if ((line[0] > 0)); then
+                    why="free, but ${line[0]} waiter(s) came first (the oldest is PID ${line[1]})"
+                elif ! mem_ok; then
                     why="MemAvailable below $mem_min GB"
                 elif try_take "$owner" "$reason" "$token"; then
+                    dequeue
+                    trap - EXIT
                     echo "cdo-slot: taken by $owner ($reason)"
                     return 0
                 else

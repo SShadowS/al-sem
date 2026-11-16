@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (TLS-88: the CDO slot serves its waiters in arrival order)
+
+- **The problem:** `scripts/land` was waiting on the slot when engine's before-after released
+  it. engine's next queued `cdo-slot run` took it first and held it for about 9 minutes,
+  against the orchestrator's hold. `acquire --wait` polled every 15 s, so whoever polled first
+  after a release won.
+- **Now** (`scripts/cdo-slot`):
+  - A waiting acquire (`run`, `acquire --wait`) registers a ticket,
+    `$CDO_SLOT_DIR/queue/<ns>.<pid>`, holding its PID and process start time.
+  - A free slot goes only to the oldest live ticket. Tickets of dead processes, or of a reused
+    PID, are dropped by whoever reads the queue.
+  - So a holder that releases and asks again goes behind earlier waiters.
+  - An acquire without `--wait` refuses while anyone waits.
+  - A waiter removes its ticket when it takes the slot, gives up or exits; a `SIGKILL`ed waiter's
+    ticket is dropped as dead.
+  - A shared hold (the same token, or the same session's hand hold) is still "already yours" at
+    once.
+- **Not done:** the task's optional priority for `land`/`cdo-gate` over lane runs. Arrival order
+  already stops a lane re-taking the slot ahead of a waiting landing.
+- **Test:** `cdo_slot_serves_waiters_in_arrival_order`. While A holds, W1 then W2 wait. A
+  releases and asks again: it times out behind them. W1 takes the slot, W2 keeps waiting. W2 is
+  then killed outright, and its dead ticket does not block the next acquire. CLAUDE.md's
+  `cdo-slot` line says so.
+
 ### Added (TLS-85: gdb and cargo-sweep in the kraken image; how to take a stack snapshot)
 
 - **What changed:** `.kraken/Dockerfile` installs two tools that were only installed live
