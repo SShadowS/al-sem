@@ -41,7 +41,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     dropped -> A re-takes the slot (red); dead tickets kept -> the slot is blocked (red).
   - `cdo_slot_queue_refuses_jumps_and_steps_aside_for_memory`, with the slot free and a waiter
     held still. A no-wait acquire is refused past a live waiter, which polls every 30 s. A no-wait
-    acquire takes the slot past a waiter whose memory floor is not met.
+    acquire takes the slot past a waiter whose memory floor is not met, and that waiter keeps its
+    ticket. Breaks: `ahead` counting nothing with no ticket -> the jump succeeds (red); `mem`
+    tickets counted -> the step-aside is refused (red); `mem` tickets removed -> the waiter loses
+    its place (red).
   - CLAUDE.md's `cdo-slot` line says so.
 
 ### Added (TLS-85: gdb and cargo-sweep in the kraken image; how to take a stack snapshot)

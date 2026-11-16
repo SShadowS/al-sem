@@ -600,11 +600,13 @@ fn cdo_slot_is_truthful_under_races_and_bad_records() {
 /// - An acquire without --wait refuses while a waiter that can run waits. The
 ///   waiter polls every 30 s, so after A's release it is still asleep.
 /// - A waiter short of memory (its floor 999999 GB) marks its ticket and steps
-///   aside: a no-wait acquire with no floor takes the slot past it.
+///   aside: a no-wait acquire with no floor takes the slot past it, and the
+///   waiter keeps its ticket (its place).
 ///
 /// Mutations: `ahead` counting nothing when we hold no ticket -> the no-wait
 /// acquire takes the slot (red); `ahead` counting `mem` tickets -> the acquire
-/// past the memory-blocked waiter is refused (red).
+/// past the memory-blocked waiter is refused (red); `ahead` removing a `mem`
+/// ticket -> M re-enqueues under a new name (red).
 #[test]
 fn cdo_slot_queue_refuses_jumps_and_steps_aside_for_memory() {
     let s = Slot::new();
@@ -655,6 +657,13 @@ fn cdo_slot_queue_refuses_jumps_and_steps_aside_for_memory() {
     until("M marked mem", &|| {
         ticket_text().is_some_and(|t| t.trim_end().ends_with(" mem"))
     });
+    let names = || -> Vec<std::ffi::OsString> {
+        std::fs::read_dir(s.dir().join("queue"))
+            .map(|d| d.filter_map(|e| Some(e.ok()?.file_name())).collect())
+            .unwrap_or_default()
+    };
+    let before = names();
+    assert_eq!(before.len(), 1, "precondition: only M waits");
     let (code, text) = s.run("D", &["acquire", "d", "past"], &[]);
     assert_eq!(
         code,
@@ -662,6 +671,9 @@ fn cdo_slot_queue_refuses_jumps_and_steps_aside_for_memory() {
         "a memory-blocked waiter held up the slot: {text}"
     );
     assert_eq!(s.run("D", &["release"], &[]).0, Some(0));
+    // M keeps its place: past its 1 s poll, its ticket is the same one.
+    std::thread::sleep(std::time::Duration::from_millis(2500));
+    assert_eq!(names(), before, "M lost its place in the queue");
     m.kill().unwrap();
     m.wait().unwrap();
 }

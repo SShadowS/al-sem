@@ -214,8 +214,6 @@ ahead() {
         elif [[ "$flag" != mem ]]; then
             ((n += 1))
             [[ -z "$first" ]] && first=$pid
-        else
-            rm -f "$t"
         fi
     done
     echo "$n $first"
