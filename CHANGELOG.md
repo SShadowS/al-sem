@@ -9,8 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed (ENG-98: the SipHash maps the CDO profiles found hot use FxHash)
 
-- **Found** (samply, `profiling` builds, the pinned CDO baseline, 2026-11-16; who hashes, by
-  the chain of frames above `Sip13`): `alsem fingerprint` spent 20.7 % of its 256.5 s CPU in
+- **Found** (samply via `scripts/profile`, `profiling` builds, the pinned CDO baseline,
+  2026-11-16; who hashes, by the chain of frames above `Sip13`; "CPU" is the thread CPU of every
+  thread, summed from samply's per-sample deltas). The commands: `alsem fingerprint
+  /work/src/cdo-baseline/Cloud` (default options; `cdo-before-after`'s cheaper
+  `--format json --deterministic` run is a different invocation) and `alsem analyze --format
+  json /work/src/cdo-baseline/Cloud`. `alsem fingerprint` spent 20.7 % of its 256.5 s CPU in
   SipHash, 17.9 % in ONE set: `enumerate_proofs`' `key_ids` (`src/engine/l5/digest.rs`), an
   `IndexSet<ProofKey>` whose keys hold every hop's projected JSON. `alsem analyze` spent 3.84 %
   of 72.5 s, the largest parts in `pd_solve::solve_producer` (its `Incoming`, `ix_of` and
@@ -22,11 +26,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stays: its share is small for that change.
 - **Same output:** `scripts/cdo-before-after 52d349ab 6d12dc5e`: no detector, fingerprint or
   number moved.
-- **Measured:** the fingerprint re-profile: SipHash 20.7 % -> 2.84 %, CPU 256.5 -> 241.6 s
-  (-5.8 %, one run each). `cdo-speed` (PASS, not under load): model build CPU x0.975 (passes
-  x0.958 / x0.992: inside its ±8 % resolution, so no build gain is claimed); warm prove x0.748
-  (passes x0.886 / x0.632, both faster, wide spread); warm tests x0.980; rounds x1.011; peak
-  memory x0.989.
+- **Measured:** the fingerprint re-profile: SipHash 20.7 % -> 2.84 %, but hashing as a whole
+  only ~20.7 % -> ~17.6 %, because Fx-hashing `ProofKey` is still 14.8 % (below); CPU 256.5 ->
+  241.6 s (-5.8 %, one run each). `cdo-speed` (PASS, not under load): model build CPU x0.975
+  (passes x0.958 / x0.992: inside its ±8 % resolution, so no build gain is claimed); warm prove
+  x0.748 (passes x0.886 / x0.632, both faster, wide spread); warm tests x0.980; rounds x1.011;
+  peak memory x0.989; the sub-second rows (x0.96-x1.10) are noise and not listed.
 - **Left:** hashing `ProofKey` with Fx is still 14.8 % of `fingerprint`'s CPU: Fx reads every
   byte of every hop's JSON for every key. Interning each hop's JSON to an id is filed as ENG-100.
 - **Also found:** `analyze` gives some distinct findings one fingerprint (CDO primary: 2,308
