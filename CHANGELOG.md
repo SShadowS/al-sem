@@ -7,7 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added (TLS-86: CPU profiles of `impact --diff`, `prove` and `explain` on CDO; five hot spots filed)
+### Added (TLS-84: the tree-sitter CLI in the kraken image)
+
+- **What changed:** `.kraken/Dockerfile` downloads tree-sitter 0.27.0's release binary into
+  `/usr/local/bin`. That is the version tree-sitter-al generates with, and tsal's image pins the
+  same.
+- **Why:** the grammar-upgrade skill checks a grammar shape against real `tree-sitter parse`
+  output, and the image had no CLI, so agents built stand-ins.
+- **When it takes effect:** at the next tentacle rebuild. Until then the live install in
+  `~/.local/bin` (0.27.0) serves. Checked by the Dockerfile diff only; no image was built.
+
+### Added (TLS-86: CPU profiles of `impact --diff`, `prove` and `explain` on CDO; six hot spots filed)
 
 - **The notes:** `docs/superpowers/notes/2026-11-16-tls86-profiles.md`. They hold samply profiles
   (`scripts/profile`, master 9c1c099b, CDO `bc3ccb18`) of three commands: the gate's 699-root

@@ -51,6 +51,12 @@ RUN printf '%s\n' 'export PATH=/opt/cargo/bin:/opt/dotnet:/opt/al-tool:$PATH' 'e
 # base's ~/.cache one so the binary lands in /opt/cargo/bin.
 RUN CARGO_HOME=/opt/cargo cargo install samply --version 0.13.1 --locked \
     && rm -rf /opt/cargo/registry /opt/cargo/git && chown -R dev:dev /opt/cargo && samply --version
+# tree-sitter CLI: `tree-sitter parse <file.al>` to check a grammar shape against real output (the
+# grammar-upgrade skill's rule; TLS-84: the image lacked it and agents built stand-ins). 0.27.0 is the
+# version tree-sitter-al generates with (tsal's image pins the same).
+ARG TREE_SITTER_VERSION=0.27.0
+RUN curl -fsSL https://github.com/tree-sitter/tree-sitter/releases/download/v$TREE_SITTER_VERSION/tree-sitter-linux-x64.gz \
+      | gunzip > /usr/local/bin/tree-sitter && chmod +x /usr/local/bin/tree-sitter && tree-sitter --version
 # ~/.al-sem (agentflow's retained runs, timings.jsonl) lives on the work volume: a rebuild keeps only /work,
 # /coord and a few home folders, so a plain ~/.al-sem was wiped every time. scripts/kraken-setup.sh makes
 # the target; the link is made here, not there, because kraken re-runs setup only when its inputs change.
