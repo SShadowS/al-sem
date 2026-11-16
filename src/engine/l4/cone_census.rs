@@ -107,14 +107,13 @@ fn value_source_heap(t: &mut Tally, vs: &ValueSource) {
 /// Owned heap reachable from one [`CapabilityExtra`].
 fn capability_extra_heap(t: &mut Tally, e: &CapabilityExtra) {
     match e {
+        // The temp state's kind owns no heap since ENG-96 (a 4-byte word).
         CapabilityExtra::Table {
             record_variable_id,
-            temp_state,
             op_subtype,
+            ..
         } => {
-            t.strs(record_variable_id)
-                .strs(temp_state.iter().map(|ts| &ts.kind))
-                .strs(op_subtype);
+            t.strs(record_variable_id).strs(op_subtype);
         }
         CapabilityExtra::Dispatch { object_type, .. } => {
             t.strs([object_type]);

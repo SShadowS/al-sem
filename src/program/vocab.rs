@@ -6,6 +6,10 @@
 //! process-wide table of the words seen so far (leaked, one copy each; none occur on real
 //! input, so the table stays empty). Equality, ordering, hashing, `Display` and serde all go
 //! through the word, so every comparison, sort and output is the one the `String` gave.
+//!
+//! The table only grows from words outside a vocabulary. Today every value comes from the
+//! engine's own literals (no AL text and no cache or wire input reaches these types), so it
+//! stays empty; a future path that deserializes untrusted input into one should bound it.
 
 use std::sync::Mutex;
 
@@ -40,7 +44,9 @@ macro_rules! open_vocab {
         #[derive(Clone, Copy)]
         $vis enum $name {
             $($variant,)+
-            /// A word this vocabulary does not know, kept ([`crate::program::vocab`]).
+            /// A word this vocabulary does not know, kept ([`crate::program::vocab`]). Built
+            /// only by `From`: a hand-made index past the table panics on first use.
+            #[doc(hidden)]
             Other(u16),
         }
 
@@ -130,7 +136,8 @@ macro_rules! open_vocab {
 
         impl std::fmt::Display for $name {
             fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                f.write_str(self.as_str())
+                // `str`'s own, so width, alignment and precision apply as to a `String` (sol).
+                std::fmt::Display::fmt(self.as_str(), f)
             }
         }
 
@@ -200,6 +207,22 @@ mod tests {
         assert_eq!(serde_json::to_string(&blue).unwrap(), "\"blue\"");
         let back: Color = serde_json::from_str("\"green\"").unwrap();
         assert!(matches!(back, Color::Green));
+        let unknown: Color = serde_json::from_str("\"blue\"").unwrap();
+        assert_eq!(
+            unknown, blue,
+            "an unknown word deserializes to the same kept word"
+        );
+        // Debug feeds the session's `{:#?}` model fingerprint: exactly a String's.
+        for (c, s) in [(red, "red".to_string()), (blue, "blue".to_string())] {
+            assert_eq!(format!("{c:?}"), format!("{s:?}"));
+            assert_eq!(format!("{c:#?}"), format!("{s:#?}"));
+            assert_eq!(c.to_string(), s);
+            assert_eq!(format!("{c:>8.3}|{c:<6}"), format!("{s:>8.3}|{s:<6}"));
+            assert_eq!(c, s);
+            use std::hash::BuildHasher;
+            let h = std::collections::hash_map::RandomState::new();
+            assert_eq!(h.hash_one(c), h.hash_one(s.as_str()), "hashes as its text");
+        }
         assert_eq!(std::mem::size_of::<Color>(), 4);
     }
 }

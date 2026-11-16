@@ -1730,7 +1730,7 @@ fn project_ir(
                     table_name: rv
                         .table_name
                         .as_deref()
-                        .map(crate::program::body::features::shared_vocab),
+                        .map(crate::program::body::features::shared_table_text),
                     table_id: None,
                     is_parameter: rv.is_parameter,
                     parameter_index: rv.parameter_index,
@@ -1770,7 +1770,7 @@ fn project_ir(
                         table_name: g
                             .table_name
                             .as_deref()
-                            .map(crate::program::body::features::shared_vocab),
+                            .map(crate::program::body::features::shared_table_text),
                         table_id: None,
                         is_parameter: g.is_parameter,
                         parameter_index: g.parameter_index,

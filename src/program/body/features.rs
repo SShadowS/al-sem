@@ -107,29 +107,47 @@ pub fn anchor_unit(unit: &str) -> crate::program::str_pool::SharedStr {
 /// argument's source kind), one allocation per text per thread. Only for closed sets: the
 /// thread keeps every text it saw.
 pub fn shared_vocab(kind: &str) -> crate::program::str_pool::SharedStr {
-    use crate::program::str_pool::SharedStr;
     thread_local! {
-        static KINDS: std::cell::RefCell<crate::fxhash::FxHashSet<SharedStr>> =
-            std::cell::RefCell::new(crate::fxhash::FxHashSet::default());
+        static KINDS: SharedSet = SharedSet::default();
     }
-    KINDS.with(|kinds| {
-        let mut kinds = kinds.borrow_mut();
-        if let Some(s) = kinds.get(kind) {
-            return s.clone();
-        }
-        let s = SharedStr::from(kind);
-        // Bounded however it is called: past the cap a text is no longer kept (it is still
-        // right, just not shared), so a long-running engine thread never grows this set.
-        if kinds.len() < SHARED_VOCAB_CAP {
-            kinds.insert(s.clone());
-        }
-        s
-    })
+    KINDS.with(|kinds| shared_in(kinds, SHARED_VOCAB_CAP, kind))
 }
 
 /// Texts [`shared_vocab`] keeps per thread: well above the grammar's kind names (~1,500)
 /// plus the expression and argument kinds.
 pub const SHARED_VOCAB_CAP: usize = 4096;
+
+/// ENG-96: a record variable's table name or table id, one allocation per text per thread.
+/// User text (a workspace's tables), so its own set and cap: it never crowds the closed
+/// vocabularies out of [`shared_vocab`]'s (Fable, ENG-96).
+pub fn shared_table_text(text: &str) -> crate::program::str_pool::SharedStr {
+    thread_local! {
+        static TABLES: SharedSet = SharedSet::default();
+    }
+    TABLES.with(|tables| shared_in(tables, SHARED_TABLE_TEXT_CAP, text))
+}
+
+/// Texts [`shared_table_text`] keeps per thread: CDO with its dependencies has about 2,300
+/// (1,149 table names, 1,120 table ids); a workspace past this still answers right, it only
+/// stops sharing the further texts.
+pub const SHARED_TABLE_TEXT_CAP: usize = 16_384;
+
+type SharedSet = std::cell::RefCell<crate::fxhash::FxHashSet<crate::program::str_pool::SharedStr>>;
+
+/// `text`'s shared copy in `set`, added while the set holds fewer than `cap` texts.
+fn shared_in(set: &SharedSet, cap: usize, text: &str) -> crate::program::str_pool::SharedStr {
+    let mut set = set.borrow_mut();
+    if let Some(s) = set.get(text) {
+        return s.clone();
+    }
+    let s = crate::program::str_pool::SharedStr::from(text);
+    // Bounded however it is called: past the cap a text is no longer kept (it is still
+    // right, just not shared), so a long-running engine thread never grows this set.
+    if set.len() < cap {
+        set.insert(s.clone());
+    }
+    s
+}
 
 impl PAnchor {
     /// 0-based containment: is `(line, column)` within `[start, end]` (inclusive)?

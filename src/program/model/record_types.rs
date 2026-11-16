@@ -173,7 +173,7 @@ pub fn resolve_routine_record_types(
             // implicit `Rec` seeded from a codeunit `TableNo = <number>` carries the
             // number string, which `table_by_name` alone could not resolve.
             if let Some(tid) = resolve_table_ref_to_id(symbols, table_name) {
-                variable.table_id = Some(crate::program::body::features::shared_vocab(&tid));
+                variable.table_id = Some(crate::program::body::features::shared_table_text(&tid));
             }
         }
     }
@@ -292,7 +292,7 @@ pub fn resolve_routine_record_types(
             if name != "rec" && name != "xrec" {
                 continue;
             }
-            rv.table_id = Some(crate::program::body::features::shared_vocab(own_id));
+            rv.table_id = Some(crate::program::body::features::shared_table_text(own_id));
         }
     }
 

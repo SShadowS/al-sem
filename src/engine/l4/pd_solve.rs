@@ -1860,14 +1860,15 @@ mod tests {
             ..Default::default()
         };
         // producers buffer; owner Arc; operation_id; fact Arc; the fact's
-        // subject, resource_id, witness_operation_id and temp-state kind;
-        // edges buffer; the edge's to, kind, callsite and sort_key.
-        assert_eq!(arena_tally(&arena).allocs, 13);
+        // subject, resource_id and witness_operation_id (its temp-state kind is
+        // a 4-byte word since ENG-96, no allocation); edges buffer; the edge's
+        // to, kind, callsite and sort_key.
+        assert_eq!(arena_tally(&arena).allocs, 12);
         let names: HashSet<Arc<str>> = HashSet::from([Arc::from("A")]);
         let reps = HashMap::from([((0, TempState::Unknown), fact)]);
         // one name; the names table; the reps table; the rep Arc and its
-        // fact's four strings. `resolved` is empty and holds no table.
-        assert_eq!(working_tally(&HashMap::new(), &names, &reps).allocs, 8);
+        // fact's three strings. `resolved` is empty and holds no table.
+        assert_eq!(working_tally(&HashMap::new(), &names, &reps).allocs, 7);
     }
 
     #[test]
