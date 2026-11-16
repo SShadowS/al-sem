@@ -450,6 +450,101 @@ pub struct LabelValue {
     pub translations: Vec<(String, String)>,
 }
 
+// ENG-94: the declarations keep no spare capacity. The lowerer push-builds them, and a
+// first push reserves four elements (a routine with one local held 4 x 192 B), so a
+// dependency tier kept by a resident session carried 49.6 MiB of unused capacity on CDO in
+// these lists alone. `lower_file` calls `exact_size` on each object once it is built; every
+// `Vec` a declaration owns is listed here, a new one belongs here too.
+use super::exact_size;
+
+impl ObjectDecl {
+    /// Drop every list's spare capacity, this object's and its members' ([`exact_size`]).
+    pub fn exact_size(&mut self) {
+        for r in &mut self.routines {
+            r.exact_size();
+        }
+        for v in &mut self.globals {
+            v.exact_size();
+        }
+        for a in &mut self.actions {
+            a.exact_size();
+        }
+        for f in &mut self.fields {
+            f.exact_size();
+        }
+        for e in &mut self.enum_values {
+            exact_size(&mut e.implementations);
+        }
+        for k in &mut self.keys {
+            exact_size(k);
+        }
+        exact_size(&mut self.routines);
+        exact_size(&mut self.globals);
+        exact_size(&mut self.protected_globals);
+        exact_size(&mut self.properties);
+        exact_size(&mut self.dataitems);
+        exact_size(&mut self.temporary_dataitems);
+        exact_size(&mut self.query_columns);
+        exact_size(&mut self.dataset_items);
+        exact_size(&mut self.implements);
+        exact_size(&mut self.page_controls);
+        exact_size(&mut self.fields);
+        exact_size(&mut self.keys);
+        exact_size(&mut self.run_objects);
+        exact_size(&mut self.enum_values);
+        exact_size(&mut self.actions);
+    }
+}
+
+impl RoutineDecl {
+    /// Drop every list's spare capacity ([`exact_size`]).
+    pub fn exact_size(&mut self) {
+        for v in &mut self.locals {
+            v.exact_size();
+        }
+        for a in &mut self.attributes_parsed {
+            exact_size(&mut a.args);
+        }
+        exact_size(&mut self.params);
+        exact_size(&mut self.locals);
+        exact_size(&mut self.attributes);
+        exact_size(&mut self.attributes_parsed);
+        exact_size(&mut self.preproc_context);
+    }
+}
+
+impl VarDecl {
+    /// Drop its label's lists' spare capacity ([`exact_size`]).
+    pub fn exact_size(&mut self) {
+        if let Some(l) = &mut self.label {
+            exact_size(&mut l.other);
+            exact_size(&mut l.translations);
+        }
+    }
+}
+
+impl ActionDecl {
+    /// Drop every list's spare capacity ([`exact_size`]).
+    pub fn exact_size(&mut self) {
+        exact_size(&mut self.caption);
+        exact_size(&mut self.tooltip);
+        exact_size(&mut self.run_object);
+        exact_size(&mut self.triggers);
+    }
+}
+
+impl FieldDecl {
+    /// Drop every list's spare capacity ([`exact_size`]).
+    pub fn exact_size(&mut self) {
+        exact_size(&mut self.obsolete_state);
+        exact_size(&mut self.obsolete_reason);
+        exact_size(&mut self.caption);
+        exact_size(&mut self.tooltip);
+        exact_size(&mut self.option_caption);
+        exact_size(&mut self.calc_formula);
+    }
+}
+
 /// The text of an AL string literal (`'it''s'` is `it's`), or `None` when `raw`
 /// is not one plain, well-formed `'…'` literal.
 pub fn al_string_literal_text(raw: &str) -> Option<String> {

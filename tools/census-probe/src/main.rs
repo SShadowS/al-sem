@@ -696,6 +696,12 @@ fn split_bodies(bodies: Option<Arc<Vec<al_sem::snapshot::parse::ParsedUnit>>>) {
         comments.push(f.comments);
     }
     step("  bodies: source text + paths + provenance", texts);
+    // ENG-94: the routine declarations' stats first, outside the measured span.
+    for file_objects in &objects {
+        for o in file_objects {
+            object_decl_stats(o);
+        }
+    }
     // ENG-85: the object declarations by field (strings, mostly).
     let (o0, _) = live();
     let mut of = Acc::default();
@@ -721,7 +727,8 @@ fn split_bodies(bodies: Option<Arc<Vec<al_sem::snapshot::parse::ParsedUnit>>>) {
                 actions,
                 ..
             } = o;
-            of.drop_as("objects.routines", routines);
+            // ENG-94: the routine declarations by field.
+            routine_decl_fields(&mut of, routines);
             of.drop_as("objects.globals", (globals, protected_globals));
             of.drop_as("objects.properties", properties);
             of.drop_as("objects.fields", fields);
@@ -745,6 +752,7 @@ fn split_bodies(bodies: Option<Arc<Vec<al_sem::snapshot::parse::ParsedUnit>>>) {
         mib(objects_total)
     );
     of.print(objects_total);
+    ROUTINE_DECL_STATS.with(|s| s.borrow().print());
     let (ir_bytes, _) = step("  bodies: ir (exprs, stmts, blocks, side tables)", irs);
     println!(
         "    ir remainder after the estimates (stmt heap, side tables, Vec slack) {:>9.2} MiB",
@@ -1964,6 +1972,194 @@ fn index_split_mode(built: Vec<Root>) {
         "RSS context (OS, not used for any byte figure): {}",
         rss_context()
     );
+}
+
+/// ENG-94: what the dependency routine declarations hold, gathered while they are dropped
+/// (counts, the inline size, and how much interning the repeated texts would save).
+#[derive(Default)]
+struct RoutineDeclStats {
+    routines: usize,
+    params: usize,
+    locals: usize,
+    attributes: usize,
+    attributes_parsed: usize,
+    docs: usize,
+    doc_bytes: usize,
+    /// Type texts (`Param.ty`, `VarDecl.ty`, `return_type`): count, bytes, distinct.
+    ty_count: usize,
+    ty_bytes: usize,
+    ty_distinct: HashMap<String, usize>,
+    /// `attributes` strings equal to some `attributes_parsed[i].raw` of the same routine.
+    attr_dup: usize,
+    access_modifiers: HashMap<String, usize>,
+    names_bytes: usize,
+    /// Locals and object globals with a label (`VarDecl.label`), and all globals.
+    locals_labelled: usize,
+    globals: usize,
+    globals_labelled: usize,
+    /// Vec capacity beyond len: routines, params, locals (elements).
+    routines_slack: usize,
+    params_slack: usize,
+    locals_slack: usize,
+    /// Rare RoutineDecl fields set.
+    return_name: usize,
+    dataitem_source_table: usize,
+    enclosing_member: usize,
+    preproc_nonempty: usize,
+}
+
+impl RoutineDeclStats {
+    fn print(&self) {
+        let distinct_bytes: usize = self.ty_distinct.keys().map(|k| k.len()).sum();
+        println!(
+            "    ENG-94 routine decls: {} (size_of RoutineDecl {} B, Param {} B, VarDecl {} B, AttributeIr {} B)",
+            self.routines,
+            size_of::<al_syntax::ir::RoutineDecl>(),
+            size_of::<al_syntax::ir::Param>(),
+            size_of::<al_syntax::ir::VarDecl>(),
+            size_of::<al_syntax::ir::AttributeIr>(),
+        );
+        println!(
+            "      params {} locals {} attributes {} attributes_parsed {} (attributes equal to a parsed raw: {})",
+            self.params, self.locals, self.attributes, self.attributes_parsed, self.attr_dup
+        );
+        println!(
+            "      type texts: {} ({:.2} MiB text), {} distinct ({:.2} MiB) -> interning would keep {:.1}%",
+            self.ty_count,
+            mib(self.ty_bytes as isize),
+            self.ty_distinct.len(),
+            mib(distinct_bytes as isize),
+            100.0 * distinct_bytes as f64 / self.ty_bytes.max(1) as f64
+        );
+        println!(
+            "      docs {} ({:.2} MiB); names {:.2} MiB; access modifiers {:?}",
+            self.docs,
+            mib(self.doc_bytes as isize),
+            mib(self.names_bytes as isize),
+            self.access_modifiers
+        );
+        println!(
+            "      labelled: locals {} of {}, object globals {} of {}",
+            self.locals_labelled, self.locals, self.globals_labelled, self.globals
+        );
+        println!(
+            "      vec slack (elements): routines {} ({:.2} MiB), params {} ({:.2} MiB), locals {} ({:.2} MiB)",
+            self.routines_slack,
+            mib((self.routines_slack * size_of::<al_syntax::ir::RoutineDecl>()) as isize),
+            self.params_slack,
+            mib((self.params_slack * size_of::<al_syntax::ir::Param>()) as isize),
+            self.locals_slack,
+            mib((self.locals_slack * size_of::<al_syntax::ir::VarDecl>()) as isize),
+        );
+        println!(
+            "      set: return_name {} dataitem_source_table {} enclosing_member {} preproc_context {}",
+            self.return_name,
+            self.dataitem_source_table,
+            self.enclosing_member,
+            self.preproc_nonempty
+        );
+    }
+}
+
+/// ENG-94: an object's globals and its routines Vec slack, outside the measured span.
+fn object_decl_stats(o: &al_syntax::ir::ObjectDecl) {
+    ROUTINE_DECL_STATS.with(|s| {
+        let mut s = s.borrow_mut();
+        s.routines_slack += o.routines.capacity() - o.routines.len();
+        s.globals += o.globals.len();
+        s.globals_labelled += o.globals.iter().filter(|g| g.label.is_some()).count();
+    });
+    routine_decl_stats(&o.routines);
+}
+
+thread_local! {
+    static ROUTINE_DECL_STATS: std::cell::RefCell<RoutineDeclStats> =
+        std::cell::RefCell::new(RoutineDeclStats::default());
+}
+
+/// ENG-94: the stats of `routines`, taken BEFORE the declarations are measured (its own
+/// allocations would otherwise be netted against the bytes dropped).
+fn routine_decl_stats(routines: &[al_syntax::ir::RoutineDecl]) {
+    ROUTINE_DECL_STATS.with(|s| {
+        let mut s = s.borrow_mut();
+        for r in routines {
+            s.routines += 1;
+            s.params += r.params.len();
+            s.locals += r.locals.len();
+            s.attributes += r.attributes.len();
+            s.attributes_parsed += r.attributes_parsed.len();
+            s.attr_dup += r
+                .attributes
+                .iter()
+                .filter(|a| r.attributes_parsed.iter().any(|p| &p.raw == *a))
+                .count();
+            if let Some(d) = &r.doc {
+                s.docs += 1;
+                s.doc_bytes += d.len();
+            }
+            s.names_bytes += r.name.len();
+            let tys = r
+                .params
+                .iter()
+                .filter_map(|p| p.ty.as_deref())
+                .chain(r.locals.iter().filter_map(|v| v.ty.as_deref()))
+                .chain(r.return_type.as_deref());
+            for t in tys {
+                s.ty_count += 1;
+                s.ty_bytes += t.len();
+                *s.ty_distinct.entry(t.to_string()).or_default() += 1;
+            }
+            if let Some(a) = &r.access_modifier {
+                *s.access_modifiers.entry(a.clone()).or_default() += 1;
+            }
+            s.locals_labelled += r.locals.iter().filter(|v| v.label.is_some()).count();
+            s.params_slack += r.params.capacity() - r.params.len();
+            s.locals_slack += r.locals.capacity() - r.locals.len();
+            s.return_name += usize::from(r.return_name.is_some());
+            s.dataitem_source_table += usize::from(r.dataitem_source_table.is_some());
+            s.enclosing_member += usize::from(r.enclosing_member.is_some());
+            s.preproc_nonempty += usize::from(!r.preproc_context.is_empty());
+        }
+    });
+}
+
+/// ENG-94: `routines` dropped field by field into `of`.
+fn routine_decl_fields(of: &mut Acc, mut routines: Vec<al_syntax::ir::RoutineDecl>) {
+    for r in routines.drain(..) {
+        let al_syntax::ir::RoutineDecl {
+            name,
+            params,
+            return_type,
+            return_name,
+            locals,
+            attributes,
+            attributes_parsed,
+            access_modifier,
+            dataitem_source_table,
+            enclosing_member,
+            preproc_context,
+            doc,
+            ..
+        } = r;
+        of.drop_as("routines.name", name);
+        of.drop_as("routines.params", params);
+        of.drop_as("routines.locals", locals);
+        of.drop_as("routines.attributes", attributes);
+        of.drop_as("routines.attributes_parsed", attributes_parsed);
+        of.drop_as("routines.doc", doc);
+        of.drop_as("routines.preproc_context", preproc_context);
+        of.drop_as(
+            "routines.return/access/dataitem/member",
+            (
+                return_type,
+                return_name,
+                access_modifier,
+                dataitem_source_table,
+                enclosing_member,
+            ),
+        );
+    }
+    of.drop_as("routines.(vec)", routines);
 }
 
 /// ENG-96: the inline layout of `PCallSite` and `ModelRecordVariable` and what their

@@ -69,6 +69,9 @@ pub fn lower_file(root: RawNode, source: &str) -> AlFile {
     // no spare capacity.
     ir.shrink_to_fit();
     crate::ir::exact_size(&mut objects);
+    objects
+        .iter_mut()
+        .for_each(crate::ir::ObjectDecl::exact_size);
     AlFile {
         objects,
         ir,
