@@ -2723,10 +2723,12 @@ fn rewrite_routine_site_ids(r: &mut ModelRoutine, f: &dyn Fn(&str) -> String) {
         }
     }
     let all = |v: &mut Vec<String>| v.iter_mut().for_each(|s| *s = f(s));
-    // ENG-103: every field is named (no `..`), here and in the nested rows that hold ids, so a
-    // field added later does not compile until someone decides whether it holds an id of this
-    // routine. A binding's `source_record_variable_id` was missed: after a split declaration
-    // it kept the old routine's id while its variable moved.
+    // ENG-103: every field of the routine, its call sites and their bindings, its operations,
+    // loops and unreachable statements is named (no `..`), so a field added later does not
+    // compile until someone decides whether it holds an id of this routine. (The statement
+    // tree, rules, drafts and record variables are still reached by field; the callers'
+    // `Debug`-text assert covers them.) A binding's `source_record_variable_id` was missed:
+    // after a split declaration it kept the old routine's id while its variable moved.
     let ModelRoutine {
         id: _,
         stable_routine_id: _,
@@ -2780,12 +2782,13 @@ fn rewrite_routine_site_ids(r: &mut ModelRoutine, f: &dyn Fn(&str) -> String) {
     for v in record_variables.iter_mut() {
         v.id = f(&v.id).into();
     }
-    for o in record_operations.iter_mut() {
-        record_operation_ids(o, f, true);
-    }
-    // A FieldRef operation's own id is no site id of this routine; its variable's is.
-    for o in field_ref_operations.iter_mut() {
-        record_operation_ids(o, f, false);
+    // FieldRef operations (`{call site id}/fieldref`) are filled later, by `resolve()`, so the
+    // list is empty here today; rewritten all the same, should that order change (Fable).
+    for o in record_operations
+        .iter_mut()
+        .chain(field_ref_operations.iter_mut())
+    {
+        record_operation_ids(o, f);
     }
     for c in call_sites.iter_mut() {
         let crate::program::body::features::PCallSite {
@@ -2876,9 +2879,9 @@ fn rewrite_routine_site_ids(r: &mut ModelRoutine, f: &dyn Fn(&str) -> String) {
     }
 }
 
-/// [`rewrite_routine_site_ids`] for one record operation: its variable's id, and, when
-/// `own_ids` (a record operation, not a FieldRef one), its own id and loop stack.
-fn record_operation_ids(o: &mut ModelRecordOperation, f: &dyn Fn(&str) -> String, own_ids: bool) {
+/// [`rewrite_routine_site_ids`] for one record operation: its own id, its loop stack and its
+/// variable's id.
+fn record_operation_ids(o: &mut ModelRecordOperation, f: &dyn Fn(&str) -> String) {
     let ModelRecordOperation {
         id,
         op: _,
@@ -2902,10 +2905,8 @@ fn record_operation_ids(o: &mut ModelRecordOperation, f: &dyn Fn(&str) -> String
     if let Some(rv) = record_variable_id {
         *rv = f(rv);
     }
-    if own_ids {
-        *id = f(id);
-        loop_stack.iter_mut().for_each(|s| *s = f(s));
-    }
+    *id = f(id);
+    loop_stack.iter_mut().for_each(|s| *s = f(s));
 }
 
 /// #160 step 11b's collided-id contract, stated BY ASSIGNMENT (engine limits

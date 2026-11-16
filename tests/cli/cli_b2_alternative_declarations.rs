@@ -1774,7 +1774,8 @@ codeunit 50483 "AD Use"
 /// holds the same kind of id (`source_record_variable_id`); it must move with them, or the
 /// binding names a variable the routine no longer has, and every reader matching a binding to
 /// its variable by id (`LoadPoint::is_variable`, `binding_source_table`, d37/d39) misreads it.
-/// Every shape (one file `#if`/`#else`, two files) and both models.
+/// Every shape (one file `#if`/`#else`, two files, each order), in the single-app model (the
+/// cross-app join runs the same rewrite).
 #[test]
 fn a_split_routines_argument_bindings_name_its_own_record_variables() {
     use al_sem::program::model::program_calls::assemble_and_resolve_workspace_program;
@@ -1808,6 +1809,18 @@ fn a_split_routines_argument_bindings_name_its_own_record_variables() {
             .filter(|r| r.name == "H")
             .collect();
         assert_eq!(hs.len(), 2, "{shape}: precondition: H split in two");
+        // sol: two rows are not yet a split; the ids must have been adopted per declaration.
+        assert_ne!(
+            hs[0].id, hs[1].id,
+            "{shape}: precondition: each declaration its own id"
+        );
+        for h in &hs {
+            assert!(
+                al_sem::program::model::workspace::split_origin(&h.stable_routine_id).is_some(),
+                "{shape}: precondition: {} is a split declaration's stable id",
+                h.stable_routine_id
+            );
+        }
         let mut checked = 0;
         for r in hs {
             for b in r.call_sites.iter().flat_map(|c| &c.argument_bindings) {
