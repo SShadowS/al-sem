@@ -71,6 +71,7 @@ use crate::engine::l5::reverse_call_graph::ReverseCallGraph;
 use crate::program::body::features::{PCallSite, PCallee};
 use crate::program::model::projection::ArmRows;
 use crate::program::model::workspace::ModelRoutine;
+use crate::program::str_pool::SharedStr;
 
 const MAX_DEPTH: usize = 50;
 
@@ -106,7 +107,8 @@ pub struct TransactionSpan {
     /// inclusive) is the WITNESS set.
     pub writes_physical_tables_count: usize,
     /// Union of events published by any routine in the span. SORTED + deduped.
-    pub publishes_events: Vec<String>,
+    /// Shared texts (ENG-114: on CDO 299,958 names over ~8.6 k texts in 64 spans).
+    pub publishes_events: Vec<SharedStr>,
     /// Span entry roots — routines in the span with no upstream caller, and the
     /// Commit routine when an earlier Commit of its own starts the span. SORTED.
     pub span_roots: Vec<String>,
@@ -130,7 +132,8 @@ pub struct TransactionSpan {
     /// whose table does not resolve. SORTED.
     pub pending_other: Vec<String>,
     /// The events published before the Commit. SORTED.
-    pub pending_events: Vec<String>,
+    /// Shared texts, as `publishes_events` (ENG-114: 221,464 names on CDO).
+    pub pending_events: Vec<SharedStr>,
     /// Each span member other than the Commit routine -> how many physical
     /// tables it writes before its call toward the Commit (d8's "manager" test).
     pub pending_physical_by_routine: BTreeMap<String, usize>,
@@ -970,6 +973,22 @@ pub fn compute_transaction_spans(
             coverage_complete,
         )
     };
+    // ENG-114: the event names the spans keep, one shared text per name for the whole run
+    // (every span lists its whole cone's events, so the same few thousand names repeat).
+    let mut event_texts: HashSet<SharedStr> = HashSet::new();
+    let mut share = |names: &[String]| -> Vec<SharedStr> {
+        names
+            .iter()
+            .map(|n| {
+                if let Some(s) = event_texts.get(n.as_str()) {
+                    return s.clone();
+                }
+                let s = SharedStr::from(n.as_str());
+                event_texts.insert(s.clone());
+                s
+            })
+            .collect()
+    };
     // ONE bitset pair for the whole run: `aggregate_span` clears and refills them
     // per template, so the union never allocates per routine or per element.
     let mut scratch = SpanScratch {
@@ -1019,13 +1038,13 @@ pub fn compute_transaction_spans(
                 routines_in_span: t.routines_in_span.clone(),
                 writes_tables: t.writes_tables.clone(),
                 writes_physical_tables_count: t.writes_physical_tables_count,
-                publishes_events: t.publishes_events.clone(),
+                publishes_events: share(&t.publishes_events),
                 span_roots: t.span_roots.clone(),
                 coverage_complete,
                 pending_physical_tables,
                 pending_order_unknown_tables,
                 pending_other,
-                pending_events,
+                pending_events: share(&pending_events),
                 pending_physical_by_routine: t.pending_by_routine.clone(),
             });
         }
@@ -1078,13 +1097,13 @@ pub fn compute_transaction_spans(
                 routines_in_span: t.routines_in_span.clone(),
                 writes_tables: t.writes_tables.clone(),
                 writes_physical_tables_count: t.writes_physical_tables_count,
-                publishes_events: t.publishes_events.clone(),
+                publishes_events: share(&t.publishes_events),
                 span_roots: t.span_roots.clone(),
                 coverage_complete,
                 pending_physical_tables,
                 pending_order_unknown_tables,
                 pending_other,
-                pending_events,
+                pending_events: share(&pending_events),
                 pending_physical_by_routine: t.pending_by_routine.clone(),
             });
         }

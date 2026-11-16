@@ -2535,10 +2535,12 @@ fn routine_fields(routines: Vec<al_sem::program::model::workspace::ModelRoutine>
 /// them, then one ask of each served kind (twice), then every retained part
 /// dropped in order, each drop delta printed. Live heap only: what the
 /// allocator keeps beyond it is the child's RSS minus these numbers.
-fn resident_mode(ws: PathBuf, routine: String, low_mem: bool) {
+fn resident_mode(ws: PathBuf, routine: String, low_mem: bool, with_sited: bool) {
     use al_sem::engine::batch::job::Job;
     use al_sem::engine::resident::revision::Revision;
-    use al_sem::engine::resident::session::{REVISION_READ, build_target};
+    use al_sem::engine::resident::session::{
+        REVISION_NEEDS, REVISION_READ, build_sited, build_target_with,
+    };
     use al_sem::engine::resident::store::Control;
     use al_sem::program::inputs::WorkspaceInputs;
     use al_sem::program::session::WorkspaceSession;
@@ -2572,20 +2574,26 @@ fn resident_mode(ws: PathBuf, routine: String, low_mem: bool) {
     });
     let t = std::time::Instant::now();
     let b0 = live().0;
-    let target = build_target(&mut session, &inputs, false)
-        .unwrap_or_else(|_| panic!("the model did not build"));
+    // With `--sited`, the sited graph from the same program, between its build and the
+    // model's, as the session builds it (`build_target_with`'s `on_program`).
+    let mut sited = None;
+    let target = build_target_with(&mut session, &inputs, false, REVISION_NEEDS, &mut |p| {
+        if with_sited {
+            sited = build_sited(p, &|| false);
+        }
+    })
+    .unwrap_or_else(|_| panic!("the model did not build"));
     line("build (session + target)", b0, t);
     let id = al_sem::wire::RevisionId {
         engine_instance_id: "probe".into(),
         generation: 1,
         inputs_stamp: "probe".into(),
     };
-    let rev = Revision::new(
-        id,
-        Arc::clone(&inputs),
-        target,
-        al_sem::engine::resident::session::REVISION_NEEDS.assembly(),
-    );
+    let mut rev = Revision::new(id, Arc::clone(&inputs), target, REVISION_NEEDS.assembly());
+    if let Some(s) = sited {
+        println!("    sited graph built ({} ms)", s.ms);
+        rev = rev.with_sited(Arc::new(s.graph));
+    }
     let ask = |name: &str| -> Box<dyn Job + '_> { resident_job(name, &inputs, &routine) };
     for round in 0..2 {
         for name in ["query", "explain", "prove", "digest"] {
@@ -2903,7 +2911,7 @@ fn eng107_split(
                     step("det.event_graph", event_graph);
                     step("det.reverse_call_graph", reverse_call_graph);
                     step("det.entry_points", entry_points);
-                    step("det.transaction_spans", transaction_spans);
+                    eng114_spans(transaction_spans);
                     step(
                         "det.resolved_call_edge_by_callsite",
                         resolved_call_edge_by_callsite,
@@ -2915,8 +2923,21 @@ fn eng107_split(
                     );
                     step("det.uncertainties_by_node", uncertainties_by_node);
                     step("det.uncertainties", uncertainties);
-                    step("det.summaries", summaries);
-                    step("det.cone_derived", cone_derived);
+                    eng114_summaries(summaries);
+                    match Arc::try_unwrap(cone_derived) {
+                        Ok(store) => {
+                            for l in store.census_lines() {
+                                println!("{l}");
+                            }
+                            for (n, p) in store.into_census_parts() {
+                                step(n, p);
+                            }
+                        }
+                        Err(shared) => {
+                            println!("    det.cone_derived: shared; dropped whole");
+                            step("det.cone_derived (whole)", shared);
+                        }
+                    }
                     step("det.event_flow_indexes", event_flow_indexes);
                     step("det.parameter_roles_by_routine", parameter_roles_by_routine);
                     step(
@@ -3018,6 +3039,122 @@ fn eng107_split(
         mib(b0 - b1),
         a0 - a1
     );
+}
+
+/// ENG-114: `DetectorArtifacts.transaction_spans` by field, with what its strings repeat.
+fn eng114_spans(mut spans: Vec<al_sem::engine::l5::transaction_spans::TransactionSpan>) {
+    use std::collections::HashSet;
+    let tally = |vals: Vec<&str>| {
+        let n = vals.len();
+        let bytes: usize = vals.iter().map(|s| s.len()).sum();
+        let d: HashSet<&str> = vals.into_iter().collect();
+        let dbytes: usize = d.iter().map(|s| s.len()).sum();
+        format!(
+            "{n} ({:.2} MiB), {} distinct ({:.2} MiB)",
+            mib(bytes as isize),
+            d.len(),
+            mib(dbytes as isize)
+        )
+    };
+    let ids = |f: fn(&al_sem::engine::l5::transaction_spans::TransactionSpan) -> Vec<&str>| {
+        tally(spans.iter().flat_map(f).collect())
+    };
+    println!(
+        "    ENG-114 transaction_spans: {} spans (size_of {} B); routines_in_span {}; writes_tables {}; \
+         publishes_events {}; commit op ids {}; commit routine ids {}",
+        spans.len(),
+        size_of::<al_sem::engine::l5::transaction_spans::TransactionSpan>(),
+        ids(|s| s.routines_in_span.iter().map(String::as_str).collect()),
+        ids(|s| s.writes_tables.iter().map(String::as_str).collect()),
+        // `&**`: the names are `String`s before ENG-114 and `SharedStr`s after.
+        ids(|s| s.publishes_events.iter().map(|e| &**e).collect()),
+        ids(|s| vec![s.commit_operation_id.as_str()]),
+        ids(|s| vec![s.commit_routine_id.as_str()]),
+    );
+    let routines: Vec<Vec<String>> = spans
+        .iter_mut()
+        .map(|s| std::mem::take(&mut s.routines_in_span))
+        .collect();
+    step("det.transaction_spans.routines_in_span", routines);
+    let tables: Vec<Vec<String>> = spans
+        .iter_mut()
+        .map(|s| std::mem::take(&mut s.writes_tables))
+        .collect();
+    step("det.transaction_spans.writes_tables", tables);
+    let events: Vec<Vec<_>> = spans
+        .iter_mut()
+        .map(|s| std::mem::take(&mut s.publishes_events))
+        .collect();
+    step("det.transaction_spans.publishes_events", events);
+    println!(
+        "    ENG-114 transaction_spans pending: pending_events {}; span_roots {}; pending_physical_tables {}",
+        tally(
+            spans
+                .iter()
+                .flat_map(|s| s.pending_events.iter().map(|e| &**e))
+                .collect()
+        ),
+        tally(
+            spans
+                .iter()
+                .flat_map(|s| s.span_roots.iter().map(String::as_str))
+                .collect()
+        ),
+        tally(
+            spans
+                .iter()
+                .flat_map(|s| s.pending_physical_tables.iter().map(String::as_str))
+                .collect()
+        ),
+    );
+    let pending_events: Vec<Vec<_>> = spans
+        .iter_mut()
+        .map(|s| std::mem::take(&mut s.pending_events))
+        .collect();
+    step("det.transaction_spans.pending_events", pending_events);
+    let roots: Vec<Vec<String>> = spans
+        .iter_mut()
+        .map(|s| std::mem::take(&mut s.span_roots))
+        .collect();
+    step("det.transaction_spans.span_roots", roots);
+    let by_routine: Vec<_> = spans
+        .iter_mut()
+        .map(|s| std::mem::take(&mut s.pending_physical_by_routine))
+        .collect();
+    step(
+        "det.transaction_spans.pending_physical_by_routine",
+        by_routine,
+    );
+    step(
+        "det.transaction_spans.(rest: ids, other pending lists, vec)",
+        spans,
+    );
+}
+
+/// ENG-114: `DetectorArtifacts.summaries` by field (the inherited half is private: it stays
+/// with the map's last line).
+fn eng114_summaries(
+    mut summaries: HashMap<String, al_sem::engine::l5::full_summary::FullRoutineSummary>,
+) {
+    let direct: usize = summaries
+        .values()
+        .map(|s| s.capability_facts_direct.len())
+        .sum();
+    // Production keeps no inherited raw facts on a summary (`full_summary.rs`).
+    println!(
+        "    ENG-114 summaries: {} routines (size_of summary {} B); direct facts {direct} (size_of fact {} B)",
+        summaries.len(),
+        size_of::<al_sem::engine::l5::full_summary::FullRoutineSummary>(),
+        size_of::<al_sem::engine::l4::capability_cone::CapabilityFact>(),
+    );
+    let facts: Vec<_> = summaries
+        .values_mut()
+        .map(|s| std::mem::take(&mut s.capability_facts_direct))
+        .collect();
+    step("det.summaries.capability_facts_direct", facts);
+    let coverage: Vec<_> = summaries.values_mut().map(|s| s.coverage.take()).collect();
+    step("det.summaries.coverage", coverage);
+    step("det.summaries.(rest: map, ids)", summaries);
 }
 
 fn resident_job<'a>(
@@ -3894,13 +4031,18 @@ fn main() {
     let mut args = std::env::args().skip(1);
     let source = match args.next().as_deref() {
         Some("resident") => {
-            // `resident <ws> [routine] [--low-mem]`
+            // `resident <ws> [routine] [--low-mem] [--sited]`
             let rest: Vec<String> = args.collect();
             let low_mem = rest.iter().any(|a| a == "--low-mem");
-            let mut plain = rest.into_iter().filter(|a| a != "--low-mem");
+            // ENG-114: also build the sited graph the way the session does (off by default, so
+            // the live totals stay comparable with every earlier census).
+            let sited = rest.iter().any(|a| a == "--sited");
+            let mut plain = rest
+                .into_iter()
+                .filter(|a| a != "--low-mem" && a != "--sited");
             let ws = PathBuf::from(plain.next().expect("workspace"));
             let routine = plain.next().unwrap_or_else(|| "IssueReminder".into());
-            resident_mode(ws, routine, low_mem);
+            resident_mode(ws, routine, low_mem, sited);
             return;
         }
         Some("incr") => {
