@@ -128,7 +128,7 @@ fn attach_docs(objects: &mut [ObjectDecl], comments: &[SourceComment], source: &
                 .chain([r.origin.start.row])
                 .min()
                 .unwrap_or(r.origin.start.row);
-            r.doc = doc_above(row);
+            r.set_doc(doc_above(row));
         }
         for f in &mut obj.fields {
             f.doc = doc_above(f.origin.start.row);
@@ -1136,7 +1136,11 @@ fn collect_xmlport_text_nodes(node: RawNode, source: &str, out: &mut Vec<VarDecl
                 .any(|p| p.name == "texttype" && p.value.eq_ignore_ascii_case("bigtext"));
             out.push(VarDecl {
                 name: ident_text(name, source),
-                ty: Some(if big { "BigText" } else { "Text" }.to_string()),
+                ty: Some(crate::ir::shared_type_text(if big {
+                    "BigText"
+                } else {
+                    "Text"
+                })),
                 temporary: false,
                 origin: origin_of(child),
                 label: None,
@@ -3120,7 +3124,7 @@ fn lower_routine<'t>(
                 .copied()
                 .find(|c| c.kind() == RawKind::TypeSpecification)
         })
-        .map(|n| n.text(source).trim().to_string());
+        .map(|n| crate::ir::shared_type_text(n.text(source).trim()));
 
     // Named-return-value binding (T3, receiver-closure-and-arg-increments plan):
     // `procedure X() Ret: Record Y` — grammar's `_procedure_named_return` sets BOTH
@@ -3232,17 +3236,20 @@ fn lower_routine<'t>(
         name_origin,
         params,
         return_type,
-        return_name,
         locals,
         attributes,
         attributes_parsed,
         access_modifier,
         parse_incomplete: node.has_error(),
-        dataitem_source_table,
         enclosing_member,
         in_dataset_modify_context,
-        preproc_context,
-        doc: None,
+        rare: crate::ir::RoutineRare {
+            return_name,
+            dataitem_source_table,
+            preproc_context,
+            doc: None,
+        }
+        .boxed(),
         body,
         origin: origin_of(node),
     }
@@ -3451,7 +3458,7 @@ fn lower_param(node: RawNode, source: &str) -> Param {
         .unwrap_or_default();
     let ty = node
         .field(FieldName::Type)
-        .map(|n| n.text(source).trim().to_string());
+        .map(|n| crate::ir::shared_type_text(n.text(source).trim()));
     Param {
         name,
         by_ref,
@@ -3493,7 +3500,7 @@ fn extract_var_body(body: RawNode, source: &str, out: &mut Vec<VarDecl>) {
 /// One `VarDecl` per name of a `variable_declaration` (none when it has no name).
 fn extract_var_decl(decl: RawNode, source: &str, out: &mut Vec<VarDecl>) {
     let type_node = decl.field(FieldName::Type);
-    let ty = type_node.map(|n| n.text(source).trim().to_string());
+    let ty = type_node.map(|n| crate::ir::shared_type_text(n.text(source).trim()));
     let temporary = type_node
         .map(|t| contains_kind(t, RawKind::TemporaryKeyword))
         .unwrap_or(false);
@@ -5991,7 +5998,7 @@ report 50102 T
             .flat_map(|o| &o.routines)
             .find(|r| r.name.eq_ignore_ascii_case("OnAfterGetRecord"))
             .expect("the dataitem trigger must be lowered");
-        assert_eq!(routine.dataitem_source_table.as_deref(), Some("Customer"));
+        assert_eq!(routine.dataitem_source_table(), Some("Customer"));
         assert!(
             !routine.in_dataset_modify_context,
             "a real dataitem(...) trigger is not a modify() member — the flag stays false"
@@ -6748,7 +6755,7 @@ codeunit 50100 "My Codeunit"
         let af = parse(src);
         let obj = &af.objects[0];
         let r = &obj.routines[0];
-        assert_eq!(r.return_name.as_deref(), Some("Ret"));
+        assert_eq!(r.return_name(), Some("Ret"));
         assert_eq!(r.return_type.as_deref(), Some("Record Item"));
     }
 
@@ -6767,7 +6774,7 @@ codeunit 50100 "My Codeunit"
         let af = parse(src);
         let obj = &af.objects[0];
         let r = &obj.routines[0];
-        assert_eq!(r.return_name, None);
+        assert_eq!(r.return_name(), None);
         assert_eq!(r.return_type.as_deref(), Some("Integer"));
     }
 
@@ -6787,7 +6794,7 @@ codeunit 50100 "My Codeunit"
         let af = parse(src);
         let obj = &af.objects[0];
         let r = &obj.routines[0];
-        assert_eq!(r.return_name.as_deref(), Some("My Result"));
+        assert_eq!(r.return_name(), Some("My Result"));
         assert_eq!(r.return_type.as_deref(), Some("Record Item"));
     }
 
@@ -6807,7 +6814,7 @@ codeunit 50100 "My Codeunit"
         let af = parse(src);
         let obj = &af.objects[0];
         let r = &obj.routines[0];
-        assert_eq!(r.return_name, None);
+        assert_eq!(r.return_name(), None);
         assert_eq!(r.return_type, None);
     }
 
@@ -6954,7 +6961,7 @@ codeunit 50102 T
                 (
                     r.params.len(),
                     r.access_modifier.clone(),
-                    r.return_name.clone(),
+                    r.return_name().map(str::to_string),
                     r.attributes.clone(),
                     r.locals.iter().map(|l| l.name.clone()).collect::<Vec<_>>(),
                 )
@@ -7177,7 +7184,7 @@ codeunit 50104 T
         };
         let af = parse(src);
         let routines = &af.objects[0].routines;
-        let ctx_of = |i: usize| routines[i].preproc_context.clone();
+        let ctx_of = |i: usize| routines[i].preproc_context().to_vec();
         assert_eq!(routines.len(), 7);
         assert_eq!(ctx_of(0), s(&[("A", true), ("B", true)]));
         // ENG-80 review r2: decides neither symbol, so the condition is kept whole (an empty
@@ -10745,7 +10752,14 @@ page 50137 P
         assert_eq!(f[1].doc, None, "a blank line breaks the run");
         let p = &af.objects[1];
         assert_eq!(p.actions[0].doc.as_deref(), Some("Doc one\nDoc two"));
-        let doc = |n: &str| p.routines.iter().find(|r| r.name == n).unwrap().doc.clone();
+        let doc = |n: &str| {
+            p.routines
+                .iter()
+                .find(|r| r.name == n)
+                .unwrap()
+                .doc()
+                .map(str::to_string)
+        };
         assert_eq!(
             doc("Attributed").as_deref(),
             Some("Proc doc"),
@@ -10926,7 +10940,7 @@ codeunit 50139 G
             assert_eq!(r.name, "OnRun");
             assert_eq!(r.locals.len(), 1);
             assert_eq!(r.locals[0].name, local);
-            assert_eq!(r.preproc_context, [("X".to_string(), sym)]);
+            assert_eq!(r.preproc_context(), [("X".to_string(), sym)]);
             assert!(call_reachable(&af, r.body.expect("shared body"), "Foo"));
         }
     }
@@ -10962,7 +10976,7 @@ codeunit 50139 G
                 (
                     r.name.as_str(),
                     r.params.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(),
-                    r.preproc_context.clone(),
+                    r.preproc_context().to_vec(),
                     r.attributes.clone(),
                 )
             })
@@ -11023,7 +11037,7 @@ codeunit 50139 G
                 (
                     r.params.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(),
                     r.locals.iter().map(|l| l.name.as_str()).collect::<Vec<_>>(),
-                    r.preproc_context.clone(),
+                    r.preproc_context().to_vec(),
                     r.attributes.clone(),
                 )
             })
@@ -11116,7 +11130,7 @@ codeunit 50139 G
                 (
                     r.kind,
                     r.locals.iter().map(|l| l.name.as_str()).collect::<Vec<_>>(),
-                    r.preproc_context.clone(),
+                    r.preproc_context().to_vec(),
                 )
             })
             .collect();
@@ -11222,9 +11236,9 @@ codeunit 50139 G
         let af = parse(src);
         let rs = &af.objects[0].routines;
         assert_eq!(rs[0].return_type.as_deref(), Some("Integer"));
-        assert_eq!(rs[0].return_name.as_deref(), Some("Result"));
+        assert_eq!(rs[0].return_name(), Some("Result"));
         assert_eq!(rs[1].return_type.as_deref(), Some("Integer"));
-        assert_eq!(rs[1].return_name.as_deref(), Some("Result"));
+        assert_eq!(rs[1].return_name(), Some("Result"));
         assert_eq!(
             af.issues
                 .iter()

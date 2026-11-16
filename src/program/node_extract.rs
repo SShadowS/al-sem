@@ -1235,7 +1235,7 @@ pub fn extract_nodes(
                 return_type_id: None,
                 abi_overload_collapsed: false,
                 source_overload_aliased: false,
-                preproc_context: r.preproc_context.clone().into_boxed_slice(),
+                preproc_context: r.preproc_context().into(),
                 // Stamped by the build that owns the dedup population.
                 source_unit: None,
                 // SOURCE routine: parameter metadata for arg-type dispatch

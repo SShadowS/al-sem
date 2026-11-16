@@ -114,7 +114,7 @@ fn shadows(routine: &RoutineDecl, v_lc: &str) -> bool {
     let named = |n: &str| n.fold_identifier() == v_lc;
     routine.params.iter().any(|p| named(&p.name))
         || routine.locals.iter().any(|l| named(&l.name))
-        || routine.return_name.as_deref().is_some_and(named)
+        || routine.return_name().is_some_and(named)
 }
 
 /// One written value: a parameter of `routine`, or a codeunit variable.

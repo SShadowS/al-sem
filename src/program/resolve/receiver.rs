@@ -2459,7 +2459,7 @@ fn collection_type_text_of_expr(
             object_globals
                 .iter()
                 .find(|v| v.name.fold_identifier() == member_lc)
-                .and_then(|v| v.ty.clone())
+                .and_then(|v| v.ty.as_deref().map(str::to_string))
         }
         ExprKind::Parenthesized(inner) => collection_type_text_of_expr(
             file,
@@ -2682,7 +2682,7 @@ pub(crate) fn name_shadows_bare_call(
     let named = |n: &str| n.fold_identifier() == name_lc;
     routine.params.iter().any(|p| named(&p.name))
         || routine.locals.iter().any(|v| named(&v.name))
-        || routine.return_name.as_deref().is_some_and(named)
+        || routine.return_name().is_some_and(named)
         || object_globals.iter().any(|v| named(&v.name))
 }
 
@@ -2818,7 +2818,7 @@ pub(crate) fn resolve_report_implicit_rec_table(
     graph: &dyn GraphReads,
     index: &dyn IndexReads,
 ) -> Option<ObjectNodeId> {
-    if let Some(table_name) = routine.dataitem_source_table.as_deref() {
+    if let Some(table_name) = routine.dataitem_source_table() {
         let table_ref = ObjectRef::Name {
             raw: table_name.into(),
             normalized_lc: table_name.fold_identifier(),
@@ -3627,8 +3627,7 @@ pub(crate) fn caller_scope_symbol<'a>(
         return CallerScopeSymbol::MalformedDuplicate;
     };
     let return_hit = routine
-        .return_name
-        .as_deref()
+        .return_name()
         .is_some_and(|rn| rn.eq_fold_identifier(name));
 
     if return_hit && (param_hit.is_some() || local_hit.is_some()) {
@@ -3792,6 +3791,15 @@ mod tests {
         (graph, app)
     }
 
+    /// A routine's rare-field box holding only a named return value.
+    fn rare_return_name(name: &str) -> Option<Box<al_syntax::ir::RoutineRare>> {
+        al_syntax::ir::RoutineRare {
+            return_name: Some(name.to_string()),
+            ..Default::default()
+        }
+        .boxed()
+    }
+
     /// Build a `RoutineDecl` with:
     /// - param `CuParam: Codeunit "MyCodeunit"`
     /// - param `CuNumParam: Codeunit 50100` (numeric id reference)
@@ -3819,7 +3827,6 @@ mod tests {
                 },
             ],
             return_type: None,
-            return_name: None,
             locals: vec![
                 VarDecl {
                     name: "Cust".into(),
@@ -3861,11 +3868,9 @@ mod tests {
             attributes_parsed: vec![],
             access_modifier: None,
             parse_incomplete: false,
-            dataitem_source_table: None,
             enclosing_member: None,
             in_dataset_modify_context: false,
-            preproc_context: Vec::new(),
-            doc: None,
+            rare: None,
             body: None,
             origin: o,
         }
@@ -4445,17 +4450,14 @@ mod tests {
                 },
             ],
             return_type: None,
-            return_name: None,
             locals: vec![],
             attributes: vec![],
             attributes_parsed: vec![],
             access_modifier: None,
             parse_incomplete: false,
-            dataitem_source_table: None,
             enclosing_member: None,
             in_dataset_modify_context: false,
-            preproc_context: Vec::new(),
-            doc: None,
+            rare: None,
             body: None,
             origin: o,
         }
@@ -4587,28 +4589,25 @@ mod tests {
                 Param {
                     name: "ById".into(),
                     by_ref: false,
-                    ty: Some(format!("{keyword} 80")),
+                    ty: Some(format!("{keyword} 80").into()),
                     origin: o.clone(),
                 },
                 Param {
                     name: "ByQuotedName".into(),
                     by_ref: false,
-                    ty: Some(format!("{keyword} \"80\"")),
+                    ty: Some(format!("{keyword} \"80\"").into()),
                     origin: o.clone(),
                 },
             ],
             return_type: None,
-            return_name: None,
             locals: vec![],
             attributes: vec![],
             attributes_parsed: vec![],
             access_modifier: None,
             parse_incomplete: false,
-            dataitem_source_table: None,
             enclosing_member: None,
             in_dataset_modify_context: false,
-            preproc_context: Vec::new(),
-            doc: None,
+            rare: None,
             body: None,
             origin: o,
         }
@@ -5467,7 +5466,6 @@ mod tests {
             name_origin: o.clone(),
             params: vec![],
             return_type: None,
-            return_name: None,
             locals: vec![VarDecl {
                 name: "R".into(),
                 ty: Some("Record \"AmbTable\"".into()),
@@ -5479,11 +5477,9 @@ mod tests {
             attributes_parsed: vec![],
             access_modifier: None,
             parse_incomplete: false,
-            dataitem_source_table: None,
             enclosing_member: None,
             in_dataset_modify_context: false,
-            preproc_context: Vec::new(),
-            doc: None,
+            rare: None,
             body: None,
             origin: o,
         };
@@ -5650,7 +5646,11 @@ mod tests {
         let (graph, w) = build_page_rec_fixture();
         let index = ResolveIndex::build(&graph);
         let routine = RoutineDecl {
-            dataitem_source_table: Some("Customer".to_string()),
+            rare: al_syntax::ir::RoutineRare {
+                dataitem_source_table: Some("Customer".to_string()),
+                ..Default::default()
+            }
+            .boxed(),
             ..build_test_routine()
         };
         let report = make_object_node(w, ObjectKind::Report, "SomeReport", Some(50221), None);
@@ -5680,9 +5680,8 @@ mod tests {
         let (graph, w) = build_page_rec_fixture();
         let index = ResolveIndex::build(&graph);
         let routine = RoutineDecl {
-            dataitem_source_table: None,
             in_dataset_modify_context: false,
-            preproc_context: Vec::new(),
+            rare: None,
             enclosing_member: Some(("SomeControl".to_string(), test_origin())),
             ..build_test_routine()
         };
@@ -5703,9 +5702,8 @@ mod tests {
         let (graph, w) = build_page_rec_fixture();
         let index = ResolveIndex::build(&graph);
         let routine = RoutineDecl {
-            dataitem_source_table: None,
             in_dataset_modify_context: true,
-            preproc_context: Vec::new(),
+            rare: None,
             enclosing_member: Some(("Cust".to_string(), test_origin())),
             ..build_test_routine()
         };
@@ -5735,9 +5733,8 @@ mod tests {
         let (graph, w) = build_page_rec_fixture();
         let index = ResolveIndex::build(&graph);
         let routine = RoutineDecl {
-            dataitem_source_table: None,
             in_dataset_modify_context: false,
-            preproc_context: Vec::new(),
+            rare: None,
             enclosing_member: Some(("Cust".to_string(), test_origin())),
             ..build_test_routine()
         };
@@ -6288,7 +6285,6 @@ mod tests {
             name_origin: o.clone(),
             params: vec![],
             return_type: None,
-            return_name: None,
             locals: vec![VarDecl {
                 name: "R".into(),
                 ty: Some("Record \"NonExistentTable\"".into()),
@@ -6300,11 +6296,9 @@ mod tests {
             attributes_parsed: vec![],
             access_modifier: None,
             parse_incomplete: false,
-            dataitem_source_table: None,
             enclosing_member: None,
             in_dataset_modify_context: false,
-            preproc_context: Vec::new(),
-            doc: None,
+            rare: None,
             body: None,
             origin: o,
         };
@@ -6340,7 +6334,6 @@ mod tests {
             name_origin: o.clone(),
             params: vec![],
             return_type: None,
-            return_name: None,
             locals: vec![VarDecl {
                 name: "Rec".into(),
                 ty: Some("Record Customer".into()),
@@ -6352,11 +6345,9 @@ mod tests {
             attributes_parsed: vec![],
             access_modifier: None,
             parse_incomplete: false,
-            dataitem_source_table: None,
             enclosing_member: None,
             in_dataset_modify_context: false,
-            preproc_context: Vec::new(),
-            doc: None,
+            rare: None,
             body: None,
             origin: o,
         };
@@ -7349,17 +7340,14 @@ codeunit 50100 "C"
             name_origin: o.clone(),
             params: vec![],
             return_type: None,
-            return_name: None,
             locals,
             attributes: vec![],
             attributes_parsed: vec![],
             access_modifier: None,
             parse_incomplete: false,
-            dataitem_source_table: None,
             enclosing_member: None,
             in_dataset_modify_context: false,
-            preproc_context: Vec::new(),
-            doc: None,
+            rare: None,
             body: None,
             origin: o,
         }
@@ -9710,8 +9698,8 @@ codeunit 50100 "C"
         let (graph, app) = build_test_graph();
         let index = ResolveIndex::build(&graph);
         let routine = RoutineDecl {
-            return_name: Some("Ret".to_string()),
-            return_type: Some("Record Customer".to_string()),
+            rare: rare_return_name("Ret"),
+            return_type: Some("Record Customer".into()),
             ..routine_with_locals(vec![])
         };
         let from_obj = make_object_node(app, ObjectKind::Codeunit, "CallerCu", Some(999), None);
@@ -9741,8 +9729,8 @@ codeunit 50100 "C"
         let (graph, app) = build_test_graph();
         let index = ResolveIndex::build(&graph);
         let routine = RoutineDecl {
-            return_name: Some("My Result".to_string()),
-            return_type: Some("Record Customer".to_string()),
+            rare: rare_return_name("My Result"),
+            return_type: Some("Record Customer".into()),
             ..routine_with_locals(vec![])
         };
         let from_obj = make_object_node(app, ObjectKind::Codeunit, "CallerCu", Some(999), None);
@@ -9780,8 +9768,8 @@ codeunit 50100 "C"
         let (graph, app) = build_test_graph();
         let index = ResolveIndex::build(&graph);
         let routine = RoutineDecl {
-            return_name: Some("Ret".to_string()),
-            return_type: Some("Record Customer".to_string()),
+            rare: rare_return_name("Ret"),
+            return_type: Some("Record Customer".into()),
             ..routine_with_locals(vec![])
         };
         let globals = vec![var_decl("Ret", "Record SalesHeader")];
@@ -9815,8 +9803,8 @@ codeunit 50100 "C"
         let (graph, app) = build_test_graph();
         let index = ResolveIndex::build(&graph);
         let routine = RoutineDecl {
-            return_name: Some("Ret".to_string()),
-            return_type: Some("Record Customer".to_string()),
+            rare: rare_return_name("Ret"),
+            return_type: Some("Record Customer".into()),
             ..routine_with_locals(vec![var_decl("Ret", "Record SalesHeader")])
         };
         let from_obj = make_object_node(app, ObjectKind::Codeunit, "CallerCu", Some(999), None);
@@ -9836,14 +9824,14 @@ codeunit 50100 "C"
         let (graph, app) = build_test_graph();
         let index = ResolveIndex::build(&graph);
         let mut routine = RoutineDecl {
-            return_name: Some("Ret".to_string()),
-            return_type: Some("Record Customer".to_string()),
+            rare: rare_return_name("Ret"),
+            return_type: Some("Record Customer".into()),
             ..routine_with_locals(vec![])
         };
         routine.params.push(Param {
             name: "Ret".to_string(),
             by_ref: false,
-            ty: Some("Record SalesHeader".to_string()),
+            ty: Some("Record SalesHeader".into()),
             origin: test_origin(),
         });
         let from_obj = make_object_node(app, ObjectKind::Codeunit, "CallerCu", Some(999), None);
@@ -9903,13 +9891,13 @@ codeunit 50100 "C"
         routine.params.push(Param {
             name: "X".to_string(),
             by_ref: false,
-            ty: Some("Integer".to_string()),
+            ty: Some("Integer".into()),
             origin: test_origin(),
         });
         routine.params.push(Param {
             name: "X".to_string(),
             by_ref: false,
-            ty: Some("Text".to_string()),
+            ty: Some("Text".into()),
             origin: test_origin(),
         });
         assert_eq!(
@@ -9927,8 +9915,7 @@ codeunit 50100 "C"
         let (graph, app) = build_test_graph();
         let index = ResolveIndex::build(&graph);
         let routine = RoutineDecl {
-            return_name: None,
-            return_type: Some("Integer".to_string()),
+            return_type: Some("Integer".into()),
             ..routine_with_locals(vec![])
         };
         let from_obj = make_object_node(app, ObjectKind::Codeunit, "CallerCu", Some(999), None);
@@ -9946,8 +9933,8 @@ codeunit 50100 "C"
         let (graph, app) = build_test_graph();
         let index = ResolveIndex::build(&graph);
         let routine_with_binding = RoutineDecl {
-            return_name: Some("Ret".to_string()),
-            return_type: Some("Record Customer".to_string()),
+            rare: rare_return_name("Ret"),
+            return_type: Some("Record Customer".into()),
             ..routine_with_locals(vec![])
         };
         let routine_without_binding = routine_with_locals(vec![]);
@@ -10017,7 +10004,7 @@ codeunit 50100 "C"
         let (graph, app) = build_test_graph();
         let index = ResolveIndex::build(&graph);
         let real_routine = &file.objects[0].routines[0];
-        assert_eq!(real_routine.return_name.as_deref(), Some("Ret"));
+        assert_eq!(real_routine.return_name(), Some("Ret"));
         let from_obj = make_object_node(app, ObjectKind::Codeunit, "C", Some(50100), None);
         let customer_id = graph
             .objects

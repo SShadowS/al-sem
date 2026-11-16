@@ -206,7 +206,7 @@ fn is_database_name(name: &str) -> bool {
 fn database_shadowed(o: &al_syntax::ir::ObjectDecl, routine: &RoutineDecl) -> bool {
     routine.params.iter().any(|p| is_database_name(&p.name))
         || routine.locals.iter().any(|v| is_database_name(&v.name))
-        || routine.return_name.as_deref().is_some_and(is_database_name)
+        || routine.return_name().is_some_and(is_database_name)
         || o.globals.iter().any(|v| is_database_name(&v.name))
         || o.dataitems.iter().any(|(name, _)| is_database_name(name))
         || o.fields.iter().any(|f| is_database_name(&f.name))
@@ -263,7 +263,7 @@ fn is_record_ty(v: &VarDecl) -> bool {
 /// calls are record operations (r2 fact check, c30: `EMailTemplateHeader.Get` on a
 /// named return value was not a touch).
 pub(crate) fn named_return_var(routine: &RoutineDecl) -> Option<(&str, &str)> {
-    let name = routine.return_name.as_deref()?;
+    let name = routine.return_name()?;
     let ty = routine.return_type.as_deref()?;
     let clashes = routine
         .params
@@ -408,7 +408,7 @@ fn build_scope(
     // `CDO Update Customer Setup`, `dataitem(Customer; Customer)` …
     // `OnAfterGetRecord` … `Modify(true)`).
     let implicit_rec =
-        has_implicit_rec(o, source_table_name) || routine.dataitem_source_table.is_some();
+        has_implicit_rec(o, source_table_name) || routine.dataitem_source_table().is_some();
 
     let params_locals: Vec<String> = routine
         .params
@@ -458,7 +458,7 @@ fn build_scope(
         .iter()
         .map(|p| p.name.fold_identifier())
         .chain(routine.locals.iter().map(|v| v.name.fold_identifier()))
-        .chain(routine.return_name.iter().map(|n| n.fold_identifier()))
+        .chain(routine.return_name().map(|n| n.fold_identifier()))
         .chain(o.globals.iter().map(|v| v.name.fold_identifier()))
         .chain(o.dataitems.iter().map(|(n, _)| n.fold_identifier()))
         .chain(object_procedure_names.iter().cloned())
@@ -3009,8 +3009,7 @@ impl TextProof<'_> {
                 signature_complete,
             ),
             (
-                r.return_name
-                    .as_deref()
+                r.return_name()
                     .filter(|n| n.eq_fold_identifier(name))
                     .map(|_| (r.return_type.as_deref(), 0, Vec::new()))
                     .into_iter()
@@ -3534,7 +3533,8 @@ pub fn ir_record_variables(
     if let Some((name, ty)) = named_return_var(routine)
         && is_record_type_str(ty)
         && !(name.eq_fold_identifier("rec")
-            && (has_implicit_rec(o, source_table_name) || routine.dataitem_source_table.is_some()))
+            && (has_implicit_rec(o, source_table_name)
+                || routine.dataitem_source_table().is_some()))
     {
         out.push(PRecordVariable {
             id: format!("{}/rv/{}", routine_id, name.to_lowercase()).into(),
@@ -3590,8 +3590,7 @@ pub fn ir_record_variables(
     // exclusive (a routine is in a codeunit OR a report); mirror legacy precedence
     // (dataitem first) for `direct_rec_table`. The IR's dataitem table keeps a `""`.
     let direct_rec_table = routine
-        .dataitem_source_table
-        .as_deref()
+        .dataitem_source_table()
         .map(super::scope::unescape_al_identifier)
         .or(codeunit_tableno);
     // Page implicit Rec is gated on the RESOLVED source_table_name (as in
@@ -3624,8 +3623,7 @@ pub fn ir_record_variables(
         // at return names; fail closed instead of guessing which one AL binds).
         let is_receiver = matches!(o.kind, ObjectKind::Table | ObjectKind::TableExtension)
             && !routine
-                .return_name
-                .as_deref()
+                .return_name()
                 .is_some_and(|n| n.eq_fold_identifier("rec"));
         out.push(PRecordVariable {
             id: format!("{}/rv/rec", routine_id).into(),
@@ -4314,7 +4312,7 @@ pub fn ir_parameter_symbols(routine: &RoutineDecl) -> Vec<super::scope::Paramete
         .iter()
         .enumerate()
         .map(|(i, p)| {
-            let ty = p.ty.clone().unwrap_or_default();
+            let ty = p.ty.as_deref().unwrap_or_default().to_string();
             let is_record = is_record_type_str(&ty);
             let table_name = if is_record {
                 parse_record_table_name(&ty)

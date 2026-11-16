@@ -3529,7 +3529,7 @@ mod tests {
         al_syntax::ir::Param {
             name: name.to_string(),
             by_ref: false,
-            ty: Some(ty.to_string()),
+            ty: Some(ty.into()),
             origin: test_origin(),
         }
     }
@@ -3537,7 +3537,7 @@ mod tests {
     fn var(name: &str, ty: &str) -> VarDecl {
         VarDecl {
             name: name.to_string(),
-            ty: Some(ty.to_string()),
+            ty: Some(ty.into()),
             temporary: false,
             origin: test_origin(),
             label: None,
@@ -3551,17 +3551,14 @@ mod tests {
             name_origin: test_origin(),
             params: vec![],
             return_type: None,
-            return_name: None,
             locals: vec![],
             attributes: vec![],
             attributes_parsed: vec![],
             access_modifier: None,
             parse_incomplete: false,
-            dataitem_source_table: None,
             enclosing_member: None,
             in_dataset_modify_context: false,
-            preproc_context: Vec::new(),
-            doc: None,
+            rare: None,
             body: None,
             origin: test_origin(),
         }
@@ -3844,8 +3841,8 @@ mod tests {
     #[test]
     fn type_one_arg_named_return_binding_types_like_a_local() {
         let mut routine = empty_routine();
-        routine.return_name = Some("ReturnValue".to_string());
-        routine.return_type = Some("JsonValue".to_string());
+        routine.rare.get_or_insert_with(Box::default).return_name = Some("ReturnValue".to_string());
+        routine.return_type = Some("JsonValue".into());
         let graph = ProgramGraph::default();
         let index = ResolveIndex::build(&graph);
         let surface = DeclSurface::build(&graph, &[]);
@@ -3880,8 +3877,8 @@ mod tests {
     #[test]
     fn type_one_arg_quoted_named_return_binding_types_like_a_local() {
         let mut routine = empty_routine();
-        routine.return_name = Some("My Result".to_string());
-        routine.return_type = Some("Text".to_string());
+        routine.rare.get_or_insert_with(Box::default).return_name = Some("My Result".to_string());
+        routine.return_type = Some("Text".into());
         let graph = ProgramGraph::default();
         let index = ResolveIndex::build(&graph);
         let surface = DeclSurface::build(&graph, &[]);
@@ -3915,8 +3912,8 @@ mod tests {
     #[test]
     fn type_one_arg_named_return_binding_shadows_global() {
         let mut routine = empty_routine();
-        routine.return_name = Some("Ret".to_string());
-        routine.return_type = Some("Integer".to_string());
+        routine.rare.get_or_insert_with(Box::default).return_name = Some("Ret".to_string());
+        routine.return_type = Some("Integer".into());
         let globals = vec![var("Ret", "Text")];
         let graph = ProgramGraph::default();
         let index = ResolveIndex::build(&graph);
@@ -3948,8 +3945,8 @@ mod tests {
     #[test]
     fn type_one_arg_named_return_duplicate_with_local_degrades_to_untyped() {
         let mut routine = empty_routine();
-        routine.return_name = Some("Ret".to_string());
-        routine.return_type = Some("Integer".to_string());
+        routine.rare.get_or_insert_with(Box::default).return_name = Some("Ret".to_string());
+        routine.return_type = Some("Integer".into());
         routine.locals.push(var("Ret", "Text"));
         let graph = ProgramGraph::default();
         let index = ResolveIndex::build(&graph);
@@ -3985,8 +3982,8 @@ mod tests {
     #[test]
     fn named_return_binding_types_arg_and_flips_overload_pick() {
         let mut routine = empty_routine();
-        routine.return_name = Some("ReturnValue".to_string());
-        routine.return_type = Some("JsonValue".to_string());
+        routine.rare.get_or_insert_with(Box::default).return_name = Some("ReturnValue".to_string());
+        routine.return_type = Some("JsonValue".into());
         let graph = ProgramGraph::default();
         let index = ResolveIndex::build(&graph);
         let surface = DeclSurface::build(&graph, &[]);

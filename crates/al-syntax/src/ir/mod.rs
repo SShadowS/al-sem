@@ -17,7 +17,8 @@ mod stmt;
 pub use decl::{
     ActionDecl, AttributeIr, DatasetItemDecl, DatasetItemKind, EnumValueDecl, FieldDecl,
     LabelValue, ObjectDecl, ObjectKind, ObjectProperty, PageControl, Param, RoutineDecl,
-    RoutineKind, SourceComment, VarDecl, al_string_literal_text,
+    RoutineKind, RoutineRare, SHARED_TYPE_TEXT_CAP, SourceComment, TypeText, VarDecl,
+    al_string_literal_text, shared_type_text,
 };
 pub use expr::{BinaryOp, Expr, ExprKind, Literal, TypeOp, UnaryOp};
 pub use stmt::{Block, BlockItem, CaseBranch, PreprocGroup, Stmt, StmtKind};
@@ -468,6 +469,36 @@ mod exact_size_tests {
     /// ENG-94: a parsed file's declaration lists keep no spare capacity. Lowering pushes
     /// into them (a first push reserves four elements); `lower_file` trims every one, the
     /// nested ones included. Pinned through `parse`, so dropping the call fails this.
+    /// ENG-102, through `parse`: equal declared types share one text (dropping
+    /// `shared_type_text` at a site gives two copies), a routine with no rare field
+    /// carries no box (an always-boxed `RoutineRare` fails it) and one with a doc or a
+    /// named return does, read back through the accessors.
+    #[test]
+    fn parsed_declarations_share_type_texts_and_box_only_rare_fields() {
+        let file = crate::parse(
+            "codeunit 50103 \"Sh\"\n{\n    var\n        G: Record Customer;\n\n    procedure Plain(P: Record Customer)\n    var\n        L: Record Customer;\n    begin\n    end;\n\n    /// Says hello.\n    procedure Named() Ret: Record Customer\n    begin\n    end;\n}\n",
+        );
+        let o = &file.objects[0];
+        let (plain, named) = (&o.routines[0], &o.routines[1]);
+        let texts = [
+            o.globals[0].ty.as_ref(),
+            plain.params[0].ty.as_ref(),
+            plain.locals[0].ty.as_ref(),
+            named.return_type.as_ref(),
+        ]
+        .map(|t| t.expect("every declaration here has a type").clone());
+        for t in &texts[1..] {
+            assert!(
+                std::sync::Arc::ptr_eq(&texts[0], t),
+                "equal type texts share one allocation: {t}"
+            );
+        }
+        assert!(plain.rare.is_none(), "no rare field: no box");
+        assert_eq!(named.return_name(), Some("Ret"));
+        assert_eq!(named.doc(), Some("Says hello."));
+        assert!(named.preproc_context().is_empty() && named.dataitem_source_table().is_none());
+    }
+
     #[test]
     fn parsed_declarations_keep_no_spare_capacity() {
         let file = crate::parse(

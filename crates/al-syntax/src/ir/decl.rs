@@ -321,18 +321,7 @@ pub struct RoutineDecl {
     pub name_origin: Origin,
     pub params: Vec<Param>,
     /// Return type text, if declared.
-    pub return_type: Option<String>,
-    /// The NAMED-return-value binding name (`procedure X() Ret: Record Y` — grammar
-    /// `_procedure_named_return`'s `return_value` field), unquoted (outer-quote-
-    /// stripped, mirrors `ident_text`); `None` for an anonymous `: Type` return (or no
-    /// return at all). The grammar only ever sets this alongside `return_type` (the
-    /// same production requires both), so `Some(_)` here implies `return_type` is also
-    /// `Some`. Scoped to THIS routine only — the engine synthesizes a scoped value
-    /// symbol from this name + `return_type` (own-routine scope, never leaking across
-    /// routines) that participates in `receiver.rs`'s Step 2 bare-identifier lookup and
-    /// `arg_dispatch.rs`'s caller-scope-exact arg typing via the shared
-    /// `caller_scope_symbol` helper (T3, receiver-closure-and-arg-increments plan).
-    pub return_name: Option<String>,
+    pub return_type: Option<TypeText>,
     pub locals: Vec<VarDecl>,
     /// Attribute names (lowercased) from the `attribute_item` siblings preceding the
     /// routine — e.g. "eventsubscriber", "tryfunction", "integrationevent". Drives
@@ -349,11 +338,6 @@ pub struct RoutineDecl {
     /// `has_error`). Mirrors the legacy `parseIncomplete` / drives the IR-vs-legacy
     /// feature-extraction choice (malformed routines use legacy ERROR-recovery).
     pub parse_incomplete: bool,
-    /// For a trigger nested inside a report `dataitem(Name; "Source Table")`, the
-    /// enclosing (innermost) dataitem's SOURCE TABLE name (unquoted) — the type of the
-    /// dataitem trigger's implicit `Rec`. `None` for any non-dataitem routine. Mirrors
-    /// the legacy `report_dataitem_source_table`.
-    pub dataitem_source_table: Option<String>,
     /// For a MEMBER-trigger (a trigger nested in a named member: table/page field,
     /// page part, action, report dataitem, query element, …), the enclosing member's
     /// name (outer-quote-stripped — the engine applies `unescape_al_identifier`) and the
@@ -376,6 +360,36 @@ pub struct RoutineDecl {
     /// non-Report/ReportExtension object (they never contain a `dataset` section).
     /// Always `false` when `enclosing_member` is not itself a `modify_modification`.
     pub in_dataset_modify_context: bool,
+    /// The fields few routines set, in one box (ENG-102: on CDO 3,705 of 121,107
+    /// routines have a return name, 3,002 a dataitem table, 1,335 build conditions and
+    /// 14,599 a doc; inline they cost 96 B on every routine). `None` when none is
+    /// set. Read through [`Self::return_name`], [`Self::dataitem_source_table`],
+    /// [`Self::preproc_context`] and [`Self::doc`].
+    pub rare: Option<Box<RoutineRare>>,
+    /// `None` for a forward/external declaration with no body.
+    pub body: Option<BlockId>,
+    pub origin: Origin,
+}
+
+/// [`RoutineDecl`]'s rarely set fields (see [`RoutineDecl::rare`]).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RoutineRare {
+    /// The NAMED-return-value binding name (`procedure X() Ret: Record Y` — grammar
+    /// `_procedure_named_return`'s `return_value` field), unquoted (outer-quote-
+    /// stripped, mirrors `ident_text`); `None` for an anonymous `: Type` return (or no
+    /// return at all). The grammar only ever sets this alongside `return_type` (the
+    /// same production requires both), so `Some(_)` here implies `return_type` is also
+    /// `Some`. Scoped to THIS routine only — the engine synthesizes a scoped value
+    /// symbol from this name + `return_type` (own-routine scope, never leaking across
+    /// routines) that participates in `receiver.rs`'s Step 2 bare-identifier lookup and
+    /// `arg_dispatch.rs`'s caller-scope-exact arg typing via the shared
+    /// `caller_scope_symbol` helper (T3, receiver-closure-and-arg-increments plan).
+    pub return_name: Option<String>,
+    /// For a trigger nested inside a report `dataitem(Name; "Source Table")`, the
+    /// enclosing (innermost) dataitem's SOURCE TABLE name (unquoted) — the type of the
+    /// dataitem trigger's implicit `Rec`. `None` for any non-dataitem routine. Mirrors
+    /// the legacy `report_dataitem_source_table`.
+    pub dataitem_source_table: Option<String>,
     /// The build conditions this routine exists under (see
     /// [`super::PreprocSymbols`]): the object-level `#if` branches around it and,
     /// for a header split across `#if` arms, its own arm. Empty for a routine
@@ -391,9 +405,40 @@ pub struct RoutineDecl {
     /// part of a run (they end it). `None` when there is no such run. The raw
     /// comments, markers included, stay in [`super::AlFile::comments`].
     pub doc: Option<String>,
-    /// `None` for a forward/external declaration with no body.
-    pub body: Option<BlockId>,
-    pub origin: Origin,
+}
+
+impl RoutineRare {
+    /// `None` when every field is unset (a routine then carries no box).
+    #[must_use]
+    pub fn boxed(self) -> Option<Box<Self>> {
+        (self != Self::default()).then(|| Box::new(self))
+    }
+}
+
+impl RoutineDecl {
+    #[must_use]
+    pub fn return_name(&self) -> Option<&str> {
+        self.rare.as_deref()?.return_name.as_deref()
+    }
+    #[must_use]
+    pub fn dataitem_source_table(&self) -> Option<&str> {
+        self.rare.as_deref()?.dataitem_source_table.as_deref()
+    }
+    #[must_use]
+    pub fn preproc_context(&self) -> &[(String, bool)] {
+        self.rare
+            .as_deref()
+            .map_or(&[], |r| r.preproc_context.as_slice())
+    }
+    #[must_use]
+    pub fn doc(&self) -> Option<&str> {
+        self.rare.as_deref()?.doc.as_deref()
+    }
+    /// Set the doc run (`lower_file`, after the routine is built); boxes only when set.
+    pub fn set_doc(&mut self, doc: Option<String>) {
+        let Some(doc) = doc else { return };
+        self.rare.get_or_insert_with(Box::default).doc = Some(doc);
+    }
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -402,17 +447,46 @@ pub enum RoutineKind {
     Trigger,
 }
 
+/// A declared type's text (`Record Customer`, `Integer`), shared (ENG-102): on CDO 288,663
+/// parameter, variable and return types hold 7,041 distinct texts, so the lowerer keeps one
+/// copy per text per thread ([`shared_type_text`]).
+pub type TypeText = std::sync::Arc<str>;
+
+/// Texts [`shared_type_text`] keeps per thread; past it a text is still right, only no
+/// longer shared, so a long-running thread's set stays bounded.
+pub const SHARED_TYPE_TEXT_CAP: usize = 16_384;
+
+/// `text`'s shared copy on this thread.
+#[must_use]
+pub fn shared_type_text(text: &str) -> TypeText {
+    thread_local! {
+        static TEXTS: std::cell::RefCell<std::collections::HashSet<TypeText>> =
+            std::cell::RefCell::default();
+    }
+    TEXTS.with(|texts| {
+        let mut texts = texts.borrow_mut();
+        if let Some(t) = texts.get(text) {
+            return t.clone();
+        }
+        let t = TypeText::from(text);
+        if texts.len() < SHARED_TYPE_TEXT_CAP {
+            texts.insert(t.clone());
+        }
+        t
+    })
+}
+
 pub struct Param {
     pub name: String,
     /// `var` (by-reference) parameter.
     pub by_ref: bool,
-    pub ty: Option<String>,
+    pub ty: Option<TypeText>,
     pub origin: Origin,
 }
 
 pub struct VarDecl {
     pub name: String,
-    pub ty: Option<String>,
+    pub ty: Option<TypeText>,
     pub temporary: bool,
     pub origin: Origin,
     /// The text of a label declaration (`Name: Label 'text', Locked = true;`) or
@@ -517,17 +591,14 @@ impl RoutineDecl {
             name_origin: _,
             params,
             return_type: _,
-            return_name: _,
             locals,
             attributes,
             attributes_parsed,
             access_modifier: _,
             parse_incomplete: _,
-            dataitem_source_table: _,
             enclosing_member: _,
             in_dataset_modify_context: _,
-            preproc_context,
-            doc: _,
+            rare,
             body: _,
             origin: _,
         } = self;
@@ -539,7 +610,15 @@ impl RoutineDecl {
         exact_size(locals);
         exact_size(attributes);
         exact_size(attributes_parsed);
-        exact_size(preproc_context);
+        if let Some(RoutineRare {
+            return_name: _,
+            dataitem_source_table: _,
+            preproc_context,
+            doc: _,
+        }) = rare.as_deref_mut()
+        {
+            exact_size(preproc_context);
+        }
     }
 }
 
