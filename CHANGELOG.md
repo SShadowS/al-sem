@@ -7,6 +7,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (GRM-04: grammar tree-sitter-al v5.3.0, `main` at `9d155ee7`)
+
+- **The bump** (tree-sitter-al #44; was v5.2.0, `f8c6d8b6`): `gen-syntax` regenerated the
+  vocabulary (517 named kinds, +4) and `node-types.sha256`; the four new kinds are triaged
+  `Structural` in `schema/kind_policy.rs`; `NAMED_KIND_COUNT` 513 -> 517;
+  `CACHE_VERSION_GRAMMAR` and its mirrors (the cache differential test, the two current
+  fixture-cache artifacts, `cafecafe…`'s content hash recomputed) -> `tree-sitter-al-v5.3.0-
+  9d155ee7-native`; `PACK_SCHEMA` 19 -> 20 and the sample pack's pinned hash (a pack stores a
+  kind as its position in `RawKind::ALL`, and the four new kinds shift later positions; old
+  packs were already invalidated by the fingerprint closure, which holds `crates/`);
+  CLAUDE.md's Grammar section. **The build needs the grammar clone at
+  `9d155ee7`** (its `node-types.sha256` check stops any other).
+- **Shapes that were ERRORs and now parse, and how the lowerer reads each** (the existing
+  split-header rule: a real build's shape; a `SyntaxIssue` where one arm is picked):
+  - a call whose `)` (and `;`) sits in every `#if` arm (`preproc_split_paren_close`, the last
+    child of `argument_list`): the first arm a build can take gives the last arguments
+    (`conditional_list_arm`, as an `#if` operand), so the arity is a real build's; the call is
+    tainted (ENG-80). Before this, the group would have lowered as one `Unknown` argument.
+    Limits: the other arms' calls are not lowered (the IR has no place for them), the same
+    limit as `#if` operands, tracked in ENG-78; the arm is chosen without the routine's own
+    build context (`Run::default()`, as the operand rule does), so inside `#if not V19` it
+    still reads a `V19` arm;
+  - an `#if` around a procedure's access modifier (`preproc_conditional_modifier`): the
+    WIDEST access a build gives: the arms' common access when they all agree, else public
+    (also when there is no `#else`, an empty arm). Its consumers read `local` as "every caller
+    is in this object" (closed-world temp, d32), so one arm's `local` must not stand for a
+    build that is public (review, Fable); without the group the procedure read as public in
+    every build;
+  - a part / systempart / usercontrol header chosen per arm (`preproc_split_part`): every arm's
+    page control is listed, in arm order (a `chartpart` arm is skipped, as a plain `chartpart`
+    section is, keeping the later arms aligned). Limit, with a `SyntaxIssue`: a lookup by
+    name (`CurrPage.<part>`, `find_page_control`) takes the first, so it resolves to the first
+    arm's target only;
+  - a table field opened in `#elif`/`#else` arms or a nested arm group
+    (`preproc_split_table_field_open`, whose `id`/`name`/`type` are now multiple, and
+    `preproc_conditional_table_field_open`): the first arm's header (tree-sitter's field
+    lookup follows inherited field entries into a nested first arm, measured at one and two
+    nesting levels), every arm's properties including a nested group's own bodies, and a
+    `SyntaxIssue` where several arms open the field, their headers equal or not (the one-arm
+    form, Microsoft's removed-field blocks, reads as before, no issue).
+- **On CDO** (pinned `bc3ccb18`; `cdo-before-after` builds both sides with one grammar, so the
+  sides were built by hand: master `8aecb8c7` on v5.2.0 against this branch on v5.3.0, then the
+  `cdo-measure` comparison and `aldump --program-call-graph-stats` on each): nothing moved.
+  `analyze` 2,308 / 32,579 findings on both sides, no fingerprint added or removed; the
+  call-graph stats are byte-identical (unknown 0, 46,688 edges). Goldens: none moved.
+- **Corrected trees:** an EMPTY `#if` group after `asserterror` or `then` no longer takes the
+  body / then-branch; the statement after it does, so a call there now lowers inside the
+  `asserterror` (trapped) or the `then` block.
+- Pinned by `lower::grammar_v5_3_tests` (one test per shape). Breaks, each red then green
+  restored: the paren-split arm removed (`Validate`'s second argument is no call); the
+  modifier group not read; the widest-access rule reduced to the first arm; the split-part
+  block skipped (no control); the `chartpart` arm not counted (later arms misaligned); nested
+  bodies not read (the nested field's captions lose 'NB' and 'NN'); the issue's arm test
+  forced true (4 issues, not 3). The empty-group test is a grammar pin (no lowerer code): its
+  input given a statement in the group, the body-taking shape, turns it red.
+
 ### Changed (ENG-94: the syntax tree's declarations keep no spare capacity, 83.9 MiB less resident memory on CDO)
 
 - **The census** (`tools/census-probe` resident mode now splits `RoutineDecl` by field and
