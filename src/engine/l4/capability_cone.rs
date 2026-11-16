@@ -1862,6 +1862,33 @@ fn substitute_entry(
 /// unchanged by construction.
 type ConeFacts = BTreeMap<Arc<str>, ConeFactEntry>;
 
+/// A finished fact cone (ENG-109): the [`ConeFacts`] an SCC built, frozen into one sorted,
+/// exactly sized slice once nothing merges into it again. A stored cone is only read (iterated
+/// in key order, looked up by key, counted), so the B-tree's nodes and spare slots buy nothing:
+/// on CDO the cones held 666 MiB, of which their 5.6 M entries' payload is 300 MiB (ENG-107
+/// census). Same order as the map (the map's own), so every reader and digest is unchanged.
+struct FrozenCone(Box<[(Arc<str>, ConeFactEntry)]>);
+
+impl FrozenCone {
+    fn freeze(cone: ConeFacts) -> Self {
+        // A `BTreeMap`'s `into_iter` is in key order and exact-size.
+        Self(cone.into_iter().collect())
+    }
+    /// The entries in key order, as `BTreeMap::iter` gives them.
+    fn iter(&self) -> impl ExactSizeIterator<Item = (&Arc<str>, &ConeFactEntry)> + '_ {
+        self.0.iter().map(|(k, e)| (k, e))
+    }
+    fn keys(&self) -> impl Iterator<Item = &Arc<str>> + '_ {
+        self.0.iter().map(|(k, _)| k)
+    }
+    fn values(&self) -> impl ExactSizeIterator<Item = &ConeFactEntry> + '_ {
+        self.0.iter().map(|(_, e)| e)
+    }
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+}
+
 /// Merge `entry` (already distance-shifted) into `dst` at `key`, keeping min
 /// dist; tie-break by canonical rep. Mirrors `mergeCone`.
 ///
@@ -1958,7 +1985,7 @@ impl MemoRows for ClosedRowMemo {
 /// The fact cones a walk reads, by SCC index. Shared (`Arc`): a resident
 /// fold's cone store keeps every non-root cone for the next revision, which
 /// reads an unchanged SCC's cone instead of rebuilding it (design §6.10).
-type ConeMap = HashMap<usize, Arc<ConeFacts>>;
+type ConeMap = HashMap<usize, Arc<FrozenCone>>;
 
 /// The coverage cones a walk reads, by SCC index (shared like [`ConeMap`]).
 type CovMap = HashMap<usize, Arc<CoverageCone>>;
@@ -2940,7 +2967,7 @@ struct SccRecord {
     fingerprint: Digest32,
     /// The fact cone; `None` for a root SCC (never built, as in a one-shot
     /// composition).
-    fact: Option<Arc<ConeFacts>>,
+    fact: Option<Arc<FrozenCone>>,
     /// The coverage cone; `None` for a root SCC.
     cov: Option<Arc<CoverageCone>>,
 }
@@ -2992,7 +3019,7 @@ struct EmitSource {
     g: TypedEdgeGraph,
     scc: SccResult,
     succ: Vec<BTreeSet<usize>>,
-    cones: Vec<Option<Arc<ConeFacts>>>,
+    cones: Vec<Option<Arc<FrozenCone>>>,
     frames: HashMap<String, super::param_guard::FrameGuards>,
     /// The members re-folded against the previous fold (its SCC re-folded,
     /// or its own producer-solve entries changed: Δ_pd_output); `None`: no
@@ -3013,7 +3040,7 @@ impl ConeStore {
         let mut out = Vec::new();
         let records = self.sccs.len();
         let (mut with_fact, mut with_cov) = (0usize, 0usize);
-        let mut facts: Vec<&Arc<ConeFacts>> = Vec::new();
+        let mut facts: Vec<&Arc<FrozenCone>> = Vec::new();
         let mut covs: Vec<&Arc<CoverageCone>> = Vec::new();
         for r in self.sccs.values() {
             if let Some(f) = &r.fact {
@@ -3025,13 +3052,13 @@ impl ConeStore {
                 covs.push(c);
             }
         }
-        let emit_cones: Vec<&Arc<ConeFacts>> = self
+        let emit_cones: Vec<&Arc<FrozenCone>> = self
             .emit
             .iter()
             .flat_map(|e| e.cones.iter().flatten())
             .collect();
         let mut seen = Set::new();
-        let distinct: Vec<&Arc<ConeFacts>> = facts
+        let distinct: Vec<&Arc<FrozenCone>> = facts
             .iter()
             .chain(emit_cones.iter())
             .copied()
@@ -3296,7 +3323,7 @@ impl ConeStore {
         self.sccs
             .values()
             .filter_map(|r| r.fact.as_deref())
-            .map(BTreeMap::len)
+            .map(FrozenCone::len)
             .sum()
     }
 }
@@ -3447,7 +3474,7 @@ impl Fingerprints {
     /// of), `dist` and guard, in key order; then the coverage cone. The
     /// entry's key is not hashed: it is a function of the representative
     /// (`inherited_fact_key`) and the guard (`guarded_key`).
-    fn of(&mut self, fact: &ConeFacts, cov: &CoverageCone) -> Digest32 {
+    fn of(&mut self, fact: &FrozenCone, cov: &CoverageCone) -> Digest32 {
         let mut h = Hasher::new();
         h.u64(fact.len() as u64);
         for e in fact.values() {
@@ -3503,7 +3530,7 @@ struct ComposedCones {
 /// What [`compose_inherited_cones`] hands over for an [`EmitSource`].
 struct EmitParts {
     succ: Vec<BTreeSet<usize>>,
-    cones: Vec<Option<Arc<ConeFacts>>>,
+    cones: Vec<Option<Arc<FrozenCone>>>,
     changed: Option<HashSet<String>>,
 }
 
@@ -3650,7 +3677,7 @@ fn compose_inherited_cones(
     // Plan 2026-11-03 L6: per SCC index, the fact cone the store keeps (for
     // the on-demand raw emission), and the members whose rows this walk
     // re-folded against the seed (`None`: no seed, every member).
-    let mut kept_cones: Vec<Option<Arc<ConeFacts>>> = if keep.is_some() {
+    let mut kept_cones: Vec<Option<Arc<FrozenCone>>> = if keep.is_some() {
         vec![None; scc.sccs.len()]
     } else {
         Vec::new()
@@ -3794,7 +3821,7 @@ fn compose_inherited_cones(
                 &crate::engine::l5::detector_context::cones_census::FACTCONE_ENTRIES,
                 fcone.len() as u64,
             );
-            fact_cones.insert(i, Arc::new(fcone));
+            fact_cones.insert(i, Arc::new(FrozenCone::freeze(fcone)));
             crate::engine::l5::detector_context::cones_census::add_since(
                 &crate::engine::l5::detector_context::cones_census::FACTCONE_NANOS,
                 _t_fc,
@@ -3910,9 +3937,16 @@ fn compose_inherited_cones(
         let _t_set = use_set
             .then(crate::engine::l5::detector_context::cones_census::start)
             .flatten();
-        let root_set = (use_set && root_scc)
-            .then(|| fact_cone_for_scc(&scc_entry.members, succ_ids, &fact_cones, direct, None));
-        let scc_set: Option<&ConeFacts> = if !use_set {
+        let root_set = (use_set && root_scc).then(|| {
+            FrozenCone::freeze(fact_cone_for_scc(
+                &scc_entry.members,
+                succ_ids,
+                &fact_cones,
+                direct,
+                None,
+            ))
+        });
+        let scc_set: Option<&FrozenCone> = if !use_set {
             None
         } else if let Some(set) = &root_set {
             stats.scc_sets_built += 1;
