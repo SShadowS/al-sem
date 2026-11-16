@@ -1,0 +1,93 @@
+cdo-speed: outputs in /work/alsem-wt/lane-engine/target/cdo-speed-runs/20261116-101514-4121006
+cdo-speed: 77ed235b = 77ed235b69: cached binary /home/dev/.cache/al-sem/cdo-speed/bin/77ed235b69e8b209c1dce675ffce9788657b6399/alsem
+cdo-speed: a030a67f = a030a67fa1: cached binary /home/dev/.cache/al-sem/cdo-speed/bin/a030a67fa1d6a1ff67b883385657f0066f07fcaf/alsem
+cdo-speed: base 77ed235b69 (77ed235b) against head a030a67fa1; workspace /work/src/cdo-baseline/Cloud
+cdo-speed: round 0, warm-up 1 of 2 (fresh servers; base builds first)
+cdo-speed:   r0.1 build        base  wall   24.97 s  cpu   76.53 s  load   5.9  pressure   0.0
+cdo-speed:   r0.1 build        head  wall   24.97 s  cpu   75.37 s  load   5.7  pressure   0.8
+cdo-speed:   r0.1 build        base  wall   31.53 s  cpu   92.65 s  (again, untimed: the server the remaining calls use)
+cdo-speed:   r0.1 warm-prove   head  wall    1.96 s  cpu    4.80 s  load   5.2  pressure   0.7
+cdo-speed:   r0.1 warm-prove   base  wall    2.75 s  cpu    7.34 s  load   5.2  pressure   0.6
+cdo-speed:   r0.1 warm-explain base  wall    0.68 s  cpu    0.67 s  load   5.2  pressure   0.7
+cdo-speed:   r0.1 warm-explain head  wall    0.64 s  cpu    0.64 s  load   5.2  pressure   0.7
+cdo-speed:   r0.1 warm-digest  head  wall    0.41 s  cpu    0.40 s  load   5.2  pressure   0.6
+cdo-speed:   r0.1 warm-digest  base  wall    0.38 s  cpu    0.38 s  load   5.2  pressure   0.6
+cdo-speed:   r0.1 warm-query   base  wall    0.56 s  cpu    0.55 s  load   5.2  pressure   0.6
+cdo-speed:   r0.1 warm-query   head  wall    0.56 s  cpu    0.56 s  load   5.2  pressure   0.6
+cdo-speed:   r0.1 warm-tests   head  wall   11.99 s  cpu   66.59 s  load   5.2  pressure   0.5
+cdo-speed:   r0.1 warm-tests   base  wall   11.67 s  cpu   64.62 s  load   5.1  pressure   3.4
+cdo-speed:   r0.1 warm-impact  base  wall    3.28 s  cpu    3.33 s  load   5.3  pressure   4.7
+cdo-speed:   r0.1 warm-impact  head  wall    2.98 s  cpu    3.20 s  load   5.3  pressure   3.1
+cdo-speed: round 0, warm-up 2 of 2 (fresh servers; head builds first)
+cdo-speed:   r0.2 build        head  wall   25.05 s  cpu   77.28 s  load   5.2  pressure   1.4
+cdo-speed:   r0.2 build        base  wall   25.37 s  cpu   76.95 s  load   5.2  pressure   1.2
+cdo-speed:   r0.2 build        head  wall   31.31 s  cpu   97.48 s  (again, untimed: the server the remaining calls use)
+cdo-speed:   r0.2 warm-prove   base  wall    2.99 s  cpu    6.02 s  load   5.3  pressure   1.0
+cdo-speed:   r0.2 warm-prove   head  wall    2.63 s  cpu    5.27 s  load   5.3  pressure   0.7
+cdo-speed:   r0.2 warm-explain head  wall    0.53 s  cpu    0.52 s  load   5.3  pressure   0.5
+cdo-speed:   r0.2 warm-explain base  wall    0.48 s  cpu    0.47 s  load   5.3  pressure   0.5
+cdo-speed:   r0.2 warm-digest  base  wall    0.34 s  cpu    0.33 s  load   5.2  pressure   0.5
+cdo-speed:   r0.2 warm-digest  head  wall    0.34 s  cpu    0.33 s  load   5.2  pressure   0.4
+cdo-speed:   r0.2 warm-query   head  wall    0.67 s  cpu    0.66 s  load   5.2  pressure   0.4
+cdo-speed:   r0.2 warm-query   base  wall    0.61 s  cpu    0.62 s  load   5.2  pressure   0.4
+cdo-speed:   r0.2 warm-tests   base  wall   12.08 s  cpu   69.47 s  load   5.2  pressure   0.4
+cdo-speed:   r0.2 warm-tests   head  wall   12.03 s  cpu   67.42 s  load   7.0  pressure   3.0
+cdo-speed:   r0.2 warm-impact  head  wall    3.46 s  cpu    3.72 s  load   6.6  pressure   4.1
+cdo-speed:   r0.2 warm-impact  base  wall    3.93 s  cpu    4.10 s  load   6.6  pressure   2.8
+cdo-speed: round 1: CDO E-Mail Handler::RunReportID
+cdo-speed:   r1 prove        head  wall   15.75 s  cpu   15.68 s  load   6.7  pressure   1.9
+cdo-speed:   r1 prove        base  wall   15.30 s  cpu   15.25 s  load   6.2  pressure   0.4
+cdo-speed:   r1 explain      head  wall    0.83 s  cpu    0.83 s  load   6.0  pressure   0.1
+cdo-speed:   r1 explain      base  wall    0.76 s  cpu    0.74 s  load   6.0  pressure   0.1
+cdo-speed:   r1 digest       head  wall    0.50 s  cpu    0.49 s  load   6.0  pressure   0.1
+cdo-speed:   r1 digest       base  wall    0.44 s  cpu    0.45 s  load   6.0  pressure   0.1
+cdo-speed:   r1 query        head  wall    0.76 s  cpu    0.75 s  load   6.0  pressure   0.1
+cdo-speed:   r1 query        base  wall    0.69 s  cpu    0.69 s  load   6.0  pressure   0.1
+cdo-speed:   r1 tests        head  wall    0.37 s  cpu    0.38 s  load   6.0  pressure   0.0
+cdo-speed:   r1 tests        base  wall    0.41 s  cpu    0.39 s  load   6.0  pressure   0.0
+cdo-speed:   r1 impact       head  wall    1.14 s  cpu    1.14 s  load   6.0  pressure   0.0
+cdo-speed:   r1 impact       base  wall    1.15 s  cpu    1.15 s  load   5.8  pressure   0.0
+cdo-speed: round 2: CDO Issue Document::IssueReminder
+cdo-speed:   r2 prove        base  wall   12.22 s  cpu   12.13 s  load   5.8  pressure   0.0
+cdo-speed:   r2 prove        head  wall   12.01 s  cpu   11.98 s  load   5.5  pressure   0.0
+cdo-speed:   r2 explain      base  wall    0.71 s  cpu    0.71 s  load   5.4  pressure   0.0
+cdo-speed:   r2 explain      head  wall    0.63 s  cpu    0.62 s  load   5.4  pressure   0.0
+cdo-speed:   r2 digest       base  wall    0.57 s  cpu    0.57 s  load   5.4  pressure   0.0
+cdo-speed:   r2 digest       head  wall    0.61 s  cpu    0.60 s  load   5.4  pressure   0.0
+cdo-speed:   r2 query        base  wall    1.36 s  cpu    1.35 s  load   5.4  pressure   0.0
+cdo-speed:   r2 query        head  wall    0.79 s  cpu    0.79 s  load   5.4  pressure   0.0
+cdo-speed:   r2 tests        base  wall    0.33 s  cpu    0.33 s  load   5.4  pressure   0.0
+cdo-speed:   r2 tests        head  wall    0.31 s  cpu    0.29 s  load   5.4  pressure   0.0
+cdo-speed:   r2 impact       base  wall    0.92 s  cpu    0.95 s  load   5.4  pressure   0.0
+cdo-speed:   r2 impact       head  wall    0.88 s  cpu    0.88 s  load   5.4  pressure   0.0
+cdo-speed: round 3: CDO E-Mail Handler::DocEMailSend
+cdo-speed:   r3 prove        head  wall   18.19 s  cpu   18.07 s  load   5.4  pressure   0.0
+cdo-speed:   r3 prove        base  wall   16.97 s  cpu   16.90 s  load   5.2  pressure   0.0
+cdo-speed:   r3 explain      head  wall    0.92 s  cpu    0.91 s  load   5.2  pressure   0.0
+cdo-speed:   r3 explain      base  wall    0.91 s  cpu    0.91 s  load   5.2  pressure   0.0
+cdo-speed:   r3 digest       head  wall    0.67 s  cpu    0.68 s  load   5.1  pressure   0.0
+cdo-speed:   r3 digest       base  wall    0.47 s  cpu    0.47 s  load   5.1  pressure   0.0
+cdo-speed:   r3 query        head  wall    0.87 s  cpu    0.86 s  load   5.1  pressure   0.0
+cdo-speed:   r3 query        base  wall    0.77 s  cpu    0.76 s  load   5.1  pressure   0.0
+cdo-speed:   r3 tests        head  wall    0.32 s  cpu    0.31 s  load   5.1  pressure   0.0
+cdo-speed:   r3 tests        base  wall    0.35 s  cpu    0.35 s  load   5.1  pressure   0.0
+cdo-speed:   r3 impact       head  wall    0.94 s  cpu    0.94 s  load   5.1  pressure   0.0
+cdo-speed:   r3 impact       base  wall    0.96 s  cpu    0.98 s  load   5.1  pressure   0.0
+cdo-speed: verdict, head/base (limits: rounds cpu 1.2 and wall 1.3 on the median ratio, warm-up cpu 1.3 and wall 1.6, memory 1.1; a call is judged alone when its base CPU is at least 2.0 s):
+cdo-speed:   build          cpu   76.74 ->   76.33 s x0.995   wall   25.17 ->   25.01 s x0.994   spread 1.02/1.01  (x0.985/x1.004 by pass; load 5.2-5.9)
+cdo-speed:   warm-prove     cpu    6.68 ->    5.04 s x0.757   wall    2.87 ->    2.29 s x0.792   spread 1.34/1.24  (reported only)  (x0.654/x0.875 by pass; load 5.2-5.3)
+cdo-speed:   warm-explain   cpu    0.57 ->    0.58 s x1.028   wall    0.58 ->    0.59 s x1.028   spread 1.16/1.16  (reported only)  (x0.955/x1.106 by pass; load 5.2-5.3)
+cdo-speed:   warm-digest    cpu    0.35 ->    0.36 s x1.026   wall    0.36 ->    0.37 s x1.041   spread 1.05/1.08  (reported only)  (x1.053/x1.000 by pass; load 5.2-5.2)
+cdo-speed:   warm-query     cpu    0.58 ->    0.61 s x1.041   wall    0.58 ->    0.61 s x1.051   spread 1.05/1.09  (reported only)  (x1.018/x1.065 by pass; load 5.2-5.2)
+cdo-speed:   warm-tests     cpu   67.05 ->   67.00 s x1.000   wall   11.87 ->   12.01 s x1.011   spread 1.06/1.03  (x1.030/x0.970 by pass; load 5.1-7.0)
+cdo-speed:   warm-impact    cpu    3.71 ->    3.46 s x0.934   wall    3.61 ->    3.22 s x0.894   spread 1.06/1.03  (reported only)  (x0.961/x0.907 by pass; load 5.3-6.6)
+cdo-speed:   prove          cpu   15.25 ->   15.68 s x1.028   wall   15.30 ->   15.75 s x1.029   spread 1.08/1.09
+cdo-speed:   explain        cpu    0.74 ->    0.83 s x1.000   wall    0.76 ->    0.83 s x1.007   spread 1.28/1.24  (in the round total only)
+cdo-speed:   digest         cpu    0.47 ->    0.60 s x1.089   wall    0.47 ->    0.61 s x1.114   spread 1.37/1.33  (in the round total only)
+cdo-speed:   query          cpu    0.76 ->    0.79 s x1.087   wall    0.77 ->    0.79 s x1.098   spread 1.93/1.95  (in the round total only)
+cdo-speed:   tests          cpu    0.35 ->    0.31 s x0.886   wall    0.35 ->    0.32 s x0.908   spread 1.11/1.02  (in the round total only)
+cdo-speed:   impact         cpu    0.98 ->    0.94 s x0.959   wall    0.96 ->    0.94 s x0.976   spread 1.07/1.04  (in the round total only)
+cdo-speed:   round-total    cpu   18.67 ->   19.27 s x1.032   wall   18.76 ->   19.34 s x1.031   spread 1.13/1.14
+cdo-speed:   peak memory    8421 -> 8242 MiB x0.979 (every server process's VmHWM, summed)
+cdo-speed: build 0 s, timing 365 s, load average 5.9 at the start, 5.0 at the end; CPU stall share of this container: warm-up 1 2.9 %, warm-up 2 2.9 %, rounds 0.0 %
+cdo-speed: PASS

@@ -90,8 +90,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`scripts/cdo-before-after 77ed235b`, workspace `bc3ccb18` clean on both sides) no finding or
   fingerprint moved at either scope (2,308 primary, 32,579 all) and the call graph is unchanged
   (0 unknown); `aldump --session-refresh --verify` gives a model equal to a cold build after every
-  change type, in the default and `--low-mem` modes. Speed was not measured separately (the
-  landing's cdo-speed check covers it); no speed ratio is claimed.
+  change type, in the default and `--low-mem` modes. `scripts/cdo-speed` (`77ed235b` against
+  `a030a67f`) passed twice; the two runs do not agree on the model build (x1.091, from one pass
+  at x1.183 and one at x1.005, against x0.995), so no speed ratio is claimed; the round totals
+  (x0.973, x1.032) are within the tool's noise.
 - **Tests.** `cli_shared_record_globals` pins both halves: the declaration's global is one
   shared, resolved row with the object-level id, and an entry guard stays in its routine.
   Discrimination: without `share_resolved_globals` the rows are not shared (red); with the
