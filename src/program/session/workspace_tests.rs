@@ -245,6 +245,45 @@ fn model_fingerprint_sees_one_field_of_one_routine() {
     assert_ne!(fp, model_fingerprint(&c), "the call edges' order");
 }
 
+/// TLS-81: the fingerprint (and `write_model`'s text) covers `ResolvedCalls`'
+/// `background_starts` and `loaded_only_tables`: one more background start, or
+/// one more loaded-only routine, changes it. (A field added later to any
+/// struct `model_parts` reads does not compile until it is placed there: each
+/// is destructured without `..`.)
+///
+/// DISCRIMINATIONS (2026-11-16): see the TLS-81 commit message.
+#[test]
+fn model_fingerprint_sees_background_starts_and_loaded_only_tables() {
+    use crate::program::model::calls::{BackgroundStart, StartedCodeunit};
+    let ws = base_ws();
+    let inputs = ws.inputs();
+    let build =
+        || assemble_and_resolve_cross_app_program(&inputs, false, AssemblyNeeds::BASE).unwrap();
+    let fp = model_fingerprint(&build());
+
+    let mut b = build();
+    let calls = std::sync::Arc::make_mut(&mut b.resolved.calls);
+    let starts = std::sync::Arc::make_mut(&mut calls.background_starts);
+    let n = starts.len();
+    starts.insert(
+        "tls81-site".into(),
+        BackgroundStart {
+            codeunit: StartedCodeunit::Literal("Codeunit TLS81".into()),
+            on_failure: None,
+        },
+    );
+    assert_eq!(starts.len(), n + 1, "precondition: a new start");
+    assert_ne!(fp, model_fingerprint(&b), "one more background start");
+
+    let mut c = build();
+    let calls = std::sync::Arc::make_mut(&mut c.resolved.calls);
+    assert!(
+        std::sync::Arc::make_mut(&mut calls.loaded_only_tables).insert("tls81-routine".into()),
+        "precondition: a new loaded-only routine"
+    );
+    assert_ne!(fp, model_fingerprint(&c), "one more loaded-only routine");
+}
+
 /// The harness itself: two cold builds of one workspace give the same text
 /// (so a difference below is the session's, not the build's), and the first
 /// refresh is a cold build (P).
