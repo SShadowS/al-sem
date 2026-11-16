@@ -1286,6 +1286,7 @@ fn fingerprint_witness_boundary_trigger_and_event() {
             false,
             &crate::engine::l4::effect_query_cli::OwnerIndex::build(model),
             &|id| primary.contains(id),
+            &crate::engine::l5::digest_cli::ReachWorkers::SERIAL,
         );
         assert!(
             result.diagnostics.is_empty(),
@@ -1409,6 +1410,7 @@ fn fingerprint_query_scoped_equals_unscoped(case: &Case, seen: &mut Seen) {
             false,
             &owners,
             &|id| primary.contains(id),
+            &crate::engine::l5::digest_cli::ReachWorkers::SERIAL,
         );
         (format!("{:?}\n{:?}", res.blocks, res.diagnostics), res)
     };

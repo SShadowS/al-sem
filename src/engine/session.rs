@@ -306,6 +306,7 @@ fn read_fingerprint_query(
     read: &QueryRead,
     pool: &BTreeSet<String>,
     model: &Model,
+    workers: &crate::engine::l5::digest_cli::ReachWorkers,
 ) -> crate::engine::l5::fingerprint_query::FingerprintQueryResult {
     let owners = crate::engine::l4::effect_query_cli::OwnerIndex::build(model);
     let primary = crate::engine::l5::fingerprint_query::primary_stable_ids(model);
@@ -316,6 +317,7 @@ fn read_fingerprint_query(
         read.roots_config_ignored,
         &owners,
         &|id| primary.contains(id),
+        workers,
     )
 }
 
@@ -1207,7 +1209,7 @@ pub(crate) fn read_tree_shared(
             }
         }
         TreeRead::FingerprintQuery(read) => {
-            let out = read_fingerprint_query(tree, read, roots, model);
+            let out = read_fingerprint_query(tree, read, roots, model, &reach_workers);
             tree_reads.insert(*job, TreeReadOut::FingerprintQuery(out));
         }
         TreeRead::Inventory(read) => {

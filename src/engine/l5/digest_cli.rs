@@ -1939,6 +1939,8 @@ pub(crate) struct PassProbe {
     /// the timeout passes: `first_root_timed_out`), so it finishes last.
     pub(crate) hold_first_root: std::sync::Mutex<Option<std::time::Duration>>,
     pub(crate) first_root_timed_out: std::sync::atomic::AtomicBool,
+    /// ENG-106: the thread name each fingerprint root block was built on.
+    pub(crate) block_threads: std::sync::Mutex<Vec<String>>,
 }
 
 /// A root in flight ([`PassProbe::enter`]); leaves on drop.

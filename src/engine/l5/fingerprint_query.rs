@@ -701,6 +701,11 @@ fn build_block<'w>(
 /// [`resolve_routine_selectors`] (final panel C5); `None` when no `--routine`
 /// was given. A failing selector never reaches the query: its result is
 /// [`selector_failure_result`], with no tree composed.
+///
+/// `workers`: how many root blocks are built at once (ENG-106; the one-shot
+/// CLI's [`default_reach_workers`], a resident revision's own setting).
+///
+/// [`default_reach_workers`]: crate::engine::l5::digest_cli::default_reach_workers
 pub fn fingerprint_query(
     snap: &CapabilitySnapshot,
     filters: &FingerprintFilters,
@@ -708,6 +713,7 @@ pub fn fingerprint_query(
     roots_config_ignored: bool,
     owners: &OwnerIndex<'_>,
     is_primary: &dyn Fn(&str) -> bool,
+    workers: &crate::engine::l5::digest_cli::ReachWorkers,
 ) -> FingerprintQueryResult {
     // Build shared indexes (reuse B1's public entry point).
     let idx = build_fingerprint_indexes_pub(snap);
@@ -737,9 +743,13 @@ pub fn fingerprint_query(
     let widx = witness_index(&idx);
     // One carrier cache for the whole query (final panel F1-C8).
     let carriers = CarrierCache::default();
-    let mut blocks: Vec<FingerprintBlock> = Vec::new();
-    for root in root_pool {
-        let block = build_block(
+    let block_of = |root: &&crate::engine::l5::snapshot::SnapshotRootClassificationSlot| {
+        #[cfg(test)]
+        if let Some(p) = workers.probe() {
+            let name = std::thread::current().name().unwrap_or("").to_string();
+            p.block_threads.lock().unwrap().push(name);
+        }
+        build_block(
             &root.routine_id,
             root,
             &idx,
@@ -747,9 +757,21 @@ pub fn fingerprint_query(
             &carriers,
             filters,
             owners,
-        );
-        blocks.push(block);
-    }
+        )
+    };
+    // ENG-106: roots on the literal pass's pool, one root per task (per-root
+    // cost is uneven). An indexed collect keeps `root_pool`'s order, so the sort
+    // below sees what the serial loop gives. Serial at one worker, and inside a
+    // rayon worker (see `digest_cli`'s literal pass: `install` there can deadlock).
+    let mut blocks: Vec<FingerprintBlock> =
+        if workers.count() <= 1 || rayon::current_thread_index().is_some() {
+            root_pool.iter().map(block_of).collect()
+        } else {
+            use rayon::prelude::*;
+            crate::engine::perf_trace::counter_delta("fingerprint.blocks_parallel", 1);
+            crate::engine::l5::digest_cli::reach_pool(workers.count())
+                .install(|| root_pool.par_iter().with_max_len(1).map(block_of).collect())
+        };
 
     // Sort blocks by routine_id.
     blocks.sort_by(|a, b| a.routine_id.cmp(&b.routine_id));
@@ -2110,6 +2132,7 @@ mod tests {
             false,
             &OwnerIndex::default(),
             &|_| true,
+            &crate::engine::l5::digest_cli::ReachWorkers::SERIAL,
         );
         let witnessed = result.blocks[0]
             .witnesses
@@ -2138,6 +2161,7 @@ mod tests {
             false,
             &OwnerIndex::default(),
             &|_| true,
+            &crate::engine::l5::digest_cli::ReachWorkers::SERIAL,
         );
         let resources: Vec<usize> = result
             .blocks
@@ -2168,6 +2192,114 @@ mod tests {
         }
     }
 
+    /// A fact of `subject` on table `T`: a direct one by operation `op-<op>`,
+    /// an inherited one through `callsite`.
+    fn table_t_fact(subject: &str, op: &str, provenance: &str, callsite: &str) -> SnapFact {
+        crate::engine::l5::snapshot::SnapshotFactFields {
+            subject: subject.to_string(),
+            op: op.to_string(),
+            resource_kind: "table".to_string(),
+            resource_id: Some("T".to_string()),
+            resource_arg_source: None,
+            confidence: "static".to_string(),
+            provenance: provenance.to_string(),
+            via: "call".to_string(),
+            witness_operation_id: (provenance == "direct").then(|| format!("op-{op}")),
+            witness_callsite_id: (provenance != "direct").then(|| callsite.to_string()),
+            extra: None,
+            witness_first_hop_operation_id: None,
+            witness_first_hop_event_id: None,
+        }
+        .into()
+    }
+
+    /// ENG-106: `n` roots `R0..`, each calling `W` (`cs<i>`), which inserts and
+    /// modifies `T`: every root inherits both facts, and all share `W`'s carrier
+    /// keys (the `CarrierCache` the parallel blocks share).
+    fn roots_sharing_one_callee(n: usize) -> CapabilitySnapshot {
+        let base = root_with_two_inherited_facts();
+        let w = "app:Codeunit:1#w";
+        let ids: Vec<(String, String)> = (0..n)
+            .map(|i| (format!("app:Codeunit:1#r{i}"), format!("R{i}")))
+            .chain([(w.to_string(), "W".to_string())])
+            .collect();
+        let refs: Vec<(&str, &str)> = ids.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
+        let mut snap = snap_with_identities(&refs);
+        let mut facts = vec![
+            table_t_fact(w, "insert", "direct", ""),
+            table_t_fact(w, "modify", "direct", ""),
+        ];
+        let (mut edges, mut roots) = (Vec::new(), Vec::new());
+        for i in 0..n {
+            let (rid, cs) = (format!("app:Codeunit:1#r{i}"), format!("cs{i}"));
+            facts.push(table_t_fact(&rid, "insert", "inherited", &cs));
+            facts.push(table_t_fact(&rid, "modify", "inherited", &cs));
+            let mut e = base.typed_edges[0].clone();
+            if let crate::engine::l5::snapshot::SnapshotGraphEdge::DirectCall {
+                callsite_id,
+                from,
+                source_anchor,
+                edge_id,
+                ..
+            } = &mut e
+            {
+                (*callsite_id, *from) = (cs.clone(), rid.clone());
+                source_anchor.enclosing_routine_id = rid.clone();
+                *edge_id = format!("e-{cs}");
+            }
+            edges.push(e);
+            let mut root = base.root_classifications[0].clone();
+            root.routine_id = rid;
+            roots.push(root);
+        }
+        snap.capability_facts = facts;
+        *std::sync::Arc::make_mut(&mut snap.typed_edges) = edges;
+        *std::sync::Arc::make_mut(&mut snap.root_classifications) = roots;
+        snap
+    }
+
+    /// ENG-106: root blocks built on the pool equal the serial ones, run after
+    /// run (order must not hang on scheduling), and the pool really built them.
+    /// Hand-stated: 24 roots sharing one callee's carrier keys.
+    ///
+    /// DISCRIMINATION (2026-11-16): the parallel branch skipping its first root
+    /// -> unequal blocks (red); the condition forced to the serial branch -> no
+    /// block built on an `al-sem-reach-` thread (red). Restored: green.
+    #[test]
+    fn parallel_blocks_equal_serial_blocks() {
+        use crate::engine::l5::digest_cli::{PassProbe, ReachWorkers};
+        let snap = roots_sharing_one_callee(24);
+        let run = |workers: &ReachWorkers| {
+            let res = fingerprint_query(
+                &snap,
+                &witnessing_filters(),
+                None,
+                false,
+                &OwnerIndex::default(),
+                &|_| true,
+                workers,
+            );
+            format!("{:?}", res.blocks)
+        };
+        let serial = run(&ReachWorkers::SERIAL);
+        assert_eq!(serial.matches("FingerprintBlock {").count(), 24);
+        assert!(
+            serial.contains("cs23"),
+            "precondition: the last root witnessed"
+        );
+        for _ in 0..5 {
+            let probe = std::sync::Arc::new(PassProbe::default());
+            let parallel = run(&ReachWorkers::new(4).with_probe(std::sync::Arc::clone(&probe)));
+            assert_eq!(parallel, serial);
+            let threads = probe.block_threads.lock().unwrap().clone();
+            assert_eq!(threads.len(), 24);
+            assert!(
+                threads.iter().all(|t| t.starts_with("al-sem-reach-")),
+                "every block on the pool: {threads:?}"
+            );
+        }
+    }
+
     /// Root `R` calls `W` once (`cs1`); `W` inserts and modifies `T`, so `R`
     /// inherits both facts through one first hop.
     fn root_with_two_inherited_facts() -> CapabilitySnapshot {
@@ -2176,29 +2308,11 @@ mod tests {
         };
         let (r, w) = ("app:Codeunit:1#r", "app:Codeunit:1#w");
         let mut snap = snap_with_identities(&[(r, "R"), (w, "W")]);
-        let fact = |subject: &str, op: &str, provenance: &str| -> SnapFact {
-            crate::engine::l5::snapshot::SnapshotFactFields {
-                subject: subject.to_string(),
-                op: op.to_string(),
-                resource_kind: "table".to_string(),
-                resource_id: Some("T".to_string()),
-                resource_arg_source: None,
-                confidence: "static".to_string(),
-                provenance: provenance.to_string(),
-                via: "call".to_string(),
-                witness_operation_id: (provenance == "direct").then(|| format!("op-{op}")),
-                witness_callsite_id: (provenance != "direct").then(|| "cs1".to_string()),
-                extra: None,
-                witness_first_hop_operation_id: None,
-                witness_first_hop_event_id: None,
-            }
-            .into()
-        };
         snap.capability_facts = vec![
-            fact(w, "insert", "direct"),
-            fact(w, "modify", "direct"),
-            fact(r, "insert", "inherited"),
-            fact(r, "modify", "inherited"),
+            table_t_fact(w, "insert", "direct", ""),
+            table_t_fact(w, "modify", "direct", ""),
+            table_t_fact(r, "insert", "inherited", "cs1"),
+            table_t_fact(r, "modify", "inherited", "cs1"),
         ];
         *std::sync::Arc::make_mut(&mut snap.typed_edges) = vec![SnapshotGraphEdge::DirectCall {
             kind: "direct-call",
