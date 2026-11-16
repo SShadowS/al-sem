@@ -654,14 +654,15 @@ fn cdo_slot_queue_refuses_jumps_and_steps_aside_for_memory() {
 
     // A waiter short of memory steps aside.
     let mut m = waiter("C", "1", "999999");
-    until("M marked mem", &|| {
-        ticket_text().is_some_and(|t| t.trim_end().ends_with(" mem"))
-    });
     let names = || -> Vec<std::ffi::OsString> {
         std::fs::read_dir(s.dir().join("queue"))
             .map(|d| d.filter_map(|e| Some(e.ok()?.file_name())).collect())
             .unwrap_or_default()
     };
+    // W's dead ticket goes at M's first read of the queue; wait for both.
+    until("only M waits, marked mem", &|| {
+        names().len() == 1 && ticket_text().is_some_and(|t| t.trim_end().ends_with(" mem"))
+    });
     let before = names();
     assert_eq!(before.len(), 1, "precondition: only M waits");
     let (code, text) = s.run("D", &["acquire", "d", "past"], &[]);
