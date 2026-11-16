@@ -529,6 +529,72 @@ pub struct ConeDerivedStore {
     rows: HashMap<String, ConeDerivedRow>,
 }
 
+/// ENG-114: the store's byte census (`tools/census-probe resident`). Read-only; no behaviour.
+#[doc(hidden)]
+impl ConeDerivedStore {
+    /// Counts taken before any drop: each pool's length and capacity, the rows, the interner.
+    pub fn census_lines(&self) -> Vec<String> {
+        let row_key_bytes: usize = self.rows.keys().map(String::capacity).sum();
+        let row_key_text: std::collections::HashSet<&str> =
+            self.rows.keys().map(String::as_str).collect();
+        vec![
+            format!(
+                "    ENG-114 cone_derived: {} rows (size_of row {} B; key heap {:.2} MiB, {} distinct keys); \
+                 interner {} strings ({:.2} MiB text, stored twice)",
+                self.rows.len(),
+                std::mem::size_of::<ConeDerivedRow>(),
+                row_key_bytes as f64 / 1048576.0,
+                row_key_text.len(),
+                self.interner.len(),
+                self.interner.census_heap_bytes() as f64 / 1048576.0,
+            ),
+            format!(
+                "      pools (len / cap): writes_all {} / {}, phys_writes {} / {}, phys_reads {} / {}, events {} / {} \
+                 (size_of ResId {} B, (ResId, u8) {} B)",
+                self.writes_all_pool.len(),
+                self.writes_all_pool.capacity(),
+                self.phys_writes_pool.len(),
+                self.phys_writes_pool.capacity(),
+                self.phys_reads_pool.len(),
+                self.phys_reads_pool.capacity(),
+                self.events_pool.len(),
+                self.events_pool.capacity(),
+                std::mem::size_of::<ResId>(),
+                std::mem::size_of::<(ResId, u8)>(),
+            ),
+        ]
+    }
+
+    /// The store's parts in the order a byte census drops them; every field named.
+    pub fn into_census_parts(self) -> Vec<(&'static str, Box<dyn std::any::Any>)> {
+        let ConeDerivedStore {
+            interner,
+            writes_all_pool,
+            phys_writes_pool,
+            phys_reads_pool,
+            events_pool,
+            rows,
+        } = self;
+        vec![
+            ("det.cone_derived.rows", Box::new(rows)),
+            (
+                "det.cone_derived.writes_all_pool",
+                Box::new(writes_all_pool),
+            ),
+            (
+                "det.cone_derived.phys_writes_pool",
+                Box::new(phys_writes_pool),
+            ),
+            (
+                "det.cone_derived.phys_reads_pool",
+                Box::new(phys_reads_pool),
+            ),
+            ("det.cone_derived.events_pool", Box::new(events_pool)),
+            ("det.cone_derived.interner", Box::new(interner)),
+        ]
+    }
+}
+
 fn window<'p, T>(pool: &'p [T], r: &Range<u32>) -> &'p [T] {
     &pool[r.start as usize..r.end as usize]
 }

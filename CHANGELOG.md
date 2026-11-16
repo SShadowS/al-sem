@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (ENG-114: transaction spans share their event names, 47.6 MiB less resident memory on CDO; the detector artifacts and the sited graph sized)
+
+- **What changed** (`src/engine/l5/transaction_spans.rs`; no output change).
+  `TransactionSpan.publishes_events` and `.pending_events` are `Vec<SharedStr>`: one text per
+  event name for the whole compute (a set local to `compute_transaction_spans`), where each span
+  held its own `String`s. On CDO the 64 spans held 521,422 event names over about 8,600 texts,
+  because every span lists its whole cone's events. `SharedStr` compares, hashes, orders,
+  prints and serializes as the text.
+- **Measured** (`tools/census-probe resident`, release, `db384ab2` (master plus the read-only
+  census hooks) vs this branch, back to back; `tools/census-probe/runs-eng114/`): live after one
+  ask of each kind 4,163.8 → 4,116.2 MiB (−47.6 MiB), allocations −512,762; the spans' event lists
+  56.60 → 8.86 MiB, `artifact.det` 313.40 → 265.65 MiB. Bar: 45 MiB. On CDO
+  (`scripts/cdo-before-after 3e1e32d6`, workspace `bc3ccb18` clean on both sides) no finding or
+  fingerprint moved at either scope and the call graph is unchanged (0 unknown); `aldump
+  --session-refresh --verify` gives a model equal to a cold build after every change type, in the
+  default and `--low-mem` modes. `scripts/cdo-speed` (`3e1e32d6` against `30485af2`) passed
+  twice: the model build x0.993 and x1.068, the round totals x0.960 and x1.005, so no speed
+  ratio is claimed; the servers' summed peak memory x0.949 and x0.967.
+- **The census** (`docs/superpowers/notes/2026-11-16-eng114-detector-artifacts-census.md`): a
+  read-only `ConeDerivedStore` census hook, the probe splitting the summaries and the spans by
+  field, and `census-probe resident --sited`, which builds the sited graph the way the session
+  does so it is measured at last (56.5 MiB). The other levers are filed: ENG-122 (the derived
+  cones' 64 MiB event pool), ENG-123 (the summaries' direct facts), ENG-124 (the sited graph's
+  20.4 MiB node index), and the summaries' coverage copy joins ENG-108.
+
 ### Changed (TLS-88: the CDO slot serves its waiters in arrival order)
 
 - **The problem:** `scripts/land` was waiting on the slot when engine's before-after released
