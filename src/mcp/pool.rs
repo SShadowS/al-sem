@@ -27,7 +27,7 @@ use super::tools::{self, CommandCall, EngineCall, Universe};
 use super::{Decide, WORKER_QUEUE_DEPTH, codes};
 use crate::engine::batch::output::SUMMARY_CAP_BYTES;
 use crate::engine::host::AskParams;
-use crate::engine::host::front::{EngineFront, FrontConfig};
+use crate::engine::host::front::{AskStderr, EngineFront, FrontConfig};
 use crate::wire::{
     Answer, FailedOutcome, MAX_FRAME_BYTES, Outcome, SpillFile, SpillKind, Stderr, Stdout,
     bound_frame, encode_frame,
@@ -704,6 +704,7 @@ impl Pool {
                 Some(SubOutcome::NotComputed(m)) => return Err(m),
                 None => return Err("the part was not run".into()),
             };
+            parts_fresh.note_engine_stderr(&frame);
             let (head, stdout) = part_answer(&frame)?;
             parts_fresh.note(&head);
             let rev = json!({"workspace": workspace, "universe": key.unwrap_or_else(|| universe.as_str().to_string()),
@@ -895,6 +896,7 @@ impl Pool {
                         Some(SubOutcome::NotComputed(m)) => return Err(m),
                         None => return Err("the part was not run".into()),
                     };
+                    parts_fresh.note_engine_stderr(&frame);
                     let (head, stdout) = part_answer(&frame)?;
                     parts_fresh.note(&head);
                     // Each part's wall time and the engine's own timing: where
@@ -1897,9 +1899,22 @@ struct PartsFreshness {
     stale: bool,
     changed: std::collections::BTreeSet<String>,
     truncated: bool,
+    /// The parts' `engineStderr` (TLS-78), joined into the composite's.
+    engine_stderr: Vec<Value>,
 }
 
 impl PartsFreshness {
+    /// One part's `engineStderr`, failed parts included (read before
+    /// [`part_answer`] judges the part).
+    fn note_engine_stderr(&mut self, frame: &Value) {
+        let head: Option<Value> = frame["result"]["content"][0]["text"]
+            .as_str()
+            .and_then(|t| serde_json::from_str(t).ok());
+        if let Some(s) = head.as_ref().and_then(|h| h.get("engineStderr")) {
+            self.engine_stderr.push(s.clone());
+        }
+    }
+
     /// One part's envelope header.
     fn note(&mut self, head: &Value) {
         if head["stale"] == json!(true) {
@@ -1919,6 +1934,9 @@ impl PartsFreshness {
     /// its `stale` and changed paths (cut as the wire cuts them).
     fn apply(self, envelope: &mut Value, requested: tools::Freshness) {
         envelope["freshness"] = super::freshness::answer_freshness(requested, self.stale);
+        if let Some(s) = join_engine_stderr(&self.engine_stderr) {
+            envelope["engineStderr"] = s;
+        }
         if envelope["kind"] != "cli" {
             return;
         }
@@ -1929,6 +1947,48 @@ impl PartsFreshness {
         envelope["changedPaths"] = json!(paths);
         envelope["changedPathsTruncated"] = json!(truncated);
     }
+}
+
+/// How much of the engine's own stderr an envelope carries as text.
+const ENGINE_STDERR_TEXT: usize = 4096;
+
+/// The longest wait for an ask's stderr mark after its answer.
+/// (A starved drain thread on a loaded host, not a lost mark, is the
+/// likely reason to wait long; a normal answer waits microseconds.)
+const ENGINE_STDERR_MARK_WAIT: Duration = Duration::from_secs(1);
+
+/// An envelope's `engineStderr` (TLS-78): `{bytes, text}` when the engine
+/// printed during the call, `{unknown}` when that cannot be told, else none.
+fn engine_stderr_json(s: &AskStderr) -> Option<Value> {
+    match s {
+        AskStderr::Counted { bytes: 0, .. } | AskStderr::NotSent => None,
+        AskStderr::Counted { bytes, text } => Some(json!({"bytes": bytes, "text": text})),
+        AskStderr::Unknown(why) => Some(json!({"unknown": why})),
+    }
+}
+
+/// A composite's parts' `engineStderr`, joined: bytes summed, texts in
+/// part order (the newest [`ENGINE_STDERR_TEXT`] bytes kept), any unknown
+/// part's reason kept.
+fn join_engine_stderr(parts: &[Value]) -> Option<Value> {
+    if parts.is_empty() {
+        return None;
+    }
+    let bytes: u64 = parts.iter().filter_map(|p| p["bytes"].as_u64()).sum();
+    let text: String = parts.iter().filter_map(|p| p["text"].as_str()).collect();
+    let cut = text.len().saturating_sub(ENGINE_STDERR_TEXT);
+    let cut = (cut..=text.len())
+        .find(|&i| text.is_char_boundary(i))
+        .unwrap_or(text.len());
+    let mut v = json!({});
+    if bytes > 0 {
+        v["bytes"] = json!(bytes);
+        v["text"] = json!(&text[cut..]);
+    }
+    if let Some(why) = parts.iter().find_map(|p| p["unknown"].as_str()) {
+        v["unknown"] = json!(why);
+    }
+    Some(v)
 }
 
 fn part_answer(frame: &Value) -> Result<(Value, String), String> {
@@ -2209,8 +2269,13 @@ fn run_command(
         progress: true,
         ..AskParams::default()
     };
+    // TLS-78: what the engine child prints itself during the call (a logger
+    // line, an `eprintln!`) goes to its own stderr, not the answer's. Its
+    // mark is in the pipe before the answer, so the wait is the drain
+    // thread's read; the cap only bounds a child that wrote no mark.
     let answer = front.ask_with(params, &mut watch);
     let compute_ms = started.elapsed().as_millis();
+    let engine_stderr = front.last_ask_stderr(ENGINE_STDERR_TEXT, ENGINE_STDERR_MARK_WAIT);
     let revision = answer.revision.clone();
     let meta = answer.meta.clone();
     let mut parsed = None;
@@ -2348,7 +2413,7 @@ fn run_command(
         revision,
         meta,
     };
-    let extras = json!({
+    let mut extras = json!({
         "universe": call.universe.as_str(),
         "freshness": freshness,
         "timing": {
@@ -2358,6 +2423,11 @@ fn run_command(
             "computeMs": compute_ms,
         },
     });
+    // Only when the engine printed something during the call, or the count
+    // is not known: an answer with none is unchanged (TLS-78).
+    if let Some(v) = engine_stderr_json(&engine_stderr) {
+        extras["engineStderr"] = v;
+    }
     let wrap = |a: &Answer| {
         let mut envelope = serde_json::to_value(a).unwrap_or(Value::Null);
         let is_error = envelope["kind"] == "failed";
