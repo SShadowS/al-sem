@@ -252,8 +252,11 @@ fn field_census_cmd(args: &[String]) -> ExitCode {
 /// newline on `app.json`, P) and its restore. Each line has the class, the
 /// files parsed and resolved, whether the dependency bodies were resolved
 /// again, `model.copied_bytes`, the program and whole-refresh wall times, and
-/// the resident set. With `--verify`, each step also builds the model cold
-/// and compares the two models' text fingerprints (`write_model`).
+/// the resident set. With `--verify`, each step also compares the session's
+/// model with a cold build's (`model_fingerprint`, over `write_model`'s parts;
+/// `fingerprintMs` times the session's). A workspace state already built cold
+/// (`noop` and every `*-restore` step return to the `cold` step's) reuses that
+/// fingerprint (`coldReused`, no `coldMs`); the others build cold (`coldMs`).
 ///
 /// The chosen file (`--file`, else the median-sized codeunit file with a
 /// procedure body) is restored after each pair, and the session's model
@@ -395,8 +398,31 @@ fn session_refresh_cmd(args: &[String]) -> ExitCode {
     // `--sited`: the sited graph built off each step's program and kept until
     // the next one replaces it, as a resident revision keeps it.
     let mut kept: Option<al_sem::program::impact_graph::SitedGraph> = None;
+    // TLS-80: the cold model's fingerprint per workspace state. The harness edits
+    // only the target file, the probe file and `app.json`, and `noop` and every
+    // `*-restore` step return to the `cold` step's state: those reuse its cold
+    // fingerprint instead of building it again.
+    let mut cold_fps: std::collections::HashMap<blake3::Hash, String> =
+        std::collections::HashMap::new();
+    let state_key = || {
+        let mut h = blake3::Hasher::new();
+        for p in [&target, &probe, &app_json] {
+            match std::fs::read(p) {
+                Ok(b) => {
+                    h.update(&[1]);
+                    h.update(&(b.len() as u64).to_le_bytes());
+                    h.update(&b);
+                }
+                Err(_) => {
+                    h.update(&[0]);
+                }
+            }
+        }
+        h.finalize()
+    };
     let mut step = |name: &str, session: &mut WorkspaceSession| {
         let inputs = WorkspaceInputs::read(&ws, &Default::default());
+        let state = state_key();
         let mut sited_ms = None;
         let mut sited_cpu_ms = None;
         let out = session.refresh_lending(&inputs, false, AssemblyNeeds::BASE, &mut |p| {
@@ -456,18 +482,31 @@ fn session_refresh_cmd(args: &[String]) -> ExitCode {
         match out {
             Ok(model) => {
                 if verify {
-                    let session_fp = al_sem::program::session::workspace::model_fingerprint(&model);
-                    drop(model);
                     let t = std::time::Instant::now();
-                    let cold = al_sem::program::model::program_calls::assemble_and_resolve_cross_app_program(
-                        &inputs,
-                        false,
-                        AssemblyNeeds::BASE,
-                    );
-                    row["coldMs"] = json!(t.elapsed().as_millis());
-                    let equal = cold.as_ref().is_ok_and(|c| {
-                        al_sem::program::session::workspace::model_fingerprint(c) == session_fp
-                    });
+                    let session_fp = al_sem::program::session::workspace::model_fingerprint(&model);
+                    row["fingerprintMs"] = json!(t.elapsed().as_millis());
+                    drop(model);
+                    let cold_fp = match cold_fps.get(&state) {
+                        Some(fp) => {
+                            row["coldReused"] = json!(true);
+                            Some(fp.clone())
+                        }
+                        None => {
+                            let t = std::time::Instant::now();
+                            let cold = al_sem::program::model::program_calls::assemble_and_resolve_cross_app_program(
+                                &inputs,
+                                false,
+                                AssemblyNeeds::BASE,
+                            );
+                            row["coldMs"] = json!(t.elapsed().as_millis());
+                            cold.ok().map(|c| {
+                                let fp = al_sem::program::session::workspace::model_fingerprint(&c);
+                                cold_fps.insert(state, fp.clone());
+                                fp
+                            })
+                        }
+                    };
+                    let equal = cold_fp.is_some_and(|fp| fp == session_fp);
                     row["equalToCold"] = json!(equal);
                     failed |= !equal;
                 }
