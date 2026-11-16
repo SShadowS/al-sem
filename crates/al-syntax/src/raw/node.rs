@@ -6,7 +6,76 @@
 //! the lowerer descend the tree — consumers above `al-syntax` see only the IR.
 
 use crate::raw::generated::{FieldName, RawKind};
-use tree_sitter::Node;
+use std::sync::LazyLock;
+// `tree_sitter::FieldId` (a private alias of this type).
+use std::num::NonZeroU16 as FieldId;
+use tree_sitter::{Node, TreeCursor};
+
+/// Per grammar symbol id, its name and its [`RawKind`] (ENG-83). Keyed by
+/// `Node::kind_id`, the ALIAS-aware id: `Node::kind` returns that id's name,
+/// so `kinds[id]` is exactly what `RawKind::try_from_raw(node.kind())` gave,
+/// without the per-call C-string conversion and string match. Built once from
+/// the loaded grammar (it is not pinned; no id is baked into generated code).
+/// An id past the table (tree-sitter's built-in error symbols) takes the old
+/// path.
+struct KindTable {
+    names: Vec<Option<&'static str>>,
+    kinds: Vec<Option<RawKind>>,
+}
+
+static KIND_TABLE: LazyLock<KindTable> = LazyLock::new(|| {
+    let lang = crate::language::static_language();
+    let names: Vec<Option<&'static str>> = (0..lang.node_kind_count())
+        .map(|id| {
+            u16::try_from(id)
+                .ok()
+                .and_then(|id| lang.node_kind_for_id(id))
+        })
+        .collect();
+    let kinds = names
+        .iter()
+        .map(|n| n.and_then(RawKind::try_from_raw))
+        .collect();
+    KindTable { names, kinds }
+});
+
+/// Per [`FieldName`] (indexed by `f as usize`), its field id in the loaded
+/// grammar, or `None` when the grammar lacks it: `child_by_field_name` then
+/// finds nothing, and so does this (ENG-83).
+static FIELD_IDS: LazyLock<Vec<Option<FieldId>>> = LazyLock::new(|| {
+    let lang = crate::language::static_language();
+    FieldName::ALL
+        .iter()
+        .map(|f| lang.field_id_for_name(f.as_raw()))
+        .collect()
+});
+
+fn field_id(f: FieldName) -> Option<FieldId> {
+    FIELD_IDS[f as usize]
+}
+
+/// The named children of a node, in document order, read with one cursor
+/// and no allocation ([`RawNode::named_children`]).
+pub(crate) struct NamedChildren<'t> {
+    cursor: TreeCursor<'t>,
+    /// The cursor is on a child not yet looked at.
+    pending: bool,
+}
+
+impl<'t> Iterator for NamedChildren<'t> {
+    type Item = RawNode<'t>;
+
+    fn next(&mut self) -> Option<RawNode<'t>> {
+        while self.pending {
+            let n = self.cursor.node();
+            self.pending = self.cursor.goto_next_sibling();
+            if n.is_named() {
+                return Some(RawNode::new(n));
+            }
+        }
+        None
+    }
+}
 
 #[derive(Copy, Clone)]
 pub struct RawNode<'t> {
@@ -23,14 +92,23 @@ impl<'t> RawNode<'t> {
     /// Semantic kind. Panics on a kind absent from the pinned grammar (loud — a
     /// grammar/binary mismatch), since only named children are ever classified.
     pub fn kind(self) -> RawKind {
-        RawKind::from_raw(self.node.kind())
+        match KIND_TABLE.kinds.get(usize::from(self.node.kind_id())) {
+            Some(Some(k)) => *k,
+            // Not a named kind of the table (an error symbol past it, or an
+            // anonymous token): the string path, which also panics as before.
+            _ => RawKind::from_raw(self.node.kind()),
+        }
     }
 
     /// The raw grammar kind string, for anchor `syntax_kind` byte-parity.
     pub fn kind_str(self) -> &'static str {
-        crate::language::static_language()
-            .node_kind_for_id(self.node.kind_id())
-            .expect("a parsed node's kind id is a symbol of its own grammar")
+        let id = self.node.kind_id();
+        match KIND_TABLE.names.get(usize::from(id)) {
+            Some(Some(name)) => name,
+            _ => crate::language::static_language()
+                .node_kind_for_id(id)
+                .expect("a parsed node's kind id is a symbol of its own grammar"),
+        }
     }
 
     /// The grammar symbol id behind [`RawNode::kind_str`] (what an `Origin` stores).
@@ -73,7 +151,8 @@ impl<'t> RawNode<'t> {
 
     /// The single child held in `field`, if present.
     pub(crate) fn field(self, f: FieldName) -> Option<RawNode<'t>> {
-        self.node.child_by_field_name(f.as_raw()).map(RawNode::new)
+        let id = field_id(f)?;
+        self.node.child_by_field_id(id.get()).map(RawNode::new)
     }
 
     /// Whether this is a *named* node (vs an anonymous token like `,`/`;`/a keyword).
@@ -86,9 +165,12 @@ impl<'t> RawNode<'t> {
 
     /// All children held in `field` (for `multiple: true` fields), document order.
     pub(crate) fn children_by_field(self, f: FieldName) -> Vec<RawNode<'t>> {
+        let Some(id) = field_id(f) else {
+            return Vec::new();
+        };
         let mut cursor = self.node.walk();
         self.node
-            .children_by_field_name(f.as_raw(), &mut cursor)
+            .children_by_field_id(id, &mut cursor)
             .map(RawNode::new)
             .collect()
     }
@@ -105,7 +187,7 @@ impl<'t> RawNode<'t> {
         let mut cursor = self.node.walk();
         loop {
             let n = cursor.node();
-            let matched = n.is_named() && kinds.contains(&n.kind());
+            let matched = n.is_named() && kinds.contains(&RawNode::new(n).kind_str());
             if matched {
                 out.push(RawNode::new(n));
             }
@@ -157,12 +239,147 @@ impl<'t> RawNode<'t> {
         }
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn named_children(self) -> Vec<RawNode<'t>> {
+    pub(crate) fn named_children(self) -> NamedChildren<'t> {
         let mut cursor = self.node.walk();
-        self.node
-            .named_children(&mut cursor)
-            .map(RawNode::new)
-            .collect()
+        let pending = cursor.goto_first_child();
+        NamedChildren { cursor, pending }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every `.al` file under `dir`, sorted.
+    fn al_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        let mut entries: Vec<_> = std::fs::read_dir(dir)
+            .expect("corpus dir")
+            .map(|e| e.expect("dir entry").path())
+            .collect();
+        entries.sort();
+        for p in entries {
+            if p.is_dir() {
+                al_files(&p, out);
+            } else if p.extension().is_some_and(|e| e == "al") {
+                out.push(p);
+            }
+        }
+    }
+
+    fn ids<'t>(nodes: impl Iterator<Item = Node<'t>>) -> Vec<usize> {
+        nodes.map(|n| n.id()).collect()
+    }
+
+    /// ENG-83: the id tables answer exactly what tree-sitter's string API
+    /// answered, on every node of the r0 corpus (584 files) and a broken
+    /// source (ERROR and MISSING nodes): `kind` and `kind_str` against
+    /// `RawKind::try_from_raw(node.kind())` and `node.kind()`, aliased nodes
+    /// included (keyed by the alias-aware `kind_id`); `named_children` against
+    /// tree-sitter's; `field` and `children_by_field` against the lookups by
+    /// name, for every field a child holds, and on every 8th file for every
+    /// `FieldName` (absent ones included).
+    ///
+    /// DISCRIMINATIONS (2026-11-16), each red then green restored: `kind`
+    /// keyed by `grammar_id` (aliases ignored) -> an aliased node reads
+    /// `ReportKeyword` where `ObjectTypeKeyword` is due; `named_children`
+    /// yielding anonymous children too -> fails on file 0's
+    /// `page_declaration`; `field` reading the next field's id -> `BaseObject`
+    /// of the same node differs.
+    #[test]
+    fn id_tables_answer_what_the_string_api_did() {
+        let corpus = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/r0-corpus");
+        let mut files = Vec::new();
+        al_files(&corpus, &mut files);
+        assert!(
+            files.len() > 500,
+            "precondition: the corpus ({})",
+            files.len()
+        );
+        let mut sources: Vec<String> = files
+            .iter()
+            .map(|p| std::fs::read_to_string(p).expect("read corpus file"))
+            .collect();
+        sources.push(
+            "codeunit 1 X\n{\n    procedure P(\n    begin\n        if then x := ;\n    end\n"
+                .into(),
+        );
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&crate::language::language())
+            .expect("load AL grammar");
+        let (mut nodes, mut aliased, mut errors, mut fields_seen) =
+            (0usize, 0usize, 0usize, 0usize);
+        for (i, src) in sources.iter().enumerate() {
+            let tree = parser.parse(src, None).expect("parse");
+            let all_fields = i % 8 == 0 || i + 1 == sources.len();
+            let mut cursor = tree.walk();
+            let mut stack = vec![tree.root_node()];
+            while let Some(n) = stack.pop() {
+                nodes += 1;
+                let r = RawNode::new(n);
+                aliased += usize::from(n.grammar_id() != n.kind_id());
+                errors += usize::from(n.is_error() || n.is_missing());
+                assert_eq!(r.kind_str(), n.kind(), "kind_str, file {i}");
+                if let Some(want) = RawKind::try_from_raw(n.kind()) {
+                    assert_eq!(r.kind(), want, "kind of {:?}, file {i}", n.kind());
+                }
+                assert_eq!(
+                    ids(r.named_children().map(|c| c.node)),
+                    ids(n.named_children(&mut cursor)),
+                    "named_children of {:?}, file {i}",
+                    n.kind()
+                );
+                let mut check = |f: FieldName| {
+                    assert_eq!(
+                        r.field(f).map(|c| c.id()),
+                        n.child_by_field_name(f.as_raw()).map(|c| c.id()),
+                        "field {f:?} of {:?}, file {i}",
+                        n.kind()
+                    );
+                    assert_eq!(
+                        ids(r.children_by_field(f).into_iter().map(|c| c.node)),
+                        ids(n.children_by_field_name(f.as_raw(), &mut cursor)),
+                        "children_by_field {f:?} of {:?}, file {i}",
+                        n.kind()
+                    );
+                };
+                if all_fields {
+                    FieldName::ALL.iter().for_each(|&f| check(f));
+                } else {
+                    for k in 0..n.child_count() {
+                        let Some(name) = n.field_name_for_child(k as u32) else {
+                            continue;
+                        };
+                        let f = FieldName::ALL
+                            .iter()
+                            .copied()
+                            .find(|f| f.as_raw() == name)
+                            .expect("every grammar field has a FieldName");
+                        fields_seen += 1;
+                        check(f);
+                    }
+                }
+                stack.extend(n.children(&mut cursor));
+            }
+        }
+        eprintln!("nodes {nodes}, aliased {aliased}, error/missing {errors}, fields {fields_seen}");
+        assert!(nodes > 50_000, "precondition: nodes walked ({nodes})");
+        assert!(aliased > 0, "precondition: aliased nodes ({aliased})");
+        assert!(
+            errors > 0,
+            "precondition: error or missing nodes ({errors})"
+        );
+        assert!(
+            fields_seen > 10_000,
+            "precondition: fields held ({fields_seen})"
+        );
+    }
+
+    /// `FieldName::ALL[f as usize] == f`: the field-id table is indexed by it.
+    #[test]
+    fn field_name_all_is_in_declaration_order() {
+        for (i, f) in FieldName::ALL.iter().enumerate() {
+            assert_eq!(*f as usize, i, "{f:?}");
+        }
     }
 }

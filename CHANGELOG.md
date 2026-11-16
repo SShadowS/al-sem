@@ -77,6 +77,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The model text's layout changed (two new parts), so a fingerprint from before this change
   never equals one from after; nothing stores one across builds.
 
+### Changed (ENG-83: the lowerer reads node kinds and fields by numeric id)
+
+- **Why, measured:** a samply profile of `aldump --program-call-graph-stats` on CDO (2026-11-16,
+  `profiling` build, 45.1 s thread CPU, parse + lower ≈ 83.7 % of it) put tree-sitter's
+  field lookup by name (`ts_language_field_id_for_name`, run on every `child_by_field_name`)
+  at 7.5 % of all CPU, and `RawNode::kind` at 5.9 % (`node.kind()` converts the kind's C
+  string with `from_utf8`, then a 550-arm string match maps it to a `RawKind`).
+  `named_children` was 11.1 % with its iteration, part of it a `Vec` per call and a separate
+  `named_child_count` walk.
+- **Now** (`crates/al-syntax/src/raw/node.rs`): one table per grammar symbol id, built once
+  from the loaded grammar (it is not pinned, so no id is baked into generated code), holds
+  each kind's name and `RawKind` (the existing `try_from_raw` of that name). It is keyed by
+  `Node::kind_id`, the alias-aware id whose name `Node::kind` returns, so the answer is
+  exactly the string path's; an id past the table (tree-sitter's built-in error symbols) or
+  a kind that is not named takes the string path, which panics as before. `kind_str` and
+  `descendants_of_kinds` read the same names. A field-id table (indexed through the new
+  generated `FieldName::ALL`) gives `field` and `children_by_field` tree-sitter's lookup by
+  id; a field the grammar lacked would find nothing, as the lookup by name does.
+  `named_children` returns an iterator over one cursor; the call sites that need a `Vec`
+  (indexed, popped as a stack, or passed on) collect it, as before.
+- Goldens: none moved (`scripts/check-goldens`, 2,040 tests).
+- Pinned by `raw::node::tests::id_tables_answer_what_the_string_api_did`: on every node of the
+  r0 corpus (584 files, 63,925 nodes, 1,597 aliased) and a broken source (error and missing
+  nodes), the tables answer what the string API did: `kind`, `kind_str`, `named_children`,
+  every field a child holds (17,770), and every `FieldName` on every 8th file. Breaks, each
+  red then green restored: `kind` keyed by `grammar_id` (aliases ignored) -> an aliased node
+  reads `ReportKeyword` where `ObjectTypeKeyword` is due; `named_children` yielding anonymous
+  children too; `field` reading the next field's id.
+
 ### Fixed (ENG-93: `aldump --session-refresh` edits CRLF files, and fails on an edit that reaches nothing)
 
 - **The hole.** The harness's `body` edit inserted a line after `"\n    begin\n"`, and its file

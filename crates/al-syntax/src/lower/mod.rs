@@ -335,7 +335,7 @@ fn lower_object(
     let mut routine_nodes = Vec::new();
     // Entries still pending at the object's end dangle and attach to nothing.
     collect_routines(
-        node.named_children(),
+        node.named_children().collect(),
         None,
         None,
         false,
@@ -488,7 +488,7 @@ fn lower_object(
     if let Some(body) = node.field(FieldName::Body) {
         // Every request page, a `#if` around it included.
         let mut pages = Vec::new();
-        let mut stack = body.named_children();
+        let mut stack: Vec<_> = body.named_children().collect();
         while let Some(c) = stack.pop() {
             if c.kind() == RawKind::RequestpageSection {
                 pages.push(c);
@@ -1515,7 +1515,7 @@ fn collect_routines<'t>(
                 // `report_dataitem` only appears under `dataset_section`/`report_body`).
                 let inner = dataitem_table_name(child, source);
                 collect_routines(
-                    child.named_children(),
+                    child.named_children().collect(),
                     inner.as_deref(),
                     Some(child),
                     true,
@@ -1530,7 +1530,7 @@ fn collect_routines<'t>(
             RawKind::DatasetSection => {
                 pending.clear();
                 collect_routines(
-                    child.named_children(),
+                    child.named_children().collect(),
                     dataitem_table,
                     member,
                     true,
@@ -1551,7 +1551,7 @@ fn collect_routines<'t>(
                 // structure, don't validate").
                 pending.clear();
                 collect_routines(
-                    child.named_children(),
+                    child.named_children().collect(),
                     dataitem_table,
                     member,
                     false,
@@ -1581,7 +1581,7 @@ fn collect_routines<'t>(
                 // generic arm below inherits the outer member and the fallback never
                 // sees the wrapper at all.
                 collect_routines(
-                    child.named_children(),
+                    child.named_children().collect(),
                     dataitem_table,
                     Some(child),
                     dataset_ctx,
@@ -1728,7 +1728,7 @@ fn collect_routines<'t>(
                     member
                 };
                 collect_routines(
-                    child.named_children(),
+                    child.named_children().collect(),
                     dataitem_table,
                     child_member,
                     dataset_ctx,
@@ -1978,7 +1978,6 @@ fn collect_protected_names(node: RawNode, source: &str, out: &mut Vec<String>) {
         RawKind::VarSection
             if node
                 .named_children()
-                .iter()
                 .any(|c| c.kind() == RawKind::ProtectedKeyword) =>
         {
             let mut decls = Vec::new();
@@ -2110,7 +2109,7 @@ fn attr_in_arm(levels: &[RawNode], attr: RawNode, arm: &std::ops::Range<usize>) 
     }
     let at = attr.byte_range().end;
     levels.iter().any(|l| {
-        let kids = l.named_children();
+        let kids: Vec<_> = l.named_children().collect();
         if !kids.iter().any(|c| c.id() == attr.id()) {
             return false;
         }
@@ -2137,7 +2136,7 @@ fn attr_in_arm(levels: &[RawNode], attr: RawNode, arm: &std::ops::Range<usize>) 
 /// The arms of one level of a split header, added to `arms`, nested groups expanded
 /// ([`header_arms`]). Returns where the tail after this level's `#endif` starts.
 fn header_group_arms(node: RawNode, arms: &mut Vec<std::ops::Range<usize>>) -> usize {
-    let kids = node.named_children();
+    let kids: Vec<_> = node.named_children().collect();
     let close_arm = |r: std::ops::Range<usize>, arms: &mut Vec<std::ops::Range<usize>>| {
         let mut nested = kids
             .iter()
@@ -2610,7 +2609,7 @@ fn arm_conditions<'t>(node: RawNode<'t>, arm: &std::ops::Range<usize>) -> Vec<(R
     }
     let mut level = Some(node);
     while let Some(n) = level.take() {
-        let kids = n.named_children();
+        let kids: Vec<_> = n.named_children().collect();
         level = kids
             .iter()
             .copied()
@@ -3367,7 +3366,6 @@ fn extract_var_decl(decl: RawNode, source: &str, out: &mut Vec<VarDecl>) {
     // gets a wrapper that never covers (its names prove nothing).
     if decl
         .named_children()
-        .iter()
         .any(|c| c.kind() == RawKind::PreprocConditionalVarNames)
     {
         CONDITIONAL_VARS.with(|v| {
@@ -4411,7 +4409,7 @@ fn collect_case_branches(
     depth: u32,
 ) {
     collect_case_branches_in(
-        node.named_children(),
+        node.named_children().collect(),
         ir,
         issues,
         source,
@@ -4998,7 +4996,7 @@ fn unary_op(node: RawNode, source: &str) -> UnaryOp {
 /// True if `node`'s subtree contains a node of kind `k` (used for `temporary`
 /// detection: `temporary_keyword` nested in the variable's `record_type`).
 fn contains_kind(node: RawNode, k: RawKind) -> bool {
-    node.kind() == k || node.named_children().iter().any(|c| contains_kind(*c, k))
+    node.kind() == k || node.named_children().any(|c| contains_kind(c, k))
 }
 
 /// Strip one layer of surrounding double quotes from a (quoted) identifier.
