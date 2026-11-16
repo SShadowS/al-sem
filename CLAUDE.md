@@ -295,7 +295,8 @@ See `src/main.rs`'s `Args` (clap derive) for the authoritative flag list.
   written to coord, and `coord questions` / `coord overview` simply stop listing it.
 - **A stack snapshot of a running process** (a hung or slow engine, where samply cannot attach)
   is taken with `gdb -p <pid> -batch -ex 'thread apply all bt'` (gdb is in the image since
-  TLS-85).
+  TLS-85). Frames have names only in a build with symbols: `profiling`, `cdo` or dev.
+  `release-fast` and the installed `alsem` strip them, so their stacks show addresses.
   - Attaching to a process gdb did not start needs the host's `kernel.yama.ptrace_scope` at 0.
     Check it with `cat /proc/sys/kernel/yama/ptrace_scope`.
   - server1 was set to 0 host-side on 2026-11-16. Like `perf_event_paranoid` and
