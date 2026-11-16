@@ -23,7 +23,10 @@ inclusive, `key_cmp` 1.4 % self.
 ## What changed, and what did not work
 
 - `HopCache` keeps its memos in a slot per edge index of the one `typed_edges` slice it serves
-  (its start and length kept; any other edge uses the address map). Kept.
+  (its start and length kept; any other edge uses the address map). Kept. Limit: there is one
+  cache per root, and each fills a slot per edge of the whole slice on first use. In the head
+  profile that fill (`extend_with<Option<Rc<NodeMemo>>>`) is 0.01 % of CPU, and peak RSS did not
+  move. If it ever shows, share one slot table per worker.
 - `enumerate_proofs`' `seen` set (only inserted into) uses FxHash. Kept.
 - A rank-keyed candidate sort (each hop's text ranked once, then a stable sort by the ranks) was
   tried and REMOVED: it made `fingerprint` 2x slower (user 188-190 s against 86-100 s;

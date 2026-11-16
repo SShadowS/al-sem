@@ -1569,12 +1569,17 @@ struct NodeMemo {
 /// one root's witnesses walk the same edges again and again — so each is built
 /// once per root.
 ///
-/// Keyed by the edge's address. `'i` ties the cache to the borrow of the graph
-/// that owns the edges, so it cannot outlive them: a freed edge's address,
-/// reused by another edge, can never hit a stale memo.
+/// Keyed by the edge's index in `idx.typed_edges` ([`DenseMemos`]), or by its
+/// address for any other edge. Both name the edge's address. `'i` ties the cache
+/// to the borrow of the graph that owns the edges, so it cannot outlive them: a
+/// freed edge's address, reused by another edge, can never hit a stale memo.
+///
+/// shortcut: each cache (one per root) allocates a slot per edge of the whole
+/// slice on first use: 0.01 % of `fingerprint`'s CPU on CDO, peak RSS unchanged
+/// (ENG-105 notes). If it shows in a profile, share one slot table per worker.
 #[derive(Default)]
 pub struct HopCache<'i>(
-    /// Memos of edges outside [`HopCache::dense`]'s slice, by address.
+    /// Memos of edges outside the [`DenseMemos`] slice, by address.
     HashMap<*const SnapshotGraphEdge, Rc<NodeMemo>>,
     std::marker::PhantomData<&'i SnapshotGraphEdge>,
     /// Each distinct projected hop JSON's dense id ([`HopCache::json_id`]).
@@ -1609,7 +1614,7 @@ impl DenseMemos {
         let size = std::mem::size_of::<SnapshotGraphEdge>();
         let offset = (edge as *const SnapshotGraphEdge as usize).checked_sub(base)?;
         let i = offset / size;
-        (offset % size == 0 && i < edges.len() && std::ptr::eq(&edges[i], edge)).then_some(i)
+        (offset % size == 0 && i < self.slots.len() && std::ptr::eq(&edges[i], edge)).then_some(i)
     }
 }
 
@@ -7996,9 +8001,6 @@ mod tests {
     // byte-compare; the divergence itself lives entirely in this helper).
     // -----------------------------------------------------------------------
 
-    /// Minimal QueryWitnessHop for path-length/sort tests. Only `from_routine_id`
-    /// varies, so the hop JSON (which `merge_normalize_via_paths` sorts and
-    /// dedupes by) orders exactly as the tags do.
     /// ENG-105: a `HopCache`'s dense memo slots belong to ONE edge slice. Asked
     /// about edge 0 of a second, equally long slice, it must not hand back the
     /// first slice's edge-0 memo (an address key never collided; an index does).
@@ -8033,6 +8035,9 @@ mod tests {
         assert_eq!(site_of(&b), "cs-B1", "the second slice's own edge");
     }
 
+    /// Minimal QueryWitnessHop for path-length/sort tests. Only `from_routine_id`
+    /// varies, so the hop JSON (which `merge_normalize_via_paths` sorts and
+    /// dedupes by) orders exactly as the tags do.
     fn mk_hop(tag: &str) -> QueryWitnessHop {
         QueryWitnessHop {
             kind: "call",
