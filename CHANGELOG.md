@@ -7,6 +7,73 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (ENG-94: the syntax tree's declarations keep no spare capacity, 83.9 MiB less resident memory on CDO)
+
+- **The census** (`tools/census-probe` resident mode now splits `RoutineDecl` by field and
+  counts each declaration list's unused capacity; `tools/census-probe/runs-eng94/`): of the
+  dependency tier's 224.9 MiB of object declarations, 49.6 MiB in routines, params and locals
+  alone was capacity never used. The lowerer push-builds every declaration list, and a first
+  push reserves four elements: a routine with one local held 4 × 192 B, an object with two
+  routines 4 × 392 B. `lower_file` already trimmed the arenas and the object list, not the
+  lists inside each declaration.
+- **The change.** `ObjectDecl::exact_size` (and the same on `RoutineDecl`, `VarDecl`,
+  `AttributeIr`, `EnumValueDecl`, `ActionDecl`, `FieldDecl`) moves every list a declaration owns,
+  nested ones included, into an exactly sized one (the existing `ir::exact_size`); `lower_file`
+  calls it once per object. Each method names every field of its struct, so a field added later
+  does not compile until someone decides whether it owns a list to trim.
+- **Measured** (the same probe source built against master `52d349ab` and against the change, run
+  back to back on CDO): live memory after one ask of each kind 4,862.7 → 4,778.8 MiB
+  (**-83.9 MiB**, bar 60); the object declarations 224.9 → 144.1 MiB, the dependency trees 728.1
+  → 647.2 MiB; the workspace's retained trees 3.5 MiB less.
+- **Speed.** `cdo-speed` (`52d349ab` against the change): PASS, model build CPU **x0.871** in both
+  passes (x0.858, x0.884; wall x0.798), rounds x0.964, the servers' peak memory 8,675 → 8,089 MiB
+  (x0.932). The trim copies each list once, yet the build gets cheaper, not dearer: the four-element
+  first reservations cost more than the moves (the cause is not profiled).
+- **Same answers.** The task gate (every golden byte-identical), `scripts/cdo-before-after
+  52d349ab` (nothing moved) and `aldump --session-refresh --verify` on a CDO copy in both memory
+  modes (every step equal to a cold build).
+- Pinned by `parsed_declarations_keep_no_spare_capacity` (al-syntax): parses a codeunit, a table
+  and a page and checks every list's capacity equals its length; dropping the `lower_file` call
+  (capacity 4 for 2 routines) or one nested trim (a field caption) fails it. **A stated limit**
+  (found from sol's review): a label's `other` and `translations` lists are exact already,
+  because the lowerer clones each label per declared name, so dropping their trim stays green;
+  the test checks the property with both lists filled, the trim stays for the day the clone goes.
+- **Not done (left as further levers):** `VarDecl`'s inline label (~88 B, set on 761 of 94,471
+  locals and 23,979 of 63,592 globals), `RoutineDecl`'s rare fields (`return_name`,
+  `dataitem_source_table`, `preproc_context`, `doc`), and the type texts (288,663 strings, 7,041
+  distinct): about 26 MiB more together.
+
+### Changed (ENG-98: the SipHash maps the CDO profiles found hot use FxHash)
+
+- **Found** (samply via `scripts/profile`, `profiling` builds, the pinned CDO baseline,
+  2026-11-16; who hashes, by the chain of frames above `Sip13`; "CPU" is the thread CPU of every
+  thread, summed from samply's per-sample deltas). The commands: `alsem fingerprint
+  /work/src/cdo-baseline/Cloud` (default options; `cdo-before-after`'s cheaper
+  `--format json --deterministic` run is a different invocation) and `alsem analyze --format
+  json /work/src/cdo-baseline/Cloud`. `alsem fingerprint` spent 20.7 % of its 256.5 s CPU in
+  SipHash, 17.9 % in ONE set: `enumerate_proofs`' `key_ids` (`src/engine/l5/digest.rs`), an
+  `IndexSet<ProofKey>` whose keys hold every hop's projected JSON. `alsem analyze` spent 3.84 %
+  of 72.5 s, the largest parts in `pd_solve::solve_producer` (its `Incoming`, `ix_of` and
+  `edge_ix` maps) and `ResInterner::by_str` (`src/engine/l4/cone_derived.rs`).
+- **Now** those five use `crate::fxhash` (TLS-66). Order audit, each: the `IndexSet` keeps
+  insertion order whatever its hasher; `ix_of` and `edge_ix` are only looked up; `Incoming` is
+  iterated once, to sort each list on its own; `by_str` only to sum key lengths. None leaks an
+  order, so none hid a nondeterminism bug. `routines_by_id` (std, passed through 16 signatures)
+  stays: its share is small for that change.
+- **Same output:** `scripts/cdo-before-after 52d349ab 6d12dc5e`: no detector, fingerprint or
+  number moved.
+- **Measured:** the fingerprint re-profile: SipHash 20.7 % -> 2.84 %, but hashing as a whole
+  only ~20.7 % -> ~17.6 %, because Fx-hashing `ProofKey` is still 14.8 % (below); CPU 256.5 ->
+  241.6 s (-5.8 %, one run each). `cdo-speed` (PASS, not under load): model build CPU x0.975
+  (passes x0.958 / x0.992: inside its ±8 % resolution, so no build gain is claimed); warm prove
+  x0.748 (passes x0.886 / x0.632, both faster, wide spread); warm tests x0.980; rounds x1.011;
+  peak memory x0.989; the sub-second rows (x0.96-x1.10) are noise and not listed.
+- **Left:** hashing `ProofKey` with Fx is still 14.8 % of `fingerprint`'s CPU: Fx reads every
+  byte of every hop's JSON for every key. Interning each hop's JSON to an id is filed as ENG-100.
+- **Also found:** `analyze` gives some distinct findings one fingerprint (CDO primary: 2,308
+  findings, 2,301 fingerprints; d54 and d55), which is why `cdo-before-after` (distinct
+  fingerprints) reads 2301 / 32548 where a findings count reads 2308 / 32579. Filed as ENG-101.
+
 ### Changed (ENG-96: smaller call-site and record-variable rows, 88.5 MiB less resident memory on CDO)
 
 - **The census** (`tools/census-probe` resident mode, now field by field for both row types;
