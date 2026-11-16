@@ -491,6 +491,44 @@ mod exact_size_tests {
         }
         assert_eq!(o.routines.len(), 2, "the fixture has two routines");
         assert_eq!(o.routines[0].locals.len(), 1, "and a local in the first");
+        for a in &o.routines[1].attributes_parsed {
+            exact("attribute args", a.args.len(), a.args.capacity());
+        }
+
+        // The object-level and nested lists (lowerer review): a table's fields, captions and
+        // keys, a page's actions, a label global's translations.
+        let file = crate::parse(
+            "table 50101 \"Cap T\"\n{\n    fields\n    {\n        field(1; Code; Code[20]) { Caption = 'Code'; ToolTip = 'The code.'; }\n        field(2; Name; Text[50]) { Caption = 'Name'; }\n    }\n    keys\n    {\n        key(PK; Code) { Clustered = true; }\n        key(K2; Name, Code) { }\n    }\n    var\n        Msg: Label 'Hello %1', Comment = '%1 = name', Locked = true;\n}\npage 50102 \"Cap P\"\n{\n    actions\n    {\n        area(Processing)\n        {\n            action(Go) { Caption = 'Go'; ToolTip = 'Go now.'; trigger OnAction() begin end; }\n        }\n    }\n}\n",
+        );
+        let t = &file.objects[0];
+        exact("fields", t.fields.len(), t.fields.capacity());
+        exact("keys", t.keys.len(), t.keys.capacity());
+        for k in &t.keys {
+            exact("key fields", k.len(), k.capacity());
+        }
+        for f in &t.fields {
+            exact("field caption", f.caption.len(), f.caption.capacity());
+            exact("field tooltip", f.tooltip.len(), f.tooltip.capacity());
+        }
+        for g in &t.globals {
+            if let Some(l) = &g.label {
+                exact("label other", l.other.len(), l.other.capacity());
+                exact(
+                    "label translations",
+                    l.translations.len(),
+                    l.translations.capacity(),
+                );
+            }
+        }
+        let p = &file.objects[1];
+        exact("actions", p.actions.len(), p.actions.capacity());
+        for a in &p.actions {
+            exact("action caption", a.caption.len(), a.caption.capacity());
+            exact("action tooltip", a.tooltip.len(), a.tooltip.capacity());
+        }
+        assert_eq!(t.fields.len(), 2, "the table has two fields");
+        assert_eq!(t.keys.len(), 2, "and two keys");
+        assert!(!p.actions.is_empty(), "the page has an action");
     }
 }
 
