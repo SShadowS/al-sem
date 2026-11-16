@@ -1389,8 +1389,9 @@ fn enumerate_proofs<'i>(
     // prefix whose search touched no state a prefix can hold.
     let mut reach_memo: HashMap<(StateIx, usize), SeedReach> = HashMap::new();
     let no_states = std::collections::HashSet::new();
-    let mut seen: std::collections::HashSet<(Vec<EdgeIx>, usize)> =
-        std::collections::HashSet::new();
+    // Only inserted into (never iterated), so its hasher cannot reach output
+    // (ENG-105: SipHash here was ~2% of `alsem fingerprint`'s CPU).
+    let mut seen: crate::fxhash::FxHashSet<(Vec<EdgeIx>, usize)> = Default::default();
     // Each distinct key once, as a dense id (its index in `key_ids`): a pop
     // tests `found[id]` and never hashes the key again (#289: hashing it per
     // pop cost ≈4× CPU on CDO `h`). `IndexSet` keeps each entry's hash, so
@@ -1573,37 +1574,75 @@ struct NodeMemo {
 /// reused by another edge, can never hit a stale memo.
 #[derive(Default)]
 pub struct HopCache<'i>(
+    /// Memos of edges outside [`HopCache::dense`]'s slice, by address.
     HashMap<*const SnapshotGraphEdge, Rc<NodeMemo>>,
     std::marker::PhantomData<&'i SnapshotGraphEdge>,
     /// Each distinct projected hop JSON's dense id ([`HopCache::json_id`]).
     crate::fxhash::FxHashMap<String, u32>,
+    /// ENG-105: memos by the edge's index in one `typed_edges` slice (the first
+    /// one asked about, its start address and length kept), no hashing. Every
+    /// walked edge lives there; the address map above serves any other edge.
+    DenseMemos,
 );
+
+/// [`HopCache`]'s memo slots by edge index, for one slice of edges.
+#[derive(Default)]
+struct DenseMemos {
+    base: usize,
+    len: usize,
+    slots: Vec<Option<Rc<NodeMemo>>>,
+}
+
+impl DenseMemos {
+    /// `edge`'s index in `edges` when this cache's slots are for `edges` (taken
+    /// for them on first use) and `edge` is one of them.
+    fn index_of(&mut self, edge: &SnapshotGraphEdge, edges: &[SnapshotGraphEdge]) -> Option<usize> {
+        let base = edges.as_ptr() as usize;
+        if self.slots.is_empty() && !edges.is_empty() {
+            self.base = base;
+            self.len = edges.len();
+            self.slots.resize(edges.len(), None);
+        }
+        if self.base != base || self.len != edges.len() {
+            return None;
+        }
+        let size = std::mem::size_of::<SnapshotGraphEdge>();
+        let offset = (edge as *const SnapshotGraphEdge as usize).checked_sub(base)?;
+        let i = offset / size;
+        (offset % size == 0 && i < edges.len() && std::ptr::eq(&edges[i], edge)).then_some(i)
+    }
+}
+
+/// `edge`'s memo: its hop and projection, built from the edge alone.
+fn build_memo(edge: &SnapshotGraphEdge, idx: &FingerprintIndexes) -> NodeMemo {
+    let hop = edge_to_hop(edge, idx).expect("only edges with a hop are walked (edge_has_hop)");
+    let from_id = edge_from(edge);
+    let from_display = idx
+        .routine_display_by_id
+        .get(from_id)
+        .cloned()
+        .unwrap_or_else(|| from_id.to_string());
+    let projected = project_hop(&hop, from_id, &from_display, idx).map(ProjHop::new);
+    NodeMemo {
+        hop: Rc::new(hop),
+        projected,
+        json_id: std::cell::OnceCell::new(),
+    }
+}
 
 impl<'i> HopCache<'i> {
     /// The memo of `edge`, built on first use. A hop leaves the routine its
     /// edge leaves, so the hop and its projection are a function of the edge
     /// alone — what makes keying by edge sound.
     fn get(&mut self, edge: &'i SnapshotGraphEdge, idx: &FingerprintIndexes) -> Rc<NodeMemo> {
+        if let Some(i) = self.3.index_of(edge, idx.typed_edges) {
+            let slot = &mut self.3.slots[i];
+            return Rc::clone(slot.get_or_insert_with(|| Rc::new(build_memo(edge, idx))));
+        }
         Rc::clone(
             self.0
                 .entry(edge as *const SnapshotGraphEdge)
-                .or_insert_with(|| {
-                    let hop = edge_to_hop(edge, idx)
-                        .expect("only edges with a hop are walked (edge_has_hop)");
-                    let from_id = edge_from(edge);
-                    let from_display = idx
-                        .routine_display_by_id
-                        .get(from_id)
-                        .cloned()
-                        .unwrap_or_else(|| from_id.to_string());
-                    let projected =
-                        project_hop(&hop, from_id, &from_display, idx).map(ProjHop::new);
-                    Rc::new(NodeMemo {
-                        hop: Rc::new(hop),
-                        projected,
-                        json_id: std::cell::OnceCell::new(),
-                    })
-                }),
+                .or_insert_with(|| Rc::new(build_memo(edge, idx))),
         )
     }
 
@@ -2240,6 +2279,44 @@ impl Candidate<'_> {
     }
 }
 
+/// Sort `candidates` by [`Candidate::key_cmp`], stably, with each key built once
+/// (ENG-105: the comparator re-read every hop's JSON text on every comparison,
+/// ~5% of `alsem fingerprint`'s CPU on CDO). A key is (length, each hop's text as
+/// its RANK among the distinct texts here, end); ranks follow the texts' order
+/// and are equal exactly for equal texts, so the order is `key_cmp`'s.
+fn sort_candidates(candidates: &mut Vec<Candidate<'_>>) {
+    if candidates.len() < 2 {
+        return;
+    }
+    let keys: Vec<(usize, Vec<u32>, EndKey)> = {
+        let mut texts: Vec<&str> = candidates
+            .iter()
+            .flat_map(|c| c.projected.0.iter().map(|h| h.json()))
+            .collect();
+        texts.sort_unstable();
+        texts.dedup();
+        let rank = |s: &str| {
+            u32::try_from(texts.binary_search(&s).expect("a collected text"))
+                .expect("fewer than 2^32 texts")
+        };
+        candidates
+            .iter()
+            .map(|c| {
+                let ranks = c.projected.0.iter().map(|h| rank(h.json())).collect();
+                (c.projected.0.len(), ranks, c.end.clone())
+            })
+            .collect()
+    };
+    let mut order: Vec<usize> = (0..candidates.len()).collect();
+    order.sort_by(|&a, &b| keys[a].cmp(&keys[b]));
+    let mut taken: Vec<Option<Candidate<'_>>> = candidates.drain(..).map(Some).collect();
+    candidates.extend(
+        order
+            .into_iter()
+            .map(|i| taken[i].take().expect("each once")),
+    );
+}
+
 /// One trie node of [`TrieWalk`]: the routine its prefix ends at, the
 /// equal-JSON edges into it (the first is the representative), and its parent
 /// slot.
@@ -2609,10 +2686,10 @@ fn reconstruct_witness_paths<'i>(
             candidate(&steps, Some(terminal), end, None, hop_cache, idx)
         })
         .collect();
-    proof_candidates.sort_by(|a, b| a.key_cmp(b));
+    sort_candidates(&mut proof_candidates);
     candidates.extend(proof_candidates);
     // Stable: a walk candidate stays ahead of an equal-key proof.
-    candidates.sort_by(|a, b| a.key_cmp(b));
+    sort_candidates(&mut candidates);
     // One per key. The others are its twins: projection drops the terminal, so
     // their conditionality still counts, the least restrictive winning (#69 D3).
     let mut merged: Vec<(Candidate, Vec<WitnessPath>)> = Vec::new();
@@ -2868,7 +2945,7 @@ fn reconstruct_site_witnesses<'i>(
     // Close a candidate set: one per key in key order, the others its twins
     // (their conditionality still counts), at most `cap`.
     let close = |mut candidates: Vec<Candidate<'i>>, walk_truncated: bool| {
-        candidates.sort_by(|a, b| a.key_cmp(b));
+        sort_candidates(&mut candidates);
         let mut merged: Vec<(Candidate, Vec<WitnessPath>)> = Vec::new();
         for c in candidates {
             match merged.last_mut() {
@@ -7960,6 +8037,84 @@ mod tests {
     /// Minimal QueryWitnessHop for path-length/sort tests. Only `from_routine_id`
     /// varies, so the hop JSON (which `merge_normalize_via_paths` sorts and
     /// dedupes by) orders exactly as the tags do.
+    /// ENG-105: a `HopCache`'s dense memo slots belong to ONE edge slice. Asked
+    /// about edge 0 of a second, equally long slice, it must not hand back the
+    /// first slice's edge-0 memo (an address key never collided; an index does).
+    /// Hand-stated: two indexes whose edge 0 leaves different routines.
+    ///
+    /// DISCRIMINATION (2026-11-16): `DenseMemos::index_of` without its slice check
+    /// -> the second edge reads the first one's hop (call site "cs-A1", not "cs-B1").
+    #[test]
+    fn hop_cache_slots_belong_to_one_edge_slice() {
+        let snapshot_with = |from: &str| {
+            let mut snap = empty_snapshot();
+            *std::sync::Arc::make_mut(&mut snap.typed_edges) = vec![
+                call_edge(from, "X", &format!("cs-{from}")),
+                call_edge("X", "Y", "cs-xy"),
+            ];
+            snap
+        };
+        let (sa, sb) = (snapshot_with("A1"), snapshot_with("B1"));
+        let (ia, ib) = (
+            build_fingerprint_indexes(&sa),
+            build_fingerprint_indexes(&sb),
+        );
+        assert_eq!(ia.typed_edges.len(), ib.typed_edges.len(), "precondition");
+        let mut hc = HopCache::default();
+        let site_of = |m: &NodeMemo| match &*m.hop {
+            WitnessHop::Call { callsite_id, .. } => callsite_id.clone(),
+            other => panic!("a call hop: {other:?}"),
+        };
+        let a = hc.get(&ia.typed_edges[0], &ia);
+        let b = hc.get(&ib.typed_edges[0], &ib);
+        assert_eq!(site_of(&a), "cs-A1");
+        assert_eq!(site_of(&b), "cs-B1", "the second slice's own edge");
+    }
+
+    /// ENG-105: `sort_candidates` gives exactly `Candidate::key_cmp`'s order and is
+    /// STABLE: equal keys keep their input order, which is what keeps a walk
+    /// candidate ahead of an equal-key proof (the first of equal keys is the
+    /// representative, the rest its twins). Hand-stated: four candidates, two keys
+    /// (hop `b`, hop `a`) twice each, told apart by `opaque_end` (not in the key);
+    /// also two lengths, and texts whose order is not their insertion order.
+    ///
+    /// DISCRIMINATION (2026-11-16): ties sorted in reverse input order (`.then(b.cmp(&a))`)
+    /// -> `["2", "4", ..]` reads `["4", "2", ..]`; ranks in reverse text order ->
+    /// eight existing order tests fail (e.g. `w4b_trie_walk_equals_the_brute_force_key_order`).
+    #[test]
+    fn sort_candidates_is_key_cmp_order_and_stable() {
+        let c = |hops: &[&str], marker: &'static str| Candidate {
+            projected: ProjPath::from_hops(hops.iter().map(|h| mk_hop(h)).collect()),
+            end: EndKey::Carrier,
+            path: WitnessPath::default(),
+            opaque_end: Some(marker),
+        };
+        let input = || {
+            vec![
+                c(&["b"], "1"),
+                c(&["a"], "2"),
+                c(&["a", "a"], "5"),
+                c(&["b"], "3"),
+                c(&["a"], "4"),
+            ]
+        };
+        let mut ours = input();
+        sort_candidates(&mut ours);
+        let mut reference = input();
+        reference.sort_by(|a, b| a.key_cmp(b));
+        let markers = |v: &[Candidate]| {
+            v.iter()
+                .map(|c| c.opaque_end.unwrap().to_string())
+                .collect::<Vec<String>>()
+        };
+        assert_eq!(markers(&ours), vec!["2", "4", "1", "3", "5"]);
+        assert_eq!(
+            markers(&ours),
+            markers(&reference),
+            "key_cmp's stable order"
+        );
+    }
+
     fn mk_hop(tag: &str) -> QueryWitnessHop {
         QueryWitnessHop {
             kind: "call",
