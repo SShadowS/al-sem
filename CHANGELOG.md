@@ -21,8 +21,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bar was 150 MiB (ENG-107's ceiling for the B-tree layout, 336 MiB).
 - **Tests.** The whole suite and every golden family pass unchanged. Discrimination: a freeze that
   drops an entry turns six `--test r3` tests red (the r3a3/r3a5 goldens, oracles and the
-  temp-class parity). **Limit:** the frozen ORDER matters but no test pins it: a freeze that
-  reverses it leaves the whole suite green (6,086 tests). It can reach output: when two guarded
+  temp-class parity). The frozen ORDER matters, and before this change no test pinned it: a
+  freeze that reversed it left the whole suite green (6,086 tests). Now
+  `a_frozen_cone_keeps_key_order_for_the_bfs_first_pick` does (a hand-built cone holding `K` and
+  its guarded copy; the reversed freeze turns it red). It can reach output: when two guarded
   entries under one base key lose their guards to an untrackable argument, they tie on distance
   and first hop, and `candidate_wins` keeps the first one met, so the order picks the
   representative (its `witnessOperationId`); `ConeStore::emit_raw` and the recursive walk read
