@@ -1,0 +1,167 @@
+# TLS-86: CPU profiles of `impact --diff`, `prove`, `explain`, and the ENG-98 / ENG-100 profiles
+
+Recorded on server1 with samply (`scripts/profile`, the `profiling` build: release-fast's code
+with symbols and line tables) on the pinned CDO baseline (`/work/src/cdo-baseline/Cloud`,
+workspace git `bc3ccb18`). "CPU" is every thread's CPU, summed from samply's per-sample deltas.
+
+The raw profiles are not in git; they go stale with every engine change. They are on the
+persistent volume, with the scripts that read them:
+
+- `/work/.al-sem/profiles/2026-11-16-tls86/`: the three new profiles (`tls86-{impact,prove,explain}.json.gz`
+  with `.syms.json`), the diff (`tls86-range.diff`) and the run script (`tls86-profile.sh`).
+- `/work/.al-sem/profiles/2026-11-16-eng98/` and `.../2026-11-16-eng100/`: the older profiles.
+- `/work/.al-sem/profiles/`: copies of the two readers; the repo's are the source.
+
+To regenerate a profile, build at the named commit and run the command through `scripts/profile -o <out>
+alsem ...`. Read it with
+`python3 tools/census-probe/runs-eng84/samply-shares.py <out> <out>.syms.json [needle ...]`
+(self and inclusive shares), and `samply-chains.py <out> <out>.syms.json <leaf> [depth]` (the
+frames above a leaf).
+
+**Reading the shares.**
+- Self shares are reliable.
+- Inclusive shares stop at rayon task boundaries: a stage that runs on the pool reads low by its
+  name. For example, `resolve_full_program` shows 0.4 % in prove.
+- Two libc functions have no symbols. By their code (`objdump`), `fun_1972e0` is the AVX2
+  `memcmp`/`bcmp` (`vpcmpeqb` + `vpmovmskb`). `fun_197a40` sits next to it and its callers are
+  `realloc_zero` and `write_str`, which suggests memset/memmove, but that is not confirmed.
+
+## 1. `alsem impact --diff` (TLS-86)
+
+- **Binary:** master `9c1c099b`.
+- **Command:**
+  ```
+  git -C /work/src/cdo-baseline diff --no-color --no-ext-diff --diff-algorithm=histogram \
+    --src-prefix=a/ --dst-prefix=b/ bc3ccb18~5 bc3ccb18 -- Cloud > range.diff
+  alsem impact /work/src/cdo-baseline/Cloud --diff - --diff-root /work/src/cdo-baseline \
+    --format json < range.diff
+  ```
+- **Result:** 699 roots, the gate's diff impact. 536.1 s CPU at the one-shot's default 8
+  workers. Wall time 337 s, which includes the profiling build.
+
+| self | function |
+|---:|---|
+| 11.26 % | `fun_1972e0` (libc memcmp) |
+| 10.26 % | SipHash (`write<Sip13Rounds>`) |
+| 3.98 % | `impact_graph::reverse::walk_multi` |
+| 2.94 % | `fold<Vec<QueryWitnessHop>>` (witness hop vectors) |
+| 2.83 % | `reach` |
+| 2.12 % | `fun_197a40` (libc) |
+| 2.10 % | `mi_page_malloc_zero` |
+| 1.86 % | `is_background_target` |
+| 1.83 % | `mi_page_free_list_extend` |
+| 1.73 % | `step` |
+
+| inclusive | stage |
+|---:|---|
+| 26.59 % | `digest::digest_one_root` |
+| 23.70 % | `digest_cli::literal_reach_entries` |
+| 21.53 % | `walk_multi`, 15.72 % of it under `impact::up::up`'s closure #3 |
+| 15.25 % | `digest::reconstruct_witness_paths` |
+| 9.17 % | `ordering_engine::compute_ordering` |
+| 5.86 % | `ordering_inter::reconstruct_call_chains` |
+| 4.87 % | `al_syntax::lower::lower_file` |
+
+**Where memcmp and string equality sit.**
+- 27.4 % of all CPU is under `equal_same_length` (`eq<str, str>`).
+- samply puts 26.6 % of that under a single `HashMap<String, String>::get` called from
+  `digest_one_root` at `digest.rs:5348`: `idx.routine_display_by_id.get(rid)`.
+- That line runs once per root, and a std `RandomState` map compares keys only when their hash
+  tags match. At 699 roots, 26.6 % of 536 s would be about 0.2 s per lookup. So this attribution
+  is very probably an unwinding artefact above a libc leaf, not the real caller. ENG-116 is to
+  find the real one.
+- memcmp's own 11.3 % self share is real.
+
+**Where SipHash sits** (the frame above `hash_one`):
+- in `digest`'s walks: `descend` 1.22 %, `marking` 0.53 %, `seed_reach` 0.41 %;
+- in `literal_reach`: `bind_m` 0.71 %, `dead_at_m` 0.50 %, `exec` 0.45 %, `states_of` 0.24 %,
+  `first_live_owner` 0.21 %;
+- in table growth: `insert` 1.14 %, `prepare_resize` 0.74 %.
+
+**memcmp's top callers** by the frame chain:
+- `ordering_inter::reconstruct_call_chains` 2.73 %;
+- `ordering_engine::compute_ordering` 1.34 %;
+- `LiteralReach::first_live_owner` 0.89 %;
+- `fact_equivalent`'s `rep_row` 0.39 %.
+
+## 2. `alsem prove` and `alsem explain` (TLS-86)
+
+- **Binary:** master `9c1c099b`.
+- **Commands:**
+  - `alsem prove /work/src/cdo-baseline/Cloud "CDO E-Mail Handler::RunReportID" may-commit --format json`
+  - `alsem explain /work/src/cdo-baseline/Cloud --routine "CDO E-Mail Handler::RunReportID" --format json`
+- **Result:** prove took 81.4 s CPU (36 s wall), explain 76.3 s CPU (34 s wall). Both are
+  one-shot runs, so most of their time is the model build.
+
+| self | prove | explain |
+|---|---:|---:|
+| `fun_1972e0` (libc memcmp) | 7.77 % | 7.42 % |
+| SipHash | 4.96 % | 4.59 % |
+| `ts_tree_cursor_goto_sibling_internal` | 3.72 % | 3.70 % |
+| `fun_197a40` (libc) | 3.34 % | 3.16 % |
+| `mi_page_free_list_extend` | 3.14 % | (below 3) |
+| `mi_block_set_nextx` | (below 3) | 3.18 % |
+| `ts_tree_cursor_goto_first_child_internal` | 2.77 % | 2.99 % |
+| `mi_page_malloc_zero` | 2.09 % | 2.15 % |
+| `_madvise` | 1.58 % | 1.38 % |
+
+| inclusive | prove | explain |
+|---|---:|---:|
+| `ts_parser_parse` | 18.24 % | 19.19 % |
+| `lower_file` | 15.49 % | 16.21 % |
+| `pd_solve` | 8.03 % | 8.17 % |
+| `recref_flow` | 7.48 % | 8.19 % |
+| `capability_cone` | 6.88 % | 5.58 % |
+| `digest_one_root` | 4.59 % | 4.85 % |
+
+- **Tree cursor:** above `ts_tree_cursor_goto_next_sibling` sit `RawNode::descendants_of_kinds`
+  (0.92 %), `named_ranges_where` (0.51 %) and `lower::collect_run_objects` (0.27 %). These are
+  CST scans beside the lowering walk.
+- **memcmp in prove:**
+  - `fact_equivalent`'s `rep_row` 1.13 %;
+  - `pd_solve::carry_reqs` 0.76 %;
+  - `capability_cone::merge_cone` 0.72 %;
+  - `ResInterner::intern`'s map 0.47 %.
+- **memset-like `fun_197a40`:** `mi_theap_realloc_zero` under `RawVec::finish_grow` (0.73 %).
+- **SipHash in prove:**
+  - spread over `get` 0.52 %, `prepare_resize` 0.43 % and `RecRefFlow::eval_routine` 0.39 %;
+  - then pd_solve's closure #9 0.33 % and `RecRefFlow::val_of_text` 0.25 %.
+
+## 3. The ENG-98 and ENG-100 profiles
+
+These are kept so the next change has the "before" (ENG-98 and ENG-100 have landed; the
+numbers below are historic). Workspace `bc3ccb18`.
+
+- **ENG-98 `alsem analyze --format json /work/src/cdo-baseline/Cloud`**
+  - Binary: master `52d349ab`, before ENG-98. Raw file: `eng98-analyze.json.gz`. 72.5 s CPU.
+  - Self: memcmp 6.33 %, `ts_tree_cursor_goto_sibling_internal` 4.22 %, SipHash 3.78 %,
+    `ts_tree_cursor_goto_first_child_internal` 3.52 %, `mi_page_free_list_extend` 3.42 %,
+    `fun_197a40` 3.10 %, `ts_lex` 2.54 %, `ts_lexer__advance` 2.24 %, `mi_page_malloc_zero` 2.19 %,
+    `ts_parser_parse` 2.04 %, `fact_pd_index` 2.01 %.
+  - ENG-98 moved its hottest SipHash maps (`pd_solve`'s, `ResInterner::by_str`) to FxHash.
+- **ENG-98 `alsem fingerprint /work/src/cdo-baseline/Cloud`**
+  - Before: binary `52d349ab`, raw file `eng98-fp.json.gz`.
+  - After: binary `6d12dc5e`, the ENG-98 change, raw file `eng98-fp2.json.gz`.
+  - The CHANGELOG's ENG-98 entry has their numbers: SipHash 20.7 % -> 2.84 %, CPU 256.5 -> 241.6 s.
+- **ENG-100 `alsem fingerprint /work/src/cdo-baseline/Cloud`**
+  - Raw file: `e100-fp.json.gz`. 99.3 s CPU.
+  - Binary: `47cf6aed`, the ENG-100 change. This is inferred from the times: the profile is from
+    09:46 and the commit from 09:21. The profile records no commit.
+  - Self: `fun_197a40` 8.07 %, `mi_page_free_list_extend` 7.87 %, SipHash 5.84 %,
+    `reconstruct_witness_paths` 5.19 %, `get` 4.54 %, memcmp 4.16 %, `quicksort<Candidate>` 3.40 %,
+    `ts_tree_cursor_goto_sibling_internal` 3.01 %, `_madvise` 2.89 %, `mi_page_malloc_zero` 2.58 %,
+    `hash_one<&*const SnapshotGraphEdge>` 2.43 %.
+  - ENG-105 then took the edge-pointer hashing and ENG-106 the per-root slot-table churn.
+
+## Hot spots of 3 % or more, filed
+
+The new profiles give these (the ENG-98/100 ones are already handled by ENG-98, ENG-100,
+ENG-105 and ENG-106):
+
+| task | hot spot | where |
+|---|---|---|
+| ENG-116 | memcmp 11.3 % self, 27.4 % under `str` equality, in impact | the unwinder names `digest.rs:5348`, which cannot be it; find the real caller, then remove the compares |
+| ENG-117 | SipHash 10.3 % (impact), 5.0 % (prove) | `literal_reach` and `digest`'s walk maps, `recref_flow`; Fx only where no order reaches output |
+| ENG-118 | `walk_multi` 4.0 % self, 21.5 % inclusive (impact) | `impact::up::up`'s closure #3 (15.7 %) |
+| ENG-119 | tree-cursor walking 6.5 % self (prove, explain; 7.7 % in analyze) | CST scans beside the lowering walk: `descendants_of_kinds`, `named_ranges_where`, `collect_run_objects` |
+| ENG-120 | allocator page set-up and zeroing, 6.8 % (prove; 10.1 % if `fun_197a40` is memset) | `mi_page_free_list_extend`, `mi_page_malloc_zero`, `realloc_zero` growth, `madvise`; `purge_delay` is 0 on purpose (peak RSS), so measure, do not assume |

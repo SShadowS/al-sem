@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (TLS-86: CPU profiles of `impact --diff`, `prove` and `explain` on CDO; five hot spots filed)
+
+- **The notes:** `docs/superpowers/notes/2026-11-16-tls86-profiles.md`. They hold samply profiles
+  (`scripts/profile`, master 9c1c099b, CDO `bc3ccb18`) of three commands: the gate's 699-root
+  `alsem impact --diff`, which took 536 s CPU, and a one-shot `prove` and `explain` of RunReportID,
+  81 and 76 s. They also record the ENG-98 analyze and fingerprint profiles and the ENG-100
+  fingerprint profile, with their binary commits.
+- **Each profile** comes with its self and inclusive shares, the exact command, the binary and
+  workspace SHAs, and the path of the raw file on the persistent volume
+  (`/work/.al-sem/profiles/2026-11-16-*`). Raw profiles stay out of git: they go stale with
+  every engine change.
+- **Added `tools/census-probe/runs-eng84/samply-chains.py`:** the frames above any leaf in a
+  samply profile (ENG-98's SipHash reader with the needle made an argument).
+- **Found:**
+  - The two unnamed libc hot spots: `fun_1972e0` is AVX2 `memcmp` (by its code), and 11.3 % of
+    impact's CPU.
+  - 27 % of impact's CPU is string equality. samply credits it to one per-root lookup
+    (`digest.rs:5348`), which cannot be right.
+  - SipHash is 10.3 % of impact and 5.0 % of prove. `walk_multi` is 21.5 % of impact inclusive.
+  - Tree-cursor stepping in the lowerer's extra CST scans is 6.5 % of prove.
+  - Allocator page set-up and zeroing is 6.8 % of prove.
+- **Filed:** ENG-116 to ENG-120, one per hot spot of 3 % or more.
+
 ### Changed (ENG-106: `alsem fingerprint` builds its root blocks on 2 workers, wall x0.55 on CDO, CPU not higher)
 
 - **What changed** (`src/engine/l5/fingerprint_query.rs`, `digest.rs`, `fingerprint_cli.rs`,
