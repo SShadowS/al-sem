@@ -464,6 +464,37 @@ pub struct AlFile {
 }
 
 #[cfg(test)]
+mod exact_size_tests {
+    /// ENG-94: a parsed file's declaration lists keep no spare capacity. Lowering pushes
+    /// into them (a first push reserves four elements); `lower_file` trims every one, the
+    /// nested ones included. Pinned through `parse`, so dropping the call fails this.
+    #[test]
+    fn parsed_declarations_keep_no_spare_capacity() {
+        let file = crate::parse(
+            "codeunit 50100 \"Cap\"\n{\n    var\n        G: Integer;\n\n    procedure One(P: Integer)\n    var\n        L: Text;\n    begin\n    end;\n\n    [EventSubscriber(ObjectType::Codeunit, 1, 'X', '', false, false)]\n    local procedure Two()\n    begin\n    end;\n}\n",
+        );
+        let o = &file.objects[0];
+        let exact = |what: &str, len: usize, cap: usize| {
+            assert_eq!(cap, len, "{what}: capacity {cap} for {len} elements");
+        };
+        exact("routines", o.routines.len(), o.routines.capacity());
+        exact("globals", o.globals.len(), o.globals.capacity());
+        for r in &o.routines {
+            exact("params", r.params.len(), r.params.capacity());
+            exact("locals", r.locals.len(), r.locals.capacity());
+            exact("attributes", r.attributes.len(), r.attributes.capacity());
+            exact(
+                "attributes_parsed",
+                r.attributes_parsed.len(),
+                r.attributes_parsed.capacity(),
+            );
+        }
+        assert_eq!(o.routines.len(), 2, "the fixture has two routines");
+        assert_eq!(o.routines[0].locals.len(), 1, "and a local in the first");
+    }
+}
+
+#[cfg(test)]
 mod origin_tests {
     use super::*;
 
