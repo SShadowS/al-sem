@@ -763,11 +763,6 @@ fn split_bodies(bodies: Option<Arc<Vec<al_sem::snapshot::parse::ParsedUnit>>>) {
     step("  bodies: AlFile Arcs shared elsewhere", shared);
 }
 
-/// A `Vec`'s element size, for an element type the probe cannot name (`pub(crate)`).
-fn elem_size<T>(_: &Vec<T>) -> usize {
-    size_of::<T>()
-}
-
 fn step<T>(label: &str, v: T) -> (isize, isize) {
     let (b0, a0) = live();
     drop(v);
@@ -2627,69 +2622,18 @@ fn resident_mode(ws: PathBuf, routine: String, low_mem: bool) {
                                 pd.producers.len(),
                                 pd.states.len(),
                                 pd.states.capacity(),
-                                size_of::<al_sem::engine::l4::pd_solve::ConeState>(),
+                                size_of::<al_sem::engine::l4::pd_solve::ArenaState>(),
                                 pd.links.len(),
                                 pd.links.capacity(),
-                                size_of::<al_sem::engine::l4::pd_solve::ConeLink>(),
+                                size_of::<al_sem::engine::l4::pd_solve::ArenaLink>(),
                                 pd.edges.len(),
                                 pd.by_routine.len()
                             );
-                            // ENG-104: what a compact state would keep, counted before any drop.
-                            {
-                                use std::collections::HashSet;
-                                let reqs_set =
-                                    pd.states.iter().filter(|s| !s.reqs.is_empty()).count();
-                                let reqs_heap: usize = pd
-                                    .states
-                                    .iter()
-                                    .map(|s| s.reqs.capacity() * elem_size(&s.reqs))
-                                    .sum();
-                                let distinct_reqs = pd
-                                    .states
-                                    .iter()
-                                    .map(|s| s.reqs.as_slice())
-                                    .collect::<HashSet<_>>()
-                                    .len();
-                                let routine_ptrs = pd
-                                    .states
-                                    .iter()
-                                    .map(|s| Arc::as_ptr(&s.routine) as *const u8)
-                                    .collect::<HashSet<_>>()
-                                    .len();
-                                let max =
-                                    |f: fn(&al_sem::engine::l4::pd_solve::ConeState) -> usize| {
-                                        pd.states.iter().map(f).max().unwrap_or(0)
-                                    };
-                                let contiguous = pd
-                                    .states
-                                    .windows(2)
-                                    .all(|w| w[0].links.end == w[1].links.start);
-                                println!(
-                                    "    ENG-104 states: {} with reqs (heap {:.2} MiB), {distinct_reqs} distinct req lists; \
-                                     {routine_ptrs} distinct routine Arcs ({} routines in by_routine); size_of TempState {} B; \
-                                     max producer {} dist {} link end {}; links contiguous in state order: {contiguous}; seeds {}",
-                                    reqs_set,
-                                    reqs_heap as f64 / 1048576.0,
-                                    pd.by_routine.len(),
-                                    size_of::<al_sem::engine::l4::summary::TempState>(),
-                                    max(|s| s.producer),
-                                    max(|s| s.dist),
-                                    max(|s| s.links.end),
-                                    pd.states.iter().filter(|s| s.seed).count(),
-                                );
+                            // ENG-104: the compact arena by part (the pre-ENG-104 counts that set
+                            // the bar are in runs-eng104/resident-before.out).
+                            for (n, p) in pd.into_census_parts() {
+                                step(n, p);
                             }
-                            let al_sem::engine::l4::pd_solve::ConeArena {
-                                producers,
-                                states,
-                                links,
-                                edges,
-                                by_routine,
-                            } = pd;
-                            step("fold.pd.by_routine", by_routine);
-                            step("fold.pd.links", links);
-                            step("fold.pd.states", states);
-                            step("fold.pd.edges", edges);
-                            step("fold.pd.producers", producers);
                         }
                         continue;
                     }
