@@ -598,7 +598,8 @@ fn cdo_slot_is_truthful_under_races_and_bad_records() {
 /// ⟨TLS-88⟩ The queue's two other rules, each with the slot free and a waiter
 /// held still:
 /// - An acquire without --wait refuses while a waiter that can run waits. The
-///   waiter polls every 30 s, so after A's release it is still asleep.
+///   waiter is stopped (SIGSTOP) once queued: alive, so its ticket counts, but
+///   it cannot take the slot itself after A's release.
 /// - A waiter short of memory (its floor 999999 GB) marks its ticket and steps
 ///   aside: a no-wait acquire with no floor takes the slot past it, and the
 ///   waiter keeps its ticket (its place).
@@ -643,8 +644,9 @@ fn cdo_slot_queue_refuses_jumps_and_steps_aside_for_memory() {
     assert_eq!(code, Some(0), "{text}");
     let mut w = waiter("B", "30", "0");
     until("W queued", &|| ticket_text().is_some());
-    // W has seen the slot held and sleeps its 30 s poll.
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    // Stopped, W is alive (its ticket counts) but cannot take the slot itself.
+    // SAFETY: SIGSTOP to the waiter this test spawned.
+    unsafe { libc::kill(w.id() as i32, libc::SIGSTOP) };
     assert_eq!(s.run("A", &["release"], &[]).0, Some(0));
     let (code, text) = s.run("D", &["acquire", "d", "jump"], &[]);
     assert_eq!(code, Some(1), "a no-wait acquire jumped a waiter: {text}");
