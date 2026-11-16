@@ -18,7 +18,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   back; `tools/census-probe/runs-eng109/`): live after one ask of each kind 4,676.8 → 4,392.6 MiB
   (−284.2 MiB; peak the same), allocations −922,066. The fact cones 666.68 → 382.65 MiB
   (1,962,468 → 1,040,321 allocations) with the same 5,612,960 entries and 306,465 keys: the
-  bar was 150 MiB (ENG-107's ceiling for the B-tree layout, 336 MiB).
+  bar was 150 MiB (ENG-107's ceiling for the B-tree layout, 336 MiB). On CDO
+  (`scripts/cdo-before-after 350dbd30`, workspace `bc3ccb18` clean on both sides) no finding or
+  fingerprint moved at either scope and the call graph is unchanged (0 unknown); `aldump
+  --session-refresh --verify` gives a model equal to a cold build after every change type, in the
+  default and `--low-mem` modes. `scripts/cdo-speed` (`350dbd30` against `8c40dae3`) passed
+  twice: the model build x0.962 and x1.008, the round totals x0.993 and x1.042, so no speed
+  ratio is claimed; the servers' summed peak memory x0.949 and x0.950.
 - **Tests.** The whole suite and every golden family pass unchanged. Discrimination: a freeze that
   drops an entry turns six `--test r3` tests red (the r3a3/r3a5 goldens, oracles and the
   temp-class parity). The frozen ORDER matters, and before this change no test pinned it: a
