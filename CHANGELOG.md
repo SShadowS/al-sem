@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (ENG-109: finished fact cones are flat sorted slices, 284.2 MiB less resident memory on CDO)
+
+- **What changed** (`src/engine/l4/capability_cone.rs`, `cone_walk_par.rs`; no output change). An
+  SCC's fact cone is still built as a `BTreeMap` (`merge_cone` needs it), then frozen into a
+  `FrozenCone`, one exactly sized `Box<[(Arc<str>, ConeFactEntry)]>` in the map's key order, at
+  both places a cone is finished (the serial fold and the parallel walk). Every reader iterates,
+  counts or folds it as before; none looks a key up, so it has no lookup.
+- **Measured** (`tools/census-probe resident`, release, master `350dbd30` vs this branch, back to
+  back; `tools/census-probe/runs-eng109/`): live after one ask of each kind 4,676.8 → 4,392.6 MiB
+  (−284.2 MiB; peak the same), allocations −922,066. The fact cones 666.68 → 382.65 MiB
+  (1,962,468 → 1,040,321 allocations) with the same 5,612,960 entries and 306,465 keys: the
+  bar was 150 MiB (ENG-107's ceiling for the B-tree layout, 336 MiB).
+- **Tests.** The whole suite and every golden family pass unchanged. Discrimination: a freeze that
+  drops an entry turns six `--test r3` tests red (the r3a3/r3a5 goldens, oracles and the
+  temp-class parity). **Limit:** the frozen ORDER is not observable in any output: a freeze that
+  reverses it leaves the whole suite green (6,086 tests). Readers merge a successor's entries
+  into a new `BTreeMap` (sorted again), `merge_cone`'s tie-break is order-free, and the product
+  fingerprint, which hashes in order, compares only cones frozen the same way. The freeze keeps
+  the map's order by construction (`BTreeMap::into_iter`).
+
 ### Changed (ENG-105: `alsem fingerprint` takes 0.92× the CPU on CDO; witness memos by edge index)
 
 - **Found** (samply, `alsem fingerprint` on the pinned CDO baseline, master after ENG-100/102):
