@@ -963,8 +963,9 @@ struct InEdge<'g, 'a> {
     edge_reqs: &'a [Req],
 }
 
-/// Callee → its incoming edges, in `(sort_key, from)` order.
-type Incoming<'g, 'a> = HashMap<&'g str, Vec<InEdge<'g, 'a>>>;
+/// Callee → its incoming edges, in `(sort_key, from)` order. Fx (ENG-98): its
+/// order never reaches output (each list is sorted on its own).
+type Incoming<'g, 'a> = crate::fxhash::FxHashMap<&'g str, Vec<InEdge<'g, 'a>>>;
 
 /// One fresh producer's solve in its own indices (plan 2026-11-03 L2): its
 /// states in BFS order, the seed first; each state's incoming links, with
@@ -1037,7 +1038,7 @@ fn solve_producer<'g, 'a>(
     #[allow(clippy::too_many_arguments)]
     fn push<'g, 'a>(
         out: &mut FreshSolve<'g>,
-        ix_of: &mut HashMap<Key, StateIx>,
+        ix_of: &mut crate::fxhash::FxHashMap<Key, StateIx>,
         at: &mut Vec<&'a Arc<str>>,
         p: usize,
         name: &'a Arc<str>,
@@ -1061,8 +1062,9 @@ fn solve_producer<'g, 'a>(
         ix
     }
     let addr = |name: &Arc<str>| Arc::as_ptr(name).cast::<u8>();
-    let mut ix_of: HashMap<Key, StateIx> = HashMap::new();
-    let mut edge_ix: HashMap<*const TypedOutEdge, usize> = HashMap::new();
+    // Fx (ENG-98): both are only looked up, never iterated.
+    let mut ix_of: crate::fxhash::FxHashMap<Key, StateIx> = Default::default();
+    let mut edge_ix: crate::fxhash::FxHashMap<*const TypedOutEdge, usize> = Default::default();
     // Each state's interned name, beside `out.states`.
     let mut at: Vec<&'a Arc<str>> = Vec::new();
     let (owner, t0, reqs0) = seed_of(prod, names, frames);
@@ -1311,7 +1313,7 @@ fn solve_core<'g>(
     // with its `from` (the edge rank reads it, [`finalize`]).
     let mut edges: Vec<(&'g str, &'g TypedOutEdge)> = Vec::new();
     let mut edge_ix: HashMap<*const TypedOutEdge, usize> = HashMap::new();
-    let mut incoming: Incoming<'g, '_> = HashMap::new();
+    let mut incoming: Incoming<'g, '_> = Incoming::default();
     for (from, list) in &g.outgoing {
         let name = names.get(from.as_str()).expect("every `from` is interned");
         let caller = routines_by_id.get(from.as_str()).copied();

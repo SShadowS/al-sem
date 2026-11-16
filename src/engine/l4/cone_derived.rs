@@ -427,7 +427,9 @@ impl ResBitset {
 /// [`ConeDerivedBuilder::continuing`].)
 #[derive(Debug, Default, Clone)]
 pub struct ResInterner {
-    by_str: HashMap<String, ResId>,
+    /// ENG-98: Fx, not SipHash (0.53% of `alsem analyze`'s CPU hashed here);
+    /// never iterated in an order that reaches output (only summed).
+    by_str: crate::fxhash::FxHashMap<String, ResId>,
     strings: Vec<String>,
 }
 
