@@ -2723,51 +2723,188 @@ fn rewrite_routine_site_ids(r: &mut ModelRoutine, f: &dyn Fn(&str) -> String) {
         }
     }
     let all = |v: &mut Vec<String>| v.iter_mut().for_each(|s| *s = f(s));
+    // ENG-103: every field is named (no `..`), here and in the nested rows that hold ids, so a
+    // field added later does not compile until someone decides whether it holds an id of this
+    // routine. A binding's `source_record_variable_id` was missed: after a split declaration
+    // it kept the old routine's id while its variable moved.
+    let ModelRoutine {
+        id: _,
+        stable_routine_id: _,
+        object_id: _,
+        object_type: _,
+        name: _,
+        kind: _,
+        attributes_parsed: _,
+        app_guid: _,
+        object_number: _,
+        normalized_signature_hash: _,
+        body_available: _,
+        parse_incomplete: _,
+        record_variables,
+        record_operations,
+        field_accesses: _,
+        implicit_field_accesses: _,
+        variables: _,
+        parameters: _,
+        access_modifier: _,
+        return_type: _,
+        call_sites,
+        operation_sites,
+        statement_tree,
+        loops,
+        file: _,
+        site_exprs: _,
+        source_anchor: _,
+        declaration_start_line: _,
+        identifier_references: _,
+        unreachable_statements,
+        has_branching: _,
+        var_assignments: _,
+        condition_references: _,
+        enclosing_member: _,
+        member_detail: _,
+        originating_object: _,
+        enclosing_member_range: _,
+        entry_temp_guard_receiver: _,
+        table_event_exits: _,
+        recordref_bindings: _,
+        field_ref_operations,
+        rules,
+        rule_drafts,
+        card_text: _,
+        site_guards: _,
+    } = r;
     // Record variable ids (`{id}/rv/{name}`): no site tag, so a renumbering
     // leaves them as they are; a new routine id (a split declaration) moves
     // them with the sites.
-    for v in &mut r.record_variables {
+    for v in record_variables.iter_mut() {
         v.id = f(&v.id).into();
     }
-    for o in r
-        .record_operations
-        .iter_mut()
-        .chain(r.field_ref_operations.iter_mut())
-    {
-        if let Some(rv) = &mut o.record_variable_id {
-            *rv = f(rv);
+    for o in record_operations.iter_mut() {
+        record_operation_ids(o, f, true);
+    }
+    // A FieldRef operation's own id is no site id of this routine; its variable's is.
+    for o in field_ref_operations.iter_mut() {
+        record_operation_ids(o, f, false);
+    }
+    for c in call_sites.iter_mut() {
+        let crate::program::body::features::PCallSite {
+            id,
+            operation_id,
+            callee_text: _,
+            callee: _,
+            argument_texts: _,
+            argument_infos: _,
+            argument_bindings,
+            loop_stack,
+            source_anchor: _,
+            result_consumed: _,
+            object_run_return_used: _,
+            under_asserterror: _,
+            control_context: _,
+            order: _,
+            in_statement_position: _,
+            result_tested: _,
+            receiver_temp_state: _,
+            implicit_receiver: _,
+            start_may_fail: _,
+            checked_run: _,
+            write_txn_query: _,
+            try_call: _,
+        } = c;
+        *id = f(id);
+        *operation_id = f(operation_id);
+        all(loop_stack);
+        for b in argument_bindings.iter_mut() {
+            let crate::program::body::features::PCallArgumentBinding {
+                parameter_index: _,
+                source_kind: _,
+                source_variable_name: _,
+                source_record_variable_id,
+                source_parameter_index: _,
+                caller_source_parameter_is_var: _,
+                source_temp_state: _,
+                argument_anchor: _,
+            } = b;
+            if let Some(rv) = source_record_variable_id {
+                *rv = f(rv).into();
+            }
         }
     }
-    for o in &mut r.record_operations {
-        o.id = f(&o.id);
-        all(&mut o.loop_stack);
+    for o in operation_sites.iter_mut() {
+        let crate::program::body::features::POperationSite {
+            id,
+            kind: _,
+            loop_stack,
+            source_anchor: _,
+            under_asserterror: _,
+            control_context: _,
+            order: _,
+        } = o;
+        *id = f(id);
+        all(loop_stack);
     }
-    for c in &mut r.call_sites {
-        c.id = f(&c.id);
-        c.operation_id = f(&c.operation_id);
-        all(&mut c.loop_stack);
-    }
-    for o in &mut r.operation_sites {
-        o.id = f(&o.id);
-        all(&mut o.loop_stack);
-    }
-    for l in &mut r.loops {
-        l.id = f(&l.id);
-        if let Some((a, b)) = &mut l.exhausting_advance {
+    for l in loops.iter_mut() {
+        let crate::program::body::features::PLoop {
+            id,
+            loop_type: _,
+            source_anchor: _,
+            exhausting_advance,
+        } = l;
+        *id = f(id);
+        if let Some((a, b)) = exhausting_advance {
             (*a, *b) = (f(a), f(b));
         }
     }
-    for u in &mut r.unreachable_statements {
-        u.id = f(&u.id);
+    for u in unreachable_statements.iter_mut() {
+        let crate::program::body::features::PUnreachableStatement {
+            id,
+            exit_kind: _,
+            exit_anchor: _,
+            unreachable_anchor: _,
+        } = u;
+        *id = f(id);
     }
-    if let Some(t) = &mut r.statement_tree {
+    if let Some(t) = statement_tree {
         tree(std::sync::Arc::make_mut(t), f);
     }
-    for rule in r.rules.iter_mut().flatten() {
+    for rule in rules.iter_mut().flatten() {
         rule.id = f(&rule.id);
     }
-    for d in r.rule_drafts.iter_mut().flatten() {
+    for d in rule_drafts.iter_mut().flatten() {
         d.rekey_ids(f);
+    }
+}
+
+/// [`rewrite_routine_site_ids`] for one record operation: its variable's id, and, when
+/// `own_ids` (a record operation, not a FieldRef one), its own id and loop stack.
+fn record_operation_ids(o: &mut ModelRecordOperation, f: &dyn Fn(&str) -> String, own_ids: bool) {
+    let ModelRecordOperation {
+        id,
+        op: _,
+        record_variable_name: _,
+        record_variable_id,
+        table_id: _,
+        temp_state: _,
+        field_arguments: _,
+        source_anchor: _,
+        loop_stack,
+        field_argument_infos: _,
+        in_until_condition: _,
+        in_statement_position: _,
+        run_trigger: _,
+        modify_all_field: _,
+        transfer_fields_source: _,
+        receiver_is_record_ref: _,
+        flow_field_reads: _,
+        dataset_reason: _,
+    } = o;
+    if let Some(rv) = record_variable_id {
+        *rv = f(rv);
+    }
+    if own_ids {
+        *id = f(id);
+        loop_stack.iter_mut().for_each(|s| *s = f(s));
     }
 }
 
