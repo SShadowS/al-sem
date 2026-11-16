@@ -1966,9 +1966,264 @@ fn index_split_mode(built: Vec<Root>) {
     );
 }
 
+/// ENG-96: the inline layout of `PCallSite` and `ModelRecordVariable` and what their
+/// fields hold, before any field is dropped (read-only; its own temporaries are freed
+/// before `routine_fields` starts measuring). Inline = `size_of` of the field in the
+/// struct; heap = the `String`/`Vec` capacity it owns (not shared `SharedStr` text).
+fn eng96_layout(routines: &[al_sem::program::model::workspace::ModelRoutine]) {
+    use al_sem::program::body::features::{PCallSite, PCallee};
+    use al_sem::program::model::workspace::ModelRecordVariable;
+    use std::collections::BTreeMap;
+    use std::mem::size_of_val;
+    fn pct(a: usize, n: usize) -> f64 {
+        if n == 0 {
+            0.0
+        } else {
+            100.0 * a as f64 / n as f64
+        }
+    }
+    let sites: Vec<&PCallSite> = routines.iter().flat_map(|r| r.call_sites.iter()).collect();
+    let vars: Vec<&ModelRecordVariable> = routines
+        .iter()
+        .flat_map(|r| r.record_variables.iter())
+        .collect();
+    let (ns, nv) = (sites.len(), vars.len());
+    println!(
+        "    ENG-96 layout: {ns} call sites x {} B = {:.2} MiB inline; {nv} record variables x {} B = {:.2} MiB inline",
+        size_of::<PCallSite>(),
+        mib((ns * size_of::<PCallSite>()) as isize),
+        size_of::<ModelRecordVariable>(),
+        mib((nv * size_of::<ModelRecordVariable>()) as isize)
+    );
+    // Vec slack: the routine's Vec<PCallSite> / Vec<ModelRecordVariable> capacity beyond len.
+    let (cs_cap, rv_cap): (usize, usize) = routines.iter().fold((0, 0), |(a, b), r| {
+        (
+            a + r.call_sites.capacity(),
+            b + r.record_variables.capacity(),
+        )
+    });
+    println!(
+        "    vec slack: call_sites cap {cs_cap} (len {ns}), record_variables cap {rv_cap} (len {nv})"
+    );
+    if let Some(c) = sites.first() {
+        println!("    PCallSite fields (inline B):");
+        for (name, b) in [
+            ("id", size_of_val(&c.id)),
+            ("operation_id", size_of_val(&c.operation_id)),
+            ("callee_text", size_of_val(&c.callee_text)),
+            ("callee", size_of_val(&c.callee)),
+            ("argument_texts", size_of_val(&c.argument_texts)),
+            ("argument_infos", size_of_val(&c.argument_infos)),
+            ("argument_bindings", size_of_val(&c.argument_bindings)),
+            ("loop_stack", size_of_val(&c.loop_stack)),
+            ("source_anchor", size_of_val(&c.source_anchor)),
+            ("result_consumed", size_of_val(&c.result_consumed)),
+            (
+                "object_run_return_used",
+                size_of_val(&c.object_run_return_used),
+            ),
+            ("under_asserterror", size_of_val(&c.under_asserterror)),
+            ("control_context", size_of_val(&c.control_context)),
+            ("order", size_of_val(&c.order)),
+            ("receiver_temp_state", size_of_val(&c.receiver_temp_state)),
+            ("implicit_receiver", size_of_val(&c.implicit_receiver)),
+        ] {
+            println!("      {name:<24} {b:>4}");
+        }
+    }
+    let count = |f: &dyn Fn(&PCallSite) -> bool| sites.iter().filter(|c| f(c)).count();
+    let heap = |f: &dyn Fn(&PCallSite) -> usize| sites.iter().map(|c| f(c)).sum::<usize>();
+    println!("    PCallSite contents:");
+    for (name, n) in [
+        (
+            "result_consumed Some",
+            count(&|c| c.result_consumed.is_some()),
+        ),
+        (
+            "object_run_return_used Some",
+            count(&|c| c.object_run_return_used.is_some()),
+        ),
+        (
+            "under_asserterror Some",
+            count(&|c| c.under_asserterror.is_some()),
+        ),
+        (
+            "control_context Some",
+            count(&|c| c.control_context.is_some()),
+        ),
+        ("order Some", count(&|c| c.order.is_some())),
+        (
+            "receiver_temp_state Some",
+            count(&|c| c.receiver_temp_state.is_some()),
+        ),
+        (
+            "implicit_receiver Some",
+            count(&|c| c.implicit_receiver.is_some()),
+        ),
+        (
+            "argument_texts empty",
+            count(&|c| c.argument_texts.is_empty()),
+        ),
+        (
+            "argument_infos empty",
+            count(&|c| c.argument_infos.is_empty()),
+        ),
+        (
+            "argument_bindings empty",
+            count(&|c| c.argument_bindings.is_empty()),
+        ),
+        ("loop_stack empty", count(&|c| c.loop_stack.is_empty())),
+        (
+            "callee Bare",
+            count(&|c| matches!(c.callee, PCallee::Bare { .. })),
+        ),
+        (
+            "callee Member",
+            count(&|c| matches!(c.callee, PCallee::Member { .. })),
+        ),
+        (
+            "callee ObjectRun",
+            count(&|c| matches!(c.callee, PCallee::ObjectRun { .. })),
+        ),
+        (
+            "callee Unknown",
+            count(&|c| matches!(c.callee, PCallee::Unknown)),
+        ),
+    ] {
+        println!("      {name:<30} {n:>8} ({:.1}%)", pct(n, ns));
+    }
+    for (name, b) in [
+        ("id heap (cap)", heap(&|c| c.id.capacity())),
+        (
+            "operation_id heap (cap)",
+            heap(&|c| c.operation_id.capacity()),
+        ),
+        (
+            "callee_text heap (cap)",
+            heap(&|c| c.callee_text.capacity()),
+        ),
+        (
+            "control_context heap (cap)",
+            heap(&|c| c.control_context.as_ref().map_or(0, |s| s.capacity())),
+        ),
+        (
+            "receiver_temp_state.kind heap",
+            heap(&|c| {
+                c.receiver_temp_state
+                    .as_ref()
+                    .map_or(0, |t| t.kind.capacity())
+            }),
+        ),
+        (
+            "loop_stack slack (cap-len)*24",
+            heap(&|c| (c.loop_stack.capacity() - c.loop_stack.len()) * 24),
+        ),
+        (
+            "argument_texts slack (cap-len)*24",
+            heap(&|c| (c.argument_texts.capacity() - c.argument_texts.len()) * 24),
+        ),
+    ] {
+        println!("      {name:<34} {:>8.2} MiB", mib(b as isize));
+    }
+    let mut ctx: BTreeMap<&str, usize> = BTreeMap::new();
+    let mut rts: BTreeMap<&str, usize> = BTreeMap::new();
+    for c in &sites {
+        *ctx.entry(c.control_context.as_deref().unwrap_or("<none>"))
+            .or_default() += 1;
+        *rts.entry(
+            c.receiver_temp_state
+                .as_ref()
+                .map_or("<none>", |t| t.kind.as_str()),
+        )
+        .or_default() += 1;
+    }
+    println!("      control_context values: {ctx:?}");
+    println!("      receiver_temp_state.kind values: {rts:?}");
+
+    if let Some(v) = vars.first() {
+        println!("    ModelRecordVariable fields (inline B):");
+        for (name, b) in [
+            ("id", size_of_val(&v.id)),
+            ("name", size_of_val(&v.name)),
+            ("table_name", size_of_val(&v.table_name)),
+            ("table_id", size_of_val(&v.table_id)),
+            ("is_parameter", size_of_val(&v.is_parameter)),
+            ("parameter_index", size_of_val(&v.parameter_index)),
+            ("temp_state", size_of_val(&v.temp_state)),
+            ("scope", size_of_val(&v.scope)),
+            ("is_receiver", size_of_val(&v.is_receiver)),
+            ("is_implicit_rec", size_of_val(&v.is_implicit_rec)),
+        ] {
+            println!("      {name:<24} {b:>4}");
+        }
+    }
+    let vcount = |f: &dyn Fn(&ModelRecordVariable) -> bool| vars.iter().filter(|v| f(v)).count();
+    let vheap =
+        |f: &dyn Fn(&ModelRecordVariable) -> usize| vars.iter().map(|v| f(v)).sum::<usize>();
+    println!("    ModelRecordVariable contents:");
+    for (name, n) in [
+        ("table_name Some", vcount(&|v| v.table_name.is_some())),
+        ("table_id Some", vcount(&|v| v.table_id.is_some())),
+        (
+            "parameter_index Some",
+            vcount(&|v| v.parameter_index.is_some()),
+        ),
+        ("scope Some", vcount(&|v| v.scope.is_some())),
+        ("is_parameter", vcount(&|v| v.is_parameter)),
+        ("is_receiver", vcount(&|v| v.is_receiver)),
+    ] {
+        println!("      {name:<30} {n:>8} ({:.1}%)", pct(n, nv));
+    }
+    for (name, b) in [
+        ("name heap (cap)", vheap(&|v| v.name.capacity())),
+        (
+            "table_name heap (cap)",
+            vheap(&|v| v.table_name.as_ref().map_or(0, |s| s.capacity())),
+        ),
+        (
+            "table_id heap (cap)",
+            vheap(&|v| v.table_id.as_ref().map_or(0, |s| s.capacity())),
+        ),
+        (
+            "scope heap (cap)",
+            vheap(&|v| v.scope.as_ref().map_or(0, |s| s.capacity())),
+        ),
+        (
+            "temp_state.kind heap (cap)",
+            vheap(&|v| v.temp_state.kind.capacity()),
+        ),
+    ] {
+        println!("      {name:<34} {:>8.2} MiB", mib(b as isize));
+    }
+    let mut scopes: BTreeMap<&str, usize> = BTreeMap::new();
+    let mut kinds: BTreeMap<&str, usize> = BTreeMap::new();
+    let mut tids: HashSet<&str> = HashSet::new();
+    let mut tnames: HashSet<&str> = HashSet::new();
+    for v in &vars {
+        *scopes
+            .entry(v.scope.as_deref().unwrap_or("<none>"))
+            .or_default() += 1;
+        *kinds.entry(v.temp_state.kind.as_str()).or_default() += 1;
+        if let Some(t) = &v.table_id {
+            tids.insert(t);
+        }
+        if let Some(t) = &v.table_name {
+            tnames.insert(t);
+        }
+    }
+    println!("      scope values: {scopes:?}");
+    println!("      temp_state.kind values: {kinds:?}");
+    println!(
+        "      distinct table_id {} / table_name {}",
+        tids.len(),
+        tnames.len()
+    );
+}
+
 /// `routines` dropped field by field, the deltas summed per field.
 fn routine_fields(routines: Vec<al_sem::program::model::workspace::ModelRoutine>) {
     use al_sem::program::model::workspace::ModelRoutine;
+    eng96_layout(&routines);
     let (t0, _) = live();
     let n = routines.len();
     let mut rf = Acc::default();
