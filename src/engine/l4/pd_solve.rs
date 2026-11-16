@@ -65,6 +65,82 @@ pub struct ConeLink {
     pub edge: usize,
 }
 
+/// A stored state (ENG-104): [`ConeState`] as the arena keeps it, 24 B against 88. The
+/// routine and the requirement list are indices into the arena's tables
+/// ([`ConeArena::routine_of`], [`ConeArena::reqs_of`]); the links are the arena's
+/// `link_off` range ([`ConeArena::links_of`]).
+///
+/// **Limits** (each checked where a state is stored: a workspace past one panics naming it,
+/// never wraps; widen the field): producers, routines, states, links and edges at most
+/// `u32::MAX` each (CDO: 2,744 producers, 9,433 routines, 3.36 M states, 4.77 M links);
+/// distance at most `u32::MAX` (CDO: 51); distinct requirement lists at most 65,535 (`u16`;
+/// CDO: 39).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArenaState {
+    pub t: TempState,
+    producer: u32,
+    routine: u32,
+    dist: u32,
+    reqs: u16,
+    /// True only for the seed `(p, owner(p), PD(i0), site reqs)`.
+    pub seed: bool,
+}
+
+impl ArenaState {
+    /// Index into `ConeArena::producers`.
+    #[must_use]
+    pub fn producer(&self) -> usize {
+        self.producer as usize
+    }
+    /// Shortest link-path length to the seed (seed = 0).
+    #[must_use]
+    pub fn dist(&self) -> usize {
+        self.dist as usize
+    }
+}
+
+/// A stored link (ENG-104): [`ConeLink`] with 32-bit indices, 8 B against 16 (limits: see
+/// [`ArenaState`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArenaLink {
+    callee_state: u32,
+    edge: u32,
+}
+
+impl ArenaLink {
+    #[must_use]
+    pub fn callee_state(&self) -> StateIx {
+        self.callee_state as usize
+    }
+    /// Index into `ConeArena::edges`.
+    #[must_use]
+    pub fn edge(&self) -> usize {
+        self.edge as usize
+    }
+}
+
+/// `n` as a `u32` arena index, or a panic naming the limit this workspace passed.
+fn index_u32(n: usize, what: &str) -> u32 {
+    u32::try_from(n).unwrap_or_else(|_| {
+        panic!(
+            "producer-solve arena: {what} {n} exceeds the u32 limit ({}); this workspace is \
+             larger than ArenaState/ArenaLink allow: widen the field (ENG-104)",
+            u32::MAX
+        )
+    })
+}
+
+/// `n` as the `u16` requirement-list index, or a panic naming the limit this workspace passed.
+fn reqs_index_u16(n: usize) -> u16 {
+    u16::try_from(n).unwrap_or_else(|_| {
+        panic!(
+            "producer-solve arena: requirement list {n} exceeds the u16 limit ({} distinct \
+             lists); this workspace is larger than ArenaState allows: widen `reqs` (ENG-104)",
+            u16::MAX
+        )
+    })
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Producer {
     /// The owner's raw direct fact (PD temp state, `provenance == "direct"`).
@@ -83,8 +159,20 @@ pub struct Producer {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ConeArena {
     pub producers: Vec<Producer>,
-    pub states: Vec<ConeState>,
-    pub links: Vec<ConeLink>,
+    /// The states (ENG-104: compact, [`ArenaState`]); read a state's routine, requirements
+    /// and links through [`Self::routine_of`], [`Self::reqs_of`] and [`Self::links_of`].
+    pub states: Vec<ArenaState>,
+    /// Every state's incoming links, deduplicated, in link rank (edge rank, which within
+    /// one state is `sort_key` order, then callee state rank; [`finalize`]), state after
+    /// state: state `i`'s are `links[link_off[i]..link_off[i + 1]]`.
+    pub links: Vec<ArenaLink>,
+    /// `states.len() + 1` offsets into `links` (ENG-104: one `u32` a state, not a `Range`).
+    link_off: Vec<u32>,
+    /// The internal routine ids the states name, indexed by `ArenaState::routine`.
+    routines: Vec<Arc<str>>,
+    /// The distinct requirement lists, indexed by `ArenaState::reqs`; index 0 is the empty
+    /// list (104,252 of CDO's 3.36 M states have one, in 39 distinct lists).
+    req_lists: Vec<Box<[Req]>>,
     /// The distinct typed edges the links cross, ONE copy each (D1.4: a link
     /// is an index, not a clone of the edge and its five strings).
     pub edges: Vec<TypedOutEdge>,
@@ -92,7 +180,134 @@ pub struct ConeArena {
     pub by_routine: HashMap<Arc<str>, Vec<StateIx>>,
 }
 
+/// A solve's producers and working states before [`finalize`] stores them (ENG-104).
+struct WorkArena {
+    producers: Vec<Producer>,
+    states: Vec<ConeState>,
+}
+
+/// What [`ConeArena::push_state`] interns while an arena is built: each routine's and each
+/// requirement list's index (by the routine `Arc`'s address; lists by value).
+#[derive(Default)]
+struct ArenaInterner {
+    routines: HashMap<usize, u32>,
+    reqs: HashMap<Vec<Req>, u16>,
+}
+
 impl ConeArena {
+    /// The arena's parts for a byte census (`tools/census-probe resident`), every field
+    /// named so a new one does not compile here unplaced. Read-only otherwise.
+    #[doc(hidden)]
+    pub fn into_census_parts(self) -> Vec<(&'static str, Box<dyn std::any::Any>)> {
+        let ConeArena {
+            producers,
+            states,
+            links,
+            link_off,
+            routines,
+            req_lists,
+            edges,
+            by_routine,
+        } = self;
+        vec![
+            ("fold.pd.by_routine", Box::new(by_routine)),
+            ("fold.pd.links", Box::new(links)),
+            ("fold.pd.link_off", Box::new(link_off)),
+            ("fold.pd.states", Box::new(states)),
+            (
+                "fold.pd.routines+req_lists",
+                Box::new((routines, req_lists)),
+            ),
+            ("fold.pd.edges", Box::new(edges)),
+            ("fold.pd.producers", Box::new(producers)),
+        ]
+    }
+
+    /// State `ix`'s internal routine id.
+    #[must_use]
+    pub fn routine_of(&self, ix: StateIx) -> &Arc<str> {
+        &self.routines[self.states[ix].routine as usize]
+    }
+    /// State `ix`'s requirements (empty for an unguarded state).
+    #[must_use]
+    pub fn reqs_of(&self, ix: StateIx) -> &[Req] {
+        &self.req_lists[self.states[ix].reqs as usize]
+    }
+    /// State `ix`'s incoming links, in link rank.
+    #[must_use]
+    pub fn links_of(&self, ix: StateIx) -> &[ArenaLink] {
+        &self.links[self.link_off[ix] as usize..self.link_off[ix + 1] as usize]
+    }
+
+    /// An arena from literal parts, every state stored the way [`finalize`] stores it (a
+    /// test's fixture; the indices are taken as given).
+    #[cfg(test)]
+    pub(crate) fn from_parts(
+        producers: Vec<Producer>,
+        states: Vec<(ConeState, Vec<ConeLink>)>,
+        edges: Vec<TypedOutEdge>,
+        by_routine: HashMap<Arc<str>, Vec<StateIx>>,
+    ) -> Self {
+        let mut arena = ConeArena {
+            producers,
+            edges,
+            by_routine,
+            ..Default::default()
+        };
+        let mut interner = ArenaInterner::default();
+        for (st, links) in states {
+            arena.push_state(st, links, &mut interner);
+        }
+        arena
+    }
+
+    /// Store `st` (its `producer` already a rank) and its `links` (already ranked, sorted and
+    /// deduplicated) as the next state, every index through a checked conversion (ENG-104).
+    fn push_state(
+        &mut self,
+        st: ConeState,
+        links: impl IntoIterator<Item = ConeLink>,
+        interner: &mut ArenaInterner,
+    ) -> StateIx {
+        if self.link_off.is_empty() {
+            self.link_off.push(0);
+            self.req_lists.push(Box::default());
+        }
+        for l in links {
+            self.links.push(ArenaLink {
+                callee_state: index_u32(l.callee_state, "state index"),
+                edge: index_u32(l.edge, "edge index"),
+            });
+        }
+        self.link_off
+            .push(index_u32(self.links.len(), "link count"));
+        let routine = *interner
+            .routines
+            .entry(Arc::as_ptr(&st.routine) as *const u8 as usize)
+            .or_insert_with(|| {
+                self.routines.push(Arc::clone(&st.routine));
+                index_u32(self.routines.len() - 1, "routine count")
+            });
+        let reqs = if st.reqs.is_empty() {
+            0
+        } else {
+            *interner.reqs.entry(st.reqs.clone()).or_insert_with(|| {
+                self.req_lists.push(st.reqs.into_boxed_slice());
+                reqs_index_u16(self.req_lists.len() - 1)
+            })
+        };
+        self.states.push(ArenaState {
+            t: st.t,
+            producer: index_u32(st.producer, "producer index"),
+            routine,
+            dist: index_u32(st.dist, "distance"),
+            reqs,
+            seed: st.seed,
+        });
+        index_u32(self.states.len(), "state count");
+        self.states.len() - 1
+    }
+
     /// The arena as text with every index replaced by the identity it points
     /// at: one line per producer, edge and state in storage order, then one
     /// line per routine of `by_routine`, routines sorted. A state is named by
@@ -104,18 +319,22 @@ impl ConeArena {
     pub fn logical_lines(&self) -> Vec<String> {
         // An edge's `from` is the routine of every state whose link crosses it.
         let mut edge_from: Vec<&str> = vec![""; self.edges.len()];
-        for s in &self.states {
-            for l in &self.links[s.links.clone()] {
-                edge_from[l.edge] = &s.routine;
+        for ix in 0..self.states.len() {
+            for l in self.links_of(ix) {
+                edge_from[l.edge()] = self.routine_of(ix);
             }
         }
         let edge = |e: usize| format!("{}|{}", edge_from[e], self.edges[e].sort_key);
         let state = |ix: StateIx| {
             let s = &self.states[ix];
-            let p = &self.producers[s.producer];
+            let p = &self.producers[s.producer()];
             format!(
                 "{}|{} @{} t={:?} reqs={:?}",
-                p.owner, p.operation_id, s.routine, s.t, s.reqs
+                p.owner,
+                p.operation_id,
+                self.routine_of(ix),
+                s.t,
+                self.reqs_of(ix)
             )
         };
         let mut out = Vec::with_capacity(
@@ -128,19 +347,21 @@ impl ConeArena {
             out.push(format!("edge {}", edge(e)));
         }
         for (ix, s) in self.states.iter().enumerate() {
-            let links: Vec<String> = self.links[s.links.clone()]
+            let links: Vec<String> = self
+                .links_of(ix)
                 .iter()
-                .map(|l| format!("{} <- {}", edge(l.edge), state(l.callee_state)))
+                .map(|l| format!("{} <- {}", edge(l.edge()), state(l.callee_state())))
                 .collect();
-            let first_hop = self.links[s.links.clone()]
+            let first_hop = self
+                .links_of(ix)
                 .iter()
-                .find(|l| !s.seed && self.states[l.callee_state].dist + 1 == s.dist)
-                .map_or_else(|| "-".to_string(), |l| edge(l.edge));
+                .find(|l| !s.seed && self.states[l.callee_state()].dist() + 1 == s.dist())
+                .map_or_else(|| "-".to_string(), |l| edge(l.edge()));
             out.push(format!(
                 "state {} seed={} dist={} first_hop={} links=[{}]",
                 state(ix),
                 s.seed,
-                s.dist,
+                s.dist(),
                 first_hop,
                 links.join("; ")
             ));
@@ -203,18 +424,19 @@ pub(crate) fn resolved_entries_of<'a>(
             if s.seed {
                 return None;
             }
-            let hop = arena.links[s.links.clone()]
+            let hop = arena
+                .links_of(ix)
                 .iter()
-                .find(|l| arena.states[l.callee_state].dist + 1 == s.dist)
+                .find(|l| arena.states[l.callee_state()].dist() + 1 == s.dist())
                 .expect("a non-seed state has a shortest link")
-                .edge;
+                .edge();
             let rep = reps
-                .entry((s.producer, s.t.clone()))
-                .or_insert_with(|| Arc::new(rep_for(&arena.producers[s.producer].fact, &s.t)));
+                .entry((s.producer(), s.t.clone()))
+                .or_insert_with(|| Arc::new(rep_for(&arena.producers[s.producer()].fact, &s.t)));
             Some(ResolvedEntry {
                 state: ix,
                 rep: Arc::clone(rep),
-                dist: s.dist,
+                dist: s.dist(),
                 first_hop: &arena.edges[hop],
             })
         })
@@ -564,9 +786,13 @@ fn finalize<'g>(
             .collect(),
         states: Vec::with_capacity(states.len()),
         links: Vec::with_capacity(raw_links.iter().map(Vec::len).sum()),
+        link_off: Vec::with_capacity(states.len() + 1),
+        routines: Vec::new(),
+        req_lists: Vec::new(),
         edges: canon_edges.iter().map(|&e| e.clone()).collect(),
         by_routine: HashMap::new(),
     };
+    let mut interner = ArenaInterner::default();
     // `by_routine` and the resolved entries per routine rank first (an index,
     // not a string hash per state), keyed by the interned name at the end.
     let mut by_rank: Vec<Vec<StateIx>> = vec![Vec::new(); sorted_names.len()];
@@ -574,26 +800,25 @@ fn finalize<'g>(
         let mut st = states[old].take().expect("a permutation");
         st.producer = p_rank[st.producer];
         let links = std::mem::take(&mut raw_links[old]);
-        let start = arena.links.len();
-        arena.links.extend(links);
-        st.links = start..arena.links.len();
-        by_rank[r_of[arena.states.len()]].push(arena.states.len());
-        arena.states.push(st);
+        let ix = arena.push_state(st, links, &mut interner);
+        by_rank[r_of[ix]].push(ix);
     }
     drop(raw_links);
+    drop(interner);
 
     // Each non-seed state's first hop: its lowest-ranked link to a state at
     // `dist - 1`, found in parallel (a read of the placed arena).
-    let first_hops: Vec<Option<usize>> = arena
-        .states
-        .par_iter()
-        .map(|s| {
+    let first_hops: Vec<Option<usize>> = (0..arena.states.len())
+        .into_par_iter()
+        .map(|ix| {
+            let s = &arena.states[ix];
             (!s.seed).then(|| {
-                arena.links[s.links.clone()]
+                arena
+                    .links_of(ix)
                     .iter()
-                    .find(|l| arena.states[l.callee_state].dist + 1 == s.dist)
+                    .find(|l| arena.states[l.callee_state()].dist() + 1 == s.dist())
                     .expect("a non-seed state has a shortest link")
-                    .edge
+                    .edge()
             })
         })
         .collect();
@@ -602,12 +827,12 @@ fn finalize<'g>(
     for (ix, (s, hop)) in arena.states.iter().zip(first_hops).enumerate() {
         let Some(hop) = hop else { continue };
         let rep = reps
-            .entry((s.producer, s.t.clone()))
-            .or_insert_with(|| Arc::new(rep_for(&arena.producers[s.producer].fact, &s.t)));
+            .entry((s.producer(), s.t.clone()))
+            .or_insert_with(|| Arc::new(rep_for(&arena.producers[s.producer()].fact, &s.t)));
         resolved_by_rank[r_of[ix]].push(ResolvedEntry {
             state: ix,
             rep: Arc::clone(rep),
-            dist: s.dist,
+            dist: s.dist(),
             first_hop: canon_edges[hop],
         });
     }
@@ -697,9 +922,13 @@ fn finalize_serial<'g>(
             .collect(),
         states: Vec::with_capacity(states.len()),
         links: Vec::with_capacity(raw_links.iter().map(Vec::len).sum()),
+        link_off: Vec::with_capacity(states.len() + 1),
+        routines: Vec::new(),
+        req_lists: Vec::new(),
         edges: canon_edges.iter().map(|&e| e.clone()).collect(),
         by_routine: HashMap::new(),
     };
+    let mut interner = ArenaInterner::default();
     for &old in &s_order {
         let mut st = states[old].take().expect("a permutation");
         st.producer = p_rank[st.producer];
@@ -712,15 +941,9 @@ fn finalize_serial<'g>(
             .collect();
         links.sort_unstable_by_key(|l| (l.edge, l.callee_state));
         links.dedup_by_key(|l| (l.edge, l.callee_state));
-        let start = arena.links.len();
-        arena.links.extend(links);
-        st.links = start..arena.links.len();
-        arena
-            .by_routine
-            .entry(Arc::clone(&st.routine))
-            .or_default()
-            .push(arena.states.len());
-        arena.states.push(st);
+        let routine = Arc::clone(&st.routine);
+        let ix = arena.push_state(st, links, &mut interner);
+        arena.by_routine.entry(routine).or_default().push(ix);
     }
 
     let mut reps: Reps = HashMap::new();
@@ -729,21 +952,22 @@ fn finalize_serial<'g>(
         if s.seed {
             continue;
         }
-        let first_hop = canon_edges[arena.links[s.links.clone()]
+        let first_hop = canon_edges[arena
+            .links_of(ix)
             .iter()
-            .find(|l| arena.states[l.callee_state].dist + 1 == s.dist)
+            .find(|l| arena.states[l.callee_state()].dist() + 1 == s.dist())
             .expect("a non-seed state has a shortest link")
-            .edge];
+            .edge()];
         let rep = reps
-            .entry((s.producer, s.t.clone()))
-            .or_insert_with(|| Arc::new(rep_for(&arena.producers[s.producer].fact, &s.t)));
+            .entry((s.producer(), s.t.clone()))
+            .or_insert_with(|| Arc::new(rep_for(&arena.producers[s.producer()].fact, &s.t)));
         resolved
-            .entry(Arc::clone(&s.routine))
+            .entry(Arc::clone(arena.routine_of(ix)))
             .or_default()
             .push(ResolvedEntry {
                 state: ix,
                 rep: Arc::clone(rep),
-                dist: s.dist,
+                dist: s.dist(),
                 first_hop,
             });
     }
@@ -828,7 +1052,7 @@ fn reusable(
     let mut old_hit: HashSet<usize> = HashSet::new();
     for r in &delta {
         for &s in reuse.old.by_routine.get(*r).map_or(&[][..], Vec::as_slice) {
-            old_hit.insert(reuse.old.states[s].producer);
+            old_hit.insert(reuse.old.states[s].producer());
         }
     }
     let old_ix: HashMap<(&str, &str), usize> = reuse
@@ -918,24 +1142,27 @@ pub(crate) fn pd_output_delta(
     );
     fn project<'a>(a: &'a ConeArena, affected: &[bool]) -> HashMap<&'a str, Vec<Proj<'a>>> {
         let mut out: HashMap<&'a str, Vec<Proj<'a>>> = HashMap::new();
-        for s in a.states.iter().filter(|s| affected[s.producer]) {
-            let p = &a.producers[s.producer];
+        for (ix, s) in a.states.iter().enumerate() {
+            if !affected[s.producer()] {
+                continue;
+            }
+            let p = &a.producers[s.producer()];
             let first_hop = (!s.seed)
                 .then(|| {
-                    a.links[s.links.clone()]
+                    a.links_of(ix)
                         .iter()
-                        .find(|l| a.states[l.callee_state].dist + 1 == s.dist)
-                        .map(|l| a.edges[l.edge].sort_key.as_str())
+                        .find(|l| a.states[l.callee_state()].dist() + 1 == s.dist())
+                        .map(|l| a.edges[l.edge()].sort_key.as_str())
                 })
                 .flatten();
-            out.entry(&*s.routine).or_default().push((
+            out.entry(&**a.routine_of(ix)).or_default().push((
                 &p.owner,
                 &p.operation_id,
                 &p.fact,
                 &s.t,
-                &s.reqs,
+                a.reqs_of(ix),
                 s.seed,
-                s.dist,
+                s.dist(),
                 first_hop,
             ));
         }
@@ -1280,9 +1507,10 @@ fn solve_core<'g>(
         producers: producers.len(),
         ..Default::default()
     };
-    let mut arena = ConeArena {
+    // The solve's working states until `finalize` stores them compactly (ENG-104).
+    let mut arena = WorkArena {
         producers,
-        ..Default::default()
+        states: Vec::new(),
     };
     let delta_span = crate::engine::perf_trace::span("cone", "pd.delta");
     let mut copy_from: Vec<Option<usize>> = vec![None; arena.producers.len()];
@@ -1349,8 +1577,8 @@ fn solve_core<'g>(
         let mut start = vec![usize::MAX; old.producers.len()];
         let mut end = vec![0usize; old.producers.len()];
         for (ix, s) in old.states.iter().enumerate() {
-            start[s.producer] = start[s.producer].min(ix);
-            end[s.producer] = ix + 1;
+            start[s.producer()] = start[s.producer()].min(ix);
+            end[s.producer()] = ix + 1;
         }
         type FromEdge<'g> = (&'g str, &'g TypedOutEdge);
         let mut by_from: HashMap<(&str, &str), Vec<FromEdge<'g>>> = HashMap::new();
@@ -1392,14 +1620,14 @@ fn solve_core<'g>(
             let Some(o) = *slot else { continue };
             let (s0, s1) = (start[o], end[o]);
             debug_assert!(
-                s0 < s1 && old.states[s0..s1].iter().all(|s| s.producer == o),
+                s0 < s1 && old.states[s0..s1].iter().all(|s| s.producer() == o),
                 "a producer's states are one range"
             );
             // First every link's edge in the current graph, then the copy.
-            let complete = old.states[s0..s1].iter().all(|st| {
-                old.links[st.links.clone()]
+            let complete = (s0..s1).all(|ix| {
+                old.links_of(ix)
                     .iter()
-                    .all(|l| map_edge(&st.routine, l.edge) != MISSING)
+                    .all(|l| map_edge(old.routine_of(ix), l.edge()) != MISSING)
             });
             if !complete {
                 debug_assert!(false, "a reused producer's edge is missing from the graph");
@@ -1407,21 +1635,24 @@ fn solve_core<'g>(
                 continue;
             }
             let base = arena.states.len();
-            for st in &old.states[s0..s1] {
-                let links = old.links[st.links.clone()]
+            for ix in s0..s1 {
+                let st = &old.states[ix];
+                let old_routine = old.routine_of(ix);
+                let links = old
+                    .links_of(ix)
                     .iter()
                     .map(|l| ConeLink {
-                        callee_state: base + (l.callee_state - s0),
-                        edge: map_edge(&st.routine, l.edge),
+                        callee_state: base + (l.callee_state() - s0),
+                        edge: map_edge(old_routine, l.edge()),
                     })
                     .collect();
                 // Interned: a seed sits at its producer's owner, and any other
                 // state has a link whose edge was just re-found in the graph
                 // with `from` = this routine.
-                let routine = names_of.entry(st.routine.as_ptr()).or_insert_with(|| {
+                let routine = names_of.entry(old_routine.as_ptr()).or_insert_with(|| {
                     Arc::clone(
                         names
-                            .get(&*st.routine)
+                            .get(&**old_routine)
                             .expect("a copied state's routine is interned"),
                     )
                 });
@@ -1429,9 +1660,9 @@ fn solve_core<'g>(
                     producer: p,
                     routine: Arc::clone(routine),
                     t: st.t.clone(),
-                    reqs: st.reqs.clone(),
+                    reqs: old.reqs_of(ix).to_vec(),
                     seed: st.seed,
-                    dist: st.dist,
+                    dist: st.dist(),
                     links: 0..0,
                 });
                 raw_links.push(links);
@@ -1661,9 +1892,15 @@ pub(crate) fn arena_tally(arena: &ConeArena) -> Tally {
         arc_fact(&mut t, &p.fact);
     }
     vec_block(&mut t, &arena.states);
-    for s in &arena.states {
-        vec_block(&mut t, &s.reqs);
+    // ENG-104: the shared requirement lists (one allocation each, index 0 the empty list),
+    // the routine table (the names themselves are counted in `working_tally`) and the link
+    // offsets.
+    vec_block(&mut t, &arena.req_lists);
+    for r in &arena.req_lists {
+        block(&mut t, std::mem::size_of_val::<[Req]>(r));
     }
+    vec_block(&mut t, &arena.routines);
+    vec_block(&mut t, &arena.link_off);
     vec_block(&mut t, &arena.links);
     vec_block(&mut t, &arena.edges);
     for e in &arena.edges {
@@ -1801,6 +2038,56 @@ mod tests {
             vec![pd_arg_binding(0, Some(arg))],
         ));
         r
+    }
+
+    /// ENG-104 limits: an index converts at its type's maximum and fails LOUDLY one past it
+    /// (naming the limit and that the field must be widened), never wrapping.
+    #[test]
+    fn arena_indices_convert_at_their_limit_and_panic_past_it() {
+        assert_eq!(index_u32(u32::MAX as usize, "state index"), u32::MAX);
+        assert_eq!(reqs_index_u16(u16::MAX as usize), u16::MAX);
+        let msg = |r: std::thread::Result<()>| {
+            let e = r.expect_err("past the limit must panic");
+            e.downcast_ref::<String>().cloned().unwrap_or_default()
+        };
+        let m = msg(std::panic::catch_unwind(|| {
+            index_u32(u32::MAX as usize + 1, "state index");
+        }));
+        assert!(m.contains("state index") && m.contains("widen"), "{m}");
+        let m = msg(std::panic::catch_unwind(|| {
+            reqs_index_u16(u16::MAX as usize + 1);
+        }));
+        assert!(m.contains("u16 limit") && m.contains("widen"), "{m}");
+    }
+
+    /// ENG-104, the USE: `push_state` stores the requirement-list index through the checked
+    /// conversion. 65,535 distinct lists (indices 1..=65,535, 0 is the empty list) store; the
+    /// 65,536th panics instead of wrapping to an existing list's index. DISCRIMINATION: an `as
+    /// u16` in `push_state` wraps and stores silently.
+    #[test]
+    fn push_state_refuses_more_requirement_lists_than_the_index_holds() {
+        let mut arena = ConeArena::default();
+        let mut interner = ArenaInterner::default();
+        let st = |i: u32| ConeState {
+            producer: 0,
+            routine: Arc::from("R"),
+            t: TempState::Known(false),
+            reqs: vec![(i, true)],
+            seed: true,
+            dist: 0,
+            links: 0..0,
+        };
+        for i in 0..u32::from(u16::MAX) {
+            arena.push_state(st(i), [], &mut interner);
+        }
+        assert_eq!(
+            arena.reqs_of(arena.states.len() - 1),
+            [(u32::from(u16::MAX) - 1, true)]
+        );
+        let past = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            arena.push_state(st(u32::from(u16::MAX)), [], &mut interner);
+        }));
+        assert!(past.is_err(), "the 65,536th distinct list must not wrap");
     }
 
     /// A raw direct insert on `owner`, parameter-dependent on param 0.
@@ -2099,9 +2386,10 @@ mod tests {
         assert_eq!(at_c.len(), 1, "both ops give one Known(false) state");
         let s = &arena.states[at_c[0]];
         assert_eq!(s.t, TempState::Known(false));
-        let ops: Vec<&str> = arena.links[s.links.clone()]
+        let ops: Vec<&str> = arena
+            .links_of(at_c[0])
             .iter()
-            .map(|l| arena.edges[l.edge].operation_id.as_deref().unwrap())
+            .map(|l| arena.edges[l.edge()].operation_id.as_deref().unwrap())
             .collect();
         assert_eq!(ops, vec!["C/op1", "C/op2"]);
         assert_eq!(
@@ -2157,9 +2445,10 @@ mod tests {
         assert_eq!(at_c.len(), 1);
         let s = &arena.states[at_c[0]];
         assert_eq!(s.t, TempState::Known(true));
-        let sites: Vec<&str> = arena.links[s.links.clone()]
+        let sites: Vec<&str> = arena
+            .links_of(at_c[0])
             .iter()
-            .map(|l| arena.edges[l.edge].callsite.as_deref().unwrap())
+            .map(|l| arena.edges[l.edge()].callsite.as_deref().unwrap())
             .collect();
         assert_eq!(sites, vec!["cs1", "cs2"]);
         let entry = &resolved["C"][0];
@@ -2183,8 +2472,8 @@ mod tests {
         assert_eq!(arena.edges.len(), 1, "the crossed edge is stored once");
         let links: Vec<usize> = arena.by_routine["C"]
             .iter()
-            .flat_map(|&s| arena.links[arena.states[s].links.clone()].iter())
-            .map(|l| l.edge)
+            .flat_map(|&s| arena.links_of(s).iter())
+            .map(ArenaLink::edge)
             .collect();
         assert_eq!(links, vec![0, 0]);
         assert_eq!(arena.edges[0].sort_key, g.outgoing["C"][0].sort_key);
@@ -2215,7 +2504,7 @@ mod tests {
             .get(routine)
             .map_or(&[][..], Vec::as_slice)
             .iter()
-            .map(|&s| (arena.states[s].t.clone(), arena.states[s].reqs.clone()))
+            .map(|&s| (arena.states[s].t.clone(), arena.reqs_of(s).to_vec()))
             .collect()
     }
 
@@ -2231,7 +2520,40 @@ mod tests {
             [frame("H", &[], &[("H/op1", vec![(1, true)])])].into();
         let (arena, _) = solve(vec![producer("H")], &g, &by_id, &frames);
         assert!(arena.states[0].seed);
-        assert_eq!(arena.states[0].reqs, vec![(1, true)]);
+        assert_eq!(arena.reqs_of(0), [(1, true)]);
+    }
+
+    /// ENG-104: a REUSED producer's guarded state keeps its requirements through the
+    /// incremental copy, and the arena comparator sees them (it reads `logical_lines`; a
+    /// state's Debug holds only a table index). No other reuse test has a guarded state (they
+    /// solve with no frames). DISCRIMINATION: a copy that drops `reqs` fails this.
+    #[test]
+    fn a_reused_producers_guarded_state_keeps_its_requirements() {
+        let c = caller_passing("C", "cs1", pd_ts_known(true));
+        let h = pd_routine("H");
+        let routines = vec![c.clone(), h.clone()];
+        let by_id: HashMap<&str, &ModelRoutine> = [("C", &c), ("H", &h)].into();
+        let g = graph(vec![("C", edge("direct-call", Some("cs1"), "H"))]);
+        let frames: HashMap<String, FrameGuards> =
+            [frame("H", &[], &[("H/op1", vec![(1, true)])])].into();
+        let digests = crate::engine::l4::capability_cone::pd_input_digests(&g, &routines, &frames);
+        let (old, _) = solve(vec![producer("H")], &g, &by_id, &frames);
+        assert!(
+            (0..old.states.len()).any(|ix| !old.reqs_of(ix).is_empty()),
+            "precondition: the old arena has a guarded state"
+        );
+        let reuse = PdReuse {
+            old: &old,
+            old_digests: &digests,
+            new_digests: &digests,
+        };
+        let (a, r, report) = solve_seeded(vec![producer("H")], &g, &by_id, &frames, Some(&reuse));
+        assert_eq!(
+            report.reused, 1,
+            "precondition: the producer is copied, not re-solved"
+        );
+        let (full, full_r) = solve(vec![producer("H")], &g, &by_id, &frames);
+        assert_eq!(arena_bytes(&a, &r), arena_bytes(&full, &full_r));
     }
 
     /// Guard step: the caller's requirements for the call site (`edge_reqs`)
@@ -2345,11 +2667,11 @@ mod tests {
         for e in &arena.edges {
             s += &format!("E {e:?}\n");
         }
-        for st in &arena.states {
-            s += &format!("S {st:?}\n");
-        }
-        for l in &arena.links {
-            s += &format!("L {l:?}\n");
+        // ENG-104: states and links through `logical_lines`, which resolves every index (a
+        // state's Debug holds table indices, so a wrong requirement list or a link moved to
+        // another state would print the same; Fable, ENG-104 review).
+        for line in arena.logical_lines() {
+            s += &format!("S {line}\n");
         }
         let mut by: Vec<_> = arena.by_routine.iter().collect();
         by.sort();
@@ -2378,21 +2700,26 @@ mod tests {
         }
         // An edge's `from`: the routine of every state whose link crosses it.
         let mut from: Vec<Option<&str>> = vec![None; arena.edges.len()];
-        for st in &arena.states {
-            for l in &arena.links[st.links.clone()] {
-                let f = from[l.edge].get_or_insert(&st.routine);
-                assert_eq!(*f, &*st.routine, "an edge has one `from`");
-                let callee = &arena.states[l.callee_state];
+        for (ix, st) in arena.states.iter().enumerate() {
+            let routine: &str = arena.routine_of(ix);
+            for l in arena.links_of(ix) {
+                let f = from[l.edge()].get_or_insert(routine);
+                assert_eq!(*f, routine, "an edge has one `from`");
                 assert_eq!(
-                    arena.edges[l.edge].to, &*callee.routine,
+                    arena.edges[l.edge()].to,
+                    &**arena.routine_of(l.callee_state()),
                     "link edge → callee"
                 );
-                assert_eq!(callee.producer, st.producer, "a link stays in one producer");
+                assert_eq!(
+                    arena.states[l.callee_state()].producer(),
+                    st.producer(),
+                    "a link stays in one producer"
+                );
             }
-            let links = &arena.links[st.links.clone()];
+            let links = arena.links_of(ix);
             for w in links.windows(2) {
                 assert!(
-                    (w[0].edge, w[0].callee_state) < (w[1].edge, w[1].callee_state),
+                    (w[0].edge(), w[0].callee_state()) < (w[1].edge(), w[1].callee_state()),
                     "links out of rank or duplicated"
                 );
             }
@@ -2405,21 +2732,22 @@ mod tests {
                 "edges out of rank"
             );
         }
-        for w in arena.states.windows(2) {
-            let key = |s: &ConeState| {
-                (
-                    s.producer,
-                    s.dist,
-                    s.routine.clone(),
-                    s.t.clone(),
-                    s.reqs.clone(),
-                )
-            };
-            assert!(key(&w[0]) < key(&w[1]), "states out of rank");
+        let key = |ix: StateIx| {
+            let s = &arena.states[ix];
+            (
+                s.producer(),
+                s.dist(),
+                Arc::clone(arena.routine_of(ix)),
+                s.t.clone(),
+                arena.reqs_of(ix).to_vec(),
+            )
+        };
+        for ix in 1..arena.states.len() {
+            assert!(key(ix - 1) < key(ix), "states out of rank");
         }
         let mut by: HashMap<&str, Vec<StateIx>> = HashMap::new();
-        for (ix, st) in arena.states.iter().enumerate() {
-            by.entry(&st.routine).or_default().push(ix);
+        for ix in 0..arena.states.len() {
+            by.entry(arena.routine_of(ix)).or_default().push(ix);
         }
         assert_eq!(by.len(), arena.by_routine.len());
         for (r, ixs) in &by {
@@ -2440,14 +2768,15 @@ mod tests {
         for es in resolved.values() {
             for e in es {
                 let st = &arena.states[e.state];
-                assert_eq!(e.dist, st.dist);
-                let first = arena.links[st.links.clone()]
+                assert_eq!(e.dist, st.dist());
+                let first = arena
+                    .links_of(e.state)
                     .iter()
-                    .find(|l| arena.states[l.callee_state].dist + 1 == st.dist)
+                    .find(|l| arena.states[l.callee_state()].dist() + 1 == st.dist())
                     .unwrap();
                 assert_eq!(
                     format!("{:?}", e.first_hop),
-                    format!("{:?}", arena.edges[first.edge]),
+                    format!("{:?}", arena.edges[first.edge()]),
                     "first hop"
                 );
             }
@@ -2652,7 +2981,9 @@ mod tests {
             let g = graph_as_given(shuffled(edges.clone(), seed));
             let (arena, resolved) = solve(vec![producer("H")], &g, &by_id, &frames);
             assert_canonical(&arena, &resolved);
-            let routines: Vec<&str> = arena.states.iter().map(|s| &*s.routine).collect();
+            let routines: Vec<&str> = (0..arena.states.len())
+                .map(|ix| &**arena.routine_of(ix))
+                .collect();
             assert_eq!(routines, ["H", "app/X1", "app/X2"], "seed {seed}");
             let (s1, s2) = (&arena.states[1], &arena.states[2]);
             assert_eq!((s1.dist, &s1.t, &s1.reqs), (s2.dist, &s2.t, &s2.reqs));

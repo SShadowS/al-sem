@@ -792,15 +792,16 @@ pub(super) fn derive_pd_base(
     // by address in a routine's out-edge list): the edge's key is the
     // state-independent one `derive_pd_arena` builds per link.
     let mut edge_from: Vec<Option<&Arc<str>>> = vec![None; cone.edges.len()];
-    for s in &cone.states {
-        for l in &cone.links[s.links.clone()] {
-            match edge_from[l.edge] {
-                None => edge_from[l.edge] = Some(&s.routine),
+    for ix in 0..cone.states.len() {
+        let routine = cone.routine_of(ix);
+        for l in cone.links_of(ix) {
+            match edge_from[l.edge()] {
+                None => edge_from[l.edge()] = Some(routine),
                 Some(f) => assert!(
-                    Arc::ptr_eq(f, &s.routine) || **f == *s.routine,
+                    Arc::ptr_eq(f, routine) || **f == **routine,
                     "pd base: cone edge {} is crossed from {f} and from {}",
-                    l.edge,
-                    s.routine
+                    l.edge(),
+                    routine
                 ),
             }
         }
@@ -948,11 +949,7 @@ pub(super) fn view_pd(
             continue;
         }
         seen[w] |= bit;
-        stack.extend(
-            cone.links[cone.states[ix].links.clone()]
-                .iter()
-                .map(|l| l.callee_state),
-        );
+        stack.extend(cone.links_of(ix).iter().map(|l| l.callee_state()));
     }
     let mut kept: Vec<usize> = Vec::new();
     for (w, &word) in seen.iter().enumerate() {
@@ -981,29 +978,32 @@ pub(super) fn view_pd(
     let mut slots: Vec<(String, Vec<usize>)> = Vec::new();
     for (ix, &old) in kept.iter().enumerate() {
         let s = &cone.states[old];
-        let slot = *routine_slot.entry(s.routine.as_ptr()).or_insert_with(|| {
-            slots.push((stable_routine_id(&s.routine, map), Vec::new()));
-            slots.len() - 1
-        });
+        let cone_routine = cone.routine_of(old);
+        let slot = *routine_slot
+            .entry(cone_routine.as_ptr())
+            .or_insert_with(|| {
+                slots.push((stable_routine_id(cone_routine, map), Vec::new()));
+                slots.len() - 1
+            });
         slots[slot].1.push(ix);
         let routine = slots[slot].0.clone();
-        if producer_fact[s.producer] == usize::MAX {
-            producer_fact[s.producer] = producers
-                .row(cone, s.producer, map)
+        if producer_fact[s.producer()] == usize::MAX {
+            producer_fact[s.producer()] = producers
+                .row(cone, s.producer(), map)
                 .expect("a producer is its owner's direct fact");
         }
         let start = out.links.len();
-        for l in &cone.links[s.links.clone()] {
-            match pb.edge_map[l.edge] {
+        for l in cone.links_of(old) {
+            match pb.edge_map[l.edge()] {
                 NO_EDGE => {
                     cones_census::add(&cones_census::PD_EDGE_UNMAPPED, 1);
-                    unmapped_edges.insert(l.edge);
+                    unmapped_edges.insert(l.edge());
                 }
-                e => out.links.push((new_ix(l.callee_state), e as EdgeIx)),
+                e => out.links.push((new_ix(l.callee_state()), e as EdgeIx)),
             }
         }
         out.states.push(StateNode {
-            producer_fact: producer_fact[s.producer],
+            producer_fact: producer_fact[s.producer()],
             temp_state: s.t.to_kind(),
             routine,
             seed: s.seed,

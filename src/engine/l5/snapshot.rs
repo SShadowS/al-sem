@@ -3073,11 +3073,7 @@ fn derive_pd_arena(
                 if std::mem::replace(&mut keep[ix], true) {
                     continue;
                 }
-                stack.extend(
-                    cone.links[cone.states[ix].links.clone()]
-                        .iter()
-                        .map(|l| l.callee_state),
-                );
+                stack.extend(cone.links_of(ix).iter().map(|l| l.callee_state()));
             }
             keep
         }
@@ -3124,20 +3120,20 @@ fn derive_pd_arena(
 
     let mut out = PdArena::default();
     let mut unmapped_edges: std::collections::HashSet<usize> = std::collections::HashSet::new();
-    for (ix, s) in cone.states.iter().enumerate() {
-        if !keep[ix] {
+    for (old_ix, s) in cone.states.iter().enumerate() {
+        if !keep[old_ix] {
             continue;
         }
-        let ix = new_ix[ix];
-        let producer = &cone.producers[s.producer];
-        let routine = stable_routine_id(&s.routine, map);
+        let ix = new_ix[old_ix];
+        let producer = &cone.producers[s.producer()];
+        let routine = stable_routine_id(cone.routine_of(old_ix), map);
         let owner = stable_routine_id(&producer.owner, map);
         let producer_fact = *direct_fact_ix
             .get(&(owner.as_str(), producer.operation_id.as_str()))
             .expect("a producer is its owner's direct fact");
         let start = out.links.len();
-        for l in &cone.links[s.links.clone()] {
-            let edge = &cone.edges[l.edge];
+        for l in cone.links_of(old_ix) {
+            let edge = &cone.edges[l.edge()];
             let to = stable_routine_id(&edge.to, map);
             let event = match edge.kind.as_str() {
                 "event-dispatch" | "table-event" => edge.event_id.as_deref().unwrap_or(""),
@@ -3152,7 +3148,7 @@ fn derive_pd_arena(
                 edge.operation_id.as_deref().unwrap_or(""),
             );
             match edge_ix.get(&key) {
-                Some(&e) => out.links.push((new_ix[l.callee_state], e)),
+                Some(&e) => out.links.push((new_ix[l.callee_state()], e)),
                 None => {
                     // R6-4: a link may miss only a row skipped for want of an
                     // anchor (or an unmodelled kind).
@@ -3168,7 +3164,7 @@ fn derive_pd_arena(
                         "pd arena: cone edge {key:?} has no snapshot edge and was not skipped"
                     );
                     cones_census::add(&cones_census::PD_EDGE_UNMAPPED, 1);
-                    unmapped_edges.insert(l.edge);
+                    unmapped_edges.insert(l.edge());
                 }
             }
         }
@@ -4504,38 +4500,43 @@ mod step6_tree_tests {
         let mut producer_fact = fact("insert", "table", Some("T"));
         producer_fact.subject = "A".to_string();
         producer_fact.witness_operation_id = Some("opA".to_string());
-        let state = |routine: &str, seed: bool, links: std::ops::Range<usize>| ConeState {
+        let state = |routine: &str, seed: bool| ConeState {
             producer: 0,
             routine: std::sync::Arc::from(routine),
             t: TempState::Known(false),
             reqs: Vec::new(),
             seed,
             dist: usize::from(!seed),
-            links,
+            links: 0..0,
         };
-        let cone = ConeArena {
-            producers: vec![Producer {
+        let cone = ConeArena::from_parts(
+            vec![Producer {
                 fact: std::sync::Arc::new(producer_fact.clone()),
                 owner: std::sync::Arc::from("A"),
                 operation_id: "opA".to_string(),
             }],
-            states: vec![state("A", true, 0..0), state("R", false, 0..1)],
-            links: vec![ConeLink {
-                callee_state: 0,
-                edge: 0,
-            }],
-            edges: vec![TypedOutEdge::new(
+            vec![
+                (state("A", true), vec![]),
+                (
+                    state("R", false),
+                    vec![ConeLink {
+                        callee_state: 0,
+                        edge: 0,
+                    }],
+                ),
+            ],
+            vec![TypedOutEdge::new(
                 "A".to_string(),
                 "direct-call".to_string(),
                 Some("csX".to_string()),
                 None,
                 None,
             )],
-            by_routine: [("A", 0), ("R", 1)]
+            [("A", 0), ("R", 1)]
                 .into_iter()
                 .map(|(r, s)| (std::sync::Arc::from(r), vec![s]))
                 .collect(),
-        };
+        );
         let facts = vec![snapshot_fact(FactRef::Direct(&producer_fact), "A#").into()];
         let before = cones_census::PD_EDGE_UNMAPPED.load(Ordering::Relaxed);
         let arena = derive_pd_arena(&inp, &cone, None, &rows, &facts, &skipped);
@@ -4606,25 +4607,27 @@ mod step6_tree_tests {
             derived: Default::default(),
             pd: None,
         };
-        let arena = ConeArena {
-            producers: vec![Producer {
+        let arena = ConeArena::from_parts(
+            vec![Producer {
                 fact: Arc::new(z_direct),
                 owner: Arc::from("Z"),
                 operation_id: "op:z".to_string(),
             }],
-            states: vec![ConeState {
-                producer: 0,
-                routine: Arc::from("Z"),
-                t: TempState::Known(false),
-                reqs: Vec::new(),
-                seed: true,
-                dist: 0,
-                links: 0..0,
-            }],
-            links: vec![],
-            edges: vec![],
-            by_routine: [(Arc::from("Z"), vec![0])].into(),
-        };
+            vec![(
+                ConeState {
+                    producer: 0,
+                    routine: Arc::from("Z"),
+                    t: TempState::Known(false),
+                    reqs: Vec::new(),
+                    seed: true,
+                    dist: 0,
+                    links: 0..0,
+                },
+                vec![],
+            )],
+            vec![],
+            [(Arc::from("Z"), vec![0])].into(),
+        );
         let ids = |xs: &[&str]| -> BTreeSet<String> { xs.iter().map(|x| x.to_string()).collect() };
         let tree = |raw: TreeRaw<'_>| {
             compose_tree(
@@ -4911,25 +4914,27 @@ mod step0_sort_tests {
                 bodyless_dependency: None,
                 source_less_apps: None,
             };
-            let cone = ConeArena {
-                producers: vec![Producer {
+            let cone = ConeArena::from_parts(
+                vec![Producer {
                     fact: Arc::new(fact("insert", "table", Some("T"))),
                     owner: Arc::from(owner),
                     operation_id: op.to_string(),
                 }],
-                states: vec![ConeState {
-                    producer: 0,
-                    routine: Arc::from(owner),
-                    t: TempState::Known(false),
-                    reqs: Vec::new(),
-                    seed: true,
-                    dist: 0,
-                    links: 0..0,
-                }],
-                links: Vec::new(),
-                edges: Vec::new(),
-                by_routine: [(Arc::from(owner), vec![0])].into_iter().collect(),
-            };
+                vec![(
+                    ConeState {
+                        producer: 0,
+                        routine: Arc::from(owner),
+                        t: TempState::Known(false),
+                        reqs: Vec::new(),
+                        seed: true,
+                        dist: 0,
+                        links: 0..0,
+                    },
+                    vec![],
+                )],
+                Vec::new(),
+                [(Arc::from(owner), vec![0])].into_iter().collect(),
+            );
             let arena = derive_pd_arena(&inp, &cone, None, &[], rows, &SkippedEdgeKeys::new());
             arena.states[0].producer_fact
         }

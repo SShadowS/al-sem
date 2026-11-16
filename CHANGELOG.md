@@ -7,7 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added (TLS-86: CPU profiles of `impact --diff`, `prove` and `explain` on CDO; five hot spots filed)
+### Added (TLS-85: gdb and cargo-sweep in the kraken image; how to take a stack snapshot)
+
+- **What changed:** `.kraken/Dockerfile` installs two tools that were only installed live
+  before.
+  - `gdb`: live stack snapshots of a running engine process, where samply cannot attach. Owner
+    request q-20261116T074643-71f6992c. It is installed in its own late apt layer, not on the
+    first apt line. A change to that line rebuilds every later layer, and the unpinned ones
+    (nextest, .NET, Node, pi) would then move version unasked.
+  - `cargo-sweep` 0.8.0 (`cargo install --locked`, a late layer like samply's): what
+    `scripts/sweep-builds` runs. q-20261116T074635-f5e45cec.
+- **CLAUDE.md:**
+  - The kraken section says how to take a snapshot:
+    `gdb -p <pid> -batch -ex 'thread apply all bt'`.
+  - Attaching needs the host's `kernel.yama.ptrace_scope` at 0. Check it with
+    `cat /proc/sys/kernel/yama/ptrace_scope`. server1 was set to 0 host-side on 2026-11-16, and
+    the setting resets on a reboot, as `perf_event_paranoid` does.
+  - The `sweep-builds` line says the image has cargo-sweep.
+- **Checked:**
+  - The snapshot command attached to a live process in this container (`ptrace_scope` 0) and
+    printed every thread's stack.
+  - The image change takes effect at the next tentacle rebuild. It is checked by the Dockerfile
+    diff only; no image was built.
+
+### Added (TLS-84: the tree-sitter CLI in the kraken image)
+
+- **What changed:** `.kraken/Dockerfile` downloads tree-sitter 0.27.0's release binary into
+  `/usr/local/bin`. That is the version tree-sitter-al generates with, and tsal's image pins the
+  same.
+- **Why:** the grammar-upgrade skill checks a grammar shape against real `tree-sitter parse`
+  output, and the image had no CLI, so agents built stand-ins.
+- **When it takes effect:** at the next tentacle rebuild. Until then the live install in
+  `~/.local/bin` (0.27.0) serves. Checked by the Dockerfile diff only; no image was built.
+
+### Added (TLS-86: CPU profiles of `impact --diff`, `prove` and `explain` on CDO; six hot spots filed)
 
 - **The notes:** `docs/superpowers/notes/2026-11-16-tls86-profiles.md`. They hold samply profiles
   (`scripts/profile`, master 9c1c099b, CDO `bc3ccb18`) of three commands: the gate's 699-root
@@ -40,6 +73,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     code. `digest_one_root`'s call-site frame looked like 27 % of string equality under one map
     lookup, but its real callees are `reconstruct_witness_paths` and `compute_ordering`.
 - **Filed:** ENG-116 to ENG-121, one per hot spot of 3 % or more.
+
+### Changed (ENG-104: the producer-solve arena stores compact states, 229.3 MiB less resident memory on CDO)
+
+- **What changed** (`src/engine/l4/pd_solve.rs`; no output change). `ConeArena` keeps
+  `ArenaState` (24 B, was 88: the temp state, a `u32` producer, routine and distance, a `u16`
+  index into a table of the distinct requirement lists, the seed flag) and `ArenaLink` (two
+  `u32`s, 8 B, was 16); each state's link `Range` became one `u32` in `link_off` (state `i`'s links
+  are `links[link_off[i]..link_off[i + 1]]`). The routine names and requirement lists are tables
+  on the arena. The solver keeps `ConeState` as its working state; `finalize`, the serial oracle
+  and the incremental copy store through `ConeArena::push_state`, and readers use
+  `routine_of`, `reqs_of` and `links_of`.
+- **Limits** (in `ArenaState`'s doc): producers, routines, states, links, edges and distance at
+  most `u32::MAX`, distinct requirement lists at most 65,535 (`u16`). CDO uses 2,744 producers,
+  9,433 routines, 3.36 M states, 4.77 M links, distance 51 and 39 lists. Every conversion is
+  checked: a workspace past a limit panics with a message naming the limit and that the field
+  must be widened, never wraps.
+- **Measured** (`tools/census-probe resident`, release, master `9c1c099b` vs this branch, back to
+  back; `tools/census-probe/runs-eng104/`): live after one ask of each kind 4,393.8 → 4,164.5 MiB
+  (−229.3 MiB; peak the same), allocations −104,235. The arena's states 283.78 → 76.89 MiB plus
+  12.82 MiB of offsets, its links 72.76 → 36.38 MiB, the two tables 1.19 MiB. The bar was 180 MiB
+  (survey estimate 216). On CDO (`scripts/cdo-before-after 9c1c099b`, workspace `bc3ccb18` clean
+  on both sides) no finding or fingerprint moved at either scope and the call graph is unchanged
+  (0 unknown); `ConeArena::logical_lines` (`aldump --snapshot-memory --pd-dump`) is
+  byte-identical before and after (3,389,463 lines); `aldump --session-refresh --verify` gives a
+  model equal to a cold build after every change type, in the default and `--low-mem` modes.
+  `scripts/cdo-speed` (`497b0e14` against `f492eea5`) passed twice: the model build x1.030 and
+  x1.007, the round totals x1.099 and x1.005 (the first run started at a host load average of
+  17.1, the second calm), so no speed ratio is claimed; the servers' summed peak memory x0.967
+  and x0.953.
+- **Tests.** `arena_indices_convert_at_their_limit_and_panic_past_it` (each conversion at its
+  maximum, and one past it panics naming the limit) and
+  `push_state_refuses_more_requirement_lists_than_the_index_holds` (65,535 distinct lists store,
+  the 65,536th panics). Discrimination: an `as u16` in `push_state` wraps silently and turns the
+  second red. The `u32` limits are not crossed by a test (4.3 G items); the conversion helper's
+  test is their guard. Review (Fable): the two arena comparators the reuse tests use
+  (`arena_bytes`, `pd_text`) printed states by `Debug`, which now holds table indices; both read
+  `logical_lines` instead. And no reuse test had a guarded state, so a copy that dropped a
+  state's requirements left every test green (before this change too):
+  `a_reused_producers_guarded_state_keeps_its_requirements` reuses the guarded-seed fixture and
+  turns red under that break.
 
 ### Changed (ENG-106: `alsem fingerprint` builds its root blocks on 2 workers, wall x0.55 on CDO, CPU not higher)
 
