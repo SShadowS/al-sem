@@ -750,6 +750,13 @@ class Server:
                 os.kill(k, 9)
             except OSError:
                 pass
+        deadline = time.monotonic() + 5
+        while left and time.monotonic() < deadline:
+            time.sleep(0.1)
+            left = [k for k in left if os.path.exists(f"/proc/{k}")]
+        for k in left:
+            log(f"server {self.name}: child {k} survived SIGKILL: its memory may still be "
+                f"resident (the next build's timing may be skewed)")
         self.err.close()
         shutil.rmtree(self.root, ignore_errors=True)
 
