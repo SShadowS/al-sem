@@ -33,6 +33,10 @@ description: Use when tree-sitter-al main moves or a grammar bump/lowerer change
    the package version; the guard checks only the version part, so a same-version bump
    passes it with a stale commit — update the commit by hand. A longer stamp can push
    `1234….json` across a 0.1 KB boundary in `tests/cli-c-goldens/cache/dry-run.txt`.
+   **A new `RawKind` also shifts the pack's positional kind index:** bump `PACK_SCHEMA` and
+   re-pin the sample pack (`the_sample_pack_encodes_to_pinned_bytes` catches a missed bump;
+   found in GRM-04, tree-sitter-al 5.3.0, 2026-11-16). Verify new shapes with the real
+   `tree-sitter parse`, never a hand-written stand-in printer.
 5. **Measure both sides.** Run the full suite on the OLD grammar and the NEW one and diff
    the per-test outcomes; that is the only way to attribute a moved golden to the grammar
    rather than to whatever else is in your diff. `gen-syntax` makes the revert cheap: check
