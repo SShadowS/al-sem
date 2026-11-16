@@ -91,8 +91,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `POperationSite`, `PLoop`, `PUnreachableStatement`, `ModelRecordOperation`), so a field added
   later does not compile until someone decides whether it holds one of the routine's ids.
 - Pinned by `a_split_routines_argument_bindings_name_its_own_record_variables`: every split shape
-  (one file `#if`/`#else`, two files, both orders), the binding's id names one of its routine's
-  record variables.
+  (one file `#if`/`#else`, two files, both orders), the routine really split (its own id, a split
+  stable id), and the binding's id names one of its routine's record variables. With the rewrite
+  removed it fails (the `Debug`-text assert in `adopt_declaration_ids`).
+- **On CDO nothing moved** (`scripts/cdo-before-after 142db3e2`: findings, fingerprints and the
+  call-graph stats): CDO has no split routine passing a record variable, so the bug never fired
+  there. Reviewed by Fable and sol.
 
 ### Changed (ENG-96: smaller call-site and record-variable rows, 88.5 MiB less resident memory on CDO)
 
