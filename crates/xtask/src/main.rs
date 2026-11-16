@@ -410,7 +410,17 @@ impl Model {
         for (_raw, var) in &self.fields {
             s.push_str(&format!("    {var},\n"));
         }
-        s.push_str("}\n\nimpl FieldName {\n    /// The grammar field-name string (for `child_by_field_name`).\n");
+        s.push_str("}\n\nimpl FieldName {\n");
+        s.push_str(&format!(
+            "    /// Every variant, in declaration order (`ALL[f as usize] == f`): the\n    /// lowerer's field-id table is indexed by it.\n    pub const ALL: [FieldName; {}] = [\n",
+            self.fields.len()
+        ));
+        for (_raw, var) in &self.fields {
+            s.push_str(&format!("        FieldName::{var},\n"));
+        }
+        s.push_str(
+            "    ];\n\n    /// The grammar field-name string (for `child_by_field_name`).\n",
+        );
         s.push_str("    pub fn as_raw(self) -> &'static str {\n        match self {\n");
         for (raw, var) in &self.fields {
             s.push_str(&format!("            FieldName::{var} => {raw:?},\n"));
