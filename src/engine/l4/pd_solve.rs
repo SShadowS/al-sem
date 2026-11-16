@@ -238,11 +238,6 @@ impl ConeArena {
     pub fn links_of(&self, ix: StateIx) -> &[ArenaLink] {
         &self.links[self.link_off[ix] as usize..self.link_off[ix + 1] as usize]
     }
-    /// State `ix`'s links as a range into [`Self::links`].
-    #[must_use]
-    pub fn link_range(&self, ix: StateIx) -> std::ops::Range<usize> {
-        self.link_off[ix] as usize..self.link_off[ix + 1] as usize
-    }
 
     /// An arena from literal parts, every state stored the way [`finalize`] stores it (a
     /// test's fixture; the indices are taken as given).
@@ -1898,7 +1893,8 @@ pub(crate) fn arena_tally(arena: &ConeArena) -> Tally {
     }
     vec_block(&mut t, &arena.states);
     // ENG-104: the shared requirement lists (one allocation each, index 0 the empty list),
-    // the routine table (`Arc`s of names counted below) and the link offsets.
+    // the routine table (the names themselves are counted in `working_tally`) and the link
+    // offsets.
     vec_block(&mut t, &arena.req_lists);
     for r in &arena.req_lists {
         block(&mut t, std::mem::size_of_val::<[Req]>(r));
@@ -2638,11 +2634,11 @@ mod tests {
         for e in &arena.edges {
             s += &format!("E {e:?}\n");
         }
-        for st in &arena.states {
-            s += &format!("S {st:?}\n");
-        }
-        for l in &arena.links {
-            s += &format!("L {l:?}\n");
+        // ENG-104: states and links through `logical_lines`, which resolves every index (a
+        // state's Debug holds table indices, so a wrong requirement list or a link moved to
+        // another state would print the same; Fable, ENG-104 review).
+        for line in arena.logical_lines() {
+            s += &format!("S {line}\n");
         }
         let mut by: Vec<_> = arena.by_routine.iter().collect();
         by.sort();
