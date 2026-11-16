@@ -1210,6 +1210,13 @@ mod proof_key {
 }
 #[cfg(test)]
 use proof_key::PROOF_KEY_HASHES;
+
+#[cfg(test)]
+thread_local! {
+    /// How often [`HopCache::json_id`] read and hashed a hop's JSON text (its
+    /// per-edge cell empty): at most once per distinct edge per cache (ENG-100).
+    static HOP_TEXTS_INTERNED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
 use proof_key::ProofKey;
 
 /// What [`seed_reach`] found from one state.
@@ -1609,6 +1616,8 @@ impl<'i> HopCache<'i> {
         if let Some(&id) = memo.json_id.get() {
             return id;
         }
+        #[cfg(test)]
+        HOP_TEXTS_INTERNED.with(|n| n.set(n.get() + 1));
         let json = memo
             .projected
             .as_ref()
@@ -8803,9 +8812,25 @@ codeunit 50101 "T7b Temp Classes"
             SnapTempState::Known { value: false },
         );
         let idx = build_fingerprint_indexes(&snap);
-        assert!(
-            !std::ptr::eq(&idx.typed_edges[1], &idx.typed_edges[2]),
-            "precondition: two edge objects"
+        let mut hc = HopCache::default();
+        let texts: Vec<String> = [1, 2, 3]
+            .iter()
+            .map(|&e| {
+                let memo = hc.get(&idx.typed_edges[e], &idx);
+                memo.projected
+                    .as_ref()
+                    .expect("projects")
+                    .json()
+                    .to_string()
+            })
+            .collect();
+        assert_eq!(
+            texts[0], texts[1],
+            "precondition: two edges, one projected JSON"
+        );
+        assert_ne!(
+            texts[0], texts[2],
+            "precondition: A → B projects differently"
         );
         let out = enumerate_proofs("Root", &f, &idx, 2, &mut HopCache::default());
         assert_eq!(
@@ -8813,6 +8838,79 @@ codeunit 50101 "T7b Temp Classes"
             vec![(vec![0, 1], 0), (vec![0, 2], 0), (vec![0, 3, 4], 0)]
         );
         assert!(!out.truncated && !out.incomplete);
+    }
+
+    /// ENG-100, the other direction: two proofs of the SAME length whose hops
+    /// project differently are two keys, never one. Hand-stated precondition:
+    /// `Root → A`, then two different call sites `A → H` (`cs-a1`, `cs-a2`), so
+    /// `Root → A → H` exists twice with different projected JSON, and `Root → A → B
+    /// → H` is longer. The cap cuts at the next LEVEL, so with cap 2 the two distinct
+    /// keys spend it and the longer proof is cut (`truncated`); merged into one key
+    /// they would leave room for it.
+    ///
+    /// DISCRIMINATION (2026-11-16): `json_id` returning one id for every text ->
+    /// the longer proof is returned too, not truncated.
+    #[test]
+    fn distinct_hops_of_equal_length_stay_two_keys() {
+        let mut snap = empty_snapshot();
+        snap.capability_facts = vec![insert_fact(
+            "H",
+            "direct",
+            Some("op0"),
+            None,
+            SnapTempState::ParameterDependent { parameter_index: 0 },
+        )];
+        // 0: Root → A, 1: A → H (cs-a1), 2: A → H (cs-a2), 3: A → B, 4: B → H.
+        *std::sync::Arc::make_mut(&mut snap.typed_edges) = vec![
+            call_edge("Root", "A", "cs-root"),
+            call_edge("A", "H", "cs-a1"),
+            call_edge("A", "H", "cs-a2"),
+            call_edge("A", "B", "cs-a3"),
+            call_edge("B", "H", "cs-b"),
+        ];
+        let arena = &mut snap.pd_solution;
+        let real = TempStateKind::Known(false);
+        arena.states = vec![
+            state("H", TempStateKind::ParameterDependent(0), true, 0..0),
+            state("B", real.clone(), false, 0..1),
+            state("A", real.clone(), false, 1..4),
+            state("Root", real, false, 4..5),
+        ];
+        // Each link is (callee state, edge).
+        arena.links = vec![(0, 4), (0, 1), (0, 2), (1, 3), (2, 0)];
+        for (r, ix) in [("H", 0), ("B", 1), ("A", 2), ("Root", 3)] {
+            arena.by_routine.insert(r.to_string(), vec![ix]);
+        }
+        let f = insert_fact(
+            "Root",
+            "inherited",
+            None,
+            Some("cs-root"),
+            SnapTempState::Known { value: false },
+        );
+        let idx = build_fingerprint_indexes(&snap);
+        let mut hc = HopCache::default();
+        let texts: Vec<String> = [1, 2]
+            .iter()
+            .map(|&e| {
+                let memo = hc.get(&idx.typed_edges[e], &idx);
+                memo.projected
+                    .as_ref()
+                    .expect("projects")
+                    .json()
+                    .to_string()
+            })
+            .collect();
+        assert_ne!(
+            texts[0], texts[1],
+            "precondition: the two hops project differently"
+        );
+        let out = enumerate_proofs("Root", &f, &idx, 2, &mut HopCache::default());
+        // The two distinct keys at length 2 reach the cap of 2, so the longer proof
+        // (length 3) is cut and the outcome is truncated; one merged key would leave
+        // room for it.
+        assert_eq!(out.paths, vec![(vec![0, 1], 0), (vec![0, 2], 0)]);
+        assert!(out.truncated, "the longer proof is cut by the cap");
     }
 
     /// Only DISTINCT proofs count toward the cap (#69 D3: dedup before the
@@ -10915,7 +11013,8 @@ codeunit 50102 "W10 Merge"
     /// not enumeration work in general (an extra-pop regression shows only as
     /// `popped`, and only here). It counts only `ProofKey`'s `Hash`; the
     /// `proof_key` module keeps the key's fields private, so the walk cannot
-    /// key `found` on the raw `Vec<String>`. Still uncounted: comparing keys
+    /// key `found` on the raw `Vec<u32>` (ENG-100: each hop's JSON as an id; the
+    /// texts are read once per edge, `HOP_TEXTS_INTERNED`). Still uncounted: comparing keys
     /// with `==` per pop (a linear scan), or keying `found` on another value
     /// built per pop (the edge list, a string made from the hops).
     #[test]
@@ -11006,8 +11105,16 @@ codeunit 50102 "W10 Merge"
         );
         let idx = build_fingerprint_indexes(&snap);
         let before = PROOF_KEY_HASHES.with(|n| n.get());
+        let texts_before = HOP_TEXTS_INTERNED.with(|n| n.get());
         let out = enumerate_proofs("R#", &f, &idx, HARD_PATH_CAP, &mut HopCache::default());
         let hashes = PROOF_KEY_HASHES.with(|n| n.get()) - before;
+        let texts = HOP_TEXTS_INTERNED.with(|n| n.get()) - texts_before;
+        // ENG-100: a key holds ids, and each hop's text is read once per edge. A
+        // crossing key is the path BEFORE the crossing edge (`key_of(.., ni, ..)`),
+        // so both crossing keys are `[e_root]` (with different boundaries): 1 text
+        // read, not 2 (review, sol). DISCRIMINATION (2026-11-16): `json_id` without
+        // its per-edge cell (the text looked up on every call) -> 2.
+        assert_eq!(texts, 1, "hop texts read");
         assert_eq!(out.paths, vec![(vec![e_root, e_a, e_h1], 0)]);
         assert!(!out.truncated && !out.incomplete, "{:?}", out.diagnostics);
         // R and P, then one state search per crossing (#369): DepA and H1
