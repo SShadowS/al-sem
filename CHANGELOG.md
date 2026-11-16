@@ -26,8 +26,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - memcmp is 11.3 % of impact's CPU and 7-8 % of prove's and explain's. Its top callers in
     impact are `ordering_inter::reconstruct_call_chains` and `compute_ordering`.
   - SipHash is 10.3 % of impact and 5.0 % of prove. `walk_multi` is 21.5 % of impact inclusive.
-  - Tree-cursor stepping is 6.5 % of prove; the scans beside the lowering walk are about 1.7 % of
-    that.
+  - Tree-cursor stepping is 6.5 % of prove. The scans beside the lowering walk are about 1.7
+    points of the 3.7 % sibling-step share.
   - Allocator page set-up and zeroing is 6.8 % of prove, and memcpy 3.3 %.
   - A caution for reading samply: inline labels on a non-leaf frame can name the neighbouring
     code. `digest_one_root`'s call-site frame looked like 27 % of string equality under one map
