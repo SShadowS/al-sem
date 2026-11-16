@@ -595,6 +595,77 @@ fn cdo_slot_is_truthful_under_races_and_bad_records() {
     assert_eq!(s.run("A", &["release"], &[]).0, Some(0));
 }
 
+/// ⟨TLS-88⟩ The queue's two other rules, each with the slot free and a waiter
+/// held still:
+/// - An acquire without --wait refuses while a waiter that can run waits. The
+///   waiter polls every 30 s, so after A's release it is still asleep.
+/// - A waiter short of memory (its floor 999999 GB) marks its ticket and steps
+///   aside: a no-wait acquire with no floor takes the slot past it.
+///
+/// Mutations: `ahead` counting nothing when we hold no ticket -> the no-wait
+/// acquire takes the slot (red); `ahead` counting `mem` tickets -> the acquire
+/// past the memory-blocked waiter is refused (red).
+#[test]
+fn cdo_slot_queue_refuses_jumps_and_steps_aside_for_memory() {
+    let s = Slot::new();
+    let waiter = |session: &str, poll: &str, mem: &str| {
+        std::process::Command::new("bash")
+            .args([SLOT, "acquire", "w", "queue", "--wait"])
+            .env("CDO_SLOT_DIR", s.dir())
+            .env("CDO_SLOT_MEM_MIN_GB", mem)
+            .env("CDO_SLOT_POLL_S", poll)
+            .env("CLAUDE_CODE_SESSION_ID", session)
+            .env_remove("CLAUDE_PID")
+            .env_remove("CDO_SLOT_TOKEN")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap()
+    };
+    let ticket_text = || {
+        std::fs::read_dir(s.dir().join("queue"))
+            .ok()
+            .and_then(|mut d| d.next())
+            .and_then(|e| std::fs::read_to_string(e.ok()?.path()).ok())
+    };
+    let until = |what: &str, ok: &dyn Fn() -> bool| {
+        let start = std::time::Instant::now();
+        while !ok() {
+            assert!(start.elapsed().as_secs() < 20, "never: {what}");
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+    };
+
+    // A waiter that can run: a no-wait acquire may not jump it.
+    let (code, text) = s.run("A", &["acquire", "a", "hold"], &[]);
+    assert_eq!(code, Some(0), "{text}");
+    let mut w = waiter("B", "30", "0");
+    until("W queued", &|| ticket_text().is_some());
+    // W has seen the slot held and sleeps its 30 s poll.
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    assert_eq!(s.run("A", &["release"], &[]).0, Some(0));
+    let (code, text) = s.run("D", &["acquire", "d", "jump"], &[]);
+    assert_eq!(code, Some(1), "a no-wait acquire jumped a waiter: {text}");
+    assert!(text.contains("came first"), "{text}");
+    w.kill().unwrap();
+    w.wait().unwrap();
+
+    // A waiter short of memory steps aside.
+    let mut m = waiter("C", "1", "999999");
+    until("M marked mem", &|| {
+        ticket_text().is_some_and(|t| t.trim_end().ends_with(" mem"))
+    });
+    let (code, text) = s.run("D", &["acquire", "d", "past"], &[]);
+    assert_eq!(
+        code,
+        Some(0),
+        "a memory-blocked waiter held up the slot: {text}"
+    );
+    assert_eq!(s.run("D", &["release"], &[]).0, Some(0));
+    m.kill().unwrap();
+    m.wait().unwrap();
+}
+
 /// ⟨TLS-88⟩ Waiters are served in arrival order. While A holds the slot, W1 then
 /// W2 wait. When A releases, A's own immediate acquire goes behind them and
 /// times out. W1 takes the slot and W2 keeps waiting. W2 is then killed outright

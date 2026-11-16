@@ -9,13 +9,15 @@
 # from every OTHER session until it is released.
 #
 #   acquire <owner> <reason> [--wait] [--timeout S] [--bind PID]
-#       Take the slot. Free means: nobody holds the lock AND MemAvailable >=
-#       35 GB (CDO_SLOT_MEM_MIN_GB). Without --wait it refuses at once (exit 1,
+#       Take the slot. It is taken when nobody holds the lock, MemAvailable >=
+#       35 GB (CDO_SLOT_MEM_MIN_GB), and no earlier waiter that can run now is
+#       waiting (see the queue below). Without --wait it refuses at once (exit 1,
 #       naming the holder); with --wait it polls every 15 s, prints the holder
 #       about every 60 s, and gives up after --timeout seconds (default: never)
 #       or when the bound process ends. Waiters are served in arrival order
 #       (TLS-88): a free slot goes to the oldest waiter still alive, and an
-#       acquire without --wait refuses while anyone waits.
+#       acquire without --wait refuses while anyone waits. A waiter short of
+#       memory steps aside until it has it, keeping its place.
 #       --bind PID: the hold ends with that process, even when it is killed
 #       outright (scripts bind their own PID; `run` binds itself). Outside a
 #       Claude session an acquire must be bound (or come from `run`).
@@ -169,27 +171,47 @@ describe() {
 # goes to the oldest live ticket, so a holder that releases and acquires again
 # goes behind an earlier waiter (before: whoever polled first won). A ticket is
 # `$queue/<ns since epoch>.<pid>`, holding "<pid> <start time>"; one of a dead
-# process (or a reused PID) is dropped by whoever reads the queue.
+# process (or a reused PID) is dropped by whoever reads the queue. A waiter that
+# cannot run now (MemAvailable below its floor) marks its ticket `mem` and steps
+# aside, so it does not hold up a waiter that can run (land acquires with no
+# floor); it clears the mark when memory is back and keeps its place.
 queue="$dir/queue"
-ticket=""
+ticket="" ticket_mark=""
+# write_ticket <mark>: (re)write our ticket whole (write, then rename: a reader
+# never sees it half written).
+write_ticket() {
+    local tmp="$dir/ticket.$$"
+    printf '%s %s %s\n' "$$" "$(proc_start $$)" "$1" >"$tmp" && mv -f "$tmp" "$ticket"
+    ticket_mark=$1
+}
 enqueue() {
     mkdir -p "$queue"
     ticket="$queue/$(printf '%020d' "$(date +%s%N)").$$"
-    printf '%s %s\n' "$$" "$(proc_start $$)" >"$ticket"
+    write_ticket ""
+}
+# mark <"" | mem>: set our ticket's mark, writing it only when it changes.
+mark() {
+    [[ -n "$ticket" ]] || return 0
+    [[ -e "$ticket" && "$1" == "$ticket_mark" ]] && return 0
+    write_ticket "$1"
 }
 dequeue() {
     [[ -n "$ticket" ]] && rm -f "$ticket"
     ticket=""
 }
-# ahead: the live tickets older than ours (every live one when we hold none),
-# as "<count> <oldest pid>"; drops dead tickets on the way.
+# ahead: the live, unmarked tickets older than ours (every one when we hold
+# none), as "<count> <oldest pid>"; drops dead tickets on the way.
 ahead() {
-    local t n=0 first="" pid start
+    local t n=0 first="" pid start flag
     for t in "$queue"/*; do
         [[ -e "$t" ]] || continue
         [[ "$t" == "$ticket" ]] && break
-        read -r pid start <"$t" 2>/dev/null || { rm -f "$t"; continue; }
-        if alive "$pid" "$start"; then
+        read -r pid start flag <"$t" 2>/dev/null || continue
+        if [[ -z "$pid" ]]; then
+            continue
+        elif ! alive "$pid" "$start"; then
+            rm -f "$t"
+        elif [[ "$flag" != mem ]]; then
             ((n += 1))
             [[ -z "$first" ]] && first=$pid
         else
@@ -290,6 +312,11 @@ acquire() { # acquire <owner> <reason> <wait 0|1> <timeout or "">
         trap dequeue EXIT
     fi
     while :; do
+        if [[ -n "$ticket" ]]; then
+            # A ticket removed under us (by hand) is made again, at the back.
+            [[ -e "$ticket" ]] || enqueue
+            if mem_ok; then mark ""; else mark mem; fi
+        fi
         state
         case "$st" in
             mine)

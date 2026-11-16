@@ -15,21 +15,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   after a release won.
 - **Now** (`scripts/cdo-slot`):
   - A waiting acquire (`run`, `acquire --wait`) registers a ticket,
-    `$CDO_SLOT_DIR/queue/<ns>.<pid>`, holding its PID and process start time.
+    `$CDO_SLOT_DIR/queue/<ns>.<pid>`, holding its PID and process start time. The ticket is
+    written to a temporary file and renamed into place, so a reader never sees it half written.
   - A free slot goes only to the oldest live ticket. Tickets of dead processes, or of a reused
     PID, are dropped by whoever reads the queue.
+  - A waiter short of memory (MemAvailable below its `CDO_SLOT_MEM_MIN_GB`) marks its ticket
+    `mem` and steps aside until it has the memory, keeping its place. Otherwise a lane run
+    waiting for 35 GB would hold up `land`, which acquires with no floor.
   - So a holder that releases and asks again goes behind earlier waiters.
   - An acquire without `--wait` refuses while anyone waits.
   - A waiter removes its ticket when it takes the slot, gives up or exits; a `SIGKILL`ed waiter's
     ticket is dropped as dead.
   - A shared hold (the same token, or the same session's hand hold) is still "already yours" at
     once.
-- **Not done:** the task's optional priority for `land`/`cdo-gate` over lane runs. Arrival order
-  already stops a lane re-taking the slot ahead of a waiting landing.
-- **Test:** `cdo_slot_serves_waiters_in_arrival_order`. While A holds, W1 then W2 wait. A
-  releases and asks again: it times out behind them. W1 takes the slot, W2 keeps waiting. W2 is
-  then killed outright, and its dead ticket does not block the next acquire. CLAUDE.md's
-  `cdo-slot` line says so.
+- **Not done:**
+  - The task's optional priority for `land`/`cdo-gate` over lane runs. Arrival order stops a lane
+    re-taking the slot after its release ahead of a waiting landing. A lane run that started
+    waiting before the landing still goes first.
+  - `status` still prints `free` while waiters queue. So the guard hook lets another session's
+    build start in the up-to-15 s gap before the head waiter polls, as before this change.
+- **Tests and breaks:**
+  - `cdo_slot_serves_waiters_in_arrival_order`. While A holds, W1 then W2 wait. A releases and
+    asks again: it times out behind them. W1 takes the slot, W2 keeps waiting. W2 is then killed
+    outright, and its dead ticket does not block the next acquire. Breaks: the queue check
+    dropped -> A re-takes the slot (red); dead tickets kept -> the slot is blocked (red).
+  - `cdo_slot_queue_refuses_jumps_and_steps_aside_for_memory`, with the slot free and a waiter
+    held still. A no-wait acquire is refused past a live waiter, which polls every 30 s. A no-wait
+    acquire takes the slot past a waiter whose memory floor is not met.
+  - CLAUDE.md's `cdo-slot` line says so.
 
 ### Added (TLS-85: gdb and cargo-sweep in the kraken image; how to take a stack snapshot)
 
