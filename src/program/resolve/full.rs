@@ -2250,10 +2250,14 @@ pub(crate) fn resolve_file_obligations(
             .collect();
 
         // The object-level part of each routine's `shadows` below (its globals, and an
-        // extension's base `protected var`s), built once per object (ENG-84).
-        let base_object = obj_node_opt.and_then(|o| {
-            crate::program::resolve::receiver::extension_base_object(o, graph, index).flatten()
-        });
+        // extension's base `protected var`s), built once per object (ENG-84). Looked up only
+        // when the object has a routine, as before: on a dependency file the lookup is a
+        // recorded read, and a routine-less extension made none (Fable, ENG-84).
+        let base_object = obj_node_opt
+            .filter(|_| !obj.routines.is_empty())
+            .and_then(|o| {
+                crate::program::resolve::receiver::extension_base_object(o, graph, index).flatten()
+            });
         let object_shadows: crate::fxhash::FxHashSet<String> = obj
             .globals
             .iter()
@@ -5218,6 +5222,79 @@ page 50003 Plain
             calls("caller"),
             Vec::<String>::new(),
             "the page global IsOn shadows the table procedure"
+        );
+    }
+
+    /// The other half of the object-level shadow set: a page extension sees its base page's
+    /// `protected var IsOn` as its own, so a bare parens-less `IsOn` there is that variable,
+    /// not the source table's `IsOn()` (Fable, ENG-84; the extension of a page without the
+    /// variable still calls it).
+    #[test]
+    fn base_protected_var_shadows_a_parenless_call_in_an_extension() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_minimal_workspace(dir.path());
+        std::fs::write(
+            dir.path().join("P.al"),
+            "table 50001 R
+{
+    fields
+    {
+        field(1; Code; Code[20]) { }
+    }
+    procedure IsOn(): Boolean
+    begin
+        exit(true);
+    end;
+}
+page 50002 Base
+{
+    SourceTable = R;
+    protected var
+        IsOn: Boolean;
+}
+page 50003 Plain
+{
+    SourceTable = R;
+}
+pageextension 50010 BaseExt extends Base
+{
+    procedure Caller()
+    begin
+        if IsOn then;
+    end;
+}
+pageextension 50011 PlainExt extends Plain
+{
+    procedure Other()
+    begin
+        if IsOn then;
+    end;
+}
+",
+        )
+        .expect("write P.al");
+
+        let report = resolve_full_program(dir.path()).expect("resolve_full_program");
+        let calls = |caller: &str| -> Vec<String> {
+            let mut v: Vec<String> = report
+                .edges
+                .iter()
+                .filter(|ce| ce.edge.from.name_lc == caller && ce.edge.kind == EdgeKind::Call)
+                .flat_map(|ce| ce.edge.routes.iter().map(|r| format!("{:?}", r.target)))
+                .collect();
+            v.sort();
+            v
+        };
+        assert_eq!(
+            calls("other").len(),
+            1,
+            "without the protected var, the bare IsOn calls the table's procedure: {:?}",
+            calls("other")
+        );
+        assert_eq!(
+            calls("caller"),
+            Vec::<String>::new(),
+            "the base page's protected var IsOn shadows the table procedure"
         );
     }
 

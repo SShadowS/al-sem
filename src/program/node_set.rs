@@ -166,6 +166,10 @@ impl<T: SortKey> NodeSet<T> {
         T::Key: std::hash::Hash,
     {
         use std::hash::BuildHasher;
+        if self.len() >= AMBIGUOUS as usize {
+            // Positions would not fit the index (sol, ENG-84); far beyond any real graph.
+            return self.binary_search_by(|e| e.sort_key().cmp(key)).ok();
+        }
         let hash = |k: &T::Key| crate::fxhash::FxBuildHasher::default().hash_one(k);
         let index = self.index.get_or_init(|| {
             let mut index =
@@ -535,7 +539,8 @@ mod tests {
 
     /// ENG-84: `find` returns exactly `binary_search_by(..).ok()` — on ties (several elements
     /// share a key: the binary search's pick, not the first), on keys absent from the set,
-    /// and on hash collisions (`Tens` hashes only the tens digit, so 11 and 12 collide).
+    /// and on hash collisions (`Tens` hashes only the tens digit: the probe key 12 collides
+    /// with the held 11, and the held 31 and 33 collide with each other).
     #[test]
     fn find_matches_binary_search() {
         let shapes: Vec<(Vec<N>, Vec<N>)> = vec![
@@ -607,5 +612,24 @@ mod tests {
         assert_eq!(set.find(&1), None);
         set.clear();
         assert_eq!(set.find(&2), None);
+    }
+
+    /// ENG-84 (Fable): a key changed in place through `IndexMut` or `iter_mut`, keeping the set
+    /// sorted so no `sort_by` (and no `reindex`) follows, is found under its new key and not
+    /// under its old one: those two drop the index themselves.
+    #[test]
+    fn find_sees_in_place_key_changes() {
+        let mut set = NodeSet::layered(Arc::new(vec![N(4, "s")]), vec![N(1, "o"), N(7, "o")]);
+        assert_eq!(set.find(&1), Some(0));
+        set[0].0 = 0; // own element, order stays sorted
+        assert_eq!(set.find(&0), Some(0));
+        assert_eq!(set.find(&1), None);
+        assert_eq!(set.find(&4), Some(1));
+        for n in set.iter_mut() {
+            n.0 += 10; // every key moves, order kept
+        }
+        assert_eq!(set.find(&14), Some(1));
+        assert_eq!(set.find(&4), None);
+        assert_eq!(set.find(&17), Some(2));
     }
 }

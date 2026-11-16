@@ -127,9 +127,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     object's globals, an extension base's `protected var`s) once per object, not once per routine.
   - The extractor's name sets (`resolve::extract`) and those shadow sets use `FxHashSet`; they are
     only looked up or merged, never iterated into output.
-- **A guard that had no test.** A page global shadowing a same-named source-table procedure in a
-  parens-less read (`object_global_shadows_a_parenless_call`): removing the object-level shadow
-  check left the resolver tests and the ENG-26 suite green; the new test fails then.
+- **Guards that had no test.** A page global shadowing a same-named source-table procedure in a
+  parens-less read (`object_global_shadows_a_parenless_call`), and a base page's `protected var`
+  doing the same in a page extension (`base_protected_var_shadows_a_parenless_call_in_an_extension`):
+  removing the object-level shadow check left the resolver tests and the ENG-26 suite green.
+  `find_sees_in_place_key_changes` pins the index reset in `IndexMut` and `iter_mut`.
+- **Reviews.** Fable and sol found no change in output. Fixed from them: the base-object lookup
+  runs only for an object with routines, as before (on a dependency file it is a recorded read,
+  and a routine-less extension made none; not pinned by a test, since more reads only cause a safe
+  re-resolution); `find` takes the binary search for a set of 4 G elements or more (positions are
+  `u32`); stale "binary search" comments.
 - **Same answers.** The task gate, `scripts/cdo-before-after e708f1f6` (fingerprint, analyze at both
   scopes, the call-graph stats: nothing moved), and `aldump --session-refresh --verify` on a CDO
   copy in both memory modes (all 12 steps equal to a cold build each; but on CDO the `body` step

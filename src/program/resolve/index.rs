@@ -1400,10 +1400,9 @@ impl ResolveIndex {
             .filter(move |ext_id| closure.contains(&ext_id.app))
     }
 
-    /// Look up an `ObjectNode` by id via binary search — `graph.objects` is
-    /// sorted by `ObjectNodeId` at construction (`build_program_graph` Step 4
-    /// / every in-memory test fixture), mirroring `object_extends`'s
-    /// identical `graph.objects.binary_search_by` lookup pattern.
+    /// Look up an `ObjectNode` by id (`NodeSet::find`, ENG-84: the element a binary
+    /// search finds; `graph.objects` is sorted by `ObjectNodeId` at construction,
+    /// `build_program_graph` Step 4 / every in-memory test fixture).
     fn find_object<'g>(graph: &'g ProgramGraph, id: &ObjectNodeId) -> Option<&'g ObjectNode> {
         graph.objects.find(id).map(|i| &graph.objects[i])
     }
@@ -1450,9 +1449,8 @@ impl ResolveIndex {
             return false;
         }
         // `graph.objects` is sorted by `ObjectNodeId` at construction
-        // (`build_program_graph` Step 4 / every in-memory test fixture) —
-        // binary-searchable, mirroring `lookup_routine_access`'s identical
-        // `graph.routines.binary_search_by` lookup pattern (resolver.rs).
+        // (`build_program_graph` Step 4 / every in-memory test fixture);
+        // `NodeSet::find` returns what a binary search over it finds (ENG-84).
         let Some(from_obj) = graph.objects.find(from).map(|i| &graph.objects[i]) else {
             return false;
         };

@@ -111,13 +111,13 @@ fn rid_of(r: &RoutineNode) -> &RoutineNodeId {
 
 /// The graph reads of call-site resolution. See the module doc.
 pub trait GraphReads {
-    /// The object with this id (binary search; [`ProgramGraph::object`]).
+    /// The object with this id ([`ProgramGraph::object`]; the binary search's answer).
     fn object(&self, id: &ObjectNodeId) -> Option<&ObjectNode>;
     /// The FIRST object with this id in the merged order (what a scan from
     /// the front finds).
     fn object_first(&self, id: &ObjectNodeId) -> Option<&ObjectNode>;
-    /// A routine with this id (binary search over the merged order: the same
-    /// element the old flat `Vec`'s search landed on).
+    /// A routine with this id (`NodeSet::find`, ENG-84: the element a binary search over
+    /// the merged order lands on, the same one the old flat `Vec`'s search found).
     fn routine(&self, rid: &RoutineNodeId) -> Option<&RoutineNode>;
     /// Every routine with exactly this id, in merged order.
     fn routines_with_id(&self, rid: &RoutineNodeId) -> NodeSetIter<'_, RoutineNode>;

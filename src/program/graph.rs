@@ -103,7 +103,8 @@ pub struct AbiIngestError {
 }
 
 impl ProgramGraph {
-    /// The object node with this id (binary search: `objects` is sorted by id).
+    /// The object node with this id ([`NodeSet::find`]: what a binary search over the
+    /// id-sorted `objects` finds).
     pub fn object(&self, id: &ObjectNodeId) -> Option<&ObjectNode> {
         self.objects.find(id).map(|i| &self.objects[i])
     }
