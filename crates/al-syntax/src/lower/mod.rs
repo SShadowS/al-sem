@@ -248,7 +248,6 @@ fn is_preproc_wrapper(n: RawNode) -> bool {
 /// unregistering the whole construct). Every one of those sites now goes through here.
 fn structural_children(node: RawNode) -> Vec<RawNode> {
     node.named_children()
-        .into_iter()
         .filter(|c| crate::schema::class_of(c.kind()) != crate::schema::Class::Trivia)
         .collect()
 }
@@ -260,7 +259,6 @@ fn structural_children(node: RawNode) -> Vec<RawNode> {
 fn split_declaration_kind(node: RawNode) -> ObjectKind {
     use ObjectKind as O;
     node.named_children()
-        .into_iter()
         .find_map(|c| {
             Some(match c.kind() {
                 RawKind::CodeunitKeyword => O::Codeunit,
@@ -2001,7 +1999,6 @@ fn collect_protected_names(node: RawNode, source: &str, out: &mut Vec<String>) {
 fn record_var_wrapper(node: RawNode) {
     let directives: Vec<RawNode> = node
         .named_children()
-        .into_iter()
         .filter(|c| {
             matches!(
                 c.kind(),
@@ -2181,7 +2178,6 @@ fn header_levels(node: RawNode<'_>) -> Vec<RawNode<'_>> {
         while i < out.len() {
             let nested: Vec<_> = out[i]
                 .named_children()
-                .into_iter()
                 .filter(|c| is_nested_header_group(c.kind()))
                 .collect();
             out.extend(nested);
@@ -2681,7 +2677,6 @@ fn attribute_arg_selection<'t>(
     };
     args_node
         .named_children()
-        .into_iter()
         .filter(|l| l.kind() == RawKind::AttributeArgumentList)
         .map(|list| {
             let mut out = AttributeArgList {
@@ -2942,7 +2937,6 @@ fn lower_routine<'t>(
     // The nodes of a return clause chosen per `#if` arm: the read arm's content.
     let conditional_return: Vec<RawNode> = node
         .named_children()
-        .into_iter()
         .find(|c| {
             matches!(
                 c.kind(),
@@ -2964,7 +2958,7 @@ fn lower_routine<'t>(
         .unwrap_or_default();
     // ENG-80 (sol review): the signature read is one arm's; another build may give a
     // parameter or the named return another type, or none.
-    let signature_varies = node.named_children().into_iter().any(|c| {
+    let signature_varies = node.named_children().any(|c| {
         matches!(
             c.kind(),
             RawKind::PreprocConditionalReturn | RawKind::PreprocConditionalReturnType
@@ -2986,7 +2980,6 @@ fn lower_routine<'t>(
     let return_type = arm_field(FieldName::ReturnType)
         .or_else(|| {
             node.named_children()
-                .into_iter()
                 .find(|c| c.kind() == RawKind::InterfaceProcedureSuffix)
                 .and_then(|suffix| suffix.field(FieldName::ReturnType))
         })
@@ -3046,7 +3039,7 @@ fn lower_routine<'t>(
     // ENG-80 (spec §4.2 C): a split body's arms declare `var` sections that never
     // reach `locals`; a nested `var` `#if` is not read either.
     let locals_incomplete = VARS_INCOMPLETE.with(|f| f.replace(false))
-        || node.named_children().into_iter().any(|c| {
+        || node.named_children().any(|c| {
             matches!(
                 c.kind(),
                 RawKind::PreprocSplitProcedureBody | RawKind::PreprocSplitCompleteBody
@@ -3069,7 +3062,6 @@ fn lower_routine<'t>(
             // `node.field(Body)` above is unconditionally `None` for both. Recover directly
             // from the wrapper child instead.
             node.named_children()
-                .into_iter()
                 .find(|c| {
                     matches!(
                         c.kind(),
@@ -3461,7 +3453,7 @@ fn label_value(decl: RawNode, ty: Option<&str>, source: &str) -> Option<crate::i
 /// at any depth ([`label_value`]).
 fn has_grouped_locked(decl: RawNode, source: &str) -> bool {
     fn walk(n: RawNode, source: &str) -> bool {
-        n.named_children().into_iter().any(|c| match c.kind() {
+        n.named_children().any(|c| match c.kind() {
             RawKind::LabelAttribute => c
                 .field(FieldName::Name)
                 .is_some_and(|m| m.text(source).trim().eq_ignore_ascii_case("locked")),
@@ -3470,7 +3462,6 @@ fn has_grouped_locked(decl: RawNode, source: &str) -> bool {
         })
     }
     decl.named_children()
-        .into_iter()
         .filter(|c| c.kind() == RawKind::PreprocConditionalLabelAttributes)
         .any(|g| walk(g, source))
 }
@@ -3481,11 +3472,9 @@ fn has_grouped_locked(decl: RawNode, source: &str) -> bool {
 fn text_const_value(decl: RawNode, source: &str) -> Option<crate::ir::LabelValue> {
     let list = decl
         .named_children()
-        .into_iter()
         .find(|c| c.kind() == RawKind::MlValueList)?;
     let pairs: Vec<(String, String, Option<String>)> = list
         .named_children()
-        .into_iter()
         .filter(|p| p.kind() == RawKind::MlValuePair)
         .map(|p| {
             let lang = p
@@ -3583,7 +3572,7 @@ fn lower_code_block(
         Some(body) => lower_statement_list(body.named_children(), ir, issues, source, depth),
         None => Vec::new(),
     };
-    if let Some(split_end) = cb.named_children().into_iter().find(|c| {
+    if let Some(split_end) = cb.named_children().find(|c| {
         matches!(
             c.kind(),
             RawKind::PreprocSplitCodeBlockEnd
@@ -4306,11 +4295,10 @@ fn lower_case_body(
             ) || (c.kind() == RawKind::CaseBranch && {
                 let body = c.field(FieldName::Body).map(|b| b.id());
                 c.named_children()
-                    .into_iter()
                     .any(|k| Some(k.id()) != body && holds_preproc(k))
             })
         };
-        if let Some(group) = body.named_children().into_iter().find(varies) {
+        if let Some(group) = body.named_children().find(varies) {
             push_untrusted_case_branch(&origin_of(group), ir, &mut branches);
         }
     }
@@ -4320,7 +4308,6 @@ fn lower_case_body(
     let body_id = case_node.field(FieldName::Body).map(|b| b.id());
     if let Some(header) = case_node
         .named_children()
-        .into_iter()
         .find(|c| Some(c.id()) != body_id && holds_preproc(*c))
     {
         push_untrusted_case_branch(&origin_of(header), ir, &mut branches);
@@ -4589,7 +4576,6 @@ fn push_case_branch(
 ) {
     let effective = case_branch_node
         .named_children()
-        .into_iter()
         .find(|c| c.kind() == RawKind::PreprocSplitCaseBranch)
         .unwrap_or(case_branch_node);
     let patterns = case_patterns(effective, ir, issues, source, depth);
@@ -4634,7 +4620,6 @@ fn lower_case_else_branch(
 ) -> BlockId {
     let content: Vec<RawNode> = else_node
         .named_children()
-        .into_iter()
         .filter(|c| c.kind() != RawKind::ElseKeyword)
         .collect();
     match content.as_slice() {
@@ -4843,8 +4828,7 @@ fn lower_expr(
     // ENG-80 (spec §4.2 C): a call whose callee or arguments hold a build-varying
     // `#if` node is read from one arm (`Error(#if X ErrInfo #else 'txt' #endif)` lowers
     // to two arguments, `#if X Error #else Work #endif ('x')` keeps one callee).
-    let tainted = matches!(kind, ExprKind::Call { .. })
-        && node.named_children().into_iter().any(holds_preproc);
+    let tainted = matches!(kind, ExprKind::Call { .. }) && node.named_children().any(holds_preproc);
     let id = ir.add_expr(Expr { kind, origin });
     if tainted {
         ir.mark_tainted(id);

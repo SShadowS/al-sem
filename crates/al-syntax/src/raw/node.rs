@@ -54,8 +54,9 @@ fn field_id(f: FieldName) -> Option<FieldId> {
     FIELD_IDS[f as usize]
 }
 
-/// The named children of a node, in document order, read with one cursor
-/// and no allocation ([`RawNode::named_children`]).
+/// The named children of a node, in document order, read with one cursor:
+/// no `Vec` and no separate `named_child_count` walk (the cursor still
+/// allocates its stack, as before) ([`RawNode::named_children`]).
 pub(crate) struct NamedChildren<'t> {
     cursor: TreeCursor<'t>,
     /// The cursor is on a child not yet looked at.
@@ -94,8 +95,9 @@ impl<'t> RawNode<'t> {
     pub fn kind(self) -> RawKind {
         match KIND_TABLE.kinds.get(usize::from(self.node.kind_id())) {
             Some(Some(k)) => *k,
-            // Not a named kind of the table (an error symbol past it, or an
-            // anonymous token): the string path, which also panics as before.
+            // Not a named kind of the table (the ERROR symbol past it, or an
+            // anonymous token): the string path, as before (`RawKind::Error`
+            // for ERROR; a panic for a kind that is not named).
             _ => RawKind::from_raw(self.node.kind()),
         }
     }
@@ -318,7 +320,9 @@ mod tests {
                 nodes += 1;
                 let r = RawNode::new(n);
                 aliased += usize::from(n.grammar_id() != n.kind_id());
-                errors += usize::from(n.is_error() || n.is_missing());
+                // A true ERROR node: its id (65535) is past the table, so
+                // `kind_str` takes the fallback.
+                errors += usize::from(n.is_error());
                 assert_eq!(r.kind_str(), n.kind(), "kind_str, file {i}");
                 if let Some(want) = RawKind::try_from_raw(n.kind()) {
                     assert_eq!(r.kind(), want, "kind of {:?}, file {i}", n.kind());
@@ -362,13 +366,10 @@ mod tests {
                 stack.extend(n.children(&mut cursor));
             }
         }
-        eprintln!("nodes {nodes}, aliased {aliased}, error/missing {errors}, fields {fields_seen}");
+        eprintln!("nodes {nodes}, aliased {aliased}, error {errors}, fields {fields_seen}");
         assert!(nodes > 50_000, "precondition: nodes walked ({nodes})");
         assert!(aliased > 0, "precondition: aliased nodes ({aliased})");
-        assert!(
-            errors > 0,
-            "precondition: error or missing nodes ({errors})"
-        );
+        assert!(errors > 0, "precondition: ERROR nodes ({errors})");
         assert!(
             fields_seen > 10_000,
             "precondition: fields held ({fields_seen})"

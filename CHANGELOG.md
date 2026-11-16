@@ -90,8 +90,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from the loaded grammar (it is not pinned, so no id is baked into generated code), holds
   each kind's name and `RawKind` (the existing `try_from_raw` of that name). It is keyed by
   `Node::kind_id`, the alias-aware id whose name `Node::kind` returns, so the answer is
-  exactly the string path's; an id past the table (tree-sitter's built-in error symbols) or
-  a kind that is not named takes the string path, which panics as before. `kind_str` and
+  exactly the string path's; an id past the table (tree-sitter's built-in ERROR symbol) or a
+  kind that is not named takes the string path, which gives `RawKind::Error` for ERROR and
+  panics, as before, on a kind that is not named. `kind_str` and
   `descendants_of_kinds` read the same names. A field-id table (indexed through the new
   generated `FieldName::ALL`) gives `field` and `children_by_field` tree-sitter's lookup by
   id; a field the grammar lacked would find nothing, as the lookup by name does.
@@ -104,7 +105,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every field a child holds (17,770), and every `FieldName` on every 8th file. Breaks, each
   red then green restored: `kind` keyed by `grammar_id` (aliases ignored) -> an aliased node
   reads `ReportKeyword` where `ObjectTypeKeyword` is due; `named_children` yielding anonymous
-  children too; `field` reading the next field's id.
+  children too; `field` reading the next field's id. The test pins equal answers, not that the
+  fast path is taken: a change that sent every lookup down the string path would stay green,
+  and only the CDO speed measurement below shows it (review, Fable).
 
 ### Fixed (ENG-93: `aldump --session-refresh` edits CRLF files, and fails on an edit that reaches nothing)
 
