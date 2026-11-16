@@ -2192,7 +2192,7 @@ mod tests {
             id: id.into(),
             name: name.to_string(),
             table_name: None,
-            table_id: table_id.map(str::to_string),
+            table_id: table_id.map(Into::into),
             is_parameter: false,
             parameter_index: None,
             temp_state: crate::program::body::features::PTempState {

@@ -318,7 +318,7 @@ pub fn resolve_routine_record_types(
                         .record_variables
                         .iter()
                         .find(|rv| rv.name.eq_fold_identifier(v))
-                        .and_then(|rv| rv.table_id.clone()),
+                        .and_then(|rv| rv.table_id.as_deref().map(str::to_string)),
                 };
                 match (t, &table) {
                     (Some(t), None) => table = Some(t),

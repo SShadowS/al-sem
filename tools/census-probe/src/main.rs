@@ -2102,18 +2102,7 @@ fn eng96_layout(routines: &[al_sem::program::model::workspace::ModelRoutine]) {
             "callee_text heap (cap)",
             heap(&|c| c.callee_text.capacity()),
         ),
-        (
-            "control_context heap (cap)",
-            heap(&|c| c.control_context.as_ref().map_or(0, |s| s.capacity())),
-        ),
-        (
-            "receiver_temp_state.kind heap",
-            heap(&|c| {
-                c.receiver_temp_state
-                    .as_ref()
-                    .map_or(0, |t| t.kind.capacity())
-            }),
-        ),
+        // ENG-96: control_context and the temp kind are 4-byte words now (no heap).
         (
             "loop_stack slack (cap-len)*24",
             heap(&|c| (c.loop_stack.capacity() - c.loop_stack.len()) * 24),
@@ -2175,23 +2164,9 @@ fn eng96_layout(routines: &[al_sem::program::model::workspace::ModelRoutine]) {
         println!("      {name:<30} {n:>8} ({:.1}%)", pct(n, nv));
     }
     for (name, b) in [
+        // ENG-96: table_name/table_id are shared texts (counted where the last holder
+        // drops them), scope and the temp kind 4-byte words: none owns a heap copy.
         ("name heap (cap)", vheap(&|v| v.name.capacity())),
-        (
-            "table_name heap (cap)",
-            vheap(&|v| v.table_name.as_ref().map_or(0, |s| s.capacity())),
-        ),
-        (
-            "table_id heap (cap)",
-            vheap(&|v| v.table_id.as_ref().map_or(0, |s| s.capacity())),
-        ),
-        (
-            "scope heap (cap)",
-            vheap(&|v| v.scope.as_ref().map_or(0, |s| s.capacity())),
-        ),
-        (
-            "temp_state.kind heap (cap)",
-            vheap(&|v| v.temp_state.kind.capacity()),
-        ),
     ] {
         println!("      {name:<34} {:>8.2} MiB", mib(b as isize));
     }
@@ -2199,6 +2174,11 @@ fn eng96_layout(routines: &[al_sem::program::model::workspace::ModelRoutine]) {
     let mut kinds: BTreeMap<&str, usize> = BTreeMap::new();
     let mut tids: HashSet<&str> = HashSet::new();
     let mut tnames: HashSet<&str> = HashSet::new();
+    // ENG-96: distinct ALLOCATIONS behind them (shared texts: about one per text and thread).
+    let mut tid_ptrs: HashSet<*const u8> = HashSet::new();
+    let mut tname_ptrs: HashSet<*const u8> = HashSet::new();
+    let mut tid_bytes = 0usize;
+    let mut tname_bytes = 0usize;
     for v in &vars {
         *scopes
             .entry(v.scope.as_deref().unwrap_or("<none>"))
@@ -2206,17 +2186,27 @@ fn eng96_layout(routines: &[al_sem::program::model::workspace::ModelRoutine]) {
         *kinds.entry(v.temp_state.kind.as_str()).or_default() += 1;
         if let Some(t) = &v.table_id {
             tids.insert(t);
+            if tid_ptrs.insert(t.as_ptr()) {
+                tid_bytes += t.len();
+            }
         }
         if let Some(t) = &v.table_name {
             tnames.insert(t);
+            if tname_ptrs.insert(t.as_ptr()) {
+                tname_bytes += t.len();
+            }
         }
     }
     println!("      scope values: {scopes:?}");
     println!("      temp_state.kind values: {kinds:?}");
     println!(
-        "      distinct table_id {} / table_name {}",
+        "      distinct table_id {} / table_name {}; allocations table_id {} ({:.2} MiB) / table_name {} ({:.2} MiB)",
         tids.len(),
-        tnames.len()
+        tnames.len(),
+        tid_ptrs.len(),
+        mib(tid_bytes as isize),
+        tname_ptrs.len(),
+        mib(tname_bytes as isize)
     );
 }
 

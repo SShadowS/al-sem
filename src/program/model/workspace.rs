@@ -974,7 +974,7 @@ impl ModelRoutine {
             let cs = call_sites.iter().find(|cs| cs.id == site);
             return EffectOperationSite {
                 control_context: cs.and_then(|c| c.control_context.as_deref()),
-                order: cs.and_then(|c| c.order.as_ref()),
+                order: cs.and_then(|c| c.order.as_deref()),
                 under_asserterror: cs.is_some_and(|c| c.under_asserterror == Some(true)),
             };
         }
@@ -2089,7 +2089,12 @@ fn project_ir(
                 );
                 let record_vars: Vec<(String, Option<String>)> = record_variables
                     .iter()
-                    .map(|rv| (rv.name.clone(), rv.table_name.clone()))
+                    .map(|rv| {
+                        (
+                            rv.name.clone(),
+                            rv.table_name.as_deref().map(str::to_string),
+                        )
+                    })
                     .collect();
                 let rule_base = next_base_by_id.get(&routine_id).map_or(0, |&(_, r)| r);
                 let drafts = crate::program::body::rules::build_rule_drafts(
@@ -2313,12 +2318,12 @@ fn join_routine_declarations(
         // 2. No row's site runs on every success path of the routine.
         for &i in &group {
             let r = &mut rows[i];
-            for c in r
-                .call_sites
-                .iter_mut()
-                .map(|s| &mut s.control_context)
-                .chain(r.operation_sites.iter_mut().map(|s| &mut s.control_context))
-            {
+            for c in r.call_sites.iter_mut().map(|s| &mut s.control_context) {
+                if c.as_deref() == Some(TOP) {
+                    *c = Some(COND.into());
+                }
+            }
+            for c in r.operation_sites.iter_mut().map(|s| &mut s.control_context) {
                 if c.as_deref() == Some(TOP) {
                     *c = Some(COND.to_string());
                 }
@@ -4227,7 +4232,7 @@ impl RoutineView<'_> {
             .record_variables
             .iter()
             .find(|v| v.name.fold_identifier() == want)
-            .and_then(|v| v.scope.clone())
+            .and_then(|v| v.scope.map(|s| s.to_string()))
     }
 
     /// The resolved `temp_state` Known value of the named record variable, or None

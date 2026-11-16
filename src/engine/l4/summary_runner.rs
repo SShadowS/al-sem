@@ -641,8 +641,8 @@ fn compute_record_roles(routine: &ModelRoutine, fields: &FieldIndex) -> Vec<Reco
         };
         let table_id = rec_var
             .table_id
-            .clone()
-            .unwrap_or_else(|| "unknown".to_string());
+            .as_deref()
+            .map_or_else(|| "unknown".to_string(), str::to_string);
 
         let mut reads_fields: Vec<String> = Vec::new();
         let mut writes_fields: Vec<String> = Vec::new();

@@ -94,7 +94,7 @@ mod tests {
         ModelRecordVariable {
             id: format!("rv/{name}").into(),
             name: name.to_string(),
-            table_name: table_name.map(str::to_string),
+            table_name: table_name.map(Into::into),
             table_id: None,
             is_parameter: false,
             parameter_index: None,

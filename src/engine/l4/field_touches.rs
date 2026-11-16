@@ -368,7 +368,7 @@ fn record_ref_tables<'m>(
                 "open" => agree(arg.and_then(|a| table_of_ref(a, by_number, by_name))),
                 "gettable" => agree(
                     arg.and_then(|a| record_var(r, a))
-                        .and_then(|rv| rv.table_id.clone()),
+                        .and_then(|rv| rv.table_id.as_deref().map(str::to_string)),
                 ),
                 _ => {}
             }

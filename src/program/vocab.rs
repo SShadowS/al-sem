@@ -150,6 +150,28 @@ macro_rules! open_vocab {
 }
 
 #[cfg(test)]
+mod row_sizes {
+    use std::mem::size_of;
+
+    /// ENG-96: the row sizes this module bought, so a field that grows one back fails here
+    /// (CDO: 160,213 call sites and 564,998 record variables, so a byte is 0.7 MiB).
+    #[test]
+    fn row_sizes_stay_put() {
+        use crate::program::body::features::{PCallSite, PTempState};
+        use crate::program::model::workspace::{ModelRecordVariable, VarScope};
+        assert_eq!(size_of::<PTempState>(), 16, "PTempState (was 40)");
+        assert_eq!(size_of::<Option<PTempState>>(), 16, "Option<PTempState>");
+        assert_eq!(size_of::<Option<VarScope>>(), 4, "Option<VarScope>");
+        assert_eq!(
+            size_of::<ModelRecordVariable>(),
+            104,
+            "ModelRecordVariable (was 168)"
+        );
+        assert_eq!(size_of::<PCallSite>(), 344, "PCallSite (was 416)");
+    }
+}
+
+#[cfg(test)]
 mod tests {
     crate::open_vocab!(Color { Red => "red", Green => "green" });
 
@@ -168,7 +190,7 @@ mod tests {
             "the same unknown word, the same value"
         );
         assert_eq!(blue, "blue");
-        let mut v = vec![Color::Red, blue, Color::Green];
+        let mut v = [Color::Red, blue, Color::Green];
         v.sort();
         assert_eq!(
             v.iter().map(|c| c.as_str()).collect::<Vec<_>>(),

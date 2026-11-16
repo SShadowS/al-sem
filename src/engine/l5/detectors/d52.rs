@@ -111,7 +111,7 @@ pub fn detect_d52(
                         .record_variables
                         .iter()
                         .find(|rv| rv.name.fold_identifier() == var_key)
-                        .and_then(|rv| rv.table_name.clone())
+                        .and_then(|rv| rv.table_name.as_deref().map(str::to_string))
                 })
                 .unwrap_or_else(|| "unknown table".to_string());
 

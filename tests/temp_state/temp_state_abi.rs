@@ -181,7 +181,7 @@ fn temp_kind(
         .find(|v| v.is_parameter)
         .unwrap_or_else(|| panic!("record var param on {routine_name}"));
     (
-        rv.temp_state.kind.clone(),
+        rv.temp_state.kind.to_string(),
         rv.temp_state.value,
         rv.temp_state.parameter_index,
     )
