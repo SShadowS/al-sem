@@ -102,7 +102,8 @@ scripts/changelog-merge        # CHANGELOG.md's merge rule (TLS-62): keep both s
                                # repo has `git config merge.changelog.driver 'bash scripts/changelog-merge
                                # --driver %O %A %B'`; without that config git merges as before
 scripts/sweep-builds           # Delete build output unused for 7 days (main + al-sem-issue-* worktrees;
-                               # needs `cargo install cargo-sweep`). Run after an issue, before a release,
+                               # needs cargo-sweep: in the kraken image since TLS-85, elsewhere
+                               # `cargo install cargo-sweep`). Run after an issue, before a release,
                                # or when `df -h /u` is low: U: has filled up three times
 ```
 
@@ -292,6 +293,16 @@ See `src/main.rs`'s `Args` (clap derive) for the authoritative flag list.
   check it with `kraken coord question <id>` at the start of each sweep (`answer` is null while
   open). Do not file it again. Nothing tells you when the owner answers: the answer is only
   written to coord, and `coord questions` / `coord overview` simply stop listing it.
+- **A stack snapshot of a running process** (a hung or slow engine, where samply cannot attach)
+  is taken with `gdb -p <pid> -batch -ex 'thread apply all bt'` (gdb is in the image since
+  TLS-85). Frames have names only in a build with symbols: `profiling`, `cdo` or dev.
+  `release-fast` and the installed `alsem` strip them, so their stacks show addresses.
+  - Attaching to a process gdb did not start needs the host's `kernel.yama.ptrace_scope` at 0.
+    Check it with `cat /proc/sys/kernel/yama/ptrace_scope`.
+  - server1 was set to 0 host-side on 2026-11-16. Like `perf_event_paranoid` and
+    `perf_event_mlock_kb`, it resets on a server1 reboot: ask the owner (`--kind config`) when it
+    reads 1 again.
+  - The process stops while gdb reads it. Never take a snapshot during someone's timed run.
 
 ## Architecture
 

@@ -7,7 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added (TLS-86: CPU profiles of `impact --diff`, `prove` and `explain` on CDO; five hot spots filed)
+### Added (TLS-85: gdb and cargo-sweep in the kraken image; how to take a stack snapshot)
+
+- **What changed:** `.kraken/Dockerfile` installs two tools that were only installed live
+  before.
+  - `gdb`: live stack snapshots of a running engine process, where samply cannot attach. Owner
+    request q-20261116T074643-71f6992c. It is installed in its own late apt layer, not on the
+    first apt line. A change to that line rebuilds every later layer, and the unpinned ones
+    (nextest, .NET, Node, pi) would then move version unasked.
+  - `cargo-sweep` 0.8.0 (`cargo install --locked`, a late layer like samply's): what
+    `scripts/sweep-builds` runs. q-20261116T074635-f5e45cec.
+- **CLAUDE.md:**
+  - The kraken section says how to take a snapshot:
+    `gdb -p <pid> -batch -ex 'thread apply all bt'`.
+  - Attaching needs the host's `kernel.yama.ptrace_scope` at 0. Check it with
+    `cat /proc/sys/kernel/yama/ptrace_scope`. server1 was set to 0 host-side on 2026-11-16, and
+    the setting resets on a reboot, as `perf_event_paranoid` does.
+  - The `sweep-builds` line says the image has cargo-sweep.
+- **Checked:**
+  - The snapshot command attached to a live process in this container (`ptrace_scope` 0) and
+    printed every thread's stack.
+  - The image change takes effect at the next tentacle rebuild. It is checked by the Dockerfile
+    diff only; no image was built.
+
+### Added (TLS-84: the tree-sitter CLI in the kraken image)
+
+- **What changed:** `.kraken/Dockerfile` downloads tree-sitter 0.27.0's release binary into
+  `/usr/local/bin`. That is the version tree-sitter-al generates with, and tsal's image pins the
+  same.
+- **Why:** the grammar-upgrade skill checks a grammar shape against real `tree-sitter parse`
+  output, and the image had no CLI, so agents built stand-ins.
+- **When it takes effect:** at the next tentacle rebuild. Until then the live install in
+  `~/.local/bin` (0.27.0) serves. Checked by the Dockerfile diff only; no image was built.
+
+### Added (TLS-86: CPU profiles of `impact --diff`, `prove` and `explain` on CDO; six hot spots filed)
 
 - **The notes:** `docs/superpowers/notes/2026-11-16-tls86-profiles.md`. They hold samply profiles
   (`scripts/profile`, master 9c1c099b, CDO `bc3ccb18`) of three commands: the gate's 699-root
