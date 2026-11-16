@@ -678,6 +678,16 @@ fn build_block<'w>(
 // fingerprintQuery (al-sem fingerprintQuery)
 // ---------------------------------------------------------------------------
 
+/// ENG-106: at most this many root blocks are built at once, below the literal
+/// pass's [`ReachWorkers`] count. Measured on CDO (2026-11-16, `fingerprint`,
+/// release-fast; CPU against the serial base's 84.6 s mean, base wall 52-64 s):
+/// 2 workers CPU x1.00, wall 34 s; 4: x1.09, 24 s; 8: x1.25, 18.6 s. The
+/// one-shot often runs beside other work, so the count is the cheapest in CPU
+/// that meets the wall bar (30-35 s).
+///
+/// [`ReachWorkers`]: crate::engine::l5::digest_cli::ReachWorkers
+pub const FINGERPRINT_BLOCK_WORKERS: usize = 2;
+
 /// Run the fingerprint query over a fully-composed `CapabilitySnapshot`.
 /// Mirrors `fingerprintQuery` in `src/cli/fingerprint-query.ts`.
 ///
@@ -702,8 +712,9 @@ fn build_block<'w>(
 /// was given. A failing selector never reaches the query: its result is
 /// [`selector_failure_result`], with no tree composed.
 ///
-/// `workers`: how many root blocks are built at once (ENG-106; the one-shot
-/// CLI's [`default_reach_workers`], a resident revision's own setting).
+/// `workers`: how many root blocks are built at once, capped by
+/// [`FINGERPRINT_BLOCK_WORKERS`] (ENG-106; the one-shot CLI's
+/// [`default_reach_workers`], a resident revision's own setting).
 ///
 /// [`default_reach_workers`]: crate::engine::l5::digest_cli::default_reach_workers
 pub fn fingerprint_query(
@@ -763,15 +774,15 @@ pub fn fingerprint_query(
     // cost is uneven). An indexed collect keeps `root_pool`'s order, so the sort
     // below sees what the serial loop gives. Serial at one worker, and inside a
     // rayon worker (see `digest_cli`'s literal pass: `install` there can deadlock).
-    let mut blocks: Vec<FingerprintBlock> =
-        if workers.count() <= 1 || rayon::current_thread_index().is_some() {
-            root_pool.iter().map(block_of).collect()
-        } else {
-            use rayon::prelude::*;
-            crate::engine::perf_trace::counter_delta("fingerprint.blocks_parallel", 1);
-            crate::engine::l5::digest_cli::reach_pool(workers.count())
-                .install(|| root_pool.par_iter().with_max_len(1).map(block_of).collect())
-        };
+    let n = workers.count().min(FINGERPRINT_BLOCK_WORKERS);
+    let mut blocks: Vec<FingerprintBlock> = if n <= 1 || rayon::current_thread_index().is_some() {
+        root_pool.iter().map(block_of).collect()
+    } else {
+        use rayon::prelude::*;
+        crate::engine::perf_trace::counter_delta("fingerprint.blocks_parallel", 1);
+        crate::engine::l5::digest_cli::reach_pool(n)
+            .install(|| root_pool.par_iter().with_max_len(1).map(block_of).collect())
+    };
 
     // Sort blocks by routine_id.
     blocks.sort_by(|a, b| a.routine_id.cmp(&b.routine_id));
