@@ -98,7 +98,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   id; a field the grammar lacked would find nothing, as the lookup by name does.
   `named_children` returns an iterator over one cursor; the call sites that need a `Vec`
   (indexed, popped as a stack, or passed on) collect it, as before.
-- Goldens: none moved (`scripts/check-goldens`, 2,040 tests).
+- **Measured** (`scripts/cdo-speed`, head `46479cfd` against master `17979658`, server1,
+  2026-11-16, PASS, no block under load: stall shares 2.5-3.1 %): the model build, where parse
+  and lower run, CPU 89.92 -> 78.31 s **x0.870** and wall x0.854 (passes x0.888 and x0.852);
+  the warm test-universe build CPU x0.895; the rounds, which parse nothing, x1.012 (neutral);
+  peak memory x0.987.
+- Goldens: none moved (`scripts/check-goldens`, 2,040 tests). On CDO
+  (`scripts/cdo-before-after 743e5dc9 734b616a`): no detector, fingerprint (2,301 and 32,548
+  kept) or number moved.
 - Pinned by `raw::node::tests::id_tables_answer_what_the_string_api_did`: on every node of the
   r0 corpus (584 files, 63,925 nodes, 1,597 aliased) and a broken source (error and missing
   nodes), the tables answer what the string API did: `kind`, `kind_str`, `named_children`,
