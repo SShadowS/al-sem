@@ -132,7 +132,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   check left the resolver tests and the ENG-26 suite green; the new test fails then.
 - **Same answers.** The task gate, `scripts/cdo-before-after e708f1f6` (fingerprint, analyze at both
   scopes, the call-graph stats: nothing moved), and `aldump --session-refresh --verify` on a CDO
-  copy in both memory modes (all 12 steps equal to a cold build each).
+  copy in both memory modes (all 12 steps equal to a cold build each; but on CDO the `body` step
+  edits nothing, the file being CRLF, so the body-only refresh path stays unverified there: ENG-93).
 - **Refresh speed.** Six alternating passes of the session refresh (default mode, master `e708f1f6`
   against ENG-84, calm-admitted): every step's `programMs` head over base at most x0.88 (geometric
   mean; Declaration steps x0.67-x0.73). One pass ran under load; without it the Declaration step
