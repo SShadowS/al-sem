@@ -2279,44 +2279,6 @@ impl Candidate<'_> {
     }
 }
 
-/// Sort `candidates` by [`Candidate::key_cmp`], stably, with each key built once
-/// (ENG-105: the comparator re-read every hop's JSON text on every comparison,
-/// ~5% of `alsem fingerprint`'s CPU on CDO). A key is (length, each hop's text as
-/// its RANK among the distinct texts here, end); ranks follow the texts' order
-/// and are equal exactly for equal texts, so the order is `key_cmp`'s.
-fn sort_candidates(candidates: &mut Vec<Candidate<'_>>) {
-    if candidates.len() < 2 {
-        return;
-    }
-    let keys: Vec<(usize, Vec<u32>, EndKey)> = {
-        let mut texts: Vec<&str> = candidates
-            .iter()
-            .flat_map(|c| c.projected.0.iter().map(|h| h.json()))
-            .collect();
-        texts.sort_unstable();
-        texts.dedup();
-        let rank = |s: &str| {
-            u32::try_from(texts.binary_search(&s).expect("a collected text"))
-                .expect("fewer than 2^32 texts")
-        };
-        candidates
-            .iter()
-            .map(|c| {
-                let ranks = c.projected.0.iter().map(|h| rank(h.json())).collect();
-                (c.projected.0.len(), ranks, c.end.clone())
-            })
-            .collect()
-    };
-    let mut order: Vec<usize> = (0..candidates.len()).collect();
-    order.sort_by(|&a, &b| keys[a].cmp(&keys[b]));
-    let mut taken: Vec<Option<Candidate<'_>>> = candidates.drain(..).map(Some).collect();
-    candidates.extend(
-        order
-            .into_iter()
-            .map(|i| taken[i].take().expect("each once")),
-    );
-}
-
 /// One trie node of [`TrieWalk`]: the routine its prefix ends at, the
 /// equal-JSON edges into it (the first is the representative), and its parent
 /// slot.
@@ -2686,10 +2648,10 @@ fn reconstruct_witness_paths<'i>(
             candidate(&steps, Some(terminal), end, None, hop_cache, idx)
         })
         .collect();
-    sort_candidates(&mut proof_candidates);
+    proof_candidates.sort_by(|a, b| a.key_cmp(b));
     candidates.extend(proof_candidates);
     // Stable: a walk candidate stays ahead of an equal-key proof.
-    sort_candidates(&mut candidates);
+    candidates.sort_by(|a, b| a.key_cmp(b));
     // One per key. The others are its twins: projection drops the terminal, so
     // their conditionality still counts, the least restrictive winning (#69 D3).
     let mut merged: Vec<(Candidate, Vec<WitnessPath>)> = Vec::new();
@@ -2945,7 +2907,7 @@ fn reconstruct_site_witnesses<'i>(
     // Close a candidate set: one per key in key order, the others its twins
     // (their conditionality still counts), at most `cap`.
     let close = |mut candidates: Vec<Candidate<'i>>, walk_truncated: bool| {
-        sort_candidates(&mut candidates);
+        candidates.sort_by(|a, b| a.key_cmp(b));
         let mut merged: Vec<(Candidate, Vec<WitnessPath>)> = Vec::new();
         for c in candidates {
             match merged.last_mut() {
@@ -8069,50 +8031,6 @@ mod tests {
         let b = hc.get(&ib.typed_edges[0], &ib);
         assert_eq!(site_of(&a), "cs-A1");
         assert_eq!(site_of(&b), "cs-B1", "the second slice's own edge");
-    }
-
-    /// ENG-105: `sort_candidates` gives exactly `Candidate::key_cmp`'s order and is
-    /// STABLE: equal keys keep their input order, which is what keeps a walk
-    /// candidate ahead of an equal-key proof (the first of equal keys is the
-    /// representative, the rest its twins). Hand-stated: four candidates, two keys
-    /// (hop `b`, hop `a`) twice each, told apart by `opaque_end` (not in the key);
-    /// also two lengths, and texts whose order is not their insertion order.
-    ///
-    /// DISCRIMINATION (2026-11-16): ties sorted in reverse input order (`.then(b.cmp(&a))`)
-    /// -> `["2", "4", ..]` reads `["4", "2", ..]`; ranks in reverse text order ->
-    /// eight existing order tests fail (e.g. `w4b_trie_walk_equals_the_brute_force_key_order`).
-    #[test]
-    fn sort_candidates_is_key_cmp_order_and_stable() {
-        let c = |hops: &[&str], marker: &'static str| Candidate {
-            projected: ProjPath::from_hops(hops.iter().map(|h| mk_hop(h)).collect()),
-            end: EndKey::Carrier,
-            path: WitnessPath::default(),
-            opaque_end: Some(marker),
-        };
-        let input = || {
-            vec![
-                c(&["b"], "1"),
-                c(&["a"], "2"),
-                c(&["a", "a"], "5"),
-                c(&["b"], "3"),
-                c(&["a"], "4"),
-            ]
-        };
-        let mut ours = input();
-        sort_candidates(&mut ours);
-        let mut reference = input();
-        reference.sort_by(|a, b| a.key_cmp(b));
-        let markers = |v: &[Candidate]| {
-            v.iter()
-                .map(|c| c.opaque_end.unwrap().to_string())
-                .collect::<Vec<String>>()
-        };
-        assert_eq!(markers(&ours), vec!["2", "4", "1", "3", "5"]);
-        assert_eq!(
-            markers(&ours),
-            markers(&reference),
-            "key_cmp's stable order"
-        );
     }
 
     fn mk_hop(tag: &str) -> QueryWitnessHop {
