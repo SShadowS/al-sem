@@ -582,6 +582,62 @@ fn a_transcript_answers_what_the_cli_answers() {
     assert!(s.finish().success());
 }
 
+/// What the `stray-stdout-on-ask` hook prints on every ask.
+pub(crate) const STRAY_LINE: &str = "engine test hook: a stray print to stdout\n";
+
+/// TLS-78: what the engine child prints itself during a call (a logger line,
+/// an `eprintln!`, a stray `println!`, none of them the command's own stderr)
+/// reaches the envelope as `engineStderr` `{bytes, text}`, and a call during
+/// which it prints nothing has no such field (the envelope is unchanged). The
+/// `stray-stdout-on-ask` hook makes the child print a line on every ask, which
+/// its stdout guard routes to its stderr.
+///
+/// The count is per call: the child writes a stderr mark right before each
+/// answer and the front counts the bytes between the previous mark and the
+/// ask's own, so each of several calls on one server counts its own line
+/// once, not the running total (the window's ordering against the drain
+/// thread is pinned by the front's `an_asks_window_runs_from_the_previous_mark_to_its_own`).
+/// A child that writes no marks (`no-stderr-marks`, as an older build)
+/// gives `{unknown}`, never a count of 0.
+///
+/// DISCRIMINATION (2026-11-16): the pool not inserting `engineStderr` -> the
+/// hooked call has none; counting from the child's start -> call 2 reads 84
+/// bytes, not 42; no older-child check -> the wrong reason.
+#[test]
+fn an_engine_print_during_a_call_reaches_the_envelope() {
+    let ws = ws_explain();
+    let mut s = Server::ready(&ws, Some("stray-stdout-on-ask"));
+    for id in 1..=4 {
+        let r = s.call(id, "alsem_explain", json!({"routines": ["PostOrder"]}));
+        let env = envelope(&r);
+        assert_eq!(env["exitCode"], 0, "{env}");
+        let e = &env["engineStderr"];
+        assert_eq!(e["bytes"], STRAY_LINE.len(), "call {id}: {env}");
+        assert_eq!(e["text"], STRAY_LINE, "call {id}: {env}");
+    }
+    assert!(s.finish().success());
+
+    let ask = |hook: Option<&str>| {
+        let mut s = Server::ready(&ws, hook);
+        let r = s.call(1, "alsem_explain", json!({"routines": ["PostOrder"]}));
+        let env = envelope(&r);
+        assert!(s.finish().success());
+        env
+    };
+    let clean = ask(None);
+    assert_eq!(clean["exitCode"], 0, "{clean}");
+    assert!(clean.get("engineStderr").is_none(), "{clean}");
+    let older = ask(Some("no-stderr-marks"));
+    assert_eq!(older["exitCode"], 0, "{older}");
+    assert!(
+        older["engineStderr"]["unknown"]
+            .as_str()
+            .is_some_and(|w| w.contains("no stderr marks")),
+        "{older}"
+    );
+    assert!(older["engineStderr"].get("bytes").is_none(), "{older}");
+}
+
 /// Output validation §6.1 (F34): the MCP front end appends `--surface=mcp`,
 /// so the renderer-owned follow-up text of an MCP answer (`more:` and
 /// `next:` lines, fold notes, `re-analysis under an assumption:`, `ask:`)

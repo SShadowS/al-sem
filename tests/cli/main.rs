@@ -327,6 +327,7 @@ mod cli_s6_consumers;
 mod cli_sarif_rule_catalog;
 mod cli_secrettext_arg;
 mod cli_selector_round_trip;
+mod cli_session_refresh_crlf;
 mod cli_snapshot_memory;
 mod cli_snapshot_schema4;
 mod cli_source_dependencies;

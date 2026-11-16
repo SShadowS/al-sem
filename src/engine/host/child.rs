@@ -117,6 +117,10 @@ pub struct ServeConfig {
     pub idle_timeout: Option<std::time::Duration>,
     pub idle_grace: std::time::Duration,
     pub light_workers: usize,
+    /// Write a [`super::stderr_mark`] to this process's stderr before each
+    /// response (TLS-78). Only the engine-host process sets it: the front
+    /// end drains that stderr; an in-process server's stderr is a test's.
+    pub stderr_marks: bool,
 }
 
 impl Default for ServeConfig {
@@ -125,6 +129,7 @@ impl Default for ServeConfig {
             idle_timeout: None,
             idle_grace: super::IDLE_GRACE,
             light_workers: super::LIGHT_WORKERS,
+            stderr_marks: false,
         }
     }
 }
@@ -135,6 +140,8 @@ struct Shared<'o, W: Write> {
     ready: Condvar,
     dir: Mutex<Option<Arc<OutputDir>>>,
     instance: String,
+    /// [`ServeConfig::stderr_marks`].
+    stderr_marks: bool,
     #[cfg(any(feature = "engine-test-hooks", debug_assertions))]
     hook: Option<super::test_hooks::Hook>,
 }
@@ -142,11 +149,25 @@ struct Shared<'o, W: Write> {
 impl<W: Write> Shared<'_, W> {
     fn send(&self, msg: &Message) -> std::io::Result<()> {
         let frame = encode_frame(msg).map_err(|e| std::io::Error::other(e.to_string()))?;
-        self.write(&frame)
+        // A response (an id, no method) ends its request's stderr output.
+        let id = msg.id.as_ref().filter(|_| msg.method.is_none());
+        self.write_marked(id, &frame)
     }
 
     fn write(&self, frame: &[u8]) -> std::io::Result<()> {
+        self.write_marked(None, frame)
+    }
+
+    /// `frame`, after request `id`'s stderr mark when marks are on. Both
+    /// under the output lock, so marks reach stderr in the frames' order;
+    /// stderr is unbuffered, so the mark is in the pipe before the frame.
+    fn write_marked(&self, id: Option<&serde_json::Value>, frame: &[u8]) -> std::io::Result<()> {
         let mut out = self.out.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(id) = id.filter(|_| self.stderr_marks) {
+            // A failed mark costs the front its count (it reports it
+            // unknown), never the answer.
+            let _ = std::io::stderr().write_all(&super::stderr_mark(id));
+        }
         out.write_all(frame)?;
         out.flush()
     }
@@ -159,8 +180,9 @@ impl<W: Write> Shared<'_, W> {
             None => Err(std::io::Error::other("no output directory")),
         };
         let wrap = |a: &Answer| serde_json::json!({"jsonrpc": "2.0", "id": a.id, "result": a});
+        let id = answer.id.clone();
         let frame = bound_frame(answer, MAX_FRAME_BYTES, &wrap, &spill);
-        self.write(&frame)
+        self.write_marked(Some(&id), &frame)
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, QueueState> {
@@ -209,14 +231,14 @@ pub fn serve_with(
     engine: &dyn Engine,
     mut input: impl BufRead + Send + 'static,
     mut output: impl Write + Send,
-    config: ServeConfig,
-) -> std::io::Result<()> {
-    #[cfg(any(feature = "engine-test-hooks", debug_assertions))]
-    let hook = super::test_hooks::from_env();
     #[cfg_attr(
         not(any(feature = "engine-test-hooks", debug_assertions)),
         allow(unused_mut)
     )]
+    mut config: ServeConfig,
+) -> std::io::Result<()> {
+    #[cfg(any(feature = "engine-test-hooks", debug_assertions))]
+    let hook = super::test_hooks::from_env();
     let mut hello = Hello::of_this_process();
     #[cfg(any(feature = "engine-test-hooks", debug_assertions))]
     match &hook {
@@ -226,8 +248,10 @@ pub fn serve_with(
             return Ok(());
         }
         Some(super::test_hooks::Hook::Protocol(p)) => hello.protocol = *p,
+        Some(super::test_hooks::Hook::NoStderrMarks) => config.stderr_marks = false,
         _ => {}
     }
+    hello.stderr_marks = config.stderr_marks;
     let frame = encode_frame(&Message::notification(
         "engine/hello",
         serde_json::to_value(&hello)?,
@@ -262,6 +286,7 @@ pub fn serve_with(
         ready: Condvar::new(),
         dir: Mutex::new(None),
         instance: hello.engine_instance_id.clone(),
+        stderr_marks: config.stderr_marks,
         #[cfg(any(feature = "engine-test-hooks", debug_assertions))]
         hook,
     };

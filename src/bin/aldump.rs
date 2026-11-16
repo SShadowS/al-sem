@@ -235,38 +235,6 @@ fn field_census_cmd(args: &[String]) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// `aldump --session-refresh <workspace-copy> [--file <rel>] [--verify]`:
-/// measure the stage-4 workspace session (context-server design §6,
-/// `program::session::WorkspaceSession`) per change type. It EDITS the
-/// workspace it is given, so it refuses a workspace inside a git checkout
-/// (the pinned CDO baseline is one): run it on a copy.
-///
-/// Steps, each one refresh, printed as one JSON line: `cold` (P, the first
-/// build), `noop`, `body` (a comment line inside the first procedure body of
-/// the chosen file, B) and its restore, `newline` (two lines prepended to the
-/// file, B) and its restore, `decl` (a procedure added to the file, S) and its
-/// restore, `signature` (the file's first parameterless procedure gains a
-/// parameter, S) and its restore, `add` (a new file, F) and its removal,
-/// with `--implements <interface>` an `implementer` (a new codeunit
-/// implementing that interface, S) and its removal, `appjson` (a trailing
-/// newline on `app.json`, P) and its restore. Each line has the class, the
-/// files parsed and resolved, whether the dependency bodies were resolved
-/// again, `model.copied_bytes`, the program and whole-refresh wall times, and
-/// the resident set. With `--verify`, each step also compares the session's
-/// model with a cold build's (`model_fingerprint`, over `write_model`'s parts;
-/// `fingerprintMs` times the session's). A workspace state already built cold
-/// (`noop` and every `*-restore` step return to the `cold` step's) reuses that
-/// fingerprint (`coldReused`, no `coldMs`); the others build cold (`coldMs`).
-///
-/// The chosen file (`--file`, else the median-sized codeunit file with a
-/// procedure body) is restored after each pair, and the session's model
-/// needs are `AssemblyNeeds::BASE` (what a default command builds).
-/// `--low-mem` measures a session that keeps no dependency tree
-/// (`MemoryMode::LowMem`); each line then also counts the dependency files
-/// parsed by the program build and by the model assembly. `--sited` also
-/// builds the sited graph off each step's program (agent-tasks design M0-1)
-/// and keeps it until the next step's replaces it; each line then has
-/// `sited: {ms, nodes, sites, bytes}` (its build is inside `refreshMs`).
 /// The process's user plus system CPU time in milliseconds (every thread).
 #[cfg(unix)]
 fn process_cpu_ms() -> Option<u64> {
@@ -286,6 +254,42 @@ fn process_cpu_ms() -> Option<u64> {
     None
 }
 
+/// `aldump --session-refresh <workspace-copy> [--file <rel>] [--verify]`:
+/// measure the stage-4 workspace session (context-server design §6,
+/// `program::session::WorkspaceSession`) per change type. It EDITS the
+/// workspace it is given, so it refuses a workspace inside a git checkout
+/// (the pinned CDO baseline is one): run it on a copy.
+///
+/// Steps, each one refresh, printed as one JSON line: `cold` (P, the first
+/// build), `noop`, `body` (a comment line inside the first procedure body of
+/// the chosen file, B) and its restore, `newline` (two lines prepended to the
+/// file, B) and its restore, `decl` (a procedure added to the file, S) and its
+/// restore, `signature` (the file's first parameterless procedure gains a
+/// parameter, S) and its restore, `add` (a new file, F) and its removal,
+/// with `--implements <interface>` an `implementer` (a new codeunit
+/// implementing that interface, S) and its removal, `appjson` (a trailing
+/// newline on `app.json`, P) and its restore. Edits to the chosen file keep its
+/// own line ending (CRLF in CDO), and a run fails, before its first build, when
+/// the `body` or `decl` edit would change nothing (the body edit needs a line
+/// that is exactly four spaces and `begin`), and at a step whose refresh sees no
+/// changed file (`noOpError`; `noop` must see none): ENG-93, the `body` edit had
+/// matched nothing in every CRLF run before. Each line has the class, the files
+/// parsed and resolved, whether the dependency bodies were resolved again, `model.copied_bytes`, the program and whole-refresh wall times, and
+/// the resident set. With `--verify`, each step also compares the session's
+/// model with a cold build's (`model_fingerprint`, over `write_model`'s parts;
+/// `fingerprintMs` times the session's). A workspace state already built cold
+/// (`noop` and every `*-restore` step return to the `cold` step's) reuses that
+/// fingerprint (`coldReused`, no `coldMs`); the others build cold (`coldMs`).
+///
+/// The chosen file (`--file`, else the median-sized codeunit file with a
+/// procedure body) is restored after each pair, and the session's model
+/// needs are `AssemblyNeeds::BASE` (what a default command builds).
+/// `--low-mem` measures a session that keeps no dependency tree
+/// (`MemoryMode::LowMem`); each line then also counts the dependency files
+/// parsed by the program build and by the model assembly. `--sited` also
+/// builds the sited graph off each step's program (agent-tasks design M0-1)
+/// and keeps it until the next step's replaces it; each line then has
+/// `sited: {ms, nodes, sites, bytes}` (its build is inside `refreshMs`).
 fn session_refresh_cmd(args: &[String]) -> ExitCode {
     use al_sem::program::inputs::WorkspaceInputs;
     use al_sem::program::model::workspace::AssemblyNeeds;
@@ -340,10 +344,12 @@ fn session_refresh_cmd(args: &[String]) -> ExitCode {
         for e in rd.flatten() {
             let p = e.path();
             if p.is_dir() {
-                if !p
-                    .file_name()
-                    .is_some_and(|n| n.to_string_lossy().starts_with('.'))
-                {
+                // Never a folder the workspace scan skips (ENG-93, Fable): an edit
+                // there would reach no refresh.
+                if !p.file_name().is_some_and(|n| {
+                    n.to_string_lossy().starts_with('.')
+                        || al_sem::source_text::is_skipped_dir_name(n)
+                }) {
                     al_files(&p, out);
                 }
             } else if p.extension().is_some_and(|x| x.eq_ignore_ascii_case("al")) {
@@ -360,8 +366,13 @@ fn session_refresh_cmd(args: &[String]) -> ExitCode {
                 .into_iter()
                 .filter_map(|p| {
                     let t = std::fs::read_to_string(&p).ok()?;
-                    (t.contains("\n    begin\n")
-                        && t.trim_start().to_lowercase().starts_with("codeunit"))
+                    // `lines` strips `\r\n` too: a CRLF file qualifies (ENG-93).
+                    (t.lines().any(|l| l == "    begin")
+                        // A byte-order mark is not text (29 of CDO's codeunit files).
+                        && t.trim_start_matches('\u{feff}')
+                            .trim_start()
+                            .to_lowercase()
+                            .starts_with("codeunit"))
                     .then_some((t.len() as u64, p))
                 })
                 .collect();
@@ -420,7 +431,10 @@ fn session_refresh_cmd(args: &[String]) -> ExitCode {
         }
         h.finalize()
     };
-    let mut step = |name: &str, session: &mut WorkspaceSession| {
+    // ENG-93: `expect_change` says whether the step's edit must reach the session (every
+    // step but `noop`); a step whose refresh saw no changed file, or `noop` seeing one,
+    // fails the run, so an edit that silently matched nothing cannot pass as verified.
+    let mut step = |name: &str, expect_change: bool, session: &mut WorkspaceSession| {
         let inputs = WorkspaceInputs::read(&ws, &Default::default());
         let state = state_key();
         let mut sited_ms = None;
@@ -456,6 +470,14 @@ fn session_refresh_cmd(args: &[String]) -> ExitCode {
             });
         }
         if let Some(r) = &r {
+            if r.changed.is_empty() == expect_change {
+                row["noOpError"] = json!(if expect_change {
+                    "the step's edit reached no file"
+                } else {
+                    "a step with no edit changed a file"
+                });
+                failed = true;
+            }
             row["class"] = json!(format!("{:?}", r.class));
             row["changed"] = json!(r.changed.len());
             row["parsed"] = json!(r.parsed);
@@ -519,33 +541,62 @@ fn session_refresh_cmd(args: &[String]) -> ExitCode {
         println!("{row}");
     };
     let write = |p: &Path, t: &str| std::fs::write(p, t).expect("write the workspace copy");
-    step("cold", &mut session);
-    step("noop", &mut session);
-    let body = original.replacen(
-        "\n    begin\n",
-        "\n    begin\n        // session probe\n",
-        1,
-    );
-    write(&target, &body);
-    step("body", &mut session);
-    write(&target, &original);
-    step("body-restore", &mut session);
-    write(&target, &format!("\n\n{original}"));
-    step("newline", &mut session);
-    write(&target, &original);
-    step("newline-restore", &mut session);
+    // ENG-93: an edit that leaves the file as it was would verify nothing (the `body`
+    // edit matched nothing in a CRLF file for every CDO run before this).
+    let edited = |name: &str, new: &str| {
+        if new == original {
+            eprintln!(
+                "aldump --session-refresh: the {name} edit changes nothing in {} (the body edit needs a line that is exactly four spaces and `begin`; the decl edit a closing `}}`)",
+                target.display()
+            );
+            false
+        } else {
+            true
+        }
+    };
+    // The file's own line ending, so an edit never mixes `\n` into a CRLF file.
+    let eol = if original.contains("\r\n") {
+        "\r\n"
+    } else {
+        "\n"
+    };
+    // A comment line after the first procedure body's `begin` (4-space indent).
+    let mut body = String::with_capacity(original.len() + 32);
+    let mut done = false;
+    for l in original.split_inclusive('\n') {
+        body.push_str(l);
+        if !done && l.trim_end_matches(['\r', '\n']) == "    begin" {
+            body.push_str("        // session probe");
+            body.push_str(eol);
+            done = true;
+        }
+    }
     let decl = match original.rfind('}') {
         Some(i) => format!(
-            "{}\n    procedure SessionProbeAdded()\n    begin\n    end;\n{}",
+            "{}{eol}    procedure SessionProbeAdded(){eol}    begin{eol}    end;{eol}{}",
             &original[..i],
             &original[i..]
         ),
         None => original.clone(),
     };
-    write(&target, &decl);
-    step("decl", &mut session);
+    // Checked before the first build: a refused edit costs no cold build (Fable).
+    if !edited("body", &body) || !edited("decl", &decl) {
+        return ExitCode::FAILURE;
+    }
+    step("cold", true, &mut session);
+    step("noop", false, &mut session);
+    write(&target, &body);
+    step("body", true, &mut session);
     write(&target, &original);
-    step("decl-restore", &mut session);
+    step("body-restore", true, &mut session);
+    write(&target, &format!("{eol}{eol}{original}"));
+    step("newline", true, &mut session);
+    write(&target, &original);
+    step("newline-restore", true, &mut session);
+    write(&target, &decl);
+    step("decl", true, &mut session);
+    write(&target, &original);
+    step("decl-restore", true, &mut session);
     // A signature change: the first parameterless procedure of the file
     // gains a parameter.
     let signature = original
@@ -564,32 +615,32 @@ fn session_refresh_cmd(args: &[String]) -> ExitCode {
         });
     if let Some(signature) = signature {
         write(&target, &signature);
-        step("signature", &mut session);
+        step("signature", true, &mut session);
         write(&target, &original);
-        step("signature-restore", &mut session);
+        step("signature-restore", true, &mut session);
     }
     write(
         &probe,
         "codeunit 99977 \"Session Probe\"\n{\n    procedure Run()\n    begin\n    end;\n}\n",
     );
-    step("add", &mut session);
+    step("add", true, &mut session);
     std::fs::remove_file(&probe).expect("remove the probe file");
-    step("add-restore", &mut session);
+    step("add-restore", true, &mut session);
     if let Some(interface) = &implements {
         write(
             &probe,
             &format!("codeunit 99978 \"Session Probe Impl\" implements \"{interface}\"\n{{\n}}\n"),
         );
-        step("implementer", &mut session);
+        step("implementer", true, &mut session);
         std::fs::remove_file(&probe).expect("remove the probe file");
-        step("implementer-restore", &mut session);
+        step("implementer-restore", true, &mut session);
     }
     let mut app = app_original.clone();
     app.push(b'\n');
     std::fs::write(&app_json, &app).expect("write app.json");
-    step("appjson", &mut session);
+    step("appjson", true, &mut session);
     std::fs::write(&app_json, &app_original).expect("restore app.json");
-    step("appjson-restore", &mut session);
+    step("appjson-restore", true, &mut session);
     if failed {
         ExitCode::FAILURE
     } else {

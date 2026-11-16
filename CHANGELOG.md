@@ -7,6 +7,102 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (ENG-93: `aldump --session-refresh` edits CRLF files, and fails on an edit that reaches nothing)
+
+- **The hole.** The harness's `body` edit inserted a line after `"\n    begin\n"`, and its file
+  choice looked for the same text. A CRLF file (all of CDO) never contains it: without `--file`
+  the harness found no file, and with `--file` the `body` step wrote the file back unchanged, so
+  it refreshed an unchanged workspace and `--verify` called it equal to a cold build. The
+  body-only refresh path was never exercised on CDO. The `newline` and `decl` edits worked but
+  mixed `\n` into the CRLF file.
+- **Now.** The file choice and the `body` edit find the procedure body by its lines, and every edit
+  to the chosen file is written in its own line ending (the probe files and the `app.json` edit
+  stay LF). The file choice also skips the folders the workspace scan skips (`node_modules`,
+  `.alpackages`, `.snapshots`) and reads past a byte-order mark (29 of CDO's codeunit files have
+  one). Two guards: a `body` or `decl` edit that would leave the file as it was stops the run with
+  "the <step> edit changes nothing", before the first build and before writing; and each step states
+  whether its refresh must see a changed file (every step but `noop`, which must see none), a
+  mismatch adding `noOpError` to the row and failing the run.
+- Pinned by `cli_session_refresh_crlf`: a CRLF workspace with no `--file` (every edit step changes
+  one file, and the file is restored; with the old LF-only `body` edit it fails), a codeunit with
+  no procedure body (the run fails naming the edit, the file unchanged), and a file under
+  `node_modules`, which the scan skips (the run fails with `noOpError` on the `body` step).
+  Turning either guard off fails its test.
+- **On CDO** (a copy of the pinned baseline, no `--file`, `--verify`, both memory modes;
+  `tools/census-probe/runs-eng93/`): the harness now chooses a file itself
+  (`CDOABSAuthSettingsMgt.Codeunit.al`), the `body` step changes one file as `BodyOnly`, and every
+  step equals a cold build in both modes, with no `noOpError`: the body-only refresh path is
+  verified on CDO for the first time. The chosen file has no parameterless procedure, so there is
+  no `signature` step (nor was there in earlier CDO runs).
+
+### Added (TLS-78: an MCP answer says when the engine printed something of its own)
+
+- **Why:** the envelope's `stderr` is what the command writes through its job output. A line
+  the engine prints itself (a logger warning, an `eprintln!`, a stray `println!`) goes to the
+  engine child's own stderr, which `EngineFront` kept only as a tail for crash reports. So
+  when TLS-75 moved the CDO test-selection and commit-sites ratchets from one-shot CLI calls
+  (which checked the whole process's stderr) to the shared MCP server, they could no longer
+  see an engine warning on real CDO input.
+- **Now:** the engine child writes a stderr mark (`\0alsem-mark <id>\n`) right before each
+  response frame, and says so in its hello (`stderrMarks: true`; `alsem engine-host` only, not
+  an in-process server). The front's stderr drain takes the marks out of the text and records
+  where each fell (`StderrTail`). After an ask's answer, `EngineFront::last_ask_stderr` counts
+  the bytes between the previous ask's mark (or the child's start) and this ask's own: both
+  ends are in the child's own stream order, so the count does not depend on when the drain
+  thread reads. Output while the child was idle, during its start or `session/open`, or between
+  a status call and the next ask, lands on the next ask (a status or open response's mark does
+  not cut the window). Two counts that review rejected: byte totals around the call (the drain
+  runs on its own thread, so a line printed just before the answer could miss its call or land
+  on the next one), and the drain's total at the ask's sending (bytes printed earlier but not
+  yet read were charged to the ask).
+- The pool adds `engineStderr: {bytes, text}` (the newest 4 KiB) to the envelope when the
+  engine printed, `{unknown: <reason>}` when that cannot be told (an older child without marks,
+  a child that stopped, an ask sent again to a new child after an idle exit, a mark not read
+  within 1 s, the previous ask's mark dropped), and nothing otherwise, including for a call
+  that reached no child (refused, busy, or failed before its request was written). Every other
+  envelope is unchanged. `alsem_tests` and `alsem_impact` join their parts' (bytes summed,
+  texts in order), read from each part's frame before the part is judged, so a failed part's
+  is kept. `src/mcp/mod.rs` documents the field. The LSP's engine requests go through the same
+  pool and carry it too.
+- **Wait, and version mixes.** The mark is in the pipe before the answer frame (stderr is
+  unbuffered, and both are written under the output lock), so the wait is the drain thread's
+  next read; the 1 s cap bounds only a drain thread starved on a loaded host, or a marked child
+  whose stderr write failed. `computeMs` is taken before it. Measured over the `mcp_server` and
+  `mcp_tests` suites (69 counted calls, debug build, server1, first version): median 40 µs,
+  p95 140 µs, max 3.0 ms. An older child is never waited for (its hello says no marks):
+  `{unknown}`, never a count of 0. An older front ignores the hello key; it would show the mark
+  lines in a crash report's stderr tail.
+- `output_cdo::with_cdo_server` refuses a call whose envelope has `engineStderr`, for every
+  shared-server user (the CDO answers, the table-answer test, the round-2 size, selection and
+  commit-sites ratchets): the guard the one-shot calls had. A refusal names the calling test's
+  line (`#[track_caller]`).
+- Pinned by `mcp_server::an_engine_print_during_a_call_reaches_the_envelope` (four calls on
+  one server, each counting its hook line once; a plain call has no field; a
+  `no-stderr-marks` child gives `{unknown}`),
+  `mcp_tests::a_composite_answer_carries_its_parts_engine_stderr` (both parts' lines; a failed
+  part's `{unknown}` under the `abort-on-ask` hook), and the front's unit tests:
+  `stderr_marks_are_taken_out_and_counted_where_they_fall` (every split of the stream into two
+  reads, a mark mid-line, a NUL that starts no mark), `an_asks_window_runs_from_the_previous_mark_to_its_own`
+  (unread bytes before the ask, a status mark between asks, a dropped mark),
+  `an_asks_count_is_unknown_when_it_cannot_be_told`, `stderr_text_between_two_offsets`,
+  `hello_stderr_marks_across_versions` and
+  `an_ask_that_never_reached_a_child_does_not_report_the_last_ones` (found while measuring the
+  wait: an ask that failed before it was sent reported the previous ask). The breaks, each red
+  then green restored, are in the commit message.
+- `output_cdo` on CDO (`cdo-gate --only output`, 22 tests, 242 s, this version, whose window
+  also covers the child's start and `session/open`): no call carried `engineStderr`.
+- Limits: the count is a window on the child, not ownership per request. A line the child
+  prints while it works on something else (a background refill, a light worker answering
+  another request) counts to the ask whose window it falls in. A stray `print!` without a
+  newline waits in the child's line-buffered stdout and lands in a later window. The base side
+  of `alsem_impact` with a delta runs in a one-shot child and is not covered. A mark holds at
+  most 64 bytes, which fits the numeric ids the front mints; a long string id would never parse
+  and its ask would report `{unknown}` after the wait. A log line holding a NUL followed by
+  `alsem-mark ` would be read as a mark (engine review, 2026-11-16). No test reaches a resend
+  after an idle exit end to end: `ask_unknown`'s resend arm is pinned, the line in `call()`
+  that sets `resent` is not (a wrong value would count the new child from its start and lose
+  only the first child's output).
+
 ### Fixed (TLS-79: `cdo-speed`'s model-build reading resolves ~±8 %, not ~±20-50 %)
 
 - **The hole:** the side whose model was built second cost x1.28 CPU on average (x1.10-x1.58

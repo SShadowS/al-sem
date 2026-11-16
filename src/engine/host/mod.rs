@@ -171,6 +171,12 @@ pub struct Hello {
     /// against.
     pub grammar_sha: String,
     pub pid: u32,
+    /// The child writes a [`stderr_mark`] line to its stderr right before
+    /// each answer frame (TLS-78), so a front can count what the child
+    /// printed during exactly that ask. Absent (false) from an older child,
+    /// and left out when false, so an unmarked hello is an older child's.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub stderr_marks: bool,
 }
 
 impl Hello {
@@ -183,8 +189,28 @@ impl Hello {
             alsem_version: crate::engine::gate::version::driver_version(),
             grammar_sha: GRAMMAR_SHA.trim().to_string(),
             pid: std::process::id(),
+            // `serve_with` sets it from its config: only the engine-host
+            // process writes marks (an in-process server's stderr is a test's).
+            stderr_marks: false,
         }
     }
+}
+
+/// Starts a stderr mark. A NUL never occurs in a log line, so the front
+/// finds a mark even in the middle of another thread's unfinished line.
+pub const STDERR_MARK_PREFIX: &[u8] = b"\0alsem-mark ";
+
+/// The longest mark a front accepts (prefix, the ask id's JSON, newline).
+pub const STDERR_MARK_MAX: usize = 64;
+
+/// The stderr line that ends ask `id`'s output: everything the child wrote
+/// to its stderr before it belongs to this ask or an earlier one.
+#[must_use]
+pub fn stderr_mark(id: &serde_json::Value) -> Vec<u8> {
+    let mut line = STDERR_MARK_PREFIX.to_vec();
+    line.extend(id.to_string().bytes());
+    line.push(b'\n');
+    line
 }
 
 /// The grammar identity this build was generated from.
@@ -519,6 +545,9 @@ pub mod test_hooks {
         /// (`ResidentSession::without_stat_ctime`): a test can make a rewrite
         /// a `fresh` ask misses, to pin what `verify` does.
         StatWithoutCtime,
+        /// TLS-78: serve as a child built before stderr marks: no mark
+        /// lines, and a hello without `stderrMarks`.
+        NoStderrMarks,
         /// Take the path of a platform with no handle-relative creation
         /// (Windows, design §10): the child makes no output directory and
         /// answers inline-only, and `alsem mcp`'s output folder writes
@@ -567,6 +596,7 @@ pub mod test_hooks {
             "exit-after-open" => Hook::ExitAfterOpen,
             "stat-without-ctime" => Hook::StatWithoutCtime,
             "stray-stdout-on-ask" => Hook::StrayStdoutOnAsk,
+            "no-stderr-marks" => Hook::NoStderrMarks,
             "no-output-dir" => Hook::NoOutputDir,
             "flood-after-open" => {
                 let (kind, count) = arg.split_once(':')?;
