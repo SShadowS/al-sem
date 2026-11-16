@@ -3066,7 +3066,8 @@ fn eng114_spans(mut spans: Vec<al_sem::engine::l5::transaction_spans::Transactio
         size_of::<al_sem::engine::l5::transaction_spans::TransactionSpan>(),
         ids(|s| s.routines_in_span.iter().map(String::as_str).collect()),
         ids(|s| s.writes_tables.iter().map(String::as_str).collect()),
-        ids(|s| s.publishes_events.iter().map(String::as_str).collect()),
+        // `&**`: the names are `String`s before ENG-114 and `SharedStr`s after.
+        ids(|s| s.publishes_events.iter().map(|e| &**e).collect()),
         ids(|s| vec![s.commit_operation_id.as_str()]),
         ids(|s| vec![s.commit_routine_id.as_str()]),
     );
@@ -3080,7 +3081,7 @@ fn eng114_spans(mut spans: Vec<al_sem::engine::l5::transaction_spans::Transactio
         .map(|s| std::mem::take(&mut s.writes_tables))
         .collect();
     step("det.transaction_spans.writes_tables", tables);
-    let events: Vec<Vec<String>> = spans
+    let events: Vec<Vec<_>> = spans
         .iter_mut()
         .map(|s| std::mem::take(&mut s.publishes_events))
         .collect();
@@ -3090,7 +3091,7 @@ fn eng114_spans(mut spans: Vec<al_sem::engine::l5::transaction_spans::Transactio
         tally(
             spans
                 .iter()
-                .flat_map(|s| s.pending_events.iter().map(String::as_str))
+                .flat_map(|s| s.pending_events.iter().map(|e| &**e))
                 .collect()
         ),
         tally(
@@ -3106,7 +3107,7 @@ fn eng114_spans(mut spans: Vec<al_sem::engine::l5::transaction_spans::Transactio
                 .collect()
         ),
     );
-    let pending_events: Vec<Vec<String>> = spans
+    let pending_events: Vec<Vec<_>> = spans
         .iter_mut()
         .map(|s| std::mem::take(&mut s.pending_events))
         .collect();
