@@ -251,7 +251,10 @@ fn model_fingerprint_sees_one_field_of_one_routine() {
 /// struct `model_parts` reads does not compile until it is placed there: each
 /// is destructured without `..`.)
 ///
-/// DISCRIMINATIONS (2026-11-16): see the TLS-81 commit message.
+/// DISCRIMINATIONS (2026-11-16): the starts' part emptied -> "one more
+/// background start" fails; the loaded-only part printed as a constant ->
+/// "one more loaded-only routine" fails; `loaded_only_tables` left out of
+/// `model_parts`' destructure -> the build fails (E0027).
 #[test]
 fn model_fingerprint_sees_background_starts_and_loaded_only_tables() {
     use crate::program::model::calls::{BackgroundStart, StartedCodeunit};
@@ -282,6 +285,50 @@ fn model_fingerprint_sees_background_starts_and_loaded_only_tables() {
         "precondition: a new loaded-only routine"
     );
     assert_ne!(fp, model_fingerprint(&c), "one more loaded-only routine");
+}
+
+const BG_JOB: &str = "codeunit 50160 \"BG Job\"\n{\n    trigger OnRun()\n    begin\n    end;\n}\ncodeunit 50162 \"BG Other\"\n{\n    trigger OnRun()\n    begin\n    end;\n}\n";
+const BG_USE: &str = "codeunit 50161 \"BG Use\"\n{\n    procedure Go()\n    var\n        S: Integer;\n    begin\n        StartSession(S, Codeunit::\"BG Job\");\n        StartSession(S, Codeunit::\"BG Job\");\n    end;\n\n    procedure Touch(var RR: RecordRef)\n    begin\n        RR.Modify(true);\n    end;\n}\n";
+
+/// TLS-81 (review, Fable): a refresh keeps `background_starts` and
+/// `loaded_only_tables` equal to a cold build's (the model text compares
+/// both since TLS-81). The fixture holds two starts (two map entries, so the
+/// sort is exercised) and a trigger-firing `RecordRef` write that no loaded
+/// table answers; a body edit (B) retargets one start and a declaration edit
+/// (S) adds a second `RecordRef` writer. Stated preconditions: the cold model
+/// has both fields filled.
+///
+/// DISCRIMINATION (2026-11-16): the session's model entry
+/// (`cross_app_program_from_cached`) dropping the start to "BG Other" -> both
+/// modes fail at "a start retargeted: model differs from cold".
+fn background_starts_and_loaded_only_tables_follow_edits(mode: MemoryMode) {
+    let ws = Ws::new(&[("Job.Codeunit.al", BG_JOB), ("Use.Codeunit.al", BG_USE)]);
+    let filled = |ws: &Ws| {
+        let x = assemble_and_resolve_cross_app_program(&ws.inputs(), false, AssemblyNeeds::RULES)
+            .expect("cold model");
+        (
+            x.resolved.calls.background_starts.len(),
+            x.resolved.calls.loaded_only_tables.len(),
+        )
+    };
+    assert_eq!(filled(&ws), (2, 1), "precondition: two starts, one routine");
+    let mut s = WorkspaceSession::with_mode(mode);
+    refresh_and_compare(&mut s, &ws, "cold");
+    ws.edit(
+        "Use.Codeunit.al",
+        "        StartSession(S, Codeunit::\"BG Job\");\n    end;",
+        "        StartSession(S, Codeunit::\"BG Other\");\n    end;",
+    );
+    let r = refresh_and_compare(&mut s, &ws, "a start retargeted");
+    assert_eq!(r.class, ChangeClass::BodyOnly);
+    ws.edit(
+        "Use.Codeunit.al",
+        "    procedure Touch(",
+        "    procedure Touch2(var RR: RecordRef)\n    begin\n        RR.Delete(true);\n    end;\n\n    procedure Touch(",
+    );
+    let r = refresh_and_compare(&mut s, &ws, "a second RecordRef writer");
+    assert_eq!(r.class, ChangeClass::Declaration);
+    assert_eq!(filled(&ws), (2, 2), "the second writer is loaded-only too");
 }
 
 /// The harness itself: two cold builds of one workspace give the same text
@@ -1749,4 +1796,5 @@ in_both_modes!(
     file_ix_shift_restamps_later_files,
     low_mem_retains_no_dependency_tree,
     dependency_text_is_extracted_once_per_package,
+    background_starts_and_loaded_only_tables_follow_edits,
 );
