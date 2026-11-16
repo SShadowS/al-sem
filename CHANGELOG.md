@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (TLS-79: `cdo-speed`'s model-build reading resolves ~±8 %, not ~±20-50 %)
+
+- **The hole:** the side whose model was built second cost x1.28 CPU on average (x1.10-x1.58
+  per pass, ENG-97), and two flipped passes cancel only a steady factor: a landing read x1.232
+  (passes x1.565 and x0.970) that ENG-97's runs could not reproduce.
+- **Cause, measured** (one binary against itself, 3 pairs per condition, 2026-11-15): the
+  first side's server is idle while the second builds (0.00-0.01 s CPU), yet the second build
+  costs x1.105 / x1.110 / x1.191 right after the first and x1.056 / x1.291 / x1.189 after
+  waiting for it to go idle; with the first server closed, x0.851 / x0.987 / x0.954. So the
+  first side's resident model, not its work. Not measured: the kernel mechanism (reclaim,
+  page faults or similar).
+- **Now:** each warm-up pass times one side's build, closes that server (and waits for its
+  whole process tree to go), times the other side's build, then starts the first side again
+  untimed, so the remaining warm-up calls and the rounds have both servers as before. Cost:
+  one more model build per pass (~30-70 s). The rounds' judgement is unchanged.
+- **Calibrated** (4 runs, the new script, every one PASS): master `c4723a1c` against itself
+  twice and ENG-85 `96d49041` against `801cc6af` twice. Per-pass build head/base CPU
+  x0.938, 0.862, 0.939, 1.029, 1.024, 1.014, 0.979, 0.990 (sd of the log 0.060; ENG-97's six
+  old passes: x0.633-x1.331, sd 0.298); the runs read x0.899, x0.983, x1.019, x0.984. A
+  two-pass reading resolves about ±8 % (95 %), ±5 % without the first run, which started at
+  a host load of 175. ENG-85 read x0.983 and x0.984. Not changed: `warm-tests` (the test
+  universe, both servers resident) still swings x0.858-x1.080 per pass (mean x0.956), well
+  inside its 1.30 limit; its cause is not measured.
+- Test: `gate_scripts::speed_warm_up_cancels_the_second_side_penalty` (the stub's build is
+  50 % slower while another server holds a built model); the original scheduling restored
+  reads x1.50 and fails it.
+
 ### Added (TLS-77: a `profiling` build and `scripts/profile`, so samply names what it samples)
 
 - **Why:** ENG-84's samply profile could read only self shares. The task assumed missing

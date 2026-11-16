@@ -179,10 +179,12 @@ Every test still runs before a merge; the tiers decide HOW OFTEN each one runs.
   1.10. It runs ALONE before the test lanes (their load is noise to it); never run two
   gates or a build beside it if you can help it. **The warm-up runs twice (TLS-65)**, on
   fresh server pairs, the second with every call's side order flipped, and is judged on
-  the geometric mean of the two: one fixed-order sample always put head second, and the
-  side built second was measured once at x1.167 for a binary against itself at load ~9
-  (ENG-81; not reproduced in TLS-65's loaded run, x1.02; one quiet run read x1.096 with
-  head second, x1.004 flipped). TLS-76 replaced the 1-min load (TLS-65's signal, which
+  the geometric mean of the two. Each side's model build is timed with the other side's
+  server closed, then the first side is started again untimed for the rest (TLS-79: with
+  the other side's model resident, its server idle, the second build cost x1.06-x1.29
+  CPU, x1.10-x1.58 in ENG-97's passes; closed, x0.85-x0.99). Calibrated: per-pass build
+  ratios x0.862-x1.029 over 8 passes (was x0.633-x1.331), so a two-pass reading resolves
+  about ±8 % (±5 % on a calm host); one extra build per pass. TLS-76 replaced the 1-min load (TLS-65's signal, which
   read 50-230 on server1 from other projects while the CPU was ~78 % idle, and stopped
   every gate) with CPU pressure, used twice: before each pass it waits (up to 10 min, then
   runs anyway) for the host's `some avg60` (`/proc/pressure/cpu`) to fall to 15 %; and
