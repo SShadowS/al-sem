@@ -87,7 +87,11 @@ scripts/cdo-slot acquire|release|status|run <owner> <reason>  # The one CDO slot
                                # --only inside such a hand hold shares it). While another session holds it,
                                # the PreToolUse hook scripts/claude-hooks/cdo-slot-guard (wired by the owner)
                                # refuses this session's cargo builds/tests, the gate scripts and aldump/alsem
-                               # on CDO, naming the holder. `scripts/cdo-slot status` says who.
+                               # on CDO, naming the holder. `scripts/cdo-slot status` says who. Waiters
+                               # (`run`, `acquire --wait`) are served in arrival order (TLS-88): a holder
+                               # that releases and asks again goes behind them, and an acquire without
+                               # --wait refuses while anyone waits; a waiter short of memory steps
+                               # aside until it has it. Tickets: $CDO_SLOT_DIR/queue/
 scripts/cdo-before-after <base> [<head>|.]  # What a change moves on CDO (TLS-61): builds each side's
                                # release-fast alsem + aldump (a revision once per commit, in cdo-speed's
                                # cache beside its alsem; `.` = the working tree, in target/before-after-head),
