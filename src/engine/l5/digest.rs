@@ -1574,9 +1574,10 @@ struct NodeMemo {
 /// to the borrow of the graph that owns the edges, so it cannot outlive them: a
 /// freed edge's address, reused by another edge, can never hit a stale memo.
 ///
-/// shortcut: each cache (one per root) allocates a slot per edge of the whole
-/// slice on first use: 0.01 % of `fingerprint`'s CPU on CDO, peak RSS unchanged
-/// (ENG-105 notes). If it shows in a profile, share one slot table per worker.
+/// The slot table (a slot per edge of the whole slice) is the thread's: a cache
+/// takes it on first use, and on drop empties the slots it filled and hands it
+/// back (ENG-106). A fresh zeroed table per root cost the allocator's page
+/// set-up and purge per root, on every worker's heap (`purge_delay` is 0).
 #[derive(Default)]
 pub struct HopCache<'i>(
     /// Memos of edges outside the [`DenseMemos`] slice, by address.
@@ -1595,7 +1596,15 @@ pub struct HopCache<'i>(
 struct DenseMemos {
     base: usize,
     len: usize,
+    /// At least `len` slots once taken; only the `filled` ones hold a memo.
     slots: Vec<Option<Rc<NodeMemo>>>,
+    filled: Vec<u32>,
+}
+
+thread_local! {
+    /// The thread's spare slot table, every slot empty (ENG-106).
+    static SPARE_SLOTS: std::cell::RefCell<Vec<Option<Rc<NodeMemo>>>> =
+        const { std::cell::RefCell::new(Vec::new()) };
 }
 
 impl DenseMemos {
@@ -1603,10 +1612,13 @@ impl DenseMemos {
     /// for them on first use) and `edge` is one of them.
     fn index_of(&mut self, edge: &SnapshotGraphEdge, edges: &[SnapshotGraphEdge]) -> Option<usize> {
         let base = edges.as_ptr() as usize;
-        if self.slots.is_empty() && !edges.is_empty() {
+        if self.len == 0 && !edges.is_empty() {
             self.base = base;
             self.len = edges.len();
-            self.slots.resize(edges.len(), None);
+            self.slots = SPARE_SLOTS.with(|s| std::mem::take(&mut *s.borrow_mut()));
+            if self.slots.len() < edges.len() {
+                self.slots.resize(edges.len(), None);
+            }
         }
         if self.base != base || self.len != edges.len() {
             return None;
@@ -1614,7 +1626,34 @@ impl DenseMemos {
         let size = std::mem::size_of::<SnapshotGraphEdge>();
         let offset = (edge as *const SnapshotGraphEdge as usize).checked_sub(base)?;
         let i = offset / size;
-        (offset % size == 0 && i < self.slots.len() && std::ptr::eq(&edges[i], edge)).then_some(i)
+        (offset % size == 0 && i < self.len && std::ptr::eq(&edges[i], edge)).then_some(i)
+    }
+
+    /// Slot `i`'s memo, built by `build` on first use.
+    fn slot(&mut self, i: usize, build: impl FnOnce() -> NodeMemo) -> Rc<NodeMemo> {
+        let slot = &mut self.slots[i];
+        if slot.is_none() {
+            self.filled
+                .push(u32::try_from(i).expect("edge index fits u32"));
+        }
+        Rc::clone(slot.get_or_insert_with(|| Rc::new(build())))
+    }
+}
+
+impl Drop for DenseMemos {
+    /// Empties the filled slots and gives the table back to the thread (a
+    /// larger spare is kept).
+    fn drop(&mut self) {
+        for &i in &self.filled {
+            self.slots[i as usize] = None;
+        }
+        let slots = std::mem::take(&mut self.slots);
+        let _ = SPARE_SLOTS.try_with(|s| {
+            let mut spare = s.borrow_mut();
+            if slots.len() > spare.len() {
+                *spare = slots;
+            }
+        });
     }
 }
 
@@ -1641,8 +1680,7 @@ impl<'i> HopCache<'i> {
     /// alone — what makes keying by edge sound.
     fn get(&mut self, edge: &'i SnapshotGraphEdge, idx: &FingerprintIndexes) -> Rc<NodeMemo> {
         if let Some(i) = self.3.index_of(edge, idx.typed_edges) {
-            let slot = &mut self.3.slots[i];
-            return Rc::clone(slot.get_or_insert_with(|| Rc::new(build_memo(edge, idx))));
+            return self.3.slot(i, || build_memo(edge, idx));
         }
         Rc::clone(
             self.0
@@ -8008,6 +8046,44 @@ mod tests {
     ///
     /// DISCRIMINATION (2026-11-16): `DenseMemos::index_of` without its slice check
     /// -> the second edge reads the first one's hop (call site "cs-A1", not "cs-B1").
+    #[test]
+    fn hop_cache_reused_slot_table_starts_empty() {
+        // ENG-106: a dropped cache hands its slot table to the next cache on the
+        // thread. Hand-stated: two equally long slices whose edge 0 differs; the
+        // second cache, on the first one's table, must build its own memo.
+        // DISCRIMINATION (2026-11-16): `DenseMemos::drop` not emptying the
+        // filled slots -> the second cache reads "cs-A1" (red). Restored: green.
+        let snapshot_with = |from: &str| {
+            let mut snap = empty_snapshot();
+            *std::sync::Arc::make_mut(&mut snap.typed_edges) = vec![
+                call_edge(from, "X", &format!("cs-{from}")),
+                call_edge("X", "Y", "cs-xy"),
+            ];
+            snap
+        };
+        let (sa, sb) = (snapshot_with("A1"), snapshot_with("B1"));
+        let (ia, ib) = (
+            build_fingerprint_indexes(&sa),
+            build_fingerprint_indexes(&sb),
+        );
+        let site_of = |m: &NodeMemo| match &*m.hop {
+            WitnessHop::Call { callsite_id, .. } => callsite_id.clone(),
+            other => panic!("a call hop: {other:?}"),
+        };
+        let first = {
+            let mut hc = HopCache::default();
+            site_of(&hc.get(&ia.typed_edges[0], &ia))
+        };
+        assert_eq!(first, "cs-A1");
+        let spare = SPARE_SLOTS.with(|s| s.borrow().len());
+        assert!(
+            spare >= 2,
+            "precondition: the first table went back ({spare})"
+        );
+        let mut hc = HopCache::default();
+        assert_eq!(site_of(&hc.get(&ib.typed_edges[0], &ib)), "cs-B1");
+    }
+
     #[test]
     fn hop_cache_slots_belong_to_one_edge_slice() {
         let snapshot_with = |from: &str| {

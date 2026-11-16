@@ -7,6 +7,73 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (ENG-106: `alsem fingerprint` builds its root blocks on 2 workers, wall x0.55 on CDO, CPU not higher)
+
+- **What changed** (`src/engine/l5/fingerprint_query.rs`, `digest.rs`, `fingerprint_cli.rs`,
+  `session.rs`; no output change).
+  - `fingerprint_query` takes a `ReachWorkers`. Root blocks run on the literal pass's pool
+    (`reach_pool`), one root per task, at most `FINGERPRINT_BLOCK_WORKERS` (2) at once.
+  - The one-shot CLI passes `default_reach_workers()`. A resident revision passes its own setting,
+    which is serial (owner decision 2026-11-12). Inside a rayon worker the loop stays serial, as the
+    literal pass does.
+  - The indexed collect keeps the root order before the `routine_id` sort (not pinned by a test:
+    every fixture's root ids are unique, so the sort hides the collect's order).
+- **The slot table is now per thread.** Each root's `HopCache` used to allocate a zeroed slot table
+  (ENG-105: a slot per edge). It now takes its thread's spare table and, on drop, empties the slots
+  it filled and hands the table back.
+  - Why: at 8 workers, the fresh table per root showed as allocator page set-up and purge
+    (`purge_delay` is 0) on every worker heap. `mi_page_free_list_extend` was 17.6 % and `madvise`
+    5.1 % of CPU, against 6.8 % and 3.0 % serial.
+  - Effect: CPU at 8 workers fell from 123-146 s (block 1, before the change) to 110-114 s (block
+    2, after it).
+  - Cost: every thread that runs a `HopCache` keeps its table (8 bytes per edge) for its lifetime.
+    That includes digest and prove's per-root cache and the engine child's long-lived workers. It
+    is not counted in MiB here. `cdo-speed`'s summed peak of the resident servers, which run
+    prove and digest, did not rise: x0.996 and x0.993.
+- **Final head** (05511cd5, the cap in place) against master 5e49ecea, alternating.
+  - Base: CPU 93.2 / 89.8 s, wall 67.7 / 64.0 s.
+  - Head: CPU 91.4 / 83.3 s (x0.98 / x0.93), wall 37.6 / 33.3 s (about x0.55). The 37.6 s run is
+    just over the 30-35 s bar, on a host whose load ran 5-14.
+  - Peak RSS 7.90-7.94 GB on both. Outputs byte-identical.
+  - `cdo-speed` twice, both PASS: build x0.968 / x1.033, warm prove x0.780 / x0.749, warm tests
+    x1.005 / x0.967, peak memory x0.996 / x0.993.
+  - `cdo-before-after 5e49ecea 05511cd5`: nothing moved (fingerprints 2301 and 32548 kept, every
+    detector, unknown edges 0).
+- **The worker sweep** (block 3), the source of the chosen count: base 350dbd30 against 221e2c18
+  (the same code, set by `AL_SEM_REACH_WORKERS` before the cap). Two rounds each, alternating
+  order; a round run beside other load is left out. CPU is user + sys.
+
+  | workers | CPU | CPU vs base mean (84.6 s) | wall |
+  |---|---:|---:|---:|
+  | base (serial) | 91.6 / 77.7 s | | 64.2 / 52.0 s |
+  | 1 | 75.7 / 75.6 s | | 50.6 / 50.9 s |
+  | **2 (chosen)** | 84.9 / 84.3 s | x1.00 | 34.2 / 34.1 s |
+  | 4 | 95.4 / 89.2 s | x1.09 | 25.3 / 23.4 s |
+  | 8 | 107.6 / 104.4 s | x1.25 | 18.8 / 18.4 s |
+
+  - The base's two rounds differ by 18 %; the 91.6 s one is probably loaded. Against the other
+    base round (77.7 s) or the same code at 1 worker (75.7 s), 2 workers cost about x1.09-x1.12
+    in CPU, 4 cost x1.15-x1.22 and 8 cost x1.34-x1.40. The final pair above puts 2 workers at
+    x0.93-x0.98 of its base.
+  - Why 2: it is the cheapest count in CPU that meets the 30-35 s wall bar, because the one-shot
+    often runs beside other work. 4 or 8 buy about 10 or 16 s more wall time for more CPU (above);
+    change `FINGERPRINT_BLOCK_WORKERS` for that.
+  - Peak RSS was unchanged in every mode: 7.89-7.95 GB.
+  - Every run's output was byte-identical to the base's, run after run. That is 40 runs:
+    - block 1, 12 runs: base, and 4d2f5958 (before the slot-table change) at 1 and 8 workers;
+    - block 2, 12 runs: base, and 221e2c18 at 1, 4 and 8 workers;
+    - block 3, 12 runs: base, and 221e2c18 at 2, 4 and 8 workers;
+    - the final pair, 4 runs.
+- **Tests and breaks.**
+  - `parallel_blocks_equal_serial_blocks`: 24 roots sharing one callee's carrier keys, 5 runs at
+    the cap, each equal to the serial run, and every block built on an `al-sem-reach-` thread.
+    Breaks: the parallel branch skipping its first root -> unequal (red); the condition forced
+    serial -> no pool thread (red).
+  - `hop_cache_reused_slot_table_starts_empty`: a second cache on the first one's returned table
+    builds its own memo. Break: `drop` not emptying the filled slots -> "cs-A1" (red). Restored:
+    green.
+  - The cap of 2 is a measured setting, not pinned by a test.
+
 ### Changed (ENG-109: finished fact cones are flat sorted slices, 284.2 MiB less resident memory on CDO)
 
 - **What changed** (`src/engine/l4/capability_cone.rs`, `cone_walk_par.rs`; no output change). An
