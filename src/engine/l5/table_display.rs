@@ -99,7 +99,7 @@ mod tests {
             is_parameter: false,
             parameter_index: None,
             temp_state: crate::program::body::features::PTempState {
-                kind: "unknown".to_string(),
+                kind: "unknown".into(),
                 value: None,
                 parameter_index: None,
             },

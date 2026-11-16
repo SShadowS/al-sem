@@ -156,7 +156,9 @@ pub(crate) fn dep_routine_to_l3(r: &ProjectedRoutine, object_type: &str) -> Mode
             crate::program::model::workspace::ModelRecordVariable {
                 id: format!("{}/rv/{}", r.id, p.name.to_lowercase()).into(),
                 name: p.name.clone(),
-                table_name: crate::program::model::record_types::record_table_name_of(&p.type_text),
+                table_name: crate::program::model::record_types::record_table_name_of(&p.type_text)
+                    .as_deref()
+                    .map(crate::program::body::features::shared_vocab),
                 table_id: None,
                 is_parameter: true,
                 parameter_index: Some(pidx),

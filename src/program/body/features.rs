@@ -165,13 +165,36 @@ pub struct PExpressionInfo {
     pub member: Option<crate::program::str_pool::SharedStr>,
 }
 
+crate::open_vocab!(
+    /// [`PCallSite::control_context`]'s words, the lattice values of
+    /// `control_context::ControlContext::as_str` (ENG-96); any other word is kept as `Other`.
+    pub ControlContextWord {
+        TopLevel => "top-level",
+        Conditional => "conditional",
+        LoopBody => "loop-body",
+        IsHandledGuarded => "is-handled-guarded",
+        ErrorPath => "error-path",
+        Unreachable => "unreachable",
+    }
+);
+
+crate::open_vocab!(
+    /// [`PTempState::kind`]'s words (ENG-96); any other word is kept as `Other`.
+    pub TempKind {
+        Known => "known",
+        ParameterDependent => "parameter-dependent",
+        Unknown => "unknown",
+    }
+);
+
 /// Temp-state of a record variable / op.
 ///
 /// `{ kind: "known", value }` | `{ kind: "parameter-dependent", parameterIndex }`
 /// | `{ kind: "unknown" }`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub struct PTempState {
-    pub kind: String,
+    /// ENG-96: a 4-byte word ([`TempKind`]), compared, ordered and serialized as its text.
+    pub kind: TempKind,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub value: Option<bool>,
     #[serde(rename = "parameterIndex", skip_serializing_if = "Option::is_none")]
@@ -293,13 +316,15 @@ pub struct PCallSite {
     /// R1b control-context lattice value (kebab-case string). ABSENT when the
     /// site has no entry (TryFunction / no body / unknown) — matching al-sem's
     /// "assign only when defined" convention.
+    /// ENG-96: a 4-byte word ([`ControlContextWord`]), serialized as its text.
     #[serde(rename = "controlContext", skip_serializing_if = "Option::is_none")]
-    pub control_context: Option<String>,
+    pub control_context: Option<ControlContextWord>,
     /// R1c operation-order index entry. ABSENT when the walk produced no entry
     /// (symbol-only / no-body / TryFunction) — matching al-sem's
-    /// "assign only when defined" convention.
+    /// "assign only when defined" convention. ENG-96: boxed, as no model row
+    /// carries one (CDO: 0 of 160,213); serialized as before.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub order: Option<OperationOrder>,
+    pub order: Option<Box<OperationOrder>>,
     /// True iff this call is the OUTERMOST expression of a bare call statement
     /// (`StmtKind::Call`) — the result is discarded. Expression-position calls
     /// (if-conditions, assignment RHS, arguments) are `false`. Consumed by d53
@@ -352,8 +377,9 @@ pub struct PCallSite {
     ///
     /// INTERNAL-ONLY (`serde(skip)`, excluded from PartialEq), as
     /// `in_statement_position`.
+    /// ENG-96: boxed (CDO: set on 4 of 160,213 call sites).
     #[serde(skip)]
-    pub implicit_receiver: Option<String>,
+    pub implicit_receiver: Option<Box<String>>,
     /// True iff the resolver decided this call starts an XmlPort in a way that
     /// may fail (ENG-08, measured on BC 28): an IMPORT (an `XmlPort.Import`, or
     /// an `XmlPort.Run` whose `Direction` allows one, `dataset::import_export`),
@@ -1279,7 +1305,7 @@ mod tests {
 
     fn ts(kind: &str, value: Option<bool>, param: Option<u32>) -> PTempState {
         PTempState {
-            kind: kind.to_string(),
+            kind: kind.into(),
             value,
             parameter_index: param,
         }
@@ -1392,7 +1418,7 @@ mod tests {
             name: "Rec".to_string(),
             table_name: None,
             temp_state: PTempState {
-                kind: "parameter-dependent".to_string(),
+                kind: "parameter-dependent".into(),
                 value: None,
                 parameter_index: Some(RECEIVER_PARAM_INDEX),
             },

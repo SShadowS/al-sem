@@ -917,7 +917,7 @@ fn field_ref_operations(routine: &ModelRoutine, tables: &Tables<'_>) -> Vec<Mode
             record_variable_id: None,
             table_id,
             temp_state: Some(temp_state.unwrap_or_else(|| PTempState {
-                kind: "unknown".to_string(),
+                kind: "unknown".into(),
                 value: None,
                 parameter_index: None,
             })),

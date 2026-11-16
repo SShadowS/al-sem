@@ -32,6 +32,7 @@ pub mod split_decls;
 pub mod str_pool;
 pub mod table_event_guard;
 pub mod topology;
+pub mod vocab;
 
 pub use build::{
     DepLayer, assemble_program_graph, build_dep_layer, build_program_graph,

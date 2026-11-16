@@ -3227,7 +3227,7 @@ mod flow_field_tests {
 
     fn known_false() -> PTempState {
         PTempState {
-            kind: "known".to_string(),
+            kind: "known".into(),
             value: Some(false),
             parameter_index: None,
         }

@@ -687,7 +687,7 @@ pub(crate) fn direct_facts_for_routine(
                 extra: Some(CapabilityExtra::Table {
                     record_variable_id: None,
                     temp_state: Some(crate::program::body::features::PTempState {
-                        kind: "known".to_string(),
+                        kind: "known".into(),
                         value: Some(ffr.temporary()),
                         parameter_index: None,
                     }),
@@ -9782,7 +9782,7 @@ mod flow_field_fact_tests {
             false,
         );
         op.temp_state = Some(PTempState {
-            kind: "known".to_string(),
+            kind: "known".into(),
             value: Some(false),
             parameter_index: None,
         });

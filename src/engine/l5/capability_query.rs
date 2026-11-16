@@ -182,7 +182,7 @@ mod tests {
         f.extra = Some(CapabilityExtra::Table {
             record_variable_id: None,
             temp_state: Some(crate::program::body::features::PTempState {
-                kind: kind.to_string(),
+                kind: kind.into(),
                 value,
                 parameter_index: None,
             }),
@@ -321,7 +321,7 @@ mod issue100_physical_table_bit_tests {
         f.extra = Some(CapabilityExtra::Table {
             record_variable_id: None,
             temp_state: Some(crate::program::body::features::PTempState {
-                kind: if value.is_some() { "known" } else { "unknown" }.to_string(),
+                kind: if value.is_some() { "known" } else { "unknown" }.into(),
                 value,
                 parameter_index: None,
             }),

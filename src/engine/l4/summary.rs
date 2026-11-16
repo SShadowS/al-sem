@@ -48,7 +48,7 @@ impl TempState {
             TempState::Unknown => ("unknown", None, None),
         };
         crate::program::body::features::PTempState {
-            kind: kind.to_string(),
+            kind: kind.into(),
             value,
             parameter_index,
         }
