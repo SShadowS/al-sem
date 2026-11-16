@@ -14,10 +14,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `alsem impact --diff`, which took 536 s CPU, and a one-shot `prove` and `explain` of RunReportID,
   81 and 76 s. They also record the ENG-98 analyze and fingerprint profiles and the ENG-100
   fingerprint profile, with their binary commits.
-- **Each profile** comes with its self and inclusive shares, the exact command, the binary and
-  workspace SHAs, and the path of the raw file on the persistent volume
-  (`/work/.al-sem/profiles/2026-11-16-*`). Raw profiles stay out of git: they go stale with
-  every engine change.
+- **What each profile comes with.**
+  - The three new profiles: self and inclusive shares, the exact command, and the binary and
+    workspace SHAs.
+  - The ENG-98 and ENG-100 profiles: self shares and the command. The ENG-98 binaries are named
+    by SHA. The ENG-100 binary was a pre-rebase commit that no longer exists, so it cannot be
+    rebuilt by SHA.
+  - Every profile names its raw file on the persistent volume (`/work/.al-sem/profiles/2026-11-16-*`).
+    Raw profiles stay out of git: they go stale with every engine change.
+- **Both readers** (`samply-shares.py`, `samply-chains.py`) now refuse a profile without CPU
+  deltas, instead of counting samples as CPU. They also count CPU on a sample without a stack in
+  the total. No total in the notes moved: the five profiles have no such samples.
 - **Added `tools/census-probe/runs-eng84/samply-chains.py`:** the frames above any leaf in a
   samply profile (ENG-98's SipHash reader with the needle made an argument).
 - **Found:**

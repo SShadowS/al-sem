@@ -85,11 +85,15 @@ for th in prof["threads"]:
         scache[s] = None if last is None else " <- ".join(clean(n) for n in seen[last + 1 : last + 1 + depth])
         return scache[s]
 
-    deltas = samples.get("threadCPUDelta") or [1] * samples["length"]
+    deltas = samples.get("threadCPUDelta")
+    if not deltas:
+        sys.exit(f"thread {th.get('name')!r} has no threadCPUDelta: CPU shares need it")
     for s, w in zip(samples["stack"], deltas):
-        if s is None or not w:
+        if not w:
             continue
-        total += w
+        total += w  # a sample without a stack still spent CPU
+        if s is None:
+            continue
         c = chain(s)
         if c is not None:
             hit += w
