@@ -83,6 +83,40 @@ fn every_step_edits_a_crlf_file() {
     );
 }
 
+/// An edit that changes the file but never reaches the session fails the run at that
+/// step: the file is under `node_modules`, which the workspace scan skips, so every edit
+/// step's refresh sees nothing changed (`noOpError`), while `noop` stays clean.
+#[test]
+fn an_edit_the_session_never_sees_fails_the_run() {
+    let t = tempfile::tempdir().unwrap();
+    let ws = t.path().join("ws");
+    workspace(
+        &ws,
+        "Other.Codeunit.al",
+        &crlf("codeunit 50932 \"SR Other\"\n{\n}\n"),
+    );
+    std::fs::create_dir_all(ws.join("node_modules")).unwrap();
+    std::fs::write(
+        ws.join("node_modules/Hidden.Codeunit.al"),
+        crlf("codeunit 50933 \"SR Hidden\"\n{\n    procedure Run()\n    begin\n    end;\n}\n"),
+    )
+    .unwrap();
+
+    let out = refresh(&ws, &["--file", "node_modules/Hidden.Codeunit.al"]);
+    assert!(
+        !out.status.success(),
+        "an edit the session never sees must fail the run"
+    );
+    let rows = rows(&out);
+    let row = |step: &str| rows.iter().find(|r| r["step"] == step).cloned().unwrap();
+    assert!(row("body").get("noOpError").is_some(), "{rows:?}");
+    assert!(row("noop").get("noOpError").is_none(), "{rows:?}");
+    assert!(
+        !String::from_utf8_lossy(&out.stderr).contains("changes nothing"),
+        "the file itself did change"
+    );
+}
+
 /// A file the `body` edit cannot change (no procedure body) fails the run, naming the
 /// edit, and is left as it was.
 #[test]

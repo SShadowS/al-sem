@@ -20,9 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stops the run with "the <step> edit changes nothing", before writing; and each step states
   whether its refresh must see a changed file (every step but `noop`, which must see none), a
   mismatch adding `noOpError` to the row and failing the run.
-- Pinned by `cli_session_refresh_crlf` (a CRLF workspace with no `--file`: every edit step
-  changes one file and the file is restored; a codeunit with no procedure body fails the run,
-  unchanged).
+- Pinned by `cli_session_refresh_crlf`: a CRLF workspace with no `--file` (every edit step changes
+  one file, and the file is restored; with the old LF-only `body` edit it fails), a codeunit with
+  no procedure body (the run fails naming the edit, the file unchanged), and a file under
+  `node_modules`, which the scan skips (the run fails with `noOpError` on the `body` step).
+  Turning either guard off fails its test.
 
 ### Fixed (TLS-79: `cdo-speed`'s model-build reading resolves ~±8 %, not ~±20-50 %)
 
