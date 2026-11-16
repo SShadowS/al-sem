@@ -786,7 +786,7 @@ mod tests {
         for (implicit, want) in [(true, (true, true, true)), (false, (false, false, true))] {
             let mut r = crate::engine::l4::db_effect_solver::tests::pd_routine("r");
             r.object_type = "Page".to_string();
-            r.record_variables = vec![ModelRecordVariable {
+            r.record_variables = vec![std::sync::Arc::new(ModelRecordVariable {
                 id: "r/rv/rec".into(),
                 name: "Rec".to_string(),
                 table_name: None,
@@ -797,7 +797,7 @@ mod tests {
                 scope: None,
                 is_receiver: false,
                 is_implicit_rec: implicit,
-            }];
+            })];
             r.record_operations = vec![op("Rec"), op("xRec")];
             resolve_routine_record_types(&mut r, Some(&page), &symbols);
             let got = (

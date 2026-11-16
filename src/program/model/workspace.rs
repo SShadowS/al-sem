@@ -2797,9 +2797,13 @@ fn rewrite_routine_site_ids(r: &mut ModelRoutine, f: &dyn Fn(&str) -> String) {
     } = r;
     // Record variable ids (`{id}/rv/{name}`): no site tag, so a renumbering
     // leaves them as they are; a new routine id (a split declaration) moves
-    // them with the sites.
+    // them with the sites. A shared global's object-level id (`{object_id}/grv/…`,
+    // ENG-99) never holds the routine id, so `f` leaves it and the row stays shared.
     for v in record_variables.iter_mut() {
-        v.id = f(&v.id).into();
+        let id = f(&v.id);
+        if id != v.id.as_str() {
+            std::sync::Arc::make_mut(v).id = id.into();
+        }
     }
     // FieldRef operations (`{call site id}/fieldref`) are filled later, by `resolve()`, so the
     // list is empty here today; rewritten all the same, should that order change (Fable).

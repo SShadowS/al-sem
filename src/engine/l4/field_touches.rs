@@ -287,6 +287,7 @@ fn record_var<'r>(r: &'r ModelRoutine, name: &str) -> Option<&'r ModelRecordVari
     r.record_variables
         .iter()
         .find(|rv| field_key(&rv.name) == key)
+        .map(|rv| &**rv)
 }
 
 /// The record a call site is made on: the member receiver's variable, or the

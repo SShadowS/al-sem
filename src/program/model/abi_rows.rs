@@ -207,7 +207,10 @@ pub(crate) fn dep_routine_to_l3(r: &ProjectedRoutine, object_type: &str) -> Mode
         normalized_signature_hash: r.signature_fingerprint.clone(),
         body_available: r.body_available, // false for dep routines.
         parse_incomplete: false,
-        record_variables,
+        record_variables: record_variables
+            .into_iter()
+            .map(std::sync::Arc::new)
+            .collect(),
         record_operations: Vec::new(),
         field_accesses: Vec::new(),
         implicit_field_accesses: Vec::new(),

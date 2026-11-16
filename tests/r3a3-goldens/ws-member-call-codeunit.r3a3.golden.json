@@ -141,7 +141,7 @@
 					"extra": {
 						"kind": "table",
 						"opSubtype": "Insert",
-						"recordVariableId": "fc1bf13cf814d160/ae22cf6a5acc2c9ec05e81a60d5784adebe23e8ac6af3537b8dcbddb11a7295e/rv/globalrec",
+						"recordVariableId": "44444444-4444-4444-4444-444444444444/Codeunit/50104/grv/globalrec",
 						"tempState": {
 							"kind": "known",
 							"value": false

@@ -83,6 +83,13 @@
 //! (single and cross, 5 routines, `direct` 6, `inherited` 2); no other case moved.
 //! Re-recorded after its reviews r1 to r3 grew the fixture: the same two cases,
 //! now 15 routines, `direct` 17, `inherited` 8, `any` 25; no other case moved.
+//!
+//! Re-recorded (2026-11-16, ENG-99: a promoted object-global record variable keeps the
+//! object-level id `{object_id}/grv/{name}`, one shared row per declaration) with
+//! `REMINT_POLICY_FACTS_ORACLE=1`: only the `sha256` of the three cases holding an op on
+//! such a global moved (`r0/ws-d57`, `r0/ws-member-call-codeunit`, `r0/ws-r2a-record-types`,
+//! single and cross): the hashed facts carry the variable's id in their `extra`. Every count
+//! (`any`, `direct`, `inherited`, `routines`) is unchanged.
 
 use super::*;
 use crate::engine::gate::policy::policy_loader::{LoadResult, load_policy_from_string};

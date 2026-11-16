@@ -1582,7 +1582,7 @@ pub(crate) fn anchor_of(a: &PAnchor, routine: &ModelRoutine) -> SourceAnchor {
 /// record-variable id, else by folded name; `None` when neither resolves to a
 /// table ([`callee_param_table_subject`] then writes `?`).
 pub(crate) fn binding_source_table<'r>(
-    vars: &'r [ModelRecordVariable],
+    vars: &'r [std::sync::Arc<ModelRecordVariable>],
     binding: &PCallArgumentBinding,
 ) -> Option<&'r str> {
     let by_id = binding
@@ -1602,7 +1602,7 @@ pub(crate) fn callee_param_table_subject(
     prefix: &str,
     callee_id: &str,
     idx: u32,
-    vars: &[ModelRecordVariable],
+    vars: &[std::sync::Arc<ModelRecordVariable>],
     binding: &PCallArgumentBinding,
 ) -> LooseSubject {
     LooseSubject {
@@ -2237,7 +2237,8 @@ mod tests {
             rec_var("v1", "Cust", Some("app/table/18")),
             rec_var("v2", "Item", Some("app/table/27")),
             rec_var("v3", "Loose", None),
-        ];
+        ]
+        .map(std::sync::Arc::new);
         let t = |id, name| binding_source_table(&vars, &binding(id, name));
         assert_eq!(t(Some("v2"), Some("cust")), Some("app/table/27"), "id wins");
         assert_eq!(t(None, Some("cust")), Some("app/table/18"), "folded name");
@@ -2251,7 +2252,7 @@ mod tests {
     /// resolved table otherwise. Break: `unwrap_or("?")` → `unwrap_or("")`.
     #[test]
     fn callee_param_table_subject_marks_an_unresolved_table() {
-        let vars = [rec_var("v1", "Cust", Some("app/table/18"))];
+        let vars = [rec_var("v1", "Cust", Some("app/table/18"))].map(std::sync::Arc::new);
         let s =
             |id, name| callee_param_table_subject("d41", "callee", 2, &vars, &binding(id, name));
         assert_eq!(s(Some("v1"), None).key, "d41/callee/2/app/table/18");
