@@ -1962,7 +1962,7 @@ mod tests {
         let mut publisher = pd_routine("Pub");
         publisher.parameters = vec![param(0, "A"), param(1, "B")];
         for (i, ts) in [(0, pd_ts_known(false)), (1, pd_ts_pd(1))] {
-            publisher.record_variables.push(
+            publisher.record_variables.push(std::sync::Arc::new(
                 crate::program::model::workspace::ModelRecordVariable {
                     id: format!("rv{i}").into(),
                     name: if i == 0 { "A" } else { "B" }.to_string(),
@@ -1975,7 +1975,7 @@ mod tests {
                     is_receiver: false,
                     is_implicit_rec: false,
                 },
-            );
+            ));
         }
         let mut subscriber = pd_routine("Sub");
         subscriber.parameters = vec![param(0, "B"), param(1, "A")];

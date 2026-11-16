@@ -63,6 +63,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   forced true (4 issues, not 3). The empty-group test is a grammar pin (no lowerer code): its
   input given a statement in the group, the body-taking shape, turns it red.
 
+### Changed (ENG-99: an object's global record variables are one shared row per declaration, 71.0 MiB less resident memory on CDO)
+
+- **What changed.** `ModelRoutine.record_variables` holds `Arc` rows. A global record variable
+  of an object was copied into every routine that does not shadow it, one row per routine; it
+  is now ONE row per object declaration, shared by those routines. Resolution (`table_id`) runs
+  once per shared row (`record_types::share_resolved_globals`, on new rows: the row cache's raw
+  rows are never written). Every per-routine write (the pass-3 `Rec` fill, the `TableType`
+  override, the entry guard, a page's `Rec`, `event_param_temp`, the id rewrite) is
+  copy-on-write at its existing pass and writes only on a change, so one routine's fact never
+  reaches a sibling. Design: `docs/superpowers/notes/2026-11-16-eng99-shared-record-globals.md`.
+- **Output change (owner-approved 2026-11-16).** The shared row carries the object-level id
+  `{object_id}/grv/{name}` instead of the per-routine `{routine_id}/rv/{name}`. The one output
+  field that shows it is the snapshot's `capabilityFacts[].extra.recordVariableId` (and the
+  same `extra` in the r3a3/r3a5 summaries). No reader is affected: `alsem diff` does not read
+  the field, the snapshot's key classes list it as data, and no fingerprint, `rootCauseKey`,
+  baseline or suppression key, sort or dedup key, SARIF, digest, query, prove, explain or graph
+  output is built from it (id-shape audit). Goldens moved by that value only: r3a3 ×2, r3a5 ×3,
+  the r5b split snapshot (json + cbor, `RECORD` noted); the policy facts oracle's sha256 moved
+  for the three fixtures with an object-global op, every count unchanged.
+- **Measured** (`tools/census-probe resident`, release, master `77ed235b` vs this branch, same
+  probe source, back to back; `tools/census-probe/runs-eng99/`): live after one ask of each kind
+  4,778.7 → 4,707.7 MiB (−71.0 MiB), allocations 31.33 M → 30.78 M. Record-variable rows:
+  workspace 287,687 references over 287,687 → 64,505 distinct rows, dependencies 277,311 over
+  277,311 → 53,897; the `record_variables` buckets 94.4 → 25.0 MiB. On CDO
+  (`scripts/cdo-before-after 77ed235b`, workspace `bc3ccb18` clean on both sides) no finding or
+  fingerprint moved at either scope (2,308 primary, 32,579 all) and the call graph is unchanged
+  (0 unknown); `aldump --session-refresh --verify` gives a model equal to a cold build after every
+  change type, in the default and `--low-mem` modes. `scripts/cdo-speed` (`77ed235b` against
+  `a030a67f`) passed twice; the two runs do not agree on the model build (x1.091, from one pass
+  at x1.183 and one at x1.005, against x0.995), so no speed ratio is claimed; the round totals
+  (x0.973, x1.032) are within the tool's noise.
+- **Tests.** `cli_shared_record_globals` pins both halves: the declaration's global is one
+  shared, resolved row with the object-level id, and an entry guard stays in its routine.
+  Discrimination: without `share_resolved_globals` the rows are not shared (red); with the
+  guard written into the shared row it leaks into a sibling (red, named); with the shadow filter
+  off, `Shadows` holds the global behind its local `G` (red). Limit: only the entry guard's
+  copy-on-write is pinned by a test; the pass-3 `Rec` fill and the `TableType` override on a
+  shared global go through the same `Arc::make_mut`, which the type system forces.
+
 ### Changed (ENG-94: the syntax tree's declarations keep no spare capacity, 83.9 MiB less resident memory on CDO)
 
 - **The census** (`tools/census-probe` resident mode now splits `RoutineDecl` by field and

@@ -2891,22 +2891,24 @@ mod shadow_tests {
         l.call_sites = vec![call_site("L/cs0", "B", vec!["L/loop0".to_string()])];
 
         let mut b = routine("B", "procedure");
-        b.record_variables = vec![crate::program::model::workspace::ModelRecordVariable {
-            id: "B/rv0".into(),
-            name: "F".to_string(),
-            table_name: Some("Field".into()),
-            table_id: None,
-            is_parameter: false,
-            parameter_index: None,
-            temp_state: crate::program::body::features::PTempState {
-                kind: "unknown".into(),
-                value: None,
+        b.record_variables = vec![std::sync::Arc::new(
+            crate::program::model::workspace::ModelRecordVariable {
+                id: "B/rv0".into(),
+                name: "F".to_string(),
+                table_name: Some("Field".into()),
+                table_id: None,
+                is_parameter: false,
                 parameter_index: None,
+                temp_state: crate::program::body::features::PTempState {
+                    kind: "unknown".into(),
+                    value: None,
+                    parameter_index: None,
+                },
+                scope: None,
+                is_receiver: false,
+                is_implicit_rec: false,
             },
-            scope: None,
-            is_receiver: false,
-            is_implicit_rec: false,
-        }];
+        )];
         let op_get = record_op("B/op0", "Get", "Rec", None, vec![], false);
         let op_next_terminator = record_op("B/op1", "Next", "Rec", None, vec![], true);
         let op_get_virtual = record_op("B/op2", "Get", "F", None, vec![], false);

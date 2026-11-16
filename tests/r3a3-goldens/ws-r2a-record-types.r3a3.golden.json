@@ -22,7 +22,7 @@
 					"extra": {
 						"kind": "table",
 						"opSubtype": "Modify",
-						"recordVariableId": "a5194b0bfeaa35df/cf366210bade77d3b3f37f179ead08fe44076c32bc5e4f4db38c6f83232615de/rv/globalcust",
+						"recordVariableId": "2a000000-0000-0000-0000-0000000002aa/Codeunit/50900/grv/globalcust",
 						"tempState": {
 							"kind": "known",
 							"value": false

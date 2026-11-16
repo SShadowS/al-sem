@@ -2179,10 +2179,21 @@ fn eng96_layout(routines: &[al_sem::program::model::workspace::ModelRoutine]) {
         }
     }
     let sites: Vec<&PCallSite> = routines.iter().flat_map(|r| r.call_sites.iter()).collect();
+    // `Borrow`: rows are plain structs before ENG-99 and `Arc`s after; the probe builds on both.
     let vars: Vec<&ModelRecordVariable> = routines
         .iter()
         .flat_map(|r| r.record_variables.iter())
+        .map(std::borrow::Borrow::borrow)
         .collect();
+    let distinct_rows = vars
+        .iter()
+        .map(|v| *v as *const ModelRecordVariable)
+        .collect::<HashSet<_>>()
+        .len();
+    println!(
+        "    ENG-99: {} record-variable references, {distinct_rows} distinct rows",
+        vars.len()
+    );
     let (ns, nv) = (sites.len(), vars.len());
     println!(
         "    ENG-96 layout: {ns} call sites x {} B = {:.2} MiB inline; {nv} record variables x {} B = {:.2} MiB inline",
@@ -2461,21 +2472,10 @@ fn routine_fields(routines: Vec<al_sem::program::model::workspace::ModelRoutine>
         rf.drop_as("attributes_parsed", attributes_parsed);
         rf.drop_as("parameters", parameters);
         rf.drop_as("variables", variables);
-        // ENG-85: the two largest fields, split by subfield (anchor strings apart).
-        let mut record_variables = record_variables;
-        for v in record_variables.drain(..) {
-            let al_sem::program::model::workspace::ModelRecordVariable {
-                id,
-                name,
-                table_name,
-                table_id,
-                ..
-            } = v;
-            rf.drop_as("record_variables.id", id);
-            rf.drop_as("record_variables.name", name);
-            rf.drop_as("record_variables.table_name/id", (table_name, table_id));
-        }
-        rf.drop_as("record_variables.(vec)", record_variables);
+        // ENG-99: one bucket (rows are `Arc`s after ENG-99, shared across routines: a row's
+        // bytes fall to whichever routine drops it last, so a per-field split would mislead).
+        rf.drop_as("record_variables", record_variables);
+        // ENG-85: the largest field, split by subfield (anchor strings apart).
         rf.drop_as("record_operations", record_operations);
         rf.drop_as("field_accesses", field_accesses);
         let mut call_sites = call_sites;

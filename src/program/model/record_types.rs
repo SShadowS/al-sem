@@ -25,7 +25,7 @@
 //!     `object_by_type_name`.
 
 use super::symbol_table::SymbolTable;
-use super::workspace::{ModelObject, ModelRoutine};
+use super::workspace::{ModelObject, ModelRecordVariable, ModelRoutine};
 use al_syntax::IdentifierFoldExt;
 
 use crate::program::body::node_util::strip_quotes;
@@ -153,6 +153,41 @@ fn resolve_table_ref_to_id(symbols: &SymbolTable, table_ref: &str) -> Option<Str
     symbols.table_by_name(table_ref).map(|t| t.id.clone())
 }
 
+/// ENG-99: replace every routine's shared global record-variable rows by one resolved row per
+/// raw row: pass 1's `table_id` (from the row's `table_name`, which depends on nothing but the
+/// symbols) set once, on a NEW row, so the raw row (the session row cache holds it) is never
+/// written. Routines that shared a raw row share its resolved row; `#if`-split declarations
+/// own different raw rows, so they never share. Every later write is per routine
+/// ([`resolve_routine_record_types`], copy-on-write), in its existing pass.
+pub(crate) fn share_resolved_globals(routines: &mut [ModelRoutine], symbols: &SymbolTable) {
+    use std::sync::Arc;
+    // Raw row's address -> (the raw row, held alive so its address is never reused while
+    // the map lives; its resolved row).
+    let mut resolved: std::collections::HashMap<
+        *const ModelRecordVariable,
+        (Arc<ModelRecordVariable>, Arc<ModelRecordVariable>),
+    > = std::collections::HashMap::new();
+    for r in routines.iter_mut() {
+        for v in r.record_variables.iter_mut() {
+            if v.scope.as_deref() != Some("global") {
+                continue;
+            }
+            let (_, row) = resolved.entry(Arc::as_ptr(v)).or_insert_with(|| {
+                let mut row = (**v).clone();
+                if let Some(tid) = row
+                    .table_name
+                    .as_deref()
+                    .and_then(|t| resolve_table_ref_to_id(symbols, t))
+                {
+                    row.table_id = Some(crate::program::body::features::shared_table_text(&tid));
+                }
+                (Arc::clone(v), Arc::new(row))
+            });
+            *v = Arc::clone(row);
+        }
+    }
+}
+
 /// Run the 3-pass record-type resolution over one routine, mutating each record
 /// var / op's resolved `table_id` (internal TableId; the L3 dump projects it as a
 /// StableTableId). Mirrors `resolveRecordTypes`'s per-routine body EXACTLY.
@@ -172,8 +207,13 @@ pub fn resolve_routine_record_types(
             // `resolve_table_ref_to_id` accepts a NAME or a NUMBER — a synthetic
             // implicit `Rec` seeded from a codeunit `TableNo = <number>` carries the
             // number string, which `table_by_name` alone could not resolve.
-            if let Some(tid) = resolve_table_ref_to_id(symbols, table_name) {
-                variable.table_id = Some(crate::program::body::features::shared_table_text(&tid));
+            if let Some(tid) = resolve_table_ref_to_id(symbols, table_name)
+                && variable.table_id.as_deref() != Some(tid.as_str())
+            {
+                // ENG-99: only a change writes, so a shared global row the declaration's
+                // pre-pass resolved (`share_resolved_globals`) stays shared.
+                std::sync::Arc::make_mut(variable).table_id =
+                    Some(crate::program::body::features::shared_table_text(&tid));
             }
         }
     }
@@ -292,7 +332,9 @@ pub fn resolve_routine_record_types(
             if name != "rec" && name != "xrec" {
                 continue;
             }
-            rv.table_id = Some(crate::program::body::features::shared_table_text(own_id));
+            // ENG-99: copy-on-write (a shared global named `Rec` is filled for this routine).
+            std::sync::Arc::make_mut(rv).table_id =
+                Some(crate::program::body::features::shared_table_text(own_id));
         }
     }
 
@@ -552,7 +594,7 @@ pub fn resolve_routine_record_types(
         };
         let is_temp = symbols.table_by_id(tid).map(|t| t.is_temporary) == Some(true);
         if is_temp {
-            variable.temp_state = crate::program::body::scope::ts_known(true);
+            mark_known_temp(variable);
         }
     }
     // ...and an argument passing the implicit `Rec`/`xRec` (#272): it has no table
@@ -587,7 +629,8 @@ pub fn resolve_routine_record_types(
         }
         for variable in routine.record_variables.iter_mut() {
             if variable.name.eq_fold_identifier(guard_receiver) {
-                variable.temp_state = crate::program::body::scope::ts_known(true);
+                // A guarded global is copied for this routine only (ENG-99).
+                mark_known_temp(variable);
             }
         }
     }
@@ -636,11 +679,21 @@ pub fn resolve_routine_record_types(
         // L2-default Known(false) would wrongly mark a temp-page Rec as physical.
         for variable in routine.record_variables.iter_mut() {
             if variable.is_implicit_rec {
-                variable.temp_state = crate::program::body::scope::ts_known(true);
+                mark_known_temp(variable);
             }
         }
         // ...and so must a call argument that passes the implicit Rec/xRec.
         mark_implicit_rec_bindings_temp(routine);
+    }
+}
+
+/// Set a record variable's temp state to `Known(true)`. ENG-99: a row may be the object
+/// declaration's shared global, so it is written only when it changes, through
+/// `Arc::make_mut`: a change copies that row for this routine, and no other routine sees it.
+fn mark_known_temp(variable: &mut std::sync::Arc<ModelRecordVariable>) {
+    let known = crate::program::body::scope::ts_known(true);
+    if variable.temp_state != known {
+        std::sync::Arc::make_mut(variable).temp_state = known;
     }
 }
 
@@ -733,7 +786,7 @@ mod tests {
         for (implicit, want) in [(true, (true, true, true)), (false, (false, false, true))] {
             let mut r = crate::engine::l4::db_effect_solver::tests::pd_routine("r");
             r.object_type = "Page".to_string();
-            r.record_variables = vec![ModelRecordVariable {
+            r.record_variables = vec![std::sync::Arc::new(ModelRecordVariable {
                 id: "r/rv/rec".into(),
                 name: "Rec".to_string(),
                 table_name: None,
@@ -744,7 +797,7 @@ mod tests {
                 scope: None,
                 is_receiver: false,
                 is_implicit_rec: implicit,
-            }];
+            })];
             r.record_operations = vec![op("Rec"), op("xRec")];
             resolve_routine_record_types(&mut r, Some(&page), &symbols);
             let got = (

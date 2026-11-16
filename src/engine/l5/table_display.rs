@@ -113,7 +113,7 @@ mod tests {
         // Minimal routine with only record_variables populated — all other fields
         // are defaulted via the test-support builder so describe_table compiles.
         let mut r = crate::engine::l5::test_support::routine("r0/test", "Procedure");
-        r.record_variables = vars;
+        r.record_variables = vars.into_iter().map(std::sync::Arc::new).collect();
         r
     }
 
