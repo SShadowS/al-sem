@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (ENG-100: `alsem fingerprint` takes 0.43× the CPU on CDO; proof keys hold hop ids, not hop texts)
+
+- **The cost** (found in ENG-98): `enumerate_proofs` (`src/engine/l5/digest.rs`) keyed each
+  candidate by every hop's projected JSON text (`ProofKey(Vec<String>, boundary)`, a `String`
+  copy per hop per key) and interned the keys in an `IndexSet`. Hashing them was 17.9 % of
+  `alsem fingerprint`'s CPU under SipHash and still 14.8 % under FxHash (ENG-98), because
+  every key re-read every hop's bytes.
+- **Now:** `HopCache` (one per root) interns each edge's projected JSON once
+  (`HopCache::json_id`, the id cached on the edge's memo); `ProofKey` is `(Vec<u32>,
+  boundary)`. Equal ids exactly when the texts are equal, and every key of one
+  `enumerate_proofs` call comes from one cache, so the dedup is unchanged; #289's one hash per
+  crossing or uncrossed proof holds.
+- **Measured on CDO** (pinned `bc3ccb18`, master `77ed235b` against `5bf020ee`, `alsem
+  fingerprint` with default options under `/usr/bin/time -v`, alternating, two runs each, in the
+  CDO slot): CPU 216.5 / 211.3 s -> 92.5 / 93.2 s (**x0.43**), wall 3:12.7 / 3:06.5 -> 1:06.2 /
+  1:07.7 (**x0.35**), system time 76 / 75 s -> 15 / 17 s (the per-hop `String` copies), peak
+  RSS unchanged (7.9 GB); the outputs are byte-identical. A samply profile of the head puts
+  `ProofKey` hashing at 1.78 % (was 14.8 %) and `enumerate_proofs` at 7.1 % inclusive (was
+  33.7 %). `cdo-speed` (PASS): neutral (build x1.001, rounds x1.012, peak memory x0.968): its
+  calls barely run `enumerate_proofs`. `cdo-before-after 77ed235b 5bf020ee`, and again on the
+  head rebased onto ENG-99 (`04d3776a 4f4b9ffe`): nothing moved.
+- Pinned by `twin_hops_on_distinct_edges_share_one_key` (two different edges with one projected
+  JSON give one key, so their proofs count once toward the cap),
+  `distinct_hops_of_equal_length_stay_two_keys` (two equal-length proofs with different hop
+  JSON stay two keys, so they spend a cap of 2 and the longer proof is cut) and the #289 guard, which now
+  also counts the hop texts read (`HOP_TEXTS_INTERNED`: once per edge; on its fixture both
+  crossing keys are `[e_root]`, so 1). Breaks, each red then green restored: a fresh id per
+  edge -> the longer proof is lost to the cap; `json_id` without its per-edge cell -> 2 texts
+  read, not 1; every text one id -> the two distinct equal-length proofs merge and the longer
+  proof is no longer cut (the existing suite missed this one; the second test was added for it).
+
 ### Changed (GRM-04: grammar tree-sitter-al v5.3.0, `main` at `9d155ee7`)
 
 - **The bump** (tree-sitter-al #44; was v5.2.0, `f8c6d8b6`): `gen-syntax` regenerated the
