@@ -204,7 +204,7 @@ pub fn def_surface_fingerprint(pf: &ParsedFile) -> DefSurface {
                 params: r_ir
                     .params
                     .iter()
-                    .map(|p| (p.ty.clone(), p.by_ref))
+                    .map(|p| (p.ty.as_deref().map(str::to_string), p.by_ref))
                     .collect(),
                 parse_incomplete: r_ir.parse_incomplete,
             };

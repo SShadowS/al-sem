@@ -67,7 +67,7 @@ fn features_lines(rel: &str, source: &str) -> Vec<(String, String)> {
                 &rid,
                 source,
                 "snap",
-                r.dataitem_source_table.as_deref(),
+                r.dataitem_source_table(),
             );
             // Debug, NOT serde JSON — covers `#[serde(skip)]` / PartialEq-excluded
             // fields (see the module doc: the serde-skip drift gate).

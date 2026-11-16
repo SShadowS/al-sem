@@ -333,8 +333,7 @@ pub fn receiver_declared_temporary(
         return v.temporary || v.ty.as_deref().is_some_and(ends_with_temporary);
     }
     if routine
-        .return_name
-        .as_deref()
+        .return_name()
         .is_some_and(|n| n.eq_fold_identifier(&name))
     {
         return false;

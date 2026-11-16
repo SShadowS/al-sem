@@ -121,7 +121,7 @@ fn params_ir(r: &RoutineDecl) -> Vec<ParamSpec> {
         .iter()
         .filter(|p| !p.name.is_empty())
         .map(|p| ParamSpec {
-            type_text: p.ty.clone().unwrap_or_default(),
+            type_text: p.ty.as_deref().unwrap_or_default().to_string(),
             is_var: p.by_ref,
         })
         .collect()

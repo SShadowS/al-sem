@@ -890,7 +890,7 @@ fn member_detail_of(
             caption: a.caption.first().cloned(),
         };
     }
-    if ir_routine.dataitem_source_table.is_some() {
+    if ir_routine.dataitem_source_table().is_some() {
         return MemberDetail {
             kind: "dataitem",
             caption: None,
@@ -1899,7 +1899,7 @@ fn project_ir(
             // arity/var-ness/type-text cannot drift.
             let param_syms = crate::program::body::ir_walk::ir_parameter_symbols(ir_routine);
             let parameters = model_parameters(&param_syms);
-            let return_type = ir_routine.return_type.clone();
+            let return_type = ir_routine.return_type.as_deref().map(str::to_string);
             let mut call_sites = std::mem::take(&mut features.call_sites);
             // RV-8 (Task 8): scope-honest `sourceKind`. The L2 binding builder
             // labels ANY non-parameter record-var arg `"local"` because scope is
@@ -2540,7 +2540,7 @@ fn card_text_of(
     cols: &Utf16Cols,
 ) -> CardText {
     CardText {
-        doc: ir_routine.doc.clone(),
+        doc: ir_routine.doc().map(str::to_string),
         object_caption: o
             .properties
             .iter()

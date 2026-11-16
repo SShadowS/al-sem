@@ -2294,7 +2294,7 @@ pub(crate) fn resolve_file_obligations(
                 .iter()
                 .map(|p| p.name.fold_identifier())
                 .chain(routine.locals.iter().map(|v| v.name.fold_identifier()))
-                .chain(routine.return_name.iter().map(|n| n.fold_identifier()))
+                .chain(routine.return_name().map(|n| n.fold_identifier()))
                 .collect();
             let shadows = |name_lc: &str| {
                 routine_shadows.contains(name_lc) || object_shadows.contains(name_lc)

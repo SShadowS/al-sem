@@ -288,7 +288,7 @@ pub(crate) fn this_receivers<'g>(
         .iter()
         .map(|p| p.name.fold_identifier())
         .chain(routine.locals.iter().map(|v| v.name.fold_identifier()))
-        .chain(routine.return_name.iter().map(|n| n.fold_identifier()))
+        .chain(routine.return_name().map(|n| n.fold_identifier()))
         .collect();
     globals
         .into_iter()
@@ -590,7 +590,7 @@ impl WithCtx {
     fn for_routine(src: &str, file: &AlFile, object_idx: usize, routine: &RoutineDecl) -> WithCtx {
         // G41: a report dataitem trigger's implicit `Rec` is its dataitem's record.
         let rec = crate::program::body::ir_walk::object_has_implicit_rec(&file.objects[object_idx])
-            || routine.dataitem_source_table.is_some();
+            || routine.dataitem_source_table().is_some();
         WithCtx {
             depth: 0,
             scan_hit: routine_has_with_token(src, routine.origin.byte()),

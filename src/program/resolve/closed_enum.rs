@@ -157,7 +157,7 @@ fn is_interface_local(cx: &ClosedEnumCx, v_lc: &str, interface_lc: &str) -> bool
     locals.peek().is_some()
         && locals.all(|l| is_i(l.ty.as_deref()))
         && !r.params.iter().any(|p| named(&p.name))
-        && !r.return_name.as_deref().is_some_and(named)
+        && !r.return_name().is_some_and(named)
         && !cx.obj.globals.iter().any(|g| named(&g.name))
 }
 
