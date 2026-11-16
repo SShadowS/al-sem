@@ -26,7 +26,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   RSS unchanged (7.9 GB); the outputs are byte-identical. A samply profile of the head puts
   `ProofKey` hashing at 1.78 % (was 14.8 %) and `enumerate_proofs` at 7.1 % inclusive (was
   33.7 %). `cdo-speed` (PASS): neutral (build x1.001, rounds x1.012, peak memory x0.968): its
-  calls barely run `enumerate_proofs`. `cdo-before-after 77ed235b 5bf020ee`: nothing moved.
+  calls barely run `enumerate_proofs`. `cdo-before-after 77ed235b 5bf020ee`, and again on the
+  head rebased onto ENG-99 (`04d3776a 4f4b9ffe`): nothing moved.
 - Pinned by `twin_hops_on_distinct_edges_share_one_key` (two different edges with one projected
   JSON give one key, so their proofs count once toward the cap),
   `distinct_hops_of_equal_length_stay_two_keys` (two equal-length proofs with different hop
