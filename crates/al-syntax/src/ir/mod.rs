@@ -466,9 +466,6 @@ pub struct AlFile {
 
 #[cfg(test)]
 mod exact_size_tests {
-    /// ENG-94: a parsed file's declaration lists keep no spare capacity. Lowering pushes
-    /// into them (a first push reserves four elements); `lower_file` trims every one, the
-    /// nested ones included. Pinned through `parse`, so dropping the call fails this.
     /// ENG-102, through `parse`: equal declared types share one text (dropping
     /// `shared_type_text` at a site gives two copies), a routine with no rare field
     /// carries no box (an always-boxed `RoutineRare` fails it) and one with a doc or a
@@ -499,6 +496,9 @@ mod exact_size_tests {
         assert!(named.preproc_context().is_empty() && named.dataitem_source_table().is_none());
     }
 
+    /// ENG-94: a parsed file's declaration lists keep no spare capacity. Lowering pushes
+    /// into them (a first push reserves four elements); `lower_file` trims every one, the
+    /// nested ones included. Pinned through `parse`, so dropping the call fails this.
     #[test]
     fn parsed_declarations_keep_no_spare_capacity() {
         let file = crate::parse(
