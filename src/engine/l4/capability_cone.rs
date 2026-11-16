@@ -1864,9 +1864,11 @@ type ConeFacts = BTreeMap<Arc<str>, ConeFactEntry>;
 
 /// A finished fact cone (ENG-109): the [`ConeFacts`] an SCC built, frozen into one sorted,
 /// exactly sized slice once nothing merges into it again. A stored cone is only read (iterated
-/// in key order, looked up by key, counted), so the B-tree's nodes and spare slots buy nothing:
-/// on CDO the cones held 666 MiB, of which their 5.6 M entries' payload is 300 MiB (ENG-107
-/// census). Same order as the map (the map's own), so every reader and digest is unchanged.
+/// in key order, folded, counted; no reader looks a key up), so the B-tree's nodes and spare
+/// slots buy nothing: on CDO the cones held 666 MiB, of which their 5.6 M entries' payload is
+/// 300 MiB (ENG-107 census). The ORDER is load-bearing: it is the map's key order, and the BFS
+/// and singleton walks keep the first entry they meet per base key, so a different order would
+/// pick another representative (`a_frozen_cone_keeps_key_order_for_the_bfs_first_pick`).
 struct FrozenCone(Box<[(Arc<str>, ConeFactEntry)]>);
 
 impl FrozenCone {
@@ -9776,6 +9778,65 @@ mod cone_memory_step1_tests {
                 (Some("t/2"), None, "cs/CX")
             ],
             "the producer took K1's slot; K2 kept its position"
+        );
+    }
+
+    /// ENG-109: a frozen cone keeps its map's KEY ORDER, and a reader sees that order. A
+    /// downstream cone holds `K` and its guarded copy (one base key, two reps); the BFS walk
+    /// keeps the first entry it meets per base key, and in key order the plain `K` comes first,
+    /// so its rep is picked. Hand-stated: the cone is built literally and frozen the one way
+    /// production freezes. DISCRIMINATION: a freeze that reverses the order picks the guarded
+    /// copy's rep (sol and Fable, ENG-109 review: no other test pins the order).
+    #[test]
+    fn a_frozen_cone_keeps_key_order_for_the_bfs_first_pick() {
+        let edge_cm = TypedOutEdge::new(
+            "M".into(),
+            "direct-call".into(),
+            Some("cs/CM".into()),
+            None,
+            None,
+        );
+        let g = TypedEdgeGraph {
+            nodes: strs(&["C", "M"]),
+            outgoing: [("C".to_string(), vec![edge_cm])].into(),
+            unresolved_sources: BTreeSet::new(),
+        };
+        let scc: HashMap<String, usize> = [("C".to_string(), 0), ("M".to_string(), 1)].into();
+        let mut plain = insert("M", "t/K");
+        plain.witness_operation_id = Some("M/plain".into());
+        let mut guarded = plain.clone();
+        guarded.witness_operation_id = Some("M/guarded".into());
+        let base: Arc<str> = Arc::from(inherited_fact_key(&plain).as_str());
+        let gkey = guarded_key(&base, &[(0, true)]);
+        assert!(base < gkey, "precondition: the plain key sorts first");
+        let entry = |f: CapabilityFact, guard: Option<Arc<EntryGuard>>| ConeFactEntry {
+            rep_key: Arc::from(rep_key(&f)),
+            rep: Arc::new(f),
+            dist: 0,
+            guard,
+        };
+        let mut cone: ConeFacts = BTreeMap::new();
+        cone.insert(Arc::clone(&base), entry(plain, None));
+        cone.insert(
+            Arc::clone(&gkey),
+            entry(
+                guarded,
+                Some(Arc::new(EntryGuard {
+                    reqs: vec![(0, true)],
+                    base_key: Arc::clone(&base),
+                })),
+            ),
+        );
+        let cones: ConeMap = [(1usize, Arc::new(FrozenCone::freeze(cone)))].into();
+        let direct: RoutineDirectFacts = HashMap::new();
+        let picks = inherited_facts_by_bfs("C", &g, &direct, &scc, &cones, &[]);
+        assert_eq!(
+            picks
+                .iter()
+                .map(|(rep, _)| rep.witness_operation_id.as_deref())
+                .collect::<Vec<_>>(),
+            vec![Some("M/plain")],
+            "one base key, one pick: the first in key order"
         );
     }
 
