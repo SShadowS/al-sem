@@ -23,8 +23,11 @@ What runs: one `alsem mcp` server per side (the resident path agents use), asked
 the same calls in turn (a fresh pair per warm-up pass; the last pair also runs the
 rounds):
   warm-up (round 0, two passes, each on a fresh server pair; TLS-65): the first ask
-    builds the CDO model (`build`), then one call of each tool builds the
-    per-revision artifacts and the test universe (`warm-tests`). The second pass
+    builds the CDO model (`build`), timed for each side with the other side's
+    server closed (TLS-79: the other side's resident model made the second build
+    cost x1.06-x1.29), then the first side's server is started again untimed;
+    then one call of each tool builds the per-revision artifacts and the test
+    universe (`warm-tests`). The second pass
     flips every call's side order, so each side is timed once building second
     (measured once at x1.167 under load, ENG-81). Before each pass the host's CPU
     pressure (`some avg60`) must fall to CALM_PRESSURE; after CALM_WAIT_S (600 s) the
@@ -744,7 +747,24 @@ class CallFailed(Exception):
     """A timed call that did not exit 0: (what, its first stderr lines)."""
 
 
-def run_round(rnd, servers, records, warm_pass=0):
+def timed_call(server, side, cid, tool, args, rnd, warm_pass, tag, records):
+    """One timed call on `side`'s server, logged and recorded."""
+    load = load_1min()
+    pressure, _ = cpu_pressure()
+    wall, cpu, sha, code, err = server.call(tool, args)
+    exit_note = f"  exit {code}" if code != 0 else ""
+    shown = "?" if pressure is None else f"{pressure:.1f}"
+    log(f"  {tag} {cid:<12} {side:<5} wall {wall:7.2f} s  cpu {cpu:7.2f} s"
+        f"  load {load:5.1f}  pressure {shown:>5}{exit_note}")
+    if code != 0:
+        raise CallFailed(f"{tag} {cid} ({tool}) on {side} exited {code}", err)
+    records.append(dict(call=cid, side=side, round=rnd, warm_pass=warm_pass,
+                        wall=wall, cpu=cpu, sha=sha, load=load, pressure=pressure))
+
+
+def run_round(rnd, servers, records, warm_pass=0, skip=0):
+    """One round's calls (`skip`: leave out the first calls of the warm-up, done
+    already)."""
     order = ["base", "head"] if rnd % 2 == 0 else ["head", "base"]
     if rnd == 0:
         calls = WARM_UP
@@ -752,6 +772,8 @@ def run_round(rnd, servers, records, warm_pass=0):
         calls = calls_for(ROUND_ROUTINES[rnd - 1])
         log(f"round {rnd}: {ROUND_ROUTINES[rnd - 1]}")
     for i, (cid, tool, args) in enumerate(calls):
+        if i < skip:
+            continue
         # The warm-up flips the order per call, and its second pass (fresh
         # servers) flips every call again: each warm-up call is timed once with
         # each side second (measured: going second costs up to ~15 % under load).
@@ -760,17 +782,7 @@ def run_round(rnd, servers, records, warm_pass=0):
             side_order = side_order[::-1]
         tag = f"r0.{warm_pass + 1}" if rnd == 0 else f"r{rnd}"
         for side in side_order:
-            load = load_1min()
-            pressure, _ = cpu_pressure()
-            wall, cpu, sha, code, err = servers[side].call(tool, args)
-            exit_note = f"  exit {code}" if code != 0 else ""
-            shown = "?" if pressure is None else f"{pressure:.1f}"
-            log(f"  {tag} {cid:<12} {side:<5} wall {wall:7.2f} s  cpu {cpu:7.2f} s"
-                f"  load {load:5.1f}  pressure {shown:>5}{exit_note}")
-            if code != 0:
-                raise CallFailed(f"{tag} {cid} ({tool}) on {side} exited {code}", err)
-            records.append(dict(call=cid, side=side, round=rnd, warm_pass=warm_pass,
-                                wall=wall, cpu=cpu, sha=sha, load=load, pressure=pressure))
+            timed_call(servers[side], side, cid, tool, args, rnd, warm_pass, tag, records)
 
 
 def judge(records):
@@ -928,12 +940,33 @@ def main():
         for p in range(args.warm_samples):
             calm.append(wait_calm(f"warm-up {p + 1} of {args.warm_samples}"))
             cur = (f"warm-up {p + 1}", Stalls())
-            servers["base"] = Server(base_exe, ws, outdir, f"base{p + 1}")
-            servers["head"] = Server(head_exe, ws, outdir, f"head{p + 1}")
+            exes = {"base": base_exe, "head": head_exe}
             first = "base" if p % 2 == 0 else "head"
+            second = "head" if first == "base" else "base"
             log(f"round 0, warm-up {p + 1} of {args.warm_samples} (fresh servers; "
                 f"{first} builds first)")
-            run_round(0, servers, records, warm_pass=p)
+            # ⟨TLS-79⟩ Each side's model build is timed with the other side's
+            # server closed: with the first side's model resident (its server
+            # idle, 0.00-0.01 s CPU), the second build cost x1.06-x1.29 CPU in
+            # six pairs of one binary against itself, and x0.85-x0.99 with the
+            # first server closed (2026-11-15). Then the first side is started
+            # again and builds untimed, so the remaining warm-up calls and the
+            # rounds have both servers.
+            _, b_tool, b_args = WARM_UP[0]
+            tag = f"r0.{p + 1}"
+            servers[first] = Server(exes[first], ws, outdir, f"{first}{p + 1}")
+            timed_call(servers[first], first, "build", b_tool, b_args, 0, p, tag, records)
+            peaks[first] = max(peaks[first], servers[first].peak_mib())
+            servers.pop(first).close()
+            servers[second] = Server(exes[second], ws, outdir, f"{second}{p + 1}")
+            timed_call(servers[second], second, "build", b_tool, b_args, 0, p, tag, records)
+            servers[first] = Server(exes[first], ws, outdir, f"{first}{p + 1}-again")
+            wall, cpu, _, code, err = servers[first].call(b_tool, b_args)
+            log(f"  {tag} {'build':<12} {first:<5} wall {wall:7.2f} s  cpu {cpu:7.2f} s"
+                f"  (again, untimed: the server the remaining calls use)")
+            if code != 0:
+                raise CallFailed(f"{tag} build (again) on {first} exited {code}", err)
+            run_round(0, servers, records, warm_pass=p, skip=1)
             blocks.append((cur[0], cur[1].share()))
             cur = None
             if p + 1 < args.warm_samples:

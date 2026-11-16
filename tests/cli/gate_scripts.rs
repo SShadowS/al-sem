@@ -1849,21 +1849,32 @@ def second(name):
         n = len(f.read())
         f.write("x")
     return n % 2 == 1
+live = os.path.join(os.environ["STUB_DIR"], "live")
+os.makedirs(live, exist_ok=True)
+me = os.path.join(live, str(os.getpid()))
+open(me, "w").close()
+def another_alive():
+    # TLS-79: another server process is alive (its model resident).
+    return any(p != str(os.getpid()) for p in os.listdir(live))
 for line in sys.stdin:
     msg = json.loads(line)
     if "id" not in msg:
         continue
     if msg.get("method") == "tools/call":
         calls += 1
-        # The warm-up's two judged calls: the model build (1st) and the test
-        # universe (6th, `warm-tests`).
-        if calls in (1, 6):
-            name = "build" if calls == 1 else "tests"
-            burn(float(os.environ["STUB_BUILD_S"]) * (1.5 if second(name) else 1.0))
+        # The warm-up's two judged calls: the model build (1st), 50 % slower
+        # while another server is alive (the real cause, TLS-79), and the test
+        # universe (6th, `warm-tests`), 50 % slower when it is the second of
+        # its pair (a positional factor the flipped passes cancel, TLS-65).
+        if calls == 1:
+            burn(float(os.environ["STUB_BUILD_S"]) * (1.5 if another_alive() else 1.0))
+        if calls == 6:
+            burn(float(os.environ["STUB_BUILD_S"]) * (1.5 if second("tests") else 1.0))
         result = {"structuredContent": {"exitCode": 0, "stdoutText": "ok"}}
     else:
         result = {}
     print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": result}), flush=True)
+os.remove(me)
 "#;
 
 #[cfg(target_os = "linux")]
@@ -1918,32 +1929,53 @@ fn speed_with_stub(
     (out.status.code(), text)
 }
 
-/// TLS-65: the warm-up's judged calls (the model build and the test
-/// universe) are timed twice, on fresh server pairs, the second pass with
-/// every call's side order flipped, and judged on the geometric mean of the
-/// two ratios. A stub whose second side of a pair is 50 % slower on both calls
-/// fails one fixed-order sample (head always builds the model second: x1.50
-/// against a 1.30 limit) and passes the two flipped ones; speed.json shows
-/// each judged call with two ratios, one each way (> 1.3 and < 0.8), and a
-/// geometric mean near 1.
+/// TLS-65 and TLS-79: the warm-up is timed twice, on fresh server pairs, the
+/// second pass with every call's side order flipped, and judged on the
+/// geometric mean of the two ratios (TLS-65); and each side's model build is
+/// timed with the other side's server closed (TLS-79). The stub's model build
+/// is 50 % slower while another server is alive (the measured cause) and its
+/// test universe 50 % slower when second in its pair (a positional factor).
+/// - One pass: the build reads ~x1.00 (no other server alive while it is
+///   timed); warm-tests shows the whole positional factor, x0.67 (base is
+///   second for it in pass 1, its order flipped per call);
+/// - two passes: the build ~x1.00 in each; warm-tests one ratio each way (> 1.3
+///   and < 0.8) with exactly their geometric mean, near 1.
 ///
-/// Mutations: the second pass not flipped -> both build samples x1.50 ->
-/// FAIL; only the first call flipped in pass 2 -> warm-tests reads x0.67 both
-/// times; the warm-up judged on one pass (`round=1`) -> one ratio (Fable r1).
+/// Mutations: the second pass not flipped -> warm-tests x1.50 both times ->
+/// FAIL; the warm-up judged on one pass (`round=1`) -> one ratio (Fable r1);
+/// TLS-79 (2026-11-15): the first side's server left alive during the second
+/// build -> the one-pass build reads x1.50 and fails.
 #[cfg(target_os = "linux")]
 #[test]
 fn speed_warm_up_cancels_the_second_side_penalty() {
     let dir = tempfile::tempdir().unwrap();
     let (code, text) = speed_with_stub(dir.path(), "0.5", &["--warm-samples", "1"], &[]);
-    assert_eq!(
-        code,
-        Some(1),
-        "precondition: one fixed-order sample fails: {text}"
-    );
-    // x1.50 by design; the decimals move a little on a busy machine.
+    assert!(code == Some(0) || code == Some(1), "{text}");
+    assert!(!text.contains("FAIL: build: CPU"), "{text}");
+    let one: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(dir.path().join("state---warm-samples-1/out/speed.json")).unwrap(),
+    )
+    .unwrap();
+    let row = |call: &str| {
+        one["warm_rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["call"] == call)
+            .unwrap_or_else(|| panic!("{call} in warm_rows"))["cpu"]["ratio"]
+            .as_f64()
+            .unwrap()
+    };
+    // The precondition: one pass shows the whole positional factor (x1/1.5).
+    let t = row("warm-tests");
     assert!(
-        text.contains("FAIL: build: CPU time x1.4") || text.contains("FAIL: build: CPU time x1.5"),
-        "{text}"
+        (0.6..0.73).contains(&t),
+        "precondition: one pass reads warm-tests at ~x0.67: x{t}"
+    );
+    let r = row("build");
+    assert!(
+        (0.9..1.1).contains(&r),
+        "the build is timed with no other server alive: x{r}"
     );
 
     let (code, text) = speed_with_stub(dir.path(), "0.5", &[], &[]);
@@ -1979,10 +2011,17 @@ fn speed_warm_up_cancels_the_second_side_penalty() {
         assert_eq!(ratios.len(), 2, "{call}: one ratio per pass: {ratios:?}");
         let hi = ratios.iter().cloned().fold(f64::MIN, f64::max);
         let lo = ratios.iter().cloned().fold(f64::MAX, f64::min);
-        assert!(
-            hi > 1.3 && lo < 0.8,
-            "{call}: one pass each way: {ratios:?}"
-        );
+        if call == "build" {
+            assert!(
+                hi < 1.1 && lo > 0.9,
+                "build: no penalty in either pass: {ratios:?}"
+            );
+        } else {
+            assert!(
+                hi > 1.3 && lo < 0.8,
+                "{call}: one pass each way: {ratios:?}"
+            );
+        }
         let ratio = row["cpu"]["ratio"].as_f64().unwrap();
         assert!(
             (0.9..1.1).contains(&ratio),
