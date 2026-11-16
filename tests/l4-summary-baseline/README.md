@@ -286,6 +286,16 @@ CDO_WS=<path> ENFORCE_CDO_WS=1 L4_CANONICAL_DUMP=/tmp/l4-cdo.txt \
   operations sit in 199 routines; the other routines inherit them through their calls. Top
   tables: CDO 6175301 and 6175304, and `unknown` (RecordRef `Count`/`IsEmpty`). The reverse
   index moves with the same reads.
+- **2026-11-16, ENG-99** (`alsem/eng-99-shared-globals`, owner-approved id change). Whole-program
+  `b2624796…` -> `ddec4d61…`; reverse index unchanged (`cdo_reverse_index_matches_slow_oracle`
+  passed in the landing run). Measured by dumping the canonical serialization
+  (`L4_CANONICAL_DUMP`, `cdo` profile) at master `77ed235b` (matches the old digest) and at the
+  branch head `145f84ca`. 5479 routines and 9,076,047 lines on both sides. 39,123 lines differ,
+  each a record-variable id of an object global, `{routine}/rv/{name}` ->
+  `{object}/grv/{name}`: 58 distinct globals, in the summaries of 89 routines. With every
+  `…/rv/<name>` and `…/grv/<name>` reduced to its name, the two renderings are byte-identical, so
+  no effect, uncertainty, temp state, table or ordering moved: only the id.
+  (The digest was written from the head dump's printed value, not by a regen.)
 - **2026-11-14, ENG-19** (`alsem/eng-19-request-page-runs`, engine limits L20). Whole-program
   `fde6e4f3…` -> `b2624796…`; reverse index unchanged. Measured by dumping the canonical
   serialization (`L4_CANONICAL_DUMP`) at master `6852a891` (matches the old digest) and at the
