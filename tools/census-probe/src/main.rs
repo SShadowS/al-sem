@@ -2006,6 +2006,8 @@ struct RoutineDeclStats {
     dataitem_source_table: usize,
     enclosing_member: usize,
     preproc_nonempty: usize,
+    /// ENG-102: routines carrying a rare-field box.
+    rare_boxed: usize,
 }
 
 impl RoutineDeclStats {
@@ -2052,11 +2054,13 @@ impl RoutineDeclStats {
             mib((self.locals_slack * size_of::<al_syntax::ir::VarDecl>()) as isize),
         );
         println!(
-            "      set: return_name {} dataitem_source_table {} enclosing_member {} preproc_context {}",
+            "      set: return_name {} dataitem_source_table {} enclosing_member {} preproc_context {}; rare box {} (size_of RoutineRare {} B)",
             self.return_name,
             self.dataitem_source_table,
             self.enclosing_member,
-            self.preproc_nonempty
+            self.preproc_nonempty,
+            self.rare_boxed,
+            size_of::<al_syntax::ir::RoutineRare>(),
         );
     }
 }
@@ -2093,7 +2097,7 @@ fn routine_decl_stats(routines: &[al_syntax::ir::RoutineDecl]) {
                 .iter()
                 .filter(|a| r.attributes_parsed.iter().any(|p| &p.raw == *a))
                 .count();
-            if let Some(d) = &r.doc {
+            if let Some(d) = r.doc() {
                 s.docs += 1;
                 s.doc_bytes += d.len();
             }
@@ -2115,10 +2119,11 @@ fn routine_decl_stats(routines: &[al_syntax::ir::RoutineDecl]) {
             s.locals_labelled += r.locals.iter().filter(|v| v.label.is_some()).count();
             s.params_slack += r.params.capacity() - r.params.len();
             s.locals_slack += r.locals.capacity() - r.locals.len();
-            s.return_name += usize::from(r.return_name.is_some());
-            s.dataitem_source_table += usize::from(r.dataitem_source_table.is_some());
+            s.return_name += usize::from(r.return_name().is_some());
+            s.dataitem_source_table += usize::from(r.dataitem_source_table().is_some());
             s.enclosing_member += usize::from(r.enclosing_member.is_some());
-            s.preproc_nonempty += usize::from(!r.preproc_context.is_empty());
+            s.preproc_nonempty += usize::from(!r.preproc_context().is_empty());
+            s.rare_boxed += usize::from(r.rare.is_some());
         }
     });
 }
@@ -2130,15 +2135,12 @@ fn routine_decl_fields(of: &mut Acc, mut routines: Vec<al_syntax::ir::RoutineDec
             name,
             params,
             return_type,
-            return_name,
             locals,
             attributes,
             attributes_parsed,
             access_modifier,
-            dataitem_source_table,
             enclosing_member,
-            preproc_context,
-            doc,
+            rare,
             ..
         } = r;
         of.drop_as("routines.name", name);
@@ -2146,17 +2148,11 @@ fn routine_decl_fields(of: &mut Acc, mut routines: Vec<al_syntax::ir::RoutineDec
         of.drop_as("routines.locals", locals);
         of.drop_as("routines.attributes", attributes);
         of.drop_as("routines.attributes_parsed", attributes_parsed);
-        of.drop_as("routines.doc", doc);
-        of.drop_as("routines.preproc_context", preproc_context);
+        // ENG-102: return name, dataitem table, build conditions and doc, one box.
+        of.drop_as("routines.rare (doc/preproc/return_name/dataitem)", rare);
         of.drop_as(
-            "routines.return/access/dataitem/member",
-            (
-                return_type,
-                return_name,
-                access_modifier,
-                dataitem_source_table,
-                enclosing_member,
-            ),
+            "routines.return/access/member",
+            (return_type, access_modifier, enclosing_member),
         );
     }
     of.drop_as("routines.(vec)", routines);

@@ -1374,8 +1374,7 @@ impl Walker<'_, '_> {
             .iter()
             .find(|p| unquote(&p.name).eq_fold_identifier(name));
         let is_return = r
-            .return_name
-            .as_deref()
+            .return_name()
             .is_some_and(|n| unquote(n).eq_fold_identifier(name));
         let locals: Vec<&VarDecl> = r
             .locals
