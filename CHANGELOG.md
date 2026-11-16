@@ -25,10 +25,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   back to back on CDO): live memory after one ask of each kind 4,862.7 → 4,778.8 MiB
   (**-83.9 MiB**, bar 60); the object declarations 224.9 → 144.1 MiB, the dependency trees 728.1
   → 647.2 MiB; the workspace's retained trees 3.5 MiB less.
-- **Speed.** `cdo-speed` (`52d349ab` against the change): PASS, model build CPU **x0.871** in both
-  passes (x0.858, x0.884; wall x0.798), rounds x0.964, the servers' peak memory 8,675 → 8,089 MiB
-  (x0.932). The trim copies each list once, yet the build gets cheaper, not dearer: the four-element
-  first reservations cost more than the moves (the cause is not profiled).
+- **Speed: not slower; a gain is not established.** Two `cdo-speed` runs against the same base
+  (`52d349ab`, ENG-83 included) disagree on the model build's CPU: x0.871 in the task's run (both
+  passes, x0.858 and x0.884) and x0.989 in the landing gate. Each is one two-pass run and the gap is
+  outside the check's ±8% resolution, so neither is quoted as the change's effect; both say it is
+  not slower (corrected after the landing; the first version of this entry claimed x0.871). Peak
+  memory agrees across both: the servers' peak x0.932 (8,675 → 8,089 MiB) and x0.943.
 - **Same answers.** The task gate (every golden byte-identical), `scripts/cdo-before-after
   52d349ab` (nothing moved) and `aldump --session-refresh --verify` on a CDO copy in both memory
   modes (every step equal to a cold build).
@@ -73,6 +75,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Also found:** `analyze` gives some distinct findings one fingerprint (CDO primary: 2,308
   findings, 2,301 fingerprints; d54 and d55), which is why `cdo-before-after` (distinct
   fingerprints) reads 2301 / 32548 where a findings count reads 2308 / 32579. Filed as ENG-101.
+
+### Fixed (ENG-103: a split routine's argument bindings keep naming its own record variables)
+
+- **The hole.** When the graph splits a routine per declaration (`#if` arms, or one routine
+  declared in two files; `adopt_declaration_ids`), the routine gets a new id and every id built
+  from the old one moves with it (`rewrite_routine_site_ids`): record-variable ids
+  (`{id}/rv/{name}`), operations' `record_variable_id`, site ids. A call's argument binding holds
+  the same kind of id (`source_record_variable_id`) and was not moved, so it named a variable the
+  routine no longer had. Every reader that matches a binding to its variable by id
+  (`LoadPoint::is_variable`, `binding_source_table`, d37, d39) then read two different variables.
+  Release builds did this silently; a debug build's `Debug`-text assert would have caught it,
+  but no test split a routine whose call passes a record variable. Found by Fable's ENG-99 design
+  review.
+- **The fix.** The binding's id moves with the rest. `rewrite_routine_site_ids` now names every
+  field of the rows it walks (`ModelRoutine`, `PCallSite`, `PCallArgumentBinding`,
+  `POperationSite`, `PLoop`, `PUnreachableStatement`, `ModelRecordOperation`), so a field added
+  later does not compile until someone decides whether it holds one of the routine's ids.
+- Pinned by `a_split_routines_argument_bindings_name_its_own_record_variables`: every split shape
+  (one file `#if`/`#else`, two files, both orders), the routine really split (its own id, a split
+  stable id), and the binding's id names one of its routine's record variables. With the rewrite
+  removed it fails (the `Debug`-text assert in `adopt_declaration_ids`).
+- **On CDO nothing moved** (`scripts/cdo-before-after 142db3e2`: findings, fingerprints and the
+  call-graph stats): CDO has no split routine passing a record variable, so the bug never fired
+  there. Reviewed by Fable and sol.
 
 ### Changed (ENG-96: smaller call-site and record-variable rows, 88.5 MiB less resident memory on CDO)
 
