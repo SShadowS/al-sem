@@ -292,6 +292,76 @@ pub struct SitedGraph {
     catalog: super::configured_dispatch::CatalogReport,
 }
 
+impl SitedGraph {
+    /// ENG-107: the graph's fields for a byte census (`tools/census-probe resident`), in
+    /// declaration order. Every field is named, so a new one does not compile here unplaced.
+    #[doc(hidden)]
+    pub fn into_census_parts(self) -> Vec<(&'static str, Box<dyn std::any::Any>)> {
+        let SitedGraph {
+            nodes,
+            node_ix,
+            sites,
+            units,
+            apps,
+            hidden,
+            primary_app: _,
+            root_kinds,
+            flags,
+            stable_objects,
+            stable_object_ix,
+            stable,
+            stable_of,
+            action_run_sites,
+            ui_candidate_sites,
+            action_run_actions,
+            entry_inventory,
+            rev_off,
+            rev_sites,
+            local_names,
+            routine_names,
+            object_names,
+            member_names,
+            platform_publishers,
+            isolated_publishers,
+            configured_arms,
+            catalog,
+        } = self;
+        vec![
+            ("sited.nodes", Box::new(nodes)),
+            ("sited.node_ix", Box::new(node_ix)),
+            ("sited.sites", Box::new(sites)),
+            ("sited.units", Box::new(units)),
+            ("sited.apps", Box::new(apps)),
+            ("sited.hidden", Box::new(hidden)),
+            ("sited.root_kinds+flags", Box::new((root_kinds, flags))),
+            (
+                "sited.stable (objects, ix, entries, of)",
+                Box::new((stable_objects, stable_object_ix, stable, stable_of)),
+            ),
+            (
+                "sited.action/ui sites + actions",
+                Box::new((action_run_sites, ui_candidate_sites, action_run_actions)),
+            ),
+            ("sited.entry_inventory", Box::new(entry_inventory)),
+            ("sited.rev (off + sites)", Box::new((rev_off, rev_sites))),
+            ("sited.local_names", Box::new(local_names)),
+            (
+                "sited.routine/object/member names",
+                Box::new((routine_names, object_names, member_names)),
+            ),
+            (
+                "sited.publishers + arms + catalog",
+                Box::new((
+                    platform_publishers,
+                    isolated_publishers,
+                    configured_arms,
+                    catalog,
+                )),
+            ),
+        ]
+    }
+}
+
 /// The catalog entry and arm a `configuredDispatch` site lies in.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ConfiguredArm {
