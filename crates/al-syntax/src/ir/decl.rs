@@ -417,8 +417,9 @@ pub struct VarDecl {
     pub origin: Origin,
     /// The text of a label declaration (`Name: Label 'text', Locked = true;`) or
     /// of a `TextConst` (`Name: TextConst ENU = 'text';`), `None` for every other
-    /// declaration. See [`LabelValue`].
-    pub label: Option<LabelValue>,
+    /// declaration. See [`LabelValue`]. Boxed (ENG-102): 112 B inline on every
+    /// declaration, set on 761 of 94,471 locals and 23,979 of 63,592 globals on CDO.
+    pub label: Option<Box<LabelValue>>,
 }
 
 /// What a label declaration's value is: the literal text with its quotes removed
@@ -559,7 +560,7 @@ impl VarDecl {
             max_length: _,
             other,
             translations,
-        }) = label
+        }) = label.as_deref_mut()
         {
             // Exact already today: the lowerer clones one label per declared name, and a
             // clone has no spare capacity (sol's test gap, ENG-94: a break here stays green).

@@ -3497,7 +3497,7 @@ fn extract_var_decl(decl: RawNode, source: &str, out: &mut Vec<VarDecl>) {
     let temporary = type_node
         .map(|t| contains_kind(t, RawKind::TemporaryKeyword))
         .unwrap_or(false);
-    let label = label_value(decl, ty.as_deref(), source);
+    let label = label_value(decl, ty.as_deref(), source).map(Box::new);
     let mut names = Vec::new();
     var_decl_names(decl, &mut names);
     // ENG-80 (Fable r5): a name inside a `#if` of the name list exists only in some
@@ -10302,7 +10302,9 @@ codeunit 50100 C
         // G52 pins text and locked only; the other attributes are
         // `label_attributes_and_text_consts_are_kept`'s.
         let lv = |text: &str, locked: bool| Some((Some(text.to_string()), locked));
-        let tl = |l: &Option<crate::ir::LabelValue>| l.as_ref().map(|l| (l.text.clone(), l.locked));
+        let tl = |l: &Option<Box<crate::ir::LabelValue>>| {
+            l.as_deref().map(|l| (l.text.clone(), l.locked))
+        };
         assert_eq!(tl(&af.objects[0].globals[0].label), lv("it's", true));
         let labels: Vec<_> = af.objects[0].routines[0]
             .locals
@@ -10383,7 +10385,7 @@ codeunit 50100 C
                 .globals
                 .iter()
                 .find(|g| g.name == name)
-                .and_then(|g| g.label.clone())
+                .and_then(|g| g.label.as_deref().cloned())
                 .unwrap_or_else(|| panic!("{name} has a label value"))
         };
         let s = |x: &str| x.to_string();

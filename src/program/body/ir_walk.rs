@@ -4038,7 +4038,7 @@ pub fn ir_variables(
                 .iter()
                 .any(|g| g.name.eq_fold_identifier(&lc));
         let fixed_local = declared_once.then(|| super::features::FixedLocal {
-            constant: super::features::label_constant_of(v.label.as_ref()),
+            constant: super::features::label_constant_of(v.label.as_deref()),
         });
         out.push(PVariableSymbol {
             name: lc,
