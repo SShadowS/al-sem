@@ -248,7 +248,6 @@ fn is_preproc_wrapper(n: RawNode) -> bool {
 /// unregistering the whole construct). Every one of those sites now goes through here.
 fn structural_children(node: RawNode) -> Vec<RawNode> {
     node.named_children()
-        .into_iter()
         .filter(|c| crate::schema::class_of(c.kind()) != crate::schema::Class::Trivia)
         .collect()
 }
@@ -260,7 +259,6 @@ fn structural_children(node: RawNode) -> Vec<RawNode> {
 fn split_declaration_kind(node: RawNode) -> ObjectKind {
     use ObjectKind as O;
     node.named_children()
-        .into_iter()
         .find_map(|c| {
             Some(match c.kind() {
                 RawKind::CodeunitKeyword => O::Codeunit,
@@ -335,7 +333,7 @@ fn lower_object(
     let mut routine_nodes = Vec::new();
     // Entries still pending at the object's end dangle and attach to nothing.
     collect_routines(
-        node.named_children(),
+        node.named_children().collect(),
         None,
         None,
         false,
@@ -488,7 +486,7 @@ fn lower_object(
     if let Some(body) = node.field(FieldName::Body) {
         // Every request page, a `#if` around it included.
         let mut pages = Vec::new();
-        let mut stack = body.named_children();
+        let mut stack: Vec<_> = body.named_children().collect();
         while let Some(c) = stack.pop() {
             if c.kind() == RawKind::RequestpageSection {
                 pages.push(c);
@@ -1515,7 +1513,7 @@ fn collect_routines<'t>(
                 // `report_dataitem` only appears under `dataset_section`/`report_body`).
                 let inner = dataitem_table_name(child, source);
                 collect_routines(
-                    child.named_children(),
+                    child.named_children().collect(),
                     inner.as_deref(),
                     Some(child),
                     true,
@@ -1530,7 +1528,7 @@ fn collect_routines<'t>(
             RawKind::DatasetSection => {
                 pending.clear();
                 collect_routines(
-                    child.named_children(),
+                    child.named_children().collect(),
                     dataitem_table,
                     member,
                     true,
@@ -1551,7 +1549,7 @@ fn collect_routines<'t>(
                 // structure, don't validate").
                 pending.clear();
                 collect_routines(
-                    child.named_children(),
+                    child.named_children().collect(),
                     dataitem_table,
                     member,
                     false,
@@ -1581,7 +1579,7 @@ fn collect_routines<'t>(
                 // generic arm below inherits the outer member and the fallback never
                 // sees the wrapper at all.
                 collect_routines(
-                    child.named_children(),
+                    child.named_children().collect(),
                     dataitem_table,
                     Some(child),
                     dataset_ctx,
@@ -1728,7 +1726,7 @@ fn collect_routines<'t>(
                     member
                 };
                 collect_routines(
-                    child.named_children(),
+                    child.named_children().collect(),
                     dataitem_table,
                     child_member,
                     dataset_ctx,
@@ -1978,7 +1976,6 @@ fn collect_protected_names(node: RawNode, source: &str, out: &mut Vec<String>) {
         RawKind::VarSection
             if node
                 .named_children()
-                .iter()
                 .any(|c| c.kind() == RawKind::ProtectedKeyword) =>
         {
             let mut decls = Vec::new();
@@ -2002,7 +1999,6 @@ fn collect_protected_names(node: RawNode, source: &str, out: &mut Vec<String>) {
 fn record_var_wrapper(node: RawNode) {
     let directives: Vec<RawNode> = node
         .named_children()
-        .into_iter()
         .filter(|c| {
             matches!(
                 c.kind(),
@@ -2110,7 +2106,7 @@ fn attr_in_arm(levels: &[RawNode], attr: RawNode, arm: &std::ops::Range<usize>) 
     }
     let at = attr.byte_range().end;
     levels.iter().any(|l| {
-        let kids = l.named_children();
+        let kids: Vec<_> = l.named_children().collect();
         if !kids.iter().any(|c| c.id() == attr.id()) {
             return false;
         }
@@ -2137,7 +2133,7 @@ fn attr_in_arm(levels: &[RawNode], attr: RawNode, arm: &std::ops::Range<usize>) 
 /// The arms of one level of a split header, added to `arms`, nested groups expanded
 /// ([`header_arms`]). Returns where the tail after this level's `#endif` starts.
 fn header_group_arms(node: RawNode, arms: &mut Vec<std::ops::Range<usize>>) -> usize {
-    let kids = node.named_children();
+    let kids: Vec<_> = node.named_children().collect();
     let close_arm = |r: std::ops::Range<usize>, arms: &mut Vec<std::ops::Range<usize>>| {
         let mut nested = kids
             .iter()
@@ -2182,7 +2178,6 @@ fn header_levels(node: RawNode<'_>) -> Vec<RawNode<'_>> {
         while i < out.len() {
             let nested: Vec<_> = out[i]
                 .named_children()
-                .into_iter()
                 .filter(|c| is_nested_header_group(c.kind()))
                 .collect();
             out.extend(nested);
@@ -2610,7 +2605,7 @@ fn arm_conditions<'t>(node: RawNode<'t>, arm: &std::ops::Range<usize>) -> Vec<(R
     }
     let mut level = Some(node);
     while let Some(n) = level.take() {
-        let kids = n.named_children();
+        let kids: Vec<_> = n.named_children().collect();
         level = kids
             .iter()
             .copied()
@@ -2682,7 +2677,6 @@ fn attribute_arg_selection<'t>(
     };
     args_node
         .named_children()
-        .into_iter()
         .filter(|l| l.kind() == RawKind::AttributeArgumentList)
         .map(|list| {
             let mut out = AttributeArgList {
@@ -2943,7 +2937,6 @@ fn lower_routine<'t>(
     // The nodes of a return clause chosen per `#if` arm: the read arm's content.
     let conditional_return: Vec<RawNode> = node
         .named_children()
-        .into_iter()
         .find(|c| {
             matches!(
                 c.kind(),
@@ -2965,7 +2958,7 @@ fn lower_routine<'t>(
         .unwrap_or_default();
     // ENG-80 (sol review): the signature read is one arm's; another build may give a
     // parameter or the named return another type, or none.
-    let signature_varies = node.named_children().into_iter().any(|c| {
+    let signature_varies = node.named_children().any(|c| {
         matches!(
             c.kind(),
             RawKind::PreprocConditionalReturn | RawKind::PreprocConditionalReturnType
@@ -2987,7 +2980,6 @@ fn lower_routine<'t>(
     let return_type = arm_field(FieldName::ReturnType)
         .or_else(|| {
             node.named_children()
-                .into_iter()
                 .find(|c| c.kind() == RawKind::InterfaceProcedureSuffix)
                 .and_then(|suffix| suffix.field(FieldName::ReturnType))
         })
@@ -3047,7 +3039,7 @@ fn lower_routine<'t>(
     // ENG-80 (spec §4.2 C): a split body's arms declare `var` sections that never
     // reach `locals`; a nested `var` `#if` is not read either.
     let locals_incomplete = VARS_INCOMPLETE.with(|f| f.replace(false))
-        || node.named_children().into_iter().any(|c| {
+        || node.named_children().any(|c| {
             matches!(
                 c.kind(),
                 RawKind::PreprocSplitProcedureBody | RawKind::PreprocSplitCompleteBody
@@ -3070,7 +3062,6 @@ fn lower_routine<'t>(
             // `node.field(Body)` above is unconditionally `None` for both. Recover directly
             // from the wrapper child instead.
             node.named_children()
-                .into_iter()
                 .find(|c| {
                     matches!(
                         c.kind(),
@@ -3367,7 +3358,6 @@ fn extract_var_decl(decl: RawNode, source: &str, out: &mut Vec<VarDecl>) {
     // gets a wrapper that never covers (its names prove nothing).
     if decl
         .named_children()
-        .iter()
         .any(|c| c.kind() == RawKind::PreprocConditionalVarNames)
     {
         CONDITIONAL_VARS.with(|v| {
@@ -3463,7 +3453,7 @@ fn label_value(decl: RawNode, ty: Option<&str>, source: &str) -> Option<crate::i
 /// at any depth ([`label_value`]).
 fn has_grouped_locked(decl: RawNode, source: &str) -> bool {
     fn walk(n: RawNode, source: &str) -> bool {
-        n.named_children().into_iter().any(|c| match c.kind() {
+        n.named_children().any(|c| match c.kind() {
             RawKind::LabelAttribute => c
                 .field(FieldName::Name)
                 .is_some_and(|m| m.text(source).trim().eq_ignore_ascii_case("locked")),
@@ -3472,7 +3462,6 @@ fn has_grouped_locked(decl: RawNode, source: &str) -> bool {
         })
     }
     decl.named_children()
-        .into_iter()
         .filter(|c| c.kind() == RawKind::PreprocConditionalLabelAttributes)
         .any(|g| walk(g, source))
 }
@@ -3483,11 +3472,9 @@ fn has_grouped_locked(decl: RawNode, source: &str) -> bool {
 fn text_const_value(decl: RawNode, source: &str) -> Option<crate::ir::LabelValue> {
     let list = decl
         .named_children()
-        .into_iter()
         .find(|c| c.kind() == RawKind::MlValueList)?;
     let pairs: Vec<(String, String, Option<String>)> = list
         .named_children()
-        .into_iter()
         .filter(|p| p.kind() == RawKind::MlValuePair)
         .map(|p| {
             let lang = p
@@ -3585,7 +3572,7 @@ fn lower_code_block(
         Some(body) => lower_statement_list(body.named_children(), ir, issues, source, depth),
         None => Vec::new(),
     };
-    if let Some(split_end) = cb.named_children().into_iter().find(|c| {
+    if let Some(split_end) = cb.named_children().find(|c| {
         matches!(
             c.kind(),
             RawKind::PreprocSplitCodeBlockEnd
@@ -4308,11 +4295,10 @@ fn lower_case_body(
             ) || (c.kind() == RawKind::CaseBranch && {
                 let body = c.field(FieldName::Body).map(|b| b.id());
                 c.named_children()
-                    .into_iter()
                     .any(|k| Some(k.id()) != body && holds_preproc(k))
             })
         };
-        if let Some(group) = body.named_children().into_iter().find(varies) {
+        if let Some(group) = body.named_children().find(varies) {
             push_untrusted_case_branch(&origin_of(group), ir, &mut branches);
         }
     }
@@ -4322,7 +4308,6 @@ fn lower_case_body(
     let body_id = case_node.field(FieldName::Body).map(|b| b.id());
     if let Some(header) = case_node
         .named_children()
-        .into_iter()
         .find(|c| Some(c.id()) != body_id && holds_preproc(*c))
     {
         push_untrusted_case_branch(&origin_of(header), ir, &mut branches);
@@ -4411,7 +4396,7 @@ fn collect_case_branches(
     depth: u32,
 ) {
     collect_case_branches_in(
-        node.named_children(),
+        node.named_children().collect(),
         ir,
         issues,
         source,
@@ -4591,7 +4576,6 @@ fn push_case_branch(
 ) {
     let effective = case_branch_node
         .named_children()
-        .into_iter()
         .find(|c| c.kind() == RawKind::PreprocSplitCaseBranch)
         .unwrap_or(case_branch_node);
     let patterns = case_patterns(effective, ir, issues, source, depth);
@@ -4636,7 +4620,6 @@ fn lower_case_else_branch(
 ) -> BlockId {
     let content: Vec<RawNode> = else_node
         .named_children()
-        .into_iter()
         .filter(|c| c.kind() != RawKind::ElseKeyword)
         .collect();
     match content.as_slice() {
@@ -4845,8 +4828,7 @@ fn lower_expr(
     // ENG-80 (spec §4.2 C): a call whose callee or arguments hold a build-varying
     // `#if` node is read from one arm (`Error(#if X ErrInfo #else 'txt' #endif)` lowers
     // to two arguments, `#if X Error #else Work #endif ('x')` keeps one callee).
-    let tainted = matches!(kind, ExprKind::Call { .. })
-        && node.named_children().into_iter().any(holds_preproc);
+    let tainted = matches!(kind, ExprKind::Call { .. }) && node.named_children().any(holds_preproc);
     let id = ir.add_expr(Expr { kind, origin });
     if tainted {
         ir.mark_tainted(id);
@@ -4998,7 +4980,7 @@ fn unary_op(node: RawNode, source: &str) -> UnaryOp {
 /// True if `node`'s subtree contains a node of kind `k` (used for `temporary`
 /// detection: `temporary_keyword` nested in the variable's `record_type`).
 fn contains_kind(node: RawNode, k: RawKind) -> bool {
-    node.kind() == k || node.named_children().iter().any(|c| contains_kind(*c, k))
+    node.kind() == k || node.named_children().any(|c| contains_kind(c, k))
 }
 
 /// Strip one layer of surrounding double quotes from a (quoted) identifier.
