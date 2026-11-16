@@ -600,7 +600,7 @@ pub fn detect_d3(resolved: &Model, ctx: &DetectorContext) -> Result<DetectorOutp
                 evidence_path,
                 additional_paths: None,
                 affected_objects: vec![routine.object_id.as_str().into()],
-                affected_tables: vec![table_id.into()],
+                affected_tables: vec![table_id.as_str().into()],
                 fix_options: vec![FixOption {
                     description: fix_description.into(),
                     safety: "high".into(),

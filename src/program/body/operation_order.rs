@@ -685,7 +685,7 @@ pub fn apply_operation_order(features: &mut PFeatures, attr_names_lc: &[String])
 
     // Populate `order` on each record (absent when no entry).
     for cs in &mut features.call_sites {
-        cs.order = order.by_callsite.get(&cs.id).copied();
+        cs.order = order.by_callsite.get(&cs.id).copied().map(Box::new);
     }
     for op in &mut features.operation_sites {
         op.order = by_operation.get(&op.id).copied();

@@ -1510,7 +1510,7 @@ fn g9_own_error_procedure_keeps_the_gap() {
 fn g10_dead_sites_read_the_mark() {
     let rows = |cc: &str| {
         let mut cs = call_site("r/cs0", "Strategy.NextKm", vec![]);
-        cs.control_context = Some(cc.to_string());
+        cs.control_context = Some(cc.into());
         let mut r = routine("r", "procedure");
         r.call_sites = vec![cs];
         vec![r]

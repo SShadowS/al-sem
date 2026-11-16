@@ -1306,7 +1306,7 @@ pub(crate) mod test_facts {
         f.extra = Some(CapabilityExtra::Table {
             record_variable_id: None,
             temp_state: Some(PTempState {
-                kind: kind.to_string(),
+                kind: kind.into(),
                 value,
                 parameter_index: None,
             }),
@@ -1581,7 +1581,7 @@ mod tests {
             Some(CapabilityExtra::Table {
                 record_variable_id: None,
                 temp_state: Some(PTempState {
-                    kind: "known".to_string(),
+                    kind: "known".into(),
                     value: Some(true),
                     parameter_index: None,
                 }),

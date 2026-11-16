@@ -720,56 +720,88 @@ impl<T: std::fmt::Debug + Sync> SeqItems for Vec<T> {
     }
 }
 
-/// The cross-app model in parts, in a fixed order: the rows, calls, bindings
-/// sorted by call site, diagnostics, external targets, the event graph and
-/// census, the declared and loaded dependencies, the coverage and the friends
-/// (the fields the text has covered since before TLS-80; `ResolvedCalls`'
-/// `background_starts` and `loaded_only_tables` are not in it, TLS-81).
+/// The cross-app model in parts, in a fixed order: every field of the model,
+/// its rows, calls and events. Each struct is destructured without `..`, so a
+/// field added to any of them does not compile until it is placed here
+/// (TLS-81: `ResolvedCalls`' `background_starts` and `loaded_only_tables`
+/// were left out). Unordered maps and sets are sorted first.
 /// [`write_model`] and [`model_fingerprint`] both read these, so they cover the
 /// same fields.
 fn model_parts(x: &CrossAppProgram) -> Vec<Part<'_>> {
-    let m = &x.resolved;
-    let mut bindings: Vec<_> = m.calls.upgraded_bindings.iter().collect();
+    use crate::program::model::calls::ResolvedCalls;
+    use crate::program::model::events::{EventGraph, ProgramEvents};
+    use crate::program::model::workspace::{Model, ModelEntities};
+    let CrossAppProgram {
+        resolved,
+        declared_dependencies,
+        dependency_apps,
+        coverage,
+        friends,
+        loaded_apps,
+    } = x;
+    let Model {
+        workspace,
+        root_classifications,
+        primary_app,
+        infra_diagnostics,
+        workspace_diagnostics,
+        dependency_diagnostics,
+        calls,
+        events,
+        page_ui_blocked,
+    } = resolved;
+    let ModelEntities {
+        objects,
+        tables,
+        routines,
+    } = workspace;
+    let ResolvedCalls {
+        edges,
+        upgraded_bindings,
+        diagnostics,
+        external_targets,
+        background_starts,
+        loaded_only_tables,
+    } = &**calls;
+    let ProgramEvents { graph, census } = &**events;
+    let EventGraph {
+        events: event_symbols,
+        edges: event_edges,
+    } = graph;
+    let mut bindings: Vec<_> = upgraded_bindings.iter().collect();
     bindings.sort_by(|a, b| a.0.cmp(b.0));
-    let mut friends: Vec<_> = x.friends.iter().collect();
+    let mut starts: Vec<_> = background_starts.iter().collect();
+    starts.sort_by(|a, b| a.0.cmp(b.0));
+    let mut loaded_only: Vec<_> = loaded_only_tables.iter().collect();
+    loaded_only.sort();
+    let mut friends: Vec<_> = friends.iter().collect();
     friends.sort();
-    let ws = &m.workspace;
-    let ev = &m.events;
     vec![
-        Part::Seq("workspace.objects", Box::new(&ws.objects[..])),
-        Part::Seq("workspace.tables", Box::new(&ws.tables[..])),
-        Part::Seq("workspace.routines", Box::new(&ws.routines[..])),
-        Part::Text(Box::new(move |w| {
-            writeln!(w, "{:#?}", m.root_classifications)
-        })),
+        Part::Seq("workspace.objects", Box::new(&objects[..])),
+        Part::Seq("workspace.tables", Box::new(&tables[..])),
+        Part::Seq("workspace.routines", Box::new(&routines[..])),
+        Part::Text(Box::new(move |w| writeln!(w, "{root_classifications:#?}"))),
         Part::Text(Box::new(move |w| {
             writeln!(
                 w,
-                "{:?}\n{:?}\n{:?}\n{:?}",
-                m.primary_app,
-                m.infra_diagnostics,
-                m.workspace_diagnostics,
-                m.dependency_diagnostics
+                "{primary_app:?}\n{infra_diagnostics:?}\n{workspace_diagnostics:?}\n{dependency_diagnostics:?}"
             )
         })),
-        Part::Seq("calls.edges", Box::new(&m.calls.edges[..])),
+        Part::Seq("calls.edges", Box::new(&edges[..])),
         Part::Seq("calls.upgraded_bindings", Box::new(bindings)),
         Part::Text(Box::new(move |w| {
-            writeln!(
-                w,
-                "{:?}\n{:?}",
-                m.calls.diagnostics, m.calls.external_targets
-            )
+            writeln!(w, "{diagnostics:?}\n{external_targets:?}")
         })),
-        Part::Seq("events.graph.events", Box::new(&ev.graph.events[..])),
-        Part::Seq("events.graph.edges", Box::new(&ev.graph.edges[..])),
-        Part::Text(Box::new(move |w| writeln!(w, "{:#?}", ev.census))),
-        Part::Text(Box::new(move |w| writeln!(w, "{:?}", m.page_ui_blocked))),
+        Part::Seq("calls.background_starts", Box::new(starts)),
+        Part::Text(Box::new(move |w| writeln!(w, "{loaded_only:?}"))),
+        Part::Seq("events.graph.events", Box::new(&event_symbols[..])),
+        Part::Seq("events.graph.edges", Box::new(&event_edges[..])),
+        Part::Text(Box::new(move |w| writeln!(w, "{census:#?}"))),
+        Part::Text(Box::new(move |w| writeln!(w, "{page_ui_blocked:?}"))),
         Part::Text(Box::new(move |w| {
             writeln!(
                 w,
-                "{:?}\n{:?}\n{:?}\n{:?}\n{:?}",
-                x.declared_dependencies, x.dependency_apps, x.coverage, friends, x.loaded_apps
+                "{declared_dependencies:?}\n{dependency_apps:?}\n{coverage:?}\n{friends:?}\n{loaded_apps:?}"
             )
         })),
     ]

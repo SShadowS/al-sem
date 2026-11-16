@@ -1910,7 +1910,7 @@ pub(crate) mod tests {
 
     pub(crate) fn pd_ts_known(value: bool) -> PTempState {
         PTempState {
-            kind: "known".to_string(),
+            kind: "known".into(),
             value: Some(value),
             parameter_index: None,
         }
@@ -1918,7 +1918,7 @@ pub(crate) mod tests {
 
     pub(crate) fn pd_ts_pd(idx: u32) -> PTempState {
         PTempState {
-            kind: "parameter-dependent".to_string(),
+            kind: "parameter-dependent".into(),
             value: None,
             parameter_index: Some(idx),
         }

@@ -107,29 +107,47 @@ pub fn anchor_unit(unit: &str) -> crate::program::str_pool::SharedStr {
 /// argument's source kind), one allocation per text per thread. Only for closed sets: the
 /// thread keeps every text it saw.
 pub fn shared_vocab(kind: &str) -> crate::program::str_pool::SharedStr {
-    use crate::program::str_pool::SharedStr;
     thread_local! {
-        static KINDS: std::cell::RefCell<crate::fxhash::FxHashSet<SharedStr>> =
-            std::cell::RefCell::new(crate::fxhash::FxHashSet::default());
+        static KINDS: SharedSet = SharedSet::default();
     }
-    KINDS.with(|kinds| {
-        let mut kinds = kinds.borrow_mut();
-        if let Some(s) = kinds.get(kind) {
-            return s.clone();
-        }
-        let s = SharedStr::from(kind);
-        // Bounded however it is called: past the cap a text is no longer kept (it is still
-        // right, just not shared), so a long-running engine thread never grows this set.
-        if kinds.len() < SHARED_VOCAB_CAP {
-            kinds.insert(s.clone());
-        }
-        s
-    })
+    KINDS.with(|kinds| shared_in(kinds, SHARED_VOCAB_CAP, kind))
 }
 
 /// Texts [`shared_vocab`] keeps per thread: well above the grammar's kind names (~1,500)
 /// plus the expression and argument kinds.
 pub const SHARED_VOCAB_CAP: usize = 4096;
+
+/// ENG-96: a record variable's table name or table id, one allocation per text per thread.
+/// User text (a workspace's tables), so its own set and cap: it never crowds the closed
+/// vocabularies out of [`shared_vocab`]'s (Fable, ENG-96).
+pub fn shared_table_text(text: &str) -> crate::program::str_pool::SharedStr {
+    thread_local! {
+        static TABLES: SharedSet = SharedSet::default();
+    }
+    TABLES.with(|tables| shared_in(tables, SHARED_TABLE_TEXT_CAP, text))
+}
+
+/// Texts [`shared_table_text`] keeps per thread: CDO with its dependencies has about 2,300
+/// (1,149 table names, 1,120 table ids); a workspace past this still answers right, it only
+/// stops sharing the further texts.
+pub const SHARED_TABLE_TEXT_CAP: usize = 16_384;
+
+type SharedSet = std::cell::RefCell<crate::fxhash::FxHashSet<crate::program::str_pool::SharedStr>>;
+
+/// `text`'s shared copy in `set`, added while the set holds fewer than `cap` texts.
+fn shared_in(set: &SharedSet, cap: usize, text: &str) -> crate::program::str_pool::SharedStr {
+    let mut set = set.borrow_mut();
+    if let Some(s) = set.get(text) {
+        return s.clone();
+    }
+    let s = crate::program::str_pool::SharedStr::from(text);
+    // Bounded however it is called: past the cap a text is no longer kept (it is still
+    // right, just not shared), so a long-running engine thread never grows this set.
+    if set.len() < cap {
+        set.insert(s.clone());
+    }
+    s
+}
 
 impl PAnchor {
     /// 0-based containment: is `(line, column)` within `[start, end]` (inclusive)?
@@ -165,13 +183,36 @@ pub struct PExpressionInfo {
     pub member: Option<crate::program::str_pool::SharedStr>,
 }
 
+crate::open_vocab!(
+    /// [`PCallSite::control_context`]'s words, the lattice values of
+    /// `control_context::ControlContext::as_str` (ENG-96); any other word is kept as `Other`.
+    pub ControlContextWord {
+        TopLevel => "top-level",
+        Conditional => "conditional",
+        LoopBody => "loop-body",
+        IsHandledGuarded => "is-handled-guarded",
+        ErrorPath => "error-path",
+        Unreachable => "unreachable",
+    }
+);
+
+crate::open_vocab!(
+    /// [`PTempState::kind`]'s words (ENG-96); any other word is kept as `Other`.
+    pub TempKind {
+        Known => "known",
+        ParameterDependent => "parameter-dependent",
+        Unknown => "unknown",
+    }
+);
+
 /// Temp-state of a record variable / op.
 ///
 /// `{ kind: "known", value }` | `{ kind: "parameter-dependent", parameterIndex }`
 /// | `{ kind: "unknown" }`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub struct PTempState {
-    pub kind: String,
+    /// ENG-96: a 4-byte word ([`TempKind`]), compared, ordered and serialized as its text.
+    pub kind: TempKind,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub value: Option<bool>,
     #[serde(rename = "parameterIndex", skip_serializing_if = "Option::is_none")]
@@ -293,13 +334,15 @@ pub struct PCallSite {
     /// R1b control-context lattice value (kebab-case string). ABSENT when the
     /// site has no entry (TryFunction / no body / unknown) — matching al-sem's
     /// "assign only when defined" convention.
+    /// ENG-96: a 4-byte word ([`ControlContextWord`]), serialized as its text.
     #[serde(rename = "controlContext", skip_serializing_if = "Option::is_none")]
-    pub control_context: Option<String>,
+    pub control_context: Option<ControlContextWord>,
     /// R1c operation-order index entry. ABSENT when the walk produced no entry
     /// (symbol-only / no-body / TryFunction) — matching al-sem's
-    /// "assign only when defined" convention.
+    /// "assign only when defined" convention. ENG-96: boxed, as no model row
+    /// carries one (CDO: 0 of 160,213); serialized as before.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub order: Option<OperationOrder>,
+    pub order: Option<Box<OperationOrder>>,
     /// True iff this call is the OUTERMOST expression of a bare call statement
     /// (`StmtKind::Call`) — the result is discarded. Expression-position calls
     /// (if-conditions, assignment RHS, arguments) are `false`. Consumed by d53
@@ -352,8 +395,9 @@ pub struct PCallSite {
     ///
     /// INTERNAL-ONLY (`serde(skip)`, excluded from PartialEq), as
     /// `in_statement_position`.
+    /// ENG-96: boxed (CDO: set on 4 of 160,213 call sites).
     #[serde(skip)]
-    pub implicit_receiver: Option<String>,
+    pub implicit_receiver: Option<Box<String>>,
     /// True iff the resolver decided this call starts an XmlPort in a way that
     /// may fail (ENG-08, measured on BC 28): an IMPORT (an `XmlPort.Import`, or
     /// an `XmlPort.Run` whose `Direction` allows one, `dataset::import_export`),
@@ -1279,7 +1323,7 @@ mod tests {
 
     fn ts(kind: &str, value: Option<bool>, param: Option<u32>) -> PTempState {
         PTempState {
-            kind: kind.to_string(),
+            kind: kind.into(),
             value,
             parameter_index: param,
         }
@@ -1392,7 +1436,7 @@ mod tests {
             name: "Rec".to_string(),
             table_name: None,
             temp_state: PTempState {
-                kind: "parameter-dependent".to_string(),
+                kind: "parameter-dependent".into(),
                 value: None,
                 parameter_index: Some(RECEIVER_PARAM_INDEX),
             },

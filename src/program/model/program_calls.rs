@@ -3024,12 +3024,12 @@ impl<'a> Converter<'a> {
             });
             let temp_state = match e.temporary {
                 Some(v) => PTempState {
-                    kind: "known".to_string(),
+                    kind: "known".into(),
                     value: Some(v),
                     parameter_index: None,
                 },
                 None => PTempState {
-                    kind: "unknown".to_string(),
+                    kind: "unknown".into(),
                     value: None,
                     parameter_index: None,
                 },
@@ -3132,7 +3132,7 @@ impl<'a> Converter<'a> {
             record_variable_id: None,
             table_id,
             temp_state: Some(PTempState {
-                kind: "unknown".to_string(),
+                kind: "unknown".into(),
                 value: None,
                 parameter_index: None,
             }),
@@ -3226,7 +3226,7 @@ impl<'a> Converter<'a> {
             temp_state: Some(match cr.temporary {
                 Some(t) => crate::program::body::scope::ts_known(t),
                 None => PTempState {
-                    kind: "unknown".to_string(),
+                    kind: "unknown".into(),
                     value: None,
                     parameter_index: None,
                 },

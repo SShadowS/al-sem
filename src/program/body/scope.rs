@@ -36,7 +36,7 @@ pub struct RecordVariable {
 /// any future `PTempState` shape change), instead of duplicating the literal.
 pub(crate) fn ts_known(value: bool) -> PTempState {
     PTempState {
-        kind: "known".to_string(),
+        kind: "known".into(),
         value: Some(value),
         parameter_index: None,
     }
@@ -46,7 +46,7 @@ pub(crate) fn ts_known(value: bool) -> PTempState {
 /// constructor. `pub(crate)` for the same reuse reason as [`ts_known`].
 pub(crate) fn ts_param_dependent(index: u32) -> PTempState {
     PTempState {
-        kind: "parameter-dependent".to_string(),
+        kind: "parameter-dependent".into(),
         value: None,
         parameter_index: Some(index),
     }

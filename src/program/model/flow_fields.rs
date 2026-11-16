@@ -732,7 +732,7 @@ fn record_ref_table(
                 .record_variables
                 .iter()
                 .find(|rv| rv.name.eq_fold_identifier(v))
-                .and_then(|rv| rv.table_id.clone()),
+                .and_then(|rv| rv.table_id.as_deref().map(str::to_string)),
         };
         match (t, &table) {
             (Some(t), None) => table = Some(t),
@@ -917,7 +917,7 @@ fn field_ref_operations(routine: &ModelRoutine, tables: &Tables<'_>) -> Vec<Mode
             record_variable_id: None,
             table_id,
             temp_state: Some(temp_state.unwrap_or_else(|| PTempState {
-                kind: "unknown".to_string(),
+                kind: "unknown".into(),
                 value: None,
                 parameter_index: None,
             })),
@@ -1148,7 +1148,11 @@ codeunit 50102 "C"
                 .find(|e| e.operation_id == op.id)
                 .unwrap_or_else(|| panic!("{name}: no evidence for {}", op.id));
             assert_eq!(ev.start_line + 1, line, "{name}");
-            assert_eq!(ev.control_context, cs.control_context, "{name}");
+            assert_eq!(
+                ev.control_context.as_deref(),
+                cs.control_context.as_deref(),
+                "{name}"
+            );
             assert_eq!(ev.under_asserterror, asserterror, "{name}");
         }
     }
