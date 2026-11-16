@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (ENG-94: the syntax tree's declarations keep no spare capacity, 83.9 MiB less resident memory on CDO)
+
+- **The census** (`tools/census-probe` resident mode now splits `RoutineDecl` by field and
+  counts each declaration list's unused capacity; `tools/census-probe/runs-eng94/`): of the
+  dependency tier's 224.9 MiB of object declarations, 49.6 MiB in routines, params and locals
+  alone was capacity never used. The lowerer push-builds every declaration list, and a first
+  push reserves four elements: a routine with one local held 4 × 192 B, an object with two
+  routines 4 × 392 B. `lower_file` already trimmed the arenas and the object list, not the
+  lists inside each declaration.
+- **The change.** `ObjectDecl::exact_size` (and the same on `RoutineDecl`, `VarDecl`,
+  `AttributeIr`, `EnumValueDecl`, `ActionDecl`, `FieldDecl`) moves every list a declaration owns,
+  nested ones included, into an exactly sized one (the existing `ir::exact_size`); `lower_file`
+  calls it once per object. Each method names every field of its struct, so a field added later
+  does not compile until someone decides whether it owns a list to trim.
+- **Measured** (the same probe source built against master `52d349ab` and against the change, run
+  back to back on CDO): live memory after one ask of each kind 4,862.7 → 4,778.8 MiB
+  (**-83.9 MiB**, bar 60); the object declarations 224.9 → 144.1 MiB, the dependency trees 728.1
+  → 647.2 MiB; the workspace's retained trees 3.5 MiB less.
+- **Speed.** `cdo-speed` (`52d349ab` against the change): PASS, model build CPU **x0.871** in both
+  passes (x0.858, x0.884; wall x0.798), rounds x0.964, the servers' peak memory 8,675 → 8,089 MiB
+  (x0.932). The trim copies each list once, yet the build gets cheaper, not dearer: the four-element
+  first reservations cost more than the moves (the cause is not profiled).
+- **Same answers.** The task gate (every golden byte-identical), `scripts/cdo-before-after
+  52d349ab` (nothing moved) and `aldump --session-refresh --verify` on a CDO copy in both memory
+  modes (every step equal to a cold build).
+- Pinned by `parsed_declarations_keep_no_spare_capacity` (al-syntax): parses a codeunit, a table
+  and a page and checks every list's capacity equals its length; dropping the `lower_file` call
+  (capacity 4 for 2 routines) or one nested trim (a field caption) fails it.
+- **Not done (left as further levers):** `VarDecl`'s inline label (~88 B, set on 761 of 94,471
+  locals and 23,979 of 63,592 globals), `RoutineDecl`'s rare fields (`return_name`,
+  `dataitem_source_table`, `preproc_context`, `doc`), and the type texts (288,663 strings, 7,041
+  distinct): about 26 MiB more together.
+
 ### Changed (ENG-96: smaller call-site and record-variable rows, 88.5 MiB less resident memory on CDO)
 
 - **The census** (`tools/census-probe` resident mode, now field by field for both row types;
