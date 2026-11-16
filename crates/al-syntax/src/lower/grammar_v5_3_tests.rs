@@ -162,12 +162,13 @@ fn a_split_part_collects_every_arms_control() {
 /// and at two (field 13, a group nested in a nested first arm).
 ///
 /// DISCRIMINATIONS: `field_bodies` not descending a nested group -> the nested
-/// field's captions miss 'NB' and 'NN'; the issue's arm test reduced to `true` -> 4
-/// issues, not 3.
+/// field's captions miss 'NB' and 'NN'; the issue's arm test reduced to `true` -> 5
+/// issues, not 3; the arm count not recursive (any nested group counting as several
+/// arms, the first version) -> the nested one-arm field 16 adds an issue, 4.
 #[test]
 fn a_field_opened_in_several_arms_reads_the_first_arms_header() {
     let af = parse(
-        "table 50103 G\n{\n    fields\n    {\n#if CLEAN25\n        field(10; \"Qty\"; Decimal)\n        {\n            Caption = 'Dec';\n#else\n        field(10; \"Qty\"; Integer)\n        {\n            Caption = 'Int';\n#endif\n            ToolTip = 'Qty';\n        }\n#if A\n#if B\n        field(11; \"Nested B\"; Integer)\n        {\n            Caption = 'NB';\n#else\n        field(11; \"Nested NotB\"; Integer)\n        {\n            Caption = 'NN';\n#endif\n#else\n        field(12; \"Other\"; Code[10])\n        {\n            Caption = 'O';\n#endif\n            ToolTip = 'N';\n        }\n#if A\n#if B\n#if C\n        field(13; \"Deep\"; Integer)\n        {\n#else\n        field(13; \"Deep NotC\"; Integer)\n        {\n#endif\n#else\n        field(14; \"NotB\"; Integer)\n        {\n#endif\n#else\n        field(15; \"NotA\"; Code[10])\n        {\n#endif\n            Caption = 'D';\n        }\n#if not CLEAN26\n        field(20; \"Removed\"; Integer)\n        {\n#endif\n            Caption = 'R';\n        }\n    }\n}\n",
+        "table 50103 G\n{\n    fields\n    {\n#if CLEAN25\n        field(10; \"Qty\"; Decimal)\n        {\n            Caption = 'Dec';\n#else\n        field(10; \"Qty\"; Integer)\n        {\n            Caption = 'Int';\n#endif\n            ToolTip = 'Qty';\n        }\n#if A\n#if B\n        field(11; \"Nested B\"; Integer)\n        {\n            Caption = 'NB';\n#else\n        field(11; \"Nested NotB\"; Integer)\n        {\n            Caption = 'NN';\n#endif\n#else\n        field(12; \"Other\"; Code[10])\n        {\n            Caption = 'O';\n#endif\n            ToolTip = 'N';\n        }\n#if A\n#if B\n#if C\n        field(13; \"Deep\"; Integer)\n        {\n#else\n        field(13; \"Deep NotC\"; Integer)\n        {\n#endif\n#else\n        field(14; \"NotB\"; Integer)\n        {\n#endif\n#else\n        field(15; \"NotA\"; Code[10])\n        {\n#endif\n            Caption = 'D';\n        }\n#if A\n#if B\n        field(16; \"One\"; Integer)\n        {\n#endif\n#endif\n            Caption = '1';\n        }\n#if not CLEAN26\n        field(20; \"Removed\"; Integer)\n        {\n#endif\n            Caption = 'R';\n        }\n    }\n}\n",
     );
     let fields: Vec<(i64, String, String)> = af.objects[0]
         .fields
@@ -181,6 +182,7 @@ fn a_field_opened_in_several_arms_reads_the_first_arms_header() {
             f(10, "Qty", "Decimal"),
             f(11, "Nested B", "Integer"),
             f(13, "Deep", "Integer"),
+            f(16, "One", "Integer"),
             f(20, "Removed", "Integer")
         ]
     );
@@ -204,14 +206,15 @@ fn a_field_opened_in_several_arms_reads_the_first_arms_header() {
             .filter(|i| i.message.contains("opened in several `#if` arms"))
             .count(),
         3,
-        "the three fields opened in several arms, not the one-arm form"
+        "the three fields opened in several arms, not the one-arm forms (flat or nested)"
     );
 }
 
 /// v5.3.0's correction: an EMPTY `#if` group after `asserterror` or `then` no longer
 /// takes the `body` / `then_branch` field; the statement after it does. So the call
 /// lowers INSIDE the `asserterror` (trapped) and the `then` block, where v5.2.0
-/// lowered it as the next statement.
+/// lowered it as the next statement. The `then` case is the shape v5.3.0 fixed: the
+/// then-branch the last statement of its block, with no `;` (review GRM-04, sol).
 ///
 /// A grammar pin, not a guard over lowerer code (none changed for it). Its input
 /// discriminates: the group given a statement (`#if D Pre(); #endif`), which takes the
@@ -220,7 +223,7 @@ fn a_field_opened_in_several_arms_reads_the_first_arms_header() {
 #[test]
 fn an_empty_group_before_a_body_no_longer_takes_the_body() {
     let af = parse(
-        "codeunit 50104 G\n{\n    procedure Go()\n    begin\n        asserterror\n#if D\n#endif\n            Foo();\n        if true then\n#if D\n#endif\n            Bar();\n    end;\n}\n",
+        "codeunit 50104 G\n{\n    procedure Go()\n    begin\n        asserterror\n#if D\n#endif\n            Foo();\n        if true then\n#if D\n#endif\n            Bar()\n    end;\n}\n",
     );
     let calls_in = |b: crate::ir::BlockId| -> Vec<String> {
         af.ir

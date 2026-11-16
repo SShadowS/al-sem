@@ -903,10 +903,7 @@ fn collect_table_fields_keys(
                 // arm's header is read ([`lower_field`]), so say so where several arms open
                 // it (their headers may still be equal).
                 if child.kind() == RawKind::PreprocSplitTableFieldOpen
-                    && (child.children_by_field(FieldName::Id).len() > 1
-                        || child
-                            .named_children()
-                            .any(|c| c.kind() == RawKind::PreprocConditionalTableFieldOpen))
+                    && field_header_count(child) > 1
                 {
                     issues.push(SyntaxIssue {
                         message: "table field opened in several `#if` arms — the first \
@@ -1002,6 +999,18 @@ fn widest_access(group: RawNode, source: &str) -> Option<String> {
     }
     let first = arms.first().cloned().flatten();
     arms.iter().all(|a| *a == first).then_some(first).flatten()
+}
+
+/// How many arms open a split table field: its own headers (`id`s) plus those of its
+/// nested arm groups, recursively. A nested group with one arm under an outer group
+/// with one arm is still one header (review GRM-04, sol).
+fn field_header_count(node: RawNode) -> usize {
+    node.children_by_field(FieldName::Id).len()
+        + node
+            .named_children()
+            .filter(|c| c.kind() == RawKind::PreprocConditionalTableFieldOpen)
+            .map(field_header_count)
+            .sum::<usize>()
 }
 
 fn field_bodies<'t>(node: RawNode<'t>, out: &mut Vec<RawNode<'t>>) {
