@@ -1177,16 +1177,17 @@ struct ProofOutcome {
 mod proof_key {
     use super::BoundaryEnd;
 
-    /// A candidate key of [`super::enumerate_proofs`]: the projected hops'
-    /// JSON and the boundary identity. The walk hashes one per crossing or
-    /// uncrossed proof, never per partial path (#289); tests count the hashes
-    /// to hold that.
+    /// A candidate key of [`super::enumerate_proofs`]: the projected hops' JSON,
+    /// each as its root's dense id ([`super::HopCache::json_id`]: equal ids exactly
+    /// when the texts are equal, ENG-100), and the boundary identity. The walk hashes
+    /// one per crossing or uncrossed proof, never per partial path (#289); tests
+    /// count the hashes to hold that.
     #[derive(PartialEq, Eq)]
-    pub(super) struct ProofKey(Vec<String>, Option<BoundaryEnd>);
+    pub(super) struct ProofKey(Vec<u32>, Option<BoundaryEnd>);
 
     impl ProofKey {
-        pub(super) fn new(json: Vec<String>, boundary: Option<BoundaryEnd>) -> Self {
-            ProofKey(json, boundary)
+        pub(super) fn new(json_ids: Vec<u32>, boundary: Option<BoundaryEnd>) -> Self {
+            ProofKey(json_ids, boundary)
         }
     }
 
@@ -1340,20 +1341,14 @@ fn enumerate_proofs<'i>(
     }
     let key_of =
         |n: &[Node], mut cur: usize, boundary: Option<BoundaryEnd>, hc: &mut HopCache<'i>| {
-            let mut json = Vec::new();
+            // Each hop's JSON as its id (ENG-100), not a copy of the text.
+            let mut json_ids = Vec::new();
             while let Some((parent, e)) = n[cur].parent {
-                let memo = hc.get(&idx.typed_edges[e], idx);
-                json.push(
-                    memo.projected
-                        .as_ref()
-                        .expect("a walked edge projects")
-                        .json()
-                        .to_string(),
-                );
+                json_ids.push(hc.json_id(&idx.typed_edges[e], idx));
                 cur = parent;
             }
-            json.reverse();
-            ProofKey::new(json, boundary)
+            json_ids.reverse();
+            ProofKey::new(json_ids, boundary)
         };
     let mut out = ProofOutcome::default();
     if fact_first_hop(f).is_none() {
@@ -1556,6 +1551,9 @@ fn enumerate_proofs<'i>(
 struct NodeMemo {
     hop: Rc<WitnessHop>,
     projected: Option<Rc<ProjHop>>,
+    /// The projected hop's JSON as a dense id of its root's [`HopCache`] (equal ids
+    /// iff equal JSON), set on first use by [`HopCache::json_id`] (ENG-100).
+    json_id: std::cell::OnceCell<u32>,
 }
 
 /// [`NodeMemo`]s keyed by graph edge, kept across the witnesses of one root. A
@@ -1570,6 +1568,8 @@ struct NodeMemo {
 pub struct HopCache<'i>(
     HashMap<*const SnapshotGraphEdge, Rc<NodeMemo>>,
     std::marker::PhantomData<&'i SnapshotGraphEdge>,
+    /// Each distinct projected hop JSON's dense id ([`HopCache::json_id`]).
+    crate::fxhash::FxHashMap<String, u32>,
 );
 
 impl<'i> HopCache<'i> {
@@ -1594,9 +1594,30 @@ impl<'i> HopCache<'i> {
                     Rc::new(NodeMemo {
                         hop: Rc::new(hop),
                         projected,
+                        json_id: std::cell::OnceCell::new(),
                     })
                 }),
         )
+    }
+
+    /// `edge`'s projected hop JSON as a dense id: equal ids exactly when the JSON
+    /// texts are equal, within this cache (one root). The text is hashed once per
+    /// edge, here, so a proof key of ids never re-reads it (ENG-100: interning keys
+    /// of whole JSON texts cost 14.8% of `alsem fingerprint`'s CPU on CDO).
+    fn json_id(&mut self, edge: &'i SnapshotGraphEdge, idx: &FingerprintIndexes) -> u32 {
+        let memo = self.get(edge, idx);
+        if let Some(&id) = memo.json_id.get() {
+            return id;
+        }
+        let json = memo
+            .projected
+            .as_ref()
+            .expect("a walked edge projects")
+            .json();
+        let next = u32::try_from(self.2.len()).expect("fewer than 2^32 hop texts");
+        let id = *self.2.entry(json.to_string()).or_insert(next);
+        let _ = memo.json_id.set(id);
+        id
     }
 }
 
@@ -8731,6 +8752,67 @@ codeunit 50101 "T7b Temp Classes"
         assert_eq!(all.len(), 1);
         assert_eq!(conds, vec![UNCONDITIONAL]);
         assert!(!truncated);
+    }
+
+    /// ENG-100: two DIFFERENT edges whose projected hops are equal give one
+    /// candidate key, so their proofs count once toward the cap: proof keys hold
+    /// each hop's JSON as an id interned by its text (`HopCache::json_id`), not one
+    /// id per edge. Hand-stated precondition: `typed_edges` lists `A → H` twice
+    /// (edges 1 and 2, two objects, one call site), so `Root → A → H` is found twice
+    /// along distinct edges; `Root → A → B → H` is longer. With cap 2, counting the
+    /// twins as two would spend the cap and lose the longer proof.
+    ///
+    /// DISCRIMINATION (2026-11-16): `json_id` interning `"{json}#{n}"` (a fresh id
+    /// per edge) -> the longer proof is lost and the outcome is truncated.
+    #[test]
+    fn twin_hops_on_distinct_edges_share_one_key() {
+        let mut snap = empty_snapshot();
+        snap.capability_facts = vec![insert_fact(
+            "H",
+            "direct",
+            Some("op0"),
+            None,
+            SnapTempState::ParameterDependent { parameter_index: 0 },
+        )];
+        // 0: Root → A, 1 and 2: A → H (twins), 3: A → B, 4: B → H.
+        *std::sync::Arc::make_mut(&mut snap.typed_edges) = vec![
+            call_edge("Root", "A", "cs-root"),
+            call_edge("A", "H", "cs-a1"),
+            call_edge("A", "H", "cs-a1"),
+            call_edge("A", "B", "cs-a2"),
+            call_edge("B", "H", "cs-b"),
+        ];
+        let arena = &mut snap.pd_solution;
+        let real = TempStateKind::Known(false);
+        arena.states = vec![
+            state("H", TempStateKind::ParameterDependent(0), true, 0..0),
+            state("B", real.clone(), false, 0..1),
+            state("A", real.clone(), false, 1..4),
+            state("Root", real, false, 4..5),
+        ];
+        // Each link is (callee state, edge).
+        arena.links = vec![(0, 4), (0, 1), (0, 2), (1, 3), (2, 0)];
+        for (r, ix) in [("H", 0), ("B", 1), ("A", 2), ("Root", 3)] {
+            arena.by_routine.insert(r.to_string(), vec![ix]);
+        }
+        let f = insert_fact(
+            "Root",
+            "inherited",
+            None,
+            Some("cs-root"),
+            SnapTempState::Known { value: false },
+        );
+        let idx = build_fingerprint_indexes(&snap);
+        assert!(
+            !std::ptr::eq(&idx.typed_edges[1], &idx.typed_edges[2]),
+            "precondition: two edge objects"
+        );
+        let out = enumerate_proofs("Root", &f, &idx, 2, &mut HopCache::default());
+        assert_eq!(
+            out.paths,
+            vec![(vec![0, 1], 0), (vec![0, 2], 0), (vec![0, 3, 4], 0)]
+        );
+        assert!(!out.truncated && !out.incomplete);
     }
 
     /// Only DISTINCT proofs count toward the cap (#69 D3: dedup before the
