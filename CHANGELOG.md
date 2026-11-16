@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (ENG-102: smaller routine and variable declarations, 31.0 MiB less resident memory on CDO)
+
+- **What changed** (`crates/al-syntax/src/ir/decl.rs`; no output change). Three levers ENG-94's
+  census left:
+  - `VarDecl.label` is boxed. Inline it cost 112 B on every declaration, and it is set on 761 of
+    94,471 locals and 23,979 of 63,592 globals.
+  - `RoutineDecl`'s rarely set fields (`return_name`, `dataitem_source_table`, `preproc_context`,
+    `doc`; set on 3,705, 3,002, 1,335 and 14,599 of 121,107 routines) are one
+    `rare: Option<Box<RoutineRare>>`, built only when one of them is set and read through
+    accessors (`return_name()`, `dataitem_source_table()`, `preproc_context()`, `doc()`).
+  - Declared type texts (`Param.ty`, `VarDecl.ty`, `RoutineDecl.return_type`) are `TypeText`
+    (`Arc<str>`) from `shared_type_text`, one copy per text per lowering thread: 288,663 texts,
+    7,041 distinct. Consumers that keep a `String` copy at their boundary.
+- **Measured** (`tools/census-probe resident`, release, master `0ba7b745` vs this branch, back to
+  back; `tools/census-probe/runs-eng102/`): live after one ask of each kind 4,707.7 → 4,676.7 MiB
+  (−31.0 MiB), allocations −292,791. Declarations 144.08 → 115.29 MiB: `RoutineDecl` 392 → 296 B,
+  `VarDecl` 192 → 80 B, `Param` 80 → 72 B; 21,954 routines carry a rare box (6.51 MiB). On CDO
+  (`scripts/cdo-before-after 0ba7b745`, workspace `bc3ccb18` clean on both sides) no finding or
+  fingerprint moved at either scope and the call graph is unchanged (0 unknown); `aldump
+  --session-refresh --verify` gives a model equal to a cold build after every change type, in the
+  default and `--low-mem` modes; goldens unmoved. `scripts/cdo-speed` (`0ba7b745` against
+  `3d9f7714`) passed twice: the model build x1.044 and x0.983, the round totals x1.027 and
+  x0.925, so no speed ratio is claimed (the runs fall either side of 1); peak memory x0.984 and
+  x0.981.
+- **Tests.** `parsed_declarations_share_type_texts_and_box_only_rare_fields` (through `parse`):
+  equal types share one allocation, a routine with no rare field has no box, a doc alone or a
+  named return boxes. Discrimination: a parameter type built without the interner, an always-built
+  box, and a `set_doc` that writes only into an existing box each turn it red.
+- **Limit.** The interner keeps at most 16,384 texts per thread; past that a text is still right
+  but not shared. A long-running editor server's lowering threads can fill their sets with
+  half-typed type texts and then stop sharing new ones.
+
 ### Changed (ENG-100: `alsem fingerprint` takes 0.43× the CPU on CDO; proof keys hold hop ids, not hop texts)
 
 - **The cost** (found in ENG-98): `enumerate_proofs` (`src/engine/l5/digest.rs`) keyed each
