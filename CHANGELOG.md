@@ -11,8 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **What changed:** `.kraken/Dockerfile` installs two tools that were only installed live
   before.
-  - `gdb` (apt): live stack snapshots of a running engine process, where samply cannot attach.
-    Owner request q-20261116T074643-71f6992c.
+  - `gdb`: live stack snapshots of a running engine process, where samply cannot attach. Owner
+    request q-20261116T074643-71f6992c. It is installed in its own late apt layer, not on the
+    first apt line. A change to that line rebuilds every later layer, and the unpinned ones
+    (nextest, .NET, Node, pi) would then move version unasked.
   - `cargo-sweep` 0.8.0 (`cargo install --locked`, a late layer like samply's): what
     `scripts/sweep-builds` runs. q-20261116T074635-f5e45cec.
 - **CLAUDE.md:**

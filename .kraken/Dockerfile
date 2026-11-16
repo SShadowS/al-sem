@@ -6,10 +6,9 @@ ARG DEBIAN_FRONTEND=noninteractive
 # commands and hooks call `python` (agentflow, run-timer); python3-psutil: scripts/bench_ab.py (no pip);
 # python3-pytest: scripts/agentflow/tests (no pip); libicu: .NET aborts without it;
 # time: GNU `/usr/bin/time -v` for peak-memory measurements (CLAUDE.md's `aldump --snapshot-memory`
-# recipe; the image lacked it, TLS-26); gdb: stack snapshots of a running engine process, where
-# samply cannot attach (TLS-85; attaching needs the host's kernel.yama.ptrace_scope 0, see CLAUDE.md)
+# recipe; the image lacked it, TLS-26)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      build-essential cmake pkg-config python3 python-is-python3 python3-psutil python3-pytest jq libicu-dev time gdb \
+      build-essential cmake pkg-config python3 python-is-python3 python3-psutil python3-pytest jq libicu-dev time \
       ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*
 # Rust as rust-toolchain.toml pins it, outside the cache volume (the base points CARGO_HOME at ~/.cache
@@ -52,6 +51,12 @@ RUN printf '%s\n' 'export PATH=/opt/cargo/bin:/opt/dotnet:/opt/al-tool:$PATH' 'e
 # base's ~/.cache one so the binary lands in /opt/cargo/bin.
 RUN CARGO_HOME=/opt/cargo cargo install samply --version 0.13.1 --locked \
     && rm -rf /opt/cargo/registry /opt/cargo/git && chown -R dev:dev /opt/cargo && samply --version
+# gdb: stack snapshots of a running engine process, where samply cannot attach (TLS-85; attaching
+# needs the host's kernel.yama.ptrace_scope 0, see CLAUDE.md). Its own late layer, not the first
+# apt line: a change there rebuilds every later layer, and the unpinned ones (nextest, .NET, Node,
+# pi) would then move version unasked.
+RUN apt-get update && apt-get install -y --no-install-recommends gdb \
+    && rm -rf /var/lib/apt/lists/* && gdb --version | head -n 1
 # cargo-sweep: scripts/sweep-builds deletes build output unused for 7 days with it (TLS-85; installed
 # live as 0.8.0 before). Pinned version, same layout as samply's layer.
 RUN CARGO_HOME=/opt/cargo cargo install cargo-sweep --version 0.8.0 --locked \
