@@ -1,0 +1,117 @@
+CPU total 64.2 s (thread CPU deltas, us)
+
+== top 40 self
+  4.29%  ts_tree_cursor_goto_sibling_internal
+  3.94%  ts_tree_cursor_goto_first_child_internal
+  3.08%  fun_19b8a0
+  2.75%  fun_197a40
+  2.73%  ts_lex
+  2.54%  mi_page_malloc_zero
+  2.45%  ts_lexer__advance
+  2.24%  ts_parser_parse
+  2.22%  write<core::hash::sip::Sip13Rounds>
+  1.94%  fun_1972e0
+  1.91%  ts_subtree_release
+  1.63%  fold_identifier
+  1.60%  mi_free
+  1.53%  binary_search_by<al_sem::program::node_extract::RoutineNode, core::slice::{impl#0}::partition_point::{closure_env#0}<al_sem::program::node_e
+  1.49%  ts_language_table_entry
+  1.47%  stack__iter
+  1.46%  ts_tree_cursor_current_node
+  1.44%  stack_node_new
+  1.43%  eq<u8, u8>
+  1.37%  core::str::converts::from_utf8
+  1.27%  ts_subtree_summarize_children
+  1.25%  ts_parser__lex
+  1.23%  call_mut<(&&al_syntax::ir::decl::VarDecl), al_sem::program::resolve::receiver::caller_scope_symbol::{closure_env#2}>
+  1.10%  ts_language_field_id_for_name
+  1.09%  mi_page_block_at
+  1.02%  add_to_hash
+  0.91%  mi_theap_malloc_aligned
+  0.90%  insert<alloc::string::String, (), core::hash::BuildHasherDefault<al_sem::fxhash::FxHasher>, alloc::alloc::Global>
+  0.89%  skip_to_escape
+  0.87%  fun_19a7c0
+  0.82%  fun_b3c60
+  0.80%  binary_search_by<al_sem::program::node_extract::RoutineNode, core::slice::{impl#0}::partition_point::{closure_env#0}<al_sem::program::node_e
+  0.78%  ts_node_start_point
+  0.77%  ts_subtree_retain
+  0.70%  ts_node_child_by_field_id
+  0.63%  eq
+  0.62%  ts_lex_keywords
+  0.59%  fun_b22c0
+  0.57%  contains_key<(usize, &str), (), core::hash::BuildHasherDefault<al_sem::fxhash::FxHasher>, alloc::alloc::Global, (usize, &str)>
+  0.57%  tree_sitter_al_external_scanner_scan
+
+== top 60 inclusive
+ 91.80%  std::sys::backtrace::__rust_begin_short_backtrace
+ 77.23%  {closure#0}
+ 75.00%  run
+ 74.89%  wait_until_cold
+ 74.89%  take_local_job
+ 74.89%  rayon_core::registry::WorkerThread::wait_until_cold
+ 74.85%  rayon::iter::plumbing::bridge_producer_consumer::helper
+ 74.82%  <rayon_core::job::StackJob<L,F,R> as rayon_core::job::Job>::execute
+ 74.78%  main_loop
+ 74.78%  rayon_core::registry::ThreadBuilder::run
+ 74.75%  rayon::iter::plumbing::Folder::consume_iter
+ 74.73%  fun_a3ac0
+ 74.71%  _rust_begin_short_backtrace<rayon_core::registry::{impl#2}::spawn::{closure_env#0}, ()>
+ 74.71%  call_once<std::thread::lifecycle::spawn_unchecked::{closure_env#1}<rayon_core::registry::{impl#2}::spawn::{closure_env#0}, ()>, ()>
+ 74.71%  do_call<core::panic::unwind_safe::AssertUnwindSafe<std::thread::lifecycle::spawn_unchecked::{closure#1}::{closure_env#0}<rayon_core::registr
+ 74.71%  call_once<(), std::thread::lifecycle::spawn_unchecked::{closure#1}::{closure_env#0}<rayon_core::registry::{impl#2}::spawn::{closure_env#0}, 
+ 74.71%  {closure#1}<rayon_core::registry::{impl#2}::spawn::{closure_env#0}, ()>
+ 74.71%  core::ops::function::FnOnce::call_once{{vtable.shim}}
+ 74.71%  catch_unwind<(), core::panic::unwind_safe::AssertUnwindSafe<std::thread::lifecycle::spawn_unchecked::{closure#1}::{closure_env#0}<rayon_core
+ 74.71%  {closure#0}<rayon_core::registry::{impl#2}::spawn::{closure_env#0}, ()>
+ 74.71%  catch_unwind<core::panic::unwind_safe::AssertUnwindSafe<std::thread::lifecycle::spawn_unchecked::{closure#1}::{closure_env#0}<rayon_core::re
+ 74.70%  fun_13738e
+ 74.69%  <std::sys::thread::unix::Thread>::new::thread_start
+ 74.69%  <std::sys::pal::unix::stack_overflow::Handler>::new
+ 74.60%  rayon_core::join::join_context::{{closure}}
+ 73.54%  core::ops::function::impls::<impl core::ops::function::FnMut<A> for &F>::call_mut
+ 54.97%  parse_file
+ 54.97%  al_sem::snapshot::parse::parse_file
+ 54.94%  parse
+ 54.94%  al_syntax::parse::parse
+ 53.14%  consume_iter<&al_sem::snapshot::embedded::SourceFile, (al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::Pars
+ 53.14%  helper<rayon::slice::IterProducer<al_sem::snapshot::embedded::SourceFile>, rayon::iter::map::MapConsumer<rayon::iter::collect::consumer::Col
+ 53.14%  fold_with<rayon::slice::IterProducer<al_sem::snapshot::embedded::SourceFile>, rayon::iter::map::MapFolder<rayon::iter::collect::consumer::Co
+ 53.10%  consume_iter<rayon::iter::collect::consumer::CollectResult<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse:
+ 53.08%  call_mut<(&al_sem::snapshot::embedded::SourceFile), al_sem::program::dep_summary::parse_for_build_observed::{closure#1}::{closure_env#0}>
+ 52.91%  {closure#0}<rayon::iter::plumbing::bridge_producer_consumer::helper::{closure_env#0}<rayon::slice::IterProducer<al_sem::snapshot::embedded::
+ 51.81%  {closure#1}<rayon::slice::IterProducer<al_sem::snapshot::embedded::SourceFile>, rayon::iter::map::MapConsumer<rayon::iter::collect::consumer
+ 51.81%  call_once<rayon::iter::collect::consumer::CollectResult<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::Pa
+ 51.81%  {closure#0}<rayon::iter::collect::consumer::CollectResult<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::
+ 51.81%  execute<rayon_core::latch::SpinLatch, rayon_core::join::join_context::call_b::{closure_env#0}<rayon::iter::collect::consumer::CollectResult<
+ 51.81%  catch_unwind<rayon::iter::collect::consumer::CollectResult<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse:
+ 51.81%  {closure#0}<rayon::iter::collect::consumer::CollectResult<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::
+ 51.81%  call<rayon::iter::collect::consumer::CollectResult<(al_sem::program::pack::PackedFile, core::option::Option<al_sem::snapshot::parse::ParsedF
+ 51.81%  do_call<core::panic::unwind_safe::AssertUnwindSafe<rayon_core::job::{impl#9}::call::{closure_env#0}<rayon::iter::collect::consumer::CollectR
+ 51.81%  catch_unwind<core::panic::unwind_safe::AssertUnwindSafe<rayon_core::job::{impl#9}::call::{closure_env#0}<rayon::iter::collect::consumer::Col
+ 51.81%  halt_unwinding<rayon_core::job::{impl#9}::call::{closure_env#0}<rayon::iter::collect::consumer::CollectResult<(al_sem::program::pack::Packed
+ 29.88%  al_syntax::lower::lower_file
+ 29.88%  lower_file
+ 23.25%  ts_parser_parse
+ 23.25%  ts_parser_parse_with_options
+ 23.15%  collect_objects
+ 23.15%  named_children
+ 23.15%  al_syntax::lower::collect_objects
+ 23.02%  lower_object
+ 23.02%  al_syntax::lower::lower_object
+ 19.95%  refresh_lending
+ 19.95%  al_sem::program::session::workspace::WorkspaceSession::refresh_lending
+ 18.50%  build_target_with
+ 18.50%  al_sem::engine::resident::session::build_target_with
+ 18.37%  main
+
+== needles (inclusive: the largest share of any name containing the needle)
+binary_search_by                         max   1.92%  e.g. ['binary_search_by<al_sem::program::node_extract::RoutineNode, core::slice::{impl#', 'binary_search_by<al_sem::program::node_extract::RoutineNode, core::slice::{impl#']
+NodeSet                                  max   0.74%  e.g. ['al_sem::program::node_set::NodeSet<T>::find', 'next<al_sem::program::node_set::NodeSetIter<al_sem::program::node_extract::Objec']
+fold_identifier                          max   4.16%  e.g. ['fold_identifier', 'al_syntax::casing::fold_identifier']
+eq_fold_identifier                       max   0.20%  e.g. ['eq_fold_identifier', 'al_syntax::casing::eq_fold_identifier']
+Sip13                                    max   2.27%  e.g. ['write<core::hash::sip::Sip13Rounds>', 'new_with_keys<core::hash::sip::Sip13Rounds>']
+caller_scope_symbol                      max   1.69%  e.g. ['al_sem::program::resolve::receiver::caller_scope_symbol', 'caller_scope_symbol']
+resolve_file_obligations                 max  16.86%  e.g. ['resolve_file_obligations', 'al_sem::program::resolve::full::resolve_file_obligations']
+resolve_recorded                         max  16.17%  e.g. ['consume_iter<&usize, (al_sem::program::resolve::full::FileResolution, std::colle', '{closure#0}<rayon::iter::plumbing::bridge_producer_consumer::helper::{closure_en']
+lower_file                               max  29.88%  e.g. ['al_syntax::lower::lower_file', 'lower_file']
+ts_parser_parse                          max  23.25%  e.g. ['ts_parser_parse', 'ts_parser_parse_with_options']

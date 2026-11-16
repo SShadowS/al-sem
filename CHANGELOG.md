@@ -138,6 +138,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   against ENG-84, calm-admitted): every step's `programMs` head over base at most x0.88 (geometric
   mean; Declaration steps x0.67-x0.73). One pass ran under load; without it the Declaration step
   read x0.56-x1.02, so the size of the gain is not settled.
+- **Where the CPU moved** (samply over one resident CDO model build, the before-profile's probe,
+  master `7f35cfa9` and ENG-84 profiled twice each, in both orders; inclusive shares of the build's
+  CPU): the id lookups 4.2% / 3.9% → 0.8% / 0.7%, `eq_fold_identifier` 1.7% / 1.6% → 0.2% / 0.2%,
+  the resolver (`resolve_recorded`) 20.4% / 19.1% → 16.6% / 16.2%. **Not moved:** SipHash 1.7-2.2%
+  → 2.3-2.4% (the sets switched to `FxHashSet` were not where it sits) and `fold_identifier` (its
+  callers store the folded name). Total CPU per build is within noise (61-69 s on both sides).
+- **cdo-speed** (head over master `7f35cfa9`): PASS, model build CPU x0.998 / wall x0.981, round
+  total x0.957, peak memory x1.014 (+123 MiB; the same binary read 7,895-8,136 MiB across ENG-97's
+  runs). It resolves about ±20% on the build, so it shows ENG-84 is not slower, not its gain.
+- Artifacts: `tools/census-probe/runs-eng84/` (`after-probe-*.out`, `refresh-ab.tsv`,
+  `cdo-speed-verdict.txt`, `cdo-speed.json`).
 
 ### Fixed (TLS-76: `cdo-speed` judges load by CPU pressure, and runs labelled when it is high)
 
