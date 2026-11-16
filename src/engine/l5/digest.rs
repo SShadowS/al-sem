@@ -1392,8 +1392,11 @@ fn enumerate_proofs<'i>(
     // Each distinct key once, as a dense id (its index in `key_ids`): a pop
     // tests `found[id]` and never hashes the key again (#289: hashing it per
     // pop cost ≈4× CPU on CDO `h`). `IndexSet` keeps each entry's hash, so
-    // growing it never rehashes a key.
-    let mut key_ids: indexmap::IndexSet<ProofKey> = indexmap::IndexSet::new();
+    // growing it never rehashes a key. Fx, not SipHash (ENG-98: SipHash over
+    // the keys' hop JSON was 17.9% of `alsem fingerprint`'s CPU on CDO); an
+    // `IndexSet` keeps insertion order whatever its hasher.
+    let mut key_ids: indexmap::IndexSet<ProofKey, crate::fxhash::FxBuildHasher> =
+        indexmap::IndexSet::default();
     let mut found: Vec<bool> = Vec::new();
     let mut found_count = 0usize;
     let mut intern = |key: ProofKey, found: &mut Vec<bool>| {
