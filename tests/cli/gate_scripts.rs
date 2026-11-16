@@ -1852,10 +1852,11 @@ def second(name):
 live = os.path.join(os.environ["STUB_DIR"], "live")
 os.makedirs(live, exist_ok=True)
 me = os.path.join(live, str(os.getpid()))
-open(me, "w").close()
 def another_alive():
-    # TLS-79: another server process is alive (its model resident).
-    return any(p != str(os.getpid()) for p in os.listdir(live))
+    # TLS-79: another server holds a built model (it registers itself once its
+    # own build is done, review r1, sol: a started server holds none yet).
+    # A marker whose process is gone (killed) does not count (review r1, Fable).
+    return any(p != str(os.getpid()) and os.path.exists(f"/proc/{p}") for p in os.listdir(live))
 for line in sys.stdin:
     msg = json.loads(line)
     if "id" not in msg:
@@ -1868,13 +1869,15 @@ for line in sys.stdin:
         # its pair (a positional factor the flipped passes cancel, TLS-65).
         if calls == 1:
             burn(float(os.environ["STUB_BUILD_S"]) * (1.5 if another_alive() else 1.0))
+            open(me, "w").close()
         if calls == 6:
             burn(float(os.environ["STUB_BUILD_S"]) * (1.5 if second("tests") else 1.0))
         result = {"structuredContent": {"exitCode": 0, "stdoutText": "ok"}}
     else:
         result = {}
     print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": result}), flush=True)
-os.remove(me)
+if os.path.exists(me):
+    os.remove(me)
 "#;
 
 #[cfg(target_os = "linux")]
@@ -1943,8 +1946,9 @@ fn speed_with_stub(
 ///
 /// Mutations: the second pass not flipped -> warm-tests x1.50 both times ->
 /// FAIL; the warm-up judged on one pass (`round=1`) -> one ratio (Fable r1);
-/// TLS-79 (2026-11-15): the first side's server left alive during the second
-/// build -> the one-pass build reads x1.50 and fails.
+/// TLS-79 (2026-11-16): the original scheduling restored (both servers started,
+/// then `run_round(0)` with the build first: the second side builds while the
+/// first holds its model) -> the one-pass build reads x1.50 and fails.
 #[cfg(target_os = "linux")]
 #[test]
 fn speed_warm_up_cancels_the_second_side_penalty() {

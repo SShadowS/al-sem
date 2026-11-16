@@ -730,11 +730,25 @@ class Server:
         return sum(self.hwm_kib.values()) / 1024
 
     def close(self):
+        # ⟨TLS-79⟩ The whole tree must be gone: an engine child left behind keeps
+        # its model resident, which is what made a build beside it slower.
+        kids = descendants(self.p.pid)
         try:
             self.p.stdin.close()
             self.p.wait(timeout=60)
         except (OSError, subprocess.TimeoutExpired):
             self.p.kill()
+        deadline = time.monotonic() + 30
+        left = [k for k in kids if os.path.exists(f"/proc/{k}")]
+        while left and time.monotonic() < deadline:
+            time.sleep(0.2)
+            left = [k for k in left if os.path.exists(f"/proc/{k}")]
+        for k in left:
+            log(f"server {self.name}: child {k} still alive 30 s after the close: killed")
+            try:
+                os.kill(k, 9)
+            except OSError:
+                pass
         self.err.close()
         shutil.rmtree(self.root, ignore_errors=True)
 
@@ -939,6 +953,7 @@ def main():
     try:
         for p in range(args.warm_samples):
             calm.append(wait_calm(f"warm-up {p + 1} of {args.warm_samples}"))
+            # The pass's stall share also covers its untimed rebuild (TLS-79).
             cur = (f"warm-up {p + 1}", Stalls())
             exes = {"base": base_exe, "head": head_exe}
             first = "base" if p % 2 == 0 else "head"
