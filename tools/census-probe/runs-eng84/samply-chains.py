@@ -11,8 +11,12 @@ weighted by its thread CPU delta.
 It prints each chain's share of all CPU. Started as ENG-98's SipHash reader, with the needle made
 an argument for TLS-86 (`docs/superpowers/notes/2026-11-16-tls86-profiles.md`).
 
-A frame just above a libc leaf can be wrong: TLS-86 saw one lookup per root credited with 26 %.
-Check an unlikely chain with a second tool before acting on it.
+Inline labels on a non-leaf frame can belong to the code next to the call. samply names a
+frame's inlined functions from the return address, which can sit in a neighbouring inlined
+call. In TLS-86, `digest_one_root`'s call-site frame carried a `HashMap::get` / `eq<str>` label
+above 26 % of all CPU. Check an unlikely chain: look at the leaf and at the frame just below.
+Many frames add both a short and a qualified name, so `depth` 4 is about two real frames. A
+recursive chain is cut at its outermost match.
 """
 import gzip
 import json

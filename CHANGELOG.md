@@ -21,14 +21,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Added `tools/census-probe/runs-eng84/samply-chains.py`:** the frames above any leaf in a
   samply profile (ENG-98's SipHash reader with the needle made an argument).
 - **Found:**
-  - The two unnamed libc hot spots: `fun_1972e0` is AVX2 `memcmp` (by its code), and 11.3 % of
-    impact's CPU.
-  - 27 % of impact's CPU is string equality. samply credits it to one per-root lookup
-    (`digest.rs:5348`), which cannot be right.
+  - The two unnamed libc hot spots, by their code: `fun_1972e0` is AVX2 `memcmp` and
+    `fun_197a40` is `memcpy`.
+  - memcmp is 11.3 % of impact's CPU and 7-8 % of prove's and explain's. Its top callers in
+    impact are `ordering_inter::reconstruct_call_chains` and `compute_ordering`.
   - SipHash is 10.3 % of impact and 5.0 % of prove. `walk_multi` is 21.5 % of impact inclusive.
-  - Tree-cursor stepping in the lowerer's extra CST scans is 6.5 % of prove.
-  - Allocator page set-up and zeroing is 6.8 % of prove.
-- **Filed:** ENG-116 to ENG-120, one per hot spot of 3 % or more.
+  - Tree-cursor stepping is 6.5 % of prove; the scans beside the lowering walk are about 1.7 % of
+    that.
+  - Allocator page set-up and zeroing is 6.8 % of prove, and memcpy 3.3 %.
+  - A caution for reading samply: inline labels on a non-leaf frame can name the neighbouring
+    code. `digest_one_root`'s call-site frame looked like 27 % of string equality under one map
+    lookup, but its real callees are `reconstruct_witness_paths` and `compute_ordering`.
+- **Filed:** ENG-116 to ENG-121, one per hot spot of 3 % or more.
 
 ### Changed (ENG-106: `alsem fingerprint` builds its root blocks on 2 workers, wall x0.55 on CDO, CPU not higher)
 
