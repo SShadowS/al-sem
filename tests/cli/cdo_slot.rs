@@ -594,3 +594,177 @@ fn cdo_slot_is_truthful_under_races_and_bad_records() {
     assert!(!text.contains("(yours)"), "{text}");
     assert_eq!(s.run("A", &["release"], &[]).0, Some(0));
 }
+
+/// ⟨TLS-88⟩ The queue's two other rules, each with the slot free and a waiter
+/// held still:
+/// - An acquire without --wait refuses while a waiter that can run waits. The
+///   waiter is stopped (SIGSTOP) once queued: alive, so its ticket counts, but
+///   it cannot take the slot itself after A's release.
+/// - A waiter short of memory (its floor 999999 GB) marks its ticket and steps
+///   aside: a no-wait acquire with no floor takes the slot past it, and the
+///   waiter keeps its ticket (its place).
+///
+/// Mutations: `ahead` counting nothing when we hold no ticket -> the no-wait
+/// acquire takes the slot (red); `ahead` counting `mem` tickets -> the acquire
+/// past the memory-blocked waiter is refused (red); `ahead` removing a `mem`
+/// ticket -> M re-enqueues under a new name (red).
+#[test]
+fn cdo_slot_queue_refuses_jumps_and_steps_aside_for_memory() {
+    let s = Slot::new();
+    let waiter = |session: &str, poll: &str, mem: &str| {
+        std::process::Command::new("bash")
+            .args([SLOT, "acquire", "w", "queue", "--wait"])
+            .env("CDO_SLOT_DIR", s.dir())
+            .env("CDO_SLOT_MEM_MIN_GB", mem)
+            .env("CDO_SLOT_POLL_S", poll)
+            .env("CLAUDE_CODE_SESSION_ID", session)
+            .env_remove("CLAUDE_PID")
+            .env_remove("CDO_SLOT_TOKEN")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap()
+    };
+    let ticket_text = || {
+        std::fs::read_dir(s.dir().join("queue"))
+            .ok()
+            .and_then(|mut d| d.next())
+            .and_then(|e| std::fs::read_to_string(e.ok()?.path()).ok())
+    };
+    let until = |what: &str, ok: &dyn Fn() -> bool| {
+        let start = std::time::Instant::now();
+        while !ok() {
+            assert!(start.elapsed().as_secs() < 20, "never: {what}");
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+    };
+
+    // A waiter that can run: a no-wait acquire may not jump it.
+    let (code, text) = s.run("A", &["acquire", "a", "hold"], &[]);
+    assert_eq!(code, Some(0), "{text}");
+    let mut w = waiter("B", "30", "0");
+    until("W queued", &|| ticket_text().is_some());
+    // Stopped, W is alive (its ticket counts) but cannot take the slot itself.
+    // SAFETY: SIGSTOP to the waiter this test spawned.
+    unsafe { libc::kill(w.id() as i32, libc::SIGSTOP) };
+    assert_eq!(s.run("A", &["release"], &[]).0, Some(0));
+    let (code, text) = s.run("D", &["acquire", "d", "jump"], &[]);
+    assert_eq!(code, Some(1), "a no-wait acquire jumped a waiter: {text}");
+    assert!(text.contains("came first"), "{text}");
+    w.kill().unwrap();
+    w.wait().unwrap();
+
+    // A waiter short of memory steps aside.
+    let mut m = waiter("C", "1", "999999");
+    let names = || -> Vec<std::ffi::OsString> {
+        std::fs::read_dir(s.dir().join("queue"))
+            .map(|d| d.filter_map(|e| Some(e.ok()?.file_name())).collect())
+            .unwrap_or_default()
+    };
+    // W's dead ticket goes at M's first read of the queue; wait for both.
+    until("only M waits, marked mem", &|| {
+        names().len() == 1 && ticket_text().is_some_and(|t| t.trim_end().ends_with(" mem"))
+    });
+    let before = names();
+    assert_eq!(before.len(), 1, "precondition: only M waits");
+    let (code, text) = s.run("D", &["acquire", "d", "past"], &[]);
+    assert_eq!(
+        code,
+        Some(0),
+        "a memory-blocked waiter held up the slot: {text}"
+    );
+    assert_eq!(s.run("D", &["release"], &[]).0, Some(0));
+    // M keeps its place: past its 1 s poll, its ticket is the same one.
+    std::thread::sleep(std::time::Duration::from_millis(2500));
+    assert_eq!(names(), before, "M lost its place in the queue");
+    m.kill().unwrap();
+    m.wait().unwrap();
+}
+
+/// ⟨TLS-88⟩ Waiters are served in arrival order. While A holds the slot, W1 then
+/// W2 wait. When A releases, A's own immediate acquire goes behind them and
+/// times out. W1 takes the slot and W2 keeps waiting. W2 is then killed outright
+/// (no trap removes its ticket), and its dead ticket must not block the next
+/// acquire.
+///
+/// Mutations: the queue check dropped from `acquire` -> A re-takes the slot
+/// ahead of W1 (red); `ahead` keeping dead tickets -> the acquire after W2's
+/// SIGKILL waits forever (red).
+#[test]
+fn cdo_slot_serves_waiters_in_arrival_order() {
+    let s = Slot::new();
+    let waiter = |session: &str, owner: &str| {
+        std::process::Command::new("bash")
+            .args([SLOT, "acquire", owner, "fifo", "--wait"])
+            .env("CDO_SLOT_DIR", s.dir())
+            .env("CDO_SLOT_MEM_MIN_GB", "0")
+            .env("CDO_SLOT_POLL_S", "1")
+            .env("CLAUDE_CODE_SESSION_ID", session)
+            .env_remove("CLAUDE_PID")
+            .env_remove("CDO_SLOT_TOKEN")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap()
+    };
+    let tickets = || {
+        std::fs::read_dir(s.dir().join("queue"))
+            .map(|d| d.count())
+            .unwrap_or(0)
+    };
+    let until = |what: &str, ok: &dyn Fn() -> bool| {
+        let start = std::time::Instant::now();
+        while !ok() {
+            assert!(start.elapsed().as_secs() < 20, "never: {what}");
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+    };
+    let owner = || {
+        std::fs::read_to_string(s.dir().join("status"))
+            .ok()
+            .and_then(|t| {
+                t.lines()
+                    .find_map(|l| l.strip_prefix("owner=").map(str::to_string))
+            })
+    };
+
+    let (code, text) = s.run("A", &["acquire", "a", "first"], &[]);
+    assert_eq!(code, Some(0), "{text}");
+    let mut w1 = waiter("B", "w1");
+    until("W1 queued", &|| tickets() == 1);
+    let mut w2 = waiter("C", "w2");
+    until("W2 queued", &|| tickets() == 2);
+
+    // A releases and at once asks again: it is behind W1 and W2 now.
+    assert_eq!(s.run("A", &["release"], &[]).0, Some(0));
+    let (code, text) = s.run(
+        "A",
+        &["acquire", "a", "again", "--wait", "--timeout", "3"],
+        &[],
+    );
+    assert_eq!(
+        code,
+        Some(1),
+        "A re-took the slot ahead of the waiters: {text}"
+    );
+    assert_eq!(w1.wait().unwrap().code(), Some(0), "W1 took the slot");
+    assert_eq!(owner().as_deref(), Some("w1"));
+    assert_eq!(tickets(), 1, "W2 still waiting");
+
+    // W2 dies outright while waiting; W1 releases; the dead ticket is skipped.
+    w2.kill().unwrap();
+    w2.wait().unwrap();
+    assert_eq!(s.run("B", &["release"], &[]).0, Some(0));
+    let (code, text) = s.run(
+        "D",
+        &["acquire", "d", "after", "--wait", "--timeout", "10"],
+        &[],
+    );
+    assert_eq!(
+        code,
+        Some(0),
+        "a dead waiter's ticket blocked the slot: {text}"
+    );
+    assert_eq!(tickets(), 0, "every ticket gone");
+    assert_eq!(s.run("D", &["release"], &[]).0, Some(0));
+}
