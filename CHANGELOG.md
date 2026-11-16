@@ -47,6 +47,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     nesting levels), every arm's properties including a nested group's own bodies, and a
     `SyntaxIssue` where several arms open the field, their headers equal or not (the one-arm
     form, Microsoft's removed-field blocks, reads as before, no issue).
+- **On CDO** (pinned `bc3ccb18`; `cdo-before-after` builds both sides with one grammar, so the
+  sides were built by hand: master `8aecb8c7` on v5.2.0 against this branch on v5.3.0, then the
+  `cdo-measure` comparison and `aldump --program-call-graph-stats` on each): nothing moved.
+  `analyze` 2,308 / 32,579 findings on both sides, no fingerprint added or removed; the
+  call-graph stats are byte-identical (unknown 0, 46,688 edges). Goldens: none moved.
 - **Corrected trees:** an EMPTY `#if` group after `asserterror` or `then` no longer takes the
   body / then-branch; the statement after it does, so a call there now lowers inside the
   `asserterror` (trapped) or the `then` block.
