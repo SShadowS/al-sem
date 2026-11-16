@@ -310,6 +310,7 @@ pub enum RawKind {
     PreprocConditionalLinkValues,
     PreprocConditionalListElements,
     PreprocConditionalMlPairs,
+    PreprocConditionalModifier,
     PreprocConditionalMoveArgs,
     PreprocConditionalMoveElements,
     PreprocConditionalNamespacePairs,
@@ -331,6 +332,7 @@ pub enum RawKind {
     PreprocConditionalReturnType,
     PreprocConditionalSortingFields,
     PreprocConditionalStatement,
+    PreprocConditionalTableFieldOpen,
     PreprocConditionalTableRelation,
     PreprocConditionalTriggerPreamble,
     PreprocConditionalVar,
@@ -380,6 +382,8 @@ pub enum RawKind {
     PreprocSplitKey,
     PreprocSplitModify,
     PreprocSplitOpenStatement,
+    PreprocSplitParenClose,
+    PreprocSplitPart,
     PreprocSplitPermissionsProperty,
     PreprocSplitProcedure,
     PreprocSplitProcedureBody,
@@ -851,6 +855,7 @@ impl RawKind {
             "preproc_conditional_link_values" => Some(RawKind::PreprocConditionalLinkValues),
             "preproc_conditional_list_elements" => Some(RawKind::PreprocConditionalListElements),
             "preproc_conditional_ml_pairs" => Some(RawKind::PreprocConditionalMlPairs),
+            "preproc_conditional_modifier" => Some(RawKind::PreprocConditionalModifier),
             "preproc_conditional_move_args" => Some(RawKind::PreprocConditionalMoveArgs),
             "preproc_conditional_move_elements" => Some(RawKind::PreprocConditionalMoveElements),
             "preproc_conditional_namespace_pairs" => {
@@ -882,6 +887,9 @@ impl RawKind {
             "preproc_conditional_return_type" => Some(RawKind::PreprocConditionalReturnType),
             "preproc_conditional_sorting_fields" => Some(RawKind::PreprocConditionalSortingFields),
             "preproc_conditional_statement" => Some(RawKind::PreprocConditionalStatement),
+            "preproc_conditional_table_field_open" => {
+                Some(RawKind::PreprocConditionalTableFieldOpen)
+            }
             "preproc_conditional_table_relation" => Some(RawKind::PreprocConditionalTableRelation),
             "preproc_conditional_trigger_preamble" => {
                 Some(RawKind::PreprocConditionalTriggerPreamble)
@@ -937,6 +945,8 @@ impl RawKind {
             "preproc_split_key" => Some(RawKind::PreprocSplitKey),
             "preproc_split_modify" => Some(RawKind::PreprocSplitModify),
             "preproc_split_open_statement" => Some(RawKind::PreprocSplitOpenStatement),
+            "preproc_split_paren_close" => Some(RawKind::PreprocSplitParenClose),
+            "preproc_split_part" => Some(RawKind::PreprocSplitPart),
             "preproc_split_permissions_property" => Some(RawKind::PreprocSplitPermissionsProperty),
             "preproc_split_procedure" => Some(RawKind::PreprocSplitProcedure),
             "preproc_split_procedure_body" => Some(RawKind::PreprocSplitProcedureBody),
@@ -1407,6 +1417,7 @@ impl RawKind {
             RawKind::PreprocConditionalLinkValues => "preproc_conditional_link_values",
             RawKind::PreprocConditionalListElements => "preproc_conditional_list_elements",
             RawKind::PreprocConditionalMlPairs => "preproc_conditional_ml_pairs",
+            RawKind::PreprocConditionalModifier => "preproc_conditional_modifier",
             RawKind::PreprocConditionalMoveArgs => "preproc_conditional_move_args",
             RawKind::PreprocConditionalMoveElements => "preproc_conditional_move_elements",
             RawKind::PreprocConditionalNamespacePairs => "preproc_conditional_namespace_pairs",
@@ -1434,6 +1445,7 @@ impl RawKind {
             RawKind::PreprocConditionalReturnType => "preproc_conditional_return_type",
             RawKind::PreprocConditionalSortingFields => "preproc_conditional_sorting_fields",
             RawKind::PreprocConditionalStatement => "preproc_conditional_statement",
+            RawKind::PreprocConditionalTableFieldOpen => "preproc_conditional_table_field_open",
             RawKind::PreprocConditionalTableRelation => "preproc_conditional_table_relation",
             RawKind::PreprocConditionalTriggerPreamble => "preproc_conditional_trigger_preamble",
             RawKind::PreprocConditionalVar => "preproc_conditional_var",
@@ -1483,6 +1495,8 @@ impl RawKind {
             RawKind::PreprocSplitKey => "preproc_split_key",
             RawKind::PreprocSplitModify => "preproc_split_modify",
             RawKind::PreprocSplitOpenStatement => "preproc_split_open_statement",
+            RawKind::PreprocSplitParenClose => "preproc_split_paren_close",
+            RawKind::PreprocSplitPart => "preproc_split_part",
             RawKind::PreprocSplitPermissionsProperty => "preproc_split_permissions_property",
             RawKind::PreprocSplitProcedure => "preproc_split_procedure",
             RawKind::PreprocSplitProcedureBody => "preproc_split_procedure_body",
@@ -1943,6 +1957,7 @@ impl RawKind {
         RawKind::PreprocConditionalLinkValues,
         RawKind::PreprocConditionalListElements,
         RawKind::PreprocConditionalMlPairs,
+        RawKind::PreprocConditionalModifier,
         RawKind::PreprocConditionalMoveArgs,
         RawKind::PreprocConditionalMoveElements,
         RawKind::PreprocConditionalNamespacePairs,
@@ -1964,6 +1979,7 @@ impl RawKind {
         RawKind::PreprocConditionalReturnType,
         RawKind::PreprocConditionalSortingFields,
         RawKind::PreprocConditionalStatement,
+        RawKind::PreprocConditionalTableFieldOpen,
         RawKind::PreprocConditionalTableRelation,
         RawKind::PreprocConditionalTriggerPreamble,
         RawKind::PreprocConditionalVar,
@@ -2013,6 +2029,8 @@ impl RawKind {
         RawKind::PreprocSplitKey,
         RawKind::PreprocSplitModify,
         RawKind::PreprocSplitOpenStatement,
+        RawKind::PreprocSplitParenClose,
+        RawKind::PreprocSplitPart,
         RawKind::PreprocSplitPermissionsProperty,
         RawKind::PreprocSplitProcedure,
         RawKind::PreprocSplitProcedureBody,
@@ -2163,7 +2181,7 @@ impl RawKind {
 /// `build.rs` asserts the checked-in grammar matches, so a silent grammar swap
 /// fails the build.
 pub const GRAMMAR_NODE_TYPES_HASH: &str =
-    "f567292a0623f4a6fb520b9c0381481df87c749f6bb607edb77f4d8bf8b0e2f0";
+    "252f8fa698b3ffa49f3d68ad9aa170c2445fc5cdb19b2df0515a0f09a7ffcf63";
 
 /// Count of NAMED kinds (excludes `Error`). Sanity anchor for the coverage test.
-pub const NAMED_KIND_COUNT: usize = 513;
+pub const NAMED_KIND_COUNT: usize = 517;
