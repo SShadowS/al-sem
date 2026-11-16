@@ -498,7 +498,7 @@ mod exact_size_tests {
         // The object-level and nested lists (lowerer review): a table's fields, captions and
         // keys, a page's actions, a label global's translations.
         let file = crate::parse(
-            "table 50101 \"Cap T\"\n{\n    fields\n    {\n        field(1; Code; Code[20]) { Caption = 'Code'; ToolTip = 'The code.'; }\n        field(2; Name; Text[50]) { Caption = 'Name'; }\n    }\n    keys\n    {\n        key(PK; Code) { Clustered = true; }\n        key(K2; Name, Code) { }\n    }\n    var\n        Msg: Label 'Hello %1', Comment = '%1 = name', Locked = true;\n}\npage 50102 \"Cap P\"\n{\n    actions\n    {\n        area(Processing)\n        {\n            action(Go) { Caption = 'Go'; ToolTip = 'Go now.'; trigger OnAction() begin end; }\n        }\n    }\n}\n",
+            "table 50101 \"Cap T\"\n{\n    fields\n    {\n        field(1; Code; Code[20]) { Caption = 'Code'; ToolTip = 'The code.'; }\n        field(2; Name; Text[50]) { Caption = 'Name'; }\n    }\n    keys\n    {\n        key(PK; Code) { Clustered = true; }\n        key(K2; Name, Code) { }\n    }\n    var\n        Msg: Label 'Hello %1', Comment = '%1 = name', Locked = true, Foo = 3;\n        Tc: TextConst DEU = 'Hallo', ENU = 'Hello', FRA = 'Salut';\n}\npage 50102 \"Cap P\"\n{\n    actions\n    {\n        area(Processing)\n        {\n            action(Go) { Caption = 'Go'; ToolTip = 'Go now.'; trigger OnAction() begin end; }\n        }\n    }\n}\n",
         );
         let t = &file.objects[0];
         exact("fields", t.fields.len(), t.fields.capacity());
@@ -526,6 +526,18 @@ mod exact_size_tests {
             exact("action caption", a.caption.len(), a.caption.capacity());
             exact("action tooltip", a.tooltip.len(), a.tooltip.capacity());
         }
+        // sol: the label lists must be non-empty, or their checks prove nothing. They pin the
+        // property, not `VarDecl::exact_size`: the lowerer clones each label per declared
+        // name, and a clone is exact, so dropping that trim stays green (a stated limit).
+        let labels: Vec<_> = t.globals.iter().filter_map(|g| g.label.as_ref()).collect();
+        assert!(
+            labels.iter().any(|l| !l.other.is_empty()),
+            "a label with `other`"
+        );
+        assert!(
+            labels.iter().any(|l| !l.translations.is_empty()),
+            "a TextConst with translations"
+        );
         assert_eq!(t.fields.len(), 2, "the table has two fields");
         assert_eq!(t.keys.len(), 2, "and two keys");
         assert!(!p.actions.is_empty(), "the page has an action");

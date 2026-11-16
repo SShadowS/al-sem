@@ -34,7 +34,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   modes (every step equal to a cold build).
 - Pinned by `parsed_declarations_keep_no_spare_capacity` (al-syntax): parses a codeunit, a table
   and a page and checks every list's capacity equals its length; dropping the `lower_file` call
-  (capacity 4 for 2 routines) or one nested trim (a field caption) fails it.
+  (capacity 4 for 2 routines) or one nested trim (a field caption) fails it. **A stated limit**
+  (found from sol's review): a label's `other` and `translations` lists are exact already,
+  because the lowerer clones each label per declared name, so dropping their trim stays green;
+  the test checks the property with both lists filled, the trim stays for the day the clone goes.
 - **Not done (left as further levers):** `VarDecl`'s inline label (~88 B, set on 761 of 94,471
   locals and 23,979 of 63,592 globals), `RoutineDecl`'s rare fields (`return_name`,
   `dataitem_source_table`, `preproc_context`, `doc`), and the type texts (288,663 strings, 7,041

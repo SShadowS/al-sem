@@ -561,6 +561,8 @@ impl VarDecl {
             translations,
         }) = label
         {
+            // Exact already today: the lowerer clones one label per declared name, and a
+            // clone has no spare capacity (sol's test gap, ENG-94: a break here stays green).
             exact_size(other);
             exact_size(translations);
         }
