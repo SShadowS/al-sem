@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (ENG-105: `alsem fingerprint` takes 0.92× the CPU on CDO; witness memos by edge index)
+
+- **Found** (samply, `alsem fingerprint` on the pinned CDO baseline, master after ENG-100/102):
+  `reconstruct_witness_paths` is ~61 % of the CPU. Inside it, `HopCache::get` (a SipHash map
+  keyed by edge pointer) 10.2 % and SipHash in all 6.4 %, the larger callers that map and
+  `enumerate_proofs`' `seen` set. Notes, with every number:
+  `docs/superpowers/notes/2026-11-16-eng105-fingerprint-profile.md`.
+- **Now** (`src/engine/l5/digest.rs`): `HopCache` keeps its memos in a slot per edge index of
+  the one `typed_edges` slice it serves (its start and length kept, so a slot never serves
+  another slice's edge; any other edge uses the address map); the `seen` set (only inserted
+  into) uses FxHash. Profiled after: `HopCache::get` 4.0 %, SipHash 3.2 %, CPU 107.8 -> 91.5 s.
+- **Tried and removed:** a rank-keyed candidate sort (each hop's text ranked once) made
+  `fingerprint` 2x slower: its keys called `json()` on every hop, and that text is built lazily;
+  the old `key_cmp` skips shared hops by pointer and serializes a hop only at a real tie. The
+  sort is `sort_by(key_cmp)` as before.
+- **Measured** (`/usr/bin/time -v`, release-fast, base `bbcbd603` against `4c3cc0d5`,
+  alternating, 4 rounds, round 4 head first): CPU x0.936 / x0.865 / x0.921 / x0.921 (round 2
+  under other load), wall about x0.89, peak RSS unchanged, outputs byte-identical. `cdo-speed`
+  twice, both PASS (warm prove x0.810 / x0.950, peak memory x0.957 / x0.969; the build does not
+  run this code). `cdo-before-after bbcbd603 4c3cc0d5`: nothing moved.
+- Pinned by `hop_cache_slots_belong_to_one_edge_slice` (one cache asked about edge 0 of two
+  equally long slices returns each slice's own hop). Breaks, each red then green restored: every
+  edge in slot 0 -> 5 existing tests fail; the slice check removed -> the new test reads `cs-A1`
+  for `cs-B1`.
+
 ### Changed (ENG-102: smaller routine and variable declarations, 31.0 MiB less resident memory on CDO)
 
 - **What changed** (`crates/al-syntax/src/ir/decl.rs`; no output change). Three levers ENG-94's
