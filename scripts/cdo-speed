@@ -28,8 +28,9 @@ rounds):
     cost x1.06-x1.29), then the first side's server is started again untimed;
     then one call of each tool builds the per-revision artifacts and the test
     universe (`warm-tests`). The second pass
-    flips every call's side order, so each side is timed once building second
-    (measured once at x1.167 under load, ENG-81). Before each pass the host's CPU
+    flips every call's side order, so each side is timed once going second (the
+    second of a pair ran slower: ENG-81, ENG-97). Calibrated (TLS-79, 8 passes): per-pass
+    build ratios x0.862-x1.029, a two-pass reading about ±8 %. Before each pass the host's CPU
     pressure (`some avg60`) must fall to CALM_PRESSURE; after CALM_WAIT_S (600 s) the
     pass runs anyway. Each timed block's CPU stall share (this container's `some total`
     over the block) is measured, and a block above CALM_PRESSURE (or a pass admitted by
