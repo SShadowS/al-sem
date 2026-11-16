@@ -21,3 +21,9 @@ Re-mints:
   A statement `Insert` / `Modify` / `Delete` / `Rename` / `Find` now also gives an
   `error-implicit` fact. The json diff is additions only: `error-implicit` facts, 3 in cross-app
   (2 direct, 1 inherited) and 2 direct in single-app, and nothing else; r5b.cross-app did not move.
+- 2026-11-16 (ENG-99, owner-approved): full-snapshot.r5b.cross-app.{json,cbor}. A record variable
+  promoted from an object's globals keeps the object-level id: the one capability fact on `cust`
+  (a global of codeunit 70000) has `extra.recordVariableId`
+  `e194b1829f6675cf/3548…1247/rv/cust` → `11111111-0000-0000-0000-0000000000aa/Codeunit/70000/grv/cust`.
+  The json diff is that one value and nothing else; the cbor shrank by the 29 bytes the shorter id
+  saves. The dd records did not move.

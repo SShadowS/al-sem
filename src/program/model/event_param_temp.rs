@@ -181,7 +181,8 @@ pub fn prove_event_param_temps(resolved: &mut Model) {
         let s = &mut resolved.workspace.routines[si];
         for rv in &mut s.record_variables {
             if rv.is_parameter && rv.parameter_index == Some(j) {
-                rv.temp_state = known_temp();
+                // A parameter row is the routine's own; `make_mut` copies it only if shared.
+                std::sync::Arc::make_mut(rv).temp_state = known_temp();
             }
         }
         for op in &mut s.record_operations {

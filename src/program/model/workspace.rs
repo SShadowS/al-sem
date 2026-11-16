@@ -660,7 +660,12 @@ pub struct ModelRoutine {
     /// L2 `parseIncomplete` — the routine's subtree has a tree-sitter ERROR node.
     /// R2d projects parse-incomplete routines' StableRoutineIds.
     pub parse_incomplete: bool,
-    pub record_variables: Vec<ModelRecordVariable>,
+    /// The routine's own record variables, then its object declaration's global ones it does
+    /// not shadow. ENG-99: each row is an `Arc`; the globals are ONE row per object declaration,
+    /// shared by every routine of it, with the object-level id (`{object_id}/grv/{name}`). A
+    /// per-routine change to one goes through `Arc::make_mut` at the pass that makes it, so it
+    /// copies that row for that routine only (see `record_types`).
+    pub record_variables: Vec<std::sync::Arc<ModelRecordVariable>>,
     pub record_operations: Vec<ModelRecordOperation>,
     /// Field accesses (from L2 body walk). Required by the R3a-2 summary
     /// engine to derive RecordRoleSummary.readsFields per record parameter.
@@ -1613,6 +1618,32 @@ fn project_ir(
         // routine's `record_variables`, honoring AL shadowing (a routine's own var wins).
         let object_global_record_vars =
             crate::program::body::ir_walk::ir_object_global_record_vars(o, &object_id);
+        // ENG-99: the model rows of those globals, built once for this declaration and shared
+        // (`Arc::clone`) by every routine that does not shadow them, each with its folded name.
+        // The id is the object-level one `ir_object_global_record_vars` gives
+        // (`{object_id}/grv/{name}`): a global is one variable, not one per routine.
+        let object_global_rows: Vec<(String, std::sync::Arc<ModelRecordVariable>)> =
+            object_global_record_vars
+                .iter()
+                .map(|g| {
+                    let row = ModelRecordVariable {
+                        id: g.id.clone(),
+                        name: g.name.clone(),
+                        table_name: g
+                            .table_name
+                            .as_deref()
+                            .map(crate::program::body::features::shared_table_text),
+                        table_id: None,
+                        is_parameter: g.is_parameter,
+                        parameter_index: g.parameter_index,
+                        temp_state: g.temp_state.clone(),
+                        scope: g.scope.as_deref().map(VarScope::from),
+                        is_receiver: false,
+                        is_implicit_rec: false,
+                    };
+                    (g.name.fold_identifier(), std::sync::Arc::new(row))
+                })
+                .collect();
 
         // Interface / ControlAddIn: keep these signature-only methods out of `ModelRoutine`
         // so body detectors never see them; digest reads them from
@@ -1721,7 +1752,7 @@ fn project_ir(
                 .map(|p| &p.name)
                 .chain(ir_routine.locals.iter().map(|v| &v.name))
                 .any(|n| n.eq_fold_identifier("rec"));
-            let mut record_variables: Vec<ModelRecordVariable> = features
+            let mut record_variables: Vec<std::sync::Arc<ModelRecordVariable>> = features
                 .record_variables
                 .iter()
                 .map(|rv| ModelRecordVariable {
@@ -1739,9 +1770,11 @@ fn project_ir(
                     is_receiver: rv.is_receiver,
                     is_implicit_rec: !declares_rec && rv.name.eq_fold_identifier("rec"),
                 })
+                .map(std::sync::Arc::new)
                 .collect();
             // Task 3 (temp-state) PROMOTION + SHADOWING: append object-global record
-            // vars, re-keyed to a per-routine id, but ONLY those whose (lowercased)
+            // vars (ENG-99: the declaration's one shared row, object-level id
+            // `{object_id}/grv/{name}`), but ONLY those whose (lowercased)
             // name is NOT already declared by the routine's own params/locals — the
             // routine's own var shadows the global (innermost wins). Skipping
             // shadowed globals keeps `record_variables` NAME-UNIQUE, which preserves
@@ -1754,31 +1787,18 @@ fn project_ir(
             // Perf: most objects have NO global record vars (the dominant case), so
             // skip the whole block — including the per-routine `own_names` build —
             // entirely when there is nothing to promote.
-            if !object_global_record_vars.is_empty() {
+            if !object_global_rows.is_empty() {
                 let own_names: std::collections::HashSet<String> = record_variables
                     .iter()
                     .map(|rv| rv.name.fold_identifier())
                     .collect();
-                for g in &object_global_record_vars {
-                    let lc = g.name.fold_identifier();
-                    if own_names.contains(&lc) {
+                for (lc, row) in &object_global_rows {
+                    if own_names.contains(lc) {
                         continue; // shadowed by the routine's own param/local
                     }
-                    record_variables.push(ModelRecordVariable {
-                        id: format!("{}/rv/{}", routine_id, lc).into(),
-                        name: g.name.clone(),
-                        table_name: g
-                            .table_name
-                            .as_deref()
-                            .map(crate::program::body::features::shared_table_text),
-                        table_id: None,
-                        is_parameter: g.is_parameter,
-                        parameter_index: g.parameter_index,
-                        temp_state: g.temp_state.clone(),
-                        scope: g.scope.as_deref().map(VarScope::from),
-                        is_receiver: false,
-                        is_implicit_rec: false,
-                    });
+                    // ENG-99: the declaration's one row, shared (was a per-routine copy
+                    // re-keyed `{routine_id}/rv/{name}`).
+                    record_variables.push(std::sync::Arc::clone(row));
                 }
             }
             // G-2 Part 2: the routine's entry guard
@@ -1917,7 +1937,7 @@ fn project_ir(
                     record_variables
                         .iter()
                         .filter(|rv| rv.scope.as_deref() == Some("global"))
-                        .map(|rv| (al_syntax::fold_identifier(&rv.name), rv))
+                        .map(|rv| (al_syntax::fold_identifier(&rv.name), &**rv))
                         .collect();
                 // Names whose INNERMOST declaration (params → locals → globals,
                 // first-wins in `features.variables`) is NOT the global —
@@ -2778,9 +2798,13 @@ fn rewrite_routine_site_ids(r: &mut ModelRoutine, f: &dyn Fn(&str) -> String) {
     } = r;
     // Record variable ids (`{id}/rv/{name}`): no site tag, so a renumbering
     // leaves them as they are; a new routine id (a split declaration) moves
-    // them with the sites.
+    // them with the sites. A shared global's object-level id (`{object_id}/grv/…`,
+    // ENG-99) never holds the routine id, so `f` leaves it and the row stays shared.
     for v in record_variables.iter_mut() {
-        v.id = f(&v.id).into();
+        let id = f(&v.id);
+        if id != v.id.as_str() {
+            std::sync::Arc::make_mut(v).id = id.into();
+        }
     }
     // FieldRef operations (`{call site id}/fieldref`) are filled later, by `resolve()`, so the
     // list is empty here today; rewritten all the same, should that order change (Fable).
@@ -3836,6 +3860,9 @@ pub fn resolve(workspace: &mut ModelEntities) {
     // under one id, each with its own SourceTable / extends target.
     let declaring = super::declaring::DeclaringObjects::new(&workspace.objects);
 
+    // ENG-99: each object declaration's shared global rows resolved once (pass 1's table id),
+    // so the per-routine passes below find them resolved and copy only a row they change.
+    super::record_types::share_resolved_globals(&mut workspace.routines, &symbols);
     for routine in &mut workspace.routines {
         let object = declaring.of(routine);
         resolve_routine_record_types(routine, object, &symbols);
