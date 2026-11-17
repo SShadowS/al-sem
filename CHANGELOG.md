@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (ENG-127: the snapshot evidence shares its routine, file and context texts, and the view's fact table is exact-size, 45.8 MiB less resident memory on CDO)
+
+- **What changed** (`src/engine/l5/snapshot.rs`, `snapshot_view.rs`; no output change).
+  `SnapshotOperationEvidence` and `SnapshotCallsiteEvidence` hold `routine`, `source_file`
+  and `control_context` as `SharedStr` (serialized, ordered and compared as the text): one
+  text per routine cloned into its rows, the anchor's own `source_unit_id` (already shared),
+  and the control context through `shared_vocab` (six possible words). Both the tree base's
+  view and the full derivation build them so. The view's fact table (`SnapTables`) is trimmed
+  to its length before it is shared: its reps had 65,536 slots for 46,101 rows of 440 B.
+  Readers that need an owned `String` take `.to_string()`, as they cloned before. A view's
+  extra rows make their own routine text (not shared with the base's); rows of a collided id
+  get separate equal texts.
+- **The census that set the bar** (CDO, master `713381f3`; new per-field
+  `ViewBase::census_lines`, printed by `tools/census-probe resident`): the view held facts
+  51.85, evidence 41.61 and `routine_to_stable` 9.43 MiB. In the evidence, `routine` was
+  9.36 MiB (9,285 and 17,703 distinct over 24,379 and 61,289 rows), `source_file` 7.14 MiB
+  (~1,900 distinct, 0.28 MiB), `control_context` 0.93 MiB (5 distinct); the op and call-site
+  ids (6.96 MiB) are all distinct. The internal and stable routine ids are stored several
+  times across `routine_to_stable`, `group_of`, the groups and `SnapTables::subjects`
+  (~9-12 MiB): sharing them from the model on is wider than the view, filed as ENG-129.
+- **Measured** (the same probe both sides, back to back; base `0c1ef2a2` with only the census
+  commit added): the view's facts 51.85 -> 42.98 MiB and evidence 41.61 -> 24.68 MiB; live
+  after the first ask 3,489.4 -> 3,443.6 MiB (-45.8) and -45.8 after every later ask (the
+  full derivation's evidence shares the same way).
+- **CDO checks** (base `0c1ef2a2`): `cdo-before-after` moved no finding, fingerprint or
+  call-graph number; the session refresh equals a cold build at all 12 steps in both modes;
+  `cdo-gate --only harness,l4` passed (211/0, 25/0). `cdo-speed` passed twice: round total
+  x0.994 and x0.990, `prove` x1.003 and x0.997; the servers' summed peak memory fell in both
+  (6,966 -> 6,685 and 7,177 -> 6,711 MiB; no ratio quoted, the two differ).
+- **Pinned by** the snapshot goldens, which byte-compare the evidence: with every call site's
+  control context shared as one word (`"loop"`), the `cli` digest and prove differentials,
+  `cli_b2_*` and the batch standalone test fail.
+
 ### Changed (ENG-123: the detector summaries share the composition's direct facts, 50.6 MiB less resident memory on CDO)
 
 - **What changed** (`src/engine/l5/detector_context.rs`, `full_summary.rs`; no output change).

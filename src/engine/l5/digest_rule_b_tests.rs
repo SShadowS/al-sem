@@ -1231,7 +1231,7 @@ fn fingerprint_witness_boundary_trigger_and_event() {
                 fact.witness_first_hop_operation_id = Some(op.operation_id.clone());
                 (
                     format!("op:{}", op.operation_id),
-                    op.source_file.clone(),
+                    op.source_file.to_string(),
                     op.start_line,
                 )
             }
