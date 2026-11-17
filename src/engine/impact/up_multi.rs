@@ -1,24 +1,31 @@
-//! ENG-125 pass 1 (plan `docs/superpowers/plans/2026-11-17-eng125-multi-source-walk.md`,
-//! Task 2): the count fields of the up pass for many roots from ONE [`multi_walk`], kept as
-//! root bit masks per reached node and per canonical entry instead of one [`Up`] visitor per
-//! root. Each root's fields equal what its own `Up` and [`summary`] give (`up_multi_tests`
-//! compares every field, the oracle being the per-root visitor).
+//! ENG-125 (plan `docs/superpowers/plans/2026-11-17-eng125-multi-source-walk.md`, Tasks 2-3):
+//! every root's up row from TWO [`multi_walk`]s over all the roots at once, kept as root bit
+//! masks, instead of one [`Up`] visitor per root. Each root's [`Row`] equals what its own `Up`
+//! gives ([`super::row_of_up`]), so its printed row is the same bytes (`up_multi_tests`).
 //!
-//! The walk's events carry a root bit set, so an event costs mask operations, not one call
-//! per root. The per-root work left is the end fold over each reached node's set bits
-//! (`rows_p1`), and bounded lists (the nearest ancestors, the page-action sites).
-//!
-//! Pass 2 (the witness lists: `first`, `firstByKind`, `nearest`) is not here yet.
+//! - **Pass 1** ([`UpMulti`]): per reached node and per canonical entry, the roots that reached
+//!   it, by tier and by class. The walk's events carry a root bit set, so an event costs mask
+//!   operations, not one call per root. Its end fold ([`UpMulti::rows_p1`]) gives every count
+//!   field, and the final category of each (root, node) that pass 2 needs.
+//! - **Pass 2** ([`UpMultiP2`]): the same walk again, with pass 1's final masks known. It keeps
+//!   the witness lists (`first`, `firstByKind`, `nearest`): per root, the best few items by
+//!   `(hops, arrival)`, or the best one by `(class, tier rank, hops, arrival)`.
+//!   - Arrival order is one counter over every add, as `Up` counts its own. A root's events
+//!     come in its own walk's order (Task 1), so comparing two counters of one root compares
+//!     their order in that root's walk.
+//!   - A list is two partitions, as `Firsts::first` sorts it: arrivals not only open (any
+//!     such arrival makes the node not only open), then only open, the latter for nodes whose
+//!     final category (pass 1) is only open, and only while pass 1 says the first partition
+//!     has fewer than `keep.per_list`.
+//!   - A class witness is admitted only for an id whose final class (pass 1) is in the
+//!     population, so a worse arrival of an id that belongs elsewhere is never counted.
 
-use std::collections::{BTreeMap, BTreeSet};
-
-use serde_json::{Value, json};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use super::{
-    Keep, Limit, POPULATION, POPULATIONS, Population, Shared, by_relation_of, hub_locations,
-    share_json, site_bits, user_or_job,
+    GroupOut, Keep, Limit, ListOut, NOTES, POPULATIONS, Population, Row, Shared, Witness,
+    hub_locations, site_bits,
 };
-use crate::engine::test_select::select::display;
 use crate::fxhash::FxHashMap;
 use crate::program::impact_graph::multi_walk::{MultiSink, ones};
 use crate::program::impact_graph::reverse::{
@@ -40,9 +47,10 @@ const PA_NON_OPEN: usize = 17;
 /// An event-dispatch arrival makes the node a publisher: at all / not only open.
 const PUB_ANY: usize = 18;
 const PUB_NON_OPEN: usize = 19;
-/// A publisher whose event raises one of the root's own nodes.
+/// A publisher whose event raises one of the root's own nodes: at all / not only open.
 const DIRECT: usize = 20;
-const FAMILIES: usize = 21;
+const DIRECT_NON_OPEN: usize = 21;
+const FAMILIES: usize = 22;
 
 // The families of a reached canonical entry.
 const E_REACHED: usize = 0;
@@ -50,6 +58,28 @@ const E_CLASS: usize = 1;
 const E_FAMILIES: usize = 13;
 
 const NONE: u32 = u32::MAX;
+
+/// The external reasons, in [`external_whys`]' order (a list index each).
+const WHYS: [ExternalWhy; 3] = [
+    ExternalWhy::Public,
+    ExternalWhy::Protected,
+    ExternalWhy::Friend,
+];
+
+/// Pass 2's lists: one per entry kind ([`EntryKind::ALL`]), per external why, then the
+/// publishers and the direct publishers.
+const N_KINDS: usize = EntryKind::ALL.len();
+const L_PUB: usize = N_KINDS + WHYS.len();
+const L_DIRECT: usize = L_PUB + 1;
+const N_LISTS: usize = L_DIRECT + 1;
+
+fn list_of_kind(k: EntryKind) -> usize {
+    EntryKind::ALL.iter().position(|&x| x == k).expect("a kind")
+}
+
+fn list_of_why(why: ExternalWhy) -> usize {
+    N_KINDS + WHYS.iter().position(|&x| x == why).expect("a why")
+}
 
 fn set_all(dst: &mut [u64], src: &[u64]) {
     for (d, s) in dst.iter_mut().zip(src) {
@@ -59,6 +89,10 @@ fn set_all(dst: &mut [u64], src: &[u64]) {
 
 fn has(a: &[u64], k: usize) -> bool {
     a[k / 64] & (1 << (k % 64)) != 0
+}
+
+fn any(a: &[u64]) -> bool {
+    a.iter().any(|&x| x != 0)
 }
 
 /// A sparse set of `families` root masks per id, `w` words each.
@@ -107,9 +141,34 @@ impl Masks {
         })
     }
 
+    /// Word `wi` of `id`'s family `f` (0 when `id` has no masks).
+    fn word(&self, id: u32, f: usize, wi: usize) -> u64 {
+        let s = self.slot[id as usize];
+        if s == NONE {
+            0
+        } else {
+            self.bits[(s as usize * self.families + f) * self.w + wi]
+        }
+    }
+
     fn bytes(&self) -> usize {
         self.slot.capacity() * 4 + self.ids.capacity() * 4 + self.bits.capacity() * 8
     }
+}
+
+/// Word `wi` of the roots whose best class of an id is one of `classes`, from its
+/// `class(c)` words (`c = 2 * population + local`).
+fn final_class_word(classes: &[Population], class: impl Fn(usize) -> u64) -> u64 {
+    let mut better = 0u64;
+    let mut out = 0u64;
+    for (p, pop) in Population::ALL.iter().enumerate() {
+        let here = class(2 * p) | class(2 * p + 1);
+        if classes.contains(pop) {
+            out |= here & !better;
+        }
+        better |= here;
+    }
+    out
 }
 
 /// One root's nearest ancestors: each node with its best `(tier, hops)` so far.
@@ -186,6 +245,11 @@ impl<'g, 'a> UpMulti<'g, 'a> {
         self.nodes.bytes() + self.entries.bytes()
     }
 
+    /// Word `wi` of the roots `n` belongs to.
+    fn own_word(&self, n: NodeIx, wi: usize) -> u64 {
+        self.own.get(&n).map_or(0, |o| o[wi])
+    }
+
     /// `roots` without the roots `n` belongs to, into `self.scratch`.
     fn not_own(&mut self, n: NodeIx, roots: &[u64]) {
         self.scratch.copy_from_slice(roots);
@@ -200,7 +264,7 @@ impl<'g, 'a> UpMulti<'g, 'a> {
     fn own_of(&self, n: NodeIx, roots: &[u64]) -> Option<Vec<u64>> {
         let o = self.own.get(&n)?;
         let v: Vec<u64> = roots.iter().zip(o).map(|(r, o)| r & o).collect();
-        v.iter().any(|&x| x != 0).then_some(v)
+        any(&v).then_some(v)
     }
 
     /// A canonical entry reached by a state of `(tier, ext)`, for `roots`.
@@ -224,6 +288,35 @@ impl<'g, 'a> UpMulti<'g, 'a> {
         }
         if let Some(direct) = self.own_of(to, roots) {
             set_all(self.nodes.fam(from, DIRECT), &direct);
+            if tier != Tier::OnlyOpen {
+                set_all(self.nodes.fam(from, DIRECT_NON_OPEN), &direct);
+            }
+        }
+    }
+
+    /// Word `wi` of the roots for which node `n`'s list `l` is only open (a node in the list
+    /// with no arrival that is not only open): pass 2's second partition.
+    fn open_only_word(&self, l: usize, n: NodeIx, wi: usize) -> u64 {
+        let w = |f| self.nodes.word(n, f, wi);
+        let non_open_tier = w(TIER) | w(TIER + 1);
+        let not_own = !self.own_word(n, wi);
+        match l {
+            L_PUB => w(PUB_ANY) & !w(PUB_NON_OPEN),
+            L_DIRECT => w(DIRECT) & !w(DIRECT_NON_OPEN),
+            l if l >= N_KINDS => w(REACHED) & !non_open_tier,
+            l if EntryKind::ALL[l] == EntryKind::PageAction => {
+                let static_pa = entry_kinds(self.g, n, self.opts).contains(&EntryKind::PageAction);
+                let (any_pa, non_open) = if static_pa {
+                    (
+                        (w(REACHED) & not_own) | w(PA_ANY),
+                        (non_open_tier & not_own) | w(PA_NON_OPEN),
+                    )
+                } else {
+                    (w(PA_ANY), w(PA_NON_OPEN))
+                };
+                any_pa & !non_open
+            }
+            _ => w(REACHED) & not_own & !non_open_tier,
         }
     }
 }
@@ -305,7 +398,7 @@ impl MultiSink for UpMulti<'_, '_> {
         {
             self.not_own(n, roots);
             let rest = std::mem::take(&mut self.scratch);
-            if rest.iter().any(|&x| x != 0) {
+            if any(&rest) {
                 self.canon(e, s.tier, s.ext, &rest);
             }
             self.scratch = rest;
@@ -341,7 +434,7 @@ impl MultiSink for UpMulti<'_, '_> {
                 .entry(st.from)
                 .or_insert_with(|| (vec![0; w], Vec::new()));
             let fresh: Vec<u64> = roots.iter().zip(seen.iter()).map(|(r, s)| r & !s).collect();
-            if fresh.iter().any(|&x| x != 0) {
+            if any(&fresh) {
                 set_all(seen, &fresh);
                 firsts.push((site, fresh));
             }
@@ -356,13 +449,13 @@ impl MultiSink for UpMulti<'_, '_> {
     }
 }
 
-/// One root's pass-1 fields, as [`summary`] prints them. `entries`, `external` and
-/// `eventPublishers` hold their count parts only (their `first` lists are pass 2's), and
-/// `nearest` / `firstByKind` are pass 2's.
-pub(super) struct P1Row {
-    pub(super) fields: serde_json::Map<String, Value>,
-    /// The page-action site that made each page node an entry (`Up::action_site`).
-    pub(super) action_site: BTreeMap<NodeIx, SiteIx>,
+/// What pass 2 needs from pass 1's end fold, per root (`w` words each).
+pub(super) struct Finals {
+    /// Per list, the roots whose first partition (not only open) has fewer than
+    /// `keep.per_list` nodes: the only-open partition can show.
+    open_needed: Vec<Vec<u64>>,
+    /// Per population, the roots with no entry of it: its nearest witness is an ancestor.
+    no_entries: [Vec<u64>; 5],
 }
 
 /// Per root, the counts the end fold gathers.
@@ -391,9 +484,10 @@ fn best_class(has_class: impl Fn(usize) -> bool) -> Option<(Population, bool)> {
 }
 
 impl UpMulti<'_, '_> {
-    /// Every root's pass-1 fields, from the walk's masks and each root's stats.
+    /// Every root's [`Row`] with pass 1's parts (every count; no witness list), and what
+    /// pass 2 needs.
     #[allow(clippy::too_many_lines)]
-    pub(super) fn rows_p1(&self, stats: &[WalkStats]) -> Vec<P1Row> {
+    pub(super) fn rows_p1(&self, stats: &[WalkStats]) -> (Vec<Row>, Finals) {
         use crate::engine::vocab;
         let g = self.g;
         let inv = self.shared.inv;
@@ -474,24 +568,17 @@ impl UpMulti<'_, '_> {
             // Page actions: the node's own kind (its reached states) and the action-run
             // arrivals, one list per node.
             let static_pa = kinds.contains(&EntryKind::PageAction);
-            for (wi, ((r, pa), (pn, (t0, t1)))) in reached
-                .iter()
-                .zip(fam(PA_ANY))
-                .zip(
-                    fam(PA_NON_OPEN)
-                        .iter()
-                        .zip(fam(TIER).iter().zip(fam(TIER + 1))),
-                )
-                .enumerate()
-            {
+            for wi in 0..w {
                 let own_w = own.map_or(0, |o| o[wi]);
-                let any = if static_pa { (r & !own_w) | pa } else { *pa };
+                let (r, pa, pn) = (reached[wi], fam(PA_ANY)[wi], fam(PA_NON_OPEN)[wi]);
+                let non_open_tier = fam(TIER)[wi] | fam(TIER + 1)[wi];
+                let any_pa = if static_pa { (r & !own_w) | pa } else { pa };
                 let non_open = if static_pa {
-                    ((t0 | t1) & !own_w) | pn
+                    (non_open_tier & !own_w) | pn
                 } else {
-                    *pn
+                    pn
                 };
-                let mut x = any;
+                let mut x = any_pa;
                 while x != 0 {
                     let k = wi * 64 + x.trailing_zeros() as usize;
                     x &= x - 1;
@@ -519,205 +606,68 @@ impl UpMulti<'_, '_> {
                 }
             }
         }
-        let program = self.shared.program();
-        let program_by_kind: serde_json::Map<String, Value> = inv
-            .by_kind(|e| !self.shared.changed.contains(&e))
-            .into_iter()
-            .map(|((_, w), n)| (w.to_string(), json!(n)))
-            .collect();
-        let noted_program = |bit: u8| {
-            (0..inv.len() as u32)
-                .filter(|e| inv.note(*e) & bit != 0 && !self.shared.changed.contains(e))
-                .count()
+        let mut finals = Finals {
+            open_needed: vec![vec![0; w]; N_LISTS],
+            no_entries: Default::default(),
         };
-        let notes = [
-            crate::program::impact_graph::entries::NOTE_UNNAMED_ACTIONS,
-            crate::program::impact_graph::entries::NOTE_BACKGROUND_WITHOUT_ON_RUN,
-        ];
-        let notes_program = notes.map(noted_program);
-        (0..n_roots)
+        for m in &mut finals.no_entries {
+            *m = vec![0; w];
+        }
+        let per_list = self.keep.per_list;
+        let rows = (0..n_roots)
             .map(|k| {
                 let a = &acc[k];
                 let es = &ents[k];
-                let mut m = serde_json::Map::new();
-                let re = &self.root_entry[k];
-                m.insert(
-                    "rootEntryKinds".into(),
-                    json!(re.iter().map(|k| k.as_str()).collect::<Vec<_>>()),
-                );
-                m.insert(
-                    "rootEntryWord".into(),
-                    json!((!re.is_empty()).then(|| vocab::entry_word(re.iter().copied()))),
-                );
-                m.insert(
-                    "rootUserOrJob".into(),
-                    json!(re.iter().any(|k| user_or_job(*k))),
-                );
-                m.insert(
-                    "hubs".into(),
-                    json!(
-                        a.hubs
-                            .iter()
-                            .map(|(k, at)| json!({"kind": k, "at": at}))
-                            .collect::<Vec<_>>()
-                    ),
-                );
-                m.insert("programEntries".into(), json!(program));
-                m.insert(
-                    "entryBuckets".into(),
-                    json!(a.kinds.values().map(|c| c.0).sum::<usize>()),
-                );
-                m.insert("states".into(), json!(stats[k].states));
-                m.insert("maxHops".into(), json!(stats[k].max_hops));
-                let [local, dep, open] = a.tiers;
-                m.insert(
-                    "ancestors".into(),
-                    json!({"total": local + dep + open, "local": local, "throughDependency": dep,
-                           "onlyOpen": open, "population": POPULATION}),
-                );
-                m.insert(
-                    "entries".into(),
-                    json!(
-                        EntryKind::ALL
-                            .iter()
-                            .filter_map(|kind| a.kinds.get(kind).map(|c| (kind, c)))
-                            .map(|(kind, c)| json!({"kind": kind.as_str(), "count": c.0,
-                                                    "onlyOpen": c.1, "userOrJob": user_or_job(*kind)}))
-                            .collect::<Vec<_>>()
-                    ),
-                );
-                m.insert(
-                    "userOrJobEntries".into(),
-                    json!(
-                        a.kinds
-                            .iter()
-                            .filter(|(kind, _)| user_or_job(**kind))
-                            .map(|(_, c)| c.0)
-                            .sum::<usize>()
-                    ),
-                );
-                m.insert(
-                    "eventPublishers".into(),
-                    json!({"count": a.publishers.0, "onlyOpen": a.publishers.1,
-                           "direct": {"count": a.direct}}),
-                );
-                m.insert(
-                    "external".into(),
-                    json!(
-                        a.external
-                            .iter()
-                            .map(|(why, c)| json!({"why": why, "count": c.0, "onlyOpen": c.1}))
-                            .collect::<Vec<_>>()
-                    ),
-                );
-                m.insert(
-                    "hidden".into(),
-                    json!({"universalHub": a.universal, "byChannel": a.hidden}),
-                );
-                m.insert(
-                    "limited".into(),
-                    json!(self.limits[k].map(|l| match l {
-                        Limit::StateBudget(n) => format!("state budget {n}"),
-                        Limit::Cancelled => "cancelled".to_string(),
-                    })),
-                );
-                // The classified part (`classified`'s counts).
-                m.insert("relationRecorded".into(), json!(true));
-                let mut ent_rel: BTreeMap<(Population, bool), usize> = BTreeMap::new();
-                for &(_, p, local) in es {
-                    *ent_rel.entry((p, local)).or_default() += 1;
+                let bit = |m: &mut Vec<u64>| m[k / 64] |= 1 << (k % 64);
+                let list = |c: (usize, usize)| ListOut {
+                    count: c.0,
+                    only_open: c.1,
+                    first: Vec::new(),
+                };
+                for (kind, c) in &a.kinds {
+                    if c.0 - c.1 < per_list {
+                        bit(&mut finals.open_needed[list_of_kind(*kind)]);
+                    }
                 }
-                m.insert(
-                    "byRelation".into(),
-                    json!({"ancestors": by_relation_of(&a.by_rel, a.anc_total),
-                           "entries": by_relation_of(&ent_rel, es.len())}),
-                );
-                let (mut by_kind, mut by_context, mut share) = (
-                    serde_json::Map::new(),
-                    serde_json::Map::new(),
-                    serde_json::Map::new(),
-                );
-                for (key, classes) in POPULATIONS {
-                    let mut kinds: BTreeMap<(usize, &str), usize> = BTreeMap::new();
-                    let mut contexts: BTreeMap<&str, usize> = BTreeMap::new();
-                    let mut mine = 0usize;
+                for why in WHYS {
+                    let c = a.external.get(why.as_str()).copied().unwrap_or_default();
+                    if c.0 - c.1 < per_list {
+                        bit(&mut finals.open_needed[list_of_why(why)]);
+                    }
+                }
+                if a.publishers.0 - a.publishers.1 < per_list {
+                    bit(&mut finals.open_needed[L_PUB]);
+                }
+                // The direct list's only-open count is not printed; pass 2 fills both
+                // partitions for it.
+                bit(&mut finals.open_needed[L_DIRECT]);
+                let mut groups: [GroupOut; 5] = Default::default();
+                for (gi, (g_out, (_, classes))) in groups.iter_mut().zip(POPULATIONS).enumerate() {
                     for &(e, p, _) in es {
                         if !classes.contains(&p) {
                             continue;
                         }
-                        mine += 1;
+                        g_out.mine += 1;
                         let word = inv.word(e);
-                        *kinds.entry((vocab::entry_word_rank(word), word)).or_default() += 1;
+                        *g_out
+                            .kinds
+                            .entry((vocab::entry_word_rank(word), word))
+                            .or_default() += 1;
                         let ctx: BTreeSet<&str> =
                             inv.kinds(e).filter_map(vocab::entry_context).collect();
                         for c in ctx {
-                            *contexts.entry(c).or_default() += 1;
+                            *g_out.contexts.entry(c).or_default() += 1;
                         }
                     }
-                    by_kind.insert(
-                        key.into(),
-                        Value::Object(
-                            kinds
-                                .iter()
-                                .map(|(&(_, w), &n)| (w.to_string(), json!(n)))
-                                .collect(),
-                        ),
-                    );
-                    by_context.insert(
-                        key.into(),
-                        Value::Object(
-                            contexts
-                                .iter()
-                                .map(|(c, n)| ((*c).to_string(), json!(n)))
-                                .collect(),
-                        ),
-                    );
-                    share.insert(key.into(), share_json(mine, program));
+                    if g_out.mine == 0 {
+                        bit(&mut finals.no_entries[gi]);
+                    }
                 }
-                let candidates = es.iter().filter(|(_, p, _)| !p.established()).count();
-                share.insert("candidates".into(), share_json(candidates, program));
-                share.insert("all".into(), share_json(es.len(), program));
-                m.insert("entriesByKind".into(), Value::Object(by_kind));
-                m.insert("entriesByContext".into(), Value::Object(by_context));
-                m.insert(
-                    "programEntriesByKind".into(),
-                    Value::Object(program_by_kind.clone()),
-                );
-                m.insert("programShare".into(), Value::Object(share));
-                m.insert(
-                    "externalCode".into(),
-                    json!(
-                        a.external_code
-                            .iter()
-                            .filter(|(_, n)| **n != 0)
-                            .map(|(why, n)| json!({"why": why, "count": n}))
-                            .collect::<Vec<_>>()
-                    ),
-                );
-                let reached_note =
-                    |bit: u8| es.iter().filter(|(e, _, _)| inv.note(*e) & bit != 0).count();
-                m.insert(
-                    "entryNotes".into(),
-                    json!({
-                        "pagesWithUnnamedActions": {"reached": reached_note(notes[0]), "program": notes_program[0]},
-                        "backgroundTargetsWithoutOnRun": {"reached": reached_note(notes[1]), "program": notes_program[1]},
-                        "unnamedActionRunSites": inv.unnamed_sites(),
-                    }),
-                );
-                m.insert(
-                    "nearestAncestors".into(),
-                    json!(
-                        self.ancestors[k]
-                            .iter()
-                            .filter_map(|&(n, _, hops)| {
-                                g.stable_id(n).map(|id| {
-                                    json!({"stableId": id, "display": display(g, n), "hops": Some(hops)})
-                                })
-                            })
-                            .collect::<Vec<_>>()
-                    ),
-                );
-                let action_site = self
+                let mut ent_rel: BTreeMap<(Population, bool), usize> = BTreeMap::new();
+                for &(_, p, local) in es {
+                    *ent_rel.entry((p, local)).or_default() += 1;
+                }
+                let action_site: HashMap<NodeIx, SiteIx> = self
                     .action_sites
                     .iter()
                     .filter_map(|(&node, (_, firsts))| {
@@ -727,12 +677,347 @@ impl UpMulti<'_, '_> {
                             .map(|&(site, _)| (node, site))
                     })
                     .collect();
-                P1Row {
-                    fields: m,
+                Row {
+                    root_entry: self.root_entry[k].clone(),
+                    hubs: a.hubs.clone(),
+                    states: stats[k].states,
+                    max_hops: stats[k].max_hops,
+                    tiers: a.tiers,
+                    entries: a.kinds.iter().map(|(&kind, &c)| (kind, list(c))).collect(),
                     action_site,
+                    publishers: list(a.publishers),
+                    direct: list((a.direct, 0)),
+                    external: a.external.iter().map(|(&why, &c)| (why, list(c))).collect(),
+                    hidden: a.hidden.clone(),
+                    universal: a.universal,
+                    limit: self.limits[k],
+                    anc_rel: (a.by_rel.clone(), a.anc_total),
+                    ent_rel: (ent_rel, es.len()),
+                    groups,
+                    candidates: es.iter().filter(|(_, p, _)| !p.established()).count(),
+                    external_code: a.external_code.clone(),
+                    notes: NOTES.map(|bit| {
+                        es.iter()
+                            .filter(|(e, _, _)| inv.note(*e) & bit != 0)
+                            .count()
+                    }),
                 }
             })
-            .collect()
+            .collect();
+        (rows, finals)
+    }
+
+    /// Each root's nearest ancestors with a stable id, and the hops of each one's best tier.
+    pub(super) fn nearest_ancestors(&self, k: usize) -> &[(NodeIx, Tier, u32)] {
+        &self.ancestors[k]
+    }
+}
+
+/// One list item: a node with its best `(hops, arrival)` and that arrival's tier.
+#[derive(Clone, Copy)]
+struct Item {
+    node: NodeIx,
+    hops: u32,
+    tier: Tier,
+    at: usize,
+}
+
+/// The best `cap` distinct nodes of a partition by `(hops, arrival)`, each node keeping its
+/// best (an equal later arrival does not replace it).
+///
+/// A node left out is never needed later: the worst kept key only gets better, and a node's
+/// later arrivals are only worse than its earlier ones unless their hops are smaller, when
+/// they compete again.
+#[derive(Clone, Default)]
+struct Top(Vec<Item>);
+
+impl Top {
+    fn offer(&mut self, cap: usize, it: Item) {
+        if let Some(x) = self.0.iter_mut().find(|x| x.node == it.node) {
+            if it.hops < x.hops {
+                *x = it;
+            }
+            return;
+        }
+        if self.0.len() < cap {
+            self.0.push(it);
+            return;
+        }
+        let (wi, worst) = self
+            .0
+            .iter()
+            .enumerate()
+            .max_by_key(|(_, x)| (x.hops, x.at))
+            .map(|(i, x)| (i, *x))
+            .expect("cap > 0");
+        if (it.hops, it.at) < (worst.hops, worst.at) {
+            self.0[wi] = it;
+        }
+    }
+
+    fn sorted(&self) -> Vec<Item> {
+        let mut v = self.0.clone();
+        v.sort_unstable_by_key(|x| (x.hops, x.at));
+        v
+    }
+}
+
+/// Pass 2's sink: the witness lists, with pass 1's final masks (see the module doc).
+pub(super) struct UpMultiP2<'p, 'g, 'a> {
+    p1: &'p UpMulti<'g, 'a>,
+    finals: &'p Finals,
+    /// The last add's arrival number (every add of every root counts once).
+    at: usize,
+    /// The hop count of the states reached last: `step` follows their reach.
+    cur_hops: u32,
+    /// Per root, per list, the two partitions: `tops[(k * N_LISTS + l) * 2 + open]`.
+    tops: Vec<Top>,
+    /// Per root, per population, per kind word: the nearest entry and its witness.
+    first_by_kind: Vec<[BTreeMap<(usize, &'static str), (u32, Witness)>; 5]>,
+    /// Per root, per population with no entry, its nearest ancestor's witness.
+    ancestor: Vec<[Option<Witness>; 5]>,
+    adm: Vec<u64>,
+}
+
+impl<'p, 'g, 'a> UpMultiP2<'p, 'g, 'a> {
+    pub(super) fn new(p1: &'p UpMulti<'g, 'a>, finals: &'p Finals) -> Self {
+        let n = p1.roots.len();
+        UpMultiP2 {
+            p1,
+            finals,
+            at: 0,
+            cur_hops: 0,
+            tops: vec![Top::default(); n * N_LISTS * 2],
+            first_by_kind: (0..n).map(|_| Default::default()).collect(),
+            ancestor: vec![[None; 5]; n],
+            adm: vec![0; p1.w],
+        }
+    }
+
+    /// An add of node `n` to list `l` at `(hops, tier)`, for `roots` (already without the
+    /// roots a list leaves out).
+    fn list_add(&mut self, l: usize, n: NodeIx, hops: u32, tier: Tier, roots: &[u64]) {
+        self.at += 1;
+        let it = Item {
+            node: n,
+            hops,
+            tier,
+            at: self.at,
+        };
+        let cap = self.p1.keep.per_list;
+        if cap == 0 {
+            return;
+        }
+        let open = tier == Tier::OnlyOpen;
+        for wi in 0..self.p1.w {
+            self.adm[wi] = if open {
+                roots[wi] & self.finals.open_needed[l][wi] & self.p1.open_only_word(l, n, wi)
+            } else {
+                roots[wi]
+            };
+        }
+        let adm = std::mem::take(&mut self.adm);
+        for k in ones(&adm) {
+            self.tops[(k * N_LISTS + l) * 2 + usize::from(open)].offer(cap, it);
+        }
+        self.adm = adm;
+    }
+
+    /// A canonical entry `e` reached by a witness `w` (its `at` set here), for `roots`.
+    fn canon_add(&mut self, e: u32, mut w: Witness, roots: &[u64]) {
+        self.at += 1;
+        w.at = self.at;
+        let word = self.p1.shared.inv.word(e);
+        let key = (crate::engine::vocab::entry_word_rank(word), word);
+        for (gi, (_, classes)) in POPULATIONS.iter().enumerate() {
+            for wi in 0..self.p1.w {
+                self.adm[wi] = roots[wi]
+                    & final_class_word(classes, |c| self.p1.entries.word(e, E_CLASS + c, wi));
+            }
+            let adm = std::mem::take(&mut self.adm);
+            for k in ones(&adm) {
+                let f = self.first_by_kind[k][gi].entry(key).or_insert((e, w));
+                if (w.key(), w.at) < (f.1.key(), f.1.at) {
+                    *f = (e, w);
+                }
+            }
+            self.adm = adm;
+        }
+    }
+
+    /// The publisher lists for an arrival over `site` at `(hops, tier)`.
+    fn publisher(&mut self, site: SiteIx, hops: u32, tier: Tier, roots: &[u64]) {
+        let st = &self.p1.g.sites()[site as usize];
+        if st.boundary != Boundary::EventDispatch {
+            return;
+        }
+        let (from, to) = (st.from, st.to);
+        self.list_add(L_PUB, from, hops, tier, roots);
+        if let Some(direct) = self.p1.own_of(to, roots) {
+            self.list_add(L_DIRECT, from, hops, tier, &direct);
+        }
+    }
+
+    /// Fills each root's witness lists into its pass-1 row.
+    pub(super) fn fill(&self, rows: &mut [Row]) {
+        let cap = self.p1.keep.per_list;
+        for (k, row) in rows.iter_mut().enumerate() {
+            let list = |l: usize| -> Vec<(u32, Tier, NodeIx)> {
+                let base = (k * N_LISTS + l) * 2;
+                self.tops[base]
+                    .sorted()
+                    .into_iter()
+                    .chain(self.tops[base + 1].sorted())
+                    .take(cap)
+                    .map(|x| (x.hops, x.tier, x.node))
+                    .collect()
+            };
+            for (kind, out) in &mut row.entries {
+                out.first = list(list_of_kind(*kind));
+            }
+            for why in WHYS {
+                if let Some(out) = row.external.get_mut(why.as_str()) {
+                    out.first = list(list_of_why(why));
+                }
+            }
+            row.publishers.first = list(L_PUB);
+            row.direct.first = list(L_DIRECT);
+            for (gi, g_out) in row.groups.iter_mut().enumerate() {
+                g_out.first_by_kind = self.first_by_kind[k][gi].clone();
+                g_out.nearest = if g_out.mine > 0 {
+                    g_out
+                        .first_by_kind
+                        .values()
+                        .min_by_key(|(_, w)| (w.key(), w.at))
+                        .map(|&(e, w)| (Some(e), w))
+                } else {
+                    self.ancestor[k][gi].map(|w| (None, w))
+                };
+            }
+        }
+    }
+}
+
+impl MultiSink for UpMultiP2<'_, '_, '_> {
+    fn reach(
+        &mut self,
+        _: u32,
+        s: WalkState,
+        hops: u32,
+        via: Via,
+        _: Option<WalkState>,
+        roots: &[u64],
+    ) {
+        self.cur_hops = hops;
+        // `Up::reach`'s order: the node's class witness, then the publisher.
+        self.at += 1;
+        let n = s.node;
+        let p1 = self.p1;
+        if p1.g.flags(n) & flag::HUB == 0 {
+            let w = Witness {
+                tier: s.tier,
+                ext: s.ext,
+                hops,
+                node: n,
+                at: self.at,
+            };
+            for (gi, (_, classes)) in POPULATIONS.iter().enumerate() {
+                for wi in 0..p1.w {
+                    self.adm[wi] = roots[wi]
+                        & self.finals.no_entries[gi][wi]
+                        & !p1.own_word(n, wi)
+                        & final_class_word(classes, |c| p1.nodes.word(n, CLASS + c, wi));
+                }
+                let adm = std::mem::take(&mut self.adm);
+                for k in ones(&adm) {
+                    let best = &mut self.ancestor[k][gi];
+                    if best.is_none_or(|b| (w.key(), w.at) < (b.key(), b.at)) {
+                        *best = Some(w);
+                    }
+                }
+                self.adm = adm;
+            }
+        }
+        if let Via::Site(site) = via {
+            self.publisher(site, hops, s.tier, roots);
+        }
+    }
+    fn rejoin(&mut self, _: u32, s: WalkState, hops: u32, site: SiteIx, roots: &[u64]) {
+        self.publisher(site, hops, s.tier, roots);
+    }
+    fn entry(
+        &mut self,
+        _: u32,
+        n: NodeIx,
+        kinds: &[EntryKind],
+        s: WalkState,
+        hops: u32,
+        roots: &[u64],
+    ) {
+        // `Up::entry`'s order: each kind's list, then the canonical entry.
+        let p1 = self.p1;
+        let rest: Vec<u64> = (0..p1.w)
+            .map(|wi| roots[wi] & !p1.own_word(n, wi))
+            .collect();
+        if !any(&rest) {
+            return;
+        }
+        for &kind in kinds {
+            self.list_add(list_of_kind(kind), n, hops, s.tier, &rest);
+        }
+        if let Some(e) = p1.shared.inv.of_node(n)
+            && !p1.shared.changed.contains(&e)
+        {
+            let w = Witness {
+                tier: s.tier,
+                ext: s.ext,
+                hops,
+                node: n,
+                at: 0,
+            };
+            self.canon_add(e, w, &rest);
+        }
+    }
+    fn action_entry(&mut self, _: u32, n: NodeIx, s: WalkState, hops: u32, roots: &[u64]) {
+        let p1 = self.p1;
+        let rest: Vec<u64> = (0..p1.w)
+            .map(|wi| roots[wi] & !p1.own_word(n, wi))
+            .collect();
+        if any(&rest) {
+            self.list_add(list_of_kind(EntryKind::PageAction), n, hops, s.tier, &rest);
+        }
+    }
+    fn external(
+        &mut self,
+        _: u32,
+        n: NodeIx,
+        why: ExternalWhy,
+        s: WalkState,
+        hops: u32,
+        roots: &[u64],
+    ) {
+        self.list_add(list_of_why(why), n, hops, s.tier, roots);
+    }
+    fn step(&mut self, g: &SitedGraph, from: WalkState, site: SiteIx, roots: &[u64]) -> Option<u8> {
+        let ext = from.ext | site_bits(g, site);
+        if g.is_action_run(site) {
+            let st = &g.sites()[site as usize];
+            let tier = tier_over(g, site, from.tier);
+            let (node, hops) = (st.from, self.cur_hops + 1);
+            for &e in self.p1.shared.inv.of_site(site) {
+                if !self.p1.shared.changed.contains(&e) {
+                    let w = Witness {
+                        tier,
+                        ext,
+                        hops,
+                        node,
+                        at: 0,
+                    };
+                    self.canon_add(e, w, roots);
+                }
+            }
+        }
+        Some(ext)
     }
 }
 

@@ -1158,12 +1158,12 @@ fn multi_walk_traces_equal_on_the_up_worlds() {
     assert!(page_actions > 0, "precondition: a page-action entry");
 }
 
-/// ENG-125 pass 1: every pass-1 field of every root equals its own `Up` on this file's
-/// worlds, which hold the candidate classes (a hub, configured dispatch) the real fixtures
-/// lack.
+/// ENG-125: every root's row from the two multi-walk passes is the bytes of its own `Up`'s on
+/// this file's worlds, which hold the candidate classes (a hub, configured dispatch) the real
+/// fixtures lack.
 #[test]
-fn multi_p1_rows_equal_on_the_up_worlds() {
-    use super::up_multi::tests::assert_p1_equal;
+fn multi_rows_equal_on_the_up_worlds() {
+    use super::up_multi::tests::assert_rows_equal;
     use crate::program::impact_graph::multi_walk::tests::every_shape;
     let graphs = [
         navigation_world().0,
@@ -1173,15 +1173,18 @@ fn multi_p1_rows_equal_on_the_up_worlds() {
         dependency_callers(),
         super::tests::entry_world().0,
     ];
-    let mut candidates = 0;
+    let captions = Captions::new(HashMap::new());
+    let (mut candidates, mut ancestor_nearest) = (0, 0);
     for g in &graphs {
-        candidates += assert_p1_equal(
-            g,
-            &every_shape(g),
-            &WalkOptions::default(),
-            Keep::new(false),
-        )
-        .candidate_rows;
+        for keep in [Keep::new(false), Keep::new(true)] {
+            let s = assert_rows_equal(g, &every_shape(g), &WalkOptions::default(), keep, &captions);
+            candidates += s.candidates;
+            ancestor_nearest += s.ancestor_nearest;
+        }
     }
-    assert!(candidates > 0, "precondition: a candidate entry");
+    assert!(candidates > 0, "precondition: a candidate class");
+    assert!(
+        ancestor_nearest > 0,
+        "precondition: a nearest ancestor witness"
+    );
 }
