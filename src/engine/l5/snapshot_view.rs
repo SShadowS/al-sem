@@ -57,7 +57,164 @@ pub(super) struct ViewBase {
 // Evidence
 // ---------------------------------------------------------------------------
 
+/// ENG-127: one census line per text field: its heap bytes (capacity), how many values, how
+/// many distinct by content, and those distinct values' bytes.
+fn text_line<'a>(name: &str, values: impl Iterator<Item = Option<&'a String>>) -> String {
+    let (mut n, mut some, mut heap) = (0usize, 0usize, 0usize);
+    let mut distinct: HashSet<&str> = HashSet::new();
+    for v in values {
+        n += 1;
+        if let Some(s) = v {
+            some += 1;
+            heap += s.capacity();
+            distinct.insert(s.as_str());
+        }
+    }
+    let distinct_bytes: usize = distinct.iter().map(|s| s.len()).sum();
+    format!(
+        "        {name:<34} {some:>9} of {n:>9}  heap {:>7.2} MiB  distinct {:>8} ({:.2} MiB)",
+        heap as f64 / 1048576.0,
+        distinct.len(),
+        distinct_bytes as f64 / 1048576.0
+    )
+}
+
 impl ViewBase {
+    /// ENG-127: per-field census lines for `tools/census-probe resident`: what each text field
+    /// holds and how much of it repeats. Read-only.
+    pub(super) fn census_lines(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        let r2s = &self.routine_to_stable;
+        out.push(format!(
+            "    ENG-127 view.routine_to_stable: {} entries",
+            r2s.len()
+        ));
+        out.push(text_line("keys", r2s.keys().map(Some)));
+        out.push(text_line("values", r2s.values().map(Some)));
+        let e = &self.evidence;
+        out.push(format!(
+            "    ENG-127 view.evidence: ops {} (cap {}, size_of {} B), sites {} (cap {}, size_of {} B), \
+             op_rest {} / {}, site_rest {} / {}",
+            e.ops.len(),
+            e.ops.capacity(),
+            std::mem::size_of::<SnapshotOperationEvidence>(),
+            e.sites.len(),
+            e.sites.capacity(),
+            std::mem::size_of::<SnapshotCallsiteEvidence>(),
+            e.op_rest.len(),
+            e.op_rest.capacity(),
+            e.site_rest.len(),
+            e.site_rest.capacity(),
+        ));
+        out.push(text_line(
+            "ops.operation_id",
+            e.ops.iter().map(|o| Some(&o.operation_id)),
+        ));
+        out.push(text_line(
+            "ops.routine",
+            e.ops.iter().map(|o| Some(&o.routine)),
+        ));
+        out.push(text_line(
+            "ops.source_file",
+            e.ops.iter().map(|o| Some(&o.source_file)),
+        ));
+        out.push(text_line(
+            "ops.display_text",
+            e.ops.iter().map(|o| Some(&o.display_text)),
+        ));
+        out.push(text_line(
+            "ops.control_context",
+            e.ops.iter().map(|o| o.control_context.as_ref()),
+        ));
+        out.push(text_line(
+            "sites.callsite_id",
+            e.sites.iter().map(|s| Some(&s.callsite_id)),
+        ));
+        out.push(text_line(
+            "sites.routine",
+            e.sites.iter().map(|s| Some(&s.routine)),
+        ));
+        out.push(text_line(
+            "sites.source_file",
+            e.sites.iter().map(|s| Some(&s.source_file)),
+        ));
+        out.push(text_line(
+            "sites.callee_display",
+            e.sites.iter().map(|s| Some(&s.callee_display)),
+        ));
+        out.push(text_line(
+            "sites.control_context",
+            e.sites.iter().map(|s| s.control_context.as_ref()),
+        ));
+        let f = &self.facts;
+        let t = &f.tables;
+        out.push(format!(
+            "    ENG-127 view.facts: rows {} (cap {}), runs {}, order {}, groups {} (cap {}), group_of {}; \
+             tables: subjects {}, reps {} (cap {}, size_of {} B), hops {} (cap {}), tables Arc holders {}",
+            f.rows.len(),
+            f.rows.capacity(),
+            f.runs.len(),
+            f.order.len(),
+            f.groups.len(),
+            f.groups.capacity(),
+            f.group_of.len(),
+            t.subjects.len(),
+            t.reps.len(),
+            t.reps.capacity(),
+            std::mem::size_of::<SnapRep>(),
+            t.hops.len(),
+            t.hops.capacity(),
+            Arc::strong_count(t),
+        ));
+        out.push(text_line("groups.id", f.groups.iter().map(|g| Some(&g.id))));
+        out.push(text_line("group_of keys", f.group_of.keys().map(Some)));
+        out.push(text_line("tables.subjects", t.subjects.iter().map(Some)));
+        let reps = &t.reps;
+        out.push(text_line("reps.op", reps.iter().map(|r| Some(&r.op))));
+        out.push(text_line(
+            "reps.resource_kind",
+            reps.iter().map(|r| Some(&r.resource_kind)),
+        ));
+        out.push(text_line(
+            "reps.resource_id",
+            reps.iter().map(|r| r.resource_id.as_ref()),
+        ));
+        out.push(text_line(
+            "reps.confidence",
+            reps.iter().map(|r| Some(&r.confidence)),
+        ));
+        out.push(text_line(
+            "reps.provenance",
+            reps.iter().map(|r| Some(&r.provenance)),
+        ));
+        out.push(text_line("reps.via", reps.iter().map(|r| Some(&r.via))));
+        out.push(text_line(
+            "reps.witness_operation_id",
+            reps.iter().map(|r| r.witness_operation_id.as_ref()),
+        ));
+        out.push(text_line(
+            "reps.witness_callsite_id",
+            reps.iter().map(|r| r.witness_callsite_id.as_ref()),
+        ));
+        out.push(text_line(
+            "reps.witness_first_hop_operation_id",
+            reps.iter()
+                .map(|r| r.witness_first_hop_operation_id.as_ref()),
+        ));
+        out.push(text_line(
+            "reps.witness_first_hop_event_id",
+            reps.iter().map(|r| r.witness_first_hop_event_id.as_ref()),
+        ));
+        out.push(format!(
+            "        reps.resource_arg_source Some {}, reps.extra Some {}",
+            reps.iter()
+                .filter(|r| r.resource_arg_source.is_some())
+                .count(),
+            reps.iter().filter(|r| r.extra.is_some()).count(),
+        ));
+        out
+    }
+
     /// ENG-111: the view base's parts for a byte census (`tools/census-probe resident`),
     /// every field named. Read-only otherwise.
     pub(super) fn into_census_parts(self) -> Vec<(&'static str, Box<dyn std::any::Any>)> {

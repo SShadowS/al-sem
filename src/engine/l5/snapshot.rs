@@ -1982,6 +1982,12 @@ pub struct TreeBase {
 }
 
 impl TreeBase {
+    /// ENG-127: the view base's per-field census lines (`tools/census-probe resident`).
+    #[doc(hidden)]
+    pub fn census_lines(&self) -> Vec<String> {
+        self.view.census_lines()
+    }
+
     /// ENG-107: the base's fields for a byte census (`tools/census-probe resident`), in
     /// declaration order. The `Arc` sections are shared with every tree built on this base, so
     /// a census drops the trees first.
