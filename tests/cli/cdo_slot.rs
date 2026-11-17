@@ -110,11 +110,33 @@ impl Drop for Slot {
     }
 }
 
-/// ⟨TLS-90⟩ A spawned child (a waiter, a bound `sleep`) that is killed and reaped
-/// when it drops, so a failing assertion cannot leak it: `Slot`'s `Drop` kills
-/// only the slot's holder, and the TLS-88 breaks left `cdo-slot acquire --wait`
-/// processes polling their temporary folders for hours.
+/// ⟨TLS-90⟩ A spawned `cdo-slot acquire --wait` waiter that is killed and reaped
+/// when it drops, so a failing assertion cannot leak it. `Slot`'s `Drop` kills
+/// only the slot's holder. The TLS-88 breaks left waiters polling their temporary
+/// folders for hours, and some then took their test's slot once its holder was
+/// killed, leaving a holder that never ends. (A test process killed outright runs
+/// no `Drop`, so that case can still leak.)
 struct Reap(std::process::Child);
+
+/// ⟨TLS-90⟩ The one way the slot tests spawn a waiter: `acquire <owner> <reason>
+/// --wait` as session `session`, polling every `poll` seconds with memory floor
+/// `mem` GB, held in [`Reap`].
+fn waiter(s: &Slot, owner: &str, reason: &str, session: &str, poll: &str, mem: &str) -> Reap {
+    Reap(
+        std::process::Command::new("bash")
+            .args([SLOT, "acquire", owner, reason, "--wait"])
+            .env("CDO_SLOT_DIR", s.dir())
+            .env("CDO_SLOT_MEM_MIN_GB", mem)
+            .env("CDO_SLOT_POLL_S", poll)
+            .env("CLAUDE_CODE_SESSION_ID", session)
+            .env_remove("CLAUDE_PID")
+            .env_remove("CDO_SLOT_TOKEN")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap(),
+    )
+}
 
 impl std::ops::Deref for Reap {
     type Target = std::process::Child;
@@ -136,9 +158,11 @@ impl Drop for Reap {
     }
 }
 
-/// ⟨TLS-90⟩ A waiter held in `Reap` is gone after a panic in the test that spawned it.
+/// ⟨TLS-90⟩ A waiter from [`waiter`] (the helper every slot test uses) is gone
+/// after a panic in the test that spawned it.
 ///
-/// Mutation: `Reap::drop` without the kill -> the waiter outlives the panic (red).
+/// Mutation: `Reap::drop` without the kill, and `try_wait` for `wait` (a plain
+/// `wait` would block on the live waiter) -> "the waiter outlived the panic" (red).
 #[test]
 fn reap_ends_a_waiter_when_the_test_panics() {
     let s = Slot::new();
@@ -146,20 +170,7 @@ fn reap_ends_a_waiter_when_the_test_panics() {
     assert_eq!(code, Some(0), "{text}");
     let pid = std::sync::Mutex::new(0u32);
     let r = std::panic::catch_unwind(|| {
-        let w = Reap(
-            std::process::Command::new("bash")
-                .args([SLOT, "acquire", "w", "leak", "--wait"])
-                .env("CDO_SLOT_DIR", s.dir())
-                .env("CDO_SLOT_MEM_MIN_GB", "0")
-                .env("CDO_SLOT_POLL_S", "1")
-                .env("CLAUDE_CODE_SESSION_ID", "B")
-                .env_remove("CLAUDE_PID")
-                .env_remove("CDO_SLOT_TOKEN")
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .spawn()
-                .unwrap(),
-        );
+        let w = waiter(&s, "w", "leak", "B", "1", "0");
         *pid.lock().unwrap() = w.id();
         panic!("a failing assertion");
     });
@@ -673,22 +684,8 @@ fn cdo_slot_is_truthful_under_races_and_bad_records() {
 #[test]
 fn cdo_slot_queue_refuses_jumps_and_steps_aside_for_memory() {
     let s = Slot::new();
-    let waiter = |session: &str, poll: &str, mem: &str| {
-        Reap(
-            std::process::Command::new("bash")
-                .args([SLOT, "acquire", "w", "queue", "--wait"])
-                .env("CDO_SLOT_DIR", s.dir())
-                .env("CDO_SLOT_MEM_MIN_GB", mem)
-                .env("CDO_SLOT_POLL_S", poll)
-                .env("CLAUDE_CODE_SESSION_ID", session)
-                .env_remove("CLAUDE_PID")
-                .env_remove("CDO_SLOT_TOKEN")
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .spawn()
-                .unwrap(),
-        )
-    };
+    let waiter =
+        |session: &str, poll: &str, mem: &str| waiter(&s, "w", "queue", session, poll, mem);
     let ticket_text = || {
         std::fs::read_dir(s.dir().join("queue"))
             .ok()
@@ -757,22 +754,7 @@ fn cdo_slot_queue_refuses_jumps_and_steps_aside_for_memory() {
 #[test]
 fn cdo_slot_serves_waiters_in_arrival_order() {
     let s = Slot::new();
-    let waiter = |session: &str, owner: &str| {
-        Reap(
-            std::process::Command::new("bash")
-                .args([SLOT, "acquire", owner, "fifo", "--wait"])
-                .env("CDO_SLOT_DIR", s.dir())
-                .env("CDO_SLOT_MEM_MIN_GB", "0")
-                .env("CDO_SLOT_POLL_S", "1")
-                .env("CLAUDE_CODE_SESSION_ID", session)
-                .env_remove("CLAUDE_PID")
-                .env_remove("CDO_SLOT_TOKEN")
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .spawn()
-                .unwrap(),
-        )
-    };
+    let waiter = |session: &str, owner: &str| waiter(&s, owner, "fifo", session, "1", "0");
     let tickets = || {
         std::fs::read_dir(s.dir().join("queue"))
             .map(|d| d.count())

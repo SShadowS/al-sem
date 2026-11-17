@@ -12,13 +12,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The problem:** `cdo_slot_serves_waiters_in_arrival_order` and
   `cdo_slot_queue_refuses_jumps_and_steps_aside_for_memory` (`tests/cli/cdo_slot.rs`) spawn
   `cdo-slot acquire --wait` children and reaped them only on the success path. A failing assertion
-  (each TLS-88 discrimination break) left them polling their temporary slot folders forever. Four
-  were found after 11 hours. They could not take the real slot (a different folder), but they piled
-  up.
-- **Now:** the waiters are held in `Reap`, which kills and reaps its child on drop, so an unwinding
-  test ends them. The other spawned children are `sleep 600` processes that end by themselves.
-- **Test:** `reap_ends_a_waiter_when_the_test_panics` spawns a waiter inside a closure that panics,
-  then checks the process is gone. Break: `Reap::drop` without the kill -> "the waiter outlived
+  (each TLS-88 discrimination break) left them polling their temporary slot folders forever.
+  - Some then took their test's slot once `Slot`'s `Drop` killed the test's holder. That started
+    a holder with no session and no bind, which never ends.
+  - Four waiters and three such holders were found, some after 11 hours, and killed by hand (each
+    checked to hold a `/tmp` test lock).
+  - They could not take the real slot (a different folder), but they piled up.
+- **Now:** every slot test spawns its waiters through one helper, `waiter`, which returns a `Reap`
+  guard. The guard kills and reaps its child on drop, so an unwinding test ends them before
+  `Slot`'s `Drop` frees the slot.
+  - The other spawned children end by themselves: `true`, the racers (no `--wait`), and
+    `sleep 600` / `run … sleep 600`.
+  - **Limit:** a test process killed outright (SIGKILL, a stopped gate) runs no `Drop`, so it can
+    still leak. A killed waiter's own `sleep "$poll"` child also outlives it by at most the poll
+    interval.
+- **Test:** `reap_ends_a_waiter_when_the_test_panics` spawns a waiter through `waiter` inside a
+  closure that panics, then checks the process is gone. Break: `Reap::drop` without the kill, and
+  with `try_wait` for `wait` (a plain `wait` would block on the live waiter) -> "the waiter outlived
   the panic" (red). Restored: green.
 
 ### Changed (ENG-111: the tree's projected solve shares its routine ids, 142.4 MiB less resident memory on CDO)
