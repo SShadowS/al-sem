@@ -224,6 +224,11 @@ distance. Only the subject's own producer-solve entries compete afterwards with
 order. This design preserves that algorithm exactly; only what a pick is stored as
 changes.
 
+> **Superseded 2026-11-17 by ENG-115:** every candidate of a key now competes under
+> `candidate_wins` (the singleton's rule: nearest, then the smaller first hop), at the
+> sibling, downstream and own sites alike; first-seen holds only at equal distance. T3b (1)
+> pins the nearest pick (`t3b_recursive_walk_keeps_the_nearest_pick`). See the CHANGELOG.
+
 Carriers: `Best { rep: &CapabilityFact, dist, edge: &TypedOutEdge }` (`:1881`) and
 `picked: Vec<(&CapabilityFact, usize, &TypedOutEdge)>` (`:2184`). Rep owners: cone
 entries (`Arc`, minted by `fact_cone_for_scc` as `Arc::new(f.clone())` from the owned
