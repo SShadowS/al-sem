@@ -206,15 +206,17 @@ pub(crate) fn facts_bytes(facts: &[CapabilityFact]) -> (u64, u64) {
 /// own bucket): the map's entries and keys, each summary's `routine_id`, its
 /// direct facts, its raw inherited facts when the cone kept them, and its
 /// coverage record's subject, its `Vec<SharedStr>` buffers, and each distinct
-/// shared text once.
+/// shared text once (by content: one copy per text).
 pub(crate) fn summaries_tally(summaries: &HashMap<String, FullRoutineSummary>) -> Tally {
     let mut t = Tally::default();
     t.buf::<(String, FullRoutineSummary)>(summaries.len())
         .strs(summaries.keys());
-    // ENG-108: the statuses, reasons and targets are shared texts. Each distinct text's
-    // allocation counts once, by its address: exact whether the interner holds it or it was
-    // minted past the interner's cap (sol, ENG-108 review).
-    let mut seen_text: std::collections::HashSet<*const u8> = std::collections::HashSet::new();
+    // ENG-108: the statuses, reasons and targets are shared texts. Each distinct TEXT counts
+    // once (sol, ENG-108 review: the texts are no longer per record). By content, not by
+    // address: how many allocations hold one text depends on which worker threads minted it
+    // (each parallel-walk worker has its own set), and the census must be deterministic
+    // (`cli_batch_census::batch_arc_census` compares a batch run with standalone runs).
+    let mut seen_text: std::collections::HashSet<&str> = std::collections::HashSet::new();
     for s in summaries.values() {
         t.strs([&s.routine_id]);
         let ft = s.census_facts_tally();
@@ -229,7 +231,7 @@ pub(crate) fn summaries_tally(summaries: &HashMap<String, FullRoutineSummary>) -
                 .chain(&cov.reasons)
                 .chain(&cov.unknown_targets)
             {
-                if seen_text.insert(text.as_str().as_ptr()) {
+                if seen_text.insert(text.as_str()) {
                     t.strs([text.as_str()]);
                 }
             }
