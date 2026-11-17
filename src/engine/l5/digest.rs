@@ -33,6 +33,7 @@
 //! - Conditionality / transactionContext / guarantees / scopedGuarantees are STAGE 4
 //!   and EXCLUDED from this projection.
 
+use crate::fxhash::{FxHashMap, FxHashSet};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::Write as _;
 use std::rc::Rc;
@@ -187,8 +188,10 @@ fn is_routine_stable_id(id: &str) -> bool {
 struct FingerprintIndexes<'a> {
     stable_id_to_display: HashMap<String, String>,
     routine_display_by_id: HashMap<String, String>,
-    /// Per-from ordered edge bucket (source array order PRESERVED).
-    outgoing_edges: HashMap<String, Vec<&'a SnapshotGraphEdge>>,
+    /// Per-from ordered edge bucket (source array order PRESERVED). ENG-117:
+    /// FxHash. Its whole-map passes are order-free: each bucket sorted in
+    /// place, and an `into_iter` into another map.
+    outgoing_edges: FxHashMap<String, Vec<&'a SnapshotGraphEdge>>,
     /// Reverse of `outgoing_edges`: incoming_edges[to] = list of `from` node ids that
     /// have at least one edge pointing to `to`. Read by the per-fact depth check
     /// (`carrier_behind_frontier`), a reverse reachability walk that needs only the
@@ -290,7 +293,7 @@ fn build_fingerprint_indexes_in(
 
     // outgoingEdges[from] ← typedEdges, ORDER PRESERVED (source array order).
     // incomingEdges[to] ← set of `from` ids — the reverse graph, built in the same pass.
-    let mut outgoing_edges: HashMap<String, Vec<&SnapshotGraphEdge>> = HashMap::new();
+    let mut outgoing_edges: FxHashMap<String, Vec<&SnapshotGraphEdge>> = FxHashMap::default();
     let mut incoming_edges: HashMap<String, Vec<String>> = HashMap::new();
     for edge in snap.typed_edges.iter() {
         let from = edge_from(edge).to_string();
@@ -1888,24 +1891,28 @@ thread_local! {
 /// predecessor DAG are exactly the shortest paths to `v`. Shortest paths are
 /// simple, so no per-path visited set is needed. The DAG depends only on (root,
 /// first hop), never on the fact.
+///
+/// ENG-117: its maps and `Marking`'s use FxHash. `info` is iterated three
+/// times, none in an order that reaches output (a BTreeMap fill, a sum, an
+/// `any`); the rest are only looked up.
 struct WitDag<'i> {
     /// Each reached routine's `δ` and its predecessors.
-    info: HashMap<&'i str, (usize, Preds<'i>)>,
+    info: FxHashMap<&'i str, (usize, Preds<'i>)>,
     /// The first-hop edges that carry a hop, sorted by target routine
     /// (stable): the trie root's children.
     seeds: Vec<(&'i str, &'i SnapshotGraphEdge)>,
     /// Opaque call-site and op seeds (A1-19: no out-edge, no direct fact,
     /// coverage `unknown`): accepting states of length 1 for EVERY fact of the
     /// root (A4-01). An event first hop has none.
-    opaque: std::collections::HashSet<&'i str>,
+    opaque: FxHashSet<&'i str>,
     /// The routines at `MAX_DEPTH` with an out-edge, left unexpanded (item 6).
-    depth_frontier: std::collections::HashSet<&'i str>,
+    depth_frontier: FxHashSet<&'i str>,
     /// Per-fact markings, by the sorted carriers at `dmin` (A2-09): facts that
     /// share their nearest carriers share one.
-    markings: std::cell::RefCell<HashMap<Vec<&'i str>, Rc<Marking<'i>>>>,
+    markings: std::cell::RefCell<FxHashMap<Vec<&'i str>, Rc<Marking<'i>>>>,
     /// Item 6's answer per carrier set (sorted): is a carrier behind the depth
     /// frontier? Asked only by facts with no path.
-    behind_frontier: std::cell::RefCell<HashMap<Vec<&'i str>, bool>>,
+    behind_frontier: std::cell::RefCell<FxHashMap<Vec<&'i str>, bool>>,
 }
 
 /// A routine's DAG predecessors `(u, e)`, every one with `δ(u) = δ − 1`
@@ -1925,11 +1932,11 @@ type Preds<'i> = Vec<(Option<&'i str>, &'i SnapshotGraphEdge)>;
 /// length 0).
 struct Marking<'i> {
     /// Every marked routine; a dependency routine's bits are 0.
-    bits: HashMap<&'i str, u128>,
+    bits: FxHashMap<&'i str, u128>,
     /// The PRIMARY carriers at `dmin`: a path's `carrier` ends.
-    carriers: std::collections::HashSet<&'i str>,
+    carriers: FxHashSet<&'i str>,
     /// Marked boundary edges, by the primary routine they leave.
-    boundary: HashMap<Option<&'i str>, Vec<&'i SnapshotGraphEdge>>,
+    boundary: FxHashMap<Option<&'i str>, Vec<&'i SnapshotGraphEdge>>,
 }
 
 impl<'i> WitDag<'i> {
@@ -1939,8 +1946,8 @@ impl<'i> WitDag<'i> {
         seeds: Vec<(&'i str, &'i SnapshotGraphEdge)>,
         idx: &'i FingerprintIndexes,
     ) -> WitDag<'i> {
-        let mut info: HashMap<&'i str, (usize, Preds<'i>)> = HashMap::new();
-        let mut depth_frontier = std::collections::HashSet::new();
+        let mut info: FxHashMap<&'i str, (usize, Preds<'i>)> = FxHashMap::default();
+        let mut depth_frontier = FxHashSet::default();
         let mut queue: std::collections::VecDeque<&'i str> = std::collections::VecDeque::new();
         for &(to, e) in &seeds {
             match info.get_mut(to) {
@@ -1975,7 +1982,7 @@ impl<'i> WitDag<'i> {
             }
         }
         let opaque = if matches!(first_hop, FirstHop::Event(_) | FirstHop::OpEvent(..)) {
-            std::collections::HashSet::new()
+            FxHashSet::default()
         } else {
             seeds
                 .iter()
@@ -1998,8 +2005,8 @@ impl<'i> WitDag<'i> {
             seeds,
             opaque,
             depth_frontier,
-            markings: std::cell::RefCell::new(HashMap::new()),
-            behind_frontier: std::cell::RefCell::new(HashMap::new()),
+            markings: std::cell::RefCell::new(FxHashMap::default()),
+            behind_frontier: std::cell::RefCell::new(FxHashMap::default()),
         }
     }
 
@@ -2016,8 +2023,8 @@ impl<'i> WitDag<'i> {
         idx: &'i FingerprintIndexes,
         keep: &std::collections::HashSet<&'i str>,
     ) -> WitDag<'i> {
-        let mut info: HashMap<&'i str, (usize, Preds<'i>)> = HashMap::new();
-        let mut depth_frontier = std::collections::HashSet::new();
+        let mut info: FxHashMap<&'i str, (usize, Preds<'i>)> = FxHashMap::default();
+        let mut depth_frontier = FxHashSet::default();
         let mut queue: std::collections::VecDeque<&'i str> = std::collections::VecDeque::new();
         let seeds: Vec<(&'i str, &'i SnapshotGraphEdge)> = seeds
             .into_iter()
@@ -2062,10 +2069,10 @@ impl<'i> WitDag<'i> {
         WitDag {
             info,
             seeds,
-            opaque: std::collections::HashSet::new(),
+            opaque: FxHashSet::default(),
             depth_frontier,
-            markings: std::cell::RefCell::new(HashMap::new()),
-            behind_frontier: std::cell::RefCell::new(HashMap::new()),
+            markings: std::cell::RefCell::new(FxHashMap::default()),
+            behind_frontier: std::cell::RefCell::new(FxHashMap::default()),
         }
     }
 
@@ -2082,8 +2089,8 @@ impl<'i> WitDag<'i> {
         if let Some(m) = self.markings.borrow().get(at_min) {
             return Rc::clone(m);
         }
-        let mut bits: HashMap<&'i str, u128> = HashMap::new();
-        let mut carriers = std::collections::HashSet::new();
+        let mut bits: FxHashMap<&'i str, u128> = FxHashMap::default();
+        let mut carriers = FxHashSet::default();
         for &c in at_min {
             let primary = !idx.is_dependency(c);
             bits.insert(c, if primary { 1u128 << dmin } else { 0 });
@@ -2091,7 +2098,8 @@ impl<'i> WitDag<'i> {
                 carriers.insert(c);
             }
         }
-        let mut boundary: HashMap<Option<&'i str>, Vec<&'i SnapshotGraphEdge>> = HashMap::new();
+        let mut boundary: FxHashMap<Option<&'i str>, Vec<&'i SnapshotGraphEdge>> =
+            FxHashMap::default();
         let mut level: Vec<&'i str> = at_min.to_vec();
         while !level.is_empty() {
             let mut next = Vec::new();

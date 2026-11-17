@@ -52,12 +52,13 @@
 //! routine reaches it ([`FlowEval`]).
 
 use super::values::{self, Domain, VSet, Val};
+use crate::fxhash::{FxHashMap, FxHashSet};
 use crate::program::body::features::{
     FlowExpr, FlowFact, PCFNNode, PathHint, ValueFact, ValueLabel,
 };
 use crate::program::model::workspace::ModelRoutine;
 use al_syntax::IdentifierFoldExt;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 /// The most values a variable's set holds before it counts as unknown.
@@ -193,22 +194,23 @@ pub(super) enum ArgWrite {
 pub(super) struct FlowProgram {
     tree: Arc<PCFNNode>,
     vars: Vec<TVar>,
-    by_name: HashMap<String, u16>,
+    // ENG-117: the maps below are only looked up (never iterated), so FxHash.
+    by_name: FxHashMap<String, u16>,
     /// The object's globals the routine can see, folded, with their domain
     /// (`None`: a type the flow does not track).
-    globals: HashMap<String, Option<FDom>>,
+    globals: FxHashMap<String, Option<FDom>>,
     /// Per call site: the tracked variables it may write.
-    writes: HashMap<String, Vec<(u16, ArgWrite)>>,
+    writes: FxHashMap<String, Vec<(u16, ArgWrite)>>,
     /// Site id (operation or call site) → its index.
-    sites: HashMap<String, u32>,
+    sites: FxHashMap<String, u32>,
     /// An `error-call` operation id → the call site at its position (as
     /// `param_guard::alias_error_ops` pairs them).
-    alias: HashMap<String, String>,
+    alias: FxHashMap<String, String>,
     /// By-value parameters (index, slot).
     params: Vec<(u32, u16)>,
     /// Round-4 literal routes: per call site on a tracked interface local
     /// (an interface dispatch), the local's slot.
-    recv: HashMap<String, u16>,
+    recv: FxHashMap<String, u16>,
     /// Relevance (module [`relevance`]): the parameters whose entry value
     /// can decide a condition, bit per parameter index (< 64).
     pub(super) guard_mask: u64,
@@ -234,9 +236,9 @@ struct MaskWalk {
 /// The result of one evaluation of a program under one set of entry values.
 #[derive(Debug, Default)]
 pub(super) struct FlowEval {
-    dead: HashSet<u32>,
+    dead: FxHashSet<u32>,
     /// Per call-site index: the argument values the flow knows there.
-    args: HashMap<u32, Vec<(u32, VSet)>>,
+    args: FxHashMap<u32, Vec<(u32, VSet)>>,
     /// The keep verdicts a reachable call used ([`ArgWrite::Keep`]), sorted.
     pub(super) keeps: Vec<u32>,
     /// Every keep verdict the evaluation asked about (followed or not, at a
@@ -246,7 +248,7 @@ pub(super) struct FlowEval {
     pub(super) consulted: Vec<u32>,
     /// Round-4 literal routes: per reachable interface call site (its index)
     /// the enum values its receiver may hold there (`None`: unknown).
-    recv: HashMap<u32, Option<VSet>>,
+    recv: FxHashMap<u32, Option<VSet>>,
 }
 
 /// Every node of `n`'s subtree, `n` first.
@@ -305,8 +307,8 @@ impl FlowProgram {
             return None;
         }
         let mut vars = Vec::new();
-        let mut by_name = HashMap::new();
-        let mut globals = HashMap::new();
+        let mut by_name = FxHashMap::default();
+        let mut globals = FxHashMap::default();
         let mut params = Vec::new();
         for v in r.variables.iter() {
             let name = values::fold(&v.name);
@@ -357,7 +359,7 @@ impl FlowProgram {
             return None;
         }
         // What each call does to the tracked variables passed to it.
-        let mut writes: HashMap<String, Vec<(u16, ArgWrite)>> = HashMap::new();
+        let mut writes: FxHashMap<String, Vec<(u16, ArgWrite)>> = FxHashMap::default();
         for cs in &r.call_sites {
             for (j, info) in cs.argument_infos.iter().enumerate() {
                 let name = match info.kind.as_str() {
@@ -372,7 +374,7 @@ impl FlowProgram {
                 }
             }
         }
-        let mut recv = HashMap::new();
+        let mut recv = FxHashMap::default();
         for cs in &r.call_sites {
             let crate::program::body::features::PCallee::Member { receiver, .. } = &cs.callee
             else {
@@ -384,14 +386,14 @@ impl FlowProgram {
                 recv.insert(cs.id.clone(), slot);
             }
         }
-        let mut sites = HashMap::new();
+        let mut sites = FxHashMap::default();
         visit(&tree, &mut |n| {
             for id in [&n.operation_id, &n.callsite_id].into_iter().flatten() {
                 let next = sites.len() as u32;
                 sites.entry(id.clone()).or_insert(next);
             }
         });
-        let mut alias = HashMap::new();
+        let mut alias = FxHashMap::default();
         for op in r.operation_sites.iter().filter(|o| o.kind == "error-call") {
             if sites.contains_key(&op.id) {
                 continue;
@@ -583,11 +585,11 @@ impl FlowProgram {
             p: self,
             resolve,
             keep,
-            seen: HashSet::new(),
-            live: HashSet::new(),
-            args: HashMap::new(),
+            seen: FxHashSet::default(),
+            live: FxHashSet::default(),
+            args: FxHashMap::default(),
             keeps: Vec::new(),
-            recv: HashMap::new(),
+            recv: FxHashMap::default(),
             loops: Vec::new(),
             conds,
         };
@@ -668,11 +670,11 @@ struct Exec<'p> {
     p: &'p FlowProgram,
     resolve: &'p dyn Fn(&ValueLabel) -> Option<Val>,
     keep: &'p dyn Fn(u32) -> bool,
-    seen: HashSet<u32>,
-    live: HashSet<u32>,
-    args: HashMap<u32, Vec<(u32, VSet)>>,
+    seen: FxHashSet<u32>,
+    live: FxHashSet<u32>,
+    args: FxHashMap<u32, Vec<(u32, VSet)>>,
     keeps: Vec<u32>,
-    recv: HashMap<u32, Option<VSet>>,
+    recv: FxHashMap<u32, Option<VSet>>,
     /// Per enclosing loop: the states at its `break`s.
     loops: Vec<Vec<St>>,
     conds: Option<&'p mut HashMap<usize, Option<VSet>>>,
