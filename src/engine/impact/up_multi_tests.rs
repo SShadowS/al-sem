@@ -2,6 +2,19 @@
 //! visitor: one `Up` per root over its own single walk (`walk_multi`), then `summary`. Every
 //! pass-1 field of every root is compared (plan §Per-field plan, the P1 rows), with the
 //! nearest ancestors and the page-action sites.
+//!
+//! DISCRIMINATION (2026-11-17, `cargo test -p al-sem --lib multi_p1`), each red, then green on
+//! revert:
+//! 1. the worst tier taken as a node's best: `ancestors`;
+//! 2. node class masks without the Local split: `byRelation`;
+//! 3. the root's own nodes left out of its external callers: `externalCode`;
+//! 4. a hub's location from a site whose caller the root did not reach: `hubs`.
+//!
+//! LIMIT, a fifth break that stayed green: canonical node entries counted for the root's own
+//! nodes as well (`canon` given every root of the event, not `rest`). That exclusion (`Up::entry`
+//! returns early for a root node) is redundant with `changed`: every root node's canonical entry
+//! is a changed entry, in `up()` (every node with a changed stable id) and here (every root
+//! node), so no root counts it either way. Kept to match `Up`.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::PathBuf;
