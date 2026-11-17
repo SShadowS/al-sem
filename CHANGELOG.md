@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (ENG-115: a recursive member's inherited fact takes its nearest witness, as every other routine's does)
+
+- **What changed** (`src/engine/l4/capability_cone.rs`). A routine in a recursive SCC gets its
+  RAW inherited facts from `inherited_facts_by_bfs`, which kept each fact key's FIRST
+  encounter: among guard variants of one fact in a downstream cone, the first in key order;
+  across the walk, the first callee or sibling met, even when a later one reached the fact
+  nearer. Every candidate now competes under `candidate_wins` (nearer; at equal distance the
+  smaller first hop), the rule its doc states and the singleton walk and the producer-solve
+  entries already used; a new `pick_nearest` serves all three pick sites. A replaced pick
+  swaps the whole representative (its witness ids, `via`, first-hop fields and payload such
+  as the temp state), not the count: one pick per key, as before. "Nearest" is by the
+  engine's distances, where a cone entry counts SCCs (every member of one downstream SCC is
+  at its distance), as in the singleton walk.
+- **An intentional change of a preserved rule.** The cone-memory design kept first-seen on
+  purpose so its refactor changed nothing (`docs/superpowers/specs/2026-10-31-cone-memory-design.md`
+  §4, now marked superseded); no design chose it. The derived row, coverage, `analyze` and
+  every finding fingerprint never read these picks (`analyze` runs with `raw:
+  WitnessScope::None`).
+- **What it moves: nothing on CDO, nothing in the goldens.** Only a recursive member's
+  inherited facts can differ, and only where one fact is reached at different distances.
+  `cdo-before-after` (base `33b44992`) moved no finding, fingerprint or call-graph number,
+  and the full `alsem fingerprint --format json --deterministic` (165,818 inherited facts,
+  165,505 with a call-site witness) is byte-identical base and head. No suppression key or
+  outside reader's field changed.
+- **Pinned by** four hand-stated tests, each proved at its own site:
+  `the_bfs_pick_takes_a_nearer_siblings_direct_fact` (the sibling site; with only it back
+  on first-seen, this test alone fails), `the_bfs_pick_takes_the_nearest_entry_of_a_base_key`,
+  `the_bfs_pick_takes_the_nearest_entry_across_callees` and T3b (1), renamed
+  `t3b_recursive_walk_keeps_the_nearest_pick` and flipped from first-seen (the downstream
+  site; with only it back on first-seen, these three fail). T3b (2) still pins the
+  producer site, and ENG-109's key-order test (renamed
+  `a_frozen_cone_keeps_key_order_for_an_equal_distance_bfs_pick`) the equal-distance tie.
+
 ### Changed (ENG-127: the snapshot evidence shares its routine, file and context texts, and the view's fact table is exact-size, 45.8 MiB less resident memory on CDO)
 
 - **What changed** (`src/engine/l5/snapshot.rs`, `snapshot_view.rs`; no output change).

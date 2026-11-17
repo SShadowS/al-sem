@@ -2321,31 +2321,10 @@ fn inherited_facts_for_singleton<'g>(
     refs
 }
 
-/// Set-correct path for routines in recursive SCCs. Mirrors
-/// `inheritedFactsByBfs`.
-///
-/// #160 step 7a: this walk feeds the RAW half only (a member the `ConeScope`'s
-/// `raw: WitnessScope` keeps). The
-/// derived row of a recursive member is folded from its Cone-SCC's set (the
-/// SCC's fact cone) plus its own entries, never from these picks.
-///
-/// ⟨C1⟩ Note the asymmetry: a SIBLING member's facts come from the key-deduped
-/// `direct` map (not its raw Vec), while a downstream SCC contributes its cone
-/// entries. ⟨issue 33⟩ With the temp class in [`inherited_fact_key`] the fold
-/// is dedup-invariant, so the oracle's fold of these picks and the set fold
-/// agree (see `cone_derived`'s module docs). The walk returns its picks, one
-/// `(representative, first hop)` per key in emission order; [`emit_picks`]
-/// retags and sorts them into the raw output.
-///
-/// #69 D1.3 use (a): after the walk, the subject's own producer-solve entries
-/// (`own`) compete per key with the walk's picks under [`candidate_wins`]
-/// (a pick's dist is its hop count plus its cone entry's dist). A sibling's
-/// producers are not in `direct`, so they are never emitted in the sibling's
-/// frame; the subject reaches them through its own entries.
 /// ENG-115: one candidate of [`inherited_facts_by_bfs`] for base key `key`: kept when it is
 /// the key's first, or replaces the current pick when [`candidate_wins`] (nearer; at equal
 /// distance, the smaller first hop) — the singleton walk's rule. A replaced pick keeps its
-/// place, so the output order stays the walk's first-seen order.
+/// place in the walk's list (`emit_picks` sorts the output anyway).
 fn pick_nearest<'g>(
     seen: &mut BTreeMap<String, usize>,
     picked: &mut Vec<(&'g Arc<CapabilityFact>, usize, &'g TypedOutEdge)>,
@@ -2368,6 +2347,31 @@ fn pick_nearest<'g>(
     }
 }
 
+/// Set-correct path for routines in recursive SCCs. Began as a port of al-sem's
+/// `inheritedFactsByBfs`.
+///
+/// #160 step 7a: this walk feeds the RAW half only (a member the `ConeScope`'s
+/// `raw: WitnessScope` keeps). The
+/// derived row of a recursive member is folded from its Cone-SCC's set (the
+/// SCC's fact cone) plus its own entries, never from these picks.
+///
+/// ⟨C1⟩ Note the asymmetry: a SIBLING member's facts come from the key-deduped
+/// `direct` map (not its raw Vec), while a downstream SCC contributes its cone
+/// entries. ⟨issue 33⟩ With the temp class in [`inherited_fact_key`] the fold
+/// is dedup-invariant, so the oracle's fold of these picks and the set fold
+/// agree (see `cone_derived`'s module docs). The walk returns its picks, one
+/// `(representative, first hop)` per key in emission order; [`emit_picks`]
+/// retags and sorts them into the raw output.
+///
+/// ENG-115: every candidate of a key competes under [`candidate_wins`] ([`pick_nearest`]),
+/// the singleton walk's rule: a sibling's direct fact (its dist is the walk's hop count), a
+/// downstream cone's entry (hop count plus the entry's dist) and, after the walk, the
+/// subject's own producer-solve entries (`own`, #69 D1.3 use (a)). Until ENG-115 only `own`
+/// competed and the walk kept each key's first encounter. "Nearest" is by these distances:
+/// a cone entry's dist counts SCCs, so the members of one downstream SCC are all at its
+/// distance (the singleton walk measures the same way). A sibling's producers are not in
+/// `direct`, so they are never emitted in the sibling's frame; the subject reaches them
+/// through its own entries.
 fn inherited_facts_by_bfs<'g>(
     subject: &str,
     g: &'g TypedEdgeGraph,
@@ -9551,7 +9555,8 @@ codeunit 50100 C
 
 /// Cone-memory design step 1 (`docs/superpowers/specs/2026-10-31-cone-memory-design.md`
 /// §9): T0 (index sentinel), T1 (`materialize` = the old `retag`, accessors =
-/// `materialize`), T3b (the recursive walk's first-seen picks and in-place
+/// `materialize`), T3b (the recursive walk's picks — first-seen until ENG-115, the
+/// nearest since — and in-place
 /// producer replacement) and T7 (interning and subjects). Each states its
 /// precondition literally. (T3(b), the frozen pre-step-1 emission compared
 /// over every fixture app, ran through steps 1 and 2 and was deleted in step
@@ -9830,13 +9835,15 @@ mod cone_memory_step1_tests {
     }
 
     /// ENG-109: a frozen cone keeps its map's KEY ORDER, and a reader sees that order. A
-    /// downstream cone holds `K` and its guarded copy (one base key, two reps); the BFS walk
-    /// keeps the first entry it meets per base key, and in key order the plain `K` comes first,
-    /// so its rep is picked. Hand-stated: the cone is built literally and frozen the one way
-    /// production freezes. DISCRIMINATION: a freeze that reverses the order picks the guarded
-    /// copy's rep (sol and Fable, ENG-109 review: no other test pins the order).
+    /// downstream cone holds `K` and its guarded copy (one base key, two reps) at the SAME
+    /// distance; at equal distance and first hop the BFS walk keeps the first entry it meets
+    /// per base key (since ENG-115 a nearer one would replace it), and in key order the plain
+    /// `K` comes first, so its rep is picked. Hand-stated: the cone is built literally and
+    /// frozen the one way production freezes. DISCRIMINATION: a freeze that reverses the
+    /// order picks the guarded copy's rep (sol and Fable, ENG-109 review: no other test pins
+    /// the order).
     #[test]
-    fn a_frozen_cone_keeps_key_order_for_the_bfs_first_pick() {
+    fn a_frozen_cone_keeps_key_order_for_an_equal_distance_bfs_pick() {
         let edge_cm = TypedOutEdge::new(
             "M".into(),
             "direct-call".into(),
@@ -10006,6 +10013,62 @@ mod cone_memory_step1_tests {
                 .collect::<Vec<_>>(),
             vec![(Some("M2/near"), "M2")],
             "one key, one pick: the nearer callee's copy, through its own first hop"
+        );
+    }
+
+    /// ENG-115: a SIBLING member's direct fact competes too (the walk's first pick site).
+    /// {C, T} is recursive; `C` calls `D` first (its cone holds `K` at distance 2, so 1 + 2)
+    /// and then its sibling `T`, which holds `K` directly (1 hop). The sibling's copy is
+    /// nearer and is the pick, through `C`'s edge to `T`.
+    /// DISCRIMINATION: the first-seen pick at the sibling site alone (the downstream and own
+    /// sites unchanged) keeps `D/far`.
+    #[test]
+    fn the_bfs_pick_takes_a_nearer_siblings_direct_fact() {
+        let edge = |to: &str, cs: &str| {
+            TypedOutEdge::new(to.into(), "direct-call".into(), Some(cs.into()), None, None)
+        };
+        let (cd, ct) = (edge("D", "cs/CD"), edge("T", "cs/CT"));
+        let g = TypedEdgeGraph {
+            nodes: strs(&["C", "T", "D"]),
+            outgoing: [("C".to_string(), vec![cd, ct])].into(),
+            unresolved_sources: BTreeSet::new(),
+        };
+        let scc: HashMap<String, usize> = [
+            ("C".to_string(), 0),
+            ("T".to_string(), 0),
+            ("D".to_string(), 1),
+        ]
+        .into();
+        let mut far = insert("D", "t/K");
+        far.witness_operation_id = Some("D/far".into());
+        let mut near = insert("T", "t/K");
+        near.witness_operation_id = Some("T/near".into());
+        let key: Arc<str> = Arc::from(inherited_fact_key(&far).as_str());
+        assert_eq!(
+            &*key,
+            inherited_fact_key(&near).as_str(),
+            "precondition: both copies share one key"
+        );
+        let mut cone: ConeFacts = BTreeMap::new();
+        cone.insert(
+            Arc::clone(&key),
+            ConeFactEntry {
+                rep_key: Arc::from(rep_key(&far)),
+                rep: Arc::new(far),
+                dist: 2,
+                guard: None,
+            },
+        );
+        let cones: ConeMap = [(1usize, Arc::new(FrozenCone::freeze(cone)))].into();
+        let direct: RoutineDirectFacts = [("T".to_string(), dedup_direct(&[near]))].into();
+        let picks = inherited_facts_by_bfs("C", &g, &direct, &scc, &cones, &[]);
+        assert_eq!(
+            picks
+                .iter()
+                .map(|(rep, hop)| (rep.witness_operation_id.as_deref(), hop.to.as_str()))
+                .collect::<Vec<_>>(),
+            vec![(Some("T/near"), "T")],
+            "one key, one pick: the sibling's nearer direct fact"
         );
     }
 
