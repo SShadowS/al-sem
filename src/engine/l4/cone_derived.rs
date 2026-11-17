@@ -527,6 +527,45 @@ pub struct ConeDerivedStore {
     phys_reads_pool: Vec<ResId>,
     events_pool: Vec<ResId>,
     rows: HashMap<String, ConeDerivedRow>,
+    /// ENG-122: while the store is built, the windows already in each pool by content, so a
+    /// row whose ids equal an earlier row's shares that window (on CDO 22,953 non-empty event
+    /// windows hold 14,076 distinct contents, 15.5 M ids for 2.0 M). Emptied by
+    /// [`ConeDerivedBuilder::finish`], which also trims the pools to their length.
+    windows: WindowIndex,
+}
+
+/// ENG-122: per pool, a window's content hash -> the windows with that hash.
+#[derive(Debug, Default)]
+struct WindowIndex {
+    writes_all: HashMap<u64, Vec<Range<u32>>>,
+    phys_writes: HashMap<u64, Vec<Range<u32>>>,
+    phys_reads: HashMap<u64, Vec<Range<u32>>>,
+    events: HashMap<u64, Vec<Range<u32>>>,
+}
+
+/// ENG-122: `ids`' window in `pool`: an earlier window with the same content, or `ids`
+/// appended. Empty ids take `0..0` (as [`EMPTY_ROW`]). Every read goes through [`window`],
+/// so two rows sharing one window answer exactly as two copies would.
+fn share_window<T: Copy + Eq + std::hash::Hash>(
+    pool: &mut Vec<T>,
+    index: &mut HashMap<u64, Vec<Range<u32>>>,
+    ids: &[T],
+) -> Range<u32> {
+    use std::hash::{Hash, Hasher};
+    if ids.is_empty() {
+        return 0..0;
+    }
+    let mut h = std::hash::DefaultHasher::new();
+    ids.hash(&mut h);
+    let same = index.entry(h.finish()).or_default();
+    if let Some(w) = same.iter().find(|w| window(pool, w) == ids) {
+        return w.clone();
+    }
+    let start = pool.len() as u32;
+    pool.extend_from_slice(ids);
+    let w = start..pool.len() as u32;
+    same.push(w.clone());
+    w
 }
 
 /// ENG-114: the store's byte census (`tools/census-probe resident`). Read-only; no behaviour.
@@ -537,7 +576,48 @@ impl ConeDerivedStore {
         let row_key_bytes: usize = self.rows.keys().map(String::capacity).sum();
         let row_key_text: std::collections::HashSet<&str> =
             self.rows.keys().map(String::as_str).collect();
+        // ENG-122: how many rows' windows are distinct by content, and the ids those hold.
+        fn distinct<'a, T: std::hash::Hash + Eq + 'a>(
+            rows: impl Iterator<Item = &'a [T]>,
+        ) -> (usize, usize, usize) {
+            let mut seen = std::collections::HashSet::new();
+            let (mut nonempty, mut ids) = (0, 0);
+            for w in rows.filter(|w| !w.is_empty()) {
+                nonempty += 1;
+                if seen.insert(w) {
+                    ids += w.len();
+                }
+            }
+            (nonempty, seen.len(), ids)
+        }
+        let rows = || self.rows.values();
+        let windows = [
+            (
+                "writes_all",
+                distinct(rows().map(|r| window(&self.writes_all_pool, &r.table_writes_all))),
+            ),
+            (
+                "phys_writes",
+                distinct(rows().map(|r| window(&self.phys_writes_pool, &r.physical_table_writes))),
+            ),
+            (
+                "phys_reads",
+                distinct(rows().map(|r| window(&self.phys_reads_pool, &r.physical_table_reads))),
+            ),
+            (
+                "events",
+                distinct(rows().map(|r| window(&self.events_pool, &r.event_publishes))),
+            ),
+        ];
+        let window_line = windows
+            .iter()
+            .map(|(name, (nonempty, d, ids))| {
+                format!("{name} {nonempty} non-empty, {d} distinct ({ids} ids)")
+            })
+            .collect::<Vec<_>>()
+            .join("; ");
         vec![
+            format!("      ENG-122 windows: {window_line}"),
             format!(
                 "    ENG-114 cone_derived: {} rows (size_of row {} B; key heap {:.2} MiB, {} distinct keys); \
                  interner {} strings ({:.2} MiB text, stored twice)",
@@ -574,8 +654,10 @@ impl ConeDerivedStore {
             phys_reads_pool,
             events_pool,
             rows,
+            windows,
         } = self;
         vec![
+            ("det.cone_derived.window_index", Box::new(windows)),
             ("det.cone_derived.rows", Box::new(rows)),
             (
                 "det.cone_derived.writes_all_pool",
@@ -604,17 +686,23 @@ impl ConeDerivedStore {
     /// `routine_id`'s row, in the layout `finish_routine` gives (TLS-29: the
     /// parallel walk's merge, in SCC order).
     pub(crate) fn push_row(&mut self, routine_id: String, row: &FoldedRow) {
-        let push = |pool: &mut Vec<ResId>, ids: &[ResId]| {
-            let start = pool.len() as u32;
-            pool.extend_from_slice(ids);
-            start..pool.len() as u32
-        };
-        let table_writes_all = push(&mut self.writes_all_pool, &row.writes_all);
-        let start = self.phys_writes_pool.len() as u32;
-        self.phys_writes_pool.extend_from_slice(&row.phys_writes);
-        let physical_table_writes = start..self.phys_writes_pool.len() as u32;
-        let physical_table_reads = push(&mut self.phys_reads_pool, &row.phys_reads);
-        let event_publishes = push(&mut self.events_pool, &row.events);
+        let w = &mut self.windows;
+        let table_writes_all = share_window(
+            &mut self.writes_all_pool,
+            &mut w.writes_all,
+            &row.writes_all,
+        );
+        let physical_table_writes = share_window(
+            &mut self.phys_writes_pool,
+            &mut w.phys_writes,
+            &row.phys_writes,
+        );
+        let physical_table_reads = share_window(
+            &mut self.phys_reads_pool,
+            &mut w.phys_reads,
+            &row.phys_reads,
+        );
+        let event_publishes = share_window(&mut self.events_pool, &mut w.events, &row.events);
         self.rows.insert(
             routine_id,
             ConeDerivedRow {
@@ -1052,16 +1140,14 @@ impl Scratch {
     /// OR-merged).
     fn folded(&mut self) -> FoldedRow {
         let ids = |scratch: &mut Vec<ResId>| {
-            let mut v = Vec::new();
-            freeze_ids(scratch, &mut v);
-            v.into_boxed_slice()
+            normalize_ids(scratch);
+            Box::<[ResId]>::from(scratch.as_slice())
         };
-        let mut phys_writes = Vec::new();
-        freeze_masked(&mut self.phys_writes, &mut phys_writes);
+        normalize_masked(&mut self.phys_writes);
         FoldedRow {
             flags: self.flags,
             writes_all: ids(&mut self.writes_all),
-            phys_writes: phys_writes.into_boxed_slice(),
+            phys_writes: Box::from(self.phys_writes.as_slice()),
             phys_reads: ids(&mut self.phys_reads),
             events: ids(&mut self.events),
         }
@@ -1178,26 +1264,27 @@ impl ConeDerivedBuilder {
             return false;
         };
         let s = &mut self.store;
-        let copy = |pool: &mut Vec<ResId>, from: &[ResId], w: &Range<u32>| {
-            let start = pool.len() as u32;
-            pool.extend_from_slice(window(from, w));
-            start..pool.len() as u32
-        };
-        let table_writes_all = copy(
+        let w = &mut s.windows;
+        let table_writes_all = share_window(
             &mut s.writes_all_pool,
-            &old.writes_all_pool,
-            &r.table_writes_all,
+            &mut w.writes_all,
+            window(&old.writes_all_pool, &r.table_writes_all),
         );
-        let physical_table_reads = copy(
+        let physical_table_reads = share_window(
             &mut s.phys_reads_pool,
-            &old.phys_reads_pool,
-            &r.physical_table_reads,
+            &mut w.phys_reads,
+            window(&old.phys_reads_pool, &r.physical_table_reads),
         );
-        let event_publishes = copy(&mut s.events_pool, &old.events_pool, &r.event_publishes);
-        let start = s.phys_writes_pool.len() as u32;
-        s.phys_writes_pool
-            .extend_from_slice(window(&old.phys_writes_pool, &r.physical_table_writes));
-        let physical_table_writes = start..s.phys_writes_pool.len() as u32;
+        let event_publishes = share_window(
+            &mut s.events_pool,
+            &mut w.events,
+            window(&old.events_pool, &r.event_publishes),
+        );
+        let physical_table_writes = share_window(
+            &mut s.phys_writes_pool,
+            &mut w.phys_writes,
+            window(&old.phys_writes_pool, &r.physical_table_writes),
+        );
         s.rows.insert(
             routine_id.to_string(),
             ConeDerivedRow {
@@ -1246,11 +1333,18 @@ impl ConeDerivedBuilder {
     /// Freeze the routine in progress into the pools and record its row.
     pub fn finish_routine(&mut self, routine_id: &str) {
         let c = &mut self.cur;
-        let table_writes_all = freeze_ids(&mut c.writes_all, &mut self.store.writes_all_pool);
-        let physical_table_writes =
-            freeze_masked(&mut c.phys_writes, &mut self.store.phys_writes_pool);
-        let physical_table_reads = freeze_ids(&mut c.phys_reads, &mut self.store.phys_reads_pool);
-        let event_publishes = freeze_ids(&mut c.events, &mut self.store.events_pool);
+        let s = &mut self.store;
+        let w = &mut s.windows;
+        let table_writes_all =
+            freeze_ids(&mut c.writes_all, &mut s.writes_all_pool, &mut w.writes_all);
+        let physical_table_writes = freeze_masked(
+            &mut c.phys_writes,
+            &mut s.phys_writes_pool,
+            &mut w.phys_writes,
+        );
+        let physical_table_reads =
+            freeze_ids(&mut c.phys_reads, &mut s.phys_reads_pool, &mut w.phys_reads);
+        let event_publishes = freeze_ids(&mut c.events, &mut s.events_pool, &mut w.events);
         self.store.rows.insert(
             routine_id.to_string(),
             ConeDerivedRow {
@@ -1297,38 +1391,59 @@ impl ConeDerivedBuilder {
         self.finish_routine(routine_id);
     }
 
-    /// Consume the builder, yielding the frozen store.
+    /// Consume the builder, yielding the frozen store: the window index is dropped (no row
+    /// is added after this) and each pool trimmed to its length (ENG-122).
     pub fn finish(self) -> ConeDerivedStore {
-        self.store
+        let mut s = self.store;
+        s.windows = WindowIndex::default();
+        s.writes_all_pool.shrink_to_fit();
+        s.phys_writes_pool.shrink_to_fit();
+        s.phys_reads_pool.shrink_to_fit();
+        s.events_pool.shrink_to_fit();
+        s.rows.shrink_to_fit();
+        s
     }
 }
 
-/// Sort + dedup `scratch` and append it to `pool`, returning its window.
-fn freeze_ids(scratch: &mut Vec<ResId>, pool: &mut Vec<ResId>) -> Range<u32> {
+/// Sort + dedup `scratch` and give it its window in `pool` (shared with an equal one).
+fn freeze_ids(
+    scratch: &mut Vec<ResId>,
+    pool: &mut Vec<ResId>,
+    index: &mut HashMap<u64, Vec<Range<u32>>>,
+) -> Range<u32> {
+    normalize_ids(scratch);
+    share_window(pool, index, scratch)
+}
+
+/// Sort + dedup.
+fn normalize_ids(scratch: &mut Vec<ResId>) {
     scratch.sort_unstable();
     scratch.dedup();
-    let start = pool.len() as u32;
-    pool.extend_from_slice(scratch);
-    start..pool.len() as u32
 }
 
-/// Sort `scratch` by id, OR-merge the masks of equal ids, and append to `pool`.
-fn freeze_masked(scratch: &mut [(ResId, u8)], pool: &mut Vec<(ResId, u8)>) -> Range<u32> {
+/// Sort `scratch` by id, OR-merge the masks of equal ids, and give it its window in `pool`
+/// (shared with an equal one).
+fn freeze_masked(
+    scratch: &mut Vec<(ResId, u8)>,
+    pool: &mut Vec<(ResId, u8)>,
+    index: &mut HashMap<u64, Vec<Range<u32>>>,
+) -> Range<u32> {
+    normalize_masked(scratch);
+    share_window(pool, index, scratch)
+}
+
+/// Sort by id and OR-merge the masks of equal ids.
+fn normalize_masked(scratch: &mut Vec<(ResId, u8)>) {
     scratch.sort_unstable();
-    let start = pool.len();
-    for &(id, mask) in scratch.iter() {
-        // Merge only within THIS routine's window — never into the previous
-        // routine's last entry.
-        if pool.len() > start
-            && let Some(last) = pool.last_mut()
-            && last.0 == id
-        {
-            last.1 |= mask;
-            continue;
+    // `dedup_by` hands (later, kept): a later entry with the kept one's id folds its mask in.
+    scratch.dedup_by(|later, kept| {
+        if later.0 == kept.0 {
+            kept.1 |= later.1;
+            true
+        } else {
+            false
         }
-        pool.push((id, mask));
-    }
-    start as u32..pool.len() as u32
+    });
 }
 
 /// Hand-built facts and edges, shared by this module's tests and the
@@ -2204,6 +2319,61 @@ mod tests {
         assert_eq!(out.derived.physical_table_reads_of("r/x"), vec!["t/C"]);
         // Events: `publish` + `event` + a resource_id, deduped and sorted.
         assert_eq!(out.derived.publishes_events_of("r/x"), vec!["e/A", "e/B"]);
+    }
+
+    // -- ENG-122 shared windows -------------------------------------------------
+
+    /// ENG-122: rows with equal ids share one window, and each still reads its own ids.
+    /// `r/a` and `r/b` publish the same two events, `r/c` a third: the events pool holds
+    /// three ids, not five, and every row answers as before.
+    /// DISCRIMINATION: `share_window` appending always (no lookup) leaves five ids.
+    #[test]
+    fn equal_windows_are_stored_once_and_each_row_reads_its_own() {
+        let mut b = ConeDerivedBuilder::default();
+        for (rid, events) in [
+            ("r/a", &["e/B", "e/A"][..]),
+            ("r/b", &["e/A", "e/B"][..]),
+            ("r/c", &["e/C"][..]),
+        ] {
+            b.begin_routine();
+            for e in events {
+                b.fold_fact(&fact("X", "publish", "event", Some(e)));
+            }
+            b.finish_routine(rid);
+        }
+        let s = b.finish();
+        assert_eq!(s.publishes_events_of("r/a"), vec!["e/A", "e/B"]);
+        assert_eq!(s.publishes_events_of("r/b"), vec!["e/A", "e/B"]);
+        assert_eq!(s.publishes_events_of("r/c"), vec!["e/C"]);
+        assert!(s.publishes_events_of("r/none").is_empty());
+        assert_eq!(s.events_pool.len(), 3, "the shared window once, then e/C");
+        assert_eq!(s.events_pool.capacity(), 3, "finish trims the pool");
+        assert!(s.windows.events.is_empty(), "finish drops the index");
+    }
+
+    /// ENG-122: a window is shared only when its content is equal, never on the hash alone.
+    /// The index is hand-stated to hold, under `[7, 8]`'s hash, a window whose content is
+    /// `[1, 2]` (as a hash collision would): `[7, 8]` must get its own window.
+    /// DISCRIMINATION: dropping the content check (`find(|_| true)`) returns `[1, 2]`'s window.
+    #[test]
+    fn a_window_is_shared_on_equal_content_not_on_the_hash() {
+        use std::hash::{Hash, Hasher};
+        let mut pool: Vec<ResId> = vec![1, 2];
+        let want: Vec<ResId> = vec![7, 8];
+        let mut h = std::hash::DefaultHasher::new();
+        want.as_slice().hash(&mut h);
+        let mut index: HashMap<u64, Vec<Range<u32>>> = HashMap::new();
+        // One window, `0..2` (a `Vec` of ranges, not the range's numbers).
+        let held: Vec<Range<u32>> = std::iter::once(0..2).collect();
+        index.insert(h.finish(), held);
+        let w = share_window(&mut pool, &mut index, &want);
+        assert_eq!(window(&pool, &w), &want[..]);
+        assert_eq!(w, 2..4);
+        assert_eq!(
+            share_window(&mut pool, &mut index, &want),
+            2..4,
+            "now shared"
+        );
     }
 
     // -- interner invariants ---------------------------------------------------
