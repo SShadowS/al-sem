@@ -2,114 +2,155 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Replace `impact`'s 699 per-root reverse walks with one bit-parallel multi-source walk.
-Every root's `up` row must stay byte-identical. The target is 8-12 % of `impact --diff`'s CPU on
-CDO, and the bar is at least 5 %.
+Revision 2, after the two-model review of revision 1 (Fable and gpt-6.1-sol, 2026-11-17). Both
+rejected the event model and the slot rule; both fixes are below.
+
+**Goal:** Replace `impact`'s per-root reverse walks AND its union walk with one bit-parallel
+multi-source walk. Every root's `up` row and the union summary must stay byte-identical (cost and
+timing fields excepted, §Cost fields). The target is 8-12 % of `impact --diff`'s CPU on CDO, and
+the bar is at least 5 % with wall time not worse.
 
 **Architecture:**
-- **The walk.** `reverse::multi_walk` traverses the union state graph once per BFS level, with
-  each state carrying the roots that reach it as a bit set. It processes each level's states in
-  sorted state order and each state's sites in `sites_into` order, exactly as every per-root walk
-  does. So each root receives the same sequence of reach, step and rejoin events as its own walk.
-- **The visitor.** A bit-set-aware visitor, `UpMulti`, consumes the events. Reachability-only
-  fields come from per-node and per-entry root masks (pass 1). Fields that need a node's *final*
-  class, or a bounded list of first arrivals, come from a second traversal with pass 1's final
-  masks known (pass 2).
-- **The oracle.** The per-root walk stays as the test oracle, never as a production path.
+- **The walk.** `reverse::multi_walk` runs one traversal of the union state graph per BFS level
+  for a chunk of logical roots. Each next-level arrival is a record `(lane, child, from, site,
+  new_bits)`. A level is processed in `(lane, child)` order, records of one child in arrival
+  order. So every root sees exactly the event sequence of its own `walk_multi` (Task 1 proves it
+  by trace equality).
+- **The visitor.** `UpMulti` consumes the events. It folds root bit masks per reached node and
+  per canonical entry (pass 1), and fills witness slots with the real keys (pass 2).
+- **Union and workers.** The union walk becomes one more logical root, whose lanes are every
+  root's nodes, so `Up`, `summary` and `classified` leave production. Root chunks run on the reach
+  pool's workers, as the per-root tasks do now.
 
 **Tech Stack:** Rust, the al-sem crate (`src/program/impact_graph/reverse.rs`,
-`src/engine/impact/up.rs`), `crate::fxhash`, and the existing impact goldens and CDO ratchets.
+`src/engine/impact/up.rs`), `crate::fxhash`, the impact goldens, and the lib CDO phase of
+`cdo-gate`.
 
-**Spec:** `docs/superpowers/notes/2026-11-17-eng125-shared-walk.md` (revision 2). Prototype and
-measurements: branch `tools/eng-125-proto` (db28c331, never lands) and
-`/work/.al-sem/profiles/2026-11-17-eng125/`.
+**Spec:** `docs/superpowers/notes/2026-11-17-eng125-shared-walk.md` (revision 2). Prototype:
+`tools/eng-125-proto` db28c331 (never lands). Measurements: `/work/.al-sem/profiles/2026-11-17-eng125/`.
 
 ## Global Constraints
 
-- Code starts only after ENG-128 lands: it adds the every-arrival `ConeVisitor` hook this plan
-  builds on (orchestrator, condition 1).
-- Every root's `up` JSON is byte-identical to today's, per field, with a test per field
-  (condition 2).
-- At least 3 more clean timing rounds of the ceilings before code (condition 3; Task 0).
-- Two-model review of this plan before code (condition 4).
-- No dual production path (owner principle 16): the per-root walk survives only as a
-  `#[cfg(test)]` oracle and in the CDO comparison test.
-- Bar for landing: impact CPU down at least 5 % on CDO (3+ alternating clean rounds), outputs
-  byte-identical, `cdo-before-after` unmoved, `cdo-speed` twice PASS, Fable and sol review.
+- **Code starts after ENG-128 lands** (condition 1). This plan builds on its hook:
+  `ConeVisitor::rejoin(root, s, hops, site)`, called for an arrival the walk drops (the `else` of
+  `scratch.insert(n)`), after the follow_open, guard and step filters, with hops = parent + 1. It
+  also builds on `Up::count_publisher(site, hops, tier)`, fed by `reach`'s `Via::Site` and by
+  `rejoin`.
+- **Byte-identical per field, a test per field** (condition 2; the table below).
+- **3+ more clean ceiling rounds before code** (condition 3; Task 0).
+- **Two-model review of this plan before code** (condition 4).
+- **No dual production path** (principle 16). The per-root walk with `Up` survives only as a
+  `#[cfg(test)]` oracle, which the lib tests and a lib CDO test (`cdo` in its name, the `--lib cdo`
+  phase of `cdo-gate`) both reach.
+- **Test selection's own walk** (`test_select::select`) is out of scope and unchanged.
+- **The bar for landing:** impact CPU down at least 5 % on CDO over 3+ agreeing clean rounds,
+  wall time not worse (cdo-speed's 1.30 limit), peak RSS within 1.10, outputs byte-identical,
+  `cdo-before-after` unmoved, `cdo-speed` twice PASS, then Fable and sol.
 
 ## Review Focus
 
-1. **A root with several nodes** (`#if` arms; none on CDO, 0 of 699). `walk_multi` labels each
-   state with its nearest arm, and ties go by arm order. The multi walk must reproduce the
-   per-arm order (lanes, Task 1). A fixture test pins it.
-2. **The universal hub** (none on CDO). It is injected once per root after level 0, with tier
-   `OnlyOpen`. A fixture test pins it.
-3. **A root that hits the state budget** (none on CDO). Its bit must stop at the same processed
-   state, mid-level, in sorted order, and report `limited`. A fixture test with a small budget
-   pins it.
-4. **The table-event guard.** A guarded state is a different state, and a raising site that
-   proves the guard is not crossed. The multi walk must use `walk_multi`'s exact guard rule. A
-   fixture with a temporary-record raise pins it.
-5. **Ties at equal key.** Two entries or nodes with the same (class, tier, hops) are decided by
-   per-root arrival order `at`. The pass-2 slot fill must take the first one in processing order.
-   A fixture with two equal-key entries pins it.
+1. **Mixed-hop events within a level.** Action-run entries, `canon.add` from `step` and `rejoin`
+   carry hops + 1 while level h is being processed. A slot must not keep an h+1 item over a later
+   h one. Task 3 has a fixture with an early h+1 action-run arrival and a later h entry.
+2. **Two roots reaching one state from different parents** at the same level: each root's `via`
+   and `from` must be its own. Task 1 has a fixture.
+3. **Lanes:**
+   - **Order:** a level is sorted by (lane, state).
+   - **One visited set per logical root:** a state seen by any lane is blocked for every lane.
+   - **A state can sit in a level twice,** for different roots on different lanes.
+   - Task 1 has a two-arm fixture with unequal distances.
+4. **The state budget's exact boundary.**
+   - `walk_multi` fires `limit` only when a further state would be processed.
+   - A root with exactly `budget` states is not limited.
+   - The last permitted state still runs all its steps and entries.
+   - Task 1 tests budgets 0, exact and exact + 1.
+5. **Crossed best tier and best class.** A node's legacy best tier and its class witness can come
+   from different states (local navigation against dependency code). `byRelation` needs the joint
+   (population, tier rank) masks. Task 2 has a fixture.
 
 ---
+
+## Event model (Task 1)
+
+`multi_walk` emits, per logical root bit set, exactly what a `ConeVisitor` gets from that root's
+`walk_multi`, in the same order:
+
+- **`reach(s, hops, via, from)`, then `report`'s calls**, when a level record is processed:
+  `hidden` once per (root, node), `entry` with the node's kinds plus the overlay and background
+  kinds, `external`, and `source`.
+- **`step(from, site)`, before the visited check.**
+- **The action-run `entry(n, PageAction, hops + 1)`,** deduplicated per (root, child state) like
+  `action_entries`, when the step's site is an action run.
+- **`rejoin(n, hops + 1, site)`** for the roots whose bit is already in `seen[child]`.
+- **The universal hub, after level 0:** one record per lane-0 root, when `follow_open`, the hub
+  has callers, and the root is non-empty and not yet at the hub.
+- **`limit`:** per root, when a further state would be processed past the budget.
+  **Cancellation** is polled every `CANCEL_EVERY` processed records; a cancelled run errors, and
+  byte identity is not required there.
 
 ## Per-field plan (condition 2)
 
 Notation:
-- **P1:** pass 1, root masks.
-- **P2:** pass 2, the same traversal with P1's final masks known.
-- **`at`:** the per-root processing index. Levels go in order, states in sorted order within a
-  level, and the root's own states are counted.
+- **P1:** pass 1, the root-mask folds.
+- **P2:** pass 2, the second traversal with P1's final masks known.
+- **Slot:** a per-(root, list) bounded vector, compared by the field's real key with event order
+  as the last tie-break. It is closed only at a level boundary after the level holding its worst
+  member's hops + 1. Events never carry more than hops + 1.
 
-| `up` field | how it is computed | why it is exact | test (Task 4/5) |
+| `up` field | mechanism | exact because | test |
 |---|---|---|---|
-| `states`, `maxHops` | P1: count of a root's processed states; last level with its bit | the same level sets (Task 1) | `multi_states_and_max_hops_equal_oracle` |
-| `ancestors.{local,throughDependency,onlyOpen,total}` | P1: per node, `tier_mask[t] \|= bits`; a root's best tier = the lowest t with its bit | `NodeBest.tier` is the minimum tier over reached states | `multi_ancestor_tiers_equal_oracle` |
-| `hidden`, `rootEntryKinds/Word/UserOrJob`, `hubs[].at` | P1: per node "reached" mask; hub `at` = min anchor over sites from reached nodes | reachability only | `multi_hidden_root_entry_hubs_equal_oracle` |
-| `byRelation`, `entriesByKind`, `entriesByContext`, `programShare`, `entryNotes`, `externalCode` | P1: per node and per canonical entry, `pop_mask[p] \|= bits` (pop from tier and ext); best pop = lowest p | `Witness::key` puts population first; the counts use only the final class | `multi_classified_counts_equal_oracle` |
-| `entries[].count/onlyOpen`, `external[].count/onlyOpen`, `userOrJobEntries`, `entryBuckets` | P1: per (node, kind) and (node, why) masks `any` and `non_open` | `Firsts` counts distinct nodes; only-open = `any & !non_open` | `multi_firsts_counts_equal_oracle` |
-| `eventPublishers.*` | ENG-128's `count_publisher(site, hops, tier)`, fed by first arrivals (`reach`'s `Via::Site`) and by `rejoin` (dropped arrivals): P1 masks for counts, P2 slots for `first` | after ENG-128 a publisher counts on any event-dispatch arrival, first or dropped | `multi_event_publishers_equal_oracle` |
-| `entries[].first`, `external[].first`, `eventPublishers.first`, `.direct.first` | P2: per (root, list) bounded slots: the first `keep.per_list` distinct nodes, non-open ones first, in processing order. A root's bit leaves a list's active mask once the list is full of non-open nodes | `Firsts::first` sorts by (open, hops, at), and processing order is (hops, at) | `multi_first_lists_equal_oracle` |
-| `entries[].first[].action/caption` | P2: `action_site` for the (root, node) pairs in the lists: the first action-run step with `st.from == n` in processing order | `Up::step` keeps the first `or_insert` | `multi_page_action_captions_equal_oracle` |
-| `firstByKind`, `nearest` (entry case) | P2: per (root, word, pop p, tier rank t) slot: the first arrival of an entry whose P1 final pop is p, arriving with pop p and rank t; then min over t | `(key, at)` minimum with key = (p, t, hops), and processing order is (hops, at) | `multi_first_by_kind_and_nearest_equal_oracle` |
-| `nearest` (ancestor fallback) | P2: the same per (root, p, t) over non-root, non-hub nodes whose final pop is p | the same | in the test above |
-| `nearestAncestors` (+ hops) | P1: the first `keep.ancestors` distinct non-root nodes with a stable id, in processing order. P2: each one's hops at its best tier (the first arrival at the P1 best tier) | `Up::reach` pushes in arrival order; `NodeBest.hops` = hops at the minimum (tier, hops) | `multi_nearest_ancestors_equal_oracle` |
-| `limited` | budget per root, counted in processing order | Task 1 | `multi_state_budget_equal_oracle` |
-| everything else (`callers`, `display`, `nodes`, `programEntries`, `programEntriesByKind`) | unchanged, not from the walk | — | the whole-row test |
+| `states`, `maxHops` | P1: count of delivered `reach` events per root; the last level with a reach | Task 1's trace equality | `multi_states_and_max_hops_equal_oracle` |
+| `ancestors.{local,throughDependency,onlyOpen,total}` | P1: `tier[3]` per reached node; best = the lowest tier with the root's bit; roots AND hubs left out | `NodeBest.tier` is the minimum over reached states (up.rs summary) | `multi_ancestor_tiers_equal_oracle` |
+| `hidden` | per node, static channels × `reached` | `report` calls it once per (root, node) | `multi_hidden_equal_oracle` |
+| `rootEntryKinds/Word/UserOrJob` | per root: the entry kinds of its own nodes, overlay included | static per node | `multi_root_entry_equal_oracle` |
+| `hubs[].at` | per hub node reached: the minimum FORMATTED location string over sites from reached nodes | as summary computes it | `multi_hubs_equal_oracle` |
+| `byRelation`, `entriesByKind`, `entriesByContext`, `programShare`, `entryNotes` | P1: joint `class[pop × tier rank]` masks per reached node and per canonical entry (both from `entry` → `inv.of_node` and `step` → `inv.of_site`); best = the lowest (pop, rank) | `Witness::key`'s order is (population, tier rank, hops) | `multi_classified_counts_equal_oracle` (with Review Focus 5's fixture) |
+| `externalCode` | P1: per external why, nodes whose best class is Code; root nodes NOT left out | as up.rs computes it, from the unfiltered `best` | `multi_external_code_equal_oracle` |
+| `entries[].count/onlyOpen`, `userOrJobEntries`, `entryBuckets` | per node static kinds × `reached`, `non_open = tier[Local] \| tier[Dep]`; PageAction from action-run arrivals adds two masks of its own; root nodes left out (`Up::entry`) | `Firsts` counts distinct nodes; only-open = `any & !non_open` | `multi_entry_counts_equal_oracle` |
+| `external[].count/onlyOpen` | static whys × `reached`; root nodes kept (`Up::external`) | as above | `multi_external_counts_equal_oracle` |
+| `eventPublishers.*` | P1 masks via `count_publisher` from reach and `rejoin`; `direct` per root (sites into its own nodes) | ENG-128's rule | `multi_event_publishers_equal_oracle` |
+| `entries[].first`, `external[].first`, `eventPublishers.first`, `.direct.first` | P2 slots keyed (open by P1's final `any & !non_open`, hops, event order), at most `keep.per_list` | `Firsts::first` sorts by (open, hops, at) | `multi_first_lists_equal_oracle` (with Review Focus 1's fixture) |
+| `entries[].first[].action/caption` | P1: per page-action node, (site, bits) in event order from `step`; the first record with the root's bit gives `action_site` | `Up::step`'s first `or_insert`, independent of the lists | `multi_page_action_captions_equal_oracle` |
+| `firstByKind`, `nearest` (entry) | P2 slots per (root, word, final pop p), keyed (tier rank, hops, event order); candidates are entries whose P1 final class pop is p, arriving with pop p | `classified`: min `(key, at)` among entries of final population p | `multi_first_by_kind_and_nearest_equal_oracle` |
+| `nearest` (ancestor fallback) | P2 slots per (root, p) over non-root, non-hub nodes of final pop p, the full witness with `ext` (`needsNavigation`) | the same | in the test above |
+| `nearestAncestors` (+ hops) | P1: the first `keep.ancestors` distinct non-root nodes with a stable id, by reach order; P2: hops at the first reach at the node's final best tier | `Up::reach` pushes in arrival order; `NodeBest` keeps the min (tier, hops) | `multi_nearest_ancestors_equal_oracle` |
+| `limited` | Task 1's budget rule | trace equality | `multi_state_budget_equal_oracle` |
+| `callers`, `display`, `nodes`, `programEntries`, `programEntriesByKind`, not-in-graph rows | unchanged | not from the walk | `multi_rows_equal_oracle_rows` |
+| **union summary** (`union`) | the same folds for the union logical root (lanes = every root's nodes) | the same | `multi_union_equals_oracle_union` |
 
-Each per-field test runs the oracle (today's per-root `walk_root` row) and the multi row on the
-same fixtures and compares that field's JSON. The whole-row test compares every row, byte for
-byte.
+### Cost fields
 
-## File structure
+`cost.perRootStates`, `unionStates`, `walksUs`, `walkMs`, `visitorBytes` and `scratchBytes`:
+- the state counts stay exact;
+- the times and bytes now describe the multi walk;
+- the comparisons blank them, as `up_par_tests.rs` already does.
 
-- `src/program/impact_graph/reverse.rs`: `multi_walk`, `RootBits`, `MultiSink` (the event
-  interface); the per-root `walk_multi` is unchanged.
-- `src/program/impact_graph/multi_walk_tests.rs`: Task 1-2 tests (oracle event-sequence equality).
-- `src/engine/impact/up_multi.rs`: `UpMulti`, the P1 masks, the P2 slots, `rows()`, which
-  builds the same JSON as `summary` and `walk_root`. It reuses `summary`'s helpers (`node_json`,
-  `witness_json`, `by_relation`, `share_json`), made `pub(super)`.
-- `src/engine/impact/up_multi_tests.rs`: the per-field tests in the table above.
-- `src/engine/impact/up.rs`: `up()` calls `UpMulti` instead of the per-root pass. `walk_root`
-  moves under `#[cfg(test)]` as the oracle, used by the tests and by the CDO comparison.
+### Memory bound
+
+The masks are sparse by reached node and reached entry: 11 words (88 B) per family. Per node:
+- `reached`;
+- `tier[3]`;
+- `class[18]`;
+- page-action any/non-open (2);
+- publishers any/non-open and direct (4).
+
+That is 28 families × 23,066 reached nodes ≈ 57 MiB. The 18 class families × ~15,000 reached
+entries ≈ 24 MiB. Each chunk's traversal adds `seen` (≤ 191,824 states × 88 B ≈ 16 MiB) plus
+the level records. So about 100 MiB per worker chunk at 699 roots, and chunks of k roots scale
+as k/699. Task 2 measures it; the bound against cdo-speed's 1.10 of the one-shot's 3.5 GB peak
+is about 350 MiB.
 
 ---
 
 ### Task 0: Three more clean ceiling rounds (condition 3)
 
-**Files:** none (prototype binary from `tools/eng-125-proto`).
+- [ ] **Step 1:** Run `scratchpad/e125-proto3.sh`: default / noop / skip, rounds 5-7, rotated
+  order, host pressure logged.
+- [ ] **Step 2:** Leave out a round with sys > 30 s or host pressure above 15 %.
+- [ ] **Step 3:** From all clean rounds (1, 4 and the new ones), report the means and ranges of
+  default − skip and noop − skip. **Stop and report** if default − skip is under 8 %.
 
-- [ ] **Step 1:** Run `scratchpad/e125-proto3.sh` (default / noop / skip, rounds 5-7, rotated
-  order, host CPU pressure logged) in the CDO slot.
-- [ ] **Step 2:** Drop any round with sys > 30 s or host `some avg10` > 15 %.
-- [ ] **Step 3:** With at least 3 clean rounds in all (rounds 1, 4 and the new ones), report the
-  means and ranges of default − skip (the per-root pass) and noop − skip (its traversal).
-  **Stop and report** if the per-root pass is under 8 %: the target then cannot clear the bar.
-
-### Task 1: `multi_walk`, the traversal core
+### Task 1: `multi_walk` and the event model
 
 **Files:**
 - Modify: `src/program/impact_graph/reverse.rs`
@@ -118,139 +159,135 @@ byte.
 **Interfaces:**
 - Produces:
   ```rust
-  pub struct RootBits(pub Box<[u64]>); // one bit per logical root
+  pub struct RootBits(pub Box<[u64]>);
   pub trait MultiSink {
       fn reach(&mut self, s: WalkState, hops: u32, via: Via, from: Option<WalkState>, roots: &RootBits);
-      fn step(&mut self, from: WalkState, site: SiteIx, roots: &RootBits) -> u8; // ext bits; pure in (from, site)
-      // ENG-128's `ConeVisitor::rejoin`: an arrival the walk drops (the state is already
-      // seen for that root), after the follow_open, guard and step filters; `hops` = parent + 1.
+      fn hidden(&mut self, n: NodeIx, ch: HiddenChannel, roots: &RootBits);
+      fn entry(&mut self, n: NodeIx, kinds: &[EntryKind], s: WalkState, hops: u32, roots: &RootBits);
+      fn external(&mut self, n: NodeIx, why: ExternalWhy, s: WalkState, hops: u32, roots: &RootBits);
+      fn source(&mut self, s: WalkState, hops: u32, roots: &RootBits);
+      fn step(&mut self, from: WalkState, site: SiteIx, roots: &RootBits) -> u8; // pure in (from, site)
       fn rejoin(&mut self, n: WalkState, hops: u32, site: SiteIx, roots: &RootBits);
       fn limit(&mut self, root: usize, l: Limit);
   }
+  /// `roots[i]` = logical root i's lanes (its nodes, in order).
   pub fn multi_walk(g: &SitedGraph, roots: &[Vec<NodeIx>], opts: &WalkOptions<'_>, sink: &mut dyn MultiSink) -> Vec<WalkStats>;
   ```
-  The `report` side effects (hidden, entry kinds, external, source) are emitted inside `reach` as
-  `walk_multi`'s `report` does, with the same arguments.
-- **Lanes for multi-node roots:** each node of a root has its own lane, ordered by node position
-  as `walk_multi`'s `roots` slice is. Within a level, lanes go in order. A state first reached by
-  lane i blocks it for lanes > i of the same root. That gives `walk_multi`'s "nearest root, ties
-  by root order".
 
-- [ ] **Step 1: Write the oracle tests**
-  - `multi_walk_event_sequence_equals_per_root_walks`: on the `World`-built graphs of
-    `src/engine/impact/up_tests.rs` and `src/program/impact_graph/reverse_tests.rs`, plus three new
-    `World` fixtures (a table-event guard, a universal hub, a two-arm root), and on the sited graph
-    of `tests/fixtures/test-universe` (`cli_impact`'s fixture). For each root, demultiplex the events whose bit is set. Assert the sequence of
-    `(reach state, hops, via, from)`, `step (from, site)` and `rejoin (n, hops, site)` equals the
-    sequence a recording `ConeVisitor` sees from that root's `walk_one` or `walk_multi`. Lengths
-    must be equal too.
-  - `multi_walk_budget_stops_each_root_where_its_walk_does`: budget 7 on a fixture where two
-    roots exceed it. Equal event prefixes, and `limit` for those roots only.
-- [ ] **Step 2:** Run `cargo test -p al-sem --lib multi_walk`. Expected: FAIL (no `multi_walk`).
-- [ ] **Step 3: Implement `multi_walk`**
-  - Intern states in an FxHashMap, with per-state `seen` bits.
-  - Each level is a `Vec<(state_ix, RootBits)>` sorted by `WalkState`'s `Ord`.
-  - Per site: apply `walk_multi`'s open, guard and `step` rule. Call `rejoin` with
-    `parent_bits & seen[child]` (the roots that drop this arrival), taken BEFORE the new bits are
-    set. Then `new = parent_bits & !seen[child]`, set them, and add the child to the next level.
-  - The universal hub goes after level 0 for every non-empty root.
-  - Budget: a per-root processed counter; a root's bit is cleared from the rest of the run when
-    it reaches the budget.
-  - Cancellation: checked every `CANCEL_EVERY` processed (state, word) units.
+- [ ] **Step 1: Write the tests**
+  - `multi_walk_traces_equal_per_root_walks`: a recording sink, demultiplexed by bit. For every
+    logical root, the full callback trace (every method above, with arguments) equals a recording
+    `ConeVisitor`'s trace from `walk_multi` on that root's nodes. The graphs:
+    - the `World` graphs of `up_tests.rs` and `reverse_tests.rs`;
+    - new `World` fixtures: two roots reaching one state from different parents; a two-arm root
+      with unequal distances; the universal hub (with an already-reached hub); a table-event
+      guard; action-run sites (a page reached twice);
+    - `tests/fixtures/test-universe`'s sited graph.
+  - `multi_walk_budget_boundaries`: budgets 0, exact and exact + 1, on a fixture with two
+    roots. Trace equality, including the last state's steps.
+- [ ] **Step 2:** Run `cargo test -p al-sem --lib multi_walk`. Expected: FAIL.
+- [ ] **Step 3: Implement**
+  - Intern states in an FxHashMap, with `seen: RootBits` per state (shared by a root's lanes).
+  - A level is `Vec<(lane, child, from, site, new_bits)>`, stably sorted by (lane, `WalkState`).
+    Process each record: reach and report for its bits, then the steps for the record's bits.
+  - Per site: apply the open, guard and step rules; the action-run entry for
+    `bits & !action_entries[child]`; `rejoin` for `bits & seen[child]`; then
+    `new = bits & !seen[child]`, set them, and push a record.
+  - Budget and cancellation as §Event model says.
 - [ ] **Step 4:** Run the tests. Expected: PASS.
 - [ ] **Step 5: Discrimination proofs, each red then green**
-  - The level sort by `state_ix` instead of `WalkState` → the sequences differ.
-  - Lanes collapsed into one bit → the two-arm fixture differs.
-  - The universal injection dropped → the hub fixture differs.
+  - The level keyed by `state_ix`. Assert first, on the fixture, that intern order ≠ `WalkState`
+    order.
+  - One record per child (provenance dropped).
+  - Lanes blocking only higher lanes.
+  - `rejoin` bits taken after `seen` is updated.
+  - `limit` fired at the budget instead of past it.
 - [ ] **Step 6:** Commit.
 
-### Task 2: `UpMulti` pass 1, the reachability fields
+### Task 2: `UpMulti` pass 1, and the go/no-go
 
 **Files:**
 - Create: `src/engine/impact/up_multi.rs`, `src/engine/impact/up_multi_tests.rs`
-- Modify: `src/engine/impact/up.rs` (helpers `pub(super)`)
+- Modify: `src/engine/impact/up.rs` (`node_json`, `witness_json`, `by_relation`, `share_json`,
+  `display`, `callers_json` become `pub(super)`)
 
 **Interfaces:**
-- Consumes: Task 1's `MultiSink`, `multi_walk`.
-- Produces: `pub(super) struct UpMulti<'g>` with
-  `fn new(g, keep, roots: &[Vec<NodeIx>], shared) -> Self`, implementing `MultiSink`.
-  - Per node: `reached`, `tier[3]`, `pop[6]`, `kind_any[13]`, `kind_nonopen[13]`,
-    `why_any[3]`, `why_nonopen[3]`, `hidden` (`RootBits` each).
-  - Per canonical entry: `pop[6]`.
-  - Per root: `states`, `max_hops`, `root_entry`, and the first `keep.ancestors` list.
+- Consumes: Task 1.
+- Produces: `pub(super) struct UpMulti<'g>`:
+  - `fn new(g, keep, roots: &[Vec<NodeIx>], union: bool, shared) -> Self`;
+  - the §Memory bound masks, sparse by reached node and entry;
+  - `fn rows_p1(&self) -> Vec<P1Row>`.
 
-- [ ] **Step 1:** Write the P1 tests from the table (`multi_states_and_max_hops_equal_oracle`,
-  `multi_ancestor_tiers_equal_oracle`, `multi_hidden_root_entry_hubs_equal_oracle`,
-  `multi_classified_counts_equal_oracle`, `multi_firsts_counts_equal_oracle`). Each compares that
-  field's JSON from the oracle row and from `UpMulti::rows()`, on Task 1's fixtures.
+- [ ] **Step 1:** Write the P1 tests (every P1 row of the table), comparing each field's JSON
+  with the oracle's, with Review Focus 5's fixture.
 - [ ] **Step 2:** Run them. Expected: FAIL.
-- [ ] **Step 3:** Implement the P1 sink and the count folds in `rows()`. A fold iterates nodes
-  (or entries) by words, and adds 1 per set bit to that root's counter. A root's own nodes are
-  removed per root (`root_nodes`).
+- [ ] **Step 3:** Implement the sink and the folds. A fold iterates reached nodes (or entries) by
+  words and counts each newly best root bit. Apply the per-field root and hub exclusions from the
+  table.
 - [ ] **Step 4:** Run the tests. Expected: PASS.
 - [ ] **Step 5:** Discrimination proofs, each red then green:
-  - the best tier taken as the highest set tier;
-  - a root's own node not removed;
-  - `only_open` computed as `non_open & !any`.
-- [ ] **Step 6:** Commit.
+  - the highest tier taken as best;
+  - population-only class masks (Review Focus 5's fixture);
+  - external dropping root nodes;
+  - hub `at` taken as a numeric minimum.
+- [ ] **Step 6: Go/no-go.** On CDO, in the slot, time `multi_walk` plus pass 1 for the 699 roots
+  against Task 0's per-root pass. **Stop and report** if the per-root pass's CPU minus
+  (2 × this time) is under 5 % of impact's CPU.
+- [ ] **Step 7:** Commit.
 
-### Task 3: `UpMulti` pass 2, the first-arrival and witness fields
+### Task 3: `UpMulti` pass 2, the witness slots
 
 **Files:** Modify `src/engine/impact/up_multi.rs` and `src/engine/impact/up_multi_tests.rs`.
 
 **Interfaces:**
-- Consumes: P1's final masks (best tier, best pop per (root, node) and (root, entry)).
-- Produces, in `UpMulti`:
+- Consumes: P1's final masks.
+- Produces:
   - `fn pass2(&mut self) -> impl MultiSink + '_`;
-  - per root: the slots `first_lists[list] -> Vec<(NodeIx, open, hops, tier)>` (at most
-    `keep.per_list`);
-  - `class_slots[(word|ancestor, pop, tier rank)] -> Option<(id, Witness)>`;
-  - `action_site[(node)]` for listed nodes only;
-  - each list's `active: RootBits` (the roots whose slots are not yet filled).
+  - `Slot<K: Ord>`: insert (key, event order); `close_after(level)`;
+  - `fn rows(&self) -> Vec<Value>` (the full rows).
 
-- [ ] **Step 1:** Write the P2 tests from the table (`multi_first_lists_equal_oracle`,
-  `multi_page_action_captions_equal_oracle`, `multi_first_by_kind_and_nearest_equal_oracle`,
-  `multi_nearest_ancestors_equal_oracle`, `multi_event_publishers_equal_oracle`, plus Review
-  Focus 5's `multi_equal_key_ties_take_the_first_arrival`).
+- [ ] **Step 1:** Write the P2 tests (every P2 row), with Review Focus 1's fixture, a late
+  non-open upgrade, a caption chosen before the page enters a list, and equal-key ties.
 - [ ] **Step 2:** Run them. Expected: FAIL.
-- [ ] **Step 3: Implement pass 2**
-  - Run `multi_walk` again (deterministic). For each event, only the bits in `roots & active` are
-    visited one by one; full slots clear their bit from `active`, so the per-bit work is bounded
-    by the slots.
-  - Slots fill strictly in event order, so the first arrival wins ties, as `<` does in `Up`.
+- [ ] **Step 3:** Implement the slots with the real keys. A slot stays open until the level
+  boundary after its worst member's hops + 1. Only the bits whose slot is open are visited per
+  event.
 - [ ] **Step 4:** Run the tests. Expected: PASS.
 - [ ] **Step 5:** Discrimination proofs, each red then green:
-  - a slot filled by the last arrival;
-  - the pass-1 final pop ignored (the arrival pop used instead);
-  - `action_site` taken from the target node.
+  - first-fill without the key (Review Focus 1);
+  - closing at the member's own level;
+  - arrival pop used instead of P1's final pop.
 - [ ] **Step 6:** Commit.
 
-### Task 4: Wire into `up()`; the whole-row oracle; the CDO comparison
+### Task 4: Wire into `up()`: chunks, the union, the oracle
 
 **Files:**
-- Modify: `src/engine/impact/up.rs`
-- Test: `src/engine/impact/up_multi_tests.rs`, `tests/cli/output_cdo.rs` (or the impact ratchet
-  module)
+- Modify: `src/engine/impact/up.rs`, `src/engine/impact/up_par_tests.rs`
+- Test: `up_multi_tests.rs`, and a lib CDO test `up_multi_cdo_rows_equal_oracle` (`cdo` in the
+  name, through `cdo_ws_or_enforce`)
 
 - [ ] **Step 1: Tests**
-  - `multi_rows_equal_oracle_rows`: every row's JSON byte-equal to `walk_root`'s, on all
-    fixtures.
-  - A CDO test (`cdo` in its name, through `cdo_ws_or_enforce`): `impact --diff` on the pinned
-    baseline; all 699 rows byte-equal between the oracle and production. It runs on `cdo-gate`
-    only.
-- [ ] **Step 2:** Replace the per-root pass in `up()` with
-  `UpMulti::new(..)` → `multi_walk` (P1) → `pass2` → `multi_walk` (P2) → `rows()`.
-  `walk_root` moves to `#[cfg(test)]`. Keep the `impact.up.*` counters and trace spans; add
-  `impact.up.multi_ms`.
+  - `multi_rows_equal_oracle_rows` and `multi_union_equals_oracle_union` on every fixture.
+  - The lib CDO test: the pinned baseline's 699 rows and the union, byte-equal (cost fields
+    blanked) between the oracle and production.
+- [ ] **Step 2: Replace the per-root pass and the union walk**
+  - Split the roots into chunks over `args.workers` (the reach pool; serial in a resident
+    revision, as now).
+  - Each chunk runs `UpMulti` P1 → P2 → rows. The union runs as one logical root in its own
+    chunk.
+  - `walk_root`, `Up`, `summary` and `classified` move under `#[cfg(test)]`.
+  - Adapt `up_par_tests.rs`' worker probes to chunks.
+  - Keep the `impact.up.*` spans and counters, and add `impact.up.multi_ms`.
 - [ ] **Step 3:** Run `scripts/check-goldens` and `cargo test -p al-sem --lib impact`. Expected:
   every impact golden unchanged.
 - [ ] **Step 4:** Commit.
 
 ### Task 5: Measure and gate
 
-- [ ] **Step 1:** `cdo-before-after <master> <head>`: nothing moved. Impact outputs byte-identical
-  over 6+ timed runs (sha256 per run).
-- [ ] **Step 2:** 3+ alternating clean rounds of the 699-root `impact --diff`. Claim a CPU ratio
-  only if the pairs agree (memory rule: two runs that agree). Peak RSS within cdo-speed's 1.10.
-- [ ] **Step 3:** `cdo-speed` twice; the CDO subset (`cdo-gate --only harness,l4,output`).
+- [ ] **Step 1:** `cdo-before-after <master> <head>`: nothing moved. Six or more timed impact runs,
+  their outputs byte-identical (sha256 of each, cost fields blanked).
+- [ ] **Step 2:** 3+ alternating clean rounds; claim a CPU ratio only if the pairs agree. Also
+  report wall time and peak RSS.
+- [ ] **Step 3:** `cdo-speed` twice. `cdo-gate --only harness,l4,lib,output` (the lib CDO test
+  included).
 - [ ] **Step 4:** CHANGELOG; Fable, then sol; the task gate; submit.
