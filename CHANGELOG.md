@@ -119,6 +119,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   whole trees predate this change); the reported-only `warm-impact` read x1.060 and x1.292
   with spreads above 1.3, and `prove`, which walks the trees, x0.974 and x1.011.
 
+### Changed (ENG-125: `alsem impact`'s up part walks many roots at once; its CPU -41 % on CDO's 699 roots, the same output)
+
+- **What changed.** The up part (who reaches each changed routine) walked the reverse call
+  graph once per root, with one visitor per root: 81.5 M root states on the gate's CDO diff
+  for 191,824 distinct ones. Now the roots are split into at most 3 chunks, one per worker.
+  Each chunk is walked by ONE bit-parallel walk for all its roots
+  (`src/program/impact_graph/multi_walk.rs`), twice (`src/engine/impact/up_multi.rs`):
+  - pass 1 keeps, per reached node and per canonical entry, which roots reached it, by tier
+    and by class, and folds every count from those masks;
+  - pass 2 walks again with pass 1's final masks known and keeps each root's witness lists
+    (the `first` lists, `firstByKind`, `nearest`).
+  A chunk of at most 2 roots walks each root on its own with the old visitor (`Up`), which
+  is cheaper there.
+- **The output is the same bytes.** Both paths fill one `Row`, printed by one function
+  (`row_json`; `summary` is `row_json(row_of_up(..))`).
+  - `multi_walk` gives every root the exact callback trace of its own `walk_multi`, the
+    ENG-128 rejoins and the state budget included (`multi_walk_tests`).
+  - Every root's printed row from the two passes equals its own `Up`'s, as text with real
+    captions, on five real fixtures under five option sets, on `up_tests`' worlds, and on
+    about 256 routines of the pinned CDO baseline
+    (`multi_rows_equal_the_per_root_visitor_on_cdo`, the lib CDO phase).
+  - Every `impact --diff` run below gave master's output (sha256 with `cost` removed).
+- **Discrimination** (each break red, then green on revert):
+  - the walk: 9 breaks (level order, merged records, rejoin timing and bits, the budget,
+    hidden channels, action-run entries, the universal hub);
+  - pass 1: 4 breaks;
+  - pass 2: 4 breaks, two of them first green and then pinned by worlds that state their
+    precondition (`a_full_list_takes_a_nearer_arrival_from_later_in_the_level`,
+    `an_entry_counts_only_in_its_best_population`).
+  - **LIMIT**, a pass-1 break that stays green: counting canonical node entries for the
+    root's own nodes too. That exclusion is redundant with `changed`: every root node's
+    canonical entry is a changed entry, so no root counts it either way. Kept to match `Up`.
+- **Measured** on server1, CDO baseline `bc3ccb18`, release-fast, master 7fb70573 against the
+  head (3 chunks), alternating rounds. Each run waited for the host's CPU `some avg60` to fall
+  to 15 % (TLS-76's rule); every run's own stall share stayed at 0.5-3.0 %. The host had about
+  37 GB swapped out, and kernel time varied by up to 3x between runs, so whole-command CPU
+  is noisy on it (about ±10 %).
+  - **The up part alone** (`impact --part up`, the 699 roots; master / head): CPU 92.4 / 54.6
+    s and 97.2 / 54.9 s (-41 %, -44 %); the per-root pass's wall time (`impact.up.roots`)
+    7.0 / 6.3 s and 7.3 / 6.8 s; peak RSS 2.17-2.19 GB / 2.30-2.34 GB (+5 % to +7.5 %).
+    At 2 chunks the pass took 7.9-8.0 s, more than master's, so 3 is the smallest count
+    that keeps its wall time; at 4, 5.4-5.5 s at slightly more CPU.
+  - **The whole `impact --diff`** (4 rounds): CPU -10.6 % and -10.7 % (rounds 1-2), -11.7 %
+    (round 4), -5.0 % in round 3, where the head's kernel time was 32 s against about 21 s.
+    The per-root pass 5.8-6.8 s against 7.7-10.0 s; peak RSS unchanged (3.36-3.51 GB against
+    3.42-3.49 GB); wall time 101.0, 104.9, 124.2, 123.1 s against 100.7, 105.5, 113.1,
+    124.0 s.
+  - **A one-routine impact** (`CDO E-Mail Handler::RunReportID`), before the small-chunk
+    path: the per-root pass 326-366 ms against 86-200 ms; a chunk of one root now takes the
+    old path.
+  - Raw: `/work/.al-sem/profiles/2026-11-17-eng125/chunks/` (`uppart4.tsv`, `whole.tsv`).
+- **A measurement field changed meaning.** `cost.visitorBytes` of the up part (`impact
+  --part up`'s JSON; the `impact` answer carries no `cost`) is now a chunk's masks, and chunks
+  follow the worker count. Like `scratchBytes` it measures the run: the up-parallel golden's
+  master value (1544) was set to `null` by hand, and both of its comparisons blank it.
+- **First found by the profile.** At first 3 chunks were 6 s slower than master: pass 1 asked
+  `SitedGraph::stable_id`, which builds a string, on every reach event (9.4 of 97 s CPU). It
+  now asks only for roots whose ancestor list still fills, once per node.
+
 ### Fixed (ENG-128: `alsem impact`'s `eventPublishers` no longer depends on which way the walk reached a state first)
 
 - **What changed in the output.** `up.eventPublishers` in `al-sem.impact/1`: a publisher is
