@@ -2378,8 +2378,10 @@ mod tests {
     /// merge, whose store goes through a builder to `finish`) and `copy_row` (a refresh
     /// carrying a routine over) end with one window for an equal event set; two rows writing
     /// table `t/A` with different ops (insert, modify) keep two physical-write windows.
-    /// DISCRIMINATION: `finish` not compacting leaves 4 ids; comparing ids without masks
-    /// leaves one physical-write window.
+    /// DISCRIMINATION: `finish` not compacting leaves 4 ids; matching windows on their length
+    /// alone, in the hash and the compare, leaves one physical-write window. (The compare
+    /// alone could not merge them: the hash covers the masks, so insert and modify on `t/A`
+    /// never meet in one bucket.)
     #[test]
     fn push_row_and_copy_row_share_and_masks_keep_windows_apart() {
         let ev = |e| fact("X", "publish", "event", Some(e));
