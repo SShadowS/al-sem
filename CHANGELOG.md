@@ -14,9 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   when that site was the walk's FIRST way into a state: the reverse walk keeps one arrival per
   state, and a later arrival over a dispatch was dropped before it was counted. So `count` and
   `direct.count` can only rise. In the one shape that moves (below), a publisher already
-  listed can also get a nearer or non-open witness: its `hops` and `tier` improve, `onlyOpen`
-  can fall by it, and the capped `first` lists can reorder or let a new publisher push one
-  out. Readers of the field (bc-dev-mcp) see more publishers or the same, never fewer.
+  listed can also get a better witness by `Firsts`' rank (non-open first, then fewer `hops`;
+  its `tier` may change either way), `onlyOpen` can fall by it, and the capped `first` lists
+  can reorder or let a new publisher push one out. Readers of the field (bc-dev-mcp) see more publishers or the same, never fewer.
 - **Real AL cannot reach that shape, so nothing moves on compiling code.** In the call graph
   only an event declaration has event-dispatch sites, so a dispatch that arrives second needs
   a publisher that ALSO calls into the cone, i.e. a publisher with a body. The AL compiler
@@ -34,11 +34,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   keeps compiling code's output unchanged: a publisher with two subscribers in the cone is
   reached twice, and counting its second arrival at once (while the level before is still
   being expanded) listed it ahead of same-hop publishers counted later in walk order (sol and
-  Fable review). Other visitors do not ask for rejoins and pay nothing.
+  Fable review). Other visitors do not ask for rejoins and pay nothing. Impact's walks hold
+  the buffer, so the cost report's `scratchBytes` (a measurement, not part of the answer)
+  can grow.
 - **Pinned by** `cli_impact::a_publisher_counts_whichever_arrival_reaches_its_state_first` (a
   fixture whose publisher has a body; with the `rejoin` delivery removed it fails on the
   missing publisher) and `up::relation_tests::a_publisher_reached_twice_keeps_its_place_in_the_list`
-  (with `rejoin` delivered at once it fails: `[(2, 4), (2, 3)]` against `[(2, 3), (2, 4)]`).
+  (with `rejoin` delivered at once it fails: `[(2, 4), (2, 3)]` against `[(2, 3), (2, 4)]`)
+  and `up::relation_tests::a_dropped_dispatch_still_counts_its_publisher` (both site orders;
+  with `Up::wants_rejoin` false the call-first world lists one publisher, not two).
 
 ### Changed (ENG-111: the tree's projected solve shares its routine ids, 142.4 MiB less resident memory on CDO)
 

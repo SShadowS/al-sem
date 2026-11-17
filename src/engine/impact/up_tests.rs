@@ -228,6 +228,73 @@ fn a_publisher_reached_twice_keeps_its_place_in_the_list() {
     assert_eq!(listed, vec![(2, qn), (2, pn)], "Q then P, two hops each");
 }
 
+/// ENG-128: a dropped dispatch still counts its publisher, in either site order. The root
+/// `R` subscribes to `E`, which `A` raises, so `A`'s state has crossed an event. `P` both
+/// calls `A` and dispatches to it (a publisher with a body, which AL refuses but the engine
+/// reads): the two sites build the SAME state of `P`, and the walk keeps the first. Both
+/// insertion orders are built, and one of them must put the call first, or the dropped
+/// arrival is never the dispatch.
+/// DISCRIMINATION: with `Up::wants_rejoin` false, the call-first world leaves `P` out.
+#[test]
+fn a_dropped_dispatch_still_counts_its_publisher() {
+    let mut call_first_seen = false;
+    for call_inserted_first in [true, false] {
+        let mut w = World::default();
+        let a = w.app("W");
+        let cu = w.obj(a, ObjectKind::Codeunit, 1, "Cu", TrustTier::Workspace);
+        let (root, e, sa, p) = (
+            w.rtn(&cu, "R"),
+            w.rtn(&cu, "OnE"),
+            w.rtn(&cu, "A"),
+            w.rtn(&cu, "OnP"),
+        );
+        w.event(&e, &[&root]);
+        w.call(&sa, &e, 1);
+        if call_inserted_first {
+            w.call(&p, &sa, 2);
+            w.event(&p, &[&sa]);
+        } else {
+            w.event(&p, &[&sa]);
+            w.call(&p, &sa, 2);
+        }
+        let g = sited_of(&w, a, &[]);
+        let node = |id: &RoutineNodeId| g.routine_node(id).expect("a node");
+        let (r, en, an, pn) = (node(&root), node(&e), node(&sa), node(&p));
+        let from_p: Vec<Boundary> = g
+            .sites_into(an)
+            .iter()
+            .map(|&x| &g.sites()[x as usize])
+            .filter(|st| st.from == pn)
+            .map(|st| st.boundary)
+            .collect();
+        assert_eq!(
+            from_p.len(),
+            2,
+            "precondition: P has a call and a dispatch into A"
+        );
+        call_first_seen |= from_p[0] != Boundary::EventDispatch;
+        let shared = Shared::new(&g, &[r].into_iter().collect());
+        let up = walk_up(&g, &[r], &shared);
+        let mut listed: Vec<NodeIx> = up
+            .publishers
+            .first(10)
+            .into_iter()
+            .map(|(_, _, n)| n)
+            .collect();
+        listed.sort_unstable();
+        let mut want = vec![en, pn];
+        want.sort_unstable();
+        assert_eq!(
+            listed, want,
+            "E and P (call inserted first: {call_inserted_first})"
+        );
+    }
+    assert!(
+        call_first_seen,
+        "precondition: one world meets P's call before its dispatch"
+    );
+}
+
 /// Round-2 r2 §2.1 step 1: a static background start on the path stays
 /// code (the context axis labels it, not the relation).
 ///
