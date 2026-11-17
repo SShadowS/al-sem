@@ -1695,10 +1695,22 @@ pub(crate) fn compose_capabilities_retained(
     }
     (
         CapabilityAnalysis {
-            direct_full: direct_full
-                .into_iter()
-                .map(|(id, facts)| (id, Arc::from(facts)))
-                .collect(),
+            // One allocation per routine at exact length (the walk's `Vec`s carry push slack);
+            // the routines with no direct facts share one empty slice.
+            direct_full: {
+                let empty: Arc<[CapabilityFact]> = Arc::from(Vec::new());
+                direct_full
+                    .into_iter()
+                    .map(|(id, facts)| {
+                        let shared = if facts.is_empty() {
+                            Arc::clone(&empty)
+                        } else {
+                            Arc::from(facts)
+                        };
+                        (id, shared)
+                    })
+                    .collect()
+            },
             coverage: outcome.coverage,
             derived: Arc::new(outcome.derived),
             pd: Some(outcome.pd_solution),

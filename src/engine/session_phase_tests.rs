@@ -91,10 +91,11 @@ fn clone_payloads(model: &Model, caps: &CapabilityAnalysis, core: &CoreSummaries
 /// artifacts (the same allocation, no new wrapper, no copy); the lent one
 /// shares it (two handles, one allocation).
 ///
-/// DISCRIMINATION: cloning `direct_full` in the owned arm (`get(..).cloned()`
-/// in place of `remove`) raises the owned bytes by the direct facts' clone,
-/// and the byte margin falls below the payload ("owned 48498 B, lent 50670
-/// B, payload 14897 B: the owned arm copied"; unbroken: owned 35773 B).
+/// DISCRIMINATION: cloning the coverage in the owned arm (`cone_coverage.get(..)
+/// .cloned()` in place of `remove`) raises the owned bytes by the coverage records'
+/// clone, and the byte margin falls below the payload (outcomes recorded in the
+/// ENG-123 CHANGELOG entry). Since ENG-123 the direct facts are an `Arc` handle, so
+/// cloning `direct_full` in the owned arm copies nothing and is no longer the break.
 #[test]
 fn owned_harvest_moves_payloads_and_adds_only_the_counted_arc() {
     let inputs = r0("ws-d37");
