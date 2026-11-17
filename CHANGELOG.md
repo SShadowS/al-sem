@@ -17,7 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   smaller first hop), the rule its doc states and the singleton walk and the producer-solve
   entries already used; a new `pick_nearest` serves all three pick sites. A replaced pick
   swaps the whole representative (its witness ids, `via`, first-hop fields and payload such
-  as the temp state), not the count: one pick per key, as before. "Nearest" is by the
+  as the temp state); still one pick per key. "Nearest" is by the
   engine's distances, where a cone entry counts SCCs (every member of one downstream SCC is
   at its distance), as in the singleton walk.
 - **An intentional change of a preserved rule.** The cone-memory design kept first-seen on
@@ -25,12 +25,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   §4, now marked superseded); no design chose it. The derived row, coverage, `analyze` and
   every finding fingerprint never read these picks (`analyze` runs with `raw:
   WitnessScope::None`).
-- **What it moves: nothing on CDO, nothing in the goldens.** Only a recursive member's
-  inherited facts can differ, and only where one fact is reached at different distances.
-  `cdo-before-after` (base `33b44992`) moved no finding, fingerprint or call-graph number,
-  and the full `alsem fingerprint --format json --deterministic` (165,818 inherited facts,
-  165,505 with a call-site witness) is byte-identical base and head. No suppression key or
-  outside reader's field changed.
+- **What it moves: attribution in explain, query and digest; no distinct-effect total.** Only
+  a recursive member's inherited facts can differ, and only where one fact is reached at
+  different distances. On CDO the `output_cdo` rendering goldens of
+  `CDO E-Mail Handler::RunReportID` moved (re-minted): every distinct-effect total is unchanged
+  (412 tables, 290 errors, UI 17, HTTP 21, file 3, isolated storage 18), while the facts are
+  now credited to the dependency entry their nearer witness goes through (the "N tables
+  beyond <entry>" groups trade in pairs: `Import Attachment - Inc. Doc.::CreateNewAttachment`
+  241 -> 242, `Sales-Calc. Discount::OnRun` 229 -> 231, `CTS-CDN Network Doc. Mgt.::CreateEDocument`
+  113 -> 111, `CSC Core::LogUsageExtended` 3 -> 2 events), and the "places" counts, which count
+  distinct witnessed locations, rise: background tasks 6 -> 7 (the new place is beyond
+  `CSC Core::IsAppActiveOrAskToActivate`), telemetry 23 -> 24. So `digest`'s JSON
+  `totalEffects` reads 838 (was 836) for that routine. `cdo-before-after` (base `33b44992`)
+  moved no finding, fingerprint or call-graph number (`analyze` never reads these picks), and
+  the full `alsem fingerprint --format json --deterministic` (165,818 inherited facts) is
+  byte-identical: neither covers explain/query/digest's attribution, which the first
+  submission missed.
 - **Pinned by** four hand-stated tests, each proved at its own site:
   `the_bfs_pick_takes_a_nearer_siblings_direct_fact` (the sibling site; with only it back
   on first-seen, this test alone fails), `the_bfs_pick_takes_the_nearest_entry_of_a_base_key`,
