@@ -1,0 +1,406 @@
+######## resident /work/src/cdo-baseline/Cloud routine IssueReminder
+  read                                     live       6.3 MiB  (+     6.3)  peak      48.9 MiB  allocs       2616  0.1s
+  build (session + target)                 live    2307.5 MiB  (+  2301.3)  peak    2317.5 MiB  allocs   18756311  23.9s
+  ask query (round 0) exit 0               live    3796.3 MiB  (+  1488.8)  peak    4026.3 MiB  allocs   26055077  25.9s
+  ask explain (round 0) exit 0             live    3822.6 MiB  (+    26.3)  peak    3929.4 MiB  allocs   26273509  3.3s
+  ask prove (round 0) exit 0               live    4013.9 MiB  (+   191.3)  peak    4155.0 MiB  allocs   27678183  3.1s
+  ask digest (round 0) exit 0              live    4013.9 MiB  (+     0.0)  peak    4100.4 MiB  allocs   27678184  0.5s
+  ask query (round 1) exit 0               live    4013.9 MiB  (+     0.0)  peak    4092.9 MiB  allocs   27678185  0.8s
+  ask explain (round 1) exit 0             live    4013.9 MiB  (+     0.0)  peak    4120.7 MiB  allocs   27678186  0.7s
+  ask prove (round 1) exit 0               live    4013.9 MiB  (+     0.0)  peak    4086.1 MiB  allocs   27678187  0.5s
+  ask digest (round 1) exit 0              live    4013.9 MiB  (+     0.0)  peak    4100.4 MiB  allocs   27678188  0.5s
+  fills: {"det": 1, "explain_indexes": 1, "fold": 1, "l4": 1, "raw": 1, "run": 1, "tree": 1, "tree_base": 1, "witness": 1}
+-- drop deltas (MiB, allocs):
+  fold.direct_full                                               56.10 MiB     215687 allocs
+    ENG-108 fold.coverage: 34203 records; subject 34203 (2.64 MiB text), 34203 distinct; direct_status 34203 (0.26 MiB text), 2 distinct; inherited_status 34203 (0.26 MiB text), 2 distinct; reasons 10066 (0.20 MiB text), 3 distinct; unknown_targets 312289 (24.12 MiB text), 192 distinct
+  fold.coverage                                                  18.27 MiB      79199 allocs
+  fold.derived                                                    0.00 MiB          1 allocs
+  pd: producers 2744 states 3359413 (cap 3359413, 24 B) links 4768419 (cap 4768419, 8 B) edges 17873 by_routine 9433
+  fold.pd.by_routine                                             26.27 MiB       9435 allocs
+  fold.pd.links                                                  36.38 MiB          2 allocs
+  fold.pd.link_off                                               12.82 MiB          2 allocs
+  fold.pd.states                                                 76.89 MiB          2 allocs
+  fold.pd.routines+req_lists                                      1.19 MiB       9474 allocs
+  fold.pd.edges                                                   8.76 MiB      72067 allocs
+  fold.pd.producers                                               2.58 MiB      21954 allocs
+  fold.pd_digests                                                 6.20 MiB      34205 allocs
+    ENG-107 cones: 33231 SCC records (30609 with a fact cone, 30609 with a coverage cone); 30609 distinct fact cones (30609 in the emit source, 0 only there), 5612960 entries (size_of key+entry 56 B), 306465 distinct keys (30.35 MiB text)
+      coverage reasons: 4403 strings in 30609 distinct cones (0.09 MiB heap), 3 distinct texts (0.00 MiB)
+      coverage unknown targets: 89771 strings in 30609 distinct cones (6.93 MiB heap), 188 distinct texts (0.01 MiB)
+      emit: graph 34205 nodes, 64921 out-edges, 33 unresolved; scc 33231 sccs; succ 33231 sets 52124 links; frames 3187; changed 0
+  cones.emit.cones (only the cones no record holds)               0.25 MiB          2 allocs
+  cones.records.fact                                            382.65 MiB    1040321 allocs
+  cones.records.cov                                               3.79 MiB      36790 allocs
+  cones.records.map (table + digests)                             7.06 MiB          2 allocs
+  cones.emit.g.nodes                                              3.43 MiB      34207 allocs
+  cones.emit.g.outgoing                                          42.93 MiB     298766 allocs
+  cones.emit.g.unresolved                                         0.00 MiB         39 allocs
+  cones.emit.scc                                                 12.42 MiB     101640 allocs
+  cones.emit.succ                                                 2.71 MiB      19115 allocs
+  cones.emit.frames                                               1.12 MiB      12367 allocs
+  cones.emit.changed                                              0.00 MiB          1 allocs
+  artifact.witness (1 keys)                                      31.69 MiB     268895 allocs
+  artifact.explain_indexes (1 keys)                              26.24 MiB     218256 allocs
+  artifact.run (1 keys)                                          47.31 MiB      99132 allocs
+  det.reverse_effect_index                                        0.00 MiB          0 allocs
+  det.dep_routine_ids                                             2.94 MiB      31338 allocs
+  det.closed_world_temp_params                                    0.00 MiB         26 allocs
+  det.cross_extension_subscribers                                 0.04 MiB        471 allocs
+  det.(declared deps, app versions, friends, diagnostics)         0.01 MiB        182 allocs
+  det.graph                                                       0.00 MiB          0 allocs
+  det.cone                                                        0.00 MiB          0 allocs
+  det.event_graph                                                12.24 MiB     197904 allocs
+  det.reverse_call_graph                                          8.88 MiB      76607 allocs
+  det.entry_points                                                0.24 MiB       2503 allocs
+    ENG-114 transaction_spans: 64 spans (size_of 304 B); routines_in_span 4929 (0.38 MiB), 992 distinct (0.08 MiB); writes_tables 20244 (0.91 MiB), 595 distinct (0.03 MiB); publishes_events 299958 (25.70 MiB), 8618 distinct (0.74 MiB); commit op ids 64 (0.01 MiB), 64 distinct (0.01 MiB); commit routine ids 64 (0.00 MiB), 56 distinct (0.00 MiB)
+  det.transaction_spans.routines_in_span                          0.50 MiB       4994 allocs
+  det.transaction_spans.writes_tables                             1.38 MiB      20308 allocs
+  det.transaction_spans.publishes_events                          4.58 MiB         84 allocs
+    ENG-114 transaction_spans pending: pending_events 221464 (18.97 MiB), 8590 distinct (0.74 MiB); span_roots 3601 (0.28 MiB), 679 distinct (0.05 MiB); pending_physical_tables 12323 (0.55 MiB), 497 distinct (0.02 MiB)
+  det.transaction_spans.pending_events                            4.28 MiB       8640 allocs
+  det.transaction_spans.span_roots                                0.36 MiB       3662 allocs
+  det.transaction_spans.pending_physical_by_routine               0.68 MiB       5698 allocs
+  det.transaction_spans.(rest: ids, other pending lists, vec)      0.89 MiB      12998 allocs
+  det.resolved_call_edge_by_callsite                             10.52 MiB      54025 allocs
+  det.uncertainty_edges_by_from                                   0.03 MiB        222 allocs
+  det.dependency_uncertainty_edges_by_from                        0.16 MiB       1369 allocs
+  det.uncertainties_by_node                                       0.19 MiB       1683 allocs
+  det.uncertainties                                               0.08 MiB        631 allocs
+    ENG-114 summaries: 34203 routines (size_of summary 152 B); direct facts 46101 (size_of fact 416 B)
+  det.summaries.capability_facts_direct                          29.01 MiB     181483 allocs
+    ENG-108 det.summaries.coverage: 34203 records; subject 34203 (2.64 MiB text), 34203 distinct; direct_status 34203 (0.26 MiB text), 2 distinct; inherited_status 34203 (0.26 MiB text), 2 distinct; reasons 10066 (0.20 MiB text), 3 distinct; unknown_targets 312289 (24.12 MiB text), 192 distinct
+  det.summaries.coverage                                         10.95 MiB      44995 allocs
+  det.summaries.(rest: map, ids)                                 16.35 MiB      68407 allocs
+    ENG-114 cone_derived: 34203 rows (size_of row 36 B; key heap 2.64 MiB, 34203 distinct keys); interner 11146 strings (1.84 MiB text, stored twice)
+      pools (len / cap): writes_all 1039367 / 1048576, phys_writes 848333 / 1048576, phys_reads 1458756 / 2097152, events 15531457 / 16777216 (size_of ResId 4 B, (ResId, u8) 8 B)
+  det.cone_derived.rows                                           6.70 MiB      34205 allocs
+  det.cone_derived.writes_all_pool                                4.00 MiB          2 allocs
+  det.cone_derived.phys_writes_pool                               8.00 MiB          2 allocs
+  det.cone_derived.phys_reads_pool                                8.00 MiB          2 allocs
+  det.cone_derived.events_pool                                   64.00 MiB          2 allocs
+  det.cone_derived.interner                                       2.73 MiB      22295 allocs
+  det.event_flow_indexes                                          7.94 MiB      88664 allocs
+  det.parameter_roles_by_routine                                  9.98 MiB      98147 allocs
+  det.upgraded_bindings_by_callsite                              19.87 MiB     310931 allocs
+  det.reachable_roots                                             0.39 MiB       4209 allocs
+  det.root_classifications_by_routine                             5.61 MiB      85274 allocs
+  artifact.det (1 keys) TOTAL                                   237.35 MiB    1361949 allocs
+  artifact.raw (1 keys)                                           6.07 MiB      42823 allocs
+  artifact.fold (0 keys)                                          0.00 MiB          0 allocs
+  artifact.l4 (1 keys)                                           83.48 MiB     668568 allocs
+  artifact.rules (0 keys)                                         0.00 MiB          0 allocs
+  artifact.ordering (0 keys)                                      0.00 MiB          0 allocs
+    tree: 55763 capability facts, 24379 operations, 61289 callsites
+  tree.capability_facts                                           9.17 MiB      71806 allocs
+  tree.operation_index                                           11.12 MiB     121040 allocs
+  tree.callsite_index                                            28.39 MiB     305554 allocs
+  tree.pd_solution                                              253.00 MiB    1239250 allocs
+  tree.commit_scopes                                              0.09 MiB        712 allocs
+  tree.(base-shared sections)                                     5.68 MiB      28725 allocs
+  artifact.tree (1 keys) TOTAL                                  307.46 MiB    1767091 allocs
+  tree_base.identities                                            7.36 MiB      90794 allocs
+  tree_base.typed_edges                                          50.95 MiB     489445 allocs
+  tree_base.callsite_resolutions                                 47.49 MiB     557727 allocs
+  tree_base.analysis_gaps                                         0.00 MiB          2 allocs
+    ENG-108 tree_base.coverage: 34203 records; subject 34203 (3.73 MiB text), 34203 distinct; direct_status 34203 (0.26 MiB text), 2 distinct; inherited_status 34203 (0.26 MiB text), 2 distinct; reasons 10066 (0.20 MiB text), 3 distinct; unknown_targets 312289 (34.37 MiB text), 192 distinct
+  tree_base.coverage                                             15.15 MiB      44997 allocs
+  tree_base.event_declarations                                    8.89 MiB      73015 allocs
+  tree_base.root_classifications                                  8.33 MiB     113372 allocs
+  tree_base.routine_order_frames                                 17.75 MiB     168628 allocs
+  tree_base.boundary                                              5.68 MiB      28734 allocs
+  tree_base.view                                                103.03 MiB     942437 allocs
+  artifact.tree_base (1 keys) TOTAL                             264.64 MiB    2509141 allocs
+  artifact.sited (0 keys) TOTAL                                   0.00 MiB          0 allocs
+  probe's inputs handle                                           0.00 MiB          0 allocs
+  revision.store                                                  0.00 MiB         50 allocs
+  revision.rel                                                    0.00 MiB          1 allocs
+  revision.dependency_calls                                       0.00 MiB          1 allocs
+  revision.inputs                                                 0.23 MiB       1964 allocs
+  base.leaf_summaries                                            35.41 MiB     230897 allocs
+  base.direct_full                                               56.10 MiB     215686 allocs
+  base.direct_coverage                                            7.47 MiB      68791 allocs
+  base.dep_routine_ids                                            2.94 MiB      31338 allocs
+  base.fixed_roles                                                0.08 MiB        725 allocs
+  base.dependency_calls                                          72.58 MiB     309224 allocs
+  model.calls                                                    30.84 MiB     375898 allocs
+  model.events                                                   14.27 MiB     197905 allocs
+  model.routines by field:
+    ENG-99: 287687 record-variable references, 64505 distinct rows
+    ENG-96 layout: 87868 call sites x 344 B = 28.83 MiB inline; 287687 record variables x 104 B = 28.53 MiB inline
+    vec slack: call_sites cap 99245 (len 87868), record_variables cap 290106 (len 287687)
+    PCallSite fields (inline B):
+      id                         24
+      operation_id               24
+      callee_text                24
+      callee                     80
+      argument_texts             24
+      argument_infos             24
+      argument_bindings          24
+      loop_stack                 24
+      source_anchor              48
+      result_consumed             1
+      object_run_return_used      1
+      under_asserterror           1
+      control_context             4
+      order                       8
+      receiver_temp_state        16
+      implicit_receiver           8
+    PCallSite contents:
+      result_consumed Some                277 (0.3%)
+      object_run_return_used Some         277 (0.3%)
+      under_asserterror Some                0 (0.0%)
+      control_context Some              86208 (98.1%)
+      order Some                            0 (0.0%)
+      receiver_temp_state Some          35186 (40.0%)
+      implicit_receiver Some                2 (0.0%)
+      argument_texts empty              19730 (22.5%)
+      argument_infos empty              19730 (22.5%)
+      argument_bindings empty           19730 (22.5%)
+      loop_stack empty                  78755 (89.6%)
+      callee Bare                       47544 (54.1%)
+      callee Member                     40047 (45.6%)
+      callee ObjectRun                    277 (0.3%)
+      callee Unknown                        0 (0.0%)
+      id heap (cap)                          8.28 MiB
+      operation_id heap (cap)                8.29 MiB
+      callee_text heap (cap)                 2.01 MiB
+      loop_stack slack (cap-len)*24          0.00 MiB
+      argument_texts slack (cap-len)*24      0.00 MiB
+      control_context values: {"<none>": 1660, "conditional": 26026, "error-path": 2709, "is-handled-guarded": 17161, "loop-body": 6365, "top-level": 33947}
+      receiver_temp_state.kind values: {"<none>": 52682, "known": 18769, "parameter-dependent": 16417}
+    ModelRecordVariable fields (inline B):
+      id                         16
+      name                       24
+      table_name                 16
+      table_id                   16
+      is_parameter                1
+      parameter_index             8
+      temp_state                 16
+      scope                       4
+      is_receiver                 1
+      is_implicit_rec             1
+    ModelRecordVariable contents:
+      table_name Some                  275600 (95.8%)
+      table_id Some                    287254 (99.8%)
+      parameter_index Some              29206 (10.2%)
+      scope Some                       228671 (79.5%)
+      is_parameter                      29206 (10.2%)
+      is_receiver                        8972 (3.1%)
+      name heap (cap)                        3.69 MiB
+      scope values: {"<none>": 59016, "global": 228671}
+      temp_state.kind values: {"known": 262768, "parameter-dependent": 24919}
+      distinct table_id 1120 / table_name 1149; allocations table_id 1120 (0.05 MiB) / table_name 1998 (0.04 MiB)
+    34205 routines, 280.0 MiB (size_of ModelRoutine 1032 B)
+    call_sites.argument_infos+bindings     32.61 MiB   11.6%     195670 allocs
+    call_sites.(vec)                       32.56 MiB   11.6%      19531 allocs
+    record_operations                      26.89 MiB    9.6%     290464 allocs
+    variables                              24.98 MiB    8.9%     370344 allocs
+    call_sites.id+operation_id             16.57 MiB    5.9%     175736 allocs
+    ids/names/strings                      13.09 MiB    4.7%     273640 allocs
+    operation_sites                        12.07 MiB    4.3%     139169 allocs
+    record_variables                       10.28 MiB    3.7%     157947 allocs
+    var_assignments                         9.80 MiB    3.5%      81727 allocs
+    field_accesses                          8.79 MiB    3.1%     144982 allocs
+    condition_references                    7.96 MiB    2.8%     109334 allocs
+    parameters                              7.43 MiB    2.7%     188296 allocs
+    call_sites.argument_texts               6.17 MiB    2.2%     223062 allocs
+    attributes_parsed                       6.08 MiB    2.2%     147043 allocs
+    card_text                               5.84 MiB    2.1%      68685 allocs
+    rules+drafts                            5.44 MiB    1.9%      73522 allocs
+    call_sites.callee_text+callee           3.99 MiB    1.4%     216278 allocs
+    identifier_references                   3.68 MiB    1.3%     123192 allocs
+    call_sites.loop_stack+control           1.33 MiB    0.5%      19642 allocs
+    loops                                   0.95 MiB    0.3%      10971 allocs
+    unreachable_statements                  0.00 MiB    0.0%          3 allocs
+    call_sites.anchor.source_unit_id        0.00 MiB    0.0%          0 allocs
+    call_sites.anchor.syntax_kind           0.00 MiB    0.0%          0 allocs
+    statement_tree                          0.00 MiB    0.0%          0 allocs
+    site_exprs                              0.00 MiB    0.0%          0 allocs
+    rest of the row                         0.00 MiB    0.0%          0 allocs
+  model.tables                                                   21.19 MiB     374088 allocs
+  model.objects                                                  11.30 MiB     120770 allocs
+  base rest (rel, field index, coverage, …)                      77.87 MiB     694238 allocs
+  session.rows.abi                                                0.00 MiB          4 allocs
+  session.rows.dependency.routines by field:
+    ENG-99: 277311 record-variable references, 53897 distinct rows
+    ENG-96 layout: 72345 call sites x 344 B = 23.73 MiB inline; 277311 record variables x 104 B = 27.50 MiB inline
+    vec slack: call_sites cap 72345 (len 72345), record_variables cap 277311 (len 277311)
+    PCallSite fields (inline B):
+      id                         24
+      operation_id               24
+      callee_text                24
+      callee                     80
+      argument_texts             24
+      argument_infos             24
+      argument_bindings          24
+      loop_stack                 24
+      source_anchor              48
+      result_consumed             1
+      object_run_return_used      1
+      under_asserterror           1
+      control_context             4
+      order                       8
+      receiver_temp_state        16
+      implicit_receiver           8
+    PCallSite contents:
+      result_consumed Some                136 (0.2%)
+      object_run_return_used Some         136 (0.2%)
+      under_asserterror Some                0 (0.0%)
+      control_context Some              70829 (97.9%)
+      order Some                            0 (0.0%)
+      receiver_temp_state Some          29501 (40.8%)
+      implicit_receiver Some                2 (0.0%)
+      argument_texts empty              15708 (21.7%)
+      argument_infos empty              15708 (21.7%)
+      argument_bindings empty           15708 (21.7%)
+      loop_stack empty                  65379 (90.4%)
+      callee Bare                       41934 (58.0%)
+      callee Member                     30275 (41.8%)
+      callee ObjectRun                    136 (0.2%)
+      callee Unknown                        0 (0.0%)
+      id heap (cap)                          5.88 MiB
+      operation_id heap (cap)                5.89 MiB
+      callee_text heap (cap)                 1.68 MiB
+      loop_stack slack (cap-len)*24          0.00 MiB
+      argument_texts slack (cap-len)*24      0.00 MiB
+      control_context values: {"<none>": 1516, "conditional": 21121, "error-path": 2477, "is-handled-guarded": 16652, "loop-body": 4415, "top-level": 26164}
+      receiver_temp_state.kind values: {"<none>": 42844, "known": 14891, "parameter-dependent": 14610}
+    ModelRecordVariable fields (inline B):
+      id                         16
+      name                       24
+      table_name                 16
+      table_id                   16
+      is_parameter                1
+      parameter_index             8
+      temp_state                 16
+      scope                       4
+      is_receiver                 1
+      is_implicit_rec             1
+    ModelRecordVariable contents:
+      table_name Some                  268395 (96.8%)
+      table_id Some                         0 (0.0%)
+      parameter_index Some              27921 (10.1%)
+      scope Some                       225663 (81.4%)
+      is_parameter                      27921 (10.1%)
+      is_receiver                        7917 (2.9%)
+      name heap (cap)                        3.57 MiB
+      scope values: {"<none>": 51648, "global": 225663}
+      temp_state.kind values: {"known": 253416, "parameter-dependent": 23895}
+      distinct table_id 0 / table_name 1073; allocations table_id 0 (0.00 MiB) / table_name 1073 (0.02 MiB)
+    28726 routines, 400.7 MiB (size_of ModelRoutine 1032 B)
+    statement_tree                        143.77 MiB   35.9%    1012790 allocs
+    call_sites.argument_infos+bindings     34.62 MiB    8.6%     332600 allocs
+    call_sites.(vec)                       23.73 MiB    5.9%      15060 allocs
+    variables                              23.45 MiB    5.9%     372630 allocs
+    record_operations                      22.93 MiB    5.7%     266167 allocs
+    record_variables                       14.72 MiB    3.7%     186496 allocs
+    call_sites.id+operation_id             11.77 MiB    2.9%     144690 allocs
+    ids/names/strings                      10.64 MiB    2.7%     229808 allocs
+    operation_sites                         9.27 MiB    2.3%     118133 allocs
+    field_accesses                          7.78 MiB    1.9%     133085 allocs
+    var_assignments                         7.40 MiB    1.8%      67949 allocs
+    parameters                              6.87 MiB    1.7%     174214 allocs
+    condition_references                    6.09 MiB    1.5%      91585 allocs
+    attributes_parsed                       5.70 MiB    1.4%     141385 allocs
+    call_sites.argument_texts               5.31 MiB    1.3%     189005 allocs
+    rules+drafts                            4.62 MiB    1.2%      56729 allocs
+    card_text                               4.24 MiB    1.1%      51388 allocs
+    call_sites.callee_text+callee           3.33 MiB    0.8%     175218 allocs
+    identifier_references                   2.94 MiB    0.7%     100914 allocs
+    call_sites.loop_stack+control           0.80 MiB    0.2%      14549 allocs
+    loops                                   0.62 MiB    0.2%       8843 allocs
+    site_exprs                              0.52 MiB    0.1%      31206 allocs
+    unreachable_statements                  0.00 MiB    0.0%          0 allocs
+    rest of the row                         0.00 MiB    0.0%          0 allocs
+    call_sites.anchor.source_unit_id        0.00 MiB    0.0%          0 allocs
+    call_sites.anchor.syntax_kind           0.00 MiB    0.0%          0 allocs
+  session.rows.dependency.objects_tables                         29.98 MiB     496536 allocs
+  session.rows.dependency.inputs                                  6.05 MiB      49189 allocs
+  session.rows.dependency.texts                                   0.25 MiB          2 allocs
+  session.rows.dependency_ids                                    15.83 MiB     185575 allocs
+  session.rows.workspace                                         68.80 MiB     706966 allocs
+  session.retained.file_resolutions                              19.36 MiB     128558 allocs
+  session.retained.file_trees                                    26.82 MiB     186606 allocs
+  dep edges: len 438823 cap 438823 size_of 368; routes len 325407 cap 325407 size_of 240
+  site_facts: len 318982 spilled 0; size_of SiteFacts 72, (u32, SiteFacts) 80, Option<ReceiverFact> 56; layout about 32.84 MiB
+  key variants: {"CallSite": 318982}
+  sites with any field beyond receiver and bare_scope_complete: 31067 of 318982
+  sites holding a RareSiteFacts box: 23574 (size_of 528 B; 11.87 MiB)
+  key span.unit heap (in the edges since ENG-92) 16.12 MiB over 7003 distinct files; distinct build contexts 22
+    field receiver                                     used   141165  heap     5.64 MiB
+    field run_trigger_excluded                         used     3838  heap     1.05 MiB
+    field dataset_run                                  used      649  heap     0.49 MiB
+    field validate_field                               used     8146  heap     0.11 MiB
+    field build_context                                used     2729  heap     0.10 MiB
+    field open                                         used      579  heap     0.07 MiB
+    field start_method                                 used     5212  heap     0.03 MiB
+    field interface                                    used     1198  heap     0.02 MiB
+    field interface_holder                             used       48  heap     0.01 MiB
+    field interface_closed_over                        used       69  heap     0.01 MiB
+    field argument_codeunits                           used       93  heap     0.00 MiB
+    field bare_scope_complete                          used   152861  heap     0.00 MiB
+    field unqualified_record_op                        used     9544  heap     0.00 MiB
+    field starts_object (not No)                       used     5944  heap     0.00 MiB
+    field table_event_raise                            used     3292  heap     0.00 MiB
+    field run_target                                   used      928  heap     0.00 MiB
+    field request_page_may_cancel                      used      376  heap     0.00 MiB
+    field record_table_unresolved (heap not walked)    used      208  heap     0.00 MiB
+    field field_ref_validate (heap not walked)         used       74  heap     0.00 MiB
+    field call_result_record (heap not walked)         used       34  heap     0.00 MiB
+    field inherited_protected                          used       34  heap     0.00 MiB
+    field interface_unmapped_enums                     used        0  heap     0.00 MiB
+    field record_op_field_named                        used        0  heap     0.00 MiB
+  session.dep_resolution.site_facts                              52.31 MiB     234852 allocs
+    remainder after the estimates (unwalked heap, shared ids)      0.05 MiB
+  session.dep_resolution.edges                                  290.39 MiB    1756069 allocs
+  session.dep_resolution.parenless                                1.12 MiB       7617 allocs
+  session.retained.dependency_record                            114.44 MiB     536337 allocs
+  session.retained.dependency_sources                             1.06 MiB      10893 allocs
+  tier.bodies: 10 units, 10881 files, text 115.5 MiB
+  tier.bodies split: 10881 files (0 AlFile Arcs shared elsewhere)
+  exprs by kind: [("Identifier", 1190629), ("Member", 516780), ("Call", 431315), ("Literal", 258108), ("QuotedIdentifier", 131079), ("Binary", 112209), ("QualifiedEnum", 65547), ("Unary", 29463), ("Parenthesized", 26330), ("DatabaseReference", 18606), ("Index", 9015), ("List", 2066), ("RangeExpr", 112), ("Ternary", 48), ("TypeOp", 15), ("Unknown", 9)]
+  counts: exprs 2791331, stmts 600787, blocks 278478, members 516780, expr strings 2070497
+    est exprs inline (len x size_of Expr)                       191.67 MiB
+    est stmts inline (len x size_of Stmt)                        41.25 MiB
+    est blocks inline (len x size_of Block)                      14.87 MiB
+    est expr strings heap (capacity)                             25.10 MiB
+    est expr arg/list Vec heap (capacity)                         5.20 MiB
+    bodies: source text + paths + provenance                    120.37 MiB      76168 allocs
+  bodies: objects (declarations)    115.25 MiB, by field:
+    routines.(vec)                         34.19 MiB   29.7%       7461 allocs
+    objects.fields                         14.61 MiB   12.7%     216860 allocs
+    routines.params                        14.12 MiB   12.3%     247753 allocs
+    objects.globals                        10.06 MiB    8.7%     132380 allocs
+    routines.locals                         9.13 MiB    7.9%     151159 allocs
+    routines.rare (doc/preproc/return_name/dataitem)      6.51 MiB    5.6%      45936 allocs
+    routines.attributes_parsed              5.27 MiB    4.6%     128723 allocs
+    objects.properties                      5.11 MiB    4.4%      86594 allocs
+    objects.actions                         4.75 MiB    4.1%      81464 allocs
+    routines.name                           2.37 MiB    2.1%     121107 allocs
+    routines.attributes                     1.21 MiB    1.1%      64695 allocs
+    objects.keys/implements/runs/name       0.92 MiB    0.8%      33315 allocs
+    routines.return/access/member           0.63 MiB    0.6%      83191 allocs
+    objects.dataitems/dataset/query         0.58 MiB    0.5%      15298 allocs
+    objects.enum_values                     0.37 MiB    0.3%       5326 allocs
+    objects.page_controls                   0.35 MiB    0.3%      11514 allocs
+    objects.(vecs)                          0.00 MiB    0.0%          0 allocs
+    ENG-94 routine decls: 121107 (size_of RoutineDecl 296 B, Param 72 B, VarDecl 80 B, AttributeIr 104 B)
+      params 171232 locals 94471 attributes 32786 attributes_parsed 32786 (attributes equal to a parsed raw: 0)
+      type texts: 288663 (4.64 MiB text), 7041 distinct (0.21 MiB) -> interning would keep 4.5%
+      docs 14599 (4.38 MiB); names 2.37 MiB; access modifiers {"protected": 381, "local": 53046, "internal": 5022}
+      labelled: locals 761 of 94471, object globals 23979 of 63592
+      vec slack (elements): routines 0 (0.00 MiB), params 0 (0.00 MiB), locals 0 (0.00 MiB)
+      set: return_name 3705 dataitem_source_table 3002 enclosing_member 24332 preproc_context 1335; rare box 21954 (size_of RoutineRare 96 B)
+    bodies: ir (exprs, stmts, blocks, side tables)              364.46 MiB    2697459 allocs
+    ir remainder after the estimates (stmt heap, side tables, Vec slack)     86.36 MiB
+    bodies: issues                                                0.40 MiB         99 allocs
+    bodies: comments                                             20.22 MiB     190162 allocs
+    bodies: AlFile Arcs shared elsewhere                          0.00 MiB          0 allocs
+  session.tier.bodies                                           618.36 MiB    4411299 allocs
+  session.tier.routines                                           0.00 MiB          0 allocs
+  session.tier.objects                                            8.34 MiB      54232 allocs
+  session.tier.dep_meta                                          60.58 MiB     262355 allocs
+  session.tier.lsp                                                0.00 MiB          0 allocs
+  session.dep_cache                                               0.01 MiB        114 allocs
+  session                                                         0.06 MiB        583 allocs
+  remaining live       1.9 MiB
