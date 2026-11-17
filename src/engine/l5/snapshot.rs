@@ -49,12 +49,13 @@ use crate::engine::l4::combined_graph::TypedEdge;
 use crate::engine::l4::inherited_facts::{
     FactRef, InheritedFacts, InheritedSlice, InheritedTables, NO_HOP,
 };
-use crate::program::body::features::{PAnchor, PCallSite, PCallee, POperationSite};
+use crate::program::body::features::{PAnchor, PCallSite, PCallee, POperationSite, shared_vocab};
 use crate::program::body::operation_order::{OperationOrder, ScopeFrame, apply_operation_order};
 use crate::program::model::calls::CallEdge;
 use crate::program::model::events::{EventGraph, EventSymbol};
 use crate::program::model::taxonomy::DispatchKind;
 use crate::program::model::workspace::{Model, ModelRoutine};
+use crate::program::str_pool::SharedStr;
 
 #[path = "snapshot_view.rs"]
 mod view;
@@ -1062,9 +1063,11 @@ impl SnapshotGraphEdge {
 pub struct SnapshotOperationEvidence {
     #[serde(rename = "operationId")]
     pub operation_id: String,
-    pub routine: String,
+    /// Shared (ENG-127): one text per routine, the file's text the anchor already holds,
+    /// and the control context's vocabulary (serialized as the text).
+    pub routine: crate::program::str_pool::SharedStr,
     #[serde(rename = "sourceFile")]
-    pub source_file: String,
+    pub source_file: crate::program::str_pool::SharedStr,
     /// 0-based row, serialized 1-based (see [`SnapshotRange`]).
     #[serde(
         rename = "startLine",
@@ -1083,7 +1086,7 @@ pub struct SnapshotOperationEvidence {
     #[serde(rename = "displayText")]
     pub display_text: String,
     #[serde(rename = "controlContext", skip_serializing_if = "Option::is_none")]
-    pub control_context: Option<String>,
+    pub control_context: Option<crate::program::str_pool::SharedStr>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub order: Option<OperationOrder>,
     #[serde(rename = "underAsserterror", skip_serializing_if = "Option::is_none")]
@@ -1098,9 +1101,10 @@ pub struct SnapshotOperationEvidence {
 pub struct SnapshotCallsiteEvidence {
     #[serde(rename = "callsiteId")]
     pub callsite_id: String,
-    pub routine: String,
+    /// Shared as [`SnapshotOperationEvidence`]'s (ENG-127).
+    pub routine: crate::program::str_pool::SharedStr,
     #[serde(rename = "sourceFile")]
-    pub source_file: String,
+    pub source_file: crate::program::str_pool::SharedStr,
     /// 0-based row, serialized 1-based (see [`SnapshotRange`]).
     #[serde(
         rename = "startLine",
@@ -1119,7 +1123,7 @@ pub struct SnapshotCallsiteEvidence {
     #[serde(rename = "calleeDisplay")]
     pub callee_display: String,
     #[serde(rename = "controlContext", skip_serializing_if = "Option::is_none")]
-    pub control_context: Option<String>,
+    pub control_context: Option<crate::program::str_pool::SharedStr>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub order: Option<OperationOrder>,
     #[serde(rename = "underAsserterror", skip_serializing_if = "Option::is_none")]
@@ -3336,7 +3340,7 @@ fn derive_operation_evidence<'r>(
     // A collided id's op is its LAST OWNING row's (the later row overwrites),
     // with that row's `order`, shifted into the id's one frame table.
     for (ri, r) in base.ws_routines.iter().enumerate() {
-        let stable = stable_routine_id(&r.id, base.routine_to_stable);
+        let stable = SharedStr::from(stable_routine_id(&r.id, base.routine_to_stable));
         // Re-stamp op/callsite order (L3 assembly does not).
         let order = compute_routine_order(r);
 
@@ -3349,13 +3353,13 @@ fn derive_operation_evidence<'r>(
             let entry = SnapshotOperationEvidence {
                 operation_id: op.id.clone(),
                 routine: stable.clone(),
-                source_file: a.source_unit_id.to_string(),
+                source_file: a.source_unit_id.clone(),
                 start_line: a.start_line,
                 start_column: a.start_column,
                 end_line: a.end_line,
                 end_column: a.end_column,
                 display_text: op.kind.clone(),
-                control_context: op.control_context.clone(),
+                control_context: op.control_context.as_deref().map(shared_vocab),
                 order: collided.order(ri, op.order),
                 under_asserterror: if op.under_asserterror == Some(true) {
                     Some(true)
@@ -3380,13 +3384,13 @@ fn derive_operation_evidence<'r>(
             let entry = SnapshotOperationEvidence {
                 operation_id: ro.id.clone(),
                 routine: stable.clone(),
-                source_file: a.source_unit_id.to_string(),
+                source_file: a.source_unit_id.clone(),
                 start_line: a.start_line,
                 start_column: a.start_column,
                 end_line: a.end_line,
                 end_column: a.end_column,
                 display_text: display,
-                control_context: site.control_context.map(str::to_string),
+                control_context: site.control_context.map(shared_vocab),
                 order: collided.order(ri, site.order.copied()),
                 under_asserterror: site.under_asserterror.then_some(true),
             };
@@ -3442,7 +3446,7 @@ fn derive_callsite_evidence<'r>(
 
     let mut out: Vec<SnapshotCallsiteEvidence> = Vec::new();
     for (ri, r) in base.ws_routines.iter().enumerate() {
-        let stable = stable_routine_id(&r.id, base.routine_to_stable);
+        let stable = SharedStr::from(stable_routine_id(&r.id, base.routine_to_stable));
         let order = compute_routine_order(r);
         for cs in &order.call_sites {
             if !referenced.contains(&cs.id) {
@@ -3452,13 +3456,13 @@ fn derive_callsite_evidence<'r>(
             out.push(SnapshotCallsiteEvidence {
                 callsite_id: cs.id.clone(),
                 routine: stable.clone(),
-                source_file: a.source_unit_id.to_string(),
+                source_file: a.source_unit_id.clone(),
                 start_line: a.start_line,
                 start_column: a.start_column,
                 end_line: a.end_line,
                 end_column: a.end_column,
                 callee_display: render_callee(&cs.callee),
-                control_context: cs.control_context.map(|c| c.to_string()),
+                control_context: cs.control_context.map(|c| shared_vocab(&c.to_string())),
                 order: collided.order(ri, cs.order.as_deref().copied()),
                 under_asserterror: if cs.under_asserterror == Some(true) {
                     Some(true)

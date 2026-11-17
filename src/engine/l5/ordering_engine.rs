@@ -383,12 +383,12 @@ pub fn compute_ordering(
         if let Some(op_id) = &eff.evidence_operation_id
             && let Some(op_ev) = index.op_by_id.get(op_id.as_str()).copied()
         {
-            return Some(op_ev.routine.clone());
+            return Some(op_ev.routine.to_string());
         }
         if let Some(cs_id) = &eff.evidence_callsite_id
             && let Some(cs_ev) = index.cs_by_id.get(cs_id.as_str()).copied()
         {
-            return Some(cs_ev.routine.clone());
+            return Some(cs_ev.routine.to_string());
         }
         None
     };

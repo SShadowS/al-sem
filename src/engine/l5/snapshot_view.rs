@@ -41,6 +41,8 @@ use super::{
     compute_routine_order, render_callee, stable_routine_id,
 };
 use crate::engine::l4::pd_solve::ConeArena;
+use crate::program::body::features::shared_vocab;
+use crate::program::str_pool::SharedStr;
 
 /// The view-independent half of a tree's per-view sections (module doc).
 #[derive(Clone)]
@@ -57,17 +59,49 @@ pub(super) struct ViewBase {
 // Evidence
 // ---------------------------------------------------------------------------
 
-/// ENG-127: one census line per text field: its heap bytes (capacity), how many values, how
-/// many distinct by content, and those distinct values' bytes.
-fn text_line<'a>(name: &str, values: impl Iterator<Item = Option<&'a String>>) -> String {
+/// ENG-127: a census text: its content and its allocation (address, bytes), so a shared one
+/// counts once.
+trait CensusText {
+    fn text(&self) -> &str;
+    fn alloc(&self) -> (usize, usize);
+}
+
+impl CensusText for String {
+    fn text(&self) -> &str {
+        self
+    }
+    fn alloc(&self) -> (usize, usize) {
+        (self.as_ptr() as usize, self.capacity())
+    }
+}
+
+impl CensusText for crate::program::str_pool::SharedStr {
+    fn text(&self) -> &str {
+        self
+    }
+    fn alloc(&self) -> (usize, usize) {
+        (self.as_ptr() as usize, self.len())
+    }
+}
+
+/// ENG-127: one census line per text field: its heap bytes (each allocation once), how many
+/// values, how many distinct by content, and those distinct values' bytes.
+fn text_line<'a, T: CensusText + 'a>(
+    name: &str,
+    values: impl Iterator<Item = Option<&'a T>>,
+) -> String {
     let (mut n, mut some, mut heap) = (0usize, 0usize, 0usize);
     let mut distinct: HashSet<&str> = HashSet::new();
+    let mut allocs: HashSet<usize> = HashSet::new();
     for v in values {
         n += 1;
         if let Some(s) = v {
             some += 1;
-            heap += s.capacity();
-            distinct.insert(s.as_str());
+            let (at, bytes) = s.alloc();
+            if bytes > 0 && allocs.insert(at) {
+                heap += bytes;
+            }
+            distinct.insert(s.text());
         }
     }
     let distinct_bytes: usize = distinct.iter().map(|s| s.len()).sum();
@@ -275,7 +309,7 @@ fn op_candidates(
     ri: usize,
     r: &ModelRoutine,
     order: &RoutineOrder,
-    stable: &str,
+    stable: &SharedStr,
     collided: &CollidedRows<'_>,
     keep: &dyn Fn(&str) -> bool,
     out: &mut Vec<(String, SnapshotOperationEvidence)>,
@@ -289,14 +323,14 @@ fn op_candidates(
         let a = &op.source_anchor;
         let entry = SnapshotOperationEvidence {
             operation_id: op.id.clone(),
-            routine: stable.to_string(),
-            source_file: a.source_unit_id.to_string(),
+            routine: stable.clone(),
+            source_file: a.source_unit_id.clone(),
             start_line: a.start_line,
             start_column: a.start_column,
             end_line: a.end_line,
             end_column: a.end_column,
             display_text: op.kind.clone(),
-            control_context: op.control_context.clone(),
+            control_context: op.control_context.as_deref().map(shared_vocab),
             order: collided.order(ri, op.order),
             under_asserterror: if op.under_asserterror == Some(true) {
                 Some(true)
@@ -317,14 +351,14 @@ fn op_candidates(
         let display = ro.evidence_text();
         let entry = SnapshotOperationEvidence {
             operation_id: ro.id.clone(),
-            routine: stable.to_string(),
-            source_file: a.source_unit_id.to_string(),
+            routine: stable.clone(),
+            source_file: a.source_unit_id.clone(),
             start_line: a.start_line,
             start_column: a.start_column,
             end_line: a.end_line,
             end_column: a.end_column,
             display_text: display,
-            control_context: site.control_context.map(str::to_string),
+            control_context: site.control_context.map(shared_vocab),
             order: collided.order(ri, site.order.copied()),
             under_asserterror: site.under_asserterror.then_some(true),
         };
@@ -337,7 +371,7 @@ fn op_candidates(
 fn site_candidates(
     ri: usize,
     order: &RoutineOrder,
-    stable: &str,
+    stable: &SharedStr,
     collided: &CollidedRows<'_>,
     keep: &dyn Fn(&str) -> bool,
     out: &mut Vec<SnapshotCallsiteEvidence>,
@@ -351,14 +385,14 @@ fn site_candidates(
         let a = &cs.source_anchor;
         out.push(SnapshotCallsiteEvidence {
             callsite_id: cs.id.clone(),
-            routine: stable.to_string(),
-            source_file: a.source_unit_id.to_string(),
+            routine: stable.clone(),
+            source_file: a.source_unit_id.clone(),
             start_line: a.start_line,
             start_column: a.start_column,
             end_line: a.end_line,
             end_column: a.end_column,
             callee_display: render_callee(&cs.callee),
-            control_context: cs.control_context.map(|c| c.to_string()),
+            control_context: cs.control_context.map(|c| shared_vocab(&c.to_string())),
             order: collided.order(ri, cs.order.as_deref().copied()),
             under_asserterror: if cs.under_asserterror == Some(true) {
                 Some(true)
@@ -428,13 +462,15 @@ pub(super) fn derive_evidence_base(
             .enumerate()
             .map(|(ri, r)| {
                 let stable = stable_routine_id(&r.id, inp.routine_to_stable);
+                // One text per routine, shared by its evidence rows (ENG-127).
+                let shared = SharedStr::from(stable.as_str());
                 let order = compute_routine_order(r);
                 let (mut ops, mut op_rest) = (Vec::new(), Vec::new());
                 op_candidates(
                     ri,
                     r,
                     &order,
-                    &stable,
+                    &shared,
                     collided,
                     &|id| op_ref.contains(id),
                     &mut ops,
@@ -444,7 +480,7 @@ pub(super) fn derive_evidence_base(
                 site_candidates(
                     ri,
                     &order,
-                    &stable,
+                    &shared,
                     collided,
                     &|id| site_ref.contains(id),
                     &mut sites,
@@ -569,7 +605,7 @@ pub(super) fn view_evidence<'r>(
     for ri in rows {
         let ri = ri as usize;
         let r = &routines[ri];
-        let stable = stable_routine_id(&r.id, &vb.routine_to_stable);
+        let stable = SharedStr::from(stable_routine_id(&r.id, &vb.routine_to_stable).as_str());
         let order = compute_routine_order(r);
         let mut more_ops = Vec::new();
         op_candidates(
@@ -758,7 +794,12 @@ pub(super) fn derive_fact_base(inp: &TreeInputs<'_>) -> FactBase {
         .into_iter()
         .map(|g| g.expect("every group placed"))
         .collect();
-    let tables = Arc::new(b.tables);
+    // ENG-127: the reps grew by pushes (65,536 slots for 46,101 reps of 440 B on CDO); the
+    // base keeps them for its lifetime, so at their length.
+    let mut tables = b.tables;
+    tables.reps.shrink_to_fit();
+    tables.subjects.shrink_to_fit();
+    let tables = Arc::new(tables);
     let mut rows: Vec<SnapshotCapabilityFact> = Vec::with_capacity(total);
     for &gi in &order {
         let g = &groups[gi];
