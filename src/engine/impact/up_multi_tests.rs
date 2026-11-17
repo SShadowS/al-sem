@@ -36,11 +36,10 @@ use std::sync::Arc;
 
 use serde_json::{Value, json};
 
-use super::super::{Captions, Keep, Shared, Up, row_json, summary};
-use super::{UpMulti, UpMultiP2};
+use super::super::{Captions, Keep, Shared, Up, multi_rows, row_json, summary};
 use crate::engine::test_select::select::display;
 use crate::program::impact_graph::SitedGraph;
-use crate::program::impact_graph::multi_walk::{multi_walk, tests::every_shape};
+use crate::program::impact_graph::multi_walk::tests::every_shape;
 use crate::program::impact_graph::reverse::{NodeIx, WalkOptions, WalkScratch, walk_multi};
 
 /// What a comparison saw, for a test's preconditions.
@@ -80,12 +79,8 @@ pub(crate) fn assert_rows_equal(
 ) -> Seen {
     let changed: BTreeSet<NodeIx> = roots.iter().flatten().copied().collect();
     let shared = Shared::new(g, &changed);
-    let mut p1 = UpMulti::new(g, keep, &shared, opts, roots);
-    let stats = multi_walk(g, roots, opts, &mut p1);
-    let (mut rows, finals) = p1.rows_p1(&stats.roots);
-    let mut p2 = UpMultiP2::new(&p1, &finals);
-    multi_walk(g, roots, opts, &mut p2);
-    p2.fill(&mut rows);
+    // The production pass sequence (`walk_chunk`'s), not a copy of it.
+    let m = multi_rows(g, keep, &shared, opts, roots);
     let mut seen = Seen::default();
     let mut scratch = WalkScratch::default();
     for (k, lanes) in roots.iter().enumerate() {
@@ -98,12 +93,10 @@ pub(crate) fn assert_rows_equal(
                 .iter()
                 .map(|&n| (n, up.best.get(&n).map(|b| b.hops))),
         );
-        let mut got = row_json(&rows[k], g, &shared, captions);
+        let mut got = row_json(&m.rows[k], g, &shared, captions);
         got["nearestAncestors"] = ancestors_json(
             g,
-            p1.nearest_ancestors(k)
-                .iter()
-                .map(|&(n, _, hops)| (n, Some(hops))),
+            m.ancestors[k].iter().map(|&(n, _, hops)| (n, Some(hops))),
         );
         let (want_s, got_s) = (want.to_string(), got.to_string());
         if want_s != got_s {

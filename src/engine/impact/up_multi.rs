@@ -307,8 +307,9 @@ impl<'g, 'a> UpMulti<'g, 'a> {
     }
 
     /// Word `wi` of the roots for which node `n`'s list `l` is only open (a node in the list
-    /// with no arrival that is not only open): pass 2's second partition.
-    fn open_only_word(&self, l: usize, n: NodeIx, wi: usize) -> u64 {
+    /// with no arrival that is not only open): pass 2's second partition. `static_pa`: `n`'s
+    /// own kinds hold `page-action` (read only for the page-action list).
+    fn open_only_word(&self, l: usize, n: NodeIx, wi: usize, static_pa: bool) -> u64 {
         let w = |f| self.nodes.word(n, f, wi);
         let non_open_tier = w(TIER) | w(TIER + 1);
         let not_own = !self.own_word(n, wi);
@@ -317,7 +318,6 @@ impl<'g, 'a> UpMulti<'g, 'a> {
             L_DIRECT => w(DIRECT) & !w(DIRECT_NON_OPEN),
             l if l >= N_KINDS => w(REACHED) & !non_open_tier,
             l if EntryKind::ALL[l] == EntryKind::PageAction => {
-                let static_pa = entry_kinds(self.g, n, self.opts).contains(&EntryKind::PageAction);
                 let (any_pa, non_open) = if static_pa {
                     (
                         (w(REACHED) & not_own) | w(PA_ANY),
@@ -429,6 +429,14 @@ impl MultiSink for UpMulti<'_, '_> {
         set_all(self.nodes.fam(n, PA_ANY), &rest);
         if s.tier != Tier::OnlyOpen {
             set_all(self.nodes.fam(n, PA_NON_OPEN), &rest);
+        }
+        // `Up::entry` as for any entry: the node's own canonical entry too (a page node has
+        // none today; kept so the two paths agree by construction).
+        if let Some(e) = self.shared.inv.of_node(n)
+            && !self.shared.changed.contains(&e)
+            && any(&rest)
+        {
+            self.canon(e, s.tier, s.ext, &rest);
         }
         self.scratch = rest;
     }
@@ -826,9 +834,14 @@ impl<'p, 'g, 'a> UpMultiP2<'p, 'g, 'a> {
             return;
         }
         let open = tier == Tier::OnlyOpen;
+        let static_pa = open
+            && l == list_of_kind(EntryKind::PageAction)
+            && entry_kinds(self.p1.g, n, self.p1.opts).contains(&EntryKind::PageAction);
         for wi in 0..self.p1.w {
             self.adm[wi] = if open {
-                roots[wi] & self.finals.open_needed[l][wi] & self.p1.open_only_word(l, n, wi)
+                roots[wi]
+                    & self.finals.open_needed[l][wi]
+                    & self.p1.open_only_word(l, n, wi, static_pa)
             } else {
                 roots[wi]
             };
@@ -1028,8 +1041,22 @@ impl MultiSink for UpMultiP2<'_, '_, '_> {
         let rest: Vec<u64> = (0..p1.w)
             .map(|wi| roots[wi] & !p1.own_word(n, wi))
             .collect();
-        if any(&rest) {
-            self.list_add(list_of_kind(EntryKind::PageAction), n, hops, s.tier, &rest);
+        if !any(&rest) {
+            return;
+        }
+        self.list_add(list_of_kind(EntryKind::PageAction), n, hops, s.tier, &rest);
+        // As pass 1: `Up::entry`'s canonical add for the node itself.
+        if let Some(e) = p1.shared.inv.of_node(n)
+            && !p1.shared.changed.contains(&e)
+        {
+            let w = Witness {
+                tier: s.tier,
+                ext: s.ext,
+                hops,
+                node: n,
+                at: 0,
+            };
+            self.canon_add(e, w, &rest);
         }
     }
     fn external(

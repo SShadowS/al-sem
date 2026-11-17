@@ -1418,10 +1418,18 @@ const CHUNKS: usize = 3;
 /// The most roots a chunk walks one by one ([`walk_chunk`]).
 const SMALL_CHUNK: usize = 2;
 
+/// The most roots one chunk walks at once: the passes' masks grow with the roots (per reached
+/// node, 22 families of a bit per root), so a serial caller (the resident engine, one worker)
+/// walks a large change in several chunks instead of one (CDO's 699 roots: 3 chunks of 233
+/// on the CLI).
+const MAX_CHUNK_ROOTS: usize = 256;
+
 /// The roots per chunk for `walked` roots on `workers` workers: [`CHUNKS`] chunks at most,
-/// one per worker.
+/// one per worker, of at most [`MAX_CHUNK_ROOTS`] roots each.
 fn chunk_size(walked: usize, workers: usize) -> usize {
-    walked.div_ceil(CHUNKS.min(workers).max(1)).max(1)
+    walked
+        .div_ceil(CHUNKS.min(workers).max(1))
+        .clamp(1, MAX_CHUNK_ROOTS)
 }
 
 /// A walk's options from the up part's arguments. Each task builds its own:
@@ -1436,9 +1444,8 @@ fn walk_options<'a>(args: &UpArgs<'a>, extra: &'a HashMap<NodeIx, u16>) -> WalkO
 }
 
 /// ENG-125: one chunk of roots (a root's `#if` arms are its lanes) and each root's row, in
-/// chunk order: [`up_multi`]'s two passes, each one [`multi_walk::multi_walk`] over every
-/// root of the chunk. A cancelled walk skips pass 2: no caller compares a cancelled run's
-/// rows (the CLI never cancels; the resident engine discards a stopped read).
+/// chunk order: [`up_multi`]'s two passes ([`multi_rows`]), each one
+/// [`multi_walk::multi_walk`] over every root of the chunk.
 ///
 /// A chunk of at most [`SMALL_CHUNK`] roots walks each root on its own with an [`Up`] instead
 /// (the union's path, and the passes' test oracle, so the rows are the same bytes): the two
@@ -1457,7 +1464,8 @@ fn walk_chunk(
         let mut scratch = WalkScratch::default();
         return chunk
             .iter()
-            .map(|(id, nodes)| {
+            .enumerate()
+            .map(|(i, (id, nodes))| {
                 let t = std::time::Instant::now();
                 let mut up = Up::new(g, args.keep, nodes, shared);
                 walk_multi(g, nodes, &opts, &mut scratch, &mut up);
@@ -1484,44 +1492,81 @@ fn walk_chunk(
                     states: up.states,
                     visitor_bytes: up.bytes(),
                     walk_us,
-                    walk_bytes: scratch.bytes(),
+                    // The chunk's one scratch, once.
+                    walk_bytes: if i + 1 == chunk.len() {
+                        scratch.bytes()
+                    } else {
+                        0
+                    },
                 }
             })
             .collect();
     }
     let lanes: Vec<Vec<NodeIx>> = chunk.iter().map(|(_, nodes)| nodes.clone()).collect();
     let t = std::time::Instant::now();
-    let mut p1 = up_multi::UpMulti::new(g, args.keep, shared, &opts, &lanes);
-    let s1 = multi_walk::multi_walk(g, &lanes, &opts, &mut p1);
-    let (mut rows, finals) = p1.rows_p1(&s1.roots);
-    let mut peak = s1.peak_bytes;
-    if !opts.cancel.is_some_and(|c| c()) {
-        let mut p2 = up_multi::UpMultiP2::new(&p1, &finals);
-        peak = peak.max(multi_walk::multi_walk(g, &lanes, &opts, &mut p2).peak_bytes);
-        p2.fill(&mut rows);
-    }
+    let m = multi_rows(g, args.keep, shared, &opts, &lanes);
     let walk_us = t.elapsed().as_micros() as u64;
-    let bytes = p1.bytes();
-    rows.iter()
+    m.rows
+        .iter()
+        .zip(&m.ancestors)
         .zip(chunk)
         .enumerate()
-        .map(|(i, (row, (id, nodes)))| RootOut {
-            row: root_row(
-                g,
-                args,
-                shared,
-                row,
-                p1.nearest_ancestors(i),
-                id,
-                nodes,
-                captions,
-            ),
+        .map(|(i, ((row, ancestors), (id, nodes)))| RootOut {
+            row: root_row(g, args, shared, row, ancestors, id, nodes, captions),
             states: row.states,
-            visitor_bytes: if i == 0 { bytes } else { 0 },
+            visitor_bytes: if i == 0 { m.bytes } else { 0 },
             walk_us: if i == 0 { walk_us } else { 0 },
-            walk_bytes: if i == 0 { peak } else { 0 },
+            walk_bytes: if i == 0 { m.peak } else { 0 },
         })
         .collect()
+}
+
+/// ENG-125: the rows of one chunk's roots from [`up_multi`]'s two passes (what
+/// [`walk_chunk`] prints and `up_multi_tests` compares).
+pub(super) struct MultiRows {
+    pub(super) rows: Vec<Row>,
+    /// Per root, its nearest ancestors with each one's best-tier hops.
+    pub(super) ancestors: Vec<Vec<(NodeIx, Tier, u32)>>,
+    /// The passes' mask bytes, and the two walks' peak.
+    pub(super) bytes: usize,
+    pub(super) peak: usize,
+}
+
+/// The two passes over the roots of `lanes` (a root's `#if` arms are its lanes). A cancel
+/// seen after either pass marks every root not limited already `cancelled`, and skips pass
+/// 2 when it comes after pass 1: a cut run's rows never look complete.
+pub(super) fn multi_rows(
+    g: &SitedGraph,
+    keep: Keep,
+    shared: &Shared<'_>,
+    opts: &WalkOptions<'_>,
+    lanes: &[Vec<NodeIx>],
+) -> MultiRows {
+    let cancelled = || opts.cancel.is_some_and(|c| c());
+    let mut p1 = up_multi::UpMulti::new(g, keep, shared, opts, lanes);
+    let s1 = multi_walk::multi_walk(g, lanes, opts, &mut p1);
+    let (mut rows, finals) = p1.rows_p1(&s1.roots);
+    let mut peak = s1.peak_bytes;
+    let mut cut = cancelled();
+    if !cut {
+        let mut p2 = up_multi::UpMultiP2::new(&p1, &finals);
+        peak = peak.max(multi_walk::multi_walk(g, lanes, opts, &mut p2).peak_bytes);
+        p2.fill(&mut rows);
+        cut = cancelled();
+    }
+    if cut {
+        for row in &mut rows {
+            row.limit.get_or_insert(Limit::Cancelled);
+        }
+    }
+    MultiRows {
+        ancestors: (0..lanes.len())
+            .map(|k| p1.nearest_ancestors(k).to_vec())
+            .collect(),
+        rows,
+        bytes: p1.bytes(),
+        peak,
+    }
 }
 
 /// One walked root's row: its [`Row`], and its nearest ancestors with each one's best-tier
@@ -1754,6 +1799,10 @@ pub fn up(g: &SitedGraph, args: &UpArgs<'_>, captions: &Captions) -> Value {
         }),
         "roots": roots_out,
         "union": union,
+        // DIAGNOSTIC ONLY: `cost.*` measures this run and is not stable across worker or
+        // chunk counts (ENG-125: `visitorBytes` is a chunk's masks, chunks follow the worker
+        // count); no consumer may key on it. Every comparison of up answers blanks the run's
+        // measures (`walkMs`, `walksUs`, `scratchBytes`, `visitorBytes`).
         "cost": {"perRootStates": states, "unionStates": ustats.states,
                  "walkMs": started.elapsed().as_millis() as u64,
                  // The walks alone (per root and the union), without the
@@ -1763,6 +1812,8 @@ pub fn up(g: &SitedGraph, args: &UpArgs<'_>, captions: &Captions) -> Value {
                  // Every scratch's capacity (one per walk in flight, TLS-21):
                  // varies with the worker count and between runs, a
                  // measurement like `walkMs`, not part of the answer.
+                 // `visitorBytes`: the largest visitor or chunk masks of any one walk; varies
+                 // with the worker count likewise.
                  "scratchBytes": scratch_bytes, "visitorBytes": visitor_bytes,
                  "inventoryBytes": shared.inv.bytes()},
     })

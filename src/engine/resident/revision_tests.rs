@@ -1365,7 +1365,7 @@ fn the_resident_up_walk_runs_on_the_revisions_count() {
     assert_eq!(
         p.up_tasks.load(std::sync::atomic::Ordering::SeqCst),
         5,
-        "one task per walked root"
+        "every walked root walked (ENG-125: in chunks)"
     );
     if std::thread::available_parallelism().map_or(1, usize::from) < 2 {
         eprintln!("one core: the parallel claim is not checked");
@@ -1388,7 +1388,8 @@ fn the_resident_up_walk_runs_on_the_revisions_count() {
             .flatten()
             .collect();
         let mut v: serde_json::Value = serde_json::from_slice(&stdout).expect("JSON");
-        for k in ["walkMs", "walksUs", "scratchBytes"] {
+        // The run's measures; ENG-125 made `visitorBytes` one (a chunk's masks).
+        for k in ["walkMs", "walksUs", "scratchBytes", "visitorBytes"] {
             v["cost"][k] = serde_json::Value::Null;
         }
         v

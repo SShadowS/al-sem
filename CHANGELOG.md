@@ -173,10 +173,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A measurement field changed meaning.** `cost.visitorBytes` of the up part (`impact
   --part up`'s JSON; the `impact` answer carries no `cost`) is now a chunk's masks, and chunks
   follow the worker count. Like `scratchBytes` it measures the run: the up-parallel golden's
-  master value (1544) was set to `null` by hand, and both of its comparisons blank it.
+  master value (1544) was set to `null` by hand, and every comparison of up answers blanks it
+  (the up-parallel golden's two, `revision_tests`' resident-against-CLI one, `engine_host`'s).
+  **The up part's `cost.*` is diagnostic:** it is not stable across worker or chunk counts,
+  and no consumer may key on it.
+- **A chunk holds at most 256 roots** (`MAX_CHUNK_ROOTS`): the masks grow with the roots, and
+  a serial caller (the resident engine) would otherwise walk a whole large change in one
+  chunk. A cancel seen after either pass marks every root not limited already `cancelled`, so
+  a cut run's rows never look complete.
 - **First found by the profile.** At first 3 chunks were 6 s slower than master: pass 1 asked
   `SitedGraph::stable_id`, which builds a string, on every reach event (9.4 of 97 s CPU). It
   now asks only for roots whose ancestor list still fills, once per node.
+- **Not measured:** mid-size changes (3 to about 20 roots, which take the two passes in small
+  chunks), and `multi_walk`'s cancel branch has no test (it is polled every 4,096 records,
+  more than any fixture has).
 
 ### Fixed (ENG-128: `alsem impact`'s `eventPublishers` no longer depends on which way the walk reached a state first)
 
