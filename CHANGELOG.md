@@ -35,8 +35,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   answered and not kept; break: no cap → red), and `step5_t1_spans_and_d9_read_the_fold` now
   pins that a real fold's records share (Root's and Helper's equal statuses and Root's inherited
   reason are one allocation each; break: `coverage_record` mints its own text → red). The
-  summaries' census tally counts each distinct shared text once, by address, so it stays exact
-  past the cap (sol).
+  summaries' census tally counts each distinct shared text once (sol), by content, not by
+  address: how many allocations hold a text depends on which parallel-walk worker minted it, and
+  `cli_batch_census::batch_arc_census` needs the census deterministic.
 - **Limits** (Fable): the parallel cone walk's workers each start an empty set, so a status or
   reason text is copied once per worker per walk (the unknown targets are shared by handle from
   the successor cones); the long-lived serial thread's set keeps at most 16,384 texts. The direct
