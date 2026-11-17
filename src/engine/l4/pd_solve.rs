@@ -1237,6 +1237,26 @@ fn seed_of<'a>(
     (owner, TempState::ParameterDependent(i0), reqs)
 }
 
+/// A state of one producer's walk, `(routine, t, reqs)` with the routine by its interned
+/// address (the producer is the walk's).
+type SolveKey = (*const u8, TempState, Vec<Req>);
+
+/// The most producers a chunk is cut down to (ENG-121): a chunk has at least this many, or
+/// fewer when there are fewer fresh producers than that per thread, so a small solve (a
+/// resident refresh after an edit) keeps one producer per worker.
+const MIN_SOLVE_CHUNK: usize = 4;
+
+/// One chunk's scratch for [`solve_producer`] (ENG-121): its visited set, its edge index and
+/// each state's name, cleared per producer and reused across the chunk, so a producer's walk
+/// does not grow them again from empty. On CDO their rehashing was 4.2-4.9 % of the sampled CPU
+/// of a one-shot prove or analyze, and fell by 1.3-1.8 points (CHANGELOG ENG-121).
+#[derive(Default)]
+struct SolveScratch<'a> {
+    ix_of: crate::fxhash::FxHashMap<SolveKey, StateIx>,
+    edge_ix: crate::fxhash::FxHashMap<*const TypedOutEdge, usize>,
+    at: Vec<&'a Arc<str>>,
+}
+
 /// One fresh producer's BFS (plan 2026-11-03 L2), on any thread. It reads
 /// only shared, immutable inputs (the interned names, the incoming edges,
 /// the rows and frames; [`cross_edge`] is a pure function of them) and
@@ -1245,25 +1265,7 @@ fn seed_of<'a>(
 /// finds depends on another: the serial walk ([`Walk::Serial`]) interleaves
 /// the producers in one FIFO queue, and that queue restricted to one
 /// producer is this one, so each state, link and distance is the same.
-/// A state of one producer's walk, `(routine, t, reqs)` with the routine by its interned
-/// address (the producer is the walk's).
-type SolveKey = (*const u8, TempState, Vec<Req>);
-
-/// The fewest producers one [`SolveScratch`] walks (a small solve is one chunk, so its
-/// producers share a scratch too).
-const MIN_SOLVE_CHUNK: usize = 4;
-
-/// One chunk's scratch for [`solve_producer`] (ENG-121): its visited set, its edge index and
-/// each state's name, cleared per producer and reused across the chunk, so a producer's walk
-/// does not grow them again from empty. On CDO their rehashes and growth were about 2 % of a
-/// one-shot prove's CPU and 3 % of analyze's (CHANGELOG ENG-121).
-#[derive(Default)]
-struct SolveScratch<'a> {
-    ix_of: crate::fxhash::FxHashMap<SolveKey, StateIx>,
-    edge_ix: crate::fxhash::FxHashMap<*const TypedOutEdge, usize>,
-    at: Vec<&'a Arc<str>>,
-}
-
+/// `scratch` (ENG-121) is cleared first, so the answer does not depend on it.
 fn solve_producer<'g, 'a>(
     p: usize,
     prod: &Producer,
@@ -1699,15 +1701,15 @@ fn solve_core<'g>(
         Walk::Parallel => {
             use rayon::prelude::*;
             // ENG-121: the producers in chunks (about eight per thread, at least
-            // `MIN_SOLVE_CHUNK`), each walked by one `SolveScratch`, so a scratch grows
+            // `MIN_SOLVE_CHUNK` unless fewer than that per thread: a small solve keeps one
+            // producer per worker), each walked by one `SolveScratch`, so a scratch grows
             // to its chunk's largest walk once instead of from empty per producer. (Rayon's
             // `map_init` makes one per split, and work stealing splits it small: on CDO
             // it removed little.) The walks' answers do not depend on it (it is cleared
             // per producer); the chunks keep producer order.
-            let per = fresh_ps
-                .len()
-                .div_ceil(rayon::current_num_threads().max(1) * 8)
-                .max(MIN_SOLVE_CHUNK);
+            let threads = rayon::current_num_threads().max(1);
+            let floor = MIN_SOLVE_CHUNK.min(fresh_ps.len() / threads).max(1);
+            let per = fresh_ps.len().div_ceil(threads * 8).max(floor);
             let solved: Vec<FreshSolve<'g>> = fresh_ps
                 .par_chunks(per)
                 .flat_map_iter(|chunk| {
@@ -3288,25 +3290,20 @@ mod tests {
         );
     }
 
-    /// L2 on the seeded solve: the fresh producers of `solve_seeded` (a
-    /// re-solved producer beside a copied one, a new caller, a removed edge)
-    /// and the hand-stated canonical-order case (four producers sharing
-    /// edges, one edge present twice in the graph, cycles) each equal the
-    /// serial walk.
     /// ENG-121: one `SolveScratch` serves every producer of its chunk, cleared per producer.
-    /// A chunk holds at least `MIN_SOLVE_CHUNK` (4) producers, so the hand-stated solves (four
-    /// producers sharing edges, whose walks reach the same states) run on one reused scratch,
-    /// each checked against the serial walk; here in a one-thread pool, so the chunks also run
-    /// one after another on one worker.
+    /// In a one-thread pool a solve of four or more fresh producers has chunks of at least
+    /// `MIN_SOLVE_CHUNK` (4), so the hand-stated solves (four producers sharing edges, whose
+    /// walks reach the same states) run on one reused scratch, each checked against the
+    /// serial walk. (In a wider pool a solve this small gets one producer per chunk.)
     ///
-    /// DISCRIMINATION (2026-11-17, with `map_init`'s per-split scratch, red in its one-thread
-    /// pool), each red here, then green on revert; none failed the other pd_solve tests:
+    /// DISCRIMINATION, on the chunked form (2026-11-17), each red here, then green on revert:
     /// not clearing, between producers, (1) the visited set (an index past the producer's
     /// states), (2) the state names (the arena differs from the serial walk's), (3) the edge
-    /// index (an index past the producer's edges). On the chunked form, (1) again: red here and
-    /// in five more pd_solve tests (chunks of four or more make reuse the common case).
+    /// index (an index past the producer's edges).
     #[test]
     fn a_reused_solve_scratch_equals_the_serial_walk() {
+        // The precondition: the four hand-stated producers fit one chunk in this pool.
+        const _: () = assert!(super::MIN_SOLVE_CHUNK >= 4);
         let pool = rayon::ThreadPoolBuilder::new()
             .num_threads(1)
             .build()
@@ -3320,6 +3317,11 @@ mod tests {
         assert!(checked >= 13, "every solve was checked ({checked})");
     }
 
+    /// L2 on the seeded solve: the fresh producers of `solve_seeded` (a
+    /// re-solved producer beside a copied one, a new caller, a removed edge)
+    /// and the hand-stated canonical-order case (four producers sharing
+    /// edges, one edge present twice in the graph, cycles) each equal the
+    /// serial walk.
     #[test]
     fn seeded_and_hand_stated_solves_equal_the_serial_walk() {
         let checked = checked_against_serial(|| {
