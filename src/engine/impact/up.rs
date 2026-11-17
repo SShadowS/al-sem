@@ -263,7 +263,7 @@ fn tier_rank(tier: Tier, ext: u8) -> u8 {
 
 /// One state as a class witness: what it reached, how, and when it arrived.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct Witness {
+pub(super) struct Witness {
     tier: Tier,
     ext: u8,
     hops: u32,
@@ -839,11 +839,9 @@ fn node_json(g: &SitedGraph, n: NodeIx, hops: u32, tier: Tier) -> Value {
 pub const POPULATION: &str =
     "legacy: every relation together (code, UI navigation, configuration, hub); see byRelation";
 
-/// Counts per class and tier, in `byRelation`'s shape (round-2 r2 §2.1
-/// step 5): `{code: {local, viaDependency}, uiNavigation: {local,
-/// viaDependency}, candidates: {overConfiguration: {code, uiNavigation},
-/// overRule, overHub}, total}`.
-fn by_relation(ws: impl Iterator<Item = Witness>) -> Value {
+/// Counts per (class, the witness's tier is `Local`), and the total: what `byRelation`
+/// prints ([`by_relation_of`]).
+fn by_relation(ws: impl Iterator<Item = Witness>) -> (BTreeMap<(Population, bool), usize>, usize) {
     let mut n: BTreeMap<(Population, bool), usize> = BTreeMap::new();
     let mut total = 0usize;
     for w in ws {
@@ -851,10 +849,12 @@ fn by_relation(ws: impl Iterator<Item = Witness>) -> Value {
         *n.entry((w.population(), w.tier == Tier::Local))
             .or_default() += 1;
     }
-    by_relation_of(&n, total)
+    (n, total)
 }
 
-/// [`by_relation`] from its counts: per (class, the witness's tier is `Local`), and the total.
+/// [`by_relation`]'s counts in `byRelation`'s shape (round-2 r2 §2.1 step 5): `{code:
+/// {local, viaDependency}, uiNavigation: {local, viaDependency}, candidates:
+/// {overConfiguration: {code, uiNavigation}, overRule, overHub}, total}`.
 fn by_relation_of(n: &BTreeMap<(Population, bool), usize>, total: usize) -> Value {
     let get = |p: Population, local: bool| n.get(&(p, local)).copied().unwrap_or(0);
     let both = |p: Population| get(p, true) + get(p, false);
@@ -908,13 +908,97 @@ const POPULATIONS: [(&str, &[Population]); 5] = [
     ("overHub", &[Population::OverHub]),
 ];
 
-/// The classified part of a walk's summary (round-2 r2 §2.1 steps 2-5):
-/// ancestors and canonical entries per population, the entries by kind and
-/// context, the program's share, each population's nearest witness, and the
-/// external callers of the code population.
-fn classified(up: &Up<'_>, g: &SitedGraph) -> serde_json::Map<String, Value> {
+/// A list's counts and its first witnesses `(hops, tier, node)` ([`Firsts`]).
+#[derive(Default)]
+pub(super) struct ListOut {
+    pub(super) count: usize,
+    pub(super) only_open: usize,
+    pub(super) first: Vec<(u32, Tier, NodeIx)>,
+}
+
+impl ListOut {
+    fn of(f: &Firsts, keep: usize) -> ListOut {
+        ListOut {
+            count: f.count(),
+            only_open: f.only_open(),
+            first: f.first(keep),
+        }
+    }
+}
+
+/// One population's part of the classified answer ([`POPULATIONS`]).
+#[derive(Default)]
+pub(super) struct GroupOut {
+    /// Per kind word (TLS-55: the entry's own, `inv.word`), keyed by its print rank
+    /// (`vocab::entry_word_rank`), so `page trigger` holds the API pages' and the configured
+    /// page triggers' too: how many entries.
+    pub(super) kinds: BTreeMap<(usize, &'static str), usize>,
+    pub(super) contexts: BTreeMap<&'static str, usize>,
+    /// The population's entries.
+    pub(super) mine: usize,
+    /// Per word, the nearest entry (class order, then arrival).
+    pub(super) first_by_kind: BTreeMap<(usize, &'static str), (u32, Witness)>,
+    /// The nearest witness: an entry of the population (`Some(e)`), else its nearest ancestor.
+    pub(super) nearest: Option<(Option<u32>, Witness)>,
+}
+
+/// What one walk found, before it is printed ([`row_json`]): [`Up`] gives it by
+/// [`row_of_up`], ENG-125's multi-walk passes by their masks. One printer for both keeps
+/// every row's bytes (and key order) the same.
+#[derive(Default)]
+pub(super) struct Row {
+    pub(super) root_entry: BTreeSet<EntryKind>,
+    pub(super) hubs: BTreeSet<(String, String)>,
+    pub(super) states: usize,
+    pub(super) max_hops: u32,
+    /// Ancestors by best tier: local, through a dependency, only open.
+    pub(super) tiers: [usize; 3],
+    pub(super) entries: BTreeMap<EntryKind, ListOut>,
+    /// The action-run site that made a page an entry (its captions).
+    pub(super) action_site: HashMap<NodeIx, SiteIx>,
+    pub(super) publishers: ListOut,
+    pub(super) direct: ListOut,
+    pub(super) external: BTreeMap<&'static str, ListOut>,
+    pub(super) hidden: BTreeMap<&'static str, usize>,
+    pub(super) universal: bool,
+    pub(super) limit: Option<Limit>,
+    /// `byRelation`'s counts and totals: ancestors, entries.
+    pub(super) anc_rel: (BTreeMap<(Population, bool), usize>, usize),
+    pub(super) ent_rel: (BTreeMap<(Population, bool), usize>, usize),
+    pub(super) groups: [GroupOut; 5],
+    pub(super) candidates: usize,
+    /// Per external why, its callers whose best state is established code.
+    pub(super) external_code: BTreeMap<&'static str, usize>,
+    /// The reached entries with each note ([`NOTES`]).
+    pub(super) notes: [usize; 2],
+}
+
+/// The entry notes `entryNotes` counts, in print order.
+const NOTES: [u8; 2] = [
+    crate::program::impact_graph::entries::NOTE_UNNAMED_ACTIONS,
+    crate::program::impact_graph::entries::NOTE_BACKGROUND_WITHOUT_ON_RUN,
+];
+
+/// The [`Row`] of one walk's visitor.
+fn row_of_up(up: &Up<'_>, g: &SitedGraph) -> Row {
     use crate::engine::vocab;
     let inv = up.shared.inv;
+    let keep = up.keep.per_list;
+    let mut tiers = [0usize; 3];
+    for (n, b) in &up.best {
+        if up.root_nodes.contains(n) || g.flags(*n) & flag::HUB != 0 {
+            continue;
+        }
+        tiers[b.tier as usize] += 1;
+    }
+    // Output validation V2 (§3.2, F12): the hubs on the reach (each with a site that calls
+    // it from inside the reach).
+    let mut hubs: BTreeSet<(String, String)> = BTreeSet::new();
+    for n in up.best.keys() {
+        if let Some(kind) = crate::engine::l5::routine_rollup::hub_kind_of(g, *n) {
+            hubs.insert((kind, hub_at(g, *n, |m| up.best.contains_key(&m))));
+        }
+    }
     let ancestors: Vec<Witness> = up
         .best
         .iter()
@@ -922,106 +1006,41 @@ fn classified(up: &Up<'_>, g: &SitedGraph) -> serde_json::Map<String, Value> {
         .map(|(_, b)| b.class)
         .collect();
     let entries: Vec<(u32, Witness)> = up.canon.best.iter().map(|(&e, &w)| (e, w)).collect();
-    let program = up.shared.program();
-    let mut by_kind = serde_json::Map::new();
-    let mut by_context = serde_json::Map::new();
-    let mut share = serde_json::Map::new();
-    let mut nearest = serde_json::Map::new();
-    let mut first_by_kind = serde_json::Map::new();
-    for (key, classes) in POPULATIONS {
-        let mine: Vec<&(u32, Witness)> = entries
+    let mut groups: [GroupOut; 5] = Default::default();
+    for (g_out, (_, classes)) in groups.iter_mut().zip(POPULATIONS) {
+        for &(e, w) in entries
             .iter()
             .filter(|(_, w)| classes.contains(&w.population()))
-            .collect();
-        // Per kind word (TLS-55: the entry's own, `inv.word`), keyed by its
-        // print rank (`vocab::entry_word_rank`), so `page trigger` holds the
-        // API pages' and the configured page triggers' too.
-        let mut kinds: BTreeMap<(usize, &str), usize> = BTreeMap::new();
-        let mut contexts: BTreeMap<&str, usize> = BTreeMap::new();
-        // Per word, the nearest entry (class order, then arrival).
-        let mut firsts: BTreeMap<(usize, &str), (u32, Witness)> = BTreeMap::new();
-        for &&(e, w) in &mine {
+        {
+            g_out.mine += 1;
             let word = inv.word(e);
             let k = (vocab::entry_word_rank(word), word);
-            *kinds.entry(k).or_default() += 1;
+            *g_out.kinds.entry(k).or_default() += 1;
             let ctx: BTreeSet<&str> = inv.kinds(e).filter_map(vocab::entry_context).collect();
             for c in ctx {
-                *contexts.entry(c).or_default() += 1;
+                *g_out.contexts.entry(c).or_default() += 1;
             }
-            let f = firsts.entry(k).or_insert((e, w));
+            let f = g_out.first_by_kind.entry(k).or_insert((e, w));
             if (w.key(), w.at) < (f.1.key(), f.1.at) {
                 *f = (e, w);
             }
         }
-        // Kinds by their §8.1 words, in print order.
-        let words: Vec<(&str, usize)> = kinds.iter().map(|(&(_, w), &n)| (w, n)).collect();
-        by_kind.insert(
-            key.into(),
-            Value::Object(
-                words
-                    .iter()
-                    .map(|(w, n)| ((*w).to_string(), json!(n)))
-                    .collect(),
-            ),
-        );
-        by_context.insert(
-            key.into(),
-            Value::Object(
-                contexts
-                    .iter()
-                    .map(|(c, n)| ((*c).to_string(), json!(n)))
-                    .collect(),
-            ),
-        );
-        share.insert(key.into(), share_json(mine.len(), program));
-        let mut list: Vec<Value> = Vec::new();
-        for (&(_, word), (e, w)) in &firsts {
-            let mut v = witness_json(g, w);
-            v["kind"] = json!(word);
-            if let Some(a) = inv.action(*e) {
-                v["action"] = json!(a);
-            }
-            list.push(v);
-        }
-        first_by_kind.insert(key.into(), Value::Array(list));
-        // The nearest witness: an entry of the population, else its nearest
-        // ancestor.
         let entry = classes
             .iter()
             .filter_map(|p| up.canon.nearest(*p))
             .min_by_key(|(_, w)| (w.key(), w.at));
-        let w = match entry {
-            Some((e, w)) => {
-                let mut v = witness_json(g, &w);
-                v["entry"] = json!(inv.word(e));
-                if let Some(a) = inv.action(e) {
-                    v["action"] = json!(a);
-                }
-                Some(v)
-            }
+        g_out.nearest = match entry {
+            Some((e, w)) => Some((Some(e), w)),
             None => ancestors
                 .iter()
                 .filter(|w| classes.contains(&w.population()))
                 .min_by_key(|w| (w.key(), w.at))
-                .map(|w| witness_json(g, w)),
+                .map(|w| (None, *w)),
         };
-        nearest.insert(key.into(), w.unwrap_or(Value::Null));
     }
-    let candidates = entries
-        .iter()
-        .filter(|(_, w)| !w.population().established())
-        .count();
-    share.insert("candidates".into(), share_json(candidates, program));
-    share.insert("all".into(), share_json(entries.len(), program));
-    // The same set as `programEntries`: the changed routines left out.
-    let program_by_kind: Vec<(&str, usize)> = inv
-        .by_kind(|e| !up.shared.changed.contains(&e))
-        .into_iter()
-        .map(|((_, w), n)| (w, n))
-        .collect();
-    // `external:` belongs to the code population: the external callers whose
-    // best state is established code.
-    let external_code: Vec<Value> = up
+    // `external:` belongs to the code population: the external callers whose best state is
+    // established code.
+    let external_code = up
         .external
         .iter()
         .map(|(why, f)| {
@@ -1034,16 +1053,128 @@ fn classified(up: &Up<'_>, g: &SitedGraph) -> serde_json::Map<String, Value> {
                         .is_some_and(|b| b.class.population() == Population::Code)
                 })
                 .count();
-            json!({"why": why, "count": n})
+            (*why, n)
         })
-        .filter(|v| v["count"] != json!(0))
+        .collect();
+    Row {
+        root_entry: up.root_entry.clone(),
+        hubs,
+        states: up.states,
+        max_hops: up.max_hops,
+        tiers,
+        entries: up
+            .entries
+            .iter()
+            .map(|(k, f)| (*k, ListOut::of(f, keep)))
+            .collect(),
+        action_site: up.action_site.clone(),
+        publishers: ListOut::of(&up.publishers, keep),
+        direct: ListOut::of(&up.direct_publishers, keep),
+        external: up
+            .external
+            .iter()
+            .map(|(why, f)| (*why, ListOut::of(f, keep)))
+            .collect(),
+        hidden: up.hidden.clone(),
+        universal: up.universal,
+        limit: up.limit,
+        anc_rel: by_relation(ancestors.iter().copied()),
+        ent_rel: by_relation(entries.iter().map(|(_, w)| *w)),
+        groups,
+        candidates: entries
+            .iter()
+            .filter(|(_, w)| !w.population().established())
+            .count(),
+        external_code,
+        notes: NOTES.map(|bit| {
+            entries
+                .iter()
+                .filter(|(e, _)| inv.note(*e) & bit != 0)
+                .count()
+        }),
+    }
+}
+
+/// The classified part of a row (round-2 r2 §2.1 steps 2-5): ancestors and canonical
+/// entries per population, the entries by kind and context, the program's share, each
+/// population's nearest witness, and the external callers of the code population.
+fn classified_json(
+    row: &Row,
+    g: &SitedGraph,
+    shared: &Shared<'_>,
+) -> serde_json::Map<String, Value> {
+    let inv = shared.inv;
+    let program = shared.program();
+    let mut by_kind = serde_json::Map::new();
+    let mut by_context = serde_json::Map::new();
+    let mut share = serde_json::Map::new();
+    let mut nearest = serde_json::Map::new();
+    let mut first_by_kind = serde_json::Map::new();
+    for (g_out, (key, _)) in row.groups.iter().zip(POPULATIONS) {
+        // Kinds by their §8.1 words, in print order.
+        by_kind.insert(
+            key.into(),
+            Value::Object(
+                g_out
+                    .kinds
+                    .iter()
+                    .map(|(&(_, w), n)| (w.to_string(), json!(n)))
+                    .collect(),
+            ),
+        );
+        by_context.insert(
+            key.into(),
+            Value::Object(
+                g_out
+                    .contexts
+                    .iter()
+                    .map(|(c, n)| ((*c).to_string(), json!(n)))
+                    .collect(),
+            ),
+        );
+        share.insert(key.into(), share_json(g_out.mine, program));
+        let mut list: Vec<Value> = Vec::new();
+        for (&(_, word), (e, w)) in &g_out.first_by_kind {
+            let mut v = witness_json(g, w);
+            v["kind"] = json!(word);
+            if let Some(a) = inv.action(*e) {
+                v["action"] = json!(a);
+            }
+            list.push(v);
+        }
+        first_by_kind.insert(key.into(), Value::Array(list));
+        let w = g_out.nearest.map(|(e, w)| {
+            let mut v = witness_json(g, &w);
+            if let Some(e) = e {
+                v["entry"] = json!(inv.word(e));
+                if let Some(a) = inv.action(e) {
+                    v["action"] = json!(a);
+                }
+            }
+            v
+        });
+        nearest.insert(key.into(), w.unwrap_or(Value::Null));
+    }
+    share.insert("candidates".into(), share_json(row.candidates, program));
+    share.insert("all".into(), share_json(row.ent_rel.1, program));
+    // The same set as `programEntries`: the changed routines left out.
+    let program_by_kind: Vec<(&str, usize)> = inv
+        .by_kind(|e| !shared.changed.contains(&e))
+        .into_iter()
+        .map(|((_, w), n)| (w, n))
+        .collect();
+    let external_code: Vec<Value> = row
+        .external_code
+        .iter()
+        .filter(|(_, n)| **n != 0)
+        .map(|(why, n)| json!({"why": why, "count": n}))
         .collect();
     let mut m = serde_json::Map::new();
     m.insert("relationRecorded".into(), json!(true));
     m.insert(
         "byRelation".into(),
-        json!({"ancestors": by_relation(ancestors.iter().copied()),
-               "entries": by_relation(entries.iter().map(|(_, w)| *w))}),
+        json!({"ancestors": by_relation_of(&row.anc_rel.0, row.anc_rel.1),
+               "entries": by_relation_of(&row.ent_rel.0, row.ent_rel.1)}),
     );
     m.insert("entriesByKind".into(), Value::Object(by_kind));
     m.insert("entriesByContext".into(), Value::Object(by_context));
@@ -1060,25 +1191,19 @@ fn classified(up: &Up<'_>, g: &SitedGraph) -> serde_json::Map<String, Value> {
     m.insert("nearest".into(), Value::Object(nearest));
     m.insert("firstByKind".into(), Value::Object(first_by_kind));
     m.insert("externalCode".into(), json!(external_code));
-    // §R2.4 landing changes 1-2: the totals say when they include a page
-    // counted once for its unnamed actions, or a background target with no
-    // `OnRun` (counted apart).
-    let noted = |bit: u8| {
-        let reached = entries
-            .iter()
-            .filter(|(e, _)| inv.note(*e) & bit != 0)
-            .count();
+    // §R2.4 landing changes 1-2: the totals say when they include a page counted once for
+    // its unnamed actions, or a background target with no `OnRun` (counted apart).
+    let noted = |i: usize| {
         let program = (0..inv.len() as u32)
-            .filter(|e| inv.note(*e) & bit != 0 && !up.shared.changed.contains(e))
+            .filter(|e| inv.note(*e) & NOTES[i] != 0 && !shared.changed.contains(e))
             .count();
-        json!({"reached": reached, "program": program})
+        json!({"reached": row.notes[i], "program": program})
     };
     m.insert(
         "entryNotes".into(),
         json!({
-            "pagesWithUnnamedActions": noted(crate::program::impact_graph::entries::NOTE_UNNAMED_ACTIONS),
-            "backgroundTargetsWithoutOnRun":
-                noted(crate::program::impact_graph::entries::NOTE_BACKGROUND_WITHOUT_ON_RUN),
+            "pagesWithUnnamedActions": noted(0),
+            "backgroundTargetsWithoutOnRun": noted(1),
             "unnamedActionRunSites": inv.unnamed_sites(),
         }),
     );
@@ -1117,29 +1242,24 @@ fn hub_locations(g: &SitedGraph, hub: NodeIx) -> impl Iterator<Item = (NodeIx, S
 
 /// What one walk found, as JSON.
 fn summary(up: &Up<'_>, g: &SitedGraph, captions: &Captions) -> Value {
-    let (mut local, mut dep, mut open) = (0usize, 0usize, 0usize);
-    for (n, b) in &up.best {
-        if up.root_nodes.contains(n) || g.flags(*n) & flag::HUB != 0 {
-            continue;
-        }
-        match b.tier {
-            Tier::Local => local += 1,
-            Tier::ThroughDependency => dep += 1,
-            Tier::OnlyOpen => open += 1,
-        }
-    }
+    row_json(&row_of_up(up, g), g, up.shared, captions)
+}
+
+/// A row as JSON: the one printer of every walk's answer (see [`Row`]).
+fn row_json(row: &Row, g: &SitedGraph, shared: &Shared<'_>, captions: &Captions) -> Value {
+    let [local, dep, open] = row.tiers;
     let entries: Vec<Value> = EntryKind::ALL
         .iter()
-        .filter_map(|k| up.entries.get(k).map(|f| (k, f)))
+        .filter_map(|k| row.entries.get(k).map(|f| (k, f)))
         .map(|(k, f)| {
             let first: Vec<Value> = f
-                .first(up.keep.per_list)
-                .into_iter()
-                .map(|(h, t, n)| {
+                .first
+                .iter()
+                .map(|&(h, t, n)| {
                     let mut v = node_json(g, n, h, t);
                     if *k == EntryKind::PageAction
                         && let Some((action, caption)) =
-                            captions.of(g, n, up.action_site.get(&n).copied())
+                            captions.of(g, n, row.action_site.get(&n).copied())
                     {
                         v["action"] = json!(action);
                         v["caption"] = json!(caption);
@@ -1147,49 +1267,41 @@ fn summary(up: &Up<'_>, g: &SitedGraph, captions: &Captions) -> Value {
                     v
                 })
                 .collect();
-            json!({"kind": k.as_str(), "count": f.count(), "onlyOpen": f.only_open(),
+            json!({"kind": k.as_str(), "count": f.count, "onlyOpen": f.only_open,
                    "userOrJob": user_or_job(*k), "first": first})
         })
         .collect();
-    let firsts = |f: &Firsts| -> Vec<Value> {
-        f.first(up.keep.per_list)
-            .into_iter()
-            .map(|(h, t, n)| node_json(g, n, h, t))
+    let firsts = |f: &ListOut| -> Vec<Value> {
+        f.first
+            .iter()
+            .map(|&(h, t, n)| node_json(g, n, h, t))
             .collect()
     };
-    let external: Vec<Value> = up
+    let external: Vec<Value> = row
         .external
         .iter()
         .map(|(why, f)| {
-            json!({"why": why, "count": f.count(), "onlyOpen": f.only_open(),
+            json!({"why": why, "count": f.count, "onlyOpen": f.only_open,
                    "first": firsts(f)})
         })
         .collect();
-    // Output validation V2 (§3.2, F12): the hubs on the reach (each with a
-    // site that calls it from inside the reach), and the program's entry
-    // count, the denominator of the reach share that folds the lists.
-    let mut hubs: BTreeSet<(String, String)> = BTreeSet::new();
-    for n in up.best.keys() {
-        let Some(kind) = crate::engine::l5::routine_rollup::hub_kind_of(g, *n) else {
-            continue;
-        };
-        hubs.insert((kind, hub_at(g, *n, |m| up.best.contains_key(&m))));
-    }
-    let entry_total: usize = up.entries.values().map(Firsts::count).sum();
+    let entry_total: usize = row.entries.values().map(|f| f.count).sum();
     let mut out = json!({
-        "rootEntryKinds": up.root_entry.iter().map(|k| k.as_str()).collect::<Vec<_>>(),
+        "rootEntryKinds": row.root_entry.iter().map(|k| k.as_str()).collect::<Vec<_>>(),
         // TLS-55: the changed routine's own kind word (`vocab::entry_word`),
         // when it is an entry itself.
-        "rootEntryWord": (!up.root_entry.is_empty())
-            .then(|| crate::engine::vocab::entry_word(up.root_entry.iter().copied())),
-        "rootUserOrJob": up.root_entry.iter().any(|k| user_or_job(*k)),
-        "hubs": hubs.iter().map(|(k, a)| json!({"kind": k, "at": a})).collect::<Vec<_>>(),
+        "rootEntryWord": (!row.root_entry.is_empty())
+            .then(|| crate::engine::vocab::entry_word(row.root_entry.iter().copied())),
+        "rootUserOrJob": row.root_entry.iter().any(|k| user_or_job(*k)),
+        // Output validation V2 (§3.2, F12): the hubs on the reach, and the program's entry
+        // count, the denominator of the reach share that folds the lists.
+        "hubs": row.hubs.iter().map(|(k, a)| json!({"kind": k, "at": a})).collect::<Vec<_>>(),
         // §R2.4 landing change 5: one program total, the canonical count
         // (`programShare.program`); the legacy root-kind mask count is gone.
-        "programEntries": up.shared.program(),
+        "programEntries": shared.program(),
         "entryBuckets": entry_total,
-        "states": up.states,
-        "maxHops": up.max_hops,
+        "states": row.states,
+        "maxHops": row.max_hops,
         // The legacy tiers mix every relation (r2 §2.1 step 5: they stay
         // until the next impact version; the classified counts are
         // `byRelation`). §R2.4 landing change 7: the label says so here
@@ -1197,22 +1309,22 @@ fn summary(up: &Up<'_>, g: &SitedGraph, captions: &Captions) -> Value {
         "ancestors": {"total": local + dep + open, "local": local, "throughDependency": dep,
                       "onlyOpen": open, "population": POPULATION},
         "entries": entries,
-        "userOrJobEntries": up.entries.iter().filter(|(k, _)| user_or_job(**k)).map(|(_, f)| f.count()).sum::<usize>(),
+        "userOrJobEntries": row.entries.iter().filter(|(k, _)| user_or_job(**k)).map(|(_, f)| f.count).sum::<usize>(),
         // `count`: publishers anywhere among the ancestors; `direct` (round-2
         // n09, additive): the events that raise a root itself.
-        "eventPublishers": {"count": up.publishers.count(), "onlyOpen": up.publishers.only_open(),
-                            "first": firsts(&up.publishers),
-                            "direct": {"count": up.direct_publishers.count(),
-                                       "first": firsts(&up.direct_publishers)}},
+        "eventPublishers": {"count": row.publishers.count, "onlyOpen": row.publishers.only_open,
+                            "first": firsts(&row.publishers),
+                            "direct": {"count": row.direct.count,
+                                       "first": firsts(&row.direct)}},
         "external": external,
-        "hidden": {"universalHub": up.universal, "byChannel": up.hidden},
-        "limited": up.limit.map(|l| match l {
+        "hidden": {"universalHub": row.universal, "byChannel": row.hidden},
+        "limited": row.limit.map(|l| match l {
             Limit::StateBudget(n) => format!("state budget {n}"),
             Limit::Cancelled => "cancelled".to_string(),
         }),
     });
     if let Value::Object(o) = &mut out {
-        o.extend(classified(up, g));
+        o.extend(classified_json(row, g, shared));
     }
     out
 }
