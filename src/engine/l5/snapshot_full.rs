@@ -2634,8 +2634,8 @@ page 50818 "T5 I-3 Wizard Alpha"
     fn op_row(operation_id: &str, routine: &str) -> SnapshotOperationEvidence {
         SnapshotOperationEvidence {
             operation_id: operation_id.to_string(),
-            routine: routine.to_string(),
-            source_file: "dep:x:src/Lib.al".to_string(),
+            routine: routine.into(),
+            source_file: "dep:x:src/Lib.al".into(),
             start_line: 1,
             start_column: 1,
             end_line: 1,
@@ -2650,8 +2650,8 @@ page 50818 "T5 I-3 Wizard Alpha"
     fn cs_row(callsite_id: &str, routine: &str) -> SnapshotCallsiteEvidence {
         SnapshotCallsiteEvidence {
             callsite_id: callsite_id.to_string(),
-            routine: routine.to_string(),
-            source_file: "dep:x:src/Lib.al".to_string(),
+            routine: routine.into(),
+            source_file: "dep:x:src/Lib.al".into(),
             start_line: 2,
             start_column: 1,
             end_line: 2,
@@ -3489,10 +3489,10 @@ page 50818 "T5 I-3 Wizard Alpha"
             });
         }
         let mut op = op_row("mi/h/op0", &routine);
-        op.control_context = Some(s("loop"));
+        op.control_context = Some("loop".into());
         op.under_asserterror = Some(true);
         let mut csr = cs_row("mi/h/cs0", &routine);
-        csr.control_context = Some(s("loop"));
+        csr.control_context = Some("loop".into());
         csr.under_asserterror = Some(true);
         let resolution = SnapshotCallsiteResolution {
             callsite_id: cs.clone(),

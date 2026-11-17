@@ -2060,14 +2060,14 @@ mod tests {
         let mut snap = empty_snap();
         snap.callsite_index.push(SnapshotCallsiteEvidence {
             callsite_id: "csHelper".to_string(),
-            routine: "root".to_string(),
-            source_file: "f".to_string(),
+            routine: "root".into(),
+            source_file: "f".into(),
             start_line: 2,
             start_column: 0,
             end_line: 2,
             end_column: 9,
             callee_display: "Helper".to_string(),
-            control_context: Some("top-level".to_string()),
+            control_context: Some("top-level".into()),
             order: evidence_order(2),
             under_asserterror: None,
         });
@@ -2087,14 +2087,14 @@ mod tests {
         });
         snap.operation_index.push(SnapshotOperationEvidence {
             operation_id: "opValidate".to_string(),
-            routine: "root".to_string(),
-            source_file: "f".to_string(),
+            routine: "root".into(),
+            source_file: "f".into(),
             start_line: 3,
             start_column: 0,
             end_line: 3,
             end_column: 20,
             display_text: "T.Validate".to_string(),
-            control_context: Some("top-level".to_string()),
+            control_context: Some("top-level".into()),
             order: evidence_order(3),
             under_asserterror: None,
         });

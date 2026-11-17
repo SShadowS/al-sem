@@ -858,7 +858,7 @@ fn build_direct_terminal(
                 operation_id: Some(witness_id.to_string()),
                 callsite_id: None,
                 display_text,
-                source_file: op_ev.map(|e| e.source_file.clone()),
+                source_file: op_ev.map(|e| e.source_file.to_string()),
                 line: op_ev.map(|e| e.start_line),
                 column: op_ev.map(|e| e.start_column),
             }
@@ -872,7 +872,7 @@ fn build_direct_terminal(
                 operation_id: None,
                 callsite_id: Some(witness_id.to_string()),
                 display_text,
-                source_file: cs_ev.map(|e| e.source_file.clone()),
+                source_file: cs_ev.map(|e| e.source_file.to_string()),
                 line: cs_ev.map(|e| e.start_line),
                 column: cs_ev.map(|e| e.start_column),
             }
@@ -892,7 +892,7 @@ fn terminal_hop_from_fact(fact: &Fact, idx: &FingerprintIndexes) -> WitnessHop {
             display_text: ev
                 .map(|e| e.display_text.clone())
                 .unwrap_or_else(|| wo.to_string()),
-            source_file: ev.map(|e| e.source_file.clone()),
+            source_file: ev.map(|e| e.source_file.to_string()),
             line: ev.map(|e| e.start_line),
             column: ev.map(|e| e.start_column),
         };
@@ -906,7 +906,7 @@ fn terminal_hop_from_fact(fact: &Fact, idx: &FingerprintIndexes) -> WitnessHop {
             display_text: ev
                 .map(|e| e.callee_display.clone())
                 .unwrap_or_else(|| wc.to_string()),
-            source_file: ev.map(|e| e.source_file.clone()),
+            source_file: ev.map(|e| e.source_file.to_string()),
             line: ev.map(|e| e.start_line),
             column: ev.map(|e| e.start_column),
         };
@@ -955,7 +955,7 @@ fn edge_to_hop(edge: &SnapshotGraphEdge, idx: &FingerprintIndexes) -> Option<Wit
                 routine_display: display,
                 callee_display: cs.map(|c| c.callee_display.clone()).unwrap_or_default(),
                 callsite_id: callsite_id.clone(),
-                source_file: cs.map(|c| c.source_file.clone()),
+                source_file: cs.map(|c| c.source_file.to_string()),
                 line: cs.map(|c| c.start_line),
                 column: cs.map(|c| c.start_column),
             })
@@ -979,7 +979,7 @@ fn edge_to_hop(edge: &SnapshotGraphEdge, idx: &FingerprintIndexes) -> Option<Wit
                 target_display: idx.stable_id_to_display.get(target_object).cloned(),
                 resolved: true,
                 callsite_id: Some(callsite_id.clone()),
-                source_file: cs.map(|c| c.source_file.clone()),
+                source_file: cs.map(|c| c.source_file.to_string()),
                 line: cs.map(|c| c.start_line),
                 column: cs.map(|c| c.start_column),
                 fires: *fires,
@@ -1026,7 +1026,7 @@ fn edge_to_hop(edge: &SnapshotGraphEdge, idx: &FingerprintIndexes) -> Option<Wit
                 receiver_type: receiver_type.clone(),
                 callee_display: cs.map(|c| c.callee_display.clone()),
                 callsite_id: callsite_id.clone(),
-                source_file: cs.map(|c| c.source_file.clone()),
+                source_file: cs.map(|c| c.source_file.to_string()),
                 line: cs.map(|c| c.start_line),
                 column: cs.map(|c| c.start_column),
                 fires: *fires,
@@ -1052,7 +1052,7 @@ fn edge_to_hop(edge: &SnapshotGraphEdge, idx: &FingerprintIndexes) -> Option<Wit
                 candidate_count: *candidate_count,
                 callee_display: cs.map(|c| c.callee_display.clone()),
                 callsite_id: callsite_id.clone(),
-                source_file: cs.map(|c| c.source_file.clone()),
+                source_file: cs.map(|c| c.source_file.to_string()),
                 line: cs.map(|c| c.start_line),
                 column: cs.map(|c| c.start_column),
             })
@@ -2250,7 +2250,7 @@ fn boundary_terminal(e: &SnapshotGraphEdge, idx: &FingerprintIndexes) -> (Bounda
         } => {
             let src = match idx.operation_by_id.get(operation_id.as_str()) {
                 Some(ev) => (
-                    Some(ev.source_file.clone()),
+                    Some(ev.source_file.to_string()),
                     Some(ev.start_line),
                     Some(ev.start_column),
                 ),
@@ -2279,7 +2279,7 @@ fn boundary_terminal(e: &SnapshotGraphEdge, idx: &FingerprintIndexes) -> (Bounda
             let cs = edge_callsite_id(e).expect("a call-family edge has a call site");
             let src = match idx.callsite_by_id.get(cs) {
                 Some(ev) => (
-                    Some(ev.source_file.clone()),
+                    Some(ev.source_file.to_string()),
                     Some(ev.start_line),
                     Some(ev.start_column),
                 ),
@@ -10018,14 +10018,14 @@ codeunit 50410 DupProducer
         ];
         let cs = |id: &str, routine: &str, ctx: &str| SnapshotCallsiteEvidence {
             callsite_id: id.to_string(),
-            routine: routine.to_string(),
-            source_file: "su".to_string(),
+            routine: routine.into(),
+            source_file: "su".into(),
             start_line: 1,
             start_column: 1,
             end_line: 1,
             end_column: 1,
             callee_display: id.to_string(),
-            control_context: Some(ctx.to_string()),
+            control_context: Some(ctx.into()),
             order: None,
             under_asserterror: None,
         };
@@ -10038,14 +10038,14 @@ codeunit 50410 DupProducer
         ];
         let op = |id: &str, routine: &str| SnapshotOperationEvidence {
             operation_id: id.to_string(),
-            routine: routine.to_string(),
-            source_file: "su".to_string(),
+            routine: routine.into(),
+            source_file: "su".into(),
             start_line: 1,
             start_column: 1,
             end_line: 1,
             end_column: 1,
             display_text: "Rec.Insert()".to_string(),
-            control_context: Some("top-level".to_string()),
+            control_context: Some("top-level".into()),
             order: None,
             under_asserterror: None,
         };
@@ -10085,27 +10085,27 @@ codeunit 50410 DupProducer
         ];
         snap.callsite_index = vec![SnapshotCallsiteEvidence {
             callsite_id: "cs1".to_string(),
-            routine: "R#1".to_string(),
-            source_file: "su".to_string(),
+            routine: "R#1".into(),
+            source_file: "su".into(),
             start_line: 1,
             start_column: 1,
             end_line: 1,
             end_column: 1,
             callee_display: "S".to_string(),
-            control_context: Some("top-level".to_string()),
+            control_context: Some("top-level".into()),
             order: None,
             under_asserterror: None,
         }];
         let op = |id: &str, routine: &str, ctx: &str| SnapshotOperationEvidence {
             operation_id: id.to_string(),
-            routine: routine.to_string(),
-            source_file: "su".to_string(),
+            routine: routine.into(),
+            source_file: "su".into(),
             start_line: 1,
             start_column: 1,
             end_line: 1,
             end_column: 1,
             display_text: "Rec.Insert()".to_string(),
-            control_context: Some(ctx.to_string()),
+            control_context: Some(ctx.into()),
             order: None,
             under_asserterror: None,
         };

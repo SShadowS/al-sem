@@ -3333,6 +3333,9 @@ fn eng107_split(
             },
             ArtifactValue::TreeBase(b) => match Arc::try_unwrap(b) {
                 Ok(b) => {
+                    for l in b.census_lines() {
+                        println!("{l}");
+                    }
                     for (n, p) in b.into_census_parts() {
                         if n == "tree_base.coverage" {
                             let cov = p
