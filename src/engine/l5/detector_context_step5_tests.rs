@@ -205,6 +205,27 @@ fn step5_t1_spans_and_d9_read_the_fold() {
         r.inherited_status, "partial",
         "Root inherits partial: {r:?}"
     );
+    // ENG-108 (a memory guard, Fable's review): the fold's records share their texts, so
+    // Root's and Helper's equal statuses and Helper's inherited reason are one allocation each.
+    // DISCRIMINATION: `coverage_record` minting `SharedStr::from` instead of the interner, or
+    // the cone copying a fresh text per routine, fails this.
+    use crate::program::str_pool::SharedStr;
+    assert_eq!(h.inherited_status, "partial", "precondition: {h:?}");
+    assert!(
+        SharedStr::ptr_eq(&r.inherited_status, &h.inherited_status),
+        "two routines' equal statuses share one text"
+    );
+    let reason = |c: &CoverageRecord| {
+        c.reasons
+            .iter()
+            .find(|s| s.as_str() == "ambiguous-overload")
+            .cloned()
+            .unwrap_or_else(|| panic!("precondition: the reason is on {}", c.subject))
+    };
+    assert!(
+        SharedStr::ptr_eq(&reason(r), &reason(h)),
+        "Root's inherited reason shares Helper's text"
+    );
     assert!(
         !span.coverage_complete,
         "the span reaches Helper's ambiguous call, so it is incomplete"
