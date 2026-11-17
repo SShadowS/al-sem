@@ -43,6 +43,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (with `rejoin` delivered at once it fails: `[(2, 4), (2, 3)]` against `[(2, 3), (2, 4)]`)
   and `up::relation_tests::a_dropped_dispatch_still_counts_its_publisher` (both site orders;
   with `Up::wants_rejoin` false the call-first world lists one publisher, not two).
+- **Measured on CDO** (base `a3b8f86f`, production code `f99af34d`). `alsem impact --format
+  json --no-tests` over the 20 workspace files holding an event subscriber (322 roots, 102,970
+  `eventPublishers` entries): byte-identical with `cost` removed. `cdo-before-after`: no
+  finding, fingerprint or call-graph number moved. `cdo-speed` passed twice; no ratio is
+  quoted, as the runs disagree within the noise (round total x1.019 and x1.034, the ~1 s
+  `impact` round calls x1.000 and x1.144 with spreads up to 2.05).
 
 ### Changed (ENG-111: the tree's projected solve shares its routine ids, 142.4 MiB less resident memory on CDO)
 
