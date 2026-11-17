@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (ENG-95: a statement-tree node keeps its rare facts in one box, 66.7 MiB less resident memory on CDO)
+
+- **What changed** (`src/program/body/features.rs`; no output change). `PCFNNode`, the
+  statement-tree node every routine row holds, was 424 B inline. Seven of its in-memory facts
+  (`is_case_else`, `path_hint`, `table_case`, `field_exit_guard`, `table_exit_guard`,
+  `junction_guards`, `value_fact`; 203 B together) are each on at most 3.6 % of the nodes, so
+  they moved into `PCFNRare` behind `rare: Option<Box<PCFNRare>>`: read through accessors of
+  the same names, written through `rare_mut()`, which makes the box only on a real write.
+  `condition_guard` (48 B, on 2.5 % of the nodes) is boxed too; its JSON is unchanged. A
+  node is now 192 B. No fact is dropped (FULL keeps every one).
+- **The census that set the bar** (`tools/census-probe resident`, CDO at master `7fb70573`,
+  routine `IssueReminder`; the dependency rows' trees split by field): 143.77 MiB in 272,529
+  nodes, of which 110.20 MiB was the nodes' inline size (no capacity slack), `flow` 22.73,
+  the callsite and operation ids 8.35, `kind` 1.07. Bar: about 56 MiB.
+- **Measured** (the same probe on both sides, back to back): the dependency trees 143.77 ->
+  87.60 MiB (-56.17: node arrays -53.95, root boxes -6.35, the new rare boxes +3.83,
+  `condition_guard` +0.30); the workspace rows -10.48; live after the build 2,307.6 ->
+  2,240.9 MiB (-66.7), and -66.6 to -66.7 after each ask. Allocations +30,741 (the boxes).
+- **Measured and not done**, so they are not proposed again blind:
+  - *A flat node arena* (nodes in one `Vec`, children as index ranges): about 15.6 MiB more
+    (three `Option<Vec>` of 24 B each become 12 B of ranges, and 142,477 fewer arrays). It
+    rewrites how every walker reads `children`, `else_children` and `condition_leaves`, in
+    about 25 files.
+  - *Interning `kind`* (15 distinct texts in 272,529 allocations): about 3 MiB (1.07 MiB of
+    heap and 8 B per node), for hundreds of comparison and construction sites.
+- **The goldens pin the facts.** `Debug` is written by hand to print the rare facts flat, in
+  their old order, so `tests/ir-l2-goldens/l2_features.snapshot` (a `Debug` print of every
+  routine's features over the r0 corpus) is byte-identical: no rare fact moved. With
+  `is_case_else()` forced to `false` it drifts on 5 routines. The module doc's internal-only
+  field list (`serde_skip_list_is_complete`) names `PCFNNode.rare`.
+
 ### Fixed (ENG-128: `alsem impact`'s `eventPublishers` no longer depends on which way the walk reached a state first)
 
 - **What changed in the output.** `up.eventPublishers` in `al-sem.impact/1`: a publisher is

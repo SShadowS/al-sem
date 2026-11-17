@@ -869,8 +869,7 @@ pub struct PConditionGuard {
 /// conditionGuard, ordered conditionLeaves. sourceAnchor DROPPED.
 ///
 /// `PartialEq`/`Eq` are implemented MANUALLY (not derived) so the in-memory-only
-/// `is_case_else` / `source_range` / `path_hint` markers are EXCLUDED from
-/// equality. They never serialize, so a freshly-built node (markers set) must
+/// `rare` / `source_range` / `flow` markers are EXCLUDED from equality. They never serialize, so a freshly-built node (markers set) must
 /// still compare equal to a golden node deserialized without them (markers
 /// defaulted). Keeping them out of `==` preserves L2 vector parity (the vectors
 /// compare via `PartialEq`).
@@ -893,12 +892,6 @@ pub struct PCFNNode {
     pub children: Option<Vec<PCFNNode>>,
     #[serde(rename = "elseChildren", skip_serializing_if = "Option::is_none")]
     pub else_children: Option<Vec<PCFNNode>>,
-    /// In-memory ONLY (never serialized — `#[serde(skip)]`, so L2 golden parity is
-    /// unchanged): marks a `case-branch` node that is the `else`/default branch of
-    /// a `case`. al-sem distinguishes it via `sourceAnchor.syntaxKind ===
-    /// "case_else_branch"`; the L2 projection drops sourceAnchor, so we carry this
-    /// flag for the L4 branch-aware walker's "case without else joins pre" rule.
-    /// EXCLUDED from `PartialEq` (see the manual impl below).
     /// In-memory ONLY (never serialized — `#[serde(skip)]`, ENG-95): the facts few nodes
     /// carry ([`PCFNRare`]: `is_case_else`, `path_hint`, `table_case`, the exit guards,
     /// `junction_guards`, `value_fact`), boxed so the rest pay 8 bytes, not 203. Read them

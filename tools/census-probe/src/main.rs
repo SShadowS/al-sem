@@ -4268,8 +4268,9 @@ fn main() {
             println!("PCFNNode {}", size_of::<f::PCFNNode>());
             println!("String {}", size_of::<String>());
             println!("Option<String> {}", size_of::<Option<String>>());
+            // The unboxed form (`condition_guard`'s field before ENG-95), as a reference.
             println!(
-                "Option<PConditionGuard> {}",
+                "Option<PConditionGuard> (unboxed) {}",
                 size_of::<Option<f::PConditionGuard>>()
             );
             println!(
