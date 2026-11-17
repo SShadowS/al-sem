@@ -45,7 +45,8 @@ pub struct FullRoutineSummary {
     /// Direct capability facts emitted by this routine's body. Always present
     /// (this half was never the memory problem — it is one routine's OWN facts,
     /// not its whole reachable cone).
-    pub capability_facts_direct: Vec<CapabilityFact>,
+    /// Shared with the composition's `direct_full` (ENG-123): one allocation per routine.
+    pub capability_facts_direct: std::sync::Arc<[CapabilityFact]>,
     /// Test fixtures only: capability facts inherited from the transitive
     /// reachable closure, supplied as INPUT ([`Self::with_inherited`]).
     /// `Some(vec![])` is a supplied-but-empty cone and is NOT the same thing as
@@ -63,12 +64,12 @@ impl FullRoutineSummary {
     /// Assemble a summary: no inherited half.
     pub fn new(
         routine_id: String,
-        capability_facts_direct: Vec<CapabilityFact>,
+        capability_facts_direct: impl Into<std::sync::Arc<[CapabilityFact]>>,
         coverage: Option<CoverageRecord>,
     ) -> Self {
         Self {
             routine_id,
-            capability_facts_direct,
+            capability_facts_direct: capability_facts_direct.into(),
             #[cfg(test)]
             capability_facts_inherited: None,
             coverage,

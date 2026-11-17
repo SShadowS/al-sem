@@ -1572,7 +1572,10 @@ pub(crate) fn det_cone_inputs_over<'e>(
 /// unless the scope derived them) and the producer arena, which the tree takes.
 /// The subjects' raw facts are returned APART by [`compose_capabilities`].
 pub(crate) struct CapabilityAnalysis {
-    pub direct_full: HashMap<String, Vec<CapabilityFact>>,
+    /// Shared (ENG-123): a routine's facts are one allocation that the detector summaries
+    /// share with this map when they borrow the analysis (the resident fold), where they used
+    /// to clone it (29 MiB of copies on CDO).
+    pub direct_full: HashMap<String, Arc<[CapabilityFact]>>,
     pub coverage: HashMap<String, crate::engine::l4::capability_cone::CoverageRecord>,
     /// Behind an `Arc` (context-server design r3 §4.2): the det harvest moves
     /// it into [`DetectorArtifacts::cone_derived`] when it owns the analysis
@@ -1692,7 +1695,22 @@ pub(crate) fn compose_capabilities_retained(
     }
     (
         CapabilityAnalysis {
-            direct_full,
+            // One allocation per routine at exact length (the walk's `Vec`s carry push slack);
+            // the routines with no direct facts share one empty slice.
+            direct_full: {
+                let empty: Arc<[CapabilityFact]> = Arc::from(Vec::new());
+                direct_full
+                    .into_iter()
+                    .map(|(id, facts)| {
+                        let shared = if facts.is_empty() {
+                            Arc::clone(&empty)
+                        } else {
+                            Arc::from(facts)
+                        };
+                        (id, shared)
+                    })
+                    .collect()
+            },
             coverage: outcome.coverage,
             derived: Arc::new(outcome.derived),
             pd: Some(outcome.pd_solution),
@@ -1909,7 +1927,7 @@ pub(crate) fn harvest_detector_artifacts(
                         r.id.clone(),
                         FullRoutineSummary::new(
                             r.id.clone(),
-                            direct.clone(),
+                            Arc::clone(direct),
                             c.coverage.get(&r.id).cloned(),
                         ),
                     );
@@ -3019,7 +3037,8 @@ page 50813 "CR Wizard"
         let summary = ctx.summaries.get(SHARED_ID).expect("R3: a summary");
         assert!(summary.coverage.is_some(), "R3: not degenerate");
         assert_eq!(
-            summary.capability_facts_direct, union,
+            &summary.capability_facts_direct[..],
+            &union[..],
             "R3: the summary holds the union of the rows' direct facts"
         );
     }

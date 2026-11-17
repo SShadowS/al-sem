@@ -1792,6 +1792,26 @@ fn is_producer(f: &CapabilityFact) -> bool {
 /// Each rep is minted ONCE here as an `Arc` (cone-memory step 1): the cone
 /// entries ([`fact_cone_for_scc`]) and the recursive walk's sibling picks share
 /// it, so the inherited-facts interner sees one identity per direct rep.
+/// ENG-123: a per-routine direct-fact map, read one routine at a time. Both shapes the engine
+/// holds answer it: the cone walk's and the cross-app base's `Vec`s, and the det
+/// composition's `Arc<[_]>`s (shared with the detector summaries).
+pub trait DirectFacts {
+    /// `id`'s direct facts, or `None` when the map has no entry for it.
+    fn facts(&self, id: &str) -> Option<&[CapabilityFact]>;
+}
+
+impl DirectFacts for HashMap<String, Vec<CapabilityFact>> {
+    fn facts(&self, id: &str) -> Option<&[CapabilityFact]> {
+        self.get(id).map(Vec::as_slice)
+    }
+}
+
+impl DirectFacts for HashMap<String, Arc<[CapabilityFact]>> {
+    fn facts(&self, id: &str) -> Option<&[CapabilityFact]> {
+        self.get(id).map(|f| &**f)
+    }
+}
+
 fn dedup_direct(facts: &[CapabilityFact]) -> BTreeMap<String, Arc<CapabilityFact>> {
     let mut byk: BTreeMap<String, &CapabilityFact> = BTreeMap::new();
     for f in facts.iter().filter(|f| !is_producer(f)) {
@@ -3225,7 +3245,7 @@ impl ConeStore {
     pub fn emit_raw<'r>(
         &self,
         routines: &[ModelRoutine],
-        direct_raw: &HashMap<String, Vec<CapabilityFact>>,
+        direct_raw: &dyn DirectFacts,
         arena: Option<&super::pd_solve::ConeArena>,
         subjects: &BTreeSet<String>,
         reuse: &dyn Fn(&str) -> Option<&'r InheritedFacts>,
@@ -3277,7 +3297,7 @@ impl ConeStore {
                     .members
                     .iter()
                     .filter_map(|id| {
-                        let byk = dedup_direct(direct_raw.get(id)?);
+                        let byk = dedup_direct(direct_raw.facts(id)?);
                         (!byk.is_empty()).then(|| (id.clone(), byk))
                     })
                     .collect();

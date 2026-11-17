@@ -369,8 +369,7 @@ pub fn run_policy_engine(model: &PolicyModel, policy: &PolicyDoc) -> RunOutput {
             // Sorted facts. al-sem memoizes by (routineId, factsMode); the result is
             // output-identical to recomputing, so we recompute (the corpus is tiny).
             // Decorate-sort-undecorate so each sort key is computed once.
-            let direct =
-                summary_for_routine.map_or(&[][..], |s| s.capability_facts_direct.as_slice());
+            let direct = summary_for_routine.map_or(&[][..], |s| &s.capability_facts_direct[..]);
             // R6 (fail loud): a routine with a summary is a cone member, and
             // the witness pass gives every member in scope a raw entry (empty
             // when it inherits nothing). A missing entry is a scope that missed

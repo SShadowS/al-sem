@@ -359,7 +359,7 @@ impl<'a> Effects<'a> {
         let Some(s) = cx.summaries.get(x) else {
             return;
         };
-        for f in &s.capability_facts_direct {
+        for f in s.capability_facts_direct.iter() {
             self.other.extend(fact_other(f));
             let Some(rid) = f.resource_id.as_deref() else {
                 continue;
@@ -854,7 +854,7 @@ fn effects(
             own.sort();
             own
         });
-        for f in &s.capability_facts_direct {
+        for f in s.capability_facts_direct.iter() {
             let at = f
                 .witness_operation_id
                 .as_ref()

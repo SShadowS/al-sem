@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (ENG-123: the detector summaries share the composition's direct facts, 50.6 MiB less resident memory on CDO)
+
+- **What changed** (`src/engine/l5/detector_context.rs`, `full_summary.rs`; no output change).
+  The resident fold lends its `CapabilityAnalysis` to the detector harvest
+  (`CapsInput::Borrowed`), which cloned every workspace routine's direct facts into its
+  `FullRoutineSummary`: 46,101 facts, 29.01 MiB of copies on CDO (ENG-114's census).
+  `CapabilityAnalysis::direct_full` and `FullRoutineSummary::capability_facts_direct` are now
+  `Arc<[CapabilityFact]>`: the lent arm clones the handle, the owned arm (one-shot) moves it.
+  The composition converts the walk's `Vec`s once, each at exact length (they carried push
+  slack); routines with no direct facts share one empty slice. The cone walk and the
+  cross-app base keep their `Vec` maps; the snapshot inputs and `ConeStore::emit_raw` read
+  either kind through a new `DirectFacts` trait (`facts(id) -> Option<&[CapabilityFact]>`).
+  Other copies of direct facts remain and were not the target: `event_flow`'s per-publisher
+  `to_vec`, the snapshot's own projection, the cone's representatives.
+- **Measured** (`tools/census-probe resident --sited`, CDO, base `fcd24540`, the same probe
+  both sides): live after the later asks 3,785.5 -> 3,734.9 MiB (-50.6), after the first
+  ask -21.8. The fold's map 56.10 -> 5.20 MiB and the summaries' facts 29.01 -> 29.27 MiB:
+  the facts are held once, at exact length (with shared allocations a bucket shows the bytes
+  on its last holder, so the live line is the measure). Measured before the shared empty
+  slice, which removes one small allocation per routine with no facts.
+- **CDO checks** (on the final head `dea2715d`, after the review fixes; the first chain on
+  `b4c24cd1` agreed): `cdo-before-after` moved no finding, fingerprint or call-graph number;
+  the session refresh equals a cold build at all 12 steps in both modes; `cdo-gate --only
+  harness,l4` passed (211/0, 25/0). `cdo-speed` passed twice: round total x1.009 and x0.983,
+  `prove` x0.993 and x1.019, the build x1.013 and x0.986; the servers' summed peak memory
+  fell in both (7,838 -> 7,276 and 7,036 -> 6,934 MiB; no ratio quoted, the two differ). The
+  first chain's round totals (x1.025, x1.015) did not repeat.
+- **Pinned by** `session::phase_tests::owned_harvest_moves_payloads_and_adds_only_the_counted_arc`:
+  every lent summary is `Arc::ptr_eq` to the composition's entry (with the lent arm copying
+  into a new `Arc`, it fails "the lent summary copied its direct facts"). Its older owned-arm
+  break (cloning `direct_full`) now copies nothing, so it was restated as cloning the
+  coverage: unbroken owned 38,061 B, lent 40,073 B, payload 2,012 B; broken owned 38,871 B,
+  "the owned arm copied".
+
 ### Changed (ENG-122: equal cone windows are stored once, 76.1 MiB less resident memory on CDO)
 
 - **What changed** (`src/engine/l4/cone_derived.rs`; no output change). `ConeDerivedStore`

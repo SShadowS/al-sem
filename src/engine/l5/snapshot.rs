@@ -1811,8 +1811,10 @@ struct TreeInputs<'a> {
     /// The calls dependency routines make (the ledger, after `calls`; D6).
     dependency_calls: &'a [CallEdge],
     event_graph: &'a EventGraph,
-    /// Per-routine RAW direct capability facts (full, ordered).
-    direct_full: &'a HashMap<String, Vec<CapabilityFact>>,
+    /// Per-routine RAW direct capability facts (full, ordered): the cross-app base's or the
+    /// det composition's map (ENG-123,
+    /// [`DirectFacts`](crate::engine::l4::capability_cone::DirectFacts)).
+    direct_full: &'a dyn crate::engine::l4::capability_cone::DirectFacts,
     /// Per-routine cone coverage: every routine that has a cone entry.
     coverage: &'a HashMap<String, CoverageRecord>,
     routine_to_stable: &'a HashMap<String, String>,
@@ -2715,7 +2717,7 @@ fn derive_capability_facts<'r>(
         .filter(|r| seen.insert(r.id.as_str()) && inp.coverage.contains_key(&r.id))
         .map(|r| RowGroup {
             subject: stable_routine_id(&r.id, inp.routine_to_stable),
-            direct: inp.direct_full.get(&r.id).map_or(&[], Vec::as_slice),
+            direct: inp.direct_full.facts(&r.id).unwrap_or(&[]),
             raw: take_raw(&r.id),
         })
         .collect();
@@ -3298,7 +3300,7 @@ fn derive_operation_evidence<'r>(
         if !base.coverage.contains_key(&r.id) {
             continue;
         }
-        if let Some(direct) = base.direct_full.get(&r.id) {
+        if let Some(direct) = base.direct_full.facts(&r.id) {
             for f in direct {
                 if let Some(w) = &f.witness_operation_id {
                     referenced.insert(w.clone());
@@ -3410,7 +3412,7 @@ fn derive_callsite_evidence<'r>(
         if !base.coverage.contains_key(&r.id) {
             continue;
         }
-        if let Some(direct) = base.direct_full.get(&r.id) {
+        if let Some(direct) = base.direct_full.facts(&r.id) {
             for f in direct {
                 if let Some(w) = &f.witness_callsite_id {
                     referenced.insert(w.clone());
@@ -4562,7 +4564,8 @@ mod step6_tree_tests {
             .map(|(a, b)| (a.to_string(), b.to_string()))
             .collect();
         let event_graph = EventGraph::default();
-        let (direct_full, coverage) = (HashMap::new(), HashMap::new());
+        let (direct_full, coverage): (HashMap<String, Vec<CapabilityFact>>, _) =
+            (HashMap::new(), HashMap::new());
         let inp = TreeInputs {
             ws_routines: &ws_routines,
             typed_edges: &typed,
@@ -4681,7 +4684,11 @@ mod step6_tree_tests {
         let mut z_direct = fact("insert", "table", Some("T"));
         z_direct.witness_operation_id = Some("op:z".to_string());
         let caps = CapabilityAnalysis {
-            direct_full: [("Z".to_string(), vec![z_direct.clone()])].into(),
+            direct_full: [(
+                "Z".to_string(),
+                std::sync::Arc::from(vec![z_direct.clone()]),
+            )]
+            .into(),
             coverage: ["X", "Y", "Z"]
                 .into_iter()
                 .map(|id| (id.to_string(), coverage("complete")))
@@ -4894,7 +4901,7 @@ mod step0_sort_tests {
             let subject = stable_routine_id(&r.id, inp.routine_to_stable);
             // (An owned fact's `FactRef::Direct` reads its fields as they are:
             // the old `snapshot_fact(&CapabilityFact)`.)
-            if let Some(direct) = inp.direct_full.get(&r.id) {
+            if let Some(direct) = inp.direct_full.facts(&r.id) {
                 for f in direct {
                     all.push(snapshot_fact(FactRef::Direct(f), &subject));
                 }
