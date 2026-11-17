@@ -46,14 +46,8 @@
 //!   - `PVarAssignment.rhs_identifier`
 //!   - `PVarAssignment.rhs_member`
 //!   - `PVarAssignment.lhs_is_member`
-//!   - `PCFNNode.is_case_else`
+//!   - `PCFNNode.rare`
 //!   - `PCFNNode.source_range`
-//!   - `PCFNNode.path_hint`
-//!   - `PCFNNode.table_case`
-//!   - `PCFNNode.field_exit_guard`
-//!   - `PCFNNode.table_exit_guard`
-//!   - `PCFNNode.junction_guards`
-//!   - `PCFNNode.value_fact`
 //!   - `PCFNNode.flow`
 
 use super::operation_order::{OperationOrder, ScopeFrame};
@@ -880,7 +874,10 @@ pub struct PConditionGuard {
 /// still compare equal to a golden node deserialized without them (markers
 /// defaulted). Keeping them out of `==` preserves L2 vector parity (the vectors
 /// compare via `PartialEq`).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// `Debug` is written by hand (ENG-95): it prints the [`PCFNRare`] facts flat, in their
+/// old place, so the `l2_features.snapshot` golden (a `Debug` print) still pins each fact.
+#[derive(Clone, Serialize, Deserialize)]
 pub struct PCFNNode {
     pub kind: String,
     #[serde(rename = "operationId", skip_serializing_if = "Option::is_none")]
@@ -954,6 +951,29 @@ pub struct PCFNRare {
     /// r3 E1: what the node says about an Integer, Option or Enum value
     /// ([`ValueFact`]).
     pub value_fact: Option<ValueFact>,
+}
+
+impl std::fmt::Debug for PCFNNode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PCFNNode")
+            .field("kind", &self.kind)
+            .field("operation_id", &self.operation_id)
+            .field("callsite_id", &self.callsite_id)
+            .field("condition_guard", &self.condition_guard)
+            .field("condition_leaves", &self.condition_leaves)
+            .field("children", &self.children)
+            .field("else_children", &self.else_children)
+            .field("is_case_else", &self.is_case_else())
+            .field("source_range", &self.source_range)
+            .field("path_hint", &self.path_hint())
+            .field("table_case", &self.table_case())
+            .field("field_exit_guard", &self.field_exit_guard())
+            .field("table_exit_guard", &self.table_exit_guard())
+            .field("junction_guards", &self.junction_guards())
+            .field("value_fact", &self.value_fact())
+            .field("flow", &self.flow)
+            .finish()
+    }
 }
 
 impl PCFNNode {
@@ -1500,7 +1520,7 @@ mod tests {
                 pending = false;
             }
         }
-        assert_eq!(actual.len(), 28, "scanner found {actual:?}");
+        assert_eq!(actual.len(), 22, "scanner found {actual:?}");
         assert_eq!(documented, actual);
     }
 
