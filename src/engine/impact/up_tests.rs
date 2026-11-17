@@ -1137,3 +1137,23 @@ codeunit 50113 "T52 Ops"
         "50114.onprereport is not reached from ViaPreOnly"
     );
 }
+
+/// ENG-125: the multi walk gives every root its own walk's trace on this file's worlds too
+/// (navigation, a hub, action runs with and without names, dependency callers).
+#[test]
+fn multi_walk_traces_equal_on_the_up_worlds() {
+    use crate::program::impact_graph::multi_walk::tests::{assert_traces_equal, every_shape};
+    let graphs = [
+        navigation_world().0,
+        hub_world().0,
+        action_world(true).0,
+        action_world(false).0,
+        dependency_callers(),
+    ];
+    let mut page_actions = 0;
+    for g in &graphs {
+        page_actions +=
+            assert_traces_equal(g, &every_shape(g), &WalkOptions::default()).page_actions;
+    }
+    assert!(page_actions > 0, "precondition: a page-action entry");
+}

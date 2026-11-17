@@ -213,22 +213,14 @@ the one-shot's 3.5 GB, which leaves about 350 MiB.
 - Create: `src/program/impact_graph/multi_walk_tests.rs`
 
 **Interfaces:**
-- Produces:
-  ```rust
-  pub struct RootBits(pub Box<[u64]>);
-  pub trait MultiSink {
-      fn reach(&mut self, s: WalkState, hops: u32, via: Via, from: Option<WalkState>, roots: &RootBits);
-      fn hidden(&mut self, n: NodeIx, ch: HiddenChannel, roots: &RootBits);
-      fn entry(&mut self, n: NodeIx, kinds: &[EntryKind], s: WalkState, hops: u32, roots: &RootBits);
-      fn external(&mut self, n: NodeIx, why: ExternalWhy, s: WalkState, hops: u32, roots: &RootBits);
-      fn source(&mut self, s: WalkState, hops: u32, roots: &RootBits);
-      fn step(&mut self, from: WalkState, site: SiteIx, roots: &RootBits) -> u8; // pure in (from, site)
-      fn rejoin(&mut self, n: WalkState, hops: u32, site: SiteIx, roots: &RootBits);
-      fn limit(&mut self, root: usize, l: Limit);
-  }
-  /// `roots[i]` = logical root i's lanes (its nodes, in order).
-  pub fn multi_walk(g: &SitedGraph, roots: &[Vec<NodeIx>], opts: &WalkOptions<'_>, sink: &mut dyn MultiSink) -> Vec<WalkStats>;
-  ```
+- Produces (as built, `src/program/impact_graph/multi_walk.rs`): every `ConeVisitor` method
+  with the single walk's `lane` (its `root` argument) and the roots as a bit slice
+  `roots: &[u64]`; `step(g, from, site, roots) -> Option<u8>`, pure in `(from, site)`;
+  `limit(root: usize, l)`. `multi_walk(g, roots: &[Vec<NodeIx>], opts, sink) -> MultiStats`,
+  with per-root `WalkStats`, the distinct states, the peak records per level and the peak
+  heap bytes. The per-site and per-state rules (`site_guard`, `state_over`, `entry_kinds`,
+  `external_whys`, `is_source`) moved out of `walk_multi` into `reverse.rs` helpers both
+  walks call.
 
 - [ ] **Step 1: Write the tests**
   - `multi_walk_traces_equal_per_root_walks`: a recording sink, demultiplexed by bit. For every

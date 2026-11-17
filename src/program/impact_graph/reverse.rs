@@ -335,7 +335,7 @@ pub const DENSE_EXT: u8 = 8;
 
 /// [`WalkOptions::state_budget`]'s default.
 pub const DEFAULT_STATE_BUDGET: usize = 2_000_000;
-const CANCEL_EVERY: usize = 4096;
+pub(super) const CANCEL_EVERY: usize = 4096;
 
 /// What a walk did.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -447,7 +447,7 @@ impl WalkScratch {
 
 /// The tier of a path that reaches `node` over a site of confidence `open`
 /// from a path of tier `tier`.
-fn tier_at(g: &SitedGraph, node: NodeIx, tier: Tier, open: bool) -> Tier {
+pub(super) fn tier_at(g: &SitedGraph, node: NodeIx, tier: Tier, open: bool) -> Tier {
     let f = g.flags(node);
     let here = if open || f & flag::HUB != 0 {
         Tier::OnlyOpen
@@ -529,30 +529,13 @@ pub fn walk_multi(
             stats.max_hops = hops;
             report(g, root, s, hops, via, from, opts, scratch, v);
             for &site in g.sites_into(s.node) {
-                let st = &g.sites()[site as usize];
-                let open = st.conf == super::project::Conf::Open;
-                if open && !opts.follow_open {
+                let Some(guard) = site_guard(g, s, site, opts) else {
                     continue;
-                }
-                // Table-event dead dispatch: carry a subscriber's guard up to
-                // its publisher; drop a raising site that proves it.
-                let guard = match st.via() {
-                    "eventFlow" => st.guard,
-                    // A raising site (a record operation's `tableEvent`, a
-                    // temporary-source page's lifecycle) that proves it.
-                    _ if s.guard & st.guard != 0 => continue,
-                    _ => 0,
                 };
                 let Some(ext) = v.step(g, s, site) else {
                     continue;
                 };
-                let n = WalkState {
-                    node: st.from,
-                    tier: tier_at(g, st.from, s.tier, open),
-                    crossed_event: s.crossed_event || st.boundary == Boundary::EventDispatch,
-                    ext,
-                    guard,
-                };
+                let n = state_over(g, s, site, ext, guard);
                 if g.is_action_run(site) && scratch.action_entries.insert(n) {
                     v.entry(root, n.node, &[EntryKind::PageAction], n, hops + 1);
                 }
@@ -601,6 +584,88 @@ pub fn walk_multi(
     stats
 }
 
+/// The table-event guard a step backwards over `site` from `s` carries, or `None` when the walk
+/// does not follow `site`: an open site without `follow_open`, or a raising site (a record
+/// operation's `tableEvent`, a temporary-source page's lifecycle) that proves `s`'s guard
+/// (table-event dead dispatch). An `eventFlow` site carries its subscriber's guard up to its
+/// publisher.
+pub(super) fn site_guard(
+    g: &SitedGraph,
+    s: WalkState,
+    site: SiteIx,
+    opts: &WalkOptions<'_>,
+) -> Option<u8> {
+    let st = &g.sites()[site as usize];
+    if st.conf == super::project::Conf::Open && !opts.follow_open {
+        return None;
+    }
+    match st.via() {
+        "eventFlow" => Some(st.guard),
+        _ if s.guard & st.guard != 0 => None,
+        _ => Some(0),
+    }
+}
+
+/// The state a walk reaches backwards over `site` from `s`, with the consumer bits `ext` and
+/// the guard from [`site_guard`].
+pub(super) fn state_over(
+    g: &SitedGraph,
+    s: WalkState,
+    site: SiteIx,
+    ext: u8,
+    guard: u8,
+) -> WalkState {
+    let st = &g.sites()[site as usize];
+    WalkState {
+        node: st.from,
+        tier: tier_at(g, st.from, s.tier, st.conf == super::project::Conf::Open),
+        crossed_event: s.crossed_event || st.boundary == Boundary::EventDispatch,
+        ext,
+        guard,
+    }
+}
+
+/// The entry kinds a state of `node` reports: its root kinds, the roots.config overlay's and
+/// static background targets' (`opts.extra_entries`), and `background-start` for the target of
+/// a static background start (F3: a run starts there, in its own session). Sorted, distinct.
+pub(super) fn entry_kinds(g: &SitedGraph, node: NodeIx, opts: &WalkOptions<'_>) -> Vec<EntryKind> {
+    let mask = g.root_kinds(node)
+        | opts
+            .extra_entries
+            .and_then(|m| m.get(&node))
+            .copied()
+            .unwrap_or(0);
+    let mut kinds = EntryKind::of_root_kinds(mask);
+    if g.is_background_target(node) {
+        kinds.push(EntryKind::BackgroundStart);
+        kinds.sort();
+        kinds.dedup();
+    }
+    kinds
+}
+
+/// The external-caller reasons of a node with flags `f` (none when no app outside the program
+/// depends on these apps).
+pub(super) fn external_whys(
+    f: u8,
+    opts: &WalkOptions<'_>,
+) -> impl Iterator<Item = ExternalWhy> + use<> {
+    let none = opts.assume_no_dependents;
+    [
+        (flag::EXT_PUBLIC, ExternalWhy::Public),
+        (flag::EXT_PROTECTED, ExternalWhy::Protected),
+        (flag::EXT_FRIEND, ExternalWhy::Friend),
+    ]
+    .into_iter()
+    .filter(move |&(bit, _)| !none && f & bit != 0)
+    .map(|(_, why)| why)
+}
+
+/// Whether a state of a node with flags `f` is a graph source (no reversed site).
+pub(super) fn is_source(g: &SitedGraph, node: NodeIx, f: u8) -> bool {
+    g.sites_into(node).is_empty() && f & flag::UNIVERSAL == 0
+}
+
 /// The per-state reports of one state.
 #[allow(clippy::too_many_arguments)]
 fn report(
@@ -624,35 +689,14 @@ fn report(
             v.hidden(root, s.node, HiddenChannel::Flag(ch));
         }
     }
-    let mask = g.root_kinds(s.node)
-        | opts
-            .extra_entries
-            .and_then(|m| m.get(&s.node))
-            .copied()
-            .unwrap_or(0);
-    let mut kinds = EntryKind::of_root_kinds(mask);
-    // F3: the target of a static background start (a `Background` site) is
-    // a `background-start` entry: a run starts there, in its own session.
-    if g.is_background_target(s.node) {
-        kinds.push(EntryKind::BackgroundStart);
-        kinds.sort();
-        kinds.dedup();
-    }
+    let kinds = entry_kinds(g, s.node, opts);
     if !kinds.is_empty() {
         v.entry(root, s.node, &kinds, s, hops);
     }
-    if !opts.assume_no_dependents {
-        for (bit, why) in [
-            (flag::EXT_PUBLIC, ExternalWhy::Public),
-            (flag::EXT_PROTECTED, ExternalWhy::Protected),
-            (flag::EXT_FRIEND, ExternalWhy::Friend),
-        ] {
-            if f & bit != 0 {
-                v.external(root, s.node, why, s, hops);
-            }
-        }
+    for why in external_whys(f, opts) {
+        v.external(root, s.node, why, s, hops);
     }
-    if g.sites_into(s.node).is_empty() && f & flag::UNIVERSAL == 0 {
+    if is_source(g, s.node, f) {
         v.source(root, s, hops);
     }
 }
