@@ -3462,7 +3462,7 @@ fn derive_callsite_evidence<'r>(
                 end_line: a.end_line,
                 end_column: a.end_column,
                 callee_display: render_callee(&cs.callee),
-                control_context: cs.control_context.map(|c| shared_vocab(&c.to_string())),
+                control_context: cs.control_context.map(|c| shared_vocab(c.as_ref())),
                 order: collided.order(ri, cs.order.as_deref().copied()),
                 under_asserterror: if cs.under_asserterror == Some(true) {
                     Some(true)
