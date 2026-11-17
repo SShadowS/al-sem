@@ -1651,7 +1651,7 @@ pub(crate) fn exit_guards(
     };
     for (n, stmt) in top.iter().enumerate() {
         let (Some((rec, tables)), Some((line, col, ..))) =
-            (&stmt.table_exit_guard, stmt.source_range)
+            (stmt.table_exit_guard(), stmt.source_range)
         else {
             continue;
         };
@@ -1965,16 +1965,16 @@ fn cond_regions(r: &ModelRoutine, tracked: &HashMap<String, VarKind>) -> Vec<Con
     };
     fn walk(n: &PCFNNode, tracked: &HashMap<String, VarKind>, out: &mut Vec<CondRegion>) {
         if n.kind == "case"
-            && let Some(TableCase::On(rv)) = &n.table_case
+            && let Some(TableCase::On(rv)) = n.table_case()
             && tracked.contains_key(rv)
         {
             let branches: Vec<&PCFNNode> = n.children.iter().flatten().collect();
             let mut listed: Vec<String> = Vec::new();
             let mut all_named = true;
             for b in &branches {
-                match &b.table_case {
+                match b.table_case() {
                     Some(TableCase::Tables(t)) => listed.extend(t.iter().cloned()),
-                    _ if b.is_case_else => {}
+                    _ if b.is_case_else() => {}
                     _ => all_named = false,
                 }
             }
@@ -1983,9 +1983,9 @@ fn cond_regions(r: &ModelRoutine, tracked: &HashMap<String, VarKind>) -> Vec<Con
                 let Some((sl, sc, el, ec)) = b.source_range else {
                     continue;
                 };
-                let cond = match &b.table_case {
+                let cond = match b.table_case() {
                     Some(TableCase::Tables(t)) => Some((rv.clone(), true, t.clone().into())),
-                    _ if b.is_case_else && all_named => {
+                    _ if b.is_case_else() && all_named => {
                         Some((rv.clone(), false, Arc::clone(&listed)))
                     }
                     _ => None,
@@ -2006,7 +2006,7 @@ fn cond_regions(r: &ModelRoutine, tracked: &HashMap<String, VarKind>) -> Vec<Con
     };
     for stmt in top {
         if let (Some((rv, tables)), Some((_, _, el, ec))) =
-            (&stmt.table_exit_guard, stmt.source_range)
+            (stmt.table_exit_guard(), stmt.source_range)
             && tracked.contains_key(rv)
         {
             out.push((

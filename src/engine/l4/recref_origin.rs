@@ -182,7 +182,7 @@ impl Walk<'_> {
                 for b in kids {
                     out.extend(self.node(b, input.clone()));
                 }
-                if !kids.iter().any(|b| b.is_case_else) {
+                if !kids.iter().any(|b| b.is_case_else()) {
                     out.extend(input);
                 }
                 out

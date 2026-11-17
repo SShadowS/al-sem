@@ -334,7 +334,7 @@ fn range_holds(r: (u32, u32, u32, u32), site: &PAnchor) -> bool {
 /// not run (`PathHint::MayRun`).
 fn evaluates(n: &crate::program::body::features::PCFNNode, id: LeafId<'_>) -> bool {
     use crate::program::body::features::PathHint;
-    if n.path_hint == Some(PathHint::MayRun) {
+    if n.path_hint() == Some(PathHint::MayRun) {
         return false;
     }
     let me = match id {

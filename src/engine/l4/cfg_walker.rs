@@ -610,7 +610,7 @@ fn walk_cfg(
             let mut has_else = false;
             let mut acc: Option<PerParamState> = None;
             for c in branches {
-                if c.is_case_else {
+                if c.is_case_else() {
                     has_else = true;
                 }
                 let (post, reach) = walk_cfg(
@@ -808,14 +808,8 @@ fn walk_cfg(
                 condition_leaves: None,
                 children: node.children.clone(),
                 else_children: None,
-                is_case_else: false,
+                rare: None,
                 source_range: None,
-                path_hint: None,
-                table_case: None,
-                field_exit_guard: None,
-                table_exit_guard: None,
-                junction_guards: None,
-                value_fact: None,
                 flow: None,
             };
             loop_stack.push(LoopFrame::default());
@@ -1953,14 +1947,8 @@ mod tests {
             condition_leaves: None,
             children: child.map(|c| vec![c]),
             else_children: None,
-            is_case_else: false,
+            rare: None,
             source_range: None,
-            path_hint: None,
-            table_case: None,
-            field_exit_guard: None,
-            table_exit_guard: None,
-            junction_guards: None,
-            value_fact: None,
             flow: None,
         }
     }

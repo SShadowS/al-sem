@@ -87,7 +87,7 @@ fn guarded_operations(r: &ModelRoutine) -> HashMap<String, i64> {
     };
     let mut active: HashMap<String, i64> = HashMap::new();
     for stmt in top {
-        if let Some((rec, n)) = &stmt.field_exit_guard
+        if let Some((rec, n)) = stmt.field_exit_guard()
             && recordrefs.contains(rec)
         {
             let Some((line, col, ..)) = stmt.source_range else {

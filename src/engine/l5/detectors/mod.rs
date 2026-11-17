@@ -352,7 +352,7 @@ fn walk_path_node(
         q.opaque();
         return s;
     }
-    match n.path_hint {
+    match n.path_hint() {
         Some(PathHint::MayRun) => s | walk_path_kind(n, s, q, loops, depth),
         Some(PathHint::AssertError) => {
             q.opaque();
@@ -379,7 +379,7 @@ fn walk_path_kind(
         }
         "if" => {
             let s = walk_path_list(leaves, s, q, loops, depth);
-            let cond_call = match n.path_hint {
+            let cond_call = match n.path_hint() {
                 Some(PathHint::CondCall { negated }) => leaves
                     .and_then(|l| l.last())
                     .and_then(|l| l.callsite_id.as_deref())
@@ -401,7 +401,7 @@ fn walk_path_kind(
             let s = walk_path_list(leaves, s, q, loops, depth);
             let (mut out, mut has_else) = (0, false);
             for br in kids.into_iter().flatten() {
-                has_else |= br.is_case_else;
+                has_else |= br.is_case_else();
                 out |= walk_path_node(br, s, q, loops, depth + 1);
             }
             if has_else { out } else { out | s }
@@ -447,7 +447,7 @@ fn walk_path_kind(
         "exit" => {
             let s = walk_path_list(leaves, s, q, loops, depth);
             if s != 0 {
-                let value = match n.path_hint {
+                let value = match n.path_hint() {
                     Some(PathHint::Exit(v)) => Some(v),
                     _ => None,
                 };
@@ -2453,14 +2453,8 @@ mod walk_paths_tests {
             condition_leaves: None,
             children: None,
             else_children: None,
-            is_case_else: false,
+            rare: None,
             source_range: None,
-            path_hint: None,
-            table_case: None,
-            field_exit_guard: None,
-            table_exit_guard: None,
-            junction_guards: None,
-            value_fact: None,
             flow: None,
         }
     }
@@ -2492,7 +2486,9 @@ mod walk_paths_tests {
     fn branch(kids: Vec<PCFNNode>, is_else: bool) -> PCFNNode {
         let mut n = node("case-branch");
         n.children = Some(vec![block(kids)]);
-        n.is_case_else = is_else;
+        if is_else {
+            n.rare_mut().is_case_else = true;
+        }
         n
     }
     fn ok(tree: PCFNNode) -> bool {
@@ -2593,20 +2589,20 @@ mod walk_paths_tests {
         );
         let mut ae = node("other");
         ae.children = Some(vec![block(vec![call("error")])]);
-        ae.path_hint = Some(PathHint::AssertError);
+        ae.rare_mut().path_hint = Some(PathHint::AssertError);
         assert!(!ok(block(vec![call("d"), call("p"), ae])), "asserterror");
     }
 
     #[test]
     fn may_run_leaf_and_cond_call_arms() {
         let mut maybe = call("p");
-        maybe.path_hint = Some(PathHint::MayRun);
+        maybe.rare_mut().path_hint = Some(PathHint::MayRun);
         assert!(!ok(block(vec![call("d"), maybe])));
         // `if not d() then exit; p` passes; `if d() then exit; p` does not.
         let guard = |negated: bool| {
             let mut n = iff(vec![node("exit")], None);
             n.condition_leaves = Some(vec![call("d")]);
-            n.path_hint = Some(PathHint::CondCall { negated });
+            n.rare_mut().path_hint = Some(PathHint::CondCall { negated });
             n
         };
         assert!(ok(block(vec![guard(true), call("p")])));
