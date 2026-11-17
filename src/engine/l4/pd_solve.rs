@@ -1241,9 +1241,9 @@ fn seed_of<'a>(
 /// address (the producer is the walk's).
 type SolveKey = (*const u8, TempState, Vec<Req>);
 
-/// The most producers a chunk is cut down to (ENG-121): a chunk has at least this many, or
-/// fewer when there are fewer fresh producers than that per thread, so a small solve (a
-/// resident refresh after an edit) keeps one producer per worker.
+/// The fewest producers in a chunk (ENG-121). A solve with fewer fresh producers than this
+/// per thread (a resident refresh after an edit) walks them one per chunk, as before, so the
+/// workers balance uneven walks.
 const MIN_SOLVE_CHUNK: usize = 4;
 
 /// One chunk's scratch for [`solve_producer`] (ENG-121): its visited set, its edge index and
@@ -1701,15 +1701,20 @@ fn solve_core<'g>(
         Walk::Parallel => {
             use rayon::prelude::*;
             // ENG-121: the producers in chunks (about eight per thread, at least
-            // `MIN_SOLVE_CHUNK` unless fewer than that per thread: a small solve keeps one
-            // producer per worker), each walked by one `SolveScratch`, so a scratch grows
+            // `MIN_SOLVE_CHUNK`; a small solve, one producer per chunk), each walked by one
+            // `SolveScratch`, so a scratch grows
             // to its chunk's largest walk once instead of from empty per producer. (Rayon's
             // `map_init` makes one per split, and work stealing splits it small: on CDO
             // it removed little.) The walks' answers do not depend on it (it is cleared
             // per producer); the chunks keep producer order.
             let threads = rayon::current_num_threads().max(1);
-            let floor = MIN_SOLVE_CHUNK.min(fresh_ps.len() / threads).max(1);
-            let per = fresh_ps.len().div_ceil(threads * 8).max(floor);
+            let per = if fresh_ps.len() < MIN_SOLVE_CHUNK * threads {
+                // A small solve: one producer per chunk, as before ENG-121, so the
+                // workers balance uneven walks.
+                1
+            } else {
+                fresh_ps.len().div_ceil(threads * 8).max(MIN_SOLVE_CHUNK)
+            };
             let solved: Vec<FreshSolve<'g>> = fresh_ps
                 .par_chunks(per)
                 .flat_map_iter(|chunk| {

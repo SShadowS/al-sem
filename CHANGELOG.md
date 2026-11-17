@@ -12,9 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **What changed** (`src/engine/l4/pd_solve.rs`; no output change). Each fresh producer's walk
   (`solve_producer`) built its visited set, its edge index and its state-name list from empty,
   so on CDO the maps rehashed and grew again for every producer. Now the producers are walked
-  in chunks (about eight per thread, at least four producers each, or one per worker when a
-  solve has fewer than four fresh producers per thread, such as a resident refresh after an
-  edit), one `SolveScratch` per chunk, cleared per producer and reused, so a scratch grows to
+  in chunks (about eight per thread, at least four producers each; a solve with fewer than four
+  fresh producers per thread, such as a resident refresh after an edit, keeps one producer per
+  chunk as before, so the workers balance uneven walks), one `SolveScratch` per chunk, cleared per producer and reused, so a scratch grows to
   its chunk's largest walk once. The chunks keep producer order.
 - **First found by the profiles.** A first form used rayon's `map_init`, which makes a scratch
   per split; work stealing splits small, so the maps still rehashed (rehash share 4.34-4.60 %
@@ -39,8 +39,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     4.59 / 4.94 % to 2.88 / 3.64 %, analyze 4.21 / 4.16 % to 2.38 / 2.32 % (-1.3 to -1.8
     points). The fresh producers' parallel walk (`pd.walk`): prove 372 / 520 ms to 258 / 317
     ms, analyze 417 / 420 ms to 292 / 279 ms (about 30 % shorter: on these cold one-shot
-    solves the chunks cost no parallelism; a resident refresh, with few fresh producers, keeps
-    one per worker and was not measured).
+    solves the chunks cost no parallelism; a resident refresh, with few fresh producers, walks
+    one producer per chunk as before and was not measured).
   - **CPU seconds are unresolved on this host:** one-shot CPU time swung about ±10 % between
     runs of one binary (host swap, kernel time). The true saving is probably between the
     instruction count's ~0.5 % and the sampled ~1.8 % (neither bounds CPU time: instructions
