@@ -27,11 +27,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the facts are held once, at exact length (with shared allocations a bucket shows the bytes
   on its last holder, so the live line is the measure). Measured before the shared empty
   slice, which removes one small allocation per routine with no facts.
-- **CDO checks:** `cdo-before-after` moved no finding, fingerprint or call-graph number; the
-  session refresh equals a cold build at all 12 steps in both modes; `cdo-gate --only
-  harness,l4` passed (211/0, 25/0). `cdo-speed` passed twice: summed peak memory x0.970 and
-  x0.979; the round total read x1.025 and x1.015 and `prove` x1.010 and x1.026, both runs a
-  little above 1 and not explained (the build x1.026 and x0.999).
+- **CDO checks** (on the final head `dea2715d`, after the review fixes; the first chain on
+  `b4c24cd1` agreed): `cdo-before-after` moved no finding, fingerprint or call-graph number;
+  the session refresh equals a cold build at all 12 steps in both modes; `cdo-gate --only
+  harness,l4` passed (211/0, 25/0). `cdo-speed` passed twice: round total x1.009 and x0.983,
+  `prove` x0.993 and x1.019, the build x1.013 and x0.986; the servers' summed peak memory
+  fell in both (7,838 -> 7,276 and 7,036 -> 6,934 MiB; no ratio quoted, the two differ). The
+  first chain's round totals (x1.025, x1.015) did not repeat.
 - **Pinned by** `session::phase_tests::owned_harvest_moves_payloads_and_adds_only_the_counted_arc`:
   every lent summary is `Arc::ptr_eq` to the composition's entry (with the lent arm copying
   into a new `Arc`, it fails "the lent summary copied its direct facts"). Its older owned-arm
