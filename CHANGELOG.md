@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (ENG-122: equal cone windows are stored once, 76.1 MiB less resident memory on CDO)
+
+- **What changed** (`src/engine/l4/cone_derived.rs`; no output change). `ConeDerivedStore`
+  (the detectors' derived cone: per routine, four windows into four id pools) kept every
+  routine's ids whole, so a routine with the same cone as another stored it again. The three
+  paths that add rows (`push_row`, the parallel walk's merge; `copy_row`, a refresh carrying
+  a routine over; `finish_routine`) still append; `ConeDerivedBuilder::finish()` then
+  rebuilds each pool once (`compact_pool`): rows visited in their old window order, each
+  distinct window kept once (found by an FxHash of its content, then compared whole), the
+  pool trimmed to its length. Rows still hold `Range<u32>` windows and every read goes
+  through `window()`, so a shared window answers exactly as its copy did.
+- **Why at `finish` and not as rows arrive.** The first version shared on each of the three
+  paths. `cdo-speed` then read the rounds x1.041, x1.032, x1.082 and x1.035 slower; a trace
+  of one-shot `prove` put +100-160 ms in `cone.walk`: `push_row` runs in the walk's merge,
+  under one lock, so the lookups held the other workers. FxHash for the lookup did not
+  change it. Sharing once at `finish` reads x1.003 and x0.976 (round total) and x1.008 and
+  x0.987 (`prove`), within the noise, and keeps the same saving.
+- **The census that set the bar** (CDO, master `57c2bebf`, `tools/census-probe resident
+  --sited`): the 22,953 non-empty event windows hold 14,076 distinct contents, 2,023,675 ids
+  of the 15,531,457 stored; the other three pools are alike (writes_all 10,090 windows, 1,628
+  distinct; phys_writes 7,899 / 1,578; phys_reads 14,746 / 3,763). Bar: the pools at their
+  distinct content, about 8.6 MiB of 84.0.
+- **Measured** (the same probe on both sides, back to back, final code): the pools 84.00 ->
+  8.56 MiB (events 64.00 -> 7.72, writes_all 4.00 -> 0.16, phys_writes 8.00 -> 0.30,
+  phys_reads 8.00 -> 0.38); live after the first ask 3,643.7 -> 3,567.6 MiB (-76.1), and
+  -76.1 after every later ask. `finish` holds one old and one new pool at a time (the events
+  pool is the largest), a short extra while the store is built.
+- **CDO checks** (base `57c2bebf`): `cdo-before-after` moved no finding, fingerprint or
+  call-graph number; the session refresh equals a cold build at all 12 steps in both modes;
+  `cdo-gate --only harness,l4` passed (211/0, 25/0). `cdo-speed` passed twice; the servers'
+  summed peak memory x0.960 and x0.959 (6,961 -> 6,680 and 7,080 -> 6,789 MiB).
+- **Pinned by** `cone_derived::tests::equal_windows_are_stored_once_and_each_row_reads_its_own`
+  (with `finish` not compacting, the pool holds 5 ids, not 3),
+  `a_window_is_shared_on_equal_content_not_on_the_hash` (a hand-stated hash collision, the
+  lookup asserted to hit it; with the match on length alone, `[7, 8]` reads back `[1, 2]`)
+  and `push_row_and_copy_row_share_and_masks_keep_windows_apart` (the merge's and the
+  refresh's rows are shared at `finish`; insert and modify on one table keep two windows,
+  one when windows match on their length alone).
+
 ### Changed (ENG-95: a statement-tree node keeps its rare facts in one box, 66.7 MiB less resident memory on CDO)
 
 - **What changed** (`src/program/body/features.rs`; no output change). `PCFNNode`, the
