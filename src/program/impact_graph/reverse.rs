@@ -253,12 +253,19 @@ pub trait ConeVisitor {
     fn reach(&mut self, root: u32, s: WalkState, hops: u32, via: Via, from: Option<WalkState>) {
         let _ = (root, s, hops, via, from);
     }
-    /// ENG-128: a state reached AGAIN, over `site`, after its first arrival (`reach` saw that
-    /// one). The walk keeps the first arrival only, so a visitor that needs every way into the
-    /// cone (a publisher whose event-dispatch site reaches a state first met over a call) reads
-    /// the rest here. `hops` is this arrival's (not shorter than the first's).
+    /// ENG-128: a state reached AGAIN, over `site`. The walk keeps the first arrival only, so a
+    /// visitor that needs every way into the cone (a publisher whose event-dispatch site reaches
+    /// a state first met over a call) reads the rest here. Called after `reach` has seen the
+    /// state (at the end of the level after the one that found the arrival), so a visitor that
+    /// orders by arrival keeps the first one first. `hops` is this arrival's (not shorter than
+    /// the first's). A walk stopped by a [`Limit`] drops the arrivals still waiting.
     fn rejoin(&mut self, root: u32, s: WalkState, hops: u32, site: u32) {
         let _ = (root, s, hops, site);
+    }
+    /// Whether the walk keeps dropped arrivals for [`Self::rejoin`] (asked once per walk; a
+    /// visitor that does not read them spares the walk the buffer).
+    fn wants_rejoin(&self) -> bool {
+        false
     }
     /// A node in the cone with a way to run no site shows (once per node).
     fn hidden(&mut self, root: u32, n: NodeIx, ch: HiddenChannel) {
@@ -365,6 +372,11 @@ pub struct WalkScratch {
     hidden_done: HashSet<NodeIx>,
     level: Vec<(u32, WalkState, Option<WalkState>, Via)>,
     next: Vec<(u32, WalkState, Option<WalkState>, Via)>,
+    /// ENG-128: dropped arrivals `(root, state, hops, site)` met while expanding this level,
+    /// and those from the level before (`rejoin_due`), delivered once the states they arrive at
+    /// have all been reported (the end of the next level).
+    rejoin_new: Vec<(u32, WalkState, u32, u32)>,
+    rejoin_due: Vec<(u32, WalkState, u32, u32)>,
 }
 
 impl WalkScratch {
@@ -380,6 +392,8 @@ impl WalkScratch {
             + self.hidden_done.capacity() * (size_of::<NodeIx>() + 8)
             + self.touched.capacity() * size_of::<NodeIx>()
             + (self.level.capacity() + self.next.capacity()) * q
+            + (self.rejoin_new.capacity() + self.rejoin_due.capacity())
+                * size_of::<(u32, WalkState, u32, u32)>()
     }
 
     fn reset(&mut self, nodes: usize) {
@@ -396,6 +410,8 @@ impl WalkScratch {
         self.hidden_done.clear();
         self.level.clear();
         self.next.clear();
+        self.rejoin_new.clear();
+        self.rejoin_due.clear();
     }
 
     /// A scratch that keeps every state in the hash fallback (tests only).
@@ -491,6 +507,7 @@ pub fn walk_multi(
     let universal = g
         .universal_hub()
         .filter(|&u| opts.follow_open && !g.sites_into(u).is_empty() && !roots.is_empty());
+    let rejoins = v.wants_rejoin();
     let mut hops = 0u32;
     while !scratch.level.is_empty() {
         let mut level = std::mem::take(&mut scratch.level);
@@ -541,10 +558,11 @@ pub fn walk_multi(
                 }
                 if scratch.insert(n) {
                     scratch.next.push((root, n, Some(s), Via::Site(site)));
-                } else {
+                } else if rejoins {
                     // ENG-128: the state is in the cone already; this way into it is not
-                    // walked again, but a visitor may still need to know of it.
-                    v.rejoin(root, n, hops + 1, site);
+                    // walked again, but a visitor may still need to know of it (after the
+                    // state's own `reach`, which may wait in the next level).
+                    scratch.rejoin_new.push((root, n, hops + 1, site));
                 }
             }
         }
@@ -563,11 +581,23 @@ pub fn walk_multi(
                 scratch.next.push((0, s, None, Via::Universal));
             }
         }
+        // ENG-128: the previous level's dropped arrivals reach states reported by now (this
+        // level holds the last of them); this level's wait for the next.
+        for &(root, n, h, site) in &scratch.rejoin_due {
+            v.rejoin(root, n, h, site);
+        }
+        scratch.rejoin_due.clear();
+        std::mem::swap(&mut scratch.rejoin_due, &mut scratch.rejoin_new);
         level.clear();
         scratch.level = std::mem::take(&mut scratch.next);
         scratch.next = level;
         hops += 1;
     }
+    // The last level's dropped arrivals (`next` is empty, so every state is reported).
+    for &(root, n, h, site) in &scratch.rejoin_due {
+        v.rejoin(root, n, h, site);
+    }
+    scratch.rejoin_due.clear();
     stats
 }
 
@@ -773,6 +803,12 @@ pub struct CodeCalls<'v>(pub &'v mut dyn ConeVisitor);
 impl ConeVisitor for CodeCalls<'_> {
     fn reach(&mut self, root: u32, s: WalkState, hops: u32, via: Via, from: Option<WalkState>) {
         self.0.reach(root, s, hops, via, from);
+    }
+    fn rejoin(&mut self, root: u32, s: WalkState, hops: u32, site: u32) {
+        self.0.rejoin(root, s, hops, site);
+    }
+    fn wants_rejoin(&self) -> bool {
+        self.0.wants_rejoin()
     }
     fn hidden(&mut self, root: u32, n: NodeIx, ch: HiddenChannel) {
         self.0.hidden(root, n, ch);

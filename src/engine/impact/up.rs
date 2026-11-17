@@ -568,6 +568,9 @@ impl ConeVisitor for Up<'_> {
     fn rejoin(&mut self, _: u32, s: WalkState, hops: u32, site: u32) {
         self.count_publisher(site, hops, s.tier);
     }
+    fn wants_rejoin(&self) -> bool {
+        true
+    }
     fn hidden(&mut self, _: u32, _: NodeIx, ch: HiddenChannel) {
         match ch {
             HiddenChannel::Universal => self.universal = true,
