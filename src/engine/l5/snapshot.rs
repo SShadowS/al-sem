@@ -2415,12 +2415,15 @@ fn census_snapshot(s: &CapabilitySnapshot) {
     emit("snapshot.routine_order_frames", &mut frames);
     let a = &s.pd_solution;
     let mut allocs = Tally::default();
+    // ENG-111: the states' and the keys' routine ids are shared texts; each distinct text
+    // is one allocation (counted once by content, as `pd_arena_bytes` counts its bytes).
+    let routine_texts: std::collections::HashSet<&str> =
+        a.states.iter().map(|n| n.routine.as_str()).collect();
     allocs
         .buf::<StateNode>(a.states.capacity())
-        .strs(a.states.iter().map(|n| &n.routine))
+        .strs(routine_texts)
         .buf::<(StateIx, EdgeIx)>(a.links.capacity())
         .buf::<(RoutineId, Vec<StateIx>)>(a.by_routine.capacity())
-        .strs(a.by_routine.keys())
         .bufs(a.by_routine.values());
     crate::engine::census::bucket(
         "snapshot.pd_solution",
@@ -3220,7 +3223,8 @@ fn derive_pd_arena(
 }
 
 /// The bytes a `PdArena` retains, counted like `pd_solve::arena_tally`: every
-/// `Vec` and hash table at its capacity, plus string heap.
+/// `Vec` and hash table at its capacity, plus each distinct routine id's text
+/// once (ENG-111: the ids are shared; the `Arc` headers are not counted).
 fn pd_arena_bytes(a: &PdArena) -> u64 {
     use std::mem::size_of;
     // ENG-111: the routine ids are shared texts (the states' and the `by_routine` keys'):

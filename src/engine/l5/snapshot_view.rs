@@ -57,8 +57,6 @@ pub(super) struct ViewBase {
 // Evidence
 // ---------------------------------------------------------------------------
 
-/// The operation and call-site evidence every view carries, and where the
-/// rest of the candidates are.
 impl ViewBase {
     /// ENG-111: the view base's parts for a byte census (`tools/census-probe resident`),
     /// every field named. Read-only otherwise.
@@ -81,6 +79,8 @@ impl ViewBase {
     }
 }
 
+/// The operation and call-site evidence every view carries, and where the
+/// rest of the candidates are.
 #[derive(Clone)]
 pub(super) struct EvidenceBase {
     /// The operation evidence of every id the base references, sorted by id
