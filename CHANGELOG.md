@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (ENG-111: the tree's projected solve shares its routine ids, 142.4 MiB less resident memory on CDO)
+
+- **What changed** (`src/engine/l5/snapshot.rs`, `snapshot_view.rs`; no output change). The
+  tree's producer-solve projection (`CapabilitySnapshot::pd_solution`, a `PdArena`) names each
+  state's routine with `RoutineId`, now a `SharedStr`: `derive_pd_arena` mints one stable id per
+  cone routine and the view path's per-routine slots hold the shared form, so every state's id
+  and every `by_routine` key is a refcount bump. On CDO 1,229,877 states name 4,685 routines, and
+  as one `String` each they held 133.14 MiB of id text. The arena is never serialized; its
+  readers (the digest's proofs, `aldump`) look up and compare the id by text.
+- **Measured** (`tools/census-probe resident`, release, master `88fbb060` vs this branch, back to
+  back; `tools/census-probe/runs-eng111/`): live after one ask of each kind 4,013.9 → 3,871.5 MiB
+  (−142.4 MiB), allocations −1,228,903; `artifact.tree` 307.46 → 164.96 MiB, its states 208.21 →
+  66.28 MiB. Bar: 120 MiB (ENG-107 sized the bucket). On CDO (`scripts/cdo-before-after
+  88fbb060`, workspace `bc3ccb18` clean on both sides) no finding or fingerprint moved at either
+  scope and the call graph is unchanged (0 unknown); `aldump --session-refresh --verify` gives a
+  model equal to a cold build after every change type, in the default and `--low-mem` modes.
+  `scripts/cdo-speed` (`88fbb060` against `a10bba82`) passed twice: the model build x0.988 and
+  x1.013, the round totals x1.009 and x1.025, so no speed ratio is claimed; the servers' summed
+  peak memory x0.923 and x0.921.
+- **The census.** The tree base's census hook splits its view into its four parts (read-only
+  `ViewBase::into_census_parts`), and the probe splits `pd_solution`; the view's facts (51.85
+  MiB), evidence (41.61) and routine-to-stable map (9.43) are ENG-127. The arena's byte and
+  allocation counts read each distinct routine text once, by content (Fable: the allocation
+  count still charged one per state).
+
 ### Changed (ENG-108: coverage records share their texts, 102.1 MiB less resident memory on CDO)
 
 - **What changed** (no output change). `CoverageRecord` (`src/engine/l4/capability_cone.rs`),

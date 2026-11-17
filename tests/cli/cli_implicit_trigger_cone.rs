@@ -811,7 +811,7 @@ fn a4_bindings_and_keys_are_per_operation() {
     let arena = &snap.pd_solution;
     let linked: BTreeSet<usize> = arena
         .by_routine
-        .get(&mixed_stable)
+        .get(mixed_stable.as_str())
         .into_iter()
         .flatten()
         .flat_map(|&s| arena.links[arena.states[s].links.clone()].iter())
