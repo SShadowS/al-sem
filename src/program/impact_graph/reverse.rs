@@ -628,7 +628,7 @@ pub(super) fn state_over(
 /// The entry kinds a state of `node` reports: its root kinds, the roots.config overlay's and
 /// static background targets' (`opts.extra_entries`), and `background-start` for the target of
 /// a static background start (F3: a run starts there, in its own session). Sorted, distinct.
-pub(super) fn entry_kinds(g: &SitedGraph, node: NodeIx, opts: &WalkOptions<'_>) -> Vec<EntryKind> {
+pub(crate) fn entry_kinds(g: &SitedGraph, node: NodeIx, opts: &WalkOptions<'_>) -> Vec<EntryKind> {
     let mask = g.root_kinds(node)
         | opts
             .extra_entries
@@ -646,7 +646,7 @@ pub(super) fn entry_kinds(g: &SitedGraph, node: NodeIx, opts: &WalkOptions<'_>) 
 
 /// The external-caller reasons of a node with flags `f` (none when no app outside the program
 /// depends on these apps).
-pub(super) fn external_whys(
+pub(crate) fn external_whys(
     f: u8,
     opts: &WalkOptions<'_>,
 ) -> impl Iterator<Item = ExternalWhy> + use<> {

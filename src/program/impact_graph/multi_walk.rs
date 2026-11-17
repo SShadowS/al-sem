@@ -81,6 +81,12 @@ pub trait MultiSink {
     ) {
         let _ = (lane, n, why, s, hops, roots);
     }
+    /// The page-action entry an action-run site makes (a single walk's
+    /// `entry(lane, n, &[EntryKind::PageAction], s, hops)`), apart from a node's own entry
+    /// kinds, which a consumer may fold from the node alone.
+    fn action_entry(&mut self, lane: u32, n: NodeIx, s: WalkState, hops: u32, roots: &[u64]) {
+        let _ = (lane, n, s, hops, roots);
+    }
     fn source(&mut self, lane: u32, s: WalkState, hops: u32, roots: &[u64]) {
         let _ = (lane, s, hops, roots);
     }
@@ -455,7 +461,7 @@ pub fn multi_walk(
                         *d |= u;
                     }
                     if any(&tmp) {
-                        sink.entry(lane, n.node, &[EntryKind::PageAction], n, hops + 1, &tmp);
+                        sink.action_entry(lane, n.node, n, hops + 1, &tmp);
                     }
                 }
                 let seen = &mut states.bits[off..off + w];

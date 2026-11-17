@@ -851,6 +851,11 @@ fn by_relation(ws: impl Iterator<Item = Witness>) -> Value {
         *n.entry((w.population(), w.tier == Tier::Local))
             .or_default() += 1;
     }
+    by_relation_of(&n, total)
+}
+
+/// [`by_relation`] from its counts: per (class, the witness's tier is `Local`), and the total.
+fn by_relation_of(n: &BTreeMap<(Population, bool), usize>, total: usize) -> Value {
     let get = |p: Population, local: bool| n.get(&(p, local)).copied().unwrap_or(0);
     let both = |p: Population| get(p, true) + get(p, false);
     json!({
@@ -1080,6 +1085,36 @@ fn classified(up: &Up<'_>, g: &SitedGraph) -> serde_json::Map<String, Value> {
     m
 }
 
+/// Where a reached hub is called from inside the reach: the smallest location (`ws:` /
+/// `dep:<app name>:` file, 1-based line) of a site into `hub` from a node `reached` holds;
+/// empty when none has an anchor.
+fn hub_at(g: &SitedGraph, hub: NodeIx, reached: impl Fn(NodeIx) -> bool) -> String {
+    hub_locations(g, hub)
+        .filter(|(from, _)| reached(*from))
+        .map(|(_, at)| at)
+        .min()
+        .unwrap_or_default()
+}
+
+/// The anchored sites into `hub`: each one's caller and its location as [`hub_at`] prints it.
+fn hub_locations(g: &SitedGraph, hub: NodeIx) -> impl Iterator<Item = (NodeIx, String)> + '_ {
+    g.sites_into(hub)
+        .iter()
+        .map(|&s| &g.sites()[s as usize])
+        .filter_map(|s| s.anchor.map(|a| (s.from, a)))
+        .map(|(from, a)| {
+            // `ws:` / `dep:<app name>:` as every human location reads.
+            let unit = g.unit(a.unit);
+            let file = match g.node_app(from) {
+                _ if unit.starts_with("ws:") || unit.starts_with("dep:") => unit.to_string(),
+                Some(app) if app == g.primary_app() => format!("ws:{unit}"),
+                Some(app) => format!("dep:{}:{unit}", g.app_identity(app).1),
+                None => unit.to_string(),
+            };
+            (from, format!("{file}:{}", a.start_line + 1))
+        })
+}
+
 /// What one walk found, as JSON.
 fn summary(up: &Up<'_>, g: &SitedGraph, captions: &Captions) -> Value {
     let (mut local, mut dep, mut open) = (0usize, 0usize, 0usize);
@@ -1138,26 +1173,7 @@ fn summary(up: &Up<'_>, g: &SitedGraph, captions: &Captions) -> Value {
         let Some(kind) = crate::engine::l5::routine_rollup::hub_kind_of(g, *n) else {
             continue;
         };
-        let at = g
-            .sites_into(*n)
-            .iter()
-            .map(|&s| &g.sites()[s as usize])
-            .filter(|s| up.best.contains_key(&s.from))
-            .filter_map(|s| s.anchor.map(|a| (s.from, a)))
-            .map(|(from, a)| {
-                // `ws:` / `dep:<app name>:` as every human location reads.
-                let unit = g.unit(a.unit);
-                let file = match g.node_app(from) {
-                    _ if unit.starts_with("ws:") || unit.starts_with("dep:") => unit.to_string(),
-                    Some(app) if app == g.primary_app() => format!("ws:{unit}"),
-                    Some(app) => format!("dep:{}:{unit}", g.app_identity(app).1),
-                    None => unit.to_string(),
-                };
-                format!("{file}:{}", a.start_line + 1)
-            })
-            .min()
-            .unwrap_or_default();
-        hubs.insert((kind, at));
+        hubs.insert((kind, hub_at(g, *n, |m| up.best.contains_key(&m))));
     }
     let entry_total: usize = up.entries.values().map(Firsts::count).sum();
     let mut out = json!({
@@ -1342,6 +1358,11 @@ impl MultiSink for Demux<'_, '_> {
     ) {
         for k in multi_walk::ones(roots) {
             self.0[k].external(lane, n, why, s, hops);
+        }
+    }
+    fn action_entry(&mut self, lane: u32, n: NodeIx, s: WalkState, hops: u32, roots: &[u64]) {
+        for k in multi_walk::ones(roots) {
+            self.0[k].entry(lane, n, &[EntryKind::PageAction], s, hops);
         }
     }
     fn source(&mut self, lane: u32, s: WalkState, hops: u32, roots: &[u64]) {
@@ -1654,6 +1675,11 @@ pub fn up(g: &SitedGraph, args: &UpArgs<'_>, captions: &Captions) -> Value {
 #[cfg(test)]
 #[path = "up_par_tests.rs"]
 pub(crate) mod up_par_tests;
+
+// ENG-125 pass 1: not wired into `up` until the plan's go/no-go (Task 2 Step 6) passes.
+#[allow(dead_code)]
+#[path = "up_multi.rs"]
+mod up_multi;
 
 #[cfg(test)]
 mod tests {

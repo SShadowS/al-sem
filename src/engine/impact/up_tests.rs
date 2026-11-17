@@ -1157,3 +1157,31 @@ fn multi_walk_traces_equal_on_the_up_worlds() {
     }
     assert!(page_actions > 0, "precondition: a page-action entry");
 }
+
+/// ENG-125 pass 1: every pass-1 field of every root equals its own `Up` on this file's
+/// worlds, which hold the candidate classes (a hub, configured dispatch) the real fixtures
+/// lack.
+#[test]
+fn multi_p1_rows_equal_on_the_up_worlds() {
+    use super::up_multi::tests::assert_p1_equal;
+    use crate::program::impact_graph::multi_walk::tests::every_shape;
+    let graphs = [
+        navigation_world().0,
+        hub_world().0,
+        action_world(true).0,
+        action_world(false).0,
+        dependency_callers(),
+        super::tests::entry_world().0,
+    ];
+    let mut candidates = 0;
+    for g in &graphs {
+        candidates += assert_p1_equal(
+            g,
+            &every_shape(g),
+            &WalkOptions::default(),
+            Keep::new(false),
+        )
+        .candidate_rows;
+    }
+    assert!(candidates > 0, "precondition: a candidate entry");
+}

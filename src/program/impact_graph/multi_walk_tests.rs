@@ -138,6 +138,12 @@ impl MultiSink for Many {
     ) {
         self.push(roots, &Ev::External(lane, n, why, s, hops));
     }
+    fn action_entry(&mut self, lane: u32, n: NodeIx, s: WalkState, hops: u32, roots: &[u64]) {
+        self.push(
+            roots,
+            &Ev::Entry(lane, n, vec![EntryKind::PageAction], s, hops),
+        );
+    }
     fn source(&mut self, lane: u32, s: WalkState, hops: u32, roots: &[u64]) {
         self.push(roots, &Ev::Source(lane, s, hops));
     }
