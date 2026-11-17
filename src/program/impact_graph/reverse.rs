@@ -253,6 +253,13 @@ pub trait ConeVisitor {
     fn reach(&mut self, root: u32, s: WalkState, hops: u32, via: Via, from: Option<WalkState>) {
         let _ = (root, s, hops, via, from);
     }
+    /// ENG-128: a state reached AGAIN, over `site`, after its first arrival (`reach` saw that
+    /// one). The walk keeps the first arrival only, so a visitor that needs every way into the
+    /// cone (a publisher whose event-dispatch site reaches a state first met over a call) reads
+    /// the rest here. `hops` is this arrival's (not shorter than the first's).
+    fn rejoin(&mut self, root: u32, s: WalkState, hops: u32, site: u32) {
+        let _ = (root, s, hops, site);
+    }
     /// A node in the cone with a way to run no site shows (once per node).
     fn hidden(&mut self, root: u32, n: NodeIx, ch: HiddenChannel) {
         let _ = (root, n, ch);
@@ -534,6 +541,10 @@ pub fn walk_multi(
                 }
                 if scratch.insert(n) {
                     scratch.next.push((root, n, Some(s), Via::Site(site)));
+                } else {
+                    // ENG-128: the state is in the cone already; this way into it is not
+                    // walked again, but a visitor may still need to know of it.
+                    v.rejoin(root, n, hops + 1, site);
                 }
             }
         }

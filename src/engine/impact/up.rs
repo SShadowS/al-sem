@@ -473,6 +473,21 @@ impl<'g> Shared<'g> {
 }
 
 impl<'g> Up<'g> {
+    /// `site`'s node is a publisher when `site` is an event dispatch into the cone, over the
+    /// arrival that reached `site`'s state with `hops` at `tier` (every arrival: `reach`'s first
+    /// one and `rejoin`'s others; `Firsts` keeps each node's best).
+    fn count_publisher(&mut self, site: u32, hops: u32, tier: Tier) {
+        let st = &self.g.sites()[site as usize];
+        if st.boundary == Boundary::EventDispatch {
+            self.publishers.add(st.from, hops, tier);
+            // Round-2 n09: the events that raise a root itself (its own subscriptions), apart
+            // from every publisher among the ancestors.
+            if self.root_nodes.contains(&st.to) {
+                self.direct_publishers.add(st.from, hops, tier);
+            }
+        }
+    }
+
     fn new(g: &'g SitedGraph, keep: Keep, roots: &[NodeIx], shared: &'g Shared<'g>) -> Up<'g> {
         Up {
             g,
@@ -538,16 +553,7 @@ impl ConeVisitor for Up<'_> {
             e.class = w;
         }
         if let Via::Site(site) = via {
-            let st = &self.g.sites()[site as usize];
-            if st.boundary == Boundary::EventDispatch {
-                self.publishers.add(st.from, hops, s.tier);
-                // Round-2 n09: the events that raise a root itself (its
-                // own subscriptions), apart from every publisher among the
-                // ancestors.
-                if self.root_nodes.contains(&st.to) {
-                    self.direct_publishers.add(st.from, hops, s.tier);
-                }
-            }
+            self.count_publisher(site, hops, s.tier);
         }
         if !self.root_nodes.contains(&s.node)
             && self.ancestors.len() < self.keep.ancestors
@@ -556,6 +562,11 @@ impl ConeVisitor for Up<'_> {
         {
             self.ancestors.push(s.node);
         }
+    }
+    /// ENG-128: an event-dispatch site into a state the walk first met another way still makes
+    /// its node a publisher (the walk keeps only the first arrival; this is every other one).
+    fn rejoin(&mut self, _: u32, s: WalkState, hops: u32, site: u32) {
+        self.count_publisher(site, hops, s.tier);
     }
     fn hidden(&mut self, _: u32, _: NodeIx, ch: HiddenChannel) {
         match ch {

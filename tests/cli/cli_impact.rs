@@ -956,3 +956,87 @@ fn impact_names_the_tables_fields_and_company() {
     assert_eq!(code, 0, "{human}{err}");
     golden("evidence.human.txt", &human, t.path());
 }
+
+/// ENG-128: a publisher counts when ANY of its event-dispatch sites reaches the cone, not only
+/// when the walk first arrives at its state over one. In the graph the publisher is the event
+/// declaration (its `eventFlow` sites go to its subscribers). `R` subscribes to `OnFirst`, which
+/// `Q` raises, so `Q`'s state has crossed an event. `OnSecond` both dispatches to its
+/// subscriber `Q` and, in its body, calls `Q`: from `Q`'s state the call and the dispatch build
+/// the SAME state of `OnSecond`, and the walk keeps whichever it meets first. `OnSecond` is a
+/// publisher either way: `eventPublishers` holds `OnFirst` and `OnSecond`.
+///
+/// The shape needs a publisher with a body, which the AL compiler refuses (AL0286 "The event
+/// can't contain code", AL0287, measured with al-tool 18.0.41 on BC 28.4 symbols), and CDO has
+/// none (0 of 649 event-dispatch callers has another edge, `alsem graph`). The engine reads
+/// source that need not compile (a workspace mid-edit), so the rule holds there too.
+/// DISCRIMINATION: counting publishers only on the first arrival (the pre-ENG-128 rule) leaves
+/// `OnSecond` out when the call is met first.
+#[test]
+fn a_publisher_counts_whichever_arrival_reaches_its_state_first() {
+    let t = tempfile::tempdir().unwrap();
+    let ws = t.path().join("App");
+    std::fs::create_dir_all(ws.join("src")).unwrap();
+    std::fs::create_dir(t.path().join(".git")).unwrap();
+    std::fs::write(
+        ws.join("app.json"),
+        r#"{"id":"12812812-0000-4000-8000-000000000128","name":"Pub Arrivals","publisher":"al-sem tests","version":"1.0.0.0","runtime":"17.0","idRanges":[{"from":50900,"to":50910}]}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        ws.join("src/pub.al"),
+        r#"codeunit 50900 "PA Root"
+{
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::"PA Mid", 'OnFirst', '', false, false)]
+    local procedure R()
+    begin
+    end;
+}
+
+codeunit 50901 "PA Mid"
+{
+    // Q: raises OnFirst (so R's cone crosses an event), and subscribes to OnSecond.
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::"PA Top", 'OnSecond', '', false, false)]
+    procedure Q()
+    begin
+        OnFirst();
+    end;
+
+    [IntegrationEvent(false, false)]
+    procedure OnFirst()
+    begin
+    end;
+}
+
+codeunit 50902 "PA Top"
+{
+    // A publisher with a body (AL refuses it; the engine reads it): it calls its own
+    // subscriber Q, so one node has a call AND a dispatch into Q.
+    [IntegrationEvent(false, false)]
+    procedure OnSecond()
+    var
+        Mid: Codeunit "PA Mid";
+    begin
+        Mid.Q();
+    end;
+}
+"#,
+    )
+    .unwrap();
+    let doc = json(&ws, &["--routine", "PA Root::R", "--no-tests"], None);
+    let p = &doc["roots"][0]["up"]["eventPublishers"];
+    let names: Vec<String> = p["first"]
+        .as_array()
+        .unwrap_or_else(|| panic!("eventPublishers.first: {p:#}"))
+        .iter()
+        .map(|f| f["display"].as_str().unwrap_or_default().to_string())
+        .collect();
+    assert!(
+        names.iter().any(|n| n.contains("OnFirst")),
+        "precondition: OnFirst, which raises into R, is a publisher: {p:#}"
+    );
+    assert!(
+        names.iter().any(|n| n.contains("OnSecond")),
+        "OnSecond dispatches into the cone, whichever arrival the walk met first: {p:#}"
+    );
+    assert_eq!(p["count"], 2, "OnFirst and OnSecond: {p:#}");
+}
