@@ -7,6 +7,73 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (ENG-128: `alsem impact`'s `eventPublishers` no longer depends on which way the walk reached a state first)
+
+- **What changed in the output.** `up.eventPublishers` in `al-sem.impact/1`: a publisher is
+  now listed when ANY of its event-dispatch sites reaches the cone. Before, it was listed only
+  when that site was the walk's FIRST way into a state: the reverse walk keeps one arrival per
+  state, and a later arrival over a dispatch was dropped before it was counted. So `count` and
+  `direct.count` can only rise. In the one shape that moves (below), a publisher already
+  listed can also get a better witness by `Firsts`' rank (non-open first, then fewer `hops`;
+  its `tier` may change either way), `onlyOpen` can fall by it, and the capped `first` lists
+  can reorder or let a new publisher push one out. Readers of the field (bc-dev-mcp) see more publishers or the same, never fewer.
+- **Real AL cannot reach that shape, so nothing moves on compiling code.** In the call graph
+  only an event declaration has event-dispatch sites, so a dispatch that arrives second needs
+  a publisher that ALSO calls into the cone, i.e. a publisher with a body. The AL compiler
+  refuses that (AL0286 "The event can't contain code", AL0287 for local variables; al-tool
+  18.0.41 on BC 28.4 symbols, for both `[IntegrationEvent]` and `[BusinessEvent]`). CDO has
+  no such node: in `alsem graph`, no caller of the 649 `eventFlow` edges has any other edge,
+  and no `run` edge targets an event. The engine also reads source that does not compile (a
+  workspace mid-edit), which is where the fix applies.
+- **How.** `ConeVisitor` (`src/program/impact_graph/reverse.rs`) has two new methods, both
+  off by default: `wants_rejoin()` and `rejoin(root, state, hops, site)`. For a visitor that
+  wants them, the walk keeps each arrival it drops (after the open, guard and `step`
+  filters) and delivers it at the end of the next level, after the state's own `reach`; a
+  walk stopped by a limit drops the ones still waiting. `CodeCalls` forwards both. `Up` counts
+  publishers through one `count_publisher` on `reach` and `rejoin`. The late delivery is what
+  keeps compiling code's output unchanged: a publisher with two subscribers in the cone is
+  reached twice, and counting its second arrival at once (while the level before is still
+  being expanded) listed it ahead of same-hop publishers counted later in walk order (sol and
+  Fable review). Other visitors do not ask for rejoins and pay nothing. Impact's walks hold
+  the buffer, so the cost report's `scratchBytes` (a measurement, not part of the answer)
+  can grow.
+- **Pinned by** `cli_impact::a_publisher_counts_whichever_arrival_reaches_its_state_first` (a
+  fixture whose publisher has a body; with the `rejoin` delivery removed it fails on the
+  missing publisher) and `up::relation_tests::a_publisher_reached_twice_keeps_its_place_in_the_list`
+  (with `rejoin` delivered at once it fails: `[(2, 4), (2, 3)]` against `[(2, 3), (2, 4)]`)
+  and `up::relation_tests::a_dropped_dispatch_still_counts_its_publisher` (both site orders;
+  with `Up::wants_rejoin` false the call-first world lists one publisher, not two).
+- **Measured on CDO** (base `a3b8f86f`, production code `f99af34d`). `alsem impact --format
+  json --no-tests` over the 20 workspace files holding an event subscriber (322 roots, 102,970
+  `eventPublishers` entries): byte-identical with `cost` removed. `cdo-before-after`: no
+  finding, fingerprint or call-graph number moved. `cdo-speed` passed twice; no ratio is
+  quoted, as the runs disagree within the noise (round total x1.019 and x1.034, the ~1 s
+  `impact` round calls x1.000 and x1.144 with spreads up to 2.05).
+
+### Fixed (TLS-90: the CDO slot tests no longer leak waiter processes when an assertion fails)
+
+- **The problem:** `cdo_slot_serves_waiters_in_arrival_order` and
+  `cdo_slot_queue_refuses_jumps_and_steps_aside_for_memory` (`tests/cli/cdo_slot.rs`) spawn
+  `cdo-slot acquire --wait` children and reaped them only on the success path. A failing assertion
+  (each TLS-88 discrimination break) left them polling their temporary slot folders forever.
+  - Some then took their test's slot once `Slot`'s `Drop` killed the test's holder. That started
+    a holder with no session and no bind, which never ends.
+  - Four waiters and three such holders were found, some after 11 hours, and killed by hand (each
+    checked to hold a `/tmp` test lock).
+  - They could not take the real slot (a different folder), but they piled up.
+- **Now:** every slot test spawns its waiters through one helper, `waiter`, which returns a `Reap`
+  guard. The guard kills and reaps its child on drop, so an unwinding test ends them before
+  `Slot`'s `Drop` frees the slot.
+  - The other spawned children end by themselves: `true`, the racers (no `--wait`), and
+    `sleep 600` / `run … sleep 600`.
+  - **Limit:** a test process killed outright (SIGKILL, a stopped gate) runs no `Drop`, so it can
+    still leak. A killed waiter's own `sleep "$poll"` child also outlives it by at most the poll
+    interval.
+- **Test:** `reap_ends_a_waiter_when_the_test_panics` spawns a waiter through `waiter` inside a
+  closure that panics, then checks the process is gone. Break: `Reap::drop` without the kill, and
+  with `try_wait` for `wait` (a plain `wait` would block on the live waiter) -> "the waiter outlived
+  the panic" (red). Restored: green.
+
 ### Changed (ENG-111: the tree's projected solve shares its routine ids, 142.4 MiB less resident memory on CDO)
 
 - **What changed** (`src/engine/l5/snapshot.rs`, `snapshot_view.rs`; no output change). The
