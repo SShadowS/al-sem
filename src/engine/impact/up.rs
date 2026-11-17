@@ -1411,9 +1411,12 @@ struct RootOut {
 /// [`multi_walk::multi_walk`] ([`up_multi`]'s two passes), serially, so more chunks run on
 /// more workers (wall time); but each chunk traverses nearly the whole cone the roots share,
 /// so each one costs about the traversal again (CPU). The smallest count whose wall time is
-/// master's: on CDO's 699 roots the per-root pass took 11.6-11.8 s at 2 chunks, 8.7-9.1 s at
-/// 3, against master's 8.2-9.6 s (CHANGELOG ENG-125).
-const CHUNKS: usize = 4;
+/// master's: on CDO's 699 roots (`impact --part up`) the per-root pass took 7.9-8.0 s at 2
+/// chunks, 6.3-6.8 s at 3, 5.4-5.5 s at 4, against master's 7.0-7.3 s (CHANGELOG ENG-125).
+const CHUNKS: usize = 3;
+
+/// The most roots a chunk walks one by one ([`walk_chunk`]).
+const SMALL_CHUNK: usize = 2;
 
 /// The roots per chunk for `walked` roots on `workers` workers: [`CHUNKS`] chunks at most,
 /// one per worker.
@@ -1436,6 +1439,12 @@ fn walk_options<'a>(args: &UpArgs<'a>, extra: &'a HashMap<NodeIx, u16>) -> WalkO
 /// chunk order: [`up_multi`]'s two passes, each one [`multi_walk::multi_walk`] over every
 /// root of the chunk. A cancelled walk skips pass 2: no caller compares a cancelled run's
 /// rows (the CLI never cancels; the resident engine discards a stopped read).
+///
+/// A chunk of at most [`SMALL_CHUNK`] roots walks each root on its own with an [`Up`] instead
+/// (the union's path, and the passes' test oracle, so the rows are the same bytes): the two
+/// passes cost about two traversals of the shared cone whatever the root count, more than
+/// one or two roots' own walks (CDO, a one-routine impact: the per-root pass 326-366 ms
+/// against master's 86-200 ms), and a small change is the common case.
 fn walk_chunk(
     g: &SitedGraph,
     args: &UpArgs<'_>,
@@ -1444,6 +1453,42 @@ fn walk_chunk(
     chunk: &[&(&String, Vec<NodeIx>)],
 ) -> Vec<RootOut> {
     let opts = walk_options(args, shared.extra);
+    if chunk.len() <= SMALL_CHUNK {
+        let mut scratch = WalkScratch::default();
+        return chunk
+            .iter()
+            .map(|(id, nodes)| {
+                let t = std::time::Instant::now();
+                let mut up = Up::new(g, args.keep, nodes, shared);
+                walk_multi(g, nodes, &opts, &mut scratch, &mut up);
+                let walk_us = t.elapsed().as_micros() as u64;
+                let ancestors: Vec<(NodeIx, Tier, u32)> = up
+                    .ancestors
+                    .iter()
+                    .map(|&n| {
+                        let b = up.best[&n];
+                        (n, b.tier, b.hops)
+                    })
+                    .collect();
+                RootOut {
+                    row: root_row(
+                        g,
+                        args,
+                        shared,
+                        &row_of_up(&up, g),
+                        &ancestors,
+                        id,
+                        nodes,
+                        captions,
+                    ),
+                    states: up.states,
+                    visitor_bytes: up.bytes(),
+                    walk_us,
+                    walk_bytes: scratch.bytes(),
+                }
+            })
+            .collect();
+    }
     let lanes: Vec<Vec<NodeIx>> = chunk.iter().map(|(_, nodes)| nodes.clone()).collect();
     let t = std::time::Instant::now();
     let mut p1 = up_multi::UpMulti::new(g, args.keep, shared, &opts, &lanes);
