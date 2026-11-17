@@ -8,6 +8,9 @@ Revision 3, after two rounds of two-model review (Fable and gpt-6.1-sol, 2026-11
   Fable also rejected chunks per worker, since the traversal is paid once per chunk.
 - Revision 3 partitions every slot by its leading key, measures the chunk count, and adds a
   memory go/no-go.
+- Revision 3.2 (after ENG-128 landed, master 7fb70573) follows its final `rejoin` contract: a
+  dropped arrival is delivered at the end of the NEXT level, after the state's own `reach`, and
+  a limited walk drops the ones still waiting.
 
 **Goal:** Replace `impact`'s per-root reverse walks AND its union walk with one bit-parallel
 multi-source walk. Every root's `up` row and the union summary must stay byte-identical (cost and
@@ -39,11 +42,18 @@ the bar is at least 5 % with wall time not worse.
 
 ## Global Constraints
 
-- **Code starts after ENG-128 lands** (condition 1). This plan builds on its hook:
-  `ConeVisitor::rejoin(root, s, hops, site)`, called for an arrival the walk drops (the `else` of
-  `scratch.insert(n)`), after the follow_open, guard and step filters, with hops = parent + 1. It
-  also builds on `Up::count_publisher(site, hops, tier)`, fed by `reach`'s `Via::Site` and by
-  `rejoin`.
+- **Code starts after ENG-128 lands** (condition 1; landed at 7fb70573). This plan builds on its
+  hook, as landed:
+  - `ConeVisitor::wants_rejoin() -> bool` (default false, asked once per walk) and
+    `rejoin(root, s, hops, site)`.
+  - When wanted, `walk_multi` buffers each arrival it drops (the `else` of `scratch.insert(n)`,
+    after the follow_open, guard and step filters, hops = parent + 1) in
+    `WalkScratch::rejoin_new`. It delivers them, in buffer order, at the END of the next level
+    (`rejoin_due`), after every `reach` of that level. The last level's are flushed after the
+    loop. A walk stopped by a `Limit` (budget or cancel) drops the ones still waiting.
+  - `Up::count_publisher(site, hops, tier)` is fed by `reach`'s `Via::Site` and by `rejoin`, so
+    a publisher's later arrivals never come before its first
+    (`up::up_tests::a_publisher_reached_twice_keeps_its_place_in_the_list`).
 - **Byte-identical per field, a test per field** (condition 2; the table below).
 - **3+ more clean ceiling rounds before code** (condition 3; Task 0).
 - **Two-model review of this plan before code** (condition 4).
@@ -89,7 +99,12 @@ the bar is at least 5 % with wall time not worse.
 - **`step(from, site)`, before the visited check.**
 - **The action-run `entry(n, PageAction, hops + 1)`,** deduplicated per (root, child state) like
   `action_entries`, when the step's site is an action run.
-- **`rejoin(n, hops + 1, site)`** for the roots whose bit is already in `seen[child]`.
+- **`rejoin(n, hops + 1, site)`** for the roots whose bit is already in `seen[child]`, taken
+  when the site is processed. It is buffered as `(n, hops + 1, site, bits)` and delivered at the
+  end of level h + 1, after that level's records, in buffer order (for one root this is its
+  own `walk_multi`'s order, because the records are processed in that root's order). The last
+  level's are flushed after the loop. A root that hits its budget, and every root of a
+  cancelled walk, drops its bits from the buffer (its pending rejoins are never delivered).
 - **The universal hub, after level 0:** one record per lane-0 root, when `follow_open`, the hub
   has callers, and the root is non-empty and not yet at the hub.
 - **`limit`:** per root, when a further state would be processed past the budget.
@@ -115,8 +130,9 @@ Notation:
   - **Per-bit work** is bounded: event bits are first ANDed with P1's final candidate mask for the
     slot. A per-(root, id) delivered mask is set only at the LEVEL BOUNDARY, from a pending mask
     kept during the level. Within a level, an arrival at h+1 can come before one at h for the same
-    id (a `rejoin` before that publisher's `reach`; an action-run entry before the page's own
-    entry; `canon.add` from `step` before `entry`). A later same-level arrival with smaller hops
+    id (an action-run entry before the page's own entry; `canon.add` from `step` before `entry`).
+    Since ENG-128's final shape, a `rejoin` always comes after its state's `reach`, so it is no
+    longer one of these cases. A later same-level arrival with smaller hops
     therefore still replaces it, under the "keep the smaller (hops, order)" rule. So the per-bit
     steps are about one P1 fold's size plus a level's repeats.
   - **Event order** is ONE per-root sequence shared by every slot of a field. `nearest` compares
@@ -134,7 +150,7 @@ Notation:
 | `externalCode` | P1: per external why, nodes whose best class is Code; root nodes NOT left out | as up.rs computes it, from the unfiltered `best` | `multi_external_code_equal_oracle` |
 | `entries[].count/onlyOpen`, `userOrJobEntries`, `entryBuckets` | per node static kinds × `reached`, `non_open = tier[Local] \| tier[Dep]`; PageAction from action-run arrivals adds two masks of its own; root nodes left out (`Up::entry`) | `Firsts` counts distinct nodes; only-open = `any & !non_open` | `multi_entry_counts_equal_oracle` |
 | `external[].count/onlyOpen` | static whys × `reached`; root nodes kept (`Up::external`) | as above | `multi_external_counts_equal_oracle` |
-| `eventPublishers.*` | P1 masks via `count_publisher` from reach and `rejoin`; `direct` per root (sites into its own nodes) | ENG-128's rule | `multi_event_publishers_equal_oracle` |
+| `eventPublishers.*` | P1 masks via `count_publisher` from reach and the buffered `rejoin`; `direct` per root (sites into its own nodes) | ENG-128's rule: rejoins after the state's reach | `multi_event_publishers_equal_oracle` (with the fixture of `a_publisher_reached_twice_keeps_its_place_in_the_list`) |
 | `entries[].first`, `external[].first`, `eventPublishers.first`, `.direct.first` | P2, two partitions per (root, list). **Non-open:** non-open arrivals of nodes whose final category is non-open. **Open-only:** arrivals of nodes whose final category is `any & !non_open`, filled only while P1's non-open count is below `keep.per_list`. Each keyed (hops, order); the result is non-open then open-only, at most `keep.per_list` | `Firsts::add` keeps min (open, hops), first arrival on ties; `first` sorts by (open, hops, at). A node's witness is its first arrival in its final category (an open hop 2 then a non-open hop 10 gives non-open, hop 10) | `multi_first_lists_equal_oracle` (Review Focus 1's fixture, and the open-then-non-open upgrade) |
 | `entries[].first[].action/caption` | P1: per page-action node, (site, bits) in event order from `step`; the first record with the root's bit gives `action_site` | `Up::step`'s first `or_insert`, independent of the lists | `multi_page_action_captions_equal_oracle` |
 | `firstByKind`, `nearest` (entry) | P2, one slot per (root, word, pop p, tier rank t). Candidates are entries whose P1 final class is exactly (p, t), arriving with (p, t); keyed (hops, order). The result per (word, p) is the slot of the lowest t present | `classified`: min `(key, at)` with key (p, t, hops) among entries of final population p. A rank-2 member at hops 3 loses to a rank-0 arrival at hops 9 because the partitions are compared first | `multi_first_by_kind_and_nearest_equal_oracle` (with a rank-upgrade fixture: a full slot at low hops, then a better rank two levels later) |
@@ -234,8 +250,10 @@ the one-shot's 3.5 GB, which leaves about 350 MiB.
     site loop is not repeated per record).
   - Record on CDO: the peak records per level, and the peak bytes of the level vectors.
   - Per site: apply the open, guard and step rules; the action-run entry for
-    `bits & !action_entries[child]`; `rejoin` for `bits & seen[child]`; then
-    `new = bits & !seen[child]`, set them, and push a record.
+    `bits & !action_entries[child]`; buffer a rejoin for `bits & seen[child]` (when nonzero);
+    then `new = bits & !seen[child]`, set them, and push a record.
+  - At the end of each level, deliver the previous level's rejoin buffer (minus the bits of
+    roots limited since), then swap the buffers, as `walk_multi` does; flush after the loop.
   - Budget and cancellation as §Event model says.
 - [ ] **Step 4:** Run the tests. Expected: PASS.
 - [ ] **Step 5: Discrimination proofs, each red then green**
@@ -244,6 +262,8 @@ the one-shot's 3.5 GB, which leaves about 350 MiB.
   - One record per child (provenance dropped).
   - Lanes blocking only higher lanes.
   - `rejoin` bits taken after `seen` is updated.
+  - `rejoin` delivered at once instead of at the end of the next level.
+  - A limited root's pending rejoins delivered (budget fixture with a rejoin waiting).
   - `limit` fired at the budget instead of past it.
 - [ ] **Step 6:** Commit.
 
@@ -311,8 +331,8 @@ the one-shot's 3.5 GB, which leaves about 350 MiB.
   - arrival pop used instead of P1's final pop;
   - one class slot per (word, pop) with the rank in the key (the rank-upgrade fixture);
   - an open-only member relabelled non-open (the open-then-non-open fixture);
-  - the delivered bit set at the first visit, with a fixture where a publisher's `rejoin` at h+1
-    comes before its `reach` at h in the same level.
+  - the delivered bit set at the first visit, with a fixture where a page's action-run entry at
+    h+1 comes before the page's own entry at h in the same level.
 - [ ] **Step 6:** Re-check the bar: pass 1 plus pass 2's measured CPU at the chosen chunk count,
   against the per-root pass. Stop and report if the saving is under 5 %.
 - [ ] **Step 7:** Commit.
