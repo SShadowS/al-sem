@@ -61,6 +61,7 @@ use crate::engine::l5::recref_flow::{
 use crate::engine::l5::snapshot::{CapabilitySnapshot, SnapshotGraphEdge};
 use crate::engine::l5::terminal_facts::TerminalFacts;
 use crate::engine::l5::traps::{TrapCallee, TrapKind, call_trap, is_try_function};
+use crate::fxhash::{FxHashMap, FxHashSet};
 use crate::program::body::features::{PCFNNode, TableCase};
 use crate::program::model::workspace::{Model, ModelRoutine};
 use al_syntax::IdentifierFoldExt;
@@ -1137,11 +1138,11 @@ fn build_flow<'a>(
     by_stable: &HashMap<&'a str, &'a ModelRoutine>,
     callees: &HashMap<&str, Vec<&str>>,
     builtin_sites: &HashSet<&str>,
-    frames: &HashMap<&'a str, FrameGuards>,
-    value_frames: &HashMap<&'a str, ValueFrame>,
+    frames: &FxHashMap<&'a str, FrameGuards>,
+    value_frames: &FxHashMap<&'a str, ValueFrame>,
 ) -> (
-    HashMap<&'a str, lflow::FlowProgram>,
-    HashMap<&'a str, Vec<(u32, lflow::FDom)>>,
+    FxHashMap<&'a str, lflow::FlowProgram>,
+    FxHashMap<&'a str, Vec<(u32, lflow::FDom)>>,
     Vec<KeepInfo>,
 ) {
     use crate::program::body::features::PCallee;
@@ -1182,7 +1183,8 @@ fn build_flow<'a>(
     let mut keep_info: Vec<KeepInfo> = Vec::new();
     let universe = universe_words(model);
     let mut verdicts: HashMap<(&str, u32), Option<u32>> = HashMap::new();
-    let mut progs: HashMap<&'a str, lflow::FlowProgram> = HashMap::new();
+    // ENG-117: iterated only by an OR fixpoint (order-free) and per entry.
+    let mut progs: FxHashMap<&'a str, lflow::FlowProgram> = FxHashMap::default();
     for r in &model.workspace.routines {
         let stable = r.stable_routine_id.as_str();
         if !by_stable.get(stable).is_some_and(|x| std::ptr::eq(*x, r)) {
@@ -1340,7 +1342,7 @@ fn build_flow<'a>(
         .map(|(k, _)| *k)
         .collect();
     progs.retain(|k, _| useful.contains(k));
-    let mut bind = HashMap::new();
+    let mut bind = FxHashMap::default();
     for (k, p) in progs.iter_mut() {
         let m = key.get(k).copied().unwrap_or(0);
         p.key_params = (0..64u32)
@@ -1413,7 +1415,7 @@ fn keep_verdict(
 fn edge_trap(
     e: &SnapshotGraphEdge,
     by_stable: &HashMap<&str, &ModelRoutine>,
-    site_rows: &HashMap<&str, &ModelRoutine>,
+    site_rows: &FxHashMap<&str, &ModelRoutine>,
     under_asserterror: &HashSet<&str>,
     isolated_events: &HashSet<&str>,
 ) -> Option<TrapKind> {
@@ -1590,7 +1592,8 @@ pub(crate) struct LiveTree<'a> {
     /// W2-0b: routine → its states' positions in `order`, ascending; built
     /// on first use, so a witness for one resource is a lookup, not a scan
     /// of the whole tree.
-    by_routine: std::sync::OnceLock<HashMap<&'a str, Vec<u32>>>,
+    /// ENG-117: only looked up ([`Self::states_of`]), so FxHash.
+    by_routine: std::sync::OnceLock<FxHashMap<&'a str, Vec<u32>>>,
 }
 
 impl<'a> LiveTree<'a> {
@@ -1598,7 +1601,7 @@ impl<'a> LiveTree<'a> {
     fn states_of(&self, routine: &str) -> &[u32] {
         self.by_routine
             .get_or_init(|| {
-                let mut m: HashMap<&'a str, Vec<u32>> = HashMap::new();
+                let mut m: FxHashMap<&'a str, Vec<u32>> = FxHashMap::default();
                 for (i, (f, _)) in self.order.iter().enumerate() {
                     m.entry(*f)
                         .or_default()
@@ -1652,31 +1655,34 @@ pub(crate) struct LiteralReach<'a> {
     /// operation id, operation, record operation) -> the row that holds it
     /// (the LAST holding row, class P). `by_stable` keeps the FIRST row for
     /// row-level reads; a site-level read goes through [`Self::row_at`].
-    site_rows: HashMap<&'a str, &'a ModelRoutine>,
+    // ENG-117: the FxHash maps of this struct are only looked up, or iterated
+    // order-free (`collectors` in an `any`); an order audit per map. The
+    // maps iterated whole stay std.
+    site_rows: FxHashMap<&'a str, &'a ModelRoutine>,
     /// Every row of a routine with several rows (stable id), in row order.
     arm_rows: HashMap<&'a str, Vec<&'a ModelRoutine>>,
-    frames: HashMap<&'a str, FrameGuards>,
+    frames: FxHashMap<&'a str, FrameGuards>,
     tables: HashMap<&'a str, TableFrame>,
     /// r3 E1: per routine (stable id) its value frame ([`values`]).
-    value_frames: HashMap<&'a str, ValueFrame>,
+    value_frames: FxHashMap<&'a str, ValueFrame>,
     /// r3 E2: per routine (stable id) its flow program ([`lflow`]), the
     /// parameters a call binds through [`Bindings::flow`], the keep verdicts
     /// the programs name, and the evaluations made so far.
-    flow_progs: HashMap<&'a str, lflow::FlowProgram>,
-    flow_bind: HashMap<&'a str, Vec<(u32, lflow::FDom)>>,
+    flow_progs: FxHashMap<&'a str, lflow::FlowProgram>,
+    flow_bind: FxHashMap<&'a str, Vec<(u32, lflow::FDom)>>,
     keep_info: Vec<KeepInfo>,
     flow_cache: std::sync::Mutex<HashMap<FlowKey, Arc<lflow::FlowEval>>>,
     /// Model table id -> the table (a real one over an extension stub), for
     /// the labels of a record field ([`values::resolve_label`]).
     tables_by_id: HashMap<&'a str, &'a crate::program::model::workspace::ModelTable>,
     /// Model table id -> its logical name, folded.
-    table_names: HashMap<&'a str, Arc<str>>,
+    table_names: FxHashMap<&'a str, Arc<str>>,
     /// Operation id → the stable id of the routine it sits in.
-    op_owner: HashMap<&'a str, &'a str>,
+    op_owner: FxHashMap<&'a str, &'a str>,
     /// G34: the RecordRef/Variant value flow, and per routine (stable id) the
     /// exit-guard requirements by site.
     flow: RecRefFlow<'a>,
-    guards: HashMap<&'a str, HashMap<String, Vec<AtomReq>>>,
+    guards: FxHashMap<&'a str, HashMap<String, Vec<AtomReq>>>,
     /// G34: per routine (flow index) the parameters, and per object the
     /// globals, whose tables a search state carries.
     rel_params: RelevantParams,
@@ -1695,7 +1701,7 @@ pub(crate) struct LiteralReach<'a> {
     traps: HashMap<&'a str, Vec<(u32, TrapKind)>>,
     /// L30: the routines (stable ids) that collect errors
     /// ([`crate::engine::l5::traps::collects_errors`]).
-    collectors: HashSet<&'a str>,
+    collectors: FxHashSet<&'a str>,
     /// B7 review: the call sites the resolver classified as platform methods
     /// (no AL code runs behind them, so they leave no write pending).
     builtin_sites: HashSet<&'a str>,
@@ -2135,18 +2141,18 @@ impl<'a> LiteralReach<'a> {
         }
         let tables_by_id =
             crate::program::model::workspace::table_by_id_preferring_real(&model.workspace.tables);
-        let mut frames = HashMap::new();
+        let mut frames = FxHashMap::default();
         let mut tables = HashMap::new();
-        let mut value_frames = HashMap::new();
+        let mut value_frames = FxHashMap::default();
         let mut by_stable = HashMap::new();
-        let mut op_owner = HashMap::new();
+        let mut op_owner = FxHashMap::default();
         let mut rows_per_stable: HashMap<&str, usize> = HashMap::new();
         for r in routines {
             *rows_per_stable
                 .entry(r.stable_routine_id.as_str())
                 .or_default() += 1;
         }
-        let mut site_rows: HashMap<&str, &ModelRoutine> = HashMap::new();
+        let mut site_rows: FxHashMap<&str, &ModelRoutine> = FxHashMap::default();
         let mut arm_rows: HashMap<&str, Vec<&ModelRoutine>> = HashMap::new();
         for r in routines {
             by_stable.entry(r.stable_routine_id.as_str()).or_insert(r);
@@ -2292,7 +2298,7 @@ impl<'a> LiteralReach<'a> {
         // G34: the exit guards, and what a search must carry to read them
         // (and G33's table parameters).
         let flow = RecRefFlow::new(model, edges);
-        let mut guards = HashMap::new();
+        let mut guards = FxHashMap::default();
         let mut seeds: Vec<(usize, Atom)> = Vec::new();
         if flow.usable() {
             for (i, r) in routines.iter().enumerate() {
