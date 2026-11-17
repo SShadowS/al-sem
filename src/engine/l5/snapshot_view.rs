@@ -236,7 +236,7 @@ pub(super) fn derive_evidence_base(
         if !inp.coverage.contains_key(&r.id) {
             continue;
         }
-        for f in inp.direct_full.get(&r.id).into_iter().flatten() {
+        for f in inp.direct_full.facts(&r.id).into_iter().flatten() {
             if let Some(w) = &f.witness_operation_id {
                 op_ref.insert(w);
             }
@@ -573,10 +573,7 @@ pub(super) fn derive_fact_base(inp: &TreeInputs<'_>) -> FactBase {
     let mut total = 0usize;
     for (k, &gi) in order.iter().enumerate() {
         let subject = b.subject(&subjects[gi]);
-        let direct = inp
-            .direct_full
-            .get(&covered[gi].id)
-            .map_or(&[][..], Vec::as_slice);
+        let direct = inp.direct_full.facts(&covered[gi].id).unwrap_or(&[]);
         let direct_base =
             crate::engine::l4::inherited_facts::table_ix(b.tables.reps.len(), "snapshot rep");
         for f in direct {

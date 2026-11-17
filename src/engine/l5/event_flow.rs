@@ -913,7 +913,7 @@ pub fn publisher_branch_facts(
     let guard_param = routine.parameters.iter().find(|p| is_handled_re(&p.name))?;
     let direct_facts: Vec<CapabilityFact> = summaries
         .get(publisher)
-        .map(|s| s.capability_facts_direct.clone())
+        .map(|s| s.capability_facts_direct.to_vec())
         .unwrap_or_default();
     let has_branching = routine.has_branching;
     let assigns_is_handled = routine

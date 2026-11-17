@@ -114,7 +114,7 @@ fn direct_io_terminals_for(
         .collect();
 
     let mut out: Vec<IoTerminal> = Vec::new();
-    for fact in &summary.capability_facts_direct {
+    for fact in summary.capability_facts_direct.iter() {
         if fact.provenance != "direct" {
             continue;
         }
