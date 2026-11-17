@@ -7,6 +7,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (ENG-117: `alsem impact --diff` takes 0.94x the CPU on CDO; FxHash for the searches' lookup maps)
+
+- **Found** in TLS-86's profile: SipHash was 10.3 % of the gate's 699-root `impact --diff` CPU,
+  spread over the witness search (`digest`'s `TrieWalk::descend`, `WitDag::marking`) and the
+  literal reach (`LiteralReach::bind_m`, `dead_at_m`, `first_live_owner`, `LiveTree::states_of`,
+  `lflow::Exec`).
+- **Now** these maps use `crate::fxhash` (TLS-66):
+  - `literal_flow.rs`: `FlowProgram`'s six maps and `Exec`'s and `FlowEval`'s maps;
+  - `literal_reach.rs`: `LiteralReach`'s lookup fields (`site_rows`, `frames`, `value_frames`,
+    `flow_progs`, `flow_bind`, `table_names`, `op_owner`, `guards`, `collectors`) and
+    `LiveTree::by_routine`;
+  - `digest.rs`: `WitDag`'s and `Marking`'s maps and `FingerprintIndexes::outgoing_edges`.
+- **The order audit,** per map:
+  - Each switched map is only looked up, or iterated in an order-free way: `build_flow`'s OR
+    fixpoint over `progs` and its per-entry `retain`/`iter_mut`; `dag.info` in a `BTreeMap`
+    fill, a `sum` and an `any`; `outgoing_edges`' per-bucket sort.
+  - The maps that are iterated whole stay std: `LiteralReach`'s `out`, `by_stable`, `traps`,
+    `arm_rows` and `tables`.
+  - So none of the switched maps hid a nondeterminism bug.
+- **Not switched,** each with too wide a reach for its share:
+  - `FingerprintIndexes`' other maps (`seed_reach`'s lookups);
+  - `RecRefFlow::eval_routine`'s maps, which callers iterate (0.17 % in impact, 0.39 % in prove);
+  - `builtin_sites` and `tables_by_id`, which go through many signatures.
+- **Measured** on CDO (`bc3ccb18`), 2026-11-17, release-fast, `/usr/bin/time -v`, base master
+  643c92d2 against 4dc53e1f, alternating; the gate's 699-root `impact --diff`:
+
+  | run | base CPU (user + sys) | head CPU | base wall | head wall |
+  |---|---:|---:|---:|---:|
+  | 1 | 510.5 s | 432.7 s | 2:26 | 1:59 |
+  | 2 | 463.4 s | 434.1 s | 2:10 | 1:59 |
+
+  - The second, same-round pair gives CPU **x0.94** and wall x0.92. The first base run was
+    slower than the second by 10 %, so x0.85 against it is not claimed.
+  - Peak RSS unchanged (3.5 GB). The four outputs are byte-identical.
+  - `cdo-speed` twice, both PASS: build x1.005 / x0.996, warm prove x0.963 / x0.941, warm
+    tests x0.993 / x1.012, peak memory x0.969 / x0.994.
+  - `cdo-before-after 643c92d2 4dc53e1f`: nothing moved.
+  - The l5 lib tests pass (854).
+- **Profile** (samply, `profiling` build of the head, the same command):
+  - SipHash is 6.51 % of 470.0 s CPU, against 10.27 % of 536.1 s in TLS-86's profile. That
+    profile is of an older master (9c1c099b), so the comparison is indicative; the timed pairs
+    above are the claim.
+  - The callers left (`samply-chains.py ... Sip13Rounds 4`): a map `insert` 1.59 %,
+    `prepare_resize` 0.49 %, `bind_m` 0.40 % (maps not switched here), `seed_reach` 0.39 %,
+    `reserve_rehash` 0.34 %.
+  - The raw profile is at `/work/.al-sem/profiles/2026-11-17-eng117/`.
+- **No new test:** the change swaps a hasher in maps whose order reaches nothing, so the guard
+  is the byte-identical output of `cdo-before-after`, the timed runs and the goldens.
+
 ### Changed (ENG-114: transaction spans share their event names, 47.6 MiB less resident memory on CDO; the detector artifacts and the sited graph sized)
 
 - **What changed** (`src/engine/l5/transaction_spans.rs`; no output change).
