@@ -1533,24 +1533,19 @@ fn pcfn_split(
     n: al_sem::program::body::features::PCFNNode,
     depth: usize,
 ) {
-    let al_sem::program::body::features::PCFNNode {
-        kind,
-        operation_id,
-        callsite_id,
-        condition_guard,
-        condition_leaves,
-        children,
-        else_children,
-        is_case_else,
-        source_range,
-        path_hint,
-        table_case,
-        field_exit_guard,
-        table_exit_guard,
-        junction_guards,
-        value_fact,
-        flow,
-    } = n;
+    // Only the fields both sides of ENG-95 have are taken by name, so one probe builds
+    // against either; what remains in the node (the rare facts, inline before ENG-95 and
+    // boxed after) drops as one bucket.
+    let mut n = n;
+    use std::mem::take;
+    let kind = take(&mut n.kind);
+    let operation_id = take(&mut n.operation_id);
+    let callsite_id = take(&mut n.callsite_id);
+    let condition_guard = take(&mut n.condition_guard);
+    let condition_leaves = take(&mut n.condition_leaves);
+    let children = take(&mut n.children);
+    let else_children = take(&mut n.else_children);
+    let flow = take(&mut n.flow);
     c.nodes += 1;
     c.max_depth = c.max_depth.max(depth);
     *c.kinds.entry(kind.clone()).or_default() += 1;
@@ -1565,29 +1560,13 @@ fn pcfn_split(
     some("condition_leaves", condition_leaves.is_some());
     some("children", children.is_some());
     some("else_children", else_children.is_some());
-    some("is_case_else", is_case_else);
-    some("source_range", source_range.is_some());
-    some("path_hint", path_hint.is_some());
-    some("table_case", table_case.is_some());
-    some("field_exit_guard", field_exit_guard.is_some());
-    some("table_exit_guard", table_exit_guard.is_some());
-    some("junction_guards", junction_guards.is_some());
-    some("value_fact", value_fact.is_some());
+    some("source_range", n.source_range.is_some());
     some("flow", flow.is_some());
     rf.drop_as("tree.kind", kind);
     rf.drop_as("tree.operation_id", operation_id);
     rf.drop_as("tree.callsite_id", callsite_id);
     rf.drop_as("tree.condition_guard", condition_guard);
-    rf.drop_as(
-        "tree.rare side facts",
-        (
-            table_case,
-            field_exit_guard,
-            table_exit_guard,
-            junction_guards,
-            value_fact,
-        ),
-    );
+    rf.drop_as("tree.rare side facts", n);
     rf.drop_as("tree.flow", flow);
     for (label, list) in [
         ("tree.children (node arrays)", children),
