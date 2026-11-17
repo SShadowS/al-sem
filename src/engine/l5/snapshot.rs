@@ -1340,14 +1340,23 @@ impl RoutineOrderFrames {
     /// Look up the scope-frame table for a routine (`snap.routineOrderFrames?.[routine]`).
     ///
     /// ENG-116: a binary search. The entries come from a `BTreeMap<String, _>`
-    /// (both builders), so they are unique and sorted by `str` order, which
-    /// `retain` keeps. The linear `find` it replaces was 3 % of `impact --diff`'s
+    /// ([`Self::from_map`], the one production constructor), so they are unique
+    /// and sorted by `str` order, which `retain` keeps. The linear `find` it replaces was 3 % of `impact --diff`'s
     /// CPU on CDO in string compares (one lookup per hop of every call chain).
     pub fn get(&self, routine_id: &str) -> Option<&[ScopeFrame]> {
         self.entries
             .binary_search_by(|(k, _)| k.as_str().cmp(routine_id))
             .ok()
             .map(|i| self.entries[i].1.as_slice())
+    }
+
+    /// The tables, from a map keyed by StableRoutineId: the one production
+    /// constructor (ENG-116), so the entries are sorted and unique by the
+    /// map's type, as [`Self::get`]'s binary search needs.
+    pub(crate) fn from_map(map: std::collections::BTreeMap<String, Vec<ScopeFrame>>) -> Self {
+        RoutineOrderFrames {
+            entries: map.into_iter().collect(),
+        }
     }
 
     /// Keep the frame tables whose routine passes `keep` (#220 key classes).
@@ -4079,9 +4088,7 @@ fn derive_routine_order_frames(
     if entries.is_empty() {
         return None;
     }
-    Some(RoutineOrderFrames {
-        entries: entries.into_iter().collect(),
-    })
+    Some(RoutineOrderFrames::from_map(entries))
 }
 
 // ===========================================================================

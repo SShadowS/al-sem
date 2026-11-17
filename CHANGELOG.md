@@ -47,17 +47,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed (ENG-116: the memcmp behind `alsem impact --diff`: two linear string scans become lookups, about 3 % CPU on CDO)
 
 - **Found** (TLS-86's impact profile, read again): libc `memcmp` was 11 % of the gate's
-  699-root `impact --diff` CPU on CDO. samply names a caller frame from its return address,
-  whose inline labels can belong to the next call. So this time the call sites were resolved
-  with `addr2line -i` on the return address minus one, against the profiled binary.
+  699-root `impact --diff` CPU on CDO. samply's inline labels on the frame above it pointed
+  at the wrong code (TLS-86); why is not established. So this time the call sites were
+  resolved with `addr2line -i` against the profiled binary, on each caller frame's address
+  (already the return address minus one, inside the call instruction; the script subtracts
+  one more, which stays inside it).
   - The top site, 3.0 % of all CPU: `ordering_inter::reconstruct_call_chains` asking
     `RoutineOrderFrames::get` once per hop of every call chain. `get` was a linear `find` over
     a `Vec<(String, _)>`, comparing the routine id against every entry.
   - Then `LiteralReach::first_live_owner` 0.7 %, `fact_equivalent` 0.4 %, `seed_reach` 0.3 %.
 - **Now:**
   - `RoutineOrderFrames::get` (`src/engine/l5/snapshot.rs`) is a binary search. Both builders
-    collect the entries from a `BTreeMap<String, _>`, so they are unique and sorted by `str`
-    order, and `retain` keeps it. The test-only `from_entries` asserts it.
+    now go through one constructor, `RoutineOrderFrames::from_map`, which takes a
+    `BTreeMap<String, _>`. So the entries are unique and sorted by `str` order by type, and
+    `retain` keeps it. The test-only `from_entries` asserts it.
+  - The pre-rebase run of the group index alone (`e116-timing.log` in the profile folder, on
+    3af92349) gave x0.986 twice.
   - `compute_ordering` (`src/engine/l5/ordering_engine.rs`) indexes its groups by owner. Three
     linear scans per occurrence compared owner strings O(occurrences x groups) times. The group
     order (insertion order) is unchanged.
