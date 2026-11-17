@@ -1338,11 +1338,16 @@ pub struct RoutineOrderFrames {
 
 impl RoutineOrderFrames {
     /// Look up the scope-frame table for a routine (`snap.routineOrderFrames?.[routine]`).
+    ///
+    /// ENG-116: a binary search. The entries come from a `BTreeMap<String, _>`
+    /// (both builders), so they are unique and sorted by `str` order, which
+    /// `retain` keeps. The linear `find` it replaces was 3 % of `impact --diff`'s
+    /// CPU on CDO in string compares (one lookup per hop of every call chain).
     pub fn get(&self, routine_id: &str) -> Option<&[ScopeFrame]> {
         self.entries
-            .iter()
-            .find(|(k, _)| k == routine_id)
-            .map(|(_, v)| v.as_slice())
+            .binary_search_by(|(k, _)| k.as_str().cmp(routine_id))
+            .ok()
+            .map(|i| self.entries[i].1.as_slice())
     }
 
     /// Keep the frame tables whose routine passes `keep` (#220 key classes).
@@ -1353,6 +1358,10 @@ impl RoutineOrderFrames {
     /// Hand-built frame tables for tests (#220 T9g).
     #[cfg(test)]
     pub(crate) fn from_entries(entries: Vec<(String, Vec<ScopeFrame>)>) -> Self {
+        assert!(
+            entries.windows(2).all(|w| w[0].0 < w[1].0),
+            "entries sorted and unique (what `get`'s binary search needs)"
+        );
         RoutineOrderFrames { entries }
     }
 }
@@ -4280,6 +4289,44 @@ mod capability_fact_serialize_tests {
         let s = serde_json::to_string(&fact("http", None)).unwrap();
         assert!(!s.contains("witnessOperationId"));
         assert!(idx(&s, "witnessCallsiteId") < idx(&s, "extra"));
+    }
+}
+
+#[cfg(test)]
+mod routine_order_frames_tests {
+    use super::*;
+
+    /// ENG-116: `RoutineOrderFrames::get` (now a binary search) finds every
+    /// routine's own table and nothing for a routine with none. Hand-stated:
+    /// five sorted ids, each with a frame whose id names it, and misses before,
+    /// between and after them.
+    ///
+    /// DISCRIMINATION (2026-11-17): the search's comparison reversed
+    /// (`routine_id.cmp(k)`) -> "R0" is not found (red). Restored: green.
+    #[test]
+    fn get_finds_each_routines_own_frames() {
+        let frame = |id: i64| crate::program::body::operation_order::ScopeFrame {
+            frame_id: id,
+            parent_frame_id: -1,
+            kind: "root".to_string(),
+            branch_always_terminates: None,
+            branch_may_fall_through: None,
+            branch_terminates_by: None,
+        };
+        let ids = ["R0", "R1", "R2", "R3", "R4"];
+        let frames = RoutineOrderFrames::from_entries(
+            ids.iter()
+                .enumerate()
+                .map(|(i, id)| (id.to_string(), vec![frame(i as i64)]))
+                .collect(),
+        );
+        for (i, id) in ids.iter().enumerate() {
+            let got = frames.get(id).map(|f| f[0].frame_id);
+            assert_eq!(got, Some(i as i64), "{id}");
+        }
+        for miss in ["", "A", "R11", "R5", "Z"] {
+            assert!(frames.get(miss).is_none(), "{miss}");
+        }
     }
 }
 
