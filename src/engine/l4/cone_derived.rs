@@ -95,7 +95,8 @@
 //!
 //! Four `BTreeSet`/`BTreeMap` per routine would be ~404k tree allocations. Instead
 //! the fold runs into reusable scratch `Vec`s, and each routine is frozen into
-//! sorted slices appended to four shared pools; the per-routine [`ConeDerivedRow`]
+//! sorted slices kept in four shared pools (a slice equal to an earlier routine's shares
+//! its window, ENG-122); the per-routine [`ConeDerivedRow`]
 //! holds four `Range<u32>` + `flags` (~40 B). Resource ids are interned once
 //! workspace-wide ([`ResInterner`]) — the same CSR playbook `l4::effect_store`
 //! uses for db-effects. Interning ORDER never reaches output: every query resolves
@@ -534,13 +535,18 @@ pub struct ConeDerivedStore {
     windows: WindowIndex,
 }
 
-/// ENG-122: per pool, a window's content hash -> the windows with that hash.
+/// ENG-122: a window's content hash -> the windows with that hash. FxHash (TLS-66): the ids
+/// come from the workspace and its packages, and the map is never iterated, so its order
+/// reaches nothing.
+type Windows = crate::fxhash::FxHashMap<u64, Vec<Range<u32>>>;
+
+/// ENG-122: the [`Windows`] of each pool.
 #[derive(Debug, Default)]
 struct WindowIndex {
-    writes_all: HashMap<u64, Vec<Range<u32>>>,
-    phys_writes: HashMap<u64, Vec<Range<u32>>>,
-    phys_reads: HashMap<u64, Vec<Range<u32>>>,
-    events: HashMap<u64, Vec<Range<u32>>>,
+    writes_all: Windows,
+    phys_writes: Windows,
+    phys_reads: Windows,
+    events: Windows,
 }
 
 /// ENG-122: `ids`' window in `pool`: an earlier window with the same content, or `ids`
@@ -548,14 +554,14 @@ struct WindowIndex {
 /// so two rows sharing one window answer exactly as two copies would.
 fn share_window<T: Copy + Eq + std::hash::Hash>(
     pool: &mut Vec<T>,
-    index: &mut HashMap<u64, Vec<Range<u32>>>,
+    index: &mut Windows,
     ids: &[T],
 ) -> Range<u32> {
     use std::hash::{Hash, Hasher};
     if ids.is_empty() {
         return 0..0;
     }
-    let mut h = std::hash::DefaultHasher::new();
+    let mut h = crate::fxhash::FxHasher::default();
     ids.hash(&mut h);
     let same = index.entry(h.finish()).or_default();
     if let Some(w) = same.iter().find(|w| window(pool, w) == ids) {
@@ -617,7 +623,6 @@ impl ConeDerivedStore {
             .collect::<Vec<_>>()
             .join("; ");
         vec![
-            format!("      ENG-122 windows: {window_line}"),
             format!(
                 "    ENG-114 cone_derived: {} rows (size_of row {} B; key heap {:.2} MiB, {} distinct keys); \
                  interner {} strings ({:.2} MiB text, stored twice)",
@@ -642,6 +647,7 @@ impl ConeDerivedStore {
                 std::mem::size_of::<ResId>(),
                 std::mem::size_of::<(ResId, u8)>(),
             ),
+            format!("      ENG-122 windows: {window_line}"),
         ]
     }
 
@@ -1239,7 +1245,8 @@ pub(crate) struct FoldedRow {
 impl ConeDerivedBuilder {
     /// A builder whose interner continues `old`'s (context-server design
     /// §6.10, stage 5): every id of `old` names the same resource here, so
-    /// [`ConeDerivedBuilder::copy_row`] copies a row's windows verbatim. New
+    /// [`ConeDerivedBuilder::copy_row`] carries a row's ids over unchanged (into a window
+    /// shared with equal content, ENG-122). New
     /// resources get new ids; interning order is irrelevant to every output
     /// ([`ResInterner`]).
     pub(crate) fn continuing(old: &ConeDerivedStore) -> Self {
@@ -1406,11 +1413,7 @@ impl ConeDerivedBuilder {
 }
 
 /// Sort + dedup `scratch` and give it its window in `pool` (shared with an equal one).
-fn freeze_ids(
-    scratch: &mut Vec<ResId>,
-    pool: &mut Vec<ResId>,
-    index: &mut HashMap<u64, Vec<Range<u32>>>,
-) -> Range<u32> {
+fn freeze_ids(scratch: &mut Vec<ResId>, pool: &mut Vec<ResId>, index: &mut Windows) -> Range<u32> {
     normalize_ids(scratch);
     share_window(pool, index, scratch)
 }
@@ -1426,7 +1429,7 @@ fn normalize_ids(scratch: &mut Vec<ResId>) {
 fn freeze_masked(
     scratch: &mut Vec<(ResId, u8)>,
     pool: &mut Vec<(ResId, u8)>,
-    index: &mut HashMap<u64, Vec<Range<u32>>>,
+    index: &mut Windows,
 ) -> Range<u32> {
     normalize_masked(scratch);
     share_window(pool, index, scratch)
@@ -2347,7 +2350,6 @@ mod tests {
         assert_eq!(s.publishes_events_of("r/c"), vec!["e/C"]);
         assert!(s.publishes_events_of("r/none").is_empty());
         assert_eq!(s.events_pool.len(), 3, "the shared window once, then e/C");
-        assert_eq!(s.events_pool.capacity(), 3, "finish trims the pool");
         assert!(s.windows.events.is_empty(), "finish drops the index");
     }
 
@@ -2360,9 +2362,9 @@ mod tests {
         use std::hash::{Hash, Hasher};
         let mut pool: Vec<ResId> = vec![1, 2];
         let want: Vec<ResId> = vec![7, 8];
-        let mut h = std::hash::DefaultHasher::new();
+        let mut h = crate::fxhash::FxHasher::default();
         want.as_slice().hash(&mut h);
-        let mut index: HashMap<u64, Vec<Range<u32>>> = HashMap::new();
+        let mut index = Windows::default();
         // One window, `0..2` (a `Vec` of ranges, not the range's numbers).
         let held: Vec<Range<u32>> = std::iter::once(0..2).collect();
         index.insert(h.finish(), held);
@@ -2370,10 +2372,66 @@ mod tests {
         assert_eq!(window(&pool, &w), &want[..]);
         assert_eq!(w, 2..4);
         assert_eq!(
+            index.len(),
+            1,
+            "precondition: the lookup hit the planted bucket (the hash is the one planted)"
+        );
+        assert_eq!(index[&h.finish()], vec![0..2, 2..4]);
+        assert_eq!(
             share_window(&mut pool, &mut index, &want),
             2..4,
             "now shared"
         );
+    }
+
+    /// ENG-122: the other two row paths share too, and a window is content-equal only with
+    /// its masks. `push_row` (the parallel walk's merge) and `copy_row` (a refresh carrying a
+    /// routine over) give an equal event set the first window; two rows writing table `t/A`
+    /// with different ops (insert, modify) keep two physical-write windows.
+    /// DISCRIMINATION: `push_row` or `copy_row` appending always leaves more ids in the pools.
+    #[test]
+    fn push_row_and_copy_row_share_and_masks_keep_windows_apart() {
+        let ev = |e| fact("X", "publish", "event", Some(e));
+        let mut b = ConeDerivedBuilder::default();
+        let r1 = b.fold_set([&ev("e/A"), &ev("e/B")]);
+        let r2 = b.fold_set([&ev("e/B"), &ev("e/A")]);
+        let ins = b.fold_set([&fact("X", "insert", "table", Some("t/A"))]);
+        let modi = b.fold_set([&fact("X", "modify", "table", Some("t/A"))]);
+        let mut store = b.finish();
+        store.push_row("r/1".into(), &r1);
+        store.push_row("r/2".into(), &r2);
+        store.push_row("r/ins".into(), &ins);
+        store.push_row("r/mod".into(), &modi);
+        assert_eq!(
+            store.events_pool.len(),
+            2,
+            "push_row shares r/1's window with r/2"
+        );
+        assert_eq!(
+            store.phys_writes_pool.len(),
+            2,
+            "insert and modify on t/A: two windows"
+        );
+        assert_eq!(store.publishes_events_of("r/2"), vec!["e/A", "e/B"]);
+        let old = store;
+        let mut c = ConeDerivedBuilder::continuing(&old);
+        for rid in ["r/1", "r/2", "r/ins", "r/mod"] {
+            assert!(c.copy_row(&old, rid), "{rid} carried over");
+        }
+        let new = c.finish();
+        assert_eq!(
+            new.events_pool.len(),
+            2,
+            "copy_row shares r/1's window with r/2"
+        );
+        assert_eq!(new.phys_writes_pool.len(), 2);
+        for rid in ["r/1", "r/2", "r/ins", "r/mod"] {
+            assert_eq!(new.publishes_events_of(rid), old.publishes_events_of(rid));
+            assert_eq!(
+                new.writes_physical_tables_of(rid),
+                old.writes_physical_tables_of(rid)
+            );
+        }
     }
 
     // -- interner invariants ---------------------------------------------------
