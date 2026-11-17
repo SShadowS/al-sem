@@ -1,7 +1,8 @@
 # ENG-125: sharing the work of impact's per-root reverse walks (design note)
 
-Status: revision 3. §1-§4 are the design reviewed by two models (Fable and gpt-6.1-sol,
-2026-11-17). §5 holds what was then built and measured; nothing of it has landed. Measured on
+Status: revision 4. §1-§4 are the design reviewed by two models (Fable and gpt-6.1-sol,
+2026-11-17). §5 holds what was then built and measured. §6 is what landed with ENG-125 (the
+plan's two passes). Measured on
 server1, the pinned CDO baseline (`bc3ccb18`), master-equivalent binary 534d636d (ENG-116's
 code; its walks visit what master's do), and in §5 against master 7fb70573.
 
@@ -194,3 +195,21 @@ different parents keep separate records.
 - **The lesson:** a prototype that counts states without provenance (the 2.2 s msbfs of §4 step
   2) overstates what an exact multi-source walk saves at small chunk sizes. Measure records per
   layout, not distinct states.
+
+## 6. The two-pass design (landed with ENG-125)
+
+- **The walk alone is cheap.** `multi_walk` over all 699 roots, with a sink that only answers
+  `step`: 1.8 s CPU and wall in one chunk (3.6 M records), 1.5 s wall in two. The per-root
+  pass it replaces was 82-98 s CPU. So nearly all of the per-root pass was the 81.5 M per-root
+  visitor calls, and the plan's folds were the way to the gain.
+- **Pass 1** (root masks per reached node and per canonical entry, by tier and class) and
+  **pass 2** (a second walk that keeps the witness lists, with pass 1's final masks known)
+  were built as the plan describes (`src/engine/impact/up_multi.rs`). Pass 2 needs no slot
+  closing: per root and list, two small partitions keyed by (hops, arrival), filled per bit.
+- **A profile found one cost** that hid the gain at first: `SitedGraph::stable_id` builds a
+  string, and pass 1 asked it on every reach event (9.4 of 97 s CPU).
+- **Measured** (`impact --part up`, the 699 roots, CHANGELOG ENG-125): 3 chunks is the
+  smallest count whose per-root pass is not slower than master's (6.3-6.8 s against
+  7.0-7.3 s), at -41..-44 % of the up part's CPU. A chunk of at most 2 roots walks each root
+  with the old visitor: two passes cost about two traversals whatever the root count, more
+  than a one-routine impact's own walk.
