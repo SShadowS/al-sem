@@ -873,7 +873,7 @@ impl Exec<'_> {
                 }
             }
         }
-        if let Some(ValueFact::LoopVar(v)) = &n.value_fact
+        if let Some(ValueFact::LoopVar(v)) = n.value_fact()
             && let Some(&s) = self.p.by_name.get(v)
         {
             w[s as usize] = true;
@@ -897,7 +897,7 @@ impl Exec<'_> {
 
     fn exec_leaves(&mut self, n: &PCFNNode, st: &mut St) {
         for l in n.condition_leaves.iter().flatten() {
-            if l.path_hint == Some(PathHint::MayRun) {
+            if l.path_hint() == Some(PathHint::MayRun) {
                 let mut alt = st.clone();
                 self.exec(l, &mut alt);
                 *st = join(st.take(), alt);
@@ -1149,7 +1149,7 @@ impl Exec<'_> {
         self.record_cond(n, &v);
         let branches: Vec<&PCFNNode> = n.children.iter().flatten().collect();
         let arm_set = |b: &PCFNNode| -> Option<Vec<Val>> {
-            let Some(ValueFact::Arm(labels)) = &b.value_fact else {
+            let Some(ValueFact::Arm(labels)) = b.value_fact() else {
                 return None;
             };
             labels
@@ -1165,7 +1165,7 @@ impl Exec<'_> {
         };
         let arms: Vec<Option<Vec<Val>>> = branches
             .iter()
-            .filter(|b| !b.is_case_else)
+            .filter(|b| !b.is_case_else())
             .map(|b| arm_set(b))
             .collect();
         // Every value the scrutinee may hold matches a resolved label.
@@ -1180,7 +1180,7 @@ impl Exec<'_> {
         let mut arm_ix = 0;
         let mut has_else = false;
         for b in branches {
-            let alive = if b.is_case_else {
+            let alive = if b.is_case_else() {
                 has_else = true;
                 !covered
             } else {
@@ -1224,7 +1224,7 @@ pub(super) fn subscriber_changes(
     if let Some(tree) = &s.statement_tree {
         let mut looped = false;
         visit(tree, &mut |n| {
-            if let Some(ValueFact::LoopVar(v)) = &n.value_fact
+            if let Some(ValueFact::LoopVar(v)) = n.value_fact()
                 && v == param
             {
                 looped = true;
@@ -1365,7 +1365,7 @@ pub(super) fn guards_of<'t>(
                 let mut arm = 0;
                 for b in n.children.iter().flatten() {
                     let len = acc.len();
-                    let kind = if b.is_case_else {
+                    let kind = if b.is_case_else() {
                         GuardKind::CaseElse
                     } else {
                         arm += 1;
@@ -1473,8 +1473,8 @@ impl FlowProgram {
                     .children
                     .iter()
                     .flatten()
-                    .filter(|b| !b.is_case_else)
-                    .map(|b| match &b.value_fact {
+                    .filter(|b| !b.is_case_else())
+                    .map(|b| match b.value_fact() {
                         Some(ValueFact::Arm(ls)) => ls
                             .iter()
                             .map(|l| {

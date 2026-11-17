@@ -172,7 +172,7 @@ fn outcomes(node: &crate::program::body::features::PCFNNode) -> Outcomes {
                 .iter()
                 .map(outcomes)
                 .fold(Outcomes::default(), Outcomes::or);
-            if kids.iter().any(|b| b.is_case_else) {
+            if kids.iter().any(|b| b.is_case_else()) {
                 all
             } else {
                 all.or(Outcomes::FALLS)
@@ -193,7 +193,7 @@ fn outcomes(node: &crate::program::body::features::PCFNNode) -> Outcomes {
                 ..o
             }
         }
-        "other" if matches!(node.path_hint, Some(PathHint::AssertError)) => {
+        "other" if matches!(node.path_hint(), Some(PathHint::AssertError)) => {
             // `asserterror` traps the body's error: control goes on after it.
             let o = outcomes_of_list(kids);
             Outcomes {
@@ -599,14 +599,8 @@ mod tests {
             condition_leaves: None,
             children: None,
             else_children: None,
-            is_case_else: false,
+            rare: None,
             source_range: None,
-            path_hint: None,
-            table_case: None,
-            field_exit_guard: None,
-            table_exit_guard: None,
-            junction_guards: None,
-            value_fact: None,
             flow: None,
         }
     }
@@ -620,14 +614,8 @@ mod tests {
             condition_leaves: None,
             children: Some(children),
             else_children: None,
-            is_case_else: false,
+            rare: None,
             source_range: None,
-            path_hint: None,
-            table_case: None,
-            field_exit_guard: None,
-            table_exit_guard: None,
-            junction_guards: None,
-            value_fact: None,
             flow: None,
         }
     }
@@ -645,14 +633,8 @@ mod tests {
             condition_leaves: None,
             children: Some(children),
             else_children: Some(else_children),
-            is_case_else: false,
+            rare: None,
             source_range: None,
-            path_hint: None,
-            table_case: None,
-            field_exit_guard: None,
-            table_exit_guard: None,
-            junction_guards: None,
-            value_fact: None,
             flow: None,
         }
     }
@@ -940,7 +922,7 @@ mod tests {
         // never fills, so a case never read as exhaustive).
         let branch = cfn_with_children("case-branch", vec![cfn_leaf("error")]);
         let mut else_branch = cfn_with_children("case-branch", vec![cfn_leaf("error")]);
-        else_branch.is_case_else = true;
+        else_branch.rare_mut().is_case_else = true;
         let node = cfn_with_children("case", vec![branch, else_branch]);
         let reach = walk_subtree(&node);
         assert!(

@@ -4284,6 +4284,45 @@ fn main() {
     }
     let mut args = std::env::args().skip(1);
     let source = match args.next().as_deref() {
+        Some("eng95-sizes") => {
+            use al_sem::program::body::features as f;
+            println!("PCFNNode {}", size_of::<f::PCFNNode>());
+            println!("String {}", size_of::<String>());
+            println!("Option<String> {}", size_of::<Option<String>>());
+            println!(
+                "Option<PConditionGuard> {}",
+                size_of::<Option<f::PConditionGuard>>()
+            );
+            println!(
+                "Option<Vec<PCFNNode>> {}",
+                size_of::<Option<Vec<f::PCFNNode>>>()
+            );
+            println!(
+                "Option<(u32,u32,u32,u32)> {}",
+                size_of::<Option<(u32, u32, u32, u32)>>()
+            );
+            println!("Option<PathHint> {}", size_of::<Option<f::PathHint>>());
+            println!("Option<TableCase> {}", size_of::<Option<f::TableCase>>());
+            println!(
+                "Option<(String,i64)> {}",
+                size_of::<Option<(String, i64)>>()
+            );
+            println!(
+                "Option<(String,Vec<String>)> {}",
+                size_of::<Option<(String, Vec<String>)>>()
+            );
+            println!(
+                "Option<JunctionGuards> {}",
+                size_of::<Option<f::JunctionGuards>>()
+            );
+            println!("Option<ValueFact> {}", size_of::<Option<f::ValueFact>>());
+            println!(
+                "Option<Box<FlowFact>> {}",
+                size_of::<Option<Box<f::FlowFact>>>()
+            );
+            println!("FlowFact {}", size_of::<f::FlowFact>());
+            return;
+        }
         Some("resident") => {
             // `resident <ws> [routine] [--low-mem] [--sited]`
             let rest: Vec<String> = args.collect();
