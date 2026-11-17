@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (ENG-128: `alsem impact`'s `eventPublishers` no longer depends on which way the walk reached a state first)
+
+- **What changed in the output.** `up.eventPublishers` in `al-sem.impact/1`: a publisher is
+  now listed when ANY of its event-dispatch sites reaches the cone. Before, it was listed only
+  when that site was the walk's FIRST way into a state: the reverse walk keeps one arrival per
+  state, and a later arrival over a dispatch was dropped before it was counted. So `count` and
+  `direct.count` can only rise. In the one shape that moves (below), a publisher already
+  listed can also get a better witness by `Firsts`' rank (non-open first, then fewer `hops`;
+  its `tier` may change either way), `onlyOpen` can fall by it, and the capped `first` lists
+  can reorder or let a new publisher push one out. Readers of the field (bc-dev-mcp) see more publishers or the same, never fewer.
+- **Real AL cannot reach that shape, so nothing moves on compiling code.** In the call graph
+  only an event declaration has event-dispatch sites, so a dispatch that arrives second needs
+  a publisher that ALSO calls into the cone, i.e. a publisher with a body. The AL compiler
+  refuses that (AL0286 "The event can't contain code", AL0287 for local variables; al-tool
+  18.0.41 on BC 28.4 symbols, for both `[IntegrationEvent]` and `[BusinessEvent]`). CDO has
+  no such node: in `alsem graph`, no caller of the 649 `eventFlow` edges has any other edge,
+  and no `run` edge targets an event. The engine also reads source that does not compile (a
+  workspace mid-edit), which is where the fix applies.
+- **How.** `ConeVisitor` (`src/program/impact_graph/reverse.rs`) has two new methods, both
+  off by default: `wants_rejoin()` and `rejoin(root, state, hops, site)`. For a visitor that
+  wants them, the walk keeps each arrival it drops (after the open, guard and `step`
+  filters) and delivers it at the end of the next level, after the state's own `reach`; a
+  walk stopped by a limit drops the ones still waiting. `CodeCalls` forwards both. `Up` counts
+  publishers through one `count_publisher` on `reach` and `rejoin`. The late delivery is what
+  keeps compiling code's output unchanged: a publisher with two subscribers in the cone is
+  reached twice, and counting its second arrival at once (while the level before is still
+  being expanded) listed it ahead of same-hop publishers counted later in walk order (sol and
+  Fable review). Other visitors do not ask for rejoins and pay nothing. Impact's walks hold
+  the buffer, so the cost report's `scratchBytes` (a measurement, not part of the answer)
+  can grow.
+- **Pinned by** `cli_impact::a_publisher_counts_whichever_arrival_reaches_its_state_first` (a
+  fixture whose publisher has a body; with the `rejoin` delivery removed it fails on the
+  missing publisher) and `up::relation_tests::a_publisher_reached_twice_keeps_its_place_in_the_list`
+  (with `rejoin` delivered at once it fails: `[(2, 4), (2, 3)]` against `[(2, 3), (2, 4)]`)
+  and `up::relation_tests::a_dropped_dispatch_still_counts_its_publisher` (both site orders;
+  with `Up::wants_rejoin` false the call-first world lists one publisher, not two).
+- **Measured on CDO** (base `a3b8f86f`, production code `f99af34d`). `alsem impact --format
+  json --no-tests` over the 20 workspace files holding an event subscriber (322 roots, 102,970
+  `eventPublishers` entries): byte-identical with `cost` removed. `cdo-before-after`: no
+  finding, fingerprint or call-graph number moved. `cdo-speed` passed twice; no ratio is
+  quoted, as the runs disagree within the noise (round total x1.019 and x1.034, the ~1 s
+  `impact` round calls x1.000 and x1.144 with spreads up to 2.05).
+
 ### Changed (ENG-111: the tree's projected solve shares its routine ids, 142.4 MiB less resident memory on CDO)
 
 - **What changed** (`src/engine/l5/snapshot.rs`, `snapshot_view.rs`; no output change). The
