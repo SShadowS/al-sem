@@ -197,6 +197,8 @@ pub(super) struct UpMulti<'g, 'a> {
     watch: FxHashMap<NodeIx, Vec<u64>>,
     limits: Vec<Option<Limit>>,
     scratch: Vec<u64>,
+    /// Per node, whether it has a stable id: 0 not asked yet, 1 yes, 2 no.
+    stable: Vec<u8>,
 }
 
 impl<'g, 'a> UpMulti<'g, 'a> {
@@ -237,6 +239,7 @@ impl<'g, 'a> UpMulti<'g, 'a> {
             watch: FxHashMap::default(),
             limits: vec![None; roots.len()],
             scratch: vec![0; w],
+            stable: vec![0; g.node_count()],
         }
     }
 
@@ -273,6 +276,15 @@ impl<'g, 'a> UpMulti<'g, 'a> {
         let local = usize::from(tier == Tier::Local);
         set_all(self.entries.fam(e, E_REACHED), roots);
         set_all(self.entries.fam(e, E_CLASS + 2 * p + local), roots);
+    }
+
+    /// Whether `n` has a stable id (asked once per node).
+    fn has_stable_id(&mut self, n: NodeIx) -> bool {
+        let c = &mut self.stable[n as usize];
+        if *c == 0 {
+            *c = if self.g.stable_id(n).is_some() { 1 } else { 2 };
+        }
+        *c == 1
     }
 
     /// `Up::count_publisher` for `roots`.
@@ -350,11 +362,13 @@ impl MultiSink for UpMulti<'_, '_> {
                 }
             }
         }
-        if self.g.stable_id(n).is_some() {
-            self.not_own(n, roots);
-            for (x, f) in self.scratch.iter_mut().zip(&self.filling) {
-                *x &= f;
-            }
+        // `Up::reach`'s order of tests, cheapest first: a root whose list still fills, not
+        // its own node, then a stable id (`stable_id` builds a string; cached per node).
+        self.not_own(n, roots);
+        for (x, f) in self.scratch.iter_mut().zip(&self.filling) {
+            *x &= f;
+        }
+        if any(&self.scratch) && self.has_stable_id(n) {
             let cand: Vec<usize> = ones(&self.scratch).collect();
             for k in cand {
                 let list = &mut self.ancestors[k];
@@ -777,6 +791,8 @@ pub(super) struct UpMultiP2<'p, 'g, 'a> {
     /// Per root, per population with no entry, its nearest ancestor's witness.
     ancestor: Vec<[Option<Witness>; 5]>,
     adm: Vec<u64>,
+    /// Per population, its roots of an entry's arrival (`canon_add`).
+    group_adm: Vec<u64>,
 }
 
 impl<'p, 'g, 'a> UpMultiP2<'p, 'g, 'a> {
@@ -791,6 +807,7 @@ impl<'p, 'g, 'a> UpMultiP2<'p, 'g, 'a> {
             first_by_kind: (0..n).map(|_| Default::default()).collect(),
             ancestor: vec![[None; 5]; n],
             adm: vec![0; p1.w],
+            group_adm: vec![0; POPULATIONS.len() * p1.w],
         }
     }
 
@@ -829,11 +846,39 @@ impl<'p, 'g, 'a> UpMultiP2<'p, 'g, 'a> {
         w.at = self.at;
         let word = self.p1.shared.inv.word(e);
         let key = (crate::engine::vocab::entry_word_rank(word), word);
-        for (gi, (_, classes)) in POPULATIONS.iter().enumerate() {
-            for wi in 0..self.p1.w {
-                self.adm[wi] = roots[wi]
-                    & final_class_word(classes, |c| self.p1.entries.word(e, E_CLASS + c, wi));
+        // Per word, the roots whose best class of `e` is each population (one pass over the
+        // classes), then each population group's roots.
+        let w_n = self.p1.w;
+        self.group_adm.resize(POPULATIONS.len() * w_n, 0);
+        for wi in 0..w_n {
+            let r = roots[wi];
+            if r == 0 {
+                for gi in 0..POPULATIONS.len() {
+                    self.group_adm[gi * w_n + wi] = 0;
+                }
+                continue;
             }
+            let mut better = 0u64;
+            let mut best = [0u64; 6];
+            for (p, b) in best.iter_mut().enumerate() {
+                let here = self.p1.entries.word(e, E_CLASS + 2 * p, wi)
+                    | self.p1.entries.word(e, E_CLASS + 2 * p + 1, wi);
+                *b = here & !better;
+                better |= here;
+            }
+            for (gi, (_, classes)) in POPULATIONS.iter().enumerate() {
+                let mut m = 0u64;
+                for (p, pop) in Population::ALL.iter().enumerate() {
+                    if classes.contains(pop) {
+                        m |= best[p];
+                    }
+                }
+                self.group_adm[gi * w_n + wi] = r & m;
+            }
+        }
+        for gi in 0..POPULATIONS.len() {
+            self.adm
+                .copy_from_slice(&self.group_adm[gi * w_n..(gi + 1) * w_n]);
             let adm = std::mem::take(&mut self.adm);
             for k in ones(&adm) {
                 let f = self.first_by_kind[k][gi].entry(key).or_insert((e, w));

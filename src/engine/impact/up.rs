@@ -1411,8 +1411,9 @@ struct RootOut {
 /// [`multi_walk::multi_walk`] ([`up_multi`]'s two passes), serially, so more chunks run on
 /// more workers (wall time); but each chunk traverses nearly the whole cone the roots share,
 /// so each one costs about the traversal again (CPU). The smallest count whose wall time is
-/// master's (CHANGELOG ENG-125).
-const CHUNKS: usize = 2;
+/// master's: on CDO's 699 roots the per-root pass took 11.6-11.8 s at 2 chunks, 8.7-9.1 s at
+/// 3, against master's 8.2-9.6 s (CHANGELOG ENG-125).
+const CHUNKS: usize = 4;
 
 /// The roots per chunk for `walked` roots on `workers` workers: [`CHUNKS`] chunks at most,
 /// one per worker.
