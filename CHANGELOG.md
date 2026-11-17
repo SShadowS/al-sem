@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Changed (ENG-117: `alsem impact --diff` takes 0.94x the CPU on CDO; FxHash for the searches' lookup maps)
+### Changed (ENG-117: `alsem impact --diff` takes 0.92-0.94x the CPU on CDO; FxHash for the searches' lookup maps)
 
 - **Found** in TLS-86's profile: SipHash was 10.3 % of the gate's 699-root `impact --diff` CPU,
   spread over the witness search (`digest`'s `TrieWalk::descend`, `WitDag::marking`) and the
@@ -22,7 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The order audit,** per map:
   - Each switched map is only looked up, or iterated in an order-free way: `build_flow`'s OR
     fixpoint over `progs` and its per-entry `retain`/`iter_mut`; `dag.info` in a `BTreeMap`
-    fill, a `sum` and an `any`; `outgoing_edges`' per-bucket sort.
+    fill, a `sum` and an `any`; `outgoing_edges`' per-bucket sort and an `into_iter` into
+    another map; `collectors` in an `any`; `Exec`'s `seen.difference(&live)` collected into a
+    set.
   - The maps that are iterated whole stay std: `LiteralReach`'s `out`, `by_stable`, `traps`,
     `arm_rows` and `tables`.
   - So none of the switched maps hid a nondeterminism bug.
@@ -37,16 +39,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   |---|---:|---:|---:|---:|
   | 1 | 510.5 s | 432.7 s | 2:26 | 1:59 |
   | 2 | 463.4 s | 434.1 s | 2:10 | 1:59 |
+  | 3 (head first) | 456.4 s | 417.8 s | 2:09 | 1:58 |
 
-  - The second, same-round pair gives CPU **x0.94** and wall x0.92. The first base run was
-    slower than the second by 10 %, so x0.85 against it is not claimed.
-  - Peak RSS unchanged (3.5 GB). The four outputs are byte-identical.
+  - Rounds 2 and 3 agree: CPU **x0.937 and x0.915**, wall x0.91 and x0.92. The first base run
+    was 10 % slower than the other two, so its x0.85 is not claimed. Round 3 was added after
+    review (one pair alone left the margin over the 5 % bar inside the base's spread).
+  - Peak RSS unchanged (3.5 GB). All six outputs are byte-identical: rounds 1-2 were checked by
+    `cmp` against base 1, and round 3's two have one sha256 (`6c19ed5e…`, kept in
+    `/work/.al-sem/profiles/2026-11-17-eng117/e117-round3.log` with the time files).
   - `cdo-speed` twice, both PASS: build x1.005 / x0.996, warm prove x0.963 / x0.941, warm
     tests x0.993 / x1.012, peak memory x0.969 / x0.994.
   - `cdo-before-after 643c92d2 4dc53e1f`: nothing moved.
   - The l5 lib tests pass (854).
 - **Profile** (samply, `profiling` build of the head, the same command):
-  - SipHash is 6.51 % of 470.0 s CPU, against 10.27 % of 536.1 s in TLS-86's profile. That
+  - SipHash is 6.54 % of 470.0 s CPU, against 10.27 % of 536.1 s in TLS-86's profile. That
     profile is of an older master (9c1c099b), so the comparison is indicative; the timed pairs
     above are the claim.
   - The callers left (`samply-chains.py ... Sip13Rounds 4`): a map `insert` 1.59 %,

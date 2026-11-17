@@ -1655,8 +1655,9 @@ pub(crate) struct LiteralReach<'a> {
     /// operation id, operation, record operation) -> the row that holds it
     /// (the LAST holding row, class P). `by_stable` keeps the FIRST row for
     /// row-level reads; a site-level read goes through [`Self::row_at`].
-    // ENG-117: the FxHash maps of this struct are only looked up, never
-    // iterated (an order audit per map); the iterated ones stay std.
+    // ENG-117: the FxHash maps of this struct are only looked up, or iterated
+    // order-free (`collectors` in an `any`); an order audit per map. The
+    // maps iterated whole stay std.
     site_rows: FxHashMap<&'a str, &'a ModelRoutine>,
     /// Every row of a routine with several rows (stable id), in row order.
     arm_rows: HashMap<&'a str, Vec<&'a ModelRoutine>>,

@@ -189,7 +189,8 @@ struct FingerprintIndexes<'a> {
     stable_id_to_display: HashMap<String, String>,
     routine_display_by_id: HashMap<String, String>,
     /// Per-from ordered edge bucket (source array order PRESERVED). ENG-117:
-    /// only looked up (its one whole-map pass sorts each bucket), so FxHash.
+    /// FxHash. Its whole-map passes are order-free: each bucket sorted in
+    /// place, and an `into_iter` into another map.
     outgoing_edges: FxHashMap<String, Vec<&'a SnapshotGraphEdge>>,
     /// Reverse of `outgoing_edges`: incoming_edges[to] = list of `from` node ids that
     /// have at least one edge pointing to `to`. Read by the per-fact depth check
