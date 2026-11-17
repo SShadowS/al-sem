@@ -10,7 +10,21 @@
 //! 3. the root's own nodes left out of its external callers: `externalCode`;
 //! 4. a hub's location from a site whose caller the root did not reach: `hubs`.
 //!
-//! LIMIT, a fifth break that stayed green: canonical node entries counted for the root's own
+//! DISCRIMINATION, pass 2 (2026-11-17, `cargo test -p al-sem --lib multi_rows`), each red, then
+//! green on revert:
+//! 1. the only-open partition admitting every open arrival, not only nodes whose final
+//!    category is only open: `entries`;
+//! 2. list items without their arrival number (ties not broken by walk order): `external`,
+//!    `entries`.
+//!
+//! Two pass-2 breaks stayed green here and got their own worlds in `up_tests`, each red then
+//! green: a full list that never takes a newcomer (`a_full_list_takes_a_nearer_arrival_from_
+//! later_in_the_level`), and a class witness admitted by the arrival's class instead of the
+//! entry's final class (`an_entry_counts_only_in_its_best_population`). The ancestor witness's
+//! `no_entries` mask is a cost guard only (`fill` reads the ancestor only when the population
+//! has no entry), so it has no proof.
+//!
+//! LIMIT, a fifth pass-1 break that stayed green: canonical node entries counted for the root's own
 //! nodes as well (`canon` given every root of the event, not `rest`). That exclusion (`Up::entry`
 //! returns early for a root node) is redundant with `changed`: every root node's canonical entry
 //! is a changed entry, in `up()` (every node with a changed stable id) and here (every root

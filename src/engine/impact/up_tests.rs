@@ -1188,3 +1188,149 @@ fn multi_rows_equal_on_the_up_worlds() {
         "precondition: a nearest ancestor witness"
     );
 }
+
+/// ENG-125 pass 2: an entry reached both by code and over a hub belongs to the code
+/// population only, so its hub arrival is no `overHub` witness. `hub_world`'s shape (`R` <-
+/// `Act` <- `Pg` <- the page-run hub <- `Y`), with `Y` also calling `R` and `Y` an entry.
+///
+/// DISCRIMINATION (2026-11-17): admitting a class witness by the arrival's class instead of
+/// the entry's final class fails here (`firstByKind`: `Y` under `overHub`); restored, passes.
+#[test]
+fn an_entry_counts_only_in_its_best_population() {
+    use super::up_multi::tests::assert_rows_equal;
+    use crate::program::impact_graph::reverse::Recorder;
+    use crate::program::resolve::edge::OpenBound;
+    let mut w = World::default();
+    let a = w.app("W");
+    let cu = w.obj(a, ObjectKind::Codeunit, 1, "Cu", TrustTier::Workspace);
+    let pg = w.obj(a, ObjectKind::Page, 2, "Pg", TrustTier::Workspace);
+    let r = w.rtn_with(&cu, "R", |x| x.access = Access::Local);
+    let act = w.rtn_with(&pg, "OnAction", |x| {
+        x.is_trigger = true;
+        x.id.enclosing_member_lc = Some("act".into());
+    });
+    w.call(&act, &r, 1);
+    let y = w.rtn_with(&cu, "Y", |x| x.access = Access::Local);
+    let s = w.edge(
+        &y,
+        EdgeKind::Call,
+        DispatchShape::DynamicOpen,
+        vec![crate::program::impact_graph::project::tests::unknown_route()],
+        2,
+    );
+    w.site_facts.insert(
+        s,
+        SiteFacts::from(RareSiteFacts {
+            open: vec![OpenBound::Run {
+                kind: Some(ObjectKind::Page),
+            }],
+            ..Default::default()
+        }),
+    );
+    w.call(&y, &r, 3);
+    kinds(&mut w, &y, &["upgrade-codeunit"]);
+    let g = sited_of(&w, a, &[]);
+    let (r, y) = (
+        g.routine_node(&r).expect("R"),
+        g.routine_node(&y).expect("Y"),
+    );
+    let mut rec = Recorder::default();
+    walk_multi(
+        &g,
+        &[r],
+        &WalkOptions::default(),
+        &mut WalkScratch::default(),
+        &mut rec,
+    );
+    let tiers: Vec<Tier> = rec.of(y).iter().map(|(s, _)| s.tier).collect();
+    assert!(
+        tiers.contains(&Tier::Local) && tiers.contains(&Tier::OnlyOpen),
+        "precondition: Y is reached by code and over the hub: {tiers:?}"
+    );
+    assert!(
+        g.entry_inventory().of_node(y).is_some(),
+        "precondition: Y is a canonical entry"
+    );
+    let captions = Captions::new(HashMap::new());
+    assert_rows_equal(
+        &g,
+        &[vec![r]],
+        &WalkOptions::default(),
+        Keep::new(false),
+        &captions,
+    );
+}
+
+/// ENG-125 pass 2: a full witness list takes a better arrival that comes later in the same
+/// level. The root has two lanes. Lane 0: `R` <- `Opened.OnOpenPage` <- the `Opened` page
+/// (lifecycle) <- `Card`'s action run, so stepping out of `Opened` at level 2 makes `Card` a
+/// page-action entry at 3 hops. Lane 1, after lane 0 in that level: `R2` <- `M` <- `Act2`, a
+/// page action at 2 hops. With one witness per list, `Act2` must replace `Card`.
+///
+/// DISCRIMINATION (2026-11-17): a full partition that never takes a newcomer (first come,
+/// first kept) fails here (`entries`: `Card` shown); restored, passes.
+#[test]
+fn a_full_list_takes_a_nearer_arrival_from_later_in_the_level() {
+    use super::up_multi::tests::assert_rows_equal;
+    let mut w = World::default();
+    let a = w.app("W");
+    let cu = w.obj(a, ObjectKind::Codeunit, 1, "Cu", TrustTier::Workspace);
+    let card = w.obj(a, ObjectKind::Page, 2, "Card", TrustTier::Workspace);
+    let opened = w.obj(a, ObjectKind::Page, 3, "Opened", TrustTier::Workspace);
+    let pg = w.obj(a, ObjectKind::Page, 4, "Pg", TrustTier::Workspace);
+    let (r, r2, m) = (w.rtn(&cu, "R"), w.rtn(&cu, "R2"), w.rtn(&cu, "M"));
+    let open_t = w.trigger(&opened, "OnOpenPage");
+    let act2 = w.rtn_with(&pg, "OnAction", |x| {
+        x.is_trigger = true;
+        x.id.enclosing_member_lc = Some("act2".into());
+    });
+    w.call(&open_t, &r, 1);
+    w.call(&m, &r2, 2);
+    w.call(&act2, &m, 3);
+    w.facts.objects.insert(
+        card.clone(),
+        ObjectFacts {
+            opens: vec![RunTarget::Object(opened.clone())],
+            action_runs: vec![RunTarget::Object(opened.clone())],
+            ..Default::default()
+        },
+    );
+    kinds(&mut w, &act2, &["page-action"]);
+    let g = sited_of(&w, a, &[]);
+    let (r, r2) = (
+        g.routine_node(&r).expect("R"),
+        g.routine_node(&r2).expect("R2"),
+    );
+    let keep = Keep {
+        per_list: 1,
+        ancestors: 32,
+    };
+    let captions = Captions::new(HashMap::new());
+    let roots = vec![vec![r, r2]];
+    assert_rows_equal(&g, &roots, &WalkOptions::default(), keep, &captions);
+    // The precondition, on the oracle: two page-action entries, the nearer one shown.
+    let shared = Shared::new(&g, &roots[0].iter().copied().collect());
+    let mut up = Up::new(&g, keep, &roots[0], &shared);
+    walk_multi(
+        &g,
+        &roots[0],
+        &WalkOptions::default(),
+        &mut WalkScratch::default(),
+        &mut up,
+    );
+    let s = summary(&up, &g, &captions);
+    let pa = s["entries"]
+        .as_array()
+        .and_then(|es| es.iter().find(|e| e["kind"] == "page-action"))
+        .expect("a page-action list");
+    assert_eq!(
+        pa["count"],
+        json!(2),
+        "precondition: Card and Act2 are page actions: {pa:#}"
+    );
+    assert_eq!(
+        pa["first"][0]["hops"],
+        json!(2),
+        "precondition: Act2 (2 hops) is shown: {pa:#}"
+    );
+}
