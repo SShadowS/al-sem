@@ -37,6 +37,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   routine's features over the r0 corpus) is byte-identical: no rare fact moved. With
   `is_case_else()` forced to `false` it drifts on 5 routines. The module doc's internal-only
   field list (`serde_skip_list_is_complete`) names `PCFNNode.rare`.
+- **CDO checks** (base `7fb70573`): `cdo-before-after` moved no finding, fingerprint or
+  call-graph number; the session refresh equals a cold build at all 12 steps in both the
+  default and `--low-mem` modes; `cdo-gate --only harness,l4` passed. `cdo-speed` passed
+  twice: round total x1.004 and x1.006 (CPU); the servers' summed peak memory fell in both
+  (7,115 -> 6,751 and 7,117 -> 6,891 MiB; no ratio quoted, the two differ). A deep clone of a
+  node with a rare fact now makes one more allocation (sol and Fable review; the clones of
+  whole trees predate this change); the reported-only `warm-impact` read x1.060 and x1.292
+  with spreads above 1.3, and `prove`, which walks the trees, x0.974 and x1.011.
 
 ### Fixed (ENG-128: `alsem impact`'s `eventPublishers` no longer depends on which way the walk reached a state first)
 
