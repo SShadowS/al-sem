@@ -129,6 +129,20 @@ fn via_key(v: Via) -> (u8, u32) {
     }
 }
 
+/// The logical roots in a bit set, in order.
+pub fn ones(roots: &[u64]) -> impl Iterator<Item = usize> + '_ {
+    roots.iter().enumerate().flat_map(|(i, &w)| {
+        let mut w = w;
+        std::iter::from_fn(move || {
+            (w != 0).then(|| {
+                let b = w.trailing_zeros() as usize;
+                w &= w - 1;
+                i * 64 + b
+            })
+        })
+    })
+}
+
 fn any(a: &[u64]) -> bool {
     a.iter().any(|&x| x != 0)
 }

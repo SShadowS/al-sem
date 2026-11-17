@@ -1,9 +1,11 @@
 //! **Who reaches each changed routine** (agent-tasks design §8.4 step 2): R0's
 //! reverse walks over the production universe's sited graph.
 //!
-//! - Per root, [`walk_one`] (TLS-21: several roots at once on the one-shot
-//!   CLI, each walk on a scratch from a stash of one per walk in flight) and
-//!   a visitor that keeps COUNTS and the first few witnesses only
+//! - Per root, its own walk and a visitor. ENG-125: the roots are walked in chunks of up
+//!   to [`CHUNK`], each chunk by ONE [`multi_walk::multi_walk`] whose events go to every
+//!   root's own visitor ([`Demux`]), so each visitor sees exactly its own walk while the
+//!   graph is traversed once per chunk (TLS-21: chunks run at once on the one-shot CLI).
+//!   The visitor keeps COUNTS and the first few witnesses only
 //!   ([`RootUp`]): its direct callers (explain's `callers:` definition,
 //!   [`direct_callers`], with each caller's first call site), ancestors by
 //!   tier, entries by kind (page actions by caption), event publishers that
@@ -33,9 +35,10 @@ use serde_json::{Value, json};
 
 use crate::engine::test_select::select::{direct_callers, display};
 use crate::program::impact_graph::entries::EntryInventory;
+use crate::program::impact_graph::multi_walk::{self, MultiSink};
 use crate::program::impact_graph::reverse::{
     ConeVisitor, EntryKind, ExternalWhy, HiddenChannel, Limit, NodeIx, SiteIx, Tier, Via,
-    WalkOptions, WalkScratch, WalkState, object_run_reaches, tier_over, walk_multi, walk_one,
+    WalkOptions, WalkScratch, WalkState, object_run_reaches, tier_over, walk_multi,
 };
 use crate::program::impact_graph::sited::{Boundary, SitedGraph, flag};
 
@@ -1265,36 +1268,102 @@ pub struct UpArgs<'a> {
     pub config_entries: &'a [(String, u16)],
 }
 
-/// One root's result (TLS-21): its row and what its walk cost.
+/// One root's result (TLS-21): its row and what its walk cost. A chunk's walk time and
+/// walk bytes sit on its first root.
 struct RootOut {
     row: Value,
     states: usize,
     visitor_bytes: usize,
     walk_us: u64,
+    walk_bytes: usize,
 }
 
-/// The scratches of the walks in flight (TLS-21): a walk takes one, or makes
-/// one when none is free, and gives it back, so no more exist than walks in
-/// flight. Each walk resets its scratch, so what one walk left never reaches
-/// another's answer.
-#[derive(Default)]
-struct Scratches(std::sync::Mutex<Vec<WalkScratch>>);
+/// ENG-125: the most roots one [`multi_walk`] serves. Each holds its own [`Up`] until the
+/// chunk's walk ends, so a chunk's visitors are alive at once (memory), while every chunk
+/// pays one traversal of the union of its roots' cones (CPU). Measured on CDO: see the
+/// CHANGELOG's ENG-125 entry.
+const CHUNK: usize = 16;
 
-impl Scratches {
-    fn take(&self, _workers: &crate::engine::l5::digest_cli::ReachWorkers) -> WalkScratch {
-        if let Some(s) = self.0.lock().unwrap_or_else(|p| p.into_inner()).pop() {
-            return s;
+/// The roots per chunk for `walked` roots on `workers` workers: [`CHUNK`] at most, and
+/// fewer when there are fewer roots than that per worker, so every worker has a chunk.
+fn chunk_size(walked: usize, workers: usize) -> usize {
+    walked.div_ceil(workers.max(1)).clamp(1, CHUNK)
+}
+
+/// ENG-125: a multi walk's events, each handed to the visitor of every root it holds for, so
+/// each [`Up`] sees exactly its own walk's callbacks (`multi_walk_tests`).
+struct Demux<'v, 'g>(&'v mut [Up<'g>]);
+
+impl MultiSink for Demux<'_, '_> {
+    fn reach(
+        &mut self,
+        lane: u32,
+        s: WalkState,
+        hops: u32,
+        via: Via,
+        from: Option<WalkState>,
+        roots: &[u64],
+    ) {
+        for k in multi_walk::ones(roots) {
+            self.0[k].reach(lane, s, hops, via, from);
         }
-        #[cfg(test)]
-        if let Some(p) = _workers.probe() {
-            p.scratches_made
-                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        }
-        WalkScratch::default()
     }
-
-    fn put(&self, s: WalkScratch) {
-        self.0.lock().unwrap_or_else(|p| p.into_inner()).push(s);
+    fn rejoin(&mut self, lane: u32, s: WalkState, hops: u32, site: SiteIx, roots: &[u64]) {
+        for k in multi_walk::ones(roots) {
+            self.0[k].rejoin(lane, s, hops, site);
+        }
+    }
+    fn hidden(&mut self, lane: u32, n: NodeIx, ch: HiddenChannel, roots: &[u64]) {
+        for k in multi_walk::ones(roots) {
+            self.0[k].hidden(lane, n, ch);
+        }
+    }
+    fn entry(
+        &mut self,
+        lane: u32,
+        n: NodeIx,
+        kinds: &[EntryKind],
+        s: WalkState,
+        hops: u32,
+        roots: &[u64],
+    ) {
+        for k in multi_walk::ones(roots) {
+            self.0[k].entry(lane, n, kinds, s, hops);
+        }
+    }
+    fn external(
+        &mut self,
+        lane: u32,
+        n: NodeIx,
+        why: ExternalWhy,
+        s: WalkState,
+        hops: u32,
+        roots: &[u64],
+    ) {
+        for k in multi_walk::ones(roots) {
+            self.0[k].external(lane, n, why, s, hops);
+        }
+    }
+    fn source(&mut self, lane: u32, s: WalkState, hops: u32, roots: &[u64]) {
+        for k in multi_walk::ones(roots) {
+            self.0[k].source(lane, s, hops);
+        }
+    }
+    fn limit(&mut self, root: usize, l: Limit) {
+        self.0[root].limit(l);
+    }
+    fn step(&mut self, g: &SitedGraph, from: WalkState, site: SiteIx, roots: &[u64]) -> Option<u8> {
+        // `Up::step` answers from `(from, site)` alone; each root still records its own step.
+        let mut answer = None;
+        for k in multi_walk::ones(roots) {
+            let a = self.0[k].step(g, from, site);
+            debug_assert!(
+                answer.is_none() || answer == Some(a),
+                "a step answer per root"
+            );
+            answer = Some(a);
+        }
+        answer.flatten()
     }
 }
 
@@ -1309,28 +1378,47 @@ fn walk_options<'a>(args: &UpArgs<'a>, extra: &'a HashMap<NodeIx, u16>) -> WalkO
     }
 }
 
-/// One root's walk over its nodes (its `#if` arms walk together) and its row.
-fn walk_root(
+/// ENG-125: one chunk of roots walked at once ([`multi_walk`]; a root's `#if` arms are its
+/// lanes) and each root's row, in chunk order.
+fn walk_chunk(
     g: &SitedGraph,
     args: &UpArgs<'_>,
     shared: &Shared<'_>,
     captions: &Captions,
-    scratches: &Scratches,
+    chunk: &[&(&String, Vec<NodeIx>)],
+) -> Vec<RootOut> {
+    let opts = walk_options(args, shared.extra);
+    let mut ups: Vec<Up<'_>> = chunk
+        .iter()
+        .map(|(_, nodes)| Up::new(g, args.keep, nodes, shared))
+        .collect();
+    let lanes: Vec<Vec<NodeIx>> = chunk.iter().map(|(_, nodes)| nodes.clone()).collect();
+    let t = std::time::Instant::now();
+    let stats = multi_walk::multi_walk(g, &lanes, &opts, &mut Demux(&mut ups));
+    let walk_us = t.elapsed().as_micros() as u64;
+    ups.iter()
+        .zip(chunk)
+        .enumerate()
+        .map(|(i, (v, (id, nodes)))| RootOut {
+            row: root_row(g, args, v, id, nodes, captions),
+            states: v.states,
+            visitor_bytes: v.bytes(),
+            walk_us: if i == 0 { walk_us } else { 0 },
+            walk_bytes: if i == 0 { stats.peak_bytes } else { 0 },
+        })
+        .collect()
+}
+
+/// One walked root's row, from its visitor.
+fn root_row(
+    g: &SitedGraph,
+    args: &UpArgs<'_>,
+    v: &Up<'_>,
     id: &str,
     nodes: &[NodeIx],
-) -> RootOut {
-    let opts = walk_options(args, shared.extra);
-    let mut v = Up::new(g, args.keep, nodes, shared);
-    let mut scratch = scratches.take(&args.workers);
-    let t = std::time::Instant::now();
-    if nodes.len() == 1 {
-        walk_one(g, nodes[0], &opts, &mut scratch, &mut v);
-    } else {
-        walk_multi(g, nodes, &opts, &mut scratch, &mut v);
-    }
-    let walk_us = t.elapsed().as_micros() as u64;
-    scratches.put(scratch);
-    let mut s = summary(&v, g, captions);
+    captions: &Captions,
+) -> Value {
+    let mut s = summary(v, g, captions);
     s["stableId"] = json!(id);
     s["status"] = json!("walked");
     s["display"] = json!(display(g, nodes[0]));
@@ -1347,12 +1435,7 @@ fn walk_root(
             })
             .collect::<Vec<_>>()
     );
-    RootOut {
-        row: s,
-        states: v.states,
-        visitor_bytes: v.bytes(),
-        walk_us,
-    }
+    s
 }
 
 /// `/proc/self/status`'s `key` line in KiB (Linux).
@@ -1427,24 +1510,28 @@ pub fn up(g: &SitedGraph, args: &UpArgs<'_>, captions: &Captions) -> Value {
         })
         .collect();
     let mut all_nodes: Vec<NodeIx> = roots.iter().flat_map(|(_, n)| n.clone()).collect();
-    let scratches = Scratches::default();
+    let n = args.workers.count();
+    // Serial when asked, and from inside a rayon worker: there `install`
+    // would let the blocked worker run other jobs while it waits (the
+    // literal pass's reason, TLS-22); such a caller is parallel already.
+    let in_rayon = n > 1 && rayon::current_thread_index().is_some();
+    if in_rayon {
+        crate::engine::perf_trace::counter_delta("impact.up.serial_in_rayon", 1);
+    }
+    let serial = n <= 1 || in_rayon;
+    // ENG-125: the walked roots in chunks, each walked at once; root order inside.
+    let walked: Vec<&(&String, Vec<NodeIx>)> =
+        roots.iter().filter(|(_, n)| !n.is_empty()).collect();
+    let size = chunk_size(walked.len(), if serial { 1 } else { n });
+    let chunks: Vec<&[&(&String, Vec<NodeIx>)]> = walked.chunks(size).collect();
     #[cfg(test)]
-    let first_walked = roots.iter().position(|(_, n)| !n.is_empty());
-    #[cfg(test)]
-    let walked = roots.iter().filter(|(_, n)| !n.is_empty()).count();
-    let task = |(_i, (id, nodes)): (usize, &(&String, Vec<NodeIx>))| -> RootOut {
-        if nodes.is_empty() {
-            return RootOut {
-                row: json!({"stableId": id, "status": "not-in-graph"}),
-                states: 0,
-                visitor_bytes: 0,
-                walk_us: 0,
-            };
-        }
+    let first_walked = walked.first().copied();
+    let task = |chunk: &&[&(&String, Vec<NodeIx>)]| -> Vec<RootOut> {
         #[cfg(test)]
         let _in = args.workers.probe().map(|p| {
             use std::sync::atomic::Ordering::SeqCst;
-            p.up_tasks.fetch_add(1, SeqCst);
+            p.up_tasks.fetch_add(chunk.len(), SeqCst);
+            p.up_chunks.fetch_add(1, SeqCst);
             p.pool_threads
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
@@ -1453,10 +1540,10 @@ pub fn up(g: &SitedGraph, args: &UpArgs<'_>, captions: &Captions) -> Value {
             let in_flight = p.enter();
             let hold = *p.hold_first_root.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(timeout) = hold
-                && Some(_i) == first_walked
+                && first_walked.is_some_and(|f| std::ptr::eq(f, chunk[0]))
             {
                 let until = std::time::Instant::now() + timeout;
-                while p.up_done.load(SeqCst) + 1 < walked {
+                while p.up_done.load(SeqCst) + chunk.len() < walked.len() {
                     if std::time::Instant::now() >= until {
                         p.first_root_timed_out.store(true, SeqCst);
                         break;
@@ -1466,59 +1553,50 @@ pub fn up(g: &SitedGraph, args: &UpArgs<'_>, captions: &Captions) -> Value {
             }
             in_flight
         });
-        let out = walk_root(g, args, &shared, captions, &scratches, id, nodes);
+        let out = walk_chunk(g, args, &shared, captions, chunk);
         #[cfg(test)]
         if let Some(p) = args.workers.probe() {
-            p.up_done.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            p.up_done
+                .fetch_add(chunk.len(), std::sync::atomic::Ordering::SeqCst);
         }
         out
     };
-    let outs: Vec<RootOut> = {
+    let outs: Vec<Vec<RootOut>> = {
         let _s = crate::engine::perf_trace::span("impact", "impact.up.roots");
-        let n = args.workers.count();
-        // Serial when asked, and from inside a rayon worker: there `install`
-        // would let the blocked worker run other jobs while it waits (the
-        // literal pass's reason, TLS-22); such a caller is parallel already.
-        let in_rayon = n > 1 && rayon::current_thread_index().is_some();
-        if in_rayon {
-            crate::engine::perf_trace::counter_delta("impact.up.serial_in_rayon", 1);
-        }
-        if n <= 1 || in_rayon {
-            roots.iter().enumerate().map(task).collect()
+        if serial {
+            chunks.iter().map(task).collect()
         } else {
             use rayon::prelude::*;
-            // One root per task: per-root cost is uneven, work stealing
+            // One chunk per task: per-chunk cost is uneven, work stealing
             // balances it; an indexed collect keeps root order.
-            crate::engine::l5::digest_cli::reach_pool(n).install(|| {
-                roots
-                    .par_iter()
-                    .enumerate()
-                    .with_max_len(1)
-                    .map(task)
-                    .collect()
-            })
+            crate::engine::l5::digest_cli::reach_pool(n)
+                .install(|| chunks.par_iter().with_max_len(1).map(task).collect())
         }
     };
     let mut states = 0usize;
     // The largest visitor of any one walk.
     let mut visitor_bytes = 0usize;
     let mut walks_us = 0u64;
-    let mut roots_out = Vec::with_capacity(outs.len());
-    for o in outs {
+    // Every multi walk's peak (the walks in flight held at most this much).
+    let mut walk_bytes = 0usize;
+    let mut outs = outs.into_iter().flatten();
+    let mut roots_out = Vec::with_capacity(roots.len());
+    for (id, nodes) in &roots {
+        if nodes.is_empty() {
+            roots_out.push(json!({"stableId": id, "status": "not-in-graph"}));
+            continue;
+        }
+        let o = outs.next().expect("a row per walked root");
         states += o.states;
         visitor_bytes = visitor_bytes.max(o.visitor_bytes);
         walks_us += o.walk_us;
+        walk_bytes += o.walk_bytes;
         roots_out.push(o.row);
     }
     all_nodes.sort_unstable();
     all_nodes.dedup();
     let mut u = Up::new(g, args.keep, &all_nodes, &shared);
-    // One scratch for the union walk; the idle ones go first (their bytes
-    // still count: the per-root pass held them).
-    let mut idle = scratches.0.into_inner().unwrap_or_else(|p| p.into_inner());
-    let mut scratch = idle.pop().unwrap_or_default();
-    let idle_bytes: usize = idle.iter().map(WalkScratch::bytes).sum();
-    drop(idle);
+    let mut scratch = WalkScratch::default();
     let t = std::time::Instant::now();
     let ustats = {
         let _s = crate::engine::perf_trace::span("impact", "impact.up.union_walk");
@@ -1531,8 +1609,8 @@ pub fn up(g: &SitedGraph, args: &UpArgs<'_>, captions: &Captions) -> Value {
         )
     };
     walks_us += t.elapsed().as_micros() as u64;
-    // Every scratch's capacity: the scratch memory the pass held.
-    let scratch_bytes = idle_bytes + scratch.bytes();
+    // The walks' memory: every multi walk's peak and the union walk's scratch.
+    let scratch_bytes = walk_bytes + scratch.bytes();
     drop(scratch);
     visitor_bytes = visitor_bytes.max(u.bytes());
     let union = {
@@ -1580,6 +1658,7 @@ pub(crate) mod up_par_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::program::impact_graph::reverse::walk_one;
 
     /// A list's witnesses put every node a path with no open site reaches
     /// before the ones only an open site (a hub) reaches, nearest first; a
