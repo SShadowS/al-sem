@@ -216,11 +216,11 @@ pub(crate) fn summaries_tally(summaries: &HashMap<String, FullRoutineSummary>) -
         t.bytes += ft.bytes;
         t.allocs += ft.allocs;
         if let Some(cov) = &s.coverage {
-            t.strs([&cov.subject, &cov.direct_status, &cov.inherited_status])
-                .buf::<String>(cov.reasons.len())
-                .strs(&cov.reasons)
-                .buf::<String>(cov.unknown_targets.len())
-                .strs(&cov.unknown_targets);
+            // ENG-108: the statuses, reasons and targets are shared texts (counted by their
+            // handles here; the few distinct texts live once in the coverage interner).
+            t.strs([&cov.subject])
+                .buf::<crate::program::str_pool::SharedStr>(cov.reasons.len())
+                .buf::<crate::program::str_pool::SharedStr>(cov.unknown_targets.len());
         }
     }
     t

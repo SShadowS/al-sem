@@ -2645,6 +2645,30 @@ fn resident_mode(ws: PathBuf, routine: String, low_mem: bool, with_sited: bool) 
                         }
                         continue;
                     }
+                    if name == "fold.coverage" {
+                        let cov =
+                            part.downcast::<HashMap<
+                                String,
+                                al_sem::engine::l4::capability_cone::CoverageRecord,
+                            >>()
+                            .expect("the coverage part");
+                        eng108_coverage(
+                            "fold.coverage",
+                            cov.values()
+                                .map(|r| {
+                                    (
+                                        &*r.subject,
+                                        &*r.direct_status,
+                                        &*r.inherited_status,
+                                        r.reasons.iter().map(|s| &**s).collect(),
+                                        r.unknown_targets.iter().map(|s| &**s).collect(),
+                                    )
+                                })
+                                .collect(),
+                        );
+                        step(name, cov);
+                        continue;
+                    }
                     if name == "fold.cones" {
                         // ENG-107: split by part (counts first: the cones are shared).
                         let cones = part
@@ -3008,6 +3032,27 @@ fn eng107_split(
             ArtifactValue::TreeBase(b) => match Arc::try_unwrap(b) {
                 Ok(b) => {
                     for (n, p) in b.into_census_parts() {
+                        if n == "tree_base.coverage" {
+                            let cov = p
+                                .downcast::<Arc<Vec<al_sem::engine::l5::snapshot::SnapshotCoverageRecord>>>()
+                                .expect("the base's coverage part");
+                            eng108_coverage(
+                                "tree_base.coverage",
+                                cov.iter()
+                                    .map(|r| {
+                                        (
+                                            &*r.subject,
+                                            &*r.direct_status,
+                                            &*r.inherited_status,
+                                            r.reasons.iter().map(|s| &**s).collect(),
+                                            r.unknown_targets.iter().map(|s| &**s).collect(),
+                                        )
+                                    })
+                                    .collect(),
+                            );
+                            step(n, cov);
+                            continue;
+                        }
                         step(n, p);
                     }
                 }
@@ -3038,6 +3083,32 @@ fn eng107_split(
         format!("artifact.{kind} ({} keys) TOTAL", keys.len()),
         mib(b0 - b1),
         a0 - a1
+    );
+}
+
+/// ENG-108: what one coverage store's records hold, per field: strings, distinct texts, bytes.
+/// A row is `(subject, direct_status, inherited_status, reasons, unknown_targets)` as `&str`s
+/// (read through `&**`, so the probe builds on `String` and `SharedStr` fields alike).
+fn eng108_coverage(label: &str, rows: Vec<(&str, &str, &str, Vec<&str>, Vec<&str>)>) {
+    use std::collections::HashSet;
+    let tally = |vals: Vec<&str>| {
+        let n = vals.len();
+        let bytes: usize = vals.iter().map(|s| s.len()).sum();
+        let d: HashSet<&str> = vals.into_iter().collect();
+        format!(
+            "{n} ({:.2} MiB text), {} distinct",
+            mib(bytes as isize),
+            d.len()
+        )
+    };
+    println!(
+        "    ENG-108 {label}: {} records; subject {}; direct_status {}; inherited_status {}; reasons {}; unknown_targets {}",
+        rows.len(),
+        tally(rows.iter().map(|r| r.0).collect()),
+        tally(rows.iter().map(|r| r.1).collect()),
+        tally(rows.iter().map(|r| r.2).collect()),
+        tally(rows.iter().flat_map(|r| r.3.iter().copied()).collect()),
+        tally(rows.iter().flat_map(|r| r.4.iter().copied()).collect()),
     );
 }
 
@@ -3152,6 +3223,22 @@ fn eng114_summaries(
         .map(|s| std::mem::take(&mut s.capability_facts_direct))
         .collect();
     step("det.summaries.capability_facts_direct", facts);
+    eng108_coverage(
+        "det.summaries.coverage",
+        summaries
+            .values()
+            .filter_map(|s| s.coverage.as_ref())
+            .map(|r| {
+                (
+                    &*r.subject,
+                    &*r.direct_status,
+                    &*r.inherited_status,
+                    r.reasons.iter().map(|s| &**s).collect(),
+                    r.unknown_targets.iter().map(|s| &**s).collect(),
+                )
+            })
+            .collect(),
+    );
     let coverage: Vec<_> = summaries.values_mut().map(|s| s.coverage.take()).collect();
     step("det.summaries.coverage", coverage);
     step("det.summaries.(rest: map, ids)", summaries);

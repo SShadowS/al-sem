@@ -192,7 +192,12 @@ fn step5_t1_spans_and_d9_read_the_fold() {
     let h = coverage_of(&ctx.summaries, &helper);
     assert_eq!(
         (h.direct_status.as_str(), h.reasons.clone()),
-        ("partial", vec!["ambiguous-overload".to_string()]),
+        (
+            "partial",
+            vec![crate::program::str_pool::SharedStr::from(
+                "ambiguous-overload"
+            )]
+        ),
         "Helper's direct coverage folds its ambiguous call: {h:?}"
     );
     let r = coverage_of(&ctx.summaries, &root);
@@ -242,15 +247,16 @@ fn app_dirs(root: &Path) -> Vec<PathBuf> {
 type CovKey = (String, String, Vec<String>, Vec<String>);
 
 fn cov_key(c: &CoverageRecord) -> CovKey {
-    let mut reasons = c.reasons.clone();
-    reasons.sort();
-    let mut targets = c.unknown_targets.clone();
-    targets.sort();
+    let owned = |v: &[crate::program::str_pool::SharedStr]| -> Vec<String> {
+        let mut v: Vec<String> = v.iter().map(|s| s.to_string()).collect();
+        v.sort();
+        v
+    };
     (
-        c.direct_status.clone(),
-        c.inherited_status.clone(),
-        reasons,
-        targets,
+        c.direct_status.to_string(),
+        c.inherited_status.to_string(),
+        owned(&c.reasons),
+        owned(&c.unknown_targets),
     )
 }
 
@@ -393,13 +399,20 @@ fn step5_t4_dependency_half_folds_into_the_cross_app_context() {
     let i = coverage_of(summaries, &inner);
     assert_eq!(
         (i.direct_status.as_str(), i.reasons.clone()),
-        ("partial", vec!["ambiguous-overload".to_string()]),
+        (
+            "partial",
+            vec![crate::program::str_pool::SharedStr::from(
+                "ambiguous-overload"
+            )]
+        ),
         "Inner's direct coverage folds its dependency-half edge: {i:?}"
     );
     let g = coverage_of(summaries, &go);
     assert_eq!(g.inherited_status, "partial", "Go inherits partial: {g:?}");
     assert!(
-        g.unknown_targets.contains(&inner),
+        g.unknown_targets
+            .iter()
+            .any(|t| t.as_str() == inner.as_str()),
         "Inner is in Go's unknown_targets: {g:?}"
     );
 
@@ -672,12 +685,17 @@ fn t9_run(n: usize) -> T9Out {
     }
     let out = crate::engine::l5::detectors::d2::detect_d2(&m, &ctx).expect("d2 runs");
     let ids = out.findings.iter().map(|f| f.id.clone()).collect();
-    let wide_status = coverage_of(&ctx.summaries, &wide).inherited_status.clone();
+    let wide_status = coverage_of(&ctx.summaries, &wide)
+        .inherited_status
+        .to_string();
     let callee_direct = callees
         .iter()
         .map(|id| {
             let c = coverage_of(&ctx.summaries, id);
-            (c.direct_status.clone(), c.reasons.clone())
+            (
+                c.direct_status.to_string(),
+                c.reasons.iter().map(|s| s.to_string()).collect(),
+            )
         })
         .collect();
     (ids, wide_status, callee_direct)

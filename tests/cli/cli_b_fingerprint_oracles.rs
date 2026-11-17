@@ -113,8 +113,8 @@ fn direct_call(callsite_id: &str, from: &str, to: &str, edge_id: &str) -> Snapsh
 fn coverage_unknown() -> SnapshotCoverageRecord {
     SnapshotCoverageRecord {
         subject: "R1".to_string(),
-        direct_status: "unknown".to_string(),
-        inherited_status: "unknown".to_string(),
+        direct_status: "unknown".into(),
+        inherited_status: "unknown".into(),
         reasons: vec![],
         unknown_targets: vec![],
     }
