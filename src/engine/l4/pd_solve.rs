@@ -1237,6 +1237,26 @@ fn seed_of<'a>(
     (owner, TempState::ParameterDependent(i0), reqs)
 }
 
+/// A state of one producer's walk, `(routine, t, reqs)` with the routine by its interned
+/// address (the producer is the walk's).
+type SolveKey = (*const u8, TempState, Vec<Req>);
+
+/// The fewest producers in a chunk (ENG-121). A solve with fewer fresh producers than this
+/// per thread (a resident refresh after an edit) walks them one per chunk, as before, so the
+/// workers balance uneven walks.
+const MIN_SOLVE_CHUNK: usize = 4;
+
+/// One chunk's scratch for [`solve_producer`] (ENG-121): its visited set, its edge index and
+/// each state's name, cleared per producer and reused across the chunk, so a producer's walk
+/// does not grow them again from empty. On CDO their rehashing was 4.2-4.9 % of the sampled CPU
+/// of a one-shot prove or analyze, and fell by 1.3-1.8 points (CHANGELOG ENG-121).
+#[derive(Default)]
+struct SolveScratch<'a> {
+    ix_of: crate::fxhash::FxHashMap<SolveKey, StateIx>,
+    edge_ix: crate::fxhash::FxHashMap<*const TypedOutEdge, usize>,
+    at: Vec<&'a Arc<str>>,
+}
+
 /// One fresh producer's BFS (plan 2026-11-03 L2), on any thread. It reads
 /// only shared, immutable inputs (the interned names, the incoming edges,
 /// the rows and frames; [`cross_edge`] is a pure function of them) and
@@ -1245,6 +1265,7 @@ fn seed_of<'a>(
 /// finds depends on another: the serial walk ([`Walk::Serial`]) interleaves
 /// the producers in one FIFO queue, and that queue restricted to one
 /// producer is this one, so each state, link and distance is the same.
+/// `scratch` (ENG-121) is cleared first, so the answer does not depend on it.
 fn solve_producer<'g, 'a>(
     p: usize,
     prod: &Producer,
@@ -1252,15 +1273,14 @@ fn solve_producer<'g, 'a>(
     incoming: &Incoming<'g, 'a>,
     routines_by_id: &HashMap<&str, &ModelRoutine>,
     frames: &HashMap<String, FrameGuards>,
+    scratch: &mut SolveScratch<'a>,
 ) -> FreshSolve<'g> {
     let mut out = FreshSolve {
         states: Vec::new(),
         raw_links: Vec::new(),
         edges: Vec::new(),
     };
-    // The visited set, `(routine, t, reqs)` with the routine by its interned
-    // address (the producer is `p`).
-    type Key = (*const u8, TempState, Vec<Req>);
+    type Key = SolveKey;
     /// Appends the state `key` names at `name` (`key.0` is its address).
     #[allow(clippy::too_many_arguments)]
     fn push<'g, 'a>(
@@ -1289,14 +1309,16 @@ fn solve_producer<'g, 'a>(
         ix
     }
     let addr = |name: &Arc<str>| Arc::as_ptr(name).cast::<u8>();
-    // Fx (ENG-98): both are only looked up, never iterated.
-    let mut ix_of: crate::fxhash::FxHashMap<Key, StateIx> = Default::default();
-    let mut edge_ix: crate::fxhash::FxHashMap<*const TypedOutEdge, usize> = Default::default();
+    // Fx (ENG-98): both are only looked up, never iterated. Empty at the start of every
+    // producer (no state of one walk reaches another's); their capacity is kept.
+    let SolveScratch { ix_of, edge_ix, at } = scratch;
+    ix_of.clear();
+    edge_ix.clear();
     // Each state's interned name, beside `out.states`.
-    let mut at: Vec<&'a Arc<str>> = Vec::new();
+    at.clear();
     let (owner, t0, reqs0) = seed_of(prod, names, frames);
     let key = (addr(owner), t0, reqs0);
-    push(&mut out, &mut ix_of, &mut at, p, owner, key, true, 0);
+    push(&mut out, ix_of, at, p, owner, key, true, 0);
     // States are appended in BFS order, so `out.states` is its own queue (so
     // `dist` is the shortest distance).
     let mut s: StateIx = 0;
@@ -1314,16 +1336,7 @@ fn solve_producer<'g, 'a>(
             let key = (addr(ie.name), t2, reqs2);
             let ix = match ix_of.get(&key) {
                 Some(&ix) => ix,
-                None => push(
-                    &mut out,
-                    &mut ix_of,
-                    &mut at,
-                    p,
-                    ie.name,
-                    key,
-                    false,
-                    dist + 1,
-                ),
+                None => push(&mut out, ix_of, at, p, ie.name, key, false, dist + 1),
             };
             let edge = *edge_ix.entry(std::ptr::from_ref(ie.e)).or_insert_with(|| {
                 out.edges.push((ie.from, ie.e));
@@ -1687,17 +1700,39 @@ fn solve_core<'g>(
     match walk {
         Walk::Parallel => {
             use rayon::prelude::*;
+            // ENG-121: the producers in chunks (about eight per thread, at least
+            // `MIN_SOLVE_CHUNK`; a small solve, one producer per chunk), each walked by one
+            // `SolveScratch`, so a scratch grows
+            // to its chunk's largest walk once instead of from empty per producer. (Rayon's
+            // `map_init` makes one per split, and work stealing splits it small: on CDO
+            // it removed little.) The walks' answers do not depend on it (it is cleared
+            // per producer); the chunks keep producer order.
+            let threads = rayon::current_num_threads().max(1);
+            let per = if fresh_ps.len() < MIN_SOLVE_CHUNK * threads {
+                // A small solve: one producer per chunk, as before ENG-121, so the
+                // workers balance uneven walks.
+                1
+            } else {
+                fresh_ps.len().div_ceil(threads * 8).max(MIN_SOLVE_CHUNK)
+            };
             let solved: Vec<FreshSolve<'g>> = fresh_ps
-                .par_iter()
-                .map(|&p| {
-                    solve_producer(
-                        p,
-                        &arena.producers[p],
-                        &names,
-                        &incoming,
-                        routines_by_id,
-                        frames,
-                    )
+                .par_chunks(per)
+                .flat_map_iter(|chunk| {
+                    let mut scratch = SolveScratch::default();
+                    chunk
+                        .iter()
+                        .map(|&p| {
+                            solve_producer(
+                                p,
+                                &arena.producers[p],
+                                &names,
+                                &incoming,
+                                routines_by_id,
+                                frames,
+                                &mut scratch,
+                            )
+                        })
+                        .collect::<Vec<_>>()
                 })
                 .collect();
             drop(walk_span);
@@ -3258,6 +3293,33 @@ mod tests {
             checked >= with_producers,
             "every solve with producers was checked ({checked} of {with_producers})"
         );
+    }
+
+    /// ENG-121: one `SolveScratch` serves every producer of its chunk, cleared per producer.
+    /// In a one-thread pool a solve of four or more fresh producers has chunks of at least
+    /// `MIN_SOLVE_CHUNK` (4), so the hand-stated solves (four producers sharing edges, whose
+    /// walks reach the same states) run on one reused scratch, each checked against the
+    /// serial walk. (In a wider pool a solve this small gets one producer per chunk.)
+    ///
+    /// DISCRIMINATION, on the chunked form (2026-11-17), each red here, then green on revert:
+    /// not clearing, between producers, (1) the visited set (an index past the producer's
+    /// states), (2) the state names (the arena differs from the serial walk's), (3) the edge
+    /// index (an index past the producer's edges).
+    #[test]
+    fn a_reused_solve_scratch_equals_the_serial_walk() {
+        // The precondition: the four hand-stated producers fit one chunk in this pool.
+        const _: () = assert!(super::MIN_SOLVE_CHUNK >= 4);
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(1)
+            .build()
+            .unwrap();
+        let checked = pool.install(|| {
+            checked_against_serial(|| {
+                reused_producer_states_equal_a_full_solve();
+                solve_is_independent_of_input_order();
+            })
+        });
+        assert!(checked >= 13, "every solve was checked ({checked})");
     }
 
     /// L2 on the seeded solve: the fresh producers of `solve_seeded` (a
