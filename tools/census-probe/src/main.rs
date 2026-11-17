@@ -2655,6 +2655,162 @@ fn routine_fields(routines: Vec<al_sem::program::model::workspace::ModelRoutine>
 /// them, then one ask of each served kind (twice), then every retained part
 /// dropped in order, each drop delta printed. Live heap only: what the
 /// allocator keeps beyond it is the child's RSS minus these numbers.
+/// ENG-125: SCC counts of the sited graph (see the `sited-scc` mode in `main`).
+fn sited_scc_mode(ws: PathBuf, roots: Option<Vec<String>>, max_tier: Option<&str>) {
+    use al_sem::engine::resident::session::{
+        REVISION_NEEDS, REVISION_READ, build_sited, build_target_with,
+    };
+    use al_sem::program::impact_graph::reverse::{Tier, tier_over};
+    use al_sem::program::inputs::WorkspaceInputs;
+    use al_sem::program::session::WorkspaceSession;
+    let inputs = WorkspaceInputs::read(&ws, &REVISION_READ);
+    let mut session = WorkspaceSession::with_mode(al_sem::program::session::MemoryMode::Default);
+    let mut sited = None;
+    let _target = build_target_with(&mut session, &inputs, false, REVISION_NEEDS, &mut |p| {
+        sited = build_sited(p, &|| false);
+    })
+    .unwrap_or_else(|_| panic!("the model did not build"));
+    let g = sited.expect("the sited graph").graph;
+    let n = g.node_count();
+    let sites = g.sites();
+    println!("sited graph: {n} nodes, {} sites", sites.len());
+    // The sites a path of at most `max_tier` may cross (all, with no limit).
+    let allowed = |s: u32| -> bool {
+        match max_tier {
+            None => true,
+            Some("local") => tier_over(&g, s, Tier::Local) == Tier::Local,
+            Some("dep") => tier_over(&g, s, Tier::Local) != Tier::OnlyOpen,
+            Some(other) => panic!("--max-tier local|dep, not {other}"),
+        }
+    };
+    println!("site filter: {}", max_tier.unwrap_or("none"));
+    // The node set to analyse: every node, or what the roots reach backwards
+    // (over `sites_into`, as the reverse walk goes, the allowed sites only).
+    let mut keep = vec![roots.is_none(); n];
+    if let Some(ids) = &roots {
+        let mut stack: Vec<u32> = Vec::new();
+        let mut starts = 0usize;
+        for id in ids {
+            for r in g.nodes_with_stable_id(id) {
+                starts += 1;
+                if !keep[r as usize] {
+                    keep[r as usize] = true;
+                    stack.push(r);
+                }
+            }
+        }
+        while let Some(v) = stack.pop() {
+            for &s in g.sites_into(v) {
+                if !allowed(s) {
+                    continue;
+                }
+                let u = sites[s as usize].from;
+                if !keep[u as usize] {
+                    keep[u as usize] = true;
+                    stack.push(u);
+                }
+            }
+        }
+        println!(
+            "roots: {} ids, {starts} nodes; reached backwards: {} nodes",
+            ids.len(),
+            keep.iter().filter(|&&k| k).count()
+        );
+    }
+    // Iterative Tarjan over the kept nodes, edges `to -> from` (the walk's direction).
+    let unvisited = u32::MAX;
+    let (mut index, mut low) = (vec![unvisited; n], vec![0u32; n]);
+    let mut on_stack = vec![false; n];
+    let (mut stack, mut comp) = (Vec::<u32>::new(), vec![unvisited; n]);
+    let (mut next, mut comps) = (0u32, 0u32);
+    let mut sizes: Vec<u32> = Vec::new();
+    for start in 0..n as u32 {
+        if !keep[start as usize] || index[start as usize] != unvisited {
+            continue;
+        }
+        // (node, position in its successor list)
+        let mut call: Vec<(u32, usize)> = vec![(start, 0)];
+        index[start as usize] = next;
+        low[start as usize] = next;
+        next += 1;
+        stack.push(start);
+        on_stack[start as usize] = true;
+        while let Some(&mut (v, ref mut pos)) = call.last_mut() {
+            let succ = g.sites_into(v);
+            if *pos < succ.len() {
+                let s = succ[*pos];
+                let w = sites[s as usize].from;
+                *pos += 1;
+                if !keep[w as usize] || !allowed(s) {
+                    continue;
+                }
+                if index[w as usize] == unvisited {
+                    index[w as usize] = next;
+                    low[w as usize] = next;
+                    next += 1;
+                    stack.push(w);
+                    on_stack[w as usize] = true;
+                    call.push((w, 0));
+                } else if on_stack[w as usize] {
+                    low[v as usize] = low[v as usize].min(index[w as usize]);
+                }
+            } else {
+                call.pop();
+                if let Some(&(p, _)) = call.last() {
+                    low[p as usize] = low[p as usize].min(low[v as usize]);
+                }
+                if low[v as usize] == index[v as usize] {
+                    let mut size = 0u32;
+                    loop {
+                        let w = stack.pop().expect("tarjan stack");
+                        on_stack[w as usize] = false;
+                        comp[w as usize] = comps;
+                        size += 1;
+                        if w == v {
+                            break;
+                        }
+                    }
+                    sizes.push(size);
+                    comps += 1;
+                }
+            }
+        }
+    }
+    let kept = keep.iter().filter(|&&k| k).count();
+    let nontrivial = sizes.iter().filter(|&&s| s > 1).count();
+    let in_nontrivial: u64 = sizes
+        .iter()
+        .filter(|&&s| s > 1)
+        .map(|&s| u64::from(s))
+        .sum();
+    let mut by_size = sizes.clone();
+    by_size.sort_unstable_by(|a, b| b.cmp(a));
+    let mut dag_edges = 0u64;
+    for v in 0..n as u32 {
+        if !keep[v as usize] {
+            continue;
+        }
+        for &s in g.sites_into(v) {
+            let u = sites[s as usize].from;
+            if allowed(s) && keep[u as usize] && comp[u as usize] != comp[v as usize] {
+                dag_edges += 1;
+            }
+        }
+    }
+    println!(
+        "nodes analysed {kept}; SCCs {comps}; non-trivial (size > 1) {nontrivial} holding {in_nontrivial} nodes; \
+         largest {:?}; condensation edges (with repeats) {dag_edges}",
+        &by_size[..by_size.len().min(8)]
+    );
+    if let Some(ids) = &roots {
+        let words = ids.len().div_ceil(64);
+        println!(
+            "per-SCC root bitsets: {comps} SCCs x {words} words x 8 B = {:.1} MiB",
+            (u64::from(comps) * words as u64 * 8) as f64 / 1048576.0
+        );
+    }
+}
+
 fn resident_mode(ws: PathBuf, routine: String, low_mem: bool, with_sited: bool) {
     use al_sem::engine::batch::job::Job;
     use al_sem::engine::resident::revision::Revision;
@@ -4316,6 +4472,33 @@ fn main() {
             let ws = PathBuf::from(plain.next().expect("workspace"));
             let routine = plain.next().unwrap_or_else(|| "IssueReminder".into());
             resident_mode(ws, routine, low_mem, sited);
+            return;
+        }
+        Some("sited-scc") => {
+            // `sited-scc <ws> [roots-file]` (ENG-125): the sited graph's strongly
+            // connected components, whole and over the part the roots (StableRoutineIds,
+            // one per line) reach backwards: what a shared pass over the reverse walk's
+            // cones would work on, and what per-SCC root bitsets would cost.
+            // `--max-tier local|dep`: only the sites a path of that tier may cross
+            // (the walk's own rule, `reverse::tier_over` from a Local state).
+            let rest: Vec<String> = args.collect();
+            let max_tier = rest
+                .iter()
+                .position(|a| a == "--max-tier")
+                .map(|i| rest[i + 1].clone());
+            let mut plain = rest
+                .iter()
+                .filter(|a| *a != "--max-tier" && Some(*a) != max_tier.as_ref());
+            let ws = PathBuf::from(plain.next().expect("workspace"));
+            let roots = plain.next().map(|f| {
+                std::fs::read_to_string(f)
+                    .expect("roots file")
+                    .lines()
+                    .filter(|l| !l.is_empty())
+                    .map(str::to_string)
+                    .collect::<Vec<_>>()
+            });
+            sited_scc_mode(ws, roots, max_tier.as_deref());
             return;
         }
         Some("incr") => {
