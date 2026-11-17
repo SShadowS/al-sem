@@ -174,6 +174,13 @@ fn final_class_word(classes: &[Population], class: impl Fn(usize) -> u64) -> u64
 /// One root's nearest ancestors: each node with its best `(tier, hops)` so far.
 type Ancestors = Vec<(NodeIx, Tier, u32)>;
 
+/// Per page node: the roots it is an action-run entry of, and each site that first made it
+/// one for some roots, with those roots.
+type ActionSites = FxHashMap<NodeIx, (Vec<u64>, Vec<(SiteIx, Vec<u64>)>)>;
+
+/// One root's per-population nearest entries: per kind word, the entry and its witness.
+type FirstByKind = [BTreeMap<(usize, &'static str), (u32, Witness)>; 5];
+
 /// Pass 1's sink and its masks (see the module doc).
 pub(super) struct UpMulti<'g, 'a> {
     g: &'g SitedGraph,
@@ -189,7 +196,7 @@ pub(super) struct UpMulti<'g, 'a> {
     root_entry: Vec<BTreeSet<EntryKind>>,
     /// Per page node, each action-run site that first made it an entry for some roots
     /// (`Up::action_site`'s first `or_insert`), in event order, with those roots.
-    action_sites: FxHashMap<NodeIx, (Vec<u64>, Vec<(SiteIx, Vec<u64>)>)>,
+    action_sites: ActionSites,
     ancestors: Vec<Ancestors>,
     /// The roots whose ancestor list is not full yet.
     filling: Vec<u64>,
@@ -795,7 +802,7 @@ pub(super) struct UpMultiP2<'p, 'g, 'a> {
     /// Per root, per list, the two partitions: `tops[(k * N_LISTS + l) * 2 + open]`.
     tops: Vec<Top>,
     /// Per root, per population, per kind word: the nearest entry and its witness.
-    first_by_kind: Vec<[BTreeMap<(usize, &'static str), (u32, Witness)>; 5]>,
+    first_by_kind: Vec<FirstByKind>,
     /// Per root, per population with no entry, its nearest ancestor's witness.
     ancestor: Vec<[Option<Witness>; 5]>,
     adm: Vec<u64>,
@@ -821,6 +828,7 @@ impl<'p, 'g, 'a> UpMultiP2<'p, 'g, 'a> {
 
     /// An add of node `n` to list `l` at `(hops, tier)`, for `roots` (already without the
     /// roots a list leaves out).
+    #[allow(clippy::needless_range_loop)] // the word index also reads masks by node id
     fn list_add(&mut self, l: usize, n: NodeIx, hops: u32, tier: Tier, roots: &[u64]) {
         self.at += 1;
         let it = Item {
@@ -854,6 +862,7 @@ impl<'p, 'g, 'a> UpMultiP2<'p, 'g, 'a> {
     }
 
     /// A canonical entry `e` reached by a witness `w` (its `at` set here), for `roots`.
+    #[allow(clippy::needless_range_loop)] // the word index also reads masks by entry id
     fn canon_add(&mut self, e: u32, mut w: Witness, roots: &[u64]) {
         self.at += 1;
         w.at = self.at;
@@ -957,6 +966,7 @@ impl<'p, 'g, 'a> UpMultiP2<'p, 'g, 'a> {
 }
 
 impl MultiSink for UpMultiP2<'_, '_, '_> {
+    #[allow(clippy::needless_range_loop)] // the word index also reads masks by node id
     fn reach(
         &mut self,
         _: u32,

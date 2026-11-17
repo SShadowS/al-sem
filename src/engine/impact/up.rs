@@ -1523,19 +1523,19 @@ fn walk_chunk(
 
 /// ENG-125: the rows of one chunk's roots from [`up_multi`]'s two passes (what
 /// [`walk_chunk`] prints and `up_multi_tests` compares).
-pub(super) struct MultiRows {
-    pub(super) rows: Vec<Row>,
+struct MultiRows {
+    rows: Vec<Row>,
     /// Per root, its nearest ancestors with each one's best-tier hops.
-    pub(super) ancestors: Vec<Vec<(NodeIx, Tier, u32)>>,
+    ancestors: Vec<Vec<(NodeIx, Tier, u32)>>,
     /// The passes' mask bytes, and the two walks' peak.
-    pub(super) bytes: usize,
-    pub(super) peak: usize,
+    bytes: usize,
+    peak: usize,
 }
 
 /// The two passes over the roots of `lanes` (a root's `#if` arms are its lanes). A cancel
 /// seen after either pass marks every root not limited already `cancelled`, and skips pass
 /// 2 when it comes after pass 1: a cut run's rows never look complete.
-pub(super) fn multi_rows(
+fn multi_rows(
     g: &SitedGraph,
     keep: Keep,
     shared: &Shared<'_>,
