@@ -396,6 +396,10 @@ pub fn compute_ordering(
     // --- Per-routine grouping (insertion order = effects order). ---
     // groups: Vec<(routineId, Vec<index-into-occurrences>)>
     let mut groups: Vec<(String, Vec<usize>)> = Vec::new();
+    // ENG-116: owner -> its group's index. A `find` over `groups` per
+    // occurrence (and a `position` per occurrence below) compared strings
+    // O(occurrences x groups) times.
+    let mut group_of: crate::fxhash::FxHashMap<String, usize> = Default::default();
     for (i, occ) in occurrences.iter().enumerate() {
         if occ.ordered_op.is_none() {
             continue;
@@ -403,9 +407,10 @@ pub fn compute_ordering(
         let Some(owner) = resolve_owning_routine(&effects[i]) else {
             continue;
         };
-        if let Some(g) = groups.iter_mut().find(|(r, _)| *r == owner) {
-            g.1.push(i);
+        if let Some(&g) = group_of.get(&owner) {
+            groups[g].1.push(i);
         } else {
+            group_of.insert(owner.clone(), groups.len());
             groups.push((owner, vec![i]));
         }
     }
@@ -437,10 +442,9 @@ pub fn compute_ordering(
             let owner = resolve_owning_routine(eff)?;
 
             // terminalRoutineOps for the owning group, shared.
-            let terminal_routine_ops: std::sync::Arc<[OrderedOp]> = groups
-                .iter()
-                .position(|(r, _)| *r == owner)
-                .map_or_else(|| Vec::new().into(), |g| hb.group(g));
+            let terminal_routine_ops: std::sync::Arc<[OrderedOp]> = group_of
+                .get(&owner)
+                .map_or_else(|| Vec::new().into(), |&g| hb.group(g));
 
             if via_paths.is_empty() {
                 if owner != routine_id {
@@ -508,10 +512,9 @@ pub fn compute_ordering(
                 labels.push("ORDERING_UNKNOWN");
                 return labels;
             };
-            let group_idxs: Vec<usize> = groups
-                .iter()
-                .find(|(r, _)| *r == owner)
-                .map(|(_, v)| v.clone())
+            let group_idxs: Vec<usize> = group_of
+                .get(&owner)
+                .map(|&g| groups[g].1.clone())
                 .unwrap_or_default();
 
             // commit/write/io occurrences in the SAME group. A checked run's
