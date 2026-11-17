@@ -117,7 +117,7 @@ fn run(f: &Fx, roots: &[String], workers: ReachWorkers, captions: &Captions) -> 
 
 /// The answer with the run-measuring fields blanked, as the golden holds them.
 fn blanked(mut v: Value) -> Value {
-    for k in ["walkMs", "walksUs", "scratchBytes"] {
+    for k in ["walkMs", "walksUs", "scratchBytes", "visitorBytes"] {
         v["cost"][k] = Value::Null;
     }
     v
@@ -265,24 +265,37 @@ fn inside_a_rayon_worker_the_up_walk_is_serial() {
     assert_eq!(blanked(got), golden());
 }
 
-/// No more scratches than walks in flight: at two workers over five walked
-/// roots and the union, at most two are made.
+/// ENG-125: at two workers the five walked roots are two chunks (3 and 2 roots), each
+/// walked at once, and the rows are still master's. At one worker they are one chunk.
 ///
-/// DISCRIMINATION (2026-11-12): a fresh scratch per walk (never taking one
-/// back from the stash) fails (6 made); restored, passes.
+/// DISCRIMINATION (2026-11-17): `chunk_size` returning 1 (one root per walk) fails "two
+/// chunks" (5); restored, passes.
 #[test]
-fn scratches_are_reused_across_roots() {
+fn roots_are_walked_in_chunks() {
     let f = fx();
     let roots = root_ids();
-    let probe = Arc::new(PassProbe::default());
-    let got = run(
-        &f,
-        &roots,
-        ReachWorkers::new(2).with_probe(Arc::clone(&probe)),
-        &captions(&f),
-    );
-    assert_eq!(probe.up_tasks.load(SeqCst), 5, "precondition");
-    let made = probe.scratches_made.load(SeqCst);
-    assert!((1..=2).contains(&made), "{made} scratches made");
-    assert_eq!(blanked(got), golden());
+    for (workers, chunks) in [(2, 2), (1, 1)] {
+        let probe = Arc::new(PassProbe::default());
+        let got = run(
+            &f,
+            &roots,
+            ReachWorkers::new(workers).with_probe(Arc::clone(&probe)),
+            &captions(&f),
+        );
+        assert_eq!(
+            probe.up_tasks.load(SeqCst),
+            5,
+            "precondition: every root walked"
+        );
+        assert_eq!(
+            probe.up_chunks.load(SeqCst),
+            chunks,
+            "{workers} workers: {chunks} chunks"
+        );
+        assert_eq!(
+            blanked(got),
+            golden(),
+            "master's answer at {workers} workers"
+        );
+    }
 }

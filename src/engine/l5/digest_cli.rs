@@ -1929,11 +1929,12 @@ pub(crate) struct PassProbe {
     pub(crate) passes: std::sync::atomic::AtomicUsize,
     pub(crate) suffix_hits: std::sync::atomic::AtomicUsize,
     pub(crate) first_wave: std::sync::Mutex<Option<(usize, std::time::Duration)>>,
-    /// TLS-21, the up walk: tasks run, scratches made, the pool size each
-    /// task saw (`rayon::current_num_threads`).
+    /// TLS-21, the up walk: roots walked and done, the chunks walked (ENG-125: a task
+    /// walks a chunk of roots at once), the pool size each task saw
+    /// (`rayon::current_num_threads`).
     pub(crate) up_tasks: std::sync::atomic::AtomicUsize,
     pub(crate) up_done: std::sync::atomic::AtomicUsize,
-    pub(crate) scratches_made: std::sync::atomic::AtomicUsize,
+    pub(crate) up_chunks: std::sync::atomic::AtomicUsize,
     pub(crate) pool_threads: std::sync::Mutex<Vec<usize>>,
     /// Hold the first root's walk until every other root's walk is done (or
     /// the timeout passes: `first_root_timed_out`), so it finishes last.
