@@ -1249,10 +1249,14 @@ fn seed_of<'a>(
 /// address (the producer is the walk's).
 type SolveKey = (*const u8, TempState, Vec<Req>);
 
-/// One worker's scratch for [`solve_producer`] (ENG-121): its visited set, its edge index
-/// and each state's name, cleared per producer and reused, so a producer's walk does not
-/// grow them again from empty. On CDO their rehashes and growth were about 2 % of a one-shot
-/// prove's CPU and 3 % of analyze's (CHANGELOG ENG-121).
+/// The fewest producers one [`SolveScratch`] walks (a small solve is one chunk, so its
+/// producers share a scratch too).
+const MIN_SOLVE_CHUNK: usize = 4;
+
+/// One chunk's scratch for [`solve_producer`] (ENG-121): its visited set, its edge index and
+/// each state's name, cleared per producer and reused across the chunk, so a producer's walk
+/// does not grow them again from empty. On CDO their rehashes and growth were about 2 % of a
+/// one-shot prove's CPU and 3 % of analyze's (CHANGELOG ENG-121).
 #[derive(Default)]
 struct SolveScratch<'a> {
     ix_of: crate::fxhash::FxHashMap<SolveKey, StateIx>,
@@ -1694,20 +1698,34 @@ fn solve_core<'g>(
     match walk {
         Walk::Parallel => {
             use rayon::prelude::*;
-            // ENG-121: each worker's `SolveScratch` serves every producer it walks; the
-            // walks' answers do not depend on it (it is cleared per producer).
+            // ENG-121: the producers in chunks (about eight per thread, at least
+            // `MIN_SOLVE_CHUNK`), each walked by one `SolveScratch`, so a scratch grows
+            // to its chunk's largest walk once instead of from empty per producer. (Rayon's
+            // `map_init` makes one per split, and work stealing splits it small: on CDO
+            // it removed little.) The walks' answers do not depend on it (it is cleared
+            // per producer); the chunks keep producer order.
+            let per = fresh_ps
+                .len()
+                .div_ceil(rayon::current_num_threads().max(1) * 8)
+                .max(MIN_SOLVE_CHUNK);
             let solved: Vec<FreshSolve<'g>> = fresh_ps
-                .par_iter()
-                .map_init(SolveScratch::default, |scratch, &p| {
-                    solve_producer(
-                        p,
-                        &arena.producers[p],
-                        &names,
-                        &incoming,
-                        routines_by_id,
-                        frames,
-                        scratch,
-                    )
+                .par_chunks(per)
+                .flat_map_iter(|chunk| {
+                    let mut scratch = SolveScratch::default();
+                    chunk
+                        .iter()
+                        .map(|&p| {
+                            solve_producer(
+                                p,
+                                &arena.producers[p],
+                                &names,
+                                &incoming,
+                                routines_by_id,
+                                frames,
+                                &mut scratch,
+                            )
+                        })
+                        .collect::<Vec<_>>()
                 })
                 .collect();
             drop(walk_span);
@@ -3275,17 +3293,18 @@ mod tests {
     /// and the hand-stated canonical-order case (four producers sharing
     /// edges, one edge present twice in the graph, cycles) each equal the
     /// serial walk.
-    /// ENG-121: one worker's `SolveScratch` serves every producer it walks, cleared per
-    /// producer. In a one-thread pool the fresh producers share a worker (rayon splits the
-    /// work into at most two pieces there, each with one scratch), so the hand-stated solves
-    /// (four producers sharing edges, whose walks reach the same states) run on a reused
-    /// scratch, each checked against the serial walk.
+    /// ENG-121: one `SolveScratch` serves every producer of its chunk, cleared per producer.
+    /// A chunk holds at least `MIN_SOLVE_CHUNK` (4) producers, so the hand-stated solves (four
+    /// producers sharing edges, whose walks reach the same states) run on one reused scratch,
+    /// each checked against the serial walk; here in a one-thread pool, so the chunks also run
+    /// one after another on one worker.
     ///
-    /// DISCRIMINATION (2026-11-17), each red here, then green on revert; none fails the other
-    /// pd_solve tests, whose producers each get a fresh scratch: not clearing, between
-    /// producers, (1) the visited set (an index past the producer's states), (2) the state
-    /// names (the arena differs from the serial walk's), (3) the edge index (an index past the
-    /// producer's edges).
+    /// DISCRIMINATION (2026-11-17, with `map_init`'s per-split scratch, red in its one-thread
+    /// pool), each red here, then green on revert; none failed the other pd_solve tests:
+    /// not clearing, between producers, (1) the visited set (an index past the producer's
+    /// states), (2) the state names (the arena differs from the serial walk's), (3) the edge
+    /// index (an index past the producer's edges). On the chunked form, (1) again: red here and
+    /// in five more pd_solve tests (chunks of four or more make reuse the common case).
     #[test]
     fn a_reused_solve_scratch_equals_the_serial_walk() {
         let pool = rayon::ThreadPoolBuilder::new()
