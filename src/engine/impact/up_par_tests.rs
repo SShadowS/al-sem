@@ -117,7 +117,7 @@ fn run(f: &Fx, roots: &[String], workers: ReachWorkers, captions: &Captions) -> 
 
 /// The answer with the run-measuring fields blanked, as the golden holds them.
 fn blanked(mut v: Value) -> Value {
-    for k in ["walkMs", "walksUs", "scratchBytes"] {
+    for k in ["walkMs", "walksUs", "scratchBytes", "visitorBytes"] {
         v["cost"][k] = Value::Null;
     }
     v

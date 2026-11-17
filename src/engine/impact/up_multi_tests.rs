@@ -183,6 +183,62 @@ pub(crate) fn fixture(dir: &str) -> (SitedGraph, Captions) {
     (g, Captions::new(texts))
 }
 
+/// ENG-125 Task 4, on the pinned CDO baseline: every root's row from the two passes, in one
+/// chunk, is the bytes of its own walk's, for an even sample of about 256 workspace routines
+/// (four words of roots), with real captions.
+#[test]
+fn multi_rows_equal_the_per_root_visitor_on_cdo() {
+    let Some(ws) = crate::cdo::cdo_ws_or_enforce() else {
+        return;
+    };
+    crate::big_stack::run_with_big_stack(move || {
+        let inputs = crate::program::inputs::WorkspaceInputs::read(
+            &ws,
+            &crate::engine::resident::session::REVISION_READ,
+        );
+        let p = crate::program::resolved::ResolvedProgram::build(
+            &inputs,
+            crate::program::resolved::ProgramScope::CrossApp,
+        )
+        .expect("CDO builds");
+        let g = crate::program::impact_graph::sited_from_program(&p, &|| false).expect("built");
+        let texts: HashMap<String, Arc<str>> = inputs
+            .al_files
+            .iter()
+            .filter_map(|f| {
+                f.text
+                    .as_ref()
+                    .ok()
+                    .map(|t| (f.rel_posix.clone(), Arc::clone(t)))
+            })
+            .collect();
+        let workspace: Vec<NodeIx> = (0..g.node_count() as u32)
+            .filter(|&n| g.stable_id(n).is_some() && g.node_app(n) == Some(g.primary_app()))
+            .collect();
+        let step = (workspace.len() / 256).max(1);
+        let roots: Vec<Vec<NodeIx>> = workspace.iter().step_by(step).map(|&n| vec![n]).collect();
+        let seen = assert_rows_equal(
+            &g,
+            &roots,
+            &WalkOptions::default(),
+            Keep::new(false),
+            &Captions::new(texts),
+        );
+        assert!(
+            seen.roots > 192,
+            "precondition: more than three words of roots"
+        );
+        assert!(
+            seen.publishers > 0 && seen.externals > 0,
+            "precondition: real lists"
+        );
+        assert!(
+            seen.full_lists > 0,
+            "precondition: a list with more nodes than it shows"
+        );
+    });
+}
+
 /// Every root's row, as bytes, on five real fixtures: with the default options, with no
 /// dependents (no external callers), at a small state budget, with ancestor lists of two (they
 /// fill), and with the detail lists (ten witnesses).

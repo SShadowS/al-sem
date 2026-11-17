@@ -1,19 +1,20 @@
 //! **Who reaches each changed routine** (agent-tasks design §8.4 step 2): R0's
 //! reverse walks over the production universe's sited graph.
 //!
-//! - Per root, its own walk and a visitor. ENG-125: the roots are walked in chunks of up
-//!   to [`CHUNK`], each chunk by ONE [`multi_walk::multi_walk`] whose events go to every
-//!   root's own visitor ([`Demux`]), so each visitor sees exactly its own walk while the
-//!   graph is traversed once per chunk (TLS-21: chunks run at once on the one-shot CLI).
-//!   The visitor keeps COUNTS and the first few witnesses only
-//!   ([`RootUp`]): its direct callers (explain's `callers:` definition,
+//! - Per root, what its own walk finds. ENG-125: the roots are split into at most
+//!   [`CHUNKS`] chunks (TLS-21: they run at once on the one-shot CLI), and each chunk is
+//!   walked by ONE [`multi_walk::multi_walk`] for all its roots, twice ([`up_multi`]: root
+//!   masks, then the witness lists), instead of one walk and one visitor per root. Each
+//!   root's [`Row`] is what its own walk and [`Up`] give ([`row_of_up`], the test oracle),
+//!   printed by the same [`row_json`]. A row keeps COUNTS and the first few witnesses
+//!   only: its direct callers (explain's `callers:` definition,
 //!   [`direct_callers`], with each caller's first call site), ancestors by
 //!   tier, entries by kind (page actions by caption), event publishers that
 //!   raise into the cone, external callability, hidden channels, the walk's
 //!   limit, and its nearest ancestors with a stable id (what "nearest tested
 //!   caller" maps into a test universe). Nothing per root outlives its walk
 //!   but that summary (Fable f10: no cone per root is kept).
-//! - Once over every root, [`walk_multi`]: the union (how many distinct
+//! - Once over every root, [`walk_multi`] with an [`Up`]: the union (how many distinct
 //!   entries the whole change is reachable from).
 //!
 //! **Relation and tier** (round-2 r2 §2.1, W2): the visitor's
@@ -35,7 +36,7 @@ use serde_json::{Value, json};
 
 use crate::engine::test_select::select::{direct_callers, display};
 use crate::program::impact_graph::entries::EntryInventory;
-use crate::program::impact_graph::multi_walk::{self, MultiSink};
+use crate::program::impact_graph::multi_walk;
 use crate::program::impact_graph::reverse::{
     ConeVisitor, EntryKind, ExternalWhy, HiddenChannel, Limit, NodeIx, SiteIx, Tier, Via,
     WalkOptions, WalkScratch, WalkState, object_run_reaches, tier_over, walk_multi,
@@ -1396,8 +1397,8 @@ pub struct UpArgs<'a> {
     pub config_entries: &'a [(String, u16)],
 }
 
-/// One root's result (TLS-21): its row and what its walk cost. A chunk's walk time and
-/// walk bytes sit on its first root.
+/// One root's result (TLS-21): its row and what its walk cost. A chunk's walk time, its
+/// passes' mask bytes and its walks' peak sit on its first root.
 struct RootOut {
     row: Value,
     states: usize,
@@ -1406,98 +1407,17 @@ struct RootOut {
     walk_bytes: usize,
 }
 
-/// ENG-125: the most roots one [`multi_walk`] serves. Each holds its own [`Up`] until the
-/// chunk's walk ends, so a chunk's visitors are alive at once (memory), while every chunk
-/// pays one traversal of the union of its roots' cones (CPU). Measured on CDO: see the
-/// CHANGELOG's ENG-125 entry.
-const CHUNK: usize = 16;
+/// ENG-125: the most chunks the walked roots are split into. A chunk is walked twice by
+/// [`multi_walk::multi_walk`] ([`up_multi`]'s two passes), serially, so more chunks run on
+/// more workers (wall time); but each chunk traverses nearly the whole cone the roots share,
+/// so each one costs about the traversal again (CPU). The smallest count whose wall time is
+/// master's (CHANGELOG ENG-125).
+const CHUNKS: usize = 2;
 
-/// The roots per chunk for `walked` roots on `workers` workers: [`CHUNK`] at most, and
-/// fewer when there are fewer roots than that per worker, so every worker has a chunk.
+/// The roots per chunk for `walked` roots on `workers` workers: [`CHUNKS`] chunks at most,
+/// one per worker.
 fn chunk_size(walked: usize, workers: usize) -> usize {
-    walked.div_ceil(workers.max(1)).clamp(1, CHUNK)
-}
-
-/// ENG-125: a multi walk's events, each handed to the visitor of every root it holds for, so
-/// each [`Up`] sees exactly its own walk's callbacks (`multi_walk_tests`).
-struct Demux<'v, 'g>(&'v mut [Up<'g>]);
-
-impl MultiSink for Demux<'_, '_> {
-    fn reach(
-        &mut self,
-        lane: u32,
-        s: WalkState,
-        hops: u32,
-        via: Via,
-        from: Option<WalkState>,
-        roots: &[u64],
-    ) {
-        for k in multi_walk::ones(roots) {
-            self.0[k].reach(lane, s, hops, via, from);
-        }
-    }
-    fn rejoin(&mut self, lane: u32, s: WalkState, hops: u32, site: SiteIx, roots: &[u64]) {
-        for k in multi_walk::ones(roots) {
-            self.0[k].rejoin(lane, s, hops, site);
-        }
-    }
-    fn hidden(&mut self, lane: u32, n: NodeIx, ch: HiddenChannel, roots: &[u64]) {
-        for k in multi_walk::ones(roots) {
-            self.0[k].hidden(lane, n, ch);
-        }
-    }
-    fn entry(
-        &mut self,
-        lane: u32,
-        n: NodeIx,
-        kinds: &[EntryKind],
-        s: WalkState,
-        hops: u32,
-        roots: &[u64],
-    ) {
-        for k in multi_walk::ones(roots) {
-            self.0[k].entry(lane, n, kinds, s, hops);
-        }
-    }
-    fn external(
-        &mut self,
-        lane: u32,
-        n: NodeIx,
-        why: ExternalWhy,
-        s: WalkState,
-        hops: u32,
-        roots: &[u64],
-    ) {
-        for k in multi_walk::ones(roots) {
-            self.0[k].external(lane, n, why, s, hops);
-        }
-    }
-    fn action_entry(&mut self, lane: u32, n: NodeIx, s: WalkState, hops: u32, roots: &[u64]) {
-        for k in multi_walk::ones(roots) {
-            self.0[k].entry(lane, n, &[EntryKind::PageAction], s, hops);
-        }
-    }
-    fn source(&mut self, lane: u32, s: WalkState, hops: u32, roots: &[u64]) {
-        for k in multi_walk::ones(roots) {
-            self.0[k].source(lane, s, hops);
-        }
-    }
-    fn limit(&mut self, root: usize, l: Limit) {
-        self.0[root].limit(l);
-    }
-    fn step(&mut self, g: &SitedGraph, from: WalkState, site: SiteIx, roots: &[u64]) -> Option<u8> {
-        // `Up::step` answers from `(from, site)` alone; each root still records its own step.
-        let mut answer = None;
-        for k in multi_walk::ones(roots) {
-            let a = self.0[k].step(g, from, site);
-            debug_assert!(
-                answer.is_none() || answer == Some(a),
-                "a step answer per root"
-            );
-            answer = Some(a);
-        }
-        answer.flatten()
-    }
+    walked.div_ceil(CHUNKS.min(workers).max(1)).max(1)
 }
 
 /// A walk's options from the up part's arguments. Each task builds its own:
@@ -1511,8 +1431,10 @@ fn walk_options<'a>(args: &UpArgs<'a>, extra: &'a HashMap<NodeIx, u16>) -> WalkO
     }
 }
 
-/// ENG-125: one chunk of roots walked at once ([`multi_walk`]; a root's `#if` arms are its
-/// lanes) and each root's row, in chunk order.
+/// ENG-125: one chunk of roots (a root's `#if` arms are its lanes) and each root's row, in
+/// chunk order: [`up_multi`]'s two passes, each one [`multi_walk::multi_walk`] over every
+/// root of the chunk. A cancelled walk skips pass 2: no caller compares a cancelled run's
+/// rows (the CLI never cancels; the resident engine discards a stopped read).
 fn walk_chunk(
     g: &SitedGraph,
     args: &UpArgs<'_>,
@@ -1521,50 +1443,66 @@ fn walk_chunk(
     chunk: &[&(&String, Vec<NodeIx>)],
 ) -> Vec<RootOut> {
     let opts = walk_options(args, shared.extra);
-    let mut ups: Vec<Up<'_>> = chunk
-        .iter()
-        .map(|(_, nodes)| Up::new(g, args.keep, nodes, shared))
-        .collect();
     let lanes: Vec<Vec<NodeIx>> = chunk.iter().map(|(_, nodes)| nodes.clone()).collect();
     let t = std::time::Instant::now();
-    let stats = multi_walk::multi_walk(g, &lanes, &opts, &mut Demux(&mut ups));
+    let mut p1 = up_multi::UpMulti::new(g, args.keep, shared, &opts, &lanes);
+    let s1 = multi_walk::multi_walk(g, &lanes, &opts, &mut p1);
+    let (mut rows, finals) = p1.rows_p1(&s1.roots);
+    let mut peak = s1.peak_bytes;
+    if !opts.cancel.is_some_and(|c| c()) {
+        let mut p2 = up_multi::UpMultiP2::new(&p1, &finals);
+        peak = peak.max(multi_walk::multi_walk(g, &lanes, &opts, &mut p2).peak_bytes);
+        p2.fill(&mut rows);
+    }
     let walk_us = t.elapsed().as_micros() as u64;
-    ups.iter()
+    let bytes = p1.bytes();
+    rows.iter()
         .zip(chunk)
         .enumerate()
-        .map(|(i, (v, (id, nodes)))| RootOut {
-            row: root_row(g, args, v, id, nodes, captions),
-            states: v.states,
-            visitor_bytes: v.bytes(),
+        .map(|(i, (row, (id, nodes)))| RootOut {
+            row: root_row(
+                g,
+                args,
+                shared,
+                row,
+                p1.nearest_ancestors(i),
+                id,
+                nodes,
+                captions,
+            ),
+            states: row.states,
+            visitor_bytes: if i == 0 { bytes } else { 0 },
             walk_us: if i == 0 { walk_us } else { 0 },
-            walk_bytes: if i == 0 { stats.peak_bytes } else { 0 },
+            walk_bytes: if i == 0 { peak } else { 0 },
         })
         .collect()
 }
 
-/// One walked root's row, from its visitor.
+/// One walked root's row: its [`Row`], and its nearest ancestors with each one's best-tier
+/// hops.
+#[allow(clippy::too_many_arguments)]
 fn root_row(
     g: &SitedGraph,
     args: &UpArgs<'_>,
-    v: &Up<'_>,
+    shared: &Shared<'_>,
+    row: &Row,
+    ancestors: &[(NodeIx, Tier, u32)],
     id: &str,
     nodes: &[NodeIx],
     captions: &Captions,
 ) -> Value {
-    let mut s = summary(v, g, captions);
+    let mut s = row_json(row, g, shared, captions);
     s["stableId"] = json!(id);
     s["status"] = json!("walked");
     s["display"] = json!(display(g, nodes[0]));
     s["nodes"] = json!(nodes.len());
     s["callers"] = callers_json(g, nodes, args.keep.per_list);
     s["nearestAncestors"] = json!(
-        v.ancestors
+        ancestors
             .iter()
-            .filter_map(|&n| {
-                g.stable_id(n).map(|id| {
-                    json!({"stableId": id, "display": display(g, n),
-                           "hops": v.best.get(&n).map(|b| b.hops)})
-                })
+            .filter_map(|&(n, _, hops)| {
+                g.stable_id(n)
+                    .map(|id| json!({"stableId": id, "display": display(g, n), "hops": Some(hops)}))
             })
             .collect::<Vec<_>>()
     );
@@ -1788,8 +1726,6 @@ pub fn up(g: &SitedGraph, args: &UpArgs<'_>, captions: &Captions) -> Value {
 #[path = "up_par_tests.rs"]
 pub(crate) mod up_par_tests;
 
-// ENG-125 pass 1: not wired into `up` until the plan's go/no-go (Task 2 Step 6) passes.
-#[allow(dead_code)]
 #[path = "up_multi.rs"]
 mod up_multi;
 
