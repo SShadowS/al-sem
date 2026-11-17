@@ -314,7 +314,7 @@ fn coverage_reasons(
     let Some(coverage) = &summary.coverage else {
         return "coverage unknown".to_string();
     };
-    let reasons: BTreeSet<&str> = coverage.reasons.iter().map(String::as_str).collect();
+    let reasons: BTreeSet<&str> = coverage.reasons.iter().map(|s| s.as_str()).collect();
     let mut out = if reasons.is_empty() {
         "incomplete coverage".to_string()
     } else {
@@ -376,7 +376,7 @@ fn coverage_reasons(
         .filter(|t| !(drop_self && **t == routine.id))
         .map(|t| match ctx.routine_by_id.get(t.as_str()) {
             Some(r) => format!("{} ({} {})", r.name, r.object_type, r.object_number),
-            None => t.clone(),
+            None => t.to_string(),
         })
         .collect();
     push_capped(&mut out, "unresolved", sites.values().map(String::as_str));
@@ -504,8 +504,8 @@ mod tests {
     /// A partial coverage record with the given reasons and unknown targets.
     fn partial(reasons: &[&str], targets: &[&str]) -> FullRoutineSummary {
         let mut cov = coverage("partial");
-        cov.reasons = reasons.iter().map(|s| s.to_string()).collect();
-        cov.unknown_targets = targets.iter().map(|s| s.to_string()).collect();
+        cov.reasons = reasons.iter().map(|s| (*s).into()).collect();
+        cov.unknown_targets = targets.iter().map(|s| (*s).into()).collect();
         summary("sub", vec![], vec![], Some(cov))
     }
 

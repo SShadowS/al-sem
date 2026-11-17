@@ -1923,8 +1923,8 @@ mod tests {
             let cov = |status: &str| {
                 Some(CoverageRecord {
                     subject: "r".to_string(),
-                    direct_status: status.to_string(),
-                    inherited_status: status.to_string(),
+                    direct_status: status.into(),
+                    inherited_status: status.into(),
                     reasons: Vec::new(),
                     unknown_targets: Vec::new(),
                 })

@@ -9587,8 +9587,8 @@ codeunit 50410 DupProducer
         ];
         let opaque = |s: &str| crate::engine::l5::snapshot::SnapshotCoverageRecord {
             subject: s.to_string(),
-            direct_status: "unknown".to_string(),
-            inherited_status: "unknown".to_string(),
+            direct_status: "unknown".into(),
+            inherited_status: "unknown".into(),
             reasons: vec![],
             unknown_targets: vec![],
         };
@@ -9664,8 +9664,8 @@ codeunit 50410 DupProducer
     fn opaque_coverage(s: &str) -> crate::engine::l5::snapshot::SnapshotCoverageRecord {
         crate::engine::l5::snapshot::SnapshotCoverageRecord {
             subject: s.to_string(),
-            direct_status: "unknown".to_string(),
-            inherited_status: "unknown".to_string(),
+            direct_status: "unknown".into(),
+            inherited_status: "unknown".into(),
             reasons: vec![],
             unknown_targets: vec![],
         }

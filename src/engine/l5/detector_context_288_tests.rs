@@ -817,9 +817,9 @@ fn seen(m: &Model, names: &[&str]) -> Vec<Seen> {
                 .collect();
             assert!(d35.len() <= 1, "one d35 finding per subscriber");
             Seen {
-                direct_status: c.direct_status.clone(),
-                inherited_status: c.inherited_status.clone(),
-                reasons: c.reasons.clone(),
+                direct_status: c.direct_status.to_string(),
+                inherited_status: c.inherited_status.to_string(),
+                reasons: c.reasons.iter().map(|s| s.to_string()).collect(),
                 commits: may_commit_derived(&ctx.cone_derived, s),
                 d35: d35.pop(),
             }
@@ -937,7 +937,11 @@ fn p3_snapshot_base_drops_a_trusted_dead_gap() {
             c.inherited_status.as_str(),
             c.reasons.as_slice()
         ),
-        ("complete", "complete", &[] as &[String]),
+        (
+            "complete",
+            "complete",
+            &[] as &[crate::program::str_pool::SharedStr]
+        ),
         "OnAfterPostDead: the snapshot base drops the dead gap"
     );
 }
@@ -993,7 +997,10 @@ fn p4_cross_app_base_drops_a_trusted_dead_dependency_gap() {
     view.prepare(&analyze_plan(vec![d35], true));
     let c = view.det().summaries[&inner_id].coverage.clone().unwrap();
     assert_eq!(
-        (c.direct_status, c.reasons),
+        (
+            c.direct_status.to_string(),
+            c.reasons.iter().map(|s| s.to_string()).collect::<Vec<_>>()
+        ),
         want,
         "the view's detector context drops Inner's dead gap"
     );
@@ -1287,7 +1294,13 @@ fn collided_work(arm_b: &str) -> (Vec<ModelRoutine>, CoverageRecordOwned) {
     let owned = build_detector_context(&m, substrate::ALL);
     let ctx = owned.ctx();
     let c = ctx.summaries[&rows[0].id].coverage.clone().unwrap();
-    (rows, (c.direct_status, c.reasons))
+    (
+        rows,
+        (
+            c.direct_status.to_string(),
+            c.reasons.iter().map(|s| s.to_string()).collect(),
+        ),
+    )
 }
 
 type CoverageRecordOwned = (String, Vec<String>);

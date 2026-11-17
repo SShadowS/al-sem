@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (ENG-108: coverage records share their texts, 102.1 MiB less resident memory on CDO)
+
+- **What changed** (no output change). `CoverageRecord` (`src/engine/l4/capability_cone.rs`),
+  `SnapshotCoverageRecord` (`src/engine/l5/snapshot.rs`) and the fold's `CoverageCone` hold
+  `SharedStr` for the direct and inherited status, the reasons and the unknown targets (`subject`
+  stays a `String`). The texts come from `shared_coverage_text` (`features.rs`), a per-thread set
+  of its own capped at 16,384: past the cap a text is still answered right, only no longer
+  shared. A routine's record copied from its cone is now a refcount bump per entry, and the tree
+  base shares each target's stable id. `SharedStr` serializes, orders, hashes and prints as its
+  text, so the snapshot's bytes, the product fingerprint's hash and the incremental fold's
+  cut-off are unchanged; the projections that keep `String`s (`PCoverageRecord`,
+  `fingerprint_query`'s block) convert at their edge.
+- **Why.** Each of three stores held 34,203 records whose `unknown_targets` were 312,289 strings
+  over only 192 distinct texts (ENG-108 census; ENG-107 and ENG-114 had found the stores):
+  `fold.coverage` 46.57, the detector summaries' coverage 38.78, `tree_base.coverage` 53.70 MiB.
+- **Measured** (`tools/census-probe resident`, release, master `3af92349` vs this branch, back to
+  back; `tools/census-probe/runs-eng108/`): live after one ask of each kind 4,116.0 → 4,013.9 MiB
+  (−102.1 MiB), allocations −1,265,456; the three stores 139.05 → 44.37 MiB. Bar: 75 MiB. On CDO
+  (`scripts/cdo-before-after 3af92349`, workspace `bc3ccb18` clean on both sides) no finding or
+  fingerprint moved at either scope and the call graph is unchanged (0 unknown); `aldump
+  --session-refresh --verify` gives a model equal to a cold build after every change type, in the
+  default and `--low-mem` modes. `scripts/cdo-speed` (`3af92349` against `2ce4c135`) passed
+  twice: the model build x0.998 and x1.082 (one pass at x1.147), the round totals x1.032 and
+  x1.008, so no speed ratio is claimed; the servers' summed peak memory x0.972 and x0.939.
+- **Tests.** `the_shared_coverage_texts_stop_growing_at_their_cap` (below the cap shared, past it
+  answered and not kept; break: no cap → red), and `step5_t1_spans_and_d9_read_the_fold` now
+  pins that a real fold's records share (Root's and Helper's equal statuses and Root's inherited
+  reason are one allocation each; break: `coverage_record` mints its own text → red). The
+  summaries' census tally counts each distinct shared text once (sol), by content, not by
+  address: how many allocations hold a text depends on which parallel-walk worker minted it, and
+  `cli_batch_census::batch_arc_census` needs the census deterministic.
+- **Limits** (Fable): the parallel cone walk's workers each start an empty set, so a status or
+  reason text is copied once per worker per walk (the unknown targets are shared by handle from
+  the successor cones); the long-lived serial thread's set keeps at most 16,384 texts. The direct
+  coverage map (`RoutineDirectCoverage`) still holds `String` statuses and reasons; it was not
+  measured.
+
 ### Changed (ENG-117: `alsem impact --diff` takes 0.92-0.94x the CPU on CDO; FxHash for the searches' lookup maps)
 
 - **Found** in TLS-86's profile: SipHash was 10.3 % of the gate's 699-root `impact --diff` CPU,

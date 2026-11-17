@@ -127,6 +127,20 @@ pub fn shared_table_text(text: &str) -> crate::program::str_pool::SharedStr {
     TABLES.with(|tables| shared_in(tables, SHARED_TABLE_TEXT_CAP, text))
 }
 
+/// ENG-108: a coverage record's status word, reason or unknown target, one allocation per text
+/// per thread. Its own set and cap (user text: an unknown target is a routine id), so it never
+/// crowds the other sets out. On CDO the three coverage stores repeat 3 reasons and 188 targets.
+pub fn shared_coverage_text(text: &str) -> crate::program::str_pool::SharedStr {
+    thread_local! {
+        static COVERAGE: SharedSet = SharedSet::default();
+    }
+    COVERAGE.with(|texts| shared_in(texts, SHARED_COVERAGE_TEXT_CAP, text))
+}
+
+/// Texts [`shared_coverage_text`] keeps per thread; past it a text is still right, only no
+/// longer shared.
+pub const SHARED_COVERAGE_TEXT_CAP: usize = 16_384;
+
 /// Texts [`shared_table_text`] keeps per thread: CDO with its dependencies has about 2,300
 /// (1,149 table names, 1,120 table ids); a workspace past this still answers right, it only
 /// stops sharing the further texts.
@@ -1319,6 +1333,34 @@ mod tests {
         })
         .join()
         .expect("the vocabulary thread");
+    }
+
+    /// ENG-108: the coverage-text set is bounded the same way. Its texts are open (an unknown
+    /// target is a routine id), so a workspace past `SHARED_COVERAGE_TEXT_CAP` distinct texts on
+    /// one thread still gets every text answered right, only no longer shared, while the texts
+    /// kept before stay shared. DISCRIMINATION: dropping the cap check keeps "past" shared.
+    #[test]
+    fn the_shared_coverage_texts_stop_growing_at_their_cap() {
+        use super::{SHARED_COVERAGE_TEXT_CAP, shared_coverage_text};
+        use crate::program::str_pool::SharedStr;
+        std::thread::spawn(|| {
+            for i in 0..SHARED_COVERAGE_TEXT_CAP {
+                shared_coverage_text(&format!("app/Codeunit/{i}/proc"));
+            }
+            let first = (
+                shared_coverage_text("app/Codeunit/0/proc"),
+                shared_coverage_text("app/Codeunit/0/proc"),
+            );
+            assert!(SharedStr::ptr_eq(&first.0, &first.1), "kept below the cap");
+            let past = (shared_coverage_text("past"), shared_coverage_text("past"));
+            assert_eq!(past.0.as_str(), "past", "answered right past the cap");
+            assert!(
+                !SharedStr::ptr_eq(&past.0, &past.1),
+                "not kept past the cap"
+            );
+        })
+        .join()
+        .expect("the coverage-text thread");
     }
 
     fn ts(kind: &str, value: Option<bool>, param: Option<u32>) -> PTempState {
