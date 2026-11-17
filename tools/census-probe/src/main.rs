@@ -3006,7 +3006,33 @@ fn eng107_split(
                     step("tree.capability_facts", capability_facts);
                     step("tree.operation_index", operation_index);
                     step("tree.callsite_index", callsite_index);
-                    step("tree.pd_solution", pd_solution);
+                    // ENG-111: the projected arena by part; what its routine strings repeat.
+                    {
+                        use std::collections::HashSet;
+                        let routines: Vec<&str> =
+                            pd_solution.states.iter().map(|s| &*s.routine).collect();
+                        let text: usize = routines.iter().map(|r| r.len()).sum();
+                        let distinct: HashSet<&str> = routines.iter().copied().collect();
+                        let dtext: usize = distinct.iter().map(|r| r.len()).sum();
+                        println!(
+                            "    ENG-111 pd_solution: {} states (size_of StateNode {} B), routine strings {:.2} MiB text over {} distinct ({:.2} MiB); {} links; by_routine {} keys",
+                            pd_solution.states.len(),
+                            size_of::<al_sem::engine::l5::snapshot::StateNode>(),
+                            mib(text as isize),
+                            distinct.len(),
+                            mib(dtext as isize),
+                            pd_solution.links.len(),
+                            pd_solution.by_routine.len(),
+                        );
+                    }
+                    let al_sem::engine::l5::snapshot::PdArena {
+                        states,
+                        links,
+                        by_routine,
+                    } = pd_solution;
+                    step("tree.pd_solution.by_routine", by_routine);
+                    step("tree.pd_solution.links", links);
+                    step("tree.pd_solution.states (incl. routine strings)", states);
                     step("tree.commit_scopes", commit_scopes);
                     // Shared with the base: their bytes fall when the base drops.
                     step(

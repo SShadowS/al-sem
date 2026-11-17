@@ -1296,7 +1296,10 @@ pub type StateIx = usize;
 /// Index into `CapabilitySnapshot::typed_edges` (after its sort and filter).
 pub type EdgeIx = usize;
 /// Stable routine id (the snapshot's routine identity).
-pub type RoutineId = String;
+/// A state's stable routine id, shared (ENG-111): on CDO 1,229,877 projected states name only
+/// 4,685 routines, and as one `String` each they held 133 MiB of id text. A `SharedStr`
+/// compares, hashes, orders, prints and serializes as its text.
+pub type RoutineId = crate::program::str_pool::SharedStr;
 
 /// #69 D2: the producer solve in snapshot ids. A state says: in `routine`'s
 /// frame, the producer's write has temp state `temp_state`. Guards are not
@@ -1994,7 +1997,7 @@ impl TreeBase {
             boundary,
             view,
         } = self;
-        vec![
+        let parts: Vec<(&'static str, Box<dyn std::any::Any>)> = vec![
             ("tree_base.identities", Box::new(identities)),
             ("tree_base.typed_edges", Box::new(typed_edges)),
             (
@@ -2013,8 +2016,9 @@ impl TreeBase {
                 Box::new(routine_order_frames),
             ),
             ("tree_base.boundary", Box::new(boundary)),
-            ("tree_base.view", Box::new(view)),
-        ]
+        ];
+        // ENG-111: the view split by part.
+        parts.into_iter().chain(view.into_census_parts()).collect()
     }
 }
 
@@ -3140,13 +3144,19 @@ fn derive_pd_arena(
 
     let mut out = PdArena::default();
     let mut unmapped_edges: std::collections::HashSet<usize> = std::collections::HashSet::new();
+    let mut stable_of: HashMap<usize, RoutineId> = HashMap::new();
     for (old_ix, s) in cone.states.iter().enumerate() {
         if !keep[old_ix] {
             continue;
         }
         let ix = new_ix[old_ix];
         let producer = &cone.producers[s.producer()];
-        let routine = stable_routine_id(cone.routine_of(old_ix), map);
+        // ENG-111: one shared stable id per cone routine (by the cone's `Arc`).
+        let cone_routine = cone.routine_of(old_ix);
+        let routine = stable_of
+            .entry(cone_routine.as_ptr() as usize)
+            .or_insert_with(|| RoutineId::from(stable_routine_id(cone_routine, map).as_str()))
+            .clone();
         let owner = stable_routine_id(&producer.owner, map);
         let producer_fact = *direct_fact_ix
             .get(&(owner.as_str(), producer.operation_id.as_str()))
@@ -3213,11 +3223,20 @@ fn derive_pd_arena(
 /// `Vec` and hash table at its capacity, plus string heap.
 fn pd_arena_bytes(a: &PdArena) -> u64 {
     use std::mem::size_of;
-    let state_heap: usize = a.states.iter().map(|s| s.routine.capacity()).sum();
+    // ENG-111: the routine ids are shared texts (the states' and the `by_routine` keys'):
+    // each distinct text once, by content (deterministic, as ENG-108's census tally).
+    let state_heap: usize = a
+        .states
+        .iter()
+        .map(|s| s.routine.as_str())
+        .collect::<std::collections::HashSet<&str>>()
+        .iter()
+        .map(|r| r.len())
+        .sum();
     let by_routine: usize = a
         .by_routine
-        .iter()
-        .map(|(k, v)| k.capacity() + v.capacity() * size_of::<StateIx>())
+        .values()
+        .map(|v| v.capacity() * size_of::<StateIx>())
         .sum::<usize>()
         + a.by_routine.capacity() * (size_of::<RoutineId>() + size_of::<Vec<StateIx>>() + 1);
     (a.states.capacity() * size_of::<StateNode>()
@@ -4791,7 +4810,10 @@ mod step6_tree_tests {
 
         let borrowed = tree(TreeRaw::Borrow(SubjectRaw::new(&raw, &scope)));
         assert!(
-            borrowed.pd_solution.by_routine.contains_key(&writer_stable),
+            borrowed
+                .pd_solution
+                .by_routine
+                .contains_key(writer_stable.as_str()),
             "borrow: Writer's states are in the tree's arena"
         );
         assert!(
@@ -4808,7 +4830,7 @@ mod step6_tree_tests {
             drain_tree
                 .pd_solution
                 .by_routine
-                .contains_key(&writer_stable),
+                .contains_key(writer_stable.as_str()),
             "drain: Writer's states are in the tree's arena"
         );
         assert_eq!(

@@ -59,6 +59,28 @@ pub(super) struct ViewBase {
 
 /// The operation and call-site evidence every view carries, and where the
 /// rest of the candidates are.
+impl ViewBase {
+    /// ENG-111: the view base's parts for a byte census (`tools/census-probe resident`),
+    /// every field named. Read-only otherwise.
+    pub(super) fn into_census_parts(self) -> Vec<(&'static str, Box<dyn std::any::Any>)> {
+        let ViewBase {
+            routine_to_stable,
+            facts,
+            evidence,
+            pd,
+        } = self;
+        vec![
+            (
+                "tree_base.view.routine_to_stable",
+                Box::new(routine_to_stable),
+            ),
+            ("tree_base.view.facts", Box::new(facts)),
+            ("tree_base.view.evidence", Box::new(evidence)),
+            ("tree_base.view.pd", Box::new(pd)),
+        ]
+    }
+}
+
 #[derive(Clone)]
 pub(super) struct EvidenceBase {
     /// The operation evidence of every id the base references, sorted by id
@@ -973,14 +995,18 @@ pub(super) fn view_pd(
     // (the arena shares one per routine; an equal string under another
     // `Arc` only takes a second slot, merged below).
     let mut routine_slot: HashMap<*const u8, usize> = HashMap::new();
-    let mut slots: Vec<(String, Vec<usize>)> = Vec::new();
+    // ENG-111: the slot's id shared, so each state's clone is a refcount bump.
+    let mut slots: Vec<(super::RoutineId, Vec<usize>)> = Vec::new();
     for (ix, &old) in kept.iter().enumerate() {
         let s = &cone.states[old];
         let cone_routine = cone.routine_of(old);
         let slot = *routine_slot
             .entry(cone_routine.as_ptr())
             .or_insert_with(|| {
-                slots.push((stable_routine_id(cone_routine, map), Vec::new()));
+                slots.push((
+                    super::RoutineId::from(stable_routine_id(cone_routine, map).as_str()),
+                    Vec::new(),
+                ));
                 slots.len() - 1
             });
         slots[slot].1.push(ix);

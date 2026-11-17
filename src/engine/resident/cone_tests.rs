@@ -612,7 +612,12 @@ fn tree_text(t: &crate::engine::l5::snapshot::CapabilitySnapshot) -> String {
     ] {
         writeln!(out, "{name} {text}").unwrap();
     }
-    let by: BTreeMap<&String, &Vec<usize>> = t.pd_solution.by_routine.iter().collect();
+    let by: BTreeMap<&str, &Vec<usize>> = t
+        .pd_solution
+        .by_routine
+        .iter()
+        .map(|(k, v)| (k.as_str(), v))
+        .collect();
     writeln!(
         out,
         "pd {:?} {:?} {by:?}",

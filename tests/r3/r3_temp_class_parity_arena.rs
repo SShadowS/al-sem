@@ -65,7 +65,7 @@ fn compare_producers(
             let t = &state.temp_state;
             producers.insert(op.clone());
             solve
-                .entry(routine.clone())
+                .entry(routine.to_string())
                 .or_default()
                 .entry(op)
                 .or_default()
