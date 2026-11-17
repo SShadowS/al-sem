@@ -1064,9 +1064,9 @@ fn derive_permissions(
             let inh = &cov.inherited_status;
             let dir = &cov.direct_status;
             if !inh.is_empty() {
-                inh.clone()
+                inh.to_string()
             } else if !dir.is_empty() {
-                dir.clone()
+                dir.to_string()
             } else {
                 "unknown".to_string()
             }
@@ -3556,10 +3556,10 @@ page 50818 "T5 I-3 Wizard Alpha"
                 "coverage",
                 to_cbor_value(&vec![SnapshotCoverageRecord {
                     subject: routine.clone(),
-                    direct_status: s("complete"),
-                    inherited_status: s("partial"),
-                    reasons: vec![s("r")],
-                    unknown_targets: vec![routine.clone()],
+                    direct_status: "complete".into(),
+                    inherited_status: "partial".into(),
+                    reasons: vec!["r".into()],
+                    unknown_targets: vec![routine.as_str().into()],
                 }]),
             ),
             (

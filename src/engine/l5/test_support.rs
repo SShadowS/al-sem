@@ -242,8 +242,8 @@ pub fn fact(
 pub fn coverage(inherited_status: &str) -> CoverageRecord {
     CoverageRecord {
         subject: "r".to_string(),
-        direct_status: inherited_status.to_string(),
-        inherited_status: inherited_status.to_string(),
+        direct_status: inherited_status.into(),
+        inherited_status: inherited_status.into(),
         reasons: Vec::new(),
         unknown_targets: Vec::new(),
     }

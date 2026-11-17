@@ -1183,13 +1183,15 @@ pub struct SnapshotAnalysisGap {
 #[derive(Debug, Clone, Serialize)]
 pub struct SnapshotCoverageRecord {
     pub subject: String,
+    /// ENG-108: shared texts, as in [`crate::engine::l4::capability_cone::CoverageRecord`]
+    /// (`SharedStr` serializes as the bare text, so the document's bytes are unchanged).
     #[serde(rename = "directStatus")]
-    pub direct_status: String,
+    pub direct_status: crate::program::str_pool::SharedStr,
     #[serde(rename = "inheritedStatus")]
-    pub inherited_status: String,
-    pub reasons: Vec<String>,
+    pub inherited_status: crate::program::str_pool::SharedStr,
+    pub reasons: Vec<crate::program::str_pool::SharedStr>,
     #[serde(rename = "unknownTargets")]
-    pub unknown_targets: Vec<String>,
+    pub unknown_targets: Vec<crate::program::str_pool::SharedStr>,
 }
 
 /// Subscriber binding. al-sem `SubscriberBinding`: publisherObject, eventName.
@@ -3893,10 +3895,13 @@ fn derive_coverage(base: &TreeInputs<'_>) -> Vec<SnapshotCoverageRecord> {
         }
         let mut reasons = cov.reasons.clone();
         reasons.sort();
-        let mut unknown_targets: Vec<String> = cov
+        // ENG-108: each target's stable id, shared (the tree's records repeat the same few).
+        let mut unknown_targets: Vec<crate::program::str_pool::SharedStr> = cov
             .unknown_targets
             .iter()
-            .map(|t| stable_routine_id(t, map))
+            .map(|t| {
+                crate::program::body::features::shared_coverage_text(&stable_routine_id(t, map))
+            })
             .collect();
         unknown_targets.sort();
         out.push(SnapshotCoverageRecord {

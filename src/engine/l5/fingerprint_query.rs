@@ -379,17 +379,21 @@ fn build_block<'w>(
     let (cov_status, direct_status, inherited_status, reasons, unknown_targets) = {
         match cov_rec {
             Some(c) => {
+                // ENG-108: the record's shared texts, as the block's own `String`s.
                 let status = if filters.include_inherited {
-                    c.inherited_status.clone()
+                    c.inherited_status.to_string()
                 } else {
-                    c.direct_status.clone()
+                    c.direct_status.to_string()
+                };
+                let owned = |v: &[crate::program::str_pool::SharedStr]| -> Vec<String> {
+                    v.iter().map(|s| s.to_string()).collect()
                 };
                 (
                     status,
-                    c.direct_status.clone(),
-                    c.inherited_status.clone(),
-                    c.reasons.clone(),
-                    c.unknown_targets.clone(),
+                    c.direct_status.to_string(),
+                    c.inherited_status.to_string(),
+                    owned(&c.reasons),
+                    owned(&c.unknown_targets),
                 )
             }
             None => (

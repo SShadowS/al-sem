@@ -152,15 +152,20 @@ pub struct CapabilityFact {
     pub extra: Option<CapabilityExtra>,
 }
 
+use crate::program::str_pool::SharedStr;
+
 /// One per-routine coverage record (internal form). Mirrors al-sem
 /// `CoverageRecord`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CoverageRecord {
     pub subject: String,
-    pub direct_status: String,
-    pub inherited_status: String,
-    pub reasons: Vec<String>,
-    pub unknown_targets: Vec<String>,
+    /// ENG-108: the statuses, reasons and unknown targets are shared texts
+    /// ([`crate::program::body::features::shared_coverage_text`]): a routine's record repeats
+    /// its cone's, and on CDO three stores held them as `String`s (about 139 MiB).
+    pub direct_status: SharedStr,
+    pub inherited_status: SharedStr,
+    pub reasons: Vec<SharedStr>,
+    pub unknown_targets: Vec<SharedStr>,
 }
 
 // ===========================================================================
@@ -1945,8 +1950,9 @@ type RoutineDirectCoverage = HashMap<String, DirectCoverage>;
 #[derive(Debug, Clone)]
 struct CoverageCone {
     complete: bool,
-    reasons: Vec<String>,
-    unknown_targets: Vec<String>,
+    /// ENG-108: shared texts, so the per-routine records copied from the cone share them.
+    reasons: Vec<SharedStr>,
+    unknown_targets: Vec<SharedStr>,
 }
 
 /// The per-key witness rule of a routine's inherited output: min dist wins;
@@ -2709,20 +2715,22 @@ fn coverage_cone_for_scc(
     unresolved_sources: &BTreeSet<String>,
 ) -> CoverageCone {
     let mut complete = true;
-    let mut reason_set: BTreeSet<String> = BTreeSet::new();
-    let mut unknown_set: BTreeSet<String> = BTreeSet::new();
+    // ENG-108: shared texts (a `SharedStr` orders as its text, so the sets enumerate as before).
+    let shared = crate::program::body::features::shared_coverage_text;
+    let mut reason_set: BTreeSet<SharedStr> = BTreeSet::new();
+    let mut unknown_set: BTreeSet<SharedStr> = BTreeSet::new();
     for m in members {
         if unresolved_sources.contains(m) {
             complete = false;
-            reason_set.insert("object-run-unresolved".to_string());
+            reason_set.insert(shared("object-run-unresolved"));
         }
         if let Some(c) = cov.get(m)
             && (c.direct_status == "partial" || c.direct_status == "unknown")
         {
             complete = false;
-            unknown_set.insert(m.clone());
+            unknown_set.insert(shared(m));
             for r in &c.reasons {
-                reason_set.insert(r.clone());
+                reason_set.insert(shared(r));
             }
         }
     }
@@ -3095,12 +3103,14 @@ impl ConeStore {
             .into_iter()
             .filter(|c| seen.insert(Arc::as_ptr(c)))
             .collect();
-        let tally = |pick: fn(&CoverageCone) -> &Vec<String>| {
+        let tally = |pick: fn(&CoverageCone) -> &Vec<SharedStr>| {
             let (mut n, mut bytes, mut texts) = (0usize, 0usize, Set::new());
             for c in &covs {
                 for s in pick(c) {
                     n += 1;
-                    bytes += s.capacity();
+                    // ENG-108: a shared text's length (counted per occurrence: the text a
+                    // `String` per occurrence would hold).
+                    bytes += s.len();
                     texts.insert(s.as_str());
                 }
             }
@@ -4291,15 +4301,14 @@ fn compose_inherited_cones(
 fn coverage_record(m: &str, cov: &RoutineDirectCoverage, ccone: &CoverageCone) -> CoverageRecord {
     CoverageRecord {
         subject: m.to_string(),
-        direct_status: cov
-            .get(m)
-            .map(|c| c.direct_status.clone())
-            .unwrap_or_else(|| "unknown".to_string()),
-        inherited_status: if ccone.complete {
-            "complete".to_string()
+        direct_status: crate::program::body::features::shared_coverage_text(
+            cov.get(m).map_or("unknown", |c| c.direct_status.as_str()),
+        ),
+        inherited_status: crate::program::body::features::shared_coverage_text(if ccone.complete {
+            "complete"
         } else {
-            "partial".to_string()
-        },
+            "partial"
+        }),
         reasons: ccone.reasons.clone(),
         unknown_targets: ccone.unknown_targets.clone(),
     }
@@ -5806,7 +5815,7 @@ pub(crate) fn project_r3a5_from_parts(
                     .collect();
                 inh.sort_by_key(capability_fact_sort_key);
 
-                let mut reasons = cov.reasons.clone();
+                let mut reasons: Vec<String> = cov.reasons.iter().map(|s| s.to_string()).collect();
                 reasons.sort();
                 let mut unknown_targets: Vec<String> = cov
                     .unknown_targets
@@ -5819,8 +5828,8 @@ pub(crate) fn project_r3a5_from_parts(
                     inh,
                     PCoverageRecord {
                         subject: stable_routine_id(&cov.subject, &map),
-                        direct_status: cov.direct_status.clone(),
-                        inherited_status: cov.inherited_status.clone(),
+                        direct_status: cov.direct_status.to_string(),
+                        inherited_status: cov.inherited_status.to_string(),
                         reasons,
                         unknown_targets,
                     },
@@ -6054,7 +6063,7 @@ pub fn project_r3a3(resolved: &Model) -> R3a3Projection {
             .collect();
         inherited_facts.sort_by_key(capability_fact_sort_key);
 
-        let mut reasons = cov.reasons.clone();
+        let mut reasons: Vec<String> = cov.reasons.iter().map(|s| s.to_string()).collect();
         reasons.sort();
         let mut unknown_targets: Vec<String> = cov
             .unknown_targets
@@ -6069,8 +6078,8 @@ pub fn project_r3a3(resolved: &Model) -> R3a3Projection {
             capability_facts_inherited: inherited_facts,
             coverage: PCoverageRecord {
                 subject: stable_routine_id(&cov.subject, &map),
-                direct_status: cov.direct_status.clone(),
-                inherited_status: cov.inherited_status.clone(),
+                direct_status: cov.direct_status.to_string(),
+                inherited_status: cov.inherited_status.to_string(),
                 reasons,
                 unknown_targets,
             },
