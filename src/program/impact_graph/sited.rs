@@ -702,6 +702,12 @@ impl SitedGraph {
         &self.sites
     }
 
+    /// Tests only: the sites, to state a precondition (a table-event guard) literally.
+    #[cfg(test)]
+    pub(crate) fn sites_mut(&mut self) -> &mut [Site] {
+        &mut self.sites
+    }
+
     /// A unit's name.
     #[must_use]
     pub fn unit(&self, ix: u32) -> &str {

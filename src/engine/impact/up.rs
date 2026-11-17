@@ -1,17 +1,20 @@
 //! **Who reaches each changed routine** (agent-tasks design §8.4 step 2): R0's
 //! reverse walks over the production universe's sited graph.
 //!
-//! - Per root, [`walk_one`] (TLS-21: several roots at once on the one-shot
-//!   CLI, each walk on a scratch from a stash of one per walk in flight) and
-//!   a visitor that keeps COUNTS and the first few witnesses only
-//!   ([`RootUp`]): its direct callers (explain's `callers:` definition,
+//! - Per root, what its own walk finds. ENG-125: the roots are split into at most
+//!   [`CHUNKS`] chunks (TLS-21: they run at once on the one-shot CLI), and each chunk is
+//!   walked by ONE [`multi_walk::multi_walk`] for all its roots, twice ([`up_multi`]: root
+//!   masks, then the witness lists), instead of one walk and one visitor per root. Each
+//!   root's [`Row`] is what its own walk and [`Up`] give ([`row_of_up`], the test oracle),
+//!   printed by the same [`row_json`]. A row keeps COUNTS and the first few witnesses
+//!   only: its direct callers (explain's `callers:` definition,
 //!   [`direct_callers`], with each caller's first call site), ancestors by
 //!   tier, entries by kind (page actions by caption), event publishers that
 //!   raise into the cone, external callability, hidden channels, the walk's
 //!   limit, and its nearest ancestors with a stable id (what "nearest tested
 //!   caller" maps into a test universe). Nothing per root outlives its walk
 //!   but that summary (Fable f10: no cone per root is kept).
-//! - Once over every root, [`walk_multi`]: the union (how many distinct
+//! - Once over every root, [`walk_multi`] with an [`Up`]: the union (how many distinct
 //!   entries the whole change is reachable from).
 //!
 //! **Relation and tier** (round-2 r2 §2.1, W2): the visitor's
@@ -33,9 +36,10 @@ use serde_json::{Value, json};
 
 use crate::engine::test_select::select::{direct_callers, display};
 use crate::program::impact_graph::entries::EntryInventory;
+use crate::program::impact_graph::multi_walk;
 use crate::program::impact_graph::reverse::{
     ConeVisitor, EntryKind, ExternalWhy, HiddenChannel, Limit, NodeIx, SiteIx, Tier, Via,
-    WalkOptions, WalkScratch, WalkState, object_run_reaches, tier_over, walk_multi, walk_one,
+    WalkOptions, WalkScratch, WalkState, object_run_reaches, tier_over, walk_multi,
 };
 use crate::program::impact_graph::sited::{Boundary, SitedGraph, flag};
 
@@ -260,7 +264,7 @@ fn tier_rank(tier: Tier, ext: u8) -> u8 {
 
 /// One state as a class witness: what it reached, how, and when it arrived.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct Witness {
+pub(super) struct Witness {
     tier: Tier,
     ext: u8,
     hops: u32,
@@ -836,11 +840,9 @@ fn node_json(g: &SitedGraph, n: NodeIx, hops: u32, tier: Tier) -> Value {
 pub const POPULATION: &str =
     "legacy: every relation together (code, UI navigation, configuration, hub); see byRelation";
 
-/// Counts per class and tier, in `byRelation`'s shape (round-2 r2 §2.1
-/// step 5): `{code: {local, viaDependency}, uiNavigation: {local,
-/// viaDependency}, candidates: {overConfiguration: {code, uiNavigation},
-/// overRule, overHub}, total}`.
-fn by_relation(ws: impl Iterator<Item = Witness>) -> Value {
+/// Counts per (class, the witness's tier is `Local`), and the total: what `byRelation`
+/// prints ([`by_relation_of`]).
+fn by_relation(ws: impl Iterator<Item = Witness>) -> (BTreeMap<(Population, bool), usize>, usize) {
     let mut n: BTreeMap<(Population, bool), usize> = BTreeMap::new();
     let mut total = 0usize;
     for w in ws {
@@ -848,6 +850,13 @@ fn by_relation(ws: impl Iterator<Item = Witness>) -> Value {
         *n.entry((w.population(), w.tier == Tier::Local))
             .or_default() += 1;
     }
+    (n, total)
+}
+
+/// [`by_relation`]'s counts in `byRelation`'s shape (round-2 r2 §2.1 step 5): `{code:
+/// {local, viaDependency}, uiNavigation: {local, viaDependency}, candidates:
+/// {overConfiguration: {code, uiNavigation}, overRule, overHub}, total}`.
+fn by_relation_of(n: &BTreeMap<(Population, bool), usize>, total: usize) -> Value {
     let get = |p: Population, local: bool| n.get(&(p, local)).copied().unwrap_or(0);
     let both = |p: Population| get(p, true) + get(p, false);
     json!({
@@ -900,13 +909,97 @@ const POPULATIONS: [(&str, &[Population]); 5] = [
     ("overHub", &[Population::OverHub]),
 ];
 
-/// The classified part of a walk's summary (round-2 r2 §2.1 steps 2-5):
-/// ancestors and canonical entries per population, the entries by kind and
-/// context, the program's share, each population's nearest witness, and the
-/// external callers of the code population.
-fn classified(up: &Up<'_>, g: &SitedGraph) -> serde_json::Map<String, Value> {
+/// A list's counts and its first witnesses `(hops, tier, node)` ([`Firsts`]).
+#[derive(Default)]
+pub(super) struct ListOut {
+    pub(super) count: usize,
+    pub(super) only_open: usize,
+    pub(super) first: Vec<(u32, Tier, NodeIx)>,
+}
+
+impl ListOut {
+    fn of(f: &Firsts, keep: usize) -> ListOut {
+        ListOut {
+            count: f.count(),
+            only_open: f.only_open(),
+            first: f.first(keep),
+        }
+    }
+}
+
+/// One population's part of the classified answer ([`POPULATIONS`]).
+#[derive(Default)]
+pub(super) struct GroupOut {
+    /// Per kind word (TLS-55: the entry's own, `inv.word`), keyed by its print rank
+    /// (`vocab::entry_word_rank`), so `page trigger` holds the API pages' and the configured
+    /// page triggers' too: how many entries.
+    pub(super) kinds: BTreeMap<(usize, &'static str), usize>,
+    pub(super) contexts: BTreeMap<&'static str, usize>,
+    /// The population's entries.
+    pub(super) mine: usize,
+    /// Per word, the nearest entry (class order, then arrival).
+    pub(super) first_by_kind: BTreeMap<(usize, &'static str), (u32, Witness)>,
+    /// The nearest witness: an entry of the population (`Some(e)`), else its nearest ancestor.
+    pub(super) nearest: Option<(Option<u32>, Witness)>,
+}
+
+/// What one walk found, before it is printed ([`row_json`]): [`Up`] gives it by
+/// [`row_of_up`], ENG-125's multi-walk passes by their masks. One printer for both keeps
+/// every row's bytes (and key order) the same.
+#[derive(Default)]
+pub(super) struct Row {
+    pub(super) root_entry: BTreeSet<EntryKind>,
+    pub(super) hubs: BTreeSet<(String, String)>,
+    pub(super) states: usize,
+    pub(super) max_hops: u32,
+    /// Ancestors by best tier: local, through a dependency, only open.
+    pub(super) tiers: [usize; 3],
+    pub(super) entries: BTreeMap<EntryKind, ListOut>,
+    /// The action-run site that made a page an entry (its captions).
+    pub(super) action_site: HashMap<NodeIx, SiteIx>,
+    pub(super) publishers: ListOut,
+    pub(super) direct: ListOut,
+    pub(super) external: BTreeMap<&'static str, ListOut>,
+    pub(super) hidden: BTreeMap<&'static str, usize>,
+    pub(super) universal: bool,
+    pub(super) limit: Option<Limit>,
+    /// `byRelation`'s counts and totals: ancestors, entries.
+    pub(super) anc_rel: (BTreeMap<(Population, bool), usize>, usize),
+    pub(super) ent_rel: (BTreeMap<(Population, bool), usize>, usize),
+    pub(super) groups: [GroupOut; 5],
+    pub(super) candidates: usize,
+    /// Per external why, its callers whose best state is established code.
+    pub(super) external_code: BTreeMap<&'static str, usize>,
+    /// The reached entries with each note ([`NOTES`]).
+    pub(super) notes: [usize; 2],
+}
+
+/// The entry notes `entryNotes` counts, in print order.
+const NOTES: [u8; 2] = [
+    crate::program::impact_graph::entries::NOTE_UNNAMED_ACTIONS,
+    crate::program::impact_graph::entries::NOTE_BACKGROUND_WITHOUT_ON_RUN,
+];
+
+/// The [`Row`] of one walk's visitor.
+fn row_of_up(up: &Up<'_>, g: &SitedGraph) -> Row {
     use crate::engine::vocab;
     let inv = up.shared.inv;
+    let keep = up.keep.per_list;
+    let mut tiers = [0usize; 3];
+    for (n, b) in &up.best {
+        if up.root_nodes.contains(n) || g.flags(*n) & flag::HUB != 0 {
+            continue;
+        }
+        tiers[b.tier as usize] += 1;
+    }
+    // Output validation V2 (§3.2, F12): the hubs on the reach (each with a site that calls
+    // it from inside the reach).
+    let mut hubs: BTreeSet<(String, String)> = BTreeSet::new();
+    for n in up.best.keys() {
+        if let Some(kind) = crate::engine::l5::routine_rollup::hub_kind_of(g, *n) {
+            hubs.insert((kind, hub_at(g, *n, |m| up.best.contains_key(&m))));
+        }
+    }
     let ancestors: Vec<Witness> = up
         .best
         .iter()
@@ -914,106 +1007,41 @@ fn classified(up: &Up<'_>, g: &SitedGraph) -> serde_json::Map<String, Value> {
         .map(|(_, b)| b.class)
         .collect();
     let entries: Vec<(u32, Witness)> = up.canon.best.iter().map(|(&e, &w)| (e, w)).collect();
-    let program = up.shared.program();
-    let mut by_kind = serde_json::Map::new();
-    let mut by_context = serde_json::Map::new();
-    let mut share = serde_json::Map::new();
-    let mut nearest = serde_json::Map::new();
-    let mut first_by_kind = serde_json::Map::new();
-    for (key, classes) in POPULATIONS {
-        let mine: Vec<&(u32, Witness)> = entries
+    let mut groups: [GroupOut; 5] = Default::default();
+    for (g_out, (_, classes)) in groups.iter_mut().zip(POPULATIONS) {
+        for &(e, w) in entries
             .iter()
             .filter(|(_, w)| classes.contains(&w.population()))
-            .collect();
-        // Per kind word (TLS-55: the entry's own, `inv.word`), keyed by its
-        // print rank (`vocab::entry_word_rank`), so `page trigger` holds the
-        // API pages' and the configured page triggers' too.
-        let mut kinds: BTreeMap<(usize, &str), usize> = BTreeMap::new();
-        let mut contexts: BTreeMap<&str, usize> = BTreeMap::new();
-        // Per word, the nearest entry (class order, then arrival).
-        let mut firsts: BTreeMap<(usize, &str), (u32, Witness)> = BTreeMap::new();
-        for &&(e, w) in &mine {
+        {
+            g_out.mine += 1;
             let word = inv.word(e);
             let k = (vocab::entry_word_rank(word), word);
-            *kinds.entry(k).or_default() += 1;
+            *g_out.kinds.entry(k).or_default() += 1;
             let ctx: BTreeSet<&str> = inv.kinds(e).filter_map(vocab::entry_context).collect();
             for c in ctx {
-                *contexts.entry(c).or_default() += 1;
+                *g_out.contexts.entry(c).or_default() += 1;
             }
-            let f = firsts.entry(k).or_insert((e, w));
+            let f = g_out.first_by_kind.entry(k).or_insert((e, w));
             if (w.key(), w.at) < (f.1.key(), f.1.at) {
                 *f = (e, w);
             }
         }
-        // Kinds by their §8.1 words, in print order.
-        let words: Vec<(&str, usize)> = kinds.iter().map(|(&(_, w), &n)| (w, n)).collect();
-        by_kind.insert(
-            key.into(),
-            Value::Object(
-                words
-                    .iter()
-                    .map(|(w, n)| ((*w).to_string(), json!(n)))
-                    .collect(),
-            ),
-        );
-        by_context.insert(
-            key.into(),
-            Value::Object(
-                contexts
-                    .iter()
-                    .map(|(c, n)| ((*c).to_string(), json!(n)))
-                    .collect(),
-            ),
-        );
-        share.insert(key.into(), share_json(mine.len(), program));
-        let mut list: Vec<Value> = Vec::new();
-        for (&(_, word), (e, w)) in &firsts {
-            let mut v = witness_json(g, w);
-            v["kind"] = json!(word);
-            if let Some(a) = inv.action(*e) {
-                v["action"] = json!(a);
-            }
-            list.push(v);
-        }
-        first_by_kind.insert(key.into(), Value::Array(list));
-        // The nearest witness: an entry of the population, else its nearest
-        // ancestor.
         let entry = classes
             .iter()
             .filter_map(|p| up.canon.nearest(*p))
             .min_by_key(|(_, w)| (w.key(), w.at));
-        let w = match entry {
-            Some((e, w)) => {
-                let mut v = witness_json(g, &w);
-                v["entry"] = json!(inv.word(e));
-                if let Some(a) = inv.action(e) {
-                    v["action"] = json!(a);
-                }
-                Some(v)
-            }
+        g_out.nearest = match entry {
+            Some((e, w)) => Some((Some(e), w)),
             None => ancestors
                 .iter()
                 .filter(|w| classes.contains(&w.population()))
                 .min_by_key(|w| (w.key(), w.at))
-                .map(|w| witness_json(g, w)),
+                .map(|w| (None, *w)),
         };
-        nearest.insert(key.into(), w.unwrap_or(Value::Null));
     }
-    let candidates = entries
-        .iter()
-        .filter(|(_, w)| !w.population().established())
-        .count();
-    share.insert("candidates".into(), share_json(candidates, program));
-    share.insert("all".into(), share_json(entries.len(), program));
-    // The same set as `programEntries`: the changed routines left out.
-    let program_by_kind: Vec<(&str, usize)> = inv
-        .by_kind(|e| !up.shared.changed.contains(&e))
-        .into_iter()
-        .map(|((_, w), n)| (w, n))
-        .collect();
-    // `external:` belongs to the code population: the external callers whose
-    // best state is established code.
-    let external_code: Vec<Value> = up
+    // `external:` belongs to the code population: the external callers whose best state is
+    // established code.
+    let external_code = up
         .external
         .iter()
         .map(|(why, f)| {
@@ -1026,16 +1054,128 @@ fn classified(up: &Up<'_>, g: &SitedGraph) -> serde_json::Map<String, Value> {
                         .is_some_and(|b| b.class.population() == Population::Code)
                 })
                 .count();
-            json!({"why": why, "count": n})
+            (*why, n)
         })
-        .filter(|v| v["count"] != json!(0))
+        .collect();
+    Row {
+        root_entry: up.root_entry.clone(),
+        hubs,
+        states: up.states,
+        max_hops: up.max_hops,
+        tiers,
+        entries: up
+            .entries
+            .iter()
+            .map(|(k, f)| (*k, ListOut::of(f, keep)))
+            .collect(),
+        action_site: up.action_site.clone(),
+        publishers: ListOut::of(&up.publishers, keep),
+        direct: ListOut::of(&up.direct_publishers, keep),
+        external: up
+            .external
+            .iter()
+            .map(|(why, f)| (*why, ListOut::of(f, keep)))
+            .collect(),
+        hidden: up.hidden.clone(),
+        universal: up.universal,
+        limit: up.limit,
+        anc_rel: by_relation(ancestors.iter().copied()),
+        ent_rel: by_relation(entries.iter().map(|(_, w)| *w)),
+        groups,
+        candidates: entries
+            .iter()
+            .filter(|(_, w)| !w.population().established())
+            .count(),
+        external_code,
+        notes: NOTES.map(|bit| {
+            entries
+                .iter()
+                .filter(|(e, _)| inv.note(*e) & bit != 0)
+                .count()
+        }),
+    }
+}
+
+/// The classified part of a row (round-2 r2 §2.1 steps 2-5): ancestors and canonical
+/// entries per population, the entries by kind and context, the program's share, each
+/// population's nearest witness, and the external callers of the code population.
+fn classified_json(
+    row: &Row,
+    g: &SitedGraph,
+    shared: &Shared<'_>,
+) -> serde_json::Map<String, Value> {
+    let inv = shared.inv;
+    let program = shared.program();
+    let mut by_kind = serde_json::Map::new();
+    let mut by_context = serde_json::Map::new();
+    let mut share = serde_json::Map::new();
+    let mut nearest = serde_json::Map::new();
+    let mut first_by_kind = serde_json::Map::new();
+    for (g_out, (key, _)) in row.groups.iter().zip(POPULATIONS) {
+        // Kinds by their §8.1 words, in print order.
+        by_kind.insert(
+            key.into(),
+            Value::Object(
+                g_out
+                    .kinds
+                    .iter()
+                    .map(|(&(_, w), n)| (w.to_string(), json!(n)))
+                    .collect(),
+            ),
+        );
+        by_context.insert(
+            key.into(),
+            Value::Object(
+                g_out
+                    .contexts
+                    .iter()
+                    .map(|(c, n)| ((*c).to_string(), json!(n)))
+                    .collect(),
+            ),
+        );
+        share.insert(key.into(), share_json(g_out.mine, program));
+        let mut list: Vec<Value> = Vec::new();
+        for (&(_, word), (e, w)) in &g_out.first_by_kind {
+            let mut v = witness_json(g, w);
+            v["kind"] = json!(word);
+            if let Some(a) = inv.action(*e) {
+                v["action"] = json!(a);
+            }
+            list.push(v);
+        }
+        first_by_kind.insert(key.into(), Value::Array(list));
+        let w = g_out.nearest.map(|(e, w)| {
+            let mut v = witness_json(g, &w);
+            if let Some(e) = e {
+                v["entry"] = json!(inv.word(e));
+                if let Some(a) = inv.action(e) {
+                    v["action"] = json!(a);
+                }
+            }
+            v
+        });
+        nearest.insert(key.into(), w.unwrap_or(Value::Null));
+    }
+    share.insert("candidates".into(), share_json(row.candidates, program));
+    share.insert("all".into(), share_json(row.ent_rel.1, program));
+    // The same set as `programEntries`: the changed routines left out.
+    let program_by_kind: Vec<(&str, usize)> = inv
+        .by_kind(|e| !shared.changed.contains(&e))
+        .into_iter()
+        .map(|((_, w), n)| (w, n))
+        .collect();
+    let external_code: Vec<Value> = row
+        .external_code
+        .iter()
+        .filter(|(_, n)| **n != 0)
+        .map(|(why, n)| json!({"why": why, "count": n}))
         .collect();
     let mut m = serde_json::Map::new();
     m.insert("relationRecorded".into(), json!(true));
     m.insert(
         "byRelation".into(),
-        json!({"ancestors": by_relation(ancestors.iter().copied()),
-               "entries": by_relation(entries.iter().map(|(_, w)| *w))}),
+        json!({"ancestors": by_relation_of(&row.anc_rel.0, row.anc_rel.1),
+               "entries": by_relation_of(&row.ent_rel.0, row.ent_rel.1)}),
     );
     m.insert("entriesByKind".into(), Value::Object(by_kind));
     m.insert("entriesByContext".into(), Value::Object(by_context));
@@ -1052,56 +1192,75 @@ fn classified(up: &Up<'_>, g: &SitedGraph) -> serde_json::Map<String, Value> {
     m.insert("nearest".into(), Value::Object(nearest));
     m.insert("firstByKind".into(), Value::Object(first_by_kind));
     m.insert("externalCode".into(), json!(external_code));
-    // §R2.4 landing changes 1-2: the totals say when they include a page
-    // counted once for its unnamed actions, or a background target with no
-    // `OnRun` (counted apart).
-    let noted = |bit: u8| {
-        let reached = entries
-            .iter()
-            .filter(|(e, _)| inv.note(*e) & bit != 0)
-            .count();
+    // §R2.4 landing changes 1-2: the totals say when they include a page counted once for
+    // its unnamed actions, or a background target with no `OnRun` (counted apart).
+    let noted = |i: usize| {
         let program = (0..inv.len() as u32)
-            .filter(|e| inv.note(*e) & bit != 0 && !up.shared.changed.contains(e))
+            .filter(|e| inv.note(*e) & NOTES[i] != 0 && !shared.changed.contains(e))
             .count();
-        json!({"reached": reached, "program": program})
+        json!({"reached": row.notes[i], "program": program})
     };
     m.insert(
         "entryNotes".into(),
         json!({
-            "pagesWithUnnamedActions": noted(crate::program::impact_graph::entries::NOTE_UNNAMED_ACTIONS),
-            "backgroundTargetsWithoutOnRun":
-                noted(crate::program::impact_graph::entries::NOTE_BACKGROUND_WITHOUT_ON_RUN),
+            "pagesWithUnnamedActions": noted(0),
+            "backgroundTargetsWithoutOnRun": noted(1),
             "unnamedActionRunSites": inv.unnamed_sites(),
         }),
     );
     m
 }
 
+/// Where a reached hub is called from inside the reach: the smallest location (`ws:` /
+/// `dep:<app name>:` file, 1-based line) of a site into `hub` from a node `reached` holds;
+/// empty when none has an anchor.
+fn hub_at(g: &SitedGraph, hub: NodeIx, reached: impl Fn(NodeIx) -> bool) -> String {
+    hub_locations(g, hub)
+        .filter(|(from, _)| reached(*from))
+        .map(|(_, at)| at)
+        .min()
+        .unwrap_or_default()
+}
+
+/// The anchored sites into `hub`: each one's caller and its location as [`hub_at`] prints it.
+fn hub_locations(g: &SitedGraph, hub: NodeIx) -> impl Iterator<Item = (NodeIx, String)> + '_ {
+    g.sites_into(hub)
+        .iter()
+        .map(|&s| &g.sites()[s as usize])
+        .filter_map(|s| s.anchor.map(|a| (s.from, a)))
+        .map(|(from, a)| {
+            // `ws:` / `dep:<app name>:` as every human location reads.
+            let unit = g.unit(a.unit);
+            let file = match g.node_app(from) {
+                _ if unit.starts_with("ws:") || unit.starts_with("dep:") => unit.to_string(),
+                Some(app) if app == g.primary_app() => format!("ws:{unit}"),
+                Some(app) => format!("dep:{}:{unit}", g.app_identity(app).1),
+                None => unit.to_string(),
+            };
+            (from, format!("{file}:{}", a.start_line + 1))
+        })
+}
+
 /// What one walk found, as JSON.
 fn summary(up: &Up<'_>, g: &SitedGraph, captions: &Captions) -> Value {
-    let (mut local, mut dep, mut open) = (0usize, 0usize, 0usize);
-    for (n, b) in &up.best {
-        if up.root_nodes.contains(n) || g.flags(*n) & flag::HUB != 0 {
-            continue;
-        }
-        match b.tier {
-            Tier::Local => local += 1,
-            Tier::ThroughDependency => dep += 1,
-            Tier::OnlyOpen => open += 1,
-        }
-    }
+    row_json(&row_of_up(up, g), g, up.shared, captions)
+}
+
+/// A row as JSON: the one printer of every walk's answer (see [`Row`]).
+fn row_json(row: &Row, g: &SitedGraph, shared: &Shared<'_>, captions: &Captions) -> Value {
+    let [local, dep, open] = row.tiers;
     let entries: Vec<Value> = EntryKind::ALL
         .iter()
-        .filter_map(|k| up.entries.get(k).map(|f| (k, f)))
+        .filter_map(|k| row.entries.get(k).map(|f| (k, f)))
         .map(|(k, f)| {
             let first: Vec<Value> = f
-                .first(up.keep.per_list)
-                .into_iter()
-                .map(|(h, t, n)| {
+                .first
+                .iter()
+                .map(|&(h, t, n)| {
                     let mut v = node_json(g, n, h, t);
                     if *k == EntryKind::PageAction
                         && let Some((action, caption)) =
-                            captions.of(g, n, up.action_site.get(&n).copied())
+                            captions.of(g, n, row.action_site.get(&n).copied())
                     {
                         v["action"] = json!(action);
                         v["caption"] = json!(caption);
@@ -1109,68 +1268,41 @@ fn summary(up: &Up<'_>, g: &SitedGraph, captions: &Captions) -> Value {
                     v
                 })
                 .collect();
-            json!({"kind": k.as_str(), "count": f.count(), "onlyOpen": f.only_open(),
+            json!({"kind": k.as_str(), "count": f.count, "onlyOpen": f.only_open,
                    "userOrJob": user_or_job(*k), "first": first})
         })
         .collect();
-    let firsts = |f: &Firsts| -> Vec<Value> {
-        f.first(up.keep.per_list)
-            .into_iter()
-            .map(|(h, t, n)| node_json(g, n, h, t))
+    let firsts = |f: &ListOut| -> Vec<Value> {
+        f.first
+            .iter()
+            .map(|&(h, t, n)| node_json(g, n, h, t))
             .collect()
     };
-    let external: Vec<Value> = up
+    let external: Vec<Value> = row
         .external
         .iter()
         .map(|(why, f)| {
-            json!({"why": why, "count": f.count(), "onlyOpen": f.only_open(),
+            json!({"why": why, "count": f.count, "onlyOpen": f.only_open,
                    "first": firsts(f)})
         })
         .collect();
-    // Output validation V2 (§3.2, F12): the hubs on the reach (each with a
-    // site that calls it from inside the reach), and the program's entry
-    // count, the denominator of the reach share that folds the lists.
-    let mut hubs: BTreeSet<(String, String)> = BTreeSet::new();
-    for n in up.best.keys() {
-        let Some(kind) = crate::engine::l5::routine_rollup::hub_kind_of(g, *n) else {
-            continue;
-        };
-        let at = g
-            .sites_into(*n)
-            .iter()
-            .map(|&s| &g.sites()[s as usize])
-            .filter(|s| up.best.contains_key(&s.from))
-            .filter_map(|s| s.anchor.map(|a| (s.from, a)))
-            .map(|(from, a)| {
-                // `ws:` / `dep:<app name>:` as every human location reads.
-                let unit = g.unit(a.unit);
-                let file = match g.node_app(from) {
-                    _ if unit.starts_with("ws:") || unit.starts_with("dep:") => unit.to_string(),
-                    Some(app) if app == g.primary_app() => format!("ws:{unit}"),
-                    Some(app) => format!("dep:{}:{unit}", g.app_identity(app).1),
-                    None => unit.to_string(),
-                };
-                format!("{file}:{}", a.start_line + 1)
-            })
-            .min()
-            .unwrap_or_default();
-        hubs.insert((kind, at));
-    }
-    let entry_total: usize = up.entries.values().map(Firsts::count).sum();
+    let entry_total: usize = row.entries.values().map(|f| f.count).sum();
     let mut out = json!({
-        "rootEntryKinds": up.root_entry.iter().map(|k| k.as_str()).collect::<Vec<_>>(),
+        "rootEntryKinds": row.root_entry.iter().map(|k| k.as_str()).collect::<Vec<_>>(),
         // TLS-55: the changed routine's own kind word (`vocab::entry_word`),
         // when it is an entry itself.
-        "rootEntryWord": (!up.root_entry.is_empty())
-            .then(|| crate::engine::vocab::entry_word(up.root_entry.iter().copied())),
-        "rootUserOrJob": up.root_entry.iter().any(|k| user_or_job(*k)),
-        "hubs": hubs.iter().map(|(k, a)| json!({"kind": k, "at": a})).collect::<Vec<_>>(),
+        "rootEntryWord": (!row.root_entry.is_empty())
+            .then(|| crate::engine::vocab::entry_word(row.root_entry.iter().copied())),
+        "rootUserOrJob": row.root_entry.iter().any(|k| user_or_job(*k)),
+        // Output validation V2 (§3.2, F12): the hubs on the reach, and the program's entry
+        // count, the denominator of the reach share that folds the lists.
+        "hubs": row.hubs.iter().map(|(k, a)| json!({"kind": k, "at": a})).collect::<Vec<_>>(),
         // §R2.4 landing change 5: one program total, the canonical count
         // (`programShare.program`); the legacy root-kind mask count is gone.
-        "programEntries": up.shared.program(),
+        "programEntries": shared.program(),
         "entryBuckets": entry_total,
-        "states": up.states,
-        "maxHops": up.max_hops,
+        "states": row.states,
+        "maxHops": row.max_hops,
         // The legacy tiers mix every relation (r2 §2.1 step 5: they stay
         // until the next impact version; the classified counts are
         // `byRelation`). §R2.4 landing change 7: the label says so here
@@ -1178,22 +1310,22 @@ fn summary(up: &Up<'_>, g: &SitedGraph, captions: &Captions) -> Value {
         "ancestors": {"total": local + dep + open, "local": local, "throughDependency": dep,
                       "onlyOpen": open, "population": POPULATION},
         "entries": entries,
-        "userOrJobEntries": up.entries.iter().filter(|(k, _)| user_or_job(**k)).map(|(_, f)| f.count()).sum::<usize>(),
+        "userOrJobEntries": row.entries.iter().filter(|(k, _)| user_or_job(**k)).map(|(_, f)| f.count).sum::<usize>(),
         // `count`: publishers anywhere among the ancestors; `direct` (round-2
         // n09, additive): the events that raise a root itself.
-        "eventPublishers": {"count": up.publishers.count(), "onlyOpen": up.publishers.only_open(),
-                            "first": firsts(&up.publishers),
-                            "direct": {"count": up.direct_publishers.count(),
-                                       "first": firsts(&up.direct_publishers)}},
+        "eventPublishers": {"count": row.publishers.count, "onlyOpen": row.publishers.only_open,
+                            "first": firsts(&row.publishers),
+                            "direct": {"count": row.direct.count,
+                                       "first": firsts(&row.direct)}},
         "external": external,
-        "hidden": {"universalHub": up.universal, "byChannel": up.hidden},
-        "limited": up.limit.map(|l| match l {
+        "hidden": {"universalHub": row.universal, "byChannel": row.hidden},
+        "limited": row.limit.map(|l| match l {
             Limit::StateBudget(n) => format!("state budget {n}"),
             Limit::Cancelled => "cancelled".to_string(),
         }),
     });
     if let Value::Object(o) = &mut out {
-        o.extend(classified(up, g));
+        o.extend(classified_json(row, g, shared));
     }
     out
 }
@@ -1265,37 +1397,39 @@ pub struct UpArgs<'a> {
     pub config_entries: &'a [(String, u16)],
 }
 
-/// One root's result (TLS-21): its row and what its walk cost.
+/// One root's result (TLS-21): its row and what its walk cost. A chunk's walk time, its
+/// passes' mask bytes and its walks' peak sit on its first root.
 struct RootOut {
     row: Value,
     states: usize,
     visitor_bytes: usize,
     walk_us: u64,
+    walk_bytes: usize,
 }
 
-/// The scratches of the walks in flight (TLS-21): a walk takes one, or makes
-/// one when none is free, and gives it back, so no more exist than walks in
-/// flight. Each walk resets its scratch, so what one walk left never reaches
-/// another's answer.
-#[derive(Default)]
-struct Scratches(std::sync::Mutex<Vec<WalkScratch>>);
+/// ENG-125: the most chunks the walked roots are split into. A chunk is walked twice by
+/// [`multi_walk::multi_walk`] ([`up_multi`]'s two passes), serially, so more chunks run on
+/// more workers (wall time); but each chunk traverses nearly the whole cone the roots share,
+/// so each one costs about the traversal again (CPU). The smallest count whose wall time is
+/// master's: on CDO's 699 roots (`impact --part up`) the per-root pass took 7.9-8.0 s at 2
+/// chunks, 6.3-6.8 s at 3, 5.4-5.5 s at 4, against master's 7.0-7.3 s (CHANGELOG ENG-125).
+const CHUNKS: usize = 3;
 
-impl Scratches {
-    fn take(&self, _workers: &crate::engine::l5::digest_cli::ReachWorkers) -> WalkScratch {
-        if let Some(s) = self.0.lock().unwrap_or_else(|p| p.into_inner()).pop() {
-            return s;
-        }
-        #[cfg(test)]
-        if let Some(p) = _workers.probe() {
-            p.scratches_made
-                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        }
-        WalkScratch::default()
-    }
+/// The most roots a chunk walks one by one ([`walk_chunk`]).
+const SMALL_CHUNK: usize = 2;
 
-    fn put(&self, s: WalkScratch) {
-        self.0.lock().unwrap_or_else(|p| p.into_inner()).push(s);
-    }
+/// The most roots one chunk walks at once: the passes' masks grow with the roots (per reached
+/// node, 22 families of a bit per root), so a serial caller (the resident engine, one worker)
+/// walks a large change in several chunks instead of one (CDO's 699 roots: 3 chunks of 233
+/// on the CLI).
+const MAX_CHUNK_ROOTS: usize = 256;
+
+/// The roots per chunk for `walked` roots on `workers` workers: [`CHUNKS`] chunks at most,
+/// one per worker, of at most [`MAX_CHUNK_ROOTS`] roots each.
+fn chunk_size(walked: usize, workers: usize) -> usize {
+    walked
+        .div_ceil(CHUNKS.min(workers).max(1))
+        .clamp(1, MAX_CHUNK_ROOTS)
 }
 
 /// A walk's options from the up part's arguments. Each task builds its own:
@@ -1309,50 +1443,161 @@ fn walk_options<'a>(args: &UpArgs<'a>, extra: &'a HashMap<NodeIx, u16>) -> WalkO
     }
 }
 
-/// One root's walk over its nodes (its `#if` arms walk together) and its row.
-fn walk_root(
+/// ENG-125: one chunk of roots (a root's `#if` arms are its lanes) and each root's row, in
+/// chunk order: [`up_multi`]'s two passes ([`multi_rows`]), each one
+/// [`multi_walk::multi_walk`] over every root of the chunk.
+///
+/// A chunk of at most [`SMALL_CHUNK`] roots walks each root on its own with an [`Up`] instead
+/// (the union's path, and the passes' test oracle, so the rows are the same bytes): the two
+/// passes cost about two traversals of the shared cone whatever the root count, more than
+/// one or two roots' own walks (CDO, a one-routine impact: the per-root pass 326-366 ms
+/// against master's 86-200 ms), and a small change is the common case.
+fn walk_chunk(
     g: &SitedGraph,
     args: &UpArgs<'_>,
     shared: &Shared<'_>,
     captions: &Captions,
-    scratches: &Scratches,
+    chunk: &[&(&String, Vec<NodeIx>)],
+) -> Vec<RootOut> {
+    let opts = walk_options(args, shared.extra);
+    if chunk.len() <= SMALL_CHUNK {
+        let mut scratch = WalkScratch::default();
+        return chunk
+            .iter()
+            .enumerate()
+            .map(|(i, (id, nodes))| {
+                let t = std::time::Instant::now();
+                let mut up = Up::new(g, args.keep, nodes, shared);
+                walk_multi(g, nodes, &opts, &mut scratch, &mut up);
+                let walk_us = t.elapsed().as_micros() as u64;
+                let ancestors: Vec<(NodeIx, Tier, u32)> = up
+                    .ancestors
+                    .iter()
+                    .map(|&n| {
+                        let b = up.best[&n];
+                        (n, b.tier, b.hops)
+                    })
+                    .collect();
+                RootOut {
+                    row: root_row(
+                        g,
+                        args,
+                        shared,
+                        &row_of_up(&up, g),
+                        &ancestors,
+                        id,
+                        nodes,
+                        captions,
+                    ),
+                    states: up.states,
+                    visitor_bytes: up.bytes(),
+                    walk_us,
+                    // The chunk's one scratch, once.
+                    walk_bytes: if i + 1 == chunk.len() {
+                        scratch.bytes()
+                    } else {
+                        0
+                    },
+                }
+            })
+            .collect();
+    }
+    let lanes: Vec<Vec<NodeIx>> = chunk.iter().map(|(_, nodes)| nodes.clone()).collect();
+    let t = std::time::Instant::now();
+    let m = multi_rows(g, args.keep, shared, &opts, &lanes);
+    let walk_us = t.elapsed().as_micros() as u64;
+    m.rows
+        .iter()
+        .zip(&m.ancestors)
+        .zip(chunk)
+        .enumerate()
+        .map(|(i, ((row, ancestors), (id, nodes)))| RootOut {
+            row: root_row(g, args, shared, row, ancestors, id, nodes, captions),
+            states: row.states,
+            visitor_bytes: if i == 0 { m.bytes } else { 0 },
+            walk_us: if i == 0 { walk_us } else { 0 },
+            walk_bytes: if i == 0 { m.peak } else { 0 },
+        })
+        .collect()
+}
+
+/// ENG-125: the rows of one chunk's roots from [`up_multi`]'s two passes (what
+/// [`walk_chunk`] prints and `up_multi_tests` compares).
+struct MultiRows {
+    rows: Vec<Row>,
+    /// Per root, its nearest ancestors with each one's best-tier hops.
+    ancestors: Vec<Vec<(NodeIx, Tier, u32)>>,
+    /// The passes' mask bytes, and the two walks' peak.
+    bytes: usize,
+    peak: usize,
+}
+
+/// The two passes over the roots of `lanes` (a root's `#if` arms are its lanes). A cancel
+/// seen after either pass marks every root not limited already `cancelled`, and skips pass
+/// 2 when it comes after pass 1: a cut run's rows never look complete.
+fn multi_rows(
+    g: &SitedGraph,
+    keep: Keep,
+    shared: &Shared<'_>,
+    opts: &WalkOptions<'_>,
+    lanes: &[Vec<NodeIx>],
+) -> MultiRows {
+    let cancelled = || opts.cancel.is_some_and(|c| c());
+    let mut p1 = up_multi::UpMulti::new(g, keep, shared, opts, lanes);
+    let s1 = multi_walk::multi_walk(g, lanes, opts, &mut p1);
+    let (mut rows, finals) = p1.rows_p1(&s1.roots);
+    let mut peak = s1.peak_bytes;
+    let mut cut = cancelled();
+    if !cut {
+        let mut p2 = up_multi::UpMultiP2::new(&p1, &finals);
+        peak = peak.max(multi_walk::multi_walk(g, lanes, opts, &mut p2).peak_bytes);
+        p2.fill(&mut rows);
+        cut = cancelled();
+    }
+    if cut {
+        for row in &mut rows {
+            row.limit.get_or_insert(Limit::Cancelled);
+        }
+    }
+    MultiRows {
+        ancestors: (0..lanes.len())
+            .map(|k| p1.nearest_ancestors(k).to_vec())
+            .collect(),
+        rows,
+        bytes: p1.bytes(),
+        peak,
+    }
+}
+
+/// One walked root's row: its [`Row`], and its nearest ancestors with each one's best-tier
+/// hops.
+#[allow(clippy::too_many_arguments)]
+fn root_row(
+    g: &SitedGraph,
+    args: &UpArgs<'_>,
+    shared: &Shared<'_>,
+    row: &Row,
+    ancestors: &[(NodeIx, Tier, u32)],
     id: &str,
     nodes: &[NodeIx],
-) -> RootOut {
-    let opts = walk_options(args, shared.extra);
-    let mut v = Up::new(g, args.keep, nodes, shared);
-    let mut scratch = scratches.take(&args.workers);
-    let t = std::time::Instant::now();
-    if nodes.len() == 1 {
-        walk_one(g, nodes[0], &opts, &mut scratch, &mut v);
-    } else {
-        walk_multi(g, nodes, &opts, &mut scratch, &mut v);
-    }
-    let walk_us = t.elapsed().as_micros() as u64;
-    scratches.put(scratch);
-    let mut s = summary(&v, g, captions);
+    captions: &Captions,
+) -> Value {
+    let mut s = row_json(row, g, shared, captions);
     s["stableId"] = json!(id);
     s["status"] = json!("walked");
     s["display"] = json!(display(g, nodes[0]));
     s["nodes"] = json!(nodes.len());
     s["callers"] = callers_json(g, nodes, args.keep.per_list);
     s["nearestAncestors"] = json!(
-        v.ancestors
+        ancestors
             .iter()
-            .filter_map(|&n| {
-                g.stable_id(n).map(|id| {
-                    json!({"stableId": id, "display": display(g, n),
-                           "hops": v.best.get(&n).map(|b| b.hops)})
-                })
+            .filter_map(|&(n, _, hops)| {
+                g.stable_id(n)
+                    .map(|id| json!({"stableId": id, "display": display(g, n), "hops": Some(hops)}))
             })
             .collect::<Vec<_>>()
     );
-    RootOut {
-        row: s,
-        states: v.states,
-        visitor_bytes: v.bytes(),
-        walk_us,
-    }
+    s
 }
 
 /// `/proc/self/status`'s `key` line in KiB (Linux).
@@ -1427,24 +1672,28 @@ pub fn up(g: &SitedGraph, args: &UpArgs<'_>, captions: &Captions) -> Value {
         })
         .collect();
     let mut all_nodes: Vec<NodeIx> = roots.iter().flat_map(|(_, n)| n.clone()).collect();
-    let scratches = Scratches::default();
+    let n = args.workers.count();
+    // Serial when asked, and from inside a rayon worker: there `install`
+    // would let the blocked worker run other jobs while it waits (the
+    // literal pass's reason, TLS-22); such a caller is parallel already.
+    let in_rayon = n > 1 && rayon::current_thread_index().is_some();
+    if in_rayon {
+        crate::engine::perf_trace::counter_delta("impact.up.serial_in_rayon", 1);
+    }
+    let serial = n <= 1 || in_rayon;
+    // ENG-125: the walked roots in chunks, each walked at once; root order inside.
+    let walked: Vec<&(&String, Vec<NodeIx>)> =
+        roots.iter().filter(|(_, n)| !n.is_empty()).collect();
+    let size = chunk_size(walked.len(), if serial { 1 } else { n });
+    let chunks: Vec<&[&(&String, Vec<NodeIx>)]> = walked.chunks(size).collect();
     #[cfg(test)]
-    let first_walked = roots.iter().position(|(_, n)| !n.is_empty());
-    #[cfg(test)]
-    let walked = roots.iter().filter(|(_, n)| !n.is_empty()).count();
-    let task = |(_i, (id, nodes)): (usize, &(&String, Vec<NodeIx>))| -> RootOut {
-        if nodes.is_empty() {
-            return RootOut {
-                row: json!({"stableId": id, "status": "not-in-graph"}),
-                states: 0,
-                visitor_bytes: 0,
-                walk_us: 0,
-            };
-        }
+    let first_walked = walked.first().copied();
+    let task = |chunk: &&[&(&String, Vec<NodeIx>)]| -> Vec<RootOut> {
         #[cfg(test)]
         let _in = args.workers.probe().map(|p| {
             use std::sync::atomic::Ordering::SeqCst;
-            p.up_tasks.fetch_add(1, SeqCst);
+            p.up_tasks.fetch_add(chunk.len(), SeqCst);
+            p.up_chunks.fetch_add(1, SeqCst);
             p.pool_threads
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
@@ -1453,10 +1702,10 @@ pub fn up(g: &SitedGraph, args: &UpArgs<'_>, captions: &Captions) -> Value {
             let in_flight = p.enter();
             let hold = *p.hold_first_root.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(timeout) = hold
-                && Some(_i) == first_walked
+                && first_walked.is_some_and(|f| std::ptr::eq(f, chunk[0]))
             {
                 let until = std::time::Instant::now() + timeout;
-                while p.up_done.load(SeqCst) + 1 < walked {
+                while p.up_done.load(SeqCst) + chunk.len() < walked.len() {
                     if std::time::Instant::now() >= until {
                         p.first_root_timed_out.store(true, SeqCst);
                         break;
@@ -1466,59 +1715,50 @@ pub fn up(g: &SitedGraph, args: &UpArgs<'_>, captions: &Captions) -> Value {
             }
             in_flight
         });
-        let out = walk_root(g, args, &shared, captions, &scratches, id, nodes);
+        let out = walk_chunk(g, args, &shared, captions, chunk);
         #[cfg(test)]
         if let Some(p) = args.workers.probe() {
-            p.up_done.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            p.up_done
+                .fetch_add(chunk.len(), std::sync::atomic::Ordering::SeqCst);
         }
         out
     };
-    let outs: Vec<RootOut> = {
+    let outs: Vec<Vec<RootOut>> = {
         let _s = crate::engine::perf_trace::span("impact", "impact.up.roots");
-        let n = args.workers.count();
-        // Serial when asked, and from inside a rayon worker: there `install`
-        // would let the blocked worker run other jobs while it waits (the
-        // literal pass's reason, TLS-22); such a caller is parallel already.
-        let in_rayon = n > 1 && rayon::current_thread_index().is_some();
-        if in_rayon {
-            crate::engine::perf_trace::counter_delta("impact.up.serial_in_rayon", 1);
-        }
-        if n <= 1 || in_rayon {
-            roots.iter().enumerate().map(task).collect()
+        if serial {
+            chunks.iter().map(task).collect()
         } else {
             use rayon::prelude::*;
-            // One root per task: per-root cost is uneven, work stealing
+            // One chunk per task: per-chunk cost is uneven, work stealing
             // balances it; an indexed collect keeps root order.
-            crate::engine::l5::digest_cli::reach_pool(n).install(|| {
-                roots
-                    .par_iter()
-                    .enumerate()
-                    .with_max_len(1)
-                    .map(task)
-                    .collect()
-            })
+            crate::engine::l5::digest_cli::reach_pool(n)
+                .install(|| chunks.par_iter().with_max_len(1).map(task).collect())
         }
     };
     let mut states = 0usize;
     // The largest visitor of any one walk.
     let mut visitor_bytes = 0usize;
     let mut walks_us = 0u64;
-    let mut roots_out = Vec::with_capacity(outs.len());
-    for o in outs {
+    // Every multi walk's peak (the walks in flight held at most this much).
+    let mut walk_bytes = 0usize;
+    let mut outs = outs.into_iter().flatten();
+    let mut roots_out = Vec::with_capacity(roots.len());
+    for (id, nodes) in &roots {
+        if nodes.is_empty() {
+            roots_out.push(json!({"stableId": id, "status": "not-in-graph"}));
+            continue;
+        }
+        let o = outs.next().expect("a row per walked root");
         states += o.states;
         visitor_bytes = visitor_bytes.max(o.visitor_bytes);
         walks_us += o.walk_us;
+        walk_bytes += o.walk_bytes;
         roots_out.push(o.row);
     }
     all_nodes.sort_unstable();
     all_nodes.dedup();
     let mut u = Up::new(g, args.keep, &all_nodes, &shared);
-    // One scratch for the union walk; the idle ones go first (their bytes
-    // still count: the per-root pass held them).
-    let mut idle = scratches.0.into_inner().unwrap_or_else(|p| p.into_inner());
-    let mut scratch = idle.pop().unwrap_or_default();
-    let idle_bytes: usize = idle.iter().map(WalkScratch::bytes).sum();
-    drop(idle);
+    let mut scratch = WalkScratch::default();
     let t = std::time::Instant::now();
     let ustats = {
         let _s = crate::engine::perf_trace::span("impact", "impact.up.union_walk");
@@ -1531,8 +1771,8 @@ pub fn up(g: &SitedGraph, args: &UpArgs<'_>, captions: &Captions) -> Value {
         )
     };
     walks_us += t.elapsed().as_micros() as u64;
-    // Every scratch's capacity: the scratch memory the pass held.
-    let scratch_bytes = idle_bytes + scratch.bytes();
+    // The walks' memory: every multi walk's peak and the union walk's scratch.
+    let scratch_bytes = walk_bytes + scratch.bytes();
     drop(scratch);
     visitor_bytes = visitor_bytes.max(u.bytes());
     let union = {
@@ -1559,6 +1799,10 @@ pub fn up(g: &SitedGraph, args: &UpArgs<'_>, captions: &Captions) -> Value {
         }),
         "roots": roots_out,
         "union": union,
+        // DIAGNOSTIC ONLY: `cost.*` measures this run and is not stable across worker or
+        // chunk counts (ENG-125: `visitorBytes` is a chunk's masks, chunks follow the worker
+        // count); no consumer may key on it. Every comparison of up answers blanks the run's
+        // measures (`walkMs`, `walksUs`, `scratchBytes`, `visitorBytes`).
         "cost": {"perRootStates": states, "unionStates": ustats.states,
                  "walkMs": started.elapsed().as_millis() as u64,
                  // The walks alone (per root and the union), without the
@@ -1568,6 +1812,8 @@ pub fn up(g: &SitedGraph, args: &UpArgs<'_>, captions: &Captions) -> Value {
                  // Every scratch's capacity (one per walk in flight, TLS-21):
                  // varies with the worker count and between runs, a
                  // measurement like `walkMs`, not part of the answer.
+                 // `visitorBytes`: the largest visitor or chunk masks of any one walk; varies
+                 // with the worker count likewise.
                  "scratchBytes": scratch_bytes, "visitorBytes": visitor_bytes,
                  "inventoryBytes": shared.inv.bytes()},
     })
@@ -1577,9 +1823,13 @@ pub fn up(g: &SitedGraph, args: &UpArgs<'_>, captions: &Captions) -> Value {
 #[path = "up_par_tests.rs"]
 pub(crate) mod up_par_tests;
 
+#[path = "up_multi.rs"]
+mod up_multi;
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::program::impact_graph::reverse::walk_one;
 
     /// A list's witnesses put every node a path with no open site reaches
     /// before the ones only an open site (a hub) reaches, nearest first; a

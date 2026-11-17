@@ -62,7 +62,8 @@ costs 0.1 s.
   - `scratchBytes`, the one shared scratch's capacity at the end. Today it is fixed only because
     the walks run in a fixed order: a reset keeps capacity, so the number depends on which walks
     ran before;
-  - `visitorBytes`, the largest visitor of any one walk; and `inventoryBytes`.
+  - `visitorBytes`, the largest visitor of any one walk (since ENG-125 a chunk's masks, which
+    follow the worker count too); and `inventoryBytes`.
 
 ## 3. Design
 
@@ -135,7 +136,9 @@ compares their up parts byte for byte, blanking only `walkMs` and `walksUs`. So 
 in that comparison must not depend on the worker count:
 
 - `perRootStates`, `unionStates`: sums of each walk's own states. Same at any count.
-- `visitorBytes`: the max over walks of each walk's own visitor. Same at any count.
+- `visitorBytes`: the max over walks of each walk's own visitor. Same at any count. (Since
+  ENG-125, 2026-11-17: a chunk's multi-walk masks; chunks follow the worker count, so it is a
+  run measure like `scratchBytes`, blanked wherever answers are compared.)
 - `inventoryBytes`: unchanged.
 - `scratchBytes` **changes meaning**: the sum of every scratch's capacity at the end, the scratch
   memory the pass held. With more than one worker it depends on which task got which scratch, so

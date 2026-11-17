@@ -6,8 +6,10 @@
 //! reference: the parallel and the serial path both share the new code, so comparing them with
 //! each other would miss a bug they share. **Never regenerate it**; no `REGEN_TEMP_GOLDENS` path
 //! writes it. A deliberate change to the up part's answer replaces it by hand, with the reason.
-//! The three fields that measure the run (`cost.walkMs`, `cost.walksUs`, `cost.scratchBytes`)
-//! are `null` in it and blanked here.
+//! The four fields that measure the run (`cost.walkMs`, `cost.walksUs`, `cost.scratchBytes`,
+//! `cost.visitorBytes`) are `null` in it and blanked here. ENG-125 made `visitorBytes` one: it
+//! is a chunk's masks (of the multi-walk passes) now, and chunks follow the worker count; its
+//! master value (1544) was set to `null` by hand.
 //!
 //! Fixture (`tests/fixtures/up-parallel/ws`): six roots in a fixed order, the not-in-graph one in
 //! the middle, a two-node root (`#if` arms subscribing differently) and a page-action caption.
@@ -66,7 +68,7 @@ fn up_part(ws: &Path, workers: usize) -> Value {
     );
     let mut v: Value = serde_json::from_slice(&out.stdout).expect("JSON");
     let cost = v["cost"].as_object_mut().expect("a cost block");
-    for k in ["walkMs", "walksUs", "scratchBytes"] {
+    for k in ["walkMs", "walksUs", "scratchBytes", "visitorBytes"] {
         assert!(cost.contains_key(k), "cost.{k}");
         cost.insert(k.to_string(), Value::Null);
     }
