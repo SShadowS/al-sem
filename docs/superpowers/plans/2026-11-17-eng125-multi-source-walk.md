@@ -2,8 +2,12 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-Revision 2, after the two-model review of revision 1 (Fable and gpt-6.1-sol, 2026-11-17). Both
-rejected the event model and the slot rule; both fixes are below.
+Revision 3, after two rounds of two-model review (Fable and gpt-6.1-sol, 2026-11-17):
+- Revision 1: both reviewers rejected the event model and the slot rule.
+- Revision 2: both rejected the hops-based slot close for keys that do not start with hops.
+  Fable also rejected chunks per worker, since the traversal is paid once per chunk.
+- Revision 3 partitions every slot by its leading key, measures the chunk count, and adds a
+  memory go/no-go.
 
 **Goal:** Replace `impact`'s per-root reverse walks AND its union walk with one bit-parallel
 multi-source walk. Every root's `up` row and the union summary must stay byte-identical (cost and
@@ -18,9 +22,13 @@ the bar is at least 5 % with wall time not worse.
   by trace equality).
 - **The visitor.** `UpMulti` consumes the events. It folds root bit masks per reached node and
   per canonical entry (pass 1), and fills witness slots with the real keys (pass 2).
-- **Union and workers.** The union walk becomes one more logical root, whose lanes are every
-  root's nodes, so `Up`, `summary` and `classified` leave production. Root chunks run on the reach
-  pool's workers, as the per-root tasks do now.
+- **Union and workers.** The union walk becomes one more logical root, whose lanes are the sorted,
+  deduplicated `all_nodes`, so `Up`, `summary` and `classified` leave production.
+  - The roots are split into chunks, each walked by one worker.
+  - Every chunk crosses nearly the whole giant component, so the traversal CPU grows with the chunk
+    count.
+  - The chunk count is therefore a MEASURED decision (Task 2): the fewest chunks that keep wall
+    time within cdo-speed's limit.
 
 **Tech Stack:** Rust, the al-sem crate (`src/program/impact_graph/reverse.rs`,
 `src/engine/impact/up.rs`), `crate::fxhash`, the impact goldens, and the lib CDO phase of
@@ -85,38 +93,49 @@ the bar is at least 5 % with wall time not worse.
 - **The universal hub, after level 0:** one record per lane-0 root, when `follow_open`, the hub
   has callers, and the root is non-empty and not yet at the hub.
 - **`limit`:** per root, when a further state would be processed past the budget.
-  **Cancellation** is polled every `CANCEL_EVERY` processed records; a cancelled run errors, and
-  byte identity is not required there.
+- **Cancellation** is polled every `CANCEL_EVERY` processed records. A cancelled walk gives every
+  unfinished root `limit(Cancelled)`, so its row keeps today's shape (`limited: "cancelled"`). The
+  cut point may differ from today's per-root cut, which is fine: no caller compares a cancelled
+  run's rows (the CLI never cancels, and the resident engine discards a stopped read).
 
 ## Per-field plan (condition 2)
 
 Notation:
 - **P1:** pass 1, the root-mask folds.
 - **P2:** pass 2, the second traversal with P1's final masks known.
-- **Slot:** a per-(root, list) bounded vector, compared by the field's real key with event order
-  as the last tie-break. It is closed only at a level boundary after the level holding its worst
-  member's hops + 1. Events never carry more than hops + 1.
+- **Slot** (revision 3; both reviews):
+  - **One leading key per slot.** A slot is partitioned by the key's leading parts (open-ness for
+    lists, (pop, tier rank) for class witnesses). It admits only arrivals whose leading parts equal
+    the candidate's FINAL ones from P1, and keeps each arrival's own hops, tier and order.
+  - **Inside a slot the key is (hops, event order).** A slot holds distinct ids (nodes or
+    entries), keeping the smaller (hops, order) on a repeat.
+  - **Close rule.** Hops now leads, so a full slot may close at the level boundary after its worst
+    member's hops + 1 (events never carry more than hops + 1).
+  - **The field's result** is the merge of its partitions in leading-key order.
+  - **Per-bit work** is bounded: event bits are first ANDed with P1's final candidate mask for the
+    slot, and a per-(root, id) delivered mask visits each candidate once. So the per-bit steps are
+    about one P1 fold's size.
 
 | `up` field | mechanism | exact because | test |
 |---|---|---|---|
 | `states`, `maxHops` | P1: count of delivered `reach` events per root; the last level with a reach | Task 1's trace equality | `multi_states_and_max_hops_equal_oracle` |
 | `ancestors.{local,throughDependency,onlyOpen,total}` | P1: `tier[3]` per reached node; best = the lowest tier with the root's bit; roots AND hubs left out | `NodeBest.tier` is the minimum over reached states (up.rs summary) | `multi_ancestor_tiers_equal_oracle` |
 | `hidden` | per node, static channels × `reached` | `report` calls it once per (root, node) | `multi_hidden_equal_oracle` |
-| `rootEntryKinds/Word/UserOrJob` | per root: the entry kinds of its own nodes, overlay included | static per node | `multi_root_entry_equal_oracle` |
+| `rootEntryKinds/Word/UserOrJob` | per root: the kinds of the DELIVERED `entry` callbacks on its own nodes (none at budget 0; only the processed ones of a partly processed multi-node root) | `Up::entry` fills `root_entry` from the callback | `multi_root_entry_equal_oracle` (budget 0 and partial) |
 | `hubs[].at` | per hub node reached: the minimum FORMATTED location string over sites from reached nodes | as summary computes it | `multi_hubs_equal_oracle` |
 | `byRelation`, `entriesByKind`, `entriesByContext`, `programShare`, `entryNotes` | P1: joint `class[pop × tier rank]` masks per reached node and per canonical entry (both from `entry` → `inv.of_node` and `step` → `inv.of_site`); best = the lowest (pop, rank) | `Witness::key`'s order is (population, tier rank, hops) | `multi_classified_counts_equal_oracle` (with Review Focus 5's fixture) |
 | `externalCode` | P1: per external why, nodes whose best class is Code; root nodes NOT left out | as up.rs computes it, from the unfiltered `best` | `multi_external_code_equal_oracle` |
 | `entries[].count/onlyOpen`, `userOrJobEntries`, `entryBuckets` | per node static kinds × `reached`, `non_open = tier[Local] \| tier[Dep]`; PageAction from action-run arrivals adds two masks of its own; root nodes left out (`Up::entry`) | `Firsts` counts distinct nodes; only-open = `any & !non_open` | `multi_entry_counts_equal_oracle` |
 | `external[].count/onlyOpen` | static whys × `reached`; root nodes kept (`Up::external`) | as above | `multi_external_counts_equal_oracle` |
 | `eventPublishers.*` | P1 masks via `count_publisher` from reach and `rejoin`; `direct` per root (sites into its own nodes) | ENG-128's rule | `multi_event_publishers_equal_oracle` |
-| `entries[].first`, `external[].first`, `eventPublishers.first`, `.direct.first` | P2 slots keyed (open by P1's final `any & !non_open`, hops, event order), at most `keep.per_list` | `Firsts::first` sorts by (open, hops, at) | `multi_first_lists_equal_oracle` (with Review Focus 1's fixture) |
+| `entries[].first`, `external[].first`, `eventPublishers.first`, `.direct.first` | P2, two partitions per (root, list). **Non-open:** non-open arrivals of nodes whose final category is non-open. **Open-only:** arrivals of nodes whose final category is `any & !non_open`, filled only while P1's non-open count is below `keep.per_list`. Each keyed (hops, order); the result is non-open then open-only, at most `keep.per_list` | `Firsts::add` keeps min (open, hops), first arrival on ties; `first` sorts by (open, hops, at). A node's witness is its first arrival in its final category (an open hop 2 then a non-open hop 10 gives non-open, hop 10) | `multi_first_lists_equal_oracle` (Review Focus 1's fixture, and the open-then-non-open upgrade) |
 | `entries[].first[].action/caption` | P1: per page-action node, (site, bits) in event order from `step`; the first record with the root's bit gives `action_site` | `Up::step`'s first `or_insert`, independent of the lists | `multi_page_action_captions_equal_oracle` |
-| `firstByKind`, `nearest` (entry) | P2 slots per (root, word, final pop p), keyed (tier rank, hops, event order); candidates are entries whose P1 final class pop is p, arriving with pop p | `classified`: min `(key, at)` among entries of final population p | `multi_first_by_kind_and_nearest_equal_oracle` |
-| `nearest` (ancestor fallback) | P2 slots per (root, p) over non-root, non-hub nodes of final pop p, the full witness with `ext` (`needsNavigation`) | the same | in the test above |
+| `firstByKind`, `nearest` (entry) | P2, one slot per (root, word, pop p, tier rank t). Candidates are entries whose P1 final class is exactly (p, t), arriving with (p, t); keyed (hops, order). The result per (word, p) is the slot of the lowest t present | `classified`: min `(key, at)` with key (p, t, hops) among entries of final population p. A rank-2 member at hops 3 loses to a rank-0 arrival at hops 9 because the partitions are compared first | `multi_first_by_kind_and_nearest_equal_oracle` (with a rank-upgrade fixture: a full slot at low hops, then a better rank two levels later) |
+| `nearest` (ancestor fallback) | P2, slots per (root, p, t) over non-root, non-hub nodes whose final class is (p, t), keeping the full witness with `ext` (`needsNavigation`) | the same | in the test above |
 | `nearestAncestors` (+ hops) | P1: the first `keep.ancestors` distinct non-root nodes with a stable id, by reach order; P2: hops at the first reach at the node's final best tier | `Up::reach` pushes in arrival order; `NodeBest` keeps the min (tier, hops) | `multi_nearest_ancestors_equal_oracle` |
 | `limited` | Task 1's budget rule | trace equality | `multi_state_budget_equal_oracle` |
 | `callers`, `display`, `nodes`, `programEntries`, `programEntriesByKind`, not-in-graph rows | unchanged | not from the walk | `multi_rows_equal_oracle_rows` |
-| **union summary** (`union`) | the same folds for the union logical root (lanes = every root's nodes) | the same | `multi_union_equals_oracle_union` |
+| **union summary** (`union`) | the same folds for the union logical root. Its lanes are `all_nodes` SORTED AND DEDUPLICATED, as `up()` builds them, not request order | the same | `multi_union_equals_oracle_union` (with reversed and duplicate root requests) |
 
 ### Cost fields
 
@@ -135,10 +154,19 @@ The masks are sparse by reached node and reached entry: 11 words (88 B) per fami
 - publishers any/non-open and direct (4).
 
 That is 28 families × 23,066 reached nodes ≈ 57 MiB. The 18 class families × ~15,000 reached
-entries ≈ 24 MiB. Each chunk's traversal adds `seen` (≤ 191,824 states × 88 B ≈ 16 MiB) plus
-the level records. So about 100 MiB per worker chunk at 699 roots, and chunks of k roots scale
-as k/699. Task 2 measures it; the bound against cdo-speed's 1.10 of the one-shot's 3.5 GB peak
-is about 350 MiB.
+entries ≈ 24 MiB.
+
+Per chunk's traversal (bitset widths rounded to whole words):
+- `seen`: ≤ 191,824 states × 88 B ≈ 16 MiB;
+- `action_entries`: the same order;
+- the state index;
+- the pass 2 slots;
+- the current and next level records. These scale with the new (root, state) pairs of a level,
+  NOT with distinct states, so they are not yet bounded.
+
+**This is an estimate, not a bound** (both reviews). Task 1 measures the peak records per level
+on CDO. Task 2 has a memory go/no-go: the whole up pass's added peak against cdo-speed's 1.10 of
+the one-shot's 3.5 GB, which leaves about 350 MiB.
 
 ---
 
@@ -189,7 +217,10 @@ is about 350 MiB.
 - [ ] **Step 3: Implement**
   - Intern states in an FxHashMap, with `seen: RootBits` per state (shared by a root's lanes).
   - A level is `Vec<(lane, child, from, site, new_bits)>`, stably sorted by (lane, `WalkState`).
-    Process each record: reach and report for its bits, then the steps for the record's bits.
+    Each (lane, child) group: reach and report per record, in arrival order. Then ONE site loop
+    for the group, with the OR of its records' bits (each root's sequence is unchanged, and the
+    site loop is not repeated per record).
+  - Record on CDO: the peak records per level, and the peak bytes of the level vectors.
   - Per site: apply the open, guard and step rules; the action-run entry for
     `bits & !action_entries[child]`; `rejoin` for `bits & seen[child]`; then
     `new = bits & !seen[child]`, set them, and push a record.
@@ -230,9 +261,18 @@ is about 350 MiB.
   - population-only class masks (Review Focus 5's fixture);
   - external dropping root nodes;
   - hub `at` taken as a numeric minimum.
-- [ ] **Step 6: Go/no-go.** On CDO, in the slot, time `multi_walk` plus pass 1 for the 699 roots
-  against Task 0's per-root pass. **Stop and report** if the per-root pass's CPU minus
-  (2 × this time) is under 5 % of impact's CPU.
+- [ ] **Step 6: Go/no-go, in the production chunk layout.**
+  - On CDO, in the slot, time `multi_walk` plus pass 1 for the 699 roots and the union, at 1, 2 and
+    8 chunks. Report CPU summed over chunks, wall time, and the up pass's added peak RSS.
+  - Choose the fewest chunks whose wall time is within cdo-speed's limit.
+  - **Stop and report** if, at that chunk count:
+    - the per-root pass's CPU minus the estimated two-pass cost is under 5 % of impact's CPU. The
+      estimate is 2 × this time and is labelled an estimate: pass 2 has slot work pass 1 lacks,
+      and it is re-checked after Task 3; or
+    - the added peak exceeds about 350 MiB.
+- [ ] **Step 6b:** A lib test with more than 64 roots (`tests/fixtures/test-universe`, every
+  routine a root), run at chunk sizes 1, 64 and all. Every row is equal across the chunkings and
+  to the oracle.
 - [ ] **Step 7:** Commit.
 
 ### Task 3: `UpMulti` pass 2, the witness slots
@@ -256,8 +296,12 @@ is about 350 MiB.
 - [ ] **Step 5:** Discrimination proofs, each red then green:
   - first-fill without the key (Review Focus 1);
   - closing at the member's own level;
-  - arrival pop used instead of P1's final pop.
-- [ ] **Step 6:** Commit.
+  - arrival pop used instead of P1's final pop;
+  - one class slot per (word, pop) with the rank in the key (the rank-upgrade fixture);
+  - an open-only member relabelled non-open (the open-then-non-open fixture).
+- [ ] **Step 6:** Re-check the bar: pass 1 plus pass 2's measured CPU at the chosen chunk count,
+  against the per-root pass. Stop and report if the saving is under 5 %.
+- [ ] **Step 7:** Commit.
 
 ### Task 4: Wire into `up()`: chunks, the union, the oracle
 
