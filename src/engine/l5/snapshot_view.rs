@@ -309,9 +309,7 @@ pub(super) fn derive_evidence_base(
     op_rest.dedup();
     site_rest.sort_unstable();
     site_rest.dedup();
-    let frames = (!frames.is_empty()).then(|| RoutineOrderFrames {
-        entries: frames.into_iter().collect(),
-    });
+    let frames = (!frames.is_empty()).then(|| RoutineOrderFrames::from_map(frames));
     (
         EvidenceBase {
             ops: by_id.into_values().collect(),

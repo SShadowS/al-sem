@@ -44,6 +44,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   coverage map (`RoutineDirectCoverage`) still holds `String` statuses and reasons; it was not
   measured.
 
+### Changed (ENG-116: the memcmp behind `alsem impact --diff`: two linear string scans become lookups, about 3 % CPU on CDO)
+
+- **Found** (TLS-86's impact profile, read again): libc `memcmp` was 11 % of the gate's
+  699-root `impact --diff` CPU on CDO. samply's inline labels on the frame above it pointed
+  at the wrong code (TLS-86); why is not established. So this time the call sites were
+  resolved with `addr2line -i` against the profiled binary, on each caller frame's address
+  (already the return address minus one, inside the call instruction; the script subtracts
+  one more, which stays inside it).
+  - The top site, 3.0 % of all CPU: `ordering_inter::reconstruct_call_chains` asking
+    `RoutineOrderFrames::get` once per hop of every call chain. `get` was a linear `find` over
+    a `Vec<(String, _)>`, comparing the routine id against every entry.
+  - Then `LiteralReach::first_live_owner` 0.7 %, `fact_equivalent` 0.4 %, `seed_reach` 0.3 %.
+- **Now:**
+  - `RoutineOrderFrames::get` (`src/engine/l5/snapshot.rs`) is a binary search. Both builders
+    now go through one constructor, `RoutineOrderFrames::from_map`, which takes a
+    `BTreeMap<String, _>`. So the entries are unique and sorted by `str` order by type, and
+    `retain` keeps it. The test-only `from_entries` asserts it.
+  - The pre-rebase run of the group index alone (`e116-timing.log` in the profile folder, on
+    3af92349) gave x0.986 twice.
+  - `compute_ordering` (`src/engine/l5/ordering_engine.rs`) indexes its groups by owner. Three
+    linear scans per occurrence compared owner strings O(occurrences x groups) times. The group
+    order (insertion order) is unchanged.
+- **Tests and breaks:**
+  - `get_finds_each_routines_own_frames`: five sorted ids each find their own frame, and five
+    misses find none. Break: the comparison reversed -> "R0" not found (red).
+  - The group index: every owner mapped to group 0 -> `r4f_ordering_facts` and
+    `r4f_scoped_guarantees` red (no lib test covers several groups; the r4f goldens do).
+    Restored: green.
+- **Measured** on CDO (`bc3ccb18`), 2026-11-17, release-fast, base master b3511094 against
+  534d636d, the gate's 699-root `impact --diff`, alternating.
+  - **≈3 % (profile-confirmed: the 3.0 % site is gone, memcmp 10.7→8.3 %); timed pairs
+    disagree, so no ratio; kept because it removes two scans that grow quadratically.** That
+    is under the task's 5 % bar.
+  - Round 1 ran beside a peer's build and is left out. Rounds 2-4, CPU (user + sys) base/head:
+    430.4/401.6 s, 427.1/389.7 s, 408.6/407.3 s.
+  - All 8 outputs byte-identical (one sha256). `cdo-before-after`: nothing moved.
+  - `cdo-speed` twice, both PASS: warm impact x0.975 / x0.921, build x0.966 / x0.972, peak
+    memory x0.973 / x0.974.
+- **Profile** of the head (samply, the same command; raw file in
+  `/work/.al-sem/profiles/2026-11-17-eng116/`):
+  - The 3.0 % `RoutineOrderFrames::get` site is gone, and memcmp fell from 10.7 % to 8.3 % of CPU.
+    The "before" profile (ENG-117's) predates ENG-108, so the two totals are not compared.
+  - memcmp's callers left, each under 1 %: `first_live_owner` 0.8 %, `fact_equivalent` 0.4 %,
+    `seed_reach` 0.3 %, `lflow::Exec::exec` 0.3 %, `bind_m` 0.2 %, `TrieWalk::descend` 0.2 %.
+- **Why kept under the bar** (the orchestrator's call): the two scans grow quadratically,
+  O(occurrences x groups) and O(hops x routines). The fix is small and pinned by tests.
+
 ### Changed (ENG-117: `alsem impact --diff` takes 0.92-0.94x the CPU on CDO; FxHash for the searches' lookup maps)
 
 - **Found** in TLS-86's profile: SipHash was 10.3 % of the gate's 699-root `impact --diff` CPU,
