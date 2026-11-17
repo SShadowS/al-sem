@@ -113,8 +113,15 @@ Notation:
     member's hops + 1 (events never carry more than hops + 1).
   - **The field's result** is the merge of its partitions in leading-key order.
   - **Per-bit work** is bounded: event bits are first ANDed with P1's final candidate mask for the
-    slot, and a per-(root, id) delivered mask visits each candidate once. So the per-bit steps are
-    about one P1 fold's size.
+    slot. A per-(root, id) delivered mask is set only at the LEVEL BOUNDARY, from a pending mask
+    kept during the level. Within a level, an arrival at h+1 can come before one at h for the same
+    id (a `rejoin` before that publisher's `reach`; an action-run entry before the page's own
+    entry; `canon.add` from `step` before `entry`). A later same-level arrival with smaller hops
+    therefore still replaces it, under the "keep the smaller (hops, order)" rule. So the per-bit
+    steps are about one P1 fold's size plus a level's repeats.
+  - **Event order** is ONE per-root sequence shared by every slot of a field. `nearest` compares
+    winners across words and across the two `overConfiguration` classes by it, so a per-slot
+    counter would break the tie-break.
 
 | `up` field | mechanism | exact because | test |
 |---|---|---|---|
@@ -177,6 +184,11 @@ the one-shot's 3.5 GB, which leaves about 350 MiB.
 - [ ] **Step 2:** Leave out a round with sys > 30 s or host pressure above 15 %.
 - [ ] **Step 3:** From all clean rounds (1, 4 and the new ones), report the means and ranges of
   default − skip and noop − skip. **Stop and report** if default − skip is under 8 %.
+  - **Done 2026-11-17.** Rounds 5-7 were all clean (sys ≤ 27 s, host pressure avg10 ≤ 2.3 %).
+    default − skip was 17.8 %, 16.3 % and 16.4 %. Over the five clean rounds (1, 4, 5, 6, 7) the
+    mean is 63.8 s, 15.6 % of impact's CPU; the per-root pass is above the 8 % threshold.
+  - The visitor-only share (default − noop) stays noisy, from −2 % to 8.2 %. Raw:
+    `/work/.al-sem/profiles/2026-11-17-eng125/e125-proto.log`.
 
 ### Task 1: `multi_walk` and the event model
 
@@ -298,7 +310,9 @@ the one-shot's 3.5 GB, which leaves about 350 MiB.
   - closing at the member's own level;
   - arrival pop used instead of P1's final pop;
   - one class slot per (word, pop) with the rank in the key (the rank-upgrade fixture);
-  - an open-only member relabelled non-open (the open-then-non-open fixture).
+  - an open-only member relabelled non-open (the open-then-non-open fixture);
+  - the delivered bit set at the first visit, with a fixture where a publisher's `rejoin` at h+1
+    comes before its `reach` at h in the same level.
 - [ ] **Step 6:** Re-check the bar: pass 1 plus pass 2's measured CPU at the chosen chunk count,
   against the per-root pass. Stop and report if the saving is under 5 %.
 - [ ] **Step 7:** Commit.
@@ -315,7 +329,7 @@ the one-shot's 3.5 GB, which leaves about 350 MiB.
   - The lib CDO test: the pinned baseline's 699 rows and the union, byte-equal (cost fields
     blanked) between the oracle and production.
 - [ ] **Step 2: Replace the per-root pass and the union walk**
-  - Split the roots into chunks over `args.workers` (the reach pool; serial in a resident
+  - Split the roots into the chunk count Task 2 chose, on the reach pool (serial in a resident
     revision, as now).
   - Each chunk runs `UpMulti` P1 → P2 → rows. The union runs as one logical root in its own
     chunk.
