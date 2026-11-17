@@ -28,7 +28,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`scripts/cdo-before-after 3af92349`, workspace `bc3ccb18` clean on both sides) no finding or
   fingerprint moved at either scope and the call graph is unchanged (0 unknown); `aldump
   --session-refresh --verify` gives a model equal to a cold build after every change type, in the
-  default and `--low-mem` modes.
+  default and `--low-mem` modes. `scripts/cdo-speed` (`3af92349` against `2ce4c135`) passed
+  twice: the model build x0.998 and x1.082 (one pass at x1.147), the round totals x1.032 and
+  x1.008, so no speed ratio is claimed; the servers' summed peak memory x0.972 and x0.939.
 - **Tests.** `the_shared_coverage_texts_stop_growing_at_their_cap` (below the cap shared, past it
   answered and not kept; break: no cap → red), and `step5_t1_spans_and_d9_read_the_fold` now
   pins that a real fold's records share (Root's and Helper's equal statuses and Root's inherited
