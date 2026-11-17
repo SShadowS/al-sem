@@ -35,7 +35,6 @@ use super::reverse::{
     state_over, tier_at,
 };
 use super::sited::{SitedGraph, flag};
-use crate::fxhash::FxHashMap;
 
 /// What a [`multi_walk`] reports. Each method is [`super::reverse::ConeVisitor`]'s, with the
 /// logical roots it holds for as a bit set (`roots`, bit k = `roots[k]` of the walk; a set is
@@ -161,26 +160,55 @@ fn has(a: &[u64], k: usize) -> bool {
 
 /// The bit sets of the walk's states: per interned state, its `seen` set then its action-run
 /// entry set (`w` words each).
+/// Dense by node (a node has a few states: tiers, bits, guards), so finding a state is a
+/// short scan of its node's list, not a hash.
 struct States {
     w: usize,
-    ix: FxHashMap<WalkState, usize>,
+    /// Per node, its last interned state's slot ([`NONE`]: none).
+    head: Vec<u32>,
+    /// Per slot, the state and the slot of its node's previous state.
+    slots: Vec<(WalkState, u32)>,
     bits: Vec<u64>,
 }
 
+const NONE: u32 = u32::MAX;
+
 impl States {
+    fn new(w: usize, nodes: usize) -> States {
+        States {
+            w,
+            head: vec![NONE; nodes],
+            slots: Vec::new(),
+            bits: Vec::new(),
+        }
+    }
+
     /// `s`'s word offset (its `seen` set; the action-run set follows it).
     fn of(&mut self, s: WalkState) -> usize {
-        let next = self.bits.len();
-        let off = *self.ix.entry(s).or_insert(next);
-        if off == next {
-            self.bits.resize(next + 2 * self.w, 0);
+        let head = &mut self.head[s.node as usize];
+        let mut i = *head;
+        while i != NONE {
+            let (st, prev) = self.slots[i as usize];
+            if st == s {
+                return i as usize * 2 * self.w;
+            }
+            i = prev;
         }
-        off
+        let slot = self.slots.len();
+        self.slots.push((s, *head));
+        *head = slot as u32;
+        self.bits.resize((slot + 1) * 2 * self.w, 0);
+        slot * 2 * self.w
+    }
+
+    fn len(&self) -> usize {
+        self.slots.len()
     }
 
     fn bytes(&self) -> usize {
         self.bits.capacity() * 8
-            + self.ix.capacity() * (std::mem::size_of::<(WalkState, usize)>() + 1)
+            + self.head.capacity() * 4
+            + self.slots.capacity() * std::mem::size_of::<(WalkState, u32)>()
     }
 }
 
@@ -275,12 +303,9 @@ pub fn multi_walk(
             set(&mut non_empty, k);
         }
     }
-    let mut states = States {
-        w,
-        ix: FxHashMap::default(),
-        bits: Vec::new(),
-    };
-    let mut hidden: FxHashMap<NodeIx, usize> = FxHashMap::default();
+    let mut states = States::new(w, g.node_count());
+    // Per node, the word offset of its hidden-channel set ([`NONE`]: not reached yet).
+    let mut hidden = vec![NONE; g.node_count()];
     let mut hidden_bits: Vec<u64> = Vec::new();
     let (mut level, mut next) = (Level::default(), Level::default());
     let (mut rejoin_new, mut rejoin_due) = (Rejoins::default(), Rejoins::default());
@@ -371,15 +396,16 @@ pub fn multi_walk(
                             out.roots[k].limited = true;
                         }
                     }
-                    out.states = states.ix.len();
+                    out.states = states.len();
                     return out;
                 }
                 sink.reach(lane, s, hops, rec.via, rec.from, &rec_roots);
-                let next_off = hidden_bits.len();
-                let off = *hidden.entry(s.node).or_insert(next_off);
-                if off == next_off {
-                    hidden_bits.resize(next_off + w, 0);
+                let at = &mut hidden[s.node as usize];
+                if *at == NONE {
+                    *at = hidden_bits.len() as u32;
+                    hidden_bits.resize(hidden_bits.len() + w, 0);
                 }
+                let off = *at as usize;
                 for ((t, x), h) in tmp
                     .iter_mut()
                     .zip(&rec_roots)
@@ -484,7 +510,7 @@ pub fn multi_walk(
         out.peak_records = out.peak_records.max(next.recs.len());
         out.peak_bytes = out.peak_bytes.max(
             states.bytes()
-                + hidden.capacity() * (std::mem::size_of::<(NodeIx, usize)>() + 1)
+                + hidden.capacity() * 4
                 + hidden_bits.capacity() * 8
                 + level.bytes()
                 + next.bytes()
@@ -496,7 +522,7 @@ pub fn multi_walk(
         hops += 1;
     }
     rejoin_due.deliver(w, &alive, &mut tmp, sink);
-    out.states = states.ix.len();
+    out.states = states.len();
     out
 }
 
