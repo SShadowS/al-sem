@@ -424,7 +424,7 @@ pub(super) fn contradicts(reqs: &[ValueReq], b: &Bindings) -> bool {
 
 /// The loop variables of `for` / `foreach` statements in `node`'s subtree.
 fn loop_vars(node: &PCFNNode, out: &mut Vec<String>) {
-    if let Some(ValueFact::LoopVar(v)) = &node.value_fact {
+    if let Some(ValueFact::LoopVar(v)) = node.value_fact() {
         out.push(v.clone());
     }
     for c in node
@@ -505,7 +505,7 @@ fn if_reqs(node: &PCFNNode, cx: &ValueWalk) -> (Vec<ValueReq>, Vec<ValueReq>) {
         name,
         equal,
         labels,
-    }) = &node.value_fact
+    }) = node.value_fact()
     else {
         return (Vec::new(), Vec::new());
     };
@@ -565,7 +565,7 @@ fn walk(
     for l in node.condition_leaves.iter().flatten() {
         walk(l, reqs, cx, by_site);
     }
-    let on = match &node.value_fact {
+    let on = match node.value_fact() {
         Some(ValueFact::CaseOn(name)) if node.kind == "case" => cx.usable.get(name),
         _ => None,
     };
@@ -574,8 +574,8 @@ fn walk(
         // Each non-else arm's label set; `None` when one label is unresolved.
         let arms: Vec<Option<Vec<Val>>> = branches
             .iter()
-            .filter(|b| !b.is_case_else)
-            .map(|b| match &b.value_fact {
+            .filter(|b| !b.is_case_else())
+            .map(|b| match b.value_fact() {
                 Some(ValueFact::Arm(labels)) => label_set(labels, d, cx.resolve),
                 _ => None,
             })
@@ -594,7 +594,7 @@ fn walk(
                 });
         let mut arm_sets = arms.into_iter();
         for b in branches {
-            let extra: Option<ValueReq> = if b.is_case_else {
+            let extra: Option<ValueReq> = if b.is_case_else() {
                 listed.as_ref().map(|l| (*p, false, Arc::clone(l)))
             } else {
                 arm_sets.next().flatten().map(|s| (*p, true, s.into()))

@@ -1006,7 +1006,7 @@ fn is_commit(n: &PCFNNode, commits: &BTreeSet<&str>) -> bool {
 fn is_guarded_commit(n: &PCFNNode, commits: &BTreeSet<&str>) -> bool {
     use crate::program::body::features::PathHint;
     if n.kind != "if"
-        || n.path_hint != Some(PathHint::CondCall { negated: false })
+        || n.path_hint() != Some(PathHint::CondCall { negated: false })
         || !kids(&n.else_children).is_empty()
     {
         return false;
@@ -1135,14 +1135,8 @@ mod tests {
             condition_leaves: None,
             children: None,
             else_children: None,
-            is_case_else: false,
+            rare: None,
             source_range: None,
-            path_hint: None,
-            table_case: None,
-            field_exit_guard: None,
-            table_exit_guard: None,
-            junction_guards: None,
-            value_fact: None,
             flow: None,
         }
     }

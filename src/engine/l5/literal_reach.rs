@@ -1040,7 +1040,7 @@ fn walk_tables(
     for l in node.condition_leaves.iter().flatten() {
         walk_tables(l, reqs, in_loop, cx, by_site);
     }
-    let on = match &node.table_case {
+    let on = match node.table_case() {
         Some(TableCase::On(r)) if !in_loop && node.kind == "case" => {
             cx.bound.get(r).copied().filter(|_| {
                 // Every call passing R or P on sits inside this case.
@@ -1060,16 +1060,16 @@ fn walk_tables(
             // for a table none of them is.
             let listed: Arc<[String]> = branches
                 .clone()
-                .filter_map(|b| match &b.table_case {
+                .filter_map(|b| match b.table_case() {
                     Some(TableCase::Tables(t)) => Some(t.clone()),
                     _ => None,
                 })
                 .flatten()
                 .collect();
             for b in branches {
-                let extra: Option<TableReq> = match &b.table_case {
+                let extra: Option<TableReq> = match b.table_case() {
                     Some(TableCase::Tables(t)) => Some((p, true, t.clone().into())),
-                    _ if b.is_case_else => Some((p, false, Arc::clone(&listed))),
+                    _ if b.is_case_else() => Some((p, false, Arc::clone(&listed))),
                     _ => None,
                 };
                 let mut r = reqs.to_vec();

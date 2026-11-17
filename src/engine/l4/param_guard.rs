@@ -210,7 +210,7 @@ fn branch_reqs(node: &PCFNNode, usable: &[(String, u32)]) -> BranchReqs {
         }
         return out;
     }
-    match &node.junction_guards {
+    match node.junction_guards() {
         Some(JunctionGuards::All(gs)) => {
             out.then = gs.iter().filter_map(|g| guard_req(g, usable)).collect();
         }

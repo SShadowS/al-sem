@@ -1512,6 +1512,81 @@ fn phase<T>(label: &str, f: impl FnOnce() -> T) -> T {
     v
 }
 
+/// ENG-95: counts over the dependency rows' statement trees, beside `Acc`'s bytes.
+#[derive(Default)]
+struct PcfnCounts {
+    trees: usize,
+    shared_trees: usize,
+    nodes: usize,
+    leaves: usize,
+    some: HashMap<&'static str, usize>,
+    kinds: HashMap<String, usize>,
+    max_depth: usize,
+}
+
+/// ENG-95: drop a statement tree field by field (heap only; the node array that holds a
+/// node is counted under its parent's `children`/`else`/`leaves` arrays, the root's box under
+/// `tree.root (Arc)`), recursing into the children first.
+fn pcfn_split(
+    rf: &mut Acc,
+    c: &mut PcfnCounts,
+    n: al_sem::program::body::features::PCFNNode,
+    depth: usize,
+) {
+    // Only the fields both sides of ENG-95 have are taken by name, so one probe builds
+    // against either; what remains in the node (the rare facts, inline before ENG-95 and
+    // boxed after) drops as one bucket.
+    let mut n = n;
+    use std::mem::take;
+    let kind = take(&mut n.kind);
+    let operation_id = take(&mut n.operation_id);
+    let callsite_id = take(&mut n.callsite_id);
+    let condition_guard = take(&mut n.condition_guard);
+    let condition_leaves = take(&mut n.condition_leaves);
+    let children = take(&mut n.children);
+    let else_children = take(&mut n.else_children);
+    let flow = take(&mut n.flow);
+    c.nodes += 1;
+    c.max_depth = c.max_depth.max(depth);
+    *c.kinds.entry(kind.clone()).or_default() += 1;
+    let mut some = |k: &'static str, b: bool| {
+        if b {
+            *c.some.entry(k).or_default() += 1;
+        }
+    };
+    some("operation_id", operation_id.is_some());
+    some("callsite_id", callsite_id.is_some());
+    some("condition_guard", condition_guard.is_some());
+    some("condition_leaves", condition_leaves.is_some());
+    some("children", children.is_some());
+    some("else_children", else_children.is_some());
+    some("source_range", n.source_range.is_some());
+    some("flow", flow.is_some());
+    rf.drop_as("tree.kind", kind);
+    rf.drop_as("tree.operation_id", operation_id);
+    rf.drop_as("tree.callsite_id", callsite_id);
+    rf.drop_as("tree.condition_guard", condition_guard);
+    rf.drop_as("tree.rare side facts", n);
+    rf.drop_as("tree.flow", flow);
+    for (label, list) in [
+        ("tree.children (node arrays)", children),
+        ("tree.else (node arrays)", else_children),
+        ("tree.leaves (node arrays)", condition_leaves),
+    ] {
+        if let Some(mut v) = list {
+            let leaves = label.starts_with("tree.leaves");
+            // Drain keeps the buffer; the emptied Vec's drop frees exactly the node array.
+            for k in v.drain(..) {
+                if leaves {
+                    c.leaves += 1;
+                }
+                pcfn_split(rf, c, k, depth + 1);
+            }
+            rf.drop_as(label, v);
+        }
+    }
+}
+
 /// Per-field drop deltas summed over many values: (bytes, allocs).
 #[derive(Default)]
 struct Acc(Vec<(&'static str, isize, isize)>);
@@ -1520,12 +1595,15 @@ impl Acc {
         let (b0, a0) = live();
         drop(v);
         let (b1, a1) = live();
+        self.add(label, b0 - b1, a0 - a1);
+    }
+    fn add(&mut self, label: &'static str, bytes: isize, allocs: isize) {
         match self.0.iter_mut().find(|e| e.0 == label) {
             Some(e) => {
-                e.1 += b0 - b1;
-                e.2 += a0 - a1;
+                e.1 += bytes;
+                e.2 += allocs;
             }
-            None => self.0.push((label, b0 - b1, a0 - a1)),
+            None => self.0.push((label, bytes, allocs)),
         }
     }
     fn print(&self, total: isize) {
@@ -2420,6 +2498,7 @@ fn routine_fields(routines: Vec<al_sem::program::model::workspace::ModelRoutine>
     let (t0, _) = live();
     let n = routines.len();
     let mut rf = Acc::default();
+    let mut pc = PcfnCounts::default();
     for r in routines {
         let ModelRoutine {
             id,
@@ -2510,7 +2589,21 @@ fn routine_fields(routines: Vec<al_sem::program::model::workspace::ModelRoutine>
         }
         rf.drop_as("call_sites.(vec)", call_sites);
         rf.drop_as("operation_sites", operation_sites);
-        rf.drop_as("statement_tree", statement_tree);
+        if let Some(t) = statement_tree {
+            pc.trees += 1;
+            // A sole holder's unwrap frees the root's Arc box: measured as its own bucket.
+            let (b0, a0) = live();
+            let unwrapped = Arc::try_unwrap(t);
+            let (b1, a1) = live();
+            rf.add("tree.root (Arc box)", b0 - b1, a0 - a1);
+            match unwrapped {
+                Ok(root) => pcfn_split(&mut rf, &mut pc, root, 0),
+                Err(shared) => {
+                    pc.shared_trees += 1;
+                    rf.drop_as("tree (shared Arc, other holder)", shared);
+                }
+            }
+        }
         rf.drop_as("loops", loops);
         rf.drop_as("site_exprs", site_exprs);
         rf.drop_as("identifier_references", identifier_references);
@@ -2528,6 +2621,33 @@ fn routine_fields(routines: Vec<al_sem::program::model::workspace::ModelRoutine>
         size_of::<ModelRoutine>()
     );
     rf.print(total);
+    if pc.nodes > 0 {
+        use al_sem::program::body::features::PCFNNode;
+        println!(
+            "    ENG-95 trees: {} ({} shared), {} nodes ({} condition leaves), max depth {}, size_of PCFNNode {} B ({:.2} MiB inline)",
+            pc.trees,
+            pc.shared_trees,
+            pc.nodes,
+            pc.leaves,
+            pc.max_depth,
+            size_of::<PCFNNode>(),
+            mib((pc.nodes * size_of::<PCFNNode>()) as isize)
+        );
+        let mut some: Vec<_> = pc.some.into_iter().collect();
+        some.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
+        for (k, v) in some {
+            println!(
+                "      Some {k:<18} {v:>9} ({:.1}% of nodes)",
+                100.0 * v as f64 / pc.nodes as f64
+            );
+        }
+        let mut kinds: Vec<_> = pc.kinds.into_iter().collect();
+        kinds.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+        println!("      {} distinct kinds:", kinds.len());
+        for (k, v) in kinds.iter().take(25) {
+            println!("        {k:<24} {v:>9}");
+        }
+    }
 }
 
 /// The resident engine's live heap (context-server stage 3, T-mem): a
@@ -4143,6 +4263,46 @@ fn main() {
     }
     let mut args = std::env::args().skip(1);
     let source = match args.next().as_deref() {
+        Some("eng95-sizes") => {
+            use al_sem::program::body::features as f;
+            println!("PCFNNode {}", size_of::<f::PCFNNode>());
+            println!("String {}", size_of::<String>());
+            println!("Option<String> {}", size_of::<Option<String>>());
+            // The unboxed form (`condition_guard`'s field before ENG-95), as a reference.
+            println!(
+                "Option<PConditionGuard> (unboxed) {}",
+                size_of::<Option<f::PConditionGuard>>()
+            );
+            println!(
+                "Option<Vec<PCFNNode>> {}",
+                size_of::<Option<Vec<f::PCFNNode>>>()
+            );
+            println!(
+                "Option<(u32,u32,u32,u32)> {}",
+                size_of::<Option<(u32, u32, u32, u32)>>()
+            );
+            println!("Option<PathHint> {}", size_of::<Option<f::PathHint>>());
+            println!("Option<TableCase> {}", size_of::<Option<f::TableCase>>());
+            println!(
+                "Option<(String,i64)> {}",
+                size_of::<Option<(String, i64)>>()
+            );
+            println!(
+                "Option<(String,Vec<String>)> {}",
+                size_of::<Option<(String, Vec<String>)>>()
+            );
+            println!(
+                "Option<JunctionGuards> {}",
+                size_of::<Option<f::JunctionGuards>>()
+            );
+            println!("Option<ValueFact> {}", size_of::<Option<f::ValueFact>>());
+            println!(
+                "Option<Box<FlowFact>> {}",
+                size_of::<Option<Box<f::FlowFact>>>()
+            );
+            println!("FlowFact {}", size_of::<f::FlowFact>());
+            return;
+        }
         Some("resident") => {
             // `resident <ws> [routine] [--low-mem] [--sited]`
             let rest: Vec<String> = args.collect();

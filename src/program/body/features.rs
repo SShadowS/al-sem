@@ -46,14 +46,8 @@
 //!   - `PVarAssignment.rhs_identifier`
 //!   - `PVarAssignment.rhs_member`
 //!   - `PVarAssignment.lhs_is_member`
-//!   - `PCFNNode.is_case_else`
+//!   - `PCFNNode.rare`
 //!   - `PCFNNode.source_range`
-//!   - `PCFNNode.path_hint`
-//!   - `PCFNNode.table_case`
-//!   - `PCFNNode.field_exit_guard`
-//!   - `PCFNNode.table_exit_guard`
-//!   - `PCFNNode.junction_guards`
-//!   - `PCFNNode.value_fact`
 //!   - `PCFNNode.flow`
 
 use super::operation_order::{OperationOrder, ScopeFrame};
@@ -875,34 +869,36 @@ pub struct PConditionGuard {
 /// conditionGuard, ordered conditionLeaves. sourceAnchor DROPPED.
 ///
 /// `PartialEq`/`Eq` are implemented MANUALLY (not derived) so the in-memory-only
-/// `is_case_else` / `source_range` / `path_hint` markers are EXCLUDED from
-/// equality. They never serialize, so a freshly-built node (markers set) must
+/// `rare` / `source_range` / `flow` markers are EXCLUDED from equality. They never serialize, so a freshly-built node (markers set) must
 /// still compare equal to a golden node deserialized without them (markers
 /// defaulted). Keeping them out of `==` preserves L2 vector parity (the vectors
 /// compare via `PartialEq`).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// `Debug` is written by hand (ENG-95): it prints the [`PCFNRare`] facts flat, in their
+/// old place, so the `l2_features.snapshot` golden (a `Debug` print) still pins each fact.
+#[derive(Clone, Serialize, Deserialize)]
 pub struct PCFNNode {
     pub kind: String,
     #[serde(rename = "operationId", skip_serializing_if = "Option::is_none")]
     pub operation_id: Option<String>,
     #[serde(rename = "callsiteId", skip_serializing_if = "Option::is_none")]
     pub callsite_id: Option<String>,
+    /// Boxed (ENG-95): on 2.5 % of the nodes, 48 B inline otherwise.
     #[serde(rename = "conditionGuard", skip_serializing_if = "Option::is_none")]
-    pub condition_guard: Option<PConditionGuard>,
+    pub condition_guard: Option<Box<PConditionGuard>>,
     #[serde(rename = "conditionLeaves", skip_serializing_if = "Option::is_none")]
     pub condition_leaves: Option<Vec<PCFNNode>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub children: Option<Vec<PCFNNode>>,
     #[serde(rename = "elseChildren", skip_serializing_if = "Option::is_none")]
     pub else_children: Option<Vec<PCFNNode>>,
-    /// In-memory ONLY (never serialized — `#[serde(skip)]`, so L2 golden parity is
-    /// unchanged): marks a `case-branch` node that is the `else`/default branch of
-    /// a `case`. al-sem distinguishes it via `sourceAnchor.syntaxKind ===
-    /// "case_else_branch"`; the L2 projection drops sourceAnchor, so we carry this
-    /// flag for the L4 branch-aware walker's "case without else joins pre" rule.
+    /// In-memory ONLY (never serialized — `#[serde(skip)]`, ENG-95): the facts few nodes
+    /// carry ([`PCFNRare`]: `is_case_else`, `path_hint`, `table_case`, the exit guards,
+    /// `junction_guards`, `value_fact`), boxed so the rest pay 8 bytes, not 203. Read them
+    /// with the accessors of the same names; set them with [`PCFNNode::rare_mut`].
     /// EXCLUDED from `PartialEq` (see the manual impl below).
     #[serde(skip, default)]
-    pub is_case_else: bool,
+    pub rare: Option<Box<PCFNRare>>,
     /// In-memory ONLY (never serialized — `#[serde(skip)]`): the node's TRUE source
     /// range `(startLine, startColumn, endLine, endColumn)` in the SAME basis as
     /// `PAnchor` (0-based row, utf16 column). al-sem reads `node.sourceAnchor.range`
@@ -912,40 +908,93 @@ pub struct PCFNNode {
     /// EXCLUDED from `PartialEq`.
     #[serde(skip, default)]
     pub source_range: Option<(u32, u32, u32, u32)>,
-    /// In-memory ONLY (#343): what a must-path walk needs that the kind does not
-    /// say ([`PathHint`]). EXCLUDED from `PartialEq`.
-    #[serde(skip, default)]
-    pub path_hint: Option<PathHint>,
-    /// In-memory ONLY (G33): a `case` on a RecordRef's table number, or one of
-    /// its branches' tables ([`TableCase`]). EXCLUDED from `PartialEq`.
-    #[serde(skip, default)]
-    pub table_case: Option<TableCase>,
-    /// In-memory ONLY (G36): on an `if` with no `else` whose condition is
-    /// `not R.FieldExist(N)` and whose then-branch is only `exit`: `(R folded,
-    /// N)`. Past it, `R` holds a table that has field `N`. EXCLUDED from
-    /// `PartialEq`.
-    #[serde(skip, default)]
-    pub field_exit_guard: Option<(String, i64)>,
-    /// In-memory ONLY (G34): on an `if` with no `else` whose condition is
-    /// `R.Number <> Database::"T"` (either side, through parentheses) and whose
-    /// then-branch is only `exit`: `(R folded, [T folded])`. Past it, `R` holds
-    /// table `T`. EXCLUDED from `PartialEq`.
-    #[serde(skip, default)]
-    pub table_exit_guard: Option<(String, Vec<String>)>,
-    /// In-memory ONLY (round-3 m04): on an `if` whose condition is not one
-    /// simple guard (`condition_guard` is `None`) but an `and` or an `or`
-    /// chain (through parentheses) with simple guards among its operands
-    /// ([`JunctionGuards`]). EXCLUDED from `PartialEq`.
-    #[serde(skip, default)]
-    pub junction_guards: Option<JunctionGuards>,
-    /// In-memory ONLY (r3 E1): what the node says about an Integer, Option or
-    /// Enum value ([`ValueFact`]). EXCLUDED from `PartialEq`.
-    #[serde(skip, default)]
-    pub value_fact: Option<ValueFact>,
     /// In-memory ONLY (r3 E2): what the within-routine value flow reads from
     /// the node ([`FlowFact`]). EXCLUDED from `PartialEq`.
     #[serde(skip, default)]
     pub flow: Option<Box<FlowFact>>,
+}
+
+/// ENG-95: a [`PCFNNode`]'s in-memory facts that few nodes carry (on CDO's dependency
+/// trees each is on at most 3.6 % of the nodes), kept in one box. In-memory only, like
+/// the node's other markers.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PCFNRare {
+    /// Marks a `case-branch` node that is the `else`/default branch of a `case`.
+    /// al-sem distinguishes it via `sourceAnchor.syntaxKind === "case_else_branch"`;
+    /// the L2 projection drops sourceAnchor, so we carry this flag for the L4
+    /// branch-aware walker's "case without else joins pre" rule.
+    pub is_case_else: bool,
+    /// #343: what a must-path walk needs that the kind does not say ([`PathHint`]).
+    pub path_hint: Option<PathHint>,
+    /// G33: a `case` on a RecordRef's table number, or one of its branches' tables
+    /// ([`TableCase`]).
+    pub table_case: Option<TableCase>,
+    /// G36: on an `if` with no `else` whose condition is `not R.FieldExist(N)` and
+    /// whose then-branch is only `exit`: `(R folded, N)`. Past it, `R` holds a table
+    /// that has field `N`.
+    pub field_exit_guard: Option<(String, i64)>,
+    /// G34: on an `if` with no `else` whose condition is `R.Number <> Database::"T"`
+    /// (either side, through parentheses) and whose then-branch is only `exit`:
+    /// `(R folded, [T folded])`. Past it, `R` holds table `T`.
+    pub table_exit_guard: Option<(String, Vec<String>)>,
+    /// Round-3 m04: on an `if` whose condition is not one simple guard
+    /// (`condition_guard` is `None`) but an `and` or an `or` chain (through
+    /// parentheses) with simple guards among its operands ([`JunctionGuards`]).
+    pub junction_guards: Option<JunctionGuards>,
+    /// r3 E1: what the node says about an Integer, Option or Enum value
+    /// ([`ValueFact`]).
+    pub value_fact: Option<ValueFact>,
+}
+
+impl std::fmt::Debug for PCFNNode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PCFNNode")
+            .field("kind", &self.kind)
+            .field("operation_id", &self.operation_id)
+            .field("callsite_id", &self.callsite_id)
+            .field("condition_guard", &self.condition_guard)
+            .field("condition_leaves", &self.condition_leaves)
+            .field("children", &self.children)
+            .field("else_children", &self.else_children)
+            .field("is_case_else", &self.is_case_else())
+            .field("source_range", &self.source_range)
+            .field("path_hint", &self.path_hint())
+            .field("table_case", &self.table_case())
+            .field("field_exit_guard", &self.field_exit_guard())
+            .field("table_exit_guard", &self.table_exit_guard())
+            .field("junction_guards", &self.junction_guards())
+            .field("value_fact", &self.value_fact())
+            .field("flow", &self.flow)
+            .finish()
+    }
+}
+
+impl PCFNNode {
+    /// The rare facts, created on first write (ENG-95).
+    pub fn rare_mut(&mut self) -> &mut PCFNRare {
+        self.rare.get_or_insert_default()
+    }
+    pub fn is_case_else(&self) -> bool {
+        self.rare.as_ref().is_some_and(|r| r.is_case_else)
+    }
+    pub fn path_hint(&self) -> Option<PathHint> {
+        self.rare.as_ref().and_then(|r| r.path_hint)
+    }
+    pub fn table_case(&self) -> Option<&TableCase> {
+        self.rare.as_ref().and_then(|r| r.table_case.as_ref())
+    }
+    pub fn field_exit_guard(&self) -> Option<&(String, i64)> {
+        self.rare.as_ref().and_then(|r| r.field_exit_guard.as_ref())
+    }
+    pub fn table_exit_guard(&self) -> Option<&(String, Vec<String>)> {
+        self.rare.as_ref().and_then(|r| r.table_exit_guard.as_ref())
+    }
+    pub fn junction_guards(&self) -> Option<&JunctionGuards> {
+        self.rare.as_ref().and_then(|r| r.junction_guards.as_ref())
+    }
+    pub fn value_fact(&self) -> Option<&ValueFact> {
+        self.rare.as_ref().and_then(|r| r.value_fact.as_ref())
+    }
 }
 
 /// r3 E2: an expression as the within-routine value flow
@@ -1155,8 +1204,8 @@ pub enum PathHint {
 
 impl PartialEq for PCFNNode {
     fn eq(&self, other: &Self) -> bool {
-        // The in-memory-only markers (`is_case_else`, `source_range`,
-        // `path_hint`) are deliberately omitted.
+        // The in-memory-only markers (`rare`, `source_range`, `flow`) are
+        // deliberately omitted.
         self.kind == other.kind
             && self.operation_id == other.operation_id
             && self.callsite_id == other.callsite_id
@@ -1464,7 +1513,7 @@ mod tests {
                 pending = false;
             }
         }
-        assert_eq!(actual.len(), 28, "scanner found {actual:?}");
+        assert_eq!(actual.len(), 22, "scanner found {actual:?}");
         assert_eq!(documented, actual);
     }
 

@@ -420,14 +420,8 @@ mod tests {
             condition_leaves: None,
             children: None,
             else_children: None,
-            is_case_else: false,
+            rare: None,
             source_range: range,
-            path_hint: None,
-            table_case: None,
-            field_exit_guard: None,
-            table_exit_guard: None,
-            junction_guards: None,
-            value_fact: None,
             flow: None,
         }
     }

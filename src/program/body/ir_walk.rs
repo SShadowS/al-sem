@@ -1883,14 +1883,8 @@ pub(crate) fn cfn_node(kind: &str) -> PCFNNode {
         condition_leaves: None,
         children: None,
         else_children: None,
-        is_case_else: false,
+        rare: None,
         source_range: None,
-        path_hint: None,
-        table_case: None,
-        field_exit_guard: None,
-        table_exit_guard: None,
-        junction_guards: None,
-        value_fact: None,
         flow: None,
     }
 }
@@ -2059,7 +2053,9 @@ impl<'a> IrCfn<'a> {
             .enumerate()
             .map(|(i, &bid)| {
                 let mut b = cfn_node("case-branch");
-                b.is_case_else = i == last && !g.falls_through;
+                if i == last && !g.falls_through {
+                    b.rare_mut().is_case_else = true;
+                }
                 b.source_range = self.range_of(&self.ir().block(bid).origin);
                 b.children = Some(vec![self.build_block(bid)]);
                 b
@@ -2173,7 +2169,7 @@ impl<'a> IrCfn<'a> {
                 self.harvest(*then_value, out);
                 self.harvest(*else_value, out);
                 for l in &mut out[start..] {
-                    l.path_hint = Some(PathHint::MayRun);
+                    l.rare_mut().path_hint = Some(PathHint::MayRun);
                 }
             }
             TypeOp { .. } | List(_) => {
@@ -2623,17 +2619,27 @@ impl<'a> IrCfn<'a> {
                 n.children = Some(vec![self.build_block(*then_block)]);
                 n.else_children = else_block.map(|b| vec![self.build_block(b)]);
                 let leaves = self.harvest_vec(*cond);
-                n.path_hint = self.cond_call(*cond, &leaves);
+                if let Some(h) = self.cond_call(*cond, &leaves) {
+                    n.rare_mut().path_hint = Some(h);
+                }
                 n.condition_leaves = some_if(leaves);
-                n.condition_guard = self.simple_guard(*cond);
-                if n.condition_guard.is_none() {
-                    n.junction_guards = self.junction_guards(*cond);
+                n.condition_guard = self.simple_guard(*cond).map(Box::new);
+                if n.condition_guard.is_none()
+                    && let Some(j) = self.junction_guards(*cond)
+                {
+                    n.rare_mut().junction_guards = Some(j);
                 }
                 if else_block.is_none() {
-                    n.field_exit_guard = self.field_exit_guard(*cond, *then_block);
-                    n.table_exit_guard = self.table_exit_guard(*cond, *then_block);
+                    if let Some(g) = self.field_exit_guard(*cond, *then_block) {
+                        n.rare_mut().field_exit_guard = Some(g);
+                    }
+                    if let Some(g) = self.table_exit_guard(*cond, *then_block) {
+                        n.rare_mut().table_exit_guard = Some(g);
+                    }
                 }
-                n.value_fact = self.value_test(*cond);
+                if let Some(v) = self.value_test(*cond) {
+                    n.rare_mut().value_fact = Some(v);
+                }
                 n.flow = self.flow_cond(*cond);
                 n
             }
@@ -2648,15 +2654,17 @@ impl<'a> IrCfn<'a> {
                     let mut b = cfn_node("case-branch");
                     b.source_range = self.range_of(&br.origin);
                     b.children = Some(vec![self.build_block(br.body)]);
-                    if on_number.is_some() {
-                        b.table_case = br
+                    if on_number.is_some()
+                        && let Some(tc) = br
                             .patterns
                             .iter()
                             .map(|&p| self.database_table(p))
                             .collect::<Option<Vec<_>>>()
-                            .map(super::features::TableCase::Tables);
+                            .map(super::features::TableCase::Tables)
+                    {
+                        b.rare_mut().table_case = Some(tc);
                     }
-                    b.value_fact = Some(ValueFact::Arm(
+                    b.rare_mut().value_fact = Some(ValueFact::Arm(
                         br.patterns
                             .iter()
                             .map(|p| self.spine.value_labels.get(p).cloned())
@@ -2666,7 +2674,7 @@ impl<'a> IrCfn<'a> {
                 }
                 if let Some(eb) = else_block {
                     let mut b = cfn_node("case-branch");
-                    b.is_case_else = true;
+                    b.rare_mut().is_case_else = true;
                     b.source_range = self.range_of(&self.ir().block(*eb).origin);
                     b.children = Some(vec![self.build_block(*eb)]);
                     branch_cfns.push(b);
@@ -2674,8 +2682,12 @@ impl<'a> IrCfn<'a> {
                 let mut n = cfn_node("case");
                 n.children = Some(branch_cfns);
                 n.condition_leaves = some_if(self.harvest_vec(*scrutinee));
-                n.table_case = on_number.map(super::features::TableCase::On);
-                n.value_fact = self.bare_name(*scrutinee).map(ValueFact::CaseOn);
+                if let Some(tc) = on_number.map(super::features::TableCase::On) {
+                    n.rare_mut().table_case = Some(tc);
+                }
+                if let Some(v) = self.bare_name(*scrutinee).map(ValueFact::CaseOn) {
+                    n.rare_mut().value_fact = Some(v);
+                }
                 n.flow = self.flow_cond(*scrutinee);
                 n
             }
@@ -2698,7 +2710,9 @@ impl<'a> IrCfn<'a> {
                 let mut leaves = self.harvest_vec(*from);
                 leaves.extend(self.harvest_vec(*to));
                 n.condition_leaves = some_if(leaves);
-                n.value_fact = self.bare_name(*var).map(ValueFact::LoopVar);
+                if let Some(v) = self.bare_name(*var).map(ValueFact::LoopVar) {
+                    n.rare_mut().value_fact = Some(v);
+                }
                 // The text `site_guards` gives a `for` (`V := A to B`).
                 n.flow = Self::flow_loop(&format!(
                     "{} := {} {} {}",
@@ -2717,7 +2731,9 @@ impl<'a> IrCfn<'a> {
                 let mut n = cfn_node("foreach");
                 n.children = Some(vec![self.build_block(*body)]);
                 n.condition_leaves = some_if(self.harvest_vec(*iterable));
-                n.value_fact = self.bare_name(*var).map(ValueFact::LoopVar);
+                if let Some(v) = self.bare_name(*var).map(ValueFact::LoopVar) {
+                    n.rare_mut().value_fact = Some(v);
+                }
                 n.flow = Self::flow_loop(&format!(
                     "{} in {}",
                     self.expr_text(*var).trim(),
@@ -2740,10 +2756,12 @@ impl<'a> IrCfn<'a> {
             Exit(x) => {
                 let mut n = cfn_node("exit");
                 n.condition_leaves = x.map(|e| self.harvest_vec(e)).and_then(some_if);
-                n.path_hint = x.and_then(|e| match &self.ir().expr(e).kind {
+                if let Some(h) = x.and_then(|e| match &self.ir().expr(e).kind {
                     ExprKind::Literal(al_syntax::ir::Literal::Bool(b)) => Some(PathHint::Exit(*b)),
                     _ => None,
-                });
+                }) {
+                    n.rare_mut().path_hint = Some(h);
+                }
                 n
             }
             With { body, .. } => {
@@ -2755,7 +2773,7 @@ impl<'a> IrCfn<'a> {
             AssertError(body) => {
                 let mut n = cfn_node("other");
                 n.children = Some(vec![self.build_block(*body)]);
-                n.path_hint = Some(PathHint::AssertError);
+                n.rare_mut().path_hint = Some(PathHint::AssertError);
                 n
             }
             Assignment {
@@ -4902,7 +4920,7 @@ codeunit 50002 T
                 .flatten()
                 .map(|b| {
                     assert_eq!(b.kind, "case-branch");
-                    b.is_case_else
+                    b.is_case_else()
                 })
                 .collect(),
         )
