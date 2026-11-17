@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (TLS-90: the CDO slot tests no longer leak waiter processes when an assertion fails)
+
+- **The problem:** `cdo_slot_serves_waiters_in_arrival_order` and
+  `cdo_slot_queue_refuses_jumps_and_steps_aside_for_memory` (`tests/cli/cdo_slot.rs`) spawn
+  `cdo-slot acquire --wait` children and reaped them only on the success path. A failing assertion
+  (each TLS-88 discrimination break) left them polling their temporary slot folders forever. Four
+  were found after 11 hours. They could not take the real slot (a different folder), but they piled
+  up.
+- **Now:** the waiters are held in `Reap`, which kills and reaps its child on drop, so an unwinding
+  test ends them. The other spawned children are `sleep 600` processes that end by themselves.
+- **Test:** `reap_ends_a_waiter_when_the_test_panics` spawns a waiter inside a closure that panics,
+  then checks the process is gone. Break: `Reap::drop` without the kill -> "the waiter outlived
+  the panic" (red). Restored: green.
+
 ### Changed (ENG-111: the tree's projected solve shares its routine ids, 142.4 MiB less resident memory on CDO)
 
 - **What changed** (`src/engine/l5/snapshot.rs`, `snapshot_view.rs`; no output change). The

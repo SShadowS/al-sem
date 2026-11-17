@@ -110,6 +110,68 @@ impl Drop for Slot {
     }
 }
 
+/// ⟨TLS-90⟩ A spawned child (a waiter, a bound `sleep`) that is killed and reaped
+/// when it drops, so a failing assertion cannot leak it: `Slot`'s `Drop` kills
+/// only the slot's holder, and the TLS-88 breaks left `cdo-slot acquire --wait`
+/// processes polling their temporary folders for hours.
+struct Reap(std::process::Child);
+
+impl std::ops::Deref for Reap {
+    type Target = std::process::Child;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for Reap {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl Drop for Reap {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+/// ⟨TLS-90⟩ A waiter held in `Reap` is gone after a panic in the test that spawned it.
+///
+/// Mutation: `Reap::drop` without the kill -> the waiter outlives the panic (red).
+#[test]
+fn reap_ends_a_waiter_when_the_test_panics() {
+    let s = Slot::new();
+    let (code, text) = s.run("A", &["acquire", "a", "hold"], &[]);
+    assert_eq!(code, Some(0), "{text}");
+    let pid = std::sync::Mutex::new(0u32);
+    let r = std::panic::catch_unwind(|| {
+        let w = Reap(
+            std::process::Command::new("bash")
+                .args([SLOT, "acquire", "w", "leak", "--wait"])
+                .env("CDO_SLOT_DIR", s.dir())
+                .env("CDO_SLOT_MEM_MIN_GB", "0")
+                .env("CDO_SLOT_POLL_S", "1")
+                .env("CLAUDE_CODE_SESSION_ID", "B")
+                .env_remove("CLAUDE_PID")
+                .env_remove("CDO_SLOT_TOKEN")
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .unwrap(),
+        );
+        *pid.lock().unwrap() = w.id();
+        panic!("a failing assertion");
+    });
+    assert!(r.is_err(), "precondition: the closure panicked");
+    let pid = *pid.lock().unwrap();
+    assert!(pid != 0, "precondition: the waiter was spawned");
+    assert!(
+        !std::path::Path::new(&format!("/proc/{pid}")).exists(),
+        "the waiter {pid} outlived the panic"
+    );
+}
+
 /// One holder at a time. A takes the slot; A again is "already yours" (exit 4);
 /// B sees it held, is refused at once without --wait, waits and times out with
 /// it, and may not release it; A releases it and it is free. A script's token
@@ -612,18 +674,20 @@ fn cdo_slot_is_truthful_under_races_and_bad_records() {
 fn cdo_slot_queue_refuses_jumps_and_steps_aside_for_memory() {
     let s = Slot::new();
     let waiter = |session: &str, poll: &str, mem: &str| {
-        std::process::Command::new("bash")
-            .args([SLOT, "acquire", "w", "queue", "--wait"])
-            .env("CDO_SLOT_DIR", s.dir())
-            .env("CDO_SLOT_MEM_MIN_GB", mem)
-            .env("CDO_SLOT_POLL_S", poll)
-            .env("CLAUDE_CODE_SESSION_ID", session)
-            .env_remove("CLAUDE_PID")
-            .env_remove("CDO_SLOT_TOKEN")
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-            .unwrap()
+        Reap(
+            std::process::Command::new("bash")
+                .args([SLOT, "acquire", "w", "queue", "--wait"])
+                .env("CDO_SLOT_DIR", s.dir())
+                .env("CDO_SLOT_MEM_MIN_GB", mem)
+                .env("CDO_SLOT_POLL_S", poll)
+                .env("CLAUDE_CODE_SESSION_ID", session)
+                .env_remove("CLAUDE_PID")
+                .env_remove("CDO_SLOT_TOKEN")
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .unwrap(),
+        )
     };
     let ticket_text = || {
         std::fs::read_dir(s.dir().join("queue"))
@@ -694,18 +758,20 @@ fn cdo_slot_queue_refuses_jumps_and_steps_aside_for_memory() {
 fn cdo_slot_serves_waiters_in_arrival_order() {
     let s = Slot::new();
     let waiter = |session: &str, owner: &str| {
-        std::process::Command::new("bash")
-            .args([SLOT, "acquire", owner, "fifo", "--wait"])
-            .env("CDO_SLOT_DIR", s.dir())
-            .env("CDO_SLOT_MEM_MIN_GB", "0")
-            .env("CDO_SLOT_POLL_S", "1")
-            .env("CLAUDE_CODE_SESSION_ID", session)
-            .env_remove("CLAUDE_PID")
-            .env_remove("CDO_SLOT_TOKEN")
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-            .unwrap()
+        Reap(
+            std::process::Command::new("bash")
+                .args([SLOT, "acquire", owner, "fifo", "--wait"])
+                .env("CDO_SLOT_DIR", s.dir())
+                .env("CDO_SLOT_MEM_MIN_GB", "0")
+                .env("CDO_SLOT_POLL_S", "1")
+                .env("CLAUDE_CODE_SESSION_ID", session)
+                .env_remove("CLAUDE_PID")
+                .env_remove("CDO_SLOT_TOKEN")
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .unwrap(),
+        )
     };
     let tickets = || {
         std::fs::read_dir(s.dir().join("queue"))
