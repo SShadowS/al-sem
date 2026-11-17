@@ -8794,7 +8794,7 @@ codeunit 50101 "T7b Temp Classes"
         crate::engine::l5::snapshot::StateNode {
             producer_fact: 0,
             temp_state,
-            routine: routine.to_string(),
+            routine: routine.into(),
             seed,
             links,
         }
@@ -8814,7 +8814,7 @@ codeunit 50101 "T7b Temp Classes"
         )];
         snap.pd_solution.states =
             vec![state("R", TempStateKind::ParameterDependent(0), true, 0..0)];
-        snap.pd_solution.by_routine.insert("R".to_string(), vec![0]);
+        snap.pd_solution.by_routine.insert("R".into(), vec![0]);
         let f = insert_fact(
             "R",
             "inherited",
@@ -8888,9 +8888,9 @@ codeunit 50101 "T7b Temp Classes"
             state("Root", TempStateKind::Known(false), false, 3..4),
         ];
         arena.links = vec![(0, 2), (2, 1), (1, 1), (2, 0)];
-        arena.by_routine.insert("Helper".to_string(), vec![0]);
-        arena.by_routine.insert("Perm".to_string(), vec![1, 2]);
-        arena.by_routine.insert("Root".to_string(), vec![3]);
+        arena.by_routine.insert("Helper".into(), vec![0]);
+        arena.by_routine.insert("Perm".into(), vec![1, 2]);
+        arena.by_routine.insert("Root".into(), vec![3]);
         let f = insert_fact(
             "Root",
             "inherited",
@@ -8964,7 +8964,7 @@ codeunit 50101 "T7b Temp Classes"
         // Each link is (callee state, edge).
         arena.links = vec![(0, 4), (0, 1), (0, 2), (1, 3), (2, 0)];
         for (r, ix) in [("H", 0), ("B", 1), ("A", 2), ("Root", 3)] {
-            arena.by_routine.insert(r.to_string(), vec![ix]);
+            arena.by_routine.insert(r.into(), vec![ix]);
         }
         let f = insert_fact(
             "Root",
@@ -9041,7 +9041,7 @@ codeunit 50101 "T7b Temp Classes"
         // Each link is (callee state, edge).
         arena.links = vec![(0, 4), (0, 1), (0, 2), (1, 3), (2, 0)];
         for (r, ix) in [("H", 0), ("B", 1), ("A", 2), ("Root", 3)] {
-            arena.by_routine.insert(r.to_string(), vec![ix]);
+            arena.by_routine.insert(r.into(), vec![ix]);
         }
         let f = insert_fact(
             "Root",
@@ -9126,7 +9126,7 @@ codeunit 50101 "T7b Temp Classes"
             ("A", [4, 5]),
             ("Root", [6, 7]),
         ] {
-            arena.by_routine.insert(r.to_string(), ixs.to_vec());
+            arena.by_routine.insert(r.into(), ixs.to_vec());
         }
         let f = insert_fact(
             "Root",
@@ -9210,9 +9210,9 @@ codeunit 50101 "T7b Temp Classes"
         ];
         arena.links = vec![(0, 1), (1, 2), (2, 0), (3, 0)];
         for (r, ixs) in [("Hz", vec![0]), ("Hb", vec![1]), ("A", vec![2, 3])] {
-            arena.by_routine.insert(r.to_string(), ixs);
+            arena.by_routine.insert(r.into(), ixs);
         }
-        arena.by_routine.insert("Root".to_string(), vec![4, 5]);
+        arena.by_routine.insert("Root".into(), vec![4, 5]);
         let f = insert_fact(
             "Root",
             "inherited",
@@ -9289,7 +9289,9 @@ codeunit 50101 "T7b Temp Classes"
             arena.links.push((j - 1, N - j));
         }
         for j in 0..=N {
-            arena.by_routine.insert(format!("R{}", N - j), vec![j]);
+            arena
+                .by_routine
+                .insert(format!("R{}", N - j).into(), vec![j]);
         }
         let f = insert_fact(
             "R0",
@@ -11119,7 +11121,7 @@ codeunit 50102 "W10 Merge"
             (9, 3),
             (10, 0),
         ];
-        arena.by_routine.insert("R#".to_string(), vec![11]);
+        arena.by_routine.insert("R#".into(), vec![11]);
         let f = insert_fact(
             "R#",
             "inherited",
@@ -11257,7 +11259,7 @@ codeunit 50102 "W10 Merge"
                 .push(state(&routine, temp, seed, start..arena.links.len()));
         }
         let root_state = arena.states.len() - 1;
-        arena.by_routine.insert("R#".to_string(), vec![root_state]);
+        arena.by_routine.insert("R#".into(), vec![root_state]);
         let f = insert_fact(
             "R#",
             "inherited",
