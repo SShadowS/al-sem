@@ -11683,3 +11683,34 @@ fn cdo_i264_closed_interface_site_census() {
         "closed interface sites (of all interface sites) on CDO; closed: {closed:#?}"
     );
 }
+
+/// ENG-90: no two nodes of CDO's sited graph (the `alsem graph` / impact
+/// graph) share a StableRoutineId: every reader that joins on the id would
+/// answer the two as one routine. The corpus and a probe of the ASCII
+/// near-collision shapes are checked in the lib (`impact_graph::stable_id_tests`);
+/// the one known way to share an id (names differing only in `İ` or a
+/// word-final `Σ`) is in `SitedGraph::shared_stable_ids`'s doc. Measured
+/// 2026-11-18: 23,253 routine nodes, none shared.
+#[test]
+fn cdo_sited_graph_stable_ids_are_unique() {
+    let Some(ws) = cdo_ws_or_enforce() else {
+        return;
+    };
+    let inputs = std::sync::Arc::new(al_sem::program::inputs::WorkspaceInputs::read(
+        &ws,
+        &Default::default(),
+    ));
+    let program = al_sem::program::resolved::ResolvedProgram::build(
+        &inputs,
+        al_sem::program::resolved::ProgramScope::CrossApp,
+    )
+    .expect("CDO cross-app program");
+    let g = al_sem::program::impact_graph::sited_from_program(&program, &|| false)
+        .expect("not cancelled");
+    let shared = g.shared_stable_ids();
+    assert!(
+        shared.is_empty(),
+        "{} stable ids shared by more than one node: {shared:#?}",
+        shared.len()
+    );
+}

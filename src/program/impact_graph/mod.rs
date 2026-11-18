@@ -94,6 +94,8 @@ pub mod multi_walk;
 pub(crate) mod project;
 pub mod reverse;
 pub mod sited;
+#[cfg(test)]
+mod stable_id_tests;
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
