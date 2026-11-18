@@ -4083,8 +4083,9 @@ pub struct FileWithoutObject {
     pub rel: String,
     /// `ParseStatus::Recovered`: the parser met a syntax error.
     pub parse_failed: bool,
-    /// The text holds `\r` but no `\n` (classic Mac line ends).
-    pub cr_only_line_ends: bool,
+    /// The text holds a line end that is a lone `\r` (a CR not followed by
+    /// LF): classic Mac line ends, wholly or mixed in.
+    pub lone_cr_line_ends: bool,
 }
 
 impl FreshCoverage {
@@ -4531,7 +4532,12 @@ pub fn reduce_fresh_coverage(
         .map(|f| FileWithoutObject {
             rel: f.virtual_path.clone(),
             parse_failed: f.file.parse_status == al_syntax::ir::ParseStatus::Recovered,
-            cr_only_line_ends: f.text.contains('\r') && !f.text.contains('\n'),
+            lone_cr_line_ends: f
+                .text
+                .as_bytes()
+                .windows(2)
+                .any(|w| w[0] == b'\r' && w[1] != b'\n')
+                || f.text.ends_with('\r'),
         })
         .collect();
     files_without_object.sort_by(|a, b| a.rel.cmp(&b.rel));

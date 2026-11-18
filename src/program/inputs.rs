@@ -1028,7 +1028,7 @@ mod tests {
         let listed = [crate::program::resolve::full::FileWithoutObject {
             rel: "locked/X.al".to_string(),
             parse_failed: false,
-            cr_only_line_ends: false,
+            lone_cr_line_ends: false,
         }];
         assert!(compute_workspace_diagnostics(&inputs, Some(&listed)).is_empty());
     }

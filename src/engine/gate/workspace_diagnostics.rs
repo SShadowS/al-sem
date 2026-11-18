@@ -128,20 +128,26 @@ pub fn compute_workspace_diagnostics(
     // GRM-03: a file whose parse FAILED (a syntax error left no object readable)
     // is a `warning`/`parse` row instead, saying its code is missing from the
     // analysis: "No object declaration found" blamed the file for the parser's
-    // loss. A file with CR-only line ends gets the likely cause named (the
-    // grammar ends `#if`/`#else`/`#endif` lines at `\n` only).
+    // loss. So is a file with a lone-CR line end, even when its parse is clean:
+    // the grammar ends `//` comments and `#if`/`#else`/`#endif` lines at `\n`
+    // only, so a header comment swallows the whole file into one clean comment.
     for f in files_without_object.unwrap_or_default() {
         let rel = &f.rel;
-        out.push(if f.parse_failed {
+        out.push(if f.parse_failed || f.lone_cr_line_ends {
             Diagnostic {
                 severity: "warning".to_string(),
                 stage: "parse".to_string(),
                 message: format!(
-                    "Could not parse {rel}: a syntax error left no object declaration readable, \
-                     so its code is missing from the analysis{}",
-                    if f.cr_only_line_ends {
-                        " (the file has CR-only line ends; preprocessor lines such as \
-                         `#if` need LF or CRLF line ends)"
+                    "Could not parse {rel}: {}, so its code is missing from the analysis{}",
+                    if f.parse_failed {
+                        "a syntax error left no object declaration readable"
+                    } else {
+                        "no object declaration was readable"
+                    },
+                    if f.lone_cr_line_ends {
+                        " (the file has line ends that are a lone CR; `//` comments and \
+                         preprocessor lines such as `#if` end only at LF, so they swallow \
+                         the code after them)"
                     } else {
                         ""
                     }
