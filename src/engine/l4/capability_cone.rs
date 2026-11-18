@@ -6162,8 +6162,8 @@ pub struct R3a3SourceBase {
     /// Per-routine RAW inherited facts, internal-id form (compact refs into
     /// shared tables, cone-memory step 1).
     pub raw: InheritedFacts,
-    /// Internal RoutineId → StableRoutineId.
-    pub routine_to_stable: HashMap<String, String>,
+    /// Internal RoutineId → StableRoutineId (shared texts, ENG-129).
+    pub routine_to_stable: RoutineIdMap,
     /// The producer solve (#69 D1), internal ids; the snapshot maps it (D2).
     pub pd_solution: super::pd_solve::ConeArena,
 }
@@ -6190,12 +6190,22 @@ pub fn build_r3a3_source_only_base(resolved: &Model) -> R3a3SourceBase {
 
 /// Internal routine id → stable routine id over every routine of `ws`: the
 /// one builder (`R3a3SourceBase::routine_to_stable`, the snapshot closure).
-pub fn routine_to_stable_of(ws: &ModelEntities) -> HashMap<String, String> {
+pub fn routine_to_stable_of(ws: &ModelEntities) -> RoutineIdMap {
     ws.routines
         .iter()
-        .map(|r| (r.id.clone(), r.stable_routine_id.clone()))
+        .map(|r| {
+            (
+                SharedStr::from(r.id.as_str()),
+                SharedStr::from(r.stable_routine_id.as_str()),
+            )
+        })
         .collect()
 }
+
+/// ENG-129: internal routine id → stable routine id, each text allocated once here and
+/// shared by every holder downstream (the snapshot base's groups and subjects, the evidence
+/// rows, the view's copy of this map). Looked up by `&str` (`SharedStr: Borrow<str>`).
+pub type RoutineIdMap = HashMap<SharedStr, SharedStr>;
 
 /// [`build_r3a3_source_only_base`] with the graph taken as a parameter (#160
 /// §4.1.6): calls and event graph still cloned from `resolved`, the direct facts,

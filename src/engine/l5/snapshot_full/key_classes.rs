@@ -509,12 +509,15 @@ fn rows_of(v: &CborValue) -> &[CborValue] {
 /// only through `routine_to_stable`; one the map lacks comes back unchanged and
 /// names no row. A `::`-bearing stable id (an event id) is cut to its first
 /// three `:` segments, its object.
-fn identity_key(v: &str, routine_to_stable: &HashMap<String, String>) -> Option<String> {
+fn identity_key(
+    v: &str,
+    routine_to_stable: &crate::engine::l4::capability_cone::RoutineIdMap,
+) -> Option<String> {
     if v == "unknown" {
         return None;
     }
     if let Some(stable) = routine_to_stable.get(v) {
-        return Some(stable.clone());
+        return Some(stable.to_string());
     }
     if v.contains(':') {
         let segs: Vec<&str> = v.splitn(4, ':').collect();
@@ -552,7 +555,12 @@ struct Referenced {
 }
 
 impl Referenced {
-    fn add(&mut self, key: &str, rows: &CborValue, routine_to_stable: &HashMap<String, String>) {
+    fn add(
+        &mut self,
+        key: &str,
+        rows: &CborValue,
+        routine_to_stable: &crate::engine::l4::capability_cone::RoutineIdMap,
+    ) {
         for row in rows_of(rows) {
             row_references(key, row, &mut |_, domain, value| match domain {
                 Identity => self
@@ -599,7 +607,7 @@ const SHARD_CLOSED: [(&str, &str); 4] = [
 pub(crate) fn close_shard(
     full: &IndexMap<String, CborValue>,
     shard: &mut IndexMap<String, CborValue>,
-    routine_to_stable: &HashMap<String, String>,
+    routine_to_stable: &crate::engine::l4::capability_cone::RoutineIdMap,
 ) {
     // Every row is scanned once: the first pass reads the sliced rows, each
     // later pass only the rows the pass before added.
@@ -774,7 +782,7 @@ pub(crate) fn filter_by_class(
     core: &mut CapabilitySnapshot,
     permission_facts: &CborValue,
     primary_app_guid: &str,
-    routine_to_stable: &HashMap<String, String>,
+    routine_to_stable: &crate::engine::l4::capability_cone::RoutineIdMap,
 ) -> HashSet<String> {
     let is_primary = |id: &str| role_of_stable_id(Some(primary_app_guid), id) == Role::Primary;
     // (1) Inventory and Behaviour rows by subject: the key's class in

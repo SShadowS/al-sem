@@ -49,7 +49,7 @@ use crate::program::str_pool::SharedStr;
 pub(super) struct ViewBase {
     /// Internal routine id → stable routine id (the base's
     /// `routine_to_stable_of`), so a view need not rebuild it.
-    pub(super) routine_to_stable: HashMap<String, String>,
+    pub(super) routine_to_stable: crate::engine::l4::capability_cone::RoutineIdMap,
     pub(super) facts: FactBase,
     pub(super) evidence: EvidenceBase,
     pub(super) pd: PdBase,
@@ -463,7 +463,8 @@ pub(super) fn derive_evidence_base(
             .map(|(ri, r)| {
                 let stable = stable_routine_id(&r.id, inp.routine_to_stable);
                 // One text per routine, shared by its evidence rows (ENG-127).
-                let shared = SharedStr::from(stable.as_str());
+                // The map's own text: shared with the subjects and every other row (ENG-129).
+                let shared = super::stable_routine_shared(&r.id, inp.routine_to_stable);
                 let order = compute_routine_order(r);
                 let (mut ops, mut op_rest) = (Vec::new(), Vec::new());
                 op_candidates(
@@ -605,7 +606,7 @@ pub(super) fn view_evidence<'r>(
     for ri in rows {
         let ri = ri as usize;
         let r = &routines[ri];
-        let stable = SharedStr::from(stable_routine_id(&r.id, &vb.routine_to_stable).as_str());
+        let stable = super::stable_routine_shared(&r.id, &vb.routine_to_stable);
         let order = compute_routine_order(r);
         let mut more_ops = Vec::new();
         op_candidates(
@@ -665,7 +666,7 @@ pub(super) struct FactBase {
     /// Per emission group (a covered routine row's id, at its first row).
     groups: Vec<GroupInfo>,
     /// Covered routine id → its emission group.
-    pub(super) group_of: HashMap<String, u32>,
+    pub(super) group_of: HashMap<SharedStr, u32>,
 }
 
 #[derive(Clone)]
@@ -678,7 +679,8 @@ struct RunInfo {
 
 #[derive(Clone)]
 struct GroupInfo {
-    id: String,
+    /// The base map's own text (ENG-129).
+    id: SharedStr,
     /// Into the base tables' subjects.
     subject: u32,
     /// The group's first direct rep; its reps are contiguous.
@@ -736,14 +738,19 @@ pub(super) fn derive_fact_base(inp: &TreeInputs<'_>) -> FactBase {
         .iter()
         .filter(|r| seen.insert(r.id.as_str()) && inp.coverage.contains_key(&r.id))
         .collect();
-    let group_of: HashMap<String, u32> = covered
+    // ENG-129: the map's own texts, so `group_of`, the groups and the subjects hold handles.
+    let ids: Vec<SharedStr> = covered
+        .iter()
+        .map(|r| super::internal_routine_shared(&r.id, inp.routine_to_stable))
+        .collect();
+    let group_of: HashMap<SharedStr, u32> = ids
         .iter()
         .enumerate()
-        .map(|(gi, r)| (r.id.clone(), row_u32(gi)))
+        .map(|(gi, id)| (id.clone(), row_u32(gi)))
         .collect();
-    let subjects: Vec<String> = covered
+    let subjects: Vec<SharedStr> = covered
         .iter()
-        .map(|r| stable_routine_id(&r.id, inp.routine_to_stable))
+        .map(|r| super::stable_routine_shared(&r.id, inp.routine_to_stable))
         .collect();
     let split = !subjects.iter().any(|s| s.contains('|'));
     if !split {
@@ -759,13 +766,13 @@ pub(super) fn derive_fact_base(inp: &TreeInputs<'_>) -> FactBase {
     }
     let mut order: Vec<usize> = (0..covered.len()).collect();
     // Stable: equal subjects keep their emission order.
-    order.sort_by(|&x, &y| cmp_joined(&[subjects[x].as_str(), ""], &[subjects[y].as_str(), ""]));
+    order.sort_by(|&x, &y| cmp_joined(&[&*subjects[x], ""], &[&*subjects[y], ""]));
     let mut b = SnapTablesBuilder::default();
     let mut groups: Vec<Option<GroupInfo>> = vec![None; covered.len()];
     let mut runs: Vec<RunInfo> = Vec::new();
     let mut total = 0usize;
     for (k, &gi) in order.iter().enumerate() {
-        let subject = b.subject(&subjects[gi]);
+        let subject = b.subject_shared(subjects[gi].clone());
         let direct = inp.direct_full.facts(&covered[gi].id).unwrap_or(&[]);
         let direct_base =
             crate::engine::l4::inherited_facts::table_ix(b.tables.reps.len(), "snapshot rep");
@@ -783,7 +790,7 @@ pub(super) fn derive_fact_base(inp: &TreeInputs<'_>) -> FactBase {
         run.groups.end = k + 1;
         total += direct.len();
         groups[gi] = Some(GroupInfo {
-            id: covered[gi].id.clone(),
+            id: ids[gi].clone(),
             subject,
             direct_base,
             direct_len: u32::try_from(direct.len()).expect("direct facts fit u32"),
@@ -871,7 +878,7 @@ pub(super) fn view_facts<'r>(
     fb: &FactBase,
     subjects: &BTreeSet<String>,
     raw: &dyn Fn(&str) -> Option<InheritedSlice<'r>>,
-    routine_to_stable: &HashMap<String, String>,
+    routine_to_stable: &crate::engine::l4::capability_cone::RoutineIdMap,
 ) -> ViewFacts {
     use rayon::prelude::*;
     debug_assert!(fb.split, "a view splices only a split table");
@@ -894,7 +901,7 @@ pub(super) fn view_facts<'r>(
                 let g = &fb.groups[gi as usize];
                 let slice = raw(&g.id).map(|slice| {
                     let stable = &fb.tables.subjects[g.subject as usize];
-                    let subject = b.subject(stable);
+                    let subject = b.subject_shared(stable.clone());
                     let mi = b.project_raw(gi, subject, stable, &slice, routine_to_stable);
                     (slice, mi)
                 });
@@ -992,7 +999,7 @@ pub(super) fn derive_pd_base(
     typed_edges: &[SnapshotGraphEdge],
     skipped: &SkippedEdgeKeys,
     fb: &FactBase,
-    map: &HashMap<String, String>,
+    map: &crate::engine::l4::capability_cone::RoutineIdMap,
 ) -> PdBase {
     let shape = shape(cone);
     if cone.states.is_empty() {
@@ -1118,7 +1125,12 @@ impl<'v> ProducerRows<'v> {
         ProducerRows::Whole(ix)
     }
 
-    fn row(&self, cone: &ConeArena, p: usize, map: &HashMap<String, String>) -> Option<usize> {
+    fn row(
+        &self,
+        cone: &ConeArena,
+        p: usize,
+        map: &crate::engine::l4::capability_cone::RoutineIdMap,
+    ) -> Option<usize> {
         let producer = &cone.producers[p];
         match self {
             ProducerRows::Spliced(pb, vf) => {
@@ -1140,7 +1152,7 @@ pub(super) fn view_pd(
     subjects: &BTreeSet<String>,
     pb: &PdBase,
     producers: &ProducerRows<'_>,
-    map: &HashMap<String, String>,
+    map: &crate::engine::l4::capability_cone::RoutineIdMap,
 ) -> PdArena {
     use crate::engine::l5::detector_context::cones_census;
     if cone.states.is_empty() {
@@ -1198,10 +1210,8 @@ pub(super) fn view_pd(
         let slot = *routine_slot
             .entry(cone_routine.as_ptr())
             .or_insert_with(|| {
-                slots.push((
-                    super::RoutineId::from(stable_routine_id(cone_routine, map).as_str()),
-                    Vec::new(),
-                ));
+                // The map's own stable text (ENG-129): one allocation for every holder.
+                slots.push((super::stable_routine_shared(cone_routine, map), Vec::new()));
                 slots.len() - 1
             });
         slots[slot].1.push(ix);
@@ -1330,6 +1340,63 @@ pub(super) mod tests {
 
     fn inputs(ws: &Path) -> Arc<crate::program::inputs::WorkspaceInputs> {
         crate::program::inputs::WorkspaceInputs::read(ws, &Default::default())
+    }
+
+    /// ENG-129: the base's per-routine ids are the routine map's own texts, not copies: every
+    /// group's id is the map's key and its subject the map's value (the same allocation), and
+    /// so is every `group_of` key. Built over a real fixture.
+    /// DISCRIMINATION: `stable_routine_shared` (or `internal_routine_shared`) answering a
+    /// fresh `SharedStr::from(..)` instead of the map's handle fails the `ptr_eq` asserts.
+    #[test]
+    fn the_base_holds_the_routine_maps_own_texts() {
+        let dir =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/r0-corpus/ws-callsite-resolutions");
+        let target = AnalysisTarget::build(&inputs(&dir), true, "digest").expect("a model");
+        let model = target.resolved();
+        let rel = ExecRelation::single_app(model);
+        let apps = tree_apps(None);
+        let (caps, _raw) = compose_cone(
+            model,
+            &rel,
+            ConeScope {
+                derived: true,
+                raw: WitnessRequest::primary().scope(model),
+            },
+        );
+        let no_arena = Default::default();
+        let pd = caps.pd.as_ref().unwrap_or(&no_arena);
+        use crate::program::str_pool::SharedStr;
+        let base = derive_tree_base(model, rel.cone(), &[], &caps, pd, &apps);
+        let vb = &base.view;
+        let fb = &vb.facts;
+        assert!(fb.split, "precondition: the split (per-run) layout");
+        assert!(
+            !fb.groups.is_empty(),
+            "precondition: the fixture has covered routines"
+        );
+        for g in &fb.groups {
+            let (key, value) = vb
+                .routine_to_stable
+                .get_key_value(&*g.id)
+                .expect("every group's routine is in the map");
+            assert!(
+                SharedStr::ptr_eq(&g.id, key),
+                "{}: the group id is a copy",
+                &*g.id
+            );
+            let subject = &fb.tables.subjects[g.subject as usize];
+            assert!(
+                SharedStr::ptr_eq(subject, value),
+                "{}: the subject is a copy",
+                &*g.id
+            );
+            let (of_key, _) = fb.group_of.get_key_value(&*g.id).expect("indexed");
+            assert!(
+                SharedStr::ptr_eq(of_key, key),
+                "{}: the group_of key is a copy",
+                &*g.id
+            );
+        }
     }
 
     /// Plan item L3: two views over one shared tree base hold its whole
