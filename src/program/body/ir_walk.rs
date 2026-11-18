@@ -70,11 +70,17 @@ fn object_run_kind(text: &str) -> Option<&'static str> {
 }
 
 /// LHS base name of an assignment target (legacy `lhs_identifier_of`, lowercased):
-/// a bare identifier's name, or a member_expression's member name; else None.
+/// a bare identifier's name, a member_expression's member name, or the variable
+/// an element write indexes (`S[1] := 'X'` writes `S`: ENG-30, a Text parameter
+/// so written holds no literal any more); else None.
 fn lhs_base_name(file: &AlFile, target: ExprId) -> Option<String> {
     match &file.ir.expr(target).kind {
         ExprKind::Identifier(x) | ExprKind::QuotedIdentifier(x) => Some(x.fold_identifier()),
         ExprKind::Member { member, .. } => Some(member.fold_identifier()),
+        ExprKind::Index { base, .. } => match &file.ir.expr(*base).kind {
+            ExprKind::Identifier(x) | ExprKind::QuotedIdentifier(x) => Some(x.fold_identifier()),
+            _ => None,
+        },
         _ => None,
     }
 }

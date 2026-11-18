@@ -806,9 +806,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Only ASCII literals take part (ENG-133 measures the rest).
   - A text literal is now a value label (`ValueLabel::Text`), read from its raw text so `''` is
     one quote. The within-routine flow does not track Text or Code locals yet (ENG-134).
-- **Tests.** `cli_prove_value_guards`'s `a_builtin_option_parameter_compares_by_member_name` and
-  `text_and_code_parameters_compare_by_the_measured_rules` run `prove` through the CLI;
-  `features::value_label_shapes` covers the label. Five discrimination proofs, all red.
+- **What can write a Text parameter (review).** A Text or Code parameter keeps its literal only
+  while nothing can write it:
+  - An element write `T[1] := 'B'` is now an assignment of `T` (`ir_walk::lhs_base_name`).
+  - A platform method can write a text through a `var` (`InStream.ReadText`,
+    `HttpContent.ReadAs`, `Dictionary.Get`, `JsonObject.WriteTo`, …). So any platform call taking
+    a Text/Code parameter makes it unusable, except 15 read-only functions (`StrLen`, `CopyStr`,
+    `Format`, `StrSubstNo`, …).
+  - alc 18.0.41 compiles each of the 15 with literals in every position. It refuses a literal
+    where a `var` is wanted (AL0130), checked on `Evaluate`.
+  - The same writer gap for Integer, Option and Enum parameters is older; ENG-135 replaces both
+    hand lists with the compiler's own parameter var-ness.
+- **Tests.**
+  - `cli_prove_value_guards` runs `prove` through the CLI:
+    - `a_builtin_option_parameter_compares_by_member_name`;
+    - `text_and_code_parameters_compare_by_the_measured_rules`;
+    - `a_text_parameter_something_writes_binds_nothing`.
+  - `features::value_label_shapes` covers the label.
+  - Seven discrimination proofs, all red.
 - **Golden.** `tests/ir-l2-goldens/l2_features.snapshot` moved one line: `ws-d60`'s
   `UpgradeWithCase` has a `case … of '':` arm, whose label is now `Text("")` (triaged before the
   regen).

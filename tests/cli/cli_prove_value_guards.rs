@@ -446,6 +446,14 @@ table 50280 "EH Code If Other" { fields { field(1; Code; Code[20]) { } } keys { 
 table 50281 "EH Txt Wide" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
 table 50282 "EH Txt Wide Else" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
 table 50284 "EH Code Ne Lower" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
+table 50285 "EH Txt Idx A" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
+table 50286 "EH Txt Idx B" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
+table 50287 "EH Txt Dict A" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
+table 50288 "EH Txt Dict Else" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
+table 50289 "EH Txt Read A" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
+table 50290 "EH Txt Read Else" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
+table 50291 "EH Txt Len A" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
+table 50292 "EH Txt Len Else" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
 // ENG-30: Text and Code literals as value domains, by the rules measured on
 // BC 28.4 (`literal_values::Domain`).
 codeunit 50283 "EH Text"
@@ -522,6 +530,88 @@ codeunit 50283 "EH Text"
         // the label would wrongly make it never true.
         if C <> 'ab' then
             Ne.Insert();
+    end;
+
+    // A Text parameter written by an element write holds no literal any more.
+    procedure TxtIndexed()
+    begin
+        OnIndexed('A');
+    end;
+
+    local procedure OnIndexed(T: Text)
+    var
+        A: Record "EH Txt Idx A";
+        B: Record "EH Txt Idx B";
+    begin
+        T[1] := 'B';
+        case T of
+            'A':
+                A.Insert();
+            'B':
+                B.Insert();
+        end;
+    end;
+
+    // Platform methods that write a Text through a `var`.
+    procedure TxtDictGet()
+    begin
+        OnDictGet('A');
+    end;
+
+    local procedure OnDictGet(T: Text)
+    var
+        D: Dictionary of [Integer, Text];
+        A: Record "EH Txt Dict A";
+        E: Record "EH Txt Dict Else";
+    begin
+        if D.Get(1, T) then;
+        case T of
+            'A':
+                A.Insert();
+            else
+                E.Insert();
+        end;
+    end;
+
+    procedure TxtReadText()
+    begin
+        OnReadText('A');
+    end;
+
+    local procedure OnReadText(T: Text)
+    var
+        S: InStream;
+        A: Record "EH Txt Read A";
+        E: Record "EH Txt Read Else";
+    begin
+        S.ReadText(T);
+        case T of
+            'A':
+                A.Insert();
+            else
+                E.Insert();
+        end;
+    end;
+
+    // A read-only platform function keeps it usable.
+    procedure TxtStrLen()
+    begin
+        OnStrLen('A');
+    end;
+
+    local procedure OnStrLen(T: Text)
+    var
+        A: Record "EH Txt Len A";
+        E: Record "EH Txt Len Else";
+    begin
+        if StrLen(T) = 0 then
+            exit;
+        case T of
+            'A':
+                A.Insert();
+            else
+                E.Insert();
+        end;
     end;
 
     // Non-ASCII text: the comparison rules are not measured, so unresolved.
@@ -855,6 +945,28 @@ fn text_and_code_parameters_compare_by_the_measured_rules() {
         ("CodeIf", "EH Code Ne Lower", "yes"),
         ("TxtWide", "EH Txt Wide", "yes"),
         ("TxtWide", "EH Txt Wide Else", "yes"),
+    ]);
+}
+
+/// ⟨ENG-30 review⟩ A Text parameter holds its literal only while nothing can
+/// write it: an element write (`T[1] := 'B'`) or a platform method that writes
+/// a text through a `var` (`Dictionary.Get`, `InStream.ReadText`) leaves every
+/// arm live; a read-only platform function (`StrLen`) keeps the pruning.
+/// Breaks (2026-11-18, both red): `lhs_base_name` without the element write
+/// (`TxtIndexed` loses `EH Txt Idx B`, a wrong `no`); `value_passes_by_value`
+/// ignoring `text` (the two writers lose their `else`, wrong `no`s).
+#[test]
+fn a_text_parameter_something_writes_binds_nothing() {
+    let ws = Ws::new();
+    ws.expect(&[
+        ("TxtIndexed", "EH Txt Idx A", "yes"),
+        ("TxtIndexed", "EH Txt Idx B", "yes"),
+        ("TxtDictGet", "EH Txt Dict A", "yes"),
+        ("TxtDictGet", "EH Txt Dict Else", "yes"),
+        ("TxtReadText", "EH Txt Read A", "yes"),
+        ("TxtReadText", "EH Txt Read Else", "yes"),
+        ("TxtStrLen", "EH Txt Len A", "yes"),
+        ("TxtStrLen", "EH Txt Len Else", "no"),
     ]);
 }
 

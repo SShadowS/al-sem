@@ -1,4 +1,5 @@
-//! r3 E1: Integer, Option and Enum values in the literal reach (n10).
+//! r3 E1: Integer, Option, Enum, built-in option, Text and Code values in the
+//! literal reach (n10; ENG-30).
 //!
 //! Continia DO's `DocSave` passes `OutputAction::SaveAsPDF` into `RunReport`'s
 //! Integer parameter `OutputActionInt`, which `RunReportID` reads as `case
@@ -14,21 +15,26 @@
 //! no reached state lets it run (the reach's own rule).
 //!
 //! **What binds a parameter.** A parameter is USABLE ([`value_frame`]) when it
-//! is by value, of type Integer, BigInteger, Option, Enum or a built-in option
-//! type (`Verbosity`, `TelemetryScope`, …; compared by member name, as an
-//! enum is: [`domain_of`]), never assigned
-//! (compound assignment included), never a `for`/`foreach` variable, and every
-//! call it is passed to is a known routine taking it by value, or a platform
-//! method other than `Evaluate` and `Clear` (a call the resolver did not
-//! resolve makes it unusable). A call binds it when its argument is an integer
+//! is by value, of type Integer, BigInteger, Option, Enum, a built-in option
+//! type (`Verbosity`, `TelemetryScope`, …), Text or Code ([`domain_of`]); never
+//! assigned (compound assignment and an element write `T[1] := c` included);
+//! never a `for`/`foreach` variable; and every call it is passed to is a known
+//! routine taking it by value, or a platform method that does not write it
+//! (for Text and Code one of `literal_reach`'s read-only functions, else one
+//! other than `Evaluate` and `Clear`; a call the resolver did not resolve
+//! makes it unusable). A call binds it when its argument is an integer or text
 //! literal, a label ([`resolve_label`]), or the caller's own bound parameter.
 //!
 //! **Comparison.** Values are kept in the domain of the parameter
 //! ([`Domain`]): an Integer or Option parameter holds ordinals (an Option
-//! member's position, blank members counted); an Enum parameter holds (enum
-//! name, value name). An Enum label against an Integer or Option parameter, an
-//! Integer against an Enum parameter, or a label of another enum, is a
-//! conversion this module does not model: the label is unresolved.
+//! member's position, blank members counted); an Enum or built-in option
+//! parameter holds (type name, member name); a Text parameter holds its text
+//! as written, a Code parameter its text trimmed and upper case (an `if`
+//! label on Code only when that leaves it unchanged: [`Domain::Code`]); only
+//! ASCII text. An Enum label against an Integer or Option parameter, an
+//! Integer against an Enum parameter, a label of another enum, or a text
+//! against a number or enum (or the reverse), is a conversion this module does
+//! not model: the label is unresolved.
 //!
 //! **Where it prunes.** `case P of`, `if P = L`, `if P <> L`, `if P in [..]`
 //! (and an `if … then exit;` of those for what follows it): an arm is dead
@@ -320,7 +326,8 @@ pub(super) fn enum_name(type_text: &str) -> Option<Arc<str>> {
 }
 
 /// The domain of a parameter of type `type_text`; `None` when the type is
-/// none of Integer, BigInteger, Option, Enum or a built-in option type.
+/// none of Integer, BigInteger, Option, Enum, a built-in option type, Text or
+/// Code.
 pub(super) fn domain_of(type_text: &str) -> Option<Domain> {
     let t = type_text.trim();
     if t.eq_fold_identifier("integer") || t.eq_fold_identifier("biginteger") {
@@ -522,12 +529,13 @@ pub(super) fn loop_vars(node: &PCFNNode, out: &mut Vec<String>) {
 }
 
 /// `r`'s value frame (module doc). `passes_by_value(callsite_id, argument
-/// index)` says whether the call passes that argument by value to a known
-/// callee or to a platform method that does not write it; `resolve` reads a
-/// label in `r`'s scope. `None` when `r` has no usable value parameter.
+/// index, text)` says whether the call passes that argument by value to a
+/// known callee or to a platform method that does not write it (`text`: the
+/// parameter is Text or Code, which many platform methods write); `resolve`
+/// reads a label in `r`'s scope. `None` when `r` has no usable value parameter.
 pub(super) fn value_frame(
     r: &ModelRoutine,
-    passes_by_value: impl Fn(&str, u32) -> bool,
+    passes_by_value: impl Fn(&str, u32, bool) -> bool,
     resolve: &dyn Fn(&ValueLabel) -> Option<Val>,
 ) -> Option<ValueFrame> {
     let tree = r.statement_tree.as_ref()?;
@@ -545,11 +553,12 @@ pub(super) fn value_frame(
         if r.var_assignments.iter().any(|a| fold(&a.lhs_name) == name) || loops.contains(&name) {
             continue;
         }
+        let text = matches!(d, Domain::Text | Domain::Code);
         let passed_unsafely = r.call_sites.iter().any(|cs| {
             cs.argument_bindings.iter().any(|b| {
                 b.source_kind == "parameter"
                     && b.source_parameter_index == Some(p.index)
-                    && !passes_by_value(&cs.id, b.parameter_index)
+                    && !passes_by_value(&cs.id, b.parameter_index, text)
             })
         });
         if passed_unsafely {
