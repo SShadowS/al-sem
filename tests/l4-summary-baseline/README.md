@@ -305,6 +305,15 @@ CDO_WS=<path> ENFORCE_CDO_WS=1 L4_CANONICAL_DUMP=/tmp/l4-cdo.txt \
   ENG-19 turns from a built-in into a dynamic run: `CDO E-Mail Template
   Management.GetReportParameters` (itself and 1007 callers that inherit it), and one each on pages
   6175306 and 6175409.
+- **2026-11-18, ENG-20** (`alsem/eng-20-request-page-trigger-id`, engine limits L20; owner
+  decision q-20261118T113518-4b94aa60, option C). Whole-program `ddec4d61…` -> `f0ce9548…`;
+  reverse index `e35456be…` -> `c62fae9b…`. A request page's own trigger gets its own id part,
+  so its internal routine id moves. Measured by dumping the canonical serialization
+  (`L4_CANONICAL_DUMP`) at master `a73b4bf6` and at the branch: the two renderings are the same
+  size (497,973,945 bytes), 27,829 `routine_id` lines each, and the line-sorted diff is exactly 11
+  `routine_id` lines renamed (CDO's 11 request-page triggers; `cdo-before-after` counts the same
+  11 stable ids). Every summary byte is otherwise unchanged; records re-sort by the new ids. The
+  reverse index maps tables to the same routine ids, so the same renames move it.
 - **2026-11-11, ENG-06** (`alsem/eng-06-b9-fieldref-validate`, engine limits B9/B10).
   Whole-program `46ef73cc…` -> `a0ce2366…`; reverse index unchanged. 5479 routines
   throughout, none added or removed. Exact single-variable attribution on the pinned
