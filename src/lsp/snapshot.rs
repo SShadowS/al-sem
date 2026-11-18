@@ -167,7 +167,7 @@ impl LspEdge {
     /// identity is the one the resolver gave it.
     pub fn project_classified(ce: &ClassifiedEdge, unit: &SharedStr) -> LspEdge {
         let e = LspEdge::project(&ce.edge, unit);
-        debug_assert_eq!(e.obligation_id(), ce.obligation_id);
+        debug_assert_eq!(e.obligation_id(), ce.obligation_id());
         e
     }
 
@@ -179,7 +179,7 @@ impl LspEdge {
             return ObligationId::Publisher(self.from.clone());
         }
         let span = crate::program::resolve::edge::CanonicalSpan {
-            unit: self.span.unit.to_string(),
+            unit: self.span.unit.clone(),
             start: self.span.start,
             end: self.span.end,
         };
@@ -263,7 +263,7 @@ pub(crate) fn split_event_links(raw: Vec<Edge>, primary: AppRef) -> (Vec<LspEdge
     // One file text per file (publishers' files), as for call edges.
     let mut pool = crate::program::str_pool::StrPool::default();
     let mut classify = |edge: Edge| {
-        let mut unit = SharedStr::from(edge.site.span.unit.as_str());
+        let mut unit = edge.site.span.unit.clone();
         pool.share(&mut unit);
         LspEdge::project(&edge, &unit)
     };
@@ -1526,7 +1526,7 @@ mod tests {
             .iter()
             .filter(|e| !is_empty_link(e))
             .map(|e| {
-                let p = LspEdge::project(e, &SharedStr::from(e.site.span.unit.as_str()));
+                let p = LspEdge::project(e, &e.site.span.unit);
                 if e.kind == EdgeKind::EventFlow {
                     canonical_event_edge(p)
                 } else {

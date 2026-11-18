@@ -643,7 +643,7 @@ pub fn write_program(p: &ResolvedProgram, w: &mut dyn std::fmt::Write) -> std::f
     }
     writeln!(w, "-- dependency edges {}", b.dependency_body_edges().len())?;
     let mut facts: Vec<_> = b.site_facts.iter().collect();
-    facts.sort_by(|a, b| a.0.cmp(b.0));
+    facts.sort_by(|a, b| a.0.cmp(&b.0));
     for f in facts {
         writeln!(w, "{f:?}")?;
     }
@@ -652,7 +652,7 @@ pub fn write_program(p: &ResolvedProgram, w: &mut dyn std::fmt::Write) -> std::f
     let hits: String = b
         .all_edges()
         .map(|e| {
-            if b.site_facts.get(&e.obligation_id).is_some() {
+            if b.site_facts.get(&e.obligation_id()).is_some() {
                 '1'
             } else {
                 '0'
