@@ -479,7 +479,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     build and keeps its mark when the first ends; a refused `acquire --bind --timed` with no
     session or token frees the slot; a timing whose hold is released while it waits refuses;
     a reason with a CR is refused;
-  - cdo-before-after's measurements run under `timed by`;
+  - cdo-before-after's measurements run under `timed by`; beside a build it measures nothing,
+    says why, fails and frees the slot;
   - cdo-speed inside a hold exits 2 beside a build, before any server starts; outside any hold
     it takes the slot itself, timed.
 
