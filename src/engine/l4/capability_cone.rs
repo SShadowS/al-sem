@@ -2721,6 +2721,7 @@ fn fact_cone_for_scc(
                 }
             }
         }
+        cands.bound();
     }
     // A frame-bound successor entry crosses into this cone per EDGE, through
     // `substitute_entry`; the per-SCC merge below then skips it. So does EVERY
@@ -2762,6 +2763,9 @@ fn fact_cone_for_scc(
                     cands.push(Cand::owned(k, e));
                 }
             }
+            // Edge-carried candidates bound the transient too (sol): many guarded edges to
+            // one large successor each carry its whole cone.
+            cands.bound();
         }
         guarded_only.retain(|y| !unguarded_to.contains(y));
     }
@@ -10094,19 +10098,22 @@ mod cone_memory_step1_tests {
 
     /// ENG-130 (sol): the builder's early reduces (which bound its memory under a
     /// high-overlap fan-in) give the cone a single reduce gives: the same entries, winners and
-    /// keys. 20,000 candidates over 3,000 keys, mixed distances and rep keys, fed in chunks
-    /// of 2,000 with a reduce allowed after each.
+    /// keys. 20,000 candidates over 3,000 keys, fed in chunks of 2,000 with a reduce allowed
+    /// after each. Hand-stated (sol): an even key's candidates get strictly nearer with each
+    /// round (a strict winner arrives AFTER an early reduce), an odd key's all tie (the
+    /// earliest must survive every reduce).
     #[test]
     fn early_reduces_give_the_one_reduce_cone() {
         let cand = |i: usize| {
+            let (k, round) = (i % 3000, i / 3000);
             let mut f = insert("M", "t/K");
             f.witness_operation_id = Some(format!("w{i}"));
             Cand::owned(
-                Arc::from(format!("k{}", i % 3000).as_str()),
+                Arc::from(format!("k{k}").as_str()),
                 ConeFactEntry {
                     rep: Arc::new(f),
-                    rep_key: Arc::from(format!("r{}", (i * 13) % 4).as_str()),
-                    dist: (i * 7) % 5,
+                    rep_key: Arc::from(format!("r{}", k % 4).as_str()),
+                    dist: if k % 2 == 0 { 10 - round } else { 3 },
                     guard: None,
                 },
             )
@@ -10132,7 +10139,15 @@ mod cone_memory_step1_tests {
             }
         }
         assert!(chunked.reduced > 0, "precondition: an early reduce ran");
-        assert_eq!(shape(&chunked.finish()), shape(&once.finish()));
+        let got = shape(&chunked.finish());
+        assert_eq!(got, shape(&once.finish()));
+        // Precondition on the expected cone: k0's winner is its last (nearest) candidate,
+        // k1's its first.
+        let of = |k: &str| got.iter().find(|(x, ..)| x == k).unwrap().1.clone();
+        assert_eq!(
+            (of("k0"), of("k1")),
+            ("w18000".to_string(), "w1".to_string())
+        );
     }
 
     /// ENG-130: a full tie keeps the EARLIER candidate at any size, which needs the sort to
