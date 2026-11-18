@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (ENG-90: a checked invariant, no two sited-graph nodes share a stable routine id)
+
+- **The question.** The effect query's up pass (`effect_query_cli::field_scope`) writes each
+  caller's tier into a map per model routine, last write wins, in `HashMap` order. Could two
+  graph nodes on one StableRoutineId make a routine's tier depend on hash order?
+- **Answer: no, so no fix.** The stable id carries everything the node id does (object, folded
+  name, unquoted member, parameter types and `var`) plus the return type. A split `#if`
+  declaration adds a per-place `~` suffix. The walk already keeps each node's best tier.
+  Measured 2026-11-18: 0 shared ids among CDO's 23,253 routine nodes and in 231 corpus/fixture
+  workspaces. An XMLport element name at two nesting levels gives one node, and a split `#if`
+  subscriber gives two nodes with distinct suffixes.
+- **Now checked.**
+  - `SitedGraph::shared_stable_ids` lists any id more than one node carries.
+  - `impact_graph::stable_id_tests` asserts it is empty on every corpus/fixture workspace, and
+    on a probe of the near-collision shapes, which asserts its split really happened.
+  - `cdo_sited_graph_stable_ids_are_unique` asserts the same on CDO, in the harness phase.
+  - The tier write points at them. One discrimination proof (red) is recorded in the probe
+    test's doc.
+
 ### Changed (ENG-120: mimalloc's `purge_delay` measured on CDO and DO, kept at 0)
 
 - No code change: `alsem` keeps `purge_delay` 0. A delay of 1 or 10 ms gave no CPU gain near the

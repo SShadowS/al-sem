@@ -640,6 +640,24 @@ impl SitedGraph {
             .collect()
     }
 
+    /// Every StableRoutineId that more than one node carries, with its nodes
+    /// (ascending); empty in a sound graph. The effect query's up pass writes
+    /// one tier per model routine per node (`effect_query_cli::field_scope`),
+    /// so two nodes on one id would make that tier depend on hash order
+    /// (ENG-90). Checked over real output by `impact_graph::stable_id_tests`
+    /// and the CDO harness.
+    #[must_use]
+    pub fn shared_stable_ids(&self) -> Vec<(String, Vec<u32>)> {
+        self.stable
+            .chunk_by(|a, b| (a.object, a.hash, a.suffix) == (b.object, b.hash, b.suffix))
+            .filter(|run| run.len() > 1)
+            .map(|run| {
+                let id = self.stable_id(run[0].node).unwrap_or_default();
+                (id, run.iter().map(|e| e.node).collect())
+            })
+            .collect()
+    }
+
     /// A node's display name: `Codeunit Name::Routine` for a routine,
     /// `Codeunit Name` for an object, the hub id for a hub.
     #[must_use]
