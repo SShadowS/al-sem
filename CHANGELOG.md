@@ -440,6 +440,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Without perf, or with `CDO_SPEED_INSTR=0`, the run says `instructions: NOT counted` and
     judges as before. A perf that cannot start for a call, or counts nothing, leaves that
     call uncounted, never failing the run.
+  - A call starts only once perf's counters run. perf starts them disabled (`-D -1`), cdo-speed
+    writes `enable` to its control FIFO and waits up to 5 s for its `ack`; with no `ack` the call
+    is uncounted. A fixed 0.2 s wait raced a slow perf start under the task gate's load (seen in
+    TLS-92's gate: one call counted from part-way through read 0, so the round total dropped out).
   - On a failure the line reads `FAIL; instructions: ...`, so it does not read as the reason.
   - `CDO_SPEED_PERF` is a test hook naming the perf command.
   - `speed.json` gains `instr` per record, `instr` per row and an `instructions` block.

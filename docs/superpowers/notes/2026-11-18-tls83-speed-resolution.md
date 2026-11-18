@@ -134,3 +134,13 @@ real landings carry the advisory:
 2. **The limit.** Fail above a higher limit (for example x1.05), or fail only on a regression
    that is not declared in the CHANGELOG?
 3. **The scope.** Judge the round total only, or each call?
+
+**A data point for 2 and 3 (engine, ENG-130, 2026-11-18).** Instruction ratios are exact run to
+run, but not build to build.
+- ENG-130 moved resident `prove` by +1.0 to +2.5 % instructions purely through thin-LTO
+  codegen reshuffling: prove never runs the changed code. In `perf record`, the cone code is at
+  0.02 %; the delta is inlining changes in untouched digest code.
+- So a per-call instruction ratio carries a codegen-layout noise of about ±2 % between two
+  builds, about the size of the x1.02 limit itself.
+- That argues for a looser limit, or for judging the round total only, where the layout shifts
+  of single calls average out.

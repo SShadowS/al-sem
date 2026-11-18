@@ -2176,7 +2176,10 @@ if os.path.exists(me):
 /// probe (`... -- true`) reads a count; attached (`-p <pids> -o <file>`), it
 /// writes, on SIGINT, how far the stub servers' published counters
 /// (`$STUB_DIR/instr.<pid>`) moved since it started, as `perf stat -x,` does on
-/// a hybrid CPU (one core type `<not counted>`). STUB_PERF_NONE: every attach
+/// a hybrid CPU (one core type `<not counted>`). It speaks perf's control FIFO
+/// (`-D -1 --control fifo:<ctl>,<ack>`): it counts from `enable` and answers
+/// `ack`; STUB_PERF_SLOW=<s> delays its counters between `enable` and `ack`, as
+/// perf's event setup does. STUB_PERF_NONE: every attach
 /// reads `<not counted>` on both. STUB_PERF_VANISH: it deletes itself after the
 /// probe, so starting it for a call fails.
 const SPEED_PERF_STUB: &str = r#"#!/usr/bin/env python3
@@ -2201,7 +2204,18 @@ if "--" in a:
     sys.exit(0)
 out = a[a.index("-o") + 1]
 pids = a[a.index("-p") + 1].split(",")
-start = total(pids)
+# perf's `-D -1 --control fifo:<ctl>,<ack>`: counting starts at `enable`, then
+# `ack` (cdo-speed waits for it before the call). STUB_PERF_SLOW: slow counters.
+assert a[a.index("-D") + 1] == "-1", a
+ctl, ack = a[a.index("--control") + 1].split(":", 1)[1].split(",")
+with open(ctl) as c:
+    assert c.readline().strip() == "enable"
+    # Like perf, the counters come up some time after `enable`; only the `ack`
+    # says they run.
+    time.sleep(float(os.environ.get("STUB_PERF_SLOW", "0")))
+    start = total(pids)
+    with open(ack, "w") as k:
+        k.write("ack\n")
 def stop(*_):
     with open(out, "w") as f:
         f.write(lines(total(pids) - start))
@@ -2285,7 +2299,11 @@ fn speed_with_stub(
 /// (red); `instr_stop` returning a 0 count -> `round-total x0.8333` with one
 /// uncounted call (red; the all-calls-uncounted case alone stayed GREEN under
 /// this break, both sides' totals being 0, hence the one-call case). Each
-/// restored, green.
+/// restored, green. TLS-92's gate (2026-11-18): the wait for perf's `ack` skipped
+/// -> "no call fully counted" under a stand-in perf whose counters come up 0.5 s
+/// after `enable` (red; with the delay BEFORE the FIFO open instead, the break
+/// stayed GREEN: the open itself synchronized, so the stub now lags where real
+/// perf does). Restored, green.
 #[cfg(target_os = "linux")]
 #[test]
 fn speed_reports_instructions_and_their_limit_is_advisory() {
@@ -2328,13 +2346,20 @@ fn speed_reports_instructions_and_their_limit_is_advisory() {
         "{text}"
     );
 
-    // The same work: x1.0000, no advisory.
+    // The same work: x1.0000, no advisory. The stand-in perf starts 0.5 s late
+    // (longer than the old fixed 0.2 s attach wait, which then counted the call
+    // from part-way, a 0: TLS-92's gate): every call is still counted whole,
+    // round total included, since the call waits for perf's `ack`.
     let dir = tempfile::tempdir().unwrap();
     let (code, text) = speed_with_stub(
         dir.path(),
         "1.0",
         &[],
-        &[("CDO_SPEED_INSTR", "1"), ("CDO_SPEED_PERF", perf)],
+        &[
+            ("CDO_SPEED_INSTR", "1"),
+            ("CDO_SPEED_PERF", perf),
+            ("STUB_PERF_SLOW", "0.5"),
+        ],
     );
     assert_eq!(code, Some(0), "{text}");
     assert!(
