@@ -797,15 +797,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - the compiler's own type symbols give every member of all 26 types its own ordinal, so two
     names never denote one value.
 - **Text and Code.** They are value domains too, for parameters, by rules measured on BC 28.4
-  (Linux sidecar):
+  (Linux sidecar; Windows confirmation pending, ENG-133):
   - **Text** compares exactly: case and spaces count.
   - **Code** holds a literal trimmed and upper case. A `case` arm and an `in` label are
     converted the same way. `=` and `<>` compare a label as written: `'ABC' = 'abc'` is false
     and `'ABC' <> 'abc'` is true. The IR does not tell `in` from `=`, so on Code an `if` label
-    is used only when conversion leaves it unchanged.
-  - Only ASCII literals take part.
+    is used only when conversion leaves it unchanged (ENG-132 carries the operator).
+  - Only ASCII literals take part (ENG-133 measures the rest).
   - A text literal is now a value label (`ValueLabel::Text`), read from its raw text so `''` is
-    one quote. The within-routine flow does not track Text or Code locals.
+    one quote. The within-routine flow does not track Text or Code locals yet (ENG-134).
 - **Tests.** `cli_prove_value_guards`'s `a_builtin_option_parameter_compares_by_member_name` and
   `text_and_code_parameters_compare_by_the_measured_rules` run `prove` through the CLI;
   `features::value_label_shapes` covers the label. Five discrimination proofs, all red.

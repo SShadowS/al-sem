@@ -109,7 +109,7 @@ pub(super) fn flow_domain(type_text: &str) -> Option<FDom> {
         return Some(FDom::Iface(i));
     }
     // Not Text or Code (ENG-30): the flow evaluates `=` itself, and on Code
-    // `=` compares a literal as written while `case` converts it.
+    // `=` compares a literal as written while `case` converts it (ENG-134).
     values::domain_of(type_text)
         .filter(|d| !matches!(d, Domain::Text | Domain::Code))
         .map(FDom::Val)

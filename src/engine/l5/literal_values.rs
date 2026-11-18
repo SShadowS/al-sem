@@ -228,13 +228,16 @@ pub(super) enum Domain {
     /// option type of this name.
     Enum(Arc<str>),
     /// ENG-30: Text (`Text`, `Text[n]`): values compared exactly, case and
-    /// spaces counting (BC 28.4: `'ABC'` takes the `'ABC'` arm, not `'abc'`;
-    /// `'ab '` is not `'ab'`).
+    /// spaces counting (BC 28.4 Linux sidecar: `'ABC'` takes the `'ABC'` arm,
+    /// not `'abc'`; `'ab '` is not `'ab'`; Windows confirmation pending,
+    /// ENG-133).
     Text,
     /// ENG-30: Code (`Code[n]`): a value is held as [`to_code`] gives it. A
     /// `case` arm or `in` label is converted the same way; an `=` / `<>`
-    /// label is compared as written (BC 28.4: `'ABC'` takes the arm `'abc'`
-    /// and is `in ['abc']`, but `'ABC' = 'abc'` is false).
+    /// label is compared as written (BC 28.4 Linux sidecar: `'ABC'` takes the
+    /// arm `'abc'` and is `in ['abc']`, but `'ABC' = 'abc'` is false; Windows
+    /// confirmation pending, ENG-133). An `if` label conversion would change
+    /// is unresolved until the IR tells `in` from `=` (ENG-132).
     Code,
 }
 
@@ -374,7 +377,7 @@ pub(super) fn in_domain(v: &Val, d: &Domain) -> Option<Val> {
             Some(Val::Enum(Arc::clone(e), Arc::clone(m)))
         }
         // ASCII only: non-ASCII case and comparison rules are not measured
-        // (BC on Linux compares with ICU).
+        // yet (BC on Linux compares with ICU; ENG-133).
         (Val::Text(s), Domain::Text) if s.is_ascii() => Some(Val::Text(Arc::clone(s))),
         (Val::Text(s), Domain::Code) if s.is_ascii() => Some(Val::Text(Arc::from(to_code(s)))),
         _ => None,
