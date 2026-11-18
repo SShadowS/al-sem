@@ -6318,8 +6318,11 @@ fn field_scope(
                 &mut WalkScratch::default(),
                 &mut c,
             );
+            // Once per walk, not per node (sol, ENG-124: the lookup is a search of the
+            // node index since the key map went).
+            let hub = g.universal_hub();
             for (&n, &tier) in &c.best {
-                if n == root || g.universal_hub() == Some(n) {
+                if n == root || hub == Some(n) {
                     continue;
                 }
                 let at = g

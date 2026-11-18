@@ -111,6 +111,70 @@ fn a_dependency_leaf_the_export_prunes_has_a_cone() {
     assert_eq!(cs[0].0.tier, Tier::ThroughDependency);
 }
 
+/// ENG-124: the graph's sorted node index finds every node by its key and nothing else:
+/// each routine node by `routine_node`, the universal hub by `universal_hub`, and a routine
+/// the graph lacks as `None`, in a world whose node order is not the key order.
+/// DISCRIMINATION: leaving the index unsorted (node order, not key order) makes the hub's
+/// binary search miss ("an edge names h:any"); an off-by-one in the answer (`p` for
+/// `node_ix[p]`) answers the wrong node.
+#[test]
+fn every_node_is_found_by_its_key() {
+    let mut w = World::default();
+    let a = w.app("W");
+    let cu = w.obj(a, ObjectKind::Codeunit, 1, "Cu", TrustTier::Workspace);
+    let names = ["Zeta", "Alpha", "Mid", "Beta", "Omega", "Gamma"];
+    let rs: Vec<RoutineNodeId> = names.iter().map(|n| w.rtn(&cu, n)).collect();
+    for (i, pair) in rs.windows(2).enumerate() {
+        w.call(&pair[0], &pair[1], i as u32 + 1);
+    }
+    // The build registers the routines first, in key order, then meets the other nodes as
+    // their edges come. `Aaa` (first) names the universal hub, then `Bbb` runs a page: the hub
+    // node is met before the page's object node, though an object key sorts before a hub key.
+    let u = w.rtn(&cu, "Aaa");
+    w.edge(
+        &u,
+        EdgeKind::Call,
+        DispatchShape::Exact,
+        vec![unknown_route()],
+        9,
+    );
+    let page = w.obj(a, ObjectKind::Page, 2, "Pg", TrustTier::Workspace);
+    let runner = w.rtn(&cu, "Bbb");
+    let ob = w.edge(&runner, EdgeKind::Call, DispatchShape::Exact, vec![], 10);
+    w.site_facts.insert(
+        ob,
+        crate::program::resolve::full::SiteFacts::from(
+            crate::program::resolve::full::RareSiteFacts {
+                run_target: Some(page.clone()),
+                ..Default::default()
+            },
+        ),
+    );
+    let g = sited_of(&w, a, &[]);
+    assert!(
+        !g.nodes.windows(2).all(|p| p[0] <= p[1]),
+        "precondition: the node order is not the key order (else an unsorted index finds them too)"
+    );
+    let mut found = 0usize;
+    for (i, key) in g.nodes.iter().enumerate() {
+        if let crate::program::impact_graph::project::Key::Routine(r) = key {
+            assert_eq!(g.routine_node(r), Some(i as u32), "{r:?}: its own node");
+            found += 1;
+        }
+    }
+    assert!(found >= 7, "precondition: the routines are nodes ({found})");
+    let hub = g.universal_hub().expect("an edge names h:any");
+    assert!(
+        matches!(
+            g.nodes[hub as usize],
+            crate::program::impact_graph::project::Key::Hub(_)
+        ),
+        "the hub's own node"
+    );
+    let absent = w.rtn(&cu, "NotInTheGraph");
+    assert_eq!(g.routine_node(&absent), None, "a routine the graph lacks");
+}
+
 /// R0-4: an `h:any` caller. The hub is reached once, one hop from the roots,
 /// as an `OnlyOpen` state; its caller once, two hops; the hub is reported
 /// once as the universal hidden channel, for one root or two.
