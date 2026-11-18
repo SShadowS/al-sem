@@ -31,7 +31,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **How common.** Real CR-only files: 0 of 582 workspace and 10,881 dependency files on CDO, and 0
   of 814 in DO. So this reports the loss here; the grammar fix (end directive lines and `//`
   comments at `\r` too) is filed upstream as https://github.com/SShadowS/tree-sitter-al/issues/45
-  (synthetic repros, the scanner lines and the comment token, a patch idea). Whether `alc` accepts such a file was not checked (no `alc` here).
+  (synthetic repros, the scanner lines and the comment token, a patch idea). The compiler accepts
+  such files: alc 18.0.41 compiles the CR-only `#if` repro, a CR-only file with a header comment
+  and one with a comment in a body, and keeps each codeunit and its method (added to the issue).
 - **Test.** `cli_a_json_differential::failed_parse_without_object_is_a_parse_warning` covers a
   CR-only file with the task's repro, a CR-only file with a header comment (clean parse), a
   CR-only file whose last line end is CRLF, an LF file with a syntax error, and a comment-only
