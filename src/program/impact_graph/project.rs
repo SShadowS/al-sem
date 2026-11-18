@@ -475,7 +475,12 @@ impl<'a> Builder<'a> {
                 match &r.target {
                     RouteTarget::Builtin(_) | RouteTarget::Unresolved => {}
                     RouteTarget::Routine(rid) => {
-                        self.site_guard = self.table_event_guard(&ce.obligation_id(), rid);
+                        // Only a table-event or publisher obligation has a guard: build no
+                        // id for the rest (ENG-87, sol).
+                        self.site_guard = match ce.obligation_kind() {
+                            ObligationKind::CallSite | ObligationKind::Background => 0,
+                            _ => self.table_event_guard(&ce.obligation_id(), rid),
+                        };
                         self.engine_route(&from, e.kind, e.shape, rid, line, conditions);
                         self.site_guard = 0;
                     }

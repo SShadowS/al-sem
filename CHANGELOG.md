@@ -150,7 +150,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `obligation_id()` derives the id and an edge cannot carry one that disagrees with it (every
   constructor built the stored id from those same parts: the id-shape audit checked each).
   `obligation_site()` borrows the parts and `has_obligation()` compares without building an id
-  (the dependency site facts' lookup). The task's SmallVec step was dropped: a `Route` is
+  (the dependency site facts' lookup). An edge's `Debug` keeps the old form, the derived id in
+  an `obligation_id` field, so the session's program dump does not change. The interface
+  holder pass indexes only the sites it closes (not every edge), and the impact graph's
+  table-event guard builds an id only for a table-event or publisher edge. The task's SmallVec step was dropped: a `Route` is
   240 bytes, so one inline per edge would add more than the route storage it saves.
 - **The census** (`tools/census-probe resident`, CDO, base `a73b4bf6`, now split by field): the
   retained dependency edges were 290 MiB over 438,823 edges; in every one of the 432,630
@@ -167,7 +170,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Pinned by** `resolve::full::tests::an_edge_has_exactly_its_derived_obligation` (an edge
   answers for exactly its derived id; with `has_obligation` ignoring the fingerprint, matching
   a call-site edge to a background id, or reading a site id's caller from `edge.from`, it
-  fails; the existing site-facts tests stayed green under the first two).
+  fails; the existing site-facts tests stayed green under the first two; a span differing in its
+  unit, start or end alone is another id) and `an_edges_debug_keeps_the_obligation_id_field`.
 
 ### Changed (ENG-120: mimalloc's `purge_delay` measured on CDO and DO, kept at 0)
 

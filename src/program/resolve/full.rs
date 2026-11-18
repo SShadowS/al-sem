@@ -136,7 +136,7 @@ pub enum ObligationKind {
 /// routine is `edge.from`, so [`Self::obligation_id`] derives the id and an edge cannot carry
 /// an obligation that disagrees with it. (It held a full copy, 128 bytes plus the span's file
 /// text, on each of CDO's 438,823 retained dependency edges.)
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct ClassifiedEdge {
     obligation: ObligationKind,
     pub edge: Edge,
@@ -144,6 +144,18 @@ pub struct ClassifiedEdge {
     /// resolution was given a file; `None` for publisher edges and the LSP's
     /// unstamped path.
     pub site: Option<crate::program::site_key::ProgramSite>,
+}
+
+/// The pre-ENG-87 derived form, with the derived id in its old field (sol review): the session's
+/// program dump prints edges with `Debug`, and its bytes must not move with the storage.
+impl std::fmt::Debug for ClassifiedEdge {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ClassifiedEdge")
+            .field("obligation_id", &self.obligation_id())
+            .field("edge", &self.edge)
+            .field("site", &self.site)
+            .finish()
+    }
 }
 
 impl ClassifiedEdge {
@@ -4915,6 +4927,30 @@ mod tests {
                 span: other_unit,
                 callee_fp,
             },
+            // sol: the start or the end alone (a predicate comparing the unit only passes the
+            // case above).
+            ObligationId::CallSite {
+                caller: caller.clone(),
+                span: CanonicalSpan {
+                    start: SourcePos {
+                        col: span.start.col + 1,
+                        ..span.start
+                    },
+                    ..span.clone()
+                },
+                callee_fp,
+            },
+            ObligationId::CallSite {
+                caller: caller.clone(),
+                span: CanonicalSpan {
+                    end: SourcePos {
+                        line: span.end.line + 1,
+                        ..span.end
+                    },
+                    ..span.clone()
+                },
+                callee_fp,
+            },
             ObligationId::Publisher(caller.clone()),
         ];
         for other in &others {
@@ -4946,6 +4982,21 @@ mod tests {
         assert!(
             !p.has_obligation(&id),
             "a publisher edge is not its site's call"
+        );
+    }
+
+    /// sol: an edge's `Debug` (the session's program dump prints edges with it) is the
+    /// pre-ENG-87 derived form, the derived id in its old `obligation_id` field.
+    #[test]
+    fn an_edges_debug_keeps_the_obligation_id_field() {
+        let id = call_site("A", 3);
+        let e = edge_for(&id);
+        assert_eq!(
+            format!("{e:?}"),
+            format!(
+                "ClassifiedEdge {{ obligation_id: {id:?}, edge: {:?}, site: None }}",
+                e.edge
+            )
         );
     }
 

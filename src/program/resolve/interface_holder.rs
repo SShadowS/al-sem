@@ -228,8 +228,8 @@ pub(crate) fn close_holder_sites(
             }
         }
     }
-    let mut closed: Vec<(ObligationId, Vec<ObjectNodeId>)> = Vec::new();
-    for e in edges.iter() {
+    let mut closed: Vec<(usize, ObligationId, Vec<ObjectNodeId>)> = Vec::new();
+    for (i, e) in edges.iter().enumerate() {
         let Some(f) = facts.get(&e.obligation_id()).map(|f| f.rare()) else {
             continue;
         };
@@ -267,21 +267,26 @@ pub(crate) fn close_holder_sites(
             })
         };
         if real && !over.is_empty() && over.iter().all(|c| implements(c) && reached.contains(c)) {
-            closed.push((e.obligation_id(), over));
+            closed.push((i, e.obligation_id(), over));
         }
     }
-    // Nothing to patch (the usual case): skip indexing every edge by its id (ENG-87, Fable).
+    // Nothing to patch (the usual case): skip the pass below (ENG-87, Fable).
     if closed.is_empty() {
         return;
     }
-    let at: HashMap<ObligationId, usize> = edges
-        .iter()
-        .enumerate()
-        .map(|(i, e)| (e.obligation_id(), i))
-        .collect();
+    // The LAST edge with each closed id is patched (what an id -> index map over every edge,
+    // the old form, answered): one pass, keeping only the closed ids (ENG-87, sol).
+    let mut last: HashMap<&ObligationId, usize> = closed.iter().map(|(i, o, _)| (o, *i)).collect();
+    for (i, e) in edges.iter().enumerate() {
+        if let Some(at) = last.get_mut(&e.obligation_id()) {
+            *at = i;
+        }
+    }
+    let last: Vec<usize> = closed.iter().map(|(_, o, _)| last[o]).collect();
     let patches: Vec<(usize, ObligationId, Vec<ObjectNodeId>)> = closed
         .into_iter()
-        .map(|(o, over)| (at[&o], o, over))
+        .zip(last)
+        .map(|((_, o, over), at)| (at, o, over))
         .collect();
     // The receiver holds one of `over` (or nothing: a runtime error), so the
     // routes to every other implementer cannot run: dropped. The model adapter
