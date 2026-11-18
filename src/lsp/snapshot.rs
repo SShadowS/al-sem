@@ -375,7 +375,7 @@ pub struct ParsedFileEntry {
     /// safe-wins Task 2) — see that field's sharing soundness doc.
     pub file: Arc<AlFile>,
     /// Shares the workspace `SourceFile.text` allocation (perf safe-wins Task 1).
-    pub text: Arc<str>,
+    pub text: crate::source_text::SourceText,
     pub virtual_path: String,
     pub surface: DefSurface,
     /// Snapshot-scoped [`LineTable`] cache (Tier-2 latency wave follow-up,
@@ -418,7 +418,7 @@ impl ParsedFileEntry {
     #[must_use]
     pub fn new(
         file: Arc<AlFile>,
-        text: Arc<str>,
+        text: crate::source_text::SourceText,
         virtual_path: String,
         surface: DefSurface,
     ) -> Self {
@@ -441,7 +441,7 @@ impl ParsedFileEntry {
     #[must_use]
     pub fn line_table(&self) -> &LineTable {
         self.line_table
-            .get_or_init(|| LineTable::new(Arc::clone(&self.text)))
+            .get_or_init(|| LineTable::new(self.text.clone()))
     }
 }
 
@@ -841,7 +841,7 @@ impl LspSnapshot {
                     pf.virtual_path.clone(),
                     Arc::new(ParsedFileEntry::new(
                         Arc::clone(&pf.file),
-                        Arc::clone(&pf.text),
+                        pf.text.clone(),
                         pf.virtual_path.clone(),
                         surface,
                     )),
@@ -2110,7 +2110,7 @@ mod tests {
         let entry = snap.parsed.get("Alpha.al").expect("Alpha.al entry");
 
         let cached = entry.line_table();
-        let fresh = LineTable::new(Arc::clone(&entry.text));
+        let fresh = LineTable::new(entry.text.clone());
 
         let lobenr = snap.decls_by_file["Alpha.al"]
             .iter()

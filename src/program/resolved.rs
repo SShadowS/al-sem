@@ -461,8 +461,9 @@ impl ResolvedProgram {
     /// buckets, printed; #160 steps 10 + 11a (§4.13): `program.edge_site` (the
     /// edges' site keys, a part of `program.report`) and `program.file_table`.
     pub(crate) fn census(&self) {
-        self.snapshot_texts_tally()
-            .emit("program.snapshot_texts", Kind::Exact);
+        let (texts, mapped) = self.snapshot_texts_tally();
+        texts.emit("program.snapshot_texts", Kind::Exact);
+        mapped.emit("program.snapshot_texts_mapped", Kind::Exact);
         self.report_tally().emit("program.report", Kind::Shallow);
         let b = &self.body;
         let edges = b.edges.len() + b.dependency_body_edges.len();
@@ -475,25 +476,20 @@ impl ResolvedProgram {
         self.meta.inputs.census().emit("inputs", Kind::Exact);
     }
 
-    /// `program.snapshot_texts`: every source text of every DEPENDENCY app in
-    /// the snapshot, each shared `Arc<str>` once (exact). The workspace texts are
-    /// the `inputs` bucket's, which shares them by `Arc`.
-    fn snapshot_texts_tally(&self) -> Tally {
-        let mut seen = std::collections::HashSet::new();
-        let mut texts = Tally::default();
+    /// `program.snapshot_texts`: every OWNED source text of every DEPENDENCY app in
+    /// the snapshot, each shared `Arc<str>` once (exact), and (second) every mapped
+    /// source-cache file those apps' texts read, once each, by its length
+    /// (ENG-113: file-backed pages the page cache shares across processes, not heap; a
+    /// package whose cache could not be used stays owned and counts as heap). The
+    /// workspace texts are the `inputs` bucket's, which shares them by `Arc`.
+    fn snapshot_texts_tally(&self) -> (Tally, Tally) {
         let snap = self.body.ctx.snapshot();
-        for app in snap.apps.iter().filter(|u| u.id != snap.workspace_app) {
-            for f in app.source.iter().flat_map(|s| s.files.iter()) {
-                if seen.insert(Arc::as_ptr(&f.text).cast::<u8>()) {
-                    // `ArcInner<str>`: strong + weak counts, then the bytes, padded
-                    // to the counts' alignment — the requested allocation size.
-                    texts.bytes += (2 * std::mem::size_of::<usize>() + f.text.len())
-                        .next_multiple_of(std::mem::align_of::<usize>());
-                    texts.allocs += 1;
-                }
-            }
-        }
-        texts
+        source_texts_tally(
+            snap.apps
+                .iter()
+                .filter(|u| u.id != snap.workspace_app)
+                .flat_map(|app| app.source.iter().flat_map(|s| s.files.iter())),
+        )
     }
 
     /// `program.report` (shallow): the resolver's per-site output (both edge
@@ -530,6 +526,29 @@ impl ResolvedProgram {
         }
         r
     }
+}
+
+/// `files`' texts as `(heap, mapped)`: each owned `Arc<str>` once, by its allocation; each
+/// mapped source-cache file once, by its length (ENG-113).
+fn source_texts_tally<'a>(
+    files: impl Iterator<Item = &'a crate::snapshot::embedded::SourceFile>,
+) -> (Tally, Tally) {
+    let mut seen = std::collections::HashSet::new();
+    let mut texts = Tally::default();
+    let mut mapped = Tally::default();
+    for f in files {
+        if let Some(a) = f.text.owned_arc() {
+            if seen.insert(Arc::as_ptr(a).cast::<u8>()) {
+                texts.text(&f.text);
+            }
+        } else if let Some(m) = f.text.mapping()
+            && seen.insert(Arc::as_ptr(m).cast::<u8>())
+        {
+            mapped.bytes += m.len();
+            mapped.allocs += 1;
+        }
+    }
+    (texts, mapped)
 }
 
 #[cfg(test)]
@@ -656,7 +675,48 @@ mod tests {
                 .any(|f| f.text.as_ref().is_ok_and(|t| !t.is_empty())),
             "the precondition: the workspace has text"
         );
-        let t = p.snapshot_texts_tally();
-        assert_eq!((t.bytes, t.allocs), (0, 0));
+        let (t, m) = p.snapshot_texts_tally();
+        assert_eq!((t.bytes, t.allocs, m.bytes, m.allocs), (0, 0, 0, 0));
+    }
+
+    /// ENG-113's bar (a): mapped package text is no heap (one map counted once, by its file
+    /// length), and a package whose cache could not be used stays owned and counts as heap
+    /// (each `Arc<str>` once, however many holders list it).
+    #[test]
+    fn mapped_texts_are_no_heap_and_owned_ones_are() {
+        use crate::engine::deps::app_package_zip::test_apps::build_app;
+        let img = crate::app_image::AppImage::from_bytes(
+            "pkg.app",
+            build_app(&[("a.al", b"codeunit 1 A { }"), ("b.al", b"codeunit 2 B { }")]),
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let (mapped_files, _) = crate::snapshot::cache::cached_source_in(dir.path(), &img).unwrap();
+        let not_a_dir = dir.path().join("file");
+        std::fs::write(&not_a_dir, "").unwrap();
+        let (owned_files, _) = crate::snapshot::cache::cached_source_in(&not_a_dir, &img).unwrap();
+        assert!(
+            mapped_files.iter().all(|f| f.text.is_mapped())
+                && owned_files.iter().all(|f| !f.text.is_mapped()),
+            "precondition: one mapped and one owned copy"
+        );
+        let file_len = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .find(|p| p.extension().is_some_and(|x| x == "bin"))
+            .map(|p| std::fs::metadata(p).unwrap().len() as usize)
+            .unwrap();
+
+        let (t, m) = source_texts_tally(mapped_files.iter().chain(&mapped_files));
+        assert_eq!((t.bytes, t.allocs), (0, 0), "mapped text is no heap");
+        assert_eq!((m.bytes, m.allocs), (file_len, 1), "one map, by its file");
+
+        let (t, m) = source_texts_tally(owned_files.iter().chain(&owned_files));
+        let arc = |n: usize| (2 * std::mem::size_of::<usize>() + n).next_multiple_of(8);
+        assert_eq!(
+            (t.bytes, t.allocs),
+            (2 * arc(16), 2),
+            "owned text is heap, once each"
+        );
+        assert_eq!((m.bytes, m.allocs), (0, 0));
     }
 }

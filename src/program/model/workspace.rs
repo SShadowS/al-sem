@@ -3172,7 +3172,7 @@ fn append_dependency_rows(
     // holds it.
     struct DepFile<'a> {
         virtual_path: &'a String,
-        text: &'a Arc<str>,
+        text: &'a crate::source_text::SourceText,
         tree: Option<Arc<al_syntax::ir::AlFile>>,
     }
     let mut units: Vec<(&crate::snapshot::AppUnit, Vec<DepFile<'_>>)> = Vec::new();

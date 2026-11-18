@@ -89,6 +89,18 @@ impl Tally {
         self
     }
 
+    /// A source text's heap: an owned text's `ArcInner<str>` (the two counts, then the bytes,
+    /// padded to the counts' alignment); a mapped text (ENG-113) is no heap of this process
+    /// and adds nothing (its file is counted by `program.snapshot_texts_mapped`).
+    pub fn text(&mut self, text: &crate::source_text::SourceText) -> &mut Self {
+        if let Some(a) = text.owned_arc() {
+            self.bytes +=
+                (2 * size_of::<usize>() + a.len()).next_multiple_of(std::mem::align_of::<usize>());
+            self.allocs += 1;
+        }
+        self
+    }
+
     /// The element buffers of nested `Vec`s (a map's values, one level down).
     pub fn bufs<'v, T: 'v>(&mut self, it: impl IntoIterator<Item = &'v Vec<T>>) -> &mut Self {
         for v in it {

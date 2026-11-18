@@ -637,7 +637,10 @@ mod tests {
     }
 
     fn same_allocations(a: &[SourceFile], b: &[SourceFile]) -> bool {
-        a.len() == b.len() && a.iter().zip(b).all(|(x, y)| Arc::ptr_eq(&x.text, &y.text))
+        a.len() == b.len()
+            && a.iter()
+                .zip(b)
+                .all(|(x, y)| crate::source_text::SourceText::ptr_eq(&x.text, &y.text))
     }
 
     /// Two roots, one cache: the extracted source is held once, but only for
@@ -671,24 +674,36 @@ mod tests {
     /// (`dep_lines`), nor its retained snapshot, nor the cache (no `Weak` into
     /// a text: an `Arc<str>`'s bytes share the allocation with its counts, so
     /// such a `Weak` would pin the whole text) holds one.
+    ///
+    /// ENG-113: embedded package text comes from the source cache as ranges of one mapped
+    /// file per package (the probe is that mapping: while any text of the package is kept,
+    /// the mapping lives), or as an owned `Arc<str>` when the cache cannot be used (the probe
+    /// is that allocation). Whichever form this run gets is probed.
     #[test]
     fn the_lsp_keeps_no_dependency_text() {
         let fx = two_roots_one_alpackages();
         let cache = DepCache::default();
         let src = dep_source(&cache, &fx.root_a);
-        let text = Arc::downgrade(&src[0].text);
+        let map = src[0].text.mapping().map(Arc::downgrade);
+        let owned = src[0].text.owned_arc().map(Arc::downgrade);
         let a = build(&fx.root_a, DependencySource::Embedded, &cache);
         assert!(!a.dep_lines.is_empty(), "precondition: dependency files");
         // Checked while the text is alive: `Weak::weak_count` reads 0 once
-        // the strong count is 0, whoever still holds a `Weak`.
+        // the strong count is 0, whoever still holds a `Weak`. (A `Weak<str>` would pin the
+        // text's bytes; a `Weak<Mmap>` pins only the map's header.)
+        let weak_count = match (&map, &owned) {
+            (Some(m), None) => m.weak_count(),
+            (None, Some(o)) => o.weak_count(),
+            _ => unreachable!("a text is mapped or owned"),
+        };
         assert_eq!(
-            text.weak_count(),
-            1,
+            weak_count, 1,
             "the cache holds no Weak into the text (only this test does)"
         );
         drop(src);
         assert!(
-            text.upgrade().is_none(),
+            map.is_none_or(|m| m.upgrade().is_none())
+                && owned.is_none_or(|o| o.upgrade().is_none()),
             "the live LSP root holds no dependency text"
         );
         drop(a);
@@ -1152,7 +1167,7 @@ mod tests {
             Ok(Some(SourceRoot {
                 files: Arc::new(vec![SourceFile {
                     virtual_path: "a.al".into(),
-                    text: Arc::from("codeunit 1 A { }"),
+                    text: "codeunit 1 A { }".into(),
                 }]),
                 tier: TrustTier::EmbeddedSource,
                 content_hash: hash.into(),

@@ -100,7 +100,7 @@ pub fn workspace_source_from_inputs(inputs: &WorkspaceInputs) -> Result<Option<S
     let mut files: Vec<SourceFile> = Vec::with_capacity(inputs.al_files.len());
     for f in &inputs.al_files {
         let text = match &f.text {
-            Ok(t) => Arc::clone(t),
+            Ok(t) => Arc::clone(t).into(),
             Err(msg) => {
                 return Err(anyhow::anyhow!("{msg}"))
                     .with_context(|| format!("reading source {}", f.abs_path.display()));

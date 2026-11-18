@@ -1121,8 +1121,14 @@ impl<'a> W<'a> {
         e.0 += n as u64;
         e.1 += (n * size_of::<T>()) as u64;
     }
-    fn text(&mut self, label: &'static str, t: &Arc<str>) {
-        if self.first(Arc::as_ptr(t)) {
+    /// An owned text by its allocation, under `label`; a mapped one (ENG-113: file pages, not
+    /// heap) by its bytes under one separate label.
+    fn text(&mut self, label: &'static str, t: &al_sem::source_text::SourceText) {
+        let (label, p) = match t.owned_arc() {
+            Some(a) => (label, Arc::as_ptr(a) as *const u8),
+            None => ("mapped source text (file pages, not heap)", t.as_ptr()),
+        };
+        if self.first(p) {
             let e = self.texts.entry(label).or_default();
             e.0 += 1;
             e.1 += t.len() as u64;
@@ -1331,7 +1337,10 @@ impl<'a> W<'a> {
             self.rid(("incoming", "key"), k);
             self.v(("incoming", "edgerefs[]"), v);
             for e in v {
-                self.text("incoming.edgeref.file(Arc<str>)", &e.file);
+                self.text(
+                    "incoming.edgeref.file(Arc<str>)",
+                    &Arc::clone(&e.file).into(), // the same allocation, wrapped
+                );
             }
         }
         if self.first(Arc::as_ptr(&l.ws_publisher_fanout)) {

@@ -20,6 +20,7 @@ use al_syntax::ir::{AlFile, BlockId, BlockItem, StmtKind};
 use crate::program::impact_graph::SitedGraph;
 use crate::program::inputs::WorkspaceInputs;
 use crate::program::node::{ObjKey, ObjectNodeId};
+use crate::source_text::SourceText;
 
 /// One enclosing condition of a site.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
@@ -53,8 +54,8 @@ pub fn site_guards(
 #[derive(Default)]
 pub struct GuardCache {
     /// The packages' embedded sources, `(virtual path, text)`.
-    packages: Option<Vec<(String, std::sync::Arc<str>)>>,
-    texts: std::collections::HashMap<(bool, String), Vec<std::sync::Arc<str>>>,
+    packages: Option<Vec<(String, SourceText)>>,
+    texts: std::collections::HashMap<(bool, String), Vec<SourceText>>,
     parsed: std::collections::HashMap<(bool, String, usize), AlFile>,
 }
 
@@ -118,14 +119,14 @@ fn pinned_texts(
     g: &SitedGraph,
     object: &ObjectNodeId,
     unit: &str,
-    packages: &mut Option<Vec<(String, std::sync::Arc<str>)>>,
-) -> Result<Vec<std::sync::Arc<str>>, String> {
+    packages: &mut Option<Vec<(String, SourceText)>>,
+) -> Result<Vec<SourceText>, String> {
     if object.app == g.primary_app() {
         return inputs
             .al_files
             .iter()
             .find(|f| f.rel_posix == unit)
-            .map(|f| f.text.clone().map(|t| vec![t]))
+            .map(|f| f.text.clone().map(|t| vec![t.into()]))
             .unwrap_or_else(|| Err(format!("{unit} is not a file of the revision's read")));
     }
     let mut out = Vec::new();
