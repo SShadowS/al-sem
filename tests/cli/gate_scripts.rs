@@ -17,6 +17,9 @@ fn private_slot<'a>(
         .env("CDO_SLOT_BUILD_NAMES", "tls89-none")
         .env("CDO_SLOT_BUILD_SCRIPTS", "tls89-none")
         .env_remove("CDO_SLOT_TOKEN")
+        // TLS-83: no instruction counting unless a test asks for it (a real
+        // perf on the stub servers adds 0.2 s a call and reads nothing useful).
+        .env("CDO_SPEED_INSTR", "0")
 }
 
 /// The speed gate pointed at an empty workspace, both sides this build's
@@ -2149,12 +2152,54 @@ for line in sys.stdin:
             open(me, "w").close()
         if calls == 6:
             burn(float(os.environ["STUB_BUILD_S"]) * (1.5 if second("tests") else 1.0))
+        # TLS-83: this process's user-mode instructions so far, for the stub perf
+        # (SPEED_PERF_STUB): 1e9 a call, times STUB_INSTR_HEAD on the head side.
+        factor = 1.0
+        if os.path.basename(sys.argv[0]) == "alsem-head":
+            factor = float(os.environ.get("STUB_INSTR_HEAD", "1"))
+        counter = os.path.join(os.environ["STUB_DIR"], f"instr.{os.getpid()}")
+        done = int(open(counter).read()) if os.path.exists(counter) else 0
+        with open(counter, "w") as f:
+            f.write(str(done + int(1e9 * factor)))
         result = {"structuredContent": {"exitCode": 0, "stdoutText": "ok"}}
     else:
         result = {}
     print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": result}), flush=True)
 if os.path.exists(me):
     os.remove(me)
+"#;
+
+/// ⟨TLS-83⟩ A stand-in `perf` (cdo-speed's CDO_SPEED_PERF test hook): the
+/// probe (`... -- true`) reads a count; attached (`-p <pids> -o <file>`), it
+/// writes, on SIGINT, how far the stub servers' published counters
+/// (`$STUB_DIR/instr.<pid>`) moved since it started, as `perf stat -x,` does on
+/// a hybrid CPU (one core type `<not counted>`).
+const SPEED_PERF_STUB: &str = r#"#!/usr/bin/env python3
+import os, signal, sys, time
+a = sys.argv[1:]
+def total(pids):
+    s = 0
+    for p in pids:
+        f = os.path.join(os.environ["STUB_DIR"], f"instr.{p}")
+        if os.path.exists(f):
+            s += int(open(f).read())
+    return s
+def lines(n):
+    return (f"{n},,cpu_core/instructions/u,1,100.00,,\n"
+            "<not counted>,,cpu_atom/instructions/u,0,0.00,,\n")
+if "--" in a:
+    sys.stderr.write(lines(1000))
+    sys.exit(0)
+out = a[a.index("-o") + 1]
+pids = a[a.index("-p") + 1].split(",")
+start = total(pids)
+def stop(*_):
+    with open(out, "w") as f:
+        f.write(lines(total(pids) - start))
+    sys.exit(0)
+signal.signal(signal.SIGINT, stop)
+while True:
+    time.sleep(0.05)
 "#;
 
 #[cfg(target_os = "linux")]
@@ -2168,6 +2213,11 @@ fn speed_with_stub(
     let stub = dir.join("alsem");
     std::fs::write(&stub, SPEED_STUB).unwrap();
     std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+    // TLS-83: head runs under its own name, so the stub can tell the sides apart.
+    let head = dir.join("alsem-head");
+    if !head.exists() {
+        std::os::unix::fs::symlink(&stub, &head).unwrap();
+    }
     let state = dir.join(format!("state-{}", extra.join("-")));
     std::fs::create_dir_all(&state).unwrap();
     std::fs::write(dir.join("loadavg"), load).unwrap();
@@ -2186,7 +2236,7 @@ fn speed_with_stub(
         .args(["--base-exe"])
         .arg(&stub)
         .arg("--head-exe")
-        .arg(&stub)
+        .arg(&head)
         .args(["--rounds", "1", "--max-rounds", "1", "--out"])
         .arg(state.join("out"))
         .args(extra)
@@ -2208,6 +2258,98 @@ fn speed_with_stub(
         String::from_utf8_lossy(&out.stderr)
     );
     (out.status.code(), text)
+}
+
+/// ⟨TLS-83⟩ cdo-speed counts each call's user-mode instructions (a stub perf,
+/// SPEED_PERF_STUB, reading what the stub servers publish) and reports the
+/// instruction ratio per call, and on its verdict line for the model build and
+/// the round total. The limit (x1.02) is ADVISORY: a head doing 5 % more work
+/// is reported ("ADVISORY (not failing)") and still PASSes. When perf cannot
+/// count, the run says so and judges CPU and wall only, as before.
+///
+/// Mutations (2026-11-18): the advisory appended to `failed` instead -> the 5 %
+/// head FAILs (red); the instruction summary dropped from the verdict line ->
+/// no `instructions: build x1.0500` there (red); `instr_probe` treating a perf
+/// that cannot run as counting -> the run without perf breaks instead of
+/// falling back (red). Each restored, green.
+#[cfg(target_os = "linux")]
+#[test]
+fn speed_reports_instructions_and_their_limit_is_advisory() {
+    use std::os::unix::fs::PermissionsExt;
+    let bin = tempfile::tempdir().unwrap();
+    let perf = bin.path().join("perf");
+    std::fs::write(&perf, SPEED_PERF_STUB).unwrap();
+    std::fs::set_permissions(&perf, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let perf = perf.to_str().unwrap();
+    let verdict = |text: &str| -> String {
+        text.lines()
+            .rfind(|l| l.contains("cdo-speed: PASS") || l.contains("cdo-speed: FAIL"))
+            .unwrap_or_else(|| panic!("a verdict line: {text}"))
+            .to_string()
+    };
+
+    // Head does 5 % more work: reported, advisory, still a PASS.
+    let dir = tempfile::tempdir().unwrap();
+    let (code, text) = speed_with_stub(
+        dir.path(),
+        "1.0",
+        &[],
+        &[
+            ("CDO_SPEED_INSTR", "1"),
+            ("CDO_SPEED_PERF", perf),
+            ("STUB_INSTR_HEAD", "1.05"),
+        ],
+    );
+    assert_eq!(code, Some(0), "an advisory must not fail the run: {text}");
+    let v = verdict(&text);
+    assert!(
+        v.contains("cdo-speed: PASS")
+            && v.contains(
+                "instructions: build x1.0500, round-total x1.0500; advisory limit x1.02, ADVISORY: "
+            ),
+        "{text}"
+    );
+    assert!(
+        text.contains("ADVISORY (not failing): build: instructions x1.0500"),
+        "{text}"
+    );
+
+    // The same work: x1.0000, no advisory.
+    let dir = tempfile::tempdir().unwrap();
+    let (code, text) = speed_with_stub(
+        dir.path(),
+        "1.0",
+        &[],
+        &[("CDO_SPEED_INSTR", "1"), ("CDO_SPEED_PERF", perf)],
+    );
+    assert_eq!(code, Some(0), "{text}");
+    assert!(
+        verdict(&text)
+            .contains("(instructions: build x1.0000, round-total x1.0000; advisory limit x1.02)"),
+        "{text}"
+    );
+    assert!(!text.contains("ADVISORY"), "{text}");
+
+    // No perf: said, and CPU and wall only.
+    let dir = tempfile::tempdir().unwrap();
+    let (code, text) = speed_with_stub(
+        dir.path(),
+        "1.0",
+        &[],
+        &[
+            ("CDO_SPEED_INSTR", "1"),
+            ("CDO_SPEED_PERF", "/nonexistent/perf"),
+        ],
+    );
+    assert_eq!(code, Some(0), "{text}");
+    assert!(
+        text.contains("instructions: NOT counted, CPU and wall only"),
+        "{text}"
+    );
+    assert!(
+        verdict(&text).contains("(instructions: not counted, CPU and wall only)"),
+        "{text}"
+    );
 }
 
 /// TLS-65 and TLS-79: the warm-up is timed twice, on fresh server pairs, the

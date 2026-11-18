@@ -94,3 +94,29 @@ is 1:
   change time without changing the count of instructions retired. A change that only makes
   memory access worse would read x1.000. CPU and wall time stay needed for that, but with
   limits that only catch large changes.
+
+## What was built (TLS-83, decided with the orchestrator, 2026-11-18)
+
+- cdo-speed counts instructions by default and reports the ratio on every verdict line, and
+  on its PASS/FAIL line for the model build and the round total. cdo-gate's summary quotes
+  that line.
+- CPU and wall limits are unchanged.
+- The instruction limit, x1.02, is ADVISORY: a ratio over it prints `ADVISORY (not failing)`
+  and the run still passes.
+- Without perf the run says `instructions: NOT counted` and judges CPU and wall, as before.
+- (a) more passes and (b) an untimed first build were dropped: instructions resolve what they
+  were meant to.
+- A CHANGELOG quotes an instruction ratio, which resolves. It quotes a CPU ratio only when
+  two independent runs agree within ±12 %, and then their four-pass value with ±6 %.
+
+## Open: when should the instruction limit fail? (for the owner, with data)
+
+At x1.02 a branch that legitimately adds 2-3 % work (a new fact, a new check) would fail,
+and that is a policy change, not a measurement fix. Questions for the owner, once about ten
+real landings carry the advisory:
+
+1. **The data.** How often a landing reads over x1.02, and in each case whether the extra
+   work was intended.
+2. **The limit.** Fail above a higher limit (for example x1.05), or fail only on a regression
+   that is not declared in the CHANGELOG?
+3. **The scope.** Judge the round total only, or each call?

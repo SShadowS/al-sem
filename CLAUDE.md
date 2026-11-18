@@ -223,6 +223,16 @@ Every test still runs before a merge; the tiers decide HOW OFTEN each one runs.
   TLS-76 entry. Two passes cost ~+3 min per check, and the wait holds the CDO slot. **It is Linux only (it reads `/proc`):
   on the Windows machine every full `cdo-gate` run FAILS unless given `--no-speed`**
   (an `--only` subset never runs it).
+  **Instructions (TLS-83):** each timed call also counts user-mode instructions (`perf`,
+  attached to the server tree). They resolve ~±0.4 % on a two-pass build reading, where CPU
+  seconds resolve ±8 % (95 %); two CPU readings of one pair can differ by ±12 %. The verdict
+  lines show the instruction ratio; the PASS/FAIL line (quoted by cdo-gate's summary) gives
+  the build's and the round total's. Over x1.02 is an ADVISORY, never a failure. Making it
+  fail is an open owner question (note `docs/superpowers/notes/2026-11-18-tls83-speed-
+  resolution.md`). They miss memory stalls and lost parallelism, so CPU and wall keep their
+  limits. **A speed number goes into a CHANGELOG** as an instruction ratio; a CPU or build
+  ratio only when two independent runs agree within ±12 %, quoted as their combined value
+  ±6 %.
   `--no-speed` skips it and prints that speed was not checked; a tree that lands without
   it must say why. On master with no edits it times HEAD against HEAD's first parent
   (the merge base would be HEAD itself). Measured 2026-11-09 (Linux,

@@ -410,6 +410,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     id parts, the member kind, explain's level, the wire id, the selector fallback, the surface hash,
     the add-in guard.
 
+### Added (TLS-83: cdo-speed counts instructions; what a build ratio resolves)
+
+- **Why.** ENG-94's build CPU ratio read x0.871 in the lane's run and x0.989 in the landing's,
+  and a CHANGELOG quoted the first.
+- **What 75 runs since TLS-79 show** (`docs/superpowers/notes/2026-11-18-tls83-speed-
+  resolution.md`). The spread is pass noise, not host state.
+  - Per pass, sd(log ratio) is 0.060. So one two-pass reading resolves ±8 % (95 %), as TLS-79
+    stated.
+  - Two readings of one pair can differ by ±12 %. The 19 pairs measured twice show a median
+    gap of 3.1 % and a max of 12.3 %; ENG-94 is a ~2σ draw of that.
+  - The run's first build costs 3.6 % more and always lands on base; the net bias is
+    ≈ -0.4 %.
+- **Instructions.** Three runs of one binary against itself (block 1, 2026-11-18) also counted
+  each call's user-mode instructions, with `perf stat --no-scale` attached to the server and
+  its engine children, both core types. Their spread, sd(log ratio):
+  - build: 0.0031, against 0.084 in CPU seconds;
+  - calls: 0.0001-0.0015, against 0.04-0.27.
+
+  So a two-pass build reading resolves about ±0.4 % in instructions.
+- **cdo-speed** now counts them by default and shows the instruction ratio on every verdict
+  line. Its PASS/FAIL line, which cdo-gate's summary quotes, carries the build's and the round
+  total's ratios: `(instructions: build x1.0003, round-total x0.9998; advisory limit x1.02)`.
+  - A ratio over x1.02 prints `ADVISORY (not failing)`. The run still passes. Whether and when
+    it should fail is an owner question for later, with data from real landings; the
+    questions are in the note.
+  - CPU, wall and memory limits are unchanged: instructions miss memory stalls and lost
+    parallelism.
+  - Without perf, or with `CDO_SPEED_INSTR=0`, the run says `instructions: NOT counted` and
+    judges as before.
+  - `CDO_SPEED_PERF` is a test hook naming the perf command.
+  - `speed.json` gains `instr` per record, `instr` per row and an `instructions` block.
+- **The CHANGELOG rule** (CLAUDE.md): quote a speed change as an instruction ratio. A CPU or
+  build ratio goes in only when two independent runs agree within ±12 %.
+- **Tests.** `gate_scripts::speed_reports_instructions_and_their_limit_is_advisory` uses a
+  stub perf and stub servers that publish their counts.
+  - A head doing 5 % more work is reported as an advisory and passes.
+  - The same work reads x1.0000.
+  - No perf falls back to CPU and wall, and says so.
+
+  Three discrimination proofs, all red, are in its doc. The other speed tests run with
+  counting off.
+
 ### Added (TLS-87: the pre-submit CDO subset is checked at landing, not remembered)
 
 - **Why.** ENG-99 (2026-11-16) was submitted without `cdo-gate --only harness,l4`, and the
