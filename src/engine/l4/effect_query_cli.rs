@@ -6333,12 +6333,13 @@ fn field_scope(
                     Some(ixs) => {
                         for &i in ixs {
                             sides.insert(i, "up");
-                            // Last-wins is order-free only because no two
-                            // nodes share a stable id: `c.best` already keeps
-                            // each node's best tier, and a distinct id per node
-                            // means one node per model routine here (ENG-90;
-                            // checked by `SitedGraph::shared_stable_ids`'s tests).
-                            scope.tiers.insert(i, tier);
+                            // The best tier, not the last: two nodes can share
+                            // a stable id (the id lowercases where the node id
+                            // folds, so `"ΒΣ"` and `"Βς"` differ only in the
+                            // node), and `c.best`'s order is a hash order
+                            // (ENG-90, `cli_query_field::shared_stable_id_tier`).
+                            let t = scope.tiers.entry(i).or_insert(tier);
+                            *t = (*t).min(tier);
                         }
                         up += 1;
                     }

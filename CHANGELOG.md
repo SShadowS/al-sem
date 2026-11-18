@@ -7,24 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added (ENG-90: a checked invariant, no two sited-graph nodes share a stable routine id)
+### Fixed (ENG-90: an up caller's tier no longer depends on hash order)
 
-- **The question.** The effect query's up pass (`effect_query_cli::field_scope`) writes each
-  caller's tier into a map per model routine, last write wins, in `HashMap` order. Could two
-  graph nodes on one StableRoutineId make a routine's tier depend on hash order?
-- **Answer: no, so no fix.** The stable id carries everything the node id does (object, folded
-  name, unquoted member, parameter types and `var`) plus the return type. A split `#if`
-  declaration adds a per-place `~` suffix. The walk already keeps each node's best tier.
-  Measured 2026-11-18: 0 shared ids among CDO's 23,253 routine nodes and in 231 corpus/fixture
-  workspaces. An XMLport element name at two nesting levels gives one node, and a split `#if`
-  subscriber gives two nodes with distinct suffixes.
-- **Now checked.**
+- **The case.** `alsem query touches … --from R --direction up` gives each caller's tier. The up
+  pass (`effect_query_cli::field_scope`) wrote that tier into a map per model routine, last
+  write wins, in `HashMap` order. Two graph nodes on one StableRoutineId therefore made the
+  answer vary from run to run.
+- **When two nodes share an id.** The stable id lowercases (`str::to_lowercase`) where the node
+  id folds (`fold_identifier`). The two differ on `İ` and on a word-final `Σ`, so procedures
+  `"ΒΣ"` and `"Βς"` are two nodes on one id.
+  - Reproduced: `"ΒΣ"` calls R directly, `"Βς"` reaches it only through a dynamic
+    `Codeunit.Run`. Over 12 runs, `"ΒΣ"` read `local` 7 times and `via-hub` 5 times.
+  - No real code was found with such a pair: 0 shared ids among CDO's 23,253 routine nodes and
+    in 231 corpus/fixture workspaces (2026-11-18).
+- **Now.** The write keeps each routine's best tier, so `"ΒΣ"` is `local` on every run. While
+  their ids are one, both routines still read the better of the two tiers. Whether the id should
+  fold like the node id is a separate question: TLS-43 keeps ids on `to_lowercase` on purpose,
+  and changing it moves ids.
+- **Checks.**
+  - `cli_query_field::shared_stable_id_tier` runs the repro 12 times, in new processes.
   - `SitedGraph::shared_stable_ids` lists any id more than one node carries.
-  - `impact_graph::stable_id_tests` asserts it is empty on every corpus/fixture workspace, and
-    on a probe of the near-collision shapes, which asserts its split really happened.
-  - `cdo_sited_graph_stable_ids_are_unique` asserts the same on CDO, in the harness phase.
-  - The tier write points at them. One discrimination proof (red) is recorded in the probe
-    test's doc.
+    `impact_graph::stable_id_tests` asserts it is empty on every corpus/fixture workspace and on
+    a probe of the ASCII near-collision shapes (an XMLport element name at two nesting levels is
+    one node; a split `#if` subscriber is two nodes with distinct `~` suffixes).
+    `cdo_sited_graph_stable_ids_are_unique` does the same on CDO, in the harness phase.
+  - Two discrimination proofs, both red, are recorded in the tests' docs.
 
 ### Changed (ENG-120: mimalloc's `purge_delay` measured on CDO and DO, kept at 0)
 

@@ -11685,11 +11685,12 @@ fn cdo_i264_closed_interface_site_census() {
 }
 
 /// ENG-90: no two nodes of CDO's sited graph (the `alsem graph` / impact
-/// graph) share a StableRoutineId. The effect query's up pass writes one tier
-/// per model routine per node, so a shared id would make that tier depend on
-/// hash order. The corpus and a probe of the near-collision shapes are checked
-/// in the lib (`impact_graph::stable_id_tests`). Measured 2026-11-18: 23,253
-/// routine nodes, none shared.
+/// graph) share a StableRoutineId: every reader that joins on the id would
+/// answer the two as one routine. The corpus and a probe of the ASCII
+/// near-collision shapes are checked in the lib (`impact_graph::stable_id_tests`);
+/// the one known way to share an id (names differing only in `İ` or a
+/// word-final `Σ`) is in `SitedGraph::shared_stable_ids`'s doc. Measured
+/// 2026-11-18: 23,253 routine nodes, none shared.
 #[test]
 fn cdo_sited_graph_stable_ids_are_unique() {
     let Some(ws) = cdo_ws_or_enforce() else {

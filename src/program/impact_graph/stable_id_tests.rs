@@ -1,8 +1,9 @@
 //! ENG-90: no two nodes of a sited graph share a StableRoutineId
-//! ([`SitedGraph::shared_stable_ids`]), checked over real output: every
-//! corpus and fixture workspace, plus a probe of the shapes closest to a
-//! collision. The CDO harness checks the same on CDO
-//! (`cdo_sited_graph_stable_ids_are_unique`).
+//! ([`SitedGraph::shared_stable_ids`]) on real code: every corpus and fixture
+//! workspace, plus a probe of the ASCII shapes closest to a collision. The
+//! CDO harness checks the same on CDO (`cdo_sited_graph_stable_ids_are_unique`).
+//! Names differing only in `İ` or a word-final `Σ` do share an id (see
+//! `shared_stable_ids`); none of these workspaces holds one.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -122,6 +123,12 @@ fn probe_nodes_never_share_a_stable_id() {
         2,
         "the #if subscriber splits in two: {split:?}"
     );
+    // And the XMLport's two triggers are one node.
+    let port = (0..g.nodes.len() as u32)
+        .filter_map(|n| g.stable_id(n))
+        .filter(|id| id.contains(":XMLport:50900#"))
+        .count();
+    assert_eq!(port, 1, "the nested `Name` triggers are one node");
     assert_eq!(g.shared_stable_ids(), Vec::new());
 }
 
@@ -138,7 +145,7 @@ fn corpus_nodes_never_share_a_stable_id() {
         .collect();
     workspaces.sort();
     assert!(workspaces.len() > 200, "{} workspaces", workspaces.len());
-    let shared: Vec<(PathBuf, Vec<(String, Vec<u32>)>)> = workspaces
+    let shared: Vec<_> = workspaces
         .into_iter()
         .map(|ws| {
             let s = sited(&ws).shared_stable_ids();
