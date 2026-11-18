@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (ENG-124: the sited graph finds nodes by a sorted index, 19.1 MiB less resident memory on CDO)
+
+- **What changed** (`src/program/impact_graph/sited.rs`; no output change). `SitedGraph::node_ix`
+  was a `HashMap<Key, u32>` holding a second copy of every node key (20.38 MiB on CDO); it is now
+  the node numbers sorted by their key (`Box<[u32]>`, 4 bytes a node), and `routine_node` /
+  `universal_hub` binary-search it over `nodes`. The builder keeps its own map while it builds
+  (unchanged) and drops it at `finish`. The graph is never mutated after the build (a resident
+  refresh builds a new one), and its keys are unique and totally ordered (all derived `Ord`), so
+  the search finds exactly the key's node.
+- **The bar and the measure** (`tools/census-probe resident --sited`, CDO, the same probe both
+  sides, base `a73b4bf6`): bar 15 MiB. The sited graph 56.47 -> 36.73 MiB (`node_ix` 20.38 ->
+  0.51; `nodes` 9.22 -> 9.35, the keys' few heap texts now charged there); live after the first
+  ask 3,487.3 -> 3,468.1 MiB (-19.1), the same after every later ask.
+- **Lookups are not on a hot path.** Every production caller looks up a root or an entry, once per
+  walk, or once per dependency routine per graph build (`configured_dispatch`); the effect
+  query's `universal_hub` per result-cone node is decided on the key's variant (Fable review).
+  `cdo-speed` passed twice: round total x0.998 and x0.989, `impact` x0.782 and x0.963, `tests`
+  x0.956 and x1.000; the servers' summed peak memory fell in both (6,721 -> 6,657 and 6,831 ->
+  6,671 MiB).
+- **CDO checks:** `cdo-before-after` moved no finding, fingerprint or call-graph number; the
+  session refresh equals a cold build at all 12 steps in both modes; `cdo-gate --only
+  harness,l4,output` passed (211/0, 25/0, 22/0).
+- **Pinned by** `program::impact_graph::reverse::tests::every_node_is_found_by_its_key`, in a world
+  whose node order is not the key order (a stated precondition: the build registers routines in
+  key order, so a plain world would let an unsorted index pass): with the index left unsorted
+  the hub's search misses; with the search position answered instead of the node, the wrong
+  node comes back.
+
 ### Changed (ENG-120: mimalloc's `purge_delay` measured on CDO and DO, kept at 0)
 
 - No code change: `alsem` keeps `purge_delay` 0. A delay of 1 or 10 ms gave no CPU gain near the

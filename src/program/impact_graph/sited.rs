@@ -225,7 +225,10 @@ struct StableEntry {
 /// in [`SitedGraph::sites`].
 pub struct SitedGraph {
     pub(crate) nodes: Vec<Key>,
-    node_ix: HashMap<Key, u32>,
+    /// ENG-124: the node indexes sorted by their key, so a lookup is a binary search over
+    /// `nodes` (4 bytes a node). It replaced a `HashMap<Key, u32>` that held a second copy of
+    /// every key (20.4 MiB on CDO); the graph's lookups are per root or entry, not per edge.
+    node_ix: Box<[u32]>,
     pub(crate) sites: Vec<Site>,
     units: Vec<Box<str>>,
     /// Each app's `(guid, name)`, for node ids.
@@ -599,7 +602,15 @@ impl SitedGraph {
     /// The universal hub's node, when an edge names it.
     #[must_use]
     pub fn universal_hub(&self) -> Option<u32> {
-        self.node_ix.get(&Key::Hub(Hub::Any)).copied()
+        self.node_of(&Key::Hub(Hub::Any))
+    }
+
+    /// ENG-124: `k`'s node, by binary search of the sorted index.
+    fn node_of(&self, k: &Key) -> Option<u32> {
+        self.node_ix
+            .binary_search_by(|&i| self.nodes[i as usize].cmp(k))
+            .ok()
+            .map(|p| self.node_ix[p])
     }
 
     /// The StableRoutineId of a routine node with source.
@@ -725,7 +736,7 @@ impl SitedGraph {
     /// The node of a routine, if the graph has it.
     #[must_use]
     pub fn routine_node(&self, r: &RoutineNodeId) -> Option<u32> {
-        self.node_ix.get(&Key::Routine(r.clone())).copied()
+        self.node_of(&Key::Routine(r.clone()))
     }
 
     /// The sites out of `from` to `to` (ids), in site order.
@@ -825,10 +836,10 @@ impl SitedGraph {
                 Key::Hub(_) => 0,
             })
             .sum();
-        // Each key twice (the table and the index), the index's slots.
+        // The keys once (ENG-124: the index holds node numbers only), the index's slots.
         let nodes = self.nodes.capacity() * size_of::<Key>()
-            + self.node_ix.capacity() * (size_of::<Key>() + size_of::<u32>() + 8)
-            + 2 * key_heap;
+            + self.node_ix.len() * size_of::<u32>()
+            + key_heap;
         let sites = self.sites.capacity() * size_of::<Site>();
         let units: usize = self.units.iter().map(|u| u.len() + 16).sum();
         let tables = self.root_kinds.capacity() * size_of::<u16>()
@@ -1278,8 +1289,13 @@ impl SitedBuilder {
         sites.shrink_to_fit();
         let mut nodes = self.nodes;
         nodes.shrink_to_fit();
-        let mut node_ix = self.node_ix;
-        node_ix.shrink_to_fit();
+        // ENG-124: the builder's map is dropped; the graph keeps node numbers sorted by key
+        // (keys are unique: the map gave each one node).
+        drop(self.node_ix);
+        let mut node_ix: Vec<u32> =
+            (0..u32::try_from(nodes.len()).expect("nodes fit u32")).collect();
+        node_ix.sort_unstable_by(|&a, &b| nodes[a as usize].cmp(&nodes[b as usize]));
+        let node_ix = node_ix.into_boxed_slice();
         SitedGraph {
             nodes,
             node_ix,
