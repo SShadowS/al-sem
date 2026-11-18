@@ -120,7 +120,9 @@ scripts/cdo-before-after <base> [<head>|.]  # What a change moves on CDO (TLS-61
                                # refuses equal trees or equal binaries, then measures in the CDO slot, base
                                # first: fingerprint, analyze (primary and --scope all), the call-graph
                                # histogram (+ the ENG14 census with --census). report.md/.json: detector
-                               # moves, fingerprints added/removed, unknown buckets, --pattern matches;
+                               # moves, fingerprints added/removed, fingerprint multiplicity (findings
+                               # merged or split under a shared fingerprint, members swapped: TLS-92),
+                               # unknown buckets, --pattern matches;
                                # VOID when the workspace moved. --dry-run builds and measures nothing
 scripts/changelog-merge        # CHANGELOG.md's merge rule (TLS-62): keep both sides' added
                                # entries, refuse any other conflict. scripts/land uses it, and git

@@ -27,7 +27,11 @@ Usage:
    `base/` and `head/` (raw outputs and meta.json: binary sha256, version,
    workspace sha and dirty count, seconds and exit per command), `report.json` and
    `report.md`: findings per detector that moved (both scopes), fingerprints
-   added, removed and kept, the call-graph histogram (wholeProgram and
+   added, removed and kept, the distinct-fingerprint count and the fingerprints
+   several findings share (TLS-92): every shared fingerprint whose finding count
+   moved (a merge or split the lists cannot show; added and removed ones too),
+   and every one whose members moved at an equal count (by finding id), the
+   call-graph histogram (wholeProgram and
    primaryScoped: unknown and realUnknownRate, then every number that moved),
    --pattern matches in the fingerprint output, and the census lines that moved.
    The workspace sha and dirty count are read before and after each side; all
@@ -335,11 +339,37 @@ def compare(out, patterns, census):
         cb = collections.Counter(f["detector"] for f in fb)
         ch = collections.Counter(f["detector"] for f in fh)
         pb, ph = {f["fingerprint"] for f in fb}, {f["fingerprint"] for f in fh}
+        # ⟨TLS-92⟩ Several findings can share one fingerprint (ENG-101: d54, d55, d22 on
+        # CDO). A change that merges or splits findings under a fingerprint moves no
+        # fingerprint, so the multiplicity is compared too.
+        nb = collections.Counter(f["fingerprint"] for f in fb)
+        nh = collections.Counter(f["fingerprint"] for f in fh)
+        det = {f["fingerprint"]: f["detector"] for f in fb + fh}
+        ib, ih = (collections.defaultdict(list) for _ in range(2))
+        for fs, ids in ((fb, ib), (fh, ih)):
+            for f in fs:
+                ids[f["fingerprint"]].append(f.get("id", ""))
+            for v in ids.values():
+                v.sort()
+        groups = [sorted([det[k], k, n] for k, n in c.items() if n > 1) for c in (nb, nh)]
         rep["findings"][scope] = {
             "total": [len(fb), len(fh)],
+            "distinct": [len(pb), len(ph)],
             "moved": {d: [cb[d], ch[d]] for d in sorted(set(cb) | set(ch)) if cb[d] != ch[d]},
             "fingerprints": {"added": sorted(ph - pb), "removed": sorted(pb - ph),
-                             "kept": len(pb & ph)}}
+                             "kept": len(pb & ph)},
+            "groups": {"base": groups[0], "head": groups[1]},
+            # A fingerprint shared on either side whose finding count changed, an added or
+            # removed one included (count 0 on the side without it): [detector, fingerprint,
+            # base, head]. Review r1 (Fable): kept-only missed a group split into new
+            # fingerprints, ENG-101's fix B.
+            "multiplicity_moved": sorted([det[k], k, nb[k], nh[k]] for k in pb | ph
+                                         if max(nb[k], nh[k]) > 1 and nb[k] != nh[k]),
+            # A fingerprint shared on both sides with the same count but other members
+            # (finding ids): a swap inside a group (review r1, Fable). Ids are content-
+            # derived, so they are stable for one workspace; an id-format change shows here.
+            "members_moved": sorted([det[k], k, nb[k]] for k in pb & ph
+                                    if nb[k] == nh[k] > 1 and ib[k] != ih[k])}
     sb = _read_json(os.path.join(b, "callgraph-stats.json"))
     sh = _read_json(os.path.join(h, "callgraph-stats.json"))
     for sec in ("wholeProgram", "primaryScoped"):
@@ -386,11 +416,29 @@ def render(rep, base, head):
         md += ["", f"**VOID: {rep['void']}.** Nothing below is a comparison."]
     for scope, f in rep["findings"].items():
         fp = f["fingerprints"]
+        gb, gh = f["groups"]["base"], f["groups"]["head"]
         md += ["", f"## {scope}: {f['total'][0]} -> {f['total'][1]} findings",
                f"fingerprints: {len(fp['added'])} added, {len(fp['removed'])} removed, "
-               f"{fp['kept']} kept"]
+               f"{fp['kept']} kept; distinct {f['distinct'][0]} -> {f['distinct'][1]}; "
+               f"shared by more than one finding: {len(gb)} -> {len(gh)} fingerprint(s), "
+               f"{sum(g[2] for g in gb)} -> {sum(g[2] for g in gh)} finding(s)"]
         md += [f"- {d}: {x[0]} -> {x[1]}" for d, x in f["moved"].items()] or [
             "- no detector moved"]
+        mm, sw = f["multiplicity_moved"], f["members_moved"]
+        if mm:
+            md.append(f"- **multiplicity moved** under {len(mm)} shared fingerprint(s) (findings "
+                      "merged or split; 0 = the fingerprint is not on that side):")
+            md += [f"  - {d} {k}: {b} -> {h} findings" for d, k, b, h in mm[:50]]
+            if len(mm) > 50:
+                md.append(f"  - ... and {len(mm) - 50} more (report.json)")
+        else:
+            md.append("- no shared fingerprint's multiplicity moved")
+        if sw:
+            md.append(f"- **members moved** under {len(sw)} shared fingerprint(s) (same count, "
+                      "other findings):")
+            md += [f"  - {d} {k}: {n} findings" for d, k, n in sw[:50]]
+            if len(sw) > 50:
+                md.append(f"  - ... and {len(sw) - 50} more (report.json)")
     for sec, x in rep["histogram"].items():
         md += ["", f"## call graph, {sec}",
                f"unknown {x['unknown'][0]} -> {x['unknown'][1]}, realUnknownRate "

@@ -617,6 +617,93 @@ fn before_after_refuses_what_it_cannot_compare() {
     assert!(!t.path("out/report.json").exists() && !t.path("out/report.md").exists());
 }
 
+/// ⟨TLS-92⟩ Moves of fingerprint MULTIPLICITY are reported. Base and head have
+/// the same fingerprints `fx`, `fy` and `fw` and the same detector, so before
+/// TLS-92 the report read "nothing moved" for them:
+/// - `fx` goes from 2 findings to 1 and `fy` from 1 to 2 (a merge under one
+///   fingerprint, a split under another);
+/// - `fw` keeps 2 findings but swaps one member (`w2` for `w3`);
+/// - `fn` is added on head with 2 findings, which a kept-only check missed
+///   (review r1, Fable: ENG-101's fix B splits a group into new fingerprints);
+/// - the singleton `fs` is kept and must stay out of both lists.
+///
+/// Mutations (2026-11-18): `multiplicity_moved` over `pb - ph` instead of
+/// `pb | ph` -> empty (red). Review r1: over `pb & ph` (kept only) -> no `fn`
+/// (red); the members comparison dropped -> no `fw` (red). Each restored, green.
+#[test]
+fn before_after_reports_a_multiplicity_change() {
+    let t = Ba::new();
+    let rows = |r: &[(&str, &str)]| -> String {
+        let r: Vec<Value> = r
+            .iter()
+            .map(|(fp, id)| json!({"detector": "d55", "fingerprint": fp, "id": id}))
+            .collect();
+        json!({"payload": {"findings": r}}).to_string()
+    };
+    let base = rows(&[
+        ("fx", "x1"),
+        ("fx", "x2"),
+        ("fy", "y1"),
+        ("fw", "w1"),
+        ("fw", "w2"),
+        ("fs", "s1"),
+    ]);
+    let head = rows(&[
+        ("fx", "x1"),
+        ("fy", "y1"),
+        ("fy", "y2"),
+        ("fw", "w1"),
+        ("fw", "w3"),
+        ("fs", "s1"),
+        ("fn", "n1"),
+        ("fn", "n2"),
+    ]);
+    for (side, v) in [("A", &base), ("B", &head)] {
+        std::fs::write(t.path(&format!("fix/{side}/analyze-primary.json")), v).unwrap();
+        std::fs::write(t.path(&format!("fix/{side}/analyze-all.json")), v).unwrap();
+    }
+    let out = t.out("out");
+    let (code, text) = t.run(&["--out", &out, &t.c1, &t.c2], &[]);
+    assert_eq!(code, Some(0), "{text}");
+    let rep = t.report("out");
+    for scope in ["analyze-primary", "analyze-all"] {
+        let f = &rep["findings"][scope];
+        assert_eq!(f["total"], json!([6, 8]), "{scope}: {f}");
+        assert_eq!(f["distinct"], json!([4, 5]), "{scope}: {f}");
+        assert_eq!(f["fingerprints"]["added"], json!(["fn"]), "{scope}: {f}");
+        assert_eq!(
+            f["groups"],
+            json!({"base": [["d55", "fw", 2], ["d55", "fx", 2]],
+                   "head": [["d55", "fn", 2], ["d55", "fw", 2], ["d55", "fy", 2]]}),
+            "{scope}: {f}"
+        );
+        assert_eq!(
+            f["multiplicity_moved"],
+            json!([
+                ["d55", "fn", 0, 2],
+                ["d55", "fx", 2, 1],
+                ["d55", "fy", 1, 2]
+            ]),
+            "{scope}: {f}"
+        );
+        assert_eq!(
+            f["members_moved"],
+            json!([["d55", "fw", 2]]),
+            "{scope}: {f}"
+        );
+    }
+    let md = std::fs::read_to_string(t.path("out/report.md")).unwrap();
+    assert!(
+        md.contains("**multiplicity moved** under 3 shared fingerprint(s)")
+            && md.contains("d55 fx: 2 -> 1 findings")
+            && md.contains("d55 fn: 0 -> 2 findings")
+            && md.contains("**members moved** under 1 shared fingerprint(s)")
+            && md.contains("d55 fw: 2 findings")
+            && md.contains("distinct 4 -> 5; shared by more than one finding: 2 -> 3"),
+        "{md}"
+    );
+}
+
 /// The measurement runs only inside the CDO slot: held by another, the run
 /// waits, and gives up at `--slot-timeout` without measuring anything (the
 /// builds come before the slot, so they are done).

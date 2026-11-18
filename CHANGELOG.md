@@ -410,6 +410,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     id parts, the member kind, explain's level, the wire id, the selector fallback, the surface hash,
     the add-in guard.
 
+### Added (TLS-92: cdo-before-after sees fingerprint multiplicity)
+
+- **Why.** On CDO, several distinct findings share one fingerprint: d54, d55 and d22 (ENG-101,
+  `/work/.al-sem/profiles/2026-11-18-eng101/README.md`). Primary has 2,308 findings under 2,301
+  fingerprints, and `--scope all` 32,579 under 32,548. A change that merges or splits findings
+  under a fingerprint moves no fingerprint, so `scripts/cdo-before-after` reported nothing moved.
+- **What.** Per scope, the report now gives:
+  - the distinct-fingerprint count beside the findings count;
+  - the fingerprints that more than one finding share, as `[detector, fingerprint, count]` per
+    side;
+  - `multiplicity_moved`: every fingerprint shared on either side whose finding count changed, as
+    `[detector, fingerprint, base, head]`. Added and removed ones are included, with 0 on the side
+    without them, so a group split into new fingerprints shows too (review r1, Fable).
+  - `members_moved`: every shared fingerprint with the same count but other members, by finding id,
+    as `[detector, fingerprint, count]`.
+
+  `report.md` lists both in bold, at most 50 lines each, then "... and N more (report.json)", or
+  says "no shared fingerprint's multiplicity moved". This is a tool change only; no engine output
+  moves.
+- **Test.** `before_after::before_after_reports_a_multiplicity_change` uses base and head fixtures
+  with ids. In both scopes it pins:
+  - a merge (`fx` 2 → 1) and a split (`fy` 1 → 2);
+  - a head-only group (`fn` 0 → 2);
+  - a member swap at an equal count (`fw`);
+  - a kept singleton that stays out of both lists.
+
+  Discrimination proofs, recorded in its doc: over removed only, kept only, and without the members
+  comparison, each is red; restored, green.
+
 ### Added (TLS-83: cdo-speed counts instructions; what a build ratio resolves)
 
 - **Why.** ENG-94's build CPU ratio read x0.871 in the lane's run and x0.989 in the landing's,
