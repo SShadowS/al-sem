@@ -1517,7 +1517,7 @@ fn build_typed_edge_graph(
 /// extra entry costs at most one per key (measured on CDO: +2.0% cone entries
 /// cross-app, inside the run-to-run noise band on both wall time and peak RSS).
 ///
-/// ORDERING SAFETY, and for the RIGHT reason. `ConeFacts` is a `BTreeMap` keyed
+/// ORDERING SAFETY, and for the RIGHT reason. A cone ([`FrozenCone`]) is sorted
 /// by this string, so appending a suffix flips iteration order if one base key
 /// is a proper string PREFIX of another (`'k' < '|'`). This is NOT safe because
 /// `confidence` is always `"static"` — that premise is false: `confidence_from_
@@ -1703,7 +1703,7 @@ struct ConeFactEntry {
     rep: Arc<CapabilityFact>,
     /// `rep_key(rep)`, computed ONCE when the entry is minted.
     ///
-    /// `merge_cone`'s tie-break used to call `rep_key` on BOTH sides of every
+    /// The cone merge's tie-break used to call `rep_key` on BOTH sides of every
     /// collision — 1,243,002 collisions per 8020 run, so ~2.5 M calls, each one
     /// building a `String` by JSON-serializing `resource_arg_source` and `extra`.
     /// The rep is immutable across merges, so the key is too.
@@ -1872,31 +1872,25 @@ fn substitute_entry(
     ))
 }
 
-/// A fact cone: dedup key → entry (min dist, tie-broken by canonical rep).
+/// A fact cone as tests state one: dedup key → entry, frozen with [`FrozenCone::freeze`].
+#[cfg(test)]
+type ConeFacts = BTreeMap<Arc<str>, ConeFactEntry>;
+
+/// A fact cone: dedup key → entry (min dist, tie-broken by canonical rep), one sorted slice,
+/// built once by [`cone_of_candidates`] (ENG-130; ENG-109 froze a `BTreeMap` into it). A
+/// stored cone is only read (iterated in key order, folded, counted; no reader looks a key
+/// up). The ORDER is load-bearing: it is `str` key order, and the BFS and singleton walks keep
+/// the first entry they meet per base key, so a different order would pick another
+/// representative (`a_frozen_cone_keeps_key_order_for_an_equal_distance_bfs_pick`).
 ///
 /// The key is `Arc<str>`, not `String`, for the same reason [`ConeFactEntry`]'s
 /// `rep`/`rep_key` are: a cone entry is copied into every predecessor's cone, and
-/// its key is IMMUTABLE across those copies. `ALSEM_CONES_CENSUS=1` counted
-/// **6,556,465 `merge_cone` calls per BC Base App 8020 run**, each of which used
-/// to pass an owned `key.clone()` — a fresh heap copy of a string that already
-/// existed in the successor cone being read. Only ~121,387 of those (one per
-/// direct fact) genuinely mint a key; the other ~6.43 M are re-copies.
-///
-/// `Arc<str>` orders through `str`'s `Ord`, exactly as `String` does, so the
-/// `BTreeMap`'s iteration order — which every downstream consumer depends on — is
-/// unchanged by construction.
-type ConeFacts = BTreeMap<Arc<str>, ConeFactEntry>;
-
-/// A finished fact cone (ENG-109): the [`ConeFacts`] an SCC built, frozen into one sorted,
-/// exactly sized slice once nothing merges into it again. A stored cone is only read (iterated
-/// in key order, folded, counted; no reader looks a key up), so the B-tree's nodes and spare
-/// slots buy nothing: on CDO the cones held 666 MiB, of which their 5.6 M entries' payload is
-/// 300 MiB (ENG-107 census). The ORDER is load-bearing: it is the map's key order, and the BFS
-/// and singleton walks keep the first entry they meet per base key, so a different order would
-/// pick another representative (`a_frozen_cone_keeps_key_order_for_the_bfs_first_pick`).
+/// its key is IMMUTABLE across those copies (`ALSEM_CONES_CENSUS=1` counted 6,556,465 merges
+/// per BC Base App 8020 run, of which only ~121,387, one per direct fact, mint a key).
 struct FrozenCone(Box<[(Arc<str>, ConeFactEntry)]>);
 
 impl FrozenCone {
+    #[cfg(test)]
     fn freeze(cone: ConeFacts) -> Self {
         // A `BTreeMap`'s `into_iter` is in key order and exact-size.
         Self(cone.into_iter().collect())
@@ -1913,37 +1907,6 @@ impl FrozenCone {
     }
     fn len(&self) -> usize {
         self.0.len()
-    }
-}
-
-/// Merge `entry` (already distance-shifted) into `dst` at `key`, keeping min
-/// dist; tie-break by canonical rep. Mirrors `mergeCone`.
-///
-/// `key` is BORROWED: the lookup goes through `Arc<str>: Borrow<str>`, so a merge
-/// that loses its tie-break — 1,243,002 of the calls collide, and a collision that
-/// loses inserts nothing — touches no refcount at all, and a winning merge pays
-/// one `Arc::clone` rather than a heap copy.
-fn merge_cone(dst: &mut ConeFacts, key: &Arc<str>, entry: ConeFactEntry) {
-    crate::engine::l5::detector_context::cones_census::add_gated(
-        &crate::engine::l5::detector_context::cones_census::MERGE_CALLS,
-        1,
-    );
-    match dst.get(&**key) {
-        None => {
-            dst.insert(Arc::clone(key), entry);
-        }
-        Some(existing) => {
-            crate::engine::l5::detector_context::cones_census::add_gated(
-                &crate::engine::l5::detector_context::cones_census::MERGE_TIEBREAKS,
-                1,
-            );
-            // min dist wins; equal dist → smaller canonical rep wins (mergeCone).
-            let wins = entry.dist < existing.dist
-                || (entry.dist == existing.dist && entry.rep_key < existing.rep_key);
-            if wins {
-                dst.insert(Arc::clone(key), entry);
-            }
-        }
     }
 }
 
@@ -2521,16 +2484,180 @@ fn build_succ_sccs(
     succ
 }
 
+/// One candidate entry of a cone being built (ENG-130): its key and its entry, each minted
+/// here (a direct fact, or a successor's entry carried across a guarded edge) or BORROWED from
+/// a successor cone (the entry then gets its dist one more and its guard dropped). A candidate
+/// that loses is never cloned, so it touches no refcount (as the old per-candidate map merge's
+/// borrowed lookup did). Key and entry are apart because a merge keeps the key of the FIRST
+/// candidate of a key with the entry of its winner, as the old map's insert did (sol, ENG-130
+/// review: the key allocation the cone then shares).
+struct Cand<'c> {
+    key: CandKey<'c>,
+    entry: CandEntry<'c>,
+}
+
+enum CandKey<'c> {
+    Owned(Arc<str>),
+    Borrowed(&'c Arc<str>),
+}
+
+enum CandEntry<'c> {
+    Owned(ConeFactEntry),
+    Succ(&'c ConeFactEntry),
+}
+
+impl<'c> Cand<'c> {
+    /// A key and entry minted here.
+    fn owned(key: Arc<str>, entry: ConeFactEntry) -> Self {
+        Cand {
+            key: CandKey::Owned(key),
+            entry: CandEntry::Owned(entry),
+        }
+    }
+    /// A successor cone's entry, under `key` (its base key).
+    fn succ(key: &'c Arc<str>, entry: &'c ConeFactEntry) -> Self {
+        Cand {
+            key: CandKey::Borrowed(key),
+            entry: CandEntry::Succ(entry),
+        }
+    }
+    fn key(&self) -> &str {
+        match &self.key {
+            CandKey::Owned(k) => k,
+            CandKey::Borrowed(k) => k,
+        }
+    }
+    fn dist(&self) -> usize {
+        match &self.entry {
+            CandEntry::Owned(e) => e.dist,
+            CandEntry::Succ(e) => e.dist + 1,
+        }
+    }
+    fn rep_key(&self) -> &str {
+        match &self.entry {
+            CandEntry::Owned(e) => &e.rep_key,
+            CandEntry::Succ(e) => &e.rep_key,
+        }
+    }
+    fn into_entry(self) -> (Arc<str>, ConeFactEntry) {
+        let key = match self.key {
+            CandKey::Owned(k) => k,
+            CandKey::Borrowed(k) => Arc::clone(k),
+        };
+        let entry = match self.entry {
+            CandEntry::Owned(e) => e,
+            CandEntry::Succ(e) => ConeFactEntry {
+                rep: Arc::clone(&e.rep),
+                rep_key: Arc::clone(&e.rep_key),
+                dist: e.dist + 1,
+                // Without an anchor (recursive / multi-member SCC) a
+                // successor's guard means nothing here.
+                guard: None,
+            },
+        };
+        (key, entry)
+    }
+}
+
+/// The winners of `cands`, in key order, one per key, with the number of candidates that met
+/// an earlier one of their key: per key, as if each candidate were merged in turn (mirrors
+/// `mergeCone`: min dist; equal dist, the smaller rep key; a full tie keeps the earlier one),
+/// under the key of the FIRST candidate of that key. The sort is stable, so equal keys stay in
+/// merge order, and it finds the presorted runs the successor cones contribute (mostly
+/// presorted: a guarded entry read under its base key can fall out of its run).
+fn reduce_candidates(mut cands: Vec<Cand<'_>>) -> (Vec<Cand<'_>>, u64) {
+    cands.sort_by(|a, b| a.key().cmp(b.key()));
+    let mut out: Vec<Cand<'_>> = Vec::new();
+    let mut it = cands.into_iter().peekable();
+    let mut tiebreaks = 0u64;
+    while let Some(first) = it.next() {
+        let Cand { key, entry } = first;
+        let mut win = Cand { key, entry };
+        while let Some(next) = it.next_if(|c| c.key() == win.key()) {
+            tiebreaks += 1;
+            if next.dist() < win.dist()
+                || (next.dist() == win.dist() && next.rep_key() < win.rep_key())
+            {
+                // The winner's entry under the first candidate's key.
+                win.entry = next.entry;
+            }
+        }
+        out.push(win);
+    }
+    (out, tiebreaks)
+}
+
+/// A cone being built from its candidates (ENG-130). It reduces the candidates to their
+/// winners whenever they grow past twice the reduced size, so it holds at most about twice the
+/// cone's distinct keys plus the entries of the successor being added, not every candidate of
+/// a high-overlap fan-in (sol, ENG-130 review: 1,000 successors sharing 10,000 keys were 10
+/// million candidates at once). A reduce keeps the merge's answer: the reduced winners sort
+/// before every later candidate of their key, and a later one replaces one only when strictly
+/// better, so the result is the sequential merge's.
+struct ConeBuilder<'c> {
+    cands: Vec<Cand<'c>>,
+    /// Candidates added in all (the census's merge count).
+    added: u64,
+    /// Tie-breaks counted by earlier reduces.
+    tiebreaks: u64,
+    /// The size after the last reduce.
+    reduced: usize,
+}
+
+/// Fewer candidates than this are never reduced early (the final reduce does them).
+const REDUCE_AT_LEAST: usize = 4096;
+
+impl<'c> ConeBuilder<'c> {
+    fn new() -> Self {
+        ConeBuilder {
+            cands: Vec::new(),
+            added: 0,
+            tiebreaks: 0,
+            reduced: 0,
+        }
+    }
+    fn push(&mut self, c: Cand<'c>) {
+        self.cands.push(c);
+        self.added += 1;
+    }
+    /// Reduce now if the candidates grew past twice their reduced size.
+    fn bound(&mut self) {
+        if self.cands.len() >= REDUCE_AT_LEAST && self.cands.len() > 2 * self.reduced {
+            let (winners, ties) = reduce_candidates(std::mem::take(&mut self.cands));
+            self.tiebreaks += ties;
+            self.reduced = winners.len();
+            self.cands = winners;
+        }
+    }
+    fn finish(self) -> FrozenCone {
+        cone_of_candidates(self.cands, self.added, self.tiebreaks)
+    }
+}
+
+/// The cone of the candidates ([`reduce_candidates`]' winners, in key order), a merge of
+/// sorted runs rather than a B-tree insert per candidate (ENG-130). `added` and
+/// `earlier_tiebreaks` are what [`ConeBuilder`] counted across its earlier reduces, for the
+/// census's merge counters.
+fn cone_of_candidates(cands: Vec<Cand<'_>>, added: u64, earlier_tiebreaks: u64) -> FrozenCone {
+    use crate::engine::l5::detector_context::cones_census as census;
+    let (winners, tiebreaks) = reduce_candidates(cands);
+    census::add_gated(&census::MERGE_CALLS, added);
+    census::add_gated(&census::MERGE_TIEBREAKS, earlier_tiebreaks + tiebreaks);
+    FrozenCone(winners.into_iter().map(Cand::into_entry).collect())
+}
+
 /// Build one SCC's fact cone (members at dist 0 + successor cones at dist+1).
-/// Mirrors `factConeForScc`.
+/// Mirrors `factConeForScc`. The candidates are gathered in the old merge order (direct
+/// facts, edge-carried entries, then each successor in `succ_ids` order), which decides a
+/// full tie ([`cone_of_candidates`]).
 fn fact_cone_for_scc(
     members: &[String],
     succ_ids: &BTreeSet<usize>,
     fact_cones: &ConeMap,
     direct: &RoutineDirectFacts,
     anchor: Option<GuardAnchor<'_>>,
-) -> ConeFacts {
-    let mut cone: ConeFacts = BTreeMap::new();
+) -> FrozenCone {
+    let mut cands = ConeBuilder::new();
     let frame = anchor.as_ref().and_then(|a| a.frame);
     for m in members {
         if let Some(byk) = direct.get(m) {
@@ -2582,19 +2709,19 @@ fn fact_cone_for_scc(
                 let rep_key_s: Arc<str> = Arc::from(rep_key(f));
                 for reqs in req_sets {
                     let (k, guard) = with_reqs(Arc::clone(&base), reqs);
-                    merge_cone(
-                        &mut cone,
-                        &k,
+                    cands.push(Cand::owned(
+                        k,
                         ConeFactEntry {
                             rep: Arc::clone(&rep),
                             rep_key: Arc::clone(&rep_key_s),
                             dist: 0,
                             guard,
                         },
-                    );
+                    ));
                 }
             }
         }
+        cands.bound();
     }
     // A frame-bound successor entry crosses into this cone per EDGE, through
     // `substitute_entry`; the per-SCC merge below then skips it. So does EVERY
@@ -2633,9 +2760,12 @@ fn fact_cone_for_scc(
                     edge_reqs,
                 ) {
                     e.dist += 1;
-                    merge_cone(&mut cone, &k, e);
+                    cands.push(Cand::owned(k, e));
                 }
             }
+            // Edge-carried candidates bound the transient too (sol): many guarded edges to
+            // one large successor each carry its whole cone.
+            cands.bound();
         }
         guarded_only.retain(|y| !unguarded_to.contains(y));
     }
@@ -2660,22 +2790,12 @@ fn fact_cone_for_scc(
                 if anchor.is_some() && frame_bound(entry) {
                     continue; // carried per edge above
                 }
-                merge_cone(
-                    &mut cone,
-                    base_key_of(key, entry),
-                    ConeFactEntry {
-                        rep: Arc::clone(&entry.rep),
-                        rep_key: Arc::clone(&entry.rep_key),
-                        dist: entry.dist + 1,
-                        // Without an anchor (recursive / multi-member SCC) a
-                        // successor's guard means nothing here.
-                        guard: None,
-                    },
-                );
+                cands.push(Cand::succ(base_key_of(key, entry), entry));
             }
+            cands.bound();
         }
     }
-    cone
+    cands.finish()
 }
 
 /// The requirements under which raw direct fact `f`'s site runs, by its
@@ -3873,7 +3993,7 @@ fn compose_inherited_cones(
                 &crate::engine::l5::detector_context::cones_census::FACTCONE_ENTRIES,
                 fcone.len() as u64,
             );
-            fact_cones.insert(i, Arc::new(FrozenCone::freeze(fcone)));
+            fact_cones.insert(i, Arc::new(fcone));
             crate::engine::l5::detector_context::cones_census::add_since(
                 &crate::engine::l5::detector_context::cones_census::FACTCONE_NANOS,
                 _t_fc,
@@ -3989,15 +4109,8 @@ fn compose_inherited_cones(
         let _t_set = use_set
             .then(crate::engine::l5::detector_context::cones_census::start)
             .flatten();
-        let root_set = (use_set && root_scc).then(|| {
-            FrozenCone::freeze(fact_cone_for_scc(
-                &scc_entry.members,
-                succ_ids,
-                &fact_cones,
-                direct,
-                None,
-            ))
-        });
+        let root_set = (use_set && root_scc)
+            .then(|| fact_cone_for_scc(&scc_entry.members, succ_ids, &fact_cones, direct, None));
         let scc_set: Option<&FrozenCone> = if !use_set {
             None
         } else if let Some(set) = &root_set {
@@ -9844,14 +9957,238 @@ mod cone_memory_step1_tests {
         );
     }
 
-    /// ENG-109: a frozen cone keeps its map's KEY ORDER, and a reader sees that order. A
-    /// downstream cone holds `K` and its guarded copy (one base key, two reps) at the SAME
-    /// distance; at equal distance and first hop the BFS walk keeps the first entry it meets
-    /// per base key (since ENG-115 a nearer one would replace it), and in key order the plain
-    /// `K` comes first, so its rep is picked. Hand-stated: the cone is built literally and
-    /// frozen the one way production freezes. DISCRIMINATION: a freeze that reverses the
-    /// order picks the guarded copy's rep (sol and Fable, ENG-109 review: no other test pins
-    /// the order).
+    /// ENG-130: `cone_of_candidates` keeps, per key, the winner a merge of the candidates in
+    /// turn keeps (min dist; equal dist, the smaller rep key; a full tie, the EARLIER one),
+    /// emits the keys in order whatever order they came in, and a successor's entry carries
+    /// one more hop and no guard. The rep keys are stated by assignment.
+    #[test]
+    fn a_cone_keeps_each_keys_merge_winner_in_key_order() {
+        let entry = |witness: &str, rep_key: &str, dist: usize, guarded: bool| {
+            let mut f = insert("M", "t/K");
+            f.witness_operation_id = Some(witness.into());
+            ConeFactEntry {
+                rep: Arc::new(f),
+                rep_key: Arc::from(rep_key),
+                dist,
+                guard: guarded.then(|| {
+                    Arc::new(EntryGuard {
+                        reqs: vec![(0, true)],
+                        base_key: Arc::from("s"),
+                    })
+                }),
+            }
+        };
+        let (k, s): (Arc<str>, Arc<str>) = (Arc::from("k"), Arc::from("s"));
+        let succ_k = entry("succ-k", "z", 0, false);
+        let succ_s = entry("succ-s", "a", 4, true);
+        let cands = vec![
+            Cand::owned(Arc::clone(&k), entry("far", "a", 2, false)),
+            Cand::succ(&k, &succ_k), // dist 1: nearer than "far"
+            Cand::owned(Arc::clone(&k), entry("smaller-rep", "b", 1, false)), // ties dist, "b" < "z"
+            Cand::owned(Arc::clone(&k), entry("full-tie-later", "b", 1, false)),
+            Cand::succ(&s, &succ_s),
+            Cand::owned(Arc::from("j"), entry("only-j", "a", 3, false)),
+        ];
+        let mut b = ConeBuilder::new();
+        cands.into_iter().for_each(|c| b.push(c));
+        let cone = b.finish();
+        let got: Vec<(&str, &str, usize, bool)> = cone
+            .iter()
+            .map(|(key, e)| {
+                (
+                    &**key,
+                    e.rep.witness_operation_id.as_deref().unwrap(),
+                    e.dist,
+                    e.guard.is_some(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("j", "only-j", 3, false),
+                ("k", "smaller-rep", 1, false),
+                ("s", "succ-s", 5, false),
+            ]
+        );
+    }
+
+    /// ENG-130 (Fable): `fact_cone_for_scc` with no anchor (a recursive or multi-member SCC)
+    /// reads a successor's guarded entry under its BASE key, one hop further and unguarded, so
+    /// it collapses with the plain copy of the same fact. Hand-stated successor cone: `K` at
+    /// dist 3 and its guarded copy `K|..` at dist 1; the cone keeps one `K`, the guarded
+    /// copy's rep at dist 2.
+    #[test]
+    fn a_successors_guarded_entry_enters_under_its_base_key() {
+        let entry = |witness: &str, dist: usize, guard: Option<Arc<EntryGuard>>| {
+            let mut f = insert("M", "t/K");
+            f.witness_operation_id = Some(witness.into());
+            ConeFactEntry {
+                rep_key: Arc::from(rep_key(&f)),
+                rep: Arc::new(f),
+                dist,
+                guard,
+            }
+        };
+        let base: Arc<str> = Arc::from("K");
+        let gkey = guarded_key(&base, &[(0, true)]);
+        let mut succ: ConeFacts = BTreeMap::new();
+        succ.insert(Arc::clone(&base), entry("plain", 3, None));
+        succ.insert(
+            Arc::clone(&gkey),
+            entry(
+                "guarded",
+                1,
+                Some(Arc::new(EntryGuard {
+                    reqs: vec![(0, true)],
+                    base_key: Arc::clone(&base),
+                })),
+            ),
+        );
+        let cones: ConeMap = [(1usize, Arc::new(FrozenCone::freeze(succ)))].into();
+        let cone = fact_cone_for_scc(
+            &strs(&["C"]),
+            &[1usize].into(),
+            &cones,
+            &HashMap::new(),
+            None,
+        );
+        let got: Vec<(&str, &str, usize, bool)> = cone
+            .iter()
+            .map(|(k, e)| {
+                (
+                    &**k,
+                    e.rep.witness_operation_id.as_deref().unwrap(),
+                    e.dist,
+                    e.guard.is_some(),
+                )
+            })
+            .collect();
+        assert_eq!(got, [("K", "guarded", 2, false)]);
+    }
+
+    /// ENG-130 (sol): a key keeps the FIRST candidate's key allocation, as the old map's
+    /// insert did, even when a later candidate with its own (equal) key text wins the entry.
+    /// Hand-stated: two separately allocated `k` keys; the second wins on distance.
+    #[test]
+    fn a_cone_keeps_the_first_candidates_key_allocation() {
+        let entry = |witness: &str, dist: usize| {
+            let mut f = insert("M", "t/K");
+            f.witness_operation_id = Some(witness.into());
+            ConeFactEntry {
+                rep: Arc::new(f),
+                rep_key: Arc::from("r"),
+                dist,
+                guard: None,
+            }
+        };
+        let (first, later): (Arc<str>, Arc<str>) = (Arc::from("k"), Arc::from("k"));
+        assert!(
+            !Arc::ptr_eq(&first, &later),
+            "precondition: two allocations of one text"
+        );
+        let mut b = ConeBuilder::new();
+        b.push(Cand::owned(Arc::clone(&first), entry("far", 2)));
+        b.push(Cand::owned(Arc::clone(&later), entry("near", 1)));
+        let cone = b.finish();
+        let (key, e) = cone.iter().next().expect("one entry");
+        assert_eq!(e.rep.witness_operation_id.as_deref(), Some("near"));
+        assert!(Arc::ptr_eq(key, &first), "the first candidate's key");
+    }
+
+    /// ENG-130 (sol): the builder's early reduces (which bound its memory under a
+    /// high-overlap fan-in) give the cone a single reduce gives: the same entries, winners and
+    /// keys. 20,000 candidates over 3,000 keys, fed in chunks of 2,000 with a reduce allowed
+    /// after each. Hand-stated (sol): an even key's candidates get strictly nearer with each
+    /// round (a strict winner arrives AFTER an early reduce), an odd key's all tie (the
+    /// earliest must survive every reduce).
+    #[test]
+    fn early_reduces_give_the_one_reduce_cone() {
+        let cand = |i: usize| {
+            let (k, round) = (i % 3000, i / 3000);
+            let mut f = insert("M", "t/K");
+            f.witness_operation_id = Some(format!("w{i}"));
+            Cand::owned(
+                Arc::from(format!("k{k}").as_str()),
+                ConeFactEntry {
+                    rep: Arc::new(f),
+                    rep_key: Arc::from(format!("r{}", k % 4).as_str()),
+                    dist: if k % 2 == 0 { 10 - round } else { 3 },
+                    guard: None,
+                },
+            )
+        };
+        let shape = |cone: &FrozenCone| -> Vec<(String, String, usize)> {
+            cone.iter()
+                .map(|(k, e)| {
+                    (
+                        k.to_string(),
+                        e.rep.witness_operation_id.clone().unwrap(),
+                        e.dist,
+                    )
+                })
+                .collect()
+        };
+        let mut once = ConeBuilder::new();
+        (0..20_000).for_each(|i| once.push(cand(i)));
+        let mut chunked = ConeBuilder::new();
+        for i in 0..20_000 {
+            chunked.push(cand(i));
+            if i % 2000 == 1999 {
+                chunked.bound();
+            }
+        }
+        assert!(chunked.reduced > 0, "precondition: an early reduce ran");
+        let got = shape(&chunked.finish());
+        assert_eq!(got, shape(&once.finish()));
+        // Precondition on the expected cone: k0's winner is its last (nearest) candidate,
+        // k1's its first.
+        let of = |k: &str| got.iter().find(|(x, ..)| x == k).unwrap().1.clone();
+        assert_eq!(
+            (of("k0"), of("k1")),
+            ("w18000".to_string(), "w1".to_string())
+        );
+    }
+
+    /// ENG-130: a full tie keeps the EARLIER candidate at any size, which needs the sort to
+    /// keep equal keys in merge order (a small input passes with an unstable sort too: below
+    /// ~20 elements it is an insertion sort). Two keys interleaved, 200 full ties each.
+    #[test]
+    fn a_full_tie_keeps_the_earliest_candidate_in_a_large_cone() {
+        let entries: Vec<(Arc<str>, ConeFactEntry)> = (0..400)
+            .map(|i| {
+                let mut f = insert("M", "t/K");
+                f.witness_operation_id = Some(format!("w{i}"));
+                let key: Arc<str> = Arc::from(if i % 2 == 0 { "b" } else { "a" });
+                let e = ConeFactEntry {
+                    rep: Arc::new(f),
+                    rep_key: Arc::from("r"),
+                    dist: 1,
+                    guard: None,
+                };
+                (key, e)
+            })
+            .collect();
+        let mut b = ConeBuilder::new();
+        entries
+            .into_iter()
+            .for_each(|(k, e)| b.push(Cand::owned(k, e)));
+        let cone = b.finish();
+        let got: Vec<(&str, &str)> = cone
+            .iter()
+            .map(|(k, e)| (&**k, e.rep.witness_operation_id.as_deref().unwrap()))
+            .collect();
+        assert_eq!(got, [("a", "w1"), ("b", "w0")]);
+    }
+
+    /// ENG-109: a reader sees a cone in KEY ORDER. A downstream cone holds `K` and its
+    /// guarded copy (one base key, two reps) at the SAME distance; at equal distance and first
+    /// hop the BFS walk keeps the first entry it meets per base key (since ENG-115 a nearer one
+    /// would replace it), and in key order the plain `K` comes first, so its rep is picked.
+    /// Hand-stated: the cone is built literally (a test-only freeze of a `BTreeMap`). It pins
+    /// the reader's first-in-key-order pick; production's key order is pinned by
+    /// `a_cone_keeps_each_keys_merge_winner_in_key_order` (ENG-130). DISCRIMINATION: a freeze
+    /// that reverses the order picks the guarded copy's rep (sol and Fable, ENG-109 review).
     #[test]
     fn a_frozen_cone_keeps_key_order_for_an_equal_distance_bfs_pick() {
         let edge_cm = TypedOutEdge::new(
