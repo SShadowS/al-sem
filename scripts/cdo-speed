@@ -841,7 +841,10 @@ class Server:
                                      "-o", out, "-p", pids],
                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             deadline = time.monotonic() + INSTR_ATTACH_S
-            while ctl_fd is None:  # perf opens its end once its counters exist
+            # perf opens its end while parsing its options, BEFORE its counters
+            # exist: this wait does not mean they run. Only the `ack` below does
+            # (review r1, Fable; TLS-83's proof: without the ack wait, red).
+            while ctl_fd is None:
                 try:
                     ctl_fd = os.open(ctl, os.O_WRONLY | os.O_NONBLOCK)
                 except OSError:  # ENXIO: no reader yet
