@@ -50,6 +50,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   producer site, and ENG-109's key-order test (renamed
   `a_frozen_cone_keeps_key_order_for_an_equal_distance_bfs_pick`) the equal-distance tie.
 
+### Changed (ENG-121: the producer solve reuses its maps across producers; a small, measured gain, below the task's 1.5 % bar)
+
+- **What changed** (`src/engine/l4/pd_solve.rs`; no output change). Each fresh producer's walk
+  (`solve_producer`) built its visited set, its edge index and its state-name list from empty,
+  so on CDO the maps rehashed and grew again for every producer. Now the producers are walked
+  in chunks (about eight per thread, at least four producers each; a solve with fewer than four
+  fresh producers per thread, such as a resident refresh after an edit, keeps one producer per
+  chunk as before, so the workers balance uneven walks), one `SolveScratch` per chunk, cleared per producer and reused, so a scratch grows to
+  its chunk's largest walk once. The chunks keep producer order.
+- **First found by the profiles.** A first form used rayon's `map_init`, which makes a scratch
+  per split; work stealing splits small, so the maps still rehashed (rehash share 4.34-4.60 %
+  to 3.96-4.01 % on prove, in other runs than the ones below: the sampling noise between runs
+  is about 0.3-0.6 points). The explicit chunks replaced it.
+- **Tests.** `a_reused_solve_scratch_equals_the_serial_walk` runs the hand-stated solves (four
+  producers sharing edges) in a one-thread pool, where they share one chunk's scratch, against
+  the serial walk; a compile-time assertion keeps that precondition (`MIN_SOLVE_CHUNK >= 4`).
+  Discrimination, on the final form: not clearing, between producers, the visited set, the
+  state names or the edge index each fail it; restored, green.
+- **Measured** on server1, CDO baseline `bc3ccb18`, master 0c1ef2a2 against the head, one-shot
+  `alsem prove` (`CDO E-Mail Handler::RunReportID`, may-commit) and `alsem analyze`. Every
+  output identical (stdout without `generatedAt`, the envelope's clock field, which is the only
+  thing two runs of one binary differ in).
+  - **Retired user-mode instructions** (`perf stat -e instructions:u`, pinned to the P-cores
+    with `taskset -c 0-11`, release-fast, 3 alternating rounds): prove 412.33 / 411.58 /
+    411.10 e9 against 409.80 / 410.33 / 410.38 e9, a ratio of 0.9964 (-0.36 %); analyze
+    289.74 / 289.56 / 289.14 e9 against 287.89 / 287.99 / 288.02 e9, 0.9948 (-0.52 %). The
+    spread within each side is about ±0.1-0.15 %, so the gain is resolved. Instructions are a
+    proxy: they miss cache and memory stalls, which rehashing is made of.
+  - **Sampled CPU share of rehashing** (samply, profiling builds, 2 alternating rounds): prove
+    4.59 / 4.94 % to 2.88 / 3.64 %, analyze 4.21 / 4.16 % to 2.38 / 2.32 % (-1.3 to -1.8
+    points). The fresh producers' parallel walk (`pd.walk`): prove 372 / 520 ms to 258 / 317
+    ms, analyze 417 / 420 ms to 292 / 279 ms (about 30 % shorter: on these cold one-shot
+    solves the chunks cost no parallelism; a resident refresh, with few fresh producers, walks
+    one producer per chunk as before and was not measured).
+  - **CPU seconds are unresolved on this host:** one-shot CPU time swung about ±10 % between
+    runs of one binary (host swap, kernel time). The true saving is probably between the
+    instruction count's ~0.5 % and the sampled ~1.8 % (neither bounds CPU time: instructions
+    miss stalls, a sampled share is not a time delta). **Below ENG-121's 1.5 % bar** by the
+    instruction count, the one measure that resolves it; the sampled share is not counted as
+    resolving it. Landed as a small, tested gain.
+- ENG-120's pre-sizing half shares this site: these maps' growth was also the largest source of
+  fresh pages in analyze's profile (1.57 of 1.95 % under `fallible_with_capacity`).
+
 ### Changed (ENG-127: the snapshot evidence shares its routine, file and context texts, and the view's fact table is exact-size, 45.8 MiB less resident memory on CDO)
 
 - **What changed** (`src/engine/l5/snapshot.rs`, `snapshot_view.rs`; no output change).
