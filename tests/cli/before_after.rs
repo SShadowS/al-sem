@@ -694,12 +694,86 @@ fn before_after_reports_a_multiplicity_change() {
     }
     let md = std::fs::read_to_string(t.path("out/report.md")).unwrap();
     assert!(
-        md.contains("**multiplicity moved** under 3 shared fingerprint(s)")
+        md.contains("**finding count changed** under 3 shared fingerprint(s)")
             && md.contains("d55 fx: 2 -> 1 findings")
             && md.contains("d55 fn: 0 -> 2 findings")
-            && md.contains("**members moved** under 1 shared fingerprint(s)")
+            && md.contains("**finding ids changed** under 1 shared fingerprint(s)")
             && md.contains("d55 fw: 2 findings")
             && md.contains("distinct 4 -> 5; shared by more than one finding: 2 -> 3"),
+        "{md}"
+    );
+}
+
+/// ⟨TLS-92 review r1, sol⟩ The cases a fingerprint-set comparison alone cannot
+/// see, each on its own:
+/// - same fingerprint set, same total, same detector count: `fa` 2 -> 1 and
+///   `fb` 1 -> 2;
+/// - a group of 2 split into two NEW singletons (ENG-101's fix B): `fz` 2 -> 0;
+/// - a group whose findings have no `id` (`fq`, `A,B -> A,C`): its members are
+///   reported unknown, never unchanged;
+/// - a fingerprint carrying another detector on head (`fd`: d55 -> d54): flagged.
+///
+/// Mutations (2026-11-18): the `no_id` exclusion dropped -> `fq` reads as an
+/// unchanged group (no `members_unknown`; red); the detector set reduced to
+/// one side's detector -> no `detector_mismatch` (red). Each restored, green.
+#[test]
+fn before_after_reports_what_the_fingerprint_set_hides() {
+    let t = Ba::new();
+    let rows = |r: &[(&str, &str, Option<&str>)]| -> String {
+        let r: Vec<Value> = r
+            .iter()
+            .map(|(det, fp, id)| match id {
+                Some(id) => json!({"detector": det, "fingerprint": fp, "id": id}),
+                None => json!({"detector": det, "fingerprint": fp}),
+            })
+            .collect();
+        json!({"payload": {"findings": r}}).to_string()
+    };
+    let base = rows(&[
+        ("d55", "fa", Some("a1")),
+        ("d55", "fa", Some("a2")),
+        ("d55", "fb", Some("b1")),
+        ("d55", "fz", Some("z1")),
+        ("d55", "fz", Some("z2")),
+        ("d55", "fq", None),
+        ("d55", "fq", None),
+        ("d55", "fd", Some("d1")),
+    ]);
+    let head = rows(&[
+        ("d55", "fa", Some("a1")),
+        ("d55", "fb", Some("b1")),
+        ("d55", "fb", Some("b2")),
+        ("d55", "fz1", Some("z1")),
+        ("d55", "fz2", Some("z2")),
+        ("d55", "fq", None),
+        ("d55", "fq", None),
+        ("d54", "fd", Some("d1")),
+    ]);
+    for (side, v) in [("A", &base), ("B", &head)] {
+        std::fs::write(t.path(&format!("fix/{side}/analyze-primary.json")), v).unwrap();
+        std::fs::write(t.path(&format!("fix/{side}/analyze-all.json")), v).unwrap();
+    }
+    let out = t.out("out");
+    let (code, text) = t.run(&["--out", &out, &t.c1, &t.c2], &[]);
+    assert_eq!(code, Some(0), "{text}");
+    let f = &t.report("out")["findings"]["analyze-primary"];
+    assert_eq!(f["total"], json!([8, 8]), "{f}");
+    assert_eq!(
+        f["multiplicity_moved"],
+        json!([
+            ["d55", "fa", 2, 1],
+            ["d55", "fb", 1, 2],
+            ["d55", "fz", 2, 0]
+        ]),
+        "{f}"
+    );
+    assert_eq!(f["members_moved"], json!([]), "{f}");
+    assert_eq!(f["members_unknown"], json!([["d55", "fq", 2, 2]]), "{f}");
+    assert_eq!(f["detector_mismatch"], json!([["d54/d55", "fd"]]), "{f}");
+    let md = std::fs::read_to_string(t.path("out/report.md")).unwrap();
+    assert!(
+        md.contains("**ids unknown** under 1 shared fingerprint(s)")
+            && md.contains("**detector mismatch** under 1 fingerprint(s)"),
         "{md}"
     );
 }

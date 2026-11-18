@@ -415,7 +415,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Why.** On CDO, several distinct findings share one fingerprint: d54, d55 and d22 (ENG-101,
   `/work/.al-sem/profiles/2026-11-18-eng101/README.md`). Primary has 2,308 findings under 2,301
   fingerprints, and `--scope all` 32,579 under 32,548. A change that merges or splits findings
-  under a fingerprint moves no fingerprint, so `scripts/cdo-before-after` reported nothing moved.
+  under a fingerprint moves no fingerprint. `scripts/cdo-before-after` then showed at most a
+  detector's count change, not which groups changed, and nothing when the counts balanced out.
 - **What.** Per scope, the report now gives:
   - the distinct-fingerprint count beside the findings count;
   - the fingerprints that more than one finding share, as `[detector, fingerprint, count]` per
@@ -426,15 +427,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `members_moved`: every shared fingerprint with the same count but other members, by finding id,
     as `[detector, fingerprint, count]`.
 
-  `report.md` lists both in bold, at most 50 lines each, then "... and N more (report.json)", or
-  says "no shared fingerprint's multiplicity moved". This is a tool change only; no engine output
-  moves.
+  - Review r1 (sol): `members_unknown`, the shared groups with a finding that has no `id` (their
+    members cannot be compared, so they are never reported as unchanged); `detector_mismatch`,
+    the fingerprints carrying more than one detector (never labelled with one side's).
+
+  `report.md` lists them in bold, at most 50 lines each, then "... and N more (report.json)", or
+  says "no shared fingerprint's finding count changed". It words them as what was observed,
+  "finding count changed" and "finding ids changed", since a rekeyed group or renumbered ids
+  look the same as a merge or a swap. This is a tool change only; no engine output moves.
 - **Test.** `before_after::before_after_reports_a_multiplicity_change` uses base and head fixtures
   with ids. In both scopes it pins:
   - a merge (`fx` 2 → 1) and a split (`fy` 1 → 2);
   - a head-only group (`fn` 0 → 2);
   - a member swap at an equal count (`fw`);
   - a kept singleton that stays out of both lists.
+
+  `before_after_reports_what_the_fingerprint_set_hides` (review r1, sol) pins each case alone:
+  same set and same totals (`fa` 2 → 1, `fb` 1 → 2), a group split into two new singletons
+  (`fz` 2 → 0), an id-less group (unknown) and a detector change under one fingerprint.
 
   Discrimination proofs, recorded in its doc: over removed only, kept only, and without the members
   comparison, each is red; restored, green.
