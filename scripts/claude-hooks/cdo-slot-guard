@@ -405,9 +405,12 @@ def guarded_segment(words, line):
             while i < len(words) and words[i].startswith("-"):
                 if words[i] in ("-c", "-m"):
                     return False
-                # `-X dev`, `-W ignore`: the value is the next word, not the
-                # script (review r3, sol).
-                i += 2 if words[i] in ("-X", "-W") else 1
+                # `-X dev`, `-W ignore`, and clustered `-IX dev`: an option word
+                # ending in X or W takes the next word as its value, not the
+                # script (review r3/r4, sol). `-Xdev` (value attached) does not.
+                w = words[i]
+                takes_next = not w.startswith("--") and w[-1:] in ("X", "W")
+                i += 2 if takes_next else 1
             return i < len(words) and script_guarded(words[i], words[i + 1:])
         break
     if i >= len(words):

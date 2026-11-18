@@ -470,6 +470,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - The tests reach the race windows through pause hooks that write a `paused.<pid>` file, and
     wait for it (the status test had a fixed delay that could miss the window). Six
     discrimination proofs, all red.
+- **Review round 4 (sol):**
+  - **A shared hold replaced before the timing began** got the timing's mark. The holder seen at
+    the acquire, taken or shared, is now what the timing expects; another one refuses.
+  - **A `run --timed` that took the slot** now ends exactly that hold on exit. A generic
+    `release` ended whatever hold its session had by then, a new one taken by hand included.
+  - **A concurrent retry could lose its mark.** A mark now records its writer and whether its
+    timing is `pending` (still waiting for builds) or `active`:
+    - a retry keeps an active mark;
+    - a retry writes its own mark over a pending one;
+    - a refusal takes a mark back only while it is still the writer.
+  - **The guard** reads a clustered Python option ending in `X` or `W` (`-IX dev`) as taking the
+    next word.
+  - **The deadline:** a wait that saw builds and ran past CDO_SLOT_TIMED_WAIT_S refuses even if
+    its last scan, delayed, found them gone.
+  - Tests: three new race sections (a shared hold replaced, a run whose session takes a new hold,
+    a concurrent retry), through pause hooks that each write a `paused.<pid>` marker the test
+    waits for. Four discrimination proofs, all red. They also caught a bug in this round's first
+    draft: the temporary-mark filter matched the whole path, so a slot folder whose path holds
+    `.tmp` (every test's tempdir) hid every mark; it matches the file name now.
 - **The limit.** The hook sees a command only when it starts. A command it allowed before the
   hold became timed, and that starts a build later (`sleep 60; cargo build`), is not stopped,
   and neither is a build started outside any hooked session.

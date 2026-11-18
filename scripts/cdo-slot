@@ -219,7 +219,8 @@ timed_valid() {
     local m
     [[ -n "$holder_pid" ]] || return 1
     for m in "$dir"/timed.*; do
-        [[ -e "$m" && "$m" != *.tmp ]] || continue
+        # The file name only: the folder's own path may hold `.tmp` (a tempdir).
+        [[ -e "$m" && "${m##*/}" != *.tmp* ]] || continue
         tmark=$m
         tload
         if [[ "$(tfield holder_pid)" == "$holder_pid" ]] && alive "$(tfield pid)" "$(tfield start)"; then
@@ -233,8 +234,13 @@ timed_valid() {
     return 1
 }
 timed_describe() { echo "timed by $(tfield owner) since $(tfield since) ($(tfield reason))"; }
-write_timed_locked() { # <owner> <reason> <pid>
-    local tmp="$dir/timed.$3.tmp"
+# A mark also names the cdo-slot call that wrote it (writer) and its state:
+# `pending` while that call waits for builds, `active` once the timing runs. A
+# retry bound to the same process leaves an active mark alone and does not reuse
+# a pending one (another call's admission); a call takes back only a mark it
+# still wrote (review r4, sol: a concurrent retry lost the mark it relied on).
+write_timed_locked() { # <owner> <reason> <pid> <pending|active>
+    local tmp="$dir/timed.$3.tmp.$$"
     {
         printf 'owner=%s\n' "$1"
         printf 'reason=%s\n' "$2"
@@ -242,9 +248,14 @@ write_timed_locked() { # <owner> <reason> <pid>
         printf 'pid=%s\n' "$3"
         printf 'start=%s\n' "$(proc_start "$3")"
         printf 'holder_pid=%s\n' "$holder_pid"
+        printf 'writer=%s\n' "$$"
+        printf 'state=%s\n' "$4"
     } >"$tmp" && mv -f "$tmp" "$dir/timed.$3"
 }
-clear_timed_locked() { rm -f "$dir/timed.$1"; } # <pid>: only that process's mark
+clear_timed_mine_locked() { # <pid>: that process's mark, only while this call wrote it
+    grep -qx "writer=$$" "$dir/timed.$1" 2>/dev/null && rm -f "$dir/timed.$1"
+    return 0
+}
 ppid_of() { local f; read -r -a f <<<"$(proc_fields "$1")"; echo "${f[1]:-}"; }
 # script_builds: "PID name" of each process running a build script
 # (CDO_SLOT_BUILD_SCRIPTS: ci-steps, check-goldens), read from its argv: the
@@ -353,19 +364,27 @@ timed_start() {
         echo "cdo-slot: --timed refused: the hold it took ended before the timing began" >&2
         return 6
     fi
-    # A mark this process already has in this hold (a retry bound to the same
-    # process) is kept as it is and never taken back by this call (review r3).
+    # An ACTIVE mark this process already has in this hold (a timing running,
+    # and this a retry bound to the same process) is kept as it is and never
+    # taken back by this call (review r3). A pending one is another call's
+    # admission, never reused: this call writes its own (review r4, sol).
     local had=0
     tmark="$dir/timed.$3"
     tload
-    [[ -e "$tmark" && "$(tfield holder_pid)" == "$holder_pid" ]] && alive "$(tfield pid)" "$(tfield start)" && had=1
-    ((had)) || with_meta write_timed_locked "$1" "$2" "$3" || die "--timed: cannot write the mark in $dir"
-    local start=$SECONDS last=-60 b list left
+    [[ -e "$tmark" && "$(tfield holder_pid)" == "$holder_pid" && "$(tfield state)" == active ]] \
+        && alive "$(tfield pid)" "$(tfield start)" && had=1
+    ((had)) || with_meta write_timed_locked "$1" "$2" "$3" pending \
+        || die "--timed: cannot write the mark in $dir"
+    local start=$SECONDS last=-60 b list left seen=0
     while b=$(foreign_builds "$3") && [[ -n "$b" ]]; do
+        seen=1
         list=$(awk '{ printf "%sPID %s (%s)", (NR > 1 ? ", " : ""), $1, $2 }' <<<"$b")
         left=$((timed_wait - (SECONDS - start)))
         if ((left <= 0)); then
-            ((had)) || with_meta clear_timed_locked "$3"
+            # Test hook: the window between deciding to refuse and taking back.
+            [[ -z "${CDO_SLOT_TEST_PAUSE_REFUSE_S:-}" ]] \
+                || { : >"$dir/paused.$$"; sleep "$CDO_SLOT_TEST_PAUSE_REFUSE_S"; }
+            ((had)) || with_meta clear_timed_mine_locked "$3"
             echo "cdo-slot: --timed refused: build processes still running after ${timed_wait} s: $list" >&2
             return 6
         fi
@@ -376,16 +395,28 @@ timed_start() {
         # Never past the deadline: a build still there at it refuses (review r3).
         sleep "$((left < poll ? left : poll))"
     done
+    # A scan that came late (a loaded host) and found the builds gone cannot say
+    # they ended in time: past the deadline, a wait that saw builds refuses
+    # (review r4, sol).
+    if ((seen && SECONDS - start > timed_wait)); then
+        ((had)) || with_meta clear_timed_mine_locked "$3"
+        echo "cdo-slot: --timed refused: builds ran up to the deadline (${timed_wait} s)" >&2
+        return 6
+    fi
     # The hold may have ended (released, or taken over) while it waited (review
-    # r1, sol): start only while this mark still counts for the current holder.
+    # r1, sol): start only while this mark still counts for the current holder,
+    # and is still this call's (or the active one it kept).
     state
     tmark="$dir/timed.$3"
     tload
-    if [[ ! -e "$tmark" || -z "$holder_pid" || "$(tfield holder_pid)" != "$holder_pid" ]]; then
-        ((had)) || with_meta clear_timed_locked "$3"
+    if [[ ! -e "$tmark" || -z "$holder_pid" || "$(tfield holder_pid)" != "$holder_pid" ]] \
+        || { ((!had)) && [[ "$(tfield writer)" != "$$" ]]; }; then
+        ((had)) || with_meta clear_timed_mine_locked "$3"
         echo "cdo-slot: --timed refused: the hold ended while it waited for builds" >&2
         return 6
     fi
+    ((had)) || with_meta write_timed_locked "$1" "$2" "$3" active \
+        || die "--timed: cannot write the mark in $dir"
     echo "cdo-slot: timed by $1 ($2)"
 }
 # ⟨TLS-88⟩ The waiters' queue: a waiting acquire holds a ticket, and a free slot
@@ -550,6 +581,9 @@ acquire() { # acquire <owner> <reason> <wait 0|1> <timeout or "">
         case "$st" in
             mine)
                 dequeue
+                # The hold it shares: a timing in it marks only this one, never
+                # one that replaced it meanwhile (review r4, sol).
+                taken_holder=$holder_pid
                 echo "cdo-slot: already yours ($(describe)); nothing to do"
                 return 4
                 ;;
@@ -654,7 +688,8 @@ case "$cmd" in
             rc=0
             acquire "$owner" "$reason" "$wait" "$timeout" || rc=$?
             # Test hook: the window between taking the slot and the timed mark.
-            [[ -z "${CDO_SLOT_TEST_PAUSE_ACQUIRED_S:-}" ]] || sleep "$CDO_SLOT_TEST_PAUSE_ACQUIRED_S"
+            [[ -z "${CDO_SLOT_TEST_PAUSE_ACQUIRED_S:-}" ]] \
+                || { : >"$dir/paused.$$"; sleep "$CDO_SLOT_TEST_PAUSE_ACQUIRED_S"; }
             if ((timed)) && [[ "$rc" == 0 || "$rc" == 4 ]]; then
                 # The holder this acquire took (none when shared): only it may be
                 # ended on a refusal, never one that took the slot meanwhile.
@@ -662,7 +697,8 @@ case "$cmd" in
                 took=""
                 [[ "$rc" != 0 ]] || took=$taken_holder
                 trc=0
-                timed_start "$owner" "$reason" "$bind" "$took" || trc=$?
+                # Taken or shared, the timing marks only the hold acquire saw.
+                timed_start "$owner" "$reason" "$bind" "$taken_holder" || trc=$?
                 if ((trc)); then
                     # End it here (`release` would refuse a hold that has only
                     # --bind, no session or token: review r1); end_holder is a
@@ -683,14 +719,16 @@ case "$cmd" in
         took=""
         [[ "$rc" != 0 ]] || took=$taken_holder
         case "$rc" in
-            0) trap 'release >/dev/null' EXIT && trap 'exit 130' INT TERM ;;
+            # End exactly the hold this run took: a generic `release` would end
+            # whatever hold its session has by then (review r4, sol).
+            0) trap 'end_holder "$took" >/dev/null' EXIT && trap 'exit 130' INT TERM ;;
             # A shared hold outlives this run: take back only our timed mark.
-            4) ((!timed)) || { trap 'with_meta clear_timed_locked $$' EXIT && trap 'exit 130' INT TERM; } ;;
+            4) ((!timed)) || { trap 'with_meta clear_timed_mine_locked $$' EXIT && trap 'exit 130' INT TERM; } ;;
             *) exit "$rc" ;;
         esac
         if ((timed)); then
             rc=0
-            timed_start "$owner" "$reason" "$$" "$took" || rc=$?
+            timed_start "$owner" "$reason" "$$" "$taken_holder" || rc=$?
             ((rc == 0)) || exit "$rc"
         fi
         rc=0

@@ -18,13 +18,25 @@ impl Slot {
     fn dir(&self) -> std::path::PathBuf {
         self.0.path().join("slot")
     }
-    /// Wait (up to 20 s) until a test pause hook's `paused.<pid>` file appears.
+    /// Wait (up to 20 s) until a test pause hook's `paused.<pid>` file appears,
+    /// then remove it, so a later wait sees only a new one.
     fn wait_paused(&self) {
         let until = std::time::Instant::now() + std::time::Duration::from_secs(20);
-        while std::fs::read_dir(self.dir()).map_or(true, |d| {
-            !d.flatten()
-                .any(|e| e.file_name().to_string_lossy().starts_with("paused."))
-        }) {
+        loop {
+            let found: Vec<_> = std::fs::read_dir(self.dir())
+                .map(|d| {
+                    d.flatten()
+                        .filter(|e| e.file_name().to_string_lossy().starts_with("paused."))
+                        .map(|e| e.path())
+                        .collect()
+                })
+                .unwrap_or_default();
+            if !found.is_empty() {
+                for p in found {
+                    let _ = std::fs::remove_file(p);
+                }
+                return;
+            }
             assert!(
                 std::time::Instant::now() < until,
                 "no pause hook was reached"
@@ -425,6 +437,8 @@ fn cdo_slot_guard_refuses_other_sessions_while_held() {
         // agentflow from PATH.
         "python3 -X dev scripts/cdo-before-after master",
         "agentflow run --name ci -- true",
+        // Review r4 (sol): clustered options ending in X take the next word.
+        "python3 -IX dev scripts/cdo-before-after master",
     ];
     // TLS-89: the guarded commands that are NOT only builds or tests (gates, CDO
     // runs): refused under an untimed hold too. Every other `guarded` entry is a
@@ -442,6 +456,7 @@ fn cdo_slot_guard_refuses_other_sessions_while_held() {
         "python3 scripts/cdo-before-after --census master~1 master",
         "cargo run --release --bin aldump -- --stats /work/src/cdo-baseline/Cloud",
         "python3 -X dev scripts/cdo-before-after master",
+        "python3 -IX dev scripts/cdo-before-after master",
     ];
     assert!(not_builds.iter().all(|c| guarded.contains(c)));
     let free = [
@@ -998,16 +1013,22 @@ fn cdo_slot_reads_a_timed_mark_once_per_check() {
             .env("CLAUDE_CODE_SESSION_ID", "A")
             .env_remove("CLAUDE_PID")
             .env_remove("CDO_SLOT_TOKEN")
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
+            .stdout(std::fs::File::create(s.0.path().join("timing.out")).unwrap())
+            .stderr(std::fs::File::create(s.0.path().join("timing.err")).unwrap())
             .spawn()
             .unwrap(),
     );
     let until = std::time::Instant::now() + std::time::Duration::from_secs(20);
-    while !s.run("B", &["status"], &[]).1.contains("(brief)") {
+    loop {
+        let (_, status) = s.run("B", &["status"], &[]);
+        if status.contains("(brief)") {
+            break;
+        }
         assert!(
             std::time::Instant::now() < until,
-            "the timing never marked the hold"
+            "the timing never marked the hold: status {status}; timing said {}{}",
+            std::fs::read_to_string(s.0.path().join("timing.out")).unwrap_or_default(),
+            std::fs::read_to_string(s.0.path().join("timing.err")).unwrap_or_default()
         );
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
@@ -1499,7 +1520,8 @@ fn cdo_slot_timed_waits_for_builds_and_refuses_beside_one() {
             .spawn()
             .unwrap(),
     );
-    std::thread::sleep(std::time::Duration::from_millis(800));
+    // Inside the window for sure (review r4, sol: a fixed delay could miss it).
+    s.wait_paused();
     assert_eq!(s.run("E", &["release"], &[]).0, Some(0));
     let (code, text) = s.run("B", &["acquire", "other", "replacement"], &[]);
     assert_eq!(code, Some(0), "{text}");
@@ -1577,6 +1599,134 @@ fn cdo_slot_timed_waits_for_builds_and_refuses_beside_one() {
         "slept past the deadline: {:?}",
         started.elapsed()
     );
+
+    // A `cdo-slot <args>` in the background, as session `who`, with `env` added.
+    let bg = |who: &str, args: &[&str], env: &[(&str, &str)]| {
+        let mut cmd = std::process::Command::new("bash");
+        cmd.arg(SLOT)
+            .args(args)
+            .env("CDO_SLOT_DIR", s.dir())
+            .env("CDO_SLOT_MEM_MIN_GB", "0")
+            .env("CDO_SLOT_POLL_S", "1")
+            .env("CDO_SLOT_BUILD_NAMES", &fake_name)
+            .env("CDO_SLOT_BUILD_SCRIPTS", "tls89-none")
+            .env("CLAUDE_CODE_SESSION_ID", who)
+            .env_remove("CLAUDE_PID")
+            .env_remove("CDO_SLOT_TOKEN")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        for (k, v) in env {
+            cmd.env(k, v);
+        }
+        Reap(cmd.spawn().unwrap())
+    };
+
+    // Review r4 (sol): a SHARED hold replaced right after the acquire -> the
+    // timing refuses and marks nothing in the replacement. Break: the expected
+    // holder passed only for a hold the acquire took (rc 0).
+    assert_eq!(s.run("A", &["acquire", "lane", "by hand"], &[]).0, Some(0));
+    let mut t8 = Reap(
+        std::process::Command::new("sleep")
+            .arg("600")
+            .spawn()
+            .unwrap(),
+    );
+    let t8pid = t8.id().to_string();
+    let mut shared = bg(
+        "A",
+        &["acquire", "lane", "shared", "--bind", &t8pid, "--timed"],
+        &[("CDO_SLOT_TEST_PAUSE_ACQUIRED_S", "2")],
+    );
+    s.wait_paused();
+    assert_eq!(s.run("A", &["release"], &[]).0, Some(0));
+    assert_eq!(
+        s.run("B", &["acquire", "other", "replacement"], &[]).0,
+        Some(0)
+    );
+    assert_eq!(shared.0.wait().unwrap().code(), Some(6));
+    let (_, text) = s.run("D", &["status"], &[]);
+    assert!(
+        text.contains("held by other (replacement)") && !text.contains("timed by"),
+        "a shared timing marked the replacement hold: {text}"
+    );
+    assert_eq!(s.run("B", &["release"], &[]).0, Some(0));
+    t8.kill().unwrap();
+    t8.wait().unwrap();
+
+    // Review r4 (sol): a `run --timed` that took the slot, whose session
+    // releases it and takes a new hold by hand while it waits -> on its exit
+    // the run ends only the hold it took, never the new one. Break: the exit
+    // trap a generic `release` (it ends the session's new hold).
+    let mut b8 = build();
+    let mut running = bg(
+        "E",
+        &["run", "lane", "took", "--timed", "--", "true"],
+        &[("CDO_SLOT_TIMED_WAIT_S", "60")],
+    );
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while !s.run("D", &["status"], &[]).1.contains("timed by lane") {
+        assert!(
+            std::time::Instant::now() < until,
+            "the run never marked its hold"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert_eq!(s.run("E", &["release"], &[]).0, Some(0));
+    assert_eq!(
+        s.run("E", &["acquire", "lane", "new by hand"], &[]).0,
+        Some(0)
+    );
+    b8.kill().unwrap();
+    b8.wait().unwrap();
+    assert_eq!(running.0.wait().unwrap().code(), Some(6));
+    let (_, text) = s.run("D", &["status"], &[]);
+    assert!(
+        text.contains("held by lane (new by hand)"),
+        "the run's exit ended its session's new hold: {text}"
+    );
+    assert_eq!(s.run("E", &["release"], &[]).0, Some(0));
+
+    // Review r4 (sol): a concurrent retry. The first timed acquire has decided
+    // to refuse (a build ran past its 1 s) and pauses before taking its mark
+    // back; meanwhile the build ends and a retry bound to the same process
+    // starts its timing. The first's take-back must not remove the mark the
+    // retry runs under. Break: the retry reusing the first's pending mark and
+    // the first removing it whoever wrote it (r3's rule).
+    assert_eq!(s.run("A", &["acquire", "lane", "by hand"], &[]).0, Some(0));
+    let mut t9 = Reap(
+        std::process::Command::new("sleep")
+            .arg("600")
+            .spawn()
+            .unwrap(),
+    );
+    let t9pid = t9.id().to_string();
+    let mut b9 = build();
+    let mut first = bg(
+        "A",
+        &["acquire", "lane", "first", "--bind", &t9pid, "--timed"],
+        &[
+            ("CDO_SLOT_TIMED_WAIT_S", "1"),
+            ("CDO_SLOT_TEST_PAUSE_REFUSE_S", "4"),
+        ],
+    );
+    s.wait_paused();
+    b9.kill().unwrap();
+    b9.wait().unwrap();
+    let (code, text) = s.run(
+        "A",
+        &["acquire", "lane", "retry", "--bind", &t9pid, "--timed"],
+        &[names],
+    );
+    assert_eq!(code, Some(4), "{text}");
+    assert_eq!(first.0.wait().unwrap().code(), Some(6));
+    let (_, text) = s.run("B", &["status"], &[]);
+    assert!(
+        text.contains("timed by lane since") && text.contains("(retry)"),
+        "the refused first took the retry's mark: {text}"
+    );
+    t9.kill().unwrap();
+    t9.wait().unwrap();
+    assert_eq!(s.run("A", &["release"], &[]).0, Some(0));
 
     // Review r1 (sol): a reason with a CR (which text-mode readers break into a
     // second line, where `timed by` lives) is refused.
