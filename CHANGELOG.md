@@ -93,7 +93,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `cdo_sited_graph_stable_ids_are_unique` does the same on CDO, in the harness phase.
   - Two discrimination proofs, both red, are recorded in the tests' docs.
 
-### Changed (ENG-130: each fact cone is built by one sorted merge, 6.0 % fewer instructions in `alsem analyze` on CDO)
+### Changed (ENG-130: each fact cone is built by one sorted merge, 5.9 % fewer instructions in `alsem analyze` on CDO)
 
 - **What changed** (`src/engine/l4/capability_cone.rs`, `cone_walk_par.rs`; no output change).
   `fact_cone_for_scc` merged every candidate entry (the SCC's direct facts, entries carried
@@ -107,9 +107,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   had put 5.4-5.7 % of analyze CPU in this merge (`merge_cone`, memory copies,
   `BTreeMap::insert`).
 - **Measured** (CDO, `alsem analyze --format json`, release-fast, pinned to P-cores 0-11,
-  3 alternating rounds, base `a73b4bf6`): `instructions:u` 287.82-287.84 G -> 270.47-270.49 G
-  (-6.0 %); output byte-identical apart from `generatedAt`; peak RSS unchanged (2.40-2.48 vs
-  2.42-2.46 GB).
+  3 alternating rounds after a warm-up, the final head `af52f239` against base `8f2a0c77`):
+  `instructions:u` 288.620-288.627 G -> 271.665-271.732 G (-5.85 to -5.88 %); output
+  byte-identical apart from `generatedAt`. (The first head, before the sol fold, read -6.0 %
+  against `a73b4bf6`, with peak RSS unchanged at 2.40-2.48 vs 2.42-2.46 GB; the landing
+  gate's cdo-speed checks peak memory on the final head.) Final head checks: `ci-steps task`
+  6129/6129, `cdo-gate --only harness,l4,output` passed (212/0, 25/0, 22/0),
+  `cdo-before-after` against `8f2a0c77` moved no finding, fingerprint or call-graph number.
 - **Bounded transient** (sol review). A builder reduces the candidate list to its winners
   whenever it grows past twice its reduced size (from 4,096 candidates), after each member's
   direct facts, each guarded edge and each successor, so it holds at most about
@@ -120,7 +124,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   candidate's key allocation, as the map's insert did (the winner only supplies the entry).
 - **Resident `prove` reads +0.5 to +2.5 % instructions (pinned, 3 rounds), from codegen:** its
   instruction profile runs none of the changed code; untouched digest code inlines differently.
-- **CDO checks** (base `a73b4bf6`): `cdo-before-after` moved no finding, fingerprint or
+- **CDO checks on the first head** (before the sol fold; base `a73b4bf6`; the final head's
+  are under Measured): `cdo-before-after` moved no finding, fingerprint or
   call-graph number; the session refresh equals a cold build at all 12 steps in both modes;
   `cdo-gate --only harness,l4,output` passed (211/0, 25/0, 22/0). `cdo-speed` passed twice:
   the build CPU x0.963 and x0.912 and summed peak memory x0.950 and x0.955 fell in both; the
