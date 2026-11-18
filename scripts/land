@@ -12,11 +12,11 @@
 #             the last fetch: no fetch here, merge-and-push fetches and checks
 #             again); every branch exists, is not master, is not yet in master
 #             and is given once; with --push, the main checkout is clean. Prints
-#             master's sha and the merge order. ⟨TLS-87⟩ Each branch touching
-#             src/ or crates/ has a pre-submit CDO record for its head tree
-#             (`cdo-gate --only harness,l4`, plus `output` for the engine):
-#             a loud warning without one, a refusal under
-#             LAND_REQUIRE_PRESUBMIT=1.
+#             master's sha and the merge order. ⟨TLS-87⟩ Each branch that
+#             changes product code (or the CDO subset's own tests) has a
+#             pre-submit CDO record for its head tree (`cdo-gate --only
+#             harness,l4,output`): a loud warning without one (said again if a
+#             step fails), a refusal under LAND_REQUIRE_PRESUBMIT=1.
 #   merge     in the gate worktree, on a DETACHED master: each branch in the
 #             order given, `merge --no-ff -m "landing: <ID>"`. A conflict in
 #             CHANGELOG.md alone is resolved by keeping both sides' added lines
@@ -239,21 +239,36 @@ done
 echo "land: landing branch: $landing"
 
 # ⟨TLS-87⟩ The pre-submit CDO subset, checked rather than remembered: a branch
-# whose diff touches src/ or crates/ needs a passing `cdo-gate --only
-# harness,l4` record for its head tree (scripts/cdo-gate's record_presubmit),
-# and one touching the engine (src/program, src/engine, crates/al-syntax) also
-# `output` (its rendering goldens are the only pre-landing check of explain,
-# query and digest text). Docs-only and scripts-only branches need none. A new
-# gate starts advisory (the owner's design principle 4): a missing record is a
-# loud warning; LAND_REQUIRE_PRESUBMIT=1 makes it a refusal.
+# whose diff changes product code (or the subset's own tests and goldens) needs
+# a passing `cdo-gate --only harness,l4,output` record for its head tree
+# (scripts/cdo-gate's record_presubmit); `output`'s rendering goldens are the
+# only pre-landing check of explain, query and digest text. A new gate starts advisory (the owner's design principle 4): a missing
+# record is a loud warning; LAND_REQUIRE_PRESUBMIT=1 makes it a refusal. It
+# runs after the slot is taken: a refusal can wait for the slot first (move it
+# up if refusal ever becomes the default).
 presubmit_dir="${CDO_PRESUBMIT_DIR:-$(G rev-parse --path-format=absolute --git-common-dir)/cdo-presubmit}"
-presubmit_missing=()
+presubmit_missing=() presubmit_notes=()
+# The paths that need no CDO check (review r1, Fable: a rule listing what NEEDS
+# one missed Cargo.*, tests/ and parts of the engine): docs, scripts, the
+# agents' and CI's folders, top-level Markdown, and tests/ apart from what the
+# subset itself runs or reads (its test files, goldens and the shared CDO
+# helpers: a re-minted golden is exactly what it checks). Every other path
+# (all of src/, crates/, Cargo.*, build.rs) needs harness,l4 and output; a
+# subset test path needs its own phases.
+presubmit_exempt='^(docs/|scripts/|\.claude/|\.kraken/|\.github/|\.agent/|[^/]+\.md$)'
+presubmit_hl_tests='^tests/(program_resolve_harness\.rs|goldens/semantic-edges/|l4_summary_differential\.rs|l4-summary-baseline/|common/)'
+presubmit_out_tests='^tests/(cli/output_cdo|cli-output-goldens/|common/)'
 for b in "${branches[@]}"; do
-    paths=$(G diff --name-only "$master...refs/heads/$b") || die "git diff failed for '$b'"
+    # --no-renames: a file moved out of the engine counts at its old path too.
+    paths=$(G diff --no-renames --name-only "$master...refs/heads/$b") || die "git diff failed for '$b'"
+    paths=$(grep -vE "$presubmit_exempt" <<<"$paths" || true)
+    product=$(grep -vE '^tests/' <<<"$paths" || true)
     need=()
-    if grep -qE '^(src|crates)/' <<<"$paths"; then
+    if [[ -n "$product" ]] || grep -qE "$presubmit_hl_tests|$presubmit_out_tests" <<<"$paths"; then
         need=(program_resolve_harness l4_summary_differential)
-        grep -qE '^(src/program|src/engine|crates/al-syntax)/' <<<"$paths" && need+=(output_cdo)
+    fi
+    if [[ -n "$product" ]] || grep -qE "$presubmit_out_tests" <<<"$paths"; then
+        need+=(output_cdo)
     fi
     ((${#need[@]})) || continue
     tree=$(G rev-parse "refs/heads/$b^{tree}")
@@ -263,6 +278,7 @@ for b in "${branches[@]}"; do
     done
     if ((${#lacks[@]})); then
         presubmit_missing+=("$b")
+        presubmit_notes+=("$b: no pre-submit record for ${lacks[*]}")
         echo "land: WARNING: '$b' has no passing pre-submit CDO record for its head tree ${tree:0:12}: missing ${lacks[*]}" >&2
         echo "land:   in its worktree, committed and clean: scripts/cdo-gate --only $(
             sed 's/program_resolve_harness/harness/; s/l4_summary_differential/l4/; s/output_cdo/output/' \
@@ -335,6 +351,9 @@ mkdir -p "$run" "$(dirname "$flow_log")"
 run_id=$(basename "$run")
 issue=$(IFS=,; echo "${ids[*]}")
 echo "land: logs in $run"
+# ⟨TLS-87⟩ The pre-submit check's findings, kept with the run (to measure what
+# the advisory gate would have caught before making it a refusal).
+((${#presubmit_notes[@]} == 0)) || printf '%s\n' "${presubmit_notes[@]}" >"$run/presubmit"
 mark() { # mark <step> start|end [exit]
     jq -nc --arg ts "$(date -u +%FT%TZ)" --arg issue "$issue" --arg run "$run_id" \
         --arg phase "$1" --arg event "$2" --arg rc "${3:-}" \
@@ -354,6 +373,12 @@ verdict() { # verdict <step> <exit> <start>
         if [[ -f "$run/$1.log" ]]; then
             grep -E 'FAIL|error[:[]' "$run/$1.log" | tail -n 8 | sed 's/^/land:   | /' || true
         fi
+        # ⟨TLS-87⟩ Said again where it matters (review r1, Fable): the check's
+        # warning is 25 minutes of output back by now.
+        local n
+        for n in "${presubmit_notes[@]}"; do
+            echo "land:   note: $n (scripts/cdo-gate --only would have run it before the landing)"
+        done
     fi
 }
 

@@ -394,13 +394,20 @@ fn cdo_gate_only_runs_and_judges_just_its_subset() {
 /// in the shared git directory (`<common dir>/cdo-presubmit/<tree>`), so
 /// `scripts/land` can check a branch had its pre-submit subset. The gate runs
 /// from a throwaway git repository holding a copy of the scripts it needs, with
-/// a stub `cargo` that passes every phase: on a work tree with an untracked file
-/// it records nothing (it would not name exactly HEAD's tree); clean, it records
-/// `harness,l4`; a second run (`lsp`) on the same tree adds to the record.
+/// a stub `cargo` that passes every phase (or fails, or commits during the run):
+/// it records nothing on a work tree with an untracked file (it would not name
+/// exactly HEAD's tree), nothing for a FAILING run, nothing when run from
+/// another checkout (cargo builds the current folder, not the script's), and
+/// nothing when a commit lands during the run; clean, it records `harness,l4`;
+/// a second run (`lsp`) on the same tree adds to the record.
 ///
 /// Mutations (2026-11-18): the `record_presubmit` call dropped -> no record
 /// (red); the clean-tree check dropped from `record_presubmit` -> the dirty run
-/// records (red). Each restored, green.
+/// records (red). Review r1 (Fable): the `rc == 0` condition dropped -> the
+/// failing run records (red); the checkout check dropped from
+/// `presubmit_clean_tree` -> the run from another checkout records (red); the
+/// same-tree comparison dropped -> the run with a commit during it records its
+/// starting tree (red). Each restored, green.
 #[cfg(unix)]
 #[test]
 fn cdo_gate_only_pass_records_the_tree_it_ran_on() {
@@ -425,9 +432,22 @@ fn cdo_gate_only_pass_records_the_tree_it_ran_on() {
             .unwrap()
             .trim()
             .to_string();
+    // STUB_FAIL: every test phase fails. STUB_COMMIT=<repo>: the first test
+    // phase commits a new file there (a commit landing during the run).
     std::fs::write(
         stub.path().join("cargo"),
-        "#!/bin/sh\necho 'test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s'\n",
+        "#!/bin/sh\n\
+         case \" $* \" in *' --no-run '*) ;; *)\n\
+           if [ -n \"$STUB_FAIL\" ]; then\n\
+             echo 'test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s'; exit 101\n\
+           fi\n\
+           if [ -n \"$STUB_COMMIT\" ] && [ ! -e \"$STUB_COMMIT/late.txt\" ]; then\n\
+             echo x > \"$STUB_COMMIT/late.txt\"\n\
+             git -C \"$STUB_COMMIT\" add late.txt\n\
+             git -C \"$STUB_COMMIT\" -c user.name=t -c user.email=t@t commit -qm late\n\
+           fi ;;\n\
+         esac\n\
+         echo 'test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s'\n",
     )
     .unwrap();
     std::fs::set_permissions(
@@ -440,8 +460,16 @@ fn cdo_gate_only_pass_records_the_tree_it_ran_on() {
         stub.path().display(),
         std::env::var("PATH").unwrap_or_default()
     );
-    let gate = |only: &str| {
-        let out = std::process::Command::new("bash")
+    let other = tempfile::tempdir().unwrap();
+    crate::git::run(other.path(), &["init", "-q", "-b", "master"]);
+    // <subset>, the folder it runs from, extra environment, the exit it must give.
+    let gate = |only: &str, cwd: &std::path::Path, env: &[(&str, &str)], rc: i32| {
+        let mut cmd = std::process::Command::new("bash");
+        for (k, v) in env {
+            cmd.env(k, v);
+        }
+        let out = cmd
+            .current_dir(cwd)
             .arg(scripts.join("cdo-gate"))
             .args(["--only", only])
             .arg(ws.path())
@@ -462,20 +490,34 @@ fn cdo_gate_only_pass_records_the_tree_it_ran_on() {
             String::from_utf8_lossy(&out.stdout),
             String::from_utf8_lossy(&out.stderr)
         );
-        assert_eq!(out.status.code(), Some(0), "{text}");
+        assert_eq!(out.status.code(), Some(rc), "{text}");
         text
     };
-    let record = repo.path().join(".git/cdo-presubmit").join(&tree);
+    let here = repo.path();
+    let records = repo.path().join(".git/cdo-presubmit");
+    let record = records.join(&tree);
 
     // Not clean (an untracked file): no record.
     std::fs::write(repo.path().join("scratch.txt"), "x").unwrap();
-    let text = gate("harness,l4");
+    let text = gate("harness,l4", here, &[], 0);
     assert!(text.contains("no pre-submit record"), "{text}");
     assert!(!record.exists(), "a dirty run recorded a pass");
     std::fs::remove_file(repo.path().join("scratch.txt")).unwrap();
 
-    // Clean: recorded.
-    let text = gate("harness,l4");
+    // A failing run: no record.
+    gate("harness,l4", here, &[("STUB_FAIL", "1")], 1);
+    assert!(!record.exists(), "a failing run recorded a pass");
+
+    // Run from another checkout (cargo would build that one): no record.
+    let text = gate("harness,l4", other.path(), &[], 0);
+    assert!(text.contains("no pre-submit record"), "{text}");
+    assert!(
+        !record.exists(),
+        "a run from another checkout recorded this tree"
+    );
+
+    // Clean, from its own checkout: recorded.
+    let text = gate("harness,l4", here, &[], 0);
     assert!(text.contains("pre-submit record for tree"), "{text}");
     assert_eq!(
         std::fs::read_to_string(&record).unwrap(),
@@ -483,10 +525,25 @@ fn cdo_gate_only_pass_records_the_tree_it_ran_on() {
     );
 
     // Another subset on the same tree adds its phases.
-    gate("lsp");
+    gate("lsp", here, &[], 0);
     assert_eq!(
         std::fs::read_to_string(&record).unwrap(),
         "l4_summary_differential\nlsp\nprogram_resolve_harness\n"
+    );
+
+    // A commit lands during the run: neither tree gets this run's phase.
+    let commit = [("STUB_COMMIT", repo.path().to_str().unwrap())];
+    let text = gate("output", here, &commit, 0);
+    assert!(text.contains("no pre-submit record"), "{text}");
+    assert_eq!(
+        std::fs::read_to_string(&record).unwrap(),
+        "l4_summary_differential\nlsp\nprogram_resolve_harness\n",
+        "the starting tree got a phase it was not tested on to the end"
+    );
+    assert_eq!(
+        std::fs::read_dir(&records).unwrap().count(),
+        1,
+        "the new tree got a record"
     );
 }
 

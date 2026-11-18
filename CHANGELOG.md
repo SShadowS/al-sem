@@ -419,29 +419,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`scripts/cdo-gate --only ...`** records a passing run. The phases go under the tree it ran
   on, in `<git common dir>/cdo-presubmit/<tree>`, one phase a line, the union of every passing
   run on that tree. This is the same pattern as ci-steps' gate-passed record. It is written
-  only when the work tree was clean before and after the run, so it names exactly HEAD's
-  tree; otherwise the gate says so.
+  only when the work tree was clean before and after the run, at the same tree, and the run
+  ran from the script's own checkout (cargo builds the current folder). So it names exactly the
+  tree that was tested; otherwise the gate says why. A full gate's pass records every subset
+  phase too.
 - **`scripts/land`** checks each branch's head tree in its `check` step, `--dry-run` included.
-  - A diff touching `src/` or `crates/` needs `harness,l4`.
-  - A diff touching `src/program`, `src/engine` or `crates/al-syntax` also needs `output`.
-  - Docs-only and scripts-only branches need none.
+  The rule lists what is exempt, so a new kind of path counts by default.
+  - Product code (`src/`, `crates/`, `Cargo.*`, everything not exempt) needs `harness,l4,output`.
+  - The subset's own tests, goldens and the shared CDO helpers need their phases. A re-minted
+    l4 golden is exactly what l4 checks.
+  - Docs, scripts, top-level Markdown, the agents' and CI's folders, and other tests need none.
+  - Renames count at their old path (`--no-renames`), so moving a file out of `src/` counts.
   - A missing record is a loud warning that names the missing phases and the command to run.
+    It is kept with the run (`<run>/presubmit`) and said again if a step fails.
     `LAND_REQUIRE_PRESUBMIT=1` makes it a refusal.
 - **Why a warning by default.** The owner's design principle 4 says "a new gate starts advisory,
   and failing is opt-in until real use has measured what it would catch". A rebase makes a new
   tree, so the subset must run after a branch's last rebase. That is right (master moved), but
   how often it warns is not yet measured.
-- **Cost of `output`.** It adds ~160 s plus an engine shared with the other output tests, and
-  only on engine diffs.
+- **Cost of `output`.** It adds ~160 s plus an engine shared with the other output tests, on
+  every product branch. A list naming only the engine missed `src/snapshot`, `src/mcp` and
+  `src/wire`, which output's answers pass through.
+- **Limits.** Two runs ending at once on one tree may lose one run's phases, which gives a false
+  warning, never a false pass. The check runs after land takes the slot.
 - **Tests:**
   - `gate_scripts::cdo_gate_only_pass_records_the_tree_it_ran_on` runs the real gate, with a
-    stub cargo, from a throwaway repository. A dirty run records nothing, a clean run records,
-    and a second subset adds to the record.
-  - `land_script::land_checks_the_pre_submit_cdo_record`: no record warns, or refuses when
-    required; a record for the head tree is accepted; an engine branch also needs `output`;
-    docs and scripts need nothing.
-  - The stubbed `--only` test sets `CDO_PRESUBMIT_DIR`, so a stubbed pass never records the
-    real tree.
+    stub cargo, from a throwaway repository. Nothing is recorded for a dirty tree, a failing
+    run, a run from another checkout, or a commit landing during the run. A clean run
+    records, and a second subset adds to the record.
+  - `land_script::land_checks_the_pre_submit_cdo_record`:
+    - no record warns, or refuses when required;
+    - product code needs `output` too, Cargo.toml included;
+    - an l4 golden needs harness,l4;
+    - a move out of `src/` counts;
+    - docs, scripts, Markdown and other tests need nothing;
+    - several branches name only the one lacking a record.
+  - The stubbed `cdo-gate` runs on the real checkout set `CDO_PRESUBMIT_DIR`, so a stubbed pass
+    never records the real tree.
 
   Each guard has a discrimination proof, recorded in the tests' docs. Documented in CLAUDE.md's
   test tier 2b.

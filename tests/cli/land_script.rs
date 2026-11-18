@@ -902,28 +902,61 @@ fn merge_and_push_lands_only_what_the_gates_saw() {
 
 /// ⟨TLS-87⟩ land checks each branch's pre-submit CDO record (scripts/cdo-gate
 /// writes it for a passing `--only` run, under the tree it ran on, in the
-/// shared git directory). A branch touching src/ without one is a loud warning
-/// naming the missing phases and the command to run; under
-/// LAND_REQUIRE_PRESUBMIT=1 a refusal. A record for its head tree satisfies it
-/// (the record is hand-written here: the precondition stated, not produced). A
-/// branch touching the engine also needs `output`. Docs and scripts need none.
+/// shared git directory). A branch changing product code (src/, Cargo.toml)
+/// needs `harness,l4,output`; one changing only the subset's own goldens needs
+/// their phases; docs, scripts, top-level Markdown and other tests need none.
+/// No record is a loud warning naming the missing phases and the command to
+/// run; under LAND_REQUIRE_PRESUBMIT=1 a refusal. A record for its head tree
+/// satisfies it (hand-written here: the precondition stated, not produced). A
+/// file moved out of src/ still counts (`--no-renames`). In a multi-branch
+/// landing only the branch without its record is named.
 ///
 /// Mutations (2026-11-18): the LAND_REQUIRE_PRESUBMIT refusal dropped -> the
 /// branch with no record passes under it (red); `output_cdo` dropped from the
-/// engine paths' need -> the engine branch with only harness,l4 passes (red).
-/// Each restored, green.
+/// product need -> the src branch with only harness,l4 passes (red). Review r1
+/// (Fable): `--no-renames` dropped -> the moved-out file counts at its new,
+/// exempt path only and the branch passes (red); the exempt list widened to
+/// all of tests/ -> the l4-golden branch passes with no record (red). Each
+/// restored, green.
 #[test]
 fn land_checks_the_pre_submit_cdo_record() {
     let r = repo();
-    for d in ["src/engine", "docs"] {
+    for d in [
+        "src/engine",
+        "docs",
+        "tests/l4-summary-baseline",
+        "tests/cli",
+    ] {
         std::fs::create_dir_all(r.main.join(d)).unwrap();
     }
+    // A file on master that a branch moves out of src/.
+    std::fs::write(r.main.join("src/engine/moved.rs"), "// moved\n".repeat(20)).unwrap();
+    git::run(&r.main, &["add", "src/engine/moved.rs"]);
+    git::run(&r.main, &["commit", "-qm", "engine file"]);
     r.branch("tools/tls-61-src", &[("src/lib.rs", b"// x\n")]);
-    r.branch("tools/tls-62-engine", &[("src/engine/x.rs", b"// x\n")]);
+    r.branch("tools/tls-62-cargo", &[("Cargo.toml", b"[package]\n")]);
     r.branch(
         "tools/tls-63-docs",
-        &[("docs/n.md", b"x\n"), ("scripts/extra", b"x\n")],
+        &[
+            ("docs/n.md", b"x\n"),
+            ("scripts/extra", b"x\n"),
+            ("README.md", b"x\n"),
+            ("tests/cli/other.rs", b"// x\n"),
+        ],
     );
+    r.branch(
+        "tools/tls-64-l4gold",
+        &[("tests/l4-summary-baseline/x.json", b"{}\n")],
+    );
+    git::run(&r.main, &["switch", "-qc", "tools/tls-65-move", "master"]);
+    // (A switch back to master removed the emptied folder.)
+    std::fs::create_dir_all(r.main.join("tests/cli")).unwrap();
+    git::run(
+        &r.main,
+        &["mv", "src/engine/moved.rs", "tests/cli/moved.rs"],
+    );
+    git::run(&r.main, &["commit", "-qm", "move"]);
+    git::run(&r.main, &["switch", "-q", "master"]);
     let require = [("LAND_REQUIRE_PRESUBMIT", "1")];
     let record = |branch: &str, phases: &str| {
         let tree = r.git(&r.main, &["rev-parse", &format!("{branch}^{{tree}}")]);
@@ -932,13 +965,15 @@ fn land_checks_the_pre_submit_cdo_record() {
         std::fs::write(dir.join(tree), phases).unwrap();
     };
 
+    let all = "l4_summary_differential\noutput_cdo\nprogram_resolve_harness\n";
+
     // No record: a loud warning, the run goes on.
     let (code, text) = r.land(&["--dry-run", "tools/tls-61-src"], &[]);
     assert_eq!(code, Some(0), "{text}");
     assert!(
         text.contains("WARNING: 'tools/tls-61-src' has no passing pre-submit CDO record")
-            && text.contains("missing program_resolve_harness l4_summary_differential")
-            && text.contains("scripts/cdo-gate --only harness,l4 <CDO_WS>"),
+            && text.contains("missing program_resolve_harness l4_summary_differential output_cdo")
+            && text.contains("scripts/cdo-gate --only harness,l4,output <CDO_WS>"),
         "{text}"
     );
     // ... and a refusal when required.
@@ -949,39 +984,60 @@ fn land_checks_the_pre_submit_cdo_record() {
         "{text}"
     );
 
-    // With the record for its head tree: accepted.
+    // harness,l4 alone is not enough for product code.
     record(
         "tools/tls-61-src",
         "l4_summary_differential\nprogram_resolve_harness\n",
     );
     let (code, text) = r.land(&["--dry-run", "tools/tls-61-src"], &require);
+    assert_eq!(code, Some(1), "{text}");
+    assert!(text.contains("missing output_cdo"), "{text}");
+    // With the full record for its head tree: accepted.
+    record("tools/tls-61-src", all);
+    let (code, text) = r.land(&["--dry-run", "tools/tls-61-src"], &require);
     assert_eq!(code, Some(0), "{text}");
     assert!(
-        text.contains("'tools/tls-61-src' pre-submit CDO record: program_resolve_harness l4_summary_differential"),
+        text.contains("'tools/tls-61-src' pre-submit CDO record: program_resolve_harness l4_summary_differential output_cdo"),
         "{text}"
     );
 
-    // The engine needs `output` too.
-    record(
-        "tools/tls-62-engine",
-        "l4_summary_differential\nprogram_resolve_harness\n",
-    );
-    let (code, text) = r.land(&["--dry-run", "tools/tls-62-engine"], &require);
+    // Cargo.toml is product code too.
+    let (code, text) = r.land(&["--dry-run", "tools/tls-62-cargo"], &require);
+    assert_eq!(code, Some(1), "{text}");
+
+    // An l4 golden re-mint needs harness,l4 (no output).
+    let (code, text) = r.land(&["--dry-run", "tools/tls-64-l4gold"], &require);
     assert_eq!(code, Some(1), "{text}");
     assert!(
-        text.contains("missing output_cdo")
-            && text.contains("scripts/cdo-gate --only harness,l4,output <CDO_WS>"),
+        text.contains("missing program_resolve_harness l4_summary_differential")
+            && !text.contains("output_cdo"),
         "{text}"
     );
     record(
-        "tools/tls-62-engine",
-        "l4_summary_differential\noutput_cdo\nprogram_resolve_harness\n",
+        "tools/tls-64-l4gold",
+        "l4_summary_differential\nprogram_resolve_harness\n",
     );
-    let (code, text) = r.land(&["--dry-run", "tools/tls-62-engine"], &require);
+    let (code, text) = r.land(&["--dry-run", "tools/tls-64-l4gold"], &require);
     assert_eq!(code, Some(0), "{text}");
 
-    // Docs and scripts: no record needed.
+    // A file moved out of src/ into an exempt place still counts.
+    let (code, text) = r.land(&["--dry-run", "tools/tls-65-move"], &require);
+    assert_eq!(code, Some(1), "a move out of src/ was exempt: {text}");
+
+    // Docs, scripts, top-level Markdown, other tests: no record needed.
     let (code, text) = r.land(&["--dry-run", "tools/tls-63-docs"], &require);
     assert_eq!(code, Some(0), "{text}");
     assert!(!text.contains("pre-submit"), "{text}");
+
+    // Several branches: only the one without its record is named.
+    let (code, text) = r.land(
+        &["--dry-run", "tools/tls-61-src", "tools/tls-62-cargo"],
+        &[],
+    );
+    assert_eq!(code, Some(0), "{text}");
+    assert!(
+        text.contains("WARNING: 'tools/tls-62-cargo'")
+            && !text.contains("WARNING: 'tools/tls-61-src'"),
+        "{text}"
+    );
 }
