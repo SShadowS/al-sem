@@ -2895,7 +2895,9 @@ fn lower_routine<'t>(
     // but loses `page-action` and its evidence containment range. That is the intended
     // trade — a meaningless id is worse than a missing anchor.
     // ENG-20: a request page's own trigger (the section itself is its member).
-    let request_page = member.is_some_and(|m| m.kind() == RawKind::RequestpageSection);
+    // A request page's own TRIGGER (a procedure written there is not one; the flag is set
+    // below, once the routine's kind is known).
+    let in_request_page = member.is_some_and(|m| m.kind() == RawKind::RequestpageSection);
     let enclosing_member = member
         .and_then(|m| {
             // ENG-20: a request page has no name; its own triggers' member is
@@ -2926,6 +2928,7 @@ fn lower_routine<'t>(
     } else {
         RoutineKind::Procedure
     };
+    let request_page = in_request_page && kind == RoutineKind::Trigger;
 
     // A header field of THIS arm (`header_arms`); for an unsplit routine the arm is the
     // whole node, so this is the field's first child, as `field` returns. The fields of

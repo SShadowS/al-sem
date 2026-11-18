@@ -919,11 +919,13 @@ impl<'a> Builder<'a> {
             // `TestPage` cannot (it hosts no add-in). Its own `via` lets a
             // test walk refuse it (`test_select::select`) while impact keeps
             // it (round-1 c21).
-            let via = if t
-                .id
-                .enclosing_member_lc
-                .as_ref()
-                .is_some_and(|m| addin_controls.contains(m.as_str()))
+            // A request page's own trigger is never an add-in's, whatever a control is
+            // named (ENG-20: its member text is `requestpage`).
+            let via = if !t.id.request_page
+                && t.id
+                    .enclosing_member_lc
+                    .as_ref()
+                    .is_some_and(|m| addin_controls.contains(m.as_str()))
             {
                 "clientEvent"
             } else {

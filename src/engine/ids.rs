@@ -348,6 +348,12 @@ pub fn encode_canonical_routine_key(key: &CanonicalRoutineKey) -> String {
         parts.push(member.to_lowercase());
     }
     // ENG-20: CONDITIONAL as the member part, so only a request page's own triggers move.
+    // A request page's trigger always has its member (the lowerer sets both together), so
+    // the flag is the 8th part, never a 7th one a member named `request-page` could mimic.
+    debug_assert!(
+        !key.request_page || key.enclosing_member.is_some(),
+        "a request page's trigger has the request page as its member"
+    );
     if key.request_page {
         parts.push(REQUEST_PAGE_PART.to_string());
     }
@@ -436,6 +442,10 @@ pub fn to_stable_routine_id_from_parts(
     enclosing_member: Option<&str>,
     request_page: bool,
 ) -> String {
+    debug_assert!(
+        !request_page || enclosing_member.is_some(),
+        "a request page's trigger has the request page as its member (ENG-20)"
+    );
     match enclosing_member {
         None => format!("{stable_object_id}#{normalized_signature_hash}"),
         Some(member) => {

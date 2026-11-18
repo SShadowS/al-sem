@@ -168,6 +168,123 @@ codeunit 50953 "RP Caller"
     }
 }
 
+/// The collide report (a dataitem NAMED `RequestPage` beside the request page): its two
+/// `OnAfterGetRecord` triggers, as `alsem graph` writes them, keep apart in the node id
+/// (the wire id bc-dev-mcp joins edges and selects tests by) and the stable id (Fable and
+/// the id-shape audit, ENG-20 review: the wire id ignored the flag).
+#[test]
+fn graph_keeps_a_dataitem_named_request_page_apart_from_the_request_page() {
+    let t = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(t.path().join("src")).unwrap();
+    std::fs::write(
+        t.path().join("app.json"),
+        r#"{"id":"e20e20e2-0000-4000-8000-0000000000bb","name":"ENG20b","publisher":"t","version":"1.0.0.0","dependencies":[]}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        t.path().join("src/rp.al"),
+        r#"report 50963 "RP Collide"
+{
+    ProcessingOnly = true;
+    dataset
+    {
+        dataitem(RequestPage; Integer)
+        {
+            trigger OnAfterGetRecord() begin end;
+        }
+    }
+    requestpage
+    {
+        trigger OnAfterGetRecord() begin end;
+    }
+}
+"#,
+    )
+    .unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_alsem"))
+        .arg("graph")
+        .arg(t.path())
+        .env("RUST_LOG", "off")
+        .output()
+        .expect("spawn alsem");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let nodes: Vec<Value> = String::from_utf8(out.stdout)
+        .unwrap()
+        .lines()
+        .map(|l| serde_json::from_str::<Value>(l).expect("jsonl"))
+        .filter(|v| v["t"] == "node" && v["v"]["memberName"] == "OnAfterGetRecord")
+        .map(|v| v["v"].clone())
+        .collect();
+    assert_eq!(
+        nodes.len(),
+        2,
+        "precondition: both triggers are nodes: {nodes:#?}"
+    );
+    assert_ne!(nodes[0]["id"], nodes[1]["id"], "wire ids: {nodes:#?}");
+    assert_ne!(
+        nodes[0]["stableRoutineId"], nodes[1]["stableRoutineId"],
+        "stable ids: {nodes:#?}"
+    );
+}
+
+/// A table field NAMED `RequestPage`: the unquoted selector form still names its trigger
+/// (no request page's trigger matches, so `.RequestPage` falls back to the field form),
+/// and so does the quoted form the display prints (Fable, ENG-20 review).
+#[test]
+fn a_field_named_request_page_is_still_selected() {
+    let t = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(t.path().join("src")).unwrap();
+    std::fs::write(
+        t.path().join("app.json"),
+        r#"{"id":"e20e20e2-0000-4000-8000-0000000000cc","name":"ENG20c","publisher":"t","version":"1.0.0.0","dependencies":[]}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        t.path().join("src/t.al"),
+        r#"table 50970 "RP Field Table"
+{
+    fields
+    {
+        field(1; RequestPage; Integer)
+        {
+            trigger OnValidate() begin end;
+        }
+    }
+    keys { key(PK; RequestPage) { } }
+}
+"#,
+    )
+    .unwrap();
+    for selector in [
+        r#"Table "RP Field Table".RequestPage::OnValidate"#,
+        r#"Table "RP Field Table"."RequestPage"::OnValidate"#,
+    ] {
+        let out = Command::new(env!("CARGO_BIN_EXE_alsem"))
+            .arg("explain")
+            .arg(format!("--routine={selector}"))
+            .args(["--single-app", "--format=json", "--"])
+            .arg(t.path())
+            .env("RUST_LOG", "off")
+            .output()
+            .expect("spawn alsem");
+        assert!(
+            out.status.success(),
+            "{selector}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let v: Value = serde_json::from_slice(&out.stdout).expect("json");
+        assert_eq!(
+            v["cards"].as_array().map(Vec::len),
+            Some(1),
+            "{selector} names the field's trigger: {v:#}"
+        );
+    }
+}
+
 /// ENG-20: explain names a request page's own trigger as the display prints it
 /// (`Report "RP Twin".requestpage::OnOpenPage`), and a page action whose `RunObject` runs
 /// the report reaches it (explain's `reachedFrom`, which reads the trigger's level).

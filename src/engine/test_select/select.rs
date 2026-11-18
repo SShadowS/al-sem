@@ -1219,6 +1219,40 @@ mod tests {
         );
     }
 
+    /// ENG-20 (Fable): a request page's own trigger is never an add-in's event, even when
+    /// a `usercontrol` of its request page is NAMED `RequestPage` (its member text). Hand-
+    /// stated: report `Rep` with that control, and its request page's `OnOpenPage`; the run
+    /// lifecycle's site into it stays `lifecycle`, so a test walk follows it.
+    #[test]
+    fn a_request_pages_trigger_is_not_an_add_in_event_whatever_a_control_is_named() {
+        let mut w = World::default();
+        let a = w.app("A");
+        let rep = w.obj(a, ObjectKind::Report, 4, "Rep", TrustTier::Workspace);
+        w.object_mut(&rep).page_controls = vec![PageControlNode {
+            name_lc: "requestpage".into(),
+            kind: PageControlKind::UserControl,
+            target: ObjectRef::Name {
+                raw: "CDO.Editor".into(),
+                normalized_lc: "cdo.editor".into(),
+            },
+        }];
+        let open = w.rtn_with(&rep, "OnOpenPage", |r| {
+            r.is_trigger = true;
+            r.id.enclosing_member_lc = Some("requestpage".into());
+            r.id.request_page = true;
+        });
+        let g = sited_of(&w, a, &[]);
+        let into: Vec<&str> = g
+            .sites_into(g.routine_node(&open).expect("a node"))
+            .iter()
+            .map(|&s| g.sites()[s as usize].via())
+            .collect();
+        assert!(
+            !into.is_empty() && into.iter().all(|v| *v == "lifecycle"),
+            "the run lifecycle reaches it: {into:?}"
+        );
+    }
+
     /// Round-3 c21: a test lists EVERY changed routine it reaches, not only
     /// the root of its shortest path; and a changed routine's nearest test
     /// is a code test when one reaches it, even when a UI-navigation test is

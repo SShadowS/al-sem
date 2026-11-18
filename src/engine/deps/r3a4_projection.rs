@@ -24,7 +24,7 @@
 //! appGuid/signature-derived → cache/modelInstanceId/devFingerprint-INDEPENDENT.
 //! The Rust dep routine already carries `stable_routine_id` =
 //! `ids::to_stable_routine_id_from_parts(to_stable_object_id(object_id),
-//! normalized_signature_hash, None)` — exactly al-sem's `DepIdStabilizer` base
+//! normalized_signature_hash, None, false)` — exactly al-sem's `DepIdStabilizer` base
 //! (`None`: a dep ABI has no member triggers, so task 4's enclosing-member fold
 //! never applies here and the hex part IS the `normalizedSignatureHash`). The
 //! `/opN` / `/csN` suffix (everything after the routine id, which is exactly two

@@ -735,8 +735,11 @@ fn object_id_str(oid: &ObjectNodeId, apps: &AppRegistry) -> String {
     )
 }
 
-/// `al:rtn:{app}/{kind}/{key}#{enclosing?}{name}/{params}/{sig_fp}` — unique per
-/// overload (params_count + sig_fp) and per member-trigger (enclosing member).
+/// `al:rtn:{app}/{kind}/{key}#{enclosing?}{name}/{params}/{sig_fp}[/rp]` — unique per
+/// overload (params_count + sig_fp) and per member-trigger (enclosing member). A request
+/// page's own trigger ends in `/rp` (ENG-20): its member text `requestpage` is a name a
+/// dataitem or control could have too, and the two numeric segments before the suffix mean
+/// no other id can end that way.
 fn routine_id_str(nid: &RoutineNodeId, apps: &AppRegistry) -> String {
     let obj = object_id_str(&nid.object, apps);
     let member = nid
@@ -745,12 +748,13 @@ fn routine_id_str(nid: &RoutineNodeId, apps: &AppRegistry) -> String {
         .map(|m| format!("{m}."))
         .unwrap_or_default();
     format!(
-        "al:rtn:{}#{}{}/{}/{}",
+        "al:rtn:{}#{}{}/{}/{}{}",
         obj.trim_start_matches("al:obj:"),
         member,
         sanitize_slug(&nid.name_lc),
         nid.params_count,
-        nid.sig_fp
+        nid.sig_fp,
+        if nid.request_page { "/rp" } else { "" }
     )
 }
 

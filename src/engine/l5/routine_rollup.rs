@@ -467,8 +467,9 @@ impl<'m> RoutineNames<'m> {
             selector_shared: Default::default(),
             app_names,
         };
-        // Overloads: one app, object, member and name; distinct stable ids.
-        type Key = (String, String, Option<String>, String);
+        // Overloads: one app, object, member and name; distinct stable ids. A request
+        // page's own trigger is its own member (ENG-20), whatever a dataitem is named.
+        type Key = (String, String, Option<String>, bool, String);
         let mut groups: HashMap<Key, Vec<&'m str>> = HashMap::new();
         // App collisions: one display (type, object name, member, name) in
         // two apps.
@@ -476,23 +477,29 @@ impl<'m> RoutineNames<'m> {
         for (&id, &i) in &names.rows {
             let r = &model.workspace.routines[i];
             let object = names.object_name_of(r).fold_identifier();
+            let request_page = r
+                .member_detail
+                .as_ref()
+                .is_some_and(|d| d.kind == REQUEST_PAGE_KIND);
             groups
                 .entry((
                     r.app_guid.to_ascii_lowercase(),
                     format!("{}/{object}", r.object_id),
                     r.enclosing_member.as_ref().map(|m| m.fold_identifier()),
+                    request_page,
                     r.name.fold_identifier(),
                 ))
                 .or_default()
                 .push(id);
             displays
                 .entry(format!(
-                    "{}|{object}|{}|{}",
+                    "{}|{object}|{}|{}|{}",
                     r.object_type.to_ascii_lowercase(),
                     r.enclosing_member
                         .as_deref()
                         .unwrap_or("")
                         .fold_identifier(),
+                    u8::from(request_page),
                     r.name.fold_identifier()
                 ))
                 .or_default()

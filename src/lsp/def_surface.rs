@@ -367,6 +367,8 @@ fn write_routine_identity(h: &mut Hasher, id: &RoutineNodeId) {
     write_opt_str(h, &id.enclosing_member_lc);
     write_u64(h, id.params_count as u64);
     write_u64(h, id.sig_fp);
+    // ENG-20: moving a trigger into or out of a request page changes its id.
+    write_tag(h, u8::from(id.request_page));
 }
 
 fn write_object_ref(h: &mut Hasher, r: &ObjectRef) {
@@ -506,6 +508,45 @@ codeunit 50100 "Sales Helper"
 }
 "#;
         assert_eq!(fp(src), fp(src));
+    }
+
+    /// ENG-20 (Fable): moving `OnAfterGetRecord` from a dataitem NAMED `RequestPage` into
+    /// the request page changes the routine's id (its `request_page` flag) and nothing a
+    /// member-text identity reads, so the surface must move: else the updater takes the
+    /// body-only path and keeps the old node id.
+    #[test]
+    fn a_trigger_moved_into_the_request_page_changes_fingerprint() {
+        let in_dataitem = r#"
+report 50963 "RP Collide"
+{
+    dataset
+    {
+        dataitem(RequestPage; Integer)
+        {
+            trigger OnAfterGetRecord() begin end;
+        }
+    }
+    requestpage
+    {
+    }
+}
+"#;
+        let in_request_page = r#"
+report 50963 "RP Collide"
+{
+    dataset
+    {
+        dataitem(RequestPage; Integer)
+        {
+        }
+    }
+    requestpage
+    {
+        trigger OnAfterGetRecord() begin end;
+    }
+}
+"#;
+        assert_ne!(fp(in_dataitem), fp(in_request_page));
     }
 
     // ── item 1: the SET of ObjectNodeIds (add/remove/re-id) ──────────────
