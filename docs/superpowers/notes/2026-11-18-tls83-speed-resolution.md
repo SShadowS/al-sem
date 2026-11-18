@@ -22,22 +22,25 @@ lies between runs (host state) or between passes, using the cdo-speed results al
 | measure | median | 90th pct | max |
 |---|---:|---:|---:|
 | pass 1 vs pass 2 of one run (abs. log difference) | 4.3 % | 14.6 % | — |
-| run vs run, same pair (abs. log difference of readings) | 3.1 % | 9.6 % | 12.3 % |
+| run vs run, same pair (abs. log difference of readings) | 3.1 % | 9.6 % | 11.6 % (12.3 % as a plain ratio) |
 
 - **Per pass:** sd(log ratio) over all 150 passes is 0.060. The two-pass reading then has
   sd 0.042, a 95 % band of **±8 %**. That agrees with TLS-79's figure for ONE reading.
 - **Two readings of one pair:** their difference has sd 0.042 × √2 = 0.059, a 95 % band of
-  **±12 %**. The 19 repeated pairs fit this: median 3.1 %, max 12.3 %.
-- **ENG-94** (x0.871 against x0.989, 12.7 %) is a ~2σ draw of that difference. No host-state
-  effect beyond the pass noise is needed to explain it.
+  **±12 %**. The 19 repeated pairs fit this: median 3.1 %, max 12.3 %; their rms gap is
+  0.052, a little under the predicted 0.059, so ±12 % is on the safe side. A run's two
+  passes are uncorrelated (r = -0.07), so this is pass noise, not host state.
+- **ENG-94** (x0.871 against x0.989, 12.7 %) is a ~2.2σ draw of that difference. This is an
+  inference from the other runs: the lane's x0.871 run is not among the 75 files (only the
+  landing's x0.989 is). No host-state effect beyond the pass noise is needed to explain it.
 - **The base build's CPU** moves much more between runs (70-103 s) than the ratio does. Host
   state shifts both sides of a run together, and the within-run ratio cancels most of it.
-- **The run's first build costs more.** Median CPU by position: pass 1 first 81.8 s, pass 1
-  second 79.8 s, pass 2 first 78.3 s, pass 2 second 77.1 s. The same side costs 3.6 % more as
-  pass 1's first build (base) than in pass 2. Head, built first in pass 2, costs 0.6 % less.
-  So the extra cost belongs to the run's first build, not to "first in a pass". TLS-79's order
-  flip does not cancel it. It falls on base, which pulls pass 1's ratio down.
-  The mean reading over all 75 runs is x0.996, so the net bias is small next to the noise.
+- **Pass 1 costs more on both sides.** Median CPU by position: pass 1 first 81.8 s, pass 1
+  second 79.8 s, pass 2 first 78.3 s, pass 2 second 77.1 s. By means, base costs 4.0 % ± 1.0
+  more in pass 1 than in pass 2, and head 2.2 % ± 0.9 (review r1, Fable; the first draft read
+  the medians alone as 3.6 % on base only). A cost common to pass 1 cancels in the ratio. The
+  part specific to the run's very first build is about 1.7 % ± 1.4, not significant. The mean
+  reading over all 75 runs is x0.996, a bias of -0.44 % ± 0.47: no measurable bias.
 
 ## What follows
 
@@ -86,10 +89,19 @@ is 1:
 | warm-tests | 6 | 0.050 | 0.0001 |
 | warm-prove / -query / -impact / -explain | 5-6 | 0.15-0.27 | 0.0002-0.0004 |
 
-- **Instructions resolve 25 to 900 times better than CPU seconds**, unpinned and
-  multi-threaded alike. The build's ratio stayed within 0.992-1.000 where its CPU ratio spread
-  with sd 0.084. One two-pass build reading in instructions resolves about ±0.4 % (95 %),
-  against ±8 % in CPU seconds.
+- **Instructions resolve far better than CPU seconds**, unpinned and multi-threaded alike.
+  - For the rows the gate judges, the factor is about 27 for the build and about 390 for
+    warm-tests.
+  - Up to about 900 for sub-second calls. Their CPU spread is mostly the 10 ms clock tick, so
+    that figure flatters.
+- **The build's six instruction ratios** were 0.99862, 0.99988, 0.99969, 0.99216, 1.00013 and
+  1.00011.
+  - Typically within ±0.1 %. One base build read 372.98e9 against about 370.05e9, a 0.8 %
+    jump: one in 12 builds.
+  - Without it, sd is about 0.0006; with n = 6, sd is known only to a factor of about 2.
+  - If the jump recurs, it is real extra work in the build, not counting noise.
+  - Either way it is far inside the x1.02 advisory limit, against ±8 % for a two-pass CPU
+    reading.
 - **What instructions do not see:** memory stalls, cache misses and lost parallelism. Those
   change time without changing the count of instructions retired. A change that only makes
   memory access worse would read x1.000. CPU and wall time stay needed for that, but with
@@ -106,8 +118,10 @@ is 1:
 - Without perf the run says `instructions: NOT counted` and judges CPU and wall, as before.
 - (a) more passes and (b) an untimed first build were dropped: instructions resolve what they
   were meant to.
-- A CHANGELOG quotes an instruction ratio, which resolves. It quotes a CPU ratio only when
-  two independent runs agree within ±12 %, and then their four-pass value with ±6 %.
+- A CHANGELOG quotes an instruction ratio, which resolves, as work ("instructions x0.93"),
+  never as "N % faster": instructions miss stalls and parallelism, so a change that trades
+  instructions for stalls reads as a gain. It quotes a CPU ratio only when two independent
+  runs agree within ±12 %, and then their four-pass value with ±6 %.
 
 ## Open: when should the instruction limit fail? (for the owner, with data)
 

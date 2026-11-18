@@ -2157,6 +2157,9 @@ for line in sys.stdin:
         factor = 1.0
         if os.path.basename(sys.argv[0]) == "alsem-head":
             factor = float(os.environ.get("STUB_INSTR_HEAD", "1"))
+            # STUB_INSTR_ZERO_CALL=N: head's N-th call (per server) retires none.
+            if str(calls) == os.environ.get("STUB_INSTR_ZERO_CALL"):
+                factor = 0.0
         counter = os.path.join(os.environ["STUB_DIR"], f"instr.{os.getpid()}")
         done = int(open(counter).read()) if os.path.exists(counter) else 0
         with open(counter, "w") as f:
@@ -2173,7 +2176,9 @@ if os.path.exists(me):
 /// probe (`... -- true`) reads a count; attached (`-p <pids> -o <file>`), it
 /// writes, on SIGINT, how far the stub servers' published counters
 /// (`$STUB_DIR/instr.<pid>`) moved since it started, as `perf stat -x,` does on
-/// a hybrid CPU (one core type `<not counted>`).
+/// a hybrid CPU (one core type `<not counted>`). STUB_PERF_NONE: every attach
+/// reads `<not counted>` on both. STUB_PERF_VANISH: it deletes itself after the
+/// probe, so starting it for a call fails.
 const SPEED_PERF_STUB: &str = r#"#!/usr/bin/env python3
 import os, signal, sys, time
 a = sys.argv[1:]
@@ -2185,10 +2190,14 @@ def total(pids):
             s += int(open(f).read())
     return s
 def lines(n):
+    if os.environ.get("STUB_PERF_NONE") and "--" not in a:
+        n = "<not counted>"
     return (f"{n},,cpu_core/instructions/u,1,100.00,,\n"
             "<not counted>,,cpu_atom/instructions/u,0,0.00,,\n")
 if "--" in a:
     sys.stderr.write(lines(1000))
+    if os.environ.get("STUB_PERF_VANISH"):
+        os.remove(sys.argv[0])  # gone after the probe: every attach then fails to start
     sys.exit(0)
 out = a[a.index("-o") + 1]
 pids = a[a.index("-p") + 1].split(",")
@@ -2271,7 +2280,12 @@ fn speed_with_stub(
 /// head FAILs (red); the instruction summary dropped from the verdict line ->
 /// no `instructions: build x1.0500` there (red); `instr_probe` treating a perf
 /// that cannot run as counting -> the run without perf breaks instead of
-/// falling back (red). Each restored, green.
+/// falling back (red). Each restored, green. Review r1 (Fable): the OSError
+/// guard in `instr_start` narrowed away -> the vanished perf breaks the run
+/// (red); `instr_stop` returning a 0 count -> `round-total x0.8333` with one
+/// uncounted call (red; the all-calls-uncounted case alone stayed GREEN under
+/// this break, both sides' totals being 0, hence the one-call case). Each
+/// restored, green.
 #[cfg(target_os = "linux")]
 #[test]
 fn speed_reports_instructions_and_their_limit_is_advisory() {
@@ -2350,6 +2364,108 @@ fn speed_reports_instructions_and_their_limit_is_advisory() {
         verdict(&text).contains("(instructions: not counted, CPU and wall only)"),
         "{text}"
     );
+
+    // Review r1 (Fable): perf gone after the probe (starting it for a call
+    // fails): the calls are not counted, and the run still passes.
+    let gone = tempfile::tempdir().unwrap();
+    let gone_perf = gone.path().join("perf");
+    std::fs::write(&gone_perf, SPEED_PERF_STUB).unwrap();
+    std::fs::set_permissions(&gone_perf, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let (code, text) = speed_with_stub(
+        dir.path(),
+        "1.0",
+        &[],
+        &[
+            ("CDO_SPEED_INSTR", "1"),
+            ("CDO_SPEED_PERF", gone_perf.to_str().unwrap()),
+            ("STUB_PERF_VANISH", "1"),
+        ],
+    );
+    assert_eq!(code, Some(0), "counting broke the run: {text}");
+    assert!(
+        verdict(&text).contains("(instructions: no call fully counted; advisory limit x1.02)"),
+        "{text}"
+    );
+
+    // Review r1 (Fable): calls with no instruction counted on either core type
+    // are not counted (a 0 pulled the round total down).
+    let dir = tempfile::tempdir().unwrap();
+    let (code, text) = speed_with_stub(
+        dir.path(),
+        "1.0",
+        &[],
+        &[
+            ("CDO_SPEED_INSTR", "1"),
+            ("CDO_SPEED_PERF", perf),
+            ("STUB_PERF_NONE", "1"),
+        ],
+    );
+    assert_eq!(code, Some(0), "{text}");
+    assert!(
+        verdict(&text).contains("(instructions: no call fully counted; advisory limit x1.02)"),
+        "{text}"
+    );
+
+    // ... and ONE such call among counted ones (head's 9th call on the rounds'
+    // server, a round call) leaves that call and the round total uncounted, not
+    // a total pulled down by a 0.
+    let dir = tempfile::tempdir().unwrap();
+    let (code, text) = speed_with_stub(
+        dir.path(),
+        "1.0",
+        &[],
+        &[
+            ("CDO_SPEED_INSTR", "1"),
+            ("CDO_SPEED_PERF", perf),
+            ("STUB_INSTR_ZERO_CALL", "9"),
+        ],
+    );
+    assert_eq!(code, Some(0), "{text}");
+    let v = verdict(&text);
+    assert!(
+        v.contains("(instructions: build x1.0000; advisory limit x1.02)"),
+        "the round total took a 0: {text}"
+    );
+}
+
+/// ⟨TLS-83⟩ The REAL perf counts the stub servers' calls: one binary twice, so
+/// every ratio is about 1 and no line says "not counted". This pins perf's
+/// actual output format (event names, `-x,` columns, `<not counted>`), which the
+/// stub perf only imitates. Skipped, saying so, where perf cannot count
+/// user-mode instructions (CI, a host whose perf sysctls reset).
+#[cfg(target_os = "linux")]
+#[test]
+fn speed_counts_instructions_with_the_real_perf() {
+    let can = std::process::Command::new("perf")
+        .args(["stat", "-x,", "-e", "instructions:u", "--", "true"])
+        .output()
+        .map(|o| {
+            o.status.success()
+                && String::from_utf8_lossy(&o.stderr).lines().any(|l| {
+                    l.split(',')
+                        .next()
+                        .is_some_and(|n| n.parse::<u64>().is_ok())
+                })
+        })
+        .unwrap_or(false);
+    if !can {
+        eprintln!("skipped: perf cannot count user-mode instructions here");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (code, text) = speed_with_stub(dir.path(), "1.0", &[], &[("CDO_SPEED_INSTR", "1")]);
+    assert_eq!(code, Some(0), "{text}");
+    let v = text
+        .lines()
+        .rfind(|l| l.contains("cdo-speed: PASS"))
+        .unwrap_or_else(|| panic!("{text}"))
+        .to_string();
+    assert!(
+        v.contains("(instructions: build x") && v.contains("round-total x"),
+        "{text}"
+    );
+    assert!(text.contains("instructions: counted per call"), "{text}");
 }
 
 /// TLS-65 and TLS-79: the warm-up is timed twice, on fresh server pairs, the

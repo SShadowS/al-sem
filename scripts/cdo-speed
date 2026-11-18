@@ -71,8 +71,9 @@ about a call (some ratios over its limit, some not), more rounds run, up to
 
 Instructions (TLS-83). Each timed call also counts the user-mode instructions of
 the server and its engine children (`perf stat` attached for the call; both core
-types on a hybrid CPU, unscaled). They resolve 25-900x better than CPU seconds
-(a two-pass build reading: about ±0.4 % against ±8 %, 95 %), but do not see memory
+types on a hybrid CPU, unscaled). They resolve far better than CPU seconds (the
+model build: typically ±0.1 %, one 0.8 % jump in 12 builds, against ±8 % for a
+two-pass CPU reading; measured n = 6), but they count work, not time: they do not see memory
 stalls, cache misses or lost parallelism, so CPU and wall keep judging. Each
 verdict line shows the call's instruction ratio, and the PASS/FAIL line the model
 build's and the round total's. A ratio over INSTR_LIMIT (x1.02) is reported as an
@@ -672,9 +673,10 @@ def descendants(pid):
 
 
 # ⟨TLS-83⟩ Instructions: user-mode instructions retired per call, next to its
-# CPU seconds. On server1 (2026-11-18, one binary against itself, 3 runs) they
-# resolved 25-900x better than CPU seconds: sd(log ratio) 0.0031 for the model
-# build against 0.084, 0.0001-0.0015 for the calls against 0.04-0.27. They do
+# CPU seconds. On server1 (2026-11-18, one binary against itself, 3 runs) the
+# model build's ratio held within about ±0.1 % (one 0.8 % jump in 12 builds;
+# n = 6), against sd(log) 0.084 in CPU seconds: ~27x; judged calls ~40-400x.
+# They do
 # not see memory stalls, cache misses or lost parallelism, so CPU and wall keep
 # judging; the instruction limit is ADVISORY (reported, never failing) until
 # real landings show what it would catch (docs/superpowers/notes/
@@ -816,13 +818,24 @@ class Server:
     def instr_start(self):
         if not INSTR_EVENTS:
             return None
-        pids = ",".join(str(p) for p in [self.p.pid, *descendants(self.p.pid)])
-        fd, out = tempfile.mkstemp(prefix="perf-", suffix=".csv", dir=self.root)
-        os.close(fd)
-        perf = subprocess.Popen([PERF, "stat", "--no-scale", "-x,", *perf_event_args(),
-                                 "-o", out, "-p", pids],
-                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        time.sleep(0.2)  # let it attach before the call starts
+        # Counting must never fail a run (review r1, Fable: a fork that fails
+        # while the gate holds 16-28 GB, or a perf gone since the probe): the
+        # call is then just not counted.
+        try:
+            pids = ",".join(str(p) for p in [self.p.pid, *descendants(self.p.pid)])
+            fd, out = tempfile.mkstemp(prefix="perf-", suffix=".csv", dir=self.root)
+            os.close(fd)
+            perf = subprocess.Popen([PERF, "stat", "--no-scale", "-x,", *perf_event_args(),
+                                     "-o", out, "-p", pids],
+                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except OSError:
+            return None
+        # shortcut: a fixed wait for perf to attach, outside the timed window.
+        # 0.02 s sufficed on a calm host (10x margin); a perf slower than 0.2 s
+        # (a very loaded host) misses the call's start and undercounts it, as
+        # noise, without saying so. Upgrade to perf's `--control` enable/ack if
+        # an UNDER LOAD run ever shows odd instruction ratios.
+        time.sleep(0.2)
         return perf, out
 
     def instr_stop(self, started):
@@ -846,7 +859,9 @@ class Server:
             os.remove(out)
         except OSError:
             pass
-        return total
+        # No instruction at all (every event `<not counted>`) is no count: as a 0
+        # it would pull the round total down (review r1, Fable).
+        return total or None
 
     def sample_hwm(self):
         """Read the VmHWM of the server and every live child. Called after each
@@ -1247,11 +1262,11 @@ def main():
     if INSTR_EVENTS:
         shown = [f"{r['call']} x{r['instr']['ratio']:.4f}"
                  for r in warm_rows + rows if r["call"] in ("build", "round-total") and "instr" in r]
-        instr_summary = (f" (instructions: {', '.join(shown) or 'no call fully counted'}; "
-                         f"advisory limit x{INSTR_LIMIT}"
-                         f"{', ADVISORY: ' + str(len(advisories)) + ' over' if advisories else ''})")
+        instr_text = (f"instructions: {', '.join(shown) or 'no call fully counted'}; "
+                      f"advisory limit x{INSTR_LIMIT}"
+                      f"{', ADVISORY: ' + str(len(advisories)) + ' over' if advisories else ''}")
     else:
-        instr_summary = " (instructions: not counted, CPU and wall only)"
+        instr_text = "instructions: not counted, CPU and wall only"
     for line in advisories:
         log(f"ADVISORY (not failing): {line}")
     elapsed = time.monotonic() - t_start
@@ -1279,9 +1294,10 @@ def main():
     if failed:
         for line in failed:
             log(f"FAIL: {line}")
-        log(f"FAIL{label}{instr_summary}")
+        # After the failures, not in parentheses: it must not read as the reason.
+        log(f"FAIL{label}; {instr_text}")
         return 1
-    log(f"PASS{label}{instr_summary}")
+    log(f"PASS{label} ({instr_text})")
     return 0
 
 
