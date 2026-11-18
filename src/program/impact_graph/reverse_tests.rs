@@ -111,16 +111,12 @@ fn a_dependency_leaf_the_export_prunes_has_a_cone() {
     assert_eq!(cs[0].0.tier, Tier::ThroughDependency);
 }
 
-/// R0-4: an `h:any` caller. The hub is reached once, one hop from the roots,
-/// as an `OnlyOpen` state; its caller once, two hops; the hub is reported
-/// once as the universal hidden channel, for one root or two.
-///
 /// ENG-124: the graph's sorted node index finds every node by its key and nothing else:
 /// each routine node by `routine_node`, the universal hub by `universal_hub`, and a routine
-/// the graph lacks as `None`. Six routines, declared out of name order, plus the hub.
-/// DISCRIMINATION: leaving the index unsorted (node order, not key order) makes binary
-/// search miss a node; an off-by-one in the answer (`p` for `node_ix[p]`) answers the wrong
-/// node.
+/// the graph lacks as `None`, in a world whose node order is not the key order.
+/// DISCRIMINATION: leaving the index unsorted (node order, not key order) makes the hub's
+/// binary search miss ("an edge names h:any"); an off-by-one in the answer (`p` for
+/// `node_ix[p]`) answers the wrong node.
 #[test]
 fn every_node_is_found_by_its_key() {
     let mut w = World::default();
@@ -179,6 +175,10 @@ fn every_node_is_found_by_its_key() {
     assert_eq!(g.routine_node(&absent), None, "a routine the graph lacks");
 }
 
+/// R0-4: an `h:any` caller. The hub is reached once, one hop from the roots,
+/// as an `OnlyOpen` state; its caller once, two hops; the hub is reported
+/// once as the universal hidden channel, for one root or two.
+///
 /// DISCRIMINATION (2026-11-05): deleting the universal hub's seeding in
 /// `walk_multi` (`universal.filter(|_| false)`) fails "the hub once": the
 /// hub and its caller are dropped.
