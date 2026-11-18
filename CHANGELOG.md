@@ -22,8 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   object and no error keeps the info row. `FreshCoverage::files_without_object` now carries those
   two facts per file (`FileWithoutObject`).
 - **How common.** Real CR-only files: 0 of 582 workspace and 10,881 dependency files on CDO, and 0
-  of 814 in DO. So this reports the loss and leaves the grammar fix to the grammar repository,
-  together with whether `alc` accepts such a file at all (no `alc` here to check).
+  of 814 in DO. So this reports the loss here; the grammar fix (end directive lines at `\r` too) is
+  filed upstream as https://github.com/SShadowS/tree-sitter-al/issues/45 (synthetic repro, the
+  scanner lines, a patch idea). Whether `alc` accepts such a file was not checked (no `alc` here).
 - **Test.** `cli_a_json_differential::failed_parse_without_object_is_a_parse_warning` covers a
   CR-only file with the task's repro, an LF file with a syntax error, and a comment-only file.
   Two discrimination proofs, both red, are recorded in its doc.
