@@ -783,6 +783,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - The owner can confirm that no new entry appears in `coredumpctl list` after a debug test
     run.
 
+### Added (ENG-30: built-in option types and Text/Code literals prune `case` and `if` arms)
+
+- **The gap (engine limits L4, L29).** The literal reach prunes an arm a bound parameter value
+  cannot take (r3 E1). It knew only Integer, Option and Enum values. A parameter of a built-in
+  option type (`Verbosity`, `TelemetryScope`, `DataClassification`, `ObjectType`, …) or of Text
+  or Code kept every arm live, so a caller passing `Verbosity::Error` still reached the
+  `Verbosity::Warning` arm.
+- **Built-in option types.** They are now value domains, compared by member name as an enum is
+  (`literal_values::domain_of`, the existing `arg_dispatch::BUILTIN_OPTION_TYPES` list). Two
+  compiler facts make that sound, both read from alc 18.0.41:
+  - a `case` on one takes only `T::M` labels (an integer label is AL0122);
+  - the compiler's own type symbols give every member of all 26 types its own ordinal, so two
+    names never denote one value.
+- **Text and Code.** They are value domains too, for parameters, by rules measured on BC 28.4
+  (Linux sidecar):
+  - **Text** compares exactly: case and spaces count.
+  - **Code** holds a literal trimmed and upper case. A `case` arm and an `in` label are
+    converted the same way. `=` and `<>` compare a label as written: `'ABC' = 'abc'` is false
+    and `'ABC' <> 'abc'` is true. The IR does not tell `in` from `=`, so on Code an `if` label
+    is used only when conversion leaves it unchanged.
+  - Only ASCII literals take part.
+  - A text literal is now a value label (`ValueLabel::Text`), read from its raw text so `''` is
+    one quote. The within-routine flow does not track Text or Code locals.
+- **Tests.** `cli_prove_value_guards`'s `a_builtin_option_parameter_compares_by_member_name` and
+  `text_and_code_parameters_compare_by_the_measured_rules` run `prove` through the CLI;
+  `features::value_label_shapes` covers the label. Five discrimination proofs, all red.
+- **Golden.** `tests/ir-l2-goldens/l2_features.snapshot` moved one line: `ws-d60`'s
+  `UpgradeWithCase` has a `case … of '':` arm, whose label is now `Text("")` (triaged before the
+  regen).
+
 ### Changed (ENG-120: mimalloc's `purge_delay` measured on CDO and DO, kept at 0)
 
 - No code change: `alsem` keeps `purge_delay` 0. A delay of 1 or 10 ms gave no CPU gain near the

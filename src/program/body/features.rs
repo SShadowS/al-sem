@@ -1075,17 +1075,26 @@ pub enum ValueLabel {
     /// `Rec."Document Type"` → `["rec", "document type"]`, `V` → `["v"]`),
     /// and the member, unquoted and folded.
     Qualified { path: Vec<String>, member: String },
+    /// ENG-30: a text literal's content as written, case and spaces kept,
+    /// a doubled `''` read as one quote (`'it''s'` → `it's`).
+    Text(String),
 }
 
 impl ValueLabel {
     /// The label an expression's [`PExpressionInfo`] states: an integer
-    /// literal (signed too) or a qualified enum/option value. `None` for any
-    /// other expression (a variable, a call, a range, `FromInteger`).
+    /// literal (signed too), a qualified enum/option value or a text literal.
+    /// `None` for any other expression (a variable, a call, a range,
+    /// `FromInteger`).
     pub fn of_info(info: &PExpressionInfo) -> Option<ValueLabel> {
         match info.kind.as_str() {
             "integer" | "unary_expression" => {
                 let v: String = info.value.as_deref()?.split_whitespace().collect();
                 v.parse::<i64>().ok().map(ValueLabel::Int)
+            }
+            // From the raw text: `value` has every outer quote trimmed.
+            "string_literal" => {
+                let inner = info.text.trim().strip_prefix('\'')?.strip_suffix('\'')?;
+                Some(ValueLabel::Text(inner.replace("''", "'")))
             }
             "qualified_enum_value" => {
                 let path = split_label_path(info.qualifier.as_deref()?)?;
@@ -1488,6 +1497,21 @@ mod tests {
             ValueLabel::of_info(&info("identifier", Some("X"), None, None)),
             None
         );
+        // ENG-30: a text literal from its raw text, quotes unescaped, case
+        // and spaces kept (`value` would have lost the lone quote of `''''`).
+        let text = |raw: &str| {
+            ValueLabel::of_info(&PExpressionInfo {
+                kind: "string_literal".into(),
+                text: raw.into(),
+                value: Some(raw.trim_matches('\'').into()),
+                qualifier: None,
+                member: None,
+            })
+        };
+        assert_eq!(text("'it''s'"), Some(ValueLabel::Text("it's".into())));
+        assert_eq!(text("''''"), Some(ValueLabel::Text("'".into())));
+        assert_eq!(text("' Ab '"), Some(ValueLabel::Text(" Ab ".into())));
+        assert_eq!(text("''"), Some(ValueLabel::Text(String::new())));
     }
 
     /// The module doc's INTERNAL-ONLY list must name exactly the fields this file

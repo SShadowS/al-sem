@@ -108,7 +108,11 @@ pub(super) fn flow_domain(type_text: &str) -> Option<FDom> {
     if let Some(i) = values::interface_name(type_text) {
         return Some(FDom::Iface(i));
     }
-    values::domain_of(type_text).map(FDom::Val)
+    // Not Text or Code (ENG-30): the flow evaluates `=` itself, and on Code
+    // `=` compares a literal as written while `case` converts it.
+    values::domain_of(type_text)
+        .filter(|d| !matches!(d, Domain::Text | Domain::Code))
+        .map(FDom::Val)
 }
 
 /// `v` in domain `d` after AL's conversion, when it is modelled. An

@@ -434,6 +434,115 @@ codeunit 50271 "EH Platform"
             A.Insert();
     end;
 }
+table 50272 "EH Txt Upper" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
+table 50273 "EH Txt Lower" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
+table 50274 "EH Txt Else" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
+table 50275 "EH Code AB" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
+table 50276 "EH Code XY" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
+table 50277 "EH Code Else" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
+table 50278 "EH Code If Lower" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
+table 50279 "EH Code If Upper" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
+table 50280 "EH Code If Other" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
+table 50281 "EH Txt Wide" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
+table 50282 "EH Txt Wide Else" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
+table 50284 "EH Code Ne Lower" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
+// ENG-30: Text and Code literals as value domains, by the rules measured on
+// BC 28.4 (`literal_values::Domain`).
+codeunit 50283 "EH Text"
+{
+    procedure TxtUpper()
+    begin
+        OnText('A');
+    end;
+
+    procedure TxtLower()
+    begin
+        OnText('a');
+    end;
+
+    local procedure OnText(T: Text)
+    var
+        U: Record "EH Txt Upper";
+        L: Record "EH Txt Lower";
+        E: Record "EH Txt Else";
+    begin
+        case T of
+            'A':
+                U.Insert();
+            'a':
+                L.Insert();
+            else
+                E.Insert();
+        end;
+    end;
+
+    // A Code parameter holds ' ab ' as 'AB'; a case arm converts too.
+    procedure CodeSpaced()
+    begin
+        OnCode(' ab ');
+    end;
+
+    local procedure OnCode(C: Code[20])
+    var
+        AB: Record "EH Code AB";
+        XY: Record "EH Code XY";
+        E: Record "EH Code Else";
+    begin
+        case C of
+            'ab':
+                AB.Insert();
+            'XY':
+                XY.Insert();
+            else
+                E.Insert();
+        end;
+    end;
+
+    // `=` compares a lowercase literal as written: never equal to a Code
+    // value, but the IR cannot tell `=` from `in`, so it is left unresolved.
+    procedure CodeIf()
+    begin
+        OnCodeIf('ab');
+    end;
+
+    local procedure OnCodeIf(C: Code[20])
+    var
+        Lo: Record "EH Code If Lower";
+        Up: Record "EH Code If Upper";
+        Ot: Record "EH Code If Other";
+        Ne: Record "EH Code Ne Lower";
+    begin
+        if C = 'ab' then
+            Lo.Insert();
+        if C = 'AB' then
+            Up.Insert();
+        if C = 'XY' then
+            Ot.Insert();
+        // Always true for a Code value ('AB' <> 'ab' as written); converting
+        // the label would wrongly make it never true.
+        if C <> 'ab' then
+            Ne.Insert();
+    end;
+
+    // Non-ASCII text: the comparison rules are not measured, so unresolved.
+    procedure TxtWide()
+    begin
+        OnWide('Æ');
+    end;
+
+    local procedure OnWide(T: Text[10])
+    var
+        W: Record "EH Txt Wide";
+        E: Record "EH Txt Wide Else";
+    begin
+        case T of
+            'Æ':
+                W.Insert();
+            else
+                E.Insert();
+        end;
+    end;
+}
 codeunit 50265 "EH Events"
 {
     var
@@ -715,6 +824,37 @@ fn a_builtin_option_parameter_compares_by_member_name() {
         ("NamedWarn", "EH Verb Warn", "yes"),
         ("ScopeAll", "EH Scope Pub", "no"),
         ("ScopeAll", "EH Scope All", "yes"),
+    ]);
+}
+
+/// ⟨ENG-30⟩ Text and Code literals as value domains, by the rules measured on
+/// BC 28.4: Text compares exactly (case counts); a Code parameter holds a
+/// literal trimmed and upper case, and a `case` arm converts the same way; an
+/// `if C = '<lower>'` label is unresolved (`=` compares it as written, `in`
+/// converts, and the IR does not tell them apart), while `'AB'` and `'XY'`
+/// decide; non-ASCII text stays unresolved.
+/// Breaks (2026-11-18, all red): `domain_of` without Text/Code (every pruned
+/// case reads `yes`); `to_code` without the upper-casing (`CodeIf` drops
+/// `EH Code If Upper`, a wrong `no`); `in_domain_test` as `in_domain`
+/// (`CodeIf` drops `EH Code Ne Lower`, a wrong `no`).
+#[test]
+fn text_and_code_parameters_compare_by_the_measured_rules() {
+    let ws = Ws::new();
+    ws.expect(&[
+        ("TxtUpper", "EH Txt Upper", "yes"),
+        ("TxtUpper", "EH Txt Lower", "no"),
+        ("TxtUpper", "EH Txt Else", "no"),
+        ("TxtLower", "EH Txt Upper", "no"),
+        ("TxtLower", "EH Txt Lower", "yes"),
+        ("CodeSpaced", "EH Code AB", "yes"),
+        ("CodeSpaced", "EH Code XY", "no"),
+        ("CodeSpaced", "EH Code Else", "no"),
+        ("CodeIf", "EH Code If Lower", "yes"),
+        ("CodeIf", "EH Code If Upper", "yes"),
+        ("CodeIf", "EH Code If Other", "no"),
+        ("CodeIf", "EH Code Ne Lower", "yes"),
+        ("TxtWide", "EH Txt Wide", "yes"),
+        ("TxtWide", "EH Txt Wide Else", "yes"),
     ]);
 }
 

@@ -61,6 +61,16 @@ pub(super) enum Val {
     /// type keyword folded (`record`, `recordref`, `codeunit`, …; see
     /// [`variant_test`]). The within-routine flow's values only.
     Type(Arc<str>),
+    /// ENG-30: a Text value, or a Code value (already trimmed and upper
+    /// case: [`to_code`]). ASCII only ([`in_domain`]).
+    Text(Arc<str>),
+}
+
+/// A text as a Code value holds it: leading and trailing spaces dropped,
+/// letters upper case (measured on BC 28.4: a `Code[20]` parameter given
+/// `' ab '` matches the arm `'AB'`). ASCII input only.
+fn to_code(s: &str) -> String {
+    s.trim_matches(' ').to_ascii_uppercase()
 }
 
 /// The static types whose `Variant` type tests [`variant_test`] decides.
@@ -214,8 +224,18 @@ pub(super) type VSet = Arc<[Val]>;
 pub(super) enum Domain {
     /// Integer, BigInteger or Option: ordinals.
     Int,
-    /// Enum of this name (folded, last namespace segment).
+    /// Enum of this name (folded, last namespace segment), or a built-in
+    /// option type of this name.
     Enum(Arc<str>),
+    /// ENG-30: Text (`Text`, `Text[n]`): values compared exactly, case and
+    /// spaces counting (BC 28.4: `'ABC'` takes the `'ABC'` arm, not `'abc'`;
+    /// `'ab '` is not `'ab'`).
+    Text,
+    /// ENG-30: Code (`Code[n]`): a value is held as [`to_code`] gives it. A
+    /// `case` arm or `in` label is converted the same way; an `=` / `<>`
+    /// label is compared as written (BC 28.4: `'ABC'` takes the arm `'abc'`
+    /// and is `in ['abc']`, but `'ABC' = 'abc'` is false).
+    Code,
 }
 
 /// A value requirement in one routine's frame: (parameter index, whether the
@@ -309,7 +329,27 @@ pub(super) fn domain_of(type_text: &str) -> Option<Domain> {
     if let Some(name) = builtin_option(t) {
         return Some(Domain::Enum(name));
     }
+    if let Some(d) = text_domain(t) {
+        return Some(d);
+    }
     enum_name(t).map(Domain::Enum)
+}
+
+/// `Text`, `Text[n]` or `Code[n]` (`Code` too): [`Domain::Text`] or
+/// [`Domain::Code`]. Not `TextBuilder`, `TextConst` or `Code Coverage`.
+fn text_domain(t: &str) -> Option<Domain> {
+    let folded = t.fold_identifier();
+    let len_or_end = |rest: &str| {
+        let rest = rest.trim_start();
+        rest.is_empty() || rest.starts_with('[')
+    };
+    if let Some(rest) = folded.strip_prefix("text") {
+        return len_or_end(rest).then_some(Domain::Text);
+    }
+    folded
+        .strip_prefix("code")
+        .filter(|r| len_or_end(r))
+        .map(|_| Domain::Code)
 }
 
 /// A built-in option type (`Verbosity`, `TelemetryScope`, `ObjectType`, …;
@@ -333,7 +373,22 @@ pub(super) fn in_domain(v: &Val, d: &Domain) -> Option<Val> {
         (Val::Enum(e, m), Domain::Enum(want)) if e == want => {
             Some(Val::Enum(Arc::clone(e), Arc::clone(m)))
         }
+        // ASCII only: non-ASCII case and comparison rules are not measured
+        // (BC on Linux compares with ICU).
+        (Val::Text(s), Domain::Text) if s.is_ascii() => Some(Val::Text(Arc::clone(s))),
+        (Val::Text(s), Domain::Code) if s.is_ascii() => Some(Val::Text(Arc::from(to_code(s)))),
         _ => None,
+    }
+}
+
+/// An `=` / `<>` label (or one the IR cannot tell from an `in` label) in
+/// domain `d`: on Code, only a label [`to_code`] leaves as it is, where the
+/// written and the converted comparison agree (module doc of [`Domain::Code`]);
+/// otherwise [`in_domain`].
+fn in_domain_test(v: &Val, d: &Domain) -> Option<Val> {
+    match (v, d) {
+        (Val::Text(s), Domain::Code) if to_code(s) != **s => None,
+        _ => in_domain(v, d),
     }
 }
 
@@ -354,7 +409,8 @@ fn typed_label(type_text: &str, member: &str) -> Option<Val> {
 
 /// What a label means in routine `r`'s scope (`tables`: the model's tables
 /// by id, a real table preferred over an extension stub):
-/// - an integer literal is itself;
+/// - an integer literal is itself, a text literal its text ([`Val::Text`],
+///   converted per domain by [`in_domain`]);
 /// - `Enum::"X"::M` is enum `X`'s value `M`;
 /// - `V::M`, `V` an Option- or Enum-typed parameter, local or global of `r`,
 ///   is `M`'s ordinal (blank members counted) or the enum value; with no
@@ -371,6 +427,7 @@ pub(super) fn resolve_label(
 ) -> Option<Val> {
     let (path, member) = match l {
         ValueLabel::Int(n) => return Some(Val::Int(*n)),
+        ValueLabel::Text(s) => return Some(Val::Text(Arc::from(s.as_str()))),
         ValueLabel::Qualified { path, member } => (path, member.as_str()),
     };
     if path.len() >= 2 && path[0] == "enum" {
@@ -415,10 +472,11 @@ fn label_set(
     labels: &[Option<ValueLabel>],
     d: &Domain,
     resolve: &dyn Fn(&ValueLabel) -> Option<Val>,
+    convert: fn(&Val, &Domain) -> Option<Val>,
 ) -> Option<Vec<Val>> {
     let mut out = labels
         .iter()
-        .map(|l| l.as_ref().and_then(resolve).and_then(|v| in_domain(&v, d)))
+        .map(|l| l.as_ref().and_then(resolve).and_then(|v| convert(&v, d)))
         .collect::<Option<Vec<Val>>>()?;
     out.sort();
     out.dedup();
@@ -534,7 +592,7 @@ fn if_reqs(node: &PCFNNode, cx: &ValueWalk) -> (Vec<ValueReq>, Vec<ValueReq>) {
     let Some((p, d)) = cx.usable.get(name) else {
         return (Vec::new(), Vec::new());
     };
-    match label_set(labels, d, cx.resolve) {
+    match label_set(labels, d, cx.resolve, in_domain_test) {
         Some(set) => {
             let set: VSet = set.into();
             (
@@ -598,7 +656,7 @@ fn walk(
             .iter()
             .filter(|b| !b.is_case_else())
             .map(|b| match b.value_fact() {
-                Some(ValueFact::Arm(labels)) => label_set(labels, d, cx.resolve),
+                Some(ValueFact::Arm(labels)) => label_set(labels, d, cx.resolve, in_domain),
                 _ => None,
             })
             .collect();
