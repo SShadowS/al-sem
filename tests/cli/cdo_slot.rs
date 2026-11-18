@@ -988,23 +988,48 @@ fn cdo_slot_timed_waits_for_builds_and_refuses_beside_one() {
     assert!(ran.exists());
     std::fs::remove_file(&ran).unwrap();
 
-    // The build ends during the wait: the timed run starts then.
-    let killer = std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(1500));
-        b.kill().unwrap();
-        b.wait().unwrap();
-    });
-    let (code, text) = s.run(
-        "A",
-        &["run", "lane", "timing", "--timed", "--", "touch", touch],
-        &[names, ("CDO_SLOT_TIMED_WAIT_S", "30")],
+    // The build ends during the wait: the timed run starts then. The build is
+    // ended only once the run says it waits for it (a fixed delay raced the
+    // run's first scan on a loaded machine: the build was gone before it).
+    let mut timed = Reap(
+        std::process::Command::new("bash")
+            .args([
+                SLOT, "run", "lane", "timing", "--timed", "--", "touch", touch,
+            ])
+            .env("CDO_SLOT_DIR", s.dir())
+            .env("CDO_SLOT_MEM_MIN_GB", "0")
+            .env("CDO_SLOT_POLL_S", "1")
+            .env("CDO_SLOT_TIMED_WAIT_S", "60")
+            .env("CDO_SLOT_BUILD_NAMES", &fake_name)
+            .env("CDO_SLOT_BUILD_SCRIPTS", "tls89-none")
+            .env("CLAUDE_CODE_SESSION_ID", "A")
+            .env_remove("CLAUDE_PID")
+            .env_remove("CDO_SLOT_TOKEN")
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap(),
     );
-    killer.join().unwrap();
+    let want = format!("waiting for build processes to end: PID {bpid}");
+    let mut text = String::new();
+    {
+        use std::io::BufRead;
+        let lines = std::io::BufReader::new(timed.0.stdout.take().unwrap()).lines();
+        let mut ended = false;
+        for line in lines {
+            let line = line.unwrap();
+            if line.contains(&want) && !ended {
+                b.kill().unwrap();
+                b.wait().unwrap();
+                ended = true;
+            }
+            text.push_str(&line);
+            text.push('\n');
+        }
+    }
+    let code = timed.0.wait().unwrap().code();
     assert_eq!(code, Some(0), "{text}");
-    assert!(
-        text.contains(&format!("waiting for build processes to end: PID {bpid}")),
-        "{text}"
-    );
+    assert!(text.contains(&want), "{text}");
     assert!(ran.exists());
 
     // Run under a build process (its ancestor): not waited for; inside, the
