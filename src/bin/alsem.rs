@@ -43,6 +43,10 @@ static GLOBAL: al_sem::release_alloc::ReleasingMiMalloc = al_sem::release_alloc:
 /// 5,320 MB to ~4,945 MB. The cost is real and paid knowingly: immediate purging
 /// gives back roughly 7–9 % of the wall-clock win.
 ///
+/// Re-measured 2026-11-18 (ENG-120, 1 and 10 ms against 0, on CDO and DO): no CPU gain near 3 %
+/// and up to +12 % peak RSS on a small model; kept at 0. Numbers:
+/// `docs/superpowers/notes/2026-11-18-eng120-purge-delay.md`. Do not re-run without a new reason.
+///
 /// `libmimalloc-sys` exports no constant for it (`mi_option_eager_commit_delay`,
 /// its lower neighbour, is behind that crate's `v2` feature and so is unusable
 /// here), so it is derived from `mi_option_use_numa_nodes`, which IS exported

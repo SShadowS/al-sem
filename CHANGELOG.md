@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (ENG-120: mimalloc's `purge_delay` measured on CDO and DO, kept at 0)
+
+- No code change: `alsem` keeps `purge_delay` 0. A delay of 1 or 10 ms gave no CPU gain near the
+  3 % bar on DO (user-mode instructions flat within 0.03 %; task-clock unchanged within noise;
+  only kernel work fell, under 5 % of the total) and raised peak RSS up to +12 % on the small
+  workspace-only model (DO prove at 10 ms, over the 1.10 limit). CDO's earlier -5 % CPU reading
+  sat inside the host's noise. The numbers are in
+  `docs/superpowers/notes/2026-11-18-eng120-purge-delay.md`, and `src/bin/alsem.rs`'s comment
+  points there so nobody re-runs it without a new reason. The pre-sizing half went to ENG-121.
+
 ### Added (TLS-91: perf in the kraken image, for instruction counts)
 
 - **What.** `.kraken/Dockerfile` installs `linux-perf` (perf 7.0) in its own late layer, as gdb's,
