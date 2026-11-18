@@ -231,10 +231,11 @@ temp file, then renames it into place.
 2. **VERIFY:** in one gate phase for good.
 3. **The small-package threshold:** one fixed constant, measured once.
 
-## Needs from ENG-113
+## Builds on ENG-113 (after it lands)
 
-- **An accessor to the text entry's header blake3** at the parse seam: the IR header binds to it.
-- **`SourceText` and the package-cache dir seam**, as its design note states.
+- **ENG-110 adds the accessor to the text entry's header blake3** itself, at the parse seam (the
+  IR header binds to it). ENG-113's measured head stays untouched (orchestrator, 2026-11-18).
+- **It uses `SourceText` and the package-cache dir seam** as ENG-113's design note states.
 
 ## Review history
 
