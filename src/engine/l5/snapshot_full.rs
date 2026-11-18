@@ -644,7 +644,7 @@ fn reach(x: &R3a5CrossAppBase) -> HashSet<String> {
 fn reachable_gaps(
     gaps: &[SnapshotAnalysisGap],
     x: &R3a5CrossAppBase,
-    routine_to_stable: &HashMap<String, String>,
+    routine_to_stable: &crate::engine::l4::capability_cone::RoutineIdMap,
 ) -> Vec<SnapshotAnalysisGap> {
     // No dependency gap (CDO: none, P5): nothing to test against the reach.
     if gaps.iter().all(|g| g.role == Role::Primary.as_str()) {

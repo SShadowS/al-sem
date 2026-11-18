@@ -865,8 +865,8 @@ pub(crate) fn selector_failure_result(
         .iter()
         .filter(|c| {
             stable
-                .get(&c.routine_id)
-                .is_some_and(|s| primary.contains(s.as_str()))
+                .get(c.routine_id.as_str())
+                .is_some_and(|s| primary.contains(&**s))
         })
         .count();
     FingerprintQueryResult {

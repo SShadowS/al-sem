@@ -42,7 +42,7 @@ use serde::Serialize;
 
 use crate::engine::ids::{object_id_app_guid, to_stable_object_id};
 use crate::engine::l4::capability_cone::{
-    CapabilityExtra, CapabilityFact, CoverageRecord, R3a3SourceBase, ValueSource,
+    CapabilityExtra, CapabilityFact, CoverageRecord, R3a3SourceBase, RoutineIdMap, ValueSource,
     build_r3a3_source_only_base,
 };
 use crate::engine::l4::combined_graph::TypedEdge;
@@ -384,7 +384,7 @@ const _: () = assert!(std::mem::size_of::<SnapshotCapabilityFact>() == 16);
 pub struct SnapTables {
     /// Stable ids of the emitted routines, interned (one per distinct
     /// emission-group subject).
-    pub(crate) subjects: Vec<String>,
+    pub(crate) subjects: Vec<SharedStr>,
     /// Inherited reps, projected once per distinct raw rep, and one row per
     /// direct fact.
     pub(crate) reps: Vec<SnapRep>,
@@ -455,8 +455,10 @@ impl SnapTables {
     pub(crate) fn heap_bytes(&self) -> u64 {
         let s = |s: &String| s.len() as u64;
         let o = |s: &Option<String>| s.as_ref().map_or(0, |s| s.len() as u64);
-        let subjects: u64 = self.subjects.iter().map(s).sum::<u64>()
-            + (self.subjects.capacity() * std::mem::size_of::<String>()) as u64;
+        // The subjects are shared texts (ENG-129): counted here as if owned, the census's
+        // per-holder view.
+        let subjects: u64 = self.subjects.iter().map(|t| t.len() as u64).sum::<u64>()
+            + (self.subjects.capacity() * std::mem::size_of::<SharedStr>()) as u64;
         let reps: u64 = self
             .reps
             .iter()
@@ -670,7 +672,7 @@ impl From<SnapshotFactFields> for SnapshotCapabilityFact {
         };
         SnapshotCapabilityFact {
             tables: std::sync::Arc::new(SnapTables {
-                subjects: vec![f.subject],
+                subjects: vec![f.subject.into()],
                 reps: vec![rep],
                 hops: Vec::new(),
             }),
@@ -1455,10 +1457,25 @@ fn compute_edge_id(e: &EdgeIdentity) -> String {
 // ===========================================================================
 
 /// Internal RoutineId → StableRoutineId; pass through if unmapped.
-pub(crate) fn stable_routine_id(internal: &str, map: &HashMap<String, String>) -> String {
+pub(crate) fn stable_routine_id(internal: &str, map: &RoutineIdMap) -> String {
+    map.get(internal)
+        .map_or_else(|| internal.to_string(), |s| s.to_string())
+}
+
+/// ENG-129: the internal id as the map's own key text (a handle, no copy); an unmapped id
+/// as a new text.
+pub(crate) fn internal_routine_shared(internal: &str, map: &RoutineIdMap) -> SharedStr {
+    map.get_key_value(internal)
+        .map(|(k, _)| k.clone())
+        .unwrap_or_else(|| SharedStr::from(internal))
+}
+
+/// ENG-129: [`stable_routine_id`] as the map's own shared text (a handle, no copy); an
+/// unmapped id passes through as a new text.
+pub(crate) fn stable_routine_shared(internal: &str, map: &RoutineIdMap) -> SharedStr {
     map.get(internal)
         .cloned()
-        .unwrap_or_else(|| internal.to_string())
+        .unwrap_or_else(|| SharedStr::from(internal))
 }
 
 /// Internal TableId (`appGuid/table/N`) → StableTableId (`appGuid:Table:N`).
@@ -1821,7 +1838,7 @@ struct TreeInputs<'a> {
     direct_full: &'a dyn crate::engine::l4::capability_cone::DirectFacts,
     /// Per-routine cone coverage: every routine that has a cone entry.
     coverage: &'a HashMap<String, CoverageRecord>,
-    routine_to_stable: &'a HashMap<String, String>,
+    routine_to_stable: &'a RoutineIdMap,
     /// D6: the internal ids of the body-less dependency rows. A resolved call
     /// whose every target is one is `unfetched-dependency`. `None` on the cut.
     bodyless_dependency: Option<&'a std::collections::HashSet<&'a str>>,
@@ -1843,7 +1860,7 @@ struct Ledger<'a> {
     typed_edges: &'a [TypedEdge],
     calls: &'a [CallEdge],
     dependency_calls: &'a [CallEdge],
-    routine_to_stable: &'a HashMap<String, String>,
+    routine_to_stable: &'a RoutineIdMap,
     bodyless_dependency: Option<&'a std::collections::HashSet<&'a str>>,
 }
 
@@ -2038,7 +2055,7 @@ impl TreeBase {
 /// [`TreeInputs`]), owned by the caller.
 struct TreeInputParts<'m> {
     bodyless: std::collections::HashSet<&'m str>,
-    routine_to_stable: HashMap<String, String>,
+    routine_to_stable: RoutineIdMap,
 }
 
 impl<'m> TreeInputParts<'m> {
@@ -2537,7 +2554,8 @@ fn capability_fact_sort_fields(f: &SnapshotCapabilityFact) -> [&str; 8] {
 /// One emitted routine's rows before projection: its direct facts, then its
 /// raw inherited facts, under its snapshot subject.
 struct RowGroup<'a> {
-    subject: String,
+    /// The routine map's own stable text (ENG-129).
+    subject: SharedStr,
     direct: &'a [CapabilityFact],
     raw: Option<InheritedSlice<'a>>,
 }
@@ -2563,21 +2581,22 @@ struct RawMemo<'r> {
 #[derive(Default)]
 struct SnapTablesBuilder<'r> {
     tables: SnapTables,
-    subject_ix: HashMap<String, u32>,
+    subject_ix: HashMap<SharedStr, u32>,
     memos: Vec<RawMemo<'r>>,
 }
 
 impl<'r> SnapTablesBuilder<'r> {
-    fn subject(&mut self, s: &str) -> u32 {
-        if let Some(&ix) = self.subject_ix.get(s) {
+    /// ENG-129: `s`'s index, storing the given text (a caller's shared handle) when new.
+    fn subject_shared(&mut self, s: SharedStr) -> u32 {
+        if let Some(&ix) = self.subject_ix.get(&*s) {
             return ix;
         }
         let ix = crate::engine::l4::inherited_facts::table_ix(
             self.tables.subjects.len(),
             "snapshot subject",
         );
-        self.tables.subjects.push(s.to_string());
-        self.subject_ix.insert(s.to_string(), ix);
+        self.tables.subjects.push(s.clone());
+        self.subject_ix.insert(s, ix);
         ix
     }
 
@@ -2615,7 +2634,7 @@ impl<'r> SnapTablesBuilder<'r> {
         group: u32,
         subject: u32,
         g: &RowGroup<'r>,
-        routine_to_stable: &HashMap<String, String>,
+        routine_to_stable: &RoutineIdMap,
     ) -> (u32, Option<usize>) {
         let direct_base =
             crate::engine::l4::inherited_facts::table_ix(self.tables.reps.len(), "snapshot rep");
@@ -2639,7 +2658,7 @@ impl<'r> SnapTablesBuilder<'r> {
         subject: u32,
         stable: &str,
         raw: &InheritedSlice<'r>,
-        routine_to_stable: &HashMap<String, String>,
+        routine_to_stable: &RoutineIdMap,
     ) -> usize {
         let mi = self.memo_of(raw.tables());
         for r in raw.refs() {
@@ -2726,7 +2745,7 @@ fn derive_capability_facts<'r>(
         .iter()
         .filter(|r| seen.insert(r.id.as_str()) && inp.coverage.contains_key(&r.id))
         .map(|r| RowGroup {
-            subject: stable_routine_id(&r.id, inp.routine_to_stable),
+            subject: stable_routine_shared(&r.id, inp.routine_to_stable),
             direct: inp.direct_full.facts(&r.id).unwrap_or(&[]),
             raw: take_raw(&r.id),
         })
@@ -2736,12 +2755,7 @@ fn derive_capability_facts<'r>(
     let mut order: Vec<usize> = (0..groups.len()).collect();
     if split {
         // Stable: equal subjects keep their emission order.
-        order.sort_by(|&x, &y| {
-            cmp_joined(
-                &[groups[x].subject.as_str(), ""],
-                &[groups[y].subject.as_str(), ""],
-            )
-        });
+        order.sort_by(|&x, &y| cmp_joined(&[&*groups[x].subject, ""], &[&*groups[y].subject, ""]));
     }
     // The subject runs in output order, as row counts (split mode only).
     let mut runs: Vec<usize> = Vec::new();
@@ -2750,10 +2764,10 @@ fn derive_capability_facts<'r>(
         for &gi in &order {
             let g = &groups[gi];
             match runs.last_mut() {
-                Some(n) if prev == Some(g.subject.as_str()) => *n += g.len(),
+                Some(n) if prev == Some(&*g.subject) => *n += g.len(),
                 _ => runs.push(g.len()),
             }
-            prev = Some(g.subject.as_str());
+            prev = Some(&*g.subject);
         }
     }
     let total: usize = groups.iter().map(RowGroup::len).sum();
@@ -2766,7 +2780,7 @@ fn derive_capability_facts<'r>(
         .iter()
         .map(|&gi| {
             let g = &groups[gi];
-            let subject = b.subject(&g.subject);
+            let subject = b.subject_shared(g.subject.clone());
             let group = u32::try_from(gi).expect("emission groups fit u32");
             b.project_group(group, subject, g, inp.routine_to_stable)
         })
@@ -3170,7 +3184,7 @@ fn derive_pd_arena(
         let cone_routine = cone.routine_of(old_ix);
         let routine = stable_of
             .entry(cone_routine.as_ptr() as usize)
-            .or_insert_with(|| RoutineId::from(stable_routine_id(cone_routine, map).as_str()))
+            .or_insert_with(|| stable_routine_shared(cone_routine, map))
             .clone();
         let owner = stable_routine_id(&producer.owner, map);
         let producer_fact = *direct_fact_ix
@@ -3340,7 +3354,7 @@ fn derive_operation_evidence<'r>(
     // A collided id's op is its LAST OWNING row's (the later row overwrites),
     // with that row's `order`, shifted into the id's one frame table.
     for (ri, r) in base.ws_routines.iter().enumerate() {
-        let stable = SharedStr::from(stable_routine_id(&r.id, base.routine_to_stable));
+        let stable = stable_routine_shared(&r.id, base.routine_to_stable);
         // Re-stamp op/callsite order (L3 assembly does not).
         let order = compute_routine_order(r);
 
@@ -3446,7 +3460,7 @@ fn derive_callsite_evidence<'r>(
 
     let mut out: Vec<SnapshotCallsiteEvidence> = Vec::new();
     for (ri, r) in base.ws_routines.iter().enumerate() {
-        let stable = SharedStr::from(stable_routine_id(&r.id, base.routine_to_stable));
+        let stable = stable_routine_shared(&r.id, base.routine_to_stable);
         let order = compute_routine_order(r);
         for cs in &order.call_sites {
             if !referenced.contains(&cs.id) {
@@ -3737,7 +3751,7 @@ fn classify_resolution(
     from: &str,
     callee_display: &str,
     dispatch_kind: &str,
-    map: &HashMap<String, String>,
+    map: &RoutineIdMap,
     edges_by_callsite: &HashMap<String, Vec<String>>,
     result_consumed: Option<bool>,
     under_asserterror: bool,
@@ -4071,14 +4085,14 @@ fn derive_root_classifications(
 
     let mut out: Vec<SnapshotRootClassificationSlot> = Vec::new();
     for c in &resolved.root_classifications {
-        let Some(stable) = map.get(&c.routine_id) else {
+        let Some(stable) = map.get(c.routine_id.as_str()) else {
             continue;
         };
         let source_anchor = routine_by_id
             .get(c.routine_id.as_str())
             .map(|r| anchor_from_panchor(&r.source_anchor, &r.id));
         out.push(SnapshotRootClassificationSlot {
-            routine_id: stable.clone(),
+            routine_id: stable.to_string(),
             kinds: c.kinds.clone(),
             externally_reachable: c.externally_reachable,
             source: c.source.clone(),
@@ -4569,9 +4583,9 @@ mod step6_tree_tests {
             trigger_kind: None,
             fires: None,
         }];
-        let routine_to_stable: HashMap<String, String> = [("R", "R#"), ("A", "A#")]
+        let routine_to_stable: RoutineIdMap = [("R", "R#"), ("A", "A#")]
             .into_iter()
-            .map(|(a, b)| (a.to_string(), b.to_string()))
+            .map(|(a, b)| (SharedStr::from(a), SharedStr::from(b)))
             .collect();
         let event_graph = EventGraph::default();
         let (direct_full, coverage): (HashMap<String, Vec<CapabilityFact>>, _) =
@@ -4947,7 +4961,7 @@ mod step0_sort_tests {
         ws_routines: Vec<ModelRoutine>,
         direct_full: HashMap<String, Vec<CapabilityFact>>,
         raw: HashMap<String, Vec<CapabilityFact>>,
-        routine_to_stable: HashMap<String, String>,
+        routine_to_stable: RoutineIdMap,
         coverage: HashMap<String, CoverageRecord>,
     }
 
@@ -4959,7 +4973,7 @@ mod step0_sort_tests {
                 raw: HashMap::new(),
                 routine_to_stable: map
                     .iter()
-                    .map(|(a, b)| (a.to_string(), b.to_string()))
+                    .map(|(a, b)| (SharedStr::from(*a), SharedStr::from(*b)))
                     .collect(),
                 coverage: ids
                     .iter()
@@ -5352,7 +5366,7 @@ mod cone_memory_step2_tests {
         ws_routines: Vec<ModelRoutine>,
         direct_full: HashMap<String, Vec<CapabilityFact>>,
         coverage: HashMap<String, CoverageRecord>,
-        routine_to_stable: HashMap<String, String>,
+        routine_to_stable: RoutineIdMap,
         event_graph: EventGraph,
     }
 
@@ -5367,7 +5381,12 @@ mod cone_memory_step2_tests {
                     .collect(),
                 routine_to_stable: ids
                     .iter()
-                    .map(|id| (id.to_string(), format!("{}#", id.to_lowercase())))
+                    .map(|id| {
+                        (
+                            SharedStr::from(*id),
+                            SharedStr::from(format!("{}#", id.to_lowercase()).as_str()),
+                        )
+                    })
                     .collect(),
                 event_graph: EventGraph::default(),
             }

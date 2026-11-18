@@ -31,6 +31,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   plain `/usr/bin/perf` that does not look for the running kernel's tools (server1 runs 7.2).
 - Until the next tentacle rebuild perf stays the live install; kraken picks this up then.
 
+### Changed (ENG-129: the snapshot base holds each routine's ids once, 12.8 MiB less resident memory on CDO)
+
+- **What changed** (`src/engine/l4/capability_cone.rs`, `src/engine/l5/snapshot*.rs`; no
+  output change). `routine_to_stable_of` returns a `RoutineIdMap` (`HashMap<SharedStr,
+  SharedStr>`): each routine's internal and stable id allocated once. Every holder clones those
+  handles instead of copying the text: the view's copy of the map, `FactBase::group_of`'s keys
+  and `GroupInfo::id` (the internal id), `SnapTables::subjects`, the evidence rows' `routine`,
+  the whole derivation's subjects and the pd solution's routine ids (the stable id).
+  `snapshot::internal_routine_shared` / `stable_routine_shared` hand them out (an unmapped id
+  passes through as a new text, as `stable_routine_id` did); `stable_routine_id` still answers
+  an owned `String` for its other callers. The model's own `ModelRoutine` strings are untouched.
+- **The bar** (ENG-127's census, CDO): the internal id stored three times (`routine_to_stable`'s
+  keys, `group_of`'s keys, the groups, 2.64 MiB each) and the stable id twice (the map's values,
+  the subjects, 3.73 MiB each), plus the evidence's per-routine texts: about 9-12 MiB.
+- **Measured** (`tools/census-probe resident`, the same probe both sides, base `05beebbc`): live
+  after the first ask 3,444.2 -> 3,431.4 MiB (-12.8), the same after every later ask. By part,
+  the view's `routine_to_stable` 9.43 -> 2.06 MiB (now its table only) and `facts` 42.98 ->
+  38.17. With shared texts the drop census charges a text to the part dropped last, so the map
+  no longer shows them; ENG-127's per-field `census_lines` de-duplicate allocations within one
+  line only, so they still print each holder's full bytes.
+- **CDO checks** (base `05beebbc`): `cdo-before-after` moved no finding, fingerprint or call-graph
+  number; the session refresh equals a cold build at all 12 steps in both modes; `cdo-gate --only
+  harness,l4,output` passed (211/0, 25/0, 22/0). `cdo-speed` passed twice: round total x0.931 and
+  x1.047, `prove` x0.946 and x1.001; the build read x1.033 and x1.027 with the host's load at
+  14.6-54.9 (not quoted as a ratio); the servers' summed peak memory fell in both (6,681 -> 6,500
+  and 6,725 -> 6,517 MiB).
+- **Pinned by** the snapshot goldens (byte-compared; with the subjects given the internal-id
+  handle the `cli` goldens fail) and `snapshot::view::tests::the_base_holds_the_routine_maps_own_texts`
+  (every group's id and subject and every `group_of` key is `ptr_eq` to the map's own text; with
+  `stable_routine_shared` answering a copy it fails "the subject is a copy").
+
 ### Fixed (ENG-115: a recursive member's inherited fact takes its nearest witness, as every other routine's does)
 
 - **What changed** (`src/engine/l4/capability_cone.rs`). A routine in a recursive SCC gets its
