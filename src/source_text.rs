@@ -506,6 +506,12 @@ mod tests {
             "same map, other range"
         );
         assert_eq!(first, second, "equal text");
+        let other_map = SourceText::mapped(&map_of(b"abab"), 0..2).unwrap();
+        assert!(
+            !SourceText::ptr_eq(&first, &other_map),
+            "same range, another map"
+        );
+        assert_eq!(first, other_map, "equal text on another map");
         let owned = SourceText::from("ab");
         assert!(SourceText::ptr_eq(&owned, &owned.clone()));
         assert!(!SourceText::ptr_eq(&owned, &SourceText::from("ab")));

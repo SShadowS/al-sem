@@ -1,7 +1,10 @@
-# ENG-113: memory-mapped dependency source text (design note, 2026-11-18, rev. 2)
+# ENG-113: memory-mapped dependency source text (design note, 2026-11-18, rev. 3)
 
 Rev. 2 folds Fable's design review (11 findings; the temp-file collision, the mandatory hash, the
-pointer fast paths and the empty case were the ones that changed the design).
+pointer fast paths and the empty case were the ones that changed the design). Rev. 3 folds sol's code
+review and states the cache as built (format 2): the hash binds the package and covers the index,
+entries are mapped only when private, the index is capped and must tile the text, and publication
+keeps the first valid entry.
 
 ## Goal and bar
 
@@ -37,11 +40,16 @@ RSS; the CHANGELOG says so.
 
 1. **One cache file per package** (`<blake3>.s<SCHEME>.f<FORMAT>.bin`, the extraction scheme and the
    cache layout both in the name), written once and renamed into place: a small header (magic, format,
-   scheme, index length, text length, blake3 of the text), the index `[(path, offset, len)]` as JSON,
-   then every file's decoded UTF-8 text concatenated. One file and one rename: a reader never pairs an
-   index with another write's text.
-2. **Unique temp files**: `tempfile::NamedTempFile::new_in(cache_dir)` + `persist` (the `tempfile`
-   crate is already a dependency). The writer never maps its own temp file; it maps the renamed file.
+   scheme, index length, text length, blake3 of the package's content hash then the index then the
+   text), the index `[(path, offset, len)]` as JSON, then every file's decoded UTF-8 text
+   concatenated. One file and one rename: a reader never pairs an index with another write's text.
+2. **Unique temp files**, owner-only and never chmod'ed. Unix: `openat(dirfd, O_CREAT | O_EXCL, 0600)`
+   with a pid/counter/time name (a taken name is skipped), published by `linkat` (no-clobber) or
+   `renameat` (replace) on the same directory handle. Windows: `tempfile::NamedTempFile::new_in` and
+   `persist_noclobber` / `persist`. A missing entry is published without replacing (an entry another
+   process published first is kept, and both engines map the one file); only an entry the reader
+   REFUSED is replaced. On Unix the decision is taken under a per-package lock (design 4). The writer
+   never maps its own temp file; it maps the published file.
 3. **`SourceText`** (new, `src/source_text.rs`): `Clone`, `Deref<Target = str>`, `Debug`/`Display` as
    the text, `From<&str>`, `From<String>`, `From<Arc<str>>`; two forms, `Owned(Arc<str>)` and
    `Mapped { map: Arc<Mmap>, range }`, and a `ptr_eq` that is true for the same `Arc<str>` or the same
@@ -50,11 +58,27 @@ RSS; the CHANGELOG says so.
    holders that clone it. The identity probes that read the text's `Arc` (the census, `dep_cache`'s
    `same_allocations` and its S10.1 guard `the_lsp_keeps_no_dependency_text`) move to the new type;
    the S10.1 guard gets a probe for the mapped form and a discrimination proof.
-4. **One path for package text when the cache is writable.** On a hit: map the file, check the header,
-   then in this order the text's length, its blake3 (MANDATORY: nothing fsyncs, so after a crash a
-   renamed file can have the right length and zero content; length and UTF-8 checks both pass on
-   that), then UTF-8, then each index entry's range and character boundaries; only then hand out
-   `Mapped` slices. On a miss: extract, write the file, then take the hit path. If the write fails,
+4. **One path for package text when the cache is writable.** The cache directory is opened first; on
+   Unix it must belong to this user with no group/other write bit (checked on the open handle), or the
+   cache is not used at all (no read, no write: the source stays `Owned`). On a hit: open the entry
+   without following a symlink or blocking (Unix: `openat` on the directory handle with
+   `O_NOFOLLOW | O_NONBLOCK`; Windows: not following a reparse point, sharing read and delete only, so
+   an entry open for writing is refused and nobody can open it for writing while the map lives:
+   memmap2 keeps a duplicate of the handle, the same file object, for the map's life), refuse anything but a regular file (checked on the opened
+   file; on Unix also one another user could write), check the header, then in this order: the index
+   length (at most 64 MiB), the file's length (exactly header + index + text), the blake3 (MANDATORY:
+   nothing fsyncs, so after a crash a renamed file can have the right length and zero content; length
+   and UTF-8 checks both pass on that; binding the package hash refuses another package's valid entry
+   copied under this name), the index (its entries must tile the text exactly, in order, each bounded
+   by the text before any sum), then each range's UTF-8 (which also checks its character boundaries);
+   only then hand out `Mapped` slices. On Unix every publish (a miss or a refused entry) holds a
+   per-package lock (`flock` on `<hash>.lock`, which must be a private regular file) and reads the
+   entry once more under it: an entry another process published meanwhile is used; a missing one is
+   published without replacing; a refused one is replaced. Without the lock a refused entry is not
+   replaced and the source stays `Owned`. Windows has no file lock: a rename over an entry another
+   engine maps fails, so a replacement cannot remove an entry in use. On Unix the temp file (`openat`, `O_EXCL`, 0600), the lock and the publish
+   (`renameat` to replace, `linkat` for no-clobber) all go through the checked directory handle. The
+   writer refuses to publish an index over the cap. On a miss: extract, write the file, then take the hit path. If the write fails,
    try the hit path once more (another process may have just written it; on Windows a rename over a
    mapped file fails) before falling back to `Owned`, logged at warn and counted as heap.
 5. **No source** (a symbol-only package): a valid entry with zero files and empty text, a hit as
@@ -71,12 +95,13 @@ RSS; the CHANGELOG says so.
   (restated in a SAFETY comment where the map is made), and the temp files are unique (design 2).
   The map now lives as long as a resident engine, so an OUTSIDE in-place copy of the cache directory
   (`cp` over it, `rsync --inplace`, a backup restore, seeding a container's cache) or a cache on a
-  network file system can still do it, and so can another local user when the cache falls back to the
-  shared temp dir. That cannot be prevented cheaply; the blast radius is the process holding the map:
+  network file system can still do it. Another local user cannot: on Unix an entry or directory they
+  could write is never mapped (design 4); on Windows the cache is under this user's profile. The rest cannot be prevented cheaply; the blast radius is the process holding the map:
   an engine child (which the front end restarts), a one-shot CLI run, or the LSP server during a build.
   Unlinking (a cleaner, a temp-dir cleaner) is safe on Linux.
-- **A hash, length, UTF-8 or index mismatch**: refuse the entry, re-extract, rewrite. Tested with a
-  hand-written broken file in a temporary cache directory.
+- **A hash, length, UTF-8 or index mismatch, or a symlink, FIFO or other non-regular entry**: refuse
+  the entry, re-extract, replace it. Tested with hand-written broken files in a temporary cache
+  directory.
 - **An old cache** (`.s7.json`): the new name does not match, so it misses cleanly. Tested. The old
   files stay on disk (no pruner exists): the cache roughly doubles per package once; the CHANGELOG
   says so.
