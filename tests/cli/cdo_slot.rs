@@ -18,6 +18,20 @@ impl Slot {
     fn dir(&self) -> std::path::PathBuf {
         self.0.path().join("slot")
     }
+    /// Wait (up to 20 s) until a test pause hook's `paused.<pid>` file appears.
+    fn wait_paused(&self) {
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while std::fs::read_dir(self.dir()).map_or(true, |d| {
+            !d.flatten()
+                .any(|e| e.file_name().to_string_lossy().starts_with("paused."))
+        }) {
+            assert!(
+                std::time::Instant::now() < until,
+                "no pause hook was reached"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
     /// `cdo-slot <args>` as Claude session `session` with `env` added
     /// (`CLAUDE_PID` only when `env` gives one); (exit, stdout + stderr).
     fn run(&self, session: &str, args: &[&str], env: &[(&str, &str)]) -> (Option<i32>, String) {
@@ -407,6 +421,10 @@ fn cdo_slot_guard_refuses_other_sessions_while_held() {
         "python3 scripts/cdo-before-after --census master~1 master",
         // TLS-89: cargo naming the CDO workspace is a CDO run, timed or not.
         "cargo run --release --bin aldump -- --stats /work/src/cdo-baseline/Cloud",
+        // Review r3 (sol): a python option's separate value is no script name;
+        // agentflow from PATH.
+        "python3 -X dev scripts/cdo-before-after master",
+        "agentflow run --name ci -- true",
     ];
     // TLS-89: the guarded commands that are NOT only builds or tests (gates, CDO
     // runs): refused under an untimed hold too. Every other `guarded` entry is a
@@ -423,6 +441,7 @@ fn cdo_slot_guard_refuses_other_sessions_while_held() {
         "scripts/cdo-before-after master",
         "python3 scripts/cdo-before-after --census master~1 master",
         "cargo run --release --bin aldump -- --stats /work/src/cdo-baseline/Cloud",
+        "python3 -X dev scripts/cdo-before-after master",
     ];
     assert!(not_builds.iter().all(|c| guarded.contains(c)));
     let free = [
@@ -934,7 +953,9 @@ fn cdo_slot_reads_the_status_once_per_check() {
             .spawn()
             .unwrap(),
     );
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    // Remove it only once the reader is inside the window (review r3, sol: a
+    // fixed delay let the removal beat the read, and the old code passed too).
+    s.wait_paused();
     std::fs::remove_file(s.dir().join("status")).unwrap();
     let mut second = second;
     let out = std::mem::replace(
@@ -952,6 +973,73 @@ fn cdo_slot_reads_the_status_once_per_check() {
     held.0.wait().unwrap();
     assert_eq!(out.status.code(), Some(1), "{text}");
     assert!(!text.contains("already yours"), "{text}");
+}
+
+/// ⟨TLS-89 review r3, sol⟩ A timed mark is read once per check too: a status
+/// reader that validated a mark keeps its fields even when the timing ends and
+/// removes the mark before they are printed. Here a `run --timed` shares a hold
+/// held by hand; a status reader pauses right after validating its mark (the
+/// CDO_SLOT_TEST_PAUSE_TIMED_S hook) while the run ends.
+///
+/// Mutation (2026-11-18): `tfield` reading the mark FILE again instead of the
+/// loaded copy -> "timed by  since  ()" (red); restored, green.
+#[test]
+fn cdo_slot_reads_a_timed_mark_once_per_check() {
+    let s = Slot::new();
+    assert_eq!(s.run("A", &["acquire", "lane", "by hand"], &[]).0, Some(0));
+    let mut timing = Reap(
+        std::process::Command::new("bash")
+            .args([SLOT, "run", "lane", "brief", "--timed", "--", "sleep", "3"])
+            .env("CDO_SLOT_DIR", s.dir())
+            .env("CDO_SLOT_MEM_MIN_GB", "0")
+            .env("CDO_SLOT_POLL_S", "1")
+            .env("CDO_SLOT_BUILD_NAMES", "tls89-none")
+            .env("CDO_SLOT_BUILD_SCRIPTS", "tls89-none")
+            .env("CLAUDE_CODE_SESSION_ID", "A")
+            .env_remove("CLAUDE_PID")
+            .env_remove("CDO_SLOT_TOKEN")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while !s.run("B", &["status"], &[]).1.contains("(brief)") {
+        assert!(
+            std::time::Instant::now() < until,
+            "the timing never marked the hold"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    let reader = std::process::Command::new("bash")
+        .args([SLOT, "status"])
+        .env("CDO_SLOT_DIR", s.dir())
+        .env("CDO_SLOT_MEM_MIN_GB", "0")
+        .env("CDO_SLOT_TEST_PAUSE_TIMED_S", "4")
+        .env("CLAUDE_CODE_SESSION_ID", "B")
+        .env_remove("CLAUDE_PID")
+        .env_remove("CDO_SLOT_TOKEN")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    s.wait_paused();
+    // The timing ends inside the reader's window and removes its mark.
+    assert_eq!(timing.0.wait().unwrap().code(), Some(0));
+    assert!(
+        !std::fs::read_dir(s.dir())
+            .unwrap()
+            .flatten()
+            .any(|e| e.file_name().to_string_lossy().starts_with("timed.")),
+        "precondition: the mark is gone before the reader prints it"
+    );
+    let out = reader.wait_with_output().unwrap();
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(
+        text.contains("timed by lane since") && text.contains("(brief)"),
+        "the reader mixed a removed mark into empty fields: {text}"
+    );
+    assert_eq!(s.run("A", &["release"], &[]).0, Some(0));
 }
 
 /// ⟨TLS-89⟩ A timed hold never starts beside a build: `run --timed` marks the
@@ -1378,6 +1466,117 @@ fn cdo_slot_timed_waits_for_builds_and_refuses_beside_one() {
         "the timing started beside a python driver: {text}"
     );
     assert!(text.contains(&format!("PID {pbpid} ({py_name})")), "{text}");
+
+    // Review r3 (sol): the hold it took is replaced in the window right after
+    // the acquire (the test hook pauses there) -> refused at once, nothing
+    // marked in the other hold, and that hold is left alone. Break: `took`
+    // read back from the status after the pause (the replacement), so the
+    // refusal ends the replacement.
+    let mut b5 = build();
+    let mut t6 = Reap(
+        std::process::Command::new("sleep")
+            .arg("600")
+            .spawn()
+            .unwrap(),
+    );
+    let mut window = Reap(
+        std::process::Command::new("bash")
+            .args([SLOT, "acquire", "lane", "window", "--bind"])
+            .arg(t6.id().to_string())
+            .arg("--timed")
+            .env("CDO_SLOT_DIR", s.dir())
+            .env("CDO_SLOT_MEM_MIN_GB", "0")
+            .env("CDO_SLOT_POLL_S", "1")
+            .env("CDO_SLOT_TIMED_WAIT_S", "2")
+            .env("CDO_SLOT_TEST_PAUSE_ACQUIRED_S", "2")
+            .env("CDO_SLOT_BUILD_NAMES", &fake_name)
+            .env("CDO_SLOT_BUILD_SCRIPTS", "tls89-none")
+            .env("CLAUDE_CODE_SESSION_ID", "E")
+            .env_remove("CLAUDE_PID")
+            .env_remove("CDO_SLOT_TOKEN")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    std::thread::sleep(std::time::Duration::from_millis(800));
+    assert_eq!(s.run("E", &["release"], &[]).0, Some(0));
+    let (code, text) = s.run("B", &["acquire", "other", "replacement"], &[]);
+    assert_eq!(code, Some(0), "{text}");
+    assert_eq!(window.wait().unwrap().code(), Some(6));
+    let (code, text) = s.run("D", &["status"], &[]);
+    assert_eq!(code, Some(1), "{text}");
+    assert!(
+        text.contains("held by other (replacement)") && !text.contains("timed by"),
+        "the refused timing touched another session's hold: {text}"
+    );
+    assert_eq!(s.run("B", &["release"], &[]).0, Some(0));
+    b5.kill().unwrap();
+    b5.wait().unwrap();
+    t6.kill().unwrap();
+    t6.wait().unwrap();
+
+    // Review r3 (sol): a second timed acquire bound to the SAME process that is
+    // refused keeps the first one's mark. Break: the refusal clears the mark
+    // whoever wrote it.
+    assert_eq!(s.run("A", &["acquire", "lane", "by hand"], &[]).0, Some(0));
+    let mut t7 = Reap(
+        std::process::Command::new("sleep")
+            .arg("600")
+            .spawn()
+            .unwrap(),
+    );
+    let t7pid = t7.id().to_string();
+    let (code, text) = s.run(
+        "A",
+        &["acquire", "lane", "kept", "--bind", &t7pid, "--timed"],
+        &[names],
+    );
+    assert_eq!(code, Some(4), "{text}");
+    let mut b6 = build();
+    let (code, text) = s.run(
+        "A",
+        &["acquire", "lane", "retry", "--bind", &t7pid, "--timed"],
+        &[names, ("CDO_SLOT_TIMED_WAIT_S", "1")],
+    );
+    assert_eq!(code, Some(6), "{text}");
+    b6.kill().unwrap();
+    b6.wait().unwrap();
+    let (_, text) = s.run("B", &["status"], &[]);
+    assert!(
+        text.contains("timed by lane since") && text.contains("(kept)"),
+        "a refused retry took the first timing's mark: {text}"
+    );
+    t7.kill().unwrap();
+    t7.wait().unwrap();
+    assert_eq!(s.run("A", &["release"], &[]).0, Some(0));
+
+    // Review r3 (sol): the wait never sleeps past its deadline. A build still
+    // running at 1 s refuses, even with a 15 s poll and the build ending at
+    // 3 s. Break: sleeping a whole poll (the build is gone at 15 s: a start).
+    let mut b7 = Reap(
+        std::process::Command::new(&fake)
+            .args(["-c", "sleep 3; true"])
+            .spawn()
+            .unwrap(),
+    );
+    let started = std::time::Instant::now();
+    let (code, text) = s.run(
+        "A",
+        &["run", "lane", "deadline", "--timed", "--", "true"],
+        &[
+            names,
+            ("CDO_SLOT_TIMED_WAIT_S", "1"),
+            ("CDO_SLOT_POLL_S", "15"),
+        ],
+    );
+    b7.wait().unwrap();
+    assert_eq!(code, Some(6), "started after its deadline: {text}");
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(10),
+        "slept past the deadline: {:?}",
+        started.elapsed()
+    );
 
     // Review r1 (sol): a reason with a CR (which text-mode readers break into a
     // second line, where `timed by` lives) is refused.

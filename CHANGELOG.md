@@ -452,6 +452,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   TLS-92's task gate, where cdo-speed runs back to back on one slot and its timed hold failed.
   `cdo_slot::cdo_slot_reads_the_status_once_per_check` pins it with a test-only pause
   (`CDO_SLOT_TEST_PAUSE_S`) between those two reads.
+- **Review round 3 (sol), all fixed:**
+  - **A refusal killed the next holder.** A refused timed acquire ended the holder it read
+    back from the status after taking the slot. If the slot changed hands in between, that was
+    someone else's hold. The holder now hands its own pid to the taker (`try_take` sets
+    `taken_holder`), and only that hold is ended. A timing whose taken hold is gone before it
+    starts refuses, and marks nothing in another hold.
+  - **A retry erased a running timing's cover.** A second timed acquire bound to the same
+    process, refused, took back the first one's mark. A mark this process already has in the
+    hold is now kept and never taken back by that call.
+  - **The wait could overrun its deadline.** It now never sleeps past CDO_SLOT_TIMED_WAIT_S.
+    Before, with a long poll, a build that ended after the deadline let the timing start.
+  - **The guard missed two commands.** `python3 -X dev scripts/cdo-before-after`: the value of
+    `-X`/`-W` was taken for the script. And `agentflow run` from PATH.
+  - **A timed mark is read once per check too.** A status reader no longer prints
+    `timed by  since  ()` when the timing ends between its fields.
+  - The tests reach the race windows through pause hooks that write a `paused.<pid>` file, and
+    wait for it (the status test had a fixed delay that could miss the window). Six
+    discrimination proofs, all red.
 - **The limit.** The hook sees a command only when it starts. A command it allowed before the
   hold became timed, and that starts a build later (`sleep 60; cargo build`), is not stopped,
   and neither is a build started outside any hooked session.

@@ -172,7 +172,7 @@ state() {
     # A test hook: a pause, between `session` and `bound`, in which a test removes
     # the status as a holder whose bound process ended does (the race
     # `load_status` closes: read field by field, `bound` would then come back "").
-    [[ -z "${CDO_SLOT_TEST_PAUSE_S:-}" ]] || sleep "$CDO_SLOT_TEST_PAUSE_S"
+    [[ -z "${CDO_SLOT_TEST_PAUSE_S:-}" ]] || { : >"$dir/paused.$$"; sleep "$CDO_SLOT_TEST_PAUSE_S"; }
     bound=$(field bound)
     if [[ -n "$me_token" && "$token" == "$me_token" ]] \
         || [[ -n "$me_session" && "$session" == "$me_session" && -z "$bound" ]]; then
@@ -209,18 +209,27 @@ describe() {
 # in is the current one (holder_pid), so a mark left by a killed run or an old
 # hold says nothing. One mark per process (review r1, Fable): a second timing in
 # a shared hold keeps its own cover when the first one ends.
-tmark=""
-tfield() { { sed -n "s/^$1=//p" "$tmark" 2>/dev/null || true; } | head -n 1; }
-# timed_valid: some mark counts; sets tmark to the oldest such.
+tmark="" tsnap=""
+# tload: read $tmark once; tfield reads that copy, so a mark removed between
+# two fields never mixes into empty ones (as the status: review r3, sol).
+tload() { tsnap=$(cat "$tmark" 2>/dev/null || true); }
+tfield() { { sed -n "s/^$1=//p" <<<"$tsnap" || true; } | head -n 1; }
+# timed_valid: some mark counts; sets tmark (and its copy) to the oldest such.
 timed_valid() {
     local m
     [[ -n "$holder_pid" ]] || return 1
     for m in "$dir"/timed.*; do
         [[ -e "$m" && "$m" != *.tmp ]] || continue
         tmark=$m
-        [[ "$(tfield holder_pid)" == "$holder_pid" ]] && alive "$(tfield pid)" "$(tfield start)" && return 0
+        tload
+        if [[ "$(tfield holder_pid)" == "$holder_pid" ]] && alive "$(tfield pid)" "$(tfield start)"; then
+            # Test hook: the window in which the mark's process may end.
+            # A `paused.<pid>` file tells the test the window is open.
+            [[ -z "${CDO_SLOT_TEST_PAUSE_TIMED_S:-}" ]] || { : >"$dir/paused.$$"; sleep "$CDO_SLOT_TEST_PAUSE_TIMED_S"; }
+            return 0
+        fi
     done
-    tmark=""
+    tmark="" tsnap=""
     return 1
 }
 timed_describe() { echo "timed by $(tfield owner) since $(tfield since) ($(tfield reason))"; }
@@ -337,12 +346,26 @@ foreign_builds() {
 timed_start() {
     state
     [[ -n "$holder_pid" && ("$st" == mine || "$st" == held) ]] || die "--timed: no hold to mark"
-    with_meta write_timed_locked "$1" "$2" "$3" || die "--timed: cannot write the mark in $dir"
-    local start=$SECONDS last=-60 b list
+    # <expect>: the holder this call's acquire took. Another holder by now means
+    # that hold ended before the timing began: mark nothing in someone else's
+    # hold (review r3, sol).
+    if [[ -n "${4:-}" && "$holder_pid" != "$4" ]]; then
+        echo "cdo-slot: --timed refused: the hold it took ended before the timing began" >&2
+        return 6
+    fi
+    # A mark this process already has in this hold (a retry bound to the same
+    # process) is kept as it is and never taken back by this call (review r3).
+    local had=0
+    tmark="$dir/timed.$3"
+    tload
+    [[ -e "$tmark" && "$(tfield holder_pid)" == "$holder_pid" ]] && alive "$(tfield pid)" "$(tfield start)" && had=1
+    ((had)) || with_meta write_timed_locked "$1" "$2" "$3" || die "--timed: cannot write the mark in $dir"
+    local start=$SECONDS last=-60 b list left
     while b=$(foreign_builds "$3") && [[ -n "$b" ]]; do
         list=$(awk '{ printf "%sPID %s (%s)", (NR > 1 ? ", " : ""), $1, $2 }' <<<"$b")
-        if ((SECONDS - start >= timed_wait)); then
-            with_meta clear_timed_locked "$3"
+        left=$((timed_wait - (SECONDS - start)))
+        if ((left <= 0)); then
+            ((had)) || with_meta clear_timed_locked "$3"
             echo "cdo-slot: --timed refused: build processes still running after ${timed_wait} s: $list" >&2
             return 6
         fi
@@ -350,14 +373,16 @@ timed_start() {
             echo "cdo-slot: timed: waiting for build processes to end: $list"
             last=$SECONDS
         fi
-        sleep "$poll"
+        # Never past the deadline: a build still there at it refuses (review r3).
+        sleep "$((left < poll ? left : poll))"
     done
     # The hold may have ended (released, or taken over) while it waited (review
     # r1, sol): start only while this mark still counts for the current holder.
     state
     tmark="$dir/timed.$3"
+    tload
     if [[ ! -e "$tmark" || -z "$holder_pid" || "$(tfield holder_pid)" != "$holder_pid" ]]; then
-        with_meta clear_timed_locked "$3"
+        ((had)) || with_meta clear_timed_locked "$3"
         echo "cdo-slot: --timed refused: the hold ended while it waited for builds" >&2
         return 6
     fi
@@ -435,10 +460,13 @@ end_holder() {
     is_holder "$1" && kill -9 "$1" 2>/dev/null || true
 }
 
-# try_take <owner> <reason> <token>: start a holder; 0 when it holds the lock.
+# try_take <owner> <reason> <token>: start a holder; 0 when it holds the lock,
+# with taken_holder set to that holder's pid (its holder_pid).
+taken_holder=""
 try_take() {
     local ready="$dir/ready.$$" n
     rm -f "$ready"
+    taken_holder=""
     CS_OWNER="$1" CS_REASON="$2" CS_TOKEN="$3" CS_BIND="$bind" CS_BIND_START="$bind_start" \
         CS_SESSION="$me_session" CS_PID="$me_pid" \
         CS_LOCK="$lock" CS_META="$meta" CS_STATUS="$status_file" CS_READY="$ready" \
@@ -465,7 +493,9 @@ try_take() {
                 printf "token=%s\n" "$CS_TOKEN"
             } >"$tmp" && mv "$tmp" "$CS_STATUS" || exit 71
             exec 8>&-
-            printf "ok\n" >"$CS_READY"
+            # Our pid, the holder_pid written above: the taker learns exactly
+            # the hold it took (TLS-89 review r3, sol).
+            printf "%s\n" "$$" >"$CS_READY"
             if [ -n "$CS_BIND" ]; then
                 # Bound: the hold ends with the process it was taken for, even
                 # when that process is killed outright (no trap runs).
@@ -483,6 +513,7 @@ try_take() {
     local holder=$!
     for n in $(seq 100); do
         if [[ -s "$ready" ]]; then
+            taken_holder=$(head -n 1 "$ready")
             rm -f "$ready"
             return 0
         fi
@@ -622,16 +653,16 @@ case "$cmd" in
             ((!timed)) || [[ -n "$bind" ]] || { echo "cdo-slot: --timed needs --bind PID (the timing process)" >&2; exit 2; }
             rc=0
             acquire "$owner" "$reason" "$wait" "$timeout" || rc=$?
+            # Test hook: the window between taking the slot and the timed mark.
+            [[ -z "${CDO_SLOT_TEST_PAUSE_ACQUIRED_S:-}" ]] || sleep "$CDO_SLOT_TEST_PAUSE_ACQUIRED_S"
             if ((timed)) && [[ "$rc" == 0 || "$rc" == 4 ]]; then
                 # The holder this acquire took (none when shared): only it may be
                 # ended on a refusal, never one that took the slot meanwhile.
+                # From the holder itself, not a later status read (review r3).
                 took=""
-                if [[ "$rc" == 0 ]]; then
-                    state
-                    took=$holder_pid
-                fi
+                [[ "$rc" != 0 ]] || took=$taken_holder
                 trc=0
-                timed_start "$owner" "$reason" "$bind" || trc=$?
+                timed_start "$owner" "$reason" "$bind" "$took" || trc=$?
                 if ((trc)); then
                     # End it here (`release` would refuse a hold that has only
                     # --bind, no session or token: review r1); end_holder is a
@@ -649,6 +680,8 @@ case "$cmd" in
         bind_start=$(proc_start "$$")
         rc=0
         acquire "$owner" "$reason" 1 "$timeout" || rc=$?
+        took=""
+        [[ "$rc" != 0 ]] || took=$taken_holder
         case "$rc" in
             0) trap 'release >/dev/null' EXIT && trap 'exit 130' INT TERM ;;
             # A shared hold outlives this run: take back only our timed mark.
@@ -657,7 +690,7 @@ case "$cmd" in
         esac
         if ((timed)); then
             rc=0
-            timed_start "$owner" "$reason" "$$" || rc=$?
+            timed_start "$owner" "$reason" "$$" "$took" || rc=$?
             ((rc == 0)) || exit "$rc"
         fi
         rc=0

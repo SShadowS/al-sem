@@ -405,7 +405,9 @@ def guarded_segment(words, line):
             while i < len(words) and words[i].startswith("-"):
                 if words[i] in ("-c", "-m"):
                     return False
-                i += 1
+                # `-X dev`, `-W ignore`: the value is the next word, not the
+                # script (review r3, sol).
+                i += 2 if words[i] in ("-X", "-W") else 1
             return i < len(words) and script_guarded(words[i], words[i + 1:])
         break
     if i >= len(words):
@@ -421,7 +423,8 @@ def guarded_segment(words, line):
         return j < len(rest) and rest[j] in CARGO_SUBS and (BUILDS or names_cdo(line))
     if base in ("aldump", "alsem"):
         return names_cdo(line)
-    if "/" in w:
+    # agentflow is also run from PATH (review r3, sol); the repo scripts by path.
+    if "/" in w or base == "agentflow":
         return script_guarded(w, rest)
     return False
 
