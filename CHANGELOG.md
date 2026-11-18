@@ -112,9 +112,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   2.42-2.46 GB).
 - **Bounded transient** (sol review). A builder reduces the candidate list to its winners
   whenever it grows past twice its reduced size (from 4,096 candidates), after each member's
-  direct facts, each guarded edge and each successor, so it holds about twice the cone's
-  distinct keys plus one successor's entries (a reduce builds a new winners list, so the
-  moment of a reduce holds both), not every
+  direct facts, each guarded edge and each successor, so it holds at most about
+  max(4,095, twice the cone's distinct keys) plus the largest such batch (a reduce builds a
+  new winners list, so the moment of a reduce holds both), not every
   candidate of a high-overlap fan-in (1,000 successors sharing 10,000 keys would have been 10
   million candidates). A reduce keeps the sequential merge's answer. A key keeps the FIRST
   candidate's key allocation, as the map's insert did (the winner only supplies the entry).
