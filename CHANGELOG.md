@@ -35,6 +35,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the hub's search misses; with the search position answered instead of the node, the wrong
   node comes back.
 
+### Fixed (GRM-03: a workspace file whose parse failed is a warning naming the loss)
+
+- **The case.** In a source file with CR-only line ends (classic Mac), a `#if` or a `//` comment
+  never ends, so the file's objects vanish from the model. With a `#if` the file parses to one
+  ERROR node. A header comment is worse: the whole file parses CLEAN as one comment. The cause is
+  in the grammar (tree-sitter-al v5.3.0 `9d155ee7`, re-checked 2026-11-18): its external scanner
+  (`src/scanner.c`) ends directive lines at `\n` only, and the comment token is `//[^\n]*`. The
+  same text with LF or CRLF parses clean.
+- **What users saw.** `analyze` reported it as `DIAG-index` "No object declaration found in
+  <file>" at severity info, which blamed the file for the parser's loss.
+- **Now.** A workspace file with no object becomes a `DIAG-parse` warning, "Could not parse
+  <file>: …, so its code is missing from the analysis", in two cases:
+  - its parse FAILED (`ParseStatus::Recovered`): "a syntax error left no object declaration
+    readable";
+  - it has a line end that is a lone CR (a CR not followed by LF, so mixed line ends count),
+    even with a clean parse: "no object declaration was readable".
+
+  A lone-CR file also gets the likely cause: "`//` comments and preprocessor lines such as `#if`
+  end only at LF, so they swallow the code after them". A file with no object, no error and no
+  lone CR keeps the info row. `FreshCoverage::files_without_object` now carries those two facts
+  per file (`FileWithoutObject`).
+- **How common.** Real CR-only files: 0 of 582 workspace and 10,881 dependency files on CDO, and 0
+  of 814 in DO. So this reports the loss here; the grammar fix (end directive lines and `//`
+  comments at `\r` too) is filed upstream as https://github.com/SShadowS/tree-sitter-al/issues/45
+  (synthetic repros, the scanner lines and the comment token, a patch idea). The compiler accepts
+  such files: alc 18.0.41 compiles the CR-only `#if` repro, a CR-only file with a header comment
+  and one with a comment in a body, and keeps each codeunit and its method (added to the issue).
+- **Test.** `cli_a_json_differential::failed_parse_without_object_is_a_parse_warning` covers a
+  CR-only file with the task's repro, a CR-only file with a header comment (clean parse), a
+  CR-only file whose last line end is CRLF, an LF file with a syntax error, and a comment-only
+  file. Four discrimination proofs, all red, are recorded in its doc.
+
 ### Changed (ENG-120: mimalloc's `purge_delay` measured on CDO and DO, kept at 0)
 
 - No code change: `alsem` keeps `purge_delay` 0. A delay of 1 or 10 ms gave no CPU gain near the
