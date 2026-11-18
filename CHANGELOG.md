@@ -173,6 +173,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fails; the existing site-facts tests stayed green under the first two; a span differing in its
   unit, start or end alone is another id) and `an_edges_debug_keeps_the_obligation_id_field`.
 
+### Changed (ENG-113: dependency source text is mapped from a sealed cache file, 114.8 MiB less heap per engine on CDO, shared across engines)
+
+- **What changed** (`src/snapshot/cache.rs`, `src/source_text.rs`; no output change). The
+  embedded-source cache keeps one file per package, `<blake3>.s7.f1.bin`: a header (magic,
+  format, extraction scheme, lengths, a blake3 over the index and the text), a JSON index of
+  `(path, offset, len)`, then every file's decoded text. It is written to a unique temp file
+  and renamed into place, and never written in place. A hit (and a miss, after writing) maps
+  the file read-only and hands out `SourceText` ranges of it, so the page cache holds a
+  package's text once for every engine process on the machine. Each read checks the header,
+  the length, the blake3 (mandatory: nothing fsyncs), then each range's bounds and UTF-8; a
+  refused entry is extracted again and rewritten; a cache that cannot be written leaves owned
+  text (logged at warn). `SourceText` (an owned `Arc<str>` or a mapped range) replaces
+  `Arc<str>` as the text of `SourceFile`, `ParsedFile` and every holder (session, row cache,
+  guard cache, LSP entries); the row cache's pointer fast path is its `==`. Design:
+  `docs/superpowers/notes/2026-11-18-eng113-mapped-dependency-text.md`.
+- **RSS and peak RSS will not show it.** Mapped file pages count in each process's RSS, so
+  one engine alone uses about as much RSS as before, and cdo-speed's summed VmHWM moved only
+  x0.962 and x0.977. The saving is heap, and it is shared:
+  - heap (`tools/census-probe resident`, same probe both sides, base `a73b4bf6`): the bucket
+    `bodies: source text + paths + provenance` 120.37 -> 4.79 MiB; live after the asks
+    3,619.5 -> 3,504.7 MiB (-114.8). The retained census prints mapped bytes on their own
+    line, `program.snapshot_texts_mapped`; an owned fallback still counts in
+    `program.snapshot_texts`.
+  - sharing (two concurrent `alsem mcp` engines on CDO, warm cache, each cache file's own
+    `/proc/<pid>/smaps` entry): each engine maps the 10 package files (116.5 MiB) with
+    Shared_Clean 114.7 MiB, Pss 57.4 and 59.2 MiB (half each), Private_Clean 0 and 1.8 MiB.
+    The base engines map no cache file. Whole-process Pss cannot resolve the change: the two
+    engines of one side differ by about 220 MiB of anonymous memory.
+- **Disk.** The old `<hash>.s7.json` entries stay (no pruner), so the cache roughly doubles
+  once (the new files are 116.5 MiB for CDO's 10 packages). A cold miss holds the owned and the
+  mapped text together for a moment.
+- **Risk.** A cache file rewritten or truncated in place under a live map (an outside `cp` or
+  `rsync --inplace` over the cache, another user in the shared temp-dir fallback) can kill the
+  process holding it with SIGBUS; the SAFETY comment in `read_cache` and the design note
+  state it.
+- **CDO checks** (base `a73b4bf6`): `cdo-before-after` moved no finding, fingerprint or
+  call-graph number; the session refresh equals a cold build at all 12 steps in both modes;
+  `cdo-gate --only harness,l4,output` passed (211/0, 25/0, 22/0). `cdo-speed` passed twice; the
+  round total read x1.002 and x1.077 and the build x0.963 and x1.065, which disagree, so no
+  speed ratio is claimed.
+- **Pinned by** `snapshot::cache::tests` (a damaged text or index under an old hash is refused
+  and rewritten: with the hash check removed, or covering the text only, they fail; truncated,
+  bad-magic, out-of-range and overflowing entries are refused; a valid entry is served without
+  extracting; an unwritable cache keeps owned text), `source_text::tests` (a range that splits
+  a character is refused: without the UTF-8 check it fails; `ptr_eq` needs the same range:
+  ignoring it fails), `resolved::tests::mapped_texts_are_no_heap_and_owned_ones_are`, and the
+  S10.1 guard `the_lsp_keeps_no_dependency_text`, which now probes the mapping (with the cache
+  pinning one text it fails).
+
 ### Changed (ENG-120: mimalloc's `purge_delay` measured on CDO and DO, kept at 0)
 
 - No code change: `alsem` keeps `purge_delay` 0. A delay of 1 or 10 ms gave no CPU gain near the
