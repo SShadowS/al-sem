@@ -225,6 +225,11 @@ fn graph_keeps_a_dataitem_named_request_page_apart_from_the_request_page() {
         "precondition: both triggers are nodes: {nodes:#?}"
     );
     assert_ne!(nodes[0]["id"], nodes[1]["id"], "wire ids: {nodes:#?}");
+    // sol: both stable ids present (a missing one is not "different").
+    assert!(
+        nodes.iter().all(|n| n["stableRoutineId"].is_string()),
+        "precondition: both stable ids: {nodes:#?}"
+    );
     assert_ne!(
         nodes[0]["stableRoutineId"], nodes[1]["stableRoutineId"],
         "stable ids: {nodes:#?}"

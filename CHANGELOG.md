@@ -274,6 +274,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     from the flag: `run_triggers`' request-page list, may-not-run, `RunRequestPage`, the sited
     graph, explain's `reachedFrom`.
   - Impact summary cache schema 16.
+  - The flag also keeps the twins apart where a reader groups routines by object, name and
+    member (sol review): the sited graph's overload handles and signatures (display), and the
+    lowerer's alternative-declaration attribute check (a twin's attribute is not marked
+    conditional). A procedure written inside the request page (the grammar accepts one) is
+    not a request-page trigger and keeps no member, so its ids are as before.
 - **What moves.** CDO (`cdo-before-after`, base `a73b4bf6`): 0 findings and 0 fingerprints at both
   scopes, the call graph unchanged. 11 stable routine ids move (CDO's request-page triggers), in
   `alsem fingerprint` output only. Fixtures: one stable id (`ws-report-dataitem`'s request-page
@@ -294,7 +299,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - What does feed keys is the stable id itself, intended under option C: a finding whose root cause
     names a request-page trigger gets a new fingerprint once (none on CDO), and `alsem diff` across
     the upgrade shows such a trigger as removed and added.
-- **Pinned by** `tests/cli/cli_eng20_request_page_twin.rs` and four unit tests (model ids,
+- **Pinned by** `tests/cli/cli_eng20_request_page_twin.rs`,
+  `l2_ir::ir_robustness::request_page_twins_and_procedures_in_the_lowerer`, graphify's
+  `a_request_page_trigger_id_ends_in_rp_and_others_are_unchanged`, and four unit tests (model ids,
   definition surface, the add-in rule, selection), with discrimination proofs for every guard:
   - CLI: both orders; a dataitem named `RequestPage`; the graph wire ids; explain selecting
     `.requestpage` and its `reachedFrom`; a field named `RequestPage` selected both ways.

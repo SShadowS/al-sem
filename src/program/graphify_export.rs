@@ -1612,4 +1612,23 @@ mod tests {
             "al:obj:dep/interface/@a%22%22b"
         );
     }
+
+    /// ENG-20 (sol): a request page's own trigger ends in `/rp`, so it never shares an id
+    /// with a routine of the same member text (`requestpage`, which a dataitem or control
+    /// could be named), name and signature; every other routine's id is as before, unsuffixed.
+    #[test]
+    fn a_request_page_trigger_id_ends_in_rp_and_others_are_unchanged() {
+        let mut apps = AppRegistry::default();
+        let a = apps.intern(&app_id("Dep"));
+        let mut member = rid(a, 50100, "OnOpenPage", 0);
+        member.enclosing_member_lc = Some("requestpage".into());
+        let mut own = member.clone();
+        own.request_page = true;
+        let (member_s, own_s) = (routine_id_str(&member, &apps), routine_id_str(&own, &apps));
+        assert_eq!(
+            member_s,
+            "al:rtn:dep/codeunit/50100#requestpage.onopenpage/0/0"
+        );
+        assert_eq!(own_s, format!("{member_s}/rp"));
+    }
 }

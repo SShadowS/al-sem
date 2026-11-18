@@ -1182,10 +1182,13 @@ impl SitedBuilder {
         // `/n#k`), so a test path never prints two overloads alike.
         {
             use crate::engine::l5::routine_rollup::{OverloadShape, overload_short};
+            // The request-page flag is part of the group (ENG-20, sol): a request page's own
+            // trigger and a dataitem `RequestPage`'s trigger of one name are not overloads.
             type Group<'k> = (
                 &'k crate::program::node::ObjectNodeId,
                 &'k str,
                 Option<&'k str>,
+                bool,
             );
             let mut groups: HashMap<Group<'_>, Vec<u32>> = HashMap::new();
             for (&i, l) in &local_names {
@@ -1195,6 +1198,7 @@ impl SitedBuilder {
                             &r.object,
                             r.name_lc.as_str(),
                             r.enclosing_member_lc.as_deref(),
+                            r.request_page,
                         ))
                         .or_default()
                         .push(i);
