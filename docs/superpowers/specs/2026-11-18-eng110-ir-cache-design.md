@@ -1,4 +1,4 @@
-# ENG-110: persistent cache of parsed dependency IR (design, rev. 2, 2026-11-18)
+# ENG-110: persistent cache of parsed dependency IR (design, rev. 3, 2026-11-18)
 
 Status: a spec for the two-model panel. No product code. Implementation waits for ENG-113, which
 builds the package-text cache this one stands on. Rev. 2 folds in Fable's review r1 (3 P1, 6 P2)
@@ -41,7 +41,9 @@ decode.
   - size: 143.9 MiB postcard (78.5 MiB deflated).
 
   The engine's parse is ~2× the single-thread figure: its pool runs on all 22 threads (6 P-cores
-  with two threads each, plus 10 E-cores). Decode inflates the same way, to about 0.7 CPU-s.
+  with two threads each, plus 10 E-cores). Decode should inflate the same way, to about 0.7 CPU-s;
+  an estimate. The probe's own parallel parse read ~4.3× on the system allocator (the engine uses
+  mimalloc), so the warm measure settles it.
 - **The ceiling.** A hit saves about 23 CPU-s of 57 (~40 %) in a one-shot analyze. The survey's
   "400-600 CPU-s per gate" is not re-measured; bar (a) reports the gate.
 - **Heap.** The IR held after a decode is 476.5 MiB in 4.66 M allocations, against 498.3 MiB in
@@ -83,6 +85,11 @@ and one `IR_KEY`.
     `cargo:rustc-env` reaches only the crate that sets it, so the key lives where it is used.
   - **A test** changes a byte under a copy of `crates/al-syntax/src/` and sees the key move, with
     a discrimination proof (break: drop the folder from the hash, so the key does not move, red).
+  - **The build trigger is pinned too (Fable r2, N1).** The root `build.rs` also exports the
+    lowerer-part hash as a constant (`IR_KEY_LOWERER`). A `ci-steps test` test re-hashes
+    `crates/al-syntax/src/` at run time and asserts it equals the baked value, so a key that did
+    not rebuild fails the task gate. Discrimination proof: drop the `rerun-if-changed` line, edit a
+    lowerer file, rebuild, red.
   - **Not `node-types.sha256` alone:** a grammar change can alter how the same text parses with no
     new node type (v4.0.0 moved dangling `else` and operator precedence). Not a constant:
     `CACHE_VERSION_GRAMMAR` kept a stale commit once. A false miss costs a parse; a false hit is a
@@ -121,19 +128,27 @@ and one `IR_KEY`.
    once at the end, and the cold-miss peak is a measure. The IR map is dropped when the package's
    decode ends: the IR is owned heap, so the SIGBUS and Windows rename windows last only for the
    decode, unlike ENG-113's text map.
-4. **Small packages are skipped (Fable P2-3).** The cache holds 83,236 files (691 MiB) today,
-   mostly test fixtures. Below a measured text size, a parse beats a file read plus a decode, and
-   no IR file is written. The threshold is measured on the prototype: the per-package decode-plus-
-   read cost against the parse cost, by size; the expected order is ~256 KiB. A package with zero
+4. **Small packages are skipped (Fable P2-3; r2 P3).** The cache holds 83,236 files (691 MiB)
+   today, mostly test fixtures; with the cache off under tests (below) that flood is gone. One
+   fixed constant remains: below it a parse beats a file read plus a decode, and no IR file is
+   written. It is measured once on the prototype (decode-plus-read cost against parse cost, by
+   package size) and written down with its table; no per-host measurement. A package with zero
    files writes nothing either.
 5. **The codec:** serde derives on the IR types, always on (Fable P3: a feature would be a second
    build shape nobody tests). `ActionDecl.kind` (`&'static str`) gets a hand-written pair: write
    the keyword, read it back into its static set, and refuse an unknown one (a miss). The
    prototype's `#[serde(skip)]` there is NOT the design.
-6. **Pruning (Fable P1-3):** whole key folders unused for 7 days are removed, by the folder's mtime
-   (a hit touches it), as `scripts/sweep-builds` does for build output. So are temp files with the
-   known prefix older than a day; a killed writer leaves up to ~144 MiB. Nothing is ever pruned for
-   being "not my key".
+6. **Pruning (Fable P1-3; r2 P3):**
+   - **"Used" is a marker file:** each process writes `<key folder>/last-used` once, on its first
+     hit or write. A folder's own mtime moves only when entries are added or removed, and opening a
+     folder to set its time fails on Windows.
+   - **When:** on the first miss write in a process, key folders whose marker is older than 7 days
+     are removed, as `scripts/sweep-builds` does for build output. So are temp files with the known
+     prefix older than a day; a killed writer leaves up to ~144 MiB.
+   - **Never "not my key".** A prune racing a writer of an old key is safe: the write fails, and
+     that process keeps its parsed IR.
+7. **`parse_snapshot` stays uncached on purpose.** It also parses dependency units, but serves
+   tests and `aldump` only.
 
 ## Correctness checks: the key is the whole story
 
@@ -148,15 +163,23 @@ and one `IR_KEY`.
   parsed anyway and compared by structure with the decoded IR. A mismatch fails the process loudly,
   naming the package, the file and the key. It is never a silent fallback. A hole in `IR_KEY` then
   shows up as a gate failure. `cdo-gate` sets it for one phase, `program_resolve_harness`, which
-  builds the cross-app model over every package. That phase runs with a warm cache: the gate's
-  first phase fills it.
-- **Tests still exercise the parser (orchestrator):**
-  - under `cargo test`, `ci-steps` and `check-goldens` the cache is OFF unless a test turns it on
-    (`ALSEM_IR_CACHE=off` set by the test harnesses, like `CDO_WS` handling); so every golden and
-    test parses as today;
-  - the cache's own tests use a temporary cache directory through a `dir` seam, like ENG-113's
-    `cached_source_in`;
-  - the identity bar (b) runs the CDO set twice, cold (empty `XDG_CACHE_HOME`) and warm.
+  builds the cross-app model over every package, and for good (Fable r2: it is the only check that
+  can catch a key hole, for about one extra parse per gate).
+  - **No hits is labelled, not passed (Fable r2, N3).** A key hole only shows on an entry written
+    by an EARLIER build under the same key, so the phase uses the user's real cache (where earlier
+    gates and runs wrote). It prints its hit count. Zero hits (`--only harness` on a cold cache, a
+    fresh host) labels the phase verdict "VERIFY: no hits": a label, not a failure.
+- **Tests still exercise the parser (orchestrator; mechanism per Fable r2, N2):**
+  - **One home for the switch:** `.cargo/config.toml`'s `[env]` sets `ALSEM_IR_CACHE=off` for
+    every cargo-run process: `cargo test` by hand or through `ci-steps` and `check-goldens`, and the
+    `alsem` and `aldump` binaries those tests spawn, which inherit the environment. So every golden
+    and test parses as today.
+  - **Precedence:** an explicit `ALSEM_IR_CACHE=on` in the environment beats `[env]` (cargo's
+    `[env]` does not override a set variable unless `force = true`, which is not used). `cdo-gate`
+    sets `on` plus VERIFY for its `program_resolve_harness` phase.
+  - The cache's own tests use a temporary cache directory through a `dir` seam, like ENG-113's
+    `cached_source_in`, and turn it on themselves.
+  - The identity bar (b) runs the CDO set twice, cold (empty `XDG_CACHE_HOME`) and warm.
 - **Hit and miss counters** go in the perf trace and the census, so bar (b)'s warm run proves it
   hit (Fable P2-6).
 - **`ParseStatus::Recovered`:** its doc says "do not cache as authoritative". The IR cache replays
@@ -200,10 +223,24 @@ temp file, then renames it into place.
 - **Heap:** the engine census, warm against today (the IR bucket); the cold-miss peak RSS.
 - **Disk:** the key folder's size for CDO; the small-package threshold's table.
 
-## Open questions for the panel
+## Settled in review
 
-1. Is the `IR_KEY` input set now complete? Anything else compiled into the parse: a target
-   feature, an opt level that changes float formatting (none in the IR), the big-stack size?
-2. Should VERIFY run in every gate, or only until the first ten landings pass, and then stay as an
-   opt-in?
-3. The small-package threshold: a fixed size, or measured per host at first use?
+1. **Is the `IR_KEY` input set complete?** Yes as far as Fable r2 could see. Opt level, target
+   features and the big-stack size do not feed the IR: `MAX_LOWER_DEPTH` is a constant 128, not
+   read from the stack.
+2. **VERIFY:** in one gate phase for good.
+3. **The small-package threshold:** one fixed constant, measured once.
+
+## Needs from ENG-113
+
+- **An accessor to the text entry's header blake3** at the parse seam: the IR header binds to it.
+- **`SourceText` and the package-cache dir seam**, as its design note states.
+
+## Review history
+
+- **rev. 1:** written.
+- **rev. 2:** Fable r1 folded in (3 P1, 6 P2, P3s), plus the orchestrator's VERIFY, tests and
+  measures additions.
+- **rev. 3:** Fable r2 folded in. N1: the build trigger is pinned by a baked-hash test. N2: one home
+  for the test switch (`[env]`) and its precedence. N3: VERIFY labels zero hits. Plus its P3s.
+  Fable r2: ready for code once ENG-113 lands. sol to review.
