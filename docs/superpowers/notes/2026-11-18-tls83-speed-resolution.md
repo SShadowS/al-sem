@@ -28,11 +28,16 @@ lies between runs (host state) or between passes, using the cdo-speed results al
   sd 0.042, a 95 % band of **±8 %**. That agrees with TLS-79's figure for ONE reading.
 - **Two readings of one pair:** their difference has sd 0.042 × √2 = 0.059, a 95 % band of
   **±12 %**. The 19 repeated pairs fit this: median 3.1 %, max 12.3 %; their rms gap is
-  0.052, a little under the predicted 0.059, so ±12 % is on the safe side. A run's two
-  passes are uncorrelated (r = -0.07), so this is pass noise, not host state.
+  0.052, a little under the predicted 0.059. A run's two passes are uncorrelated
+  (r = -0.07).
+- **These bands are rules of thumb, not calibrated 95 % bounds** (review r1, sol). The pooled
+  ratios include real changes and repeated heads whose trees are not all identified, and two
+  runs minutes apart can share a host effect that shifts head against base: they would then
+  agree and still be off. What the data support is that pass noise CAN explain the spread,
+  not that host state never adds to it.
 - **ENG-94** (x0.871 against x0.989, 12.7 %) is a ~2.2σ draw of that difference. This is an
   inference from the other runs: the lane's x0.871 run is not among the 75 files (only the
-  landing's x0.989 is). No host-state effect beyond the pass noise is needed to explain it.
+  landing's x0.989 is). Pass noise alone can explain it; a host effect is not ruled out.
 - **The base build's CPU** moves much more between runs (70-103 s) than the ratio does. Host
   state shifts both sides of a run together, and the within-run ratio cancels most of it.
 - **Pass 1 costs more on both sides.** Median CPU by position: pass 1 first 81.8 s, pass 1
@@ -48,7 +53,8 @@ lies between runs (host state) or between passes, using the cdo-speed results al
    reading resolves ±8 % (95 %). Comparing two readings resolves ±12 %. A reading inside ±8 %
    of 1.0 is "no measurable change", not a gain or a loss.
 2. **A CHANGELOG quotes a build ratio** only when two independent runs agree within ±12 %, and
-   then quotes their combined (four-pass) value with its ±6 %. (Memory rule since ENG-94;
+   then quotes their combined (four-pass) value with its ±6 % (a rule of thumb, as above; two
+   runs close in time can share a host effect, so space them apart). (Memory rule since ENG-94;
    proposed for CLAUDE.md and the cdo-measure skill.)
 3. **Ways to resolve more**, to be measured before one is built:
    - (a) More passes. Four passes give sd 0.030, ±6 %; eight give ±4 %. Each pass costs about

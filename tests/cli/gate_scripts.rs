@@ -2181,7 +2181,9 @@ if os.path.exists(me):
 /// `ack`; STUB_PERF_SLOW=<s> delays its counters between `enable` and `ack`, as
 /// perf's event setup does. STUB_PERF_NONE: every attach
 /// reads `<not counted>` on both. STUB_PERF_VANISH: it deletes itself after the
-/// probe, so starting it for a call fails.
+/// probe, so starting it for a call fails. STUB_PERF_NOACK: it never answers
+/// `ack`. STUB_PERF_SHARE=<pct>: an attach's count ran that share of the time
+/// (multiplexed).
 const SPEED_PERF_STUB: &str = r#"#!/usr/bin/env python3
 import os, signal, sys, time
 a = sys.argv[1:]
@@ -2193,9 +2195,12 @@ def total(pids):
             s += int(open(f).read())
     return s
 def lines(n):
-    if os.environ.get("STUB_PERF_NONE") and "--" not in a:
-        n = "<not counted>"
-    return (f"{n},,cpu_core/instructions/u,1,100.00,,\n"
+    share = "100.00"
+    if "--" not in a:
+        if os.environ.get("STUB_PERF_NONE"):
+            n = "<not counted>"
+        share = os.environ.get("STUB_PERF_SHARE", share)
+    return (f"{n},,cpu_core/instructions/u,1,{share},,\n"
             "<not counted>,,cpu_atom/instructions/u,0,0.00,,\n")
 if "--" in a:
     sys.stderr.write(lines(1000))
@@ -2208,19 +2213,23 @@ pids = a[a.index("-p") + 1].split(",")
 # `ack` (cdo-speed waits for it before the call). STUB_PERF_SLOW: slow counters.
 assert a[a.index("-D") + 1] == "-1", a
 ctl, ack = a[a.index("--control") + 1].split(":", 1)[1].split(",")
-with open(ctl) as c:
-    assert c.readline().strip() == "enable"
-    # Like perf, the counters come up some time after `enable`; only the `ack`
-    # says they run.
-    time.sleep(float(os.environ.get("STUB_PERF_SLOW", "0")))
-    start = total(pids)
-    with open(ack, "w") as k:
-        k.write("ack\n")
+start = 0
 def stop(*_):
     with open(out, "w") as f:
         f.write(lines(total(pids) - start))
     sys.exit(0)
+# Installed before the `ack` (review r1, sol): a fast call may SIGINT us at once.
 signal.signal(signal.SIGINT, stop)
+with open(ctl) as c:
+    assert c.readline().strip() == "enable"
+    # Like perf, the counters come up some time after `enable`; only the `ack`
+    # says they run. STUB_PERF_NOACK: never.
+    time.sleep(float(os.environ.get("STUB_PERF_SLOW", "0")))
+    while os.environ.get("STUB_PERF_NOACK"):
+        time.sleep(0.05)
+    start = total(pids)
+    with open(ack, "w") as k:
+        k.write("ack\n")
 while True:
     time.sleep(0.05)
 "#;
@@ -2451,6 +2460,49 @@ fn speed_reports_instructions_and_their_limit_is_advisory() {
     assert!(
         v.contains("(instructions: build x1.0000; advisory limit x1.02)"),
         "the round total took a 0: {text}"
+    );
+
+    // Review r1 (sol): a count perf took only part of the time (another
+    // profiler multiplexing the PMU) is no count.
+    let dir = tempfile::tempdir().unwrap();
+    let (code, text) = speed_with_stub(
+        dir.path(),
+        "1.0",
+        &[],
+        &[
+            ("CDO_SPEED_INSTR", "1"),
+            ("CDO_SPEED_PERF", perf),
+            ("STUB_PERF_SHARE", "50.00"),
+        ],
+    );
+    assert_eq!(code, Some(0), "{text}");
+    assert!(
+        verdict(&text).contains("(instructions: no call fully counted; advisory limit x1.02)"),
+        "a multiplexed count was taken as whole: {text}"
+    );
+
+    // Review r1 (sol): a perf that never acks costs each server at most
+    // INSTR_GIVE_UP waits, then its calls go uncounted, said once.
+    let dir = tempfile::tempdir().unwrap();
+    let (code, text) = speed_with_stub(
+        dir.path(),
+        "1.0",
+        &[],
+        &[
+            ("CDO_SPEED_INSTR", "1"),
+            ("CDO_SPEED_PERF", perf),
+            ("STUB_PERF_NOACK", "1"),
+            ("CDO_SPEED_INSTR_ATTACH_S", "0.3"),
+        ],
+    );
+    assert_eq!(code, Some(0), "{text}");
+    assert!(
+        text.contains("perf failed to attach 3 times in a row"),
+        "no give-up: {text}"
+    );
+    assert!(
+        verdict(&text).contains("(instructions: no call fully counted; advisory limit x1.02)"),
+        "{text}"
     );
 }
 

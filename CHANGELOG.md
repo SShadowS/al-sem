@@ -415,8 +415,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Why.** ENG-94's build CPU ratio read x0.871 in the lane's run and x0.989 in the landing's,
   and a CHANGELOG quoted the first.
 - **What 75 runs since TLS-79 show** (`docs/superpowers/notes/2026-11-18-tls83-speed-
-  resolution.md`). The spread is pass noise, not host state.
-  - Per pass, sd(log ratio) is 0.060. So one two-pass reading resolves ±8 % (95 %), as TLS-79
+  resolution.md`). Pass noise can explain the spread; host state is not ruled out (review r1,
+  sol), and the bands below are rules of thumb from pooled runs, not calibrated bounds.
+  - Per pass, sd(log ratio) is 0.060. So one two-pass reading resolves about ±8 %, as TLS-79
     stated.
   - Two readings of one pair can differ by ±12 %. The 19 pairs measured twice show a median
     gap of 3.1 % and a max of 12.3 %. ENG-94 is, by inference, a ~2σ draw of that: its lane run
@@ -445,6 +446,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     is uncounted. A fixed 0.2 s wait raced a slow perf start under the task gate's load (seen in
     TLS-92's gate: one call counted from part-way through read 0, so the round total dropped out).
   - On a failure the line reads `FAIL; instructions: ...`, so it does not read as the reason.
+  - Review r1 (sol):
+    - after three failed attaches in a row, a server's calls go uncounted (each failure cost up
+      to 5 s inside the CDO slot);
+    - perf is stopped even when a call times out;
+    - a count perf took only part of the time (multiplexed, column 5 below 100 %) is no count;
+    - so is a call where a server process appeared between the pid scan and the attach;
+    - the advisory checks every row, not only the judged ones.
   - `CDO_SPEED_PERF` is a test hook naming the perf command.
   - `speed.json` gains `instr` per record, `instr` per row and an `instructions` block.
 - **The CHANGELOG rule** (CLAUDE.md): quote an instruction ratio as work ("instructions x0.93"),
