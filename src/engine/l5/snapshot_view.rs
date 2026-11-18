@@ -999,7 +999,7 @@ pub(super) fn derive_pd_base(
     typed_edges: &[SnapshotGraphEdge],
     skipped: &SkippedEdgeKeys,
     fb: &FactBase,
-    map: &HashMap<String, String>,
+    map: &crate::engine::l4::capability_cone::RoutineIdMap,
 ) -> PdBase {
     let shape = shape(cone);
     if cone.states.is_empty() {
@@ -1125,7 +1125,12 @@ impl<'v> ProducerRows<'v> {
         ProducerRows::Whole(ix)
     }
 
-    fn row(&self, cone: &ConeArena, p: usize, map: &HashMap<String, String>) -> Option<usize> {
+    fn row(
+        &self,
+        cone: &ConeArena,
+        p: usize,
+        map: &crate::engine::l4::capability_cone::RoutineIdMap,
+    ) -> Option<usize> {
         let producer = &cone.producers[p];
         match self {
             ProducerRows::Spliced(pb, vf) => {
@@ -1147,7 +1152,7 @@ pub(super) fn view_pd(
     subjects: &BTreeSet<String>,
     pb: &PdBase,
     producers: &ProducerRows<'_>,
-    map: &HashMap<String, String>,
+    map: &crate::engine::l4::capability_cone::RoutineIdMap,
 ) -> PdArena {
     use crate::engine::l5::detector_context::cones_census;
     if cone.states.is_empty() {
@@ -1205,10 +1210,8 @@ pub(super) fn view_pd(
         let slot = *routine_slot
             .entry(cone_routine.as_ptr())
             .or_insert_with(|| {
-                slots.push((
-                    super::RoutineId::from(stable_routine_id(cone_routine, map).as_str()),
-                    Vec::new(),
-                ));
+                // The map's own stable text (ENG-129): one allocation for every holder.
+                slots.push((super::stable_routine_shared(cone_routine, map), Vec::new()));
                 slots.len() - 1
             });
         slots[slot].1.push(ix);

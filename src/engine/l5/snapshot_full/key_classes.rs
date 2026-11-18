@@ -517,7 +517,7 @@ fn identity_key(
         return None;
     }
     if let Some(stable) = routine_to_stable.get(v) {
-        return Some(stable.clone());
+        return Some(stable.to_string());
     }
     if v.contains(':') {
         let segs: Vec<&str> = v.splitn(4, ':').collect();

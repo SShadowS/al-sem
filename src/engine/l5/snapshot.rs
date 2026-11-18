@@ -455,8 +455,10 @@ impl SnapTables {
     pub(crate) fn heap_bytes(&self) -> u64 {
         let s = |s: &String| s.len() as u64;
         let o = |s: &Option<String>| s.as_ref().map_or(0, |s| s.len() as u64);
-        let subjects: u64 = self.subjects.iter().map(s).sum::<u64>()
-            + (self.subjects.capacity() * std::mem::size_of::<String>()) as u64;
+        // The subjects are shared texts (ENG-129): counted here as if owned, the census's
+        // per-holder view.
+        let subjects: u64 = self.subjects.iter().map(|t| t.len() as u64).sum::<u64>()
+            + (self.subjects.capacity() * std::mem::size_of::<SharedStr>()) as u64;
         let reps: u64 = self
             .reps
             .iter()
@@ -670,7 +672,7 @@ impl From<SnapshotFactFields> for SnapshotCapabilityFact {
         };
         SnapshotCapabilityFact {
             tables: std::sync::Arc::new(SnapTables {
-                subjects: vec![f.subject],
+                subjects: vec![f.subject.into()],
                 reps: vec![rep],
                 hops: Vec::new(),
             }),
@@ -3760,7 +3762,7 @@ fn classify_resolution(
     from: &str,
     callee_display: &str,
     dispatch_kind: &str,
-    map: &HashMap<String, String>,
+    map: &RoutineIdMap,
     edges_by_callsite: &HashMap<String, Vec<String>>,
     result_consumed: Option<bool>,
     under_asserterror: bool,
@@ -4094,14 +4096,14 @@ fn derive_root_classifications(
 
     let mut out: Vec<SnapshotRootClassificationSlot> = Vec::new();
     for c in &resolved.root_classifications {
-        let Some(stable) = map.get(&c.routine_id) else {
+        let Some(stable) = map.get(c.routine_id.as_str()) else {
             continue;
         };
         let source_anchor = routine_by_id
             .get(c.routine_id.as_str())
             .map(|r| anchor_from_panchor(&r.source_anchor, &r.id));
         out.push(SnapshotRootClassificationSlot {
-            routine_id: stable.clone(),
+            routine_id: stable.to_string(),
             kinds: c.kinds.clone(),
             externally_reachable: c.externally_reachable,
             source: c.source.clone(),
@@ -4592,9 +4594,9 @@ mod step6_tree_tests {
             trigger_kind: None,
             fires: None,
         }];
-        let routine_to_stable: HashMap<String, String> = [("R", "R#"), ("A", "A#")]
+        let routine_to_stable: RoutineIdMap = [("R", "R#"), ("A", "A#")]
             .into_iter()
-            .map(|(a, b)| (a.to_string(), b.to_string()))
+            .map(|(a, b)| (SharedStr::from(a), SharedStr::from(b)))
             .collect();
         let event_graph = EventGraph::default();
         let (direct_full, coverage): (HashMap<String, Vec<CapabilityFact>>, _) =
@@ -4982,7 +4984,7 @@ mod step0_sort_tests {
                 raw: HashMap::new(),
                 routine_to_stable: map
                     .iter()
-                    .map(|(a, b)| (a.to_string(), b.to_string()))
+                    .map(|(a, b)| (SharedStr::from(*a), SharedStr::from(*b)))
                     .collect(),
                 coverage: ids
                     .iter()
@@ -5390,7 +5392,12 @@ mod cone_memory_step2_tests {
                     .collect(),
                 routine_to_stable: ids
                     .iter()
-                    .map(|id| (id.to_string(), format!("{}#", id.to_lowercase())))
+                    .map(|id| {
+                        (
+                            SharedStr::from(*id),
+                            SharedStr::from(format!("{}#", id.to_lowercase()).as_str()),
+                        )
+                    })
                     .collect(),
                 event_graph: EventGraph::default(),
             }
