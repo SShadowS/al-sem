@@ -41,7 +41,7 @@ use crate::program::inputs::WorkspaceInputs;
 /// `diagnostics: []`).
 pub fn compute_workspace_diagnostics(
     inputs: &WorkspaceInputs,
-    files_without_object: Option<&[String]>,
+    files_without_object: Option<&[crate::program::resolve::full::FileWithoutObject]>,
 ) -> Vec<Diagnostic> {
     assert!(
         !inputs.build_only,
@@ -124,11 +124,35 @@ pub fn compute_workspace_diagnostics(
     // <rel>" — al-sem `indexer.ts:56-63`. The build's own `al_syntax::parse`, so
     // the diagnostic reflects exactly what the engine sees (incl. objects nested
     // under a `namespace`).
-    for rel in files_without_object.unwrap_or_default() {
-        out.push(Diagnostic {
-            severity: "info".to_string(),
-            stage: "index".to_string(),
-            message: format!("No object declaration found in {rel}"),
+    //
+    // GRM-03: a file whose parse FAILED (a syntax error left no object readable)
+    // is a `warning`/`parse` row instead, saying its code is missing from the
+    // analysis: "No object declaration found" blamed the file for the parser's
+    // loss. A file with CR-only line ends gets the likely cause named (the
+    // grammar ends `#if`/`#else`/`#endif` lines at `\n` only).
+    for f in files_without_object.unwrap_or_default() {
+        let rel = &f.rel;
+        out.push(if f.parse_failed {
+            Diagnostic {
+                severity: "warning".to_string(),
+                stage: "parse".to_string(),
+                message: format!(
+                    "Could not parse {rel}: a syntax error left no object declaration readable, \
+                     so its code is missing from the analysis{}",
+                    if f.cr_only_line_ends {
+                        " (the file has CR-only line ends; preprocessor lines such as \
+                         `#if` need LF or CRLF line ends)"
+                    } else {
+                        ""
+                    }
+                ),
+            }
+        } else {
+            Diagnostic {
+                severity: "info".to_string(),
+                stage: "index".to_string(),
+                message: format!("No object declaration found in {rel}"),
+            }
         });
     }
 

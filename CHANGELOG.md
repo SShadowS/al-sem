@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (GRM-03: a workspace file whose parse failed is a warning naming the loss)
+
+- **The case.** A source file with CR-only line ends (classic Mac) that holds a `#if` parses to
+  one ERROR node, so its objects vanish from the model. The cause is in the grammar: its external
+  scanner (`src/scanner.c`) ends directive lines at `\n` only (tree-sitter-al v5.3.0 `9d155ee7`,
+  re-checked 2026-11-18). The same text with LF, or with no directive, parses clean.
+- **What users saw.** `analyze` reported it as `DIAG-index` "No object declaration found in
+  <file>" at severity info, which blamed the file for the parser's loss.
+- **Now.** A workspace file whose parse FAILED (`ParseStatus::Recovered`) and left no object is a
+  `DIAG-parse` warning: "Could not parse <file>: a syntax error left no object declaration
+  readable, so its code is missing from the analysis". A file with CR-only line ends adds the
+  likely cause: "preprocessor lines such as `#if` need LF or CRLF line ends". A file with no
+  object and no error keeps the info row. `FreshCoverage::files_without_object` now carries those
+  two facts per file (`FileWithoutObject`).
+- **How common.** Real CR-only files: 0 of 582 workspace and 10,881 dependency files on CDO, and 0
+  of 814 in DO. So this reports the loss and leaves the grammar fix to the grammar repository,
+  together with whether `alc` accepts such a file at all (no `alc` here to check).
+- **Test.** `cli_a_json_differential::failed_parse_without_object_is_a_parse_warning` covers a
+  CR-only file with the task's repro, an LF file with a syntax error, and a comment-only file.
+  Two discrimination proofs, both red, are recorded in its doc.
+
 ### Changed (ENG-120: mimalloc's `purge_delay` measured on CDO and DO, kept at 0)
 
 - No code change: `alsem` keeps `purge_delay` 0. A delay of 1 or 10 ms gave no CPU gain near the

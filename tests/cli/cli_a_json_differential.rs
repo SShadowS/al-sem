@@ -677,3 +677,71 @@ fn no_object_declaration_emits_index_diagnostic() {
         "expected a DIAG-index 'No object declaration found' diagnostic; got {diags:?}"
     );
 }
+
+/// ⟨GRM-03⟩ A file whose parse FAILED, leaving no object readable, is a
+/// `DIAG-parse` WARNING saying its code is missing from the analysis, not the
+/// info row that blamed the file. A file with CR-only line ends gets the likely
+/// cause named: the grammar ends `#if`/`#endif` lines at `\n` only, so the
+/// task's repro (`codeunit ... \r ... #if X288 \r ...`) parses to one ERROR. A
+/// file with no object and no error keeps the info row.
+///
+/// Mutation (2026-11-18): `parse_failed` hard-wired to `false` in
+/// `FreshCoverage` -> both broken files read "No object declaration found" at
+/// info (red); the CR-only test inverted -> the CR-only file gets no cause, the
+/// LF one a wrong one (red). Each restored, green.
+#[test]
+fn failed_parse_without_object_is_a_parse_warning() {
+    let _env = crate::env_guard();
+    let (_tmp, ws) = scratch_ws("parsefail");
+    std::fs::write(
+        ws.join("app.json"),
+        r#"{"id":"44444444-4444-4444-4444-444444444444","name":"A","publisher":"P","version":"1.0.0.0"}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        ws.join("Cr.al"),
+        "codeunit 50299 \"C288 CR\"\r{\r    procedure P()\r    begin\r#if X288\r        exit;\r#endif\r        Q();\r    end;\r}\r",
+    )
+    .unwrap();
+    std::fs::write(
+        ws.join("Broken.al"),
+        "codeunit 50300 X\n{\n    procedure (\n",
+    )
+    .unwrap();
+    std::fs::write(ws.join("Empty.al"), "// just a comment, no object\n").unwrap();
+
+    let default_csv = detector_arg(DEFAULT_DETECTOR_NAMES);
+    let _guard = ENV_LOCK.lock().unwrap();
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var("ALCH_DRIVER_VERSION_OVERRIDE", JSON_VERSION_OVERRIDE) };
+    let out = run_json_path(&ws, &default_csv);
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("ALCH_DRIVER_VERSION_OVERRIDE") };
+
+    let v: serde_json::Value = serde_json::from_str(&out).expect("valid JSON");
+    let diags = v["diagnostics"].as_array().expect("diagnostics array");
+    let find = |needle: &str| {
+        diags
+            .iter()
+            .find(|d| d["message"].as_str().is_some_and(|m| m.contains(needle)))
+            .unwrap_or_else(|| panic!("no diagnostic naming {needle}: {diags:?}"))
+    };
+    let cr = find("Cr.al");
+    assert_eq!(cr["code"], "DIAG-parse", "{cr}");
+    assert_eq!(cr["severity"], "warning", "{cr}");
+    let cr_msg = cr["message"].as_str().unwrap();
+    assert!(
+        cr_msg.contains("Could not parse Cr.al") && cr_msg.contains("CR-only line ends"),
+        "{cr_msg}"
+    );
+    let broken = find("Broken.al");
+    assert_eq!(broken["code"], "DIAG-parse", "{broken}");
+    assert_eq!(broken["severity"], "warning", "{broken}");
+    assert!(
+        !broken["message"].as_str().unwrap().contains("CR-only"),
+        "{broken}"
+    );
+    let empty = find("Empty.al");
+    assert_eq!(empty["code"], "DIAG-index", "{empty}");
+    assert_eq!(empty["severity"], "info", "{empty}");
+}
