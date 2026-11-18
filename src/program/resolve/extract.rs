@@ -22,6 +22,7 @@ use al_syntax::IdentifierFoldExt;
 use al_syntax::ir::{AlFile, BlockId, BlockItem, ExprId, ExprKind, RoutineDecl, StmtKind};
 
 use crate::program::resolve::edge::CanonicalSpan;
+use crate::program::str_pool::SharedStr;
 
 /// Classified callee shape for a call expression, mirroring L3's
 /// `classify_callee` + record-op filter.
@@ -768,7 +769,7 @@ fn collect_value_v2(
     file: &AlFile,
     src: &str,
     eid: ExprId,
-    unit: &str,
+    unit: &SharedStr,
     caller: &str,
     rvars: &FxHashSet<String>,
     ctx: WithCtx,
@@ -784,7 +785,7 @@ fn collect_value_v2(
             shape: classify_call(file, src, eid, &[], rvars, ctx),
             arity: 0,
             span: CanonicalSpan {
-                unit: unit.to_string(),
+                unit: unit.clone(),
                 start: e.origin.start.into(),
                 end: e.origin.end.into(),
             },
@@ -805,7 +806,7 @@ fn collect_calls_v2(
     file: &AlFile,
     src: &str,
     eid: ExprId,
-    unit: &str,
+    unit: &SharedStr,
     caller: &str,
     rvars: &FxHashSet<String>,
     ctx: WithCtx,
@@ -824,7 +825,7 @@ fn collect_calls_v2(
             // so callee_fp agrees between the two sides of the harness.
             let callee_text = src[file.ir.expr(fn_id).origin.byte()].to_string();
             let span = CanonicalSpan {
-                unit: unit.to_string(),
+                unit: unit.clone(),
                 start: e.origin.start.into(),
                 end: e.origin.end.into(),
             };
@@ -893,7 +894,7 @@ fn walk_block_v2(
     file: &AlFile,
     src: &str,
     bid: BlockId,
-    unit: &str,
+    unit: &SharedStr,
     caller: &str,
     rvars: &FxHashSet<String>,
     ctx: WithCtx,
@@ -919,7 +920,7 @@ fn walk_stmt_v2(
     file: &AlFile,
     src: &str,
     kind: &StmtKind,
-    unit: &str,
+    unit: &SharedStr,
     caller: &str,
     rvars: &FxHashSet<String>,
     ctx: WithCtx,
@@ -1044,7 +1045,7 @@ fn walk_stmt_v2(
 pub fn extract_sites(
     file: &AlFile,
     src: &str,
-    unit: &str,
+    unit: &SharedStr,
     object_globals: &FxHashSet<String>,
 ) -> Vec<RawSiteV2> {
     let mut out = Vec::new();
@@ -1082,7 +1083,7 @@ pub fn extract_sites(
 pub fn extract_sites_for_object(
     file: &AlFile,
     src: &str,
-    unit: &str,
+    unit: &SharedStr,
     object_globals: &FxHashSet<String>,
     obj_idx: usize,
 ) -> Vec<RawSiteV2> {
@@ -1123,7 +1124,7 @@ pub fn extract_sites_for_object(
 pub fn extract_sites_for_routine(
     file: &AlFile,
     src: &str,
-    unit: &str,
+    unit: &SharedStr,
     object_globals: &FxHashSet<String>,
     obj_idx: usize,
     routine_idx: usize,
@@ -1186,7 +1187,7 @@ mod tests {
         let (mut checked, mut crlf_sites) = (0usize, 0usize);
         for (name, src) in &sources {
             let file = al_syntax::parse(src);
-            for site in extract_sites(&file, src, "U.al", &FxHashSet::default()) {
+            for site in extract_sites(&file, src, &"U.al".into(), &FxHashSet::default()) {
                 let byte = file.ir.expr(site.expr).origin.byte();
                 assert_eq!(
                     (site.span.start, site.span.end),
@@ -1252,7 +1253,7 @@ codeunit 50102 "D"
 "#;
         let file = al_syntax::parse(src);
         // Parens-less value reads are candidates, not definite sites.
-        let sites: Vec<_> = extract_sites(&file, src, "C.al", &FxHashSet::default())
+        let sites: Vec<_> = extract_sites(&file, src, &"C.al".into(), &FxHashSet::default())
             .into_iter()
             .filter(|s| !s.parenless)
             .collect();
@@ -1303,7 +1304,7 @@ codeunit 50100 "C"
 "#;
         let file = al_syntax::parse(src);
         // Parens-less value reads are candidates, not definite sites.
-        let sites: Vec<_> = extract_sites(&file, src, "C.al", &FxHashSet::default())
+        let sites: Vec<_> = extract_sites(&file, src, &"C.al".into(), &FxHashSet::default())
             .into_iter()
             .filter(|s| !s.parenless)
             .collect();
@@ -1357,7 +1358,7 @@ codeunit 50100 "C"
 }
 "#;
         let file = al_syntax::parse(src);
-        let sites = extract_sites(&file, src, "C.al", &FxHashSet::default());
+        let sites = extract_sites(&file, src, &"C.al".into(), &FxHashSet::default());
         let run: Vec<_> = sites.iter().filter(|s| s.caller_routine == "run").collect();
 
         let member_site = run
@@ -1415,7 +1416,7 @@ codeunit 50100 "C"
 "#;
         let file = al_syntax::parse(src);
         // Parens-less value reads are candidates, not definite sites.
-        let sites: Vec<_> = extract_sites(&file, src, "C.al", &FxHashSet::default())
+        let sites: Vec<_> = extract_sites(&file, src, &"C.al".into(), &FxHashSet::default())
             .into_iter()
             .filter(|s| !s.parenless)
             .collect();
@@ -1448,7 +1449,7 @@ codeunit 50100 "C"
 "#;
         let file = al_syntax::parse(src);
         // Parens-less value reads are candidates, not definite sites.
-        let sites: Vec<_> = extract_sites(&file, src, "C.al", &FxHashSet::default())
+        let sites: Vec<_> = extract_sites(&file, src, &"C.al".into(), &FxHashSet::default())
             .into_iter()
             .filter(|s| !s.parenless)
             .collect();
@@ -1571,7 +1572,7 @@ codeunit 50100 "C"
 }
 "#;
         let file = al_syntax::parse(src);
-        let sites = extract_sites(&file, src, "C.al", &FxHashSet::default());
+        let sites = extract_sites(&file, src, &"C.al".into(), &FxHashSet::default());
         let site = sites
             .iter()
             .find(|s| s.caller_routine == "usesomeauth")
@@ -1604,7 +1605,7 @@ codeunit 50100 "C"
 }
 "#;
         let file = al_syntax::parse(src);
-        let sites = extract_sites(&file, src, "C.al", &FxHashSet::default());
+        let sites = extract_sites(&file, src, &"C.al".into(), &FxHashSet::default());
         let site = sites
             .iter()
             .find(|s| matches!(&s.shape, CalleeShape::Bare { name } if name.eq_ignore_ascii_case("foo")))

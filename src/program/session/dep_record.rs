@@ -446,9 +446,8 @@ impl Assembly {
         let facts: Vec<(ObligationId, SiteFacts)> = old.edges[f.edges.clone()]
             .iter()
             .filter_map(|e| {
-                old.site_facts
-                    .get(&e.obligation_id)
-                    .map(|v| (e.obligation_id.clone(), v.clone()))
+                let id = e.obligation_id();
+                old.site_facts.get(&id).map(|v| (id, v.clone()))
             })
             .collect();
         self.facts(facts);

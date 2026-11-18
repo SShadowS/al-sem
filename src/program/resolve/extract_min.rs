@@ -47,7 +47,7 @@ fn collect_calls(
             // Emit one site for this call expression.
             let callee_text = src[file.ir.expr(fn_id).origin.byte()].to_string();
             let span = CanonicalSpan {
-                unit: unit.to_string(),
+                unit: unit.into(),
                 start: e.origin.start.into(),
                 end: e.origin.end.into(),
             };

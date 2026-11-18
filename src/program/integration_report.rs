@@ -460,11 +460,11 @@ mod tests {
             },
             routes: vec![src_route(rid(ws, 50100, "HandlePost", 1))],
         };
-        let ce = ClassifiedEdge {
-            obligation_id: crate::program::resolve::full::ObligationId::Publisher(pubr),
+        let ce = ClassifiedEdge::new(
+            crate::program::resolve::full::ObligationKind::Publisher,
             edge,
-            site: None,
-        };
+            None,
+        );
 
         let rep = build_report(&graph, &[ce], ws);
         assert_eq!(rep.summary.primary_app, "Ws");

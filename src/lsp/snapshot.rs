@@ -167,7 +167,7 @@ impl LspEdge {
     /// identity is the one the resolver gave it.
     pub fn project_classified(ce: &ClassifiedEdge, unit: &SharedStr) -> LspEdge {
         let e = LspEdge::project(&ce.edge, unit);
-        debug_assert_eq!(e.obligation_id(), ce.obligation_id);
+        debug_assert_eq!(e.obligation_id(), ce.obligation_id());
         e
     }
 
@@ -179,7 +179,7 @@ impl LspEdge {
             return ObligationId::Publisher(self.from.clone());
         }
         let span = crate::program::resolve::edge::CanonicalSpan {
-            unit: self.span.unit.to_string(),
+            unit: self.span.unit.as_str().into(),
             start: self.span.start,
             end: self.span.end,
         };

@@ -220,17 +220,17 @@ pub(crate) fn close_holder_sites(
     if !graph.workspace_friendless {
         return;
     }
-    let mut callers: HashMap<&RoutineNodeId, Vec<&ObligationId>> = HashMap::new();
+    let mut callers: HashMap<&RoutineNodeId, Vec<&ClassifiedEdge>> = HashMap::new();
     for e in edges.iter() {
         for r in &e.edge.routes {
             if let RouteTarget::Routine(rid) = &r.target {
-                callers.entry(rid).or_default().push(&e.obligation_id);
+                callers.entry(rid).or_default().push(e);
             }
         }
     }
     let mut closed: Vec<(ObligationId, Vec<ObjectNodeId>)> = Vec::new();
     for e in edges.iter() {
-        let Some(f) = facts.get(&e.obligation_id).map(|f| f.rare()) else {
+        let Some(f) = facts.get(&e.obligation_id()).map(|f| f.rare()) else {
             continue;
         };
         let (Some(sources), Some(interface_lc)) = (&f.interface_holder, &f.interface) else {
@@ -267,13 +267,13 @@ pub(crate) fn close_holder_sites(
             })
         };
         if real && !over.is_empty() && over.iter().all(|c| implements(c) && reached.contains(c)) {
-            closed.push((e.obligation_id.clone(), over));
+            closed.push((e.obligation_id(), over));
         }
     }
-    let at: HashMap<&ObligationId, usize> = edges
+    let at: HashMap<ObligationId, usize> = edges
         .iter()
         .enumerate()
-        .map(|(i, e)| (&e.obligation_id, i))
+        .map(|(i, e)| (e.obligation_id(), i))
         .collect();
     let patches: Vec<(usize, ObligationId, Vec<ObjectNodeId>)> = closed
         .into_iter()
@@ -298,7 +298,7 @@ pub(crate) fn close_holder_sites(
 /// from code that is not resolved, or one call passes anything else.
 fn source_codeunits(
     graph: &ProgramGraph,
-    callers: &HashMap<&RoutineNodeId, Vec<&ObligationId>>,
+    callers: &HashMap<&RoutineNodeId, Vec<&ClassifiedEdge>>,
     facts: &SiteFactsByObligation,
     source: &HolderSource,
 ) -> Option<Vec<ObjectNodeId>> {
@@ -317,6 +317,13 @@ fn source_codeunits(
         .get(rid)
         .map_or(&[][..], Vec::as_slice)
         .iter()
-        .map(|c| facts.get(*c)?.rare().argument_codeunits.get(p)?.clone())
+        .map(|c| {
+            facts
+                .get(&c.obligation_id())?
+                .rare()
+                .argument_codeunits
+                .get(p)?
+                .clone()
+        })
         .collect()
 }

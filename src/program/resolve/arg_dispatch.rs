@@ -4170,7 +4170,12 @@ mod tests {
     ) -> (al_syntax::ir::AlFile, Vec<ExprId>, WithState) {
         use crate::program::resolve::extract::extract_sites;
         let file = al_syntax::parse(src);
-        let sites = extract_sites(&file, src, "T.al", &crate::fxhash::FxHashSet::default());
+        let sites = extract_sites(
+            &file,
+            src,
+            &"T.al".into(),
+            &crate::fxhash::FxHashSet::default(),
+        );
         let site = sites
             .iter()
             .find(|s| s.callee_text.eq_ignore_ascii_case(callee_lc))

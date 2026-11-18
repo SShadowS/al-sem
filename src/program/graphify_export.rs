@@ -367,7 +367,7 @@ fn project_edge(
     edges_out: &mut Vec<GEdge>,
 ) {
     let source = routine_id_str(&edge.from, &graph.apps);
-    let site_file = edge.site.span.unit.clone();
+    let site_file = edge.site.span.unit.to_string();
     let outcome = classify_obligation(edge);
     let dispatch_shape = Some(dispatch_shape_str(edge.shape));
 
@@ -673,7 +673,7 @@ fn build_location_hints(edges: &[ClassifiedEdge]) -> HashMap<RoutineNodeId, Stri
     // Pass 1: caller files (call-site unit). First write wins (deterministic order).
     for ce in edges {
         map.entry(ce.edge.from.clone())
-            .or_insert_with(|| ce.edge.site.span.unit.clone());
+            .or_insert_with(|| ce.edge.site.span.unit.to_string());
     }
     // Pass 2: callee def files from Source-route witnesses (authoritative — overwrite).
     for ce in edges {
@@ -1209,15 +1209,11 @@ mod tests {
                 receiver_tier: None,
             }],
         };
-        let ce = ClassifiedEdge {
-            obligation_id: crate::program::resolve::full::ObligationId::CallSite {
-                caller,
-                span: edge.site.span.clone(),
-                callee_fp: 42,
-            },
+        let ce = ClassifiedEdge::new(
+            crate::program::resolve::full::ObligationKind::CallSite,
             edge,
-            site: None,
-        };
+            None,
+        );
         (graph, vec![ce], a)
     }
 
@@ -1295,15 +1291,11 @@ mod tests {
                 receiver_tier: None,
             }],
         };
-        let ce = ClassifiedEdge {
-            obligation_id: crate::program::resolve::full::ObligationId::CallSite {
-                caller,
-                span: edge.site.span.clone(),
-                callee_fp: 7,
-            },
+        let ce = ClassifiedEdge::new(
+            crate::program::resolve::full::ObligationKind::CallSite,
             edge,
-            site: None,
-        };
+            None,
+        );
         // Drop the routines so only the unknown edge is present.
         g.routines.clear();
         let doc = build_graphify_document(&g, &[ce], primary);
@@ -1396,11 +1388,11 @@ mod tests {
                 mk_route(rid(a, 50102, "HandleB", 1)),
             ],
         };
-        let ce = ClassifiedEdge {
-            obligation_id: crate::program::resolve::full::ObligationId::Publisher(pubr),
+        let ce = ClassifiedEdge::new(
+            crate::program::resolve::full::ObligationKind::Publisher,
             edge,
-            site: None,
-        };
+            None,
+        );
         let doc = build_graphify_document(&graph, &[ce], a);
 
         let hev: Vec<&serde_json::Value> = doc
@@ -1484,15 +1476,11 @@ mod tests {
             completeness: SetCompleteness::Complete,
             routes: vec![mk_route(cand_a), mk_route(cand_b)],
         };
-        let ce = ClassifiedEdge {
-            obligation_id: crate::program::resolve::full::ObligationId::CallSite {
-                caller,
-                span: edge.site.span.clone(),
-                callee_fp: 99,
-            },
+        let ce = ClassifiedEdge::new(
+            crate::program::resolve::full::ObligationKind::CallSite,
             edge,
-            site: None,
-        };
+            None,
+        );
         let doc = build_graphify_document(&g, &[ce], primary);
 
         let amb: Vec<&GEdge> = doc

@@ -43,7 +43,7 @@ pub fn cross_app_demand(
 ) -> HashSet<RoutineNodeId> {
     // The record operations only the site facts carry: (triggers, table events).
     // FxHash (TLS-66): these maps over every edge were hot in the CDO build.
-    let fact_routes: FxHashMap<&ObligationId, (&[Route], &[Route])> = edges
+    let fact_routes: FxHashMap<std::borrow::Cow<'_, ObligationId>, (&[Route], &[Route])> = edges
         .site_facts
         .iter()
         .filter_map(|(ob, f)| {
@@ -76,7 +76,7 @@ pub fn cross_app_demand(
             continue;
         }
         let from = &ce.edge.from;
-        if let Some((triggers, table_events)) = fact_routes.get(&ce.obligation_id) {
+        if let Some((triggers, table_events)) = fact_routes.get(&ce.obligation_id()) {
             for to in triggers
                 .iter()
                 .chain(*table_events)

@@ -1915,7 +1915,7 @@ fn run_main() -> ExitCode {
                     let line = line_text();
                     let receiver = res
                         .site_facts
-                        .get(&ce.obligation_id)
+                        .get(&ce.obligation_id())
                         .and_then(|f| f.receiver.as_ref())
                         .map(|r| format!("{:?} {}", r.ty, r.type_text.as_deref().unwrap_or("")));
                     rows.push(serde_json::json!({
