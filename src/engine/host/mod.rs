@@ -496,6 +496,37 @@ pub mod test_hooks {
     /// The environment variable naming the hook.
     pub const ENV: &str = "ALSEM_ENGINE_TEST_HOOK";
 
+    /// Turn this process's core dumps off (`RLIMIT_CORE` 0) before a test
+    /// seam crashes it on purpose, and say so on stderr when the limit reads
+    /// back 0. The host pipes cores to systemd-coredump with the limit as
+    /// `%c`, and it stores none for a 0 limit, so a test's deliberate abort
+    /// leaves no core and raises no crash notice (TLS-93). A real crash keeps
+    /// its core: only the seams call this.
+    pub fn no_core_dumps(who: &str) {
+        #[cfg(unix)]
+        {
+            let zero = libc::rlimit {
+                rlim_cur: 0,
+                rlim_max: 0,
+            };
+            let mut now = libc::rlimit {
+                rlim_cur: 1,
+                rlim_max: 1,
+            };
+            // SAFETY: plain syscalls on stack values.
+            let off = unsafe {
+                libc::setrlimit(libc::RLIMIT_CORE, &zero) == 0
+                    && libc::getrlimit(libc::RLIMIT_CORE, &mut now) == 0
+            };
+            if off && now.rlim_cur == 0 {
+                use std::io::Write;
+                let _ = writeln!(std::io::stderr(), "{who}: test seam: core dumps off");
+            }
+        }
+        #[cfg(not(unix))]
+        let _ = who;
+    }
+
     /// A fault the child injects.
     #[derive(Clone, Debug, PartialEq, Eq)]
     pub enum Hook {

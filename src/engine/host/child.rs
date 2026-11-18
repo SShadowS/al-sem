@@ -239,6 +239,11 @@ pub fn serve_with(
 ) -> std::io::Result<()> {
     #[cfg(any(feature = "engine-test-hooks", debug_assertions))]
     let hook = super::test_hooks::from_env();
+    // A hooked child is a test's; several hooks crash it on purpose.
+    #[cfg(any(feature = "engine-test-hooks", debug_assertions))]
+    if hook.is_some() {
+        super::test_hooks::no_core_dumps("al-sem: engine-host");
+    }
     let mut hello = Hello::of_this_process();
     #[cfg(any(feature = "engine-test-hooks", debug_assertions))]
     match &hook {

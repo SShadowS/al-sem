@@ -1106,6 +1106,14 @@ mod faults {
         assert!(message.contains("engine died"), "{message}");
         #[cfg(unix)]
         assert!(message.contains("signal 6"), "an abort: {message}");
+        // TLS-93: a hooked child turns its core dumps off (read back as 0),
+        // so the deliberate abort leaves no core on the host. Break: the
+        // child's `no_core_dumps` call removed -> no such line (red).
+        #[cfg(unix)]
+        assert!(
+            message.contains("engine-host: test seam: core dumps off"),
+            "core dumps off: {message}"
+        );
         assert_eq!(
             front.current_backoff(),
             Duration::from_millis(400),

@@ -646,6 +646,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Each guard has a discrimination proof, recorded in the tests' docs. Documented in CLAUDE.md's
   test tier 2b.
 
+### Fixed (TLS-93: a test's deliberate crash no longer leaves a core dump on the host)
+
+- **The case.** `lsp::l4_host_binary::host_panic_ends_the_server` makes the server abort on
+  purpose. Each debug test run therefore made systemd-coredump store a core of
+  `al-call-hierarchy`, and the desktop raised a crash notice that looked like a real crash. The
+  engine-host fault hooks (`abort-on-ask`, `abort-on-ask-once`, `panic-on-ask-once`, used by
+  `engine_host` and the MCP tests) crash their child the same way.
+- **Now.** Both test seams lower their own process's `RLIMIT_CORE` to 0 before they crash it, and
+  print "test seam: core dumps off" once the limit reads back as 0:
+  - the l4-host panic seam (`AL_SEM_L4_HOST_TEST_PANIC`);
+  - any engine child started with a test hook (`ALSEM_ENGINE_TEST_HOOK`).
+
+  The host's `core_pattern` pipes to systemd-coredump with the limit as `%c`, and it stores no
+  core for a 0 limit. A real crash keeps its core, because only the seams lower the limit. No
+  other test crashes a process on purpose (searched: `abort`, SIGABRT and the other
+  core-dumping signals).
+- **Tests.** `host_panic_ends_the_server` and `engine_host`'s
+  `a_crash_mid_request_fails_the_ask_and_the_next_ask_respawns` assert the line, so the limit
+  read back inside the crashing child. Two discrimination proofs, both red: each seam's call
+  removed. That the host stores no core is for the owner to confirm with `coredumpctl list`
+  after a run.
+
 ### Changed (ENG-120: mimalloc's `purge_delay` measured on CDO and DO, kept at 0)
 
 - No code change: `alsem` keeps `purge_delay` 0. A delay of 1 or 10 ms gave no CPU gain near the

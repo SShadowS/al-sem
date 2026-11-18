@@ -130,6 +130,7 @@ pub fn spawn_l4_host(root: PathBuf, universe: ViewUniverse) -> (HostHandle, Join
                     // Debug-only seam for the spawned-binary test of FX-13.
                     #[cfg(debug_assertions)]
                     if std::env::var_os("AL_SEM_L4_HOST_TEST_PANIC").is_some() {
+                        crate::engine::host::test_hooks::no_core_dumps("l4-host");
                         panic!("AL_SEM_L4_HOST_TEST_PANIC");
                     }
                     run_worker(shared, wake, IncrementalHost::new(&root, universe), || {})
