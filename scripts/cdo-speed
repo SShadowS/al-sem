@@ -695,29 +695,33 @@ PERF = os.environ.get("CDO_SPEED_PERF", "perf")
 
 
 def perf_event_args(events=None):
-    return [a for e in (events or INSTR_EVENTS) for a in ("-e", e)]
+    """`-e` arguments for `events`: at most ONE event per PMU (`cpu_core/...`,
+    `cpu_atom/...`, or the plain `instructions:u`). Instructions use the fixed
+    counter, so one event a PMU leaves nothing in this perf run to multiplex: a
+    count never comes out short because of our own events (review r1, sol). A
+    second event on a PMU is refused here, not added."""
+    events = events or INSTR_EVENTS
+    pmus = [e.split("/", 1)[0] if "/" in e else "" for e in events]
+    if len(pmus) != len(set(pmus)):
+        raise ValueError(f"cdo-speed: one perf event per PMU only (no multiplexing): {events}")
+    return [a for e in events for a in ("-e", e)]
 
 
 def instr_total(text, events=None):
     """The summed count of `perf stat -x,` output for `events`, or None. An event
     that never ran (a call that stayed on one core type) reads `<not counted>`:
     0. Any other non-number (`<not supported>`), or an event missing, is None.
-    So is a count perf did not take the whole time (column 5, the share of the
-    time it ran, below 100 %): another profiler multiplexing the PMU leaves an
-    unscaled count short, and one side counted short looks cheaper (review r1,
-    sol)."""
+    One event per PMU (`perf_event_args`) leaves nothing in this run to
+    multiplex. perf's time-share column is no self-check here: on a hybrid CPU a
+    core type's event is enabled all along but runs only while the task is on
+    that type, so enabled and running differ with no multiplexing at all (58 %
+    and 42 % for 4 threads, measured)."""
     events = events or INSTR_EVENTS
     seen, total = set(), 0
     for line in text.splitlines():
         cols = line.strip().split(",")
         if len(cols) > 2 and cols[2] in events:
             if cols[0].isdigit():
-                try:
-                    share = float(cols[4]) if len(cols) > 4 and cols[4] else 100.0
-                except ValueError:
-                    return None
-                if share < 99.99:
-                    return None
                 total += int(cols[0])
             elif cols[0] != "<not counted>":
                 return None
@@ -1306,14 +1310,15 @@ def main():
         log(f"  {row['call']:<14} cpu {c['base']:7.2f} -> {c['head']:7.2f} s x{c['ratio']:.3f}"
             f"   wall {w['base']:7.2f} -> {w['head']:7.2f} s x{w['ratio']:.3f}"
             f"{instr_col}   spread {c['spread']:.2f}/{w['spread']:.2f}{note}")
-        # ⟨TLS-83⟩ Advisory: reported, never failing (see INSTR_LIMIT). On every
-        # row, not only the judged ones: an instruction count stays exact below
-        # the CPU-time cutoff (review r1, sol: warm-digest at x1.10 said nothing).
+        if not row["judged"]:
+            continue
+        # ⟨TLS-83⟩ Advisory: reported, never failing (see INSTR_LIMIT), on the
+        # judged rows only: below the CPU-time cutoff a call is a few thousand
+        # instructions whose ratio swings (8 false advisories in a run of one
+        # binary against itself when tried on every row; review r1, sol).
         if i and i["ratio"] > INSTR_LIMIT:
             advisories.append(f"{row['call']}: instructions x{i['ratio']:.4f} "
                               f"(advisory limit {INSTR_LIMIT}{', warm-up' if warm else ''})")
-        if not row["judged"]:
-            continue
         if warm:
             if c["ratio"] > WARM_CPU_LIMIT:
                 failed.append(f"{row['call']}: CPU time x{c['ratio']:.2f} "

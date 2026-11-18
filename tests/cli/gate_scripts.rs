@@ -2182,8 +2182,7 @@ if os.path.exists(me):
 /// perf's event setup does. STUB_PERF_NONE: every attach
 /// reads `<not counted>` on both. STUB_PERF_VANISH: it deletes itself after the
 /// probe, so starting it for a call fails. STUB_PERF_NOACK: it never answers
-/// `ack`. STUB_PERF_SHARE=<pct>: an attach's count ran that share of the time
-/// (multiplexed).
+/// `ack`.
 const SPEED_PERF_STUB: &str = r#"#!/usr/bin/env python3
 import os, signal, sys, time
 a = sys.argv[1:]
@@ -2195,12 +2194,9 @@ def total(pids):
             s += int(open(f).read())
     return s
 def lines(n):
-    share = "100.00"
-    if "--" not in a:
-        if os.environ.get("STUB_PERF_NONE"):
-            n = "<not counted>"
-        share = os.environ.get("STUB_PERF_SHARE", share)
-    return (f"{n},,cpu_core/instructions/u,1,{share},,\n"
+    if os.environ.get("STUB_PERF_NONE") and "--" not in a:
+        n = "<not counted>"
+    return (f"{n},,cpu_core/instructions/u,1,100.00,,\n"
             "<not counted>,,cpu_atom/instructions/u,0,0.00,,\n")
 if "--" in a:
     sys.stderr.write(lines(1000))
@@ -2209,6 +2205,8 @@ if "--" in a:
     sys.exit(0)
 out = a[a.index("-o") + 1]
 pids = a[a.index("-p") + 1].split(",")
+with open(os.path.join(os.environ["STUB_DIR"], "perf-attaches"), "a") as f:
+    f.write(pids[0] + "\n")  # the server's pid (cdo-speed lists it first)
 # perf's `-D -1 --control fifo:<ctl>,<ack>`: counting starts at `enable`, then
 # `ack` (cdo-speed waits for it before the call). STUB_PERF_SLOW: slow counters.
 assert a[a.index("-D") + 1] == "-1", a
@@ -2462,25 +2460,6 @@ fn speed_reports_instructions_and_their_limit_is_advisory() {
         "the round total took a 0: {text}"
     );
 
-    // Review r1 (sol): a count perf took only part of the time (another
-    // profiler multiplexing the PMU) is no count.
-    let dir = tempfile::tempdir().unwrap();
-    let (code, text) = speed_with_stub(
-        dir.path(),
-        "1.0",
-        &[],
-        &[
-            ("CDO_SPEED_INSTR", "1"),
-            ("CDO_SPEED_PERF", perf),
-            ("STUB_PERF_SHARE", "50.00"),
-        ],
-    );
-    assert_eq!(code, Some(0), "{text}");
-    assert!(
-        verdict(&text).contains("(instructions: no call fully counted; advisory limit x1.02)"),
-        "a multiplexed count was taken as whole: {text}"
-    );
-
     // Review r1 (sol): a perf that never acks costs each server at most
     // INSTR_GIVE_UP waits, then its calls go uncounted, said once.
     let dir = tempfile::tempdir().unwrap();
@@ -2496,9 +2475,30 @@ fn speed_reports_instructions_and_their_limit_is_advisory() {
         ],
     );
     assert_eq!(code, Some(0), "{text}");
+    let gave_up = text
+        .matches("perf failed to attach 3 times in a row")
+        .count();
+    assert!(gave_up > 0, "no give-up: {text}");
+    // No server tried more than 3 times (the stub logs each attach with its
+    // server's pid; a server with fewer calls tries fewer times), and those that
+    // gave up tried exactly 3. Break: the give-up's early return dropped -> a
+    // server tries on every call (red; the message alone stayed GREEN under that
+    // break, since it is printed at the third failure either way).
+    let mut per_server = std::collections::BTreeMap::<String, usize>::new();
+    for pid in std::fs::read_to_string(dir.path().join("state-/perf-attaches"))
+        .unwrap()
+        .lines()
+    {
+        *per_server.entry(pid.to_string()).or_default() += 1;
+    }
     assert!(
-        text.contains("perf failed to attach 3 times in a row"),
-        "no give-up: {text}"
+        per_server.values().all(|&n| n <= 3),
+        "attaches went on after the give-up: {per_server:?}"
+    );
+    assert_eq!(
+        per_server.values().filter(|&&n| n == 3).count(),
+        gave_up,
+        "{per_server:?}"
     );
     assert!(
         verdict(&text).contains("(instructions: no call fully counted; advisory limit x1.02)"),

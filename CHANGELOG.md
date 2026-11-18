@@ -450,9 +450,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - after three failed attaches in a row, a server's calls go uncounted (each failure cost up
       to 5 s inside the CDO slot);
     - perf is stopped even when a call times out;
-    - a count perf took only part of the time (multiplexed, column 5 below 100 %) is no count;
-    - so is a call where a server process appeared between the pid scan and the attach;
-    - the advisory checks every row, not only the judged ones.
+    - a call where a server process appeared between the pid scan and the attach is not
+      counted;
+    - no multiplexing by construction: a perf run asks for at most one event per PMU (the
+      fixed instruction counter of each core type), and `perf_event_args` refuses a second.
+      perf's time share is no self-check on a hybrid CPU: a core type's event is enabled all
+      along but runs only while the task is on that type (58 % + 42 % for 4 threads,
+      measured, with nothing else counting);
+    - the advisory applies to the judged rows only, as the verdict says: on every row, the
+      tiny unjudged calls gave 8 false advisories in a run of one binary against itself.
   - `CDO_SPEED_PERF` is a test hook naming the perf command.
   - `speed.json` gains `instr` per record, `instr` per row and an `instructions` block.
 - **The CHANGELOG rule** (CLAUDE.md): quote an instruction ratio as work ("instructions x0.93"),
