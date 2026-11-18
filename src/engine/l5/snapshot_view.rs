@@ -901,7 +901,7 @@ pub(super) fn view_facts<'r>(
                 let g = &fb.groups[gi as usize];
                 let slice = raw(&g.id).map(|slice| {
                     let stable = &fb.tables.subjects[g.subject as usize];
-                    let subject = b.subject(stable);
+                    let subject = b.subject_shared(stable.clone());
                     let mi = b.project_raw(gi, subject, stable, &slice, routine_to_stable);
                     (slice, mi)
                 });
@@ -1340,6 +1340,63 @@ pub(super) mod tests {
 
     fn inputs(ws: &Path) -> Arc<crate::program::inputs::WorkspaceInputs> {
         crate::program::inputs::WorkspaceInputs::read(ws, &Default::default())
+    }
+
+    /// ENG-129: the base's per-routine ids are the routine map's own texts, not copies: every
+    /// group's id is the map's key and its subject the map's value (the same allocation), and
+    /// so is every `group_of` key. Built over a real fixture.
+    /// DISCRIMINATION: `stable_routine_shared` (or `internal_routine_shared`) answering a
+    /// fresh `SharedStr::from(..)` instead of the map's handle fails the `ptr_eq` asserts.
+    #[test]
+    fn the_base_holds_the_routine_maps_own_texts() {
+        let dir =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/r0-corpus/ws-callsite-resolutions");
+        let target = AnalysisTarget::build(&inputs(&dir), true, "digest").expect("a model");
+        let model = target.resolved();
+        let rel = ExecRelation::single_app(model);
+        let apps = tree_apps(None);
+        let (caps, _raw) = compose_cone(
+            model,
+            &rel,
+            ConeScope {
+                derived: true,
+                raw: WitnessRequest::primary().scope(model),
+            },
+        );
+        let no_arena = Default::default();
+        let pd = caps.pd.as_ref().unwrap_or(&no_arena);
+        use crate::program::str_pool::SharedStr;
+        let base = derive_tree_base(model, rel.cone(), &[], &caps, pd, &apps);
+        let vb = &base.view;
+        let fb = &vb.facts;
+        assert!(fb.split, "precondition: the split (per-run) layout");
+        assert!(
+            !fb.groups.is_empty(),
+            "precondition: the fixture has covered routines"
+        );
+        for g in &fb.groups {
+            let (key, value) = vb
+                .routine_to_stable
+                .get_key_value(&*g.id)
+                .expect("every group's routine is in the map");
+            assert!(
+                SharedStr::ptr_eq(&g.id, key),
+                "{}: the group id is a copy",
+                &*g.id
+            );
+            let subject = &fb.tables.subjects[g.subject as usize];
+            assert!(
+                SharedStr::ptr_eq(subject, value),
+                "{}: the subject is a copy",
+                &*g.id
+            );
+            let (of_key, _) = fb.group_of.get_key_value(&*g.id).expect("indexed");
+            assert!(
+                SharedStr::ptr_eq(of_key, key),
+                "{}: the group_of key is a copy",
+                &*g.id
+            );
+        }
     }
 
     /// Plan item L3: two views over one shared tree base hold its whole

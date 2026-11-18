@@ -2554,7 +2554,8 @@ fn capability_fact_sort_fields(f: &SnapshotCapabilityFact) -> [&str; 8] {
 /// One emitted routine's rows before projection: its direct facts, then its
 /// raw inherited facts, under its snapshot subject.
 struct RowGroup<'a> {
-    subject: String,
+    /// The routine map's own stable text (ENG-129).
+    subject: SharedStr,
     direct: &'a [CapabilityFact],
     raw: Option<InheritedSlice<'a>>,
 }
@@ -2585,13 +2586,6 @@ struct SnapTablesBuilder<'r> {
 }
 
 impl<'r> SnapTablesBuilder<'r> {
-    fn subject(&mut self, s: &str) -> u32 {
-        if let Some(&ix) = self.subject_ix.get(s) {
-            return ix;
-        }
-        self.subject_shared(SharedStr::from(s))
-    }
-
     /// ENG-129: `s`'s index, storing the given text (a caller's shared handle) when new.
     fn subject_shared(&mut self, s: SharedStr) -> u32 {
         if let Some(&ix) = self.subject_ix.get(&*s) {
@@ -2751,7 +2745,7 @@ fn derive_capability_facts<'r>(
         .iter()
         .filter(|r| seen.insert(r.id.as_str()) && inp.coverage.contains_key(&r.id))
         .map(|r| RowGroup {
-            subject: stable_routine_id(&r.id, inp.routine_to_stable),
+            subject: stable_routine_shared(&r.id, inp.routine_to_stable),
             direct: inp.direct_full.facts(&r.id).unwrap_or(&[]),
             raw: take_raw(&r.id),
         })
@@ -2761,12 +2755,7 @@ fn derive_capability_facts<'r>(
     let mut order: Vec<usize> = (0..groups.len()).collect();
     if split {
         // Stable: equal subjects keep their emission order.
-        order.sort_by(|&x, &y| {
-            cmp_joined(
-                &[groups[x].subject.as_str(), ""],
-                &[groups[y].subject.as_str(), ""],
-            )
-        });
+        order.sort_by(|&x, &y| cmp_joined(&[&*groups[x].subject, ""], &[&*groups[y].subject, ""]));
     }
     // The subject runs in output order, as row counts (split mode only).
     let mut runs: Vec<usize> = Vec::new();
@@ -2775,10 +2764,10 @@ fn derive_capability_facts<'r>(
         for &gi in &order {
             let g = &groups[gi];
             match runs.last_mut() {
-                Some(n) if prev == Some(g.subject.as_str()) => *n += g.len(),
+                Some(n) if prev == Some(&*g.subject) => *n += g.len(),
                 _ => runs.push(g.len()),
             }
-            prev = Some(g.subject.as_str());
+            prev = Some(&*g.subject);
         }
     }
     let total: usize = groups.iter().map(RowGroup::len).sum();
@@ -2791,7 +2780,7 @@ fn derive_capability_facts<'r>(
         .iter()
         .map(|&gi| {
             let g = &groups[gi];
-            let subject = b.subject(&g.subject);
+            let subject = b.subject_shared(g.subject.clone());
             let group = u32::try_from(gi).expect("emission groups fit u32");
             b.project_group(group, subject, g, inp.routine_to_stable)
         })
@@ -3195,7 +3184,7 @@ fn derive_pd_arena(
         let cone_routine = cone.routine_of(old_ix);
         let routine = stable_of
             .entry(cone_routine.as_ptr() as usize)
-            .or_insert_with(|| RoutineId::from(stable_routine_id(cone_routine, map).as_str()))
+            .or_insert_with(|| stable_routine_shared(cone_routine, map))
             .clone();
         let owner = stable_routine_id(&producer.owner, map);
         let producer_fact = *direct_fact_ix
