@@ -74,8 +74,8 @@ RSS; the CHANGELOG says so.
    only then hand out `Mapped` slices. On Unix every publish (a miss or a refused entry) holds a
    per-package lock (`flock` on `<hash>.lock`, which must be a private regular file) and reads the
    entry once more under it: an entry another process published meanwhile is used; a missing one is
-   published without replacing; a refused one is replaced. Without the lock a refused entry is not
-   replaced and the source stays `Owned`. Windows has no file lock: a rename over an entry another
+   published without replacing; a refused one is replaced. Without the lock nothing is published
+   and the source stays `Owned`. Windows has no file lock: a rename over an entry another
    engine maps fails, so a replacement cannot remove an entry in use. On Unix the temp file (`openat`, `O_EXCL`, 0600), the lock and the publish
    (`renameat` to replace, `linkat` for no-clobber) all go through the checked directory handle. The
    writer refuses to publish an index over the cap. On a miss: extract, write the file, then take the hit path. If the write fails,

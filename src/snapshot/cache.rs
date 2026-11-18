@@ -130,22 +130,23 @@ pub fn cached_source_in(dir: &Path, image: &Arc<AppImage>) -> Result<(Vec<Source
 /// package's lock and reads the entry again under it, so no two writers decide on the same
 /// entry at once: an entry another process published meanwhile is used (every engine then maps
 /// the one file); a missing one is published without replacing; a refused one is replaced.
-/// Without the lock a missing entry is still published without replacing (that never
-/// overwrites anything), but a refused one is not replaced and the text stays owned.
+/// Without the lock nothing is published (sol): an entry another process published is still
+/// used, otherwise the text stays owned.
 fn publish(d: &CacheDir<'_>, name: &str, hash: &str, files: Vec<SourceFile>) -> Vec<SourceFile> {
     let path = d.path.join(name);
     let lock = d.lock(hash);
     let replace = match d.read(name, hash) {
         Ok(Some(theirs)) => return theirs,
-        Ok(None) => false,
-        Err(_) if lock.is_some() => true,
-        Err(_) => {
+        _ if lock.is_none() => {
             log::warn!(
-                "snapshot cache lock for {} not taken: refused entry kept, source owned text",
+                "snapshot cache lock for {} not taken: nothing published, source kept as owned \
+                 text",
                 path.display()
             );
             return files;
         }
+        Ok(None) => false,
+        Err(_) => true,
     };
     if let Err(e) = d.write(name, hash, &files, replace) {
         log::warn!(
@@ -890,7 +891,8 @@ mod tests {
     }
 
     /// A lock path that is not a regular private file (a FIFO here) is not used, never blocks,
-    /// and the refused entry is left alone (the source is owned text).
+    /// and nothing is published without it: a refused entry is left alone, and a missing one
+    /// is not created (the source is owned text either way).
     #[cfg(unix)]
     #[test]
     fn a_bad_lock_replaces_nothing() {
@@ -907,6 +909,14 @@ mod tests {
         assert_eq!(texts(&files), [("src/A.al", A), ("src/B.al", B)]);
         assert!(files.iter().all(|f| !f.text.is_mapped()), "owned");
         assert_eq!(std::fs::read(&path).unwrap(), b"refused", "not replaced");
+
+        std::fs::remove_file(&path).unwrap();
+        let (files, _) = cached_source_in(dir.path(), &img).unwrap();
+        assert!(files.iter().all(|f| !f.text.is_mapped()), "owned on a miss");
+        assert!(
+            std::fs::symlink_metadata(&path).is_err(),
+            "nothing published without the lock"
+        );
     }
 
     /// Windows: while a map of an entry lives, the entry cannot be opened for writing (the

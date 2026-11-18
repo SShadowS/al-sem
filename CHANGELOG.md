@@ -183,7 +183,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Unix every publish holds a per-package lock (`flock` on a private regular `<hash>.lock`) and
   reads the entry again under it: an entry another process published meanwhile is used (every
   engine then maps the one file), a missing one is published without replacing, a refused one
-  is replaced. Without the lock a refused entry is not replaced and the text stays owned; the
+  is replaced. Without the lock nothing is published and the text stays owned; the
   temp file, the lock and the rename all go through the checked directory handle. Windows has
   no lock: a missing entry is published without replacing, a refused one replaced (a rename
   over an entry another engine maps fails). A hit (and a miss, after writing) maps
@@ -224,11 +224,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Windows the default cache (`%LOCALAPPDATA%`, else the per-user temp directory) is under this
   user's profile (not checked), and while a map lives the entry cannot be opened for writing at
   all, not even by this user.
-- **CDO checks** (base `a73b4bf6`): `cdo-before-after` moved no finding, fingerprint or
-  call-graph number; the session refresh equals a cold build at all 12 steps in both modes;
-  `cdo-gate --only harness,l4,output` passed (211/0, 25/0, 22/0). `cdo-speed` passed twice; the
-  round total read x1.002 and x1.077 and the build x0.963 and x1.065, which disagree, so no
-  speed ratio is claimed.
+- **CDO checks** (first head, before the sol fold; base `a73b4bf6`): `cdo-before-after` moved
+  no finding, fingerprint or call-graph number; the session refresh equals a cold build at all
+  12 steps in both modes; `cdo-gate --only harness,l4,output` passed (211/0, 25/0, 22/0).
+  `cdo-speed` passed twice; the round total read x1.002 and x1.077 and the build x0.963 and
+  x1.065, which disagree, so no speed ratio is claimed. After the fold (base `38635b99`):
+  `ci-steps task` 6148/6148, `cdo-before-after` moved nothing, `cdo-gate --only
+  harness,l4,output` passed (212/0, 25/0, 22/0), the refresh equals a cold build at all 12
+  steps in both modes, and the census bucket is again 4.79 MiB (mapped).
 - **Pinned by** `snapshot::cache::tests` (a damaged text or index under an old hash is refused
   and rewritten, mapped: with the hash check removed, or covering the text only, they fail;
   truncated, bad-magic, out-of-range and overflowing entries, another package's entry, an
@@ -237,7 +240,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   refused and replaced; a directory other users can write is not used, and an entry they
   can write is replaced; a published entry is kept and a refused one replaced, unless another
   process already published a valid one; a publish waits for the lock, and a lock path that is
-  not a private regular file replaces nothing; on Windows a mapped entry cannot be opened for
+  not a private regular file publishes nothing; on Windows a mapped entry cannot be opened for
   writing (that test runs on Windows only); a valid entry, empty included, is served without
   extracting or rewriting; an unwritable cache keeps owned text), `source_text::tests` (a
   range that splits a character is refused: without the UTF-8 check it fails; `ptr_eq` needs
