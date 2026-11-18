@@ -513,7 +513,7 @@ fn task(i: usize, cx: &Cx<'_, '_, '_>) -> (Option<Shared>, SccOut) {
         census::add_gated(&census::FACTCONE_ENTRIES, fcone.len() as u64);
         census::add_since(&census::FACTCONE_NANOS, t);
         census::add(&census::FACTCONE_CALLS, 1);
-        FrozenCone::freeze(fcone)
+        fcone
     });
     let t = census::start();
     let ccone = coverage_cone_for_scc(
@@ -563,15 +563,8 @@ fn task(i: usize, cx: &Cx<'_, '_, '_>) -> (Option<Shared>, SccOut) {
     // `emitted > 0` here: with no seed every member re-folds.
     let use_set = recursive && emitted > 0 && x.scope.derived;
     let t = use_set.then(census::start).flatten();
-    let root_set = (use_set && root_scc).then(|| {
-        FrozenCone::freeze(fact_cone_for_scc(
-            &scc_entry.members,
-            succ_ids,
-            &cones,
-            x.direct,
-            None,
-        ))
-    });
+    let root_set = (use_set && root_scc)
+        .then(|| fact_cone_for_scc(&scc_entry.members, succ_ids, &cones, x.direct, None));
     census::add_since(&census::BFS_WALK_NANOS, t);
     let scc_set: Option<&FrozenCone> = if !use_set {
         None

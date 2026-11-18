@@ -468,8 +468,8 @@ pub(crate) mod cones_census {
     /// Σ entries of the built (non-root) fact cones: what a cone store that
     /// keeps every cone holds (design §6.10).
     pub(crate) static FACTCONE_ENTRIES: AtomicU64 = AtomicU64::new(0);
-    /// `merge_cone` traffic: total merges, and how many hit the tie-break path
-    /// that calls `rep_key` TWICE (each call JSON-serializes two fields).
+    /// Cone merge traffic (`cone_of_candidates`, ENG-130): candidates, and how many met an
+    /// earlier candidate of their key (the tie-break path; the rep keys are precomputed).
     pub(crate) static MERGE_CALLS: AtomicU64 = AtomicU64::new(0);
     pub(crate) static MERGE_TIEBREAKS: AtomicU64 = AtomicU64::new(0);
     /// #69 D1.4: the producer solve (`l4::pd_solve::solve`), summed over every
@@ -713,7 +713,7 @@ pub(crate) mod cones_census {
     }
 
     /// `add`, but only when the census is on. For counters on paths that run
-    /// millions of times per run (`merge_cone`: 6,556,465), an unconditional
+    /// millions of times per run (the cone merge: 6,556,465), an unconditional
     /// `fetch_add` is not free — it inflated `compose` from ~11.0 s to ~12.8 s,
     /// i.e. the probe was distorting the very number it reported.
     pub(crate) fn add_gated(c: &AtomicU64, v: u64) {
@@ -888,7 +888,7 @@ pub(crate) mod cones_census {
             PD_SOLVE_CALLS.load(Ordering::Relaxed),
         );
         eprintln!(
-            "[cones-census]   merge_cone: calls={} tiebreaks={} (a tiebreak = 2x rep_key, each JSON-serializing)",
+            "[cones-census]   cone merge: candidates={} tiebreaks={}",
             MERGE_CALLS.load(Ordering::Relaxed),
             MERGE_TIEBREAKS.load(Ordering::Relaxed),
         );
