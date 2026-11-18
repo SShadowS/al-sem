@@ -24,6 +24,9 @@ fn speed_gate_fails_when_a_timed_call_fails() {
         .env("ALSEM_SPEED_CACHE", out.path().join("cache"))
         // TLS-65/TLS-76: no wait for a calm machine (the test's own load is no issue).
         .env("CDO_SPEED_CALM_PRESSURE", "100")
+        // TLS-89: outside any hold (a gate's inherited token would mark the real slot).
+        .env_remove("CDO_SLOT_TOKEN")
+        .env("CDO_SLOT_DIR", out.path().join("slot"))
         .output()
         .expect("spawn python3 scripts/cdo-speed");
     let text = format!(
@@ -38,6 +41,79 @@ fn speed_gate_fails_when_a_timed_call_fails() {
     );
     assert!(text.contains("  | "), "the call's stderr: {text}");
     assert!(!text.contains("cdo-speed: PASS"), "{text}");
+    assert!(text.contains("not inside the CDO slot"), "{text}");
+}
+
+/// ⟨TLS-89⟩ Inside a hold (its token), cdo-speed marks it timed before its first
+/// timed call; a build still running when the wait ends stops it there: exit 2,
+/// "timed nothing", no server started. The stand-in build is bash through a symlink
+/// named `t89g<test pid>` (unique: `pgrep -x` sees the whole machine), matched by
+/// `cdo-slot`'s `pgrep -x` (CDO_SLOT_BUILD_NAMES).
+///
+/// Mutation (2026-11-18): the `timed_hold(repo)` call dropped from `main` -> the
+/// warm-up starts beside the build (exit 1 on the empty workspace, "round 0") (red).
+#[cfg(target_os = "linux")]
+#[test]
+fn speed_gate_times_nothing_beside_a_build() {
+    let ws = tempfile::tempdir().unwrap();
+    let out = tempfile::tempdir().unwrap();
+    let exe = env!("CARGO_BIN_EXE_alsem");
+    let slot = concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-slot");
+    let fake_name = format!("t89g{}", std::process::id());
+    let fake = out.path().join(&fake_name);
+    // A symlink (its process name is the link's): a copy can fail to exec with
+    // "Text file busy" while another test thread forks.
+    std::os::unix::fs::symlink("/bin/bash", &fake).unwrap();
+    // Reaped on any exit, a panic included (a leaked stand-in would hold up
+    // later runs).
+    let build = crate::cdo_slot::Reap(
+        std::process::Command::new(&fake)
+            .args(["-c", "sleep 600; true"])
+            .spawn()
+            .unwrap(),
+    );
+    let holder = crate::cdo_slot::Reap(
+        std::process::Command::new("sleep")
+            .arg("600")
+            .spawn()
+            .unwrap(),
+    );
+    let held = std::process::Command::new("bash")
+        .args([slot, "acquire", "gate", "test hold", "--bind"])
+        .arg(holder.0.id().to_string())
+        .env("CDO_SLOT_DIR", out.path().join("slot"))
+        .env("CDO_SLOT_MEM_MIN_GB", "0")
+        .env("CDO_SLOT_TOKEN", "tok-speed")
+        .env_remove("CLAUDE_CODE_SESSION_ID")
+        .output()
+        .unwrap();
+    let run = std::process::Command::new("python3")
+        .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-speed"))
+        .arg(ws.path())
+        .args(["--base-exe", exe, "--head-exe", exe, "--out"])
+        .arg(out.path())
+        .env("ALSEM_SPEED_CACHE", out.path().join("cache"))
+        .env("CDO_SPEED_CALM_PRESSURE", "100")
+        .env("CDO_SLOT_DIR", out.path().join("slot"))
+        .env("CDO_SLOT_MEM_MIN_GB", "0")
+        .env("CDO_SLOT_POLL_S", "1")
+        .env("CDO_SLOT_TOKEN", "tok-speed")
+        .env("CDO_SLOT_BUILD_NAMES", &fake_name)
+        .env("CDO_SLOT_BUILD_SCRIPTS", "tls89-none")
+        .env("CDO_SLOT_TIMED_WAIT_S", "1")
+        .output()
+        .expect("spawn python3 scripts/cdo-speed");
+    drop(build);
+    drop(holder);
+    assert!(held.status.success(), "{held:?}");
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(run.status.code(), Some(2), "{text}");
+    assert!(text.contains("timed nothing"), "{text}");
+    assert!(!text.contains("round 0"), "{text}");
 }
 
 /// TLS-25: `--rounds` outside 1 to 5 (there are 5 round routines) is refused
@@ -73,6 +149,9 @@ fn speed_gate_refuses_more_rounds_than_routines() {
             // TLS-65 (Fable r1)/TLS-76: no wait for a calm machine, which on a busy
             // box would hold the valid run for 10 min.
             .env("CDO_SPEED_CALM_PRESSURE", "100")
+            // TLS-89: outside any hold (a gate's inherited token would mark the real slot).
+            .env_remove("CDO_SLOT_TOKEN")
+            .env("CDO_SLOT_DIR", out.path().join("slot"))
             .output()
             .expect("spawn python3 scripts/cdo-speed");
         let text = format!(

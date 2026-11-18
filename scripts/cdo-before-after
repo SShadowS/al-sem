@@ -414,15 +414,19 @@ def render(rep, base, head):
 
 
 def take_slot(reason, timeout):
-    """Hold the CDO slot (bound to this process); `True` when this run took it and
+    """Hold the CDO slot (bound to this process), timed (TLS-89: the measurements
+    are timed, so no build may run beside them); `True` when this run took it and
     must release it, `False` when it shares a hold it is inside."""
     os.environ.setdefault("CDO_SLOT_TOKEN", os.urandom(8).hex())
     cmd = ["bash", os.path.join(HERE, "cdo-slot"), "acquire",
            os.environ.get("CDO_SLOT_OWNER", "before-after"), reason, "--wait",
-           "--bind", str(os.getpid())]
+           "--bind", str(os.getpid()), "--timed"]
     if timeout:
         cmd += ["--timeout", str(timeout)]
     rc = subprocess.run(cmd).returncode
+    if rc == 6:
+        fail("builds still ran when the timed hold began (scripts/cdo-slot --timed): "
+             "measured nothing")
     if rc not in (0, 4):
         fail("the CDO slot was not taken (scripts/cdo-slot status)")
     return rc == 0

@@ -420,6 +420,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `docs/superpowers/notes/2026-11-18-eng120-purge-delay.md`, and `src/bin/alsem.rs`'s comment
   points there so nobody re-runs it without a new reason. The pre-sizing half went to ENG-121.
 
+### Changed (TLS-89: a timed CDO slot hold keeps builds out; untimed holds allow them)
+
+- **Why.** On 2026-11-16/17 a lane's cargo or probe build overlapped another lane's or a
+  landing's timed run at least six times; each round was re-run by hand. The finding behind the
+  fix: `scripts/claude-hooks/cdo-slot-guard` was wired in no session's settings, so it had
+  never refused anything. And once wired, it refused builds under EVERY hold (memory holds
+  included), which is too much, while a build started a minute before a timing still ran
+  beside it.
+- **`scripts/cdo-slot --timed`** (`run <owner> <reason> --timed -- <cmd>`, `acquire ... --bind PID
+  --timed`). It marks the hold, taken or shared, as timed while the bound process lives (a mark
+  counts only for the current holder and a live process). It then waits
+  for the build processes already running outside its own process line (its ancestors and
+  descendants do not count; nor do zombies). Build processes are found by exact name with
+  `pgrep -x`: `cargo cargo-nextest rustc rustdoc`, or CDO_SLOT_BUILD_NAMES (at most 15
+  characters each, a process name's limit). Build scripts count too, by an exact argv word:
+  `ci-steps check-goldens`, or CDO_SLOT_BUILD_SCRIPTS. Without them a timing could start
+  between a script's cargo steps (ci-steps' ~2 min agentflow step). Never a `pgrep -f`
+  pattern, which matches its own command line. Each timing keeps its own mark
+  (`$CDO_SLOT_DIR/timed.<pid>`), so a second timing in a shared hold also waits for builds,
+  and keeps its cover when the first ends. It prints their PIDs every ~60 s. If they still run after
+  CDO_SLOT_TIMED_WAIT_S (1800 s), it refuses with exit 6: it takes the mark back and releases
+  the slot if it took it, never a silent start beside a build. `status` adds a second line,
+  `timed by <owner> since <time> (<reason>)`.
+- **Who sets it.**
+  - `scripts/cdo-speed`, after its builds and before its first timed call, inside the hold it
+    runs in. So the speed phase of every cdo-gate and land is timed. Outside any hold it says
+    that nothing guards the timing. If builds still run, it exits 2 with "timed nothing".
+  - `scripts/cdo-before-after`, for its measurements.
+  - A lane's own timed run uses `cdo-slot run ... --timed`.
+- **The guard** now refuses:
+  - under any hold, another session's gate scripts and its CDO runs (aldump/alsem, or cargo,
+    naming the CDO workspace), as before;
+  - under a TIMED hold, also cargo builds and tests, `ci-steps`, `check-goldens` and
+    `agentflow run`, from every session, the holder's own included. The message names the
+    timed run and when it started.
+
+  An untimed hold now allows builds and tests (the slot's memory wait covers memory).
+- **Wiring** (the owner's: `.claude/` is outside the flow). Add this to each worktree's
+  `.claude/settings.local.json` under `hooks.PreToolUse`:
+  `{"matcher": "Bash", "hooks": [{"type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR/scripts/claude-hooks/cdo-slot-guard\"", "timeout": 30}]}`.
+  CLAUDE.md's "wired by the owner" now says what is true.
+- **Tests** (`tests/cli/cdo_slot.rs`, `before_after.rs`, `gate_scripts.rs`, `land_script.rs`):
+  - a timed hold refuses every guarded command from both sessions;
+  - an untimed one refuses only the non-build ones (listed by hand) and allows builds; land's
+    test now checks the other session's `scripts/cdo-gate` (its `cargo test` passes now);
+  - `run --timed` refuses beside a stand-in build (bash through a symlink with a per-run name)
+    with exit 6, nothing run; it starts once the build ends; its ancestor build is not waited
+    for; a stand-in build script refuses it too;
+  - an untimed run does not wait;
+  - a timed mark ends with its bound process; a second timing in a shared hold waits for a
+    build and keeps its mark when the first ends; a refused `acquire --bind --timed` with no
+    session or token frees the slot;
+  - cdo-before-after's measurements run under `timed by`;
+  - cdo-speed inside a hold exits 2 beside a build, before any server starts.
+
+  Each guard has a discrimination proof (break, red, restore, green), recorded in the tests'
+  docs. The two existing cdo-speed tests now run outside any hold (an inherited gate token
+  would have marked the real slot).
+
 ### Added (TLS-91: perf in the kraken image, for instruction counts)
 
 - **What.** `.kraken/Dockerfile` installs `linux-perf` (perf 7.0) in its own late layer, as gdb's,

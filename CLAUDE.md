@@ -84,10 +84,24 @@ scripts/cdo-slot acquire|release|status|run <owner> <reason>  # The one CDO slot
                                # cdo-gate hold it for their whole run; a lane's CDO measurement or timed run
                                # (an output_cdo re-mint, a hand CDO probe; TLS-61's cdo-before-after) takes it
                                # too: `run ... -- <cmd>`, or `acquire --wait` + `release` by hand (cdo-gate
-                               # --only inside such a hand hold shares it). While another session holds it,
-                               # the PreToolUse hook scripts/claude-hooks/cdo-slot-guard (wired by the owner)
-                               # refuses this session's cargo builds/tests, the gate scripts and aldump/alsem
-                               # on CDO, naming the holder. `scripts/cdo-slot status` says who. Waiters
+                               # --only inside such a hand hold shares it). A TIMING takes it `--timed`
+                               # (TLS-89; `run <owner> <reason> --timed -- <cmd>`, or `acquire ... --bind PID
+                               # --timed`): cdo-speed marks its hold timed after its builds (so a land's and
+                               # cdo-gate's speed phase is timed), cdo-before-after its measuring; any other
+                               # timed run of yours passes it too. A timed acquire first waits for the build
+                               # processes already running (cargo, cargo-nextest, rustc, rustdoc, by exact
+                               # name, never a self-matching `pgrep -f`), up to CDO_SLOT_TIMED_WAIT_S (1800 s),
+                               # then refuses (exit 6) rather than start beside one.
+                               # The PreToolUse hook scripts/claude-hooks/cdo-slot-guard then refuses: under
+                               # any hold, ANOTHER session's gate scripts and aldump/alsem (or cargo) naming
+                               # CDO; under a TIMED hold, also every session's cargo builds/tests, ci-steps,
+                               # check-goldens and agentflow run, the holder's own included. An untimed hold
+                               # allows builds. It refuses only where it is WIRED, and until TLS-89 it was
+                               # wired in no session: per worktree, `.claude/settings.local.json`
+                               # `hooks.PreToolUse` gets {"matcher": "Bash", "hooks": [{"type": "command",
+                               # "command": "python3 \"$CLAUDE_PROJECT_DIR/scripts/claude-hooks/cdo-slot-guard\"",
+                               # "timeout": 30}]} (the owner's to add). `scripts/cdo-slot status` says who
+                               # holds it, and on a second line `timed by ...` when timed. Waiters
                                # (`run`, `acquire --wait`) are served in arrival order (TLS-88): a holder
                                # that releases and asks again goes behind them, and an acquire without
                                # --wait refuses while anyone waits; a waiter short of memory steps

@@ -2,10 +2,17 @@
 """scripts/claude-hooks/cdo-slot-guard: a Claude Code PreToolUse hook (Bash tool).
 
 While another live session holds the CDO slot (scripts/cdo-slot), it refuses
-this session's builds, tests, gates and CDO runs, naming the holder.
+this session's gates and CDO runs, naming the holder. While the hold is TIMED
+(`cdo-slot run/acquire --timed`, TLS-89: a timing runs in it) it also refuses
+builds and tests (cargo, `ci-steps`, `check-goldens`, `agentflow run`), from every
+session, the holder's own included, naming the timed run and when it started.
+An untimed hold allows builds and tests (the slot's own memory wait covers
+memory).
 
-TLS-60. The owner wires it (e.g. .claude/settings.json `hooks.PreToolUse`, matcher
-"Bash", command `<repo>/scripts/claude-hooks/cdo-slot-guard`). The command line is
+TLS-60. Wired per session in `.claude/settings.local.json` (or settings.json)
+`hooks.PreToolUse`: {"matcher": "Bash", "hooks": [{"type": "command", "command":
+"python3 \"$CLAUDE_PROJECT_DIR/scripts/claude-hooks/cdo-slot-guard\"", "timeout": 30}]}
+(TLS-89 found it wired in no session until then). The command line is
 read the way the shell reads it (quotes, heredoc bodies and comments are not
 commands); every command in it is checked, after `cd ... &&`, `VAR=x`, shell
 keywords (`if`, `!`, `{`, `do` ...) and wrappers (`nice`, `env`, `time`,
@@ -18,9 +25,11 @@ strings are read as command lines too). Guarded:
     through bash/sh/python, except their information modes (--help, --dry-run,
     --layout, --summary=..., --product-paths, `ci-steps fmt`);
   aldump / alsem, when the command line names the CDO workspace
-    (/work/src/cdo-baseline, $CDO_WS or its value).
-Allowed: everything else; any command while the slot is free, stale or this
-session's. Its limits: it sees Bash calls only (an `alsem_*` MCP call on CDO is
+    (/work/src/cdo-baseline, $CDO_WS or its value), and cargo naming it.
+Builds and tests (the cargo subcommands, ci-steps, check-goldens, agentflow run)
+count only under a timed hold.
+Allowed: everything else; any command while the slot is free or stale; under
+this session's own hold, all but builds and tests while it is timed. Its limits: it sees Bash calls only (an `alsem_*` MCP call on CDO is
 not guarded), and a command it cannot parse is read word by word. A hook that
 cannot read its input, or a `cdo-slot status` that fails, allows (and says so on
 stderr), so a hook bug never stops every session.
@@ -57,6 +66,10 @@ INFO_ANYWHERE = {
     "cdo-before-after": {"-h", "--help", "--dry-run"},
 }
 INFO_FIRST = {"ci-steps": {"fmt"}}
+# ⟨TLS-89⟩ The scripts that only build and test: guarded under a timed hold only.
+BUILD_SCRIPTS = {"ci-steps", "check-goldens"}
+# Whether builds and tests count (main clears it for an untimed hold).
+BUILDS = True
 SEPARATORS = {";", ";;", "&&", "||", "|", "|&", "&", "(", ")", "\n"}
 KEYWORDS = {
     "if", "then", "else", "elif", "fi", "do", "done", "while", "until", "!", "{", "}",
@@ -405,7 +418,7 @@ def guarded_segment(words, line):
             if rest[j] in CARGO_VALUE_FLAGS:
                 j += 1
             j += 1
-        return j < len(rest) and rest[j] in CARGO_SUBS
+        return j < len(rest) and rest[j] in CARGO_SUBS and (BUILDS or names_cdo(line))
     if base in ("aldump", "alsem"):
         return names_cdo(line)
     if "/" in w:
@@ -416,8 +429,8 @@ def guarded_segment(words, line):
 def script_guarded(path, args):
     base = os.path.basename(path)
     if base == "agentflow":  # its `run` runs a gate (`-- bash scripts/ci-steps all`)
-        return args[:1] == ["run"]
-    if base not in SCRIPTS:
+        return BUILDS and args[:1] == ["run"]
+    if base not in SCRIPTS or (base in BUILD_SCRIPTS and not BUILDS):
         return False
     anywhere = INFO_ANYWHERE.get(base, set())
     if any(a in anywhere for a in args):
@@ -445,6 +458,7 @@ def guarded_line(line):
 
 
 def main():
+    global BUILDS
     if sys.argv[1:2] in (["-h"], ["--help"]):
         print(__doc__)
         return 0
@@ -469,20 +483,38 @@ def main():
         )
     except Exception as e:
         allow(f"scripts/cdo-slot status did not run: {e}")
-    said = p.stdout.strip()
-    # This session's own hold, a bound one (its land or cdo-gate) included:
-    # only another session's hold stops it.
+    if p.returncode not in (0, 1, 3):
+        allow(f"scripts/cdo-slot status failed: {(p.stderr or p.stdout).strip()}")
+    if p.returncode != 1:
+        return 0  # free or stale
+    # Line 1 describes the hold; a timed hold adds `timed by ...` (TLS-89). A
+    # reason is one line, so it cannot fake the second.
+    lines = p.stdout.strip().split("\n")
+    said = lines[0]
+    timed = lines[1] if len(lines) > 1 and lines[1].startswith("timed by ") else None
     # The last ", session <id>": the reason comes earlier in the line and
     # could hold that text itself.
     owns = re.findall(r", session (\S+?)(?=,|$)", said)
-    if owns and owns[-1] == session:
+    mine = (owns and owns[-1] == session) or said.endswith("(yours)")
+    if timed:
+        # A timing runs: nothing guarded from anyone, this session included
+        # (`hit` was found with builds and tests counted).
+        print(f"cdo-slot-guard: the CDO slot's hold is {timed}; {said}. Not run: {hit}",
+              file=sys.stderr)
+        print("A timing runs: builds and tests wait until it ends (scripts/cdo-slot status).",
+              file=sys.stderr)
+        return 2
+    # This session's own untimed hold, a bound one (its land or cdo-gate)
+    # included: only another session's hold stops it.
+    if mine or not said.startswith("held by"):
         return 0
-    if p.returncode == 1 and said.startswith("held by") and not said.endswith("(yours)"):
+    # Untimed: builds and tests may run beside it.
+    BUILDS = False
+    hit = guarded_line(line)
+    if hit:
         print(f"cdo-slot-guard: the CDO slot is {said}. Not run: {hit}", file=sys.stderr)
         print("Wait until it is free (scripts/cdo-slot status), or ask its holder.", file=sys.stderr)
         return 2
-    if p.returncode not in (0, 1, 3):
-        allow(f"scripts/cdo-slot status failed: {(p.stderr or said).strip()}")
     return 0
 
 

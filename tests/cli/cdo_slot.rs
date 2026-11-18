@@ -27,6 +27,9 @@ impl Slot {
             .env("CDO_SLOT_DIR", self.dir())
             .env("CDO_SLOT_MEM_MIN_GB", "0")
             .env("CDO_SLOT_POLL_S", "1")
+            // TLS-89: no real build on this machine may hold up a timed hold.
+            .env("CDO_SLOT_BUILD_NAMES", "tls89-none")
+            .env("CDO_SLOT_BUILD_SCRIPTS", "tls89-none")
             .env("CLAUDE_CODE_SESSION_ID", session)
             .env_remove("CLAUDE_PID")
             .env_remove("CDO_SLOT_TOKEN");
@@ -116,7 +119,7 @@ impl Drop for Slot {
 /// folders for hours, and some then took their test's slot once its holder was
 /// killed, leaving a holder that never ends. (A test process killed outright runs
 /// no `Drop`, so that case can still leak.)
-struct Reap(std::process::Child);
+pub(crate) struct Reap(pub(crate) std::process::Child);
 
 /// ⟨TLS-90⟩ The one way the slot tests spawn a waiter: `acquire <owner> <reason>
 /// --wait` as session `session`, polling every `poll` seconds with memory floor
@@ -315,11 +318,18 @@ fn cdo_slot_frees_itself() {
     assert!(text.contains("MemAvailable below 999999 GB"), "{text}");
 }
 
-/// The hook: while session A holds the slot, session B's builds, tests, gates
-/// and CDO runs are refused (exit 2, naming the holder), in every shape a
-/// command line takes; reading a script, git, a fixture `aldump` and A's own
-/// commands pass; with the slot free everything passes; input it cannot read
-/// passes (a hook bug must not stop every session).
+/// The hook: while session A holds the slot TIMED (TLS-89), every session's
+/// builds, tests, gates and CDO runs are refused (exit 2, naming the timed run
+/// and the holder), A's own included, in every shape a command line takes.
+/// While A holds it untimed, B's gates and CDO runs are refused (naming the
+/// holder) and B's builds and tests pass, as do all of A's. Reading a script,
+/// git and a fixture `aldump` always pass; with the slot free everything
+/// passes; input it cannot read passes (a hook bug must not stop every session).
+///
+/// TLS-89 mutations (2026-11-18): `BUILDS = False` dropped from the untimed
+/// path -> B's `cargo test --test cli` refused under the untimed hold (red);
+/// the timed branch dropped -> A's own `cargo test --test cli` passes under the
+/// timed hold (red). Both restored, green.
 ///
 /// Mutations: the wrapper skipping dropped -> `nice`, `timeout -k`, `taskset`
 /// shapes pass; the first-word rule dropped (every word checked) -> `grep ...
@@ -395,7 +405,26 @@ fn cdo_slot_guard_refuses_other_sessions_while_held() {
         // TLS-61: a before/after run builds and measures.
         "scripts/cdo-before-after master",
         "python3 scripts/cdo-before-after --census master~1 master",
+        // TLS-89: cargo naming the CDO workspace is a CDO run, timed or not.
+        "cargo run --release --bin aldump -- --stats /work/src/cdo-baseline/Cloud",
     ];
+    // TLS-89: the guarded commands that are NOT only builds or tests (gates, CDO
+    // runs): refused under an untimed hold too. Every other `guarded` entry is a
+    // cargo build/test, ci-steps, check-goldens or agentflow run.
+    let not_builds = [
+        "scripts/cdo-gate --only harness",
+        "target/cdo/aldump --program-call-graph-stats /work/src/cdo-baseline/Cloud",
+        "alsem analyze \"$CDO_WS\"",
+        "bash scripts/land --push tools/x",
+        "/usr/bin/time -v target/release-fast/aldump --snapshot-memory /work/src/cdo-baseline/Cloud",
+        "cd /work/src/cdo-baseline/Cloud && aldump --stats .",
+        "python3 scripts/cdo-speed --warm HEAD",
+        "cd scripts && ./cdo-gate /ws",
+        "scripts/cdo-before-after master",
+        "python3 scripts/cdo-before-after --census master~1 master",
+        "cargo run --release --bin aldump -- --stats /work/src/cdo-baseline/Cloud",
+    ];
+    assert!(not_builds.iter().all(|c| guarded.contains(c)));
     let free = [
         "grep -n x scripts/cdo-gate",
         "cat scripts/land",
@@ -434,15 +463,61 @@ fn cdo_slot_guard_refuses_other_sessions_while_held() {
     for c in guarded.iter().chain(&free) {
         assert_eq!(s.guard("B", c).0, Some(0), "slot free: {c}");
     }
+    // Timed (bound to a stand-in timing process; no build name can match).
+    let mut timing = Reap(
+        std::process::Command::new("sleep")
+            .arg("600")
+            .spawn()
+            .unwrap(),
+    );
+    let tpid = timing.id().to_string();
+    let no_builds = [("CDO_SLOT_BUILD_NAMES", "tls89-none")];
+    let (code, text) = s.run(
+        "A",
+        &[
+            "acquire",
+            "orchestrator",
+            "speed tls89",
+            "--bind",
+            &tpid,
+            "--timed",
+        ],
+        &no_builds,
+    );
+    assert_eq!(code, Some(0), "{text}");
+    for c in guarded {
+        for who in ["A", "B"] {
+            let (code, text) = s.guard(who, c);
+            assert_eq!(code, Some(2), "timed, {who}: {c}: {text}");
+            assert!(
+                text.contains("timed by orchestrator since")
+                    && text.contains("(speed tls89)")
+                    && text.contains("Not run:"),
+                "{c}: {text}"
+            );
+        }
+    }
+    for c in free {
+        assert_eq!(s.guard("B", c).0, Some(0), "timed: {c}");
+    }
+    timing.kill().unwrap();
+    timing.wait().unwrap();
+    assert!(s.wait_free());
+
+    // Untimed: only another session's gates and CDO runs.
     let (code, text) = s.run("A", &["acquire", "orchestrator", "landing tls60"], &[]);
     assert_eq!(code, Some(0), "{text}");
     for c in guarded {
         let (code, text) = s.guard("B", c);
-        assert_eq!(code, Some(2), "{c}: {text}");
-        assert!(
-            text.contains("held by orchestrator (landing tls60)"),
-            "{c}: {text}"
-        );
+        if not_builds.contains(&c) {
+            assert_eq!(code, Some(2), "{c}: {text}");
+            assert!(
+                text.contains("held by orchestrator (landing tls60)"),
+                "{c}: {text}"
+            );
+        } else {
+            assert_eq!(code, Some(0), "a build beside an untimed hold: {c}: {text}");
+        }
         assert_eq!(s.guard("A", c).0, Some(0), "the holder's own: {c}");
     }
     for c in free {
@@ -494,8 +569,8 @@ fn cdo_slot_guard_refuses_other_sessions_while_held() {
     let pid = land.id().to_string();
     let (code, text) = s.run("A", &["acquire", "land", "landing x", "--bind", &pid], &[]);
     assert_eq!(code, Some(0), "{text}");
-    let a = s.guard("A", "cargo test --test cli");
-    let b = s.guard("B", "cargo test --test cli");
+    let a = s.guard("A", "scripts/cdo-gate --only harness");
+    let b = s.guard("B", "scripts/cdo-gate --only harness");
     land.kill().unwrap();
     land.wait().unwrap();
     assert_eq!(a.0, Some(0), "A under its own bound hold: {}", a.1);
@@ -815,4 +890,264 @@ fn cdo_slot_serves_waiters_in_arrival_order() {
     );
     assert_eq!(tickets(), 0, "every ticket gone");
     assert_eq!(s.run("D", &["release"], &[]).0, Some(0));
+}
+
+/// ⟨TLS-89⟩ A timed hold never starts beside a build: `run --timed` marks the
+/// hold, waits for the build processes already running, and starts once they
+/// end; still running at `CDO_SLOT_TIMED_WAIT_S` it refuses (exit 6, naming
+/// their PIDs), runs nothing and frees the slot. Its own ancestors (the cargo
+/// test that runs a timed script) are not waited for. An untimed run does not
+/// wait. The mark lives only as long as its bound process.
+///
+/// Review r1 (Fable): a build SCRIPT (ci-steps, between its cargo steps) counts
+/// too; a second timing in a shared hold waits for builds as well (it got
+/// "timed already" at once before) and keeps its own mark when the first
+/// timing ends; a refused `acquire --bind --timed` with no session or token
+/// frees the slot it took.
+///
+/// The stand-in build is bash run through a symlink named `t89s<test pid>`
+/// (matched by `pgrep -x`; unique, as `pgrep -x` sees the whole machine),
+/// running two commands so it does not exec into `sleep`. The stand-in build
+/// script is a file `ci-steps-t89-<test pid>` run by bash.
+///
+/// Mutations (2026-11-18): the timeout's `return 6` made `break` -> the run
+/// starts beside the build (red); the ancestor exclusion dropped from
+/// `foreign_builds` -> the run under the stand-in build refuses itself (red);
+/// the liveness check dropped from `timed_valid` -> the mark outlives its
+/// killed process (red). Each restored, green. Review r1 (2026-11-18):
+/// `script_builds` dropped from `foreign_builds` -> the run starts beside the
+/// script (red); the old early return on "timed already" restored -> the
+/// second timing starts beside the build (red); the `end_holder` on a refused
+/// acquire dropped -> the slot stays held (red). Each restored, green.
+#[test]
+fn cdo_slot_timed_waits_for_builds_and_refuses_beside_one() {
+    let s = Slot::new();
+    let fake_name = format!("t89s{}", std::process::id());
+    let fake = s.0.path().join(&fake_name);
+    // A symlink, not a copy: a copy still open for writing when another test
+    // thread forks fails to exec ("Text file busy"). Its process name is the
+    // link's name.
+    std::os::unix::fs::symlink("/bin/bash", &fake).unwrap();
+    let names = ("CDO_SLOT_BUILD_NAMES", fake_name.as_str());
+    let build = || {
+        Reap(
+            std::process::Command::new(&fake)
+                .args(["-c", "sleep 600; true"])
+                .spawn()
+                .unwrap(),
+        )
+    };
+    let ran = s.0.path().join("ran");
+    let touch = ran.to_str().unwrap();
+
+    // A build runs: refused after the wait, nothing run, the slot free.
+    let mut b = build();
+    let bpid = b.id();
+    let (code, text) = s.run(
+        "A",
+        &["run", "lane", "timing", "--timed", "--", "touch", touch],
+        &[names, ("CDO_SLOT_TIMED_WAIT_S", "2")],
+    );
+    assert_eq!(code, Some(6), "{text}");
+    assert!(
+        text.contains("--timed refused") && text.contains(&format!("PID {bpid} ({fake_name})")),
+        "{text}"
+    );
+    assert!(!ran.exists(), "the timed command ran beside a build");
+    assert_eq!(
+        s.run("A", &["status"], &[]).0,
+        Some(0),
+        "the refused run freed the slot"
+    );
+
+    // An untimed run does not wait for it.
+    let (code, text) = s.run(
+        "A",
+        &["run", "lane", "plain", "--", "touch", touch],
+        &[names],
+    );
+    assert_eq!(code, Some(0), "{text}");
+    assert!(ran.exists());
+    std::fs::remove_file(&ran).unwrap();
+
+    // The build ends during the wait: the timed run starts then.
+    let killer = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(1500));
+        b.kill().unwrap();
+        b.wait().unwrap();
+    });
+    let (code, text) = s.run(
+        "A",
+        &["run", "lane", "timing", "--timed", "--", "touch", touch],
+        &[names, ("CDO_SLOT_TIMED_WAIT_S", "30")],
+    );
+    killer.join().unwrap();
+    assert_eq!(code, Some(0), "{text}");
+    assert!(
+        text.contains(&format!("waiting for build processes to end: PID {bpid}")),
+        "{text}"
+    );
+    assert!(ran.exists());
+
+    // Run under a build process (its ancestor): not waited for; inside, the
+    // status names the timed run.
+    let inner = format!("bash {SLOT} run lane inner --timed -- bash -c 'bash {SLOT} status; true'");
+    let out = std::process::Command::new(&fake)
+        .args(["-c", &format!("{inner}; true")])
+        .env("CDO_SLOT_DIR", s.dir())
+        .env("CDO_SLOT_MEM_MIN_GB", "0")
+        .env("CDO_SLOT_POLL_S", "1")
+        .env("CDO_SLOT_TIMED_WAIT_S", "2")
+        .env("CDO_SLOT_BUILD_NAMES", &fake_name)
+        .env("CDO_SLOT_BUILD_SCRIPTS", "tls89-none")
+        .env("CLAUDE_CODE_SESSION_ID", "A")
+        .env_remove("CLAUDE_PID")
+        .env_remove("CDO_SLOT_TOKEN")
+        .output()
+        .unwrap();
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        text.contains("timed by lane since") && text.contains("(inner)"),
+        "{text}"
+    );
+    assert!(!text.contains("refused"), "{text}");
+
+    // A timed mark on a hold held by hand ends with its bound process; the hold stays.
+    assert_eq!(s.run("A", &["acquire", "lane", "by hand"], &[]).0, Some(0));
+    let mut timing = Reap(
+        std::process::Command::new("sleep")
+            .arg("600")
+            .spawn()
+            .unwrap(),
+    );
+    let tpid = timing.id().to_string();
+    let (code, text) = s.run(
+        "A",
+        &["acquire", "lane", "measure", "--bind", &tpid, "--timed"],
+        &[names],
+    );
+    assert_eq!(code, Some(4), "shared: {text}");
+    let (_, text) = s.run("B", &["status"], &[]);
+    assert!(text.contains("timed by lane since"), "{text}");
+    timing.kill().unwrap();
+    timing.wait().unwrap();
+    let (code, text) = s.run("B", &["status"], &[]);
+    assert_eq!(code, Some(1), "{text}");
+    assert!(
+        !text.contains("timed by"),
+        "the mark outlived its process: {text}"
+    );
+
+    // Two timings in that hold: the second waits for a build too, and keeps
+    // its own mark when the first ends.
+    let mut t1 = Reap(
+        std::process::Command::new("sleep")
+            .arg("600")
+            .spawn()
+            .unwrap(),
+    );
+    let mut t2 = Reap(
+        std::process::Command::new("sleep")
+            .arg("600")
+            .spawn()
+            .unwrap(),
+    );
+    let (t1pid, t2pid) = (t1.id().to_string(), t2.id().to_string());
+    let (code, text) = s.run(
+        "A",
+        &["acquire", "lane", "first", "--bind", &t1pid, "--timed"],
+        &[names],
+    );
+    assert_eq!(code, Some(4), "{text}");
+    let mut b2 = build();
+    let (code, text) = s.run(
+        "A",
+        &["acquire", "lane", "second", "--bind", &t2pid, "--timed"],
+        &[names, ("CDO_SLOT_TIMED_WAIT_S", "2")],
+    );
+    assert_eq!(
+        code,
+        Some(6),
+        "the second timing started beside a build: {text}"
+    );
+    b2.kill().unwrap();
+    b2.wait().unwrap();
+    let (code, text) = s.run(
+        "A",
+        &["acquire", "lane", "second", "--bind", &t2pid, "--timed"],
+        &[names],
+    );
+    assert_eq!(code, Some(4), "{text}");
+    t1.kill().unwrap();
+    t1.wait().unwrap();
+    let (_, text) = s.run("B", &["status"], &[]);
+    assert!(
+        text.contains("timed by lane since") && text.contains("(second)"),
+        "the second timing lost its cover: {text}"
+    );
+    t2.kill().unwrap();
+    t2.wait().unwrap();
+    assert_eq!(s.run("A", &["release"], &[]).0, Some(0));
+
+    // A build script between its cargo steps (no build-named process) counts.
+    let script_name = format!("ci-steps-t89-{}", std::process::id());
+    let script = s.0.path().join(&script_name);
+    std::fs::write(&script, "sleep 600\ntrue\n").unwrap();
+    let mut sb = Reap(
+        std::process::Command::new("bash")
+            .arg(&script)
+            .spawn()
+            .unwrap(),
+    );
+    let sbpid = sb.id();
+    let (code, text) = s.run(
+        "A",
+        &["run", "lane", "timing", "--timed", "--", "true"],
+        &[
+            names,
+            ("CDO_SLOT_BUILD_SCRIPTS", script_name.as_str()),
+            ("CDO_SLOT_TIMED_WAIT_S", "2"),
+        ],
+    );
+    assert_eq!(
+        code,
+        Some(6),
+        "the timing started beside a build script: {text}"
+    );
+    assert!(
+        text.contains(&format!("PID {sbpid} ({script_name})")),
+        "{text}"
+    );
+
+    // A refused `acquire --bind --timed` (no session, no token) frees what it took.
+    let mut t3 = Reap(
+        std::process::Command::new("sleep")
+            .arg("600")
+            .spawn()
+            .unwrap(),
+    );
+    let t3pid = t3.id().to_string();
+    let (code, text) = s.run(
+        "",
+        &["acquire", "cron", "measure", "--bind", &t3pid, "--timed"],
+        &[
+            names,
+            ("CDO_SLOT_BUILD_SCRIPTS", script_name.as_str()),
+            ("CDO_SLOT_TIMED_WAIT_S", "1"),
+        ],
+    );
+    sb.kill().unwrap();
+    sb.wait().unwrap();
+    assert_eq!(code, Some(6), "{text}");
+    assert_eq!(
+        s.run("B", &["status"], &[]).0,
+        Some(0),
+        "the refused acquire kept the slot"
+    );
+    t3.kill().unwrap();
+    t3.wait().unwrap();
 }

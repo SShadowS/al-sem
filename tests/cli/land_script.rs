@@ -517,12 +517,13 @@ fn land_pushes_only_the_tree_its_gates_saw() {
 
 /// TLS-60: land holds the CDO slot from its start to its end. While its ci
 /// runs, another session sees the slot held by land and the cdo-slot-guard hook
-/// refuses that session's `cargo test`; the cdo-gate land runs shares the hold
-/// (its acquire answers "already yours", exit 4); after the run the slot is
-/// free again.
+/// refuses that session's `scripts/cdo-gate` (TLS-89: land's hold is untimed,
+/// so a `cargo test` would pass; only cdo-speed's timing inside it is timed);
+/// the cdo-gate land runs shares the hold (its acquire answers "already yours",
+/// exit 4); after the run the slot is free again.
 ///
 /// Mutations: land without its acquire -> the other session sees `free` and
-/// its `cargo test` passes the hook; land without the token export -> the
+/// its `scripts/cdo-gate` passes the hook; land without the token export -> the
 /// nested acquire waits on land's own hold.
 #[test]
 fn land_holds_the_cdo_slot_from_start_to_end() {
@@ -535,7 +536,7 @@ fn land_holds_the_cdo_slot_from_start_to_end() {
     let ci = format!(
         "CLAUDE_CODE_SESSION_ID=other CDO_SLOT_TOKEN= bash {slot} status >> \"$STUB_LOG\" 2>&1; \
          printf '%s' '{{\"tool_name\":\"Bash\",\"session_id\":\"other\",\
-         \"tool_input\":{{\"command\":\"cargo test\"}}}}' \
+         \"tool_input\":{{\"command\":\"scripts/cdo-gate /ws\"}}}}' \
          | {guard} 2>/dev/null; echo \"guard $?\" >> \"$STUB_LOG\""
     );
     let cdo = format!(

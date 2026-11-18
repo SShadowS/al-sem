@@ -197,6 +197,9 @@ impl Ba {
             .env("CDO_SLOT_DIR", self.path("slot"))
             .env("CDO_SLOT_MEM_MIN_GB", "0")
             .env("CDO_SLOT_POLL_S", "1")
+            // TLS-89: its hold is timed; no real build of this machine may hold it up.
+            .env("CDO_SLOT_BUILD_NAMES", "tls89-none")
+            .env("CDO_SLOT_BUILD_SCRIPTS", "tls89-none")
             .env("BA_LOG", self.path("calls.log"))
             .env("BA_FIX", self.path("fix"))
             .env("BA_STUB", self.path("stub"))
@@ -339,6 +342,15 @@ fn before_after_reports_what_moved_and_caches_both_binaries() {
     assert!(
         slot.iter()
             .all(|l| l.starts_with("slot: held by before-after")),
+        "{log}"
+    );
+    // TLS-89: and the hold was timed (no build may run beside a measurement).
+    // Mutation (2026-11-18): `--timed` dropped from `take_slot` -> no `timed by` line (red).
+    assert_eq!(
+        log.lines()
+            .filter(|l| l.starts_with("timed by before-after since"))
+            .count(),
+        2,
         "{log}"
     );
     // One cache: both binaries kept per commit, beside cdo-speed's alsem.

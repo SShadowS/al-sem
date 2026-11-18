@@ -644,8 +644,9 @@ profile=(--profile cdo)
 "$(dirname "$0")/require-rttime" || exit 1
 
 # ⟨TLS-60⟩ The CDO slot (scripts/cdo-slot) for the whole run: it waits for any
-# other holder and for 35 GB free, and lanes' builds and tests stop under it
-# (the cdo-slot-guard hook). Inside a scripts/land run (its CDO_SLOT_TOKEN) or
+# other holder and for 35 GB free, and lanes' gates and CDO runs stop under it
+# (the cdo-slot-guard hook); their builds and tests stop only while the speed
+# phase's timing marks it timed (TLS-89). Inside a scripts/land run (its CDO_SLOT_TOKEN) or
 # a session that already holds it, it shares that hold. Bound to this process.
 export CDO_SLOT_TOKEN=${CDO_SLOT_TOKEN:-$(od -An -N8 -tx8 /dev/urandom | tr -d ' ')}
 slot="$(dirname "$0")/cdo-slot"

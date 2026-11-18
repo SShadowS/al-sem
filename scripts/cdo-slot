@@ -5,10 +5,11 @@
 # ⟨TLS-60⟩ Replaces hold messages: 147 of the orchestrator's 316 messages were
 # about holds, and at least 9 times a lane's run had already started when the
 # hold arrived. A session (or script) acquires the slot; the PreToolUse hook
-# `scripts/claude-hooks/cdo-slot-guard` then refuses builds, tests and gates
-# from every OTHER session until it is released.
+# `scripts/claude-hooks/cdo-slot-guard` then refuses gates and CDO runs from
+# every OTHER session until it is released, and builds and tests from EVERY
+# session while the hold is timed (--timed, TLS-89).
 #
-#   acquire <owner> <reason> [--wait] [--timeout S] [--bind PID]
+#   acquire <owner> <reason> [--wait] [--timeout S] [--bind PID] [--timed]
 #       Take the slot. It is taken when nobody holds the lock, MemAvailable >=
 #       35 GB (CDO_SLOT_MEM_MIN_GB), and no earlier waiter that can run now is
 #       waiting (see the queue below). Without --wait it refuses at once (exit 1,
@@ -24,12 +25,22 @@
 #       Exit 0: taken. Exit 4: already yours, nothing to release: the holder's
 #       CDO_SLOT_TOKEN is in the environment (a script's hold, shared with what
 #       it starts), or this Claude session holds it unbound (by hand).
+#       --timed (needs --bind; TLS-89): the hold, taken or shared, is timed
+#       while the bound process lives: a timing runs in it, so no build may.
+#       It marks the hold first (the guard then refuses new builds and tests),
+#       then waits for the build processes already running (cargo, cargo-nextest,
+#       rustc, rustdoc: CDO_SLOT_BUILD_NAMES; and scripts/ci-steps, check-goldens
+#       between their cargo steps: CDO_SLOT_BUILD_SCRIPTS) outside the bound
+#       process's own line, printing their PIDs every ~60 s. Still running after
+#       CDO_SLOT_TIMED_WAIT_S (1800) s: exit 6, unmarked (and released, when this
+#       acquire took it); never a silent start beside a build.
 #   release
 #       Give the slot back. Only its holder may (its session or token); a STALE
 #       holder may be released by anyone.
 #   status
 #       `free` (exit 0), `held by ...` (exit 1) or `held by ... STALE` (exit 3).
-#   run <owner> <reason> -- <command...>
+#       A timed hold adds a second line: `timed by <owner> since <time> (<reason>)`.
+#   run <owner> <reason> [--timed] -- <command...>
 #       acquire --wait (bound to itself), run the command, release on any exit
 #       (only when this run took the slot: inside a holder's run it just runs).
 #
@@ -45,7 +56,9 @@ set -euo pipefail
 
 usage() {
     sed -n '/^#   acquire/,/^#       (only when this run/p' "$0" | sed 's/^# \{0,1\}//'
-    echo "Environment: CDO_SLOT_DIR, CDO_SLOT_MEM_MIN_GB (35), CDO_SLOT_POLL_S (15)."
+    echo "Environment: CDO_SLOT_DIR, CDO_SLOT_MEM_MIN_GB (35), CDO_SLOT_POLL_S (15),"
+    echo "CDO_SLOT_TIMED_WAIT_S (1800), CDO_SLOT_BUILD_NAMES (cargo cargo-nextest rustc rustdoc),"
+    echo "CDO_SLOT_BUILD_SCRIPTS (ci-steps check-goldens)."
 }
 die() {
     echo "cdo-slot: $*" >&2
@@ -60,8 +73,18 @@ meta="$dir/meta"
 status_file="$dir/status"
 mem_min="${CDO_SLOT_MEM_MIN_GB:-35}"
 poll="${CDO_SLOT_POLL_S:-15}"
+timed_wait="${CDO_SLOT_TIMED_WAIT_S:-1800}"
+build_names="${CDO_SLOT_BUILD_NAMES:-cargo cargo-nextest rustc rustdoc}"
+build_scripts="${CDO_SLOT_BUILD_SCRIPTS:-ci-steps check-goldens}"
 [[ "$mem_min" =~ ^(0|[1-9][0-9]{0,5})$ ]] || die "CDO_SLOT_MEM_MIN_GB '$mem_min': whole GB, no leading zero"
 [[ "$poll" =~ ^[1-9][0-9]{0,3}$ ]] || die "CDO_SLOT_POLL_S '$poll': whole seconds"
+[[ "$timed_wait" =~ ^(0|[1-9][0-9]{0,6})$ ]] || die "CDO_SLOT_TIMED_WAIT_S '$timed_wait': whole seconds"
+[[ "$build_names" =~ ^[A-Za-z0-9._\ -]+$ ]] || die "CDO_SLOT_BUILD_NAMES '$build_names': process names, space-separated"
+# A process name (comm) holds at most 15 characters: a longer one never matches.
+for n in $build_names; do
+    ((${#n} <= 15)) || die "CDO_SLOT_BUILD_NAMES: '$n' is longer than a process name (15 characters)"
+done
+[[ "$build_scripts" =~ ^[A-Za-z0-9._\ -]+$ ]] || die "CDO_SLOT_BUILD_SCRIPTS '$build_scripts': script names, space-separated"
 me_session="${CLAUDE_CODE_SESSION_ID:-}"
 me_pid="${CLAUDE_PID:-}"
 me_token="${CDO_SLOT_TOKEN:-}"
@@ -167,6 +190,118 @@ describe() {
     [[ -n "$bound" ]] && who+=", for PID $bound"
     echo "held by $(field owner) ($(field reason)) since $since ($((age / 60)) min), $who"
 }
+
+# ⟨TLS-89⟩ The timed marks: one `$dir/timed.<pid>` per timing process, key=value
+# lines like the status (owner, reason, since, pid, start, holder_pid). A mark
+# counts only while its process lives (pid + start time) and the hold it was set
+# in is the current one (holder_pid), so a mark left by a killed run or an old
+# hold says nothing. One mark per process (review r1, Fable): a second timing in
+# a shared hold keeps its own cover when the first one ends.
+tmark=""
+tfield() { { sed -n "s/^$1=//p" "$tmark" 2>/dev/null || true; } | head -n 1; }
+# timed_valid: some mark counts; sets tmark to the oldest such.
+timed_valid() {
+    local m
+    [[ -n "$holder_pid" ]] || return 1
+    for m in "$dir"/timed.*; do
+        [[ -e "$m" && "$m" != *.tmp ]] || continue
+        tmark=$m
+        [[ "$(tfield holder_pid)" == "$holder_pid" ]] && alive "$(tfield pid)" "$(tfield start)" && return 0
+    done
+    tmark=""
+    return 1
+}
+timed_describe() { echo "timed by $(tfield owner) since $(tfield since) ($(tfield reason))"; }
+write_timed_locked() { # <owner> <reason> <pid>
+    local tmp="$dir/timed.$3.tmp"
+    {
+        printf 'owner=%s\n' "$1"
+        printf 'reason=%s\n' "$2"
+        printf 'since=%s\n' "$(date -u +%FT%TZ)"
+        printf 'pid=%s\n' "$3"
+        printf 'start=%s\n' "$(proc_start "$3")"
+        printf 'holder_pid=%s\n' "$holder_pid"
+    } >"$tmp" && mv -f "$tmp" "$dir/timed.$3"
+}
+clear_timed_locked() { rm -f "$dir/timed.$1"; } # <pid>: only that process's mark
+ppid_of() { local f; read -r -a f <<<"$(proc_fields "$1")"; echo "${f[1]:-}"; }
+# script_builds: "PID name" of each process running a build script
+# (CDO_SLOT_BUILD_SCRIPTS: ci-steps, check-goldens), read from its argv: the
+# script is argv[0], or the first non-option argument of a shell or python
+# argv[0]. Between their cargo steps (ci-steps' agentflow pytest, ~2 min) no
+# process has a build name, so the build names alone would let a timing start
+# there (review r1, Fable). Exact argv words, never a `-f` pattern.
+script_builds() {
+    local d a i
+    for d in /proc/[0-9]*; do
+        mapfile -d '' -t a 2>/dev/null <"$d/cmdline" || continue
+        ((${#a[@]})) || continue
+        i=0
+        case "${a[0]##*/}" in
+            bash | sh | dash | zsh | python | python3)
+                i=1
+                while ((i < ${#a[@]})) && [[ "${a[i]}" == -* ]]; do i=$((i + 1)); done
+                ;;
+        esac
+        ((i < ${#a[@]})) || continue
+        case " $build_scripts " in
+            *" ${a[i]##*/} "*) echo "${d#/proc/} ${a[i]##*/}" ;;
+        esac
+    done
+}
+# foreign_builds <pid>: the running build processes (CDO_SLOT_BUILD_NAMES, matched
+# by exact name with `pgrep -x`: a `-f` pattern would match this script's own
+# command line; and script_builds) that are alive (not zombies) and are neither
+# <pid>, its ancestors nor its descendants (a timed script's own build, or the
+# cargo test that runs it); "PID name" lines.
+foreign_builds() {
+    local root=$1 line=" " q p name
+    q=$root
+    while [[ "$q" =~ ^[1-9][0-9]*$ ]]; do
+        line+="$q "
+        q=$(ppid_of "$q")
+    done
+    while read -r p name; do
+        [[ -n "$p" ]] || continue
+        alive "$p" || continue
+        [[ "$line" == *" $p "* ]] && continue
+        q=$p
+        while [[ "$q" =~ ^[1-9][0-9]*$ && "$q" != 1 ]]; do
+            [[ "$q" == "$root" ]] && continue 2
+            q=$(ppid_of "$q")
+        done
+        echo "$p $name"
+    done < <(
+        for name in $build_names; do
+            for p in $(pgrep -x -- "$name" || true); do echo "$p $name"; done
+        done
+        script_builds
+    )
+}
+# timed_start <owner> <reason> <pid>: mark the current hold timed while <pid>
+# lives, then wait for the build processes already running (also when another
+# timing in the hold marked it first). 0: timed; 6: they still ran after
+# CDO_SLOT_TIMED_WAIT_S (this mark is taken back).
+timed_start() {
+    state
+    [[ -n "$holder_pid" && ("$st" == mine || "$st" == held) ]] || die "--timed: no hold to mark"
+    with_meta write_timed_locked "$1" "$2" "$3" || die "--timed: cannot write the mark in $dir"
+    local start=$SECONDS last=-60 b list
+    while b=$(foreign_builds "$3") && [[ -n "$b" ]]; do
+        list=$(awk '{ printf "%sPID %s (%s)", (NR > 1 ? ", " : ""), $1, $2 }' <<<"$b")
+        if ((SECONDS - start >= timed_wait)); then
+            with_meta clear_timed_locked "$3"
+            echo "cdo-slot: --timed refused: build processes still running after ${timed_wait} s: $list" >&2
+            return 6
+        fi
+        if ((SECONDS - last >= 60)); then
+            echo "cdo-slot: timed: waiting for build processes to end: $list"
+            last=$SECONDS
+        fi
+        sleep "$poll"
+    done
+    echo "cdo-slot: timed by $1 ($2)"
+}
 # ⟨TLS-88⟩ The waiters' queue: a waiting acquire holds a ticket, and a free slot
 # goes to the oldest live ticket, so a holder that releases and acquires again
 # goes behind an earlier waiter (before: whoever polled first won). A ticket is
@@ -228,7 +363,7 @@ mem_ok() {
 # slot's holder named by the status: remove the status, then end the process.
 end_holder_locked() {
     is_holder "$1" || return 0
-    [[ "$(field holder_pid)" == "$1" ]] && rm -f "$status_file"
+    [[ "$(field holder_pid)" == "$1" ]] && rm -f "$status_file" "$dir"/timed.*
     kill "$1" 2>/dev/null || true
 }
 end_holder() {
@@ -388,11 +523,12 @@ case "$cmd" in
         (($# >= 2)) || { usage >&2; exit 2; }
         owner=$1 reason=$2
         shift 2
-        wait=0 timeout=""
+        wait=0 timeout="" timed=0
         [[ "$cmd" == run ]] && wait=1
         while (($#)); do
             case "$1" in
                 --wait) wait=1 ;;
+                --timed) timed=1 ;;
                 --bind)
                     [[ "${2:-}" =~ ^[1-9][0-9]*$ ]] && alive "$2" || { echo "cdo-slot: --bind needs a live PID" >&2; exit 2; }
                     bind=$2
@@ -418,8 +554,23 @@ case "$cmd" in
         done
         if [[ "$cmd" == acquire ]]; then
             (($# == 0)) || { echo "cdo-slot: acquire takes no command" >&2; exit 2; }
-            acquire "$owner" "$reason" "$wait" "$timeout"
-            exit $?
+            ((!timed)) || [[ -n "$bind" ]] || { echo "cdo-slot: --timed needs --bind PID (the timing process)" >&2; exit 2; }
+            rc=0
+            acquire "$owner" "$reason" "$wait" "$timeout" || rc=$?
+            if ((timed)) && [[ "$rc" == 0 || "$rc" == 4 ]]; then
+                trc=0
+                timed_start "$owner" "$reason" "$bind" || trc=$?
+                if ((trc)); then
+                    # This acquire took it: end it here (`release` would refuse a
+                    # hold that has only --bind, no session or token: review r1).
+                    if [[ "$rc" == 0 ]]; then
+                        state
+                        [[ -z "$holder_pid" ]] || end_holder "$holder_pid"
+                    fi
+                    exit "$trc"
+                fi
+            fi
+            exit "$rc"
         fi
         (($#)) || { echo "cdo-slot: run needs -- <command>" >&2; exit 2; }
         export CDO_SLOT_TOKEN=${me_token:-$(od -An -N8 -tx8 /dev/urandom | tr -d ' ')}
@@ -430,9 +581,15 @@ case "$cmd" in
         acquire "$owner" "$reason" 1 "$timeout" || rc=$?
         case "$rc" in
             0) trap 'release >/dev/null' EXIT && trap 'exit 130' INT TERM ;;
-            4) ;;
+            # A shared hold outlives this run: take back only our timed mark.
+            4) ((!timed)) || { trap 'with_meta clear_timed_locked $$' EXIT && trap 'exit 130' INT TERM; } ;;
             *) exit "$rc" ;;
         esac
+        if ((timed)); then
+            rc=0
+            timed_start "$owner" "$reason" "$$" || rc=$?
+            ((rc == 0)) || exit "$rc"
+        fi
         rc=0
         "$@" || rc=$?
         exit "$rc"
@@ -448,10 +605,12 @@ case "$cmd" in
             free) echo free ;;
             mine)
                 echo "$(describe) (yours)"
+                ! timed_valid || timed_describe
                 exit 1
                 ;;
             held)
                 describe
+                ! timed_valid || timed_describe
                 exit 1
                 ;;
             stale)
