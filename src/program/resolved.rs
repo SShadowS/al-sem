@@ -483,25 +483,13 @@ impl ResolvedProgram {
     /// package whose cache could not be used stays owned and counts as heap). The
     /// workspace texts are the `inputs` bucket's, which shares them by `Arc`.
     fn snapshot_texts_tally(&self) -> (Tally, Tally) {
-        let mut seen = std::collections::HashSet::new();
-        let mut texts = Tally::default();
-        let mut mapped = Tally::default();
         let snap = self.body.ctx.snapshot();
-        for app in snap.apps.iter().filter(|u| u.id != snap.workspace_app) {
-            for f in app.source.iter().flat_map(|s| s.files.iter()) {
-                if let Some(a) = f.text.owned_arc() {
-                    if seen.insert(Arc::as_ptr(a).cast::<u8>()) {
-                        texts.text(&f.text);
-                    }
-                } else if let Some(m) = f.text.mapping()
-                    && seen.insert(Arc::as_ptr(m).cast::<u8>())
-                {
-                    mapped.bytes += m.len();
-                    mapped.allocs += 1;
-                }
-            }
-        }
-        (texts, mapped)
+        source_texts_tally(
+            snap.apps
+                .iter()
+                .filter(|u| u.id != snap.workspace_app)
+                .flat_map(|app| app.source.iter().flat_map(|s| s.files.iter())),
+        )
     }
 
     /// `program.report` (shallow): the resolver's per-site output (both edge
@@ -538,6 +526,29 @@ impl ResolvedProgram {
         }
         r
     }
+}
+
+/// `files`' texts as `(heap, mapped)`: each owned `Arc<str>` once, by its allocation; each
+/// mapped source-cache file once, by its length (ENG-113).
+fn source_texts_tally<'a>(
+    files: impl Iterator<Item = &'a crate::snapshot::embedded::SourceFile>,
+) -> (Tally, Tally) {
+    let mut seen = std::collections::HashSet::new();
+    let mut texts = Tally::default();
+    let mut mapped = Tally::default();
+    for f in files {
+        if let Some(a) = f.text.owned_arc() {
+            if seen.insert(Arc::as_ptr(a).cast::<u8>()) {
+                texts.text(&f.text);
+            }
+        } else if let Some(m) = f.text.mapping()
+            && seen.insert(Arc::as_ptr(m).cast::<u8>())
+        {
+            mapped.bytes += m.len();
+            mapped.allocs += 1;
+        }
+    }
+    (texts, mapped)
 }
 
 #[cfg(test)]
@@ -666,5 +677,46 @@ mod tests {
         );
         let (t, m) = p.snapshot_texts_tally();
         assert_eq!((t.bytes, t.allocs, m.bytes, m.allocs), (0, 0, 0, 0));
+    }
+
+    /// ENG-113's bar (a): mapped package text is no heap (one map counted once, by its file
+    /// length), and a package whose cache could not be used stays owned and counts as heap
+    /// (each `Arc<str>` once, however many holders list it).
+    #[test]
+    fn mapped_texts_are_no_heap_and_owned_ones_are() {
+        use crate::engine::deps::app_package_zip::test_apps::build_app;
+        let img = crate::app_image::AppImage::from_bytes(
+            "pkg.app",
+            build_app(&[("a.al", b"codeunit 1 A { }"), ("b.al", b"codeunit 2 B { }")]),
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let (mapped_files, _) = crate::snapshot::cache::cached_source_in(dir.path(), &img).unwrap();
+        let not_a_dir = dir.path().join("file");
+        std::fs::write(&not_a_dir, "").unwrap();
+        let (owned_files, _) = crate::snapshot::cache::cached_source_in(&not_a_dir, &img).unwrap();
+        assert!(
+            mapped_files.iter().all(|f| f.text.is_mapped())
+                && owned_files.iter().all(|f| !f.text.is_mapped()),
+            "precondition: one mapped and one owned copy"
+        );
+        let file_len = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .find(|p| p.extension().is_some_and(|x| x == "bin"))
+            .map(|p| std::fs::metadata(p).unwrap().len() as usize)
+            .unwrap();
+
+        let (t, m) = source_texts_tally(mapped_files.iter().chain(&mapped_files));
+        assert_eq!((t.bytes, t.allocs), (0, 0), "mapped text is no heap");
+        assert_eq!((m.bytes, m.allocs), (file_len, 1), "one map, by its file");
+
+        let (t, m) = source_texts_tally(owned_files.iter().chain(&owned_files));
+        let arc = |n: usize| (2 * std::mem::size_of::<usize>() + n).next_multiple_of(8);
+        assert_eq!(
+            (t.bytes, t.allocs),
+            (2 * arc(16), 2),
+            "owned text is heap, once each"
+        );
+        assert_eq!((m.bytes, m.allocs), (0, 0));
     }
 }

@@ -74,8 +74,9 @@ struct IndexEntry {
 /// from the SAME bytes, so a package rewritten after its hash was taken can
 /// never be extracted under the old key (context-server design r5 §5.2).
 ///
-/// Cache I/O failures (unwritable dir, locked file, corrupt entry) are
-/// **non-fatal**: a warn is logged and the extraction is used as owned text.
+/// Cache I/O failures are **non-fatal** and logged at warn: a corrupt entry is extracted
+/// again and rewritten; a cache that cannot be written or read back (unwritable dir, locked
+/// file) leaves the extraction as owned text.
 pub fn cached_source(image: &Arc<AppImage>) -> Result<(Vec<SourceFile>, String)> {
     cached_source_in(&cache_dir(), image)
 }
@@ -127,18 +128,22 @@ pub fn cached_source_in(dir: &Path, image: &Arc<AppImage>) -> Result<(Vec<Source
     Ok((files, hash))
 }
 
-/// Read a cache entry: map it, check the header, then the text's length and blake3, then each
-/// index entry's range and UTF-8 (`SourceText::mapped`). Any failure refuses the entry.
+/// Read a cache entry: map it, check the header, then the length and the blake3 of everything
+/// after the header (the index and the text), then each index entry's range and UTF-8
+/// (`SourceText::mapped`). Any failure refuses the entry.
 ///
 /// The blake3 check is NOT optional: nothing fsyncs, so after a crash a renamed file can have
-/// the right length and zero content, which the length and UTF-8 checks both accept.
+/// the right length and zero content, which the length and UTF-8 checks both accept. It
+/// covers the index too, so a damaged offset or path that is still valid JSON is refused.
 fn read_cache(cache_file: &Path) -> Result<Vec<SourceFile>> {
     let file = std::fs::File::open(cache_file)
         .with_context(|| format!("open cache {}", cache_file.display()))?;
     // SAFETY: entries are only ever replaced whole by a rename of a unique temp file
     // (`write_cache`), never written or truncated in place, so the mapped bytes never change.
-    // An outside in-place copy over the cache (cp, rsync --inplace, a restore) breaks this;
-    // the design note states the risk and its blast radius (the engine process).
+    // An outside in-place copy over the cache (cp, rsync --inplace, a restore), or another
+    // user who can write the directory (the shared temp-dir fallback of `cache_dir`), breaks
+    // this: the process holding the map (an engine child, a one-shot CLI, the LSP server
+    // during a build) can then die of SIGBUS. The design note states the risk.
     let map = unsafe { crate::capped_io::map_read_only(&file) }
         .with_context(|| format!("map cache {}", cache_file.display()))?
         .with_context(|| format!("cache {} is empty", cache_file.display()))?;
@@ -160,8 +165,8 @@ fn read_cache(cache_file: &Path) -> Result<Vec<SourceFile>> {
     if text_start.checked_add(text_len) != Some(map.len()) {
         bail!("cache length is not header + index + text");
     }
-    if blake3::hash(&map[text_start..]).as_bytes() != &hash {
-        bail!("cache text hash differs");
+    if blake3::hash(&map[HEADER_LEN..]).as_bytes() != &hash {
+        bail!("cache hash differs");
     }
     let index: Vec<IndexEntry> =
         serde_json::from_slice(&map[HEADER_LEN..text_start]).context("cache index")?;
@@ -189,7 +194,6 @@ fn read_cache(cache_file: &Path) -> Result<Vec<SourceFile>> {
 fn write_cache(dir: &Path, cache_file: &Path, hash: &str, files: &[SourceFile]) -> Result<()> {
     let mut index = Vec::with_capacity(files.len());
     let mut text_len = 0u64;
-    let mut hasher = blake3::Hasher::new();
     for f in files {
         let len = f.text.len() as u64;
         index.push(IndexEntry {
@@ -197,15 +201,27 @@ fn write_cache(dir: &Path, cache_file: &Path, hash: &str, files: &[SourceFile]) 
             offset: text_len,
             len,
         });
-        hasher.update(f.text.as_bytes());
         text_len += len;
     }
     let index = serde_json::to_vec(&index).context("cache index")?;
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(&index);
+    for f in files {
+        hasher.update(f.text.as_bytes());
+    }
     let mut tmp = tempfile::Builder::new()
         .prefix(&format!("{hash}-"))
         .suffix(".tmp")
         .tempfile_in(dir)
         .with_context(|| format!("create cache temp in {}", dir.display()))?;
+    // `tempfile` creates the file owner-only; the old cache file had the umask's mode, which
+    // lets another user sharing the directory read the entry instead of re-extracting it.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        tmp.as_file()
+            .set_permissions(std::fs::Permissions::from_mode(0o644))?;
+    }
     {
         let mut out = std::io::BufWriter::new(tmp.as_file_mut());
         out.write_all(MAGIC)?;
@@ -280,6 +296,87 @@ mod tests {
         );
     }
 
+    /// A valid entry is a hit: it is read, not extracted again (an entry whose text is not the
+    /// package's is served as written).
+    #[test]
+    fn a_valid_entry_is_served_without_extracting() {
+        let dir = tempfile::tempdir().unwrap();
+        let img = two_files();
+        let path = entry(dir.path(), &img);
+        let text = "codeunit 1 Kept { }";
+        let index = format!(r#"[{{"path":"src/K.al","offset":0,"len":{}}}]"#, text.len());
+        write_raw(&path, index.as_bytes(), text.as_bytes(), None);
+        let (files, _) = cached_source_in(dir.path(), &img).unwrap();
+        assert_eq!(texts(&files), [("src/K.al", text)]);
+    }
+
+    /// An entry of `index` and `text` with a correct header (or the given hash).
+    fn write_raw(path: &Path, index: &[u8], text: &[u8], hash: Option<[u8; 32]>) {
+        let mut h = blake3::Hasher::new();
+        h.update(index);
+        h.update(text);
+        let mut out = MAGIC.to_vec();
+        out.extend(CACHE_FORMAT.to_le_bytes());
+        out.extend(EXTRACTION_SCHEME.to_le_bytes());
+        out.extend((index.len() as u64).to_le_bytes());
+        out.extend((text.len() as u64).to_le_bytes());
+        out.extend(hash.unwrap_or(*h.finalize().as_bytes()));
+        out.extend(index);
+        out.extend(text);
+        std::fs::write(path, out).unwrap();
+    }
+
+    /// Hostile or damaged entries are refused, never a panic: truncated, a wrong magic, a
+    /// damaged index that is still JSON (the hash covers it), and a range past the text
+    /// under a correct hash.
+    #[test]
+    fn damaged_entries_are_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("e.bin");
+        let good = br#"[{"path":"a.al","offset":0,"len":3}]"#;
+        write_raw(&path, good, b"abc", None);
+        assert!(
+            read_cache(&path).is_ok(),
+            "precondition: the good entry reads"
+        );
+
+        let bytes = std::fs::read(&path).unwrap();
+        std::fs::write(&path, &bytes[..bytes.len() - 1]).unwrap();
+        assert!(read_cache(&path).is_err(), "truncated");
+        std::fs::write(&path, &bytes[..HEADER_LEN - 1]).unwrap();
+        assert!(read_cache(&path).is_err(), "shorter than a header");
+
+        let mut magic = bytes.clone();
+        magic[0] = b'X';
+        std::fs::write(&path, &magic).unwrap();
+        assert!(read_cache(&path).is_err(), "wrong magic");
+
+        let mut index = bytes.clone();
+        let at = HEADER_LEN + br#"[{"path":""#.len();
+        assert_eq!(index[at], b'a', "precondition: the path's first byte");
+        index[at] = b'z';
+        std::fs::write(&path, &index).unwrap();
+        assert!(
+            read_cache(&path).is_err(),
+            "a damaged index under the old hash"
+        );
+
+        write_raw(
+            &path,
+            br#"[{"path":"a.al","offset":2,"len":3}]"#,
+            b"abc",
+            None,
+        );
+        assert!(read_cache(&path).is_err(), "a range past the text");
+        write_raw(
+            &path,
+            br#"[{"path":"a.al","offset":18446744073709551615,"len":3}]"#,
+            b"abc",
+            None,
+        );
+        assert!(read_cache(&path).is_err(), "an offset that overflows");
+    }
+
     /// An entry whose text changed in place with its length and UTF-8 kept (one letter
     /// flipped) is refused by the hash alone, re-extracted and rewritten.
     #[test]
@@ -305,6 +402,27 @@ mod tests {
             bytes,
             "the entry was rewritten"
         );
+    }
+
+    /// An entry whose index changed in place and is still JSON (one path letter flipped) is
+    /// refused by the hash, which covers the index, and rewritten.
+    #[test]
+    fn a_damaged_index_is_refused_and_rewritten() {
+        let dir = tempfile::tempdir().unwrap();
+        let img = two_files();
+        cached_source_in(dir.path(), &img).unwrap();
+        let path = entry(dir.path(), &img);
+        let mut bytes = std::fs::read(&path).unwrap();
+        let at = HEADER_LEN + br#"[{"path":"src/"#.len();
+        assert_eq!(
+            bytes[at], b'A',
+            "precondition: the flipped byte is A's path"
+        );
+        bytes[at] = b'Z';
+        std::fs::write(&path, &bytes).unwrap();
+
+        let (files, _) = cached_source_in(dir.path(), &img).unwrap();
+        assert_eq!(texts(&files), [("src/A.al", A), ("src/B.al", B)]);
     }
 
     /// The pre-ENG-113 JSON entry of the same package is never read (its name differs).

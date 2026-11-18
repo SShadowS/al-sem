@@ -71,9 +71,10 @@ RSS; the CHANGELOG says so.
   (restated in a SAFETY comment where the map is made), and the temp files are unique (design 2).
   The map now lives as long as a resident engine, so an OUTSIDE in-place copy of the cache directory
   (`cp` over it, `rsync --inplace`, a backup restore, seeding a container's cache) or a cache on a
-  network file system can still do it. That cannot be prevented cheaply; the blast radius is the
-  engine child, which the front end restarts. Unlinking (a cleaner, a temp-dir cleaner when the cache
-  falls back to the temp dir) is safe on Linux.
+  network file system can still do it, and so can another local user when the cache falls back to the
+  shared temp dir. That cannot be prevented cheaply; the blast radius is the process holding the map:
+  an engine child (which the front end restarts), a one-shot CLI run, or the LSP server during a build.
+  Unlinking (a cleaner, a temp-dir cleaner) is safe on Linux.
 - **A hash, length, UTF-8 or index mismatch**: refuse the entry, re-extract, rewrite. Tested with a
   hand-written broken file in a temporary cache directory.
 - **An old cache** (`.s7.json`): the new name does not match, so it misses cleanly. Tested. The old

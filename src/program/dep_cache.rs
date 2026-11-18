@@ -676,31 +676,34 @@ mod tests {
     /// such a `Weak` would pin the whole text) holds one.
     ///
     /// ENG-113: embedded package text comes from the source cache as ranges of one mapped
-    /// file per package, so the probe is that mapping: while any text of the package is
-    /// kept, the mapping lives.
+    /// file per package (the probe is that mapping: while any text of the package is kept,
+    /// the mapping lives), or as an owned `Arc<str>` when the cache cannot be used (the probe
+    /// is that allocation). Whichever form this run gets is probed.
     #[test]
     fn the_lsp_keeps_no_dependency_text() {
         let fx = two_roots_one_alpackages();
         let cache = DepCache::default();
         let src = dep_source(&cache, &fx.root_a);
-        let map = Arc::downgrade(
-            src[0]
-                .text
-                .mapping()
-                .expect("precondition: the package text is mapped from the source cache"),
-        );
+        let map = src[0].text.mapping().map(Arc::downgrade);
+        let owned = src[0].text.owned_arc().map(Arc::downgrade);
         let a = build(&fx.root_a, DependencySource::Embedded, &cache);
         assert!(!a.dep_lines.is_empty(), "precondition: dependency files");
         // Checked while the text is alive: `Weak::weak_count` reads 0 once
-        // the strong count is 0, whoever still holds a `Weak`.
+        // the strong count is 0, whoever still holds a `Weak`. (A `Weak<str>` would pin the
+        // text's bytes; a `Weak<Mmap>` pins only the map's header.)
+        let weak_count = match (&map, &owned) {
+            (Some(m), None) => m.weak_count(),
+            (None, Some(o)) => o.weak_count(),
+            _ => unreachable!("a text is mapped or owned"),
+        };
         assert_eq!(
-            map.weak_count(),
-            1,
-            "the cache holds no Weak into the mapping (only this test does)"
+            weak_count, 1,
+            "the cache holds no Weak into the text (only this test does)"
         );
         drop(src);
         assert!(
-            map.upgrade().is_none(),
+            map.is_none_or(|m| m.upgrade().is_none())
+                && owned.is_none_or(|o| o.upgrade().is_none()),
             "the live LSP root holds no dependency text"
         );
         drop(a);
