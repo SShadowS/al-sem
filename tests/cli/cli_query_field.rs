@@ -418,3 +418,102 @@ fn callers_come_from_the_reverse_walk() {
         assert_eq!(run(&via), direct, "single_app {single_app}");
     }
 }
+
+/// ⟨ENG-90⟩ Two routines whose names differ only in a word-final sigma
+/// (`"ΒΣ"`, `"Βς"`) are two graph nodes on ONE StableRoutineId: the node id
+/// folds (`Σ` -> `σ`), the stable id lowercases (`Σ` -> `ς`). `"ΒΣ"` calls
+/// Root directly (local); `"Βς"` reaches it only through a dynamic
+/// `Codeunit.Run` (via a hub). Both model routines map to both nodes, so the
+/// up pass met both tiers in hash order; `"ΒΣ"`'s tier must be its best,
+/// `local`, on every run.
+///
+/// Mutation (2026-11-18): the tier write back to last-wins
+/// (`scope.tiers.insert(i, tier)`) -> `"ΒΣ"` read `onlyOpen` on run 0 (red);
+/// restored, green.
+#[test]
+fn shared_stable_id_tier() {
+    let t = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(t.path().join(".git")).unwrap();
+    let ws = t.path().join("ws");
+    std::fs::create_dir_all(ws.join("src")).unwrap();
+    std::fs::write(
+        ws.join("app.json"),
+        r#"{"id":"90909090-0000-0000-0000-000000000091","name":"G","publisher":"RC","version":"1.0.0.0"}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        ws.join("src/G.al"),
+        r#"table 50910 "G Item"
+{
+    fields
+    {
+        field(1; "No."; Code[20]) { }
+        field(2; Amount; Decimal) { }
+    }
+}
+
+codeunit 50910 "G Root"
+{
+    trigger OnRun()
+    begin
+        Root();
+    end;
+
+    procedure Root()
+    begin
+    end;
+}
+
+codeunit 50911 "G Callers"
+{
+    procedure "ΒΣ"()
+    var
+        C: Codeunit "G Root";
+        I: Record "G Item";
+    begin
+        C.Root();
+        I.Amount := 1;
+        I.Modify();
+    end;
+
+    procedure "Βς"()
+    var
+        I: Record "G Item";
+    begin
+        Codeunit.Run(Random(10));
+        I.Amount := 2;
+        I.Modify();
+    end;
+}
+"#,
+    )
+    .unwrap();
+    let args = [
+        "--table",
+        "G Item",
+        "--field",
+        "Amount",
+        "--from",
+        "Root",
+        "--direction",
+        "up",
+    ];
+    // Each run is a new process, so a new hash seed.
+    for run in 0..12 {
+        let (v, code) = touches(&ws, &args);
+        assert_eq!(code, 0, "{v}");
+        let sites = v["payload"]["fieldTouches"].as_array().unwrap();
+        // The precondition: both routines are up sites on one stable id.
+        let ids: Vec<&str> = sites
+            .iter()
+            .map(|s| s["routine"]["stableId"].as_str().unwrap())
+            .collect();
+        assert_eq!(ids.len(), 2, "run {run}: {v}");
+        assert_eq!(ids[0], ids[1], "run {run}: one stable id: {ids:?}");
+        let direct = sites
+            .iter()
+            .find(|s| s["routine"]["display"] == "ΒΣ")
+            .unwrap_or_else(|| panic!("run {run}: no ΒΣ site: {v}"));
+        assert_eq!(direct["tier"], "local", "run {run}: {direct}");
+    }
+}

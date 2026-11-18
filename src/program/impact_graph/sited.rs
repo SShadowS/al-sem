@@ -244,8 +244,9 @@ pub struct SitedGraph {
     /// The object parts of the stable ids, interned.
     stable_objects: Vec<Box<str>>,
     stable_object_ix: HashMap<Box<str>, u32>,
-    /// Every routine node with a StableRoutineId, sorted (a stable id can
-    /// name several nodes: `#if` arms the program keeps apart).
+    /// Every routine node with a StableRoutineId, sorted (an unsuffixed id
+    /// names every declaration of a split routine; see also
+    /// [`SitedGraph::shared_stable_ids`]).
     stable: Vec<StableEntry>,
     /// Per node: its index in `stable`, `u32::MAX` for none.
     stable_of: Vec<u32>,
@@ -648,6 +649,24 @@ impl SitedGraph {
             .take_while(|e| (e.object, e.hash) == (object, hash))
             .filter(|e| suffix == 0 || e.suffix == suffix)
             .map(|e| e.node)
+            .collect()
+    }
+
+    /// Every StableRoutineId that more than one node carries, with its nodes
+    /// (ascending). Two such nodes are answered as one routine by every
+    /// reader that joins on the id (ENG-90). Empty on every corpus workspace
+    /// and on CDO (`impact_graph::stable_id_tests`, the CDO harness). The id
+    /// lowercases where the node id folds, so names differing only in `İ` or
+    /// a word-final `Σ` do share one (`cli_query_field::shared_stable_id_tier`).
+    #[must_use]
+    pub fn shared_stable_ids(&self) -> Vec<(String, Vec<u32>)> {
+        self.stable
+            .chunk_by(|a, b| (a.object, a.hash, a.suffix) == (b.object, b.hash, b.suffix))
+            .filter(|run| run.len() > 1)
+            .map(|run| {
+                let id = self.stable_id(run[0].node).unwrap_or_default();
+                (id, run.iter().map(|e| e.node).collect())
+            })
             .collect()
     }
 

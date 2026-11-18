@@ -67,6 +67,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   CR-only file whose last line end is CRLF, an LF file with a syntax error, and a comment-only
   file. Four discrimination proofs, all red, are recorded in its doc.
 
+### Fixed (ENG-90: an up caller's tier no longer depends on hash order)
+
+- **The case.** `alsem query touches … --from R --direction up` gives each caller's tier. The up
+  pass (`effect_query_cli::field_scope`) wrote that tier into a map per model routine, last
+  write wins, in `HashMap` order. Two graph nodes on one StableRoutineId therefore made the
+  answer vary from run to run.
+- **When two nodes share an id.** The stable id lowercases (`str::to_lowercase`) where the node
+  id folds (`fold_identifier`). The two differ on `İ` and on a word-final `Σ`, so procedures
+  `"ΒΣ"` and `"Βς"` are two nodes on one id.
+  - Reproduced: `"ΒΣ"` calls R directly, `"Βς"` reaches it only through a dynamic
+    `Codeunit.Run`. Over 12 runs, `"ΒΣ"` read `local` 7 times and `via-hub` 5 times.
+  - No real code was found with such a pair: 0 shared ids among CDO's 23,253 routine nodes and
+    in 231 corpus/fixture workspaces (2026-11-18).
+- **Now.** The write keeps each routine's best tier, so `"ΒΣ"` is `local` on every run. While
+  their ids are one, both routines still read the better of the two tiers. Whether the id should
+  fold like the node id is a separate question: TLS-43 keeps ids on `to_lowercase` on purpose,
+  and changing it moves ids.
+- **Checks.**
+  - `cli_query_field::shared_stable_id_tier` runs the repro 12 times, in new processes.
+  - `SitedGraph::shared_stable_ids` lists any id more than one node carries.
+    `impact_graph::stable_id_tests` asserts it is empty on every corpus/fixture workspace and on
+    a probe of the ASCII near-collision shapes (an XMLport element name at two nesting levels is
+    one node; a split `#if` subscriber is two nodes with distinct `~` suffixes).
+    `cdo_sited_graph_stable_ids_are_unique` does the same on CDO, in the harness phase.
+  - Two discrimination proofs, both red, are recorded in the tests' docs.
+
 ### Changed (ENG-120: mimalloc's `purge_delay` measured on CDO and DO, kept at 0)
 
 - No code change: `alsem` keeps `purge_delay` 0. A delay of 1 or 10 ms gave no CPU gain near the
