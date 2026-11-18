@@ -260,6 +260,171 @@ pub fn count_app_json_paths(workspace: &Path) -> Vec<std::path::PathBuf> {
     paths
 }
 
+/// Why [`SourceText::mapped`] refused a range.
+#[derive(Debug)]
+pub enum MappedTextError {
+    /// The range ends past the mapping (or starts after its end).
+    OutOfRange,
+    /// The bytes are not UTF-8.
+    NotUtf8(std::str::Utf8Error),
+}
+
+impl std::fmt::Display for MappedTextError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            MappedTextError::OutOfRange => f.write_str("text range outside the mapped file"),
+            MappedTextError::NotUtf8(e) => write!(f, "mapped text is not UTF-8: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for MappedTextError {}
+
+/// ENG-113: an AL source text, read as a `str`: owned (workspace files, source-folder
+/// dependencies, a package whose cache could not be written) or a range of a read-only
+/// mapping of a package's cache file (`snapshot::cache`), which the page cache shares across
+/// engine processes. Cloning is a handle copy either way.
+#[derive(Clone)]
+pub struct SourceText(Repr);
+
+#[derive(Clone)]
+enum Repr {
+    Owned(std::sync::Arc<str>),
+    /// `map[range]`, checked to be UTF-8 on a character boundary at both ends when made.
+    Mapped {
+        map: std::sync::Arc<memmap2::Mmap>,
+        range: std::ops::Range<usize>,
+    },
+}
+
+impl SourceText {
+    /// `map[range]` as text.
+    ///
+    /// # Errors
+    /// The range is outside the map, or its bytes are not UTF-8 (which also refuses a range
+    /// that splits a character).
+    pub fn mapped(
+        map: &std::sync::Arc<memmap2::Mmap>,
+        range: std::ops::Range<usize>,
+    ) -> Result<SourceText, MappedTextError> {
+        let bytes = map.get(range.clone()).ok_or(MappedTextError::OutOfRange)?;
+        std::str::from_utf8(bytes).map_err(MappedTextError::NotUtf8)?;
+        Ok(SourceText(Repr::Mapped {
+            map: std::sync::Arc::clone(map),
+            range,
+        }))
+    }
+
+    /// The same text allocation (one `Arc<str>`, or one map and range): equal without reading
+    /// the bytes. `false` says nothing (two copies of one text).
+    #[must_use]
+    pub fn ptr_eq(a: &SourceText, b: &SourceText) -> bool {
+        match (&a.0, &b.0) {
+            (Repr::Owned(x), Repr::Owned(y)) => std::sync::Arc::ptr_eq(x, y),
+            (Repr::Mapped { map: m, range: r }, Repr::Mapped { map: n, range: s }) => {
+                std::sync::Arc::ptr_eq(m, n) && r == s
+            }
+            _ => false,
+        }
+    }
+
+    /// Whether the text is a range of a mapped file (for the census and tests).
+    #[must_use]
+    pub fn is_mapped(&self) -> bool {
+        matches!(self.0, Repr::Mapped { .. })
+    }
+
+    /// The owned text's allocation, when owned (the census counts it as heap; a mapped text
+    /// is no heap of this process).
+    #[must_use]
+    pub fn owned_arc(&self) -> Option<&std::sync::Arc<str>> {
+        match &self.0 {
+            Repr::Owned(a) => Some(a),
+            Repr::Mapped { .. } => None,
+        }
+    }
+
+    /// The mapping a mapped text reads (tests probe that it outlives nothing it should not).
+    #[must_use]
+    pub fn mapping(&self) -> Option<&std::sync::Arc<memmap2::Mmap>> {
+        match &self.0 {
+            Repr::Owned(_) => None,
+            Repr::Mapped { map, .. } => Some(map),
+        }
+    }
+}
+
+impl std::ops::Deref for SourceText {
+    type Target = str;
+    fn deref(&self) -> &str {
+        match &self.0 {
+            Repr::Owned(a) => a,
+            Repr::Mapped { map, range } => {
+                // SAFETY: `mapped` checked these bytes are UTF-8 when the text was made, and
+                // the mapping is read-only and never changes (snapshot::cache: entries are
+                // replaced whole by a rename, never written in place).
+                unsafe { std::str::from_utf8_unchecked(&map[range.clone()]) }
+            }
+        }
+    }
+}
+
+impl AsRef<str> for SourceText {
+    fn as_ref(&self) -> &str {
+        self
+    }
+}
+
+impl std::borrow::Borrow<str> for SourceText {
+    fn borrow(&self) -> &str {
+        self
+    }
+}
+
+impl std::fmt::Debug for SourceText {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(&**self, f)
+    }
+}
+
+impl std::fmt::Display for SourceText {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&**self, f)
+    }
+}
+
+impl PartialEq for SourceText {
+    fn eq(&self, other: &SourceText) -> bool {
+        SourceText::ptr_eq(self, other) || **self == **other
+    }
+}
+
+impl Eq for SourceText {}
+
+impl PartialEq<str> for SourceText {
+    fn eq(&self, other: &str) -> bool {
+        &**self == other
+    }
+}
+
+impl From<std::sync::Arc<str>> for SourceText {
+    fn from(a: std::sync::Arc<str>) -> SourceText {
+        SourceText(Repr::Owned(a))
+    }
+}
+
+impl From<String> for SourceText {
+    fn from(s: String) -> SourceText {
+        SourceText(Repr::Owned(s.into()))
+    }
+}
+
+impl From<&str> for SourceText {
+    fn from(s: &str) -> SourceText {
+        SourceText(Repr::Owned(s.into()))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::decode_al_source;
@@ -296,5 +461,61 @@ mod tests {
         );
         assert_ne!(rf, re);
         assert_eq!(key_path(&rf), Path::new(OsStr::from_bytes(b"src/\xff.al")));
+    }
+
+    fn map_of(bytes: &[u8]) -> std::sync::Arc<memmap2::Mmap> {
+        let mut f = tempfile::tempfile().unwrap();
+        std::io::Write::write_all(&mut f, bytes).unwrap();
+        // SAFETY: a private anonymous temp file nothing else writes.
+        std::sync::Arc::new(unsafe { memmap2::Mmap::map(&f) }.unwrap())
+    }
+
+    /// `mapped` refuses a range past the map and one that splits a character (its `Deref`
+    /// reads the bytes unchecked, so every text it makes must be whole UTF-8).
+    #[test]
+    fn mapped_text_is_whole_utf8_inside_the_map() {
+        use super::{MappedTextError, SourceText};
+        let map = map_of("aÅb".as_bytes()); // `Å` is bytes 1..3
+        assert_eq!(&*SourceText::mapped(&map, 0..4).unwrap(), "aÅb");
+        assert_eq!(&*SourceText::mapped(&map, 1..3).unwrap(), "Å");
+        assert!(matches!(
+            SourceText::mapped(&map, 0..2),
+            Err(MappedTextError::NotUtf8(_))
+        ));
+        assert!(matches!(
+            SourceText::mapped(&map, 2..4),
+            Err(MappedTextError::NotUtf8(_))
+        ));
+        assert!(matches!(
+            SourceText::mapped(&map, 3..5),
+            Err(MappedTextError::OutOfRange)
+        ));
+    }
+
+    /// `ptr_eq` is the same map and range, or the same `Arc<str>`; `==` is the text, across
+    /// forms.
+    #[test]
+    fn source_text_identity_and_equality() {
+        use super::SourceText;
+        let map = map_of(b"abab");
+        let first = SourceText::mapped(&map, 0..2).unwrap();
+        let second = SourceText::mapped(&map, 2..4).unwrap();
+        assert!(SourceText::ptr_eq(&first, &first.clone()));
+        assert!(
+            !SourceText::ptr_eq(&first, &second),
+            "same map, other range"
+        );
+        assert_eq!(first, second, "equal text");
+        let other_map = SourceText::mapped(&map_of(b"abab"), 0..2).unwrap();
+        assert!(
+            !SourceText::ptr_eq(&first, &other_map),
+            "same range, another map"
+        );
+        assert_eq!(first, other_map, "equal text on another map");
+        let owned = SourceText::from("ab");
+        assert!(SourceText::ptr_eq(&owned, &owned.clone()));
+        assert!(!SourceText::ptr_eq(&owned, &SourceText::from("ab")));
+        assert_eq!(owned, first, "equal text across forms");
+        assert_ne!(owned, SourceText::from("ba"));
     }
 }

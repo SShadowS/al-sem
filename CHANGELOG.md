@@ -173,6 +173,81 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fails; the existing site-facts tests stayed green under the first two; a span differing in its
   unit, start or end alone is another id) and `an_edges_debug_keeps_the_obligation_id_field`.
 
+### Changed (ENG-113: dependency source text is mapped from a sealed cache file, 114.8 MiB less heap per engine on CDO, shared across engines)
+
+- **What changed** (`src/snapshot/cache.rs`, `src/source_text.rs`; no output change). The
+  embedded-source cache keeps one file per package, `<blake3>.s7.f2.bin`: a header (magic,
+  format, extraction scheme, lengths, a blake3 over the package's hash, the index and the
+  text), a JSON index of `(path, offset, len)`, then every file's decoded text. It is written
+  owner-only to a unique temp file and renamed into place; it is never written in place. On
+  Unix every publish holds a per-package lock (`flock` on a private regular `<hash>.lock`) and
+  reads the entry again under it: an entry another process published meanwhile is used (every
+  engine then maps the one file), a missing one is published without replacing, a refused one
+  is replaced. Without the lock nothing is published and the text stays owned; the
+  temp file, the lock and the rename all go through the checked directory handle. Windows has
+  no lock: a missing entry is published without replacing, a refused one replaced (a rename
+  over an entry another engine maps fails). A hit (and a miss, after writing) maps
+  the file read-only and hands out `SourceText` ranges of it, so the page cache holds a
+  package's text once for every engine process on the machine. Each read opens the entry
+  without following a symlink or blocking (Unix: relative to the checked directory handle;
+  Windows: denying write sharing, which holds while the map lives, since memmap2 keeps a
+  duplicate of the handle), refuses anything but a regular file, checks the header,
+  an index of at most 64 MiB, the length, the blake3 (mandatory: nothing fsyncs; it also
+  refuses another package's entry copied under this name), that the index tiles the text
+  exactly, then each range's UTF-8; a refused entry is extracted again and rewritten; a cache
+  that cannot be written leaves owned text (logged at warn). On Unix a cache directory or
+  entry another user could write is never mapped: such a directory is not used at all (no
+  read, no write; the source stays owned text), such an entry is refused and replaced. `SourceText` (an owned `Arc<str>` or a mapped range) replaces
+  `Arc<str>` as the text of `SourceFile`, `ParsedFile` and every holder (session, row cache,
+  guard cache, LSP entries); the row cache's pointer fast path is its `==`. Design:
+  `docs/superpowers/notes/2026-11-18-eng113-mapped-dependency-text.md`.
+- **RSS and peak RSS will not show it.** Mapped file pages count in each process's RSS, so
+  one engine alone uses about as much RSS as before, and cdo-speed's summed VmHWM moved only
+  x0.962 and x0.977. The saving is heap, and it is shared:
+  - heap (`tools/census-probe resident`, same probe both sides, base `a73b4bf6`): the bucket
+    `bodies: source text + paths + provenance` 120.37 -> 4.79 MiB; live after the asks
+    3,619.5 -> 3,504.7 MiB (-114.8). The retained census prints mapped bytes on their own
+    line, `program.snapshot_texts_mapped`; an owned fallback still counts in
+    `program.snapshot_texts`.
+  - sharing (two concurrent `alsem mcp` engines on CDO, warm cache, each cache file's own
+    `/proc/<pid>/smaps` entry): each engine maps the 10 package files (116.5 MiB) with
+    Shared_Clean 114.7 MiB, Pss 57.4 and 59.2 MiB (half each), Private_Clean 0 and 1.8 MiB.
+    The base engines map no cache file. Whole-process Pss cannot resolve the change: the two
+    engines of one side differ by about 220 MiB of anonymous memory.
+- **Disk.** The old `<hash>.s7.json` entries stay (no pruner), so the cache roughly doubles
+  once (the new files are 116.5 MiB for CDO's 10 packages). A cold miss holds the owned and the
+  mapped text together for a moment.
+- **Risk.** A cache file this user rewrites or truncates in place under a live map (an
+  outside `cp` or `rsync --inplace` over the cache, a restore) can kill the process holding it
+  with SIGBUS; the SAFETY comment in `CacheDir::read` and the design note state it. Other
+  users cannot on Unix, where an entry or directory they could write is never mapped. On
+  Windows the default cache (`%LOCALAPPDATA%`, else the per-user temp directory) is under this
+  user's profile (not checked), and while a map lives the entry cannot be opened for writing at
+  all, not even by this user.
+- **CDO checks** (first head, before the sol fold; base `a73b4bf6`): `cdo-before-after` moved
+  no finding, fingerprint or call-graph number; the session refresh equals a cold build at all
+  12 steps in both modes; `cdo-gate --only harness,l4,output` passed (211/0, 25/0, 22/0).
+  `cdo-speed` passed twice; the round total read x1.002 and x1.077 and the build x0.963 and
+  x1.065, which disagree, so no speed ratio is claimed. After the fold (base `38635b99`):
+  `ci-steps task` 6148/6148, `cdo-before-after` moved nothing, `cdo-gate --only
+  harness,l4,output` passed (212/0, 25/0, 22/0), the refresh equals a cold build at all 12
+  steps in both modes, and the census bucket is again 4.79 MiB (mapped).
+- **Pinned by** `snapshot::cache::tests` (a damaged text or index under an old hash is refused
+  and rewritten, mapped: with the hash check removed, or covering the text only, they fail;
+  truncated, bad-magic, out-of-range and overflowing entries, another package's entry, an
+  index that leaves a gap, overlaps or misses text, a length that overflows, a trailing byte
+  past the stated length and an index over the cap are refused; a symlink or FIFO entry is
+  refused and replaced; a directory other users can write is not used, and an entry they
+  can write is replaced; a published entry is kept and a refused one replaced, unless another
+  process already published a valid one; a publish waits for the lock, and a lock path that is
+  not a private regular file publishes nothing; on Windows a mapped entry cannot be opened for
+  writing (that test runs on Windows only); a valid entry, empty included, is served without
+  extracting or rewriting; an unwritable cache keeps owned text), `source_text::tests` (a
+  range that splits a character is refused: without the UTF-8 check it fails; `ptr_eq` needs
+  the same map and range: ignoring either fails), `resolved::tests::mapped_texts_are_no_heap_and_owned_ones_are`, and the
+  S10.1 guard `the_lsp_keeps_no_dependency_text`, which now probes the mapping (with the cache
+  pinning one text it fails).
+
 ### Changed (ENG-120: mimalloc's `purge_delay` measured on CDO and DO, kept at 0)
 
 - No code change: `alsem` keeps `purge_delay` 0. A delay of 1 or 10 ms gave no CPU gain near the

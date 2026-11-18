@@ -23,9 +23,9 @@ pub struct ParsedFile {
     /// (rung-1 `pending` splice / rung-2 `splice_file` / rung-3 wholesale).
     pub file: std::sync::Arc<al_syntax::ir::AlFile>,
     pub provenance: Provenance,
-    /// The original AL source text — the SAME `Arc<str>` allocation as the
-    /// snapshot's `SourceFile.text` (perf safe-wins Task 1), never a copy.
-    pub text: Arc<str>,
+    /// The original AL source text — the SAME text handle as the snapshot's
+    /// `SourceFile.text` (perf safe-wins Task 1, ENG-113), never a copy.
+    pub text: crate::source_text::SourceText,
 }
 
 /// All parsed files for one source-bearing app.
@@ -137,7 +137,7 @@ fn parse_unit_reusing_in_pool(
                 virtual_path: f.virtual_path.clone(),
                 file: tree,
                 provenance: unit.provenance.clone(),
-                text: Arc::clone(&f.text),
+                text: f.text.clone(),
             },
             None => parse_file(unit, f),
         })
@@ -156,7 +156,7 @@ pub(crate) fn parse_file(unit: &AppUnit, f: &crate::snapshot::embedded::SourceFi
         virtual_path: f.virtual_path.clone(),
         file: Arc::new(al_syntax::parse(&f.text)),
         provenance: unit.provenance.clone(),
-        text: Arc::clone(&f.text),
+        text: f.text.clone(),
     }
 }
 

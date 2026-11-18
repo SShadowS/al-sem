@@ -635,10 +635,7 @@ impl WorkspaceInputs {
                     t.arc::<Vec<crate::snapshot::embedded::SourceFile>>();
                     t.buf::<crate::snapshot::embedded::SourceFile>(d.files.len());
                     for f in d.files.iter() {
-                        t.strs([&f.virtual_path]);
-                        t.bytes += (2 * std::mem::size_of::<usize>() + f.text.len())
-                            .next_multiple_of(std::mem::align_of::<usize>());
-                        t.allocs += 1;
+                        t.strs([&f.virtual_path]).text(&f.text);
                     }
                 }
             }
@@ -969,7 +966,10 @@ mod tests {
         assert_eq!(new.tier, old.tier);
         // The SAME text, not a copy.
         assert!(Arc::ptr_eq(
-            &new.files[0].text,
+            new.files[0]
+                .text
+                .owned_arc()
+                .expect("workspace text is owned"),
             inputs.al_files[0].text.as_ref().unwrap()
         ));
     }

@@ -1471,7 +1471,7 @@ fn build_full_with_parsed_shares_one_parse_between_snapshot_and_updater() {
              not two independent parses"
         );
         assert!(
-            std::sync::Arc::ptr_eq(&entry.text, &pf.text),
+            al_sem::source_text::SourceText::ptr_eq(&entry.text, &pf.text),
             "{vp}: snapshot and updater must share ONE text allocation"
         );
     }
