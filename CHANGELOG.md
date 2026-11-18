@@ -445,6 +445,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   shares ended while it waited. A script's option operands (`bash -o pipefail scripts/ci-steps`)
   are skipped when finding the script. `status` adds a second line,
   `timed by <owner> since <time> (<reason>)`; a reason may hold no line break (LF or CR).
+- **Fixed: the status is read once per check.** A holder whose bound process ended removes its
+  status while it still holds the lock. Reading the fields one by one from the file could mix
+  the two: `session` from before the removal, `bound` (now empty) from after. Another run's bound
+  hold then read as this session's own unbound one, "already yours" with empty fields. Seen in
+  TLS-92's task gate, where cdo-speed runs back to back on one slot and its timed hold failed.
+  `cdo_slot::cdo_slot_reads_the_status_once_per_check` pins it with a test-only pause
+  (`CDO_SLOT_TEST_PAUSE_S`) between those two reads.
 - **The limit.** The hook sees a command only when it starts. A command it allowed before the
   hold became timed, and that starts a build later (`sleep 60; cargo build`), is not stopped,
   and neither is a build started outside any hooked session.

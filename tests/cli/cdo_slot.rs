@@ -892,6 +892,68 @@ fn cdo_slot_serves_waiters_in_arrival_order() {
     assert_eq!(s.run("D", &["release"], &[]).0, Some(0));
 }
 
+/// ⟨TLS-89, found by TLS-92's gate⟩ A holder whose bound process ended removes its
+/// status while it still holds the lock. A reader that took the status's fields
+/// one by one from the file could mix the two states: `session` (this session's)
+/// read before the removal, `bound` (now empty) after it, so another run's BOUND
+/// hold read as this session's own unbound one: "already yours" with empty
+/// fields, and cdo-speed's timed hold then failed. The status is now read once
+/// per check. Here session A holds the slot bound to a sleeper; a second acquire
+/// by A pauses between reading `session` and `bound` (the CDO_SLOT_TEST_PAUSE_S
+/// hook) while the test removes the status file. It must still see a hold that
+/// is not its own: refused (exit 1), not "already yours" (exit 4).
+///
+/// Mutation (2026-11-18): `field` reading the status FILE again instead of the
+/// loaded copy -> "already yours (held by  () since ...)", exit 4, the gate's
+/// exact symptom (red); restored, green. With the pause placed after
+/// `holder_pid` instead, the break stayed GREEN (every later field, `session`
+/// too, read after the removal), so the hook sits where the race needs it.
+#[test]
+fn cdo_slot_reads_the_status_once_per_check() {
+    let s = Slot::new();
+    let mut held = Reap(
+        std::process::Command::new("sleep")
+            .arg("600")
+            .spawn()
+            .unwrap(),
+    );
+    let pid = held.id().to_string();
+    let (code, text) = s.run("A", &["acquire", "land", "bound hold", "--bind", &pid], &[]);
+    assert_eq!(code, Some(0), "{text}");
+    let second = Reap(
+        std::process::Command::new("bash")
+            .args([SLOT, "acquire", "lane", "second"])
+            .env("CDO_SLOT_DIR", s.dir())
+            .env("CDO_SLOT_MEM_MIN_GB", "0")
+            .env("CDO_SLOT_TEST_PAUSE_S", "1.5")
+            .env("CLAUDE_CODE_SESSION_ID", "A")
+            .env_remove("CLAUDE_PID")
+            .env_remove("CDO_SLOT_TOKEN")
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap(),
+    );
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    std::fs::remove_file(s.dir().join("status")).unwrap();
+    let mut second = second;
+    let out = std::mem::replace(
+        &mut second.0,
+        std::process::Command::new("true").spawn().unwrap(),
+    )
+    .wait_with_output()
+    .unwrap();
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    held.0.kill().unwrap();
+    held.0.wait().unwrap();
+    assert_eq!(out.status.code(), Some(1), "{text}");
+    assert!(!text.contains("already yours"), "{text}");
+}
+
 /// ⟨TLS-89⟩ A timed hold never starts beside a build: `run --timed` marks the
 /// hold, waits for the build processes already running, and starts once they
 /// end; still running at `CDO_SLOT_TIMED_WAIT_S` it refuses (exit 6, naming

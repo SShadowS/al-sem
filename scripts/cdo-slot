@@ -91,8 +91,15 @@ me_token="${CDO_SLOT_TOKEN:-}"
 bind="" bind_start=""
 command -v flock >/dev/null || die "flock is needed"
 
-# field <name>: one field of the status file ("" when absent).
-field() { { sed -n "s/^$1=//p" "$status_file" 2>/dev/null || true; } | head -n 1; }
+# load_status: read the status file ONCE; `field` reads from that copy. A holder
+# removes its status when its bound process ends, so fields read one by one from
+# the file could mix a live status with a removed one: `session` read before the
+# removal and `bound` after it made another run's bound hold look like this
+# session's own unbound one ("already yours", with empty fields; TLS-92's gate).
+status_snap=""
+load_status() { status_snap=$(cat "$status_file" 2>/dev/null || true); }
+# field <name>: one field of the last loaded status ("" when absent).
+field() { { sed -n "s/^$1=//p" <<<"$status_snap" || true; } | head -n 1; }
 # proc_fields <pid>: its /proc stat fields from the state on (state = $1,
 # start time = $20); nothing when it is gone.
 proc_fields() { sed 's/.*) //' "/proc/$1/stat" 2>/dev/null || true; }
@@ -150,6 +157,7 @@ state() {
         st=free
         return
     fi
+    load_status
     holder_pid=$(field holder_pid)
     if ! is_holder "$holder_pid"; then
         # Held, but its status is not written yet (or was lost): somebody's.
@@ -161,6 +169,10 @@ state() {
     pid=$(field claude_pid)
     session=$(field session)
     token=$(field token)
+    # A test hook: a pause, between `session` and `bound`, in which a test removes
+    # the status as a holder whose bound process ended does (the race
+    # `load_status` closes: read field by field, `bound` would then come back "").
+    [[ -z "${CDO_SLOT_TEST_PAUSE_S:-}" ]] || sleep "$CDO_SLOT_TEST_PAUSE_S"
     bound=$(field bound)
     if [[ -n "$me_token" && "$token" == "$me_token" ]] \
         || [[ -n "$me_session" && "$session" == "$me_session" && -z "$bound" ]]; then
@@ -412,6 +424,7 @@ mem_ok() {
 # slot's holder named by the status: remove the status, then end the process.
 end_holder_locked() {
     is_holder "$1" || return 0
+    load_status
     [[ "$(field holder_pid)" == "$1" ]] && rm -f "$status_file" "$dir"/timed.*
     kill "$1" 2>/dev/null || true
 }
