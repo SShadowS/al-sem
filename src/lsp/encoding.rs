@@ -6,8 +6,8 @@
 //! is opt-in via `general.positionEncodings`). This module bridges the two
 //! without depending on `lsp_types`, so it stays trivially unit-testable.
 
+use crate::source_text::SourceText;
 use std::ops::Range;
-use std::sync::Arc;
 
 /// Which column encoding an LSP session negotiated with the client.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -34,7 +34,7 @@ pub fn negotiate(client_encodings: Option<&[String]>) -> PositionEncoding {
 
 /// Lazy per-line byte<->UTF-16 conversion table for one file's text.
 ///
-/// Owns its source text (`Arc<str>`, a cheap refcount-bump clone whenever
+/// Owns its source text (a [`SourceText`] handle, a cheap clone whenever
 /// the caller already holds one — `ParsedFileEntry::text` does) rather than
 /// borrowing it, so a `LineTable` is
 /// lifetime-free and can be memoized behind a `OnceLock` on the very struct
@@ -47,18 +47,18 @@ pub fn negotiate(client_encodings: Option<&[String]>) -> PositionEncoding {
 /// `char_indices()` walk over one line is plenty fast — memoize nothing
 /// fancier unless profiling ever says otherwise.
 pub struct LineTable {
-    text: Arc<str>,
+    text: SourceText,
     lines: Vec<Range<usize>>,
 }
 
 impl LineTable {
-    /// Accepts anything cheaply convertible to `Arc<str>` — an `Arc<str>`
-    /// the caller already holds (`Arc::clone`, no allocation, the common
-    /// production path) or a borrowed `&str`/`String` (`Arc<str>: From<&str>`
+    /// Accepts anything cheaply convertible to a [`SourceText`] — a text
+    /// handle the caller already holds (a clone, no allocation, the common
+    /// production path), an `Arc<str>`, or a borrowed `&str`/`String` (which
     /// allocates a fresh copy — only ever hit by this module's own literal-
     /// constant unit tests below).
-    pub fn new(text: impl Into<Arc<str>>) -> Self {
-        let text: Arc<str> = text.into();
+    pub fn new(text: impl Into<SourceText>) -> Self {
+        let text: SourceText = text.into();
         let mut lines = Vec::new();
         let mut start = 0usize;
         for part in text.split('\n') {
@@ -232,6 +232,7 @@ impl LineIndex {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
 
     /// `LineIndex::col_out` equals `LineTable::col_out` at every byte column
     /// (in range, mid-character, past the end) of every line (and past the

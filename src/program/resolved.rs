@@ -461,8 +461,9 @@ impl ResolvedProgram {
     /// buckets, printed; #160 steps 10 + 11a (§4.13): `program.edge_site` (the
     /// edges' site keys, a part of `program.report`) and `program.file_table`.
     pub(crate) fn census(&self) {
-        self.snapshot_texts_tally()
-            .emit("program.snapshot_texts", Kind::Exact);
+        let (texts, mapped) = self.snapshot_texts_tally();
+        texts.emit("program.snapshot_texts", Kind::Exact);
+        mapped.emit("program.snapshot_texts_mapped", Kind::Exact);
         self.report_tally().emit("program.report", Kind::Shallow);
         let b = &self.body;
         let edges = b.edges.len() + b.dependency_body_edges.len();
@@ -475,25 +476,32 @@ impl ResolvedProgram {
         self.meta.inputs.census().emit("inputs", Kind::Exact);
     }
 
-    /// `program.snapshot_texts`: every source text of every DEPENDENCY app in
-    /// the snapshot, each shared `Arc<str>` once (exact). The workspace texts are
-    /// the `inputs` bucket's, which shares them by `Arc`.
-    fn snapshot_texts_tally(&self) -> Tally {
+    /// `program.snapshot_texts`: every OWNED source text of every DEPENDENCY app in
+    /// the snapshot, each shared `Arc<str>` once (exact), and (second) every mapped
+    /// source-cache file those apps' texts read, once each, by its length
+    /// (ENG-113: file-backed pages the page cache shares across processes, not heap; a
+    /// package whose cache could not be used stays owned and counts as heap). The
+    /// workspace texts are the `inputs` bucket's, which shares them by `Arc`.
+    fn snapshot_texts_tally(&self) -> (Tally, Tally) {
         let mut seen = std::collections::HashSet::new();
         let mut texts = Tally::default();
+        let mut mapped = Tally::default();
         let snap = self.body.ctx.snapshot();
         for app in snap.apps.iter().filter(|u| u.id != snap.workspace_app) {
             for f in app.source.iter().flat_map(|s| s.files.iter()) {
-                if seen.insert(Arc::as_ptr(&f.text).cast::<u8>()) {
-                    // `ArcInner<str>`: strong + weak counts, then the bytes, padded
-                    // to the counts' alignment — the requested allocation size.
-                    texts.bytes += (2 * std::mem::size_of::<usize>() + f.text.len())
-                        .next_multiple_of(std::mem::align_of::<usize>());
-                    texts.allocs += 1;
+                if let Some(a) = f.text.owned_arc() {
+                    if seen.insert(Arc::as_ptr(a).cast::<u8>()) {
+                        texts.text(&f.text);
+                    }
+                } else if let Some(m) = f.text.mapping()
+                    && seen.insert(Arc::as_ptr(m).cast::<u8>())
+                {
+                    mapped.bytes += m.len();
+                    mapped.allocs += 1;
                 }
             }
         }
-        texts
+        (texts, mapped)
     }
 
     /// `program.report` (shallow): the resolver's per-site output (both edge
@@ -656,7 +664,7 @@ mod tests {
                 .any(|f| f.text.as_ref().is_ok_and(|t| !t.is_empty())),
             "the precondition: the workspace has text"
         );
-        let t = p.snapshot_texts_tally();
-        assert_eq!((t.bytes, t.allocs), (0, 0));
+        let (t, m) = p.snapshot_texts_tally();
+        assert_eq!((t.bytes, t.allocs, m.bytes, m.allocs), (0, 0, 0, 0));
     }
 }

@@ -35,10 +35,11 @@ RSS; the CHANGELOG says so.
 
 ## Design
 
-1. **One cache file per package** (`<blake3>.t<SCHEME>.bin`), written once and renamed into place:
-   a small header (magic, scheme, file count, text length, blake3 of the text), the index
-   `[(path, offset, len)]`, then every file's decoded UTF-8 text concatenated. One file and one
-   rename: a reader never pairs an index with another write's text.
+1. **One cache file per package** (`<blake3>.s<SCHEME>.f<FORMAT>.bin`, the extraction scheme and the
+   cache layout both in the name), written once and renamed into place: a small header (magic, format,
+   scheme, index length, text length, blake3 of the text), the index `[(path, offset, len)]` as JSON,
+   then every file's decoded UTF-8 text concatenated. One file and one rename: a reader never pairs an
+   index with another write's text.
 2. **Unique temp files**: `tempfile::NamedTempFile::new_in(cache_dir)` + `persist` (the `tempfile`
    crate is already a dependency). The writer never maps its own temp file; it maps the renamed file.
 3. **`SourceText`** (new, `src/source_text.rs`): `Clone`, `Deref<Target = str>`, `Debug`/`Display` as

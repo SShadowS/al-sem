@@ -687,7 +687,7 @@ impl Updater {
     fn plan_save(&self, cur: &LspSnapshot, vp: String, text: String) -> Planned {
         let provenance = self.file_provenance(cur, &vp);
         let file = Arc::new(al_syntax::parse(&text));
-        let text: Arc<str> = text.into();
+        let text: crate::source_text::SourceText = text.into();
         // Fail-closed: a `Recovered` parse cannot be trusted for rung 1's
         // fingerprint-equality shortcut — the IR may have silently dropped
         // content (see `crate::snapshot::parse::recovered_file_paths`'s doc),
@@ -867,7 +867,7 @@ impl Updater {
                 pf.virtual_path.clone(),
                 Arc::new(ParsedFileEntry::new(
                     Arc::clone(&pf.file),
-                    Arc::clone(&pf.text),
+                    pf.text.clone(),
                     pf.virtual_path.clone(),
                     def_surface,
                 )),
@@ -1242,7 +1242,7 @@ fn apply_rung1_core(
             vp.clone(),
             Arc::new(ParsedFileEntry::new(
                 Arc::clone(&pf.file),
-                Arc::clone(&pf.text),
+                pf.text.clone(),
                 vp.clone(),
                 surface,
             )),

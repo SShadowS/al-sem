@@ -65,7 +65,7 @@ use crate::snapshot::{AppSetSnapshot, DependencySource, SnapshotBuilder};
 
 /// One workspace file as the last revision left it.
 struct RetainedFile {
-    text: Arc<str>,
+    text: crate::source_text::SourceText,
     tree: Arc<al_syntax::ir::AlFile>,
     projection: DeclProjection,
     /// The pre-refinement resolution (before `close_holder_sites`).
@@ -555,7 +555,7 @@ impl WorkspaceSession {
         // Both modes: the next snapshot shares this text through the
         // session's `DepCache` (same `.app` stamp, which carries the image's
         // content hash) instead of extracting it again. In the default mode
-        // the tier's trees hold the same `Arc<str>` texts, so this costs only
+        // the tier's trees hold the same text handles, so this costs only
         // the lists.
         let dependency_sources: Vec<_> = ctx
             .snap
@@ -575,16 +575,17 @@ impl WorkspaceSession {
         }
         let proj: HashMap<String, DeclProjection> = projections.into_iter().collect();
         let mut files = HashMap::new();
-        let trees: HashMap<&str, (&Arc<al_syntax::ir::AlFile>, &Arc<str>)> = ws_files
-            .iter()
-            .map(|pf| (pf.virtual_path.as_str(), (&pf.file, &pf.text)))
-            .collect();
+        let trees: HashMap<&str, (&Arc<al_syntax::ir::AlFile>, &crate::source_text::SourceText)> =
+            ws_files
+                .iter()
+                .map(|pf| (pf.virtual_path.as_str(), (&pf.file, &pf.text)))
+                .collect();
         for (path, resolution) in kept.files {
             let (tree, text) = trees[path.as_str()];
             files.insert(
                 path.clone(),
                 RetainedFile {
-                    text: Arc::clone(text),
+                    text: text.clone(),
                     tree: Arc::clone(tree),
                     projection: proj[&path],
                     resolution,

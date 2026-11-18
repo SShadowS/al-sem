@@ -46,11 +46,12 @@ use std::sync::Arc;
 use super::workspace::{AbiRowIds, AssemblyNeeds, FilePopulation, ModelEntities};
 use crate::program::node::{AppRef, RoutineNodeId};
 use crate::program::site_key::FileIx;
+use crate::source_text::SourceText;
 
 /// Everything `project_ir` reads for one file, borrowed from the current
 /// revision. Its tree is the text's parse (see the module doc).
 pub(crate) struct ProjectionInputs<'a> {
-    pub(crate) text: &'a Arc<str>,
+    pub(crate) text: &'a SourceText,
     pub(crate) population: &'a FilePopulation,
     /// The file's [`crate::program::resolve::full::FileBindings`]: the parens-less calls
     /// and (ENG-80) the bare-call verdicts the `Error` rule reads. A row whose bindings
@@ -64,7 +65,7 @@ pub(crate) struct ProjectionInputs<'a> {
 
 /// One file's raw rows and the inputs they were projected from.
 pub(crate) struct CachedFile {
-    text: Arc<str>,
+    text: SourceText,
     population: FilePopulation,
     parenless: crate::program::resolve::full::FileBindings,
     file: Option<FileIx>,
@@ -83,7 +84,7 @@ impl CachedFile {
         positions: Vec<(usize, usize)>,
     ) -> Self {
         CachedFile {
-            text: Arc::clone(i.text),
+            text: i.text.clone(),
             population: i.population.clone(),
             parenless: i.parenless.clone(),
             file: i.file,
@@ -99,9 +100,10 @@ impl CachedFile {
     /// what `project_ir` would push for `i`: every input equal but the
     /// `FileIx`, which `project_ir` only writes into each routine row's
     /// `file` (a per-build number: a file added before this one shifts it).
-    /// The text stands for the tree (its parse).
+    /// The text stands for the tree (its parse); `==` answers the same text handle
+    /// without reading the bytes.
     pub(crate) fn matches(&self, i: &ProjectionInputs<'_>) -> bool {
-        (Arc::ptr_eq(&self.text, i.text) || *self.text == **i.text)
+        self.text == *i.text
             && self.population == *i.population
             && self.parenless == *i.parenless
             && self.needs == i.needs
@@ -175,7 +177,7 @@ pub struct RowCache {
 
 /// One dependency file's routine ids and the text they were built from.
 pub(crate) struct DependencyIds {
-    text: Arc<str>,
+    text: SourceText,
     ids: Arc<Vec<Vec<RoutineNodeId>>>,
 }
 
@@ -188,10 +190,10 @@ impl RowCache {
         &self,
         app: AppRef,
         path: &str,
-        text: &Arc<str>,
+        text: &SourceText,
     ) -> Option<Arc<Vec<Vec<RoutineNodeId>>>> {
         let d = self.dependency_ids.get(&(app, path.to_string()))?;
-        (Arc::ptr_eq(&d.text, text) || *d.text == **text).then(|| Arc::clone(&d.ids))
+        (d.text == *text).then(|| Arc::clone(&d.ids))
     }
 
     /// The routine ids of dependency file `path` of `app`: the kept ones when
@@ -200,7 +202,7 @@ impl RowCache {
         &mut self,
         app: AppRef,
         path: &str,
-        text: &Arc<str>,
+        text: &SourceText,
         compute: impl FnOnce() -> Vec<Vec<RoutineNodeId>>,
     ) -> Arc<Vec<Vec<RoutineNodeId>>> {
         if let Some(ids) = self.kept_dependency_ids(app, path, text) {
@@ -210,7 +212,7 @@ impl RowCache {
         self.dependency_ids.insert(
             (app, path.to_string()),
             DependencyIds {
-                text: Arc::clone(text),
+                text: text.clone(),
                 ids: Arc::clone(&ids),
             },
         );
