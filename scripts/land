@@ -197,15 +197,18 @@ if ((push)); then
     [[ -z "$main_dirty" ]] || die "the main checkout $main has uncommitted changes; merge-and-push would refuse after the gates"
 fi
 
-ids=() parts=()
+ids=() parts=() tips=()
 for ((i = 0; i < ${#branches[@]}; i++)); do
     b=${branches[i]}
     [[ "$b" != master ]] || die "master is not a branch to land"
     for ((j = 0; j < i; j++)); do
         [[ "$b" != "${branches[j]}" ]] || die "'$b' given twice"
     done
-    G rev-parse -q --verify "refs/heads/$b" >/dev/null || die "no local branch '$b'"
-    G merge-base --is-ancestor "refs/heads/$b" "$master" && die "'$b' is already in master"
+    # Each branch's commit, read once: the checks below and the merge use this
+    # commit, never the branch name again, so a commit added to a branch while
+    # land runs is neither checked nor merged (TLS-87 review r1, sol).
+    tips[i]=$(G rev-parse -q --verify "refs/heads/$b^{commit}") || die "no local branch '$b'"
+    G merge-base --is-ancestor "${tips[i]}" "$master" && die "'$b' is already in master"
     if [[ "$b" =~ (^|/)([A-Za-z]+)-([0-9]+) ]]; then
         ids+=("${BASH_REMATCH[2]^^}-${BASH_REMATCH[3]}")
         parts+=("${BASH_REMATCH[2],,}${BASH_REMATCH[3]}")
@@ -234,7 +237,7 @@ while taken "$landing"; do
 done
 echo "land: merge order:"
 for ((i = 0; i < ${#branches[@]}; i++)); do
-    echo "land:   $((i + 1)). ${branches[i]} ($(G rev-parse --short "refs/heads/${branches[i]}"), ${ids[i]})"
+    echo "land:   $((i + 1)). ${branches[i]} (${tips[i]:0:8}, ${ids[i]})"
 done
 echo "land: landing branch: $landing"
 
@@ -257,21 +260,49 @@ presubmit_missing=() presubmit_notes=()
 # subset test path needs its own phases.
 presubmit_exempt='^(docs/|scripts/|\.claude/|\.kraken/|\.github/|\.agent/|[^/]+\.md$)'
 presubmit_hl_tests='^tests/(program_resolve_harness\.rs|goldens/semantic-edges/|l4_summary_differential\.rs|l4-summary-baseline/|common/)'
-presubmit_out_tests='^tests/(cli/output_cdo|cli-output-goldens/|common/)'
-for b in "${branches[@]}"; do
+presubmit_out_tests='^tests/(cli-output-goldens/|common/|cli/main\.rs$)'
+# The cli members `output_cdo` reaches through `crate::<module>` at commit <c>,
+# followed transitively (review r1, sol: it imports output_invariants and
+# mcp_server, which a fixed list missed): `tests/cli/<module>.rs`, one a line.
+cli_closure() { # <commit> <module>...
+    local c=$1 m src n
+    shift
+    local -A seen=()
+    local queue=("$@")
+    while ((${#queue[@]})); do
+        m=${queue[0]}
+        queue=("${queue[@]:1}")
+        [[ -z "${seen[$m]:-}" ]] || continue
+        seen[$m]=1
+        src=$(G show "$c:tests/cli/$m.rs" 2>/dev/null) || continue
+        echo "tests/cli/$m.rs"
+        while read -r n; do
+            [[ -n "$n" ]] && queue+=("$n")
+        done < <(grep -oE 'crate::[a-z_][a-z0-9_]*' <<<"$src" | sed 's/^crate:://' | sort -u)
+    done
+}
+for ((i = 0; i < ${#branches[@]}; i++)); do
+    b=${branches[i]}
     # --no-renames: a file moved out of the engine counts at its old path too.
-    paths=$(G diff --no-renames --name-only "$master...refs/heads/$b") || die "git diff failed for '$b'"
+    # core.quotePath=false: a non-ASCII path is not quoted, so it still matches
+    # the exempt prefixes (review r1, sol).
+    paths=$(G -c core.quotePath=false diff --no-renames --name-only "$master...${tips[i]}") \
+        || die "git diff failed for '$b'"
     paths=$(grep -vE "$presubmit_exempt" <<<"$paths" || true)
     product=$(grep -vE '^tests/' <<<"$paths" || true)
+    out_tests=$(
+        grep -E "$presubmit_out_tests" <<<"$paths" || true
+        grep -xF -f <(cli_closure "${tips[i]}" output_cdo) <<<"$paths" || true
+    )
     need=()
-    if [[ -n "$product" ]] || grep -qE "$presubmit_hl_tests|$presubmit_out_tests" <<<"$paths"; then
+    if [[ -n "$product" || -n "$out_tests" ]] || grep -qE "$presubmit_hl_tests" <<<"$paths"; then
         need=(program_resolve_harness l4_summary_differential)
     fi
-    if [[ -n "$product" ]] || grep -qE "$presubmit_out_tests" <<<"$paths"; then
+    if [[ -n "$product" || -n "$out_tests" ]]; then
         need+=(output_cdo)
     fi
     ((${#need[@]})) || continue
-    tree=$(G rev-parse "refs/heads/$b^{tree}")
+    tree=$(G rev-parse "${tips[i]}^{tree}")
     lacks=()
     for p in "${need[@]}"; do
         grep -qxF "$p" "$presubmit_dir/$tree" 2>/dev/null || lacks+=("$p")
@@ -290,6 +321,9 @@ done
 if ((${#presubmit_missing[@]})) && [[ "${LAND_REQUIRE_PRESUBMIT:-}" == 1 ]]; then
     die "LAND_REQUIRE_PRESUBMIT=1: no pre-submit CDO record for ${presubmit_missing[*]}"
 fi
+# Test hook: a command run right after the checks (a branch moving now must not
+# change what is merged).
+[[ -z "${LAND_TEST_AFTER_CHECK:-}" ]] || bash -c "$LAND_TEST_AFTER_CHECK"
 
 # ---- dry run -----------------------------------------------------------
 if ((dry_run)); then
@@ -299,7 +333,7 @@ if ((dry_run)); then
     for ((i = 0; i < ${#branches[@]}; i++)); do
         b=${branches[i]}
         rc=0
-        out=$(G merge-tree --write-tree --no-messages "$prev" "refs/heads/$b") || rc=$?
+        out=$(G merge-tree --write-tree --no-messages "$prev" "${tips[i]}") || rc=$?
         ((rc <= 1)) || die "git merge-tree failed on '$b' (exit $rc)"
         tree=$(head -n 1 <<<"$out")
         # The other lines: `<mode> <blob> <stage>\t<path>`, one per conflicted stage.
@@ -334,7 +368,7 @@ if ((dry_run)); then
             echo "land:   ${ids[i]}: REFUSE: conflicts in" $conflicts
             refuse=1
         fi
-        prev=$(G commit-tree "$tree" -p "$prev" -p "refs/heads/$b" -m "land dry run")
+        prev=$(G commit-tree "$tree" -p "$prev" -p "${tips[i]}" -m "land dry run")
     done
     echo "land: then: ci-steps all; wait for ${mem_min_gb} GB free; cdo-gate $cdo_ws; merge-and-push $landing only with --push"
     if ((refuse)); then
@@ -405,7 +439,7 @@ G switch --quiet --detach "$master" >>"$run/merge.log" 2>&1 \
 for ((i = 0; i < ${#branches[@]}; i++)); do
     b=${branches[i]} msg="landing: ${ids[i]}"
     before=$(G rev-parse HEAD) || merge_failed "cannot read HEAD"
-    if G -c core.commentChar=';' merge --no-ff --no-edit -m "$msg" "refs/heads/$b" >>"$run/merge.log" 2>&1; then
+    if G -c core.commentChar=';' merge --no-ff --no-edit -m "$msg" "${tips[i]}" >>"$run/merge.log" 2>&1; then
         if [[ "$(G rev-parse HEAD)" == "$before" ]]; then
             echo "land:   ${ids[i]}: already in the landing (an earlier branch holds it); no commit"
         else
@@ -453,6 +487,11 @@ recheck() {
     fi
     if [[ -n "$why" ]]; then
         echo "recheck after $1: $why" >>"$run/verdict"
+        # ⟨TLS-87⟩ This exit repeats the notice too (review r1, sol).
+        local n
+        for n in "${presubmit_notes[@]}"; do
+            echo "land:   note: $n (scripts/cdo-gate --only would have run it before the landing)"
+        done
         die "FAIL after $1: $why; nothing pushed ($landing kept)"
     fi
 }

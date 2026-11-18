@@ -917,7 +917,11 @@ fn merge_and_push_lands_only_what_the_gates_saw() {
 /// (Fable): `--no-renames` dropped -> the moved-out file counts at its new,
 /// exempt path only and the branch passes (red); the exempt list widened to
 /// all of tests/ -> the l4-golden branch passes with no record (red). Each
-/// restored, green.
+/// restored, green. Review r1 (sol): the merge by branch name, not the pinned
+/// commit -> the landing's second parent is the moved tip (red); `cli_closure`
+/// returning nothing -> the
+/// output-helper branch passes (red); `core.quotePath=false` dropped -> the
+/// docs branch with `docs/café.md` is refused (red).
 #[test]
 fn land_checks_the_pre_submit_cdo_record() {
     let r = repo();
@@ -931,14 +935,36 @@ fn land_checks_the_pre_submit_cdo_record() {
     }
     // A file on master that a branch moves out of src/.
     std::fs::write(r.main.join("src/engine/moved.rs"), "// moved\n".repeat(20)).unwrap();
-    git::run(&r.main, &["add", "src/engine/moved.rs"]);
+    // The output phase's test and a helper it imports (review r1, sol).
+    std::fs::write(
+        r.main.join("tests/cli/output_cdo.rs"),
+        "use crate::output_invariants::check;\n",
+    )
+    .unwrap();
+    std::fs::write(r.main.join("tests/cli/output_invariants.rs"), "// v1\n").unwrap();
+    git::run(
+        &r.main,
+        &[
+            "add",
+            "src/engine/moved.rs",
+            "tests/cli/output_cdo.rs",
+            "tests/cli/output_invariants.rs",
+        ],
+    );
     git::run(&r.main, &["commit", "-qm", "engine file"]);
+    r.branch(
+        "tools/tls-66-outhelper",
+        &[("tests/cli/output_invariants.rs", b"// v2\n")],
+    );
     r.branch("tools/tls-61-src", &[("src/lib.rs", b"// x\n")]);
     r.branch("tools/tls-62-cargo", &[("Cargo.toml", b"[package]\n")]);
     r.branch(
         "tools/tls-63-docs",
         &[
             ("docs/n.md", b"x\n"),
+            // Review r1 (sol): git quotes a non-ASCII path by default, which
+            // would hide the docs/ prefix.
+            ("docs/café.md", b"x\n"),
             ("scripts/extra", b"x\n"),
             ("README.md", b"x\n"),
             ("tests/cli/other.rs", b"// x\n"),
@@ -1028,6 +1054,41 @@ fn land_checks_the_pre_submit_cdo_record() {
     let (code, text) = r.land(&["--dry-run", "tools/tls-63-docs"], &require);
     assert_eq!(code, Some(0), "{text}");
     assert!(!text.contains("pre-submit"), "{text}");
+
+    // Review r1 (sol): the branch gains a commit after the checks (here: moved
+    // to one adding a source file): the landing merges the commit that was
+    // checked, not the new tip. Break: the merge by branch name.
+    let rev = |what: &str| r.git(&r.main, &["rev-parse", what]);
+    r.branch("tools/tls-67-late", &[("docs/late-ok.md", b"x\n")]);
+    let checked = rev("tools/tls-67-late");
+    git::run(&r.main, &["switch", "-q", "tools/tls-67-late"]);
+    std::fs::write(r.main.join("src/late.rs"), "// late\n").unwrap();
+    git::run(&r.main, &["add", "src/late.rs"]);
+    git::run(&r.main, &["commit", "-qm", "late source"]);
+    let late = rev("tools/tls-67-late");
+    git::run(&r.main, &["switch", "-q", "master"]);
+    git::run(&r.main, &["branch", "-qf", "tools/tls-67-late", &checked]);
+    let main = r.main.to_str().unwrap().to_string();
+    let hook = format!("git -C '{main}' branch -qf tools/tls-67-late {late}");
+    let (code, text) = r.land(
+        &["tools/tls-67-late"],
+        &[("LAND_TEST_AFTER_CHECK", hook.as_str())],
+    );
+    assert_eq!(code, Some(0), "{text}");
+    assert_eq!(rev("tools/tls-67-late"), late, "precondition: it moved");
+    assert_eq!(
+        rev("landing/tls67^2"),
+        checked,
+        "the landing merged a commit no check saw"
+    );
+
+    // Review r1 (sol): a helper the output test imports is output's input too.
+    let (code, text) = r.land(&["--dry-run", "tools/tls-66-outhelper"], &require);
+    assert_eq!(code, Some(1), "an output helper was exempt: {text}");
+    assert!(
+        text.contains("missing program_resolve_harness l4_summary_differential output_cdo"),
+        "{text}"
+    );
 
     // Several branches: only the one without its record is named.
     let (code, text) = r.land(

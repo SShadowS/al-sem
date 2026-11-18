@@ -407,7 +407,9 @@ fn cdo_gate_only_runs_and_judges_just_its_subset() {
 /// failing run records (red); the checkout check dropped from
 /// `presubmit_clean_tree` -> the run from another checkout records (red); the
 /// same-tree comparison dropped -> the run with a commit during it records its
-/// starting tree (red). Each restored, green.
+/// starting tree (red). Each restored, green. Review r1 (sol): the
+/// `presubmit_touched` check dropped -> the run whose test phase changed and
+/// restored a tracked file records (red).
 #[cfg(unix)]
 #[test]
 fn cdo_gate_only_pass_records_the_tree_it_ran_on() {
@@ -440,6 +442,10 @@ fn cdo_gate_only_pass_records_the_tree_it_ran_on() {
          case \" $* \" in *' --no-run '*) ;; *)\n\
            if [ -n \"$STUB_FAIL\" ]; then\n\
              echo 'test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s'; exit 101\n\
+           fi\n\
+           if [ -n \"$STUB_TOUCH\" ]; then\n\
+             cp \"$STUB_TOUCH\" \"$STUB_TOUCH.bak\"; echo x >> \"$STUB_TOUCH\"\n\
+             cp \"$STUB_TOUCH.bak\" \"$STUB_TOUCH\"; rm \"$STUB_TOUCH.bak\"\n\
            fi\n\
            if [ -n \"$STUB_COMMIT\" ] && [ ! -e \"$STUB_COMMIT/late.txt\" ]; then\n\
              echo x > \"$STUB_COMMIT/late.txt\"\n\
@@ -515,6 +521,14 @@ fn cdo_gate_only_pass_records_the_tree_it_ran_on() {
         !record.exists(),
         "a run from another checkout recorded this tree"
     );
+
+    // Review r1 (sol): a tracked file changed during the run and restored
+    // before its end (clean at both ends): no record.
+    let touched = scripts.join("require-rttime");
+    let touch = [("STUB_TOUCH", touched.to_str().unwrap())];
+    let text = gate("harness,l4", here, &touch, 0);
+    assert!(text.contains("modified during the run"), "{text}");
+    assert!(!record.exists(), "a run on changed code recorded the tree");
 
     // Clean, from its own checkout: recorded.
     let text = gate("harness,l4", here, &[], 0);
