@@ -140,6 +140,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and `early_reduces_give_the_one_reduce_cone` (20,000 candidates over 3,000 keys, fed in
   chunks with a reduce after each, equal the one-reduce cone).
 
+### Changed (ENG-87: retained call edges share each file's path and derive their obligation id, 106.9 MiB less resident memory on CDO)
+
+- **What changed** (`src/program/resolve/{edge,full,extract}.rs` and the edges' readers; no
+  output change). `CanonicalSpan.unit` is a `SharedStr`: `resolve_file_obligations` mints one
+  per file and every site's span (an edge holds two) clones it. `ClassifiedEdge` stores its
+  `ObligationKind` instead of a full `ObligationId`: a site obligation's `(caller, span,
+  callee_fp)` is the edge's own `edge.site`, a publisher's routine is `edge.from`, so
+  `obligation_id()` derives the id and an edge cannot carry one that disagrees with it (every
+  constructor built the stored id from those same parts: the id-shape audit checked each).
+  `obligation_site()` borrows the parts and `has_obligation()` compares without building an id
+  (the dependency site facts' lookup). The task's SmallVec step was dropped: a `Route` is
+  240 bytes, so one inline per edge would add more than the route storage it saves.
+- **The census** (`tools/census-probe resident`, CDO, base `a73b4bf6`, now split by field): the
+  retained dependency edges were 290 MiB over 438,823 edges; in every one of the 432,630
+  call-site edges the obligation repeated the site's caller and span. Edges' own buffer
+  154.0 -> 97.1 MiB (368 -> 232 bytes each); the obligation 75.8 -> 0.4 MiB; `edge.site`
+  73.2 -> 48.1 MiB. Live after the asks 3,619.8 -> 3,512.9 MiB (-106.9; bar 100 MiB).
+- **Measured** (CDO, release-fast): `alsem analyze` peak RSS 2.29-2.34 -> 2.17-2.23 GB and
+  pinned `instructions:u` 287.85-287.89 G -> 287.69-287.73 G (3 alternating rounds), output
+  byte-identical; `cdo-speed` passed twice with the servers' summed peak memory x0.930 and
+  x0.929, the rounds flat (x0.989 and x1.014, not quoted as a ratio).
+- **CDO checks** (base `a73b4bf6`): `cdo-before-after` moved no finding, fingerprint or
+  call-graph number; the session refresh equals a cold build at all 12 steps in both modes;
+  `cdo-gate --only harness,l4,output` passed (211/0, 25/0, 22/0).
+- **Pinned by** `resolve::full::tests::an_edge_has_exactly_its_derived_obligation` (an edge
+  answers for exactly its derived id; with `has_obligation` ignoring the fingerprint, matching
+  a call-site edge to a background id, or reading a site id's caller from `edge.from`, it
+  fails; the existing site-facts tests stayed green under the first two).
+
 ### Changed (ENG-120: mimalloc's `purge_delay` measured on CDO and DO, kept at 0)
 
 - No code change: `alsem` keeps `purge_delay` 0. A delay of 1 or 10 ms gave no CPU gain near the
