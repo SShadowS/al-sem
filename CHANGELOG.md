@@ -442,6 +442,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `src/wire`, which output's answers pass through.
 - **Limits.** Two runs ending at once on one tree may lose one run's phases, which gives a false
   warning, never a false pass. The check runs after land takes the slot.
+- **Review round 1 (sol), all fixed:**
+  - **A record could name code the run did not test.** A tracked file changed for the build and
+    restored before the end left the tree clean at both ends. The gate now writes no record if
+    any tracked file was modified after the run began; a restore still leaves a newer mtime.
+    A failing `git status` no longer reads as clean.
+  - **land could merge a different commit than it checked.** In a batch, a later branch could
+    gain a commit while an earlier one merged. Each branch's commit is now read once and used
+    for the diff, the record lookup and the merge.
+  - **output's own helpers were exempt.** `output_cdo` imports `output_invariants` and
+    `mcp_server`. The files the output phase reads are now found by following its
+    `crate::<module>` imports, transitively, at the branch's commit, plus `tests/cli/main.rs`.
+  - Paths are read unquoted (`core.quotePath=false`), so `docs/café.md` stays exempt. The
+    master-moved recheck repeats the missing-record notice too.
+  - Four discrimination proofs, all red.
 - **Tests:**
   - `gate_scripts::cdo_gate_only_pass_records_the_tree_it_ran_on` runs the real gate, with a
     stub cargo, from a throwaway repository. Nothing is recorded for a dirty tree, a failing

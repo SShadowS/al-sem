@@ -136,7 +136,10 @@ impl Repo {
     fn branch(&self, name: &str, files: &[(&str, &[u8])]) {
         git::run(&self.main, &["switch", "-qc", name, "master"]);
         for (path, bytes) in files {
-            std::fs::write(self.main.join(path), bytes).unwrap();
+            let path = self.main.join(path);
+            // A switch removes a folder its branch emptied.
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, bytes).unwrap();
         }
         git::run(&self.main, &["add", "-A"]);
         git::run(&self.main, &["commit", "-qm", name]);
