@@ -360,6 +360,80 @@ codeunit 50264 "EH Handler"
         end;
     end;
 }
+table 50266 "EH Verb Error" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
+table 50267 "EH Verb Warn" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
+table 50268 "EH Verb Else" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
+table 50269 "EH Scope Pub" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
+table 50270 "EH Scope All" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
+// ENG-30: built-in option types (`Verbosity`, `TelemetryScope`) as value
+// domains, compared by member name.
+codeunit 50271 "EH Platform"
+{
+    procedure VerbError()
+    begin
+        Emit(Verbosity::Error);
+    end;
+
+    procedure VerbVerbose()
+    begin
+        Emit(Verbosity::Verbose);
+    end;
+
+    procedure VerbUnknown(V: Verbosity)
+    begin
+        Emit(V);
+    end;
+
+    local procedure Emit(Level: Verbosity)
+    var
+        E: Record "EH Verb Error";
+        W: Record "EH Verb Warn";
+        O: Record "EH Verb Else";
+    begin
+        case Level of
+            Verbosity::Error:
+                E.Insert();
+            Verbosity::Warning:
+                W.Insert();
+            else
+                O.Insert();
+        end;
+    end;
+
+    // A parameter named like its type: `Verbosity::Warning` then names the
+    // parameter's own member.
+    procedure NamedWarn()
+    begin
+        EmitNamed(Verbosity::Warning);
+    end;
+
+    local procedure EmitNamed(Verbosity: Verbosity)
+    var
+        E: Record "EH Verb Error";
+        W: Record "EH Verb Warn";
+    begin
+        if Verbosity = Verbosity::Error then
+            E.Insert();
+        if Verbosity in [Verbosity::Warning, Verbosity::Normal] then
+            W.Insert();
+    end;
+
+    procedure ScopeAll()
+    begin
+        Send(TelemetryScope::All);
+    end;
+
+    local procedure Send(Scope: TelemetryScope)
+    var
+        P: Record "EH Scope Pub";
+        A: Record "EH Scope All";
+    begin
+        if Scope = TelemetryScope::ExtensionPublisher then
+            P.Insert()
+        else
+            A.Insert();
+    end;
+}
 codeunit 50265 "EH Events"
 {
     var
@@ -615,6 +689,32 @@ fn an_enum_parameter_compares_by_enum_value() {
         ("KindUnknown", "EH Alpha", "yes"),
         ("KindUnknown", "EH Beta", "yes"),
         ("KindUnknown", "EH Kind Else", "yes"),
+    ]);
+}
+
+/// ⟨ENG-30⟩ A built-in option type (`Verbosity`, `TelemetryScope`) is a value
+/// domain compared by member name: a bound value runs only its arm (or the
+/// `else`, or the `if` branch it meets), also through a parameter named like
+/// its type; an unknown value runs every arm. Breaks (2026-11-18, both red):
+/// `domain_of` without the built-in option types (every pruned case reads
+/// `yes`); `typed_label` without them (`NamedWarn` reaches `EH Verb Error`).
+#[test]
+fn a_builtin_option_parameter_compares_by_member_name() {
+    let ws = Ws::new();
+    ws.expect(&[
+        ("VerbError", "EH Verb Error", "yes"),
+        ("VerbError", "EH Verb Warn", "no"),
+        ("VerbError", "EH Verb Else", "no"),
+        ("VerbVerbose", "EH Verb Error", "no"),
+        ("VerbVerbose", "EH Verb Warn", "no"),
+        ("VerbVerbose", "EH Verb Else", "yes"),
+        ("VerbUnknown", "EH Verb Error", "yes"),
+        ("VerbUnknown", "EH Verb Warn", "yes"),
+        ("VerbUnknown", "EH Verb Else", "yes"),
+        ("NamedWarn", "EH Verb Error", "no"),
+        ("NamedWarn", "EH Verb Warn", "yes"),
+        ("ScopeAll", "EH Scope Pub", "no"),
+        ("ScopeAll", "EH Scope All", "yes"),
     ]);
 }
 

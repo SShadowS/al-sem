@@ -14,7 +14,9 @@
 //! no reached state lets it run (the reach's own rule).
 //!
 //! **What binds a parameter.** A parameter is USABLE ([`value_frame`]) when it
-//! is by value, of type Integer, BigInteger, Option or Enum, never assigned
+//! is by value, of type Integer, BigInteger, Option, Enum or a built-in option
+//! type (`Verbosity`, `TelemetryScope`, …; compared by member name, as an
+//! enum is: [`domain_of`]), never assigned
 //! (compound assignment included), never a `for`/`foreach` variable, and every
 //! call it is passed to is a known routine taking it by value, or a platform
 //! method other than `Evaluate` and `Clear` (a call the resolver did not
@@ -295,7 +297,7 @@ pub(super) fn enum_name(type_text: &str) -> Option<Arc<str>> {
 }
 
 /// The domain of a parameter of type `type_text`; `None` when the type is
-/// none of Integer, BigInteger, Option or Enum.
+/// none of Integer, BigInteger, Option, Enum or a built-in option type.
 pub(super) fn domain_of(type_text: &str) -> Option<Domain> {
     let t = type_text.trim();
     if t.eq_fold_identifier("integer") || t.eq_fold_identifier("biginteger") {
@@ -304,7 +306,24 @@ pub(super) fn domain_of(type_text: &str) -> Option<Domain> {
     if option_members(t).is_some() {
         return Some(Domain::Int);
     }
+    if let Some(name) = builtin_option(t) {
+        return Some(Domain::Enum(name));
+    }
     enum_name(t).map(Domain::Enum)
+}
+
+/// A built-in option type (`Verbosity`, `TelemetryScope`, `ObjectType`, …;
+/// `arg_dispatch::BUILTIN_OPTION_TYPES`), folded. Its values are compared
+/// by member name, as an enum's are: a `case` on one takes only `T::M`
+/// labels (alc 18.0.41: an integer label is AL0122), and the compiler gives
+/// every member its own ordinal (ENG-30, read from its type symbols for all
+/// 26 types), so two names never denote one value. `T::M` resolves to
+/// [`Val::Enum`]`(t, m)` ([`resolve_label`]'s no-variable path).
+fn builtin_option(type_text: &str) -> Option<Arc<str>> {
+    let t = type_text.trim().fold_identifier();
+    crate::program::resolve::arg_dispatch::BUILTIN_OPTION_TYPES
+        .contains(&t.as_str())
+        .then(|| Arc::from(t))
 }
 
 /// `v` in domain `d` after AL's conversion, when this module models it.
@@ -326,6 +345,9 @@ fn typed_label(type_text: &str, member: &str) -> Option<Val> {
             .iter()
             .position(|m| m == member)
             .map(|i| Val::Int(i64::try_from(i).expect("an option ordinal fits i64")));
+    }
+    if let Some(t) = builtin_option(type_text) {
+        return Some(Val::Enum(t, Arc::from(member)));
     }
     enum_name(type_text).map(|e| Val::Enum(e, Arc::from(member)))
 }
