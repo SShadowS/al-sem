@@ -67,6 +67,14 @@ RUN CARGO_HOME=/opt/cargo cargo install cargo-sweep --version 0.8.0 --locked \
 ARG TREE_SITTER_VERSION=0.27.0
 RUN curl -fsSL https://github.com/tree-sitter/tree-sitter/releases/download/v$TREE_SITTER_VERSION/tree-sitter-linux-x64.gz \
       | gunzip > /usr/local/bin/tree-sitter && chmod +x /usr/local/bin/tree-sitter && tree-sitter --version
+# perf: `perf stat -e instructions:u` counts retired instructions, which resolve a 0.1 % change where
+# server1's CPU seconds swing ±10 % (TLS-91; ENG-121's measurement). Counting needs perf_event_open,
+# as samply does (CAP_PERFMON, perf_event_paranoid <= 1; scripts/perf-probe). The package is
+# linux-perf, a plain /usr/bin/perf that does not look for the running kernel's tools: it is only a
+# Recommends of linux-tools-common, so `linux-tools-generic` under --no-install-recommends brings no
+# perf. Its own late layer, as gdb's. On the hybrid CPU pin to one core type (`taskset -c 0-11`).
+RUN apt-get update && apt-get install -y --no-install-recommends linux-perf \
+    && rm -rf /var/lib/apt/lists/* && perf --version
 # ~/.al-sem (agentflow's retained runs, timings.jsonl) lives on the work volume: a rebuild keeps only /work,
 # /coord and a few home folders, so a plain ~/.al-sem was wiped every time. scripts/kraken-setup.sh makes
 # the target; the link is made here, not there, because kraken re-runs setup only when its inputs change.
