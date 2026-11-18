@@ -93,6 +93,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `cdo_sited_graph_stable_ids_are_unique` does the same on CDO, in the harness phase.
   - Two discrimination proofs, both red, are recorded in the tests' docs.
 
+### Changed (ENG-130: each fact cone is built by one sorted merge, 6.0 % fewer instructions in `alsem analyze` on CDO)
+
+- **What changed** (`src/engine/l4/capability_cone.rs`, `cone_walk_par.rs`; no output change).
+  `fact_cone_for_scc` merged every candidate entry (the SCC's direct facts, entries carried
+  across guarded edges, every successor cone's entries) into a `BTreeMap` one at a time
+  (`merge_cone`: a lookup, and an insert when new or strictly better), then the caller froze
+  the map into a sorted slice. It now gathers the candidates in the same order (a successor's
+  entries borrowed, so a losing one touches no refcount), stable-sorts them by key (the
+  successor cones are presorted runs) and keeps per key the first candidate no later one
+  strictly beats: min dist, then the smaller rep key; a full tie keeps the earlier one, as
+  the map merge did. It returns the `FrozenCone`; `merge_cone` is gone. ENG-112's profiles
+  had put 5.4-5.7 % of analyze CPU in this merge (`merge_cone`, memory copies,
+  `BTreeMap::insert`).
+- **Measured** (CDO, `alsem analyze --format json`, release-fast, pinned to P-cores 0-11,
+  3 alternating rounds, base `a73b4bf6`): `instructions:u` 287.82-287.84 G -> 270.47-270.49 G
+  (-6.0 %); output byte-identical apart from `generatedAt`; peak RSS unchanged (2.40-2.48 vs
+  2.42-2.46 GB). The candidate list holds every candidate at once where the map held one slot
+  per key: a transient that did not show on CDO.
+- **Resident `prove` reads +0.5 to +2.5 % instructions (pinned, 3 rounds), from codegen:** its
+  instruction profile runs none of the changed code; untouched digest code inlines differently.
+- **CDO checks** (base `a73b4bf6`): `cdo-before-after` moved no finding, fingerprint or
+  call-graph number; the session refresh equals a cold build at all 12 steps in both modes;
+  `cdo-gate --only harness,l4,output` passed (211/0, 25/0, 22/0). `cdo-speed` passed twice:
+  the build CPU x0.963 and x0.912 and summed peak memory x0.950 and x0.955 fell in both; the
+  rounds read x1.026 and x1.091, `prove` x1.020 and x1.102 (see above).
+- **Pinned by** `cone_memory_step1_tests::a_cone_keeps_each_keys_merge_winner_in_key_order`
+  (with the dist test flipped, a full tie replacing, or a successor without its extra hop, it
+  fails), `a_full_tie_keeps_the_earliest_candidate_in_a_large_cone` (with an unstable sort it
+  fails; the small test stays green there: below ~20 elements the unstable sort is an
+  insertion sort) and `a_successors_guarded_entry_enters_under_its_base_key` (Fable: with the
+  stored key instead of the base key every lib, r3 and r4 test stayed green; this one fails).
+
 ### Changed (ENG-120: mimalloc's `purge_delay` measured on CDO and DO, kept at 0)
 
 - No code change: `alsem` keeps `purge_delay` 0. A delay of 1 or 10 ms gave no CPU gain near the
