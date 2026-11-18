@@ -653,20 +653,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `al-call-hierarchy`, and the desktop raised a crash notice that looked like a real crash. The
   engine-host fault hooks (`abort-on-ask`, `abort-on-ask-once`, `panic-on-ask-once`, used by
   `engine_host` and the MCP tests) crash their child the same way.
-- **Now.** Both test seams lower their own process's `RLIMIT_CORE` to 0 before they crash it, and
-  print "test seam: core dumps off" once the limit reads back as 0:
+- **Now.** Each deliberate crash turns its process's core dump off right before it happens, and
+  prints "test seam: core dumps off" once that reads back:
   - the l4-host panic seam (`AL_SEM_L4_HOST_TEST_PANIC`);
-  - any engine child started with a test hook (`ALSEM_ENGINE_TEST_HOOK`).
+  - the engine-host hooks `abort-on-ask`, `abort-on-ask-once` and `panic-on-ask-once`.
 
-  The host's `core_pattern` pipes to systemd-coredump with the limit as `%c`, and it stores no
-  core for a 0 limit. A real crash keeps its core, because only the seams lower the limit. No
-  other test crashes a process on purpose (searched: `abort`, SIGABRT and the other
-  core-dumping signals).
-- **Tests.** `host_panic_ends_the_server` and `engine_host`'s
-  `a_crash_mid_request_fails_the_ask_and_the_next_ask_respawns` assert the line, so the limit
-  read back inside the crashing child. Two discrimination proofs, both red: each seam's call
-  removed. That the host stores no core is for the owner to confirm with `coredumpctl list`
-  after a run.
+  How it is turned off:
+  - **Linux:** the process becomes not dumpable (`PR_SET_DUMPABLE` 0). The kernel then skips the
+    dump before it starts the host's `core_pattern` pipe to systemd-coredump, so there is no
+    core, no journal record and no notice. `RLIMIT_CORE` 0 would not do: the kernel ignores it
+    for a pipe, and systemd-coredump would still log the crash (found in the Fable review).
+  - **Other unix:** `RLIMIT_CORE` 0.
+
+  The call sits at the crash itself, because a non-dumpable process's `/proc` files belong to
+  root, and its own `clear_refs` write would fail. A real crash keeps its core. No other test
+  crashes a process on purpose (searched: `abort`, SIGABRT and the other core-dumping signals).
+- **Tests.**
+  - `host_panic_ends_the_server` and `engine_host`'s
+    `a_crash_mid_request_fails_the_ask_and_the_next_ask_respawns` assert the line, read back
+    inside the crashing child.
+  - Discrimination proofs, all red: each seam's call removed, re-run after the call moved to
+    the crash.
+  - The owner can confirm that no new entry appears in `coredumpctl list` after a debug test
+    run.
 
 ### Changed (ENG-120: mimalloc's `purge_delay` measured on CDO and DO, kept at 0)
 

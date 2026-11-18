@@ -496,15 +496,27 @@ pub mod test_hooks {
     /// The environment variable naming the hook.
     pub const ENV: &str = "ALSEM_ENGINE_TEST_HOOK";
 
-    /// Turn this process's core dumps off (`RLIMIT_CORE` 0) before a test
-    /// seam crashes it on purpose, and say so on stderr when the limit reads
-    /// back 0. The host pipes cores to systemd-coredump with the limit as
-    /// `%c`, and it stores none for a 0 limit, so a test's deliberate abort
-    /// leaves no core and raises no crash notice (TLS-93). A real crash keeps
-    /// its core: only the seams call this.
+    /// Turn this process's core dump off right before a test seam crashes it
+    /// on purpose, and say so on stderr once it reads back off (TLS-93).
+    /// - Linux: not dumpable (`PR_SET_DUMPABLE` 0). The kernel then skips the
+    ///   dump before it starts the host's `core_pattern` pipe
+    ///   (systemd-coredump), so there is no core, no journal record and no
+    ///   crash notice. `RLIMIT_CORE` 0 alone is not enough: the kernel
+    ///   ignores it for a pipe and systemd-coredump still logs the crash.
+    /// - Other unix: `RLIMIT_CORE` 0.
+    ///
+    /// Only call it at the crash itself: a non-dumpable process's `/proc`
+    /// files belong to root (its own `clear_refs` write fails). A real crash
+    /// keeps its core.
     pub fn no_core_dumps(who: &str) {
-        #[cfg(unix)]
-        {
+        #[cfg(target_os = "linux")]
+        // SAFETY: plain prctl calls with integer arguments.
+        let off = unsafe {
+            libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) == 0
+                && libc::prctl(libc::PR_GET_DUMPABLE, 0, 0, 0, 0) == 0
+        };
+        #[cfg(all(unix, not(target_os = "linux")))]
+        let off = {
             let zero = libc::rlimit {
                 rlim_cur: 0,
                 rlim_max: 0,
@@ -514,17 +526,18 @@ pub mod test_hooks {
                 rlim_max: 1,
             };
             // SAFETY: plain syscalls on stack values.
-            let off = unsafe {
+            unsafe {
                 libc::setrlimit(libc::RLIMIT_CORE, &zero) == 0
                     && libc::getrlimit(libc::RLIMIT_CORE, &mut now) == 0
-            };
-            if off && now.rlim_cur == 0 {
-                use std::io::Write;
-                let _ = writeln!(std::io::stderr(), "{who}: test seam: core dumps off");
+                    && now.rlim_cur == 0
             }
-        }
+        };
         #[cfg(not(unix))]
-        let _ = who;
+        let off = false;
+        if off {
+            use std::io::Write;
+            let _ = writeln!(std::io::stderr(), "{who}: test seam: core dumps off");
+        }
     }
 
     /// A fault the child injects.

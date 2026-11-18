@@ -239,11 +239,6 @@ pub fn serve_with(
 ) -> std::io::Result<()> {
     #[cfg(any(feature = "engine-test-hooks", debug_assertions))]
     let hook = super::test_hooks::from_env();
-    // A hooked child is a test's; several hooks crash it on purpose.
-    #[cfg(any(feature = "engine-test-hooks", debug_assertions))]
-    if hook.is_some() {
-        super::test_hooks::no_core_dumps("al-sem: engine-host");
-    }
     let mut hello = Hello::of_this_process();
     #[cfg(any(feature = "engine-test-hooks", debug_assertions))]
     match &hook {
@@ -841,7 +836,10 @@ fn refuse_undeliverable(mut answer: Answer) -> Answer {
 fn inject_ask_fault<W: Write + Send>(shared: &Shared<'_, W>) -> std::io::Result<bool> {
     use super::test_hooks::Hook;
     match &shared.hook {
-        Some(Hook::AbortOnAsk) => std::process::abort(),
+        Some(Hook::AbortOnAsk) => {
+            super::test_hooks::no_core_dumps("al-sem: engine-host");
+            std::process::abort()
+        }
         Some(Hook::SleepOnAsk(ms)) => {
             std::thread::sleep(std::time::Duration::from_millis(*ms));
             Ok(false)
@@ -860,6 +858,7 @@ fn inject_ask_fault<W: Write + Send>(shared: &Shared<'_, W>) -> std::io::Result<
                 .open(marker)
                 .is_ok()
             {
+                super::test_hooks::no_core_dumps("al-sem: engine-host");
                 panic!("engine test hook: a panic while answering an ask");
             }
             Ok(false)
@@ -871,6 +870,7 @@ fn inject_ask_fault<W: Write + Send>(shared: &Shared<'_, W>) -> std::io::Result<
                 .open(marker)
                 .is_ok()
             {
+                super::test_hooks::no_core_dumps("al-sem: engine-host");
                 std::process::abort();
             }
             Ok(false)

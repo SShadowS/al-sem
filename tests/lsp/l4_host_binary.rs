@@ -390,8 +390,8 @@ fn host_panic_ends_the_server() {
         stderr.iter().any(|l| l.contains("l4-host: panicked")),
         "the panic is logged: {stderr:?}"
     );
-    // TLS-93: the seam read RLIMIT_CORE back as 0 before it panicked, so the
-    // abort leaves no core on the host. Break: the seam's `no_core_dumps`
+    // TLS-93: the seam turned the core dump off (read back) before it
+    // panicked, so the abort leaves nothing on the host. Break: the seam's `no_core_dumps`
     // call removed -> no such line (red).
     #[cfg(unix)]
     assert!(
