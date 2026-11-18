@@ -1231,6 +1231,7 @@ fn canon_edge_distinguishes_kind_targets_and_route_count() {
             enclosing_member_lc: None,
             params_count: 0,
             sig_fp: 0,
+            request_page: false,
         }
     }
 

@@ -1828,6 +1828,7 @@ mod tests {
                 enclosing_member_lc: None,
                 params_count: 0,
                 sig_fp: 0,
+                request_page: false,
             }
         }
 
@@ -1930,6 +1931,7 @@ mod tests {
             enclosing_member_lc: None,
             params_count: 0,
             sig_fp: 0,
+            request_page: false,
         };
         let key = AbiRoutineKey {
             app: AppRef(1),
@@ -2020,6 +2022,7 @@ mod tests {
                 enclosing_member_lc: None,
                 params_count: 0,
                 sig_fp: 0,
+                request_page: false,
             }
         }
 

@@ -419,6 +419,9 @@ pub struct NodeName<'g> {
     pub routine: &'g str,
     /// `(T1, T2)` when the name is overloaded, else empty.
     pub signature: &'g str,
+    /// A request page's own trigger (ENG-20, `RoutineNodeId::request_page`): its member
+    /// prints as `.requestpage`, whatever the trigger's name.
+    pub request_page: bool,
 }
 
 impl SitedGraph {
@@ -446,6 +449,7 @@ impl SitedGraph {
             member_declared: self.member_names.contains_key(&ix),
             routine,
             signature: self.local_names.get(&ix).map_or("", |l| &*l.signature),
+            request_page: r.request_page,
         })
     }
 
@@ -1178,10 +1182,13 @@ impl SitedBuilder {
         // `/n#k`), so a test path never prints two overloads alike.
         {
             use crate::engine::l5::routine_rollup::{OverloadShape, overload_short};
+            // The request-page flag is part of the group (ENG-20, sol): a request page's own
+            // trigger and a dataitem `RequestPage`'s trigger of one name are not overloads.
             type Group<'k> = (
                 &'k crate::program::node::ObjectNodeId,
                 &'k str,
                 Option<&'k str>,
+                bool,
             );
             let mut groups: HashMap<Group<'_>, Vec<u32>> = HashMap::new();
             for (&i, l) in &local_names {
@@ -1191,6 +1198,7 @@ impl SitedBuilder {
                             &r.object,
                             r.name_lc.as_str(),
                             r.enclosing_member_lc.as_deref(),
+                            r.request_page,
                         ))
                         .or_default()
                         .push(i);

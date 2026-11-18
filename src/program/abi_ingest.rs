@@ -462,6 +462,7 @@ pub(crate) fn abi_routine_node_id(obj_id: &ObjectNodeId, routine: &AbiRoutine) -
             UNKNOWN_ARITY
         },
         sig_fp: param_type_fp(&routine.parameters),
+        request_page: false,
     }
 }
 

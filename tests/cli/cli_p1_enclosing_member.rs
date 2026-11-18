@@ -130,6 +130,7 @@ fn two_field_on_validate_distinct_member_and_stable_id() {
                 &al_sem::engine::ids::to_stable_object_id(&r.object_id),
                 &r.normalized_signature_hash,
                 None,
+                false,
             )
         })
         .collect();
@@ -227,6 +228,7 @@ fn two_action_modifies_distinct_member_and_stable_id() {
                 &al_sem::engine::ids::to_stable_object_id(&r.object_id),
                 &r.normalized_signature_hash,
                 None,
+                false,
             )
         })
         .collect();

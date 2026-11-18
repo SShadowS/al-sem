@@ -1622,6 +1622,7 @@ mod tests {
                 enclosing_member_lc: None,
                 params_count: params,
                 sig_fp: 0,
+                request_page: false,
             },
             name: name.into(),
             is_trigger: matches!(
@@ -1710,6 +1711,7 @@ mod tests {
             enclosing_member_lc: None,
             params_count: 0,
             sig_fp: 0,
+            request_page: false,
         };
         let target_rid = RoutineNodeId {
             object: impl_id,
@@ -1717,6 +1719,7 @@ mod tests {
             enclosing_member_lc: None,
             params_count: 0,
             sig_fp: 0,
+            request_page: false,
         };
         let site = SiteId {
             caller: caller_rid.clone(),
@@ -1768,6 +1771,7 @@ mod tests {
             enclosing_member_lc: None,
             params_count: 0,
             sig_fp: 0,
+            request_page: false,
         };
         let target_rid = RoutineNodeId {
             object: not_impl_id,
@@ -1775,6 +1779,7 @@ mod tests {
             enclosing_member_lc: None,
             params_count: 0,
             sig_fp: 0,
+            request_page: false,
         };
         let site = SiteId {
             caller: caller_rid.clone(),
@@ -1823,6 +1828,7 @@ mod tests {
             enclosing_member_lc: None,
             params_count: 0,
             sig_fp: 0,
+            request_page: false,
         };
         let target_rid = RoutineNodeId {
             object: impl_id,
@@ -1830,6 +1836,7 @@ mod tests {
             enclosing_member_lc: None,
             params_count: 0,
             sig_fp: 0,
+            request_page: false,
         };
         let edge = Edge {
             from: caller_rid.clone(),
@@ -1884,6 +1891,7 @@ mod tests {
             enclosing_member_lc: None,
             params_count: 0,
             sig_fp: 0,
+            request_page: false,
         };
         Edge {
             from: rid.clone(),
@@ -1941,6 +1949,7 @@ mod tests {
             enclosing_member_lc: None,
             params_count: 0,
             sig_fp: 0,
+            request_page: false,
         };
         let target_rid = RoutineNodeId {
             object: table_id.clone(),
@@ -1948,6 +1957,7 @@ mod tests {
             enclosing_member_lc: None,
             params_count: 0,
             sig_fp: 0,
+            request_page: false,
         };
         let site = SiteId {
             caller: caller_rid.clone(),
@@ -1997,6 +2007,7 @@ mod tests {
             enclosing_member_lc: None,
             params_count: 0,
             sig_fp: 0,
+            request_page: false,
         };
         let target_rid = RoutineNodeId {
             object: vendor_id,
@@ -2004,6 +2015,7 @@ mod tests {
             enclosing_member_lc: None,
             params_count: 0,
             sig_fp: 0,
+            request_page: false,
         };
         let site = SiteId {
             caller: caller_rid.clone(),
@@ -2058,6 +2070,7 @@ mod tests {
             enclosing_member_lc: None,
             params_count: 0,
             sig_fp: 0,
+            request_page: false,
         };
         let target_rid = RoutineNodeId {
             object: table_id,
@@ -2065,6 +2078,7 @@ mod tests {
             enclosing_member_lc: None,
             params_count: 0,
             sig_fp: 0,
+            request_page: false,
         };
         let edge = Edge {
             from: caller_rid.clone(),
@@ -2141,6 +2155,7 @@ mod tests {
             enclosing_member_lc: None,
             params_count: 0,
             sig_fp: 0,
+            request_page: false,
         };
         let target_rid = RoutineNodeId {
             object: table_id.clone(),
@@ -2148,6 +2163,7 @@ mod tests {
             enclosing_member_lc: None,
             params_count: 0,
             sig_fp: 0,
+            request_page: false,
         };
         let site = SiteId {
             caller: caller_rid.clone(),
@@ -2210,6 +2226,7 @@ mod tests {
             enclosing_member_lc: None,
             params_count: 0,
             sig_fp: 0,
+            request_page: false,
         };
         let target_rid = RoutineNodeId {
             object: ext_id,
@@ -2217,6 +2234,7 @@ mod tests {
             enclosing_member_lc: None,
             params_count: 0,
             sig_fp: 0,
+            request_page: false,
         };
         let site = SiteId {
             caller: caller_rid.clone(),
@@ -2370,6 +2388,7 @@ codeunit 50801 "EvSub"
             enclosing_member_lc: None,
             params_count: 0,
             sig_fp: 0,
+            request_page: false,
         };
         let sub_rid = RoutineNodeId {
             object: sub_id,
@@ -2377,6 +2396,7 @@ codeunit 50801 "EvSub"
             enclosing_member_lc: None,
             params_count: 0,
             sig_fp: 0,
+            request_page: false,
         };
         let edge = Edge {
             from: pub_rid.clone(),
@@ -2441,6 +2461,7 @@ codeunit 50804 "EvSub2"
             enclosing_member_lc: None,
             params_count: 0,
             sig_fp: 0,
+            request_page: false,
         };
         let sub_rid = RoutineNodeId {
             object: sub_id,
@@ -2448,6 +2469,7 @@ codeunit 50804 "EvSub2"
             enclosing_member_lc: None,
             params_count: 0,
             sig_fp: 0,
+            request_page: false,
         };
         let edge = Edge {
             from: pub_rid.clone(),
@@ -2565,6 +2587,7 @@ codeunit 50810 "EvSub5"
             enclosing_member_lc: None,
             params_count: 0,
             sig_fp: 0,
+            request_page: false,
         };
         let sub_rid = find_routine_id(&graph, &sub_id, "handle");
         assert_eq!(sub_rid.params_count, 1, "precondition: arity 1");
@@ -2667,6 +2690,7 @@ codeunit 50808 "EvSub4"
             enclosing_member_lc: None,
             params_count: 0,
             sig_fp: 0,
+            request_page: false,
         };
         let edge = Edge {
             from: caller_rid.clone(),

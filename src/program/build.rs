@@ -835,6 +835,7 @@ pub(crate) fn inject_platform_event_publishers(graph: &mut ProgramGraph) {
                 enclosing_member_lc: None,
                 params_count: PLATFORM_EVENT_PUBLISHER_ARITY,
                 sig_fp: 0,
+                request_page: false,
             };
             if !seen.insert(synth_id.clone()) {
                 continue; // already injected for this (table, event)
@@ -1983,6 +1984,7 @@ codeunit 50100 "Ws2 Cu"
                 enclosing_member_lc: None,
                 params_count,
                 sig_fp,
+                request_page: false,
             },
             name: name_lc.into(),
             is_trigger: false,
@@ -2028,6 +2030,7 @@ codeunit 50100 "Ws2 Cu"
                 enclosing_member_lc: None,
                 params_count,
                 sig_fp,
+                request_page: false,
             },
             name: name_lc.into(),
             is_trigger: false,

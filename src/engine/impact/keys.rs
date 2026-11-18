@@ -83,7 +83,10 @@ use crate::program::model::workspace::{Model, ModelRoutine};
 /// other bare `Error` is a call that may raise, so the code after it is live.
 /// #288's per-routine trust gate is gone, so a routine with a well-formed `#if`
 /// group drops its dead sites again.
-pub const SUMMARY_SCHEMA: u32 = 15;
+/// 16 (ENG-20): a request page's own trigger has its own stable id (and a
+/// report procedure of its name and parameters its own), so a base cached by a
+/// binary of the same version would show those triggers as removed and added.
+pub const SUMMARY_SCHEMA: u32 = 16;
 
 /// One own site of a key.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

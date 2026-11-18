@@ -239,6 +239,7 @@ fn report_dataitem_implicit_rec_and_name_vars_seeded() {
         "trigger",
         &trig.name,
         trig_member.as_deref(),
+        trig.is_request_page_trigger(),
         &no_params,
         None,
     );
@@ -276,6 +277,7 @@ fn report_dataitem_implicit_rec_and_name_vars_seeded() {
         "procedure",
         &helper.name,
         ir_walk::ir_enclosing_member(helper).as_deref(),
+        helper.is_request_page_trigger(),
         &no_params,
         None,
     );
@@ -291,4 +293,47 @@ fn report_dataitem_implicit_rec_and_name_vars_seeded() {
         feats2.record_variables.iter().any(|rv| rv.name == "Cust"),
         "the dataitem name var is in scope in report-level procedures too"
     );
+}
+
+/// ENG-20 (sol): a request page's own trigger and a `RequestPage` dataitem's trigger of one
+/// name share the member text `requestpage` but are different routines, so the dataitem
+/// trigger's attribute is not "missing from an alternative declaration"; and a procedure
+/// written inside the request page is not a request-page trigger and keeps no member (its
+/// ids as before ENG-20).
+#[test]
+fn request_page_twins_and_procedures_in_the_lowerer() {
+    let src = "report 50100 R\n{\n    dataset\n    {\n        dataitem(RequestPage; Customer)\n        {\n            [Obsolete('x', '1.0')]\n            trigger OnAfterGetRecord() begin end;\n        }\n    }\n    requestpage\n    {\n        SourceTable = Customer;\n        trigger OnAfterGetRecord() begin end;\n        procedure Helper() begin end;\n    }\n}\n";
+    let f = al_syntax::parse(src);
+    let routines = &f.objects[0].routines;
+    let triggers: Vec<_> = routines
+        .iter()
+        .filter(|r| r.name == "OnAfterGetRecord")
+        .collect();
+    assert_eq!(triggers.len(), 2, "precondition: both triggers");
+    let dataitem = triggers
+        .iter()
+        .find(|r| !r.is_request_page_trigger())
+        .expect("the dataitem trigger");
+    let own = triggers
+        .iter()
+        .find(|r| r.is_request_page_trigger())
+        .expect("the request page's trigger");
+    let norm =
+        |r: &al_syntax::ir::RoutineDecl| r.enclosing_member.as_ref().map(|(m, _)| m.to_lowercase());
+    assert_eq!(
+        (norm(dataitem), norm(own)),
+        (Some("requestpage".into()), Some("requestpage".into())),
+        "precondition: one member text"
+    );
+    assert_eq!(dataitem.attributes_parsed.len(), 1, "precondition");
+    assert!(
+        !dataitem.attributes_parsed[0].another_declaration_lacks,
+        "the twin is not an alternative declaration"
+    );
+    let helper = routines
+        .iter()
+        .find(|r| r.name == "Helper")
+        .expect("Helper");
+    assert!(!helper.is_request_page_trigger());
+    assert_eq!(helper.enclosing_member, None, "a procedure keeps no member");
 }

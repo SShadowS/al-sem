@@ -1590,7 +1590,7 @@ impl<'m> Indexes<'m> {
         if !crate::program::impact_graph::reverse::run_reaches_trigger(
             kind,
             &r.name.fold_identifier(),
-            r.enclosing_member.is_some(),
+            trigger_level(r),
         ) {
             return Vec::new();
         }
@@ -4006,7 +4006,7 @@ impl RunBy {
                 crate::program::impact_graph::reverse::run_reaches_trigger(
                     kind,
                     &r.name.fold_identifier(),
-                    r.enclosing_member.is_some(),
+                    trigger_level(r),
                 )
             };
         if !reaches {
@@ -5787,6 +5787,17 @@ impl Card {
         }
         out
     }
+}
+
+/// Where model routine `r` is declared (ENG-20): a request page's own trigger is told by its
+/// member kind, which the model sets from the IR's flag, never from the member's text.
+fn trigger_level(r: &ModelRoutine) -> crate::program::resolve::resolver::TriggerLevel {
+    crate::program::resolve::resolver::TriggerLevel::new(
+        r.enclosing_member.is_some(),
+        r.member_detail
+            .as_ref()
+            .is_some_and(|d| d.kind == crate::engine::l5::routine_rollup::REQUEST_PAGE_KIND),
+    )
 }
 
 fn cmp_text(op: CmpOp) -> &'static str {

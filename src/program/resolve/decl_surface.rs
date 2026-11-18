@@ -561,6 +561,7 @@ codeunit 50100 "My Codeunit"
             enclosing_member_lc: None,
             params_count: 0,
             sig_fp: 0,
+            request_page: false,
         };
         let meta = surface.get(&r1).expect("DoSomething must be found");
         assert_eq!(meta.name, "DoSomething");
@@ -571,6 +572,7 @@ codeunit 50100 "My Codeunit"
             enclosing_member_lc: None,
             params_count: 0,
             sig_fp: 0,
+            request_page: false,
         };
         let meta2 = surface.get(&r2).expect("DoOther must be found");
         assert_eq!(meta2.name, "DoOther");
@@ -582,6 +584,7 @@ codeunit 50100 "My Codeunit"
             enclosing_member_lc: None,
             params_count: 0,
             sig_fp: 0,
+            request_page: false,
         };
         assert!(
             surface.get(&absent).is_none(),
@@ -617,6 +620,7 @@ tableextension 50100 "Customer Ext" extends Customer
             enclosing_member_lc: None,
             params_count: 0,
             sig_fp: 0,
+            request_page: false,
         };
         // Verify the routine is found and correctly indexed.
         assert!(
@@ -708,6 +712,7 @@ tableextension 50100 "Cust Ext" extends Customer
             enclosing_member_lc: Some("foo".into()),
             params_count: 0,
             sig_fp: 0,
+            request_page: false,
         };
         let baz_id = RoutineNodeId {
             object: obj_id.clone(),
@@ -715,6 +720,7 @@ tableextension 50100 "Cust Ext" extends Customer
             enclosing_member_lc: Some("baz".into()),
             params_count: 0,
             sig_fp: 0,
+            request_page: false,
         };
 
         // The two RoutineNodeIds must be distinct (the discriminator must differ).
@@ -783,6 +789,7 @@ tableextension 50100 "Cust Ext" extends Customer
             enclosing_member_lc: None,
             params_count: 0,
             sig_fp: 0,
+            request_page: false,
         };
         let dep_rid = RoutineNodeId {
             object: ObjectNodeId {
@@ -794,6 +801,7 @@ tableextension 50100 "Cust Ext" extends Customer
             enclosing_member_lc: None,
             params_count: 0,
             sig_fp: 0,
+            request_page: false,
         };
 
         assert!(surface.get(&ws_rid).is_some());
@@ -816,6 +824,7 @@ tableextension 50100 "Cust Ext" extends Customer
             enclosing_member_lc: None,
             params_count: 0,
             sig_fp: 0,
+            request_page: false,
         };
 
         // A frozen tier that (artificially) contains an entry under the SAME

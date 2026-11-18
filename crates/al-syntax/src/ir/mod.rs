@@ -16,8 +16,8 @@ mod stmt;
 
 pub use decl::{
     ActionDecl, AttributeIr, DatasetItemDecl, DatasetItemKind, EnumValueDecl, FieldDecl,
-    LabelValue, ObjectDecl, ObjectKind, ObjectProperty, PageControl, Param, RoutineDecl,
-    RoutineKind, RoutineRare, SHARED_TYPE_TEXT_CAP, SourceComment, TypeText, VarDecl,
+    LabelValue, ObjectDecl, ObjectKind, ObjectProperty, PageControl, Param, REQUEST_PAGE_MEMBER,
+    RoutineDecl, RoutineKind, RoutineRare, SHARED_TYPE_TEXT_CAP, SourceComment, TypeText, VarDecl,
     al_string_literal_text, shared_type_text,
 };
 pub use expr::{BinaryOp, Expr, ExprKind, Literal, TypeOp, UnaryOp};

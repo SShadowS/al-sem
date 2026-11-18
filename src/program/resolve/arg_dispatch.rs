@@ -4915,6 +4915,7 @@ codeunit 50100 "C"
                 enclosing_member_lc: None,
                 params_count: 0,
                 sig_fp: 0,
+                request_page: false,
             },
             name: "GetValue".into(),
             is_trigger: false,
@@ -5153,6 +5154,7 @@ codeunit 50700 "Caller"
                 enclosing_member_lc: None,
                 params_count,
                 sig_fp,
+                request_page: false,
             },
             name: name_lc.into(),
             is_trigger: false,
@@ -5637,6 +5639,7 @@ codeunit 50700 "Caller"
             enclosing_member_lc: None,
             params_count: 1,
             sig_fp: 0,
+            request_page: false,
         };
         assert!(candidate_param_infos_abi(&rid, &graph, &index).is_none());
     }

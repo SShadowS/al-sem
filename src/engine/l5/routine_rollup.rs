@@ -285,12 +285,25 @@ pub fn format_object(object_type: &str, object_name: &str, number: Option<i64>) 
     out
 }
 
+/// The member kind of a request page's own trigger (ENG-20): it prints as
+/// `.requestpage`, a request page having no name of its own.
+pub const REQUEST_PAGE_KIND: &str = "requestpage";
+
 /// A member as the display prints it after its object: `."Table No."` for
-/// a field, `.action(Name "Caption")` for the other kinds.
+/// a field, `.requestpage` for a request page's own trigger,
+/// `.action(Name "Caption")` for the other kinds.
 #[must_use]
 pub fn format_member(m: &MemberPart<'_>, caption: bool) -> String {
     if m.kind == "field" {
+        // A field or control NAMED `RequestPage` prints quoted, so its display never reads
+        // as a request page's own trigger (`.requestpage`, ENG-20).
+        if m.name.eq_fold_identifier(REQUEST_PAGE_KIND) {
+            return format!(".\"{}\"", m.name.replace('"', "\"\""));
+        }
         return format!(".{}", al_name(m.name));
+    }
+    if m.kind == REQUEST_PAGE_KIND {
+        return format!(".{REQUEST_PAGE_KIND}");
     }
     let cap = match m.caption.filter(|c| caption && !c.is_empty()) {
         Some(c) => format!(" \"{}\"", c.replace('"', "\"\"")),
@@ -388,7 +401,11 @@ fn graph_display_as(
         object_name: nn.object_name,
         object_number: nn.object_number.filter(|_| !nn.primary),
         member: member_name.as_deref().map(|name| MemberPart {
-            kind: infer_member_kind(nn.object_kind, nn.routine),
+            kind: if nn.request_page {
+                REQUEST_PAGE_KIND
+            } else {
+                infer_member_kind(nn.object_kind, nn.routine)
+            },
             name,
             caption: None,
         }),
@@ -450,8 +467,9 @@ impl<'m> RoutineNames<'m> {
             selector_shared: Default::default(),
             app_names,
         };
-        // Overloads: one app, object, member and name; distinct stable ids.
-        type Key = (String, String, Option<String>, String);
+        // Overloads: one app, object, member and name; distinct stable ids. A request
+        // page's own trigger is its own member (ENG-20), whatever a dataitem is named.
+        type Key = (String, String, Option<String>, bool, String);
         let mut groups: HashMap<Key, Vec<&'m str>> = HashMap::new();
         // App collisions: one display (type, object name, member, name) in
         // two apps.
@@ -459,23 +477,29 @@ impl<'m> RoutineNames<'m> {
         for (&id, &i) in &names.rows {
             let r = &model.workspace.routines[i];
             let object = names.object_name_of(r).fold_identifier();
+            let request_page = r
+                .member_detail
+                .as_ref()
+                .is_some_and(|d| d.kind == REQUEST_PAGE_KIND);
             groups
                 .entry((
                     r.app_guid.to_ascii_lowercase(),
                     format!("{}/{object}", r.object_id),
                     r.enclosing_member.as_ref().map(|m| m.fold_identifier()),
+                    request_page,
                     r.name.fold_identifier(),
                 ))
                 .or_default()
                 .push(id);
             displays
                 .entry(format!(
-                    "{}|{object}|{}|{}",
+                    "{}|{object}|{}|{}|{}",
                     r.object_type.to_ascii_lowercase(),
                     r.enclosing_member
                         .as_deref()
                         .unwrap_or("")
                         .fold_identifier(),
+                    u8::from(request_page),
                     r.name.fold_identifier()
                 ))
                 .or_default()

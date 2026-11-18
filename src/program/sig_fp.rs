@@ -162,6 +162,7 @@ pub fn source_routine_node_id(object: ObjectNodeId, decl: &RoutineDecl) -> Routi
             .map(|(n, _)| n.fold_identifier().into()),
         params_count: decl.params.len(),
         sig_fp: source_param_sig_fp(&decl.params),
+        request_page: decl.is_request_page_trigger(),
     }
 }
 

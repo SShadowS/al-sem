@@ -580,12 +580,16 @@ pub(crate) fn key_id_with(key: &Key, app: &dyn Fn(AppRef) -> (String, String)) -
             let member = r.enclosing_member_lc.as_deref().unwrap_or("");
             let params = r.params_count.to_string();
             let sig = r.sig_fp.to_string();
-            hash_id(
-                "r:",
-                &[
-                    &p[0], &p[1], &p[2], &p[3], member, &r.name_lc, &params, &sig,
-                ],
-            )
+            let mut parts: Vec<&str> = vec![
+                &p[0], &p[1], &p[2], &p[3], member, &r.name_lc, &params, &sig,
+            ];
+            // ENG-20: a request page's own trigger hashes one more (length-prefixed) part,
+            // so a dataitem or control NAMED `RequestPage` never shares its id; every other
+            // id is unchanged.
+            if r.request_page {
+                parts.push("request-page");
+            }
+            hash_id("r:", &parts)
         }
         Key::Hub(h) => match h {
             Hub::Any => "h:any".to_string(),
@@ -636,6 +640,7 @@ pub(crate) fn stable_routine_id(
         )),
         &hash,
         member.as_deref(),
+        r.request_page,
     );
     // A split declaration's own id, as the model mints it
     // (`workspace::adopt_declaration_ids`).

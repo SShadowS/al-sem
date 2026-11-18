@@ -801,13 +801,20 @@ Population: CDO has 14 reports, 1 query and 0 XmlPorts. CHANGELOG section: "engi
   `OnQueryClosePage`, all `conditional` (safe, imprecise).
 - A request page's `SourceTable` does not type its `Rec`: a write through `Rec` in a request-page
   trigger is a table not known, so `unknown` (safe, imprecise).
-- **A report procedure with a request-page trigger's name and parameters hides the trigger: wrong
-  answer left.** Both get one routine id (object, name, no member, parameters), and the build keeps
-  the first one declared. alc accepts the pair (a report with `procedure OnOpenPage()` and a
-  request-page `trigger OnOpenPage()` compiles, checked with alc 2026-11-11). When the procedure
-  comes first, a run follows neither, so a write in the trigger answers `no` (before ENG-07 the run
-  followed the procedure's body, also not the trigger's). The root fix is a member for request-page
-  triggers in the lowerer, or `is_trigger` in the routine id; both move ids.
+- ~~**A report procedure with a request-page trigger's name and parameters hides the trigger: wrong
+  answer left.**~~ **Fixed by ENG-20** (2026-11-18; re-probed on master `a73b4bf6`, both declaration
+  orders: a run answered `writes-table: no` for the trigger's write, and a call of the procedure read
+  the trigger's body or answered `unknown`). Both had one routine id (object, name, no member,
+  parameters) and the build kept one body; alc accepts the pair. A request page's own triggers now
+  have the request page as their member (`RequestPage`, displayed `Report X.requestpage::OnOpenPage`)
+  and a flag of their own in every id (`RoutineDecl::is_request_page_trigger`,
+  `RoutineNodeId::request_page`, a conditional part of the internal and stable ids; owner decision
+  q-20261118T113518-4b94aa60, option C), so neither a procedure nor a dataitem or control NAMED
+  `RequestPage` can share one (a dataitem `RequestPage`'s `OnAfterGetRecord` beside the request
+  page's: alc 18.0.41 compiles it). The run rules read a trigger's level (object, request page,
+  other member: `resolver::TriggerLevel`) from that flag. On CDO 11 stable routine ids move (its
+  request-page triggers), no finding or fingerprint. Tests: `tests/cli/cli_eng20_request_page_twin.rs`
+  and `a_request_pages_trigger_and_a_dataitem_named_request_page_have_distinct_ids`.
 - A checked import (`Ok := Xmlport.Import(X, …)`, `if Xmlport.Import(…)`) is not a trap: an error
   raised inside `X` (an `Error` in its triggers, or, since ENG-08, a statement import there) still
   reaches the caller's `throws-error`, though the probe saw `Ok :=` return `false` instead of

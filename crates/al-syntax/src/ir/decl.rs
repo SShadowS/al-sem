@@ -371,6 +371,11 @@ pub struct RoutineDecl {
     pub origin: Origin,
 }
 
+/// The enclosing member of a request page's own triggers (ENG-20): a request page has no
+/// name, and without a member its `OnOpenPage` had a report procedure `OnOpenPage()`'s id
+/// (alc accepts the pair). Its controls' and actions' triggers keep their own member.
+pub const REQUEST_PAGE_MEMBER: &str = "RequestPage";
+
 /// [`RoutineDecl`]'s rarely set fields (see [`RoutineDecl::rare`]).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RoutineRare {
@@ -405,6 +410,11 @@ pub struct RoutineRare {
     /// part of a run (they end it). `None` when there is no such run. The raw
     /// comments, markers included, stay in [`super::AlFile::comments`].
     pub doc: Option<String>,
+    /// ENG-20: the routine is a request page's own trigger (its `enclosing_member` is
+    /// [`REQUEST_PAGE_MEMBER`], which a dataitem or control could also be named). Set only
+    /// by the lowerer, from the `requestpage` section itself, so no name can set it; the ids
+    /// carry it as their own part (`engine::ids`, `RoutineNodeId::request_page`).
+    pub request_page: bool,
 }
 
 impl RoutineRare {
@@ -433,6 +443,11 @@ impl RoutineDecl {
     #[must_use]
     pub fn doc(&self) -> Option<&str> {
         self.rare.as_deref()?.doc.as_deref()
+    }
+    /// Whether this is a request page's own trigger ([`RoutineRare::request_page`]).
+    #[must_use]
+    pub fn is_request_page_trigger(&self) -> bool {
+        self.rare.as_deref().is_some_and(|r| r.request_page)
     }
     /// Set the doc run (`lower_file`, after the routine is built); boxes only when set.
     pub fn set_doc(&mut self, doc: Option<String>) {
@@ -615,6 +630,7 @@ impl RoutineDecl {
             dataitem_source_table: _,
             preproc_context,
             doc: _,
+            request_page: _,
         }) = rare.as_deref_mut()
         {
             exact_size(preproc_context);

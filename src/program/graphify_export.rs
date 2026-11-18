@@ -735,8 +735,11 @@ fn object_id_str(oid: &ObjectNodeId, apps: &AppRegistry) -> String {
     )
 }
 
-/// `al:rtn:{app}/{kind}/{key}#{enclosing?}{name}/{params}/{sig_fp}` — unique per
-/// overload (params_count + sig_fp) and per member-trigger (enclosing member).
+/// `al:rtn:{app}/{kind}/{key}#{enclosing?}{name}/{params}/{sig_fp}[/rp]` — unique per
+/// overload (params_count + sig_fp) and per member-trigger (enclosing member). A request
+/// page's own trigger ends in `/rp` (ENG-20): its member text `requestpage` is a name a
+/// dataitem or control could have too, and the two numeric segments before the suffix mean
+/// no other id can end that way.
 fn routine_id_str(nid: &RoutineNodeId, apps: &AppRegistry) -> String {
     let obj = object_id_str(&nid.object, apps);
     let member = nid
@@ -745,12 +748,13 @@ fn routine_id_str(nid: &RoutineNodeId, apps: &AppRegistry) -> String {
         .map(|m| format!("{m}."))
         .unwrap_or_default();
     format!(
-        "al:rtn:{}#{}{}/{}/{}",
+        "al:rtn:{}#{}{}/{}/{}{}",
         obj.trim_start_matches("al:obj:"),
         member,
         sanitize_slug(&nid.name_lc),
         nid.params_count,
-        nid.sig_fp
+        nid.sig_fp,
+        if nid.request_page { "/rp" } else { "" }
     )
 }
 
@@ -1110,6 +1114,7 @@ mod tests {
                 enclosing_member_lc: None,
                 params_count: params,
                 sig_fp: 0,
+                request_page: false,
             },
             name: name.into(),
             is_trigger: false,
@@ -1145,6 +1150,7 @@ mod tests {
             enclosing_member_lc: None,
             params_count: params,
             sig_fp: 0,
+            request_page: false,
         }
     }
 
@@ -1605,5 +1611,24 @@ mod tests {
             object_id_str(&oid("a\"\"b"), &apps),
             "al:obj:dep/interface/@a%22%22b"
         );
+    }
+
+    /// ENG-20 (sol): a request page's own trigger ends in `/rp`, so it never shares an id
+    /// with a routine of the same member text (`requestpage`, which a dataitem or control
+    /// could be named), name and signature; every other routine's id is as before, unsuffixed.
+    #[test]
+    fn a_request_page_trigger_id_ends_in_rp_and_others_are_unchanged() {
+        let mut apps = AppRegistry::default();
+        let a = apps.intern(&app_id("Dep"));
+        let mut member = rid(a, 50100, "OnOpenPage", 0);
+        member.enclosing_member_lc = Some("requestpage".into());
+        let mut own = member.clone();
+        own.request_page = true;
+        let (member_s, own_s) = (routine_id_str(&member, &apps), routine_id_str(&own, &apps));
+        assert_eq!(
+            member_s,
+            "al:rtn:dep/codeunit/50100#requestpage.onopenpage/0/0"
+        );
+        assert_eq!(own_s, format!("{member_s}/rp"));
     }
 }

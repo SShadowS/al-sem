@@ -83,7 +83,8 @@ use crate::program::resolve::decl_surface::RoutineMeta;
 /// 18: `FieldNode::number` (ENG-06, `FieldRef` resolution).
 /// 19: `DatasetNode::request_page_hidden` (ENG-19, a report's `UseRequestPage`).
 /// 20: grammar v5.3.0 (GRM-04): four new `RawKind`s shift the positional kind index.
-pub const PACK_SCHEMA: u32 = 20;
+/// 21: `RoutineNodeId::request_page` (ENG-20, a request page's own trigger).
+pub const PACK_SCHEMA: u32 = 21;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PackedFile {
@@ -481,6 +482,7 @@ mod tests {
             // double.
             params_count: 2,
             sig_fp: 9_007_199_254_740_993,
+            request_page: false,
         }
     }
 
@@ -562,7 +564,8 @@ mod tests {
         let bytes = encode(&pack).expect("encode");
         assert_eq!(
             blake3::hash(&bytes).to_hex().as_str(),
-            "8c8cc4c00c024b1860a16e5ed2bb1dede52fd592d6722a3a99a6debe195b67cd",
+            // Schema 21 (ENG-20): every `RoutineNodeId` writes its `request_page` flag.
+            "cd5078ff66b20481fd62a1937815c211aab7e0123f739adef33252729c72784a",
             "the pack's serialized form changed: bump PACK_SCHEMA and re-pin"
         );
     }
@@ -577,7 +580,7 @@ mod tests {
     /// Stated precondition: set by assignment, whatever the fixture holds.
     #[test]
     fn pack_round_trips_method_ids() {
-        assert_eq!(PACK_SCHEMA, 20);
+        assert_eq!(PACK_SCHEMA, 21);
         let mut pack = sample_pack();
         pack.files[0].routines[0].abi_method_id = Some(-42);
         pack.files[0].routines[0].publisher_isolated = true;

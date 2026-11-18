@@ -483,6 +483,15 @@ pub(crate) fn split_member(selector: &str) -> Option<MemberSelector> {
     if !is_plain_identifier(member) {
         return None;
     }
+    // ENG-20: an unquoted `.requestpage` is a request page's own trigger (the display
+    // quotes a field or control of that name, `."RequestPage"`).
+    if member.eq_fold_identifier(crate::engine::l5::routine_rollup::REQUEST_PAGE_KIND) {
+        return done(
+            &left[..dot],
+            Some(crate::engine::l5::routine_rollup::REQUEST_PAGE_KIND.to_string()),
+            al_syntax::ir::REQUEST_PAGE_MEMBER.to_string(),
+        );
+    }
     done(&left[..dot], None, member.to_string())
 }
 
@@ -507,24 +516,41 @@ pub(crate) fn resolve_member_selector<'a>(
     selector: &str,
     rows: impl IntoIterator<Item = MemberRow<'a>>,
 ) -> Option<Vec<String>> {
+    use crate::engine::l5::routine_rollup::REQUEST_PAGE_KIND;
     let m = split_member(selector)?;
     let owner = owner_part(&m.owner)?;
-    let mut out: Vec<String> = Vec::new();
-    for r in rows {
-        if !r.routine.eq_fold_identifier(&m.routine)
-            || !r.member.eq_fold_identifier(&m.member)
-            || m.kind.as_deref().is_some_and(|k| k != r.member_kind)
-        {
-            continue;
+    let rows: Vec<MemberRow<'a>> = rows.into_iter().collect();
+    let pick = |kind: Option<&str>| -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for r in &rows {
+            // A selector with no kind word is the field form, which never names a request
+            // page's own trigger (ENG-20: `.requestpage` does).
+            let kind_ok = match kind {
+                Some(k) => k == r.member_kind,
+                None => r.member_kind != REQUEST_PAGE_KIND,
+            };
+            if !r.routine.eq_fold_identifier(&m.routine)
+                || !r.member.eq_fold_identifier(&m.member)
+                || !kind_ok
+            {
+                continue;
+            }
+            let key = normalize_display_key(&r.owner_display);
+            let owned = owner.wants.iter().any(|want| match owner.typed {
+                true => key == *want,
+                false => strip_type_word_prefix(&key) == Some(want.as_str()),
+            });
+            if owned && !out.iter().any(|x| x == r.id) {
+                out.push(r.id.to_string());
+            }
         }
-        let key = normalize_display_key(&r.owner_display);
-        let owned = owner.wants.iter().any(|want| match owner.typed {
-            true => key == *want,
-            false => strip_type_word_prefix(&key) == Some(want.as_str()),
-        });
-        if owned && !out.iter().any(|x| x == r.id) {
-            out.push(r.id.to_string());
-        }
+        out
+    };
+    let out = pick(m.kind.as_deref());
+    // An unquoted `.RequestPage` that names no request page's trigger is the field form
+    // (a table field of that name, `Table T.RequestPage::OnValidate`), as before ENG-20.
+    if out.is_empty() && m.kind.as_deref() == Some(REQUEST_PAGE_KIND) {
+        return Some(pick(None));
     }
     Some(out)
 }

@@ -51,6 +51,7 @@ fn build_key(input: &Value) -> ids::CanonicalRoutineKey {
             .get("enclosingMember")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string()),
+        request_page: false,
     }
 }
 
@@ -92,6 +93,7 @@ fn encode(kind: &str, input: &Value) -> String {
             input["stableObjectId"].as_str().unwrap(),
             input["normalizedSignatureHash"].as_str().unwrap(),
             input.get("enclosingMember").and_then(|v| v.as_str()),
+            false,
         ),
         "routineSignatureFingerprint" => ids::routine_signature_fingerprint(
             input["name"].as_str().unwrap(),

@@ -2513,7 +2513,7 @@ impl<'a> Converter<'a> {
                     && (crate::program::resolve::resolver::run_trigger_may_not_run(
                         id.object.kind,
                         id.name_lc.as_str(),
-                        id.enclosing_member_lc.is_some(),
+                        crate::program::resolve::resolver::TriggerLevel::of_routine(&id),
                     ) || self.request_page_cancel_skips(ce, &id))
                 {
                     e.fires = Some(crate::engine::l4::combined_graph::TriggerFires::Maybe);
@@ -2697,6 +2697,7 @@ impl<'a> Converter<'a> {
                 enclosing_member_lc: None,
                 params_count: key.params_count,
                 sig_fp: key.param_type_fp,
+                request_page: false,
             }),
             _ => None,
         }
