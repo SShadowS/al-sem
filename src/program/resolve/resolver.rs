@@ -2270,73 +2270,46 @@ fn entry_trigger_name(kind: ObjectKind) -> &'static str {
 /// `platformEntryPointsNotModelled` assumption). A page part's triggers are
 /// not followed either.
 ///
-/// A report's object-level list holds its request page's triggers too (the
-/// lowerer gives them no enclosing member): a run loads the request page, so
-/// its `OnInit` runs, and `OnOpenPage`/`OnClosePage` run whenever the page
-/// shows or a head-less run (`Execute`) runs it (ENG-07, engine limits L20).
-/// Measured on the BC 28.4 Linux sidecar and confirmed on Windows BC
-/// 28.0.54946.56477. Its record triggers mirror a page's, for a request page
-/// with a `SourceTable`. An XmlPort's request page the same: its `OnInit` ran
-/// on every `Run` and `Export` measured (before `OnInitXmlPort`; sidecar only).
-pub(crate) fn run_triggers(
-    kind: ObjectKind,
-) -> Option<(&'static [&'static str], &'static [&'static str])> {
+/// A report's request page has its own list (`request_page`): a run loads the
+/// request page, so its `OnInit` runs, and `OnOpenPage`/`OnClosePage` run
+/// whenever the page shows or a head-less run (`Execute`) runs it (ENG-07,
+/// engine limits L20). Measured on the BC 28.4 Linux sidecar and confirmed on
+/// Windows BC 28.0.54946.56477. Its record triggers mirror a page's, for a
+/// request page with a `SourceTable`. An XmlPort's request page the same: its
+/// `OnInit` ran on every `Run` and `Export` measured (before `OnInitXmlPort`;
+/// sidecar only). Since ENG-20 those triggers have the request page as their
+/// member ([`al_syntax::ir::REQUEST_PAGE_MEMBER`], [`TriggerLevel::RequestPage`]),
+/// so a report procedure of the same name and parameters is never one of them.
+pub(crate) fn run_triggers(kind: ObjectKind) -> Option<RunTriggers> {
+    const REQUEST_PAGE: &[&str] = &[
+        "oninit",
+        "onopenpage",
+        "onfindrecord",
+        "onnextrecord",
+        "onaftergetrecord",
+        "onaftergetcurrrecord",
+        "onnewrecord",
+        "onqueryclosepage",
+        "onclosepage",
+        "onpagebackgroundtaskcompleted",
+        "onpagebackgroundtaskerror",
+    ];
     match kind {
-        ObjectKind::Page => Some((
-            &[
-                "oninit",
-                "onopenpage",
-                "onfindrecord",
-                "onnextrecord",
-                "onaftergetrecord",
-                "onaftergetcurrrecord",
-                "onnewrecord",
-                "onqueryclosepage",
-                "onclosepage",
-                "onpagebackgroundtaskcompleted",
-                "onpagebackgroundtaskerror",
-            ],
-            &[],
-        )),
-        ObjectKind::Report => Some((
-            &[
-                "oninitreport",
-                "onprereport",
-                "onpostreport",
-                // The request page's (see the doc above).
-                "oninit",
-                "onopenpage",
-                "onfindrecord",
-                "onnextrecord",
-                "onaftergetrecord",
-                "onaftergetcurrrecord",
-                "onnewrecord",
-                "onqueryclosepage",
-                "onclosepage",
-                "onpagebackgroundtaskcompleted",
-                "onpagebackgroundtaskerror",
-            ],
-            &["onpredataitem", "onaftergetrecord", "onpostdataitem"],
-        )),
-        ObjectKind::XmlPort => Some((
-            &[
-                "oninitxmlport",
-                "onprexmlport",
-                "onpostxmlport",
-                // The request page's, as a report's.
-                "oninit",
-                "onopenpage",
-                "onfindrecord",
-                "onnextrecord",
-                "onaftergetrecord",
-                "onaftergetcurrrecord",
-                "onnewrecord",
-                "onqueryclosepage",
-                "onclosepage",
-                "onpagebackgroundtaskcompleted",
-                "onpagebackgroundtaskerror",
-            ],
-            &[
+        // A page's own triggers are its request-page-like lifecycle, at object level.
+        ObjectKind::Page => Some(RunTriggers {
+            object: REQUEST_PAGE,
+            request_page: &[],
+            member: &[],
+        }),
+        ObjectKind::Report => Some(RunTriggers {
+            object: &["oninitreport", "onprereport", "onpostreport"],
+            request_page: REQUEST_PAGE,
+            member: &["onpredataitem", "onaftergetrecord", "onpostdataitem"],
+        }),
+        ObjectKind::XmlPort => Some(RunTriggers {
+            object: &["oninitxmlport", "onprexmlport", "onpostxmlport"],
+            request_page: REQUEST_PAGE,
+            member: &[
                 "onbeforepassvariable",
                 "onbeforepassfield",
                 "onafterassignvariable",
@@ -2349,10 +2322,69 @@ pub(crate) fn run_triggers(
                 "onprexmlitem",
                 "onaftergetrecord",
             ],
-        )),
+        }),
         // B6: a query's `Open` (or save) runs its one trigger.
-        ObjectKind::Query => Some((&["onbeforeopen"], &[])),
+        ObjectKind::Query => Some(RunTriggers {
+            object: &["onbeforeopen"],
+            request_page: &[],
+            member: &[],
+        }),
         _ => None,
+    }
+}
+
+/// The triggers a run of an object reaches ([`run_triggers`]), by where they are declared.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct RunTriggers {
+    /// Declared on the object itself (no enclosing member).
+    pub object: &'static [&'static str],
+    /// Declared on the object's request page ([`TriggerLevel::RequestPage`]).
+    pub request_page: &'static [&'static str],
+    /// Declared in another member: a dataitem, an XmlPort element.
+    pub member: &'static [&'static str],
+}
+
+impl RunTriggers {
+    /// Whether a trigger named `name_lc` (folded) declared at `level` is one of them.
+    #[must_use]
+    pub fn contains(&self, level: TriggerLevel, name_lc: &str) -> bool {
+        match level {
+            TriggerLevel::Object => self.object,
+            TriggerLevel::RequestPage => self.request_page,
+            TriggerLevel::Member => self.member,
+        }
+        .contains(&name_lc)
+    }
+}
+
+/// Where a trigger is declared (ENG-20): on its object, on the object's request page, or in
+/// another member (a field, an action, a dataitem, an XmlPort element, a request page
+/// control). A request page's own trigger is told by its flag
+/// (`RoutineDecl::is_request_page_trigger`, `RoutineNodeId::request_page`), never by its
+/// member's text, which a dataitem or control could share.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TriggerLevel {
+    Object,
+    RequestPage,
+    Member,
+}
+
+impl TriggerLevel {
+    /// The level of a routine that has an enclosing member (`has_member`) or none, and is
+    /// (`request_page`) or is not a request page's own trigger.
+    #[must_use]
+    pub fn new(has_member: bool, request_page: bool) -> Self {
+        match (request_page, has_member) {
+            (true, _) => TriggerLevel::RequestPage,
+            (false, true) => TriggerLevel::Member,
+            (false, false) => TriggerLevel::Object,
+        }
+    }
+
+    /// The level of routine `id`.
+    #[must_use]
+    pub fn of_routine(id: &RoutineNodeId) -> Self {
+        Self::new(id.enclosing_member_lc.is_some(), id.request_page)
     }
 }
 
@@ -2391,34 +2423,36 @@ pub(crate) fn run_triggers(
 pub(crate) fn run_trigger_may_not_run(
     kind: ObjectKind,
     trigger_lc: &str,
-    member_level: bool,
+    level: TriggerLevel,
 ) -> bool {
-    match kind {
-        ObjectKind::Report | ObjectKind::ReportExtension => {
-            member_level
-                || !matches!(
-                    trigger_lc,
-                    "oninitreport" | "onprereport" | "onpostreport" | "oninit"
-                )
+    match (kind, level) {
+        // A dataitem's, an element's or a request page control's trigger.
+        (
+            ObjectKind::Report | ObjectKind::ReportExtension | ObjectKind::XmlPort,
+            TriggerLevel::Member,
+        ) => true,
+        // A request page's `OnInit` ran in every run measured; the rest may not.
+        (
+            ObjectKind::Report | ObjectKind::ReportExtension | ObjectKind::XmlPort,
+            TriggerLevel::RequestPage,
+        ) => trigger_lc != "oninit",
+        (ObjectKind::Report | ObjectKind::ReportExtension, _) => {
+            !matches!(trigger_lc, "oninitreport" | "onprereport" | "onpostreport")
         }
-        ObjectKind::XmlPort => {
-            member_level
-                || !matches!(
-                    trigger_lc,
-                    "oninitxmlport" | "onprexmlport" | "onpostxmlport" | "oninit"
-                )
-        }
-        ObjectKind::Page | ObjectKind::PageExtension => {
-            !member_level
-                && matches!(
-                    trigger_lc,
-                    "onaftergetrecord"
-                        | "onaftergetcurrrecord"
-                        | "onnextrecord"
-                        | "onnewrecord"
-                        | "onpagebackgroundtaskcompleted"
-                        | "onpagebackgroundtaskerror"
-                )
+        (ObjectKind::XmlPort, _) => !matches!(
+            trigger_lc,
+            "oninitxmlport" | "onprexmlport" | "onpostxmlport"
+        ),
+        (ObjectKind::Page | ObjectKind::PageExtension, TriggerLevel::Object) => {
+            matches!(
+                trigger_lc,
+                "onaftergetrecord"
+                    | "onaftergetcurrrecord"
+                    | "onnextrecord"
+                    | "onnewrecord"
+                    | "onpagebackgroundtaskcompleted"
+                    | "onpagebackgroundtaskerror"
+            )
         }
         _ => false,
     }
@@ -2436,11 +2470,16 @@ pub(crate) fn start_runs_trigger(
     kind: ObjectKind,
     method_lc: &str,
     trigger_lc: &str,
-    member_level: bool,
+    level: TriggerLevel,
 ) -> bool {
     !(matches!(kind, ObjectKind::Report | ObjectKind::ReportExtension)
         && method_lc == "runrequestpage"
-        && (member_level || matches!(trigger_lc, "onprereport" | "onpostreport")))
+        && match level {
+            // A data item's trigger.
+            TriggerLevel::Member => true,
+            TriggerLevel::Object => matches!(trigger_lc, "onprereport" | "onpostreport"),
+            TriggerLevel::RequestPage => false,
+        })
 }
 
 /// [`start_runs_trigger`] over a run's routes: drop the trigger routes start
@@ -2451,7 +2490,7 @@ pub(crate) fn retain_started_triggers(routes: &mut Vec<Route>, method_lc: &str) 
             id.object.kind,
             method_lc,
             id.name_lc.as_str(),
-            id.enclosing_member_lc.is_some(),
+            TriggerLevel::of_routine(id),
         ),
         _ => true,
     });
@@ -2519,7 +2558,7 @@ fn dispatch_entry_trigger(
     // codeunit, the object-level `OnRun` (`enclosing_member_lc == None`), else
     // any routine of that name.
     let entries_of = |object: &ObjectNodeId| -> Vec<&RoutineNodeId> {
-        let Some((object_level, member_level)) = run_triggers(object_kind) else {
+        let Some(runs) = run_triggers(object_kind) else {
             let candidates = index.routines_in_object(graph, object, trigger_name);
             return candidates
                 .clone()
@@ -2529,24 +2568,23 @@ fn dispatch_entry_trigger(
                 .collect();
         };
         // A trigger, never a procedure of the same name: a report procedure
-        // `OnInit` is not its request page's `OnInit` (ENG-07).
+        // `OnInit` is not its request page's `OnInit` (ENG-07; since ENG-20 the two
+        // also have distinct ids, so the procedure no longer hides the trigger).
         let trigger = |r: &&RoutineNodeId| graph.routine(r).is_none_or(|n| n.is_trigger);
         let mut out: Vec<&RoutineNodeId> = Vec::new();
-        for name in object_level {
-            out.extend(
-                index
-                    .routines_in_object(graph, object, name)
-                    .filter(|r| r.enclosing_member_lc.is_none())
-                    .filter(trigger),
-            );
-        }
-        for name in member_level {
-            out.extend(
-                index
-                    .routines_in_object(graph, object, name)
-                    .filter(|r| r.enclosing_member_lc.is_some())
-                    .filter(trigger),
-            );
+        for (level, names) in [
+            (TriggerLevel::Object, runs.object),
+            (TriggerLevel::RequestPage, runs.request_page),
+            (TriggerLevel::Member, runs.member),
+        ] {
+            for name in names {
+                out.extend(
+                    index
+                        .routines_in_object(graph, object, name)
+                        .filter(|r| TriggerLevel::of_routine(r) == level)
+                        .filter(trigger),
+                );
+            }
         }
         out
     };
@@ -5631,6 +5669,7 @@ pageextension 52911 "ExtA" extends BasePage
                 enclosing_member_lc: None,
                 params_count: 0,
                 sig_fp: 0,
+                request_page: false,
             },
             name: "DoFoo".into(),
             is_trigger: false,
@@ -5819,6 +5858,7 @@ pageextension 52911 "ExtA" extends BasePage
                 enclosing_member_lc: None,
                 params_count: 1,
                 sig_fp: 777,
+                request_page: false,
             },
             name: "Get".into(),
             is_trigger: false,
@@ -6026,6 +6066,7 @@ pageextension 52911 "ExtA" extends BasePage
                     enclosing_member_lc: None,
                     params_count: 1,
                     sig_fp,
+                    request_page: false,
                 },
                 name: "Get".into(),
                 is_trigger: false,
@@ -6185,6 +6226,7 @@ codeunit 50611 "MixedCU"
             enclosing_member_lc: None,
             params_count: 1,
             sig_fp: 999,
+            request_page: false,
         };
         graph.routines.push(RoutineNode {
             id: abi_rid.clone(),
@@ -6276,6 +6318,7 @@ codeunit 50612 "MixedCU2"
             enclosing_member_lc: None,
             params_count: 1,
             sig_fp: 999,
+            request_page: false,
         };
         graph.routines.push(RoutineNode {
             id: abi_rid.clone(),
@@ -6435,6 +6478,7 @@ codeunit 50612 "MixedCU2"
                 enclosing_member_lc: None,
                 params_count: 0,
                 sig_fp: 0,
+                request_page: false,
             },
             name: "OnRun".into(),
             is_trigger: false,
@@ -6659,6 +6703,7 @@ codeunit 50612 "MixedCU2"
                 enclosing_member_lc: None,
                 params_count: 0,
                 sig_fp: 0,
+                request_page: false,
             },
             name: "OnInsert".into(),
             is_trigger: false,
@@ -6841,6 +6886,7 @@ codeunit 50612 "MixedCU2"
                 enclosing_member_lc: None,
                 params_count: 0,
                 sig_fp: 0,
+                request_page: false,
             },
             name: "OnAfterX".into(),
             is_trigger: false,
@@ -6871,6 +6917,7 @@ codeunit 50612 "MixedCU2"
                 enclosing_member_lc: None,
                 params_count: 0,
                 sig_fp: 0,
+                request_page: false,
             },
             name: "OnAfterXHandler".into(),
             is_trigger: false,
@@ -12005,6 +12052,7 @@ codeunit 50000 "Caller"
                 enclosing_member_lc: None,
                 params_count: 1,
                 sig_fp: 0,
+                request_page: false,
             },
             name: "OnDepEvent".into(),
             is_trigger: false,
@@ -12036,6 +12084,7 @@ codeunit 50000 "Caller"
                 enclosing_member_lc: None,
                 params_count: 0,
                 sig_fp: 0,
+                request_page: false,
             },
             name: "DoWork".into(),
             is_trigger: false,
@@ -14310,6 +14359,7 @@ codeunit 53971 "OverloadNCaller"
                     enclosing_member_lc: None,
                     params_count: 1,
                     sig_fp,
+                    request_page: false,
                 },
                 name: "Foo".into(),
                 is_trigger: false,
@@ -14713,6 +14763,7 @@ codeunit 53975 "Overload3Caller"
                     enclosing_member_lc: None,
                     params_count: 1,
                     sig_fp: 111,
+                    request_page: false,
                 },
                 name: "Foo".into(),
                 is_trigger: false,
@@ -14742,6 +14793,7 @@ codeunit 53975 "Overload3Caller"
                     enclosing_member_lc: None,
                     params_count: 1,
                     sig_fp: 222,
+                    request_page: false,
                 },
                 name: "Foo".into(),
                 is_trigger: false,

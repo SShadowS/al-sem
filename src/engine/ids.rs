@@ -66,7 +66,19 @@ pub struct CanonicalRoutineKey {
     ///    only when this is `Some` — see its doc for why `Some("")` and `None`
     ///    are still distinguishable.
     pub enclosing_member: Option<String>,
+    /// ENG-20: the routine is a request page's own trigger
+    /// (`al_syntax::ir::RoutineDecl::is_request_page_trigger`). Its member is the request page
+    /// (`REQUEST_PAGE_MEMBER`), a text a dataitem or control could also be named, so this flag
+    /// is its own hash part: [`encode_canonical_routine_key`] appends it only when `true`, so
+    /// every other routine's id is unchanged.
+    pub request_page: bool,
 }
+
+/// The extra hash part of a request page's own trigger ([`CanonicalRoutineKey::request_page`]).
+/// Its CONTENT is not what keeps the id apart: a member trigger hashes one more PART than any
+/// other routine, and `sha256_of_strings` length-prefixes every part, so no member name can
+/// produce the same parts.
+const REQUEST_PAGE_PART: &str = "request-page";
 
 /// Count of UTF-16 code units in `s` — equal to JavaScript's `String.length`.
 ///
@@ -335,6 +347,10 @@ pub fn encode_canonical_routine_key(key: &CanonicalRoutineKey) -> String {
     if let Some(member) = &key.enclosing_member {
         parts.push(member.to_lowercase());
     }
+    // ENG-20: CONDITIONAL as the member part, so only a request page's own triggers move.
+    if key.request_page {
+        parts.push(REQUEST_PAGE_PART.to_string());
+    }
     sha256_of_strings(&parts)
 }
 
@@ -418,13 +434,18 @@ pub fn to_stable_routine_id_from_parts(
     stable_object_id: &str,
     normalized_signature_hash: &str,
     enclosing_member: Option<&str>,
+    request_page: bool,
 ) -> String {
     match enclosing_member {
         None => format!("{stable_object_id}#{normalized_signature_hash}"),
         Some(member) => {
-            let discriminated =
-                sha256_of_strings(&[normalized_signature_hash.to_string(), member.to_lowercase()]);
-            format!("{stable_object_id}#{discriminated}")
+            let mut parts = vec![normalized_signature_hash.to_string(), member.to_lowercase()];
+            // ENG-20: a request page's own trigger hashes one more part
+            // ([`CanonicalRoutineKey::request_page`]); every other id is unchanged.
+            if request_page {
+                parts.push(REQUEST_PAGE_PART.to_string());
+            }
+            format!("{stable_object_id}#{}", sha256_of_strings(&parts))
         }
     }
 }
@@ -601,6 +622,7 @@ mod tests {
             routine_name: "OnAction".to_string(),
             normalized_signature_hash: sha256_hex("onaction():"),
             enclosing_member: member.map(|m| m.to_string()),
+            request_page: false,
         }
     }
 
@@ -718,7 +740,7 @@ mod tests {
     fn stable_routine_id_shape_is_object_plus_64_hex_regardless_of_member() {
         const OBJ: &str = "11111111-2222-3333-4444-555555555555:Page:50811";
         for member in [None, Some(""), Some("No."), Some(r#"a"b"#), Some("😀")] {
-            let id = to_stable_routine_id_from_parts(OBJ, &norm_hash(), member);
+            let id = to_stable_routine_id_from_parts(OBJ, &norm_hash(), member, false);
             let parts: Vec<&str> = id.split('#').collect();
             assert_eq!(
                 parts.len(),
@@ -745,8 +767,8 @@ mod tests {
     #[test]
     fn distinct_enclosing_members_yield_distinct_stable_routine_ids() {
         const OBJ: &str = "11111111-2222-3333-4444-555555555555:Page:50811";
-        let first = to_stable_routine_id_from_parts(OBJ, &norm_hash(), Some("First"));
-        let second = to_stable_routine_id_from_parts(OBJ, &norm_hash(), Some("Second"));
+        let first = to_stable_routine_id_from_parts(OBJ, &norm_hash(), Some("First"), false);
+        let second = to_stable_routine_id_from_parts(OBJ, &norm_hash(), Some("Second"), false);
         assert_ne!(
             first, second,
             "two same-signature triggers under different members must not share a stable id"
@@ -755,7 +777,7 @@ mod tests {
         // case is the same routine and must keep one stable id.
         assert_eq!(
             first,
-            to_stable_routine_id_from_parts(OBJ, &norm_hash(), Some("FIRST"))
+            to_stable_routine_id_from_parts(OBJ, &norm_hash(), Some("FIRST"), false)
         );
     }
 
@@ -769,13 +791,13 @@ mod tests {
         const OBJ: &str = "11111111-2222-3333-4444-555555555555:Page:50811";
         let h = norm_hash();
         assert_eq!(
-            to_stable_routine_id_from_parts(OBJ, &h, None),
+            to_stable_routine_id_from_parts(OBJ, &h, None, false),
             format!("{OBJ}#{h}"),
             "a routine with no enclosing member must keep the legacy stable id"
         );
         assert_ne!(
-            to_stable_routine_id_from_parts(OBJ, &h, None),
-            to_stable_routine_id_from_parts(OBJ, &h, Some("")),
+            to_stable_routine_id_from_parts(OBJ, &h, None, false),
+            to_stable_routine_id_from_parts(OBJ, &h, Some(""), false),
             "an empty-named member is still distinguishable from no member at all"
         );
     }

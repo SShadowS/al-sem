@@ -483,6 +483,15 @@ pub(crate) fn split_member(selector: &str) -> Option<MemberSelector> {
     if !is_plain_identifier(member) {
         return None;
     }
+    // ENG-20: an unquoted `.requestpage` is a request page's own trigger (the display
+    // quotes a field or control of that name, `."RequestPage"`).
+    if member.eq_fold_identifier(crate::engine::l5::routine_rollup::REQUEST_PAGE_KIND) {
+        return done(
+            &left[..dot],
+            Some(crate::engine::l5::routine_rollup::REQUEST_PAGE_KIND.to_string()),
+            al_syntax::ir::REQUEST_PAGE_MEMBER.to_string(),
+        );
+    }
     done(&left[..dot], None, member.to_string())
 }
 
@@ -511,9 +520,15 @@ pub(crate) fn resolve_member_selector<'a>(
     let owner = owner_part(&m.owner)?;
     let mut out: Vec<String> = Vec::new();
     for r in rows {
+        // A selector with no kind word is the field form, which never names a request
+        // page's own trigger (ENG-20: `.requestpage` does).
+        let kind_ok = match m.kind.as_deref() {
+            Some(k) => k == r.member_kind,
+            None => r.member_kind != crate::engine::l5::routine_rollup::REQUEST_PAGE_KIND,
+        };
         if !r.routine.eq_fold_identifier(&m.routine)
             || !r.member.eq_fold_identifier(&m.member)
-            || m.kind.as_deref().is_some_and(|k| k != r.member_kind)
+            || !kind_ok
         {
             continue;
         }

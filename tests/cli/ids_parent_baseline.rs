@@ -57,6 +57,12 @@
 //! review r3 (the inline `SetRange` control): only that fixture's entry moved each
 //! time (checked by comparing the record with that entry left out).
 //!
+//! Re-minted 2026-11-18 (ENG-20, licensed by the orchestrator under owner decision
+//! q-20261118T113518-4b94aa60, option C) at `a73b4bf6+ENG-20`: a request page's own trigger
+//! gets its own id part. Exactly one stable id moved, `ws-report-dataitem`'s request-page
+//! `OnOpenPage` (Report 51700, `#d5b90afe…` -> `#b0e0b330…`); no fingerprint moved, every
+//! other fixture's record is byte-identical (compared with that entry left out).
+//!
 //! A recorded string is a stable id and nothing else (`stable_id_re`), so the
 //! record cannot move for the reason the migration legitimately moves other
 //! output: internal ids and the hashes derived from them.

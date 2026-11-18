@@ -285,12 +285,25 @@ pub fn format_object(object_type: &str, object_name: &str, number: Option<i64>) 
     out
 }
 
+/// The member kind of a request page's own trigger (ENG-20): it prints as
+/// `.requestpage`, a request page having no name of its own.
+pub const REQUEST_PAGE_KIND: &str = "requestpage";
+
 /// A member as the display prints it after its object: `."Table No."` for
-/// a field, `.action(Name "Caption")` for the other kinds.
+/// a field, `.requestpage` for a request page's own trigger,
+/// `.action(Name "Caption")` for the other kinds.
 #[must_use]
 pub fn format_member(m: &MemberPart<'_>, caption: bool) -> String {
     if m.kind == "field" {
+        // A field or control NAMED `RequestPage` prints quoted, so its display never reads
+        // as a request page's own trigger (`.requestpage`, ENG-20).
+        if m.name.eq_fold_identifier(REQUEST_PAGE_KIND) {
+            return format!(".\"{}\"", m.name.replace('"', "\"\""));
+        }
         return format!(".{}", al_name(m.name));
+    }
+    if m.kind == REQUEST_PAGE_KIND {
+        return format!(".{REQUEST_PAGE_KIND}");
     }
     let cap = match m.caption.filter(|c| caption && !c.is_empty()) {
         Some(c) => format!(" \"{}\"", c.replace('"', "\"\"")),
@@ -388,7 +401,11 @@ fn graph_display_as(
         object_name: nn.object_name,
         object_number: nn.object_number.filter(|_| !nn.primary),
         member: member_name.as_deref().map(|name| MemberPart {
-            kind: infer_member_kind(nn.object_kind, nn.routine),
+            kind: if nn.request_page {
+                REQUEST_PAGE_KIND
+            } else {
+                infer_member_kind(nn.object_kind, nn.routine)
+            },
             name,
             caption: None,
         }),

@@ -111,6 +111,7 @@ pub fn synthetic_unknown_edge_for_test() -> Vec<Edge> {
         enclosing_member_lc: None,
         params_count: 0,
         sig_fp: 0,
+        request_page: false,
     };
     vec![Edge {
         from: caller.clone(),

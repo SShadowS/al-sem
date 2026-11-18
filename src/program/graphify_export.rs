@@ -1110,6 +1110,7 @@ mod tests {
                 enclosing_member_lc: None,
                 params_count: params,
                 sig_fp: 0,
+                request_page: false,
             },
             name: name.into(),
             is_trigger: false,
@@ -1145,6 +1146,7 @@ mod tests {
             enclosing_member_lc: None,
             params_count: params,
             sig_fp: 0,
+            request_page: false,
         }
     }
 

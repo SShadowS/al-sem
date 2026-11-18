@@ -424,6 +424,7 @@ mod tests {
                 enclosing_member_lc: enclosing.map(|s| s.fold_identifier().into()),
                 params_count: params,
                 sig_fp: 0,
+                request_page: false,
             },
             name: name.into(),
             is_trigger: enclosing.is_some()
@@ -517,6 +518,7 @@ mod tests {
             enclosing_member_lc: None,
             params_count: 0,
             sig_fp: 0,
+            request_page: false,
         };
         assert!(
             interface_route_applicable("ifoo", "bar", 0, &target, &graph, &index),
@@ -540,6 +542,7 @@ mod tests {
             enclosing_member_lc: None,
             params_count: 1,
             sig_fp: 0,
+            request_page: false,
         };
         assert!(
             !interface_route_applicable("ifoo", "bar", 0, &target, &graph, &index),
@@ -563,6 +566,7 @@ mod tests {
             enclosing_member_lc: None,
             params_count: 0,
             sig_fp: 0,
+            request_page: false,
         };
         assert!(
             !interface_route_applicable("ifoo", "bar", 0, &target, &graph, &index),
@@ -588,6 +592,7 @@ mod tests {
             enclosing_member_lc: None,
             params_count: 0,
             sig_fp: 0,
+            request_page: false,
         };
         assert!(
             !interface_route_applicable("ifoo", "bar", 0, &target, &graph, &index),
@@ -643,6 +648,7 @@ mod tests {
             enclosing_member_lc: None,
             params_count: 0,
             sig_fp: 0,
+            request_page: false,
         };
         assert!(
             interface_route_applicable("ithing", "run", 0, &target, &graph, &index),
@@ -718,6 +724,7 @@ mod tests {
             enclosing_member_lc: None,
             params_count: 0,
             sig_fp: 0,
+            request_page: false,
         };
         assert!(implicit_trigger_route_applicable(
             &ctx, &target, &graph, &index
@@ -744,6 +751,7 @@ mod tests {
             enclosing_member_lc: None,
             params_count: 0,
             sig_fp: 0,
+            request_page: false,
         };
         assert!(implicit_trigger_route_applicable(
             &ctx,
@@ -780,6 +788,7 @@ mod tests {
             enclosing_member_lc: None,
             params_count: 0,
             sig_fp: 0,
+            request_page: false,
         };
         assert!(
             implicit_trigger_route_applicable(&ctx, &target, &graph, &index),
@@ -823,6 +832,7 @@ mod tests {
             enclosing_member_lc: None,
             params_count: 0,
             sig_fp: 0,
+            request_page: false,
         };
         assert!(
             implicit_trigger_route_applicable(&ctx, &target, &graph, &index),
@@ -845,6 +855,7 @@ mod tests {
             enclosing_member_lc: Some("no.".into()),
             params_count: 0,
             sig_fp: 0,
+            request_page: false,
         };
         assert!(implicit_trigger_route_applicable(
             &ctx, &target, &graph, &index
@@ -871,6 +882,7 @@ mod tests {
             enclosing_member_lc: None,
             params_count: 0,
             sig_fp: 0,
+            request_page: false,
         };
         assert!(
             !implicit_trigger_route_applicable(&ctx, &target, &graph, &index),
@@ -894,6 +906,7 @@ mod tests {
             enclosing_member_lc: None,
             params_count: 0,
             sig_fp: 0,
+            request_page: false,
         };
         assert!(
             !implicit_trigger_route_applicable(&ctx, &target, &graph, &index),
@@ -918,6 +931,7 @@ mod tests {
             enclosing_member_lc: Some("name".into()), // <— different field
             params_count: 0,
             sig_fp: 0,
+            request_page: false,
         };
         assert!(
             !implicit_trigger_route_applicable(&ctx, &target, &graph, &index),
@@ -948,6 +962,7 @@ mod tests {
             enclosing_member_lc: None,
             params_count: 0,
             sig_fp: 0,
+            request_page: false,
         };
         assert!(
             !implicit_trigger_route_applicable(&ctx, &target, &graph, &index),

@@ -765,16 +765,21 @@ pub fn object_run_reaches(g: &SitedGraph, r: NodeIx) -> bool {
     run_reaches_trigger(
         id.object.kind,
         id.name_lc.as_str(),
-        id.enclosing_member_lc.is_some(),
+        crate::program::resolve::resolver::TriggerLevel::of_routine(id),
     )
 }
 
 /// [`object_run_reaches`] over a routine's parts: a trigger named `name_lc`
-/// (folded) of an object of `kind`, declared in a member (`member`) or at
-/// object level. The one rule both the sited graph and `alsem explain`'s
+/// (folded) of an object of `kind`, declared at `level` (object, request page or
+/// another member). The one rule both the sited graph and `alsem explain`'s
 /// "reached from page actions" (a `RunObject` run) read.
 #[must_use]
-pub fn run_reaches_trigger(kind: al_syntax::ir::ObjectKind, name_lc: &str, member: bool) -> bool {
+pub fn run_reaches_trigger(
+    kind: al_syntax::ir::ObjectKind,
+    name_lc: &str,
+    level: crate::program::resolve::resolver::TriggerLevel,
+) -> bool {
+    use crate::program::resolve::resolver::TriggerLevel;
     use al_syntax::ir::ObjectKind;
     let kind = match kind {
         ObjectKind::PageExtension => ObjectKind::Page,
@@ -782,14 +787,8 @@ pub fn run_reaches_trigger(kind: al_syntax::ir::ObjectKind, name_lc: &str, membe
         k => k,
     };
     match crate::program::resolve::resolver::run_triggers(kind) {
-        Some((object, members)) => {
-            if member {
-                members.contains(&name_lc)
-            } else {
-                object.contains(&name_lc)
-            }
-        }
-        None => kind == ObjectKind::Codeunit && !member && name_lc == "onrun",
+        Some(runs) => runs.contains(level, name_lc),
+        None => kind == ObjectKind::Codeunit && level == TriggerLevel::Object && name_lc == "onrun",
     }
 }
 

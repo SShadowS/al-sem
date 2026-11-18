@@ -1827,6 +1827,7 @@ fn decl_only_id(kind: &str, object: &str, procedure: &str) -> String {
         &to_stable_object_id(&format!("{DECL_GUID}/{kind}/{}", object_key(None, object))),
         &normalized_signature_hash(procedure, &[], None),
         None,
+        false,
     )
 }
 

@@ -239,6 +239,7 @@ fn report_dataitem_implicit_rec_and_name_vars_seeded() {
         "trigger",
         &trig.name,
         trig_member.as_deref(),
+        trig.is_request_page_trigger(),
         &no_params,
         None,
     );
@@ -276,6 +277,7 @@ fn report_dataitem_implicit_rec_and_name_vars_seeded() {
         "procedure",
         &helper.name,
         ir_walk::ir_enclosing_member(helper).as_deref(),
+        helper.is_request_page_trigger(),
         &no_params,
         None,
     );

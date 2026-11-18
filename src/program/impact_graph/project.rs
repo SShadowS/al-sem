@@ -420,13 +420,13 @@ impl<'a> Builder<'a> {
     /// (a request page field's `OnLookup`, a user starts it) is kept, as the
     /// start still shows what it is on.
     fn starts_trigger(t: &RoutineNode, method_lc: &str) -> bool {
-        let (kind, name, member) = (
+        let (kind, name, level) = (
             t.id.object.kind,
             t.id.name_lc.as_str(),
-            t.id.enclosing_member_lc.is_some(),
+            crate::program::resolve::resolver::TriggerLevel::of_routine(&t.id),
         );
-        !super::reverse::run_reaches_trigger(kind, name, member)
-            || crate::program::resolve::resolver::start_runs_trigger(kind, method_lc, name, member)
+        !super::reverse::run_reaches_trigger(kind, name, level)
+            || crate::program::resolve::resolver::start_runs_trigger(kind, method_lc, name, level)
     }
 
     fn abi_object(&self, key: &AbiRoutineKey) -> Option<ObjectNodeId> {
@@ -495,6 +495,8 @@ impl<'a> Builder<'a> {
                             enclosing_member_lc: None,
                             params_count: key.params_count,
                             sig_fp: key.param_type_fp,
+                            // An ABI routine is never a request page's trigger (ENG-20).
+                            request_page: false,
                         };
                         if self.rtn_by_id.contains_key(&rid) {
                             self.engine_route(&from, e.kind, e.shape, &rid, line, conditions);
@@ -591,6 +593,7 @@ impl<'a> Builder<'a> {
                                     enclosing_member_lc: None,
                                     params_count: key.params_count,
                                     sig_fp: key.param_type_fp,
+                                    request_page: false,
                                 };
                                 if self.rtn_by_id.contains_key(&rid) {
                                     Key::Routine(rid)
@@ -1770,6 +1773,7 @@ pub(crate) mod tests {
                     enclosing_member_lc: None,
                     params_count: 0,
                     sig_fp: 0,
+                    request_page: false,
                 },
                 name: name.into(),
                 is_trigger: false,

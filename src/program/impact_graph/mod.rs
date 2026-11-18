@@ -636,6 +636,7 @@ pub(crate) fn stable_routine_id(
         )),
         &hash,
         member.as_deref(),
+        r.request_page,
     );
     // A split declaration's own id, as the model mints it
     // (`workspace::adopt_declaration_ids`).

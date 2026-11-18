@@ -419,6 +419,9 @@ pub struct NodeName<'g> {
     pub routine: &'g str,
     /// `(T1, T2)` when the name is overloaded, else empty.
     pub signature: &'g str,
+    /// A request page's own trigger (ENG-20, `RoutineNodeId::request_page`): its member
+    /// prints as `.requestpage`, whatever the trigger's name.
+    pub request_page: bool,
 }
 
 impl SitedGraph {
@@ -446,6 +449,7 @@ impl SitedGraph {
             member_declared: self.member_names.contains_key(&ix),
             routine,
             signature: self.local_names.get(&ix).map_or("", |l| &*l.signature),
+            request_page: r.request_page,
         })
     }
 

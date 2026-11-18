@@ -1748,6 +1748,7 @@ mod tests {
                 enclosing_member_lc: None,
                 params_count: 0,
                 sig_fp: 0,
+                request_page: false,
             },
             name: name.into(),
             is_trigger: false,
@@ -1786,6 +1787,7 @@ mod tests {
                 enclosing_member_lc: None,
                 params_count: params,
                 sig_fp: 0,
+                request_page: false,
             },
             name: name.into(),
             is_trigger: false,
@@ -1824,6 +1826,7 @@ mod tests {
                 enclosing_member_lc: None,
                 params_count: params,
                 sig_fp: 0,
+                request_page: false,
             },
             name: name.into(),
             is_trigger: false,
@@ -2922,6 +2925,7 @@ mod tests {
             enclosing_member_lc: None,
             params_count: 0,
             sig_fp: 0,
+            request_page: false,
         };
         assert!(
             idx.subscribers_of(&fake_pub).is_empty(),
@@ -2950,6 +2954,7 @@ mod tests {
             enclosing_member_lc: None,
             params_count: 0,
             sig_fp: 0,
+            request_page: false,
         };
 
         let (graph, _, _) = build_event_fixture(
@@ -2997,6 +3002,7 @@ mod tests {
             enclosing_member_lc: None,
             params_count: 0,
             sig_fp: 0,
+            request_page: false,
         };
         let pub_onbeforex_id = RoutineNodeId {
             object: pub_id.clone(),
@@ -3004,6 +3010,7 @@ mod tests {
             enclosing_member_lc: None,
             params_count: 0,
             sig_fp: 0,
+            request_page: false,
         };
 
         let (graph, _, _) = build_event_fixture(
@@ -3058,6 +3065,7 @@ mod tests {
             enclosing_member_lc: None,
             params_count: 0,
             sig_fp: 0,
+            request_page: false,
         };
 
         let mut sa = sub_args("pub", "onafterx");
@@ -3106,6 +3114,7 @@ mod tests {
             enclosing_member_lc: None,
             params_count: 0,
             sig_fp: 0,
+            request_page: false,
         };
         let (graph, _, _) = build_event_fixture(
             vec![make_publisher(
@@ -3298,6 +3307,7 @@ mod tests {
             enclosing_member_lc: None,
             params_count: 1,
             sig_fp: 0,
+            request_page: false,
         };
         let pub_onafterx_2param_id = RoutineNodeId {
             object: pub_id.clone(),
@@ -3305,6 +3315,7 @@ mod tests {
             enclosing_member_lc: None,
             params_count: 2,
             sig_fp: 0,
+            request_page: false,
         };
 
         // Subscriber params=0: both overloads satisfy >=0 but neither equals 0.
@@ -3370,6 +3381,7 @@ mod tests {
             enclosing_member_lc: None,
             params_count: 0,
             sig_fp: 0,
+            request_page: false,
         };
         let (graph, _, _) = build_event_fixture(
             vec![make_publisher(
@@ -3420,6 +3432,7 @@ mod tests {
             enclosing_member_lc: None,
             params_count: 0,
             sig_fp: 0,
+            request_page: false,
         };
         let (graph, _, _) = build_event_fixture(
             vec![make_publisher(
@@ -3683,6 +3696,7 @@ mod tests {
             enclosing_member_lc: None,
             params_count: 0,
             sig_fp: 0,
+            request_page: false,
         };
         let pub_onafterx_1param_id = RoutineNodeId {
             object: pub_id.clone(),
@@ -3690,6 +3704,7 @@ mod tests {
             enclosing_member_lc: None,
             params_count: 1,
             sig_fp: 0,
+            request_page: false,
         };
 
         // Subscriber params=0: both >=0, but exactly ONE has params==0.
@@ -3806,6 +3821,7 @@ mod tests {
             enclosing_member_lc: None,
             params_count: params,
             sig_fp: 0,
+            request_page: false,
         };
 
         let idx = SubscriberIndex::build(&graph);

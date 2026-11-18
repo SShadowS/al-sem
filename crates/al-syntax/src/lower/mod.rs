@@ -9,8 +9,9 @@
 use crate::casing::IdentifierFoldExt;
 use crate::ir::{
     AlFile, BinaryOp, Block, BlockId, BlockItem, CaseBranch, Expr, ExprId, ExprKind, Ir, Literal,
-    ObjectDecl, ObjectKind, Origin, Param, ParseStatus, Point, PreprocGroup, RoutineDecl,
-    RoutineKind, SourceComment, Stmt, StmtId, StmtKind, SyntaxIssue, TypeOp, UnaryOp, VarDecl,
+    ObjectDecl, ObjectKind, Origin, Param, ParseStatus, Point, PreprocGroup, REQUEST_PAGE_MEMBER,
+    RoutineDecl, RoutineKind, SourceComment, Stmt, StmtId, StmtKind, SyntaxIssue, TypeOp, UnaryOp,
+    VarDecl,
 };
 use crate::raw::{FieldName, RawKind, RawNode};
 
@@ -1682,11 +1683,16 @@ fn collect_routines<'t>(
                 // be treated as report-dataset context, even under a pathological/
                 // decompiled nesting the real AL compiler would never accept ("parse
                 // structure, don't validate").
+                //
+                // ENG-20: the section is the member of its own triggers (`RequestPage`,
+                // see `lower_routine`), so a request page's `OnOpenPage` and a report
+                // procedure `OnOpenPage()` (alc accepts the pair) have distinct ids. Its
+                // controls' and actions' triggers keep their own member.
                 pending.clear();
                 collect_routines(
                     child.named_children().collect(),
                     dataitem_table,
-                    member,
+                    Some(child),
                     false,
                     ctx,
                     Vec::new(),
@@ -2888,8 +2894,15 @@ fn lower_routine<'t>(
     // and `originating_object` too: it keeps `trigger-page` (inserted unconditionally)
     // but loses `page-action` and its evidence containment range. That is the intended
     // trade — a meaningless id is worse than a missing anchor.
+    // ENG-20: a request page's own trigger (the section itself is its member).
+    let request_page = member.is_some_and(|m| m.kind() == RawKind::RequestpageSection);
     let enclosing_member = member
         .and_then(|m| {
+            // ENG-20: a request page has no name; its own triggers' member is
+            // `REQUEST_PAGE_MEMBER` (shown as is), and `request_page` keeps it apart in ids.
+            if m.kind() == RawKind::RequestpageSection {
+                return Some((REQUEST_PAGE_MEMBER.to_string(), origin_of(m)));
+            }
             let name_node = m.field(FieldName::Name).or_else(|| {
                 if matches!(
                     m.kind(),
@@ -3248,6 +3261,7 @@ fn lower_routine<'t>(
             dataitem_source_table,
             preproc_context,
             doc: None,
+            request_page,
         }
         .boxed(),
         body,

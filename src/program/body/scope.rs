@@ -165,6 +165,7 @@ pub fn compute_routine_id(
     routine_kind: &str,
     routine_name: &str,
     enclosing_member: Option<&str>,
+    request_page: bool,
     parameters: &[ParameterSymbol],
     return_type_text: Option<&str>,
 ) -> String {
@@ -185,6 +186,7 @@ pub fn compute_routine_id(
         routine_name: routine_name.to_string(),
         normalized_signature_hash,
         enclosing_member: enclosing_member.map(|m| m.to_string()),
+        request_page,
     };
     encode_routine_id(&key)
 }
