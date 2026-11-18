@@ -1703,7 +1703,7 @@ struct ConeFactEntry {
     rep: Arc<CapabilityFact>,
     /// `rep_key(rep)`, computed ONCE when the entry is minted.
     ///
-    /// `merge_cone`'s tie-break used to call `rep_key` on BOTH sides of every
+    /// The cone merge's tie-break used to call `rep_key` on BOTH sides of every
     /// collision — 1,243,002 collisions per 8020 run, so ~2.5 M calls, each one
     /// building a `String` by JSON-serializing `resource_arg_source` and `extra`.
     /// The rep is immutable across merges, so the key is too.
@@ -2484,12 +2484,10 @@ fn build_succ_sccs(
     succ
 }
 
-/// Build one SCC's fact cone (members at dist 0 + successor cones at dist+1).
-/// Mirrors `factConeForScc`.
 /// One candidate entry of a cone being built (ENG-130): minted here (a direct fact, or a
 /// successor's entry carried across a guarded edge), or a successor cone's entry BORROWED, its
 /// dist one more and its guard dropped. A candidate that loses is never cloned, so it touches
-/// no refcount (as `merge_cone`'s borrowed lookup did).
+/// no refcount (as the old per-candidate map merge's borrowed lookup did).
 enum Cand<'c> {
     Owned(Arc<str>, ConeFactEntry),
     Succ(&'c Arc<str>, &'c ConeFactEntry),
@@ -2534,9 +2532,11 @@ impl Cand<'_> {
 
 /// The cone of the candidates, in key order: per key the winner as if each candidate were
 /// merged in turn (mirrors `mergeCone`: min dist; equal dist, the smaller rep key; a full tie
-/// keeps the earlier candidate). The sort is stable, so equal keys stay in merge order, and it finds
-/// the presorted runs the successor cones contribute: a merge of sorted runs, not a B-tree
-/// insert per candidate (ENG-130).
+/// keeps the earlier candidate). The sort is stable, so equal keys stay in merge order, and it
+/// finds the presorted runs the successor cones contribute (mostly presorted: a guarded entry
+/// read under its base key can fall out of its run), so it works as a merge of sorted runs,
+/// not a B-tree insert per candidate (ENG-130). Transient memory: every candidate at once,
+/// not one slot per distinct key (measured in the ENG-130 CHANGELOG entry).
 fn cone_of_candidates(mut cands: Vec<Cand<'_>>) -> FrozenCone {
     use crate::engine::l5::detector_context::cones_census as census;
     census::add_gated(&census::MERGE_CALLS, cands.len() as u64);
@@ -2559,6 +2559,10 @@ fn cone_of_candidates(mut cands: Vec<Cand<'_>>) -> FrozenCone {
     FrozenCone(out.into_boxed_slice())
 }
 
+/// Build one SCC's fact cone (members at dist 0 + successor cones at dist+1).
+/// Mirrors `factConeForScc`. The candidates are gathered in the old merge order (direct
+/// facts, edge-carried entries, then each successor in `succ_ids` order), which decides a
+/// full tie ([`cone_of_candidates`]).
 fn fact_cone_for_scc(
     members: &[String],
     succ_ids: &BTreeSet<usize>,
@@ -9862,14 +9866,6 @@ mod cone_memory_step1_tests {
         );
     }
 
-    /// ENG-109: a frozen cone keeps its map's KEY ORDER, and a reader sees that order. A
-    /// downstream cone holds `K` and its guarded copy (one base key, two reps) at the SAME
-    /// distance; at equal distance and first hop the BFS walk keeps the first entry it meets
-    /// per base key (since ENG-115 a nearer one would replace it), and in key order the plain
-    /// `K` comes first, so its rep is picked. Hand-stated: the cone is built literally and
-    /// frozen the one way production freezes. DISCRIMINATION: a freeze that reverses the
-    /// order picks the guarded copy's rep (sol and Fable, ENG-109 review: no other test pins
-    /// the order).
     /// ENG-130: `cone_of_candidates` keeps, per key, the winner a merge of the candidates in
     /// turn keeps (min dist; equal dist, the smaller rep key; a full tie, the EARLIER one),
     /// emits the keys in order whatever order they came in, and a successor's entry carries
@@ -9924,6 +9920,60 @@ mod cone_memory_step1_tests {
         );
     }
 
+    /// ENG-130 (Fable): `fact_cone_for_scc` with no anchor (a recursive or multi-member SCC)
+    /// reads a successor's guarded entry under its BASE key, one hop further and unguarded, so
+    /// it collapses with the plain copy of the same fact. Hand-stated successor cone: `K` at
+    /// dist 3 and its guarded copy `K|..` at dist 1; the cone keeps one `K`, the guarded
+    /// copy's rep at dist 2.
+    #[test]
+    fn a_successors_guarded_entry_enters_under_its_base_key() {
+        let entry = |witness: &str, dist: usize, guard: Option<Arc<EntryGuard>>| {
+            let mut f = insert("M", "t/K");
+            f.witness_operation_id = Some(witness.into());
+            ConeFactEntry {
+                rep_key: Arc::from(rep_key(&f)),
+                rep: Arc::new(f),
+                dist,
+                guard,
+            }
+        };
+        let base: Arc<str> = Arc::from("K");
+        let gkey = guarded_key(&base, &[(0, true)]);
+        let mut succ: ConeFacts = BTreeMap::new();
+        succ.insert(Arc::clone(&base), entry("plain", 3, None));
+        succ.insert(
+            Arc::clone(&gkey),
+            entry(
+                "guarded",
+                1,
+                Some(Arc::new(EntryGuard {
+                    reqs: vec![(0, true)],
+                    base_key: Arc::clone(&base),
+                })),
+            ),
+        );
+        let cones: ConeMap = [(1usize, Arc::new(FrozenCone::freeze(succ)))].into();
+        let cone = fact_cone_for_scc(
+            &strs(&["C"]),
+            &[1usize].into(),
+            &cones,
+            &HashMap::new(),
+            None,
+        );
+        let got: Vec<(&str, &str, usize, bool)> = cone
+            .iter()
+            .map(|(k, e)| {
+                (
+                    &**k,
+                    e.rep.witness_operation_id.as_deref().unwrap(),
+                    e.dist,
+                    e.guard.is_some(),
+                )
+            })
+            .collect();
+        assert_eq!(got, [("K", "guarded", 2, false)]);
+    }
+
     /// ENG-130: a full tie keeps the EARLIER candidate at any size, which needs the sort to
     /// keep equal keys in merge order (a small input passes with an unstable sort too: below
     /// ~20 elements it is an insertion sort). Two keys interleaved, 200 full ties each.
@@ -9955,6 +10005,14 @@ mod cone_memory_step1_tests {
         assert_eq!(got, [("a", "w1"), ("b", "w0")]);
     }
 
+    /// ENG-109: a reader sees a cone in KEY ORDER. A downstream cone holds `K` and its
+    /// guarded copy (one base key, two reps) at the SAME distance; at equal distance and first
+    /// hop the BFS walk keeps the first entry it meets per base key (since ENG-115 a nearer one
+    /// would replace it), and in key order the plain `K` comes first, so its rep is picked.
+    /// Hand-stated: the cone is built literally (a test-only freeze of a `BTreeMap`). It pins
+    /// the reader's first-in-key-order pick; production's key order is pinned by
+    /// `a_cone_keeps_each_keys_merge_winner_in_key_order` (ENG-130). DISCRIMINATION: a freeze
+    /// that reverses the order picks the guarded copy's rep (sol and Fable, ENG-109 review).
     #[test]
     fn a_frozen_cone_keeps_key_order_for_an_equal_distance_bfs_pick() {
         let edge_cm = TypedOutEdge::new(
