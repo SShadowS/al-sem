@@ -635,6 +635,53 @@ fn before_after_measures_only_inside_the_slot() {
     assert!(!t.log().contains("fingerprint"), "{}", t.log());
 }
 
+/// ⟨TLS-89⟩ A build still running when its timed hold is to begin: the run
+/// measures nothing, says why, fails, and frees the slot it took. The stand-in
+/// build is bash through a symlink named `t89b<test pid>` (unique: `pgrep -x`
+/// sees the whole machine).
+///
+/// Mutation (2026-11-18): the `rc == 6` branch of `take_slot` dropped -> the
+/// generic "the CDO slot was not taken" message instead (red); restored, green.
+#[test]
+fn before_after_measures_nothing_beside_a_build() {
+    let t = Ba::new();
+    let name = format!("t89b{}", std::process::id());
+    let fake = t.path(&name);
+    std::os::unix::fs::symlink("/bin/bash", &fake).unwrap();
+    let build = crate::cdo_slot::Reap(
+        std::process::Command::new(&fake)
+            .args(["-c", "sleep 600; true"])
+            .spawn()
+            .unwrap(),
+    );
+    let out = t.out("out");
+    let (code, text) = t.run(
+        &["--out", &out, &t.c1, &t.c2],
+        &[
+            ("CDO_SLOT_BUILD_NAMES", name.as_str()),
+            ("CDO_SLOT_TIMED_WAIT_S", "1"),
+        ],
+    );
+    drop(build);
+    assert_eq!(code, Some(1), "{text}");
+    assert!(
+        text.contains("builds still ran when the timed hold began"),
+        "{text}"
+    );
+    assert!(!t.log().contains("fingerprint"), "{}", t.log());
+    let status = std::process::Command::new("bash")
+        .arg(t.path("repo/scripts/cdo-slot"))
+        .arg("status")
+        .env("CDO_SLOT_DIR", t.path("slot"))
+        .output()
+        .unwrap();
+    assert_eq!(
+        status.status.code(),
+        Some(0),
+        "the slot stays held: {status:?}"
+    );
+}
+
 /// Run inside a hold it shares (the holder's `CDO_SLOT_TOKEN`, as under
 /// `cdo-slot run` or `land`), it measures and leaves that hold in place.
 ///
