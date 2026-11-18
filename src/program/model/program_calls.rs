@@ -136,7 +136,7 @@ use crate::program::resolve::edge::{
     callee_fp,
 };
 use crate::program::resolve::full::{
-    ClassifiedEdge, ObligationId, ProgramContext, ProgramReport, can_fire_trigger,
+    ClassifiedEdge, ObligationKind, ProgramContext, ProgramReport, can_fire_trigger,
 };
 use crate::program::resolved::{EdgeView, ProgramMeta, ProgramScope, ResolvedProgram};
 use crate::snapshot::TrustTier;
@@ -386,7 +386,7 @@ fn model_key(a: &crate::program::body::features::PAnchor) -> SiteKey {
 /// unit by the caller, [`model_unit`]).
 fn program_key(s: &crate::program::resolve::edge::CanonicalSpan) -> SiteKey {
     (
-        s.unit.clone(),
+        s.unit.to_string(),
         s.start.line,
         s.start.col,
         s.end.line,
@@ -450,7 +450,7 @@ pub(crate) fn join_reads<'a>(
 ) -> impl Iterator<Item = &'a ClassifiedEdge> {
     let primary = view.primary_app_ref;
     view.all_edges().filter(move |ce| {
-        matches!(ce.obligation_id, ObligationId::CallSite { .. })
+        ce.obligation_kind() == ObligationKind::CallSite
             && apps.contains(&ce.edge.from.object.app)
             && caller_held(&ce.edge.from, primary, demand)
     })
@@ -1673,12 +1673,8 @@ fn convert<'a>(
     // catalog call shares), to name the codeunits it starts.
     let background_edges: HashMap<_, &ClassifiedEdge> = view
         .all_edges()
-        .filter_map(|ce| match &ce.obligation_id {
-            ObligationId::Background {
-                caller,
-                span,
-                callee_fp,
-            } => Some(((caller, span, *callee_fp), ce)),
+        .filter_map(|ce| match ce.obligation_kind() {
+            ObligationKind::Background => Some((ce.obligation_site()?, ce)),
             _ => None,
         })
         .collect();
@@ -1686,12 +1682,8 @@ fn convert<'a>(
     // `ImplicitTrigger` edge shares), and each publisher's event flow.
     let table_event_edges: HashMap<_, &ClassifiedEdge> = view
         .all_edges()
-        .filter_map(|ce| match &ce.obligation_id {
-            ObligationId::TableEvent {
-                caller,
-                span,
-                callee_fp,
-            } => Some(((caller, span, *callee_fp), ce)),
+        .filter_map(|ce| match ce.obligation_kind() {
+            ObligationKind::TableEvent => Some((ce.obligation_site()?, ce)),
             _ => None,
         })
         .collect();
@@ -1716,8 +1708,8 @@ fn convert<'a>(
             HashMap::new()
         } else {
             view.all_edges()
-                .filter_map(|ce| match &ce.obligation_id {
-                    ObligationId::Publisher(p) => Some((p, ce)),
+                .filter_map(|ce| match ce.obligation_kind() {
+                    ObligationKind::Publisher => Some((&ce.edge.from, ce)),
                     _ => None,
                 })
                 .collect()
@@ -1781,7 +1773,7 @@ fn convert<'a>(
             // procedure named `Run`), whether or not its `OnRun` is a row here
             // (none declared, or a symbol-only dependency).
             let starts_codeunit = program_edge
-                .and_then(|ce| conv.site_facts.get(&ce.obligation_id))
+                .and_then(|ce| conv.site_facts.get(&ce.obligation_id()))
                 .is_some_and(|f| {
                     f.starts_object == crate::program::resolve::dataset::ObjectStart::Yes
                         && f.receiver.as_ref().is_some_and(|r| {
@@ -1832,7 +1824,7 @@ fn convert<'a>(
             bindings_per_site.push((cs.id.clone(), bindings));
             // B6: the platform's own operations on the run object's dataset.
             if let Some(run) = program_edge
-                .and_then(|ce| conv.site_facts.get(&ce.obligation_id))
+                .and_then(|ce| conv.site_facts.get(&ce.obligation_id()))
                 .and_then(|f| f.rare().dataset_run.as_ref())
             {
                 let (ops, op_edges) = conv.dataset_operations(ix, r, cs, run, &event_flow, &mut c);
@@ -1849,7 +1841,7 @@ fn convert<'a>(
             }
             // ENG-06 (B9): a `FieldRef.Validate(…)` validates a field.
             if let Some(frv) = program_edge
-                .and_then(|ce| conv.site_facts.get(&ce.obligation_id))
+                .and_then(|ce| conv.site_facts.get(&ce.obligation_id()))
                 .and_then(|f| f.rare().field_ref_validate.as_ref())
             {
                 let (op, op_edges) =
@@ -1868,7 +1860,7 @@ fn convert<'a>(
             }
             // ENG-12: a record operation on a function's returned record.
             if let Some(cr) = program_edge
-                .and_then(|ce| conv.site_facts.get(&ce.obligation_id))
+                .and_then(|ce| conv.site_facts.get(&ce.obligation_id()))
                 .and_then(|f| f.rare().call_result_record.as_ref())
             {
                 let (mut op, op_edges) =
@@ -1893,7 +1885,7 @@ fn convert<'a>(
             if let Some(ce) = j.ops.get(&(ri, oi)) {
                 c.adapter_program_trigger_ops += 1;
                 // ENG-06: a trigger-capable op on a table that did not resolve.
-                if let Some(f) = conv.site_facts.get(&ce.obligation_id).map(|f| f.rare())
+                if let Some(f) = conv.site_facts.get(&ce.obligation_id()).map(|f| f.rare())
                     && let Some(how) = f.record_table_unresolved
                 {
                     if conv.unknown_table_may_run(how, &f.open) {
@@ -2177,18 +2169,14 @@ impl<'a> Converter<'a> {
             RouteTarget::Builtin(b) => bg::starter_of_builtin(b),
             _ => None,
         })?;
-        let ObligationId::CallSite {
-            caller,
-            span,
-            callee_fp,
-        } = &ce.obligation_id
-        else {
+        if ce.obligation_kind() != ObligationKind::CallSite {
             return None;
-        };
+        }
+        let (caller, span, callee_fp) = ce.obligation_site()?;
         // The objects the start's edge reaches (an object is the same whether
         // its route is the failure codeunit's or not).
         let reached: Vec<&ObjectNode> = background_edges
-            .get(&(caller, span, *callee_fp))
+            .get(&(caller, span, callee_fp))
             .into_iter()
             .flat_map(|e| e.edge.routes.iter())
             .filter_map(|r| {
@@ -2244,7 +2232,7 @@ impl<'a> Converter<'a> {
         ce: &ClassifiedEdge,
     ) -> Option<&'a crate::program::resolve::full::ReceiverFact> {
         self.site_facts
-            .get(&ce.obligation_id)
+            .get(&ce.obligation_id())
             .and_then(|f| f.receiver.as_ref())
     }
 
@@ -2311,7 +2299,7 @@ impl<'a> Converter<'a> {
         // B4: the resolver's one rule for a call that starts an object.
         e.starts_object = self
             .site_facts
-            .get(&ce.obligation_id)
+            .get(&ce.obligation_id())
             .map_or_else(Default::default, |f| f.starts_object);
         let external = if is_run {
             Resolution::Opaque
@@ -2331,7 +2319,7 @@ impl<'a> Converter<'a> {
                 // type; into a dependency, an external callee of that object.
                 let target = self
                     .site_facts
-                    .get(&ce.obligation_id)
+                    .get(&ce.obligation_id())
                     .and_then(|f| f.rare().run_target.as_ref());
                 // A run of an object whose SOURCE is loaded and declares no
                 // trigger the run reaches (`resolver::run_triggers`) runs no
@@ -2792,7 +2780,7 @@ impl<'a> Converter<'a> {
         }
         c.adapter_interface_dependency_impls += dependency.len();
 
-        let facts = self.site_facts.get(&ce.obligation_id).map(|f| f.rare());
+        let facts = self.site_facts.get(&ce.obligation_id()).map(|f| f.rare());
         let name_lc = facts.and_then(|f| f.interface.clone()).unwrap_or_default();
         let interface_name = self
             .graph
@@ -3286,7 +3274,7 @@ impl<'a> Converter<'a> {
             && matches!(id.name_lc.as_str(), "onprereport" | "onpostreport")
             && self
                 .site_facts
-                .get(&ce.obligation_id)
+                .get(&ce.obligation_id())
                 .is_some_and(|f| f.request_page_may_cancel)
     }
 
@@ -3419,22 +3407,20 @@ impl Converter<'_> {
         event_flow: &HashMap<&RoutineNodeId, &ClassifiedEdge>,
         c: &mut SiteCensus,
     ) -> Vec<CallEdge> {
-        let ObligationId::CallSite {
-            caller,
-            span,
-            callee_fp,
-        } = &ce.obligation_id
-        else {
+        if ce.obligation_kind() != ObligationKind::CallSite {
+            return Vec::new();
+        }
+        let Some((caller, span, callee_fp)) = ce.obligation_site() else {
             return Vec::new();
         };
-        let Some(te) = table_event_edges.get(&(caller, span, *callee_fp)) else {
+        let Some(te) = table_event_edges.get(&(caller, span, callee_fp)) else {
             return Vec::new();
         };
         // What the site proves about the dispatch (`table_event_guard`): the
         // program resolver's declared-temporary / RunTrigger reading.
         let raise = self
             .site_facts
-            .get(&ce.obligation_id)
+            .get(&ce.obligation_id())
             .and_then(|f| f.rare().table_event_raise)
             .unwrap_or_default();
         self.table_event_edges(ix, r, op, &te.edge.routes, raise, event_flow, c)
@@ -4320,15 +4306,15 @@ mod tests {
             .edges
             .iter()
             .position(|ce| {
-                matches!(ce.obligation_id, ObligationId::CallSite { .. })
+                ce.obligation_kind() == ObligationKind::CallSite
                     && ce.edge.from.object.app == primary
             })
             .unwrap();
-        let mut copy = ClassifiedEdge {
-            obligation_id: report.edges[i].obligation_id.clone(),
-            edge: report.edges[i].edge.clone(),
-            site: report.edges[i].site,
-        };
+        let mut copy = ClassifiedEdge::new(
+            report.edges[i].obligation_kind(),
+            report.edges[i].edge.clone(),
+            report.edges[i].site,
+        );
         copy.edge.site.callee_fingerprint = callee_fp("NotTheCallee");
         assert_ne!(
             copy.edge.site.callee_fingerprint, report.edges[i].edge.site.callee_fingerprint,

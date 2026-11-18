@@ -374,7 +374,7 @@ fn compiler_only_facts(ctx: &ProgramContext, report: &ProgramReport) -> Compiler
                 }
             }
         }
-        if let Some(f) = report.site_facts.get(&ce.obligation_id) {
+        if let Some(f) = report.site_facts.get(&ce.obligation_id()) {
             let caller = anon_caller(&routine_of_node(&ce.edge.site.caller, apps));
             // Program lines are 0-based, the compiler's 1-based.
             let line = ce.edge.site.span.start.line + 1;
@@ -448,7 +448,7 @@ fn classify_program_only(
     let facts = |i: usize| -> SiteFacts {
         report
             .site_facts
-            .get(&report.edges[i].obligation_id)
+            .get(&report.edges[i].obligation_id())
             .cloned()
             .unwrap_or_default()
     };

@@ -117,7 +117,7 @@ pub fn synthetic_unknown_edge_for_test() -> Vec<Edge> {
         site: SiteId {
             caller: caller.clone(),
             span: CanonicalSpan {
-                unit: "Test.al".to_string(),
+                unit: "Test.al".into(),
                 start: SourcePos { line: 0, col: 0 },
                 end: SourcePos { line: 0, col: 10 },
             },

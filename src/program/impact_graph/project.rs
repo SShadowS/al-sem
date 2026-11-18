@@ -20,7 +20,7 @@ use crate::program::resolve::edge::{
     AbiRoutineKey, Condition, DispatchShape, EdgeKind, EvidenceKind, OpenBound, Route, RouteTarget,
 };
 use crate::program::resolve::event::PublisherKind;
-use crate::program::resolve::full::{FieldRefValidate, ObligationId};
+use crate::program::resolve::full::{FieldRefValidate, ObligationId, ObligationKind};
 use crate::program::resolve::index::{ObjectRefResolution, ResolveIndex};
 use crate::program::resolved::EdgeView;
 use crate::snapshot::TrustTier;
@@ -443,23 +443,23 @@ impl<'a> Builder<'a> {
         for ce in inp.edges.all_edges() {
             let e = &ce.edge;
             let from = Key::Routine(e.from.clone());
-            let line = match ce.obligation_id {
-                ObligationId::CallSite { .. }
-                | ObligationId::Background { .. }
-                | ObligationId::TableEvent { .. } => Some(Anchor {
+            let line = match ce.obligation_kind() {
+                ObligationKind::CallSite
+                | ObligationKind::Background
+                | ObligationKind::TableEvent => Some(Anchor {
                     unit: self.sited.unit(&e.site.span.unit),
                     start_line: e.site.span.start.line,
                     start_col: e.site.span.start.col,
                     end_line: e.site.span.end.line,
                     end_col: e.site.span.end.col,
                 }),
-                ObligationId::Publisher(_) => None,
+                ObligationKind::Publisher => None,
             };
-            self.site_start = match ce.obligation_id {
-                ObligationId::CallSite { .. } => inp
+            self.site_start = match ce.obligation_kind() {
+                ObligationKind::CallSite => inp
                     .edges
                     .site_facts
-                    .get(&ce.obligation_id)
+                    .get(&ce.obligation_id())
                     .and_then(|f| f.rare().start_method.as_deref()),
                 _ => None,
             };
@@ -475,7 +475,12 @@ impl<'a> Builder<'a> {
                 match &r.target {
                     RouteTarget::Builtin(_) | RouteTarget::Unresolved => {}
                     RouteTarget::Routine(rid) => {
-                        self.site_guard = self.table_event_guard(&ce.obligation_id, rid);
+                        // Only a table-event or publisher obligation has a guard: build no
+                        // id for the rest (ENG-87, sol).
+                        self.site_guard = match ce.obligation_kind() {
+                            ObligationKind::CallSite | ObligationKind::Background => 0,
+                            _ => self.table_event_guard(&ce.obligation_id(), rid),
+                        };
                         self.engine_route(&from, e.kind, e.shape, rid, line, conditions);
                         self.site_guard = 0;
                     }
@@ -522,11 +527,11 @@ impl<'a> Builder<'a> {
                 }
             }
             // A run of an object that declares no entry trigger still runs it.
-            if let ObligationId::CallSite { .. } = ce.obligation_id
+            if ce.obligation_kind() == ObligationKind::CallSite
                 && let Some(t) = inp
                     .edges
                     .site_facts
-                    .get(&ce.obligation_id)
+                    .get(&ce.obligation_id())
                     .and_then(|f| f.rare().run_target.as_ref())
             {
                 let to = self.run_key(t);
@@ -549,8 +554,8 @@ impl<'a> Builder<'a> {
             // ENG-12 / ENG-06: so does a record operation the site facts carry
             // instead of the edge (a call result's, `GetRef().Modify(true)`; a
             // FieldRef's `Validate`), its trigger rule already applied.
-            if let ObligationId::CallSite { .. } = ce.obligation_id
-                && let Some(facts) = inp.edges.site_facts.get(&ce.obligation_id)
+            if ce.obligation_kind() == ObligationKind::CallSite
+                && let Some(facts) = inp.edges.site_facts.get(&ce.obligation_id())
             {
                 let facts = facts.rare();
                 let mut ops: Vec<(&[Route], &[Route], Conf)> = Vec::new();
@@ -613,18 +618,18 @@ impl<'a> Builder<'a> {
                     }
                 }
             }
-            let bounds: &[OpenBound] = match ce.obligation_id {
-                ObligationId::CallSite { .. } => inp
+            let bounds: &[OpenBound] = match ce.obligation_kind() {
+                ObligationKind::CallSite => inp
                     .edges
                     .site_facts
-                    .get(&ce.obligation_id)
+                    .get(&ce.obligation_id())
                     .map(|f| f.rare().open.as_slice())
                     .unwrap_or(&[]),
                 // A background start's dynamic codeunits are its catalog
                 // call's open bound (`full::resolve_file_obligations`).
-                ObligationId::Publisher(_)
-                | ObligationId::Background { .. }
-                | ObligationId::TableEvent { .. } => &[],
+                ObligationKind::Publisher
+                | ObligationKind::Background
+                | ObligationKind::TableEvent => &[],
             };
             let via = if e.shape == DispatchShape::DynamicOpen {
                 "dynamic"
@@ -1821,9 +1826,9 @@ pub(crate) mod tests {
                 span: span.clone(),
                 callee_fp: fp,
             };
-            self.edges.push(ClassifiedEdge {
-                obligation_id: ob.clone(),
-                edge: EngineEdge {
+            self.edges.push(ClassifiedEdge::new(
+                ObligationKind::CallSite,
+                EngineEdge {
                     from: from.clone(),
                     site: SiteId {
                         caller: from.clone(),
@@ -1837,34 +1842,28 @@ pub(crate) mod tests {
                     },
                     routes,
                 },
-                site: None,
-            });
+                None,
+            ));
             ob
         }
 
         /// A static background start's own edge (F3), under its `Background`
         /// obligation, as `full::resolve_file_obligations` emits it.
         pub(crate) fn background(&mut self, from: &RoutineNodeId, routes: Vec<Route>, line: u32) {
-            let ob = self.edge(
+            self.edge(
                 from,
                 EdgeKind::BackgroundStart,
                 DispatchShape::Multicast,
                 routes,
                 line,
             );
-            let ObligationId::CallSite {
-                caller,
-                span,
-                callee_fp,
-            } = ob
-            else {
-                unreachable!("`edge` makes a call-site obligation");
-            };
-            self.edges.last_mut().expect("just pushed").obligation_id = ObligationId::Background {
-                caller,
-                span,
-                callee_fp,
-            };
+            // The same site, under its `Background` obligation.
+            let last = self.edges.pop().expect("just pushed");
+            self.edges.push(ClassifiedEdge::new(
+                ObligationKind::Background,
+                last.edge,
+                last.site,
+            ));
         }
 
         pub(crate) fn call(&mut self, from: &RoutineNodeId, to: &RoutineNodeId, line: u32) {
@@ -1878,14 +1877,14 @@ pub(crate) mod tests {
         }
 
         pub(crate) fn event(&mut self, publisher: &RoutineNodeId, subscribers: &[&RoutineNodeId]) {
-            self.edges.push(ClassifiedEdge {
-                obligation_id: ObligationId::Publisher(publisher.clone()),
-                edge: EngineEdge {
+            self.edges.push(ClassifiedEdge::new(
+                ObligationKind::Publisher,
+                EngineEdge {
                     from: publisher.clone(),
                     site: SiteId {
                         caller: publisher.clone(),
                         span: CanonicalSpan {
-                            unit: String::new(),
+                            unit: "".into(),
                             start: SourcePos { line: 0, col: 0 },
                             end: SourcePos { line: 0, col: 0 },
                         },
@@ -1898,8 +1897,8 @@ pub(crate) mod tests {
                     },
                     routes: subscribers.iter().map(|s| src(s)).collect(),
                 },
-                site: None,
-            });
+                None,
+            ));
         }
 
         fn project(&self, primary: AppRef) -> Out {
@@ -2896,14 +2895,14 @@ pub(crate) mod tests {
         let r = w.rtn(&dep, "R");
         // The workspace reaches R, so pruning keeps it.
         w.call(&caller, &r, 1);
-        w.edges.push(ClassifiedEdge {
-            obligation_id: ObligationId::Publisher(r.clone()),
-            edge: EngineEdge {
+        w.edges.push(ClassifiedEdge::new(
+            ObligationKind::Publisher,
+            EngineEdge {
                 from: r.clone(),
                 site: SiteId {
                     caller: r.clone(),
                     span: CanonicalSpan {
-                        unit: String::new(),
+                        unit: "".into(),
                         start: SourcePos { line: 0, col: 0 },
                         end: SourcePos { line: 0, col: 0 },
                     },
@@ -2916,8 +2915,8 @@ pub(crate) mod tests {
                 },
                 routes: vec![unknown()],
             },
-            site: None,
-        });
+            None,
+        ));
         let site = w.edge(
             &r,
             EdgeKind::Call,

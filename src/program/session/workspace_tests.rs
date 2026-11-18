@@ -521,14 +521,10 @@ fn dependency_site_facts_hit_after_a_partial_refresh(mode: MemoryMode) {
     let cold = ResolvedProgram::build(&inputs, ProgramScope::CrossApp).expect("cold program");
     let mut with_facts = 0;
     for e in cold.body().dependency_body_edges() {
-        if let Some(want) = cold.body().site_facts.get(&e.obligation_id) {
+        let id = e.obligation_id();
+        if let Some(want) = cold.body().site_facts.get(&id) {
             with_facts += 1;
-            assert_eq!(
-                session.body().site_facts.get(&e.obligation_id),
-                Some(want),
-                "{:?}",
-                e.obligation_id
-            );
+            assert_eq!(session.body().site_facts.get(&id), Some(want), "{:?}", id);
         }
     }
     assert!(with_facts > 0, "precondition: dependency sites carry facts");

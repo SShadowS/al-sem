@@ -2008,7 +2008,7 @@ mod tests {
         let route = report
             .edges
             .iter()
-            .find(|ce| ce.obligation_id == site.obligation_id())
+            .find(|ce| ce.obligation_id() == site.obligation_id())
             .map(|ce| &ce.edge.routes[0])
             .expect("the report has Beta's call site");
         assert!(

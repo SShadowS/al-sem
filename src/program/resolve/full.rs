@@ -119,15 +119,151 @@ pub enum ObligationId {
     },
 }
 
+/// Which [`ObligationId`] variant an edge was resolved from (ENG-87): the id's other parts are
+/// the edge's own (see [`ClassifiedEdge::obligation_id`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ObligationKind {
+    CallSite,
+    Publisher,
+    Background,
+    TableEvent,
+}
+
 /// A classified edge annotated with the obligation it was resolved from.
-#[derive(Clone, Debug)]
+///
+/// ENG-87: the obligation is stored as its kind only. Every obligation's other parts are the
+/// edge's: a site obligation's `(caller, span, callee_fp)` is `edge.site`, a publisher's
+/// routine is `edge.from`, so [`Self::obligation_id`] derives the id and an edge cannot carry
+/// an obligation that disagrees with it. (It held a full copy, 128 bytes plus the span's file
+/// text, on each of CDO's 438,823 retained dependency edges.)
+#[derive(Clone)]
 pub struct ClassifiedEdge {
-    pub obligation_id: ObligationId,
+    obligation: ObligationKind,
     pub edge: Edge,
     /// #160 step 10 (§4.2): the call site's key and `fires`, stamped when the
     /// resolution was given a file; `None` for publisher edges and the LSP's
     /// unstamped path.
     pub site: Option<crate::program::site_key::ProgramSite>,
+}
+
+/// The pre-ENG-87 derived form, with the derived id in its old field (sol review): the session's
+/// program dump prints edges with `Debug`, and its bytes must not move with the storage.
+impl std::fmt::Debug for ClassifiedEdge {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ClassifiedEdge")
+            .field("obligation_id", &self.obligation_id())
+            .field("edge", &self.edge)
+            .field("site", &self.site)
+            .finish()
+    }
+}
+
+impl ClassifiedEdge {
+    /// The edge of a `kind` obligation; the id is derived from `edge` ([`Self::obligation_id`]).
+    #[must_use]
+    pub fn new(
+        kind: ObligationKind,
+        edge: Edge,
+        site: Option<crate::program::site_key::ProgramSite>,
+    ) -> Self {
+        ClassifiedEdge {
+            obligation: kind,
+            edge,
+            site,
+        }
+    }
+
+    /// The obligation this edge was resolved from.
+    #[must_use]
+    pub fn obligation_kind(&self) -> ObligationKind {
+        self.obligation
+    }
+
+    /// A site obligation's `(caller, span, callee_fp)`, borrowed from the edge's own site (what
+    /// [`Self::obligation_id`] puts in a `CallSite`, `Background` or `TableEvent` id); `None`
+    /// for a publisher.
+    #[must_use]
+    pub fn obligation_site(&self) -> Option<(&RoutineNodeId, &CanonicalSpan, u64)> {
+        let s = &self.edge.site;
+        (self.obligation != ObligationKind::Publisher).then_some((
+            &s.caller,
+            &s.span,
+            s.callee_fingerprint,
+        ))
+    }
+
+    /// Whether `id` is this edge's obligation id ([`Self::obligation_id`] `== *id`), without
+    /// building one.
+    #[must_use]
+    pub fn has_obligation(&self, id: &ObligationId) -> bool {
+        let at_site = |caller: &RoutineNodeId, span: &CanonicalSpan, fp: u64| {
+            let s = &self.edge.site;
+            s.callee_fingerprint == fp && s.span == *span && s.caller == *caller
+        };
+        match (self.obligation, id) {
+            (ObligationKind::Publisher, ObligationId::Publisher(p)) => self.edge.from == *p,
+            (
+                ObligationKind::CallSite,
+                ObligationId::CallSite {
+                    caller,
+                    span,
+                    callee_fp,
+                },
+            )
+            | (
+                ObligationKind::Background,
+                ObligationId::Background {
+                    caller,
+                    span,
+                    callee_fp,
+                },
+            )
+            | (
+                ObligationKind::TableEvent,
+                ObligationId::TableEvent {
+                    caller,
+                    span,
+                    callee_fp,
+                },
+            ) => at_site(caller, span, *callee_fp),
+            _ => false,
+        }
+    }
+
+    /// The obligation's id: the kind with the edge's own site (or, for a publisher, its
+    /// routine).
+    #[must_use]
+    pub fn obligation_id(&self) -> ObligationId {
+        let s = &self.edge.site;
+        let site = || (s.caller.clone(), s.span.clone(), s.callee_fingerprint);
+        match self.obligation {
+            ObligationKind::Publisher => ObligationId::Publisher(self.edge.from.clone()),
+            ObligationKind::CallSite => {
+                let (caller, span, callee_fp) = site();
+                ObligationId::CallSite {
+                    caller,
+                    span,
+                    callee_fp,
+                }
+            }
+            ObligationKind::Background => {
+                let (caller, span, callee_fp) = site();
+                ObligationId::Background {
+                    caller,
+                    span,
+                    callee_fp,
+                }
+            }
+            ObligationKind::TableEvent => {
+                let (caller, span, callee_fp) = site();
+                ObligationId::TableEvent {
+                    caller,
+                    span,
+                    callee_fp,
+                }
+            }
+        }
+    }
 }
 
 /// Result of resolving ALL call-site obligations in ONE workspace file —
@@ -576,15 +712,16 @@ impl DepSiteFacts {
         let mut spill_entries: Vec<(ObligationId, SiteFacts)> = Vec::new();
         // Walk the edges: a key found here has its edge (the first edge with that id).
         for (i, e) in edges.iter().enumerate() {
-            if let Some(v) = map.remove(&e.obligation_id) {
+            let id = e.obligation_id();
+            if let Some(v) = map.remove(&id) {
                 let ix = u32::try_from(index.facts.len()).expect("under 4 G site facts");
-                let h = hash(&e.obligation_id);
+                let h = hash(&id);
                 if let std::collections::hash_map::Entry::Vacant(slot) = index.by_hash.entry(h) {
                     slot.insert(ix);
                     index.facts.push((i as u32, v));
                 } else {
                     // Another key took this hash: kept whole.
-                    spill_entries.push((e.obligation_id.clone(), v));
+                    spill_entries.push((id, v));
                 }
             }
         }
@@ -607,7 +744,7 @@ impl DepSiteFacts {
         // its own key (mantra 5: never a quiet wrong answer).
         debug_assert!(
             out.iter()
-                .all(|(k, f)| out.get(k).is_some_and(|g| std::ptr::eq(g, f))),
+                .all(|(k, f)| out.get(&k).is_some_and(|g| std::ptr::eq(g, f))),
             "a dependency site fact is not found by its own key"
         );
         out
@@ -626,7 +763,7 @@ impl DepSiteFacts {
             edges
                 .iter()
                 .zip(self.edges.iter())
-                .all(|(a, b)| a.obligation_id == b.obligation_id),
+                .all(|(a, b)| a.obligation_id() == b.obligation_id()),
             "the same obligation ids at the same positions"
         );
         DepSiteFacts {
@@ -641,11 +778,11 @@ impl DepSiteFacts {
         Arc::ptr_eq(&self.edges, edges)
     }
 
-    fn key_of(&self, at: u32) -> &ObligationId {
+    fn key_of(&self, at: u32) -> std::borrow::Cow<'_, ObligationId> {
         let n = self.edges.len();
         match (at as usize).checked_sub(n) {
-            None => &self.edges[at as usize].obligation_id,
-            Some(i) => &self.index.spill_keys[i],
+            None => std::borrow::Cow::Owned(self.edges[at as usize].obligation_id()),
+            Some(i) => std::borrow::Cow::Borrowed(&self.index.spill_keys[i]),
         }
     }
 
@@ -655,7 +792,11 @@ impl DepSiteFacts {
         let h = ix.hash.unwrap_or(fx_hash)(k);
         if let Some(&i) = ix.by_hash.get(&h) {
             let (at, f) = &ix.facts[i as usize];
-            if self.key_of(*at) == k {
+            let hit = match (*at as usize).checked_sub(self.edges.len()) {
+                None => self.edges[*at as usize].has_obligation(k),
+                Some(s) => ix.spill_keys[s] == *k,
+            };
+            if hit {
                 return Some(f);
             }
         }
@@ -668,7 +809,7 @@ impl DepSiteFacts {
     }
 
     /// Every entry once, in build order (unordered, as the map's iteration was).
-    pub fn iter(&self) -> impl Iterator<Item = (&ObligationId, &SiteFacts)> {
+    pub fn iter(&self) -> impl Iterator<Item = (std::borrow::Cow<'_, ObligationId>, &SiteFacts)> {
         self.index.facts.iter().map(|(at, f)| (self.key_of(*at), f))
     }
 
@@ -2217,6 +2358,8 @@ pub(crate) fn resolve_file_obligations(
         caller_app,
         &crate::program::split_decls::unit_of_parsed(pf),
     );
+    // ENG-87: the file's path, once: every site span and witness of the file shares it.
+    let unit = crate::program::str_pool::SharedStr::from(pf.virtual_path.as_str());
 
     for (obj_idx, obj) in pf.file.objects.iter().enumerate() {
         let obj_key = ObjKey::from_source(obj);
@@ -2280,7 +2423,7 @@ pub(crate) fn resolve_file_obligations(
             let sites = extract_sites_for_routine(
                 &pf.file,
                 &pf.text,
-                &pf.virtual_path,
+                &unit,
                 &globals_rec,
                 obj_idx,
                 routine_idx,
@@ -2519,7 +2662,7 @@ pub(crate) fn resolve_file_obligations(
                 // A writer may have made the box and left every rare fact empty.
                 facts.compact();
                 if facts != SiteFacts::default() {
-                    site_facts.push((obl_id.clone(), facts));
+                    site_facts.push((obl_id, facts));
                 }
 
                 match finding {
@@ -2550,7 +2693,7 @@ pub(crate) fn resolve_file_obligations(
                             if crate::program::resolve::member_catalog::is_commit_builtin(b))
                     });
                 edges.push(ClassifiedEdge {
-                    obligation_id: obl_id,
+                    obligation: ObligationKind::CallSite,
                     edge: Edge {
                         from: caller.clone(),
                         site: SiteId {
@@ -2582,11 +2725,7 @@ pub(crate) fn resolve_file_obligations(
                 });
                 if !table_events.is_empty() {
                     edges.push(ClassifiedEdge {
-                        obligation_id: ObligationId::TableEvent {
-                            caller: caller.clone(),
-                            span: site.span.clone(),
-                            callee_fp: fp,
-                        },
+                        obligation: ObligationKind::TableEvent,
                         edge: Edge {
                             from: caller.clone(),
                             site: SiteId {
@@ -2614,11 +2753,7 @@ pub(crate) fn resolve_file_obligations(
                     let (shape, completeness, routes) =
                         background_routes(&targets, caller_app, graph, index, surface);
                     edges.push(ClassifiedEdge {
-                        obligation_id: ObligationId::Background {
-                            caller: caller.clone(),
-                            span: site.span.clone(),
-                            callee_fp: fp,
-                        },
+                        obligation: ObligationKind::Background,
                         edge: Edge {
                             from: caller.clone(),
                             site: SiteId {
@@ -3061,7 +3196,7 @@ fn resolve_full_program_from_parts(
         // loop), so deriving the id set from the edges post-hoc is a
         // no-op change to the set's membership.
         for ce in &file_res.edges {
-            obligation_id_set.insert(ce.obligation_id.clone());
+            obligation_id_set.insert(ce.obligation_id());
         }
         classified_edges.extend(file_res.edges);
         flagged.extend(file_res.flagged);
@@ -3092,19 +3227,14 @@ fn resolve_full_program_from_parts(
     };
     for edge in event_edges {
         // Each publisher routine emits exactly one EventFlow edge.
-        let obl_id = ObligationId::Publisher(edge.from.clone());
-        obligation_id_set.insert(obl_id.clone());
-        classified_edges.push(ClassifiedEdge {
-            obligation_id: obl_id,
-            edge,
-            site: None,
-        });
+        obligation_id_set.insert(ObligationId::Publisher(edge.from.clone()));
+        classified_edges.push(ClassifiedEdge::new(ObligationKind::Publisher, edge, None));
     }
 
     // ── Coverage: distinct-id SET equality ────────────────────────────────────
     let edge_id_set: HashSet<ObligationId> = classified_edges
         .iter()
-        .map(|ce| ce.obligation_id.clone())
+        .map(ClassifiedEdge::obligation_id)
         .collect();
 
     let mut missing: Vec<ObligationId> = obligation_id_set
@@ -4719,9 +4849,15 @@ mod tests {
             } => (caller.clone(), span.clone(), *callee_fp),
             ObligationId::Publisher(_) => unreachable!("a call-site fixture"),
         };
-        ClassifiedEdge {
-            obligation_id: id.clone(),
-            edge: Edge {
+        let kind = match id {
+            ObligationId::CallSite { .. } => ObligationKind::CallSite,
+            ObligationId::TableEvent { .. } => ObligationKind::TableEvent,
+            ObligationId::Background { .. } => ObligationKind::Background,
+            ObligationId::Publisher(_) => unreachable!("a call-site fixture"),
+        };
+        ClassifiedEdge::new(
+            kind,
+            Edge {
                 from: caller.clone(),
                 site: SiteId {
                     caller,
@@ -4733,14 +4869,135 @@ mod tests {
                 completeness: SetCompleteness::Complete,
                 routes: Vec::new(),
             },
-            site: None,
-        }
+            None,
+        )
     }
 
     fn facts_named(field: &str) -> SiteFacts {
         let mut f = SiteFacts::default();
         f.rare_mut().validate_field = Some(field.into());
         f
+    }
+
+    /// ENG-87: an edge's obligation id is derived from its own site (or, for a publisher, its
+    /// routine), and `has_obligation` (which the dependency site facts' lookup uses) answers
+    /// for exactly that id: not for the same parts under another kind, nor for an id that
+    /// differs in caller, span or callee fingerprint alone.
+    #[test]
+    fn an_edge_has_exactly_its_derived_obligation() {
+        let id = call_site("A", 3);
+        let e = edge_for(&id);
+        assert_eq!(e.obligation_id(), id);
+        assert!(e.has_obligation(&id));
+        let ObligationId::CallSite {
+            caller,
+            span,
+            callee_fp,
+        } = id.clone()
+        else {
+            unreachable!()
+        };
+        let other_unit = CanonicalSpan {
+            unit: "G.al".into(),
+            ..span.clone()
+        };
+        let others = [
+            ObligationId::Background {
+                caller: caller.clone(),
+                span: span.clone(),
+                callee_fp,
+            },
+            ObligationId::TableEvent {
+                caller: caller.clone(),
+                span: span.clone(),
+                callee_fp,
+            },
+            ObligationId::CallSite {
+                caller: caller.clone(),
+                span: span.clone(),
+                callee_fp: callee_fp + 1,
+            },
+            ObligationId::CallSite {
+                caller: rid("B"),
+                span: span.clone(),
+                callee_fp,
+            },
+            ObligationId::CallSite {
+                caller: caller.clone(),
+                span: other_unit,
+                callee_fp,
+            },
+            // sol: the start or the end alone (a predicate comparing the unit only passes the
+            // case above).
+            ObligationId::CallSite {
+                caller: caller.clone(),
+                span: CanonicalSpan {
+                    start: SourcePos {
+                        col: span.start.col + 1,
+                        ..span.start
+                    },
+                    ..span.clone()
+                },
+                callee_fp,
+            },
+            ObligationId::CallSite {
+                caller: caller.clone(),
+                span: CanonicalSpan {
+                    end: SourcePos {
+                        line: span.end.line + 1,
+                        ..span.end
+                    },
+                    ..span.clone()
+                },
+                callee_fp,
+            },
+            ObligationId::Publisher(caller.clone()),
+        ];
+        for other in &others {
+            assert!(!e.has_obligation(other), "{other:?}");
+            assert_ne!(e.obligation_id(), *other);
+        }
+        // Fable: an edge whose `from` differs from its site's caller, so a site id read from
+        // `from`, or a publisher id read from the site, cannot pass.
+        let mut split = e.clone();
+        split.edge.from = rid("P");
+        assert_eq!(
+            split.obligation_id(),
+            id,
+            "a site id is the site's, not `from`'s"
+        );
+        assert!(split.has_obligation(&id));
+        assert!(!split.has_obligation(&ObligationId::CallSite {
+            caller: rid("P"),
+            span: span.clone(),
+            callee_fp,
+        }));
+        let p = ClassifiedEdge::new(ObligationKind::Publisher, split.edge.clone(), None);
+        assert_eq!(p.obligation_id(), ObligationId::Publisher(rid("P")));
+        assert!(p.has_obligation(&ObligationId::Publisher(rid("P"))));
+        assert!(
+            !p.has_obligation(&ObligationId::Publisher(caller)),
+            "a publisher id is `from`'s, not the site's caller"
+        );
+        assert!(
+            !p.has_obligation(&id),
+            "a publisher edge is not its site's call"
+        );
+    }
+
+    /// sol: an edge's `Debug` (the session's program dump prints edges with it) is the
+    /// pre-ENG-87 derived form, the derived id in its old `obligation_id` field.
+    #[test]
+    fn an_edges_debug_keeps_the_obligation_id_field() {
+        let id = call_site("A", 3);
+        let e = edge_for(&id);
+        assert_eq!(
+            format!("{e:?}"),
+            format!(
+                "ClassifiedEdge {{ obligation_id: {id:?}, edge: {:?}, site: None }}",
+                e.edge
+            )
+        );
     }
 
     /// ENG-92: the dependency facts keyed through their edges answer exactly what the
@@ -4779,10 +5036,10 @@ mod tests {
         }
         assert_eq!(dep.len(), map.len());
         assert_eq!(dep.spilled(), 1, "`d` has no edge");
-        let mut got: Vec<_> = dep.iter().collect();
-        let mut want: Vec<_> = map.iter().collect();
-        got.sort_by(|x, y| x.0.cmp(y.0));
-        want.sort_by(|x, y| x.0.cmp(y.0));
+        let mut got: Vec<_> = dep.iter().map(|(k, f)| (k.into_owned(), f)).collect();
+        let mut want: Vec<_> = map.iter().map(|(k, f)| (k.clone(), f)).collect();
+        got.sort_by(|x, y| x.0.cmp(&y.0));
+        want.sort_by(|x, y| x.0.cmp(&y.0));
         assert_eq!(got, want);
     }
 
@@ -4840,10 +5097,10 @@ mod tests {
             assert_eq!(dep.get(k), map.get(k), "{k:?}");
         }
         assert_eq!(dep.get(&call_site("absent", 9)), None);
-        let mut got: Vec<_> = dep.iter().collect();
-        let mut want: Vec<_> = map.iter().collect();
-        got.sort_by(|x, y| x.0.cmp(y.0));
-        want.sort_by(|x, y| x.0.cmp(y.0));
+        let mut got: Vec<_> = dep.iter().map(|(k, f)| (k.into_owned(), f)).collect();
+        let mut want: Vec<_> = map.iter().map(|(k, f)| (k.clone(), f)).collect();
+        got.sort_by(|x, y| x.0.cmp(&y.0));
+        want.sort_by(|x, y| x.0.cmp(&y.0));
         assert_eq!(got, want);
     }
 
@@ -6636,7 +6893,7 @@ codeunit 50003 \"Check Dimensions\"
                 .flat_map(|ce| {
                     report
                         .site_facts
-                        .get(&ce.obligation_id)
+                        .get(&ce.obligation_id())
                         .map(|f| f.rare().open.clone())
                         .unwrap_or_default()
                 })
@@ -6763,10 +7020,7 @@ codeunit 50003 \"Check Dimensions\"
                 .collect();
             assert!(bg.len() <= 1, "{tag}: one background edge per site");
             let ce = bg.first()?;
-            assert!(
-                matches!(ce.obligation_id, ObligationId::Background { .. }),
-                "{tag}"
-            );
+            assert!(ce.obligation_kind() == ObligationKind::Background, "{tag}");
             assert!(ce.site.is_none(), "{tag}: the model never pairs it");
             Some(
                 ce.edge
@@ -6789,7 +7043,7 @@ codeunit 50003 \"Check Dimensions\"
                 .flat_map(|ce| {
                     report
                         .site_facts
-                        .get(&ce.obligation_id)
+                        .get(&ce.obligation_id())
                         .map(|f| f.rare().open.clone())
                         .unwrap_or_default()
                 })
@@ -7308,7 +7562,7 @@ codeunit 50003 \"Check Dimensions\"
         // and are out of scope for this per-file comparison.
         let phase1_full: Vec<&ClassifiedEdge> = full_edges
             .iter()
-            .filter(|ce| matches!(ce.obligation_id, ObligationId::CallSite { .. }))
+            .filter(|ce| ce.obligation_kind() == ObligationKind::CallSite)
             .collect();
         assert!(
             !phase1_full.is_empty(),
@@ -7377,7 +7631,8 @@ codeunit 50003 \"Check Dimensions\"
                 );
                 for (got, want) in file_res.edges.iter().zip(expected.iter()) {
                     assert_eq!(
-                        &got.obligation_id, &want.obligation_id,
+                        &got.obligation_id(),
+                        &want.obligation_id(),
                         "file {}",
                         pf.virtual_path
                     );
@@ -7397,7 +7652,7 @@ codeunit 50003 \"Check Dimensions\"
         // list EXACTLY (order included).
         assert_eq!(per_file_concat.len(), phase1_full.len());
         for (got, want) in per_file_concat.iter().zip(phase1_full.iter()) {
-            assert_eq!(&got.obligation_id, &want.obligation_id);
+            assert_eq!(&got.obligation_id(), &want.obligation_id());
             assert_eq!(&got.edge, &want.edge);
         }
     }
@@ -7449,7 +7704,7 @@ codeunit 50003 \"Check Dimensions\"
                 );
                 assert_eq!(unstamped.edges.len(), stamped.edges.len());
                 for (u, s) in unstamped.edges.iter().zip(&stamped.edges) {
-                    assert_eq!(u.obligation_id, s.obligation_id);
+                    assert_eq!(u.obligation_id(), s.obligation_id());
                     assert_eq!(u.edge, s.edge, "equal apart from `site`");
                 }
                 assert!(
@@ -7501,7 +7756,7 @@ codeunit 50003 \"Check Dimensions\"
                 .edges
                 .iter()
                 .filter(|ce| {
-                    matches!(ce.obligation_id, ObligationId::CallSite { .. })
+                    ce.obligation_kind() == ObligationKind::CallSite
                         && ce.edge.site.span.unit == file
                         && ce.edge.site.span.start.line == line
                 })
@@ -7566,7 +7821,7 @@ codeunit 50003 \"Check Dimensions\"
                 assert!(!a.edges.is_empty());
                 assert_eq!(a.edges.len(), b.edges.len());
                 for (x, y) in a.edges.iter().zip(b.edges.iter()) {
-                    assert_eq!(x.obligation_id, y.obligation_id);
+                    assert_eq!(x.obligation_id(), y.obligation_id());
                     assert_eq!(x.edge, y.edge);
                 }
                 checked += 1;

@@ -363,7 +363,7 @@ fn split_site_facts(m: al_sem::program::resolve::full::DepSiteFacts) {
         };
     let s = |x: &Option<String>| x.as_ref().map_or(0, String::capacity);
     for (key, sf) in m.iter() {
-        let span = match key {
+        let span = match &*key {
             ObligationId::CallSite { span, .. } => (variants.entry("CallSite"), Some(span)),
             ObligationId::Background { span, .. } => (variants.entry("Background"), Some(span)),
             ObligationId::TableEvent { span, .. } => (variants.entry("TableEvent"), Some(span)),
@@ -371,8 +371,11 @@ fn split_site_facts(m: al_sem::program::resolve::full::DepSiteFacts) {
         };
         *span.0.or_default() += 1;
         if let Some(sp) = span.1 {
-            unit_heap += sp.unit.capacity();
-            units.insert(sp.unit.as_str());
+            // ENG-87: a shared text; its bytes once per distinct allocation (clones share the
+            // data pointer).
+            if units.insert(sp.unit.as_str().as_ptr() as usize) {
+                unit_heap += sp.unit.len();
+            }
         }
         // ENG-91: the hot record inline, the rare facts in a box (`rare()`).
         let SiteFacts {
@@ -564,7 +567,7 @@ fn split_site_facts(m: al_sem::program::resolve::full::DepSiteFacts) {
         mib(boxes)
     );
     println!(
-        "  key span.unit heap (in the edges since ENG-92) {:.2} MiB over {} distinct files; \
+        "  key span.unit heap (in the edges since ENG-92; shared since ENG-87) {:.2} MiB over {} distinct allocations; \
          distinct build contexts {}",
         mib(unit_heap),
         units.len(),
@@ -761,6 +764,107 @@ fn split_bodies(bodies: Option<Arc<Vec<al_sem::snapshot::parse::ParsedUnit>>>) {
     step("  bodies: issues", issues);
     step("  bodies: comments", comments);
     step("  bodies: AlFile Arcs shared elsewhere", shared);
+}
+
+/// ENG-87: the retained dependency edges by field. Every edge is moved apart into one Vec per
+/// field (the edge Vec's own buffer drops first), then each Vec is dropped and its live-heap
+/// delta printed: its buffer (len x size_of) plus whatever heap only it held. Shared
+/// allocations (the ids' shared texts) are charged to whichever part drops last.
+fn split_dep_edges(edges: Vec<ClassifiedEdge>) {
+    use al_sem::program::resolve::edge::{Edge, Route, RouteTarget, Witness};
+    use al_sem::program::resolve::full::ObligationId;
+    let n = edges.len();
+    let (mut same_from, mut same_site_caller, mut same_span, mut call_sites) = (0, 0, 0, 0);
+    let mut route_hist = [0usize; 4];
+    let (mut conds, mut witness_src, mut witness_file_bytes) = (0usize, 0usize, 0usize);
+    let (mut target_routine, mut site_some) = (0usize, 0usize);
+    for e in &edges {
+        // Since ENG-87 the id is derived from the edge's site, so these hold by construction.
+        if let ObligationId::CallSite { caller, span, .. } = &e.obligation_id() {
+            call_sites += 1;
+            same_from += usize::from(*caller == e.edge.from);
+            same_site_caller += usize::from(*caller == e.edge.site.caller);
+            same_span += usize::from(*span == e.edge.site.span);
+        }
+        route_hist[e.edge.routes.len().min(3)] += 1;
+        site_some += usize::from(e.site.is_some());
+        for r in &e.edge.routes {
+            conds += r.conditions.len();
+            target_routine += usize::from(matches!(r.target, RouteTarget::Routine(_)));
+            if let Witness::SourceSpan { file, .. } = &r.witness {
+                witness_src += 1;
+                witness_file_bytes += file.len();
+            }
+        }
+    }
+    println!(
+        "  dep edges split: {n} edges; CallSite {call_sites}: caller==from {same_from}, caller==site.caller {same_site_caller}, span==site.span {same_span}; program site Some {site_some}"
+    );
+    println!(
+        "    routes per edge 0/1/2/3+: {route_hist:?}; conditions {conds}; targets Routine {target_routine}; SourceSpan witnesses {witness_src} ({:.2} MiB file text)",
+        mib(witness_file_bytes as isize)
+    );
+    println!(
+        "    size_of: ObligationId {} Edge {} SiteId {} CanonicalSpan {} NodeId {} Route {} RouteTarget {} Witness {} Option<ProgramSite> {}",
+        size_of::<ObligationId>(),
+        size_of::<Edge>(),
+        size_of::<al_sem::program::resolve::edge::SiteId>(),
+        size_of::<al_sem::program::resolve::edge::CanonicalSpan>(),
+        size_of::<al_sem::program::resolve::edge::NodeId>(),
+        size_of::<Route>(),
+        size_of::<RouteTarget>(),
+        size_of::<Witness>(),
+        size_of::<Option<al_sem::program::site_key::ProgramSite>>()
+    );
+    let (mut obl, mut from, mut site, mut routes, mut rest) =
+        (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    obl.reserve_exact(n);
+    from.reserve_exact(n);
+    site.reserve_exact(n);
+    routes.reserve_exact(n);
+    rest.reserve_exact(n);
+    let (b0, a0) = live();
+    for ce in edges {
+        obl.push(ce.obligation_kind());
+        let (edge, psite) = (ce.edge, ce.site);
+        from.push(edge.from);
+        site.push(edge.site);
+        routes.push(edge.routes);
+        rest.push((edge.kind, edge.shape, edge.completeness, psite));
+    }
+    let (b1, a1) = live();
+    println!(
+        "    edges' own buffer (len x size_of ClassifiedEdge)          {:>9.2} MiB {:>10} allocs",
+        mib(b0 - b1),
+        a0 - a1
+    );
+    step(
+        "    edges.obligation (kind; the id is derived since ENG-87)",
+        obl,
+    );
+    step("    edges.edge.from", from);
+    step("    edges.edge.site", site);
+    let mut route_parts: (Vec<RouteTarget>, Vec<Witness>, Vec<Vec<_>>) =
+        (Vec::new(), Vec::new(), Vec::new());
+    let (b2, a2) = live();
+    let route_vecs = routes.len();
+    for v in routes {
+        for r in v {
+            route_parts.0.push(r.target);
+            route_parts.1.push(r.witness);
+            route_parts.2.push(r.conditions);
+        }
+    }
+    let (b3, a3) = live();
+    println!(
+        "    edges.edge.routes: Vec buffers of {route_vecs} edges (len x size_of Route), freed by the split {:>9.2} MiB {:>10} allocs",
+        mib(b2 - b3),
+        a2 - a3
+    );
+    step("    routes.target", route_parts.0);
+    step("    routes.witness", route_parts.1);
+    step("    routes.conditions", route_parts.2);
+    step("    edges: kind, shape, completeness, program site", rest);
 }
 
 fn step<T>(label: &str, v: T) -> (isize, isize) {
@@ -3120,7 +3224,12 @@ fn resident_mode(ws: PathBuf, routine: String, low_mem: bool, with_sited: bool) 
                             step("session.dep_resolution.site_facts (shared Arc)", shared);
                         }
                     }
-                    step("session.dep_resolution.edges", d.edges);
+                    match Arc::try_unwrap(d.edges) {
+                        Ok(edges) => split_dep_edges(edges),
+                        Err(shared) => {
+                            step("session.dep_resolution.edges (shared Arc)", shared);
+                        }
+                    }
                     step("session.dep_resolution.parenless", d.parenless_calls);
                 }
                 Err(d) => {

@@ -1569,7 +1569,7 @@ fn cross_app_census_has_no_losses_with_a_dependency_body() {
         .body()
         .all_edges()
         .filter(|ce| {
-            matches!(ce.obligation_id, ObligationId::CallSite { .. })
+            ce.obligation_kind() == crate::program::resolve::full::ObligationKind::CallSite
                 && &*ce.edge.from.name_lc == "depunused"
         })
         .collect();

@@ -4267,7 +4267,7 @@ pub fn emit_event_flow_edges(graph: &ProgramGraph, surface: &DeclSurface) -> Vec
             SiteId {
                 caller: pub_routine.id.clone(),
                 span: CanonicalSpan {
-                    unit: path.to_string(),
+                    unit: path.into(),
                     start: SourcePos {
                         line: decl.name_origin.start.row,
                         col: decl.name_origin.start.column,
@@ -4285,7 +4285,7 @@ pub fn emit_event_flow_edges(graph: &ProgramGraph, surface: &DeclSurface) -> Vec
             SiteId {
                 caller: pub_routine.id.clone(),
                 span: CanonicalSpan {
-                    unit: String::new(),
+                    unit: "".into(),
                     start: SourcePos { line: 0, col: 0 },
                     end: SourcePos { line: 0, col: 0 },
                 },

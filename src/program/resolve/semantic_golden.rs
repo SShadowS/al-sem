@@ -733,7 +733,7 @@ fn canonical_to_golden_key(e: &CanonicalEdge) -> GoldenSiteKey {
             EdgeKind::BackgroundStart => 4,
             EdgeKind::TableEvent => 5,
         },
-        unit: e.site.span.unit.clone(),
+        unit: e.site.span.unit.to_string(),
         line: e.site.span.start.line,
         col: e.site.span.start.col,
         end_line: e.site.span.end.line,
@@ -1043,7 +1043,7 @@ fn build_fan_out_site_context(
                     let sites = extract_sites_for_routine(
                         &pf.file,
                         &pf.text,
-                        &pf.virtual_path,
+                        &pf.virtual_path.as_str().into(),
                         &globals_rec,
                         obj_idx,
                         routine_idx,

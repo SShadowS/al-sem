@@ -18,6 +18,7 @@
 //! [`ProgramBody::all_edges`] and [`EdgeView::all_edges`] are the only ways a
 //! reader walks both.
 
+use std::borrow::Cow;
 use std::sync::Arc;
 
 use crate::engine::census::{Kind, Tally};
@@ -26,8 +27,8 @@ use crate::program::node::AppRef;
 use crate::program::profile::{BuildProfile, DependencyBodies};
 use crate::program::resolve::edge::Histogram;
 use crate::program::resolve::full::{
-    ClassifiedEdge, Coverage, DepSiteFacts, FreshCoverage, ObligationId, ParenlessCalls,
-    ProgramContext, ProgramReport, SiteFacts, SiteFactsByObligation,
+    ClassifiedEdge, Coverage, DepSiteFacts, FreshCoverage, ObligationId, ObligationKind,
+    ParenlessCalls, ProgramContext, ProgramReport, SiteFacts, SiteFactsByObligation,
 };
 
 /// What a build resolves. The scope is a meaning, not a retention choice: it
@@ -142,7 +143,7 @@ impl SiteFactsMap {
         self.view().get(k)
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = (&ObligationId, &SiteFacts)> {
+    pub fn iter(&self) -> impl Iterator<Item = (Cow<'_, ObligationId>, &SiteFacts)> {
         self.view().iter()
     }
 
@@ -196,12 +197,13 @@ impl<'r> SiteFactsRef<'r> {
 
     /// Every entry once: the shared layer's, then the owned entries it does
     /// not shadow. Unordered, as a map's iteration is.
-    pub fn iter(self) -> impl Iterator<Item = (&'r ObligationId, &'r SiteFacts)> {
+    pub fn iter(self) -> impl Iterator<Item = (Cow<'r, ObligationId>, &'r SiteFacts)> {
         let shared = self.shared;
         shared.into_iter().flat_map(|s| s.iter()).chain(
             self.own
                 .iter()
-                .filter(move |(k, _)| shared.is_none_or(|s| !s.contains_key(k))),
+                .filter(move |(k, _)| shared.is_none_or(|s| !s.contains_key(k)))
+                .map(|(k, v)| (Cow::Borrowed(k), v)),
         )
     }
 }
@@ -381,10 +383,10 @@ impl ResolvedProgram {
         debug_assert!(dependency_body_edges.iter().all(|ce| {
             ce.edge.from.object.app != ctx.primary_app_ref
                 && matches!(
-                    ce.obligation_id,
-                    ObligationId::CallSite { .. }
-                        | ObligationId::Background { .. }
-                        | ObligationId::TableEvent { .. }
+                    ce.obligation_kind(),
+                    ObligationKind::CallSite
+                        | ObligationKind::Background
+                        | ObligationKind::TableEvent
                 )
         }));
         // Nothing reads the dispatch audit or the alias-skip count of this
@@ -548,11 +550,7 @@ fn edge_for_test(body: &ProgramBody, params_count: usize) -> ClassifiedEdge {
     let first = body.all_edges().next().expect("fixture has an edge");
     let mut edge = first.edge.clone();
     edge.from.params_count = params_count;
-    ClassifiedEdge {
-        obligation_id: first.obligation_id.clone(),
-        edge,
-        site: first.site,
-    }
+    ClassifiedEdge::new(first.obligation_kind(), edge, first.site)
 }
 
 #[cfg(test)]
@@ -629,7 +627,7 @@ mod tests {
         p.meta.coverage_contract.missing.clear();
         p.meta.coverage_contract.extra.clear();
         let before = p.report_tally();
-        let id = edge_for_test(&p.body, 1).obligation_id;
+        let id = edge_for_test(&p.body, 1).obligation_id();
         p.meta.recovered_files = vec!["App::Recovered.al".to_string()];
         p.meta.coverage_contract.missing = vec![id.clone()];
         p.meta.coverage_contract.extra = vec![id];

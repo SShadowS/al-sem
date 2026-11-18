@@ -99,7 +99,9 @@ impl From<al_syntax::ir::Point> for SourcePos {
 /// (L3 records line/col via `PAnchor`; the fresh side reads the IR origin's parser points).
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct CanonicalSpan {
-    pub unit: String,
+    /// Shared text (ENG-87): one allocation per source file, cloned into every site's span
+    /// (an edge holds two spans); compares, hashes and orders as the text.
+    pub unit: crate::program::str_pool::SharedStr,
     pub start: SourcePos,
     pub end: SourcePos,
 }

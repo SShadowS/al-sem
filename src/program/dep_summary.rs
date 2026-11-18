@@ -513,7 +513,7 @@ codeunit 60002 "Plain Cu"
         let edges: Vec<_> = r
             .edges
             .iter()
-            .map(|c| (&c.obligation_id, &c.edge))
+            .map(|c| (c.obligation_id(), &c.edge))
             .collect();
         format!(
             "{edges:#?}\n{:?}\n{:?}\n{:?}",

@@ -1134,8 +1134,8 @@ fn event_teeth_non_circularity_reads_raw_ir() {
 // ---------------------------------------------------------------------------
 
 use al_sem::program::resolve::full::{
-    ClassifiedEdge, Coverage, ObligationId, ProgramReport, coverage_holds, is_primary_scope,
-    resolve_full_program,
+    ClassifiedEdge, Coverage, ObligationId, ObligationKind, ProgramReport, coverage_holds,
+    is_primary_scope, resolve_full_program,
 };
 
 // ---------------------------------------------------------------------------
@@ -4462,11 +4462,9 @@ fn edges_for_caller<'a>(
     report
         .edges
         .iter()
-        .filter(|ce| match &ce.obligation_id {
-            ObligationId::CallSite { caller, .. } => caller.name_lc == caller_name_lc,
-            ObligationId::Publisher(_)
-            | ObligationId::Background { .. }
-            | ObligationId::TableEvent { .. } => false,
+        .filter(|ce| match (ce.obligation_kind(), ce.obligation_site()) {
+            (ObligationKind::CallSite, Some((caller, _, _))) => caller.name_lc == caller_name_lc,
+            _ => false,
         })
         .collect()
 }
@@ -7246,7 +7244,7 @@ fn distinct_sig_fp_publishers_both_emit_correct_spans() {
             .get_with_path(&entry.id)
             .expect("publisher must be in DeclSurface under its own distinct id");
         let expected_span = CanonicalSpan {
-            unit: path.to_string(),
+            unit: path.into(),
             start: SourcePos {
                 line: decl.name_origin.start.row,
                 col: decl.name_origin.start.column,
@@ -7468,14 +7466,12 @@ fn edges_for_object_routine<'a>(
     report
         .edges
         .iter()
-        .filter(|ce| match &ce.obligation_id {
-            ObligationId::CallSite { caller, .. } => {
+        .filter(|ce| match (ce.obligation_kind(), ce.obligation_site()) {
+            (ObligationKind::CallSite, Some((caller, _, _))) => {
                 caller.object.id_equals_number(object_id_number)
                     && caller.name_lc == routine_name_lc
             }
-            ObligationId::Publisher(_)
-            | ObligationId::Background { .. }
-            | ObligationId::TableEvent { .. } => false,
+            _ => false,
         })
         .collect()
 }
