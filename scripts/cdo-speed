@@ -90,6 +90,7 @@ import shutil
 import statistics
 import subprocess
 import sys
+import signal
 import tempfile
 import time
 
@@ -714,12 +715,16 @@ class Server:
 
     def call(self, tool, args):
         """(wall s, CPU s, stdout sha256, exit code, first stderr lines) of one
-        tool call; exit code -1 when the engine failed (no CLI exit)."""
+        tool call; exit code -1 when the engine failed (no CLI exit). With
+        CDO_SPEED_INSTR=1 (TLS-83 experiment) `self.last_instr` holds the call's
+        user-mode instructions (None without)."""
+        perf = self.instr_start()
         c0 = self.cpu()
         t0 = time.monotonic()
         r = self.request("tools/call", {"name": tool, "arguments": args})
         wall = time.monotonic() - t0
         cpu = self.cpu() - c0
+        self.last_instr = self.instr_stop(perf)
         self.sample_hwm()
         if "error" in r:
             raise SystemExit(f"cdo-speed: {self.name}: {tool}: {r['error']}")
@@ -735,6 +740,45 @@ class Server:
         if isinstance(err, str):
             err = err.splitlines()
         return wall, cpu, sha, env.get("exitCode", -1), [str(x) for x in err if x][:5]
+
+    # ⟨TLS-83⟩ Experiment: user-mode instructions over a call, from `perf stat`
+    # attached to the server and its live children (threads and children they
+    # start during the call are counted too: inherit). Both core types' counters,
+    # unscaled (`--no-scale`): an unpinned thread moves between P- and E-cores,
+    # and perf's default scaling would inflate each type's partial count.
+    INSTR_EVENTS = ("cpu_core/instructions/u", "cpu_atom/instructions/u")
+
+    def instr_start(self):
+        if os.environ.get("CDO_SPEED_INSTR") != "1":
+            return None
+        pids = ",".join(str(p) for p in [self.p.pid, *descendants(self.p.pid)])
+        fd, out = tempfile.mkstemp(prefix="perf-", suffix=".csv", dir=self.root)
+        os.close(fd)
+        events = [a for e in self.INSTR_EVENTS for a in ("-e", e)]
+        perf = subprocess.Popen(["perf", "stat", "--no-scale", "-x,", *events, "-o", out,
+                                 "-p", pids], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        time.sleep(0.2)  # let it attach before the call starts
+        return perf, out
+
+    def instr_stop(self, started):
+        if started is None:
+            return None
+        perf, out = started
+        perf.send_signal(signal.SIGINT)
+        try:
+            perf.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            perf.kill()
+            return None
+        total, seen = 0, 0
+        with open(out) as f:
+            for line in f:
+                cols = line.strip().split(",")
+                if len(cols) > 2 and cols[2] in self.INSTR_EVENTS and cols[0].isdigit():
+                    total += int(cols[0])
+                    seen += 1
+        os.remove(out)
+        return total if seen == len(self.INSTR_EVENTS) else None
 
     def sample_hwm(self):
         """Read the VmHWM of the server and every live child. Called after each
@@ -796,12 +840,15 @@ def timed_call(server, side, cid, tool, args, rnd, warm_pass, tag, records):
     wall, cpu, sha, code, err = server.call(tool, args)
     exit_note = f"  exit {code}" if code != 0 else ""
     shown = "?" if pressure is None else f"{pressure:.1f}"
+    instr = getattr(server, "last_instr", None)
+    instr_note = "" if instr is None else f"  instr {instr / 1e9:8.3f}e9"
     log(f"  {tag} {cid:<12} {side:<5} wall {wall:7.2f} s  cpu {cpu:7.2f} s"
-        f"  load {load:5.1f}  pressure {shown:>5}{exit_note}")
+        f"  load {load:5.1f}  pressure {shown:>5}{instr_note}{exit_note}")
     if code != 0:
         raise CallFailed(f"{tag} {cid} ({tool}) on {side} exited {code}", err)
     records.append(dict(call=cid, side=side, round=rnd, warm_pass=warm_pass,
-                        wall=wall, cpu=cpu, sha=sha, load=load, pressure=pressure))
+                        wall=wall, cpu=cpu, sha=sha, load=load, pressure=pressure,
+                        instr=instr))
 
 
 def run_round(rnd, servers, records, warm_pass=0, skip=0):
