@@ -3,6 +3,22 @@
 //! in 0.01 s on both sides, and the phase printed PASS on the ratios of those
 //! failures), and `scripts/cdo-gate` fails a test phase that ran no test.
 
+/// ⟨TLS-89⟩ A cdo-speed run takes the CDO slot timed before it times: give it a
+/// slot of its own under `dir` (never the tentacle's, never an inherited hold's
+/// token), no memory floor, and build names no real process has (a peer lane's
+/// build must not hold it up).
+fn private_slot<'a>(
+    cmd: &'a mut std::process::Command,
+    dir: &std::path::Path,
+) -> &'a mut std::process::Command {
+    cmd.env("CDO_SLOT_DIR", dir.join("slot"))
+        .env("CDO_SLOT_MEM_MIN_GB", "0")
+        .env("CDO_SLOT_POLL_S", "1")
+        .env("CDO_SLOT_BUILD_NAMES", "tls89-none")
+        .env("CDO_SLOT_BUILD_SCRIPTS", "tls89-none")
+        .env_remove("CDO_SLOT_TOKEN")
+}
+
 /// The speed gate pointed at an empty workspace, both sides this build's
 /// `alsem` (`--base-exe`/`--head-exe`: no build, no git): the first timed
 /// call exits 1, and the gate fails (exit 1) naming the call, its exit code
@@ -10,13 +26,17 @@
 ///
 /// Mutation: drop the non-zero exit check in `run_round` -> every call is
 /// timed, the ratios of the failures pass, PASS and exit 0.
+///
+/// TLS-89: with no hold to share it takes the (private) slot itself, timed.
+/// Mutation (2026-11-18): `timed_hold` returning early with no CDO_SLOT_TOKEN
+/// (its first form) -> no "taken by cdo-speed" (red); restored, green.
 #[cfg(target_os = "linux")]
 #[test]
 fn speed_gate_fails_when_a_timed_call_fails() {
     let ws = tempfile::tempdir().unwrap();
     let out = tempfile::tempdir().unwrap();
     let exe = env!("CARGO_BIN_EXE_alsem");
-    let run = std::process::Command::new("python3")
+    let run = private_slot(&mut std::process::Command::new("python3"), out.path())
         .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-speed"))
         .arg(ws.path())
         .args(["--base-exe", exe, "--head-exe", exe, "--out"])
@@ -24,9 +44,6 @@ fn speed_gate_fails_when_a_timed_call_fails() {
         .env("ALSEM_SPEED_CACHE", out.path().join("cache"))
         // TLS-65/TLS-76: no wait for a calm machine (the test's own load is no issue).
         .env("CDO_SPEED_CALM_PRESSURE", "100")
-        // TLS-89: outside any hold (a gate's inherited token would mark the real slot).
-        .env_remove("CDO_SLOT_TOKEN")
-        .env("CDO_SLOT_DIR", out.path().join("slot"))
         .output()
         .expect("spawn python3 scripts/cdo-speed");
     let text = format!(
@@ -41,7 +58,12 @@ fn speed_gate_fails_when_a_timed_call_fails() {
     );
     assert!(text.contains("  | "), "the call's stderr: {text}");
     assert!(!text.contains("cdo-speed: PASS"), "{text}");
-    assert!(text.contains("not inside the CDO slot"), "{text}");
+    // TLS-89 (review r1, sol): with no hold to share, it takes the slot itself, timed.
+    assert!(
+        text.contains("cdo-slot: taken by cdo-speed (cdo-speed timing)")
+            && text.contains("cdo-slot: timed by cdo-speed (cdo-speed timing)"),
+        "{text}"
+    );
 }
 
 /// ⟨TLS-89⟩ Inside a hold (its token), cdo-speed marks it timed before its first
@@ -132,7 +154,7 @@ fn speed_gate_refuses_more_rounds_than_routines() {
     let out = tempfile::tempdir().unwrap();
     let exe = env!("CARGO_BIN_EXE_alsem");
     let run = |rounds: &str| {
-        let r = std::process::Command::new("python3")
+        let r = private_slot(&mut std::process::Command::new("python3"), out.path())
             .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-speed"))
             .arg(ws.path())
             .args([
@@ -149,9 +171,6 @@ fn speed_gate_refuses_more_rounds_than_routines() {
             // TLS-65 (Fable r1)/TLS-76: no wait for a calm machine, which on a busy
             // box would hold the valid run for 10 min.
             .env("CDO_SPEED_CALM_PRESSURE", "100")
-            // TLS-89: outside any hold (a gate's inherited token would mark the real slot).
-            .env_remove("CDO_SLOT_TOKEN")
-            .env("CDO_SLOT_DIR", out.path().join("slot"))
             .output()
             .expect("spawn python3 scripts/cdo-speed");
         let text = format!(
@@ -1982,6 +2001,7 @@ fn speed_with_stub(
     let ws = dir.join("ws");
     std::fs::create_dir_all(&ws).unwrap();
     let mut cmd = std::process::Command::new("python3");
+    private_slot(&mut cmd, dir);
     cmd.arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-speed"))
         .arg(&ws)
         .args(["--base-exe"])

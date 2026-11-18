@@ -478,18 +478,18 @@ def main():
     env = dict(os.environ, CLAUDE_CODE_SESSION_ID=session)
     env.pop("CDO_SLOT_TOKEN", None)
     try:
-        p = subprocess.run(
-            ["bash", SLOT, "status"], env=env, capture_output=True, text=True, timeout=30
-        )
+        p = subprocess.run(["bash", SLOT, "status"], env=env, capture_output=True, timeout=30)
     except Exception as e:
         allow(f"scripts/cdo-slot status did not run: {e}")
+    # Bytes, split on LF only: text mode would also break lines at a CR.
+    out = p.stdout.decode("utf-8", "replace")
     if p.returncode not in (0, 1, 3):
-        allow(f"scripts/cdo-slot status failed: {(p.stderr or p.stdout).strip()}")
+        allow(f"scripts/cdo-slot status failed: {(p.stderr.decode('utf-8', 'replace') or out).strip()}")
     if p.returncode != 1:
         return 0  # free or stale
     # Line 1 describes the hold; a timed hold adds `timed by ...` (TLS-89). A
-    # reason is one line, so it cannot fake the second.
-    lines = p.stdout.strip().split("\n")
+    # reason is one line (no LF, no CR), so it cannot fake the second.
+    lines = out.strip().split("\n")
     said = lines[0]
     timed = lines[1] if len(lines) > 1 and lines[1].startswith("timed by ") else None
     # The last ", session <id>": the reason comes earlier in the line and

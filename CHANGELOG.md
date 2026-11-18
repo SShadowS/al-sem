@@ -441,12 +441,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`$CDO_SLOT_DIR/timed.<pid>`), so a second timing in a shared hold also waits for builds,
   and keeps its cover when the first ends. It prints their PIDs every ~60 s. If they still run after
   CDO_SLOT_TIMED_WAIT_S (1800 s), it refuses with exit 6: it takes the mark back and releases
-  the slot if it took it, never a silent start beside a build. `status` adds a second line,
-  `timed by <owner> since <time> (<reason>)`.
+  the slot if it took it, never a silent start beside a build. It also refuses if the hold it
+  shares ended while it waited. A script's option operands (`bash -o pipefail scripts/ci-steps`)
+  are skipped when finding the script. `status` adds a second line,
+  `timed by <owner> since <time> (<reason>)`; a reason may hold no line break (LF or CR).
+- **The limit.** The hook sees a command only when it starts. A command it allowed before the
+  hold became timed, and that starts a build later (`sleep 60; cargo build`), is not stopped,
+  and neither is a build started outside any hooked session.
 - **Who sets it.**
-  - `scripts/cdo-speed`, after its builds and before its first timed call, inside the hold it
-    runs in. So the speed phase of every cdo-gate and land is timed. Outside any hold it says
-    that nothing guards the timing. If builds still run, it exits 2 with "timed nothing".
+  - `scripts/cdo-speed`, after its builds and before its first timed call. It shares the hold
+    it runs in (a cdo-gate's or land's token, `cdo-slot run`, its session's hand hold), so the
+    speed phase of every cdo-gate and land is timed. Outside any hold it takes the slot itself,
+    waiting its turn. If builds still run, it exits 2 with "timed nothing".
   - `scripts/cdo-before-after`, for its measurements.
   - A lane's own timed run uses `cdo-slot run ... --timed`.
 - **The guard** now refuses:
@@ -467,17 +473,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     test now checks the other session's `scripts/cdo-gate` (its `cargo test` passes now);
   - `run --timed` refuses beside a stand-in build (bash through a symlink with a per-run name)
     with exit 6, nothing run; it starts once the build ends; its ancestor build is not waited
-    for; a stand-in build script refuses it too;
+    for; a stand-in build script refuses it too, run as `bash -o pipefail <script>`;
   - an untimed run does not wait;
   - a timed mark ends with its bound process; a second timing in a shared hold waits for a
     build and keeps its mark when the first ends; a refused `acquire --bind --timed` with no
-    session or token frees the slot;
+    session or token frees the slot; a timing whose hold is released while it waits refuses;
+    a reason with a CR is refused;
   - cdo-before-after's measurements run under `timed by`;
-  - cdo-speed inside a hold exits 2 beside a build, before any server starts.
+  - cdo-speed inside a hold exits 2 beside a build, before any server starts; outside any hold
+    it takes the slot itself, timed.
 
   Each guard has a discrimination proof (break, red, restore, green), recorded in the tests'
-  docs. The two existing cdo-speed tests now run outside any hold (an inherited gate token
-  would have marked the real slot).
+  docs. Every test that runs cdo-speed up to its timing gets a slot of its own
+  (`private_slot`): an inherited gate token would have marked the real slot.
 
 ### Added (TLS-91: perf in the kraken image, for instruction counts)
 

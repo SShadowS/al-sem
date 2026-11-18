@@ -231,6 +231,46 @@ ppid_of() { local f; read -r -a f <<<"$(proc_fields "$1")"; echo "${f[1]:-}"; }
 # argv[0]. Between their cargo steps (ci-steps' agentflow pytest, ~2 min) no
 # process has a build name, so the build names alone would let a timing start
 # there (review r1, Fable). Exact argv words, never a `-f` pattern.
+# script_operand: in `a` (an interpreter's argv), set i to the script operand's
+# index after the options, or -1 when there is none (`-c` command string, `python
+# -m`). Option operands are skipped (review r1, sol): a shell's `-o`/`-O` (each
+# one in a cluster: `-euo pipefail`), --rcfile/--init-file; python's -W/-X.
+script_operand() {
+    local w py=0 k
+    [[ "${a[0]##*/}" == python* ]] && py=1
+    i=1
+    while ((i < ${#a[@]})); do
+        w=${a[i]}
+        if [[ "$w" == -- ]]; then
+            i=$((i + 1))
+            break
+        fi
+        [[ "$w" == [-+]?* ]] || break
+        i=$((i + 1))
+        case "$w" in
+            --rcfile | --init-file) i=$((i + 1)); continue ;;
+            --*) continue ;;
+        esac
+        if ((py)); then
+            # Letter by letter: -W/-X take the rest as their value (`-Xtracemalloc`)
+            # or, last in the cluster, the next word (review r2, sol).
+            for ((k = 1; k < ${#w}; k++)); do
+                case "${w:k:1}" in
+                    c | m) i=-1; return ;;
+                    W | X)
+                        ((k == ${#w} - 1)) && i=$((i + 1))
+                        break
+                        ;;
+                esac
+            done
+        else
+            [[ "${w:1}" == *c* ]] && { i=-1; return; }
+            for ((k = 1; k < ${#w}; k++)); do
+                [[ "${w:k:1}" == [oO] ]] && i=$((i + 1))
+            done
+        fi
+    done
+}
 script_builds() {
     local d a i
     for d in /proc/[0-9]*; do
@@ -239,8 +279,8 @@ script_builds() {
         i=0
         case "${a[0]##*/}" in
             bash | sh | dash | zsh | python | python3)
-                i=1
-                while ((i < ${#a[@]})) && [[ "${a[i]}" == -* ]]; do i=$((i + 1)); done
+                script_operand
+                ((i >= 0)) || continue
                 ;;
         esac
         ((i < ${#a[@]})) || continue
@@ -300,6 +340,15 @@ timed_start() {
         fi
         sleep "$poll"
     done
+    # The hold may have ended (released, or taken over) while it waited (review
+    # r1, sol): start only while this mark still counts for the current holder.
+    state
+    tmark="$dir/timed.$3"
+    if [[ ! -e "$tmark" || -z "$holder_pid" || "$(tfield holder_pid)" != "$holder_pid" ]]; then
+        with_meta clear_timed_locked "$3"
+        echo "cdo-slot: --timed refused: the hold ended while it waited for builds" >&2
+        return 6
+    fi
     echo "cdo-slot: timed by $1 ($2)"
 }
 # ⟨TLS-88⟩ The waiters' queue: a waiting acquire holds a ticket, and a free slot
@@ -435,7 +484,10 @@ try_take() {
 acquire() { # acquire <owner> <reason> <wait 0|1> <timeout or "">
     local owner=$1 reason=$2 wait=$3 timeout=$4 start=$SECONDS last=-60 why
     [[ "$owner" =~ ^[A-Za-z0-9._-]{1,40}$ ]] || die "owner '$owner': a short name (letters, digits, . _ -)"
-    [[ -n "$reason" && "$reason" != *$'\n'* && ${#reason} -le 200 ]] || die "give a one-line reason (at most 200 characters)"
+    # No CR either: a reader that turns CR into a line break (Python's text mode)
+    # would see a second status line, which a timed hold uses (TLS-89 review r1, sol).
+    [[ -n "$reason" && "$reason" != *$'\n'* && "$reason" != *$'\r'* && ${#reason} -le 200 ]] \
+        || die "give a one-line reason (at most 200 characters)"
     [[ -n "$me_session" || -n "$me_token" || -n "$bind" ]] \
         || die "outside a Claude session, bind the hold (--bind PID) or use 'run'; nobody could release it otherwise"
     mkdir -p "$dir"
@@ -558,15 +610,20 @@ case "$cmd" in
             rc=0
             acquire "$owner" "$reason" "$wait" "$timeout" || rc=$?
             if ((timed)) && [[ "$rc" == 0 || "$rc" == 4 ]]; then
+                # The holder this acquire took (none when shared): only it may be
+                # ended on a refusal, never one that took the slot meanwhile.
+                took=""
+                if [[ "$rc" == 0 ]]; then
+                    state
+                    took=$holder_pid
+                fi
                 trc=0
                 timed_start "$owner" "$reason" "$bind" || trc=$?
                 if ((trc)); then
-                    # This acquire took it: end it here (`release` would refuse a
-                    # hold that has only --bind, no session or token: review r1).
-                    if [[ "$rc" == 0 ]]; then
-                        state
-                        [[ -z "$holder_pid" ]] || end_holder "$holder_pid"
-                    fi
+                    # End it here (`release` would refuse a hold that has only
+                    # --bind, no session or token: review r1); end_holder is a
+                    # no-op once that process is no longer this slot's holder.
+                    [[ -z "$took" ]] || end_holder "$took"
                     exit "$trc"
                 fi
             fi

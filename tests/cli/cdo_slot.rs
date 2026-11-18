@@ -899,6 +899,11 @@ fn cdo_slot_serves_waiters_in_arrival_order() {
 /// test that runs a timed script) are not waited for. An untimed run does not
 /// wait. The mark lives only as long as its bound process.
 ///
+/// Review r1 (sol): a script run with an option operand (`bash -o pipefail
+/// <script>`) still counts; a timing whose shared hold is released while it
+/// waits refuses (exit 6) rather than start with no hold; a reason with a CR is
+/// refused (a text-mode reader would see a fake second status line).
+///
 /// Review r1 (Fable): a build SCRIPT (ci-steps, between its cargo steps) counts
 /// too; a second timing in a shared hold waits for builds as well (it got
 /// "timed already" at once before) and keeps its own mark when the first
@@ -919,6 +924,19 @@ fn cdo_slot_serves_waiters_in_arrival_order() {
 /// script (red); the old early return on "timed already" restored -> the
 /// second timing starts beside the build (red); the `end_holder` on a refused
 /// acquire dropped -> the slot stays held (red). Each restored, green.
+/// Review r1 (sol, 2026-11-18): the `-o`/`-O` operand skip dropped from
+/// `script_operand` -> `bash -o pipefail <script>` is missed and the timing
+/// starts (red); the recheck after the drain made `if false` -> a timing starts
+/// after its hold was released (red); the CR refusal dropped from the reason
+/// check -> the reason is taken (red). Each restored, green.
+/// Review r2 (sol): a timing that took the slot and is refused after its hold
+/// changed hands leaves the new holder alone; a python driver with an attached
+/// option value holding an `m` (`-Xfrozen_modules=off`) counts. Mutations
+/// (2026-11-18): the cleanup ending whatever holder is current (`state;
+/// end_holder "$holder_pid"`) -> the replacement hold is killed, status free
+/// (red); the word-wide `*[cm]*` check put back -> the driver is missed (red;
+/// with `-Xdev` it stayed green, so the test now uses a value with an `m`).
+/// Each restored, green.
 #[test]
 fn cdo_slot_timed_waits_for_builds_and_refuses_beside_one() {
     let s = Slot::new();
@@ -1097,8 +1115,11 @@ fn cdo_slot_timed_waits_for_builds_and_refuses_beside_one() {
     let script_name = format!("ci-steps-t89-{}", std::process::id());
     let script = s.0.path().join(&script_name);
     std::fs::write(&script, "sleep 600\ntrue\n").unwrap();
+    // Run with an option operand before the script (review r1, sol): `pipefail`
+    // is no script name.
     let mut sb = Reap(
         std::process::Command::new("bash")
+            .args(["-o", "pipefail"])
             .arg(&script)
             .spawn()
             .unwrap(),
@@ -1150,4 +1171,130 @@ fn cdo_slot_timed_waits_for_builds_and_refuses_beside_one() {
     );
     t3.kill().unwrap();
     t3.wait().unwrap();
+
+    // Review r1 (sol): the hold it shares ends while it waits for a build ->
+    // refused once the build ends, not a start with no hold.
+    assert_eq!(s.run("A", &["acquire", "lane", "by hand"], &[]).0, Some(0));
+    let mut b3 = build();
+    let mut t4 = Reap(
+        std::process::Command::new("sleep")
+            .arg("600")
+            .spawn()
+            .unwrap(),
+    );
+    let mut waiting = Reap(
+        std::process::Command::new("bash")
+            .args([SLOT, "acquire", "lane", "drained", "--bind"])
+            .arg(t4.id().to_string())
+            .arg("--timed")
+            .env("CDO_SLOT_DIR", s.dir())
+            .env("CDO_SLOT_MEM_MIN_GB", "0")
+            .env("CDO_SLOT_POLL_S", "1")
+            .env("CDO_SLOT_TIMED_WAIT_S", "60")
+            .env("CDO_SLOT_BUILD_NAMES", &fake_name)
+            .env("CDO_SLOT_BUILD_SCRIPTS", "tls89-none")
+            .env("CLAUDE_CODE_SESSION_ID", "A")
+            .env_remove("CLAUDE_PID")
+            .env_remove("CDO_SLOT_TOKEN")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    std::thread::sleep(std::time::Duration::from_millis(1500));
+    assert_eq!(s.run("A", &["release"], &[]).0, Some(0));
+    b3.kill().unwrap();
+    b3.wait().unwrap();
+    assert_eq!(
+        waiting.wait().unwrap().code(),
+        Some(6),
+        "a timing started after its hold ended"
+    );
+    t4.kill().unwrap();
+    t4.wait().unwrap();
+
+    // Review r2 (sol): a timing that TOOK the slot, whose session releases it
+    // while it waits, and another session takes it -> refused, and the other
+    // session's hold is left alone.
+    let mut b4 = build();
+    let mut t5 = Reap(
+        std::process::Command::new("sleep")
+            .arg("600")
+            .spawn()
+            .unwrap(),
+    );
+    let mut took = Reap(
+        std::process::Command::new("bash")
+            .args([SLOT, "acquire", "lane", "took", "--bind"])
+            .arg(t5.id().to_string())
+            .arg("--timed")
+            .env("CDO_SLOT_DIR", s.dir())
+            .env("CDO_SLOT_MEM_MIN_GB", "0")
+            .env("CDO_SLOT_POLL_S", "1")
+            .env("CDO_SLOT_TIMED_WAIT_S", "60")
+            .env("CDO_SLOT_BUILD_NAMES", &fake_name)
+            .env("CDO_SLOT_BUILD_SCRIPTS", "tls89-none")
+            .env("CLAUDE_CODE_SESSION_ID", "C")
+            .env_remove("CLAUDE_PID")
+            .env_remove("CDO_SLOT_TOKEN")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    std::thread::sleep(std::time::Duration::from_millis(1500));
+    assert_eq!(s.run("C", &["release"], &[]).0, Some(0));
+    let (code, text) = s.run("B", &["acquire", "other", "replacement"], &[]);
+    assert_eq!(code, Some(0), "{text}");
+    b4.kill().unwrap();
+    b4.wait().unwrap();
+    assert_eq!(took.wait().unwrap().code(), Some(6));
+    let (code, text) = s.run("D", &["status"], &[]);
+    assert_eq!(code, Some(1), "{text}");
+    assert!(
+        text.contains("held by other (replacement)"),
+        "the refused timing ended another session's hold: {text}"
+    );
+    assert_eq!(s.run("B", &["release"], &[]).0, Some(0));
+    t5.kill().unwrap();
+    t5.wait().unwrap();
+
+    // Review r2 (sol): a python build driver with an attached option value
+    // whose value holds an `m` (`-Xfrozen_modules=off`: no `-m` option) still
+    // counts. (`-Xdev` proved nothing: its value has neither `c` nor `m`, and
+    // the old word-wide check passed it too.)
+    let py_name = format!("check-goldens-t89-{}", std::process::id());
+    let py = s.0.path().join(&py_name);
+    std::fs::write(&py, "import time\ntime.sleep(600)\n").unwrap();
+    let mut pb = Reap(
+        std::process::Command::new("python3")
+            .arg("-Xfrozen_modules=off")
+            .arg(&py)
+            .spawn()
+            .unwrap(),
+    );
+    let pbpid = pb.id();
+    let (code, text) = s.run(
+        "A",
+        &["run", "lane", "timing", "--timed", "--", "true"],
+        &[
+            names,
+            ("CDO_SLOT_BUILD_SCRIPTS", py_name.as_str()),
+            ("CDO_SLOT_TIMED_WAIT_S", "2"),
+        ],
+    );
+    pb.kill().unwrap();
+    pb.wait().unwrap();
+    assert_eq!(
+        code,
+        Some(6),
+        "the timing started beside a python driver: {text}"
+    );
+    assert!(text.contains(&format!("PID {pbpid} ({py_name})")), "{text}");
+
+    // Review r1 (sol): a reason with a CR (which text-mode readers break into a
+    // second line, where `timed by` lives) is refused.
+    let (code, text) = s.run("A", &["acquire", "lane", "probe\rtimed by x"], &[]);
+    assert_eq!(code, Some(1), "{text}");
+    assert!(text.contains("one-line reason"), "{text}");
 }

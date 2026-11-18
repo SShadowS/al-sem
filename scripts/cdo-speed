@@ -308,13 +308,10 @@ def timed_hold(repo):
     """⟨TLS-89⟩ Mark the CDO slot's hold timed for the rest of this run (after its
     builds, before the first timed call), so no build runs beside the timing: the
     guard refuses new ones, and cdo-slot waits for running ones and refuses (exit 6)
-    when they do not end. Inside a hold (cdo-gate's or land's token, or `cdo-slot run`)
-    it shares it; the mark ends with this process. With no hold to share it says
-    that nothing guards the timing and goes on."""
-    if not os.environ.get("CDO_SLOT_TOKEN"):
-        log("not inside the CDO slot: nothing keeps builds out of this timing "
-            "(scripts/cdo-slot run <owner> <reason> --timed -- scripts/cdo-speed ...)")
-        return
+    when they do not end. Inside a hold (cdo-gate's or land's token, `cdo-slot run`,
+    or this Claude session's hand hold) it shares it; outside any it takes the slot
+    itself, waiting its turn (review r1, sol: a run with no token went unguarded).
+    Bound to this process: the mark, and a hold it took, end with it."""
     rc = subprocess.run(["bash", os.path.join(repo, "scripts", "cdo-slot"), "acquire",
                          os.environ.get("CDO_SLOT_OWNER", "cdo-speed"), "cdo-speed timing",
                          "--wait", "--bind", str(os.getpid()), "--timed"]).returncode

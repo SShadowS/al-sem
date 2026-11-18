@@ -86,12 +86,14 @@ scripts/cdo-slot acquire|release|status|run <owner> <reason>  # The one CDO slot
                                # too: `run ... -- <cmd>`, or `acquire --wait` + `release` by hand (cdo-gate
                                # --only inside such a hand hold shares it). A TIMING takes it `--timed`
                                # (TLS-89; `run <owner> <reason> --timed -- <cmd>`, or `acquire ... --bind PID
-                               # --timed`): cdo-speed marks its hold timed after its builds (so a land's and
-                               # cdo-gate's speed phase is timed), cdo-before-after its measuring; any other
-                               # timed run of yours passes it too. A timed acquire first waits for the build
-                               # processes already running (cargo, cargo-nextest, rustc, rustdoc, by exact
-                               # name, never a self-matching `pgrep -f`), up to CDO_SLOT_TIMED_WAIT_S (1800 s),
-                               # then refuses (exit 6) rather than start beside one.
+                               # --timed`): cdo-speed takes it timed after its builds (sharing the hold it is
+                               # in, so a land's and cdo-gate's speed phase is timed), cdo-before-after for its
+                               # measuring; any other timed run of yours passes it too. A timed acquire first
+                               # waits for the build processes already running (cargo, cargo-nextest, rustc,
+                               # rustdoc by exact name; ci-steps and check-goldens by argv; never a
+                               # self-matching `pgrep -f`), up to CDO_SLOT_TIMED_WAIT_S (1800 s), then refuses
+                               # (exit 6) rather than start beside one. The hook sees a command only as it
+                               # starts: `sleep 60; cargo build` allowed before a timing began still builds.
                                # The PreToolUse hook scripts/claude-hooks/cdo-slot-guard then refuses: under
                                # any hold, ANOTHER session's gate scripts and aldump/alsem (or cargo) naming
                                # CDO; under a TIMED hold, also every session's cargo builds/tests, ci-steps,
