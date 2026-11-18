@@ -2484,79 +2484,166 @@ fn build_succ_sccs(
     succ
 }
 
-/// One candidate entry of a cone being built (ENG-130): minted here (a direct fact, or a
-/// successor's entry carried across a guarded edge), or a successor cone's entry BORROWED, its
-/// dist one more and its guard dropped. A candidate that loses is never cloned, so it touches
-/// no refcount (as the old per-candidate map merge's borrowed lookup did).
-enum Cand<'c> {
-    Owned(Arc<str>, ConeFactEntry),
-    Succ(&'c Arc<str>, &'c ConeFactEntry),
+/// One candidate entry of a cone being built (ENG-130): its key and its entry, each minted
+/// here (a direct fact, or a successor's entry carried across a guarded edge) or BORROWED from
+/// a successor cone (the entry then gets its dist one more and its guard dropped). A candidate
+/// that loses is never cloned, so it touches no refcount (as the old per-candidate map merge's
+/// borrowed lookup did). Key and entry are apart because a merge keeps the key of the FIRST
+/// candidate of a key with the entry of its winner, as the old map's insert did (sol, ENG-130
+/// review: the key allocation the cone then shares).
+struct Cand<'c> {
+    key: CandKey<'c>,
+    entry: CandEntry<'c>,
 }
 
-impl Cand<'_> {
+enum CandKey<'c> {
+    Owned(Arc<str>),
+    Borrowed(&'c Arc<str>),
+}
+
+enum CandEntry<'c> {
+    Owned(ConeFactEntry),
+    Succ(&'c ConeFactEntry),
+}
+
+impl<'c> Cand<'c> {
+    /// A key and entry minted here.
+    fn owned(key: Arc<str>, entry: ConeFactEntry) -> Self {
+        Cand {
+            key: CandKey::Owned(key),
+            entry: CandEntry::Owned(entry),
+        }
+    }
+    /// A successor cone's entry, under `key` (its base key).
+    fn succ(key: &'c Arc<str>, entry: &'c ConeFactEntry) -> Self {
+        Cand {
+            key: CandKey::Borrowed(key),
+            entry: CandEntry::Succ(entry),
+        }
+    }
     fn key(&self) -> &str {
-        match self {
-            Cand::Owned(k, _) => k,
-            Cand::Succ(k, _) => k,
+        match &self.key {
+            CandKey::Owned(k) => k,
+            CandKey::Borrowed(k) => k,
         }
     }
     fn dist(&self) -> usize {
-        match self {
-            Cand::Owned(_, e) => e.dist,
-            Cand::Succ(_, e) => e.dist + 1,
+        match &self.entry {
+            CandEntry::Owned(e) => e.dist,
+            CandEntry::Succ(e) => e.dist + 1,
         }
     }
     fn rep_key(&self) -> &str {
-        match self {
-            Cand::Owned(_, e) => &e.rep_key,
-            Cand::Succ(_, e) => &e.rep_key,
+        match &self.entry {
+            CandEntry::Owned(e) => &e.rep_key,
+            CandEntry::Succ(e) => &e.rep_key,
         }
     }
     fn into_entry(self) -> (Arc<str>, ConeFactEntry) {
-        match self {
-            Cand::Owned(k, e) => (k, e),
-            Cand::Succ(k, e) => (
-                Arc::clone(k),
-                ConeFactEntry {
-                    rep: Arc::clone(&e.rep),
-                    rep_key: Arc::clone(&e.rep_key),
-                    dist: e.dist + 1,
-                    // Without an anchor (recursive / multi-member SCC) a
-                    // successor's guard means nothing here.
-                    guard: None,
-                },
-            ),
-        }
+        let key = match self.key {
+            CandKey::Owned(k) => k,
+            CandKey::Borrowed(k) => Arc::clone(k),
+        };
+        let entry = match self.entry {
+            CandEntry::Owned(e) => e,
+            CandEntry::Succ(e) => ConeFactEntry {
+                rep: Arc::clone(&e.rep),
+                rep_key: Arc::clone(&e.rep_key),
+                dist: e.dist + 1,
+                // Without an anchor (recursive / multi-member SCC) a
+                // successor's guard means nothing here.
+                guard: None,
+            },
+        };
+        (key, entry)
     }
 }
 
-/// The cone of the candidates, in key order: per key the winner as if each candidate were
-/// merged in turn (mirrors `mergeCone`: min dist; equal dist, the smaller rep key; a full tie
-/// keeps the earlier candidate). The sort is stable, so equal keys stay in merge order, and it
-/// finds the presorted runs the successor cones contribute (mostly presorted: a guarded entry
-/// read under its base key can fall out of its run), so it works as a merge of sorted runs,
-/// not a B-tree insert per candidate (ENG-130). Transient memory: every candidate at once,
-/// not one slot per distinct key (measured in the ENG-130 CHANGELOG entry).
-fn cone_of_candidates(mut cands: Vec<Cand<'_>>) -> FrozenCone {
-    use crate::engine::l5::detector_context::cones_census as census;
-    census::add_gated(&census::MERGE_CALLS, cands.len() as u64);
+/// The winners of `cands`, in key order, one per key, with the number of candidates that met
+/// an earlier one of their key: per key, as if each candidate were merged in turn (mirrors
+/// `mergeCone`: min dist; equal dist, the smaller rep key; a full tie keeps the earlier one),
+/// under the key of the FIRST candidate of that key. The sort is stable, so equal keys stay in
+/// merge order, and it finds the presorted runs the successor cones contribute (mostly
+/// presorted: a guarded entry read under its base key can fall out of its run).
+fn reduce_candidates(mut cands: Vec<Cand<'_>>) -> (Vec<Cand<'_>>, u64) {
     cands.sort_by(|a, b| a.key().cmp(b.key()));
-    let mut out: Vec<(Arc<str>, ConeFactEntry)> = Vec::with_capacity(cands.len());
+    let mut out: Vec<Cand<'_>> = Vec::new();
     let mut it = cands.into_iter().peekable();
     let mut tiebreaks = 0u64;
-    while let Some(mut win) = it.next() {
+    while let Some(first) = it.next() {
+        let Cand { key, entry } = first;
+        let mut win = Cand { key, entry };
         while let Some(next) = it.next_if(|c| c.key() == win.key()) {
             tiebreaks += 1;
             if next.dist() < win.dist()
                 || (next.dist() == win.dist() && next.rep_key() < win.rep_key())
             {
-                win = next;
+                // The winner's entry under the first candidate's key.
+                win.entry = next.entry;
             }
         }
-        out.push(win.into_entry());
+        out.push(win);
     }
-    census::add_gated(&census::MERGE_TIEBREAKS, tiebreaks);
-    FrozenCone(out.into_boxed_slice())
+    (out, tiebreaks)
+}
+
+/// A cone being built from its candidates (ENG-130). It reduces the candidates to their
+/// winners whenever they grow past twice the reduced size, so it holds at most about twice the
+/// cone's distinct keys plus the entries of the successor being added, not every candidate of
+/// a high-overlap fan-in (sol, ENG-130 review: 1,000 successors sharing 10,000 keys were 10
+/// million candidates at once). A reduce keeps the merge's answer: the reduced winners sort
+/// before every later candidate of their key, and a later one replaces one only when strictly
+/// better, so the result is the sequential merge's.
+struct ConeBuilder<'c> {
+    cands: Vec<Cand<'c>>,
+    /// Candidates added in all (the census's merge count).
+    added: u64,
+    /// Tie-breaks counted by earlier reduces.
+    tiebreaks: u64,
+    /// The size after the last reduce.
+    reduced: usize,
+}
+
+/// Fewer candidates than this are never reduced early (the final reduce does them).
+const REDUCE_AT_LEAST: usize = 4096;
+
+impl<'c> ConeBuilder<'c> {
+    fn new() -> Self {
+        ConeBuilder {
+            cands: Vec::new(),
+            added: 0,
+            tiebreaks: 0,
+            reduced: 0,
+        }
+    }
+    fn push(&mut self, c: Cand<'c>) {
+        self.cands.push(c);
+        self.added += 1;
+    }
+    /// Reduce now if the candidates grew past twice their reduced size.
+    fn bound(&mut self) {
+        if self.cands.len() >= REDUCE_AT_LEAST && self.cands.len() > 2 * self.reduced {
+            let (winners, ties) = reduce_candidates(std::mem::take(&mut self.cands));
+            self.tiebreaks += ties;
+            self.reduced = winners.len();
+            self.cands = winners;
+        }
+    }
+    fn finish(self) -> FrozenCone {
+        cone_of_candidates(self.cands, self.added, self.tiebreaks)
+    }
+}
+
+/// The cone of the candidates ([`reduce_candidates`]' winners, in key order), a merge of
+/// sorted runs rather than a B-tree insert per candidate (ENG-130). `added` and
+/// `earlier_tiebreaks` are what [`ConeBuilder`] counted across its earlier reduces, for the
+/// census's merge counters.
+fn cone_of_candidates(cands: Vec<Cand<'_>>, added: u64, earlier_tiebreaks: u64) -> FrozenCone {
+    use crate::engine::l5::detector_context::cones_census as census;
+    let (winners, tiebreaks) = reduce_candidates(cands);
+    census::add_gated(&census::MERGE_CALLS, added);
+    census::add_gated(&census::MERGE_TIEBREAKS, earlier_tiebreaks + tiebreaks);
+    FrozenCone(winners.into_iter().map(Cand::into_entry).collect())
 }
 
 /// Build one SCC's fact cone (members at dist 0 + successor cones at dist+1).
@@ -2570,7 +2657,7 @@ fn fact_cone_for_scc(
     direct: &RoutineDirectFacts,
     anchor: Option<GuardAnchor<'_>>,
 ) -> FrozenCone {
-    let mut cands: Vec<Cand<'_>> = Vec::new();
+    let mut cands = ConeBuilder::new();
     let frame = anchor.as_ref().and_then(|a| a.frame);
     for m in members {
         if let Some(byk) = direct.get(m) {
@@ -2622,7 +2709,7 @@ fn fact_cone_for_scc(
                 let rep_key_s: Arc<str> = Arc::from(rep_key(f));
                 for reqs in req_sets {
                     let (k, guard) = with_reqs(Arc::clone(&base), reqs);
-                    cands.push(Cand::Owned(
+                    cands.push(Cand::owned(
                         k,
                         ConeFactEntry {
                             rep: Arc::clone(&rep),
@@ -2672,7 +2759,7 @@ fn fact_cone_for_scc(
                     edge_reqs,
                 ) {
                     e.dist += 1;
-                    cands.push(Cand::Owned(k, e));
+                    cands.push(Cand::owned(k, e));
                 }
             }
         }
@@ -2695,16 +2782,16 @@ fn fact_cone_for_scc(
              provably non-root, so this cone should have been built and not yet freed"
         );
         if let Some(yc) = fact_cones.get(y) {
-            cands.reserve(yc.len());
             for (key, entry) in yc.iter() {
                 if anchor.is_some() && frame_bound(entry) {
                     continue; // carried per edge above
                 }
-                cands.push(Cand::Succ(base_key_of(key, entry), entry));
+                cands.push(Cand::succ(base_key_of(key, entry), entry));
             }
+            cands.bound();
         }
     }
-    cone_of_candidates(cands)
+    cands.finish()
 }
 
 /// The requirements under which raw direct fact `f`'s site runs, by its
@@ -9891,14 +9978,16 @@ mod cone_memory_step1_tests {
         let succ_k = entry("succ-k", "z", 0, false);
         let succ_s = entry("succ-s", "a", 4, true);
         let cands = vec![
-            Cand::Owned(Arc::clone(&k), entry("far", "a", 2, false)),
-            Cand::Succ(&k, &succ_k), // dist 1: nearer than "far"
-            Cand::Owned(Arc::clone(&k), entry("smaller-rep", "b", 1, false)), // ties dist, "b" < "z"
-            Cand::Owned(Arc::clone(&k), entry("full-tie-later", "b", 1, false)),
-            Cand::Succ(&s, &succ_s),
-            Cand::Owned(Arc::from("j"), entry("only-j", "a", 3, false)),
+            Cand::owned(Arc::clone(&k), entry("far", "a", 2, false)),
+            Cand::succ(&k, &succ_k), // dist 1: nearer than "far"
+            Cand::owned(Arc::clone(&k), entry("smaller-rep", "b", 1, false)), // ties dist, "b" < "z"
+            Cand::owned(Arc::clone(&k), entry("full-tie-later", "b", 1, false)),
+            Cand::succ(&s, &succ_s),
+            Cand::owned(Arc::from("j"), entry("only-j", "a", 3, false)),
         ];
-        let cone = cone_of_candidates(cands);
+        let mut b = ConeBuilder::new();
+        cands.into_iter().for_each(|c| b.push(c));
+        let cone = b.finish();
         let got: Vec<(&str, &str, usize, bool)> = cone
             .iter()
             .map(|(key, e)| {
@@ -9974,6 +10063,78 @@ mod cone_memory_step1_tests {
         assert_eq!(got, [("K", "guarded", 2, false)]);
     }
 
+    /// ENG-130 (sol): a key keeps the FIRST candidate's key allocation, as the old map's
+    /// insert did, even when a later candidate with its own (equal) key text wins the entry.
+    /// Hand-stated: two separately allocated `k` keys; the second wins on distance.
+    #[test]
+    fn a_cone_keeps_the_first_candidates_key_allocation() {
+        let entry = |witness: &str, dist: usize| {
+            let mut f = insert("M", "t/K");
+            f.witness_operation_id = Some(witness.into());
+            ConeFactEntry {
+                rep: Arc::new(f),
+                rep_key: Arc::from("r"),
+                dist,
+                guard: None,
+            }
+        };
+        let (first, later): (Arc<str>, Arc<str>) = (Arc::from("k"), Arc::from("k"));
+        assert!(
+            !Arc::ptr_eq(&first, &later),
+            "precondition: two allocations of one text"
+        );
+        let mut b = ConeBuilder::new();
+        b.push(Cand::owned(Arc::clone(&first), entry("far", 2)));
+        b.push(Cand::owned(Arc::clone(&later), entry("near", 1)));
+        let cone = b.finish();
+        let (key, e) = cone.iter().next().expect("one entry");
+        assert_eq!(e.rep.witness_operation_id.as_deref(), Some("near"));
+        assert!(Arc::ptr_eq(key, &first), "the first candidate's key");
+    }
+
+    /// ENG-130 (sol): the builder's early reduces (which bound its memory under a
+    /// high-overlap fan-in) give the cone a single reduce gives: the same entries, winners and
+    /// keys. 20,000 candidates over 3,000 keys, mixed distances and rep keys, fed in chunks
+    /// of 2,000 with a reduce allowed after each.
+    #[test]
+    fn early_reduces_give_the_one_reduce_cone() {
+        let cand = |i: usize| {
+            let mut f = insert("M", "t/K");
+            f.witness_operation_id = Some(format!("w{i}"));
+            Cand::owned(
+                Arc::from(format!("k{}", i % 3000).as_str()),
+                ConeFactEntry {
+                    rep: Arc::new(f),
+                    rep_key: Arc::from(format!("r{}", (i * 13) % 4).as_str()),
+                    dist: (i * 7) % 5,
+                    guard: None,
+                },
+            )
+        };
+        let shape = |cone: &FrozenCone| -> Vec<(String, String, usize)> {
+            cone.iter()
+                .map(|(k, e)| {
+                    (
+                        k.to_string(),
+                        e.rep.witness_operation_id.clone().unwrap(),
+                        e.dist,
+                    )
+                })
+                .collect()
+        };
+        let mut once = ConeBuilder::new();
+        (0..20_000).for_each(|i| once.push(cand(i)));
+        let mut chunked = ConeBuilder::new();
+        for i in 0..20_000 {
+            chunked.push(cand(i));
+            if i % 2000 == 1999 {
+                chunked.bound();
+            }
+        }
+        assert!(chunked.reduced > 0, "precondition: an early reduce ran");
+        assert_eq!(shape(&chunked.finish()), shape(&once.finish()));
+    }
+
     /// ENG-130: a full tie keeps the EARLIER candidate at any size, which needs the sort to
     /// keep equal keys in merge order (a small input passes with an unstable sort too: below
     /// ~20 elements it is an insertion sort). Two keys interleaved, 200 full ties each.
@@ -9993,11 +10154,11 @@ mod cone_memory_step1_tests {
                 (key, e)
             })
             .collect();
-        let cands = entries
+        let mut b = ConeBuilder::new();
+        entries
             .into_iter()
-            .map(|(k, e)| Cand::Owned(k, e))
-            .collect();
-        let cone = cone_of_candidates(cands);
+            .for_each(|(k, e)| b.push(Cand::owned(k, e)));
+        let cone = b.finish();
         let got: Vec<(&str, &str)> = cone
             .iter()
             .map(|(k, e)| (&**k, e.rep.witness_operation_id.as_deref().unwrap()))

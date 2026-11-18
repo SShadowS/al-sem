@@ -109,8 +109,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Measured** (CDO, `alsem analyze --format json`, release-fast, pinned to P-cores 0-11,
   3 alternating rounds, base `a73b4bf6`): `instructions:u` 287.82-287.84 G -> 270.47-270.49 G
   (-6.0 %); output byte-identical apart from `generatedAt`; peak RSS unchanged (2.40-2.48 vs
-  2.42-2.46 GB). The candidate list holds every candidate at once where the map held one slot
-  per key: a transient that did not show on CDO.
+  2.42-2.46 GB).
+- **Bounded transient** (sol review). A builder reduces the candidate list to its winners
+  whenever it grows past twice its reduced size (from 4,096 candidates), after each successor,
+  so it holds about twice the cone's distinct keys plus one successor's entries, not every
+  candidate of a high-overlap fan-in (1,000 successors sharing 10,000 keys would have been 10
+  million candidates). A reduce keeps the sequential merge's answer. A key keeps the FIRST
+  candidate's key allocation, as the map's insert did (the winner only supplies the entry).
 - **Resident `prove` reads +0.5 to +2.5 % instructions (pinned, 3 rounds), from codegen:** its
   instruction profile runs none of the changed code; untouched digest code inlines differently.
 - **CDO checks** (base `a73b4bf6`): `cdo-before-after` moved no finding, fingerprint or
@@ -122,8 +127,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (with the dist test flipped, a full tie replacing, or a successor without its extra hop, it
   fails), `a_full_tie_keeps_the_earliest_candidate_in_a_large_cone` (with an unstable sort it
   fails; the small test stays green there: below ~20 elements the unstable sort is an
-  insertion sort) and `a_successors_guarded_entry_enters_under_its_base_key` (Fable: with the
-  stored key instead of the base key every lib, r3 and r4 test stayed green; this one fails).
+  insertion sort), `a_successors_guarded_entry_enters_under_its_base_key` (Fable: with the
+  stored key instead of the base key every lib, r3 and r4 test stayed green; this one fails),
+  `a_cone_keeps_the_first_candidates_key_allocation` (with the winner's key taken it fails)
+  and `early_reduces_give_the_one_reduce_cone` (20,000 candidates over 3,000 keys, fed in
+  chunks with a reduce after each, equal the one-reduce cone).
 
 ### Changed (ENG-120: mimalloc's `purge_delay` measured on CDO and DO, kept at 0)
 
