@@ -284,15 +284,21 @@ cli_closure() { # <commit> <module>...
 for ((i = 0; i < ${#branches[@]}; i++)); do
     b=${branches[i]}
     # --no-renames: a file moved out of the engine counts at its old path too.
-    # core.quotePath=false: a non-ASCII path is not quoted, so it still matches
-    # the exempt prefixes (review r1, sol).
-    paths=$(G -c core.quotePath=false diff --no-renames --name-only "$master...${tips[i]}") \
+    # -z: paths as they are, never quoted (a non-ASCII name, a tab or a `"`), so
+    # they still match the exempt prefixes (review r1/r2, sol).
+    paths=$(G diff -z --no-renames --name-only "$master...${tips[i]}" | tr '\0' '\n') \
         || die "git diff failed for '$b'"
     paths=$(grep -vE "$presubmit_exempt" <<<"$paths" || true)
+    # Test data the subset reads (tests/fixtures/events is the harness's) counts
+    # as product code (review r2, sol).
     product=$(grep -vE '^tests/' <<<"$paths" || true)
+    product+=$(grep -E '^tests/(fixtures|r0-corpus)/' <<<"$paths" || true)
+    # output_cdo's helpers as the branch has them AND as master has them: a
+    # helper master started importing after the branch left counts too (r2).
     out_tests=$(
         grep -E "$presubmit_out_tests" <<<"$paths" || true
-        grep -xF -f <(cli_closure "${tips[i]}" output_cdo) <<<"$paths" || true
+        grep -xF -f <(cli_closure "${tips[i]}" output_cdo; cli_closure "$master" output_cdo) \
+            <<<"$paths" || true
     )
     need=()
     if [[ -n "$product" || -n "$out_tests" ]] || grep -qE "$presubmit_hl_tests" <<<"$paths"; then

@@ -961,6 +961,11 @@ fn land_checks_the_pre_submit_cdo_record() {
     );
     r.branch("tools/tls-61-src", &[("src/lib.rs", b"// x\n")]);
     r.branch("tools/tls-62-cargo", &[("Cargo.toml", b"[package]\n")]);
+    // Review r2 (sol): test data the harness reads.
+    r.branch(
+        "tools/tls-68-fixture",
+        &[("tests/fixtures/events/x.al", b"// x\n")],
+    );
     r.branch(
         "tools/tls-63-docs",
         &[
@@ -968,6 +973,8 @@ fn land_checks_the_pre_submit_cdo_record() {
             // Review r1 (sol): git quotes a non-ASCII path by default, which
             // would hide the docs/ prefix.
             ("docs/café.md", b"x\n"),
+            // Review r2 (sol): a tab is quoted even with core.quotePath=false.
+            ("docs/tab\there.md", b"x\n"),
             ("scripts/extra", b"x\n"),
             ("README.md", b"x\n"),
             ("tests/cli/other.rs", b"// x\n"),
@@ -1083,6 +1090,15 @@ fn land_checks_the_pre_submit_cdo_record() {
         rev("landing/tls67^2"),
         checked,
         "the landing merged a commit no check saw"
+    );
+
+    // Review r2 (sol): a fixture change needs the record too. Break: tests/
+    // fixtures/ left exempt with the other tests.
+    let (code, text) = r.land(&["--dry-run", "tools/tls-68-fixture"], &require);
+    assert_eq!(code, Some(1), "a fixture change was exempt: {text}");
+    assert!(
+        text.contains("missing program_resolve_harness l4_summary_differential output_cdo"),
+        "{text}"
     );
 
     // Review r1 (sol): a helper the output test imports is output's input too.

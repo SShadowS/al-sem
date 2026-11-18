@@ -456,6 +456,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Paths are read unquoted (`core.quotePath=false`), so `docs/café.md` stays exempt. The
     master-moved recheck repeats the missing-record notice too.
   - Four discrimination proofs, all red.
+- **Review round 2 (sol):**
+  - **The record is best-effort.** A file changed and restored with its old mtime (`cp -p`)
+    passes both checks; the record guards against forgetting the subset, not against a
+    deliberate trick. Said in `cdo-gate`.
+  - **Test data counts.** A change under `tests/fixtures/` or `tests/r0-corpus/` needs all three
+    phases (the harness reads `tests/fixtures/events/`).
+  - **The output closure** is taken at master too, so a helper master started importing after
+    the branch left counts.
+  - **Paths** are read NUL-delimited (`-z`), never quoted (a tab or `"` in a name too).
+  - **Not done, the check being advisory:**
+    - a lane that reverts a source change merged in a side topic can still hide behind
+      `git diff`'s single merge base;
+    - the closure over-warns for `cli_impact`, which the subset does not run.
 - **Tests:**
   - `gate_scripts::cdo_gate_only_pass_records_the_tree_it_ran_on` runs the real gate, with a
     stub cargo, from a throwaway repository. Nothing is recorded for a dirty tree, a failing

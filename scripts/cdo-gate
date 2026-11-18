@@ -672,7 +672,10 @@ repo="$(cd "$(dirname "$0")/.." && pwd)"
 # directory every worktree shares (`<common dir>/cdo-presubmit/<tree>`), one
 # phase a line (the union of every passing run on that tree), and written only
 # when the work tree was CLEAN before and after the run (no tracked change, no
-# untracked file outside .gitignore), so it names exactly HEAD's tree. A full
+# untracked file outside .gitignore) and no tracked file was modified during it
+# (presubmit_touched). That is best-effort, not proof (review r2, sol): a file
+# changed and then restored WITH its old mtime (`cp -p`) passes both checks. It
+# is a check against forgetting the subset, not against a deliberate trick. A full
 # gate's pass records its phases too. Cargo builds the CURRENT folder, so the
 # record is written only when that is this script's checkout (review r1, Fable:
 # `bash <other worktree>/scripts/cdo-gate` built one tree and recorded another).
