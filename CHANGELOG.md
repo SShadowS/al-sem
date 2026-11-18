@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (TLS-91: perf in the kraken image, for instruction counts)
+
+- **What.** `.kraken/Dockerfile` installs `linux-perf` (perf 7.0) in its own late layer, as gdb's,
+  and checks `perf --version` at build. `perf stat -e instructions:u` resolves a change of about
+  0.1 % where one-shot CPU seconds on server1 swing about ±10 % (ENG-121's measurement). It
+  counts through perf_event_open, as samply records, so it needs what samply needs
+  (CAP_PERFMON, the host's `perf_event_paranoid` <= 1; `scripts/perf-probe`). On the hybrid CPU,
+  pin to one core type (`taskset -c 0-11`, the P-cores) so the count is one PMU's.
+- **Why `linux-perf`, not `linux-tools-generic`** (what was installed live, and what the task
+  named): `linux-perf` is only a Recommends of `linux-tools-common`, so under the image's
+  `--no-install-recommends` the tools package would bring no perf at all. `linux-perf` gives a
+  plain `/usr/bin/perf` that does not look for the running kernel's tools (server1 runs 7.2).
+- Until the next tentacle rebuild perf stays the live install; kraken picks this up then.
+
 ### Fixed (ENG-115: a recursive member's inherited fact takes its nearest witness, as every other routine's does)
 
 - **What changed** (`src/engine/l4/capability_cone.rs`). A routine in a recursive SCC gets its
