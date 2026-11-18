@@ -390,6 +390,106 @@ fn cdo_gate_only_runs_and_judges_just_its_subset() {
     );
 }
 
+/// ⟨TLS-87⟩ A passing `--only` run records its phases under the tree it ran on,
+/// in the shared git directory (`<common dir>/cdo-presubmit/<tree>`), so
+/// `scripts/land` can check a branch had its pre-submit subset. The gate runs
+/// from a throwaway git repository holding a copy of the scripts it needs, with
+/// a stub `cargo` that passes every phase: on a work tree with an untracked file
+/// it records nothing (it would not name exactly HEAD's tree); clean, it records
+/// `harness,l4`; a second run (`lsp`) on the same tree adds to the record.
+///
+/// Mutations (2026-11-18): the `record_presubmit` call dropped -> no record
+/// (red); the clean-tree check dropped from `record_presubmit` -> the dirty run
+/// records (red). Each restored, green.
+#[cfg(unix)]
+#[test]
+fn cdo_gate_only_pass_records_the_tree_it_ran_on() {
+    use std::os::unix::fs::PermissionsExt;
+    let repo = tempfile::tempdir().unwrap();
+    let stub = tempfile::tempdir().unwrap();
+    let target = tempfile::tempdir().unwrap();
+    let ws = tempfile::tempdir().unwrap();
+    let scripts = repo.path().join("scripts");
+    std::fs::create_dir_all(&scripts).unwrap();
+    for f in ["cdo-gate", "cdo-slot", "require-rttime", "cdo-speed"] {
+        let from = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("scripts")
+            .join(f);
+        std::fs::copy(from, scripts.join(f)).unwrap();
+    }
+    crate::git::run(repo.path(), &["init", "-q", "-b", "master"]);
+    crate::git::run(repo.path(), &["add", "scripts"]);
+    crate::git::run(repo.path(), &["commit", "-q", "-m", "scripts"]);
+    let tree =
+        String::from_utf8(crate::git::run(repo.path(), &["rev-parse", "HEAD^{tree}"]).stdout)
+            .unwrap()
+            .trim()
+            .to_string();
+    std::fs::write(
+        stub.path().join("cargo"),
+        "#!/bin/sh\necho 'test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s'\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(
+        stub.path().join("cargo"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    let path = format!(
+        "{}:{}",
+        stub.path().display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let gate = |only: &str| {
+        let out = std::process::Command::new("bash")
+            .arg(scripts.join("cdo-gate"))
+            .args(["--only", only])
+            .arg(ws.path())
+            .env("PATH", &path)
+            .env("CARGO_TARGET_DIR", target.path())
+            .env("CDO_SLOT_DIR", target.path().join("slot"))
+            .env("CDO_SLOT_MEM_MIN_GB", "0")
+            .env_remove("CDO_PRESUBMIT_DIR")
+            .env_remove("CDO_SLOT_TOKEN")
+            .env_remove("CDO_WS")
+            .env_remove("CDO_GATE_SERIAL")
+            .env_remove("CDO_GATE_LAYOUT")
+            .env_remove("CDO_GATE_NO_SPEED")
+            .output()
+            .expect("spawn bash scripts/cdo-gate");
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(out.status.code(), Some(0), "{text}");
+        text
+    };
+    let record = repo.path().join(".git/cdo-presubmit").join(&tree);
+
+    // Not clean (an untracked file): no record.
+    std::fs::write(repo.path().join("scratch.txt"), "x").unwrap();
+    let text = gate("harness,l4");
+    assert!(text.contains("no pre-submit record"), "{text}");
+    assert!(!record.exists(), "a dirty run recorded a pass");
+    std::fs::remove_file(repo.path().join("scratch.txt")).unwrap();
+
+    // Clean: recorded.
+    let text = gate("harness,l4");
+    assert!(text.contains("pre-submit record for tree"), "{text}");
+    assert_eq!(
+        std::fs::read_to_string(&record).unwrap(),
+        "l4_summary_differential\nprogram_resolve_harness\n"
+    );
+
+    // Another subset on the same tree adds its phases.
+    gate("lsp");
+    assert_eq!(
+        std::fs::read_to_string(&record).unwrap(),
+        "l4_summary_differential\nlsp\nprogram_resolve_harness\n"
+    );
+}
+
 /// TLS-58 review r1: a real `--only harness,l4,lsp,output` run, with a stub
 /// `cargo` that logs each call. It builds just those targets, runs just those
 /// phases, each with the full gate's command and `ENFORCE_CDO_WS=1` and with
@@ -457,6 +557,9 @@ fn cdo_gate_only_run_builds_and_runs_just_its_phases() {
         // A slot of its own (TLS-60): never the tentacle's real one.
         .env("CDO_SLOT_DIR", target.path().join("slot"))
         .env("CDO_SLOT_MEM_MIN_GB", "0")
+        // TLS-87: a stubbed pass must never record a pre-submit pass for the
+        // real tree (it would on a clean checkout).
+        .env("CDO_PRESUBMIT_DIR", target.path().join("presubmit"))
         .env_remove("CDO_SLOT_TOKEN")
         .env_remove("CDO_WS")
         .env_remove("CDO_GATE_SERIAL")

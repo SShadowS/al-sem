@@ -12,7 +12,11 @@
 #             the last fetch: no fetch here, merge-and-push fetches and checks
 #             again); every branch exists, is not master, is not yet in master
 #             and is given once; with --push, the main checkout is clean. Prints
-#             master's sha and the merge order.
+#             master's sha and the merge order. ⟨TLS-87⟩ Each branch touching
+#             src/ or crates/ has a pre-submit CDO record for its head tree
+#             (`cdo-gate --only harness,l4`, plus `output` for the engine):
+#             a loud warning without one, a refusal under
+#             LAND_REQUIRE_PRESUBMIT=1.
 #   merge     in the gate worktree, on a DETACHED master: each branch in the
 #             order given, `merge --no-ff -m "landing: <ID>"`. A conflict in
 #             CHANGELOG.md alone is resolved by keeping both sides' added lines
@@ -233,6 +237,43 @@ for ((i = 0; i < ${#branches[@]}; i++)); do
     echo "land:   $((i + 1)). ${branches[i]} ($(G rev-parse --short "refs/heads/${branches[i]}"), ${ids[i]})"
 done
 echo "land: landing branch: $landing"
+
+# ⟨TLS-87⟩ The pre-submit CDO subset, checked rather than remembered: a branch
+# whose diff touches src/ or crates/ needs a passing `cdo-gate --only
+# harness,l4` record for its head tree (scripts/cdo-gate's record_presubmit),
+# and one touching the engine (src/program, src/engine, crates/al-syntax) also
+# `output` (its rendering goldens are the only pre-landing check of explain,
+# query and digest text). Docs-only and scripts-only branches need none. A new
+# gate starts advisory (the owner's design principle 4): a missing record is a
+# loud warning; LAND_REQUIRE_PRESUBMIT=1 makes it a refusal.
+presubmit_dir="${CDO_PRESUBMIT_DIR:-$(G rev-parse --path-format=absolute --git-common-dir)/cdo-presubmit}"
+presubmit_missing=()
+for b in "${branches[@]}"; do
+    paths=$(G diff --name-only "$master...refs/heads/$b") || die "git diff failed for '$b'"
+    need=()
+    if grep -qE '^(src|crates)/' <<<"$paths"; then
+        need=(program_resolve_harness l4_summary_differential)
+        grep -qE '^(src/program|src/engine|crates/al-syntax)/' <<<"$paths" && need+=(output_cdo)
+    fi
+    ((${#need[@]})) || continue
+    tree=$(G rev-parse "refs/heads/$b^{tree}")
+    lacks=()
+    for p in "${need[@]}"; do
+        grep -qxF "$p" "$presubmit_dir/$tree" 2>/dev/null || lacks+=("$p")
+    done
+    if ((${#lacks[@]})); then
+        presubmit_missing+=("$b")
+        echo "land: WARNING: '$b' has no passing pre-submit CDO record for its head tree ${tree:0:12}: missing ${lacks[*]}" >&2
+        echo "land:   in its worktree, committed and clean: scripts/cdo-gate --only $(
+            sed 's/program_resolve_harness/harness/; s/l4_summary_differential/l4/; s/output_cdo/output/' \
+                <<<"$(IFS=,; echo "${need[*]}")") <CDO_WS>" >&2
+    else
+        echo "land: '$b' pre-submit CDO record: ${need[*]}"
+    fi
+done
+if ((${#presubmit_missing[@]})) && [[ "${LAND_REQUIRE_PRESUBMIT:-}" == 1 ]]; then
+    die "LAND_REQUIRE_PRESUBMIT=1: no pre-submit CDO record for ${presubmit_missing[*]}"
+fi
 
 # ---- dry run -----------------------------------------------------------
 if ((dry_run)); then

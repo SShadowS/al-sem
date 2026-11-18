@@ -410,6 +410,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     id parts, the member kind, explain's level, the wire id, the selector fallback, the surface hash,
     the add-in guard.
 
+### Added (TLS-87: the pre-submit CDO subset is checked at landing, not remembered)
+
+- **Why.** ENG-99 (2026-11-16) was submitted without `cdo-gate --only harness,l4`, and the
+  landing gate failed after 23 min on `l4_summary_differential`'s frozen digest. ENG-115
+  (2026-11-17) ran `harness,l4`, but its landing failed after ~25 min on `output_cdo`'s
+  rendering goldens, which only `output` checks before a landing.
+- **`scripts/cdo-gate --only ...`** records a passing run. The phases go under the tree it ran
+  on, in `<git common dir>/cdo-presubmit/<tree>`, one phase a line, the union of every passing
+  run on that tree. This is the same pattern as ci-steps' gate-passed record. It is written
+  only when the work tree was clean before and after the run, so it names exactly HEAD's
+  tree; otherwise the gate says so.
+- **`scripts/land`** checks each branch's head tree in its `check` step, `--dry-run` included.
+  - A diff touching `src/` or `crates/` needs `harness,l4`.
+  - A diff touching `src/program`, `src/engine` or `crates/al-syntax` also needs `output`.
+  - Docs-only and scripts-only branches need none.
+  - A missing record is a loud warning that names the missing phases and the command to run.
+    `LAND_REQUIRE_PRESUBMIT=1` makes it a refusal.
+- **Why a warning by default.** The owner's design principle 4 says "a new gate starts advisory,
+  and failing is opt-in until real use has measured what it would catch". A rebase makes a new
+  tree, so the subset must run after a branch's last rebase. That is right (master moved), but
+  how often it warns is not yet measured.
+- **Cost of `output`.** It adds ~160 s plus an engine shared with the other output tests, and
+  only on engine diffs.
+- **Tests:**
+  - `gate_scripts::cdo_gate_only_pass_records_the_tree_it_ran_on` runs the real gate, with a
+    stub cargo, from a throwaway repository. A dirty run records nothing, a clean run records,
+    and a second subset adds to the record.
+  - `land_script::land_checks_the_pre_submit_cdo_record`: no record warns, or refuses when
+    required; a record for the head tree is accepted; an engine branch also needs `output`;
+    docs and scripts need nothing.
+  - The stubbed `--only` test sets `CDO_PRESUBMIT_DIR`, so a stubbed pass never records the
+    real tree.
+
+  Each guard has a discrimination proof, recorded in the tests' docs. Documented in CLAUDE.md's
+  test tier 2b.
+
 ### Changed (ENG-120: mimalloc's `purge_delay` measured on CDO and DO, kept at 0)
 
 - No code change: `alsem` keeps `purge_delay` 0. A delay of 1 or 10 ms gave no CPU gain near the

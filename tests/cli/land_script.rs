@@ -97,6 +97,8 @@ impl Repo {
             .env("CLAUDE_CODE_SESSION_ID", "land-test")
             .env_remove("CLAUDE_PID")
             .env_remove("CDO_SLOT_TOKEN")
+            .env_remove("CDO_PRESUBMIT_DIR")
+            .env_remove("LAND_REQUIRE_PRESUBMIT")
             .env("CDO_WS", self.root.join("cdo-ws"))
             .env("STUB_LOG", self.root.join("calls"));
         for (k, v) in env {
@@ -896,4 +898,90 @@ fn merge_and_push_lands_only_what_the_gates_saw() {
     assert_eq!(rev(&r.main, "master^1"), m3);
     assert_eq!(rev(&r.main, "master^2"), plain, "the branch, not the tag");
     assert_eq!(rev(&origin, "master"), rev(&r.main, "master"));
+}
+
+/// ⟨TLS-87⟩ land checks each branch's pre-submit CDO record (scripts/cdo-gate
+/// writes it for a passing `--only` run, under the tree it ran on, in the
+/// shared git directory). A branch touching src/ without one is a loud warning
+/// naming the missing phases and the command to run; under
+/// LAND_REQUIRE_PRESUBMIT=1 a refusal. A record for its head tree satisfies it
+/// (the record is hand-written here: the precondition stated, not produced). A
+/// branch touching the engine also needs `output`. Docs and scripts need none.
+///
+/// Mutations (2026-11-18): the LAND_REQUIRE_PRESUBMIT refusal dropped -> the
+/// branch with no record passes under it (red); `output_cdo` dropped from the
+/// engine paths' need -> the engine branch with only harness,l4 passes (red).
+/// Each restored, green.
+#[test]
+fn land_checks_the_pre_submit_cdo_record() {
+    let r = repo();
+    for d in ["src/engine", "docs"] {
+        std::fs::create_dir_all(r.main.join(d)).unwrap();
+    }
+    r.branch("tools/tls-61-src", &[("src/lib.rs", b"// x\n")]);
+    r.branch("tools/tls-62-engine", &[("src/engine/x.rs", b"// x\n")]);
+    r.branch(
+        "tools/tls-63-docs",
+        &[("docs/n.md", b"x\n"), ("scripts/extra", b"x\n")],
+    );
+    let require = [("LAND_REQUIRE_PRESUBMIT", "1")];
+    let record = |branch: &str, phases: &str| {
+        let tree = r.git(&r.main, &["rev-parse", &format!("{branch}^{{tree}}")]);
+        let dir = r.main.join(".git/cdo-presubmit");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(tree), phases).unwrap();
+    };
+
+    // No record: a loud warning, the run goes on.
+    let (code, text) = r.land(&["--dry-run", "tools/tls-61-src"], &[]);
+    assert_eq!(code, Some(0), "{text}");
+    assert!(
+        text.contains("WARNING: 'tools/tls-61-src' has no passing pre-submit CDO record")
+            && text.contains("missing program_resolve_harness l4_summary_differential")
+            && text.contains("scripts/cdo-gate --only harness,l4 <CDO_WS>"),
+        "{text}"
+    );
+    // ... and a refusal when required.
+    let (code, text) = r.land(&["--dry-run", "tools/tls-61-src"], &require);
+    assert_eq!(code, Some(1), "{text}");
+    assert!(
+        text.contains("no pre-submit CDO record for tools/tls-61-src"),
+        "{text}"
+    );
+
+    // With the record for its head tree: accepted.
+    record(
+        "tools/tls-61-src",
+        "l4_summary_differential\nprogram_resolve_harness\n",
+    );
+    let (code, text) = r.land(&["--dry-run", "tools/tls-61-src"], &require);
+    assert_eq!(code, Some(0), "{text}");
+    assert!(
+        text.contains("'tools/tls-61-src' pre-submit CDO record: program_resolve_harness l4_summary_differential"),
+        "{text}"
+    );
+
+    // The engine needs `output` too.
+    record(
+        "tools/tls-62-engine",
+        "l4_summary_differential\nprogram_resolve_harness\n",
+    );
+    let (code, text) = r.land(&["--dry-run", "tools/tls-62-engine"], &require);
+    assert_eq!(code, Some(1), "{text}");
+    assert!(
+        text.contains("missing output_cdo")
+            && text.contains("scripts/cdo-gate --only harness,l4,output <CDO_WS>"),
+        "{text}"
+    );
+    record(
+        "tools/tls-62-engine",
+        "l4_summary_differential\noutput_cdo\nprogram_resolve_harness\n",
+    );
+    let (code, text) = r.land(&["--dry-run", "tools/tls-62-engine"], &require);
+    assert_eq!(code, Some(0), "{text}");
+
+    // Docs and scripts: no record needed.
+    let (code, text) = r.land(&["--dry-run", "tools/tls-63-docs"], &require);
+    assert_eq!(code, Some(0), "{text}");
+    assert!(!text.contains("pre-submit"), "{text}");
 }
