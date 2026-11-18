@@ -270,6 +270,10 @@ pub(crate) fn close_holder_sites(
             closed.push((e.obligation_id(), over));
         }
     }
+    // Nothing to patch (the usual case): skip indexing every edge by its id (ENG-87, Fable).
+    if closed.is_empty() {
+        return;
+    }
     let at: HashMap<ObligationId, usize> = edges
         .iter()
         .enumerate()

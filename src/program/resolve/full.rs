@@ -4921,9 +4921,28 @@ mod tests {
             assert!(!e.has_obligation(other), "{other:?}");
             assert_ne!(e.obligation_id(), *other);
         }
-        let p = ClassifiedEdge::new(ObligationKind::Publisher, e.edge.clone(), None);
-        assert_eq!(p.obligation_id(), ObligationId::Publisher(caller.clone()));
-        assert!(p.has_obligation(&ObligationId::Publisher(caller)));
+        // Fable: an edge whose `from` differs from its site's caller, so a site id read from
+        // `from`, or a publisher id read from the site, cannot pass.
+        let mut split = e.clone();
+        split.edge.from = rid("P");
+        assert_eq!(
+            split.obligation_id(),
+            id,
+            "a site id is the site's, not `from`'s"
+        );
+        assert!(split.has_obligation(&id));
+        assert!(!split.has_obligation(&ObligationId::CallSite {
+            caller: rid("P"),
+            span: span.clone(),
+            callee_fp,
+        }));
+        let p = ClassifiedEdge::new(ObligationKind::Publisher, split.edge.clone(), None);
+        assert_eq!(p.obligation_id(), ObligationId::Publisher(rid("P")));
+        assert!(p.has_obligation(&ObligationId::Publisher(rid("P"))));
+        assert!(
+            !p.has_obligation(&ObligationId::Publisher(caller)),
+            "a publisher id is `from`'s, not the site's caller"
+        );
         assert!(
             !p.has_obligation(&id),
             "a publisher edge is not its site's call"
