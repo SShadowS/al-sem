@@ -285,8 +285,9 @@ for ((i = 0; i < ${#branches[@]}; i++)); do
     b=${branches[i]}
     # --no-renames: a file moved out of the engine counts at its old path too.
     # -z: paths as they are, never quoted (a non-ASCII name, a tab or a `"`), so
-    # they still match the exempt prefixes (review r1/r2, sol).
-    paths=$(G diff -z --no-renames --name-only "$master...${tips[i]}" | tr '\0' '\n') \
+    # they still match the exempt prefixes (review r1/r2, sol). A newline inside
+    # a name becomes \001 first, so each path stays one line (r3).
+    paths=$(G diff -z --no-renames --name-only "$master...${tips[i]}" | tr '\n\0' '\001\n') \
         || die "git diff failed for '$b'"
     paths=$(grep -vE "$presubmit_exempt" <<<"$paths" || true)
     # Test data the subset reads (tests/fixtures/events is the harness's) counts

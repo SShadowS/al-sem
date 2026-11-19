@@ -420,9 +420,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on, in `<git common dir>/cdo-presubmit/<tree>`, one phase a line, the union of every passing
   run on that tree. This is the same pattern as ci-steps' gate-passed record. It is written
   only when the work tree was clean before and after the run, at the same tree, and the run
-  ran from the script's own checkout (cargo builds the current folder). So it names exactly the
-  tree that was tested; otherwise the gate says why. A full gate's pass records every subset
-  phase too.
+  ran from the script's own checkout (cargo builds the current folder), and no tracked file was
+  modified during the run. That names the tested tree on a best-effort basis (a file restored
+  with its old mtime, `cp -p`, passes): it guards against forgetting the subset, not against a
+  deliberate trick. Otherwise the gate says why. A full gate's pass records every subset phase
+  too.
 - **`scripts/land`** checks each branch's head tree in its `check` step, `--dry-run` included.
   The rule lists what is exempt, so a new kind of path counts by default.
   - Product code (`src/`, `crates/`, `Cargo.*`, everything not exempt) needs `harness,l4,output`.
