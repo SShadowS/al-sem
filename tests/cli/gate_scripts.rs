@@ -2149,6 +2149,10 @@ for line in sys.stdin:
         # its pair (a positional factor the flipped passes cancel, TLS-65).
         if calls == 1:
             burn(float(os.environ["STUB_BUILD_S"]) * (1.5 if another_alive() else 1.0))
+            # STUB_HEAD_SLEEP_S (TLS-103): head's build waits this long, wall time
+            # with no CPU, as a loaded host stretches it.
+            if os.path.basename(sys.argv[0]) == "alsem-head":
+                time.sleep(float(os.environ.get("STUB_HEAD_SLEEP_S", "0")))
             open(me, "w").close()
         if calls == 6:
             burn(float(os.environ["STUB_BUILD_S"]) * (1.5 if second("tests") else 1.0))
@@ -2285,9 +2289,20 @@ fn speed_with_stub(
         .env("CDO_SPEED_LOADAVG_FILE", dir.join("loadavg"))
         .env("CDO_SPEED_PRESSURE_FILE", dir.join("pressure"))
         .env("CDO_SPEED_HOST_PRESSURE_FILE", dir.join("pressure"))
-        .env("CDO_SPEED_CALM_PRESSURE", "25");
+        .env("CDO_SPEED_CALM_PRESSURE", "25")
+        // TLS-103: a stub clock. The stub servers burn exact CPU, but their
+        // wall time is the host's: under load a stub build read x1.78 against
+        // the 1.6 wall limit and failed a test about instruction counts. With
+        // wall taken as CPU, a stub run's verdict no longer depends on the
+        // host. (A test may still pass its own value in `env`.)
+        .env("CDO_SPEED_TEST_WALL_IS_CPU", "1");
+    // An empty value removes the variable (a test turning a default off).
     for (k, v) in env {
-        cmd.env(k, v);
+        if v.is_empty() {
+            cmd.env_remove(k);
+        } else {
+            cmd.env(k, v);
+        }
     }
     let out = cmd.output().expect("spawn python3 scripts/cdo-speed");
     let text = format!(
@@ -2487,16 +2502,17 @@ fn speed_reports_instructions_and_their_limit_is_advisory() {
         .matches("perf failed to attach 3 times in a row")
         .count();
     assert!(gave_up > 0, "no give-up: {text}");
-    // No server tried more than 3 times (the stub logs each attach with its
-    // server's pid; a server with fewer calls tries fewer times), and those that
-    // gave up tried exactly 3. Break: the give-up's early return dropped -> a
-    // server tries on every call (red; the message alone stayed GREEN under that
-    // break, since it is printed at the third failure either way).
+    // No server tried more than 3 times (a server with fewer calls tries fewer
+    // times), and those that gave up tried exactly 3. Counted from cdo-speed's
+    // own line per failed attach, by server pid (TLS-103: the stub perf's log
+    // missed an attempt whose stub was still starting when the 0.3 s ran out,
+    // under load). The stub's log still bounds the attaches it saw. Break: the
+    // give-up's early return dropped -> a server tries on every call (red; the
+    // message alone stayed GREEN under that break, since it is printed at the
+    // third failure either way).
     let mut per_server = std::collections::BTreeMap::<String, usize>::new();
-    for pid in std::fs::read_to_string(dir.path().join("state-/perf-attaches"))
-        .unwrap()
-        .lines()
-    {
+    for l in text.lines().filter(|l| l.contains("perf attach failed (")) {
+        let pid = l.split("(pid ").nth(1).unwrap().split(')').next().unwrap();
         *per_server.entry(pid.to_string()).or_default() += 1;
     }
     assert!(
@@ -2507,6 +2523,17 @@ fn speed_reports_instructions_and_their_limit_is_advisory() {
         per_server.values().filter(|&&n| n == 3).count(),
         gave_up,
         "{per_server:?}"
+    );
+    let mut stub_saw = std::collections::BTreeMap::<String, usize>::new();
+    for pid in std::fs::read_to_string(dir.path().join("state-/perf-attaches"))
+        .unwrap_or_default()
+        .lines()
+    {
+        *stub_saw.entry(pid.to_string()).or_default() += 1;
+    }
+    assert!(
+        stub_saw.values().all(|&n| n <= 3),
+        "the stub saw attaches after the give-up: {stub_saw:?}"
     );
     assert!(
         verdict(&text).contains("(instructions: no call fully counted; advisory limit x1.02)"),
@@ -2602,6 +2629,88 @@ fn speed_counts_instructions_with_the_real_perf() {
     assert!(text.contains("instructions: counted per call"), "{text}");
 }
 
+/// ⟨TLS-103⟩ A stub run's verdict does not depend on the host's load: under
+/// `speed_with_stub`'s stub clock (CDO_SPEED_TEST_WALL_IS_CPU) a call's wall
+/// time is its CPU time. Here head's model build waits 1 s with no CPU
+/// (STUB_HEAD_SLEEP_S), as a loaded host stretches it: about x3.5 in wall
+/// against the 1.6 limit, the shape that failed TLS-102's stress run (x1.78).
+/// The run still PASSes, judged on CPU alone.
+///
+/// The control (review, sol): the same delay with the stub clock off FAILs on
+/// wall time, so the PASS above is the hook's doing. And the hook never judges
+/// a real run: any value but `1`, or a run without `--base-exe` and
+/// `--head-exe` (a gate builds its own binaries), is refused before anything
+/// starts.
+///
+/// Mutations (2026-11-19): the hook dropped from `Server.call` (wall measured
+/// again) -> "FAIL: build: wall time" (red); restored, green. The refusal
+/// dropped from argument parsing -> the run without stub binaries is not
+/// refused (red); restored, green.
+#[cfg(target_os = "linux")]
+#[test]
+fn speed_stub_verdicts_ignore_the_hosts_wall_time() {
+    let dir = tempfile::tempdir().unwrap();
+    let (code, text) = speed_with_stub(dir.path(), "1.0", &[], &[("STUB_HEAD_SLEEP_S", "1")]);
+    assert_eq!(
+        code,
+        Some(0),
+        "a stretched wall time failed a stub run: {text}"
+    );
+    assert!(
+        text.contains("test hooks set") && text.contains("CDO_SPEED_TEST_WALL_IS_CPU=1"),
+        "{text}"
+    );
+
+    // The control: the stub clock off (an empty value removes it). 3 s, not 1:
+    // the ratio (0.4k + 3) / 0.4k stays over 1.6 until load stretches the 0.4 s
+    // burn twelvefold (k = 12.5), where 1 s gave out at k = 4.2 (review, Fable).
+    let off = tempfile::tempdir().unwrap();
+    let (code, text) = speed_with_stub(
+        off.path(),
+        "1.0",
+        &[],
+        &[
+            ("STUB_HEAD_SLEEP_S", "3"),
+            ("CDO_SPEED_TEST_WALL_IS_CPU", ""),
+        ],
+    );
+    assert_eq!(code, Some(1), "{text}");
+    assert!(text.contains("FAIL: build: wall time"), "{text}");
+
+    // Never a real run: a value but `1`, or no stub binaries.
+    let other = tempfile::tempdir().unwrap();
+    let (code, text) = speed_with_stub(
+        other.path(),
+        "1.0",
+        &[],
+        &[("CDO_SPEED_TEST_WALL_IS_CPU", "0")],
+    );
+    assert_eq!(code, Some(2), "{text}");
+    assert!(
+        text.contains("CDO_SPEED_TEST_WALL_IS_CPU is a test hook") && !text.contains("outputs in"),
+        "refused before anything starts: {text}"
+    );
+    // One stub binary only (both are needed), and `--no-build` into a private
+    // target: a refusal that regressed ends at "no binary at", never in cargo.
+    let out = std::process::Command::new("python3")
+        .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-speed"))
+        .arg(dir.path().join("ws"))
+        .arg("--base-exe")
+        .arg(dir.path().join("alsem"))
+        .arg("--no-build")
+        .env("CDO_SPEED_TEST_WALL_IS_CPU", "1")
+        .env("CARGO_TARGET_DIR", dir.path().join("target"))
+        .env("ALSEM_SPEED_CACHE", dir.path().join("cache"))
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(2), "{text}");
+    assert!(
+        text.contains("only with --base-exe and --head-exe"),
+        "{text}"
+    );
+}
+
 /// TLS-65 and TLS-79: the warm-up is timed twice, on fresh server pairs, the
 /// second pass with every call's side order flipped, and judged on the
 /// geometric mean of the two ratios (TLS-65); and each side's model build is
@@ -2654,7 +2763,8 @@ fn speed_warm_up_cancels_the_second_side_penalty() {
 
     let (code, text) = speed_with_stub(dir.path(), "0.5", &[], &[]);
     // The CPU judgment is the deterministic part (the stub burns exact CPU);
-    // wall time is the host's (sol r1): only a CPU failure may not appear.
+    // only a CPU failure may not appear. (Wall equals CPU here under the stub
+    // clock, TLS-103; it was the host's when sol r1 wrote this.)
     assert!(
         !text.contains("FAIL: build: CPU") && !text.contains("FAIL: warm-tests: CPU"),
         "two flipped samples pass the CPU limit: {text}"

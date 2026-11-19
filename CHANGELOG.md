@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (TLS-103: the cdo-speed stub tests no longer depend on the host's load)
+
+- **What failed.** `gate_scripts::speed_reports_instructions_and_their_limit_is_advisory` failed
+  in TLS-102's stress run and in TLS-93's landing, on master since TLS-83: the stub servers
+  burn exact CPU, but their WALL time is the host's, and under load a stub model build read
+  x1.78 against cdo-speed's 1.6 wall limit. The run then FAILED, though the test only checks
+  instruction counts and that their limit is advisory.
+- **The fix: a stub clock.** A test hook, `CDO_SPEED_TEST_WALL_IS_CPU`, takes each call's wall
+  time to be its CPU time (`Server.call`, the one place every judged wall time comes from).
+  `speed_with_stub` sets it for every stub run, so their verdicts rest on CPU alone. It is
+  listed among the test hooks a run reports; the limits are unchanged.
+- **A second wall-time dependence, found by the stress run.** The same test checks that a
+  server whose perf never acks gives up after exactly 3 attaches. It counted the attaches
+  from the stub perf's own log, but under load a stub could still be starting when the 0.3 s
+  attach time ran out, so a server that failed 3 times showed 2 (2 failures in 10 loaded
+  runs). cdo-speed now prints one line per failed attach (`perf attach failed (n/3)`, with
+  the server's pid; at most 3 a server, also useful in a real gate), and the test counts
+  those. Proof: the give-up's early return dropped -> servers tried up to 13 times (red).
+- **It never judges a real run** (review, sol): any value but `1`, or a run without
+  `--base-exe` and `--head-exe` (a gate builds its own binaries and gives neither), is refused
+  before anything starts, so a variable left exported in a shell cannot make a real gate pass
+  on CPU alone.
+- **Tests.** `speed_stub_verdicts_ignore_the_hosts_wall_time`: head's build waits 1 s with no
+  CPU (a new stub knob, `STUB_HEAD_SLEEP_S`), x3.48 in wall; the run still PASSes. The control
+  (hook off) waits 3 s and FAILs on wall time; it stays over the limit until load stretches the
+  stub's burn twelvefold (review, Fable: 1 s gave out at about four). The hook is refused for
+  `0` (before any output) and for a run with one stub binary only. Proofs: the hook dropped ->
+  "FAIL: build: wall time x3.48" (red); the refusal dropped -> the `0` run goes ahead (red); the
+  refusal weakened to "either binary" -> the one-binary run is not refused (red); and the
+  advisory rule broken (the
+  instructions advisory appended to the failures) still fails the instructions test (red).
+  Cost noted (sol): the geometric-mean check now sees wall ratios equal to CPU's, so its wall
+  half checks the arithmetic again rather than an independent sample. The speed tests ran 10
+  times beside full nextest runs, all green.
+
 ### Fixed (TLS-89 follow-up: a slot test raced the run's status write)
 
 - TLS-92's landing failed on `cdo_slot_timings_in_a_hand_hold`: it waited for `held=1`, then
@@ -645,6 +680,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   Each guard has a discrimination proof, recorded in the tests' docs. Documented in CLAUDE.md's
   test tier 2b.
+
+### Fixed (TLS-93: a test's deliberate crash no longer leaves a core dump on the host)
+
+- **The case.** `lsp::l4_host_binary::host_panic_ends_the_server` makes the server abort on
+  purpose. Each debug test run therefore made systemd-coredump store a core of
+  `al-call-hierarchy`, and the desktop raised a crash notice that looked like a real crash. The
+  engine-host fault hooks (`abort-on-ask`, `abort-on-ask-once`, `panic-on-ask-once`, used by
+  `engine_host` and the MCP tests) crash their child the same way.
+- **Now.** Each deliberate crash turns its process's core dump off right before it happens, and
+  prints "test seam: core dumps off" once that reads back:
+  - the l4-host panic seam (`AL_SEM_L4_HOST_TEST_PANIC`);
+  - the engine-host hooks `abort-on-ask`, `abort-on-ask-once` and `panic-on-ask-once`.
+
+  How it is turned off:
+  - **Linux:** the process becomes not dumpable (`PR_SET_DUMPABLE` 0). When that succeeds, the
+    kernel skips the dump before it starts the host's `core_pattern` pipe, so systemd-coredump
+    makes no core and no record, and the desktop raises no notice. `RLIMIT_CORE` 0 would not do:
+    the kernel ignores it for a pipe, and systemd-coredump would still log the crash (found in
+    the Fable review). prctl's arguments are passed word-sized (`c_ulong`): it is variadic,
+    and a bare `0` left the upper bits of each argument unspecified on 64-bit Linux (sol).
+  - **Other unix:** `RLIMIT_CORE` 0.
+  - If the call fails (a sandbox refusing `prctl`, or a non-unix system), the seam still
+    crashes and may dump, and no "core dumps off" line is printed.
+
+  The call sits at the crash itself, because a non-dumpable process's `/proc` files belong to
+  root, and its own `clear_refs` write would fail. A real crash keeps its core. No other test
+  crashes a process on purpose (searched: `abort`, SIGABRT and the other core-dumping signals).
+- **Tests.**
+  - `host_panic_ends_the_server` and `engine_host`'s three crash tests (`abort-on-ask-once`,
+    `abort-on-ask`, `panic-on-ask-once`) assert the line, read back inside the crashing child.
+  - Discrimination proofs, all red: each seam's call removed, re-run after the call moved to
+    the crash.
+  - The owner can confirm that no new entry appears in `coredumpctl list` after a debug test
+    run.
 
 ### Changed (ENG-120: mimalloc's `purge_delay` measured on CDO and DO, kept at 0)
 
