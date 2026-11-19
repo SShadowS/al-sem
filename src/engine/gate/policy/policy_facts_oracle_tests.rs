@@ -90,6 +90,11 @@
 //! such a global moved (`r0/ws-d57`, `r0/ws-member-call-codeunit`, `r0/ws-r2a-record-types`,
 //! single and cross): the hashed facts carry the variable's id in their `extra`. Every count
 //! (`any`, `direct`, `inherited`, `routines`) is unchanged.
+//!
+//! Re-recorded (2026-11-19, ENG-131: the `rv/` record-variable ids fold with the
+//! identifier fold, which keeps `İ`) with `REMINT_POLICY_FACTS_ORACLE=1`: only the `sha256`
+//! of `r0/ws-nordic-identifiers` (single and cross) moved, its `İndkøb` variable's id
+//! `rv/i̇ndkøb` becoming `rv/İndkøb` in the facts' `extra`. Every count is unchanged.
 
 use super::*;
 use crate::engine::gate::policy::policy_loader::{LoadResult, load_policy_from_string};

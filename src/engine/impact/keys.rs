@@ -86,7 +86,10 @@ use crate::program::model::workspace::{Model, ModelRoutine};
 /// 16 (ENG-20): a request page's own trigger has its own stable id (and a
 /// report procedure of its name and parameters its own), so a base cached by a
 /// binary of the same version would show those triggers as removed and added.
-pub const SUMMARY_SCHEMA: u32 = 16;
+/// 17 (ENG-131): identifiers fold as the compiler compares them, in stable ids
+/// too, so a routine whose name holds `İ`, `ẞ`, `µ`, `ς` or another of the 27
+/// re-classed chars has a new stable id (and an event a new event id).
+pub const SUMMARY_SCHEMA: u32 = 17;
 
 /// One own site of a key.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -383,10 +386,10 @@ fn message_key(
     if text.starts_with('\'') {
         return format!("text:{}", short_hash(text));
     }
-    // The lookup folds as the L2 names do; the key keeps its own spelling
-    // (an identity: it must not move with the fold).
+    // The lookup and the key fold as the L2 names do (ENG-131, sol: `to_lowercase`
+    // keyed `Error(Aẞ)` and `Error(Aß)` alike; summary schema 17 covers the move).
     let raw = text.trim_matches('"');
-    let name = raw.to_lowercase();
+    let name = al_syntax::fold_identifier(raw);
     if r.variables.iter().any(|v| {
         al_syntax::eq_fold_identifier(&v.name, raw)
             && v.declared_type.to_lowercase().starts_with("label")

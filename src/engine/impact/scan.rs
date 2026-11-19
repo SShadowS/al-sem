@@ -248,7 +248,7 @@ fn first_word(code: &str) -> String {
 fn routine_header(raw: &str, code: &str) -> Option<Option<String>> {
     // Both sides stay on the ASCII fold: `off` below is a byte offset taken from
     // one and used in the other, and the identifier fold can change a byte length
-    // (`İ` is 2 bytes, `i` 1). Only the extracted name is folded (TLS-43 r4).
+    // (`Ɐ` is 3 bytes, its fold `ɐ` 2). Only the extracted name is folded (TLS-43 r4).
     let lc = code.trim_start().to_ascii_lowercase();
     let mut rest = lc.as_str();
     for m in ["local ", "internal ", "protected "] {

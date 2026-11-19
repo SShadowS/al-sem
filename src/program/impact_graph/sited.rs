@@ -660,8 +660,9 @@ impl SitedGraph {
     /// (ascending). Two such nodes are answered as one routine by every
     /// reader that joins on the id (ENG-90). Empty on every corpus workspace
     /// and on CDO (`impact_graph::stable_id_tests`, the CDO harness). The id
-    /// lowercases where the node id folds, so names differing only in `İ` or
-    /// a word-final `Σ` do share one (`cli_query_field::shared_stable_id_tier`).
+    /// and the node id fold names with one function, the compiler's
+    /// (`al_syntax::fold_identifier`, ENG-131), so no fold difference can make two
+    /// nodes share one.
     #[must_use]
     pub fn shared_stable_ids(&self) -> Vec<(String, Vec<u32>)> {
         self.stable

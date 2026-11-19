@@ -7,6 +7,106 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (ENG-131: identifiers fold exactly as the AL compiler compares them, the same for binding, graph nodes and stable ids)
+
+- **The wrong answer** (found by Fable reviewing ENG-90). Binding and graph node ids folded names
+  with `fold_identifier` (a per-char lowercase); stable routine ids with `str::to_lowercase`
+  (Unicode's full, context-sensitive lowercase). The two disagreed on `İ` and a word-final `Σ`, so
+  `"ΒΣ"` and `"Βς"` were two graph nodes on ONE stable id, and every id-joined answer merged
+  them. Neither fold matched the compiler either.
+- **The compiler's answer** (alc 18.0.41 on Linux; Windows confirmation pending): it compares
+  like .NET `OrdinalIgnoreCase`, each char's simple uppercase, and never folds a non-ASCII char
+  onto ASCII. One identifier: `"ΒΣ"`/`"Βς"`, `"Σx"`/`"ςx"`, micro `µ`/Greek `μ`. Two: `İ`/`i`,
+  `ẞ`/`ß`, the Kelvin sign/`k`, dotless `ı`/`i` (as before). Probe apps and the table:
+  `docs/superpowers/notes/2026-11-18-eng131-compiler-identifier-fold.md`.
+- **The fix** (`crates/al-syntax/src/casing.rs`, `src/engine/ids.rs`). `fold_identifier` /
+  `eq_fold_identifier` fold each char to that class, written as the class's lowercase char
+  where one maps back, else the uppercase char: ASCII and every Latin letter in real BC names
+  fold as before; 27 chars fold differently (the release note below lists them). Stable routine
+  ids (the routine name, enclosing member and type text) fold with the same function, so
+  binding, node ids and stable ids agree with the compiler and with each other.
+  - Every other identifier key joined against them folds with it too (id-shape audit, Fable):
+    event ids (`encode_event_id`: the publisher side lowercased while subscribers folded, so a
+    publisher `OnΒΣ` or `OnCalcµg` lost its subscribers), literal reach's unbound-event guard,
+    the `rv/` record-variable ids (`to_lowercase` merged `Aẞ` with `Aß`), and the lowerer's
+    alternative-declaration grouping (`µP`/`μP` arms are one routine there too).
+  - Impact summary cache schema 17, so a base cached before the upgrade is not read with the
+    new ids.
+- **What moves.** CDO (`cdo-before-after`, base `dd1caf9a`): 0 of 5,479 stable routine ids, 0
+  fingerprints at both scopes, no detector, no call-graph number. None of the 27 chars occurs in
+  CDO's source or in the text of the 883 packages in the source cache (CDO's dependencies
+  included). Fixtures: the `ws-nordic-identifiers` l2 snapshot moves 3 routine digests (its
+  `İndkøb` reference folds to `İndkøb`, was `indkøb`). Tests that encoded `İ` = `I` (d59's guard
+  name, event-flow `IsHandled`, a RecordRef `Field` member, a closed-enum shape, a selector
+  signature, a prove `--match` variable) now encode the compiler's answer or take a pair the
+  compiler merges.
+  DO (`/work/src/DO`, 814 `.al` files): none of the 27 chars, and no capital `Σ`, either.
+- **Release note: whose ids can move, and how to re-baseline.** Only a name holding one of these
+  chars moves an id: a routine, member or type name its stable routine id, and with it finding
+  fingerprints; an object name (`interface "Iµ"`) its stable object id; an event name its event
+  id; a field or variable name the fingerprints and emitted policy-pin atoms of the findings
+  that name it (d4, d18, d65); `alsem graph` node ids (`r:`, read by bc-dev-mcp) and graphify
+  ids; and an `alsem diff` snapshot's event `parameters` list for such a parameter name. A
+  word-final capital `Σ` moves stable routine and event ids only (graph node ids already folded
+  it). The 27 chars whose fold changed (measured over every Unicode scalar; "was" is the old
+  fold, "now" the compiler's):
+
+  | char | code point | name | was | now |
+  |---|---|---|---|---|
+  | `µ` | U+00B5 | micro sign | `µ` | `μ` (one with Greek mu) |
+  | `İ` | U+0130 | Latin capital I with dot above | `i` | `İ` (apart from `i`) |
+  | `ͅ` | U+0345 | combining Greek ypogegrammeni | itself | `ι` U+03B9 |
+  | `ς` | U+03C2 | Greek final small sigma | `ς` | `σ` |
+  | `ϐ` | U+03D0 | Greek beta symbol | `ϐ` | `β` |
+  | `ϑ` | U+03D1 | Greek theta symbol | `ϑ` | `θ` |
+  | `ϕ` | U+03D5 | Greek phi symbol | `ϕ` | `φ` |
+  | `ϖ` | U+03D6 | Greek pi symbol | `ϖ` | `π` |
+  | `ϰ` | U+03F0 | Greek kappa symbol | `ϰ` | `κ` |
+  | `ϱ` | U+03F1 | Greek rho symbol | `ϱ` | `ρ` |
+  | `ϴ` | U+03F4 | Greek capital theta symbol | `θ` | `ϴ` (apart from `θ`) |
+  | `ϵ` | U+03F5 | Greek lunate epsilon symbol | `ϵ` | `ε` |
+  | `ᲀ` | U+1C80 | Cyrillic small rounded ve | `ᲀ` | `в` |
+  | `ᲁ` | U+1C81 | Cyrillic small long-legged de | `ᲁ` | `д` |
+  | `ᲂ` | U+1C82 | Cyrillic small narrow o | `ᲂ` | `о` |
+  | `ᲃ` | U+1C83 | Cyrillic small wide es | `ᲃ` | `с` |
+  | `ᲄ` | U+1C84 | Cyrillic small tall te | `ᲄ` | `т` |
+  | `ᲅ` | U+1C85 | Cyrillic small three-legged te | `ᲅ` | `т` |
+  | `ᲆ` | U+1C86 | Cyrillic small tall hard sign | `ᲆ` | `ъ` |
+  | `ᲇ` | U+1C87 | Cyrillic small tall yat | `ᲇ` | `ѣ` |
+  | `ᲈ` | U+1C88 | Cyrillic small unblended uk | `ᲈ` | `ꙋ` |
+  | `ẛ` | U+1E9B | Latin small long s with dot above | `ẛ` | `ṡ` |
+  | `ẞ` | U+1E9E | Latin capital sharp s | `ß` | `ẞ` (apart from `ß`) |
+  | `ι` | U+1FBE | Greek prosgegrammeni | itself | `ι` U+03B9 (one with iota) |
+  | `Ω` | U+2126 | Ohm sign | `ω` | `Ω` (apart from `ω`) |
+  | `K` | U+212A | Kelvin sign | `k` | `K` (apart from `k`) |
+  | `Å` | U+212B | Angstrom sign | `å` | `Å` (apart from `å`) |
+
+  Stable ids also move for a word-final capital `Σ` (U+03A3), which `to_lowercase` made `ς` and
+  the fold makes `σ`. Names using only ASCII and the Latin letters of real BC names (`æ ø å ä ö
+  ü ñ ç é è ß` and their capitals) keep every id; dotless `ı` (U+0131) and long `ſ` (U+017F) keep
+  their own. None of these chars occurs in CDO, DO or the 883 cached packages. If a project's names hold one of these: a baseline
+  shows the affected findings as new once (re-baseline with `alsem analyze --baseline <file>
+  --update-baseline`); regenerate saved `alsem diff` snapshots on both sides (across the
+  upgrade such a routine reads as removed and added, or as a rename where diff pairs it by
+  name, and a renamed event parameter as an ABI change); re-emit or review emitted policy
+  pins whose rule atoms name such an identifier (a field, a variable, an enum member).
+- **Pinned by** `casing::tests::the_fold_agrees_with_the_compiler_on_every_measured_pair` (every
+  measured pair, the Greek subscript-iota pairs Fable measured included),
+  `the_fold_is_one_char_idempotent_and_keeps_non_ascii_off_ascii` (all of Unicode) and
+  `the_number_of_chars_the_fold_changes_is_pinned` (1,503: the classes follow the toolchain's
+  Unicode tables, which a Rust upgrade can widen; Fable found 25 Unicode 17 pairs .NET 10 keeps
+  apart, chars alc rejects in identifiers); `cli_query_field::sigma_twins_are_one_routine` (one
+  graph node for `"ΒΣ"`/`"Βς"`); `l2_ir::two_arms_spelled_with_micro_and_mu_are_one_routine_for_the_attribute_check`
+  and `attribute_literals_are_not_identifier_folded` (an attribute's literal text keeps its
+  own spelling); `cli_eng131_event_fold` (a publisher `"OnΒΣ"` keeps its subscriber);
+  `cli_eng131_grouping_fold` (d4 and d18 read `Aẞ` and `Aß` as two variables, and `Fẞ`/`Fß`
+  as two fields, with distinct finding ids and fingerprints);
+  `ids::tests::stable_ids_fold_names_as_the_compiler_compares_them` and the impact key test
+  `two_labels_spelled_with_sharp_s_and_capital_sharp_s_have_two_keys` (sol). Each of these
+  folds, put back on `to_lowercase`, fails its test.
+  With the old fold restored, four casing tests fail and the l2 snapshot matches the old golden
+  again.
+
 ### Changed (ENG-124: the sited graph finds nodes by a sorted index, 19.1 MiB less resident memory on CDO)
 
 - **What changed** (`src/program/impact_graph/sited.rs`; no output change). `SitedGraph::node_ix`

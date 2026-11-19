@@ -1901,18 +1901,19 @@ fn collect_routines<'t>(
 ///
 /// The rows are grouped by the routine identity's parts as the IR has them (kind,
 /// name, enclosing member, parameter `var`-ness and types, return type), compared
-/// lowercased with whitespace removed: at least as coarse as
-/// `compute_routine_id`'s lowercased, trimmed signature, so rows the engine counts
+/// with the identifier fold, whitespace removed: at least as coarse as
+/// `compute_routine_id`'s folded, trimmed signature, so rows the engine counts
 /// as one routine are always in one group. A coarser group only marks more
 /// attributes conditional (the "may" direction). Attributes compare by their
-/// whole text, normalized the same way, so two arms that write the same attribute
+/// whole text, whitespace removed and lowercased (not identifier-folded: the text holds
+/// literals), so two arms that write the same attribute
 /// with different arguments each make the other conditional.
 fn mark_attributes_some_arm_lacks(routines: &mut [RoutineDecl]) {
+    // The identifier fold (ENG-131): routine ids fold with it, so the groups stay at
+    // least as coarse as the ids (`µx`/`μx` are one routine and one group).
     fn norm(s: &str) -> String {
-        s.chars()
-            .filter(|c| !c.is_whitespace())
-            .flat_map(char::to_lowercase)
-            .collect()
+        let squeezed: String = s.chars().filter(|c| !c.is_whitespace()).collect();
+        crate::fold_identifier(&squeezed)
     }
     let key = |r: &RoutineDecl| {
         (
@@ -1941,7 +1942,16 @@ fn mark_attributes_some_arm_lacks(routines: &mut [RoutineDecl]) {
                 routines[i]
                     .attributes_parsed
                     .iter()
-                    .map(|a| norm(&a.raw))
+                    // An attribute's text holds literals (`'Use µ'`), not only
+                    // identifiers: it keeps the plain lowercase it always had, so two
+                    // different literals stay different (ENG-131, sol).
+                    .map(|a| {
+                        a.raw
+                            .chars()
+                            .filter(|c| !c.is_whitespace())
+                            .flat_map(char::to_lowercase)
+                            .collect::<String>()
+                    })
                     .collect()
             })
             .collect();

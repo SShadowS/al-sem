@@ -1264,13 +1264,9 @@ enum 50106 "Other Kind" implements "Other Strategy"
                 "",
                 "        S := Enum::\"Demo Kind\".FromInteger(0);",
             ),
-            // TLS-43 review sol r4: the member name takes the identifier fold.
-            (
-                "FromDottedInteger",
-                "",
-                "",
-                "        S := Enum::\"Demo Kind\".Fromİnteger(0);",
-            ),
+            // TLS-43 review sol r4 had `Fromİnteger(0)` here, completing as `FromInteger`.
+            // ENG-131: the compiler keeps `İ` apart from `i` (alc 18.0.41: AL0118), so that
+            // call names no member and is no longer a shape that completes.
             ("FromOwnCall", "", "", "        S := PickKind();"),
         ];
         let mut text = "codeunit 50110 \"Shape Probe\"\n{\n".to_string();
