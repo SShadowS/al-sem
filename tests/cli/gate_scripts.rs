@@ -2649,14 +2649,16 @@ fn speed_stub_verdicts_ignore_the_hosts_wall_time() {
         "{text}"
     );
 
-    // The control: the stub clock off (an empty value removes it).
+    // The control: the stub clock off (an empty value removes it). 3 s, not 1:
+    // the ratio (0.4k + 3) / 0.4k stays over 1.6 until load stretches the 0.4 s
+    // burn twelvefold (k = 12.5), where 1 s gave out at k = 4.2 (review, Fable).
     let off = tempfile::tempdir().unwrap();
     let (code, text) = speed_with_stub(
         off.path(),
         "1.0",
         &[],
         &[
-            ("STUB_HEAD_SLEEP_S", "1"),
+            ("STUB_HEAD_SLEEP_S", "3"),
             ("CDO_SPEED_TEST_WALL_IS_CPU", ""),
         ],
     );
@@ -2673,13 +2675,20 @@ fn speed_stub_verdicts_ignore_the_hosts_wall_time() {
     );
     assert_eq!(code, Some(2), "{text}");
     assert!(
-        text.contains("CDO_SPEED_TEST_WALL_IS_CPU is a test hook"),
-        "{text}"
+        text.contains("CDO_SPEED_TEST_WALL_IS_CPU is a test hook") && !text.contains("outputs in"),
+        "refused before anything starts: {text}"
     );
+    // One stub binary only (both are needed), and `--no-build` into a private
+    // target: a refusal that regressed ends at "no binary at", never in cargo.
     let out = std::process::Command::new("python3")
         .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-speed"))
         .arg(dir.path().join("ws"))
+        .arg("--base-exe")
+        .arg(dir.path().join("alsem"))
+        .arg("--no-build")
         .env("CDO_SPEED_TEST_WALL_IS_CPU", "1")
+        .env("CARGO_TARGET_DIR", dir.path().join("target"))
+        .env("ALSEM_SPEED_CACHE", dir.path().join("cache"))
         .output()
         .unwrap();
     let text = String::from_utf8_lossy(&out.stderr);
@@ -2742,7 +2751,8 @@ fn speed_warm_up_cancels_the_second_side_penalty() {
 
     let (code, text) = speed_with_stub(dir.path(), "0.5", &[], &[]);
     // The CPU judgment is the deterministic part (the stub burns exact CPU);
-    // wall time is the host's (sol r1): only a CPU failure may not appear.
+    // only a CPU failure may not appear. (Wall equals CPU here under the stub
+    // clock, TLS-103; it was the host's when sol r1 wrote this.)
     assert!(
         !text.contains("FAIL: build: CPU") && !text.contains("FAIL: warm-tests: CPU"),
         "two flipped samples pass the CPU limit: {text}"

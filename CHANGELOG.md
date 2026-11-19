@@ -23,10 +23,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   before anything starts, so a variable left exported in a shell cannot make a real gate pass
   on CPU alone.
 - **Tests.** `speed_stub_verdicts_ignore_the_hosts_wall_time`: head's build waits 1 s with no
-  CPU (a new stub knob, `STUB_HEAD_SLEEP_S`), x3.48 in wall; the run still PASSes, and the same
-  delay with the hook off FAILs on wall time (the control). The hook is refused for `0` and
-  for a run without stub binaries. Proofs: the hook dropped -> "FAIL: build: wall time x3.48"
-  (red); the refusal dropped -> the `0` run goes ahead (red); and the advisory rule broken (the
+  CPU (a new stub knob, `STUB_HEAD_SLEEP_S`), x3.48 in wall; the run still PASSes. The control
+  (hook off) waits 3 s and FAILs on wall time; it stays over the limit until load stretches the
+  stub's burn twelvefold (review, Fable: 1 s gave out at about four). The hook is refused for
+  `0` (before any output) and for a run with one stub binary only. Proofs: the hook dropped ->
+  "FAIL: build: wall time x3.48" (red); the refusal dropped -> the `0` run goes ahead (red); the
+  refusal weakened to "either binary" -> the one-binary run is not refused (red); and the
+  advisory rule broken (the
   instructions advisory appended to the failures) still fails the instructions test (red).
   Cost noted (sol): the geometric-mean check now sees wall ratios equal to CPU's, so its wall
   half checks the arithmetic again rather than an independent sample. The speed tests ran 10
