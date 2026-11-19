@@ -37,6 +37,7 @@ table 51375 "PW Chg Flow" { fields { field(1; Code; Code[20]) { } } keys { key(P
 table 51376 "PW Q Int A" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
 table 51377 "PW Q Int Else" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
 table 51378 "PW Q Bool" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
+table 51380 "PW Sub" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
 enum 51360 "PW Kind"
 {
     value(0; Alpha) { }
@@ -552,6 +553,53 @@ codeunit 51370 "PW Shapes"
                 E.Insert();
         end;
     end;
+
+    // sol round 4: E2 keeps a local passed to a publisher's `var` when no loaded subscriber
+    // changes it; the subscriber below changes it through a QUOTED argument.
+    procedure SubRoot()
+    var
+        U: Boolean;
+        T: Record "PW Sub";
+    begin
+        U := true;
+        OnSubKeep(U);
+        if not U then
+            T.Insert();
+    end;
+
+    [IntegrationEvent(false, false)]
+    procedure OnSubKeep(var Value: Boolean)
+    begin
+    end;
+
+    // Round-4 literal routes (cross_rules): a record passed to a Variant decides `IsRecord`
+    // only while the Variant holds it; here a `var` replaces it, through a quoted argument.
+    procedure VarTypeRoot()
+    var
+        R: Record "PW Tab Line";
+    begin
+        VarTypeCheck(R);
+    end;
+
+    local procedure VarTypeCheck(V: Variant)
+    begin
+        VarTypeChange("V");
+        if not V.IsRecord then
+            Error('VarTypeCheck needs a record.');
+    end;
+
+    local procedure VarTypeChange(var V: Variant)
+    begin
+        V := 1;
+    end;
+}
+codeunit 51379 "PW Sub Subscr"
+{
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::"PW Shapes", 'OnSubKeep', '', false, false)]
+    local procedure HandleSubKeep(var Value: Boolean)
+    begin
+        Evaluate("Value", 'false');
+    end;
 }
 "#;
 
@@ -656,6 +704,7 @@ fn an_arm_that_writes_the_parameter_unbinds_it() {
         ("QBoolRoot", "PW Q Bool", "yes"),
         ("QFlowRoot", "PW Chg Flow", "yes"),
         ("QVarRoot", "PW Tab Log", "yes"),
+        ("SubRoot", "PW Sub", "yes"),
     ]);
 }
 
@@ -672,4 +721,37 @@ fn a_read_only_platform_position_keeps_the_value() {
         ("FlowKeep", "PW Keep Else", "no"),
         ("BoolKeepRoot", "PW Bool Keep", "no"),
     ]);
+}
+
+/// sol round 4, the round-4 literal routes (`cross_rules::variant_usable`): a record passed to a
+/// Variant rules out `not V.IsRecord` only while the Variant holds it. `VarTypeCheck` hands `"V"`
+/// (quoted) to a `var` that stores an Integer, so the caller's card keeps the rule and its error.
+#[test]
+fn a_variant_a_var_replaces_keeps_its_type_test() {
+    let dir = tempfile::tempdir().unwrap();
+    let ws = dir.path().join("ws");
+    std::fs::create_dir_all(ws.join("src")).unwrap();
+    std::fs::write(
+        ws.join("app.json"),
+        r#"{"id":"13513513-0000-4000-8000-000000000135","name":"PW","publisher":"t","version":"1.0.0.0"}"#,
+    )
+    .unwrap();
+    std::fs::write(ws.join("src/Shapes.al"), SOURCE).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_alsem"))
+        .args([
+            "explain",
+            "ws",
+            "--routine",
+            "Codeunit \"PW Shapes\"::VarTypeRoot",
+        ])
+        .current_dir(dir.path())
+        .env("RUST_LOG", "off")
+        .output()
+        .unwrap();
+    let card = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        card.contains("rejects when not V.IsRecord"),
+        "the rule stays: {card}"
+    );
+    assert!(card.contains("ERROR_THROW"), "and the error: {card}");
 }

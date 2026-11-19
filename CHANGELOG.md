@@ -833,9 +833,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A quoted argument hid a write (older, sol round 3).** The guard frame, the value frame and the
   kept-parameter rule found the calls a parameter is passed to through `argument_bindings`, which
   records only unquoted names: `D.Get(1, "B")` or `Evaluate("I", '2')` wrote the parameter
-  through an argument recorded as an expression, so it stayed bound. One rule now serves all
-  three (`param_guard::passes_param_unsafely`): an argument is the parameter when it binds to it
-  or when its text is the parameter's name, quoted or not.
+  through an argument recorded as an expression, so it stayed bound. One rule now serves every
+  reader that needs a parameter unchanged (`param_guard::passes_param_unsafely`): an argument is
+  the parameter when it binds to it or when its text is the parameter's name, quoted or not. The
+  readers: the guard frame, the value frame, the kept-parameter rule, E2's publisher keep check
+  (`subscriber_changes`: a loaded subscriber writing its `var` through `Evaluate("Value", ..)`
+  was taken as keeping it; sol round 4) and the round-4 literal routes' Variant test
+  (`cross_rules::variant_usable`: `explain` dropped a `not V.IsRecord` rule for a Variant a
+  `var` call replaced).
 - **What moves.** Precision is LOST where the old lists said "keeps its value" wrongly (correct),
   and gained where ENG-30's Text rule unbound a parameter passed to a read-only function outside
   its 15 names (`DelStr`, `StrLen`'s kin). CDO counts: TBD.
