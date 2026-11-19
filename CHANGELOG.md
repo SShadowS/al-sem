@@ -410,6 +410,78 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     id parts, the member kind, explain's level, the wire id, the selector fallback, the surface hash,
     the add-in guard.
 
+### Added (TLS-83: cdo-speed counts instructions; what a build ratio resolves)
+
+- **Why.** ENG-94's build CPU ratio read x0.871 in the lane's run and x0.989 in the landing's,
+  and a CHANGELOG quoted the first.
+- **What 75 runs since TLS-79 show** (`docs/superpowers/notes/2026-11-18-tls83-speed-
+  resolution.md`). Pass noise can explain the spread; host state is not ruled out (review r1,
+  sol), and the bands below are rules of thumb from pooled runs, not calibrated bounds.
+  - Per pass, sd(log ratio) is 0.060. So one two-pass reading resolves about ±8 %, as TLS-79
+    stated.
+  - Two readings of one pair can differ by ±12 %. The 19 pairs measured twice show a median
+    gap of 3.1 % and a max of 12.3 %. ENG-94 is, by inference, a ~2σ draw of that: its lane run
+    is not among the files.
+  - Pass 1 costs 2-4 % more on both sides, which cancels in the ratio; there is no measurable
+    bias (-0.44 % ± 0.47).
+- **Instructions.** Three runs of one binary against itself (block 1, 2026-11-18) also counted
+  each call's user-mode instructions, with `perf stat --no-scale` attached to the server and
+  its engine children, both core types.
+  - The build's ratio held within about ±0.1 %, with one 0.8 % jump in 12 builds (n = 6).
+  - CPU seconds spread with sd(log) 0.084 over the same builds.
+  - For the judged calls, instructions resolve about 27x (build) to 390x (warm-tests) better.
+- **cdo-speed** now counts them by default and shows the instruction ratio on every verdict
+  line. Its PASS/FAIL line, which cdo-gate's summary quotes, carries the build's and the round
+  total's ratios: `(instructions: build x1.0003, round-total x0.9998; advisory limit x1.02)`.
+  - A ratio over x1.02 on a judged row prints `ADVISORY (not failing)`. The run still passes.
+    Whether and when
+    it should fail is an owner question for later, with data from real landings; the
+    questions are in the note.
+  - CPU, wall and memory limits are unchanged: instructions miss memory stalls and lost
+    parallelism.
+  - Without perf, or with `CDO_SPEED_INSTR=0`, the run says `instructions: NOT counted` and
+    judges as before. A perf that cannot start for a call, or counts nothing, leaves that
+    call uncounted, never failing the run.
+  - A call starts only once perf's counters run. perf starts them disabled (`-D -1`), cdo-speed
+    writes `enable` to its control FIFO and waits up to 5 s for its `ack`; with no `ack` the call
+    is uncounted. A fixed 0.2 s wait raced a slow perf start under the task gate's load (seen in
+    TLS-92's gate: one call counted from part-way through read 0, so the round total dropped out).
+  - On a failure the line reads `FAIL; instructions: ...`, so it does not read as the reason.
+  - Review r1 (sol):
+    - after three failed attaches in a row, a server's calls go uncounted (each failure cost up
+      to 5 s inside the CDO slot);
+    - perf is stopped even when a call times out;
+    - a call where a server process appeared between the pid scan and the attach is not
+      counted;
+    - no multiplexing by construction: a perf run asks for at most one event per PMU (the
+      fixed instruction counter of each core type), and `perf_event_args` refuses a second.
+      perf's time share is no self-check on a hybrid CPU: a core type's event is enabled all
+      along but runs only while the task is on that type (58 % + 42 % for 4 threads,
+      measured, with nothing else counting);
+    - the advisory applies to the judged rows only, as the verdict says: on every row, the
+      tiny unjudged calls gave 8 false advisories in a run of one binary against itself.
+  - Review r2 (sol):
+    - a perf that does not stop within 30 s ends that server's counting (an ack reset the
+      attach streak, so a perf hanging at its stop cost 30 s on every call);
+    - a perf that ended before cdo-speed stopped it counted part of the call only, even when
+      its CSV is valid: no count.
+  - `CDO_SPEED_PERF` is a test hook naming the perf command.
+  - `speed.json` gains `instr` per record, `instr` per row and an `instructions` block.
+- **The CHANGELOG rule** (CLAUDE.md): quote an instruction ratio as work ("instructions x0.93"),
+  never as "N % faster". A CPU or build ratio goes in only when two independent runs agree
+  within ±12 %.
+- **Tests.** `gate_scripts::speed_reports_instructions_and_their_limit_is_advisory` uses a
+  stub perf and stub servers that publish their counts.
+  - A head doing 5 % more work is reported as an advisory and passes.
+  - The same work reads x1.0000.
+  - No perf falls back to CPU and wall, and says so.
+  - A perf gone after the probe, and one that counts nothing, leave the calls uncounted and
+    the run passing.
+
+  `speed_counts_instructions_with_the_real_perf` runs the real perf on the stub servers, to
+  pin its output format; it is skipped where perf cannot count. Discrimination proofs, all
+  red, are in the tests' docs. The other speed tests run with counting off.
+
 ### Added (TLS-87: the pre-submit CDO subset is checked at landing, not remembered)
 
 - **Why.** ENG-99 (2026-11-16) was submitted without `cdo-gate --only harness,l4`, and the
