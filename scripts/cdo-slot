@@ -128,6 +128,19 @@ alive() {
 }
 proc_start() { local f; read -r -a f <<<"$(proc_fields "$1")"; echo "${f[19]:-}"; }
 new_id() { od -An -N8 -tx8 /dev/urandom | tr -d ' '; }
+# test_pause <seconds>: the test hooks' window. It writes `paused.<pid>` (the
+# test waits for it), then waits until the test makes `$dir/resume`, at most
+# <seconds>. A fixed sleep could end before the test's steps in the window did
+# under load (TLS-89's gates).
+test_pause() {
+    : >"$dir/paused.$$"
+    local w
+    for ((w = 0; w < ${1%.*} * 20 + 20; w++)); do
+        [[ -e "$dir/resume" ]] && break
+        sleep 0.05
+    done
+    rm -f "$dir/resume"
+}
 
 # probe <s|x> <lock file>: 0 when some process holds the lock against a probe of
 # that kind, 1 when not (or the file does not exist). `s` finds an exclusive
@@ -239,7 +252,7 @@ state() {
     # Test hook: a pause between `session` and `bound`, in which a test removes
     # the status file (the read-once rule: read field by field from the file,
     # `bound` would come back "" and a bound hold read as an unbound one).
-    [[ -z "${CDO_SLOT_TEST_PAUSE_S:-}" ]] || { : >"$dir/paused.$$"; sleep "$CDO_SLOT_TEST_PAUSE_S"; }
+    [[ -z "${CDO_SLOT_TEST_PAUSE_S:-}" ]] || test_pause "$CDO_SLOT_TEST_PAUSE_S"
     bound=$(field bound)
     [[ -n "$me_session" && "$session" == "$me_session" ]] && own=1
     if [[ -n "$me_token" && "$token" == "$me_token" ]] || { ((own)) && [[ -z "$bound" ]]; }; then
@@ -288,7 +301,7 @@ take_hold() {
     mkdir -p "$ids"
     local lfd hfd
     # Test hook: the window between the acquire's checks and the hold lock.
-    [[ -z "${CDO_SLOT_TEST_PAUSE_TAKE_S:-}" ]] || { : >"$dir/paused.$$"; sleep "$CDO_SLOT_TEST_PAUSE_TAKE_S"; }
+    [[ -z "${CDO_SLOT_TEST_PAUSE_TAKE_S:-}" ]] || test_pause "$CDO_SLOT_TEST_PAUSE_TAKE_S"
     exec {lfd}>"$lock"
     # Up to 1 s: a probe has the lock for an instant.
     if ! flock -x -w 1 "$lfd"; then
@@ -599,7 +612,7 @@ timed_start() {
     # refuse <message>: take the timing back (only this call's), say why.
     refuse() {
         [[ -z "${CDO_SLOT_TEST_PAUSE_REFUSE_S:-}" ]] \
-            || { : >"$dir/paused.$$"; sleep "$CDO_SLOT_TEST_PAUSE_REFUSE_S"; }
+            || test_pause "$CDO_SLOT_TEST_PAUSE_REFUSE_S"
         if [[ -n "$tkpid" ]]; then end_keeper "$ids/timed.$tid"; else drop_timed; fi
         echo "cdo-slot: --timed refused: $*" >&2
         return 6
@@ -640,7 +653,7 @@ timed_start() {
         return
     fi
     # Test hook: the window in which a timing keeper may be killed before its go.
-    [[ -z "${CDO_SLOT_TEST_PAUSE_GO_S:-}" ]] || { : >"$dir/paused.$$"; sleep "$CDO_SLOT_TEST_PAUSE_GO_S"; }
+    [[ -z "${CDO_SLOT_TEST_PAUSE_GO_S:-}" ]] || test_pause "$CDO_SLOT_TEST_PAUSE_GO_S"
     if [[ -n "$tkpid" ]] && ! go "$tid" "$ids/timed.$tid"; then
         refuse "its timing keeper ended before the timing began"
         return
@@ -857,7 +870,7 @@ case "$cmd" in
             acquire "$owner" "$reason" "$wait" "$timeout" 0 || rc=$?
             # Test hook: the window between taking the slot and the timing.
             [[ -z "${CDO_SLOT_TEST_PAUSE_ACQUIRED_S:-}" ]] \
-                || { : >"$dir/paused.$$"; sleep "$CDO_SLOT_TEST_PAUSE_ACQUIRED_S"; }
+                || test_pause "$CDO_SLOT_TEST_PAUSE_ACQUIRED_S"
             if ((timed)) && [[ "$rc" == 0 || "$rc" == 4 ]]; then
                 trc=0
                 timed_start "$owner" "$reason" "$bind" "$taken_hid" keeper || trc=$?
@@ -869,7 +882,7 @@ case "$cmd" in
             fi
             # Test hook: the window between the timing's go and the hold's.
             [[ -z "${CDO_SLOT_TEST_PAUSE_HOLDGO_S:-}" ]] \
-                || { : >"$dir/paused.$$"; sleep "$CDO_SLOT_TEST_PAUSE_HOLDGO_S"; }
+                || test_pause "$CDO_SLOT_TEST_PAUSE_HOLDGO_S"
             if [[ "$rc" == 0 ]] && ! go "$taken_hid" "$ids/hold.$taken_hid"; then
                 # Its keeper is gone or stopped: no hold, so no timing either.
                 ((!timed)) || end_keeper "$ids/timed.$tid"

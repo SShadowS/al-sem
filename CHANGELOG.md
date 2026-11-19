@@ -513,7 +513,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     options) before the `--`, so a reason that is itself `--` hides nothing, and reads a bare
     `cdo-slot` from PATH too.
   - The other points (a copied live hold id vouching for edited ownership fields, a PID-reuse
-    window between the fd scan and the kill, a fixed sleep in the take-window test) are TLS-99.
+    window between the fd scan and the kill) are TLS-99. The fixed sleep in the take-window
+    test failed a gate under load and is fixed here: every test pause hook (`test_pause`) now
+    holds its window until the test makes `$CDO_SLOT_DIR/resume`, its seconds only a bound.
 - **Fixed at landing: `release` could exit 1 while a probe had the hold file open.** The first
   landing's full nextest run failed `cdo_slot_queue_refuses_jumps_and_steps_aside_for_memory`
   at `D release` (exit 1). `keepers_of` ended its loop with `grep -q ... && echo`. When the last

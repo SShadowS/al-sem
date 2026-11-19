@@ -142,6 +142,11 @@ impl Slot {
             !found.is_empty()
         });
     }
+    /// Ends the window of the process a pause hook holds (it waits for this
+    /// file, at most its hook's seconds), once the test's steps in it are done.
+    fn resume(&self) {
+        std::fs::write(self.dir().join("resume"), "").unwrap();
+    }
     /// `cdo-slot <args>`, run to its end; (exit, stdout + stderr).
     fn run(&self, session: &str, args: &[&str], env: &[(&str, &str)]) -> (Option<i32>, String) {
         let out = self.cmd(session, args, env).output().unwrap();
@@ -1324,7 +1329,7 @@ fn cdo_slot_reads_the_status_once_per_check() {
         .cmd(
             "A",
             &["acquire", "lane", "second"],
-            &[("CDO_SLOT_TEST_PAUSE_S", "1.5")],
+            &[("CDO_SLOT_TEST_PAUSE_S", "60")],
         )
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -1333,6 +1338,7 @@ fn cdo_slot_reads_the_status_once_per_check() {
     // Remove it only once the reader is inside the window (review r3, sol).
     s.wait_paused();
     std::fs::remove_file(s.dir().join("status")).unwrap();
+    s.resume();
     let out = second.wait_with_output().unwrap();
     let text = format!(
         "{}{}",
@@ -1854,7 +1860,7 @@ fn cdo_slot_timings_in_a_hand_hold() {
     let mut window = s.bg(
         "A",
         &["acquire", "lane", "window", "--bind", &t5pid, "--timed"],
-        &[names, ("CDO_SLOT_TEST_PAUSE_ACQUIRED_S", "2")],
+        &[names, ("CDO_SLOT_TEST_PAUSE_ACQUIRED_S", "60")],
     );
     s.wait_paused();
     assert_eq!(s.run("A", &["release"], &[]).0, Some(0));
@@ -1862,6 +1868,7 @@ fn cdo_slot_timings_in_a_hand_hold() {
         s.run("B", &["acquire", "other", "replacement"], &[]).0,
         Some(0)
     );
+    s.resume();
     assert_eq!(window.0.wait().unwrap().code(), Some(6));
     let (_, text) = s.run("D", &["status"], &[]);
     assert!(
@@ -1889,7 +1896,7 @@ fn cdo_slot_timings_in_a_hand_hold() {
         &[
             names,
             ("CDO_SLOT_TIMED_WAIT_S", "1"),
-            ("CDO_SLOT_TEST_PAUSE_REFUSE_S", "3"),
+            ("CDO_SLOT_TEST_PAUSE_REFUSE_S", "60"),
         ],
     );
     s.wait_paused();
@@ -1900,6 +1907,7 @@ fn cdo_slot_timings_in_a_hand_hold() {
         &[names],
     );
     assert_eq!(code, Some(4), "{text}");
+    s.resume();
     assert_eq!(first.0.wait().unwrap().code(), Some(6));
     let text = timed_line();
     assert!(
@@ -1921,7 +1929,7 @@ fn cdo_slot_timings_in_a_hand_hold() {
         &[
             names,
             ("CDO_SLOT_TIMED_WAIT_S", "1"),
-            ("CDO_SLOT_TEST_PAUSE_REFUSE_S", "3"),
+            ("CDO_SLOT_TEST_PAUSE_REFUSE_S", "60"),
             ("CDO_SLOT_TOKEN", "tls89-shared"),
         ],
     );
@@ -1933,6 +1941,7 @@ fn cdo_slot_timings_in_a_hand_hold() {
         &[names, ("CDO_SLOT_TOKEN", "tls89-shared")],
     );
     assert_eq!(code, Some(4), "{text}");
+    s.resume();
     assert_eq!(taker.0.wait().unwrap().code(), Some(6));
     assert!(
         s.probe().ends_with("timed=1") && timed_line().contains("(sharer)"),
@@ -1974,7 +1983,9 @@ fn cdo_slot_acquire_windows_hold_against_a_timing() {
     let mut b = s.bg(
         "B",
         &["acquire", "other", "late"],
-        &[("CDO_SLOT_TEST_PAUSE_TAKE_S", "3")],
+        // Held until the test makes `resume` (60 s at most): a fixed 3 s pause
+        // ended before the steps below under load (TLS-89's gate).
+        &[("CDO_SLOT_TEST_PAUSE_TAKE_S", "60")],
     );
     s.wait_paused();
     assert_eq!(s.run("A", &["acquire", "lane", "by hand"], &[]).0, Some(0));
@@ -1988,6 +1999,7 @@ fn cdo_slot_acquire_windows_hold_against_a_timing() {
     assert_eq!(code, Some(4), "{text}");
     assert_eq!(s.run("A", &["release"], &[]).0, Some(0));
     assert_eq!(s.probe(), "held=0 own=0 timed=1", "precondition");
+    s.resume();
     assert_eq!(
         b.0.wait().unwrap().code(),
         Some(1),
@@ -2002,7 +2014,7 @@ fn cdo_slot_acquire_windows_hold_against_a_timing() {
     let mut timed = s.bg(
         "A",
         &["acquire", "lane", "orphaned", "--bind", &tpid, "--timed"],
-        &[("CDO_SLOT_TEST_PAUSE_GO_S", "3")],
+        &[("CDO_SLOT_TEST_PAUSE_GO_S", "60")],
     );
     s.wait_paused();
     let want = format!("CDO_SLOT_DIR={}", s.dir().display());
@@ -2019,6 +2031,7 @@ fn cdo_slot_acquire_windows_hold_against_a_timing() {
     assert_eq!(keepers.len(), 1, "precondition: one timing keeper");
     // SAFETY: SIGKILL to this test's own timing keeper.
     unsafe { libc::kill(keepers[0], libc::SIGKILL) };
+    s.resume();
     assert_eq!(
         timed.0.wait().unwrap().code(),
         Some(6),
@@ -2047,13 +2060,14 @@ fn cdo_slot_acquire_windows_hold_against_a_timing() {
     let mut timed = s.bg(
         "A",
         &["acquire", "lane", "between", "--bind", &tpid, "--timed"],
-        &[("CDO_SLOT_TEST_PAUSE_HOLDGO_S", "3")],
+        &[("CDO_SLOT_TEST_PAUSE_HOLDGO_S", "60")],
     );
     s.wait_paused();
     let k = keeper_of(b"_keep\0timed\0");
     assert_eq!(k.len(), 1, "precondition: one timing keeper");
     // SAFETY: SIGKILL to this test's own timing keeper.
     unsafe { libc::kill(k[0], libc::SIGKILL) };
+    s.resume();
     assert_eq!(
         timed.0.wait().unwrap().code(),
         Some(6),
@@ -2069,7 +2083,7 @@ fn cdo_slot_acquire_windows_hold_against_a_timing() {
             "A",
             &["acquire", "lane", "stopped"],
             &[
-                ("CDO_SLOT_TEST_PAUSE_HOLDGO_S", "2"),
+                ("CDO_SLOT_TEST_PAUSE_HOLDGO_S", "60"),
                 ("CDO_SLOT_LOCK_WAIT_S", "2"),
             ],
         )
@@ -2082,6 +2096,7 @@ fn cdo_slot_acquire_windows_hold_against_a_timing() {
     assert_eq!(k.len(), 1, "precondition: one hold keeper");
     // SAFETY: SIGSTOP to this test's own hold keeper.
     unsafe { libc::kill(k[0], libc::SIGSTOP) };
+    s.resume();
     let started = std::time::Instant::now();
     let code = loop {
         if let Some(st) = held.try_wait().unwrap() {
