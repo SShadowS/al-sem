@@ -197,6 +197,9 @@ impl Ba {
             .env("CDO_SLOT_DIR", self.path("slot"))
             .env("CDO_SLOT_MEM_MIN_GB", "0")
             .env("CDO_SLOT_POLL_S", "1")
+            // TLS-89: its hold is timed; no real build of this machine may hold it up.
+            .env("CDO_SLOT_BUILD_NAMES", "tls89-none")
+            .env("CDO_SLOT_BUILD_SCRIPTS", "tls89-none")
             .env("BA_LOG", self.path("calls.log"))
             .env("BA_FIX", self.path("fix"))
             .env("BA_STUB", self.path("stub"))
@@ -339,6 +342,15 @@ fn before_after_reports_what_moved_and_caches_both_binaries() {
     assert!(
         slot.iter()
             .all(|l| l.starts_with("slot: held by before-after")),
+        "{log}"
+    );
+    // TLS-89: and the hold was timed (no build may run beside a measurement).
+    // Mutation (2026-11-18): `--timed` dropped from `take_slot` -> no `timed by` line (red).
+    assert_eq!(
+        log.lines()
+            .filter(|l| l.starts_with("timed by before-after since"))
+            .count(),
+        2,
         "{log}"
     );
     // One cache: both binaries kept per commit, beside cdo-speed's alsem.
@@ -621,6 +633,58 @@ fn before_after_measures_only_inside_the_slot() {
     assert_eq!(code, Some(1), "{text}");
     assert!(text.contains("the CDO slot was not taken"), "{text}");
     assert!(!t.log().contains("fingerprint"), "{}", t.log());
+}
+
+/// ⟨TLS-89⟩ A build still running when its timed hold is to begin: the run
+/// measures nothing, says why, fails, and frees the slot it took. The stand-in
+/// build is bash through a symlink named `t89b<test pid>` (unique: `pgrep -x`
+/// sees the whole machine).
+///
+/// Mutation (2026-11-18): the `rc == 6` branch of `take_slot` dropped -> the
+/// generic "the CDO slot was not taken" message instead (red); restored, green.
+#[test]
+fn before_after_measures_nothing_beside_a_build() {
+    let t = Ba::new();
+    let name = format!("t89b{}", std::process::id());
+    let fake = t.path(&name);
+    std::os::unix::fs::symlink("/bin/bash", &fake).unwrap();
+    // One process: the builtin `read` waits on a pipe nobody writes, so killing
+    // it leaves no `sleep` child holding the test's output (a nextest leak).
+    let build = crate::cdo_slot::Reap(
+        std::process::Command::new(&fake)
+            .args(["-c", "read -t 600 _ || true"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    let out = t.out("out");
+    let (code, text) = t.run(
+        &["--out", &out, &t.c1, &t.c2],
+        &[
+            ("CDO_SLOT_BUILD_NAMES", name.as_str()),
+            ("CDO_SLOT_TIMED_WAIT_S", "1"),
+        ],
+    );
+    drop(build);
+    assert_eq!(code, Some(1), "{text}");
+    assert!(
+        text.contains("builds still ran when the timed hold began"),
+        "{text}"
+    );
+    assert!(!t.log().contains("fingerprint"), "{}", t.log());
+    let status = std::process::Command::new("bash")
+        .arg(t.path("repo/scripts/cdo-slot"))
+        .arg("status")
+        .env("CDO_SLOT_DIR", t.path("slot"))
+        .output()
+        .unwrap();
+    assert_eq!(
+        status.status.code(),
+        Some(0),
+        "the slot stays held: {status:?}"
+    );
 }
 
 /// Run inside a hold it shares (the holder's `CDO_SLOT_TOKEN`, as under

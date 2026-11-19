@@ -304,6 +304,26 @@ def git(repo, *args):
                           text=True).stdout.strip()
 
 
+def timed_hold(repo):
+    """⟨TLS-89⟩ Mark the CDO slot's hold timed for the rest of this run (after its
+    builds, before the first timed call), so no build runs beside the timing: the
+    guard refuses new ones, and cdo-slot waits for running ones and refuses (exit 6)
+    when they do not end. Inside a hold (cdo-gate's or land's token, `cdo-slot run`,
+    or this Claude session's hand hold) it shares it; outside any it takes the slot
+    itself, waiting its turn (review r1, sol: a run with no token went unguarded).
+    Bound to this process: the mark, and a hold it took, end with it."""
+    rc = subprocess.run(["bash", os.path.join(repo, "scripts", "cdo-slot"), "acquire",
+                         os.environ.get("CDO_SLOT_OWNER", "cdo-speed"), "cdo-speed timing",
+                         "--wait", "--bind", str(os.getpid()), "--timed"]).returncode
+    if rc == 6:
+        log("builds still ran when the timing was to begin (scripts/cdo-slot --timed): "
+            "timed nothing")
+        sys.exit(2)
+    if rc not in (0, 4):
+        log(f"the timed CDO slot hold was not taken (cdo-slot exit {rc})")
+        sys.exit(2)
+
+
 def child_env():
     # Nothing that changes the engine's behaviour or adds tracing cost.
     return {k: v for k, v in os.environ.items()
@@ -942,6 +962,7 @@ def main():
     if args.build_only:
         log(f"built (no timing asked) in {t_built - t_start:.0f} s")
         return 0
+    timed_hold(repo)
 
     log(f"base {base_sha[:10]} ({base_rev}) against head {head_label}; workspace {ws}")
     hooks = [f"{k}={os.environ[k]}" for k in TEST_HOOKS if k in os.environ]

@@ -153,8 +153,9 @@ G rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "$worktree is not a git
 if ((!dry_run)); then
     exec 7>&1 8>&2
     # ⟨TLS-60⟩ The CDO slot (scripts/cdo-slot), from here to the end: no second
-    # land and no lane's build or test (the cdo-slot-guard hook) can run under
-    # this landing's gates. The token lets the cdo-gate it runs share the hold;
+    # land and no lane's gate or CDO run (the cdo-slot-guard hook) can run under
+    # this landing's gates; lanes' builds and tests stop only while cdo-speed's
+    # timing marks the hold timed (TLS-89). The token lets the cdo-gate it runs share the hold;
     # bound to this process, so even a killed run frees it.
     export CDO_SLOT_TOKEN=${CDO_SLOT_TOKEN:-$(od -An -N8 -tx8 /dev/urandom | tr -d ' ')}
     slot="$(dirname "$0")/cdo-slot"

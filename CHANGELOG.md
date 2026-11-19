@@ -420,6 +420,213 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `docs/superpowers/notes/2026-11-18-eng120-purge-delay.md`, and `src/bin/alsem.rs`'s comment
   points there so nobody re-runs it without a new reason. The pre-sizing half went to ENG-121.
 
+### Changed (TLS-89: a timed CDO slot hold keeps builds out; untimed holds allow them)
+
+- **Why.** On 2026-11-16/17 a lane's cargo or probe build overlapped another lane's or a
+  landing's timed run at least six times; each round was re-run by hand. The finding behind the
+  fix: `scripts/claude-hooks/cdo-slot-guard` was wired in no session's settings, so it had
+  never refused anything. And once wired, it refused builds under EVERY hold (memory holds
+  included), which is too much, while a build started a minute before a timing still ran
+  beside it.
+- **Only kernel locks decide; files describe** (the design after six review rounds; see the
+  review history below). `scripts/cdo-slot` now:
+  - **The hold** is an exclusive flock on `$CDO_SLOT_DIR/lock` plus one on `id/hold.<hid>`, a
+    fresh random id per hold. `run` takes them in its own process, so its command inherits them:
+    the hold ends when the last of them ends, killed or not (an orphaned build keeps the slot,
+    since it still uses the memory). `acquire` starts a detached keeper (`cdo-slot _keep`) that
+    ends with the --bind PID, else the acquiring Claude PID, else at `release`. A process that
+    dies drops its locks, so nothing is STALE any more and nothing guesses whether a holder lives.
+  - **A timing** is a SHARED flock on `timed.lock` (each timing takes its own) plus one on
+    `id/timed.<tid>`. `run --timed` takes it in its own process; `acquire --bind PID --timed` in
+    a keeper bound to the PID. A token-sharing timing keeps builds out by its own lock, whatever
+    happens to the hold or to another timing.
+  - **Every decision is one lock probe** (`probe`, a flock with a 0.1 s wait): held, own (this
+    Claude session's hold), timed. The status file (owner, reason, start, session, bound PID,
+    holder PID, token, hid) is written once and whole by the hold's own holder, with the id last.
+    A reader trusts it only for the hold whose id lock it then probes as held. A keeper is ended
+    by the lock it has open, never by a PID a file names.
+  - **New commands:** `probe` (the guard's input: `held=<0|1> own=<0|1> timed=<0|1>`, then the
+    descriptions). `release` refuses a `run`'s hold (it ends with the run).
+  - **A keeper started by an acquire waits for its go.** If the acquire is killed before that
+    (during a timed wait), its hold and timing go with it, though the bound process lives.
+  - **A timing keeps every new hold out**: an acquire waits while a timing runs, even one whose
+    own hold has ended.
+  - **The meta lock is gone**: no file is read, changed and written back any more. The one
+    bounded wait left is a timing's on `timed.lock` (CDO_SLOT_LOCK_WAIT_S, 30 s), which only a
+    stopped probe can hold exclusive. Exit 5 then names the PIDs that have the lock file open.
+    `/proc/locks` cannot name them: it hides every lock taken with flock(1), whose PID has exited.
+- **`--timed`'s build wait.** After taking the timing lock it waits for the build processes
+  already running outside its own process line (its ancestors and descendants do not count;
+  nor do zombies). Build processes are found by exact name with `pgrep -x`: `cargo
+  cargo-nextest rustc rustdoc`, or CDO_SLOT_BUILD_NAMES (at most 15 characters each). Build
+  scripts are found by an exact argv word: `ci-steps check-goldens`, or CDO_SLOT_BUILD_SCRIPTS.
+  Option operands are skipped (`bash -o pipefail scripts/ci-steps`); never a `pgrep -f`. It
+  waits until none is seen for CDO_SLOT_TIMED_GRACE_S (3 s) in a row: a command the guard allowed
+  a moment before the timing lock was taken starts a moment later. A build still seen at
+  CDO_SLOT_TIMED_WAIT_S (1800 s), or the hold gone by then, refuses with exit 6: the timing is
+  taken back, and the hold is released when this call took it. It prints their PIDs every
+  ~60 s. `status` adds a second line, `timed by <owner> since <time> (<reason>)`, while a
+  timing runs. A reason may hold no line break (LF or CR).
+- **Fixed: the status is read once per check.** A holder whose bound process ended removes its
+  status while it still holds the lock. Reading the fields one by one from the file could mix
+  the two: `session` from before the removal, `bound` (now empty) from after. Another run's bound
+  hold then read as this session's own unbound one, "already yours" with empty fields. Seen in
+  TLS-92's task gate, where cdo-speed runs back to back on one slot and its timed hold failed.
+  `cdo_slot::cdo_slot_reads_the_status_once_per_check` pins it with a test-only pause
+  (`CDO_SLOT_TEST_PAUSE_S`) between those two reads.
+- **Review history.** Rounds 1-5 (Fable, sol) each found a narrower race in a design that
+  decided from files, PIDs and liveness checks: a refusal ending the next holder, a retry
+  erasing a running timing's marker, a shared hold replaced before the timing began, a
+  concurrent retry losing its marker, an interrupted wait keeping builds out. A one-file state
+  under a meta lock (round 6's input) closed the writer races, but sol r6 still found four
+  check-then-act races, all of one root (any check on a file or a PID can be stale by the time
+  it is acted on):
+  - a lock-free reader missing a timing that joined after its read;
+  - a dead holder's hold promoted;
+  - a busy hold dropped by its holder's bind watch;
+  - a hold stranded when a lock wait timed out.
+  The orchestrator's answer was to change what the truth is: kernel locks decide. The
+  per-round fixes that still apply carried over: the guard's Python option clusters (`-X dev`,
+  `-IX dev`, `-Wignore:W`), `agentflow run` from PATH, the microsecond deadline (`EPOCHREALTIME`;
+  a wait never sleeps past it), and a refused timing ending only its own timing and its own
+  hold. Every `cdo_slot` test has a watchdog: after 300 s it kills every process using its slot
+  folder (one hang held the real slot 2h43m).
+- **Review round 7 (sol, on the lock design), all fixed:**
+  - **A hold taken beside a timing.** An acquire checked for a timing, then took the hold lock;
+    a timing begun in between (in a hold released meanwhile) was missed. The check runs again
+    under the hold lock.
+  - **A timing reported after its keeper died.** A keeper killed after taking its locks and
+    before its go left the acquire reporting success with no timing lock. The go file is now
+    named by the attempt's id (not a reusable PID), and the acquire waits for the keeper to
+    take it (remove it) while its id lock is held; a keeper gone first refuses (exit 6).
+  - **The guard read `scripts/cdo-slot run ... -- <cmd>` as no build.** It now reads the
+    wrapped command, as it does `timeout` or `nice`.
+  - A status write that fails exits (dropping the locks) instead of holding them with no
+    status; the inherited-lock test waits for the sharer's timing instead of a fixed second.
+- **Review round 8 (sol, on round 7's fixes), all fixed:**
+  - **A timing that ended between the two go's** (a fresh timed acquire gives its timing keeper
+    its go, then its hold keeper) was still reported. Its id lock is probed after both.
+  - **`go` could wait forever** for a stopped keeper, and took a go file it could not create
+    for an acknowledgement. It now checks the create and waits at most CDO_SLOT_LOCK_WAIT_S;
+    a hold keeper that does not take its go is ended, and the acquire says nothing is held.
+  - **The guard's `cdo-slot run` reading** now skips `run`'s own words (owner, reason, its
+    options) before the `--`, so a reason that is itself `--` hides nothing, and reads a bare
+    `cdo-slot` from PATH too.
+  - The other points (a copied live hold id vouching for edited ownership fields, a PID-reuse
+    window between the fd scan and the kill) are TLS-99. The fixed sleep in the take-window
+    test failed a gate under load and is fixed here: every test pause hook (`test_pause`) now
+    holds its window until the test makes `$CDO_SLOT_DIR/resume`, its seconds only a bound.
+- **Fixed at landing: `release` could exit 1 while a probe had the hold file open.** The first
+  landing's full nextest run failed `cdo_slot_queue_refuses_jumps_and_steps_aside_for_memory`
+  at `D release` (exit 1). `keepers_of` ended its loop with `grep -q ... && echo`. When the last
+  process listed with the hold's id file open was not a keeper (another call's probe holds the
+  file open for an instant, more often under load), the loop's status was 1, and `set -e` ended
+  the script at `ps=$(keepers_of ...)`. Memory had nothing to do with it (the test's floors are
+  0 and 999999). It is an `if` now. `cdo_slot_release_ignores_other_openers_of_the_hold_file`
+  keeps a non-keeper opener of the file listed after the keeper for the whole release.
+- **Found by running the slot tests 3x beside a full nextest run** (the orchestrator's check
+  after the landing failure):
+  - **A refusal could lose its reason.** A keeper that wrote "fail <why>" and ended between the
+    acquire's ready check and its liveness check was taken for one that never started: "the
+    timing lock was not taken", with no holder named. The acquire now reads the ready file
+    again once it sees the keeper gone (test hook CDO_SLOT_TEST_PAUSE_SPAWN_S).
+  - **A test race:** `cdo_slot_a_hold_lives_exactly_as_long_as_its_processes` killed the run once
+    the timing lock showed, which can be before the run starts its command (nothing inherited
+    yet, so the slot rightly came free). It now waits for the command itself.
+- **Fixed at the second landing: probes were slow enough to time a test out.** Every probe of a
+  busy lock waited its full 0.1 s before answering "held", so a guard call during a timing cost
+  four such waits. The guard test (about 400 calls) took ~190 s alone and passed its 300 s
+  watchdog under the landing's load. An `s` probe now answers at once (`-n`): only a holder
+  takes those locks exclusive. The `timed.lock` probe still looks twice, the second time
+  with the 0.1 s wait, since another probe may have it for an instant. The guard test now
+  takes ~57 s. The slot tests also drop every inherited `CDO_SLOT_*` and `CLAUDE_*` setting
+  (and `CDO_WS`), so a suite run inside a hold gives the same results as one outside.
+- **The guard's own cost per Bash call** (once wired it runs on every Bash call of every
+  session). Measured 2026-11-19 on server1 at a host load average of ~144 (other projects), so
+  high side; 50 calls each, median (p90), in ms:
+
+  | slot | a guarded command (`cargo test`) | an unguarded one (`git status`) |
+  |------|-----------------------------------|----------------------------------|
+  | free | 48 (62) | 31 (40) |
+  | held by another session | 88 (99) | 32 (42) |
+  | during a timing | 210 (223), refused | 40 (67) |
+
+  An unguarded command (most Bash calls) costs Python's start and the command-line parse; only
+  a guarded one runs `cdo-slot probe`. During a timing the `timed.lock` probe adds its 0.1 s
+  confirming wait. Script: `guard_latency.py` (TLS-89 scratch, not in the tree).
+- **Fixed at the manual landing: a timing in the real slot folder.** All test phases of the
+  manual cdo-gate passed; its speed phase failed with `--timed: the timing lock was not taken`
+  (exit 5). The real slot folder held a FILE named `timed`, a timing mark that TLS-89's first
+  design wrote there on 2026-11-18, and the timing keeper's `mkdir -p .../timed` failed on it.
+  The tests start in empty folders, so none saw it. Three fixes:
+  - **The timing files' folder is `timings`**, a name no earlier version used.
+  - **A folder the timing cannot make** is a refusal that names it (exit 5); a hold keeper that
+    ends on its own stops a waiting acquire with its reason, instead of retrying forever.
+  - **A keeper's stderr reached nobody.** It closed its inherited fds in a loop run under
+    `2>/dev/null`; bash keeps the real stderr on a spare fd above 2 for the loop's length,
+    the loop closed that fd too, and every later message was lost. The loop has no redirect
+    now, and a keeper that ends without a word has its stderr shown in the refusal.
+
+  `cdo_slot_works_in_a_folder_an_older_version_left` runs cdo-gate's hold and cdo-speed's
+  timed share, as they call them, in a folder holding that `timed` file, a `meta` file and a
+  status with no hold id.
+- **One-time switch to this design.** A land run by the OLD cdo-slot holds the slot in the old
+  format (no hold id), which the new scripts cannot recognize as their own hold, so a new
+  cdo-gate inside it waits forever (TLS-89's landing hung 4 h). Land TLS-89 by running the new
+  cdo-gate from the landing tree on a free slot, then merge-and-push.
+- **What it cannot see.** The hook sees a command only when it starts. A command it allowed
+  before the timing began that starts a build later (`sleep 60; cargo build`) is not stopped,
+  and neither is a build started outside any hooked session. TLS-98 plans a cargo wrapper lock
+  (rustc-wrapper and target runner) that would wait for timings exactly; it needs an owner
+  config change.
+- **Who sets it.**
+  - `scripts/cdo-speed`, after its builds and before its first timed call. It shares the hold
+    it runs in (a cdo-gate's or land's token, `cdo-slot run`, its session's hand hold), so the
+    speed phase of every cdo-gate and land is timed. Outside any hold it takes the slot itself,
+    waiting its turn. If builds still run, it exits 2 with "timed nothing".
+  - `scripts/cdo-before-after`, for its measurements.
+  - A lane's own timed run uses `cdo-slot run ... --timed`.
+- **The guard** now refuses:
+  - under any hold, another session's gate scripts and its CDO runs (aldump/alsem, or cargo,
+    naming the CDO workspace), as before;
+  - under a TIMED hold, also cargo builds and tests, `ci-steps`, `check-goldens` and
+    `agentflow run`, from every session, the holder's own included. The message names the
+    timed run and when it started.
+
+  An untimed hold now allows builds and tests (the slot's memory wait covers memory).
+- **Wiring** (the owner's: `.claude/` is outside the flow). Add this to each worktree's
+  `.claude/settings.local.json` under `hooks.PreToolUse`:
+  `{"matcher": "Bash", "hooks": [{"type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR/scripts/claude-hooks/cdo-slot-guard\"", "timeout": 30}]}`.
+  CLAUDE.md's "wired by the owner" now says what is true.
+- **Tests** (`tests/cli/cdo_slot.rs`, `before_after.rs`, `gate_scripts.rs`, `land_script.rs`):
+  - a timed hold refuses every guarded command from both sessions;
+  - an untimed one refuses only the non-build ones (listed by hand) and allows builds; land's
+    test now checks the other session's `scripts/cdo-gate` (its `cargo test` passes now);
+  - `run --timed` refuses beside a stand-in build (bash through a symlink with a per-run name)
+    with exit 6, nothing run; it starts once the build ends; its ancestor build is not waited
+    for; a stand-in build script refuses it too, run as `bash -o pipefail <script>`;
+  - an untimed run does not wait;
+  - a timing ends with its bound process; a second timing in a shared hold waits for a
+    build and stays on when the first ends; a refused `acquire --bind --timed` with no
+    session or token frees the slot; a timing whose hold is released while it waits refuses,
+    and no other session takes the slot meanwhile; a reason with a CR is refused;
+  - the lock design (`cdo_slot_decides_from_locks_alone`,
+    `cdo_slot_a_hold_lives_exactly_as_long_as_its_processes`): a timing that a second one joined,
+    killed outright, never reads untimed; a run that ends before its token-sharing timing keeps
+    the hold and the timing until the sharer ends; an `acquire --timed` killed in its wait
+    leaves nothing; a run killed while its command lives keeps the slot until the command ends;
+    a keeper killed outright frees the slot at once; a build that starts within the grace wait
+    is waited for; a stuck timing lock fails loudly (exit 5, naming the PID); a status read half
+    way is never printed as a hold;
+  - cdo-before-after's measurements run under `timed by`; beside a build it measures nothing,
+    says why, fails and frees the slot;
+  - cdo-speed inside a hold exits 2 beside a build, before any server starts; outside any hold
+    it takes the slot itself, timed.
+
+  Each guard has a discrimination proof (break, red, restore, green), recorded in the tests'
+  docs. Every test that runs cdo-speed up to its timing gets a slot of its own
+  (`private_slot`): an inherited gate token would have marked the real slot.
+
 ### Added (TLS-91: perf in the kraken image, for instruction counts)
 
 - **What.** `.kraken/Dockerfile` installs `linux-perf` (perf 7.0) in its own late layer, as gdb's,
