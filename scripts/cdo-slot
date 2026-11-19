@@ -325,6 +325,9 @@ take_hold() {
     exec {hfd}>"$ids/hold.$hid"
     flock -x -n "$hfd" || die "cannot lock the new hold id $ids/hold.$hid"
     held_fds+=("$hfd")
+    # Test hook: the window in which the hold is taken (`held=1`) but its status
+    # is not written yet; a `release` then cannot name it and refuses.
+    [[ -z "${CDO_SLOT_TEST_PAUSE_PUBLISH_S:-}" ]] || test_pause "$CDO_SLOT_TEST_PAUSE_PUBLISH_S"
     write_atomic "$status_file" "owner=$1
 reason=$2
 since=$(date -u +%FT%TZ)

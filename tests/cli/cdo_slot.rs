@@ -1951,9 +1951,34 @@ fn cdo_slot_timings_in_a_hand_hold() {
     drop(t11);
     until("free", &|| s.probe() == "held=0 own=0 timed=0");
 
-    // A `run`'s hold is the run's: `release` refuses it.
-    let mut running = s.bg("E", &["run", "lane", "took", "--", "sleep", "600"], &[]);
-    until("the run holds", &|| s.probe().starts_with("held=1"));
+    // A `run`'s hold is the run's: `release` refuses it. The hold lock is taken
+    // (`held=1`) a moment before the run writes its status (TLS-92's landing:
+    // a `release` in that moment refused, honestly, with "its holder is still
+    // writing its status", and the test expected "taken by a run"). The
+    // PUBLISH hook holds that moment open (2 s, no resume): a `release` inside
+    // it refuses and ends nothing; the test then waits for the published
+    // status, not for `held=1`.
+    // Mutation (2026-11-19): the wait for the published status dropped (the
+    // second `release` goes in the same moment) -> "still writing its status"
+    // instead of "taken by a run" (red); restored, green.
+    let mut running = s.bg(
+        "E",
+        &["run", "lane", "took", "--", "sleep", "600"],
+        &[("CDO_SLOT_TEST_PAUSE_PUBLISH_S", "2")],
+    );
+    s.wait_paused();
+    let (code, text) = s.run("E", &["release"], &[]);
+    assert_eq!(code, Some(1), "{text}");
+    assert!(text.contains("still writing its status"), "{text}");
+    assert!(
+        s.probe().starts_with("held=1"),
+        "a refused release ended the hold"
+    );
+    until("the run's status is published", &|| {
+        s.run("D", &["status"], &[])
+            .1
+            .contains("held by lane (took)")
+    });
     let (code, text) = s.run("E", &["release"], &[]);
     assert_eq!(code, Some(1), "{text}");
     assert!(text.contains("taken by a run"), "{text}");
