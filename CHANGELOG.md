@@ -829,6 +829,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **What moves.** Precision is LOST where the old lists said "keeps its value" wrongly (correct),
   and gained where ENG-30's Text rule unbound a parameter passed to a read-only function outside
   its 15 names (`DelStr`, `StrLen`'s kin). CDO counts: TBD.
+  The CDO rendering goldens (`output_cdo`) move for `IssueReminder` and `RunReportID`: 3 more tables
+  each beyond dependency calls (`Interaction Merge Data`, `Privacy Notice`, `Privacy Notice
+  Approval`; 198 -> 201 and 412 -> 415 tables), a few more temporary-only ones, and one
+  representative path. Bisected to ENG-135's own rule: `Word Template Interactions` calls
+  `WordTemplate.Merge(.., EditDoc)` inside Base Application; the literal pruning's call targets
+  hold workspace callers only, so that call has none and counts as a possible writer of `EditDoc`.
+  The old rule assumed such a call writes nothing (right for this `Merge`, unsound in general).
+  ENG-137 (dependency-internal calls get their real targets) wins this back.
 - **Pinned by** `cli_eng135_platform_writers` (an Integer through `Dictionary.Get`, an Option
   through `InStream.Read`, an Enum through `List.Get`, a local through `Dictionary.Set`: every arm
   live, each read seeded so the written value is real; a parameter only the compiled `#if` arm
