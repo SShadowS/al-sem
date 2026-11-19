@@ -2502,16 +2502,17 @@ fn speed_reports_instructions_and_their_limit_is_advisory() {
         .matches("perf failed to attach 3 times in a row")
         .count();
     assert!(gave_up > 0, "no give-up: {text}");
-    // No server tried more than 3 times (the stub logs each attach with its
-    // server's pid; a server with fewer calls tries fewer times), and those that
-    // gave up tried exactly 3. Break: the give-up's early return dropped -> a
-    // server tries on every call (red; the message alone stayed GREEN under that
-    // break, since it is printed at the third failure either way).
+    // No server tried more than 3 times (a server with fewer calls tries fewer
+    // times), and those that gave up tried exactly 3. Counted from cdo-speed's
+    // own line per failed attach, by server pid (TLS-103: the stub perf's log
+    // missed an attempt whose stub was still starting when the 0.3 s ran out,
+    // under load). The stub's log still bounds the attaches it saw. Break: the
+    // give-up's early return dropped -> a server tries on every call (red; the
+    // message alone stayed GREEN under that break, since it is printed at the
+    // third failure either way).
     let mut per_server = std::collections::BTreeMap::<String, usize>::new();
-    for pid in std::fs::read_to_string(dir.path().join("state-/perf-attaches"))
-        .unwrap()
-        .lines()
-    {
+    for l in text.lines().filter(|l| l.contains("perf attach failed (")) {
+        let pid = l.split("(pid ").nth(1).unwrap().split(')').next().unwrap();
         *per_server.entry(pid.to_string()).or_default() += 1;
     }
     assert!(
@@ -2522,6 +2523,17 @@ fn speed_reports_instructions_and_their_limit_is_advisory() {
         per_server.values().filter(|&&n| n == 3).count(),
         gave_up,
         "{per_server:?}"
+    );
+    let mut stub_saw = std::collections::BTreeMap::<String, usize>::new();
+    for pid in std::fs::read_to_string(dir.path().join("state-/perf-attaches"))
+        .unwrap_or_default()
+        .lines()
+    {
+        *stub_saw.entry(pid.to_string()).or_default() += 1;
+    }
+    assert!(
+        stub_saw.values().all(|&n| n <= 3),
+        "the stub saw attaches after the give-up: {stub_saw:?}"
     );
     assert!(
         verdict(&text).contains("(instructions: no call fully counted; advisory limit x1.02)"),

@@ -854,6 +854,11 @@ class Server:
             return None
         started = self._instr_start()
         self.instr_failures = 0 if started else getattr(self, "instr_failures", 0) + 1
+        if not started:
+            # One line per failed attach (at most INSTR_GIVE_UP a server): what the
+            # tests count, since a stub perf too slow to start logs nothing (TLS-103).
+            print(f"cdo-speed: {self.name} (pid {self.p.pid}): perf attach failed "
+                  f"({self.instr_failures}/{INSTR_GIVE_UP})", file=sys.stderr)
         if self.instr_failures == INSTR_GIVE_UP:
             print(f"cdo-speed: {self.name}: perf failed to attach {INSTR_GIVE_UP} times in a row; "
                   "this server's calls are not counted from here on", file=sys.stderr)

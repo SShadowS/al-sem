@@ -18,6 +18,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   time to be its CPU time (`Server.call`, the one place every judged wall time comes from).
   `speed_with_stub` sets it for every stub run, so their verdicts rest on CPU alone. It is
   listed among the test hooks a run reports; the limits are unchanged.
+- **A second wall-time dependence, found by the stress run.** The same test checks that a
+  server whose perf never acks gives up after exactly 3 attaches. It counted the attaches
+  from the stub perf's own log, but under load a stub could still be starting when the 0.3 s
+  attach time ran out, so a server that failed 3 times showed 2 (2 failures in 10 loaded
+  runs). cdo-speed now prints one line per failed attach (`perf attach failed (n/3)`, with
+  the server's pid; at most 3 a server, also useful in a real gate), and the test counts
+  those. Proof: the give-up's early return dropped -> servers tried up to 13 times (red).
 - **It never judges a real run** (review, sol): any value but `1`, or a run without
   `--base-exe` and `--head-exe` (a gate builds its own binaries and gives neither), is refused
   before anything starts, so a variable left exported in a shell cannot make a real gate pass
