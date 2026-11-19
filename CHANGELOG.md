@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (TLS-89 follow-up: a slot test raced the run's status write)
+
+- TLS-92's landing failed on `cdo_slot_timings_in_a_hand_hold`: it waited for `held=1`, then
+  called `release` on a `run`'s hold. The hold lock is taken a moment before the run writes its
+  status, and a `release` in that moment refuses, correctly, with "its holder is still writing
+  its status". The script was right (an `acquire` returns only after its status is written: a
+  `run` writes it before going on, a keeper before its ready file); only an outside caller
+  polling the lock can land in the moment. The test now waits for the published status. A new
+  hook, CDO_SLOT_TEST_PAUSE_PUBLISH_S, holds that moment open: the test checks that a `release`
+  inside it refuses and ends nothing. Proof: the wait dropped gives the landing's message (red).
+- The batch landing of TLS-102 and TLS-92 failed on `cdo_slot_acquire_windows_hold_against_a_timing`:
+  "one timing keeper", found two. A keeper is a bash script, and each `$(...)` it runs forks a
+  subshell with its command line, environment and descriptors for a moment; a count by command
+  line caught the keeper and its subshell together, more often under load. A keeper is now the
+  top one: a matching process whose parent is not one (the tests' `keepers`, and the script's
+  own `keepers_of`, where the fork was harmless). A hook, CDO_SLOT_TEST_KEEPER_FORK, keeps such
+  a subshell open; proof: without the parent check the count is two (red).
+- **Every timing assumption in `cdo_slot.rs` audited at once** (the orchestrator: three slot
+  tests failed only inside landings):
+  - the grace test's fixed 1 s sleep before its late build is a pause hook now
+    (CDO_SLOT_TEST_PAUSE_GRACE_S, after the first empty scan); proof: the grace ended at the
+    first empty scan lets the timing start beside the build (red);
+  - the sharer in the inherited-lock check runs 20 s, not 4;
+  - every poll's budget is 60 s (POLL_BUDGET; only a failing run waits it out);
+  - the time bounds that tell a refusal from a hang are 15, 20, 14 and 30 s, each still short
+    of what its break takes (a lock wait for ever or of 30 s, a 15 s sleep);
+  - the two fixed 2.5 s sleeps left can only let a test pass without checking, never fail it
+    (the queue test's one is in TLS-99).
+- **Fixed: a STOPPED keeper could strand the slot** (found by the first 20x stress run, 1 of 20,
+  and reproduced outside cargo under load, 1 of 25). An acquire whose hold keeper was SIGSTOPped
+  before its go said "nothing is held", yet the keeper lived on (state T, reparented to PID 1)
+  holding the slot. `end_keeper` had trusted a fresh `/proc` scan at every step (first, in its
+  wait loop, before its KILL), and a scan that missed the keeper ended it early. Now it records
+  the keepers it finds once (PID and start time), waits for and KILLs exactly those (a stopped
+  process is alive, so only KILL ends it), and asks the lock itself, up to 5 rounds, whether
+  anything still holds it. When something still does, it says so and who; `release` then fails,
+  and an acquire never claims "nothing is held". A hook, CDO_SLOT_TEST_SCAN_ONCE, makes only the
+  first scan find the keeper; proof: the old `end_keeper` leaves it stopped and holding (red).
+- **The guard test's hook calls run 8 at a time**: ~400 calls one after another passed the 300 s
+  watchdog twice under load; now ~13 s unloaded (was ~57 s). The watchdog is 600 s.
+- **The deadline test's stand-in build runs until the test ends it**: ending by itself at 3 s, it
+  could be gone before a loaded host's first scan, which then rightly saw nothing.
+- The speed test's wall-time judgement under load is TLS-103.
+
+  Stress: the suite 20 times in a row beside full nextest runs, zero failures (see TLS-102).
+
 ### Fixed (ENG-131: identifiers fold exactly as the AL compiler compares them, the same for binding, graph nodes and stable ids)
 
 - **The wrong answer** (found by Fable reviewing ENG-90). Binding and graph node ids folded names
@@ -409,6 +455,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     may-not-run, `RunRequestPage`, `run_reaches_trigger`, the node-id flag, the internal and stable
     id parts, the member kind, explain's level, the wire id, the selector fallback, the surface hash,
     the add-in guard.
+
+### Added (TLS-92: cdo-before-after sees fingerprint multiplicity)
+
+- **Why.** On CDO, several distinct findings share one fingerprint: d54, d55 and d22 (ENG-101,
+  `/work/.al-sem/profiles/2026-11-18-eng101/README.md`). Primary has 2,308 findings under 2,301
+  fingerprints, and `--scope all` 32,579 under 32,548. A change that merges or splits findings
+  under a fingerprint moves no fingerprint. `scripts/cdo-before-after` then showed at most a
+  detector's count change, not which groups changed, and nothing when the counts balanced out.
+- **What.** Per scope, the report now gives:
+  - the distinct-fingerprint count beside the findings count;
+  - the fingerprints that more than one finding share, as `[detector, fingerprint, count]` per
+    side;
+  - `multiplicity_moved`: every fingerprint shared on either side whose finding count changed, as
+    `[detector, fingerprint, base, head]`. Added and removed ones are included, with 0 on the side
+    without them, so a group split into new fingerprints shows too (review r1, Fable).
+  - `members_moved`: every shared fingerprint with the same count but other members, by finding id,
+    as `[detector, fingerprint, count]`.
+
+  - Review r1 (sol): `members_unknown`, the shared groups with a finding that has no `id` (their
+    members cannot be compared, so they are never reported as unchanged); `detector_mismatch`,
+    the fingerprints carrying more than one detector (never labelled with one side's).
+
+  `report.md` lists them in bold, at most 50 lines each, then "... and N more (report.json)", or
+  says "no shared fingerprint's finding count changed". It words them as what was observed,
+  "finding count changed" and "finding ids changed", since a rekeyed group or renumbered ids
+  look the same as a merge or a swap. This is a tool change only; no engine output moves.
+- **Test.** `before_after::before_after_reports_a_multiplicity_change` uses base and head fixtures
+  with ids. In both scopes it pins:
+  - a merge (`fx` 2 → 1) and a split (`fy` 1 → 2);
+  - a head-only group (`fn` 0 → 2);
+  - a member swap at an equal count (`fw`);
+  - a kept singleton that stays out of both lists.
+
+  `before_after_reports_what_the_fingerprint_set_hides` (review r1, sol) pins each case alone:
+  same set and same totals (`fa` 2 → 1, `fb` 1 → 2), a group split into two new singletons
+  (`fz` 2 → 0), an id-less group (unknown) and a detector change under one fingerprint.
+
+  Discrimination proofs, recorded in its doc: over removed only, kept only, and without the members
+  comparison, each is red; restored, green.
 
 ### Added (TLS-83: cdo-speed counts instructions; what a build ratio resolves)
 
