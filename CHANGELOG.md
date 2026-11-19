@@ -78,6 +78,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   discrimination proofs. A no-row result alone does not show the object is whole (review,
   sol), so `cr_only_line_ends_keep_the_object_and_its_code` pins each repro in the IR: a clean
   parse, its codeunit and routine, and the call after the CR-ended directive or comment.
+- **Measured on both grammars.**
+  - Tests: master `3cc17b21` on 5.3.0 passed all 6,188; this branch on 5.4.0 passes all 6,189
+    (the new CLI test is the one more). No test changed outcome and no golden moved.
+  - CDO (`bc3ccb18`, clean), release-fast, 5.3.0 master `3cc17b21` against this branch on 5.4.0,
+    each side built against its own grammar (a one-grammar `cdo-before-after` cannot build the
+    5.3.0 base): no finding or fingerprint moved (primary 2,308 findings / 2,301 fingerprints,
+    `--scope all` 32,579 / 32,548, 0 added, 0 removed); the `:Interface:` ids matched in the
+    fingerprints are unchanged (14 / 7 distinct); `aldump --program-call-graph-stats` is
+    byte-identical (46,688 edges, 0 unknown). CDO's workspace sources hold no interface
+    `extends` and no lone-CR line end (0 files each), which fits nothing moving.
+  - The landing's speed check runs with `--no-speed` for the same reason: its base and head
+    need different grammars.
 
 ### Fixed (TLS-89 follow-up: a slot test raced the run's status write)
 
