@@ -438,6 +438,11 @@ fn lower_object(
     } else {
         Vec::new()
     };
+    let interface_extends = if kind == ObjectKind::Interface {
+        interface_extends_names(node, source)
+    } else {
+        Vec::new()
+    };
 
     // Page controls (Page / PageExtension).
     let mut page_controls = Vec::new();
@@ -544,6 +549,7 @@ fn lower_object(
         dataset_items,
         extends_target,
         implements,
+        interface_extends,
         page_controls,
         fields,
         keys,
@@ -806,6 +812,28 @@ fn implements_clause_names(clause: RawNode, source: &str, out: &mut Vec<String>)
             _ => {}
         }
     }
+}
+
+/// An interface's `extends` list (grammar 5.4.0, tree-sitter-al #43): every
+/// `extends_interface` entry of the declaration and of each `#if` group in the list
+/// (`preproc_conditional_extends`, nested groups included), document order. Every arm's
+/// names are kept: the same union [`extract_implements`] reads.
+fn interface_extends_names(node: RawNode, source: &str) -> Vec<String> {
+    fn walk<'t>(n: RawNode<'t>, out: &mut Vec<RawNode<'t>>) {
+        out.extend(n.children_by_field(FieldName::ExtendsInterface));
+        for g in n.named_children() {
+            if g.kind() == RawKind::PreprocConditionalExtends {
+                walk(g, out);
+            }
+        }
+    }
+    let mut nodes = Vec::new();
+    walk(node, &mut nodes);
+    nodes.sort_by_key(|n| n.byte_range().start);
+    nodes
+        .into_iter()
+        .map(|n| reference_name(n, source))
+        .collect()
 }
 
 /// Collect page `part` / `systempart` / `usercontrol` sections (name, kind, target),
@@ -6653,6 +6681,48 @@ codeunit 50204 "Preproc Impl" implements IOther
             implements.iter().any(|i| i.eq_ignore_ascii_case("IOther")),
             "got implements: {implements:?}"
         );
+    }
+
+    /// GRM-05 (grammar 5.4.0, tree-sitter-al #43): an interface's `extends` list
+    /// reaches the IR whole: several bases, a namespace-qualified base (its last
+    /// segment, as for `implements`), and the names of every arm of an `#if` group in
+    /// the list (nested too), in document order. Another object kind's `extends`
+    /// (an extension's base object) never lands here. Shapes compiled with alc
+    /// 18.0.41 (/work/.al-sem/probes/grm05-iface).
+    ///
+    /// Mutations (2026-11-19): the `#if`-group descent dropped -> `IGroupA`, `IGroupB`,
+    /// `INested` missing (red); `reference_name` replaced by the raw text -> the
+    /// qualified base reads `NS.Sub."IQux"` (red); the sort dropped -> the group's names
+    /// come after `ILast` (red). Each restored, green.
+    #[test]
+    fn interface_extends_list_is_lowered_with_every_arm() {
+        let src = r#"
+interface IBaz extends IBar, NS.Sub."IQux",
+#if A
+    IGroupA,
+#if B
+    INested,
+#endif
+#else
+    IGroupB,
+#endif
+    ILast
+{
+    procedure Baz();
+}
+
+tableextension 50100 "T Ext" extends Customer
+{
+}
+"#;
+        let af = parse(src);
+        assert_eq!(af.objects.len(), 2, "both objects lowered");
+        assert_eq!(
+            af.objects[0].interface_extends,
+            ["IBar", "IQux", "IGroupA", "INested", "IGroupB", "ILast"]
+        );
+        assert!(af.objects[1].interface_extends.is_empty());
+        assert_eq!(af.objects[1].extends_target.as_deref(), Some("Customer"));
     }
 
     /// The `ParseStatus::Recovered` diagnostic fixture: an unbalanced `#if`
