@@ -70,9 +70,10 @@ use crate::program::model::workspace::{ModelObject, ModelRoutine};
 /// char), so multi-byte middle characters (`"is😀handled"`, `"isßhandled"`) are
 /// handled faithfully and `İsHandled` reads as `ishandled`.
 pub fn is_handled_re(name: &str) -> bool {
-    // TLS-43 review sol r3: the identifier fold first, so a raw `İsHandled`
-    // matches as its folded spelling (an assignment's name) already did. The
-    // fold is 1:1 per char, so the length rules below are unchanged.
+    // TLS-43 review sol r3: the identifier fold first, so a raw name matches as
+    // its folded spelling (an assignment's name) already did. The fold is 1:1
+    // per char, so the length rules below are unchanged. (ENG-131: `İsHandled` is
+    // another identifier to the compiler, so it does not match.)
     let folded = name.fold_identifier();
     let chars: Vec<char> = folded.chars().collect();
     let is_lit: [char; 2] = ['i', 's'];

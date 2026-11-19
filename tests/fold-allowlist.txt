@@ -29,7 +29,7 @@
 2 src/engine/gate/diff/cli.rs
 2 src/engine/gate/diff/passes.rs
 1 src/engine/gate/diff/preflight.rs
-9 src/engine/ids.rs
+1 src/engine/ids.rs
 2 src/engine/impact/base.rs
 2 src/engine/impact/delta.rs
 10 src/engine/impact/keys.rs
@@ -65,7 +65,7 @@
 5 src/engine/l5/prove_slice.rs
 3 src/engine/l5/registry.rs
 11 src/engine/l5/routine_rollup.rs
-4 src/engine/l5/selector_index.rs
+6 src/engine/l5/selector_index.rs
 6 src/engine/l5/snapshot.rs
 8 src/engine/l5/snapshot_full.rs
 6 src/engine/l5/snapshot_full/key_classes.rs
@@ -119,7 +119,7 @@
 6 src/program/resolve/index.rs
 1 src/program/resolve/interface_holder.rs
 4 src/program/resolve/method_id.rs
-59 src/program/resolve/receiver.rs
+58 src/program/resolve/receiver.rs
 8 src/program/resolve/resolver.rs
 5 src/program/resolve/semantic_golden.rs
 1 src/program/session/workspace_tests.rs

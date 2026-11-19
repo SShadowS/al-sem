@@ -419,12 +419,14 @@ fn callers_come_from_the_reverse_walk() {
     }
 }
 
-/// ⟨ENG-90⟩ Two routines whose names differ only in a word-final sigma
-/// (`"ΒΣ"`, `"Βς"`) are two graph nodes on ONE StableRoutineId: the node id
-/// folds (`Σ` -> `σ`), the stable id lowercases (`Σ` -> `ς`). `"ΒΣ"` calls
-/// Root directly (local); `"Βς"` reaches it only through a dynamic
-/// `Codeunit.Run` (via a hub). Both model routines map to both nodes, so the
-/// up pass met both tiers in hash order; `"ΒΣ"`'s tier must be its best,
+/// ⟨ENG-90⟩ Two procedures whose names differ only in a word-final sigma
+/// (`"ΒΣ"`, `"Βς"`) share ONE StableRoutineId. Before ENG-131 they were two
+/// graph nodes on that id (the node id folded `Σ` to `σ`, the stable id
+/// lowercased it to `ς`); since ENG-131 both ids take the compiler's fold, to
+/// which the two names are ONE identifier (alc: AL0440, a duplicate), so this
+/// source is a duplicate declaration. `"ΒΣ"` calls Root directly (local);
+/// `"Βς"` reaches it only through a dynamic `Codeunit.Run` (via a hub). The up
+/// pass may meet both tiers in hash order; `"ΒΣ"`'s tier must be its best,
 /// `local`, on every run.
 ///
 /// Mutation (2026-11-18): the tier write back to last-wins

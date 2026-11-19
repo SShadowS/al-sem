@@ -1731,27 +1731,30 @@ mod tests {
     }
 
     /// TLS-43 review sol r3: the whole-signature compare takes the identifier
-    /// fold, so a type holding `İ` and a comma (one parameter, which the item
-    /// split reads as two) selects by its `i` spelling.
-    ///
-    /// DISCRIMINATION (2026-11-13): `fold_whole` back on
-    /// the per-char Unicode lowercase (the old `flat_map`) fails here;
-    /// restored, passes.
+    /// fold, so a type holding a non-ASCII letter and a comma (one parameter, which
+    /// the item split reads as two) selects by another spelling of that identifier.
+    /// ENG-131: the compiler's pair here is micro `µ` (U+00B5) and Greek capital `Μ`
+    /// (U+039C), one identifier to alc; `İ` and `i`, the pair before, are two.
     #[test]
     fn a_whole_signature_with_a_dotted_capital_i_selects() {
         use crate::program::model::workspace::ModelParameter;
         let params = vec![ModelParameter {
             index: 0,
             name: "P".into(),
-            type_text: "Option İ,Other".into(),
+            type_text: "Option µ,Other".into(),
             is_var: false,
             is_record: false,
             table_name: None,
         }];
-        let (_, wanted) = split_signature("Codeunit X::F(Option i,Other)");
+        let (_, wanted) = split_signature("Codeunit X::F(Option \u{39C},Other)");
         let wanted = wanted.unwrap();
         assert_eq!(wanted.len(), 2, "precondition: the item split reads two");
+        assert_ne!("µ".to_lowercase(), "\u{39C}".to_lowercase(), "precondition");
         assert!(signature_matches(&wanted, &params));
+        let (_, other) = split_signature("Codeunit X::F(Option İ,Other)");
+        let mut i_params = params.clone();
+        i_params[0].type_text = "Option i,Other".into();
+        assert!(!signature_matches(&other.unwrap(), &i_params), "İ is not i");
     }
 
     /// V3 §2.1: a member form keeps only the named owner, member, kind and

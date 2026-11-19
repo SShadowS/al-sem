@@ -204,10 +204,12 @@ fn body_starts_at_var_or_begin() {
     assert_eq!(body_start(&["procedure X();"], 0, 0), None);
 }
 
-/// TLS-43 r4 (Fable): a header name with `İ` (2 bytes, its identifier fold `i` 1
-/// byte) keeps its name. `routine_header` slices the raw line at a byte offset
+/// TLS-43 r4 (Fable): a header name with a char whose identifier fold is shorter in
+/// bytes keeps its name. `routine_header` slices the raw line at a byte offset
 /// taken from the scanner's text, so the slice must stay on the ASCII fold and
-/// only the extracted name is folded.
+/// only the extracted name is folded. (It was `İ`, 2 bytes folding to `i`; since
+/// ENG-131 `İ` folds to itself, so the shrinking char is `Ɐ` U+2C6F, 3 bytes, whose
+/// fold `ɐ` U+0250 is 2.)
 ///
 /// Discrimination (2026-11-13): the raw line folded with `fold_identifier` before
 /// the slice (the r4 regression) fails it: in a debug build the offset arithmetic
@@ -215,10 +217,15 @@ fn body_starts_at_var_or_begin() {
 /// result as the wrong name `e`. Restored, it passes.
 #[test]
 fn a_header_name_with_a_dotted_capital_i_is_read_whole() {
-    let got = labels("codeunit 50100 G\n{\n    procedure İndkøbTest()\n    begin\n    end;\n}\n");
+    let got = labels("codeunit 50100 G\n{\n    procedure ⱯndkøbTest()\n    begin\n    end;\n}\n");
+    assert_eq!(
+        "Ɐ".len() - al_syntax::fold_identifier("Ɐ").len(),
+        1,
+        "precondition"
+    );
     assert!(
         got.iter()
-            .any(|(line, k)| line.starts_with("procedure") && *k == r(Some("indkøbtest"))),
+            .any(|(line, k)| line.starts_with("procedure") && *k == r(Some("ɐndkøbtest"))),
         "{got:?}"
     );
 }

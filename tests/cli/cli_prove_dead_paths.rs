@@ -192,7 +192,7 @@ fn a_message_match_lowercases_prose_not_identifiers() {
     .unwrap();
     std::fs::write(
         ws.join("src/Greek.al"),
-        "codeunit 50430 \"G43 Greek\"\n{\n    procedure Fail()\n    begin\n        Error('ΟΣ');\n    end;\n\n    procedure FailLabel()\n    var\n        İletiErr: Label 'x';\n    begin\n        Error(İletiErr);\n    end;\n}\n",
+        "codeunit 50430 \"G43 Greek\"\n{\n    procedure Fail()\n    begin\n        Error('ΟΣ');\n    end;\n\n    procedure FailLabel()\n    var\n        µLetiErr: Label 'x';\n    begin\n        Error(µLetiErr);\n    end;\n}\n",
     )
     .unwrap();
     let inv = alsem(
@@ -228,11 +228,13 @@ fn a_message_match_lowercases_prose_not_identifiers() {
     };
     let r = matched("Fail", "ος");
     assert_eq!(r["answer"], "yes", "the message matches: {r}");
-    // The variable holding the message is an identifier: `İletiErr` folds to
-    // `iletierr`, so `ileti` finds it (its text 'x' cannot match). Fable r6
-    // P2. DISCRIMINATION (2026-11-13): the variable side back on
-    // `to_lowercase` (`i̇letierr`) answers `no` here; restored, `yes`.
-    let r = matched("FailLabel", "ileti");
+    // The variable holding the message is an identifier: micro `µLetiErr` folds to
+    // `μletierr` (Greek mu: one identifier char to the compiler, ENG-131), so the
+    // Greek `μleti` finds it (its text 'x' cannot match), where `to_lowercase`
+    // keeps `µ` and `μ` apart. Fable r6 P2 (it was `İletiErr` and `ileti`, which
+    // the compiler keeps apart).
+    assert_ne!("µ".to_lowercase(), "μ".to_lowercase(), "precondition");
+    let r = matched("FailLabel", "μleti");
     assert_eq!(r["answer"], "yes", "the message variable matches: {r}");
 }
 

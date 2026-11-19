@@ -2,41 +2,28 @@
 //! program engine, legacy L3) funnels through when it needs to compare or store an AL
 //! identifier case-insensitively.
 //!
-//! AL identifiers are case-insensitive. The real AL compiler's fold is best-evidence a
-//! **simple, culture-invariant, 1:1 Unicode case fold** — `StringComparison
-//! .OrdinalIgnoreCase`-class or Roslyn `CaseInsensitiveComparison`-class; the two agree
-//! on every letter that occurs in real BC identifiers (the Latin-1 Supplement and
-//! Latin-Extended ranges: `Æ/æ Ø/ø Å/å Ä/ä Ö/ö Ü/ü Ñ/ñ Ç/ç È/è É/é`, plus `ß`). See
-//! `.superpowers/sdd/unicode-fold-investigation.md` for the full evidence trail.
+//! AL identifiers are case-insensitive, and the AL compiler compares them like .NET
+//! `StringComparison.OrdinalIgnoreCase` (ENG-131, measured with alc 18.0.41 on Linux;
+//! Windows confirmation pending): two chars are one when their simple UPPERCASE mappings
+//! are equal, and no non-ASCII char maps onto ASCII. This fold gives each such class one
+//! char ([`fold_char`]), so binding, graph node ids and stable routine ids (which fold
+//! with it too since ENG-131) agree with the compiler and with each other. The measured
+//! pairs and the probe apps: `docs/superpowers/notes/2026-11-18-eng131-compiler-identifier-fold.md`.
 //!
-//! This is deliberately **NOT** `str::to_lowercase()`. `to_lowercase()` performs
-//! Unicode's *full* case mapping (`SpecialCasing.txt`), which for exactly one
-//! codepoint — `İ` (U+0130, LATIN CAPITAL LETTER I WITH DOT ABOVE) — is a **1:n**
-//! mapping (`İ` → `i` + U+0307 COMBINING DOT ABOVE, two chars; verified empirically by
-//! scanning every Unicode scalar value for a multi-char `to_lowercase()` result — U+0130
-//! is the *only* one). A 1:n fold breaks the "identifier folds to one canonical string"
-//! invariant every fold call site in this codebase relies on, and is a *linguistic*
-//! casing operation the compiler does not perform on symbol names (matching .NET
-//! `OrdinalIgnoreCase`, which never applies full/special casing). `str::to_lowercase()`
-//! also differs on one context-sensitive case: a word-final capital sigma `Σ` (U+03A3)
-//! becomes `ς`, where this fold gives `σ` (TLS-42 measured both, over every scalar).
+//! It is deliberately NOT `str::to_lowercase()`, which applies Unicode's FULL, context-
+//! sensitive lowercase mapping: `İ` becomes two chars (`i` + U+0307), a word-final `Σ`
+//! becomes `ς` but a medial one `σ`, and it merges pairs the compiler keeps apart (`ẞ`
+//! with `ß`, the Kelvin sign with `k`) while keeping apart pairs it merges (`ς` with `σ`
+//! in mid-word, micro `µ` with Greek `μ`).
 //!
-//! Fold behavior on the characters that matter:
-//! - **`ß` (German sharp S) stays `ß`.** Its only case transform is an *uppercase*
-//!   expansion (`ß` → `SS`), never touched by a lowercase fold; `ß` has no distinct
-//!   uppercase letter to fold *from*, so it is fixed under this fold (`ß` is
-//!   fold-equivalent only to `ß`, never to `ss`).
-//! - **`İ` (Turkish dotted capital I) folds to plain `i` (U+0069), not `i̇`
-//!   (U+0069 U+0307).** We take `char::to_lowercase(c).next()` — for every codepoint
-//!   except `İ` this is exactly the (single-char) full mapping; for `İ` specifically it
-//!   yields just `i`, discarding the combining-dot tail. That single-char result also
-//!   happens to equal Unicode's *simple* (non-special) lowercase mapping for `İ`
-//!   (`UnicodeData.txt`'s `Simple_Lowercase_Mapping` field), so `.next()` is a simple
-//!   fold everywhere, not an ad-hoc truncation. Practical note: `İ` merging with plain
-//!   `i`/`I` is harmless for AL — Turkish `İ` does not occur in any real BC/CDO/DO
-//!   identifier population sampled for this change.
-//! - **`ı` (Turkish dotless lowercase i, U+0131) folds to itself** — it is already
-//!   lowercase and has no uppercase 1:1 partner under a simple fold.
+//! Behavior on the characters that matter:
+//! - Latin letters in real BC identifiers (`Æ/æ Ø/ø Å/å Ä/ä Ö/ö Ü/ü Ñ/ñ Ç/ç È/è É/é`) fold to
+//!   their lowercase, as always.
+//! - `ß` stays `ß`, and the capital `ẞ` stays `ẞ`: two identifiers, as alc says. `ß` never
+//!   folds to `ss`.
+//! - `Σ`, `σ` and `ς` are one identifier char, `σ`; micro `µ` and Greek `μ` are one, `μ`.
+//! - `İ` (U+0130) stays `İ`, apart from `i`; dotless `ı` (U+0131) stays `ı`; the Kelvin
+//!   sign stays apart from `k`.
 //!
 //! ASCII fast path: for an all-ASCII input, `fold_identifier` is byte-identical to
 //! `str::to_ascii_lowercase()` — today's behavior, unchanged for the overwhelming
@@ -76,13 +63,58 @@ pub fn eq_fold_identifier(a: &str, b: &str) -> bool {
     }
 }
 
-/// Simple 1:1 lowercase fold for one char. See the module doc for the `İ` rationale —
-/// this is the *only* codepoint (of all of Unicode, empirically verified) where
-/// `char::to_lowercase()` yields more than one char; `.next()` degrades it to a single
-/// char everywhere, and that single char is a simple (non-linguistic) fold.
+/// The compiler's fold for one char (ENG-131, measured with alc 18.0.41): two chars are
+/// one identifier char when their simple UPPERCASE mappings are equal, as .NET
+/// `StringComparison.OrdinalIgnoreCase` compares, except that a non-ASCII char never maps
+/// onto ASCII (`ı` U+0131 and `ſ` U+017F stay apart from `i` and `s`). Each class is
+/// written as its single lowercase char when one maps back to the class (`Σ`, `σ`, `ς` →
+/// `σ`; micro `µ` and Greek `μ` → `μ`; `Ø` → `ø`), else as the uppercase char itself
+/// (`İ`, `ẞ`, the Kelvin sign `K`), so every ASCII and nearly every other char keeps the
+/// lowercase form it always had. The table of measured pairs is in
+/// `docs/superpowers/notes/2026-11-18-eng131-compiler-identifier-fold.md`.
 #[inline]
 fn fold_char(c: char) -> char {
-    c.to_lowercase().next().unwrap_or(c)
+    if c.is_ascii() {
+        return c.to_ascii_lowercase();
+    }
+    let upper = simple_upper(c);
+    if upper.is_ascii() {
+        return c; // `ı`, `ſ`: the compiler keeps them apart from ASCII
+    }
+    let lower = simple_lower(upper);
+    if simple_upper(lower) == upper && !lower.is_ascii() {
+        lower
+    } else {
+        upper
+    }
+}
+
+/// Unicode's simple (1:1) uppercase mapping. `char::to_uppercase` gives the FULL mapping,
+/// which differs from the simple one only where it expands to several chars: those keep
+/// the char itself, except the Greek letters with a subscript iota, whose simple uppercase
+/// is their titlecase form (`ᾳ` → `ᾼ`, `UnicodeData.txt`).
+fn simple_upper(c: char) -> char {
+    let mut up = c.to_uppercase();
+    match (up.next(), up.next()) {
+        (Some(u), None) => u,
+        _ => match c as u32 {
+            0x1F80..=0x1F87 | 0x1F90..=0x1F97 | 0x1FA0..=0x1FA7 => {
+                char::from_u32(c as u32 + 8).unwrap_or(c)
+            }
+            0x1FB3 | 0x1FC3 | 0x1FF3 => char::from_u32(c as u32 + 9).unwrap_or(c),
+            _ => c,
+        },
+    }
+}
+
+/// Unicode's simple (1:1) lowercase mapping: the full mapping when it is one char (every
+/// char but `İ`, whose full lowercase is `i` + U+0307), else the char itself.
+fn simple_lower(c: char) -> char {
+    let mut low = c.to_lowercase();
+    match (low.next(), low.next()) {
+        (Some(l), None) => l,
+        _ => c,
+    }
 }
 
 /// Ergonomic method-call sugar for [`fold_identifier`]/[`eq_fold_identifier`], so the
@@ -185,14 +217,57 @@ mod tests {
     // --- Turkish İ/ı, pinned ---
 
     #[test]
-    fn turkish_capital_i_with_dot_folds_to_plain_i_not_two_chars() {
-        // İ (U+0130) must NOT become "i̇" (U+0069 U+0307, two chars) — that is
-        // `str::to_lowercase()`'s 1:n special-casing behavior, explicitly rejected.
+    fn turkish_capital_i_with_dot_stays_itself_one_char() {
+        // İ (U+0130) is its own identifier char to alc ("İx" and "ix" compile side by
+        // side; `"ix"()` does not bind to "İx"), and one char, never `to_lowercase()`'s
+        // two (`i` + U+0307).
         let folded = fold_identifier("İ");
-        assert_eq!(folded.chars().count(), 1, "İ must fold to exactly one char");
-        assert_eq!(folded, "i");
-        // Sanity: str::to_lowercase() DOES take the 1:n path (pins the contrast).
+        assert_eq!(folded, "İ");
+        assert_ne!(fold_identifier("İx"), fold_identifier("ix"));
         assert_eq!("İ".to_lowercase().chars().count(), 2);
+    }
+
+    /// ENG-131: every pair alc 18.0.41 was asked about (two procedures of the pair in one
+    /// codeunit: AL0440 = one identifier; a call by the other spelling: AL0118 = two), and
+    /// the fold agrees with each. Linux alc; Windows confirmation pending.
+    #[test]
+    fn the_fold_agrees_with_the_compiler_on_every_measured_pair() {
+        let one = [
+            ("Ix", "ix"),
+            ("ΒΣ", "Βς"),
+            ("Σx", "ςx"),
+            ("µx", "μx"), // U+00B5 micro, U+03BC Greek
+        ];
+        let two = [
+            ("İx", "ix"),
+            ("aß", "aẞ"),
+            ("\u{212A}x", "kx"), // Kelvin sign
+            ("ıx", "ix"),
+        ];
+        for (a, b) in one {
+            assert_eq!(fold_identifier(a), fold_identifier(b), "{a:?} = {b:?}");
+            assert!(eq_fold_identifier(a, b), "{a:?} = {b:?}");
+        }
+        for (a, b) in two {
+            assert_ne!(fold_identifier(a), fold_identifier(b), "{a:?} ≠ {b:?}");
+            assert!(!eq_fold_identifier(a, b), "{a:?} ≠ {b:?}");
+        }
+        // The class representatives: lowercase where one maps back, ASCII unchanged.
+        assert_eq!(fold_identifier("ΒΣ"), "βσ");
+        assert_eq!(fold_identifier("µx"), "μx");
+        assert_eq!(fold_identifier("ẞ"), "ẞ");
+        assert_eq!(fold_identifier("\u{212A}"), "\u{212A}");
+    }
+
+    /// The fold is idempotent and one char per char on every scalar value, and never maps a
+    /// non-ASCII char onto ASCII.
+    #[test]
+    fn the_fold_is_one_char_idempotent_and_keeps_non_ascii_off_ascii() {
+        for c in (0..=0x10FFFFu32).filter_map(char::from_u32) {
+            let f = fold_char(c);
+            assert_eq!(fold_char(f), f, "{c:?} → {f:?}");
+            assert_eq!(c.is_ascii(), f.is_ascii(), "{c:?} → {f:?}");
+        }
     }
 
     #[test]
@@ -240,7 +315,8 @@ mod tests {
             ("Løbenr", "løbenr"),
             ("Größe", "GRÖße"),
             ("ß", "ß"),
-            ("İ", "i"),
+            ("İ", "İ"),
+            ("Σ", "ς"),
         ];
         for (a, b) in pairs {
             assert_eq!(
@@ -255,12 +331,13 @@ mod tests {
 
     /// ENG-84: the allocation-free char-by-char path answers exactly what comparing the two
     /// folded strings answers, for every pair: prefixes, mixed ASCII/non-ASCII, a char whose
-    /// fold changes its byte length (`ẞ` 3 bytes → `ß` 2), and `İ` (`to_lowercase` is 2 chars).
+    /// fold changes its byte length (`µ` 2 bytes → `μ` 2, `ς` → `σ`), and `İ` (`to_lowercase`
+    /// is 2 chars).
     #[test]
     fn eq_fold_matches_folded_string_equality_on_every_pair() {
         let samples = [
             "", "a", "A", "Lobenr", "Løbenr", "LØBENR", "Løb", "Løbenrx", "Æble", "æble", "ẞ", "ß",
-            "SS", "İ", "i", "I", "ı", "Größe", "GRÖSSE", "Σ", "σ", "ς",
+            "SS", "İ", "i", "I", "ı", "Größe", "GRÖSSE", "Σ", "σ", "ς", "µ", "μ", "\u{212A}", "k",
         ];
         for a in samples {
             for b in samples {

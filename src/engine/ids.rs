@@ -252,9 +252,11 @@ pub fn canonical_routine_signature(
         .collect::<Vec<_>>()
         .join(";");
 
-    let ret = return_type_text.unwrap_or("").trim().to_lowercase();
+    // ENG-131: the compiler's identifier fold, the one binding and node ids use (type text
+    // names objects too). It equals `to_lowercase` on ASCII and on nearly every other char.
+    let ret = al_syntax::fold_identifier(return_type_text.unwrap_or("").trim());
 
-    format!("{}({}):{}", name.to_lowercase(), params, ret)
+    format!("{}({}):{}", al_syntax::fold_identifier(name), params, ret)
 }
 
 /// #236: the publisher attributes whose contract fact carries `parameters` and
@@ -269,9 +271,12 @@ pub const PARAMETER_EVENT_ATTRIBUTES: [&str; 2] = ["IntegrationEvent", "Business
 pub fn canonical_param_spec(p: &ParamSpec, name: Option<&str>) -> String {
     let prefix = if p.is_var { "var " } else { "" };
     let name = name
-        .map(|n| format!("{}: ", n.to_lowercase()))
+        .map(|n| format!("{}: ", al_syntax::fold_identifier(n)))
         .unwrap_or_default();
-    format!("{prefix}{name}{}", p.type_text.trim().to_lowercase())
+    format!(
+        "{prefix}{name}{}",
+        al_syntax::fold_identifier(p.type_text.trim())
+    )
 }
 
 /// SHA-256 hex of the canonical routine signature — the return-type-aware
@@ -336,16 +341,16 @@ pub fn encode_canonical_routine_key(key: &CanonicalRoutineKey) -> String {
         key.object_type.clone(),
         key.object_key.clone(),
         key.routine_kind.clone(),
-        key.routine_name.to_lowercase(),
+        al_syntax::fold_identifier(&key.routine_name),
         key.normalized_signature_hash.clone(),
     ];
     // CONDITIONAL: no member → the 6-part hash, byte-identical to the
-    // pre-discriminator schema. The value is lowercased (AL identifiers are
-    // case-insensitive, exactly like `routine_name` above) but NOT unescaped —
-    // callers pass the already-unescaped logical identifier, see
+    // pre-discriminator schema. The value is folded (AL identifiers are
+    // case-insensitive, exactly like `routine_name` above; ENG-131: the compiler's fold)
+    // but NOT unescaped — callers pass the already-unescaped logical identifier, see
     // `CanonicalRoutineKey::enclosing_member`.
     if let Some(member) = &key.enclosing_member {
-        parts.push(member.to_lowercase());
+        parts.push(al_syntax::fold_identifier(member));
     }
     // ENG-20: CONDITIONAL as the member part, so only a request page's own triggers move.
     // A request page's trigger always has its member (the lowerer sets both together), so
@@ -449,7 +454,10 @@ pub fn to_stable_routine_id_from_parts(
     match enclosing_member {
         None => format!("{stable_object_id}#{normalized_signature_hash}"),
         Some(member) => {
-            let mut parts = vec![normalized_signature_hash.to_string(), member.to_lowercase()];
+            let mut parts = vec![
+                normalized_signature_hash.to_string(),
+                al_syntax::fold_identifier(member),
+            ];
             // ENG-20: a request page's own trigger hashes one more part
             // ([`CanonicalRoutineKey::request_page`]); every other id is unchanged.
             if request_page {
@@ -708,7 +716,7 @@ mod tests {
             key.object_type.clone(),
             key.object_key.clone(),
             key.routine_kind.clone(),
-            key.routine_name.to_lowercase(),
+            al_syntax::fold_identifier(&key.routine_name),
             key.normalized_signature_hash.clone(),
         ]);
         assert_eq!(

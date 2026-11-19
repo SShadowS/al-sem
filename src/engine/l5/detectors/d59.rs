@@ -164,15 +164,13 @@ mod tests {
         }
     }
 
-    /// TLS-43 review sol r2: a guard name with a dotted capital `İ` is the
-    /// same identifier as its `I` spelling (AL's simple fold), so it is judged
-    /// alike; the loose-subject key keeps its old `to_lowercase` spelling.
-    ///
-    /// DISCRIMINATION (2026-11-13): `is_guard_name` back on `fold_guard_name`
-    /// (`to_lowercase`) fails at "İsAllowed"; restored, passes.
+    /// A guard name is judged with the identifier fold. TLS-43 review sol r2 had
+    /// `İsAllowed` as `IsAllowed`; ENG-131: the compiler keeps a dotted capital `İ`
+    /// apart from `I` (alc 18.0.41), so it is another name and not a guard. The
+    /// loose-subject key keeps its old `to_lowercase` spelling.
     #[test]
     fn a_dotted_capital_i_guard_name_is_judged_like_its_i_spelling() {
-        assert!(is_guard_name("İsAllowed"), "İsAllowed");
+        assert!(!is_guard_name("İsAllowed"), "İsAllowed");
         assert!(is_guard_name("IsAllowed"), "IsAllowed");
         assert_eq!(fold_guard_name("İsAllowed"), "i\u{307}sallowed");
     }

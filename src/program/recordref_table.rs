@@ -571,18 +571,20 @@ mod tests {
     }
 
     /// TLS-43 review sol r4: `Field` and `FieldNo` are member names, so they
-    /// take the identifier fold, as the model side reads the same source: a
-    /// `Fİeld(1)` / `FİeldNo` is the `Field(1)` / `FieldNo` it folds to.
-    ///
-    /// DISCRIMINATION (2026-11-13): `field_call` back on the ASCII fold
-    /// answers `None` (the dotted `Fİeld` is no source); `field_arg` back on
-    /// `eq_ignore_ascii_case` answers `Unknown` for `FİeldNo`; restored,
-    /// passes.
+    /// take the identifier fold, as the model side reads the same source.
+    /// ENG-131: the compiler keeps a dotted capital `İ` apart from `i` (alc
+    /// 18.0.41), so `Fİeld(1)` is not `Field(1)` and no source; `FIELD` and
+    /// `fieldno` are.
     #[test]
     fn a_dotted_capital_i_field_member_is_a_field_source() {
-        let src = "codeunit 50100 X\n{\n    procedure P()\n    var\n        R: RecordRef;\n        F: FieldRef;\n        G: FieldRef;\n        Cust: Record Customer;\n    begin\n        F := R.Fİeld(1);\n        G := R.Field(Cust.FİeldNo(Name));\n    end;\n}\n";
+        let src = "codeunit 50100 X\n{\n    procedure P()\n    var\n        R: RecordRef;\n        F: FieldRef;\n        G: FieldRef;\n        H: FieldRef;\n        Cust: Record Customer;\n    begin\n        F := R.FIELD(1);\n        G := R.Field(Cust.fieldno(Name));\n        H := R.Fİeld(1);\n    end;\n}\n";
         let f = al_syntax::parse(src);
         let r = &f.objects[0].routines[0];
+        assert_eq!(
+            local_fieldref_sources(&f, r, "H"),
+            None,
+            "Fİeld is no member"
+        );
         assert_eq!(
             local_fieldref_sources(&f, r, "F"),
             Some(vec![FieldSource {
