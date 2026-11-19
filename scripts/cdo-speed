@@ -156,7 +156,12 @@ OWN_PRESSURE = ("/sys/fs/cgroup/cpu.pressure", "/proc/pressure/cpu")
 
 TEST_HOOKS = ("CDO_SPEED_WARM_MIN_SECONDS", "CDO_SPEED_LOADAVG_FILE", "CDO_SPEED_PRESSURE_FILE",
               "CDO_SPEED_HOST_PRESSURE_FILE", "CDO_SPEED_CALM_PRESSURE", "CDO_SPEED_CALM_WAIT_S",
-              "CDO_SPEED_CALM_POLL_S", "CDO_SPEED_PERF")
+              "CDO_SPEED_CALM_POLL_S", "CDO_SPEED_PERF", "CDO_SPEED_TEST_WALL_IS_CPU")
+# CDO_SPEED_TEST_WALL_IS_CPU: a test hook, a stub clock: each call's wall time is
+# taken to be its CPU time. A stub server burns exact CPU, but its wall time is
+# the host's, so under load a stub run could fail its wall limit (x1.78 against
+# 1.6, TLS-103) whatever the test meant to check. A real gate never sets it.
+TEST_WALL_IS_CPU = os.environ.get("CDO_SPEED_TEST_WALL_IS_CPU") == "1"
 
 
 def load_1min():
@@ -816,6 +821,8 @@ class Server:
             r = self.request("tools/call", {"name": tool, "arguments": args})
             wall = time.monotonic() - t0
             cpu = self.cpu() - c0
+            if TEST_WALL_IS_CPU:
+                wall = cpu
         finally:
             self.last_instr = self.instr_stop(perf)
         self.sample_hwm()
@@ -847,6 +854,11 @@ class Server:
             return None
         started = self._instr_start()
         self.instr_failures = 0 if started else getattr(self, "instr_failures", 0) + 1
+        if not started:
+            # One line per failed attach (at most INSTR_GIVE_UP a server): what the
+            # tests count, since a stub perf too slow to start logs nothing (TLS-103).
+            print(f"cdo-speed: {self.name} (pid {self.p.pid}): perf attach failed "
+                  f"({self.instr_failures}/{INSTR_GIVE_UP})", file=sys.stderr)
         if self.instr_failures == INSTR_GIVE_UP:
             print(f"cdo-speed: {self.name}: perf failed to attach {INSTR_GIVE_UP} times in a row; "
                   "this server's calls are not counted from here on", file=sys.stderr)
@@ -1125,6 +1137,14 @@ def main():
         ap.error(f"--rounds {args.rounds}: give 1 to {len(ROUND_ROUTINES)}, one round per "
                  f"routine in ROUND_ROUTINES (a routine timed again measures nothing new)")
     args.max_rounds = min(max(args.max_rounds, args.rounds), len(ROUND_ROUTINES))
+    # TLS-103 review (sol): the stub clock never judges a real run. It is honoured
+    # only as `1` and with both prebuilt binaries given (the stub tests' shape; a gate
+    # builds its own and gives neither), so a variable left exported in a lane shell
+    # cannot make a real gate pass on CPU alone.
+    hook = os.environ.get("CDO_SPEED_TEST_WALL_IS_CPU")
+    if hook is not None and (hook != "1" or not (args.base_exe and args.head_exe)):
+        ap.error("CDO_SPEED_TEST_WALL_IS_CPU is a test hook for stub servers: set it to 1, "
+                 "and only with --base-exe and --head-exe (unset it for a real run)")
 
     if not sys.platform.startswith("linux"):
         log("this gate reads /proc: Linux only")

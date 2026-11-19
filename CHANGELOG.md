@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (TLS-103: the cdo-speed stub tests no longer depend on the host's load)
+
+- **What failed.** `gate_scripts::speed_reports_instructions_and_their_limit_is_advisory` failed
+  in TLS-102's stress run and in TLS-93's landing, on master since TLS-83: the stub servers
+  burn exact CPU, but their WALL time is the host's, and under load a stub model build read
+  x1.78 against cdo-speed's 1.6 wall limit. The run then FAILED, though the test only checks
+  instruction counts and that their limit is advisory.
+- **The fix: a stub clock.** A test hook, `CDO_SPEED_TEST_WALL_IS_CPU`, takes each call's wall
+  time to be its CPU time (`Server.call`, the one place every judged wall time comes from).
+  `speed_with_stub` sets it for every stub run, so their verdicts rest on CPU alone. It is
+  listed among the test hooks a run reports; the limits are unchanged.
+- **A second wall-time dependence, found by the stress run.** The same test checks that a
+  server whose perf never acks gives up after exactly 3 attaches. It counted the attaches
+  from the stub perf's own log, but under load a stub could still be starting when the 0.3 s
+  attach time ran out, so a server that failed 3 times showed 2 (2 failures in 10 loaded
+  runs). cdo-speed now prints one line per failed attach (`perf attach failed (n/3)`, with
+  the server's pid; at most 3 a server, also useful in a real gate), and the test counts
+  those. Proof: the give-up's early return dropped -> servers tried up to 13 times (red).
+- **It never judges a real run** (review, sol): any value but `1`, or a run without
+  `--base-exe` and `--head-exe` (a gate builds its own binaries and gives neither), is refused
+  before anything starts, so a variable left exported in a shell cannot make a real gate pass
+  on CPU alone.
+- **Tests.** `speed_stub_verdicts_ignore_the_hosts_wall_time`: head's build waits 1 s with no
+  CPU (a new stub knob, `STUB_HEAD_SLEEP_S`), x3.48 in wall; the run still PASSes. The control
+  (hook off) waits 3 s and FAILs on wall time; it stays over the limit until load stretches the
+  stub's burn twelvefold (review, Fable: 1 s gave out at about four). The hook is refused for
+  `0` (before any output) and for a run with one stub binary only. Proofs: the hook dropped ->
+  "FAIL: build: wall time x3.48" (red); the refusal dropped -> the `0` run goes ahead (red); the
+  refusal weakened to "either binary" -> the one-binary run is not refused (red); and the
+  advisory rule broken (the
+  instructions advisory appended to the failures) still fails the instructions test (red).
+  Cost noted (sol): the geometric-mean check now sees wall ratios equal to CPU's, so its wall
+  half checks the arithmetic again rather than an independent sample. The speed tests ran 10
+  times beside full nextest runs, all green.
+
 ### Fixed (TLS-89 follow-up: a slot test raced the run's status write)
 
 - TLS-92's landing failed on `cdo_slot_timings_in_a_hand_hold`: it waited for `held=1`, then
