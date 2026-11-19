@@ -823,14 +823,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     Bindings now take a quoted name as the same symbol (`ir_walk`, `bare_name`'s fold; this is
     ENG-138's core, absorbed).
   - Under `with R do`, an unqualified name may be one of R's fields, but a `case T of` there was
-    bound to the parameter `T`. Inside a `with` body no fact that reads a name as a condition
-    (guard, junction, value test, `case` scrutinee) is emitted any more, so every frame refuses
-    it; E2 already builds no program for a routine with a `with`. Resolving R's fields (binding
-    where R's table has no field of that name) is ENG-141's. alc 18.0.41 still accepts `with`
-    (AL0606 is a warning).
-  - Tests: `TxtQuoted`, `TxtWith` (each fails exactly when its fix is removed), a lowercase Code
-    `in` (`CodeIn`, left unresolved as `=` is), and the Dictionary and InStream reads seeded so
-    the write really happens.
+    bound to the parameter `T`, and `Check(T)` there forwarded the parameter's value to the
+    callee. Inside a `with` body no fact that reads a name as a condition (guard, junction,
+    value test, `case` scrutinee) is emitted any more, and a call argument binds to no symbol, so
+    every reader refuses it; E2 already builds no program for a routine with a `with`. A write
+    through such an argument is still seen: one rule, `param_guard::passes_param_unsafely`
+    (bound, or the argument text is the parameter's name, quoted or not), now serves the guard
+    frame, the value frame, E2's subscriber check and the Variant routes. Resolving R's fields
+    (binding where R's table has no field of that name) is ENG-141's. alc 18.0.41 still accepts
+    `with` (AL0606 is a warning).
+  - Tests: `TxtQuoted`, `TxtWith`, `TxtWithFwd`, `TxtWithWrite` (each fails exactly when its fix
+    is removed), `CodeIn` (a lowercase label left unresolved as `=` is, an uppercase one pruned),
+    and the Dictionary and InStream reads seeded so the write really happens.
 - **Tests.**
   - `cli_prove_value_guards` runs `prove` through the CLI:
     - `a_builtin_option_parameter_compares_by_member_name`;

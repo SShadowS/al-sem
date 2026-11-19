@@ -790,32 +790,32 @@ impl<'m> CrossRules<'m> {
         }
         let routines = &self.model.workspace.routines;
         let targets = self.ix.site_targets.get(&row);
-        r.call_sites.iter().all(|cs| {
-            cs.argument_bindings
-                .iter()
-                .filter(|b| b.source_kind == "parameter" && b.source_parameter_index == Some(index))
-                .all(|b| {
-                    let tos = targets.and_then(|m| m.get(cs.id.as_str()));
-                    match tos {
-                        Some(tos) if !tos.is_empty() => tos.iter().all(|&t| {
-                            routines[t]
-                                .parameters
-                                .iter()
-                                .find(|q| q.index == b.parameter_index)
-                                .is_some_and(|q| !q.is_var)
-                        }),
-                        _ => match &cs.callee {
-                            crate::program::body::features::PCallee::Member { method, .. } => {
-                                method.eq_fold_identifier("gettable")
-                            }
-                            crate::program::body::features::PCallee::Bare { name } => {
-                                name.eq_fold_identifier("format")
-                            }
-                            _ => false,
-                        },
+        // Each call passing the parameter (bound or by its text, quoted or not: sol on ENG-30)
+        // keeps it: a resolved callee taking it by value, else `GetTable` or `Format`.
+        let passes_by_value = |cs_id: &str, k: u32| {
+            let Some(cs) = r.call_sites.iter().find(|c| c.id == cs_id) else {
+                return false;
+            };
+            match targets.and_then(|m| m.get(cs.id.as_str())) {
+                Some(tos) if !tos.is_empty() => tos.iter().all(|&t| {
+                    routines[t]
+                        .parameters
+                        .iter()
+                        .find(|q| q.index == k)
+                        .is_some_and(|q| !q.is_var)
+                }),
+                _ => match &cs.callee {
+                    crate::program::body::features::PCallee::Member { method, .. } => {
+                        method.eq_fold_identifier("gettable")
                     }
-                })
-        })
+                    crate::program::body::features::PCallee::Bare { name } => {
+                        name.eq_fold_identifier("format")
+                    }
+                    _ => false,
+                },
+            }
+        };
+        !crate::engine::l4::param_guard::passes_param_unsafely(r, p, passes_by_value)
     }
 
     /// `rule`, a rule in `callee`'s frame, seen from `caller` across `step`.

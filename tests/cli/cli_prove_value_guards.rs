@@ -461,6 +461,11 @@ table 50296 "EH Txt Q Else" { fields { field(1; Code; Code[20]) { } } keys { key
 table 50297 "EH With Rec" { fields { field(1; Code; Code[20]) { } field(2; T; Text[30]) { } } keys { key(PK; Code) { } } }
 table 50298 "EH Txt With A" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
 table 50299 "EH Txt With Else" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
+table 50300 "EH Code In XY" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
+table 50301 "EH Txt WFwd A" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
+table 50302 "EH Txt WFwd Else" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
+table 50303 "EH Txt WWr A" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
+table 50304 "EH Txt WWr Else" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
 // ENG-30: Text and Code literals as value domains, by the rules measured on
 // BC 28.4 (`literal_values::Domain`).
 codeunit 50283 "EH Text"
@@ -615,9 +620,65 @@ codeunit 50283 "EH Text"
     local procedure OnCodeIn(C: Code[20])
     var
         Lo: Record "EH Code In Lower";
+        Xy: Record "EH Code In XY";
     begin
         if C in ['ab'] then
             Lo.Insert();
+        // An uppercase label the value ('AB') can never meet: pruned (sol round 2 on ENG-30:
+        // the lone `yes` above would also pass if the guard were ignored).
+        if C in ['XY'] then
+            Xy.Insert();
+    end;
+
+    // sol round 2 on ENG-30: under `with R do`, `T` passed on may be R's field, so the callee
+    // gets no value for it.
+    procedure TxtWithFwd()
+    begin
+        OnWithFwd('A');
+    end;
+
+    local procedure OnWithFwd(T: Text)
+    var
+        R: Record "EH With Rec";
+    begin
+        R.FindFirst();
+        with R do
+            WithLeaf(T);
+    end;
+
+    local procedure WithLeaf(X: Text)
+    var
+        A: Record "EH Txt WFwd A";
+        E: Record "EH Txt WFwd Else";
+    begin
+        case X of
+            'A':
+                A.Insert();
+            else
+                E.Insert();
+        end;
+    end;
+
+    // And a `var` call under `with` may still write the parameter `T`.
+    procedure TxtWithWrite()
+    begin
+        OnWithWrite('A');
+    end;
+
+    local procedure OnWithWrite(T: Text)
+    var
+        R: Record "EH With Rec";
+        A: Record "EH Txt WWr A";
+        E: Record "EH Txt WWr Else";
+    begin
+        with R do
+            SetB(T);
+        case T of
+            'A':
+                A.Insert();
+            else
+                E.Insert();
+        end;
     end;
 
     // sol on ENG-30: a QUOTED argument to a `var` writes the parameter ("T" is T).
@@ -1047,6 +1108,11 @@ fn a_text_parameter_something_writes_binds_nothing() {
         ("TxtWith", "EH Txt With A", "yes"),
         ("TxtWith", "EH Txt With Else", "yes"),
         ("CodeIn", "EH Code In Lower", "yes"),
+        ("CodeIn", "EH Code In XY", "no"),
+        ("TxtWithFwd", "EH Txt WFwd A", "yes"),
+        ("TxtWithFwd", "EH Txt WFwd Else", "yes"),
+        ("TxtWithWrite", "EH Txt WWr A", "yes"),
+        ("TxtWithWrite", "EH Txt WWr Else", "yes"),
     ]);
 }
 

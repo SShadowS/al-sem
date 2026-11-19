@@ -1238,13 +1238,8 @@ pub(super) fn subscriber_changes(
             return true;
         }
     }
-    s.call_sites.iter().any(|cs| {
-        cs.argument_bindings.iter().any(|b| {
-            b.source_kind == "parameter"
-                && b.source_parameter_index == Some(sp.index)
-                && !passes_by_value(&cs.id, b.parameter_index)
-        })
-    })
+    // Bound or by its text, quoted or not (sol on ENG-30): the rule every frame uses.
+    crate::engine::l4::param_guard::passes_param_unsafely(s, sp, passes_by_value)
 }
 
 /// What a guard on a route is (a witness's condition, module doc).

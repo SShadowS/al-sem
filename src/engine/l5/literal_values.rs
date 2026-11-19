@@ -554,13 +554,11 @@ pub(super) fn value_frame(
             continue;
         }
         let text = matches!(d, Domain::Text | Domain::Code);
-        let passed_unsafely = r.call_sites.iter().any(|cs| {
-            cs.argument_bindings.iter().any(|b| {
-                b.source_kind == "parameter"
-                    && b.source_parameter_index == Some(p.index)
-                    && !passes_by_value(&cs.id, b.parameter_index, text)
-            })
-        });
+        // Bound or by its text, quoted or not (sol on ENG-30): the rule every frame uses.
+        let passed_unsafely =
+            crate::engine::l4::param_guard::passes_param_unsafely(r, p, |cs: &str, k: u32| {
+                passes_by_value(cs, k, text)
+            });
         if passed_unsafely {
             continue;
         }

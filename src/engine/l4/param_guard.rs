@@ -67,6 +67,29 @@ pub(crate) fn conjoin(a: &[Req], b: &[Req]) -> Option<Vec<Req>> {
     Some(out)
 }
 
+/// Whether `r` hands its parameter `p` to a call argument that may write it
+/// (`passes_by_value(callsite_id, argument_index)` false there). An argument is `p` when it
+/// binds to `p` or when its text is `p`'s name, quoted or not: a name under `with R do` binds to
+/// no symbol (it may be R's field), yet it may still be `p` and be written (sol on ENG-30). One
+/// rule for every frame that needs a parameter unchanged.
+pub(crate) fn passes_param_unsafely(
+    r: &ModelRoutine,
+    p: &crate::program::model::workspace::ModelParameter,
+    passes_by_value: impl Fn(&str, u32) -> bool,
+) -> bool {
+    let name = p.name.trim().trim_matches('"');
+    r.call_sites.iter().any(|cs| {
+        cs.argument_bindings.iter().any(|b| {
+            b.source_kind == "parameter"
+                && b.source_parameter_index == Some(p.index)
+                && !passes_by_value(&cs.id, b.parameter_index)
+        }) || cs.argument_texts.iter().enumerate().any(|(k, a)| {
+            a.trim().trim_matches('"').eq_fold_identifier(name)
+                && !passes_by_value(&cs.id, k as u32)
+        })
+    })
+}
+
 /// The guard frame of `r`. `passes_by_value(callsite_id, argument_index)` says
 /// whether the call passes that argument to a by-value parameter of a known
 /// callee. `None` when the routine has no usable guard parameter.
@@ -91,14 +114,7 @@ pub(crate) fn frame_guards(
         {
             continue;
         }
-        let passed_unsafely = r.call_sites.iter().any(|cs| {
-            cs.argument_bindings.iter().any(|b| {
-                b.source_kind == "parameter"
-                    && b.source_parameter_index == Some(p.index)
-                    && !passes_by_value(&cs.id, b.parameter_index)
-            })
-        });
-        if passed_unsafely {
+        if passes_param_unsafely(r, p, &passes_by_value) {
             continue;
         }
         usable.push((name.fold_identifier(), p.index));

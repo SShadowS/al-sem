@@ -128,6 +128,9 @@ pub struct IrSpine {
     /// Per call-site, the argument ExprIds (parallel to `call_sites`) — the binding
     /// post-pass needs them to anchor + classify each argument.
     pub cs_arg_exprs: Vec<Vec<ExprId>>,
+    /// Per call-site (parallel to `call_sites`): whether it sits in a `with` body, where an
+    /// unqualified argument name may be the receiver's field, so it binds to no symbol.
+    pub cs_under_with: Vec<bool>,
     /// r3 E1: the value label ([`ValueLabel::of_info`], the same reading as a
     /// call argument's) of every `case` pattern and every operand of an `if`
     /// comparison (`=`, `<>`, `in`) that is a literal or a label. The CFN
@@ -546,6 +549,7 @@ struct SpineCtx<'a> {
     /// #160 §4.2: each site's expression index (see [`IrSpine::site_exprs`]).
     site_exprs: crate::program::site_key::SiteExprs,
     cs_arg_exprs: Vec<Vec<ExprId>>,
+    cs_under_with: Vec<bool>,
     /// Every assignment whose target is a bare variable, `(name lowercased,
     /// value expr)`, in walk order. Read by `exhausting_advance` (#50) to see
     /// how often a `repeat` body assigns its `until` flag.
@@ -1506,6 +1510,9 @@ impl<'a> SpineCtx<'a> {
                     try_call: false,
                 });
                 self.cs_arg_exprs.push(args.clone());
+                // `implicit` holds the base `Rec` seed frame (always one, pushed where the
+                // context is built) plus one frame per enclosing `with`.
+                self.cs_under_with.push(self.implicit.len() > 1);
             }
             // Recurse: a member-call RECEIVER is a value ref; a bare callee name is not.
             // Sub-expressions (receiver, args) are EXPRESSION position (consumed).
@@ -1713,6 +1720,7 @@ pub fn walk_spine(
         call_sites: Vec::new(),
         site_exprs: Default::default(),
         cs_arg_exprs: Vec::new(),
+        cs_under_with: Vec::new(),
         bare_assigns: Vec::new(),
         assign_target: None,
         value_labels: HashMap::new(),
@@ -1774,6 +1782,7 @@ pub fn walk_spine(
         call_sites: ctx.call_sites,
         site_exprs: ctx.site_exprs,
         cs_arg_exprs: ctx.cs_arg_exprs,
+        cs_under_with: ctx.cs_under_with,
         value_labels: ctx.value_labels,
         next_base,
     }
@@ -3273,7 +3282,11 @@ pub fn routine_features_partial(
     let obj = &file.objects[object_idx];
     let own_record_rec = has_own_record_rec(obj, source_table_name);
     let mut call_sites = spine.call_sites;
-    for (cs, arg_exprs) in call_sites.iter_mut().zip(spine.cs_arg_exprs.iter()) {
+    for ((cs, arg_exprs), &under_with) in call_sites
+        .iter_mut()
+        .zip(spine.cs_arg_exprs.iter())
+        .zip(spine.cs_under_with.iter())
+    {
         // The record the call is made on (a table method's `Rec`): the member
         // receiver, or the implicit `Rec` for a bare call. Object globals are
         // filled at L3 (`workspace.rs`), as for argument bindings.
@@ -3297,7 +3310,22 @@ pub fn routine_features_partial(
                 // Only a bare name binds to a record/parameter symbol, quoted or not: `"I"` is the
                 // parameter `I` (ENG-138, sol on ENG-30: a quoted `var` argument escaped every
                 // reader's write check). The quoted fold is `bare_name`'s.
+                // Under `with R do`, the name may be R's field: it binds to no symbol, so no
+                // reader forwards a value through it (sol round 2 on ENG-30). A write through it
+                // is still seen by the text match of `param_guard::passes_param_unsafely`.
                 let lc = match &e.kind {
+                    _ if under_with => {
+                        return PCallArgumentBinding {
+                            parameter_index,
+                            source_kind: shared_vocab("expression"),
+                            source_variable_name: None,
+                            source_record_variable_id: None,
+                            source_parameter_index: None,
+                            caller_source_parameter_is_var: None,
+                            source_temp_state: None,
+                            argument_anchor,
+                        };
+                    }
                     ExprKind::Identifier(n) if e.origin.kind_text() == "identifier" => {
                         n.fold_identifier()
                     }
