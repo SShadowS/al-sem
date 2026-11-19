@@ -1853,14 +1853,14 @@
       "direct": 17,
       "inherited": 8,
       "routines": 15,
-      "sha256": "b388bd5c70f6836242bcfaf72c203277c2d7d069363262214b3431fce5093dc8"
+      "sha256": "1bcd829d6cee592f475da43b77187362afc1e1a5d447c0ff80869088fd4a2e4f"
     },
     "r0/ws-nordic-identifiers single": {
       "any": 25,
       "direct": 17,
       "inherited": 8,
       "routines": 15,
-      "sha256": "b388bd5c70f6836242bcfaf72c203277c2d7d069363262214b3431fce5093dc8"
+      "sha256": "1bcd829d6cee592f475da43b77187362afc1e1a5d447c0ff80869088fd4a2e4f"
     },
     "r0/ws-object-name-shape cross": {
       "any": 0,

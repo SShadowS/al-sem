@@ -42,6 +42,19 @@ routine id (`engine::ids`: the routine name, enclosing member, parameter names a
 folds with the same function, so binding, graph node ids and stable ids agree with the compiler
 and with each other.
 
-What moves: only names with a char whose class differs between the folds: `İ`, `ẞ`, the Kelvin,
-Ohm and Ångström signs, `ς`/`Σ`, micro `µ`, `ı`/`ſ` (binding only). The counts on CDO are in the
-CHANGELOG entry.
+Every other key built from an identifier and joined against these folds with the same function:
+event ids (`encode_event_id`, whose publisher side lowercased while the subscriber side folded),
+the `rv/` record-variable ids, and the lowerer's alternative-declaration grouping.
+
+What moves: only names holding one of the 27 chars whose fold changed (`µ`, `İ`, U+0345, `ς`,
+`ϐ ϑ ϕ ϖ ϰ ϱ ϴ ϵ`, U+1C80-1C88, `ẛ`, `ẞ`, U+1FBE, the Ohm, Kelvin and Ångström signs), plus, in
+stable ids only, a word-final capital `Σ` (which `to_lowercase` made `ς`). `ı` and `ſ` do not
+move. The fold follows the Rust toolchain's Unicode tables; `casing::tests` pins how many chars
+it changes (1,503), so a toolchain that adds case pairs is a visible change. The counts on CDO and
+DO are in the CHANGELOG entry.
+
+Measured by Fable (alc 18.0.41, .NET 10.0.15): over all 1,112,064 scalars no .NET
+`OrdinalIgnoreCase` class is split by the fold; the fold merges 25 Unicode 17 pairs (Beria Erfe,
+U+16EA0-16EB8 / U+16EBB-16ED3) that .NET 10 keeps apart, which alc also flags as invalid
+identifier chars (AL0586). The Greek subscript-iota pairs (`ᾳ`/`ᾼ`, `ᾀ`/`ᾈ`) are one identifier
+(AL0440).

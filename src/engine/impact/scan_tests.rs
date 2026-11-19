@@ -216,7 +216,7 @@ fn body_starts_at_var_or_begin() {
 /// underflows (`attempt to subtract with overflow`); review r4 read the release
 /// result as the wrong name `e`. Restored, it passes.
 #[test]
-fn a_header_name_with_a_dotted_capital_i_is_read_whole() {
+fn a_header_name_whose_fold_is_shorter_is_read_whole() {
     let got = labels("codeunit 50100 G\n{\n    procedure ⱯndkøbTest()\n    begin\n    end;\n}\n");
     assert_eq!(
         "Ɐ".len() - al_syntax::fold_identifier("Ɐ").len(),

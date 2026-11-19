@@ -169,7 +169,7 @@ mod tests {
     /// apart from `I` (alc 18.0.41), so it is another name and not a guard. The
     /// loose-subject key keeps its old `to_lowercase` spelling.
     #[test]
-    fn a_dotted_capital_i_guard_name_is_judged_like_its_i_spelling() {
+    fn a_dotted_capital_i_guard_name_is_another_name() {
         assert!(!is_guard_name("İsAllowed"), "İsAllowed");
         assert!(is_guard_name("IsAllowed"), "IsAllowed");
         assert_eq!(fold_guard_name("İsAllowed"), "i\u{307}sallowed");

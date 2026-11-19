@@ -11687,8 +11687,8 @@ fn cdo_i264_closed_interface_site_census() {
 /// graph) share a StableRoutineId: every reader that joins on the id would
 /// answer the two as one routine. The corpus and a probe of the ASCII
 /// near-collision shapes are checked in the lib (`impact_graph::stable_id_tests`);
-/// the one known way to share an id (names differing only in `İ` or a
-/// word-final `Σ`) is in `SitedGraph::shared_stable_ids`'s doc. Measured
+/// since ENG-131 the id and the node id fold alike, so names differing only in
+/// `İ` or a word-final `Σ` no longer share one either. Measured
 /// 2026-11-18: 23,253 routine nodes, none shared.
 #[test]
 fn cdo_sited_graph_stable_ids_are_unique() {

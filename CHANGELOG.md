@@ -7,6 +7,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (ENG-131: identifiers fold exactly as the AL compiler compares them, the same for binding, graph nodes and stable ids)
+
+- **The wrong answer** (found by Fable reviewing ENG-90). Binding and graph node ids folded names
+  with `fold_identifier` (a per-char lowercase); stable routine ids with `str::to_lowercase`
+  (Unicode's full, context-sensitive lowercase). The two disagreed on `İ` and a word-final `Σ`, so
+  `"ΒΣ"` and `"Βς"` were two graph nodes on ONE stable id, and every id-joined answer merged
+  them. Neither fold matched the compiler either.
+- **The compiler's answer** (alc 18.0.41 on Linux; Windows confirmation pending): it compares
+  like .NET `OrdinalIgnoreCase`, each char's simple uppercase, and never folds a non-ASCII char
+  onto ASCII. One identifier: `"ΒΣ"`/`"Βς"`, `"Σx"`/`"ςx"`, micro `µ`/Greek `μ`. Two: `İ`/`i`,
+  `ẞ`/`ß`, the Kelvin sign/`k`, dotless `ı`/`i` (as before). Probe apps and the table:
+  `docs/superpowers/notes/2026-11-18-eng131-compiler-identifier-fold.md`.
+- **The fix** (`crates/al-syntax/src/casing.rs`, `src/engine/ids.rs`). `fold_identifier` /
+  `eq_fold_identifier` fold each char to that class, written as the class's lowercase char
+  where one maps back, else the uppercase char: ASCII and every Latin letter in real BC names
+  fold as before; 27 chars fold differently (the release note below lists them). Stable routine
+  ids (the routine name, enclosing member and type text) fold with the same function, so
+  binding, node ids and stable ids agree with the compiler and with each other.
+  - Every other identifier key joined against them folds with it too (id-shape audit, Fable):
+    event ids (`encode_event_id`: the publisher side lowercased while subscribers folded, so a
+    publisher `OnΒΣ` or `OnCalcµg` lost its subscribers), literal reach's unbound-event guard,
+    the `rv/` record-variable ids (`to_lowercase` merged `Aẞ` with `Aß`), and the lowerer's
+    alternative-declaration grouping (`µP`/`μP` arms are one routine there too).
+  - Impact summary cache schema 17, so a base cached before the upgrade is not read with the
+    new ids.
+- **What moves.** CDO (`cdo-before-after`, base `dd1caf9a`): 0 of 5,479 stable routine ids, 0
+  fingerprints at both scopes, no detector, no call-graph number. None of the 27 chars occurs in
+  CDO's source or in the text of the 883 packages in the source cache (CDO's dependencies
+  included). Fixtures: the `ws-nordic-identifiers` l2 snapshot moves 3 routine digests (its
+  `İndkøb` reference folds to `İndkøb`, was `indkøb`). Tests that encoded `İ` = `I` (d59's guard
+  name, event-flow `IsHandled`, a RecordRef `Field` member, a closed-enum shape, a selector
+  signature, a prove `--match` variable) now encode the compiler's answer or take a pair the
+  compiler merges.
+  DO (`/work/src/DO`, 814 `.al` files): none of the 27 chars, and no capital `Σ`, either.
+- **Release note: whose ids can move, and how to re-baseline.** Only a routine, member or type
+  name holding one of these chars gets a new stable routine id, and with it new finding
+  fingerprints; an event name holding one gets a new event id, `alsem graph` node ids (`r:`,
+  read by bc-dev-mcp) and graphify ids move for the same names, and an `alsem diff` snapshot's
+  event `parameters` list moves for such a parameter name: Turkish `İ` (now apart from `i`), the capital `ẞ` (now apart from `ß`), the
+  Kelvin `K`, Ohm `Ω` and Ångström `Å` signs (now apart from `k`, `ω`, `å`), micro `µ` (now one
+  with Greek `μ`), `ς` anywhere and a word-final capital `Σ` (now one with `σ`), the Greek symbol
+  variants `ϐ ϑ ϕ ϖ ϰ ϱ ϵ ϴ` and iota forms U+0345/U+1FBE, `ẛ`, and the Cyrillic variant letters
+  U+1C80-1C88 (now one with their letters, `ϴ` now apart from `θ`). Names using only ASCII and
+  the Latin letters of real BC names keep their ids; dotless `ı` keeps its own. If a project's names hold one of these: a baseline
+  shows the affected findings as new once; re-baseline with `alsem analyze --baseline <file>
+  --update-baseline`; `alsem diff` across the upgrade shows such a routine as removed and added.
+- **Pinned by** `casing::tests::the_fold_agrees_with_the_compiler_on_every_measured_pair` (every
+  measured pair, the Greek subscript-iota pairs Fable measured included),
+  `the_fold_is_one_char_idempotent_and_keeps_non_ascii_off_ascii` (all of Unicode) and
+  `the_number_of_chars_the_fold_changes_is_pinned` (1,503: the classes follow the toolchain's
+  Unicode tables, which a Rust upgrade can widen; Fable found 25 Unicode 17 pairs .NET 10 keeps
+  apart, chars alc rejects in identifiers); `cli_query_field::sigma_twins_are_one_routine` (one
+  graph node for `"ΒΣ"`/`"Βς"`); `l2_ir::two_arms_spelled_with_micro_and_mu_are_one_routine_for_the_attribute_check`.
+  With the old fold restored, four casing tests fail and the l2 snapshot matches the old golden
+  again.
+
 ### Changed (ENG-124: the sited graph finds nodes by a sorted index, 19.1 MiB less resident memory on CDO)
 
 - **What changed** (`src/program/impact_graph/sited.rs`; no output change). `SitedGraph::node_ix`

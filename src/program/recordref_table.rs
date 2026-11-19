@@ -576,7 +576,7 @@ mod tests {
     /// 18.0.41), so `Fİeld(1)` is not `Field(1)` and no source; `FIELD` and
     /// `fieldno` are.
     #[test]
-    fn a_dotted_capital_i_field_member_is_a_field_source() {
+    fn field_members_fold_as_the_compiler_compares() {
         let src = "codeunit 50100 X\n{\n    procedure P()\n    var\n        R: RecordRef;\n        F: FieldRef;\n        G: FieldRef;\n        H: FieldRef;\n        Cust: Record Customer;\n    begin\n        F := R.FIELD(1);\n        G := R.Field(Cust.fieldno(Name));\n        H := R.Fİeld(1);\n    end;\n}\n";
         let f = al_syntax::parse(src);
         let r = &f.objects[0].routines[0];

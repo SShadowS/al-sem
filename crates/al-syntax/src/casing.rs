@@ -237,6 +237,10 @@ mod tests {
             ("ΒΣ", "Βς"),
             ("Σx", "ςx"),
             ("µx", "μx"), // U+00B5 micro, U+03BC Greek
+            // Greek subscript iota: the simple uppercase is the titlecase letter (Fable,
+            // measured with alc: AL0440 for both pairs).
+            ("ᾳx", "ᾼx"),
+            ("ᾀx", "ᾈx"),
         ];
         let two = [
             ("İx", "ix"),
@@ -257,6 +261,20 @@ mod tests {
         assert_eq!(fold_identifier("µx"), "μx");
         assert_eq!(fold_identifier("ẞ"), "ẞ");
         assert_eq!(fold_identifier("\u{212A}"), "\u{212A}");
+    }
+
+    /// The number of scalars whose fold is not themselves. The classes follow the
+    /// toolchain's Unicode tables (`char::to_uppercase`), so a Rust upgrade that adds case
+    /// pairs moves stable ids of names using them: this count makes that a visible change
+    /// (Fable: Unicode 17's Beria Erfe pairs, which .NET 10 and alc keep apart).
+    #[test]
+    fn the_number_of_chars_the_fold_changes_is_pinned() {
+        let n = (0..=0x10FFFFu32)
+            .filter_map(char::from_u32)
+            .filter(|&c| fold_char(c) != c)
+            .count();
+        // Measured 2026-11-19, Rust's Unicode 17 tables (26 of them ASCII `A`-`Z`).
+        assert_eq!(n, 1503, "chars whose fold is not themselves");
     }
 
     /// The fold is idempotent and one char per char on every scalar value, and never maps a

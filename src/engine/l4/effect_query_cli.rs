@@ -6336,11 +6336,12 @@ fn field_scope(
                     Some(ixs) => {
                         for &i in ixs {
                             sides.insert(i, "up");
-                            // The best tier, not the last: two nodes can share
-                            // a stable id (the id lowercases where the node id
-                            // folds, so `"ΒΣ"` and `"Βς"` differ only in the
-                            // node), and `c.best`'s order is a hash order
-                            // (ENG-90, `cli_query_field::shared_stable_id_tier`).
+                            // The best tier, not the last: `c.best`'s order is a
+                            // hash order, so the write must not depend on it if two
+                            // nodes ever share a stable id (ENG-90). Since ENG-131
+                            // the id and the node id fold alike, and no workspace
+                            // the tests or CDO hold has such a pair
+                            // (`SitedGraph::shared_stable_ids`).
                             let t = scope.tiers.entry(i).or_insert(tier);
                             *t = (*t).min(tier);
                         }

@@ -1882,8 +1882,8 @@ fn differential_r4_findings_match_goldens() {
 /// "GemAndet reassigns Ørd"; the backfill's `global_rv_by_lc` key back on
 /// `to_ascii_lowercase` fails at "Ålcust is the object global" (`unknown`);
 /// the filter proof's `Reset` compare (`detectors/mod.rs`) back on its old
-/// `to_lowercase` (review r2, astra: `İ` lowercases to `i` + U+0307, the fold to
-/// `i`) fails at "the Reset on İndkøb clears the filter"; d33's own variable key
+/// `to_lowercase` (review r2, astra: `İ` lowercases to `i` + U+0307, the fold
+/// keeps `İ`) fails at "the Reset on İndkøb clears the filter"; d33's own variable key
 /// back on `to_lowercase` while the shared filter helper folds (review r3,
 /// Fable) fails at "the inline SetRange on İndkøb filters". Restored, each passes.
 #[test]

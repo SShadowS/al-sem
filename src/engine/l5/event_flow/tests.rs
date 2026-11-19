@@ -671,7 +671,7 @@ fn compute_chain_report_primary_scope_filters() {
 /// answer (measured 2026-11-19: `is_handled_re` on the unfolded name passes
 /// too); the test pins the answers, not the fold.
 #[test]
-fn a_dotted_capital_i_is_handled_name_matches_like_its_folded_spelling() {
+fn is_handled_names_match_as_the_compiler_folds_them() {
     for n in ["ishandled", "IsHandled", "Is_Handled", "ISHANDLED"] {
         assert!(is_handled_re(n), "{n}");
     }

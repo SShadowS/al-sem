@@ -86,7 +86,10 @@ use crate::program::model::workspace::{Model, ModelRoutine};
 /// 16 (ENG-20): a request page's own trigger has its own stable id (and a
 /// report procedure of its name and parameters its own), so a base cached by a
 /// binary of the same version would show those triggers as removed and added.
-pub const SUMMARY_SCHEMA: u32 = 16;
+/// 17 (ENG-131): identifiers fold as the compiler compares them, in stable ids
+/// too, so a routine whose name holds `İ`, `ẞ`, `µ`, `ς` or another of the 27
+/// re-classed chars has a new stable id (and an event a new event id).
+pub const SUMMARY_SCHEMA: u32 = 17;
 
 /// One own site of a key.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

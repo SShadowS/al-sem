@@ -84,8 +84,8 @@ codeunit 50430 "Nordic Names"
     end;
 
     // d33 (review r2, astra): `Filtrer` filters `İndkøb` by var, then `Reset`
-    // clears that filter, so the DeleteAll is unfiltered. `İ` is the one letter
-    // whose `to_lowercase` (`i` + U+0307) differs from the identifier fold (`i`).
+    // clears that filter, so the DeleteAll is unfiltered. `İ`'s `to_lowercase`
+    // (`i` + U+0307) differs from the identifier fold (`İ`, ENG-131).
     procedure ResetThenDeleteAll()
     var
         İndkøb: Record "Nordic Order";

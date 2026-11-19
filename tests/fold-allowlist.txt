@@ -60,7 +60,6 @@
 1 src/engine/l5/field_guard.rs
 2 src/engine/l5/field_writers.rs
 1 src/engine/l5/literal_flow_tests.rs
-1 src/engine/l5/literal_reach.rs
 3 src/engine/l5/prove.rs
 5 src/engine/l5/prove_slice.rs
 3 src/engine/l5/registry.rs
@@ -81,7 +80,7 @@
 1 src/engine/test_select/universe_tests.rs
 7 src/program/abi_ingest.rs
 2 src/program/attributes.rs
-12 src/program/body/ir_walk.rs
+9 src/program/body/ir_walk.rs
 4 src/program/build.rs
 2 src/program/graph.rs
 2 src/program/graphify_export.rs
@@ -90,8 +89,7 @@
 4 src/program/impact_graph/facts.rs
 4 src/program/impact_graph/mod.rs
 1 src/program/integration_report.rs
-1 src/program/model/abi_rows.rs
-3 src/program/model/events.rs
+2 src/program/model/events.rs
 2 src/program/model/platform_natives.rs
 7 src/program/model/program_calls.rs
 3 src/program/model/program_calls_adapter_tests.rs

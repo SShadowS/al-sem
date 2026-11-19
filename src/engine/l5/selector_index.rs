@@ -1736,7 +1736,7 @@ mod tests {
     /// ENG-131: the compiler's pair here is micro `µ` (U+00B5) and Greek capital `Μ`
     /// (U+039C), one identifier to alc; `İ` and `i`, the pair before, are two.
     #[test]
-    fn a_whole_signature_with_a_dotted_capital_i_selects() {
+    fn a_whole_signature_selects_by_another_spelling_of_one_identifier() {
         use crate::program::model::workspace::ModelParameter;
         let params = vec![ModelParameter {
             index: 0,

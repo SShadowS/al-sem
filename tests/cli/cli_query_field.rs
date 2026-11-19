@@ -419,21 +419,17 @@ fn callers_come_from_the_reverse_walk() {
     }
 }
 
-/// ⟨ENG-90⟩ Two procedures whose names differ only in a word-final sigma
-/// (`"ΒΣ"`, `"Βς"`) share ONE StableRoutineId. Before ENG-131 they were two
-/// graph nodes on that id (the node id folded `Σ` to `σ`, the stable id
-/// lowercased it to `ς`); since ENG-131 both ids take the compiler's fold, to
-/// which the two names are ONE identifier (alc: AL0440, a duplicate), so this
-/// source is a duplicate declaration. `"ΒΣ"` calls Root directly (local);
-/// `"Βς"` reaches it only through a dynamic `Codeunit.Run` (via a hub). The up
-/// pass may meet both tiers in hash order; `"ΒΣ"`'s tier must be its best,
-/// `local`, on every run.
-///
-/// Mutation (2026-11-18): the tier write back to last-wins
-/// (`scope.tiers.insert(i, tier)`) -> `"ΒΣ"` read `onlyOpen` on run 0 (red);
-/// restored, green.
+/// ⟨ENG-90, ENG-131⟩ Two procedures whose names differ only in a word-final
+/// sigma (`"ΒΣ"`, `"Βς"`). Before ENG-131 they were two graph nodes on ONE
+/// StableRoutineId (the node id folded `Σ` to `σ`, the stable id lowercased it
+/// to `ς`), and the up pass met both tiers in hash order (ENG-90 made the tier
+/// the best one). Since ENG-131 both ids take the compiler's fold, to which the
+/// two names are ONE identifier (alc: AL0440, a duplicate declaration): one
+/// graph node, one stable id. `"ΒΣ"` calls Root directly (local); `"Βς"`
+/// reaches it only through a dynamic `Codeunit.Run`; the one routine reads
+/// `local` on every run.
 #[test]
-fn shared_stable_id_tier() {
+fn sigma_twins_are_one_routine() {
     let t = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(t.path().join(".git")).unwrap();
     let ws = t.path().join("ws");
@@ -518,4 +514,26 @@ codeunit 50911 "G Callers"
             .unwrap_or_else(|| panic!("run {run}: no ΒΣ site: {v}"));
         assert_eq!(direct["tier"], "local", "run {run}: {direct}");
     }
+    // ENG-131: one graph node for both spellings (two before: the old node fold kept `σ`
+    // and `ς` apart).
+    let out = Command::new(env!("CARGO_BIN_EXE_alsem"))
+        .arg("graph")
+        .arg(&ws)
+        .env("RUST_LOG", "off")
+        .output()
+        .expect("spawn alsem");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let twins = String::from_utf8(out.stdout)
+        .unwrap()
+        .lines()
+        .map(|l| serde_json::from_str::<Value>(l).expect("jsonl"))
+        .filter(|v| {
+            v["t"] == "node" && (v["v"]["memberName"] == "ΒΣ" || v["v"]["memberName"] == "Βς")
+        })
+        .count();
+    assert_eq!(twins, 1, "one routine node for both spellings");
 }

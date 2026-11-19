@@ -3533,7 +3533,7 @@ pub fn ir_record_variables(
             ts_known(false)
         };
         out.push(PRecordVariable {
-            id: format!("{}/rv/{}", routine_id, p.name.to_lowercase()).into(),
+            id: format!("{}/rv/{}", routine_id, p.name.fold_identifier()).into(),
             name: p.name.clone(),
             table_name: parse_record_table_name(ty),
             temp_state,
@@ -3555,7 +3555,7 @@ pub fn ir_record_variables(
                 || routine.dataitem_source_table().is_some()))
     {
         out.push(PRecordVariable {
-            id: format!("{}/rv/{}", routine_id, name.to_lowercase()).into(),
+            id: format!("{}/rv/{}", routine_id, name.fold_identifier()).into(),
             name: name.to_string(),
             table_name: parse_record_table_name(ty),
             temp_state: ts_known(ty.to_ascii_lowercase().contains("temporary")),
@@ -3573,7 +3573,7 @@ pub fn ir_record_variables(
             continue;
         }
         out.push(PRecordVariable {
-            id: format!("{}/rv/{}", routine_id, v.name.to_lowercase()).into(),
+            id: format!("{}/rv/{}", routine_id, v.name.fold_identifier()).into(),
             name: v.name.clone(),
             table_name: parse_record_table_name(ty),
             temp_state: ts_known(v.temporary),
