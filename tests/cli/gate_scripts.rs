@@ -2149,6 +2149,10 @@ for line in sys.stdin:
         # its pair (a positional factor the flipped passes cancel, TLS-65).
         if calls == 1:
             burn(float(os.environ["STUB_BUILD_S"]) * (1.5 if another_alive() else 1.0))
+            # STUB_HEAD_SLEEP_S (TLS-103): head's build waits this long, wall time
+            # with no CPU, as a loaded host stretches it.
+            if os.path.basename(sys.argv[0]) == "alsem-head":
+                time.sleep(float(os.environ.get("STUB_HEAD_SLEEP_S", "0")))
             open(me, "w").close()
         if calls == 6:
             burn(float(os.environ["STUB_BUILD_S"]) * (1.5 if second("tests") else 1.0))
@@ -2285,7 +2289,13 @@ fn speed_with_stub(
         .env("CDO_SPEED_LOADAVG_FILE", dir.join("loadavg"))
         .env("CDO_SPEED_PRESSURE_FILE", dir.join("pressure"))
         .env("CDO_SPEED_HOST_PRESSURE_FILE", dir.join("pressure"))
-        .env("CDO_SPEED_CALM_PRESSURE", "25");
+        .env("CDO_SPEED_CALM_PRESSURE", "25")
+        // TLS-103: a stub clock. The stub servers burn exact CPU, but their
+        // wall time is the host's: under load a stub build read x1.78 against
+        // the 1.6 wall limit and failed a test about instruction counts. With
+        // wall taken as CPU, a stub run's verdict no longer depends on the
+        // host. (A test may still pass its own value in `env`.)
+        .env("CDO_SPEED_TEST_WALL_IS_CPU", "1");
     for (k, v) in env {
         cmd.env(k, v);
     }
@@ -2600,6 +2610,31 @@ fn speed_counts_instructions_with_the_real_perf() {
         "{text}"
     );
     assert!(text.contains("instructions: counted per call"), "{text}");
+}
+
+/// ⟨TLS-103⟩ A stub run's verdict does not depend on the host's load: under
+/// `speed_with_stub`'s stub clock (CDO_SPEED_TEST_WALL_IS_CPU) a call's wall
+/// time is its CPU time. Here head's model build waits 1 s with no CPU
+/// (STUB_HEAD_SLEEP_S), as a loaded host stretches it: about x3.5 in wall
+/// against the 1.6 limit, the shape that failed TLS-102's stress run (x1.78).
+/// The run still PASSes, judged on CPU alone.
+///
+/// Mutation (2026-11-19): the hook dropped from `Server.call` (wall measured
+/// again) -> "FAIL: build: wall time" (red); restored, green.
+#[cfg(target_os = "linux")]
+#[test]
+fn speed_stub_verdicts_ignore_the_hosts_wall_time() {
+    let dir = tempfile::tempdir().unwrap();
+    let (code, text) = speed_with_stub(dir.path(), "1.0", &[], &[("STUB_HEAD_SLEEP_S", "1")]);
+    assert_eq!(
+        code,
+        Some(0),
+        "a stretched wall time failed a stub run: {text}"
+    );
+    assert!(
+        text.contains("test hooks set") && text.contains("CDO_SPEED_TEST_WALL_IS_CPU=1"),
+        "{text}"
+    );
 }
 
 /// TLS-65 and TLS-79: the warm-up is timed twice, on fresh server pairs, the

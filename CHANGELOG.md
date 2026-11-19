@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (TLS-103: the cdo-speed stub tests no longer depend on the host's load)
+
+- **What failed.** `gate_scripts::speed_reports_instructions_and_their_limit_is_advisory` failed
+  in TLS-102's stress run and in TLS-93's landing, on master since TLS-83: the stub servers
+  burn exact CPU, but their WALL time is the host's, and under load a stub model build read
+  x1.78 against cdo-speed's 1.6 wall limit. The run then FAILED, though the test only checks
+  instruction counts and that their limit is advisory.
+- **The fix: a stub clock.** A test hook, `CDO_SPEED_TEST_WALL_IS_CPU`, takes each call's wall
+  time to be its CPU time (`Server.call`, the one place every judged wall time comes from).
+  `speed_with_stub` sets it for every stub run, so their verdicts rest on CPU alone. It is
+  listed among the test hooks a run reports; a real gate sets none, and the limits are
+  unchanged.
+- **Tests.** `speed_stub_verdicts_ignore_the_hosts_wall_time`: head's build waits 1 s with no
+  CPU (a new stub knob, `STUB_HEAD_SLEEP_S`), x3.48 in wall; the run still PASSes. Proofs: the
+  hook dropped -> "FAIL: build: wall time x3.48" (red); and the advisory rule broken (the
+  instructions advisory appended to the failures) still fails the instructions test (red). The
+  speed tests ran 10 times beside full nextest runs, all green.
+
 ### Fixed (TLS-89 follow-up: a slot test raced the run's status write)
 
 - TLS-92's landing failed on `cdo_slot_timings_in_a_hand_hold`: it waited for `held=1`, then

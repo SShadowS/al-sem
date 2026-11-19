@@ -156,7 +156,12 @@ OWN_PRESSURE = ("/sys/fs/cgroup/cpu.pressure", "/proc/pressure/cpu")
 
 TEST_HOOKS = ("CDO_SPEED_WARM_MIN_SECONDS", "CDO_SPEED_LOADAVG_FILE", "CDO_SPEED_PRESSURE_FILE",
               "CDO_SPEED_HOST_PRESSURE_FILE", "CDO_SPEED_CALM_PRESSURE", "CDO_SPEED_CALM_WAIT_S",
-              "CDO_SPEED_CALM_POLL_S", "CDO_SPEED_PERF")
+              "CDO_SPEED_CALM_POLL_S", "CDO_SPEED_PERF", "CDO_SPEED_TEST_WALL_IS_CPU")
+# CDO_SPEED_TEST_WALL_IS_CPU: a test hook, a stub clock: each call's wall time is
+# taken to be its CPU time. A stub server burns exact CPU, but its wall time is
+# the host's, so under load a stub run could fail its wall limit (x1.78 against
+# 1.6, TLS-103) whatever the test meant to check. A real gate never sets it.
+TEST_WALL_IS_CPU = bool(os.environ.get("CDO_SPEED_TEST_WALL_IS_CPU"))
 
 
 def load_1min():
@@ -816,6 +821,8 @@ class Server:
             r = self.request("tools/call", {"name": tool, "arguments": args})
             wall = time.monotonic() - t0
             cpu = self.cpu() - c0
+            if TEST_WALL_IS_CPU:
+                wall = cpu
         finally:
             self.last_instr = self.instr_stop(perf)
         self.sample_hwm()
