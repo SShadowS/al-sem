@@ -503,6 +503,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     wrapped command, as it does `timeout` or `nice`.
   - A status write that fails exits (dropping the locks) instead of holding them with no
     status; the inherited-lock test waits for the sharer's timing instead of a fixed second.
+- **Review round 8 (sol, on round 7's fixes), all fixed:**
+  - **A timing that ended between the two go's** (a fresh timed acquire gives its timing keeper
+    its go, then its hold keeper) was still reported. Its id lock is probed after both.
+  - **`go` could wait forever** for a stopped keeper, and took a go file it could not create
+    for an acknowledgement. It now checks the create and waits at most CDO_SLOT_LOCK_WAIT_S;
+    a hold keeper that does not take its go is ended, and the acquire says nothing is held.
+  - **The guard's `cdo-slot run` reading** now skips `run`'s own words (owner, reason, its
+    options) before the `--`, so a reason that is itself `--` hides nothing, and reads a bare
+    `cdo-slot` from PATH too.
+  - The other points (a copied live hold id vouching for edited ownership fields, a PID-reuse
+    window between the fd scan and the kill, a fixed sleep in the take-window test) are TLS-99.
 - **What it cannot see.** The hook sees a command only when it starts. A command it allowed
   before the timing began that starts a build later (`sleep 60; cargo build`) is not stopped,
   and neither is a build started outside any hooked session. TLS-98 plans a cargo wrapper lock

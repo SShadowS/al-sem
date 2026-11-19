@@ -425,12 +425,19 @@ spawn_keeper() {
 # acknowledges (removes the file; only a live keeper does) while it still holds
 # that lock. 0: it went on (what it watches decides its life from then on); 1:
 # it was gone before it took the go (killed: TLS-89 review r7, sol).
+# A keeper that does not take it within CDO_SLOT_LOCK_WAIT_S (stopped): 1 too,
+# and a go file that cannot be made is no go (review r8, sol).
 go() {
-    : >"$dir/go.$1"
+    : >"$dir/go.$1" || return 1
+    local until_s=$((SECONDS + lock_wait))
     while [[ -e "$dir/go.$1" ]]; do
         if ! probe s "$2"; then
             # It may have taken the go and ended just after the check above.
             [[ -e "$dir/go.$1" ]] || return 0
+            rm -f "$dir/go.$1"
+            return 1
+        fi
+        if ((SECONDS >= until_s)); then
             rm -f "$dir/go.$1"
             return 1
         fi
@@ -837,10 +844,21 @@ case "$cmd" in
                     exit "$trc"
                 fi
             fi
+            # Test hook: the window between the timing's go and the hold's.
+            [[ -z "${CDO_SLOT_TEST_PAUSE_HOLDGO_S:-}" ]] \
+                || { : >"$dir/paused.$$"; sleep "$CDO_SLOT_TEST_PAUSE_HOLDGO_S"; }
             if [[ "$rc" == 0 ]] && ! go "$taken_hid" "$ids/hold.$taken_hid"; then
-                # Its keeper was killed: no hold, so no timing either.
+                # Its keeper is gone or stopped: no hold, so no timing either.
                 ((!timed)) || end_keeper "$ids/timed.$tid"
-                die "the hold's keeper ended before the hold was confirmed"
+                end_keeper "$ids/hold.$taken_hid"
+                die "the hold's keeper did not take its go (ended or stopped); nothing is held"
+            fi
+            # After both go's, the timing must still run (its keeper may have
+            # ended while the hold's go was waited for: review r8, sol).
+            if ((timed)) && [[ "$rc" == 0 || "$rc" == 4 ]] && ! probe s "$ids/timed.$tid"; then
+                [[ "$rc" != 0 ]] || end_keeper "$ids/hold.$taken_hid"
+                echo "cdo-slot: --timed refused: its timing ended before the timing began" >&2
+                exit 6
             fi
             exit "$rc"
         fi

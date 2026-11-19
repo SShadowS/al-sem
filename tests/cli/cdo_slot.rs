@@ -517,6 +517,9 @@ fn cdo_slot_a_hold_lives_exactly_as_long_as_its_processes() {
 /// `INFO_ANYWHERE` dropped -> its `--dry-run` and `--help` are refused.
 /// TLS-89 review r7 (2026-11-19): the `cdo-slot` branch of `script_guarded`
 /// dropped -> `scripts/cdo-slot run ... -- cargo build` passes the timing (red).
+/// Review r8: `run`'s own words parsed as "the first `--`" again -> the
+/// `'--'` reason hides the build (red); `cdo-slot` dropped from the PATH names
+/// -> the bare `cdo-slot run ... -- cargo build` passes (red).
 #[test]
 fn cdo_slot_guard_refuses_other_sessions_while_held() {
     let s = Slot::new();
@@ -596,6 +599,9 @@ fn cdo_slot_guard_refuses_other_sessions_while_held() {
         // Review r7 (sol): the slot's own `run` wraps a command.
         "scripts/cdo-slot run lane rebuild -- cargo build",
         "bash /work/alsem/scripts/cdo-slot run lane r --timed -- timeout 60 cargo test",
+        // Review r8 (sol): from PATH, and a reason that is itself `--`.
+        "cdo-slot run lane x -- cargo build",
+        "scripts/cdo-slot run lane '--' -- cargo build",
     ];
     // TLS-89: the guarded commands that are NOT only builds or tests (gates, CDO
     // runs): refused under an untimed hold too. Every other `guarded` entry is a
@@ -654,6 +660,7 @@ fn cdo_slot_guard_refuses_other_sessions_while_held() {
         // Review r7 (sol): the slot itself, and its `run` of a harmless command.
         "scripts/cdo-slot status",
         "bash scripts/cdo-slot run lane x -- git status",
+        "scripts/cdo-slot run lane '--' --timeout 5 -- git status",
     ];
     for c in guarded.iter().chain(&free) {
         assert_eq!(s.guard("B", c).0, Some(0), "slot free: {c}");
@@ -1929,7 +1936,11 @@ fn cdo_slot_timings_in_a_hand_hold() {
 /// Mutations (2026-11-19): the timing recheck under the hold lock dropped ->
 /// B takes the slot beside the timing (red); `go` without the acknowledgement
 /// (only `: >go.<id>`) -> the acquire reports success with no timing (red).
-/// Each restored, green.
+/// Each restored, green. Review r8 (2026-11-19): the timing probe after both
+/// go's dropped -> the acquire whose timing keeper died between them exits 0
+/// (red); `go`'s time bound dropped -> it waits for the stopped keeper past the
+/// test's 20 s (red). Each restored, green. (The go file's creation check has
+/// no proof: no test here can make that one write fail.)
 #[test]
 fn cdo_slot_acquire_windows_hold_against_a_timing() {
     let s = Slot::new();
@@ -1987,4 +1998,79 @@ fn cdo_slot_acquire_windows_hold_against_a_timing() {
         "the acquire reported a timing whose keeper was killed"
     );
     assert_eq!(s.probe(), "held=0 own=0 timed=0", "it freed what it took");
+    drop(t);
+
+    // Review r8 (sol): the timing keeper killed AFTER its go, while the acquire
+    // gives the hold keeper its go (the HOLDGO hook pauses there): refused, and
+    // the hold it took is freed.
+    let keeper_of = |kind: &[u8]| -> Vec<i32> {
+        std::fs::read_dir("/proc")
+            .unwrap()
+            .flatten()
+            .filter_map(|e| e.file_name().to_string_lossy().parse::<i32>().ok())
+            .filter(|p| {
+                let cmd = std::fs::read(format!("/proc/{p}/cmdline")).unwrap_or_default();
+                let env = std::fs::read(format!("/proc/{p}/environ")).unwrap_or_default();
+                cmd.ends_with(kind) && env.split(|b| *b == 0).any(|v| v == want.as_bytes())
+            })
+            .collect()
+    };
+    let t = sleeper();
+    let tpid = t.id().to_string();
+    let mut timed = s.bg(
+        "A",
+        &["acquire", "lane", "between", "--bind", &tpid, "--timed"],
+        &[("CDO_SLOT_TEST_PAUSE_HOLDGO_S", "3")],
+    );
+    s.wait_paused();
+    let k = keeper_of(b"_keep\0timed\0");
+    assert_eq!(k.len(), 1, "precondition: one timing keeper");
+    // SAFETY: SIGKILL to this test's own timing keeper.
+    unsafe { libc::kill(k[0], libc::SIGKILL) };
+    assert_eq!(
+        timed.0.wait().unwrap().code(),
+        Some(6),
+        "the acquire reported a timing that ended before both go's"
+    );
+    until("it freed the hold", &|| s.probe() == "held=0 own=0 timed=0");
+    drop(t);
+
+    // Review r8 (sol): a hold keeper STOPPED before its go: the acquire gives up
+    // after CDO_SLOT_LOCK_WAIT_S, ends the keeper and says nothing is held.
+    let mut held = s
+        .cmd(
+            "A",
+            &["acquire", "lane", "stopped"],
+            &[
+                ("CDO_SLOT_TEST_PAUSE_HOLDGO_S", "2"),
+                ("CDO_SLOT_LOCK_WAIT_S", "2"),
+            ],
+        )
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    s.wait_paused();
+    let k = keeper_of(b"_keep\0hold\0");
+    assert_eq!(k.len(), 1, "precondition: one hold keeper");
+    // SAFETY: SIGSTOP to this test's own hold keeper.
+    unsafe { libc::kill(k[0], libc::SIGSTOP) };
+    let started = std::time::Instant::now();
+    let code = loop {
+        if let Some(st) = held.try_wait().unwrap() {
+            break st.code();
+        }
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(20),
+            "the go waited for a stopped keeper"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    };
+    let mut err = String::new();
+    std::io::Read::read_to_string(&mut held.stderr.take().unwrap(), &mut err).unwrap();
+    assert_eq!(code, Some(1), "{err}");
+    assert!(err.contains("nothing is held"), "{err}");
+    until("the stopped keeper was ended", &|| {
+        s.probe() == "held=0 own=0 timed=0"
+    });
 }

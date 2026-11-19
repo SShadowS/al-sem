@@ -438,8 +438,9 @@ def guarded_segment(words, line):
         return j < len(rest) and rest[j] in CARGO_SUBS and (BUILDS or names_cdo(line))
     if base in ("aldump", "alsem"):
         return names_cdo(line)
-    # agentflow is also run from PATH (review r3, sol); the repo scripts by path.
-    if "/" in w or base == "agentflow":
+    # agentflow and cdo-slot are also run from PATH (review r3, r8, sol); the
+    # repo scripts by path.
+    if "/" in w or base in ("agentflow", "cdo-slot"):
         return script_guarded(w, rest)
     return False
 
@@ -450,9 +451,16 @@ def script_guarded(path, args):
         # `cdo-slot run <owner> <reason> [options] -- <command>` runs <command>:
         # read it as the command it wraps (TLS-89 review r7, sol: a build
         # submitted through the slot's own `run` during a timing passed).
-        if args[:1] == ["run"] and "--" in args:
-            inner = args[args.index("--") + 1:]
-            return guarded_segment(inner, " ".join(inner))
+        # Its own words first: `run <owner> <reason>`, then its options up to
+        # `--` (a reason may itself be `--`: review r8, sol).
+        if args[:1] != ["run"]:
+            return False
+        i = 3
+        while i < len(args):
+            if args[i] == "--":
+                inner = args[i + 1:]
+                return guarded_segment(inner, " ".join(inner))
+            i += 2 if args[i] in ("--timeout", "--bind") else 1
         return False
     if base == "agentflow":  # its `run` runs a gate (`-- bash scripts/ci-steps all`)
         return BUILDS and args[:1] == ["run"]
