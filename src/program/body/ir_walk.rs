@@ -3327,7 +3327,11 @@ pub fn routine_features_partial(
             super::features::PCallee::Bare { .. } => Some("rec".to_string()),
             _ => None,
         };
+        // Under `with R do`, a bare table-method call may run on R rather than `Rec`, and a
+        // receiver's name may be one of R's fields: its temp state is unknown (sol r6 on ENG-30;
+        // a temporary `Rec` must not suppress a physical write made on the `with` record).
         cs.receiver_temp_state = receiver_lc
+            .filter(|_| !under_with)
             .and_then(|lc| rv_by_lc.get(&lc))
             .map(|rv| rv.temp_state.clone());
         cs.argument_bindings = arg_exprs

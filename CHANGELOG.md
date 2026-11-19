@@ -836,7 +836,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     guard, value and table frames and exit guards are not taken (so no caller's literal decides
     its own rules), the RecordRef flow fixes its variables to "anything" and reads no name in it
     (`atoms_of`, `val_of_text`: arguments, callee effects, self-call summaries), the Variant
-    routes refuse it, and E2 builds no program for it (as before).
+    routes refuse it, and E2 builds no program for it (as before). Two older readers that could
+    hide a write take the same rule (sol round 6): G36's field guard (`field_guard`) is not taken
+    in an opaque routine (an alias of the guarded RecordRef rebound inside a `with` was missed),
+    and a call's receiver temp state is unknown under `with` (a bare table-method call may run on
+    the `with` record, so a temporary `Rec` no longer suppresses its write in d1's temp proof).
     Write detection keeps the texts, so a call that may write a variable is still seen. An
     explicit `Enum::"E"::Member` keeps its value. Resolving with-scope names as alc does is
     ENG-143. A write
@@ -846,7 +850,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     (binding where R's table has no field of that name) is ENG-141's. alc 18.0.41 still accepts
     `with` (AL0606 is a warning).
   - Tests: `TxtQuoted`, `TxtWith`, `TxtWithFwd`, `TxtWithWrite`, `VarWith`, `TabWith`,
-    `TabWithUntrusted` (each fails exactly when its fix is removed; the opacity checks behind
+    `TabWithUntrusted`, G36's `AliasWith`, `a_bare_table_method_under_with_runs_on_the_with_record`
+    (each fails exactly when its fix is removed; the opacity checks behind
     `bind_m` and the condition-fact gate, including the frames' own and `a_callee_with_keeps_its_rule`'s,
     are a second line, so each alone is not separately observable), `CodeIn` (a lowercase label left unresolved as `=` is, an uppercase one pruned),
     and the Dictionary and InStream reads seeded so the write really happens.

@@ -72,6 +72,21 @@ codeunit 50403 "FG Mgt"
         R.GetTable(L);
         R.Modify();
     end;
+
+    // sol r6 on ENG-30: an alias of R rebound inside a `with`: the guard no longer holds.
+    procedure AliasWith(var R: RecordRef)
+    var
+        A: RecordRef;
+        W: Record "FG Doc";
+        L: Record "FG Log";
+    begin
+        if not R.FieldExist(50) then
+            exit;
+        A := R;
+        with W do
+            A.GetTable(L);
+        R.Modify();
+    end;
 }
 "#;
 
@@ -115,4 +130,68 @@ fn a_field_guarded_recordref_write_writes_only_tables_with_the_field() {
     // Controls: no guard, or a guard the RecordRef is rebound past.
     assert_eq!(answer("Unguarded", "FG Log"), "unknown");
     assert_eq!(answer("Rebound", "FG Log"), "unknown");
+    // sol r6 on ENG-30: a routine with a `with` takes no field guard.
+    assert_eq!(answer("AliasWith", "FG Log"), "unknown");
+}
+
+/// sol r6 on ENG-30: under `with Phys do`, a bare table-method call runs on `Phys` (physical),
+/// not on the page's temporary `Rec`; the temporary `Rec` must not suppress its write.
+const WITH_TEMP: &str = r#"table 50410 "WT Buf"
+{
+    fields { field(1; K; Integer) { } }
+    keys { key(PK; K) { } }
+
+    procedure ClearBuffer()
+    begin
+        DeleteAll();
+    end;
+
+    procedure Outer()
+    var
+        Phys: Record "WT Buf";
+    begin
+        with Phys do
+            ClearBuffer();
+    end;
+}
+codeunit 50411 "WT Caller"
+{
+    procedure DoIt()
+    var
+        Tmp: Record "WT Buf" temporary;
+    begin
+        Tmp.Outer();
+    end;
+}
+"#;
+
+#[test]
+fn a_bare_table_method_under_with_runs_on_the_with_record() {
+    let t = tempfile::tempdir().unwrap();
+    let ws = t.path().join("ws");
+    std::fs::create_dir_all(ws.join("src")).unwrap();
+    std::fs::write(
+        ws.join("app.json"),
+        r#"{"id":"34343434-0000-4000-8000-000000000035","name":"WT","publisher":"t","version":"1.0.0.0"}"#,
+    )
+    .unwrap();
+    std::fs::write(ws.join("src/WT.al"), WITH_TEMP).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_alsem"))
+        .arg("prove")
+        .arg(&ws)
+        .args(["DoIt", "writes-table:WT Buf", "--deterministic"])
+        .env("RUST_LOG", "off")
+        .output()
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout)
+        .unwrap_or_else(|e| panic!("{e}: {}", String::from_utf8_lossy(&out.stderr)));
+    // The receiver's temp state is unknown under `with`, so the answer is not the wrong `no`
+    // a temporary `Rec` gave (`yes` or `unknown`, both sound).
+    assert_ne!(
+        v["payload"]["result"]["answer"]
+            .as_str()
+            .unwrap_or_default(),
+        "no",
+        "{v:#}"
+    );
 }
