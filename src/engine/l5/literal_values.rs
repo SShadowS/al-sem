@@ -554,13 +554,7 @@ pub(super) fn kept_params(
             !p.is_var
                 && !r.var_assignments.iter().any(|a| fold(&a.lhs_name) == name)
                 && !loops.contains(&name)
-                && !r.call_sites.iter().any(|cs| {
-                    cs.argument_bindings.iter().any(|b| {
-                        b.source_kind == "parameter"
-                            && b.source_parameter_index == Some(p.index)
-                            && !passes_by_value(&cs.id, b.parameter_index)
-                    })
-                })
+                && !crate::engine::l4::param_guard::passes_param_unsafely(r, p, &passes_by_value)
         })
         .map(|p| p.index)
         .collect()
@@ -590,10 +584,7 @@ pub(super) fn value_frame(
         if r.var_assignments.iter().any(|a| fold(&a.lhs_name) == name) || loops.contains(&name) {
             continue;
         }
-        // Bound or by its text, quoted or not (sol on ENG-30): the rule every frame uses.
-        let passed_unsafely =
-            crate::engine::l4::param_guard::passes_param_unsafely(r, p, &passes_by_value);
-        if passed_unsafely {
+        if crate::engine::l4::param_guard::passes_param_unsafely(r, p, &passes_by_value) {
             continue;
         }
         usable.insert(name, (p.index, d));

@@ -34,6 +34,9 @@ table 51372 "PW Tab Batch" { fields { field(1; Code; Code[20]) { } } keys { key(
 table 51373 "PW Tab Log" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
 table 51374 "PW Ref Log" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
 table 51375 "PW Chg Flow" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
+table 51376 "PW Q Int A" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
+table 51377 "PW Q Int Else" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
+table 51378 "PW Q Bool" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
 enum 51360 "PW Kind"
 {
     value(0; Alpha) { }
@@ -431,6 +434,72 @@ codeunit 51370 "PW Shapes"
         V := TabOther();
     end;
 
+    // sol round 3: the same writes with the argument QUOTED ("I" is the parameter I). The
+    // argument bindings record only unquoted names, so each frame must also read the text.
+    procedure QIntRoot()
+    begin
+        QIntCase(1);
+    end;
+
+    local procedure QIntCase(I: Integer)
+    var
+        D: Dictionary of [Integer, Integer];
+        A: Record "PW Q Int A";
+        E: Record "PW Q Int Else";
+    begin
+        D.Add(1, 2);
+        D.Get(1, "I");
+        case I of
+            1:
+                A.Insert();
+            else
+                E.Insert();
+        end;
+    end;
+
+    procedure QBoolRoot()
+    begin
+        QBoolGuard(false);
+    end;
+
+    local procedure QBoolGuard(B: Boolean)
+    var
+        D: Dictionary of [Integer, Boolean];
+        T: Record "PW Q Bool";
+    begin
+        D.Add(1, true);
+        D.Get(1, "B");
+        if B then
+            T.Insert();
+    end;
+
+    procedure QFlowRoot()
+    begin
+        QFlowPass(1);
+    end;
+
+    local procedure QFlowPass(I: Integer)
+    begin
+        Evaluate("I", '2');
+        ChgFlowLeaf(I);
+    end;
+
+    procedure QVarRoot()
+    var
+        Line: Record "PW Tab Line";
+    begin
+        QVarPass(Line);
+    end;
+
+    local procedure QVarPass(V: Variant)
+    var
+        RecRef: RecordRef;
+    begin
+        RecRef.GetTable(V);
+        ChgVarChange("V");
+        ArmTabLeaf(V);
+    end;
+
     local procedure TabOther(): Variant
     var
         Batch: Record "PW Tab Batch";
@@ -583,6 +652,10 @@ fn an_arm_that_writes_the_parameter_unbinds_it() {
         ("RefRoot", "PW Ref Log", "yes"),
         ("ChgFlowRoot", "PW Chg Flow", "yes"),
         ("ChgVarRoot", "PW Tab Log", "yes"),
+        ("QIntRoot", "PW Q Int Else", "yes"),
+        ("QBoolRoot", "PW Q Bool", "yes"),
+        ("QFlowRoot", "PW Chg Flow", "yes"),
+        ("QVarRoot", "PW Tab Log", "yes"),
     ]);
 }
 
