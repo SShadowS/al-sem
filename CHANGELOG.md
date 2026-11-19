@@ -531,6 +531,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **A test race:** `cdo_slot_a_hold_lives_exactly_as_long_as_its_processes` killed the run once
     the timing lock showed, which can be before the run starts its command (nothing inherited
     yet, so the slot rightly came free). It now waits for the command itself.
+- **Fixed at the second landing: probes were slow enough to time a test out.** Every probe of a
+  busy lock waited its full 0.1 s before answering "held", so a guard call during a timing cost
+  four such waits. The guard test (about 400 calls) took ~190 s alone and passed its 300 s
+  watchdog under the landing's load. An `s` probe now answers at once (`-n`): only a holder
+  takes those locks exclusive. The `timed.lock` probe still looks twice, the second time
+  with the 0.1 s wait, since another probe may have it for an instant. The guard test now
+  takes ~57 s. The slot tests also drop every inherited `CDO_SLOT_*` and `CLAUDE_*` setting
+  (and `CDO_WS`), so a suite run inside a hold gives the same results as one outside.
 - **What it cannot see.** The hook sees a command only when it starts. A command it allowed
   before the timing began that starts a build later (`sleep 60; cargo build`) is not stopped,
   and neither is a build started outside any hooked session. TLS-98 plans a cargo wrapper lock
