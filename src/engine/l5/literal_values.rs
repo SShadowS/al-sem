@@ -533,6 +533,39 @@ pub(super) fn loop_vars(node: &PCFNNode, out: &mut Vec<String>) {
 /// callee or to a platform method that does not write it (the compiler's
 /// var-ness, for every type: ENG-135); `resolve` reads a label in `r`'s scope.
 /// `None` when `r` has no usable value parameter.
+/// The parameters row `r` provably never changes, of any type: by-value, never assigned, not a
+/// loop variable, and passed to no call that may write it (the rules of [`value_frame`] without
+/// its domain). A caller forwards a parameter's ENTRY value to a callee only when it is one of
+/// these (sol, ENG-135: a value the flow or G34 bound on entry and the routine then changed).
+/// A row with no statement tree keeps none.
+pub(super) fn kept_params(
+    r: &ModelRoutine,
+    passes_by_value: impl Fn(&str, u32) -> bool,
+) -> Vec<u32> {
+    let Some(tree) = r.statement_tree.as_ref() else {
+        return Vec::new();
+    };
+    let mut loops = Vec::new();
+    loop_vars(tree, &mut loops);
+    r.parameters
+        .iter()
+        .filter(|p| {
+            let name = fold(&p.name);
+            !p.is_var
+                && !r.var_assignments.iter().any(|a| fold(&a.lhs_name) == name)
+                && !loops.contains(&name)
+                && !r.call_sites.iter().any(|cs| {
+                    cs.argument_bindings.iter().any(|b| {
+                        b.source_kind == "parameter"
+                            && b.source_parameter_index == Some(p.index)
+                            && !passes_by_value(&cs.id, b.parameter_index)
+                    })
+                })
+        })
+        .map(|p| p.index)
+        .collect()
+}
+
 pub(super) fn value_frame(
     r: &ModelRoutine,
     passes_by_value: impl Fn(&str, u32) -> bool,

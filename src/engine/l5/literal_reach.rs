@@ -1104,6 +1104,12 @@ fn walk_tables(
 /// ([`platform_writes`](crate::program::resolve::platform_writes), ENG-135; it
 /// replaced ENG-30's Text/Code read-only list and the `Evaluate`/`Clear` pair). A
 /// call the resolver did not resolve may write it.
+/// A model row's key in maps kept per row (two `#if` arms of one routine share its ids, so the
+/// row's own address names it).
+fn row_key(r: &ModelRoutine) -> usize {
+    r as *const ModelRoutine as usize
+}
+
 fn value_passes_by_value(
     r: &ModelRoutine,
     cs_id: &str,
@@ -1673,6 +1679,9 @@ pub(crate) struct LiteralReach<'a> {
     site_rows: FxHashMap<&'a str, &'a ModelRoutine>,
     /// Every row of a routine with several rows (stable id), in row order.
     arm_rows: HashMap<&'a str, Vec<&'a ModelRoutine>>,
+    /// Per model row ([`row_key`]): the parameters it provably never changes
+    /// ([`values::kept_params`]), the only ones whose entry value a call forwards.
+    kept: FxHashMap<usize, Vec<u32>>,
     frames: FxHashMap<&'a str, FrameGuards>,
     tables: HashMap<&'a str, TableFrame>,
     /// r3 E1: per routine (stable id) its value frame ([`values`]).
@@ -2156,6 +2165,8 @@ impl<'a> LiteralReach<'a> {
         let mut frames = FxHashMap::default();
         let mut tables = HashMap::new();
         let mut value_frames = FxHashMap::default();
+        // Per model row (by address): the parameters it provably never changes.
+        let mut kept: FxHashMap<usize, Vec<u32>> = FxHashMap::default();
         let mut by_stable = HashMap::new();
         let mut op_owner = FxHashMap::default();
         let mut rows_per_stable: HashMap<&str, usize> = HashMap::new();
@@ -2230,6 +2241,7 @@ impl<'a> LiteralReach<'a> {
             let resolve = |l: &crate::program::body::features::ValueLabel| {
                 values::resolve_label(r, &tables_by_id, l)
             };
+            kept.insert(row_key(r), values::kept_params(r, passes_by_value));
             if let Some(v) = values::value_frame(r, passes_by_value, &resolve)
                 .or_else(|| multi.then(values::ValueFrame::default))
             {
@@ -2356,6 +2368,7 @@ impl<'a> LiteralReach<'a> {
             by_stable,
             site_rows,
             arm_rows,
+            kept,
             frames,
             tables,
             value_frames,
@@ -2629,6 +2642,9 @@ impl<'a> LiteralReach<'a> {
                 .find(|x| x.parameter_index == j && x.source_kind == "parameter")
                 .and_then(|x| x.source_parameter_index)
         };
+        // Whether the row holding the call never changes its parameter `i`: only then is the
+        // entry value it was bound to still the value it forwards (sol, ENG-135).
+        let caller_keeps = |i: u32| self.kept.get(&row_key(r)).is_some_and(|k| k.contains(&i));
         // r3 E2: what the caller's flow knows of each argument at this call
         // (its locals, a parameter it changed, a derived value).
         let caller_flow = self
@@ -2677,14 +2693,9 @@ impl<'a> LiteralReach<'a> {
                     .and_then(|id| self.table_names.get(id))
                     .map(|t| TSet::from([Arc::clone(t)]))
             });
-            // A forwarded parameter holds its entry table only if the caller never changes it:
-            // usable in the caller's own table frame. `b.tables` may also carry a parameter the
-            // value flow (G34) bound on entry and the caller then reassigns (ENG-135).
-            let caller_keeps = |i: u32| {
-                self.tables
-                    .get(caller)
-                    .is_some_and(|t| t.usable.contains(&i))
-            };
+            // A forwarded parameter holds its entry table only if the caller never changes it.
+            // `b.tables` may also carry one the value flow (G34) bound on entry and the caller
+            // then reassigns or passes to a `var` (ENG-135).
             let table = own.or_else(|| {
                 forwarded(j).filter(|&i| caller_keeps(i)).and_then(|i| {
                     b.tables
@@ -2747,7 +2758,11 @@ impl<'a> LiteralReach<'a> {
                             .map(|v| Arc::from([v])),
                     }
                 })
-                .or_else(|| forwarded(*j).and_then(|i| b.entry_value(i)))
+                .or_else(|| {
+                    forwarded(*j)
+                        .filter(|&i| caller_keeps(i))
+                        .and_then(|i| b.entry_value(i))
+                })
                 // Round-4 literal routes: a Variant parameter holds the
                 // static type of the caller's variable passed to it (the
                 // implicit `Rec` included).

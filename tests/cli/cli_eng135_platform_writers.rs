@@ -33,6 +33,7 @@ table 51371 "PW Tab Line" { fields { field(1; Code; Code[20]) { } } keys { key(P
 table 51372 "PW Tab Batch" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
 table 51373 "PW Tab Log" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
 table 51374 "PW Ref Log" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
+table 51375 "PW Chg Flow" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
 enum 51360 "PW Kind"
 {
     value(0; Alpha) { }
@@ -159,6 +160,7 @@ codeunit 51370 "PW Shapes"
         Other: Record "PW Keep Else";
     begin
         L := 1;
+        D.Add(1, 5);
         D.Get(L, V);
         case L of
             1:
@@ -384,6 +386,51 @@ codeunit 51370 "PW Shapes"
     end;
 #endif
 
+    // sol round 2: an entry value is forwarded only for a parameter the caller never changes.
+    // E2: Pass writes I through Evaluate, and Leaf (which assigns I, so only the flow binds
+    // it) must not get the entry 1.
+    procedure ChgFlowRoot()
+    begin
+        ChgFlowPass(1);
+    end;
+
+    local procedure ChgFlowPass(I: Integer)
+    begin
+        Evaluate(I, '2');
+        ChgFlowLeaf(I);
+    end;
+
+    local procedure ChgFlowLeaf(I: Integer)
+    var
+        T: Record "PW Chg Flow";
+    begin
+        if I = 2 then
+            T.Insert();
+        I := 0;
+    end;
+
+    // G33: Pass reads V's table, then hands V to a `var` that replaces the record.
+    procedure ChgVarRoot()
+    var
+        Line: Record "PW Tab Line";
+    begin
+        ChgVarPass(Line);
+    end;
+
+    local procedure ChgVarPass(V: Variant)
+    var
+        RecRef: RecordRef;
+    begin
+        RecRef.GetTable(V);
+        ChgVarChange(V);
+        ArmTabLeaf(V);
+    end;
+
+    local procedure ChgVarChange(var V: Variant)
+    begin
+        V := TabOther();
+    end;
+
     local procedure TabOther(): Variant
     var
         Batch: Record "PW Tab Batch";
@@ -534,6 +581,8 @@ fn an_arm_that_writes_the_parameter_unbinds_it() {
         ("ArmTabOpaqueRoot", "PW Tab Log", "yes"),
         ("TabFwdRoot", "PW Tab Log", "yes"),
         ("RefRoot", "PW Ref Log", "yes"),
+        ("ChgFlowRoot", "PW Chg Flow", "yes"),
+        ("ChgVarRoot", "PW Tab Log", "yes"),
     ]);
 }
 

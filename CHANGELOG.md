@@ -824,7 +824,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   frame checks; but the value flow (G34) also binds a routine's parameters on entry, reassigned or
   not. So `Pass(V)` doing `V := Other(); Leaf(V)` (a value the flow cannot follow) still sent the
   caller's record to `Leaf`, and `prove` pruned a `case RecRef.Number` arm that runs (`no` on
-  master). A parameter is now forwarded only when it is usable in the caller's own table frame;
+  master). The within-routine flow (E2) had the same gap: after `Evaluate(I, '2')` the caller's
+  flow knows nothing of `I`, and the binding fell back to `I`'s entry value (sol, round 2). Each
+  row now records the parameters it provably never changes (`values::kept_params`: by-value,
+  never assigned, not a loop variable, passed to no call that may write it, the value frame's
+  own rules without its domain), and an entry value, table or flow, is forwarded only for those;
   the value flow still decides wherever it knows the new value.
 - **What moves.** Precision is LOST where the old lists said "keeps its value" wrongly (correct),
   and gained where ENG-30's Text rule unbound a parameter passed to a read-only function outside
