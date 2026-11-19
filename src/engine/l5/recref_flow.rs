@@ -170,9 +170,10 @@ struct Facts {
     /// Variables an alias rebinding reaches (a by-value Variant parameter in
     /// it may hand a changed RecordRef back).
     alias_shared: HashSet<String>,
-    /// The routine holds a `with` ([`crate::program::body::features::tree_has_with`]): a name
-    /// in it may be the receiver's field, so every variable may hold anything, no argument is
-    /// read by name and no exit guard is taken (sol on ENG-30).
+    /// The routine is opaque to names ([`crate::program::body::features::names_opaque`]: a
+    /// `with`, or a body with no tree): a name in it may be a `with` receiver's field, so every
+    /// variable may hold anything, no argument is read by name ([`RecRefFlow::atoms_of`],
+    /// [`RecRefFlow::val_of_text`]) and no exit guard is taken (sol on ENG-30).
     opaque: bool,
 }
 
@@ -783,6 +784,10 @@ impl<'a> RecRefFlow<'a> {
         globals: &[(Arc<str>, Val)],
         text: &str,
     ) -> Val {
+        // As `atoms_of`: a name read in an opaque routine is unknown (sol r5).
+        if self.facts[i].opaque {
+            return None;
+        }
         let name = lc(text);
         match self.facts[i].tracked.get(&name) {
             Some(VarKind::Global) => {
@@ -965,6 +970,11 @@ impl<'a> RecRefFlow<'a> {
 
     /// The atoms `text` (an argument or a value) stands for in routine `i`.
     fn atoms_of(&self, i: usize, vars: &HashMap<String, Atoms>, text: &str) -> Atoms {
+        // Every name read in an opaque routine (its arguments mapped into a callee, a callee's
+        // effects mapped back, self-call summaries) may be a `with` field: anything (sol r5).
+        if self.facts[i].opaque {
+            return top();
+        }
         let r = &self.routines[i];
         let name = lc(text);
         match self.facts[i].tracked.get(&name) {
@@ -1657,7 +1667,7 @@ pub(crate) fn exit_guards(
     };
     // A guard's receiver named in a routine with a `with` may be the `with` receiver's field
     // (sol on ENG-30): no exit guard is taken from it.
-    if crate::program::body::features::tree_has_with(Some(tree)) {
+    if crate::program::body::features::names_opaque(Some(tree), r.body_available) {
         return out;
     }
     let top: &[PCFNNode] = match tree.kind.as_str() {
@@ -1800,7 +1810,8 @@ fn facts_of(r: &ModelRoutine, obj_in_place: &HashSet<String>) -> Facts {
         };
         f.tracked.insert(lc(&v.name), kind);
     }
-    f.opaque = crate::program::body::features::tree_has_with(r.statement_tree.as_deref());
+    f.opaque =
+        crate::program::body::features::names_opaque(r.statement_tree.as_deref(), r.body_available);
     if f.opaque {
         let names: Vec<String> = f.tracked.keys().cloned().collect();
         for n in names {

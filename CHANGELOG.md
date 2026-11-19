@@ -831,9 +831,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     re-reads the name (the Variant routes did, sol round 3). And since raw argument TEXTS are
     read by name too (the table lookup of a passed record, the RecordRef flow; sol round 4), a
     routine with a `with` is OPAQUE to the literal pruning's name resolution, by one test every
-    entry calls (`features::tree_has_with`): its calls bind nothing, its table frame and exit
-    guards are not taken, the RecordRef flow fixes its variables to "anything" and reads no
-    argument by name, the Variant routes refuse it, and E2 builds no program for it (as before).
+    entry calls (`features::names_opaque`; also true for a body whose tree was dropped as
+    untrusted, ENG-14, since its call sites remain: sol round 5): its calls bind nothing, its
+    guard, value and table frames and exit guards are not taken (so no caller's literal decides
+    its own rules), the RecordRef flow fixes its variables to "anything" and reads no name in it
+    (`atoms_of`, `val_of_text`: arguments, callee effects, self-call summaries), the Variant
+    routes refuse it, and E2 builds no program for it (as before).
     Write detection keeps the texts, so a call that may write a variable is still seen. An
     explicit `Enum::"E"::Member` keeps its value. Resolving with-scope names as alc does is
     ENG-143. A write
@@ -842,9 +845,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     frame, the value frame, E2's subscriber check and the Variant routes. Resolving R's fields
     (binding where R's table has no field of that name) is ENG-141's. alc 18.0.41 still accepts
     `with` (AL0606 is a warning).
-  - Tests: `TxtQuoted`, `TxtWith`, `TxtWithFwd`, `TxtWithWrite`, `VarWith`, `TabWith` (each fails
-    exactly when its fix is removed; the opacity checks behind `bind_m` are a second line, so
-    each alone is not separately observable), `CodeIn` (a lowercase label left unresolved as `=` is, an uppercase one pruned),
+  - Tests: `TxtQuoted`, `TxtWith`, `TxtWithFwd`, `TxtWithWrite`, `VarWith`, `TabWith`,
+    `TabWithUntrusted` (each fails exactly when its fix is removed; the opacity checks behind
+    `bind_m` and the condition-fact gate, including the frames' own and `a_callee_with_keeps_its_rule`'s,
+    are a second line, so each alone is not separately observable), `CodeIn` (a lowercase label left unresolved as `=` is, an uppercase one pruned),
     and the Dictionary and InStream reads seeded so the write really happens.
 - **Tests.**
   - `cli_prove_value_guards` runs `prove` through the CLI:

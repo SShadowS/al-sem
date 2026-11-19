@@ -301,7 +301,7 @@ impl FlowProgram {
         writes_of: &mut dyn FnMut(&str, u32) -> Option<ArgWrite>,
     ) -> Option<FlowProgram> {
         let tree = Arc::clone(r.statement_tree.as_ref()?);
-        if crate::program::body::features::tree_has_with(Some(&tree)) {
+        if crate::program::body::features::names_opaque(Some(&tree), r.body_available) {
             return None;
         }
         let mut vars = Vec::new();

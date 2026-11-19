@@ -539,6 +539,10 @@ pub(super) fn value_frame(
     resolve: &dyn Fn(&ValueLabel) -> Option<Val>,
 ) -> Option<ValueFrame> {
     let tree = r.statement_tree.as_ref()?;
+    // As the guard frame: a routine opaque to names (a `with`) has no value frame (sol r5).
+    if crate::program::body::features::names_opaque(Some(tree), r.body_available) {
+        return None;
+    }
     let mut loops = Vec::new();
     loop_vars(tree, &mut loops);
     let mut usable: HashMap<String, (u32, Domain)> = HashMap::new();

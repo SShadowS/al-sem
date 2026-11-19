@@ -102,6 +102,11 @@ pub(crate) fn frame_guards(
     if r.body_available && r.statement_tree.is_none() {
         return None;
     }
+    // A routine opaque to names (a `with`: `if Flag then` may test R's field Flag) has no
+    // frame, so no caller's literal decides its rules (sol round 5 on ENG-30).
+    if crate::program::body::features::names_opaque(r.statement_tree.as_deref(), r.body_available) {
+        return None;
+    }
     let mut usable: Vec<(String, u32)> = Vec::new();
     for p in &r.parameters {
         if p.is_var || !p.type_text.trim().eq_fold_identifier("boolean") {

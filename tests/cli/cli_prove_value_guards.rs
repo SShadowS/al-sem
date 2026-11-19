@@ -470,6 +470,7 @@ table 50305 "EH Var With" { fields { field(1; Code; Code[20]) { } } keys { key(P
 table 50306 "EH Tab A" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
 table 50307 "EH Tab A Log" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
 table 50308 "EH Tab Else Log" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
+table 50309 "EH Flag Rec" { fields { field(1; Code; Code[20]) { } field(2; Flag; Boolean) { } } keys { key(PK; Code) { } } }
 // ENG-30: Text and Code literals as value domains, by the rules measured on
 // BC 28.4 (`literal_values::Domain`).
 codeunit 50283 "EH Text"
@@ -779,6 +780,42 @@ codeunit 50283 "EH Text"
             else
                 E.Insert();
         end;
+    end;
+
+    // sol round 5 on ENG-30: TabWith's shape in a routine whose tree is dropped (an `#if` slot
+    // with two statements under `if B then`, ENG-14): the call sites stay, so the routine must
+    // still be opaque to names.
+    procedure TabWithUntrusted()
+    var
+        R: Record "EH With Rec";
+        T: Record "EH Tab A";
+        B: Boolean;
+    begin
+        R.FindFirst();
+        if B then
+#if PW_X
+            exit;
+            B := true;
+#endif
+        with R do
+            TabWithCheck(T);
+    end;
+
+    // sol round 5 on ENG-30: the CALLEE's own `with`: `if Flag then` tests R's field Flag, so a
+    // caller passing `false` for the parameter Flag decides nothing.
+    procedure RuleWithRoot()
+    begin
+        RuleWithCallee(false);
+    end;
+
+    local procedure RuleWithCallee(Flag: Boolean)
+    var
+        R: Record "EH Flag Rec";
+    begin
+        R.FindFirst();
+        with R do
+            if Flag then
+                Error('RuleWithCallee: the record is flagged.');
     end;
 
     // A read-only platform function keeps it usable.
@@ -1168,6 +1205,7 @@ fn a_text_parameter_something_writes_binds_nothing() {
         ("TxtWithWrite", "EH Txt WWr Else", "yes"),
         ("VarWith", "EH Var With", "yes"),
         ("TabWith", "EH Tab Else Log", "yes"),
+        ("TabWithUntrusted", "EH Tab Else Log", "yes"),
     ]);
 }
 
@@ -1253,4 +1291,33 @@ fn an_event_whose_listed_paths_were_dropped_is_no_extension_point() {
         "precondition: a raise of its own is one"
     );
     assert!(points("EvRoot").is_empty(), "{:?}", points("EvRoot"));
+}
+
+/// sol round 5 on ENG-30: a callee's own `with` makes its rules opaque. `RuleWithCallee` tests
+/// `Flag` inside `with R do`, where `Flag` is R's field; `RuleWithRoot` passes `false` for the
+/// parameter `Flag`, which decides nothing, so its card keeps the error.
+#[test]
+fn a_callee_with_keeps_its_rule() {
+    let dir = tempfile::tempdir().unwrap();
+    let ws = dir.path().join("ws");
+    std::fs::create_dir_all(ws.join("src")).unwrap();
+    std::fs::write(
+        ws.join("app.json"),
+        r#"{"id":"e1e1e1e1-0000-4000-8000-0000000000e1","name":"E1","publisher":"t","version":"1.0.0.0"}"#,
+    )
+    .unwrap();
+    std::fs::write(ws.join("src/Cases.al"), SOURCE).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_alsem"))
+        .args([
+            "explain",
+            "ws",
+            "--routine",
+            "Codeunit \"EH Text\"::RuleWithRoot",
+        ])
+        .current_dir(dir.path())
+        .env("RUST_LOG", "off")
+        .output()
+        .unwrap();
+    let card = String::from_utf8_lossy(&out.stdout);
+    assert!(card.contains("ERROR_THROW"), "the error stays: {card}");
 }

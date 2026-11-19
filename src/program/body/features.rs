@@ -1059,14 +1059,18 @@ pub enum FlowFact {
     Opaque,
 }
 
-/// Whether a routine's statement tree holds a `with` statement ([`FlowFact::With`]). Inside
-/// `with R do` an unqualified name may be one of R's fields, so a routine with one is OPAQUE to
-/// every reader that resolves an argument or variable by name (the literal pruning's bindings,
-/// the RecordRef flow, the Variant routes, E2): the ONE test they all call (sol on ENG-30).
-/// A routine with no statement tree has no `with` to find (its readers refuse it elsewhere).
+/// Whether a routine is OPAQUE to every reader that resolves an argument, variable or condition
+/// by NAME (the literal pruning's frames and bindings, the RecordRef flow, the Variant routes,
+/// E2): the ONE test they all call (sol on ENG-30). Opaque when
+/// - its statement tree holds a `with` ([`FlowFact::With`]): inside `with R do` an unqualified
+///   name may be one of R's fields;
+/// - or it has a body but no tree (an untrusted body, ENG-14): its call sites remain, but no
+///   tree says whether a `with` encloses them (sol round 5).
+///
+/// A routine with no body at all (symbol-only code) has no names to misread and is not opaque.
 /// shortcut: opaque as a whole; resolving with-scope names as alc does is ENG-143.
 #[must_use]
-pub fn tree_has_with(tree: Option<&PCFNNode>) -> bool {
+pub fn names_opaque(tree: Option<&PCFNNode>, body_available: bool) -> bool {
     fn walk(n: &PCFNNode) -> bool {
         matches!(n.flow.as_deref(), Some(FlowFact::With))
             || n.condition_leaves
@@ -1076,7 +1080,10 @@ pub fn tree_has_with(tree: Option<&PCFNNode>) -> bool {
                 .flatten()
                 .any(walk)
     }
-    tree.is_some_and(walk)
+    match tree {
+        Some(t) => walk(t),
+        None => body_available,
+    }
 }
 
 /// The longest condition text a [`FlowFact::Cond`] keeps.

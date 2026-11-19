@@ -737,8 +737,11 @@ impl<'m> CrossRules<'m> {
         };
         // A caller with a `with` is opaque to name resolution: the argument's name may be a
         // field of the `with` receiver (sol on ENG-30).
-        if crate::program::body::features::tree_has_with(self.row(caller).statement_tree.as_deref())
-        {
+        let c = self.row(caller);
+        if crate::program::body::features::names_opaque(
+            c.statement_tree.as_deref(),
+            c.body_available,
+        ) {
             return VariantAcross::Unknown;
         }
         if !self.variant_usable(step.to, index) {
@@ -752,7 +755,6 @@ impl<'m> CrossRules<'m> {
         }
         let fold = |s: &str| s.trim().trim_matches('"').fold_identifier();
         let name = fold(&info.text);
-        let c = self.row(caller);
         if let Some(p) = c.parameters.iter().find(|p| fold(&p.name) == name)
             && !p.is_var
             && p.type_text.trim().eq_fold_identifier("variant")
@@ -789,7 +791,10 @@ impl<'m> CrossRules<'m> {
         // A callee with a `with`: a use of the parameter's name may be a field (sol on ENG-30).
         if p.is_var
             || !p.type_text.trim().eq_fold_identifier("variant")
-            || crate::program::body::features::tree_has_with(r.statement_tree.as_deref())
+            || crate::program::body::features::names_opaque(
+                r.statement_tree.as_deref(),
+                r.body_available,
+            )
         {
             return false;
         }

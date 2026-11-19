@@ -910,7 +910,7 @@ fn table_frame(r: &ModelRoutine) -> Option<TableFrame> {
     let tree = r.statement_tree.as_ref()?;
     // A routine with a `with` is opaque to name resolution (sol on ENG-30): a receiver or
     // argument named in it may be the `with` receiver's field.
-    if crate::program::body::features::tree_has_with(Some(tree)) {
+    if crate::program::body::features::names_opaque(Some(tree), r.body_available) {
         return None;
     }
     let lc = |s: &str| s.trim().trim_matches('"').fold_identifier();
@@ -2628,9 +2628,12 @@ impl<'a> LiteralReach<'a> {
         else {
             return Bindings::default();
         };
-        // A caller with a `with` is opaque to name resolution: an argument named there may be
-        // a field of the `with` receiver (sol on ENG-30), so its calls bind nothing.
-        if crate::program::body::features::tree_has_with(r.statement_tree.as_deref()) {
+        // A caller opaque to names (a `with`, or a body with no tree) binds nothing: an
+        // argument named there may be a field of a `with` receiver (sol on ENG-30).
+        if crate::program::body::features::names_opaque(
+            r.statement_tree.as_deref(),
+            r.body_available,
+        ) {
             return Bindings::default();
         }
         let forwarded = |j: u32| {
