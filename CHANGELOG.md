@@ -42,6 +42,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   half checks the arithmetic again rather than an independent sample. The speed tests ran 10
   times beside full nextest runs, all green.
 
+### Changed (GRM-05: grammar tree-sitter-al v5.4.0, `main` at `88bb6871`)
+
+- **Why now.** tree-sitter-al moved `main` to v5.4.0, so every build against `main` stopped at
+  `crates/al-syntax/build.rs`'s `node-types.json` hash check: GitHub CI on master was red on
+  every push, and a fresh clone did not build.
+- **The bump** (was v5.3.0, `9d155ee7`): `gen-syntax` regenerated the vocabulary (518 named
+  kinds, +1) and `node-types.sha256`. The new kind `preproc_conditional_extends` is triaged
+  `Structural`. `NAMED_KIND_COUNT` 517 -> 518. `CACHE_VERSION_GRAMMAR` and its mirrors (the
+  cache differential test and the two current fixture-cache artifacts, `cafecafe…`'s content
+  hash recomputed) -> `tree-sitter-al-v5.4.0-88bb6871-native`. `PACK_SCHEMA` 21 -> 22, and
+  the sample pack's pinned hash moved: the new kind shifts later positions in `RawKind::ALL`.
+  CLAUDE.md's grammar lines updated.
+- **Interface `extends` lists reach the IR** (tree-sitter-al #43: `extends_interface` is now a
+  list and may be a qualified name; `preproc_conditional_extends` is an `#if` group inside
+  it). New `ObjectDecl::interface_extends`: the base names, a qualified name read as its last
+  segment, every `#if` arm's names, in document order. Test
+  `interface_extends_list_is_lowered_with_every_arm`, three discrimination proofs. **Interface
+  inheritance is not yet modelled** (it never was: the lowerer dropped even v5.3.0's single
+  base). That is ENG-142: implementers of a derived interface implement its bases, and a call
+  on a derived interface may reach a base's method. alc 18.0.41 confirms both
+  (`/work/.al-sem/probes/grm05-iface`: `B := Z` and `Z.Bar()` compile; an implementer of
+  `IBaz` missing `IBar`'s `Bar` fails AL0582).
+- **CR-only files keep their objects** (tree-sitter-al #45, filed in GRM-03: `#if` lines and
+  `//` comments now end at a lone CR). GRM-03's lone-CR rule is removed: `DIAG-parse` is a
+  warning only when a syntax error left a file with no object (the whole-object loss). A
+  file with no object and a clean parse is the `DIAG-index` info row, whatever its line ends:
+  a CR-only comment-only placeholder no longer reads "Could not parse". A file that keeps an
+  object but loses code inside it is preflight's "N recovered file(s)", not this row.
+  `failed_parse_without_object_is_a_parse_warning` now pins that GRM-03's CR-only repros (an
+  `#if`, a header comment, a comment in a body, mixed line ends) keep their codeunit, with
+  LF, CR-only and CRLF comment-only controls and an LF and a CR-only syntax error. Two
+  discrimination proofs.
+
 ### Fixed (TLS-89 follow-up: a slot test raced the run's status write)
 
 - TLS-92's landing failed on `cdo_slot_timings_in_a_hand_hold`: it waited for `held=1`, then

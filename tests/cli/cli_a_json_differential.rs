@@ -678,23 +678,22 @@ fn no_object_declaration_emits_index_diagnostic() {
     );
 }
 
-/// ⟨GRM-03⟩ A file whose parse FAILED, leaving no object readable, is a
+/// ⟨GRM-03, GRM-05⟩ A file whose parse FAILED, leaving no object readable, is a
 /// `DIAG-parse` WARNING saying its code is missing from the analysis, not the
-/// info row that blamed the file. A file with a lone-CR line end gets the
-/// likely cause named: the grammar ends `#if`/`#endif` lines and `//` comments
-/// at `\n` only, so the task's repro (`codeunit ... \r ... #if X288 \r ...`)
-/// parses to one ERROR, and a CR-only file that starts with a header comment
-/// parses CLEAN to one comment: still a warning, not "no object". A CR-only file
-/// whose last line end is CRLF still has lone CRs. A file with no object and no
-/// error keeps the info row.
+/// info row that blamed the file: Broken.al (LF) and CrBroken.al (CR-only).
 ///
-/// Mutation (2026-11-18): `parse_failed` hard-wired to `false` in
-/// `FreshCoverage` -> both broken files read "No object declaration found" at
-/// info (red); the CR-only test inverted -> the CR-only file gets no cause, the
-/// LF one a wrong one (red). Each restored, green.
-/// Mutation (2026-11-18, review): the warning condition back to `parse_failed`
-/// alone -> Hdr.al is the info row (red); the lone-CR test back to "`\r` and
-/// no `\n`" -> Mixed.al gets no cause (red). Each restored, green.
+/// GRM-05 (grammar 5.4.0, tree-sitter-al #45): `#if` lines and `//` comments end
+/// at a lone CR, so GRM-03's CR-only repros keep their codeunit: the `#if` repro
+/// (Cr.al), a header comment (Hdr.al), a comment inside a body (BodyCmt.al) and
+/// mixed line ends (Mixed.al) get NO row, since a row exists only for a file that
+/// declared no object. A comment-only placeholder is the info row whatever its
+/// line ends (Empty.al LF, EmptyCr.al CR-only, EmptyCrlf.al CRLF).
+///
+/// Mutations (2026-11-19): the warning condition widened to every objectless file
+/// -> the three placeholders read "Could not parse" (red); `parse_failed`
+/// hard-wired to `false` in `FreshCoverage` -> both broken files are info rows
+/// (red). Each restored, green. The CR-only repros are what GRM-03 recorded as
+/// lost on grammar 5.3.0 (`9d155ee7`): there each had a row.
 #[test]
 fn failed_parse_without_object_is_a_parse_warning() {
     let _env = crate::env_guard();
@@ -724,7 +723,23 @@ fn failed_parse_without_object_is_a_parse_warning() {
         "codeunit 50302 \"C Mixed\"\r{\r    procedure P()\r    begin\r#if X288\r        exit;\r#endif\r    end;\r}\r\n",
     )
     .unwrap();
+    std::fs::write(
+        ws.join("BodyCmt.al"),
+        "codeunit 50303 \"C Body\"\r{\r    procedure P()\r    begin\r        // a comment\r        exit;\r    end;\r}\r",
+    )
+    .unwrap();
+    std::fs::write(
+        ws.join("CrBroken.al"),
+        "codeunit 50304 Y\r{\r    procedure (\r",
+    )
+    .unwrap();
     std::fs::write(ws.join("Empty.al"), "// just a comment, no object\n").unwrap();
+    std::fs::write(ws.join("EmptyCr.al"), "// placeholder\r// no object\r").unwrap();
+    std::fs::write(
+        ws.join("EmptyCrlf.al"),
+        "// placeholder\r\n// no object\r\n",
+    )
+    .unwrap();
 
     let default_csv = detector_arg(DEFAULT_DETECTOR_NAMES);
     let _guard = ENV_LOCK.lock().unwrap();
@@ -736,35 +751,43 @@ fn failed_parse_without_object_is_a_parse_warning() {
 
     let v: serde_json::Value = serde_json::from_str(&out).expect("valid JSON");
     let diags = v["diagnostics"].as_array().expect("diagnostics array");
-    let find = |needle: &str| {
+    // A file's rows: its name is a whole word in the message (`Cr.al` is not
+    // `CrBroken.al`'s, nor `Empty.al` `EmptyCr.al`'s).
+    let rows = |file: &str| -> Vec<&serde_json::Value> {
         diags
             .iter()
-            .find(|d| d["message"].as_str().is_some_and(|m| m.contains(needle)))
-            .unwrap_or_else(|| panic!("no diagnostic naming {needle}: {diags:?}"))
+            .filter(|d| {
+                d["message"].as_str().is_some_and(|m| {
+                    m.split(|c: char| c.is_whitespace() || c == ':')
+                        .any(|w| w == file)
+                })
+            })
+            .collect()
     };
-    for (file, why) in [
-        ("Cr.al", "a syntax error"),
-        ("Hdr.al", "no object declaration was readable"),
-        ("Mixed.al", "a syntax error"),
-    ] {
-        let d = find(file);
-        assert_eq!(d["code"], "DIAG-parse", "{d}");
-        assert_eq!(d["severity"], "warning", "{d}");
-        let msg = d["message"].as_str().unwrap();
+    for file in ["Cr.al", "Hdr.al", "Mixed.al", "BodyCmt.al"] {
         assert!(
-            msg.contains(&format!("Could not parse {file}: {why}"))
-                && msg.contains("line ends that are a lone CR"),
-            "{msg}"
+            rows(file).is_empty(),
+            "{file} keeps its codeunit on grammar 5.4.0: {:?}",
+            rows(file)
         );
     }
-    let broken = find("Broken.al");
-    assert_eq!(broken["code"], "DIAG-parse", "{broken}");
-    assert_eq!(broken["severity"], "warning", "{broken}");
-    assert!(
-        !broken["message"].as_str().unwrap().contains("lone CR"),
-        "{broken}"
-    );
-    let empty = find("Empty.al");
-    assert_eq!(empty["code"], "DIAG-index", "{empty}");
-    assert_eq!(empty["severity"], "info", "{empty}");
+    for file in ["Broken.al", "CrBroken.al"] {
+        let r = rows(file);
+        assert_eq!(r.len(), 1, "{file}: {r:?}");
+        assert_eq!(r[0]["code"], "DIAG-parse", "{file}");
+        assert_eq!(r[0]["severity"], "warning", "{file}");
+        assert_eq!(
+            r[0]["message"],
+            format!(
+                "Could not parse {file}: a syntax error left no object declaration readable, \
+                 so its code is missing from the analysis"
+            ),
+        );
+    }
+    for file in ["Empty.al", "EmptyCr.al", "EmptyCrlf.al"] {
+        let r = rows(file);
+        assert_eq!(r.len(), 1, "{file}: {r:?}");
+        assert_eq!(r[0]["code"], "DIAG-index", "{file}");
+        assert_eq!(r[0]["severity"], "info", "{file}");
+    }
 }
