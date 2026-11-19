@@ -834,17 +834,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   flow (G34) decides every parameter it finds relevant: its tables replace the table frame's, and
   when it cannot establish them the parameter is unbound instead of keeping the entry table (sol
   round 7).
-- **A quoted argument hid a write (older, sol round 3).** The guard frame, the value frame and the
-  kept-parameter rule found the calls a parameter is passed to through `argument_bindings`, which
-  records only unquoted names: `D.Get(1, "B")` or `Evaluate("I", '2')` wrote the parameter
-  through an argument recorded as an expression, so it stayed bound. One rule now serves every
-  reader that needs a parameter unchanged (`param_guard::passes_param_unsafely`): an argument is
-  the parameter when it binds to it or when its text is the parameter's name, quoted or not. The
-  readers: the guard frame, the value frame, the kept-parameter rule, E2's publisher keep check
-  (`subscriber_changes`: a loaded subscriber writing its `var` through `Evaluate("Value", ..)`
-  was taken as keeping it; sol round 4) and the round-4 literal routes' Variant test
-  (`cross_rules::variant_usable`: `explain` dropped a `not V.IsRecord` rule for a Variant a
-  `var` call replaced). The publisher keep check also read ONE row of each subscriber (the last
+- **A quoted argument hid a write (older, sol rounds 3 and 4).** The readers that need a
+  parameter unchanged found its calls through `argument_bindings` alone, which recorded only
+  unquoted names: `D.Get(1, "B")` or `Evaluate("I", '2')` wrote the parameter through an argument
+  recorded as an expression, so it stayed bound. ENG-30's fix (below it in the stack) makes a
+  quoted name bind and adds the shared rule `param_guard::passes_param_unsafely` (bound, or the
+  argument text is the parameter's name, for an argument under `with`); ENG-135's own reader,
+  the kept-parameter rule, uses it too. ENG-135's tests pin the cases: `QIntRoot`, `QBoolRoot`,
+  `QFlowRoot`, `QVarRoot`, E2's publisher keep check (`SubRoot`: a loaded subscriber writing its
+  `var` through `Evaluate("Value", ..)`) and the round-4 literal routes' Variant test
+  (`explain` keeps a `not V.IsRecord` rule for a Variant a `var` call replaced). The publisher
+  keep check also read ONE row of each subscriber (the last
   by id): a subscriber declared in two `#if` arms, only one changing its `var`, was taken as
   keeping it. It now requires every row of every subscriber to keep the parameter (sol round 5),
   and checks every name the publisher's rows give the parameter, since a subscriber binds it by
