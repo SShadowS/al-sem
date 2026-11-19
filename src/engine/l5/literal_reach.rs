@@ -2187,7 +2187,14 @@ impl<'a> LiteralReach<'a> {
             }
             let callees_at =
                 |cs: &str| -> Vec<&str> { callees.get(cs).cloned().unwrap_or_default() };
-            if let Some(f) = frame_guards_over(r, callees_at, &by_id) {
+            // A routine's frames take the parameters usable in EVERY row: a row with none
+            // usable (no frame) merges as an empty frame, not as no row at all, or a
+            // parameter another row writes would stay bound (sol, ENG-135). Frames left with
+            // nothing usable are dropped after the loop.
+            let multi = rows_per_stable[r.stable_routine_id.as_str()] > 1;
+            if let Some(f) = frame_guards_over(r, callees_at, &by_id)
+                .or_else(|| multi.then(FrameGuards::default))
+            {
                 // Engine limits B2: a routine's rows (its `#if` arms) each have
                 // their own sites; its frame holds every row's sites (a shared
                 // site: the LAST row's requirements) and the guard parameters
@@ -2203,7 +2210,7 @@ impl<'a> LiteralReach<'a> {
                     }
                 }
             }
-            if let Some(t) = table_frame(r) {
+            if let Some(t) = table_frame(r).or_else(|| multi.then(TableFrame::default)) {
                 // As the frame: every row's sites, the parameters usable in
                 // every row.
                 match tables.entry(r.stable_routine_id.as_str()) {
@@ -2223,7 +2230,9 @@ impl<'a> LiteralReach<'a> {
             let resolve = |l: &crate::program::body::features::ValueLabel| {
                 values::resolve_label(r, &tables_by_id, l)
             };
-            if let Some(v) = values::value_frame(r, passes_by_value, &resolve) {
+            if let Some(v) = values::value_frame(r, passes_by_value, &resolve)
+                .or_else(|| multi.then(values::ValueFrame::default))
+            {
                 match value_frames.entry(r.stable_routine_id.as_str()) {
                     std::collections::hash_map::Entry::Vacant(e) => {
                         e.insert(v);
@@ -2247,6 +2256,11 @@ impl<'a> LiteralReach<'a> {
                 op_owner.insert(cs.id.as_str(), r.stable_routine_id.as_str());
             }
         }
+        // A merged frame with nothing usable binds nothing: drop it (as a single row with no
+        // usable parameter has none).
+        frames.retain(|_, f: &mut FrameGuards| !f.usable.is_empty());
+        tables.retain(|_, t: &mut TableFrame| !t.usable.is_empty());
+        value_frames.retain(|_, v: &mut values::ValueFrame| !v.usable.is_empty());
         let (flow_progs, flow_bind, keep_info) = build_flow(
             model,
             &by_id,
@@ -2663,8 +2677,16 @@ impl<'a> LiteralReach<'a> {
                     .and_then(|id| self.table_names.get(id))
                     .map(|t| TSet::from([Arc::clone(t)]))
             });
+            // A forwarded parameter holds its entry table only if the caller never changes it:
+            // usable in the caller's own table frame. `b.tables` may also carry a parameter the
+            // value flow (G34) bound on entry and the caller then reassigns (ENG-135).
+            let caller_keeps = |i: u32| {
+                self.tables
+                    .get(caller)
+                    .is_some_and(|t| t.usable.contains(&i))
+            };
             let table = own.or_else(|| {
-                forwarded(j).and_then(|i| {
+                forwarded(j).filter(|&i| caller_keeps(i)).and_then(|i| {
                     b.tables
                         .iter()
                         .find(|(k, _)| *k == i)
@@ -2754,7 +2776,9 @@ impl<'a> LiteralReach<'a> {
         }
         // G34: what the value flow knows of the callee's relevant parameters
         // (G33's included, where it knows more), and of its instance's globals.
-        if let (Some(c), Some(fi)) = (ci, self.flow.index_of(caller)) {
+        // The row that holds the call site (an `#if` arm), not the caller's first row: the
+        // argument's tables are what THAT arm leaves in it (sol, ENG-135).
+        if let (Some(c), Some(fi)) = (ci, self.flow.index_of_row(r)) {
             for &j in rel_params.into_iter().flatten() {
                 if let Some(set) = self.flow.arg_tables(fi, cs, j, &b.tables, &b.globals) {
                     out.tables.retain(|(k, _)| *k != j);

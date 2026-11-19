@@ -800,12 +800,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `WRITING_BUILTINS` and ENG-30's 15-name Text read-only list. An argument counts as written when
   any overload of that name, on any class, takes it as `var` (a call site may not know its
   receiver's type); a name the compiler does not list may write anything.
+- **`#if` arms (sol).** A routine's frames (guard, value, table) keep the parameters usable in
+  EVERY arm, but an arm with none usable had no frame and was skipped instead of merged, so a
+  parameter only that arm writes stayed bound. It now merges as an empty frame; a frame left with
+  nothing usable is dropped. The capability cone's own guard frames (`capability_cone::
+  guard_frames`, which `prove` reads for a Boolean passed on to a callee) merged arms the same
+  way and are fixed the same way; this was older than ENG-135, and ENG-135 makes it fire more often
+  (an arm that writes a Boolean through a platform `var` now has no frame). The RecordRef flow
+  (`recref_flow`, G34: the tables a RecordRef or a record in a Variant may hold) mapped a call to
+  ONE row of its routine per edge source (the last row by id, the first by stable id), so a
+  routine in three or more arms had its middle arms ignored: a `var` RecordRef only the middle arm
+  sets kept the other arms' tables, and a `R.Number` exit guard pruned code that runs (older than
+  ENG-135); a call now targets every row, and its summaries are the union. The literal
+  pruning read a call's argument tables from that flow in the caller's FIRST row
+  (`RecRefFlow::index_of`), not the row holding the call site, so a Variant the second arm
+  reassigns still reached the callee with the caller's record; it now reads the holding row
+  (`RecRefFlow::index_of_row`). E2 needs no change:
+  each arm numbers its call sites after the earlier arms, so the first arm's flow program never
+  answers for another arm's site.
+- **A reassigned Variant forwarded its caller's record (older, no arms needed).** When a
+  routine passes on a Variant parameter, the callee's table frame took the table the routine got
+  on entry. That is right only when the routine never changes the parameter, which its own table
+  frame checks; but the value flow (G34) also binds a routine's parameters on entry, reassigned or
+  not. So `Pass(V)` doing `V := Other(); Leaf(V)` (a value the flow cannot follow) still sent the
+  caller's record to `Leaf`, and `prove` pruned a `case RecRef.Number` arm that runs (`no` on
+  master). A parameter is now forwarded only when it is usable in the caller's own table frame;
+  the value flow still decides wherever it knows the new value.
 - **What moves.** Precision is LOST where the old lists said "keeps its value" wrongly (correct),
   and gained where ENG-30's Text rule unbound a parameter passed to a read-only function outside
   its 15 names (`DelStr`, `StrLen`'s kin). CDO counts: TBD.
 - **Pinned by** `cli_eng135_platform_writers` (an Integer through `Dictionary.Get`, an Option
   through `InStream.Read`, an Enum through `List.Get`, a local through `Dictionary.Set`: every arm
-  live; a Text through `DelStr` keeps its literal) and `platform_writes::tests` (the table sorted;
+  live, each read seeded so the written value is real; a parameter only the compiled `#if` arm
+  writes reaches every arm of its callee; a Text through `DelStr` keeps its literal) and
+  `platform_writes::tests` (the table sorted;
   the compiler's answers on the old lists' names; an unlisted name writes).
 
 ### Added (ENG-30: built-in option types and Text/Code literals prune `case` and `if` arms)
