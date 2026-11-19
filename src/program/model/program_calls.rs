@@ -666,12 +666,15 @@ fn attach_program_calls_with(
         let _s = pt::span("attach", "attach.event_param_temps");
         crate::program::model::event_param_temp::prove_event_param_temps(&mut resolved);
     }
+    // After every pass that derives a record operation's temp state (ENG-30, sol r8).
+    crate::program::model::workspace::clear_opaque_operation_temps(&mut resolved);
     if crate::engine::census::enabled() {
         crate::census_hook::mark("census.model");
         census_model(&resolved);
     }
     // Every final model, in every debug build (each test, and the `alsem` the CLI tests run):
-    // a routine opaque to names binds nothing (ENG-30). `cdo` builds have no debug assertions;
+    // a routine opaque to names binds nothing and knows no operation's temp state (ENG-30).
+    // `cdo` builds have no debug assertions;
     // `eng14_cdo_untrusted_census` checks CDO.
     #[cfg(debug_assertions)]
     {

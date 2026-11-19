@@ -846,7 +846,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     invariant over the FINAL model (`workspace::opaque_binding_violations`) is asserted at the
     end of `attach_program_calls` in every debug build (each test, and the `alsem` the CLI tests
     run), on every r0 fixture (`opaque_routines_bind_nothing`) and on CDO
-    (`eng14_cdo_untrusted_census`), so a later step that refills them fails at once.
+    (`eng14_cdo_untrusted_census`), so a later step that refills them fails at once. The same
+    for record operations (sol round 8: the RecordRef temp derivation in `record_types` stamped
+    `Ref.Modify()` temporary from `Ref.GetTable(Tmp)` though an alias was rebound to a physical
+    record inside a `with`; a bare `DeleteAll()` inside `with` took `Rec`'s state by name):
+    `attach_program_calls` sets every operation's temp state in an opaque routine to unknown
+    after every pass that derives one, and the invariant includes it (and
+    `caller_source_parameter_is_var`). Argument infos and condition facts stay in the model;
+    their readers refuse an opaque routine (the frames' and E2's checks, `TxtWith`, `VarWith`).
+    Goldens: `ws-with-receiver` (`with R do begin Insert(); Modify; end;`) moves in r3a2, r3a3
+    and the policy-facts oracle, its two writes' temp state going from known physical to
+    unknown (`prove` still `yes`); nothing else moved.
     Write detection keeps the texts, so a call that may write a variable is still seen. An
     explicit `Enum::"E"::Member` keeps its value. Resolving with-scope names as alc does is
     ENG-143. A write
@@ -859,8 +869,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `TabWithUntrusted`, G36's `AliasWith`, `a_bare_table_method_under_with_runs_on_the_with_record`
     (`DoIt`, a bare call inside `with Phys do`, and `DoGlobal`, a temporary object global
     called inside a `with`, whose temporary state the backfill gave back: each `yes` with
-    `tempState: unknown` evidence; without the clearing step the debug `alsem` stops on the
-    model invariant)
+    `tempState: unknown` evidence; `BareWith` the same; `RefWith` `unknown`; without either
+    clearing step the debug `alsem` stops on the model invariant)
     (each fails exactly when its fix is removed; the opacity checks behind
     `bind_m` and the condition-fact gate, including the frames' own and `a_callee_with_keeps_its_rule`'s,
     are a second line, so each alone is not separately observable), `CodeIn` (a lowercase label left unresolved as `=` is, an uppercase one pruned),

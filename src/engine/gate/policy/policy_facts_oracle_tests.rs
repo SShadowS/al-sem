@@ -95,6 +95,11 @@
 //! identifier fold, which keeps `İ`) with `REMINT_POLICY_FACTS_ORACLE=1`: only the `sha256`
 //! of `r0/ws-nordic-identifiers` (single and cross) moved, its `İndkøb` variable's id
 //! `rv/i̇ndkøb` becoming `rv/İndkøb` in the facts' `extra`. Every count is unchanged.
+//!
+//! Re-recorded (2026-11-19, ENG-30 sol r8: a record operation in a routine opaque to names, a
+//! `with`, has an unknown temp state) with `REMINT_POLICY_FACTS_ORACLE=1`: only the `sha256` of
+//! `r0/ws-with-receiver` (single and cross) moved, `DoWith`'s `Insert` and `Modify` inside
+//! `with R do` going from known physical to unknown temp state. Every count is unchanged.
 
 use super::*;
 use crate::engine::gate::policy::policy_loader::{LoadResult, load_policy_from_string};

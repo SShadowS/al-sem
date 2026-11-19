@@ -174,6 +174,32 @@ codeunit 50411 "WT Caller"
         with Phys do
             Buf.ClearBuffer();
     end;
+
+    // sol r8: the RecordRef temp derivation stamped `Ref.Modify()` temporary from
+    // `Ref.GetTable(Tmp)`, though the alias `A` rebinds it to `Phys` inside the `with`.
+    procedure RefWith()
+    var
+        Ref: RecordRef;
+        A: RecordRef;
+        Tmp: Record "WT Buf" temporary;
+        Phys: Record "WT Buf";
+        W: Record "WT Buf";
+    begin
+        Ref.GetTable(Tmp);
+        A := Ref;
+        with W do
+            A.GetTable(Phys);
+        Ref.Modify();
+    end;
+
+    // A bare table method on `Rec` of a temporary page source: the operation's own temp state.
+    procedure BareWith()
+    var
+        Phys: Record "WT Buf";
+    begin
+        with Phys do
+            DeleteAll();
+    end;
 }
 "#;
 
@@ -203,8 +229,16 @@ fn a_bare_table_method_under_with_runs_on_the_with_record() {
     // is `yes` (the write may happen), never the `no` a temporary receiver gives, and each write's
     // evidence says `tempState: unknown` (D1's Uncertain; sol r7). DoIt's write runs on the
     // physical `Phys`; DoGlobal's on the temporary global `Buf` (resolving the `with` scope as
-    // alc does, ENG-143, would make it `no`).
-    for routine in ["DoIt", "DoGlobal"] {
+    // alc does, ENG-143, would make it `no`). BareWith (sol r8): a record operation in an opaque
+    // routine has an unknown temp state. RefWith (sol r8): the RecordRef temp derivation no
+    // longer stamps `Ref.Modify()` temporary; the opaque routine's RecordRef table is unknown.
+    let v = answer("RefWith");
+    assert_eq!(
+        v["payload"]["result"]["answer"].as_str(),
+        Some("unknown"),
+        "RefWith: {v:#}"
+    );
+    for routine in ["DoIt", "DoGlobal", "BareWith"] {
         let v = answer(routine);
         let r = &v["payload"]["result"];
         assert_eq!(r["answer"].as_str(), Some("yes"), "{routine}: {v:#}");

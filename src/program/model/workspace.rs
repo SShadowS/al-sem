@@ -4139,20 +4139,34 @@ impl RowNodes {
     }
 }
 
-/// The invariant over a final model (ENG-30, sol r7): a routine opaque to names
-/// (`features::names_opaque`) has no argument binding with a source and no receiver temp state,
-/// whatever step wrote them. Returns how many opaque routines there are and one line per
-/// offending call site.
+fn is_opaque(r: &ModelRoutine) -> bool {
+    crate::program::body::features::names_opaque(r.statement_tree.as_deref(), r.body_available)
+}
+
+/// The model's last word on an opaque routine (ENG-30, sol r8): every record operation's temp
+/// state is unknown, since a name in it may be the `with` record's (a bare `Insert()` runs on the
+/// `with` record, not `Rec`; `A.GetTable(Phys)` may rebind an alias). Runs after every pass
+/// that derives one (the body walk, `record_types`, `event_param_temp`).
+pub fn clear_opaque_operation_temps(m: &mut Model) {
+    for r in m.workspace.routines.iter_mut().filter(|r| is_opaque(r)) {
+        for op in &mut r.record_operations {
+            op.temp_state = Some(crate::program::body::features::PTempState {
+                kind: "unknown".into(),
+                value: None,
+                parameter_index: None,
+            });
+        }
+    }
+}
+
+/// The invariant over a final model (ENG-30, sol r7 and r8): a routine opaque to names
+/// (`features::names_opaque`) has no argument binding with a source, no receiver temp state and
+/// no record operation with a known or parameter-dependent temp state, whatever step wrote them.
+/// Returns how many opaque routines there are and one line per offending call site or operation.
 pub fn opaque_binding_violations(m: &Model) -> (usize, Vec<String>) {
     let mut opaque = 0;
     let mut bad = Vec::new();
-    for r in &m.workspace.routines {
-        if !crate::program::body::features::names_opaque(
-            r.statement_tree.as_deref(),
-            r.body_available,
-        ) {
-            continue;
-        }
+    for r in m.workspace.routines.iter().filter(|r| is_opaque(r)) {
         opaque += 1;
         for cs in &r.call_sites {
             let bound = cs.argument_bindings.iter().any(|b| {
@@ -4160,10 +4174,23 @@ pub fn opaque_binding_violations(m: &Model) -> (usize, Vec<String>) {
                     || b.source_variable_name.is_some()
                     || b.source_record_variable_id.is_some()
                     || b.source_parameter_index.is_some()
+                    || b.caller_source_parameter_is_var.is_some()
                     || b.source_temp_state.is_some()
             });
             if bound || cs.receiver_temp_state.is_some() {
                 bad.push(format!("{}::{} call {}", r.object_id, r.name, cs.id));
+            }
+        }
+        for op in &r.record_operations {
+            if op
+                .temp_state
+                .as_ref()
+                .is_some_and(|t| t.kind.as_str() != "unknown")
+            {
+                bad.push(format!(
+                    "{}::{} {} on {}",
+                    r.object_id, r.name, op.op, op.record_variable_name
+                ));
             }
         }
     }
