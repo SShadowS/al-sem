@@ -79,8 +79,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sol), so `cr_only_line_ends_keep_the_object_and_its_code` pins each repro in the IR: a clean
   parse, its codeunit and routine, and the call after the CR-ended directive or comment.
 - **Measured on both grammars.**
-  - Tests: master `3cc17b21` on 5.3.0 passed all 6,188; this branch on 5.4.0 passes all 6,189
-    (the new CLI test is the one more). No test changed outcome and no golden moved.
+  - Tests, on one base (`3c616380` with TLS-103): 5.3.0 passed all 6,188, this branch on 5.4.0
+    all 6,189 (the new CLI test is the one more). No test changed outcome and no golden moved.
   - CDO (`bc3ccb18`, clean), release-fast, 5.3.0 master `3cc17b21` against this branch on 5.4.0,
     each side built against its own grammar (a one-grammar `cdo-before-after` cannot build the
     5.3.0 base): no finding or fingerprint moved (primary 2,308 findings / 2,301 fingerprints,
