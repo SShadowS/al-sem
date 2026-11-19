@@ -47,9 +47,7 @@
 2 src/engine/l5/detectors/d1.rs
 2 src/engine/l5/detectors/d13.rs
 1 src/engine/l5/detectors/d14.rs
-4 src/engine/l5/detectors/d18.rs
 1 src/engine/l5/detectors/d46.rs
-2 src/engine/l5/detectors/d4.rs
 2 src/engine/l5/detectors/d57.rs
 1 src/engine/l5/detectors/d59.rs
 1 src/engine/l5/detectors/d65.rs

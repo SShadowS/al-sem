@@ -135,9 +135,9 @@ pub fn detect_d4(resolved: &Model, ctx: &DetectorContext) -> Result<DetectorOutp
                 if op_idxs.len() < 2 {
                     continue;
                 }
-                let var = routine.record_operations[op_idxs[0]]
-                    .record_variable_name
-                    .to_lowercase();
+                let var = al_syntax::fold_identifier(
+                    &routine.record_operations[op_idxs[0]].record_variable_name,
+                );
                 *qualifying_keys_per_var.entry(var).or_insert(0) += 1;
             }
 
@@ -147,7 +147,8 @@ pub fn detect_d4(resolved: &Model, ctx: &DetectorContext) -> Result<DetectorOutp
                     continue;
                 }
                 let first = &routine.record_operations[op_idxs[0]];
-                let first_rec_var_lower = first.record_variable_name.to_lowercase();
+                // The identifier fold (ENG-131, sol): the id keeps two variables apart.
+                let first_rec_var_lower = al_syntax::fold_identifier(&first.record_variable_name);
 
                 let multi_key = qualifying_keys_per_var
                     .get(&first_rec_var_lower)

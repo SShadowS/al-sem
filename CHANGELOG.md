@@ -58,7 +58,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   --update-baseline`); regenerate saved `alsem diff` snapshots on both sides (across the
   upgrade such a routine reads as removed and added, or as a rename where diff pairs it by
   name, and a renamed event parameter as an ABI change); re-emit or review emitted policy
-  pins naming such a field.
+  pins whose rule atoms name such an identifier (a field, a variable, an enum member).
 - **Pinned by** `casing::tests::the_fold_agrees_with_the_compiler_on_every_measured_pair` (every
   measured pair, the Greek subscript-iota pairs Fable measured included),
   `the_fold_is_one_char_idempotent_and_keeps_non_ascii_off_ascii` (all of Unicode) and
@@ -68,7 +68,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   graph node for `"ΒΣ"`/`"Βς"`); `l2_ir::two_arms_spelled_with_micro_and_mu_are_one_routine_for_the_attribute_check`
   and `attribute_literals_are_not_identifier_folded` (an attribute's literal text keeps its
   own spelling); `cli_eng131_event_fold` (a publisher `"OnΒΣ"` keeps its subscriber);
-  `cli_eng131_grouping_fold` (d4 and d18 read `Aẞ` and `Aß` as two variables);
+  `cli_eng131_grouping_fold` (d4 and d18 read `Aẞ` and `Aß` as two variables, and `Fẞ`/`Fß`
+  as two fields, with distinct finding ids and fingerprints);
   `ids::tests::stable_ids_fold_names_as_the_compiler_compares_them` and the impact key test
   `two_labels_spelled_with_sharp_s_and_capital_sharp_s_have_two_keys` (sol). Each of these
   folds, put back on `to_lowercase`, fails its test.

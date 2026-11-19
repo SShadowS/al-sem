@@ -28,15 +28,25 @@ fn analyze(src: &str) -> Value {
 }
 
 fn count(v: &Value, detector: &str) -> usize {
-    v["payload"]["findings"]
+    distinct(v, detector).0
+}
+
+/// The `detector` findings' count, and whether their ids and their fingerprints are all
+/// distinct (sol: two findings on one id let one baseline entry suppress both).
+fn distinct(v: &Value, detector: &str) -> (usize, bool) {
+    let fs: Vec<&Value> = v["payload"]["findings"]
         .as_array()
         .expect("findings")
         .iter()
         .filter(|f| f["detector"] == detector)
-        .count()
+        .collect();
+    let ids: std::collections::HashSet<String> = fs.iter().map(|f| f["id"].to_string()).collect();
+    let fps: std::collections::HashSet<String> =
+        fs.iter().map(|f| f["fingerprint"].to_string()).collect();
+    (fs.len(), ids.len() == fs.len() && fps.len() == fs.len())
 }
 
-const TABLES: &str = "table 18 Customer { fields { field(1; \"No.\"; Code[20]) { } field(2; Status; Option) { OptionMembers = Open,Closed; } } }\ntable 37 \"Sales Line\" { fields { field(1; \"Document No.\"; Code[20]) { } } }\n";
+const TABLES: &str = "table 18 Customer { fields { field(1; \"No.\"; Code[20]) { } field(2; Status; Option) { OptionMembers = Open,Closed; } field(3; \"Fẞ\"; Integer) { } field(4; \"Fß\"; Integer) { } } }\ntable 37 \"Sales Line\" { fields { field(1; \"Document No.\"; Code[20]) { } } }\n";
 
 #[test]
 fn two_variables_spelled_with_sharp_s_and_capital_sharp_s_are_two() {
@@ -56,8 +66,26 @@ fn two_variables_spelled_with_sharp_s_and_capital_sharp_s_are_two() {
         "codeunit 50131 G\n{{\n    procedure Filters()\n    var\n        Aẞ: Record Customer;\n        Aß: Record Customer;\n        i: Integer;\n    begin\n        for i := 1 to 10 do begin\n            Aẞ.SetRange(Status, Aẞ.Status::Open);\n            Aẞ.FindFirst();\n            Aß.SetRange(Status, Aß.Status::Open);\n            Aß.FindFirst();\n        end;\n    end;\n}}\n{TABLES}"
     ));
     assert_eq!(
-        count(&d18, "d18-constant-filter-in-loop"),
-        2,
-        "d18: {d18:#}"
+        distinct(&d18, "d18-constant-filter-in-loop"),
+        (2, true),
+        "d18: two findings, distinct ids and fingerprints: {d18:#}"
+    );
+    // d4: each variable repeats its own lookup: two findings, never one id.
+    let d4 = analyze(&format!(
+        "codeunit 50131 G\n{{\n    procedure Lookup()\n    var\n        SalesLine: Record \"Sales Line\";\n        Aẞ: Record Customer;\n        Aß: Record Customer;\n    begin\n        if SalesLine.FindSet() then\n            repeat\n                Aẞ.Get('X');\n                Aẞ.Get('X');\n                Aß.Get('X');\n                Aß.Get('X');\n            until SalesLine.Next() = 0;\n    end;\n}}\n{TABLES}"
+    ));
+    assert_eq!(
+        distinct(&d4, "d4-repeated-lookup-in-loop"),
+        (2, true),
+        "d4: two findings, distinct ids and fingerprints: {d4:#}"
+    );
+    // d18: one variable, two fields the compiler keeps apart: two findings.
+    let fields = analyze(&format!(
+        "codeunit 50131 G\n{{\n    procedure Filters()\n    var\n        C: Record Customer;\n        i: Integer;\n    begin\n        for i := 1 to 10 do begin\n            C.SetRange(\"Fẞ\", 1);\n            C.SetRange(\"Fß\", 1);\n            C.FindFirst();\n        end;\n    end;\n}}\n{TABLES}"
+    ));
+    assert_eq!(
+        distinct(&fields, "d18-constant-filter-in-loop"),
+        (2, true),
+        "d18 fields: {fields:#}"
     );
 }

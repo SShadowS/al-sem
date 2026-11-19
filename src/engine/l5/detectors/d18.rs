@@ -117,7 +117,7 @@ pub fn detect_d18(
             };
             let field_name = field_info.text.trim().to_string();
             // The unquoted, folded field: the dedup key and the #252 loose subject.
-            let field_lc = unquoted_field_name(field_info).to_lowercase();
+            let field_lc = al_syntax::fold_identifier(&unquoted_field_name(field_info));
 
             let dedup_key = format!(
                 "{}|{}|{}|{}",
@@ -162,8 +162,10 @@ pub fn detect_d18(
                 "d18/{}/{}/{}/{}",
                 routine.id,
                 loop_info.id,
-                op.record_variable_name.to_lowercase(),
-                field_name.to_lowercase()
+                // The identifier fold (ENG-131, sol): two variables or fields the
+                // compiler keeps apart never share a finding id.
+                al_syntax::fold_identifier(&op.record_variable_name),
+                al_syntax::fold_identifier(&field_name)
             );
             let root_cause_key = id.clone();
 
@@ -217,7 +219,10 @@ pub fn detect_d18(
                     key: match &op.table_id {
                         Some(_) => format!("d18/{field_lc}"),
                         None => {
-                            format!("d18/{}/{field_lc}", op.record_variable_name.to_lowercase())
+                            format!(
+                                "d18/{}/{field_lc}",
+                                al_syntax::fold_identifier(&op.record_variable_name)
+                            )
                         }
                     },
                 }),
