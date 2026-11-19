@@ -69,6 +69,18 @@ L14 entry gives the measured noise behind each limit. When the rounds disagree
 about a call (some ratios over its limit, some not), more rounds run, up to
 --max-rounds; then the median decides.
 
+Instructions (TLS-83). Each timed call also counts the user-mode instructions of
+the server and its engine children (`perf stat` attached for the call; both core
+types on a hybrid CPU, unscaled). They resolve far better than CPU seconds (the
+model build: typically ±0.1 %, one 0.8 % jump in 12 builds, against ±8 % for a
+two-pass CPU reading; measured n = 6), but they count work, not time: they do not see memory
+stalls, cache misses or lost parallelism, so CPU and wall keep judging. Each
+verdict line shows the call's instruction ratio, and the PASS/FAIL line the model
+build's and the round total's. A ratio over INSTR_LIMIT (x1.02) is reported as an
+ADVISORY and never fails the run: it becomes a failing limit only by an owner's
+decision on data from real landings. Without perf (or CDO_SPEED_INSTR=0) the run
+says "instructions: NOT counted" and judges CPU and wall alone.
+
 Output equality (the answer's hash) is reported (a branch may change answers on
 purpose), never judged here: the CDO goldens do that. A call that exits non-zero
 or fails in the engine, on either side, fails the run at once, naming the call,
@@ -90,6 +102,7 @@ import shutil
 import statistics
 import subprocess
 import sys
+import signal
 import tempfile
 import time
 
@@ -143,7 +156,7 @@ OWN_PRESSURE = ("/sys/fs/cgroup/cpu.pressure", "/proc/pressure/cpu")
 
 TEST_HOOKS = ("CDO_SPEED_WARM_MIN_SECONDS", "CDO_SPEED_LOADAVG_FILE", "CDO_SPEED_PRESSURE_FILE",
               "CDO_SPEED_HOST_PRESSURE_FILE", "CDO_SPEED_CALM_PRESSURE", "CDO_SPEED_CALM_WAIT_S",
-              "CDO_SPEED_CALM_POLL_S")
+              "CDO_SPEED_CALM_POLL_S", "CDO_SPEED_PERF")
 
 
 def load_1min():
@@ -659,6 +672,83 @@ def descendants(pid):
     return out
 
 
+# ⟨TLS-83⟩ Instructions: user-mode instructions retired per call, next to its
+# CPU seconds. On server1 (2026-11-18, one binary against itself, 3 runs) the
+# model build's ratio held within about ±0.1 % (one 0.8 % jump in 12 builds;
+# n = 6), against sd(log) 0.084 in CPU seconds: ~27x; judged calls ~40-400x.
+# They do
+# not see memory stalls, cache misses or lost parallelism, so CPU and wall keep
+# judging; the instruction limit is ADVISORY (reported, never failing) until
+# real landings show what it would catch (docs/superpowers/notes/
+# 2026-11-18-tls83-speed-resolution.md). The events in use: both core types'
+# counters on a hybrid CPU, else the plain one; empty when perf cannot count.
+INSTR_EVENTS = ()
+INSTR_WHY = ""
+INSTR_LIMIT = 1.02
+# How long a call waits for perf to attach (its `ack`) before it goes uncounted.
+INSTR_ATTACH_S = float(os.environ.get("CDO_SPEED_INSTR_ATTACH_S", "5"))  # env: tests
+# Failed attaches in a row after which a server's calls go uncounted.
+INSTR_GIVE_UP = 3
+# How long perf may take to stop after SIGINT; longer ends the server's counting.
+INSTR_STOP_S = float(os.environ.get("CDO_SPEED_INSTR_STOP_S", "30"))  # env: tests
+HYBRID_EVENTS = ("cpu_core/instructions/u", "cpu_atom/instructions/u")
+# CDO_SPEED_PERF: a test hook, the perf command to run (a stub in the tests).
+PERF = os.environ.get("CDO_SPEED_PERF", "perf")
+
+
+def perf_event_args(events=None):
+    """`-e` arguments for `events`: at most ONE event per PMU (`cpu_core/...`,
+    `cpu_atom/...`, or the plain `instructions:u`). Instructions use the fixed
+    counter, so one event a PMU leaves nothing in this perf run to multiplex: a
+    count never comes out short because of our own events (review r1, sol). A
+    second event on a PMU is refused here, not added."""
+    events = events or INSTR_EVENTS
+    pmus = [e.split("/", 1)[0] if "/" in e else "" for e in events]
+    if len(pmus) != len(set(pmus)):
+        raise ValueError(f"cdo-speed: one perf event per PMU only (no multiplexing): {events}")
+    return [a for e in events for a in ("-e", e)]
+
+
+def instr_total(text, events=None):
+    """The summed count of `perf stat -x,` output for `events`, or None. An event
+    that never ran (a call that stayed on one core type) reads `<not counted>`:
+    0. Any other non-number (`<not supported>`), or an event missing, is None.
+    One event per PMU (`perf_event_args`) leaves nothing in this run to
+    multiplex. perf's time-share column is no self-check here: on a hybrid CPU a
+    core type's event is enabled all along but runs only while the task is on
+    that type, so enabled and running differ with no multiplexing at all (58 %
+    and 42 % for 4 threads, measured)."""
+    events = events or INSTR_EVENTS
+    seen, total = set(), 0
+    for line in text.splitlines():
+        cols = line.strip().split(",")
+        if len(cols) > 2 and cols[2] in events:
+            if cols[0].isdigit():
+                total += int(cols[0])
+            elif cols[0] != "<not counted>":
+                return None
+            seen.add(cols[2])
+    return total if seen == set(events) else None
+
+
+def instr_probe():
+    """(events, why): the events that count user-mode instructions here, or ((),
+    the reason none can). CDO_SPEED_INSTR=0 turns counting off."""
+    if os.environ.get("CDO_SPEED_INSTR") == "0":
+        return (), "off (CDO_SPEED_INSTR=0)"
+    why = "perf gave no count"
+    for events in (HYBRID_EVENTS, ("instructions:u",)):
+        try:
+            r = subprocess.run([PERF, "stat", "--no-scale", "-x,", *perf_event_args(events),
+                                "--", "true"], capture_output=True, text=True, timeout=30)
+        except (OSError, subprocess.TimeoutExpired) as e:
+            return (), f"perf did not run ({e})"
+        if r.returncode == 0 and instr_total(r.stderr, events):
+            return events, ""
+        why = (r.stderr.strip().splitlines() or [f"exit {r.returncode}"])[-1]
+    return (), f"perf cannot count user-mode instructions here ({why}); scripts/perf-probe"
+
+
 class Server:
     """One `alsem mcp` server over stdio (newline-delimited JSON-RPC)."""
 
@@ -714,12 +804,20 @@ class Server:
 
     def call(self, tool, args):
         """(wall s, CPU s, stdout sha256, exit code, first stderr lines) of one
-        tool call; exit code -1 when the engine failed (no CLI exit)."""
-        c0 = self.cpu()
-        t0 = time.monotonic()
-        r = self.request("tools/call", {"name": tool, "arguments": args})
-        wall = time.monotonic() - t0
-        cpu = self.cpu() - c0
+        tool call; exit code -1 when the engine failed (no CLI exit).
+        `self.last_instr` then holds the call's user-mode instructions, or None
+        when they are not counted (TLS-83)."""
+        perf = self.instr_start()
+        # instr_stop runs even when the call times out (SystemExit): perf and
+        # its FIFOs never outlive the call (review r1, sol).
+        try:
+            c0 = self.cpu()
+            t0 = time.monotonic()
+            r = self.request("tools/call", {"name": tool, "arguments": args})
+            wall = time.monotonic() - t0
+            cpu = self.cpu() - c0
+        finally:
+            self.last_instr = self.instr_stop(perf)
         self.sample_hwm()
         if "error" in r:
             raise SystemExit(f"cdo-speed: {self.name}: {tool}: {r['error']}")
@@ -735,6 +833,127 @@ class Server:
         if isinstance(err, str):
             err = err.splitlines()
         return wall, cpu, sha, env.get("exitCode", -1), [str(x) for x in err if x][:5]
+
+    # ⟨TLS-83⟩ User-mode instructions over a call (INSTR_EVENTS, chosen at the
+    # start by instr_probe), from `perf stat` attached to the server and its live
+    # children; threads and children they start during the call are counted too
+    # (inherit). Unscaled (`--no-scale`): an unpinned thread moves between core
+    # types, and perf's default scaling would inflate each type's partial count.
+    def instr_start(self):
+        # After INSTR_GIVE_UP attaches in a row fail, this server counts no more:
+        # each failure costs up to INSTR_ATTACH_S inside the CDO slot, 66 calls a
+        # run (review r1, sol).
+        if not INSTR_EVENTS or getattr(self, "instr_failures", 0) >= INSTR_GIVE_UP:
+            return None
+        started = self._instr_start()
+        self.instr_failures = 0 if started else getattr(self, "instr_failures", 0) + 1
+        if self.instr_failures == INSTR_GIVE_UP:
+            print(f"cdo-speed: {self.name}: perf failed to attach {INSTR_GIVE_UP} times in a row; "
+                  "this server's calls are not counted from here on", file=sys.stderr)
+        return started
+
+    def _instr_start(self):
+        # Counting must never fail a run (review r1, Fable: a fork that fails
+        # while the gate holds 16-28 GB, or a perf gone since the probe): the
+        # call is then just not counted.
+        # The call starts only once perf says its counters run: perf starts them
+        # disabled (`-D -1`), we write `enable` to its control FIFO and wait for
+        # its `ack` (at most INSTR_ATTACH_S). A fixed sleep raced a slow perf start
+        # under load and counted a call from part-way through (TLS-92's gate: a
+        # 0-count call). No ack in time: the call is not counted.
+        perf = ctl_fd = ack_fd = None
+        try:
+            attached = [self.p.pid, *descendants(self.p.pid)]
+            pids = ",".join(str(p) for p in attached)
+            work = tempfile.mkdtemp(prefix="perf-", dir=self.root)
+            out, ctl, ack = (os.path.join(work, n) for n in ("out.csv", "ctl", "ack"))
+            os.mkfifo(ctl)
+            os.mkfifo(ack)
+            ack_fd = os.open(ack, os.O_RDONLY | os.O_NONBLOCK)
+            perf = subprocess.Popen([PERF, "stat", "--no-scale", "-x,", *perf_event_args(),
+                                     "-D", "-1", "--control", f"fifo:{ctl},{ack}",
+                                     "-o", out, "-p", pids],
+                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            deadline = time.monotonic() + INSTR_ATTACH_S
+            # perf opens its end while parsing its options, BEFORE its counters
+            # exist: this wait does not mean they run. Only the `ack` below does
+            # (review r1, Fable; TLS-83's proof: without the ack wait, red).
+            while ctl_fd is None:
+                try:
+                    ctl_fd = os.open(ctl, os.O_WRONLY | os.O_NONBLOCK)
+                except OSError:  # ENXIO: no reader yet
+                    if time.monotonic() > deadline or perf.poll() is not None:
+                        raise
+                    time.sleep(0.005)
+            os.write(ctl_fd, b"enable\n")
+            got = b""
+            while b"ack" not in got:
+                left = deadline - time.monotonic()
+                if left <= 0 or not select.select([ack_fd], [], [], left)[0]:
+                    raise OSError("perf gave no ack")
+                chunk = os.read(ack_fd, 64)
+                if not chunk and perf.poll() is not None:
+                    raise OSError("perf ended before its ack")
+                got += chunk
+            # A process that appeared between the pid scan and the attach (an
+            # engine child restarted) is not counted, inherit or not: such a
+            # call's count would be partial (review r1, sol).
+            if set(descendants(self.p.pid)) - set(attached):
+                raise OSError("a server process started before perf attached")
+        except OSError:
+            for fd in (ctl_fd, ack_fd):
+                if fd is not None:
+                    os.close(fd)
+            if perf is not None:
+                perf.kill()
+                try:
+                    perf.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    pass
+            return None
+        return perf, out, (ctl_fd, ack_fd)
+
+    def instr_stop(self, started):
+        """The call's instruction count, or None when perf could not give it (the
+        call then has no instruction ratio; CPU and wall still judge it)."""
+        if started is None:
+            return None
+        perf, out, fds = started
+        # A perf that ended before we stopped it counted only part of the call
+        # (its output can still be valid CSV): no count (review r2, sol).
+        early = perf.poll() is not None
+        if not early:
+            perf.send_signal(signal.SIGINT)
+        try:
+            perf.wait(timeout=INSTR_STOP_S)
+        except subprocess.TimeoutExpired:
+            perf.kill()
+            try:
+                perf.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                pass
+            total = None
+            # A perf that hangs at its stop would cost 30 s on every call: this
+            # server counts no more (review r2, sol; an ack resets the attach
+            # streak, so the attach give-up alone did not catch it).
+            self.instr_failures = INSTR_GIVE_UP
+            print(f"cdo-speed: {self.name}: perf did not stop within {INSTR_STOP_S:g} s; "
+                  "this server's calls are not counted from here on", file=sys.stderr)
+        else:
+            if early:
+                total = None
+            else:
+                try:
+                    with open(out) as f:
+                        total = instr_total(f.read())
+                except OSError:
+                    total = None
+        for fd in fds:
+            os.close(fd)
+        shutil.rmtree(os.path.dirname(out), ignore_errors=True)
+        # No instruction at all (every event `<not counted>`) is no count: as a 0
+        # it would pull the round total down (review r1, Fable).
+        return total or None
 
     def sample_hwm(self):
         """Read the VmHWM of the server and every live child. Called after each
@@ -796,12 +1015,15 @@ def timed_call(server, side, cid, tool, args, rnd, warm_pass, tag, records):
     wall, cpu, sha, code, err = server.call(tool, args)
     exit_note = f"  exit {code}" if code != 0 else ""
     shown = "?" if pressure is None else f"{pressure:.1f}"
+    instr = getattr(server, "last_instr", None)
+    instr_note = "" if instr is None else f"  instr {instr / 1e9:8.3f}e9"
     log(f"  {tag} {cid:<12} {side:<5} wall {wall:7.2f} s  cpu {cpu:7.2f} s"
-        f"  load {load:5.1f}  pressure {shown:>5}{exit_note}")
+        f"  load {load:5.1f}  pressure {shown:>5}{instr_note}{exit_note}")
     if code != 0:
         raise CallFailed(f"{tag} {cid} ({tool}) on {side} exited {code}", err)
     records.append(dict(call=cid, side=side, round=rnd, warm_pass=warm_pass,
-                        wall=wall, cpu=cpu, sha=sha, load=load, pressure=pressure))
+                        wall=wall, cpu=cpu, sha=sha, load=load, pressure=pressure,
+                        instr=instr))
 
 
 def run_round(rnd, servers, records, warm_pass=0, skip=0):
@@ -836,9 +1058,11 @@ def judge(records):
     for side in ("base", "head"):
         for rnd in rounds:
             rs = [r for r in records if r["round"] == rnd and r["side"] == side]
+            instr = [r.get("instr") for r in rs]
             records.append(dict(call="round-total", side=side, round=rnd, total=True,
                                 wall=sum(r["wall"] for r in rs),
-                                cpu=sum(r["cpu"] for r in rs), sha=""))
+                                cpu=sum(r["cpu"] for r in rs), sha="",
+                                instr=sum(instr) if instr and None not in instr else None))
     calls.append("round-total")
     for cid in calls:
         rs = [r for r in records if r["call"] == cid]
@@ -847,7 +1071,10 @@ def judge(records):
         paired = sorted(set(a) & set(b))
         row = dict(call=cid, rounds=paired, same_output=(
             [a[k]["sha"] for k in paired] == [b[k]["sha"] for k in paired]))
-        for m in ("cpu", "wall"):
+        # ⟨TLS-83⟩ Instructions only where every paired call has a count.
+        counted = paired and all((a[k].get("instr") or 0) > 0 and (b[k].get("instr") or 0) > 0
+                                 for k in paired)
+        for m in ("cpu", "wall", "instr") if counted else ("cpu", "wall"):
             ratios = [b[k][m] / a[k][m] if a[k][m] > 0 else 1.0 for k in paired]
             row[m] = dict(base=statistics.median(a[k][m] for k in paired),
                           head=statistics.median(b[k][m] for k in paired),
@@ -963,6 +1190,13 @@ def main():
         log(f"built (no timing asked) in {t_built - t_start:.0f} s")
         return 0
     timed_hold(repo)
+    global INSTR_EVENTS, INSTR_WHY
+    INSTR_EVENTS, INSTR_WHY = instr_probe()
+    if INSTR_EVENTS:
+        log(f"instructions: counted per call ({', '.join(INSTR_EVENTS)}); advisory limit "
+            f"x{INSTR_LIMIT}")
+    else:
+        log(f"instructions: NOT counted, CPU and wall only: {INSTR_WHY}")
 
     log(f"base {base_sha[:10]} ({base_rev}) against head {head_label}; workspace {ws}")
     hooks = [f"{k}={os.environ[k]}" for k in TEST_HOOKS if k in os.environ]
@@ -1058,13 +1292,15 @@ def main():
     warm_rows, _ = judge([dict(r, round=r["warm_pass"] + 1) for r in warm_records])
     warm_rows = [r for r in warm_rows if r["call"] != "round-total"]
     for row in warm_rows:
-        for m in ("cpu", "wall"):
+        for m in ("cpu", "wall", "instr"):
+            if m not in row:
+                continue
             ratios = row[m]["ratios"]
             if ratios and min(ratios) > 0:
                 row[m]["ratio"] = statistics.geometric_mean(ratios)
         loads = [r["load"] for r in warm_records if r["call"] == row["call"]]
         row["load"] = dict(min=min(loads), max=max(loads))
-    failed = []
+    failed, advisories = [], []
     log(f"verdict, head/base (limits: rounds cpu {CPU_LIMIT} and wall {WALL_LIMIT} on the "
         f"median ratio, warm-up cpu {WARM_CPU_LIMIT} and wall {WARM_WALL_LIMIT}, memory "
         f"{MEM_LIMIT}; a call is judged "
@@ -1084,11 +1320,20 @@ def main():
         if warm:
             note += (f"  (x{'/x'.join(f'{x:.3f}' for x in c['ratios'])} by pass; load "
                      f"{row['load']['min']:.1f}-{row['load']['max']:.1f})")
+        i = row.get("instr")
+        instr_col = f"   instr x{i['ratio']:.4f}" if i else ""
         log(f"  {row['call']:<14} cpu {c['base']:7.2f} -> {c['head']:7.2f} s x{c['ratio']:.3f}"
             f"   wall {w['base']:7.2f} -> {w['head']:7.2f} s x{w['ratio']:.3f}"
-            f"   spread {c['spread']:.2f}/{w['spread']:.2f}{note}")
+            f"{instr_col}   spread {c['spread']:.2f}/{w['spread']:.2f}{note}")
         if not row["judged"]:
             continue
+        # ⟨TLS-83⟩ Advisory: reported, never failing (see INSTR_LIMIT), on the
+        # judged rows only: below the CPU-time cutoff a call is a few thousand
+        # instructions whose ratio swings (8 false advisories in a run of one
+        # binary against itself when tried on every row; review r1, sol).
+        if i and i["ratio"] > INSTR_LIMIT:
+            advisories.append(f"{row['call']}: instructions x{i['ratio']:.4f} "
+                              f"(advisory limit {INSTR_LIMIT}{', warm-up' if warm else ''})")
         if warm:
             if c["ratio"] > WARM_CPU_LIMIT:
                 failed.append(f"{row['call']}: CPU time x{c['ratio']:.2f} "
@@ -1107,6 +1352,18 @@ def main():
         " (every server process's VmHWM, summed)")
     if mem_ratio > MEM_LIMIT:
         failed.append(f"peak memory x{mem_ratio:.2f} (limit {MEM_LIMIT})")
+    # ⟨TLS-83⟩ The instruction ratios on the verdict line (cdo-gate's summary
+    # quotes it): the model build (warm-up) and the round total.
+    if INSTR_EVENTS:
+        shown = [f"{r['call']} x{r['instr']['ratio']:.4f}"
+                 for r in warm_rows + rows if r["call"] in ("build", "round-total") and "instr" in r]
+        instr_text = (f"instructions: {', '.join(shown) or 'no call fully counted'}; "
+                      f"advisory limit x{INSTR_LIMIT}"
+                      f"{', ADVISORY: ' + str(len(advisories)) + ' over' if advisories else ''}")
+    else:
+        instr_text = "instructions: not counted, CPU and wall only"
+    for line in advisories:
+        log(f"ADVISORY (not failing): {line}")
     elapsed = time.monotonic() - t_start
     label = under_load_label(calm, blocks)
     under = [i + 1 for i, (_, loaded) in enumerate(calm) if loaded]
@@ -1122,7 +1379,9 @@ def main():
                        pressure_start=pressure0, pressure_end=cpu_pressure()[0],
                        calm_pressure=CALM_PRESSURE, admitted_by_timeout=under,
                        stall_shares=dict(blocks), under_load=bool(label.startswith(" UNDER")),
-                       pressure_unknown=unknown, warm_samples=args.warm_samples),
+                       pressure_unknown=unknown, warm_samples=args.warm_samples,
+                       instructions=dict(events=list(INSTR_EVENTS), why_not=INSTR_WHY,
+                                         advisory_limit=INSTR_LIMIT, advisories=advisories)),
                   f, indent=1)
     log(f"build {t_built - t_start:.0f} s, timing {elapsed - (t_built - t_start):.0f} s, "
         f"load average {load0:.1f} at the start, {load_1min():.1f} at the end; "
@@ -1130,10 +1389,10 @@ def main():
     if failed:
         for line in failed:
             log(f"FAIL: {line}")
-        if label:
-            log(f"FAIL{label}")
+        # After the failures, not in parentheses: it must not read as the reason.
+        log(f"FAIL{label}; {instr_text}")
         return 1
-    log(f"PASS{label}")
+    log(f"PASS{label} ({instr_text})")
     return 0
 
 

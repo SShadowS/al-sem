@@ -17,6 +17,9 @@ fn private_slot<'a>(
         .env("CDO_SLOT_BUILD_NAMES", "tls89-none")
         .env("CDO_SLOT_BUILD_SCRIPTS", "tls89-none")
         .env_remove("CDO_SLOT_TOKEN")
+        // TLS-83: no instruction counting unless a test asks for it (a real
+        // perf on the stub servers adds 0.2 s a call and reads nothing useful).
+        .env("CDO_SPEED_INSTR", "0")
 }
 
 /// The speed gate pointed at an empty workspace, both sides this build's
@@ -2149,12 +2152,92 @@ for line in sys.stdin:
             open(me, "w").close()
         if calls == 6:
             burn(float(os.environ["STUB_BUILD_S"]) * (1.5 if second("tests") else 1.0))
+        # TLS-83: this process's user-mode instructions so far, for the stub perf
+        # (SPEED_PERF_STUB): 1e9 a call, times STUB_INSTR_HEAD on the head side.
+        factor = 1.0
+        if os.path.basename(sys.argv[0]) == "alsem-head":
+            factor = float(os.environ.get("STUB_INSTR_HEAD", "1"))
+            # STUB_INSTR_ZERO_CALL=N: head's N-th call (per server) retires none.
+            if str(calls) == os.environ.get("STUB_INSTR_ZERO_CALL"):
+                factor = 0.0
+        counter = os.path.join(os.environ["STUB_DIR"], f"instr.{os.getpid()}")
+        done = int(open(counter).read()) if os.path.exists(counter) else 0
+        with open(counter, "w") as f:
+            f.write(str(done + int(1e9 * factor)))
         result = {"structuredContent": {"exitCode": 0, "stdoutText": "ok"}}
     else:
         result = {}
     print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": result}), flush=True)
 if os.path.exists(me):
     os.remove(me)
+"#;
+
+/// ⟨TLS-83⟩ A stand-in `perf` (cdo-speed's CDO_SPEED_PERF test hook): the
+/// probe (`... -- true`) reads a count; attached (`-p <pids> -o <file>`), it
+/// writes, on SIGINT, how far the stub servers' published counters
+/// (`$STUB_DIR/instr.<pid>`) moved since it started, as `perf stat -x,` does on
+/// a hybrid CPU (one core type `<not counted>`). It speaks perf's control FIFO
+/// (`-D -1 --control fifo:<ctl>,<ack>`): it counts from `enable` and answers
+/// `ack`; STUB_PERF_SLOW=<s> delays its counters between `enable` and `ack`, as
+/// perf's event setup does. STUB_PERF_NONE: every attach
+/// reads `<not counted>` on both. STUB_PERF_VANISH: it deletes itself after the
+/// probe, so starting it for a call fails. STUB_PERF_NOACK: it never answers
+/// `ack`.
+const SPEED_PERF_STUB: &str = r#"#!/usr/bin/env python3
+import os, signal, sys, time
+a = sys.argv[1:]
+def total(pids):
+    s = 0
+    for p in pids:
+        f = os.path.join(os.environ["STUB_DIR"], f"instr.{p}")
+        if os.path.exists(f):
+            s += int(open(f).read())
+    return s
+def lines(n):
+    if os.environ.get("STUB_PERF_NONE") and "--" not in a:
+        n = "<not counted>"
+    return (f"{n},,cpu_core/instructions/u,1,100.00,,\n"
+            "<not counted>,,cpu_atom/instructions/u,0,0.00,,\n")
+if "--" in a:
+    sys.stderr.write(lines(1000))
+    if os.environ.get("STUB_PERF_VANISH"):
+        os.remove(sys.argv[0])  # gone after the probe: every attach then fails to start
+    sys.exit(0)
+out = a[a.index("-o") + 1]
+pids = a[a.index("-p") + 1].split(",")
+with open(os.path.join(os.environ["STUB_DIR"], "perf-attaches"), "a") as f:
+    f.write(pids[0] + "\n")  # the server's pid (cdo-speed lists it first)
+# perf's `-D -1 --control fifo:<ctl>,<ack>`: counting starts at `enable`, then
+# `ack` (cdo-speed waits for it before the call). STUB_PERF_SLOW: slow counters.
+assert a[a.index("-D") + 1] == "-1", a
+ctl, ack = a[a.index("--control") + 1].split(":", 1)[1].split(",")
+start = 0
+def stop(*_):
+    with open(out, "w") as f:
+        # STUB_PERF_EARLY writes a fixed positive count: one measured right
+        # after the ack can be 0, which a reader may not take for a count, so a
+        # break that reads the early output could pass (TLS-83 r3, sol).
+        f.write(lines(1000000 if os.environ.get("STUB_PERF_EARLY") else total(pids) - start))
+    sys.exit(0)
+# Installed before the `ack` (review r1, sol): a fast call may SIGINT us at once.
+# STUB_PERF_NOSTOP: SIGINT does nothing (a perf hanging at its stop).
+signal.signal(signal.SIGINT, signal.SIG_IGN if os.environ.get("STUB_PERF_NOSTOP") else stop)
+with open(ctl) as c:
+    assert c.readline().strip() == "enable"
+    # Like perf, the counters come up some time after `enable`; only the `ack`
+    # says they run. STUB_PERF_NOACK: never.
+    time.sleep(float(os.environ.get("STUB_PERF_SLOW", "0")))
+    while os.environ.get("STUB_PERF_NOACK"):
+        time.sleep(0.05)
+    start = total(pids)
+    with open(ack, "w") as k:
+        k.write("ack\n")
+# STUB_PERF_EARLY: it ends right after the `ack`, with valid output (a count of
+# only part of the call).
+if os.environ.get("STUB_PERF_EARLY"):
+    stop()
+while True:
+    time.sleep(0.05)
 "#;
 
 #[cfg(target_os = "linux")]
@@ -2168,6 +2251,11 @@ fn speed_with_stub(
     let stub = dir.join("alsem");
     std::fs::write(&stub, SPEED_STUB).unwrap();
     std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+    // TLS-83: head runs under its own name, so the stub can tell the sides apart.
+    let head = dir.join("alsem-head");
+    if !head.exists() {
+        std::os::unix::fs::symlink(&stub, &head).unwrap();
+    }
     let state = dir.join(format!("state-{}", extra.join("-")));
     std::fs::create_dir_all(&state).unwrap();
     std::fs::write(dir.join("loadavg"), load).unwrap();
@@ -2186,7 +2274,7 @@ fn speed_with_stub(
         .args(["--base-exe"])
         .arg(&stub)
         .arg("--head-exe")
-        .arg(&stub)
+        .arg(&head)
         .args(["--rounds", "1", "--max-rounds", "1", "--out"])
         .arg(state.join("out"))
         .args(extra)
@@ -2208,6 +2296,310 @@ fn speed_with_stub(
         String::from_utf8_lossy(&out.stderr)
     );
     (out.status.code(), text)
+}
+
+/// ⟨TLS-83⟩ cdo-speed counts each call's user-mode instructions (a stub perf,
+/// SPEED_PERF_STUB, reading what the stub servers publish) and reports the
+/// instruction ratio per call, and on its verdict line for the model build and
+/// the round total. The limit (x1.02) is ADVISORY: a head doing 5 % more work
+/// is reported ("ADVISORY (not failing)") and still PASSes. When perf cannot
+/// count, the run says so and judges CPU and wall only, as before.
+///
+/// Mutations (2026-11-18): the advisory appended to `failed` instead -> the 5 %
+/// head FAILs (red); the instruction summary dropped from the verdict line ->
+/// no `instructions: build x1.0500` there (red); `instr_probe` treating a perf
+/// that cannot run as counting -> the run without perf breaks instead of
+/// falling back (red). Each restored, green. Review r1 (Fable): the OSError
+/// guard in `instr_start` narrowed away -> the vanished perf breaks the run
+/// (red); `instr_stop` returning a 0 count -> `round-total x0.8333` with one
+/// uncounted call (red; the all-calls-uncounted case alone stayed GREEN under
+/// this break, both sides' totals being 0, hence the one-call case). Each
+/// restored, green. TLS-92's gate (2026-11-18): the wait for perf's `ack` skipped
+/// -> "no call fully counted" under a stand-in perf whose counters come up 0.5 s
+/// after `enable` (red; with the delay BEFORE the FIFO open instead, the break
+/// stayed GREEN: the open itself synchronized, so the stub now lags where real
+/// perf does). Restored, green.
+#[cfg(target_os = "linux")]
+#[test]
+fn speed_reports_instructions_and_their_limit_is_advisory() {
+    use std::os::unix::fs::PermissionsExt;
+    let bin = tempfile::tempdir().unwrap();
+    let perf = bin.path().join("perf");
+    std::fs::write(&perf, SPEED_PERF_STUB).unwrap();
+    std::fs::set_permissions(&perf, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let perf = perf.to_str().unwrap();
+    let verdict = |text: &str| -> String {
+        text.lines()
+            .rfind(|l| l.contains("cdo-speed: PASS") || l.contains("cdo-speed: FAIL"))
+            .unwrap_or_else(|| panic!("a verdict line: {text}"))
+            .to_string()
+    };
+
+    // Head does 5 % more work: reported, advisory, still a PASS.
+    let dir = tempfile::tempdir().unwrap();
+    let (code, text) = speed_with_stub(
+        dir.path(),
+        "1.0",
+        &[],
+        &[
+            ("CDO_SPEED_INSTR", "1"),
+            ("CDO_SPEED_PERF", perf),
+            ("STUB_INSTR_HEAD", "1.05"),
+        ],
+    );
+    assert_eq!(code, Some(0), "an advisory must not fail the run: {text}");
+    let v = verdict(&text);
+    assert!(
+        v.contains("cdo-speed: PASS")
+            && v.contains(
+                "instructions: build x1.0500, round-total x1.0500; advisory limit x1.02, ADVISORY: "
+            ),
+        "{text}"
+    );
+    assert!(
+        text.contains("ADVISORY (not failing): build: instructions x1.0500"),
+        "{text}"
+    );
+
+    // The same work: x1.0000, no advisory. The stand-in perf starts 0.5 s late
+    // (longer than the old fixed 0.2 s attach wait, which then counted the call
+    // from part-way, a 0: TLS-92's gate): every call is still counted whole,
+    // round total included, since the call waits for perf's `ack`.
+    let dir = tempfile::tempdir().unwrap();
+    let (code, text) = speed_with_stub(
+        dir.path(),
+        "1.0",
+        &[],
+        &[
+            ("CDO_SPEED_INSTR", "1"),
+            ("CDO_SPEED_PERF", perf),
+            ("STUB_PERF_SLOW", "0.5"),
+        ],
+    );
+    assert_eq!(code, Some(0), "{text}");
+    assert!(
+        verdict(&text)
+            .contains("(instructions: build x1.0000, round-total x1.0000; advisory limit x1.02)"),
+        "{text}"
+    );
+    assert!(!text.contains("ADVISORY"), "{text}");
+
+    // No perf: said, and CPU and wall only.
+    let dir = tempfile::tempdir().unwrap();
+    let (code, text) = speed_with_stub(
+        dir.path(),
+        "1.0",
+        &[],
+        &[
+            ("CDO_SPEED_INSTR", "1"),
+            ("CDO_SPEED_PERF", "/nonexistent/perf"),
+        ],
+    );
+    assert_eq!(code, Some(0), "{text}");
+    assert!(
+        text.contains("instructions: NOT counted, CPU and wall only"),
+        "{text}"
+    );
+    assert!(
+        verdict(&text).contains("(instructions: not counted, CPU and wall only)"),
+        "{text}"
+    );
+
+    // Review r1 (Fable): perf gone after the probe (starting it for a call
+    // fails): the calls are not counted, and the run still passes.
+    let gone = tempfile::tempdir().unwrap();
+    let gone_perf = gone.path().join("perf");
+    std::fs::write(&gone_perf, SPEED_PERF_STUB).unwrap();
+    std::fs::set_permissions(&gone_perf, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let (code, text) = speed_with_stub(
+        dir.path(),
+        "1.0",
+        &[],
+        &[
+            ("CDO_SPEED_INSTR", "1"),
+            ("CDO_SPEED_PERF", gone_perf.to_str().unwrap()),
+            ("STUB_PERF_VANISH", "1"),
+        ],
+    );
+    assert_eq!(code, Some(0), "counting broke the run: {text}");
+    assert!(
+        verdict(&text).contains("(instructions: no call fully counted; advisory limit x1.02)"),
+        "{text}"
+    );
+
+    // Review r1 (Fable): calls with no instruction counted on either core type
+    // are not counted (a 0 pulled the round total down).
+    let dir = tempfile::tempdir().unwrap();
+    let (code, text) = speed_with_stub(
+        dir.path(),
+        "1.0",
+        &[],
+        &[
+            ("CDO_SPEED_INSTR", "1"),
+            ("CDO_SPEED_PERF", perf),
+            ("STUB_PERF_NONE", "1"),
+        ],
+    );
+    assert_eq!(code, Some(0), "{text}");
+    assert!(
+        verdict(&text).contains("(instructions: no call fully counted; advisory limit x1.02)"),
+        "{text}"
+    );
+
+    // ... and ONE such call among counted ones (head's 9th call on the rounds'
+    // server, a round call) leaves that call and the round total uncounted, not
+    // a total pulled down by a 0.
+    let dir = tempfile::tempdir().unwrap();
+    let (code, text) = speed_with_stub(
+        dir.path(),
+        "1.0",
+        &[],
+        &[
+            ("CDO_SPEED_INSTR", "1"),
+            ("CDO_SPEED_PERF", perf),
+            ("STUB_INSTR_ZERO_CALL", "9"),
+        ],
+    );
+    assert_eq!(code, Some(0), "{text}");
+    let v = verdict(&text);
+    assert!(
+        v.contains("(instructions: build x1.0000; advisory limit x1.02)"),
+        "the round total took a 0: {text}"
+    );
+
+    // Review r1 (sol): a perf that never acks costs each server at most
+    // INSTR_GIVE_UP waits, then its calls go uncounted, said once.
+    let dir = tempfile::tempdir().unwrap();
+    let (code, text) = speed_with_stub(
+        dir.path(),
+        "1.0",
+        &[],
+        &[
+            ("CDO_SPEED_INSTR", "1"),
+            ("CDO_SPEED_PERF", perf),
+            ("STUB_PERF_NOACK", "1"),
+            ("CDO_SPEED_INSTR_ATTACH_S", "0.3"),
+        ],
+    );
+    assert_eq!(code, Some(0), "{text}");
+    let gave_up = text
+        .matches("perf failed to attach 3 times in a row")
+        .count();
+    assert!(gave_up > 0, "no give-up: {text}");
+    // No server tried more than 3 times (the stub logs each attach with its
+    // server's pid; a server with fewer calls tries fewer times), and those that
+    // gave up tried exactly 3. Break: the give-up's early return dropped -> a
+    // server tries on every call (red; the message alone stayed GREEN under that
+    // break, since it is printed at the third failure either way).
+    let mut per_server = std::collections::BTreeMap::<String, usize>::new();
+    for pid in std::fs::read_to_string(dir.path().join("state-/perf-attaches"))
+        .unwrap()
+        .lines()
+    {
+        *per_server.entry(pid.to_string()).or_default() += 1;
+    }
+    assert!(
+        per_server.values().all(|&n| n <= 3),
+        "attaches went on after the give-up: {per_server:?}"
+    );
+    assert_eq!(
+        per_server.values().filter(|&&n| n == 3).count(),
+        gave_up,
+        "{per_server:?}"
+    );
+    assert!(
+        verdict(&text).contains("(instructions: no call fully counted; advisory limit x1.02)"),
+        "{text}"
+    );
+
+    // Review r2 (sol): a perf that acks but never stops ends its server's
+    // counting at the first stop timeout. Break: no give-up on a stop timeout
+    // (each ack resets the attach streak: every call tries again).
+    let dir = tempfile::tempdir().unwrap();
+    let (code, text) = speed_with_stub(
+        dir.path(),
+        "1.0",
+        &[],
+        &[
+            ("CDO_SPEED_INSTR", "1"),
+            ("CDO_SPEED_PERF", perf),
+            ("STUB_PERF_NOSTOP", "1"),
+            ("CDO_SPEED_INSTR_STOP_S", "0.3"),
+        ],
+    );
+    assert_eq!(code, Some(0), "{text}");
+    assert!(text.contains("perf did not stop within 0.3 s"), "{text}");
+    let mut per_server = std::collections::BTreeMap::<String, usize>::new();
+    for pid in std::fs::read_to_string(dir.path().join("state-/perf-attaches"))
+        .unwrap()
+        .lines()
+    {
+        *per_server.entry(pid.to_string()).or_default() += 1;
+    }
+    assert!(
+        per_server.values().all(|&n| n == 1),
+        "a server kept counting after perf hung at its stop: {per_server:?}"
+    );
+
+    // Review r2 (sol): a perf that ended before cdo-speed stopped it (valid
+    // output, part of the call) gives no count. Break: its output read anyway
+    // (every call counted, x1.0000).
+    let dir = tempfile::tempdir().unwrap();
+    let (code, text) = speed_with_stub(
+        dir.path(),
+        "1.0",
+        &[],
+        &[
+            ("CDO_SPEED_INSTR", "1"),
+            ("CDO_SPEED_PERF", perf),
+            ("STUB_PERF_EARLY", "1"),
+        ],
+    );
+    assert_eq!(code, Some(0), "{text}");
+    assert!(
+        verdict(&text).contains("(instructions: no call fully counted; advisory limit x1.02)"),
+        "a perf that ended early was counted: {text}"
+    );
+}
+
+/// ⟨TLS-83⟩ The REAL perf counts the stub servers' calls: one binary twice, so
+/// every ratio is about 1 and no line says "not counted". This pins perf's
+/// actual output format (event names, `-x,` columns, `<not counted>`), which the
+/// stub perf only imitates. Skipped, saying so, where perf cannot count
+/// user-mode instructions (CI, a host whose perf sysctls reset).
+#[cfg(target_os = "linux")]
+#[test]
+fn speed_counts_instructions_with_the_real_perf() {
+    let can = std::process::Command::new("perf")
+        .args(["stat", "-x,", "-e", "instructions:u", "--", "true"])
+        .output()
+        .map(|o| {
+            o.status.success()
+                && String::from_utf8_lossy(&o.stderr).lines().any(|l| {
+                    l.split(',')
+                        .next()
+                        .is_some_and(|n| n.parse::<u64>().is_ok())
+                })
+        })
+        .unwrap_or(false);
+    if !can {
+        eprintln!("skipped: perf cannot count user-mode instructions here");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (code, text) = speed_with_stub(dir.path(), "1.0", &[], &[("CDO_SPEED_INSTR", "1")]);
+    assert_eq!(code, Some(0), "{text}");
+    let v = text
+        .lines()
+        .rfind(|l| l.contains("cdo-speed: PASS"))
+        .unwrap_or_else(|| panic!("{text}"))
+        .to_string();
+    assert!(
+        v.contains("(instructions: build x") && v.contains("round-total x"),
+        "{text}"
+    );
+    assert!(text.contains("instructions: counted per call"), "{text}");
 }
 
 /// TLS-65 and TLS-79: the warm-up is timed twice, on fresh server pairs, the
