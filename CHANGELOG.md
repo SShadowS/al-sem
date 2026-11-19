@@ -554,6 +554,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   An unguarded command (most Bash calls) costs Python's start and the command-line parse; only
   a guarded one runs `cdo-slot probe`. During a timing the `timed.lock` probe adds its 0.1 s
   confirming wait. Script: `guard_latency.py` (TLS-89 scratch, not in the tree).
+- **Fixed at the manual landing: a timing in the real slot folder.** All test phases of the
+  manual cdo-gate passed; its speed phase failed with `--timed: the timing lock was not taken`
+  (exit 5). The real slot folder held a FILE named `timed`, a timing mark that TLS-89's first
+  design wrote there on 2026-11-18, and the timing keeper's `mkdir -p .../timed` failed on it.
+  The tests start in empty folders, so none saw it. Three fixes:
+  - **The timing files' folder is `timings`**, a name no earlier version used.
+  - **A folder the timing cannot make** is a refusal that names it (exit 5); a hold keeper that
+    ends on its own stops a waiting acquire with its reason, instead of retrying forever.
+  - **A keeper's stderr reached nobody.** It closed its inherited fds in a loop run under
+    `2>/dev/null`; bash keeps the real stderr on a spare fd above 2 for the loop's length,
+    the loop closed that fd too, and every later message was lost. The loop has no redirect
+    now, and a keeper that ends without a word has its stderr shown in the refusal.
+
+  `cdo_slot_works_in_a_folder_an_older_version_left` runs cdo-gate's hold and cdo-speed's
+  timed share, as they call them, in a folder holding that `timed` file, a `meta` file and a
+  status with no hold id.
+- **One-time switch to this design.** A land run by the OLD cdo-slot holds the slot in the old
+  format (no hold id), which the new scripts cannot recognize as their own hold, so a new
+  cdo-gate inside it waits forever (TLS-89's landing hung 4 h). Land TLS-89 by running the new
+  cdo-gate from the landing tree on a free slot, then merge-and-push.
 - **What it cannot see.** The hook sees a command only when it starts. A command it allowed
   before the timing began that starts a build later (`sleep 60; cargo build`) is not stopped,
   and neither is a build started outside any hooked session. TLS-98 plans a cargo wrapper lock

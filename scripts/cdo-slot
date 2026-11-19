@@ -86,7 +86,9 @@ self=$(realpath "$0")
 dir=$(realpath -m "${CDO_SLOT_DIR:-/work/.al-sem/cdo-slot}")
 lock="$dir/lock"
 ids="$dir/id"
-tdir="$dir/timed"
+# Not `timed`: TLS-89's first design kept a timing mark in a FILE of that name,
+# and one left in the real slot folder stopped every timing (its manual landing).
+tdir="$dir/timings"
 timed_lock="$dir/timed.lock"
 status_file="$dir/status"
 mem_min="${CDO_SLOT_MEM_MIN_GB:-35}"
@@ -298,7 +300,7 @@ timed_describe() {
 # take_hold <owner> <reason> <token> <kind>: take the hold in THIS process: the
 # hold lock, then a fresh id lock, then the status. 0: taken (hid set); 1: held.
 take_hold() {
-    mkdir -p "$ids"
+    mkdir -p "$ids" || die "cannot make the folder $ids (something else has the name?)"
     local lfd hfd
     # Test hook: the window between the acquire's checks and the hold lock.
     [[ -z "${CDO_SLOT_TEST_PAUSE_TAKE_S:-}" ]] || test_pause "$CDO_SLOT_TEST_PAUSE_TAKE_S"
@@ -340,7 +342,10 @@ hid=$hid" || die "cannot write the status $status_file (exiting drops the hold)"
 # timing lock stayed taken for CDO_SLOT_LOCK_WAIT_S (only a probe takes it
 # exclusive, for an instant: a stopped or hung one; why says who).
 take_timed() {
-    mkdir -p "$ids" "$tdir"
+    if ! mkdir -p "$ids" "$tdir" 2>/dev/null; then
+        why="cannot make the folders $ids and $tdir (something else has one of the names?)"
+        return 5
+    fi
     local tfd xfd
     exec {tfd}>"$timed_lock"
     if ! flock -s -w "$lock_wait" "$tfd"; then
@@ -379,10 +384,17 @@ drop_timed() {
 keeper() {
     local fd
     # Keep no descriptor of the caller (a pipe it waits on, a lock of a run).
+    # No `2>/dev/null` on the loop: bash keeps the real stderr on a spare fd
+    # above 2 for the loop's length, the loop closed that fd too, and stderr was
+    # lost for good (TLS-89's manual landing: a keeper's death said nothing).
+    # Closing an fd that is not open is silent anyway. An `if`, not `&&`: under
+    # `set -e` a false last test would end the keeper.
     for fd in /proc/$$/fd/*; do
         fd=${fd##*/}
-        [ "$fd" -gt 2 ] && eval "exec $fd>&-"
-    done 2>/dev/null
+        if [[ "$fd" =~ ^[0-9]+$ ]] && ((fd > 2)); then
+            eval "exec $fd>&-"
+        fi
+    done
     me_session=$CS_SESSION me_pid=$CS_PID bind=$CS_BIND bind_start=$CS_BIND_START
     local id rc=0
     case "$1" in
@@ -427,12 +439,12 @@ spawn_keeper() {
     CS_OWNER="$2" CS_REASON="$3" CS_TOKEN="$4" CS_BIND="$bind" CS_BIND_START="$bind_start" \
         CS_SESSION="$me_session" CS_PID="$me_pid" CS_PID_START="$(proc_start "${me_pid:-0}")" \
         CS_WRITER="$$" CS_WRITER_START="$(proc_start $$)" CS_READY="$ready" \
-        setsid bash "$self" _keep "$1" </dev/null >/dev/null 2>&1 &
+        setsid bash "$self" _keep "$1" </dev/null >/dev/null 2>"$ready.err" &
     local child=$!
     for n in $(seq 1200); do
         if [[ -s "$ready" ]]; then
             read -r line <"$ready"
-            rm -f "$ready"
+            rm -f "$ready" "$ready.err"
             if [[ "$line" == fail* ]]; then
                 why=${line#fail }
                 return 1
@@ -447,12 +459,20 @@ spawn_keeper() {
             # ended just after the check above: read it then (TLS-89's
             # 3x-under-load check lost a refusal's why this way).
             [[ -s "$ready" ]] && continue
-            rm -f "$ready"
+            local krc=0
+            wait "$child" 2>/dev/null || krc=$?
+            # 75: another acquirer took the hold lock first (plain contention).
+            # Any other end without a word: say what it printed (a keeper's
+            # stderr goes to this file; TLS-89's manual landing got only "not
+            # taken").
+            ((krc == 75)) \
+                || why="its keeper ended (exit $krc) before it took its locks: $(tail -n 3 "$ready.err" 2>/dev/null | tr '\n' ' ')"
+            rm -f "$ready" "$ready.err"
             return 1
         fi
         sleep 0.05
     done
-    rm -f "$ready"
+    rm -f "$ready" "$ready.err"
     kill "$child" 2>/dev/null || true
     why="its keeper did not start"
     return 1
@@ -741,6 +761,7 @@ acquire() {
         trap dequeue EXIT
     fi
     while :; do
+        why=""
         if [[ -n "$ticket" ]]; then
             # A ticket removed under us (by hand) is made again, at the back.
             [[ -e "$ticket" ]] || enqueue
@@ -776,6 +797,9 @@ acquire() {
                     echo "cdo-slot: taken by $owner ($reason)"
                     return 0
                 else
+                    # A keeper that ended on its own (a folder it cannot make)
+                    # will not do better on the next try: say why, stop.
+                    [[ "$why" != "its keeper ended"* ]] || die "not taken: $why"
                     state
                     if [[ "$st" != free ]]; then
                         why=$(describe)

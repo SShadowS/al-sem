@@ -2161,3 +2161,85 @@ fn cdo_slot_release_ignores_other_openers_of_the_hold_file() {
     assert_eq!(s.run("B", &["status"], &[]), (Some(0), "free\n".into()));
     drop(opener);
 }
+
+/// ⟨TLS-89's manual landing⟩ The real slot folder keeps what older versions
+/// wrote: a `timed` FILE (TLS-89's first design kept a timing mark there), a
+/// `meta` lock file, a status with no hold id. In it, cdo-gate's hold (`acquire
+/// --wait --bind <its pid>`, its token exported) and cdo-speed's timed share
+/// (`acquire --wait --bind <its pid> --timed`, the same token) must work: the
+/// landing's speed phase got "--timed: the timing lock was not taken" (exit 5),
+/// its keeper dead at `mkdir -p .../timed` on that file. And a folder the
+/// timing cannot make is a refusal that names it, never a silent keeper death.
+///
+/// Mutations (2026-11-19): the timing folder named `timed` again -> the share
+/// exits 5 (red); the `mkdir` check in `take_timed` dropped (the keeper dies
+/// under `set -e`) -> the refusal names no folder, only the keeper's end (red).
+/// Each restored, green.
+#[test]
+fn cdo_slot_works_in_a_folder_an_older_version_left() {
+    let s = Slot::new();
+    std::fs::create_dir_all(s.dir()).unwrap();
+    std::fs::write(
+        s.dir().join("timed"),
+        "owner=cdo-speed\nreason=cdo-speed timing\nsince=2026-11-18T02:36:11Z\npid=2141252\n",
+    )
+    .unwrap();
+    std::fs::write(s.dir().join("meta"), "").unwrap();
+    std::fs::write(
+        s.dir().join("status"),
+        "owner=old\nreason=x\nsince=2026-11-18T00:00:00Z\nsession=old\nholder_pid=1\ntoken=t\n",
+    )
+    .unwrap();
+    let token = ("CDO_SLOT_TOKEN", "tls89-gate");
+    let gate = sleeper();
+    let gpid = gate.id().to_string();
+    let (code, text) = s.run(
+        "G",
+        &["acquire", "cdo-gate", "cdo-gate", "--wait", "--bind", &gpid],
+        &[token],
+    );
+    assert_eq!(code, Some(0), "{text}");
+    let speed = sleeper();
+    let spid = speed.id().to_string();
+    let (code, text) = s.run(
+        "G",
+        &[
+            "acquire",
+            "cdo-speed",
+            "cdo-speed timing",
+            "--wait",
+            "--bind",
+            &spid,
+            "--timed",
+        ],
+        &[token],
+    );
+    assert_eq!(
+        code,
+        Some(4),
+        "the speed phase's timed share failed: {text}"
+    );
+    assert!(text.contains("timed by cdo-speed"), "{text}");
+    assert_eq!(s.probe(), "held=1 own=0 timed=1");
+    drop(speed);
+    drop(gate);
+    until("free", &|| s.probe() == "held=0 own=0 timed=0");
+
+    // The timing folder's name taken by a file (a slot of its own): a refusal
+    // that names it.
+    let s = Slot::new();
+    std::fs::create_dir_all(s.dir()).unwrap();
+    std::fs::write(s.dir().join("timings"), "").unwrap();
+    assert_eq!(s.run("A", &["acquire", "lane", "by hand"], &[]).0, Some(0));
+    let t = sleeper();
+    let tpid = t.id().to_string();
+    let (code, text) = s.run(
+        "A",
+        &["acquire", "lane", "timing", "--bind", &tpid, "--timed"],
+        &[],
+    );
+    assert_eq!(code, Some(5), "{text}");
+    assert!(text.contains("cannot make the folders"), "{text}");
+    assert_eq!(s.probe(), "held=1 own=0 timed=0", "nothing timed");
+    assert_eq!(s.run("A", &["release"], &[]).0, Some(0));
+}
