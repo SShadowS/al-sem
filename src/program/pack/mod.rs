@@ -84,7 +84,9 @@ use crate::program::resolve::decl_surface::RoutineMeta;
 /// 19: `DatasetNode::request_page_hidden` (ENG-19, a report's `UseRequestPage`).
 /// 20: grammar v5.3.0 (GRM-04): four new `RawKind`s shift the positional kind index.
 /// 21: `RoutineNodeId::request_page` (ENG-20, a request page's own trigger).
-pub const PACK_SCHEMA: u32 = 21;
+/// 22: grammar v5.4.0 (GRM-05): the new `PreprocConditionalExtends` shifts the
+/// positional kind index.
+pub const PACK_SCHEMA: u32 = 22;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PackedFile {
@@ -564,8 +566,9 @@ mod tests {
         let bytes = encode(&pack).expect("encode");
         assert_eq!(
             blake3::hash(&bytes).to_hex().as_str(),
-            // Schema 21 (ENG-20): every `RoutineNodeId` writes its `request_page` flag.
-            "cd5078ff66b20481fd62a1937815c211aab7e0123f739adef33252729c72784a",
+            // Schema 22 (GRM-05): grammar v5.4.0's new kind shifts the positional kind
+            // index (schema 21, ENG-20: `cd5078ff…`).
+            "0c347209c461511f79e802a85f5dc04f3be7d3cbf85d9fe6ebf8872bf2b81929",
             "the pack's serialized form changed: bump PACK_SCHEMA and re-pin"
         );
     }
@@ -580,7 +583,7 @@ mod tests {
     /// Stated precondition: set by assignment, whatever the fixture holds.
     #[test]
     fn pack_round_trips_method_ids() {
-        assert_eq!(PACK_SCHEMA, 21);
+        assert_eq!(PACK_SCHEMA, 22);
         let mut pack = sample_pack();
         pack.files[0].routines[0].abi_method_id = Some(-42);
         pack.files[0].routines[0].publisher_isolated = true;
