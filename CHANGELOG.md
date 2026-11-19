@@ -48,12 +48,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that name it (d4, d18, d65); `alsem graph` node ids (`r:`, read by bc-dev-mcp) and graphify
   ids; and an `alsem diff` snapshot's event `parameters` list for such a parameter name. A
   word-final capital `Σ` moves stable routine and event ids only (graph node ids already folded
-  it). The chars: Turkish `İ` (now apart from `i`), the capital `ẞ` (now apart from `ß`), the
-  Kelvin `K`, Ohm `Ω` and Ångström `Å` signs (now apart from `k`, `ω`, `å`), micro `µ` (now one
-  with Greek `μ`), `ς` anywhere and a word-final capital `Σ` (now one with `σ`), the Greek symbol
-  variants `ϐ ϑ ϕ ϖ ϰ ϱ ϵ ϴ` and iota forms U+0345/U+1FBE, `ẛ`, and the Cyrillic variant letters
-  U+1C80-1C88 (now one with their letters, `ϴ` now apart from `θ`). Names using only ASCII and
-  the Latin letters of real BC names keep their ids; dotless `ı` keeps its own. If a project's names hold one of these: a baseline
+  it). The 27 chars whose fold changed (measured over every Unicode scalar; "was" is the old
+  fold, "now" the compiler's):
+
+  | char | code point | name | was | now |
+  |---|---|---|---|---|
+  | `µ` | U+00B5 | micro sign | `µ` | `μ` (one with Greek mu) |
+  | `İ` | U+0130 | Latin capital I with dot above | `i` | `İ` (apart from `i`) |
+  | `ͅ` | U+0345 | combining Greek ypogegrammeni | itself | `ι` U+03B9 |
+  | `ς` | U+03C2 | Greek final small sigma | `ς` | `σ` |
+  | `ϐ` | U+03D0 | Greek beta symbol | `ϐ` | `β` |
+  | `ϑ` | U+03D1 | Greek theta symbol | `ϑ` | `θ` |
+  | `ϕ` | U+03D5 | Greek phi symbol | `ϕ` | `φ` |
+  | `ϖ` | U+03D6 | Greek pi symbol | `ϖ` | `π` |
+  | `ϰ` | U+03F0 | Greek kappa symbol | `ϰ` | `κ` |
+  | `ϱ` | U+03F1 | Greek rho symbol | `ϱ` | `ρ` |
+  | `ϴ` | U+03F4 | Greek capital theta symbol | `θ` | `ϴ` (apart from `θ`) |
+  | `ϵ` | U+03F5 | Greek lunate epsilon symbol | `ϵ` | `ε` |
+  | `ᲀ` | U+1C80 | Cyrillic small rounded ve | `ᲀ` | `в` |
+  | `ᲁ` | U+1C81 | Cyrillic small long-legged de | `ᲁ` | `д` |
+  | `ᲂ` | U+1C82 | Cyrillic small narrow o | `ᲂ` | `о` |
+  | `ᲃ` | U+1C83 | Cyrillic small wide es | `ᲃ` | `с` |
+  | `ᲄ` | U+1C84 | Cyrillic small tall te | `ᲄ` | `т` |
+  | `ᲅ` | U+1C85 | Cyrillic small three-legged te | `ᲅ` | `т` |
+  | `ᲆ` | U+1C86 | Cyrillic small tall hard sign | `ᲆ` | `ъ` |
+  | `ᲇ` | U+1C87 | Cyrillic small tall yat | `ᲇ` | `ѣ` |
+  | `ᲈ` | U+1C88 | Cyrillic small unblended uk | `ᲈ` | `ꙋ` |
+  | `ẛ` | U+1E9B | Latin small long s with dot above | `ẛ` | `ṡ` |
+  | `ẞ` | U+1E9E | Latin capital sharp s | `ß` | `ẞ` (apart from `ß`) |
+  | `ι` | U+1FBE | Greek prosgegrammeni | itself | `ι` U+03B9 (one with iota) |
+  | `Ω` | U+2126 | Ohm sign | `ω` | `Ω` (apart from `ω`) |
+  | `K` | U+212A | Kelvin sign | `k` | `K` (apart from `k`) |
+  | `Å` | U+212B | Angstrom sign | `å` | `Å` (apart from `å`) |
+
+  Stable ids also move for a word-final capital `Σ` (U+03A3), which `to_lowercase` made `ς` and
+  the fold makes `σ`. Names using only ASCII and the Latin letters of real BC names (`æ ø å ä ö
+  ü ñ ç é è ß` and their capitals) keep every id; dotless `ı` (U+0131) and long `ſ` (U+017F) keep
+  their own. None of these chars occurs in CDO, DO or the 883 cached packages. If a project's names hold one of these: a baseline
   shows the affected findings as new once (re-baseline with `alsem analyze --baseline <file>
   --update-baseline`); regenerate saved `alsem diff` snapshots on both sides (across the
   upgrade such a routine reads as removed and added, or as a rename where diff pairs it by
