@@ -454,6 +454,13 @@ table 50289 "EH Txt Read A" { fields { field(1; Code; Code[20]) { } } keys { key
 table 50290 "EH Txt Read Else" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
 table 50291 "EH Txt Len A" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
 table 50292 "EH Txt Len Else" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
+table 50293 "EH Blob" { fields { field(1; Code; Code[20]) { } field(2; Data; Blob) { } } keys { key(PK; Code) { } } }
+table 50294 "EH Code In Lower" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
+table 50295 "EH Txt Q A" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
+table 50296 "EH Txt Q Else" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
+table 50297 "EH With Rec" { fields { field(1; Code; Code[20]) { } field(2; T; Text[30]) { } } keys { key(PK; Code) { } } }
+table 50298 "EH Txt With A" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
+table 50299 "EH Txt With Else" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
 // ENG-30: Text and Code literals as value domains, by the rules measured on
 // BC 28.4 (`literal_values::Domain`).
 codeunit 50283 "EH Text"
@@ -564,6 +571,7 @@ codeunit 50283 "EH Text"
         A: Record "EH Txt Dict A";
         E: Record "EH Txt Dict Else";
     begin
+        D.Add(1, 'B');
         if D.Get(1, T) then;
         case T of
             'A':
@@ -580,10 +588,15 @@ codeunit 50283 "EH Text"
 
     local procedure OnReadText(T: Text)
     var
+        Buf: Record "EH Blob" temporary;
+        OS: OutStream;
         S: InStream;
         A: Record "EH Txt Read A";
         E: Record "EH Txt Read Else";
     begin
+        Buf.Data.CreateOutStream(OS);
+        OS.WriteText('B');
+        Buf.Data.CreateInStream(S);
         S.ReadText(T);
         case T of
             'A':
@@ -591,6 +604,67 @@ codeunit 50283 "EH Text"
             else
                 E.Insert();
         end;
+    end;
+
+    // sol on ENG-30: `in` with a lowercase label on a Code value; as `=`, left unresolved.
+    procedure CodeIn()
+    begin
+        OnCodeIn('ab');
+    end;
+
+    local procedure OnCodeIn(C: Code[20])
+    var
+        Lo: Record "EH Code In Lower";
+    begin
+        if C in ['ab'] then
+            Lo.Insert();
+    end;
+
+    // sol on ENG-30: a QUOTED argument to a `var` writes the parameter ("T" is T).
+    procedure TxtQuoted()
+    begin
+        OnQuoted('A');
+    end;
+
+    local procedure OnQuoted(T: Text)
+    var
+        A: Record "EH Txt Q A";
+        E: Record "EH Txt Q Else";
+    begin
+        SetB("T");
+        case T of
+            'A':
+                A.Insert();
+            else
+                E.Insert();
+        end;
+    end;
+
+    local procedure SetB(var X: Text)
+    begin
+        X := 'B';
+    end;
+
+    // sol on ENG-30: inside `with R do`, `T` is R's field T, not the parameter T.
+    procedure TxtWith()
+    begin
+        OnWith('A');
+    end;
+
+    local procedure OnWith(T: Text)
+    var
+        R: Record "EH With Rec";
+        A: Record "EH Txt With A";
+        E: Record "EH Txt With Else";
+    begin
+        R.FindFirst();
+        with R do
+            case T of
+                'A':
+                    A.Insert();
+                else
+                    E.Insert();
+            end;
     end;
 
     // A read-only platform function keeps it usable.
@@ -967,6 +1041,12 @@ fn a_text_parameter_something_writes_binds_nothing() {
         ("TxtReadText", "EH Txt Read Else", "yes"),
         ("TxtStrLen", "EH Txt Len A", "yes"),
         ("TxtStrLen", "EH Txt Len Else", "no"),
+        // sol on ENG-30: a quoted `var` argument writes T; `T` under `with R` is R's field.
+        ("TxtQuoted", "EH Txt Q A", "yes"),
+        ("TxtQuoted", "EH Txt Q Else", "yes"),
+        ("TxtWith", "EH Txt With A", "yes"),
+        ("TxtWith", "EH Txt With Else", "yes"),
+        ("CodeIn", "EH Code In Lower", "yes"),
     ]);
 }
 

@@ -1902,9 +1902,23 @@ pub struct IrCfn<'a> {
     pub cols: &'a Utf16Cols<'a>,
     /// The file's source: r3 E2's condition texts and labels.
     pub source: &'a str,
+    /// How many `with` bodies enclose the statement being built. Inside `with R do`, an
+    /// unqualified name may be one of R's fields rather than the local or parameter of that
+    /// name, so no fact that READS a name as a condition (a guard, a junction, a value test, a
+    /// `case` scrutinee) is emitted there: every frame reader then refuses it at once (sol on
+    /// ENG-30). E2 already builds no program for a routine with a `with`. Facts that record a WRITE (loop variables, assignment
+    /// targets) stay, which only makes the readers more conservative.
+    /// shortcut: refuses every name under `with`; resolving R's fields (bind where R's table
+    /// has no field of that name) is ENG-141's.
+    pub with_depth: std::cell::Cell<usize>,
 }
 
 impl<'a> IrCfn<'a> {
+    /// Whether a name read here may be a `with` receiver's field ([`Self::with_depth`]).
+    fn under_with(&self) -> bool {
+        self.with_depth.get() > 0
+    }
+
     fn ir(&self) -> &al_syntax::ir::Ir {
         &self.file.ir
     }
@@ -1992,6 +2006,8 @@ impl<'a> IrCfn<'a> {
     /// r3 E2: a condition's [`FlowFact::Cond`]: its value and its source text,
     /// whitespace folded and cut at [`FLOW_TEXT_MAX`] characters.
     fn flow_cond(&self, e: ExprId) -> Option<Box<FlowFact>> {
+        // Not gated by `with`: E2 builds no program for a routine with a `with`
+        // (`literal_flow::FlowProgram::build`), and the text is a witness's guard display.
         Some(Box::new(FlowFact::Cond {
             expr: self.flow_expr(e),
             text: flow_text(self.expr_text(e)),
@@ -2432,6 +2448,9 @@ impl<'a> IrCfn<'a> {
     /// parentheses) `N = L` / `L = N`, `N <> L` / `L <> N` or `N in [L, …]`,
     /// `N` a bare identifier and the other side not one.
     fn value_test(&self, cond: ExprId) -> Option<ValueFact> {
+        if self.under_with() {
+            return None;
+        }
         use ExprKind::*;
         let mut e = cond;
         while let Parenthesized(x) = &self.ir().expr(e).kind {
@@ -2470,6 +2489,9 @@ impl<'a> IrCfn<'a> {
     }
 
     fn simple_guard(&self, cond: ExprId) -> Option<PConditionGuard> {
+        if self.under_with() {
+            return None;
+        }
         use ExprKind::*;
         let e = self.ir().expr(cond);
         match &e.kind {
@@ -2531,6 +2553,9 @@ impl<'a> IrCfn<'a> {
     /// expression, is an unknown operand and adds nothing. `None` when no
     /// operand is a simple guard.
     fn junction_guards(&self, cond: ExprId) -> Option<super::features::JunctionGuards> {
+        if self.under_with() {
+            return None;
+        }
         use ExprKind::*;
         let strip = |mut e: ExprId| {
             while let Parenthesized(x) = &self.ir().expr(e).kind {
@@ -2691,7 +2716,11 @@ impl<'a> IrCfn<'a> {
                 if let Some(tc) = on_number.map(super::features::TableCase::On) {
                     n.rare_mut().table_case = Some(tc);
                 }
-                if let Some(v) = self.bare_name(*scrutinee).map(ValueFact::CaseOn) {
+                if let Some(v) = self
+                    .bare_name(*scrutinee)
+                    .filter(|_| !self.under_with())
+                    .map(ValueFact::CaseOn)
+                {
                     n.rare_mut().value_fact = Some(v);
                 }
                 n.flow = self.flow_cond(*scrutinee);
@@ -2772,7 +2801,10 @@ impl<'a> IrCfn<'a> {
             }
             With { body, .. } => {
                 let mut n = cfn_node("other");
-                n.children = Some(vec![self.build_block(*body)]);
+                self.with_depth.set(self.with_depth.get() + 1);
+                let inner = self.build_block(*body);
+                self.with_depth.set(self.with_depth.get() - 1);
+                n.children = Some(vec![inner]);
                 n.flow = Some(Box::new(FlowFact::With));
                 n
             }
@@ -3195,6 +3227,7 @@ pub fn routine_features_partial(
             spine: &spine,
             cols: &cols,
             source,
+            with_depth: std::cell::Cell::new(0),
         };
         cfn.build_block(b)
     });
@@ -3261,10 +3294,20 @@ pub fn routine_features_partial(
                 let e = file.ir.expr(a);
                 let argument_anchor = anchor(&e.origin);
                 let parameter_index = parameter_index as u32;
-                // Only bare-identifier args bind to a record/parameter symbol.
+                // Only a bare name binds to a record/parameter symbol, quoted or not: `"I"` is the
+                // parameter `I` (ENG-138, sol on ENG-30: a quoted `var` argument escaped every
+                // reader's write check). The quoted fold is `bare_name`'s.
                 let lc = match &e.kind {
                     ExprKind::Identifier(n) if e.origin.kind_text() == "identifier" => {
                         n.fold_identifier()
+                    }
+                    ExprKind::QuotedIdentifier(n) => {
+                        let t = n.trim();
+                        let inner = t
+                            .strip_prefix('"')
+                            .and_then(|s| s.strip_suffix('"'))
+                            .unwrap_or(t);
+                        inner.replace("\"\"", "\"").fold_identifier()
                     }
                     _ => {
                         return PCallArgumentBinding {

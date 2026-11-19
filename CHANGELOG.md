@@ -817,6 +817,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     where a `var` is wanted (AL0130), checked on `Evaluate`.
   - The same writer gap for Integer, Option and Enum parameters is older; ENG-135 replaces both
     hand lists with the compiler's own parameter var-ness.
+- **Two holes older than ENG-30 that its new domains made prune more (sol).**
+  - A QUOTED argument hid a write: the call's argument bindings recorded only unquoted names,
+    so `SetB("T")` into a `var` (or a `var` event subscriber) left the parameter `T` usable.
+    Bindings now take a quoted name as the same symbol (`ir_walk`, `bare_name`'s fold; this is
+    ENG-138's core, absorbed).
+  - Under `with R do`, an unqualified name may be one of R's fields, but a `case T of` there was
+    bound to the parameter `T`. Inside a `with` body no fact that reads a name as a condition
+    (guard, junction, value test, `case` scrutinee) is emitted any more, so every frame refuses
+    it; E2 already builds no program for a routine with a `with`. Resolving R's fields (binding
+    where R's table has no field of that name) is ENG-141's. alc 18.0.41 still accepts `with`
+    (AL0606 is a warning).
+  - Tests: `TxtQuoted`, `TxtWith` (each fails exactly when its fix is removed), a lowercase Code
+    `in` (`CodeIn`, left unresolved as `=` is), and the Dictionary and InStream reads seeded so
+    the write really happens.
 - **Tests.**
   - `cli_prove_value_guards` runs `prove` through the CLI:
     - `a_builtin_option_parameter_compares_by_member_name`;
