@@ -290,6 +290,9 @@ pub struct AbiObject {
     pub extends_target_name: Option<String>,
     /// Unquoted, `#guid#`-stripped interface names. `None` = field absent.
     pub implemented_interfaces: Option<Vec<String>>,
+    /// An interface's bases (`ExtendedInterfaces`, ENG-142), parsed as
+    /// [`Self::implemented_interfaces`] are. Empty for every other kind.
+    pub extended_interfaces: Vec<String>,
     /// Canonical lower-case member: "ignore" | "error" | "allow".
     pub inherent_commit_behavior: Option<String>,
     /// Page controls (name, kind, target). kind ∈ {"part","usercontrol"}.
@@ -546,6 +549,11 @@ struct RawObject {
     target_object: Option<String>,
     #[serde(rename = "ImplementedInterfaces")]
     implemented_interfaces: Option<Vec<String>>,
+    /// An interface's bases (ENG-142): alc 18.0.41 writes
+    /// `"ExtendedInterfaces": ["IBar", "IQux"]` for `interface IBaz extends
+    /// IBar, NS.IQux` (the namespace dropped).
+    #[serde(rename = "ExtendedInterfaces")]
+    extended_interfaces: Option<Vec<String>>,
     #[serde(rename = "Controls")]
     controls: Option<Vec<RawControl>>,
     /// ENG-26: the object's global variables; only the `Protected` ones are
@@ -1468,6 +1476,14 @@ fn abi_from_sections(root: &Sections<'_>) -> SymbolReferenceAbi {
             if let Some(ifaces) = &o.implemented_interfaces {
                 abi_object.implemented_interfaces =
                     Some(ifaces.iter().map(|s| parse_abi_interface_name(s)).collect());
+            }
+            if object_type == "Interface" {
+                abi_object.extended_interfaces = o
+                    .extended_interfaces
+                    .iter()
+                    .flatten()
+                    .map(|s| parse_abi_interface_name(s))
+                    .collect();
             }
             apply_access_properties(&mut abi_object, &o.properties);
             abi_object.protected_vars = protected_vars_of(&o);

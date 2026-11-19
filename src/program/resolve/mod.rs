@@ -23,6 +23,8 @@ pub mod framework_returns;
 pub mod full;
 pub mod global_builtins;
 pub mod index;
+#[cfg(test)]
+mod interface_extends_tests;
 pub mod interface_holder;
 pub mod member_catalog;
 pub mod method_id;

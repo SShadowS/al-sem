@@ -2254,6 +2254,12 @@ fn infer_cross_object_chain_receiver(
 /// than-one same-arity candidate is declared (defensive — a single interface
 /// declaration should never itself be arity-ambiguous, but this never
 /// guesses).
+///
+/// ENG-142: a member the interface does not declare itself may be a base's
+/// (`interface IBaz extends IBar`: alc 18.0.41 compiles `Z.Bar()` on an `IBaz`
+/// receiver). Then exactly one same-arity declaration across all its bases,
+/// transitively (a diamond's shared base counted once), is the member; none,
+/// or more than one, is `None`.
 pub(crate) fn interface_own_routine_node<'g>(
     name_lc: &str,
     member_lc: &str,
@@ -2263,10 +2269,37 @@ pub(crate) fn interface_own_routine_node<'g>(
     index: &dyn IndexReads,
 ) -> Option<&'g RoutineNode> {
     let iface = graph.resolve_object(from_object.id.app, ObjectKind::Interface, name_lc)?;
-    let matched: Vec<&RoutineNodeId> = index
-        .routines_in_object(graph, &iface.id, member_lc)
-        .filter(|rid| rid.params_count == arity)
-        .collect();
+    let declared = |o: &ObjectNode| -> Vec<&RoutineNodeId> {
+        index
+            .routines_in_object(graph, &o.id, member_lc)
+            .filter(|rid| rid.params_count == arity)
+            .collect()
+    };
+    let mut matched = declared(iface);
+    if matched.is_empty() {
+        let mut seen: std::collections::HashSet<&ObjectNodeId> =
+            std::collections::HashSet::from([&iface.id]);
+        let mut stack: Vec<&ObjectNode> = vec![iface];
+        while let Some(o) = stack.pop() {
+            // A base is named from the declaring interface's own app: a
+            // dependency's `extends` names what that app sees.
+            for b in &o.interface_bases {
+                let Some(base) =
+                    graph.resolve_object(o.id.app, ObjectKind::Interface, &b.fold_identifier())
+                else {
+                    continue;
+                };
+                if seen.insert(&base.id) {
+                    for rid in declared(base) {
+                        if !matched.contains(&rid) {
+                            matched.push(rid);
+                        }
+                    }
+                    stack.push(base);
+                }
+            }
+        }
+    }
     let [rid] = matched.as_slice() else {
         return None;
     };
@@ -3752,6 +3785,7 @@ mod tests {
                 declared_id,
                 extends_target: None,
                 implements: vec![],
+                interface_bases: vec![],
                 tier: TrustTier::Workspace,
                 source_table: None,
                 table_no: None,
@@ -3897,6 +3931,7 @@ mod tests {
             declared_id,
             extends_target: extends_target.map(SharedStr::from),
             implements: vec![],
+            interface_bases: vec![],
             tier: TrustTier::Workspace,
             source_table: None,
             table_no: None,

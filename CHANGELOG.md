@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (ENG-142: interface inheritance; a call through a base interface reaches the implementers of every interface derived from it)
+
+- **The gap.** al-sem never modelled `interface IBaz extends IBar, NS.IQux`. A codeunit that
+  implements `IBaz` implements `IBar` too: alc 18.0.41 compiles `B := Z` and `B := <codeunit
+  implementing IBaz>` for `B: Interface IBar`, `Z.Bar()` on an `IBaz` receiver, and refuses an
+  `IBaz` implementer without `IBar`'s `Bar` (AL0582; probe `/work/.al-sem/probes/grm05-iface`).
+  So a call through `IBar` missed every implementer of a derived interface: a missing edge, not
+  an imprecise one.
+- **Bases in the graph.** New `ObjectNode::interface_bases`, from three sources:
+  - the source (`ObjectDecl::interface_extends`, GRM-05), but none when the file did not parse
+    clean, since a recovered parse can misread the list (`extends A.` before `#if X` reads the
+    base as `X`);
+  - a dependency's symbols, whose interfaces carry `"ExtendedInterfaces": [...]` (alc writes the
+    base's name without its namespace);
+  - a runtime package's synthesized source, which now writes `extends` from those symbols.
+  `PACK_SCHEMA` 22 -> 23 (the sample pack re-pinned); the session's declaration hash includes it.
+- **Resolution.**
+  - `ResolveIndex::implementers_of(base)` also lists the implementers of every interface derived
+    from it, transitively, codeunits and closed enums alike, its own first and then the derived
+    ones in name order; an `extends` cycle (alc refuses one) ends.
+  - `interface_route_applicable` (the semantic audit's check of an interface route) accepts an
+    implementer of a derived interface.
+  - The declared signature of a member an interface inherits (`interface_own_routine_node`):
+    the interface's own declaration first, else exactly one same-arity declaration across its
+    bases (a diamond's shared base counted once), each base named from its declaring interface's
+    app. It types an interface call used as an argument (`Take(O.Bar())` picks the overload).
+- **Tests.** `program::resolve::interface_extends_tests` resolves whole workspaces: a call
+  through a base reaches every derived implementer (a qualified base, a grand-derived interface,
+  not a base's implementer through a derived interface); a dependency's bases come from its
+  symbols; a recovered parse gives no bases; an `extends` cycle ends; an inherited member types
+  an argument. Plus `interface_applicable_through_a_derived_interface` and
+  `an_interfaces_bases_are_written` (synthesis). Seven discrimination proofs, all red. One break
+  stayed GREEN at first: with implementers present `arg_dispatch` falls back to their agreeing
+  return types, so the argument test uses an interface with no implementer in the program.
+
 ### Fixed (TLS-103: the cdo-speed stub tests no longer depend on the host's load)
 
 - **What failed.** `gate_scripts::speed_reports_instructions_and_their_limit_is_advisory` failed

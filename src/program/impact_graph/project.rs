@@ -1712,6 +1712,7 @@ pub(crate) mod tests {
                 },
                 extends_target: None,
                 implements: vec![],
+                interface_bases: vec![],
                 tier,
                 source_table: None,
                 table_no: None,

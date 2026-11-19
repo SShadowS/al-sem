@@ -1082,6 +1082,7 @@ mod tests {
             declared_id: Some(id),
             extends_target: None,
             implements: vec![],
+            interface_bases: vec![],
             tier: TrustTier::Workspace,
             source_table: None,
             table_no: None,

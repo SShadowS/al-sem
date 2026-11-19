@@ -671,6 +671,11 @@ fn ingest_abi_objects(
                 .flatten()
                 .map(SharedStr::from)
                 .collect(),
+            interface_bases: abi_obj
+                .extended_interfaces
+                .iter()
+                .map(|s| SharedStr::from(s.as_str()))
+                .collect(),
             tier: TrustTier::SymbolOnly,
             // ABI/SymbolOnly ingestion does not (yet) project SourceTable/TableNo/
             // page-control data from the dependency symbol reference — additive gap,

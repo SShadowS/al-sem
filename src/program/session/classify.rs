@@ -379,6 +379,7 @@ impl Classify for ObjectNode {
             declared_id,
             extends_target,
             implements,
+            interface_bases,
             tier,
             source_table,
             table_no,
@@ -403,6 +404,7 @@ impl Classify for ObjectNode {
         declared_id.classify(h);
         extends_target.classify(h);
         implements.classify(h);
+        interface_bases.classify(h);
         tier.classify(h);
         source_table.classify(h);
         table_no.classify(h);

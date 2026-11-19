@@ -658,6 +658,28 @@ impl ResolveIndex {
             }
         }
 
+        // ENG-142: an implementer of a derived interface implements each base
+        // (`interface IBaz extends IBar`: alc 18.0.41 accepts `B := Z` and
+        // `B := <codeunit implementing IBaz>` for `B: Interface IBar`), so a
+        // call through an `IBar` reaches it too. Interfaces are keyed by name,
+        // as the implementers are.
+        let mut bases: HashMap<String, Vec<String>> = HashMap::new();
+        for obj in graph
+            .objects
+            .iter()
+            .filter(|o| o.id.kind == ObjectKind::Interface)
+        {
+            let list = bases.entry(obj.name.fold_identifier()).or_default();
+            for b in &obj.interface_bases {
+                let b = b.fold_identifier();
+                if !list.contains(&b) {
+                    list.push(b);
+                }
+            }
+        }
+        inherit_implementers(&mut implementers, &bases);
+        inherit_implementers(&mut closed_enum_implementers, &bases);
+
         // An object declared `ObsoleteState = Moved`/`Removed` binds no
         // reference while another of its name or number exists
         // (`ObjectNode::obsolete_gone`): Base Application's `Moved` stub of
@@ -1014,8 +1036,9 @@ impl ResolveIndex {
     }
 
     /// All objects whose `implements` list (lowercased) contains
-    /// `interface_name_lc` — [`WorldMode::AnalyzedSnapshot`], whole-program
-    /// view (implementers live in reverse-dependent apps).
+    /// `interface_name_lc`, or an interface derived from it (ENG-142,
+    /// [`inherit_implementers`]) — [`WorldMode::AnalyzedSnapshot`],
+    /// whole-program view (implementers live in reverse-dependent apps).
     pub fn implementers_of(&self, interface_name_lc: &str) -> &[ObjectNodeId] {
         crate::program::resolve::reads::probe();
         self.implementers
@@ -1677,6 +1700,44 @@ pub fn count_unknown_include_sender_plus1_subscribers(graph: &ProgramGraph) -> u
     count
 }
 
+/// ENG-142: every base interface (transitively, through `bases`: interface
+/// name -> its bases' names, all lowercased) also lists the implementers of
+/// each interface derived from it. A base's own implementers come first, then
+/// those of its derived interfaces in name order, each object once, so the
+/// order does not depend on hashing. An `extends` cycle (alc refuses one, but
+/// a broken workspace may hold it) ends at the interfaces already visited.
+fn inherit_implementers(
+    implementers: &mut HashMap<String, Vec<ObjectNodeId>>,
+    bases: &HashMap<String, Vec<String>>,
+) {
+    let mut derived: Vec<String> = implementers
+        .keys()
+        .filter(|k| bases.get(*k).is_some_and(|b| !b.is_empty()))
+        .cloned()
+        .collect();
+    derived.sort();
+    // From each interface's DIRECT implementers: the closure is in the walk.
+    let direct = implementers.clone();
+    for d in &derived {
+        let mut seen: HashSet<&str> = HashSet::from([d.as_str()]);
+        let mut stack: Vec<&str> = bases[d].iter().map(String::as_str).collect();
+        while let Some(base) = stack.pop() {
+            if !seen.insert(base) {
+                continue;
+            }
+            let list = implementers.entry(base.to_string()).or_default();
+            for id in &direct[d] {
+                if !list.contains(id) {
+                    list.push(id.clone());
+                }
+            }
+            if let Some(more) = bases.get(base) {
+                stack.extend(more.iter().map(String::as_str));
+            }
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -1720,6 +1781,7 @@ mod tests {
             declared_id,
             extends_target: extends_target.map(SharedStr::from),
             implements: implements.into_iter().map(SharedStr::from).collect(),
+            interface_bases: vec![],
             tier: TrustTier::Workspace,
             source_table: None,
             table_no: None,

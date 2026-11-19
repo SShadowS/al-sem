@@ -8321,6 +8321,13 @@ fn resolve_module_pick_first_base_function_callers_are_a_known_allowlist() {
             "receiver.rs",
             "let iface = graph.resolve_object(from_object.id.app, ObjectKind::Interface, name_lc)?;",
         ),
+        // ENG-142: an interface's base, named from the declaring interface's own
+        // app, for a member it inherits (`interface_own_routine_node`'s base
+        // search). Semantic: no base, or an unresolvable one, adds no candidate.
+        (
+            "receiver.rs",
+            "graph.resolve_object(o.id.app, ObjectKind::Interface, &b.fold_identifier())",
+        ),
         // The query-column chain arm (S9.0e): a declared `Query` var's object,
         // the same lookup `resolve_member`'s `Object` arm makes for it; a
         // collision fails closed and the arm declines.
