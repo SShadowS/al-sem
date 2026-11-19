@@ -433,6 +433,7 @@ mod tests {
             rule_drafts: None,
             card_text: None,
             site_guards: None,
+            names_opaque: false,
         }
     }
 

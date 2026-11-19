@@ -132,9 +132,9 @@ fn classify_edge_param(
 
 /// The param index a terminal op's `temp_state` reads, if any
 /// (`resolve_terminal` reads <=1 index): `ParameterDependent(i)` reads `i`;
-/// `Known`/`Unknown`/absent `temp_state` reads nothing.
-fn terminal_read_index(op: &ModelRecordOperation) -> Option<u32> {
-    let ts = op.temp_state.as_ref()?;
+/// `Known`/`Unknown`/absent `temp_state` reads nothing. `owner` holds `op`.
+fn terminal_read_index(op: &ModelRecordOperation, owner: &ModelRoutine) -> Option<u32> {
+    let ts = op.temp_state.get(owner)?;
     match TempStateKind::from_p_temp_state(ts) {
         TempStateKind::ParameterDependent(i) => Some(i),
         TempStateKind::Known(_) | TempStateKind::Unknown => None,
@@ -158,7 +158,7 @@ pub(crate) fn compute_liveness<'a>(
     // Const(Temp) regardless of any caller value).
     for (node_ix, terminals) in graph.terminals.iter().enumerate() {
         for t in terminals {
-            if let Some(i) = terminal_read_index(t.op) {
+            if let Some(i) = terminal_read_index(t.op, t.owner) {
                 need[node_ix].insert(i);
             }
         }
@@ -256,7 +256,7 @@ pub(crate) fn compute_liveness<'a>(
     for (node_ix, node_terminals) in graph.terminals.iter().enumerate() {
         let reads = node_terminals
             .iter()
-            .map(|t| terminal_read_index(t.op).map(|i| slot_of[node_ix][&i]))
+            .map(|t| terminal_read_index(t.op, t.owner).map(|i| slot_of[node_ix][&i]))
             .collect();
         terminal_reads.push(reads);
     }
@@ -287,7 +287,7 @@ mod tests {
     fn need_is_backward_closure() {
         let mut t = routine("T", "procedure");
         let mut top0 = record_op("T/op0", "Modify", "Rec", Some("t/T"), vec![], false);
-        top0.temp_state = Some(ts_pd(0));
+        top0.temp_state.set(Some(ts_pd(0)));
         t.record_operations = vec![top0];
 
         let mut b = routine("B", "procedure");
@@ -365,7 +365,7 @@ mod tests {
     fn const_and_unknown_bindings_need_no_caller() {
         let mut h = routine("H", "procedure");
         let mut hop0 = record_op("H/op0", "Modify", "Rec", Some("t/H"), vec![], false);
-        hop0.temp_state = Some(ts_pd(0));
+        hop0.temp_state.set(Some(ts_pd(0)));
         h.record_operations = vec![hop0];
 
         // A binds H's param0 to a Known(true) LITERAL — a Const, no caller need.
@@ -438,7 +438,7 @@ mod tests {
     fn proven_param_needs_no_caller() {
         let mut h = routine("H", "procedure");
         let mut hop0 = record_op("H/op0", "Modify", "Rec", Some("t/H"), vec![], false);
-        hop0.temp_state = Some(ts_pd(0));
+        hop0.temp_state.set(Some(ts_pd(0)));
         h.record_operations = vec![hop0];
 
         let mut a = routine("A", "procedure");
@@ -513,7 +513,7 @@ mod tests {
                     vec![],
                     false,
                 );
-                op.temp_state = Some(ts_pd(i));
+                op.temp_state.set(Some(ts_pd(i)));
                 op
             })
             .collect();
@@ -652,15 +652,15 @@ mod tests {
         use crate::program::body::features::RECEIVER_PARAM_INDEX as REC;
         let mut t = routine("T", "trigger");
         let mut top0 = record_op("T/op0", "Modify", "Rec", Some("t/T"), vec![], false);
-        top0.temp_state = Some(ts_pd(REC));
+        top0.temp_state.set(Some(ts_pd(REC)));
         t.record_operations = vec![top0];
         let mut r = routine("R", "procedure");
         let mut rop = record_op("R/op0", "Validate", "X", Some("t/T"), vec![], false);
-        rop.temp_state = Some(ts_known(false));
+        rop.temp_state.set(Some(ts_known(false)));
         r.record_operations = vec![rop];
         let mut f = routine("F", "procedure");
         let mut fop = record_op("F/op0", "Validate", "P", Some("t/T"), vec![], false);
-        fop.temp_state = Some(ts_pd(2));
+        fop.temp_state.set(Some(ts_pd(2)));
         f.record_operations = vec![fop];
 
         let routines = vec![r, f, t];

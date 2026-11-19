@@ -203,17 +203,17 @@ pub(crate) fn cross_hop(
 }
 
 /// Terminal answer for an op given the state of its OWNING frame.
-/// `owner_id` is checked for closed-world proof FIRST (mirrors the backward
-/// chase's very first iteration, anchored at the terminal step's own routine
-/// before any hop is popped — see module docs); only a non-proven
-/// `ParameterDependent(i)` falls back to `frame_state[i]`.
+/// `owner` (the routine holding `op`) is checked for closed-world proof FIRST
+/// (mirrors the backward chase's very first iteration, anchored at the terminal
+/// step's own routine before any hop is popped — see module docs); only a
+/// non-proven `ParameterDependent(i)` falls back to `frame_state[i]`.
 pub(crate) fn resolve_terminal(
     op: &ModelRecordOperation,
     frame_state: &TempVec,
-    owner_id: &str,
+    owner: &ModelRoutine,
     cw: &ClosedWorldTempParams,
 ) -> ParamTemp {
-    let Some(ts) = &op.temp_state else {
+    let Some(ts) = op.temp_state.get(owner) else {
         return ParamTemp::Unknown;
     };
     match TempStateKind::from_p_temp_state(ts) {
@@ -221,7 +221,7 @@ pub(crate) fn resolve_terminal(
         TempStateKind::Known(false) => ParamTemp::Physical,
         TempStateKind::Unknown => ParamTemp::Unknown,
         TempStateKind::ParameterDependent(i) => {
-            if cw.contains(&(owner_id.to_string(), i)) {
+            if cw.contains(&(owner.id.clone(), i)) {
                 ParamTemp::Temp
             } else {
                 lookup(frame_state, i)
@@ -318,6 +318,7 @@ mod tests {
             rule_drafts: None,
             card_text: None,
             site_guards: None,
+            names_opaque: false,
         }
     }
 
@@ -394,7 +395,7 @@ mod tests {
             record_variable_name: "Rec".to_string(),
             record_variable_id: None,
             table_id: None,
-            temp_state,
+            temp_state: crate::program::model::workspace::OpTemp::new(temp_state),
             field_arguments: None,
             source_anchor: p_anchor(),
             loop_stack: Vec::new(),
@@ -534,7 +535,7 @@ mod tests {
             .iter()
             .find(|o| o.id == op_id)
             .unwrap_or_else(|| panic!("fixture must declare op {op_id} on {terminal_owner}"));
-        let terminal_ts = match &op.temp_state {
+        let terminal_ts = match op.temp_state.get(routine_by_id[terminal_owner]) {
             Some(ts) => TempStateKind::from_p_temp_state(ts),
             None => TempStateKind::Unknown,
         };
@@ -570,7 +571,7 @@ mod tests {
                         cw,
                     );
                 }
-                let forward_pt = resolve_terminal(op, &state, terminal_owner, cw);
+                let forward_pt = resolve_terminal(op, &state, routine_by_id[terminal_owner], cw);
 
                 assert_eq!(
                     forward_pt,

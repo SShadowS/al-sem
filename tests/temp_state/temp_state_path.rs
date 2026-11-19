@@ -106,6 +106,7 @@ fn routine(id: &str) -> ModelRoutine {
         rule_drafts: None,
         card_text: None,
         site_guards: None,
+        names_opaque: false,
     }
 }
 
@@ -536,7 +537,7 @@ fn record_op(
         record_variable_name: "EMailLog".to_string(),
         record_variable_id: None,
         table_id: None,
-        temp_state: Some(temp_state),
+        temp_state: al_sem::program::model::workspace::OpTemp::new(Some(temp_state)),
         field_arguments: None,
         source_anchor: p_anchor(),
         loop_stack: Vec::new(),

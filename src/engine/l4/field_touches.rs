@@ -512,7 +512,7 @@ pub fn field_touches<'m>(
             if op.receiver_is_record_ref {
                 continue;
             }
-            let temp = TempClass::of(op.temp_state.as_ref());
+            let temp = TempClass::of(op.temp_state.get(r));
             if op.op == "TransferFields" {
                 let other = op
                     .transfer_fields_source

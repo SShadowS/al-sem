@@ -854,6 +854,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     after every pass that derives one, and the invariant includes it (and
     `caller_source_parameter_is_var`). Argument infos and condition facts stay in the model;
     their readers refuse an opaque routine (the frames' and E2's checks, `TxtWith`, `VarWith`).
+    Closed on the read side (sol round 9: the adapter's table-event edges read an op's temp state
+    before that last clearing, so a subscriber exiting on a temporary record lost its edge;
+    FieldRef operations escaped the clearing): an operation's temp state is an `OpTemp` whose
+    value is private, read only by `OpTemp::get(routine)`, which answers `unknown` when the
+    routine is opaque (`ModelRoutine::names_opaque`, computed once where the row is built, so a
+    read is a field check), whatever the order of passes. The resolver's by-name
+    `record_temporary` is dropped there too. The clearing and the invariant stay (belt and
+    braces), now over FieldRef operations, and the invariant flags a stale `names_opaque`. Sound
+    but blunt: an unambiguous temporary receiver outside the `with`, and a platform operation
+    whose temp state comes from table metadata, read `unknown` in such a routine; exact
+    with-scope resolution (ENG-143) gives them back.
     Goldens: `ws-with-receiver` (`with R do begin Insert(); Modify; end;`) moves in r3a2, r3a3
     and the policy-facts oracle, its two writes' temp state going from known physical to
     unknown (`prove` still `yes`); nothing else moved.
@@ -870,7 +881,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     (`DoIt`, a bare call inside `with Phys do`, and `DoGlobal`, a temporary object global
     called inside a `with`, whose temporary state the backfill gave back: each `yes` with
     `tempState: unknown` evidence; `BareWith` the same; `RefWith` `unknown`; without either
-    clearing step the debug `alsem` stops on the model invariant)
+    clearing step the debug `alsem` stops on the model invariant; `TmpWith`, a temporary
+    `Tmp.Insert()` inside a `with` with a table subscriber exiting on `Rec.IsTemporary`, `yes`,
+    `no` without either the accessor or the `record_temporary` drop;
+    `field_ref_temp_state_is_unknown_in_an_opaque_routine`, a FieldRef `CalcField` over a
+    RecordRef opened temporary, known temporary outside a `with` and unknown inside one; the
+    accessor alone is masked there by the last clearing, both broken stop on the invariant)
     (each fails exactly when its fix is removed; the opacity checks behind
     `bind_m` and the condition-fact gate, including the frames' own and `a_callee_with_keeps_its_rule`'s,
     are a second line, so each alone is not separately observable), `CodeIn` (a lowercase label left unresolved as `=` is, an uppercase one pruned),

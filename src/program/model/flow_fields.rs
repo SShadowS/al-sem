@@ -157,9 +157,9 @@ impl FlowFieldRead {
 
     /// True when this read is the same read `op` already makes on its own
     /// record: a `CalcFields` of a FlowField over the record's own table, with
-    /// the same known temp state. An effect builder emits it once.
+    /// the same known temp state. An effect builder emits it once. `routine` owns `op`.
     #[must_use]
-    pub fn repeats_host_read(&self, op: &ModelRecordOperation) -> bool {
+    pub fn repeats_host_read(&self, op: &ModelRecordOperation, routine: &ModelRoutine) -> bool {
         let FlowFieldSource::Table { table_id, .. } = &self.source else {
             return false;
         };
@@ -167,7 +167,7 @@ impl FlowFieldRead {
             && op.table_id.as_deref() == Some(table_id.as_str())
             && op
                 .temp_state
-                .as_ref()
+                .get(routine)
                 .is_some_and(|t| t.kind == "known" && t.value == Some(self.temporary()))
     }
 }
@@ -709,7 +709,7 @@ fn record_ref_table(
             (Some(t), Some(x)) if t == x => {}
             _ => decided = false,
         }
-        match (op.temp_state.as_ref(), temp) {
+        match (op.temp_state.get(routine), temp) {
             (Some(t), None) => temp = Some(t),
             (Some(t), Some(x)) if t == x => {}
             _ => temp_decided = false,
@@ -916,11 +916,13 @@ fn field_ref_operations(routine: &ModelRoutine, tables: &Tables<'_>) -> Vec<Mode
             record_variable_name: receiver.clone(),
             record_variable_id: None,
             table_id,
-            temp_state: Some(temp_state.unwrap_or_else(|| PTempState {
-                kind: "unknown".into(),
-                value: None,
-                parameter_index: None,
-            })),
+            temp_state: super::workspace::OpTemp::new(Some(temp_state.unwrap_or_else(|| {
+                PTempState {
+                    kind: "unknown".into(),
+                    value: None,
+                    parameter_index: None,
+                }
+            }))),
             field_arguments: None,
             source_anchor: cs.source_anchor.clone(),
             loop_stack: cs.loop_stack.clone(),
@@ -1340,5 +1342,94 @@ codeunit 50102 "C"
         for (formula, want) in cases {
             assert_eq!(calc_formula_table(formula).as_deref(), want, "{formula}");
         }
+    }
+
+    /// ENG-30 (sol r9 P2): a `FieldRef` operation takes its RecordRef's temp state. In a routine
+    /// opaque to names (a `with`) it reads `unknown`, as read (`OpTemp::get`) and as stored (the
+    /// last clearing). Precondition, stated: the same shape with no `with` reads known temporary,
+    /// so the derivation carries a known state there.
+    #[test]
+    fn field_ref_temp_state_is_unknown_in_an_opaque_routine() {
+        let src = r#"
+table 50100 "H"
+{
+    fields
+    {
+        field(1; "No."; Code[20]) { }
+        field(4; "Line Count"; Integer)
+        {
+            FieldClass = FlowField;
+            CalcFormula = count("L" where("No." = field("No.")));
+        }
+    }
+}
+table 50101 "L"
+{
+    fields { field(1; "No."; Code[20]) { } }
+}
+codeunit 50102 "C"
+{
+    procedure Plain()
+    var
+        RR: RecordRef;
+        FR: FieldRef;
+    begin
+        RR.Open(Database::"H", true);
+        RR.FindFirst();
+        FR := RR.Field(4);
+        FR.CalcField();
+    end;
+
+    procedure InWith()
+    var
+        RR: RecordRef;
+        FR: FieldRef;
+        W: Record "L";
+    begin
+        RR.Open(Database::"H", true);
+        RR.FindFirst();
+        FR := RR.Field(4);
+        with W do
+            FR.CalcField();
+    end;
+}
+"#;
+        let m = crate::program::model::program_calls::assemble_and_resolve_inline_program_default(
+            &[("src/C.al".to_string(), src.to_string())],
+            "33333333-0000-0000-0000-0000000000b6",
+        );
+        let routine = |name: &str| {
+            m.workspace
+                .routines
+                .iter()
+                .find(|r| r.name == name)
+                .unwrap()
+        };
+        let (plain, in_with) = (routine("Plain"), routine("InWith"));
+        assert!(
+            !plain.names_opaque && in_with.names_opaque,
+            "precondition: only InWith is opaque"
+        );
+        let read = |r: &ModelRoutine| {
+            assert_eq!(r.field_ref_operations.len(), 1, "precondition: {}", r.name);
+            r.field_ref_operations[0]
+                .temp_state
+                .get(r)
+                .map(|t| (t.kind.as_str(), t.value))
+        };
+        assert_eq!(
+            read(plain),
+            Some(("known", Some(true))),
+            "precondition: Plain"
+        );
+        assert_eq!(read(in_with), Some(("unknown", None)));
+        assert_eq!(
+            in_with.field_ref_operations[0]
+                .temp_state
+                .raw()
+                .map(|t| t.kind.as_str()),
+            Some("unknown"),
+            "stored"
+        );
     }
 }

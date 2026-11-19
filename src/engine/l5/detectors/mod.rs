@@ -1520,9 +1520,9 @@ pub(crate) fn whole_set_advance<'a>(
 /// `temp_state.kind === "known" && value === true`. A `None` temp_state (al-sem
 /// always sets `{kind:"unknown"}`) is NOT a known-temp. Shared by d1 and d2
 /// (and mirrors d33's inline gate): an op provably on a temporary record does no
-/// physical-db work.
-pub(crate) fn is_known_temp(op: &ModelRecordOperation) -> bool {
-    crate::program::body::features::temp_state_suppresses(op.temp_state.as_ref())
+/// physical-db work. `routine` owns `op`.
+pub(crate) fn is_known_temp(op: &ModelRecordOperation, routine: &ModelRoutine) -> bool {
+    crate::program::body::features::temp_state_suppresses(op.temp_state.get(routine))
 }
 
 /// Anchor containment: `inner` sits fully inside `outer` (inclusive bounds).
@@ -2276,7 +2276,7 @@ mod issue21_predicate_tests {
             record_variable_name: "R".to_string(),
             record_variable_id: None,
             table_id: None,
-            temp_state: None,
+            temp_state: crate::program::model::workspace::OpTemp::new(None),
             field_arguments: args
                 .as_ref()
                 .map(|v| v.iter().map(|i| i.text.to_string()).collect()),

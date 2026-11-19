@@ -2681,7 +2681,7 @@ fn render_query_touches_body(
                     // FlowField at this operation is a `CalcFields` site of
                     // it, unless the operation is already one on this table.
                     for ffr in &o.flow_field_reads {
-                        if ffr.effect_table_id() != table.id || ffr.repeats_host_read(o) {
+                        if ffr.effect_table_id() != table.id || ffr.repeats_host_read(o, r) {
                             continue;
                         }
                         if primary {
@@ -2734,7 +2734,7 @@ fn render_query_touches_body(
                             },
                             temp: o
                                 .temp_state
-                                .as_ref()
+                                .get(r)
                                 .map_or(TempStateKind::Unknown, TempStateKind::from_p_temp_state),
                         });
                     } else {

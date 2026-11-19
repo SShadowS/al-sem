@@ -88,7 +88,7 @@ fn make_routine_for_pass2b(variables: Vec<ModelVariable>) -> ModelRoutine {
         record_variable_name: "Foo".to_string(),
         record_variable_id: None,
         table_id: None,
-        temp_state: None,
+        temp_state: al_sem::program::model::workspace::OpTemp::new(None),
         field_arguments: None,
         source_anchor: dummy_anchor(),
         loop_stack: Vec::new(),
@@ -153,6 +153,7 @@ fn make_routine_for_pass2b(variables: Vec<ModelVariable>) -> ModelRoutine {
         rule_drafts: None,
         card_text: None,
         site_guards: None,
+        names_opaque: false,
     }
 }
 

@@ -200,6 +200,34 @@ codeunit 50411 "WT Caller"
         with Phys do
             DeleteAll();
     end;
+
+    // sol r9: a table subscriber that exits on a temporary record lost its edge when an opaque
+    // routine's op (or the resolver's by-name check) proved the record temporary.
+    procedure TmpWith()
+    var
+        Tmp: Record "WT Buf" temporary;
+        W: Record "WT Buf";
+    begin
+        with W do
+            Tmp.Insert();
+    end;
+}
+table 50412 "WT Log"
+{
+    fields { field(1; K; Integer) { } }
+    keys { key(PK; K) { } }
+}
+codeunit 50413 "WT Sub"
+{
+    [EventSubscriber(ObjectType::Table, Database::"WT Buf", 'OnBeforeInsertEvent', '', false, false)]
+    local procedure OnBeforeInsert(var Rec: Record "WT Buf"; RunTrigger: Boolean)
+    var
+        L: Record "WT Log";
+    begin
+        if Rec.IsTemporary then
+            exit;
+        L.Insert();
+    end;
 }
 "#;
 
@@ -214,17 +242,27 @@ fn a_bare_table_method_under_with_runs_on_the_with_record() {
     )
     .unwrap();
     std::fs::write(ws.join("src/WT.al"), WITH_TEMP).unwrap();
-    let answer = |routine: &str| -> serde_json::Value {
+    let answer_on = |routine: &str, table: &str| -> serde_json::Value {
         let out = Command::new(env!("CARGO_BIN_EXE_alsem"))
             .arg("prove")
             .arg(&ws)
-            .args([routine, "writes-table:WT Buf", "--deterministic"])
+            .args([routine, &format!("writes-table:{table}"), "--deterministic"])
             .env("RUST_LOG", "off")
             .output()
             .unwrap();
         serde_json::from_slice(&out.stdout)
             .unwrap_or_else(|e| panic!("{e}: {}", String::from_utf8_lossy(&out.stderr)))
     };
+    let answer = |routine: &str| answer_on(routine, "WT Buf");
+    // sol r9: `Tmp.Insert()` inside a `with` keeps its table subscriber's edge (it exits on a
+    // temporary record, which an opaque routine cannot prove), so the subscriber's write of
+    // `WT Log` stays reachable. Without the gate in `table_event_edges` the answer was `no`.
+    let v = answer_on("TmpWith", "WT Log");
+    assert_eq!(
+        v["payload"]["result"]["answer"].as_str(),
+        Some("yes"),
+        "TmpWith: {v:#}"
+    );
     // The receiver's temp state is unknown under `with`: D1 reports it Uncertain, so the answer
     // is `yes` (the write may happen), never the `no` a temporary receiver gives, and each write's
     // evidence says `tempState: unknown` (D1's Uncertain; sol r7). DoIt's write runs on the

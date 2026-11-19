@@ -271,7 +271,8 @@ pub fn detect_d56(
             // the write is no SQL round-trip (a `SourceTableTemporary` page's
             // `Rec`, a `temporary` local). The write op carries the temp state
             // (the model forces the page's implicit `Rec` ops to known-temp).
-            if crate::program::body::features::temp_state_suppresses(write.temp_state.as_ref()) {
+            if crate::program::body::features::temp_state_suppresses(write.temp_state.get(routine))
+            {
                 skipped_target_temp += 1;
                 continue;
             }

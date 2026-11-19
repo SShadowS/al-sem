@@ -1489,7 +1489,7 @@ fn own_writes(r: &ModelRoutine) -> Vec<&PAnchor> {
             .iter()
             .filter(|op| {
                 WRITE_OPS.contains(&op.op.fold_identifier().as_str())
-                    && !temp_state_suppresses(op.temp_state.as_ref())
+                    && !temp_state_suppresses(op.temp_state.get(r))
                     && !temp_var(&op.record_variable_name)
             })
             .map(|op| &op.source_anchor),

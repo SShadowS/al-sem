@@ -79,7 +79,7 @@ pub fn detect_d18(
             }
 
             // Skip temporary records.
-            if super::is_known_temp(op) {
+            if super::is_known_temp(op, routine) {
                 skipped_temp_record += 1;
                 continue;
             }

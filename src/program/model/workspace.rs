@@ -387,6 +387,56 @@ impl ModelRecordVariable {
     }
 }
 
+/// A record or FieldRef operation's temp state (ENG-30, sol r9). Readable only through
+/// [`OpTemp::get`], which takes the operation's routine and answers `unknown` when the routine
+/// is opaque to names ([`ModelRoutine::names_opaque`]: a name in it may be a `with` record's).
+/// So no pass sees a temp state derived by name in such a routine, whatever the order of passes.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct OpTemp(Option<crate::program::body::features::PTempState>);
+
+static UNKNOWN_TEMP: crate::program::body::features::PTempState =
+    crate::program::body::features::PTempState {
+        kind: crate::program::body::features::TempKind::Unknown,
+        value: None,
+        parameter_index: None,
+    };
+
+impl OpTemp {
+    #[must_use]
+    pub fn new(ts: Option<crate::program::body::features::PTempState>) -> Self {
+        Self(ts)
+    }
+
+    pub fn set(&mut self, ts: Option<crate::program::body::features::PTempState>) {
+        self.0 = ts;
+    }
+
+    /// The temp state as a reader of routine `r` (the operation's own) may see it.
+    #[must_use]
+    pub fn get(&self, r: &ModelRoutine) -> Option<&crate::program::body::features::PTempState> {
+        self.get_with(r.names_opaque)
+    }
+
+    /// [`Self::get`] with the routine's [`ModelRoutine::names_opaque`] read beforehand, for a
+    /// loop that holds the routine's operations mutably.
+    #[must_use]
+    pub fn get_with(
+        &self,
+        names_opaque: bool,
+    ) -> Option<&crate::program::body::features::PTempState> {
+        if names_opaque {
+            Some(&UNKNOWN_TEMP)
+        } else {
+            self.0.as_ref()
+        }
+    }
+
+    /// The stored value: only the opacity clearing and its invariant read it.
+    pub(crate) fn raw(&self) -> Option<&crate::program::body::features::PTempState> {
+        self.0.as_ref()
+    }
+}
+
 /// A record operation with its (post-resolve) resolved internal table id.
 #[derive(Debug, Clone)]
 pub struct ModelRecordOperation {
@@ -397,7 +447,8 @@ pub struct ModelRecordOperation {
     pub table_id: Option<String>,
     /// Temp-state of this operation (from L2 body walk). Required by the
     /// R3a-2 summary engine to derive DbEffect.tempState for base summaries.
-    pub temp_state: Option<crate::program::body::features::PTempState>,
+    /// Read only through [`OpTemp::get`] with the operation's routine (ENG-30).
+    pub temp_state: OpTemp,
     /// Field arguments for ops like Validate (from L2 body walk). Required
     /// by the R3a-2 summary engine for RecordRoleSummary.writesFields.
     pub field_arguments: Option<Vec<String>>,
@@ -712,6 +763,10 @@ pub struct ModelRoutine {
     /// kept rows and every revision's model share one tree (context-server
     /// stage 3).
     pub statement_tree: Option<std::sync::Arc<crate::program::body::features::PCFNNode>>,
+    /// `features::names_opaque(statement_tree, body_available)`, computed once where the row is
+    /// built (ENG-30): a `with`, or a body whose tree was dropped as untrusted. [`OpTemp::get`]
+    /// reads it on every temp-state read, so it is a field, not a tree walk.
+    pub names_opaque: bool,
     /// The routine's loops (L2 body-walk output). L2 data that the L3
     /// record-type projection drops, forwarded here for L5 detectors (d4 reads
     /// `routine.features.loops`). Additive — never reaches an R0–R3 golden.
@@ -1845,7 +1900,7 @@ fn project_ir(
                     record_variable_name: op.record_variable_name.clone(),
                     record_variable_id: op.record_variable_id.clone(),
                     table_id: None,
-                    temp_state: Some(op.temp_state.clone()),
+                    temp_state: OpTemp::new(Some(op.temp_state.clone())),
                     field_arguments: op.field_arguments.clone(),
                     source_anchor: op.source_anchor.clone(),
                     loop_stack: op.loop_stack.clone(),
@@ -2191,6 +2246,10 @@ fn project_ir(
                     &|origin| anchor_from_origin(origin, source_unit_id, cols),
                 ))
             });
+            let names_opaque = crate::program::body::features::names_opaque(
+                statement_tree.as_deref(),
+                body_available,
+            );
             workspace.routines.push(ModelRoutine {
                 id: routine_id,
                 stable_routine_id,
@@ -2215,6 +2274,7 @@ fn project_ir(
                 call_sites,
                 operation_sites,
                 statement_tree,
+                names_opaque,
                 loops,
                 file,
                 site_exprs,
@@ -2826,6 +2886,7 @@ fn rewrite_routine_site_ids(r: &mut ModelRoutine, f: &dyn Fn(&str) -> String) {
         rule_drafts,
         card_text: _,
         site_guards: _,
+        names_opaque: _,
     } = r;
     // Record variable ids (`{id}/rv/{name}`): no site tag, so a renumbering
     // leaves them as they are; a new routine id (a split declaration) moves
@@ -4139,33 +4200,44 @@ impl RowNodes {
     }
 }
 
-fn is_opaque(r: &ModelRoutine) -> bool {
+pub(crate) fn is_opaque(r: &ModelRoutine) -> bool {
     crate::program::body::features::names_opaque(r.statement_tree.as_deref(), r.body_available)
 }
 
-/// The model's last word on an opaque routine (ENG-30, sol r8): every record operation's temp
-/// state is unknown, since a name in it may be the `with` record's (a bare `Insert()` runs on the
-/// `with` record, not `Rec`; `A.GetTable(Phys)` may rebind an alias). Runs after every pass
-/// that derives one (the body walk, `record_types`, `event_param_temp`).
-pub fn clear_opaque_operation_temps(m: &mut Model) {
-    for r in m.workspace.routines.iter_mut().filter(|r| is_opaque(r)) {
-        for op in &mut r.record_operations {
-            op.temp_state = Some(crate::program::body::features::PTempState {
-                kind: "unknown".into(),
-                value: None,
-                parameter_index: None,
-            });
+/// ENG-30 (sol r8, r9): every record and FieldRef operation's temp state in an opaque routine is
+/// unknown, since a name in it may be the `with` record's (a bare `Insert()` runs on the `with`
+/// record, not `Rec`; `A.GetTable(Phys)` may rebind an alias). Every reader goes through
+/// [`OpTemp::get`], which already answers `unknown` there, whatever the order of passes; this
+/// clearing (run last in `attach_program_calls`) keeps the stored value equal to what readers see,
+/// and the invariant checks it (belt and braces). Sound but blunt: an unambiguous
+/// temporary receiver outside the `with`, and a platform operation whose temp state comes from
+/// table metadata, lose it too; exact with-scope resolution (ENG-143) gives them back.
+pub fn clear_opaque_operation_temps(w: &mut ModelEntities) {
+    for r in w.routines.iter_mut().filter(|r| is_opaque(r)) {
+        for op in r
+            .record_operations
+            .iter_mut()
+            .chain(r.field_ref_operations.iter_mut())
+        {
+            op.temp_state.set(Some(UNKNOWN_TEMP.clone()));
         }
     }
 }
 
-/// The invariant over a final model (ENG-30, sol r7 and r8): a routine opaque to names
+/// The invariant over a final model (ENG-30, sol r7 to r9): a routine opaque to names
 /// (`features::names_opaque`) has no argument binding with a source, no receiver temp state and
-/// no record operation with a known or parameter-dependent temp state, whatever step wrote them.
+/// no record or FieldRef operation with a known or parameter-dependent temp state, whatever step
+/// wrote them.
 /// Returns how many opaque routines there are and one line per offending call site or operation.
 pub fn opaque_binding_violations(m: &Model) -> (usize, Vec<String>) {
     let mut opaque = 0;
     let mut bad = Vec::new();
+    for r in &m.workspace.routines {
+        // The stored flag `OpTemp::get` reads must be the tree's own.
+        if r.names_opaque != is_opaque(r) {
+            bad.push(format!("{}::{} names_opaque is stale", r.object_id, r.name));
+        }
+    }
     for r in m.workspace.routines.iter().filter(|r| is_opaque(r)) {
         opaque += 1;
         for cs in &r.call_sites {
@@ -4181,10 +4253,10 @@ pub fn opaque_binding_violations(m: &Model) -> (usize, Vec<String>) {
                 bad.push(format!("{}::{} call {}", r.object_id, r.name, cs.id));
             }
         }
-        for op in &r.record_operations {
+        for op in r.record_operations.iter().chain(&r.field_ref_operations) {
             if op
                 .temp_state
-                .as_ref()
+                .raw()
                 .is_some_and(|t| t.kind.as_str() != "unknown")
             {
                 bad.push(format!(
@@ -4510,7 +4582,7 @@ impl RoutineView<'_> {
             .record_operations
             .iter()
             .find(|op| op.record_variable_name.fold_identifier() == want)
-            .and_then(|op| op.temp_state.as_ref())
+            .and_then(|op| op.temp_state.get(self.routine))
             .and_then(|ts| if ts.kind == "known" { ts.value } else { None })
     }
 

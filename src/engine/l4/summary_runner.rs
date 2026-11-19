@@ -585,7 +585,7 @@ pub fn base_intraprocedural_summary(
         let table_id = op.table_id.clone().unwrap_or_else(|| "unknown".to_string());
         let temp_state = op
             .temp_state
-            .as_ref()
+            .get(routine)
             .map(TempState::from_p)
             .unwrap_or(TempState::Unknown);
         let temp_kind = temp_state.to_kind();
@@ -1127,7 +1127,7 @@ pub(crate) fn trigger_receiver_temp_state(
         return TempState::Unknown;
     }
     record_op_by_id(routine, op_id)
-        .and_then(|op| op.temp_state.as_ref())
+        .and_then(|op| op.temp_state.get(routine))
         .map_or(TempState::Unknown, TempState::from_p)
 }
 
@@ -1155,7 +1155,7 @@ pub(crate) fn table_event_param_temp_state(
         return TempState::Unknown;
     }
     record_op_by_id(routine, op_id)
-        .and_then(|op| op.temp_state.as_ref())
+        .and_then(|op| op.temp_state.get(routine))
         .map_or(TempState::Unknown, TempState::from_p)
 }
 
@@ -3247,7 +3247,7 @@ mod flow_field_tests {
             Vec::new(),
             false,
         );
-        op.temp_state = Some(known_false());
+        op.temp_state.set(Some(known_false()));
         op.flow_field_reads = vec![
             FlowFieldRead {
                 field: "Child Count".to_string(),

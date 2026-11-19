@@ -497,7 +497,7 @@ mod tests {
 
         let mut h = routine("H", "procedure");
         let mut op0 = record_op("H/op0", "Modify", "Rec", Some("t/H"), vec![], false);
-        op0.temp_state = Some(ts_pd(0));
+        op0.temp_state.set(Some(ts_pd(0)));
         h.record_operations = vec![op0];
 
         let routines = vec![r, a, b, c, d, h];
