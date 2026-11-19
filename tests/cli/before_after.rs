@@ -5,7 +5,7 @@
 //! (`ALSEM_SPEED_CACHE`), slot folder (`CDO_SLOT_DIR`) and workspace. Nothing
 //! touches the real checkout, cache, slot or CDO.
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 
 const SCRIPTS: [&str; 3] = ["cdo-before-after", "cdo-speed", "cdo-slot"];

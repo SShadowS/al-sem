@@ -17,7 +17,11 @@ const GUARD: &str = concat!(
 /// (holders, keepers, waiters) is killed. Its watchdog does the same after
 /// WATCHDOG, so a hung test fails instead of holding the CDO slot for hours
 /// (TLS-89: one did, 2h43m).
-struct Slot(tempfile::TempDir, Watchdog);
+struct Slot(
+    tempfile::TempDir,
+    // Never read: held for its Drop, which stops the watchdog.
+    #[allow(dead_code)] Watchdog,
+);
 
 const WATCHDOG: std::time::Duration = std::time::Duration::from_secs(300);
 
@@ -466,7 +470,7 @@ fn cdo_slot_a_hold_lives_exactly_as_long_as_its_processes() {
             .filter_map(|e| e.file_name().to_string_lossy().parse::<i32>().ok())
             .filter(|p| {
                 std::fs::read(format!("/proc/{p}/cmdline"))
-                    .map(|c| c == b"sleep\0600\0")
+                    .map(|c| c == b"sleep\x00600\x00")
                     .unwrap_or(false)
                     && std::fs::read(format!("/proc/{p}/environ"))
                         .map(|e| {
