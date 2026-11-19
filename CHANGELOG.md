@@ -681,6 +681,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Each guard has a discrimination proof, recorded in the tests' docs. Documented in CLAUDE.md's
   test tier 2b.
 
+### Fixed (TLS-93: a test's deliberate crash no longer leaves a core dump on the host)
+
+- **The case.** `lsp::l4_host_binary::host_panic_ends_the_server` makes the server abort on
+  purpose. Each debug test run therefore made systemd-coredump store a core of
+  `al-call-hierarchy`, and the desktop raised a crash notice that looked like a real crash. The
+  engine-host fault hooks (`abort-on-ask`, `abort-on-ask-once`, `panic-on-ask-once`, used by
+  `engine_host` and the MCP tests) crash their child the same way.
+- **Now.** Each deliberate crash turns its process's core dump off right before it happens, and
+  prints "test seam: core dumps off" once that reads back:
+  - the l4-host panic seam (`AL_SEM_L4_HOST_TEST_PANIC`);
+  - the engine-host hooks `abort-on-ask`, `abort-on-ask-once` and `panic-on-ask-once`.
+
+  How it is turned off:
+  - **Linux:** the process becomes not dumpable (`PR_SET_DUMPABLE` 0). When that succeeds, the
+    kernel skips the dump before it starts the host's `core_pattern` pipe, so systemd-coredump
+    makes no core and no record, and the desktop raises no notice. `RLIMIT_CORE` 0 would not do:
+    the kernel ignores it for a pipe, and systemd-coredump would still log the crash (found in
+    the Fable review). prctl's arguments are passed word-sized (`c_ulong`): it is variadic,
+    and a bare `0` left the upper bits of each argument unspecified on 64-bit Linux (sol).
+  - **Other unix:** `RLIMIT_CORE` 0.
+  - If the call fails (a sandbox refusing `prctl`, or a non-unix system), the seam still
+    crashes and may dump, and no "core dumps off" line is printed.
+
+  The call sits at the crash itself, because a non-dumpable process's `/proc` files belong to
+  root, and its own `clear_refs` write would fail. A real crash keeps its core. No other test
+  crashes a process on purpose (searched: `abort`, SIGABRT and the other core-dumping signals).
+- **Tests.**
+  - `host_panic_ends_the_server` and `engine_host`'s three crash tests (`abort-on-ask-once`,
+    `abort-on-ask`, `panic-on-ask-once`) assert the line, read back inside the crashing child.
+  - Discrimination proofs, all red: each seam's call removed, re-run after the call moved to
+    the crash.
+  - The owner can confirm that no new entry appears in `coredumpctl list` after a debug test
+    run.
+
 ### Changed (ENG-120: mimalloc's `purge_delay` measured on CDO and DO, kept at 0)
 
 - No code change: `alsem` keeps `purge_delay` 0. A delay of 1 or 10 ms gave no CPU gain near the

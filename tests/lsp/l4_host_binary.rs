@@ -390,4 +390,14 @@ fn host_panic_ends_the_server() {
         stderr.iter().any(|l| l.contains("l4-host: panicked")),
         "the panic is logged: {stderr:?}"
     );
+    // TLS-93: the seam turned the core dump off (read back) before it
+    // panicked, so the abort leaves nothing on the host. Break: the seam's `no_core_dumps`
+    // call removed -> no such line (red).
+    #[cfg(unix)]
+    assert!(
+        stderr
+            .iter()
+            .any(|l| l.contains("l4-host: test seam: core dumps off")),
+        "core dumps off before the panic: {stderr:?}"
+    );
 }

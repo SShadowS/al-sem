@@ -1106,6 +1106,15 @@ mod faults {
         assert!(message.contains("engine died"), "{message}");
         #[cfg(unix)]
         assert!(message.contains("signal 6"), "an abort: {message}");
+        // TLS-93: the hook turns the child's core dump off (read back) right
+        // before it aborts, so the abort leaves nothing on the host. Break:
+        // the `no_core_dumps` call at `abort-on-ask-once` removed -> no such
+        // line (red).
+        #[cfg(unix)]
+        assert!(
+            message.contains("engine-host: test seam: core dumps off"),
+            "core dumps off: {message}"
+        );
         assert_eq!(
             front.current_backoff(),
             Duration::from_millis(400),
@@ -1162,8 +1171,16 @@ mod faults {
         let mut waits = Vec::new();
         for _ in 0..3 {
             let started = Instant::now();
-            let (outcome, _) = failure(&front.ask(explain()).outcome);
+            let answer = front.ask(explain());
+            let (outcome, message) = failure(&answer.outcome);
             assert_eq!(outcome, FailedOutcome::EngineError);
+            // TLS-93 (review, sol): `abort-on-ask` turns the core dump off
+            // (read back) before it aborts. Break: its call removed (red).
+            #[cfg(unix)]
+            assert!(
+                message.contains("engine-host: test seam: core dumps off"),
+                "core dumps off: {message}"
+            );
             waits.push(started.elapsed());
         }
         assert!(waits[1] >= Duration::from_millis(200), "{waits:?}");
@@ -1217,6 +1234,13 @@ mod faults {
         assert!(message.contains("engine died"), "{message}");
         #[cfg(unix)]
         assert!(message.contains("signal 6"), "an abort: {message}");
+        // TLS-93 (review, sol): `panic-on-ask-once` turns the core dump off
+        // (read back) before it panics. Break: its call removed (red).
+        #[cfg(unix)]
+        assert!(
+            message.contains("engine-host: test seam: core dumps off"),
+            "core dumps off: {message}"
+        );
         let argv = explain_argv();
         let argv: Vec<&str> = argv.iter().map(String::as_str).collect();
         assert_eq!(cli_answer(front.ask(explain()).outcome), cli(&argv));
