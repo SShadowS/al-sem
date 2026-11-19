@@ -21,6 +21,9 @@ table 51357 "PW Set Else" { fields { field(1; Code; Code[20]) { } } keys { key(P
 table 51358 "PW Txt A" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
 table 51359 "PW Txt Else" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
 table 51361 "PW Bool If" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
+table 51362 "PW Keep One" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
+table 51363 "PW Keep Else" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
+table 51364 "PW Bool Keep" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
 enum 51360 "PW Kind"
 {
     value(0; Alpha) { }
@@ -128,6 +131,40 @@ codeunit 51370 "PW Shapes"
             T.Insert();
     end;
 
+    // ---- E2 keeps: a local at Dictionary.Get's KEY position (not var) keeps its value ----
+    procedure FlowKeep()
+    var
+        D: Dictionary of [Integer, Integer];
+        L: Integer;
+        V: Integer;
+        One: Record "PW Keep One";
+        Other: Record "PW Keep Else";
+    begin
+        L := 1;
+        D.Get(L, V);
+        case L of
+            1:
+                One.Insert();
+            else
+                Other.Insert();
+        end;
+    end;
+
+    // ---- guard frames keep: Format reads a Boolean ----
+    procedure BoolKeepRoot()
+    begin
+        BoolKeep(false);
+    end;
+
+    local procedure BoolKeep(B: Boolean)
+    var
+        T: Record "PW Bool Keep";
+    begin
+        Message(Format(B));
+        if B then
+            T.Insert();
+    end;
+
     // ---- Text: DelStr reads its text (outside ENG-30's 15 names): T keeps 'A' ----
     procedure TxtRoot()
     begin
@@ -231,12 +268,17 @@ fn a_platform_method_writing_through_var_keeps_every_arm_live() {
     ]);
 }
 
-/// A read-only platform function keeps a Text parameter's literal, so the arm it cannot take
-/// is pruned (ENG-30 unbound every Text passed to a function outside its 15 names).
+/// A read-only platform position keeps the value, so the arm it cannot take is pruned: a Text
+/// passed to `DelStr` (ENG-30 unbound every Text passed to a function outside its 15 names), a
+/// local at `Dictionary.Get`'s key position (E2's old list havocked every argument of `Get`),
+/// and a Boolean passed to `Format`.
 #[test]
-fn a_read_only_platform_function_keeps_a_text_literal() {
+fn a_read_only_platform_position_keeps_the_value() {
     expect(&[
         ("TxtRoot", "PW Txt A", "yes"),
         ("TxtRoot", "PW Txt Else", "no"),
+        ("FlowKeep", "PW Keep One", "yes"),
+        ("FlowKeep", "PW Keep Else", "no"),
+        ("BoolKeepRoot", "PW Bool Keep", "no"),
     ]);
 }

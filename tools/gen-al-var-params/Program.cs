@@ -66,7 +66,11 @@ class Program
             {
                 if (!p.IsVar) continue;
                 if (p.Ordinal >= 64) throw new Exception($"{m.Name}: var parameter {p.Ordinal} past 63");
-                mask |= 1UL << p.Ordinal;
+                // A variadic `var` parameter (`Dialog.Open(String; var Variable1 ...)`,
+                // `ReportInstance.CreateTotals(var Var1; var Var2 ...)`: alc gives AL0130 for a
+                // literal at every later position too) makes every position from it on `var`.
+                // `IsParams` is not on the public interface, so it is read by reflection.
+                mask |= IsParams(p) ? ulong.MaxValue << p.Ordinal : 1UL << p.Ordinal;
             }
             VarPositions.TryGetValue(name, out var had);
             VarPositions[name] = had | mask;
@@ -76,9 +80,8 @@ class Program
     static int Run(string dir, string output)
     {
         var asm = typeof(Compilation).Assembly;
-        Type[] types;
-        try { types = asm.GetTypes(); }
-        catch (ReflectionTypeLoadException e) { types = e.Types.Where(t => t != null).ToArray(); }
+        // Every type must load: a class that failed to load would be silently unread (Fable).
+        var types = asm.GetTypes();
         // Abstract bases every class derives from, and the interface type's base: no members.
         var bases = new HashSet<string> { "Language", "GenericLanguage", "I" };
         var unread = new List<string>();
@@ -136,6 +139,15 @@ class Program
         File.WriteAllText(output, sb.ToString());
         Console.Error.WriteLine($"{classes} classes, {overloads} overloads, {AllNames.Count} names, {writers} writers -> {output}");
         return 0;
+    }
+
+    static bool IsParams(IParameterSymbol p)
+    {
+        var prop = p.GetType().GetProperty("IsParams",
+            BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+        if (prop == null)
+            throw new Exception($"{p.GetType().Name} has no IsParams: the compiler's API moved");
+        return (bool)prop.GetValue(p);
     }
 
     static string Quote(string s) => "\"" + s.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";

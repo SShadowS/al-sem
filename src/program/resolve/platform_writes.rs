@@ -39,8 +39,12 @@ mod tests {
                 .all(|w| w[0].0 < w[1].0),
             "sorted and unique by name"
         );
-        assert!(
-            table::PLATFORM_VAR_PARAMS.len() > 700,
+        // Every platform method name alc 18.0.41 lists (the generator's header): a table that
+        // lost names would only cost precision (an unlisted name writes), so pin the count to
+        // make a shrink visible. A new alc: re-run the generator and update it.
+        assert_eq!(
+            table::PLATFORM_VAR_PARAMS.len(),
+            796,
             "every platform method"
         );
     }
@@ -61,6 +65,13 @@ mod tests {
             assert!(may_write_arg(m, k), "{m} writes argument {k}");
         }
         assert!(!may_write_arg("Evaluate", 1), "Evaluate reads its text");
+        // A variadic `var` parameter writes every position from it on (Fable: alc gives AL0130
+        // for a literal at `Dialog.Open('#1## #2##', 1, 2)`'s positions 1 and 2).
+        assert!(
+            (1..5).all(|k| may_write_arg("Open", k)),
+            "Dialog.Open's variables"
+        );
+        assert!(!may_write_arg("Open", 0), "Dialog.Open's text");
         assert!(
             !may_write_arg("SelectToken", 0),
             "SelectToken reads its path"
