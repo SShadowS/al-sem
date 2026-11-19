@@ -1198,6 +1198,11 @@ fn build_flow<'a>(
             .push(e.subscriber_routine_id.as_str());
     }
     let mut keep_info: Vec<KeepInfo> = Vec::new();
+    // Every model row of an id (two `#if` arms of one routine share it), for the subscribers.
+    let mut rows_by_id: HashMap<&str, Vec<&ModelRoutine>> = HashMap::new();
+    for r in &model.workspace.routines {
+        rows_by_id.entry(r.id.as_str()).or_default().push(r);
+    }
     let universe = universe_words(model);
     let mut verdicts: HashMap<(&str, u32), Option<u32>> = HashMap::new();
     // ENG-117: iterated only by an OR fixpoint (order-free) and per entry.
@@ -1251,6 +1256,7 @@ fn build_flow<'a>(
                         &subs,
                         &unbound,
                         by_id,
+                        &rows_by_id,
                         callees,
                         builtin_sites,
                     )
@@ -1391,6 +1397,7 @@ fn keep_verdict(
     subs: &HashMap<&str, Vec<&str>>,
     unbound: &HashSet<String>,
     by_id: &HashMap<&str, &ModelRoutine>,
+    rows_by_id: &HashMap<&str, Vec<&ModelRoutine>>,
     callees: &HashMap<&str, Vec<&str>>,
     builtin_sites: &HashSet<&str>,
 ) -> Option<KeepInfo> {
@@ -1403,15 +1410,19 @@ fn keep_verdict(
         return None;
     }
     let id = crate::program::model::events::encode_event_id(&c.object_id, &c.name);
+    // Every row of every subscriber (a subscriber declared in two `#if` arms is two rows with
+    // one id; any arm's build may run): each must keep the parameter (sol round 5, ENG-135).
     for sid in subs.get(id.as_str()).into_iter().flatten() {
-        let s = by_id.get(sid)?;
-        if !s.body_available || s.statement_tree.is_none() {
-            return None;
-        }
-        let passes =
-            |cs: &str, a: u32| value_passes_by_value(s, cs, a, callees, builtin_sites, by_id);
-        if lflow::subscriber_changes(s, &name, &passes) {
-            return None;
+        let rows = rows_by_id.get(sid)?;
+        for &s in rows {
+            if !s.body_available || s.statement_tree.is_none() {
+                return None;
+            }
+            let passes =
+                |cs: &str, a: u32| value_passes_by_value(s, cs, a, callees, builtin_sites, by_id);
+            if lflow::subscriber_changes(s, &name, &passes) {
+                return None;
+            }
         }
     }
     Some(KeepInfo {

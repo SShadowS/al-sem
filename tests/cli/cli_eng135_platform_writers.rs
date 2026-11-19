@@ -38,6 +38,7 @@ table 51376 "PW Q Int A" { fields { field(1; Code; Code[20]) { } } keys { key(PK
 table 51377 "PW Q Int Else" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
 table 51378 "PW Q Bool" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
 table 51380 "PW Sub" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
+table 51382 "PW Sub Arm" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
 enum 51360 "PW Kind"
 {
     value(0; Alpha) { }
@@ -572,6 +573,23 @@ codeunit 51370 "PW Shapes"
     begin
     end;
 
+    // sol round 5: the subscriber is declared in two `#if` arms; only the first changes Value.
+    procedure SubArmRoot()
+    var
+        U: Boolean;
+        T: Record "PW Sub Arm";
+    begin
+        U := true;
+        OnSubArmKeep(U);
+        if not U then
+            T.Insert();
+    end;
+
+    [IntegrationEvent(false, false)]
+    procedure OnSubArmKeep(var Value: Boolean)
+    begin
+    end;
+
     // Round-4 literal routes (cross_rules): a record passed to a Variant decides `IsRecord`
     // only while the Variant holds it; here a `var` replaces it, through a quoted argument.
     procedure VarTypeRoot()
@@ -600,6 +618,19 @@ codeunit 51379 "PW Sub Subscr"
     begin
         Evaluate("Value", 'false');
     end;
+
+#if PW_NEVER
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::"PW Shapes", 'OnSubArmKeep', '', false, false)]
+    local procedure HandleSubArmKeep(var Value: Boolean)
+    begin
+        Evaluate("Value", 'false');
+    end;
+#else
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::"PW Shapes", 'OnSubArmKeep', '', false, false)]
+    local procedure HandleSubArmKeep(var Value: Boolean)
+    begin
+    end;
+#endif
 }
 "#;
 
@@ -705,6 +736,7 @@ fn an_arm_that_writes_the_parameter_unbinds_it() {
         ("QFlowRoot", "PW Chg Flow", "yes"),
         ("QVarRoot", "PW Tab Log", "yes"),
         ("SubRoot", "PW Sub", "yes"),
+        ("SubArmRoot", "PW Sub Arm", "yes"),
     ]);
 }
 

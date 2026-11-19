@@ -840,7 +840,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`subscriber_changes`: a loaded subscriber writing its `var` through `Evaluate("Value", ..)`
   was taken as keeping it; sol round 4) and the round-4 literal routes' Variant test
   (`cross_rules::variant_usable`: `explain` dropped a `not V.IsRecord` rule for a Variant a
-  `var` call replaced).
+  `var` call replaced). The publisher keep check also read ONE row of each subscriber (the last
+  by id): a subscriber declared in two `#if` arms, only one changing its `var`, was taken as
+  keeping it. It now requires every row of every subscriber to keep the parameter (sol round 5).
 - **What moves.** Precision is LOST where the old lists said "keeps its value" wrongly (correct),
   and gained where ENG-30's Text rule unbound a parameter passed to a read-only function outside
   its 15 names (`DelStr`, `StrLen`'s kin). CDO counts: TBD.
