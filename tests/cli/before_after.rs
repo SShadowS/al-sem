@@ -5,7 +5,7 @@
 //! (`ALSEM_SPEED_CACHE`), slot folder (`CDO_SLOT_DIR`) and workspace. Nothing
 //! touches the real checkout, cache, slot or CDO.
 
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
 const SCRIPTS: [&str; 3] = ["cdo-before-after", "cdo-speed", "cdo-slot"];
@@ -648,9 +648,14 @@ fn before_after_measures_nothing_beside_a_build() {
     let name = format!("t89b{}", std::process::id());
     let fake = t.path(&name);
     std::os::unix::fs::symlink("/bin/bash", &fake).unwrap();
+    // One process: the builtin `read` waits on a pipe nobody writes, so killing
+    // it leaves no `sleep` child holding the test's output (a nextest leak).
     let build = crate::cdo_slot::Reap(
         std::process::Command::new(&fake)
-            .args(["-c", "sleep 600; true"])
+            .args(["-c", "read -t 600 _ || true"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
             .spawn()
             .unwrap(),
     );

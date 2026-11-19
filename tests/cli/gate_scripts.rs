@@ -88,9 +88,14 @@ fn speed_gate_times_nothing_beside_a_build() {
     std::os::unix::fs::symlink("/bin/bash", &fake).unwrap();
     // Reaped on any exit, a panic included (a leaked stand-in would hold up
     // later runs).
+    // One process: the builtin `read` waits on a pipe nobody writes, so killing
+    // it leaves no `sleep` child holding the test's output (a nextest leak).
     let build = crate::cdo_slot::Reap(
         std::process::Command::new(&fake)
-            .args(["-c", "sleep 600; true"])
+            .args(["-c", "read -t 600 _ || true"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
             .spawn()
             .unwrap(),
     );

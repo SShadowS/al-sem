@@ -236,6 +236,23 @@ fn sleeper() -> Reap {
     )
 }
 
+/// A stand-in process of slot `s` (a build, a build script, a lock holder): its
+/// output goes nowhere and its environment names the slot folder, so the
+/// slot's cleanup ends it and every child it started (a killed `bash -c
+/// "sleep 600; true"` leaves its `sleep`, which nextest reported as a leak).
+fn stand_in(s: &Slot, program: impl AsRef<std::ffi::OsStr>, args: &[&std::ffi::OsStr]) -> Reap {
+    Reap(
+        std::process::Command::new(program)
+            .args(args)
+            .env("CDO_SLOT_DIR", s.dir())
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap(),
+    )
+}
+
 /// ⟨TLS-90⟩ A spawned process (a waiter, a stand-in) that is killed and reaped
 /// when it drops, so a failing assertion cannot leak it. (A test process killed
 /// outright runs no `Drop`, so that case can still leak; the slot's watchdog
@@ -1061,14 +1078,18 @@ fn cdo_slot_serves_waiters_in_arrival_order() {
 fn cdo_slot_a_stuck_lock_fails_loudly_and_readers_go_on() {
     let s = Slot::new();
     assert_eq!(s.run("A", &["acquire", "lane", "by hand"], &[]).0, Some(0));
-    let stuck = Reap(
-        std::process::Command::new("flock")
-            // -o: its `sleep` does not keep the lock once flock is killed.
-            .args(["-x", "-o"])
-            .arg(s.dir().join("timed.lock"))
-            .args(["sleep", "60"])
-            .spawn()
-            .unwrap(),
+    // -o: its `sleep` does not keep the lock once flock is killed.
+    let lock = s.dir().join("timed.lock");
+    let stuck = stand_in(
+        &s,
+        "flock",
+        &[
+            "-x".as_ref(),
+            "-o".as_ref(),
+            lock.as_os_str(),
+            "sleep".as_ref(),
+            "60".as_ref(),
+        ],
     );
     until("the stand-in has the lock", &|| {
         s.probe().ends_with("timed=1")
@@ -1360,12 +1381,7 @@ fn cdo_slot_decides_from_locks_alone() {
     let fake_name = format!("t89d{}", std::process::id());
     let fake = s.0.path().join(&fake_name);
     std::os::unix::fs::symlink("/bin/bash", &fake).unwrap();
-    let b = Reap(
-        std::process::Command::new(&fake)
-            .args(["-c", "sleep 600; true"])
-            .spawn()
-            .unwrap(),
-    );
+    let b = stand_in(&s, &fake, &["-c".as_ref(), "sleep 600; true".as_ref()]);
     let bound = sleeper();
     let bpid = bound.id().to_string();
     let mut waiting = s.bg(
@@ -1416,12 +1432,7 @@ fn cdo_slot_timed_waits_for_builds_and_refuses_beside_one() {
     let touch = ran.to_str().unwrap();
 
     // A build runs: refused after the wait, nothing run, the slot free.
-    let mut b = Reap(
-        std::process::Command::new(&fake)
-            .args(["-c", "sleep 600; true"])
-            .spawn()
-            .unwrap(),
-    );
+    let mut b = stand_in(&s, &fake, &["-c".as_ref(), "sleep 600; true".as_ref()]);
     let bpid = b.id();
     let (code, text) = s.run(
         "A",
@@ -1519,12 +1530,7 @@ fn cdo_slot_timed_waits_for_builds_and_refuses_beside_one() {
     // Review r3 (sol): the wait never sleeps past its deadline. A build still
     // running at 1 s refuses, even with a 15 s poll and the build ending at
     // 3 s. Break: sleeping a whole poll (the build is gone at 15 s: a start).
-    let mut b7 = Reap(
-        std::process::Command::new(&fake)
-            .args(["-c", "sleep 3; true"])
-            .spawn()
-            .unwrap(),
-    );
+    let mut b7 = stand_in(&s, &fake, &["-c".as_ref(), "sleep 3; true".as_ref()]);
     let started = std::time::Instant::now();
     let (code, text) = s.run(
         "A",
@@ -1576,12 +1582,10 @@ fn cdo_slot_timed_waits_for_build_scripts_and_late_builds() {
     let script_name = format!("ci-steps-t89-{}", std::process::id());
     let script = s.0.path().join(&script_name);
     std::fs::write(&script, "sleep 600\ntrue\n").unwrap();
-    let sb = Reap(
-        std::process::Command::new("bash")
-            .args(["-o", "pipefail"])
-            .arg(&script)
-            .spawn()
-            .unwrap(),
+    let sb = stand_in(
+        &s,
+        "bash",
+        &["-o".as_ref(), "pipefail".as_ref(), script.as_os_str()],
     );
     let (code, text) = s.run(
         "A",
@@ -1606,12 +1610,10 @@ fn cdo_slot_timed_waits_for_build_scripts_and_late_builds() {
     let py_name = format!("check-goldens-t89-{}", std::process::id());
     let py = s.0.path().join(&py_name);
     std::fs::write(&py, "import time\ntime.sleep(600)\n").unwrap();
-    let pb = Reap(
-        std::process::Command::new("python3")
-            .arg("-Xfrozen_modules=off")
-            .arg(&py)
-            .spawn()
-            .unwrap(),
+    let pb = stand_in(
+        &s,
+        "python3",
+        &["-Xfrozen_modules=off".as_ref(), py.as_os_str()],
     );
     let (code, text) = s.run(
         "A",
@@ -1661,12 +1663,7 @@ fn cdo_slot_timed_waits_for_build_scripts_and_late_builds() {
         s.probe().ends_with("timed=1")
     });
     std::thread::sleep(std::time::Duration::from_millis(1000));
-    let late = Reap(
-        std::process::Command::new(&fake)
-            .args(["-c", "sleep 600; true"])
-            .spawn()
-            .unwrap(),
-    );
+    let late = stand_in(&s, &fake, &["-c".as_ref(), "sleep 600; true".as_ref()]);
     let code = timing.0.wait().unwrap().code();
     let mut err = String::new();
     std::io::Read::read_to_string(&mut timing.0.stderr.take().unwrap(), &mut err).unwrap();
@@ -1712,14 +1709,7 @@ fn cdo_slot_timings_in_a_hand_hold() {
     let fake = s.0.path().join(&fake_name);
     std::os::unix::fs::symlink("/bin/bash", &fake).unwrap();
     let names = ("CDO_SLOT_BUILD_NAMES", fake_name.as_str());
-    let build = || {
-        Reap(
-            std::process::Command::new(&fake)
-                .args(["-c", "sleep 600; true"])
-                .spawn()
-                .unwrap(),
-        )
-    };
+    let build = || stand_in(&s, &fake, &["-c".as_ref(), "sleep 600; true".as_ref()]);
     let timed_line = || s.run("B", &["status"], &[]).1;
 
     // A timing ends with its bound process; the hold stays.
