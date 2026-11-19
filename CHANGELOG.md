@@ -489,6 +489,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     waits for. Four discrimination proofs, all red. They also caught a bug in this round's first
     draft: the temporary-mark filter matched the whole path, so a slot folder whose path holds
     `.tmp` (every test's tempdir) hid every mark; it matches the file name now.
+- **The state design, after five review rounds of narrower races** (the orchestrator: "the state
+  is spread too thin, not that we need more patches"):
+  - **The slot's whole state is one file**, the status file: the hold's fields and every timed
+    mark (`timed.<pid>.<key>=<value>` lines). The separate `timed.<pid>` files are gone.
+  - **Writers replace it whole** (write, then rename) under the meta lock. A writer that decides
+    on what it read decides and writes in that one critical section (`publish_locked`,
+    `promote_locked`, `end_taken_locked`, `clear_timed_mine_locked`).
+  - **Readers take no lock.** They read the file once and see one whole state, so a reader that
+    stops or dies blocks nobody.
+  - **Every meta wait is bounded** (`CDO_SLOT_META_WAIT_S`, 30 s). A process stuck inside the
+    lock makes a writer fail loudly with exit 5, naming the holder's PID, command and process
+    state. Before, a waiter SIGSTOPped inside the lock (by a test) left `release` waiting
+    2h43m while it held the CDO slot. The invariant is stated at `with_meta`.
+  - **Every `cdo_slot` test has a watchdog**: after 300 s it kills every process using that
+    test's slot folder, so a hang fails the test instead of holding the slot.
+  - Tests:
+    - `cdo_slot_state_holds_under_concurrent_takers`: six sessions at once, a checker reading
+      throughout.
+    - `cdo_slot_a_stuck_state_lock_fails_loudly_and_readers_go_on`: proof red with an
+      unbounded wait.
+    - `cdo_slot_a_reader_never_sees_a_half_written_state`: a test hook writes the new state in
+      two parts with a pause between them; a reader polling meanwhile always sees the whole old
+      state. Proof red with an in-place write.
+  - What a reader can see during a takeover is the hold lock taken before its status exists:
+    a whole "no status yet" state, never a torn file.
+- **Review round 5 (sol):**
+  - **A refused call that took the hold** no longer ends it while another call's timing is active
+    in it (a retry sharing its token; `end_taken`). A `run --timed`'s exit uses the same rule.
+  - **A pending mark counts only while the call that wrote it lives** (writer pid and start
+    time in the mark). An acquire killed during its wait no longer keeps builds out for as long
+    as its timing process lives.
+  - **The guard parses a Python option cluster letter by letter**, as the slot's scanner does:
+    `-Wignore:W` carries its value, `-IX dev` takes the next word, `c` or `m` runs no script.
+  - **The deadline is measured in microseconds** (`EPOCHREALTIME`), so an overrun below a second
+    refuses too.
 - **The limit.** The hook sees a command only when it starts. A command it allowed before the
   hold became timed, and that starts a build later (`sleep 60; cargo build`), is not stopped,
   and neither is a build started outside any hooked session.

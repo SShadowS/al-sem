@@ -8,12 +8,63 @@ const GUARD: &str = concat!(
     "/scripts/claude-hooks/cdo-slot-guard"
 );
 
-/// A slot folder; whatever holder a test leaves is killed when it drops.
-struct Slot(tempfile::TempDir);
+/// A slot folder; whatever holder a test leaves is killed when it drops. Its
+/// watchdog kills every process using the folder after WATCHDOG, so a hung test
+/// fails instead of holding the CDO slot for hours (TLS-89: one did, 2h43m).
+struct Slot(tempfile::TempDir, Watchdog);
+
+const WATCHDOG: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// Kills, at its deadline, every process whose environment names `dir` as
+/// CDO_SLOT_DIR (the test's own cdo-slot calls, their holders and waiters).
+struct Watchdog {
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl Watchdog {
+    fn new(dir: std::path::PathBuf) -> Self {
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = std::sync::Arc::clone(&stop);
+        std::thread::spawn(move || {
+            let until = std::time::Instant::now() + WATCHDOG;
+            while std::time::Instant::now() < until {
+                if flag.load(std::sync::atomic::Ordering::Relaxed) {
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(200));
+            }
+            let want = format!("CDO_SLOT_DIR={}", dir.display());
+            let mut killed = Vec::new();
+            for e in std::fs::read_dir("/proc").into_iter().flatten().flatten() {
+                let name = e.file_name().to_string_lossy().to_string();
+                let Ok(pid) = name.parse::<u32>() else {
+                    continue;
+                };
+                let env = std::fs::read(e.path().join("environ")).unwrap_or_default();
+                if env.split(|b| *b == 0).any(|v| v == want.as_bytes()) {
+                    let _ = std::process::Command::new("kill")
+                        .args(["-9", &pid.to_string()])
+                        .status();
+                    killed.push(pid);
+                }
+            }
+            eprintln!("cdo_slot watchdog: the test hung for {WATCHDOG:?}; killed {killed:?}");
+        });
+        Watchdog { stop }
+    }
+}
+
+impl Drop for Watchdog {
+    fn drop(&mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+}
 
 impl Slot {
     fn new() -> Self {
-        Slot(tempfile::tempdir().unwrap())
+        let tmp = tempfile::tempdir().unwrap();
+        let dog = Watchdog::new(tmp.path().join("slot"));
+        Slot(tmp, dog)
     }
     fn dir(&self) -> std::path::PathBuf {
         self.0.path().join("slot")
@@ -439,6 +490,8 @@ fn cdo_slot_guard_refuses_other_sessions_while_held() {
         "agentflow run --name ci -- true",
         // Review r4 (sol): clustered options ending in X take the next word.
         "python3 -IX dev scripts/cdo-before-after master",
+        // Review r5 (sol): an attached value may itself end in W or X.
+        "python3 -Wignore:W scripts/cdo-before-after master",
     ];
     // TLS-89: the guarded commands that are NOT only builds or tests (gates, CDO
     // runs): refused under an untimed hold too. Every other `guarded` entry is a
@@ -457,6 +510,7 @@ fn cdo_slot_guard_refuses_other_sessions_while_held() {
         "cargo run --release --bin aldump -- --stats /work/src/cdo-baseline/Cloud",
         "python3 -X dev scripts/cdo-before-after master",
         "python3 -IX dev scripts/cdo-before-after master",
+        "python3 -Wignore:W scripts/cdo-before-after master",
     ];
     assert!(not_builds.iter().all(|c| guarded.contains(c)));
     let free = [
@@ -926,6 +980,255 @@ fn cdo_slot_serves_waiters_in_arrival_order() {
     assert_eq!(s.run("D", &["release"], &[]).0, Some(0));
 }
 
+/// ⟨TLS-89, the lock invariant⟩ A process stuck inside the state lock (here a
+/// `flock` on it that sleeps) blocks nobody for long: a writer gives up after
+/// CDO_SLOT_META_WAIT_S with exit 5, naming the holder; a reader takes no lock
+/// and answers at once. (The hang that made this test: a SIGSTOPped waiter
+/// held the lock and `release` waited 2h43m.)
+///
+/// Mutation (2026-11-18): `with_meta` waiting without `-w` -> the writer is
+/// still waiting at the test's 10 s deadline (red); restored, green.
+#[test]
+fn cdo_slot_a_stuck_state_lock_fails_loudly_and_readers_go_on() {
+    let s = Slot::new();
+    assert_eq!(s.run("A", &["acquire", "lane", "by hand"], &[]).0, Some(0));
+    let meta = s.dir().join("meta");
+    let _stuck = Reap(
+        std::process::Command::new("flock")
+            .arg("-x")
+            .arg(&meta)
+            .args(["sleep", "60"])
+            .spawn()
+            .unwrap(),
+    );
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    // A reader: no lock, at once.
+    let started = std::time::Instant::now();
+    let (code, text) = s.run("B", &["status"], &[]);
+    assert_eq!(code, Some(1), "{text}");
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(5),
+        "a reader waited for the lock"
+    );
+    // A writer: gives up loudly after its bound.
+    let mut t = Reap(
+        std::process::Command::new("sleep")
+            .arg("60")
+            .spawn()
+            .unwrap(),
+    );
+    let tpid = t.id().to_string();
+    let mut writer = Reap(
+        std::process::Command::new("bash")
+            .args([SLOT, "acquire", "lane", "stuck", "--bind", &tpid, "--timed"])
+            .env("CDO_SLOT_DIR", s.dir())
+            .env("CDO_SLOT_MEM_MIN_GB", "0")
+            .env("CDO_SLOT_META_WAIT_S", "2")
+            .env("CDO_SLOT_BUILD_NAMES", "tls89-none")
+            .env("CDO_SLOT_BUILD_SCRIPTS", "tls89-none")
+            .env("CLAUDE_CODE_SESSION_ID", "A")
+            .env_remove("CLAUDE_PID")
+            .env_remove("CDO_SLOT_TOKEN")
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap(),
+    );
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let code = loop {
+        if let Some(st) = writer.0.try_wait().unwrap() {
+            break st.code();
+        }
+        assert!(
+            std::time::Instant::now() < until,
+            "a writer still waits for a stuck state lock after 10 s"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
+    let mut err = String::new();
+    std::io::Read::read_to_string(&mut writer.0.stderr.take().unwrap(), &mut err).unwrap();
+    assert_eq!(code, Some(5), "{err}");
+    assert!(err.contains("state lock") && err.contains("PID"), "{err}");
+    t.0.kill().unwrap();
+    t.0.wait().unwrap();
+}
+
+/// ⟨TLS-89, the lock invariant⟩ A writer replaces the state file whole: a
+/// reader polling while a writer is half way through its write (the
+/// CDO_SLOT_TEST_WRITE_PAUSE_S hook writes the new state in two halves with a
+/// pause between) sees the whole old state, never part of the new one.
+///
+/// Mutation (2026-11-18): the state written into the status file itself
+/// instead of a temporary file renamed over it -> the reader sees the half
+/// state ("held by an unknown holder", the hold's fields cut off) (red);
+/// restored, green.
+#[test]
+fn cdo_slot_a_reader_never_sees_a_half_written_state() {
+    let s = Slot::new();
+    assert_eq!(s.run("A", &["acquire", "lane", "by hand"], &[]).0, Some(0));
+    let mut t = Reap(
+        std::process::Command::new("sleep")
+            .arg("60")
+            .spawn()
+            .unwrap(),
+    );
+    let tpid = t.id().to_string();
+    // A shared timed acquire: its mark write (the hold's lines plus the mark's)
+    // pauses half way.
+    let mut writer = Reap(
+        std::process::Command::new("bash")
+            .args([
+                SLOT, "acquire", "lane", "halfway", "--bind", &tpid, "--timed",
+            ])
+            .env("CDO_SLOT_DIR", s.dir())
+            .env("CDO_SLOT_MEM_MIN_GB", "0")
+            .env("CDO_SLOT_TEST_WRITE_PAUSE_S", "3")
+            .env("CDO_SLOT_BUILD_NAMES", "tls89-none")
+            .env("CDO_SLOT_BUILD_SCRIPTS", "tls89-none")
+            .env("CLAUDE_CODE_SESSION_ID", "A")
+            .env_remove("CLAUDE_PID")
+            .env_remove("CDO_SLOT_TOKEN")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    s.wait_paused();
+    // While the writer pauses: every read shows the whole hold.
+    let until = std::time::Instant::now() + std::time::Duration::from_millis(2000);
+    let mut reads = 0;
+    while std::time::Instant::now() < until {
+        let (_, text) = s.run("B", &["status"], &[]);
+        assert!(
+            text.starts_with("held by lane (by hand) since"),
+            "a reader saw a half-written state: {text}"
+        );
+        reads += 1;
+    }
+    assert!(reads > 0);
+    assert_eq!(writer.0.wait().unwrap().code(), Some(4));
+    t.0.kill().unwrap();
+    t.0.wait().unwrap();
+}
+
+/// ⟨TLS-89, the lock invariant⟩ Concurrent takers: six sessions at once run
+/// timed and untimed `run`s, bound timed acquires whose process then ends, and
+/// `status`, while a checker reads `status` throughout. Every read and write of
+/// the slot's state is under one lock, so:
+/// - no `status` ever shows a half-read hold or mark (an empty owner, reason or
+///   time);
+/// - every command ends with an expected code (0 ran, 1 held, 4 shared, 6 a
+///   timed refusal), never a crash or "cannot write the mark";
+/// - at the end the slot is free and no timed mark is left that counts.
+///
+/// It pins that concurrent takers, sharers and readers end in a consistent
+/// state with no stuck lock (the earlier, lock-for-readers design hung here for
+/// 2h43m when a waiter was stopped). The whole-file write itself is pinned by
+/// `cdo_slot_a_reader_never_sees_a_half_written_state`: one short write left
+/// this run green under an in-place write.
+#[test]
+fn cdo_slot_state_holds_under_concurrent_takers() {
+    let s = Slot::new();
+    let dir = s.dir();
+    let run = |session: &str, args: &[&str]| -> (Option<i32>, String) {
+        let out = std::process::Command::new("bash")
+            .arg(SLOT)
+            .args(args)
+            .env("CDO_SLOT_DIR", &dir)
+            .env("CDO_SLOT_MEM_MIN_GB", "0")
+            .env("CDO_SLOT_POLL_S", "1")
+            .env("CDO_SLOT_TIMED_WAIT_S", "5")
+            .env("CDO_SLOT_BUILD_NAMES", "tls89-none")
+            .env("CDO_SLOT_BUILD_SCRIPTS", "tls89-none")
+            .env("CLAUDE_CODE_SESSION_ID", session)
+            .env_remove("CLAUDE_PID")
+            .env_remove("CDO_SLOT_TOKEN")
+            .output()
+            .unwrap();
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        (out.status.code(), text)
+    };
+    let bad_line = |l: &str| {
+        l.contains("held by  (")
+            || l.contains("() since")
+            || l.contains("timed by  since")
+            || l.contains("since  (")
+            || l.ends_with("()")
+    };
+    let stop = std::sync::atomic::AtomicBool::new(false);
+    let seen_bad = std::sync::Mutex::new(Vec::<String>::new());
+    let unexpected = std::sync::Mutex::new(Vec::<String>::new());
+    std::thread::scope(|sc| {
+        // The checker.
+        sc.spawn(|| {
+            while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                let (_, text) = run("checker", &["status"]);
+                for l in text.lines().filter(|l| bad_line(l)) {
+                    seen_bad.lock().unwrap().push(l.to_string());
+                }
+            }
+        });
+        let workers: Vec<_> = (0..6)
+            .map(|w| {
+                let (run, unexpected) = (&run, &unexpected);
+                sc.spawn(move || {
+                    let session = format!("S{w}");
+                    for i in 0..4 {
+                        let (code, text) = match (w + i) % 4 {
+                            0 => run(&session, &["run", "lane", "t", "--timed", "--", "true"]),
+                            1 => run(&session, &["run", "lane", "u", "--", "true"]),
+                            2 => {
+                                let mut t = Reap(
+                                    std::process::Command::new("sleep")
+                                        .arg("1")
+                                        .spawn()
+                                        .unwrap(),
+                                );
+                                let tpid = t.id().to_string();
+                                let r = run(
+                                    &session,
+                                    &["acquire", "lane", "b", "--bind", &tpid, "--timed", "--wait"],
+                                );
+                                let _ = t.0.wait();
+                                r
+                            }
+                            _ => run(&session, &["status"]),
+                        };
+                        if !matches!(code, Some(0 | 1 | 4 | 6)) || text.contains("cannot write") {
+                            unexpected.lock().unwrap().push(format!("{code:?}: {text}"));
+                        }
+                    }
+                })
+            })
+            .collect();
+        for w in workers {
+            w.join().unwrap();
+        }
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    });
+    let bad = seen_bad.into_inner().unwrap();
+    assert!(bad.is_empty(), "half-read status lines: {bad:?}");
+    let unexpected = unexpected.into_inner().unwrap();
+    assert!(unexpected.is_empty(), "unexpected outcomes: {unexpected:?}");
+    // Bound holds end with their processes (the holder polls every 2 s).
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    loop {
+        let (code, text) = run("checker", &["status"]);
+        if code == Some(0) && text.trim() == "free" {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < until,
+            "the slot never came free: {text}"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+}
+
 /// ⟨TLS-89, found by TLS-92's gate⟩ A holder whose bound process ended removes its
 /// status while it still holds the lock. A reader that took the status's fields
 /// one by one from the file could mix the two states: `session` (this session's)
@@ -990,13 +1293,14 @@ fn cdo_slot_reads_the_status_once_per_check() {
     assert!(!text.contains("already yours"), "{text}");
 }
 
-/// ⟨TLS-89 review r3, sol⟩ A timed mark is read once per check too: a status
-/// reader that validated a mark keeps its fields even when the timing ends and
-/// removes the mark before they are printed. Here a `run --timed` shares a hold
-/// held by hand; a status reader pauses right after validating its mark (the
-/// CDO_SLOT_TEST_PAUSE_TIMED_S hook) while the run ends.
+/// ⟨TLS-89 review r3, sol; the lock invariant⟩ A status reader reads the whole
+/// state (hold and marks) ONCE, with no lock: a timing that ends meanwhile and
+/// takes its mark back neither waits for the reader nor mixes into what it
+/// prints. Here a `run --timed` shares a hold held by hand; a status reader
+/// pauses right after validating its mark (the CDO_SLOT_TEST_PAUSE_TIMED_S
+/// hook) while the run ends and removes its mark.
 ///
-/// Mutation (2026-11-18): `tfield` reading the mark FILE again instead of the
+/// Mutation (2026-11-18): `tfield` reading the status FILE again instead of the
 /// loaded copy -> "timed by  since  ()" (red); restored, green.
 #[test]
 fn cdo_slot_reads_a_timed_mark_once_per_check() {
@@ -1045,20 +1349,24 @@ fn cdo_slot_reads_a_timed_mark_once_per_check() {
         .spawn()
         .unwrap();
     s.wait_paused();
-    // The timing ends inside the reader's window and removes its mark.
+    // The run ends inside the reader's window and takes its mark back: a reader
+    // holds no lock, so nothing waits for it.
     assert_eq!(timing.0.wait().unwrap().code(), Some(0));
+    let state = std::fs::read_to_string(s.dir().join("status")).unwrap_or_default();
     assert!(
-        !std::fs::read_dir(s.dir())
-            .unwrap()
-            .flatten()
-            .any(|e| e.file_name().to_string_lossy().starts_with("timed.")),
-        "precondition: the mark is gone before the reader prints it"
+        !state.contains("timed."),
+        "precondition: the mark is gone before the reader prints it: {state}"
     );
     let out = reader.wait_with_output().unwrap();
     let text = String::from_utf8_lossy(&out.stdout).to_string();
     assert!(
         text.contains("timed by lane since") && text.contains("(brief)"),
         "the reader mixed a removed mark into empty fields: {text}"
+    );
+    let (_, text) = s.run("B", &["status"], &[]);
+    assert!(
+        !text.contains("timed by"),
+        "the mark outlived its timing: {text}"
     );
     assert_eq!(s.run("A", &["release"], &[]).0, Some(0));
 }
@@ -1727,6 +2035,93 @@ fn cdo_slot_timed_waits_for_builds_and_refuses_beside_one() {
     t9.kill().unwrap();
     t9.wait().unwrap();
     assert_eq!(s.run("A", &["release"], &[]).0, Some(0));
+
+    // Review r5 (sol): a shared timed acquire killed while it waits for a build
+    // leaves its pending mark behind; with its writer dead, that mark no longer
+    // counts (its timing process alive or not). Break: pending marks counted
+    // whatever their writer.
+    assert_eq!(s.run("A", &["acquire", "lane", "by hand"], &[]).0, Some(0));
+    let mut t10 = Reap(
+        std::process::Command::new("sleep")
+            .arg("600")
+            .spawn()
+            .unwrap(),
+    );
+    let t10pid = t10.id().to_string();
+    let mut b10 = build();
+    let mut orphan = bg(
+        "A",
+        &["acquire", "lane", "orphan", "--bind", &t10pid, "--timed"],
+        &[("CDO_SLOT_TIMED_WAIT_S", "60")],
+    );
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while !s.run("D", &["status"], &[]).1.contains("(orphan)") {
+        assert!(
+            std::time::Instant::now() < until,
+            "the waiting acquire never marked"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    orphan.0.kill().unwrap();
+    orphan.0.wait().unwrap();
+    let (_, text) = s.run("D", &["status"], &[]);
+    assert!(
+        !text.contains("timed by"),
+        "a dead caller's pending mark still counts: {text}"
+    );
+    b10.kill().unwrap();
+    b10.wait().unwrap();
+    t10.kill().unwrap();
+    t10.wait().unwrap();
+    assert_eq!(s.run("A", &["release"], &[]).0, Some(0));
+
+    // Review r5 (sol): the first timed acquire TOOK the slot and decided to
+    // refuse; while it pauses before its cleanup, a retry sharing its token
+    // shares the hold (a bound hold is shareable by token only) and its timing
+    // starts. The first's cleanup must not end the hold that timing runs in.
+    // Break: the cleanup ending the hold it took whatever runs in it.
+    let mut t11 = Reap(
+        std::process::Command::new("sleep")
+            .arg("600")
+            .spawn()
+            .unwrap(),
+    );
+    let mut t12 = Reap(
+        std::process::Command::new("sleep")
+            .arg("600")
+            .spawn()
+            .unwrap(),
+    );
+    let (t11pid, t12pid) = (t11.id().to_string(), t12.id().to_string());
+    let mut b11 = build();
+    let mut taker = bg(
+        "A",
+        &["acquire", "lane", "taker", "--bind", &t11pid, "--timed"],
+        &[
+            ("CDO_SLOT_TIMED_WAIT_S", "1"),
+            ("CDO_SLOT_TEST_PAUSE_REFUSE_S", "4"),
+            ("CDO_SLOT_TOKEN", "tls89-shared"),
+        ],
+    );
+    s.wait_paused();
+    b11.kill().unwrap();
+    b11.wait().unwrap();
+    let (code, text) = s.run(
+        "A",
+        &["acquire", "lane", "sharer", "--bind", &t12pid, "--timed"],
+        &[names, ("CDO_SLOT_TOKEN", "tls89-shared")],
+    );
+    assert_eq!(code, Some(4), "{text}");
+    assert_eq!(taker.0.wait().unwrap().code(), Some(6));
+    let (_, text) = s.run("D", &["status"], &[]);
+    assert!(
+        text.contains("held by lane (taker)") && text.contains("(sharer)"),
+        "the refused taker ended the hold a timing runs in: {text}"
+    );
+    t12.kill().unwrap();
+    t12.wait().unwrap();
+    t11.kill().unwrap();
+    t11.wait().unwrap();
 
     // Review r1 (sol): a reason with a CR (which text-mode readers break into a
     // second line, where `timed by` lives) is refused.

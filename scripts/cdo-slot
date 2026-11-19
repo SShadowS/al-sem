@@ -136,11 +136,37 @@ lock_held() {
 is_holder() {
     alive "$1" && tr '\0' '\n' <"/proc/$1/environ" 2>/dev/null | grep -qxF "CS_LOCK=$lock"
 }
-# with_meta <command...>: run it under the meta lock (status changes only).
+# ⟨TLS-89, the invariant⟩ The slot's whole STATE is ONE file, the status file:
+# the hold's fields and every timed mark. Writers replace it as a whole (write,
+# then rename) under the meta lock (`with_meta`), and a writer that decides on
+# what it read decides and writes in that one critical section (functions named
+# `*_locked`), so no other writer can change the state between its check and its
+# write (five review rounds found such windows). Readers take NO lock: they read
+# the file once (`load_status`) and always see one whole state, so a reader that
+# stops (SIGSTOP) or dies blocks nobody. The meta lock is held only around a few
+# file reads and one write, never across a wait; its wait is bounded
+# (CDO_SLOT_META_WAIT_S, 30 s): a holder stopped inside it makes the others fail
+# loudly (exit 5, naming it), never wait forever. The one other lock, `$lock`, is
+# the hold itself (its holder keeps it); only `try_take`'s holder takes it.
+# Nothing nests `with_meta`: a second flock on a new descriptor would wait for
+# this process itself.
+meta_wait="${CDO_SLOT_META_WAIT_S:-30}"
+# with_meta <command...>: run it under the meta lock, in this shell.
 with_meta() {
     local fd
     exec {fd}>"$meta"
-    flock -x "$fd"
+    if ! flock -x -w "$meta_wait" "$fd"; then
+        exec {fd}>&-
+        local ino holders
+        ino=$(stat -c %i "$meta" 2>/dev/null || true)
+        holders=$(awk -v ino="$ino" '{ split($6, a, ":"); if (a[3] == ino) print $5 }' /proc/locks \
+            | sort -u | while read -r p; do
+                printf 'PID %s (%s, state %s) ' "$p" "$(tr '\0' ' ' <"/proc/$p/cmdline" 2>/dev/null | cut -c1-80)" \
+                    "$(awk '{ print $3 }' "/proc/$p/stat" 2>/dev/null)"
+            done)
+        echo "cdo-slot: the slot's state lock $meta was held for ${meta_wait} s by ${holders:-an unknown process}; refusing (a stopped or hung cdo-slot: end it)" >&2
+        exit 5
+    fi
     local rc=0
     "$@" || rc=$?
     exec {fd}>&-
@@ -151,7 +177,9 @@ with_meta() {
 #   mine: our token, or our Claude session holding unbound (shareable);
 #   a hold of our own session that is bound to a process is NOT shareable (it
 #   ends with that process): a second land of the same session waits for it.
-state() {
+# A read: no lock (the status file is replaced whole; the lock invariant).
+state() { state_locked; }
+state_locked() {
     holder_pid="" bound=""
     if ! lock_held; then
         st=free
@@ -203,27 +231,36 @@ describe() {
     echo "held by $(field owner) ($(field reason)) since $since ($((age / 60)) min), $who"
 }
 
-# ⟨TLS-89⟩ The timed marks: one `$dir/timed.<pid>` per timing process, key=value
-# lines like the status (owner, reason, since, pid, start, holder_pid). A mark
-# counts only while its process lives (pid + start time) and the hold it was set
-# in is the current one (holder_pid), so a mark left by a killed run or an old
-# hold says nothing. One mark per process (review r1, Fable): a second timing in
-# a shared hold keeps its own cover when the first one ends.
+# ⟨TLS-89⟩ The timed marks live in the STATUS FILE, beside the hold: one mark per
+# timing process, as `timed.<pid>.<key>=<value>` lines (owner, reason, since,
+# pid, start, holder_pid, writer, writer_start, state). The file is the slot's
+# whole state, replaced as a whole (write, then rename) by writers under meta, so
+# a reader that reads it once sees one consistent state, with no lock (the lock
+# invariant above). A mark counts only while its process lives (pid + start
+# time) and the hold it was set in is the current one (holder_pid), so a mark
+# left by a killed run or an old hold says nothing. One mark per process (review
+# r1, Fable): a second timing in a shared hold keeps its own cover when the first
+# one ends.
 tmark="" tsnap=""
-# tload: read $tmark once; tfield reads that copy, so a mark removed between
-# two fields never mixes into empty ones (as the status: review r3, sol).
-tload() { tsnap=$(cat "$tmark" 2>/dev/null || true); }
+# tload: tmark (a pid) -> tsnap, its mark's lines from the loaded status, the
+# prefix taken off; tfield reads that copy.
+tload() { tsnap=$( { grep "^timed\.$tmark\." <<<"$status_snap" || true; } | sed "s/^timed\.$tmark\.//"); }
 tfield() { { sed -n "s/^$1=//p" <<<"$tsnap" || true; } | head -n 1; }
-# timed_valid: some mark counts; sets tmark (and its copy) to the oldest such.
+# mark_pids: the pids with a mark in the loaded status, oldest line first.
+mark_pids() { { sed -n 's/^timed\.\([0-9]*\)\.pid=.*/\1/p' <<<"$status_snap" || true; }; }
+# timed_valid: some mark in the loaded status counts; sets tmark/tsnap to it.
 timed_valid() {
     local m
     [[ -n "$holder_pid" ]] || return 1
-    for m in "$dir"/timed.*; do
-        # The file name only: the folder's own path may hold `.tmp` (a tempdir).
-        [[ -e "$m" && "${m##*/}" != *.tmp* ]] || continue
+    for m in $(mark_pids); do
         tmark=$m
         tload
-        if [[ "$(tfield holder_pid)" == "$holder_pid" ]] && alive "$(tfield pid)" "$(tfield start)"; then
+        # A pending mark counts only while the call that wrote it lives: one
+        # interrupted during its wait would otherwise keep builds out for as
+        # long as its timing process lives (review r5, sol).
+        if [[ "$(tfield holder_pid)" == "$holder_pid" ]] && alive "$(tfield pid)" "$(tfield start)" \
+            && { [[ "$(tfield state)" != pending ]] \
+                || alive "$(tfield writer)" "$(tfield writer_start)"; }; then
             # Test hook: the window in which the mark's process may end.
             # A `paused.<pid>` file tells the test the window is open.
             [[ -z "${CDO_SLOT_TEST_PAUSE_TIMED_S:-}" ]] || { : >"$dir/paused.$$"; sleep "$CDO_SLOT_TEST_PAUSE_TIMED_S"; }
@@ -234,27 +271,105 @@ timed_valid() {
     return 1
 }
 timed_describe() { echo "timed by $(tfield owner) since $(tfield since) ($(tfield reason))"; }
+# write_state_locked <content>: replace the status file with <content> as a
+# whole (write, then rename); under meta.
+write_state_locked() {
+    local tmp="$status_file.w$$"
+    if [[ -n "${CDO_SLOT_TEST_WRITE_PAUSE_S:-}" ]]; then
+        # Test hook: write in two parts with a pause between them; a reader
+        # polling meanwhile must still see the whole old state (the rename).
+        # A third, not a half: the hold's own lines are cut (a half would end
+        # exactly after them when a mark follows).
+        local n half
+        n=$(wc -l <<<"$1")
+        half=$((n / 3))
+        head -n "$half" <<<"$1" >"$tmp"
+        : >"$dir/paused.$$"
+        sleep "$CDO_SLOT_TEST_WRITE_PAUSE_S"
+        tail -n +"$((half + 1))" <<<"$1" >>"$tmp" && mv -f "$tmp" "$status_file"
+        return
+    fi
+    printf '%s\n' "$1" >"$tmp" && mv -f "$tmp" "$status_file"
+}
+# without_mark <pid>: the loaded status minus <pid>'s mark lines.
+without_mark() { { grep -v "^timed\.$1\." <<<"$status_snap" || true; }; }
 # A mark also names the cdo-slot call that wrote it (writer) and its state:
 # `pending` while that call waits for builds, `active` once the timing runs. A
 # retry bound to the same process leaves an active mark alone and does not reuse
 # a pending one (another call's admission); a call takes back only a mark it
 # still wrote (review r4, sol: a concurrent retry lost the mark it relied on).
-write_timed_locked() { # <owner> <reason> <pid> <pending|active>
-    local tmp="$dir/timed.$3.tmp.$$"
-    {
-        printf 'owner=%s\n' "$1"
-        printf 'reason=%s\n' "$2"
-        printf 'since=%s\n' "$(date -u +%FT%TZ)"
-        printf 'pid=%s\n' "$3"
-        printf 'start=%s\n' "$(proc_start "$3")"
-        printf 'holder_pid=%s\n' "$holder_pid"
-        printf 'writer=%s\n' "$$"
-        printf 'state=%s\n' "$4"
-    } >"$tmp" && mv -f "$tmp" "$dir/timed.$3"
+write_timed_locked() { # <owner> <reason> <pid> <pending|active>, the status loaded
+    local p="timed.$3"
+    write_state_locked "$(without_mark "$3")
+$p.owner=$1
+$p.reason=$2
+$p.since=$(date -u +%FT%TZ)
+$p.pid=$3
+$p.start=$(proc_start "$3")
+$p.holder_pid=$holder_pid
+$p.writer=$$
+$p.writer_start=$(proc_start "$$")
+$p.state=$4"
+}
+# publish_locked <owner> <reason> <pid> <expect>, under meta, the status read
+# there (review r5, sol: checked, then written, in one critical section):
+# 3 when the hold is not <expect> (or there is none); 4 when <pid> already has
+# an ACTIVE mark in it (kept as it is); 0 when this call's pending mark is written.
+publish_locked() {
+    load_status
+    local h
+    h=$(field holder_pid)
+    [[ -n "$h" && (-z "$4" || "$h" == "$4") ]] || return 3
+    holder_pid=$h
+    tmark=$3
+    tload
+    if [[ -n "$tsnap" && "$(tfield holder_pid)" == "$h" && "$(tfield state)" == active ]] \
+        && alive "$(tfield pid)" "$(tfield start)"; then
+        return 4
+    fi
+    write_timed_locked "$1" "$2" "$3" pending
+}
+# promote_locked <owner> <reason> <pid>, under meta: 0 when this call's pending
+# mark still counts for the current holder and is now active; 1 otherwise.
+promote_locked() {
+    load_status
+    local h
+    h=$(field holder_pid)
+    tmark=$3
+    tload
+    [[ -n "$h" && -n "$tsnap" && "$(tfield holder_pid)" == "$h" && "$(tfield writer)" == "$$" ]] \
+        || return 1
+    holder_pid=$h
+    write_timed_locked "$1" "$2" "$3" active
+}
+# kept_counts <pid>: 0 while <pid>'s mark (the active one a retry kept) still
+# counts for the current holder. A read only: no lock.
+kept_counts() {
+    load_status
+    local h
+    h=$(field holder_pid)
+    tmark=$1
+    tload
+    [[ -n "$h" && -n "$tsnap" && "$(tfield holder_pid)" == "$h" ]]
+}
+# busy_locked <holder>: 0 when another call's ACTIVE mark counts in that hold.
+busy_locked() {
+    local m
+    load_status
+    for m in $(mark_pids); do
+        tmark=$m
+        tload
+        [[ "$(tfield holder_pid)" == "$1" && "$(tfield state)" == active \
+            && "$(tfield writer)" != "$$" ]] && alive "$(tfield pid)" "$(tfield start)" && return 0
+    done
+    return 1
 }
 clear_timed_mine_locked() { # <pid>: that process's mark, only while this call wrote it
-    grep -qx "writer=$$" "$dir/timed.$1" 2>/dev/null && rm -f "$dir/timed.$1"
-    return 0
+    load_status
+    tmark=$1
+    tload
+    [[ -n "$tsnap" && "$(tfield writer)" == "$$" ]] || return 0
+    write_state_locked "$(without_mark "$1")"
 }
 ppid_of() { local f; read -r -a f <<<"$(proc_fields "$1")"; echo "${f[1]:-}"; }
 # script_builds: "PID name" of each process running a build script
@@ -357,30 +472,35 @@ foreign_builds() {
 timed_start() {
     state
     [[ -n "$holder_pid" && ("$st" == mine || "$st" == held) ]] || die "--timed: no hold to mark"
-    # <expect>: the holder this call's acquire took. Another holder by now means
-    # that hold ended before the timing began: mark nothing in someone else's
-    # hold (review r3, sol).
-    if [[ -n "${4:-}" && "$holder_pid" != "$4" ]]; then
-        echo "cdo-slot: --timed refused: the hold it took ended before the timing began" >&2
-        return 6
-    fi
-    # An ACTIVE mark this process already has in this hold (a timing running,
-    # and this a retry bound to the same process) is kept as it is and never
-    # taken back by this call (review r3). A pending one is another call's
-    # admission, never reused: this call writes its own (review r4, sol).
-    local had=0
-    tmark="$dir/timed.$3"
-    tload
-    [[ -e "$tmark" && "$(tfield holder_pid)" == "$holder_pid" && "$(tfield state)" == active ]] \
-        && alive "$(tfield pid)" "$(tfield start)" && had=1
-    ((had)) || with_meta write_timed_locked "$1" "$2" "$3" pending \
-        || die "--timed: cannot write the mark in $dir"
-    local start=$SECONDS last=-60 b list left seen=0
+    # <expect>: the hold this call's acquire took or shared. Another holder by
+    # now means that hold ended before the timing began: mark nothing in someone
+    # else's hold (review r3/r4). An ACTIVE mark <pid> already has in this hold
+    # (a timing running, and this a retry bound to the same process) is kept as
+    # it is and never taken back by this call (review r3). A pending one is
+    # another call's admission, never reused: this call writes its own (review
+    # r4). Checked and written in one critical section (review r5, sol).
+    local had=0 prc=0
+    with_meta publish_locked "$1" "$2" "$3" "${4:-}" || prc=$?
+    case "$prc" in
+        0) ;;
+        4) had=1 ;;
+        3)
+            echo "cdo-slot: --timed refused: the hold it took ended before the timing began" >&2
+            return 6
+            ;;
+        *) die "--timed: cannot write the mark in $dir" ;;
+    esac
+    # Microseconds (EPOCHREALTIME): the deadline holds below a second too
+    # (review r5, sol: whole seconds let a 1.3 s overrun pass as 1).
+    local now start last=-60 b list left_us nap seen=0
+    start=${EPOCHREALTIME//[!0-9]/}
+    local wait_us=$((timed_wait * 1000000))
     while b=$(foreign_builds "$3") && [[ -n "$b" ]]; do
         seen=1
         list=$(awk '{ printf "%sPID %s (%s)", (NR > 1 ? ", " : ""), $1, $2 }' <<<"$b")
-        left=$((timed_wait - (SECONDS - start)))
-        if ((left <= 0)); then
+        now=${EPOCHREALTIME//[!0-9]/}
+        left_us=$((wait_us - (now - start)))
+        if ((left_us <= 0)); then
             # Test hook: the window between deciding to refuse and taking back.
             [[ -z "${CDO_SLOT_TEST_PAUSE_REFUSE_S:-}" ]] \
                 || { : >"$dir/paused.$$"; sleep "$CDO_SLOT_TEST_PAUSE_REFUSE_S"; }
@@ -393,30 +513,32 @@ timed_start() {
             last=$SECONDS
         fi
         # Never past the deadline: a build still there at it refuses (review r3).
-        sleep "$((left < poll ? left : poll))"
+        nap=$((left_us < poll * 1000000 ? left_us : poll * 1000000))
+        sleep "$((nap / 1000000)).$(printf '%06d' $((nap % 1000000)))"
     done
     # A scan that came late (a loaded host) and found the builds gone cannot say
     # they ended in time: past the deadline, a wait that saw builds refuses
-    # (review r4, sol).
-    if ((seen && SECONDS - start > timed_wait)); then
+    # (review r4/r5, sol).
+    now=${EPOCHREALTIME//[!0-9]/}
+    if ((seen && now - start > wait_us)); then
         ((had)) || with_meta clear_timed_mine_locked "$3"
         echo "cdo-slot: --timed refused: builds ran up to the deadline (${timed_wait} s)" >&2
         return 6
     fi
     # The hold may have ended (released, or taken over) while it waited (review
-    # r1, sol): start only while this mark still counts for the current holder,
-    # and is still this call's (or the active one it kept).
-    state
-    tmark="$dir/timed.$3"
-    tload
-    if [[ ! -e "$tmark" || -z "$holder_pid" || "$(tfield holder_pid)" != "$holder_pid" ]] \
-        || { ((!had)) && [[ "$(tfield writer)" != "$$" ]]; }; then
-        ((had)) || with_meta clear_timed_mine_locked "$3"
+    # r1, sol): start only while this mark still counts for the current holder
+    # and is still this call's, turning it active in the same critical section
+    # (review r5); or, for the active mark it kept, while that one still counts.
+    if ((had)); then
+        if ! kept_counts "$3"; then
+            echo "cdo-slot: --timed refused: the hold ended while it waited for builds" >&2
+            return 6
+        fi
+    elif ! with_meta promote_locked "$1" "$2" "$3"; then
+        with_meta clear_timed_mine_locked "$3"
         echo "cdo-slot: --timed refused: the hold ended while it waited for builds" >&2
         return 6
     fi
-    ((had)) || with_meta write_timed_locked "$1" "$2" "$3" active \
-        || die "--timed: cannot write the mark in $dir"
     echo "cdo-slot: timed by $1 ($2)"
 }
 # ⟨TLS-88⟩ The waiters' queue: a waiting acquire holds a ticket, and a free slot
@@ -481,8 +603,17 @@ mem_ok() {
 end_holder_locked() {
     is_holder "$1" || return 0
     load_status
-    [[ "$(field holder_pid)" == "$1" ]] && rm -f "$status_file" "$dir"/timed.*
+    [[ "$(field holder_pid)" == "$1" ]] && rm -f "$status_file" # the marks go with it
     kill "$1" 2>/dev/null || true
+}
+# end_taken <pid>: end the hold this call took, unless another call's timing is
+# active in it by now (a retry sharing it: review r5, sol); decided under meta.
+end_taken_locked() { busy_locked "$1" && return 1; end_holder_locked "$1"; }
+end_taken() {
+    with_meta end_taken_locked "$1" || return 0
+    local n
+    for n in $(seq 50); do alive "$1" || return 0; sleep 0.1; done
+    is_holder "$1" && kill -9 "$1" 2>/dev/null || true
 }
 end_holder() {
     with_meta end_holder_locked "$1"
@@ -501,6 +632,7 @@ try_take() {
     CS_OWNER="$1" CS_REASON="$2" CS_TOKEN="$3" CS_BIND="$bind" CS_BIND_START="$bind_start" \
         CS_SESSION="$me_session" CS_PID="$me_pid" \
         CS_LOCK="$lock" CS_META="$meta" CS_STATUS="$status_file" CS_READY="$ready" \
+        CS_META_WAIT="$meta_wait" \
         setsid bash -c '
             # Keep no descriptor of the caller (a pipe it waits on, a lock).
             for fd in /proc/$$/fd/*; do
@@ -510,7 +642,8 @@ try_take() {
             exec 9>"$CS_LOCK" || exit 70
             # Up to 1 s: a status probe holds the lock for an instant.
             flock -w 1 9 || exit 75
-            exec 8>"$CS_META" && flock -x 8 || exit 72
+            # Bounded, as every meta wait (the lock invariant).
+            exec 8>"$CS_META" && flock -x -w "$CS_META_WAIT" 8 || exit 72
             tmp="$CS_STATUS.$$"
             {
                 printf "owner=%s\n" "$CS_OWNER"
@@ -535,8 +668,10 @@ try_take() {
                     && set -- $f && [ "$1" != Z ] && [ "${20}" = "$CS_BIND_START" ]; do
                     sleep 2 9>&-
                 done
-                exec 8>"$CS_META" && flock -x 8
-                grep -qx "holder_pid=$$" "$CS_STATUS" 2>/dev/null && rm -f "$CS_STATUS"
+                # Bounded too; without the lock the status stays, and with this
+                # holder gone (its hold lock freed) it reads as free anyway.
+                exec 8>"$CS_META" && flock -x -w "$CS_META_WAIT" 8 \
+                    && grep -qx "holder_pid=$$" "$CS_STATUS" 2>/dev/null && rm -f "$CS_STATUS"
                 exit 0
             fi
             exec sleep 2147483647
@@ -703,7 +838,7 @@ case "$cmd" in
                     # End it here (`release` would refuse a hold that has only
                     # --bind, no session or token: review r1); end_holder is a
                     # no-op once that process is no longer this slot's holder.
-                    [[ -z "$took" ]] || end_holder "$took"
+                    [[ -z "$took" ]] || end_taken "$took"
                     exit "$trc"
                 fi
             fi
@@ -721,7 +856,7 @@ case "$cmd" in
         case "$rc" in
             # End exactly the hold this run took: a generic `release` would end
             # whatever hold its session has by then (review r4, sol).
-            0) trap 'end_holder "$took" >/dev/null' EXIT && trap 'exit 130' INT TERM ;;
+            0) trap 'end_taken "$took" >/dev/null' EXIT && trap 'exit 130' INT TERM ;;
             # A shared hold outlives this run: take back only our timed mark.
             4) ((!timed)) || { trap 'with_meta clear_timed_mine_locked $$' EXIT && trap 'exit 130' INT TERM; } ;;
             *) exit "$rc" ;;
@@ -741,24 +876,30 @@ case "$cmd" in
         ;;
     status)
         (($# == 0)) || { usage >&2; exit 2; }
-        state
-        case "$st" in
-            free) echo free ;;
-            mine)
-                echo "$(describe) (yours)"
-                ! timed_valid || timed_describe
-                exit 1
-                ;;
-            held)
-                describe
-                ! timed_valid || timed_describe
-                exit 1
-                ;;
-            stale)
-                echo "$(describe) STALE"
-                exit 3
-                ;;
-        esac
+        # The hold and its marks, from one read of the state file (no lock).
+        status_locked() {
+            state_locked
+            case "$st" in
+                free) echo free ;;
+                mine)
+                    echo "$(describe) (yours)"
+                    ! timed_valid || timed_describe
+                    return 1
+                    ;;
+                held)
+                    describe
+                    ! timed_valid || timed_describe
+                    return 1
+                    ;;
+                stale)
+                    echo "$(describe) STALE"
+                    return 3
+                    ;;
+            esac
+        }
+        rc=0
+        status_locked || rc=$?
+        exit "$rc"
         ;;
     -h | --help) usage ;;
     *)
