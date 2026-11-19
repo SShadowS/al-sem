@@ -514,6 +514,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `cdo-slot` from PATH too.
   - The other points (a copied live hold id vouching for edited ownership fields, a PID-reuse
     window between the fd scan and the kill, a fixed sleep in the take-window test) are TLS-99.
+- **Fixed at landing: `release` could exit 1 while a probe had the hold file open.** The first
+  landing's full nextest run failed `cdo_slot_queue_refuses_jumps_and_steps_aside_for_memory`
+  at `D release` (exit 1). `keepers_of` ended its loop with `grep -q ... && echo`. When the last
+  process listed with the hold's id file open was not a keeper (another call's probe holds the
+  file open for an instant, more often under load), the loop's status was 1, and `set -e` ended
+  the script at `ps=$(keepers_of ...)`. Memory had nothing to do with it (the test's floors are
+  0 and 999999). It is an `if` now. `cdo_slot_release_ignores_other_openers_of_the_hold_file`
+  keeps a non-keeper opener of the file listed after the keeper for the whole release.
+- **Found by running the slot tests 3x beside a full nextest run** (the orchestrator's check
+  after the landing failure):
+  - **A refusal could lose its reason.** A keeper that wrote "fail <why>" and ended between the
+    acquire's ready check and its liveness check was taken for one that never started: "the
+    timing lock was not taken", with no holder named. The acquire now reads the ready file
+    again once it sees the keeper gone (test hook CDO_SLOT_TEST_PAUSE_SPAWN_S).
+  - **A test race:** `cdo_slot_a_hold_lives_exactly_as_long_as_its_processes` killed the run once
+    the timing lock showed, which can be before the run starts its command (nothing inherited
+    yet, so the slot rightly came free). It now waits for the command itself.
 - **What it cannot see.** The hook sees a command only when it starts. A command it allowed
   before the timing began that starts a build later (`sleep 60; cargo build`) is not stopped,
   and neither is a build started outside any hooked session. TLS-98 plans a cargo wrapper lock

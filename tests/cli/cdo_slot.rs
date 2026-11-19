@@ -457,8 +457,31 @@ fn cdo_slot_a_hold_lives_exactly_as_long_as_its_processes() {
         &[],
     );
     let rpid = run.id() as i32;
-    until("the run timed its hold", &|| {
-        s.probe() == "held=1 own=0 timed=1"
+    // The run's command (its `sleep 600`, which carries the slot folder in its
+    // environment).
+    let command = || -> Vec<i32> {
+        std::fs::read_dir("/proc")
+            .unwrap()
+            .flatten()
+            .filter_map(|e| e.file_name().to_string_lossy().parse::<i32>().ok())
+            .filter(|p| {
+                std::fs::read(format!("/proc/{p}/cmdline"))
+                    .map(|c| c == b"sleep\0600\0")
+                    .unwrap_or(false)
+                    && std::fs::read(format!("/proc/{p}/environ"))
+                        .map(|e| {
+                            let want = format!("CDO_SLOT_DIR={}", s.dir().display());
+                            e.split(|b| *b == 0).any(|v| v == want.as_bytes())
+                        })
+                        .unwrap_or(false)
+            })
+            .collect()
+    };
+    // Killed only once its command runs (TLS-89's 3x-under-load check: the
+    // timing lock is taken before the build wait, so `timed=1` alone could
+    // let the kill land before the command started, and nothing inherited).
+    until("the run's command runs, timed", &|| {
+        command().len() == 1 && s.probe() == "held=1 own=0 timed=1"
     });
     // SAFETY: SIGKILL to the run's bash only; its `sleep` lives on.
     unsafe { libc::kill(rpid, libc::SIGKILL) };
@@ -470,22 +493,7 @@ fn cdo_slot_a_hold_lives_exactly_as_long_as_its_processes() {
             "the hold ended while its command ran"
         );
     }
-    let kids: Vec<i32> = std::fs::read_dir("/proc")
-        .unwrap()
-        .flatten()
-        .filter_map(|e| e.file_name().to_string_lossy().parse::<i32>().ok())
-        .filter(|p| {
-            std::fs::read(format!("/proc/{p}/cmdline"))
-                .map(|c| c == b"sleep\0600\0")
-                .unwrap_or(false)
-                && std::fs::read(format!("/proc/{p}/environ"))
-                    .map(|e| {
-                        let want = format!("CDO_SLOT_DIR={}", s.dir().display());
-                        e.split(|b| *b == 0).any(|v| v == want.as_bytes())
-                    })
-                    .unwrap_or(false)
-        })
-        .collect();
+    let kids = command();
     assert_eq!(kids.len(), 1, "precondition: the orphaned command lives");
     // SAFETY: SIGKILL to the orphaned `sleep` of this test's run.
     unsafe { libc::kill(kids[0], libc::SIGKILL) };
@@ -1074,6 +1082,13 @@ fn cdo_slot_serves_waiters_in_arrival_order() {
 ///
 /// Mutation (2026-11-19): `take_timed` waiting without `-w` -> the timing is
 /// still waiting at the test's 10 s deadline (red); restored, green.
+///
+/// The keeper that reports the refusal writes its "fail <why>" and ends; the
+/// acquire must still read it once it sees the keeper gone (TLS-89's
+/// 3x-under-load check: the full suite's copy of this test lost the PID
+/// that way). The CDO_SLOT_TEST_PAUSE_SPAWN_S hook makes it happen every time.
+/// Mutation (2026-11-19): the ready re-check after the keeper is gone dropped
+/// -> "the timing lock was not taken", no PID (red); restored, green.
 #[test]
 fn cdo_slot_a_stuck_lock_fails_loudly_and_readers_go_on() {
     let s = Slot::new();
@@ -1106,7 +1121,12 @@ fn cdo_slot_a_stuck_lock_fails_loudly_and_readers_go_on() {
     let mut timing = s.cmd(
         "A",
         &["acquire", "lane", "stuck", "--bind", &tpid, "--timed"],
-        &[("CDO_SLOT_LOCK_WAIT_S", "2")],
+        // The SPAWN pause lets the timing keeper write its "fail <why>" and end
+        // between the acquire's ready check and its liveness check.
+        &[
+            ("CDO_SLOT_LOCK_WAIT_S", "2"),
+            ("CDO_SLOT_TEST_PAUSE_SPAWN_S", "3"),
+        ],
     );
     let mut timing = Reap(
         timing
@@ -2063,4 +2083,49 @@ fn cdo_slot_acquire_windows_hold_against_a_timing() {
     until("the stopped keeper was ended", &|| {
         s.probe() == "held=0 own=0 timed=0"
     });
+}
+
+/// ⟨TLS-89's landing⟩ `release` finds its keeper among every process that has
+/// the hold's id file open, other ones included (a probe has it open for an
+/// instant). The landing's full nextest run failed the queue test this way:
+/// `D release` exited 1 when a probe listed after the keeper had the file
+/// open, because `keepers_of`'s last `grep && echo` left status 1 and `set -e`
+/// ended the script at `ps=$(keepers_of ...)`. Here a stand-in started after the
+/// keeper (so listed after it) keeps the file open for the whole release.
+///
+/// Mutation (2026-11-19): `keepers_of` back to `grep -q ... && echo "$p"` ->
+/// `release` exits 1 (red); restored, green.
+#[test]
+fn cdo_slot_release_ignores_other_openers_of_the_hold_file() {
+    let s = Slot::new();
+    assert_eq!(s.run("D", &["acquire", "d", "held"], &[]).0, Some(0));
+    let status = std::fs::read_to_string(s.dir().join("status")).unwrap();
+    let hid = status
+        .lines()
+        .find_map(|l| l.strip_prefix("hid="))
+        .expect("the status names its hold id")
+        .to_string();
+    let file = s.dir().join("id").join(format!("hold.{hid}"));
+    let opener = stand_in(
+        &s,
+        "bash",
+        &[
+            "-c".as_ref(),
+            "exec 3<\"$0\"; sleep 600".as_ref(),
+            file.as_os_str(),
+        ],
+    );
+    let opener_pid = opener.id();
+    until("the stand-in has the hold file open", &|| {
+        std::fs::read_dir(format!("/proc/{opener_pid}/fd"))
+            .map(|d| {
+                d.flatten()
+                    .any(|e| std::fs::read_link(e.path()).ok() == Some(file.clone()))
+            })
+            .unwrap_or(false)
+    });
+    let (code, text) = s.run("D", &["release"], &[]);
+    assert_eq!(code, Some(0), "{text}");
+    assert_eq!(s.run("B", &["status"], &[]), (Some(0), "free\n".into()));
+    drop(opener);
 }

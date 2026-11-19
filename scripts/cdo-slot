@@ -162,7 +162,13 @@ holders_of() {
 keepers_of() {
     local p
     for p in $(find /proc/[0-9]*/fd -lname "$1" 2>/dev/null | cut -d/ -f3 | sort -un); do
-        tr '\0' ' ' <"/proc/$p/cmdline" 2>/dev/null | grep -q " _keep " && echo "$p"
+        # An `if`, not `grep && echo`: a non-keeper listed last (a probe that
+        # has the file open for an instant) left the loop's status 1, and
+        # `ps=$(keepers_of ...)` under `set -e` then ended `release` with exit
+        # 1 (TLS-89's landing, the queue test under load).
+        if tr '\0' ' ' <"/proc/$p/cmdline" 2>/dev/null | grep -q " _keep "; then
+            echo "$p"
+        fi
     done
 }
 
@@ -413,7 +419,16 @@ spawn_keeper() {
             kpid=${line%% *} kid=${line#* }
             return 0
         fi
-        alive "$child" || { rm -f "$ready"; return 1; }
+        # Test hook: the window between the ready check and the liveness check.
+        [[ -z "${CDO_SLOT_TEST_PAUSE_SPAWN_S:-}" ]] || sleep "$CDO_SLOT_TEST_PAUSE_SPAWN_S"
+        if ! alive "$child"; then
+            # It may have written its ready file (a "fail <why>" too) and
+            # ended just after the check above: read it then (TLS-89's
+            # 3x-under-load check lost a refusal's why this way).
+            [[ -s "$ready" ]] && continue
+            rm -f "$ready"
+            return 1
+        fi
         sleep 0.05
     done
     rm -f "$ready"
