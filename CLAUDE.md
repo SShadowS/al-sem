@@ -84,10 +84,32 @@ scripts/cdo-slot acquire|release|status|run <owner> <reason>  # The one CDO slot
                                # cdo-gate hold it for their whole run; a lane's CDO measurement or timed run
                                # (an output_cdo re-mint, a hand CDO probe; TLS-61's cdo-before-after) takes it
                                # too: `run ... -- <cmd>`, or `acquire --wait` + `release` by hand (cdo-gate
-                               # --only inside such a hand hold shares it). While another session holds it,
-                               # the PreToolUse hook scripts/claude-hooks/cdo-slot-guard (wired by the owner)
-                               # refuses this session's cargo builds/tests, the gate scripts and aldump/alsem
-                               # on CDO, naming the holder. `scripts/cdo-slot status` says who. Waiters
+                               # --only inside such a hand hold shares it). A TIMING takes it `--timed`
+                               # (TLS-89; `run <owner> <reason> --timed -- <cmd>`, or `acquire ... --bind PID
+                               # --timed`): cdo-speed takes it timed after its builds (sharing the hold it is
+                               # in, so a land's and cdo-gate's speed phase is timed), cdo-before-after for its
+                               # measuring; any other timed run of yours passes it too. A timed acquire first
+                               # waits for the build processes already running (cargo, cargo-nextest, rustc,
+                               # rustdoc by exact name; ci-steps and check-goldens by argv; never a
+                               # self-matching `pgrep -f`) until none is seen for CDO_SLOT_TIMED_GRACE_S (3 s)
+                               # in a row, up to CDO_SLOT_TIMED_WAIT_S (1800 s), then refuses (exit 6) rather
+                               # than start beside one. The hook sees a command only as it starts: `sleep 60;
+                               # cargo build` allowed before a timing began still builds (TLS-98 plans a cargo
+                               # wrapper lock for that). Only kernel locks decide (TLS-89): the hold is a flock
+                               # its holder keeps (`run`: the run and its command, killed or not; `acquire`: a
+                               # keeper that ends with the --bind PID or the Claude PID), a timing a shared
+                               # flock; a dead process drops its locks, so nothing is STALE any more, and
+                               # `release` cannot end a `run`'s hold (it ends with the run).
+                               # The PreToolUse hook scripts/claude-hooks/cdo-slot-guard then refuses: under
+                               # any hold, ANOTHER session's gate scripts and aldump/alsem (or cargo) naming
+                               # CDO; under a TIMED hold, also every session's cargo builds/tests, ci-steps,
+                               # check-goldens and agentflow run, the holder's own included. An untimed hold
+                               # allows builds. It refuses only where it is WIRED, and until TLS-89 it was
+                               # wired in no session: per worktree, `.claude/settings.local.json`
+                               # `hooks.PreToolUse` gets {"matcher": "Bash", "hooks": [{"type": "command",
+                               # "command": "python3 \"$CLAUDE_PROJECT_DIR/scripts/claude-hooks/cdo-slot-guard\"",
+                               # "timeout": 30}]} (the owner's to add). `scripts/cdo-slot status` says who
+                               # holds it, and on a second line `timed by ...` while a timing runs. Waiters
                                # (`run`, `acquire --wait`) are served in arrival order (TLS-88): a holder
                                # that releases and asks again goes behind them, and an acquire without
                                # --wait refuses while anyone waits; a waiter short of memory steps
