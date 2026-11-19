@@ -928,12 +928,8 @@ fn merge_and_push_lands_only_what_the_gates_saw() {
 #[test]
 fn land_checks_the_pre_submit_cdo_record() {
     let r = repo();
-    for d in [
-        "src/engine",
-        "docs",
-        "tests/l4-summary-baseline",
-        "tests/cli",
-    ] {
+    // (No docs/ folder here: `branch` makes the folders of the files it writes.)
+    for d in ["src/engine", "tests/l4-summary-baseline", "tests/cli"] {
         std::fs::create_dir_all(r.main.join(d)).unwrap();
     }
     // A file on master that a branch moves out of src/.

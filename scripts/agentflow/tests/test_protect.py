@@ -27,6 +27,11 @@ _MENTIONS_ONLY = {
     ("tests/cli/land_script.rs", "CHANGELOG.md conflicts: would keep"): _MESSAGE,
     ("tests/cli/land_script.rs", '"CHANGELOG.md is missing on one side"'): _MESSAGE,
     ("tests/cli/land_script.rs", '"cannot merge CHANGELOG.md"'): _MESSAGE,
+    # TLS-87: prose files in a fixture branch (land must not ask them for a record).
+    ("tests/cli/land_script.rs", '("docs/n.md", b"x\\n")'): "a file in a fixture commit",
+    ("tests/cli/land_script.rs", '("docs/café.md", b"x\\n")'): "a file in a fixture commit",
+    ("tests/cli/land_script.rs", '("docs/tab\\there.md", b"x\\n")'): "a file in a fixture commit",
+    ("tests/cli/land_script.rs", '("docs/late-ok.md", b"x\\n")'): "a file in a fixture commit",
     ("tests/cli/changelog_merge.rs", 'p.join("CHANGELOG.md")'): _FIXTURE,
     ("tests/cli/changelog_merge.rs", 'dir.path().join("CHANGELOG.md")'): _FIXTURE,
     ("tests/cli/changelog_merge.rs", '"CHANGELOG.md merge=changelog\\n"'): "a fixture repo's .gitattributes",
