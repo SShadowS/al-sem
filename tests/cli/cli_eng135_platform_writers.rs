@@ -39,6 +39,7 @@ table 51377 "PW Q Int Else" { fields { field(1; Code; Code[20]) { } } keys { key
 table 51378 "PW Q Bool" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
 table 51380 "PW Sub" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
 table 51382 "PW Sub Arm" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
+table 51383 "PW Sub Name" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
 enum 51360 "PW Kind"
 {
     value(0; Alpha) { }
@@ -590,6 +591,31 @@ codeunit 51370 "PW Shapes"
     begin
     end;
 
+    // sol round 6: the PUBLISHER is declared in two `#if` arms naming the parameter differently;
+    // the subscriber (first arm only) binds `Value` by name and changes it.
+    procedure SubNameRoot()
+    var
+        U: Boolean;
+        T: Record "PW Sub Name";
+    begin
+        U := true;
+        OnSubName(U);
+        if not U then
+            T.Insert();
+    end;
+
+#if PW_NEVER
+    [IntegrationEvent(false, false)]
+    procedure OnSubName(var Value: Boolean)
+    begin
+    end;
+#else
+    [IntegrationEvent(false, false)]
+    procedure OnSubName(var Other: Boolean)
+    begin
+    end;
+#endif
+
     // Round-4 literal routes (cross_rules): a record passed to a Variant decides `IsRecord`
     // only while the Variant holds it; here a `var` replaces it, through a quoted argument.
     procedure VarTypeRoot()
@@ -629,6 +655,14 @@ codeunit 51379 "PW Sub Subscr"
     [EventSubscriber(ObjectType::Codeunit, Codeunit::"PW Shapes", 'OnSubArmKeep', '', false, false)]
     local procedure HandleSubArmKeep(var Value: Boolean)
     begin
+    end;
+#endif
+
+#if PW_NEVER
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::"PW Shapes", 'OnSubName', '', false, false)]
+    local procedure HandleSubName(var Value: Boolean)
+    begin
+        Value := false;
     end;
 #endif
 }
@@ -737,6 +771,7 @@ fn an_arm_that_writes_the_parameter_unbinds_it() {
         ("QVarRoot", "PW Tab Log", "yes"),
         ("SubRoot", "PW Sub", "yes"),
         ("SubArmRoot", "PW Sub Arm", "yes"),
+        ("SubNameRoot", "PW Sub Name", "yes"),
     ]);
 }
 

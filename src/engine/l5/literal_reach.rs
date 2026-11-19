@@ -1405,7 +1405,22 @@ fn keep_verdict(
         return None;
     }
     let p = c.parameters.iter().find(|p| p.index == j)?;
-    let name = values::fold(&p.name);
+    // A subscriber binds the publisher's parameters by NAME, and a publisher declared in two
+    // `#if` arms may name parameter `j` differently in each: check every arm's name, each a
+    // `var` (sol round 6, ENG-135).
+    let mut names: Vec<String> = Vec::new();
+    for row in rows_by_id.get(c.id.as_str()).map_or(&[][..], Vec::as_slice) {
+        let q = row.parameters.iter().find(|q| q.index == j)?;
+        if !q.is_var {
+            return None;
+        }
+        names.push(values::fold(&q.name));
+    }
+    if names.is_empty() {
+        names.push(values::fold(&p.name));
+    }
+    names.sort();
+    names.dedup();
     if unbound.contains(&al_syntax::fold_identifier(&c.name)) {
         return None;
     }
@@ -1420,7 +1435,10 @@ fn keep_verdict(
             }
             let passes =
                 |cs: &str, a: u32| value_passes_by_value(s, cs, a, callees, builtin_sites, by_id);
-            if lflow::subscriber_changes(s, &name, &passes) {
+            if names
+                .iter()
+                .any(|name| lflow::subscriber_changes(s, name, &passes))
+            {
                 return None;
             }
         }
