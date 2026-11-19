@@ -1443,8 +1443,29 @@ impl<'a> SpineCtx<'a> {
                     .iter()
                     .map(|&a| self.raw(&self.file.ir.expr(a).origin).to_string())
                     .collect();
-                let argument_infos: Vec<PExpressionInfo> =
-                    args.iter().map(|&a| self.ir_expression_info(a)).collect();
+                // Under `with R do`, an argument that NAMES something (a variable, a quoted
+                // name, a bare `Type::Item` that may be R's option field) may be R's field: its
+                // info keeps the text but no value, so no reader re-reads the name (sol round 3
+                // on ENG-30: the Variant routes looked it up by name). Literals keep their value.
+                let under_with = self.implicit.len() > 1;
+                let argument_infos: Vec<PExpressionInfo> = args
+                    .iter()
+                    .map(|&a| {
+                        let mut info = self.ir_expression_info(a);
+                        if under_with
+                            && matches!(
+                                info.kind.as_str(),
+                                "identifier" | "quoted_identifier" | "qualified_enum_value"
+                            )
+                        {
+                            info.kind = shared_vocab("other");
+                            info.value = None;
+                            info.qualifier = None;
+                            info.member = None;
+                        }
+                        info
+                    })
+                    .collect();
                 let under = if self.assert_depth > 0 {
                     Some(true)
                 } else {
@@ -3309,7 +3330,9 @@ pub fn routine_features_partial(
                 let parameter_index = parameter_index as u32;
                 // Only a bare name binds to a record/parameter symbol, quoted or not: `"I"` is the
                 // parameter `I` (ENG-138, sol on ENG-30: a quoted `var` argument escaped every
-                // reader's write check). The quoted fold is `bare_name`'s.
+                // reader's write check). The name is folded as the symbol maps' keys are
+                // (`p.name.fold_identifier()`: the inner name, a doubled `""` kept as written), so
+                // `"A""B"` finds the parameter `"A""B"` (sol round 3).
                 // Under `with R do`, the name may be R's field: it binds to no symbol, so no
                 // reader forwards a value through it (sol round 2 on ENG-30). A write through it
                 // is still seen by the text match of `param_guard::passes_param_unsafely`.
@@ -3335,7 +3358,7 @@ pub fn routine_features_partial(
                             .strip_prefix('"')
                             .and_then(|s| s.strip_suffix('"'))
                             .unwrap_or(t);
-                        inner.replace("\"\"", "\"").fold_identifier()
+                        inner.fold_identifier()
                     }
                     _ => {
                         return PCallArgumentBinding {

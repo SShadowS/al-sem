@@ -466,6 +466,7 @@ table 50301 "EH Txt WFwd A" { fields { field(1; Code; Code[20]) { } } keys { key
 table 50302 "EH Txt WFwd Else" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
 table 50303 "EH Txt WWr A" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
 table 50304 "EH Txt WWr Else" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
+table 50305 "EH Var With" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
 // ENG-30: Text and Code literals as value domains, by the rules measured on
 // BC 28.4 (`literal_values::Domain`).
 codeunit 50283 "EH Text"
@@ -659,7 +660,8 @@ codeunit 50283 "EH Text"
         end;
     end;
 
-    // And a `var` call under `with` may still write the parameter `T`.
+    // And a `var` call under `with` may still write the parameter `T` (the receiver has no
+    // field T here, so it IS the parameter: sol round 3).
     procedure TxtWithWrite()
     begin
         OnWithWrite('A');
@@ -667,7 +669,7 @@ codeunit 50283 "EH Text"
 
     local procedure OnWithWrite(T: Text)
     var
-        R: Record "EH With Rec";
+        R: Record "EH Blob";
         A: Record "EH Txt WWr A";
         E: Record "EH Txt WWr Else";
     begin
@@ -726,6 +728,26 @@ codeunit 50283 "EH Text"
                 else
                     E.Insert();
             end;
+    end;
+
+    // sol round 3 on ENG-30: under `with R do`, `T` is R's Text field, not the local Boolean T;
+    // the Variant route must not read the local's type from the argument's name.
+    procedure VarWith()
+    var
+        R: Record "EH With Rec";
+        T: Boolean;
+    begin
+        R.FindFirst();
+        with R do
+            VarWithCheck(T);
+    end;
+
+    local procedure VarWithCheck(V: Variant)
+    var
+        X: Record "EH Var With";
+    begin
+        if not V.IsBoolean then
+            X.Insert();
     end;
 
     // A read-only platform function keeps it usable.
@@ -1113,6 +1135,7 @@ fn a_text_parameter_something_writes_binds_nothing() {
         ("TxtWithFwd", "EH Txt WFwd Else", "yes"),
         ("TxtWithWrite", "EH Txt WWr A", "yes"),
         ("TxtWithWrite", "EH Txt WWr Else", "yes"),
+        ("VarWith", "EH Var With", "yes"),
     ]);
 }
 

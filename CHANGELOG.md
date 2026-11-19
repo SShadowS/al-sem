@@ -825,15 +825,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Under `with R do`, an unqualified name may be one of R's fields, but a `case T of` there was
     bound to the parameter `T`, and `Check(T)` there forwarded the parameter's value to the
     callee. Inside a `with` body no fact that reads a name as a condition (guard, junction,
-    value test, `case` scrutinee) is emitted any more, and a call argument binds to no symbol, so
-    every reader refuses it; E2 already builds no program for a routine with a `with`. A write
+    value test, `case` scrutinee) is emitted any more, a call argument binds to no symbol, and an
+    argument that names something (a variable, a quoted name, a bare `Type::Item` that may be
+    R's option field) keeps its text but no value in the call's argument infos, so no reader
+    re-reads the name (the Variant routes did, sol round 3); every reader refuses it, and E2
+    already builds no program for a routine with a `with`. A write
     through such an argument is still seen: one rule, `param_guard::passes_param_unsafely`
     (bound, or the argument text is the parameter's name, quoted or not), now serves the guard
     frame, the value frame, E2's subscriber check and the Variant routes. Resolving R's fields
     (binding where R's table has no field of that name) is ENG-141's. alc 18.0.41 still accepts
     `with` (AL0606 is a warning).
-  - Tests: `TxtQuoted`, `TxtWith`, `TxtWithFwd`, `TxtWithWrite` (each fails exactly when its fix
-    is removed), `CodeIn` (a lowercase label left unresolved as `=` is, an uppercase one pruned),
+  - Tests: `TxtQuoted`, `TxtWith`, `TxtWithFwd`, `TxtWithWrite`, `VarWith` (each fails exactly
+    when its fix is removed), `CodeIn` (a lowercase label left unresolved as `=` is, an uppercase one pruned),
     and the Dictionary and InStream reads seeded so the write really happens.
 - **Tests.**
   - `cli_prove_value_guards` runs `prove` through the CLI:
