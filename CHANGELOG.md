@@ -433,7 +433,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **cdo-speed** now counts them by default and shows the instruction ratio on every verdict
   line. Its PASS/FAIL line, which cdo-gate's summary quotes, carries the build's and the round
   total's ratios: `(instructions: build x1.0003, round-total x0.9998; advisory limit x1.02)`.
-  - A ratio over x1.02 prints `ADVISORY (not failing)`. The run still passes. Whether and when
+  - A ratio over x1.02 on a judged row prints `ADVISORY (not failing)`. The run still passes.
+    Whether and when
     it should fail is an owner question for later, with data from real landings; the
     questions are in the note.
   - CPU, wall and memory limits are unchanged: instructions miss memory stalls and lost
@@ -459,6 +460,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
       measured, with nothing else counting);
     - the advisory applies to the judged rows only, as the verdict says: on every row, the
       tiny unjudged calls gave 8 false advisories in a run of one binary against itself.
+  - Review r2 (sol):
+    - a perf that does not stop within 30 s ends that server's counting (an ack reset the
+      attach streak, so a perf hanging at its stop cost 30 s on every call);
+    - a perf that ended before cdo-speed stopped it counted part of the call only, even when
+      its CSV is valid: no count.
   - `CDO_SPEED_PERF` is a test hook naming the perf command.
   - `speed.json` gains `instr` per record, `instr` per row and an `instructions` block.
 - **The CHANGELOG rule** (CLAUDE.md): quote an instruction ratio as work ("instructions x0.93"),

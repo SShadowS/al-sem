@@ -2217,7 +2217,8 @@ def stop(*_):
         f.write(lines(total(pids) - start))
     sys.exit(0)
 # Installed before the `ack` (review r1, sol): a fast call may SIGINT us at once.
-signal.signal(signal.SIGINT, stop)
+# STUB_PERF_NOSTOP: SIGINT does nothing (a perf hanging at its stop).
+signal.signal(signal.SIGINT, signal.SIG_IGN if os.environ.get("STUB_PERF_NOSTOP") else stop)
 with open(ctl) as c:
     assert c.readline().strip() == "enable"
     # Like perf, the counters come up some time after `enable`; only the `ack`
@@ -2228,6 +2229,10 @@ with open(ctl) as c:
     start = total(pids)
     with open(ack, "w") as k:
         k.write("ack\n")
+# STUB_PERF_EARLY: it ends right after the `ack`, with valid output (a count of
+# only part of the call).
+if os.environ.get("STUB_PERF_EARLY"):
+    stop()
 while True:
     time.sleep(0.05)
 "#;
@@ -2503,6 +2508,55 @@ fn speed_reports_instructions_and_their_limit_is_advisory() {
     assert!(
         verdict(&text).contains("(instructions: no call fully counted; advisory limit x1.02)"),
         "{text}"
+    );
+
+    // Review r2 (sol): a perf that acks but never stops ends its server's
+    // counting at the first stop timeout. Break: no give-up on a stop timeout
+    // (each ack resets the attach streak: every call tries again).
+    let dir = tempfile::tempdir().unwrap();
+    let (code, text) = speed_with_stub(
+        dir.path(),
+        "1.0",
+        &[],
+        &[
+            ("CDO_SPEED_INSTR", "1"),
+            ("CDO_SPEED_PERF", perf),
+            ("STUB_PERF_NOSTOP", "1"),
+            ("CDO_SPEED_INSTR_STOP_S", "0.3"),
+        ],
+    );
+    assert_eq!(code, Some(0), "{text}");
+    assert!(text.contains("perf did not stop within 0.3 s"), "{text}");
+    let mut per_server = std::collections::BTreeMap::<String, usize>::new();
+    for pid in std::fs::read_to_string(dir.path().join("state-/perf-attaches"))
+        .unwrap()
+        .lines()
+    {
+        *per_server.entry(pid.to_string()).or_default() += 1;
+    }
+    assert!(
+        per_server.values().all(|&n| n == 1),
+        "a server kept counting after perf hung at its stop: {per_server:?}"
+    );
+
+    // Review r2 (sol): a perf that ended before cdo-speed stopped it (valid
+    // output, part of the call) gives no count. Break: its output read anyway
+    // (every call counted, x1.0000).
+    let dir = tempfile::tempdir().unwrap();
+    let (code, text) = speed_with_stub(
+        dir.path(),
+        "1.0",
+        &[],
+        &[
+            ("CDO_SPEED_INSTR", "1"),
+            ("CDO_SPEED_PERF", perf),
+            ("STUB_PERF_EARLY", "1"),
+        ],
+    );
+    assert_eq!(code, Some(0), "{text}");
+    assert!(
+        verdict(&text).contains("(instructions: no call fully counted; advisory limit x1.02)"),
+        "a perf that ended early was counted: {text}"
     );
 }
 

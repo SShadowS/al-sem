@@ -689,6 +689,8 @@ INSTR_LIMIT = 1.02
 INSTR_ATTACH_S = float(os.environ.get("CDO_SPEED_INSTR_ATTACH_S", "5"))  # env: tests
 # Failed attaches in a row after which a server's calls go uncounted.
 INSTR_GIVE_UP = 3
+# How long perf may take to stop after SIGINT; longer ends the server's counting.
+INSTR_STOP_S = float(os.environ.get("CDO_SPEED_INSTR_STOP_S", "30"))  # env: tests
 HYBRID_EVENTS = ("cpu_core/instructions/u", "cpu_atom/instructions/u")
 # CDO_SPEED_PERF: a test hook, the perf command to run (a stub in the tests).
 PERF = os.environ.get("CDO_SPEED_PERF", "perf")
@@ -917,9 +919,13 @@ class Server:
         if started is None:
             return None
         perf, out, fds = started
-        perf.send_signal(signal.SIGINT)
+        # A perf that ended before we stopped it counted only part of the call
+        # (its output can still be valid CSV): no count (review r2, sol).
+        early = perf.poll() is not None
+        if not early:
+            perf.send_signal(signal.SIGINT)
         try:
-            perf.wait(timeout=30)
+            perf.wait(timeout=INSTR_STOP_S)
         except subprocess.TimeoutExpired:
             perf.kill()
             try:
@@ -927,12 +933,21 @@ class Server:
             except subprocess.TimeoutExpired:
                 pass
             total = None
+            # A perf that hangs at its stop would cost 30 s on every call: this
+            # server counts no more (review r2, sol; an ack resets the attach
+            # streak, so the attach give-up alone did not catch it).
+            self.instr_failures = INSTR_GIVE_UP
+            print(f"cdo-speed: {self.name}: perf did not stop within {INSTR_STOP_S:g} s; "
+                  "this server's calls are not counted from here on", file=sys.stderr)
         else:
-            try:
-                with open(out) as f:
-                    total = instr_total(f.read())
-            except OSError:
+            if early:
                 total = None
+            else:
+                try:
+                    with open(out) as f:
+                        total = instr_total(f.read())
+                except OSError:
+                    total = None
         for fd in fds:
             os.close(fd)
         shutil.rmtree(os.path.dirname(out), ignore_errors=True)

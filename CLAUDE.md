@@ -225,10 +225,11 @@ Every test still runs before a merge; the tiers decide HOW OFTEN each one runs.
   (an `--only` subset never runs it).
   **Instructions (TLS-83):** each timed call also counts user-mode instructions (`perf`,
   attached to the server tree). The build's ratio held within about ±0.1 % (one 0.8 % jump in
-  12 builds; n = 6), where a two-pass CPU reading resolves ±8 % (95 %); two CPU readings of
-  one pair can differ by ±12 %. The verdict
-  lines show the instruction ratio; the PASS/FAIL line (quoted by cdo-gate's summary) gives
-  the build's and the round total's. Over x1.02 is an ADVISORY, never a failure. Making it
+  12 builds; n = 6), where a two-pass CPU reading resolves about ±8 %; two CPU readings of
+  one pair can differ by about ±12 % (rules of thumb from pooled runs, not calibrated bounds).
+  The verdict lines show the instruction ratio; the PASS/FAIL line (quoted by cdo-gate's
+  summary) gives the build's and the round total's. Over x1.02 on a judged row is an
+  ADVISORY, never a failure. Making it
   fail is an open owner question (note `docs/superpowers/notes/2026-11-18-tls83-speed-
   resolution.md`). They miss memory stalls and lost parallelism, so CPU and wall keep their
   limits. **A CHANGELOG quotes** an instruction ratio as work ("instructions x0.93"), never
