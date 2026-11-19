@@ -16,7 +16,7 @@ TLS-60. Wired per session in `.claude/settings.local.json` (or settings.json)
 read the way the shell reads it (quotes, heredoc bodies and comments are not
 commands); every command in it is checked, after `cd ... &&`, `VAR=x`, shell
 keywords (`if`, `!`, `{`, `do` ...) and wrappers (`nice`, `env`, `time`,
-`timeout`, `taskset`, `stdbuf`, `xargs`, `nohup`, `setsid`; `bash -c`/`eval`
+`timeout`, `taskset`, `stdbuf`, `xargs`, `nohup`, `setsid`, `scripts/cdo-slot run ... --`; `bash -c`/`eval`
 strings are read as command lines too). Guarded:
   cargo build/test/check/clippy/nextest/run/bench/install/rustc/doc/llvm-cov/miri
     (and the aliases b, t, c, r, d), after cargo's own flags and +toolchain;
@@ -27,11 +27,15 @@ strings are read as command lines too). Guarded:
   aldump / alsem, when the command line names the CDO workspace
     (/work/src/cdo-baseline, $CDO_WS or its value), and cargo naming it.
 Builds and tests (the cargo subcommands, ci-steps, check-goldens, agentflow run)
-count only under a timed hold.
-Allowed: everything else; any command while the slot is free or stale; under
-this session's own hold, all but builds and tests while it is timed. Its limits: it sees Bash calls only (an `alsem_*` MCP call on CDO is
-not guarded), and a command it cannot parse is read word by word. A hook that
-cannot read its input, or a `cdo-slot status` that fails, allows (and says so on
+count only while a timing runs.
+Allowed: everything else; any command while the slot is free and no timing
+runs; under this session's own hold, all but builds and tests while a timing
+runs. It decides from `cdo-slot probe`'s first line alone, kernel lock probes
+(held, own, timed; TLS-89), never from the status text. Its limits: it sees Bash
+calls only (an `alsem_*` MCP call on CDO is not guarded), a command it cannot
+parse is read word by word, and a command it allows starts a moment later (a
+timing that begins in that moment covers it with its grace wait). A hook that
+cannot read its input, or a `cdo-slot probe` that fails, allows (and says so on
 stderr), so a hook bug never stops every session.
 Exit: 0 allow; 2 refuse (the message on stderr goes back to Claude).
 """
@@ -442,6 +446,14 @@ def guarded_segment(words, line):
 
 def script_guarded(path, args):
     base = os.path.basename(path)
+    if base == "cdo-slot":
+        # `cdo-slot run <owner> <reason> [options] -- <command>` runs <command>:
+        # read it as the command it wraps (TLS-89 review r7, sol: a build
+        # submitted through the slot's own `run` during a timing passed).
+        if args[:1] == ["run"] and "--" in args:
+            inner = args[args.index("--") + 1:]
+            return guarded_segment(inner, " ".join(inner))
+        return False
     if base == "agentflow":  # its `run` runs a gate (`-- bash scripts/ci-steps all`)
         return BUILDS and args[:1] == ["run"]
     if base not in SCRIPTS or (base in BUILD_SCRIPTS and not BUILDS):
@@ -492,35 +504,30 @@ def main():
     env = dict(os.environ, CLAUDE_CODE_SESSION_ID=session)
     env.pop("CDO_SLOT_TOKEN", None)
     try:
-        p = subprocess.run(["bash", SLOT, "status"], env=env, capture_output=True, timeout=30)
+        p = subprocess.run(["bash", SLOT, "probe"], env=env, capture_output=True, timeout=30)
     except Exception as e:
-        allow(f"scripts/cdo-slot status did not run: {e}")
+        allow(f"scripts/cdo-slot probe did not run: {e}")
     # Bytes, split on LF only: text mode would also break lines at a CR.
     out = p.stdout.decode("utf-8", "replace")
-    if p.returncode not in (0, 1, 3):
-        allow(f"scripts/cdo-slot status failed: {(p.stderr.decode('utf-8', 'replace') or out).strip()}")
-    if p.returncode != 1:
-        return 0  # free or stale
-    # Line 1 describes the hold; a timed hold adds `timed by ...` (TLS-89). A
-    # reason is one line (no LF, no CR), so it cannot fake the second.
     lines = out.strip().split("\n")
-    said = lines[0]
-    timed = lines[1] if len(lines) > 1 and lines[1].startswith("timed by ") else None
-    # The last ", session <id>": the reason comes earlier in the line and
-    # could hold that text itself.
-    owns = re.findall(r", session (\S+?)(?=,|$)", said)
-    mine = (owns and owns[-1] == session) or said.endswith("(yours)")
+    # Line 1 is the decision, from kernel lock probes alone (TLS-89: only locks
+    # decide; files describe): `held=<0|1> own=<0|1> timed=<0|1>`. The lines
+    # after it only describe the hold and the timing, for the message.
+    flags = re.fullmatch(r"held=([01]) own=([01]) timed=([01])", lines[0])
+    if p.returncode != 0 or not flags:
+        allow(f"scripts/cdo-slot probe failed: {(p.stderr.decode('utf-8', 'replace') or out).strip()}")
+    held, own, timed = (f == "1" for f in flags.groups())
+    said = "; ".join(lines[1:])
     if timed:
         # A timing runs: nothing guarded from anyone, this session included
         # (`hit` was found with builds and tests counted).
-        print(f"cdo-slot-guard: the CDO slot's hold is {timed}; {said}. Not run: {hit}",
-              file=sys.stderr)
+        print(f"cdo-slot-guard: the CDO slot: {said}. Not run: {hit}", file=sys.stderr)
         print("A timing runs: builds and tests wait until it ends (scripts/cdo-slot status).",
               file=sys.stderr)
         return 2
     # This session's own untimed hold, a bound one (its land or cdo-gate)
     # included: only another session's hold stops it.
-    if mine or not said.startswith("held by"):
+    if own or not held:
         return 0
     # Untimed: builds and tests may run beside it.
     BUILDS = False

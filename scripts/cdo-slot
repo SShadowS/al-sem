@@ -7,78 +7,100 @@
 # hold arrived. A session (or script) acquires the slot; the PreToolUse hook
 # `scripts/claude-hooks/cdo-slot-guard` then refuses gates and CDO runs from
 # every OTHER session until it is released, and builds and tests from EVERY
-# session while the hold is timed (--timed, TLS-89).
+# session while a timing runs (--timed, TLS-89).
 #
 #   acquire <owner> <reason> [--wait] [--timeout S] [--bind PID] [--timed]
-#       Take the slot. It is taken when nobody holds the lock, MemAvailable >=
-#       35 GB (CDO_SLOT_MEM_MIN_GB), and no earlier waiter that can run now is
-#       waiting (see the queue below). Without --wait it refuses at once (exit 1,
-#       naming the holder); with --wait it polls every 15 s, prints the holder
-#       about every 60 s, and gives up after --timeout seconds (default: never)
-#       or when the bound process ends. Waiters are served in arrival order
-#       (TLS-88): a free slot goes to the oldest waiter still alive, and an
-#       acquire without --wait refuses while anyone waits. A waiter short of
-#       memory steps aside until it has it, keeping its place.
-#       --bind PID: the hold ends with that process, even when it is killed
-#       outright (scripts bind their own PID; `run` binds itself). Outside a
-#       Claude session an acquire must be bound (or come from `run`).
+#       Take the slot. It is taken when nobody holds it, no timing runs,
+#       MemAvailable >= 35 GB (CDO_SLOT_MEM_MIN_GB), and no earlier waiter that
+#       can run now is waiting (see the queue below). Without --wait it refuses at
+#       once (exit 1, naming the holder); with --wait it polls every 15 s, prints
+#       the holder about every 60 s, and gives up after --timeout seconds
+#       (default: never) or when the bound process ends. Waiters are served in
+#       arrival order (TLS-88): a free slot goes to the oldest waiter still alive,
+#       and an acquire without --wait refuses while anyone waits. A waiter short
+#       of memory steps aside until it has it, keeping its place.
+#       The hold is kept by a detached keeper process. It ends when the --bind
+#       PID ends (even killed outright), else when the acquiring Claude process
+#       (CLAUDE_PID) ends, else at `release`. Outside a Claude session an acquire
+#       must be bound (or come from `run`).
 #       Exit 0: taken. Exit 4: already yours, nothing to release: the holder's
 #       CDO_SLOT_TOKEN is in the environment (a script's hold, shared with what
 #       it starts), or this Claude session holds it unbound (by hand).
-#       --timed (needs --bind; TLS-89): the hold, taken or shared, is timed
-#       while the bound process lives: a timing runs in it, so no build may.
-#       It marks the hold first (the guard then refuses new builds and tests),
-#       then waits for the build processes already running (cargo, cargo-nextest,
+#       --timed (needs --bind; TLS-89): a timing runs in the hold, taken or
+#       shared, while the bound process lives, so no build may. It takes the
+#       timing lock first (the guard then refuses new builds and tests), then
+#       waits for the build processes already running (cargo, cargo-nextest,
 #       rustc, rustdoc: CDO_SLOT_BUILD_NAMES; and scripts/ci-steps, check-goldens
 #       between their cargo steps: CDO_SLOT_BUILD_SCRIPTS) outside the bound
-#       process's own line, printing their PIDs every ~60 s. Still running after
-#       CDO_SLOT_TIMED_WAIT_S (1800) s: exit 6, unmarked (and released, when this
-#       acquire took it); never a silent start beside a build.
+#       process's own line, printing their PIDs every ~60 s, until none is seen
+#       for CDO_SLOT_TIMED_GRACE_S (3) s in a row (a command the guard allowed a
+#       moment before starts a moment later). A build still seen at
+#       CDO_SLOT_TIMED_WAIT_S (1800) s, or the hold gone by then: exit 6, no
+#       timing (and the hold released, when this acquire took it); never a
+#       silent start beside a build.
 #   release
-#       Give the slot back. Only its holder may (its session or token); a STALE
-#       holder may be released by anyone.
+#       Give the slot back: end its keeper. Only its holder may (its session or
+#       token). A hold taken by `run` ends with that run, never by `release`.
 #   status
-#       `free` (exit 0), `held by ...` (exit 1) or `held by ... STALE` (exit 3).
-#       A timed hold adds a second line: `timed by <owner> since <time> (<reason>)`.
+#       `free` (exit 0), or `held by ...` (exit 1). While a timing runs it adds a
+#       line `timed by <owner> since <time> (<reason>)` (exit 1, even when free).
+#   probe
+#       For the guard: `held=<0|1> own=<0|1> timed=<0|1>` (own: this Claude
+#       session's hold, bound or not), then the hold's and the timing's lines.
 #   run <owner> <reason> [--timed] -- <command...>
-#       acquire --wait (bound to itself), run the command, release on any exit
-#       (only when this run took the slot: inside a holder's run it just runs).
+#       acquire --wait, in this process, run the command. The hold (and the
+#       timing) is this process's and its command's: it ends when the last of
+#       them ends, killed or not. Inside a holder's run (its token) it shares the
+#       hold and just runs.
 #
-# Whether the slot is held is the flock on `$CDO_SLOT_DIR/lock` alone (default
-# /work/.al-sem/cdo-slot); a detached holder process keeps it. The `status` file
-# only describes the holder (owner, reason, start, Claude session and PID, bound
-# PID, holder PID, token); it is written and removed under a second lock (`meta`)
-# and only for a PID that is provably this slot's holder (its environment names
-# this lock), so no race or reused PID makes it lie or kills a stranger. A hold
-# is STALE when its Claude process is gone and it is bound to no live process:
-# the next acquire ends it and takes over.
+# ⟨TLS-89, the invariant⟩ Only kernel locks decide; files describe. The hold is
+# an exclusive flock on `$CDO_SLOT_DIR/lock` (default /work/.al-sem/cdo-slot)
+# plus one on `id/hold.<hid>`, a fresh random id per hold. A timing is a SHARED
+# flock on `timed.lock` (each timing takes its own) plus one on
+# `id/timed.<tid>`. A process that dies drops its locks, so no hold or timing
+# outlives every process that has it, and none is ever ended by guessing that a
+# process is gone. Every decision is one lock probe (a flock with a 0.1 s wait,
+# `probe`), never a read of a file. The status file (owner, reason, start,
+# session, bound PID, holder PID, token, hid) is written once, whole, by the
+# hold's own holder; a reader trusts it only for the hold whose id lock it then
+# probes as held (a file of an older hold names a dead id). A timing's own file
+# (`timed/<tid>`) is read the same way. Five review rounds found race windows
+# in the earlier file-and-liveness design (TLS-89 CHANGELOG); a lock probe has
+# no window: the kernel answers for that instant.
 set -euo pipefail
 
 usage() {
-    sed -n '/^#   acquire/,/^#       (only when this run/p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '/^#   acquire/,/^#       hold and just runs/p' "$0" | sed 's/^# \{0,1\}//'
     echo "Environment: CDO_SLOT_DIR, CDO_SLOT_MEM_MIN_GB (35), CDO_SLOT_POLL_S (15),"
-    echo "CDO_SLOT_TIMED_WAIT_S (1800), CDO_SLOT_BUILD_NAMES (cargo cargo-nextest rustc rustdoc),"
-    echo "CDO_SLOT_BUILD_SCRIPTS (ci-steps check-goldens)."
+    echo "CDO_SLOT_TIMED_WAIT_S (1800), CDO_SLOT_TIMED_GRACE_S (3), CDO_SLOT_LOCK_WAIT_S (30),"
+    echo "CDO_SLOT_BUILD_NAMES (cargo cargo-nextest rustc rustdoc), CDO_SLOT_BUILD_SCRIPTS (ci-steps check-goldens)."
 }
 die() {
     echo "cdo-slot: $*" >&2
     exit 1
 }
 
-# One spelling of the folder (a trailing slash or a symlink must not make the
-# holder check, which compares the lock's path, fail).
+self=$(realpath "$0")
+# One spelling of the folder (a trailing slash or a symlink must not make two
+# names for one lock, or a holder search by path miss it).
 dir=$(realpath -m "${CDO_SLOT_DIR:-/work/.al-sem/cdo-slot}")
 lock="$dir/lock"
-meta="$dir/meta"
+ids="$dir/id"
+tdir="$dir/timed"
+timed_lock="$dir/timed.lock"
 status_file="$dir/status"
 mem_min="${CDO_SLOT_MEM_MIN_GB:-35}"
 poll="${CDO_SLOT_POLL_S:-15}"
 timed_wait="${CDO_SLOT_TIMED_WAIT_S:-1800}"
+timed_grace="${CDO_SLOT_TIMED_GRACE_S:-3}"
+lock_wait="${CDO_SLOT_LOCK_WAIT_S:-30}"
 build_names="${CDO_SLOT_BUILD_NAMES:-cargo cargo-nextest rustc rustdoc}"
 build_scripts="${CDO_SLOT_BUILD_SCRIPTS:-ci-steps check-goldens}"
 [[ "$mem_min" =~ ^(0|[1-9][0-9]{0,5})$ ]] || die "CDO_SLOT_MEM_MIN_GB '$mem_min': whole GB, no leading zero"
 [[ "$poll" =~ ^[1-9][0-9]{0,3}$ ]] || die "CDO_SLOT_POLL_S '$poll': whole seconds"
 [[ "$timed_wait" =~ ^(0|[1-9][0-9]{0,6})$ ]] || die "CDO_SLOT_TIMED_WAIT_S '$timed_wait': whole seconds"
+[[ "$timed_grace" =~ ^(0|[1-9][0-9]?)$ ]] || die "CDO_SLOT_TIMED_GRACE_S '$timed_grace': whole seconds, at most 99"
+[[ "$lock_wait" =~ ^[1-9][0-9]{0,3}$ ]] || die "CDO_SLOT_LOCK_WAIT_S '$lock_wait': whole seconds"
 [[ "$build_names" =~ ^[A-Za-z0-9._\ -]+$ ]] || die "CDO_SLOT_BUILD_NAMES '$build_names': process names, space-separated"
 # A process name (comm) holds at most 15 characters: a longer one never matches.
 for n in $build_names; do
@@ -91,20 +113,12 @@ me_token="${CDO_SLOT_TOKEN:-}"
 bind="" bind_start=""
 command -v flock >/dev/null || die "flock is needed"
 
-# load_status: read the status file ONCE; `field` reads from that copy. A holder
-# removes its status when its bound process ends, so fields read one by one from
-# the file could mix a live status with a removed one: `session` read before the
-# removal and `bound` after it made another run's bound hold look like this
-# session's own unbound one ("already yours", with empty fields; TLS-92's gate).
-status_snap=""
-load_status() { status_snap=$(cat "$status_file" 2>/dev/null || true); }
-# field <name>: one field of the last loaded status ("" when absent).
-field() { { sed -n "s/^$1=//p" <<<"$status_snap" || true; } | head -n 1; }
 # proc_fields <pid>: its /proc stat fields from the state on (state = $1,
 # start time = $20); nothing when it is gone.
 proc_fields() { sed 's/.*) //' "/proc/$1/stat" 2>/dev/null || true; }
 # alive <pid> [start]: running (a zombie is not) and, with a start time, still
-# the same process (not a reused PID).
+# the same process (not a reused PID). Used only to END things (a keeper's
+# watch, a waiter's ticket), never to decide who holds what.
 alive() {
     [[ "${1:-}" =~ ^[1-9][0-9]*$ ]] || return 1
     local f
@@ -113,113 +127,120 @@ alive() {
     [[ -z "${2:-}" || "${f[19]}" == "$2" ]]
 }
 proc_start() { local f; read -r -a f <<<"$(proc_fields "$1")"; echo "${f[19]:-}"; }
-# A Claude PID counts only while it is still a claude process (PID reuse).
-claude_alive() { alive "$1" && grep -q claude "/proc/$1/comm" "/proc/$1/cmdline" 2>/dev/null; }
-# lock_held: somebody holds the lock (not this process: it never keeps it).
-# A short wait, not -n: another prober or a starting holder has it for an
-# instant. Only a timeout (exit 75) means held; any other failure of the probe
-# stops with exit 5 (the hook then allows: a broken probe is no holder).
-lock_held() {
-    [[ -e "$lock" ]] || return 1
+new_id() { od -An -N8 -tx8 /dev/urandom | tr -d ' '; }
+
+# probe <s|x> <lock file>: 0 when some process holds the lock against a probe of
+# that kind, 1 when not (or the file does not exist). `s` finds an exclusive
+# holder (probes never block each other); `x` finds shared holders too (the
+# timing lock). A 0.1 s wait, not -n: another prober may have it for an instant.
+# Any other flock failure stops with exit 5 (the hook then allows: a broken probe
+# is no holder).
+probe() {
+    [[ -e "$2" ]] || return 1
     local rc=0
-    flock -E 75 -w 0.1 "$lock" true 2>/dev/null || rc=$?
+    flock -"$1" -E 75 -w 0.1 "$2" true 2>/dev/null || rc=$?
     case "$rc" in
         0) return 1 ;;
         75) return 0 ;;
         *)
-            echo "cdo-slot: cannot probe the lock $lock (flock exit $rc)" >&2
+            echo "cdo-slot: cannot probe the lock $2 (flock exit $rc)" >&2
             exit 5
             ;;
     esac
 }
-# is_holder <pid>: that process is a holder of THIS slot (its environment says so).
-is_holder() {
-    alive "$1" && tr '\0' '\n' <"/proc/$1/environ" 2>/dev/null | grep -qxF "CS_LOCK=$lock"
+# holders_of <file>: "PID n (cmdline, state s)" for each process with the file
+# open (/proc/locks cannot say: it hides a lock whose flock(1) has exited).
+holders_of() {
+    local p
+    for p in $(find /proc/[0-9]*/fd -lname "$1" 2>/dev/null | cut -d/ -f3 | sort -un); do
+        printf 'PID %s (%s, state %s) ' "$p" "$(tr '\0' ' ' <"/proc/$p/cmdline" 2>/dev/null | cut -c1-80)" \
+            "$(awk '{ print $3 }' "/proc/$p/stat" 2>/dev/null)"
+    done
 }
-# ⟨TLS-89, the invariant⟩ The slot's whole STATE is ONE file, the status file:
-# the hold's fields and every timed mark. Writers replace it as a whole (write,
-# then rename) under the meta lock (`with_meta`), and a writer that decides on
-# what it read decides and writes in that one critical section (functions named
-# `*_locked`), so no other writer can change the state between its check and its
-# write (five review rounds found such windows). Readers take NO lock: they read
-# the file once (`load_status`) and always see one whole state, so a reader that
-# stops (SIGSTOP) or dies blocks nobody. The meta lock is held only around a few
-# file reads and one write, never across a wait; its wait is bounded
-# (CDO_SLOT_META_WAIT_S, 30 s): a holder stopped inside it makes the others fail
-# loudly (exit 5, naming it), never wait forever. The one other lock, `$lock`, is
-# the hold itself (its holder keeps it); only `try_take`'s holder takes it.
-# Nothing nests `with_meta`: a second flock on a new descriptor would wait for
-# this process itself.
-meta_wait="${CDO_SLOT_META_WAIT_S:-30}"
-# with_meta <command...>: run it under the meta lock, in this shell.
-with_meta() {
-    local fd
-    exec {fd}>"$meta"
-    if ! flock -x -w "$meta_wait" "$fd"; then
-        exec {fd}>&-
-        local ino holders
-        ino=$(stat -c %i "$meta" 2>/dev/null || true)
-        holders=$(awk -v ino="$ino" '{ split($6, a, ":"); if (a[3] == ino) print $5 }' /proc/locks \
-            | sort -u | while read -r p; do
-                printf 'PID %s (%s, state %s) ' "$p" "$(tr '\0' ' ' <"/proc/$p/cmdline" 2>/dev/null | cut -c1-80)" \
-                    "$(awk '{ print $3 }' "/proc/$p/stat" 2>/dev/null)"
-            done)
-        echo "cdo-slot: the slot's state lock $meta was held for ${meta_wait} s by ${holders:-an unknown process}; refusing (a stopped or hung cdo-slot: end it)" >&2
-        exit 5
-    fi
-    local rc=0
-    "$@" || rc=$?
-    exec {fd}>&-
-    return "$rc"
+# keepers_of <file>: the PIDs of the keepers (`cdo-slot _keep`) that have the
+# lock file open: found by the lock itself, never by a PID a file names.
+keepers_of() {
+    local p
+    for p in $(find /proc/[0-9]*/fd -lname "$1" 2>/dev/null | cut -d/ -f3 | sort -un); do
+        tr '\0' ' ' <"/proc/$p/cmdline" 2>/dev/null | grep -q " _keep " && echo "$p"
+    done
 }
 
-# state: sets st to free | mine | held | stale, and holder_pid / bound.
-#   mine: our token, or our Claude session holding unbound (shareable);
-#   a hold of our own session that is bound to a process is NOT shareable (it
-#   ends with that process): a second land of the same session waits for it.
-# A read: no lock (the status file is replaced whole; the lock invariant).
-state() { state_locked; }
-state_locked() {
-    holder_pid="" bound=""
-    if ! lock_held; then
+# write_atomic <file> <content>: the whole file at once (write, then rename): a
+# reader sees the old file or the new one, never part of it.
+write_atomic() {
+    local tmp
+    tmp="$1.w$$.$(new_id)"
+    if [[ -n "${CDO_SLOT_TEST_WRITE_PAUSE_S:-}" ]]; then
+        # Test hook: the first third, a pause, then the rest; a reader polling
+        # meanwhile must never see the part.
+        local n third
+        n=$(wc -l <<<"$2")
+        third=$((n / 3))
+        head -n "$third" <<<"$2" >"$tmp"
+        : >"$dir/paused.$$"
+        sleep "$CDO_SLOT_TEST_WRITE_PAUSE_S"
+        tail -n +"$((third + 1))" <<<"$2" >>"$tmp" && mv -f "$tmp" "$1"
+        return
+    fi
+    printf '%s\n' "$2" >"$tmp" && mv -f "$tmp" "$1"
+}
+# load <file>: read it ONCE into snap; `field` reads from that copy.
+snap=""
+load() { snap=$(cat "$1" 2>/dev/null || true); }
+field() { { sed -n "s/^$1=//p" <<<"$snap" || true; } | head -n 1; }
+
+# The locks this process holds, so the sleeps of a keeper do not inherit them
+# (a keeper killed outright must not leave a `sleep` child holding its hold).
+held_fds=()
+nap() {
+    local r="" f
+    for f in "${held_fds[@]}"; do r+=" $f>&-"; done
+    eval "sleep $1$r"
+}
+
+# state: from one probe of the hold lock, one read of the status, one probe of
+# the id lock it names. st = free | mine | held; own = this Claude session's
+# hold (bound or not, the guard's question); hid, holder_pid, bound: the hold's,
+# only when its id lock is held (the status describes it).
+#   mine: our token, or our Claude session holding unbound (shareable); a hold of
+#   our own session bound to a process (a land, a run) is not shareable: it ends
+#   with that process, and a second land of the same session waits for it.
+state() {
+    holder_pid="" bound="" hid="" own=0
+    if ! probe s "$lock"; then
         st=free
         return
     fi
-    load_status
+    st=held
+    load "$status_file"
+    local h session token
+    h=$(field hid)
+    # A status of an older hold names a dead id: say "held", trust nothing in it.
+    [[ "$h" =~ ^[0-9a-f]{16}$ ]] && probe s "$ids/hold.$h" || return 0
+    hid=$h
     holder_pid=$(field holder_pid)
-    if ! is_holder "$holder_pid"; then
-        # Held, but its status is not written yet (or was lost): somebody's.
-        holder_pid=""
-        st=held
-        return
-    fi
-    local pid session token
-    pid=$(field claude_pid)
     session=$(field session)
     token=$(field token)
-    # A test hook: a pause, between `session` and `bound`, in which a test removes
-    # the status as a holder whose bound process ended does (the race
-    # `load_status` closes: read field by field, `bound` would then come back "").
+    # Test hook: a pause between `session` and `bound`, in which a test removes
+    # the status file (the read-once rule: read field by field from the file,
+    # `bound` would come back "" and a bound hold read as an unbound one).
     [[ -z "${CDO_SLOT_TEST_PAUSE_S:-}" ]] || { : >"$dir/paused.$$"; sleep "$CDO_SLOT_TEST_PAUSE_S"; }
     bound=$(field bound)
-    if [[ -n "$me_token" && "$token" == "$me_token" ]] \
-        || [[ -n "$me_session" && "$session" == "$me_session" && -z "$bound" ]]; then
+    [[ -n "$me_session" && "$session" == "$me_session" ]] && own=1
+    if [[ -n "$me_token" && "$token" == "$me_token" ]] || { ((own)) && [[ -z "$bound" ]]; }; then
         st=mine
-    elif [[ -n "$pid" ]] && ! claude_alive "$pid" && ! alive "$bound" "$(field bound_start)"; then
-        st=stale
-    else
-        st=held
     fi
 }
 describe() {
-    if [[ -z "$holder_pid" ]]; then
+    if [[ -z "$hid" ]]; then
         # The holder truncates the lock file as it takes it: its mtime is when.
         local taken
         taken=$(stat -c %Y "$lock" 2>/dev/null || date +%s)
         if (($(date +%s) - taken < 5)); then
             echo "held (its holder is still writing its status)"
         else
-            echo "held by an unknown holder (its status is gone) since $(date -u -d "@$taken" +%FT%TZ); find it with: fuser -v $lock"
+            echo "held by an unknown holder (no status names it) since $(date -u -d "@$taken" +%FT%TZ): $(holders_of "$lock")"
         fi
         return
     fi
@@ -231,146 +252,207 @@ describe() {
     echo "held by $(field owner) ($(field reason)) since $since ($((age / 60)) min), $who"
 }
 
-# ⟨TLS-89⟩ The timed marks live in the STATUS FILE, beside the hold: one mark per
-# timing process, as `timed.<pid>.<key>=<value>` lines (owner, reason, since,
-# pid, start, holder_pid, writer, writer_start, state). The file is the slot's
-# whole state, replaced as a whole (write, then rename) by writers under meta, so
-# a reader that reads it once sees one consistent state, with no lock (the lock
-# invariant above). A mark counts only while its process lives (pid + start
-# time) and the hold it was set in is the current one (holder_pid), so a mark
-# left by a killed run or an old hold says nothing. One mark per process (review
-# r1, Fable): a second timing in a shared hold keeps its own cover when the first
-# one ends.
-tmark="" tsnap=""
-# tload: tmark (a pid) -> tsnap, its mark's lines from the loaded status, the
-# prefix taken off; tfield reads that copy.
-tload() { tsnap=$( { grep "^timed\.$tmark\." <<<"$status_snap" || true; } | sed "s/^timed\.$tmark\.//"); }
-tfield() { { sed -n "s/^$1=//p" <<<"$tsnap" || true; } | head -n 1; }
-# mark_pids: the pids with a mark in the loaded status, oldest line first.
-mark_pids() { { sed -n 's/^timed\.\([0-9]*\)\.pid=.*/\1/p' <<<"$status_snap" || true; }; }
-# timed_valid: some mark in the loaded status counts; sets tmark/tsnap to it.
-timed_valid() {
-    local m
-    [[ -n "$holder_pid" ]] || return 1
-    for m in $(mark_pids); do
-        tmark=$m
-        tload
-        # A pending mark counts only while the call that wrote it lives: one
-        # interrupted during its wait would otherwise keep builds out for as
-        # long as its timing process lives (review r5, sol).
-        if [[ "$(tfield holder_pid)" == "$holder_pid" ]] && alive "$(tfield pid)" "$(tfield start)" \
-            && { [[ "$(tfield state)" != pending ]] \
-                || alive "$(tfield writer)" "$(tfield writer_start)"; }; then
-            # Test hook: the window in which the mark's process may end.
-            # A `paused.<pid>` file tells the test the window is open.
-            [[ -z "${CDO_SLOT_TEST_PAUSE_TIMED_S:-}" ]] || { : >"$dir/paused.$$"; sleep "$CDO_SLOT_TEST_PAUSE_TIMED_S"; }
+# timed_now: a timing runs (some process holds the timing lock).
+timed_now() { probe x "$timed_lock"; }
+# timed_describe: the line of a running timing: the first timing file whose id
+# lock is held (one read of each file).
+timed_describe() {
+    local f
+    for f in "$tdir"/*; do
+        [[ -f "$f" ]] || continue
+        probe s "$ids/timed.${f##*/}" || continue
+        load "$f"
+        echo "timed by $(field owner) since $(field since) ($(field reason))"
+        return
+    done
+    echo "timed (its timing is starting)"
+}
+
+# take_hold <owner> <reason> <token> <kind>: take the hold in THIS process: the
+# hold lock, then a fresh id lock, then the status. 0: taken (hid set); 1: held.
+take_hold() {
+    mkdir -p "$ids"
+    local lfd hfd
+    # Test hook: the window between the acquire's checks and the hold lock.
+    [[ -z "${CDO_SLOT_TEST_PAUSE_TAKE_S:-}" ]] || { : >"$dir/paused.$$"; sleep "$CDO_SLOT_TEST_PAUSE_TAKE_S"; }
+    exec {lfd}>"$lock"
+    # Up to 1 s: a probe has the lock for an instant.
+    if ! flock -x -w 1 "$lfd"; then
+        exec {lfd}>&-
+        return 1
+    fi
+    # A timing that began after this acquire's check (its own hold released
+    # meanwhile) still keeps every new hold out: checked again under the hold
+    # lock (TLS-89 review r7, sol). A timing that starts after this needs a hold
+    # it can probe at its end, and the only one is this one.
+    if timed_now; then
+        exec {lfd}>&-
+        return 1
+    fi
+    held_fds+=("$lfd")
+    # No other hold lives under the hold lock: every id lock file left is dead.
+    find "$ids" -maxdepth 1 -name 'hold.*' -delete 2>/dev/null || true
+    hid=$(new_id)
+    exec {hfd}>"$ids/hold.$hid"
+    flock -x -n "$hfd" || die "cannot lock the new hold id $ids/hold.$hid"
+    held_fds+=("$hfd")
+    write_atomic "$status_file" "owner=$1
+reason=$2
+since=$(date -u +%FT%TZ)
+session=$me_session
+claude_pid=$me_pid
+bound=$bind
+bound_start=$bind_start
+holder_pid=$$
+holder_kind=$4
+token=$3
+hid=$hid" || die "cannot write the status $status_file (exiting drops the hold)"
+}
+# take_timed <owner> <reason> <pid>: take a timing in THIS process: the timing
+# lock (shared), a fresh id lock, then its file. 0: taken (tid set); 5: the
+# timing lock stayed taken for CDO_SLOT_LOCK_WAIT_S (only a probe takes it
+# exclusive, for an instant: a stopped or hung one; why says who).
+take_timed() {
+    mkdir -p "$ids" "$tdir"
+    local tfd xfd
+    exec {tfd}>"$timed_lock"
+    if ! flock -s -w "$lock_wait" "$tfd"; then
+        exec {tfd}>&-
+        why="the timing lock $timed_lock was held for ${lock_wait} s by $(holders_of "$timed_lock"); refusing (a stopped or hung cdo-slot probe: end it)"
+        return 5
+    fi
+    tid=$(new_id)
+    exec {xfd}>"$ids/timed.$tid"
+    flock -x -n "$xfd" || die "cannot lock the new timing id $ids/timed.$tid"
+    held_fds+=("$tfd" "$xfd")
+    timed_fds=("$tfd" "$xfd")
+    write_atomic "$tdir/$tid" "owner=$1
+reason=$2
+since=$(date -u +%FT%TZ)
+pid=$3" || die "cannot write the timing file $tdir/$tid (exiting drops the timing)"
+    # Files of timings that ended long ago (their id lock free) go.
+    for f in $(find "$tdir" -maxdepth 1 -type f -mmin +5 2>/dev/null); do
+        probe s "$ids/timed.${f##*/}" || rm -f "$f" "$ids/timed.${f##*/}"
+    done
+}
+# drop_timed: end the timing this process holds (a refusal); its hold stays.
+timed_fds=()
+drop_timed() {
+    local f
+    for f in "${timed_fds[@]}"; do exec {f}>&-; done
+    timed_fds=()
+    rm -f "$tdir/$tid"
+}
+
+# A keeper (`cdo-slot _keep hold|timed`, started detached by an acquire): takes
+# its locks, says so in its ready file ("<pid> <id>", or "fail <why>"), waits
+# for `go.<pid>` while its acquire lives (an acquire killed before it says go,
+# in a timed wait, leaves nothing behind), then keeps the locks while what it
+# watches lives.
+keeper() {
+    local fd
+    # Keep no descriptor of the caller (a pipe it waits on, a lock of a run).
+    for fd in /proc/$$/fd/*; do
+        fd=${fd##*/}
+        [ "$fd" -gt 2 ] && eval "exec $fd>&-"
+    done 2>/dev/null
+    me_session=$CS_SESSION me_pid=$CS_PID bind=$CS_BIND bind_start=$CS_BIND_START
+    local id rc=0
+    case "$1" in
+        hold)
+            take_hold "$CS_OWNER" "$CS_REASON" "$CS_TOKEN" keeper || exit 75
+            id=$hid
+            ;;
+        timed)
+            take_timed "$CS_OWNER" "$CS_REASON" "$CS_BIND" || rc=$?
+            if ((rc)); then
+                write_atomic "$CS_READY" "fail $why"
+                exit "$rc"
+            fi
+            id=$tid
+            ;;
+    esac
+    write_atomic "$CS_READY" "$$ $id"
+    # The go file is named by this keeper's own id (never a reusable PID), and
+    # removing it is the acknowledgement its acquire waits for.
+    while [[ ! -e "$dir/go.$id" ]]; do
+        alive "$CS_WRITER" "$CS_WRITER_START" || exit 0
+        nap 0.2
+    done
+    rm -f "$dir/go.$id"
+    if [[ -n "$CS_BIND" ]]; then
+        while alive "$CS_BIND" "$CS_BIND_START"; do nap 2; done
+    elif [[ -n "$CS_PID" ]]; then
+        # A Claude PID counts only while it is still the same claude process.
+        while alive "$CS_PID" "$CS_PID_START" && grep -q claude "/proc/$CS_PID/comm" "/proc/$CS_PID/cmdline" 2>/dev/null; do
+            nap 2
+        done
+    else
+        while :; do nap 3600; done
+    fi
+    exit 0
+}
+# spawn_keeper <hold|timed> <owner> <reason> <token>: start one; 0 with kpid and
+# kid (its id) set; 1 when it did not take its locks (why set for a timing).
+spawn_keeper() {
+    local ready="$dir/ready.$$.$(new_id)" n line
+    kpid="" kid=""
+    CS_OWNER="$2" CS_REASON="$3" CS_TOKEN="$4" CS_BIND="$bind" CS_BIND_START="$bind_start" \
+        CS_SESSION="$me_session" CS_PID="$me_pid" CS_PID_START="$(proc_start "${me_pid:-0}")" \
+        CS_WRITER="$$" CS_WRITER_START="$(proc_start $$)" CS_READY="$ready" \
+        setsid bash "$self" _keep "$1" </dev/null >/dev/null 2>&1 &
+    local child=$!
+    for n in $(seq 1200); do
+        if [[ -s "$ready" ]]; then
+            read -r line <"$ready"
+            rm -f "$ready"
+            if [[ "$line" == fail* ]]; then
+                why=${line#fail }
+                return 1
+            fi
+            kpid=${line%% *} kid=${line#* }
             return 0
         fi
+        alive "$child" || { rm -f "$ready"; return 1; }
+        sleep 0.05
     done
-    tmark="" tsnap=""
+    rm -f "$ready"
+    kill "$child" 2>/dev/null || true
+    why="its keeper did not start"
     return 1
 }
-timed_describe() { echo "timed by $(tfield owner) since $(tfield since) ($(tfield reason))"; }
-# write_state_locked <content>: replace the status file with <content> as a
-# whole (write, then rename); under meta.
-write_state_locked() {
-    local tmp="$status_file.w$$"
-    if [[ -n "${CDO_SLOT_TEST_WRITE_PAUSE_S:-}" ]]; then
-        # Test hook: write in two parts with a pause between them; a reader
-        # polling meanwhile must still see the whole old state (the rename).
-        # A third, not a half: the hold's own lines are cut (a half would end
-        # exactly after them when a mark follows).
-        local n half
-        n=$(wc -l <<<"$1")
-        half=$((n / 3))
-        head -n "$half" <<<"$1" >"$tmp"
-        : >"$dir/paused.$$"
-        sleep "$CDO_SLOT_TEST_WRITE_PAUSE_S"
-        tail -n +"$((half + 1))" <<<"$1" >>"$tmp" && mv -f "$tmp" "$status_file"
-        return
-    fi
-    printf '%s\n' "$1" >"$tmp" && mv -f "$tmp" "$status_file"
-}
-# without_mark <pid>: the loaded status minus <pid>'s mark lines.
-without_mark() { { grep -v "^timed\.$1\." <<<"$status_snap" || true; }; }
-# A mark also names the cdo-slot call that wrote it (writer) and its state:
-# `pending` while that call waits for builds, `active` once the timing runs. A
-# retry bound to the same process leaves an active mark alone and does not reuse
-# a pending one (another call's admission); a call takes back only a mark it
-# still wrote (review r4, sol: a concurrent retry lost the mark it relied on).
-write_timed_locked() { # <owner> <reason> <pid> <pending|active>, the status loaded
-    local p="timed.$3"
-    write_state_locked "$(without_mark "$3")
-$p.owner=$1
-$p.reason=$2
-$p.since=$(date -u +%FT%TZ)
-$p.pid=$3
-$p.start=$(proc_start "$3")
-$p.holder_pid=$holder_pid
-$p.writer=$$
-$p.writer_start=$(proc_start "$$")
-$p.state=$4"
-}
-# publish_locked <owner> <reason> <pid> <expect>, under meta, the status read
-# there (review r5, sol: checked, then written, in one critical section):
-# 3 when the hold is not <expect> (or there is none); 4 when <pid> already has
-# an ACTIVE mark in it (kept as it is); 0 when this call's pending mark is written.
-publish_locked() {
-    load_status
-    local h
-    h=$(field holder_pid)
-    [[ -n "$h" && (-z "$4" || "$h" == "$4") ]] || return 3
-    holder_pid=$h
-    tmark=$3
-    tload
-    if [[ -n "$tsnap" && "$(tfield holder_pid)" == "$h" && "$(tfield state)" == active ]] \
-        && alive "$(tfield pid)" "$(tfield start)"; then
-        return 4
-    fi
-    write_timed_locked "$1" "$2" "$3" pending
-}
-# promote_locked <owner> <reason> <pid>, under meta: 0 when this call's pending
-# mark still counts for the current holder and is now active; 1 otherwise.
-promote_locked() {
-    load_status
-    local h
-    h=$(field holder_pid)
-    tmark=$3
-    tload
-    [[ -n "$h" && -n "$tsnap" && "$(tfield holder_pid)" == "$h" && "$(tfield writer)" == "$$" ]] \
-        || return 1
-    holder_pid=$h
-    write_timed_locked "$1" "$2" "$3" active
-}
-# kept_counts <pid>: 0 while <pid>'s mark (the active one a retry kept) still
-# counts for the current holder. A read only: no lock.
-kept_counts() {
-    load_status
-    local h
-    h=$(field holder_pid)
-    tmark=$1
-    tload
-    [[ -n "$h" && -n "$tsnap" && "$(tfield holder_pid)" == "$h" ]]
-}
-# busy_locked <holder>: 0 when another call's ACTIVE mark counts in that hold.
-busy_locked() {
-    local m
-    load_status
-    for m in $(mark_pids); do
-        tmark=$m
-        tload
-        [[ "$(tfield holder_pid)" == "$1" && "$(tfield state)" == active \
-            && "$(tfield writer)" != "$$" ]] && alive "$(tfield pid)" "$(tfield start)" && return 0
+# go <id> <its lock file>: tell the keeper of <id> to go on, and wait until it
+# acknowledges (removes the file; only a live keeper does) while it still holds
+# that lock. 0: it went on (what it watches decides its life from then on); 1:
+# it was gone before it took the go (killed: TLS-89 review r7, sol).
+go() {
+    : >"$dir/go.$1"
+    while [[ -e "$dir/go.$1" ]]; do
+        if ! probe s "$2"; then
+            # It may have taken the go and ended just after the check above.
+            [[ -e "$dir/go.$1" ]] || return 0
+            rm -f "$dir/go.$1"
+            return 1
+        fi
+        sleep 0.05
     done
-    return 1
 }
-clear_timed_mine_locked() { # <pid>: that process's mark, only while this call wrote it
-    load_status
-    tmark=$1
-    tload
-    [[ -n "$tsnap" && "$(tfield writer)" == "$$" ]] || return 0
-    write_state_locked "$(without_mark "$1")"
+# end_keeper <lock file>: end the keeper of exactly that hold or timing (the one
+# with its id lock open); a no-op when none has it.
+end_keeper() {
+    local ps n
+    ps=$(keepers_of "$1")
+    [[ -n "$ps" ]] || return 0
+    # shellcheck disable=SC2086 # one word per PID
+    kill $ps 2>/dev/null || true
+    for n in $(seq 50); do
+        [[ -n "$(keepers_of "$1")" ]] || return 0
+        sleep 0.1
+    done
+    # shellcheck disable=SC2046
+    kill -9 $(keepers_of "$1") 2>/dev/null || true
 }
+
 ppid_of() { local f; read -r -a f <<<"$(proc_fields "$1")"; echo "${f[1]:-}"; }
 # script_builds: "PID name" of each process running a build script
 # (CDO_SLOT_BUILD_SCRIPTS: ci-steps, check-goldens), read from its argv: the
@@ -465,82 +547,77 @@ foreign_builds() {
         script_builds
     )
 }
-# timed_start <owner> <reason> <pid>: mark the current hold timed while <pid>
-# lives, then wait for the build processes already running (also when another
-# timing in the hold marked it first). 0: timed; 6: they still ran after
-# CDO_SLOT_TIMED_WAIT_S (this mark is taken back).
+# timed_start <owner> <reason> <pid> <hid> <here|keeper>: a timing in hold <hid>
+# while <pid> lives. It takes the timing lock (in this process for `run`, whose
+# command inherits it; in a keeper bound to <pid> for `acquire`), so the guard
+# refuses new builds from then on, then waits for the builds already running.
+# 0: timed (a keeper's go given); 5: the timing lock could not be taken; 6: a
+# build still ran at CDO_SLOT_TIMED_WAIT_S, or hold <hid> ended meanwhile (the
+# timing taken back).
 timed_start() {
-    state
-    [[ -n "$holder_pid" && ("$st" == mine || "$st" == held) ]] || die "--timed: no hold to mark"
-    # <expect>: the hold this call's acquire took or shared. Another holder by
-    # now means that hold ended before the timing began: mark nothing in someone
-    # else's hold (review r3/r4). An ACTIVE mark <pid> already has in this hold
-    # (a timing running, and this a retry bound to the same process) is kept as
-    # it is and never taken back by this call (review r3). A pending one is
-    # another call's admission, never reused: this call writes its own (review
-    # r4). Checked and written in one critical section (review r5, sol).
-    local had=0 prc=0
-    with_meta publish_locked "$1" "$2" "$3" "${4:-}" || prc=$?
-    case "$prc" in
-        0) ;;
-        4) had=1 ;;
-        3)
-            echo "cdo-slot: --timed refused: the hold it took ended before the timing began" >&2
-            return 6
-            ;;
-        *) die "--timed: cannot write the mark in $dir" ;;
-    esac
-    # Microseconds (EPOCHREALTIME): the deadline holds below a second too
-    # (review r5, sol: whole seconds let a 1.3 s overrun pass as 1).
-    local now start last=-60 b list left_us nap seen=0
-    start=${EPOCHREALTIME//[!0-9]/}
-    local wait_us=$((timed_wait * 1000000))
-    while b=$(foreign_builds "$3") && [[ -n "$b" ]]; do
-        seen=1
-        list=$(awk '{ printf "%sPID %s (%s)", (NR > 1 ? ", " : ""), $1, $2 }' <<<"$b")
-        now=${EPOCHREALTIME//[!0-9]/}
-        left_us=$((wait_us - (now - start)))
-        if ((left_us <= 0)); then
-            # Test hook: the window between deciding to refuse and taking back.
-            [[ -z "${CDO_SLOT_TEST_PAUSE_REFUSE_S:-}" ]] \
-                || { : >"$dir/paused.$$"; sleep "$CDO_SLOT_TEST_PAUSE_REFUSE_S"; }
-            ((had)) || with_meta clear_timed_mine_locked "$3"
-            echo "cdo-slot: --timed refused: build processes still running after ${timed_wait} s: $list" >&2
-            return 6
-        fi
-        if ((SECONDS - last >= 60)); then
-            echo "cdo-slot: timed: waiting for build processes to end: $list"
-            last=$SECONDS
-        fi
-        # Never past the deadline: a build still there at it refuses (review r3).
-        nap=$((left_us < poll * 1000000 ? left_us : poll * 1000000))
-        sleep "$((nap / 1000000)).$(printf '%06d' $((nap % 1000000)))"
-    done
-    # A scan that came late (a loaded host) and found the builds gone cannot say
-    # they ended in time: past the deadline, a wait that saw builds refuses
-    # (review r4/r5, sol).
-    now=${EPOCHREALTIME//[!0-9]/}
-    if ((seen && now - start > wait_us)); then
-        ((had)) || with_meta clear_timed_mine_locked "$3"
-        echo "cdo-slot: --timed refused: builds ran up to the deadline (${timed_wait} s)" >&2
-        return 6
+    local tkpid="" rc=0
+    if [[ "$5" == here ]]; then
+        take_timed "$1" "$2" "$3" || rc=$?
+    else
+        spawn_keeper timed "$1" "$2" "" || rc=5
+        tkpid=$kpid tid=$kid
     fi
-    # The hold may have ended (released, or taken over) while it waited (review
-    # r1, sol): start only while this mark still counts for the current holder
-    # and is still this call's, turning it active in the same critical section
-    # (review r5); or, for the active mark it kept, while that one still counts.
-    if ((had)); then
-        if ! kept_counts "$3"; then
-            echo "cdo-slot: --timed refused: the hold ended while it waited for builds" >&2
-            return 6
-        fi
-    elif ! with_meta promote_locked "$1" "$2" "$3"; then
-        with_meta clear_timed_mine_locked "$3"
-        echo "cdo-slot: --timed refused: the hold ended while it waited for builds" >&2
+    if ((rc)); then
+        echo "cdo-slot: --timed: ${why:-the timing lock was not taken}" >&2
+        return 5
+    fi
+    # refuse <message>: take the timing back (only this call's), say why.
+    refuse() {
+        [[ -z "${CDO_SLOT_TEST_PAUSE_REFUSE_S:-}" ]] \
+            || { : >"$dir/paused.$$"; sleep "$CDO_SLOT_TEST_PAUSE_REFUSE_S"; }
+        if [[ -n "$tkpid" ]]; then end_keeper "$ids/timed.$tid"; else drop_timed; fi
+        echo "cdo-slot: --timed refused: $*" >&2
         return 6
+    }
+    # Microseconds (EPOCHREALTIME): the deadline holds below a second too.
+    local now start last=-60 b list left_us nap_us quiet=""
+    start=${EPOCHREALTIME//[!0-9]/}
+    local wait_us=$((timed_wait * 1000000)) grace_us=$((timed_grace * 1000000))
+    while :; do
+        b=$(foreign_builds "$3")
+        now=${EPOCHREALTIME//[!0-9]/}
+        if [[ -n "$b" ]]; then
+            quiet=""
+            list=$(awk '{ printf "%sPID %s (%s)", (NR > 1 ? ", " : ""), $1, $2 }' <<<"$b")
+            left_us=$((wait_us - (now - start)))
+            # A build seen at (or past) the deadline refuses; the sleeps below
+            # never pass the deadline, so a scan always lands on it.
+            ((left_us > 0)) || { refuse "build processes still running after ${timed_wait} s: $list"; return; }
+            if ((SECONDS - last >= 60)); then
+                echo "cdo-slot: timed: waiting for build processes to end: $list"
+                last=$SECONDS
+            fi
+            nap_us=$((left_us < poll * 1000000 ? left_us : poll * 1000000))
+        else
+            # None seen: start (or go on) counting the grace (a command the
+            # guard allowed just before the timing lock was taken may start now).
+            [[ -n "$quiet" ]] || quiet=$now
+            ((now - quiet < grace_us)) || break
+            nap_us=$((grace_us - (now - quiet)))
+            ((nap_us < 500000)) || nap_us=500000
+        fi
+        sleep "$((nap_us / 1000000)).$(printf '%06d' $((nap_us % 1000000)))"
+    done
+    # The hold it was to run in must still be there (released, or ended, while
+    # it waited: review r1, sol): one probe of its id lock.
+    if ! probe s "$ids/hold.$4"; then
+        refuse "the hold ended while it waited for builds"
+        return
+    fi
+    # Test hook: the window in which a timing keeper may be killed before its go.
+    [[ -z "${CDO_SLOT_TEST_PAUSE_GO_S:-}" ]] || { : >"$dir/paused.$$"; sleep "$CDO_SLOT_TEST_PAUSE_GO_S"; }
+    if [[ -n "$tkpid" ]] && ! go "$tid" "$ids/timed.$tid"; then
+        refuse "its timing keeper ended before the timing began"
+        return
     fi
     echo "cdo-slot: timed by $1 ($2)"
 }
+
 # ⟨TLS-88⟩ The waiters' queue: a waiting acquire holds a ticket, and a free slot
 # goes to the oldest live ticket, so a holder that releases and acquires again
 # goes behind an earlier waiter (before: whoever polled first won). A ticket is
@@ -548,7 +625,9 @@ timed_start() {
 # process (or a reused PID) is dropped by whoever reads the queue. A waiter that
 # cannot run now (MemAvailable below its floor) marks its ticket `mem` and steps
 # aside, so it does not hold up a waiter that can run (land acquires with no
-# floor); it clears the mark when memory is back and keeps its place.
+# floor); it clears the mark when memory is back and keeps its place. The queue
+# decides only the order, never whether the slot is held: a wrong order costs
+# fairness, never a second holder.
 queue="$dir/queue"
 ticket="" ticket_mark=""
 # write_ticket <mark>: (re)write our ticket whole (write, then rename: a reader
@@ -598,110 +677,22 @@ mem_ok() {
     kb=$(awk '/^MemAvailable:/ { print $2 }' /proc/meminfo)
     ((kb >= mem_min * 1048576))
 }
-# end_holder <pid>: under the meta lock, and only while <pid> is still this
-# slot's holder named by the status: remove the status, then end the process.
-end_holder_locked() {
-    is_holder "$1" || return 0
-    load_status
-    [[ "$(field holder_pid)" == "$1" ]] && rm -f "$status_file" # the marks go with it
-    kill "$1" 2>/dev/null || true
-}
-# end_taken <pid>: end the hold this call took, unless another call's timing is
-# active in it by now (a retry sharing it: review r5, sol); decided under meta.
-end_taken_locked() { busy_locked "$1" && return 1; end_holder_locked "$1"; }
-end_taken() {
-    with_meta end_taken_locked "$1" || return 0
-    local n
-    for n in $(seq 50); do alive "$1" || return 0; sleep 0.1; done
-    is_holder "$1" && kill -9 "$1" 2>/dev/null || true
-}
-end_holder() {
-    with_meta end_holder_locked "$1"
-    local n
-    for n in $(seq 50); do alive "$1" || return 0; sleep 0.1; done
-    is_holder "$1" && kill -9 "$1" 2>/dev/null || true
-}
 
-# try_take <owner> <reason> <token>: start a holder; 0 when it holds the lock,
-# with taken_holder set to that holder's pid (its holder_pid).
-taken_holder=""
-try_take() {
-    local ready="$dir/ready.$$" n
-    rm -f "$ready"
-    taken_holder=""
-    CS_OWNER="$1" CS_REASON="$2" CS_TOKEN="$3" CS_BIND="$bind" CS_BIND_START="$bind_start" \
-        CS_SESSION="$me_session" CS_PID="$me_pid" \
-        CS_LOCK="$lock" CS_META="$meta" CS_STATUS="$status_file" CS_READY="$ready" \
-        CS_META_WAIT="$meta_wait" \
-        setsid bash -c '
-            # Keep no descriptor of the caller (a pipe it waits on, a lock).
-            for fd in /proc/$$/fd/*; do
-                fd=${fd##*/}
-                [ "$fd" -gt 2 ] && eval "exec $fd>&-"
-            done 2>/dev/null
-            exec 9>"$CS_LOCK" || exit 70
-            # Up to 1 s: a status probe holds the lock for an instant.
-            flock -w 1 9 || exit 75
-            # Bounded, as every meta wait (the lock invariant).
-            exec 8>"$CS_META" && flock -x -w "$CS_META_WAIT" 8 || exit 72
-            tmp="$CS_STATUS.$$"
-            {
-                printf "owner=%s\n" "$CS_OWNER"
-                printf "reason=%s\n" "$CS_REASON"
-                printf "since=%s\n" "$(date -u +%FT%TZ)"
-                printf "session=%s\n" "$CS_SESSION"
-                printf "claude_pid=%s\n" "$CS_PID"
-                printf "bound=%s\n" "$CS_BIND"
-                printf "bound_start=%s\n" "$CS_BIND_START"
-                printf "holder_pid=%s\n" "$$"
-                printf "token=%s\n" "$CS_TOKEN"
-            } >"$tmp" && mv "$tmp" "$CS_STATUS" || exit 71
-            exec 8>&-
-            # Our pid, the holder_pid written above: the taker learns exactly
-            # the hold it took (TLS-89 review r3, sol).
-            printf "%s\n" "$$" >"$CS_READY"
-            if [ -n "$CS_BIND" ]; then
-                # Bound: the hold ends with the process it was taken for, even
-                # when that process is killed outright (no trap runs).
-                # Running, not a zombie, and the same process (its start time).
-                while f=$(sed "s/.*) //" "/proc/$CS_BIND/stat" 2>/dev/null) \
-                    && set -- $f && [ "$1" != Z ] && [ "${20}" = "$CS_BIND_START" ]; do
-                    sleep 2 9>&-
-                done
-                # Bounded too; without the lock the status stays, and with this
-                # holder gone (its hold lock freed) it reads as free anyway.
-                exec 8>"$CS_META" && flock -x -w "$CS_META_WAIT" 8 \
-                    && grep -qx "holder_pid=$$" "$CS_STATUS" 2>/dev/null && rm -f "$CS_STATUS"
-                exit 0
-            fi
-            exec sleep 2147483647
-        ' </dev/null >/dev/null 2>&1 &
-    local holder=$!
-    for n in $(seq 100); do
-        if [[ -s "$ready" ]]; then
-            taken_holder=$(head -n 1 "$ready")
-            rm -f "$ready"
-            return 0
-        fi
-        alive "$holder" || { rm -f "$ready"; return 1; }
-        sleep 0.05
-    done
-    rm -f "$ready"
-    kill "$holder" 2>/dev/null || true
-    return 1
-}
-
-acquire() { # acquire <owner> <reason> <wait 0|1> <timeout or "">
-    local owner=$1 reason=$2 wait=$3 timeout=$4 start=$SECONDS last=-60 why
+# acquire <owner> <reason> <wait 0|1> <timeout or ""> <here 0|1>: 0 taken (in
+# this process with here=1, else by a keeper: taken_holder its pid), 4 shared;
+# taken_hid: the hold taken or shared.
+taken_holder="" taken_hid=""
+acquire() {
+    local owner=$1 reason=$2 wait=$3 timeout=$4 here=$5 start=$SECONDS last=-60 why
     [[ "$owner" =~ ^[A-Za-z0-9._-]{1,40}$ ]] || die "owner '$owner': a short name (letters, digits, . _ -)"
     # No CR either: a reader that turns CR into a line break (Python's text mode)
-    # would see a second status line, which a timed hold uses (TLS-89 review r1, sol).
+    # would see a second status line, which a timing uses (TLS-89 review r1, sol).
     [[ -n "$reason" && "$reason" != *$'\n'* && "$reason" != *$'\r'* && ${#reason} -le 200 ]] \
         || die "give a one-line reason (at most 200 characters)"
     [[ -n "$me_session" || -n "$me_token" || -n "$bind" ]] \
         || die "outside a Claude session, bind the hold (--bind PID) or use 'run'; nobody could release it otherwise"
     mkdir -p "$dir"
-    local token=${me_token:-$(od -An -N8 -tx8 /dev/urandom | tr -d ' ')} line
+    local token=${me_token:-$(new_id)} line
     if ((wait)); then
         enqueue
         trap dequeue EXIT
@@ -716,31 +707,40 @@ acquire() { # acquire <owner> <reason> <wait 0|1> <timeout or "">
         case "$st" in
             mine)
                 dequeue
-                # The hold it shares: a timing in it marks only this one, never
-                # one that replaced it meanwhile (review r4, sol).
-                taken_holder=$holder_pid
+                taken_hid=$hid
                 echo "cdo-slot: already yours ($(describe)); nothing to do"
                 return 4
                 ;;
-            stale)
-                echo "cdo-slot: $(describe) is STALE (its Claude process is gone): ending it"
-                end_holder "$holder_pid"
-                continue
-                ;;
             free)
                 read -r -a line <<<"$(ahead)"
-                if ((line[0] > 0)); then
+                if timed_now; then
+                    # A timing whose hold has ended still keeps every new hold out.
+                    why="free, but a timing runs: $(timed_describe)"
+                elif ((line[0] > 0)); then
                     why="free, but ${line[0]} waiter(s) came first (the oldest is PID ${line[1]})"
                 elif ! mem_ok; then
                     why="MemAvailable below $mem_min GB"
-                elif try_take "$owner" "$reason" "$token"; then
+                elif ((here)) && take_hold "$owner" "$reason" "$token" run; then
                     dequeue
                     trap - EXIT
+                    taken_holder=$$ taken_hid=$hid
+                    echo "cdo-slot: taken by $owner ($reason)"
+                    return 0
+                elif ((!here)) && spawn_keeper hold "$owner" "$reason" "$token"; then
+                    dequeue
+                    trap - EXIT
+                    taken_holder=$kpid taken_hid=$kid
                     echo "cdo-slot: taken by $owner ($reason)"
                     return 0
                 else
                     state
-                    why=$( ((${#holder_pid})) && describe || echo "taken by another acquirer just now")
+                    if [[ "$st" != free ]]; then
+                        why=$(describe)
+                    elif timed_now; then
+                        why="free, but a timing runs: $(timed_describe)"
+                    else
+                        why="taken by another acquirer just now"
+                    fi
                 fi
                 ;;
             held) why=$(describe) ;;
@@ -764,26 +764,29 @@ acquire() { # acquire <owner> <reason> <wait 0|1> <timeout or "">
 release() {
     state
     case "$st" in
-        free) echo "cdo-slot: free already" ;;
-        mine | stale)
-            end_holder "$holder_pid"
-            echo "cdo-slot: released"
-            ;;
-        held)
-            # Our own session's bound hold (a script of ours) is ours to end too.
-            if [[ -n "$holder_pid" && -n "$me_session" && "$(field session)" == "$me_session" ]]; then
-                end_holder "$holder_pid"
-                echo "cdo-slot: released (it was bound to PID $bound)"
-            else
-                die "not yours: $(describe)"
-            fi
+        free)
+            echo "cdo-slot: free already"
+            return
             ;;
     esac
+    [[ -n "$hid" ]] || die "$(describe); it names no hold this can release"
+    # Ours: our token, or our session's hold (a script of ours bound to a PID too).
+    if ! { [[ -n "$me_token" && "$(field token)" == "$me_token" ]] || ((own)); }; then
+        die "not yours: $(describe)"
+    fi
+    if [[ "$(field holder_kind)" != keeper ]]; then
+        die "$(describe): taken by a run (PID $holder_pid); it ends when that run ends"
+    fi
+    end_keeper "$ids/hold.$hid"
+    echo "cdo-slot: released"
 }
 
 cmd=${1:-}
 [[ $# -gt 0 ]] && shift
 case "$cmd" in
+    _keep)
+        keeper "${1:-}"
+        ;;
     acquire | run)
         (($# >= 2)) || { usage >&2; exit 2; }
         owner=$1 reason=$2
@@ -821,51 +824,41 @@ case "$cmd" in
             (($# == 0)) || { echo "cdo-slot: acquire takes no command" >&2; exit 2; }
             ((!timed)) || [[ -n "$bind" ]] || { echo "cdo-slot: --timed needs --bind PID (the timing process)" >&2; exit 2; }
             rc=0
-            acquire "$owner" "$reason" "$wait" "$timeout" || rc=$?
-            # Test hook: the window between taking the slot and the timed mark.
+            acquire "$owner" "$reason" "$wait" "$timeout" 0 || rc=$?
+            # Test hook: the window between taking the slot and the timing.
             [[ -z "${CDO_SLOT_TEST_PAUSE_ACQUIRED_S:-}" ]] \
                 || { : >"$dir/paused.$$"; sleep "$CDO_SLOT_TEST_PAUSE_ACQUIRED_S"; }
             if ((timed)) && [[ "$rc" == 0 || "$rc" == 4 ]]; then
-                # The holder this acquire took (none when shared): only it may be
-                # ended on a refusal, never one that took the slot meanwhile.
-                # From the holder itself, not a later status read (review r3).
-                took=""
-                [[ "$rc" != 0 ]] || took=$taken_holder
                 trc=0
-                # Taken or shared, the timing marks only the hold acquire saw.
-                timed_start "$owner" "$reason" "$bind" "$taken_holder" || trc=$?
+                timed_start "$owner" "$reason" "$bind" "$taken_hid" keeper || trc=$?
                 if ((trc)); then
-                    # End it here (`release` would refuse a hold that has only
-                    # --bind, no session or token: review r1); end_holder is a
-                    # no-op once that process is no longer this slot's holder.
-                    [[ -z "$took" ]] || end_taken "$took"
+                    # The keeper this acquire started, exactly (none when shared).
+                    [[ "$rc" != 0 ]] || end_keeper "$ids/hold.$taken_hid"
                     exit "$trc"
                 fi
+            fi
+            if [[ "$rc" == 0 ]] && ! go "$taken_hid" "$ids/hold.$taken_hid"; then
+                # Its keeper was killed: no hold, so no timing either.
+                ((!timed)) || end_keeper "$ids/timed.$tid"
+                die "the hold's keeper ended before the hold was confirmed"
             fi
             exit "$rc"
         fi
         (($#)) || { echo "cdo-slot: run needs -- <command>" >&2; exit 2; }
-        export CDO_SLOT_TOKEN=${me_token:-$(od -An -N8 -tx8 /dev/urandom | tr -d ' ')}
+        export CDO_SLOT_TOKEN=${me_token:-$(new_id)}
         me_token=$CDO_SLOT_TOKEN
         bind=$$
         bind_start=$(proc_start "$$")
         rc=0
-        acquire "$owner" "$reason" 1 "$timeout" || rc=$?
-        took=""
-        [[ "$rc" != 0 ]] || took=$taken_holder
-        case "$rc" in
-            # End exactly the hold this run took: a generic `release` would end
-            # whatever hold its session has by then (review r4, sol).
-            0) trap 'end_taken "$took" >/dev/null' EXIT && trap 'exit 130' INT TERM ;;
-            # A shared hold outlives this run: take back only our timed mark.
-            4) ((!timed)) || { trap 'with_meta clear_timed_mine_locked $$' EXIT && trap 'exit 130' INT TERM; } ;;
-            *) exit "$rc" ;;
-        esac
+        acquire "$owner" "$reason" 1 "$timeout" 1 || rc=$?
+        [[ "$rc" == 0 || "$rc" == 4 ]] || exit "$rc"
         if ((timed)); then
             rc=0
-            timed_start "$owner" "$reason" "$$" "$taken_holder" || rc=$?
+            timed_start "$owner" "$reason" "$$" "$taken_hid" here || rc=$?
             ((rc == 0)) || exit "$rc"
         fi
+        # The command inherits this process's locks: the hold (when taken here)
+        # and the timing end when the last process holding them ends.
         rc=0
         "$@" || rc=$?
         exit "$rc"
@@ -876,30 +869,27 @@ case "$cmd" in
         ;;
     status)
         (($# == 0)) || { usage >&2; exit 2; }
-        # The hold and its marks, from one read of the state file (no lock).
-        status_locked() {
-            state_locked
-            case "$st" in
-                free) echo free ;;
-                mine)
-                    echo "$(describe) (yours)"
-                    ! timed_valid || timed_describe
-                    return 1
-                    ;;
-                held)
-                    describe
-                    ! timed_valid || timed_describe
-                    return 1
-                    ;;
-                stale)
-                    echo "$(describe) STALE"
-                    return 3
-                    ;;
-            esac
-        }
-        rc=0
-        status_locked || rc=$?
-        exit "$rc"
+        state
+        t=0
+        timed_now && t=1
+        case "$st" in
+            free) echo free ;;
+            mine) echo "$(describe) (yours)" ;;
+            held) describe ;;
+        esac
+        ((t)) && timed_describe
+        [[ "$st" == free ]] && ((!t)) && exit 0
+        exit 1
+        ;;
+    probe)
+        (($# == 0)) || { usage >&2; exit 2; }
+        state
+        t=0
+        timed_now && t=1
+        echo "held=$([[ "$st" == free ]] && echo 0 || echo 1) own=$own timed=$t"
+        [[ "$st" == free ]] || describe
+        ((t)) && timed_describe
+        exit 0
         ;;
     -h | --help) usage ;;
     *)

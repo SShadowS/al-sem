@@ -428,23 +428,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   never refused anything. And once wired, it refused builds under EVERY hold (memory holds
   included), which is too much, while a build started a minute before a timing still ran
   beside it.
-- **`scripts/cdo-slot --timed`** (`run <owner> <reason> --timed -- <cmd>`, `acquire ... --bind PID
-  --timed`). It marks the hold, taken or shared, as timed while the bound process lives (a mark
-  counts only for the current holder and a live process). It then waits
-  for the build processes already running outside its own process line (its ancestors and
-  descendants do not count; nor do zombies). Build processes are found by exact name with
-  `pgrep -x`: `cargo cargo-nextest rustc rustdoc`, or CDO_SLOT_BUILD_NAMES (at most 15
-  characters each, a process name's limit). Build scripts count too, by an exact argv word:
-  `ci-steps check-goldens`, or CDO_SLOT_BUILD_SCRIPTS. Without them a timing could start
-  between a script's cargo steps (ci-steps' ~2 min agentflow step). Never a `pgrep -f`
-  pattern, which matches its own command line. Each timing keeps its own mark
-  (`$CDO_SLOT_DIR/timed.<pid>`), so a second timing in a shared hold also waits for builds,
-  and keeps its cover when the first ends. It prints their PIDs every ~60 s. If they still run after
-  CDO_SLOT_TIMED_WAIT_S (1800 s), it refuses with exit 6: it takes the mark back and releases
-  the slot if it took it, never a silent start beside a build. It also refuses if the hold it
-  shares ended while it waited. A script's option operands (`bash -o pipefail scripts/ci-steps`)
-  are skipped when finding the script. `status` adds a second line,
-  `timed by <owner> since <time> (<reason>)`; a reason may hold no line break (LF or CR).
+- **Only kernel locks decide; files describe** (the design after six review rounds; see the
+  review history below). `scripts/cdo-slot` now:
+  - **The hold** is an exclusive flock on `$CDO_SLOT_DIR/lock` plus one on `id/hold.<hid>`, a
+    fresh random id per hold. `run` takes them in its own process, so its command inherits them:
+    the hold ends when the last of them ends, killed or not (an orphaned build keeps the slot,
+    since it still uses the memory). `acquire` starts a detached keeper (`cdo-slot _keep`) that
+    ends with the --bind PID, else the acquiring Claude PID, else at `release`. A process that
+    dies drops its locks, so nothing is STALE any more and nothing guesses whether a holder lives.
+  - **A timing** is a SHARED flock on `timed.lock` (each timing takes its own) plus one on
+    `id/timed.<tid>`. `run --timed` takes it in its own process; `acquire --bind PID --timed` in
+    a keeper bound to the PID. A token-sharing timing keeps builds out by its own lock, whatever
+    happens to the hold or to another timing.
+  - **Every decision is one lock probe** (`probe`, a flock with a 0.1 s wait): held, own (this
+    Claude session's hold), timed. The status file (owner, reason, start, session, bound PID,
+    holder PID, token, hid) is written once and whole by the hold's own holder, with the id last.
+    A reader trusts it only for the hold whose id lock it then probes as held. A keeper is ended
+    by the lock it has open, never by a PID a file names.
+  - **New commands:** `probe` (the guard's input: `held=<0|1> own=<0|1> timed=<0|1>`, then the
+    descriptions). `release` refuses a `run`'s hold (it ends with the run).
+  - **A keeper started by an acquire waits for its go.** If the acquire is killed before that
+    (during a timed wait), its hold and timing go with it, though the bound process lives.
+  - **A timing keeps every new hold out**: an acquire waits while a timing runs, even one whose
+    own hold has ended.
+  - **The meta lock is gone**: no file is read, changed and written back any more. The one
+    bounded wait left is a timing's on `timed.lock` (CDO_SLOT_LOCK_WAIT_S, 30 s), which only a
+    stopped probe can hold exclusive. Exit 5 then names the PIDs that have the lock file open.
+    `/proc/locks` cannot name them: it hides every lock taken with flock(1), whose PID has exited.
+- **`--timed`'s build wait.** After taking the timing lock it waits for the build processes
+  already running outside its own process line (its ancestors and descendants do not count;
+  nor do zombies). Build processes are found by exact name with `pgrep -x`: `cargo
+  cargo-nextest rustc rustdoc`, or CDO_SLOT_BUILD_NAMES (at most 15 characters each). Build
+  scripts are found by an exact argv word: `ci-steps check-goldens`, or CDO_SLOT_BUILD_SCRIPTS.
+  Option operands are skipped (`bash -o pipefail scripts/ci-steps`); never a `pgrep -f`. It
+  waits until none is seen for CDO_SLOT_TIMED_GRACE_S (3 s) in a row: a command the guard allowed
+  a moment before the timing lock was taken starts a moment later. A build still seen at
+  CDO_SLOT_TIMED_WAIT_S (1800 s), or the hold gone by then, refuses with exit 6: the timing is
+  taken back, and the hold is released when this call took it. It prints their PIDs every
+  ~60 s. `status` adds a second line, `timed by <owner> since <time> (<reason>)`, while a
+  timing runs. A reason may hold no line break (LF or CR).
 - **Fixed: the status is read once per check.** A holder whose bound process ended removes its
   status while it still holds the lock. Reading the fields one by one from the file could mix
   the two: `session` from before the removal, `bound` (now empty) from after. Another run's bound
@@ -452,81 +474,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   TLS-92's task gate, where cdo-speed runs back to back on one slot and its timed hold failed.
   `cdo_slot::cdo_slot_reads_the_status_once_per_check` pins it with a test-only pause
   (`CDO_SLOT_TEST_PAUSE_S`) between those two reads.
-- **Review round 3 (sol), all fixed:**
-  - **A refusal killed the next holder.** A refused timed acquire ended the holder it read
-    back from the status after taking the slot. If the slot changed hands in between, that was
-    someone else's hold. The holder now hands its own pid to the taker (`try_take` sets
-    `taken_holder`), and only that hold is ended. A timing whose taken hold is gone before it
-    starts refuses, and marks nothing in another hold.
-  - **A retry erased a running timing's cover.** A second timed acquire bound to the same
-    process, refused, took back the first one's mark. A mark this process already has in the
-    hold is now kept and never taken back by that call.
-  - **The wait could overrun its deadline.** It now never sleeps past CDO_SLOT_TIMED_WAIT_S.
-    Before, with a long poll, a build that ended after the deadline let the timing start.
-  - **The guard missed two commands.** `python3 -X dev scripts/cdo-before-after`: the value of
-    `-X`/`-W` was taken for the script. And `agentflow run` from PATH.
-  - **A timed mark is read once per check too.** A status reader no longer prints
-    `timed by  since  ()` when the timing ends between its fields.
-  - The tests reach the race windows through pause hooks that write a `paused.<pid>` file, and
-    wait for it (the status test had a fixed delay that could miss the window). Six
-    discrimination proofs, all red.
-- **Review round 4 (sol):**
-  - **A shared hold replaced before the timing began** got the timing's mark. The holder seen at
-    the acquire, taken or shared, is now what the timing expects; another one refuses.
-  - **A `run --timed` that took the slot** now ends exactly that hold on exit. A generic
-    `release` ended whatever hold its session had by then, a new one taken by hand included.
-  - **A concurrent retry could lose its mark.** A mark now records its writer and whether its
-    timing is `pending` (still waiting for builds) or `active`:
-    - a retry keeps an active mark;
-    - a retry writes its own mark over a pending one;
-    - a refusal takes a mark back only while it is still the writer.
-  - **The guard** reads a clustered Python option ending in `X` or `W` (`-IX dev`) as taking the
-    next word.
-  - **The deadline:** a wait that saw builds and ran past CDO_SLOT_TIMED_WAIT_S refuses even if
-    its last scan, delayed, found them gone.
-  - Tests: three new race sections (a shared hold replaced, a run whose session takes a new hold,
-    a concurrent retry), through pause hooks that each write a `paused.<pid>` marker the test
-    waits for. Four discrimination proofs, all red. They also caught a bug in this round's first
-    draft: the temporary-mark filter matched the whole path, so a slot folder whose path holds
-    `.tmp` (every test's tempdir) hid every mark; it matches the file name now.
-- **The state design, after five review rounds of narrower races** (the orchestrator: "the state
-  is spread too thin, not that we need more patches"):
-  - **The slot's whole state is one file**, the status file: the hold's fields and every timed
-    mark (`timed.<pid>.<key>=<value>` lines). The separate `timed.<pid>` files are gone.
-  - **Writers replace it whole** (write, then rename) under the meta lock. A writer that decides
-    on what it read decides and writes in that one critical section (`publish_locked`,
-    `promote_locked`, `end_taken_locked`, `clear_timed_mine_locked`).
-  - **Readers take no lock.** They read the file once and see one whole state, so a reader that
-    stops or dies blocks nobody.
-  - **Every meta wait is bounded** (`CDO_SLOT_META_WAIT_S`, 30 s). A process stuck inside the
-    lock makes a writer fail loudly with exit 5, naming the holder's PID, command and process
-    state. Before, a waiter SIGSTOPped inside the lock (by a test) left `release` waiting
-    2h43m while it held the CDO slot. The invariant is stated at `with_meta`.
-  - **Every `cdo_slot` test has a watchdog**: after 300 s it kills every process using that
-    test's slot folder, so a hang fails the test instead of holding the slot.
-  - Tests:
-    - `cdo_slot_state_holds_under_concurrent_takers`: six sessions at once, a checker reading
-      throughout.
-    - `cdo_slot_a_stuck_state_lock_fails_loudly_and_readers_go_on`: proof red with an
-      unbounded wait.
-    - `cdo_slot_a_reader_never_sees_a_half_written_state`: a test hook writes the new state in
-      two parts with a pause between them; a reader polling meanwhile always sees the whole old
-      state. Proof red with an in-place write.
-  - What a reader can see during a takeover is the hold lock taken before its status exists:
-    a whole "no status yet" state, never a torn file.
-- **Review round 5 (sol):**
-  - **A refused call that took the hold** no longer ends it while another call's timing is active
-    in it (a retry sharing its token; `end_taken`). A `run --timed`'s exit uses the same rule.
-  - **A pending mark counts only while the call that wrote it lives** (writer pid and start
-    time in the mark). An acquire killed during its wait no longer keeps builds out for as long
-    as its timing process lives.
-  - **The guard parses a Python option cluster letter by letter**, as the slot's scanner does:
-    `-Wignore:W` carries its value, `-IX dev` takes the next word, `c` or `m` runs no script.
-  - **The deadline is measured in microseconds** (`EPOCHREALTIME`), so an overrun below a second
-    refuses too.
-- **The limit.** The hook sees a command only when it starts. A command it allowed before the
-  hold became timed, and that starts a build later (`sleep 60; cargo build`), is not stopped,
-  and neither is a build started outside any hooked session.
+- **Review history.** Rounds 1-5 (Fable, sol) each found a narrower race in a design that
+  decided from files, PIDs and liveness checks: a refusal ending the next holder, a retry
+  erasing a running timing's marker, a shared hold replaced before the timing began, a
+  concurrent retry losing its marker, an interrupted wait keeping builds out. A one-file state
+  under a meta lock (round 6's input) closed the writer races, but sol r6 still found four
+  check-then-act races, all of one root (any check on a file or a PID can be stale by the time
+  it is acted on):
+  - a lock-free reader missing a timing that joined after its read;
+  - a dead holder's hold promoted;
+  - a busy hold dropped by its holder's bind watch;
+  - a hold stranded when a lock wait timed out.
+  The orchestrator's answer was to change what the truth is: kernel locks decide. The
+  per-round fixes that still apply carried over: the guard's Python option clusters (`-X dev`,
+  `-IX dev`, `-Wignore:W`), `agentflow run` from PATH, the microsecond deadline (`EPOCHREALTIME`;
+  a wait never sleeps past it), and a refused timing ending only its own timing and its own
+  hold. Every `cdo_slot` test has a watchdog: after 300 s it kills every process using its slot
+  folder (one hang held the real slot 2h43m).
+- **Review round 7 (sol, on the lock design), all fixed:**
+  - **A hold taken beside a timing.** An acquire checked for a timing, then took the hold lock;
+    a timing begun in between (in a hold released meanwhile) was missed. The check runs again
+    under the hold lock.
+  - **A timing reported after its keeper died.** A keeper killed after taking its locks and
+    before its go left the acquire reporting success with no timing lock. The go file is now
+    named by the attempt's id (not a reusable PID), and the acquire waits for the keeper to
+    take it (remove it) while its id lock is held; a keeper gone first refuses (exit 6).
+  - **The guard read `scripts/cdo-slot run ... -- <cmd>` as no build.** It now reads the
+    wrapped command, as it does `timeout` or `nice`.
+  - A status write that fails exits (dropping the locks) instead of holding them with no
+    status; the inherited-lock test waits for the sharer's timing instead of a fixed second.
+- **What it cannot see.** The hook sees a command only when it starts. A command it allowed
+  before the timing began that starts a build later (`sleep 60; cargo build`) is not stopped,
+  and neither is a build started outside any hooked session. TLS-98 plans a cargo wrapper lock
+  (rustc-wrapper and target runner) that would wait for timings exactly; it needs an owner
+  config change.
 - **Who sets it.**
   - `scripts/cdo-speed`, after its builds and before its first timed call. It shares the hold
     it runs in (a cdo-gate's or land's token, `cdo-slot run`, its session's hand hold), so the
@@ -554,10 +535,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     with exit 6, nothing run; it starts once the build ends; its ancestor build is not waited
     for; a stand-in build script refuses it too, run as `bash -o pipefail <script>`;
   - an untimed run does not wait;
-  - a timed mark ends with its bound process; a second timing in a shared hold waits for a
-    build and keeps its mark when the first ends; a refused `acquire --bind --timed` with no
-    session or token frees the slot; a timing whose hold is released while it waits refuses;
-    a reason with a CR is refused;
+  - a timing ends with its bound process; a second timing in a shared hold waits for a
+    build and stays on when the first ends; a refused `acquire --bind --timed` with no
+    session or token frees the slot; a timing whose hold is released while it waits refuses,
+    and no other session takes the slot meanwhile; a reason with a CR is refused;
+  - the lock design (`cdo_slot_decides_from_locks_alone`,
+    `cdo_slot_a_hold_lives_exactly_as_long_as_its_processes`): a timing that a second one joined,
+    killed outright, never reads untimed; a run that ends before its token-sharing timing keeps
+    the hold and the timing until the sharer ends; an `acquire --timed` killed in its wait
+    leaves nothing; a run killed while its command lives keeps the slot until the command ends;
+    a keeper killed outright frees the slot at once; a build that starts within the grace wait
+    is waited for; a stuck timing lock fails loudly (exit 5, naming the PID); a status read half
+    way is never printed as a hold;
   - cdo-before-after's measurements run under `timed by`; beside a build it measures nothing,
     says why, fails and frees the slot;
   - cdo-speed inside a hold exits 2 beside a build, before any server starts; outside any hold

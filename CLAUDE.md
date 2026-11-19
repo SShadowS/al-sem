@@ -91,9 +91,15 @@ scripts/cdo-slot acquire|release|status|run <owner> <reason>  # The one CDO slot
                                # measuring; any other timed run of yours passes it too. A timed acquire first
                                # waits for the build processes already running (cargo, cargo-nextest, rustc,
                                # rustdoc by exact name; ci-steps and check-goldens by argv; never a
-                               # self-matching `pgrep -f`), up to CDO_SLOT_TIMED_WAIT_S (1800 s), then refuses
-                               # (exit 6) rather than start beside one. The hook sees a command only as it
-                               # starts: `sleep 60; cargo build` allowed before a timing began still builds.
+                               # self-matching `pgrep -f`) until none is seen for CDO_SLOT_TIMED_GRACE_S (3 s)
+                               # in a row, up to CDO_SLOT_TIMED_WAIT_S (1800 s), then refuses (exit 6) rather
+                               # than start beside one. The hook sees a command only as it starts: `sleep 60;
+                               # cargo build` allowed before a timing began still builds (TLS-98 plans a cargo
+                               # wrapper lock for that). Only kernel locks decide (TLS-89): the hold is a flock
+                               # its holder keeps (`run`: the run and its command, killed or not; `acquire`: a
+                               # keeper that ends with the --bind PID or the Claude PID), a timing a shared
+                               # flock; a dead process drops its locks, so nothing is STALE any more, and
+                               # `release` cannot end a `run`'s hold (it ends with the run).
                                # The PreToolUse hook scripts/claude-hooks/cdo-slot-guard then refuses: under
                                # any hold, ANOTHER session's gate scripts and aldump/alsem (or cargo) naming
                                # CDO; under a TIMED hold, also every session's cargo builds/tests, ci-steps,
@@ -103,7 +109,7 @@ scripts/cdo-slot acquire|release|status|run <owner> <reason>  # The one CDO slot
                                # `hooks.PreToolUse` gets {"matcher": "Bash", "hooks": [{"type": "command",
                                # "command": "python3 \"$CLAUDE_PROJECT_DIR/scripts/claude-hooks/cdo-slot-guard\"",
                                # "timeout": 30}]} (the owner's to add). `scripts/cdo-slot status` says who
-                               # holds it, and on a second line `timed by ...` when timed. Waiters
+                               # holds it, and on a second line `timed by ...` while a timing runs. Waiters
                                # (`run`, `acquire --wait`) are served in arrival order (TLS-88): a holder
                                # that releases and asks again goes behind them, and an acquire without
                                # --wait refuses while anyone waits; a waiter short of memory steps
