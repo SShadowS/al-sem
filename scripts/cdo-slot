@@ -189,10 +189,17 @@ keepers_of() {
         # has the file open for an instant) left the loop's status 1, and
         # `ps=$(keepers_of ...)` under `set -e` then ended `release` with exit
         # 1 (TLS-89's landing, the queue test under load).
-        if tr '\0' ' ' <"/proc/$p/cmdline" 2>/dev/null | grep -q " _keep "; then
-            echo "$p"
-        fi
+        is_keeper_cmd "$p" || continue
+        # Only the keeper itself: each `$(...)` it runs forks a subshell with
+        # its command line and descriptors for a moment (TLS-102's landing).
+        is_keeper_cmd "$(ppid_of "$p")" && continue
+        echo "$p"
     done
+}
+# is_keeper_cmd <pid>: that process runs `cdo-slot _keep`.
+is_keeper_cmd() {
+    [[ "${1:-}" =~ ^[1-9][0-9]*$ ]] || return 1
+    tr '\0' ' ' <"/proc/$1/cmdline" 2>/dev/null | grep -q " _keep "
 }
 
 # write_atomic <file> <content>: the whole file at once (write, then rename): a
@@ -414,6 +421,15 @@ keeper() {
             id=$tid
             ;;
     esac
+    # Test hook: a subshell of this keeper (its command line and environment,
+    # none of its locks) held until the test makes `fork-done`, as each `$(...)`
+    # it runs is for a moment (TLS-102: a count by command line saw two).
+    if [[ -n "${CDO_SLOT_TEST_KEEPER_FORK:-}" ]]; then
+        (
+            for fd in "${held_fds[@]}"; do eval "exec $fd>&-"; done
+            while [[ ! -e "$dir/fork-done" ]]; do sleep 0.05; done
+        ) &
+    fi
     write_atomic "$CS_READY" "$$ $id"
     # The go file is named by this keeper's own id (never a reusable PID), and
     # removing it is the acknowledgement its acquire waits for.
@@ -662,7 +678,12 @@ timed_start() {
         else
             # None seen: start (or go on) counting the grace (a command the
             # guard allowed just before the timing lock was taken may start now).
-            [[ -n "$quiet" ]] || quiet=$now
+            if [[ -z "$quiet" ]]; then
+                quiet=$now
+                # Test hook: the grace's first moment, after the first empty
+                # scan (a build the guard allowed may start now).
+                [[ -z "${CDO_SLOT_TEST_PAUSE_GRACE_S:-}" ]] || test_pause "$CDO_SLOT_TEST_PAUSE_GRACE_S"
+            fi
             ((now - quiet < grace_us)) || break
             nap_us=$((grace_us - (now - quiet)))
             ((nap_us < 500000)) || nap_us=500000

@@ -17,6 +17,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   polling the lock can land in the moment. The test now waits for the published status. A new
   hook, CDO_SLOT_TEST_PAUSE_PUBLISH_S, holds that moment open: the test checks that a `release`
   inside it refuses and ends nothing. Proof: the wait dropped gives the landing's message (red).
+- The batch landing of TLS-102 and TLS-92 failed on `cdo_slot_acquire_windows_hold_against_a_timing`:
+  "one timing keeper", found two. A keeper is a bash script, and each `$(...)` it runs forks a
+  subshell with its command line, environment and descriptors for a moment; a count by command
+  line caught the keeper and its subshell together, more often under load. A keeper is now the
+  top one: a matching process whose parent is not one (the tests' `keepers`, and the script's
+  own `keepers_of`, where the fork was harmless). A hook, CDO_SLOT_TEST_KEEPER_FORK, keeps such
+  a subshell open; proof: without the parent check the count is two (red).
+- **Every timing assumption in `cdo_slot.rs` audited at once** (the orchestrator: three slot
+  tests failed only inside landings):
+  - the grace test's fixed 1 s sleep before its late build is a pause hook now
+    (CDO_SLOT_TEST_PAUSE_GRACE_S, after the first empty scan); proof: the grace ended at the
+    first empty scan lets the timing start beside the build (red);
+  - the sharer in the inherited-lock check runs 20 s, not 4;
+  - every poll's budget is 60 s (POLL_BUDGET; only a failing run waits it out);
+  - the time bounds that tell a refusal from a hang are 15, 20, 14 and 30 s, each still short
+    of what its break takes (a lock wait for ever or of 30 s, a 15 s sleep);
+  - the two fixed 2.5 s sleeps left can only let a test pass without checking, never fail it
+    (the queue test's one is in TLS-99).
+  Stress: the suite 20 times in a row beside full nextest runs, zero failures (see TLS-102).
 
 ### Fixed (ENG-131: identifiers fold exactly as the AL compiler compares them, the same for binding, graph nodes and stable ids)
 
