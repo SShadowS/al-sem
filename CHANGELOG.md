@@ -539,6 +539,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with the 0.1 s wait, since another probe may have it for an instant. The guard test now
   takes ~57 s. The slot tests also drop every inherited `CDO_SLOT_*` and `CLAUDE_*` setting
   (and `CDO_WS`), so a suite run inside a hold gives the same results as one outside.
+- **The guard's own cost per Bash call** (once wired it runs on every Bash call of every
+  session). Measured 2026-11-19 on server1 at a host load average of ~144 (other projects), so
+  high side; 50 calls each, median (p90), in ms:
+
+  | slot | a guarded command (`cargo test`) | an unguarded one (`git status`) |
+  |------|-----------------------------------|----------------------------------|
+  | free | 48 (62) | 31 (40) |
+  | held by another session | 88 (99) | 32 (42) |
+  | during a timing | 210 (223), refused | 40 (67) |
+
+  An unguarded command (most Bash calls) costs Python's start and the command-line parse; only
+  a guarded one runs `cdo-slot probe`. During a timing the `timed.lock` probe adds its 0.1 s
+  confirming wait. Script: `guard_latency.py` (TLS-89 scratch, not in the tree).
 - **What it cannot see.** The hook sees a command only when it starts. A command it allowed
   before the timing began that starts a build later (`sleep 60; cargo build`) is not stopped,
   and neither is a build started outside any hooked session. TLS-98 plans a cargo wrapper lock
