@@ -461,9 +461,13 @@ def render(rep, base, head):
             md.append(f"- **ids unknown** under {len(mu)} shared fingerprint(s) (a finding "
                       "without an id; its members cannot be compared):")
             md += [f"  - {d} {k}: {b} -> {h} findings" for d, k, b, h in mu[:50]]
+            if len(mu) > 50:
+                md.append(f"  - ... and {len(mu) - 50} more (report.json)")
         if dm:
             md.append(f"- **detector mismatch** under {len(dm)} fingerprint(s):")
             md += [f"  - {d} {k}" for d, k in dm[:50]]
+            if len(dm) > 50:
+                md.append(f"  - ... and {len(dm) - 50} more (report.json)")
     for sec, x in rep["histogram"].items():
         md += ["", f"## call graph, {sec}",
                f"unknown {x['unknown'][0]} -> {x['unknown'][1]}, realUnknownRate "

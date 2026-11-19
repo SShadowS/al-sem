@@ -776,6 +776,34 @@ fn before_after_reports_what_the_fingerprint_set_hides() {
             && md.contains("**detector mismatch** under 1 fingerprint(s)"),
         "{md}"
     );
+
+    // The same-set case alone (review r2, sol: above, `fz` and `fd` change the
+    // set and the detector counts in the same run): same fingerprints, same
+    // total, same detector count, only the counts per fingerprint move.
+    let base = rows(&[
+        ("d55", "fa", Some("a1")),
+        ("d55", "fa", Some("a2")),
+        ("d55", "fb", Some("b1")),
+    ]);
+    let head = rows(&[
+        ("d55", "fa", Some("a1")),
+        ("d55", "fb", Some("b1")),
+        ("d55", "fb", Some("b2")),
+    ]);
+    for (side, v) in [("A", &base), ("B", &head)] {
+        std::fs::write(t.path(&format!("fix/{side}/analyze-primary.json")), v).unwrap();
+        std::fs::write(t.path(&format!("fix/{side}/analyze-all.json")), v).unwrap();
+    }
+    let out = t.out("same-set");
+    let (code, text) = t.run(&["--out", &out, &t.c1, &t.c2], &[]);
+    assert_eq!(code, Some(0), "{text}");
+    let f = &t.report("same-set")["findings"]["analyze-primary"];
+    assert_eq!(f["total"], json!([3, 3]), "{f}");
+    assert_eq!(
+        f["multiplicity_moved"],
+        json!([["d55", "fa", 2, 1], ["d55", "fb", 1, 2]]),
+        "the same-set count changes were missed: {f}"
+    );
 }
 
 /// The measurement runs only inside the CDO slot: held by another, the run
