@@ -410,6 +410,85 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     id parts, the member kind, explain's level, the wire id, the selector fallback, the surface hash,
     the add-in guard.
 
+### Added (TLS-87: the pre-submit CDO subset is checked at landing, not remembered)
+
+- **Why.** ENG-99 (2026-11-16) was submitted without `cdo-gate --only harness,l4`, and the
+  landing gate failed after 23 min on `l4_summary_differential`'s frozen digest. ENG-115
+  (2026-11-17) ran `harness,l4`, but its landing failed after ~25 min on `output_cdo`'s
+  rendering goldens, which only `output` checks before a landing.
+- **`scripts/cdo-gate --only ...`** records a passing run. The phases go under the tree it ran
+  on, in `<git common dir>/cdo-presubmit/<tree>`, one phase a line, the union of every passing
+  run on that tree. This is the same pattern as ci-steps' gate-passed record. It is written
+  only when the work tree was clean before and after the run, at the same tree, and the run
+  ran from the script's own checkout (cargo builds the current folder), and no tracked file was
+  modified during the run. That names the tested tree on a best-effort basis (a file restored
+  with its old mtime, `cp -p`, passes): it guards against forgetting the subset, not against a
+  deliberate trick. Otherwise the gate says why. A full gate's pass records every subset phase
+  too.
+- **`scripts/land`** checks each branch's head tree in its `check` step, `--dry-run` included.
+  The rule lists what is exempt, so a new kind of path counts by default.
+  - Product code (`src/`, `crates/`, `Cargo.*`, everything not exempt) needs `harness,l4,output`.
+  - The subset's own tests, goldens and the shared CDO helpers need their phases. A re-minted
+    l4 golden is exactly what l4 checks.
+  - Docs, scripts, top-level Markdown, the agents' and CI's folders, and other tests need none.
+  - Renames count at their old path (`--no-renames`), so moving a file out of `src/` counts.
+  - A missing record is a loud warning that names the missing phases and the command to run.
+    It is kept with the run (`<run>/presubmit`) and said again if a step fails.
+    `LAND_REQUIRE_PRESUBMIT=1` makes it a refusal.
+- **Why a warning by default.** The owner's design principle 4 says "a new gate starts advisory,
+  and failing is opt-in until real use has measured what it would catch". A rebase makes a new
+  tree, so the subset must run after a branch's last rebase. That is right (master moved), but
+  how often it warns is not yet measured.
+- **Cost of `output`.** It adds ~160 s plus an engine shared with the other output tests, on
+  every product branch. A list naming only the engine missed `src/snapshot`, `src/mcp` and
+  `src/wire`, which output's answers pass through.
+- **Limits.** Two runs ending at once on one tree may lose one run's phases, which gives a false
+  warning, never a false pass. The check runs after land takes the slot.
+- **Review round 1 (sol), all fixed:**
+  - **A record could name code the run did not test.** A tracked file changed for the build and
+    restored before the end left the tree clean at both ends. The gate now writes no record if
+    any tracked file was modified after the run began; a restore still leaves a newer mtime.
+    A failing `git status` no longer reads as clean.
+  - **land could merge a different commit than it checked.** In a batch, a later branch could
+    gain a commit while an earlier one merged. Each branch's commit is now read once and used
+    for the diff, the record lookup and the merge.
+  - **output's own helpers were exempt.** `output_cdo` imports `output_invariants` and
+    `mcp_server`. The files the output phase reads are now found by following its
+    `crate::<module>` imports, transitively, at the branch's commit, plus `tests/cli/main.rs`.
+  - Paths are read unquoted (`core.quotePath=false`), so `docs/café.md` stays exempt. The
+    master-moved recheck repeats the missing-record notice too.
+  - Four discrimination proofs, all red.
+- **Review round 2 (sol):**
+  - **The record is best-effort.** A file changed and restored with its old mtime (`cp -p`)
+    passes both checks; the record guards against forgetting the subset, not against a
+    deliberate trick. Said in `cdo-gate`.
+  - **Test data counts.** A change under `tests/fixtures/` or `tests/r0-corpus/` needs all three
+    phases (the harness reads `tests/fixtures/events/`).
+  - **The output closure** is taken at master too, so a helper master started importing after
+    the branch left counts.
+  - **Paths** are read NUL-delimited (`-z`), never quoted (a tab or `"` in a name too).
+  - **Not done, the check being advisory:**
+    - a lane that reverts a source change merged in a side topic can still hide behind
+      `git diff`'s single merge base;
+    - the closure over-warns for `cli_impact`, which the subset does not run.
+- **Tests:**
+  - `gate_scripts::cdo_gate_only_pass_records_the_tree_it_ran_on` runs the real gate, with a
+    stub cargo, from a throwaway repository. Nothing is recorded for a dirty tree, a failing
+    run, a run from another checkout, or a commit landing during the run. A clean run
+    records, and a second subset adds to the record.
+  - `land_script::land_checks_the_pre_submit_cdo_record`:
+    - no record warns, or refuses when required;
+    - product code needs `output` too, Cargo.toml included;
+    - an l4 golden needs harness,l4;
+    - a move out of `src/` counts;
+    - docs, scripts, Markdown and other tests need nothing;
+    - several branches name only the one lacking a record.
+  - The stubbed `cdo-gate` runs on the real checkout set `CDO_PRESUBMIT_DIR`, so a stubbed pass
+    never records the real tree.
+
+  Each guard has a discrimination proof, recorded in the tests' docs. Documented in CLAUDE.md's
+  test tier 2b.
+
 ### Changed (ENG-120: mimalloc's `purge_delay` measured on CDO and DO, kept at 0)
 
 - No code change: `alsem` keeps `purge_delay` 0. A delay of 1 or 10 ms gave no CPU gain near the

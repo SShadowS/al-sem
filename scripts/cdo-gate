@@ -623,7 +623,8 @@ export CDO_WS="$ws"
 export ENFORCE_CDO_WS=1
 # ⟨2026-11-05⟩ The tests must never see a git hook's repository variables
 # (`GIT_DIR`, `GIT_INDEX_FILE`, ...): with them, a test's `git -C <tmp> commit`
-# writes into the committer's repository. This script runs no git of its own.
+# writes into the committer's repository. (This script's own git calls name
+# their repository with `git -C "$repo"`.)
 # shellcheck disable=SC2046
 unset $(git rev-parse --local-env-vars 2>/dev/null)
 
@@ -662,6 +663,65 @@ case "$slot_rc" in
 esac
 
 repo="$(cd "$(dirname "$0")/.." && pwd)"
+
+# ⟨TLS-87⟩ The pre-submit record: a passing `--only` run records its phases
+# under the tree it ran on, so `scripts/land` can see that a branch had its
+# pre-submit CDO subset (twice a branch was landed without it, and the landing
+# gate failed after 23-25 min on what the subset would have caught). As
+# ci-steps' gate-passed record: a file named after the tree hash, in the git
+# directory every worktree shares (`<common dir>/cdo-presubmit/<tree>`), one
+# phase a line (the union of every passing run on that tree), and written only
+# when the work tree was CLEAN before and after the run (no tracked change, no
+# untracked file outside .gitignore) and no tracked file was modified during it
+# (presubmit_touched). That is best-effort, not proof (review r2, sol): a file
+# changed and then restored WITH its old mtime (`cp -p`) passes both checks. It
+# is a check against forgetting the subset, not against a deliberate trick. A full
+# gate's pass records its phases too. Cargo builds the CURRENT folder, so the
+# record is written only when that is this script's checkout (review r1, Fable:
+# `bash <other worktree>/scripts/cdo-gate` built one tree and recorded another).
+# Two runs ending at once on one tree may lose one's phases (read, then
+# rename): a missing phase only, so a false warning, never a false pass.
+presubmit_clean_tree() {
+    local top st
+    top=$(git rev-parse --show-toplevel 2>/dev/null) || return 1
+    [[ "$(realpath "$top")" == "$(realpath "$repo")" ]] || return 1
+    # A failing `git status` is no clean tree (review r1, sol).
+    st=$(git -C "$repo" status --porcelain --untracked-files=normal) || return 1
+    [[ -z "$st" ]] || return 1
+    git -C "$repo" rev-parse 'HEAD^{tree}'
+}
+# The tracked files modified since the run began (presubmit_stamp). Clean at
+# both ends is not enough: a tracked file changed for the build and restored
+# before the end leaves the tree "clean" while the tests ran on other code
+# (review r1, sol). A restore still leaves a newer mtime. Build output
+# (target/) and .git are skipped.
+presubmit_touched() {
+    (cd "$repo" && find . \( -path ./target -o -path ./.git \) -prune -o -type f \
+        -newer "$presubmit_stamp" -print0 | xargs -0 -r git ls-files --)
+}
+record_presubmit() { # <phase>...
+    local after dir file tmp touched
+    if [[ -z "$presubmit_tree" ]] || ! after=$(presubmit_clean_tree) || [[ "$after" != "$presubmit_tree" ]]; then
+        echo "cdo-gate: no pre-submit record: the run's tree is not exactly HEAD's (a change or untracked file, a commit during the run, no git checkout, or run from another checkout than $repo); commit, then run it from there"
+        return 0
+    fi
+    if ! touched=$(presubmit_touched) || [[ -n "$touched" ]]; then
+        echo "cdo-gate: no pre-submit record: tracked files were modified during the run: $(head -n 5 <<<"$touched" | paste -sd ' ')"
+        return 0
+    fi
+    # CDO_PRESUBMIT_DIR: tests only (a stubbed run must not record a pass).
+    dir="${CDO_PRESUBMIT_DIR:-$(git -C "$repo" rev-parse --path-format=absolute --git-common-dir)/cdo-presubmit}"
+    file="$dir/$after"
+    tmp="$file.$$"
+    if mkdir -p "$dir" && { cat "$file" 2>/dev/null; printf '%s\n' "$@"; } | sort -u >"$tmp" \
+        && mv -f "$tmp" "$file"; then
+        echo "cdo-gate: pre-submit record for tree ${after:0:12}: $(paste -sd, "$file")"
+    else
+        rm -f "$tmp"
+        echo "cdo-gate: warning: could not write the pre-submit record $file" >&2
+    fi
+}
+
 logs_root="${CARGO_TARGET_DIR:-$repo/target}/cdo-gate-logs"
 mkdir -p "$logs_root" || exit 1
 # Runs older than a week go; each run has its own folder (two gates at once
@@ -720,6 +780,11 @@ else
     # ⟨TLS-19⟩ This run runs the impact ratchets as their own phase (summarize).
     : > "$logs/split-impact"
 fi
+# ⟨TLS-87⟩ The tree this run tests, for the pre-submit record, and the moment
+# it began (presubmit_touched).
+presubmit_tree=$(presubmit_clean_tree) || presubmit_tree=""
+presubmit_stamp="$logs/presubmit-start"
+: >"$presubmit_stamp"
 
 # Each output line prefixed with the gate's clock (seconds since it started),
 # so a log shows when each test ended.
@@ -1077,5 +1142,14 @@ echo "cdo-gate: layout: $(cat "$logs/layout")"
 kill "$sampler" 2>/dev/null
 cp /sys/fs/cgroup/memory.events "$logs/memory.events.end" 2>/dev/null
 
-summarize
-exit $?
+rc=0
+summarize || rc=$?
+if [[ "$rc" == 0 ]]; then
+    if [[ -n "$only" ]]; then
+        record_presubmit "${only_phases[@]}"
+    else
+        # A full gate's pass covers every subset phase (review r1, Fable).
+        record_presubmit program_resolve_harness lsp l4_summary_differential lib_cdo output_cdo
+    fi
+fi
+exit "$rc"
