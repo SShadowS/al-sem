@@ -438,6 +438,11 @@ fn lower_object(
     } else {
         Vec::new()
     };
+    let interface_extends = if kind == ObjectKind::Interface {
+        interface_extends_names(node, source)
+    } else {
+        Vec::new()
+    };
 
     // Page controls (Page / PageExtension).
     let mut page_controls = Vec::new();
@@ -544,6 +549,7 @@ fn lower_object(
         dataset_items,
         extends_target,
         implements,
+        interface_extends,
         page_controls,
         fields,
         keys,
@@ -806,6 +812,30 @@ fn implements_clause_names(clause: RawNode, source: &str, out: &mut Vec<String>)
             _ => {}
         }
     }
+}
+
+/// An interface's `extends` list (grammar 5.4.0, tree-sitter-al #43): every
+/// `extends_interface` entry of the declaration and of each `#if` group in the list
+/// (`preproc_conditional_extends`, nested groups included), document order. Every arm's
+/// names are kept: the same union [`extract_implements`] reads.
+fn interface_extends_names(node: RawNode, source: &str) -> Vec<String> {
+    fn walk<'t>(n: RawNode<'t>, out: &mut Vec<RawNode<'t>>) {
+        out.extend(n.children_by_field(FieldName::ExtendsInterface));
+        for g in n.named_children() {
+            if g.kind() == RawKind::PreprocConditionalExtends {
+                walk(g, out);
+            }
+        }
+    }
+    let mut nodes = Vec::new();
+    walk(node, &mut nodes);
+    nodes.sort_by_key(|n| n.byte_range().start);
+    nodes
+        .into_iter()
+        .map(|n| reference_name(n, source))
+        // An empty name (`extends ""`) names nothing.
+        .filter(|s| !s.is_empty())
+        .collect()
 }
 
 /// Collect page `part` / `systempart` / `usercontrol` sections (name, kind, target),
@@ -6653,6 +6683,121 @@ codeunit 50204 "Preproc Impl" implements IOther
             implements.iter().any(|i| i.eq_ignore_ascii_case("IOther")),
             "got implements: {implements:?}"
         );
+    }
+
+    /// GRM-05 (grammar 5.4.0, tree-sitter-al #43): an interface's `extends` list
+    /// reaches the IR whole: several bases, a namespace-qualified base (its last
+    /// segment, as for `implements`), and the names of every arm of an `#if` group in
+    /// the list (nested too), in document order. Another object kind's `extends`
+    /// (an extension's base object) never lands here. Shapes compiled with alc
+    /// 18.0.41 (/work/.al-sem/probes/grm05-iface).
+    ///
+    /// Mutations (2026-11-19): the `#if`-group descent dropped -> `IGroupA`, `IGroupB`,
+    /// `INested` missing (red); `reference_name` replaced by the raw text -> the
+    /// qualified base reads `NS.Sub."IQux"` (red); the sort dropped -> the group's names
+    /// come after `ILast` (red). Each restored, green. Review (sol): a single-field read
+    /// (`field` for `children_by_field`) -> only `IBar` (red); restored, green. A
+    /// group as the first entry, an `#elif` arm and a comment on an `#if` line (the
+    /// second interface) parse clean and keep every name. No broken list gives an
+    /// empty name: the empty-name filter dropped -> `extends ""` gives `""` (red;
+    /// the MISSING-name shapes, `extends NS.` and a trailing comma, never reach the
+    /// field, so they stayed green); restored, green.
+    #[test]
+    fn interface_extends_list_is_lowered_with_every_arm() {
+        let src = r#"
+interface IBaz extends IBar, NS.Sub."IQux",
+#if A
+    IGroupA,
+#if B
+    INested,
+#endif
+#else
+    IGroupB,
+#endif
+    ILast
+{
+    procedure Baz();
+}
+
+interface IFirst extends
+#if A // a comment on the directive line
+    IOne,
+#elif B
+    ITwo,
+#endif
+    IThree
+{
+}
+
+tableextension 50100 "T Ext" extends Customer
+{
+}
+"#;
+        let af = parse(src);
+        assert_eq!(af.parse_status, crate::ir::ParseStatus::Clean);
+        assert_eq!(af.objects.len(), 3, "every object lowered");
+        assert_eq!(
+            af.objects[0].interface_extends,
+            ["IBar", "IQux", "IGroupA", "INested", "IGroupB", "ILast"]
+        );
+        assert_eq!(af.objects[1].interface_extends, ["IOne", "ITwo", "IThree"]);
+        assert!(af.objects[2].interface_extends.is_empty());
+        assert_eq!(af.objects[2].extends_target.as_deref(), Some("Customer"));
+
+        for src in [
+            "interface IX extends NS.\n{\n}\n",
+            "interface IX extends\n{\n}\n",
+            "interface IX extends IA,\n{\n}\n",
+            "interface IX extends IA, NS.\n{\n}\n",
+            "interface IX extends \"\"\n{\n}\n",
+        ] {
+            for o in &parse(src).objects {
+                assert!(
+                    o.interface_extends.iter().all(|s| !s.is_empty()),
+                    "{src:?}: {:?}",
+                    o.interface_extends
+                );
+            }
+        }
+    }
+
+    /// GRM-05 (grammar 5.4.0, tree-sitter-al #45): GRM-03's CR-only repros now parse
+    /// CLEAN and keep their codeunit, its routine and the code after the CR-ended
+    /// `#if`/`#endif` lines or `//` comment (on 5.3.0 each lost its object: the
+    /// `#if` repro to one ERROR, the header comment to one clean comment). The CLI
+    /// test (`failed_parse_without_object_is_a_parse_warning`) pins the diagnostics;
+    /// this pins what reaches the IR.
+    #[test]
+    fn cr_only_line_ends_keep_the_object_and_its_code() {
+        for (what, src, call) in [
+            (
+                "#if",
+                "codeunit 50299 \"C288 CR\"\r{\r    procedure P()\r    begin\r#if X288\r        exit;\r#endif\r        Q();\r    end;\r}\r",
+                "Q",
+            ),
+            (
+                "header comment",
+                "// header\rcodeunit 50301 \"C Hdr\"\r{\r    procedure P()\r    begin\r        Q();\r    end;\r}\r",
+                "Q",
+            ),
+            (
+                "body comment",
+                "codeunit 50303 \"C Body\"\r{\r    procedure P()\r    begin\r        // a comment\r        Q();\r    end;\r}\r",
+                "Q",
+            ),
+            (
+                "mixed line ends",
+                "codeunit 50302 \"C Mixed\"\r{\r    procedure P()\r    begin\r#if X288\r        exit;\r#endif\r        Q();\r    end;\r}\r\n",
+                "Q",
+            ),
+        ] {
+            let af = parse(src);
+            assert_eq!(af.parse_status, crate::ir::ParseStatus::Clean, "{what}");
+            assert_eq!(af.objects.len(), 1, "{what}");
+            assert_eq!(af.objects[0].routines.len(), 1, "{what}");
+            let body = af.objects[0].routines[0].body.expect("body");
+            assert!(call_reachable(&af, body, call), "{what}: {call}() is lost");
+        }
     }
 
     /// The `ParseStatus::Recovered` diagnostic fixture: an unbalanced `#if`

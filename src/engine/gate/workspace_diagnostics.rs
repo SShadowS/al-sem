@@ -128,29 +128,22 @@ pub fn compute_workspace_diagnostics(
     // GRM-03: a file whose parse FAILED (a syntax error left no object readable)
     // is a `warning`/`parse` row instead, saying its code is missing from the
     // analysis: "No object declaration found" blamed the file for the parser's
-    // loss. So is a file with a lone-CR line end, even when its parse is clean:
-    // the grammar ends `//` comments and `#if`/`#else`/`#endif` lines at `\n`
-    // only, so a header comment swallows the whole file into one clean comment.
+    // loss. This row is the WHOLE-object loss only. A file that kept an object but
+    // lost code inside it to a syntax error is not here (it has an object): that
+    // partial loss is preflight's "N recovered file(s)" (`recovered_files`).
+    // GRM-05: grammar 5.4.0 ends `//` comments and `#if` lines at a lone CR too
+    // (tree-sitter-al #45), so a CR-only file no longer loses its objects, and a
+    // CR-only file with no object and a clean parse is the info row like any
+    // comment-only file.
     for f in files_without_object.unwrap_or_default() {
         let rel = &f.rel;
-        out.push(if f.parse_failed || f.lone_cr_line_ends {
+        out.push(if f.parse_failed {
             Diagnostic {
                 severity: "warning".to_string(),
                 stage: "parse".to_string(),
                 message: format!(
-                    "Could not parse {rel}: {}, so its code is missing from the analysis{}",
-                    if f.parse_failed {
-                        "a syntax error left no object declaration readable"
-                    } else {
-                        "no object declaration was readable"
-                    },
-                    if f.lone_cr_line_ends {
-                        " (the file has line ends that are a lone CR; `//` comments and \
-                         preprocessor lines such as `#if` end only at LF, so they swallow \
-                         the code after them)"
-                    } else {
-                        ""
-                    }
+                    "Could not parse {rel}: a syntax error left no object declaration \
+                     readable, so its code is missing from the analysis"
                 ),
             }
         } else {

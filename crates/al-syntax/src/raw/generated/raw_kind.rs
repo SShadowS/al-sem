@@ -297,6 +297,7 @@ pub enum RawKind {
     PreprocConditionalControladdin,
     PreprocConditionalDataset,
     PreprocConditionalExpressionTail,
+    PreprocConditionalExtends,
     PreprocConditionalFieldListItems,
     PreprocConditionalFieldgroups,
     PreprocConditionalFields,
@@ -838,6 +839,7 @@ impl RawKind {
             "preproc_conditional_expression_tail" => {
                 Some(RawKind::PreprocConditionalExpressionTail)
             }
+            "preproc_conditional_extends" => Some(RawKind::PreprocConditionalExtends),
             "preproc_conditional_field_list_items" => {
                 Some(RawKind::PreprocConditionalFieldListItems)
             }
@@ -1404,6 +1406,7 @@ impl RawKind {
             RawKind::PreprocConditionalControladdin => "preproc_conditional_controladdin",
             RawKind::PreprocConditionalDataset => "preproc_conditional_dataset",
             RawKind::PreprocConditionalExpressionTail => "preproc_conditional_expression_tail",
+            RawKind::PreprocConditionalExtends => "preproc_conditional_extends",
             RawKind::PreprocConditionalFieldListItems => "preproc_conditional_field_list_items",
             RawKind::PreprocConditionalFieldgroups => "preproc_conditional_fieldgroups",
             RawKind::PreprocConditionalFields => "preproc_conditional_fields",
@@ -1944,6 +1947,7 @@ impl RawKind {
         RawKind::PreprocConditionalControladdin,
         RawKind::PreprocConditionalDataset,
         RawKind::PreprocConditionalExpressionTail,
+        RawKind::PreprocConditionalExtends,
         RawKind::PreprocConditionalFieldListItems,
         RawKind::PreprocConditionalFieldgroups,
         RawKind::PreprocConditionalFields,
@@ -2181,7 +2185,7 @@ impl RawKind {
 /// `build.rs` asserts the checked-in grammar matches, so a silent grammar swap
 /// fails the build.
 pub const GRAMMAR_NODE_TYPES_HASH: &str =
-    "252f8fa698b3ffa49f3d68ad9aa170c2445fc5cdb19b2df0515a0f09a7ffcf63";
+    "bd718ce0ade498f882dc06ffa0adc21d898ffad4fb21b8b9903365438aa91514";
 
 /// Count of NAMED kinds (excludes `Error`). Sanity anchor for the coverage test.
-pub const NAMED_KIND_COUNT: usize = 517;
+pub const NAMED_KIND_COUNT: usize = 518;

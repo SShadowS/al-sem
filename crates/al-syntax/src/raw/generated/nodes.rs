@@ -4444,10 +4444,12 @@ impl<'t> RawInterfaceDeclaration<'t> {
             .field(FieldName::Body)
             .and_then(RawInterfaceBody::cast)
     }
-    pub fn extends_interface(self) -> Option<IdentifierOrQuotedIdentifier<'t>> {
+    pub fn extends_interface(self) -> Vec<IdentifierOrQualifiedNameOrQuotedIdentifier<'t>> {
         self.0
-            .field(FieldName::ExtendsInterface)
-            .and_then(IdentifierOrQuotedIdentifier::cast)
+            .children_by_field(FieldName::ExtendsInterface)
+            .into_iter()
+            .filter_map(IdentifierOrQualifiedNameOrQuotedIdentifier::cast)
+            .collect()
     }
     pub fn object_name(self) -> Option<IdentifierOrQuotedIdentifier<'t>> {
         self.0
@@ -6531,6 +6533,30 @@ impl<'t> RawPreprocConditionalExpressionTail<'t> {
     }
     pub fn operator(self) -> Vec<RawNode<'t>> {
         self.0.children_by_field(FieldName::Operator)
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct RawPreprocConditionalExtends<'t>(pub(super) RawNode<'t>);
+impl<'t> RawPreprocConditionalExtends<'t> {
+    #[inline]
+    pub fn cast(n: RawNode<'t>) -> Option<Self> {
+        if n.kind() == RawKind::PreprocConditionalExtends {
+            Some(Self(n))
+        } else {
+            None
+        }
+    }
+    #[inline]
+    pub fn node(self) -> RawNode<'t> {
+        self.0
+    }
+    pub fn extends_interface(self) -> Vec<IdentifierOrQualifiedNameOrQuotedIdentifier<'t>> {
+        self.0
+            .children_by_field(FieldName::ExtendsInterface)
+            .into_iter()
+            .filter_map(IdentifierOrQualifiedNameOrQuotedIdentifier::cast)
+            .collect()
     }
 }
 

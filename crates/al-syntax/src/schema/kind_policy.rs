@@ -225,6 +225,9 @@ pub fn class_of(k: RawKind) -> Class {
         | RawKind::PreprocConditionalModifier
         | RawKind::PreprocSplitPart
         | RawKind::PreprocConditionalTableFieldOpen
+        // v5.4.0 (88bb6871, tree-sitter-al #43): an interface's `extends` list split
+        // by `#if`; the lowerer owns descent (GRM-05).
+        | RawKind::PreprocConditionalExtends
         // Later 2026-10 `main` additions (8682cb5f, still package v4.4.1). Structure,
         // not keywords. `chartpart_section` is a page-layout part beside `part`/
         // `systempart` (deferred-work 32); `filter_group` is a parenthesised filter
