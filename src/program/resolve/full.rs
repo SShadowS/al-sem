@@ -4201,8 +4201,7 @@ pub struct FreshCoverage {
     /// <rel>` index diagnostic (#160 §4.2.4), so the diagnostics never parse a
     /// second time. GRM-03: each says whether its parse FAILED (a syntax error
     /// left no object readable, so its code is missing: a warning, not the info
-    /// row) and whether its text has CR-only line ends (the grammar's directive
-    /// lines end at `\n` only, so such a file with `#if` parses to one ERROR).
+    /// row).
     pub files_without_object: Vec<FileWithoutObject>,
 }
 
@@ -4213,9 +4212,6 @@ pub struct FileWithoutObject {
     pub rel: String,
     /// `ParseStatus::Recovered`: the parser met a syntax error.
     pub parse_failed: bool,
-    /// The text holds a line end that is a lone `\r` (a CR not followed by
-    /// LF): classic Mac line ends, wholly or mixed in.
-    pub lone_cr_line_ends: bool,
 }
 
 impl FreshCoverage {
@@ -4662,12 +4658,6 @@ pub fn reduce_fresh_coverage(
         .map(|f| FileWithoutObject {
             rel: f.virtual_path.clone(),
             parse_failed: f.file.parse_status == al_syntax::ir::ParseStatus::Recovered,
-            lone_cr_line_ends: f
-                .text
-                .as_bytes()
-                .windows(2)
-                .any(|w| w[0] == b'\r' && w[1] != b'\n')
-                || f.text.ends_with('\r'),
         })
         .collect();
     files_without_object.sort_by(|a, b| a.rel.cmp(&b.rel));
