@@ -184,15 +184,28 @@ holders_of() {
 # lock file open: found by the lock itself, never by a PID a file names.
 keepers_of() {
     local p
+    # Test hook: only this call's first scan finds anything, as when a later
+    # scan misses a keeper that is still there (TLS-102's stress run).
+    if [[ -n "${CDO_SLOT_TEST_SCAN_ONCE:-}" ]]; then
+        [[ ! -e "$dir/scanned.$$" ]] || return 0
+        : >"$dir/scanned.$$"
+    fi
     for p in $(find /proc/[0-9]*/fd -lname "$1" 2>/dev/null | cut -d/ -f3 | sort -un); do
         # An `if`, not `grep && echo`: a non-keeper listed last (a probe that
         # has the file open for an instant) left the loop's status 1, and
         # `ps=$(keepers_of ...)` under `set -e` then ended `release` with exit
         # 1 (TLS-89's landing, the queue test under load).
-        if tr '\0' ' ' <"/proc/$p/cmdline" 2>/dev/null | grep -q " _keep "; then
-            echo "$p"
-        fi
+        is_keeper_cmd "$p" || continue
+        # Only the keeper itself: each `$(...)` it runs forks a subshell with
+        # its command line and descriptors for a moment (TLS-102's landing).
+        is_keeper_cmd "$(ppid_of "$p")" && continue
+        echo "$p"
     done
+}
+# is_keeper_cmd <pid>: that process runs `cdo-slot _keep`.
+is_keeper_cmd() {
+    [[ "${1:-}" =~ ^[1-9][0-9]*$ ]] || return 1
+    tr '\0' ' ' <"/proc/$1/cmdline" 2>/dev/null | grep -q " _keep "
 }
 
 # write_atomic <file> <content>: the whole file at once (write, then rename): a
@@ -325,6 +338,9 @@ take_hold() {
     exec {hfd}>"$ids/hold.$hid"
     flock -x -n "$hfd" || die "cannot lock the new hold id $ids/hold.$hid"
     held_fds+=("$hfd")
+    # Test hook: the window in which the hold is taken (`held=1`) but its status
+    # is not written yet; a `release` then cannot name it and refuses.
+    [[ -z "${CDO_SLOT_TEST_PAUSE_PUBLISH_S:-}" ]] || test_pause "$CDO_SLOT_TEST_PAUSE_PUBLISH_S"
     write_atomic "$status_file" "owner=$1
 reason=$2
 since=$(date -u +%FT%TZ)
@@ -411,6 +427,15 @@ keeper() {
             id=$tid
             ;;
     esac
+    # Test hook: a subshell of this keeper (its command line and environment,
+    # none of its locks) held until the test makes `fork-done`, as each `$(...)`
+    # it runs is for a moment (TLS-102: a count by command line saw two).
+    if [[ -n "${CDO_SLOT_TEST_KEEPER_FORK:-}" ]]; then
+        (
+            for fd in "${held_fds[@]}"; do eval "exec $fd>&-"; done
+            while [[ ! -e "$dir/fork-done" ]]; do sleep 0.05; done
+        ) &
+    fi
     write_atomic "$CS_READY" "$$ $id"
     # The go file is named by this keeper's own id (never a reusable PID), and
     # removing it is the acknowledgement its acquire waits for.
@@ -501,19 +526,41 @@ go() {
     done
 }
 # end_keeper <lock file>: end the keeper of exactly that hold or timing (the one
-# with its id lock open); a no-op when none has it.
+# with its id lock open). 0 when nothing holds that lock any more (none did, or
+# its keeper is gone); 1 when something still holds it after 5 rounds.
+# TLS-102's stress run left a STOPPED keeper alive: every step trusted a fresh
+# /proc scan. Now the keepers found are recorded once (PID and start time),
+# waited for and killed by that record, and the lock itself says when it is done.
 end_keeper() {
-    local ps n
+    local round
+    for round in 1 2 3 4 5; do
+        probe s "$1" || return 0
+        end_keepers_once "$1"
+    done
+    ! probe s "$1"
+}
+# kept_warn <lock file>: say that a keeper could not be ended, and who holds it.
+kept_warn() { echo "cdo-slot: could not end the keeper of $1; still holding it: $(holders_of "$1")" >&2; }
+# end_keepers_once <lock file>: TERM the keepers holding it, then KILL any of
+# exactly those still alive after 5 s (a stopped one is alive: only KILL ends it).
+end_keepers_once() {
+    local ps p n live
+    local -a found=()
     ps=$(keepers_of "$1")
-    [[ -n "$ps" ]] || return 0
+    for p in $ps; do found+=("$p:$(proc_start "$p")"); done
+    ((${#found[@]})) || { sleep 0.2; return 0; }
     # shellcheck disable=SC2086 # one word per PID
     kill $ps 2>/dev/null || true
     for n in $(seq 50); do
-        [[ -n "$(keepers_of "$1")" ]] || return 0
+        live=0
+        for p in "${found[@]}"; do alive "${p%%:*}" "${p#*:}" && live=1; done
+        ((live)) || return 0
         sleep 0.1
     done
-    # shellcheck disable=SC2046
-    kill -9 $(keepers_of "$1") 2>/dev/null || true
+    for p in "${found[@]}"; do
+        if alive "${p%%:*}" "${p#*:}"; then kill -9 "${p%%:*}" 2>/dev/null || true; fi
+    done
+    return 0
 }
 
 ppid_of() { local f; read -r -a f <<<"$(proc_fields "$1")"; echo "${f[1]:-}"; }
@@ -633,7 +680,11 @@ timed_start() {
     refuse() {
         [[ -z "${CDO_SLOT_TEST_PAUSE_REFUSE_S:-}" ]] \
             || test_pause "$CDO_SLOT_TEST_PAUSE_REFUSE_S"
-        if [[ -n "$tkpid" ]]; then end_keeper "$ids/timed.$tid"; else drop_timed; fi
+        if [[ -n "$tkpid" ]]; then
+            end_keeper "$ids/timed.$tid" || kept_warn "$ids/timed.$tid"
+        else
+            drop_timed
+        fi
         echo "cdo-slot: --timed refused: $*" >&2
         return 6
     }
@@ -659,7 +710,12 @@ timed_start() {
         else
             # None seen: start (or go on) counting the grace (a command the
             # guard allowed just before the timing lock was taken may start now).
-            [[ -n "$quiet" ]] || quiet=$now
+            if [[ -z "$quiet" ]]; then
+                quiet=$now
+                # Test hook: the grace's first moment, after the first empty
+                # scan (a build the guard allowed may start now).
+                [[ -z "${CDO_SLOT_TEST_PAUSE_GRACE_S:-}" ]] || test_pause "$CDO_SLOT_TEST_PAUSE_GRACE_S"
+            fi
             ((now - quiet < grace_us)) || break
             nap_us=$((grace_us - (now - quiet)))
             ((nap_us < 500000)) || nap_us=500000
@@ -844,7 +900,10 @@ release() {
     if [[ "$(field holder_kind)" != keeper ]]; then
         die "$(describe): taken by a run (PID $holder_pid); it ends when that run ends"
     fi
-    end_keeper "$ids/hold.$hid"
+    if ! end_keeper "$ids/hold.$hid"; then
+        kept_warn "$ids/hold.$hid"
+        exit 1
+    fi
     echo "cdo-slot: released"
 }
 
@@ -900,7 +959,8 @@ case "$cmd" in
                 timed_start "$owner" "$reason" "$bind" "$taken_hid" keeper || trc=$?
                 if ((trc)); then
                     # The keeper this acquire started, exactly (none when shared).
-                    [[ "$rc" != 0 ]] || end_keeper "$ids/hold.$taken_hid"
+                    [[ "$rc" != 0 ]] || end_keeper "$ids/hold.$taken_hid" \
+                        || kept_warn "$ids/hold.$taken_hid"
                     exit "$trc"
                 fi
             fi
@@ -909,14 +969,18 @@ case "$cmd" in
                 || test_pause "$CDO_SLOT_TEST_PAUSE_HOLDGO_S"
             if [[ "$rc" == 0 ]] && ! go "$taken_hid" "$ids/hold.$taken_hid"; then
                 # Its keeper is gone or stopped: no hold, so no timing either.
-                ((!timed)) || end_keeper "$ids/timed.$tid"
-                end_keeper "$ids/hold.$taken_hid"
+                ((!timed)) || end_keeper "$ids/timed.$tid" || kept_warn "$ids/timed.$tid"
+                if ! end_keeper "$ids/hold.$taken_hid"; then
+                    kept_warn "$ids/hold.$taken_hid"
+                    die "the hold's keeper did not take its go (ended or stopped), and it could not be ended"
+                fi
                 die "the hold's keeper did not take its go (ended or stopped); nothing is held"
             fi
             # After both go's, the timing must still run (its keeper may have
             # ended while the hold's go was waited for: review r8, sol).
             if ((timed)) && [[ "$rc" == 0 || "$rc" == 4 ]] && ! probe s "$ids/timed.$tid"; then
-                [[ "$rc" != 0 ]] || end_keeper "$ids/hold.$taken_hid"
+                [[ "$rc" != 0 ]] || end_keeper "$ids/hold.$taken_hid" \
+                    || kept_warn "$ids/hold.$taken_hid"
                 echo "cdo-slot: --timed refused: its timing ended before the timing began" >&2
                 exit 6
             fi
