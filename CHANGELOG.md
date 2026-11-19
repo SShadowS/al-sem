@@ -17,13 +17,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The fix: a stub clock.** A test hook, `CDO_SPEED_TEST_WALL_IS_CPU`, takes each call's wall
   time to be its CPU time (`Server.call`, the one place every judged wall time comes from).
   `speed_with_stub` sets it for every stub run, so their verdicts rest on CPU alone. It is
-  listed among the test hooks a run reports; a real gate sets none, and the limits are
-  unchanged.
+  listed among the test hooks a run reports; the limits are unchanged.
+- **It never judges a real run** (review, sol): any value but `1`, or a run without
+  `--base-exe` and `--head-exe` (a gate builds its own binaries and gives neither), is refused
+  before anything starts, so a variable left exported in a shell cannot make a real gate pass
+  on CPU alone.
 - **Tests.** `speed_stub_verdicts_ignore_the_hosts_wall_time`: head's build waits 1 s with no
-  CPU (a new stub knob, `STUB_HEAD_SLEEP_S`), x3.48 in wall; the run still PASSes. Proofs: the
-  hook dropped -> "FAIL: build: wall time x3.48" (red); and the advisory rule broken (the
-  instructions advisory appended to the failures) still fails the instructions test (red). The
-  speed tests ran 10 times beside full nextest runs, all green.
+  CPU (a new stub knob, `STUB_HEAD_SLEEP_S`), x3.48 in wall; the run still PASSes, and the same
+  delay with the hook off FAILs on wall time (the control). The hook is refused for `0` and
+  for a run without stub binaries. Proofs: the hook dropped -> "FAIL: build: wall time x3.48"
+  (red); the refusal dropped -> the `0` run goes ahead (red); and the advisory rule broken (the
+  instructions advisory appended to the failures) still fails the instructions test (red).
+  Cost noted (sol): the geometric-mean check now sees wall ratios equal to CPU's, so its wall
+  half checks the arithmetic again rather than an independent sample. The speed tests ran 10
+  times beside full nextest runs, all green.
 
 ### Fixed (TLS-89 follow-up: a slot test raced the run's status write)
 

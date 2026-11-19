@@ -2296,8 +2296,13 @@ fn speed_with_stub(
         // wall taken as CPU, a stub run's verdict no longer depends on the
         // host. (A test may still pass its own value in `env`.)
         .env("CDO_SPEED_TEST_WALL_IS_CPU", "1");
+    // An empty value removes the variable (a test turning a default off).
     for (k, v) in env {
-        cmd.env(k, v);
+        if v.is_empty() {
+            cmd.env_remove(k);
+        } else {
+            cmd.env(k, v);
+        }
     }
     let out = cmd.output().expect("spawn python3 scripts/cdo-speed");
     let text = format!(
@@ -2619,8 +2624,16 @@ fn speed_counts_instructions_with_the_real_perf() {
 /// against the 1.6 limit, the shape that failed TLS-102's stress run (x1.78).
 /// The run still PASSes, judged on CPU alone.
 ///
-/// Mutation (2026-11-19): the hook dropped from `Server.call` (wall measured
-/// again) -> "FAIL: build: wall time" (red); restored, green.
+/// The control (review, sol): the same delay with the stub clock off FAILs on
+/// wall time, so the PASS above is the hook's doing. And the hook never judges
+/// a real run: any value but `1`, or a run without `--base-exe` and
+/// `--head-exe` (a gate builds its own binaries), is refused before anything
+/// starts.
+///
+/// Mutations (2026-11-19): the hook dropped from `Server.call` (wall measured
+/// again) -> "FAIL: build: wall time" (red); restored, green. The refusal
+/// dropped from argument parsing -> the run without stub binaries is not
+/// refused (red); restored, green.
 #[cfg(target_os = "linux")]
 #[test]
 fn speed_stub_verdicts_ignore_the_hosts_wall_time() {
@@ -2633,6 +2646,46 @@ fn speed_stub_verdicts_ignore_the_hosts_wall_time() {
     );
     assert!(
         text.contains("test hooks set") && text.contains("CDO_SPEED_TEST_WALL_IS_CPU=1"),
+        "{text}"
+    );
+
+    // The control: the stub clock off (an empty value removes it).
+    let off = tempfile::tempdir().unwrap();
+    let (code, text) = speed_with_stub(
+        off.path(),
+        "1.0",
+        &[],
+        &[
+            ("STUB_HEAD_SLEEP_S", "1"),
+            ("CDO_SPEED_TEST_WALL_IS_CPU", ""),
+        ],
+    );
+    assert_eq!(code, Some(1), "{text}");
+    assert!(text.contains("FAIL: build: wall time"), "{text}");
+
+    // Never a real run: a value but `1`, or no stub binaries.
+    let other = tempfile::tempdir().unwrap();
+    let (code, text) = speed_with_stub(
+        other.path(),
+        "1.0",
+        &[],
+        &[("CDO_SPEED_TEST_WALL_IS_CPU", "0")],
+    );
+    assert_eq!(code, Some(2), "{text}");
+    assert!(
+        text.contains("CDO_SPEED_TEST_WALL_IS_CPU is a test hook"),
+        "{text}"
+    );
+    let out = std::process::Command::new("python3")
+        .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-speed"))
+        .arg(dir.path().join("ws"))
+        .env("CDO_SPEED_TEST_WALL_IS_CPU", "1")
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(2), "{text}");
+    assert!(
+        text.contains("only with --base-exe and --head-exe"),
         "{text}"
     );
 }
