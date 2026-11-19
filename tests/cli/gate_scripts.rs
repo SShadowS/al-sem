@@ -2214,7 +2214,10 @@ ctl, ack = a[a.index("--control") + 1].split(":", 1)[1].split(",")
 start = 0
 def stop(*_):
     with open(out, "w") as f:
-        f.write(lines(total(pids) - start))
+        # STUB_PERF_EARLY writes a fixed positive count: one measured right
+        # after the ack can be 0, which a reader may not take for a count, so a
+        # break that reads the early output could pass (TLS-83 r3, sol).
+        f.write(lines(1000000 if os.environ.get("STUB_PERF_EARLY") else total(pids) - start))
     sys.exit(0)
 # Installed before the `ack` (review r1, sol): a fast call may SIGINT us at once.
 # STUB_PERF_NOSTOP: SIGINT does nothing (a perf hanging at its stop).
