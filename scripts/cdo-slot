@@ -132,13 +132,21 @@ new_id() { od -An -N8 -tx8 /dev/urandom | tr -d ' '; }
 # probe <s|x> <lock file>: 0 when some process holds the lock against a probe of
 # that kind, 1 when not (or the file does not exist). `s` finds an exclusive
 # holder (probes never block each other); `x` finds shared holders too (the
-# timing lock). A 0.1 s wait, not -n: another prober may have it for an instant.
+# timing lock). An `s` probe answers at once (-n): only a holder takes these locks
+# exclusive, and one taking it as the probe runs is taking it. An `x` probe that
+# finds the lock busy looks again with a 0.1 s wait: another `x` probe has it
+# for an instant, a timing keeps it. (TLS-89's second landing: a 0.1 s wait on
+# every busy probe made the guard test pass its 300 s watchdog under load.)
 # Any other flock failure stops with exit 5 (the hook then allows: a broken probe
 # is no holder).
 probe() {
     [[ -e "$2" ]] || return 1
     local rc=0
-    flock -"$1" -E 75 -w 0.1 "$2" true 2>/dev/null || rc=$?
+    flock -"$1" -n -E 75 "$2" true 2>/dev/null || rc=$?
+    if [[ "$1" == x && "$rc" == 75 ]]; then
+        rc=0
+        flock -x -E 75 -w 0.1 "$2" true 2>/dev/null || rc=$?
+    fi
     case "$rc" in
         0) return 1 ;;
         75) return 0 ;;

@@ -25,6 +25,19 @@ struct Slot(
 
 const WATCHDOG: std::time::Duration = std::time::Duration::from_secs(300);
 
+/// `cmd` without any slot or Claude setting this test process inherited (a
+/// landing runs the suite inside its own hold: its token, its tuning, its
+/// session), so a slot test gives the same result inside a hold and outside.
+fn scrubbed(mut cmd: std::process::Command) -> std::process::Command {
+    for (k, _) in std::env::vars_os() {
+        let k = k.to_string_lossy().into_owned();
+        if k.starts_with("CDO_SLOT_") || k.starts_with("CLAUDE_") || k == "CDO_WS" {
+            cmd.env_remove(k);
+        }
+    }
+    cmd
+}
+
 /// SIGKILL to every process whose environment names `dir` as CDO_SLOT_DIR.
 fn kill_users(dir: &std::path::Path) -> Vec<u32> {
     let want = format!("CDO_SLOT_DIR={}", dir.display());
@@ -99,7 +112,7 @@ impl Slot {
     /// A `cdo-slot <args>` command as Claude session `session`, with BASE_ENV
     /// and then `env` (`CLAUDE_PID` and `CDO_SLOT_TOKEN` only when `env` gives them).
     fn cmd(&self, session: &str, args: &[&str], env: &[(&str, &str)]) -> std::process::Command {
-        let mut cmd = std::process::Command::new("bash");
+        let mut cmd = scrubbed(std::process::Command::new("bash"));
         cmd.arg(SLOT)
             .args(args)
             .env("CDO_SLOT_DIR", self.dir())
@@ -168,7 +181,7 @@ impl Slot {
     }
     fn guard_raw_env(&self, input: &str, env: &[(&str, &str)]) -> (Option<i32>, String) {
         use std::io::Write;
-        let mut cmd = std::process::Command::new(GUARD);
+        let mut cmd = scrubbed(std::process::Command::new(GUARD));
         for (k, v) in env {
             cmd.env(k, v);
         }
@@ -246,7 +259,7 @@ fn sleeper() -> Reap {
 /// "sleep 600; true"` leaves its `sleep`, which nextest reported as a leak).
 fn stand_in(s: &Slot, program: impl AsRef<std::ffi::OsStr>, args: &[&std::ffi::OsStr]) -> Reap {
     Reap(
-        std::process::Command::new(program)
+        scrubbed(std::process::Command::new(program))
             .args(args)
             .env("CDO_SLOT_DIR", s.dir())
             .stdin(std::process::Stdio::null())
@@ -1525,7 +1538,7 @@ fn cdo_slot_timed_waits_for_builds_and_refuses_beside_one() {
     // Run under a build process (its ancestor): not waited for; inside, the
     // status names the timing.
     let inner = format!("bash {SLOT} run lane inner --timed -- bash -c 'bash {SLOT} status; true'");
-    let mut under = std::process::Command::new(&fake);
+    let mut under = scrubbed(std::process::Command::new(&fake));
     under
         .args(["-c", &format!("{inner}; true")])
         .env("CDO_SLOT_DIR", s.dir())
