@@ -670,6 +670,14 @@ fn attach_program_calls_with(
         crate::census_hook::mark("census.model");
         census_model(&resolved);
     }
+    // Every final model, in every debug build (each test, and the `alsem` the CLI tests run):
+    // a routine opaque to names binds nothing (ENG-30). `cdo` builds have no debug assertions;
+    // `eng14_cdo_untrusted_census` checks CDO.
+    #[cfg(debug_assertions)]
+    {
+        let (_, bad) = crate::program::model::workspace::opaque_binding_violations(&resolved);
+        assert!(bad.is_empty(), "opaque routines with bindings: {bad:?}");
+    }
     (resolved, meta, census)
 }
 

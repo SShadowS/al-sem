@@ -2023,6 +2023,27 @@ fn project_ir(
                     }
                 }
             }
+            // A routine opaque to names (`features::names_opaque`: a `with`, or an untrusted body
+            // that may hide one) binds no argument and knows no receiver's temp state: a name in
+            // it may be the `with` record's field. This is the LAST step that writes them, so no
+            // backfill above refills what the walk left empty (sol r7 on ENG-30); the invariant
+            // test `opaque_routines_bind_nothing` checks the final model.
+            if crate::program::body::features::names_opaque(
+                features.statement_tree.as_ref(),
+                ir_routine.body.is_some(),
+            ) {
+                for cs in &mut call_sites {
+                    cs.receiver_temp_state = None;
+                    for b in &mut cs.argument_bindings {
+                        b.source_kind = crate::program::body::features::shared_vocab("expression");
+                        b.source_variable_name = None;
+                        b.source_record_variable_id = None;
+                        b.source_parameter_index = None;
+                        b.caller_source_parameter_is_var = None;
+                        b.source_temp_state = None;
+                    }
+                }
+            }
             let operation_sites = std::mem::take(&mut features.operation_sites);
             // A clone is exactly sized (the walk's push-built vectors carry
             // spare capacity); the shared copy is the tight one.
@@ -4116,6 +4137,37 @@ impl RowNodes {
         }
         RowNodes { node_of, j2_row }
     }
+}
+
+/// The invariant over a final model (ENG-30, sol r7): a routine opaque to names
+/// (`features::names_opaque`) has no argument binding with a source and no receiver temp state,
+/// whatever step wrote them. Returns how many opaque routines there are and one line per
+/// offending call site.
+pub fn opaque_binding_violations(m: &Model) -> (usize, Vec<String>) {
+    let mut opaque = 0;
+    let mut bad = Vec::new();
+    for r in &m.workspace.routines {
+        if !crate::program::body::features::names_opaque(
+            r.statement_tree.as_deref(),
+            r.body_available,
+        ) {
+            continue;
+        }
+        opaque += 1;
+        for cs in &r.call_sites {
+            let bound = cs.argument_bindings.iter().any(|b| {
+                b.source_kind.as_str() != "expression"
+                    || b.source_variable_name.is_some()
+                    || b.source_record_variable_id.is_some()
+                    || b.source_parameter_index.is_some()
+                    || b.source_temp_state.is_some()
+            });
+            if bound || cs.receiver_temp_state.is_some() {
+                bad.push(format!("{}::{} call {}", r.object_id, r.name, cs.id));
+            }
+        }
+    }
+    (opaque, bad)
 }
 
 /// The detector model: the rows, with the program engine's calls and event graph.

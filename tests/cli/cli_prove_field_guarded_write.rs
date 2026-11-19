@@ -156,11 +156,23 @@ const WITH_TEMP: &str = r#"table 50410 "WT Buf"
 }
 codeunit 50411 "WT Caller"
 {
+    var
+        Buf: Record "WT Buf" temporary;
+
     procedure DoIt()
     var
         Tmp: Record "WT Buf" temporary;
     begin
         Tmp.Outer();
+    end;
+
+    // sol r7: the object-global backfill gave `Buf` its temporary state back inside the `with`.
+    procedure DoGlobal()
+    var
+        Phys: Record "WT Buf";
+    begin
+        with Phys do
+            Buf.ClearBuffer();
     end;
 }
 "#;
@@ -176,22 +188,35 @@ fn a_bare_table_method_under_with_runs_on_the_with_record() {
     )
     .unwrap();
     std::fs::write(ws.join("src/WT.al"), WITH_TEMP).unwrap();
-    let out = Command::new(env!("CARGO_BIN_EXE_alsem"))
-        .arg("prove")
-        .arg(&ws)
-        .args(["DoIt", "writes-table:WT Buf", "--deterministic"])
-        .env("RUST_LOG", "off")
-        .output()
-        .unwrap();
-    let v: serde_json::Value = serde_json::from_slice(&out.stdout)
-        .unwrap_or_else(|e| panic!("{e}: {}", String::from_utf8_lossy(&out.stderr)));
-    // The receiver's temp state is unknown under `with`, so the answer is not the wrong `no`
-    // a temporary `Rec` gave (`yes` or `unknown`, both sound).
-    assert_ne!(
-        v["payload"]["result"]["answer"]
-            .as_str()
-            .unwrap_or_default(),
-        "no",
-        "{v:#}"
-    );
+    let answer = |routine: &str| -> serde_json::Value {
+        let out = Command::new(env!("CARGO_BIN_EXE_alsem"))
+            .arg("prove")
+            .arg(&ws)
+            .args([routine, "writes-table:WT Buf", "--deterministic"])
+            .env("RUST_LOG", "off")
+            .output()
+            .unwrap();
+        serde_json::from_slice(&out.stdout)
+            .unwrap_or_else(|e| panic!("{e}: {}", String::from_utf8_lossy(&out.stderr)))
+    };
+    // The receiver's temp state is unknown under `with`: D1 reports it Uncertain, so the answer
+    // is `yes` (the write may happen), never the `no` a temporary receiver gives, and each write's
+    // evidence says `tempState: unknown` (D1's Uncertain; sol r7). DoIt's write runs on the
+    // physical `Phys`; DoGlobal's on the temporary global `Buf` (resolving the `with` scope as
+    // alc does, ENG-143, would make it `no`).
+    for routine in ["DoIt", "DoGlobal"] {
+        let v = answer(routine);
+        let r = &v["payload"]["result"];
+        assert_eq!(r["answer"].as_str(), Some("yes"), "{routine}: {v:#}");
+        let states: Vec<_> = r["evidence"]
+            .as_array()
+            .expect("evidence")
+            .iter()
+            .map(|e| e["detail"]["tempState"].as_str())
+            .collect();
+        assert!(
+            !states.is_empty() && states.iter().all(|s| *s == Some("unknown")),
+            "{routine}: {states:?}"
+        );
+    }
 }

@@ -841,6 +841,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     in an opaque routine (an alias of the guarded RecordRef rebound inside a `with` was missed),
     and a call's receiver temp state is unknown under `with` (a bare table-method call may run on
     the `with` record, so a temporary `Rec` no longer suppresses its write in d1's temp proof).
+    The model's last word (sol round 7): an L3 step clears every binding and receiver temp state
+    of an opaque routine after the object-global backfill, which had refilled them, and an
+    invariant over the FINAL model (`workspace::opaque_binding_violations`) is asserted at the
+    end of `attach_program_calls` in every debug build (each test, and the `alsem` the CLI tests
+    run), on every r0 fixture (`opaque_routines_bind_nothing`) and on CDO
+    (`eng14_cdo_untrusted_census`), so a later step that refills them fails at once.
     Write detection keeps the texts, so a call that may write a variable is still seen. An
     explicit `Enum::"E"::Member` keeps its value. Resolving with-scope names as alc does is
     ENG-143. A write
@@ -851,6 +857,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `with` (AL0606 is a warning).
   - Tests: `TxtQuoted`, `TxtWith`, `TxtWithFwd`, `TxtWithWrite`, `VarWith`, `TabWith`,
     `TabWithUntrusted`, G36's `AliasWith`, `a_bare_table_method_under_with_runs_on_the_with_record`
+    (`DoIt`, a bare call inside `with Phys do`, and `DoGlobal`, a temporary object global
+    called inside a `with`, whose temporary state the backfill gave back: each `yes` with
+    `tempState: unknown` evidence; without the clearing step the debug `alsem` stops on the
+    model invariant)
     (each fails exactly when its fix is removed; the opacity checks behind
     `bind_m` and the condition-fact gate, including the frames' own and `a_callee_with_keeps_its_rule`'s,
     are a second line, so each alone is not separately observable), `CodeIn` (a lowercase label left unresolved as `=` is, an uppercase one pruned),
