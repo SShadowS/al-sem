@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (TLS-89 follow-up: a slot test raced the run's status write)
+
+- TLS-92's landing failed on `cdo_slot_timings_in_a_hand_hold`: it waited for `held=1`, then
+  called `release` on a `run`'s hold. The hold lock is taken a moment before the run writes its
+  status, and a `release` in that moment refuses, correctly, with "its holder is still writing
+  its status". The script was right (an `acquire` returns only after its status is written: a
+  `run` writes it before going on, a keeper before its ready file); only an outside caller
+  polling the lock can land in the moment. The test now waits for the published status. A new
+  hook, CDO_SLOT_TEST_PAUSE_PUBLISH_S, holds that moment open: the test checks that a `release`
+  inside it refuses and ends nothing. Proof: the wait dropped gives the landing's message (red).
+
 ### Fixed (ENG-131: identifiers fold exactly as the AL compiler compares them, the same for binding, graph nodes and stable ids)
 
 - **The wrong answer** (found by Fable reviewing ENG-90). Binding and graph node ids folded names
