@@ -716,6 +716,9 @@ fn before_after_reports_a_multiplicity_change() {
 /// Mutations (2026-11-18): the `no_id` exclusion dropped -> `fq` reads as an
 /// unchanged group (no `members_unknown`; red); the detector set reduced to
 /// one side's detector -> no `detector_mismatch` (red). Each restored, green.
+/// Review r2 (2026-11-19): `multiplicity_moved` computed only when the
+/// fingerprint set changed (`pb != ph and ...`) -> the same-set run misses
+/// `fa` 2 -> 1 and `fb` 1 -> 2 (red); restored, green.
 #[test]
 fn before_after_reports_what_the_fingerprint_set_hides() {
     let t = Ba::new();
