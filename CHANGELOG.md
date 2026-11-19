@@ -35,6 +35,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     of what its break takes (a lock wait for ever or of 30 s, a 15 s sleep);
   - the two fixed 2.5 s sleeps left can only let a test pass without checking, never fail it
     (the queue test's one is in TLS-99).
+- **Fixed: a STOPPED keeper could strand the slot** (found by the first 20x stress run, 1 of 20,
+  and reproduced outside cargo under load, 1 of 25). An acquire whose hold keeper was SIGSTOPped
+  before its go said "nothing is held", yet the keeper lived on (state T, reparented to PID 1)
+  holding the slot. `end_keeper` had trusted a fresh `/proc` scan at every step (first, in its
+  wait loop, before its KILL), and a scan that missed the keeper ended it early. Now it records
+  the keepers it finds once (PID and start time), waits for and KILLs exactly those (a stopped
+  process is alive, so only KILL ends it), and asks the lock itself, up to 5 rounds, whether
+  anything still holds it. When something still does, it says so and who; `release` then fails,
+  and an acquire never claims "nothing is held". A hook, CDO_SLOT_TEST_SCAN_ONCE, makes only the
+  first scan find the keeper; proof: the old `end_keeper` leaves it stopped and holding (red).
+- **The guard test's hook calls run 8 at a time**: ~400 calls one after another passed the 300 s
+  watchdog twice under load; now ~13 s unloaded (was ~57 s). The watchdog is 600 s.
+- **The deadline test's stand-in build runs until the test ends it**: ending by itself at 3 s, it
+  could be gone before a loaded host's first scan, which then rightly saw nothing.
+- The speed test's wall-time judgement under load is TLS-103.
+
   Stress: the suite 20 times in a row beside full nextest runs, zero failures (see TLS-102).
 
 ### Fixed (ENG-131: identifiers fold exactly as the AL compiler compares them, the same for binding, graph nodes and stable ids)

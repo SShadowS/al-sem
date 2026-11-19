@@ -23,7 +23,9 @@ struct Slot(
     #[allow(dead_code)] Watchdog,
 );
 
-const WATCHDOG: std::time::Duration = std::time::Duration::from_secs(300);
+// 600 s: it catches hangs, and a landing's load stretched the slowest test past
+// 300 s twice in TLS-102's stress run (that test now runs its calls 8 at once).
+const WATCHDOG: std::time::Duration = std::time::Duration::from_secs(600);
 
 /// `cmd` without any slot or Claude setting this test process inherited (a
 /// landing runs the suite inside its own hold: its token, its tuning, its
@@ -274,6 +276,20 @@ fn keepers(s: &Slot, kind: &[u8]) -> Vec<i32> {
         .filter_map(|e| e.file_name().to_string_lossy().parse::<i32>().ok())
         .filter(|&p| is_keeper(p) && !parent(p).is_some_and(is_keeper))
         .collect()
+}
+
+/// The hook's answers for `cmds` from session `who`, in order, 8 calls at a
+/// time: each call is its own python and bash, and one after another the guard
+/// test's ~400 passed its watchdog under a landing's load (TLS-102).
+fn guard_many(s: &Slot, who: &str, cmds: &[&str]) -> Vec<(Option<i32>, String)> {
+    let size = cmds.len().div_ceil(8).max(1);
+    std::thread::scope(|sc| {
+        let parts: Vec<_> = cmds
+            .chunks(size)
+            .map(|part| sc.spawn(move || part.iter().map(|c| s.guard(who, c)).collect::<Vec<_>>()))
+            .collect();
+        parts.into_iter().flat_map(|h| h.join().unwrap()).collect()
+    })
 }
 
 /// A process that sleeps 600 s: a stand-in for a bound process.
@@ -737,8 +753,11 @@ fn cdo_slot_guard_refuses_other_sessions_while_held() {
         "bash scripts/cdo-slot run lane x -- git status",
         "scripts/cdo-slot run lane '--' --timeout 5 -- git status",
     ];
-    for c in guarded.iter().chain(&free) {
-        assert_eq!(s.guard("B", c).0, Some(0), "slot free: {c}");
+    // The hook's calls run 8 at a time (`guard_many`): one after another, the
+    // ~400 calls passed the 300 s watchdog under a landing's load (TLS-102).
+    let both: Vec<&str> = guarded.iter().chain(&free).copied().collect();
+    for (c, (code, text)) in both.iter().zip(guard_many(&s, "B", &both)) {
+        assert_eq!(code, Some(0), "slot free: {c}: {text}");
     }
     // Timed (bound to a stand-in timing process; no build name can match).
     let mut timing = sleeper();
@@ -756,9 +775,8 @@ fn cdo_slot_guard_refuses_other_sessions_while_held() {
         &[],
     );
     assert_eq!(code, Some(0), "{text}");
-    for c in guarded {
-        for who in ["A", "B"] {
-            let (code, text) = s.guard(who, c);
+    for who in ["A", "B"] {
+        for (c, (code, text)) in guarded.iter().zip(guard_many(&s, who, &guarded)) {
             assert_eq!(code, Some(2), "timed, {who}: {c}: {text}");
             assert!(
                 text.contains("timed by orchestrator since")
@@ -768,8 +786,8 @@ fn cdo_slot_guard_refuses_other_sessions_while_held() {
             );
         }
     }
-    for c in free {
-        assert_eq!(s.guard("B", c).0, Some(0), "timed: {c}");
+    for (c, (code, text)) in free.iter().zip(guard_many(&s, "B", &free)) {
+        assert_eq!(code, Some(0), "timed: {c}: {text}");
     }
     timing.kill().unwrap();
     timing.wait().unwrap();
@@ -778,9 +796,9 @@ fn cdo_slot_guard_refuses_other_sessions_while_held() {
     // Untimed: only another session's gates and CDO runs.
     let (code, text) = s.run("A", &["acquire", "orchestrator", "landing tls60"], &[]);
     assert_eq!(code, Some(0), "{text}");
-    for c in guarded {
-        let (code, text) = s.guard("B", c);
-        if not_builds.contains(&c) {
+    let (from_b, from_a) = (guard_many(&s, "B", &guarded), guard_many(&s, "A", &guarded));
+    for ((c, (code, text)), (a_code, a_text)) in guarded.iter().zip(from_b).zip(from_a) {
+        if not_builds.contains(c) {
             assert_eq!(code, Some(2), "{c}: {text}");
             assert!(
                 text.contains("held by orchestrator (landing tls60)"),
@@ -789,10 +807,10 @@ fn cdo_slot_guard_refuses_other_sessions_while_held() {
         } else {
             assert_eq!(code, Some(0), "a build beside an untimed hold: {c}: {text}");
         }
-        assert_eq!(s.guard("A", c).0, Some(0), "the holder's own: {c}");
+        assert_eq!(a_code, Some(0), "the holder's own: {c}: {a_text}");
     }
-    for c in free {
-        assert_eq!(s.guard("B", c).0, Some(0), "{c}");
+    for (c, (code, text)) in free.iter().zip(guard_many(&s, "B", &free)) {
+        assert_eq!(code, Some(0), "{c}: {text}");
     }
     let (code, text) = s.guard_raw("not json");
     assert_eq!(code, Some(0), "{text}");
@@ -1604,9 +1622,12 @@ fn cdo_slot_timed_waits_for_builds_and_refuses_beside_one() {
     assert!(!text.contains("refused"), "{text}");
 
     // Review r3 (sol): the wait never sleeps past its deadline. A build still
-    // running at 1 s refuses, even with a 15 s poll and the build ending at
-    // 3 s. Break: sleeping a whole poll (the build is gone at 15 s: a start).
-    let mut b7 = stand_in(&s, &fake, &["-c".as_ref(), "sleep 3; true".as_ref()]);
+    // running at the 1 s deadline refuses at once, even with a 15 s poll.
+    // Break: sleeping a whole poll -> the refusal comes after 15 s (red on the
+    // time). The build runs until the test ends it: one that ended by itself at
+    // 3 s could end before a loaded host's first scan, which then rightly saw
+    // nothing and started (TLS-102's stress run).
+    let b7 = stand_in(&s, &fake, &["-c".as_ref(), "sleep 600; true".as_ref()]);
     let started = std::time::Instant::now();
     let (code, text) = s.run(
         "A",
@@ -1617,8 +1638,8 @@ fn cdo_slot_timed_waits_for_builds_and_refuses_beside_one() {
             ("CDO_SLOT_POLL_S", "15"),
         ],
     );
-    b7.0.wait().unwrap();
-    assert_eq!(code, Some(6), "started after its deadline: {text}");
+    drop(b7);
+    assert_eq!(code, Some(6), "started beside a build: {text}");
     // 14 s: the break sleeps a whole 15 s poll; a loaded host's refusal at the
     // 1 s deadline stays far below.
     assert!(
@@ -2129,6 +2150,11 @@ fn cdo_slot_acquire_windows_hold_against_a_timing() {
 
     // Review r8 (sol): a hold keeper STOPPED before its go: the acquire gives up
     // after CDO_SLOT_LOCK_WAIT_S, ends the keeper and says nothing is held.
+    // SCAN_ONCE: only the first keeper scan finds it, as when a later scan
+    // missed it under load (TLS-102's stress run left it stopped and holding).
+    // Mutation (2026-11-19): `end_keeper` trusting a fresh scan at each step
+    // again -> the stopped keeper is never killed: "never: the stopped keeper
+    // was ended" (red); restored, green.
     let mut held = s
         .cmd(
             "A",
@@ -2136,6 +2162,7 @@ fn cdo_slot_acquire_windows_hold_against_a_timing() {
             &[
                 ("CDO_SLOT_TEST_PAUSE_HOLDGO_S", "60"),
                 ("CDO_SLOT_LOCK_WAIT_S", "2"),
+                ("CDO_SLOT_TEST_SCAN_ONCE", "1"),
             ],
         )
         .stdout(std::process::Stdio::piped())
