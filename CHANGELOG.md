@@ -41,25 +41,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   signature, a prove `--match` variable) now encode the compiler's answer or take a pair the
   compiler merges.
   DO (`/work/src/DO`, 814 `.al` files): none of the 27 chars, and no capital `Σ`, either.
-- **Release note: whose ids can move, and how to re-baseline.** Only a routine, member or type
-  name holding one of these chars gets a new stable routine id, and with it new finding
-  fingerprints; an event name holding one gets a new event id, `alsem graph` node ids (`r:`,
-  read by bc-dev-mcp) and graphify ids move for the same names, and an `alsem diff` snapshot's
-  event `parameters` list moves for such a parameter name: Turkish `İ` (now apart from `i`), the capital `ẞ` (now apart from `ß`), the
+- **Release note: whose ids can move, and how to re-baseline.** Only a name holding one of these
+  chars moves an id: a routine, member or type name its stable routine id, and with it finding
+  fingerprints; an object name (`interface "Iµ"`) its stable object id; an event name its event
+  id; a field or variable name the fingerprints and emitted policy-pin atoms of the findings
+  that name it (d4, d18, d65); `alsem graph` node ids (`r:`, read by bc-dev-mcp) and graphify
+  ids; and an `alsem diff` snapshot's event `parameters` list for such a parameter name. A
+  word-final capital `Σ` moves stable routine and event ids only (graph node ids already folded
+  it). The chars: Turkish `İ` (now apart from `i`), the capital `ẞ` (now apart from `ß`), the
   Kelvin `K`, Ohm `Ω` and Ångström `Å` signs (now apart from `k`, `ω`, `å`), micro `µ` (now one
   with Greek `μ`), `ς` anywhere and a word-final capital `Σ` (now one with `σ`), the Greek symbol
   variants `ϐ ϑ ϕ ϖ ϰ ϱ ϵ ϴ` and iota forms U+0345/U+1FBE, `ẛ`, and the Cyrillic variant letters
   U+1C80-1C88 (now one with their letters, `ϴ` now apart from `θ`). Names using only ASCII and
   the Latin letters of real BC names keep their ids; dotless `ı` keeps its own. If a project's names hold one of these: a baseline
-  shows the affected findings as new once; re-baseline with `alsem analyze --baseline <file>
-  --update-baseline`; `alsem diff` across the upgrade shows such a routine as removed and added.
+  shows the affected findings as new once (re-baseline with `alsem analyze --baseline <file>
+  --update-baseline`); regenerate saved `alsem diff` snapshots on both sides (across the
+  upgrade such a routine reads as removed and added, or as a rename where diff pairs it by
+  name, and a renamed event parameter as an ABI change); re-emit or review emitted policy
+  pins naming such a field.
 - **Pinned by** `casing::tests::the_fold_agrees_with_the_compiler_on_every_measured_pair` (every
   measured pair, the Greek subscript-iota pairs Fable measured included),
   `the_fold_is_one_char_idempotent_and_keeps_non_ascii_off_ascii` (all of Unicode) and
   `the_number_of_chars_the_fold_changes_is_pinned` (1,503: the classes follow the toolchain's
   Unicode tables, which a Rust upgrade can widen; Fable found 25 Unicode 17 pairs .NET 10 keeps
   apart, chars alc rejects in identifiers); `cli_query_field::sigma_twins_are_one_routine` (one
-  graph node for `"ΒΣ"`/`"Βς"`); `l2_ir::two_arms_spelled_with_micro_and_mu_are_one_routine_for_the_attribute_check`.
+  graph node for `"ΒΣ"`/`"Βς"`); `l2_ir::two_arms_spelled_with_micro_and_mu_are_one_routine_for_the_attribute_check`
+  and `attribute_literals_are_not_identifier_folded` (an attribute's literal text keeps its
+  own spelling); `cli_eng131_event_fold` (a publisher `"OnΒΣ"` keeps its subscriber);
+  `cli_eng131_grouping_fold` (d4 and d18 read `Aẞ` and `Aß` as two variables);
+  `ids::tests::stable_ids_fold_names_as_the_compiler_compares_them` and the impact key test
+  `two_labels_spelled_with_sharp_s_and_capital_sharp_s_have_two_keys` (sol). Each of these
+  folds, put back on `to_lowercase`, fails its test.
   With the old fold restored, four casing tests fail and the l2 snapshot matches the old golden
   again.
 

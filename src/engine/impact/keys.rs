@@ -386,10 +386,10 @@ fn message_key(
     if text.starts_with('\'') {
         return format!("text:{}", short_hash(text));
     }
-    // The lookup folds as the L2 names do; the key keeps its own spelling
-    // (an identity: it must not move with the fold).
+    // The lookup and the key fold as the L2 names do (ENG-131, sol: `to_lowercase`
+    // keyed `Error(Aẞ)` and `Error(Aß)` alike; summary schema 17 covers the move).
     let raw = text.trim_matches('"');
-    let name = raw.to_lowercase();
+    let name = al_syntax::fold_identifier(raw);
     if r.variables.iter().any(|v| {
         al_syntax::eq_fold_identifier(&v.name, raw)
             && v.declared_type.to_lowercase().starts_with("label")

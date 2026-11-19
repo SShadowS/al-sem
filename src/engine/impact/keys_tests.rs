@@ -137,6 +137,47 @@ codeunit 50380 "IK Work"
 /// Break: drop the `WRITE_IN_TRY` arm in `own_keys` -> the key reads
 /// `error|error-implicit|`.
 #[test]
+fn two_labels_spelled_with_sharp_s_and_capital_sharp_s_have_two_keys() {
+    // ENG-131 (sol): `Aẞ` and `Aß` are two labels to the compiler; `to_lowercase` keyed
+    // `Error(Aẞ)` and `Error(Aß)` alike, hiding a switch between two messages.
+    const SRC: &str = r#"
+codeunit 50391 "IK Labels"
+{
+    procedure Caller(B: Boolean)
+    var
+        Aẞ: Label 'one';
+        Aß: Label 'two';
+    begin
+        if B then
+            Error(Aẞ)
+        else
+            Error(Aß);
+    end;
+}
+"#;
+    let m = crate::program::model::program_calls::assemble_and_resolve_inline_program_default(
+        &[("src/L.al".to_string(), SRC.to_string())],
+        "22222222-0000-0000-0000-0000000e1311",
+    );
+    let caller = m
+        .workspace
+        .routines
+        .iter()
+        .find(|r| r.name == "Caller")
+        .expect("Caller");
+    let rcx = crate::engine::l5::routine_rollup::RollupCx::new(&m, &[]);
+    let names = Names::new(&m, &rcx);
+    let s = summarize(&names, &caller.stable_routine_id, None, None).expect("a summary");
+    let labels: Vec<&String> = s.own.keys().filter(|k| k.contains("label:")).collect();
+    assert_eq!(
+        labels.len(),
+        2,
+        "two label keys: {:?}",
+        s.own.keys().collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn a_try_calls_refusal_has_its_own_key() {
     const SRC: &str = r#"
 table 50390 "IK T"

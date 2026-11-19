@@ -629,6 +629,36 @@ mod tests {
         assert_eq!(utf16_len("a😀b"), 4); // 1 + 2 + 1
     }
 
+    /// ENG-131 (sol): stable ids fold names as the compiler compares them, through every
+    /// part: `Aẞ` and `Aß` are two identifiers (`to_lowercase` merged them), `"ΒΣ"` and
+    /// `"Βς"` one; the same for a member and a signature's name and type.
+    #[test]
+    fn stable_ids_fold_names_as_the_compiler_compares_them() {
+        let key = |name: &str, member: Option<&str>| {
+            let mut k = member_key(member);
+            k.routine_name = name.to_string();
+            encode_canonical_routine_key(&k)
+        };
+        assert_ne!(key("Aẞ", None), key("Aß", None), "routine name");
+        assert_eq!(key("ΒΣ", None), key("Βς", None), "routine name");
+        assert_ne!(key("P", Some("Aẞ")), key("P", Some("Aß")), "member");
+        assert_ne!(
+            to_stable_routine_id_from_parts("o", "h", Some("Aẞ"), false),
+            to_stable_routine_id_from_parts("o", "h", Some("Aß"), false),
+            "stable member part"
+        );
+        assert_ne!(
+            canonical_routine_signature("Aẞ", &[], None),
+            canonical_routine_signature("Aß", &[], None),
+            "signature name"
+        );
+        assert_eq!(
+            canonical_routine_signature("P", &[], Some("Record \"ΒΣ\"")),
+            canonical_routine_signature("P", &[], Some("Record \"Βς\"")),
+            "signature type text"
+        );
+    }
+
     // -- the enclosing-member discriminator (Task 3) --------------------------
 
     fn member_key(member: Option<&str>) -> CanonicalRoutineKey {

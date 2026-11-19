@@ -110,7 +110,12 @@ pub fn detect_d4(resolved: &Model, ctx: &DetectorContext) -> Result<DetectorOutp
                 std::collections::HashMap::new();
             for (op_idx, key) in &candidates {
                 let op = &routine.record_operations[*op_idx];
-                let group_key = format!("{}|{}", op.record_variable_name.to_lowercase(), key);
+                // The identifier fold (ENG-131, sol): `Aẞ` and `Aß` are two variables.
+                let group_key = format!(
+                    "{}|{}",
+                    al_syntax::fold_identifier(&op.record_variable_name),
+                    key
+                );
                 let entry = groups.entry(group_key.clone()).or_insert_with(|| {
                     group_order.push(group_key.clone());
                     (key.clone(), Vec::new())

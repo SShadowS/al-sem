@@ -357,3 +357,22 @@ fn two_arms_spelled_with_micro_and_mu_are_one_routine_for_the_attribute_check() 
         "the other arm lacks it"
     );
 }
+
+/// ENG-131 (sol): an attribute's text holds literals, which keep their own spelling: two arms
+/// of one routine whose `Obsolete` messages differ only in micro `µ` against Greek `μ` write
+/// two different attributes, so each lacks in the other arm.
+#[test]
+fn attribute_literals_are_not_identifier_folded() {
+    let src = "codeunit 50100 X\n{\n#if A\n    [Obsolete('Use µ', '1.0')]\n    procedure P()\n    begin\n    end;\n#else\n    [Obsolete('Use μ', '1.0')]\n    procedure P()\n    begin\n    end;\n#endif\n}\n";
+    let f = al_syntax::parse(src);
+    let routines = &f.objects[0].routines;
+    assert_eq!(routines.len(), 2, "precondition: both arms");
+    for r in routines {
+        assert_eq!(r.attributes_parsed.len(), 1, "precondition");
+        assert!(
+            r.attributes_parsed[0].another_declaration_lacks,
+            "{}: the other arm writes another message",
+            r.attributes_parsed[0].raw
+        );
+    }
+}

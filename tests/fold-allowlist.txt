@@ -32,7 +32,7 @@
 1 src/engine/ids.rs
 2 src/engine/impact/base.rs
 2 src/engine/impact/delta.rs
-10 src/engine/impact/keys.rs
+9 src/engine/impact/keys.rs
 5 src/engine/impact/scan.rs
 1 src/engine/l4/capability_cone.rs
 1 src/engine/l4/combined_graph.rs
@@ -47,9 +47,9 @@
 2 src/engine/l5/detectors/d1.rs
 2 src/engine/l5/detectors/d13.rs
 1 src/engine/l5/detectors/d14.rs
-5 src/engine/l5/detectors/d18.rs
+4 src/engine/l5/detectors/d18.rs
 1 src/engine/l5/detectors/d46.rs
-3 src/engine/l5/detectors/d4.rs
+2 src/engine/l5/detectors/d4.rs
 2 src/engine/l5/detectors/d57.rs
 1 src/engine/l5/detectors/d59.rs
 1 src/engine/l5/detectors/d65.rs

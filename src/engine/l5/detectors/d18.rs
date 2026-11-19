@@ -109,7 +109,8 @@ pub fn detect_d18(
                 None => continue,
             };
 
-            let record_var = op.record_variable_name.to_lowercase();
+            // The identifier fold (ENG-131, sol): `Aẞ` and `Aß` are two variables.
+            let record_var = al_syntax::fold_identifier(&op.record_variable_name);
             let field_info = match infos.first() {
                 Some(f) => f,
                 None => continue,
