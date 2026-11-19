@@ -143,9 +143,15 @@ pub(crate) fn parse_isolated(attrs: &[AttributeInfo]) -> Option<bool> {
     isolated.then_some(true)
 }
 
-/// `encodeEventId(publisherObjectId, eventName)` — lowercases the eventName.
+/// `encodeEventId(publisherObjectId, eventName)` — folds the eventName with the
+/// identifier fold, as the subscriber side reads the attribute's event name
+/// (ENG-131: `to_lowercase` here split a publisher `OnΒΣ` or `OnCalcµg` from its
+/// subscribers). Byte-identical for ASCII names.
 pub fn encode_event_id(publisher_object_id: &str, event_name: &str) -> String {
-    format!("{publisher_object_id}/event/{}", event_name.to_lowercase())
+    format!(
+        "{publisher_object_id}/event/{}",
+        al_syntax::fold_identifier(event_name)
+    )
 }
 
 /// `EventEdge::resolution` of an `[EventSubscriber]` the engine could not read.

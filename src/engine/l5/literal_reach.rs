@@ -1381,7 +1381,7 @@ fn keep_verdict(
     }
     let p = c.parameters.iter().find(|p| p.index == j)?;
     let name = values::fold(&p.name);
-    if unbound.contains(&c.name.to_lowercase()) {
+    if unbound.contains(&al_syntax::fold_identifier(&c.name)) {
         return None;
     }
     let id = crate::program::model::events::encode_event_id(&c.object_id, &c.name);

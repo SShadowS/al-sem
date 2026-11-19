@@ -2,8 +2,8 @@
 //! ([`SitedGraph::shared_stable_ids`]) on real code: every corpus and fixture
 //! workspace, plus a probe of the ASCII shapes closest to a collision. The
 //! CDO harness checks the same on CDO (`cdo_sited_graph_stable_ids_are_unique`).
-//! Names differing only in `İ` or a word-final `Σ` do share an id (see
-//! `shared_stable_ids`); none of these workspaces holds one.
+//! Since ENG-131 the id and the node id fold names with one function, so names
+//! differing only in `İ` or a word-final `Σ` no longer share an id either.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

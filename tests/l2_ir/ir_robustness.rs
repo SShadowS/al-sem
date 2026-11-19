@@ -337,3 +337,42 @@ fn request_page_twins_and_procedures_in_the_lowerer() {
     assert!(!helper.is_request_page_trigger());
     assert_eq!(helper.enclosing_member, None, "a procedure keeps no member");
 }
+
+/// ENG-131 (Fable): two `#if` arms declare one routine spelled `µP` (micro sign) and `μP`
+/// (Greek mu), one identifier to the compiler and one routine id; the arm with the attribute
+/// marks it as missing from the other arm, as for any two spellings of one name.
+#[test]
+fn two_arms_spelled_with_micro_and_mu_are_one_routine_for_the_attribute_check() {
+    let src = "codeunit 50100 X\n{\n#if A\n    [TryFunction]\n    procedure µP()\n    begin\n    end;\n#else\n    procedure μP()\n    begin\n    end;\n#endif\n}\n";
+    assert_ne!("µ".to_lowercase(), "μ".to_lowercase(), "precondition");
+    let f = al_syntax::parse(src);
+    let routines = &f.objects[0].routines;
+    assert_eq!(routines.len(), 2, "precondition: both arms");
+    let with = routines
+        .iter()
+        .find(|r| !r.attributes_parsed.is_empty())
+        .expect("the arm with the attribute");
+    assert!(
+        with.attributes_parsed[0].another_declaration_lacks,
+        "the other arm lacks it"
+    );
+}
+
+/// ENG-131 (sol): an attribute's text holds literals, which keep their own spelling: two arms
+/// of one routine whose `Obsolete` messages differ only in micro `µ` against Greek `μ` write
+/// two different attributes, so each lacks in the other arm.
+#[test]
+fn attribute_literals_are_not_identifier_folded() {
+    let src = "codeunit 50100 X\n{\n#if A\n    [Obsolete('Use µ', '1.0')]\n    procedure P()\n    begin\n    end;\n#else\n    [Obsolete('Use μ', '1.0')]\n    procedure P()\n    begin\n    end;\n#endif\n}\n";
+    let f = al_syntax::parse(src);
+    let routines = &f.objects[0].routines;
+    assert_eq!(routines.len(), 2, "precondition: both arms");
+    for r in routines {
+        assert_eq!(r.attributes_parsed.len(), 1, "precondition");
+        assert!(
+            r.attributes_parsed[0].another_declaration_lacks,
+            "{}: the other arm writes another message",
+            r.attributes_parsed[0].raw
+        );
+    }
+}
