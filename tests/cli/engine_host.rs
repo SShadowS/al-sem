@@ -1171,7 +1171,8 @@ mod faults {
         let mut waits = Vec::new();
         for _ in 0..3 {
             let started = Instant::now();
-            let (outcome, message) = failure(&front.ask(explain()).outcome);
+            let answer = front.ask(explain());
+            let (outcome, message) = failure(&answer.outcome);
             assert_eq!(outcome, FailedOutcome::EngineError);
             // TLS-93 (review, sol): `abort-on-ask` turns the core dump off
             // (read back) before it aborts. Break: its call removed (red).
