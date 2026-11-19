@@ -2823,9 +2823,13 @@ impl<'a> LiteralReach<'a> {
         // The row that holds the call site (an `#if` arm), not the caller's first row: the
         // argument's tables are what THAT arm leaves in it (sol, ENG-135).
         if let (Some(c), Some(fi)) = (ci, self.flow.index_of_row(r)) {
+            // G34 decides every relevant parameter: its tables replace the frame's, and when it
+            // cannot establish them (an alias rebound in place, `R := V; R.GetTable(X)`, or any
+            // value it cannot follow) the parameter is unbound, not left at a stale entry table
+            // (sol round 7, ENG-135).
             for &j in rel_params.into_iter().flatten() {
+                out.tables.retain(|(k, _)| *k != j);
                 if let Some(set) = self.flow.arg_tables(fi, cs, j, &b.tables, &b.globals) {
-                    out.tables.retain(|(k, _)| *k != j);
                     out.tables.push((j, set));
                 }
             }

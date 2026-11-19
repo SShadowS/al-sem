@@ -503,6 +503,29 @@ codeunit 51370 "PW Shapes"
         ArmTabLeaf(V);
     end;
 
+    // sol round 7: `R := V` makes R share V's reference (the value flow's model, G34), so
+    // rebinding R rebinds what V holds, though V is never written: G34 cannot establish V's table
+    // at the leaf call, and the table frame's entry table (Line) must not be forwarded.
+    procedure AliasRoot()
+    var
+        Line: Record "PW Tab Line";
+    begin
+        AliasPass(Line);
+    end;
+
+    local procedure AliasPass(V: Variant)
+    var
+        R0: RecordRef;
+        R: RecordRef;
+        NewValue: Variant;
+    begin
+        R0.GetTable(V);
+        R := V;
+        NewValue := TabOther();
+        R.GetTable(NewValue);
+        ArmTabLeaf(V);
+    end;
+
     local procedure TabOther(): Variant
     var
         Batch: Record "PW Tab Batch";
@@ -772,6 +795,7 @@ fn an_arm_that_writes_the_parameter_unbinds_it() {
         ("SubRoot", "PW Sub", "yes"),
         ("SubArmRoot", "PW Sub Arm", "yes"),
         ("SubNameRoot", "PW Sub Name", "yes"),
+        ("AliasRoot", "PW Tab Log", "yes"),
     ]);
 }
 
