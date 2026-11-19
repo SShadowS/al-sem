@@ -529,13 +529,13 @@ pub(super) fn loop_vars(node: &PCFNNode, out: &mut Vec<String>) {
 }
 
 /// `r`'s value frame (module doc). `passes_by_value(callsite_id, argument
-/// index, text)` says whether the call passes that argument by value to a
-/// known callee or to a platform method that does not write it (`text`: the
-/// parameter is Text or Code, which many platform methods write); `resolve`
-/// reads a label in `r`'s scope. `None` when `r` has no usable value parameter.
+/// index)` says whether the call passes that argument by value to a known
+/// callee or to a platform method that does not write it (the compiler's
+/// var-ness, for every type: ENG-135); `resolve` reads a label in `r`'s scope.
+/// `None` when `r` has no usable value parameter.
 pub(super) fn value_frame(
     r: &ModelRoutine,
-    passes_by_value: impl Fn(&str, u32, bool) -> bool,
+    passes_by_value: impl Fn(&str, u32) -> bool,
     resolve: &dyn Fn(&ValueLabel) -> Option<Val>,
 ) -> Option<ValueFrame> {
     let tree = r.statement_tree.as_ref()?;
@@ -557,12 +557,9 @@ pub(super) fn value_frame(
         if r.var_assignments.iter().any(|a| fold(&a.lhs_name) == name) || loops.contains(&name) {
             continue;
         }
-        let text = matches!(d, Domain::Text | Domain::Code);
         // Bound or by its text, quoted or not (sol on ENG-30): the rule every frame uses.
         let passed_unsafely =
-            crate::engine::l4::param_guard::passes_param_unsafely(r, p, |cs: &str, k: u32| {
-                passes_by_value(cs, k, text)
-            });
+            crate::engine::l4::param_guard::passes_param_unsafely(r, p, &passes_by_value);
         if passed_unsafely {
             continue;
         }

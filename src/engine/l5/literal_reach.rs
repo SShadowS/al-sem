@@ -1097,41 +1097,17 @@ fn walk_tables(
     }
 }
 
-/// The platform functions known not to write a Text or Code argument: alc
-/// 18.0.41 compiles each with literals in every position, and refuses a
-/// literal where a `var` is wanted (AL0130, checked on `Evaluate`). Many
-/// platform methods do write a text through a `var` (`InStream.ReadText`,
-/// `HttpContent.ReadAs`, `Dictionary.Get`, `JsonObject.WriteTo`, …), so for
-/// Text and Code every other one is taken to write (ENG-30).
-const TEXT_READ_ONLY_BUILTINS: &[&str] = &[
-    "strlen",
-    "copystr",
-    "uppercase",
-    "lowercase",
-    "strpos",
-    "format",
-    "strsubstno",
-    "delchr",
-    "padstr",
-    "selectstr",
-    "convertstr",
-    "incstr",
-    "message",
-    "error",
-    "confirm",
-];
-
 /// r3 E1: whether call site `cs_id` of `r` passes argument `arg` by value: every
 /// routine it reaches takes that parameter by value, or, reaching none, the
-/// resolver classified it as a platform method that does not write it: for a
-/// Text or Code argument (`text`) one of [`TEXT_READ_ONLY_BUILTINS`], else one
-/// other than `Evaluate` and `Clear`. A call the resolver did not resolve may
-/// write it.
+/// resolver classified it as a platform method that the compiler's table says
+/// takes that argument by value, for every type
+/// ([`platform_writes`](crate::program::resolve::platform_writes), ENG-135; it
+/// replaced ENG-30's Text/Code read-only list and the `Evaluate`/`Clear` pair). A
+/// call the resolver did not resolve may write it.
 fn value_passes_by_value(
     r: &ModelRoutine,
     cs_id: &str,
     arg: u32,
-    text: bool,
     callees: &HashMap<&str, Vec<&str>>,
     builtin_sites: &HashSet<&str>,
     by_id: &HashMap<&str, &ModelRoutine>,
@@ -1153,15 +1129,12 @@ fn value_passes_by_value(
                 .iter()
                 .find(|c| c.id == cs_id)
                 .map(|c| match &c.callee {
-                    PCallee::Bare { name } => name.fold_identifier(),
-                    PCallee::Member { method, .. } => method.fold_identifier(),
-                    _ => String::new(),
+                    PCallee::Bare { name } => name.as_str(),
+                    PCallee::Member { method, .. } => method.as_str(),
+                    _ => "",
                 })
                 .unwrap_or_default();
-            if text {
-                return TEXT_READ_ONLY_BUILTINS.contains(&name.as_str());
-            }
-            !matches!(name.as_str(), "evaluate" | "clear")
+            !crate::program::resolve::platform_writes::may_write_arg(name, arg)
         }
     }
 }
@@ -1239,13 +1212,14 @@ fn build_flow<'a>(
                     .iter()
                     .find(|c| c.id == cs)
                     .map(|c| match &c.callee {
-                        PCallee::Bare { name } => name.fold_identifier(),
-                        PCallee::Member { method, .. } => method.fold_identifier(),
-                        _ => String::new(),
+                        PCallee::Bare { name } => name.as_str(),
+                        PCallee::Member { method, .. } => method.as_str(),
+                        _ => "",
                     })
                     .unwrap_or_default();
-                return lflow::WRITING_BUILTINS
-                    .contains(&name.as_str())
+                // ENG-135: the compiler's var-ness of this argument, in place of a hand
+                // list of writing methods (which also havocked every argument of one).
+                return crate::program::resolve::platform_writes::may_write_arg(name, j)
                     .then_some(ArgWrite::Havoc);
             }
             let mut keep: Option<u32> = None;
@@ -1428,9 +1402,8 @@ fn keep_verdict(
         if !s.body_available || s.statement_tree.is_none() {
             return None;
         }
-        let passes = |cs: &str, a: u32| {
-            value_passes_by_value(s, cs, a, false, callees, builtin_sites, by_id)
-        };
+        let passes =
+            |cs: &str, a: u32| value_passes_by_value(s, cs, a, callees, builtin_sites, by_id);
         if lflow::subscriber_changes(s, &name, &passes) {
             return None;
         }
@@ -2244,8 +2217,8 @@ impl<'a> LiteralReach<'a> {
                     }
                 }
             }
-            let passes_by_value = |cs_id: &str, arg: u32, text: bool| {
-                value_passes_by_value(r, cs_id, arg, text, &callees, &builtin_sites, &by_id)
+            let passes_by_value = |cs_id: &str, arg: u32| {
+                value_passes_by_value(r, cs_id, arg, &callees, &builtin_sites, &by_id)
             };
             let resolve = |l: &crate::program::body::features::ValueLabel| {
                 values::resolve_label(r, &tables_by_id, l)

@@ -164,8 +164,9 @@ pub(crate) fn alias_error_ops<T: Clone>(r: &ModelRoutine, by_site: &mut HashMap<
 /// [`frame_guards`] over a call graph:`callees_at(callsite_id)` lists the
 /// routines a call site reaches. A parameter passed to a call stays usable when
 /// every reached callee takes it by value, or when the call reaches nothing (a
-/// platform method) other than `Evaluate` and `Clear`, which write their
-/// argument.
+/// platform method) and the compiler's table says that method takes the
+/// argument by value ([`platform_writes`](crate::program::resolve::platform_writes),
+/// ENG-135).
 pub(crate) fn frame_guards_over<'a>(
     r: &ModelRoutine,
     callees_at: impl Fn(&str) -> Vec<&'a str>,
@@ -175,18 +176,17 @@ pub(crate) fn frame_guards_over<'a>(
     let passes_by_value = |cs_id: &str, arg: u32| -> bool {
         let targets = callees_at(cs_id);
         if targets.is_empty() {
-            let callee_lc = r
+            let callee = r
                 .call_sites
                 .iter()
                 .find(|c| c.id == cs_id)
                 .map(|c| match &c.callee {
-                    PCallee::Bare { name } => name.fold_identifier(),
-                    PCallee::Member { method, .. } => method.fold_identifier(),
-                    _ => String::new(),
+                    PCallee::Bare { name } => name.as_str(),
+                    PCallee::Member { method, .. } => method.as_str(),
+                    _ => "",
                 })
                 .unwrap_or_default();
-            // The platform methods that write a Boolean argument.
-            return !matches!(callee_lc.as_str(), "evaluate" | "clear");
+            return !crate::program::resolve::platform_writes::may_write_arg(callee, arg);
         }
         targets.iter().all(|to| {
             routines_by_id

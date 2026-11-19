@@ -783,6 +783,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - The owner can confirm that no new entry appears in `coredumpctl list` after a debug test
     run.
 
+### Fixed (ENG-135: literal pruning knows every platform method's `var` parameters, from the compiler)
+
+- **The wrong answer** (found by Fable reviewing ENG-30; older, on master). A parameter bound to a
+  caller's literal kept it while a platform method wrote it through a `var`, so `case` arms that
+  run were pruned: `prove` answered a wrong `no`. E1 (literal binding) took only `Evaluate` and
+  `Clear` as writers of an Integer, Option or Enum argument (`D.Get(1, I)`, `InStream.Read(O)`,
+  `L.Get(1, K)` were missed), the guard frames the same pair for Booleans, and E2 (the
+  within-routine flow) a 9-name hand list that missed e.g. `Dictionary.Set(K, V, var Old)`.
+- **The fix.** `tools/gen-al-var-params` reads every built-in method's parameters from the AL
+  compiler's own symbols (alc 18.0.41's `Microsoft.Dynamics.Nav.CodeAnalysis.dll`: each built-in
+  class's members, `IParameterSymbol.IsVar`; 101 classes, 1,752 overloads, 796 names, 86 with a
+  `var`) and generates `program/resolve/platform_var_params.rs`. ONE query,
+  `platform_writes::may_write_arg(method, k)`, answers for every reader: E1, E2 and the guard
+  frames. It replaces E1's `Evaluate`/`Clear` pair, the guard frames' pair, E2's
+  `WRITING_BUILTINS` and ENG-30's 15-name Text read-only list. An argument counts as written when
+  any overload of that name, on any class, takes it as `var` (a call site may not know its
+  receiver's type); a name the compiler does not list may write anything.
+- **What moves.** Precision is LOST where the old lists said "keeps its value" wrongly (correct),
+  and gained where ENG-30's Text rule unbound a parameter passed to a read-only function outside
+  its 15 names (`DelStr`, `StrLen`'s kin). CDO counts: TBD.
+- **Pinned by** `cli_eng135_platform_writers` (an Integer through `Dictionary.Get`, an Option
+  through `InStream.Read`, an Enum through `List.Get`, a local through `Dictionary.Set`: every arm
+  live; a Text through `DelStr` keeps its literal) and `platform_writes::tests` (the table sorted;
+  the compiler's answers on the old lists' names; an unlisted name writes).
+
 ### Added (ENG-30: built-in option types and Text/Code literals prune `case` and `if` arms)
 
 - **The gap (engine limits L4, L29).** The literal reach prunes an arm a bound parameter value
