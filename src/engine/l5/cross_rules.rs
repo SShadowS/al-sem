@@ -735,6 +735,12 @@ impl<'m> CrossRules<'m> {
         let Some(cs) = step.call else {
             return VariantAcross::Unknown;
         };
+        // A caller with a `with` is opaque to name resolution: the argument's name may be a
+        // field of the `with` receiver (sol on ENG-30).
+        if crate::program::body::features::tree_has_with(self.row(caller).statement_tree.as_deref())
+        {
+            return VariantAcross::Unknown;
+        }
         if !self.variant_usable(step.to, index) {
             return VariantAcross::Unknown;
         }
@@ -780,7 +786,11 @@ impl<'m> CrossRules<'m> {
         let Some(p) = r.parameters.iter().find(|p| p.index == index) else {
             return false;
         };
-        if p.is_var || !p.type_text.trim().eq_fold_identifier("variant") {
+        // A callee with a `with`: a use of the parameter's name may be a field (sol on ENG-30).
+        if p.is_var
+            || !p.type_text.trim().eq_fold_identifier("variant")
+            || crate::program::body::features::tree_has_with(r.statement_tree.as_deref())
+        {
             return false;
         }
         let fold = |s: &str| al_syntax::fold_identifier(s.trim().trim_matches('"'));

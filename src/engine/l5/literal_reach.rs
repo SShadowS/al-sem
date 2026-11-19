@@ -908,6 +908,11 @@ struct TableFrame {
 fn table_frame(r: &ModelRoutine) -> Option<TableFrame> {
     use crate::program::body::features::PCallee;
     let tree = r.statement_tree.as_ref()?;
+    // A routine with a `with` is opaque to name resolution (sol on ENG-30): a receiver or
+    // argument named in it may be the `with` receiver's field.
+    if crate::program::body::features::tree_has_with(Some(tree)) {
+        return None;
+    }
     let lc = |s: &str| s.trim().trim_matches('"').fold_identifier();
     // R (folded) -> the parameter index its one GetTable reads.
     let mut bound: HashMap<String, u32> = HashMap::new();
@@ -2623,6 +2628,11 @@ impl<'a> LiteralReach<'a> {
         else {
             return Bindings::default();
         };
+        // A caller with a `with` is opaque to name resolution: an argument named there may be
+        // a field of the `with` receiver (sol on ENG-30), so its calls bind nothing.
+        if crate::program::body::features::tree_has_with(r.statement_tree.as_deref()) {
+            return Bindings::default();
+        }
         let forwarded = |j: u32| {
             cs.argument_bindings
                 .iter()

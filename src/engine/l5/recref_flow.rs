@@ -170,6 +170,10 @@ struct Facts {
     /// Variables an alias rebinding reaches (a by-value Variant parameter in
     /// it may hand a changed RecordRef back).
     alias_shared: HashSet<String>,
+    /// The routine holds a `with` ([`crate::program::body::features::tree_has_with`]): a name
+    /// in it may be the receiver's field, so every variable may hold anything, no argument is
+    /// read by name and no exit guard is taken (sol on ENG-30).
+    opaque: bool,
 }
 
 /// Per routine: the atoms of each tracked own variable, and of each global it
@@ -561,6 +565,9 @@ impl<'a> RecRefFlow<'a> {
         params: &[(u32, TSet)],
         globals: &[(Arc<str>, TSet)],
     ) -> Val {
+        if self.facts[i].opaque {
+            return None;
+        }
         let arg = cs.argument_texts.get(k as usize)?;
         let mut inputs: Vec<(u32, Val)> = self.facts[i]
             .tracked
@@ -1224,6 +1231,9 @@ impl<'a> RecRefFlow<'a> {
 
     /// The atoms of the argument at position `k` of call site `cs` of `i`.
     pub(crate) fn arg_atoms(&self, i: usize, cs: &PCallSite, k: u32) -> Atoms {
+        if self.facts[i].opaque {
+            return top();
+        }
         match cs.argument_texts.get(k as usize) {
             Some(a) => self.atoms_of(i, &self.summaries[i].vars, a),
             None => top(),
@@ -1645,6 +1655,11 @@ pub(crate) fn exit_guards(
     let Some(tree) = r.statement_tree.as_ref() else {
         return out;
     };
+    // A guard's receiver named in a routine with a `with` may be the `with` receiver's field
+    // (sol on ENG-30): no exit guard is taken from it.
+    if crate::program::body::features::tree_has_with(Some(tree)) {
+        return out;
+    }
     let top: &[PCFNNode] = match tree.kind.as_str() {
         "block" => tree.children.as_deref().unwrap_or_default(),
         _ => std::slice::from_ref(tree),
@@ -1784,6 +1799,14 @@ fn facts_of(r: &ModelRoutine, obj_in_place: &HashSet<String>) -> Facts {
             VarKind::Local
         };
         f.tracked.insert(lc(&v.name), kind);
+    }
+    f.opaque = crate::program::body::features::tree_has_with(r.statement_tree.as_deref());
+    if f.opaque {
+        let names: Vec<String> = f.tracked.keys().cloned().collect();
+        for n in names {
+            f.fixed.push((n.clone(), Part::Atoms(top()), None));
+            f.alias_shared.insert(n);
+        }
     }
     if f.tracked.is_empty() {
         return f;

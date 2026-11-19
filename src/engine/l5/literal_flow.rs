@@ -301,13 +301,7 @@ impl FlowProgram {
         writes_of: &mut dyn FnMut(&str, u32) -> Option<ArgWrite>,
     ) -> Option<FlowProgram> {
         let tree = Arc::clone(r.statement_tree.as_ref()?);
-        let mut has_with = false;
-        visit(&tree, &mut |n| {
-            if matches!(n.flow.as_deref(), Some(FlowFact::With)) {
-                has_with = true;
-            }
-        });
-        if has_with {
+        if crate::program::body::features::tree_has_with(Some(&tree)) {
             return None;
         }
         let mut vars = Vec::new();

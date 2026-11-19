@@ -467,6 +467,9 @@ table 50302 "EH Txt WFwd Else" { fields { field(1; Code; Code[20]) { } } keys { 
 table 50303 "EH Txt WWr A" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
 table 50304 "EH Txt WWr Else" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
 table 50305 "EH Var With" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
+table 50306 "EH Tab A" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
+table 50307 "EH Tab A Log" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
+table 50308 "EH Tab Else Log" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
 // ENG-30: Text and Code literals as value domains, by the rules measured on
 // BC 28.4 (`literal_values::Domain`).
 codeunit 50283 "EH Text"
@@ -748,6 +751,34 @@ codeunit 50283 "EH Text"
     begin
         if not V.IsBoolean then
             X.Insert();
+    end;
+
+    // sol round 4 on ENG-30: under `with R do`, `T` is R's Text field, not the local record T of
+    // table "EH Tab A"; the caller's own-record table lookup must not bind table A.
+    procedure TabWith()
+    var
+        R: Record "EH With Rec";
+        T: Record "EH Tab A";
+    begin
+        R.FindFirst();
+        with R do
+            TabWithCheck(T);
+    end;
+
+    local procedure TabWithCheck(V: Variant)
+    var
+        Ref: RecordRef;
+        A: Record "EH Tab A Log";
+        E: Record "EH Tab Else Log";
+    begin
+        if V.IsRecord then
+            Ref.GetTable(V);
+        case Ref.Number of
+            Database::"EH Tab A":
+                A.Insert();
+            else
+                E.Insert();
+        end;
     end;
 
     // A read-only platform function keeps it usable.
@@ -1136,6 +1167,7 @@ fn a_text_parameter_something_writes_binds_nothing() {
         ("TxtWithWrite", "EH Txt WWr A", "yes"),
         ("TxtWithWrite", "EH Txt WWr Else", "yes"),
         ("VarWith", "EH Var With", "yes"),
+        ("TabWith", "EH Tab Else Log", "yes"),
     ]);
 }
 

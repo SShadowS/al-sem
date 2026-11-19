@@ -1059,6 +1059,26 @@ pub enum FlowFact {
     Opaque,
 }
 
+/// Whether a routine's statement tree holds a `with` statement ([`FlowFact::With`]). Inside
+/// `with R do` an unqualified name may be one of R's fields, so a routine with one is OPAQUE to
+/// every reader that resolves an argument or variable by name (the literal pruning's bindings,
+/// the RecordRef flow, the Variant routes, E2): the ONE test they all call (sol on ENG-30).
+/// A routine with no statement tree has no `with` to find (its readers refuse it elsewhere).
+/// shortcut: opaque as a whole; resolving with-scope names as alc does is ENG-143.
+#[must_use]
+pub fn tree_has_with(tree: Option<&PCFNNode>) -> bool {
+    fn walk(n: &PCFNNode) -> bool {
+        matches!(n.flow.as_deref(), Some(FlowFact::With))
+            || n.condition_leaves
+                .iter()
+                .chain(&n.children)
+                .chain(&n.else_children)
+                .flatten()
+                .any(walk)
+    }
+    tree.is_some_and(walk)
+}
+
 /// The longest condition text a [`FlowFact::Cond`] keeps.
 pub const FLOW_TEXT_MAX: usize = 80;
 

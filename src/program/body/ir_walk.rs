@@ -1452,7 +1452,16 @@ impl<'a> SpineCtx<'a> {
                     .iter()
                     .map(|&a| {
                         let mut info = self.ir_expression_info(a);
+                        // An explicit `Enum::"E"::Member` names its enum outright: no `with`
+                        // lookup can change it, so it keeps its value (sol round 4, P3).
+                        let explicit_enum = info.kind.as_str() == "qualified_enum_value"
+                            && info.qualifier.as_deref().is_some_and(|q| {
+                                q.trim()
+                                    .get(..6)
+                                    .is_some_and(|p| p.eq_ignore_ascii_case("enum::"))
+                            });
                         if under_with
+                            && !explicit_enum
                             && matches!(
                                 info.kind.as_str(),
                                 "identifier" | "quoted_identifier" | "qualified_enum_value"
