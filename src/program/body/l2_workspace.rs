@@ -91,7 +91,12 @@ pub(crate) fn stable_routine_id_ir(
         .collect();
     let norm_hash = normalized_signature_hash(&r.name, &param_specs, r.return_type.as_deref());
     let enclosing_member = ir_walk::ir_enclosing_member(r);
-    to_stable_routine_id_from_parts(stable_object_id, &norm_hash, enclosing_member.as_deref())
+    to_stable_routine_id_from_parts(
+        stable_object_id,
+        &norm_hash,
+        enclosing_member.as_deref(),
+        r.is_request_page_trigger(),
+    )
 }
 
 /// The shared `.al` decoder: L2/L3 must see the same text as the program engine.
@@ -155,6 +160,7 @@ fn build_proutine(
         kind,
         &rname,
         enclosing_member.as_deref(),
+        ir_routine.is_request_page_trigger(),
         &parameters,
         return_type_text.as_deref(),
     );
@@ -316,6 +322,7 @@ pub fn ir_features_for_named_routine(
                 kind,
                 &r.name,
                 enclosing_member.as_deref(),
+                r.is_request_page_trigger(),
                 &parameters,
                 r.return_type.as_deref(),
             );

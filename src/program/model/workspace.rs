@@ -884,6 +884,13 @@ fn member_detail_of(
     object_type: &str,
     member: &str,
 ) -> MemberDetail {
+    // ENG-20: a request page's own trigger, whatever its name.
+    if ir_routine.is_request_page_trigger() {
+        return MemberDetail {
+            kind: crate::engine::l5::routine_rollup::REQUEST_PAGE_KIND,
+            caption: None,
+        };
+    }
     if let Some(a) = o.actions.iter().find(|a| a.triggers.contains(&rix)) {
         return MemberDetail {
             kind: "action",
@@ -1554,6 +1561,7 @@ fn project_ir(
                                 &stable_object_id,
                                 &hash,
                                 None,
+                                false,
                             ),
                             source_anchor: anchor_from_origin(&r.origin, source_unit_id, cols),
                             declaration_start_line: declaration_start_line(r),
@@ -1698,6 +1706,7 @@ fn project_ir(
                     kind_for_id,
                     &rname,
                     enclosing_member.as_deref(),
+                    ir_routine.is_request_page_trigger(),
                     &params_for_id,
                     ir_routine.return_type.as_deref(),
                 );
@@ -2049,6 +2058,7 @@ fn project_ir(
                 &stable_object_id,
                 &norm_hash,
                 enclosing_member.as_deref(),
+                ir_routine.is_request_page_trigger(),
             );
 
             // Routine kind + structured attributes (the event-graph inputs). Reuse the
@@ -4976,6 +4986,7 @@ page 50813 "CP3 Wizard"
                             routine_name: r.name.clone(),
                             normalized_signature_hash: r.normalized_signature_hash.clone(),
                             enclosing_member: None,
+                            request_page: false,
                         },
                     )
                 })
@@ -5084,6 +5095,7 @@ page 50815 "CP5 Wizard"
                         &to_stable_object_id(&r.object_id),
                         &r.normalized_signature_hash,
                         None,
+                        false,
                     )
                 })
                 .collect();
@@ -5245,6 +5257,7 @@ page 50814 "CP4 Wizard"
                 &to_stable_object_id(&l3_routine.object_id),
                 &l3_routine.normalized_signature_hash,
                 None,
+                false,
             ),
             "a member trigger's stable id must differ from its pre-discriminator form"
         );
@@ -5254,6 +5267,7 @@ page 50814 "CP4 Wizard"
                 &to_stable_object_id(&l3_routine.object_id),
                 &l3_routine.normalized_signature_hash,
                 Some(r#"Be""ta"#),
+                false,
             ),
             "the escaped and unescaped member texts must fold differently into the \
              STABLE id too — otherwise this test could not tell a missing unescape \
@@ -5278,6 +5292,7 @@ page 50814 "CP4 Wizard"
             "trigger",
             "OnValidate",
             Some(r#"Be""ta"#),
+            false,
             &params,
             None,
         );
@@ -5286,6 +5301,66 @@ page 50814 "CP4 Wizard"
             "the escaped and unescaped member texts must hash differently — otherwise \
              this test could not tell a missing unescape from a present one"
         );
+    }
+
+    /// ENG-20: a request page's own trigger has its own model ids. Hand-stated pairs
+    /// that share everything a member-text id reads (name, parameters, the member text
+    /// `RequestPage`): a dataitem NAMED `RequestPage` with an `OnAfterGetRecord` beside the
+    /// request page's `OnAfterGetRecord`. The two must differ in the internal id and the
+    /// stable id, and the request page's member displays as `requestpage`, the
+    /// dataitem's as a dataitem.
+    #[test]
+    fn a_request_pages_trigger_and_a_dataitem_named_request_page_have_distinct_ids() {
+        let src = r#"report 50963 "RP Collide"
+{
+    dataset
+    {
+        dataitem(RequestPage; Integer)
+        {
+            trigger OnAfterGetRecord() begin end;
+        }
+    }
+    requestpage
+    {
+        trigger OnAfterGetRecord() begin end;
+    }
+}
+"#;
+        let files = vec![("src/rp.al".to_string(), src.to_string())];
+        let resolved =
+            crate::program::model::program_calls::assemble_and_resolve_inline_program_default(
+                &files,
+                "44444444-0000-0000-0000-00000000e020",
+            );
+        let pair: Vec<&ModelRoutine> = resolved
+            .workspace
+            .routines
+            .iter()
+            .filter(|r| r.name.eq_fold_identifier("OnAfterGetRecord"))
+            .collect();
+        assert_eq!(
+            pair.len(),
+            2,
+            "precondition: both triggers are model routines"
+        );
+        assert!(
+            pair.iter().all(|r| r
+                .enclosing_member
+                .as_deref()
+                .is_some_and(|m| m.eq_fold_identifier("RequestPage"))),
+            "precondition: both members read `RequestPage`"
+        );
+        assert_ne!(pair[0].id, pair[1].id, "internal ids");
+        assert_ne!(
+            pair[0].stable_routine_id, pair[1].stable_routine_id,
+            "stable ids"
+        );
+        let mut kinds: Vec<&str> = pair
+            .iter()
+            .map(|r| r.member_detail.as_ref().map_or("?", |d| d.kind))
+            .collect();
+        kinds.sort_unstable();
+        assert_eq!(kinds, ["dataitem", "requestpage"]);
     }
 }
 

@@ -257,6 +257,13 @@ pub struct RoutineNodeId {
     /// [`sig_fp_as_string`].
     #[serde(with = "sig_fp_as_string")]
     pub sig_fp: u64,
+    /// ENG-20: a request page's own trigger (`RoutineDecl::is_request_page_trigger`). Its
+    /// `enclosing_member_lc` is `requestpage`, which a dataitem or control could also be named,
+    /// so the flag keeps the two apart; last, so ids order as before except between such a
+    /// pair. Always written (`#[serde(default)]` only reads older item data: postcard, the
+    /// dependency pack's format, cannot skip a field, so the pack schema moved instead).
+    #[serde(default)]
+    pub request_page: bool,
 }
 
 impl crate::program::str_pool::ShareStrings for ObjKey {
@@ -405,6 +412,7 @@ mod tests {
             // a JSON NUMBER this large would silently round through a
             // JS-based client's JSON.parse.
             sig_fp: u64::MAX - 1,
+            request_page: false,
         };
         assert!(
             id.sig_fp > (1u64 << 53),
@@ -452,6 +460,7 @@ mod tests {
             enclosing_member_lc: None,
             params_count: 2,
             sig_fp: u64::MAX - 1,
+            request_page: false,
         };
 
         let bytes = postcard::to_stdvec(&id).expect("postcard encode");

@@ -259,12 +259,14 @@ impl Classify for RoutineNodeId {
             enclosing_member_lc,
             params_count,
             sig_fp,
+            request_page,
         } = self;
         object.classify(h);
         name_lc.classify(h);
         enclosing_member_lc.classify(h);
         params_count.classify(h);
         sig_fp.classify(h);
+        request_page.classify(h);
     }
 }
 

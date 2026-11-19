@@ -207,6 +207,7 @@ fn extract_from_ir(file: &al_syntax::ir::AlFile, app_guid: &str, out: &mut Ident
                 &stable_object_id,
                 &norm_hash,
                 enclosing_member.as_deref(),
+                r.is_request_page_trigger(),
             );
 
             out.routines.push(RoutineIdentity {

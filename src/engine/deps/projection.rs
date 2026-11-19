@@ -224,6 +224,8 @@ fn abi_routine_to_routine(
         // NUMBERED dep object are byte-identical to before; a numberless one's
         // moved on purpose, #83.)
         enclosing_member: None,
+        // A dependency ABI has no request page trigger either (ENG-20).
+        request_page: false,
     };
 
     // accessModifier: isInternal ? "internal" : isLocal ? "local" : undefined.
@@ -241,7 +243,7 @@ fn abi_routine_to_routine(
     // (byte-identical for a numbered object; a numberless one's moved on purpose,
     // #83) and the cross-app stable-id join stays symmetric by construction.
     let stable_routine_id =
-        ids::to_stable_routine_id_from_parts(&stable_object_id, &normalized_hash, None);
+        ids::to_stable_routine_id_from_parts(&stable_object_id, &normalized_hash, None, false);
 
     ProjectedRoutine {
         id: ids::encode_routine_id(&canonical),

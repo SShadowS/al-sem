@@ -248,6 +248,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   S10.1 guard `the_lsp_keeps_no_dependency_text`, which now probes the mapping (with the cache
   pinning one text it fails).
 
+### Fixed (ENG-20: a request page's own trigger has its own routine id; a report procedure of its name no longer hides it)
+
+- **The wrong answer** (engine limits L20; re-probed on master `a73b4bf6`, both declaration orders): a
+  report procedure with a request-page trigger's name and parameters (`procedure OnOpenPage()` beside
+  the request page's `trigger OnOpenPage()`; alc accepts the pair) had the trigger's routine id, and
+  the build kept one body. A run answered `writes-table: no` for the trigger's write; a call of the
+  procedure read the trigger's body (procedure first) or answered `unknown` (trigger first). Now all
+  eight answers are right in both orders.
+- **The fix** (owner decision q-20261118T113518-4b94aa60, option C; note
+  `docs/superpowers/notes/2026-11-18-eng20-request-page-member.md`):
+  - The lowerer gives a request page's own TRIGGERS the member `RequestPage` (display) and a flag
+    (`RoutineDecl::is_request_page_trigger`) set from the `requestpage` section itself, which no name
+    can set.
+  - Every id carries the flag as its own part, appended only when set, so every other id is
+    unchanged:
+    - the internal id (`CanonicalRoutineKey::request_page`);
+    - the stable id (`to_stable_routine_id_from_parts`);
+    - the program node id (`RoutineNodeId::request_page`; dependency pack schema 21);
+    - `alsem graph`'s `r:` wire id and graphify's `al:rtn:` id.
+  - A dataitem or control NAMED `RequestPage` therefore never shares an id with one (alc 18.0.41
+    compiles a dataitem `RequestPage` beside the request page; both `OnAfterGetRecord`s are
+    reached).
+  - The run rules read a three-way `resolver::TriggerLevel` (object, request page, other member)
+    from the flag: `run_triggers`' request-page list, may-not-run, `RunRequestPage`, the sited
+    graph, explain's `reachedFrom`.
+  - Impact summary cache schema 16.
+  - The flag also keeps the twins apart where a reader groups routines by object, name and
+    member (sol review): the sited graph's overload handles and signatures (display), and the
+    lowerer's alternative-declaration attribute check (a twin's attribute is not marked
+    conditional). A procedure written inside the request page (the grammar accepts one) is
+    not a request-page trigger and keeps no member, so its ids are as before.
+- **What moves.** CDO (`cdo-before-after`, base `a73b4bf6`): 0 findings and 0 fingerprints at both
+  scopes, the call graph unchanged. 11 stable routine ids move (CDO's request-page triggers), in
+  `alsem fingerprint` output only. Fixtures: one stable id (`ws-report-dataitem`'s request-page
+  `OnOpenPage`); the `ids-parent-baseline` record was re-minted for it (licensed; every other fixture
+  byte-identical); goldens: that id in the r4f root-class summary and the policy-facts oracle.
+- **Output text that changes, and what it feeds** (id-shape audit). None of it feeds a fingerprint,
+  a suppression key or an `alsem diff` key.
+  - The routine display `Report X.requestpage::OnOpenPage` (was `Report X::OnOpenPage`):
+    - fingerprints hash the routine name, not the display;
+    - baselines match fingerprints;
+    - inline suppressions match file, line and detector;
+    - `alsem diff` joins on stable ids.
+  - A field or control NAMED `RequestPage` now displays quoted, `."RequestPage"`. Display only; the
+    unquoted selector still finds it when no request page's trigger matches.
+  - JSON `enclosingMember` is now `"RequestPage"` where it was absent (analyze `--with-evidence`, the
+    snapshot inventory's secondary sort after the stable id). Output only.
+  - Member JSON `kind: "requestpage"` (explain, digest, query). Output only.
+  - What does feed keys is the stable id itself, intended under option C: a finding whose root cause
+    names a request-page trigger gets a new fingerprint once (none on CDO), and `alsem diff` across
+    the upgrade shows such a trigger as removed and added.
+- **Pinned by** `tests/cli/cli_eng20_request_page_twin.rs`,
+  `l2_ir::ir_robustness::request_page_twins_and_procedures_in_the_lowerer`, graphify's
+  `a_request_page_trigger_id_ends_in_rp_and_others_are_unchanged`, and four unit tests (model ids,
+  definition surface, the add-in rule, selection), with discrimination proofs for every guard:
+  - CLI: both orders; a dataitem named `RequestPage`; the graph wire ids; explain selecting
+    `.requestpage` and its `reachedFrom`; a field named `RequestPage` selected both ways.
+  - Each of these breaks fails a test: the lowerer member, the run lookup level, `OnInit`'s
+    may-not-run, `RunRequestPage`, `run_reaches_trigger`, the node-id flag, the internal and stable
+    id parts, the member kind, explain's level, the wire id, the selector fallback, the surface hash,
+    the add-in guard.
+
 ### Changed (ENG-120: mimalloc's `purge_delay` measured on CDO and DO, kept at 0)
 
 - No code change: `alsem` keeps `purge_delay` 0. A delay of 1 or 10 ms gave no CPU gain near the

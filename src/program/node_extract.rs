@@ -1283,6 +1283,7 @@ pub(crate) mod test_fixtures {
                 enclosing_member_lc: Some("no.".into()),
                 params_count: 2,
                 sig_fp: 0xDEAD_BEEF_CAFE_F00D,
+                request_page: false,
             },
             name: "DoThing".into(),
             is_trigger: false,

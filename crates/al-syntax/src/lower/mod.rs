@@ -9,8 +9,9 @@
 use crate::casing::IdentifierFoldExt;
 use crate::ir::{
     AlFile, BinaryOp, Block, BlockId, BlockItem, CaseBranch, Expr, ExprId, ExprKind, Ir, Literal,
-    ObjectDecl, ObjectKind, Origin, Param, ParseStatus, Point, PreprocGroup, RoutineDecl,
-    RoutineKind, SourceComment, Stmt, StmtId, StmtKind, SyntaxIssue, TypeOp, UnaryOp, VarDecl,
+    ObjectDecl, ObjectKind, Origin, Param, ParseStatus, Point, PreprocGroup, REQUEST_PAGE_MEMBER,
+    RoutineDecl, RoutineKind, SourceComment, Stmt, StmtId, StmtKind, SyntaxIssue, TypeOp, UnaryOp,
+    VarDecl,
 };
 use crate::raw::{FieldName, RawKind, RawNode};
 
@@ -1682,11 +1683,16 @@ fn collect_routines<'t>(
                 // be treated as report-dataset context, even under a pathological/
                 // decompiled nesting the real AL compiler would never accept ("parse
                 // structure, don't validate").
+                //
+                // ENG-20: the section is the member of its own triggers (`RequestPage`,
+                // see `lower_routine`), so a request page's `OnOpenPage` and a report
+                // procedure `OnOpenPage()` (alc accepts the pair) have distinct ids. Its
+                // controls' and actions' triggers keep their own member.
                 pending.clear();
                 collect_routines(
                     child.named_children().collect(),
                     dataitem_table,
-                    member,
+                    Some(child),
                     false,
                     ctx,
                     Vec::new(),
@@ -1911,6 +1917,10 @@ fn mark_attributes_some_arm_lacks(routines: &mut [RoutineDecl]) {
     let key = |r: &RoutineDecl| {
         (
             r.kind == RoutineKind::Trigger,
+            // ENG-20 (sol): a request page's own trigger is a different routine from a
+            // `RequestPage` dataitem's trigger of one name; grouping them would mark an
+            // attribute only one of them has as missing from an alternative.
+            r.is_request_page_trigger(),
             norm(&r.name),
             r.enclosing_member.as_ref().map(|(m, _)| norm(m)),
             r.params
@@ -2888,8 +2898,28 @@ fn lower_routine<'t>(
     // and `originating_object` too: it keeps `trigger-page` (inserted unconditionally)
     // but loses `page-action` and its evidence containment range. That is the intended
     // trade — a meaningless id is worse than a missing anchor.
+    // ENG-20: a request page's own trigger (the section itself is its member).
+    // A request page's own TRIGGER (a procedure written there is not one; the flag is set
+    // below, once the routine's kind is known).
+    let kind = if matches!(
+        node.kind(),
+        RawKind::TriggerDeclaration | RawKind::PreprocSplitTriggerPreamble
+    ) {
+        RoutineKind::Trigger
+    } else {
+        RoutineKind::Procedure
+    };
+    let in_request_page = member.is_some_and(|m| m.kind() == RawKind::RequestpageSection);
+    let request_page = in_request_page && kind == RoutineKind::Trigger;
     let enclosing_member = member
         .and_then(|m| {
+            // ENG-20: a request page has no name; its own TRIGGERS' member is
+            // `REQUEST_PAGE_MEMBER` (shown as is), and `request_page` keeps it apart in ids.
+            // A procedure written there keeps no member, as before ENG-20 (sol): its ids
+            // must not move.
+            if m.kind() == RawKind::RequestpageSection {
+                return request_page.then(|| (REQUEST_PAGE_MEMBER.to_string(), origin_of(m)));
+            }
             let name_node = m.field(FieldName::Name).or_else(|| {
                 if matches!(
                     m.kind(),
@@ -2905,14 +2935,6 @@ fn lower_routine<'t>(
             name_node.map(|n| (ident_text(n, source), origin_of(m)))
         })
         .filter(|(t, _)| !t.is_empty());
-    let kind = if matches!(
-        node.kind(),
-        RawKind::TriggerDeclaration | RawKind::PreprocSplitTriggerPreamble
-    ) {
-        RoutineKind::Trigger
-    } else {
-        RoutineKind::Procedure
-    };
 
     // A header field of THIS arm (`header_arms`); for an unsplit routine the arm is the
     // whole node, so this is the field's first child, as `field` returns. The fields of
@@ -3248,6 +3270,7 @@ fn lower_routine<'t>(
             dataitem_source_table,
             preproc_context,
             doc: None,
+            request_page,
         }
         .boxed(),
         body,

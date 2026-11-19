@@ -241,6 +241,7 @@ fn make_sub_rid(
         enclosing_member_lc: None,
         params_count: params,
         sig_fp: 0,
+        request_page: false,
     };
     (apps, rid)
 }
@@ -552,6 +553,7 @@ fn test_rid(app: u32, obj_kind: ObjectKind, obj_num: i64, name: &str) -> Routine
         enclosing_member_lc: None,
         params_count: 0,
         sig_fp: 0,
+        request_page: false,
     }
 }
 
@@ -1338,6 +1340,7 @@ fn dropped_obligation_is_caught_by_coverage_contract() {
             enclosing_member_lc: None,
             params_count: 0,
             sig_fp: 0,
+            request_page: false,
         }
     }
 

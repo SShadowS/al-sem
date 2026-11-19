@@ -1084,7 +1084,8 @@ codeunit 50113 "T52 Ops"
     }
     for (object, name, member) in [
         (50110, "oninitreport", None),
-        (50110, "onopenpage", None),
+        // The request page's own trigger: its member is the request page (ENG-20).
+        (50110, "onopenpage", Some("requestpage")),
         // A request page field's: the user may start it on the shown page.
         (50110, "onlookup", Some("pickfilter")),
         // Not on the run list: kept (it can only over-select).

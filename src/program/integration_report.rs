@@ -395,6 +395,7 @@ mod tests {
             enclosing_member_lc: None,
             params_count: params,
             sig_fp: 0,
+            request_page: false,
         }
     }
 

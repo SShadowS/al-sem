@@ -472,6 +472,7 @@ fn routine_id_equals_alsem_stable_routine_id() {
                 &util,
                 &normalized_signature_hash("Over", &[param("Integer")], None),
                 None,
+                false,
             ),
         ),
         (
@@ -481,17 +482,18 @@ fn routine_id_equals_alsem_stable_routine_id() {
                 &util,
                 &normalized_signature_hash("Over", &[param("Text")], None),
                 None,
+                false,
             ),
         ),
         (
             "src/D/Card.Page.al",
             22,
-            to_stable_routine_id_from_parts(&card, &on_action, Some("First")),
+            to_stable_routine_id_from_parts(&card, &on_action, Some("First"), false),
         ),
         (
             "src/D/Card.Page.al",
             28,
-            to_stable_routine_id_from_parts(&card, &on_action, Some("Second")),
+            to_stable_routine_id_from_parts(&card, &on_action, Some("Second"), false),
         ),
     ];
     for (path, line, want) in &pinned {
