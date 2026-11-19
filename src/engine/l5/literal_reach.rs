@@ -77,6 +77,10 @@ pub(crate) mod values;
 #[path = "literal_flow.rs"]
 mod lflow;
 
+/// `aldump --literal-pruning-stats` (the pruning's whole-workspace counts).
+#[path = "literal_stats.rs"]
+pub mod stats;
+
 #[cfg(test)]
 #[path = "literal_flow_tests.rs"]
 mod lflow_tests;

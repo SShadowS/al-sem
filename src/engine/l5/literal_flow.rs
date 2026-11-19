@@ -1436,6 +1436,22 @@ pub(super) fn guards_of<'t>(
 }
 
 impl FlowProgram {
+    /// The (call site, tracked variable) pairs whose call may change the variable
+    /// (`ArgWrite::Havoc`), for `aldump --literal-pruning-stats`: each variable once per call
+    /// site, however many arguments pass it (sol).
+    pub(super) fn havoc_writes(&self) -> usize {
+        self.writes
+            .values()
+            .map(|w| {
+                w.iter()
+                    .filter(|(_, a)| matches!(a, ArgWrite::Havoc))
+                    .map(|(slot, _)| *slot)
+                    .collect::<std::collections::BTreeSet<u16>>()
+                    .len()
+            })
+            .sum()
+    }
+
     /// The tree the program evaluates.
     pub(super) fn tree(&self) -> &PCFNNode {
         &self.tree

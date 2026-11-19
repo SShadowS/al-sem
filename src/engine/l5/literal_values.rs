@@ -423,7 +423,7 @@ pub(super) fn contradicts(reqs: &[ValueReq], b: &Bindings) -> bool {
 }
 
 /// The loop variables of `for` / `foreach` statements in `node`'s subtree.
-fn loop_vars(node: &PCFNNode, out: &mut Vec<String>) {
+pub(super) fn loop_vars(node: &PCFNNode, out: &mut Vec<String>) {
     if let Some(ValueFact::LoopVar(v)) = node.value_fact() {
         out.push(v.clone());
     }

@@ -137,6 +137,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   Stress: the suite 20 times in a row beside full nextest runs, zero failures (see TLS-102).
 
+### Added (`aldump --literal-pruning-stats`: one measure of what the literal pruning knows and proves)
+
+- **What it prints** (`engine::l5::literal_reach::stats`, deterministic JSON). Over the
+  workspace's model, totals counting each stable routine id once (all its `#if` arms):
+  - guard frames (Boolean parameters), value frames (r3 E1; the usable parameters by domain) and
+    flow programs (r3 E2): the routines with one and the usable or bound parameters;
+  - the parameters a WRITE leaves unusable: those passing every other test of their frame
+    (by-value, never assigned, not a loop variable, a control tree) yet unusable because a call
+    may write them, per frame; and E2's (call site, tracked variable) pairs a call may change;
+  - one-hop pruning: over the search's own edges, as it takes them from an empty caller state (an
+    edge dead there is never taken; an object run or event edge carries no bindings), the
+    bindings it derives (no caller context: literal and label arguments, the caller's own
+    records' tables, its flow, the callee instance's globals), and the callee sites (every arm)
+    those prove dead that no binding does, in total and by frame.
+- **Why:** each change to the pruning (ENG-30, ENG-135, ENG-132..134) reports its own move by
+  running it before and after, instead of a counter per task. Pinned by
+  `cli_literal_pruning_stats` (a hand-stated fixture: each count is what its shapes give; two
+  runs print the same bytes).
+
 ### Fixed (ENG-131: identifiers fold exactly as the AL compiler compares them, the same for binding, graph nodes and stable ids)
 
 - **The wrong answer** (found by Fable reviewing ENG-90). Binding and graph node ids folded names
