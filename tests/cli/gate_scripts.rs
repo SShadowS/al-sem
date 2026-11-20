@@ -3492,6 +3492,7 @@ fn perf_bounds_labels_a_suspend() {
 ///   under that PID still counts;
 /// - a parked waiter whose own process has an exact build NAME (as cargo or
 ///   rustc would) still counts: only build scripts can be parked.
+///
 /// Both refuse the timing (exit 1, "timed nothing").
 ///
 /// Mutations (2026-11-20, each restored, green): the ticket's start time not
