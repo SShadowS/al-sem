@@ -390,10 +390,43 @@ fn every_format_states_what_was_hidden_when_nothing_is_shown() {
         "{out}"
     );
 
-    // The shown case: pr-summary carries it under its heading as well.
+    // The shown case (pr-summary; terminal, `--group-by` and html are
+    // `the_text_formats_state_the_line_beside_shown_findings`).
     let (out, ..) = run(&args(&ws, OutputFormat::PrSummary, Some("maintainability"))).unwrap();
     assert!(
         out.contains("hidden by --focus maintainability (before limit, baseline and suppressions): 0 findings"),
+        "{out}"
+    );
+}
+
+/// The owner's case: findings shown AND some hidden (ws-d34 `--focus behaviour`:
+/// the d34 findings stay, the two d19 are hidden). Terminal, `--group-by` and
+/// html each print the shown findings and the line (review r2, Fable: only the
+/// empty case was pinned).
+///
+/// Mutation (2026-11-20): `format_terminal`'s shown-findings focus branch
+/// removed -> the terminal case loses the line (red); restored, green.
+#[test]
+fn the_text_formats_state_the_line_beside_shown_findings() {
+    let ws = d34_ws();
+    let line = "hidden by --focus behaviour (before limit, baseline and suppressions): \
+                2 findings (maintainability: d19 2)";
+
+    let (out, ..) = run(&args(&ws, OutputFormat::Terminal, Some("behaviour"))).unwrap();
+    assert!(out.contains("d34-commit-in-loop"), "{out}");
+    assert!(!out.contains("d19-unused-parameter"), "{out}");
+    assert!(out.contains(line), "{out}");
+
+    let mut a = args(&ws, OutputFormat::Terminal, Some("behaviour"));
+    a.group_by = Some("detector".to_string());
+    let (out, ..) = run(&a).unwrap();
+    assert!(out.contains("d34-commit-in-loop"), "{out}");
+    assert!(out.contains(line), "{out}");
+
+    let (out, ..) = run(&args(&ws, OutputFormat::Html, Some("behaviour"))).unwrap();
+    assert!(out.contains("d34-commit-in-loop"), "{out}");
+    assert!(
+        out.contains(&format!("<div class=\"coverage\">{line}</div>")),
         "{out}"
     );
 }
