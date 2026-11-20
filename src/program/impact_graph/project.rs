@@ -2769,6 +2769,40 @@ pub(crate) mod tests {
         );
     }
 
+    /// ENG-152: the callbacks hub reaches implementers of the hub app's
+    /// interfaces by identity. App B (loaded, it cannot see S) declares its own
+    /// `IBar` and an implementer; S's hub reaches `Impl` (A's, which binds to
+    /// S's `IBar`) and not B's.
+    /// Mutation (2026-11-20): the hub taking every interface named like one of
+    /// its app's -> `BImpl.Bar` reached (red); restored, green.
+    #[test]
+    fn the_callbacks_hub_skips_a_same_named_interface_of_another_app() {
+        let mut w = World::default();
+        let a = w.app("A");
+        let s = w.app("S");
+        let b = w.app("B");
+        w.deps.push((a, s));
+        w.deps.push((a, b));
+        let cu = w.obj(a, ObjectKind::Codeunit, 1, "Cu", TrustTier::Workspace);
+        let sym = w.obj(s, ObjectKind::Codeunit, 7, "SymCu", TrustTier::SymbolOnly);
+        w.obj(s, ObjectKind::Interface, 8, "IBar", TrustTier::SymbolOnly);
+        w.obj(b, ObjectKind::Interface, 8, "IBar", TrustTier::SymbolOnly);
+        let imp = w.obj(a, ObjectKind::Codeunit, 10, "Impl", TrustTier::Workspace);
+        w.object_mut(&imp).implements = vec!["IBar".into()];
+        let bimp = w.obj(b, ObjectKind::Codeunit, 11, "BImpl", TrustTier::SymbolOnly);
+        w.object_mut(&bimp).implements = vec!["IBar".into()];
+        let test = w.rtn(&cu, "TestIt");
+        let api = w.rtn(&sym, "Api");
+        w.rtn(&imp, "Bar");
+        w.rtn(&bimp, "Bar");
+        w.call(&test, &api, 1);
+        let o = w.project(a);
+        let hub = "h:callbacks:s-guid";
+        assert!(!o.edges(hub, "Impl.Bar").is_empty(), "A's implementer");
+        // Unreached, so pruned: no node at all.
+        assert!(!o.has("BImpl.Bar"), "not B's");
+    }
+
     /// Duplicate rows merge to the strongest confidence and the smallest line;
     /// self-edges are dropped.
     #[test]

@@ -4,7 +4,7 @@
 //! `resolver::tests::interface_dispatch_reaches_only_the_named_interfaces_implementers`.
 
 use crate::program::node::ObjKey;
-use crate::program::resolve::edge::{DispatchShape, RouteTarget};
+use crate::program::resolve::edge::{DispatchShape, RouteTarget, SetCompleteness};
 use crate::program::resolve::full::{ProgramReport, resolve_full_program};
 
 const WS_GUID: &str = "15215215-0000-0000-0000-000000000001";
@@ -120,6 +120,62 @@ fn a_qualified_symbol_reference_keeps_its_app() {
         ],
     );
     assert_eq!(targets(&r, "calls"), ["70201"]);
+}
+
+/// A closed enum proves a site complete only for the ONE interface its
+/// receiver names: W sees `IDup` in A and in B, so `X: Interface IDup` binds
+/// to both and nothing closes it, though W's closed enum maps every value
+/// (by name, the site was proven complete).
+///
+/// Mutation (2026-11-20): the three identity gates in `closed_enum.rs`
+/// (`closed_over`'s receiver binding, `is_interface_local`'s variable type,
+/// `enum_identity`'s enum reference) taking a non-exact binding's first
+/// interface -> the site reads complete (red); restored, green. They overlap
+/// here (every `IDup` reference in W binds alike): `is_interface_local` alone,
+/// or the other two together, kept the site open, so all three were relaxed.
+#[test]
+fn a_closed_enum_does_not_close_an_ambiguous_interface() {
+    assert_eq!(
+        closed_enum_site(&[(A_GUID, "DepA152")]),
+        SetCompleteness::Complete,
+        "control: one IDup visible, the enum closes the site"
+    );
+    assert_ne!(
+        closed_enum_site(&[(A_GUID, "DepA152"), (B_GUID, "DepB152")]),
+        SetCompleteness::Complete,
+        "two IDups visible"
+    );
+}
+
+/// The completeness of `Caller.Calls`'s interface site: `X: Interface IDup`
+/// assigned W's closed enum value, the workspace depending on `deps`, each
+/// declaring `IDup` with no implementer (so the routes are exactly the
+/// enum's mapping).
+fn closed_enum_site(deps: &[(&str, &str)]) -> SetCompleteness {
+    let sym = r#"{"RuntimeVersion":"15.0","Interfaces":[{"Name":"IDup","Methods":[{"Name":"Go","Parameters":[]}]}]}"#;
+    let kind = "enum 50110 \"W Kind\" implements IDup\n{\n    Extensible = false;\n    value(0; A) { Implementation = IDup = \"W Impl\"; }\n}\n";
+    let imp = "codeunit 50101 \"W Impl\" implements IDup\n{\n    procedure Go()\n    begin\n    end;\n}\n";
+    let caller = "codeunit 50120 \"Caller\"\n{\n    procedure Calls()\n    var\n        X: Interface IDup;\n    begin\n        X := \"W Kind\"::A;\n        X.Go();\n    end;\n}\n";
+    let r = report(
+        deps,
+        &[
+            ("src/Kind.al", kind),
+            ("src/Impl.al", imp),
+            ("src/Caller.al", caller),
+        ],
+        deps.iter()
+            .map(|(g, n)| (format!("probe_{n}_1.0.0.0.app"), app(g, n, sym, &[])))
+            .collect(),
+    );
+    let sites: Vec<_> = r
+        .edges
+        .iter()
+        .filter(|c| {
+            c.edge.from.name_lc.as_ref() == "calls" && c.edge.shape == DispatchShape::Polymorphic
+        })
+        .collect();
+    assert_eq!(sites.len(), 1, "precondition: one interface site");
+    sites[0].edge.completeness
 }
 
 /// A callee's interface return type binds in the CALLEE's app. Dependency A

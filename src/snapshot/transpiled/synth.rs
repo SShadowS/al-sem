@@ -898,7 +898,8 @@ mod tests {
     /// ENG-142: an interface's `ExtendedInterfaces` become its `extends` list, so
     /// the synthesized file lowers with its bases (names with spaces quoted).
     /// Mutation (2026-11-19): the `interface` arm dropped -> no bases (red);
-    /// restored, green.
+    /// restored, green. ENG-152 (2026-11-20): `iface_refs` writing every name
+    /// bare -> `IOther` loses its app (red); restored, green.
     #[test]
     fn an_interfaces_bases_are_written() {
         let symbols: Value = serde_json::from_str(
@@ -915,6 +916,15 @@ mod tests {
         assert_eq!(
             f.objects[0].interface_extends,
             ["IBar", "My Base", "IOther"],
+            "{text}"
+        );
+        assert_eq!(
+            f.objects[0].interface_extends_qualifiers,
+            [
+                None,
+                None,
+                Some("#63ca2fa4-4f03-4f2b-a480-172fef340d3f#".to_string())
+            ],
             "{text}"
         );
     }
@@ -959,12 +969,19 @@ mod tests {
         // `A""B`: the lowerer keeps a reference's escape, as for hand-written
         // `implements "A""B"` (readers unescape).
         assert_eq!(cu.implements, ["IFoo", "My Iface", "A\"\"B", "Dep Iface"]);
+        // ENG-152: another app's reference keeps its `#<guid>#` through
+        // synthesis and lowering; a bare one stays bare. Mutation (2026-11-20):
+        // `iface_refs` writing every name bare -> the guid is lost (red);
+        // restored, green.
+        let guid = Some("#6a0b05e01c554c3b9d115a0f3c4c0a01#".to_string());
+        assert_eq!(cu.implements_qualifiers, [None, None, None, guid.clone()]);
         // The package's own interface `A"B` (symbols' plain `Name`) is written
         // escaped, so it lowers to the same text its implementer names.
         let (iface, _) = object(al_syntax::ir::ObjectKind::Interface);
         assert_eq!(iface.name, cu.implements[2]);
         let (en, text) = object(al_syntax::ir::ObjectKind::Enum);
         assert_eq!(en.implements, ["My Iface", "Dep Iface"]);
+        assert_eq!(en.implements_qualifiers, [None, guid]);
         // Ids become the package's codeunit names (one in a namespace); `B`'s
         // 99999 is no codeunit of this package, so `B` gets no mapping.
         assert_eq!(
