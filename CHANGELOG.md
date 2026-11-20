@@ -90,8 +90,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   another primary app (exit 3). A missing file is written, as before.
 - **The file, schema 2.** `universe` and `primaryApp` bind it to its runs; an empty
   `primaryApp` is not stamped yet, and the first update with an app id stamps it.
-  `bodiedApps` lists the dependency apps (by guid) the file's runs had with source.
-  `fingerprints` is what suppression reads, so a schema-1 reader still works. `entries` holds
+  `bodiedApps` lists the dependency apps (by guid) the file's runs had with source, and
+  `loadedApps` those they found in any form (with source or symbol-only). `fingerprints` is
+  what suppression reads, so a schema-1 reader still works. `entries` holds
   each fingerprint's detector and scope (`primary` or `dependency`), sorted and deduped. A
   fingerprint listed with no entry is a schema-1 entry: kept until a run sees it.
 - **How it works.**
@@ -115,12 +116,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     its contract failed, a file was parsed with recovery, or a dependency package was
     unreadable, unidentified or encrypted. Unknown call edges and unbound subscriptions do not
     stop pruning: every real workspace has some. A declared dependency without a body
-    (symbol-only, or its package not found) does not either, unless the file's runs had it
-    with source: then this run lost findings through it and prunes nothing (review r2, sol: a
-    package moved away). A new dependency, or one never seen with source, is accepted. The
-    file's `bodiedApps` only grows, so a lost body keeps blocking until it returns or the file
-    is rebuilt; a dependency no longer declared is not counted. A schema-2 file written
-    before `bodiedApps` existed reads as none recorded.
+    (symbol-only, or its package not found) does not either, unless this run lost something
+    the file's runs had: a body (the app was in `bodiedApps` and is symbol-only or missing
+    now), or the app itself (it was in `loadedApps`, even symbol-only, and is missing now:
+    d17's version drift reads a symbol-only package). Then this run may have lost findings
+    and prunes nothing (reviews r2 and r3, sol: a package moved away). A new dependency,
+    symbol-only or not, is accepted, and so is a missing one the file's runs never found.
+    Both lists only grow, so a loss keeps blocking until the app returns or the file is
+    rebuilt; a dependency no longer declared is not counted. A schema-2 file written before
+    either list existed reads it as empty.
   - A batch job's plan declares its baseline as read and written.
 - **Changed without `--update-baseline`: a plain read refuses an unknown `schemaVersion`.** A
   `--baseline` file whose `schemaVersion` is anything but `"1"`, the number `1`, `"2"` or
