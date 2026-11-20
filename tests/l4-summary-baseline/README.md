@@ -308,6 +308,17 @@ CDO_WS=<path> ENFORCE_CDO_WS=1 L4_CANONICAL_DUMP=/tmp/l4-cdo.txt \
   (`OpTemp::get` answers `unknown` for an opaque routine), carried into its 956 callers. No
   effect, table or ordering moved otherwise. (The digest was written from the head dump's
   printed value, not by a regen.)
+- **2026-11-20, ENG-145** (`alsem/eng-145-aliases`, RecordRef aliases end G36 guards and the
+  RecordRef temp derivation). Whole-program `79c0363f…` -> `4041daeb…`. Measured by dumping the
+  canonical serialization (`L4_CANONICAL_DUMP`, `cdo` profile) at master `425c108d` (matches the
+  old digest) and at the branch head `62e8c9b6`. 5479 routines on both sides, none added or
+  removed. 42 routines differ, each only in one effect whose temp state goes from `Known(false)`
+  to `Unknown` (`effectKey` suffix `|f` -> `|u`): 40 `Count` and 2 `FindFirst` reads on a
+  RecordRef whose table is not resolved, from 12 distinct operations. Their `Known(false)` was
+  `record_types`' RecordRef derivation (`RR.Open(n)` with no temporary flag); ENG-145's one
+  predicate (`may_be_rebound_elsewhere`) withholds it when the RecordRef is a parameter or global
+  joined with another, aliased, assigned, or passed to a call. No write, table or ordering moved.
+  (The digest was written from the head dump's printed value, not by a regen.)
 - **2026-11-14, ENG-19** (`alsem/eng-19-request-page-runs`, engine limits L20). Whole-program
   `fde6e4f3…` -> `b2624796…`; reverse index unchanged. Measured by dumping the canonical
   serialization (`L4_CANONICAL_DUMP`) at master `6852a891` (matches the old digest) and at the

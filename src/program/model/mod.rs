@@ -23,6 +23,7 @@ pub mod platform_natives;
 pub mod program_calls;
 pub mod projection;
 pub mod record_types;
+pub mod recref_alias;
 pub mod role;
 pub mod row_cache;
 pub mod symbol_table;
