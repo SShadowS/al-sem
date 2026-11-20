@@ -1657,15 +1657,21 @@ fn cdo_slot_timed_waits_for_builds_and_refuses_beside_one() {
 
 /// ⟨TLS-104⟩ A host suspend does not use up `run --timed`'s wait for builds: the
 /// wait is wall-clock time, which keeps counting while a laptop sleeps (review,
-/// Fable). A build runs and the wait is 2 s; once the run says it waits, the
-/// host "sleeps" 5 s (`CDO_HOST_SUSPENDED_FILE` moves from 100 to 105). The run
-/// says so and waits on on awake time; the build is ended only 3 s later, past
-/// the 2 s wall-clock deadline (ending it at once passed even with the wait on
-/// wall time: a first proof of this test came back green), and the timed
-/// command runs (exit 0).
+/// Fable). A build runs and the wait is 10 s; once the run says it waits, the
+/// host "sleeps" 60 s (`CDO_HOST_SUSPENDED_FILE` moves from 100 to 160). The
+/// run says so and waits on awake time; the build is ended only 12 s after the
+/// run started, past the 10 s wall-clock deadline (ending it at once passed even
+/// with the wait on wall time: a first proof of this test came back green), and
+/// the timed command runs (exit 0).
+///
+/// The budgets (ENG-168's task gate, 4 failures in 4 runs with 2 s and 5 s): on
+/// a loaded machine the wait's first scan of the process table can itself take
+/// over 2 s, so a 2 s wait refused before it printed the line the suspend is
+/// injected on. 10 s leaves the scan room; the 60 s suspend puts the awake
+/// deadline about 70 s out, far past the kill at 12 s.
 ///
 /// Mutation (2026-11-20): the wait on wall time again (`slot_clocks` taking
-/// `EPOCHREALTIME` for the awake clock) -> refused at 2 s, exit 6 (red);
+/// `EPOCHREALTIME` for the awake clock) -> refused at 10 s, exit 6 (red);
 /// restored, green.
 #[test]
 fn cdo_slot_timed_wait_survives_a_host_suspend() {
@@ -1686,7 +1692,7 @@ fn cdo_slot_timed_wait_survives_a_host_suspend() {
             &["run", "lane", "timing", "--timed", "--", "touch", touch],
             &[
                 ("CDO_SLOT_BUILD_NAMES", fake_name.as_str()),
-                ("CDO_SLOT_TIMED_WAIT_S", "2"),
+                ("CDO_SLOT_TIMED_WAIT_S", "10"),
                 ("CDO_HOST_SUSPENDED_FILE", reading_s),
             ],
         )
@@ -1695,6 +1701,7 @@ fn cdo_slot_timed_wait_survives_a_host_suspend() {
         .spawn()
         .unwrap(),
     );
+    let started = std::time::Instant::now();
     let mut text = String::new();
     {
         use std::io::BufRead;
@@ -1702,11 +1709,12 @@ fn cdo_slot_timed_wait_survives_a_host_suspend() {
         for line in lines {
             let line = line.unwrap();
             if line.contains(&format!("waiting for build processes to end: PID {bpid}")) {
-                std::fs::write(&reading, "105").unwrap();
+                std::fs::write(&reading, "160").unwrap();
             }
-            if line.contains("the host slept 5 s during this wait") {
-                // Past the 2 s wall-clock deadline, inside the awake one.
-                std::thread::sleep(std::time::Duration::from_secs(3));
+            if line.contains("the host slept 60 s during this wait") {
+                // Past the 10 s wall-clock deadline, inside the awake one.
+                let at = std::time::Duration::from_secs(12);
+                std::thread::sleep(at.saturating_sub(started.elapsed()));
                 b.0.kill().unwrap();
                 b.0.wait().unwrap();
             }
@@ -1719,7 +1727,7 @@ fn cdo_slot_timed_wait_survives_a_host_suspend() {
     let code = timed.0.wait().unwrap().code();
     assert_eq!(code, Some(0), "{text}{err}");
     assert!(
-        text.contains("the host slept 5 s during this wait"),
+        text.contains("the host slept 60 s during this wait"),
         "{text}"
     );
     assert!(ran.exists(), "{text}{err}");
