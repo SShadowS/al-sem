@@ -136,6 +136,8 @@ pub struct ProjectedObject {
     pub source_table_name: Option<String>,
     pub extends_target_name: Option<String>,
     pub implements_interfaces: Option<Vec<String>>,
+    /// An interface's bases (`AbiObject::extended_interfaces`, ENG-142/151).
+    pub interface_bases: Vec<String>,
     pub inherent_commit_behavior: Option<String>,
     /// Page controls (name, kind-string, target) forwarded from the ABI — see AbiObject.
     pub page_controls: Vec<(String, String, String)>,
@@ -378,6 +380,7 @@ pub fn project_abi_to_index(abi: &SymbolReferenceAbi, app_guid: &str) -> Project
             source_table_name: o.source_table_name.clone(),
             extends_target_name: o.extends_target_name.clone(),
             implements_interfaces: o.implemented_interfaces.clone(),
+            interface_bases: o.extended_interfaces.clone(),
             inherent_commit_behavior: o.inherent_commit_behavior.clone(),
             page_controls: o.page_controls.clone(),
             page_props: o.page_props,

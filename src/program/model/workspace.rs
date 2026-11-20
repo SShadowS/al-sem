@@ -55,6 +55,11 @@ pub struct ModelObject {
     /// Implemented interfaces (Codeunit / Enum / Interface): `Some([])` known-none,
     /// `Some([...])` listed, `None` unknown. Other object types: `None`.
     pub implements_interfaces: Option<Vec<String>>,
+    /// An interface's `extends` list (ENG-142, ENG-151): its bases' names, by
+    /// their LOGICAL name like `implements_interfaces`. Interface only; empty
+    /// otherwise. Read by d19 to know a method that implements an inherited
+    /// member.
+    pub interface_bases: Vec<String>,
     /// Object `Subtype` property (Codeunit only; e.g. "Install" / "Upgrade" /
     /// "Test"), else `None`. Additive L2→L3 forward — ModelObject is NOT
     /// Serialize-derived into any gate surface (R0–R3 goldens are field-allowlisted
@@ -1637,6 +1642,7 @@ fn project_ir(
             source_table_name: source_table_name.clone(),
             extends_target_name,
             implements_interfaces,
+            interface_bases: o.interface_extends.clone(),
             object_subtype,
             page_type,
             inherent_commit_behavior,

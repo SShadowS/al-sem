@@ -21,16 +21,83 @@
 //!
 //! Within-detector sort by `compareStrings(a.id, b.id)` (byte order).
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::engine::l5::confidence::to_confidence;
 use crate::engine::l5::detector_context::DetectorContext;
 use crate::engine::l5::detectors::anchor_of;
 use crate::engine::l5::finding::{Evidence, EvidenceStep, Finding, FindingConfidence, FixOption};
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
-use crate::program::model::workspace::Model;
+use crate::program::model::workspace::{Model, ModelEntities, ModelObject, ModelRoutine};
 
 pub(crate) const DETECTOR: &str = "d19-unused-parameter";
+
+/// ENG-151: whether a routine implements an interface member: its object
+/// implements an interface that is, or extends (transitively, ENG-142's
+/// `interface_bases`), one declaring a member of the routine's name (the
+/// model keeps no arity for a source interface's members). alc makes an
+/// implementer keep the member's signature (AL0582 when a
+/// member is missing), so its unused parameters are not the author's to drop.
+/// An interface not in the model (its members unknown) counts as declaring the
+/// member: the safe side for an advisory detector. Interfaces are matched by
+/// name, as the model's `implements_interfaces` lists them.
+fn interface_member_test(ws: &ModelEntities) -> impl Fn(&ModelRoutine) -> bool + '_ {
+    let fold = |s: &str| al_syntax::fold_identifier(s.trim().trim_matches('"'));
+    let objects: HashMap<&str, &ModelObject> =
+        ws.objects.iter().map(|o| (o.id.as_str(), o)).collect();
+    let mut bases: HashMap<String, Vec<String>> = HashMap::new();
+    for o in ws.objects.iter().filter(|o| o.object_type == "Interface") {
+        bases
+            .entry(fold(&o.name))
+            .or_default()
+            .extend(o.interface_bases.iter().map(|b| fold(b)));
+    }
+    // A source interface keeps its members in `declaration_only_routines` (names
+    // only: the model keeps them out of `routines`); a symbol-only one has them
+    // as routines. So members match by NAME: a same-named method of another
+    // arity (an overload) is skipped too, the safe side.
+    let mut members: HashMap<String, HashSet<String>> = HashMap::new();
+    for o in ws.objects.iter().filter(|o| o.object_type == "Interface") {
+        members
+            .entry(fold(&o.name))
+            .or_default()
+            .extend(o.declaration_only_routines.iter().map(|d| fold(&d.name)));
+    }
+    for r in &ws.routines {
+        if let Some(o) = objects.get(r.object_id.as_str())
+            && o.object_type == "Interface"
+        {
+            members
+                .entry(fold(&o.name))
+                .or_default()
+                .insert(fold(&r.name));
+        }
+    }
+    move |r: &ModelRoutine| {
+        let Some(impls) = objects
+            .get(r.object_id.as_str())
+            .and_then(|o| o.implements_interfaces.as_ref())
+        else {
+            return false;
+        };
+        let key = fold(&r.name);
+        let mut seen: HashSet<String> = HashSet::new();
+        let mut stack: Vec<String> = impls.iter().map(|i| fold(i)).collect();
+        while let Some(i) = stack.pop() {
+            if !seen.insert(i.clone()) {
+                continue;
+            }
+            let Some(more) = bases.get(&i) else {
+                return true; // not in the model: its members are unknown
+            };
+            if members.get(&i).is_some_and(|m| m.contains(&key)) {
+                return true;
+            }
+            stack.extend(more.iter().cloned());
+        }
+        false
+    }
+}
 
 pub fn detect_d19(
     resolved: &Model,
@@ -43,6 +110,8 @@ pub fn detect_d19(
     let mut skipped_trigger = 0u64;
     let mut skipped_event_subscriber = 0u64;
     let mut skipped_event_publisher = 0u64;
+    let mut skipped_interface_member = 0u64;
+    let implements_member = interface_member_test(ws);
 
     for routine in &ws.routines {
         // roleOf(routine) !== "primary" → skip. Source-only: every routine is
@@ -76,6 +145,12 @@ pub fn detect_d19(
             continue;
         }
         if routine.parameters.is_empty() {
+            continue;
+        }
+        // ENG-151: a method implementing an interface member keeps the
+        // interface's signature, so an unused parameter there is no defect.
+        if implements_member(routine) {
+            skipped_interface_member += 1;
             continue;
         }
         candidates_considered += 1;
@@ -161,6 +236,7 @@ pub fn detect_d19(
     stats.add_skip("trigger", skipped_trigger);
     stats.add_skip("eventSubscriber", skipped_event_subscriber);
     stats.add_skip("eventPublisher", skipped_event_publisher);
+    stats.add_skip("interfaceMember", skipped_interface_member);
     Ok(DetectorOutput {
         findings,
         stats,

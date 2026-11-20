@@ -1260,6 +1260,7 @@ codeunit 50102 "C"
             source_table_name: None,
             extends_target_name: ext.map(str::to_string),
             implements_interfaces: None,
+            interface_bases: Vec::new(),
             object_subtype: None,
             page_type: None,
             inherent_commit_behavior: None,

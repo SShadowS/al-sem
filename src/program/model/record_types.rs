@@ -742,6 +742,7 @@ mod tests {
             source_table_name: None,
             extends_target_name: None,
             implements_interfaces: None,
+            interface_bases: Vec::new(),
             object_subtype: None,
             page_type: None,
             inherent_commit_behavior: None,
