@@ -218,10 +218,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   It is replaced by `get_id_sources`: `R.Get(Id)` takes the table of every `X` in `Id :=
   X.RecordId` when `Id` is a local that only such assignments write, is passed to no call and
   is no `for`/`foreach` variable. X must be a RecordRef, or a record whose table is resolved
-  and has no field named `RecordId`, its loaded extensions' fields included: on such a table
-  `X.RecordId` is the FIELD (alc binds it), which may hold any record's ID (Fable, review round
-  3). AL binds the name against the apps the workspace compiles with, which are the loaded
-  ones. Anything else moves R to any table. In the flow's summaries,
+  and has neither a field nor a procedure named `RecordId`, in the table or a loaded extension
+  of it: alc binds `X.RecordId` to such a field (Fable, review round 3) and `X.RecordId()` to
+  such a procedure (warning AL0524, which says it will become an error; Fable, round 4),
+  either of which may give any record's ID. AL binds the name against the apps the workspace
+  compiles with, which are the loaded ones; a dependency's procedure is loaded because the call
+  resolves to it. A table extension whose target is not known turns the record path off.
+  Anything else moves R to any table. In the flow's summaries,
   which read a variable over its whole routine, that covers X wherever `Id` was taken. The
   `Get` moves the shared handle, so every member of R's alias class takes the same tables
   (`R := O` before the `Get`: O takes R's, the caller's included). This is the CDO shape of
@@ -277,7 +280,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     its call check → `OwnIdPassedRoot`; its assignment check → `OwnIdComputedRoot`; its
     locals-only check → `OwnIdGlobalRoot`; the alias class's `Get` → `OwnIdAliasRoot`; the
     alias class taking the sources → `OwnIdAliasedRoot` (`yes`); a record source →
-    `OwnIdRecordRoot` (`yes`); its no-`RecordId`-field check → `OwnIdFieldRoot` (`no`).
+    `OwnIdRecordRoot` (`yes`); its no-`RecordId`-field check → `OwnIdFieldRoot` (`no`); its
+    no-procedure check → `OwnIdProcRoot` (`no`), and through a table extension →
+    `OwnIdExtProcRoot` (`no`).
 
   On a parameter, a `Get` before its guard (`GetBeforeGuardRoot`) is right on master too: the
   caller's argument reads the callee's write-back over the whole routine. On a local nothing

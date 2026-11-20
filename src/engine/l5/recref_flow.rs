@@ -394,13 +394,40 @@ impl<'a> RecRefFlow<'a> {
         }
         let none = HashSet::new();
         // ENG-160 (Fable): the resolved tables (their loaded extensions' fields merged in) with no
-        // field named `RecordId`: on a record of one, `X.RecordId` is the record's own ID.
+        // field named `RecordId`, and no procedure of that name in the table or a loaded
+        // extension of it (alc binds `X.RecordId()` to the procedure, with warning AL0524): on a
+        // record of one, `X.RecordId` is the record's own ID. An extension whose target is not
+        // known turns the record path off (no table counts).
+        let mut proc_tables: HashSet<String> = HashSet::new();
+        let mut proc_target_unknown = false;
+        for r in routines
+            .iter()
+            .filter(|r| r.name.eq_fold_identifier("recordid"))
+        {
+            let Some(o) = model.workspace.objects.iter().find(|o| o.id == r.object_id) else {
+                continue;
+            };
+            match o.object_type.fold_identifier().as_str() {
+                "table" => {
+                    proc_tables.insert(o.name.fold_identifier());
+                }
+                "tableextension" => match &o.extends_target_name {
+                    Some(t) => {
+                        proc_tables.insert(t.trim().trim_matches('"').fold_identifier());
+                    }
+                    None => proc_target_unknown = true,
+                },
+                _ => {}
+            }
+        }
         let own_id_tables: HashSet<&str> = model
             .workspace
             .tables
             .iter()
             .filter(|t| {
-                !t.is_extension_stub
+                !proc_target_unknown
+                    && !t.is_extension_stub
+                    && !proc_tables.contains(&t.name.fold_identifier())
                     && !t
                         .fields
                         .iter()

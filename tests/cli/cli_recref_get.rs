@@ -35,6 +35,34 @@ table 50436 "GE Link"
     fields { field(1; K; Integer) { } field(3; RecordId; RecordId) { } }
     keys { key(PK; K) { } }
 }
+table 50437 "GE Proc"
+{
+    fields { field(1; K; Integer) { } }
+    keys { key(PK; K) { } }
+
+    procedure RecordId(): RecordId
+    var
+        D: Record "GE Doc";
+    begin
+        D.FindFirst();
+        exit(D.RecordId);
+    end;
+}
+table 50438 "GE Proc2"
+{
+    fields { field(1; K; Integer) { } }
+    keys { key(PK; K) { } }
+}
+tableextension 50439 "GE Proc2 Ext" extends "GE Proc2"
+{
+    procedure RecordId(): RecordId
+    var
+        D: Record "GE Doc";
+    begin
+        D.FindFirst();
+        exit(D.RecordId);
+    end;
+}
 codeunit 50434 "GE Mgt"
 {
     var
@@ -280,6 +308,36 @@ codeunit 50434 "GE Mgt"
         R.GetTable(E);
         Link.FindFirst();
         Id := Link.RecordId;
+        R.Get(Id);
+        Guarded(R);
+    end;
+
+    // Fable on ENG-160 (round 4): a table procedure named RecordId wins over the built-in (alc
+    // warns AL0524), in the table or a table extension; it may return a Doc's ID.
+    procedure OwnIdProcRoot()
+    var
+        R: RecordRef;
+        E: Record "GE Entry";
+        P: Record "GE Proc";
+        Id: RecordId;
+    begin
+        R.GetTable(E);
+        P.FindFirst();
+        Id := P.RecordId();
+        R.Get(Id);
+        Guarded(R);
+    end;
+
+    procedure OwnIdExtProcRoot()
+    var
+        R: RecordRef;
+        E: Record "GE Entry";
+        P: Record "GE Proc2";
+        Id: RecordId;
+    begin
+        R.GetTable(E);
+        P.FindFirst();
+        Id := P.RecordId();
         R.Get(Id);
         Guarded(R);
     end;
@@ -693,6 +751,8 @@ fn a_recordref_get_moves_the_table_for_every_reader() {
     assert_eq!(answer("OwnIdAliasedRoot", "GE Log"), "no");
     assert_eq!(answer("OwnIdRecordRoot", "GE Log"), "no");
     assert_eq!(answer("OwnIdFieldRoot", "GE Log"), "yes");
+    assert_eq!(answer("OwnIdProcRoot", "GE Log"), "yes");
+    assert_eq!(answer("OwnIdExtProcRoot", "GE Log"), "yes");
     assert_eq!(answer("OwnIdForeachRoot", "GE Log"), "yes");
     assert_eq!(answer("OwnIdPassedRoot", "GE Log"), "yes");
     assert_eq!(answer("OwnIdComputedRoot", "GE Log"), "yes");
