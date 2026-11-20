@@ -2012,8 +2012,21 @@ fn run_batch_cmd(b: BatchCli) -> ExitCode {
             let p = plan(command, true, &cx);
             written.reads.append(&mut cx.take_touched());
             let written = match p {
+                // A refused job writes no file its command names, and its own
+                // streams may not write one either (ENG-168): a refused
+                // `--update-baseline B` with stdout B would empty B.
+                // `job_paths` lists the two streams first, then the named targets.
                 Planned::Failed(_) => JobPaths {
                     reads: written.reads,
+                    kept: written
+                        .writes
+                        .into_iter()
+                        .skip(2)
+                        .filter_map(|t| match t {
+                            al_sem::engine::batch::manifest::Target::File(f) => Some(f),
+                            al_sem::engine::batch::manifest::Target::Dir(_) => None,
+                        })
+                        .collect(),
                     ..stream_paths(&job.streams)
                 },
                 Planned::Ready { .. } => written,
@@ -4150,7 +4163,8 @@ fn plan_analyze(a: AnalyzeCli, in_batch: bool) -> Planned {
             // `new` fails only on the focus conflicts and the detector set,
             // both checked above.
             Box::new(
-                AnalyzeJob::new(inputs, request, args, version).expect("the detector set resolved"),
+                AnalyzeJob::new(inputs, request, args, version)
+                    .expect("plan_analyze checked the --focus conflicts and the detector set"),
             )
         },
     )
