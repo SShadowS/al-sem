@@ -58,24 +58,32 @@ fn guarded_operations(r: &ModelRoutine) -> HashMap<String, i64> {
                 .push((a.source_anchor.start_line, a.source_anchor.start_column));
         }
     }
-    // The call sites (by id) that may rebind a RecordRef, with the one they may.
+    // ENG-145: `A := R` shares one record (a Variant holds the reference too), and a rebinding
+    // through any member rebinds every member (measured on BC 28.4), so a rebinding ends the
+    // guard of the whole alias class: the routine's own aliases, and every parameter, global and
+    // array holder that may share a record already (`recref_alias::AliasClasses::for_routine`).
+    // Names are keyed as the classes key them (`this.G`, `Slot[1]`, quotes).
+    use crate::program::model::recref_alias::{AliasClasses, holder_key};
+    let aliases = AliasClasses::for_routine(r);
+    // The call sites (by id) that may rebind a RecordRef, with the ones they may.
     let mut rebinds: HashMap<&str, HashSet<String>> = HashMap::new();
     for cs in &r.call_sites {
         let mut names: HashSet<String> = cs
             .argument_texts
             .iter()
-            .map(|a| lc(a))
-            .filter(|a| recordrefs.contains(a))
+            .map(|a| holder_key(a))
+            .filter(|a| aliases.is_holder(a))
             .collect();
         if let PCallee::Member { receiver, method } = &cs.callee
             && matches!(
                 method.fold_identifier().as_str(),
                 "gettable" | "open" | "copy" | "close"
             )
-            && recordrefs.contains(&lc(receiver))
+            && aliases.is_holder(&holder_key(receiver))
         {
-            names.insert(lc(receiver));
+            names.insert(holder_key(receiver));
         }
+        let names: HashSet<String> = names.iter().flat_map(|n| aliases.members(n)).collect();
         if !names.is_empty() {
             rebinds.insert(cs.id.as_str(), names);
         }

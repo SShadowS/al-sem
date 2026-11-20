@@ -64,6 +64,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   DO has no `.alpackages`. So the change has no input
   here to move. The resolver test is the evidence of the gain.
 
+### Fixed (ENG-145: a RecordRef rebound through an alias hid a write)
+
+- **Measured first.** After `A := Ref` between two RecordRefs, does rebinding `A` rebind `Ref`?
+  On BC 28.4 (`docs/superpowers/notes/2026-11-20-eng145-recordref-aliasing.md`, probe source
+  and results there): `GetTable` through either variable rebinds both, the record's temporary
+  state included (`Ref.GetTable(TmpCust); A := Ref; A.GetTable(PhysCust)` leaves `Ref`
+  physical); `Close` detaches only the variable it is called on, and `Open` needs a closed one;
+  `Duplicate()` shares nothing. The RecordRef flow (G34/G35) assumed the sharing; two readers
+  ignored it.
+- **G36's field guard** (`if not R.FieldExist(N) then exit; … R.Modify()`) ended only on a
+  rebinding of `R` by name. `A := R; A.GetTable(L); R.Modify()` kept the guard, and `prove
+  writes-table` answered `no` for a table L without the field. A rebinding through any member of
+  `R`'s alias class now ends it (`field_guard`).
+- **`record_types`' temp derivation** stamped `Ref.Modify()` temporary from `Ref.GetTable(Tmp)`
+  (the no-branching pass) or `RR.Open(n, true)` (the "only ever opened temporary" pass) though
+  something later rebound the record, so the temp proof hid the write. The two passes also
+  disagreed on what can: the branching pass refused a RecordRef passed to a call or assigned,
+  the no-branching pass checked neither (`RR.Open(n, true); Helper(RR); RR.Modify()` with
+  `Helper(var R: RecordRef)` doing `R.GetTable(Phys)`, or `Ref := PhysRef()`). Both now read ONE
+  predicate, `may_be_rebound_elsewhere`: an alias of it, any assignment to it, or a call
+  receiving it as an argument ends the derivation.
+- **One alias source.** `program::model::recref_alias::AliasClasses` builds a routine's alias
+  classes from `A := B` between RecordRef and Variant variables (a Variant holds the reference);
+  `recref_flow`, `field_guard` and `record_types` all read it (`recref_flow`'s own union-find is
+  gone). Readers still treat `Open`/`Close` through an alias as rebinding the class: sound, and
+  coarser than the platform (ENG-157).
+- **What a routine cannot see (sol, round 1).** `AliasClasses::for_routine` (what `field_guard`
+  and `record_types` read) also joins: every parameter and global holder (a caller may bind two
+  `var` parameters to one record, `Victim(R, R)`; two globals may have been aliased elsewhere),
+  and, when the routine has an array of RecordRefs or Variants, every holder (`Slot[1] := R`
+  records no partner). Names are keyed one way, `recref_alias::holder_key` (`this.G` is `G`,
+  `Slot[1]` is `Slot`, quotes stripped), which `record_types`' receiver key now calls; a
+  `Rebind(this.G)` was no rebinding of `G`. The cost: a routine with two or more parameter or
+  global RecordRefs takes no field guard and no derived temp state for them. `this.` and an
+  index count as syntax only outside quotes, and a DECLARED name (already logical: the lowerer
+  strips its quotes) is keyed by `recref_alias::name_key`, so a variable literally named
+  `"R[1]"` is one name, not an array element (sol round 2: the declaration keyed as `r` and its
+  quoted uses as `r[1]`, so its rebinding ended no guard).
+- **A record kept by code the routine cannot see** (a SingleInstance store holding the caller's
+  RecordRef and rebinding it from a later call, sol round 2) is ENG-159's: a sound rule for it
+  costs the RecordRef flow most of its CDO pruning (measured: IssueReminder 201 -> 422 tables)
+  until position-aware copies and interprocedural escape facts win it back, so the two land
+  together.
+- **A quoted alias was no alias.** `PVarAssignment::rhs_identifier` was set only for two bare
+  identifiers, so `"Alias Ref" := R` made no alias. It now takes quoted names on either side
+  (also read by d11/d21's record-assign-as-load).
+- **Tests.** `cli_prove_field_guarded_write`: `AliasPlain`, `AliasQuoted`, `AliasVariant` answer
+  `unknown`, `DuplicateControl` keeps its guard (`no`); `a_recordref_alias_keeps_no_derived_temp_state`:
+  `AliasGetTable`, `AliasOpenTemp` answer `unknown`, their no-alias controls `no`, and
+  `QuotedPassOpenTemp` (a quoted RecordRef passed to a call that rebinds it) `unknown`, as it
+  already did; `HelperOpenTemp`, `HelperGetTable` and `AssignedFromCall` (the no-branching pass)
+  `unknown`. Each fix fails its test when removed (the class expansion, the quoted
+  `rhs_identifier`, the Variant holders, the two passes' alias checks, and the predicate's
+  argument and assignment clauses: `HelperOpenTemp` and `AssignedFromCall` answer `no`). Sol's
+  round 1 shapes, in both families: `ThisGlobal`/`ThisGlobalTemp` (`this.G`), `Victim`/
+  `VictimTemp` (two `var` parameters), `ArraySlot`/`ArraySlotTemp`, each `unknown`, and `no`
+  when its rule (the one key, the parameter/global join, the array join) is removed;
+  `LiteralName` (`"R[1]"`) `unknown`, and `no` without `name_key`. On CDO the analyze findings,
+  fingerprints and the CDO renderings do not move; the L4 frozen digest does (42 routines,
+  each a RecordRef read's derived `Known(false)` now `Unknown`; README re-freeze log);
+  `recref_alias`'s unit test pins the classes.
+
 ### Fixed (ENG-151: d19 no longer flags an unused parameter of a method that implements an interface member)
 
 - **The gap.** `d19-unused-parameter` flagged the parameters of a method implementing an

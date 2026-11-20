@@ -30,26 +30,44 @@ use al_syntax::IdentifierFoldExt;
 
 use crate::program::body::node_util::strip_quotes;
 
+/// ENG-145: whether something other than the pass's own `Open`/`GetTable` calls on it may rebind
+/// the RecordRef `v` (a [`recref_alias::holder_key`]) in `routine`, so no temp state may be
+/// derived for it: an alias of it (`A := v` or `v := A`, a Variant included; `A.GetTable(Phys)`
+/// rebinds `v` too, measured on BC 28.4; a parameter, global or array holder may be aliased
+/// already, `AliasClasses::for_routine`), any assignment to it (`v := GetRef()`), or a call
+/// receiving it as an argument, `this.v` included (a callee may `GetTable` it: by `var`, or
+/// through the record the passed handle shares). The ONE predicate both temp-derivation passes
+/// read, so they cannot drift apart again.
+///
+/// [`recref_alias::holder_key`]: crate::program::model::recref_alias::holder_key
+fn may_be_rebound_elsewhere(
+    routine: &ModelRoutine,
+    aliases: &crate::program::model::recref_alias::AliasClasses,
+    v: &str,
+) -> bool {
+    use crate::program::model::recref_alias::{holder_key, name_key};
+    // An argument is source text (`holder_key`); an assignment target is a logical name.
+    let names = |t: &str| holder_key(t) == v;
+    aliases.has_alias(v)
+        || routine
+            .var_assignments
+            .iter()
+            .any(|a| name_key(&a.lhs_name) == v)
+        || routine
+            .call_sites
+            .iter()
+            .any(|cs| cs.argument_texts.iter().any(|a| names(a)))
+}
+
 /// An operation's receiver as a variable-name key: the body pass keeps the
 /// receiver's raw text, so a quoted name (`"Job Ledger Entry".Modify()`) is
 /// matched LOGICAL (quotes stripped, `""` one `"`), lowercased, as variable
 /// names are stored. A quoted receiver missed its variable, so its table and
-/// temp state stayed unknown.
+/// temp state stayed unknown. An array element `Recs[1]` is an op on the array
+/// variable (ENG-12, L36), and `this.X` on the global `X` (ENG-12). The same key the
+/// RecordRef alias classes use (`recref_alias::holder_key`, ENG-145).
 fn op_variable_lc(raw: &str) -> String {
-    // An array element `Recs[1]` is an op on the array variable (ENG-12, L36).
-    let raw = match raw.trim_end().strip_suffix(']') {
-        Some(_) => raw.find('[').map_or(raw, |i| &raw[..i]),
-        None => raw,
-    };
-    // An object global through `this` (`this.X`): the global `X` (ENG-12).
-    let raw = raw.trim();
-    let raw = match raw.get(..5) {
-        Some(p) if p.eq_fold_identifier("this.") => &raw[5..],
-        _ => raw,
-    };
-    strip_quotes(raw.trim())
-        .replace("\"\"", "\"")
-        .fold_identifier()
+    crate::program::model::recref_alias::holder_key(raw)
 }
 
 /// Extract the TABLE NAME from a record variable's `declaredType` string.
@@ -483,6 +501,11 @@ pub fn resolve_routine_record_types(
                 }
             }
 
+            // ENG-145: a RecordRef something else may rebind (an alias, an assignment, a call it
+            // is passed to) keeps no derived temp state.
+            let aliases = crate::program::model::recref_alias::AliasClasses::for_routine(routine);
+            recref_temp.retain(|v, _| !may_be_rebound_elsewhere(routine, &aliases, v));
+
             // Apply derived temp states to matching record ops.
             for op in routine.record_operations.iter_mut() {
                 let var_lc = op_variable_lc(&op.record_variable_name);
@@ -514,18 +537,17 @@ pub fn resolve_routine_record_types(
             })
             .map(|v| v.name.fold_identifier())
             .collect();
+        // ENG-145: an alias (`A := RR`, either side; a Variant holds the reference too) can
+        // rebind it (`A.GetTable(Phys)`).
+        let aliases = crate::program::model::recref_alias::AliasClasses::for_routine(routine);
         let always_temp: std::collections::HashSet<String> = locals
             .into_iter()
             .filter(|v_lc| {
+                if may_be_rebound_elsewhere(routine, &aliases, v_lc) {
+                    return false;
+                }
                 let mut opened = false;
                 for cs in &routine.call_sites {
-                    if cs
-                        .argument_texts
-                        .iter()
-                        .any(|a| a.trim().fold_identifier() == *v_lc)
-                    {
-                        return false;
-                    }
                     let crate::program::body::features::PCallee::Member { receiver, method } =
                         &cs.callee
                     else {
@@ -550,10 +572,6 @@ pub fn resolve_routine_record_types(
                     }
                 }
                 opened
-                    && !routine
-                        .var_assignments
-                        .iter()
-                        .any(|a| a.lhs_name.trim().fold_identifier() == *v_lc)
             })
             .collect();
         if !always_temp.is_empty() {

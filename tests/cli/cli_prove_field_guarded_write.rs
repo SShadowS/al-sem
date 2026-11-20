@@ -37,6 +37,9 @@ table 50402 "FG Log"
 }
 codeunit 50403 "FG Mgt"
 {
+    var
+        G: RecordRef;
+
     procedure SetHandled(V: Variant)
     var
         RecRef: RecordRef;
@@ -87,6 +90,115 @@ codeunit 50403 "FG Mgt"
             A.GetTable(L);
         R.Modify();
     end;
+
+    // ENG-145: `A := R` shares one record, and `A.GetTable(L)` rebinds R too (measured on
+    // BC 28.4), with no `with` at all.
+    procedure AliasPlain(var R: RecordRef)
+    var
+        A: RecordRef;
+        L: Record "FG Log";
+    begin
+        if not R.FieldExist(50) then
+            exit;
+        A := R;
+        A.GetTable(L);
+        R.Modify();
+    end;
+
+    // The same through a quoted alias name.
+    procedure AliasQuoted(var R: RecordRef)
+    var
+        "Alias Ref": RecordRef;
+        L: Record "FG Log";
+    begin
+        if not R.FieldExist(50) then
+            exit;
+        "Alias Ref" := R;
+        "Alias Ref".GetTable(L);
+        R.Modify();
+    end;
+
+    // The same through a Variant holding the reference.
+    procedure AliasVariant(var R: RecordRef)
+    var
+        V: Variant;
+        A: RecordRef;
+        L: Record "FG Log";
+    begin
+        if not R.FieldExist(50) then
+            exit;
+        V := R;
+        A := V;
+        A.GetTable(L);
+        R.Modify();
+    end;
+
+    // sol on ENG-145: the global passed on as `this.G`.
+    procedure ThisGlobal()
+    begin
+        if not G.FieldExist(50) then
+            exit;
+        RebindLog(this.G);
+        G.Modify();
+    end;
+
+    // sol on ENG-145: two `var` parameters a caller may bind to one record (`Victim(R, R)`).
+    procedure Victim(var A: RecordRef; var B: RecordRef)
+    var
+        L: Record "FG Log";
+    begin
+        if not A.FieldExist(50) then
+            exit;
+        B.GetTable(L);
+        A.Modify();
+    end;
+
+    // sol on ENG-145: an array slot holding the alias.
+    procedure ArraySlot(var R: RecordRef)
+    var
+        Slot: array[1] of RecordRef;
+        L: Record "FG Log";
+    begin
+        if not R.FieldExist(50) then
+            exit;
+        Slot[1] := R;
+        Slot[1].GetTable(L);
+        R.Modify();
+    end;
+
+    // sol round 2: a variable literally named `"R[1]"` is one name, not an array element.
+    procedure LiteralName()
+    var
+        "R[1]": RecordRef;
+        D: Record "FG Doc";
+        L: Record "FG Log";
+    begin
+        "R[1]".GetTable(D);
+        if not "R[1]".FieldExist(50) then
+            exit;
+        "R[1]".GetTable(L);
+        "R[1]".Modify();
+    end;
+
+    local procedure RebindLog(var R: RecordRef)
+    var
+        L: Record "FG Log";
+    begin
+        R.GetTable(L);
+    end;
+
+    // Control: a Duplicate() shares nothing, so the guard holds.
+    procedure DuplicateControl(var R: RecordRef)
+    var
+        A: RecordRef;
+        L: Record "FG Log";
+    begin
+        if not R.FieldExist(50) then
+            exit;
+        A := R.Duplicate();
+        A.GetTable(L);
+        R.Modify();
+    end;
 }
 "#;
 
@@ -132,6 +244,22 @@ fn a_field_guarded_recordref_write_writes_only_tables_with_the_field() {
     assert_eq!(answer("Rebound", "FG Log"), "unknown");
     // sol r6 on ENG-30: a routine with a `with` takes no field guard.
     assert_eq!(answer("AliasWith", "FG Log"), "unknown");
+    // ENG-145: a rebinding through an alias (plain, quoted, through a Variant) ends the guard;
+    // a Duplicate() shares nothing, so its guard holds.
+    for routine in [
+        "AliasPlain",
+        "AliasQuoted",
+        "AliasVariant",
+        // sol on ENG-145: `this.G` passed on, two parameters one caller may alias, an array slot.
+        "ThisGlobal",
+        "Victim",
+        "ArraySlot",
+        // sol round 2: a variable literally named `"R[1]"` (`recref_alias::name_key`).
+        "LiteralName",
+    ] {
+        assert_eq!(answer(routine, "FG Log"), "unknown", "{routine}");
+    }
+    assert_eq!(answer("DuplicateControl", "FG Log"), "no");
 }
 
 /// sol r6 on ENG-30: under `with Phys do`, a bare table-method call runs on `Phys` (physical),
@@ -290,5 +418,207 @@ fn a_bare_table_method_under_with_runs_on_the_with_record() {
             !states.is_empty() && states.iter().all(|s| *s == Some("unknown")),
             "{routine}: {states:?}"
         );
+    }
+}
+
+/// ENG-145: record_types derives a RecordRef's temp state from its `GetTable`/`Open`. An alias
+/// (`A := Ref`) shares the record, and `A.GetTable(Phys)` makes `Ref` physical (measured on
+/// BC 28.4), so a RecordRef with an alias keeps no derived temp state. Each case has a control
+/// with no alias, which stays temporary.
+const TEMP_ALIAS: &str = r#"table 50420 "TA Buf"
+{
+    fields { field(1; K; Integer) { } }
+    keys { key(PK; K) { } }
+}
+codeunit 50421 "TA Mgt"
+{
+    var
+        TG: RecordRef;
+
+    // No branching: the first derivation pass.
+    procedure AliasGetTable()
+    var
+        Ref: RecordRef;
+        A: RecordRef;
+        Tmp: Record "TA Buf" temporary;
+        Phys: Record "TA Buf";
+    begin
+        Ref.GetTable(Tmp);
+        A := Ref;
+        A.GetTable(Phys);
+        Ref.Modify();
+    end;
+
+    procedure NoAliasGetTable()
+    var
+        Ref: RecordRef;
+        Tmp: Record "TA Buf" temporary;
+    begin
+        Ref.GetTable(Tmp);
+        Ref.Modify();
+    end;
+
+    // With branching: the "only ever opened temporary" pass.
+    procedure AliasOpenTemp(B: Boolean)
+    var
+        RR: RecordRef;
+        A: RecordRef;
+        Phys: Record "TA Buf";
+    begin
+        if B then
+            exit;
+        RR.Open(Database::"TA Buf", true);
+        A := RR;
+        A.GetTable(Phys);
+        RR.Insert();
+    end;
+
+    procedure NoAliasOpenTemp(B: Boolean)
+    var
+        RR: RecordRef;
+    begin
+        if B then
+            exit;
+        RR.Open(Database::"TA Buf", true);
+        RR.Insert();
+    end;
+
+    // The same pass, the RecordRef passed on by a quoted name.
+    procedure QuotedPassOpenTemp(B: Boolean)
+    var
+        "My RR": RecordRef;
+    begin
+        if B then
+            exit;
+        "My RR".Open(Database::"TA Buf", true);
+        Rebind("My RR");
+        "My RR".Insert();
+    end;
+
+    local procedure Rebind(var R: RecordRef)
+    var
+        Phys: Record "TA Buf";
+    begin
+        R.GetTable(Phys);
+    end;
+
+    // No branching, the RecordRef passed to a call that rebinds it (the orchestrator's shape).
+    procedure HelperOpenTemp()
+    var
+        RR: RecordRef;
+    begin
+        RR.Open(Database::"TA Buf", true);
+        Rebind(RR);
+        RR.Modify();
+    end;
+
+    procedure HelperGetTable()
+    var
+        Ref: RecordRef;
+        Tmp: Record "TA Buf" temporary;
+    begin
+        Ref.GetTable(Tmp);
+        Rebind(Ref);
+        Ref.Modify();
+    end;
+
+    // No branching, the RecordRef assigned a new one (no alias: the value is a call).
+    procedure AssignedFromCall()
+    var
+        Ref: RecordRef;
+        Tmp: Record "TA Buf" temporary;
+    begin
+        Ref.GetTable(Tmp);
+        Ref := PhysRef();
+        Ref.Modify();
+    end;
+
+    // sol on ENG-145, the temp derivation: `this.TG` passed on, two parameters a caller may
+    // alias, an array slot.
+    procedure ThisGlobalTemp()
+    var
+        Tmp: Record "TA Buf" temporary;
+    begin
+        TG.GetTable(Tmp);
+        Rebind(this.TG);
+        TG.Modify();
+    end;
+
+    procedure VictimTemp(var A: RecordRef; var B: RecordRef)
+    var
+        Tmp: Record "TA Buf" temporary;
+        Phys: Record "TA Buf";
+    begin
+        A.GetTable(Tmp);
+        B.GetTable(Phys);
+        A.Modify();
+    end;
+
+    procedure ArraySlotTemp()
+    var
+        Ref: RecordRef;
+        Slot: array[1] of RecordRef;
+        Tmp: Record "TA Buf" temporary;
+        Phys: Record "TA Buf";
+    begin
+        Ref.GetTable(Tmp);
+        Slot[1] := Ref;
+        Slot[1].GetTable(Phys);
+        Ref.Modify();
+    end;
+
+    local procedure PhysRef(): RecordRef
+    var
+        R: RecordRef;
+        Phys: Record "TA Buf";
+    begin
+        R.GetTable(Phys);
+        exit(R);
+    end;
+}
+"#;
+
+#[test]
+fn a_recordref_alias_keeps_no_derived_temp_state() {
+    let t = tempfile::tempdir().unwrap();
+    let ws = t.path().join("ws");
+    std::fs::create_dir_all(ws.join("src")).unwrap();
+    std::fs::write(
+        ws.join("app.json"),
+        r#"{"id":"34343434-0000-4000-8000-000000000036","name":"TA","publisher":"t","version":"1.0.0.0"}"#,
+    )
+    .unwrap();
+    std::fs::write(ws.join("src/TA.al"), TEMP_ALIAS).unwrap();
+    let answer = |routine: &str| -> String {
+        let out = Command::new(env!("CARGO_BIN_EXE_alsem"))
+            .arg("prove")
+            .arg(&ws)
+            .args([routine, "writes-table:TA Buf", "--deterministic"])
+            .env("RUST_LOG", "off")
+            .output()
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&out.stdout)
+            .unwrap_or_else(|e| panic!("{e}: {}", String::from_utf8_lossy(&out.stderr)));
+        v["payload"]["result"]["answer"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string()
+    };
+    // An alias (or a quoted pass to a call that rebinds it) may make the record physical: the
+    // write is not ruled out by a temporary state.
+    for routine in ["AliasGetTable", "AliasOpenTemp", "QuotedPassOpenTemp"] {
+        assert_eq!(answer(routine), "unknown", "{routine}");
+    }
+    // The no-branching pass, the RecordRef passed to a call or assigned: the same one rule.
+    for routine in ["HelperOpenTemp", "HelperGetTable", "AssignedFromCall"] {
+        assert_eq!(answer(routine), "unknown", "{routine}");
+    }
+    // sol on ENG-145: `this.TG`, two parameters a caller may alias, an array slot.
+    for routine in ["ThisGlobalTemp", "VictimTemp", "ArraySlotTemp"] {
+        assert_eq!(answer(routine), "unknown", "{routine}");
+    }
+    // Controls: no alias, the record stays temporary.
+    for routine in ["NoAliasGetTable", "NoAliasOpenTemp"] {
+        assert_eq!(answer(routine), "no", "{routine}");
     }
 }

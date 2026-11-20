@@ -1872,54 +1872,33 @@ fn facts_of(r: &ModelRoutine, obj_in_place: &HashSet<String>) -> Facts {
             ));
         }
     }
-    // Union-find over the alias assignments: name -> parent.
-    let mut class: HashMap<String, String> = HashMap::new();
-    fn find(class: &HashMap<String, String>, x: &str) -> String {
-        let mut cur = x.to_string();
-        while let Some(p) = class.get(&cur) {
-            if *p == cur {
-                break;
-            }
-            cur = p.clone();
-        }
-        cur
-    }
-    let mut alias_at: Vec<(String, (u32, u32))> = Vec::new();
+    // The alias classes (one source, ENG-145: `program::model::recref_alias`).
+    let classes = crate::program::model::recref_alias::AliasClasses::of(&r.var_assignments, |n| {
+        f.tracked.contains_key(n)
+    });
     for a in &r.var_assignments {
         let l = lc(&a.lhs_name);
         if !f.tracked.contains_key(&l) {
             continue;
         }
         let part = match (&a.rhs_identifier, &a.rhs_member) {
-            (Some(w), _) => {
-                let w = lc(w);
-                if f.tracked.contains_key(&w) {
-                    class.entry(l.clone()).or_insert_with(|| l.clone());
-                    class.entry(w.clone()).or_insert_with(|| w.clone());
-                    let (rl, rw) = (find(&class, &l), find(&class, &w));
-                    class.insert(rl, rw);
-                    alias_at.push((
-                        l.clone(),
-                        (a.source_anchor.start_line, a.source_anchor.start_column),
-                    ));
-                }
-                Part::Copy(w)
-            }
+            (Some(w), _) => Part::Copy(lc(w)),
             (None, Some((w, m))) if m == "duplicate" => Part::Copy(lc(w)),
             _ => Part::Atoms(top()),
         };
         let at = (a.source_anchor.start_line, a.source_anchor.start_column);
         f.fixed.push((l, part, Some(at)));
     }
-    if !alias_at.is_empty() {
-        let names: Vec<String> = class.keys().cloned().collect();
-        for root in names
-            .iter()
-            .map(|n| find(&class, n))
+    if !classes.assignments.is_empty() {
+        for root in classes
+            .names()
+            .map(|n| classes.root(n))
             .collect::<HashSet<_>>()
         {
-            let members: Vec<&String> = names.iter().filter(|n| find(&class, n) == root).collect();
-            let assigns: Vec<(u32, u32)> = alias_at
+            let owned = classes.members(&root);
+            let members: Vec<&String> = owned.iter().collect();
+            let assigns: Vec<(u32, u32)> = classes
+                .assignments
                 .iter()
                 .filter(|(l, _)| members.contains(&l))
                 .map(|(_, p)| *p)
