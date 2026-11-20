@@ -229,6 +229,25 @@ codeunit 50434 "GE Mgt"
         Guarded(R);
     end;
 
+    // The same with R handed to a Variant first (one handle, so one alias class), as
+    // RunReportID does: the class takes the ID's sources too.
+    procedure OwnIdAliasedRoot()
+    var
+        R: RecordRef;
+        F: RecordRef;
+        E: Record "GE Entry";
+        V: Variant;
+        Id: RecordId;
+    begin
+        R.GetTable(E);
+        F.GetTable(E);
+        V := R;
+        Id := R.RecordId;
+        R := F.Duplicate();
+        R.Get(Id);
+        Guarded(R);
+    end;
+
     // The ID written by a `foreach`: it may be any record's.
     procedure OwnIdForeachRoot()
     var
@@ -635,6 +654,7 @@ fn a_recordref_get_moves_the_table_for_every_reader() {
     // A Get with its own record ID keeps the table the ID was taken from; an ID a `foreach`, a
     // call or a function writes, or an alias in between, may move it anywhere.
     assert_eq!(answer("OwnIdRoot", "GE Log"), "no");
+    assert_eq!(answer("OwnIdAliasedRoot", "GE Log"), "no");
     assert_eq!(answer("OwnIdForeachRoot", "GE Log"), "yes");
     assert_eq!(answer("OwnIdPassedRoot", "GE Log"), "yes");
     assert_eq!(answer("OwnIdComputedRoot", "GE Log"), "yes");

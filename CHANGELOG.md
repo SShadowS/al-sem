@@ -218,10 +218,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   It is replaced by `get_id_sources`: `R.Get(Id)` takes the table of every `X` in `Id :=
   X.RecordId` when `Id` is a local that only such assignments write, is passed to no call and
   is no `for`/`foreach` variable. Anything else moves R to any table. In the flow's summaries,
-  which read a variable over its whole routine, that covers X wherever `Id` was taken; an
-  alias in between still reaches every member (`R := O`: O may hold anything). This is the CDO
-  shape of `RunReportID`: `SavedRecID := RecRef.RecordId; RecRef := RecRefFilter.Duplicate();
-  RecRef.Get(SavedRecID)`. ENG-161's reads at a position must read such a copy where `Id` was
+  which read a variable over its whole routine, that covers X wherever `Id` was taken. The
+  `Get` moves the shared handle, so every member of R's alias class takes the same tables
+  (`R := O` before the `Get`: O takes R's, the caller's included). This is the CDO shape of
+  `RunReportID`, which also hands RecRef to a Variant first: `SavedRecID := RecRef.RecordId;
+  RecRef := RecRefFilter.Duplicate(); RecRef.Get(SavedRecID)`. With "anything" for that class
+  (an intermediate state of this change), IssueReminder lost every table literal arguments
+  ruled out (may write 201 → 422 tables, ruled out 274 → 0); with the sources it is back to
+  201 and 274 (bisected per commit on CDO, 2026-11-20). ENG-161's reads at a position must read such a copy where `Id` was
   taken, not at the `Get`.
 - **The same reviews found older holes of the same kind** (the `GetTable` form fails on master
   too), now closed:
@@ -253,7 +257,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     array check → `LocalSlotGet`;
   - `get_id_sources` itself → `OwnIdRoot` (`yes`); its `foreach` check → `OwnIdForeachRoot`;
     its call check → `OwnIdPassedRoot`; its assignment check → `OwnIdComputedRoot`; its
-    locals-only check → `OwnIdGlobalRoot`; the alias class's `Get` → `OwnIdAliasRoot`.
+    locals-only check → `OwnIdGlobalRoot`; the alias class's `Get` → `OwnIdAliasRoot`; the
+    alias class taking the sources → `OwnIdAliasedRoot` (`yes`).
 
   On a parameter, a `Get` before its guard (`GetBeforeGuardRoot`) is right on master too: the
   caller's argument reads the callee's write-back over the whole routine. On a local nothing

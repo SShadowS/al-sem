@@ -1928,10 +1928,20 @@ fn facts_of(r: &ModelRoutine, obj_in_place: &HashSet<String>) -> Facts {
     for site in &sites {
         let x = lc(site.receiver);
         if f.tracked.contains_key(&x) {
-            in_place.entry(x).or_default().push((
-                (site.anchor.start_line, site.anchor.start_column),
-                in_place_part(site),
-            ));
+            let at = (site.anchor.start_line, site.anchor.start_column);
+            // A `Get` whose record ID's sources the routine names moves the shared handle to
+            // one of their tables, for every member of the class alike (Continia DO's
+            // `RunReportID` hands its RecRef to a Variant before `RecRef.Get(SavedRecID)`).
+            let parts = match (site.how, site.call) {
+                (RecRefBind::Get, None) => get_id_sources(r, site)
+                    .map(|xs| xs.into_iter().map(Part::Copy).collect::<Vec<_>>()),
+                _ => None,
+            }
+            .unwrap_or_else(|| vec![in_place_part(site)]);
+            let entry = in_place.entry(x).or_default();
+            for part in parts {
+                entry.push((at, part));
+            }
         }
     }
     // The alias classes (one source, ENG-145: `program::model::recref_alias`).
