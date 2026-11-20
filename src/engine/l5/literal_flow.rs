@@ -64,23 +64,6 @@ use std::sync::Arc;
 /// The most values a variable's set holds before it counts as unknown.
 const MAX_SET: usize = 16;
 
-/// The platform methods that write a variable passed to them (besides a
-/// `var` parameter of a resolved routine): `Evaluate(var X, ..)`, `Clear(X)`,
-/// `Dictionary.Get(K, var V)`, `InStream.Read(var X)`, `StartSession(var
-/// Id, ..)`, `JsonToken.SelectToken(.., var T)` and their kin. A variable
-/// passed to any other platform method keeps its value.
-pub(super) const WRITING_BUILTINS: &[&str] = &[
-    "evaluate",
-    "clear",
-    "get",
-    "read",
-    "readfrom",
-    "startsession",
-    "selecttoken",
-    "selectsinglenode",
-    "trygetvalue",
-];
-
 /// The domain a tracked variable's values are compared in.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum FDom {

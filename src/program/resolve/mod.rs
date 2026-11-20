@@ -26,6 +26,7 @@ pub mod index;
 pub mod interface_holder;
 pub mod member_catalog;
 pub mod method_id;
+pub mod platform_writes;
 pub mod reads;
 pub mod receiver;
 pub mod recordref_returns;

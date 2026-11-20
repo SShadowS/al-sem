@@ -783,6 +783,111 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - The owner can confirm that no new entry appears in `coredumpctl list` after a debug test
     run.
 
+### Fixed (ENG-135: literal pruning knows every platform method's `var` parameters, from the compiler)
+
+- **The wrong answer** (found by Fable reviewing ENG-30; older, on master). A parameter bound to a
+  caller's literal kept it while a platform method wrote it through a `var`, so `case` arms that
+  run were pruned: `prove` answered a wrong `no`. E1 (literal binding) took only `Evaluate` and
+  `Clear` as writers of an Integer, Option or Enum argument (`D.Get(1, I)`, `InStream.Read(O)`,
+  `L.Get(1, K)` were missed), the guard frames the same pair for Booleans, and E2 (the
+  within-routine flow) a 9-name hand list that missed e.g. `Dictionary.Set(K, V, var Old)`.
+- **The fix.** `tools/gen-al-var-params` reads every built-in method's parameters from the AL
+  compiler's own symbols (alc 18.0.41's `Microsoft.Dynamics.Nav.CodeAnalysis.dll`: each built-in
+  class's members, `IParameterSymbol.IsVar`; 101 classes, 1,752 overloads, 796 names, 86 with a
+  `var`) and generates `program/resolve/platform_var_params.rs`. ONE query,
+  `platform_writes::may_write_arg(method, k)`, answers for every reader: E1, E2 and the guard
+  frames. It replaces E1's `Evaluate`/`Clear` pair, the guard frames' pair, E2's
+  `WRITING_BUILTINS` and ENG-30's 15-name Text read-only list. An argument counts as written when
+  any overload of that name, on any class, takes it as `var` (a call site may not know its
+  receiver's type); a name the compiler does not list may write anything.
+- **`#if` arms (sol).** A routine's frames (guard, value, table) keep the parameters usable in
+  EVERY arm, but an arm with none usable had no frame and was skipped instead of merged, so a
+  parameter only that arm writes stayed bound. It now merges as an empty frame; a frame left with
+  nothing usable is dropped. The capability cone's own guard frames (`capability_cone::
+  guard_frames`, which `prove` reads for a Boolean passed on to a callee) merged arms the same
+  way and are fixed the same way; this was older than ENG-135, and ENG-135 makes it fire more often
+  (an arm that writes a Boolean through a platform `var` now has no frame). The RecordRef flow
+  (`recref_flow`, G34: the tables a RecordRef or a record in a Variant may hold) mapped a call to
+  ONE row of its routine per edge source (the last row by id, the first by stable id), so a
+  routine in three or more arms had its middle arms ignored: a `var` RecordRef only the middle arm
+  sets kept the other arms' tables, and a `R.Number` exit guard pruned code that runs (older than
+  ENG-135); a call now targets every row, and its summaries are the union. The literal
+  pruning read a call's argument tables from that flow in the caller's FIRST row
+  (`RecRefFlow::index_of`), not the row holding the call site, so a Variant the second arm
+  reassigns still reached the callee with the caller's record; it now reads the holding row
+  (`RecRefFlow::index_of_row`). E2 needs no change:
+  each arm numbers its call sites after the earlier arms, so the first arm's flow program never
+  answers for another arm's site.
+- **A reassigned Variant forwarded its caller's record (older, no arms needed).** When a
+  routine passes on a Variant parameter, the callee's table frame took the table the routine got
+  on entry. That is right only when the routine never changes the parameter, which its own table
+  frame checks; but the value flow (G34) also binds a routine's parameters on entry, reassigned or
+  not. So `Pass(V)` doing `V := Other(); Leaf(V)` (a value the flow cannot follow) still sent the
+  caller's record to `Leaf`, and `prove` pruned a `case RecRef.Number` arm that runs (`no` on
+  master). The within-routine flow (E2) had the same gap: after `Evaluate(I, '2')` the caller's
+  flow knows nothing of `I`, and the binding fell back to `I`'s entry value (sol, round 2). Each
+  row now records the parameters it provably never changes (`values::kept_params`: by-value,
+  never assigned, not a loop variable, passed to no call that may write it, the value frame's
+  own rules without its domain), and an entry value, table or flow, is forwarded only for those;
+  the value flow still decides wherever it knows the new value. A write through an ALIAS is not
+  a write of the parameter (`R := V; R.GetTable(X)` rebinds the reference `V` holds), so the value
+  flow (G34) decides every parameter it finds relevant: its tables replace the table frame's, and
+  when it cannot establish them the parameter is unbound instead of keeping the entry table (sol
+  round 7).
+- **A quoted argument hid a write (older, sol rounds 3 and 4).** The readers that need a
+  parameter unchanged found its calls through `argument_bindings` alone, which recorded only
+  unquoted names: `D.Get(1, "B")` or `Evaluate("I", '2')` wrote the parameter through an argument
+  recorded as an expression, so it stayed bound. ENG-30's fix (below it in the stack) makes a
+  quoted name bind and adds the shared rule `param_guard::passes_param_unsafely` (bound, or the
+  argument text is the parameter's name, for an argument under `with`); ENG-135's own reader,
+  the kept-parameter rule, uses it too. ENG-135's tests pin the cases: `QIntRoot`, `QBoolRoot`,
+  `QFlowRoot`, `QVarRoot`, E2's publisher keep check (`SubRoot`: a loaded subscriber writing its
+  `var` through `Evaluate("Value", ..)`) and the round-4 literal routes' Variant test
+  (`explain` keeps a `not V.IsRecord` rule for a Variant a `var` call replaced). The publisher
+  keep check also read ONE row of each subscriber (the last
+  by id): a subscriber declared in two `#if` arms, only one changing its `var`, was taken as
+  keeping it. It now requires every row of every subscriber to keep the parameter (sol round 5),
+  and checks every name the publisher's rows give the parameter, since a subscriber binds it by
+  name and two arms may name it differently (sol round 6).
+- **What moves.** Precision is LOST where the old lists said "keeps its value" wrongly (correct),
+  and gained where ENG-30's Text rule unbound a parameter passed to a read-only function outside
+  its 15 names (`DelStr`, `StrLen`'s kin). Measured on CDO (`bc3ccb18`) with
+  `aldump --literal-pruning-stats`, release-fast, ENG-30 (`d6cba139`) against ENG-135
+  (`3d707d3c`; the final head differs only in tests and this file), 34,203 routines:
+
+  | | ENG-30 | ENG-135 |
+  |---|---:|---:|
+  | guard frames: usable parameters | 4,178 | 3,215 |
+  | guard frames: parameters unusable by a write | 4 | 967 |
+  | guard frames: routines with a frame | 3,263 | 2,481 |
+  | value frames: usable parameters | 7,876 | 7,988 |
+  | — by domain: Enum / Integer / Code / Text | 763 / 3,105 / 2,469 / 1,539 | 763 / 3,105 / 2,478 / 1,642 |
+  | value frames: parameters unusable by a write | 5,892 | 5,780 |
+  | flow: parameters bound | 526 | 910 |
+  | one hop: calls binding a parameter (of 63,795) | 7,074 | 6,806 |
+  | one hop: dead sites | 6,616 | 5,602 |
+  | — by guard / value / flow | 2,106 / 4,051 / 5,427 | 980 / 4,058 / 5,427 |
+
+  The compiler's var-ness makes 963 guard parameters unusable (a platform call that may write
+  them), so 1,126 fewer call sites are proven dead by a guard: the old guards trusted a
+  parameter a `var` platform call can change. The value frames and the flow gain where the
+  compiler shows a platform parameter is by value (112 more usable values, 384 more bound flow
+  parameters). Peak RSS 3.65 / 3.64 GB.
+  The CDO rendering goldens (`output_cdo`) move for `IssueReminder` and `RunReportID`: 3 more tables
+  each beyond dependency calls (`Interaction Merge Data`, `Privacy Notice`, `Privacy Notice
+  Approval`; 198 -> 201 and 413 -> 416 tables, on ENG-30's counts), a few more temporary-only ones, and one
+  representative path. Bisected to ENG-135's own rule: `Word Template Interactions` calls
+  `WordTemplate.Merge(.., EditDoc)` inside Base Application; the literal pruning's call targets
+  hold workspace callers only, so that call has none and counts as a possible writer of `EditDoc`.
+  The old rule assumed such a call writes nothing (right for this `Merge`, unsound in general).
+  ENG-137 (dependency-internal calls get their real targets) wins this back.
+- **Pinned by** `cli_eng135_platform_writers` (an Integer through `Dictionary.Get`, an Option
+  through `InStream.Read`, an Enum through `List.Get`, a local through `Dictionary.Set`: every arm
+  live, each read seeded so the written value is real; a parameter only the compiled `#if` arm
+  writes reaches every arm of its callee; a Text through `DelStr` keeps its literal) and
+  `platform_writes::tests` (the table sorted;
+  the compiler's answers on the old lists' names; an unlisted name writes).
+
 ### Added (ENG-30: built-in option types and Text/Code literals prune `case` and `if` arms)
 
 - **The gap (engine limits L4, L29).** The literal reach prunes an arm a bound parameter value

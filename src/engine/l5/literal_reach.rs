@@ -1097,41 +1097,23 @@ fn walk_tables(
     }
 }
 
-/// The platform functions known not to write a Text or Code argument: alc
-/// 18.0.41 compiles each with literals in every position, and refuses a
-/// literal where a `var` is wanted (AL0130, checked on `Evaluate`). Many
-/// platform methods do write a text through a `var` (`InStream.ReadText`,
-/// `HttpContent.ReadAs`, `Dictionary.Get`, `JsonObject.WriteTo`, …), so for
-/// Text and Code every other one is taken to write (ENG-30).
-const TEXT_READ_ONLY_BUILTINS: &[&str] = &[
-    "strlen",
-    "copystr",
-    "uppercase",
-    "lowercase",
-    "strpos",
-    "format",
-    "strsubstno",
-    "delchr",
-    "padstr",
-    "selectstr",
-    "convertstr",
-    "incstr",
-    "message",
-    "error",
-    "confirm",
-];
-
 /// r3 E1: whether call site `cs_id` of `r` passes argument `arg` by value: every
 /// routine it reaches takes that parameter by value, or, reaching none, the
-/// resolver classified it as a platform method that does not write it: for a
-/// Text or Code argument (`text`) one of [`TEXT_READ_ONLY_BUILTINS`], else one
-/// other than `Evaluate` and `Clear`. A call the resolver did not resolve may
-/// write it.
+/// resolver classified it as a platform method that the compiler's table says
+/// takes that argument by value, for every type
+/// ([`platform_writes`](crate::program::resolve::platform_writes), ENG-135; it
+/// replaced ENG-30's Text/Code read-only list and the `Evaluate`/`Clear` pair). A
+/// call the resolver did not resolve may write it.
+/// A model row's key in maps kept per row (two `#if` arms of one routine share its ids, so the
+/// row's own address names it).
+fn row_key(r: &ModelRoutine) -> usize {
+    r as *const ModelRoutine as usize
+}
+
 fn value_passes_by_value(
     r: &ModelRoutine,
     cs_id: &str,
     arg: u32,
-    text: bool,
     callees: &HashMap<&str, Vec<&str>>,
     builtin_sites: &HashSet<&str>,
     by_id: &HashMap<&str, &ModelRoutine>,
@@ -1153,15 +1135,12 @@ fn value_passes_by_value(
                 .iter()
                 .find(|c| c.id == cs_id)
                 .map(|c| match &c.callee {
-                    PCallee::Bare { name } => name.fold_identifier(),
-                    PCallee::Member { method, .. } => method.fold_identifier(),
-                    _ => String::new(),
+                    PCallee::Bare { name } => name.as_str(),
+                    PCallee::Member { method, .. } => method.as_str(),
+                    _ => "",
                 })
                 .unwrap_or_default();
-            if text {
-                return TEXT_READ_ONLY_BUILTINS.contains(&name.as_str());
-            }
-            !matches!(name.as_str(), "evaluate" | "clear")
+            !crate::program::resolve::platform_writes::may_write_arg(name, arg)
         }
     }
 }
@@ -1219,6 +1198,11 @@ fn build_flow<'a>(
             .push(e.subscriber_routine_id.as_str());
     }
     let mut keep_info: Vec<KeepInfo> = Vec::new();
+    // Every model row of an id (two `#if` arms of one routine share it), for the subscribers.
+    let mut rows_by_id: HashMap<&str, Vec<&ModelRoutine>> = HashMap::new();
+    for r in &model.workspace.routines {
+        rows_by_id.entry(r.id.as_str()).or_default().push(r);
+    }
     let universe = universe_words(model);
     let mut verdicts: HashMap<(&str, u32), Option<u32>> = HashMap::new();
     // ENG-117: iterated only by an OR fixpoint (order-free) and per entry.
@@ -1239,13 +1223,14 @@ fn build_flow<'a>(
                     .iter()
                     .find(|c| c.id == cs)
                     .map(|c| match &c.callee {
-                        PCallee::Bare { name } => name.fold_identifier(),
-                        PCallee::Member { method, .. } => method.fold_identifier(),
-                        _ => String::new(),
+                        PCallee::Bare { name } => name.as_str(),
+                        PCallee::Member { method, .. } => method.as_str(),
+                        _ => "",
                     })
                     .unwrap_or_default();
-                return lflow::WRITING_BUILTINS
-                    .contains(&name.as_str())
+                // ENG-135: the compiler's var-ness of this argument, in place of a hand
+                // list of writing methods (which also havocked every argument of one).
+                return crate::program::resolve::platform_writes::may_write_arg(name, j)
                     .then_some(ArgWrite::Havoc);
             }
             let mut keep: Option<u32> = None;
@@ -1271,6 +1256,7 @@ fn build_flow<'a>(
                         &subs,
                         &unbound,
                         by_id,
+                        &rows_by_id,
                         callees,
                         builtin_sites,
                     )
@@ -1411,6 +1397,7 @@ fn keep_verdict(
     subs: &HashMap<&str, Vec<&str>>,
     unbound: &HashSet<String>,
     by_id: &HashMap<&str, &ModelRoutine>,
+    rows_by_id: &HashMap<&str, Vec<&ModelRoutine>>,
     callees: &HashMap<&str, Vec<&str>>,
     builtin_sites: &HashSet<&str>,
 ) -> Option<KeepInfo> {
@@ -1418,21 +1405,42 @@ fn keep_verdict(
         return None;
     }
     let p = c.parameters.iter().find(|p| p.index == j)?;
-    let name = values::fold(&p.name);
+    // A subscriber binds the publisher's parameters by NAME, and a publisher declared in two
+    // `#if` arms may name parameter `j` differently in each: check every arm's name, each a
+    // `var` (sol round 6, ENG-135).
+    let mut names: Vec<String> = Vec::new();
+    for row in rows_by_id.get(c.id.as_str()).map_or(&[][..], Vec::as_slice) {
+        let q = row.parameters.iter().find(|q| q.index == j)?;
+        if !q.is_var {
+            return None;
+        }
+        names.push(values::fold(&q.name));
+    }
+    if names.is_empty() {
+        names.push(values::fold(&p.name));
+    }
+    names.sort();
+    names.dedup();
     if unbound.contains(&al_syntax::fold_identifier(&c.name)) {
         return None;
     }
     let id = crate::program::model::events::encode_event_id(&c.object_id, &c.name);
+    // Every row of every subscriber (a subscriber declared in two `#if` arms is two rows with
+    // one id; any arm's build may run): each must keep the parameter (sol round 5, ENG-135).
     for sid in subs.get(id.as_str()).into_iter().flatten() {
-        let s = by_id.get(sid)?;
-        if !s.body_available || s.statement_tree.is_none() {
-            return None;
-        }
-        let passes = |cs: &str, a: u32| {
-            value_passes_by_value(s, cs, a, false, callees, builtin_sites, by_id)
-        };
-        if lflow::subscriber_changes(s, &name, &passes) {
-            return None;
+        let rows = rows_by_id.get(sid)?;
+        for &s in rows {
+            if !s.body_available || s.statement_tree.is_none() {
+                return None;
+            }
+            let passes =
+                |cs: &str, a: u32| value_passes_by_value(s, cs, a, callees, builtin_sites, by_id);
+            if names
+                .iter()
+                .any(|name| lflow::subscriber_changes(s, name, &passes))
+            {
+                return None;
+            }
         }
     }
     Some(KeepInfo {
@@ -1700,6 +1708,9 @@ pub(crate) struct LiteralReach<'a> {
     site_rows: FxHashMap<&'a str, &'a ModelRoutine>,
     /// Every row of a routine with several rows (stable id), in row order.
     arm_rows: HashMap<&'a str, Vec<&'a ModelRoutine>>,
+    /// Per model row ([`row_key`]): the parameters it provably never changes
+    /// ([`values::kept_params`]), the only ones whose entry value a call forwards.
+    kept: FxHashMap<usize, Vec<u32>>,
     frames: FxHashMap<&'a str, FrameGuards>,
     tables: HashMap<&'a str, TableFrame>,
     /// r3 E1: per routine (stable id) its value frame ([`values`]).
@@ -2183,6 +2194,8 @@ impl<'a> LiteralReach<'a> {
         let mut frames = FxHashMap::default();
         let mut tables = HashMap::new();
         let mut value_frames = FxHashMap::default();
+        // Per model row (by address): the parameters it provably never changes.
+        let mut kept: FxHashMap<usize, Vec<u32>> = FxHashMap::default();
         let mut by_stable = HashMap::new();
         let mut op_owner = FxHashMap::default();
         let mut rows_per_stable: HashMap<&str, usize> = HashMap::new();
@@ -2214,7 +2227,14 @@ impl<'a> LiteralReach<'a> {
             }
             let callees_at =
                 |cs: &str| -> Vec<&str> { callees.get(cs).cloned().unwrap_or_default() };
-            if let Some(f) = frame_guards_over(r, callees_at, &by_id) {
+            // A routine's frames take the parameters usable in EVERY row: a row with none
+            // usable (no frame) merges as an empty frame, not as no row at all, or a
+            // parameter another row writes would stay bound (sol, ENG-135). Frames left with
+            // nothing usable are dropped after the loop.
+            let multi = rows_per_stable[r.stable_routine_id.as_str()] > 1;
+            if let Some(f) = frame_guards_over(r, callees_at, &by_id)
+                .or_else(|| multi.then(FrameGuards::default))
+            {
                 // Engine limits B2: a routine's rows (its `#if` arms) each have
                 // their own sites; its frame holds every row's sites (a shared
                 // site: the LAST row's requirements) and the guard parameters
@@ -2230,7 +2250,7 @@ impl<'a> LiteralReach<'a> {
                     }
                 }
             }
-            if let Some(t) = table_frame(r) {
+            if let Some(t) = table_frame(r).or_else(|| multi.then(TableFrame::default)) {
                 // As the frame: every row's sites, the parameters usable in
                 // every row.
                 match tables.entry(r.stable_routine_id.as_str()) {
@@ -2244,13 +2264,16 @@ impl<'a> LiteralReach<'a> {
                     }
                 }
             }
-            let passes_by_value = |cs_id: &str, arg: u32, text: bool| {
-                value_passes_by_value(r, cs_id, arg, text, &callees, &builtin_sites, &by_id)
+            let passes_by_value = |cs_id: &str, arg: u32| {
+                value_passes_by_value(r, cs_id, arg, &callees, &builtin_sites, &by_id)
             };
             let resolve = |l: &crate::program::body::features::ValueLabel| {
                 values::resolve_label(r, &tables_by_id, l)
             };
-            if let Some(v) = values::value_frame(r, passes_by_value, &resolve) {
+            kept.insert(row_key(r), values::kept_params(r, passes_by_value));
+            if let Some(v) = values::value_frame(r, passes_by_value, &resolve)
+                .or_else(|| multi.then(values::ValueFrame::default))
+            {
                 match value_frames.entry(r.stable_routine_id.as_str()) {
                     std::collections::hash_map::Entry::Vacant(e) => {
                         e.insert(v);
@@ -2274,6 +2297,11 @@ impl<'a> LiteralReach<'a> {
                 op_owner.insert(cs.id.as_str(), r.stable_routine_id.as_str());
             }
         }
+        // A merged frame with nothing usable binds nothing: drop it (as a single row with no
+        // usable parameter has none).
+        frames.retain(|_, f: &mut FrameGuards| !f.usable.is_empty());
+        tables.retain(|_, t: &mut TableFrame| !t.usable.is_empty());
+        value_frames.retain(|_, v: &mut values::ValueFrame| !v.usable.is_empty());
         let (flow_progs, flow_bind, keep_info) = build_flow(
             model,
             &by_id,
@@ -2369,6 +2397,7 @@ impl<'a> LiteralReach<'a> {
             by_stable,
             site_rows,
             arm_rows,
+            kept,
             frames,
             tables,
             value_frames,
@@ -2642,6 +2671,9 @@ impl<'a> LiteralReach<'a> {
                 .find(|x| x.parameter_index == j && x.source_kind == "parameter")
                 .and_then(|x| x.source_parameter_index)
         };
+        // Whether the row holding the call never changes its parameter `i`: only then is the
+        // entry value it was bound to still the value it forwards (sol, ENG-135).
+        let caller_keeps = |i: u32| self.kept.get(&row_key(r)).is_some_and(|k| k.contains(&i));
         // r3 E2: what the caller's flow knows of each argument at this call
         // (its locals, a parameter it changed, a derived value).
         let caller_flow = self
@@ -2690,8 +2722,11 @@ impl<'a> LiteralReach<'a> {
                     .and_then(|id| self.table_names.get(id))
                     .map(|t| TSet::from([Arc::clone(t)]))
             });
+            // A forwarded parameter holds its entry table only if the caller never changes it.
+            // `b.tables` may also carry one the value flow (G34) bound on entry and the caller
+            // then reassigns or passes to a `var` (ENG-135).
             let table = own.or_else(|| {
-                forwarded(j).and_then(|i| {
+                forwarded(j).filter(|&i| caller_keeps(i)).and_then(|i| {
                     b.tables
                         .iter()
                         .find(|(k, _)| *k == i)
@@ -2752,7 +2787,11 @@ impl<'a> LiteralReach<'a> {
                             .map(|v| Arc::from([v])),
                     }
                 })
-                .or_else(|| forwarded(*j).and_then(|i| b.entry_value(i)))
+                .or_else(|| {
+                    forwarded(*j)
+                        .filter(|&i| caller_keeps(i))
+                        .and_then(|i| b.entry_value(i))
+                })
                 // Round-4 literal routes: a Variant parameter holds the
                 // static type of the caller's variable passed to it (the
                 // implicit `Rec` included).
@@ -2781,10 +2820,16 @@ impl<'a> LiteralReach<'a> {
         }
         // G34: what the value flow knows of the callee's relevant parameters
         // (G33's included, where it knows more), and of its instance's globals.
-        if let (Some(c), Some(fi)) = (ci, self.flow.index_of(caller)) {
+        // The row that holds the call site (an `#if` arm), not the caller's first row: the
+        // argument's tables are what THAT arm leaves in it (sol, ENG-135).
+        if let (Some(c), Some(fi)) = (ci, self.flow.index_of_row(r)) {
+            // G34 decides every relevant parameter: its tables replace the frame's, and when it
+            // cannot establish them (an alias rebound in place, `R := V; R.GetTable(X)`, or any
+            // value it cannot follow) the parameter is unbound, not left at a stale entry table
+            // (sol round 7, ENG-135).
             for &j in rel_params.into_iter().flatten() {
+                out.tables.retain(|(k, _)| *k != j);
                 if let Some(set) = self.flow.arg_tables(fi, cs, j, &b.tables, &b.globals) {
-                    out.tables.retain(|(k, _)| *k != j);
                     out.tables.push((j, set));
                 }
             }

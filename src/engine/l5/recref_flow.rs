@@ -251,13 +251,18 @@ const EVAL_DEPTH: usize = 48;
 impl<'a> RecRefFlow<'a> {
     pub(crate) fn new(model: &'a Model, edges: &'a [SnapshotGraphEdge]) -> Self {
         let routines = model.workspace.routines.as_slice();
-        let by_id: HashMap<&str, usize> = routines
-            .iter()
-            .enumerate()
-            .map(|(i, r)| (r.id.as_str(), i))
-            .collect();
+        // A call targets EVERY row of its routine (a routine declared in two `#if` arms is two
+        // rows with one id): one row's summary would miss what only the other arm does to a
+        // passed RecordRef or Variant (sol, ENG-135).
+        let mut rows_by_id: HashMap<&str, Vec<usize>> = HashMap::new();
+        let mut rows_by_stable: HashMap<&str, Vec<usize>> = HashMap::new();
         let mut by_stable = HashMap::new();
         for (i, r) in routines.iter().enumerate() {
+            rows_by_id.entry(r.id.as_str()).or_default().push(i);
+            rows_by_stable
+                .entry(r.stable_routine_id.as_str())
+                .or_default()
+                .push(i);
             by_stable.entry(r.stable_routine_id.as_str()).or_insert(i);
         }
         // A call's targets: the model's resolved calls (workspace callers) and
@@ -286,8 +291,12 @@ impl<'a> RecRefFlow<'a> {
                 }
                 _ => {}
             }
-            match e.to.as_deref().and_then(|to| by_id.get(to)) {
-                Some(&t) => push(e.callsite_id.as_str(), t),
+            match e.to.as_deref().and_then(|to| rows_by_id.get(to)) {
+                Some(rows) => {
+                    for &t in rows {
+                        push(e.callsite_id.as_str(), t);
+                    }
+                }
                 None => {
                     open_sites.insert(e.callsite_id.as_str());
                 }
@@ -313,8 +322,12 @@ impl<'a> RecRefFlow<'a> {
                 }
                 _ => continue,
             };
-            match by_stable.get(to.as_str()) {
-                Some(&t) => push(cs.as_str(), t),
+            match rows_by_stable.get(to.as_str()) {
+                Some(rows) => {
+                    for &t in rows {
+                        push(cs.as_str(), t);
+                    }
+                }
                 None => {
                     open_sites.insert(cs.as_str());
                 }
@@ -337,12 +350,18 @@ impl<'a> RecRefFlow<'a> {
         let mut subscribers: HashMap<usize, Vec<usize>> = HashMap::new();
         for e in edges {
             if let SnapshotGraphEdge::EventDispatch { from, to, .. } = e
-                && let (Some(&p), Some(&s)) =
-                    (by_stable.get(from.as_str()), by_stable.get(to.as_str()))
+                && let (Some(ps), Some(ss)) = (
+                    rows_by_stable.get(from.as_str()),
+                    rows_by_stable.get(to.as_str()),
+                )
             {
-                let v = subscribers.entry(p).or_default();
-                if !v.contains(&s) {
-                    v.push(s);
+                for &p in ps {
+                    let v = subscribers.entry(p).or_default();
+                    for &s in ss {
+                        if !v.contains(&s) {
+                            v.push(s);
+                        }
+                    }
                 }
             }
         }
@@ -942,6 +961,19 @@ impl<'a> RecRefFlow<'a> {
 
     pub(crate) fn index_of(&self, stable: &str) -> Option<usize> {
         self.by_stable.get(stable).copied()
+    }
+
+    /// The index of the model row `r` itself (one `#if` arm of its routine), when `r` is one of
+    /// the model's routines. A call site belongs to one row: its argument is read in that row's
+    /// facts, not in the first row's ([`Self::index_of`]).
+    pub(crate) fn index_of_row(&self, r: &ModelRoutine) -> Option<usize> {
+        let base = self.routines.as_ptr();
+        // Address arithmetic only (no unsafe): the result is checked to be that very row.
+        let off = (r as *const ModelRoutine as usize).checked_sub(base as usize)?;
+        let size = std::mem::size_of::<ModelRoutine>();
+        let i = off / size;
+        (off % size == 0 && i < self.routines.len() && std::ptr::eq(&self.routines[i], r))
+            .then_some(i)
     }
 
     pub(crate) fn routine(&self, i: usize) -> &'a ModelRoutine {

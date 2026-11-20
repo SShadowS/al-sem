@@ -246,6 +246,7 @@ mod cli_eng10_write_in_try;
 mod cli_eng12_record_ops;
 mod cli_eng131_event_fold;
 mod cli_eng131_grouping_fold;
+mod cli_eng135_platform_writers;
 mod cli_eng15_ext_triggers;
 mod cli_eng19_request_page_runs;
 mod cli_eng20_request_page_twin;
