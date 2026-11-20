@@ -33,8 +33,11 @@ if [[ -n "${CDO_HOST_SUSPENDED_FILE:-}" ]]; then
     fi
     exit 0
 fi
+# MONOTONIC first, then BOOTTIME, and never below 0 (review r4, sol): on a host
+# that never slept the two are equal, and the later read of the pair is the
+# larger, so BOOTTIME first gave -1, which every caller refused as unreadable.
 exec python3 -c 'import sys, time
-b = time.clock_gettime_ns(time.CLOCK_BOOTTIME)
 m = time.clock_gettime_ns(time.CLOCK_MONOTONIC)
-s = (b - m) // 10**9
+b = time.clock_gettime_ns(time.CLOCK_BOOTTIME)
+s = max(0, (b - m) // 10**9)
 print(f"{s} {b // 10**9} {m // 1000}" if sys.argv[1:] == ["--clocks"] else s)' "$@"

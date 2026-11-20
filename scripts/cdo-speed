@@ -247,7 +247,9 @@ def host_suspended():
         if hook:
             with open(hook) as f:
                 return float(f.read().split()[0])
-        return time.clock_gettime(time.CLOCK_BOOTTIME) - time.clock_gettime(time.CLOCK_MONOTONIC)
+        # MONOTONIC first, never below 0 (as `host-suspended`; review r4, sol).
+        m = time.clock_gettime(time.CLOCK_MONOTONIC)
+        return max(0.0, time.clock_gettime(time.CLOCK_BOOTTIME) - m)
     except (OSError, ValueError, IndexError, AttributeError):
         return None
 

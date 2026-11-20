@@ -20,7 +20,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `CLOCK_BOOTTIME` minus `CLOCK_MONOTONIC`. A rise between two readings is a suspend between
   them. With `--clocks` it prints the reading, `CLOCK_BOOTTIME` (wall time) and
   `CLOCK_MONOTONIC` (awake time) from one process. A reading and a clock read separately by
-  the caller could have a suspend fall between them (review r3, sol). Test hook
+  the caller could have a suspend fall between them (review r3, sol). It reads `CLOCK_MONOTONIC`
+  first and never prints below 0. On a host that never slept the two clocks are equal, and
+  reading `CLOCK_BOOTTIME` first gave -1, which every caller refused as unreadable: suspend
+  detection would have been off until the first sleep (review r4, sol). Test hook
   `CDO_HOST_SUSPENDED_FILE` (shared by the three scripts).
 - **cdo-speed** takes a first reading before it waits for the slot. It reads again before and
   after each timed call, and around the untimed rebuild. A rise of at least 1 s is logged

@@ -723,15 +723,16 @@ timed_start() {
     local now start last=-60 b list left_us nap_us quiet="" susp0="" susp mono="" slept=0 awake=""
     # The time base is chosen once: awake time if the first read works. A later
     # failed read keeps the last awake time (the wait only grows: the safe side).
+    # The awake clock is judged on its own (review r4, sol): a bad suspended
+    # field costs only the log line, never the time base.
     slot_clocks() {
-        local s _b m
-        if read -r s _b m < <(host_clocks) && [[ "$s" =~ ^[0-9]+$ && "$m" =~ ^[0-9]+$ ]] &&
-            [[ "$awake" != 0 ]]; then
-            susp=$s mono=$m awake=1
-        elif [[ "$awake" == 1 ]]; then
-            susp=""
-        else
-            susp="" mono=${EPOCHREALTIME//[!0-9]/} awake=0
+        local s="" _b m=""
+        read -r s _b m < <(host_clocks) || true
+        [[ "$s" =~ ^[0-9]+$ ]] && susp=$s || susp=""
+        if [[ "$m" =~ ^[0-9]+$ && "$awake" != 0 ]]; then
+            mono=$m awake=1
+        elif [[ "$awake" != 1 ]]; then
+            mono=${EPOCHREALTIME//[!0-9]/} awake=0
         fi
     }
     slot_clocks
