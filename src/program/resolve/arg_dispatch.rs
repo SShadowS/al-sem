@@ -2538,6 +2538,9 @@ fn implicitly_converts(arg: &CanonicalArgType, param: &CanonicalArgType) -> bool
 /// mix of `Variant` and other arguments, 0 or >1 exact matches with no sole
 /// applicable candidate) — the caller's existing `AmbiguousOverload`
 /// construction is UNCHANGED whenever this returns `None`.
+// Tests only; a `cfg(test)` gate here would end the production text the
+// harness's `resolve_object` allowlist scans.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn pick_candidate(
     args: &[ArgDispatchInfo],
     candidates: &[Vec<ParamDispatchInfo>],

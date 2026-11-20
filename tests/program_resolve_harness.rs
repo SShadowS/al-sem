@@ -8328,6 +8328,23 @@ fn resolve_module_pick_first_base_function_callers_are_a_known_allowlist() {
             "receiver.rs",
             "graph.resolve_object(o.id.app, ObjectKind::Interface, &b.fold_identifier())",
         ),
+        // ENG-142: the same base lookup for overload picking (`interface_binds`:
+        // does an interface argument derive from an interface parameter).
+        (
+            "arg_dispatch.rs",
+            "graph.resolve_object(o.id.app, ObjectKind::Interface, &b.fold_identifier())",
+        ),
+        // ENG-142: the implementer index's inheritance closure, by identity: each
+        // base from its declaring interface's app, and each implemented interface
+        // from its implementer's app. Semantic: an unresolvable name adds nothing.
+        (
+            "index.rs",
+            ".filter_map(|b| graph.resolve_object(d.id.app, iface, &b.fold_identifier()))",
+        ),
+        (
+            "index.rs",
+            "graph.resolve_object(obj.id.app, iface, &name.fold_identifier())",
+        ),
         // The query-column chain arm (S9.0e): a declared `Query` var's object,
         // the same lookup `resolve_member`'s `Object` arm makes for it; a
         // collision fails closed and the arm declines.
