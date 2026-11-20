@@ -11066,6 +11066,79 @@ codeunit 51399 "IfaceCaller1"
         }
     }
 
+    /// ENG-152: apps A and B each declare `IDup` and an implementer; the
+    /// workspace W depends on A only (B is loaded, out of W's sight). The
+    /// routes of a W call through `IDup`, `+B` when W also depends on B
+    /// (both visible: alc refuses that without namespaces, so the engine
+    /// over-approximates), `none` when W depends on neither (none visible:
+    /// every interface of the name, as a missing topology edge must not lose
+    /// targets).
+    fn idup_routes(edges: &[(&str, &str)]) -> Vec<String> {
+        use crate::program::resolve::receiver::ReceiverType;
+        const IDUP: &str = "interface IDup\n{\n    procedure Go();\n}\n";
+        let a: &'static str = "codeunit 52101 \"A Impl\" implements IDup\n{\n    procedure Go()\n    begin\n    end;\n}\n";
+        let b: &'static str = "codeunit 52201 \"B Impl\" implements IDup\n{\n    procedure Go()\n    begin\n    end;\n}\n";
+        let w: &'static str =
+            "codeunit 52001 \"W Caller\"\n{\n    procedure Run()\n    begin\n    end;\n}\n";
+        let units = [
+            make_unit(make_app_id("AppA"), "AIface.al", IDUP),
+            make_unit(make_app_id("AppA"), "AImpl.al", a),
+            make_unit(make_app_id("AppB"), "BIface.al", IDUP),
+            make_unit(make_app_id("AppB"), "BImpl.al", b),
+            make_unit(make_app_id("AppW"), "WCaller.al", w),
+        ];
+        let mut graph = build_graph(&units, None);
+        for (from, to) in edges {
+            let (f, t) = (
+                graph.apps.find_by_name(from).unwrap(),
+                graph.apps.find_by_name(to).unwrap(),
+            );
+            graph.topology.add_dependency(f, t);
+        }
+        let index = ResolveIndex::build(&graph);
+        let surface = DeclSurface::build(&graph, &units);
+        let from_obj = find_obj(&graph, "W Caller");
+        let receiver = ReceiverType::Interface {
+            name_lc: "idup".into(),
+            app: None,
+            scope: from_obj.id.app,
+        };
+        let (_, routes) = resolve_member(&receiver, "go", 0, from_obj, &graph, &index, &surface);
+        let mut out: Vec<String> = routes
+            .iter()
+            .filter_map(|r| match &r.target {
+                RouteTarget::Routine(id) => Some(format!("{:?}", id.object.key)),
+                _ => None,
+            })
+            .collect();
+        out.sort();
+        out
+    }
+
+    /// ENG-152: an interface call reaches the implementers of the interface
+    /// its type names, by identity: only A's when W sees only A (by name, B's
+    /// was pooled in). See [`idup_routes`] for the other two cases.
+    ///
+    /// Mutations (2026-11-20, each restored, green): `bind_interface`'s bare
+    /// rule always taking every interface of the name in the program -> W->A
+    /// reaches B's too (red); the index keyed by name again (every interface of
+    /// the name filed together: `for_binding` over all same-named ids) -> the
+    /// same (red).
+    #[test]
+    fn interface_dispatch_reaches_only_the_named_interfaces_implementers() {
+        assert_eq!(idup_routes(&[("AppW", "AppA")]), ["Id(52101)"]);
+        assert_eq!(
+            idup_routes(&[("AppW", "AppA"), ("AppW", "AppB")]),
+            ["Id(52101)", "Id(52201)"],
+            "both visible: both"
+        );
+        assert_eq!(
+            idup_routes(&[]),
+            ["Id(52101)", "Id(52201)"],
+            "none visible: every interface of the name"
+        );
+    }
+
     /// ONE implementer → exactly 1 Routine route.
     #[test]
     fn resolve_member_interface_one_implementer_emits_one_route() {

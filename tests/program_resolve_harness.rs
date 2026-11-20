@@ -9729,6 +9729,13 @@ fn ws_protected_abi_internal_and_local_still_declines_but_with_precise_reason() 
 /// PER-CANDIDATE visibility independently: the dep route declines
 /// (`ProtectedNotVisible`), the workspace route resolves `Source`. Neither a
 /// visible sibling nor an excluded sibling may influence the other's route.
+///
+/// ENG-152: the dep's symbols list a bare `IProtWorker` though the dep declares
+/// none (not alc's shape: alc writes another app's `#<guid>#`). The bare
+/// reference is read as the dep's own (an INFERRED app), which declares no
+/// such interface, so it binds as a bare name and the dep implementer stays.
+/// Mutation (2026-11-20): `bind_interface`'s inferred fallback dropped -> the
+/// dep implementer is lost, 1 route (red); restored, green.
 #[test]
 fn ws_protected_abi_interface_fanout_respects_visibility() {
     let report = ws_protected_abi_report();

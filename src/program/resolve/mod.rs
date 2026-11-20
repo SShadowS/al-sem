@@ -26,6 +26,8 @@ pub mod index;
 #[cfg(test)]
 mod interface_extends_tests;
 pub mod interface_holder;
+#[cfg(test)]
+mod interface_identity_tests;
 pub mod interfaces;
 pub mod member_catalog;
 pub mod method_id;
