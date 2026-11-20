@@ -324,14 +324,26 @@ fn is_record_ref_var(r: &ModelRoutine, name: &str) -> bool {
 /// The table each RecordRef variable of `r` holds, when the routine alone
 /// decides it: a LOCAL RecordRef (not a parameter, not a global) whose every
 /// `Open(<table>)` / `GetTable(<record>)` in the routine names one resolved
-/// table, that is assigned nowhere and passed to no call. Anything else is
-/// unknown (`None` in the map, or absent).
+/// table, that is assigned nowhere, aliased by no assignment (`A := R` shares
+/// it; an assignment into an array of RecordRefs or Variants, whose right side
+/// the IR does not keep, may) and passed to no call. A `Get(Id)` may move it
+/// anywhere (ENG-160). Anything else is unknown (`None` in the map, or absent).
 fn record_ref_tables<'m>(
     r: &ModelRoutine,
     by_number: &HashMap<i64, Option<&'m str>>,
     by_name: &HashMap<String, Option<&'m str>>,
 ) -> HashMap<String, Option<String>> {
+    use crate::program::model::recref_alias::{RecRefBind, bind_sites};
     let mut out: HashMap<String, Option<String>> = HashMap::new();
+    let sites = bind_sites(r);
+    let into_holder_array = r.var_assignments.iter().any(|a| {
+        r.variables.iter().any(|v| {
+            field_key(&v.name) == field_key(&a.lhs_name) && {
+                let t = v.declared_type.trim().fold_identifier();
+                t.ends_with(" of recordref") || t.ends_with(" of variant")
+            }
+        })
+    });
     let locals: Vec<&str> = r
         .variables
         .iter()
@@ -351,10 +363,13 @@ fn record_ref_tables<'m>(
                 _ => None,
             });
         };
-        let mut escapes = r
-            .var_assignments
-            .iter()
-            .any(|a| field_key(&a.lhs_name) == key);
+        let mut escapes = into_holder_array
+            || r.var_assignments.iter().any(|a| {
+                field_key(&a.lhs_name) == key
+                    || a.rhs_identifier
+                        .as_deref()
+                        .is_some_and(|w| field_key(w) == key)
+            });
         for cs in &r.call_sites {
             let on_it = matches!(&cs.callee, PCallee::Member { receiver, .. } if field_key(receiver) == key);
             if !on_it {
@@ -375,12 +390,9 @@ fn record_ref_tables<'m>(
             }
         }
         // ENG-160: `R.Get(Id)` may move it to any table (a record operation, not a call site).
-        if crate::program::model::recref_alias::bind_sites(r)
+        if sites
             .iter()
-            .any(|s| {
-                s.how == crate::program::model::recref_alias::RecRefBind::Get
-                    && field_key(s.receiver) == key
-            })
+            .any(|s| s.how == RecRefBind::Get && field_key(s.receiver) == key)
         {
             agree(None);
         }

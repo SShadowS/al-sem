@@ -17,6 +17,9 @@ measurements behind ENG-145 are in `2026-11-20-eng145-recordref-aliasing.md`.
 | `R.GetTable(TmpA)`; `O.GetTable(TmpB)`; `R.Copy(O, true)` | R stays 18, temporary |
 | `O.GetTable(Cust)` (physical or temporary); `R.Copy(O)` on a RecordRef never opened | runtime error "The record is not open." |
 | `R.Open(Vendor); R.Close(); O.GetTable(Cust); R.Copy(O)` | runtime error "The record is not open." |
+| `R.Open(Customer, true); O.Open(Vendor, true); R.Copy(O, true)` | runtime error "Both target and source tables must refer to the same table." |
+| `R.Open(Customer, true); O.Open(Vendor, true); R.Copy(O)` | runtime error, the same |
+| `R.Open(Customer); O.Open(Customer, true); R.Copy(O, true)` | runtime error "The COPY function can only be used with the shareTable argument set to true if both records are temporary." |
 | `R.Open(Customer); R.Get(Vendor.RecordId)` (record exists) | true, R is 23 |
 | `R.Open(Customer, true); R.Get(Vendor.RecordId)` | true, R is 23, **physical** |
 | `R.Open(Customer); A := R; A.Get(Vendor.RecordId)` | true, R and A both 23 (one handle) |
@@ -34,9 +37,9 @@ measurements behind ENG-145 are in `2026-11-20-eng145-recordref-aliasing.md`.
   record. A different table is physical. On the same table the temporary state stays. So:
   table unknown, temporary state unknown. A `Get` that finds nothing moves nothing, but the
   engine cannot tell the outcomes apart.
-- **`Copy` moves nothing**: neither the table (another table is a runtime error) nor the
-  temporary state (kept in all three combinations measured), and it binds no RecordRef that is
-  not open (a runtime error).
+- **`Copy` moves nothing**: neither the table (another table is a runtime error, temporary on
+  both sides or not, `shareTable` or not) nor the temporary state (kept in every combination
+  that runs), and it binds no RecordRef that is not open (a runtime error).
 - **`GetBySystemId` moves nothing** (it looks only in the RecordRef's own table).
 - With `Open`, `GetTable` and `Close` (ENG-145's note), these are the RecordRef methods that bind
   or unbind it: `src/program/model/recref_alias.rs`'s `recref_method_move` is the one list.
@@ -140,7 +143,7 @@ codeunit 71590 "P159 Rebind Probe"
 }
 ```
 
-P160 rounds 1 to 3 (T1–T6, U1–U3, V1–V3), one codeunit per round; shown merged:
+P160 rounds 1 to 4 (T1–T6, U1–U3, V1–V3, W1–W3), one codeunit per round; shown merged:
 
 ```al
 codeunit 71600 "P160 Get Probe"
@@ -307,6 +310,39 @@ codeunit 71600 "P160 Get Probe"
         O.GetTable(Cust);
         R.Copy(O);
         Error('MEASURED V3 copy into closed: R=%1', R.Number);
+    end;
+
+    [Test]
+    procedure W1CopyShareTempOtherTable()
+    var
+        R, O : RecordRef;
+    begin
+        R.Open(Database::Customer, true);
+        O.Open(Database::Vendor, true);
+        R.Copy(O, true);
+        Error('MEASURED W1 copy sharetable temp other table: R=%1 temp=%2', R.Number, R.IsTemporary());
+    end;
+
+    [Test]
+    procedure W2CopyTempOtherTable()
+    var
+        R, O : RecordRef;
+    begin
+        R.Open(Database::Customer, true);
+        O.Open(Database::Vendor, true);
+        R.Copy(O);
+        Error('MEASURED W2 copy temp other table: R=%1 temp=%2', R.Number, R.IsTemporary());
+    end;
+
+    [Test]
+    procedure W3CopySharePhysTargetTempSource()
+    var
+        R, O : RecordRef;
+    begin
+        R.Open(Database::Customer);
+        O.Open(Database::Customer, true);
+        R.Copy(O, true);
+        Error('MEASURED W3 copy sharetable physical target: R=%1 temp=%2', R.Number, R.IsTemporary());
     end;
 }
 ```

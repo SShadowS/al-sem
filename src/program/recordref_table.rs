@@ -24,8 +24,9 @@
 //!   reference), or used as a `with` receiver;
 //! - each binding is `R.Open(<table literal>[, …])` (`Database::"T"`,
 //!   `Database::T`, `Database::<number>`, or a positive integer) or
-//!   `R.GetTable(<record variable>)`; `R.Copy(…)` and any other binding form,
-//!   and an expression the IR does not model, decline.
+//!   `R.GetTable(<record variable>)`; `R.Get(<RecordId>)` (any table) and any
+//!   other binding form, and an expression the IR does not model, decline.
+//!   `R.Copy(…)` binds nothing (measured on BC 28.4, ENG-160).
 //!
 //! The callers resolve each binding to a table in their own terms (the
 //! program graph in `resolve::full`, the model's symbols in `record_types`)

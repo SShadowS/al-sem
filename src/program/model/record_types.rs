@@ -30,14 +30,17 @@ use al_syntax::IdentifierFoldExt;
 
 use crate::program::body::node_util::strip_quotes;
 
-/// Whether `R.Get(Id)` binds RecordRef `v_lc` (folded) in `routine`: a record operation, not a
-/// call site, so the call-site scan of the first pass does not see it (ENG-160). It may move
-/// `v_lc` to the RecordId's table, physical or not: no derived temp state holds across it.
-fn rebound_by_get(routine: &ModelRoutine, v_lc: &str) -> bool {
+/// The RecordRefs (as [`op_variable_lc`] keys them) a `R.Get(Id)` binds in `routine`: a record
+/// operation, not a call site, so the call-site scan of the first pass does not see it (ENG-160).
+/// It may move the RecordRef to the RecordId's table, physical or not: no derived temp state
+/// holds across it.
+fn moved_by_get(routine: &ModelRoutine) -> std::collections::HashSet<String> {
     use crate::program::model::recref_alias::{RecRefBind, bind_sites};
     bind_sites(routine)
         .iter()
-        .any(|s| s.how == RecRefBind::Get && op_variable_lc(s.receiver) == v_lc)
+        .filter(|s| s.how == RecRefBind::Get)
+        .map(|s| op_variable_lc(s.receiver))
+        .collect()
 }
 
 /// ENG-145: whether something other than the pass's own `Open`/`GetTable` calls on it may rebind
@@ -432,11 +435,16 @@ pub fn resolve_routine_record_types(
     // The derivation only fires when has_branching == false so we don't need to inspect
     // individual call-site control contexts (which are not yet populated at this stage).
     if !routine.has_branching {
-        // Build set of RecordRef var names (lc) from the routine's variable list.
+        // Build set of RecordRef var names (lc) from the routine's variable list. Not a global
+        // (ENG-160, Fable): any routine of the object a call reaches may rebind it between
+        // the routine's own `Open` and an operation (`Helper()` doing `G.Get(Id)`).
         let recordref_var_names: std::collections::HashSet<String> = routine
             .variables
             .iter()
-            .filter(|v| v.declared_type.fold_identifier() == "recordref")
+            .filter(|v| {
+                v.declared_type.fold_identifier() == "recordref"
+                    && (v.is_parameter || v.scope.as_deref() == Some("local"))
+            })
             .map(|v| v.name.fold_identifier())
             .collect();
 
@@ -514,8 +522,9 @@ pub fn resolve_routine_record_types(
             // ENG-145: a RecordRef something else may rebind (an alias, an assignment, a call it
             // is passed to) keeps no derived temp state.
             let aliases = crate::program::model::recref_alias::AliasClasses::for_routine(routine);
+            let moved = moved_by_get(routine);
             recref_temp.retain(|v, _| {
-                !may_be_rebound_elsewhere(routine, &aliases, v) && !rebound_by_get(routine, v)
+                !may_be_rebound_elsewhere(routine, &aliases, v) && !moved.contains(v)
             });
 
             // Apply derived temp states to matching record ops.
@@ -552,18 +561,20 @@ pub fn resolve_routine_record_types(
         // ENG-145: an alias (`A := RR`, either side; a Variant holds the reference too) can
         // rebind it (`A.GetTable(Phys)`).
         let aliases = crate::program::model::recref_alias::AliasClasses::for_routine(routine);
+        // Its binds (`recref_alias::RecRefBind`, the one list; ENG-160: `Get(Id)` may move it to
+        // a physical table, and `Copy` keeps its temporary state), receivers keyed as the
+        // operations are (`op_variable_lc`: `"My R".Get(…)` is `MyR`'s, Fable on ENG-160).
+        use crate::program::model::recref_alias::{RecRefBind, bind_sites};
+        let sites = bind_sites(routine);
         let always_temp: std::collections::HashSet<String> = locals
             .into_iter()
             .filter(|v_lc| {
                 if may_be_rebound_elsewhere(routine, &aliases, v_lc) {
                     return false;
                 }
-                // Its binds (`recref_alias::RecRefBind`, the one list; ENG-160: `Get(Id)` may
-                // move it to a physical table, and `Copy` keeps its temporary state).
-                use crate::program::model::recref_alias::{RecRefBind, bind_sites};
                 let mut opened = false;
-                for site in bind_sites(routine) {
-                    if site.receiver.fold_identifier() != *v_lc {
+                for site in &sites {
+                    if op_variable_lc(site.receiver) != *v_lc {
                         continue;
                     }
                     match site.how {

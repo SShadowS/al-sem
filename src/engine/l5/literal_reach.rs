@@ -889,8 +889,10 @@ fn exit_guards(flow: &RecRefFlow, i: usize) -> HashMap<String, Vec<AtomReq>> {
 
 /// G33: one routine's table frame. A parameter is USABLE when it is a
 /// by-value `Variant` that is never assigned, read by `R.GetTable(P)` for a
-/// LOCAL RecordRef `R` that nothing else binds (no other `GetTable`, `Open` or
-/// `Copy`, no assignment). Then `R.Number` is `P`'s table wherever `R` is bound
+/// LOCAL RecordRef `R` that nothing else binds (no other `GetTable`, no `Open`
+/// or `Get`, no assignment to it, and no alias: `A := R` shares it, so a bind
+/// through `A` binds `R`; an assignment into an array of RecordRefs or Variants,
+/// whose right side the IR does not keep, may be one). Then `R.Number` is `P`'s table wherever `R` is bound
 /// (before that a branch on it takes none of the `Database::"T"` patterns, so
 /// requiring the table can only keep a branch that cannot run, never drop one
 /// that can). A call that passes `R` or `P` on may change them, but only for
@@ -918,13 +920,28 @@ fn table_frame(r: &ModelRoutine) -> Option<TableFrame> {
     let mut bound: HashMap<String, u32> = HashMap::new();
     // R (folded) -> the call sites that pass R or its P on.
     let mut escapes: HashMap<String, HashSet<String>> = HashMap::new();
+    // ENG-160: the binds (call sites and `Get` record operations), once per routine.
+    let sites = crate::program::model::recref_alias::bind_sites(r);
+    let into_holder_array = r.var_assignments.iter().any(|a| {
+        r.variables.iter().any(|v| {
+            lc(&v.name) == lc(&a.lhs_name) && {
+                let t = v.declared_type.trim().fold_identifier();
+                t.ends_with(" of recordref") || t.ends_with(" of variant")
+            }
+        })
+    });
     for v in r.variables.iter().filter(|v| {
         !v.is_parameter
             && v.scope.as_deref() == Some("local")
             && v.declared_type.trim().eq_fold_identifier("recordref")
     }) {
         let r_lc = lc(&v.name);
-        if r.var_assignments.iter().any(|a| lc(&a.lhs_name) == r_lc) {
+        if into_holder_array
+            || r.var_assignments.iter().any(|a| {
+                lc(&a.lhs_name) == r_lc
+                    || a.rhs_identifier.as_deref().is_some_and(|w| lc(w) == r_lc)
+            })
+        {
             continue;
         }
         let mut source: Option<u32> = None;
@@ -956,7 +973,7 @@ fn table_frame(r: &ModelRoutine) -> Option<TableFrame> {
                         }
                     }
                 }
-                "open" | "copy" => {
+                "open" => {
                     ok = false;
                     break;
                 }
@@ -964,12 +981,9 @@ fn table_frame(r: &ModelRoutine) -> Option<TableFrame> {
             }
         }
         // ENG-160: `R.Get(Id)` binds it too (a record operation, not a call site).
-        let got = crate::program::model::recref_alias::bind_sites(r)
-            .iter()
-            .any(|s| {
-                s.how == crate::program::model::recref_alias::RecRefBind::Get
-                    && lc(s.receiver) == r_lc
-            });
+        let got = sites.iter().any(|s| {
+            s.how == crate::program::model::recref_alias::RecRefBind::Get && lc(s.receiver) == r_lc
+        });
         if let (true, false, Some(p)) = (ok, got, source) {
             bound.insert(r_lc.clone(), p);
             escapes.insert(r_lc, passed);

@@ -480,8 +480,13 @@ mod tests {
         // :19 `FindSet` — either branch of the `if`, never the loop's copy.
         assert_eq!(at(19), format!("RecordRef RecRef: {dup}; or {get_table}"));
         // :21 `Reset` inside the loop — both branches and the loop's copy
-        // over the back edge (one phrase for both Duplicates).
-        assert_eq!(at(21), format!("RecordRef RecRef: {dup}; or {get_table}"));
+        // over the back edge (one phrase for both Duplicates), and the :24
+        // `Get` over it too (ENG-160: `Get(RecordId)` moves the RecordRef).
+        let get = "moved by Get to a record ID's table";
+        assert_eq!(
+            at(21),
+            format!("RecordRef RecRef: {dup}; or {get_table}; or {get}")
+        );
     }
 
     #[test]

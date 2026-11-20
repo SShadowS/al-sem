@@ -11,7 +11,7 @@
 //!
 //! The guard must be a statement of the routine's own top-level block (so it
 //! runs before every later statement), and `R` must not be rebound after it
-//! (`GetTable`, `Open`, `Copy`, `Close`, passing `R` on as an argument, an
+//! (`GetTable`, `Open`, `Get(Id)`, `Close`, `recref_alias::RecRefBind`; passing `R` on as an argument, an
 //! assignment; `R := InputRecord.Duplicate()` before it is fine). A write it guards may write a table `T` exactly when `T`
 //! has field `N`, in its own declaration or a loaded extension of it. Ruling a
 //! table out needs every extension of it to be in the model: true for a table

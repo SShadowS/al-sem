@@ -32,6 +32,9 @@ table 50433 "GE Other"
 }
 codeunit 50434 "GE Mgt"
 {
+    var
+        G: RecordRef;
+
     // G34/G35 (recref_flow): the guard in Guarded reads what R holds.
     procedure GetMoves()
     var
@@ -54,16 +57,53 @@ codeunit 50434 "GE Mgt"
         Guarded(R);
     end;
 
-    // `Id := R.RecordId` then `R.Get(Id)` keeps R's own table.
-    procedure GetOwnId()
+    // sol on ENG-160: a Get through an alias (one handle) moves R too.
+    procedure AliasGetRoot()
     var
         R: RecordRef;
         E: Record "GE Entry";
-        Id: RecordId;
     begin
         R.GetTable(E);
-        Id := R.RecordId;
-        R.Get(Id);
+        AliasGet(R);
+    end;
+
+    local procedure AliasGet(var R: RecordRef)
+    var
+        A: RecordRef;
+        D: Record "GE Doc";
+    begin
+        A := R;
+        D.FindFirst();
+        A.Get(D.RecordId);
+        Guarded(R);
+    end;
+
+    // sol on ENG-160: a bind through an array slot R was put in moves R (GetTable as well:
+    // the IR keeps no right side for an indexed target).
+    procedure SlotGetRoot()
+    var
+        R: RecordRef;
+        Slot: array[2] of RecordRef;
+        E: Record "GE Entry";
+        D: Record "GE Doc";
+    begin
+        R.GetTable(E);
+        Slot[1] := R;
+        D.FindFirst();
+        Slot[1].Get(D.RecordId);
+        Guarded(R);
+    end;
+
+    procedure SlotGetTableRoot()
+    var
+        R: RecordRef;
+        Slot: array[2] of RecordRef;
+        E: Record "GE Entry";
+        D: Record "GE Doc";
+    begin
+        R.GetTable(E);
+        Slot[1] := R;
+        Slot[1].GetTable(D);
         Guarded(R);
     end;
 
@@ -158,6 +198,55 @@ codeunit 50434 "GE Mgt"
         end;
     end;
 
+    // Fable on ENG-160: the frame's R aliased (`A := R`), then moved through the alias.
+    procedure FrameAliasRoot()
+    var
+        E: Record "GE Entry";
+    begin
+        FrameAlias(E);
+    end;
+
+    local procedure FrameAlias(V: Variant)
+    var
+        R: RecordRef;
+        A: RecordRef;
+        Log: Record "GE Log";
+        D: Record "GE Doc";
+    begin
+        R.GetTable(V);
+        A := R;
+        D.FindFirst();
+        A.Get(D.RecordId);
+        case R.Number of
+            Database::"GE Doc":
+                Log.Insert();
+        end;
+    end;
+
+    // The frame's R put in an array slot, then moved through the slot.
+    procedure FrameSlotRoot()
+    var
+        E: Record "GE Entry";
+    begin
+        FrameSlot(E);
+    end;
+
+    local procedure FrameSlot(V: Variant)
+    var
+        R: RecordRef;
+        Slot: array[2] of RecordRef;
+        Log: Record "GE Log";
+        D: Record "GE Doc";
+    begin
+        R.GetTable(V);
+        Slot[1] := R;
+        Slot[1].GetTable(D);
+        case R.Number of
+            Database::"GE Doc":
+                Log.Insert();
+        end;
+    end;
+
     // record_types: a local RecordRef only ever opened temporary holds a temporary table,
     // unless a Get moves it to a physical one.
     procedure TempGet(TableNo: Integer; Flag: Boolean)
@@ -196,6 +285,37 @@ codeunit 50434 "GE Mgt"
         D.FindFirst();
         R.Get(D.RecordId);
         R.Delete();
+    end;
+
+    // Fable on ENG-160: the Get names the RecordRef quoted.
+    procedure TempGetQuoted(TableNo: Integer; Flag: Boolean)
+    var
+        MyR: RecordRef;
+        D: Record "GE Doc";
+    begin
+        if Flag then
+            MyR.Open(TableNo, true)
+        else
+            MyR.Open(TableNo, true);
+        D.FindFirst();
+        "MyR".Get(D.RecordId);
+        MyR.Delete();
+    end;
+
+    // Fable on ENG-160: a global opened temporary here, moved by a routine the call reaches.
+    procedure TempGlobal()
+    begin
+        G.Open(Database::"GE Other", true);
+        MoveG();
+        G.Delete();
+    end;
+
+    local procedure MoveG()
+    var
+        D: Record "GE Doc";
+    begin
+        D.FindFirst();
+        G.Get(D.RecordId);
     end;
 
     // The resolver's RecordRef table (`program::recordref_table`): opened on Doc, then moved.
@@ -238,6 +358,37 @@ codeunit 50434 "GE Mgt"
         F: FieldRef;
     begin
         R.Open(Database::"GE Doc");
+        F := R.Field(2);
+        F.Value := 'x';
+    end;
+
+    // Fable on ENG-160: moved through an alias (`A := R`).
+    procedure TouchAlias()
+    var
+        R: RecordRef;
+        A: RecordRef;
+        E: Record "GE Entry";
+        F: FieldRef;
+    begin
+        R.Open(Database::"GE Doc");
+        A := R;
+        E.FindFirst();
+        A.Get(E.RecordId);
+        F := R.Field(2);
+        F.Value := 'x';
+    end;
+
+    // Moved through an array slot.
+    procedure TouchSlot()
+    var
+        R: RecordRef;
+        Slot: array[2] of RecordRef;
+        E: Record "GE Entry";
+        F: FieldRef;
+    begin
+        R.Open(Database::"GE Doc");
+        Slot[1] := R;
+        Slot[1].GetTable(E);
         F := R.Field(2);
         F.Value := 'x';
     end;
@@ -296,20 +447,28 @@ fn a_recordref_get_moves_the_table_for_every_reader() {
             .unwrap()
             .to_string()
     };
-    // recref_flow: the Get may move R to a Doc; its own RecordId keeps the Entry.
+    // recref_flow: the Get may move R to a Doc, directly, through an alias or an array slot
+    // (GetTable through a slot too).
     assert_eq!(answer("GetControl", "GE Log"), "no", "precondition");
     assert_eq!(answer("GetMoves", "GE Log"), "yes");
-    assert_eq!(answer("GetOwnId", "GE Log"), "no");
-    // exit_guards: the guard after a Get reads no entry value.
+    assert_eq!(answer("AliasGetRoot", "GE Log"), "yes");
+    assert_eq!(answer("SlotGetRoot", "GE Log"), "yes");
+    assert_eq!(answer("SlotGetTableRoot", "GE Log"), "yes");
+    // A Get before the guard (the callee's write-back reaches the caller's argument).
     assert_eq!(answer("GuardOnlyRoot", "GE Log"), "no", "precondition");
     assert_eq!(answer("GetBeforeGuardRoot", "GE Log"), "yes");
-    // literal_reach's table frame.
+    // literal_reach's table frame, directly and through an alias.
     assert_eq!(answer("FrameControlRoot", "GE Log"), "no", "precondition");
     assert_eq!(answer("FrameRoot", "GE Log"), "yes");
-    // record_types: after the Get the delete may hit a physical Doc.
+    assert_eq!(answer("FrameAliasRoot", "GE Log"), "yes");
+    assert_eq!(answer("FrameSlotRoot", "GE Log"), "yes");
+    // record_types: after the Get the delete may hit a physical Doc (a quoted receiver alike; a
+    // global a called routine moves).
     assert_eq!(answer("TempControl", "GE Doc"), "no", "precondition");
     assert_ne!(answer("TempGet", "GE Doc"), "no");
+    assert_ne!(answer("TempGetQuoted", "GE Doc"), "no");
     assert_ne!(answer("TempGetStraight", "GE Doc"), "no");
+    assert_ne!(answer("TempGlobal", "GE Doc"), "no");
     // The resolver's RecordRef table: opened on Doc, moved to an Entry.
     assert_eq!(answer("OpenControl", "GE Entry"), "no", "precondition");
     assert_ne!(answer("OpenThenGet", "GE Entry"), "no");
@@ -343,6 +502,8 @@ fn a_field_of_a_recordref_moved_by_get_may_be_any_tables() {
         lines.contains(&field_line("TouchAfterGet")),
         "{lines:?}: {v}"
     );
+    assert!(lines.contains(&field_line("TouchAlias")), "{lines:?}: {v}");
+    assert!(lines.contains(&field_line("TouchSlot")), "{lines:?}: {v}");
     assert!(
         !lines.contains(&field_line("TouchControl")),
         "precondition: a RecordRef opened on Doc touches no Entry field: {lines:?}"

@@ -193,15 +193,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     unbind it.
   - `Get` moves only when it finds the record. Another table is physical; the same table keeps
     its temporary state.
-  - `Copy` moves nothing: another table, `shareTable` with a physical side, or a RecordRef not
-    open are runtime errors, and it keeps the temporary state otherwise.
+  - `Copy` moves nothing: another table (temporary on both sides or not, `shareTable` or not),
+    `shareTable` with a physical side, or a RecordRef not open are runtime errors, and it keeps
+    the temporary state otherwise.
   - `GetBySystemId` looks in its own table only.
   - Also measured: `A := F.Record()` shares no handle with R, a by-value RecordRef parameter
     does share the caller's handle, and `Clear(A)` detaches only A.
 - **The fix.** One list, `recref_alias::RecRefBind`, and one way to find the binds,
   `recref_alias::bind_sites`, which lists the call sites and the `Get` record operations alike.
-  Every reader goes through it:
-  - recref_flow's facts (G34/G35) and its exit guards (a `Get` before the guard: no entry value);
+  These readers go through it:
+  - recref_flow's facts (G34/G35);
   - literal_reach's table frame (G33);
   - the field guard (G36);
   - record_types' two temp passes;
@@ -209,23 +210,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - field_touches' RecordRef table (`query touches --field`);
   - recref_origin's reason text.
 
-  `get_keeps_table` (`Id := R.RecordId; R.Get(Id)` keeps R's table) had never run, for the same
-  reason; it runs now. `Copy` left the lists that held it: it moves nothing.
+  `Copy` left the lists that held it: it moves nothing. `recref_flow`'s `get_keeps_table`
+  (`Id := R.RecordId; R.Get(Id)` keeps R's table) had never run, for the same reason. It is
+  deleted, not turned on, because it is unsound (Fable): `R := O` between the two lines, or a
+  `foreach Id in …`, moves R.
+- **The same reviews found older holes of the same kind** (the `GetTable` form fails on master
+  too), now closed:
+  - **an array slot:** `Slot[1] := R; Slot[1].GetTable(D)` rebinds R. The IR keeps no right side
+    for an indexed target, so the flow, the table frame and field_touches now read an
+    assignment into an array of RecordRefs or Variants as one that may share any holder, as
+    `AliasClasses::for_routine` already does for the field guard and record_types (sol);
+  - **an alias:** `A := R; A.Get(Id)` (or `A.GetTable`) binds R. The table frame and
+    field_touches now refuse a RecordRef that is assigned to another (Fable);
+  - **a global:** record_types' first pass derived a temp state for a global RecordRef, which
+    any routine a call reaches may rebind. It now takes locals and parameters only (Fable);
+  - **a quoted receiver:** record_types' second pass compared `"MyR".Get(…)` raw. It now keys
+    the receiver as the operations are (Fable).
 - **Tests.** `tests/cli/cli_recref_get.rs` has one shape per reader, each with a control that
-  holds without the `Get`. The G36 fixture adds `ReboundByGet`. Every shape answered `no` on
-  master 831122de. Discrimination proofs (2026-11-20, each break reverted):
-  - the flow's `Get` facts → `GetMoves` red;
-  - the table frame's check → `FrameRoot` red;
-  - record_types' first pass → `TempGetStraight` red; its second pass → `TempGet` red;
-  - the resolver's `Get` arm → `TempGetStraight` and `OpenThenGet` red;
-  - field_touches' check → the touches test red;
-  - the field guard's operation lookup → `ReboundByGet` red;
-  - `get_keeps_table` → `GetOwnId` red.
+  holds without the `Get`. The G36 fixture adds `ReboundByGet`. On master 831122de every
+  `prove` shape answers `no` (13 of 13), and `query touches` lists none of the three moved
+  `Field` sites. Discrimination proofs (2026-11-20, each break reverted, each red):
+  - the flow's `Get` facts → `GetMoves`; its array-slot rule → `SlotGetRoot`;
+  - the table frame's `Get` check → `FrameRoot`; its alias check → `FrameAliasRoot`; its
+    array check → `FrameSlotRoot`;
+  - record_types' first pass `Get` check → `TempGetStraight`; its locals-only filter →
+    `TempGlobal`; the second pass's `Get` arm → `TempGet`; its receiver key → `TempGetQuoted`;
+  - the resolver's `Get` arm → `TempGetStraight` and `OpenThenGet`;
+  - field_touches' `Get` check → `TouchAfterGet`; its alias check → `TouchAlias`; its array
+    check → `TouchSlot`;
+  - the field guard's operation lookup → `ReboundByGet`.
 
-  The exit-guard clause's break stays green on master: the caller's argument reads the
-  callee's write-back over the whole routine, and the `Get` makes that write-back "anything".
-  It is the only guard once arguments are read at their call (ENG-159 Part A), where its proof
-  is taken.
+  A `Get` before a guard in the guarded routine itself (`GetBeforeGuardRoot`) is right on
+  master already: the caller's argument reads the callee's write-back over the whole routine.
+  A guard needs its own check for it only once arguments are read at their call (ENG-161).
 
 ### Fixed (ENG-148: a runtime package's codeunit implementers reach interface dispatch)
 

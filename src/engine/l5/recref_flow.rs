@@ -387,8 +387,7 @@ impl<'a> RecRefFlow<'a> {
                     lc(&v.name) == x
                         && v.scope.as_deref() == Some("global")
                         && is_tracked_type(&v.declared_type)
-                }) && in_place_part(r, &site, &x).is_some()
-                {
+                }) {
                     in_place.entry(r.object_id.as_str()).or_default().insert(x);
                 }
             }
@@ -1537,21 +1536,18 @@ fn initial_summary(f: &Facts) -> Summary {
     s
 }
 
-/// What bind site `site` of `r` on tracked `recv` binds it to
-/// ([`recref_alias::RecRefBind`], the one list, ENG-160): `GetTable(X)` what `X`
-/// holds, `Close` no table, `Open` anything, and `Get(Id)` anything unless it
-/// keeps the table.
-fn in_place_part(r: &ModelRoutine, site: &BindSite<'_>, recv: &str) -> Option<Part> {
-    Some(match site.how {
+/// What bind site `site` binds its receiver to ([`recref_alias::RecRefBind`],
+/// the one list, ENG-160): `GetTable(X)` what `X` holds, `Close` no table,
+/// `Open` and `Get(Id)` anything.
+fn in_place_part(site: &BindSite<'_>) -> Part {
+    match site.how {
         RecRefBind::GetTable => match site.args.first() {
             Some(arg) => Part::Copy(lc(arg)),
             None => Part::Atoms(top()),
         },
-        RecRefBind::Open => Part::Atoms(top()),
+        RecRefBind::Open | RecRefBind::Get => Part::Atoms(top()),
         RecRefBind::Close => Part::Atoms(Atoms::from([Atom::Unset])),
-        RecRefBind::Get if get_keeps_table(r, site, recv) => return None,
-        RecRefBind::Get => Part::Atoms(top()),
-    })
+    }
 }
 
 /// Whether call `cs` runs on the caller's own instance: `Proc(…)`,
@@ -1721,10 +1717,6 @@ pub(crate) fn exit_guards(
                         && (cs.argument_texts.iter().any(|a| lc(a) == *rec)
                             || matches!(&cs.callee, PCallee::Member { receiver, .. }
                                 if lc(receiver) == *rec))
-                })
-                // ENG-160: `R.Get(Id)`, a record operation.
-                || bind_sites(r).iter().any(|s| {
-                    s.call.is_none() && lc(s.receiver) == *rec && before(s.anchor)
                 }));
         if bound_before {
             continue;
@@ -1864,13 +1856,11 @@ fn facts_of(r: &ModelRoutine, obj_in_place: &HashSet<String>) -> Facts {
     let sites = bind_sites(r);
     for site in &sites {
         let x = lc(site.receiver);
-        if f.tracked.contains_key(&x)
-            && let Some(part) = in_place_part(r, site, &x)
-        {
-            in_place
-                .entry(x)
-                .or_default()
-                .push(((site.anchor.start_line, site.anchor.start_column), part));
+        if f.tracked.contains_key(&x) {
+            in_place.entry(x).or_default().push((
+                (site.anchor.start_line, site.anchor.start_column),
+                in_place_part(site),
+            ));
         }
     }
     // The alias classes (one source, ENG-145: `program::model::recref_alias`).
@@ -1880,6 +1870,25 @@ fn facts_of(r: &ModelRoutine, obj_in_place: &HashSet<String>) -> Facts {
     for a in &r.var_assignments {
         let l = lc(&a.lhs_name);
         if !f.tracked.contains_key(&l) {
+            // ENG-160 (sol): `Slot[1] := R` shares R's record with an array slot, which the flow
+            // does not track, and a bind through it (`Slot[1].Get(Id)`, `.GetTable(D)`) rebinds
+            // R. The IR keeps no right-hand side for an indexed target, so, as
+            // `AliasClasses::for_routine` does, an assignment into an array of RecordRefs or
+            // Variants may share any holder: each may hold anything from there on.
+            let into_holder_array = r.variables.iter().any(|v| {
+                lc(&v.name) == l && {
+                    let t = v.declared_type.trim().fold_identifier();
+                    t.ends_with(" of recordref") || t.ends_with(" of variant")
+                }
+            });
+            if into_holder_array {
+                let at = (a.source_anchor.start_line, a.source_anchor.start_column);
+                let names: Vec<String> = f.tracked.keys().cloned().collect();
+                for w in names {
+                    f.alias_shared.insert(w.clone());
+                    f.fixed.push((w, Part::Atoms(top()), Some(at)));
+                }
+            }
             continue;
         }
         let part = match (&a.rhs_identifier, &a.rhs_member) {
@@ -1934,11 +1943,9 @@ fn facts_of(r: &ModelRoutine, obj_in_place: &HashSet<String>) -> Facts {
     // ENG-160: a `Get` on a tracked RecordRef is a record operation, not a call site.
     for site in sites.iter().filter(|s| s.call.is_none()) {
         let v = lc(site.receiver);
-        if f.tracked.contains_key(&v)
-            && let Some(part) = in_place_part(r, site, &v)
-        {
+        if f.tracked.contains_key(&v) {
             let at = Some((site.anchor.start_line, site.anchor.start_column));
-            f.fixed.push((v, part, at));
+            f.fixed.push((v, in_place_part(site), at));
         }
     }
     for (ci, cs) in r.call_sites.iter().enumerate() {
@@ -1946,11 +1953,11 @@ fn facts_of(r: &ModelRoutine, obj_in_place: &HashSet<String>) -> Facts {
         if let PCallee::Member { receiver, .. } = &cs.callee {
             let v = lc(receiver);
             if f.tracked.contains_key(&v) {
-                if let Some(site) = sites.iter().find(|s| s.id == cs.id)
-                    && let Some(part) = in_place_part(r, site, &v)
-                    && !rebinds_to_guarded(r, &guards, &cs.id, &v, &part)
-                {
-                    f.fixed.push((v, part, at));
+                if let Some(site) = sites.iter().find(|s| s.id == cs.id) {
+                    let part = in_place_part(site);
+                    if !rebinds_to_guarded(r, &guards, &cs.id, &v, &part) {
+                        f.fixed.push((v, part, at));
+                    }
                 }
                 continue;
             }
@@ -2083,32 +2090,4 @@ fn keeps_by_value(_callee: &ModelRoutine, f: &Facts, p: &ModelParameter) -> bool
     !p.is_var
         && p.type_text.trim().eq_fold_identifier("variant")
         && !f.alias_shared.contains(&lc(&p.name))
-}
-
-/// `R.Get(Id)` keeps `R`'s table when `Id` is a local whose every assignment
-/// is `Id := R.RecordId` and that nothing else is passed to.
-fn get_keeps_table(r: &ModelRoutine, site: &BindSite<'_>, recref: &str) -> bool {
-    let [id] = site.args else {
-        return false;
-    };
-    let id = lc(id);
-    let local = r
-        .variables
-        .iter()
-        .any(|v| lc(&v.name) == id && !v.is_parameter && v.scope.as_deref() == Some("local"));
-    if !local {
-        return false;
-    }
-    let mut assigned = false;
-    for a in r.var_assignments.iter().filter(|a| lc(&a.lhs_name) == id) {
-        match &a.rhs_member {
-            Some((w, m)) if lc(w) == recref && m == "recordid" => assigned = true,
-            _ => return false,
-        }
-    }
-    assigned
-        && r.call_sites
-            .iter()
-            .filter(|c| c.id != site.id)
-            .all(|c| c.argument_texts.iter().all(|a| lc(a) != id))
 }
