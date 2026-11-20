@@ -5,10 +5,10 @@
 //! compiles, `B := Z` and `B := <codeunit implementing IBaz>` compile for
 //! `B: Interface IBar`, and an `IBaz` implementer without `Bar` fails AL0582.
 //!
-//! Mutations (2026-11-19, each restored, green):
-//! - `inherit_implementers` not called -> `IBar`/`IQux` calls reach no
-//!   implementer (`a_call_through_a_base_reaches_every_derived_implementer`,
-//!   `a_dependency_interfaces_bases_come_from_its_symbols`, red);
+//! Mutations (2026-11-19/20, each restored, green; re-run on the identity-based
+//! closure after the review rewrite):
+//! - the index's derived-interface closure skipped -> six tests red (the
+//!   base calls reach no derived implementer, the dependency case included);
 //! - its walk one level deep (no `stack.extend`) -> the grand-derived `C Deep`
 //!   is missing (red);
 //! - `interface_own_routine_node` without the base search -> `Take(O.Bar())`
@@ -17,12 +17,69 @@
 //!   falls back to their agreeing return types, hence the implementer-less
 //!   `IOrphan`);
 //! - the ExtendedInterfaces read dropped -> the dependency case (red);
-//! - the recovered-parse guard in `node_extract` dropped -> the broken file's
-//!   bases count (`a_recovered_parse_gives_no_bases`, red).
+//! - the lowerer's per-object parse-error guard dropped -> the broken
+//!   interface's bases count (`a_recovered_parse_gives_no_bases`, red);
+//! - each later rule carries its own note at its test.
 
 use crate::program::node::ObjKey;
-use crate::program::resolve::edge::{DispatchShape, RouteTarget};
+use crate::program::resolve::edge::{DispatchShape, RouteTarget, SetCompleteness};
 use crate::program::resolve::full::{ProgramReport, resolve_full_program};
+
+/// The completeness of the ONE interface (polymorphic) site in `Caller.Calls`.
+fn site_completeness(report: &ProgramReport) -> SetCompleteness {
+    let hits: Vec<_> = report
+        .edges
+        .iter()
+        .filter(|c| {
+            c.edge.from.name_lc.as_ref() == "calls" && c.edge.shape == DispatchShape::Polymorphic
+        })
+        .collect();
+    assert_eq!(hits.len(), 1, "precondition: one interface site");
+    hits[0].edge.completeness
+}
+
+/// G28 (review, Fable): an internal interface whose friends are all loaded is
+/// closed (it reaches exactly its routes), but a PUBLIC interface may extend it
+/// (alc 18.0.41 compiles that, probe `/work/.al-sem/probes/eng142-internal`),
+/// and any unloaded app may implement the public one. So the internal base is
+/// open while a public interface derives from it, closed without one.
+/// Mutation (2026-11-19): the derived check in `closed_internal_interfaces`
+/// dropped -> the site with the public derived interface reads closed (red);
+/// restored, green.
+#[test]
+fn an_internal_base_with_a_public_derived_interface_is_open() {
+    let base = "interface IInner\n{\n    Access = Internal;\n\n    procedure Bar(): Integer;\n}\n";
+    let caller_src = caller(
+        "        B: Interface IInner;\n        N: Integer;",
+        "        N := B.Bar();",
+    );
+    let imp = "codeunit 50101 \"C Inner\" implements IInner\n{\n    procedure Bar(): Integer begin exit(1); end;\n}\n";
+    let closed = report_of(&[
+        ("app.json", APP_JSON.into()),
+        ("src/Inner.al", base.into()),
+        ("src/Impl.al", imp.into()),
+        ("src/Caller.al", caller_src.clone()),
+    ]);
+    assert!(
+        !matches!(site_completeness(&closed), SetCompleteness::Partial { .. }),
+        "control: a closed internal interface"
+    );
+    let open = report_of(&[
+        ("app.json", APP_JSON.into()),
+        (
+            "src/Inner.al",
+            format!(
+                "{base}\ninterface IOuter extends IInner\n{{\n    procedure Baz(): Integer;\n}}\n"
+            ),
+        ),
+        ("src/Impl.al", imp.into()),
+        ("src/Caller.al", caller_src),
+    ]);
+    assert!(
+        matches!(site_completeness(&open), SetCompleteness::Partial { .. }),
+        "an unloaded app may implement IOuter, so IInner is open"
+    );
+}
 
 const APP_JSON: &str = r#"{"id":"14214214-0000-0000-0000-000000000001","name":"Ifx142","publisher":"probe","version":"1.0.0.0","runtime":"15.0","idRanges":[{"from":50100,"to":50199}]}"#;
 
@@ -154,6 +211,90 @@ fn a_call_through_a_base_reaches_every_derived_implementer() {
     );
 }
 
+/// The raw routes of the `B.Bar()` site, unsorted (review, Fable: the helper
+/// above sorts and dedups): the base's own implementer first, then the derived
+/// ones in object order, and `C Both`, which implements two interfaces derived
+/// from `IBar`, once.
+///
+/// Mutations (2026-11-19): the `!list.contains` guard in the index's closure
+/// dropped -> `50106` twice (red); the closure run before the direct
+/// implementers -> `50103` not first (red). Each restored, green.
+#[test]
+fn a_base_lists_its_own_implementer_first_and_each_once() {
+    let mut files = base_workspace(caller(
+        "        B: Interface IBar;\n        N: Integer;",
+        "        N := B.Bar();",
+    ));
+    files.push((
+        "src/ImplBoth.al",
+        implementer(50106, "C Both", "IBaz, IDeep"),
+    ));
+    let report = report_of(&files);
+    let raw: Vec<String> = report
+        .edges
+        .iter()
+        .filter(|c| {
+            c.edge.from.name_lc.as_ref() == "calls" && c.edge.shape == DispatchShape::Polymorphic
+        })
+        .flat_map(|c| c.edge.routes.iter())
+        .filter_map(|r| match &r.target {
+            RouteTarget::Routine(id) => match &id.object.key {
+                ObjKey::Id(n) => Some(n.to_string()),
+                ObjKey::Name(s) => Some(s.to_string()),
+            },
+            _ => None,
+        })
+        .collect();
+    assert_eq!(raw, ["50103", "50101", "50102", "50106"]);
+}
+
+/// A whole-object `#if` split gives two declarations of one interface (and of
+/// one codeunit); the merged object keeps every arm's bases and every arm's
+/// `implements` (review, sol: the first copy alone lost the later arms'). So
+/// `C Split` (implementing `ISplit`, whose arms extend `IBar` and `IQux`)
+/// is reached through both bases, and `C Arms` (implementing `IBar` in one arm
+/// and `IQux` in the other, unrelated interfaces) through `IQux`.
+///
+/// Mutations (2026-11-19): the `interface_bases` union in `dedup_objects`
+/// dropped -> no `50107.qux` (red); the `implements` union dropped -> no
+/// `50108.qux` (red; with `IBaz` in the first arm it stayed GREEN, since `IBaz`
+/// extends `IQux`). Each restored, green.
+#[test]
+fn a_whole_object_if_split_keeps_every_arms_interfaces() {
+    let mut files = base_workspace(caller(
+        "        B: Interface IBar;\n        Q: Interface IQux;\n        N: Integer;",
+        "        N := B.Bar();\n        N := Q.Qux();",
+    ));
+    // Whole objects in each arm: two declarations of one id, merged by
+    // `dedup_objects`. (A header-only `#if` split of an `extends` list does not
+    // parse in grammar 5.4.0: an interface with a parse error gives no bases.)
+    files.push((
+        "src/Split.al",
+        "namespace Probe.Ifaces;\n\n#if A\ninterface ISplit extends IBar\n{\n    procedure Split(): Integer;\n}\n#else\ninterface ISplit extends IQux\n{\n    procedure Split(): Integer;\n}\n#endif\n"
+            .into(),
+    ));
+    files.push(("src/ImplSplit.al", implementer(50107, "C Split", "ISplit")));
+    let arm = |iface: &str| {
+        format!(
+            "codeunit 50108 \"C Arms\" implements {iface}\n{{\n    procedure Bar(): Integer begin exit(1); end;\n    procedure Qux(): Integer begin exit(2); end;\n    procedure Baz(): Integer begin exit(3); end;\n}}\n"
+        )
+    };
+    files.push((
+        "src/Arms.al",
+        format!(
+            "namespace Probe.Ifaces;\n\n#if A\n{}#else\n{}#endif\n",
+            arm("IBar"),
+            arm("IQux")
+        ),
+    ));
+    let report = report_of(&files);
+    let bar = interface_targets(&report, "bar");
+    let qux = interface_targets(&report, "qux");
+    assert!(bar.contains(&"50107.bar".to_string()), "{bar:?}");
+    assert!(qux.contains(&"50107.qux".to_string()), "{qux:?}");
+    assert!(qux.contains(&"50108.qux".to_string()), "{qux:?}");
+}
+
 /// `Take(O.Bar())`, `Take` overloaded on `Integer` and `Text`, `O: Interface
 /// IOrphan` (`extends IBar`, no implementer in the program: they may live in
 /// an app not loaded), `Bar` declared on the base `IBar` only: the argument is
@@ -203,28 +344,39 @@ fn a_base_member_types_an_argument() {
     );
 }
 
-/// An interface in a file that did not parse clean gives no bases (its list may
-/// be misread), so its implementers are not added to them.
+/// An interface whose own declaration holds a parse error gives no bases (its
+/// list may be misread), so its implementers are not added to them; a parse
+/// error in ANOTHER object of the same file leaves a clean interface's list as
+/// read (ENG-142 review, Fable: file-wide, the guard dropped true edges).
 #[test]
 fn a_recovered_parse_gives_no_bases() {
     let mut files = base_workspace(caller(
         "        B: Interface IBar;\n        N: Integer;",
         "        N := B.Bar();",
     ));
+    // `ISick`: the error is inside the interface itself.
     files.push((
-        "src/Broken.al",
-        "namespace Probe.Ifaces;\n\ninterface IBroken extends IBar\n{\n    procedure Broken(): Integer;\n}\n\ncodeunit 50130 \"Junk\"\n{\n    procedure (\n"
+        "src/Sick.al",
+        "namespace Probe.Ifaces;\n\ninterface ISick extends IBar\n{\n    procedure Sick(: Integer;\n}\n"
             .into(),
     ));
+    files.push(("src/ImplSick.al", implementer(50105, "C Sick", "ISick")));
+    // `IWell`: clean, but a later codeunit of its file is broken.
     files.push((
-        "src/ImplBroken.al",
-        implementer(50104, "C Broken", "IBroken"),
+        "src/Well.al",
+        "namespace Probe.Ifaces;\n\ninterface IWell extends IBar\n{\n    procedure Well(): Integer;\n}\n\ncodeunit 50130 \"Junk\"\n{\n    procedure (\n"
+            .into(),
     ));
+    files.push(("src/ImplWell.al", implementer(50104, "C Well", "IWell")));
     let report = report_of(&files);
     let bar = interface_targets(&report, "bar");
     assert!(
-        !bar.contains(&"50104.bar".to_string()),
-        "a recovered file's extends list is not trusted: {bar:?}"
+        !bar.contains(&"50105.bar".to_string()),
+        "a broken interface's extends list is not trusted: {bar:?}"
+    );
+    assert!(
+        bar.contains(&"50104.bar".to_string()),
+        "an error in another object leaves IWell's bases: {bar:?}"
     );
     assert!(bar.contains(&"50101.bar".to_string()), "{bar:?}");
 }
@@ -251,6 +403,39 @@ fn an_extends_cycle_ends() {
         interface_targets(&report, "bar"),
         ["50101.bar", "50102.bar"]
     );
+}
+
+/// `Take(Z)` with `Z: Interface IBaz` and overloads `Take(B: Interface IBar)` /
+/// `Take(T: Text)`: an `IBaz` value is an `IBar` (alc 18.0.41 compiles `B :=
+/// Z`), so the `IBar` overload is the one (review, sol and Fable: two different
+/// interfaces were "provably incompatible", so no overload was left).
+/// Mutation (2026-11-19): the interface rule in
+/// `position_provably_incompatible` dropped -> no single `Take` route (red);
+/// restored, green.
+#[test]
+fn a_derived_interface_value_binds_a_base_parameter() {
+    let caller_text = "namespace Probe.Ifaces;\n\ncodeunit 50120 \"Caller\"\n{\n    procedure Calls()\n    var\n        Z: Interface IBaz;\n    begin\n        Take(Z);\n    end;\n\n    procedure Take(B: Interface IBar)\n    begin\n    end;\n\n    procedure Take(T: Text)\n    begin\n    end;\n}\n";
+    let report = report_of(&base_workspace(caller_text.into()));
+    let take: Vec<_> = report
+        .edges
+        .iter()
+        .filter(|c| {
+            c.edge.from.name_lc.as_ref() == "calls"
+                && c.edge.routes.iter().any(|r| {
+                    matches!(&r.target, RouteTarget::Routine(id) if id.name_lc.as_ref() == "take")
+                })
+        })
+        .collect();
+    assert_eq!(take.len(), 1, "one Take site");
+    assert_eq!(take[0].edge.routes.len(), 1, "{:?}", take[0].edge.routes);
+    let one = al_syntax::parse(
+        "codeunit 1 X\n{\n    procedure Take(B: Interface IBar)\n    begin\n    end;\n}\n",
+    );
+    let iface_fp = crate::program::sig_fp::source_param_sig_fp(&one.objects[0].routines[0].params);
+    let RouteTarget::Routine(id) = &take[0].edge.routes[0].target else {
+        panic!("a routine route")
+    };
+    assert_eq!(id.sig_fp, iface_fp, "the IBar overload: {id:?}");
 }
 
 const DEP_GUID: &str = "14214214-0000-0000-0000-0000000000df";

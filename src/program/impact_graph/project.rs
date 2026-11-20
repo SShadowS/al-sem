@@ -1311,12 +1311,15 @@ impl<'a> Builder<'a> {
                         }
                     }
                     // Implementations of interfaces declared there.
-                    let ifaces: HashSet<String> = g
+                    let mut ifaces: HashSet<String> = g
                         .objects
                         .iter()
                         .filter(|o| o.id.kind == ObjectKind::Interface && apps.contains(&o.id.app))
                         .map(|o| o.name.fold_identifier())
                         .collect();
+                    // ENG-142: and every interface derived from one, in any app:
+                    // its implementers implement the base too.
+                    g.add_derived_interfaces(&mut ifaces);
                     if !ifaces.is_empty() {
                         for o in g.objects.iter() {
                             if o.implements
@@ -2734,6 +2737,37 @@ pub(crate) mod tests {
         );
         assert_eq!(o.node("SymCu.Api").symbol_only, Some(true));
         assert_eq!(o.node("SymCu.Api").source_path, None);
+    }
+
+    /// ENG-142 (review, Fable and sol): a symbol-only app's callbacks hub reaches
+    /// the implementations of its interfaces, and of every interface derived from
+    /// one: the workspace's `IBaz extends IBar` (`IBar` the symbol-only app's), so
+    /// its implementer `Impl` implements `IBar` and the hub reaches `Impl.Bar`.
+    /// Mutation (2026-11-19): the derived interfaces not added to the hub's set
+    /// -> no edge (red); restored, green.
+    #[test]
+    fn the_callbacks_hub_reaches_a_derived_interfaces_implementer() {
+        let mut w = World::default();
+        let a = w.app("A");
+        let s = w.app("S");
+        w.deps.push((a, s));
+        let cu = w.obj(a, ObjectKind::Codeunit, 1, "Cu", TrustTier::Workspace);
+        let sym = w.obj(s, ObjectKind::Codeunit, 7, "SymCu", TrustTier::SymbolOnly);
+        w.obj(s, ObjectKind::Interface, 8, "IBar", TrustTier::SymbolOnly);
+        let baz = w.obj(a, ObjectKind::Interface, 9, "IBaz", TrustTier::Workspace);
+        w.object_mut(&baz).interface_bases = vec!["IBar".into()];
+        let imp = w.obj(a, ObjectKind::Codeunit, 10, "Impl", TrustTier::Workspace);
+        w.object_mut(&imp).implements = vec!["IBaz".into()];
+        let test = w.rtn(&cu, "TestIt");
+        let api = w.rtn(&sym, "Api");
+        w.rtn(&imp, "Bar");
+        w.call(&test, &api, 1);
+        let o = w.project(a);
+        let hub = "h:callbacks:s-guid";
+        assert!(
+            !o.edges(hub, "Impl.Bar").is_empty(),
+            "the hub reaches IBaz's implementer"
+        );
     }
 
     /// Duplicate rows merge to the strongest confidence and the smallest line;

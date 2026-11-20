@@ -103,6 +103,32 @@ pub struct AbiIngestError {
 }
 
 impl ProgramGraph {
+    /// ENG-142: adds to `names` (lowercased interface names) every interface
+    /// derived from one of them, transitively (`ObjectNode::interface_bases`),
+    /// so a reader matching implementers BY NAME (`o.implements`) also takes an
+    /// implementer of a derived interface: it implements the base. By name, as
+    /// such a reader is; `ResolveIndex::implementers_of` resolves by identity.
+    pub fn add_derived_interfaces(&self, names: &mut HashSet<String>) {
+        loop {
+            let before = names.len();
+            for o in self
+                .objects
+                .iter()
+                .filter(|o| o.id.kind == ObjectKind::Interface)
+            {
+                if o.interface_bases
+                    .iter()
+                    .any(|b| names.contains(&b.fold_identifier()))
+                {
+                    names.insert(o.name.fold_identifier());
+                }
+            }
+            if names.len() == before {
+                return;
+            }
+        }
+    }
+
     /// The object node with this id ([`NodeSet::find`]: what a binary search over the
     /// id-sorted `objects` finds).
     pub fn object(&self, id: &ObjectNodeId) -> Option<&ObjectNode> {

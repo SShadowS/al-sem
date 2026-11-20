@@ -517,11 +517,19 @@ fn write_object(
         }
     } else if kw == "interface" {
         // ENG-142: an interface's bases (`ExtendedInterfaces`), so the lowered
-        // source keeps them (`ObjectDecl::interface_extends`).
+        // source keeps them (`ObjectDecl::interface_extends`). A `#<guid>#Name`
+        // reference keeps its name, as the symbol reader reads it (review, sol).
         let bases: Vec<String> = arr(o, "ExtendedInterfaces")
             .iter()
             .filter_map(Value::as_str)
-            .map(q)
+            .map(|raw| {
+                let name = raw
+                    .strip_prefix('#')
+                    .and_then(|s| s.split_once('#'))
+                    .map_or(raw, |(_, rest)| rest)
+                    .trim();
+                q(if name.is_empty() { raw } else { name })
+            })
             .collect();
         if bases.is_empty() {
             header
@@ -826,8 +834,8 @@ mod tests {
     #[test]
     fn an_interfaces_bases_are_written() {
         let symbols: Value = serde_json::from_str(
-            r#"{ "Interfaces": [ { "Name": "IBaz", "ExtendedInterfaces": ["IBar", "My Base"],
-                "Methods": [ { "Name": "Baz" } ] } ] }"#,
+            r##"{ "Interfaces": [ { "Name": "IBaz", "ExtendedInterfaces": ["IBar", "My Base", "#63ca2fa4-4f03-4f2b-a480-172fef340d3f#IOther"],
+                "Methods": [ { "Name": "Baz" } ] } ] }"##,
         )
         .expect("json");
         let files = synthesize(&symbols, &[]);
@@ -838,7 +846,7 @@ mod tests {
         assert_eq!(f.parse_status, al_syntax::ir::ParseStatus::Clean, "{text}");
         assert_eq!(
             f.objects[0].interface_extends,
-            ["IBar", "My Base"],
+            ["IBar", "My Base", "IOther"],
             "{text}"
         );
     }

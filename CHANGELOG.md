@@ -16,31 +16,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   So a call through `IBar` missed every implementer of a derived interface: a missing edge, not
   an imprecise one.
 - **Bases in the graph.** New `ObjectNode::interface_bases`, from three sources:
-  - the source (`ObjectDecl::interface_extends`, GRM-05), but none when the file did not parse
-    clean, since a recovered parse can misread the list (`extends A.` before `#if X` reads the
-    base as `X`);
+  - the source (`ObjectDecl::interface_extends`, GRM-05). An interface whose own node holds a
+    parse error lowers with no bases, since recovery can misread the list (`extends A.` before
+    `#if X` reads the base as `X`); an error elsewhere in the file leaves the list as read;
   - a dependency's symbols, whose interfaces carry `"ExtendedInterfaces": [...]` (alc writes the
-    base's name without its namespace);
+    base's name without its namespace; a `#<guid>#` prefix is dropped);
   - a runtime package's synthesized source, which now writes `extends` from those symbols.
-  `PACK_SCHEMA` 22 -> 23 (the sample pack re-pinned); the session's declaration hash includes it.
+  A whole object repeated in `#if` arms keeps every arm's bases, and now every arm's
+  `implements` too (`dedup_objects` kept the first copy's only, which also lost a codeunit's
+  later-arm interface, and its edges, before this change). `PACK_SCHEMA` 22 -> 23 (the sample
+  pack re-pinned); the session's declaration hash and the LSP definition surface (item 24)
+  include it.
 - **Resolution.**
   - `ResolveIndex::implementers_of(base)` also lists the implementers of every interface derived
-    from it, transitively, codeunits and closed enums alike, its own first and then the derived
-    ones in name order; an `extends` cycle (alc refuses one) ends.
+    from it, transitively, codeunits and closed enums alike. By identity: the implemented
+    interface resolves from the implementer's own app and each base from its declaring
+    interface's app, so two apps' same-named interfaces never pool their bases. The base's own
+    implementers come first, then the derived ones in object order, each once; an `extends`
+    cycle (alc refuses one) ends.
   - `interface_route_applicable` (the semantic audit's check of an interface route) accepts an
     implementer of a derived interface.
+  - Overload picking: an interface or codeunit into an interface parameter is never "provably
+    incompatible" (a derived interface's value and its implementer bind a base parameter), so
+    `Take(Z)` with `Z: IBaz` picks `Take(B: Interface IBar)`. This also covers a codeunit passed to
+    an interface parameter, which was already wrongly ruled out.
   - The declared signature of a member an interface inherits (`interface_own_routine_node`):
     the interface's own declaration first, else exactly one same-arity declaration across its
     bases (a diamond's shared base counted once), each base named from its declaring interface's
     app. It types an interface call used as an argument (`Take(O.Bar())` picks the overload).
+  - G24: a closed enum of a derived interface with a value mapped outside the program opens a
+    base's site too (its every mapping counts when it is listed through a derived interface).
+  - G28: an internal interface closes only while every interface derived from it is closed too.
+    A PUBLIC interface may extend an internal one (alc 18.0.41 compiles it, probe
+    `/work/.al-sem/probes/eng142-internal`), and any unloaded app may implement it.
+- **Model and graph readers.** The model's interface dispatch meta (`total_impls`,
+  `unresolved_impls`, `enum_implementers`) and the impact graph's callbacks hub match the
+  implementers of derived interfaces too (`ProgramGraph::add_derived_interfaces`).
+  `SUMMARY_SCHEMA` 17 -> 18, `FACADE_VERSION` 2 -> 3.
+- **Kept as is, on purpose.** A chained call on an interface with more than one implementer is
+  not typed (the harness pins that decline, test 32e). So a base that had one implementer and
+  gains more through derived interfaces stops typing such chains: a precision loss that comes
+  with the soundness gain. Typing interface chains from the declared signature whatever the
+  implementer count is a separate change (filed).
+- **Grammar gap filed.** A header-only `#if` split of an interface's `extends` list is valid AL
+  (alc 18.0.41 compiles it) but does not parse in tree-sitter-al v5.4.0: filed as
+  https://github.com/SShadowS/tree-sitter-al/issues/46. Such an interface gives no bases until
+  the grammar parses it.
 - **Tests.** `program::resolve::interface_extends_tests` resolves whole workspaces: a call
   through a base reaches every derived implementer (a qualified base, a grand-derived interface,
-  not a base's implementer through a derived interface); a dependency's bases come from its
-  symbols; a recovered parse gives no bases; an `extends` cycle ends; an inherited member types
-  an argument. Plus `interface_applicable_through_a_derived_interface` and
-  `an_interfaces_bases_are_written` (synthesis). Seven discrimination proofs, all red. One break
-  stayed GREEN at first: with implementers present `arg_dispatch` falls back to their agreeing
-  return types, so the argument test uses an interface with no implementer in the program.
+  not a base's implementer through a derived interface), in order and each once; a dependency's
+  bases come from its symbols; a broken interface gives no bases, an error elsewhere in its file
+  leaves them; a whole-object `#if` split keeps every arm's interfaces; an `extends` cycle ends;
+  an inherited member types an argument; a derived interface's value binds a base parameter; an
+  internal base with a public derived interface is open. Plus
+  `interface_applicable_through_a_derived_interface`, `an_interfaces_bases_are_written`
+  (synthesis, a GUID-prefixed base), `interface_extends_changed_changes_fingerprint` (LSP),
+  `interface_meta_counts_a_derived_interfaces_implementer` (model),
+  `the_callbacks_hub_reaches_a_derived_interfaces_implementer` (impact graph) and the G24 index
+  test. Each rule has a discrimination proof, all red. Three breaks stayed GREEN at first and
+  their fixtures were changed: with implementers present `arg_dispatch` falls back to their
+  agreeing return types (the argument test uses an interface with no implementer); a codeunit
+  implementing `IBaz` already reached `IQux` (the `#if`-arms test uses `IBar`); and the
+  recovered-parse test first pinned the file-wide guard, which dropped true edges (review,
+  Fable).
 
 ### Fixed (TLS-103: the cdo-speed stub tests no longer depend on the host's load)
 

@@ -381,6 +381,31 @@ fn other_unknown_bare_call() {
 /// `OnInsert` trigger symbol.
 const DEP_SYMBOLS: &str = r#"{"Tables":[{"Id":18,"Name":"Customer","Fields":[{"Id":1,"Name":"No.","TypeDefinition":{"Name":"Code"}}],"Methods":[{"Name":"DepProc","Parameters":[]},{"Name":"OnInsert","Parameters":[]}]}],"Interfaces":[{"Name":"IDep","Methods":[{"Name":"Go","Parameters":[{"Name":"C","IsVar":true,"TypeDefinition":{"Name":"Record","Subtype":{"Name":"Customer","Id":18}}}]}]}],"Codeunits":[{"Id":80,"Name":"Sales-Post","Methods":[{"Name":"Post","Parameters":[{"Name":"C","IsVar":true,"TypeDefinition":{"Name":"Record","Subtype":{"Name":"Customer","Id":18}}}]}]},{"Id":81,"Name":"DepImpl","ImplementedInterfaces":["IDep"],"Methods":[{"Name":"Go","Parameters":[{"Name":"C","IsVar":true,"TypeDefinition":{"Name":"Record","Subtype":{"Name":"Customer","Id":18}}}]}]}]}"#;
 
+/// ENG-142 (review, Fable): a call through `IBar` whose only implementer
+/// implements `IBaz extends IBar`: the model's dispatch meta counts it, as the
+/// edge's route does. Mutation (2026-11-19): the derived-interface family
+/// dropped from the meta's implementer match -> `total_impls` 0 (red);
+/// restored, green.
+#[test]
+fn interface_meta_counts_a_derived_interfaces_implementer() {
+    let ifaces = "interface IBar\n{\n    procedure Bar();\n}\ninterface IBaz extends IBar\n{\n    procedure Baz();\n}\n";
+    let imp = "codeunit 50103 \"WsImpl\" implements IBaz\n{\n    procedure Bar()\n    begin\n    end;\n\n    procedure Baz()\n    begin\n    end;\n}\n";
+    let cu = "codeunit 50101 \"W\"\n{\n    procedure Caller()\n    var\n        X: Interface IBar;\n    begin\n        X.Bar();\n    end;\n}\n";
+    let a = adapt(
+        &[("src/f.al", ifaces), ("src/i.al", imp), ("src/w.al", cu)],
+        None,
+    );
+    let cs = a.site("Caller", "X.Bar");
+    let metas: Vec<_> = a
+        .edges(&cs.id)
+        .into_iter()
+        .filter_map(|e| e.dispatch_meta)
+        .collect();
+    assert_eq!(metas.len(), 1, "{metas:?}");
+    assert_eq!(metas[0].total_impls, 1, "{metas:?}");
+    assert!(metas[0].unresolved_impls.is_empty(), "{metas:?}");
+}
+
 /// Row "Polymorphic (interface)", engine-switch S3.2: one `Interface`+`Maybe`
 /// edge to the workspace implementer, `dispatch_meta` on it, and one to-less
 /// `Interface`+`ExternalTarget` edge naming the dependency implementer

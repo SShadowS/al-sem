@@ -2349,6 +2349,19 @@ fn position_provably_incompatible(arg: &ArgDispatchInfo, param: &ParamDispatchIn
     if arg_canonical.is_variant() {
         return false;
     }
+    // ENG-142 (review, sol): an interface parameter takes a value of any
+    // interface derived from it and of any codeunit implementing one (alc
+    // 18.0.41: `B := Z` for `Z: Interface IBaz` and `B := <codeunit implementing
+    // IBaz>` for `B: Interface IBar`). That relation is not checked here, so an
+    // interface or codeunit into an interface parameter is never proven apart:
+    // undecided at worst, never a wrong pick.
+    if let CanonicalArgType::Object(p) = &param.canonical
+        && p.kind == ObjectKind::Interface
+        && matches!(arg_canonical, CanonicalArgType::Object(a)
+            if matches!(a.kind, ObjectKind::Interface | ObjectKind::Codeunit))
+    {
+        return false;
+    }
     // Every DotNet type canonicalizes to `dotnet`, and whether one converts
     // with a simple AL value depends on the .NET type (alc 18.0.43: a `DotNet
     // MemoryStream` into InStream and OutStream, a `DotNet String` into Text

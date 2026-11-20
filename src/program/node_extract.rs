@@ -1153,14 +1153,10 @@ pub fn extract_nodes(
             declared_id: obj.id,
             extends_target: obj.extends_target.as_deref().map(SharedStr::from),
             implements: obj.implements.iter().map(SharedStr::from).collect(),
-            // GRM-05's note (Fable): a recovered parse can misread the list
-            // (`extends A.` before `#if X` reads the base as `X`), so a file that
-            // did not parse clean gives no base, as `enum_closure` does.
-            interface_bases: if parse_incomplete {
-                Vec::new()
-            } else {
-                obj.interface_extends.iter().map(SharedStr::from).collect()
-            },
+            // An interface whose own node holds a parse error lowers with no
+            // bases (`al_syntax`'s `interface_extends_names`), so its list is never
+            // a misread one; an error elsewhere in the file leaves it as read.
+            interface_bases: obj.interface_extends.iter().map(SharedStr::from).collect(),
             tier,
             source_table,
             table_no,

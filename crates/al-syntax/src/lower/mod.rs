@@ -818,7 +818,15 @@ fn implements_clause_names(clause: RawNode, source: &str, out: &mut Vec<String>)
 /// `extends_interface` entry of the declaration and of each `#if` group in the list
 /// (`preproc_conditional_extends`, nested groups included), document order. Every arm's
 /// names are kept: the same union [`extract_implements`] reads.
+///
+/// An interface whose node holds a parse error gives NO bases (GRM-05 review,
+/// Fable; ENG-142): recovery can misread the list (`extends A.` before `#if X`
+/// becomes `qualified_name(A, ERROR, X)`, read as base `X`). The object's own
+/// node, not the file: an error in another object leaves this list as read.
 fn interface_extends_names(node: RawNode, source: &str) -> Vec<String> {
+    if node.has_error() {
+        return Vec::new();
+    }
     fn walk<'t>(n: RawNode<'t>, out: &mut Vec<RawNode<'t>>) {
         out.extend(n.children_by_field(FieldName::ExtendsInterface));
         for g in n.named_children() {

@@ -89,7 +89,9 @@ use crate::program::model::workspace::{Model, ModelRoutine};
 /// 17 (ENG-131): identifiers fold as the compiler compares them, in stable ids
 /// too, so a routine whose name holds `İ`, `ẞ`, `µ`, `ς` or another of the 27
 /// re-classed chars has a new stable id (and an event a new event id).
-pub const SUMMARY_SCHEMA: u32 = 17;
+/// 18 (ENG-142): a call through a base interface reaches the implementers of
+/// every interface derived from it, so a key's callee effects may grow.
+pub const SUMMARY_SCHEMA: u32 = 18;
 
 /// One own site of a key.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
