@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (TLS-104: a host suspend is labelled in cdo-speed, cdo-gate and cdo-slot)
+
+- **What happened.** During ENG-145's landing, cdo-speed's log jumped 33 minutes between two
+  calls while the call itself read 8.2 s. server1 had suspended for 1,965 s
+  (`/sys/power/suspend_stats/last_hw_sleep`). Every Claude session on the machine went quiet for
+  exactly that window. A call's wall time is `CLOCK_MONOTONIC`, which stops during a suspend;
+  cdo-gate's phase seconds are bash `$SECONDS`, which do not. The call after the resume ran at
+  x2.0 its pair (cold caches and clocks). server1 is a laptop that suspends when it is moved
+  (owner, 2026-11-20), so a suspend is expected: it is labelled, never hidden.
+- **The reading.** New `scripts/host-suspended` prints the host's suspended seconds since boot,
+  `CLOCK_BOOTTIME` minus `CLOCK_MONOTONIC`. A rise between two readings is a suspend between
+  them. Test hook `CDO_HOST_SUSPENDED_FILE` (shared by the three scripts).
+- **cdo-speed** reads it before and after each timed call. A rise of at least 1 s is logged
+  (`host suspended N s before|during <call>`). "Before" covers time since the previous reading:
+  that call ran cold after a resume. The verdict line gains ` SUSPENDED:` with the total and
+  where. `speed.json` lists them (`suspended`), and each record carries `suspended_before` and
+  `suspended_during`. The same limits judge the run. Instruction counts are unaffected: a
+  suspended task executes nothing.
+- **cdo-gate** reads it at each phase's start and end. A suspend during a phase gives a line under
+  the phase (`the host was suspended N s during this phase: its seconds include that time`),
+  a `suspended` line in `phases.times`, and a note under the phase in the summary.
+- **cdo-slot** records the reading with a hold and with a timing. `status` says how much of a
+  hold's age the host spent suspended (`(42 min, 1965 s of it with the host suspended)`): an
+  old hold can be a laptop that slept, not a hung holder.
+- **Tests.** One red proof per rule (each test's doc):
+  - cdo-speed: a stub server "sleeps" 5 s during one call. The test checks the label, the log
+    line and `speed.json`; the control run has none.
+  - cdo-gate: the stubbed gate's first phase sees a 30 s suspend. The test checks its line and
+    the summary note; the next phase has none, and so does the control.
+  - `host-suspended` reads a whole number and refuses an unreadable hook.
+  - cdo-slot's status names 60 s after the reading moves.
+
+  The hook files have no final newline, which the first `host-suspended` refused. The slot test
+  found it, and it is fixed.
+
 ### Fixed (ENG-148: a runtime package's codeunit implementers reach interface dispatch)
 
 - **The gap.** A runtime package ships no AL, only BC's transpiled C# (`bin/*.cs`) and its
