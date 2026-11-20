@@ -8317,34 +8317,10 @@ fn resolve_module_pick_first_base_function_callers_are_a_known_allowlist() {
             "index.rs",
             "if let Some(base) = graph.resolve_object(obj.id.app, base_kind, target) {",
         ),
-        (
-            "receiver.rs",
-            "let iface = graph.resolve_object(from_object.id.app, ObjectKind::Interface, name_lc)?;",
-        ),
-        // ENG-142: an interface's base, named from the declaring interface's own
-        // app, for a member it inherits (`interface_own_routine_node`'s base
-        // search). Semantic: no base, or an unresolvable one, adds no candidate.
-        (
-            "receiver.rs",
-            "graph.resolve_object(o.id.app, ObjectKind::Interface, &b.fold_identifier())",
-        ),
-        // ENG-142: the same base lookup for overload picking (`interface_binds`:
-        // does an interface argument derive from an interface parameter). An
-        // unresolvable base answers "may bind": undecided, never a wrong pick.
-        (
-            "arg_dispatch.rs",
-            "graph.resolve_object(o.id.app, ObjectKind::Interface, &b.fold_identifier())",
-        ),
-        // ENG-142: an enum mapping's interface against a site's interface, both
-        // named from the enum's app (`interface_is_or_derives`, G24 and the
-        // closed-enum coverage proof). Unresolvable: the mapping counts.
-        (
-            "arg_dispatch.rs",
-            "let find = |n: &str| graph.resolve_object(app, ObjectKind::Interface, n);",
-        ),
-        // (ENG-142's implementer closure resolves through
-        // `ProgramGraph::interfaces_named_from`, outside this module: a name that
-        // does not resolve uniquely names every interface of that name.)
+        // (ENG-152: every interface name binds through
+        // `ProgramGraph::bind_interface`, outside this module, never
+        // `resolve_object`: own-app-first is not alc's rule for interfaces, and a
+        // name several apps declare binds to all of them.)
         // The query-column chain arm (S9.0e): a declared `Query` var's object,
         // the same lookup `resolve_member`'s `Object` arm makes for it; a
         // collision fails closed and the arm declines.
@@ -9753,6 +9729,13 @@ fn ws_protected_abi_internal_and_local_still_declines_but_with_precise_reason() 
 /// PER-CANDIDATE visibility independently: the dep route declines
 /// (`ProtectedNotVisible`), the workspace route resolves `Source`. Neither a
 /// visible sibling nor an excluded sibling may influence the other's route.
+///
+/// ENG-152: the dep's symbols list a bare `IProtWorker` though the dep declares
+/// none (not alc's shape: alc writes another app's `#<guid>#`). The bare
+/// reference is read as the dep's own (an INFERRED app), which declares no
+/// such interface, so it binds as a bare name and the dep implementer stays.
+/// Mutation (2026-11-20): `bind_interface`'s inferred fallback dropped -> the
+/// dep implementer is lost, 1 route (red); restored, green.
 #[test]
 fn ws_protected_abi_interface_fanout_respects_visibility() {
     let report = ws_protected_abi_report();

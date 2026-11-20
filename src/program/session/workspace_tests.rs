@@ -701,8 +701,11 @@ fn extension_added_and_removed(mode: MemoryMode) {
 }
 
 /// A name collision introduced and removed: a workspace interface named like
-/// the dependency's. Whatever it changes in the dependency's dispatch, the
-/// session equals cold, and only files that read the name are re-resolved.
+/// the dependency's. The session equals cold. ENG-152: the dependency's
+/// dispatch binds its interface from the dependency's own scope, which does not
+/// see the workspace (alc), so the collision changes no answer the dependency
+/// read and no dependency file is re-resolved (by name, the pooled
+/// `implementers_of("dep i")` read changed and one file was).
 fn name_collision_introduced_and_removed(mode: MemoryMode) {
     let ws = base_ws();
     let mut s = WorkspaceSession::with_mode(mode);
@@ -714,7 +717,7 @@ fn name_collision_introduced_and_removed(mode: MemoryMode) {
         "collision",
         |w| w.write("DupI.Interface.al", dup),
         false,
-        1,
+        0,
     );
     assert!(r.dependency_files_resolved < r.dependency_files);
     s_edit(
@@ -723,6 +726,44 @@ fn name_collision_introduced_and_removed(mode: MemoryMode) {
         "collision removed",
         |w| w.remove("DupI.Interface.al"),
         false,
+        0,
+    );
+}
+
+const DEP_GHOST_USER: &str = "codeunit 70012 \"Dep Ghost User\"\n{\n    procedure CallG(X: Interface \"Ghost I\")\n    begin\n        X.M();\n    end;\n}\n";
+const WS_GHOST: &str = "interface \"Ghost I\"\n{\n    procedure M();\n}\n\ncodeunit 50151 \"Ghost Impl\" implements \"Ghost I\"\n{\n    procedure M()\n    begin\n    end;\n}\n";
+
+/// ENG-152: a dependency names an interface it cannot see, so its binding
+/// falls back to every interface of that name in the program, the
+/// workspace's included. A workspace `Ghost I` (and implementer) added, then
+/// removed, changes that binding: the dependency file is re-resolved, and
+/// the session equals cold.
+///
+/// Mutation (2026-11-20): `bind_interface`'s replay record dropped (the
+/// facade answers without recording `BindInterface`) -> "ghost added": the
+/// warm program differs from cold, both modes (red); restored, green.
+fn an_unseen_interface_binding_follows_the_workspace(mode: MemoryMode) {
+    let ws = base_ws();
+    ws.write_dep(&[
+        ("src/DepLib.Codeunit.al", DEP_LIB),
+        ("src/DepGhostUser.Codeunit.al", DEP_GHOST_USER),
+    ]);
+    let mut s = WorkspaceSession::with_mode(mode);
+    refresh_and_compare(&mut s, &ws, "cold");
+    s_edit(
+        &mut s,
+        &ws,
+        "ghost added",
+        |w| w.write("Ghost.Interface.al", WS_GHOST),
+        true,
+        1,
+    );
+    s_edit(
+        &mut s,
+        &ws,
+        "ghost removed",
+        |w| w.remove("Ghost.Interface.al"),
+        true,
         1,
     );
 }
@@ -1771,6 +1812,7 @@ in_both_modes!(
     extension_added_and_removed,
     name_collision_introduced_and_removed,
     dependency_dispatch_over_a_workspace_enum,
+    an_unseen_interface_binding_follows_the_workspace,
     demand_expansion_and_contraction,
     dependency_raiser_and_subscriber_edits,
     event_flow_edge_of_an_unchanged_publisher_moves_under_b,

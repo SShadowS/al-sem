@@ -30,8 +30,9 @@ use al_syntax::ir::{
     RoutineDecl, StmtId, StmtKind,
 };
 
+use crate::program::graph::InterfaceBinding;
 use crate::program::node::ObjectNodeId;
-use crate::program::node_extract::{ObjectNode, ObjectRef, fold_ref_name};
+use crate::program::node_extract::{InterfaceRef, ObjectNode, ObjectRef, fold_ref_name};
 use crate::program::resolve::edge::{Evidence, Route, RouteTarget};
 use crate::program::resolve::extract::WithState;
 use crate::program::resolve::index::ObjectRefResolution;
@@ -57,12 +58,17 @@ pub(crate) struct ClosedEnumCx<'a> {
 
 /// The closed enums (sorted) the interface call on `receiver` dispatches over,
 /// when its `routes` are exactly the reachable implementations; else empty.
+/// ENG-152: only a receiver whose type binds to ONE interface (`binding`) can
+/// close: a merely visible or unbound one proves nothing.
 pub(crate) fn closed_over(
     cx: &ClosedEnumCx,
     receiver: ExprId,
-    interface_lc: &str,
+    binding: &InterfaceBinding,
     routes: &[Route],
 ) -> Vec<ObjectNodeId> {
+    let Some(iface) = binding.exact() else {
+        return Vec::new();
+    };
     // Closed + empty would classify `Unknown` (`edge.rs`); a route that is not
     // real is an honest hole, never part of a closed set (spec §4).
     let real = |r: &Route| {
@@ -71,13 +77,13 @@ pub(crate) fn closed_over(
     if routes.is_empty() || !routes.iter().all(real) {
         return Vec::new();
     }
-    let Some(enums) = closed_enum_sources(cx, receiver, interface_lc) else {
+    let Some(enums) = closed_enum_sources(cx, receiver, iface) else {
         return Vec::new();
     };
     let covered = |id: &ObjectNodeId| {
         cx.graph
             .object(id)
-            .is_some_and(|e| enum_covered_by_routes(cx.graph, cx.index, e, interface_lc, routes))
+            .is_some_and(|e| enum_covered_by_routes(cx.graph, cx.index, e, iface, routes))
     };
     if enums.iter().all(covered) {
         enums
@@ -102,7 +108,7 @@ pub(crate) fn closed_over(
 pub(crate) fn closed_enum_sources(
     cx: &ClosedEnumCx,
     receiver: ExprId,
-    interface_lc: &str,
+    iface: &ObjectNodeId,
 ) -> Option<Vec<ObjectNodeId>> {
     if cx.file.parse_status != ParseStatus::Clean || cx.routine.parse_incomplete {
         return None;
@@ -120,13 +126,13 @@ pub(crate) fn closed_enum_sources(
     }
     let ir = &cx.file.ir;
     let v_lc = name_of(ir, receiver)?;
-    if !is_interface_local(cx, &v_lc, interface_lc) {
+    if !is_interface_local(cx, &v_lc, iface) {
         return None;
     }
     let writes = allowlisted_writes(ir, cx.routine.body?, &v_lc)?;
     let mut enums = writes
         .into_iter()
-        .map(|value| enum_identity(cx, value, interface_lc))
+        .map(|value| enum_identity(cx, value, iface))
         .collect::<Option<Vec<_>>>()?;
     enums.sort();
     enums.dedup();
@@ -147,13 +153,23 @@ pub(super) fn name_of(ir: &Ir, e: ExprId) -> Option<String> {
 }
 
 /// Rule 2: `v_lc` is a local of the routine, every declaration of it (one per
-/// `#if` arm) is `Interface <interface_lc>`, and nothing else in scope shares
-/// the name.
-fn is_interface_local(cx: &ClosedEnumCx, v_lc: &str, interface_lc: &str) -> bool {
+/// `#if` arm) is `Interface I` binding exactly to `iface` from the routine's
+/// object (ENG-152), and nothing else in scope shares the name.
+fn is_interface_local(cx: &ClosedEnumCx, v_lc: &str, iface: &ObjectNodeId) -> bool {
     let r = cx.routine;
     let named = |n: &str| n.fold_identifier() == v_lc;
     let mut locals = r.locals.iter().filter(|l| named(&l.name)).peekable();
-    let is_i = |ty: Option<&str>| matches!(ty.map(classify_type_text), Some(ParsedType::Interface { name }) if name == interface_lc);
+    let is_i = |ty: Option<&str>| match ty.map(classify_type_text) {
+        Some(ParsedType::Interface { name, app }) => {
+            let r = InterfaceRef {
+                name: name.into(),
+                app,
+                inferred: false,
+            };
+            cx.graph.bind_interface(cx.from_object.id.app, &r).exact() == Some(iface)
+        }
+        _ => false,
+    };
     locals.peek().is_some()
         && locals.all(|l| is_i(l.ty.as_deref()))
         && !r.params.iter().any(|p| named(&p.name))
@@ -310,14 +326,15 @@ impl Occurrences<'_> {
 }
 
 /// Rule 4: the closed enum `value` is a value of, or `None`. The enum must be
-/// `closed_enum` and implement I.
-fn enum_identity(cx: &ClosedEnumCx, value: ExprId, interface_lc: &str) -> Option<ObjectNodeId> {
+/// `closed_enum` and implement I: a reference of its own that binds, from its
+/// app, to exactly `iface` (ENG-152).
+fn enum_identity(cx: &ClosedEnumCx, value: ExprId, iface: &ObjectNodeId) -> Option<ObjectNodeId> {
     let id = value_enum(cx, unparen(&cx.file.ir, value))?;
     let node = cx.graph.object(&id)?;
     let implements_i = node
         .implements
         .iter()
-        .any(|i| fold_ref_name(i) == interface_lc);
+        .any(|i| cx.graph.bind_interface(node.id.app, i).exact() == Some(iface));
     (node.closed_enum && implements_i).then_some(id)
 }
 
@@ -578,50 +595,89 @@ fn declared_type<'a>(cx: &ClosedEnumCx<'a>, name_lc: &str) -> Option<&'a str> {
     }
 }
 
-/// Spec §2: every implementation `enum_node` maps for `interface_lc` resolves,
-/// from the enum's own app, to exactly one codeunit that is the object of one
-/// of `routes`. The lookup is strict: two same-named codeunits in the enum's
-/// app (different namespaces) are ambiguous, since first-wins would pass
-/// coverage whichever one the enum meant. Not vacuous (opus N3): the enum must
-/// be closed and hold at least one entry for EVERY interface it implements.
+/// Whether `derived` is `base` or extends it through bases that each bind
+/// exactly from their declaring interface's app (ENG-152): what a proof may
+/// rely on. Each interface visited once (alc refuses an `extends` cycle).
+fn surely_derives(graph: &dyn GraphReads, derived: &ObjectNodeId, base: &ObjectNodeId) -> bool {
+    let mut seen: Vec<ObjectNodeId> = Vec::new();
+    let mut stack = vec![derived.clone()];
+    while let Some(i) = stack.pop() {
+        if &i == base {
+            return true;
+        }
+        if seen.contains(&i) {
+            continue;
+        }
+        if let Some(o) = graph.object(&i) {
+            for b in &o.interface_bases {
+                if let Some(k) = graph.bind_interface(o.id.app, b).exact() {
+                    stack.push(k.clone());
+                }
+            }
+        }
+        seen.push(i);
+    }
+    false
+}
+
+/// Spec §2: every implementation `enum_node` maps for interface `iface`
+/// resolves, from the enum's own app, to exactly one codeunit that is the
+/// object of one of `routes`. The lookup is strict: two same-named codeunits
+/// in the enum's app (different namespaces) are ambiguous, since first-wins
+/// would pass coverage whichever one the enum meant. Not vacuous (opus N3):
+/// the enum must be closed and hold at least one entry for EVERY interface it
+/// implements (by name: both sides are this enum's own text), and one for
+/// `iface`.
 pub(crate) fn enum_covered_by_routes(
     graph: &dyn GraphReads,
     index: &dyn IndexReads,
     enum_node: &ObjectNode,
-    interface_lc: &str,
+    iface: &ObjectNodeId,
     routes: &[Route],
 ) -> bool {
-    let has_entry = |iface: &str| {
+    // ENG-142 (review, sol r2): a mapping keyed by an interface derived from
+    // this one (a whole-object `#if` arm implementing it) dispatches here too.
+    // ENG-152: by identity, the key bound from the enum's own app; a key that
+    // binds no single interface may be this one, so it counts too (counting
+    // more mappings can only keep a site open, never close one).
+    let for_iface = |(i, _): &&(InterfaceRef, ObjectRef)| match graph
+        .bind_interface(enum_node.id.app, i)
+        .exact()
+    {
+        Some(k) => index.interface_is_or_derives(k, iface),
+        None => true,
+    };
+    // A key that binds no single interface may add a codeunit to check, but
+    // never stands in for `iface`'s own mapping (review, sol): `iface` needs
+    // a key that binds to it, or to an interface derived from it through
+    // bases that each bind exactly (sol r2: a base reached only through a
+    // fallback binding proves nothing either).
+    let surely_for_iface = |(i, _): &(InterfaceRef, ObjectRef)| {
+        graph
+            .bind_interface(enum_node.id.app, i)
+            .exact()
+            .is_some_and(|k| surely_derives(graph, k, iface))
+    };
+    let has_entry = |name: &str| {
         enum_node
             .enum_impls
             .iter()
-            .any(|(i, _)| i.as_ref() == iface)
+            .any(|(i, _)| i.name.as_ref() == name)
     };
     if !enum_node.closed_enum
         || !enum_node
             .implements
             .iter()
-            .all(|i| has_entry(&fold_ref_name(i)))
-        || !has_entry(interface_lc)
+            .all(|i| has_entry(&fold_ref_name(&i.name)))
+        || !enum_node.enum_impls.iter().any(surely_for_iface)
     {
         return false;
     }
     let reached: Vec<ObjectNodeId> = routes.iter().filter_map(Route::target_object).collect();
-    // ENG-142 (review, sol r2): a mapping keyed by an interface derived from this
-    // one (a whole-object `#if` arm implementing it) dispatches here too, so it
-    // must be reached as well.
     enum_node
         .enum_impls
         .iter()
-        .filter(|(i, _)| {
-            crate::program::resolve::arg_dispatch::interface_is_or_derives(
-                graph,
-                index,
-                enum_node.id.app,
-                i,
-                interface_lc,
-            )
-        })
+        .filter(for_iface)
         .all(|(_, codeunit)| {
             matches!(
                 index.resolve_object_ref_strict(graph, enum_node.id.clone(), ObjectKind::Codeunit, codeunit),
@@ -1176,6 +1232,23 @@ enum 50106 "Other Kind" implements "Other Strategy"
         assert_eq!(site[0].edge.completeness, SetCompleteness::Complete);
     }
 
+    /// The fixtures' `Demo Strategy` interface (ENG-152: coverage is asked by
+    /// identity).
+    fn demo_strategy(
+        graph: &crate::program::graph::ProgramGraph,
+    ) -> crate::program::node::ObjectNodeId {
+        graph
+            .objects
+            .iter()
+            .find(|o| {
+                o.id.kind == al_syntax::ir::ObjectKind::Interface
+                    && o.name.as_ref() == "Demo Strategy"
+            })
+            .expect("the interface")
+            .id
+            .clone()
+    }
+
     /// T34 (opus N3): an enum whose `enum_impls` hold no entry for one of the
     /// interfaces it implements is not covered, even with every route present.
     /// Stated precondition: the node's fields are set by assignment.
@@ -1208,15 +1281,33 @@ enum 50106 "Other Kind" implements "Other Strategy"
             .clone();
         assert!(node.closed_enum, "precondition: the real fact is closed");
         assert!(
-            super::enum_covered_by_routes(graph, &index, &node, "demo strategy", routes),
+            super::enum_covered_by_routes(graph, &index, &node, &demo_strategy(graph), routes),
             "precondition: covered as extracted"
         );
+        let unbound_keys = {
+            let mut n = node.clone();
+            for (i, _) in &mut n.enum_impls {
+                i.app = Some("0badf00d0badf00d0badf00d0badf00d".into());
+            }
+            n
+        };
         node.implements.push("Other Strategy".into());
         assert!(!super::enum_covered_by_routes(
             graph,
             &index,
             &node,
-            "demo strategy",
+            &demo_strategy(graph),
+            routes
+        ));
+        // ENG-152 (review, sol): keys naming an app that is not loaded bind no
+        // interface; they never stand in for `Demo Strategy`'s own mapping.
+        // Mutation (2026-11-20): the existence check counting a non-exact key
+        // -> covered (red); restored, green.
+        assert!(!super::enum_covered_by_routes(
+            graph,
+            &index,
+            &unbound_keys,
+            &demo_strategy(graph),
             routes
         ));
     }
@@ -1256,7 +1347,7 @@ enum 50106 "Other Kind" implements "Other Strategy"
             .expect("the enum")
             .clone();
         assert!(
-            super::enum_covered_by_routes(graph, &index, &node, "demo strategy", routes),
+            super::enum_covered_by_routes(graph, &index, &node, &demo_strategy(graph), routes),
             "precondition: covered as extracted"
         );
         node.implements.push("Derived Strategy".into());
@@ -1271,7 +1362,7 @@ enum 50106 "Other Kind" implements "Other Strategy"
             graph,
             &index,
             &node,
-            "demo strategy",
+            &demo_strategy(graph),
             routes
         ));
     }

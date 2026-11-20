@@ -91,7 +91,10 @@ use crate::program::model::workspace::{Model, ModelRoutine};
 /// re-classed chars has a new stable id (and an event a new event id).
 /// 18 (ENG-142): a call through a base interface reaches the implementers of
 /// every interface derived from it, so a key's callee effects may grow.
-pub const SUMMARY_SCHEMA: u32 = 18;
+/// 19 (ENG-152): implementers are found by the interface's identity, so a
+/// call no longer reaches another app's same-named interface's implementers
+/// and a key's callee effects may shrink.
+pub const SUMMARY_SCHEMA: u32 = 19;
 
 /// One own site of a key.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

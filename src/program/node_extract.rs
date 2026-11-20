@@ -267,20 +267,88 @@ pub struct FieldNode {
     pub number: Option<i64>,
 }
 
+/// An interface reference (`implements` entry, `extends` base; ENG-152): the
+/// name, and the app that declares it when the reference says so. Symbols
+/// write another app's interface as `#<guid>#Name` and their own bare (alc
+/// 18.0.41, probed), so a reference read from symbols (or from AL synthesized
+/// from them, which writes the app as a `"#<guid>#"` qualifier) always knows
+/// its app; hand-written source does not (its namespace would decide, which the
+/// graph does not model: ENG-158).
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct InterfaceRef {
+    /// Unquoted, as written (an embedded `""` kept, as for `implements`).
+    pub name: SharedStr,
+    /// The declaring app's guid, lowercase hex without dashes ([`norm_guid`]).
+    pub app: Option<SharedStr>,
+    /// `app` was inferred, not written: a bare symbol reference, which alc
+    /// writes for the package's OWN interface (another app's carries
+    /// `#<guid>#`). When that app declares no such interface the inference is
+    /// wrong (a symbol file not shaped as alc's), and the reference binds as a
+    /// bare one ([`ProgramGraph::bind_interface`]); a WRITTEN app never rebinds.
+    ///
+    /// [`ProgramGraph::bind_interface`]: crate::program::graph::ProgramGraph::bind_interface
+    #[serde(default)]
+    pub inferred: bool,
+}
+
+impl InterfaceRef {
+    /// A reference with no app (hand-written source).
+    pub fn bare(name: &str) -> Self {
+        Self {
+            name: name.into(),
+            app: None,
+            inferred: false,
+        }
+    }
+
+    /// From a reference's qualifier and name as the lowerer gives them: a
+    /// qualifier of the form `#<guid>#` names the app; any other (a namespace)
+    /// is ignored until ENG-158.
+    pub fn from_qualified(qualifier: Option<&str>, name: &str) -> Self {
+        Self {
+            name: name.into(),
+            app: qualifier.and_then(app_marker).map(|g| norm_guid(g).into()),
+            inferred: false,
+        }
+    }
+}
+
+impl From<&str> for InterfaceRef {
+    fn from(name: &str) -> Self {
+        Self::bare(name)
+    }
+}
+
+/// The guid of a `#<guid>#` app marker (the whole text), else `None`.
+pub fn app_marker(s: &str) -> Option<&str> {
+    let g = s.strip_prefix('#')?.strip_suffix('#')?;
+    (!g.is_empty() && g.chars().all(|c| c.is_ascii_hexdigit() || c == '-')).then_some(g)
+}
+
+/// A guid compared as alc writes it in either form: lowercase, no dashes.
+pub fn norm_guid(g: &str) -> String {
+    g.chars()
+        .filter(|c| *c != '-')
+        .map(|c| c.to_ascii_lowercase())
+        .collect()
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ObjectNode {
     pub id: ObjectNodeId,
     pub name: SharedStr,
     pub declared_id: Option<i64>,
     pub extends_target: Option<SharedStr>,
-    pub implements: Vec<SharedStr>,
-    /// An interface's `extends` list (ENG-142): the base interfaces' names,
-    /// unquoted, a qualified name read as its last segment, every `#if` arm's,
-    /// document order. From the source (`ObjectDecl::interface_extends`, none
-    /// when the file did not parse clean) or the symbols' `ExtendedInterfaces`.
-    /// Interface only; empty for every other kind. An implementer of a derived
-    /// interface implements each base (`ResolveIndex::implementers_of`).
-    pub interface_bases: Vec<SharedStr>,
+    /// The interfaces an object's `implements` names ([`InterfaceRef`]).
+    pub implements: Vec<InterfaceRef>,
+    /// An interface's `extends` list (ENG-142): the base interfaces,
+    /// a qualified name read as its last segment (its app marker kept, ENG-152),
+    /// every `#if` arm's, document order. From the source
+    /// (`ObjectDecl::interface_extends`, none when the interface's node did not
+    /// parse clean) or the symbols' `ExtendedInterfaces`. Interface only; empty
+    /// for every other kind. An implementer of a derived interface implements
+    /// each base (`ResolveIndex::implementers_of`).
+    pub interface_bases: Vec<InterfaceRef>,
     pub tier: TrustTier,
     /// The `SourceTable` object property — Page/PageExtension/Report/
     /// ReportExtension only; `None` for every other kind (and when the
@@ -343,11 +411,12 @@ pub struct ObjectNode {
     /// interface's dispatch once every friend is loaded,
     /// `build::closed_internal_interfaces`). `false` for a symbol-only object.
     pub internal: bool,
-    /// `(interface name folded, implementing codeunit)` for every value's
-    /// `Implementation` pair, every `DefaultImplementation` and every
+    /// `(interface, implementing codeunit)` for every value's `Implementation`
+    /// pair, every `DefaultImplementation` and every
     /// `UnknownValueImplementation`, union over `#if` arms, document order, no
-    /// duplicates. Empty unless [`Self::closed_enum`].
-    pub enum_impls: Vec<(SharedStr, ObjectRef)>,
+    /// duplicates; the interface's name folded, its app kept (ENG-152). Empty
+    /// unless [`Self::closed_enum`].
+    pub enum_impls: Vec<(InterfaceRef, ObjectRef)>,
     /// A Table's or TableExtension's `LookupPageId` values (raw property
     /// text, union over `#if` arms); empty for every other kind and for a
     /// symbol-only table. `Page.Run(0, Rec)` runs that page
@@ -642,11 +711,9 @@ impl ShareStrings for ObjectNode {
         self.id.share_strings(pool);
         pool.share(&mut self.name);
         pool.share_opt(&mut self.extends_target);
-        for s in &mut self.implements {
-            pool.share(s);
-        }
-        for s in &mut self.interface_bases {
-            pool.share(s);
+        for r in self.implements.iter_mut().chain(&mut self.interface_bases) {
+            pool.share(&mut r.name);
+            pool.share_opt(&mut r.app);
         }
         for c in &mut self.page_controls {
             pool.share(&mut c.name_lc);
@@ -671,7 +738,8 @@ impl ShareStrings for ObjectNode {
             pool.share(ty);
         }
         for (iface, _) in &mut self.enum_impls {
-            pool.share(iface);
+            pool.share(&mut iface.name);
+            pool.share_opt(&mut iface.app);
         }
         for page in &mut self.lookup_pages {
             pool.share(page);
@@ -736,7 +804,12 @@ pub(crate) fn enum_value_impls(
     let one = |raws: &[&str]| -> Option<Vec<(String, ObjectRef)>> {
         match raws {
             [] => Some(Vec::new()),
-            [raw] => read_impl_pairs(raw),
+            [raw] => read_impl_pairs(raw).map(|pairs| {
+                pairs
+                    .into_iter()
+                    .map(|(i, c)| (i.name.to_string(), c))
+                    .collect()
+            }),
             _ => None,
         }
     };
@@ -772,14 +845,14 @@ pub(crate) fn enum_value_impls(
 pub(crate) fn enum_closure(
     obj: &al_syntax::ir::ObjectDecl,
     parse_incomplete: bool,
-) -> (bool, Vec<(SharedStr, ObjectRef)>) {
+) -> (bool, Vec<(InterfaceRef, ObjectRef)>) {
     enum_closure_impls(obj, parse_incomplete).map_or((false, Vec::new()), |impls| (true, impls))
 }
 
 fn enum_closure_impls(
     obj: &al_syntax::ir::ObjectDecl,
     parse_incomplete: bool,
-) -> Option<Vec<(SharedStr, ObjectRef)>> {
+) -> Option<Vec<(InterfaceRef, ObjectRef)>> {
     if obj.kind != ObjectKind::Enum || obj.implements.is_empty() || parse_incomplete {
         return None;
     }
@@ -792,35 +865,39 @@ fn enum_closure_impls(
     {
         return None;
     }
-    let mut impls: Vec<(SharedStr, ObjectRef)> = Vec::new();
-    fn add(pairs: Vec<(String, ObjectRef)>, impls: &mut Vec<(SharedStr, ObjectRef)>) {
-        for (iface, codeunit) in pairs {
-            let entry = (SharedStr::from(iface.as_str()), codeunit);
+    let mut impls: Vec<(InterfaceRef, ObjectRef)> = Vec::new();
+    fn add(pairs: Vec<(InterfaceRef, ObjectRef)>, impls: &mut Vec<(InterfaceRef, ObjectRef)>) {
+        for entry in pairs {
             if !impls.contains(&entry) {
                 impls.push(entry);
             }
         }
     }
-    let mut defaults = Vec::new();
+    // Coverage (every implemented interface mapped for every value) compares
+    // folded names: both sides are this enum's own text.
+    let mut defaults: Vec<SharedStr> = Vec::new();
     for p in &obj.properties {
         let is_default = p.name == "defaultimplementation";
         if is_default || p.name == "unknownvalueimplementation" {
             let pairs = read_impl_pairs(&p.value)?;
             if is_default {
-                defaults.extend(pairs.iter().map(|(iface, _)| iface.clone()));
+                defaults.extend(pairs.iter().map(|(iface, _)| iface.name.clone()));
             }
             add(pairs, &mut impls);
         }
     }
     let implemented: Vec<String> = obj.implements.iter().map(|i| fold_ref_name(i)).collect();
     for value in &obj.enum_values {
-        let mut mapped = Vec::new();
+        let mut mapped: Vec<SharedStr> = Vec::new();
         for raw in &value.implementations {
             let pairs = read_impl_pairs(raw)?;
-            mapped.extend(pairs.iter().map(|(iface, _)| iface.clone()));
+            mapped.extend(pairs.iter().map(|(iface, _)| iface.name.clone()));
             add(pairs, &mut impls);
         }
-        let covered = |iface: &String| mapped.contains(iface) || defaults.contains(iface);
+        let covered = |iface: &String| {
+            mapped.iter().any(|m| m.as_ref() == iface.as_str())
+                || defaults.iter().any(|d| d.as_ref() == iface.as_str())
+        };
         if !implemented.iter().all(covered) {
             return None;
         }
@@ -831,16 +908,35 @@ fn enum_closure_impls(
 /// [`parse_impl_pairs`] of `raw` with the interface folded and the codeunit
 /// as an [`ObjectRef`]. The interface may be namespace-qualified (it is matched
 /// by folded name); a qualified codeunit makes the whole value unreadable.
-fn read_impl_pairs(raw: &str) -> Option<Vec<(String, ObjectRef)>> {
+fn read_impl_pairs(raw: &str) -> Option<Vec<(InterfaceRef, ObjectRef)>> {
     let pairs = parse_impl_pairs(raw)?;
     let read = |(iface, codeunit): (String, String)| {
         // The graph holds no namespaces (`ResolveIndex::resolve_object_ref`), so
         // `Ns2."Impl"` would resolve to an `Impl` in any namespace: unreadable.
         let unqualified = crate::program::resolve::receiver::strip_namespace(&codeunit);
-        (unqualified == codeunit)
-            .then(|| (fold_ref_name(&iface), parse_object_ref_value(unqualified).0))
+        (unqualified == codeunit).then(|| {
+            (
+                interface_ref_text(&iface),
+                parse_object_ref_value(unqualified).0,
+            )
+        })
     };
     pairs.into_iter().map(read).collect()
+}
+
+/// An interface reference's text (`IDup`, `NsA.IDup`, `"#<guid>#"."Dep Iface"`)
+/// as an [`InterfaceRef`] (ENG-152): the folded last segment, and the app of a
+/// `#<guid>#` qualifier (a namespace qualifier is ignored until ENG-158).
+pub(crate) fn interface_ref_text(s: &str) -> InterfaceRef {
+    let s = s.trim();
+    let last = crate::program::resolve::receiver::strip_namespace(s);
+    let head = s[..s.len() - last.len()]
+        .trim_end()
+        .trim_end_matches('.')
+        .trim();
+    let head =
+        (!head.is_empty()).then(|| crate::program::resolve::receiver::unquote_identifier(head));
+    InterfaceRef::from_qualified(head.as_deref(), &fold_ref_name(s))
 }
 
 /// An object reference's folded name: last namespace segment, unquoted.
@@ -1046,6 +1142,15 @@ fn page_control_kind(raw: &str) -> Option<PageControlKind> {
     }
 }
 
+/// The lowerer's parallel name and qualifier lists as [`InterfaceRef`]s.
+fn qualified_refs(names: &[String], qualifiers: &[Option<String>]) -> Vec<InterfaceRef> {
+    names
+        .iter()
+        .enumerate()
+        .map(|(i, n)| InterfaceRef::from_qualified(qualifiers.get(i).and_then(|q| q.as_deref()), n))
+        .collect()
+}
+
 pub fn extract_nodes(
     app: AppRef,
     file: &AlFile,
@@ -1152,11 +1257,14 @@ pub fn extract_nodes(
             name: obj.name.as_str().into(),
             declared_id: obj.id,
             extends_target: obj.extends_target.as_deref().map(SharedStr::from),
-            implements: obj.implements.iter().map(SharedStr::from).collect(),
+            implements: qualified_refs(&obj.implements, &obj.implements_qualifiers),
             // An interface whose own node holds a parse error lowers with no
             // bases (`al_syntax`'s `interface_extends_names`), so its list is never
             // a misread one; an error elsewhere in the file leaves it as read.
-            interface_bases: obj.interface_extends.iter().map(SharedStr::from).collect(),
+            interface_bases: qualified_refs(
+                &obj.interface_extends,
+                &obj.interface_extends_qualifiers,
+            ),
             tier,
             source_table,
             table_no,
@@ -1926,8 +2034,8 @@ page 50110 "Temporary Marker Conflict"
         let impls = impls
             .into_iter()
             .map(|(iface, r)| match r {
-                ObjectRef::Name { normalized_lc, .. } => (iface.to_string(), normalized_lc),
-                ObjectRef::Id(n) => (iface.to_string(), n.to_string()),
+                ObjectRef::Name { normalized_lc, .. } => (iface.name.to_string(), normalized_lc),
+                ObjectRef::Id(n) => (iface.name.to_string(), n.to_string()),
             })
             .collect();
         (closed, impls)

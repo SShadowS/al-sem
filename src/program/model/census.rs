@@ -290,9 +290,10 @@ pub fn object_fact_census(
                 ),
                 format!(
                     "{:?}",
+                    // The model keeps bare names (ENG-152: the app is the graph's).
                     n.implements
                         .iter()
-                        .map(|s| s.fold_identifier())
+                        .map(|s| s.name.fold_identifier())
                         .collect::<Vec<_>>()
                 ),
             );

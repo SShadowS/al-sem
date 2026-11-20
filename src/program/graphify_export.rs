@@ -31,7 +31,6 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 
-use al_syntax::IdentifierFoldExt;
 use al_syntax::ir::ObjectKind;
 use serde::Serialize;
 
@@ -311,29 +310,33 @@ fn build_hyperedges(
     }
 
     // ── Interface families: interface + its ≥2 implementers ───────────────────
-    let iface_by_name: HashMap<String, &ObjectNode> = graph
-        .objects
-        .iter()
-        .filter(|o| o.id.kind == ObjectKind::Interface)
-        .map(|o| (o.name.fold_identifier(), o))
-        .collect();
-    let mut impls: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    // ENG-152: one family per interface, by identity: each `implements`
+    // reference joins the family of every interface it binds to from its
+    // object's app (two apps' same-named interfaces are two families). A
+    // reference that binds nothing is skipped rather than dangle.
+    let mut impls: BTreeMap<String, (&ObjectNode, Vec<String>)> = BTreeMap::new();
     for o in &graph.objects {
-        for iface in &o.implements {
-            impls
-                .entry(iface.fold_identifier())
-                .or_default()
-                .push(object_id_str(&o.id, &graph.apps));
+        for r in &o.implements {
+            for iface in graph.bind_interface(o.id.app, r).ids() {
+                let Some(iface_obj) = graph.object(iface) else {
+                    continue;
+                };
+                let list = &mut impls
+                    .entry(object_id_str(iface, &graph.apps))
+                    .or_insert((iface_obj, Vec::new()))
+                    .1;
+                let id = object_id_str(&o.id, &graph.apps);
+                if !list.contains(&id) {
+                    list.push(id);
+                }
+            }
         }
     }
-    for (iface_lc, impl_ids) in &impls {
+    for (iface_id, (iface_obj, impl_ids)) in &impls {
         if impl_ids.len() < 2 {
             continue;
         }
-        let Some(iface_obj) = iface_by_name.get(iface_lc) else {
-            continue; // interface not in the graph — skip rather than dangle
-        };
-        let iface_id = object_id_str(&iface_obj.id, &graph.apps);
+        let iface_id = iface_id.clone();
         let mut nodes = Vec::with_capacity(impl_ids.len() + 1);
         nodes.push(iface_id.clone());
         nodes.extend(impl_ids.iter().cloned());
@@ -1061,6 +1064,7 @@ mod tests {
     use crate::program::resolve::edge::{CanonicalSpan, Route, SiteId, SourcePos};
     use crate::program::topology::DependencyGraph;
     use crate::snapshot::AppId;
+    use al_syntax::IdentifierFoldExt;
 
     fn app_id(name: &str) -> AppId {
         AppId {

@@ -33,8 +33,9 @@ use crate::program::str_pool::SharedStr;
 use crate::snapshot::TrustTier;
 
 /// Bumped whenever the encoding or [`EXCLUDED`] changes. Hashed first, so two
-/// versions never compare equal.
-pub const DECL_PROJECTION_VERSION: u32 = 1;
+/// versions never compare equal. 2 (ENG-152): interface references encode
+/// their app and `inferred`.
+pub const DECL_PROJECTION_VERSION: u32 = 2;
 
 /// The fields the projection leaves out, and only these: the positions of a
 /// declaration (they move with every edit above it; the location domains of
@@ -199,6 +200,40 @@ impl Classify for AppRef {
     fn classify(&self, h: &mut ProjectionHasher) {
         let AppRef(n) = self;
         h.u64(u64::from(*n));
+    }
+}
+
+impl Classify for crate::program::node_extract::InterfaceRef {
+    fn classify(&self, h: &mut ProjectionHasher) {
+        let Self {
+            name,
+            app,
+            inferred,
+        } = self;
+        name.classify(h);
+        app.classify(h);
+        inferred.classify(h);
+    }
+}
+
+impl Classify for crate::program::graph::InterfaceBinding {
+    fn classify(&self, h: &mut ProjectionHasher) {
+        use crate::program::graph::InterfaceBinding as B;
+        match self {
+            B::Exact(id) => {
+                h.tag(0);
+                id.classify(h);
+            }
+            B::Visible(ids) => {
+                h.tag(1);
+                ids.classify(h);
+            }
+            B::Unbound => h.tag(2),
+            B::Unseen(ids) => {
+                h.tag(3);
+                ids.classify(h);
+            }
+        }
     }
 }
 

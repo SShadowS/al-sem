@@ -25,11 +25,13 @@ use std::collections::{HashMap, HashSet};
 use al_syntax::IdentifierFoldExt;
 use al_syntax::ir::ObjectKind;
 
-use crate::program::graph::ProgramGraph;
+use crate::program::graph::{InterfaceBinding, ProgramGraph};
 use crate::program::node::{AppRef, ObjectNodeId, RoutineNodeId, SharedStr};
-use crate::program::node_extract::{FieldNode, ObjectNode, ObjectRef};
+use crate::program::node_extract::{FieldNode, InterfaceRef, ObjectNode, ObjectRef};
+
 use crate::program::resolve::edge::Condition;
 use crate::program::resolve::event::{ParsedSubscriberArgs, PublisherKind, subscriber_arity_bound};
+use crate::program::resolve::interfaces::InterfaceImplementers;
 
 // ---------------------------------------------------------------------------
 // WorldMode
@@ -244,13 +246,9 @@ pub struct ResolveIndex {
     /// index is the mechanical third copy of the same reverse lookup; see
     /// [`Self::report_extensions_of`]).
     report_extensions: HashMap<String, Vec<ObjectNodeId>>,
-    /// Lowercased interface name → all object ids that implement it.
-    implementers: HashMap<String, Vec<ObjectNodeId>>,
-    /// Lowercased interface name → the CLOSED enums implementing it (G24):
-    /// only they carry their value mappings (`ObjectNode::enum_impls`), read
-    /// by [`Self::unmapped_enum_implementers`]. Apart from `implementers`,
-    /// which is codeunits only (an enum has no methods to dispatch to).
-    closed_enum_implementers: HashMap<String, Vec<ObjectNodeId>>,
+    /// Interface implementers by identity (ENG-152): the one home of the fact,
+    /// shared with the model's dispatch meta and the impact hub.
+    interfaces: InterfaceImplementers,
 }
 
 /// Event subscriptions resolved over a [`ProgramGraph`]: which subscribers
@@ -580,8 +578,6 @@ impl ResolveIndex {
         let mut untargeted_table_extensions: Vec<ObjectNodeId> = Vec::new();
         let mut page_extensions: HashMap<String, Vec<ObjectNodeId>> = HashMap::new();
         let mut report_extensions: HashMap<String, Vec<ObjectNodeId>> = HashMap::new();
-        let mut implementers: HashMap<String, Vec<ObjectNodeId>> = HashMap::new();
-        let mut closed_enum_implementers: HashMap<String, Vec<ObjectNodeId>> = HashMap::new();
 
         for obj in &graph.objects {
             // By-number: first sorted entry wins for a given (app, kind, id).
@@ -632,96 +628,10 @@ impl ResolveIndex {
                     .or_default()
                     .push(obj.id.clone());
             }
-
-            // Interface implementers: codeunits only. An enum's `implements`
-            // maps its VALUES to implementing codeunits (which declare the
-            // interface themselves); the enum has no methods to dispatch to
-            // (S9.0e). A header split across `#if` arms lists an interface once
-            // per arm, so each object is recorded once per interface.
-            if obj.id.kind == ObjectKind::Codeunit {
-                for iface in &obj.implements {
-                    let list = implementers.entry(iface.fold_identifier()).or_default();
-                    if !list.contains(&obj.id) {
-                        list.push(obj.id.clone());
-                    }
-                }
-            }
-            if obj.closed_enum {
-                for iface in &obj.implements {
-                    let list = closed_enum_implementers
-                        .entry(iface.fold_identifier())
-                        .or_default();
-                    if !list.contains(&obj.id) {
-                        list.push(obj.id.clone());
-                    }
-                }
-            }
         }
 
-        // ENG-142: an implementer of a derived interface implements each base
-        // (`interface IBaz extends IBar`: alc 18.0.41 accepts `B := Z` and
-        // `B := <codeunit implementing IBaz>` for `B: Interface IBar`), so a
-        // call through an `IBar` reaches it too. By IDENTITY, not by name (review,
-        // sol): the implemented interface resolves from the implementer's own
-        // app and each base from its declaring interface's app, so two apps'
-        // same-named interfaces never pool their bases. The lists stay keyed by
-        // the base's name, as `implementers_of` is asked. A base's own
-        // implementers come first, then the derived ones in object order; an
-        // `extends` cycle (alc refuses one) ends at the interfaces seen.
-        let iface = ObjectKind::Interface;
-        let bases_of: HashMap<&ObjectNodeId, Vec<&ObjectNode>> = graph
-            .objects
-            .iter()
-            .filter(|o| o.id.kind == iface && !o.interface_bases.is_empty())
-            .map(|d| {
-                // A name that does not resolve uniquely names every interface of
-                // that name (`interfaces_named_from`): over-approximate, never drop.
-                let bases = d
-                    .interface_bases
-                    .iter()
-                    .flat_map(|b| graph.interfaces_named_from(d.id.app, &b.fold_identifier()))
-                    .collect();
-                (&d.id, bases)
-            })
-            .collect();
-        if !bases_of.is_empty() {
-            for obj in &graph.objects {
-                let codeunit = obj.id.kind == ObjectKind::Codeunit;
-                if !codeunit && !obj.closed_enum {
-                    continue;
-                }
-                for name in &obj.implements {
-                    let derived = graph.interfaces_named_from(obj.id.app, &name.fold_identifier());
-                    let mut seen: HashSet<&ObjectNodeId> = derived.iter().map(|d| &d.id).collect();
-                    let mut stack: Vec<&ObjectNode> = derived
-                        .iter()
-                        .flat_map(|d| bases_of.get(&d.id).cloned().unwrap_or_default())
-                        .collect();
-                    stack.reverse();
-                    while let Some(base) = stack.pop() {
-                        if !seen.insert(&base.id) {
-                            continue;
-                        }
-                        let key = base.name.fold_identifier();
-                        for (on, map) in [
-                            (codeunit, &mut implementers),
-                            (obj.closed_enum, &mut closed_enum_implementers),
-                        ] {
-                            if !on {
-                                continue;
-                            }
-                            let list = map.entry(key.clone()).or_default();
-                            if !list.contains(&obj.id) {
-                                list.push(obj.id.clone());
-                            }
-                        }
-                        if let Some(more) = bases_of.get(&base.id) {
-                            stack.extend(more.iter().rev());
-                        }
-                    }
-                }
-            }
-        }
+        // Interface implementers by identity (ENG-152; ENG-142's bases).
+        let interfaces = InterfaceImplementers::build(graph);
 
         // An object declared `ObsoleteState = Moved`/`Removed` binds no
         // reference while another of its name or number exists
@@ -758,8 +668,7 @@ impl ResolveIndex {
             untargeted_table_extensions,
             page_extensions,
             report_extensions,
-            implementers,
-            closed_enum_implementers,
+            interfaces,
         }
     }
 
@@ -777,8 +686,7 @@ impl ResolveIndex {
             untargeted_table_extensions,
             page_extensions,
             report_extensions,
-            implementers,
-            closed_enum_implementers,
+            interfaces,
         } = self;
         vec![
             ("objs_by_number", Box::new(objs_by_number)),
@@ -791,11 +699,7 @@ impl ResolveIndex {
             ),
             ("page_extensions", Box::new(page_extensions)),
             ("report_extensions", Box::new(report_extensions)),
-            ("implementers", Box::new(implementers)),
-            (
-                "closed_enum_implementers",
-                Box::new(closed_enum_implementers),
-            ),
+            ("interfaces", Box::new(interfaces)),
         ]
     }
 
@@ -1078,16 +982,31 @@ impl ResolveIndex {
             .unwrap_or(&[])
     }
 
-    /// All objects whose `implements` list (lowercased) contains
-    /// `interface_name_lc`, or an interface derived from it (ENG-142,
-    /// resolved by identity in [`Self::build`]) — [`WorldMode::AnalyzedSnapshot`],
-    /// whole-program view (implementers live in reverse-dependent apps).
-    pub fn implementers_of(&self, interface_name_lc: &str) -> &[ObjectNodeId] {
+    /// The codeunits implementing interface `iface` or an interface derived
+    /// from it (ENG-142), by identity (ENG-152, [`Self::build`]) —
+    /// [`WorldMode::AnalyzedSnapshot`], whole-program view (implementers live in
+    /// reverse-dependent apps).
+    pub fn implementers_of(&self, iface: &ObjectNodeId) -> &[ObjectNodeId] {
         crate::program::resolve::reads::probe();
-        self.implementers
-            .get(interface_name_lc)
-            .map(Vec::as_slice)
-            .unwrap_or(&[])
+        self.interfaces.implementers_of(iface)
+    }
+
+    /// The codeunits a receiver bound `binding` (typed by `r`) dispatches to
+    /// ([`InterfaceImplementers::for_binding`]).
+    pub fn implementers_for(
+        &self,
+        binding: &InterfaceBinding,
+        r: &InterfaceRef,
+    ) -> Vec<ObjectNodeId> {
+        crate::program::resolve::reads::probe();
+        self.interfaces.for_binding(false, binding, r)
+    }
+
+    /// Whether interface `derived` is `base` or derives from it, transitively,
+    /// by identity ([`InterfaceImplementers::is_or_derives`]).
+    pub fn interface_is_or_derives(&self, derived: &ObjectNodeId, base: &ObjectNodeId) -> bool {
+        crate::program::resolve::reads::probe();
+        self.interfaces.is_or_derives(derived, base)
     }
 
     /// G24: the closed enums implementing `interface_name_lc` that map a value
@@ -1103,30 +1022,33 @@ impl ResolveIndex {
     pub fn unmapped_enum_implementers(
         &self,
         graph: &ProgramGraph,
-        interface_name_lc: &str,
+        binding: &InterfaceBinding,
+        r: &InterfaceRef,
     ) -> Vec<ObjectNodeId> {
         crate::program::resolve::reads::probe();
-        self.closed_enum_implementers
-            .get(interface_name_lc)
-            .map(Vec::as_slice)
-            .unwrap_or(&[])
+        let enums = self.interfaces.for_binding(true, binding, r);
+        enums
             .iter()
             .filter_map(|id| graph.object(id))
             .filter(|o| {
                 // ENG-142 (review, Fable; sol r2): an enum's mappings are keyed by
                 // the interface it implements, which may derive from this one,
                 // whole-object `#if` arms each naming another. Every mapping
-                // whose interface is this one or derives from it counts.
+                // whose interface is (by identity, ENG-152: bound from the enum's
+                // own app) this one or derives from it counts; a mapping key that
+                // binds nothing, or a receiver that binds nothing, may be it.
                 o.enum_impls
                     .iter()
                     .filter(|(i, _)| {
-                        crate::program::resolve::arg_dispatch::interface_is_or_derives(
-                            graph,
-                            self,
-                            o.id.app,
-                            i,
-                            interface_name_lc,
-                        )
+                        let key = graph.bind_interface(o.id.app, i);
+                        key == InterfaceBinding::Unbound
+                            || *binding == InterfaceBinding::Unbound
+                            || key.ids().iter().any(|k| {
+                                binding
+                                    .ids()
+                                    .iter()
+                                    .any(|b| self.interface_is_or_derives(k, b))
+                            })
                     })
                     .any(|(_, codeunit)| {
                         !matches!(
@@ -1780,6 +1702,31 @@ mod tests {
         }
     }
 
+    /// ENG-152: the closed enums of the interface named `name_lc` (bound
+    /// exactly: these single-app fixtures declare it once) that map a value
+    /// into nothing.
+    fn unmapped(index: &ResolveIndex, graph: &ProgramGraph, name_lc: &str) -> Vec<ObjectNodeId> {
+        let id = graph
+            .objects
+            .iter()
+            .find(|o| o.id.kind == ObjectKind::Interface && o.name.fold_identifier() == name_lc)
+            .expect("the interface")
+            .id
+            .clone();
+        index.unmapped_enum_implementers(graph, &InterfaceBinding::Exact(id), &name_lc.into())
+    }
+
+    /// ENG-152: the codeunits implementing the interface named `name_lc` (or one
+    /// derived from it), by identity; empty when no such interface exists.
+    fn impls_named(idx: &ResolveIndex, graph: &ProgramGraph, name_lc: &str) -> Vec<ObjectNodeId> {
+        graph
+            .objects
+            .iter()
+            .find(|o| o.id.kind == ObjectKind::Interface && o.name.fold_identifier() == name_lc)
+            .map(|o| idx.implementers_of(&o.id).to_vec())
+            .unwrap_or_default()
+    }
+
     fn make_obj(
         app: AppRef,
         kind: ObjectKind,
@@ -1797,7 +1744,7 @@ mod tests {
             name: name.into(),
             declared_id,
             extends_target: extends_target.map(SharedStr::from),
-            implements: implements.into_iter().map(SharedStr::from).collect(),
+            implements: implements.into_iter().map(InterfaceRef::from).collect(),
             interface_bases: vec![],
             tier: TrustTier::Workspace,
             source_table: None,
@@ -2032,6 +1979,9 @@ mod tests {
                 None,
                 vec![],
             ),
+            // ENG-152: the interface `SomeImpl` implements, so its reference
+            // binds (from A, which sees B) as real code's does.
+            make_obj(b, ObjectKind::Interface, None, "IFoo", None, vec![]),
         ];
         objects.sort_by(|x, y| x.id.cmp(&y.id));
 
@@ -2112,14 +2062,8 @@ mod tests {
             ..Default::default()
         };
         let index = ResolveIndex::build(&graph);
-        assert_eq!(
-            index.unmapped_enum_implementers(&graph, "ibar"),
-            vec![kind_id.clone()]
-        );
-        assert_eq!(
-            index.unmapped_enum_implementers(&graph, "ibaz"),
-            vec![kind_id]
-        );
+        assert_eq!(unmapped(&index, &graph, "ibar"), vec![kind_id.clone()]);
+        assert_eq!(unmapped(&index, &graph, "ibaz"), vec![kind_id]);
     }
 
     /// The mixed case (review, sol r2): whole-object `#if` arms implementing
@@ -2171,21 +2115,18 @@ mod tests {
             ..Default::default()
         };
         let index = ResolveIndex::build(&graph);
-        assert_eq!(
-            index.unmapped_enum_implementers(&graph, "ibar"),
-            vec![kind_id]
-        );
+        assert_eq!(unmapped(&index, &graph, "ibar"), vec![kind_id]);
     }
 
-    /// An interface name that resolves to nothing (review, Fable): the relation
-    /// answers in the safe direction. `interface_is_or_derives` counts it (a
-    /// mapping that may be the site's), and `interface_binds` says an interface
-    /// with such a base "may bind" any interface parameter (undecided, never a
-    /// wrong pick). Mutations (2026-11-20): each fallback back to `false` -> its
-    /// assertion red; each restored, green.
+    /// An interface name that binds to nothing (review, Fable): the relation
+    /// answers in the safe direction. `interface_binds` says an interface with
+    /// such a base "may bind" any interface parameter (undecided, never a wrong
+    /// pick). (ENG-152: an unbound enum mapping key counting as the site's is
+    /// pinned through `unmapped_enum_implementers` and `enum_covered_by_routes`.)
+    /// Mutation (2026-11-20): the fallback back to `false` -> red; restored, green.
     #[test]
     fn an_unresolved_interface_name_answers_the_safe_way() {
-        use crate::program::resolve::arg_dispatch::{interface_binds, interface_is_or_derives};
+        use crate::program::resolve::arg_dispatch::interface_binds;
         let mut apps = AppRegistry::default();
         let a = apps.intern(&make_app_id("AppA"));
         let mut der = make_obj(a, ObjectKind::Interface, None, "IDer", None, vec![]);
@@ -2202,7 +2143,11 @@ mod tests {
             ..Default::default()
         };
         let index = ResolveIndex::build(&graph);
-        assert!(interface_is_or_derives(&graph, &index, a, "ider", "ighost"));
+        assert_eq!(
+            graph.bind_interface(a, &"IGhost".into()),
+            InterfaceBinding::Unbound,
+            "precondition: the base binds nothing"
+        );
         assert!(interface_binds(&graph, &index, &der_id, &other_id));
     }
 
@@ -3043,7 +2988,7 @@ mod tests {
         let (graph, a, _b) = build_fixture();
         let idx = ResolveIndex::build(&graph);
 
-        let impls = idx.implementers_of("ifoo");
+        let impls = impls_named(&idx, &graph, "ifoo");
         assert_eq!(impls.len(), 1, "expected exactly one implementer of IFoo");
         assert_eq!(impls[0].app, a);
         assert_eq!(impls[0].kind, ObjectKind::Codeunit);
@@ -3058,7 +3003,11 @@ mod tests {
         let cu = graph
             .objects
             .iter_mut()
-            .find(|o| o.implements.iter().any(|i| i.eq_ignore_ascii_case("ifoo")))
+            .find(|o| {
+                o.implements
+                    .iter()
+                    .any(|i| i.name.eq_ignore_ascii_case("ifoo"))
+            })
             .expect("fixture implementer");
         cu.implements.push("IFoo".into());
         let mut en = cu.clone();
@@ -3067,7 +3016,7 @@ mod tests {
         graph.objects.push(en);
         let idx = ResolveIndex::build(&graph);
 
-        let impls = idx.implementers_of("ifoo");
+        let impls = impls_named(&idx, &graph, "ifoo");
         assert_eq!(impls.len(), 1, "{impls:?}");
         assert_eq!(impls[0].kind, ObjectKind::Codeunit);
     }
@@ -3077,7 +3026,7 @@ mod tests {
         let (graph, _, _) = build_fixture();
         let idx = ResolveIndex::build(&graph);
 
-        assert!(idx.implementers_of("ibar").is_empty());
+        assert!(impls_named(&idx, &graph, "ibar").is_empty());
     }
 
     // -- routines_in_object test ----------------------------------------------
