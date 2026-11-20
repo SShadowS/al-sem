@@ -656,18 +656,31 @@ script_builds() {
 # by exact name with `pgrep -x`: a `-f` pattern would match this script's own
 # command line; and script_builds) that are alive (not zombies) and are neither
 # <pid>, its ancestors nor its descendants (a timed script's own build, or the
-# cargo test that runs it); "PID name" lines.
+# cargo test that runs it), nor an ancestor of a waiter in the queue: a
+# `ci-steps` parked in `acquire --wait` builds nothing while it waits, and
+# counting it made two timings wait on each other until CDO_SLOT_TIMED_WAIT_S
+# (TLS-108, review Fable and sol); "PID name" lines.
 foreign_builds() {
-    local root=$1 line=" " q p name
+    local root=$1 line=" " parked=" " q p name t
     q=$root
     while [[ "$q" =~ ^[1-9][0-9]*$ ]]; do
         line+="$q "
         q=$(ppid_of "$q")
     done
+    for t in "$queue"/*; do
+        [[ -f "$t" ]] || continue
+        read -r q _ <"$t" 2>/dev/null || continue
+        alive "$q" || continue
+        while [[ "$q" =~ ^[1-9][0-9]*$ && "$q" != 1 ]]; do
+            parked+="$q "
+            q=$(ppid_of "$q")
+        done
+    done
     while read -r p name; do
         [[ -n "$p" ]] || continue
         alive "$p" || continue
         [[ "$line" == *" $p "* ]] && continue
+        [[ "$parked" == *" $p "* ]] && continue
         q=$p
         while [[ "$q" =~ ^[1-9][0-9]*$ && "$q" != 1 ]]; do
             [[ "$q" == "$root" ]] && continue 2
