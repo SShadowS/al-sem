@@ -7236,6 +7236,7 @@ codeunit 13 "Dep Rec Sub"
             requires: substrate::CORE_SUMMARIES,
             rule_name: "Probe",
             short_description: "test probe",
+            concern: crate::engine::l5::registry::Concern::Behaviour,
         };
         let mut view = View::new(crate::engine::gate::run::AnalysisTarget::CrossApp(
             Box::new(base),

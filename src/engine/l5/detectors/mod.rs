@@ -74,7 +74,7 @@ use al_syntax::IdentifierFoldExt;
 
 use crate::engine::l5::detector_context::DetectorContext;
 use crate::engine::l5::finding::{LooseSubject, SourceAnchor};
-use crate::engine::l5::registry::{Detector, substrate};
+use crate::engine::l5::registry::{Concern, Detector, substrate};
 use crate::program::body::features::{
     PAnchor, PCFNNode, PCallArgumentBinding, PCallSite, PCallee, PExpressionInfo, PathHint,
 };
@@ -1684,6 +1684,7 @@ pub fn default_detectors() -> Vec<Detector> {
             run: d1::detect_d1,
             rule_name: "DbOpInLoop",
             short_description: "Database operation inside a loop",
+            concern: Concern::Performance,
             // summaries + uncertainties_by_node + closed_world_temp_params.
             requires: substrate::SUMMARIES
                 | substrate::CORE_SUMMARIES
@@ -1694,6 +1695,7 @@ pub fn default_detectors() -> Vec<Detector> {
             run: d2::detect_d2,
             rule_name: "EventFanoutInLoop",
             short_description: "Event raised inside a loop with DB-touching subscribers",
+            concern: Concern::Performance,
             // summaries + uncertainties_by_node.
             requires: substrate::SUMMARIES | substrate::CORE_SUMMARIES,
         },
@@ -1702,6 +1704,7 @@ pub fn default_detectors() -> Vec<Detector> {
             run: d3::detect_d3,
             rule_name: "MissingSetLoadFields",
             short_description: "Missing SetLoadFields before record retrieval",
+            concern: Concern::Performance,
             // parameter_roles_by_routine + closed_world_temp_params.
             requires: substrate::CORE_SUMMARIES | substrate::CLOSED_WORLD_TEMP,
         },
@@ -1710,6 +1713,7 @@ pub fn default_detectors() -> Vec<Detector> {
             run: d4::detect_d4,
             rule_name: "RepeatedLookupInLoop",
             short_description: "Repeated identical lookup inside a loop",
+            concern: Concern::Performance,
             requires: 0,
         },
         Detector {
@@ -1717,6 +1721,7 @@ pub fn default_detectors() -> Vec<Detector> {
             run: d5::detect_d5,
             rule_name: "SetBasedOpportunity",
             short_description: "Loop-and-Modify candidate for ModifyAll",
+            concern: Concern::Performance,
             requires: 0,
         },
         Detector {
@@ -1724,6 +1729,7 @@ pub fn default_detectors() -> Vec<Detector> {
             run: d7::detect_d7,
             rule_name: "RecursiveEventExpansion",
             short_description: "Event subscriber chain forms a cycle",
+            concern: Concern::Behaviour,
             requires: 0,
         },
         Detector {
@@ -1731,6 +1737,7 @@ pub fn default_detectors() -> Vec<Detector> {
             run: d9::detect_d9,
             rule_name: "TransactionSpanSummary",
             short_description: "Transaction span summary (info)",
+            concern: Concern::Behaviour,
             requires: substrate::TRANSACTION_SPANS,
         },
         Detector {
@@ -1738,6 +1745,7 @@ pub fn default_detectors() -> Vec<Detector> {
             run: d10::detect_d10,
             rule_name: "SelfModifyingLoop",
             short_description: "Self-modifying loop",
+            concern: Concern::Behaviour,
             requires: substrate::CLOSED_WORLD_TEMP,
         },
         Detector {
@@ -1745,6 +1753,7 @@ pub fn default_detectors() -> Vec<Detector> {
             run: d11::detect_d11,
             rule_name: "ModifyWithoutGet",
             short_description: "Modify without prior Get",
+            concern: Concern::Behaviour,
             requires: 0,
         },
         Detector {
@@ -1752,6 +1761,7 @@ pub fn default_detectors() -> Vec<Detector> {
             run: d12::detect_d12,
             rule_name: "DeadIntegrationEvent",
             short_description: "Integration event has no subscribers",
+            concern: Concern::Maintainability,
             requires: 0,
         },
         Detector {
@@ -1759,6 +1769,7 @@ pub fn default_detectors() -> Vec<Detector> {
             run: d13::detect_d13,
             rule_name: "CrossAppInternalCall",
             short_description: "Cross-extension call into an internal procedure",
+            concern: Concern::Maintainability,
             requires: 0,
         },
         Detector {
@@ -1766,6 +1777,7 @@ pub fn default_detectors() -> Vec<Detector> {
             run: d14::detect_d14,
             rule_name: "DeadRoutine",
             short_description: "Routine unreachable from any entry point",
+            concern: Concern::Maintainability,
             requires: 0,
         },
         Detector {
@@ -1773,6 +1785,7 @@ pub fn default_detectors() -> Vec<Detector> {
             run: d16::detect_d16,
             rule_name: "ObsoleteRoutineCall",
             short_description: "Call to an obsolete routine",
+            concern: Concern::Maintainability,
             requires: 0,
         },
         Detector {
@@ -1780,6 +1793,7 @@ pub fn default_detectors() -> Vec<Detector> {
             run: d18::detect_d18,
             rule_name: "ConstantFilterInLoop",
             short_description: "Constant SetRange/SetFilter inside a loop",
+            concern: Concern::Performance,
             requires: 0,
         },
         Detector {
@@ -1787,6 +1801,7 @@ pub fn default_detectors() -> Vec<Detector> {
             run: d19::detect_d19,
             rule_name: "UnusedParameter",
             short_description: "Procedure parameter never used in the body",
+            concern: Concern::Maintainability,
             requires: 0,
         },
         Detector {
@@ -1794,6 +1809,7 @@ pub fn default_detectors() -> Vec<Detector> {
             run: d20::detect_d20,
             rule_name: "UnreachableAfterExit",
             short_description: "Statement after an unconditional exit is unreachable",
+            concern: Concern::Maintainability,
             requires: 0,
         },
         Detector {
@@ -1801,6 +1817,7 @@ pub fn default_detectors() -> Vec<Detector> {
             run: d21::detect_d21,
             rule_name: "ReadWithoutLoad",
             short_description: "Read on a record variable that was never loaded",
+            concern: Concern::Behaviour,
             requires: 0,
         },
         Detector {
@@ -1808,6 +1825,7 @@ pub fn default_detectors() -> Vec<Detector> {
             run: d22::detect_d22,
             rule_name: "FlowFieldWithoutCalcFields",
             short_description: "FlowField read without prior CalcFields",
+            concern: Concern::Behaviour,
             requires: 0,
         },
         Detector {
@@ -1815,6 +1833,7 @@ pub fn default_detectors() -> Vec<Detector> {
             run: d29::detect_d29,
             rule_name: "SubscriberModifyOnEventRecord",
             short_description: "Subscriber modifies the event record, re-firing the same event",
+            concern: Concern::Behaviour,
             requires: 0,
         },
         Detector {
@@ -1822,6 +1841,7 @@ pub fn default_detectors() -> Vec<Detector> {
             run: d32::detect_d32,
             rule_name: "ConstantBooleanParameter",
             short_description: "Boolean parameter passed the same literal at every call site",
+            concern: Concern::Maintainability,
             requires: 0,
         },
         Detector {
@@ -1829,6 +1849,7 @@ pub fn default_detectors() -> Vec<Detector> {
             run: d33::detect_d33,
             rule_name: "UnfilteredBulkWrite",
             short_description: "DeleteAll/ModifyAll without a narrowing filter",
+            concern: Concern::Behaviour,
             requires: 0,
         },
         Detector {
@@ -1836,6 +1857,7 @@ pub fn default_detectors() -> Vec<Detector> {
             run: d34::detect_d34,
             rule_name: "CommitInLoop",
             short_description: "Commit inside a loop",
+            concern: Concern::Behaviour,
             requires: substrate::SUMMARIES,
         },
         Detector {
@@ -1843,6 +1865,7 @@ pub fn default_detectors() -> Vec<Detector> {
             run: d35::detect_d35,
             rule_name: "CommitInEventSubscriber",
             short_description: "Commit reachable, or not ruled out, from an event subscriber",
+            concern: Concern::Behaviour,
             // CORE_SUMMARIES: the unknown arm's `cappedBy` reads the uncertainty view (#148).
             requires: substrate::SUMMARIES | substrate::CORE_SUMMARIES,
         },
@@ -1851,6 +1874,7 @@ pub fn default_detectors() -> Vec<Detector> {
             run: d36::detect_d36,
             rule_name: "LateSetLoadFields",
             short_description: "SetLoadFields placed after the record is loaded",
+            concern: Concern::Performance,
             requires: 0,
         },
         Detector {
@@ -1858,6 +1882,7 @@ pub fn default_detectors() -> Vec<Detector> {
             run: d37::detect_d37,
             rule_name: "ValidateWithoutPersist",
             short_description: "Validate with no later Modify or Insert to persist it",
+            concern: Concern::Behaviour,
             // parameter_roles_by_routine (+ upgraded_bindings, always-built core).
             requires: substrate::CORE_SUMMARIES,
         },
@@ -1866,6 +1891,7 @@ pub fn default_detectors() -> Vec<Detector> {
             run: d38::detect_d38,
             rule_name: "SubscriberToObsoleteEvent",
             short_description: "Event subscriber bound to an obsolete publisher",
+            concern: Concern::Maintainability,
             requires: 0,
         },
         Detector {
@@ -1873,6 +1899,7 @@ pub fn default_detectors() -> Vec<Detector> {
             run: d39::detect_d39,
             rule_name: "RecordLeftDirtyAcrossChain",
             short_description: "Record changed by a helper is never persisted by the caller",
+            concern: Concern::Behaviour,
             // parameter_roles_by_routine.
             requires: substrate::CORE_SUMMARIES,
         },
@@ -1881,6 +1908,7 @@ pub fn default_detectors() -> Vec<Detector> {
             run: d41::detect_d41,
             rule_name: "TransitiveFilterLoss",
             short_description: "Callee resets filters the caller still relies on",
+            concern: Concern::Behaviour,
             // parameter_roles_by_routine.
             requires: substrate::CORE_SUMMARIES,
         },
@@ -1889,6 +1917,7 @@ pub fn default_detectors() -> Vec<Detector> {
             run: d42::detect_d42,
             rule_name: "CrossCallWrongSetLoadFields",
             short_description: "Caller's SetLoadFields omits fields the callee needs",
+            concern: Concern::Performance,
             // parameter_roles_by_routine.
             requires: substrate::CORE_SUMMARIES,
         },
@@ -1897,6 +1926,7 @@ pub fn default_detectors() -> Vec<Detector> {
             run: d43::detect_d43,
             rule_name: "EventIsHandledSkip",
             short_description: "IsHandled subscriber skips the publisher's default write",
+            concern: Concern::Behaviour,
             requires: substrate::SUMMARIES,
         },
         Detector {
@@ -1904,6 +1934,7 @@ pub fn default_detectors() -> Vec<Detector> {
             run: d44::detect_d44,
             rule_name: "EventMultiSubscriberOverlap",
             short_description: "Several subscribers of one event touch the same table",
+            concern: Concern::Behaviour,
             requires: substrate::SUMMARIES,
         },
         // d52: BCQuality wave (bulk-write-param-no-temp-guard).
@@ -1912,6 +1943,7 @@ pub fn default_detectors() -> Vec<Detector> {
             run: d52::detect_d52,
             rule_name: "BulkWriteParamNoTempGuard",
             short_description: "Bulk write on a var record parameter with no temporary guard",
+            concern: Concern::Behaviour,
             requires: substrate::CLOSED_WORLD_TEMP,
         },
         // d53: BCQuality wave (ignored-tryfunction-result).
@@ -1920,6 +1952,7 @@ pub fn default_detectors() -> Vec<Detector> {
             run: d53::detect_d53,
             rule_name: "IgnoredTryFunctionResult",
             short_description: "TryFunction result ignored",
+            concern: Concern::Behaviour,
             requires: 0,
         },
         // d54: BCQuality wave (publish-in-tryfunction-cone).
@@ -1928,6 +1961,7 @@ pub fn default_detectors() -> Vec<Detector> {
             run: d54::detect_d54,
             rule_name: "PublishInTryFunctionCone",
             short_description: "Event published inside a TryFunction's call cone",
+            concern: Concern::Behaviour,
             requires: 0,
         },
         // d55: BCQuality wave (event-publish-in-loop).
@@ -1936,6 +1970,7 @@ pub fn default_detectors() -> Vec<Detector> {
             run: d55::detect_d55,
             rule_name: "EventPublishInLoop",
             short_description: "Event published directly inside a loop",
+            concern: Concern::Performance,
             requires: 0,
         },
         // d56: BCQuality wave (clone-before-write-in-loop). Re-promoted from
@@ -1947,6 +1982,7 @@ pub fn default_detectors() -> Vec<Detector> {
             run: d56::detect_d56,
             rule_name: "CloneBeforeWriteInLoop",
             short_description: "Record cloned before Modify/Delete inside a loop",
+            concern: Concern::Performance,
             requires: 0,
         },
         // d57: BCQuality wave (singleinstance-growing-state).
@@ -1955,6 +1991,7 @@ pub fn default_detectors() -> Vec<Detector> {
             run: d57::detect_d57,
             rule_name: "SingleInstanceGrowingState",
             short_description: "SingleInstance subscriber grows a global that is never cleared",
+            concern: Concern::Performance,
             requires: 0,
         },
         // d58: BCQuality wave (query-filter-after-open).
@@ -1963,6 +2000,7 @@ pub fn default_detectors() -> Vec<Detector> {
             run: d58::detect_d58,
             rule_name: "QueryFilterAfterOpen",
             short_description: "Query filter set after Open",
+            concern: Concern::Behaviour,
             requires: 0,
         },
         // d59: BCQuality wave (integrationevent-var-boolean-guard).
@@ -1971,6 +2009,7 @@ pub fn default_detectors() -> Vec<Detector> {
             run: d59::detect_d59,
             rule_name: "IntegrationEventVarBooleanGuard",
             short_description: "IntegrationEvent var Boolean parameter can bypass a guard",
+            concern: Concern::Behaviour,
             requires: 0,
         },
         // d60: BCQuality wave (upgrade-loop-should-be-datatransfer).
@@ -1979,6 +2018,7 @@ pub fn default_detectors() -> Vec<Detector> {
             run: d60::detect_d60,
             rule_name: "UpgradeLoopShouldBeDataTransfer",
             short_description: "Row-by-row Modify loop in upgrade code; use DataTransfer",
+            concern: Concern::Performance,
             requires: 0,
         },
     ]
@@ -1994,6 +2034,7 @@ pub fn opt_in_detectors() -> Vec<Detector> {
             run: d40::detect_d40,
             rule_name: "TransitiveLoadMissing",
             short_description: "Record passed unloaded to a callee that needs it loaded",
+            concern: Concern::Behaviour,
             // parameter_roles_by_routine.
             requires: substrate::CORE_SUMMARIES,
         },
@@ -2003,6 +2044,7 @@ pub fn opt_in_detectors() -> Vec<Detector> {
             run: d46::detect_d46,
             rule_name: "CommitInLifecycle",
             short_description: "Commit reachable from an Install/Upgrade codeunit trigger",
+            concern: Concern::Behaviour,
             // uncertainties_by_node (path walker).
             requires: substrate::CORE_SUMMARIES,
         },
@@ -2012,6 +2054,7 @@ pub fn opt_in_detectors() -> Vec<Detector> {
             run: d47::detect_d47,
             rule_name: "IoUnsafeTxn",
             short_description: "External IO inside an open write transaction / before commit",
+            concern: Concern::Behaviour,
             requires: substrate::ORDERING_FACTS,
         },
         // d48: OPT-IN (io-in-loop, surfaced by transaction-integrity preset).
@@ -2020,6 +2063,7 @@ pub fn opt_in_detectors() -> Vec<Detector> {
             run: d48::detect_d48,
             rule_name: "IoInLoop",
             short_description: "External IO (HTTP/FILE) inside a loop",
+            concern: Concern::Performance,
             // summaries + uncertainties_by_node.
             requires: substrate::SUMMARIES | substrate::CORE_SUMMARIES,
         },
@@ -2029,6 +2073,7 @@ pub fn opt_in_detectors() -> Vec<Detector> {
             run: d49::detect_d49,
             rule_name: "UncommittedWriteBeforeUi",
             short_description: "DB write pending at a window-opening UI call (BC runtime error)",
+            concern: Concern::Behaviour,
             requires: substrate::ORDERING_FACTS,
         },
         // d50: OPT-IN. ENG-22: a checked run with a write pending (BC raises
@@ -2038,6 +2083,7 @@ pub fn opt_in_detectors() -> Vec<Detector> {
             run: d50::detect_d50,
             rule_name: "CheckedRunWithPendingWrite",
             short_description: "Checked Codeunit.Run with a DB write pending (BC runtime error at the run)",
+            concern: Concern::Behaviour,
             // summaries + transaction_spans.
             requires: substrate::SUMMARIES | substrate::TRANSACTION_SPANS,
         },
@@ -2047,6 +2093,7 @@ pub fn opt_in_detectors() -> Vec<Detector> {
             run: d51::detect_d51,
             rule_name: "RetrySideEffectDuplication",
             short_description: "Write-direction external request before an escaping error — may duplicate on retry (advisory)",
+            concern: Concern::Behaviour,
             requires: substrate::ORDERING_FACTS,
         },
         // d17: OPT-IN since engine-switch S8.5 (min-version-drift). It knows the
@@ -2059,6 +2106,7 @@ pub fn opt_in_detectors() -> Vec<Detector> {
             run: d17::detect_d17,
             rule_name: "MinVersionDrift",
             short_description: "Call into API newer than declared MinVersion",
+            concern: Concern::Maintainability,
             requires: 0,
         },
         // d8: OPT-IN since engine-switch S8 (owner decision 2026-10-07). It now
@@ -2071,6 +2119,7 @@ pub fn opt_in_detectors() -> Vec<Detector> {
             run: d8::detect_d8,
             rule_name: "CommitInTransaction",
             short_description: "Commit inside a posting transaction span",
+            concern: Concern::Behaviour,
             // summaries + transaction_spans.
             requires: substrate::SUMMARIES | substrate::TRANSACTION_SPANS,
         },
@@ -2085,6 +2134,7 @@ pub fn opt_in_detectors() -> Vec<Detector> {
             run: d45::detect_d45,
             rule_name: "EventTransitiveTableExposure",
             short_description: "Tables written by an event's transitive subscriber chain",
+            concern: Concern::Behaviour,
             requires: substrate::SUMMARIES,
         },
         // d61: OPT-IN (BCQuality wave, ishandled-bypasses-critical-write).
@@ -2093,6 +2143,7 @@ pub fn opt_in_detectors() -> Vec<Detector> {
             run: d61::detect_d61,
             rule_name: "IsHandledBypassesCriticalWrite",
             short_description: "IsHandled lets a subscriber skip a critical record write",
+            concern: Concern::Behaviour,
             requires: 0,
         },
         // d62: OPT-IN (BCQuality wave, telemetry-before-success).
@@ -2101,6 +2152,7 @@ pub fn opt_in_detectors() -> Vec<Detector> {
             run: d62::detect_d62,
             rule_name: "TelemetryBeforeSuccess",
             short_description: "Feature usage logged before a step that can fail",
+            concern: Concern::Behaviour,
             requires: 0,
         },
         // d63: OPT-IN (BCQuality wave, html-concat-injection).
@@ -2109,6 +2161,7 @@ pub fn opt_in_detectors() -> Vec<Detector> {
             run: d63::detect_d63,
             rule_name: "HtmlConcatInjection",
             short_description: "HTML built by string concatenation (injection risk)",
+            concern: Concern::Behaviour,
             requires: 0,
         },
         // d64: OPT-IN (BCQuality wave, api-page-write-surface).
@@ -2117,6 +2170,7 @@ pub fn opt_in_detectors() -> Vec<Detector> {
             run: d64::detect_d64,
             rule_name: "ApiPageWriteSurface",
             short_description: "API page leaves OData write operations exposed",
+            concern: Concern::Behaviour,
             requires: 0,
         },
         // d65: OPT-IN (intent evidence, guard-bypass). Spec §4.5: it may run
@@ -2126,6 +2180,7 @@ pub fn opt_in_detectors() -> Vec<Detector> {
             run: d65::detect_d65,
             rule_name: "GuardBypass",
             short_description: "Write skips a check most other writers of the field apply",
+            concern: Concern::Behaviour,
             // The per-field writer index, built from the model's rules.
             requires: substrate::RULES,
         },
