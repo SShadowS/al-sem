@@ -121,7 +121,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   round 1 shapes, in both families: `ThisGlobal`/`ThisGlobalTemp` (`this.G`), `Victim`/
   `VictimTemp` (two `var` parameters), `ArraySlot`/`ArraySlotTemp`, each `unknown`, and `no`
   when its rule (the one key, the parameter/global join, the array join) is removed;
-  `LiteralName` (`"R[1]"`) `unknown`, and `no` without `name_key`;
+  `LiteralName` (`"R[1]"`) `unknown`, and `no` without `name_key`. On CDO the analyze findings,
+  fingerprints and the CDO renderings do not move; the L4 frozen digest does (42 routines,
+  each a RecordRef read's derived `Known(false)` now `Unknown`; README re-freeze log);
   `recref_alias`'s unit test pins the classes.
 
 ### Fixed (ENG-151: d19 no longer flags an unused parameter of a method that implements an interface member)
