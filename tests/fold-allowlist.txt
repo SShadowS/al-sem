@@ -100,7 +100,7 @@
 11 src/program/node_extract.rs
 1 src/program/pack/mod.rs
 3 src/program/page_ui.rs
-6 src/program/recordref_table.rs
+4 src/program/recordref_table.rs
 4 src/program/resolve/abi_check.rs
 14 src/program/resolve/arg_dispatch.rs
 2 src/program/resolve/background.rs

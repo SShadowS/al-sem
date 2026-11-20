@@ -1698,6 +1698,11 @@ pub(crate) fn exit_guards(
         "block" => tree.children.as_deref().unwrap_or_default(),
         _ => std::slice::from_ref(tree),
     };
+    // ENG-160: the binds (`R.Get(Id)` is a record operation, not a call site), and the aliases
+    // a bind may go through (`A := R; A.Get(Id)`: one handle).
+    let sites = bind_sites(r);
+    let aliases =
+        crate::program::model::recref_alias::AliasClasses::of(&r.var_assignments, |_| true);
     for (n, stmt) in top.iter().enumerate() {
         let (Some((rec, tables)), Some((line, col, ..))) =
             (stmt.table_exit_guard(), stmt.source_range)
@@ -1707,17 +1712,27 @@ pub(crate) fn exit_guards(
         let before = |a: &crate::program::body::features::PAnchor| {
             (a.start_line, a.start_column) < (line, col)
         };
+        // Bound before the guard through any member of its alias class: an assignment, a call
+        // it is passed to or called on, a `Get` (ENG-160: a local's guard otherwise reads its
+        // `Unset` entry, sol), or an assignment into an array of holders (any may be shared).
+        let members: HashSet<String> = aliases.members(rec).into_iter().collect();
+        let named = |t: &str| {
+            members.contains(&lc(t))
+                || members.contains(&crate::program::model::recref_alias::holder_key(t))
+        };
         let bound_before = !anytime(rec)
-            && (r
-                .var_assignments
+            && (r.var_assignments.iter().any(|a| {
+                before(&a.source_anchor)
+                    && (named(&a.lhs_name)
+                        || crate::program::model::recref_alias::into_holder_array(r, a))
+            }) || r.call_sites.iter().any(|cs| {
+                before(&cs.source_anchor)
+                    && (cs.argument_texts.iter().any(|a| named(a))
+                        || matches!(&cs.callee, PCallee::Member { receiver, .. }
+                            if named(receiver)))
+            }) || sites
                 .iter()
-                .any(|a| lc(&a.lhs_name) == *rec && before(&a.source_anchor))
-                || r.call_sites.iter().any(|cs| {
-                    before(&cs.source_anchor)
-                        && (cs.argument_texts.iter().any(|a| lc(a) == *rec)
-                            || matches!(&cs.callee, PCallee::Member { receiver, .. }
-                                if lc(receiver) == *rec))
-                }));
+                .any(|s| s.call.is_none() && named(s.receiver) && before(s.anchor)));
         if bound_before {
             continue;
         }
@@ -1871,17 +1886,9 @@ fn facts_of(r: &ModelRoutine, obj_in_place: &HashSet<String>) -> Facts {
         let l = lc(&a.lhs_name);
         if !f.tracked.contains_key(&l) {
             // ENG-160 (sol): `Slot[1] := R` shares R's record with an array slot, which the flow
-            // does not track, and a bind through it (`Slot[1].Get(Id)`, `.GetTable(D)`) rebinds
-            // R. The IR keeps no right-hand side for an indexed target, so, as
-            // `AliasClasses::for_routine` does, an assignment into an array of RecordRefs or
-            // Variants may share any holder: each may hold anything from there on.
-            let into_holder_array = r.variables.iter().any(|v| {
-                lc(&v.name) == l && {
-                    let t = v.declared_type.trim().fold_identifier();
-                    t.ends_with(" of recordref") || t.ends_with(" of variant")
-                }
-            });
-            if into_holder_array {
+            // does not track (`recref_alias::into_holder_array`): each holder may hold anything
+            // from there on.
+            if crate::program::model::recref_alias::into_holder_array(r, a) {
                 let at = (a.source_anchor.start_line, a.source_anchor.start_column);
                 let names: Vec<String> = f.tracked.keys().cloned().collect();
                 for w in names {

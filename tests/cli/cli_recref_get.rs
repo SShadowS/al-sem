@@ -156,6 +156,61 @@ codeunit 50434 "GE Mgt"
         Log.Insert();
     end;
 
+    // G34 (exit_guards): a local's guard reads its `Unset` entry unless something binds it
+    // first: a Get on it (sol on ENG-160), through an alias of it, or through an array slot.
+    procedure LocalGet()
+    var
+        R: RecordRef;
+        D: Record "GE Doc";
+        L: Record "GE Log";
+    begin
+        D.FindFirst();
+        R.Get(D.RecordId);
+        if R.Number <> Database::"GE Doc" then
+            exit;
+        L.Insert();
+    end;
+
+    procedure LocalAliasGet()
+    var
+        R: RecordRef;
+        A: RecordRef;
+        D: Record "GE Doc";
+        L: Record "GE Log";
+    begin
+        A := R;
+        D.FindFirst();
+        A.Get(D.RecordId);
+        if R.Number <> Database::"GE Doc" then
+            exit;
+        L.Insert();
+    end;
+
+    procedure LocalSlotGet()
+    var
+        R: RecordRef;
+        Slot: array[2] of RecordRef;
+        D: Record "GE Doc";
+        L: Record "GE Log";
+    begin
+        Slot[1] := R;
+        D.FindFirst();
+        Slot[1].Get(D.RecordId);
+        if R.Number <> Database::"GE Doc" then
+            exit;
+        L.Insert();
+    end;
+
+    procedure LocalUnbound()
+    var
+        R: RecordRef;
+        L: Record "GE Log";
+    begin
+        if R.Number <> Database::"GE Doc" then
+            exit;
+        L.Insert();
+    end;
+
     // G33 (literal_reach's table frame): R takes the Variant's table, unless a Get moves it.
     procedure FrameRoot()
     var
@@ -454,9 +509,14 @@ fn a_recordref_get_moves_the_table_for_every_reader() {
     assert_eq!(answer("AliasGetRoot", "GE Log"), "yes");
     assert_eq!(answer("SlotGetRoot", "GE Log"), "yes");
     assert_eq!(answer("SlotGetTableRoot", "GE Log"), "yes");
-    // A Get before the guard (the callee's write-back reaches the caller's argument).
+    // A Get before the guard: in a callee (the write-back reaches the caller's argument), and on a
+    // local, directly, through an alias or through an array slot (exit_guards).
     assert_eq!(answer("GuardOnlyRoot", "GE Log"), "no", "precondition");
     assert_eq!(answer("GetBeforeGuardRoot", "GE Log"), "yes");
+    assert_eq!(answer("LocalUnbound", "GE Log"), "no", "precondition");
+    assert_eq!(answer("LocalGet", "GE Log"), "yes");
+    assert_eq!(answer("LocalAliasGet", "GE Log"), "yes");
+    assert_eq!(answer("LocalSlotGet", "GE Log"), "yes");
     // literal_reach's table frame, directly and through an alias.
     assert_eq!(answer("FrameControlRoot", "GE Log"), "no", "precondition");
     assert_eq!(answer("FrameRoot", "GE Log"), "yes");

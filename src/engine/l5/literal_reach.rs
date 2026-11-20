@@ -922,14 +922,10 @@ fn table_frame(r: &ModelRoutine) -> Option<TableFrame> {
     let mut escapes: HashMap<String, HashSet<String>> = HashMap::new();
     // ENG-160: the binds (call sites and `Get` record operations), once per routine.
     let sites = crate::program::model::recref_alias::bind_sites(r);
-    let into_holder_array = r.var_assignments.iter().any(|a| {
-        r.variables.iter().any(|v| {
-            lc(&v.name) == lc(&a.lhs_name) && {
-                let t = v.declared_type.trim().fold_identifier();
-                t.ends_with(" of recordref") || t.ends_with(" of variant")
-            }
-        })
-    });
+    let into_holder_array = r
+        .var_assignments
+        .iter()
+        .any(|a| crate::program::model::recref_alias::into_holder_array(r, a));
     for v in r.variables.iter().filter(|v| {
         !v.is_parameter
             && v.scope.as_deref() == Some("local")

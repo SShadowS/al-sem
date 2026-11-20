@@ -202,7 +202,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The fix.** One list, `recref_alias::RecRefBind`, and one way to find the binds,
   `recref_alias::bind_sites`, which lists the call sites and the `Get` record operations alike.
   These readers go through it:
-  - recref_flow's facts (G34/G35);
+  - recref_flow's facts (G34/G35) and its exit guards (a guard reads no entry value once a
+    member of its variable's alias class is bound before it: assigned, passed on, called on,
+    a `Get`, or put in an array slot; a local's guard read its `Unset` entry, sol);
   - literal_reach's table frame (G33);
   - the field guard (G36);
   - record_types' two temp passes;
@@ -228,7 +230,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     the receiver as the operations are (Fable).
 - **Tests.** `tests/cli/cli_recref_get.rs` has one shape per reader, each with a control that
   holds without the `Get`. The G36 fixture adds `ReboundByGet`. On master 831122de every
-  `prove` shape answers `no` (13 of 13), and `query touches` lists none of the three moved
+  `prove` shape answers `no` (16 of 16), and `query touches` lists none of the three moved
   `Field` sites. Discrimination proofs (2026-11-20, each break reverted, each red):
   - the flow's `Get` facts → `GetMoves`; its array-slot rule → `SlotGetRoot`;
   - the table frame's `Get` check → `FrameRoot`; its alias check → `FrameAliasRoot`; its
@@ -238,11 +240,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - the resolver's `Get` arm → `TempGetStraight` and `OpenThenGet`;
   - field_touches' `Get` check → `TouchAfterGet`; its alias check → `TouchAlias`; its array
     check → `TouchSlot`;
-  - the field guard's operation lookup → `ReboundByGet`.
+  - the field guard's operation lookup → `ReboundByGet`;
+  - the exit guards' `Get` check → `LocalGet`; their alias class → `LocalAliasGet`; their
+    array check → `LocalSlotGet`.
 
-  A `Get` before a guard in the guarded routine itself (`GetBeforeGuardRoot`) is right on
-  master already: the caller's argument reads the callee's write-back over the whole routine.
-  A guard needs its own check for it only once arguments are read at their call (ENG-161).
+  On a parameter, a `Get` before its guard (`GetBeforeGuardRoot`) is right on master too: the
+  caller's argument reads the callee's write-back over the whole routine. On a local nothing
+  writes back, so the four `Local*` shapes answered `no` on master.
 
 ### Fixed (ENG-148: a runtime package's codeunit implementers reach interface dispatch)
 

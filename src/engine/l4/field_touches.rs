@@ -336,14 +336,10 @@ fn record_ref_tables<'m>(
     use crate::program::model::recref_alias::{RecRefBind, bind_sites};
     let mut out: HashMap<String, Option<String>> = HashMap::new();
     let sites = bind_sites(r);
-    let into_holder_array = r.var_assignments.iter().any(|a| {
-        r.variables.iter().any(|v| {
-            field_key(&v.name) == field_key(&a.lhs_name) && {
-                let t = v.declared_type.trim().fold_identifier();
-                t.ends_with(" of recordref") || t.ends_with(" of variant")
-            }
-        })
-    });
+    let into_holder_array = r
+        .var_assignments
+        .iter()
+        .any(|a| crate::program::model::recref_alias::into_holder_array(r, a));
     let locals: Vec<&str> = r
         .variables
         .iter()

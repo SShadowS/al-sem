@@ -49,6 +49,20 @@ pub fn recref_bind(method: &str) -> Option<RecRefBind> {
     })
 }
 
+/// Whether assignment `a` of `r` writes into an array of RecordRefs or Variants (`Slot[1] := R`).
+/// The IR keeps no right side for an indexed target, so it may share any holder of `r` with
+/// the slot, and a bind through the slot (`Slot[1].Get(Id)`) then binds it (ENG-160, sol).
+#[must_use]
+pub fn into_holder_array(r: &ModelRoutine, a: &PVarAssignment) -> bool {
+    let l = name_key(&a.lhs_name);
+    r.variables.iter().any(|v| {
+        name_key(&v.name) == l && {
+            let t = v.declared_type.trim().fold_identifier();
+            t.ends_with(" of recordref") || t.ends_with(" of variant")
+        }
+    })
+}
+
 /// One place a routine binds a variable in place through a [`RecRefBind`] method.
 #[derive(Debug, Clone, Copy)]
 pub struct BindSite<'r> {
