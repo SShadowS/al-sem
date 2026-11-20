@@ -911,6 +911,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Golden.** `tests/ir-l2-goldens/l2_features.snapshot` moved one line: `ws-d60`'s
   `UpgradeWithCase` has a `case … of '':` arm, whose label is now `Text("")` (triaged before the
   regen).
+- **Measured on CDO** (`bc3ccb18`): `aldump --literal-pruning-stats`, release-fast, master with
+  the counter (`b46e6174`) against ENG-30 (`d6cba139`; the final head adds only tests and this
+  file), 34,203 routines:
+
+  | | master | ENG-30 |
+  |---|---:|---:|
+  | value frames: usable parameters | 3,814 | 7,876 |
+  | — by domain: Enum / Integer / Code / Text | 703 / 3,111 / – / – | 763 / 3,105 / 2,469 / 1,539 |
+  | value frames: parameters unusable by a write | 2,105 | 5,892 |
+  | value frames: routines with a frame | 2,924 | 4,835 |
+  | guard frames: usable parameters | 4,178 | 4,178 |
+  | flow: parameters bound | 520 | 526 |
+  | flow: routines with a program | 5,308 | 5,360 |
+  | one hop: calls binding a parameter (of 63,795) | 6,051 | 7,074 |
+  | one hop: dead sites | 6,542 | 6,616 |
+  | — by value | 3,977 | 4,051 |
+
+  The new Text and Code domains make 4,008 parameters usable as values, and the write rules
+  (review) exclude 3,787 more. 74 more call sites are proven dead by a value. Peak RSS 3.63 /
+  3.65 GB. The guard frames are unchanged; ENG-135 moves those.
 
 ### Changed (ENG-120: mimalloc's `purge_delay` measured on CDO and DO, kept at 0)
 
