@@ -29,24 +29,30 @@ fn q(name: &str) -> String {
 /// `ExtendedInterfaces`) holds, as AL header text. alc 18.0.41 writes them as
 /// AL references: a name with a space or a quote arrives quoted and escaped
 /// (`"\"Dep Iface\""`, `"\"A\"\"B\""`), another app's with a
-/// `#<guid>#` prefix (`#6a0b…#"Dep Iface"`; review, Fable). The prefix is
-/// dropped, as the symbol reader drops it; a quoted reference is kept as
-/// written, a bare one quoted.
+/// `#<guid>#` prefix (`#6a0b…#"Dep Iface"`; review, Fable). A quoted name is
+/// kept as written, a bare one quoted. ENG-152: another app's is kept as a
+/// qualifier, `"#<guid>#"."Dep Iface"` (the grammar's qualified name; a reader
+/// by name sees the last segment). A bare one stays bare: alc means the
+/// package's own interface, but written into AL text that inference would read
+/// as a written app, which never rebinds; bare, it binds from the package's own
+/// scope (`bind_interface`), which finds its own interface.
 fn iface_refs(o: &Value, key: &str) -> Vec<String> {
     arr(o, key)
         .iter()
         .filter_map(Value::as_str)
         .map(|raw| {
-            let name = raw
-                .strip_prefix('#')
-                .and_then(|s| s.split_once('#'))
-                .map_or(raw, |(_, rest)| rest)
-                .trim();
-            let name = if name.is_empty() { raw.trim() } else { name };
-            if name.len() >= 2 && name.starts_with('"') && name.ends_with('"') {
+            let (app, name) = match raw.strip_prefix('#').and_then(|s| s.split_once('#')) {
+                Some((g, rest)) if !rest.trim().is_empty() => (Some(g), rest.trim()),
+                _ => (None, raw.trim()),
+            };
+            let name = if name.len() >= 2 && name.starts_with('"') && name.ends_with('"') {
                 name.to_string()
             } else {
                 q(name)
+            };
+            match app {
+                Some(g) if !g.is_empty() => format!("\"#{g}#\".{name}"),
+                _ => name,
             }
         })
         .collect()
@@ -731,7 +737,20 @@ fn write_object(
                 };
                 w.out.line(1, &format!("Extensible = {v};"));
             }
-            let ifaces = iface_refs(o, "ImplementedInterfaces");
+            // The mapping keys without the app qualifier: tree-sitter-al rejects
+            // a qualified key in a list of two or more pairs (an ERROR; alc
+            // 18.0.41 accepts it: tree-sitter-al #47). A bare key binds from the
+            // enum's own app (`bind_interface`), which sees what it implements.
+            // shortcut: unqualified mapping keys, until tree-sitter-al #47 lands.
+            let ifaces: Vec<String> = iface_refs(o, "ImplementedInterfaces")
+                .into_iter()
+                .map(
+                    |i| match i.strip_prefix("\"#").and_then(|r| r.split_once("#\".")) {
+                        Some((_, name)) => name.to_string(),
+                        None => i,
+                    },
+                )
+                .collect();
             if let Some(p) =
                 prop(o, "DefaultImplementation").and_then(|d| impl_pairs(&ifaces, d, codeunits))
             {
@@ -879,7 +898,8 @@ mod tests {
     /// ENG-142: an interface's `ExtendedInterfaces` become its `extends` list, so
     /// the synthesized file lowers with its bases (names with spaces quoted).
     /// Mutation (2026-11-19): the `interface` arm dropped -> no bases (red);
-    /// restored, green.
+    /// restored, green. ENG-152 (2026-11-20): `iface_refs` writing every name
+    /// bare -> `IOther` loses its app (red); restored, green.
     #[test]
     fn an_interfaces_bases_are_written() {
         let symbols: Value = serde_json::from_str(
@@ -896,6 +916,15 @@ mod tests {
         assert_eq!(
             f.objects[0].interface_extends,
             ["IBar", "My Base", "IOther"],
+            "{text}"
+        );
+        assert_eq!(
+            f.objects[0].interface_extends_qualifiers,
+            [
+                None,
+                None,
+                Some("#63ca2fa4-4f03-4f2b-a480-172fef340d3f#".to_string())
+            ],
             "{text}"
         );
     }
@@ -940,12 +969,19 @@ mod tests {
         // `A""B`: the lowerer keeps a reference's escape, as for hand-written
         // `implements "A""B"` (readers unescape).
         assert_eq!(cu.implements, ["IFoo", "My Iface", "A\"\"B", "Dep Iface"]);
+        // ENG-152: another app's reference keeps its `#<guid>#` through
+        // synthesis and lowering; a bare one stays bare. Mutation (2026-11-20):
+        // `iface_refs` writing every name bare -> the guid is lost (red);
+        // restored, green.
+        let guid = Some("#6a0b05e01c554c3b9d115a0f3c4c0a01#".to_string());
+        assert_eq!(cu.implements_qualifiers, [None, None, None, guid.clone()]);
         // The package's own interface `A"B` (symbols' plain `Name`) is written
         // escaped, so it lowers to the same text its implementer names.
         let (iface, _) = object(al_syntax::ir::ObjectKind::Interface);
         assert_eq!(iface.name, cu.implements[2]);
         let (en, text) = object(al_syntax::ir::ObjectKind::Enum);
         assert_eq!(en.implements, ["My Iface", "Dep Iface"]);
+        assert_eq!(en.implements_qualifiers, [None, guid]);
         // Ids become the package's codeunit names (one in a namespace); `B`'s
         // 99999 is no codeunit of this package, so `B` gets no mapping.
         assert_eq!(

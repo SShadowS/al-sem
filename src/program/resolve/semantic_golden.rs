@@ -933,10 +933,13 @@ pub fn assert_against_semantic_golden(
 /// with `resolve_full_program`'s edges.
 #[derive(Clone, Debug)]
 pub enum FanOutSiteContext {
-    /// `ReceiverType::Interface { name_lc }` — the call site dispatched via
-    /// this interface, calling `called_member_lc` with `arity` arguments.
+    /// `ReceiverType::Interface` — the call site dispatched via this interface
+    /// reference, bound `binding` from the receiver's declaring scope (ENG-152:
+    /// the verifier checks against the same binding the resolver used),
+    /// calling `called_member_lc` with `arity` arguments.
     Interface {
-        iface_lc: String,
+        binding: crate::program::graph::InterfaceBinding,
+        r: crate::program::node_extract::InterfaceRef,
         called_member_lc: String,
         arity: usize,
     },
@@ -1074,11 +1077,12 @@ fn build_fan_out_site_context(
                                     None,
                                     None,
                                 );
-                                if let ReceiverType::Interface { name_lc } = recv {
+                                if let Some((r, binding)) = recv.interface_binding(graph) {
                                     ctx_map.insert(
                                         site_id,
                                         FanOutSiteContext::Interface {
-                                            iface_lc: name_lc,
+                                            binding,
+                                            r,
                                             called_member_lc: method.fold_identifier(),
                                             arity: site.arity,
                                         },
@@ -1202,7 +1206,8 @@ pub fn route_applicability(
             EdgeKind::Call if edge.shape == DispatchShape::Polymorphic => {
                 match fan_out_ctx.get(&edge.site) {
                     Some(FanOutSiteContext::Interface {
-                        iface_lc,
+                        binding,
+                        r,
                         called_member_lc,
                         arity,
                     }) => {
@@ -1211,7 +1216,8 @@ pub fn route_applicability(
                                 RouteTarget::Routine(rid) => {
                                     interface_routes_checked += 1;
                                     interface_route_applicable(
-                                        iface_lc,
+                                        binding,
+                                        r,
                                         called_member_lc,
                                         *arity,
                                         rid,
@@ -1679,6 +1685,21 @@ mod tests {
         }
     }
 
+    /// ENG-152: the fixture's `IFoo`, bound exactly (it declares one), or
+    /// unbound when it declares none.
+    fn ifoo_binding(graph: &ProgramGraph) -> crate::program::graph::InterfaceBinding {
+        graph
+            .objects
+            .iter()
+            .find(|o| {
+                o.id.kind == al_syntax::ir::ObjectKind::Interface
+                    && al_syntax::fold_identifier(&o.name) == "ifoo"
+            })
+            .map_or(crate::program::graph::InterfaceBinding::Unbound, |o| {
+                crate::program::graph::InterfaceBinding::Exact(o.id.clone())
+            })
+    }
+
     fn source_route(target: RoutineNodeId) -> Route {
         Route {
             target: RouteTarget::Routine(target),
@@ -1741,7 +1762,8 @@ mod tests {
         ctx.insert(
             site,
             FanOutSiteContext::Interface {
-                iface_lc: "ifoo".into(),
+                binding: ifoo_binding(&graph),
+                r: "ifoo".into(),
                 called_member_lc: "bar".into(),
                 arity: 0,
             },
@@ -1801,7 +1823,8 @@ mod tests {
         ctx.insert(
             site,
             FanOutSiteContext::Interface {
-                iface_lc: "ifoo".into(),
+                binding: ifoo_binding(&graph),
+                r: "ifoo".into(),
                 called_member_lc: "bar".into(),
                 arity: 0,
             },

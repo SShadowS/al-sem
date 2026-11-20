@@ -3,7 +3,6 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 
-use al_syntax::IdentifierFoldExt;
 use al_syntax::ir::ObjectKind;
 
 use super::facts::{RunTarget, SourceFacts};
@@ -195,6 +194,8 @@ struct Builder<'a> {
     inp: &'a Inputs<'a>,
     obj_by_id: HashMap<&'a ObjectNodeId, &'a ObjectNode>,
     routines_of: HashMap<&'a ObjectNodeId, Vec<&'a RoutineNode>>,
+    /// Interface implementers by identity (ENG-152), for the callback hubs.
+    interfaces: crate::program::resolve::interfaces::InterfaceImplementers,
     rtn_by_id: HashMap<&'a RoutineNodeId, &'a RoutineNode>,
     base_of: HashMap<&'a ObjectNodeId, ObjectNodeId>,
     exts_of: HashMap<ObjectNodeId, Vec<&'a ObjectNodeId>>,
@@ -266,6 +267,7 @@ impl<'a> Builder<'a> {
             inp,
             obj_by_id,
             routines_of,
+            interfaces: crate::program::resolve::interfaces::InterfaceImplementers::build(g),
             rtn_by_id,
             base_of,
             exts_of,
@@ -1310,22 +1312,18 @@ impl<'a> Builder<'a> {
                             targets.push((Key::Routine(r.id.clone()), Kind::Event));
                         }
                     }
-                    // Implementations of interfaces declared there.
-                    let mut ifaces: HashSet<String> = g
+                    // Implementations of interfaces declared there, by identity
+                    // (ENG-152): `implementers_of` holds the implementers of
+                    // every interface derived from one, in any app (ENG-142).
+                    let impls: HashSet<&ObjectNodeId> = g
                         .objects
                         .iter()
                         .filter(|o| o.id.kind == ObjectKind::Interface && apps.contains(&o.id.app))
-                        .map(|o| o.name.fold_identifier())
+                        .flat_map(|i| self.interfaces.implementers_of(&i.id))
                         .collect();
-                    // ENG-142: and every interface derived from one, in any app:
-                    // its implementers implement the base too.
-                    g.add_derived_interfaces(&mut ifaces);
-                    if !ifaces.is_empty() {
+                    if !impls.is_empty() {
                         for o in g.objects.iter() {
-                            if o.implements
-                                .iter()
-                                .any(|i| ifaces.contains(&i.fold_identifier()))
-                            {
+                            if impls.contains(&o.id) {
                                 for r in self.routines_of.get(&o.id).into_iter().flatten() {
                                     if !r.is_trigger && r.access == Access::Public {
                                         targets.push((Key::Routine(r.id.clone()), Kind::Interface));
@@ -1634,6 +1632,7 @@ pub(crate) mod tests {
     use crate::program::resolve::full::{ClassifiedEdge, RareSiteFacts, SiteFacts};
     use crate::program::topology::DependencyGraph;
     use crate::snapshot::AppId;
+    use al_syntax::IdentifierFoldExt;
 
     /// A hand-built program (also the reverse walker's test world).
     #[derive(Default)]
@@ -2768,6 +2767,40 @@ pub(crate) mod tests {
             !o.edges(hub, "Impl.Bar").is_empty(),
             "the hub reaches IBaz's implementer"
         );
+    }
+
+    /// ENG-152: the callbacks hub reaches implementers of the hub app's
+    /// interfaces by identity. App B (loaded, it cannot see S) declares its own
+    /// `IBar` and an implementer; S's hub reaches `Impl` (A's, which binds to
+    /// S's `IBar`) and not B's.
+    /// Mutation (2026-11-20): the hub taking every interface named like one of
+    /// its app's -> `BImpl.Bar` reached (red); restored, green.
+    #[test]
+    fn the_callbacks_hub_skips_a_same_named_interface_of_another_app() {
+        let mut w = World::default();
+        let a = w.app("A");
+        let s = w.app("S");
+        let b = w.app("B");
+        w.deps.push((a, s));
+        w.deps.push((a, b));
+        let cu = w.obj(a, ObjectKind::Codeunit, 1, "Cu", TrustTier::Workspace);
+        let sym = w.obj(s, ObjectKind::Codeunit, 7, "SymCu", TrustTier::SymbolOnly);
+        w.obj(s, ObjectKind::Interface, 8, "IBar", TrustTier::SymbolOnly);
+        w.obj(b, ObjectKind::Interface, 8, "IBar", TrustTier::SymbolOnly);
+        let imp = w.obj(a, ObjectKind::Codeunit, 10, "Impl", TrustTier::Workspace);
+        w.object_mut(&imp).implements = vec!["IBar".into()];
+        let bimp = w.obj(b, ObjectKind::Codeunit, 11, "BImpl", TrustTier::SymbolOnly);
+        w.object_mut(&bimp).implements = vec!["IBar".into()];
+        let test = w.rtn(&cu, "TestIt");
+        let api = w.rtn(&sym, "Api");
+        w.rtn(&imp, "Bar");
+        w.rtn(&bimp, "Bar");
+        w.call(&test, &api, 1);
+        let o = w.project(a);
+        let hub = "h:callbacks:s-guid";
+        assert!(!o.edges(hub, "Impl.Bar").is_empty(), "A's implementer");
+        // Unreached, so pruned: no node at all.
+        assert!(!o.has("BImpl.Bar"), "not B's");
     }
 
     /// Duplicate rows merge to the strongest confidence and the smallest line;

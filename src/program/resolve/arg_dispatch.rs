@@ -539,6 +539,24 @@ fn split_top_level_commas(inner: &str) -> Option<Vec<&str>> {
 /// variant's doc). `None` when unparseable/unresolvable — UNDECIDED, module
 /// doc's cardinal rule: an unparseable generic argument degrades the WHOLE
 /// enclosing type, never a partial read.
+///
+/// ENG-152: an interface type's identity, when it binds to exactly one
+/// interface from `scope` ([`ProgramGraph::bind_interface`]); several it may
+/// name, or none, is no identity (the argument stays untyped: never a pick).
+fn exact_interface(
+    graph: &dyn GraphReads,
+    scope: crate::program::node::AppRef,
+    name: String,
+    app: Option<crate::program::node::SharedStr>,
+) -> Option<ObjectNodeId> {
+    let r = crate::program::node_extract::InterfaceRef {
+        name: name.into(),
+        app,
+        inferred: false,
+    };
+    graph.bind_interface(scope, &r).exact().cloned()
+}
+
 fn parse_generic_arg(
     arg_text: &str,
     from: &ObjectNodeId,
@@ -562,12 +580,8 @@ fn parse_generic_arg(
     match classify_type_text(arg_text) {
         ParsedType::Record { table_ref } => resolve(ObjectKind::Table, &table_ref),
         ParsedType::Object { kind, object_ref } => resolve(kind, &object_ref),
-        ParsedType::Interface { name } => {
-            let oref = ObjectRef::Name {
-                raw: name.clone(),
-                normalized_lc: name,
-            };
-            resolve(ObjectKind::Interface, &oref)
+        ParsedType::Interface { name, app } => {
+            exact_interface(graph, from.app, name, app).map(GenericArgType::Object)
         }
         ParsedType::EnumType { name } => {
             let oref = ObjectRef::Name {
@@ -636,12 +650,8 @@ pub(crate) fn dispatch_canonical_type_text(
     match classify_type_text(ty_text) {
         ParsedType::Record { table_ref } => resolve(ObjectKind::Table, &table_ref),
         ParsedType::Object { kind, object_ref } => resolve(kind, &object_ref),
-        ParsedType::Interface { name } => {
-            let oref = ObjectRef::Name {
-                raw: name.clone(),
-                normalized_lc: name,
-            };
-            resolve(ObjectKind::Interface, &oref)
+        ParsedType::Interface { name, app } => {
+            exact_interface(graph, from.app, name, app).map(CanonicalArgType::Object)
         }
         ParsedType::EnumType { name } => {
             let oref = ObjectRef::Name {
@@ -1718,16 +1728,13 @@ fn type_call_result_arg_member(
     // declared return type, which every implementer shares. System
     // Application's `SetFunctionAsToolChoice(Function.GetName())` over
     // `(Interface "AOAI Function")` / `(Text)` stayed ambiguous.
-    if let ReceiverType::Interface { name_lc } = &base_receiver
-        && let Some(node) = crate::program::resolve::receiver::interface_own_routine_node(
-            name_lc,
-            &member_lc,
-            inner_arity,
-            from_object,
-            graph,
-            index,
-        )
-    {
+    if let Some(node) = crate::program::resolve::receiver::interface_own_routine_node(
+        &base_receiver,
+        &member_lc,
+        inner_arity,
+        graph,
+        index,
+    ) {
         return call_result_arg_from_routine_node(node, from, graph, index);
     }
     let (_shape, routes) = resolve_member(
@@ -1890,7 +1897,13 @@ fn call_result_arg_from_routine_node(
     let Some(ty_text) = node.return_type.as_deref() else {
         return ArgDispatchInfo::untyped();
     };
-    let canonical = dispatch_canonical_type_text(ty_text, from, graph, index);
+    // ENG-152: an interface return type binds in the callee's app, as the
+    // receiver path's `declared_in` does.
+    let scope = match classify_type_text(ty_text) {
+        ParsedType::Interface { .. } => &node.id.object,
+        _ => from,
+    };
+    let canonical = dispatch_canonical_type_text(ty_text, scope, graph, index);
     if let Some((_name, id)) = &node.return_type_id {
         match &canonical {
             Some(CanonicalArgType::Object(oid)) => match object_by_id(graph, oid) {
@@ -2078,7 +2091,10 @@ fn abi_param_canonical(
     let (object_kind, text_ref) = match classify_type_text(&p.type_text) {
         ParsedType::Record { table_ref } => (ObjectKind::Table, Some(table_ref)),
         ParsedType::Object { kind, object_ref } => (kind, Some(object_ref)),
-        ParsedType::Interface { name } => (
+        // A symbol parameter's bare type name is its own package's scope, as
+        // `resolve_object_ref` reads it from `from` (ENG-152: the qualifier,
+        // if any, does not reach symbol type text).
+        ParsedType::Interface { name, .. } => (
             ObjectKind::Interface,
             Some(ObjectRef::Name {
                 raw: name.clone(),
@@ -2557,34 +2573,11 @@ pub(crate) fn pick_candidate(
 /// it, or a codeunit implementing one (ENG-142, [`interface_binds`]).
 pub(crate) type IsA<'a> = &'a dyn Fn(&ObjectNodeId, &ObjectNodeId) -> bool;
 
-/// ENG-142: whether the interface named `derived_lc` is, or derives from, the
-/// one named `base_lc`, both names read from `app` (an enum's mapping keys, its
-/// `implements` list). By identity, as [`interface_binds`]; equal names when
-/// neither resolves.
-pub(crate) fn interface_is_or_derives(
-    graph: &dyn GraphReads,
-    index: &dyn IndexReads,
-    app: crate::program::node::AppRef,
-    derived_lc: &str,
-    base_lc: &str,
-) -> bool {
-    if derived_lc == base_lc {
-        return true;
-    }
-    let find = |n: &str| graph.resolve_object(app, ObjectKind::Interface, n);
-    match (find(derived_lc), find(base_lc)) {
-        (Some(d), Some(b)) => interface_binds(graph, index, &d.id, &b.id),
-        // A name that does not resolve uniquely may be the other's (review,
-        // Fable): counting the mapping can only open a site, never close one.
-        _ => true,
-    }
-}
-
 /// ENG-142: whether a value of `arg` (an interface or a codeunit) binds an
 /// interface parameter `param`, as alc 18.0.41 lets it: the same interface, an
-/// interface derived from it (its bases named from each declaring interface's
-/// app), or a codeunit among its implementers (`implementers_of`, which holds a
-/// derived interface's implementers too).
+/// interface derived from it, or a codeunit among its implementers
+/// (`implementers_of`, which holds a derived interface's implementers too).
+/// ENG-152: by identity; each base binds from its declaring interface's app.
 pub(crate) fn interface_binds(
     graph: &dyn GraphReads,
     index: &dyn IndexReads,
@@ -2594,32 +2587,26 @@ pub(crate) fn interface_binds(
     if arg == param {
         return true;
     }
-    let Some(p) = graph.object(param) else {
-        return false;
-    };
     match arg.kind {
-        ObjectKind::Codeunit => index
-            .implementers_of(&p.name.fold_identifier())
-            .contains(arg),
+        ObjectKind::Codeunit => index.implementers_of(param).contains(arg),
         ObjectKind::Interface => {
-            let mut seen: Vec<&ObjectNodeId> = vec![arg];
+            let mut seen: Vec<ObjectNodeId> = vec![arg.clone()];
             let mut stack: Vec<&ObjectNode> = graph.object(arg).into_iter().collect();
             while let Some(o) = stack.pop() {
                 for b in &o.interface_bases {
-                    let Some(base) =
-                        graph.resolve_object(o.id.app, ObjectKind::Interface, &b.fold_identifier())
-                    else {
-                        // A base that does not resolve uniquely may be (or lead
+                    let binding = graph.bind_interface(o.id.app, b);
+                    let Some(base) = binding.exact() else {
+                        // A base that binds no single interface may be (or lead
                         // to) the parameter's interface (review, Fable): "may
                         // bind" leaves the call undecided, never a wrong pick.
                         return true;
                     };
-                    if base.id == *param {
+                    if base == param {
                         return true;
                     }
-                    if !seen.contains(&&base.id) {
-                        seen.push(&base.id);
-                        stack.push(base);
+                    if !seen.contains(base) {
+                        seen.push(base.clone());
+                        stack.extend(graph.object(base));
                     }
                 }
             }

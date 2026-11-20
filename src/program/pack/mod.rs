@@ -87,7 +87,10 @@ use crate::program::resolve::decl_surface::RoutineMeta;
 /// 22: grammar v5.4.0 (GRM-05): the new `PreprocConditionalExtends` shifts the
 /// positional kind index.
 /// 23: `ObjectNode::interface_bases` (ENG-142, interface inheritance).
-pub const PACK_SCHEMA: u32 = 23;
+/// 24: `ObjectNode::implements` / `interface_bases` / `enum_impls` keys are
+/// `InterfaceRef`s, a name, its app and whether the app was inferred (ENG-152,
+/// interfaces by identity).
+pub const PACK_SCHEMA: u32 = 24;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PackedFile {
@@ -567,9 +570,9 @@ mod tests {
         let bytes = encode(&pack).expect("encode");
         assert_eq!(
             blake3::hash(&bytes).to_hex().as_str(),
-            // Schema 23 (ENG-142): every `ObjectNode` writes its `interface_bases`
-            // (schema 22, GRM-05: `0c347209…`).
-            "d2491f2db38b25f682c372faf9ccee14c6aa843ccab59ba82295cc6e6f419247",
+            // Schema 24 (ENG-152): interface references carry their app (schema
+            // 23, ENG-142: `d2491f2d…`; schema 22, GRM-05: `0c347209…`).
+            "207dea50f1317e87aaf9343a1d8a8ede54d8c80e98ce59c69656d32b5fcea119",
             "the pack's serialized form changed: bump PACK_SCHEMA and re-pin"
         );
     }
@@ -584,7 +587,7 @@ mod tests {
     /// Stated precondition: set by assignment, whatever the fixture holds.
     #[test]
     fn pack_round_trips_method_ids() {
-        assert_eq!(PACK_SCHEMA, 23);
+        assert_eq!(PACK_SCHEMA, 24);
         let mut pack = sample_pack();
         pack.files[0].routines[0].abi_method_id = Some(-42);
         pack.files[0].routines[0].publisher_isolated = true;
@@ -618,8 +621,20 @@ mod tests {
             request_page_hidden: true,
         };
         pack.files[0].objects[0].dataset = dataset.clone();
+        // Schema 24 (ENG-152): an interface reference keeps its app.
+        let iref = crate::program::node_extract::InterfaceRef {
+            name: "Dep Iface".into(),
+            app: Some("6a0b05e01c554c3b9d115a0f3c4c0a01".into()),
+            inferred: true,
+        };
+        pack.files[0].objects[0].implements = vec![iref.clone()];
         pack.self_hash = compute_self_hash(&pack);
         let back = decode(&encode(&pack).expect("encode")).expect("decode");
+        assert_eq!(
+            back.files[0].objects[0].implements,
+            [iref],
+            "schema 24: InterfaceRef"
+        );
         assert_eq!(back.files[0].routines[0].abi_method_id, Some(-42));
         let meta = &back.files[0].routine_meta[0].1;
         assert_eq!((meta.method_id, meta.try_function), (Some(-7), true));

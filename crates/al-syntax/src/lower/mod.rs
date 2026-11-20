@@ -430,19 +430,24 @@ fn lower_object(
         .filter(|s| !s.is_empty());
 
     // `implements` interface names (Codeunit / Enum / Interface).
-    let implements = if matches!(
+    let (implements_qualifiers, implements): (Vec<_>, Vec<_>) = if matches!(
         kind,
         ObjectKind::Codeunit | ObjectKind::Enum | ObjectKind::Interface
     ) {
         extract_implements(node, source)
     } else {
         Vec::new()
-    };
-    let interface_extends = if kind == ObjectKind::Interface {
-        interface_extends_names(node, source)
-    } else {
-        Vec::new()
-    };
+    }
+    .into_iter()
+    .unzip();
+    let (interface_extends_qualifiers, interface_extends): (Vec<_>, Vec<_>) =
+        if kind == ObjectKind::Interface {
+            interface_extends_names(node, source)
+        } else {
+            Vec::new()
+        }
+        .into_iter()
+        .unzip();
 
     // Page controls (Page / PageExtension).
     let mut page_controls = Vec::new();
@@ -550,6 +555,8 @@ fn lower_object(
         extends_target,
         implements,
         interface_extends,
+        implements_qualifiers,
+        interface_extends_qualifiers,
         page_controls,
         fields,
         keys,
@@ -762,11 +769,31 @@ fn collect_run_objects(node: RawNode, source: &str, out: &mut Vec<String>) {
 /// conditional interfaces over-approximates the implementer set (one branch
 /// is always dead at compile time) but never fabricates a false SINGLE-
 /// target confidence, so the union is sound without a degrade.
-fn extract_implements(node: RawNode, source: &str) -> Vec<String> {
+fn extract_implements(node: RawNode, source: &str) -> Vec<QualifiedRef> {
     let mut out = Vec::new();
     let mut saw_implements = false;
     extract_implements_walk(node, source, &mut saw_implements, &mut out);
     out
+}
+
+/// A reference's leading segments (`NsA` of `NsA.IDup`, the `"#<guid>#"`
+/// app marker of synthesized text; ENG-152), if any, and its name.
+type QualifiedRef = (Option<String>, String);
+
+/// [`reference_name`] with the qualifier it drops: a `qualified_name`'s
+/// segments before the last, each [`ident_text`], joined with `.`.
+fn qualified_reference(n: RawNode, source: &str) -> QualifiedRef {
+    let qualifier = (n.kind() == RawKind::QualifiedName)
+        .then(|| {
+            let segs = structural_children(n);
+            let head: Vec<String> = segs[..segs.len().saturating_sub(1)]
+                .iter()
+                .map(|s| ident_text(*s, source))
+                .collect();
+            (!head.is_empty()).then(|| head.join("."))
+        })
+        .flatten();
+    (qualifier, reference_name(n, source))
 }
 
 /// Recursive walk backing [`extract_implements`]. Returns `true` once a
@@ -776,14 +803,14 @@ fn extract_implements_walk(
     node: RawNode,
     source: &str,
     saw_implements: &mut bool,
-    out: &mut Vec<String>,
+    out: &mut Vec<QualifiedRef>,
 ) -> bool {
     for child in node.named_children() {
         match child.kind() {
             RawKind::ImplementsKeyword => *saw_implements = true,
             RawKind::ImplementsClause => implements_clause_names(child, source, out),
             RawKind::Identifier | RawKind::QuotedIdentifier if *saw_implements => {
-                out.push(ident_text(child, source));
+                out.push((None, ident_text(child, source)));
             }
             // Stop at the object body / a routine body.
             RawKind::DeclarationBody | RawKind::CodeBlock if *saw_implements => return true,
@@ -802,11 +829,11 @@ fn extract_implements_walk(
 /// (`preproc_conditional_implements`, grammar 8682cb5f: `implements IA, #if X IB,
 /// #endif IC`) gives the names of every arm, nested groups included: the same
 /// union [`extract_implements`] already reads across a whole-header `#if`.
-fn implements_clause_names(clause: RawNode, source: &str, out: &mut Vec<String>) {
+fn implements_clause_names(clause: RawNode, source: &str, out: &mut Vec<QualifiedRef>) {
     for sub in clause.named_children() {
         match sub.kind() {
             RawKind::Identifier | RawKind::QuotedIdentifier | RawKind::QualifiedName => {
-                out.push(reference_name(sub, source));
+                out.push(qualified_reference(sub, source));
             }
             RawKind::PreprocConditionalImplements => implements_clause_names(sub, source, out),
             _ => {}
@@ -823,7 +850,7 @@ fn implements_clause_names(clause: RawNode, source: &str, out: &mut Vec<String>)
 /// Fable; ENG-142): recovery can misread the list (`extends A.` before `#if X`
 /// becomes `qualified_name(A, ERROR, X)`, read as base `X`). The object's own
 /// node, not the file: an error in another object leaves this list as read.
-fn interface_extends_names(node: RawNode, source: &str) -> Vec<String> {
+fn interface_extends_names(node: RawNode, source: &str) -> Vec<QualifiedRef> {
     if node.has_error() {
         return Vec::new();
     }
@@ -840,9 +867,9 @@ fn interface_extends_names(node: RawNode, source: &str) -> Vec<String> {
     nodes.sort_by_key(|n| n.byte_range().start);
     nodes
         .into_iter()
-        .map(|n| reference_name(n, source))
+        .map(|n| qualified_reference(n, source))
         // An empty name (`extends ""`) names nothing.
-        .filter(|s| !s.is_empty())
+        .filter(|(_, s)| !s.is_empty())
         .collect()
 }
 

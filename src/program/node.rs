@@ -50,6 +50,17 @@ impl AppRegistry {
         self.apps.get(r.0 as usize)
     }
 
+    /// The interned apps whose guid is `norm` (ENG-152; compared as
+    /// `node_extract::norm_guid` writes it: lowercase, no dashes). Several when
+    /// two versions of one app are interned.
+    pub fn find_by_guid<'a>(&'a self, norm: &'a str) -> impl Iterator<Item = AppRef> + 'a {
+        self.apps
+            .iter()
+            .enumerate()
+            .filter(move |(_, id)| crate::program::node_extract::norm_guid(&id.guid) == norm)
+            .map(|(i, _)| AppRef(i as u32))
+    }
+
     /// Find the first interned app whose `name` matches case-insensitively.
     pub fn find_by_name(&self, name: &str) -> Option<AppRef> {
         self.apps

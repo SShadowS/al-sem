@@ -127,7 +127,7 @@ use super::ix::RoutineIx;
 use super::taxonomy::{DispatchKind, Resolution};
 use super::workspace::{AssemblyNeeds, ModelEntities, ModelRecordOperation, ModelRoutine};
 use crate::program::body::features::{PCallSite, PCallee};
-use crate::program::graph::ProgramGraph;
+use crate::program::graph::{InterfaceBinding, ProgramGraph};
 use crate::program::node::{AppRef, ObjKey, ObjectNodeId, RoutineNodeId};
 use crate::program::node_extract::{AbiParams, ObjectNode};
 use crate::program::resolve::decl_surface::DeclSurface;
@@ -1645,6 +1645,7 @@ fn convert<'a>(
         ),
         upgrade_dependency_bindings,
         graph,
+        interfaces: crate::program::resolve::interfaces::InterfaceImplementers::build(graph),
         surface: &surface,
         rows: &ws.routines,
         j2_row: &row_nodes.j2_row,
@@ -2005,6 +2006,9 @@ struct Converter<'a> {
     routine_pick: HashMap<&'a str, &'a ModelRoutine>,
     upgrade_dependency_bindings: bool,
     graph: &'a ProgramGraph,
+    /// Interface implementers by identity (ENG-152), the resolver's candidate
+    /// query over the same graph, for the interface sites' dispatch meta.
+    interfaces: crate::program::resolve::interfaces::InterfaceImplementers,
     surface: &'a DeclSurface,
     /// The model's rows, indexed by `RoutineIx`.
     rows: &'a [ModelRoutine],
@@ -2796,47 +2800,72 @@ impl<'a> Converter<'a> {
 
         let facts = self.site_facts.get(&ce.obligation_id()).map(|f| f.rare());
         let name_lc = facts.and_then(|f| f.interface.clone()).unwrap_or_default();
-        let interface_name = self
-            .graph
-            .objects
+        // ENG-152: the interfaces the receiver bound to at the site, as the
+        // resolver dispatched (the same candidate query: `self.interfaces`).
+        let (iref, binding) = facts
+            .and_then(|f| f.interface_binding.clone())
+            .unwrap_or_else(|| (name_lc.as_str().into(), InterfaceBinding::Unbound));
+        let bound: Vec<&ObjectNode> = binding
+            .ids()
             .iter()
-            .filter(|o| o.id.kind == ObjectKind::Interface && o.name.fold_identifier() == name_lc)
+            .filter_map(|id| self.graph.object(id))
+            .collect();
+        let interface_name = bound
+            .iter()
             .min_by_key(|o| o.id.app != self.primary)
             .map_or_else(|| name_lc.clone(), |o| o.name.to_string());
-        // G29: every interface of this name is the cataloged one.
-        let mut named = self
-            .graph
-            .objects
-            .iter()
-            .filter(|o| o.id.kind == ObjectKind::Interface && o.name.fold_identifier() == name_lc)
-            .peekable();
-        let publisher_scoped = named.peek().is_some()
-            && named.all(|o| {
+        // G29: every interface the receiver may name is the cataloged one. An
+        // `Unseen` binding may name an interface no loaded app declares (review,
+        // sol), so it never qualifies.
+        let publisher_scoped = !bound.is_empty()
+            && !matches!(binding, InterfaceBinding::Unseen(_))
+            && bound.iter().all(|o| {
                 let guid = &self.graph.apps.resolve(o.id.app).guid;
+                let n = o.name.fold_identifier();
                 crate::program::model::calls::PUBLISHER_SCOPED_INTERFACES
                     .iter()
-                    .any(|(g, n)| guid.eq_ignore_ascii_case(g) && *n == name_lc)
+                    .any(|(g, c)| guid.eq_ignore_ascii_case(g) && *c == n)
             });
+        let by_id = |ids: Vec<ObjectNodeId>| -> Vec<&ObjectNode> {
+            let mut v: Vec<&ObjectNode> =
+                ids.iter().filter_map(|id| self.graph.object(id)).collect();
+            v.sort_by(|a, b| a.id.cmp(&b.id));
+            v
+        };
         // ENG-142 (review, Fable): the implementers of every interface derived
-        // from this one implement it too, as the edge's routes count them.
-        let mut family = std::collections::HashSet::from([name_lc.clone()]);
-        self.graph.add_derived_interfaces(&mut family);
-        let implements = |kinds: &[ObjectKind]| -> Vec<&ObjectNode> {
+        // from these implement them too, as the edge's routes count them.
+        let impls = by_id(self.interfaces.for_binding(false, &binding, &iref));
+        // Every enum and enum extension implementing them (open ones too: the
+        // closed-enum bucket is not the inventory), each reference bound from
+        // its own app.
+        let enum_implementers: Vec<&ObjectNode> = {
             let mut v: Vec<&ObjectNode> = self
                 .graph
                 .objects
                 .iter()
+                .filter(|o| matches!(o.id.kind, ObjectKind::Enum | ObjectKind::EnumExtension))
                 .filter(|o| {
-                    kinds.contains(&o.id.kind)
-                        && o.implements
-                            .iter()
-                            .any(|i| family.contains(&i.fold_identifier()))
+                    o.implements
+                        .iter()
+                        .any(|r| match self.graph.bind_interface(o.id.app, r) {
+                            // By name alone, as the unbound bucket (review, sol).
+                            InterfaceBinding::Unbound => {
+                                binding.may_be_unloaded()
+                                    && crate::program::graph::interface_name_key(&r.name)
+                                        == crate::program::graph::interface_name_key(&iref.name)
+                            }
+                            b => b.ids().iter().any(|k| {
+                                binding
+                                    .ids()
+                                    .iter()
+                                    .any(|base| self.interfaces.is_or_derives(k, base))
+                            }),
+                        })
                 })
                 .collect();
             v.sort_by(|a, b| a.id.cmp(&b.id));
             v
         };
-        let impls = implements(&[ObjectKind::Codeunit]);
         let reached = |o: &ObjectNode| {
             let object_id = self.model_object_id(&o.id);
             callees.iter().any(|t| t.object_id == object_id) || dependency.contains(&o.id)
@@ -2885,7 +2914,7 @@ impl<'a> Converter<'a> {
             interface_name,
             total_impls: impls.len(),
             unresolved_impls,
-            enum_implementers: implements(&[ObjectKind::Enum, ObjectKind::EnumExtension])
+            enum_implementers: enum_implementers
                 .iter()
                 .map(|o| self.model_object_id(&o.id))
                 .collect(),

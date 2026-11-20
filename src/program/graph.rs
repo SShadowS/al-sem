@@ -5,9 +5,10 @@ use al_syntax::ir::ObjectKind;
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::program::node::{AppRef, AppRegistry, ObjKey, ObjectNodeId};
-use crate::program::node_extract::{ObjectNode, RoutineNode};
+use crate::program::node_extract::{InterfaceRef, ObjectNode, RoutineNode};
 use crate::program::node_set::NodeSet;
 use crate::program::topology::DependencyGraph;
+use serde::{Deserialize, Serialize};
 
 /// Index from (app, kind, lowercase-name) to position in `ProgramGraph::objects`.
 ///
@@ -102,45 +103,121 @@ pub struct AbiIngestError {
     pub message: String,
 }
 
-impl ProgramGraph {
-    /// ENG-142: the interface `name_lc` names from `app`: the one
-    /// [`Self::resolve_object`] finds, or, when it finds none (two dependencies
-    /// declaring the name, or none visible), every interface of that name
-    /// (review, Fable: dropping an unresolved name lost implementers and closed
-    /// sites; over-approximating keeps them).
-    pub fn interfaces_named_from(&self, app: AppRef, name_lc: &str) -> Vec<&ObjectNode> {
-        if let Some(o) = self.resolve_object(app, ObjectKind::Interface, name_lc) {
-            return vec![o];
+/// An interface name as interface binding compares it (ENG-152): folded, with
+/// AL's escaped quote (`""`) read as one quote, so a source spelling (`A""B`)
+/// and a symbol spelling (`A"B`) of one name agree. shortcut: local to
+/// interfaces; ENG-169 gives every identifier one spelling and removes this.
+pub fn interface_name_key(name: &str) -> String {
+    name.fold_identifier().replace("\"\"", "\"")
+}
+
+/// What an interface reference binds to (ENG-152, [`ProgramGraph::bind_interface`]).
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum InterfaceBinding {
+    /// The one interface it names: proven.
+    Exact(ObjectNodeId),
+    /// Several it may name (sorted): reach them all, prove nothing.
+    Visible(Vec<ObjectNodeId>),
+    /// None of its name is visible from its scope: every interface of the name
+    /// in the program (sorted), and the one it names may be in an app that is
+    /// not loaded, so the unbound implementers of the name count too (review,
+    /// sol). Reach them all, prove nothing, and never read it as a cataloged
+    /// interface (G29).
+    Unseen(Vec<ObjectNodeId>),
+    /// No interface node it can name.
+    Unbound,
+}
+
+impl InterfaceBinding {
+    /// The interfaces it may name.
+    pub fn ids(&self) -> &[ObjectNodeId] {
+        match self {
+            Self::Exact(id) => std::slice::from_ref(id),
+            Self::Visible(ids) | Self::Unseen(ids) => ids,
+            Self::Unbound => &[],
         }
-        self.objects
-            .iter()
-            .filter(|o| o.id.kind == ObjectKind::Interface && o.name.fold_identifier() == name_lc)
-            .collect()
     }
 
-    /// ENG-142: adds to `names` (lowercased interface names) every interface
-    /// derived from one of them, transitively (`ObjectNode::interface_bases`),
-    /// so a reader matching implementers BY NAME (`o.implements`) also takes an
-    /// implementer of a derived interface: it implements the base. By name, as
-    /// such a reader is; `ResolveIndex::implementers_of` resolves by identity.
-    pub fn add_derived_interfaces(&self, names: &mut HashSet<String>) {
-        loop {
-            let before = names.len();
-            for o in self
+    /// Whether the interface it names may be one no loaded app declares:
+    /// dispatch then reaches the unbound implementers of its name too.
+    pub fn may_be_unloaded(&self) -> bool {
+        matches!(self, Self::Unseen(_) | Self::Unbound)
+    }
+
+    /// The interface it proves, if any.
+    pub fn exact(&self) -> Option<&ObjectNodeId> {
+        match self {
+            Self::Exact(id) => Some(id),
+            _ => None,
+        }
+    }
+}
+
+impl ProgramGraph {
+    /// ENG-152: what interface reference `r`, read in `from`'s scope, names.
+    /// - Qualified (`r.app`, from symbols or synthesized text): the interface
+    ///   of that name in that app, `Exact`; that app or name absent: `Unbound`
+    ///   (never rebound to another app's interface of the name), unless the
+    ///   app was only INFERRED (`r.inferred`: a bare symbol reference read as the
+    ///   package's own), which then binds as a bare reference below.
+    /// - Bare (hand-written source, namespaces erased: ENG-158): the
+    ///   interfaces of the name in `from` and its dependency closure. One:
+    ///   `Exact` (alc refuses two without namespaces, AL0275, and the own app
+    ///   does not shadow, AL0197). Several: `Visible(all)`. None visible: every
+    ///   interface of the name in the program, `Unseen` (a missing topology
+    ///   edge or package must not lose reach), or `Unbound` when there is none.
+    pub fn bind_interface(&self, from: AppRef, r: &InterfaceRef) -> InterfaceBinding {
+        let kind = ObjectKind::Interface;
+        // A name holding a quote has two spellings (ENG-169): a source
+        // declaration and every reference keep AL's escape (`A""B`), a
+        // symbol `Name` does not (`A"B`). Both are looked up.
+        let name_lc = interface_name_key(&r.name);
+        let escaped = name_lc.replace('"', "\"\"");
+        let at = |app: AppRef| {
+            [&name_lc, &escaped].into_iter().find_map(|n| {
+                self.obj_index
+                    .by_app_kind_name
+                    .get(&(app, kind, n.clone()))
+                    .map(|&i| self.objects[i].id.clone())
+            })
+        };
+        if let Some(guid) = &r.app {
+            let mut ids: Vec<ObjectNodeId> = self.apps.find_by_guid(guid).filter_map(at).collect();
+            ids.sort();
+            match ids.len() {
+                // A WRITTEN app that lacks the name stays unbound (never
+                // rebound); an INFERRED one (a bare symbol reference read as the
+                // package's own) was a wrong inference: bind it as bare.
+                0 if r.inferred => {}
+                0 => return InterfaceBinding::Unbound,
+                1 => return InterfaceBinding::Exact(ids.remove(0)),
+                // Two versions of one app interned: either may be meant.
+                _ => return InterfaceBinding::Visible(ids),
+            }
+        }
+        let mut apps = self.topology.closure(from);
+        apps.insert(from);
+        let mut ids: Vec<ObjectNodeId> = apps.into_iter().filter_map(at).collect();
+        if ids.is_empty() {
+            ids = self
                 .objects
                 .iter()
-                .filter(|o| o.id.kind == ObjectKind::Interface)
-            {
-                if o.interface_bases
-                    .iter()
-                    .any(|b| names.contains(&b.fold_identifier()))
-                {
-                    names.insert(o.name.fold_identifier());
-                }
-            }
-            if names.len() == before {
-                return;
-            }
+                .filter(|o| o.id.kind == kind && interface_name_key(&o.name) == name_lc)
+                .map(|o| o.id.clone())
+                .collect();
+            ids.sort();
+            ids.dedup();
+            return if ids.is_empty() {
+                InterfaceBinding::Unbound
+            } else {
+                InterfaceBinding::Unseen(ids)
+            };
+        }
+        ids.sort();
+        if ids.len() == 1 {
+            InterfaceBinding::Exact(ids.remove(0))
+        } else {
+            InterfaceBinding::Visible(ids)
         }
     }
 

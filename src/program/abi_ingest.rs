@@ -612,6 +612,27 @@ pub(crate) fn source_app_symbol_control_addins(
     (result.objects, result.routines)
 }
 
+/// Symbol interface references as [`InterfaceRef`]s: each name with its
+/// `#<guid>#` app, or the package's own (`own`) when bare (ENG-152).
+fn abi_refs<'a>(
+    names: impl Iterator<Item = &'a String>,
+    apps: &[Option<String>],
+    own: &SharedStr,
+) -> Vec<crate::program::node_extract::InterfaceRef> {
+    names
+        .enumerate()
+        .map(|(i, n)| {
+            let written = apps.get(i).and_then(|a| a.as_deref());
+            crate::program::node_extract::InterfaceRef {
+                name: n.as_str().into(),
+                app: Some(written.map_or_else(|| own.clone(), SharedStr::from)),
+                // The package's own app is inferred from a bare reference.
+                inferred: written.is_none(),
+            }
+        })
+        .collect()
+}
+
 /// [`ingest_abi`] over the ABI objects whose node id `keep` holds.
 fn ingest_abi_objects(
     unit: &AppUnit,
@@ -641,6 +662,7 @@ fn ingest_abi_objects(
     let routine_count = kept.iter().map(|(o, _)| o.routines.len()).sum();
     let mut objects: Vec<ObjectNode> = Vec::with_capacity(kept.len());
     let mut routines: Vec<RoutineNode> = Vec::with_capacity(routine_count);
+    let own_guid: SharedStr = crate::program::node_extract::norm_guid(&unit.id.guid).into();
 
     for (abi_obj, obj_id) in kept {
         let kind = obj_id.kind;
@@ -665,17 +687,19 @@ fn ingest_abi_objects(
             name: abi_obj.name.as_str().into(),
             declared_id: crate::engine::ids::abi_object_number(abi_obj.object_number),
             extends_target: abi_obj.extends_target_name.as_deref().map(SharedStr::from),
-            implements: abi_obj
-                .implemented_interfaces
-                .iter()
-                .flatten()
-                .map(SharedStr::from)
-                .collect(),
-            interface_bases: abi_obj
-                .extended_interfaces
-                .iter()
-                .map(|s| SharedStr::from(s.as_str()))
-                .collect(),
+            // ENG-152: a bare symbol reference is the package's own interface
+            // (alc writes another app's `#<guid>#`), so every reference read here
+            // knows its app.
+            implements: abi_refs(
+                abi_obj.implemented_interfaces.iter().flatten(),
+                &abi_obj.implemented_interface_apps,
+                &own_guid,
+            ),
+            interface_bases: abi_refs(
+                abi_obj.extended_interfaces.iter(),
+                &abi_obj.extended_interface_apps,
+                &own_guid,
+            ),
             tier: TrustTier::SymbolOnly,
             // ABI/SymbolOnly ingestion does not (yet) project SourceTable/TableNo/
             // page-control data from the dependency symbol reference — additive gap,
