@@ -1096,13 +1096,16 @@ impl<'a> SpineCtx<'a> {
                 // PVarAssignment: lhs base name (identifier or member name), optional
                 // literal rhs, anchored on the assignment statement.
                 if let Some(lhs_name) = lhs_base_name(self.file, *target) {
+                    // A whole-variable copy, quoted names included (`"My Ref" := Ref`: ENG-145, an
+                    // alias by a quoted name was no alias). The lowerer strips the quotes.
                     let rhs_identifier = match (
                         &self.file.ir.expr(*target).kind,
                         &self.file.ir.expr(*value).kind,
                     ) {
-                        (ExprKind::Identifier(_), ExprKind::Identifier(v)) => {
-                            Some(v.fold_identifier())
-                        }
+                        (
+                            ExprKind::Identifier(_) | ExprKind::QuotedIdentifier(_),
+                            ExprKind::Identifier(v) | ExprKind::QuotedIdentifier(v),
+                        ) => Some(v.fold_identifier()),
                         _ => None,
                     };
                     let rhs_member = match &self.file.ir.expr(*target).kind {
