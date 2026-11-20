@@ -7,7 +7,109 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added (TLS-104: a host suspend is labelled in cdo-speed, cdo-gate and cdo-slot)
+### Fixed (ENG-152: interface implementers are found by the interface's identity, not its name)
+
+- **The gap.** Implementers were filed under the interface's folded name. Two apps that each
+  declare an interface `IDup` pooled their implementers, so a call through one app's `IDup`
+  also reached the other app's implementers: false callees and false effects. A closed enum
+  could even prove such a site complete. Design note:
+  `docs/superpowers/notes/2026-11-20-eng152-interface-identity.md`.
+- **References keep their app.** An interface reference (`implements`, `extends`, an enum's
+  mapping key) is now an `InterfaceRef`: its name, the app it names when the text says so, and
+  whether that app was inferred.
+  - The lowerer keeps each reference's qualifier (`implements_qualifiers`,
+    `interface_extends_qualifiers`).
+  - The symbol reader keeps alc's `#<guid>#` prefix (another app's interface), where it used to
+    drop it, for codeunits and for enums and enum extensions (read by a second loop; review,
+    Fable).
+  - A bare symbol reference is read as the package's own interface (marked inferred).
+  - Synthesized AL for a runtime package writes another app's reference as
+    `"#<guid>#"."Name"`. An enum value's mapping key stays unqualified: the grammar does not
+    parse a qualified key in a multi-pair `Implementation` (tree-sitter-al
+    [#47](https://github.com/SShadowS/tree-sitter-al/issues/47), filed with a synthetic
+    repro). The enum's `implements` list still carries the app.
+- **Binding.** `ProgramGraph::bind_interface(from, ref)` answers which interface a reference
+  names, as alc does:
+  - qualified: that app's interface, or nothing;
+  - bare: the interfaces of that name visible from `from` (its app and its dependency
+    closure). One is exact. Several are all kept, because the app's own interface does not
+    shadow a dependency's (alc AL0197 and AL0275).
+  - None visible: every interface of that name in the program (`Unseen`), so a missing
+    topology edge loses no target. The interface meant may then be in a package that is not
+    loaded, so the call also reaches the unbound implementers of the name, and G29 never
+    reads such a binding as System Application's `Telemetry Logger` (review, sol). An
+    inferred app that declares no such interface falls back to the bare rule.
+
+  An unbound reference (its interface is not loaded) is filed under its name alone, whatever
+  app it names: which app it means cannot be checked, so an unbound receiver of that name
+  reaches every one (review, Fable: keyed by app too, a symbol-only implementer of
+  `#<A>#I` was missed with A's package absent). The model's dispatch meta lists unbound
+  enums the same way (review, sol).
+
+  Interface names compare with AL's escaped quote read as one quote (`A""B` = `A"B`): a
+  source declaration and every reference keep the escape, a symbol `Name` does not. Compared
+  raw, a call through a quote-named interface could miss its own symbol-only interface
+  (review, sol). ENG-169 gives every identifier one spelling and replaces this local rule.
+
+  Code in namespaces is not modelled yet: two same-named interfaces in different namespaces
+  of one app share one object id, so they are one node and their implementers pool, as
+  before. ENG-158 (the namespace model) makes that case exact. It also covers
+  `literal_reach`'s enum-mapping pick by interface name, which can only differ for an enum
+  mapping two same-named interfaces (alc refuses that without namespaces).
+- **One home.** `InterfaceImplementers` (`src/program/resolve/interfaces.rs`) files
+  implementers by interface id, the implementers of derived interfaces included (ENG-142). The
+  resolver, the model's dispatch meta and the impact graph's callbacks hub all read it.
+- **Where a type binds.** An interface-typed receiver binds in the app that declares the type.
+  A callee's return type therefore binds in the callee's app, which may not see the caller's
+  interfaces. The same holds for a base object's protected variable and for a call result
+  passed as an argument (review, Fable).
+- **Proofs need one interface.** The closed-enum rule, the interface-holder rule and G28's
+  closed internal interfaces now prove a site complete only when its binding is exact. A site
+  that may name several interfaces stays open. In a closed enum's coverage, a mapping key that
+  binds no single interface may add a codeunit to check, but never stands in for the
+  interface's own mapping, and a mapping for a derived interface counts only through bases
+  that each bind exactly (review, sol).
+- **Session.** The incremental refresh records `BindInterface`, `ImplementersOf(id)`,
+  `ImplementersFor`, `InterfaceIsOrDerives` and `UnmappedEnumImplementers`. `FACADE_VERSION`
+  is 4. A workspace interface named like a dependency's no longer re-resolves the dependency
+  file: the dependency cannot see it, so none of its answers change.
+- **Caches.** `PACK_SCHEMA` 23 -> 24 and `EXTRACTION_SCHEME` 8 -> 9, so packs and synthesized
+  packages built before this change are rebuilt. `SUMMARY_SCHEMA` 18 -> 19: a key's callee
+  effects may shrink, so an impact base cached by a binary of the same version is not reused
+  (review, Fable). `DECL_PROJECTION_VERSION` 1 -> 2, as its rule asks for a changed encoding
+  (review, sol). The symbol reader's stamp is unchanged: the object it builds (`AbiObject`)
+  is never stored.
+- **Tests.** Each has a red proof, recorded at the test:
+  - the resolver reaches only the visible app's implementers, both when both are visible, and
+    every one when none is visible (two proofs: the bare rule and the index);
+  - a qualified symbol reference keeps its app through a base interface;
+  - the symbol reader keeps a codeunit's and an enum's `#<guid>#`;
+  - an unbound receiver reaches an unbound implementer that names another app, and the
+    dispatch meta lists such an enum;
+  - a closed enum whose mapping keys bind nothing is not covered, nor one whose only witness
+    derives from the interface through a fallback-bound base;
+  - a receiver that sees no interface of its name reaches the unbound implementers too, and
+    is not publisher-scoped (G29);
+  - a quote-named interface binds across its source and symbol spellings;
+  - a callee's return type binds in the callee's app, as do a base object's protected variable
+    and a call result passed as an argument (which then picks its one overload);
+  - the inferred-app fallback (on the harness's protected-ABI fixture);
+  - the session: a dependency's binding that falls back to the workspace's interface follows
+    it as it is added and removed, warm equal to cold, both memory modes;
+  - synthesis and lowering keep a `#<guid>#` qualifier;
+  - the callbacks hub skips a same-named interface of another app;
+  - a closed enum never closes an interface visible in two apps. Its control: with one visible,
+    it closes. The three identity gates overlap here, so all three were relaxed for the proof.
+- **Measured.** release-fast, master `ab435c0d` against this branch's final code `245ea406`
+  (`scripts/cdo-before-after`). CDO (`bc3ccb18`, clean) and DO (`b3b44591`, clean) are
+  unchanged: findings (CDO 2,306 primary and 32,429 at `--scope all`, DO 2,178), no
+  fingerprint added or removed, and `aldump --program-call-graph-stats` byte-identical (CDO
+  46,688 edges, 0 unknown; DO 21,868 edges, 1,142 unknown). There is nothing for the change to
+  separate there: CDO's 138 interface declarations (workspace and its 11 packages) hold no
+  name twice, and DO has no `.alpackages`. The tests are the evidence of the gain.
+  Cost: `alsem analyze` on CDO, three alternating runs per side in a timed slot hold, user CPU
+  73.2-74.8 s on master and 74.5-75.3 s here (+1.6 % on the means, inside this host's noise),
+  peak memory 2.1-2.3 GB on both.
 
 - **What happened.** During ENG-145's landing, cdo-speed's log jumped 33 minutes between two
   calls while the call itself read 8.2 s. server1 had suspended for 1,965 s
