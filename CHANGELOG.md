@@ -28,18 +28,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `speed.json` lists them (`suspended`), and each record carries `suspended_before` and
   `suspended_during`. The same limits judge the run. Instruction counts are unaffected: a
   suspended task executes nothing.
-- **cdo-gate** reads it as each phase starts and as its command ends (before its seconds are
-  written). A suspend during a phase gives a line under the phase (`the host was suspended N s
-  during this phase: its seconds include that time`); one since the previous phase ended gives
-  `... before this phase (since the last one)`. Both are `suspended` lines in `phases.times`,
-  and the summary lists every one, the build phases included.
+- **cdo-gate** reads it before each phase's clock starts and as its command ends (before its
+  seconds are written). A suspend during a phase gives a line under the phase (`the host was
+  suspended N s during this phase: its seconds include that time`). One since the previous phase
+  of this run ended gives `... before this phase: since the previous phase of this run ended,
+  outside its seconds`. A phase running beside it in the background (`speed_build`, the
+  parallel layout's second lane) may hold that gap, and notes it itself if so. Both are
+  `suspended` lines in `phases.times`, and the summary lists every one, the build phases
+  included.
 - **cdo-slot** records the reading with a hold and with a timing. `status` says how much of a
   hold's age the host spent suspended (`(42 min, 1965 s of it with the host suspended)`): an
   old hold can be a laptop that slept, not a hung holder. `run --timed`'s wait for builds
-  (`CDO_SLOT_TIMED_WAIT_S`) is wall-clock time: at its deadline it now moves on by the time
-  the host slept (`the host slept N s during this wait: it goes on that much longer`). Before,
-  a 33-minute sleep used up the 1,800 s in a few real seconds, refused with exit 6, and failed
-  the gate's speed phase for a false reason (review, Fable).
+  (`CDO_SLOT_TIMED_WAIT_S`) and its grace now run on awake time: wall time less the host's
+  suspended seconds since the wait began, read each pass
+  (`the host slept N s during this wait: it goes on that much longer`). Before, a 33-minute
+  sleep used up the 1,800 s in a few real seconds, refused with exit 6, and failed the gate's
+  speed phase for a false reason (review, Fable). It also ended the grace with no build given
+  the chance to start (review r2, sol).
 - **Thresholds.** The shell scripts read whole seconds, so they note a rise of 2 s or more: a
   reading that only crossed a second boundary moves by 1 (review, sol). cdo-speed reads
   fractions and notes 1 s.
