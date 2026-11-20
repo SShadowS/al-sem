@@ -55,8 +55,10 @@ pub struct ModelObject {
     /// Implemented interfaces (Codeunit / Enum / Interface): `Some([])` known-none,
     /// `Some([...])` listed, `None` unknown. Other object types: `None`.
     pub implements_interfaces: Option<Vec<String>>,
-    /// An interface's `extends` list (ENG-142, ENG-151): its bases' names, by
-    /// their LOGICAL name like `implements_interfaces`. Interface only; empty
+    /// An interface's `extends` list (ENG-142, ENG-151): its bases' names as
+    /// written, like `implements_interfaces` (source: the reference text, which
+    /// may be quoted and escaped; symbols: the logical name), so a reader
+    /// unquotes and unescapes before comparing with an object name. Interface only; empty
     /// otherwise. Read by d19 to know a method that implements an inherited
     /// member.
     pub interface_bases: Vec<String>,

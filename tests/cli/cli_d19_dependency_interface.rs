@@ -13,6 +13,9 @@
 //! `declaration_only_routines` instead of `interface_members` -> `Do` is
 //! flagged (red); restored, green. (A first fix that called every dependency
 //! interface's members unknown silenced `Other` too: this test caught it.)
+//! Symbol-only case (review, Fable), each restored, green: d19 not reading the
+//! interfaces' routines as members -> red (skip counts (0, 0)); `abi_rows`
+//! dropping `interface_bases` -> red (the inherited `Do` not found).
 
 use std::path::Path;
 
@@ -28,7 +31,14 @@ const DEP_SYMBOLS: &str = r#"{"RuntimeVersion":"15.0","Interfaces":[{"Name":"IDe
 
 const WS_CODEUNIT: &str = "codeunit 50101 \"Ws Impl\" implements IDepDer\n{\n    procedure Do(X: Integer)\n    begin\n    end;\n\n    procedure Extra()\n    begin\n    end;\n\n    procedure Other(Y: Integer)\n    begin\n    end;\n}\n";
 
+/// The workspace with the dependency shipping its source ([`DEP_SOURCE`]), or,
+/// with `embed` false, symbols only (its members then reach the model as
+/// routines, its bases through the ABI's `ExtendedInterfaces`).
 fn workspace(root: &Path) -> std::path::PathBuf {
+    workspace_with(root, true)
+}
+
+fn workspace_with(root: &Path, embed: bool) -> std::path::PathBuf {
     let ws = root.join("ws");
     std::fs::create_dir_all(ws.join("src")).unwrap();
     std::fs::write(
@@ -46,7 +56,11 @@ fn workspace(root: &Path) -> std::path::PathBuf {
         "Dep151",
         "1.0.0.0",
         DEP_SYMBOLS,
-        &[("src/DepIfaces.al", DEP_SOURCE)],
+        if embed {
+            &[("src/DepIfaces.al", DEP_SOURCE)]
+        } else {
+            &[]
+        },
         "",
     );
     ws
@@ -90,6 +104,18 @@ fn d19_routines(ws: &Path) -> Vec<String> {
         })
         .collect();
     v.sort();
+    let skip = |key: &str| {
+        json["payload"]["summary"]["detectorStats"][0]["skipped"][key]
+            .as_u64()
+            .unwrap_or(0)
+    };
+    // Every case's interfaces are in the model: `Do` is a found member, never
+    // an unknown-interface skip (which would pass the finding check alone).
+    assert_eq!(
+        (skip("interfaceMember"), skip("interfaceUnknown")),
+        (1, 0),
+        "skip counts"
+    );
     v
 }
 
@@ -99,5 +125,15 @@ fn d19_routines(ws: &Path) -> Vec<String> {
 fn a_member_of_a_dependency_interface_is_not_flagged() {
     let dir = tempfile::tempdir().unwrap();
     let ws = workspace(dir.path());
+    assert_eq!(d19_routines(&ws), ["Other"]);
+}
+
+/// The same with a SYMBOL-ONLY dependency (review, Fable): the members come
+/// from the interfaces' routines, `IDepDer`'s base from the ABI's
+/// `ExtendedInterfaces`.
+#[test]
+fn a_member_of_a_symbol_only_dependency_interface_is_not_flagged() {
+    let dir = tempfile::tempdir().unwrap();
+    let ws = workspace_with(dir.path(), false);
     assert_eq!(d19_routines(&ws), ["Other"]);
 }

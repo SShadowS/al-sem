@@ -4,7 +4,8 @@
 //! Restricted to `procedure` (NOT triggers, NOT event subscribers — the latter's
 //! signature is dictated by the publisher and must keep every parameter declared,
 //! even unused — and NOT event publishers). bodyAvailable + !parseIncomplete; skip
-//! when there are 0 params.
+//! when there are 0 params. ENG-151: also skip a method implementing an interface
+//! member (the interface fixes its signature; see `interface_member_test`).
 //!
 //! The event-publisher exclusion (issue 25) is a CONSTRUCTION argument, not a
 //! heuristic: an `[IntegrationEvent]`/`[BusinessEvent]` body is empty by language
@@ -58,7 +59,12 @@ enum IfaceMember {
 fn interface_member_test(
     ws: &ModelEntities,
 ) -> impl Fn(Option<&ModelObject>, &ModelRoutine) -> IfaceMember + '_ {
-    let fold = |s: &str| {
+    // Object, member and routine names are logical already; `implements` and
+    // `extends` entries are reference text as written (quoted, escaped), so
+    // only they are unquoted and unescaped (review, Fable: unescaping a
+    // logical `A""B` twice lost the match).
+    let fold = |s: &str| al_syntax::fold_identifier(s);
+    let fold_ref = |s: &str| {
         al_syntax::fold_identifier(&crate::program::body::scope::unescape_al_identifier(
             s.trim().trim_matches('"'),
         ))
@@ -70,7 +76,7 @@ fn interface_member_test(
         bases
             .entry(fold(&o.name))
             .or_default()
-            .extend(o.interface_bases.iter().map(|b| fold(b)));
+            .extend(o.interface_bases.iter().map(|b| fold_ref(b)));
     }
     // A source interface's members are `interface_members`, ALL of them: not
     // `declaration_only_routines`, which the cross-app model cuts to the demanded
@@ -103,7 +109,7 @@ fn interface_member_test(
         let key = fold(&r.name);
         let mut unknown = false;
         let mut seen: HashSet<String> = HashSet::new();
-        let mut stack: Vec<String> = impls.iter().map(|i| fold(i)).collect();
+        let mut stack: Vec<String> = impls.iter().map(|i| fold_ref(i)).collect();
         while let Some(i) = stack.pop() {
             if !seen.insert(i.clone()) {
                 continue;
