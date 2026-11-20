@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# scripts/host-suspended — the seconds this HOST has spent suspended since it
+# booted (TLS-104): CLOCK_BOOTTIME minus CLOCK_MONOTONIC (the first keeps
+# counting through a suspend, the second does not). A rise between two readings
+# is a suspend between them, so wall-clock seconds over that span (bash
+# `$SECONDS`, `date`) include that much time in which nothing ran.
+#
+# server1 is a laptop that suspends when it is moved (owner, 2026-11-20): a
+# suspend is expected, so the timing scripts label it, never hide it.
+#
+# Prints a whole number of seconds. Prints nothing and exits 1 when the clocks
+# cannot be read. Test hook: CDO_HOST_SUSPENDED_FILE, a file whose first number
+# is printed instead (a real run sets none).
+set -u
+if [[ -n "${CDO_HOST_SUSPENDED_FILE:-}" ]]; then
+    # `read` fails at a missing final newline even when it read the line.
+    v=""
+    read -r v <"$CDO_HOST_SUSPENDED_FILE" 2>/dev/null || [[ -n "$v" ]] || exit 1
+    [[ "${v%%.*}" =~ ^[0-9]+$ ]] || exit 1
+    echo "${v%%.*}"
+    exit 0
+fi
+exec python3 -c 'import time
+print(int(time.clock_gettime(time.CLOCK_BOOTTIME) - time.clock_gettime(time.CLOCK_MONOTONIC)))'

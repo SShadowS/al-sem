@@ -291,7 +291,22 @@ describe() {
     age=$(($(date +%s) - $(date -d "$since" +%s 2>/dev/null || date +%s)))
     who="session $(field session)"
     [[ -n "$bound" ]] && who+=", for PID $bound"
-    echo "held by $(field owner) ($(field reason)) since $since ($((age / 60)) min), $who"
+    echo "held by $(field owner) ($(field reason)) since $since ($((age / 60)) min$(suspended_since), $who"
+}
+
+# ⟨TLS-104⟩ `, N s of it with the host suspended)` when the host was suspended
+# since the record was written (its `suspended=` reading), else `)`: an old hold
+# can be a laptop that slept, not a hung holder (server1 suspends when moved).
+host_suspended() { "$(dirname "$0")/host-suspended" 2>/dev/null; }
+suspended_since() {
+    local s0 s1
+    s0=$(field suspended)
+    s1=$(host_suspended)
+    if [[ "$s0" =~ ^[0-9]+$ && "$s1" =~ ^[0-9]+$ ]] && ((s1 - s0 >= 1)); then
+        echo ", $((s1 - s0)) s of it with the host suspended)"
+    else
+        echo ")"
+    fi
 }
 
 # timed_now: a timing runs (some process holds the timing lock).
@@ -304,7 +319,7 @@ timed_describe() {
         [[ -f "$f" ]] || continue
         probe s "$ids/timed.${f##*/}" || continue
         load "$f"
-        echo "timed by $(field owner) since $(field since) ($(field reason))"
+        echo "timed by $(field owner) since $(field since) ($(field reason)$(suspended_since)"
         return
     done
     echo "timed (its timing is starting)"
@@ -344,6 +359,7 @@ take_hold() {
     write_atomic "$status_file" "owner=$1
 reason=$2
 since=$(date -u +%FT%TZ)
+suspended=$(host_suspended)
 session=$me_session
 claude_pid=$me_pid
 bound=$bind
@@ -377,6 +393,7 @@ take_timed() {
     write_atomic "$tdir/$tid" "owner=$1
 reason=$2
 since=$(date -u +%FT%TZ)
+suspended=$(host_suspended)
 pid=$3" || die "cannot write the timing file $tdir/$tid (exiting drops the timing)"
     # Files of timings that ended long ago (their id lock free) go.
     for f in $(find "$tdir" -maxdepth 1 -type f -mmin +5 2>/dev/null); do

@@ -423,7 +423,13 @@ fn cdo_gate_only_pass_records_the_tree_it_ran_on() {
     let ws = tempfile::tempdir().unwrap();
     let scripts = repo.path().join("scripts");
     std::fs::create_dir_all(&scripts).unwrap();
-    for f in ["cdo-gate", "cdo-slot", "require-rttime", "cdo-speed"] {
+    for f in [
+        "cdo-gate",
+        "cdo-slot",
+        "require-rttime",
+        "cdo-speed",
+        "host-suspended",
+    ] {
         let from = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("scripts")
             .join(f);
@@ -439,10 +445,13 @@ fn cdo_gate_only_pass_records_the_tree_it_ran_on() {
             .to_string();
     // STUB_FAIL: every test phase fails. STUB_COMMIT=<repo>: the first test
     // phase commits a new file there (a commit landing during the run).
+    // STUB_SUSPEND=<n> (TLS-104): a test phase sets the host's suspended-seconds
+    // reading (CDO_HOST_SUSPENDED_FILE) to n: the host "slept" during it.
     std::fs::write(
         stub.path().join("cargo"),
         "#!/bin/sh\n\
          case \" $* \" in *' --no-run '*) ;; *)\n\
+           if [ -n \"$STUB_SUSPEND\" ]; then echo \"$STUB_SUSPEND\" > \"$CDO_HOST_SUSPENDED_FILE\"; fi\n\
            if [ -n \"$STUB_FAIL\" ]; then\n\
              echo 'test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s'; exit 101\n\
            fi\n\
@@ -562,6 +571,41 @@ fn cdo_gate_only_pass_records_the_tree_it_ran_on() {
         1,
         "the new tree got a record"
     );
+
+    // ⟨TLS-104⟩ The host suspends 30 s during the first test phase (the stub
+    // sets the reading from 100 to 130): that phase's line and the summary say
+    // so; the next phase (reading unchanged) says nothing. The control: no
+    // suspend, no note. Mutation (2026-11-20): `suspend_note` always returning
+    // early -> no note (red); restored, green.
+    let reading = target.path().join("suspended");
+    let reading_s = reading.to_str().unwrap().to_string();
+    std::fs::write(&reading, "100").unwrap();
+    let env = [
+        ("CDO_HOST_SUSPENDED_FILE", reading_s.as_str()),
+        ("STUB_SUSPEND", "130"),
+    ];
+    let text = gate("harness,l4", other.path(), &env, 0);
+    let noted: Vec<&str> = text
+        .lines()
+        .filter(|l| l.contains("the host was suspended 30 s during this phase"))
+        .collect();
+    assert_eq!(noted.len(), 1, "one phase saw the suspend: {text}");
+    assert!(
+        noted[0].starts_with("cdo-gate: [program_resolve_harness]"),
+        "{text}"
+    );
+    assert!(
+        text.contains("(program_resolve_harness: the host was suspended 30 s during it;"),
+        "{text}"
+    );
+    std::fs::write(&reading, "100").unwrap();
+    let text = gate(
+        "harness,l4",
+        other.path(),
+        &[("CDO_HOST_SUSPENDED_FILE", reading_s.as_str())],
+        0,
+    );
+    assert!(!text.contains("suspended"), "{text}");
 }
 
 /// TLS-58 review r1: a real `--only harness,l4,lsp,output` run, with a stub
@@ -2164,6 +2208,14 @@ for line in sys.stdin:
             # STUB_INSTR_ZERO_CALL=N: head's N-th call (per server) retires none.
             if str(calls) == os.environ.get("STUB_INSTR_ZERO_CALL"):
                 factor = 0.0
+            # TLS-104: STUB_SUSPEND_CALL=N: the host "sleeps" STUB_SUSPEND_S
+            # during head's N-th call (per server): the reading cdo-speed takes
+            # (CDO_HOST_SUSPENDED_FILE) rises while the call runs.
+            if str(calls) == os.environ.get("STUB_SUSPEND_CALL"):
+                path = os.environ["CDO_HOST_SUSPENDED_FILE"]
+                now = float(open(path).read().split()[0])
+                with open(path, "w") as f:
+                    f.write(str(now + float(os.environ["STUB_SUSPEND_S"])))
         counter = os.path.join(os.environ["STUB_DIR"], f"instr.{os.getpid()}")
         done = int(open(counter).read()) if os.path.exists(counter) else 0
         with open(counter, "w") as f:
@@ -2627,6 +2679,128 @@ fn speed_counts_instructions_with_the_real_perf() {
         "{text}"
     );
     assert!(text.contains("instructions: counted per call"), "{text}");
+}
+
+/// ⟨TLS-104⟩ A host suspend during a timed call is labelled, never hidden: the
+/// stub "sleeps" 5 s (the reading `CDO_HOST_SUSPENDED_FILE` rises) during head's
+/// 2nd call. The run logs `host suspended 5 s during ...`, its verdict line
+/// carries ` SUSPENDED:`, `speed.json` lists it, and the verdict itself (PASS,
+/// exit 0) is the same limits' (label, never weaken). The control: the same run
+/// with no suspend has no label and an empty list.
+///
+/// Mutation (2026-11-20): `Suspends.note` never recording a rise -> no
+/// "host suspended" line, no label (red); restored, green.
+#[cfg(target_os = "linux")]
+#[test]
+fn speed_labels_a_host_suspend() {
+    let run = |suspend: bool| {
+        let dir = tempfile::tempdir().unwrap();
+        let reading = dir.path().join("suspended");
+        std::fs::write(&reading, "100").unwrap();
+        let reading = reading.to_str().unwrap().to_string();
+        let mut env = vec![("CDO_HOST_SUSPENDED_FILE", reading.as_str())];
+        if suspend {
+            env.extend([("STUB_SUSPEND_CALL", "2"), ("STUB_SUSPEND_S", "5")]);
+        }
+        let (code, text) = speed_with_stub(dir.path(), "1.0", &[], &env);
+        let json: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(dir.path().join("state-/out/speed.json")).unwrap(),
+        )
+        .unwrap();
+        (code, text, json)
+    };
+    let (code, text, json) = run(true);
+    assert_eq!(code, Some(0), "the same limits judge it: {text}");
+    assert!(text.contains("host suspended 5 s during r0.1"), "{text}");
+    assert!(
+        text.lines()
+            .any(|l| l.contains("cdo-speed: PASS SUSPENDED: the host slept")),
+        "{text}"
+    );
+    let seen = json["suspended"].as_array().expect("suspended list");
+    assert!(
+        !seen.is_empty() && seen.iter().all(|s| s["seconds"] == 5.0),
+        "{json}"
+    );
+
+    let (code, text, json) = run(false);
+    assert_eq!(code, Some(0), "{text}");
+    // (The hooks line names `CDO_HOST_SUSPENDED_FILE`: look for the label.)
+    assert!(
+        !text.contains(" SUSPENDED:") && !text.contains("host suspended"),
+        "{text}"
+    );
+    assert_eq!(json["suspended"], serde_json::json!([]), "{json}");
+}
+
+/// ⟨TLS-104⟩ `scripts/host-suspended` reads the host's suspended seconds (a
+/// whole number on a Linux host), and its test hook instead when set; an
+/// unreadable hook file prints nothing and exits 1. cdo-slot's `status` says how
+/// much of a hold's age the host spent suspended: the hold is taken at reading
+/// 100, the reading moves to 160, and the status line names 60 s; the control
+/// (unchanged reading) names none.
+///
+/// The hook files are written with no final newline: `host-suspended`'s first
+/// form (`read ... || exit 1`) refused them, and this test found it.
+///
+/// Mutation (2026-11-20): `suspended_since` always printing `)` -> no "60 s of
+/// it with the host suspended" (red); restored, green.
+#[cfg(target_os = "linux")]
+#[test]
+fn host_suspend_reading_and_slot_status() {
+    let script = concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/host-suspended");
+    let real = std::process::Command::new("bash")
+        .arg(script)
+        .env_remove("CDO_HOST_SUSPENDED_FILE")
+        .output()
+        .unwrap();
+    assert!(real.status.success(), "{real:?}");
+    let text = String::from_utf8_lossy(&real.stdout);
+    assert!(text.trim().parse::<u64>().is_ok(), "{text:?}");
+    let dir = tempfile::tempdir().unwrap();
+    let reading = dir.path().join("suspended");
+    let missing = std::process::Command::new("bash")
+        .arg(script)
+        .env("CDO_HOST_SUSPENDED_FILE", &reading)
+        .output()
+        .unwrap();
+    assert_eq!(missing.status.code(), Some(1));
+    assert!(missing.stdout.is_empty());
+
+    let slot = concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-slot");
+    let holder = crate::cdo_slot::Reap(
+        std::process::Command::new("sleep")
+            .arg("600")
+            .spawn()
+            .unwrap(),
+    );
+    let cmd = |args: &[&str]| {
+        std::process::Command::new("bash")
+            .arg(slot)
+            .args(args)
+            .env("CDO_SLOT_DIR", dir.path().join("slot"))
+            .env("CDO_SLOT_MEM_MIN_GB", "0")
+            .env("CDO_HOST_SUSPENDED_FILE", &reading)
+            .env_remove("CLAUDE_CODE_SESSION_ID")
+            .output()
+            .unwrap()
+    };
+    std::fs::write(&reading, "100").unwrap();
+    let pid = holder.0.id().to_string();
+    let held = cmd(&["acquire", "t104", "test hold", "--bind", &pid]);
+    assert!(held.status.success(), "{held:?}");
+    let status = String::from_utf8_lossy(&cmd(&["status"]).stdout).into_owned();
+    assert!(
+        status.starts_with("held by t104") && !status.contains("suspended"),
+        "{status}"
+    );
+    std::fs::write(&reading, "160").unwrap();
+    let status = String::from_utf8_lossy(&cmd(&["status"]).stdout).into_owned();
+    assert!(
+        status.contains("60 s of it with the host suspended)"),
+        "{status}\n{}",
+        std::fs::read_to_string(dir.path().join("slot/status")).unwrap_or_default()
+    );
 }
 
 /// ⟨TLS-103⟩ A stub run's verdict does not depend on the host's load: under
