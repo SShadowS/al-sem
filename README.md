@@ -128,7 +128,7 @@ Useful flags:
 | `--detector d1-db-op-in-loop,d8-commit-in-transaction` | Run only the checks you name. This and `--preset` are how you reach the 15 opt-in checks; they're mutually exclusive |
 | `--min-severity high` | Drop everything below a severity |
 | `--group-by object \| routine \| table \| detector \| file` | Reorganize terminal output |
-| `--baseline al-sem.baseline.json` | Suppress findings listed in the file — adopt the tool on an old codebase without fixing 500 things first. `--update-baseline` rewrites it to the current state |
+| `--baseline al-sem.baseline.json` | Suppress findings listed in the file — adopt the tool on an old codebase without fixing 500 things first. `--update-baseline` adds the current findings and drops only those the run proves fixed (a filtered run keeps what it did not look at) |
 | `--fail-on high` | Exit 1 when anything at or above that severity survives filtering — this is the CI gate |
 | `--require-dependencies` | Exit 4 if dependencies are missing, instead of quietly analyzing less code |
 

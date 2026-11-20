@@ -451,8 +451,9 @@ fn baseline_edit_after_read() {
 
 /// A1.6 `baseline::update_baseline_applies_the_set_just_written`: with
 /// `--update-baseline` the set applied is the set just written, so every
-/// current finding is dropped, whatever the old file held: (a) no file,
-/// (b) a malformed file (never read, so never an error).
+/// current finding is dropped (no file before). Since TLS-106 the update reads
+/// the old file the `RequestInputs` read: a malformed one is refused (exit 2,
+/// nothing written) instead of overwritten.
 #[test]
 fn update_baseline_applies_the_set_just_written() {
     let ws = r0("ws-d8-commit-in-tx");
@@ -462,16 +463,22 @@ fn update_baseline_applies_the_set_just_written() {
         !findings(&analyze_run(&probe.read_inputs(), &probe.read_request(), &probe).0).is_empty(),
         "precondition: findings without a baseline"
     );
-    for (case, old) in [("no file", None), ("malformed", Some("not json"))] {
-        let base = d.path().join(format!("{}.json", case.replace(' ', "-")));
-        if let Some(text) = old {
-            std::fs::write(&base, text).unwrap();
-        }
-        let args = d8_args(&ws, &base, true);
-        let (out, exit) = analyze_run(&args.read_inputs(), &args.read_request(), &args);
-        assert_eq!(exit, 0, "{case}");
-        assert_eq!(findings(&out).len(), 0, "{case}");
-    }
+    let args = d8_args(&ws, &d.path().join("no-file.json"), true);
+    let (out, exit) = analyze_run(&args.read_inputs(), &args.read_request(), &args);
+    assert_eq!(exit, 0);
+    assert_eq!(findings(&out).len(), 0);
+
+    let base = d.path().join("malformed.json");
+    std::fs::write(&base, "not json").unwrap();
+    let args = d8_args(&ws, &base, true);
+    let err = run_analyze_with_exit(
+        &args.read_inputs(),
+        &args.read_request(),
+        &args,
+        "engine-default",
+    )
+    .expect_err("a malformed baseline is refused");
+    assert!(err.starts_with("analysis failure — "), "{err}");
 }
 
 /// Final panel r1 (F2-1): analyze's JSON `alsemVersion` is the version the set

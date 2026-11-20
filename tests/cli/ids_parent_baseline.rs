@@ -316,7 +316,10 @@ fn record_fixture(ws: &Path, with_baseline_bytes: bool) -> FixtureRecord {
         let path = tmp.path().join("baseline.json");
         let mut args = analyze_args(ws, OutputFormat::Sarif, Some(path.display().to_string()));
         args.update_baseline = true;
-        let bytes = analyze(&args).3.expect("--update-baseline returns bytes");
+        let bytes = analyze(&args)
+            .3
+            .expect("--update-baseline returns bytes")
+            .bytes;
         String::from_utf8(bytes).expect("baseline is UTF-8")
     });
 

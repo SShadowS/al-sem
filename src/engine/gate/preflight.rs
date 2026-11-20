@@ -42,6 +42,30 @@ pub struct PreflightResult {
     pub verify_error: Option<String>,
 }
 
+/// A dependency the primary needs whose package could not be read: it looks
+/// empty (or absent) to every other check.
+fn is_unreadable(e: &crate::program::resolve::full::LedgerEntry) -> bool {
+    e.unreadable.is_some() || e.found.as_ref().is_some_and(|f| f.ingest_error.is_some())
+}
+
+/// Whether the run's inputs were whole, so a finding it did not report is gone
+/// rather than unseen (TLS-106, `--update-baseline`): the coverage was
+/// verified, its contract held, no file was parsed with recovery, and no
+/// dependency package was unreadable, unidentified or encrypted. Unknown call
+/// edges, symbol-only dependencies and unbound subscriptions do NOT count: they
+/// are the same in every run, and real workspaces always have some (DO: 1,142
+/// unknown edges), so a rule that stopped on them would never prune.
+pub fn inputs_whole(fresh: &Result<FreshCoverage, String>) -> bool {
+    let Ok(fc) = fresh else {
+        return false;
+    };
+    fc.coverage_holds
+        && fc.recovered_files == 0
+        && fc.unidentified_packages.is_empty()
+        && fc.encrypted_packages.is_empty()
+        && !fc.ledger.iter().any(is_unreadable)
+}
+
 /// `evaluatePreflight(coverage, required)`, rewired onto [`FreshCoverage`].
 ///
 /// `fresh` is the fresh resolver's own coverage status for this run
@@ -88,15 +112,10 @@ pub fn evaluate_preflight(
                     fc.unbound_subscriptions
                 ));
             }
-            // A dependency the primary needs whose package could not be read:
-            // it looks empty (or absent) to every other check.
             let unreadable: Vec<&str> = fc
                 .ledger
                 .iter()
-                .filter(|e| {
-                    e.unreadable.is_some()
-                        || e.found.as_ref().is_some_and(|f| f.ingest_error.is_some())
-                })
+                .filter(|e| is_unreadable(e))
                 .map(|e| e.name.as_str())
                 .collect();
             if !unreadable.is_empty() {
@@ -269,6 +288,63 @@ mod tests {
         let pf = evaluate_preflight(&Ok(broken), true);
         assert!(pf.degraded && pf.failed);
         assert!(pf.message.ends_with("1 unreadable dependency app(s): Bad"));
+    }
+
+    /// TLS-106: which inputs stop a baseline update from pruning. Unknown
+    /// edges, symbol-only apps and unbound subscriptions do not (every real
+    /// workspace has some); an unverified coverage, a broken contract, a
+    /// recovered file, and an unreadable, unidentified or encrypted package do.
+    ///
+    /// Mutation (2026-11-20): `&& fc.unknown == 0` added to `inputs_whole` ->
+    /// the unknown-edges case reads not whole (red); restored, green.
+    /// Mutation (2026-11-20): `fc.recovered_files == 0 &&` removed -> the
+    /// recovered-file case reads whole (red); restored, green.
+    #[test]
+    fn inputs_whole_ignores_stable_gaps_and_stops_on_lost_input() {
+        assert!(inputs_whole(&Ok(clean())));
+        let stable = FreshCoverage {
+            unknown: 1142,
+            opaque_apps: vec!["Base Application".into()],
+            unbound_subscriptions: 3,
+            ..clean()
+        };
+        assert!(inputs_whole(&Ok(stable)), "stable gaps do not block");
+        let found = LedgerApp {
+            version: "1.0.0.0".to_string(),
+            tier: crate::snapshot::TrustTier::SymbolOnly,
+            abi_objects: Some(0),
+            ingest_error: Some("bad zip".to_string()),
+        };
+        let lost = [
+            FreshCoverage {
+                coverage_holds: false,
+                ..clean()
+            },
+            FreshCoverage {
+                recovered_files: 1,
+                ..clean()
+            },
+            FreshCoverage {
+                unidentified_packages: vec!["x.app: no manifest".into()],
+                ..clean()
+            },
+            FreshCoverage {
+                encrypted_packages: vec![".alpackages/x.app".into()],
+                ..clean()
+            },
+            FreshCoverage {
+                ledger: vec![entry("Gone", None, Some("unreadable"))],
+                ..clean()
+            },
+            FreshCoverage {
+                ledger: vec![entry("Bad", Some(found), None)],
+                ..clean()
+            },
+        ];
+        for (i, fc) in lost.into_iter().enumerate() {
+            assert!(!inputs_whole(&Ok(fc)), "case {i} must not be whole");
+        }
+        assert!(!inputs_whole(&Err("boom".into())), "unverified");
     }
 
     #[test]
