@@ -80,7 +80,8 @@ a detector).
 - **d9 (info): Behaviour.** It reports what a transaction spans.
 - **d13: Maintainability** (review, Fable). Its own text: a call into another app's internal
   routine "breaks encapsulation and can stop compiling on any minor version bump"
-  (`d13.rs:120-124`). It runs today; the risk is the next build.
+  (`d13.rs:120-124`; friend apps are skipped, `d13.rs:69-86`). Its subject is an API boundary
+  and the build, not what the code does at runtime.
 - **d17: Maintainability** (review, Fable and sol). It compares the manifest's MinVersion with
   the resolved dependency and needs only one call into it (`d17.rs:148-185`); it never shows
   that a called API is missing at the minimum.
@@ -115,12 +116,14 @@ a detector).
   classified).
 - **Presets and `--detector` compose with it.** `--preset transaction-integrity --focus
   behaviour` hides d48's findings, a preset member, and the hidden line says so.
-- **Refused combinations** (exit 3, config error, before any analysis or write; checked in
-  `plan_analyze`, so batch and the shared job entry refuse too):
+- **Refused combinations** (exit 3, config error, before any analysis or write). One check,
+  called from `plan_analyze` (the CLI and batch) and from `AnalyzeJob::new` (the direct
+  `run_analyze_with_exit` entry, `run.rs:673-713`, review sol r2), tested on both paths, so
+  no path can produce replacement baseline bytes:
   - `--update-baseline --focus`: the baseline writer replaces the fingerprint set, so a
     focused baseline would drop every hidden finding, and the next full run would report
     them all as new. (The same hazard exists today with `--min-severity`, `--detector`,
-    `--preset` and `--limit`; filed as its own task.)
+    `--preset` and `--limit`; filed as TLS-106.)
   - `--fail-on --focus`: the exit code follows the shown findings, so a focused run could
     turn a failing gate clean. `--focus` is an investigation view, not a gate (principle 4:
     a new gate starts advisory). A later task can allow it once wanted.
@@ -135,8 +138,10 @@ One tally, computed once and handed to every renderer: the focus, the total, and
 detector its name, concern and count (registry order, zero counts omitted). Raw findings, not
 groups or rollups. Machine-readable in JSON and SARIF (orchestrator):
 
-- **json**: `payload.summary.hidden`, present only with `--focus` (an additive key under an
-  opt-in flag, as `--with-evidence` adds `evidence`, so no schema bump; `format_json.rs:453`):
+- **json**: `payload.summary.hidden`, present only with `--focus`. An additive key under an
+  opt-in flag; no schema bump (my call: a reader that ignores unknown keys is unaffected, and
+  a run without `--focus` is byte-identical). With `--with-evidence` (schema 2.0.0) the key is
+  the same, at the same place:
   `{"focus": ["behaviour"], "before": "limit, baseline, suppressions", "total": 1743,
   "byDetector": [{"detector": "d1-db-op-in-loop", "concern": "performance", "count": 612},
   ...]}`. `detectorStats` stays run-level (all detectors that ran).
@@ -144,7 +149,10 @@ groups or rollups. Machine-readable in JSON and SARIF (orchestrator):
   today, `format_sarif.rs:336-346`). SARIF consumers ignore property bags and treat a missing
   alert as fixed, so a focused SARIF run also writes to stderr
   `al-sem: warning: --focus: a partial report (N findings hidden); do not upload it as the
-  full scan`, and `--help` says the same.
+  full scan`, beside the existing dependency warning (`run.rs:1045-1061`), and `--help` says
+  the same. `AnalyzeOutput`'s one `stderr_warning: Option<String>` (`run.rs:639`, written at
+  `795-797`) becomes a list, so a focused SARIF run on a degraded workspace prints both (review,
+  Fable r2; tested together).
 - **terminal, and `--group-by`'s renderer**: one line after the findings, also when none are
   shown (never a bare "no findings"):
   `hidden by --focus behaviour (before limit, baseline and suppressions): 1,743 findings
@@ -153,7 +161,9 @@ groups or rollups. Machine-readable in JSON and SARIF (orchestrator):
   "more ... see SARIF" overflow; with nothing shown it says "no findings in this view".
 - **html**: the same line in the report header, also on the empty branch.
 - **No model** (the workspace failed to assemble): the output says "focus requested, analysis
-  unavailable", never a hidden count of zero.
+  unavailable", never a hidden count of zero. That path is `view_failed` and
+  `empty_output_result` (`run.rs:761-773`), not `analyze_view`; the statement is written there,
+  per format.
 
 ### 3.5 MCP
 
@@ -188,4 +198,4 @@ CHANGELOG entry.
 - Any detector's severity, default or opt-in class, or fingerprint.
 - Hiding by file or routine.
 - The MCP tool (ENG-171).
-- The baseline-update hazard with the existing filters (its own task, §3.3).
+- The baseline-update hazard with the existing filters (TLS-106, §3.3).
