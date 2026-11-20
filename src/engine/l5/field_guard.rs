@@ -162,7 +162,6 @@ fn guarded_operations(r: &ModelRoutine) -> HashMap<String, i64> {
         }
         // The operations in source order: a write checks the guards still active, then its own
         // trigger's rebinding (`after_by_op`) ends them for the operations after it.
-        let mut ops = ops;
         ops.sort_by_key(|op| in_loop.get(op).map(|(_, pos)| *pos));
         for op in ops {
             if let Some(rec) = writes.get(op)

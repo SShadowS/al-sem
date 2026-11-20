@@ -187,11 +187,18 @@ struct Summary {
     /// ENG-159 Part A: in a positional routine, each binding of a tracked parameter or local
     /// with where it sits and what it binds, so a read at a point (an argument) takes only the
     /// bindings before it ([`RecRefFlow::arg_atoms`]). Empty otherwise.
-    timeline: Vec<(String, Option<(u32, u32)>, Atoms)>,
+    timeline: SummaryTimeline,
 }
 
+/// ENG-159 Part A: a variable, where it is bound (none: from entry) and to what.
+type Bound<T> = (String, Option<(u32, u32)>, T);
+/// ENG-159 Part A: [`Summary::timeline`]'s rows.
+type SummaryTimeline = Vec<Bound<Atoms>>;
 /// ENG-159 Part A: the evaluator's [`Summary::timeline`] under inputs.
-type Timeline = Vec<(String, Option<(u32, u32)>, Val)>;
+type Timeline = Vec<Bound<Val>>;
+/// An evaluation's answer: each variable's value, with its timeline; `None` when it does not
+/// settle.
+type EvalAnswer = Option<(HashMap<String, Val>, Timeline)>;
 
 pub(crate) struct RecRefFlow<'a> {
     routines: &'a [ModelRoutine],
@@ -222,7 +229,7 @@ pub(crate) struct RecRefFlow<'a> {
     /// it is the key's alone: what else the read asked before cannot change it.
     /// TLS-22: shared by the literal pass's workers, never locked while
     /// evaluating; two workers may evaluate one key, and get the same answer.
-    results: Mutex<HashMap<EvalKey, Option<(HashMap<String, Val>, Timeline)>>>,
+    results: Mutex<HashMap<EvalKey, EvalAnswer>>,
     /// ENG-159: which holders may be kept elsewhere (the constructor's input).
     kept: KeptElsewhere,
     /// Tests: runs after a `results` miss, the lock released, before the
