@@ -1,0 +1,365 @@
+//! ENG-160: `RecordRef.Get(RecordId)` moves the RecordRef to the RecordId's table (measured on
+//! BC 28.4: `docs/superpowers/notes/2026-11-20-eng160-recordref-table-moves.md`). In the IR it is a
+//! record operation, never a call site, so every reader that looked for a RecordRef's binds among
+//! the call sites alone missed it: a guard read the table the RecordRef held before (a false
+//! `no`). `recref_alias::RecRefBind` is now the one list, and `recref_alias::bind_sites` hands
+//! every reader the call sites and the record operations alike. One shape per reader, each with
+//! a control that holds without the `Get`.
+
+use std::collections::BTreeSet;
+use std::path::Path;
+use std::process::Command;
+
+const SOURCE: &str = r#"table 50430 "GE Doc"
+{
+    fields { field(1; K; Integer) { } }
+    keys { key(PK; K) { } }
+}
+table 50431 "GE Entry"
+{
+    fields { field(1; K; Integer) { } field(2; Name; Text[20]) { } }
+    keys { key(PK; K) { } }
+}
+table 50432 "GE Log"
+{
+    fields { field(1; K; Integer) { } }
+    keys { key(PK; K) { } }
+}
+table 50433 "GE Other"
+{
+    fields { field(1; K; Integer) { } }
+    keys { key(PK; K) { } }
+}
+codeunit 50434 "GE Mgt"
+{
+    // G34/G35 (recref_flow): the guard in Guarded reads what R holds.
+    procedure GetMoves()
+    var
+        R: RecordRef;
+        E: Record "GE Entry";
+        D: Record "GE Doc";
+    begin
+        R.GetTable(E);
+        D.FindFirst();
+        R.Get(D.RecordId);
+        Guarded(R);
+    end;
+
+    procedure GetControl()
+    var
+        R: RecordRef;
+        E: Record "GE Entry";
+    begin
+        R.GetTable(E);
+        Guarded(R);
+    end;
+
+    // `Id := R.RecordId` then `R.Get(Id)` keeps R's own table.
+    procedure GetOwnId()
+    var
+        R: RecordRef;
+        E: Record "GE Entry";
+        Id: RecordId;
+    begin
+        R.GetTable(E);
+        Id := R.RecordId;
+        R.Get(Id);
+        Guarded(R);
+    end;
+
+    local procedure Guarded(var R: RecordRef)
+    var
+        Log: Record "GE Log";
+    begin
+        if R.Number <> Database::"GE Doc" then
+            exit;
+        Log.Insert();
+    end;
+
+    // G34 (exit_guards): a Get before the guard; the guard reads no entry value.
+    procedure GetBeforeGuardRoot()
+    var
+        R: RecordRef;
+        E: Record "GE Entry";
+    begin
+        R.GetTable(E);
+        GetBeforeGuard(R);
+    end;
+
+    procedure GuardOnlyRoot()
+    var
+        R: RecordRef;
+        E: Record "GE Entry";
+    begin
+        R.GetTable(E);
+        GuardOnly(R);
+    end;
+
+    local procedure GetBeforeGuard(var R: RecordRef)
+    var
+        Log: Record "GE Log";
+        D: Record "GE Doc";
+    begin
+        D.FindFirst();
+        R.Get(D.RecordId);
+        if R.Number <> Database::"GE Doc" then
+            exit;
+        Log.Insert();
+    end;
+
+    local procedure GuardOnly(var R: RecordRef)
+    var
+        Log: Record "GE Log";
+    begin
+        if R.Number <> Database::"GE Doc" then
+            exit;
+        Log.Insert();
+    end;
+
+    // G33 (literal_reach's table frame): R takes the Variant's table, unless a Get moves it.
+    procedure FrameRoot()
+    var
+        E: Record "GE Entry";
+    begin
+        Frame(E);
+    end;
+
+    procedure FrameControlRoot()
+    var
+        E: Record "GE Entry";
+    begin
+        FrameControl(E);
+    end;
+
+    local procedure Frame(V: Variant)
+    var
+        R: RecordRef;
+        Log: Record "GE Log";
+        D: Record "GE Doc";
+    begin
+        R.GetTable(V);
+        D.FindFirst();
+        R.Get(D.RecordId);
+        case R.Number of
+            Database::"GE Doc":
+                Log.Insert();
+        end;
+    end;
+
+    local procedure FrameControl(V: Variant)
+    var
+        R: RecordRef;
+        Log: Record "GE Log";
+    begin
+        R.GetTable(V);
+        case R.Number of
+            Database::"GE Doc":
+                Log.Insert();
+        end;
+    end;
+
+    // record_types: a local RecordRef only ever opened temporary holds a temporary table,
+    // unless a Get moves it to a physical one.
+    procedure TempGet(TableNo: Integer; Flag: Boolean)
+    var
+        R: RecordRef;
+        D: Record "GE Doc";
+    begin
+        if Flag then
+            R.Open(TableNo, true)
+        else
+            R.Open(TableNo, true);
+        D.FindFirst();
+        R.Get(D.RecordId);
+        R.Delete();
+    end;
+
+    procedure TempControl(TableNo: Integer; Flag: Boolean)
+    var
+        R: RecordRef;
+    begin
+        if Flag then
+            R.Open(TableNo, true)
+        else
+            R.Open(TableNo, true);
+        R.Delete();
+    end;
+
+    // record_types' first pass (no branching): Open(…, true) derives a temporary table for every
+    // operation, unless a Get moves it.
+    procedure TempGetStraight()
+    var
+        R: RecordRef;
+        D: Record "GE Doc";
+    begin
+        R.Open(Database::"GE Other", true);
+        D.FindFirst();
+        R.Get(D.RecordId);
+        R.Delete();
+    end;
+
+    // The resolver's RecordRef table (`program::recordref_table`): opened on Doc, then moved.
+    procedure OpenThenGet()
+    var
+        R: RecordRef;
+        E: Record "GE Entry";
+    begin
+        R.Open(Database::"GE Doc");
+        E.FindFirst();
+        R.Get(E.RecordId);
+        R.Delete();
+    end;
+
+    procedure OpenControl()
+    var
+        R: RecordRef;
+    begin
+        R.Open(Database::"GE Doc");
+        R.Delete();
+    end;
+
+    // `field_touches`: the table a local RecordRef's `Field(n)` reads.
+    procedure TouchAfterGet()
+    var
+        R: RecordRef;
+        E: Record "GE Entry";
+        F: FieldRef;
+    begin
+        R.Open(Database::"GE Doc");
+        E.FindFirst();
+        R.Get(E.RecordId);
+        F := R.Field(2);
+        F.Value := 'x';
+    end;
+
+    procedure TouchControl()
+    var
+        R: RecordRef;
+        F: FieldRef;
+    begin
+        R.Open(Database::"GE Doc");
+        F := R.Field(2);
+        F.Value := 'x';
+    end;
+}
+"#;
+
+fn alsem(cwd: &Path, args: &[&str]) -> serde_json::Value {
+    let out = Command::new(env!("CARGO_BIN_EXE_alsem"))
+        .args(args)
+        .current_dir(cwd)
+        .env("RUST_LOG", "off")
+        .output()
+        .unwrap();
+    serde_json::from_slice(&out.stdout).unwrap_or_else(|e| {
+        panic!(
+            "{args:?}: {e}; stderr: {}",
+            String::from_utf8_lossy(&out.stderr)
+        )
+    })
+}
+
+fn workspace() -> tempfile::TempDir {
+    let t = tempfile::tempdir().unwrap();
+    let ws = t.path().join("ws");
+    std::fs::create_dir_all(ws.join("src")).unwrap();
+    std::fs::write(
+        ws.join("app.json"),
+        r#"{"id":"36363636-0000-4000-8000-000000000036","name":"GE","publisher":"t","version":"1.0.0.0"}"#,
+    )
+    .unwrap();
+    std::fs::write(ws.join("src/a.al"), SOURCE).unwrap();
+    t
+}
+
+#[test]
+fn a_recordref_get_moves_the_table_for_every_reader() {
+    let t = workspace();
+    let inv = alsem(
+        t.path(),
+        &["fingerprint", "ws", "--inventory-only", "--format", "json"],
+    );
+    let answer = |name: &str, table: &str| -> String {
+        let id = inv["payload"]["routineInventory"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["routineName"] == name)
+            .unwrap_or_else(|| panic!("precondition: {name} is in the inventory"))
+            ["stableRoutineId"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let q = format!("writes-table:{table}");
+        alsem(t.path(), &["prove", "ws", &id, &q, "--deterministic"])["payload"]["result"]["answer"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    // recref_flow: the Get may move R to a Doc; its own RecordId keeps the Entry.
+    assert_eq!(answer("GetControl", "GE Log"), "no", "precondition");
+    assert_eq!(answer("GetMoves", "GE Log"), "yes");
+    assert_eq!(answer("GetOwnId", "GE Log"), "no");
+    // exit_guards: the guard after a Get reads no entry value.
+    assert_eq!(answer("GuardOnlyRoot", "GE Log"), "no", "precondition");
+    assert_eq!(answer("GetBeforeGuardRoot", "GE Log"), "yes");
+    // literal_reach's table frame.
+    assert_eq!(answer("FrameControlRoot", "GE Log"), "no", "precondition");
+    assert_eq!(answer("FrameRoot", "GE Log"), "yes");
+    // record_types: after the Get the delete may hit a physical Doc.
+    assert_eq!(answer("TempControl", "GE Doc"), "no", "precondition");
+    assert_ne!(answer("TempGet", "GE Doc"), "no");
+    assert_ne!(answer("TempGetStraight", "GE Doc"), "no");
+    // The resolver's RecordRef table: opened on Doc, moved to an Entry.
+    assert_eq!(answer("OpenControl", "GE Entry"), "no", "precondition");
+    assert_ne!(answer("OpenThenGet", "GE Entry"), "no");
+}
+
+#[test]
+fn a_field_of_a_recordref_moved_by_get_may_be_any_tables() {
+    let t = workspace();
+    let v = alsem(
+        t.path(),
+        &[
+            "query",
+            "touches",
+            "ws",
+            "--table",
+            "GE Entry",
+            "--field",
+            "Name",
+            "--format",
+            "json",
+            "--deterministic",
+        ],
+    );
+    let lines: BTreeSet<u64> = v["payload"]["fieldTouches"]
+        .as_array()
+        .unwrap_or_else(|| panic!("fieldTouches: {v}"))
+        .iter()
+        .map(|s| s["site"]["line"].as_u64().unwrap())
+        .collect();
+    assert!(
+        lines.contains(&field_line("TouchAfterGet")),
+        "{lines:?}: {v}"
+    );
+    assert!(
+        !lines.contains(&field_line("TouchControl")),
+        "precondition: a RecordRef opened on Doc touches no Entry field: {lines:?}"
+    );
+}
+
+/// The 1-based line of `F := R.Field(2);` in procedure `name` of [`SOURCE`].
+fn field_line(name: &str) -> u64 {
+    let head = format!("procedure {name}()");
+    let start = SOURCE
+        .lines()
+        .position(|l| l.trim() == head)
+        .unwrap_or_else(|| panic!("precondition: {name} is in the fixture"));
+    let at = SOURCE
+        .lines()
+        .skip(start)
+        .position(|l| l.trim() == "F := R.Field(2);")
+        .expect("precondition: the procedure reads Field(2)");
+    (start + at + 1) as u64
+}

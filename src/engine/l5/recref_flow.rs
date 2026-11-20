@@ -42,6 +42,7 @@
 
 use crate::engine::l5::snapshot::SnapshotGraphEdge;
 use crate::program::body::features::{PCFNNode, PCallSite, PCallee, TableCase};
+use crate::program::model::recref_alias::{BindSite, RecRefBind, bind_sites};
 use crate::program::model::workspace::ModelParameter;
 use crate::program::model::workspace::{Model, ModelRoutine};
 use al_syntax::IdentifierFoldExt;
@@ -380,17 +381,15 @@ impl<'a> RecRefFlow<'a> {
         // Per object: the tracked globals some routine rebinds in place.
         let mut in_place: HashMap<&str, HashSet<String>> = HashMap::new();
         for r in routines {
-            for cs in &r.call_sites {
-                if let PCallee::Member { receiver, .. } = &cs.callee {
-                    let x = lc(receiver);
-                    if r.variables.iter().any(|v| {
-                        lc(&v.name) == x
-                            && v.scope.as_deref() == Some("global")
-                            && is_tracked_type(&v.declared_type)
-                    }) && in_place_part(r, cs, &x).is_some()
-                    {
-                        in_place.entry(r.object_id.as_str()).or_default().insert(x);
-                    }
+            for site in bind_sites(r) {
+                let x = lc(site.receiver);
+                if r.variables.iter().any(|v| {
+                    lc(&v.name) == x
+                        && v.scope.as_deref() == Some("global")
+                        && is_tracked_type(&v.declared_type)
+                }) && in_place_part(r, &site, &x).is_some()
+                {
+                    in_place.entry(r.object_id.as_str()).or_default().insert(x);
                 }
             }
         }
@@ -1538,23 +1537,20 @@ fn initial_summary(f: &Facts) -> Summary {
     s
 }
 
-/// What member call `cs` of `r` on tracked `recv` binds it to, when it
-/// rebinds it in place: `GetTable(X)` what `X` holds, `Close` no table, `Open`
-/// and `Copy` anything, and `Get(Id)` anything unless it keeps the table.
-fn in_place_part(r: &ModelRoutine, cs: &PCallSite, recv: &str) -> Option<Part> {
-    let PCallee::Member { method, .. } = &cs.callee else {
-        return None;
-    };
-    Some(match method.fold_identifier().as_str() {
-        "gettable" => match cs.argument_texts.first() {
+/// What bind site `site` of `r` on tracked `recv` binds it to
+/// ([`recref_alias::RecRefBind`], the one list, ENG-160): `GetTable(X)` what `X`
+/// holds, `Close` no table, `Open` anything, and `Get(Id)` anything unless it
+/// keeps the table.
+fn in_place_part(r: &ModelRoutine, site: &BindSite<'_>, recv: &str) -> Option<Part> {
+    Some(match site.how {
+        RecRefBind::GetTable => match site.args.first() {
             Some(arg) => Part::Copy(lc(arg)),
             None => Part::Atoms(top()),
         },
-        "open" | "copy" => Part::Atoms(top()),
-        "close" => Part::Atoms(Atoms::from([Atom::Unset])),
-        "get" if get_keeps_table(r, cs, recv) => return None,
-        "get" => Part::Atoms(top()),
-        _ => return None,
+        RecRefBind::Open => Part::Atoms(top()),
+        RecRefBind::Close => Part::Atoms(Atoms::from([Atom::Unset])),
+        RecRefBind::Get if get_keeps_table(r, site, recv) => return None,
+        RecRefBind::Get => Part::Atoms(top()),
     })
 }
 
@@ -1725,6 +1721,10 @@ pub(crate) fn exit_guards(
                         && (cs.argument_texts.iter().any(|a| lc(a) == *rec)
                             || matches!(&cs.callee, PCallee::Member { receiver, .. }
                                 if lc(receiver) == *rec))
+                })
+                // ENG-160: `R.Get(Id)`, a record operation.
+                || bind_sites(r).iter().any(|s| {
+                    s.call.is_none() && lc(s.receiver) == *rec && before(s.anchor)
                 }));
         if bound_before {
             continue;
@@ -1803,7 +1803,7 @@ fn exclusive(n: &PCFNNode, a: (u32, u32), b: (u32, u32)) -> bool {
 fn rebinds_to_guarded(
     r: &ModelRoutine,
     guards: &[(String, Vec<String>, HashSet<String>)],
-    cs: &PCallSite,
+    site_id: &str,
     v: &str,
     part: &Part,
 ) -> bool {
@@ -1820,7 +1820,7 @@ fn rebinds_to_guarded(
         return false;
     };
     guards.iter().any(|(rec, tables, ids)| {
-        rec == v && tables.len() == 1 && tables[0] == table && ids.contains(&cs.id)
+        rec == v && tables.len() == 1 && tables[0] == table && ids.contains(site_id)
     })
 }
 
@@ -1861,15 +1861,16 @@ fn facts_of(r: &ModelRoutine, obj_in_place: &HashSet<String>) -> Facts {
     // of its alias class, so each member may then hold anything. An object
     // global rebound in place in any routine of the object may be at any time.
     let mut in_place: InPlace = HashMap::new();
-    for cs in &r.call_sites {
-        if let PCallee::Member { receiver, .. } = &cs.callee
-            && f.tracked.contains_key(&lc(receiver))
-            && let Some(part) = in_place_part(r, cs, &lc(receiver))
+    let sites = bind_sites(r);
+    for site in &sites {
+        let x = lc(site.receiver);
+        if f.tracked.contains_key(&x)
+            && let Some(part) = in_place_part(r, site, &x)
         {
-            in_place.entry(lc(receiver)).or_default().push((
-                (cs.source_anchor.start_line, cs.source_anchor.start_column),
-                part,
-            ));
+            in_place
+                .entry(x)
+                .or_default()
+                .push(((site.anchor.start_line, site.anchor.start_column), part));
         }
     }
     // The alias classes (one source, ENG-145: `program::model::recref_alias`).
@@ -1930,13 +1931,24 @@ fn facts_of(r: &ModelRoutine, obj_in_place: &HashSet<String>) -> Facts {
             }
         }
     }
+    // ENG-160: a `Get` on a tracked RecordRef is a record operation, not a call site.
+    for site in sites.iter().filter(|s| s.call.is_none()) {
+        let v = lc(site.receiver);
+        if f.tracked.contains_key(&v)
+            && let Some(part) = in_place_part(r, site, &v)
+        {
+            let at = Some((site.anchor.start_line, site.anchor.start_column));
+            f.fixed.push((v, part, at));
+        }
+    }
     for (ci, cs) in r.call_sites.iter().enumerate() {
         let at = Some((cs.source_anchor.start_line, cs.source_anchor.start_column));
         if let PCallee::Member { receiver, .. } = &cs.callee {
             let v = lc(receiver);
             if f.tracked.contains_key(&v) {
-                if let Some(part) = in_place_part(r, cs, &v)
-                    && !rebinds_to_guarded(r, &guards, cs, &v, &part)
+                if let Some(site) = sites.iter().find(|s| s.id == cs.id)
+                    && let Some(part) = in_place_part(r, site, &v)
+                    && !rebinds_to_guarded(r, &guards, &cs.id, &v, &part)
                 {
                     f.fixed.push((v, part, at));
                 }
@@ -2075,8 +2087,8 @@ fn keeps_by_value(_callee: &ModelRoutine, f: &Facts, p: &ModelParameter) -> bool
 
 /// `R.Get(Id)` keeps `R`'s table when `Id` is a local whose every assignment
 /// is `Id := R.RecordId` and that nothing else is passed to.
-fn get_keeps_table(r: &ModelRoutine, cs: &PCallSite, recref: &str) -> bool {
-    let [id] = cs.argument_texts.as_slice() else {
+fn get_keeps_table(r: &ModelRoutine, site: &BindSite<'_>, recref: &str) -> bool {
+    let [id] = site.args else {
         return false;
     };
     let id = lc(id);
@@ -2097,6 +2109,6 @@ fn get_keeps_table(r: &ModelRoutine, cs: &PCallSite, recref: &str) -> bool {
     assigned
         && r.call_sites
             .iter()
-            .filter(|c| c.id != cs.id)
+            .filter(|c| c.id != site.id)
             .all(|c| c.argument_texts.iter().all(|a| lc(a) != id))
 }

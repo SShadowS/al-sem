@@ -963,7 +963,14 @@ fn table_frame(r: &ModelRoutine) -> Option<TableFrame> {
                 _ => {}
             }
         }
-        if let (true, Some(p)) = (ok, source) {
+        // ENG-160: `R.Get(Id)` binds it too (a record operation, not a call site).
+        let got = crate::program::model::recref_alias::bind_sites(r)
+            .iter()
+            .any(|s| {
+                s.how == crate::program::model::recref_alias::RecRefBind::Get
+                    && lc(s.receiver) == r_lc
+            });
+        if let (true, false, Some(p)) = (ok, got, source) {
             bound.insert(r_lc.clone(), p);
             escapes.insert(r_lc, passed);
         }

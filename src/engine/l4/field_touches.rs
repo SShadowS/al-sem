@@ -374,6 +374,16 @@ fn record_ref_tables<'m>(
                 _ => {}
             }
         }
+        // ENG-160: `R.Get(Id)` may move it to any table (a record operation, not a call site).
+        if crate::program::model::recref_alias::bind_sites(r)
+            .iter()
+            .any(|s| {
+                s.how == crate::program::model::recref_alias::RecRefBind::Get
+                    && field_key(s.receiver) == key
+            })
+        {
+            agree(None);
+        }
         let decided = if escapes { None } else { table.flatten() };
         out.insert(key, decided);
     }

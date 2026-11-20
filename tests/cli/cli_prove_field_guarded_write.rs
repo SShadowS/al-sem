@@ -76,6 +76,16 @@ codeunit 50403 "FG Mgt"
         R.Modify();
     end;
 
+    // ENG-160: `R.Get(Id)` moves R to the RecordId's table (measured on BC 28.4); it is a
+    // record operation, not a call site.
+    procedure ReboundByGet(var R: RecordRef; Id: RecordId)
+    begin
+        if not R.FieldExist(50) then
+            exit;
+        R.Get(Id);
+        R.Modify();
+    end;
+
     // sol r6 on ENG-30: an alias of R rebound inside a `with`: the guard no longer holds.
     procedure AliasWith(var R: RecordRef)
     var
@@ -242,6 +252,8 @@ fn a_field_guarded_recordref_write_writes_only_tables_with_the_field() {
     // Controls: no guard, or a guard the RecordRef is rebound past.
     assert_eq!(answer("Unguarded", "FG Log"), "unknown");
     assert_eq!(answer("Rebound", "FG Log"), "unknown");
+    // ENG-160: `R.Get(Id)` past the guard rebinds R too.
+    assert_eq!(answer("ReboundByGet", "FG Log"), "unknown");
     // sol r6 on ENG-30: a routine with a `with` takes no field guard.
     assert_eq!(answer("AliasWith", "FG Log"), "unknown");
     // ENG-145: a rebinding through an alias (plain, quoted, through a Variant) ends the guard;

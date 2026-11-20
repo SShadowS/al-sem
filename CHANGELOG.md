@@ -177,6 +177,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The hook files have no final newline, which the first `host-suspended` refused. The slot test
   found it, and it is fixed.
 
+### Fixed (ENG-160: `RecordRef.Get(RecordId)` moves the RecordRef, and every reader now sees it)
+
+- **The bug.** `R.Get(Id)` moves a RecordRef to the RecordId's table. Measured on BC 28.4: open
+  on Customer, `R.Get(<a Vendor's RecordId>)` returns true and `R.Number` is 23 (Vendor). The
+  move reaches every alias of R, and a temporary R becomes physical. In the IR, `Get` (like
+  `Copy`, `Insert` and every other record method) is a record OPERATION, never a call site. So
+  each reader that looked for a RecordRef's binds among the call sites alone never saw it.
+  `R.GetTable(Entry); R.Get(DocId); Guarded(R)`, where Guarded does `if R.Number <>
+  Database::Doc then exit; Log.Insert()`, answered `prove … writes-table:Log` **no**; the truth
+  is yes. Found by Fable's review of ENG-159 Part B.
+- **The list, measured** (`docs/superpowers/notes/2026-11-20-eng160-recordref-table-moves.md`,
+  probes P159/P160):
+  - `Open`, `GetTable`, `Get(RecordId)` and `Close` are the only RecordRef methods that bind or
+    unbind it.
+  - `Get` moves only when it finds the record. Another table is physical; the same table keeps
+    its temporary state.
+  - `Copy` moves nothing: another table, `shareTable` with a physical side, or a RecordRef not
+    open are runtime errors, and it keeps the temporary state otherwise.
+  - `GetBySystemId` looks in its own table only.
+  - Also measured: `A := F.Record()` shares no handle with R, a by-value RecordRef parameter
+    does share the caller's handle, and `Clear(A)` detaches only A.
+- **The fix.** One list, `recref_alias::RecRefBind`, and one way to find the binds,
+  `recref_alias::bind_sites`, which lists the call sites and the `Get` record operations alike.
+  Every reader goes through it:
+  - recref_flow's facts (G34/G35) and its exit guards (a `Get` before the guard: no entry value);
+  - literal_reach's table frame (G33);
+  - the field guard (G36);
+  - record_types' two temp passes;
+  - the resolver's RecordRef table (`program::recordref_table`);
+  - field_touches' RecordRef table (`query touches --field`);
+  - recref_origin's reason text.
+
+  `get_keeps_table` (`Id := R.RecordId; R.Get(Id)` keeps R's table) had never run, for the same
+  reason; it runs now. `Copy` left the lists that held it: it moves nothing.
+- **Tests.** `tests/cli/cli_recref_get.rs` has one shape per reader, each with a control that
+  holds without the `Get`. The G36 fixture adds `ReboundByGet`. Every shape answered `no` on
+  master 831122de. Discrimination proofs (2026-11-20, each break reverted):
+  - the flow's `Get` facts → `GetMoves` red;
+  - the table frame's check → `FrameRoot` red;
+  - record_types' first pass → `TempGetStraight` red; its second pass → `TempGet` red;
+  - the resolver's `Get` arm → `TempGetStraight` and `OpenThenGet` red;
+  - field_touches' check → the touches test red;
+  - the field guard's operation lookup → `ReboundByGet` red;
+  - `get_keeps_table` → `GetOwnId` red.
+
+  The exit-guard clause's break stays green on master: the caller's argument reads the
+  callee's write-back over the whole routine, and the `Get` makes that write-back "anything".
+  It is the only guard once arguments are read at their call (ENG-159 Part A), where its proof
+  is taken.
+
 ### Fixed (ENG-148: a runtime package's codeunit implementers reach interface dispatch)
 
 - **The gap.** A runtime package ships no AL, only BC's transpiled C# (`bin/*.cs`) and its

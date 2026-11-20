@@ -31,6 +31,7 @@
 //! program graph in `resolve::full`, the model's symbols in `record_types`)
 //! and use it only when all bindings resolve to the same table.
 
+use crate::program::model::recref_alias::{RecRefBind, recref_bind};
 use al_syntax::IdentifierFoldExt;
 use al_syntax::ir::{AlFile, BlockId, BlockItem, ExprId, ExprKind, Literal, RoutineDecl, StmtKind};
 
@@ -204,9 +205,9 @@ impl Walk<'_> {
                 if self.names_var(*object) {
                     // A parens-less member (`R.Number`, `R.Close`): a binding
                     // always takes an argument.
-                    let m = member.trim().trim_matches('"').to_ascii_lowercase();
                     if self.field_sources.is_none()
-                        && matches!(m.as_str(), "open" | "gettable" | "copy")
+                        && recref_bind(member.trim().trim_matches('"'))
+                            .is_some_and(|b| b != RecRefBind::Close)
                     {
                         self.ok = false;
                     }
@@ -228,13 +229,17 @@ impl Walk<'_> {
             // A FieldRef's own methods (`Validate`, `Value`, …) never rebind it.
             return;
         }
-        let m = member.trim().trim_matches('"').to_ascii_lowercase();
-        match m.as_str() {
-            "open" => match args.first().and_then(|a| table_literal(self.file, *a)) {
+        // The binds: `recref_alias::RecRefBind`, the one list (ENG-160). `Get(Id)` may move it to
+        // any table; `Copy` moves no table (measured on BC 28.4: another table is a runtime
+        // error); `Close` leaves none for an operation to run on.
+        match recref_bind(member.trim().trim_matches('"')) {
+            Some(RecRefBind::Open) => match args.first().and_then(|a| table_literal(self.file, *a))
+            {
                 Some(b) => self.bindings.push(b),
                 None => self.ok = false,
             },
-            "gettable" => {
+            Some(RecRefBind::Get) => self.ok = false,
+            Some(RecRefBind::GetTable) => {
                 let name = args
                     .first()
                     .and_then(|a| match &self.file.ir.expr(*a).kind {
@@ -248,9 +253,7 @@ impl Walk<'_> {
                     _ => self.ok = false,
                 }
             }
-            // Another RecordRef's table, by reference or by copy.
-            "copy" => self.ok = false,
-            _ => {}
+            Some(RecRefBind::Close) | None => {}
         }
     }
 }

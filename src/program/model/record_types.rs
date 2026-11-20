@@ -30,6 +30,16 @@ use al_syntax::IdentifierFoldExt;
 
 use crate::program::body::node_util::strip_quotes;
 
+/// Whether `R.Get(Id)` binds RecordRef `v_lc` (folded) in `routine`: a record operation, not a
+/// call site, so the call-site scan of the first pass does not see it (ENG-160). It may move
+/// `v_lc` to the RecordId's table, physical or not: no derived temp state holds across it.
+fn rebound_by_get(routine: &ModelRoutine, v_lc: &str) -> bool {
+    use crate::program::model::recref_alias::{RecRefBind, bind_sites};
+    bind_sites(routine)
+        .iter()
+        .any(|s| s.how == RecRefBind::Get && op_variable_lc(s.receiver) == v_lc)
+}
+
 /// ENG-145: whether something other than the pass's own `Open`/`GetTable` calls on it may rebind
 /// the RecordRef `v` (a [`recref_alias::holder_key`]) in `routine`, so no temp state may be
 /// derived for it: an alias of it (`A := v` or `v := A`, a Variant included; `A.GetTable(Phys)`
@@ -504,7 +514,9 @@ pub fn resolve_routine_record_types(
             // ENG-145: a RecordRef something else may rebind (an alias, an assignment, a call it
             // is passed to) keeps no derived temp state.
             let aliases = crate::program::model::recref_alias::AliasClasses::for_routine(routine);
-            recref_temp.retain(|v, _| !may_be_rebound_elsewhere(routine, &aliases, v));
+            recref_temp.retain(|v, _| {
+                !may_be_rebound_elsewhere(routine, &aliases, v) && !rebound_by_get(routine, v)
+            });
 
             // Apply derived temp states to matching record ops.
             for op in routine.record_operations.iter_mut() {
@@ -546,20 +558,18 @@ pub fn resolve_routine_record_types(
                 if may_be_rebound_elsewhere(routine, &aliases, v_lc) {
                     return false;
                 }
+                // Its binds (`recref_alias::RecRefBind`, the one list; ENG-160: `Get(Id)` may
+                // move it to a physical table, and `Copy` keeps its temporary state).
+                use crate::program::model::recref_alias::{RecRefBind, bind_sites};
                 let mut opened = false;
-                for cs in &routine.call_sites {
-                    let crate::program::body::features::PCallee::Member { receiver, method } =
-                        &cs.callee
-                    else {
-                        continue;
-                    };
-                    if receiver.fold_identifier() != *v_lc {
+                for site in bind_sites(routine) {
+                    if site.receiver.fold_identifier() != *v_lc {
                         continue;
                     }
-                    match method.fold_identifier().as_str() {
-                        "open" => {
-                            let temp = cs
-                                .argument_texts
+                    match site.how {
+                        RecRefBind::Open => {
+                            let temp = site
+                                .args
                                 .get(1)
                                 .is_some_and(|t| t.trim().eq_fold_identifier("true"));
                             if !temp {
@@ -567,8 +577,8 @@ pub fn resolve_routine_record_types(
                             }
                             opened = true;
                         }
-                        "gettable" | "copy" => return false,
-                        _ => {}
+                        RecRefBind::GetTable | RecRefBind::Get => return false,
+                        RecRefBind::Close => {}
                     }
                 }
                 opened

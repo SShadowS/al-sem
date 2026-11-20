@@ -15,9 +15,84 @@
 //! other already (`Victim(R, R)`, two globals assigned elsewhere), and an array of them keeps
 //! no record of which element holds what (`Slot[1] := R`), so a routine with one joins them all.
 
-use crate::program::body::features::PVarAssignment;
+use crate::program::body::features::{PAnchor, PCallSite, PCallee, PVarAssignment};
 use crate::program::model::workspace::ModelRoutine;
 use al_syntax::IdentifierFoldExt;
+
+/// How a RecordRef method binds the RecordRef it runs on: the one list (ENG-160), measured on
+/// BC 28.4 (`docs/superpowers/notes/2026-11-20-eng160-recordref-table-moves.md` and ENG-145's
+/// note). Through every alias of it, as `GetTable` (one handle). `Copy` moves neither the table
+/// (another table is a runtime error) nor the temporary state; `GetBySystemId` looks only in its
+/// own table; neither is here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecRefBind {
+    /// `Open(No[, Temp])`: the table its first argument names.
+    Open,
+    /// `GetTable(Rec)`: its argument's table and temporary state.
+    GetTable,
+    /// `Get(RecordId)`: the RecordId's table when it finds the record (a different table is
+    /// physical, the same table keeps its state), else nothing: any table, state unknown.
+    Get,
+    /// `Close`: no table.
+    Close,
+}
+
+/// [`RecRefBind`] of a method name (any case).
+#[must_use]
+pub fn recref_bind(method: &str) -> Option<RecRefBind> {
+    Some(match method.trim().fold_identifier().as_str() {
+        "open" => RecRefBind::Open,
+        "gettable" => RecRefBind::GetTable,
+        "get" => RecRefBind::Get,
+        "close" => RecRefBind::Close,
+        _ => return None,
+    })
+}
+
+/// One place a routine binds a variable in place through a [`RecRefBind`] method.
+#[derive(Debug, Clone, Copy)]
+pub struct BindSite<'r> {
+    /// The receiver as written (`R`, `this.R`, `Slot[1]`).
+    pub receiver: &'r str,
+    pub how: RecRefBind,
+    pub args: &'r [String],
+    pub anchor: &'r PAnchor,
+    /// The call site's or the record operation's id.
+    pub id: &'r str,
+    /// The call site, when it is one (`Open`, `GetTable`, `Close`).
+    pub call: Option<&'r PCallSite>,
+}
+
+/// Every [`BindSite`] of `r`, in no particular order: its member calls, and its `Get` record
+/// operations. In the IR a method of a record or RecordRef that `record_op_type` lists (`Get`,
+/// `Copy`, `Insert`…) is a record OPERATION, never a call site, so a reader scanning call sites
+/// alone never sees `R.Get(Id)` (ENG-160). A `Get` on a record variable is listed too: a reader
+/// matches the receiver against its own RecordRef holders.
+#[must_use]
+pub fn bind_sites(r: &ModelRoutine) -> Vec<BindSite<'_>> {
+    let calls = r.call_sites.iter().filter_map(|cs| match &cs.callee {
+        PCallee::Member { receiver, method } => Some(BindSite {
+            receiver,
+            how: recref_bind(method)?,
+            args: &cs.argument_texts,
+            anchor: &cs.source_anchor,
+            id: &cs.id,
+            call: Some(cs),
+        }),
+        _ => None,
+    });
+    let ops = r.record_operations.iter().filter_map(|op| {
+        (recref_bind(&op.op)? == RecRefBind::Get).then_some(BindSite {
+            receiver: &op.record_variable_name,
+            how: RecRefBind::Get,
+            args: op.field_arguments.as_deref().unwrap_or_default(),
+            anchor: &op.source_anchor,
+            id: &op.id,
+            call: None,
+        })
+    });
+    calls.chain(ops).collect()
+}
 use std::collections::{HashMap, HashSet};
 
 /// A variable reference's key, as every reader of the classes names it: an array element

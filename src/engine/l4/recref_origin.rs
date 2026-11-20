@@ -24,6 +24,8 @@ use std::collections::BTreeSet;
 enum Kind {
     Open,
     GetTable,
+    /// `R.Get(Id)`: the RecordId's table (ENG-160).
+    Get,
     /// `R := X` (`duplicate` false) or `R := X.Duplicate()`.
     Copy {
         from: String,
@@ -45,21 +47,23 @@ const ENTRY: usize = usize::MAX;
 /// The origins of `v` in `r`, in source order.
 fn origins(r: &ModelRoutine, v: &str) -> Vec<Origin> {
     let mut out: Vec<Origin> = Vec::new();
-    for c in &r.call_sites {
-        if let PCallee::Member { receiver, method } = &c.callee
-            && receiver.eq_fold_identifier(v)
-        {
-            let kind = match method.fold_identifier().as_str() {
-                "open" => Kind::Open,
-                "gettable" => Kind::GetTable,
-                _ => continue,
-            };
-            let a = &c.source_anchor;
-            out.push(Origin {
-                at: (a.start_line, a.start_column),
-                kind,
-            });
+    // The binds (`recref_alias::RecRefBind`, the one list; `Get` is a record operation, ENG-160).
+    // `Close` leaves no table to name.
+    use crate::program::model::recref_alias::{RecRefBind, bind_sites};
+    for s in bind_sites(r) {
+        if !s.receiver.eq_fold_identifier(v) {
+            continue;
         }
+        let kind = match s.how {
+            RecRefBind::Open => Kind::Open,
+            RecRefBind::GetTable => Kind::GetTable,
+            RecRefBind::Get => Kind::Get,
+            RecRefBind::Close => continue,
+        };
+        out.push(Origin {
+            at: (s.anchor.start_line, s.anchor.start_column),
+            kind,
+        });
     }
     for a in &r.var_assignments {
         if !a.lhs_name.eq_fold_identifier(v) {
@@ -371,6 +375,7 @@ pub fn recref_reason(model: &Model, r: &ModelRoutine, o: &ModelRecordOperation) 
                 Kind::GetTable => {
                     "set by GetTable from a record whose table is not resolved".to_string()
                 }
+                Kind::Get => "moved by Get to a record ID's table".to_string(),
                 Kind::Copy { from, duplicate } => {
                     let src = named(model, r, from, &spelling(model, r, from));
                     if *duplicate {

@@ -19,7 +19,7 @@
 //! a table is ruled out; any other keeps the `unknown-table-write`.
 
 use crate::engine::l5::digest_cli::DigestEntryFull;
-use crate::program::body::features::{PCFNNode, PCallee};
+use crate::program::body::features::PCFNNode;
 use crate::program::model::workspace::{Model, ModelRoutine};
 use al_syntax::IdentifierFoldExt;
 use std::collections::{HashMap, HashSet};
@@ -63,31 +63,31 @@ fn guarded_operations(r: &ModelRoutine) -> HashMap<String, i64> {
     // guard of the whole alias class: the routine's own aliases, and every parameter, global and
     // array holder that may share a record already (`recref_alias::AliasClasses::for_routine`).
     // Names are keyed as the classes key them (`this.G`, `Slot[1]`, quotes).
-    use crate::program::model::recref_alias::{AliasClasses, holder_key};
+    use crate::program::model::recref_alias::{AliasClasses, bind_sites, holder_key};
     let aliases = AliasClasses::for_routine(r);
-    // The call sites (by id) that may rebind a RecordRef, with the ones they may.
-    let mut rebinds: HashMap<&str, HashSet<String>> = HashMap::new();
+    // The call sites and record operations (by id) that may rebind a RecordRef, with the ones
+    // they may: a call it is passed to, and a bind through it (`recref_alias::RecRefBind`, the
+    // one list: `R.Get(Id)` is a record operation, ENG-160).
+    let mut names_by_site: HashMap<&str, HashSet<String>> = HashMap::new();
     for cs in &r.call_sites {
-        let mut names: HashSet<String> = cs
-            .argument_texts
-            .iter()
-            .map(|a| holder_key(a))
-            .filter(|a| aliases.is_holder(a))
-            .collect();
-        if let PCallee::Member { receiver, method } = &cs.callee
-            && matches!(
-                method.fold_identifier().as_str(),
-                "gettable" | "open" | "copy" | "close"
-            )
-            && aliases.is_holder(&holder_key(receiver))
-        {
-            names.insert(holder_key(receiver));
-        }
-        let names: HashSet<String> = names.iter().flat_map(|n| aliases.members(n)).collect();
-        if !names.is_empty() {
-            rebinds.insert(cs.id.as_str(), names);
+        names_by_site.entry(cs.id.as_str()).or_default().extend(
+            cs.argument_texts
+                .iter()
+                .map(|a| holder_key(a))
+                .filter(|a| aliases.is_holder(a)),
+        );
+    }
+    for site in bind_sites(r) {
+        let key = holder_key(site.receiver);
+        if aliases.is_holder(&key) {
+            names_by_site.entry(site.id).or_default().insert(key);
         }
     }
+    let rebinds: HashMap<&str, HashSet<String>> = names_by_site
+        .into_iter()
+        .map(|(id, names)| (id, names.iter().flat_map(|n| aliases.members(n)).collect()))
+        .filter(|(_, names): &(&str, HashSet<String>)| !names.is_empty())
+        .collect();
     let writes: HashMap<&str, String> = r
         .record_operations
         .iter()
@@ -120,8 +120,8 @@ fn guarded_operations(r: &ModelRoutine) -> HashMap<String, i64> {
         let mut sites = Vec::new();
         collect(stmt, &mut ops, &mut sites);
         // A rebinding anywhere in the statement ends the guard for all of it.
-        for cs in sites {
-            for name in rebinds.get(cs).into_iter().flatten() {
+        for id in sites.iter().chain(&ops) {
+            for name in rebinds.get(id).into_iter().flatten() {
                 active.remove(name);
             }
         }
