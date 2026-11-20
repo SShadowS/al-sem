@@ -735,6 +735,15 @@ impl<'m> CrossRules<'m> {
         let Some(cs) = step.call else {
             return VariantAcross::Unknown;
         };
+        // A caller with a `with` is opaque to name resolution: the argument's name may be a
+        // field of the `with` receiver (sol on ENG-30).
+        let c = self.row(caller);
+        if crate::program::body::features::names_opaque(
+            c.statement_tree.as_deref(),
+            c.body_available,
+        ) {
+            return VariantAcross::Unknown;
+        }
         if !self.variant_usable(step.to, index) {
             return VariantAcross::Unknown;
         }
@@ -746,7 +755,6 @@ impl<'m> CrossRules<'m> {
         }
         let fold = |s: &str| s.trim().trim_matches('"').fold_identifier();
         let name = fold(&info.text);
-        let c = self.row(caller);
         if let Some(p) = c.parameters.iter().find(|p| fold(&p.name) == name)
             && !p.is_var
             && p.type_text.trim().eq_fold_identifier("variant")
@@ -780,7 +788,14 @@ impl<'m> CrossRules<'m> {
         let Some(p) = r.parameters.iter().find(|p| p.index == index) else {
             return false;
         };
-        if p.is_var || !p.type_text.trim().eq_fold_identifier("variant") {
+        // A callee with a `with`: a use of the parameter's name may be a field (sol on ENG-30).
+        if p.is_var
+            || !p.type_text.trim().eq_fold_identifier("variant")
+            || crate::program::body::features::names_opaque(
+                r.statement_tree.as_deref(),
+                r.body_available,
+            )
+        {
             return false;
         }
         let fold = |s: &str| al_syntax::fold_identifier(s.trim().trim_matches('"'));
@@ -790,32 +805,32 @@ impl<'m> CrossRules<'m> {
         }
         let routines = &self.model.workspace.routines;
         let targets = self.ix.site_targets.get(&row);
-        r.call_sites.iter().all(|cs| {
-            cs.argument_bindings
-                .iter()
-                .filter(|b| b.source_kind == "parameter" && b.source_parameter_index == Some(index))
-                .all(|b| {
-                    let tos = targets.and_then(|m| m.get(cs.id.as_str()));
-                    match tos {
-                        Some(tos) if !tos.is_empty() => tos.iter().all(|&t| {
-                            routines[t]
-                                .parameters
-                                .iter()
-                                .find(|q| q.index == b.parameter_index)
-                                .is_some_and(|q| !q.is_var)
-                        }),
-                        _ => match &cs.callee {
-                            crate::program::body::features::PCallee::Member { method, .. } => {
-                                method.eq_fold_identifier("gettable")
-                            }
-                            crate::program::body::features::PCallee::Bare { name } => {
-                                name.eq_fold_identifier("format")
-                            }
-                            _ => false,
-                        },
+        // Each call passing the parameter (bound or by its text, quoted or not: sol on ENG-30)
+        // keeps it: a resolved callee taking it by value, else `GetTable` or `Format`.
+        let passes_by_value = |cs_id: &str, k: u32| {
+            let Some(cs) = r.call_sites.iter().find(|c| c.id == cs_id) else {
+                return false;
+            };
+            match targets.and_then(|m| m.get(cs.id.as_str())) {
+                Some(tos) if !tos.is_empty() => tos.iter().all(|&t| {
+                    routines[t]
+                        .parameters
+                        .iter()
+                        .find(|q| q.index == k)
+                        .is_some_and(|q| !q.is_var)
+                }),
+                _ => match &cs.callee {
+                    crate::program::body::features::PCallee::Member { method, .. } => {
+                        method.eq_fold_identifier("gettable")
                     }
-                })
-        })
+                    crate::program::body::features::PCallee::Bare { name } => {
+                        name.eq_fold_identifier("format")
+                    }
+                    _ => false,
+                },
+            }
+        };
+        !crate::engine::l4::param_guard::passes_param_unsafely(r, p, passes_by_value)
     }
 
     /// `rule`, a rule in `callee`'s frame, seen from `caller` across `step`.
@@ -1451,7 +1466,12 @@ impl<'m> CrossRules<'m> {
 /// The record-field assignments and mutating operations of `r` (not on a
 /// record known temporary).
 fn own_writes(r: &ModelRoutine) -> Vec<&PAnchor> {
+    // A by-name lookup: in a routine opaque to names the receiver may be a `with` record, so it
+    // proves nothing temporary there (ENG-30, sol r10).
     let temp_var = |var: &str| {
+        if r.names_opaque {
+            return false;
+        }
         let key = var.trim_matches('"').fold_identifier();
         r.record_variables.iter().any(|rv| {
             rv.name.trim_matches('"').fold_identifier() == key
@@ -1474,7 +1494,7 @@ fn own_writes(r: &ModelRoutine) -> Vec<&PAnchor> {
             .iter()
             .filter(|op| {
                 WRITE_OPS.contains(&op.op.fold_identifier().as_str())
-                    && !temp_state_suppresses(op.temp_state.as_ref())
+                    && !temp_state_suppresses(op.temp_state.get(r))
                     && !temp_var(&op.record_variable_name)
             })
             .map(|op| &op.source_anchor),

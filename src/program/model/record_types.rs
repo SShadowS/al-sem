@@ -236,7 +236,7 @@ pub fn resolve_routine_record_types(
             if let Some(tid) = &variable.table_id {
                 op.table_id = Some(tid.to_string());
             }
-            op.temp_state = Some(variable.temp_state.clone());
+            op.temp_state.set(Some(variable.temp_state.clone()));
         }
     }
 
@@ -268,7 +268,8 @@ pub fn resolve_routine_record_types(
         if let Some(element) = crate::record_ops::array_element_type(decl)
             && strip_trailing_temporary(element).len() != element.trim_end().len()
         {
-            op.temp_state = Some(crate::program::body::scope::ts_known(true));
+            op.temp_state
+                .set(Some(crate::program::body::scope::ts_known(true)));
         }
         let Some(table_name) = record_table_name_of(crate::record_ops::receiver_type_of(decl))
         else {
@@ -486,7 +487,7 @@ pub fn resolve_routine_record_types(
             for op in routine.record_operations.iter_mut() {
                 let var_lc = op_variable_lc(&op.record_variable_name);
                 if let Some(ts) = recref_temp.get(&var_lc) {
-                    op.temp_state = Some(ts.clone());
+                    op.temp_state.set(Some(ts.clone()));
                 }
             }
         }
@@ -558,7 +559,8 @@ pub fn resolve_routine_record_types(
         if !always_temp.is_empty() {
             for op in routine.record_operations.iter_mut() {
                 if always_temp.contains(&op_variable_lc(&op.record_variable_name)) {
-                    op.temp_state = Some(crate::program::body::scope::ts_known(true));
+                    op.temp_state
+                        .set(Some(crate::program::body::scope::ts_known(true)));
                 }
             }
         }
@@ -585,7 +587,8 @@ pub fn resolve_routine_record_types(
         let Some(tid) = &op.table_id else { continue };
         let is_temp = symbols.table_by_id(tid).map(|t| t.is_temporary) == Some(true);
         if is_temp {
-            op.temp_state = Some(crate::program::body::scope::ts_known(true));
+            op.temp_state
+                .set(Some(crate::program::body::scope::ts_known(true)));
         }
     }
     for variable in routine.record_variables.iter_mut() {
@@ -624,7 +627,8 @@ pub fn resolve_routine_record_types(
         let guard_receiver = guard_receiver.as_str();
         for op in routine.record_operations.iter_mut() {
             if op.record_variable_name.eq_fold_identifier(guard_receiver) {
-                op.temp_state = Some(crate::program::body::scope::ts_known(true));
+                op.temp_state
+                    .set(Some(crate::program::body::scope::ts_known(true)));
             }
         }
         for variable in routine.record_variables.iter_mut() {
@@ -671,7 +675,8 @@ pub fn resolve_routine_record_types(
             if (name.eq_fold_identifier("rec") && !rec_declared)
                 || (name.eq_fold_identifier("xrec") && !xrec_declared)
             {
-                op.temp_state = Some(crate::program::body::scope::ts_known(true));
+                op.temp_state
+                    .set(Some(crate::program::body::scope::ts_known(true)));
             }
         }
         // The implicit Rec record VARIABLE (d22 FN registration) must agree —
@@ -760,7 +765,7 @@ mod tests {
             record_variable_name: name.to_string(),
             record_variable_id: None,
             table_id: None,
-            temp_state: Some(ts_known(false)),
+            temp_state: crate::program::model::workspace::OpTemp::new(Some(ts_known(false))),
             field_arguments: None,
             source_anchor: PAnchor {
                 source_unit_id: "ws:p.al".into(),
@@ -802,8 +807,8 @@ mod tests {
             resolve_routine_record_types(&mut r, Some(&page), &symbols);
             let got = (
                 r.record_variables[0].temp_state == ts_known(true),
-                r.record_operations[0].temp_state == temp,
-                r.record_operations[1].temp_state == temp,
+                r.record_operations[0].temp_state.get(&r) == temp.as_ref(),
+                r.record_operations[1].temp_state.get(&r) == temp.as_ref(),
             );
             assert_eq!(got, want, "is_implicit_rec = {implicit}");
         }

@@ -583,7 +583,7 @@ pub(crate) fn solve_group<'a>(
         let d = &direct_ops[di];
         let op = d.op;
         let owner = d.routine;
-        let base_pt = resolve_terminal(op, &root, owner.id.as_str(), cw);
+        let base_pt = resolve_terminal(op, &root, owner, cw);
         let verdict = flowfield_verdict(base_pt, op, &ctx.table_by_id);
         let local_depth = op.loop_stack.len() as i64;
         let depth_bucket = local_depth.min(2);
@@ -642,7 +642,7 @@ pub(crate) fn solve_group<'a>(
                     // Reach-based: verdict is caller-independent (constant op, or
                     // a proven PD -> `resolve_terminal` returns Temp without a read).
                     let verdict = flowfield_verdict(
-                        resolve_terminal(op, &TempVec::new(), owner.id.as_str(), cw),
+                        resolve_terminal(op, &TempVec::new(), owner, cw),
                         op,
                         &ctx.table_by_id,
                     );
@@ -677,7 +677,7 @@ pub(crate) fn solve_group<'a>(
                         }
                         let frame: TempVec = std::iter::once((i, f.class)).collect();
                         let verdict = flowfield_verdict(
-                            resolve_terminal(op, &frame, owner.id.as_str(), cw),
+                            resolve_terminal(op, &frame, owner, cw),
                             op,
                             &ctx.table_by_id,
                         );
@@ -1644,7 +1644,7 @@ pub(crate) fn build_terminal_plan<'a>(
             let read = match read_slot {
                 None => {
                     let verdict = flowfield_verdict(
-                        resolve_terminal(op, &TempVec::new(), owner.id.as_str(), cw),
+                        resolve_terminal(op, &TempVec::new(), owner, cw),
                         op,
                         &ctx.table_by_id,
                     );
@@ -1664,7 +1664,7 @@ pub(crate) fn build_terminal_plan<'a>(
                     for (ci, &class) in CLASSES.iter().enumerate() {
                         let frame: TempVec = std::iter::once((i, class)).collect();
                         let verdict = flowfield_verdict(
-                            resolve_terminal(op, &frame, owner.id.as_str(), cw),
+                            resolve_terminal(op, &frame, owner, cw),
                             op,
                             &ctx.table_by_id,
                         );
@@ -2263,7 +2263,7 @@ pub(crate) fn solve_batch<'a>(
             let d = &direct_ops[di];
             let op = d.op;
             let owner = d.routine;
-            let base_pt = resolve_terminal(op, &root, owner.id.as_str(), cw);
+            let base_pt = resolve_terminal(op, &root, owner, cw);
             let verdict = flowfield_verdict(base_pt, op, &ctx.table_by_id);
             let local_depth = op.loop_stack.len() as i64;
             let depth_bucket = local_depth.min(2);
@@ -3176,7 +3176,7 @@ pub(crate) fn score_batch_to_sink<'a>(
             let d = &direct_ops[di];
             let op = d.op;
             let owner = d.routine;
-            let base_pt = resolve_terminal(op, &root, owner.id.as_str(), cw);
+            let base_pt = resolve_terminal(op, &root, owner, cw);
             let verdict = flowfield_verdict(base_pt, op, &ctx.table_by_id);
             let local_depth = op.loop_stack.len() as i64;
             let depth_bucket = local_depth.min(2);
@@ -4058,7 +4058,7 @@ mod tests {
 
         let mut h = routine("H", "procedure");
         let mut op0 = record_op("H/op0", "Modify", "Rec", Some("t/H"), vec![], false);
-        op0.temp_state = Some(ts_pd(0));
+        op0.temp_state.set(Some(ts_pd(0)));
         h.record_operations = vec![op0];
 
         let routines = vec![r, h];
@@ -4117,7 +4117,7 @@ mod tests {
         // downgrade (unresolvable table is conservative), so a Temp-resolved read
         // is `FlowFieldGated`, not `Temporary`.
         let mut op0 = record_op("H/op0", "CalcFields", "Rec", None, vec![], false);
-        op0.temp_state = Some(ts_pd(0)); // PD on param 0 — resolves per caller
+        op0.temp_state.set(Some(ts_pd(0))); // PD on param 0 — resolves per caller
         h.record_operations = vec![op0];
 
         let routines = vec![r, h];
@@ -4873,7 +4873,7 @@ mod tests {
 
         let mut h = routine("H", "procedure");
         let mut op0 = record_op("H/op0", "Modify", "Rec", Some("t/H"), vec![], false);
-        op0.temp_state = Some(ts_pd(0));
+        op0.temp_state.set(Some(ts_pd(0)));
         h.record_operations = vec![op0];
 
         let routines = vec![r, a, b, c, h];

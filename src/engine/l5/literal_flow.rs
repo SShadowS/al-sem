@@ -108,7 +108,11 @@ pub(super) fn flow_domain(type_text: &str) -> Option<FDom> {
     if let Some(i) = values::interface_name(type_text) {
         return Some(FDom::Iface(i));
     }
-    values::domain_of(type_text).map(FDom::Val)
+    // Not Text or Code (ENG-30): the flow evaluates `=` itself, and on Code
+    // `=` compares a literal as written while `case` converts it (ENG-134).
+    values::domain_of(type_text)
+        .filter(|d| !matches!(d, Domain::Text | Domain::Code))
+        .map(FDom::Val)
 }
 
 /// `v` in domain `d` after AL's conversion, when it is modelled. An
@@ -297,13 +301,7 @@ impl FlowProgram {
         writes_of: &mut dyn FnMut(&str, u32) -> Option<ArgWrite>,
     ) -> Option<FlowProgram> {
         let tree = Arc::clone(r.statement_tree.as_ref()?);
-        let mut has_with = false;
-        visit(&tree, &mut |n| {
-            if matches!(n.flow.as_deref(), Some(FlowFact::With)) {
-                has_with = true;
-            }
-        });
-        if has_with {
+        if crate::program::body::features::names_opaque(Some(&tree), r.body_available) {
             return None;
         }
         let mut vars = Vec::new();
@@ -1234,13 +1232,8 @@ pub(super) fn subscriber_changes(
             return true;
         }
     }
-    s.call_sites.iter().any(|cs| {
-        cs.argument_bindings.iter().any(|b| {
-            b.source_kind == "parameter"
-                && b.source_parameter_index == Some(sp.index)
-                && !passes_by_value(&cs.id, b.parameter_index)
-        })
-    })
+    // Bound or by its text, quoted or not (sol on ENG-30): the rule every frame uses.
+    crate::engine::l4::param_guard::passes_param_unsafely(s, sp, passes_by_value)
 }
 
 /// What a guard on a route is (a witness's condition, module doc).
@@ -1436,6 +1429,22 @@ pub(super) fn guards_of<'t>(
 }
 
 impl FlowProgram {
+    /// The (call site, tracked variable) pairs whose call may change the variable
+    /// (`ArgWrite::Havoc`), for `aldump --literal-pruning-stats`: each variable once per call
+    /// site, however many arguments pass it (sol).
+    pub(super) fn havoc_writes(&self) -> usize {
+        self.writes
+            .values()
+            .map(|w| {
+                w.iter()
+                    .filter(|(_, a)| matches!(a, ArgWrite::Havoc))
+                    .map(|(slot, _)| *slot)
+                    .collect::<std::collections::BTreeSet<u16>>()
+                    .len()
+            })
+            .sum()
+    }
+
     /// The tree the program evaluates.
     pub(super) fn tree(&self) -> &PCFNNode {
         &self.tree

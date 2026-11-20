@@ -140,7 +140,7 @@ pub fn detect_d29(
             }
             // A provably-temporary record (in-memory) fires no database triggers,
             // so a Modify/Delete on it cannot re-raise the publisher event.
-            if is_known_temp(op) {
+            if is_known_temp(op, routine) {
                 skipped_temp_record += 1;
                 continue;
             }

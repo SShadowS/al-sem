@@ -140,10 +140,11 @@ const CURSOR_OPENER_OPS: [&str; 4] = ["FindSet", "FindFirst", "FindLast", "Find"
 /// The terminal op's `temp_state` as a [`TempStateKind`] (the resolver's input).
 /// A `None` temp_state → `Unknown` (al-sem always sets `{kind:"unknown"}` for
 /// untracked ops, so the absence maps the same way). Test-only: the production
-/// path resolves temp-ness via `d1_temp`'s forward vector, not this.
+/// path resolves temp-ness via `d1_temp`'s forward vector, not this. `owner`
+/// holds `op`; no owner reads as `Unknown`.
 #[cfg(test)]
-fn op_temp_state_kind(op: &ModelRecordOperation) -> TempStateKind {
-    match &op.temp_state {
+fn op_temp_state_kind(op: &ModelRecordOperation, owner: Option<&ModelRoutine>) -> TempStateKind {
+    match owner.and_then(|r| op.temp_state.get(r)) {
         Some(ts) => TempStateKind::from_p_temp_state(ts),
         None => TempStateKind::Unknown,
     }
@@ -478,7 +479,7 @@ fn build_finding(
     // intra-callee shape) — see `closed_world_temp`.
     let resolved = resolve_temp_along_path_closed_world(
         &result.path,
-        op_temp_state_kind(terminal_op),
+        op_temp_state_kind(terminal_op, terminal_routine),
         routine_by_id,
         &crate::program::model::projection::ArmRows::default(),
         edge_kind_by_callsite,
@@ -1342,7 +1343,7 @@ fn enumerate_direct_ops<'a>(
             // genuinely downgrade.
             let flowfield_gated_direct = FLOWFIELD_GATED_OPS.contains(&op.op.as_str())
                 && flowfield_gate_blocks_downgrade(op, &ctx.table_by_id);
-            if is_known_temp(op) && !flowfield_gated_direct {
+            if is_known_temp(op, routine) && !flowfield_gated_direct {
                 s.downgraded_to_info += 1;
             }
             out.push(DirectOp {
@@ -2364,7 +2365,7 @@ mod memo_tests {
             record_variable_name: "Rec".to_string(),
             record_variable_id: None,
             table_id: None,
-            temp_state: None,
+            temp_state: crate::program::model::workspace::OpTemp::new(None),
             field_arguments: None,
             source_anchor: crate::program::body::features::PAnchor {
                 source_unit_id: "ws:test".into(),
@@ -2782,7 +2783,7 @@ mod shadow_tests {
 
         let mut h = routine("H", "procedure");
         let mut op0 = record_op("H/op0", "Modify", "Rec", Some("t/H"), vec![], false);
-        op0.temp_state = Some(ts_pd(0));
+        op0.temp_state.set(Some(ts_pd(0)));
         h.record_operations = vec![op0];
 
         let routines = vec![r, h];

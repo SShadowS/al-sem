@@ -275,6 +275,8 @@ pub(crate) fn dep_routine_to_l3(r: &ProjectedRoutine, object_type: &str) -> Mode
         table_event_exits: Default::default(),
         recordref_bindings: Vec::new(),
         field_ref_operations: Vec::new(),
+        // No tree: opaque only if a body were claimed (the stored flag must match it, ENG-30).
+        names_opaque: crate::program::body::features::names_opaque(None, r.body_available),
     }
 }
 

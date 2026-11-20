@@ -137,6 +137,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   Stress: the suite 20 times in a row beside full nextest runs, zero failures (see TLS-102).
 
+### Added (`aldump --literal-pruning-stats`: one measure of what the literal pruning knows and proves)
+
+- **What it prints** (`engine::l5::literal_reach::stats`, deterministic JSON). Over the
+  workspace's model, totals counting each stable routine id once (all its `#if` arms):
+  - guard frames (Boolean parameters), value frames (r3 E1; the usable parameters by domain) and
+    flow programs (r3 E2): the routines with one and the usable or bound parameters;
+  - the parameters a WRITE leaves unusable: those passing every other test of their frame
+    (by-value, never assigned, not a loop variable, a control tree) yet unusable because a call
+    may write them, per frame; and E2's (call site, tracked variable) pairs a call may change;
+  - one-hop pruning: over the search's own edges, as it takes them from an empty caller state (an
+    edge dead there is never taken; an object run or event edge carries no bindings), the
+    bindings it derives (no caller context: literal and label arguments, the caller's own
+    records' tables, its flow, the callee instance's globals), and the callee sites (every arm)
+    those prove dead that no binding does, in total and by frame.
+- **Why:** each change to the pruning (ENG-30, ENG-135, ENG-132..134) reports its own move by
+  running it before and after, instead of a counter per task. Pinned by
+  `cli_literal_pruning_stats` (a hand-stated fixture: each count is what its shapes give; two
+  runs print the same bytes).
+
 ### Fixed (ENG-131: identifiers fold exactly as the AL compiler compares them, the same for binding, graph nodes and stable ids)
 
 - **The wrong answer** (found by Fable reviewing ENG-90). Binding and graph node ids folded names
@@ -763,6 +782,155 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     the crash.
   - The owner can confirm that no new entry appears in `coredumpctl list` after a debug test
     run.
+
+### Added (ENG-30: built-in option types and Text/Code literals prune `case` and `if` arms)
+
+- **The gap (engine limits L4, L29).** The literal reach prunes an arm a bound parameter value
+  cannot take (r3 E1). It knew only Integer, Option and Enum values. A parameter of a built-in
+  option type (`Verbosity`, `TelemetryScope`, `DataClassification`, `ObjectType`, …) or of Text
+  or Code kept every arm live, so a caller passing `Verbosity::Error` still reached the
+  `Verbosity::Warning` arm.
+- **Built-in option types.** They are now value domains, compared by member name as an enum is
+  (`literal_values::domain_of`, the existing `arg_dispatch::BUILTIN_OPTION_TYPES` list). Two
+  compiler facts make that sound, both read from alc 18.0.41:
+  - a `case` on one takes only `T::M` labels (an integer label is AL0122);
+  - the compiler's own type symbols give every member of all 26 types its own ordinal, so two
+    names never denote one value.
+- **Text and Code.** They are value domains too, for parameters, by rules measured on BC 28.4
+  (Linux sidecar; Windows confirmation pending, ENG-133):
+  - **Text** compares exactly: case and spaces count.
+  - **Code** holds a literal trimmed and upper case. A `case` arm and an `in` label are
+    converted the same way. `=` and `<>` compare a label as written: `'ABC' = 'abc'` is false
+    and `'ABC' <> 'abc'` is true. The IR does not tell `in` from `=`, so on Code an `if` label
+    is used only when conversion leaves it unchanged (ENG-132 carries the operator).
+  - Only ASCII literals take part (ENG-133 measures the rest).
+  - A text literal is now a value label (`ValueLabel::Text`), read from its raw text so `''` is
+    one quote. The within-routine flow does not track Text or Code locals yet (ENG-134).
+- **What can write a Text parameter (review).** A Text or Code parameter keeps its literal only
+  while nothing can write it:
+  - An element write `T[1] := 'B'` is now an assignment of `T` (`ir_walk::lhs_base_name`).
+  - A platform method can write a text through a `var` (`InStream.ReadText`,
+    `HttpContent.ReadAs`, `Dictionary.Get`, `JsonObject.WriteTo`, …). So any platform call taking
+    a Text/Code parameter makes it unusable, except 15 read-only functions (`StrLen`, `CopyStr`,
+    `Format`, `StrSubstNo`, …).
+  - alc 18.0.41 compiles each of the 15 with literals in every position. It refuses a literal
+    where a `var` is wanted (AL0130), checked on `Evaluate`.
+  - The same writer gap for Integer, Option and Enum parameters is older; ENG-135 replaces both
+    hand lists with the compiler's own parameter var-ness.
+- **Two holes older than ENG-30 that its new domains made prune more (sol).**
+  - A QUOTED argument hid a write: the call's argument bindings recorded only unquoted names,
+    so `SetB("T")` into a `var` (or a `var` event subscriber) left the parameter `T` usable.
+    Bindings now take a quoted name as the same symbol (`ir_walk`, `bare_name`'s fold; this is
+    ENG-138's core, absorbed).
+  - Under `with R do`, an unqualified name may be one of R's fields, but a `case T of` there was
+    bound to the parameter `T`, and `Check(T)` there forwarded the parameter's value to the
+    callee. Inside a `with` body no fact that reads a name as a condition (guard, junction,
+    value test, `case` scrutinee) is emitted any more, a call argument binds to no symbol, and an
+    argument that names something (a variable, a quoted name, a bare `Type::Item` that may be
+    R's option field) keeps its text but no value in the call's argument infos, so no reader
+    re-reads the name (the Variant routes did, sol round 3). And since raw argument TEXTS are
+    read by name too (the table lookup of a passed record, the RecordRef flow; sol round 4), a
+    routine with a `with` is OPAQUE to the literal pruning's name resolution, by one test every
+    entry calls (`features::names_opaque`; also true for a body whose tree was dropped as
+    untrusted, ENG-14, since its call sites remain: sol round 5): its calls bind nothing, its
+    guard, value and table frames and exit guards are not taken (so no caller's literal decides
+    its own rules), the RecordRef flow fixes its variables to "anything" and reads no name in it
+    (`atoms_of`, `val_of_text`: arguments, callee effects, self-call summaries), the Variant
+    routes refuse it, and E2 builds no program for it (as before). Two older readers that could
+    hide a write take the same rule (sol round 6): G36's field guard (`field_guard`) is not taken
+    in an opaque routine (an alias of the guarded RecordRef rebound inside a `with` was missed),
+    and a call's receiver temp state is unknown under `with` (a bare table-method call may run on
+    the `with` record, so a temporary `Rec` no longer suppresses its write in d1's temp proof).
+    The model's last word (sol round 7): an L3 step clears every binding and receiver temp state
+    of an opaque routine after the object-global backfill, which had refilled them, and an
+    invariant over the FINAL model (`workspace::opaque_binding_violations`) is asserted at the
+    end of `attach_program_calls` in every debug build (each test, and the `alsem` the CLI tests
+    run), on every r0 fixture (`opaque_routines_bind_nothing`) and on CDO
+    (`eng14_cdo_untrusted_census`), so a later step that refills them fails at once. The same
+    for record operations (sol round 8: the RecordRef temp derivation in `record_types` stamped
+    `Ref.Modify()` temporary from `Ref.GetTable(Tmp)` though an alias was rebound to a physical
+    record inside a `with`; a bare `DeleteAll()` inside `with` took `Rec`'s state by name):
+    `attach_program_calls` sets every operation's temp state in an opaque routine to unknown
+    after every pass that derives one, and the invariant includes it (and
+    `caller_source_parameter_is_var`). Argument infos and condition facts stay in the model;
+    their readers refuse an opaque routine (the frames' and E2's checks, `TxtWith`, `VarWith`).
+    Closed on the read side (sol round 9: the adapter's table-event edges read an op's temp state
+    before that last clearing, so a subscriber exiting on a temporary record lost its edge;
+    FieldRef operations escaped the clearing): an operation's temp state is an `OpTemp` whose
+    value is private, read only by `OpTemp::get(routine)`, which answers `unknown` when the
+    routine is opaque (`ModelRoutine::names_opaque`, computed once where the row is built, so a
+    read is a field check), whatever the order of passes. The resolver's by-name
+    `record_temporary` is dropped there too, and so is `cross_rules`' by-name temporary-variable
+    check of a routine's own writes (sol round 10: a write on `Tmp` inside a `with` was dropped,
+    so the error after it passed to callers as a pre-write check; `TmpRuleRoot` pins it). The
+    clearing and the invariant stay (belt and
+    braces), now over FieldRef operations, and the invariant flags a stale `names_opaque`. Sound
+    but blunt: an unambiguous temporary receiver outside the `with`, and a platform operation
+    whose temp state comes from table metadata, read `unknown` in such a routine; exact
+    with-scope resolution (ENG-143) gives them back.
+    Goldens: `ws-with-receiver` (`with R do begin Insert(); Modify; end;`) moves in r3a2, r3a3
+    and the policy-facts oracle, its two writes' temp state going from known physical to
+    unknown (`prove` still `yes`); nothing else moved. On CDO the rule reaches the untrusted
+    bodies (ENG-14's census): the L4 frozen digest moves (956 routines inherit two `Get`s of
+    `CDO E-Mail::SetSendingMethodAndFromAddress` going known physical to unknown; nothing added
+    or removed; README re-freeze log), and RunReportID may write one more table, System App's
+    `Email Account`, whose temporary-record `Delete` in the untrusted Email Accounts page
+    routine is now unknown (412 -> 413 tables in its explain, query and digest renderings);
+    IssueReminder's literal arguments already rule that table out (273 -> 274). No write
+    disappears.
+    Write detection keeps the texts, so a call that may write a variable is still seen. An
+    explicit `Enum::"E"::Member` keeps its value. Resolving with-scope names as alc does is
+    ENG-143. A write
+    through such an argument is still seen: one rule, `param_guard::passes_param_unsafely`
+    (bound, or the argument text is the parameter's name, quoted or not), now serves the guard
+    frame, the value frame, E2's subscriber check and the Variant routes. Resolving R's fields
+    (binding where R's table has no field of that name) is ENG-141's. alc 18.0.41 still accepts
+    `with` (AL0606 is a warning).
+  - Tests: `TxtQuoted`, `TxtWith`, `TxtWithFwd`, `TxtWithWrite`, `VarWith`, `TabWith`,
+    `TabWithUntrusted`, G36's `AliasWith`, `a_bare_table_method_under_with_runs_on_the_with_record`
+    (`DoIt`, a bare call inside `with Phys do`, and `DoGlobal`, a temporary object global
+    called inside a `with`, whose temporary state the backfill gave back: each `yes` with
+    `tempState: unknown` evidence; `BareWith` the same; `RefWith` `unknown`; without either
+    clearing step the debug `alsem` stops on the model invariant; `TmpWith`, a temporary
+    `Tmp.Insert()` inside a `with` with a table subscriber exiting on `Rec.IsTemporary`, `yes`,
+    `no` without either the accessor or the `record_temporary` drop;
+    `field_ref_temp_state_is_unknown_in_an_opaque_routine`, a FieldRef `CalcField` over a
+    RecordRef opened temporary, known temporary outside a `with` and unknown inside one; the
+    accessor alone is masked there by the last clearing, both broken stop on the invariant)
+    (each fails exactly when its fix is removed; the opacity checks behind
+    `bind_m` and the condition-fact gate, including the frames' own and `a_callee_with_keeps_its_rule`'s,
+    are a second line, so each alone is not separately observable), `CodeIn` (a lowercase label left unresolved as `=` is, an uppercase one pruned),
+    and the Dictionary and InStream reads seeded so the write really happens.
+- **Tests.**
+  - `cli_prove_value_guards` runs `prove` through the CLI:
+    - `a_builtin_option_parameter_compares_by_member_name`;
+    - `text_and_code_parameters_compare_by_the_measured_rules`;
+    - `a_text_parameter_something_writes_binds_nothing`.
+  - `features::value_label_shapes` covers the label.
+  - Seven discrimination proofs, all red.
+- **Golden.** `tests/ir-l2-goldens/l2_features.snapshot` moved one line: `ws-d60`'s
+  `UpgradeWithCase` has a `case … of '':` arm, whose label is now `Text("")` (triaged before the
+  regen).
+- **Measured on CDO** (`bc3ccb18`): `aldump --literal-pruning-stats`, release-fast, master with
+  the counter (`b46e6174`) against ENG-30 (`d6cba139`; the final head adds only tests and this
+  file), 34,203 routines:
+
+  | | master | ENG-30 |
+  |---|---:|---:|
+  | value frames: usable parameters | 3,814 | 7,876 |
+  | — by domain: Enum / Integer / Code / Text | 703 / 3,111 / – / – | 763 / 3,105 / 2,469 / 1,539 |
+  | value frames: parameters unusable by a write | 2,105 | 5,892 |
+  | value frames: routines with a frame | 2,924 | 4,835 |
+  | guard frames: usable parameters | 4,178 | 4,178 |
+  | flow: parameters bound | 520 | 526 |
+  | flow: routines with a program | 5,308 | 5,360 |
+  | one hop: calls binding a parameter (of 63,795) | 6,051 | 7,074 |
+  | one hop: dead sites | 6,542 | 6,616 |
+  | — by value | 3,977 | 4,051 |
+
+  The new Text and Code domains make 4,008 parameters usable as values, and the write rules
+  (review) exclude 3,787 more. 74 more call sites are proven dead by a value. Peak RSS 3.63 /
+  3.65 GB. The guard frames are unchanged; ENG-135 moves those.
 
 ### Changed (ENG-120: mimalloc's `purge_delay` measured on CDO and DO, kept at 0)
 

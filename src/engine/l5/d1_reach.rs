@@ -543,7 +543,7 @@ pub(crate) fn process_group<'g, 'a>(
         let d = &direct_ops[di];
         let op = d.op;
         let owner = d.routine;
-        let base_pt = resolve_terminal(op, &root, owner.id.as_str(), cw);
+        let base_pt = resolve_terminal(op, &root, owner, cw);
         let verdict = flowfield_verdict(base_pt, op, &ctx.table_by_id);
         let local_depth = op.loop_stack.len() as i64;
         let depth_bucket = local_depth.min(2);
@@ -578,7 +578,7 @@ pub(crate) fn process_group<'g, 'a>(
         for t in &graph.terminals[node as usize] {
             let op = t.op;
             let owner = t.owner;
-            let base_pt = resolve_terminal(op, &label.temp_vec, owner.id.as_str(), cw);
+            let base_pt = resolve_terminal(op, &label.temp_vec, owner, cw);
             let verdict = flowfield_verdict(base_pt, op, &ctx.table_by_id);
             let total_scoring = (label.depth_bucket + t.local_depth).min(2);
             let is_singleton = is_setup_singleton_get(op, Some(owner), &ctx.table_by_id);
@@ -1156,7 +1156,7 @@ mod tests {
 
         let mut h = routine("H", "procedure");
         let mut op0 = record_op("H/op0", "Modify", "Rec", Some("t/H"), vec![], false);
-        op0.temp_state = Some(ts_pd(0)); // PD on param 0 — resolves per caller
+        op0.temp_state.set(Some(ts_pd(0))); // PD on param 0 — resolves per caller
         h.record_operations = vec![op0];
 
         let routines = vec![r, h];

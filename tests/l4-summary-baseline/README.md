@@ -296,6 +296,18 @@ CDO_WS=<path> ENFORCE_CDO_WS=1 L4_CANONICAL_DUMP=/tmp/l4-cdo.txt \
   `…/rv/<name>` and `…/grv/<name>` reduced to its name, the two renderings are byte-identical, so
   no effect, uncertainty, temp state, table or ordering moved: only the id.
   (The digest was written from the head dump's printed value, not by a regen.)
+- **2026-11-20, ENG-30** (`alsem/eng-30-p1-fixes`, the `with`/untrusted opacity rule, sol
+  rounds 7 to 10). Whole-program `f0ce9548…` -> `79c0363f…`. Measured by dumping the canonical
+  serialization (`L4_CANONICAL_DUMP`, `cdo` profile) at master + the counter `b46e6174`
+  (matches the old digest) and at the branch head `d6cba139`. 5479 routines on both sides,
+  none added or removed. 956 routines differ, each only in effects whose temp state goes from
+  `Known(false)` to `Unknown` (1,912 effects, each with its `effectKey` suffix `|f` -> `|u`).
+  Every one of them comes from ONE routine's operations: `CDO E-Mail::SetSendingMethodAndFromAddress`,
+  the single-app model's only routine opaque to names (its body is untrusted, ENG-14/ENG-79: no
+  tree), whose two own `Get`s (tables 6175281 and 6175308) are now `Unknown`
+  (`OpTemp::get` answers `unknown` for an opaque routine), carried into its 956 callers. No
+  effect, table or ordering moved otherwise. (The digest was written from the head dump's
+  printed value, not by a regen.)
 - **2026-11-14, ENG-19** (`alsem/eng-19-request-page-runs`, engine limits L20). Whole-program
   `fde6e4f3…` -> `b2624796…`; reverse index unchanged. Measured by dumping the canonical
   serialization (`L4_CANONICAL_DUMP`) at master `6852a891` (matches the old digest) and at the

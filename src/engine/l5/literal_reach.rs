@@ -77,6 +77,10 @@ pub(crate) mod values;
 #[path = "literal_flow.rs"]
 mod lflow;
 
+/// `aldump --literal-pruning-stats` (the pruning's whole-workspace counts).
+#[path = "literal_stats.rs"]
+pub mod stats;
+
 #[cfg(test)]
 #[path = "literal_flow_tests.rs"]
 mod lflow_tests;
@@ -904,6 +908,11 @@ struct TableFrame {
 fn table_frame(r: &ModelRoutine) -> Option<TableFrame> {
     use crate::program::body::features::PCallee;
     let tree = r.statement_tree.as_ref()?;
+    // A routine with a `with` is opaque to name resolution (sol on ENG-30): a receiver or
+    // argument named in it may be the `with` receiver's field.
+    if crate::program::body::features::names_opaque(Some(tree), r.body_available) {
+        return None;
+    }
     let lc = |s: &str| s.trim().trim_matches('"').fold_identifier();
     // R (folded) -> the parameter index its one GetTable reads.
     let mut bound: HashMap<String, u32> = HashMap::new();
@@ -1088,15 +1097,41 @@ fn walk_tables(
     }
 }
 
+/// The platform functions known not to write a Text or Code argument: alc
+/// 18.0.41 compiles each with literals in every position, and refuses a
+/// literal where a `var` is wanted (AL0130, checked on `Evaluate`). Many
+/// platform methods do write a text through a `var` (`InStream.ReadText`,
+/// `HttpContent.ReadAs`, `Dictionary.Get`, `JsonObject.WriteTo`, …), so for
+/// Text and Code every other one is taken to write (ENG-30).
+const TEXT_READ_ONLY_BUILTINS: &[&str] = &[
+    "strlen",
+    "copystr",
+    "uppercase",
+    "lowercase",
+    "strpos",
+    "format",
+    "strsubstno",
+    "delchr",
+    "padstr",
+    "selectstr",
+    "convertstr",
+    "incstr",
+    "message",
+    "error",
+    "confirm",
+];
+
 /// r3 E1: whether call site `cs_id` of `r` passes argument `arg` by value: every
 /// routine it reaches takes that parameter by value, or, reaching none, the
-/// resolver classified it as a platform method other than `Evaluate` and
-/// `Clear` (which write their argument). A call the resolver did not resolve
-/// may write it.
+/// resolver classified it as a platform method that does not write it: for a
+/// Text or Code argument (`text`) one of [`TEXT_READ_ONLY_BUILTINS`], else one
+/// other than `Evaluate` and `Clear`. A call the resolver did not resolve may
+/// write it.
 fn value_passes_by_value(
     r: &ModelRoutine,
     cs_id: &str,
     arg: u32,
+    text: bool,
     callees: &HashMap<&str, Vec<&str>>,
     builtin_sites: &HashSet<&str>,
     by_id: &HashMap<&str, &ModelRoutine>,
@@ -1123,6 +1158,9 @@ fn value_passes_by_value(
                     _ => String::new(),
                 })
                 .unwrap_or_default();
+            if text {
+                return TEXT_READ_ONLY_BUILTINS.contains(&name.as_str());
+            }
             !matches!(name.as_str(), "evaluate" | "clear")
         }
     }
@@ -1390,8 +1428,9 @@ fn keep_verdict(
         if !s.body_available || s.statement_tree.is_none() {
             return None;
         }
-        let passes =
-            |cs: &str, a: u32| value_passes_by_value(s, cs, a, callees, builtin_sites, by_id);
+        let passes = |cs: &str, a: u32| {
+            value_passes_by_value(s, cs, a, false, callees, builtin_sites, by_id)
+        };
         if lflow::subscriber_changes(s, &name, &passes) {
             return None;
         }
@@ -2205,8 +2244,8 @@ impl<'a> LiteralReach<'a> {
                     }
                 }
             }
-            let passes_by_value = |cs_id: &str, arg: u32| {
-                value_passes_by_value(r, cs_id, arg, &callees, &builtin_sites, &by_id)
+            let passes_by_value = |cs_id: &str, arg: u32, text: bool| {
+                value_passes_by_value(r, cs_id, arg, text, &callees, &builtin_sites, &by_id)
             };
             let resolve = |l: &crate::program::body::features::ValueLabel| {
                 values::resolve_label(r, &tables_by_id, l)
@@ -2589,6 +2628,14 @@ impl<'a> LiteralReach<'a> {
         else {
             return Bindings::default();
         };
+        // A caller opaque to names (a `with`, or a body with no tree) binds nothing: an
+        // argument named there may be a field of a `with` receiver (sol on ENG-30).
+        if crate::program::body::features::names_opaque(
+            r.statement_tree.as_deref(),
+            r.body_available,
+        ) {
+            return Bindings::default();
+        }
         let forwarded = |j: u32| {
             cs.argument_bindings
                 .iter()

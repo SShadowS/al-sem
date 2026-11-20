@@ -4,24 +4,22 @@
       "routineId": "11111111-0000-0000-0000-000000abc210:Codeunit:50108#ac1e52074481f48b63d44cfb2bbd0e46c6bed856e9f8d97b1b0c2edb9839d536",
       "dbEffects": [
         {
-          "effectKey": "Insert|11111111-0000-0000-0000-000000abc210:Table:50100|11111111-0000-0000-0000-000000abc210:Codeunit:50108#ac1e52074481f48b63d44cfb2bbd0e46c6bed856e9f8d97b1b0c2edb9839d536/op0|f",
+          "effectKey": "Insert|11111111-0000-0000-0000-000000abc210:Table:50100|11111111-0000-0000-0000-000000abc210:Codeunit:50108#ac1e52074481f48b63d44cfb2bbd0e46c6bed856e9f8d97b1b0c2edb9839d536/op0|u",
           "op": "Insert",
           "tableId": "11111111-0000-0000-0000-000000abc210:Table:50100",
           "operationId": "11111111-0000-0000-0000-000000abc210:Codeunit:50108#ac1e52074481f48b63d44cfb2bbd0e46c6bed856e9f8d97b1b0c2edb9839d536/op0",
           "tempState": {
-            "kind": "known",
-            "value": false
+            "kind": "unknown"
           },
           "via": "direct"
         },
         {
-          "effectKey": "Modify|11111111-0000-0000-0000-000000abc210:Table:50100|11111111-0000-0000-0000-000000abc210:Codeunit:50108#ac1e52074481f48b63d44cfb2bbd0e46c6bed856e9f8d97b1b0c2edb9839d536/op1|f",
+          "effectKey": "Modify|11111111-0000-0000-0000-000000abc210:Table:50100|11111111-0000-0000-0000-000000abc210:Codeunit:50108#ac1e52074481f48b63d44cfb2bbd0e46c6bed856e9f8d97b1b0c2edb9839d536/op1|u",
           "op": "Modify",
           "tableId": "11111111-0000-0000-0000-000000abc210:Table:50100",
           "operationId": "11111111-0000-0000-0000-000000abc210:Codeunit:50108#ac1e52074481f48b63d44cfb2bbd0e46c6bed856e9f8d97b1b0c2edb9839d536/op1",
           "tempState": {
-            "kind": "known",
-            "value": false
+            "kind": "unknown"
           },
           "via": "direct"
         }

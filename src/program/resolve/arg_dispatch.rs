@@ -281,8 +281,9 @@ pub(crate) enum LiteralKind {
 }
 
 /// AL's built-in option types, folded: a `T::V` value of one types as `T`'s
-/// base keyword ([`base_keyword`]), as a parameter declared `T` does.
-const BUILTIN_OPTION_TYPES: &[&str] = &[
+/// base keyword ([`base_keyword`]), as a parameter declared `T` does. Also
+/// the literal reach's value domains (`literal_values::domain_of`).
+pub(crate) const BUILTIN_OPTION_TYPES: &[&str] = &[
     "action",
     "clienttype",
     "commitbehavior",

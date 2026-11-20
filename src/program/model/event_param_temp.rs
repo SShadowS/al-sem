@@ -185,9 +185,10 @@ pub fn prove_event_param_temps(resolved: &mut Model) {
                 std::sync::Arc::make_mut(rv).temp_state = known_temp();
             }
         }
+        let opaque = s.names_opaque;
         for op in &mut s.record_operations {
-            if op.temp_state.as_ref().is_some_and(|t| is_pd(t, j)) {
-                op.temp_state = Some(known_temp());
+            if op.temp_state.get_with(opaque).is_some_and(|t| is_pd(t, j)) {
+                op.temp_state.set(Some(known_temp()));
             }
         }
         for cs in &mut s.call_sites {

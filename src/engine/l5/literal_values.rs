@@ -1,4 +1,5 @@
-//! r3 E1: Integer, Option and Enum values in the literal reach (n10).
+//! r3 E1: Integer, Option, Enum, built-in option, Text and Code values in the
+//! literal reach (n10; ENG-30).
 //!
 //! Continia DO's `DocSave` passes `OutputAction::SaveAsPDF` into `RunReport`'s
 //! Integer parameter `OutputActionInt`, which `RunReportID` reads as `case
@@ -14,19 +15,26 @@
 //! no reached state lets it run (the reach's own rule).
 //!
 //! **What binds a parameter.** A parameter is USABLE ([`value_frame`]) when it
-//! is by value, of type Integer, BigInteger, Option or Enum, never assigned
-//! (compound assignment included), never a `for`/`foreach` variable, and every
-//! call it is passed to is a known routine taking it by value, or a platform
-//! method other than `Evaluate` and `Clear` (a call the resolver did not
-//! resolve makes it unusable). A call binds it when its argument is an integer
+//! is by value, of type Integer, BigInteger, Option, Enum, a built-in option
+//! type (`Verbosity`, `TelemetryScope`, …), Text or Code ([`domain_of`]); never
+//! assigned (compound assignment and an element write `T[1] := c` included);
+//! never a `for`/`foreach` variable; and every call it is passed to is a known
+//! routine taking it by value, or a platform method that does not write it
+//! (for Text and Code one of `literal_reach`'s read-only functions, else one
+//! other than `Evaluate` and `Clear`; a call the resolver did not resolve
+//! makes it unusable). A call binds it when its argument is an integer or text
 //! literal, a label ([`resolve_label`]), or the caller's own bound parameter.
 //!
 //! **Comparison.** Values are kept in the domain of the parameter
 //! ([`Domain`]): an Integer or Option parameter holds ordinals (an Option
-//! member's position, blank members counted); an Enum parameter holds (enum
-//! name, value name). An Enum label against an Integer or Option parameter, an
-//! Integer against an Enum parameter, or a label of another enum, is a
-//! conversion this module does not model: the label is unresolved.
+//! member's position, blank members counted); an Enum or built-in option
+//! parameter holds (type name, member name); a Text parameter holds its text
+//! as written, a Code parameter its text trimmed and upper case (an `if`
+//! label on Code only when that leaves it unchanged: [`Domain::Code`]); only
+//! ASCII text. An Enum label against an Integer or Option parameter, an
+//! Integer against an Enum parameter, a label of another enum, or a text
+//! against a number or enum (or the reverse), is a conversion this module does
+//! not model: the label is unresolved.
 //!
 //! **Where it prunes.** `case P of`, `if P = L`, `if P <> L`, `if P in [..]`
 //! (and an `if … then exit;` of those for what follows it): an arm is dead
@@ -59,6 +67,16 @@ pub(super) enum Val {
     /// type keyword folded (`record`, `recordref`, `codeunit`, …; see
     /// [`variant_test`]). The within-routine flow's values only.
     Type(Arc<str>),
+    /// ENG-30: a Text value, or a Code value (already trimmed and upper
+    /// case: [`to_code`]). ASCII only ([`in_domain`]).
+    Text(Arc<str>),
+}
+
+/// A text as a Code value holds it: leading and trailing spaces dropped,
+/// letters upper case (measured on BC 28.4: a `Code[20]` parameter given
+/// `' ab '` matches the arm `'AB'`). ASCII input only.
+fn to_code(s: &str) -> String {
+    s.trim_matches(' ').to_ascii_uppercase()
 }
 
 /// The static types whose `Variant` type tests [`variant_test`] decides.
@@ -212,8 +230,21 @@ pub(super) type VSet = Arc<[Val]>;
 pub(super) enum Domain {
     /// Integer, BigInteger or Option: ordinals.
     Int,
-    /// Enum of this name (folded, last namespace segment).
+    /// Enum of this name (folded, last namespace segment), or a built-in
+    /// option type of this name.
     Enum(Arc<str>),
+    /// ENG-30: Text (`Text`, `Text[n]`): values compared exactly, case and
+    /// spaces counting (BC 28.4 Linux sidecar: `'ABC'` takes the `'ABC'` arm,
+    /// not `'abc'`; `'ab '` is not `'ab'`; Windows confirmation pending,
+    /// ENG-133).
+    Text,
+    /// ENG-30: Code (`Code[n]`): a value is held as [`to_code`] gives it. A
+    /// `case` arm or `in` label is converted the same way; an `=` / `<>`
+    /// label is compared as written (BC 28.4 Linux sidecar: `'ABC'` takes the
+    /// arm `'abc'` and is `in ['abc']`, but `'ABC' = 'abc'` is false; Windows
+    /// confirmation pending, ENG-133). An `if` label conversion would change
+    /// is unresolved until the IR tells `in` from `=` (ENG-132).
+    Code,
 }
 
 /// A value requirement in one routine's frame: (parameter index, whether the
@@ -295,7 +326,8 @@ pub(super) fn enum_name(type_text: &str) -> Option<Arc<str>> {
 }
 
 /// The domain of a parameter of type `type_text`; `None` when the type is
-/// none of Integer, BigInteger, Option or Enum.
+/// none of Integer, BigInteger, Option, Enum, a built-in option type, Text or
+/// Code.
 pub(super) fn domain_of(type_text: &str) -> Option<Domain> {
     let t = type_text.trim();
     if t.eq_fold_identifier("integer") || t.eq_fold_identifier("biginteger") {
@@ -304,7 +336,44 @@ pub(super) fn domain_of(type_text: &str) -> Option<Domain> {
     if option_members(t).is_some() {
         return Some(Domain::Int);
     }
+    if let Some(name) = builtin_option(t) {
+        return Some(Domain::Enum(name));
+    }
+    if let Some(d) = text_domain(t) {
+        return Some(d);
+    }
     enum_name(t).map(Domain::Enum)
+}
+
+/// `Text`, `Text[n]` or `Code[n]` (`Code` too): [`Domain::Text`] or
+/// [`Domain::Code`]. Not `TextBuilder`, `TextConst` or `Code Coverage`.
+fn text_domain(t: &str) -> Option<Domain> {
+    let folded = t.fold_identifier();
+    let len_or_end = |rest: &str| {
+        let rest = rest.trim_start();
+        rest.is_empty() || rest.starts_with('[')
+    };
+    if let Some(rest) = folded.strip_prefix("text") {
+        return len_or_end(rest).then_some(Domain::Text);
+    }
+    folded
+        .strip_prefix("code")
+        .filter(|r| len_or_end(r))
+        .map(|_| Domain::Code)
+}
+
+/// A built-in option type (`Verbosity`, `TelemetryScope`, `ObjectType`, …;
+/// `arg_dispatch::BUILTIN_OPTION_TYPES`), folded. Its values are compared
+/// by member name, as an enum's are: a `case` on one takes only `T::M`
+/// labels (alc 18.0.41: an integer label is AL0122), and the compiler gives
+/// every member its own ordinal (ENG-30, read from its type symbols for all
+/// 26 types), so two names never denote one value. `T::M` resolves to
+/// [`Val::Enum`]`(t, m)` ([`resolve_label`]'s no-variable path).
+fn builtin_option(type_text: &str) -> Option<Arc<str>> {
+    let t = type_text.trim().fold_identifier();
+    crate::program::resolve::arg_dispatch::BUILTIN_OPTION_TYPES
+        .contains(&t.as_str())
+        .then(|| Arc::from(t))
 }
 
 /// `v` in domain `d` after AL's conversion, when this module models it.
@@ -314,7 +383,22 @@ pub(super) fn in_domain(v: &Val, d: &Domain) -> Option<Val> {
         (Val::Enum(e, m), Domain::Enum(want)) if e == want => {
             Some(Val::Enum(Arc::clone(e), Arc::clone(m)))
         }
+        // ASCII only: non-ASCII case and comparison rules are not measured
+        // yet (BC on Linux compares with ICU; ENG-133).
+        (Val::Text(s), Domain::Text) if s.is_ascii() => Some(Val::Text(Arc::clone(s))),
+        (Val::Text(s), Domain::Code) if s.is_ascii() => Some(Val::Text(Arc::from(to_code(s)))),
         _ => None,
+    }
+}
+
+/// An `=` / `<>` label (or one the IR cannot tell from an `in` label) in
+/// domain `d`: on Code, only a label [`to_code`] leaves as it is, where the
+/// written and the converted comparison agree (module doc of [`Domain::Code`]);
+/// otherwise [`in_domain`].
+fn in_domain_test(v: &Val, d: &Domain) -> Option<Val> {
+    match (v, d) {
+        (Val::Text(s), Domain::Code) if to_code(s) != **s => None,
+        _ => in_domain(v, d),
     }
 }
 
@@ -327,12 +411,16 @@ fn typed_label(type_text: &str, member: &str) -> Option<Val> {
             .position(|m| m == member)
             .map(|i| Val::Int(i64::try_from(i).expect("an option ordinal fits i64")));
     }
+    if let Some(t) = builtin_option(type_text) {
+        return Some(Val::Enum(t, Arc::from(member)));
+    }
     enum_name(type_text).map(|e| Val::Enum(e, Arc::from(member)))
 }
 
 /// What a label means in routine `r`'s scope (`tables`: the model's tables
 /// by id, a real table preferred over an extension stub):
-/// - an integer literal is itself;
+/// - an integer literal is itself, a text literal its text ([`Val::Text`],
+///   converted per domain by [`in_domain`]);
 /// - `Enum::"X"::M` is enum `X`'s value `M`;
 /// - `V::M`, `V` an Option- or Enum-typed parameter, local or global of `r`,
 ///   is `M`'s ordinal (blank members counted) or the enum value; with no
@@ -349,6 +437,7 @@ pub(super) fn resolve_label(
 ) -> Option<Val> {
     let (path, member) = match l {
         ValueLabel::Int(n) => return Some(Val::Int(*n)),
+        ValueLabel::Text(s) => return Some(Val::Text(Arc::from(s.as_str()))),
         ValueLabel::Qualified { path, member } => (path, member.as_str()),
     };
     if path.len() >= 2 && path[0] == "enum" {
@@ -393,10 +482,11 @@ fn label_set(
     labels: &[Option<ValueLabel>],
     d: &Domain,
     resolve: &dyn Fn(&ValueLabel) -> Option<Val>,
+    convert: fn(&Val, &Domain) -> Option<Val>,
 ) -> Option<Vec<Val>> {
     let mut out = labels
         .iter()
-        .map(|l| l.as_ref().and_then(resolve).and_then(|v| in_domain(&v, d)))
+        .map(|l| l.as_ref().and_then(resolve).and_then(|v| convert(&v, d)))
         .collect::<Option<Vec<Val>>>()?;
     out.sort();
     out.dedup();
@@ -423,7 +513,7 @@ pub(super) fn contradicts(reqs: &[ValueReq], b: &Bindings) -> bool {
 }
 
 /// The loop variables of `for` / `foreach` statements in `node`'s subtree.
-fn loop_vars(node: &PCFNNode, out: &mut Vec<String>) {
+pub(super) fn loop_vars(node: &PCFNNode, out: &mut Vec<String>) {
     if let Some(ValueFact::LoopVar(v)) = node.value_fact() {
         out.push(v.clone());
     }
@@ -439,15 +529,20 @@ fn loop_vars(node: &PCFNNode, out: &mut Vec<String>) {
 }
 
 /// `r`'s value frame (module doc). `passes_by_value(callsite_id, argument
-/// index)` says whether the call passes that argument by value to a known
-/// callee or to a platform method that does not write it; `resolve` reads a
-/// label in `r`'s scope. `None` when `r` has no usable value parameter.
+/// index, text)` says whether the call passes that argument by value to a
+/// known callee or to a platform method that does not write it (`text`: the
+/// parameter is Text or Code, which many platform methods write); `resolve`
+/// reads a label in `r`'s scope. `None` when `r` has no usable value parameter.
 pub(super) fn value_frame(
     r: &ModelRoutine,
-    passes_by_value: impl Fn(&str, u32) -> bool,
+    passes_by_value: impl Fn(&str, u32, bool) -> bool,
     resolve: &dyn Fn(&ValueLabel) -> Option<Val>,
 ) -> Option<ValueFrame> {
     let tree = r.statement_tree.as_ref()?;
+    // As the guard frame: a routine opaque to names (a `with`) has no value frame (sol r5).
+    if crate::program::body::features::names_opaque(Some(tree), r.body_available) {
+        return None;
+    }
     let mut loops = Vec::new();
     loop_vars(tree, &mut loops);
     let mut usable: HashMap<String, (u32, Domain)> = HashMap::new();
@@ -462,13 +557,12 @@ pub(super) fn value_frame(
         if r.var_assignments.iter().any(|a| fold(&a.lhs_name) == name) || loops.contains(&name) {
             continue;
         }
-        let passed_unsafely = r.call_sites.iter().any(|cs| {
-            cs.argument_bindings.iter().any(|b| {
-                b.source_kind == "parameter"
-                    && b.source_parameter_index == Some(p.index)
-                    && !passes_by_value(&cs.id, b.parameter_index)
-            })
-        });
+        let text = matches!(d, Domain::Text | Domain::Code);
+        // Bound or by its text, quoted or not (sol on ENG-30): the rule every frame uses.
+        let passed_unsafely =
+            crate::engine::l4::param_guard::passes_param_unsafely(r, p, |cs: &str, k: u32| {
+                passes_by_value(cs, k, text)
+            });
         if passed_unsafely {
             continue;
         }
@@ -512,7 +606,7 @@ fn if_reqs(node: &PCFNNode, cx: &ValueWalk) -> (Vec<ValueReq>, Vec<ValueReq>) {
     let Some((p, d)) = cx.usable.get(name) else {
         return (Vec::new(), Vec::new());
     };
-    match label_set(labels, d, cx.resolve) {
+    match label_set(labels, d, cx.resolve, in_domain_test) {
         Some(set) => {
             let set: VSet = set.into();
             (
@@ -576,7 +670,7 @@ fn walk(
             .iter()
             .filter(|b| !b.is_case_else())
             .map(|b| match b.value_fact() {
-                Some(ValueFact::Arm(labels)) => label_set(labels, d, cx.resolve),
+                Some(ValueFact::Arm(labels)) => label_set(labels, d, cx.resolve, in_domain),
                 _ => None,
             })
             .collect();

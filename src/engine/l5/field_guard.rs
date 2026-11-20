@@ -31,6 +31,11 @@ fn guarded_operations(r: &ModelRoutine) -> HashMap<String, i64> {
     let Some(tree) = r.statement_tree.as_ref() else {
         return out;
     };
+    // A routine opaque to names (a `with`): a `with`-rebound alias of the guarded RecordRef can
+    // hide a write the name-based invalidation misses, so no guard is taken (sol r6, ENG-30).
+    if crate::program::body::features::names_opaque(Some(tree), r.body_available) {
+        return out;
+    }
     let lc = |s: &str| s.trim().trim_matches('"').fold_identifier();
     let recordrefs: HashSet<String> = r
         .variables

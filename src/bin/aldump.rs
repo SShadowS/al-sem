@@ -58,6 +58,7 @@ fn usage() -> ExitCode {
          --r3a4-dep-hooks | --r3a5-cross-app-summary | --r4-findings | --r4-findings-cross-app | --dependency-bodies-stats [--sites] | \
          --r4f-root-classifications | --r4f-return-summaries | --r4f-snapshot | \
          --r4f-digest-effects | --r4f-scoped-guarantees | --program-call-graph-stats | \
+         --literal-pruning-stats | \
          --graphify-export | --graphify-export-fragments | --integration-points] \
          <workspace-or-.app>\n\
          \x20      aldump --switch-dump <workspace> <out-dir>\n\
@@ -1468,6 +1469,7 @@ fn run_main() -> ExitCode {
     }
     let mut l2 = false;
     let mut program_call_graph_stats = false;
+    let mut literal_pruning_stats = false;
     let mut graphify_export = false;
     let mut graphify_export_fragments = false;
     let mut integration_points = false;
@@ -1570,6 +1572,10 @@ fn run_main() -> ExitCode {
             program_call_graph_stats = true;
             continue;
         }
+        if arg == "--literal-pruning-stats" {
+            literal_pruning_stats = true;
+            continue;
+        }
         if workspace_arg.is_some() {
             eprintln!("aldump: error: more than one workspace argument");
             return usage();
@@ -1594,6 +1600,7 @@ fn run_main() -> ExitCode {
         r4f_scoped_guarantees,
         r4f_ordering_facts,
         program_call_graph_stats,
+        literal_pruning_stats,
         // T4-B: these three each guard their own dedicated `if`-block (like every
         // flag above) but were missing from this array — a combo like
         // `--graphify-export --l2` silently ran whichever block's `if`
@@ -1611,7 +1618,7 @@ fn run_main() -> ExitCode {
             "aldump: error: --l2 / \
              --r3a1-combined-graph / --r3a2-summary-core / --r3a3-cone-coverage / \
              --r3a4-dep-hooks / --r3a5-cross-app-summary / --r4f-return-summaries / \
-             --program-call-graph-stats / \
+             --program-call-graph-stats / --literal-pruning-stats / \
              --graphify-export / --graphify-export-fragments / --integration-points are mutually exclusive"
         );
         return usage();
@@ -2167,6 +2174,23 @@ fn run_main() -> ExitCode {
             }
             Err(e) => {
                 eprintln!("aldump: error: failed to serialize R3a-1 projection: {e}");
+                ExitCode::FAILURE
+            }
+        };
+    }
+
+    if literal_pruning_stats {
+        // ENG-135: the literal pruning's whole-workspace counts (guard, value and flow frames,
+        // the parameters a write unbinds, one-hop dead sites), deterministic JSON.
+        return match al_sem::engine::l5::literal_reach::stats::literal_pruning_stats_json(
+            &workspace,
+        ) {
+            Ok(json) => {
+                print!("{json}");
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("aldump: error: {e:#}");
                 ExitCode::FAILURE
             }
         };

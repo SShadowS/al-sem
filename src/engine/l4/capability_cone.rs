@@ -662,7 +662,7 @@ pub(crate) fn direct_facts_for_routine(
         // an unresolved table read, never no read. A `CalcFields` of a
         // FlowField over the record's own table is the host fact below.
         for ffr in &op.flow_field_reads {
-            if ffr.repeats_host_read(op) {
+            if ffr.repeats_host_read(op, routine) {
                 continue;
             }
             let resource_id = match &ffr.source {
@@ -725,7 +725,7 @@ pub(crate) fn direct_facts_for_routine(
             witness_first_hop_event_id: None,
             extra: Some(CapabilityExtra::Table {
                 record_variable_id: op.record_variable_id.clone(),
-                temp_state: op.temp_state.clone(),
+                temp_state: op.temp_state.get(routine).cloned(),
                 op_subtype: Some(op.op.clone()),
             }),
         });
@@ -10617,11 +10617,11 @@ mod flow_field_fact_tests {
             Vec::new(),
             false,
         );
-        op.temp_state = Some(PTempState {
+        op.temp_state.set(Some(PTempState {
             kind: "known".into(),
             value: Some(false),
             parameter_index: None,
-        });
+        }));
         op.flow_field_reads = vec![table_read("app/table/1"), table_read("app/table/2")];
         r.record_operations = vec![op];
         let (facts, _, _) = direct_facts_for_routine(&r, &[]);

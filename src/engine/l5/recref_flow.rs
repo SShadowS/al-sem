@@ -170,6 +170,11 @@ struct Facts {
     /// Variables an alias rebinding reaches (a by-value Variant parameter in
     /// it may hand a changed RecordRef back).
     alias_shared: HashSet<String>,
+    /// The routine is opaque to names ([`crate::program::body::features::names_opaque`]: a
+    /// `with`, or a body with no tree): a name in it may be a `with` receiver's field, so every
+    /// variable may hold anything, no argument is read by name ([`RecRefFlow::atoms_of`],
+    /// [`RecRefFlow::val_of_text`]) and no exit guard is taken (sol on ENG-30).
+    opaque: bool,
 }
 
 /// Per routine: the atoms of each tracked own variable, and of each global it
@@ -561,6 +566,9 @@ impl<'a> RecRefFlow<'a> {
         params: &[(u32, TSet)],
         globals: &[(Arc<str>, TSet)],
     ) -> Val {
+        if self.facts[i].opaque {
+            return None;
+        }
         let arg = cs.argument_texts.get(k as usize)?;
         let mut inputs: Vec<(u32, Val)> = self.facts[i]
             .tracked
@@ -776,6 +784,10 @@ impl<'a> RecRefFlow<'a> {
         globals: &[(Arc<str>, Val)],
         text: &str,
     ) -> Val {
+        // As `atoms_of`: a name read in an opaque routine is unknown (sol r5).
+        if self.facts[i].opaque {
+            return None;
+        }
         let name = lc(text);
         match self.facts[i].tracked.get(&name) {
             Some(VarKind::Global) => {
@@ -958,6 +970,11 @@ impl<'a> RecRefFlow<'a> {
 
     /// The atoms `text` (an argument or a value) stands for in routine `i`.
     fn atoms_of(&self, i: usize, vars: &HashMap<String, Atoms>, text: &str) -> Atoms {
+        // Every name read in an opaque routine (its arguments mapped into a callee, a callee's
+        // effects mapped back, self-call summaries) may be a `with` field: anything (sol r5).
+        if self.facts[i].opaque {
+            return top();
+        }
         let r = &self.routines[i];
         let name = lc(text);
         match self.facts[i].tracked.get(&name) {
@@ -1224,6 +1241,9 @@ impl<'a> RecRefFlow<'a> {
 
     /// The atoms of the argument at position `k` of call site `cs` of `i`.
     pub(crate) fn arg_atoms(&self, i: usize, cs: &PCallSite, k: u32) -> Atoms {
+        if self.facts[i].opaque {
+            return top();
+        }
         match cs.argument_texts.get(k as usize) {
             Some(a) => self.atoms_of(i, &self.summaries[i].vars, a),
             None => top(),
@@ -1645,6 +1665,11 @@ pub(crate) fn exit_guards(
     let Some(tree) = r.statement_tree.as_ref() else {
         return out;
     };
+    // A guard's receiver named in a routine with a `with` may be the `with` receiver's field
+    // (sol on ENG-30): no exit guard is taken from it.
+    if crate::program::body::features::names_opaque(Some(tree), r.body_available) {
+        return out;
+    }
     let top: &[PCFNNode] = match tree.kind.as_str() {
         "block" => tree.children.as_deref().unwrap_or_default(),
         _ => std::slice::from_ref(tree),
@@ -1784,6 +1809,15 @@ fn facts_of(r: &ModelRoutine, obj_in_place: &HashSet<String>) -> Facts {
             VarKind::Local
         };
         f.tracked.insert(lc(&v.name), kind);
+    }
+    f.opaque =
+        crate::program::body::features::names_opaque(r.statement_tree.as_deref(), r.body_available);
+    if f.opaque {
+        let names: Vec<String> = f.tracked.keys().cloned().collect();
+        for n in names {
+            f.fixed.push((n.clone(), Part::Atoms(top()), None));
+            f.alias_shared.insert(n);
+        }
     }
     if f.tracked.is_empty() {
         return f;

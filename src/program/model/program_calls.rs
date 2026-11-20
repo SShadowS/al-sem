@@ -666,9 +666,21 @@ fn attach_program_calls_with(
         let _s = pt::span("attach", "attach.event_param_temps");
         crate::program::model::event_param_temp::prove_event_param_temps(&mut resolved);
     }
+    // The last writer: after every pass that appends or derives an operation's temp state
+    // (ENG-30, sol r8).
+    crate::program::model::workspace::clear_opaque_operation_temps(&mut resolved.workspace);
     if crate::engine::census::enabled() {
         crate::census_hook::mark("census.model");
         census_model(&resolved);
+    }
+    // Every final model, in every debug build (each test, and the `alsem` the CLI tests run):
+    // a routine opaque to names binds nothing and knows no operation's temp state (ENG-30).
+    // `cdo` builds have no debug assertions;
+    // `eng14_cdo_untrusted_census` checks CDO.
+    #[cfg(debug_assertions)]
+    {
+        let (_, bad) = crate::program::model::workspace::opaque_binding_violations(&resolved);
+        assert!(bad.is_empty(), "opaque routines with bindings: {bad:?}");
     }
     (resolved, meta, census)
 }
@@ -1873,7 +1885,8 @@ fn convert<'a>(
                     .as_deref()
                     .is_some_and(|t| temporary_tables.contains(t))
                 {
-                    op.temp_state = Some(crate::program::body::scope::ts_known(true));
+                    op.temp_state
+                        .set(Some(crate::program::body::scope::ts_known(true)));
                 }
                 dataset_edges.extend(op_edges);
                 dataset_ops.ops.push((ri, vec![op]));
@@ -3035,7 +3048,7 @@ impl<'a> Converter<'a> {
                 },
                 record_variable_id: None,
                 table_id,
-                temp_state: Some(temp_state),
+                temp_state: crate::program::model::workspace::OpTemp::new(Some(temp_state)),
                 field_arguments: None,
                 source_anchor: cs.source_anchor.clone(),
                 loop_stack: cs.loop_stack.clone(),
@@ -3120,11 +3133,11 @@ impl<'a> Converter<'a> {
             record_variable_name: receiver,
             record_variable_id: None,
             table_id,
-            temp_state: Some(PTempState {
+            temp_state: crate::program::model::workspace::OpTemp::new(Some(PTempState {
                 kind: "unknown".into(),
                 value: None,
                 parameter_index: None,
-            }),
+            })),
             field_arguments: field.map(|f| vec![f]),
             source_anchor: cs.source_anchor.clone(),
             loop_stack: cs.loop_stack.clone(),
@@ -3212,14 +3225,14 @@ impl<'a> Converter<'a> {
             table_id,
             // ENG-26: a protected var's declaration says whether it is
             // temporary; a call's result does not.
-            temp_state: Some(match cr.temporary {
+            temp_state: crate::program::model::workspace::OpTemp::new(Some(match cr.temporary {
                 Some(t) => crate::program::body::scope::ts_known(t),
                 None => PTempState {
                     kind: "unknown".into(),
                     value: None,
                     parameter_index: None,
                 },
-            }),
+            })),
             // `Validate(Field, …)`: its field, as written; `CalcFields(F1, …)`:
             // every field (their FlowField reads are attached after the op
             // joins, `flow_fields::attach_appended_flow_field_reads`).
@@ -3453,10 +3466,15 @@ impl Converter<'_> {
                 })
         });
         // Plus the model's own temp state of the op (a `TableType = Temporary`
-        // table, an entry guard, a RecordRef opened temporary, …).
+        // table, an entry guard, a RecordRef opened temporary, …). ENG-30 (sol r9): in a
+        // routine opaque to names, neither the op's temp state (`OpTemp::get`) nor the
+        // resolver's by-name `record_temporary` proves anything.
+        if r.names_opaque {
+            raise.record_temporary = false;
+        }
         let known_temp = op
             .temp_state
-            .as_ref()
+            .get(r)
             .and_then(crate::program::body::features::PTempState::known_value);
         raise.record_temporary |= crate::program::body::features::known_temp_suppresses(known_temp);
         let record_not_temporary = known_temp == Some(false);
