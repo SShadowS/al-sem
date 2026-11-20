@@ -1,6 +1,6 @@
 # TLS-106: `--update-baseline` must not lose fingerprints to a filter
 
-Status: revision 2, after review r1 (Fable, sol). Needs an owner decision (a released file
+Status: revision 3, after review r1 and r2 (Fable, sol). Needs an owner decision (a released file
 format and command change behaviour).
 
 ## 1. The bug
@@ -37,18 +37,37 @@ severity or scope (`fingerprint.rs` 262-271). So the question "is F still there?
 of the run's COMPLETE output, before any filter, and needs only F's detector:
 
 - **Drop** an old entry only when all hold:
-  - its detector ran in this run and did not error;
-  - the run's universe (cross-app or `--single-app`) is the one the file records;
-  - the run's coverage is not degraded (the preflight passed);
-  - its fingerprint is absent from the run's findings BEFORE `--min-severity`, the allow-list,
-    `--scope`, `--focus` and `--limit`.
+  - its detector ran in this run COMPLETELY: it has a `detector_stats` row (a detector that
+    errors leaves only a diagnostic, `registry.rs` 711, 717-735) and reported nothing
+    incomplete (a truncation such as d65's `crossCallTruncated`, a substrate warning such as
+    d43's; review r2, sol). Each detector's incompleteness signals are listed in one place
+    in the registry, and a detector lists none only when it has none;
+  - the run's universe and primary app are the ones the file records;
+  - the run's inputs were whole: no unreadable or encrypted dependency, no recovered (parse
+    error) file, no failed coverage check. Unknown call edges do NOT stop pruning: DO's every
+    run reports 1,142 of them, so a rule that stopped on any `degraded` preflight would never
+    prune on real workspaces and decay into keeping everything (review r2, Fable);
+  - the entry's scope is inside the run's scope: a primary-scope run (the default) prunes only
+    entries recorded as primary; dependency entries are pruned only by a `--scope all` run
+    (the registry drops dependency findings itself at `--scope primary`, `registry.rs` 565-582,
+    so the gate never sees them; review r2, Fable and sol);
+  - its fingerprint is absent from the run's findings BEFORE the gate's `--min-severity`,
+    allow-list, `--focus` and `--limit`.
 - **Keep** every other old entry, byte for byte.
-- **Add** the findings the run shows (after its filters), as today.
+- **Add** the findings the run shows (after its filters), as today, each with its detector and
+  scope.
 
 So severity drift (review, sol and Fable: F moves from high to medium) cannot drop F, a
 dependency finding is never dropped by a primary-scope update, a detector outside the view
-keeps its entries, and an error or a degraded run drops nothing. `--limit` needs no refusal:
-it only limits what is added.
+keeps its entries, and an incomplete detector or input drops nothing. `--limit` needs no
+refusal: it only limits what is added.
+
+What the rule promises is about fingerprints, not issues: a detector whose fingerprint includes
+a sample anchor (d17 takes the first caller's) gives the same issue a new fingerprint when that
+anchor moves; the old one is then pruned and the new one is new (review r2, sol).
+
+Each update prints on stderr how many entries it kept unchecked and why (detector not run or
+incomplete, inputs not whole, out of scope, no detector known), so keeping is never silent.
 
 ## 4. The file, schema 2
 
@@ -57,19 +76,24 @@ it only limits what is added.
   "schemaVersion": "2",
   "generatedAt": "...",
   "universe": "cross-app",
+  "primaryApp": "<app id>",
   "fingerprints": ["...", "..."],
-  "entries": [{"fingerprint": "...", "detector": "d1-db-op-in-loop"}, ...]
+  "entries": [{"fingerprint": "...", "detector": "d1-db-op-in-loop", "scope": "primary"}, ...]
 }
 ```
 
-- `entries` is sorted by (fingerprint, detector) and deduped on the pair (several findings
-  share a fingerprint: 2,308 findings, 2,301 fingerprints on CDO).
-- `fingerprints` is the sorted, deduped list of the entries' fingerprints: what suppression
-  reads, so a version-1 reader still works. When the two disagree (a hand edit, a merge), the
-  file is refused as inconsistent (exit 2), never repaired silently.
-- `universe` is `cross-app` or `single-app`. An update in the other universe is refused
-  (exit 3): the two models find different sets, so presence in one says nothing about the
-  other. Use one baseline per universe.
+- `entries` is sorted by (fingerprint, detector, scope) and deduped (several findings share a
+  fingerprint: 2,308 findings, 2,301 fingerprints on CDO). `scope` is `primary` or
+  `dependency`, decided by the registry's own primary predicate (one shared function), never a
+  second reading of the object role.
+- `fingerprints` is what suppression reads, so a version-1 reader still works. A fingerprint
+  listed with no entry is a version-1 entry (no detector known), kept until a run sees it: that
+  covers a version-1 file, a hand edit and an old binary's rewrite alike. Only an entry whose
+  fingerprint is not listed is inconsistent: the update refuses (exit 2) and writes nothing; a
+  plain read still reads `fingerprints` (review r2, Fable).
+- `universe` (`cross-app` or `single-app`) and `primaryApp` bind the file: an update in another
+  universe or for another primary app is refused (exit 3). A version-1 file has neither; its
+  first update stamps them.
 - An unknown `schemaVersion` is refused (exit 2).
 
 ## 5. Old files and the update path
@@ -85,8 +109,13 @@ it only limits what is added.
   file is never read, so a malformed one is overwritten).
 - **Batch**: the job's baseline is now read and written; its plan declares both
   (`src/bin/alsem.rs` 1863-1867).
-- **An old binary** updating a version-2 file writes version 1 and loses `entries`; the
-  newer binary then reads it as version 1 (keeps everything). Not a loss, only a downgrade.
+- **An old binary** updating a version-2 file writes version 1 with its old rule, so a
+  filtered update by an old binary still loses fingerprints, as today (review r2, sol). Mixed
+  readers are fine; mixed writers are not: the release note says to update every writer.
+- **Entries that are never pruned:** a detector no longer registered (removed or renamed)
+  never runs, so its entries stay; they are harmless (its name is hashed) and counted on
+  stderr. Unseen version-1 entries are cleared only by rebuilding the file, which accepts
+  every current finding untriaged: the release note says so.
 
 ## 6. Release note (CHANGELOG)
 
