@@ -121,7 +121,13 @@ pub fn detect_d54(
                 to_confidence(&[], if direct { "likely" } else { "possible" });
             let mut finding = Finding {
                 id: format!("d54/{}/{}", routine.id, publisher.id),
-                root_cause_key: format!("d54/{}", routine.id),
+                // ENG-101 (owner decision 2026-11-18): the publisher is part of the
+                // root cause. Each publisher is its own hazard (its own subscribers,
+                // its own fix), so it gets its own fingerprint; keyed by the try
+                // routine alone, the five publishers of one TryFunction shared one,
+                // and suppressing one suppressed all. Its internal routine id is
+                // swapped for its stable id before hashing (`fingerprint_of`).
+                root_cause_key: format!("d54/{}/{}", routine.id, publisher.id),
                 detector: DETECTOR.to_string(),
                 title: format!(
                     "Event published inside TryFunction cone{}",
@@ -173,8 +179,13 @@ pub fn detect_d54(
         }
     }
 
-    let (mut findings, truncated) =
-        group_and_cap(findings, |f| f.root_cause_key.clone(), MAX_PER_TRY_ROUTINE);
+    // The cap is per TRY ROUTINE (the anchor), not per key: the key holds the
+    // publisher since ENG-101.
+    let (mut findings, truncated) = group_and_cap(
+        findings,
+        |f| f.primary_location.enclosing_routine_id.clone(),
+        MAX_PER_TRY_ROUTINE,
+    );
     findings.sort_by(|a, b| a.id.cmp(&b.id));
     let emitted = findings.len();
     let mut stats = DetectorStats::new(DETECTOR, candidates_considered, emitted);

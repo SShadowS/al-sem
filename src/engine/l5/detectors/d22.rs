@@ -197,6 +197,7 @@ pub fn detect_d22(
         }
     }
 
+    let mut findings = merge_reads(findings);
     findings.sort_by(|a, b| a.id.cmp(&b.id));
 
     let emitted = findings.len();
@@ -204,6 +205,41 @@ pub fn detect_d22(
     stats.add_skip("unresolvedTable", skipped_unresolved_table);
     stats.add_skip("parameter", skipped_parameter);
     Ok(DetectorOutput::no_diag(findings, stats))
+}
+
+/// ENG-101 (owner decision 2026-11-18): ONE finding per routine, record variable
+/// and FlowField. A FlowField read without CalcFields has one cause and one fix
+/// (a CalcFields before the first read), so the nine reads of one field in one
+/// routine were nine findings under ONE fingerprint (their `rootCauseKey` never
+/// held the read). The merged finding is the FIRST read in source order (its
+/// id, location and text), and its evidence lists every uncovered read in
+/// source order. Key and fingerprint are unchanged.
+fn merge_reads(findings: Vec<Finding>) -> Vec<Finding> {
+    let mut groups: std::collections::BTreeMap<String, Vec<Finding>> =
+        std::collections::BTreeMap::new();
+    for f in findings {
+        groups.entry(f.root_cause_key.clone()).or_default().push(f);
+    }
+    groups
+        .into_values()
+        .map(|mut reads| {
+            reads.sort_by(|a, b| {
+                let pos = |f: &Finding| {
+                    (
+                        f.primary_location.start_line,
+                        f.primary_location.start_column,
+                    )
+                };
+                pos(a).cmp(&pos(b)).then_with(|| a.id.cmp(&b.id))
+            });
+            let mut rest = reads.split_off(1);
+            let mut first = reads.pop().expect("a group has at least one read");
+            for r in &mut rest {
+                first.evidence_path.append(&mut r.evidence_path);
+            }
+            first
+        })
+        .collect()
 }
 
 /// Returns true if there is a `CalcFields` op on `record_var_key` strictly

@@ -4,6 +4,11 @@ codeunit 50922 "D54 Events"
     procedure OnAfterThing()
     begin
     end;
+
+    [IntegrationEvent(false, false)]
+    procedure OnBeforeThing()
+    begin
+    end;
 }
 
 codeunit 50923 "D54 Demo"
@@ -28,6 +33,17 @@ codeunit 50923 "D54 Demo"
     var
         Ev: Codeunit "D54 Events";
     begin
+        Ev.OnAfterThing();
+    end;
+
+    // FLAGGED twice (ENG-101): one TryFunction reaching two publishers is two
+    // findings with two fingerprints, one per publisher.
+    [TryFunction]
+    procedure TryTwo()
+    var
+        Ev: Codeunit "D54 Events";
+    begin
+        Ev.OnBeforeThing();
         Ev.OnAfterThing();
     end;
 

@@ -4,6 +4,11 @@ codeunit 50924 "D55 Events"
     procedure OnRowProcessed()
     begin
     end;
+
+    [IntegrationEvent(false, false)]
+    procedure OnRowChecked()
+    begin
+    end;
 }
 
 codeunit 50925 "D55 Demo"
@@ -16,6 +21,21 @@ codeunit 50925 "D55 Demo"
     begin
         if Item.FindSet() then
             repeat
+                Ev.OnRowProcessed();
+            until Item.Next() = 0;
+    end;
+
+    // FLAGGED three times (ENG-101): two events, one of them published twice,
+    // in ONE loop: three findings with three fingerprints (event + `#n`).
+    procedure PublishSeveralInLoop()
+    var
+        Item: Record "D55 Item";
+        Ev: Codeunit "D55 Events";
+    begin
+        if Item.FindSet() then
+            repeat
+                Ev.OnRowChecked();
+                Ev.OnRowProcessed();
                 Ev.OnRowProcessed();
             until Item.Next() = 0;
     end;

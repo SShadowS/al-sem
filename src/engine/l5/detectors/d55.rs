@@ -39,8 +39,23 @@ pub fn detect_d55(
         }
         let loop_by_id: HashMap<&str, &PLoop> =
             routine.loops.iter().map(|l| (l.id.as_str(), l)).collect();
+        // ENG-101: the n-th publish of one event in one loop, in source order.
+        let mut sites: Vec<_> = routine.call_sites.iter().collect();
+        sites.sort_by(|a, b| {
+            (
+                a.source_anchor.start_line,
+                a.source_anchor.start_column,
+                &a.id,
+            )
+                .cmp(&(
+                    b.source_anchor.start_line,
+                    b.source_anchor.start_column,
+                    &b.id,
+                ))
+        });
+        let mut nth: HashMap<(&str, &str), usize> = HashMap::new();
 
-        for cs in &routine.call_sites {
+        for cs in sites {
             let Some(edge) = ctx.resolved_call_edge_by_callsite.get(&cs.id) else {
                 continue;
             };
@@ -70,9 +85,19 @@ pub fn detect_d55(
             };
             let confidence: FindingConfidence = to_confidence(&[], "likely");
             let id = format!("d55/{}/{}/{}", routine.id, loop_info.id, cs.id);
+            // ENG-101 (owner decision 2026-11-18): the published event, and its
+            // repeat number in this loop, are part of the root cause. Each event is
+            // its own hazard; keyed by the loop alone, every publish in one loop
+            // shared one fingerprint (suppressing one suppressed all, and a new
+            // event in the loop was invisible to a baseline). `#n` tells apart two
+            // publishes of the SAME event in one loop (`CDO E-Mail Job::Run`).
+            let n = nth
+                .entry((loop_info.id.as_str(), callee.id.as_str()))
+                .or_insert(0);
+            *n += 1;
             let mut finding = Finding {
                 id: id.clone(),
-                root_cause_key: format!("d55/{}/{}", routine.id, loop_info.id),
+                root_cause_key: format!("d55/{}/{}/{}#{}", routine.id, loop_info.id, callee.id, n),
                 detector: DETECTOR.to_string(),
                 title: "Event published inside loop".into(),
                 root_cause: format!(

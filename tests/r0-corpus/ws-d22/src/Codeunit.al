@@ -10,6 +10,19 @@ codeunit 50800 "D22 Demo"
         Amount := Customer."Balance (LCY)";
     end;
 
+    // FLAGGED once (ENG-101): three reads of one FlowField on one record variable,
+    // no CalcFields: one cause, one fix, ONE finding listing the three reads.
+    procedure ReadFlowFieldThrice()
+    var
+        Customer: Record Customer;
+        Amount: Decimal;
+    begin
+        Customer.Get('C0001');
+        Amount := Customer."Balance (LCY)";
+        Amount += Customer."Balance (LCY)";
+        Amount += Customer."Balance (LCY)";
+    end;
+
     // NOT FLAGGED: CalcFields is called before the FlowField read.
     procedure ReadFlowFieldAfterCalc()
     var

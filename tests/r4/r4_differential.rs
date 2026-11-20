@@ -1521,6 +1521,31 @@ fn finding_subset(golden: &Value, names: &BTreeSet<String>) -> Vec<Value> {
 }
 
 /// Run a single smoke entry through the acceptance gate or deferred path.
+/// ⟨ENG-101⟩ Two DIFFERENT findings never share a fingerprint: a baseline or a
+/// suppression keyed by fingerprint would treat them as one (suppressing one
+/// suppressed all; a new member was invisible). On CDO d54 (one TryFunction's 5
+/// publishers), d55 (several publishes in one loop) and d22 (several reads of
+/// one FlowField) did; the fixtures `ws-d54`, `ws-d55` and `ws-d22` hold those
+/// shapes. Checked on every fixture's real output, for every detector, before
+/// any regen.
+///
+/// Mutations (2026-11-19): d54's key without the publisher -> `ws-d54`'s
+/// `TryTwo` findings share one (red); d55's key without the event and `#n` ->
+/// `ws-d55`'s loop publishes share one (red); d22 without `merge_reads` ->
+/// `ws-d22`'s three reads share one (red). Each restored, green.
+fn assert_distinct_fingerprints(fixture: &str, rust: &R4FindingsProjection) {
+    let json = serde_json::to_value(rust).expect("rust → value");
+    let mut seen: std::collections::BTreeMap<String, String> = Default::default();
+    for f in json["findings"].as_array().into_iter().flatten() {
+        let (Some(fp), Some(id)) = (f["fingerprint"].as_str(), f["id"].as_str()) else {
+            continue;
+        };
+        if let Some(prev) = seen.insert(fp.to_string(), id.to_string()) {
+            panic!("{fixture}: two findings share fingerprint {fp}:\n  {prev}\n  {id}");
+        }
+    }
+}
+
 fn run_smoke_entry(
     smoke: &Smoke,
     registered_names: &BTreeSet<String>,
@@ -1542,6 +1567,7 @@ fn run_smoke_entry(
 
     let source_dir = smoke.corpus_dir.unwrap_or(smoke.fixture);
     let rust = run_rust(smoke.fixture, source_dir, smoke.detectors);
+    assert_distinct_fingerprints(smoke.fixture, &rust);
 
     if smoke.ported {
         if maybe_regen_r4(&golden_path, &rust) {
