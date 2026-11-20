@@ -8,17 +8,33 @@
 # server1 is a laptop that suspends when it is moved (owner, 2026-11-20): a
 # suspend is expected, so the timing scripts label it, never hide it.
 #
-# Prints a whole number of seconds. Prints nothing and exits 1 when the clocks
-# cannot be read. Test hook: CDO_HOST_SUSPENDED_FILE, a file whose first number
-# is printed instead (a real run sets none).
+# Prints a whole number of seconds. With `--clocks`, prints three numbers read
+# in ONE process (review r3, sol: a reading and a separate clock read in the
+# caller race a suspend between them): the suspended seconds, CLOCK_BOOTTIME in
+# whole seconds (wall time since boot: a phase's seconds that include a
+# suspend), and CLOCK_MONOTONIC in microseconds (awake time: a wait a suspend
+# must not use up). Prints nothing and exits 1 when the clocks cannot be read.
+#
+# Test hook: CDO_HOST_SUSPENDED_FILE, a file whose first number is the suspended
+# seconds instead (a real run sets none); `--clocks` then derives the other two
+# from the wall clock (boot = now, awake = now less the suspended seconds).
 set -u
 if [[ -n "${CDO_HOST_SUSPENDED_FILE:-}" ]]; then
     # `read` fails at a missing final newline even when it read the line.
     v=""
     read -r v <"$CDO_HOST_SUSPENDED_FILE" 2>/dev/null || [[ -n "$v" ]] || exit 1
-    [[ "${v%%.*}" =~ ^[0-9]+$ ]] || exit 1
-    echo "${v%%.*}"
+    v=${v%%.*}
+    [[ "$v" =~ ^[0-9]+$ ]] || exit 1
+    if [[ "${1:-}" == --clocks ]]; then
+        now=${EPOCHREALTIME//[!0-9]/}
+        echo "$v $((now / 1000000)) $((now - v * 1000000))"
+    else
+        echo "$v"
+    fi
     exit 0
 fi
-exec python3 -c 'import time
-print(int(time.clock_gettime(time.CLOCK_BOOTTIME) - time.clock_gettime(time.CLOCK_MONOTONIC)))'
+exec python3 -c 'import sys, time
+b = time.clock_gettime_ns(time.CLOCK_BOOTTIME)
+m = time.clock_gettime_ns(time.CLOCK_MONOTONIC)
+s = (b - m) // 10**9
+print(f"{s} {b // 10**9} {m // 1000}" if sys.argv[1:] == ["--clocks"] else s)' "$@"

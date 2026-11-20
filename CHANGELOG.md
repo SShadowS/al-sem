@@ -18,7 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (owner, 2026-11-20), so a suspend is expected: it is labelled, never hidden.
 - **The reading.** New `scripts/host-suspended` prints the host's suspended seconds since boot,
   `CLOCK_BOOTTIME` minus `CLOCK_MONOTONIC`. A rise between two readings is a suspend between
-  them. Test hook `CDO_HOST_SUSPENDED_FILE` (shared by the three scripts).
+  them. With `--clocks` it prints the reading, `CLOCK_BOOTTIME` (wall time) and
+  `CLOCK_MONOTONIC` (awake time) from one process. A reading and a clock read separately by
+  the caller could have a suspend fall between them (review r3, sol). Test hook
+  `CDO_HOST_SUSPENDED_FILE` (shared by the three scripts).
 - **cdo-speed** takes a first reading before it waits for the slot. It reads again before and
   after each timed call, and around the untimed rebuild. A rise of at least 1 s is logged
   (`host suspended N s before|during <call>`). "Before" covers time since the previous reading
@@ -28,8 +31,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `speed.json` lists them (`suspended`), and each record carries `suspended_before` and
   `suspended_during`. The same limits judge the run. Instruction counts are unaffected: a
   suspended task executes nothing.
-- **cdo-gate** reads it before each phase's clock starts and as its command ends (before its
-  seconds are written). A suspend during a phase gives a line under the phase (`the host was
+- **cdo-gate** samples the clocks as each phase starts and as its command ends. The phase's
+  seconds (wall time, `CLOCK_BOOTTIME`) and its suspend come from the same two samples, so a
+  suspend is never counted in a phase's seconds and noted outside them, or the other way round.
+  A suspend during a phase gives a line under the phase (`the host was
   suspended N s during this phase: its seconds include that time`). One since the previous phase
   of this run ended gives `... before this phase: since the previous phase of this run ended,
   outside its seconds`. A phase running beside it in the background (`speed_build`, the
@@ -39,8 +44,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **cdo-slot** records the reading with a hold and with a timing. `status` says how much of a
   hold's age the host spent suspended (`(42 min, 1965 s of it with the host suspended)`): an
   old hold can be a laptop that slept, not a hung holder. `run --timed`'s wait for builds
-  (`CDO_SLOT_TIMED_WAIT_S`) and its grace now run on awake time: wall time less the host's
-  suspended seconds since the wait began, read each pass
+  (`CDO_SLOT_TIMED_WAIT_S`) and its grace now run on awake time, `CLOCK_MONOTONIC` (wall time
+  only when the clocks cannot be read). Each new sleep is said once
   (`the host slept N s during this wait: it goes on that much longer`). Before, a 33-minute
   sleep used up the 1,800 s in a few real seconds, refused with exit 6, and failed the gate's
   speed phase for a false reason (review, Fable). It also ended the grace with no build given

@@ -805,9 +805,9 @@ stamp() {
     done
 }
 
-# ⟨TLS-104⟩ The host's suspended seconds since boot (`host-suspended`), or
-# nothing when they cannot be read.
-host_suspended() { "$(dirname "$0")/host-suspended" 2>/dev/null; }
+# ⟨TLS-104⟩ `<suspended s> <boot s> <awake us>` in one read (`host-suspended
+# --clocks`), or nothing when the clocks cannot be read.
+host_clocks() { "$(dirname "$0")/host-suspended" --clocks 2>/dev/null; }
 # suspend_note <before> <after> <what>: when the host was suspended between the
 # two readings, say so: wall seconds over `what` (bash `$SECONDS`) then include
 # time in which nothing ran (server1 is a laptop that suspends when moved).
@@ -833,10 +833,13 @@ gate_susp_last=""
 run_phase() {
     local name="$1"
     shift
-    local start susp0 note
-    # The reading first, then the clock (review r2, sol): a suspend between the
-    # two is then inside this phase's seconds and noted as during it.
-    susp0=$(host_suspended)
+    local start susp0="" boot0="" susp1="" boot1="" note _m
+    # The phase's seconds and its suspend come from the same two samples
+    # (`host-suspended --clocks`: the reading and CLOCK_BOOTTIME, wall time since
+    # boot, from one process; review r3, sol), so a suspend is never counted in
+    # its seconds and noted outside them, or the other way round. `$SECONDS`
+    # only when the clocks cannot be read.
+    read -r susp0 boot0 _m < <(host_clocks) || true
     start=$SECONDS
     note=$(suspend_note "$gate_susp_last" "$susp0" "before this phase" \
         "since the previous phase of this run ended, outside its seconds")
@@ -852,10 +855,11 @@ run_phase() {
     # command's own status goes through a file (`PIPESTATUS` is the foreground's).
     { "$@" 2>&1; echo $? > "$logs/$name.rc"; } | stamp > "$logs/$name.log" &
     wait $!
-    # The end reading as the command ends, before its seconds are written (review,
-    # sol: a suspend after them is not "included in" them).
-    gate_susp_last=$(host_suspended)
+    # The end sample as the command ends, before its seconds are written.
+    read -r susp1 boot1 _m < <(host_clocks) || true
+    gate_susp_last=$susp1
     local secs=$((SECONDS - start))
+    [[ "$boot0" =~ ^[0-9]+$ && "$boot1" =~ ^[0-9]+$ ]] && secs=$((boot1 - boot0))
     local rc
     rc=$(cat "$logs/$name.rc" 2>/dev/null)
     [[ "$rc" =~ ^[0-9]+$ ]] || rc=1

@@ -301,6 +301,7 @@ describe() {
 # since the record was written (its `suspended=` reading), else `)`: an old hold
 # can be a laptop that slept, not a hung holder (server1 suspends when moved).
 host_suspended() { "$(dirname "$0")/host-suspended" 2>/dev/null; }
+host_clocks() { "$(dirname "$0")/host-suspended" --clocks 2>/dev/null; }
 # At least 2 s: the readings are whole seconds (one that crossed a second
 # boundary moves by 1; review, sol), and a real suspend lasts far longer.
 # `$1`: the words after the seconds (default `of it with the host suspended`).
@@ -711,27 +712,40 @@ timed_start() {
         echo "cdo-slot: --timed refused: $*" >&2
         return 6
     }
-    # Microseconds (EPOCHREALTIME): the deadline holds below a second too.
-    # ⟨TLS-104⟩ EPOCHREALTIME keeps counting through a host suspend: a laptop that
-    # slept 33 min would "wait" its 1800 s in a few real seconds and refuse
+    # Microseconds: the deadline holds below a second too.
+    # ⟨TLS-104⟩ The wall clock keeps counting through a host suspend: a laptop
+    # that slept 33 min would "wait" its 1800 s in a few real seconds and refuse
     # falsely (review, Fable), and its grace would end with no build given the
     # chance to start (review r2, sol). So the wait and the grace run on AWAKE
-    # time: wall time less what the host slept since the wait began
-    # (`host-suspended`, read each pass, before the start so a suspend between
-    # the two counts as waited: the long side). Each new sleep is said once.
-    local now start last=-60 b list left_us nap_us quiet="" susp0 susp slept_us=0
-    susp0=$(host_suspended)
-    start=${EPOCHREALTIME//[!0-9]/}
+    # time, CLOCK_MONOTONIC (`host-suspended --clocks`: the reading and the clock
+    # from one process, so no suspend falls between them; review r3, sol). Each
+    # new sleep is said once. With the clocks unreadable, the wall clock (as before).
+    local now start last=-60 b list left_us nap_us quiet="" susp0="" susp mono="" slept=0 awake=""
+    # The time base is chosen once: awake time if the first read works. A later
+    # failed read keeps the last awake time (the wait only grows: the safe side).
+    slot_clocks() {
+        local s _b m
+        if read -r s _b m < <(host_clocks) && [[ "$s" =~ ^[0-9]+$ && "$m" =~ ^[0-9]+$ ]] &&
+            [[ "$awake" != 0 ]]; then
+            susp=$s mono=$m awake=1
+        elif [[ "$awake" == 1 ]]; then
+            susp=""
+        else
+            susp="" mono=${EPOCHREALTIME//[!0-9]/} awake=0
+        fi
+    }
+    slot_clocks
+    susp0=$susp
+    start=$mono
     local wait_us=$((timed_wait * 1000000)) grace_us=$((timed_grace * 1000000))
     while :; do
         b=$(foreign_builds "$3")
-        susp=$(host_suspended)
-        if [[ "$susp0" =~ ^[0-9]+$ && "$susp" =~ ^[0-9]+$ ]] &&
-            (((susp - susp0) * 1000000 - slept_us >= 2000000)); then
-            echo "cdo-slot: timed: the host slept $((susp - susp0 - slept_us / 1000000)) s during this wait: it goes on that much longer"
-            slept_us=$(((susp - susp0) * 1000000))
+        slot_clocks
+        if [[ "$susp0" =~ ^[0-9]+$ && "$susp" =~ ^[0-9]+$ ]] && ((susp - susp0 - slept >= 2)); then
+            echo "cdo-slot: timed: the host slept $((susp - susp0 - slept)) s during this wait: it goes on that much longer"
+            slept=$((susp - susp0))
         fi
-        now=$((${EPOCHREALTIME//[!0-9]/} - slept_us))
+        now=$mono
         if [[ -n "$b" ]]; then
             quiet=""
             list=$(awk '{ printf "%sPID %s (%s)", (NR > 1 ? ", " : ""), $1, $2 }' <<<"$b")

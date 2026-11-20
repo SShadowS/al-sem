@@ -1664,8 +1664,9 @@ fn cdo_slot_timed_waits_for_builds_and_refuses_beside_one() {
 /// wall time: a first proof of this test came back green), and the timed
 /// command runs (exit 0).
 ///
-/// Mutations (2026-11-20): the wait on wall time again (`now` less nothing
-/// slept) -> refused at 2 s, exit 6 (red); restored, green.
+/// Mutation (2026-11-20): the wait on wall time again (`slot_clocks` taking
+/// `EPOCHREALTIME` for the awake clock) -> refused at 2 s, exit 6 (red);
+/// restored, green.
 #[test]
 fn cdo_slot_timed_wait_survives_a_host_suspend() {
     let s = Slot::new();
