@@ -1036,6 +1036,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The new Text and Code domains make 4,008 parameters usable as values, and the write rules
   (review) exclude 3,787 more. 74 more call sites are proven dead by a value. Peak RSS 3.63 /
   3.65 GB. The guard frames are unchanged; ENG-135 moves those.
+- **Release note: findings and fingerprints that move (CDO, `cdo-before-after` b46e6174 ->
+  d0ac21b0).** ENG-30's opacity rule reads every temp state in a routine whose body is untrusted
+  (ENG-14) as unknown. On CDO that reaches one write: System App's Email Accounts page deletes
+  rows of its TEMPORARY `Email Account` (table 8902) record at `EmailAccounts.Page.al:487`, in a
+  routine whose body is untrusted; that `Delete` now counts as a possible write. No finding
+  disappears. What a user sees:
+  - **21 changed fingerprints, workspace findings (`--scope primary`, the default): every
+    `d9-transaction-span-summary` finding whose transaction reaches that delete.** The finding,
+    its location and its detector are the same; its root cause now says one more table
+    ("writes 447 known table(s)" -> "448"), and d9's fingerprint hashes that text. A
+    `--baseline` file made before this version no longer suppresses those 21: they show as new
+    once. Re-baseline with `alsem analyze --baseline <file> --update-baseline`; a suppression
+    keyed on the old fingerprint must be re-added. (That d9 hashes a count, so any precision
+    change moves its fingerprints, is filed as its own defect.)
+  - **14 new findings, all in dependency code (`--scope all` only):**
+    - `d10-self-modifying-loop` +1: `FilterToConnectorv2v3Accounts`, the delete itself, inside
+      its own loop.
+    - `d43-event-ishandled-skip` +12: callers whose writes are guarded on `IsHandled` and whose
+      cone now holds the `Email Account` delete (`OnBeforePostValueEntryToGL` in 9 posting
+      codeunits, `HandleValidateLineNo` in the Sales and Purchase allocation-account codeunits,
+      `AltCustVATRegDocImpl`'s confirm subscriber); each names table 8902 as the write the
+      skipping subscriber does not make.
+    - `d33-unfiltered-bulk-write` +1: `Sales-Post::PostSalesLine`'s `DeleteAll` on
+      `TempPostedATOLink`. `PostSalesLine` is itself one of the untrusted bodies (ENG-14's
+      census: an unlowered statement), so its record's known temporary state now reads unknown.
+  - All 14 are false positives, each verified: the `Email Account` record (13, through
+    `Page "Email Accounts"::FilterToConnectorv2v3Accounts`, untrusted) and `TempPostedATOLink`
+    (1) are temporary, and the opacity rule cannot see it. ENG-143 (exact with-scope
+    resolution) lifts the rule for bodies with no `with` and removes them.
 
 ### Changed (ENG-120: mimalloc's `purge_delay` measured on CDO and DO, kept at 0)
 
