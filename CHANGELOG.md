@@ -80,8 +80,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   are counted apart as `interfaceUnknown`. `implements` and `extends` entries are unquoted and
   unescaped (`"I""Q"` names `I"Q`).
 - **Matched by name, not signature.** The model keeps no parameter list for a source interface's
-  members, so a same-named method of another arity (an overload) is skipped too. That is the
-  quiet side for an advisory detector.
+  members, so a same-named method of another arity (an overload) is skipped too. ENG-155 matches
+  members by signature, as alc does.
 - **New model facts.** `ModelObject::interface_bases` holds an interface's `extends` list (source
   IR, the symbols' `ExtendedInterfaces`). `ModelObject::interface_members` holds ALL member names
   of a source interface. The existing `declaration_only_routines` cannot serve: the cross-app model
