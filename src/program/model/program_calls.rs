@@ -2817,6 +2817,10 @@ impl<'a> Converter<'a> {
                     .iter()
                     .any(|(g, n)| guid.eq_ignore_ascii_case(g) && *n == name_lc)
             });
+        // ENG-142 (review, Fable): the implementers of every interface derived
+        // from this one implement it too, as the edge's routes count them.
+        let mut family = std::collections::HashSet::from([name_lc.clone()]);
+        self.graph.add_derived_interfaces(&mut family);
         let implements = |kinds: &[ObjectKind]| -> Vec<&ObjectNode> {
             let mut v: Vec<&ObjectNode> = self
                 .graph
@@ -2824,7 +2828,9 @@ impl<'a> Converter<'a> {
                 .iter()
                 .filter(|o| {
                     kinds.contains(&o.id.kind)
-                        && o.implements.iter().any(|i| i.fold_identifier() == name_lc)
+                        && o.implements
+                            .iter()
+                            .any(|i| family.contains(&i.fold_identifier()))
                 })
                 .collect();
             v.sort_by(|a, b| a.id.cmp(&b.id));

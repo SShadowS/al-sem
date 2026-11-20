@@ -1594,6 +1594,7 @@ mod tests {
             declared_id: None,
             extends_target: None,
             implements: implements.into_iter().map(Into::into).collect(),
+            interface_bases: vec![],
             tier: TrustTier::Workspace,
             source_table: None,
             table_no: None,

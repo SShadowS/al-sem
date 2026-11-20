@@ -53,7 +53,8 @@ use crate::program::resolve::index::{ObjectRefResolution, ResolveIndex};
 
 /// Bumped whenever a trait method, a [`Query`] variant or `session::dep_record::eval`'s answer
 /// changes meaning: a kept log of another version is never trusted.
-pub const FACADE_VERSION: u32 = 2;
+/// 3 (ENG-142): `implementers_of` also lists the implementers of derived interfaces.
+pub const FACADE_VERSION: u32 = 3;
 
 /// A run of routines as resolution reads it: one candidate per routine. The
 /// declarations of a split subscriber (`program::split_decls`) are one routine

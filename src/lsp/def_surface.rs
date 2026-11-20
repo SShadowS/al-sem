@@ -49,6 +49,8 @@
 //! 11. `parse_incomplete` (file-level parse-health flag)
 //! 22. `name`, RAW-cased (see "LSP-surface additions" below — added
 //!     alongside item 2's lowercased form, not instead of it)
+//! 24. `interface_bases` (ENG-142: an `extends` edit changes which
+//!     implementers a call through a base reaches, in every file)
 //!
 //! Then, for each routine of that object, in `RoutineNodeId` order (sorted by
 //! `(name_lc, enclosing_member_lc, params_count, sig_fp)` — audit §4 item 3's
@@ -235,6 +237,7 @@ pub fn def_surface_fingerprint(pf: &ParsedFile) -> DefSurface {
         write_list(h, &obj.dataitems, write_dataitem); // 10
         write_bool(h, obj.parse_incomplete); // 11
         write_str(h, &obj.name); // 22 (LSP-surface addition — see module doc)
+        write_list(h, &obj.interface_bases, |h, s| write_str(h, s)); // 24
 
         write_list(h, routines, |h, entry| {
             write_routine_identity(h, &entry.node.id); // 12
@@ -667,6 +670,16 @@ codeunit 50100 "Impl" implements IBar
     end;
 }
 "#;
+        assert_ne!(fp(base), fp(variant));
+    }
+
+    /// ENG-142 (review, Fable): an edit to an interface's `extends` list alone
+    /// is a definition change. Mutation (2026-11-19): item 24 dropped -> equal
+    /// fingerprints (red); restored, green.
+    #[test]
+    fn interface_extends_changed_changes_fingerprint() {
+        let base = "interface IBaz extends IBar\n{\n    procedure Baz();\n}\n";
+        let variant = "interface IBaz extends IQux\n{\n    procedure Baz();\n}\n";
         assert_ne!(fp(base), fp(variant));
     }
 

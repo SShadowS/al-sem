@@ -103,6 +103,47 @@ pub struct AbiIngestError {
 }
 
 impl ProgramGraph {
+    /// ENG-142: the interface `name_lc` names from `app`: the one
+    /// [`Self::resolve_object`] finds, or, when it finds none (two dependencies
+    /// declaring the name, or none visible), every interface of that name
+    /// (review, Fable: dropping an unresolved name lost implementers and closed
+    /// sites; over-approximating keeps them).
+    pub fn interfaces_named_from(&self, app: AppRef, name_lc: &str) -> Vec<&ObjectNode> {
+        if let Some(o) = self.resolve_object(app, ObjectKind::Interface, name_lc) {
+            return vec![o];
+        }
+        self.objects
+            .iter()
+            .filter(|o| o.id.kind == ObjectKind::Interface && o.name.fold_identifier() == name_lc)
+            .collect()
+    }
+
+    /// ENG-142: adds to `names` (lowercased interface names) every interface
+    /// derived from one of them, transitively (`ObjectNode::interface_bases`),
+    /// so a reader matching implementers BY NAME (`o.implements`) also takes an
+    /// implementer of a derived interface: it implements the base. By name, as
+    /// such a reader is; `ResolveIndex::implementers_of` resolves by identity.
+    pub fn add_derived_interfaces(&self, names: &mut HashSet<String>) {
+        loop {
+            let before = names.len();
+            for o in self
+                .objects
+                .iter()
+                .filter(|o| o.id.kind == ObjectKind::Interface)
+            {
+                if o.interface_bases
+                    .iter()
+                    .any(|b| names.contains(&b.fold_identifier()))
+                {
+                    names.insert(o.name.fold_identifier());
+                }
+            }
+            if names.len() == before {
+                return;
+            }
+        }
+    }
+
     /// The object node with this id ([`NodeSet::find`]: what a binary search over the
     /// id-sorted `objects` finds).
     pub fn object(&self, id: &ObjectNodeId) -> Option<&ObjectNode> {
@@ -261,6 +302,7 @@ mod tests {
             declared_id: None,
             extends_target: None,
             implements: vec![],
+            interface_bases: vec![],
             tier: TrustTier::Workspace,
             source_table: None,
             table_no: None,
@@ -358,6 +400,7 @@ mod tests {
             declared_id,
             extends_target: None,
             implements: vec![],
+            interface_bases: vec![],
             tier: TrustTier::Workspace,
             source_table: None,
             table_no: None,

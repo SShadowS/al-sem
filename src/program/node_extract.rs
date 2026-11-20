@@ -274,6 +274,13 @@ pub struct ObjectNode {
     pub declared_id: Option<i64>,
     pub extends_target: Option<SharedStr>,
     pub implements: Vec<SharedStr>,
+    /// An interface's `extends` list (ENG-142): the base interfaces' names,
+    /// unquoted, a qualified name read as its last segment, every `#if` arm's,
+    /// document order. From the source (`ObjectDecl::interface_extends`, none
+    /// when the file did not parse clean) or the symbols' `ExtendedInterfaces`.
+    /// Interface only; empty for every other kind. An implementer of a derived
+    /// interface implements each base (`ResolveIndex::implementers_of`).
+    pub interface_bases: Vec<SharedStr>,
     pub tier: TrustTier,
     /// The `SourceTable` object property — Page/PageExtension/Report/
     /// ReportExtension only; `None` for every other kind (and when the
@@ -636,6 +643,9 @@ impl ShareStrings for ObjectNode {
         pool.share(&mut self.name);
         pool.share_opt(&mut self.extends_target);
         for s in &mut self.implements {
+            pool.share(s);
+        }
+        for s in &mut self.interface_bases {
             pool.share(s);
         }
         for c in &mut self.page_controls {
@@ -1143,6 +1153,10 @@ pub fn extract_nodes(
             declared_id: obj.id,
             extends_target: obj.extends_target.as_deref().map(SharedStr::from),
             implements: obj.implements.iter().map(SharedStr::from).collect(),
+            // An interface whose own node holds a parse error lowers with no
+            // bases (`al_syntax`'s `interface_extends_names`), so its list is never
+            // a misread one; an error elsewhere in the file leaves it as read.
+            interface_bases: obj.interface_extends.iter().map(SharedStr::from).collect(),
             tier,
             source_table,
             table_no,
@@ -1346,6 +1360,7 @@ pub(crate) mod test_fixtures {
             declared_id: Some(50100),
             extends_target: Some("Base Card".into()),
             implements: vec!["ICustomInterface".into()],
+            interface_bases: vec![],
             tier: TrustTier::EmbeddedSource,
             source_table: Some(ObjectRef::Name {
                 raw: "Customer".to_string(),

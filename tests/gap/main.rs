@@ -9,6 +9,7 @@ mod gap_audit_d4;
 mod gap_audit_e_filter_load;
 mod gap_cone_temp_param;
 mod gap_d19_event_publisher_skip;
+mod gap_d19_interface_member_skip;
 mod gap_d39_var_param_passthrough;
 mod gap_d40_helper_loads;
 mod gap_d9_physical_span_gate;

@@ -515,6 +515,27 @@ fn write_object(
         } else {
             format!("{header} implements {}", ifaces.join(", "))
         }
+    } else if kw == "interface" {
+        // ENG-142: an interface's bases (`ExtendedInterfaces`), so the lowered
+        // source keeps them (`ObjectDecl::interface_extends`). A `#<guid>#Name`
+        // reference keeps its name, as the symbol reader reads it (review, sol).
+        let bases: Vec<String> = arr(o, "ExtendedInterfaces")
+            .iter()
+            .filter_map(Value::as_str)
+            .map(|raw| {
+                let name = raw
+                    .strip_prefix('#')
+                    .and_then(|s| s.split_once('#'))
+                    .map_or(raw, |(_, rest)| rest)
+                    .trim();
+                q(if name.is_empty() { raw } else { name })
+            })
+            .collect();
+        if bases.is_empty() {
+            header
+        } else {
+            format!("{header} extends {}", bases.join(", "))
+        }
     } else {
         header
     };
@@ -804,6 +825,30 @@ mod tests {
             })
             .collect();
         assert_eq!(ids, vec![Some(-324976780), Some(798086828)], "{text}");
+    }
+
+    /// ENG-142: an interface's `ExtendedInterfaces` become its `extends` list, so
+    /// the synthesized file lowers with its bases (names with spaces quoted).
+    /// Mutation (2026-11-19): the `interface` arm dropped -> no bases (red);
+    /// restored, green.
+    #[test]
+    fn an_interfaces_bases_are_written() {
+        let symbols: Value = serde_json::from_str(
+            r##"{ "Interfaces": [ { "Name": "IBaz", "ExtendedInterfaces": ["IBar", "My Base", "#63ca2fa4-4f03-4f2b-a480-172fef340d3f#IOther"],
+                "Methods": [ { "Name": "Baz" } ] } ] }"##,
+        )
+        .expect("json");
+        let files = synthesize(&symbols, &[]);
+        let [(_, text)] = files.as_slice() else {
+            panic!("one file: {files:?}")
+        };
+        let f = al_syntax::parse(text);
+        assert_eq!(f.parse_status, al_syntax::ir::ParseStatus::Clean, "{text}");
+        assert_eq!(
+            f.objects[0].interface_extends,
+            ["IBar", "My Base", "IOther"],
+            "{text}"
+        );
     }
 
     /// Gated on `TRANSPILED_SYMBOLS` (a real package's `SymbolReference.json`)

@@ -70,7 +70,7 @@ use crate::program::node::{AppRef, ObjKey, ObjectNodeId, RoutineNodeId};
 use crate::program::node_extract::{Access, ObjectNode, RoutineNode};
 use crate::program::resolve::arg_dispatch::{
     ArgDispatchInfo, ParamDispatchInfo, candidate_param_infos, candidate_param_infos_abi,
-    pick_candidate,
+    interface_binds, pick_candidate_with,
 };
 use crate::program::resolve::builtins::{catalog_version, global_builtin_id};
 use crate::program::resolve::dataset::ObjectStart;
@@ -727,7 +727,12 @@ fn resolve_in_object(
                         }
                     }
                 }
-                if all_known && let Some(picked_idx) = pick_candidate(args, &candidate_params) {
+                if all_known
+                    && let Some(picked_idx) =
+                        pick_candidate_with(args, &candidate_params, &|a, p| {
+                            interface_binds(graph, index, a, p)
+                        })
+                {
                     let rid0 = visible[picked_idx];
                     return Some((
                         DispatchShape::Exact,
@@ -2918,7 +2923,9 @@ pub(crate) fn run_by_other_name_binding(
                     None => return RunBinding::Undecided,
                 }
             }
-            match pick_candidate(args, &candidates) {
+            match pick_candidate_with(args, &candidates, &|a, p| {
+                interface_binds(graph, index, a, p)
+            }) {
                 Some(i) if i < builtins.len() => RunBinding::Builtin,
                 Some(_) => RunBinding::Procedure,
                 None => RunBinding::Undecided,
@@ -5617,6 +5624,7 @@ pageextension 52911 "ExtA" extends BasePage
                 declared_id: Some(50100),
                 extends_target: Some("BaseRpt".into()),
                 implements: vec![],
+                interface_bases: vec![],
                 tier: TrustTier::Workspace,
                 source_table: None,
                 table_no: None,
@@ -5641,6 +5649,7 @@ pageextension 52911 "ExtA" extends BasePage
                 declared_id: Some(60000),
                 extends_target: None,
                 implements: vec![],
+                interface_bases: vec![],
                 tier: TrustTier::SymbolOnly,
                 source_table: None,
                 table_no: None,
@@ -5802,6 +5811,7 @@ pageextension 52911 "ExtA" extends BasePage
                 declared_id: Some(50600),
                 extends_target: None,
                 implements: vec![],
+                interface_bases: vec![],
                 tier: TrustTier::Workspace,
                 source_table: None,
                 table_no: None,
@@ -5826,6 +5836,7 @@ pageextension 52911 "ExtA" extends BasePage
                 declared_id: Some(60104),
                 extends_target: None,
                 implements: vec![],
+                interface_bases: vec![],
                 tier: TrustTier::SymbolOnly,
                 source_table: None,
                 table_no: None,
@@ -6014,6 +6025,7 @@ pageextension 52911 "ExtA" extends BasePage
                 declared_id: Some(50610),
                 extends_target: None,
                 implements: vec![],
+                interface_bases: vec![],
                 tier: TrustTier::Workspace,
                 source_table: None,
                 table_no: None,
@@ -6038,6 +6050,7 @@ pageextension 52911 "ExtA" extends BasePage
                 declared_id: Some(60110),
                 extends_target: None,
                 implements: vec![],
+                interface_bases: vec![],
                 tier: TrustTier::SymbolOnly,
                 source_table: None,
                 table_no: None,
@@ -6278,7 +6291,7 @@ codeunit 50611 "MixedCU"
         }];
         let candidates = vec![source_params, abi_params];
         assert_eq!(
-            pick_candidate(&args, &candidates),
+            crate::program::resolve::arg_dispatch::pick_candidate(&args, &candidates),
             Some(1),
             "an Integer arg must pick the ABI (Integer) candidate over the source (Text) one"
         );
@@ -6427,6 +6440,7 @@ codeunit 50612 "MixedCU2"
                 declared_id: Some(50610),
                 extends_target: None,
                 implements: vec![],
+                interface_bases: vec![],
                 tier: TrustTier::Workspace,
                 source_table: None,
                 table_no: None,
@@ -6451,6 +6465,7 @@ codeunit 50612 "MixedCU2"
                 declared_id: Some(60150),
                 extends_target: None,
                 implements: vec![],
+                interface_bases: vec![],
                 tier: TrustTier::SymbolOnly,
                 source_table: None,
                 table_no: None,
@@ -6677,6 +6692,7 @@ codeunit 50612 "MixedCU2"
             declared_id: Some(60160),
             extends_target: None,
             implements: vec![],
+            interface_bases: vec![],
             tier: TrustTier::SymbolOnly,
             source_table: None,
             table_no: None,
@@ -6835,6 +6851,7 @@ codeunit 50612 "MixedCU2"
                 declared_id: Some(60170),
                 extends_target: None,
                 implements: vec![],
+                interface_bases: vec![],
                 tier: TrustTier::SymbolOnly,
                 source_table: None,
                 table_no: None,
@@ -6859,6 +6876,7 @@ codeunit 50612 "MixedCU2"
                 declared_id: Some(60171),
                 extends_target: None,
                 implements: vec![],
+                interface_bases: vec![],
                 tier: TrustTier::SymbolOnly,
                 source_table: None,
                 table_no: None,
@@ -7448,6 +7466,7 @@ codeunit 50203 "NoTriggerCU"
             declared_id: Some(60000),
             extends_target: None,
             implements: vec![],
+            interface_bases: vec![],
             tier: TrustTier::SymbolOnly,
             source_table: None,
             table_no: None,
@@ -7752,6 +7771,7 @@ codeunit 50300 "OverloadCU"
             declared_id: Some(1),
             extends_target: None,
             implements: vec![],
+            interface_bases: vec![],
             tier: TrustTier::Workspace,
             source_table: None,
             table_no: None,
@@ -12025,6 +12045,7 @@ codeunit 50000 "Caller"
             declared_id: Some(50100),
             extends_target: None,
             implements: vec![],
+            interface_bases: vec![],
             tier: TrustTier::SymbolOnly,
             source_table: None,
             table_no: None,
@@ -14302,6 +14323,7 @@ codeunit 53971 "OverloadNCaller"
                 declared_id: Some(53990),
                 extends_target: None,
                 implements: vec![],
+                interface_bases: vec![],
                 tier: TrustTier::Workspace,
                 source_table: None,
                 table_no: None,
@@ -14326,6 +14348,7 @@ codeunit 53971 "OverloadNCaller"
                 declared_id: Some(63990),
                 extends_target: None,
                 implements: vec![],
+                interface_bases: vec![],
                 tier: TrustTier::Workspace,
                 source_table: None,
                 table_no: None,
@@ -14709,6 +14732,7 @@ codeunit 53975 "Overload3Caller"
                 declared_id: Some(50611),
                 extends_target: None,
                 implements: vec![],
+                interface_bases: vec![],
                 tier: TrustTier::Workspace,
                 source_table: None,
                 table_no: None,
@@ -14733,6 +14757,7 @@ codeunit 53975 "Overload3Caller"
                 declared_id: Some(60151),
                 extends_target: None,
                 implements: vec![],
+                interface_bases: vec![],
                 tier: TrustTier::SymbolOnly,
                 source_table: None,
                 table_no: None,
@@ -14922,6 +14947,7 @@ codeunit 53975 "Overload3Caller"
                 declared_id: Some(50700),
                 extends_target: None,
                 implements: vec![],
+                interface_bases: vec![],
                 tier: TrustTier::Workspace,
                 source_table: None,
                 table_no: None,
@@ -14946,6 +14972,7 @@ codeunit 53975 "Overload3Caller"
                 declared_id: Some(60152),
                 extends_target: None,
                 implements: vec![],
+                interface_bases: vec![],
                 tier: TrustTier::Workspace,
                 source_table: None,
                 table_no: None,

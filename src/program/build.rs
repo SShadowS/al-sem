@@ -770,13 +770,52 @@ fn closed_internal_interfaces(
         })
         .filter_map(|u| graph.apps.find(&u.id))
         .collect();
-    graph
+    let mut closed: HashSet<ObjectNodeId> = graph
         .objects
         .iter()
         .filter(|o| o.id.kind == ObjectKind::Interface && o.internal)
         .filter(|o| closed_apps.contains(&o.id.app))
         .map(|o| o.id.clone())
-        .collect()
+        .collect();
+    // ENG-142 (review, Fable): a PUBLIC interface may extend an internal one
+    // (alc 18.0.41 compiles it, probe /work/.al-sem/probes/eng142-internal), and
+    // any app can implement the public one, so an implementer outside the
+    // program reaches the base. An interface is closed only while every
+    // interface derived from it is closed too.
+    let derived: Vec<(&ObjectNodeId, Vec<ObjectNodeId>)> = graph
+        .objects
+        .iter()
+        .filter(|o| o.id.kind == ObjectKind::Interface && !o.interface_bases.is_empty())
+        .map(|d| {
+            let bases = d
+                .interface_bases
+                .iter()
+                // Unresolved: every interface of the name (review, Fable: a
+                // dropped base stayed closed).
+                .flat_map(|b| {
+                    use al_syntax::IdentifierFoldExt;
+                    graph.interfaces_named_from(d.id.app, &b.fold_identifier())
+                })
+                .map(|b| b.id.clone())
+                .collect();
+            (&d.id, bases)
+        })
+        .collect();
+    loop {
+        let open: Vec<ObjectNodeId> = derived
+            .iter()
+            .filter(|(d, _)| !closed.contains(*d))
+            .flat_map(|(_, bases)| bases.iter())
+            .filter(|b| closed.contains(*b))
+            .cloned()
+            .collect();
+        if open.is_empty() {
+            break closed;
+        }
+        for b in &open {
+            closed.remove(b);
+        }
+    }
 }
 
 /// Synthetic platform-publisher arity: a generous upper bound so the resolve
@@ -943,7 +982,24 @@ fn dedup_objects(objects: &mut Vec<ObjectNode>) {
                 kept.fields.push(field);
             }
         }
+        // ENG-142 (review, sol): what any copy implements or extends, since a
+        // dispatch through either arm's interface may reach the object. The
+        // first copy alone lost the later arms' interfaces (and their edges).
+        for name in std::mem::take(&mut dup.implements) {
+            if !kept.implements.contains(&name) {
+                kept.implements.push(name);
+            }
+        }
+        for name in std::mem::take(&mut dup.interface_bases) {
+            if !kept.interface_bases.contains(&name) {
+                kept.interface_bases.push(name);
+            }
+        }
         kept.closed_enum &= dup.closed_enum;
+        // ENG-142 (review, sol r2): internal only when every copy is: a copy
+        // that is public in some build can be named, and implemented, by any app
+        // (G28 reads this to close an interface).
+        kept.internal &= dup.internal;
         if kept.closed_enum {
             for entry in std::mem::take(&mut dup.enum_impls) {
                 if !kept.enum_impls.contains(&entry) {
