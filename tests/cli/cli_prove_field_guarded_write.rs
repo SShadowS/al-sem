@@ -37,6 +37,9 @@ table 50402 "FG Log"
 }
 codeunit 50403 "FG Mgt"
 {
+    var
+        G: RecordRef;
+
     procedure SetHandled(V: Variant)
     var
         RecRef: RecordRef;
@@ -130,6 +133,46 @@ codeunit 50403 "FG Mgt"
         R.Modify();
     end;
 
+    // sol on ENG-145: the global passed on as `this.G`.
+    procedure ThisGlobal()
+    begin
+        if not G.FieldExist(50) then
+            exit;
+        RebindLog(this.G);
+        G.Modify();
+    end;
+
+    // sol on ENG-145: two `var` parameters a caller may bind to one record (`Victim(R, R)`).
+    procedure Victim(var A: RecordRef; var B: RecordRef)
+    var
+        L: Record "FG Log";
+    begin
+        if not A.FieldExist(50) then
+            exit;
+        B.GetTable(L);
+        A.Modify();
+    end;
+
+    // sol on ENG-145: an array slot holding the alias.
+    procedure ArraySlot(var R: RecordRef)
+    var
+        Slot: array[1] of RecordRef;
+        L: Record "FG Log";
+    begin
+        if not R.FieldExist(50) then
+            exit;
+        Slot[1] := R;
+        Slot[1].GetTable(L);
+        R.Modify();
+    end;
+
+    local procedure RebindLog(var R: RecordRef)
+    var
+        L: Record "FG Log";
+    begin
+        R.GetTable(L);
+    end;
+
     // Control: a Duplicate() shares nothing, so the guard holds.
     procedure DuplicateControl(var R: RecordRef)
     var
@@ -189,7 +232,15 @@ fn a_field_guarded_recordref_write_writes_only_tables_with_the_field() {
     assert_eq!(answer("AliasWith", "FG Log"), "unknown");
     // ENG-145: a rebinding through an alias (plain, quoted, through a Variant) ends the guard;
     // a Duplicate() shares nothing, so its guard holds.
-    for routine in ["AliasPlain", "AliasQuoted", "AliasVariant"] {
+    for routine in [
+        "AliasPlain",
+        "AliasQuoted",
+        "AliasVariant",
+        // sol on ENG-145: `this.G` passed on, two parameters one caller may alias, an array slot.
+        "ThisGlobal",
+        "Victim",
+        "ArraySlot",
+    ] {
         assert_eq!(answer(routine, "FG Log"), "unknown", "{routine}");
     }
     assert_eq!(answer("DuplicateControl", "FG Log"), "no");
@@ -365,6 +416,9 @@ const TEMP_ALIAS: &str = r#"table 50420 "TA Buf"
 }
 codeunit 50421 "TA Mgt"
 {
+    var
+        TG: RecordRef;
+
     // No branching: the first derivation pass.
     procedure AliasGetTable()
     var
@@ -463,6 +517,40 @@ codeunit 50421 "TA Mgt"
         Ref.Modify();
     end;
 
+    // sol on ENG-145, the temp derivation: `this.TG` passed on, two parameters a caller may
+    // alias, an array slot.
+    procedure ThisGlobalTemp()
+    var
+        Tmp: Record "TA Buf" temporary;
+    begin
+        TG.GetTable(Tmp);
+        Rebind(this.TG);
+        TG.Modify();
+    end;
+
+    procedure VictimTemp(var A: RecordRef; var B: RecordRef)
+    var
+        Tmp: Record "TA Buf" temporary;
+        Phys: Record "TA Buf";
+    begin
+        A.GetTable(Tmp);
+        B.GetTable(Phys);
+        A.Modify();
+    end;
+
+    procedure ArraySlotTemp()
+    var
+        Ref: RecordRef;
+        Slot: array[1] of RecordRef;
+        Tmp: Record "TA Buf" temporary;
+        Phys: Record "TA Buf";
+    begin
+        Ref.GetTable(Tmp);
+        Slot[1] := Ref;
+        Slot[1].GetTable(Phys);
+        Ref.Modify();
+    end;
+
     local procedure PhysRef(): RecordRef
     var
         R: RecordRef;
@@ -507,6 +595,10 @@ fn a_recordref_alias_keeps_no_derived_temp_state() {
     }
     // The no-branching pass, the RecordRef passed to a call or assigned: the same one rule.
     for routine in ["HelperOpenTemp", "HelperGetTable", "AssignedFromCall"] {
+        assert_eq!(answer(routine), "unknown", "{routine}");
+    }
+    // sol on ENG-145: `this.TG`, two parameters a caller may alias, an array slot.
+    for routine in ["ThisGlobalTemp", "VictimTemp", "ArraySlotTemp"] {
         assert_eq!(answer(routine), "unknown", "{routine}");
     }
     // Controls: no alias, the record stays temporary.

@@ -90,6 +90,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `recref_flow`, `field_guard` and `record_types` all read it (`recref_flow`'s own union-find is
   gone). Readers still treat `Open`/`Close` through an alias as rebinding the class: sound, and
   coarser than the platform (ENG-157).
+- **What a routine cannot see (sol, round 1).** `AliasClasses::for_routine` (what `field_guard`
+  and `record_types` read) also joins: every parameter and global holder (a caller may bind two
+  `var` parameters to one record, `Victim(R, R)`; two globals may have been aliased elsewhere),
+  and, when the routine has an array of RecordRefs or Variants, every holder (`Slot[1] := R`
+  records no partner). Names are keyed one way, `recref_alias::holder_key` (`this.G` is `G`,
+  `Slot[1]` is `Slot`, quotes stripped), which `record_types`' receiver key now calls; a
+  `Rebind(this.G)` was no rebinding of `G`. The cost: a routine with two or more parameter or
+  global RecordRefs takes no field guard and no derived temp state for them.
 - **A quoted alias was no alias.** `PVarAssignment::rhs_identifier` was set only for two bare
   identifiers, so `"Alias Ref" := R` made no alias. It now takes quoted names on either side
   (also read by d11/d21's record-assign-as-load).
@@ -100,7 +108,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   already did; `HelperOpenTemp`, `HelperGetTable` and `AssignedFromCall` (the no-branching pass)
   `unknown`. Each fix fails its test when removed (the class expansion, the quoted
   `rhs_identifier`, the Variant holders, the two passes' alias checks, and the predicate's
-  argument and assignment clauses: `HelperOpenTemp` and `AssignedFromCall` answer `no`);
+  argument and assignment clauses: `HelperOpenTemp` and `AssignedFromCall` answer `no`). Sol's
+  round 1 shapes, in both families: `ThisGlobal`/`ThisGlobalTemp` (`this.G`), `Victim`/
+  `VictimTemp` (two `var` parameters), `ArraySlot`/`ArraySlotTemp`, each `unknown`, and `no`
+  when its rule (the one key, the parameter/global join, the array join) is removed;
   `recref_alias`'s unit test pins the classes.
 
 ### Fixed (ENG-151: d19 no longer flags an unused parameter of a method that implements an interface member)

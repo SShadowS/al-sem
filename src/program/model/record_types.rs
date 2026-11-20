@@ -30,35 +30,22 @@ use al_syntax::IdentifierFoldExt;
 
 use crate::program::body::node_util::strip_quotes;
 
-/// The routine's variables that can hold a RecordRef's record (RecordRef, or a Variant holding
-/// one), folded: the alias classes' members (ENG-145).
-fn reference_holders(routine: &ModelRoutine) -> std::collections::HashSet<String> {
-    routine
-        .variables
-        .iter()
-        .filter(|v| {
-            let t = v.declared_type.trim();
-            t.eq_fold_identifier("recordref") || t.eq_fold_identifier("variant")
-        })
-        .map(|v| v.name.fold_identifier())
-        .collect()
-}
-
 /// ENG-145: whether something other than the pass's own `Open`/`GetTable` calls on it may rebind
-/// the RecordRef `v` (folded) in `routine`, so no temp state may be derived for it: an alias of
-/// it (`A := v` or `v := A`, a Variant included; `A.GetTable(Phys)` rebinds `v` too, measured on
-/// BC 28.4), any assignment to it (`v := GetRef()`), or a call receiving it as an argument (a
-/// callee may `GetTable` it: by `var`, or through the record the passed handle shares). The ONE
-/// predicate both temp-derivation passes read, so they cannot drift apart again.
+/// the RecordRef `v` (a [`recref_alias::holder_key`]) in `routine`, so no temp state may be
+/// derived for it: an alias of it (`A := v` or `v := A`, a Variant included; `A.GetTable(Phys)`
+/// rebinds `v` too, measured on BC 28.4; a parameter, global or array holder may be aliased
+/// already, `AliasClasses::for_routine`), any assignment to it (`v := GetRef()`), or a call
+/// receiving it as an argument, `this.v` included (a callee may `GetTable` it: by `var`, or
+/// through the record the passed handle shares). The ONE predicate both temp-derivation passes
+/// read, so they cannot drift apart again.
+///
+/// [`recref_alias::holder_key`]: crate::program::model::recref_alias::holder_key
 fn may_be_rebound_elsewhere(
     routine: &ModelRoutine,
     aliases: &crate::program::model::recref_alias::AliasClasses,
     v: &str,
 ) -> bool {
-    let names = |t: &str| {
-        let t = t.trim();
-        t.fold_identifier() == v || t.trim_matches('"').fold_identifier() == v
-    };
+    let names = |t: &str| crate::program::model::recref_alias::holder_key(t) == v;
     aliases.has_alias(v)
         || routine.var_assignments.iter().any(|a| names(&a.lhs_name))
         || routine
@@ -71,22 +58,11 @@ fn may_be_rebound_elsewhere(
 /// receiver's raw text, so a quoted name (`"Job Ledger Entry".Modify()`) is
 /// matched LOGICAL (quotes stripped, `""` one `"`), lowercased, as variable
 /// names are stored. A quoted receiver missed its variable, so its table and
-/// temp state stayed unknown.
+/// temp state stayed unknown. An array element `Recs[1]` is an op on the array
+/// variable (ENG-12, L36), and `this.X` on the global `X` (ENG-12). The same key the
+/// RecordRef alias classes use (`recref_alias::holder_key`, ENG-145).
 fn op_variable_lc(raw: &str) -> String {
-    // An array element `Recs[1]` is an op on the array variable (ENG-12, L36).
-    let raw = match raw.trim_end().strip_suffix(']') {
-        Some(_) => raw.find('[').map_or(raw, |i| &raw[..i]),
-        None => raw,
-    };
-    // An object global through `this` (`this.X`): the global `X` (ENG-12).
-    let raw = raw.trim();
-    let raw = match raw.get(..5) {
-        Some(p) if p.eq_fold_identifier("this.") => &raw[5..],
-        _ => raw,
-    };
-    strip_quotes(raw.trim())
-        .replace("\"\"", "\"")
-        .fold_identifier()
+    crate::program::model::recref_alias::holder_key(raw)
 }
 
 /// Extract the TABLE NAME from a record variable's `declaredType` string.
@@ -522,11 +498,7 @@ pub fn resolve_routine_record_types(
 
             // ENG-145: a RecordRef something else may rebind (an alias, an assignment, a call it
             // is passed to) keeps no derived temp state.
-            let holders = reference_holders(routine);
-            let aliases = crate::program::model::recref_alias::AliasClasses::of(
-                &routine.var_assignments,
-                |n| holders.contains(n),
-            );
+            let aliases = crate::program::model::recref_alias::AliasClasses::for_routine(routine);
             recref_temp.retain(|v, _| !may_be_rebound_elsewhere(routine, &aliases, v));
 
             // Apply derived temp states to matching record ops.
@@ -562,11 +534,7 @@ pub fn resolve_routine_record_types(
             .collect();
         // ENG-145: an alias (`A := RR`, either side; a Variant holds the reference too) can
         // rebind it (`A.GetTable(Phys)`).
-        let holders = reference_holders(routine);
-        let aliases =
-            crate::program::model::recref_alias::AliasClasses::of(&routine.var_assignments, |n| {
-                holders.contains(n)
-            });
+        let aliases = crate::program::model::recref_alias::AliasClasses::for_routine(routine);
         let always_temp: std::collections::HashSet<String> = locals
             .into_iter()
             .filter(|v_lc| {

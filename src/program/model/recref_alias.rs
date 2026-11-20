@@ -9,10 +9,34 @@
 //!
 //! Readers treat every rebinding call through a class member as reaching every member, `Open`
 //! and `Close` included: sound, and coarser than the platform (ENG-157 refines it).
+//!
+//! A routine sees only its own assignments, so [`AliasClasses::for_routine`] also joins what it
+//! cannot see (sol on ENG-145): every parameter and global holder may share a record with every
+//! other already (`Victim(R, R)`, two globals assigned elsewhere), and an array of them keeps
+//! no record of which element holds what (`Slot[1] := R`), so a routine with one joins them all.
 
 use crate::program::body::features::PVarAssignment;
+use crate::program::model::workspace::ModelRoutine;
 use al_syntax::IdentifierFoldExt;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+
+/// A variable reference's key, as every reader of the classes names it: an array element
+/// `Recs[1]` is its array, `this.X` the global `X`, quotes stripped (`""` one `"`), folded.
+#[must_use]
+pub fn holder_key(raw: &str) -> String {
+    let raw = match raw.trim_end().strip_suffix(']') {
+        Some(_) => raw.find('[').map_or(raw, |i| &raw[..i]),
+        None => raw,
+    };
+    let raw = raw.trim();
+    let raw = match raw.get(..5) {
+        Some(p) if p.eq_fold_identifier("this.") => &raw[5..],
+        _ => raw,
+    };
+    crate::program::body::node_util::strip_quotes(raw.trim())
+        .replace("\"\"", "\"")
+        .fold_identifier()
+}
 
 /// The alias classes over the variables `tracked` accepts (folded names), from `A := B`
 /// assignments between two of them. A variable in no assignment is its own class.
@@ -21,18 +45,75 @@ pub struct AliasClasses {
     parent: HashMap<String, String>,
     /// Each alias assignment's target and position (line, column).
     pub assignments: Vec<(String, (u32, u32))>,
+    /// [`Self::for_routine`]'s holders (keys); empty from [`Self::of`].
+    holders: HashSet<String>,
 }
 
 impl AliasClasses {
+    /// The classes `field_guard` and `record_types` read: over the routine's RecordRef and
+    /// Variant holders (arrays of them included), from its own `A := B`, with every parameter
+    /// and global holder joined (a caller or another routine may have aliased them) and, when
+    /// the routine has an array holder, every holder joined.
+    #[must_use]
+    pub fn for_routine(r: &ModelRoutine) -> Self {
+        let holder_type = |t: &str| {
+            let t = t.trim().fold_identifier();
+            t == "recordref"
+                || t == "variant"
+                || t.ends_with(" of recordref")
+                || t.ends_with(" of variant")
+        };
+        let holders: Vec<&crate::program::model::workspace::ModelVariable> = r
+            .variables
+            .iter()
+            .filter(|v| holder_type(&v.declared_type))
+            .collect();
+        let keys: HashSet<String> = holders.iter().map(|v| holder_key(&v.name)).collect();
+        let mut c = Self::of(&r.var_assignments, |n| keys.contains(n));
+        let any_array = holders
+            .iter()
+            .any(|v| v.declared_type.trim().fold_identifier().contains(" of "));
+        let joined: Vec<String> = holders
+            .iter()
+            .filter(|v| any_array || v.is_parameter || v.scope.as_deref() != Some("local"))
+            .map(|v| holder_key(&v.name))
+            .collect();
+        c.join(&joined);
+        c.holders = keys;
+        c
+    }
+
+    /// Whether the key `x` names a holder ([`Self::for_routine`] only).
+    #[must_use]
+    pub fn is_holder(&self, x: &str) -> bool {
+        self.holders.contains(x)
+    }
+
+    /// Joins every name of `names` into one class.
+    fn join(&mut self, names: &[String]) {
+        let Some((first, rest)) = names.split_first() else {
+            return;
+        };
+        for n in rest {
+            let (ra, rb) = (self.root(first), self.root(n));
+            self.parent
+                .entry(first.clone())
+                .or_insert_with(|| first.clone());
+            self.parent.entry(n.clone()).or_insert_with(|| n.clone());
+            if ra != rb {
+                self.parent.insert(ra, rb);
+            }
+        }
+    }
     #[must_use]
     pub fn of(assignments: &[PVarAssignment], tracked: impl Fn(&str) -> bool) -> Self {
         let mut c = Self::default();
         for a in assignments {
-            let l = a.lhs_name.trim().trim_matches('"').fold_identifier();
+            let l = holder_key(&a.lhs_name);
             let Some(w) = a.rhs_identifier.as_deref() else {
                 continue;
             };
-            let w = w.trim_matches('"').fold_identifier();
+            let w = holder_key(w);
             if !tracked(&l) || !tracked(&w) {
                 continue;
             }
