@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (ENG-148: a runtime package's codeunit implementers reach interface dispatch)
+
+- **The gap.** A runtime package ships no AL, only BC's transpiled C# (`bin/*.cs`) and its
+  symbols. al-sem reads it from AL it synthesizes from both (`snapshot::transpiled::synth`).
+  That AL wrote `implements` for enums only. A codeunit in such a package that implements an
+  interface was missing from `implementers_of`, so a call through the interface reached none of
+  it: a missed callee, and missed effects.
+- **The fix.** The synthesized header writes `implements` for codeunits too. alc 18.0.41 accepts
+  `implements` on codeunits and enums only: a report, page, table, query or xmlport header with
+  one is syntax error AL0104 (probe `/work/.al-sem/probes/eng148-kinds`), so no other kind needs
+  it. Every interface list (an enum's and a codeunit's `implements`, an interface's `extends`)
+  now goes through one helper. It quotes each name and reads a `#<guid>#Name` reference by its
+  name. The enum header and its values' `Implementation = <interface> = ...` lines had joined
+  the raw names, so an interface name with a space broke them.
+- **Tests.** `synth`'s unit test reads the lowered `implements` of a synthesized codeunit and
+  enum (names with a space and a `#<guid>#` reference). A resolver test builds a synthetic
+  runtime package and checks a workspace call through its interface reaches the codeunit.
+  Red proofs: the codeunit arm dropped breaks both; raw names break the unit test. The resolver
+  test's red also shows the model reads the synthesized source there, not the symbols (which
+  list the implementer too).
+- **Measured.** release-fast, ENG-151 `e6063417` against this branch: CDO (`bc3ccb18`, clean)
+  and DO (`b3b44591`, clean) unchanged. Findings and fingerprints are identical at both scopes.
+  `aldump --program-call-graph-stats` output is byte-identical (CDO 46,688 edges, 0 unknown).
+  Neither workspace holds a runtime package: CDO's 11 `.alpackages` all ship `.al` and no
+  `bin/*.cs` (Continia Core included), and DO has no `.alpackages`. So the change has no input
+  here to move. The resolver test is the evidence of the gain.
+
 ### Fixed (ENG-151: d19 no longer flags an unused parameter of a method that implements an interface member)
 
 - **The gap.** `d19-unused-parameter` flagged the parameters of a method implementing an
