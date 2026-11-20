@@ -321,7 +321,15 @@ pub enum ReceiverType {
         id: Option<ObjectNodeId>,
     },
     /// An `Interface IFoo` receiver — Phase B fans out to every implementer.
-    Interface { name_lc: String },
+    /// ENG-152: `app` is the reference's own app qualifier (symbols and
+    /// synthesized text), `scope` the app whose scope NAMED the type (where the
+    /// variable, parameter or return type is declared, not the call site);
+    /// the interface binds from there ([`Self::interface_binding`]).
+    Interface {
+        name_lc: String,
+        app: Option<crate::program::node::SharedStr>,
+        scope: crate::program::node::AppRef,
+    },
     /// A declared `Enum "Color"`-typed VALUE (a var/field), OR a VERIFIED
     /// enum-value-literal chain (`X::Y` — `ExprKind::QualifiedEnum` whose
     /// `enum_type` is NOT the literal `Enum` keyword, but WAS confirmed to
@@ -398,6 +406,50 @@ pub enum ReceiverType {
     Unknown,
 }
 
+impl ReceiverType {
+    /// ENG-152: an `Interface` receiver whose type text was declared in
+    /// `app`'s scope (a callee's return type: the callee's app), not the
+    /// typing caller's. Every other receiver is returned as is.
+    pub(crate) fn declared_in(self, app: crate::program::node::AppRef) -> Self {
+        match self {
+            ReceiverType::Interface {
+                name_lc, app: a, ..
+            } => ReceiverType::Interface {
+                name_lc,
+                app: a,
+                scope: app,
+            },
+            other => other,
+        }
+    }
+
+    /// ENG-152: an `Interface` receiver's reference and what it binds to from
+    /// its declaring scope (recorded through `GraphReads::bind_interface`).
+    pub(crate) fn interface_binding(
+        &self,
+        graph: &dyn GraphReads,
+    ) -> Option<(
+        crate::program::node_extract::InterfaceRef,
+        crate::program::graph::InterfaceBinding,
+    )> {
+        let ReceiverType::Interface {
+            name_lc,
+            app,
+            scope,
+        } = self
+        else {
+            return None;
+        };
+        let r = crate::program::node_extract::InterfaceRef {
+            name: name_lc.as_str().into(),
+            app: app.clone(),
+            inferred: false,
+        };
+        let b = graph.bind_interface(*scope, &r);
+        Some((r, b))
+    }
+}
+
 /// What Phase A already proved about a `ControlAddIn` receiver's declaration —
 /// the closed-if-known tri-state (receiver-closure plan, Task 1 round-2
 /// closer). `Ambiguous`/`Degraded`/genuinely-absent-and-non-platform outcomes
@@ -463,8 +515,12 @@ pub enum ParsedType {
         kind: ObjectKind,
         object_ref: ObjectRef,
     },
-    /// `Interface <Name>` — lowercased interface name.
-    Interface { name: String },
+    /// `Interface <Name>` — lowercased interface name, and (ENG-152) the app of
+    /// a `"#<guid>#".` qualifier (synthesized text), if any.
+    Interface {
+        name: String,
+        app: Option<crate::program::node::SharedStr>,
+    },
     /// `Enum <Name>` — lowercased enum name.
     EnumType { name: String },
     /// `ControlAddIn <Name>` — lowercased addin type name, quotes stripped
@@ -547,9 +603,13 @@ pub fn classify_type_text(ty: &str) -> ParsedType {
         "report" => parse_object_kind_type(ObjectKind::Report, rest),
         "query" => parse_object_kind_type(ObjectKind::Query, rest),
         "xmlport" => parse_object_kind_type(ObjectKind::XmlPort, rest),
-        "interface" => ParsedType::Interface {
-            name: unquote_identifier(strip_namespace(rest)).fold_identifier(),
-        },
+        "interface" => {
+            let r = crate::program::node_extract::interface_ref_text(rest);
+            ParsedType::Interface {
+                name: r.name.to_string(),
+                app: r.app,
+            }
+        }
         "enum" => ParsedType::EnumType {
             name: unquote_identifier(strip_namespace(rest)).fold_identifier(),
         },
@@ -2234,10 +2294,7 @@ fn infer_cross_object_chain_receiver(
         return None;
     }
 
-    if let ReceiverType::Interface { name_lc } = base_ty
-        && let Some(node) =
-            interface_own_routine_node(name_lc, member_lc, arity, from_object, graph, index)
-    {
+    if let Some(node) = interface_own_routine_node(base_ty, member_lc, arity, graph, index) {
         return receiver_from_routine_node(node, from_object, graph, index);
     }
 
@@ -2249,8 +2306,9 @@ fn infer_cross_object_chain_receiver(
 /// modeled — see [`infer_cross_object_chain_receiver`]'s doc. Interface
 /// members carry no access modifier in AL (they are always the public
 /// contract), so no visibility filtering applies here (unlike
-/// `resolve_member`'s implementer dispatch). `None` when the interface
-/// object itself is not resolvable from `from_object`'s app, or zero/more-
+/// `resolve_member`'s implementer dispatch). `None` unless `receiver` is an
+/// `Interface` that binds to exactly ONE interface (ENG-152: from its declaring
+/// scope; a merely visible one proves no signature), or when zero/more-
 /// than-one same-arity candidate is declared (defensive — a single interface
 /// declaration should never itself be arity-ambiguous, but this never
 /// guesses).
@@ -2258,17 +2316,18 @@ fn infer_cross_object_chain_receiver(
 /// ENG-142: a member the interface does not declare itself may be a base's
 /// (`interface IBaz extends IBar`: alc 18.0.41 compiles `Z.Bar()` on an `IBaz`
 /// receiver). Then exactly one same-arity declaration across all its bases,
-/// transitively (a diamond's shared base counted once), is the member; none,
-/// or more than one, is `None`.
+/// transitively (a diamond's shared base counted once; a base bound from its
+/// declaring interface's app, every interface it may name), is the member;
+/// none, or more than one, is `None`.
 pub(crate) fn interface_own_routine_node<'g>(
-    name_lc: &str,
+    receiver: &ReceiverType,
     member_lc: &str,
     arity: usize,
-    from_object: &ObjectNode,
     graph: &'g dyn GraphReads,
     index: &dyn IndexReads,
 ) -> Option<&'g RoutineNode> {
-    let iface = graph.resolve_object(from_object.id.app, ObjectKind::Interface, name_lc)?;
+    let (_, binding) = receiver.interface_binding(graph)?;
+    let iface = graph.object(binding.exact()?)?;
     let declared = |o: &ObjectNode| -> Vec<&RoutineNodeId> {
         index
             .routines_in_object(graph, &o.id, member_lc)
@@ -2283,12 +2342,13 @@ pub(crate) fn interface_own_routine_node<'g>(
         while let Some(o) = stack.pop() {
             // A base is named from the declaring interface's own app: a
             // dependency's `extends` names what that app sees.
-            for b in &o.interface_bases {
-                let Some(base) =
-                    graph.resolve_object(o.id.app, ObjectKind::Interface, &b.fold_identifier())
-                else {
-                    continue;
-                };
+            let bases: Vec<&ObjectNode> = o
+                .interface_bases
+                .iter()
+                .flat_map(|b| graph.bind_interface(o.id.app, b).ids().to_vec())
+                .filter_map(|id| graph.object(&id))
+                .collect();
+            for base in bases {
                 if seen.insert(&base.id) {
                     for rid in declared(base) {
                         if !matched.contains(&rid) {
@@ -2346,7 +2406,9 @@ fn receiver_from_routine_node(
     if matches!(parsed, ParsedType::Primitive) {
         return None;
     }
-    let receiver = parsed_type_to_receiver(parsed, from_object, graph, index);
+    // ENG-152: an interface return type is named in the callee's app.
+    let receiver =
+        parsed_type_to_receiver(parsed, from_object, graph, index).declared_in(node.id.object.app);
 
     if let Some((_name, id)) = &node.return_type_id {
         let resolved_obj = match &receiver {
@@ -2700,7 +2762,8 @@ fn infer_call_result_receiver(
 
     // 4. Convert the parsed return type to a receiver — same fail-closed
     //    conversion Step 2's declared-variable path uses.
-    Some(parsed_type_to_receiver(parsed, from_object, graph, index))
+    // ENG-152: an interface return type is named in the callee's app.
+    Some(parsed_type_to_receiver(parsed, from_object, graph, index).declared_in(rid.object.app))
 }
 
 /// Whether a bare call `name_lc(..)` may instead read a variable of that name:
@@ -3231,7 +3294,14 @@ pub(crate) fn parsed_type_to_receiver(
                 resolve_object_ref_lc(kind, &object_ref, from_object.id.clone(), graph, index);
             ReceiverType::Object { kind, name_lc, id }
         }
-        ParsedType::Interface { name } => ReceiverType::Interface { name_lc: name },
+        // ENG-152: named in `from_object`'s app; a caller typing a type text
+        // declared elsewhere (a callee's return type) re-scopes it
+        // (`ReceiverType::declared_in`).
+        ParsedType::Interface { name, app } => ReceiverType::Interface {
+            name_lc: name,
+            app,
+            scope: from_object.id.app,
+        },
         ParsedType::EnumType { name } => ReceiverType::EnumType { name_lc: name },
         ParsedType::ControlAddIn { name } => {
             // Direct-var retrofit (Task 1 round-1 addendum): `var X: ControlAddIn
@@ -4255,7 +4325,8 @@ mod tests {
         assert_eq!(
             classify_type_text("Interface \"IFoo\""),
             ParsedType::Interface {
-                name: "ifoo".into()
+                name: "ifoo".into(),
+                app: None,
             }
         );
     }
@@ -6236,7 +6307,9 @@ mod tests {
         assert_eq!(
             result,
             ReceiverType::Interface {
-                name_lc: "imyinterface".into()
+                name_lc: "imyinterface".into(),
+                app: None,
+                scope: from_obj.id.app,
             }
         );
     }

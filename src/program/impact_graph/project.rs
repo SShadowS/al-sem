@@ -3,7 +3,6 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 
-use al_syntax::IdentifierFoldExt;
 use al_syntax::ir::ObjectKind;
 
 use super::facts::{RunTarget, SourceFacts};
@@ -195,6 +194,8 @@ struct Builder<'a> {
     inp: &'a Inputs<'a>,
     obj_by_id: HashMap<&'a ObjectNodeId, &'a ObjectNode>,
     routines_of: HashMap<&'a ObjectNodeId, Vec<&'a RoutineNode>>,
+    /// Interface implementers by identity (ENG-152), for the callback hubs.
+    interfaces: crate::program::resolve::interfaces::InterfaceImplementers,
     rtn_by_id: HashMap<&'a RoutineNodeId, &'a RoutineNode>,
     base_of: HashMap<&'a ObjectNodeId, ObjectNodeId>,
     exts_of: HashMap<ObjectNodeId, Vec<&'a ObjectNodeId>>,
@@ -266,6 +267,7 @@ impl<'a> Builder<'a> {
             inp,
             obj_by_id,
             routines_of,
+            interfaces: crate::program::resolve::interfaces::InterfaceImplementers::build(g),
             rtn_by_id,
             base_of,
             exts_of,
@@ -1310,22 +1312,18 @@ impl<'a> Builder<'a> {
                             targets.push((Key::Routine(r.id.clone()), Kind::Event));
                         }
                     }
-                    // Implementations of interfaces declared there.
-                    let mut ifaces: HashSet<String> = g
+                    // Implementations of interfaces declared there, by identity
+                    // (ENG-152): `implementers_of` holds the implementers of
+                    // every interface derived from one, in any app (ENG-142).
+                    let impls: HashSet<&ObjectNodeId> = g
                         .objects
                         .iter()
                         .filter(|o| o.id.kind == ObjectKind::Interface && apps.contains(&o.id.app))
-                        .map(|o| o.name.fold_identifier())
+                        .flat_map(|i| self.interfaces.implementers_of(&i.id))
                         .collect();
-                    // ENG-142: and every interface derived from one, in any app:
-                    // its implementers implement the base too.
-                    g.add_derived_interfaces(&mut ifaces);
-                    if !ifaces.is_empty() {
+                    if !impls.is_empty() {
                         for o in g.objects.iter() {
-                            if o.implements
-                                .iter()
-                                .any(|i| ifaces.contains(&i.fold_identifier()))
-                            {
+                            if impls.contains(&o.id) {
                                 for r in self.routines_of.get(&o.id).into_iter().flatten() {
                                     if !r.is_trigger && r.access == Access::Public {
                                         targets.push((Key::Routine(r.id.clone()), Kind::Interface));
@@ -1634,6 +1632,7 @@ pub(crate) mod tests {
     use crate::program::resolve::full::{ClassifiedEdge, RareSiteFacts, SiteFacts};
     use crate::program::topology::DependencyGraph;
     use crate::snapshot::AppId;
+    use al_syntax::IdentifierFoldExt;
 
     /// A hand-built program (also the reverse walker's test world).
     #[derive(Default)]

@@ -509,6 +509,7 @@ impl std::fmt::Debug for SiteFacts {
         } = self;
         let RareSiteFacts {
             interface,
+            interface_binding,
             interface_closed_over,
             interface_unmapped_enums,
             interface_holder,
@@ -527,6 +528,7 @@ impl std::fmt::Debug for SiteFacts {
         } = self.rare();
         f.debug_struct("SiteFacts")
             .field("interface", interface)
+            .field("interface_binding", interface_binding)
             .field("interface_closed_over", interface_closed_over)
             .field("interface_unmapped_enums", interface_unmapped_enums)
             .field("interface_holder", interface_holder)
@@ -558,6 +560,13 @@ impl std::fmt::Debug for SiteFacts {
 pub struct RareSiteFacts {
     /// The interface (folded name) an interface-receiver call dispatched over.
     pub interface: Option<String>,
+    /// ENG-152: that receiver's interface reference and what it bound to from
+    /// its declaring scope, as the resolver dispatched (the model's dispatch
+    /// meta asks the same candidate query).
+    pub interface_binding: Option<(
+        crate::program::node_extract::InterfaceRef,
+        crate::program::graph::InterfaceBinding,
+    )>,
     /// #264: the closed enums an interface call's receiver provably holds a
     /// value of (sorted), when the edge is `Complete` because of them
     /// ([`crate::program::resolve::closed_enum::closed_over`]). Empty = open.
@@ -1685,8 +1694,9 @@ fn resolve_call_site_obligation(
                     receiver.map(|id| (file, id)),
                     Some((surface, with_state)),
                 );
-                if let ReceiverType::Interface { name_lc } = &recv {
+                if let ReceiverType::Interface { name_lc, .. } = &recv {
                     facts_out.rare_mut().interface = Some(name_lc.clone());
+                    facts_out.rare_mut().interface_binding = recv.interface_binding(graph);
                 }
                 facts_out.receiver = Some(receiver_fact(
                     &recv,
@@ -1870,7 +1880,9 @@ fn resolve_call_site_obligation(
                         )
                         .map(|o| o.id.clone());
                 }
-                if let (ReceiverType::Interface { name_lc }, Some(receiver)) = (&recv, receiver) {
+                if let (Some((iref, binding)), Some(receiver)) =
+                    (recv.interface_binding(graph), receiver)
+                {
                     let cx = crate::program::resolve::closed_enum::ClosedEnumCx {
                         file,
                         routine,
@@ -1883,10 +1895,11 @@ fn resolve_call_site_obligation(
                     };
                     facts_out.rare_mut().interface_closed_over =
                         crate::program::resolve::closed_enum::closed_over(
-                            &cx, *receiver, name_lc, &r,
+                            &cx, *receiver, &binding, &r,
                         );
                     // G28: an internal interface no unloaded app can implement
                     // reaches exactly its routes, whatever the receiver holds.
+                    // ENG-152: only an interface the receiver provably names.
                     let real = |x: &Route| {
                         !matches!(x.target, RouteTarget::Unresolved)
                             && !matches!(x.evidence, Evidence::Unknown(_))
@@ -1894,7 +1907,7 @@ fn resolve_call_site_obligation(
                     if facts_out.rare().interface_closed_over.is_empty()
                         && !r.is_empty()
                         && r.iter().all(real)
-                        && let Some(i) = index.unique_object(ObjectKind::Interface, name_lc)
+                        && let Some(i) = binding.exact()
                         && graph.is_closed_internal_interface(i)
                     {
                         facts_out.rare_mut().interface_closed_over = vec![i.clone()];
@@ -1903,11 +1916,11 @@ fn resolve_call_site_obligation(
                     if facts_out.rare().interface_closed_over.is_empty() {
                         facts_out.rare_mut().interface_holder =
                             crate::program::resolve::interface_holder::holder_sources(
-                                &cx, *receiver, name_lc,
+                                &cx, *receiver, &binding,
                             );
                     }
                     facts_out.rare_mut().interface_unmapped_enums =
-                        index.unmapped_enum_implementers(graph, name_lc);
+                        index.unmapped_enum_implementers(graph, &binding, &iref);
                 }
                 (s, r)
             } else {

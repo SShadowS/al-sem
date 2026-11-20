@@ -790,13 +790,10 @@ fn closed_internal_interfaces(
             let bases = d
                 .interface_bases
                 .iter()
-                // Unresolved: every interface of the name (review, Fable: a
-                // dropped base stayed closed).
-                .flat_map(|b| {
-                    use al_syntax::IdentifierFoldExt;
-                    graph.interfaces_named_from(d.id.app, &b.fold_identifier())
-                })
-                .map(|b| b.id.clone())
+                // Every interface the base may name (ENG-152, `bind_interface`:
+                // a non-unique name keeps them all; review, Fable: a dropped base
+                // stayed closed).
+                .flat_map(|b| graph.bind_interface(d.id.app, b).ids().to_vec())
                 .collect();
             (&d.id, bases)
         })

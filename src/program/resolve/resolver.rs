@@ -3903,8 +3903,11 @@ pub(crate) fn resolve_member_with_args(
                 }
             }
         }
-        ReceiverType::Interface { name_lc } => {
-            // Phase 4 Task 2: fan out to all known implementers.
+        ReceiverType::Interface { .. } => {
+            // Phase 4 Task 2: fan out to all known implementers. ENG-152: of the
+            // interfaces the receiver's type binds to from its declaring scope
+            // (several when it may name several; the name pool only when it
+            // binds none).
             //
             // For each implementer:
             //   SymbolOnly tier  → delegate directly to `resolve_in_object`, which
@@ -3922,10 +3925,13 @@ pub(crate) fn resolve_member_with_args(
             // `Route{Unresolved, Unknown}` and must NOT be dropped — silently
             // dropping it would create a reachability black hole where a
             // runtime-reachable target is invisible in the call graph.
-            let implementers = index.implementers_of(name_lc);
+            let implementers = match receiver.interface_binding(graph) {
+                Some((r, binding)) => index.implementers_for(&binding, &r),
+                None => Vec::new(),
+            };
             let mut routes: Vec<Route> = Vec::with_capacity(implementers.len());
 
-            for impl_id in implementers {
+            for impl_id in &implementers {
                 let impl_tier = graph
                     .object_first(impl_id)
                     .map(|o| o.tier)
@@ -11015,6 +11021,8 @@ codeunit 51399 "IfaceCaller1"
         let from_obj = find_obj(&graph, "IfaceCaller1");
         let receiver = ReceiverType::Interface {
             name_lc: "ifoo".into(),
+            app: None,
+            scope: from_obj.id.app,
         };
         let (shape, routes) =
             resolve_member(&receiver, "bar", 0, from_obj, &graph, &index, &surface);
@@ -11041,13 +11049,17 @@ codeunit 51399 "IfaceCaller1"
             assert_eq!(r.evidence, Evidence::Source, "evidence must be Source");
         }
 
-        // Each Routine must pass interface_route_applicable.
+        // Each Routine must pass interface_route_applicable, for the site's
+        // binding (ENG-152).
+        let (iref, binding) = receiver
+            .interface_binding(&graph)
+            .expect("an interface receiver");
         for r in &routes {
             let RouteTarget::Routine(ref rid) = r.target else {
                 unreachable!()
             };
             assert!(
-                interface_route_applicable("ifoo", "bar", 0, rid, &graph, &index),
+                interface_route_applicable(&binding, &iref, "bar", 0, rid, &graph, &index),
                 "Routine route must pass interface_route_applicable; rid={:?}",
                 rid
             );
@@ -11084,6 +11096,8 @@ codeunit 51499 "IfaceCaller2"
         let from_obj = find_obj(&graph, "IfaceCaller2");
         let receiver = ReceiverType::Interface {
             name_lc: "ifoo".into(),
+            app: None,
+            scope: from_obj.id.app,
         };
         let (shape, routes) =
             resolve_member(&receiver, "bar", 0, from_obj, &graph, &index, &surface);
@@ -11147,6 +11161,8 @@ codeunit 51499 "IfaceTypedCaller"
         let from_obj = find_obj(&graph, "IfaceTypedCaller");
         let receiver = ReceiverType::Interface {
             name_lc: "ifoo".into(),
+            app: None,
+            scope: from_obj.id.app,
         };
         let args = [ArgDispatchInfo {
             canonical: Some(CanonicalArgType::Base("integer".into())),
@@ -11245,6 +11261,8 @@ codeunit 51499 "IfaceNestedCaller"
         let from_obj = find_obj(&graph, "IfaceNestedCaller");
         let receiver = ReceiverType::Interface {
             name_lc: "ifoo".into(),
+            app: None,
+            scope: from_obj.id.app,
         };
         let (shape, routes) =
             resolve_member(&receiver, "bar", 1, from_obj, &graph, &index, &surface);
@@ -11360,6 +11378,8 @@ codeunit 51599 "IfaceCaller3"
         let from_obj = find_obj(&graph, "IfaceCaller3");
         let receiver = ReceiverType::Interface {
             name_lc: "ifoo".into(),
+            app: None,
+            scope: from_obj.id.app,
         };
         let (shape, routes) =
             resolve_member(&receiver, "bar", 0, from_obj, &graph, &index, &surface);
@@ -11417,6 +11437,8 @@ codeunit 51699 "IfaceCaller4"
         let from_obj = find_obj(&graph, "IfaceCaller4");
         let receiver = ReceiverType::Interface {
             name_lc: "ifoo".into(),
+            app: None,
+            scope: from_obj.id.app,
         };
         let (shape, routes) =
             resolve_member(&receiver, "bar", 0, from_obj, &graph, &index, &surface);
@@ -11522,6 +11544,8 @@ codeunit 51801 "DepImpl" implements IFoo
         let from_obj = find_obj(&graph, "IfaceCallerSym");
         let receiver = ReceiverType::Interface {
             name_lc: "ifoo".into(),
+            app: None,
+            scope: from_obj.id.app,
         };
         let (shape, routes) =
             resolve_member(&receiver, "bar", 0, from_obj, &graph, &index, &surface);
@@ -15360,6 +15384,8 @@ codeunit 54012 "IfaceCallerX"
         let from_obj = find_obj(&graph, "IfaceCallerX");
         let receiver = ReceiverType::Interface {
             name_lc: "ifoo".into(),
+            app: None,
+            scope: from_obj.id.app,
         };
         let (shape, routes) =
             resolve_member(&receiver, "bar", 0, from_obj, &graph, &index, &surface);
@@ -15436,6 +15462,8 @@ codeunit 54021 "IfaceCallerY"
         let from_obj = find_obj(&graph, "IfaceCallerY");
         let receiver = ReceiverType::Interface {
             name_lc: "ifoo".into(),
+            app: None,
+            scope: from_obj.id.app,
         };
         let (shape, routes) =
             resolve_member(&receiver, "bar", 0, from_obj, &graph, &index, &surface);

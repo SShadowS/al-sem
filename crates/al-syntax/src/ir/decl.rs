@@ -55,6 +55,12 @@ pub struct ObjectDecl {
     /// empty otherwise. GRM-05 (grammar 5.4.0); read by the engine's interface
     /// inheritance (ENG-142: `ObjectNode::interface_bases`) and by d19 (ENG-151).
     pub interface_extends: Vec<String>,
+    /// Parallel to [`Self::implements`] (ENG-152): each reference's leading
+    /// segments, `.`-joined (`NsA` of `NsA.IDup`; the `#<guid>#` app marker
+    /// synthesized text writes as `"#<guid>#"."IDup"`), or `None` for a bare name.
+    pub implements_qualifiers: Vec<Option<String>>,
+    /// Parallel to [`Self::interface_extends`], as [`Self::implements_qualifiers`].
+    pub interface_extends_qualifiers: Vec<Option<String>>,
     /// Page controls (`part` / `systempart` / `usercontrol` sections) in document
     /// order — Page / PageExtension only. Resolves `CurrPage.<control>…` member calls.
     pub page_controls: Vec<PageControl>,
@@ -572,6 +578,8 @@ impl ObjectDecl {
             extends_target: _,
             implements,
             interface_extends,
+            implements_qualifiers,
+            interface_extends_qualifiers,
             page_controls,
             fields,
             keys,
@@ -596,6 +604,8 @@ impl ObjectDecl {
         exact_size(dataset_items);
         exact_size(implements);
         exact_size(interface_extends);
+        exact_size(implements_qualifiers);
+        exact_size(interface_extends_qualifiers);
         exact_size(page_controls);
         exact_size(fields);
         exact_size(keys);

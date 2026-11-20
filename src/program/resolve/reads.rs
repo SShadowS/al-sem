@@ -44,9 +44,9 @@ use std::collections::BTreeSet;
 
 use al_syntax::ir::ObjectKind;
 
-use crate::program::graph::ProgramGraph;
+use crate::program::graph::{InterfaceBinding, ProgramGraph};
 use crate::program::node::{AppRef, ObjectNodeId, RoutineNodeId};
-use crate::program::node_extract::{FieldNode, ObjectNode, ObjectRef, RoutineNode};
+use crate::program::node_extract::{FieldNode, InterfaceRef, ObjectNode, ObjectRef, RoutineNode};
 use crate::program::node_set::NodeSetIter;
 use crate::program::resolve::decl_surface::{DeclSurface, RoutineMeta};
 use crate::program::resolve::index::{ObjectRefResolution, ResolveIndex};
@@ -54,7 +54,9 @@ use crate::program::resolve::index::{ObjectRefResolution, ResolveIndex};
 /// Bumped whenever a trait method, a [`Query`] variant or `session::dep_record::eval`'s answer
 /// changes meaning: a kept log of another version is never trusted.
 /// 3 (ENG-142): `implementers_of` also lists the implementers of derived interfaces.
-pub const FACADE_VERSION: u32 = 3;
+/// 4 (ENG-152): interfaces by identity: `bind_interface`, `implementers_of(id)`,
+/// `implementers_for`, `interface_is_or_derives`; `unmapped_enum_implementers` by binding.
+pub const FACADE_VERSION: u32 = 4;
 
 /// A run of routines as resolution reads it: one candidate per routine. The
 /// declarations of a split subscriber (`program::split_decls`) are one routine
@@ -134,6 +136,8 @@ pub trait GraphReads {
     fn declarations_of(&self, rid: &RoutineNodeId) -> &[RoutineNodeId];
     /// [`ProgramGraph::resolve_object`].
     fn resolve_object(&self, from: AppRef, kind: ObjectKind, name: &str) -> Option<&ObjectNode>;
+    /// [`ProgramGraph::bind_interface`].
+    fn bind_interface(&self, from: AppRef, r: &InterfaceRef) -> InterfaceBinding;
     /// [`ProgramGraph::resolve_object_by_number`].
     fn resolve_object_by_number(
         &self,
@@ -192,11 +196,14 @@ pub trait IndexReads {
     fn table_extensions_of(&self, base_table_name_lc: &str) -> &[ObjectNodeId];
     fn page_extensions_of(&self, base_page_name_lc: &str) -> &[ObjectNodeId];
     fn report_extensions_of(&self, base_report_name_lc: &str) -> &[ObjectNodeId];
-    fn implementers_of(&self, interface_name_lc: &str) -> &[ObjectNodeId];
+    fn implementers_of(&self, iface: &ObjectNodeId) -> &[ObjectNodeId];
+    fn implementers_for(&self, binding: &InterfaceBinding, r: &InterfaceRef) -> Vec<ObjectNodeId>;
+    fn interface_is_or_derives(&self, derived: &ObjectNodeId, base: &ObjectNodeId) -> bool;
     fn unmapped_enum_implementers(
         &self,
         graph: &dyn GraphReads,
-        interface_name_lc: &str,
+        binding: &InterfaceBinding,
+        r: &InterfaceRef,
     ) -> Vec<ObjectNodeId>;
     fn field_in_table(
         &self,
@@ -291,6 +298,9 @@ impl GraphReads for ProgramGraph {
     fn resolve_object(&self, from: AppRef, kind: ObjectKind, name: &str) -> Option<&ObjectNode> {
         ProgramGraph::resolve_object(self, from, kind, name)
     }
+    fn bind_interface(&self, from: AppRef, r: &InterfaceRef) -> InterfaceBinding {
+        ProgramGraph::bind_interface(self, from, r)
+    }
     fn resolve_object_by_number(
         &self,
         from: AppRef,
@@ -374,15 +384,22 @@ impl IndexReads for ResolveIndex {
     fn report_extensions_of(&self, base_report_name_lc: &str) -> &[ObjectNodeId] {
         ResolveIndex::report_extensions_of(self, base_report_name_lc)
     }
-    fn implementers_of(&self, interface_name_lc: &str) -> &[ObjectNodeId] {
-        ResolveIndex::implementers_of(self, interface_name_lc)
+    fn implementers_of(&self, iface: &ObjectNodeId) -> &[ObjectNodeId] {
+        ResolveIndex::implementers_of(self, iface)
+    }
+    fn implementers_for(&self, binding: &InterfaceBinding, r: &InterfaceRef) -> Vec<ObjectNodeId> {
+        ResolveIndex::implementers_for(self, binding, r)
+    }
+    fn interface_is_or_derives(&self, derived: &ObjectNodeId, base: &ObjectNodeId) -> bool {
+        ResolveIndex::interface_is_or_derives(self, derived, base)
     }
     fn unmapped_enum_implementers(
         &self,
         graph: &dyn GraphReads,
-        interface_name_lc: &str,
+        binding: &InterfaceBinding,
+        r: &InterfaceRef,
     ) -> Vec<ObjectNodeId> {
-        ResolveIndex::unmapped_enum_implementers(self, graph.raw(Token(())), interface_name_lc)
+        ResolveIndex::unmapped_enum_implementers(self, graph.raw(Token(())), binding, r)
     }
     fn field_in_table(
         &self,
@@ -541,8 +558,12 @@ pub enum Query {
     TableExtensionsOf(String),
     PageExtensionsOf(String),
     ReportExtensionsOf(String),
-    ImplementersOf(String),
-    UnmappedEnumImplementers(String),
+    // ENG-152: interfaces by identity.
+    BindInterface(AppRef, InterfaceRef),
+    ImplementersOf(ObjectNodeId),
+    ImplementersFor(InterfaceBinding, InterfaceRef),
+    InterfaceIsOrDerives(ObjectNodeId, ObjectNodeId),
+    UnmappedEnumImplementers(InterfaceBinding, InterfaceRef),
     FieldWithOwnerInTable(AppRef, ObjectNodeId, String),
     FieldNumberedInTable(AppRef, ObjectNodeId, i64),
     TableScopeHasRoutine(AppRef, ObjectNodeId, String),
@@ -624,6 +645,10 @@ impl GraphReads for Recorder<'_> {
     fn resolve_object(&self, from: AppRef, kind: ObjectKind, name: &str) -> Option<&ObjectNode> {
         let _g = self.note(Query::ResolveObject(from, kind, name.to_string()));
         GraphReads::resolve_object(self.graph, from, kind, name)
+    }
+    fn bind_interface(&self, from: AppRef, r: &InterfaceRef) -> InterfaceBinding {
+        let _g = self.note(Query::BindInterface(from, r.clone()));
+        GraphReads::bind_interface(self.graph, from, r)
     }
     fn resolve_object_by_number(
         &self,
@@ -723,19 +748,26 @@ impl IndexReads for Recorder<'_> {
         let _g = self.note(Query::ReportExtensionsOf(base_report_name_lc.to_string()));
         IndexReads::report_extensions_of(self.index, base_report_name_lc)
     }
-    fn implementers_of(&self, interface_name_lc: &str) -> &[ObjectNodeId] {
-        let _g = self.note(Query::ImplementersOf(interface_name_lc.to_string()));
-        IndexReads::implementers_of(self.index, interface_name_lc)
+    fn implementers_of(&self, iface: &ObjectNodeId) -> &[ObjectNodeId] {
+        let _g = self.note(Query::ImplementersOf(iface.clone()));
+        IndexReads::implementers_of(self.index, iface)
+    }
+    fn implementers_for(&self, binding: &InterfaceBinding, r: &InterfaceRef) -> Vec<ObjectNodeId> {
+        let _g = self.note(Query::ImplementersFor(binding.clone(), r.clone()));
+        IndexReads::implementers_for(self.index, binding, r)
+    }
+    fn interface_is_or_derives(&self, derived: &ObjectNodeId, base: &ObjectNodeId) -> bool {
+        let _g = self.note(Query::InterfaceIsOrDerives(derived.clone(), base.clone()));
+        IndexReads::interface_is_or_derives(self.index, derived, base)
     }
     fn unmapped_enum_implementers(
         &self,
         _graph: &dyn GraphReads,
-        interface_name_lc: &str,
+        binding: &InterfaceBinding,
+        r: &InterfaceRef,
     ) -> Vec<ObjectNodeId> {
-        let _g = self.note(Query::UnmappedEnumImplementers(
-            interface_name_lc.to_string(),
-        ));
-        IndexReads::unmapped_enum_implementers(self.index, self.graph, interface_name_lc)
+        let _g = self.note(Query::UnmappedEnumImplementers(binding.clone(), r.clone()));
+        IndexReads::unmapped_enum_implementers(self.index, self.graph, binding, r)
     }
     fn field_in_table(
         &self,

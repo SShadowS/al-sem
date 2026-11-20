@@ -29,24 +29,30 @@ fn q(name: &str) -> String {
 /// `ExtendedInterfaces`) holds, as AL header text. alc 18.0.41 writes them as
 /// AL references: a name with a space or a quote arrives quoted and escaped
 /// (`"\"Dep Iface\""`, `"\"A\"\"B\""`), another app's with a
-/// `#<guid>#` prefix (`#6a0b…#"Dep Iface"`; review, Fable). The prefix is
-/// dropped, as the symbol reader drops it; a quoted reference is kept as
-/// written, a bare one quoted.
+/// `#<guid>#` prefix (`#6a0b…#"Dep Iface"`; review, Fable). A quoted name is
+/// kept as written, a bare one quoted. ENG-152: another app's is kept as a
+/// qualifier, `"#<guid>#"."Dep Iface"` (the grammar's qualified name; a reader
+/// by name sees the last segment). A bare one stays bare: alc means the
+/// package's own interface, but written into AL text that inference would read
+/// as a written app, which never rebinds; bare, it binds from the package's own
+/// scope (`bind_interface`), which finds its own interface.
 fn iface_refs(o: &Value, key: &str) -> Vec<String> {
     arr(o, key)
         .iter()
         .filter_map(Value::as_str)
         .map(|raw| {
-            let name = raw
-                .strip_prefix('#')
-                .and_then(|s| s.split_once('#'))
-                .map_or(raw, |(_, rest)| rest)
-                .trim();
-            let name = if name.is_empty() { raw.trim() } else { name };
-            if name.len() >= 2 && name.starts_with('"') && name.ends_with('"') {
+            let (app, name) = match raw.strip_prefix('#').and_then(|s| s.split_once('#')) {
+                Some((g, rest)) if !rest.trim().is_empty() => (Some(g), rest.trim()),
+                _ => (None, raw.trim()),
+            };
+            let name = if name.len() >= 2 && name.starts_with('"') && name.ends_with('"') {
                 name.to_string()
             } else {
                 q(name)
+            };
+            match app {
+                Some(g) if !g.is_empty() => format!("\"#{g}#\".{name}"),
+                _ => name,
             }
         })
         .collect()
@@ -731,7 +737,20 @@ fn write_object(
                 };
                 w.out.line(1, &format!("Extensible = {v};"));
             }
-            let ifaces = iface_refs(o, "ImplementedInterfaces");
+            // The mapping keys without the app qualifier: tree-sitter-al rejects
+            // a qualified key in a list of two or more pairs (an ERROR; alc
+            // 18.0.41 accepts it: tree-sitter-al #47). A bare key binds from the
+            // enum's own app (`bind_interface`), which sees what it implements.
+            // shortcut: unqualified mapping keys, until tree-sitter-al #47 lands.
+            let ifaces: Vec<String> = iface_refs(o, "ImplementedInterfaces")
+                .into_iter()
+                .map(
+                    |i| match i.strip_prefix("\"#").and_then(|r| r.split_once("#\".")) {
+                        Some((_, name)) => name.to_string(),
+                        None => i,
+                    },
+                )
+                .collect();
             if let Some(p) =
                 prop(o, "DefaultImplementation").and_then(|d| impl_pairs(&ifaces, d, codeunits))
             {

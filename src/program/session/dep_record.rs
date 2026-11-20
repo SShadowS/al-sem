@@ -183,9 +183,14 @@ pub(crate) fn eval(q: &Query, s: &EvalState) -> Digest {
         Query::TableExtensionsOf(name) => ix.table_extensions_of(name).classify(&mut h),
         Query::PageExtensionsOf(name) => ix.page_extensions_of(name).classify(&mut h),
         Query::ReportExtensionsOf(name) => ix.report_extensions_of(name).classify(&mut h),
-        Query::ImplementersOf(name) => ix.implementers_of(name).classify(&mut h),
-        Query::UnmappedEnumImplementers(name) => {
-            ix.unmapped_enum_implementers(g, name).classify(&mut h);
+        // ENG-152: the binding outcome itself is recorded (a third same-named
+        // interface changes it while every old bucket stays the same).
+        Query::BindInterface(app, r) => g.bind_interface(*app, r).classify(&mut h),
+        Query::ImplementersOf(iface) => ix.implementers_of(iface).classify(&mut h),
+        Query::ImplementersFor(b, r) => ix.implementers_for(b, r).classify(&mut h),
+        Query::InterfaceIsOrDerives(d, b) => ix.interface_is_or_derives(d, b).classify(&mut h),
+        Query::UnmappedEnumImplementers(b, r) => {
+            ix.unmapped_enum_implementers(g, b, r).classify(&mut h);
         }
         // The `from_object` accessors read only its app (`ResolveIndex`'s
         // `*_from` forms, to which the object forms delegate).
@@ -315,8 +320,6 @@ fn query_heap(q: &Query) -> usize {
         | Query::TableExtensionsOf(s)
         | Query::PageExtensionsOf(s)
         | Query::ReportExtensionsOf(s)
-        | Query::ImplementersOf(s)
-        | Query::UnmappedEnumImplementers(s)
         | Query::FieldWithOwnerInTable(_, _, s)
         | Query::TableScopeHasRoutine(_, _, s)
         | Query::TableScopeMayHaveField(_, _, s) => s.len(),
@@ -330,8 +333,17 @@ fn query_heap(q: &Query) -> usize {
             _,
             crate::program::resolve::reads::RefKey::Name { raw, normalized_lc },
         ) => raw.len() + normalized_lc.len(),
+        Query::BindInterface(_, r) => iface_ref_heap(r),
+        Query::ImplementersFor(b, r) | Query::UnmappedEnumImplementers(b, r) => {
+            iface_ref_heap(r) + std::mem::size_of_val(b.ids())
+        }
         _ => 0,
     }
+}
+
+/// The heap text of an interface reference (ENG-152), for [`query_heap`].
+fn iface_ref_heap(r: &crate::program::node_extract::InterfaceRef) -> usize {
+    r.name.len() + r.app.as_ref().map_or(0, |a| a.len())
 }
 
 // ---------------------------------------------------------------------------

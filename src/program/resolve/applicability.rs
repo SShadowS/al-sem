@@ -83,14 +83,15 @@ pub struct RecordOpCtx {
 // ---------------------------------------------------------------------------
 
 /// Returns `true` iff a fresh fan-out route to `target` is applicable for a
-/// call site that dispatches via interface `iface_lc` calling member
+/// call site that dispatches via the interface reference `r`, bound
+/// `binding` from the receiver's declaring scope (ENG-152), calling member
 /// `called_member_lc` with arity `called_arity`.
 ///
 /// # Conditions (all must hold)
 /// 1. `target.name_lc == called_member_lc` — the route targets the right method.
 /// 2. `target.params_count == called_arity` — arity matches the call site.
-/// 3. The target's OBJECT implements `iface_lc` (exact case-insensitive match via
-///    `ObjectNode.implements`, already lowercased).
+/// 3. The target's OBJECT implements one of the interfaces `binding` names, or
+///    one derived from it (`IndexReads::implementers_for`, by identity).
 /// 4. The match is UNAMBIGUOUS: exactly one routine in the target object has
 ///    `(name_lc == called_member_lc, params_count == called_arity)`.  Multiple
 ///    → `false` (caller emits Unresolved rather than a false-confident route).
@@ -99,7 +100,8 @@ pub struct RecordOpCtx {
 /// public-signature match.  Same-name-same-arity type-disambiguation is deferred
 /// to Phase 1B.3 → those punt to `false` here.
 pub fn interface_route_applicable(
-    iface_lc: &str,
+    binding: &crate::program::graph::InterfaceBinding,
+    r: &crate::program::node_extract::InterfaceRef,
     called_member_lc: &str,
     called_arity: usize,
     target: &RoutineNodeId,
@@ -115,16 +117,10 @@ pub fn interface_route_applicable(
     }
 
     // 3. Target's object must implement the interface: itself, or through an
-    //    interface derived from it (ENG-142; `implementers_of` holds both).
-    let Some(obj_node) = graph.object_first(&target.object) else {
-        return false;
-    };
-    let implements_iface = obj_node
-        .implements
-        .iter()
-        .any(|s| s.fold_identifier() == iface_lc)
-        || index.implementers_of(iface_lc).contains(&target.object);
-    if !implements_iface {
+    //    interface derived from it (ENG-142), by identity (ENG-152).
+    if graph.object_first(&target.object).is_none()
+        || !index.implementers_for(binding, r).contains(&target.object)
+    {
         return false;
     }
 
@@ -508,6 +504,21 @@ mod tests {
         (graph, index, iface_id, impl_id)
     }
 
+    /// [`interface_route_applicable`] for a call through `iface`, a bare name
+    /// bound from the target's app (ENG-152), as these single-app fixtures read it.
+    fn applicable(
+        iface: &str,
+        member: &str,
+        arity: usize,
+        target: &RoutineNodeId,
+        graph: &ProgramGraph,
+        index: &ResolveIndex,
+    ) -> bool {
+        let r: crate::program::node_extract::InterfaceRef = iface.into();
+        let b = graph.bind_interface(target.object.app, &r);
+        interface_route_applicable(&b, &r, member, arity, target, graph, index)
+    }
+
     // -------------------------------------------------------------------------
     // interface_route_applicable — positive
     // -------------------------------------------------------------------------
@@ -524,7 +535,7 @@ mod tests {
             request_page: false,
         };
         assert!(
-            interface_route_applicable("ifoo", "bar", 0, &target, &graph, &index),
+            applicable("ifoo", "bar", 0, &target, &graph, &index),
             "FooImpl implements IFoo and has a unique Bar() → applicable"
         );
     }
@@ -557,7 +568,7 @@ mod tests {
             sig_fp: 0,
             request_page: false,
         };
-        assert!(interface_route_applicable(
+        assert!(applicable(
             "ibase",
             "bar",
             0,
@@ -565,7 +576,7 @@ mod tests {
             &graph,
             &index
         ));
-        assert!(!interface_route_applicable(
+        assert!(!applicable(
             "ibase",
             "bar",
             0,
@@ -594,7 +605,7 @@ mod tests {
             request_page: false,
         };
         assert!(
-            !interface_route_applicable("ifoo", "bar", 0, &target, &graph, &index),
+            !applicable("ifoo", "bar", 0, &target, &graph, &index),
             "Baz() route for Bar() call must be false — name mismatch (site-context guard)"
         );
     }
@@ -618,7 +629,7 @@ mod tests {
             request_page: false,
         };
         assert!(
-            !interface_route_applicable("ifoo", "bar", 0, &target, &graph, &index),
+            !applicable("ifoo", "bar", 0, &target, &graph, &index),
             "Object does not implement IFoo → not applicable"
         );
     }
@@ -644,7 +655,7 @@ mod tests {
             request_page: false,
         };
         assert!(
-            !interface_route_applicable("ifoo", "bar", 0, &target, &graph, &index),
+            !applicable("ifoo", "bar", 0, &target, &graph, &index),
             "Ambiguous (two Bar() in implementer) → not applicable"
         );
     }
@@ -700,12 +711,12 @@ mod tests {
             request_page: false,
         };
         assert!(
-            interface_route_applicable("ithing", "run", 0, &target, &graph, &index),
+            applicable("ithing", "run", 0, &target, &graph, &index),
             "the union must still route-apply for IThing (one of the two \
              conditional branches)"
         );
         assert!(
-            interface_route_applicable("iother", "run", 0, &target, &graph, &index),
+            applicable("iother", "run", 0, &target, &graph, &index),
             "the union must ALSO still route-apply for IOther (the OTHER \
              conditional branch) — no false narrowing to only the first \
              branch captured"

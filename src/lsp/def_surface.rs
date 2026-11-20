@@ -228,7 +228,7 @@ pub fn def_surface_fingerprint(pf: &ParsedFile) -> DefSurface {
         write_str(h, &obj.name.fold_identifier()); // 2 (see module doc's "object name" section)
         write_opt_i64(h, obj.declared_id); // 3
         write_opt_str(h, &obj.extends_target); // 4
-        write_list(h, &obj.implements, |h, s| write_str(h, s)); // 5
+        write_list(h, &obj.implements, write_iface_ref); // 5
         write_opt_object_ref(h, &obj.source_table); // 6
         write_bool(h, obj.source_table_temporary); // 6 (cont'd)
         write_opt_object_ref(h, &obj.table_no); // 7
@@ -237,7 +237,7 @@ pub fn def_surface_fingerprint(pf: &ParsedFile) -> DefSurface {
         write_list(h, &obj.dataitems, write_dataitem); // 10
         write_bool(h, obj.parse_incomplete); // 11
         write_str(h, &obj.name); // 22 (LSP-surface addition — see module doc)
-        write_list(h, &obj.interface_bases, |h, s| write_str(h, s)); // 24
+        write_list(h, &obj.interface_bases, write_iface_ref); // 24
 
         write_list(h, routines, |h, entry| {
             write_routine_identity(h, &entry.node.id); // 12
@@ -279,6 +279,14 @@ fn write_u64(h: &mut Hasher, v: u64) {
 
 fn write_i64(h: &mut Hasher, v: i64) {
     h.update(&v.to_le_bytes());
+}
+
+/// An interface reference: its name and (ENG-152) its app, so a changed
+/// qualifier is a changed surface.
+fn write_iface_ref(h: &mut Hasher, r: &crate::program::node_extract::InterfaceRef) {
+    write_str(h, &r.name);
+    write_opt_str(h, &r.app);
+    write_bool(h, r.inferred);
 }
 
 fn write_str(h: &mut Hasher, s: &str) {

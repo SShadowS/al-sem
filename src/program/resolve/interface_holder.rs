@@ -39,7 +39,7 @@ use al_syntax::ir::{ExprId, ExprKind, ObjectKind, ParseStatus, RoutineDecl, VarD
 
 use crate::program::graph::ProgramGraph;
 use crate::program::node::{ObjectNodeId, RoutineNodeId};
-use crate::program::node_extract::{Access, fold_ref_name};
+use crate::program::node_extract::Access;
 use crate::program::resolve::closed_enum::{
     ClosedEnumCx, admitted_writes, name_of, overlaps, unparen,
 };
@@ -65,8 +65,10 @@ pub enum HolderSource {
 pub(crate) fn holder_sources(
     cx: &ClosedEnumCx,
     receiver: ExprId,
-    interface_lc: &str,
+    binding: &crate::program::graph::InterfaceBinding,
 ) -> Option<Vec<HolderSource>> {
+    // ENG-152: only a receiver whose type binds to ONE interface can close.
+    let iface = binding.exact()?;
     let obj = cx.obj;
     if obj.kind != ObjectKind::Codeunit
         || !obj.implements.is_empty()
@@ -81,7 +83,18 @@ pub(crate) fn holder_sources(
     }
     let v_lc = name_of(&cx.file.ir, receiver)?;
     let named = |n: &str| n.fold_identifier() == v_lc;
-    let is_i = |ty: Option<&str>| matches!(ty.map(classify_type_text), Some(ParsedType::Interface { name }) if name == interface_lc);
+    // A global declared `Interface I` binding exactly to `iface` from this object.
+    let is_i = |ty: Option<&str>| match ty.map(classify_type_text) {
+        Some(ParsedType::Interface { name, app }) => {
+            let r = crate::program::node_extract::InterfaceRef {
+                name: name.into(),
+                app,
+                inferred: false,
+            };
+            cx.graph.bind_interface(cx.from_object.id.app, &r).exact() == Some(iface)
+        }
+        _ => false,
+    };
     let mut globals = obj.globals.iter().filter(|g| named(&g.name)).peekable();
     if globals.peek().is_none()
         || !globals.all(|g| is_i(g.ty.as_deref()))
@@ -233,7 +246,11 @@ pub(crate) fn close_holder_sites(
         let Some(f) = facts.get(&e.obligation_id()).map(|f| f.rare()) else {
             continue;
         };
-        let (Some(sources), Some(interface_lc)) = (&f.interface_holder, &f.interface) else {
+        // ENG-152: the interface the receiver bound to exactly at the site.
+        let (Some(sources), Some(iface)) = (
+            &f.interface_holder,
+            f.interface_binding.as_ref().and_then(|(_, b)| b.exact()),
+        ) else {
             continue;
         };
         if !f.interface_closed_over.is_empty() {
@@ -263,7 +280,7 @@ pub(crate) fn close_holder_sites(
             graph.object(id).is_some_and(|o| {
                 o.implements
                     .iter()
-                    .any(|i| fold_ref_name(i) == *interface_lc)
+                    .any(|i| graph.bind_interface(o.id.app, i).exact() == Some(iface))
             })
         };
         if real && !over.is_empty() && over.iter().all(|c| implements(c) && reached.contains(c)) {

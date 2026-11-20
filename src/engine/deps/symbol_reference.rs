@@ -293,6 +293,12 @@ pub struct AbiObject {
     /// An interface's bases (`ExtendedInterfaces`, ENG-142), parsed as
     /// [`Self::implemented_interfaces`] are. Empty for every other kind.
     pub extended_interfaces: Vec<String>,
+    /// Parallel to [`Self::implemented_interfaces`] (ENG-152): the `#<guid>#`
+    /// app of another app's interface (normalized, `node_extract::norm_guid`),
+    /// `None` for a bare one, which alc writes for the package's OWN interface.
+    pub implemented_interface_apps: Vec<Option<String>>,
+    /// Parallel to [`Self::extended_interfaces`], as [`Self::implemented_interface_apps`].
+    pub extended_interface_apps: Vec<Option<String>>,
     /// Canonical lower-case member: "ignore" | "error" | "allow".
     pub inherent_commit_behavior: Option<String>,
     /// Page controls (name, kind, target). kind ∈ {"part","usercontrol"}.
@@ -703,6 +709,17 @@ fn parse_abi_interface_name(raw: &str) -> String {
     } else {
         name.to_string()
     }
+}
+
+/// The app of a raw interface reference (ENG-152): the guid of its `#<guid>#`
+/// prefix, normalized, or `None` for a bare reference (the package's own).
+fn abi_interface_app(raw: &str) -> Option<String> {
+    let rest = raw.strip_prefix('#')?;
+    let end = rest.find('#')?;
+    let marker = &raw[..end + 2];
+    crate::program::node_extract::app_marker(marker)
+        .filter(|_| end + 2 < raw.len())
+        .map(crate::program::node_extract::norm_guid)
 }
 
 /// Stringify a serde_json `Value` the way JS `String(x.Value ?? "")` would for the
@@ -1476,14 +1493,14 @@ fn abi_from_sections(root: &Sections<'_>) -> SymbolReferenceAbi {
             if let Some(ifaces) = &o.implemented_interfaces {
                 abi_object.implemented_interfaces =
                     Some(ifaces.iter().map(|s| parse_abi_interface_name(s)).collect());
+                abi_object.implemented_interface_apps =
+                    ifaces.iter().map(|s| abi_interface_app(s)).collect();
             }
             if object_type == "Interface" {
-                abi_object.extended_interfaces = o
-                    .extended_interfaces
-                    .iter()
-                    .flatten()
-                    .map(|s| parse_abi_interface_name(s))
-                    .collect();
+                let bases = o.extended_interfaces.iter().flatten();
+                abi_object.extended_interfaces =
+                    bases.clone().map(|s| parse_abi_interface_name(s)).collect();
+                abi_object.extended_interface_apps = bases.map(|s| abi_interface_app(s)).collect();
             }
             apply_access_properties(&mut abi_object, &o.properties);
             abi_object.protected_vars = protected_vars_of(&o);

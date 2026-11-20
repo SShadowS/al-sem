@@ -202,6 +202,36 @@ impl Classify for AppRef {
     }
 }
 
+impl Classify for crate::program::node_extract::InterfaceRef {
+    fn classify(&self, h: &mut ProjectionHasher) {
+        let Self {
+            name,
+            app,
+            inferred,
+        } = self;
+        name.classify(h);
+        app.classify(h);
+        inferred.classify(h);
+    }
+}
+
+impl Classify for crate::program::graph::InterfaceBinding {
+    fn classify(&self, h: &mut ProjectionHasher) {
+        use crate::program::graph::InterfaceBinding as B;
+        match self {
+            B::Exact(id) => {
+                h.tag(0);
+                id.classify(h);
+            }
+            B::Visible(ids) => {
+                h.tag(1);
+                ids.classify(h);
+            }
+            B::Unbound => h.tag(2),
+        }
+    }
+}
+
 impl Classify for ObjectKind {
     fn classify(&self, h: &mut ProjectionHasher) {
         h.tag(match self {

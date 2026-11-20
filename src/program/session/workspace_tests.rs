@@ -701,8 +701,11 @@ fn extension_added_and_removed(mode: MemoryMode) {
 }
 
 /// A name collision introduced and removed: a workspace interface named like
-/// the dependency's. Whatever it changes in the dependency's dispatch, the
-/// session equals cold, and only files that read the name are re-resolved.
+/// the dependency's. The session equals cold. ENG-152: the dependency's
+/// dispatch binds its interface from the dependency's own scope, which does not
+/// see the workspace (alc), so the collision changes no answer the dependency
+/// read and no dependency file is re-resolved (by name, the pooled
+/// `implementers_of("dep i")` read changed and one file was).
 fn name_collision_introduced_and_removed(mode: MemoryMode) {
     let ws = base_ws();
     let mut s = WorkspaceSession::with_mode(mode);
@@ -714,7 +717,7 @@ fn name_collision_introduced_and_removed(mode: MemoryMode) {
         "collision",
         |w| w.write("DupI.Interface.al", dup),
         false,
-        1,
+        0,
     );
     assert!(r.dependency_files_resolved < r.dependency_files);
     s_edit(
@@ -723,7 +726,7 @@ fn name_collision_introduced_and_removed(mode: MemoryMode) {
         "collision removed",
         |w| w.remove("DupI.Interface.al"),
         false,
-        1,
+        0,
     );
 }
 
