@@ -7,6 +7,162 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (ENG-151: d19 no longer flags an unused parameter of a method that implements an interface member)
+
+- **The gap.** `d19-unused-parameter` flagged the parameters of a method implementing an
+  interface member. The interface fixes that signature (alc 18.0.41 refuses an implementer that
+  misses a member, AL0582), so the author cannot drop the parameter: a false positive. ENG-142
+  made 4 more of them visible on CDO (System Application's "Default Email Connector v2" and a
+  Continia `Authorize`, see below).
+- **The rule.** d19 skips a method when its object implements an interface that is, or extends
+  (transitively, ENG-142's bases), one declaring a member of the method's name. It is counted as
+  `interfaceMember` in d19's skip stats. The object is the `#if` arm that declares the method
+  (`DeclaringObjects::of`), so whole-object arms do not borrow each other's `implements`. An
+  interface absent from the model leaves the answer unknown. d19 then skips only a method that
+  could be a member: not a `local` one, which alc never accepts as an implementation. These skips
+  are counted apart as `interfaceUnknown`. `implements` and `extends` entries are unquoted and
+  unescaped (`"I""Q"` names `I"Q`).
+- **Matched by name, not signature.** The model keeps no parameter list for a source interface's
+  members, so a same-named method of another arity (an overload) is skipped too. That is the
+  quiet side for an advisory detector.
+- **New model facts.** `ModelObject::interface_bases` holds an interface's `extends` list (source
+  IR, the symbols' `ExtendedInterfaces`). `ModelObject::interface_members` holds ALL member names
+  of a source interface. The existing `declaration_only_routines` cannot serve: the cross-app model
+  cuts it to the demanded routines, and a dependency interface's bodyless members are never
+  demanded, so System Application's "Email Connector" read as memberless. A symbol-only
+  interface's members are its routines.
+- **Tests.** Real assembly or the real analyze path, each with a flagged control: a direct,
+  inherited and missing interface; a `local` helper beside a missing one; escaped quotes; `#if`
+  arms in both orders; a dependency interface with source; a symbol-only one. One red proof per
+  rule (recorded in each test file's header).
+- **Measured.** release-fast, ENG-142 `d21ff4d9` against this branch, both on master `d0ac21b0`:
+  - CDO (`bc3ccb18`, clean): primary 2,308 -> 2,306 findings, 2 fingerprints removed, 0 added;
+    `--scope all` 32,597 -> 32,429, 168 removed, 0 added, all `d19-unused-parameter` (347 -> 179).
+    d19 skipped 444 methods as `interfaceMember` and 0 as `interfaceUnknown`. All 168 were checked
+    against the packaged or workspace source: each method is declared by an interface its object
+    implements, directly or through a base. 166 are dependency implementers (Base Application's
+    price calculation, invoice posting and transformation rules; System Application's "Default
+    Email Connector v2", including the 4 ENG-142 made visible; Continia's authorization and
+    localized-id codeunits). 2 are the workspace's own ("CDO Essential Module License"
+    `IsModuleActivated`, "CDO Universign eSeal Service" `SealDocument`).
+  - DO (`b3b44591`, clean): 2,180 -> 2,178 findings at both scopes, the same 2 workspace
+    fingerprints removed, 0 added.
+- **Release note.** A baseline holding d19 findings on interface implementations loses them:
+  CDO 2 (primary), 168 (`--scope all`); DO 2.
+
+### Fixed (ENG-142: interface inheritance; a call through a base interface reaches the implementers of every interface derived from it)
+
+- **The gap.** al-sem never modelled `interface IBaz extends IBar, NS.IQux`. A codeunit that
+  implements `IBaz` implements `IBar` too: alc 18.0.41 compiles `B := Z` and `B := <codeunit
+  implementing IBaz>` for `B: Interface IBar`, `Z.Bar()` on an `IBaz` receiver, and refuses an
+  `IBaz` implementer without `IBar`'s `Bar` (AL0582; probe `/work/.al-sem/probes/grm05-iface`).
+  So a call through `IBar` missed every implementer of a derived interface: a missing edge, not
+  an imprecise one.
+- **Bases in the graph.** New `ObjectNode::interface_bases`, from three sources:
+  - the source (`ObjectDecl::interface_extends`, GRM-05). An interface whose own node holds a
+    parse error lowers with no bases, since recovery can misread the list (`extends A.` before
+    `#if X` reads the base as `X`); an error elsewhere in the file leaves the list as read;
+  - a dependency's symbols, whose interfaces carry `"ExtendedInterfaces": [...]` (alc writes the
+    base's name without its namespace; a `#<guid>#` prefix is dropped);
+  - a runtime package's synthesized source, which now writes `extends` from those symbols.
+  A whole object repeated in `#if` arms keeps every arm's bases, and now every arm's
+  `implements` too (`dedup_objects` kept the first copy's only, which also lost a codeunit's
+  later-arm interface, and its edges, before this change). `PACK_SCHEMA` 22 -> 23 (the sample
+  pack re-pinned); the session's declaration hash and the LSP definition surface (item 24)
+  include it.
+- **Resolution.**
+  - `ResolveIndex::implementers_of(base)` also lists the implementers of every interface derived
+    from it, transitively, codeunits and closed enums alike. By identity: the implemented
+    interface resolves from the implementer's own app and each base from its declaring
+    interface's app, so two apps' same-named interfaces never pool their bases. The base's own
+    implementers come first, then the derived ones in object order, each once; an `extends`
+    cycle (alc refuses one) ends.
+  - `interface_route_applicable` (the semantic audit's check of an interface route) accepts an
+    implementer of a derived interface.
+  - Overload picking follows the relation alc applies (`arg_dispatch::interface_binds`, passed to
+    `pick_candidate_with`): an interface argument binds an interface parameter of itself or of a
+    base, and a codeunit argument one it implements, directly or through a derived interface. So
+    `Take(Z)` with `Z: IBaz`, and `Take(C)` with `C` implementing `IBaz`, pick `Take(B: Interface
+    IBar)`. Before, every interface or codeunit into an interface parameter was "provably
+    incompatible", which also ruled out a codeunit's own interface. A codeunit implementing
+    neither stays apart. By value only: alc refuses an `IBaz` variable for a `var` parameter of
+    type `IBar` (AL0133, probe `eng142-internal/src/VarArg.al`), so `Take(Z)` over `Take(var B:
+    Interface IBar)` / `Take(V: Variant)` is the `Variant` one. (A first version that never
+    proved such a pair apart resolved `cli_step5_coverage_fold`'s deliberately ambiguous
+    `T.O(L)`, where `L` implements no interface: the gate caught it.)
+  - The declared signature of a member an interface inherits (`interface_own_routine_node`):
+    the interface's own declaration first, else exactly one same-arity declaration across its
+    bases (a diamond's shared base counted once), each base named from its declaring interface's
+    app. It types an interface call used as an argument (`Take(O.Bar())` picks the overload).
+  - G24 and the closed-enum coverage proof: an enum's mapping counts for a site when its
+    interface is the site's or derives from it (`arg_dispatch::interface_is_or_derives`, by
+    identity). So a closed enum of a derived interface with a value mapped outside the program
+    opens a base's site, and so does an enum whose whole-object `#if` arms implement the base
+    and a derived interface (it looked "direct", so its derived mapping was skipped; review, sol
+    r2).
+  - G28: an internal interface closes only while every interface derived from it is closed too.
+    A PUBLIC interface may extend an internal one (alc 18.0.41 compiles it, probe
+    `/work/.al-sem/probes/eng142-internal`), and any unloaded app may implement it. An object in
+    whole-object `#if` arms is internal only when every copy is (`dedup_objects`; the first
+    copy's flag let a derived interface public in one arm close its base).
+- **Model and graph readers.** The model's interface dispatch meta (`total_impls`,
+  `unresolved_impls`, `enum_implementers`) and the impact graph's callbacks hub match the
+  implementers of derived interfaces too (`ProgramGraph::add_derived_interfaces`).
+  `SUMMARY_SCHEMA` 17 -> 18, `FACADE_VERSION` 2 -> 3.
+- **Kept as is, on purpose.** A chained call on an interface with more than one implementer is
+  not typed (the harness pins that decline, test 32e). So a base that had one implementer and
+  gains more through derived interfaces stops typing such chains: a precision loss that comes
+  with the soundness gain. Typing interface chains from the declared signature whatever the
+  implementer count is a separate change (filed).
+- **A name that does not resolve uniquely** (two dependencies declaring it, or none visible)
+  answers the safe way everywhere (review, Fable): the implementer closure and G28 take every
+  interface of the name (`ProgramGraph::interfaces_named_from`); an enum mapping counts for G24
+  and coverage; an interface argument "may bind" (undecided). Dropping it, as the first identity
+  version did, lost implementers, kept sites closed and could pick the wrong overload. Tests:
+  `an_ambiguous_base_name_keeps_the_derived_implementer` (two dependencies declare `IDup`) and
+  `an_unresolved_interface_name_answers_the_safe_way`, each with red proofs.
+- **Still keyed by name, as before (filed).** `implementers_of` answers by interface NAME, so a
+  call through one app's `IBase` also lists the implementers of another app's same-named
+  `IBase`, as it always did for direct implementers. The inheritance closure resolves by
+  identity, but its result lands in that name bucket. Keying implementers by interface
+  identity is its own change (review, sol r2). The model meta and impact hub match by name too.
+- **Measured.** release-fast, master `edad0e30` against this branch:
+  - CDO (`bc3ccb18`, clean): primary 2,308 findings and 2,301 fingerprints unchanged; `--scope
+    all` 32,579 -> 32,583 findings, 4 fingerprints added, 0 removed; `aldump
+    --program-call-graph-stats` byte-identical (46,688 edges, 0 unknown: an interface edge that
+    gains routes stays in its bucket). The 4 are `d19-unused-parameter`: three on System
+    Application's codeunit 8998 "Default Email Connector v2" (`Send` x2, `GetAccounts`), one on a
+    Continia codeunit's `Authorize`, both newly in the cross-app model. 8998 implements "Email
+    Connector v2/v3/v4", which extend "Email Connector", so a call through "Email Connector" now
+    reaches it and its bodies enter the model (the Continia one was not traced further). They are
+    d19 false positives of an older kind (an interface implementation's parameters are fixed by
+    the interface; d19 had no such exemption): fixed by ENG-151 (above). CDO's dependencies hold
+    real inheritance: the System Application's email connectors, Continia Delivery Network's
+    four `IeDocCreationBase` interfaces, Base Application's "Cost Adjustment With Params".
+  - DO (`b3b4459`, clean): 2,180 findings and 2,172 fingerprints unchanged at both scopes;
+    call-graph stats byte-identical (21,868 edges, 1,142 unknown).
+- **Grammar gap filed.** A header-only `#if` split of an interface's `extends` list is valid AL
+  (alc 18.0.41 compiles it) but does not parse in tree-sitter-al v5.4.0: filed as
+  https://github.com/SShadowS/tree-sitter-al/issues/46. Such an interface gives no bases until
+  the grammar parses it.
+- **Tests.** `program::resolve::interface_extends_tests` resolves whole workspaces: a call
+  through a base reaches every derived implementer (a qualified base, a grand-derived interface,
+  not a base's implementer through a derived interface), in order and each once; a dependency's
+  bases come from its symbols; a broken interface gives no bases, an error elsewhere in its file
+  leaves them; a whole-object `#if` split keeps every arm's interfaces; an `extends` cycle ends;
+  an inherited member types an argument; a derived interface's value binds a base parameter; an
+  internal base with a public derived interface is open. Plus
+  `interface_applicable_through_a_derived_interface`, `an_interfaces_bases_are_written`
+  (synthesis, a GUID-prefixed base), `interface_extends_changed_changes_fingerprint` (LSP),
+  `interface_meta_counts_a_derived_interfaces_implementer` (model),
+  `the_callbacks_hub_reaches_a_derived_interfaces_implementer` (impact graph) and the G24 index
+  test. Each rule has a discrimination proof, all red. Three breaks stayed GREEN at first and
+  their fixtures were changed: with implementers present `arg_dispatch` falls back to their
+  agreeing return types (the argument test uses an interface with no implementer); a codeunit
+  implementing `IBaz` already reached `IQux` (the `#if`-arms test uses `IBar`); and the
+  recovered-parse test first pinned the file-wide guard, which dropped true edges (review,
+  Fable).
+
 ### Fixed (TLS-103: the cdo-speed stub tests no longer depend on the host's load)
 
 - **What failed.** `gate_scripts::speed_reports_instructions_and_their_limit_is_advisory` failed

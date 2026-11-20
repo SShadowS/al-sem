@@ -142,6 +142,8 @@ pub(crate) mod tests {
             source_table_name: None,
             extends_target_name: None,
             implements_interfaces: Some(Vec::new()),
+            interface_bases: Vec::new(),
+            interface_members: Vec::new(),
             object_subtype: None,
             page_type: None,
             inherent_commit_behavior: None,

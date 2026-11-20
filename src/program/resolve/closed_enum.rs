@@ -607,10 +607,21 @@ pub(crate) fn enum_covered_by_routes(
         return false;
     }
     let reached: Vec<ObjectNodeId> = routes.iter().filter_map(Route::target_object).collect();
+    // ENG-142 (review, sol r2): a mapping keyed by an interface derived from this
+    // one (a whole-object `#if` arm implementing it) dispatches here too, so it
+    // must be reached as well.
     enum_node
         .enum_impls
         .iter()
-        .filter(|(i, _)| i.as_ref() == interface_lc)
+        .filter(|(i, _)| {
+            crate::program::resolve::arg_dispatch::interface_is_or_derives(
+                graph,
+                index,
+                enum_node.id.app,
+                i,
+                interface_lc,
+            )
+        })
         .all(|(_, codeunit)| {
             matches!(
                 index.resolve_object_ref_strict(graph, enum_node.id.clone(), ObjectKind::Codeunit, codeunit),
@@ -1201,6 +1212,61 @@ enum 50106 "Other Kind" implements "Other Strategy"
             "precondition: covered as extracted"
         );
         node.implements.push("Other Strategy".into());
+        assert!(!super::enum_covered_by_routes(
+            graph,
+            &index,
+            &node,
+            "demo strategy",
+            routes
+        ));
+    }
+
+    /// ENG-142 (review, sol r2): a closed enum whose whole-object `#if` arms
+    /// implement `Demo Strategy` and `Derived Strategy` (which extends it) maps
+    /// a value through the derived one to a codeunit no route reaches: the
+    /// `Demo Strategy` site is not covered. Stated precondition: the node's
+    /// fields are set by assignment. Mutation (2026-11-20): the mapping filter
+    /// back to "the asked interface's key only" -> covered (red); restored, green.
+    #[test]
+    fn enum_covered_by_routes_counts_a_derived_interfaces_mapping() {
+        let derived = "interface \"Derived Strategy\" extends \"Demo Strategy\"\n{\n    procedure Extra();\n}\n";
+        let ws = workspace(
+            caller(VARS, "        S := K;\n        S.NextKm(1);", ""),
+            &[("src/Derived.al", derived.into())],
+        );
+        let dir = write(&ws);
+        let ctx = crate::program::resolve::full::build_context_res(dir.path()).expect("context");
+        let graph = ctx.graph();
+        let index = crate::program::resolve::index::ResolveIndex::build(graph);
+        let report = crate::program::resolve::full::resolve_full_program_with(
+            &ctx,
+            crate::program::resolve::abi_check::AbiIntegrity::Skip,
+        );
+        let routes = &report
+            .edges
+            .iter()
+            .find(|c| c.edge.shape == DispatchShape::Polymorphic)
+            .expect("the interface site")
+            .edge
+            .routes;
+        let mut node = graph
+            .objects
+            .iter()
+            .find(|o| o.name.as_ref() == "Demo Kind")
+            .expect("the enum")
+            .clone();
+        assert!(
+            super::enum_covered_by_routes(graph, &index, &node, "demo strategy", routes),
+            "precondition: covered as extracted"
+        );
+        node.implements.push("Derived Strategy".into());
+        node.enum_impls.push((
+            "derived strategy".into(),
+            crate::program::node_extract::ObjectRef::Name {
+                raw: "Nowhere".into(),
+                normalized_lc: "nowhere".into(),
+            },
+        ));
         assert!(!super::enum_covered_by_routes(
             graph,
             &index,

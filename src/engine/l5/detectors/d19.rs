@@ -4,7 +4,8 @@
 //! Restricted to `procedure` (NOT triggers, NOT event subscribers — the latter's
 //! signature is dictated by the publisher and must keep every parameter declared,
 //! even unused — and NOT event publishers). bodyAvailable + !parseIncomplete; skip
-//! when there are 0 params.
+//! when there are 0 params. ENG-151: also skip a method implementing an interface
+//! member (the interface fixes its signature; see `interface_member_test`).
 //!
 //! The event-publisher exclusion (issue 25) is a CONSTRUCTION argument, not a
 //! heuristic: an `[IntegrationEvent]`/`[BusinessEvent]` body is empty by language
@@ -21,16 +22,114 @@
 //!
 //! Within-detector sort by `compareStrings(a.id, b.id)` (byte order).
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::engine::l5::confidence::to_confidence;
 use crate::engine::l5::detector_context::DetectorContext;
 use crate::engine::l5::detectors::anchor_of;
 use crate::engine::l5::finding::{Evidence, EvidenceStep, Finding, FindingConfidence, FixOption};
 use crate::engine::l5::registry::{DetectorError, DetectorOutput, DetectorStats};
-use crate::program::model::workspace::Model;
+use crate::program::model::workspace::{Model, ModelEntities, ModelObject, ModelRoutine};
 
 pub(crate) const DETECTOR: &str = "d19-unused-parameter";
+
+/// ENG-151: whether a routine implements an interface member: its object
+/// implements an interface that is, or extends (transitively, ENG-142's
+/// `interface_bases`), one declaring a member of the routine's name (the
+/// model keeps no arity for a source interface's members). alc makes an
+/// implementer keep the member's signature (AL0582 when a
+/// member is missing), so its unused parameters are not the author's to drop.
+/// An interface not in the model leaves its members unknown
+/// ([`IfaceMember::Unknown`]); the caller skips only a method that could be a
+/// member then (review, sol: not a `local` one). Interfaces are matched by
+/// name, as the model's `implements_interfaces` lists them, unescaped as the
+/// object names are (`"I""Foo"` names `I"Foo`). The routine's object is the
+/// copy that DECLARES it (`DeclaringObjects::of`), so whole-object `#if` arms
+/// do not borrow each other's `implements` (review, sol).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum IfaceMember {
+    /// An interface the object implements (or one of its bases) declares it.
+    Member,
+    /// None declares it, but one of them is not in the model.
+    Unknown,
+    /// None declares it, and all of them are in the model (or none at all).
+    No,
+}
+
+fn interface_member_test(
+    ws: &ModelEntities,
+) -> impl Fn(Option<&ModelObject>, &ModelRoutine) -> IfaceMember + '_ {
+    // Object, member and routine names are logical already; `implements` and
+    // `extends` entries are reference text as written (quoted, escaped), so
+    // only they are unquoted and unescaped (review, Fable: unescaping a
+    // logical `A""B` twice lost the match).
+    let fold = |s: &str| al_syntax::fold_identifier(s);
+    let fold_ref = |s: &str| {
+        al_syntax::fold_identifier(&crate::program::body::scope::unescape_al_identifier(
+            s.trim().trim_matches('"'),
+        ))
+    };
+    let objects: HashMap<&str, &ModelObject> =
+        ws.objects.iter().map(|o| (o.id.as_str(), o)).collect();
+    let mut bases: HashMap<String, Vec<String>> = HashMap::new();
+    for o in ws.objects.iter().filter(|o| o.object_type == "Interface") {
+        bases
+            .entry(fold(&o.name))
+            .or_default()
+            .extend(o.interface_bases.iter().map(|b| fold_ref(b)));
+    }
+    // A source interface's members are `interface_members`, ALL of them: not
+    // `declaration_only_routines`, which the cross-app model cuts to the demanded
+    // population, and a dependency interface's bodyless members are never
+    // demanded (ENG-151's CDO measurement: System Application's "Email
+    // Connector" read as memberless). A symbol-only interface has its members as
+    // routines. Names only: a same-named method of another arity (an overload)
+    // is skipped too, the safe side.
+    let mut members: HashMap<String, HashSet<String>> = HashMap::new();
+    for o in ws.objects.iter().filter(|o| o.object_type == "Interface") {
+        members
+            .entry(fold(&o.name))
+            .or_default()
+            .extend(o.interface_members.iter().map(|m| fold(m)));
+    }
+    for r in &ws.routines {
+        if let Some(o) = objects.get(r.object_id.as_str())
+            && o.object_type == "Interface"
+        {
+            members
+                .entry(fold(&o.name))
+                .or_default()
+                .insert(fold(&r.name));
+        }
+    }
+    move |object: Option<&ModelObject>, r: &ModelRoutine| {
+        let Some(impls) = object.and_then(|o| o.implements_interfaces.as_ref()) else {
+            return IfaceMember::No;
+        };
+        let key = fold(&r.name);
+        let mut unknown = false;
+        let mut seen: HashSet<String> = HashSet::new();
+        let mut stack: Vec<String> = impls.iter().map(|i| fold_ref(i)).collect();
+        while let Some(i) = stack.pop() {
+            if !seen.insert(i.clone()) {
+                continue;
+            }
+            let Some(more) = bases.get(&i) else {
+                unknown = true; // not in the model: its members are unknown
+                continue;
+            };
+            if members.get(&i).is_some_and(|m| m.contains(&key)) {
+                return IfaceMember::Member;
+            }
+            stack.extend(more.iter().cloned());
+        }
+        if unknown {
+            IfaceMember::Unknown
+        } else {
+            IfaceMember::No
+        }
+    }
+}
 
 pub fn detect_d19(
     resolved: &Model,
@@ -43,6 +142,10 @@ pub fn detect_d19(
     let mut skipped_trigger = 0u64;
     let mut skipped_event_subscriber = 0u64;
     let mut skipped_event_publisher = 0u64;
+    let mut skipped_interface_member = 0u64;
+    let mut skipped_interface_unknown = 0u64;
+    let implements_member = interface_member_test(ws);
+    let declaring = crate::program::model::declaring::DeclaringObjects::new(&ws.objects);
 
     for routine in &ws.routines {
         // roleOf(routine) !== "primary" → skip. Source-only: every routine is
@@ -77,6 +180,21 @@ pub fn detect_d19(
         }
         if routine.parameters.is_empty() {
             continue;
+        }
+        // ENG-151: a method implementing an interface member keeps the
+        // interface's signature, so an unused parameter there is no defect.
+        // An interface not in the model leaves this unknown: skip then only a
+        // method that could be a member (a `local` one cannot).
+        match implements_member(declaring.of(routine), routine) {
+            IfaceMember::Member => {
+                skipped_interface_member += 1;
+                continue;
+            }
+            IfaceMember::Unknown if routine.access_modifier.as_deref() != Some("local") => {
+                skipped_interface_unknown += 1;
+                continue;
+            }
+            IfaceMember::Unknown | IfaceMember::No => {}
         }
         candidates_considered += 1;
 
@@ -161,6 +279,8 @@ pub fn detect_d19(
     stats.add_skip("trigger", skipped_trigger);
     stats.add_skip("eventSubscriber", skipped_event_subscriber);
     stats.add_skip("eventPublisher", skipped_event_publisher);
+    stats.add_skip("interfaceMember", skipped_interface_member);
+    stats.add_skip("interfaceUnknown", skipped_interface_unknown);
     Ok(DetectorOutput {
         findings,
         stats,

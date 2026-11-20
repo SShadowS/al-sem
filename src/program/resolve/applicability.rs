@@ -114,14 +114,16 @@ pub fn interface_route_applicable(
         return false;
     }
 
-    // 3. Target's object must implement the interface.
+    // 3. Target's object must implement the interface: itself, or through an
+    //    interface derived from it (ENG-142; `implementers_of` holds both).
     let Some(obj_node) = graph.object_first(&target.object) else {
         return false;
     };
     let implements_iface = obj_node
         .implements
         .iter()
-        .any(|s| s.fold_identifier() == iface_lc);
+        .any(|s| s.fold_identifier() == iface_lc)
+        || index.implementers_of(iface_lc).contains(&target.object);
     if !implements_iface {
         return false;
     }
@@ -391,6 +393,7 @@ mod tests {
             declared_id: None,
             extends_target: extends_target.map(Into::into),
             implements: implements.into_iter().map(Into::into).collect(),
+            interface_bases: vec![],
             tier: TrustTier::Workspace,
             source_table: None,
             table_no: None,
@@ -524,6 +527,52 @@ mod tests {
             interface_route_applicable("ifoo", "bar", 0, &target, &graph, &index),
             "FooImpl implements IFoo and has a unique Bar() → applicable"
         );
+    }
+
+    /// ENG-142: `IFoo extends IBase`, so FooImpl (which implements IFoo)
+    /// implements IBase too, and its `Bar()` is an applicable route for a call
+    /// through `IBase` (the semantic audit's check of an interface route).
+    /// Mutation (2026-11-19): the `implementers_of` half of check 3 dropped ->
+    /// not applicable (red); restored, green.
+    #[test]
+    fn interface_applicable_through_a_derived_interface() {
+        let (apps, app) = make_app();
+        let mut iface = make_obj(app, ObjectKind::Interface, "IFoo", vec![], None);
+        iface.interface_bases = vec!["IBase".into()];
+        let base = make_obj(app, ObjectKind::Interface, "IBase", vec![], None);
+        let imp = make_obj(app, ObjectKind::Codeunit, "FooImpl", vec!["IFoo"], None);
+        let other = make_obj(app, ObjectKind::Codeunit, "Other", vec![], None);
+        let impl_id = imp.id.clone();
+        let other_id = other.id.clone();
+        let routines = vec![
+            make_routine(&impl_id, "bar", 0, None),
+            make_routine(&other_id, "bar", 0, None),
+        ];
+        let (graph, index) = build_graph(apps, vec![iface, base, imp, other], routines);
+        let target = |object: &ObjectNodeId| RoutineNodeId {
+            object: object.clone(),
+            name_lc: "bar".into(),
+            enclosing_member_lc: None,
+            params_count: 0,
+            sig_fp: 0,
+            request_page: false,
+        };
+        assert!(interface_route_applicable(
+            "ibase",
+            "bar",
+            0,
+            &target(&impl_id),
+            &graph,
+            &index
+        ));
+        assert!(!interface_route_applicable(
+            "ibase",
+            "bar",
+            0,
+            &target(&other_id),
+            &graph,
+            &index
+        ));
     }
 
     // -------------------------------------------------------------------------
