@@ -548,7 +548,8 @@ mod tests {
             // Assigned, or aliased.
             "R := Param;",
             "R.Open(Database::Customer);\nOther := R;\nOther.Open(Database::Vendor);",
-            "R.Open(Database::Customer);\nR.Copy(Param);",
+            // ENG-160: `Get(RecordId)` moves it to the RecordId's table.
+            "R.Open(Database::Customer);\nR.Get(Param.RecordId);",
             // Never bound.
             "R.Modify();",
             // Not a table literal.
@@ -557,6 +558,12 @@ mod tests {
         ] {
             assert_eq!(bindings(body), None, "{body}");
         }
+        // ENG-160: `Copy` binds nothing (another table, or a RecordRef not open, is a runtime
+        // error on BC 28.4).
+        assert_eq!(
+            bindings("R.Open(Database::Customer);\nR.Copy(Param);"),
+            Some(vec![table("Customer")])
+        );
         // Two tables: provable bindings, the caller sees they differ.
         assert_eq!(
             bindings("R.Open(Database::Customer);\nR.Close();\nR.Open(Database::Vendor);"),
