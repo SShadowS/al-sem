@@ -35,12 +35,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every `ci-steps` process as a build, including one parked in `acquire --wait` behind the
   slot's holder. So a landing's timed step waited for a lane's queued gate while that gate
   waited for the landing, until the 1,800 s wait ran out and the landing failed (review r1,
-  Fable and sol). A queued waiter's ancestors are now skipped; its siblings (a real cargo)
-  still count. This applies to every timed acquire, cdo-speed's included.
+  Fable and sol). A queued waiter's ancestors are now skipped, but only build SCRIPTS: an
+  exact build name (cargo, rustc) always counts, and a ticket counts only when its PID and
+  start time are both alive (a dead waiter's reused PID parks nothing; review r2, sol). Its
+  siblings and children still count. This applies to every timed acquire, cdo-speed's
+  included.
 - **Labels.** The stall share is of awake time (a suspend no longer dilutes it), compared
   before rounding (15.99 % is above 15 %), and names its source (this cgroup's, or the
-  host's when only `/proc/pressure/cpu` is readable). An unreadable suspend reading is said.
-- **Tests.** Seven, on a private slot with a stand-in test binary
+  host's when only `/proc/pressure/cpu` is readable). An unreadable suspend reading is said, and
+  a suspend covering the whole run says "load not checked: the host slept through the run".
+- **Tests.** Eight, on a private slot with a stand-in test binary
   (`CI_STEPS_PERF_BOUNDS_BIN`), the correctness guards each with a red proof:
   - the step takes the slot timed, the binary runs inside the timed mark (it prints the
     slot's status from inside), and its exit is the step's (proof: the acquire dropped);
@@ -49,7 +53,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - on a CI runner it holds no slot and says so (proof: no-slot check always empty);
   - inside a hold (a landing's token) it shares it;
   - a parked gate does not stop it (proof: the parked skip dropped);
-  - load above and below 15 % (proof: the share compared the wrong way), and a suspend.
+  - the parked skip hides no real build: a stale ticket and a parked exact build name both
+    still count (proofs: the start time not checked; the script-only condition dropped);
+  - load above and below 15 % (proof: the share compared the wrong way); a suspend, with the
+    share of awake time (proof: the share over wall time).
   Hooks: `CI_STEPS_CPU_PRESSURE_FILE`, `CDO_HOST_SUSPENDED_FILE`.
 
 ### Fixed (TLS-107: TLS-104's suspend test no longer fails on a loaded machine)

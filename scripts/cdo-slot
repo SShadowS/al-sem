@@ -661,7 +661,7 @@ script_builds() {
 # counting it made two timings wait on each other until CDO_SLOT_TIMED_WAIT_S
 # (TLS-108, review Fable and sol); "PID name" lines.
 foreign_builds() {
-    local root=$1 line=" " parked=" " q p name t
+    local root=$1 line=" " parked=" " q s p name t
     q=$root
     while [[ "$q" =~ ^[1-9][0-9]*$ ]]; do
         line+="$q "
@@ -669,8 +669,11 @@ foreign_builds() {
     done
     for t in "$queue"/*; do
         [[ -f "$t" ]] || continue
-        read -r q _ <"$t" 2>/dev/null || continue
-        alive "$q" || continue
+        # The ticket's start time too, as `ahead` checks it: a dead waiter's
+        # reused PID (a cargo build, say) must not pass as parked (review r2, sol).
+        read -r q s _ <"$t" 2>/dev/null || continue
+        [[ -n "$q" && -n "$s" ]] || continue
+        alive "$q" "$s" || continue
         while [[ "$q" =~ ^[1-9][0-9]*$ && "$q" != 1 ]]; do
             parked+="$q "
             q=$(ppid_of "$q")
@@ -680,7 +683,9 @@ foreign_builds() {
         [[ -n "$p" ]] || continue
         alive "$p" || continue
         [[ "$line" == *" $p "* ]] && continue
-        [[ "$parked" == *" $p "* ]] && continue
+        # Only a build SCRIPT can be parked (a `ci-steps` between its steps); an
+        # exact build name (cargo, rustc) always counts (review r2, sol).
+        [[ "$parked" == *" $p "* && " $build_scripts " == *" $name "* ]] && continue
         q=$p
         while [[ "$q" =~ ^[1-9][0-9]*$ && "$q" != 1 ]]; do
             [[ "$q" == "$root" ]] && continue 2

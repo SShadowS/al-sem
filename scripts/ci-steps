@@ -326,7 +326,12 @@ run_perf_bounds() {
     fi
     # The share is of awake time: a suspend stalls nothing and must not dilute it.
     awake_us=$((wall_us - slept_s * 1000000))
-    if [[ "${stall0:-}" =~ ^[0-9]+$ && "${stall1:-}" =~ ^[0-9]+$ ]] && ((awake_us > 0)); then
+    if [[ ! "${stall0:-}" =~ ^[0-9]+$ || ! "${stall1:-}" =~ ^[0-9]+$ ]]; then
+        label+=" (CPU pressure not readable: load not checked)"
+    elif ((awake_us <= 0)); then
+        # Whole seconds of suspend can cover a short run (review r2, Fable).
+        label+=" (load not checked: the host slept through the run)"
+    else
         local stalled=$((stall1 - stall0))
         # Compared before rounding: 15.99 % is above 15 % (review r1, sol).
         if ((stalled * 100 > PERF_BOUNDS_LOADED_SHARE * awake_us)); then
@@ -334,8 +339,6 @@ run_perf_bounds() {
         else
             label+=" (${src} CPU stall share $((stalled * 100 / awake_us)) %)"
         fi
-    else
-        label+=" (CPU pressure not readable: load not checked)"
     fi
     if ((slept_s >= 1)); then
         label+=" SUSPENDED: the host slept ${slept_s} s during the timing"
