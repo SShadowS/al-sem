@@ -151,6 +151,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Master's damaged 190-fingerprint schema-1 file, updated by this branch at the default
     scope: all 190 kept, the 2,109 shown findings added (2,299), written as schema 2.
 
+### Fixed (ENG-159: a record kept elsewhere may be rebound by user code — the sound rule, with reads at their position)
+
+- **The bug.** A RecordRef or Variant shares one record handle with every alias of it (BC 28.4,
+  ENG-145's note), and an alias may live where the routine cannot see it: a SingleInstance store
+  that kept the caller's RecordRef (`G := R`) and rebinds it later (`G.GetTable(L)`). A routine
+  that called anything (or wrote a record whose trigger calls the store) between binding its
+  RecordRef and branching on `R.Number` read a table the record no longer held: a definite `no`
+  that could be wrong (sol, review round 2 on ENG-145: `Store.Rebind(); if A.Number <> … then
+  exit;`).
+- **The rule** (owner decision, q-20261120T060657: "a wrong answer is worse than a stated limit").
+  A holder that may share a record with code the routine cannot see (a parameter, a global, a
+  call's result, a holder already passed to a call that may keep it) may hold anything after a
+  place that may run user code. Those places (`recref_alias::user_code_points`) are the calls
+  `may_run_user_code` says yes for, and the record operations that fire a trigger or a table
+  event (`Insert`, `Modify`, `Delete`, `Rename`, `ModifyAll`, `DeleteAll`, `Validate`, `Init`):
+  record operations in the IR, never call sites, which a call-site scan missed (Fable on
+  ENG-159 Part B). Every reader takes it: the flow's facts, its exit guards (G34), the field
+  guard (G36), and both of `record_types`' temp passes (Fable's N2 on ENG-160).
+- **Measured on BC 28.4** (`docs/superpowers/notes/2026-11-20-eng159-trigger-rebind.md`): a
+  write's own trigger or table-event subscriber cannot move the record the write targets. When it
+  rebinds the handle through a kept alias, `Modify` fails ("The record is not open.") and
+  `Insert` crashes the platform (`ObjectDisposedException`); neither writes another table. So the
+  field guard keeps a guarded write's own guard and ends it only for what runs after it (a write
+  in a loop ends it before: a later iteration runs after it). Without this, G36 would end at every
+  guarded write, its whole purpose, for any parameter or global RecordRef.
+- **Reads at their position** (the former Part A, brought in because the rule alone cost more):
+  in a loop-free routine a copy (`RR.GetTable(V)`, `A := B`) and a call's argument read what
+  reaches them (the source's entry value and the facts before), not the routine's union; an
+  argument does not include its own call's write-back. The G34 exit guards read no entry value
+  once any member of the variable's alias class (every parameter and global it may share a
+  record with: `Twice(R, R)`'s `B.GetTable(L)` rebinds `A`), or a user-code place while it may
+  be kept, binds it before the guard: positional reads made both shapes reachable.
+- **"Kept elsewhere" is an input.** `RecRefFlow::new` takes `KeptElsewhere`: production passes
+  `AnyExternal` (the rule above), and a caller that knows states `Nothing`. ENG-161's escape
+  facts will compute it per holder. ENG-18's depth-cutoff test states `Nothing` for its store-less
+  fixture, and its roots read `V` after the chain (reads at their position no longer nest for an
+  argument read before its call). Its proof: one `EvalState` shared across evaluations (the
+  pre-ENG-18 shape) turns it red.
+- **The cost on CDO** (`/work/src/cdo-baseline/Cloud` at `bc3ccb18`; master `fca2b558`;
+  cdo-before-after and `explain`, 2026-11-20):
+
+  | | master | the rule alone | the rule + reads at their position (this change) |
+  |---|---|---|---|
+  | findings, fingerprints, detectors (both scopes) | 2306 / 32429 | unchanged | unchanged |
+  | IssueReminder: may write | 201 tables | 422 | 422 |
+  | IssueReminder: literal arguments rule out | 274 tables (108 rows) | 0 (37 rows) | 0 (37 rows) |
+  | RunReportID: may write | 416 tables | 416 | 416 |
+  | one-hop calls with a binding | 6802 | 6665 | 6760 |
+  | one-hop dead sites | 5602 | 5600 | 5600 |
+
+  Reads at their position win back 95 of the 137 bindings the rule costs, and none of
+  IssueReminder's tables. Those need ENG-161's escape facts (no store keeps that record): Part B,
+  not Part A, is the lever (measured; the owner's question expected Part A to win them back).
+  Counting record operations as user code cost nothing beyond calls on these numbers.
+- **Re-baseline and tests:** filled in below after the gate.
+
 ### Fixed (TLS-107: TLS-104's suspend test no longer fails on a loaded machine)
 
 - **What failed.** `cdo_slot_timed_wait_survives_a_host_suspend` failed in task gates under
