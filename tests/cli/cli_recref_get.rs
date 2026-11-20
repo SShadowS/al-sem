@@ -34,6 +34,7 @@ codeunit 50434 "GE Mgt"
 {
     var
         G: RecordRef;
+        GId: RecordId;
 
     // G34/G35 (recref_flow): the guard in Guarded reads what R holds.
     procedure GetMoves()
@@ -209,6 +210,131 @@ codeunit 50434 "GE Mgt"
         if R.Number <> Database::"GE Doc" then
             exit;
         L.Insert();
+    end;
+
+    // ENG-160: `Id := R.RecordId; …; R.Get(Id)` moves R back to the table the ID was taken from
+    // (Continia DO's `RunReportID`): here an Entry, so the guard holds.
+    procedure OwnIdRoot()
+    var
+        R: RecordRef;
+        F: RecordRef;
+        E: Record "GE Entry";
+        Id: RecordId;
+    begin
+        R.GetTable(E);
+        F.GetTable(E);
+        Id := R.RecordId;
+        R := F.Duplicate();
+        R.Get(Id);
+        Guarded(R);
+    end;
+
+    // The ID written by a `foreach`: it may be any record's.
+    procedure OwnIdForeachRoot()
+    var
+        R: RecordRef;
+        E: Record "GE Entry";
+        D: Record "GE Doc";
+        Id: RecordId;
+        Ids: List of [RecordId];
+    begin
+        R.GetTable(E);
+        D.FindFirst();
+        Ids.Add(D.RecordId);
+        Id := R.RecordId;
+        foreach Id in Ids do begin
+            R.Get(Id);
+            Guarded(R);
+        end;
+    end;
+
+    // The ID passed to a call that may write it.
+    procedure OwnIdPassedRoot()
+    var
+        R: RecordRef;
+        E: Record "GE Entry";
+        Id: RecordId;
+    begin
+        R.GetTable(E);
+        Id := R.RecordId;
+        FillDocId(Id);
+        R.Get(Id);
+        Guarded(R);
+    end;
+
+    local procedure FillDocId(var Id: RecordId)
+    var
+        D: Record "GE Doc";
+    begin
+        D.FindFirst();
+        Id := D.RecordId;
+    end;
+
+    // The ID taken from R, then computed by a function.
+    procedure OwnIdComputedRoot()
+    var
+        R: RecordRef;
+        E: Record "GE Entry";
+        Id: RecordId;
+    begin
+        R.GetTable(E);
+        Id := R.RecordId;
+        Id := DocId();
+        R.Get(Id);
+        Guarded(R);
+    end;
+
+    local procedure DocId(): RecordId
+    var
+        D: Record "GE Doc";
+    begin
+        D.FindFirst();
+        exit(D.RecordId);
+    end;
+
+    // A global ID that a called routine rewrites (it is not passed as an argument).
+    procedure OwnIdGlobalRoot()
+    var
+        R: RecordRef;
+        E: Record "GE Entry";
+    begin
+        R.GetTable(E);
+        GId := R.RecordId;
+        SetGIdDoc();
+        R.Get(GId);
+        Guarded(R);
+    end;
+
+    local procedure SetGIdDoc()
+    var
+        D: Record "GE Doc";
+    begin
+        D.FindFirst();
+        GId := D.RecordId;
+    end;
+
+    // Fable on ENG-160: `R := O` between taking the ID and the Get moves O (one handle) to the
+    // caller's Doc.
+    procedure OwnIdAliasRoot()
+    var
+        R: RecordRef;
+        D: Record "GE Doc";
+    begin
+        R.GetTable(D);
+        OwnIdAlias(R);
+    end;
+
+    local procedure OwnIdAlias(var R: RecordRef)
+    var
+        O: RecordRef;
+        E: Record "GE Entry";
+        Id: RecordId;
+    begin
+        O.GetTable(E);
+        Id := R.RecordId;
+        R := O;
+        R.Get(Id);
+        Guarded(O);
     end;
 
     // G33 (literal_reach's table frame): R takes the Variant's table, unless a Get moves it.
@@ -506,6 +632,14 @@ fn a_recordref_get_moves_the_table_for_every_reader() {
     // (GetTable through a slot too).
     assert_eq!(answer("GetControl", "GE Log"), "no", "precondition");
     assert_eq!(answer("GetMoves", "GE Log"), "yes");
+    // A Get with its own record ID keeps the table the ID was taken from; an ID a `foreach`, a
+    // call or a function writes, or an alias in between, may move it anywhere.
+    assert_eq!(answer("OwnIdRoot", "GE Log"), "no");
+    assert_eq!(answer("OwnIdForeachRoot", "GE Log"), "yes");
+    assert_eq!(answer("OwnIdPassedRoot", "GE Log"), "yes");
+    assert_eq!(answer("OwnIdComputedRoot", "GE Log"), "yes");
+    assert_eq!(answer("OwnIdGlobalRoot", "GE Log"), "yes");
+    assert_eq!(answer("OwnIdAliasRoot", "GE Log"), "yes");
     assert_eq!(answer("AliasGetRoot", "GE Log"), "yes");
     assert_eq!(answer("SlotGetRoot", "GE Log"), "yes");
     assert_eq!(answer("SlotGetTableRoot", "GE Log"), "yes");

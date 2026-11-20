@@ -213,9 +213,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - recref_origin's reason text.
 
   `Copy` left the lists that held it: it moves nothing. `recref_flow`'s `get_keeps_table`
-  (`Id := R.RecordId; R.Get(Id)` keeps R's table) had never run, for the same reason. It is
-  deleted, not turned on, because it is unsound (Fable): `R := O` between the two lines, or a
-  `foreach Id in …`, moves R.
+  (`Id := R.RecordId; R.Get(Id)` keeps R's table) had never run, for the same reason, and was
+  unsound (Fable): with `R := O` between the two lines, or a `foreach Id in …`, the `Get` moves R.
+  It is replaced by `get_id_sources`: `R.Get(Id)` takes the table of every `X` in `Id :=
+  X.RecordId` when `Id` is a local that only such assignments write, is passed to no call and
+  is no `for`/`foreach` variable. Anything else moves R to any table. In the flow's summaries,
+  which read a variable over its whole routine, that covers X wherever `Id` was taken; an
+  alias in between still reaches every member (`R := O`: O may hold anything). This is the CDO
+  shape of `RunReportID`: `SavedRecID := RecRef.RecordId; RecRef := RecRefFilter.Duplicate();
+  RecRef.Get(SavedRecID)`. ENG-161's reads at a position must read such a copy where `Id` was
+  taken, not at the `Get`.
 - **The same reviews found older holes of the same kind** (the `GetTable` form fails on master
   too), now closed:
   - **an array slot:** `Slot[1] := R; Slot[1].GetTable(D)` rebinds R. The IR keeps no right side
@@ -230,8 +237,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     the receiver as the operations are (Fable).
 - **Tests.** `tests/cli/cli_recref_get.rs` has one shape per reader, each with a control that
   holds without the `Get`. The G36 fixture adds `ReboundByGet`. On master 831122de every
-  `prove` shape answers `no` (16 of 16), and `query touches` lists none of the three moved
-  `Field` sites. Discrimination proofs (2026-11-20, each break reverted, each red):
+  `prove` shape that may write answers `no` (21 of 21), and `query touches` lists none of the
+  three moved `Field` sites; `OwnIdRoot` (the RunReportID shape) answers `no` on master and on
+  this branch alike, rightly. Discrimination proofs (2026-11-20, each break reverted, each red):
   - the flow's `Get` facts → `GetMoves`; its array-slot rule → `SlotGetRoot`;
   - the table frame's `Get` check → `FrameRoot`; its alias check → `FrameAliasRoot`; its
     array check → `FrameSlotRoot`;
@@ -242,7 +250,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     check → `TouchSlot`;
   - the field guard's operation lookup → `ReboundByGet`;
   - the exit guards' `Get` check → `LocalGet`; their alias class → `LocalAliasGet`; their
-    array check → `LocalSlotGet`.
+    array check → `LocalSlotGet`;
+  - `get_id_sources` itself → `OwnIdRoot` (`yes`); its `foreach` check → `OwnIdForeachRoot`;
+    its call check → `OwnIdPassedRoot`; its assignment check → `OwnIdComputedRoot`; its
+    locals-only check → `OwnIdGlobalRoot`; the alias class's `Get` → `OwnIdAliasRoot`.
 
   On a parameter, a `Get` before its guard (`GetBeforeGuardRoot`) is right on master too: the
   caller's argument reads the callee's write-back over the whole routine. On a local nothing

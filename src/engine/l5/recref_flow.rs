@@ -1550,6 +1550,62 @@ fn in_place_part(site: &BindSite<'_>) -> Part {
     }
 }
 
+/// ENG-160: the variables (folded) whose table `R.Get(Id)` at `site` moves `R` to: the `X` of
+/// every `Id := X.RecordId`, when `Id` is a local that only such assignments write. Measured on
+/// BC 28.4, `Get(Id)` moves R to the RecordId's table (or leaves it, when it finds nothing), and a
+/// RecordId keeps the table of what it was taken from. In a summary that reads each variable
+/// over the whole routine, `Copy(X)` covers X at every assignment; it is the CDO shape
+/// `SavedRecID := RecRef.RecordId; RecRef := Filter.Duplicate(); RecRef.Get(SavedRecID)`.
+/// `None` (anything) when `Id` is anything else: a parameter or global, passed to a call (it may
+/// be written), a `for`/`foreach` variable (Fable on ENG-160), or written another way.
+fn get_id_sources(r: &ModelRoutine, site: &BindSite<'_>) -> Option<Vec<String>> {
+    let [id] = site.args else {
+        return None;
+    };
+    let id = lc(id);
+    if !r
+        .variables
+        .iter()
+        .any(|v| lc(&v.name) == id && !v.is_parameter && v.scope.as_deref() == Some("local"))
+    {
+        return None;
+    }
+    if r.call_sites
+        .iter()
+        .any(|cs| cs.argument_texts.iter().any(|a| lc(a) == id))
+    {
+        return None;
+    }
+    fn loops_over(n: &PCFNNode, id: &str) -> bool {
+        use crate::program::body::features::ValueFact;
+        let is_loop = matches!(n.kind.as_str(), "for" | "foreach");
+        let var = match n.value_fact() {
+            Some(ValueFact::LoopVar(v)) => Some(v.as_str()),
+            _ => None,
+        };
+        (is_loop && var.is_none_or(|v| v == id))
+            || [&n.condition_leaves, &n.children, &n.else_children]
+                .into_iter()
+                .flatten()
+                .flatten()
+                .any(|c| loops_over(c, id))
+    }
+    if r.statement_tree
+        .as_deref()
+        .is_none_or(|t| loops_over(t, &id))
+    {
+        return None;
+    }
+    let mut out = Vec::new();
+    for a in r.var_assignments.iter().filter(|a| lc(&a.lhs_name) == id) {
+        match &a.rhs_member {
+            Some((x, m)) if m.eq_fold_identifier("recordid") => out.push(lc(x)),
+            _ => return None,
+        }
+    }
+    (!out.is_empty()).then_some(out)
+}
+
 /// Whether call `cs` runs on the caller's own instance: `Proc(…)`,
 /// `this.Proc(…)` or `CurrCodeunit.Proc(…)` (the target must be in the same
 /// object).
@@ -1947,12 +2003,21 @@ fn facts_of(r: &ModelRoutine, obj_in_place: &HashSet<String>) -> Facts {
             }
         }
     }
-    // ENG-160: a `Get` on a tracked RecordRef is a record operation, not a call site.
+    // ENG-160: a `Get` on a tracked RecordRef is a record operation, not a call site. It moves
+    // the RecordRef to the record ID's table: what the ID was taken from, when the routine
+    // alone says ([`get_id_sources`]), else anything.
     for site in sites.iter().filter(|s| s.call.is_none()) {
         let v = lc(site.receiver);
         if f.tracked.contains_key(&v) {
             let at = Some((site.anchor.start_line, site.anchor.start_column));
-            f.fixed.push((v, in_place_part(site), at));
+            match get_id_sources(r, site) {
+                Some(xs) => {
+                    for x in xs {
+                        f.fixed.push((v.clone(), Part::Copy(x), at));
+                    }
+                }
+                None => f.fixed.push((v, in_place_part(site), at)),
+            }
         }
     }
     for (ci, cs) in r.call_sites.iter().enumerate() {
