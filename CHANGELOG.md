@@ -59,6 +59,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     share of awake time (proof: the share over wall time).
   Hooks: `CI_STEPS_CPU_PRESSURE_FILE`, `CDO_HOST_SUSPENDED_FILE`.
 
+### Fixed (TLS-106: `--update-baseline` no longer drops findings that were outside the run's view)
+
+- **Before:** an update with `--min-severity`, `--detector`, `--preset`, `--limit`,
+  `--single-app`, the default `--scope primary`, a failing detector or degraded coverage
+  removed every finding that run did not show, and later runs reported them as new.
+- **What a filtered update keeps now:** every entry the run did not prove gone. An entry is
+  dropped only when its detector ran completely, the run's inputs were whole, the entry is
+  inside the run's scope, and its fingerprint is absent before any filter. Everything kept
+  unchecked is counted on stderr (`al-sem: baseline: kept N entries unchecked: ...`) and in
+  `--format json` (`payload.summary.baselineUpdate`: `written`, `dropped`, `added`,
+  `keptUnchecked` by reason).
+- **Your old (schema 1) baseline moves to schema 2 by itself:** the first `--update-baseline`
+  reads it, keeps every fingerprint, records a detector for each one the run sees, and writes
+  schema 2. Fingerprints no run sees stay (counted as 'no detector known') until you rebuild.
+  Reading a baseline (`--baseline` alone) works with both schemas. Update every machine that
+  writes the file: an old binary still writes schema 1 with the old, lossy rule.
+- **If an earlier filtered update damaged your baseline,** rebuild it once: delete the file
+  and run `alsem analyze <ws> --scope all --baseline <file> --update-baseline` with the
+  detectors your gate uses (`--preset`, opt-in detectors). This accepts every current finding
+  as the new floor, untriaged: review the list first if that matters. Then any narrower
+  updates you like: they now keep what they do not see.
+- **Refused now, nothing written:** an update of a malformed file (it used to be overwritten),
+  of a file whose `entries` name a fingerprint `fingerprints` does not list, or of an unknown
+  `schemaVersion` (exit 2); an update in another universe (`--single-app` on a cross-app file)
+  or for another primary app (exit 3). A missing file is written, as before.
+- **The file, schema 2.** `universe` and `primaryApp` bind it to its runs. `fingerprints` is
+  what suppression reads, so a schema-1 reader still works. `entries` holds each
+  fingerprint's detector and scope (`primary` or `dependency`), sorted and deduped. A
+  fingerprint listed with no entry is a schema-1 entry: kept until a run sees it.
+- **How it works.**
+  - The registry labels each finding primary or dependency by the predicate `--scope
+    primary` drops by (one function, `in_primary_scope`). A primary-scope run never sees
+    dependency findings, so it never prunes a dependency entry; only a cross-app `--scope
+    all` run does.
+  - Each detector's incompleteness signals are listed in one place
+    (`registry::incompleteness_signals`; every registered detector states its list, `&[]`
+    for none): d44 and d45 `outputCapped`, d54 `cappedPerTryRoutine`, d65
+    `crossCallTruncated`, d43's substrate warning. A detector that errors has no stats row.
+    Either keeps its entries.
+  - Inputs are whole (`preflight::inputs_whole`) unless the coverage could not be verified,
+    its contract failed, a file was parsed with recovery, or a dependency package was
+    unreadable, unidentified or encrypted. Unknown call edges, symbol-only dependencies and
+    unbound subscriptions do not stop pruning: every real workspace has some.
+  - A batch job's plan declares its baseline as read and written.
+- **Unchanged.** Without `--update-baseline` every output is byte for byte as before.
+- **Measured.** MEASUREMENT
+
 ### Fixed (TLS-107: TLS-104's suspend test no longer fails on a loaded machine)
 
 - **What failed.** `cdo_slot_timed_wait_survives_a_host_suspend` failed in task gates under
