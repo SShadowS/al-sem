@@ -329,6 +329,7 @@ mod cli_query_field;
 mod cli_receiver_temp_state;
 mod cli_record_integer_builtin_arg;
 mod cli_recordref_open_temporary;
+mod cli_recref_get;
 mod cli_s6_consumers;
 mod cli_sarif_rule_catalog;
 mod cli_secrettext_arg;

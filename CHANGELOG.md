@@ -197,6 +197,117 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The hook files have no final newline, which the first `host-suspended` refused. The slot test
   found it, and it is fixed.
 
+### Fixed (ENG-160: `RecordRef.Get(RecordId)` moves the RecordRef, and every reader now sees it)
+
+- **The bug.** `R.Get(Id)` moves a RecordRef to the RecordId's table. Measured on BC 28.4: open
+  on Customer, `R.Get(<a Vendor's RecordId>)` returns true and `R.Number` is 23 (Vendor). The
+  move reaches every alias of R, and a temporary R becomes physical. In the IR, `Get` (like
+  `Copy`, `Insert` and every other record method) is a record OPERATION, never a call site. So
+  each reader that looked for a RecordRef's binds among the call sites alone never saw it.
+  `R.GetTable(Entry); R.Get(DocId); Guarded(R)`, where Guarded does `if R.Number <>
+  Database::Doc then exit; Log.Insert()`, answered `prove … writes-table:Log` **no**; the truth
+  is yes. Found by Fable's review of ENG-159 Part B.
+- **The list, measured** (`docs/superpowers/notes/2026-11-20-eng160-recordref-table-moves.md`,
+  probes P159/P160):
+  - `Open`, `GetTable`, `Get(RecordId)` and `Close` are the only RecordRef methods that bind or
+    unbind it.
+  - `Get` moves only when it finds the record. Another table is physical; the same table keeps
+    its temporary state.
+  - `Copy` moves nothing: another table (temporary on both sides or not, `shareTable` or not),
+    `shareTable` with a physical side, or a RecordRef not open are runtime errors, and it keeps
+    the temporary state otherwise.
+  - `GetBySystemId` looks in its own table only.
+  - Also measured: `A := F.Record()` shares no handle with R, a by-value RecordRef parameter
+    does share the caller's handle, and `Clear(A)` detaches only A.
+- **The fix.** One list, `recref_alias::RecRefBind`, and one way to find the binds,
+  `recref_alias::bind_sites`, which lists the call sites and the `Get` record operations alike.
+  These readers go through it:
+  - recref_flow's facts (G34/G35) and its exit guards (a guard reads no entry value once a
+    member of its variable's alias class is bound before it: assigned, passed on, called on,
+    a `Get`, or put in an array slot; a local's guard read its `Unset` entry, sol);
+  - literal_reach's table frame (G33);
+  - the field guard (G36);
+  - record_types' two temp passes;
+  - the resolver's RecordRef table (`program::recordref_table`);
+  - field_touches' RecordRef table (`query touches --field`);
+  - recref_origin's reason text.
+
+  `Copy` left the lists that held it: it moves nothing. `recref_flow`'s `get_keeps_table`
+  (`Id := R.RecordId; R.Get(Id)` keeps R's table) had never run, for the same reason, and was
+  unsound (Fable): with `R := O` between the two lines, or a `foreach Id in …`, the `Get` moves R.
+  It is replaced by `get_id_sources`: `R.Get(Id)` takes the table of every `X` in `Id :=
+  X.RecordId` when `Id` is a local that only such assignments write, is passed to no call and
+  is no `for`/`foreach` variable. X must be a RecordRef, or a record whose table is resolved
+  and has neither a field nor a procedure named `RecordId`, in the table or a loaded extension
+  of it: alc binds `X.RecordId` to such a field (Fable, review round 3) and `X.RecordId()` to
+  such a procedure (warning AL0524, which says it will become an error; Fable, round 4),
+  either of which may give any record's ID. AL binds the name against the apps the workspace
+  compiles with, which are the loaded ones; a dependency's procedure is loaded because the call
+  resolves to it. A table extension whose target is not known turns the record path off.
+  Anything else moves R to any table. In the flow's summaries,
+  which read a variable over its whole routine, that covers X wherever `Id` was taken. The
+  `Get` moves the shared handle, so every member of R's alias class takes the same tables
+  (`R := O` before the `Get`: O takes R's, the caller's included). This is the CDO shape of
+  `RunReportID`, which also hands RecRef to a Variant first: `SavedRecID := RecRef.RecordId;
+  RecRef := RecRefFilter.Duplicate(); RecRef.Get(SavedRecID)`. With "anything" for that class
+  (an intermediate state of this change), IssueReminder lost every table literal arguments
+  ruled out (may write 201 → 422 tables, ruled out 274 → 0); with the sources it is back to
+  201 and 274 (bisected per commit on CDO, 2026-11-20). ENG-161's reads at a position must read such a copy where `Id` was
+  taken, not at the `Get`.
+- **The same reviews found older holes of the same kind** (the `GetTable` form fails on master
+  too), now closed:
+  - **an array slot:** `Slot[1] := R; Slot[1].GetTable(D)` rebinds R. The IR keeps no right side
+    for an indexed target, so the flow, the table frame and field_touches now read an
+    assignment into an array of RecordRefs or Variants as one that may share any holder, as
+    `AliasClasses::for_routine` already does for the field guard and record_types (sol);
+  - **an alias:** `A := R; A.Get(Id)` (or `A.GetTable`) binds R. The table frame and
+    field_touches now refuse a RecordRef that is assigned to another (Fable);
+  - **a global:** record_types' first pass derived a temp state for a global RecordRef, which
+    any routine a call reaches may rebind. It now takes locals and parameters only (Fable);
+  - **a quoted receiver:** record_types' second pass compared `"MyR".Get(…)` raw. It now keys
+    the receiver as the operations are (Fable).
+- **On CDO** (cdo-before-after, master ab435c0d → this branch): no detector, finding or
+  fingerprint moves (2306 / 32429 findings), unknown 0; `oneHop.callsBinding` 6806 → 6802.
+  Two `output_cdo` renderings move, witness routes only: IssueReminder's explain and
+  RunReportID's `prove writes-table:CDO E-Mail Log` each lose the hops `ExecuteResponses →
+  ExecuteQueuedEvents →` (Base Application `Workflow Management`); every count and answer is
+  unchanged (IssueReminder may write 201 tables, literal arguments rule out 274). The cause is
+  real: `Workflow Response Handling.ReleaseDocument(var Variant)` does, for an Approval Entry,
+  `TargetRecRef.Get(ApprovalEntry."Record ID to Approve"); Variant := TargetRecRef;`, which
+  hands the record being approved (a sales document) back to `ExecuteResponses`, whose next
+  response `PostDocument` may post it. Master did not see the `Get`, so it pruned that direct
+  route and showed only the event-queue detour. **Re-baseline:** the two `output_cdo` goldens
+  (`tests/cli-output-goldens/cdo/IssueReminder.explain.human.txt`,
+  `RunReportID.prove-writes-table.human.txt`), re-minted here; no outside reader keys on a
+  witness route.
+- **Tests.** `tests/cli/cli_recref_get.rs` has one shape per reader, each with a control that
+  holds without the `Get`. The G36 fixture adds `ReboundByGet`. On master 831122de every
+  `prove` shape that may write answers `no` (21 of 21), and `query touches` lists none of the
+  three moved `Field` sites; `OwnIdRoot` (the RunReportID shape) answers `no` on master and on
+  this branch alike, rightly. Discrimination proofs (2026-11-20, each break reverted, each red):
+  - the flow's `Get` facts → `GetMoves`; its array-slot rule → `SlotGetRoot`;
+  - the table frame's `Get` check → `FrameRoot`; its alias check → `FrameAliasRoot`; its
+    array check → `FrameSlotRoot`;
+  - record_types' first pass `Get` check → `TempGetStraight`; its locals-only filter →
+    `TempGlobal`; the second pass's `Get` arm → `TempGet`; its receiver key → `TempGetQuoted`;
+  - the resolver's `Get` arm → `TempGetStraight` and `OpenThenGet`;
+  - field_touches' `Get` check → `TouchAfterGet`; its alias check → `TouchAlias`; its array
+    check → `TouchSlot`;
+  - the field guard's operation lookup → `ReboundByGet`;
+  - the exit guards' `Get` check → `LocalGet`; their alias class → `LocalAliasGet`; their
+    array check → `LocalSlotGet`;
+  - `get_id_sources` itself → `OwnIdRoot` (`yes`); its `foreach` check → `OwnIdForeachRoot`;
+    its call check → `OwnIdPassedRoot`; its assignment check → `OwnIdComputedRoot`; its
+    locals-only check → `OwnIdGlobalRoot`; the alias class's `Get` → `OwnIdAliasRoot`; the
+    alias class taking the sources → `OwnIdAliasedRoot` (`yes`); a record source →
+    `OwnIdRecordRoot` (`yes`); its no-`RecordId`-field check → `OwnIdFieldRoot` (`no`); its
+    no-procedure check → `OwnIdProcRoot` (`no`), and through a table extension →
+    `OwnIdExtProcRoot` (`no`).
+
+  On a parameter, a `Get` before its guard (`GetBeforeGuardRoot`) is right on master too: the
+  caller's argument reads the callee's write-back over the whole routine. On a local nothing
+  writes back, so the four `Local*` shapes answered `no` on master.
+
 ### Fixed (ENG-148: a runtime package's codeunit implementers reach interface dispatch)
 
 - **The gap.** A runtime package ships no AL, only BC's transpiled C# (`bin/*.cs`) and its
