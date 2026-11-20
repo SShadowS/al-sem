@@ -564,6 +564,78 @@ fn a_dependency_interfaces_bases_come_from_its_symbols() {
     );
 }
 
+/// ENG-148: a RUNTIME package (no `.al`; BC's transpiled C# under `bin/` and
+/// its symbols) is read from AL synthesized from both, so its codeunit's
+/// `implements` must be written into that AL, or the implementer leaves
+/// interface dispatch: a workspace call through the package's interface
+/// reached nothing of it (a missed callee). The package's symbols list the
+/// implementer too; the mutation shows the synthesized source is what the
+/// model reads (were it the symbols, the route would survive the break).
+/// Mutation (2026-11-20): `synth::write_object` writing `implements` for
+/// enums only, as before -> no route to 70002 (red); restored, green.
+#[test]
+fn a_runtime_packages_codeunit_implementer_is_dispatched() {
+    const GUID: &str = "14814814-0000-0000-0000-0000000000df";
+    let go = r#"{"Name":"Go","Parameters":[]}"#;
+    let symbols = format!(
+        r#"{{"RuntimeVersion":"15.0","Interfaces":[{{"Name":"Dep Iface","Methods":[{go}]}}],"Codeunits":[{{"Id":70002,"Name":"Dep Impl","ImplementedInterfaces":["Dep Iface"],"Methods":[{go}]}}]}}"#
+    );
+    let cs = r#"
+public sealed class Codeunit70002 : NavCodeunit
+{
+    [NavName("Go")]
+    [MethodId(1)]
+    public async ValueTask Go()
+    {
+        ALMethodScope<(bool γfiller, bool γfiller2)> γscope = default;
+        try
+        {
+            γscope = new ALMethodScope<(bool γfiller, bool γfiller2)>(this, "Go", MethodScopeFlags.None, 1);
+            γscope.ALStart();
+        }
+        finally
+        {
+            ALMethodScope.ALFinally(γscope);
+        }
+    }
+}
+"#;
+    let manifest = format!(
+        r#"<?xml version="1.0" encoding="utf-8"?><Package xmlns="http://schemas.microsoft.com/navx/2015/manifest"><App Id="{GUID}" Name="Dep148" Publisher="probe" Version="1.0.0.0" Runtime="15.0" /></Package>"#
+    );
+    let app = crate::engine::deps::app_package_zip::test_apps::build_app(&[
+        ("NavxManifest.xml", manifest.as_bytes()),
+        ("SymbolReference.json", symbols.as_bytes()),
+        ("bin/COD70002.cs", cs.as_bytes()),
+    ]);
+    let app_json = format!(
+        r#"{{"id":"14814814-0000-0000-0000-000000000002","name":"Ws148","publisher":"probe","version":"1.0.0.0","runtime":"15.0","idRanges":[{{"from":50100,"to":50199}}],"dependencies":[{{"id":"{GUID}","name":"Dep148","publisher":"probe","version":"1.0.0.0"}}]}}"#
+    );
+    let dir = write(&[
+        ("app.json", app_json),
+        (
+            "src/Caller.al",
+            "codeunit 50130 \"Caller\"\n{\n    procedure Calls()\n    var\n        B: Interface \"Dep Iface\";\n    begin\n        B.Go();\n    end;\n}\n".into(),
+        ),
+    ]);
+    let pkgs = dir.path().join(".alpackages");
+    std::fs::create_dir_all(&pkgs).unwrap();
+    std::fs::write(pkgs.join("probe_Dep148_1.0.0.0.app"), app).unwrap();
+    let report = resolve_full_program(dir.path()).expect("resolves");
+    let routes: Vec<_> = report
+        .edges
+        .iter()
+        .filter(|c| c.edge.from.name_lc.as_ref() == "calls")
+        .flat_map(|c| c.edge.routes.iter())
+        .collect();
+    assert!(
+        routes.iter().any(|r| r
+            .target_object()
+            .is_some_and(|o| o.key == ObjKey::Id(70002))),
+        "B.Go() reaches the runtime package's implementer: {routes:#?}"
+    );
+}
+
 /// An interface name the workspace cannot resolve uniquely (review, Fable): two
 /// dependencies each declare `IDup`, and the workspace's `IDer extends IDup`. The
 /// base resolves to neither, so the closure takes every interface of the name,

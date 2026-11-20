@@ -23,6 +23,24 @@ fn q(name: &str) -> String {
     format!("\"{}\"", name.replace('"', ""))
 }
 
+/// The interface names a symbol list (`ImplementedInterfaces`,
+/// `ExtendedInterfaces`) holds, quoted for a header. A `#<guid>#Name`
+/// reference keeps its name, as the symbol reader reads it (review, sol).
+fn iface_refs(o: &Value, key: &str) -> Vec<String> {
+    arr(o, key)
+        .iter()
+        .filter_map(Value::as_str)
+        .map(|raw| {
+            let name = raw
+                .strip_prefix('#')
+                .and_then(|s| s.split_once('#'))
+                .map_or(raw, |(_, rest)| rest)
+                .trim();
+            q(if name.is_empty() { raw } else { name })
+        })
+        .collect()
+}
+
 fn prop<'a>(o: &'a Value, name: &str) -> Option<&'a str> {
     o.get("Properties")?
         .as_array()?
@@ -505,39 +523,21 @@ fn write_object(
         (_, Some(id)) => format!("{kw} {id} {}", q(name)),
         _ => return None,
     };
-    let header = if kw == "enum" {
-        let ifaces: Vec<&str> = arr(o, "ImplementedInterfaces")
-            .iter()
-            .filter_map(Value::as_str)
-            .collect();
-        if ifaces.is_empty() {
-            header
+    // The interfaces an enum or codeunit implements (ENG-148: codeunits too,
+    // the two kinds alc lets implement one), and an interface's bases
+    // (ENG-142), so the lowered source keeps them.
+    let refs = |key: &str, clause: &str| {
+        let names = iface_refs(o, key);
+        if names.is_empty() {
+            String::new()
         } else {
-            format!("{header} implements {}", ifaces.join(", "))
+            format!(" {clause} {}", names.join(", "))
         }
-    } else if kw == "interface" {
-        // ENG-142: an interface's bases (`ExtendedInterfaces`), so the lowered
-        // source keeps them (`ObjectDecl::interface_extends`). A `#<guid>#Name`
-        // reference keeps its name, as the symbol reader reads it (review, sol).
-        let bases: Vec<String> = arr(o, "ExtendedInterfaces")
-            .iter()
-            .filter_map(Value::as_str)
-            .map(|raw| {
-                let name = raw
-                    .strip_prefix('#')
-                    .and_then(|s| s.split_once('#'))
-                    .map_or(raw, |(_, rest)| rest)
-                    .trim();
-                q(if name.is_empty() { raw } else { name })
-            })
-            .collect();
-        if bases.is_empty() {
-            header
-        } else {
-            format!("{header} extends {}", bases.join(", "))
-        }
-    } else {
-        header
+    };
+    let header = match kw {
+        "enum" | "codeunit" => header + &refs("ImplementedInterfaces", "implements"),
+        "interface" => header + &refs("ExtendedInterfaces", "extends"),
+        _ => header,
     };
     w.out.line(0, &header);
     w.out.line(0, "{");
@@ -698,10 +698,7 @@ fn write_object(
                 };
                 w.out.line(1, &format!("Extensible = {v};"));
             }
-            let ifaces: Vec<&str> = arr(o, "ImplementedInterfaces")
-                .iter()
-                .filter_map(Value::as_str)
-                .collect();
+            let ifaces = iface_refs(o, "ImplementedInterfaces");
             for v in arr(o, "Values") {
                 let ord = v.get("Ordinal").and_then(Value::as_i64).unwrap_or(0);
                 w.out.line(1, &format!("value({ord}; {})", q(s(v, "Name"))));
@@ -849,6 +846,39 @@ mod tests {
             ["IBar", "My Base", "IOther"],
             "{text}"
         );
+    }
+
+    /// ENG-148: a codeunit's and an enum's `ImplementedInterfaces` become their
+    /// `implements` list (names with spaces quoted, a `#<guid>#Name` reference
+    /// by its name), so a runtime package's implementers reach interface
+    /// dispatch. Mutations (2026-11-20, each restored, green): the `codeunit`
+    /// arm dropped -> the codeunit implements nothing (red); the names joined
+    /// raw, as the enum arm did -> `My Iface` does not parse clean (red).
+    #[test]
+    fn a_codeunits_and_an_enums_interfaces_are_written() {
+        let symbols: Value = serde_json::from_str(
+            r##"{ "Codeunits": [ { "Id": 50100, "Name": "Impl", "ImplementedInterfaces": ["IFoo", "My Iface", "#63ca2fa4-4f03-4f2b-a480-172fef340d3f#IOther"],
+                "Methods": [ { "Name": "Go" } ] } ],
+                "EnumTypes": [ { "Id": 50101, "Name": "Kind", "ImplementedInterfaces": ["My Iface"],
+                "Values": [ { "Name": "A", "Ordinal": 0, "Properties": [ { "Name": "Implementation", "Value": "Impl" } ] } ] } ] }"##,
+        )
+        .expect("json");
+        let files = synthesize(&symbols, &[]);
+        assert_eq!(files.len(), 2, "{files:?}");
+        let implements = |kind: al_syntax::ir::ObjectKind| {
+            let (_, text) = files
+                .iter()
+                .find(|(_, t)| al_syntax::parse(t).objects[0].kind == kind)
+                .unwrap_or_else(|| panic!("a {kind:?} file: {files:?}"));
+            let f = al_syntax::parse(text);
+            assert_eq!(f.parse_status, al_syntax::ir::ParseStatus::Clean, "{text}");
+            f.objects[0].implements.clone()
+        };
+        assert_eq!(
+            implements(al_syntax::ir::ObjectKind::Codeunit),
+            ["IFoo", "My Iface", "IOther"]
+        );
+        assert_eq!(implements(al_syntax::ir::ObjectKind::Enum), ["My Iface"]);
     }
 
     /// Gated on `TRANSPILED_SYMBOLS` (a real package's `SymbolReference.json`)
