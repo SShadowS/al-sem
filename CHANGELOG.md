@@ -97,7 +97,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   records no partner). Names are keyed one way, `recref_alias::holder_key` (`this.G` is `G`,
   `Slot[1]` is `Slot`, quotes stripped), which `record_types`' receiver key now calls; a
   `Rebind(this.G)` was no rebinding of `G`. The cost: a routine with two or more parameter or
-  global RecordRefs takes no field guard and no derived temp state for them.
+  global RecordRefs takes no field guard and no derived temp state for them. `this.` and an
+  index count as syntax only outside quotes, and a DECLARED name (already logical: the lowerer
+  strips its quotes) is keyed by `recref_alias::name_key`, so a variable literally named
+  `"R[1]"` is one name, not an array element (sol round 2: the declaration keyed as `r` and its
+  quoted uses as `r[1]`, so its rebinding ended no guard).
+- **A record kept by code the routine cannot see** (a SingleInstance store holding the caller's
+  RecordRef and rebinding it from a later call, sol round 2) is ENG-159's: a sound rule for it
+  costs the RecordRef flow most of its CDO pruning (measured: IssueReminder 201 -> 422 tables)
+  until position-aware copies and interprocedural escape facts win it back, so the two land
+  together.
 - **A quoted alias was no alias.** `PVarAssignment::rhs_identifier` was set only for two bare
   identifiers, so `"Alias Ref" := R` made no alias. It now takes quoted names on either side
   (also read by d11/d21's record-assign-as-load).
@@ -112,6 +121,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   round 1 shapes, in both families: `ThisGlobal`/`ThisGlobalTemp` (`this.G`), `Victim`/
   `VictimTemp` (two `var` parameters), `ArraySlot`/`ArraySlotTemp`, each `unknown`, and `no`
   when its rule (the one key, the parameter/global join, the array join) is removed;
+  `LiteralName` (`"R[1]"`) `unknown`, and `no` without `name_key`;
   `recref_alias`'s unit test pins the classes.
 
 ### Fixed (ENG-151: d19 no longer flags an unused parameter of a method that implements an interface member)

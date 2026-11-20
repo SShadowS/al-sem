@@ -45,9 +45,14 @@ fn may_be_rebound_elsewhere(
     aliases: &crate::program::model::recref_alias::AliasClasses,
     v: &str,
 ) -> bool {
-    let names = |t: &str| crate::program::model::recref_alias::holder_key(t) == v;
+    use crate::program::model::recref_alias::{holder_key, name_key};
+    // An argument is source text (`holder_key`); an assignment target is a logical name.
+    let names = |t: &str| holder_key(t) == v;
     aliases.has_alias(v)
-        || routine.var_assignments.iter().any(|a| names(&a.lhs_name))
+        || routine
+            .var_assignments
+            .iter()
+            .any(|a| name_key(&a.lhs_name) == v)
         || routine
             .call_sites
             .iter()

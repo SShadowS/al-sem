@@ -166,6 +166,20 @@ codeunit 50403 "FG Mgt"
         R.Modify();
     end;
 
+    // sol round 2: a variable literally named `"R[1]"` is one name, not an array element.
+    procedure LiteralName()
+    var
+        "R[1]": RecordRef;
+        D: Record "FG Doc";
+        L: Record "FG Log";
+    begin
+        "R[1]".GetTable(D);
+        if not "R[1]".FieldExist(50) then
+            exit;
+        "R[1]".GetTable(L);
+        "R[1]".Modify();
+    end;
+
     local procedure RebindLog(var R: RecordRef)
     var
         L: Record "FG Log";
@@ -240,6 +254,8 @@ fn a_field_guarded_recordref_write_writes_only_tables_with_the_field() {
         "ThisGlobal",
         "Victim",
         "ArraySlot",
+        // sol round 2: a variable literally named `"R[1]"` (`recref_alias::name_key`).
+        "LiteralName",
     ] {
         assert_eq!(answer(routine, "FG Log"), "unknown", "{routine}");
     }

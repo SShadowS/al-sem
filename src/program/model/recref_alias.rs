@@ -22,18 +22,39 @@ use std::collections::{HashMap, HashSet};
 
 /// A variable reference's key, as every reader of the classes names it: an array element
 /// `Recs[1]` is its array, `this.X` the global `X`, quotes stripped (`""` one `"`), folded.
+/// `this.` and an index are syntax only OUTSIDE quotes: a variable named `"R[1]"` or
+/// `"this.G"` keys as its whole name (sol round 2 on ENG-145).
 #[must_use]
 pub fn holder_key(raw: &str) -> String {
-    let raw = match raw.trim_end().strip_suffix(']') {
-        Some(_) => raw.find('[').map_or(raw, |i| &raw[..i]),
-        None => raw,
-    };
     let raw = raw.trim();
     let raw = match raw.get(..5) {
         Some(p) if p.eq_fold_identifier("this.") => &raw[5..],
         _ => raw,
     };
-    crate::program::body::node_util::strip_quotes(raw.trim())
+    // The first `[` outside quotes starts an index.
+    let mut quoted = false;
+    let mut end = raw.len();
+    for (i, ch) in raw.char_indices() {
+        match ch {
+            '"' => quoted = !quoted,
+            '[' if !quoted => {
+                end = i;
+                break;
+            }
+            _ => {}
+        }
+    }
+    crate::program::body::node_util::strip_quotes(raw[..end].trim())
+        .replace("\"\"", "\"")
+        .fold_identifier()
+}
+
+/// A DECLARED variable name's key: a declaration's name is already logical (the lowerer strips
+/// its quotes), so nothing in it is syntax; `"R[1]"` declared keys as `r[1]`, as its quoted uses
+/// do through [`holder_key`]. The IR's assignment sides are logical names too.
+#[must_use]
+pub fn name_key(name: &str) -> String {
+    crate::program::body::node_util::strip_quotes(name.trim())
         .replace("\"\"", "\"")
         .fold_identifier()
 }
@@ -68,7 +89,7 @@ impl AliasClasses {
             .iter()
             .filter(|v| holder_type(&v.declared_type))
             .collect();
-        let keys: HashSet<String> = holders.iter().map(|v| holder_key(&v.name)).collect();
+        let keys: HashSet<String> = holders.iter().map(|v| name_key(&v.name)).collect();
         let mut c = Self::of(&r.var_assignments, |n| keys.contains(n));
         let any_array = holders
             .iter()
@@ -76,7 +97,7 @@ impl AliasClasses {
         let joined: Vec<String> = holders
             .iter()
             .filter(|v| any_array || v.is_parameter || v.scope.as_deref() != Some("local"))
-            .map(|v| holder_key(&v.name))
+            .map(|v| name_key(&v.name))
             .collect();
         c.join(&joined);
         c.holders = keys;
@@ -108,12 +129,13 @@ impl AliasClasses {
     #[must_use]
     pub fn of(assignments: &[PVarAssignment], tracked: impl Fn(&str) -> bool) -> Self {
         let mut c = Self::default();
+        // The IR gives both sides as logical names (`name_key`, not source text).
         for a in assignments {
-            let l = holder_key(&a.lhs_name);
+            let l = name_key(&a.lhs_name);
             let Some(w) = a.rhs_identifier.as_deref() else {
                 continue;
             };
-            let w = holder_key(w);
+            let w = name_key(w);
             if !tracked(&l) || !tracked(&w) {
                 continue;
             }
