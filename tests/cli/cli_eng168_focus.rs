@@ -131,29 +131,100 @@ fn focus_applies_before_limit() {
     assert_eq!(v["payload"]["summary"]["hidden"]["total"], 2);
 }
 
-/// The hidden counts are taken before the baseline: a finding the baseline drops
-/// is still counted (the stated definition), with `--with-evidence` too.
+/// The hidden counts are taken before the baseline: the two d19 findings, which
+/// the baseline lists, are still counted (the stated definition), while the d34
+/// findings it does not list are shown with their evidence, under schema 2.0.0.
+///
+/// Mutation (2026-11-20): moved the focus partition below the baseline block in
+/// `analyze_view` -> the baseline dropped both d19 first and `hidden.total` read
+/// 0, not 2 (red); restored, green.
 #[test]
 fn hidden_counts_are_taken_before_the_baseline() {
     let ws = d34_ws();
+    let plain = json(&args(&ws, OutputFormat::Json, None));
+    let d19: Vec<&str> = plain["payload"]["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|f| f["detector"] == "d19-unused-parameter")
+        .map(|f| f["fingerprint"].as_str().unwrap())
+        .collect();
+    assert_eq!(d19.len(), 2, "precondition: two d19 fingerprints");
     let dir = tempfile::tempdir().unwrap();
     let base = dir.path().join("baseline.json");
-    // Every current fingerprint, written by the unfocused `--update-baseline`.
-    let mut a = args(&ws, OutputFormat::Json, None);
-    a.baseline = Some(base.to_string_lossy().to_string());
-    a.update_baseline = true;
-    let (.., bytes) = run(&a).expect("analyze runs");
-    std::fs::write(&base, bytes.expect("baseline bytes")).unwrap();
+    std::fs::write(
+        &base,
+        serde_json::json!({"schemaVersion": "1", "generatedAt": "1970-01-01T00:00:00Z",
+            "fingerprints": d19})
+        .to_string(),
+    )
+    .unwrap();
 
     let mut a = args(&ws, OutputFormat::Json, Some("behaviour"));
     a.baseline = Some(base.to_string_lossy().to_string());
     a.with_evidence = true;
     let v = json(&a);
-    assert!(
-        detectors(&v).is_empty(),
-        "the baseline drops every shown finding"
-    );
+    assert_eq!(v["schemaVersion"], "2.0.0");
+    let shown = v["payload"]["findings"].as_array().unwrap();
+    assert_eq!(shown.len(), 3, "{shown:#?}");
+    for f in shown {
+        assert_eq!(f["detector"], "d34-commit-in-loop");
+        assert!(
+            f["evidencePath"].as_array().is_some_and(|p| !p.is_empty()),
+            "d34 carries its evidence: {f:#}"
+        );
+    }
     assert_eq!(v["payload"]["summary"]["hidden"]["total"], 2);
+}
+
+/// The hidden counts are taken after `--min-severity`: at `critical` the two
+/// `info` d19 findings are gone before focus sees them, so nothing is counted.
+///
+/// Mutation (2026-11-20): moved the focus partition above `filter_findings` in
+/// `analyze_view` -> `hidden.total` read 2, not 0 (red); restored, green.
+#[test]
+fn hidden_counts_are_taken_after_min_severity() {
+    let ws = d34_ws();
+    let mut a = args(&ws, OutputFormat::Json, Some("behaviour"));
+    a.min_severity = Some("critical".to_string());
+    let v = json(&a);
+    assert_eq!(detectors(&v), ["d34-commit-in-loop"]);
+    assert_eq!(v["payload"]["summary"]["hidden"]["total"], 0);
+    assert_eq!(
+        v["payload"]["summary"]["hidden"]["byDetector"],
+        serde_json::json!([])
+    );
+}
+
+/// The hidden d35 count of #265 A6d's workspace (a subscriber in a SOURCE
+/// dependency) at `scope`, under `--focus performance`.
+fn hidden_d35(scope: Scope) -> u64 {
+    let (_tmp, ws) = crate::cli_d35_unknown_commit::dependency_subscriber_ws();
+    let mut a = args(&ws, OutputFormat::Json, Some("performance"));
+    a.scope = scope;
+    let v = json(&a);
+    v["payload"]["summary"]["hidden"]["byDetector"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["detector"] == "d35-commit-in-event-subscriber")
+        .map_or(0, |r| r["count"].as_u64().unwrap())
+}
+
+/// The hidden counts follow `--scope`: the dependency's d35 finding is counted
+/// under `--scope all` and not under `--scope primary`.
+///
+/// Mutation (2026-11-20): moved the focus partition above the scope block in
+/// `analyze_view` -> still green. The cross-app run already drops
+/// dependency-anchored findings for `--scope primary` itself, before
+/// `analyze_view`'s scope filter, so no existing workspace has a finding that
+/// only that filter removes. This test pins the outcome (what `--scope primary`
+/// counts), not the partition's place relative to the scope block.
+#[test]
+fn hidden_counts_follow_scope() {
+    let all = hidden_d35(Scope::All);
+    let primary = hidden_d35(Scope::Primary);
+    assert_eq!(all, primary + 1, "all {all}, primary {primary}");
 }
 
 /// The refused combinations on the direct entry (`AnalyzeJob::new`): an error,
@@ -207,8 +278,8 @@ fn alsem(argv: &[&str]) -> (String, String, i32) {
 ///
 /// Mutation (2026-11-20): `plan_analyze`'s `check_focus_conflicts` refusal
 /// disabled (`... && false`) -> the `--update-baseline` run exited 101 (the job's
-/// `expect("the detector set resolved")` panicked on the focus error), not 3 (red);
-/// restored, green.
+/// `expect` in `plan_analyze`'s job closure panicked on the focus error), not 3
+/// (red); restored, green.
 #[test]
 fn cli_refuses_and_validates_focus() {
     let ws = corpus("ws-d34");
@@ -216,8 +287,11 @@ fn cli_refuses_and_validates_focus() {
     let dir = tempfile::tempdir().unwrap();
     let base = dir.path().join("baseline.json");
     let base_s = base.to_str().unwrap();
+    // A baseline that exists before the run must come out byte-identical.
+    let before = b"{\"schemaVersion\":\"1\",\"fingerprints\":[\"pre-existing\"]}";
+    std::fs::write(&base, before).unwrap();
 
-    let (_, err, code) = alsem(&[
+    let (out, err, code) = alsem(&[
         "analyze",
         ws,
         "--focus",
@@ -231,17 +305,20 @@ fn cli_refuses_and_validates_focus() {
         err.contains("--update-baseline cannot be combined with --focus"),
         "{err}"
     );
-    assert!(!base.exists(), "nothing written");
+    assert_eq!(out, "", "no report");
+    assert_eq!(std::fs::read(&base).unwrap(), before, "baseline untouched");
 
-    let (_, err, code) = alsem(&["analyze", ws, "--focus", "behaviour", "--fail-on", "high"]);
+    let (out, err, code) = alsem(&["analyze", ws, "--focus", "behaviour", "--fail-on", "high"]);
     assert_eq!(code, 3, "{err}");
     assert!(
         err.contains("--fail-on cannot be combined with --focus"),
         "{err}"
     );
+    assert_eq!(out, "", "no report");
 
-    let (_, err, code) = alsem(&["analyze", ws, "--focus", "speed"]);
+    let (out, err, code) = alsem(&["analyze", ws, "--focus", "speed"]);
     assert_eq!(code, 3, "{err}");
+    assert_eq!(out, "", "no report");
     assert!(
         err.contains("'speed'")
             && err.contains("performance, behaviour (or behavior), maintainability"),
@@ -277,21 +354,39 @@ fn every_format_states_what_was_hidden_when_nothing_is_shown() {
     assert!(detectors(&v).is_empty());
     assert_eq!(v["payload"]["summary"]["hidden"]["total"], 1);
 
+    // Terminal: the line directly under "No findings in this view.", never the
+    // bare "No findings." sentence.
     let (out, ..) = run(&args(&ws, OutputFormat::Terminal, Some("performance"))).unwrap();
-    assert!(out.ends_with(line), "{out}");
+    assert!(
+        out.contains(&format!("\n\nNo findings in this view.\n{line}")),
+        "{out}"
+    );
+    assert!(!out.contains("No findings. (Absence"), "{out}");
 
     let mut a = args(&ws, OutputFormat::Terminal, Some("performance"));
     a.group_by = Some("detector".to_string());
     let (out, ..) = run(&a).unwrap();
-    assert!(out.ends_with(line), "{out}");
+    assert!(
+        out.contains(&format!(
+            "Grouped by detector (top 0):\nNo findings in this view.\n{line}"
+        )),
+        "{out}"
+    );
 
     let (out, ..) = run(&args(&ws, OutputFormat::PrSummary, Some("performance"))).unwrap();
-    assert!(out.contains("No findings in this view."), "{out}");
+    assert!(
+        out.starts_with("### Transaction integrity — No findings in this view."),
+        "{out}"
+    );
     assert!(out.contains(&format!("_{line}_")), "{out}");
 
     let (out, ..) = run(&args(&ws, OutputFormat::Html, Some("performance"))).unwrap();
     assert!(
         out.contains(&format!("<div class=\"coverage\">{line}</div>")),
+        "{out}"
+    );
+    assert!(
+        out.contains(r#"<p class="empty">No findings in this view.</p>"#),
         "{out}"
     );
 
@@ -310,7 +405,17 @@ fn sarif_states_hidden_and_warns_beside_the_degraded_warning() {
     let ws = d34_ws();
     let (out, _, warnings, _) = run(&args(&ws, OutputFormat::Sarif, Some("behaviour"))).unwrap();
     let v: Value = serde_json::from_str(&out).unwrap();
-    assert_eq!(v["runs"][0]["properties"]["hidden"]["total"], 2);
+    let json_hidden = json(&args(&ws, OutputFormat::Json, Some("behaviour")))["payload"]["summary"]
+        ["hidden"]
+        .clone();
+    assert_eq!(v["runs"][0]["properties"]["hidden"], json_hidden);
+    let rules: Vec<&str> = v["runs"][0]["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["ruleId"].as_str().unwrap())
+        .collect();
+    assert_eq!(rules, ["d34-commit-in-loop"; 3]);
     assert_eq!(
         warnings.last().map(String::as_str),
         Some("--focus: a partial report (2 findings hidden); do not upload it as the full scan")
@@ -332,6 +437,80 @@ fn sarif_states_hidden_and_warns_beside_the_degraded_warning() {
         warnings[1].starts_with("--focus: a partial report"),
         "{warnings:?}"
     );
+}
+
+/// The bin prints EVERY warning, in order: on a degraded workspace a focused
+/// SARIF run's stderr carries the preflight warning, then the partial-report one.
+///
+/// Mutation (2026-11-20): `AnalyzeJob::serialize` printed only the first warning
+/// (`for msg in stderr_warning.into_iter().take(1)`) -> one `al-sem: warning:`
+/// line, not 2 (red); restored, green.
+#[test]
+fn the_bin_prints_both_warnings_in_order() {
+    let ws = corpus("ws-baseapp-closure");
+    let (out, err, code) = alsem(&[
+        "analyze",
+        ws.to_str().unwrap(),
+        "--format",
+        "sarif",
+        "--focus",
+        "behaviour",
+    ]);
+    assert_eq!(code, 0, "{err}");
+    assert!(out.contains("\"hidden\""), "{out}");
+    let warnings: Vec<&str> = err
+        .lines()
+        .filter(|l| l.starts_with("al-sem: warning: "))
+        .collect();
+    assert_eq!(warnings.len(), 2, "{err}");
+    assert!(warnings[0].contains("symbol-only dependency app"), "{err}");
+    assert!(
+        warnings[1].starts_with("al-sem: warning: --focus: a partial report ("),
+        "{err}"
+    );
+}
+
+/// A refused batch job must not empty, through its own stdout, the baseline its
+/// command names: the run refuses the manifest (exit 3) and B is untouched.
+///
+/// Mutation (2026-11-20): the refused job's `kept` list emptied in the bin's
+/// batch planning (`kept: vec![]`) -> the run was not refused: it exited 0, not
+/// 3 (red); restored, green. Mutation (2026-11-20): `check_write_sets`' own-stream
+/// test flipped (`writes[w].0 != r`) -> this test exited 0, not 3, and
+/// `cli_batch_writes::batch_failed_job_writes_only_its_streams` exited 3, not 0
+/// (red); restored, green.
+#[test]
+fn a_refused_batch_job_keeps_the_baseline_it_names() {
+    use crate::cli_batch_writes::{job, run_manifest};
+    let ws = corpus("ws-d34");
+    let dir = tempfile::tempdir().unwrap();
+    let base = dir.path().join("base.json");
+    let before = b"{\"schemaVersion\":\"1\",\"fingerprints\":[\"pre-existing\"]}";
+    std::fs::write(&base, before).unwrap();
+    let b = base.to_str().unwrap();
+    let (out, _) = run_manifest(
+        dir.path(),
+        &[job(
+            &[
+                "analyze",
+                ws.to_str().unwrap(),
+                "--focus",
+                "behaviour",
+                "--baseline",
+                b,
+                "--update-baseline",
+            ],
+            Some(&base),
+            None,
+        )],
+        None,
+        &[],
+        None,
+    );
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(3), "{err}");
+    assert!(err.contains("is refused"), "{err}");
+    assert_eq!(std::fs::read(&base).unwrap(), before, "B untouched");
 }
 
 /// A preset composes with focus: `transaction-integrity --focus behaviour`
@@ -391,10 +570,19 @@ fn no_model_says_analysis_unavailable_in_every_format() {
         s["runs"][0]["properties"]["hidden"]["status"],
         "focus requested, analysis unavailable"
     );
+    assert!(
+        s["runs"][0]["properties"]["hidden"].get("total").is_none(),
+        "nothing was counted: {s:#}"
+    );
     assert_eq!(
         warnings.len(),
         2,
         "could-not-verify, then the focus warning"
+    );
+    assert_eq!(
+        warnings[1],
+        "--focus: a partial report (focus requested, analysis unavailable); do not upload \
+         it as the full scan"
     );
     for format in [
         OutputFormat::Terminal,
