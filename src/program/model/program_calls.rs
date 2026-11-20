@@ -2851,7 +2851,8 @@ impl<'a> Converter<'a> {
                             // By name alone, as the unbound bucket (review, sol).
                             InterfaceBinding::Unbound => {
                                 binding.may_be_unloaded()
-                                    && r.name.fold_identifier() == iref.name.fold_identifier()
+                                    && crate::program::graph::interface_name_key(&r.name)
+                                        == crate::program::graph::interface_name_key(&iref.name)
                             }
                             b => b.ids().iter().any(|k| {
                                 binding

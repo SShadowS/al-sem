@@ -334,6 +334,48 @@ fn a_mapping_proves_a_base_only_through_exact_bases() {
     ));
 }
 
+/// A quote in an interface's name has two spellings: AL source and every
+/// reference keep the escape (`"A""B"` lowers to `A""B`), a symbol `Name`
+/// does not (`A"B`). A's symbols declare `A"B`; C's implement
+/// `#<A>#"A""B"`; an unrelated B (loaded, no dependency of W) declares
+/// `"A""B"` in source with its own implementer. W depends on A and C: its
+/// `"A""B"` is A's, so the call reaches C's codeunit only.
+///
+/// Mutation (2026-11-20, review sol; orchestrator: no route lost against
+/// master): `interface_name_key` without the unescape -> W sees no `A""B`,
+/// falls back to B's, and reaches B's implementer too (red); restored, green.
+#[test]
+fn a_quoted_interface_name_has_one_spelling() {
+    let a_dashless = A_GUID.replace('-', "");
+    let c_guid = "15215215-0000-0000-0000-0000000000c1";
+    let a_symbols = r#"{"RuntimeVersion":"15.0","Interfaces":[{"Name":"A\"B","Methods":[{"Name":"Go","Parameters":[]}]}]}"#;
+    let c_symbols = format!(
+        r##"{{"RuntimeVersion":"15.0","Codeunits":[{{"Id":70301,"Name":"C Impl","ImplementedInterfaces":["#{a_dashless}#\"A\"\"B\""],"Methods":[{{"Id":1,"Name":"Go","Parameters":[]}}]}}]}}"##
+    );
+    let b_src = "interface \"A\"\"B\"\n{\n    procedure Go();\n}\n\ncodeunit 70201 \"B Impl\" implements \"A\"\"B\"\n{\n    procedure Go()\n    begin\n    end;\n}\n";
+    let b_symbols = r#"{"RuntimeVersion":"15.0","Interfaces":[{"Name":"A\"B","Methods":[{"Name":"Go","Parameters":[]}]}],"Codeunits":[{"Id":70201,"Name":"B Impl","ImplementedInterfaces":["\"A\"\"B\""],"Methods":[{"Id":1,"Name":"Go","Parameters":[]}]}]}"#;
+    let caller = "codeunit 50120 \"Caller\"\n{\n    procedure Calls()\n    var\n        X: Interface \"A\"\"B\";\n    begin\n        X.Go();\n    end;\n}\n";
+    let r = report(
+        &[(A_GUID, "DepA152"), (c_guid, "DepC152")],
+        &[("src/Caller.al", caller)],
+        vec![
+            (
+                "probe_DepA152_1.0.0.0.app".into(),
+                app(A_GUID, "DepA152", a_symbols, &[]),
+            ),
+            (
+                "probe_DepB152_1.0.0.0.app".into(),
+                app(B_GUID, "DepB152", b_symbols, &[("src/B.al", b_src)]),
+            ),
+            (
+                "probe_DepC152_1.0.0.0.app".into(),
+                app(c_guid, "DepC152", &c_symbols, &[]),
+            ),
+        ],
+    );
+    assert_eq!(targets(&r, "calls"), ["70301"]);
+}
+
 /// A base object's protected variable binds in the base's app: A's table
 /// declares `protected var X: Interface IDup` (A's `IDup`); W's table
 /// extension calls `X.Go()` and sees B's `IDup` too. Only A's implementer.

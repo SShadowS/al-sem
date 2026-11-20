@@ -103,6 +103,14 @@ pub struct AbiIngestError {
     pub message: String,
 }
 
+/// An interface name as interface binding compares it (ENG-152): folded, with
+/// AL's escaped quote (`""`) read as one quote, so a source spelling (`A""B`)
+/// and a symbol spelling (`A"B`) of one name agree. shortcut: local to
+/// interfaces; ENG-169 gives every identifier one spelling and removes this.
+pub fn interface_name_key(name: &str) -> String {
+    name.fold_identifier().replace("\"\"", "\"")
+}
+
 /// What an interface reference binds to (ENG-152, [`ProgramGraph::bind_interface`]).
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum InterfaceBinding {
@@ -160,12 +168,18 @@ impl ProgramGraph {
     ///   edge or package must not lose reach), or `Unbound` when there is none.
     pub fn bind_interface(&self, from: AppRef, r: &InterfaceRef) -> InterfaceBinding {
         let kind = ObjectKind::Interface;
-        let name_lc = r.name.fold_identifier();
+        // A name holding a quote has two spellings (ENG-169): a source
+        // declaration and every reference keep AL's escape (`A""B`), a
+        // symbol `Name` does not (`A"B`). Both are looked up.
+        let name_lc = interface_name_key(&r.name);
+        let escaped = name_lc.replace('"', "\"\"");
         let at = |app: AppRef| {
-            self.obj_index
-                .by_app_kind_name
-                .get(&(app, kind, name_lc.clone()))
-                .map(|&i| self.objects[i].id.clone())
+            [&name_lc, &escaped].into_iter().find_map(|n| {
+                self.obj_index
+                    .by_app_kind_name
+                    .get(&(app, kind, n.clone()))
+                    .map(|&i| self.objects[i].id.clone())
+            })
         };
         if let Some(guid) = &r.app {
             let mut ids: Vec<ObjectNodeId> = self.apps.find_by_guid(guid).filter_map(at).collect();
@@ -188,7 +202,7 @@ impl ProgramGraph {
             ids = self
                 .objects
                 .iter()
-                .filter(|o| o.id.kind == kind && o.name.fold_identifier() == name_lc)
+                .filter(|o| o.id.kind == kind && interface_name_key(&o.name) == name_lc)
                 .map(|o| o.id.clone())
                 .collect();
             ids.sort();

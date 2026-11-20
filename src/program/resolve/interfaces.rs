@@ -19,10 +19,9 @@
 
 use std::collections::{HashMap, HashSet};
 
-use al_syntax::IdentifierFoldExt;
 use al_syntax::ir::ObjectKind;
 
-use crate::program::graph::{InterfaceBinding, ProgramGraph};
+use crate::program::graph::{InterfaceBinding, ProgramGraph, interface_name_key};
 use crate::program::node::ObjectNodeId;
 use crate::program::node_extract::InterfaceRef;
 
@@ -84,7 +83,7 @@ impl InterfaceImplementers {
                 for r in &obj.implements {
                     let binding = graph.bind_interface(obj.id.app, r);
                     if binding == InterfaceBinding::Unbound {
-                        let key = (obj.closed_enum, r.name.fold_identifier());
+                        let key = (obj.closed_enum, interface_name_key(&r.name));
                         push(out.unbound.entry(key).or_default(), &obj.id);
                     }
                     direct.extend(binding.ids().iter().cloned());
@@ -141,7 +140,7 @@ impl InterfaceImplementers {
     /// reference binds no interface node, filed by `r`'s folded name.
     pub fn unbound_of(&self, closed_enum: bool, r: &InterfaceRef) -> &[ObjectNodeId] {
         self.unbound
-            .get(&(closed_enum, r.name.fold_identifier()))
+            .get(&(closed_enum, interface_name_key(&r.name)))
             .map(Vec::as_slice)
             .unwrap_or(&[])
     }
