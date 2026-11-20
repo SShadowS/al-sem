@@ -57,6 +57,7 @@ fn may_be_rebound_elsewhere(
     routine: &ModelRoutine,
     aliases: &crate::program::model::recref_alias::AliasClasses,
     v: &str,
+    shadowed: &crate::program::model::recref_alias::ShadowedBuiltins,
 ) -> bool {
     use crate::program::model::recref_alias::{holder_key, name_key};
     // An argument is source text (`holder_key`); an assignment target is a logical name.
@@ -70,7 +71,7 @@ fn may_be_rebound_elsewhere(
             .call_sites
             .iter()
             .any(|cs| {
-                crate::program::model::recref_alias::may_keep_argument(routine, cs)
+                crate::program::model::recref_alias::may_keep_argument(routine, cs, shadowed)
                     && cs.argument_texts.iter().any(|a| names(a))
             })
         // sol round 2: a record retained elsewhere (a parameter, a global, a call's result, one
@@ -78,7 +79,7 @@ fn may_be_rebound_elsewhere(
         // call, or a record operation that fires a trigger or a table event (ENG-159; Fable's
         // N2 on ENG-160: `R.Open(T, true); S.Move(); R.Delete()` on a parameter R kept by a
         // store, both temp passes read this predicate).
-        || crate::program::model::recref_alias::user_code_points(routine)
+        || crate::program::model::recref_alias::user_code_points(routine, shadowed)
             .into_iter()
             .any(|p| aliases.rebinds_at(v, p.runs))
 }
@@ -233,10 +234,13 @@ pub(crate) fn share_resolved_globals(routines: &mut [ModelRoutine], symbols: &Sy
 /// Run the 3-pass record-type resolution over one routine, mutating each record
 /// var / op's resolved `table_id` (internal TableId; the L3 dump projects it as a
 /// StableTableId). Mirrors `resolveRecordTypes`'s per-routine body EXACTLY.
+/// `shadowed`: the record built-ins some table of the program declares as a procedure
+/// ([`ShadowedBuiltins`](crate::program::model::recref_alias::ShadowedBuiltins)).
 pub fn resolve_routine_record_types(
     routine: &mut ModelRoutine,
     object: Option<&ModelObject>,
     symbols: &SymbolTable,
+    shadowed: &crate::program::model::recref_alias::ShadowedBuiltins,
 ) {
     // --- pass 1: resolve declared record variables ---------------------------
     // name (lowercased) -> index into record_variables, for matching ops below.
@@ -532,10 +536,11 @@ pub fn resolve_routine_record_types(
 
             // ENG-145: a RecordRef something else may rebind (an alias, an assignment, a call it
             // is passed to) keeps no derived temp state.
-            let aliases = crate::program::model::recref_alias::AliasClasses::for_routine(routine);
+            let aliases =
+                crate::program::model::recref_alias::AliasClasses::for_routine(routine, shadowed);
             let moved = moved_by_get(routine);
             recref_temp.retain(|v, _| {
-                !may_be_rebound_elsewhere(routine, &aliases, v) && !moved.contains(v)
+                !may_be_rebound_elsewhere(routine, &aliases, v, shadowed) && !moved.contains(v)
             });
 
             // Apply derived temp states to matching record ops.
@@ -571,7 +576,8 @@ pub fn resolve_routine_record_types(
             .collect();
         // ENG-145: an alias (`A := RR`, either side; a Variant holds the reference too) can
         // rebind it (`A.GetTable(Phys)`).
-        let aliases = crate::program::model::recref_alias::AliasClasses::for_routine(routine);
+        let aliases =
+            crate::program::model::recref_alias::AliasClasses::for_routine(routine, shadowed);
         // Its binds (`recref_alias::RecRefBind`, the one list; ENG-160: `Get(Id)` may move it to
         // a physical table, and `Copy` keeps its temporary state), receivers keyed as the
         // operations are (`op_variable_lc`: `"My R".Get(…)` is `MyR`'s, Fable on ENG-160).
@@ -580,7 +586,7 @@ pub fn resolve_routine_record_types(
         let always_temp: std::collections::HashSet<String> = locals
             .into_iter()
             .filter(|v_lc| {
-                if may_be_rebound_elsewhere(routine, &aliases, v_lc) {
+                if may_be_rebound_elsewhere(routine, &aliases, v_lc, shadowed) {
                     return false;
                 }
                 let mut opened = false;
@@ -856,7 +862,12 @@ mod tests {
                 is_implicit_rec: implicit,
             })];
             r.record_operations = vec![op("Rec"), op("xRec")];
-            resolve_routine_record_types(&mut r, Some(&page), &symbols);
+            resolve_routine_record_types(
+                &mut r,
+                Some(&page),
+                &symbols,
+                &crate::program::model::recref_alias::ShadowedBuiltins::none(),
+            );
             let got = (
                 r.record_variables[0].temp_state == ts_known(true),
                 r.record_operations[0].temp_state.get(&r) == temp.as_ref(),

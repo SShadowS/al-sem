@@ -875,9 +875,12 @@ fn contradicts_atoms(reqs: &[AtomReq], b: &Bindings) -> bool {
 fn exit_guards(flow: &RecRefFlow, i: usize) -> HashMap<String, Vec<AtomReq>> {
     let mut out: HashMap<String, Vec<AtomReq>> = HashMap::new();
     let anytime = |n: &str| matches!(flow.initial_atom(i, n), Some(Atom::Global(_)));
-    for (rec, tables, ids) in
-        crate::engine::l5::recref_flow::exit_guards(flow.routine(i), anytime, flow.kept())
-    {
+    for (rec, tables, ids) in crate::engine::l5::recref_flow::exit_guards(
+        flow.routine(i),
+        anytime,
+        flow.kept(),
+        flow.shadowed(),
+    ) {
         let Some(init) = flow.initial_atom(i, &rec) else {
             continue;
         };

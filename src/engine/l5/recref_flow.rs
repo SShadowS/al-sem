@@ -239,6 +239,8 @@ pub(crate) struct RecRefFlow<'a> {
     results: Mutex<HashMap<EvalKey, EvalAnswer>>,
     /// ENG-159: which holders may be kept elsewhere (the constructor's input).
     kept: KeptElsewhere,
+    /// ENG-159 (sol): the record built-ins some table declares as a procedure.
+    shadowed: crate::program::model::recref_alias::ShadowedBuiltins,
     /// Tests: runs after a `results` miss, the lock released, before the
     /// evaluation (TLS-22 forces two workers to miss one key).
     #[cfg(test)]
@@ -447,6 +449,7 @@ impl<'a> RecRefFlow<'a> {
             }
         }
         let none = HashSet::new();
+        let shadowed = crate::program::model::recref_alias::ShadowedBuiltins::of(routines);
         // ENG-160 (Fable): the resolved tables (their loaded extensions' fields merged in) with no
         // field named `RecordId`, and no procedure of that name in the table or a loaded
         // extension of it (alc binds `X.RecordId()` to the procedure, with warning AL0524): on a
@@ -505,6 +508,7 @@ impl<'a> RecRefFlow<'a> {
                     in_place.get(r.object_id.as_str()).unwrap_or(&none),
                     &own_id_tables,
                     kept,
+                    &shadowed,
                 )
             })
             .collect();
@@ -522,6 +526,7 @@ impl<'a> RecRefFlow<'a> {
             closure: HashMap::new(),
             self_escapes,
             kept,
+            shadowed,
             converged: false,
             sensitive: Vec::new(),
             results: Mutex::new(HashMap::new()),
@@ -1183,6 +1188,11 @@ impl<'a> RecRefFlow<'a> {
     /// ENG-159: the "may be kept elsewhere" input the flow was built with.
     pub(crate) fn kept(&self) -> KeptElsewhere {
         self.kept
+    }
+
+    /// ENG-159: the record built-ins some table of the model declares as a procedure.
+    pub(crate) fn shadowed(&self) -> &crate::program::model::recref_alias::ShadowedBuiltins {
+        &self.shadowed
     }
 
     pub(crate) fn routine(&self, i: usize) -> &'a ModelRoutine {
@@ -2085,6 +2095,7 @@ pub(crate) fn exit_guards(
     r: &ModelRoutine,
     anytime: impl Fn(&str) -> bool,
     kept_elsewhere: KeptElsewhere,
+    shadowed: &crate::program::model::recref_alias::ShadowedBuiltins,
 ) -> Vec<(String, Vec<String>, HashSet<String>)> {
     let mut out: Vec<(String, Vec<String>, HashSet<String>)> = Vec::new();
     let Some(tree) = r.statement_tree.as_ref() else {
@@ -2108,9 +2119,11 @@ pub(crate) fn exit_guards(
     // may pass one record as two parameters, `Twice(R, R)`), and the sound rule's retainable
     // holders (a record kept elsewhere may be rebound by a place that may run user code;
     // `RetainedNumber`: `Store.Rebind(); if A.Number <> …`).
-    let kept = crate::program::model::recref_alias::AliasClasses::for_routine(r);
+    let kept = crate::program::model::recref_alias::AliasClasses::for_routine(r, shadowed);
     let user_code = match kept_elsewhere {
-        KeptElsewhere::AnyExternal => crate::program::model::recref_alias::user_code_points(r),
+        KeptElsewhere::AnyExternal => {
+            crate::program::model::recref_alias::user_code_points(r, shadowed)
+        }
         KeptElsewhere::Nothing => Vec::new(),
     };
     for (n, stmt) in top.iter().enumerate() {
@@ -2261,6 +2274,7 @@ fn facts_of(
     obj_in_place: &HashSet<String>,
     own_id_tables: &HashSet<&str>,
     kept: KeptElsewhere,
+    shadowed: &crate::program::model::recref_alias::ShadowedBuiltins,
 ) -> Facts {
     let mut f = Facts::default();
     for v in r.variables.iter() {
@@ -2291,7 +2305,12 @@ fn facts_of(
     if f.tracked.is_empty() {
         return f;
     }
-    let guards = exit_guards(r, |n| f.tracked.get(n) == Some(&VarKind::Global), kept);
+    let guards = exit_guards(
+        r,
+        |n| f.tracked.get(n) == Some(&VarKind::Global),
+        kept,
+        shadowed,
+    );
     // Aliases: `A := B` between tracked variables shares one RecordRef (a
     // Variant holds the reference), unlike `A := B.Duplicate()`. Rebinding one
     // in place (`Open`, `GetTable`…) after the assignment rebinds every member
@@ -2326,7 +2345,8 @@ fn facts_of(
         .iter()
         .map(|(n, k)| (n.clone(), !matches!(k, VarKind::Local)))
         .collect();
-    let classes = crate::program::model::recref_alias::AliasClasses::build(r, &holders, false);
+    let classes =
+        crate::program::model::recref_alias::AliasClasses::build(r, &holders, false, shadowed);
     for a in &r.var_assignments {
         let l = lc(&a.lhs_name);
         if !f.tracked.contains_key(&l) {
@@ -2418,7 +2438,9 @@ fn facts_of(
     // may hold anything from there on. A call, or a record operation that fires a trigger or a
     // table event (`recref_alias::user_code_points`). Only for records `kept` says may be kept.
     let user_code = match kept {
-        KeptElsewhere::AnyExternal => crate::program::model::recref_alias::user_code_points(r),
+        KeptElsewhere::AnyExternal => {
+            crate::program::model::recref_alias::user_code_points(r, shadowed)
+        }
         KeptElsewhere::Nothing => Vec::new(),
     };
     for p in user_code {

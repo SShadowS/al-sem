@@ -198,7 +198,12 @@ fn pass_2b_first_wins_on_name_collision() {
     let mut routine = make_routine_for_pass2b(variables);
 
     // Run the full three-pass resolution (no object context → no implicit Rec).
-    resolve_routine_record_types(&mut routine, None, &symbols);
+    resolve_routine_record_types(
+        &mut routine,
+        None,
+        &symbols,
+        &al_sem::program::model::recref_alias::ShadowedBuiltins::none(),
+    );
 
     let op_table_id = routine.record_operations[0].table_id.as_deref();
 

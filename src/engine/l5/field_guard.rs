@@ -25,8 +25,11 @@ use al_syntax::IdentifierFoldExt;
 use std::collections::{HashMap, HashSet};
 
 /// The field number each guarded RecordRef write of `r` (by operation id)
-/// is guarded with.
-fn guarded_operations(r: &ModelRoutine) -> HashMap<String, i64> {
+/// is guarded with. `shadowed`: the record built-ins a table declares as a procedure.
+fn guarded_operations(
+    r: &ModelRoutine,
+    shadowed: &crate::program::model::recref_alias::ShadowedBuiltins,
+) -> HashMap<String, i64> {
     let mut out = HashMap::new();
     let Some(tree) = r.statement_tree.as_ref() else {
         return out;
@@ -64,7 +67,7 @@ fn guarded_operations(r: &ModelRoutine) -> HashMap<String, i64> {
     // array holder that may share a record already (`recref_alias::AliasClasses::for_routine`).
     // Names are keyed as the classes key them (`this.G`, `Slot[1]`, quotes).
     use crate::program::model::recref_alias::{AliasClasses, bind_sites, holder_key};
-    let aliases = AliasClasses::for_routine(r);
+    let aliases = AliasClasses::for_routine(r, shadowed);
     // The call sites and record operations (by id) that may rebind a RecordRef, with the ones
     // they may: a call it is passed to, and a bind through it (`recref_alias::RecRefBind`, the
     // one list: `R.Get(Id)` is a record operation, ENG-160).
@@ -106,7 +109,7 @@ fn guarded_operations(r: &ModelRoutine) -> HashMap<String, i64> {
         })
         .collect();
     let mut after_by_op: HashMap<&str, HashSet<String>> = HashMap::new();
-    for p in crate::program::model::recref_alias::user_code_points(r) {
+    for p in crate::program::model::recref_alias::user_code_points(r, shadowed) {
         let id = p.id;
         let rebound: Vec<String> = aliases.rebound_at(p.runs).cloned().collect();
         if rebound.is_empty() {
@@ -226,8 +229,10 @@ pub(crate) fn resolve_field_guarded_writes(
 ) -> HashMap<usize, bool> {
     let mut out = HashMap::new();
     let mut guarded: HashMap<String, i64> = HashMap::new();
+    let shadowed =
+        crate::program::model::recref_alias::ShadowedBuiltins::of(&model.workspace.routines);
     for r in &model.workspace.routines {
-        guarded.extend(guarded_operations(r));
+        guarded.extend(guarded_operations(r, &shadowed));
     }
     if guarded.is_empty() {
         return out;

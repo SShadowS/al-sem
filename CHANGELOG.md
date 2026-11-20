@@ -222,6 +222,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     (`recref_alias::strip_parens`).
   - `HttpClient` is no value type: in a test codeunit `Send` runs an `[HttpClientHandler]`
     procedure.
+  - A table may declare a procedure named like a record built-in (`SetRecFilter(Really)`,
+    `CopyFilters(var R; Really)`, `Count(Really)`; alc binds the call to it). Round 2, sol and
+    Fable: such a call read as platform code. `recref_alias::ShadowedBuiltins` holds the built-in
+    names some table or table extension of the model declares, dependency routines included; on
+    a record, such a name is user code and may keep its argument, as a call site or as a record
+    operation (the IR lowers `D.Count(true)` as one). Every reader takes the set: the flow, its
+    exit guards, the field guard and both temp passes.
 - **The own-trigger rule, measured further** (P159c, the note): a write's own trigger that moves
   the kept handle by `Get(RecordId)` or `Close` + `Open` does not move the write either, and
   `Delete` and `Rename` behave like `Insert` and `Modify`. The field guard keeps a write's own
@@ -232,7 +239,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   hands out (`FG Keeper`, `FG Mover`), so keeping and rebinding are separate calls, and the
   shapes: `NestedKeepRoot` (and its control), `NestedArgRoot` (and its control), `BoxRoot`,
   `CopyThenMoveRoot`, `TableProcRetained`, `TableProcKeepRoot` (a table holding the record in
-  its own global), `NestedFiring`, `HttpRetained`, `ParenKeepRoot`, `OwnDelete`/`OwnDeleteAll`.
+  its own global), `NestedFiring`, `HttpRetained`, `ParenKeepRoot` (by value: AL passes no
+  `(R)` to a `var`), `OwnDelete`/`OwnDeleteAll`, `ShadowRetained`, `ShadowKeepRoot`,
+  `ShadowOpRetained`. The test's AL compiles with alc 18.0.41.
   `lflow_tests::a_this_qualified_global_is_the_global` pins `this.` under
   `KeptElsewhere::Nothing` (under production's input every global may hold anything from entry,
   which hides the keying). Red proofs, one per rule, each failing on its own shape: user code
@@ -242,7 +251,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`TableProcKeepRoot`), `(R)` unstripped (`ParenKeepRoot`), operations ordered by start
   (`NestedFiring`), the write-back to the named argument only (`CopyThenMoveRoot`), `HttpClient`
   a value type (`HttpRetained`), the own-trigger rule for every firing operation
-  (`OwnDeleteAll`).
+  (`OwnDeleteAll`), shadowed names ignored for call sites (`ShadowKeepRoot`) and for record
+  operations (`ShadowOpRetained`).
 - **Re-baseline:** filled in below after the CDO before-after.
 
 ### Fixed (TLS-107: TLS-104's suspend test no longer fails on a loaded machine)

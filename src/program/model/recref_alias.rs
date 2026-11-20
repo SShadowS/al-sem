@@ -180,7 +180,11 @@ pub fn name_key(name: &str) -> String {
 /// triggers get their own record, B6). Anything else may (a procedure, an object's method, a
 /// List or Dictionary storing a Variant, anything unresolved).
 #[must_use]
-pub fn may_keep_argument(r: &ModelRoutine, cs: &crate::program::body::features::PCallSite) -> bool {
+pub fn may_keep_argument(
+    r: &ModelRoutine,
+    cs: &crate::program::body::features::PCallSite,
+    shadowed: &ShadowedBuiltins,
+) -> bool {
     use crate::program::body::features::PCallee;
     let PCallee::Member { receiver, method } = &cs.callee else {
         return true;
@@ -191,7 +195,7 @@ pub fn may_keep_argument(r: &ModelRoutine, cs: &crate::program::body::features::
             let ty = v.declared_type.trim().fold_identifier();
             let ty = ty.rsplit(" of ").next().unwrap_or(&ty).trim();
             // A table's own procedure may keep it (Fable on ENG-159).
-            record_like_builtin(ty, method).is_none_or(|builtin| !builtin)
+            record_like_builtin(ty, method, shadowed).is_none_or(|builtin| !builtin)
         }
         None => !matches!(
             key.as_str(),
@@ -208,16 +212,59 @@ pub fn may_keep_argument(r: &ModelRoutine, cs: &crate::program::body::features::
 }
 
 /// For a variable of folded type `ty`: whether `method` is a platform method of a RecordRef,
-/// FieldRef or record (`member_catalog`), not a table's own procedure. `None` for another type.
-fn record_like_builtin(ty: &str, method: &str) -> Option<bool> {
+/// FieldRef or record (`member_catalog`), not a table's own procedure. A record's built-in name
+/// that some table declares as a procedure ([`ShadowedBuiltins`]) may be that procedure. `None`
+/// for another type.
+fn record_like_builtin(ty: &str, method: &str, shadowed: &ShadowedBuiltins) -> Option<bool> {
     use crate::program::resolve::member_catalog::{MemberCatalogKind, member_builtin};
+    let m = method.fold_identifier();
     let kind = match ty {
         "recordref" => MemberCatalogKind::RecordRef,
         "fieldref" => MemberCatalogKind::FieldRef,
-        t if t.starts_with("record ") => MemberCatalogKind::Record,
+        t if t.starts_with("record ") => {
+            return Some(member_builtin(MemberCatalogKind::Record, &m) && !shadowed.0.contains(&m));
+        }
         _ => return None,
     };
-    Some(member_builtin(kind, &method.fold_identifier()))
+    Some(member_builtin(kind, &m))
+}
+
+/// The record built-in method names some table or table extension of the program declares as
+/// its own procedure (alc binds `T.RecordId()` to the procedure, with warning AL0524; sol on
+/// ENG-159). On a record, such a name may run that procedure: user code, which may keep an
+/// argument. Built from every routine of the model, dependency routines from symbols included.
+#[derive(Debug, Clone, Default)]
+pub struct ShadowedBuiltins(std::collections::HashSet<String>);
+
+impl ShadowedBuiltins {
+    /// The names among `routines`' table and table extension procedures.
+    #[must_use]
+    pub fn of<'a>(routines: impl IntoIterator<Item = &'a ModelRoutine>) -> Self {
+        use crate::program::resolve::member_catalog::{MemberCatalogKind, member_builtin};
+        Self(
+            routines
+                .into_iter()
+                .filter(|r| {
+                    matches!(
+                        r.object_type.fold_identifier().as_str(),
+                        "table" | "tableextension"
+                    )
+                })
+                .map(|r| r.name.fold_identifier())
+                .filter(|n| member_builtin(MemberCatalogKind::Record, n))
+                .collect(),
+        )
+    }
+
+    /// No name is shadowed: for a caller that states no table declares one.
+    #[must_use]
+    pub fn none() -> Self {
+        Self::default()
+    }
+
+    fn contains(&self, name: &str) -> bool {
+        self.0.contains(&name.fold_identifier())
+    }
 }
 
 /// The record methods that may run user code: they fire a table trigger or a table event (the
@@ -241,8 +288,13 @@ const FIRING_METHODS: &[&str] = &[
 ///
 /// Each comes with where it starts (where a fact it makes is anchored) and where it ends: its
 /// user code runs then, after its arguments, so [`AliasClasses::rebinds_at`] takes the end.
+/// A record operation whose name a table declares as a procedure ([`ShadowedBuiltins`]) may run
+/// it, so it counts too.
 #[must_use]
-pub fn user_code_points<'a>(r: &'a ModelRoutine) -> Vec<UserCodePoint<'a>> {
+pub fn user_code_points<'a>(
+    r: &'a ModelRoutine,
+    shadowed: &ShadowedBuiltins,
+) -> Vec<UserCodePoint<'a>> {
     let point = |id: &'a str, a: &crate::program::body::features::PAnchor| UserCodePoint {
         id,
         at: (a.start_line, a.start_column),
@@ -251,12 +303,14 @@ pub fn user_code_points<'a>(r: &'a ModelRoutine) -> Vec<UserCodePoint<'a>> {
     let calls = r
         .call_sites
         .iter()
-        .filter(|cs| may_run_user_code(r, cs))
+        .filter(|cs| may_run_user_code(r, cs, shadowed))
         .map(|cs| point(cs.id.as_str(), &cs.source_anchor));
     let ops = r
         .record_operations
         .iter()
-        .filter(|op| FIRING_METHODS.contains(&op.op.fold_identifier().as_str()))
+        .filter(|op| {
+            FIRING_METHODS.contains(&op.op.fold_identifier().as_str()) || shadowed.contains(&op.op)
+        })
         .map(|op| point(op.id.as_str(), &op.source_anchor));
     calls.chain(ops).collect()
 }
@@ -280,7 +334,11 @@ pub struct UserCodePoint<'a> {
 /// `Rec`, `Insert`/`Modify`/`Delete`/`Rename`/`ModifyAll`/`DeleteAll`/`Validate`/`Init` (triggers
 /// and table events fire even with `RunTrigger` false) and anything unresolved say yes.
 #[must_use]
-pub fn may_run_user_code(r: &ModelRoutine, cs: &crate::program::body::features::PCallSite) -> bool {
+pub fn may_run_user_code(
+    r: &ModelRoutine,
+    cs: &crate::program::body::features::PCallSite,
+    shadowed: &ShadowedBuiltins,
+) -> bool {
     use crate::program::body::features::PCallee;
     let PCallee::Member { receiver, method } = &cs.callee else {
         return true;
@@ -297,7 +355,7 @@ pub fn may_run_user_code(r: &ModelRoutine, cs: &crate::program::body::features::
     let ty = ty.rsplit(" of ").next().unwrap_or(&ty).trim().to_string();
     // A platform method fires user code only when it fires a trigger or a table event; a
     // table's own procedure (`D.Poke()`) is user code (Fable on ENG-159).
-    if let Some(builtin) = record_like_builtin(&ty, method) {
+    if let Some(builtin) = record_like_builtin(&ty, method, shadowed) {
         return !builtin || FIRING_METHODS.contains(&method.fold_identifier().as_str());
     }
     const VALUE_TYPES: &[&str] = &[
@@ -378,7 +436,7 @@ impl AliasClasses {
     /// and global holder joined (a caller or another routine may have aliased them) and, when
     /// the routine has an array holder, every holder joined.
     #[must_use]
-    pub fn for_routine(r: &ModelRoutine) -> Self {
+    pub fn for_routine(r: &ModelRoutine, shadowed: &ShadowedBuiltins) -> Self {
         let holder_type = |t: &str| {
             let t = t.trim().fold_identifier();
             t == "recordref"
@@ -402,7 +460,7 @@ impl AliasClasses {
             .iter()
             .filter(|v| holder_type(&v.declared_type))
             .any(|v| v.declared_type.trim().fold_identifier().contains(" of "));
-        Self::build(r, &holders, any_array)
+        Self::build(r, &holders, any_array, shadowed)
     }
 
     /// The classes over `holders` (`(key, external)`): `r`'s own `A := B`, every external
@@ -412,7 +470,12 @@ impl AliasClasses {
     /// `r` passes to a call (the callee may keep it): a call that may run user code may rebind
     /// it ([`may_run_user_code`]).
     #[must_use]
-    pub fn build(r: &ModelRoutine, holders: &[(String, bool)], any_array: bool) -> Self {
+    pub fn build(
+        r: &ModelRoutine,
+        holders: &[(String, bool)],
+        any_array: bool,
+        shadowed: &ShadowedBuiltins,
+    ) -> Self {
         let keys: HashSet<String> = holders.iter().map(|(k, _)| k.clone()).collect();
         let mut c = Self::of(&r.var_assignments, |n| keys.contains(n));
         let mut external: HashSet<String> = holders
@@ -447,7 +510,11 @@ impl AliasClasses {
         for k in &external {
             from.insert(c.root(k), None);
         }
-        for cs in r.call_sites.iter().filter(|cs| may_keep_argument(r, cs)) {
+        for cs in r
+            .call_sites
+            .iter()
+            .filter(|cs| may_keep_argument(r, cs, shadowed))
+        {
             let at = if cs.loop_stack.is_empty() {
                 Some((cs.source_anchor.end_line, cs.source_anchor.end_column))
             } else {

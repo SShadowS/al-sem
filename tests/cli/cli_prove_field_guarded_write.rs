@@ -38,6 +38,28 @@ table 50401 "FG Doc"
         S.Rebind();
     end;
 
+    // sol and Fable on ENG-159: procedures named like record built-ins (alc warns AL0524 and
+    // binds the call to them). One runs user code, one holds its argument.
+    procedure SetRecFilter(Really: Boolean)
+    var
+        S: Codeunit "FG Store";
+    begin
+        S.Rebind();
+    end;
+
+    procedure CopyFilters(var R: RecordRef; Really: Boolean)
+    begin
+        H := R;
+    end;
+
+    // Named like a record operation (`Count`), which the IR lowers as one, not a call site.
+    procedure Count(Really: Boolean)
+    var
+        S: Codeunit "FG Store";
+    begin
+        S.Rebind();
+    end;
+
     // Holds a record in the table variable's own global, and hands its handle out.
     procedure Hold(var R: RecordRef)
     begin
@@ -102,6 +124,12 @@ codeunit 50406 "FG Keeper"
     procedure Expose(var X: RecordRef)
     begin
         X := H;
+    end;
+
+    // A by-value RecordRef shares the caller's handle (BC 28.4, ENG-145's note).
+    procedure KeepByVal(R: RecordRef)
+    begin
+        H := R;
     end;
 }
 codeunit 50407 "FG Mover"
@@ -504,6 +532,42 @@ codeunit 50403 "FG Mgt"
         A.Modify();
     end;
 
+    // sol and Fable on ENG-159: `D.SetRecFilter(true)` is the table's procedure, user code.
+    procedure ShadowRetained(var A: RecordRef)
+    var
+        D: Record "FG Doc";
+    begin
+        if not A.FieldExist(50) then
+            exit;
+        D.SetRecFilter(true);
+        A.Modify();
+    end;
+
+    // sol on ENG-159: `D.Count(true)` is the table's procedure (a record operation in the IR).
+    procedure ShadowOpRetained(var A: RecordRef)
+    var
+        D: Record "FG Doc";
+    begin
+        if not A.FieldExist(50) then
+            exit;
+        D.Count(true);
+        A.Modify();
+    end;
+
+    // sol and Fable on ENG-159: `Holder.CopyFilters(R, true)` is the table's procedure, which
+    // holds R.
+    procedure ShadowKeepRoot()
+    var
+        R: RecordRef;
+        D: Record "FG Doc";
+        Holder: Record "FG Doc";
+    begin
+        R.GetTable(D);
+        Holder.CopyFilters(R, true);
+        MoveHeld(Holder);
+        OnlyLog(R);
+    end;
+
     // Fable on ENG-159: a table's own procedure may keep its argument.
     procedure TableProcKeepRoot()
     var
@@ -576,7 +640,7 @@ codeunit 50403 "FG Mgt"
         M: Codeunit "FG Mover";
     begin
         R.GetTable(D);
-        K.Keep((R));
+        K.KeepByVal((R));
         M.Go(0);
         OnlyLog(R);
     end;
@@ -705,6 +769,8 @@ fn a_field_guarded_recordref_write_writes_only_tables_with_the_field() {
         ("CopyThenMoveRoot", "yes"),
         ("TableProcKeepRoot", "yes"),
         ("ParenKeepRoot", "yes"),
+        // sol and Fable on ENG-159: a table procedure named like a built-in may keep too.
+        ("ShadowKeepRoot", "yes"),
     ] {
         assert_eq!(answer(routine, "FG Other"), want, "{routine}");
     }
@@ -716,6 +782,8 @@ fn a_field_guarded_recordref_write_writes_only_tables_with_the_field() {
         "NestedFiring",
         "HttpRetained",
         "OwnDeleteAll",
+        "ShadowRetained",
+        "ShadowOpRetained",
     ] {
         assert_eq!(answer(routine, "FG Other"), "unknown", "{routine}");
     }
