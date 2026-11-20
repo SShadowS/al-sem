@@ -818,6 +818,23 @@ codeunit 50283 "EH Text"
                 Error('RuleWithCallee: the record is flagged.');
     end;
 
+    // sol round 10 on ENG-30: `Tmp` is found temporary by its NAME, which an opaque routine
+    // cannot trust, so `Tmp.Insert()` is a write and the error after it is no pre-write check.
+    procedure TmpRuleRoot()
+    begin
+        TmpRuleCallee();
+    end;
+
+    local procedure TmpRuleCallee()
+    var
+        Tmp: Record "EH Blob" temporary;
+        W: Record "EH Blob";
+    begin
+        with W do
+            Tmp.Insert();
+        Error('TmpRuleCallee: after the write.');
+    end;
+
     // A read-only platform function keeps it usable.
     procedure TxtStrLen()
     begin
@@ -1320,4 +1337,23 @@ fn a_callee_with_keeps_its_rule() {
         .unwrap();
     let card = String::from_utf8_lossy(&out.stdout);
     assert!(card.contains("ERROR_THROW"), "the error stays: {card}");
+    let out = Command::new(env!("CARGO_BIN_EXE_alsem"))
+        .args([
+            "explain",
+            "ws",
+            "--routine",
+            "Codeunit \"EH Text\"::TmpRuleRoot",
+        ])
+        .current_dir(dir.path())
+        .env("RUST_LOG", "off")
+        .output()
+        .unwrap();
+    // sol round 10: `Tmp.Insert()` is a write (its temporariness is by name, in an opaque
+    // routine), so the error after it is no check the caller inherits before any write.
+    let card = String::from_utf8_lossy(&out.stdout);
+    assert!(card.contains("EH Blob: Insert"), "precondition: {card}");
+    assert!(
+        !card.contains("inherits via TmpRuleCallee"),
+        "an error after a write is no pre-write check: {card}"
+    );
 }

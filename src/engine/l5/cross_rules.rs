@@ -1466,7 +1466,12 @@ impl<'m> CrossRules<'m> {
 /// The record-field assignments and mutating operations of `r` (not on a
 /// record known temporary).
 fn own_writes(r: &ModelRoutine) -> Vec<&PAnchor> {
+    // A by-name lookup: in a routine opaque to names the receiver may be a `with` record, so it
+    // proves nothing temporary there (ENG-30, sol r10).
     let temp_var = |var: &str| {
+        if r.names_opaque {
+            return false;
+        }
         let key = var.trim_matches('"').fold_identifier();
         r.record_variables.iter().any(|rv| {
             rv.name.trim_matches('"').fold_identifier() == key

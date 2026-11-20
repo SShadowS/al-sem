@@ -860,7 +860,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     value is private, read only by `OpTemp::get(routine)`, which answers `unknown` when the
     routine is opaque (`ModelRoutine::names_opaque`, computed once where the row is built, so a
     read is a field check), whatever the order of passes. The resolver's by-name
-    `record_temporary` is dropped there too. The clearing and the invariant stay (belt and
+    `record_temporary` is dropped there too, and so is `cross_rules`' by-name temporary-variable
+    check of a routine's own writes (sol round 10: a write on `Tmp` inside a `with` was dropped,
+    so the error after it passed to callers as a pre-write check; `TmpRuleRoot` pins it). The
+    clearing and the invariant stay (belt and
     braces), now over FieldRef operations, and the invariant flags a stale `names_opaque`. Sound
     but blunt: an unambiguous temporary receiver outside the `with`, and a platform operation
     whose temp state comes from table metadata, read `unknown` in such a routine; exact
