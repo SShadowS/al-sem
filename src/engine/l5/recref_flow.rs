@@ -393,6 +393,21 @@ impl<'a> RecRefFlow<'a> {
             }
         }
         let none = HashSet::new();
+        // ENG-160 (Fable): the resolved tables (their loaded extensions' fields merged in) with no
+        // field named `RecordId`: on a record of one, `X.RecordId` is the record's own ID.
+        let own_id_tables: HashSet<&str> = model
+            .workspace
+            .tables
+            .iter()
+            .filter(|t| {
+                !t.is_extension_stub
+                    && !t
+                        .fields
+                        .iter()
+                        .any(|f| f.name.eq_fold_identifier("recordid"))
+            })
+            .map(|t| t.id.as_str())
+            .collect();
         let mut self_escapes = HashSet::new();
         let facts: Vec<Facts> = routines
             .iter()
@@ -404,7 +419,11 @@ impl<'a> RecRefFlow<'a> {
                 }) {
                     self_escapes.insert(r.object_id.as_str());
                 }
-                facts_of(r, in_place.get(r.object_id.as_str()).unwrap_or(&none))
+                facts_of(
+                    r,
+                    in_place.get(r.object_id.as_str()).unwrap_or(&none),
+                    &own_id_tables,
+                )
             })
             .collect();
         let mut flow = RecRefFlow {
@@ -1558,7 +1577,11 @@ fn in_place_part(site: &BindSite<'_>) -> Part {
 /// `SavedRecID := RecRef.RecordId; RecRef := Filter.Duplicate(); RecRef.Get(SavedRecID)`.
 /// `None` (anything) when `Id` is anything else: a parameter or global, passed to a call (it may
 /// be written), a `for`/`foreach` variable (Fable on ENG-160), or written another way.
-fn get_id_sources(r: &ModelRoutine, site: &BindSite<'_>) -> Option<Vec<String>> {
+fn get_id_sources(
+    r: &ModelRoutine,
+    site: &BindSite<'_>,
+    own_id_tables: &HashSet<&str>,
+) -> Option<Vec<String>> {
     let [id] = site.args else {
         return None;
     };
@@ -1596,10 +1619,28 @@ fn get_id_sources(r: &ModelRoutine, site: &BindSite<'_>) -> Option<Vec<String>> 
     {
         return None;
     }
+    // `X.RecordId` must be X's own record ID. It is on a RecordRef (no fields of its own). On a
+    // record it is a FIELD when X's table has one of that name (AL binds the field; alc
+    // 18.0.41), which may hold any record's ID (Fable on ENG-160): a record counts only when its
+    // table is resolved and has no such field, its loaded extensions' fields included
+    // (`own_id_tables`). Anything else, or a table not resolved, is no source.
+    let recordref = |x: &str| {
+        r.variables
+            .iter()
+            .any(|v| lc(&v.name) == x && v.declared_type.trim().eq_fold_identifier("recordref"))
+            || r.record_variables.iter().any(|v| {
+                lc(&v.name) == x
+                    && v.table_id
+                        .as_deref()
+                        .is_some_and(|t| own_id_tables.contains(t))
+            })
+    };
     let mut out = Vec::new();
     for a in r.var_assignments.iter().filter(|a| lc(&a.lhs_name) == id) {
         match &a.rhs_member {
-            Some((x, m)) if m.eq_fold_identifier("recordid") => out.push(lc(x)),
+            Some((x, m)) if m.eq_fold_identifier("recordid") && recordref(&lc(x)) => {
+                out.push(lc(x));
+            }
             _ => return None,
         }
     }
@@ -1887,7 +1928,11 @@ fn rebinds_to_guarded(
     })
 }
 
-fn facts_of(r: &ModelRoutine, obj_in_place: &HashSet<String>) -> Facts {
+fn facts_of(
+    r: &ModelRoutine,
+    obj_in_place: &HashSet<String>,
+    own_id_tables: &HashSet<&str>,
+) -> Facts {
     let mut f = Facts::default();
     for v in r.variables.iter() {
         if !is_tracked_type(&v.declared_type) {
@@ -1933,7 +1978,7 @@ fn facts_of(r: &ModelRoutine, obj_in_place: &HashSet<String>) -> Facts {
             // one of their tables, for every member of the class alike (Continia DO's
             // `RunReportID` hands its RecRef to a Variant before `RecRef.Get(SavedRecID)`).
             let parts = match (site.how, site.call) {
-                (RecRefBind::Get, None) => get_id_sources(r, site)
+                (RecRefBind::Get, None) => get_id_sources(r, site, own_id_tables)
                     .map(|xs| xs.into_iter().map(Part::Copy).collect::<Vec<_>>()),
                 _ => None,
             }
@@ -2020,7 +2065,7 @@ fn facts_of(r: &ModelRoutine, obj_in_place: &HashSet<String>) -> Facts {
         let v = lc(site.receiver);
         if f.tracked.contains_key(&v) {
             let at = Some((site.anchor.start_line, site.anchor.start_column));
-            match get_id_sources(r, site) {
+            match get_id_sources(r, site, own_id_tables) {
                 Some(xs) => {
                     for x in xs {
                         f.fixed.push((v.clone(), Part::Copy(x), at));

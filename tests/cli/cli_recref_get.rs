@@ -30,6 +30,11 @@ table 50433 "GE Other"
     fields { field(1; K; Integer) { } }
     keys { key(PK; K) { } }
 }
+table 50436 "GE Link"
+{
+    fields { field(1; K; Integer) { } field(3; RecordId; RecordId) { } }
+    keys { key(PK; K) { } }
+}
 codeunit 50434 "GE Mgt"
 {
     var
@@ -244,6 +249,37 @@ codeunit 50434 "GE Mgt"
         V := R;
         Id := R.RecordId;
         R := F.Duplicate();
+        R.Get(Id);
+        Guarded(R);
+    end;
+
+    // A record's own ID: its table (GE Entry) has no field named RecordId.
+    procedure OwnIdRecordRoot()
+    var
+        R: RecordRef;
+        E: Record "GE Entry";
+        E2: Record "GE Entry";
+        Id: RecordId;
+    begin
+        R.GetTable(E);
+        E2.FindFirst();
+        Id := E2.RecordId;
+        R.Get(Id);
+        Guarded(R);
+    end;
+
+    // Fable on ENG-160: on a record whose table has a FIELD named RecordId, `Link.RecordId` is
+    // that field, which may hold a Doc's ID.
+    procedure OwnIdFieldRoot()
+    var
+        R: RecordRef;
+        E: Record "GE Entry";
+        Link: Record "GE Link";
+        Id: RecordId;
+    begin
+        R.GetTable(E);
+        Link.FindFirst();
+        Id := Link.RecordId;
         R.Get(Id);
         Guarded(R);
     end;
@@ -655,6 +691,8 @@ fn a_recordref_get_moves_the_table_for_every_reader() {
     // call or a function writes, or an alias in between, may move it anywhere.
     assert_eq!(answer("OwnIdRoot", "GE Log"), "no");
     assert_eq!(answer("OwnIdAliasedRoot", "GE Log"), "no");
+    assert_eq!(answer("OwnIdRecordRoot", "GE Log"), "no");
+    assert_eq!(answer("OwnIdFieldRoot", "GE Log"), "yes");
     assert_eq!(answer("OwnIdForeachRoot", "GE Log"), "yes");
     assert_eq!(answer("OwnIdPassedRoot", "GE Log"), "yes");
     assert_eq!(answer("OwnIdComputedRoot", "GE Log"), "yes");
