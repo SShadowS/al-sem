@@ -52,8 +52,8 @@ pub struct ObjectDecl {
     /// An interface's `extends` list (`interface IBaz extends IBar, NS.IQux`): the base
     /// interface names, unquoted, a qualified name read as its last segment, every `#if`
     /// arm's (a union, as for [`Self::implements`]), document order. Interface only,
-    /// empty otherwise. GRM-05 (grammar 5.4.0); no consumer yet: the engine does not
-    /// model interface inheritance (ENG-142).
+    /// empty otherwise. GRM-05 (grammar 5.4.0); read by the engine's interface
+    /// inheritance (ENG-142: `ObjectNode::interface_bases`) and by d19 (ENG-151).
     pub interface_extends: Vec<String>,
     /// Page controls (`part` / `systempart` / `usercontrol` sections) in document
     /// order — Page / PageExtension only. Resolves `CurrPage.<control>…` member calls.

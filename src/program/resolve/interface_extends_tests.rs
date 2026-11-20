@@ -577,8 +577,10 @@ fn a_dependency_interfaces_bases_come_from_its_symbols() {
 fn a_runtime_packages_codeunit_implementer_is_dispatched() {
     const GUID: &str = "14814814-0000-0000-0000-0000000000df";
     let go = r#"{"Name":"Go","Parameters":[]}"#;
+    // The codeunit's method carries the C# body's `[MethodId(1)]` (review, sol).
+    let go_impl = r#"{"Id":1,"Name":"Go","Parameters":[]}"#;
     let symbols = format!(
-        r#"{{"RuntimeVersion":"15.0","Interfaces":[{{"Name":"Dep Iface","Methods":[{go}]}}],"Codeunits":[{{"Id":70002,"Name":"Dep Impl","ImplementedInterfaces":["Dep Iface"],"Methods":[{go}]}}]}}"#
+        r#"{{"RuntimeVersion":"15.0","Interfaces":[{{"Name":"Dep Iface","Methods":[{go}]}}],"Codeunits":[{{"Id":70002,"Name":"Dep Impl","ImplementedInterfaces":["Dep Iface"],"Methods":[{go_impl}]}}]}}"#
     );
     let cs = r#"
 public sealed class Codeunit70002 : NavCodeunit
@@ -628,10 +630,13 @@ public sealed class Codeunit70002 : NavCodeunit
         .filter(|c| c.edge.from.name_lc.as_ref() == "calls")
         .flat_map(|c| c.edge.routes.iter())
         .collect();
+    // Its SOURCE routine `Go` (review, sol: not just any route to the object).
     assert!(
-        routes.iter().any(|r| r
-            .target_object()
-            .is_some_and(|o| o.key == ObjKey::Id(70002))),
+        routes.iter().any(|r| matches!(
+            &r.target,
+            RouteTarget::Routine(id)
+                if id.object.key == ObjKey::Id(70002) && id.name_lc.as_ref() == "go"
+        )),
         "B.Go() reaches the runtime package's implementer: {routes:#?}"
     );
 }
