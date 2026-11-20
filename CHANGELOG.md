@@ -7,6 +7,74 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (TLS-104: a host suspend is labelled in cdo-speed, cdo-gate and cdo-slot)
+
+- **What happened.** During ENG-145's landing, cdo-speed's log jumped 33 minutes between two
+  calls while the call itself read 8.2 s. server1 had suspended for 1,965 s
+  (`/sys/power/suspend_stats/last_hw_sleep`). Every Claude session on the machine went quiet for
+  exactly that window. A call's wall time is `CLOCK_MONOTONIC`, which stops during a suspend;
+  cdo-gate's phase seconds are bash `$SECONDS`, which do not. The call after the resume ran at
+  x2.0 its pair (cold caches and clocks). server1 is a laptop that suspends when it is moved
+  (owner, 2026-11-20), so a suspend is expected: it is labelled, never hidden.
+- **The reading.** New `scripts/host-suspended` prints the host's suspended seconds since boot,
+  `CLOCK_BOOTTIME` minus `CLOCK_MONOTONIC`. A rise between two readings is a suspend between
+  them. With `--clocks` it prints the reading, `CLOCK_BOOTTIME` (wall time) and
+  `CLOCK_MONOTONIC` (awake time) from one process. A reading and a clock read separately by
+  the caller could have a suspend fall between them (review r3, sol). It reads `CLOCK_MONOTONIC`
+  first and never prints below 0. On a host that never slept the two clocks are equal, and
+  reading `CLOCK_BOOTTIME` first gave -1, which every caller refused as unreadable: suspend
+  detection would have been off until the first sleep (review r4, sol). Test hook
+  `CDO_HOST_SUSPENDED_FILE` (shared by the three scripts).
+- **cdo-speed** takes a first reading before it waits for the slot. It reads again before and
+  after each timed call, and around the untimed rebuild. A rise of at least 1 s is logged
+  (`host suspended N s before|during <call>`). "Before" covers time since the previous reading
+  (a slot wait, a server start, the calm wait): that call ran cold after a resume. A call that
+  fails or times out is still read after. The verdict line gains ` SUSPENDED:` with the total
+  and where, on PASS, FAIL and a failed call; a run that cannot go on (exit 2) prints it too.
+  `speed.json` lists them (`suspended`), and each record carries `suspended_before` and
+  `suspended_during`. The same limits judge the run. Instruction counts are unaffected: a
+  suspended task executes nothing.
+- **cdo-gate** samples the clocks as each phase starts and as its command ends. The phase's
+  seconds (wall time, `CLOCK_BOOTTIME`) and its suspend come from the same two samples, so a
+  suspend is never counted in a phase's seconds and noted outside them, or the other way round.
+  A suspend during a phase gives a line under the phase (`the host was
+  suspended N s during this phase: its seconds include that time`). One since the previous phase
+  of this run ended gives `... before this phase: since the previous phase of this run ended,
+  outside its seconds`. A phase running beside it in the background (`speed_build`, the
+  parallel layout's second lane) may hold that gap, and notes it itself if so. Both are
+  `suspended` lines in `phases.times`, and the summary lists every one, the build phases
+  included.
+- **cdo-slot** records the reading with a hold and with a timing. `status` says how much of a
+  hold's age the host spent suspended (`(42 min, 1965 s of it with the host suspended)`): an
+  old hold can be a laptop that slept, not a hung holder. `run --timed`'s wait for builds
+  (`CDO_SLOT_TIMED_WAIT_S`) and its grace now run on awake time, `CLOCK_MONOTONIC` (wall time
+  only when the clocks cannot be read). Each new sleep is said once
+  (`the host slept N s during this wait: it goes on that much longer`). Before, a 33-minute
+  sleep used up the 1,800 s in a few real seconds, refused with exit 6, and failed the gate's
+  speed phase for a false reason (review, Fable). It also ended the grace with no build given
+  the chance to start (review r2, sol).
+- **Thresholds.** The shell scripts read whole seconds, so they note a rise of 2 s or more: a
+  reading that only crossed a second boundary moves by 1 (review, sol). cdo-speed reads
+  fractions and notes 1 s.
+- **Tests.** One red proof per rule (each test's doc):
+  - cdo-speed: a stub server "sleeps" 5 s during one call. The test checks the label, the log
+    line, `speed.json`, that each suspend is attributed to the head call it happened in, and
+    that call's `suspended_during`; the control run has none.
+  - cdo-gate: the stubbed gate's first phase sees a 30 s suspend. The test checks its line and
+    the summary's; the next phase has none, and so does the control.
+  - `host-suspended` reads a whole number and refuses an unreadable hook.
+  - cdo-slot: the status names 60 s after the reading moves, and a timed wait whose host
+    "sleeps" 5 s past its 2 s deadline waits on and then runs (it refused with exit 6 before).
+  - Not exercised by a test: a suspend between two cdo-gate phases (no stub can move the
+    reading after one phase ends and before the next starts without a race). It shares
+    `suspend_note` with the tested during-phase case.
+- **Filed, not done here.** cdo-slot's `go` (30 s) and `acquire --wait` deadlines and
+  `scripts/land`'s memory wait (30 min) are wall-clock too. A suspend can end them early the
+  same way: the orchestrator files them as a task.
+
+  The hook files have no final newline, which the first `host-suspended` refused. The slot test
+  found it, and it is fixed.
+
 ### Fixed (ENG-148: a runtime package's codeunit implementers reach interface dispatch)
 
 - **The gap.** A runtime package ships no AL, only BC's transpiled C# (`bin/*.cs`) and its

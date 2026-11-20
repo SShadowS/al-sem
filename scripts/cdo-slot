@@ -44,6 +44,9 @@
 #   status
 #       `free` (exit 0), or `held by ...` (exit 1). While a timing runs it adds a
 #       line `timed by <owner> since <time> (<reason>)` (exit 1, even when free).
+#       ⟨TLS-104⟩ Either line names the seconds the host spent suspended since
+#       (`scripts/host-suspended`; server1 is a laptop that sleeps when moved),
+#       2 s or more: an old hold can be a laptop that slept, not a hung holder.
 #   probe
 #       For the guard: `held=<0|1> own=<0|1> timed=<0|1>` (own: this Claude
 #       session's hold, bound or not), then the hold's and the timing's lines.
@@ -291,7 +294,26 @@ describe() {
     age=$(($(date +%s) - $(date -d "$since" +%s 2>/dev/null || date +%s)))
     who="session $(field session)"
     [[ -n "$bound" ]] && who+=", for PID $bound"
-    echo "held by $(field owner) ($(field reason)) since $since ($((age / 60)) min), $who"
+    echo "held by $(field owner) ($(field reason)) since $since ($((age / 60)) min$(suspended_since), $who"
+}
+
+# ⟨TLS-104⟩ `, N s of it with the host suspended)` when the host was suspended
+# since the record was written (its `suspended=` reading), else `)`: an old hold
+# can be a laptop that slept, not a hung holder (server1 suspends when moved).
+host_suspended() { "$(dirname "$0")/host-suspended" 2>/dev/null; }
+host_clocks() { "$(dirname "$0")/host-suspended" --clocks 2>/dev/null; }
+# At least 2 s: the readings are whole seconds (one that crossed a second
+# boundary moves by 1; review, sol), and a real suspend lasts far longer.
+# `$1`: the words after the seconds (default `of it with the host suspended`).
+suspended_since() {
+    local s0 s1
+    s0=$(field suspended)
+    s1=$(host_suspended)
+    if [[ "$s0" =~ ^[0-9]+$ && "$s1" =~ ^[0-9]+$ ]] && ((s1 - s0 >= 2)); then
+        echo ", $((s1 - s0)) s ${1:-of it with the host suspended})"
+    else
+        echo ")"
+    fi
 }
 
 # timed_now: a timing runs (some process holds the timing lock).
@@ -304,7 +326,7 @@ timed_describe() {
         [[ -f "$f" ]] || continue
         probe s "$ids/timed.${f##*/}" || continue
         load "$f"
-        echo "timed by $(field owner) since $(field since) ($(field reason))"
+        echo "timed by $(field owner) since $(field since) ($(field reason)$(suspended_since "with the host suspended since")"
         return
     done
     echo "timed (its timing is starting)"
@@ -344,6 +366,7 @@ take_hold() {
     write_atomic "$status_file" "owner=$1
 reason=$2
 since=$(date -u +%FT%TZ)
+suspended=$(host_suspended)
 session=$me_session
 claude_pid=$me_pid
 bound=$bind
@@ -377,6 +400,7 @@ take_timed() {
     write_atomic "$tdir/$tid" "owner=$1
 reason=$2
 since=$(date -u +%FT%TZ)
+suspended=$(host_suspended)
 pid=$3" || die "cannot write the timing file $tdir/$tid (exiting drops the timing)"
     # Files of timings that ended long ago (their id lock free) go.
     for f in $(find "$tdir" -maxdepth 1 -type f -mmin +5 2>/dev/null); do
@@ -688,13 +712,41 @@ timed_start() {
         echo "cdo-slot: --timed refused: $*" >&2
         return 6
     }
-    # Microseconds (EPOCHREALTIME): the deadline holds below a second too.
-    local now start last=-60 b list left_us nap_us quiet=""
-    start=${EPOCHREALTIME//[!0-9]/}
+    # Microseconds: the deadline holds below a second too.
+    # ⟨TLS-104⟩ The wall clock keeps counting through a host suspend: a laptop
+    # that slept 33 min would "wait" its 1800 s in a few real seconds and refuse
+    # falsely (review, Fable), and its grace would end with no build given the
+    # chance to start (review r2, sol). So the wait and the grace run on AWAKE
+    # time, CLOCK_MONOTONIC (`host-suspended --clocks`: the reading and the clock
+    # from one process, so no suspend falls between them; review r3, sol). Each
+    # new sleep is said once. With the clocks unreadable, the wall clock (as before).
+    local now start last=-60 b list left_us nap_us quiet="" susp0="" susp mono="" slept=0 awake=""
+    # The time base is chosen once: awake time if the first read works. A later
+    # failed read keeps the last awake time (the wait only grows: the safe side).
+    # The awake clock is judged on its own (review r4, sol): a bad suspended
+    # field costs only the log line, never the time base.
+    slot_clocks() {
+        local s="" _b m=""
+        read -r s _b m < <(host_clocks) || true
+        [[ "$s" =~ ^[0-9]+$ ]] && susp=$s || susp=""
+        if [[ "$m" =~ ^[0-9]+$ && "$awake" != 0 ]]; then
+            mono=$m awake=1
+        elif [[ "$awake" != 1 ]]; then
+            mono=${EPOCHREALTIME//[!0-9]/} awake=0
+        fi
+    }
+    slot_clocks
+    susp0=$susp
+    start=$mono
     local wait_us=$((timed_wait * 1000000)) grace_us=$((timed_grace * 1000000))
     while :; do
         b=$(foreign_builds "$3")
-        now=${EPOCHREALTIME//[!0-9]/}
+        slot_clocks
+        if [[ "$susp0" =~ ^[0-9]+$ && "$susp" =~ ^[0-9]+$ ]] && ((susp - susp0 - slept >= 2)); then
+            echo "cdo-slot: timed: the host slept $((susp - susp0 - slept)) s during this wait: it goes on that much longer"
+            slept=$((susp - susp0))
+        fi
+        now=$mono
         if [[ -n "$b" ]]; then
             quiet=""
             list=$(awk '{ printf "%sPID %s (%s)", (NR > 1 ? ", " : ""), $1, $2 }' <<<"$b")

@@ -35,7 +35,9 @@ rounds):
     pass runs anyway. Each timed block's CPU stall share (this container's `some total`
     over the block) is measured, and a block above CALM_PRESSURE (or a pass admitted by
     the timeout) labels the verdict "UNDER LOAD" with the shares: the same limits judge
-    it, nothing is skipped (TLS-76);
+    it, nothing is skipped (TLS-76). A host suspend before or during a timed call (the
+    host's suspended seconds, `scripts/host-suspended`, rose) labels it "SUSPENDED" the
+    same way (TLS-104: server1 is a laptop that sleeps when moved);
   rounds 1..N (default 3, at most 5, as many as ROUND_ROUTINES has; a larger --rounds is
     refused before anything starts): one CDO routine per round, a different one each round
     (a resident answer is kept, so asking the same routine again measures
@@ -156,7 +158,8 @@ OWN_PRESSURE = ("/sys/fs/cgroup/cpu.pressure", "/proc/pressure/cpu")
 
 TEST_HOOKS = ("CDO_SPEED_WARM_MIN_SECONDS", "CDO_SPEED_LOADAVG_FILE", "CDO_SPEED_PRESSURE_FILE",
               "CDO_SPEED_HOST_PRESSURE_FILE", "CDO_SPEED_CALM_PRESSURE", "CDO_SPEED_CALM_WAIT_S",
-              "CDO_SPEED_CALM_POLL_S", "CDO_SPEED_PERF", "CDO_SPEED_TEST_WALL_IS_CPU")
+              "CDO_SPEED_CALM_POLL_S", "CDO_SPEED_PERF", "CDO_SPEED_TEST_WALL_IS_CPU",
+              "CDO_HOST_SUSPENDED_FILE")
 # CDO_SPEED_TEST_WALL_IS_CPU: a test hook, a stub clock: each call's wall time is
 # taken to be its CPU time. A stub server burns exact CPU, but its wall time is
 # the host's, so under load a stub run could fail its wall limit (x1.78 against
@@ -220,6 +223,69 @@ class Stalls:
         if total is None or self.total0 is None or wall <= 0:
             return None
         return 100.0 * (total - self.total0) / 1e6 / wall
+
+
+# ⟨TLS-104⟩ Host suspends. server1 is a laptop that suspends when it is moved
+# (owner, 2026-11-20): during ENG-145's landing it slept 1,965 s between two
+# calls. A call's wall time is CLOCK_MONOTONIC, which stops during a suspend, so
+# the call itself read right (8.2 s) while the gate's `$SECONDS` jumped 33 min;
+# but the call after a resume runs with cold caches and clocks (that one took
+# x2.0 its pair). So each timed call reads the host's suspended seconds
+# (`host_suspended`) before and after it: a rise since the previous reading
+# (before the call) or over the call is logged with its size and labels the
+# verdict SUSPENDED. The same limits judge it (label, never hide); instruction
+# counts are unaffected (a suspended task executes nothing).
+SUSPEND_MIN_S = 1
+
+
+def host_suspended():
+    """The host's suspended seconds since boot (CLOCK_BOOTTIME minus
+    CLOCK_MONOTONIC), or None when unreadable. CDO_HOST_SUSPENDED_FILE: a test
+    hook, a file whose first number is read instead (as `scripts/host-suspended`)."""
+    hook = os.environ.get("CDO_HOST_SUSPENDED_FILE")
+    try:
+        if hook:
+            with open(hook) as f:
+                return float(f.read().split()[0])
+        # MONOTONIC first, never below 0 (as `host-suspended`; review r4, sol).
+        m = time.clock_gettime(time.CLOCK_MONOTONIC)
+        return max(0.0, time.clock_gettime(time.CLOCK_BOOTTIME) - m)
+    except (OSError, ValueError, IndexError, AttributeError):
+        return None
+
+
+class Suspends:
+    """The host suspends seen over the timing: (where, seconds) each."""
+
+    def __init__(self):
+        self.seen = []
+        self.last = host_suspended()
+
+    def note(self, where):
+        """Read again; a rise of at least SUSPEND_MIN_S since the last reading is
+        a suspend `where` (logged). Returns its seconds, or 0."""
+        now = host_suspended()
+        rise = 0
+        if now is not None and self.last is not None and now - self.last >= SUSPEND_MIN_S:
+            rise = now - self.last
+            self.seen.append((where, rise))
+            log(f"host suspended {rise:.0f} s {where}: its timing is not trusted "
+                "(labelled SUSPENDED; instruction counts are unaffected)")
+        if now is not None:
+            self.last = now
+        return rise
+
+    def label(self):
+        """` SUSPENDED: ...` when the host slept during the timing, else ``."""
+        if not self.seen:
+            return ""
+        total = sum(s for _, s in self.seen)
+        where = ", ".join(f"{s:.0f} s {w}" for w, s in self.seen)
+        return (f" SUSPENDED: the host slept {total:.0f} s during the timing ({where}); "
+                "the timings around it are not trusted, instruction counts are")
+
+
+SUSPENDS = None
 
 
 def shares_text(blocks):
@@ -1024,7 +1090,14 @@ def timed_call(server, side, cid, tool, args, rnd, warm_pass, tag, records):
     """One timed call on `side`'s server, logged and recorded."""
     load = load_1min()
     pressure, _ = cpu_pressure()
-    wall, cpu, sha, code, err = server.call(tool, args)
+    what = f"{tag} {cid} {side}"
+    before = SUSPENDS.note(f"before {what}") if SUSPENDS else 0
+    # Read again even when the call fails or times out (review, sol): the
+    # verdict then still says the host slept.
+    try:
+        wall, cpu, sha, code, err = server.call(tool, args)
+    finally:
+        during = SUSPENDS.note(f"during {what}") if SUSPENDS else 0
     exit_note = f"  exit {code}" if code != 0 else ""
     shown = "?" if pressure is None else f"{pressure:.1f}"
     instr = getattr(server, "last_instr", None)
@@ -1035,7 +1108,7 @@ def timed_call(server, side, cid, tool, args, rnd, warm_pass, tag, records):
         raise CallFailed(f"{tag} {cid} ({tool}) on {side} exited {code}", err)
     records.append(dict(call=cid, side=side, round=rnd, warm_pass=warm_pass,
                         wall=wall, cpu=cpu, sha=sha, load=load, pressure=pressure,
-                        instr=instr))
+                        instr=instr, suspended_before=before, suspended_during=during))
 
 
 def run_round(rnd, servers, records, warm_pass=0, skip=0):
@@ -1209,6 +1282,11 @@ def main():
     if args.build_only:
         log(f"built (no timing asked) in {t_built - t_start:.0f} s")
         return 0
+    # ⟨TLS-104⟩ The baseline before the slot wait (review, Fable): a host that
+    # sleeps while this waits for the slot or for builds is seen "before" the
+    # first timed call, which then runs cold.
+    global SUSPENDS
+    SUSPENDS = Suspends()
     timed_hold(repo)
     global INSTR_EVENTS, INSTR_WHY
     INSTR_EVENTS, INSTR_WHY = instr_probe()
@@ -1259,7 +1337,11 @@ def main():
             servers[second] = Server(exes[second], ws, outdir, f"{second}{p + 1}")
             timed_call(servers[second], second, "build", b_tool, b_args, 0, p, tag, records)
             servers[first] = Server(exes[first], ws, outdir, f"{first}{p + 1}-again")
-            wall, cpu, _, code, err = servers[first].call(b_tool, b_args)
+            SUSPENDS.note(f"before {tag} build {first} again (untimed)")
+            try:
+                wall, cpu, _, code, err = servers[first].call(b_tool, b_args)
+            finally:
+                SUSPENDS.note(f"during {tag} build {first} again (untimed)")
             log(f"  {tag} {'build':<12} {first:<5} wall {wall:7.2f} s  cpu {cpu:7.2f} s"
                 f"  (again, untimed: the server the remaining calls use)")
             if code != 0:
@@ -1295,7 +1377,7 @@ def main():
         log(f"FAIL: {what}; nothing is judged on a failed call")
         for line in err or ["(no stderr)"]:
             log(f"  | {line}")
-        label = under_load_label(calm, blocks)
+        label = under_load_label(calm, blocks) + SUSPENDS.label()
         if label:
             log(f"FAIL{label}")
         return 1
@@ -1385,7 +1467,8 @@ def main():
     for line in advisories:
         log(f"ADVISORY (not failing): {line}")
     elapsed = time.monotonic() - t_start
-    label = under_load_label(calm, blocks)
+    load_label = under_load_label(calm, blocks)
+    label = load_label + SUSPENDS.label()
     under = [i + 1 for i, (_, loaded) in enumerate(calm) if loaded]
     unknown = any(loaded is None for _, loaded in calm) or any(s is None for _, s in blocks)
     with open(os.path.join(outdir, "speed.json"), "w") as f:
@@ -1398,7 +1481,9 @@ def main():
                        failed=failed, loadavg_start=load0, loadavg_end=load_1min(),
                        pressure_start=pressure0, pressure_end=cpu_pressure()[0],
                        calm_pressure=CALM_PRESSURE, admitted_by_timeout=under,
-                       stall_shares=dict(blocks), under_load=bool(label.startswith(" UNDER")),
+                       stall_shares=dict(blocks),
+                       under_load=bool(load_label.startswith(" UNDER")),
+                       suspended=[dict(where=w, seconds=s) for w, s in SUSPENDS.seen],
                        pressure_unknown=unknown, warm_samples=args.warm_samples,
                        instructions=dict(events=list(INSTR_EVENTS), why_not=INSTR_WHY,
                                          advisory_limit=INSTR_LIMIT, advisories=advisories)),
@@ -1422,5 +1507,9 @@ if __name__ == "__main__":
     except SystemExit as e:
         if isinstance(e.code, str):  # a "cannot run" message
             print(e.code, file=sys.stderr, flush=True)
+            # ⟨TLS-104⟩ A run stopped after the timing began still says the
+            # host slept (review, sol): a call that timed out across a suspend.
+            if SUSPENDS is not None and SUSPENDS.seen:
+                print(f"cdo-speed:{SUSPENDS.label()}", file=sys.stderr, flush=True)
             sys.exit(2)
         raise
