@@ -439,13 +439,17 @@ summarize() {
         fi
         [[ "$word" == ok ]] || { status=1; bad+=("$name"); }
         printf 'cdo-gate:   %-26s %-20s %6s s  %s\n' "$name" "$word" "$secs" "${counts:-no test result}"
-        # ⟨TLS-104⟩ A host suspend during the phase: its seconds above include it.
-        local susp
-        susp=$(awk -v p="$name" '$2 == "suspended" && $3 == p { print $4; exit }' \
-            "$logs/phases.times" 2>/dev/null)
-        [[ -n "$susp" ]] &&
-            echo "cdo-gate:     ($name: the host was suspended $susp s during it; its seconds include that time)"
     done
+    # ⟨TLS-104⟩ Every host suspend the run saw, during a phase (its seconds above
+    # include it) or before one (between phases), the build phases included.
+    awk '$2 == "suspended" {
+            p = $3; w = "during"; t = "its seconds include that time"
+            if (p ~ /^before:/) {
+                w = "before"; t = "between phases: no phase'"'"'s seconds include it"
+                sub(/^before:/, "", p)
+            }
+            printf "cdo-gate:   host suspended %s s %s %s (%s)\n", $4, w, p, t
+        }' "$logs/phases.times" 2>/dev/null
     # ⟨TLS-32⟩ The layout the test phases took.
     [[ -f "$logs/layout" ]] && echo "cdo-gate:   layout: $(cat "$logs/layout")"
     # ⟨TLS-19⟩ The container's peak unreclaimable memory during the test lanes,
@@ -807,12 +811,17 @@ host_suspended() { "$(dirname "$0")/host-suspended" 2>/dev/null; }
 # suspend_note <before> <after> <what>: when the host was suspended between the
 # two readings, say so: wall seconds over `what` (bash `$SECONDS`) then include
 # time in which nothing ran (server1 is a laptop that suspends when moved).
-# Prints nothing otherwise, or when a reading is missing.
+# Prints nothing otherwise, or when a reading is missing. 2 s at least: the
+# readings are whole seconds, so a reading that only crossed a second boundary
+# moves by 1 (review, sol); a real suspend lasts far longer.
 suspend_note() {
     [[ "$1" =~ ^[0-9]+$ && "$2" =~ ^[0-9]+$ ]] || return 0
-    (($2 - $1 >= 1)) || return 0
-    echo "the host was suspended $(($2 - $1)) s during $3: its seconds include that time (no work ran)"
+    (($2 - $1 >= 2)) || return 0
+    echo "the host was suspended $(($2 - $1)) s $3: its seconds include that time (no work ran)"
 }
+# The reading at the end of the last phase (empty before the first): a suspend
+# BETWEEN phases is noted at the next one's start (review, sol).
+gate_susp_last=""
 
 # A phase: its command's output goes to `<name>.log`, each line stamped;
 # `<name>.status` holds the exit status and the wall seconds when it ends.
@@ -820,8 +829,13 @@ suspend_note() {
 run_phase() {
     local name="$1"
     shift
-    local start=$SECONDS susp0
+    local start=$SECONDS susp0 note
     susp0=$(host_suspended)
+    note=$(suspend_note "$gate_susp_last" "$susp0" "before this phase (since the last one)")
+    if [[ -n "$note" ]]; then
+        echo "$(date +%s) suspended before:$name ${note#the host was suspended }" >> "$logs/phases.times"
+        echo "cdo-gate: [$name] $note"
+    fi
     echo "cdo-gate: [$name] started"
     echo "$(date +%s) start $name" >> "$logs/phases.times"
     # In the background, then `wait`: bash runs a trap only between commands,
@@ -830,22 +844,25 @@ run_phase() {
     # command's own status goes through a file (`PIPESTATUS` is the foreground's).
     { "$@" 2>&1; echo $? > "$logs/$name.rc"; } | stamp > "$logs/$name.log" &
     wait $!
+    # The end reading as the command ends, before its seconds are written (review,
+    # sol: a suspend after them is not "included in" them).
+    gate_susp_last=$(host_suspended)
+    local secs=$((SECONDS - start))
     local rc
     rc=$(cat "$logs/$name.rc" 2>/dev/null)
     [[ "$rc" =~ ^[0-9]+$ ]] || rc=1
     echo "$(date +%s) end $name" >> "$logs/phases.times"
     phase_memory "$logs" "$name" >> "$logs/$name.log"
-    echo "$rc $((SECONDS - start))" > "$logs/$name.status"
-    local note
-    note=$(suspend_note "$susp0" "$(host_suspended)" "this phase")
+    echo "$rc $secs" > "$logs/$name.status"
+    note=$(suspend_note "$susp0" "$gate_susp_last" "during this phase")
     if [[ -n "$note" ]]; then
         echo "$(date +%s) suspended $name ${note#the host was suspended }" >> "$logs/phases.times"
         echo "cdo-gate: [$name] $note"
     fi
     if [[ "$rc" -eq 0 ]]; then
-        echo "cdo-gate: [$name] ok ($((SECONDS - start)) s)"
+        echo "cdo-gate: [$name] ok ($secs s)"
     else
-        echo "cdo-gate: [$name] FAILED, exit $rc ($((SECONDS - start)) s)"
+        echo "cdo-gate: [$name] FAILED, exit $rc ($secs s)"
     fi
     return "$rc"
 }

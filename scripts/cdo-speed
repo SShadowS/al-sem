@@ -1088,8 +1088,12 @@ def timed_call(server, side, cid, tool, args, rnd, warm_pass, tag, records):
     pressure, _ = cpu_pressure()
     what = f"{tag} {cid} {side}"
     before = SUSPENDS.note(f"before {what}") if SUSPENDS else 0
-    wall, cpu, sha, code, err = server.call(tool, args)
-    during = SUSPENDS.note(f"during {what}") if SUSPENDS else 0
+    # Read again even when the call fails or times out (review, sol): the
+    # verdict then still says the host slept.
+    try:
+        wall, cpu, sha, code, err = server.call(tool, args)
+    finally:
+        during = SUSPENDS.note(f"during {what}") if SUSPENDS else 0
     exit_note = f"  exit {code}" if code != 0 else ""
     shown = "?" if pressure is None else f"{pressure:.1f}"
     instr = getattr(server, "last_instr", None)
@@ -1274,6 +1278,11 @@ def main():
     if args.build_only:
         log(f"built (no timing asked) in {t_built - t_start:.0f} s")
         return 0
+    # ⟨TLS-104⟩ The baseline before the slot wait (review, Fable): a host that
+    # sleeps while this waits for the slot or for builds is seen "before" the
+    # first timed call, which then runs cold.
+    global SUSPENDS
+    SUSPENDS = Suspends()
     timed_hold(repo)
     global INSTR_EVENTS, INSTR_WHY
     INSTR_EVENTS, INSTR_WHY = instr_probe()
@@ -1287,8 +1296,6 @@ def main():
     hooks = [f"{k}={os.environ[k]}" for k in TEST_HOOKS if k in os.environ]
     if hooks:
         log(f"test hooks set (a real gate sets none): {' '.join(hooks)}")
-    global SUSPENDS
-    SUSPENDS = Suspends()
     load0 = load_1min()
     pressure0, _ = cpu_pressure()
     records = []
@@ -1326,7 +1333,11 @@ def main():
             servers[second] = Server(exes[second], ws, outdir, f"{second}{p + 1}")
             timed_call(servers[second], second, "build", b_tool, b_args, 0, p, tag, records)
             servers[first] = Server(exes[first], ws, outdir, f"{first}{p + 1}-again")
-            wall, cpu, _, code, err = servers[first].call(b_tool, b_args)
+            SUSPENDS.note(f"before {tag} build {first} again (untimed)")
+            try:
+                wall, cpu, _, code, err = servers[first].call(b_tool, b_args)
+            finally:
+                SUSPENDS.note(f"during {tag} build {first} again (untimed)")
             log(f"  {tag} {'build':<12} {first:<5} wall {wall:7.2f} s  cpu {cpu:7.2f} s"
                 f"  (again, untimed: the server the remaining calls use)")
             if code != 0:
@@ -1492,5 +1503,9 @@ if __name__ == "__main__":
     except SystemExit as e:
         if isinstance(e.code, str):  # a "cannot run" message
             print(e.code, file=sys.stderr, flush=True)
+            # ⟨TLS-104⟩ A run stopped after the timing began still says the
+            # host slept (review, sol): a call that timed out across a suspend.
+            if SUSPENDS is not None and SUSPENDS.seen:
+                print(f"cdo-speed:{SUSPENDS.label()}", file=sys.stderr, flush=True)
             sys.exit(2)
         raise

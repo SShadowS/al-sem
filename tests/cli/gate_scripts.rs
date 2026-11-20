@@ -595,7 +595,7 @@ fn cdo_gate_only_pass_records_the_tree_it_ran_on() {
         "{text}"
     );
     assert!(
-        text.contains("(program_resolve_harness: the host was suspended 30 s during it;"),
+        text.contains("cdo-gate:   host suspended 30 s during program_resolve_harness (its seconds include that time)"),
         "{text}"
     );
     std::fs::write(&reading, "100").unwrap();
@@ -2717,9 +2717,22 @@ fn speed_labels_a_host_suspend() {
             .any(|l| l.contains("cdo-speed: PASS SUSPENDED: the host slept")),
         "{text}"
     );
+    // Each suspend is attributed to the head call it happened in (review: not to
+    // the call after it), and that call's record carries it.
     let seen = json["suspended"].as_array().expect("suspended list");
     assert!(
-        !seen.is_empty() && seen.iter().all(|s| s["seconds"] == 5.0),
+        !seen.is_empty()
+            && seen.iter().all(|s| s["seconds"] == 5.0
+                && s["where"]
+                    .as_str()
+                    .is_some_and(|w| w.starts_with("during ") && w.ends_with(" head"))),
+        "{json}"
+    );
+    let records = json["records"].as_array().expect("records");
+    assert!(
+        records.iter().any(|r| r["side"] == "head"
+            && r["suspended_during"] == 5.0
+            && r["suspended_before"] == 0),
         "{json}"
     );
 

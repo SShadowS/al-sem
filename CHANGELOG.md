@@ -19,25 +19,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The reading.** New `scripts/host-suspended` prints the host's suspended seconds since boot,
   `CLOCK_BOOTTIME` minus `CLOCK_MONOTONIC`. A rise between two readings is a suspend between
   them. Test hook `CDO_HOST_SUSPENDED_FILE` (shared by the three scripts).
-- **cdo-speed** reads it before and after each timed call. A rise of at least 1 s is logged
-  (`host suspended N s before|during <call>`). "Before" covers time since the previous reading:
-  that call ran cold after a resume. The verdict line gains ` SUSPENDED:` with the total and
-  where. `speed.json` lists them (`suspended`), and each record carries `suspended_before` and
+- **cdo-speed** takes a first reading before it waits for the slot. It reads again before and
+  after each timed call, and around the untimed rebuild. A rise of at least 1 s is logged
+  (`host suspended N s before|during <call>`). "Before" covers time since the previous reading
+  (a slot wait, a server start, the calm wait): that call ran cold after a resume. A call that
+  fails or times out is still read after. The verdict line gains ` SUSPENDED:` with the total
+  and where, on PASS, FAIL and a failed call; a run that cannot go on (exit 2) prints it too.
+  `speed.json` lists them (`suspended`), and each record carries `suspended_before` and
   `suspended_during`. The same limits judge the run. Instruction counts are unaffected: a
   suspended task executes nothing.
-- **cdo-gate** reads it at each phase's start and end. A suspend during a phase gives a line under
-  the phase (`the host was suspended N s during this phase: its seconds include that time`),
-  a `suspended` line in `phases.times`, and a note under the phase in the summary.
+- **cdo-gate** reads it as each phase starts and as its command ends (before its seconds are
+  written). A suspend during a phase gives a line under the phase (`the host was suspended N s
+  during this phase: its seconds include that time`); one since the previous phase ended gives
+  `... before this phase (since the last one)`. Both are `suspended` lines in `phases.times`,
+  and the summary lists every one, the build phases included.
 - **cdo-slot** records the reading with a hold and with a timing. `status` says how much of a
   hold's age the host spent suspended (`(42 min, 1965 s of it with the host suspended)`): an
-  old hold can be a laptop that slept, not a hung holder.
+  old hold can be a laptop that slept, not a hung holder. `run --timed`'s wait for builds
+  (`CDO_SLOT_TIMED_WAIT_S`) is wall-clock time: at its deadline it now moves on by the time
+  the host slept (`the host slept N s during this wait: it goes on that much longer`). Before,
+  a 33-minute sleep used up the 1,800 s in a few real seconds, refused with exit 6, and failed
+  the gate's speed phase for a false reason (review, Fable).
+- **Thresholds.** The shell scripts read whole seconds, so they note a rise of 2 s or more: a
+  reading that only crossed a second boundary moves by 1 (review, sol). cdo-speed reads
+  fractions and notes 1 s.
 - **Tests.** One red proof per rule (each test's doc):
   - cdo-speed: a stub server "sleeps" 5 s during one call. The test checks the label, the log
-    line and `speed.json`; the control run has none.
+    line, `speed.json`, that each suspend is attributed to the head call it happened in, and
+    that call's `suspended_during`; the control run has none.
   - cdo-gate: the stubbed gate's first phase sees a 30 s suspend. The test checks its line and
-    the summary note; the next phase has none, and so does the control.
+    the summary's; the next phase has none, and so does the control.
   - `host-suspended` reads a whole number and refuses an unreadable hook.
-  - cdo-slot's status names 60 s after the reading moves.
+  - cdo-slot: the status names 60 s after the reading moves, and a timed wait whose host
+    "sleeps" 5 s past its 2 s deadline waits on and then runs (it refused with exit 6 before).
+  - Not exercised by a test: a suspend between two cdo-gate phases (no stub can move the
+    reading after one phase ends and before the next starts without a race). It shares
+    `suspend_note` with the tested during-phase case.
+- **Filed, not done here.** cdo-slot's `go` (30 s) and `acquire --wait` deadlines and
+  `scripts/land`'s memory wait (30 min) are wall-clock too. A suspend can end them early the
+  same way: the orchestrator files them as a task.
 
   The hook files have no final newline, which the first `host-suspended` refused. The slot test
   found it, and it is fixed.

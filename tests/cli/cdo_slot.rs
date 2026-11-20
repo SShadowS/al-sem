@@ -1655,6 +1655,71 @@ fn cdo_slot_timed_waits_for_builds_and_refuses_beside_one() {
     assert!(text.contains("one-line reason"), "{text}");
 }
 
+/// ⟨TLS-104⟩ A host suspend does not use up `run --timed`'s wait for builds: the
+/// wait is wall-clock time, which keeps counting while a laptop sleeps (review,
+/// Fable). A build runs and the wait is 2 s; once the run says it waits, the
+/// host "sleeps" 5 s (`CDO_HOST_SUSPENDED_FILE` moves from 100 to 105). At the
+/// deadline the run says so and waits on, instead of refusing; the build then
+/// ends and the timed command runs (exit 0).
+///
+/// Mutation (2026-11-20): the deadline's suspend check dropped -> refused at
+/// 2 s, exit 6 (red); restored, green.
+#[test]
+fn cdo_slot_timed_wait_survives_a_host_suspend() {
+    let s = Slot::new();
+    let fake_name = format!("t104s{}", std::process::id());
+    let fake = s.0.path().join(&fake_name);
+    std::os::unix::fs::symlink("/bin/bash", &fake).unwrap();
+    let ran = s.0.path().join("ran");
+    let touch = ran.to_str().unwrap();
+    let reading = s.0.path().join("suspended");
+    std::fs::write(&reading, "100").unwrap();
+    let reading_s = reading.to_str().unwrap();
+    let mut b = stand_in(&s, &fake, &["-c".as_ref(), "sleep 600; true".as_ref()]);
+    let bpid = b.0.id();
+    let mut timed = Reap(
+        s.cmd(
+            "A",
+            &["run", "lane", "timing", "--timed", "--", "touch", touch],
+            &[
+                ("CDO_SLOT_BUILD_NAMES", fake_name.as_str()),
+                ("CDO_SLOT_TIMED_WAIT_S", "2"),
+                ("CDO_HOST_SUSPENDED_FILE", reading_s),
+            ],
+        )
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap(),
+    );
+    let mut text = String::new();
+    {
+        use std::io::BufRead;
+        let lines = std::io::BufReader::new(timed.0.stdout.take().unwrap()).lines();
+        for line in lines {
+            let line = line.unwrap();
+            if line.contains(&format!("waiting for build processes to end: PID {bpid}")) {
+                std::fs::write(&reading, "105").unwrap();
+            }
+            if line.contains("the host slept 5 s during this wait") {
+                b.0.kill().unwrap();
+                b.0.wait().unwrap();
+            }
+            text.push_str(&line);
+            text.push('\n');
+        }
+    }
+    let mut err = String::new();
+    std::io::Read::read_to_string(&mut timed.0.stderr.take().unwrap(), &mut err).unwrap();
+    let code = timed.0.wait().unwrap().code();
+    assert_eq!(code, Some(0), "{text}{err}");
+    assert!(
+        text.contains("the host slept 5 s during this wait"),
+        "{text}"
+    );
+    assert!(ran.exists(), "{text}{err}");
+}
+
 /// ⟨TLS-89⟩ The build scripts a timing waits for, and the grace wait:
 /// - Review r1 (Fable): a build SCRIPT between its cargo steps (no build-named
 ///   process) counts; review r1 (sol): run with an option operand before it

@@ -298,12 +298,15 @@ describe() {
 # since the record was written (its `suspended=` reading), else `)`: an old hold
 # can be a laptop that slept, not a hung holder (server1 suspends when moved).
 host_suspended() { "$(dirname "$0")/host-suspended" 2>/dev/null; }
+# At least 2 s: the readings are whole seconds (one that crossed a second
+# boundary moves by 1; review, sol), and a real suspend lasts far longer.
+# `$1`: the words after the seconds (default `of it with the host suspended`).
 suspended_since() {
     local s0 s1
     s0=$(field suspended)
     s1=$(host_suspended)
-    if [[ "$s0" =~ ^[0-9]+$ && "$s1" =~ ^[0-9]+$ ]] && ((s1 - s0 >= 1)); then
-        echo ", $((s1 - s0)) s of it with the host suspended)"
+    if [[ "$s0" =~ ^[0-9]+$ && "$s1" =~ ^[0-9]+$ ]] && ((s1 - s0 >= 2)); then
+        echo ", $((s1 - s0)) s ${1:-of it with the host suspended})"
     else
         echo ")"
     fi
@@ -319,7 +322,7 @@ timed_describe() {
         [[ -f "$f" ]] || continue
         probe s "$ids/timed.${f##*/}" || continue
         load "$f"
-        echo "timed by $(field owner) since $(field since) ($(field reason)$(suspended_since)"
+        echo "timed by $(field owner) since $(field since) ($(field reason)$(suspended_since "with the host suspended since")"
         return
     done
     echo "timed (its timing is starting)"
@@ -706,8 +709,13 @@ timed_start() {
         return 6
     }
     # Microseconds (EPOCHREALTIME): the deadline holds below a second too.
-    local now start last=-60 b list left_us nap_us quiet=""
+    # ⟨TLS-104⟩ EPOCHREALTIME keeps counting through a host suspend: a laptop that
+    # slept 33 min would "wait" its 1800 s in a few real seconds and refuse
+    # falsely (review, Fable). So at the deadline the wait is moved on by the
+    # time the host slept since it began (`host-suspended`), said once a rise.
+    local now start last=-60 b list left_us nap_us quiet="" susp0 susp slept_us=0
     start=${EPOCHREALTIME//[!0-9]/}
+    susp0=$(host_suspended)
     local wait_us=$((timed_wait * 1000000)) grace_us=$((timed_grace * 1000000))
     while :; do
         b=$(foreign_builds "$3")
@@ -716,6 +724,16 @@ timed_start() {
             quiet=""
             list=$(awk '{ printf "%sPID %s (%s)", (NR > 1 ? ", " : ""), $1, $2 }' <<<"$b")
             left_us=$((wait_us - (now - start)))
+            if ((left_us <= 0)); then
+                susp=$(host_suspended)
+                if [[ "$susp0" =~ ^[0-9]+$ && "$susp" =~ ^[0-9]+$ ]] &&
+                    (((susp - susp0) * 1000000 - slept_us >= 2000000)); then
+                    echo "cdo-slot: timed: the host slept $((susp - susp0)) s during this wait: it goes on that much longer"
+                    start=$((start + (susp - susp0) * 1000000 - slept_us))
+                    slept_us=$(((susp - susp0) * 1000000))
+                    left_us=$((wait_us - (now - start)))
+                fi
+            fi
             # A build seen at (or past) the deadline refuses; the sleeps below
             # never pass the deadline, so a scan always lands on it.
             ((left_us > 0)) || { refuse "build processes still running after ${timed_wait} s: $list"; return; }
