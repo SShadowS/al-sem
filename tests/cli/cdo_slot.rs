@@ -1658,12 +1658,14 @@ fn cdo_slot_timed_waits_for_builds_and_refuses_beside_one() {
 /// ⟨TLS-104⟩ A host suspend does not use up `run --timed`'s wait for builds: the
 /// wait is wall-clock time, which keeps counting while a laptop sleeps (review,
 /// Fable). A build runs and the wait is 2 s; once the run says it waits, the
-/// host "sleeps" 5 s (`CDO_HOST_SUSPENDED_FILE` moves from 100 to 105). At the
-/// deadline the run says so and waits on, instead of refusing; the build then
-/// ends and the timed command runs (exit 0).
+/// host "sleeps" 5 s (`CDO_HOST_SUSPENDED_FILE` moves from 100 to 105). The run
+/// says so and waits on on awake time; the build is ended only 3 s later, past
+/// the 2 s wall-clock deadline (ending it at once passed even with the wait on
+/// wall time: a first proof of this test came back green), and the timed
+/// command runs (exit 0).
 ///
-/// Mutation (2026-11-20): the deadline's suspend check dropped -> refused at
-/// 2 s, exit 6 (red); restored, green.
+/// Mutations (2026-11-20): the wait on wall time again (`now` less nothing
+/// slept) -> refused at 2 s, exit 6 (red); restored, green.
 #[test]
 fn cdo_slot_timed_wait_survives_a_host_suspend() {
     let s = Slot::new();
@@ -1702,6 +1704,8 @@ fn cdo_slot_timed_wait_survives_a_host_suspend() {
                 std::fs::write(&reading, "105").unwrap();
             }
             if line.contains("the host slept 5 s during this wait") {
+                // Past the 2 s wall-clock deadline, inside the awake one.
+                std::thread::sleep(std::time::Duration::from_secs(3));
                 b.0.kill().unwrap();
                 b.0.wait().unwrap();
             }

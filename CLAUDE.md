@@ -223,7 +223,14 @@ Every test still runs before a merge; the tiers decide HOW OFTEN each one runs.
   nothing). A block above 15 %, or a pass admitted by the timeout, labels the verdict
   "UNDER LOAD" with the shares; the same limits judge it (label, never hide; never weaken
   the gate). Shares and pressure are in `speed.json`; calibration in the CHANGELOG's
-  TLS-76 entry. Two passes cost ~+3 min per check, and the wait holds the CDO slot. **It is Linux only (it reads `/proc`):
+  TLS-76 entry. Two passes cost ~+3 min per check, and the wait holds the CDO slot.
+  **A host suspend is labelled too (TLS-104):** server1 is a laptop that suspends when moved.
+  `scripts/host-suspended` prints the host's suspended seconds (`CLOCK_BOOTTIME` minus
+  `CLOCK_MONOTONIC`); a rise around a timed call adds ` SUSPENDED:` to the verdict (the call ran
+  cold after a resume; instruction counts are unaffected), cdo-gate notes one per phase and in
+  its summary (its phase seconds are wall time and include the sleep), cdo-slot's `status` says
+  how much of a hold's age was a suspend, and `run --timed`'s wait for builds runs on awake time.
+  **It is Linux only (it reads `/proc`):
   on the Windows machine every full `cdo-gate` run FAILS unless given `--no-speed`**
   (an `--only` subset never runs it).
   **Instructions (TLS-83):** each timed call also counts user-mode instructions (`perf`,

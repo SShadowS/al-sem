@@ -35,7 +35,9 @@ rounds):
     pass runs anyway. Each timed block's CPU stall share (this container's `some total`
     over the block) is measured, and a block above CALM_PRESSURE (or a pass admitted by
     the timeout) labels the verdict "UNDER LOAD" with the shares: the same limits judge
-    it, nothing is skipped (TLS-76);
+    it, nothing is skipped (TLS-76). A host suspend before or during a timed call (the
+    host's suspended seconds, `scripts/host-suspended`, rose) labels it "SUSPENDED" the
+    same way (TLS-104: server1 is a laptop that sleeps when moved);
   rounds 1..N (default 3, at most 5, as many as ROUND_ROUTINES has; a larger --rounds is
     refused before anything starts): one CDO routine per round, a different one each round
     (a resident answer is kept, so asking the same routine again measures
