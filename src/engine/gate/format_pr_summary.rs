@@ -47,10 +47,14 @@ fn app_label(app: Option<&App>) -> String {
 ///
 /// Returns the string WITHOUT a trailing newline (the CLI / caller appends `"\n"`, like
 /// al-sem's `process.stdout.write(`${formatPrSummary(...)}\n`)`).
+///
+/// `focus_line` is `--focus`'s statement (ENG-168): written under the heading,
+/// before the empty-result return, so a focused summary always says what it hid.
 pub fn format_pr_summary(
     pairs: &[(FindingSummary, &Finding)],
     routines: &[crate::program::model::workspace::ModelRoutine],
     apps: &[App],
+    focus_line: Option<&str>,
 ) -> String {
     let idx = AttributionIndex::build(routines, apps);
 
@@ -86,7 +90,13 @@ pub fn format_pr_summary(
     if count_parts.is_empty() {
         lines.push("### Transaction integrity — no findings".to_string());
         lines.push(String::new());
-        lines.push("No transaction-integrity findings detected.".to_string());
+        if let Some(l) = focus_line {
+            lines.push("No findings in this view.".to_string());
+            lines.push(String::new());
+            lines.push(format!("_{l}_"));
+        } else {
+            lines.push("No transaction-integrity findings detected.".to_string());
+        }
         return lines.join("\n");
     }
 
@@ -95,6 +105,10 @@ pub fn format_pr_summary(
         count_parts.join(", ")
     ));
     lines.push(String::new());
+    if let Some(l) = focus_line {
+        lines.push(format!("_{l}_"));
+        lines.push(String::new());
+    }
 
     // --- per-severity groups ---
     for (sev, bucket) in &by_sev {
@@ -442,7 +456,7 @@ mod tests {
 
         // The format_pr_summary output must use the dep app label, NOT the primary app label
         let pairs: Vec<(FindingSummary, &Finding)> = vec![(summary, &finding)];
-        let md = format_pr_summary(&pairs, &routines, &apps);
+        let md = format_pr_summary(&pairs, &routines, &apps, None);
         assert!(
             md.contains("Dep/DepLib 1.0.0.0"),
             "F1: PR-summary must attribute the finding to the DEP app (raw primary_location):\n{md}"
@@ -487,7 +501,7 @@ mod tests {
             })
             .collect();
 
-        let md = format_pr_summary(&pairs, &routines, &apps);
+        let md = format_pr_summary(&pairs, &routines, &apps, None);
 
         // Exactly 10 "coverage:" lines (one per shown finding)
         let coverage_count = md.matches("  coverage:").count();
@@ -531,7 +545,7 @@ mod tests {
             Some(vec!["ExternalLib".to_string(), "OpaqueApp".to_string()]);
 
         let pairs: Vec<(FindingSummary, &Finding)> = vec![(summary, &finding)];
-        let md = format_pr_summary(&pairs, &routines, &apps);
+        let md = format_pr_summary(&pairs, &routines, &apps, None);
 
         assert!(
             md.contains("  coverage: partial — capped by: ExternalLib, OpaqueApp"),

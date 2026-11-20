@@ -180,6 +180,10 @@ struct Tool {
 struct Run {
     tool: Tool,
     results: Vec<SarifResult>,
+    /// The run's property bag: `{"hidden": ...}` under `--focus` (ENG-168), absent
+    /// otherwise, so an unfocused run is byte-identical.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    properties: Option<serde_json::Value>,
 }
 
 #[derive(Serialize)]
@@ -322,7 +326,15 @@ const SCHEMA: &str = "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/mas
 ///
 /// Output is `serde_json::to_string_pretty(...)` — 2-space indent matching
 /// `JSON.stringify(_, null, 2)`. The caller appends the trailing newline.
-pub fn format_sarif(summaries: &[FindingSummary], raws: &[&Finding], version: &str) -> String {
+///
+/// `hidden` is `--focus`'s statement (`runs[0].properties.hidden`); `None` writes
+/// no property bag.
+pub fn format_sarif(
+    summaries: &[FindingSummary],
+    raws: &[&Finding],
+    version: &str,
+    hidden: Option<serde_json::Value>,
+) -> String {
     debug_assert_eq!(summaries.len(), raws.len());
     let results: Vec<SarifResult> = summaries
         .iter()
@@ -343,6 +355,7 @@ pub fn format_sarif(summaries: &[FindingSummary], raws: &[&Finding], version: &s
                 },
             },
             results,
+            properties: hidden.map(|h| serde_json::json!({ "hidden": h })),
         }],
     };
 
@@ -537,7 +550,7 @@ mod tests {
 
     #[test]
     fn empty_findings_emits_empty_results_array() {
-        let s = format_sarif(&[], &[], "gate-sarif-v1");
+        let s = format_sarif(&[], &[], "gate-sarif-v1", None);
         assert!(s.contains("\"results\": []"));
         assert!(s.contains("\"version\": \"gate-sarif-v1\""));
     }

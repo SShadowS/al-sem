@@ -136,6 +136,7 @@ fn inline_suppress_args(disable_suppression: bool) -> AnalyzeArgs {
         deterministic: false,
         with_evidence: false,
         single_app: false,
+        focus: None,
     }
 }
 
@@ -329,6 +330,7 @@ fn d8_args(baseline: Option<&str>, update: bool, fail_on: Option<&str>) -> Analy
         deterministic: false,
         with_evidence: false,
         single_app: false,
+        focus: None,
     }
 }
 

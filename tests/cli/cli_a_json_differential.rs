@@ -179,6 +179,7 @@ fn run_json(fixture: &str, detector_csv: &str) -> String {
         deterministic: true,
         with_evidence: false,
         single_app: false,
+        focus: None,
     };
     // The pipeline returns (output, exit_code, warning); we only need the output.
     // The trailing newline is appended by the bin — add it here to match the golden.
@@ -532,6 +533,7 @@ fn run_json_path(ws: &Path, detector_csv: &str) -> String {
         deterministic: true,
         with_evidence: false,
         single_app: false,
+        focus: None,
     };
     match run_analyze_with_exit(
         &args.read_inputs(),

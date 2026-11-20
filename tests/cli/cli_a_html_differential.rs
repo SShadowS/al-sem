@@ -198,6 +198,7 @@ fn run_html(fixture: &str, detector_csv: &str) -> String {
         deterministic: true,
         with_evidence: false,
         single_app: false,
+        focus: None,
     };
     // The pipeline returns (output, exit_code, warning); we only need the output.
     // The trailing newline is appended by the bin — add it here to match the golden.

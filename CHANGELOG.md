@@ -131,6 +131,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   73.2-74.8 s on master and 74.5-75.3 s here (+1.6 % on the means, inside this host's noise),
   peak memory 2.1-2.3 GB on both.
 
+### Added (ENG-168: `alsem analyze --focus`, hiding findings by concern and saying what was hidden)
+
+- **Why.** An agent used `alsem analyze` on DO to see what a change does to data, transactions
+  and events. It got 2,447 findings. Most were performance findings (database calls in loops,
+  missing `SetLoadFields`), and it had to sort them out by hand.
+- **A concern per detector.** Every detector now states one in the registry: performance (13),
+  behaviour (33) or maintainability (9). The field is required, so a new detector cannot be
+  added without one. A test holds the whole table (spec
+  `docs/superpowers/specs/2026-11-20-eng168-analyze-focus-design.md` §3.2).
+- **The option.** `--focus <concern>[,<concern>...]` with `performance`, `behaviour` (or
+  `behavior`) and `maintainability`. The findings of the concerns not named are removed after
+  `--min-severity`, `--detector` and `--scope`, and before `--limit`, the baseline and inline
+  suppression. Focus comes before the limit because findings are sorted by detector: a limit
+  taken first would fill its slots with findings focus then hides. The detectors and their run
+  do not change, so a shown finding is the same, byte for byte, with and without `--focus`. A
+  finding from a detector the registry does not know is kept, never hidden.
+- **Nothing disappears silently.** Every format says what was hidden: the focus, the total,
+  and per hidden detector its concern and count. JSON has it in `payload.summary.hidden` (also
+  with `--with-evidence`; no schema change, the key exists only under `--focus`). SARIF has it
+  in `runs[0].properties.hidden` and also prints a stderr warning that the file is a partial
+  report, not to be uploaded as the full scan. Terminal, `--group-by`, pr-summary and html print
+  one line, also when nothing is shown. When the workspace could not be analysed, every format
+  says "focus requested, analysis unavailable" instead of a count.
+- **Refused.** `--update-baseline --focus` (the new baseline would lose every hidden finding)
+  and `--fail-on --focus` (a focused run could turn a failing gate clean) exit 3 before any
+  analysis or write. The CLI and the library entry (`AnalyzeJob::new`) run the same check. An
+  unknown value exits 3 and names the known ones. The same baseline hazard with the older
+  filters is TLS-106.
+- **Changed for library callers.** `AnalyzeOutput`'s third field is now a list of stderr
+  warnings, so a focused SARIF run on a degraded workspace prints both warnings.
+- **Without `--focus`** every output is unchanged; no golden moved.
+- **Measured.** MEASUREMENT
+
+### Added (TLS-104: a host suspend is labelled in cdo-speed, cdo-gate and cdo-slot)
+
 - **What happened.** During ENG-145's landing, cdo-speed's log jumped 33 minutes between two
   calls while the call itself read 8.2 s. server1 had suspended for 1,965 s
   (`/sys/power/suspend_stats/last_hw_sleep`). Every Claude session on the machine went quiet for

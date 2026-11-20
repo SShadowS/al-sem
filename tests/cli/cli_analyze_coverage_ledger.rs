@@ -164,6 +164,7 @@ fn analyze_args(ws: &Path) -> AnalyzeArgs {
         deterministic: true,
         with_evidence: false,
         single_app: false,
+        focus: None,
     }
 }
 
@@ -178,7 +179,9 @@ fn analyze_degrades_on_an_unreadable_dependency_and_reports_the_others() {
     let (out, exit, warning, _) =
         run_analyze_with_exit(&args.read_inputs(), &args.read_request(), &args, "test")
             .expect("analyze runs");
-    let warning = warning.expect("degraded");
+    let [warning] = &warning[..] else {
+        panic!("degraded: {warning:?}")
+    };
     assert!(
         warning.contains("1 unreadable dependency app(s): LedgerBroken"),
         "{warning}"
@@ -230,7 +233,9 @@ fn analyze_degrades_on_an_unbound_event_subscription() {
     let (_, _, warning, _) =
         run_analyze_with_exit(&args.read_inputs(), &args.read_request(), &args, "test")
             .expect("analyze runs");
-    let warning = warning.expect("degraded");
+    let [warning] = &warning[..] else {
+        panic!("degraded: {warning:?}")
+    };
     assert!(
         warning.contains("1 unbound event subscription(s)"),
         "{warning}"

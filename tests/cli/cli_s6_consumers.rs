@@ -366,6 +366,7 @@ fn html_report_draws_the_program_engines_event_graph() {
         deterministic: true,
         with_evidence: false,
         single_app: false,
+        focus: None,
     };
     let (html, ..) = run_analyze_with_exit(&args.read_inputs(), &args.read_request(), &args, "s6")
         .expect("analyze runs");

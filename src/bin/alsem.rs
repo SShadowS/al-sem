@@ -87,6 +87,7 @@ use al_sem::engine::gate::cache_prune::{format_prune_report, prune_cache};
 use al_sem::engine::gate::events::{EventsChainsOptions, EventsFanoutOptions, EventsJob};
 use al_sem::engine::gate::exit_code::{exit, parse_fail_on};
 use al_sem::engine::gate::filter::Scope;
+use al_sem::engine::gate::focus::{check_focus_conflicts, parse_focus};
 use al_sem::engine::gate::presets::{preset_names, resolve_analyze_detectors};
 use al_sem::engine::gate::run::{AnalyzeArgs, AnalyzeJob, OutputFormat};
 use al_sem::engine::gate::version::driver_version;
@@ -1139,6 +1140,15 @@ struct AnalyzeCli {
     /// subscribes to): cross-app findings such as d13/d16/d17, at more memory and time.
     #[arg(long = "single-app", default_value_t = false)]
     single_app: bool,
+
+    /// Show only these concerns' findings: performance | behaviour (or behavior) |
+    /// maintainability, comma-separated. The rest is hidden after --scope and before
+    /// --limit, the baseline and suppressions, and every format says how many were
+    /// hidden per detector. A focused SARIF file is a PARTIAL report: do not upload
+    /// it as the full scan (consumers read a missing alert as fixed). Refused with
+    /// --update-baseline and --fail-on.
+    #[arg(long = "focus")]
+    focus: Option<String>,
 }
 
 /// `ProveCli` — arguments for `alsem prove <ws> <routine> <question>`.
@@ -4071,6 +4081,18 @@ fn plan_analyze(a: AnalyzeCli, in_batch: bool) -> Planned {
         None => None,
     };
 
+    // --- validate --focus (ENG-168): an unknown value names the known ones. ---
+    let focus = match a.focus.as_deref().map(parse_focus).transpose() {
+        Ok(focus) => focus,
+        Err(msg) => {
+            return failed(
+                format!("al-sem: {msg}"),
+                exit::CONFIG_ERROR,
+                exit::ANALYSIS_FAILURE,
+            );
+        }
+    };
+
     let args = AnalyzeArgs {
         workspace: a.workspace,
         min_severity: a.min_severity,
@@ -4089,7 +4111,22 @@ fn plan_analyze(a: AnalyzeCli, in_batch: bool) -> Planned {
         deterministic: a.deterministic,
         with_evidence: a.with_evidence,
         single_app: a.single_app,
+        focus,
     };
+
+    // The refused `--focus` combinations, before any analysis or write; the
+    // same check `AnalyzeJob::new` runs for the direct entry.
+    if let Err(msg) = check_focus_conflicts(
+        args.focus.as_deref(),
+        args.update_baseline,
+        args.fail_on.as_deref(),
+    ) {
+        return failed(
+            format!("al-sem: {msg}"),
+            exit::CONFIG_ERROR,
+            exit::ANALYSIS_FAILURE,
+        );
+    }
 
     // `default_version` is the engine's default (unpinned) SARIF `driver.version`.
     // The differential always pins via `--sarif-version-override gate-sarif-v1`;
@@ -4110,7 +4147,8 @@ fn plan_analyze(a: AnalyzeCli, in_batch: bool) -> Planned {
             let request = args.read_request();
             let version = inputs.get().driver_version.clone();
             let (args, inputs, request, version) = hold(slot, (args, inputs, request, version));
-            // `new` fails only on the detector set, resolved above.
+            // `new` fails only on the focus conflicts and the detector set,
+            // both checked above.
             Box::new(
                 AnalyzeJob::new(inputs, request, args, version).expect("the detector set resolved"),
             )
@@ -5157,6 +5195,7 @@ mod tests {
                 deterministic: false,
                 with_evidence: false,
                 single_app: false,
+                focus: None,
             };
             let inputs = args.read_inputs();
             let result = run_analyze_with_exit(&inputs, &args.read_request(), &args, "test");
@@ -5185,6 +5224,7 @@ mod tests {
                 deterministic: false,
                 with_evidence: false,
                 single_app: false,
+                focus: None,
             };
             let inputs = args.read_inputs();
             let result = run_analyze_with_exit(&inputs, &args.read_request(), &args, "test");

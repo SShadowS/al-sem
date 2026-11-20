@@ -328,6 +328,9 @@ pub struct JsonFormatInputs<'a> {
     /// emitted on each finding (+ its `primaryLocation`), `payload.lineBase: 1`, and
     /// `schemaVersion` [`ANALYZE_EVIDENCE_SCHEMA_VERSION`].
     pub evidence: Option<&'a [FindingEvidence]>,
+    /// `--focus`'s statement, emitted as `payload.summary.hidden` (ENG-168). `None`
+    /// (no `--focus`) emits no key, byte-identical to before.
+    pub hidden: Option<serde_json::Value>,
 }
 
 /// Build the `DocumentEnvelope<"analyze-report", _>` as a `serde_json::Value`,
@@ -400,6 +403,9 @@ pub fn build_analyze_json(inputs: &JsonFormatInputs<'_>) -> String {
         inputs.coverage.source_units_parsed.into(),
     );
     summary.insert("totalFindings".to_string(), inputs.findings.len().into());
+    if let Some(hidden) = &inputs.hidden {
+        summary.insert("hidden".to_string(), hidden.clone());
+    }
 
     // --- payload.findings ---
     // Under --with-evidence (`inputs.evidence` Some), each finding is paired BY INDEX with
