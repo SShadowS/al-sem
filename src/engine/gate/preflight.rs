@@ -66,36 +66,35 @@ pub fn inputs_whole(fresh: &Result<FreshCoverage, String>) -> bool {
         && !fc.ledger.iter().any(is_unreadable)
 }
 
-/// The run's declared dependency apps (lowercase guids, from the ledger) by
-/// whether it had their bodies (TLS-106): `(bodied, unbodied)`. Bodied: found
-/// with source. Unbodied: found symbol-only, or not found at all. An
-/// unreadable package is neither (it already makes the inputs not whole). A
-/// baseline update compares these with the apps its file's runs had with
-/// source: a body lost since then stops pruning. Empty when the coverage
-/// could not be verified (the inputs are then not whole anyway).
-pub fn dependency_bodies(
-    fresh: &Result<FreshCoverage, String>,
-) -> (
-    std::collections::BTreeSet<String>,
-    std::collections::BTreeSet<String>,
-) {
-    let mut bodied = std::collections::BTreeSet::new();
-    let mut unbodied = std::collections::BTreeSet::new();
+/// A run's declared dependency apps (lowercase guids, from the ledger) by what
+/// it found of them (TLS-106). An unreadable package is in none of the three:
+/// it already makes the inputs not whole.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DependencyBodies {
+    /// Found with source.
+    pub bodied: std::collections::BTreeSet<String>,
+    /// Found symbol-only.
+    pub symbol_only: std::collections::BTreeSet<String>,
+    /// Not found at all (its package moved away or never installed).
+    pub missing: std::collections::BTreeSet<String>,
+}
+
+/// The run's [`DependencyBodies`]. A baseline update compares them with the
+/// apps its file's runs had with source and found at all: a body or an app
+/// lost since then stops pruning. Empty when the coverage could not be
+/// verified (the inputs are then not whole anyway).
+pub fn dependency_bodies(fresh: &Result<FreshCoverage, String>) -> DependencyBodies {
+    let mut deps = DependencyBodies::default();
     for e in fresh.iter().flat_map(|fc| &fc.ledger) {
-        match &e.found {
-            Some(f) if f.tier != crate::snapshot::TrustTier::SymbolOnly => {
-                bodied.insert(e.guid.clone());
-            }
-            Some(_) => {
-                unbodied.insert(e.guid.clone());
-            }
-            None if e.unreadable.is_none() => {
-                unbodied.insert(e.guid.clone());
-            }
-            None => {}
-        }
+        let into = match &e.found {
+            Some(f) if f.tier != crate::snapshot::TrustTier::SymbolOnly => &mut deps.bodied,
+            Some(_) => &mut deps.symbol_only,
+            None if e.unreadable.is_none() => &mut deps.missing,
+            None => continue,
+        };
+        into.insert(e.guid.clone());
     }
-    (bodied, unbodied)
+    deps
 }
 
 /// `evaluatePreflight(coverage, required)`, rewired onto [`FreshCoverage`].
@@ -379,12 +378,14 @@ mod tests {
         assert!(!inputs_whole(&Err("boom".into())), "unverified");
     }
 
-    /// TLS-106 (review r2, sol): a declared dependency with source is bodied;
-    /// one found symbol-only, or not found at all (the package moved away), is
-    /// unbodied; an unreadable one is neither.
+    /// TLS-106 (review r2 and r3, sol): a declared dependency with source is
+    /// bodied, one found symbol-only is symbol-only, one not found at all (the
+    /// package moved away) is missing; an unreadable one is none of them.
     ///
     /// Mutation (2026-11-20): the `None if e.unreadable.is_none()` arm made a
     /// no-op -> the missing app is not unbodied (red); restored, green.
+    /// Mutation (2026-11-20, round 3): that arm filed under `symbol_only` ->
+    /// `missing` is empty (red); restored, green.
     #[test]
     fn dependency_bodies_counts_missing_as_unbodied() {
         let found = |tier| LedgerApp {
@@ -413,11 +414,15 @@ mod tests {
             ledger: vec![sourced, symbols, missing, broken],
             ..clean()
         };
-        let (bodied, unbodied) = dependency_bodies(&Ok(fc));
-        assert_eq!(bodied.into_iter().collect::<Vec<_>>(), ["s"]);
-        assert_eq!(unbodied.into_iter().collect::<Vec<_>>(), ["m", "y"]);
-        let (bodied, unbodied) = dependency_bodies(&Err("boom".into()));
-        assert!(bodied.is_empty() && unbodied.is_empty());
+        let deps = dependency_bodies(&Ok(fc));
+        let list = |s: &std::collections::BTreeSet<String>| s.iter().cloned().collect::<Vec<_>>();
+        assert_eq!(list(&deps.bodied), ["s"]);
+        assert_eq!(list(&deps.symbol_only), ["y"]);
+        assert_eq!(list(&deps.missing), ["m"]);
+        assert_eq!(
+            dependency_bodies(&Err("boom".into())),
+            DependencyBodies::default()
+        );
     }
 
     #[test]

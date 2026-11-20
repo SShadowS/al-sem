@@ -447,6 +447,109 @@ fn a_moved_away_dependency_keeps_its_entries() {
     );
 }
 
+/// `analyze <ws> --deterministic --baseline <base> --format json <extra>` (no
+/// update): the findings it reports.
+fn reported(ws: &str, base: &str, extra: &[&str]) -> serde_json::Value {
+    let mut args = vec![
+        "analyze",
+        ws,
+        "--deterministic",
+        "--baseline",
+        base,
+        "--format",
+        "json",
+    ];
+    args.extend_from_slice(extra);
+    let out = alsem(&args);
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    v["payload"]["findings"].clone()
+}
+
+/// TLS-106 (review r3, sol): a symbol-only dependency the seed loaded, moved
+/// away at the update, keeps the file's entries: the run lost what that
+/// app's symbols gave, so nothing absent is proved gone. Restored, nothing is
+/// reported new.
+///
+/// Mutation (2026-11-20): the `lost_app` test removed from `update_baseline`
+/// -> the stale entry is dropped (red); restored, green.
+#[test]
+fn a_moved_away_symbol_only_dependency_keeps_entries() {
+    const DEP: &str = "cccc7777-0000-0000-0000-000000000010";
+    let dir = tempfile::tempdir().unwrap();
+    let ws = dir.path().join("ws");
+    crate::copy_dir(
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/r0-corpus/ws-cross-object-chain"),
+        &ws,
+    );
+    let ws = ws.to_str().unwrap().to_string();
+    let (path, seed) = seed_of(&dir, &ws, &[]);
+    assert!(
+        seed.contains("  \"bodiedApps\": [],\n") && seed.contains(&format!("    \"{DEP}\"")),
+        "precondition: loaded, symbol-only: {seed}"
+    );
+    let stale = with_stale(&seed, "d19-unused-parameter", "primary");
+    std::fs::write(&path, &stale).unwrap();
+    let app = Path::new(&ws).join(".alpackages/probe_CrossChainDep_1.0.0.0.app");
+    let away = dir.path().join("away.app");
+    std::fs::rename(&app, &away).unwrap();
+    let (code, counts) = update_json(&ws, &path, &[]);
+    assert_eq!(code, Some(0));
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), stale);
+    assert_eq!(
+        counts["keptUnchecked"],
+        serde_json::json!({"inputsNotWhole": 1})
+    );
+    std::fs::rename(&away, &app).unwrap();
+    assert_eq!(
+        reported(&ws, &path, &[]),
+        serde_json::json!([]),
+        "nothing new"
+    );
+}
+
+/// TLS-106 (review r3, sol): d17's own case. Its version-drift finding on
+/// `ws-d17-drift` comes from the dependency's package; moved away at the
+/// update, the finding is not seen, and its entry is kept (the dependency had
+/// a body at the seed, and was loaded: either loss alone blocks). Restored,
+/// nothing is reported new.
+///
+/// Mutation (2026-11-20): both the `lost_body` and the `lost_app` tests
+/// removed from `update_baseline` -> the d17 entry is dropped (red);
+/// restored, green. (Either one alone keeps it green: each covers this case.)
+#[test]
+fn a_d17_drift_entry_survives_its_package_moving_away() {
+    const D17: &str = "d17-min-version-drift";
+    let dir = tempfile::tempdir().unwrap();
+    let ws = dir.path().join("ws");
+    crate::copy_dir(
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/r0-corpus/ws-d17-drift"),
+        &ws,
+    );
+    let ws = ws.to_str().unwrap().to_string();
+    let (path, seed) = seed_of(&dir, &ws, &["--detector", D17]);
+    assert_eq!(
+        entries_of(&seed, "primary"),
+        1,
+        "precondition: one d17 entry"
+    );
+    let app = Path::new(&ws).join(".alpackages/dddddddd-0000-0000-0000-0000000000d17.app");
+    let away = dir.path().join("away.app");
+    std::fs::rename(&app, &away).unwrap();
+    let (code, counts) = update_json(&ws, &path, &["--detector", D17]);
+    assert_eq!(code, Some(0));
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), seed);
+    assert_eq!(
+        counts["keptUnchecked"],
+        serde_json::json!({"inputsNotWhole": 1})
+    );
+    std::fs::rename(&away, &app).unwrap();
+    assert_eq!(
+        reported(&ws, &path, &["--detector", D17]),
+        serde_json::json!([]),
+        "nothing new"
+    );
+}
+
 /// TLS-106 (review r2): a dependency the file never knew with source does not
 /// stop pruning, even with no body (two symbol-only dependencies here); one the
 /// file knew with source and the run has symbol-only does.

@@ -3,7 +3,8 @@
 //!
 //! Schema 2 (`--update-baseline` writes it):
 //! `{ schemaVersion: "2", generatedAt, universe, primaryApp, bodiedApps: string[],
-//! fingerprints: string[], entries: [{ fingerprint, detector, scope }] }`.
+//! loadedApps: string[], fingerprints: string[], entries: [{ fingerprint, detector,
+//! scope }] }`.
 //!   - `fingerprints` is what suppression reads ([`load_baseline`]), so a schema-1
 //!     reader still works. A fingerprint listed with no entry is a schema-1 entry (no
 //!     detector known): a schema-1 file, a hand edit, an old binary's rewrite.
@@ -19,6 +20,11 @@
 //!     list only grows (the union of the file's and the run's), so a lost body keeps
 //!     blocking until it returns or the file is rebuilt. A schema-2 file without the
 //!     key (written before it existed) reads as an empty list.
+//!   - `loadedApps` lists the dependency apps the file's runs found in any form
+//!     (with source or symbol-only). A run that cannot find one of them at all lost
+//!     what its symbols gave (a version, an obsolete tag): it prunes nothing either.
+//!     It grows and reads like `bodiedApps`. A new symbol-only dependency is
+//!     accepted.
 //!
 //! Versions: `"1"`, the number `1` or a missing `schemaVersion` are schema 1 (a file
 //! of fingerprints only); `"2"` is schema 2; any other value is a schema this alsem
@@ -207,12 +213,9 @@ pub struct UpdateRun {
     pub prunes_dependency: bool,
     /// `preflight::inputs_whole`.
     pub inputs_whole: bool,
-    /// The declared dependency apps (lowercase guids) the run had with source
-    /// (`preflight::dependency_bodies`).
-    pub bodied_apps: BTreeSet<String>,
-    /// The declared dependency apps the run had without a body: symbol-only, or
-    /// not found.
-    pub unbodied_apps: BTreeSet<String>,
+    /// The run's declared dependency apps (lowercase guids) by what it found
+    /// of them (`preflight::dependency_bodies`).
+    pub dependencies: crate::engine::gate::preflight::DependencyBodies,
     /// Every finding the detectors emitted: before the registry's scope tail
     /// (`RunOutput::scoped_out` included) and before the gate's
     /// `--min-severity`, detector allow-list, scope filter and `--limit`.
@@ -292,6 +295,7 @@ struct Stamp {
     /// Empty: not stamped yet.
     primary_app: String,
     bodied_apps: BTreeSet<String>,
+    loaded_apps: BTreeSet<String>,
 }
 
 /// The old file, as an update reads it.
@@ -356,10 +360,12 @@ fn read_old(file: &FileInput) -> Result<OldFile, Refusal> {
             }
             let primary_app = text_field(&v, "primaryApp")?;
             // Absent in a schema-2 file written before it existed: none.
-            let bodied_apps = match v.get("bodiedApps") {
-                None => BTreeSet::new(),
-                Some(_) => strings("bodiedApps")?,
+            let optional = |key: &str| match v.get(key) {
+                None => Ok(BTreeSet::new()),
+                Some(_) => strings(key),
             };
+            let bodied_apps = optional("bodiedApps")?;
+            let loaded_apps = optional("loadedApps")?;
             let rows = v
                 .get("entries")
                 .and_then(|e| e.as_array())
@@ -390,6 +396,7 @@ fn read_old(file: &FileInput) -> Result<OldFile, Refusal> {
                     universe,
                     primary_app,
                     bodied_apps,
+                    loaded_apps,
                 }),
                 fingerprints,
                 entries,
@@ -452,20 +459,28 @@ pub fn update_baseline(old: &FileInput, run: &UpdateRun) -> Result<BaselineUpdat
         _ => run.primary_app.clone(),
     };
     // A dependency the file's runs had with source and this run lacks the body
-    // of (symbol-only now, or not found) may have hidden a recorded finding:
-    // nothing absent is proved gone. A new or never-bodied one is accepted. The
-    // file keeps every body it ever had, so a lost one keeps blocking.
-    let file_bodied = old
+    // of (symbol-only now, or not found), or one they found in any form and
+    // this run cannot find, may have hidden a recorded finding: nothing absent
+    // is proved gone. A new dependency, symbol-only or not, is accepted. The
+    // file keeps every body and every app it ever had, so a loss keeps blocking.
+    let empty = BTreeSet::new();
+    let (file_bodied, file_loaded) = old
         .stamp
         .as_ref()
-        .map(|s| s.bodied_apps.clone())
-        .unwrap_or_default();
-    let inputs_whole = run.inputs_whole
-        && file_bodied
-            .intersection(&run.unbodied_apps)
-            .next()
-            .is_none();
-    let bodied_apps: BTreeSet<String> = file_bodied.union(&run.bodied_apps).cloned().collect();
+        .map_or((&empty, &empty), |s| (&s.bodied_apps, &s.loaded_apps));
+    let deps = &run.dependencies;
+    let lost_body = file_bodied
+        .iter()
+        .any(|g| deps.symbol_only.contains(g) || deps.missing.contains(g));
+    let lost_app = file_loaded.iter().any(|g| deps.missing.contains(g));
+    let inputs_whole = run.inputs_whole && !lost_body && !lost_app;
+    let bodied_apps: BTreeSet<String> = file_bodied.union(&deps.bodied).cloned().collect();
+    let loaded_apps: BTreeSet<String> = file_loaded
+        .iter()
+        .chain(&deps.bodied)
+        .chain(&deps.symbol_only)
+        .cloned()
+        .collect();
     let mut seen: BTreeMap<&str, Vec<&Entry>> = BTreeMap::new();
     for e in &run.before_filters {
         seen.entry(e.fingerprint.as_str()).or_default().push(e);
@@ -509,6 +524,7 @@ pub fn update_baseline(old: &FileInput, run: &UpdateRun) -> Result<BaselineUpdat
         universe: run.universe,
         primary_app: &primary_app,
         bodied_apps: &bodied_apps,
+        loaded_apps: &loaded_apps,
     };
     Ok(BaselineUpdate {
         bytes: serialize_v2(&header, &fingerprints, &entries).into_bytes(),
@@ -524,6 +540,7 @@ struct Header<'a> {
     universe: &'a str,
     primary_app: &'a str,
     bodied_apps: &'a BTreeSet<String>,
+    loaded_apps: &'a BTreeSet<String>,
 }
 
 /// `  "<key>": [ ... ],` (2-space JSON), a sorted list of strings.
@@ -552,6 +569,7 @@ fn serialize_v2(header: &Header, fingerprints: &BTreeSet<String>, entries: &[Ent
         json_str(header.primary_app)
     ));
     push_string_list(&mut out, "bodiedApps", header.bodied_apps.iter());
+    push_string_list(&mut out, "loadedApps", header.loaded_apps.iter());
     push_string_list(&mut out, "fingerprints", fingerprints.iter());
     if entries.is_empty() {
         out.push_str("  \"entries\": []\n");
@@ -704,6 +722,7 @@ mod tests {
     const D3: &str = "d3-missing-setloadfields";
     const APP: &str = "11111111-1111-1111-1111-111111111111";
     const BODIED: &str = "bodied-dep";
+    const OPAQUE: &str = "opaque-dep";
 
     fn e(fp: &str, detector: &str, scope: EntryScope) -> Entry {
         Entry {
@@ -728,8 +747,11 @@ mod tests {
             primary_app: APP.to_string(),
             prunes_dependency: false,
             inputs_whole: true,
-            bodied_apps: set(&[BODIED]),
-            unbodied_apps: set(&["opaque-dep"]),
+            dependencies: crate::engine::gate::preflight::DependencyBodies {
+                bodied: set(&[BODIED]),
+                symbol_only: set(&[OPAQUE]),
+                missing: set(&[]),
+            },
             before_filters: vec![],
             shown: vec![],
             selected: set(&[D1, D3]),
@@ -755,10 +777,12 @@ mod tests {
         let mut entries = entries.to_vec();
         entries.sort();
         let bodied = set(&[BODIED]);
+        let loaded = set(&[BODIED, OPAQUE]);
         let header = Header {
             universe: "cross-app",
             primary_app: APP,
             bodied_apps: &bodied,
+            loaded_apps: &loaded,
         };
         serialize_v2(&header, &fps, &entries)
     }
@@ -1063,14 +1087,51 @@ mod tests {
     fn a_lost_body_stops_pruning_a_new_unbodied_app_does_not() {
         let old = v2(&[p("aa", D1)], &[]);
         let mut r = run();
-        r.bodied_apps = set(&[]);
-        r.unbodied_apps = set(&["opaque-dep", BODIED]);
+        r.dependencies.bodied = set(&[]);
+        r.dependencies.symbol_only = set(&[OPAQUE, BODIED]);
         let u = update(&old, &r);
         assert_eq!(text(&u), old, "kept, the lost body still listed");
         assert_eq!(reasons(&u), vec![("inputsNotWhole", 1)]);
         // A file written before `bodiedApps` existed: accepted, then stamped.
         let pre = old.replace(
             &format!("  \"bodiedApps\": [\n    \"{BODIED}\"\n  ],\n"),
+            "",
+        );
+        assert_ne!(pre, old, "precondition: the key removed");
+        let u = update(&pre, &run());
+        assert_eq!(text(&u), v2(&[], &[]), "pruned, then stamped");
+    }
+
+    /// TLS-106 (review r3, sol): a dependency the file's runs found only
+    /// symbol-only, and this run cannot find at all, lost what its symbols gave
+    /// (d17's version drift): it stops pruning, and the file keeps it in
+    /// `loadedApps`. A dependency the file never found, missing now, is
+    /// accepted; so is a new symbol-only one. A schema-2 file with no
+    /// `loadedApps` reads as none.
+    ///
+    /// Mutation (2026-11-20): the `lost_app` test removed from
+    /// `update_baseline` -> the stale entry is dropped (red); restored, green.
+    /// Mutation (2026-11-20): the written `loadedApps` made the run's found
+    /// apps only (no file's list) -> the missing app leaves the header (red);
+    /// restored, green.
+    #[test]
+    fn a_lost_symbol_only_app_stops_pruning_a_never_found_one_does_not() {
+        let old = v2(&[p("aa", D1)], &[]);
+        let mut r = run();
+        r.dependencies.symbol_only = set(&[]);
+        r.dependencies.missing = set(&[OPAQUE]);
+        let u = update(&old, &r);
+        assert_eq!(text(&u), old, "kept, the lost app still listed");
+        assert_eq!(reasons(&u), vec![("inputsNotWhole", 1)]);
+        // Never found by the file's runs: missing now is accepted.
+        let mut r = run();
+        r.dependencies.missing = set(&["never-found"]);
+        let u = update(&old, &r);
+        assert_eq!(text(&u), v2(&[], &[]), "pruned");
+        // A file written before `loadedApps` existed, and a symbol-only app
+        // it never had: accepted.
+        let pre = old.replace(
+            &format!("  \"loadedApps\": [\n    \"{BODIED}\",\n    \"{OPAQUE}\"\n  ],\n"),
             "",
         );
         assert_ne!(pre, old, "precondition: the key removed");
