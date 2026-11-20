@@ -76,8 +76,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reads it, keeps every fingerprint, records a detector for each one the run sees, and writes
   schema 2. Fingerprints no run sees stay (counted as 'no detector known') until you rebuild.
   Reading a baseline (`--baseline` alone) works with both schemas. A file with no
-  `schemaVersion`, or a numeric one, is read as schema 1, as before. Update every machine that
-  writes the file: an old binary still writes schema 1 with the old, lossy rule.
+  `schemaVersion`, or the number `1`, is read as schema 1, as before. Update every machine
+  that writes the file: an old binary still writes schema 1 with the old, lossy rule.
 - **If an earlier filtered update damaged your baseline,** rebuild it once: delete the file
   and run `alsem analyze <ws> --scope all --baseline <file> --update-baseline` with the
   detectors your gate uses (`--preset`, opt-in detectors). This accepts every current finding
@@ -85,24 +85,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   updates you like: they now keep what they do not see.
 - **Refused now, nothing written:** an update of a malformed file (it used to be overwritten),
   of a file whose `entries` name a fingerprint `fingerprints` does not list, or of an unknown
-  `schemaVersion` string (exit 2), checked before any analysis, so even an empty or failing
+  `schemaVersion` (exit 2), checked before any analysis, so even an empty or failing
   workspace refuses; an update in another universe (`--single-app` on a cross-app file) or for
   another primary app (exit 3). A missing file is written, as before.
-- **Refused now on a plain read too:** a `schemaVersion` string other than `"1"` and `"2"`
-  (exit 2). A later schema may give `fingerprints` another meaning, so an unknown one is not
-  guessed at (it used to be read).
 - **The file, schema 2.** `universe` and `primaryApp` bind it to its runs; an empty
   `primaryApp` is not stamped yet, and the first update with an app id stamps it.
-  `opaqueApps` lists the symbol-only dependency apps the file's runs had. `fingerprints` is
-  what suppression reads, so a schema-1 reader still works. `entries` holds each
-  fingerprint's detector and scope (`primary` or `dependency`), sorted and deduped. A
+  `bodiedApps` lists the dependency apps (by guid) the file's runs had with source.
+  `fingerprints` is what suppression reads, so a schema-1 reader still works. `entries` holds
+  each fingerprint's detector and scope (`primary` or `dependency`), sorted and deduped. A
   fingerprint listed with no entry is a schema-1 entry: kept until a run sees it.
 - **How it works.**
-  - The registry labels each finding primary or dependency by the one predicate `--scope
-    primary` drops by (`in_primary_scope`, single-app and cross-app alike), and remembers the
-    fingerprints its primary tail drops. A finding that drifted out of the primary scope is
-    still present, so its entry is kept. A dependency entry is dropped only by a cross-app
-    `--scope all` run.
+  - The registry labels each finding primary or dependency by the predicate `--scope
+    primary` drops by (`in_primary_scope` cross-app; single-app keeps the role rule alone, so
+    its output is unchanged by construction), and remembers the fingerprints its primary tail
+    drops. A finding that drifted out of the primary scope is still present, so its entry is
+    kept. A dependency entry is dropped only by a cross-app `--scope all` run.
   - A fingerprint the run saw takes the run's own entries (detector and scope), so a label
     that drifted is corrected.
   - Each detector's incompleteness signals are listed in one place
@@ -117,13 +114,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Inputs are whole (`preflight::inputs_whole`) unless the coverage could not be verified,
     its contract failed, a file was parsed with recovery, or a dependency package was
     unreadable, unidentified or encrypted. Unknown call edges and unbound subscriptions do not
-    stop pruning: every real workspace has some. Symbol-only dependencies do not either, as
-    long as the file recorded them: an app that is symbol-only now and was not before lost
-    bodies, so that run prunes nothing. The file keeps only the opacity all its runs had.
+    stop pruning: every real workspace has some. A declared dependency without a body
+    (symbol-only, or its package not found) does not either, unless the file's runs had it
+    with source: then this run lost findings through it and prunes nothing (review r2, sol: a
+    package moved away). A new dependency, or one never seen with source, is accepted. The
+    file's `bodiedApps` only grows, so a lost body keeps blocking until it returns or the file
+    is rebuilt; a dependency no longer declared is not counted. A schema-2 file written
+    before `bodiedApps` existed reads as none recorded.
   - A batch job's plan declares its baseline as read and written.
-- **Unchanged.** Without `--update-baseline` every output is byte for byte as before. The
-  `skipped` keys `outputCapped`, `cappedPerTryRoutine` and `crossCallTruncated` were already
-  in `detectorStats` before this change and stay.
+- **Changed without `--update-baseline`: a plain read refuses an unknown `schemaVersion`.** A
+  `--baseline` file whose `schemaVersion` is anything but `"1"`, the number `1`, `"2"` or
+  absent is now refused (exit 2); it used to be read for its `fingerprints`. A later schema
+  may give `fingerprints` another meaning, so an unknown one is not guessed at.
+- **Unchanged otherwise.** Without `--update-baseline` every other output is byte for byte
+  as before. The `skipped` keys `outputCapped`, `cappedPerTryRoutine` and
+  `crossCallTruncated` were already in `detectorStats` before this change and stay.
 - **Measured.** On CDO (`bc3ccb18`, clean), release-fast, master `bd988b97` against this
   branch `2d53ad52`:
   - Without `--update-baseline` nothing changes (`scripts/cdo-before-after`): analyze at both
