@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (TLS-107: TLS-104's suspend test no longer fails on a loaded machine)
+
+- **What failed.** `cdo_slot_timed_wait_survives_a_host_suspend` failed in task gates under
+  parallel nextest load (exit 6, "build processes still running after 2 s"), in ENG-168's and
+  ENG-160's gates among others; alone it passed.
+- **Why.** The timed wait's 2 s budget starts before its first scan of the process table
+  (`pgrep` per build name). With many processes running, that scan alone took over 2 s, so
+  the run refused before it printed the line the test injects the suspend on. The kill margin
+  was also thin: about 1 s past the 7 s awake deadline.
+- **The fix (test only; `scripts/cdo-slot` is unchanged).** The wait budget is 10 s, the fake
+  suspend 60 s, and the stand-in build is killed 12 s after the run started: past the 10 s
+  wall-clock deadline (so the test still proves the wait runs on awake time) and about 58 s
+  before the awake one. The suspend is still injected on the "waiting" line, so the order of
+  events is fixed.
+- **Shown.** With `pgrep` slowed to 3 s per call (a wrapper on `PATH`), the old test failed
+  3 of 3 runs and the new one passed 3 of 3. Under load (all 22 cores busy, plus 2,000 and
+  4,000 sleeping processes) the old test failed 1 of 16 runs and the new one passed 40 of 40.
+  The proof still holds: the wait on wall time again is refused at 10 s (red). The other
+  2 s-budget tests in the file all expect a refusal, which load only makes more certain.
+
 ### Fixed (ENG-152: interface implementers are found by the interface's identity, not its name)
 
 - **The gap.** Implementers were filed under the interface's folded name. Two apps that each
