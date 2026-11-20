@@ -622,6 +622,15 @@ pub(crate) fn enum_covered_by_routes(
         Some(k) => index.interface_is_or_derives(k, iface),
         None => true,
     };
+    // A key that binds no single interface may add a codeunit to check, but
+    // never stands in for `iface`'s own mapping (review, sol): `iface` needs
+    // a key that binds to it, or to an interface derived from it.
+    let surely_for_iface = |(i, _): &(InterfaceRef, ObjectRef)| {
+        graph
+            .bind_interface(enum_node.id.app, i)
+            .exact()
+            .is_some_and(|k| index.interface_is_or_derives(k, iface))
+    };
     let has_entry = |name: &str| {
         enum_node
             .enum_impls
@@ -633,7 +642,7 @@ pub(crate) fn enum_covered_by_routes(
             .implements
             .iter()
             .all(|i| has_entry(&fold_ref_name(&i.name)))
-        || !enum_node.enum_impls.iter().any(|e| for_iface(&e))
+        || !enum_node.enum_impls.iter().any(surely_for_iface)
     {
         return false;
     }
@@ -1248,11 +1257,29 @@ enum 50106 "Other Kind" implements "Other Strategy"
             super::enum_covered_by_routes(graph, &index, &node, &demo_strategy(graph), routes),
             "precondition: covered as extracted"
         );
+        let unbound_keys = {
+            let mut n = node.clone();
+            for (i, _) in &mut n.enum_impls {
+                i.app = Some("0badf00d0badf00d0badf00d0badf00d".into());
+            }
+            n
+        };
         node.implements.push("Other Strategy".into());
         assert!(!super::enum_covered_by_routes(
             graph,
             &index,
             &node,
+            &demo_strategy(graph),
+            routes
+        ));
+        // ENG-152 (review, sol): keys naming an app that is not loaded bind no
+        // interface; they never stand in for `Demo Strategy`'s own mapping.
+        // Mutation (2026-11-20): the existence check counting a non-exact key
+        // -> covered (red); restored, green.
+        assert!(!super::enum_covered_by_routes(
+            graph,
+            &index,
+            &unbound_keys,
             &demo_strategy(graph),
             routes
         ));

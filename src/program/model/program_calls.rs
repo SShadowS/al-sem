@@ -2845,9 +2845,9 @@ impl<'a> Converter<'a> {
                     o.implements
                         .iter()
                         .any(|r| match self.graph.bind_interface(o.id.app, r) {
+                            // By name alone, as the unbound bucket (review, sol).
                             InterfaceBinding::Unbound => {
                                 binding == InterfaceBinding::Unbound
-                                    && r.app == iref.app
                                     && r.name.fold_identifier() == iref.name.fold_identifier()
                             }
                             b => b.ids().iter().any(|k| {

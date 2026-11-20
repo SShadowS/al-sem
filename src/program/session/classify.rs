@@ -33,8 +33,9 @@ use crate::program::str_pool::SharedStr;
 use crate::snapshot::TrustTier;
 
 /// Bumped whenever the encoding or [`EXCLUDED`] changes. Hashed first, so two
-/// versions never compare equal.
-pub const DECL_PROJECTION_VERSION: u32 = 1;
+/// versions never compare equal. 2 (ENG-152): interface references encode
+/// their app and `inferred`.
+pub const DECL_PROJECTION_VERSION: u32 = 2;
 
 /// The fields the projection leaves out, and only these: the positions of a
 /// declaration (they move with every edit above it; the location domains of

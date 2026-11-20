@@ -406,6 +406,26 @@ fn interface_meta_counts_a_derived_interfaces_implementer() {
     assert!(metas[0].unresolved_impls.is_empty(), "{metas:?}");
 }
 
+/// ENG-152 (review, sol): an interface no loaded app declares. The dependency's
+/// enum implements `#<absent app>#IGone`, the workspace site is typed with a
+/// bare `IGone`: neither binds, so the meta's enum list matches them by name,
+/// as dispatch's unbound bucket does. Mutation (2026-11-20): the unbound match
+/// requiring equal apps again -> no enum (red); restored, green.
+#[test]
+fn interface_meta_lists_an_unbound_enum_by_name() {
+    let symbols = r##"{"EnumTypes":[{"Id":80,"Name":"Gone Kind","ImplementedInterfaces":["#0badf00d0badf00d0badf00d0badf00d#IGone"],"Values":[{"Name":"A","Ordinal":0}]}]}"##;
+    let cu = "codeunit 50101 \"W\"\n{\n    procedure Caller()\n    var\n        X: Interface IGone;\n    begin\n        X.Go();\n    end;\n}\n";
+    let a = adapt(&[("src/w.al", cu)], Some(symbols));
+    let cs = a.site("Caller", "X.Go");
+    let metas: Vec<_> = a
+        .edges(&cs.id)
+        .into_iter()
+        .filter_map(|e| e.dispatch_meta)
+        .collect();
+    assert_eq!(metas.len(), 1, "{metas:?}");
+    assert_eq!(metas[0].enum_implementers.len(), 1, "{metas:?}");
+}
+
 /// Row "Polymorphic (interface)", engine-switch S3.2: one `Interface`+`Maybe`
 /// edge to the workspace implementer, `dispatch_meta` on it, and one to-less
 /// `Interface`+`ExternalTarget` edge naming the dependency implementer
