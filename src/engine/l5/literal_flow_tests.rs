@@ -240,12 +240,16 @@ table 50422 "CF Doc" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Co
 table 50423 "CF Log" { fields { field(1; Code; Code[20]) { } } keys { key(PK; Code) { } } }
 codeunit 50424 "CF Deep"
 {
+    // ENG-159: `Post(V)` reads `V` after the chain returns, so the root's answer needs the whole
+    // chain's write-back: one evaluation nested through every call (reads at their position no
+    // longer nest for an argument read before its own call).
     procedure Shallow(var Batch: Record "CF Batch")
     var
         V: Variant;
     begin
         V := Batch;
         W1(V);
+        Post(V);
     end;
 
     procedure Deep(var Batch: Record "CF Batch")
@@ -254,12 +258,12 @@ codeunit 50424 "CF Deep"
     begin
         V := Batch;
         D1(V);
+        Post(V);
     end;
 
     local procedure Execute(var V: Variant)
     begin
         Release(V);
-        Post(V);
     end;
 
     local procedure Release(var V: Variant)
@@ -328,8 +332,25 @@ codeunit 50424 "CF Deep"
 /// answer must be the same. Before the fix the flow kept one memo and budget
 /// for the whole read and marked the cut-off values final, so `Shallow` read
 /// `Deep`'s truncated `W` values and kept the insert.
+///
+/// ENG-159: the fixture has no store, so no code keeps a record of its
+/// RecordRefs or Variants; the test states that ([`KeptElsewhere::Nothing`]).
+/// Under production's input (any parameter may be kept, the sound rule) the
+/// chain's calls may rebind `V`, every value past a call is "anything", and the
+/// cutoff could not change an answer. ENG-161's escape facts prove `Nothing`
+/// for such a program. The roots read `V` after the chain returns, so the
+/// answer nests through every call (reads at their position, ENG-159 Part A, do
+/// not nest for an argument read before its own call).
+///
+/// Discrimination (2026-11-20): one `EvalState` (memo and budget) shared by
+/// every evaluation of the read, the pre-ENG-18 shape, fails "Shallow asked
+/// after Deep answers as it does alone"; the per-evaluation state, restored,
+/// passes. (Sharing only the cut-off values through the results cache stayed
+/// green: nested evaluations never consult that cache.)
 #[test]
 fn a_roots_answer_does_not_depend_on_what_was_asked_before() {
+    use crate::engine::l5::literal_reach::KeptElsewhere;
+    let reach = |tree, model| LiteralReach::with_kept(tree, model, KeptElsewhere::Nothing);
     let tmp = depth_fixture();
     let (base, tree) = crate::engine::l5::digest::wave2_index_tests::tree_over(
         tmp.path(),
@@ -363,18 +384,18 @@ fn a_roots_answer_does_not_depend_on_what_was_asked_before() {
             .contains(&log_insert(fx))
     };
 
-    let alone = LiteralReach::new(&tree, model);
+    let alone = reach(&tree, model);
     assert!(
         dead(&alone, &shallow, &shallow_fx),
         "precondition: asked alone, Shallow's chain is within the cutoff and the insert is ruled out"
     );
-    let deep_alone = LiteralReach::new(&tree, model);
+    let deep_alone = reach(&tree, model);
     assert!(
         !dead(&deep_alone, &deep, &deep_fx),
         "precondition: Deep's chain crosses the cutoff, so the insert is kept there"
     );
 
-    let batch = LiteralReach::new(&tree, model);
+    let batch = reach(&tree, model);
     assert!(!dead(&batch, &deep, &deep_fx), "Deep's own answer");
     assert!(
         dead(&batch, &shallow, &shallow_fx),
@@ -383,7 +404,7 @@ fn a_roots_answer_does_not_depend_on_what_was_asked_before() {
 
     // The other order (review): Shallow's exact values must not reach Deep,
     // whose own evaluation crosses the cutoff.
-    let reverse = LiteralReach::new(&tree, model);
+    let reverse = reach(&tree, model);
     assert!(
         dead(&reverse, &shallow, &shallow_fx),
         "Shallow's own answer"

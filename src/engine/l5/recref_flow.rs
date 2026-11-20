@@ -223,6 +223,8 @@ pub(crate) struct RecRefFlow<'a> {
     /// TLS-22: shared by the literal pass's workers, never locked while
     /// evaluating; two workers may evaluate one key, and get the same answer.
     results: Mutex<HashMap<EvalKey, Option<(HashMap<String, Val>, Timeline)>>>,
+    /// ENG-159: which holders may be kept elsewhere (the constructor's input).
+    kept: KeptElsewhere,
     /// Tests: runs after a `results` miss, the lock released, before the
     /// evaluation (TLS-22 forces two workers to miss one key).
     #[cfg(test)]
@@ -258,8 +260,37 @@ const EVAL_BUDGET: usize = 200_000;
 /// The deepest chain of calls one evaluation follows.
 const EVAL_DEPTH: usize = 48;
 
+/// Which RecordRefs and Variants may share a record with code the routine cannot see, so a place
+/// that may run user code may rebind them (the sound rule, ENG-159; BC 28.4: `A := R` shares one
+/// handle, `GetTable` through either rebinds both).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum KeptElsewhere {
+    /// Every parameter, global, call result, and holder already passed to a call that may keep
+    /// it (`recref_alias::AliasClasses`' retainable holders): production, until escape facts
+    /// (ENG-161) say which are kept.
+    AnyExternal,
+    /// None: the caller states that no code keeps a record of the program's RecordRefs (a test
+    /// fixture with no store; what escape facts prove for such a program). Production builds it
+    /// once ENG-161's escape facts prove it.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "stated by tests until ENG-161's escape facts compute it"
+        )
+    )]
+    Nothing,
+}
+
 impl<'a> RecRefFlow<'a> {
-    pub(crate) fn new(model: &'a Model, edges: &'a [SnapshotGraphEdge]) -> Self {
+    /// `kept`: which RecordRefs and Variants code the routine cannot see may hold a record of
+    /// (ENG-159). Production passes [`KeptElsewhere::AnyExternal`] (the sound rule); ENG-161's
+    /// escape facts will compute it.
+    pub(crate) fn new(
+        model: &'a Model,
+        edges: &'a [SnapshotGraphEdge],
+        kept: KeptElsewhere,
+    ) -> Self {
         let routines = model.workspace.routines.as_slice();
         // A call targets EVERY row of its routine (a routine declared in two `#if` arms is two
         // rows with one id): one row's summary would miss what only the other arm does to a
@@ -459,6 +490,7 @@ impl<'a> RecRefFlow<'a> {
                     r,
                     in_place.get(r.object_id.as_str()).unwrap_or(&none),
                     &own_id_tables,
+                    kept,
                 )
             })
             .collect();
@@ -475,6 +507,7 @@ impl<'a> RecRefFlow<'a> {
             facts,
             closure: HashMap::new(),
             self_escapes,
+            kept,
             converged: false,
             sensitive: Vec::new(),
             results: Mutex::new(HashMap::new()),
@@ -1130,6 +1163,11 @@ impl<'a> RecRefFlow<'a> {
         let i = off / size;
         (off % size == 0 && i < self.routines.len() && std::ptr::eq(&self.routines[i], r))
             .then_some(i)
+    }
+
+    /// ENG-159: the "may be kept elsewhere" input the flow was built with.
+    pub(crate) fn kept(&self) -> KeptElsewhere {
+        self.kept
     }
 
     pub(crate) fn routine(&self, i: usize) -> &'a ModelRoutine {
@@ -2012,6 +2050,7 @@ fn keeps_unresolved(r: &ModelRoutine, cs: &PCallSite) -> bool {
 pub(crate) fn exit_guards(
     r: &ModelRoutine,
     anytime: impl Fn(&str) -> bool,
+    kept_elsewhere: KeptElsewhere,
 ) -> Vec<(String, Vec<String>, HashSet<String>)> {
     let mut out: Vec<(String, Vec<String>, HashSet<String>)> = Vec::new();
     let Some(tree) = r.statement_tree.as_ref() else {
@@ -2036,7 +2075,10 @@ pub(crate) fn exit_guards(
     // holders (a record kept elsewhere may be rebound by a place that may run user code;
     // `RetainedNumber`: `Store.Rebind(); if A.Number <> …`).
     let kept = crate::program::model::recref_alias::AliasClasses::for_routine(r);
-    let user_code = crate::program::model::recref_alias::user_code_points(r);
+    let user_code = match kept_elsewhere {
+        KeptElsewhere::AnyExternal => crate::program::model::recref_alias::user_code_points(r),
+        KeptElsewhere::Nothing => Vec::new(),
+    };
     for (n, stmt) in top.iter().enumerate() {
         let (Some((rec, tables)), Some((line, col, ..))) =
             (stmt.table_exit_guard(), stmt.source_range)
@@ -2182,6 +2224,7 @@ fn facts_of(
     r: &ModelRoutine,
     obj_in_place: &HashSet<String>,
     own_id_tables: &HashSet<&str>,
+    kept: KeptElsewhere,
 ) -> Facts {
     let mut f = Facts::default();
     for v in r.variables.iter() {
@@ -2212,7 +2255,7 @@ fn facts_of(
     if f.tracked.is_empty() {
         return f;
     }
-    let guards = exit_guards(r, |n| f.tracked.get(n) == Some(&VarKind::Global));
+    let guards = exit_guards(r, |n| f.tracked.get(n) == Some(&VarKind::Global), kept);
     // Aliases: `A := B` between tracked variables shares one RecordRef (a
     // Variant holds the reference), unlike `A := B.Duplicate()`. Rebinding one
     // in place (`Open`, `GetTable`…) after the assignment rebinds every member
@@ -2337,8 +2380,12 @@ fn facts_of(
     // sol round 2 on ENG-145 (ENG-159): a place that may run user code may rebind a record
     // retained elsewhere (a SingleInstance store, a caller's alias): every retainable variable
     // may hold anything from there on. A call, or a record operation that fires a trigger or a
-    // table event (`recref_alias::user_code_points`).
-    for (_, pos) in crate::program::model::recref_alias::user_code_points(r) {
+    // table event (`recref_alias::user_code_points`). Only for records `kept` says may be kept.
+    let user_code = match kept {
+        KeptElsewhere::AnyExternal => crate::program::model::recref_alias::user_code_points(r),
+        KeptElsewhere::Nothing => Vec::new(),
+    };
+    for (_, pos) in user_code {
         let at = Some(pos);
         for v in classes.rebound_at(pos) {
             f.alias_shared.insert(v.clone());
