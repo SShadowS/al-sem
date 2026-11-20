@@ -405,16 +405,20 @@ fn an_extends_cycle_ends() {
     );
 }
 
-/// `Take(Z)` with `Z: Interface IBaz` and overloads `Take(B: Interface IBar)` /
-/// `Take(T: Text)`: an `IBaz` value is an `IBar` (alc 18.0.41 compiles `B :=
-/// Z`), so the `IBar` overload is the one (review, sol and Fable: two different
-/// interfaces were "provably incompatible", so no overload was left).
-/// Mutation (2026-11-19): the interface rule in
-/// `position_provably_incompatible` dropped -> no single `Take` route (red);
-/// restored, green.
+/// `Take(Z)` with `Z: Interface IBaz` and `Take(C)` with `C: Codeunit "C Baz"`
+/// (which implements `IBaz`), over overloads `Take(B: Interface IBar)` /
+/// `Take(T: Text)`: an `IBaz` value and an `IBaz` implementer are `IBar`s (alc
+/// 18.0.41 compiles `B := Z` and `B := C`), so the `IBar` overload is the one
+/// at both sites (review, sol and Fable: two different interfaces, and a
+/// codeunit and an interface, were "provably incompatible", so no overload was
+/// left). A codeunit implementing neither stays apart (`cli_step5_coverage_fold`'s
+/// `T.O(L)` keeps its ambiguity).
+/// Mutation (2026-11-20): the program relation answering "no" (`interface_binds`
+/// replaced by `|_, _| false` at the resolver's pick) -> no single `Take` route
+/// (red); restored, green.
 #[test]
 fn a_derived_interface_value_binds_a_base_parameter() {
-    let caller_text = "namespace Probe.Ifaces;\n\ncodeunit 50120 \"Caller\"\n{\n    procedure Calls()\n    var\n        Z: Interface IBaz;\n    begin\n        Take(Z);\n    end;\n\n    procedure Take(B: Interface IBar)\n    begin\n    end;\n\n    procedure Take(T: Text)\n    begin\n    end;\n}\n";
+    let caller_text = "namespace Probe.Ifaces;\n\ncodeunit 50120 \"Caller\"\n{\n    procedure Calls()\n    var\n        Z: Interface IBaz;\n        C: Codeunit \"C Baz\";\n    begin\n        Take(Z);\n        Take(C);\n    end;\n\n    procedure Take(B: Interface IBar)\n    begin\n    end;\n\n    procedure Take(T: Text)\n    begin\n    end;\n}\n";
     let report = report_of(&base_workspace(caller_text.into()));
     let take: Vec<_> = report
         .edges
@@ -426,16 +430,18 @@ fn a_derived_interface_value_binds_a_base_parameter() {
                 })
         })
         .collect();
-    assert_eq!(take.len(), 1, "one Take site");
-    assert_eq!(take[0].edge.routes.len(), 1, "{:?}", take[0].edge.routes);
+    assert_eq!(take.len(), 2, "two Take sites");
     let one = al_syntax::parse(
         "codeunit 1 X\n{\n    procedure Take(B: Interface IBar)\n    begin\n    end;\n}\n",
     );
     let iface_fp = crate::program::sig_fp::source_param_sig_fp(&one.objects[0].routines[0].params);
-    let RouteTarget::Routine(id) = &take[0].edge.routes[0].target else {
-        panic!("a routine route")
-    };
-    assert_eq!(id.sig_fp, iface_fp, "the IBar overload: {id:?}");
+    for site in &take {
+        assert_eq!(site.edge.routes.len(), 1, "{:?}", site.edge.routes);
+        let RouteTarget::Routine(id) = &site.edge.routes[0].target else {
+            panic!("a routine route")
+        };
+        assert_eq!(id.sig_fp, iface_fp, "the IBar overload: {id:?}");
+    }
 }
 
 const DEP_GUID: &str = "14214214-0000-0000-0000-0000000000df";

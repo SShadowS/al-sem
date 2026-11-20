@@ -36,10 +36,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     cycle (alc refuses one) ends.
   - `interface_route_applicable` (the semantic audit's check of an interface route) accepts an
     implementer of a derived interface.
-  - Overload picking: an interface or codeunit into an interface parameter is never "provably
-    incompatible" (a derived interface's value and its implementer bind a base parameter), so
-    `Take(Z)` with `Z: IBaz` picks `Take(B: Interface IBar)`. This also covers a codeunit passed to
-    an interface parameter, which was already wrongly ruled out.
+  - Overload picking follows the relation alc applies (`arg_dispatch::interface_binds`, passed to
+    `pick_candidate_with`): an interface argument binds an interface parameter of itself or of a
+    base, and a codeunit argument one it implements, directly or through a derived interface. So
+    `Take(Z)` with `Z: IBaz`, and `Take(C)` with `C` implementing `IBaz`, pick `Take(B: Interface
+    IBar)`. Before, every interface or codeunit into an interface parameter was "provably
+    incompatible", which also ruled out a codeunit's own interface. A codeunit implementing
+    neither stays apart. (A first version that never proved such a pair apart resolved
+    `cli_step5_coverage_fold`'s deliberately ambiguous `T.O(L)`, where `L` implements no
+    interface: the gate caught it.)
   - The declared signature of a member an interface inherits (`interface_own_routine_node`):
     the interface's own declaration first, else exactly one same-arity declaration across its
     bases (a diamond's shared base counted once), each base named from its declaring interface's

@@ -70,7 +70,7 @@ use crate::program::node::{AppRef, ObjKey, ObjectNodeId, RoutineNodeId};
 use crate::program::node_extract::{Access, ObjectNode, RoutineNode};
 use crate::program::resolve::arg_dispatch::{
     ArgDispatchInfo, ParamDispatchInfo, candidate_param_infos, candidate_param_infos_abi,
-    pick_candidate,
+    interface_binds, pick_candidate_with,
 };
 use crate::program::resolve::builtins::{catalog_version, global_builtin_id};
 use crate::program::resolve::dataset::ObjectStart;
@@ -727,7 +727,12 @@ fn resolve_in_object(
                         }
                     }
                 }
-                if all_known && let Some(picked_idx) = pick_candidate(args, &candidate_params) {
+                if all_known
+                    && let Some(picked_idx) =
+                        pick_candidate_with(args, &candidate_params, &|a, p| {
+                            interface_binds(graph, index, a, p)
+                        })
+                {
                     let rid0 = visible[picked_idx];
                     return Some((
                         DispatchShape::Exact,
@@ -2918,7 +2923,9 @@ pub(crate) fn run_by_other_name_binding(
                     None => return RunBinding::Undecided,
                 }
             }
-            match pick_candidate(args, &candidates) {
+            match pick_candidate_with(args, &candidates, &|a, p| {
+                interface_binds(graph, index, a, p)
+            }) {
                 Some(i) if i < builtins.len() => RunBinding::Builtin,
                 Some(_) => RunBinding::Procedure,
                 None => RunBinding::Undecided,
@@ -6284,7 +6291,7 @@ codeunit 50611 "MixedCU"
         }];
         let candidates = vec![source_params, abi_params];
         assert_eq!(
-            pick_candidate(&args, &candidates),
+            crate::program::resolve::arg_dispatch::pick_candidate(&args, &candidates),
             Some(1),
             "an Integer arg must pick the ABI (Integer) candidate over the source (Text) one"
         );

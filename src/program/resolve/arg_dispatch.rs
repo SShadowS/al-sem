@@ -108,7 +108,9 @@ use al_syntax::ir::{
 };
 
 use crate::program::node::{ObjectNodeId, RoutineNodeId};
-use crate::program::node_extract::{AbiParamRetained, AbiParams, ObjectRef, RoutineNode};
+use crate::program::node_extract::{
+    AbiParamRetained, AbiParams, ObjectNode, ObjectRef, RoutineNode,
+};
 use crate::program::resolve::edge::{BuiltinId, RouteTarget};
 use crate::program::resolve::extract::WithState;
 use crate::program::resolve::framework_returns::{
@@ -2333,7 +2335,11 @@ fn length_fits(arg: Option<&str>, param: &str) -> bool {
 /// provably incompatible (e.g. `Text` vs `Code[20]` — see [`same_soft_
 /// family`]'s doc) — that UNDECIDED middle ground blocks a confident pick of
 /// anything else, exactly like a genuine second exact match would.
-fn position_provably_incompatible(arg: &ArgDispatchInfo, param: &ParamDispatchInfo) -> bool {
+fn position_provably_incompatible(
+    arg: &ArgDispatchInfo,
+    param: &ParamDispatchInfo,
+    is_a: IsA<'_>,
+) -> bool {
     let Some(arg_canonical) = &arg.canonical else {
         return false;
     };
@@ -2350,15 +2356,15 @@ fn position_provably_incompatible(arg: &ArgDispatchInfo, param: &ParamDispatchIn
         return false;
     }
     // ENG-142 (review, sol): an interface parameter takes a value of any
-    // interface derived from it and of any codeunit implementing one (alc
+    // interface derived from it and of any codeunit implementing either (alc
     // 18.0.41: `B := Z` for `Z: Interface IBaz` and `B := <codeunit implementing
-    // IBaz>` for `B: Interface IBar`). That relation is not checked here, so an
-    // interface or codeunit into an interface parameter is never proven apart:
-    // undecided at worst, never a wrong pick.
-    if let CanonicalArgType::Object(p) = &param.canonical
+    // IBaz>` for `B: Interface IBar`), through the program's relation (`is_a`).
+    // A codeunit that implements neither stays apart (alc refuses it).
+    if let (CanonicalArgType::Object(a), CanonicalArgType::Object(p)) =
+        (arg_canonical, &param.canonical)
         && p.kind == ObjectKind::Interface
-        && matches!(arg_canonical, CanonicalArgType::Object(a)
-            if matches!(a.kind, ObjectKind::Interface | ObjectKind::Codeunit))
+        && matches!(a.kind, ObjectKind::Interface | ObjectKind::Codeunit)
+        && is_a(a, p)
     {
         return false;
     }
@@ -2536,6 +2542,68 @@ pub(crate) fn pick_candidate(
     args: &[ArgDispatchInfo],
     candidates: &[Vec<ParamDispatchInfo>],
 ) -> Option<usize> {
+    pick_candidate_with(args, candidates, &|_, _| false)
+}
+
+/// Whether an object of the first id (an interface or a codeunit) binds an
+/// interface parameter of the second: the interface itself or one derived from
+/// it, or a codeunit implementing one (ENG-142, [`interface_binds`]).
+pub(crate) type IsA<'a> = &'a dyn Fn(&ObjectNodeId, &ObjectNodeId) -> bool;
+
+/// ENG-142: whether a value of `arg` (an interface or a codeunit) binds an
+/// interface parameter `param`, as alc 18.0.41 lets it: the same interface, an
+/// interface derived from it (its bases named from each declaring interface's
+/// app), or a codeunit among its implementers (`implementers_of`, which holds a
+/// derived interface's implementers too).
+pub(crate) fn interface_binds(
+    graph: &dyn GraphReads,
+    index: &dyn IndexReads,
+    arg: &ObjectNodeId,
+    param: &ObjectNodeId,
+) -> bool {
+    if arg == param {
+        return true;
+    }
+    let Some(p) = graph.object(param) else {
+        return false;
+    };
+    match arg.kind {
+        ObjectKind::Codeunit => index
+            .implementers_of(&p.name.fold_identifier())
+            .contains(arg),
+        ObjectKind::Interface => {
+            let mut seen: Vec<&ObjectNodeId> = vec![arg];
+            let mut stack: Vec<&ObjectNode> = graph.object(arg).into_iter().collect();
+            while let Some(o) = stack.pop() {
+                for b in &o.interface_bases {
+                    let Some(base) =
+                        graph.resolve_object(o.id.app, ObjectKind::Interface, &b.fold_identifier())
+                    else {
+                        continue;
+                    };
+                    if base.id == *param {
+                        return true;
+                    }
+                    if !seen.contains(&&base.id) {
+                        seen.push(&base.id);
+                        stack.push(base);
+                    }
+                }
+            }
+            false
+        }
+        _ => false,
+    }
+}
+
+/// [`pick_candidate`] with the program's interface relation (`is_a`), so an
+/// interface or codeunit argument binds an interface parameter exactly when
+/// alc lets it.
+pub(crate) fn pick_candidate_with(
+    args: &[ArgDispatchInfo],
+    candidates: &[Vec<ParamDispatchInfo>],
+    is_a: IsA<'_>,
+) -> Option<usize> {
     if args.is_empty() || candidates.len() < 2 {
         return None;
     }
@@ -2594,7 +2662,7 @@ pub(crate) fn pick_candidate(
                 .filter(|c| {
                     !discriminating
                         .iter()
-                        .any(|&p| position_provably_incompatible(&args[p], &c[p]))
+                        .any(|&p| position_provably_incompatible(&args[p], &c[p], is_a))
                 })
                 .map(|c| &c[pos].canonical)
                 .collect();
@@ -2609,7 +2677,7 @@ pub(crate) fn pick_candidate(
         }
     }
     if untyped {
-        return pick_sole_applicable(args, candidates, &discriminating);
+        return pick_sole_applicable(args, candidates, &discriminating, is_a);
     }
 
     // `Variant` precedence (S9.0e), proven with alc 18.0.41.45789 on
@@ -2645,7 +2713,7 @@ pub(crate) fn pick_candidate(
         // Boolean) over `(Variant; Boolean; …)` / `(Dictionary …; Enum …; …)`
         // stayed ambiguous.
         if variant_args > 0 {
-            return pick_sole_applicable(args, candidates, &discriminating);
+            return pick_sole_applicable(args, candidates, &discriminating, is_a);
         }
     }
     // (A) An exact match at every discriminating position wins, against any
@@ -2672,8 +2740,8 @@ pub(crate) fn pick_candidate(
     // `TC(Text|Code[20])` binds Text; `Integer` into `IB(Decimal|BigInteger)`
     // binds BigInteger) the call stays ambiguous here, never a guess — except
     // the one ranking rule (C) proves.
-    pick_sole_applicable(args, candidates, &discriminating)
-        .or_else(|| pick_over_secrettext(args, candidates, &discriminating))
+    pick_sole_applicable(args, candidates, &discriminating, is_a)
+        .or_else(|| pick_over_secrettext(args, candidates, &discriminating, is_a))
 }
 
 /// Rule (C) of [`pick_candidate`]: a Text-family argument binds a by-value
@@ -2695,12 +2763,13 @@ fn pick_over_secrettext(
     args: &[ArgDispatchInfo],
     candidates: &[Vec<ParamDispatchInfo>],
     discriminating: &[usize],
+    is_a: IsA<'_>,
 ) -> Option<usize> {
     let applicable: Vec<usize> = (0..candidates.len())
         .filter(|&i| {
             !discriminating
                 .iter()
-                .any(|&p| position_provably_incompatible(&args[p], &candidates[i][p]))
+                .any(|&p| position_provably_incompatible(&args[p], &candidates[i][p], is_a))
         })
         .collect();
     let text_family = |a: &ArgDispatchInfo| {
@@ -2754,11 +2823,12 @@ fn pick_sole_applicable(
     args: &[ArgDispatchInfo],
     candidates: &[Vec<ParamDispatchInfo>],
     discriminating: &[usize],
+    is_a: IsA<'_>,
 ) -> Option<usize> {
     let mut applicable = (0..candidates.len()).filter(|&i| {
         !discriminating
             .iter()
-            .any(|&p| position_provably_incompatible(&args[p], &candidates[i][p]))
+            .any(|&p| position_provably_incompatible(&args[p], &candidates[i][p], is_a))
     });
     let picked = applicable.next()?;
     applicable.next().is_none().then_some(picked)
