@@ -2359,9 +2359,13 @@ fn position_provably_incompatible(
     // interface derived from it and of any codeunit implementing either (alc
     // 18.0.41: `B := Z` for `Z: Interface IBaz` and `B := <codeunit implementing
     // IBaz>` for `B: Interface IBar`), through the program's relation (`is_a`).
-    // A codeunit that implements neither stays apart (alc refuses it).
+    // A codeunit that implements neither stays apart (alc refuses it). By value
+    // only, and only between DIFFERENT objects (review, sol r2): a `var`
+    // parameter and the same type keep the checks below (passability).
     if let (CanonicalArgType::Object(a), CanonicalArgType::Object(p)) =
         (arg_canonical, &param.canonical)
+        && !param.by_ref
+        && a != p
         && p.kind == ObjectKind::Interface
         && matches!(a.kind, ObjectKind::Interface | ObjectKind::Codeunit)
         && is_a(a, p)
@@ -2552,6 +2556,27 @@ pub(crate) fn pick_candidate(
 /// interface parameter of the second: the interface itself or one derived from
 /// it, or a codeunit implementing one (ENG-142, [`interface_binds`]).
 pub(crate) type IsA<'a> = &'a dyn Fn(&ObjectNodeId, &ObjectNodeId) -> bool;
+
+/// ENG-142: whether the interface named `derived_lc` is, or derives from, the
+/// one named `base_lc`, both names read from `app` (an enum's mapping keys, its
+/// `implements` list). By identity, as [`interface_binds`]; equal names when
+/// neither resolves.
+pub(crate) fn interface_is_or_derives(
+    graph: &dyn GraphReads,
+    index: &dyn IndexReads,
+    app: crate::program::node::AppRef,
+    derived_lc: &str,
+    base_lc: &str,
+) -> bool {
+    if derived_lc == base_lc {
+        return true;
+    }
+    let find = |n: &str| graph.resolve_object(app, ObjectKind::Interface, n);
+    match (find(derived_lc), find(base_lc)) {
+        (Some(d), Some(b)) => interface_binds(graph, index, &d.id, &b.id),
+        _ => false,
+    }
+}
 
 /// ENG-142: whether a value of `arg` (an interface or a codeunit) binds an
 /// interface parameter `param`, as alc 18.0.41 lets it: the same interface, an

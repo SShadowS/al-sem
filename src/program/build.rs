@@ -994,6 +994,10 @@ fn dedup_objects(objects: &mut Vec<ObjectNode>) {
             }
         }
         kept.closed_enum &= dup.closed_enum;
+        // ENG-142 (review, sol r2): internal only when every copy is: a copy
+        // that is public in some build can be named, and implemented, by any app
+        // (G28 reads this to close an interface).
+        kept.internal &= dup.internal;
         if kept.closed_enum {
             for entry in std::mem::take(&mut dup.enum_impls) {
                 if !kept.enum_impls.contains(&entry) {

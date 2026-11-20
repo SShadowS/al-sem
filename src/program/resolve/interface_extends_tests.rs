@@ -444,6 +444,80 @@ fn a_derived_interface_value_binds_a_base_parameter() {
     }
 }
 
+/// The `var` negative (review, sol r2): alc 18.0.41 refuses an `IBaz` variable
+/// for a `var` parameter of type `IBar` (AL0133, probe
+/// `/work/.al-sem/probes/eng142-internal/src/VarArg.al`; by value it binds). So
+/// `Take(Z)` over `Take(var B: Interface IBar)` / `Take(V: Variant)` is the
+/// `Variant` overload.
+/// Mutation (2026-11-20): the by-value condition dropped from the interface rule
+/// -> the `var` overload stays in contention, no single route (red); restored,
+/// green.
+#[test]
+fn a_derived_interface_value_does_not_bind_a_var_base_parameter() {
+    let caller_text = "namespace Probe.Ifaces;\n\ncodeunit 50120 \"Caller\"\n{\n    procedure Calls()\n    var\n        Z: Interface IBaz;\n    begin\n        Take(Z);\n    end;\n\n    procedure Take(var B: Interface IBar)\n    begin\n    end;\n\n    procedure Take(V: Variant)\n    begin\n    end;\n}\n";
+    let report = report_of(&base_workspace(caller_text.into()));
+    let take: Vec<_> = report
+        .edges
+        .iter()
+        .filter(|c| {
+            c.edge.from.name_lc.as_ref() == "calls"
+                && c.edge.routes.iter().any(|r| {
+                    matches!(&r.target, RouteTarget::Routine(id) if id.name_lc.as_ref() == "take")
+                })
+        })
+        .collect();
+    assert_eq!(take.len(), 1, "one Take site");
+    assert_eq!(take[0].edge.routes.len(), 1, "{:?}", take[0].edge.routes);
+    let one = al_syntax::parse(
+        "codeunit 1 X\n{\n    procedure Take(V: Variant)\n    begin\n    end;\n}\n",
+    );
+    let variant_fp =
+        crate::program::sig_fp::source_param_sig_fp(&one.objects[0].routines[0].params);
+    let RouteTarget::Routine(id) = &take[0].edge.routes[0].target else {
+        panic!("a routine route")
+    };
+    assert_eq!(id.sig_fp, variant_fp, "the Variant overload: {id:?}");
+}
+
+/// G28 across `#if` arms (review, sol r2): a derived interface internal in one
+/// whole-object arm and public in the other is public in some build, so its
+/// internal base is open. Mutation (2026-11-20): `internal` merged as the first
+/// copy's (no AND in `dedup_objects`) -> the site reads closed (red); restored,
+/// green.
+#[test]
+fn an_internal_base_with_a_derived_interface_public_in_one_arm_is_open() {
+    let base = "interface IInner\n{\n    Access = Internal;\n\n    procedure Bar(): Integer;\n}\n";
+    let outer = |access: &str| {
+        format!("interface IOuter extends IInner\n{{\n{access}    procedure Baz(): Integer;\n}}\n")
+    };
+    let report = report_of(&[
+        ("app.json", APP_JSON.into()),
+        (
+            "src/Inner.al",
+            format!(
+                "{base}\n#if A\n{}#else\n{}#endif\n",
+                outer("    Access = Internal;\n\n"),
+                outer("")
+            ),
+        ),
+        (
+            "src/Impl.al",
+            "codeunit 50101 \"C Inner\" implements IInner\n{\n    procedure Bar(): Integer begin exit(1); end;\n}\n".into(),
+        ),
+        (
+            "src/Caller.al",
+            caller(
+                "        B: Interface IInner;\n        N: Integer;",
+                "        N := B.Bar();",
+            ),
+        ),
+    ]);
+    assert!(
+        matches!(site_completeness(&report), SetCompleteness::Partial { .. }),
+        "IOuter is public in one build, so IInner is open"
+    );
+}
+
 const DEP_GUID: &str = "14214214-0000-0000-0000-0000000000df";
 
 /// A dependency's interfaces arrive as symbols only: their bases come from the

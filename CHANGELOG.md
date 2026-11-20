@@ -42,18 +42,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `Take(Z)` with `Z: IBaz`, and `Take(C)` with `C` implementing `IBaz`, pick `Take(B: Interface
     IBar)`. Before, every interface or codeunit into an interface parameter was "provably
     incompatible", which also ruled out a codeunit's own interface. A codeunit implementing
-    neither stays apart. (A first version that never proved such a pair apart resolved
-    `cli_step5_coverage_fold`'s deliberately ambiguous `T.O(L)`, where `L` implements no
-    interface: the gate caught it.)
+    neither stays apart. By value only: alc refuses an `IBaz` variable for a `var` parameter of
+    type `IBar` (AL0133, probe `eng142-internal/src/VarArg.al`), so `Take(Z)` over `Take(var B:
+    Interface IBar)` / `Take(V: Variant)` is the `Variant` one. (A first version that never
+    proved such a pair apart resolved `cli_step5_coverage_fold`'s deliberately ambiguous
+    `T.O(L)`, where `L` implements no interface: the gate caught it.)
   - The declared signature of a member an interface inherits (`interface_own_routine_node`):
     the interface's own declaration first, else exactly one same-arity declaration across its
     bases (a diamond's shared base counted once), each base named from its declaring interface's
     app. It types an interface call used as an argument (`Take(O.Bar())` picks the overload).
-  - G24: a closed enum of a derived interface with a value mapped outside the program opens a
-    base's site too (its every mapping counts when it is listed through a derived interface).
+  - G24 and the closed-enum coverage proof: an enum's mapping counts for a site when its
+    interface is the site's or derives from it (`arg_dispatch::interface_is_or_derives`, by
+    identity). So a closed enum of a derived interface with a value mapped outside the program
+    opens a base's site, and so does an enum whose whole-object `#if` arms implement the base
+    and a derived interface (it looked "direct", so its derived mapping was skipped; review, sol
+    r2).
   - G28: an internal interface closes only while every interface derived from it is closed too.
     A PUBLIC interface may extend an internal one (alc 18.0.41 compiles it, probe
-    `/work/.al-sem/probes/eng142-internal`), and any unloaded app may implement it.
+    `/work/.al-sem/probes/eng142-internal`), and any unloaded app may implement it. An object in
+    whole-object `#if` arms is internal only when every copy is (`dedup_objects`; the first
+    copy's flag let a derived interface public in one arm close its base).
 - **Model and graph readers.** The model's interface dispatch meta (`total_impls`,
   `unresolved_impls`, `enum_implementers`) and the impact graph's callbacks hub match the
   implementers of derived interfaces too (`ProgramGraph::add_derived_interfaces`).
@@ -63,6 +71,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   gains more through derived interfaces stops typing such chains: a precision loss that comes
   with the soundness gain. Typing interface chains from the declared signature whatever the
   implementer count is a separate change (filed).
+- **Still keyed by name, as before (filed).** `implementers_of` answers by interface NAME, so a
+  call through one app's `IBase` also lists the implementers of another app's same-named
+  `IBase`, as it always did for direct implementers. The inheritance closure resolves by
+  identity, but its result lands in that name bucket. Keying implementers by interface
+  identity is its own change (review, sol r2). The model meta and impact hub match by name too.
+- **Measured.** release-fast, master `edad0e30` against this branch:
+  - CDO (`bc3ccb18`, clean): primary 2,308 findings and 2,301 fingerprints unchanged; `--scope
+    all` 32,579 -> 32,583 findings, 4 fingerprints added, 0 removed; `aldump
+    --program-call-graph-stats` byte-identical (46,688 edges, 0 unknown: an interface edge that
+    gains routes stays in its bucket). The 4 are `d19-unused-parameter`: three on System
+    Application's codeunit 8998 "Default Email Connector v2" (`Send` x2, `GetAccounts`), one on a
+    Continia codeunit's `Authorize`, both newly in the cross-app model. 8998 implements "Email
+    Connector v2/v3/v4", which extend "Email Connector", so a call through "Email Connector" now
+    reaches it and its bodies enter the model (the Continia one was not traced further). They are
+    d19 false positives of an older kind (an interface implementation's parameters are fixed by
+    the interface; d19 has no such exemption): filed, not hidden here. CDO's dependencies hold
+    real inheritance: the System Application's email connectors, Continia Delivery Network's
+    four `IeDocCreationBase` interfaces, Base Application's "Cost Adjustment With Params".
+  - DO (`b3b4459`, clean): 2,180 findings and 2,172 fingerprints unchanged at both scopes;
+    call-graph stats byte-identical (21,868 edges, 1,142 unknown).
 - **Grammar gap filed.** A header-only `#if` split of an interface's `extends` list is valid AL
   (alc 18.0.41 compiles it) but does not parse in tree-sitter-al v5.4.0: filed as
   https://github.com/SShadowS/tree-sitter-al/issues/46. Such an interface gives no bases until

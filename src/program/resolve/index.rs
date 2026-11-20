@@ -1113,17 +1113,21 @@ impl ResolveIndex {
             .iter()
             .filter_map(|id| graph.object(id))
             .filter(|o| {
-                // ENG-142 (review, Fable): an enum listed here through a derived
-                // interface keys its mappings by that interface, so its every
-                // mapping counts (an over-approximation: it can only mark the
-                // site open, never closed).
-                let direct = o
-                    .implements
-                    .iter()
-                    .any(|i| i.fold_identifier() == interface_name_lc);
+                // ENG-142 (review, Fable; sol r2): an enum's mappings are keyed by
+                // the interface it implements, which may derive from this one,
+                // whole-object `#if` arms each naming another. Every mapping
+                // whose interface is this one or derives from it counts.
                 o.enum_impls
                     .iter()
-                    .filter(|(i, _)| !direct || i.as_ref() == interface_name_lc)
+                    .filter(|(i, _)| {
+                        crate::program::resolve::arg_dispatch::interface_is_or_derives(
+                            graph,
+                            self,
+                            o.id.app,
+                            i,
+                            interface_name_lc,
+                        )
+                    })
                     .any(|(_, codeunit)| {
                         !matches!(
                             self.resolve_object_ref_strict(
@@ -2114,6 +2118,61 @@ mod tests {
         );
         assert_eq!(
             index.unmapped_enum_implementers(&graph, "ibaz"),
+            vec![kind_id]
+        );
+    }
+
+    /// The mixed case (review, sol r2): whole-object `#if` arms implementing
+    /// `IBar` and `IBaz extends IBar` merge to one enum implementing both. Its
+    /// `IBar` mapping resolves (`Real`), its `IBaz` one does not (`Nowhere`):
+    /// an `IBar` site can still dispatch to the missing codeunit, so the enum is
+    /// listed. Mutation (2026-11-20): the mapping filter back to "the asked
+    /// interface's key only" -> not listed (red); restored, green.
+    #[test]
+    fn a_mixed_arm_closed_enum_counts_its_derived_interfaces_mapping() {
+        let mut apps = AppRegistry::default();
+        let a = apps.intern(&make_app_id("AppA"));
+        let bar = make_obj(a, ObjectKind::Interface, None, "IBar", None, vec![]);
+        let mut baz = make_obj(a, ObjectKind::Interface, None, "IBaz", None, vec![]);
+        baz.interface_bases = vec!["IBar".into()];
+        let real = make_obj(
+            a,
+            ObjectKind::Codeunit,
+            Some(50150),
+            "Real",
+            None,
+            vec!["IBar"],
+        );
+        let mut kind = make_obj(
+            a,
+            ObjectKind::Enum,
+            Some(50140),
+            "Kind",
+            None,
+            vec!["IBar", "IBaz"],
+        );
+        kind.closed_enum = true;
+        let name = |s: &str| ObjectRef::Name {
+            raw: s.into(),
+            normalized_lc: s.to_ascii_lowercase(),
+        };
+        kind.enum_impls = vec![
+            ("ibar".into(), name("Real")),
+            ("ibaz".into(), name("Nowhere")),
+        ];
+        let kind_id = kind.id.clone();
+        let mut objects = vec![bar, baz, real, kind];
+        objects.sort_by(|x, y| x.id.cmp(&y.id));
+        let obj_index = ObjectIndex::build(&objects);
+        let graph = ProgramGraph {
+            apps,
+            objects: objects.into(),
+            obj_index,
+            ..Default::default()
+        };
+        let index = ResolveIndex::build(&graph);
+        assert_eq!(
+            index.unmapped_enum_implementers(&graph, "ibar"),
             vec![kind_id]
         );
     }
