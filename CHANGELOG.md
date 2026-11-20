@@ -239,6 +239,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     any routine a call reaches may rebind. It now takes locals and parameters only (Fable);
   - **a quoted receiver:** record_types' second pass compared `"MyR".Get(…)` raw. It now keys
     the receiver as the operations are (Fable).
+- **On CDO** (cdo-before-after, master ab435c0d → this branch): no detector, finding or
+  fingerprint moves (2306 / 32429 findings), unknown 0; `oneHop.callsBinding` 6806 → 6802.
+  Two `output_cdo` renderings move, witness routes only: IssueReminder's explain and
+  RunReportID's `prove writes-table:CDO E-Mail Log` each lose the hops `ExecuteResponses →
+  ExecuteQueuedEvents →` (Base Application `Workflow Management`); every count and answer is
+  unchanged (IssueReminder may write 201 tables, literal arguments rule out 274). The cause is
+  real: `Workflow Response Handling.ReleaseDocument(var Variant)` does, for an Approval Entry,
+  `TargetRecRef.Get(ApprovalEntry."Record ID to Approve"); Variant := TargetRecRef;`, which
+  hands the record being approved (a sales document) back to `ExecuteResponses`, whose next
+  response `PostDocument` may post it. Master did not see the `Get`, so it pruned that direct
+  route and showed only the event-queue detour. **Re-baseline:** the two `output_cdo` goldens
+  (`tests/cli-output-goldens/cdo/IssueReminder.explain.human.txt`,
+  `RunReportID.prove-writes-table.human.txt`), re-minted here; no outside reader keys on a
+  witness route.
 - **Tests.** `tests/cli/cli_recref_get.rs` has one shape per reader, each with a control that
   holds without the `Get`. The G36 fixture adds `ReboundByGet`. On master 831122de every
   `prove` shape that may write answers `no` (21 of 21), and `query touches` lists none of the
