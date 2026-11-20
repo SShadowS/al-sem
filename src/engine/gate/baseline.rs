@@ -2,7 +2,7 @@
 //! since TLS-106 a schema-2 file that an update merges into instead of replacing.
 //!
 //! Schema 2 (`--update-baseline` writes it):
-//! `{ schemaVersion: "2", generatedAt, universe, primaryApp, opaqueApps: string[],
+//! `{ schemaVersion: "2", generatedAt, universe, primaryApp, bodiedApps: string[],
 //! fingerprints: string[], entries: [{ fingerprint, detector, scope }] }`.
 //!   - `fingerprints` is what suppression reads ([`load_baseline`]), so a schema-1
 //!     reader still works. A fingerprint listed with no entry is a schema-1 entry (no
@@ -12,12 +12,16 @@
 //!     looked at" ([`update_baseline`], the rule of TLS-106 §3).
 //!   - `universe` (`cross-app` / `single-app`) and `primaryApp` bind the file to the
 //!     runs that may update it; an empty `primaryApp` is not stamped yet.
-//!   - `opaqueApps` lists the symbol-only dependency apps the file's runs had. A run
-//!     with an opaque app the file does not list lost bodies it may have had: it
-//!     prunes nothing (its inputs are not whole).
+//!   - `bodiedApps` lists the dependency apps (lowercase guids) the file's runs had
+//!     WITH source. A run that lacks the body of one of them (now symbol-only, or not
+//!     found) may have lost findings through it: it prunes nothing (its inputs are
+//!     not whole). A dependency that is new, or was never bodied, is accepted. The
+//!     list only grows (the union of the file's and the run's), so a lost body keeps
+//!     blocking until it returns or the file is rebuilt. A schema-2 file without the
+//!     key (written before it existed) reads as an empty list.
 //!
-//! Versions: `"1"`, a missing `schemaVersion` or a numeric one are schema 1 (a file
-//! of fingerprints only); `"2"` is schema 2; any other string is a schema this alsem
+//! Versions: `"1"`, the number `1` or a missing `schemaVersion` are schema 1 (a file
+//! of fingerprints only); `"2"` is schema 2; any other value is a schema this alsem
 //! does not know, refused by a plain read AND an update (fail closed: a later schema
 //! may give `fingerprints` another meaning).
 //!
@@ -69,9 +73,9 @@ pub fn load_baseline_bytes(file: &FileInput) -> Result<BTreeSet<String>, String>
     };
     let v = serde_json::from_str::<serde_json::Value>(text)
         .map_err(|e| format!("baseline '{}' is not valid JSON: {e}", path.display()))?;
-    if let Some(version) = unknown_version(&v) {
+    if let Err(version) = schema_of(&v) {
         return Err(format!(
-            "baseline '{}': schemaVersion '{version}' is not one this alsem knows (1 or 2)",
+            "baseline '{}': schemaVersion {version} is not one this alsem knows (1 or 2)",
             path.display()
         ));
     }
@@ -90,12 +94,16 @@ pub fn load_baseline_bytes(file: &FileInput) -> Result<BTreeSet<String>, String>
         .collect())
 }
 
-/// A `schemaVersion` string other than `"1"` and `"2"`. A missing or numeric
-/// version is schema 1 (TLS-106: such files were read before).
-fn unknown_version(v: &serde_json::Value) -> Option<&str> {
-    v.get("schemaVersion")
-        .and_then(|x| x.as_str())
-        .filter(|s| *s != "1" && *s != "2")
+/// The schema a file's `schemaVersion` names: 1 for `"1"`, the number `1` or
+/// a missing field (TLS-106: such files were read before); 2 for `"2"`;
+/// `Err(the value as JSON)` for anything else.
+fn schema_of(v: &serde_json::Value) -> Result<u8, String> {
+    match v.get("schemaVersion") {
+        None => Ok(1),
+        Some(x) if x.as_str() == Some("1") || x.as_u64() == Some(1) => Ok(1),
+        Some(x) if x.as_str() == Some("2") => Ok(2),
+        Some(x) => Err(x.to_string()),
+    }
 }
 
 /// Return only findings whose fingerprint is NOT in the baseline. Order-preserving.
@@ -199,8 +207,12 @@ pub struct UpdateRun {
     pub prunes_dependency: bool,
     /// `preflight::inputs_whole`.
     pub inputs_whole: bool,
-    /// The run's symbol-only dependency apps (`FreshCoverage::opaque_apps`).
-    pub opaque_apps: BTreeSet<String>,
+    /// The declared dependency apps (lowercase guids) the run had with source
+    /// (`preflight::dependency_bodies`).
+    pub bodied_apps: BTreeSet<String>,
+    /// The declared dependency apps the run had without a body: symbol-only, or
+    /// not found.
+    pub unbodied_apps: BTreeSet<String>,
     /// Every finding the detectors emitted: before the registry's scope tail
     /// (`RunOutput::scoped_out` included) and before the gate's
     /// `--min-severity`, detector allow-list, scope filter and `--limit`.
@@ -279,7 +291,7 @@ struct Stamp {
     universe: String,
     /// Empty: not stamped yet.
     primary_app: String,
-    opaque_apps: BTreeSet<String>,
+    bodied_apps: BTreeSet<String>,
 }
 
 /// The old file, as an update reads it.
@@ -331,26 +343,23 @@ fn read_old(file: &FileInput) -> Result<OldFile, Refusal> {
             .ok_or_else(|| bad(format!("'{key}' is missing or not an array of strings")))
     };
     let fingerprints = strings("fingerprints")?;
-    let version = v.get("schemaVersion");
-    match version.and_then(|x| x.as_str()) {
-        // Missing or numeric: schema 1, as before (TLS-106 review).
-        _ if version.is_none_or(serde_json::Value::is_number) => Ok(OldFile {
+    match schema_of(&v) {
+        Ok(1) => Ok(OldFile {
             stamp: None,
             fingerprints,
             entries: Vec::new(),
         }),
-        Some("1") => Ok(OldFile {
-            stamp: None,
-            fingerprints,
-            entries: Vec::new(),
-        }),
-        Some("2") => {
+        Ok(_) => {
             let universe = text_field(&v, "universe")?;
             if universe != "cross-app" && universe != "single-app" {
                 return Err(bad(format!("unknown universe '{universe}'")));
             }
             let primary_app = text_field(&v, "primaryApp")?;
-            let opaque_apps = strings("opaqueApps")?;
+            // Absent in a schema-2 file written before it existed: none.
+            let bodied_apps = match v.get("bodiedApps") {
+                None => BTreeSet::new(),
+                Some(_) => strings("bodiedApps")?,
+            };
             let rows = v
                 .get("entries")
                 .and_then(|e| e.as_array())
@@ -380,24 +389,21 @@ fn read_old(file: &FileInput) -> Result<OldFile, Refusal> {
                 stamp: Some(Stamp {
                     universe,
                     primary_app,
-                    opaque_apps,
+                    bodied_apps,
                 }),
                 fingerprints,
                 entries,
             })
         }
-        Some(other) => Err(bad(format!(
-            "schemaVersion '{other}' is not one this alsem knows (1 or 2)"
+        Err(other) => Err(bad(format!(
+            "schemaVersion {other} is not one this alsem knows (1 or 2)"
         ))),
-        None => Err(bad(
-            "'schemaVersion' is neither a string nor a number".to_string()
-        )),
     }
 }
 
 /// Why `entry`, which this run did not report, must be kept unchecked, or
 /// `None` when the run proves it gone. `inputs_whole` is the run's, also
-/// false when the run has an opaque app the file did not record.
+/// false when the run lacks the body of an app the file knew with source.
 fn unchecked_reason(entry: &Entry, run: &UpdateRun, inputs_whole: bool) -> Option<KeptUnchecked> {
     if !run.registered.contains(&entry.detector) {
         Some(KeptUnchecked::DetectorNotRegistered)
@@ -445,19 +451,21 @@ pub fn update_baseline(old: &FileInput, run: &UpdateRun) -> Result<BaselineUpdat
         Some(s) if run.primary_app.is_empty() => s.primary_app.clone(),
         _ => run.primary_app.clone(),
     };
-    // Opacity the file already accepted stays allowed; an app opaque now that
-    // the file did not record lost its bodies: nothing absent is proved gone.
-    // The file keeps only the opacity every one of its runs had.
-    let (inputs_whole, opaque_apps) = match &old.stamp {
-        Some(s) => (
-            run.inputs_whole && run.opaque_apps.is_subset(&s.opaque_apps),
-            s.opaque_apps
-                .intersection(&run.opaque_apps)
-                .cloned()
-                .collect(),
-        ),
-        None => (run.inputs_whole, run.opaque_apps.clone()),
-    };
+    // A dependency the file's runs had with source and this run lacks the body
+    // of (symbol-only now, or not found) may have hidden a recorded finding:
+    // nothing absent is proved gone. A new or never-bodied one is accepted. The
+    // file keeps every body it ever had, so a lost one keeps blocking.
+    let file_bodied = old
+        .stamp
+        .as_ref()
+        .map(|s| s.bodied_apps.clone())
+        .unwrap_or_default();
+    let inputs_whole = run.inputs_whole
+        && file_bodied
+            .intersection(&run.unbodied_apps)
+            .next()
+            .is_none();
+    let bodied_apps: BTreeSet<String> = file_bodied.union(&run.bodied_apps).cloned().collect();
     let mut seen: BTreeMap<&str, Vec<&Entry>> = BTreeMap::new();
     for e in &run.before_filters {
         seen.entry(e.fingerprint.as_str()).or_default().push(e);
@@ -500,7 +508,7 @@ pub fn update_baseline(old: &FileInput, run: &UpdateRun) -> Result<BaselineUpdat
     let header = Header {
         universe: run.universe,
         primary_app: &primary_app,
-        opaque_apps: &opaque_apps,
+        bodied_apps: &bodied_apps,
     };
     Ok(BaselineUpdate {
         bytes: serialize_v2(&header, &fingerprints, &entries).into_bytes(),
@@ -515,7 +523,7 @@ pub fn update_baseline(old: &FileInput, run: &UpdateRun) -> Result<BaselineUpdat
 struct Header<'a> {
     universe: &'a str,
     primary_app: &'a str,
-    opaque_apps: &'a BTreeSet<String>,
+    bodied_apps: &'a BTreeSet<String>,
 }
 
 /// `  "<key>": [ ... ],` (2-space JSON), a sorted list of strings.
@@ -543,7 +551,7 @@ fn serialize_v2(header: &Header, fingerprints: &BTreeSet<String>, entries: &[Ent
         "  \"primaryApp\": {},\n",
         json_str(header.primary_app)
     ));
-    push_string_list(&mut out, "opaqueApps", header.opaque_apps.iter());
+    push_string_list(&mut out, "bodiedApps", header.bodied_apps.iter());
     push_string_list(&mut out, "fingerprints", fingerprints.iter());
     if entries.is_empty() {
         out.push_str("  \"entries\": []\n");
@@ -695,6 +703,7 @@ mod tests {
     const D1: &str = "d1-db-op-in-loop";
     const D3: &str = "d3-missing-setloadfields";
     const APP: &str = "11111111-1111-1111-1111-111111111111";
+    const BODIED: &str = "bodied-dep";
 
     fn e(fp: &str, detector: &str, scope: EntryScope) -> Entry {
         Entry {
@@ -719,7 +728,8 @@ mod tests {
             primary_app: APP.to_string(),
             prunes_dependency: false,
             inputs_whole: true,
-            opaque_apps: set(&["Opaque Dep"]),
+            bodied_apps: set(&[BODIED]),
+            unbodied_apps: set(&["opaque-dep"]),
             before_filters: vec![],
             shown: vec![],
             selected: set(&[D1, D3]),
@@ -744,11 +754,11 @@ mod tests {
         fps.extend(extra.iter().map(|s| s.to_string()));
         let mut entries = entries.to_vec();
         entries.sort();
-        let opaque = set(&["Opaque Dep"]);
+        let bodied = set(&[BODIED]);
         let header = Header {
             universe: "cross-app",
             primary_app: APP,
-            opaque_apps: &opaque,
+            bodied_apps: &bodied,
         };
         serialize_v2(&header, &fps, &entries)
     }
@@ -937,9 +947,10 @@ mod tests {
             ("not json", "nope".to_string()),
             ("unknown version", good.replace("\"2\"", "\"3\"")),
             ("boolean version", good.replace("\"2\"", "true")),
+            ("numeric version 3", good.replace("\"2\"", "3")),
             (
-                "no opaqueApps",
-                good.replace("  \"opaqueApps\": [\n    \"Opaque Dep\"\n  ],\n", ""),
+                "bodiedApps not strings",
+                good.replace(&format!("    \"{BODIED}\""), "    7"),
             ),
             (
                 "fingerprint not a string",
@@ -1036,21 +1047,35 @@ mod tests {
         assert_eq!(text(&u), v2(&[p("aa", D1)], &[]));
     }
 
-    /// An app opaque now that the file did not record lost its bodies: the
-    /// run prunes nothing (inputs not whole), and the file keeps only the
-    /// opacity it had. Opacity the file recorded stays allowed
-    /// (`a_fixed_finding_is_dropped` prunes beside "Opaque Dep").
+    /// A dependency the file knew with source and the run lacks the body of
+    /// (symbol-only now, or not found) stops pruning, and the file keeps it in
+    /// `bodiedApps`. A dependency without a body that the file never knew with
+    /// one is accepted: `a_fixed_finding_is_dropped` prunes beside the
+    /// symbol-only "opaque-dep". A schema-2 file with no `bodiedApps` reads as
+    /// none (it accepts the run).
     ///
-    /// Mutation (2026-11-20): the `is_subset` test removed from
+    /// Mutation (2026-11-20): the intersection test removed from
     /// `update_baseline` -> the stale entry is dropped (red); restored, green.
+    /// Mutation (2026-11-20): the written list made the run's bodied apps only
+    /// (no union) -> the lost body is dropped from the header (red); restored,
+    /// green.
     #[test]
-    fn a_newly_opaque_app_stops_pruning() {
+    fn a_lost_body_stops_pruning_a_new_unbodied_app_does_not() {
         let old = v2(&[p("aa", D1)], &[]);
         let mut r = run();
-        r.opaque_apps = set(&["Opaque Dep", "Newly Opaque"]);
+        r.bodied_apps = set(&[]);
+        r.unbodied_apps = set(&["opaque-dep", BODIED]);
         let u = update(&old, &r);
-        assert_eq!(text(&u), old, "kept, header unchanged");
+        assert_eq!(text(&u), old, "kept, the lost body still listed");
         assert_eq!(reasons(&u), vec![("inputsNotWhole", 1)]);
+        // A file written before `bodiedApps` existed: accepted, then stamped.
+        let pre = old.replace(
+            &format!("  \"bodiedApps\": [\n    \"{BODIED}\"\n  ],\n"),
+            "",
+        );
+        assert_ne!(pre, old, "precondition: the key removed");
+        let u = update(&pre, &run());
+        assert_eq!(text(&u), v2(&[], &[]), "pruned, then stamped");
     }
 
     /// Duplicate rows in the old file count once and are written once
@@ -1072,15 +1097,17 @@ mod tests {
         assert_eq!(reasons(&u), vec![("detectorNotRun", 1)]);
     }
 
-    /// Versions (review, Fable 3): a missing or numeric `schemaVersion` is
-    /// schema 1, for an update and a plain read; an unknown string version is
-    /// refused by both.
+    /// Versions (review, Fable 3, round 2): a missing `schemaVersion` or the
+    /// number `1` is schema 1, for an update and a plain read; any other
+    /// value (the string "3", the number 3) is refused by both.
     ///
     /// Mutation (2026-11-20): the missing-or-numeric arm of `read_old`
     /// deleted -> the update refuses them (red); restored, green.
     /// Mutation (2026-11-20): the `unknown_version` check in
     /// `load_baseline_bytes` deleted -> the plain read of "3" passes (red);
     /// restored, green.
+    /// Mutation (2026-11-20, round 2): `schema_of` accepting any number as
+    /// schema 1 -> the number 3 is read (red); restored, green.
     #[test]
     fn missing_and_numeric_versions_are_schema_1_unknown_strings_refused() {
         for (case, old) in [
@@ -1095,9 +1122,19 @@ mod tests {
             assert_eq!(text(&u), v2(&[], &["aa"]), "{case}");
             assert_eq!(reasons(&u), vec![("noDetectorKnown", 1)], "{case}");
         }
-        let unknown = "{\"schemaVersion\": \"3\", \"fingerprints\": [\"aa\"]}";
-        assert!(load_baseline_bytes(&file(Some(unknown))).is_err());
-        assert!(check_update_file(&file(Some(unknown))).is_err());
+        for unknown in [
+            "{\"schemaVersion\": \"3\", \"fingerprints\": [\"aa\"]}",
+            "{\"schemaVersion\": 3, \"fingerprints\": [\"aa\"]}",
+        ] {
+            assert!(
+                load_baseline_bytes(&file(Some(unknown))).is_err(),
+                "{unknown}"
+            );
+            assert!(
+                check_update_file(&file(Some(unknown))).is_err(),
+                "{unknown}"
+            );
+        }
         assert!(check_update_file(&file(Some("nope"))).is_err());
         assert!(check_update_file(&file(None)).is_ok());
     }

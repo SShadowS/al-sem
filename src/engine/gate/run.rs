@@ -1008,6 +1008,8 @@ fn analyze_view(
             // gone. A malformed, inconsistent or foreign file is refused before
             // anything is written. The set applied is every current finding: the
             // entries kept besides them are findings this run did not make.
+            let (bodied_apps, unbodied_apps) =
+                crate::engine::gate::preflight::dependency_bodies(fresh);
             let update = update_baseline(
                 file,
                 &UpdateRun {
@@ -1023,10 +1025,8 @@ fn analyze_view(
                         .unwrap_or_default(),
                     prunes_dependency: !args.single_app && args.scope == Scope::All,
                     inputs_whole: inputs_whole(fresh),
-                    opaque_apps: fresh
-                        .as_ref()
-                        .map(|f| f.opaque_apps.iter().cloned().collect())
-                        .unwrap_or_default(),
+                    bodied_apps,
+                    unbodied_apps,
                     before_filters,
                     shown: paired
                         .iter()

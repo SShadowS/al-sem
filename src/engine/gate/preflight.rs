@@ -66,6 +66,38 @@ pub fn inputs_whole(fresh: &Result<FreshCoverage, String>) -> bool {
         && !fc.ledger.iter().any(is_unreadable)
 }
 
+/// The run's declared dependency apps (lowercase guids, from the ledger) by
+/// whether it had their bodies (TLS-106): `(bodied, unbodied)`. Bodied: found
+/// with source. Unbodied: found symbol-only, or not found at all. An
+/// unreadable package is neither (it already makes the inputs not whole). A
+/// baseline update compares these with the apps its file's runs had with
+/// source: a body lost since then stops pruning. Empty when the coverage
+/// could not be verified (the inputs are then not whole anyway).
+pub fn dependency_bodies(
+    fresh: &Result<FreshCoverage, String>,
+) -> (
+    std::collections::BTreeSet<String>,
+    std::collections::BTreeSet<String>,
+) {
+    let mut bodied = std::collections::BTreeSet::new();
+    let mut unbodied = std::collections::BTreeSet::new();
+    for e in fresh.iter().flat_map(|fc| &fc.ledger) {
+        match &e.found {
+            Some(f) if f.tier != crate::snapshot::TrustTier::SymbolOnly => {
+                bodied.insert(e.guid.clone());
+            }
+            Some(_) => {
+                unbodied.insert(e.guid.clone());
+            }
+            None if e.unreadable.is_none() => {
+                unbodied.insert(e.guid.clone());
+            }
+            None => {}
+        }
+    }
+    (bodied, unbodied)
+}
+
 /// `evaluatePreflight(coverage, required)`, rewired onto [`FreshCoverage`].
 ///
 /// `fresh` is the fresh resolver's own coverage status for this run
@@ -345,6 +377,47 @@ mod tests {
             assert!(!inputs_whole(&Ok(fc)), "case {i} must not be whole");
         }
         assert!(!inputs_whole(&Err("boom".into())), "unverified");
+    }
+
+    /// TLS-106 (review r2, sol): a declared dependency with source is bodied;
+    /// one found symbol-only, or not found at all (the package moved away), is
+    /// unbodied; an unreadable one is neither.
+    ///
+    /// Mutation (2026-11-20): the `None if e.unreadable.is_none()` arm made a
+    /// no-op -> the missing app is not unbodied (red); restored, green.
+    #[test]
+    fn dependency_bodies_counts_missing_as_unbodied() {
+        let found = |tier| LedgerApp {
+            version: "1.0.0.0".to_string(),
+            tier,
+            abi_objects: Some(1),
+            ingest_error: None,
+        };
+        let mut sourced = entry(
+            "Sourced",
+            Some(found(crate::snapshot::TrustTier::EmbeddedSource)),
+            None,
+        );
+        sourced.guid = "s".into();
+        let mut symbols = entry(
+            "Symbols",
+            Some(found(crate::snapshot::TrustTier::SymbolOnly)),
+            None,
+        );
+        symbols.guid = "y".into();
+        let mut missing = entry("Missing", None, None);
+        missing.guid = "m".into();
+        let mut broken = entry("Broken", None, Some("bad zip"));
+        broken.guid = "b".into();
+        let fc = FreshCoverage {
+            ledger: vec![sourced, symbols, missing, broken],
+            ..clean()
+        };
+        let (bodied, unbodied) = dependency_bodies(&Ok(fc));
+        assert_eq!(bodied.into_iter().collect::<Vec<_>>(), ["s"]);
+        assert_eq!(unbodied.into_iter().collect::<Vec<_>>(), ["m", "y"]);
+        let (bodied, unbodied) = dependency_bodies(&Err("boom".into()));
+        assert!(bodied.is_empty() && unbodied.is_empty());
     }
 
     #[test]

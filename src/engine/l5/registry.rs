@@ -411,9 +411,9 @@ impl Concern {
 pub struct RunOutput {
     pub findings: Vec<Finding>,
     /// Aligned with `findings`: whether each is in the primary scope, by the
-    /// predicate `--scope primary` drops by (`in_primary_scope`). All `true`
-    /// for a `--scope primary` run, which kept only those (TLS-106: a baseline
-    /// entry's scope).
+    /// predicate `--scope primary` drops by (`in_primary_scope` cross-app,
+    /// the role rule single-app). All `true` for a `--scope primary` run,
+    /// which kept only those (TLS-106: a baseline entry's scope).
     pub finding_is_primary: Vec<bool>,
     /// `(detector, fingerprint)` of every finding the primary-scope tail
     /// dropped (empty at `--scope all`). With `findings` it is the complete
@@ -670,9 +670,12 @@ pub(crate) fn finish_run(
         scoped_out,
     } = match cross {
         None => {
-            // Role-scoping filter (registry.ts:161-172), by THE predicate. A
+            // Role-scoping filter (registry.ts:161-172), by THE role rule. A
             // single-app model holds only the workspace's routines, so every
-            // role is "primary" and the predicate keeps everything.
+            // role is "primary" and the rule keeps everything. Single-app keeps
+            // the role rule alone (no `dep:` location check), so its output is
+            // unchanged by construction (TLS-106 review r2); it filters and
+            // labels by that one rule.
             let _s = pt::span("l4_l5", "l4_l5.role_scope_and_sort");
             let role_by_routine: std::collections::HashMap<&str, &str> = resolved
                 .workspace
@@ -680,7 +683,7 @@ pub(crate) fn finish_run(
                 .iter()
                 .map(|r| (r.id.as_str(), resolved.routine_role(r).as_str()))
                 .collect();
-            scope_and_sort(findings, &role_by_routine, true)
+            scope_and_sort(findings, &role_by_routine, true, has_primary_role)
         }
         Some(base) => cross_app_scope(base, findings, scope_primary),
     };
@@ -768,32 +771,37 @@ fn cross_app_scope(
     let _s = pt::span("crossapp", "crossapp.role_scope");
     // `--scope all` (alsem analyze) keeps dependency-anchored findings: only
     // the sort applies, and each finding is labelled by the same predicate.
-    scope_and_sort(findings, &role_by_routine, scope_primary)
+    scope_and_sort(findings, &role_by_routine, scope_primary, in_primary_scope)
 }
 
 /// A run's findings after the scope tail.
 struct Scoped {
     findings: Vec<Finding>,
-    /// Aligned with `findings`: [`in_primary_scope`].
+    /// Aligned with `findings`: the path's primary predicate.
     primary: Vec<bool>,
     /// `(detector, fingerprint)` of each finding the tail dropped.
     scoped_out: Vec<(String, String)>,
 }
 
+/// The scope predicate of a path: [`in_primary_scope`] cross-app,
+/// [`has_primary_role`] single-app.
+type ScopePredicate = fn(&Finding, &std::collections::HashMap<&str, &str>) -> bool;
+
 /// The scope tail: with `drop_dependency`, drop every finding outside
-/// [`in_primary_scope`] (remembering its fingerprint); label the rest by the
-/// same predicate; then the stable sort. One predicate for the filter and the
-/// label, single-app and cross-app alike (TLS-106).
+/// `is_primary` (remembering its fingerprint); label the rest by the same
+/// predicate; then the stable sort. One predicate for the filter and the
+/// label on each path (TLS-106).
 fn scope_and_sort(
     findings: Vec<Finding>,
     role_by_routine: &std::collections::HashMap<&str, &str>,
     drop_dependency: bool,
+    is_primary: ScopePredicate,
 ) -> Scoped {
     let mut kept = Vec::with_capacity(findings.len());
     let mut primary = Vec::with_capacity(findings.len());
     let mut scoped_out = Vec::new();
     for f in findings {
-        let p = in_primary_scope(&f, role_by_routine);
+        let p = is_primary(&f, role_by_routine);
         if p || !drop_dependency {
             kept.push((p, f));
         } else {
@@ -1968,14 +1976,17 @@ mod tests {
         f
     }
 
-    /// TLS-106 (review, sol P1): one predicate filters and labels, on both
-    /// paths. A finding located in dependency source with no workspace anchor
-    /// is dropped by the primary tail (and remembered in `scoped_out`) even
-    /// when no role map marks it, and labelled dependency when kept.
+    /// TLS-106 (review, sol P1): one predicate filters and labels on each
+    /// path. Cross-app (`in_primary_scope`): a finding located in dependency
+    /// source with no workspace anchor is dropped by the primary tail (and
+    /// remembered in `scoped_out`) even when no role map marks it, and
+    /// labelled dependency when kept. Single-app (`has_primary_role`, review
+    /// r2): the role rule alone, as before TLS-106, so it keeps that finding
+    /// and labels it primary.
     ///
     /// Mutation (2026-11-20): `scope_and_sort`'s filter made
     /// `has_primary_role(&f, role_by_routine)` -> the `dep:` finding is kept
-    /// at the primary tail (red); restored, green.
+    /// at the cross-app primary tail (red); restored, green.
     #[test]
     fn scope_and_sort_filters_and_labels_by_one_predicate() {
         let empty = std::collections::HashMap::new();
@@ -1985,12 +1996,15 @@ mod tests {
                 located("dep", "d1", "dep:abcd:src/B.al", 1, "k"),
             ]
         };
-        let primary = scope_and_sort(input(), &empty, true);
+        let single = scope_and_sort(input(), &empty, true, has_primary_role);
+        assert_eq!(single.primary, [true, true]);
+        assert!(single.scoped_out.is_empty());
+        let primary = scope_and_sort(input(), &empty, true, in_primary_scope);
         let ids: Vec<&str> = primary.findings.iter().map(|f| f.id.as_str()).collect();
         assert_eq!(ids, ["ws"]);
         assert_eq!(primary.primary, [true]);
         assert_eq!(primary.scoped_out.len(), 1);
-        let all = scope_and_sort(input(), &empty, false);
+        let all = scope_and_sort(input(), &empty, false, in_primary_scope);
         let labelled: Vec<(&str, bool)> = all
             .findings
             .iter()
@@ -2033,11 +2047,16 @@ mod tests {
             located("d", "d2", "d", 1, "k"),
             located("t2", "d2", "b", 1, "k"),
         ];
-        let ids: Vec<String> = scope_and_sort(input, &std::collections::HashMap::new(), true)
-            .findings
-            .into_iter()
-            .map(|f| f.id)
-            .collect();
+        let ids: Vec<String> = scope_and_sort(
+            input,
+            &std::collections::HashMap::new(),
+            true,
+            has_primary_role,
+        )
+        .findings
+        .into_iter()
+        .map(|f| f.id)
+        .collect();
         assert_eq!(ids, ["a1", "a-k1", "a-k2", "t1", "t2", "c", "d", "late"]);
     }
 

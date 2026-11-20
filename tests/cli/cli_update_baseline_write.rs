@@ -392,40 +392,95 @@ fn inputs_not_whole_keep_entries() {
     );
 }
 
-/// TLS-106 (review, sol P1): an app opaque now that the file did not record
-/// lost bodies, so the run prunes nothing. Opacity the file recorded stays
-/// allowed: the same stale entry is dropped beside it.
+/// TLS-106 (review r2, sol): a dependency whose package was moved away. Seed
+/// at `--scope all` with the dependency's source present (its findings and
+/// its guid in `bodiedApps`), remove its `.app`, update: the run lacks a body
+/// the file knew, so every entry it no longer sees is kept (inputs not whole)
+/// and the file is unchanged. Restore the package: nothing is reported new.
 ///
-/// Mutation (2026-11-20): the run's opaque apps passed empty
-/// (`.take(0)`) in `analyze_view`'s `UpdateRun` -> the seed records none, the
-/// precondition fails (red); restored, green. The comparison itself is pinned
-/// by `baseline::tests::a_newly_opaque_app_stops_pruning`.
+/// Mutation (2026-11-20): the `None if e.unreadable.is_none()` arm of
+/// `preflight::dependency_bodies` made a no-op -> the update prunes the
+/// dependency's entries (red); restored, green.
 #[test]
-fn a_newly_opaque_app_keeps_entries() {
+fn a_moved_away_dependency_keeps_its_entries() {
+    let dir = tempfile::tempdir().unwrap();
+    let ws = dir.path().join("ws");
+    crate::copy_dir(&Path::new(env!("CARGO_MANIFEST_DIR")).join(DEP_WS), &ws);
+    let ws = ws.to_str().unwrap().to_string();
+    let (path, seed) = seed_of(&dir, &ws, &["--scope", "all"]);
+    assert!(
+        seed.contains("  \"bodiedApps\": [\n    \"d0d00001-0000-4000-8000-0000000000b1\"\n  ],\n"),
+        "precondition: the dependency is bodied: {seed}"
+    );
+    assert!(
+        entries_of(&seed, "dependency") > 0,
+        "precondition: its findings"
+    );
+    let app = Path::new(&ws).join(".alpackages/probe_Out Base_1.0.0.0.app");
+    let away = dir.path().join("away.app");
+    std::fs::rename(&app, &away).unwrap();
+    let (code, counts) = update_json(&ws, &path, &["--scope", "all"]);
+    assert_eq!(code, Some(0));
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), seed);
+    let kept = counts["keptUnchecked"].as_object().unwrap();
+    assert!(
+        kept.keys().all(|k| k == "inputsNotWhole") && kept["inputsNotWhole"].as_u64() >= Some(1),
+        "{counts}"
+    );
+    std::fs::rename(&away, &app).unwrap();
+    let out = alsem(&[
+        "analyze",
+        &ws,
+        "--deterministic",
+        "--scope",
+        "all",
+        "--baseline",
+        &path,
+        "--format",
+        "json",
+    ]);
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(
+        v["payload"]["findings"],
+        serde_json::json!([]),
+        "nothing new"
+    );
+}
+
+/// TLS-106 (review r2): a dependency the file never knew with source does not
+/// stop pruning, even with no body (two symbol-only dependencies here); one the
+/// file knew with source and the run has symbol-only does.
+///
+/// Mutation (2026-11-20): `update_baseline` made "not whole" whenever the run
+/// has any unbodied app -> the never-bodied case keeps the stale entry (red);
+/// restored, green.
+/// Mutation (2026-11-20): the `bodiedApps` intersection test removed from
+/// `update_baseline` -> the once-bodied case drops the stale entry (red);
+/// restored, green.
+#[test]
+fn only_a_lost_body_stops_pruning() {
     const WS: &str = "tests/r0-corpus/ws-cross-object-chain";
+    const DEP: &str = "cccc7777-0000-0000-0000-000000000010";
     let dir = tempfile::tempdir().unwrap();
     let (path, seed) = seed_of(&dir, WS, &[]);
-    let recorded = "  \"opaqueApps\": [\n    \"CrossChainDep\",\n    \"CrossChainDep2\"\n  ],\n";
-    assert!(
-        seed.contains(recorded),
-        "precondition: two opaque apps: {seed}"
-    );
-    // Recorded opacity: the stale entry is dropped.
+    let none = "  \"bodiedApps\": [],\n";
+    assert!(seed.contains(none), "precondition: no bodied apps: {seed}");
+    // Never bodied: the stale entry is dropped.
     std::fs::write(&path, with_stale(&seed, "d19-unused-parameter", "primary")).unwrap();
     let (code, counts) = update_json(WS, &path, &[]);
     assert_eq!(code, Some(0));
     assert_eq!(std::fs::read_to_string(&path).unwrap(), seed);
     assert_eq!(counts["dropped"], 1);
-    // The file recorded none: the run's opaque apps are new; it keeps.
-    let unrecorded = with_stale(
-        &seed.replace(recorded, "  \"opaqueApps\": [],\n"),
+    // Bodied in an earlier run, symbol-only now: it keeps.
+    let once = with_stale(
+        &seed.replace(none, &format!("  \"bodiedApps\": [\n    \"{DEP}\"\n  ],\n")),
         "d19-unused-parameter",
         "primary",
     );
-    std::fs::write(&path, &unrecorded).unwrap();
+    std::fs::write(&path, &once).unwrap();
     let (code, counts) = update_json(WS, &path, &[]);
     assert_eq!(code, Some(0));
-    assert_eq!(std::fs::read_to_string(&path).unwrap(), unrecorded);
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), once);
     assert_eq!(
         counts["keptUnchecked"],
         serde_json::json!({"inputsNotWhole": 1})
