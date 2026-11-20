@@ -1,7 +1,15 @@
 # TLS-106: `--update-baseline` must not lose fingerprints to a filter
 
-Status: revision 3, after review r1 and r2 (Fable, sol). Needs an owner decision (a released file
-format and command change behaviour).
+Status: revision 3, after review r1 and r2 (Fable, sol). Decided 2026-11-20
+(q-20261120T181319-96d0a142, answered by kraken from the owner's principles, the owner may
+overrule; relayed by the orchestrator): implement this revision.
+
+**This revision supersedes option C** (revision 1's per-entry facts merge), on C's own
+principles: 1 (correct first: a filtered update must not lose fingerprints, and a plain union
+keeps stale ones), 5 (fail loudly and closed) and 22 (released: a release note, nothing users
+run today breaks). C's "exact merge" was broken in review (severity drift, the scope rule,
+`--single-app`, incomplete detectors, §3), so this revision keeps C's aim and replaces its
+rule: drop only what the run proves gone.
 
 ## 1. The bug
 
@@ -66,8 +74,12 @@ What the rule promises is about fingerprints, not issues: a detector whose finge
 a sample anchor (d17 takes the first caller's) gives the same issue a new fingerprint when that
 anchor moves; the old one is then pruned and the new one is new (review r2, sol).
 
-Each update prints on stderr how many entries it kept unchecked and why (detector not run or
-incomplete, inputs not whole, out of scope, no detector known), so keeping is never silent.
+Each update states how many entries it kept unchecked, and why, by reason: detector not run,
+detector incomplete, inputs not whole, out of scope, no detector known (version 1), detector
+no longer registered. On stderr (`al-sem: baseline: kept N entries unchecked: ...`) AND, for
+`--format json`, as `payload.summary.baselineUpdate` (`{"written": n, "dropped": n, "added":
+n, "keptUnchecked": {"<reason>": n, ...}}`), so keeping is never silent, for a person or a
+reader of the JSON (decision 2026-11-20).
 
 ## 4. The file, schema 2
 
@@ -119,13 +131,25 @@ incomplete, inputs not whole, out of scope, no detector known), so keeping is ne
 
 ## 6. Release note (CHANGELOG)
 
-"`--update-baseline` no longer drops findings that were outside the run's view. Before, an
-update with `--min-severity`, `--detector`, `--preset`, `--limit`, `--single-app`, the default
-`--scope primary`, a failing detector or degraded coverage removed every finding that run did
-not show, and later runs reported them as new. If that happened to your baseline, rebuild it:
-delete the file and run `alsem analyze <ws> --scope all --baseline <file> --update-baseline`
-with the detectors your gate uses (`--preset`, opt-in detectors), then any narrower updates you
-like: they now keep what they do not see."
+"`--update-baseline` no longer drops findings that were outside the run's view.
+
+- **Before:** an update with `--min-severity`, `--detector`, `--preset`, `--limit`,
+  `--single-app`, the default `--scope primary`, a failing detector or degraded coverage
+  removed every finding that run did not show, and later runs reported them as new.
+- **What a filtered update keeps now:** every entry the run did not prove gone. An entry is
+  dropped only when its detector ran completely, the run's inputs were whole, the entry is
+  inside the run's scope, and its fingerprint is absent before any filter. Everything kept
+  unchecked is counted on stderr and in `--format json` (`payload.summary.baselineUpdate`).
+- **Your old (schema 1) baseline moves to schema 2 by itself:** the first `--update-baseline`
+  reads it, keeps every fingerprint, records a detector for each one the run sees, and writes
+  schema 2. Fingerprints no run sees stay (counted as 'no detector known') until you rebuild.
+  Reading a baseline (`--baseline` alone) works with both schemas. Update every machine that
+  writes the file: an old binary still writes schema 1 with the old, lossy rule.
+- **If an earlier filtered update damaged your baseline,** rebuild it once: delete the file
+  and run `alsem analyze <ws> --scope all --baseline <file> --update-baseline` with the
+  detectors your gate uses (`--preset`, opt-in detectors). This accepts every current finding
+  as the new floor, untriaged: review the list first if that matters. Then any narrower
+  updates you like: they now keep what they do not see."
 
 ## 7. Tests (each with a red proof)
 
@@ -138,6 +162,7 @@ like: they now keep what they do not see."
   ones their detector, writes v2, and reports the unseen count.
 - Malformed, inconsistent, unknown-version files: refused, nothing written; missing: written.
 - Batch: the plan declares the baseline as read and write.
+- The kept-unchecked counts per reason, on stderr and in `payload.summary.baselineUpdate`.
 - An unfiltered update of a clean run writes the same `fingerprints` as today.
 
 ## 8. Owner question
