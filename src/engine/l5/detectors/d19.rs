@@ -52,16 +52,19 @@ fn interface_member_test(ws: &ModelEntities) -> impl Fn(&ModelRoutine) -> bool +
             .or_default()
             .extend(o.interface_bases.iter().map(|b| fold(b)));
     }
-    // A source interface keeps its members in `declaration_only_routines` (names
-    // only: the model keeps them out of `routines`); a symbol-only one has them
-    // as routines. So members match by NAME: a same-named method of another
-    // arity (an overload) is skipped too, the safe side.
+    // A source interface's members are `interface_members`, ALL of them: not
+    // `declaration_only_routines`, which the cross-app model cuts to the demanded
+    // population, and a dependency interface's bodyless members are never
+    // demanded (ENG-151's CDO measurement: System Application's "Email
+    // Connector" read as memberless). A symbol-only interface has its members as
+    // routines. Names only: a same-named method of another arity (an overload)
+    // is skipped too, the safe side.
     let mut members: HashMap<String, HashSet<String>> = HashMap::new();
     for o in ws.objects.iter().filter(|o| o.object_type == "Interface") {
         members
             .entry(fold(&o.name))
             .or_default()
-            .extend(o.declaration_only_routines.iter().map(|d| fold(&d.name)));
+            .extend(o.interface_members.iter().map(|m| fold(m)));
     }
     for r in &ws.routines {
         if let Some(o) = objects.get(r.object_id.as_str())

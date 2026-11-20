@@ -27,6 +27,8 @@ pub(crate) fn dep_object_to_l3(o: &ProjectedObject) -> ModelObject {
         extends_target_name: o.extends_target_name.clone(),
         implements_interfaces: o.implements_interfaces.clone(),
         interface_bases: o.interface_bases.clone(),
+        // A symbol-only interface's members are its routines (d19 reads those).
+        interface_members: Vec::new(),
         // The ABI projection DOES carry `object_subtype` (projection.rs:116) —
         // forward it so native + ABI agree on the ModelObject shape (d46 reads it).
         object_subtype: o.object_subtype.clone(),

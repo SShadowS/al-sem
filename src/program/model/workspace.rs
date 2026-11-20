@@ -60,6 +60,12 @@ pub struct ModelObject {
     /// otherwise. Read by d19 to know a method that implements an inherited
     /// member.
     pub interface_bases: Vec<String>,
+    /// An interface's member names, ALL of them (ENG-151), as declared:
+    /// unlike `declaration_only_routines`, not cut to the population, so a
+    /// dependency interface (whose bodyless members are never demanded) keeps
+    /// them. Source interfaces only; a symbol-only one has its members as
+    /// routines. Empty for every other kind. Read by d19.
+    pub interface_members: Vec<String>,
     /// Object `Subtype` property (Codeunit only; e.g. "Install" / "Upgrade" /
     /// "Test"), else `None`. Additive L2→L3 forward — ModelObject is NOT
     /// Serialize-derived into any gate surface (R0–R3 goldens are field-allowlisted
@@ -1643,6 +1649,15 @@ fn project_ir(
             extends_target_name,
             implements_interfaces,
             interface_bases: o.interface_extends.clone(),
+            interface_members: if object_type == "Interface" {
+                o.routines
+                    .iter()
+                    .filter(|r| !r.name.is_empty())
+                    .map(|r| r.name.clone())
+                    .collect()
+            } else {
+                Vec::new()
+            },
             object_subtype,
             page_type,
             inherent_commit_behavior,

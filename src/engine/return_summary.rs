@@ -1075,6 +1075,7 @@ mod tests {
             extends_target_name: None,
             implements_interfaces: None,
             interface_bases: Vec::new(),
+            interface_members: Vec::new(),
             object_subtype: None,
             page_type: None,
             inherent_commit_behavior: inherent_commit_behavior.map(str::to_string),
