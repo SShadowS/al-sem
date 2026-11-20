@@ -851,10 +851,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   name and two arms may name it differently (sol round 6).
 - **What moves.** Precision is LOST where the old lists said "keeps its value" wrongly (correct),
   and gained where ENG-30's Text rule unbound a parameter passed to a read-only function outside
-  its 15 names (`DelStr`, `StrLen`'s kin). CDO counts: TBD.
+  its 15 names (`DelStr`, `StrLen`'s kin). Measured on CDO (`bc3ccb18`) with
+  `aldump --literal-pruning-stats`, release-fast, ENG-30 (`d6cba139`) against ENG-135
+  (`3d707d3c`; the final head differs only in tests and this file), 34,203 routines:
+
+  | | ENG-30 | ENG-135 |
+  |---|---:|---:|
+  | guard frames: usable parameters | 4,178 | 3,215 |
+  | guard frames: parameters unusable by a write | 4 | 967 |
+  | guard frames: routines with a frame | 3,263 | 2,481 |
+  | value frames: usable parameters | 7,876 | 7,988 |
+  | — by domain: Enum / Integer / Code / Text | 763 / 3,105 / 2,469 / 1,539 | 763 / 3,105 / 2,478 / 1,642 |
+  | value frames: parameters unusable by a write | 5,892 | 5,780 |
+  | flow: parameters bound | 526 | 910 |
+  | one hop: calls binding a parameter (of 63,795) | 7,074 | 6,806 |
+  | one hop: dead sites | 6,616 | 5,602 |
+  | — by guard / value / flow | 2,106 / 4,051 / 5,427 | 980 / 4,058 / 5,427 |
+
+  The compiler's var-ness makes 963 guard parameters unusable (a platform call that may write
+  them), so 1,126 fewer call sites are proven dead by a guard: the old guards trusted a
+  parameter a `var` platform call can change. The value frames and the flow gain where the
+  compiler shows a platform parameter is by value (112 more usable values, 384 more bound flow
+  parameters). Peak RSS 3.65 / 3.64 GB.
   The CDO rendering goldens (`output_cdo`) move for `IssueReminder` and `RunReportID`: 3 more tables
   each beyond dependency calls (`Interaction Merge Data`, `Privacy Notice`, `Privacy Notice
-  Approval`; 198 -> 201 and 412 -> 415 tables), a few more temporary-only ones, and one
+  Approval`; 198 -> 201 and 413 -> 416 tables, on ENG-30's counts), a few more temporary-only ones, and one
   representative path. Bisected to ENG-135's own rule: `Word Template Interactions` calls
   `WordTemplate.Merge(.., EditDoc)` inside Base Application; the literal pruning's call targets
   hold workspace callers only, so that call has none and counts as a possible writer of `EditDoc`.
