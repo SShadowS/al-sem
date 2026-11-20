@@ -7,6 +7,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (TLS-108: `ci-steps perf-bounds` times its bounds under a timed CDO slot hold)
+
+- **What failed.** `perf_bounds` asserts wall-time bounds. In a landing's `ci-steps all` it ran
+  beside other lanes' builds: on 2026-11-20 two landings failed there while a lane built two
+  release-fast trees. TLS-107, a test-only change, failed `recursive_scc_db_effects` at
+  1.18 s against 650 ms and `compute_summaries_v2` at 355 ms against 230 ms, with host CPU
+  pressure (avg300) near 57 %. The TIMED slot hold (TLS-89) protected cdo-speed, not this step.
+- **The fix.** The step builds the test binary first (untimed), then marks the CDO slot's hold
+  TIMED for the binary's run, as cdo-speed does: `cdo-slot` waits for the builds already
+  running and refuses (exit 6, "timed nothing") when they do not end, and the guard refuses
+  new ones. Inside a hold (land's or cdo-gate's token) it shares it; outside any it takes the
+  slot itself. The mark ends with the step. The binary runs from the repository's top, as
+  `cargo test` runs it.
+- **Labelled, never excused.** The step prints one line after the run: its time, the
+  binary's exit, this cgroup's CPU stall share during the run, `UNDER LOAD` above 15 %, and
+  `SUSPENDED` when the host slept. The bounds still decide.
+- **Not done: instruction counts for these bounds** (the task's "consider"). With builds kept
+  away, the measured cause is gone; the bounds time single operations in-process, where
+  per-operation counters would need `perf_event_open` in the test itself. Left for a task if
+  a bound fails again under the timed hold.
+- **Where no slot can be held** (GitHub CI runs this step, `ci.yml`; a hosted runner has no
+  `/work`, the Windows machine no `flock`), the step runs with no hold and says so in its line
+  (`no CDO slot held: ...`). Holding it there failed or hung CI (review r1, Fable and sol). It
+  also takes the slot with no memory floor (the step needs none), as `land` does.
+- **A parked gate is not a build** (`scripts/cdo-slot` `foreign_builds`). A timed wait counted
+  every `ci-steps` process as a build, including one parked in `acquire --wait` behind the
+  slot's holder. So a landing's timed step waited for a lane's queued gate while that gate
+  waited for the landing, until the 1,800 s wait ran out and the landing failed (review r1,
+  Fable and sol). A queued waiter's ancestors are now skipped, but only build SCRIPTS: an
+  exact build name (cargo, rustc) always counts, and a ticket counts only when its PID and
+  start time are both alive (a dead waiter's reused PID parks nothing; review r2, sol). Its
+  siblings and children still count. This applies to every timed acquire, cdo-speed's
+  included.
+- **Labels.** The stall share is of awake time (a suspend no longer dilutes it), compared
+  before rounding (15.99 % is above 15 %), and names its source (this cgroup's, or the
+  host's when only `/proc/pressure/cpu` is readable). An unreadable suspend reading is said, and
+  a suspend covering the whole run says "load not checked: the host slept through the run".
+- **Tests.** Eight, on a private slot with a stand-in test binary
+  (`CI_STEPS_PERF_BOUNDS_BIN`), the correctness guards each with a red proof:
+  - the step takes the slot timed, the binary runs inside the timed mark (it prints the
+    slot's status from inside), and its exit is the step's (proof: the acquire dropped);
+  - beside a running build it times nothing and fails, naming the build (proof: exit 6
+    accepted);
+  - on a CI runner it holds no slot and says so (proof: no-slot check always empty);
+  - inside a hold (a landing's token) it shares it;
+  - a parked gate does not stop it (proof: the parked skip dropped);
+  - the parked skip hides no real build: a stale ticket and a parked exact build name both
+    still count (proofs: the start time not checked; the script-only condition dropped);
+  - load above and below 15 % (proof: the share compared the wrong way); a suspend, with the
+    share of awake time (proof: the share over wall time).
+  Hooks: `CI_STEPS_CPU_PRESSURE_FILE`, `CDO_HOST_SUSPENDED_FILE`.
+
 ### Fixed (TLS-107: TLS-104's suspend test no longer fails on a loaded machine)
 
 - **What failed.** `cdo_slot_timed_wait_survives_a_host_suspend` failed in task gates under

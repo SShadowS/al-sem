@@ -88,7 +88,9 @@ scripts/cdo-slot acquire|release|status|run <owner> <reason>  # The one CDO slot
                                # (TLS-89; `run <owner> <reason> --timed -- <cmd>`, or `acquire ... --bind PID
                                # --timed`): cdo-speed takes it timed after its builds (sharing the hold it is
                                # in, so a land's and cdo-gate's speed phase is timed), cdo-before-after for its
-                               # measuring; any other timed run of yours passes it too. A timed acquire first
+                               # measuring, `ci-steps perf-bounds` for its test binary (TLS-108: a land's
+                               # `ci-steps all` failed its wall-time bounds beside a lane's builds); any other
+                               # timed run of yours passes it too. A timed acquire first
                                # waits for the build processes already running (cargo, cargo-nextest, rustc,
                                # rustdoc by exact name; ci-steps and check-goldens by argv; never a
                                # self-matching `pgrep -f`) until none is seen for CDO_SLOT_TIMED_GRACE_S (3 s)
