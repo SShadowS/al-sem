@@ -674,10 +674,12 @@ impl ResolveIndex {
             .iter()
             .filter(|o| o.id.kind == iface && !o.interface_bases.is_empty())
             .map(|d| {
+                // A name that does not resolve uniquely names every interface of
+                // that name (`interfaces_named_from`): over-approximate, never drop.
                 let bases = d
                     .interface_bases
                     .iter()
-                    .filter_map(|b| graph.resolve_object(d.id.app, iface, &b.fold_identifier()))
+                    .flat_map(|b| graph.interfaces_named_from(d.id.app, &b.fold_identifier()))
                     .collect();
                 (&d.id, bases)
             })
@@ -689,14 +691,12 @@ impl ResolveIndex {
                     continue;
                 }
                 for name in &obj.implements {
-                    let Some(derived) =
-                        graph.resolve_object(obj.id.app, iface, &name.fold_identifier())
-                    else {
-                        continue;
-                    };
-                    let mut seen: HashSet<&ObjectNodeId> = HashSet::from([&derived.id]);
-                    let mut stack: Vec<&ObjectNode> =
-                        bases_of.get(&derived.id).cloned().unwrap_or_default();
+                    let derived = graph.interfaces_named_from(obj.id.app, &name.fold_identifier());
+                    let mut seen: HashSet<&ObjectNodeId> = derived.iter().map(|d| &d.id).collect();
+                    let mut stack: Vec<&ObjectNode> = derived
+                        .iter()
+                        .flat_map(|d| bases_of.get(&d.id).cloned().unwrap_or_default())
+                        .collect();
                     stack.reverse();
                     while let Some(base) = stack.pop() {
                         if !seen.insert(&base.id) {
@@ -2154,7 +2154,7 @@ mod tests {
         kind.closed_enum = true;
         let name = |s: &str| ObjectRef::Name {
             raw: s.into(),
-            normalized_lc: s.to_ascii_lowercase(),
+            normalized_lc: s.fold_identifier(),
         };
         kind.enum_impls = vec![
             ("ibar".into(), name("Real")),
@@ -2175,6 +2175,35 @@ mod tests {
             index.unmapped_enum_implementers(&graph, "ibar"),
             vec![kind_id]
         );
+    }
+
+    /// An interface name that resolves to nothing (review, Fable): the relation
+    /// answers in the safe direction. `interface_is_or_derives` counts it (a
+    /// mapping that may be the site's), and `interface_binds` says an interface
+    /// with such a base "may bind" any interface parameter (undecided, never a
+    /// wrong pick). Mutations (2026-11-20): each fallback back to `false` -> its
+    /// assertion red; each restored, green.
+    #[test]
+    fn an_unresolved_interface_name_answers_the_safe_way() {
+        use crate::program::resolve::arg_dispatch::{interface_binds, interface_is_or_derives};
+        let mut apps = AppRegistry::default();
+        let a = apps.intern(&make_app_id("AppA"));
+        let mut der = make_obj(a, ObjectKind::Interface, None, "IDer", None, vec![]);
+        der.interface_bases = vec!["IGhost".into()];
+        let other = make_obj(a, ObjectKind::Interface, None, "IOther", None, vec![]);
+        let (der_id, other_id) = (der.id.clone(), other.id.clone());
+        let mut objects = vec![der, other];
+        objects.sort_by(|x, y| x.id.cmp(&y.id));
+        let obj_index = ObjectIndex::build(&objects);
+        let graph = ProgramGraph {
+            apps,
+            objects: objects.into(),
+            obj_index,
+            ..Default::default()
+        };
+        let index = ResolveIndex::build(&graph);
+        assert!(interface_is_or_derives(&graph, &index, a, "ider", "ighost"));
+        assert!(interface_binds(&graph, &index, &der_id, &other_id));
     }
 
     #[test]

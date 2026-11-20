@@ -103,6 +103,21 @@ pub struct AbiIngestError {
 }
 
 impl ProgramGraph {
+    /// ENG-142: the interface `name_lc` names from `app`: the one
+    /// [`Self::resolve_object`] finds, or, when it finds none (two dependencies
+    /// declaring the name, or none visible), every interface of that name
+    /// (review, Fable: dropping an unresolved name lost implementers and closed
+    /// sites; over-approximating keeps them).
+    pub fn interfaces_named_from(&self, app: AppRef, name_lc: &str) -> Vec<&ObjectNode> {
+        if let Some(o) = self.resolve_object(app, ObjectKind::Interface, name_lc) {
+            return vec![o];
+        }
+        self.objects
+            .iter()
+            .filter(|o| o.id.kind == ObjectKind::Interface && o.name.fold_identifier() == name_lc)
+            .collect()
+    }
+
     /// ENG-142: adds to `names` (lowercased interface names) every interface
     /// derived from one of them, transitively (`ObjectNode::interface_bases`),
     /// so a reader matching implementers BY NAME (`o.implements`) also takes an

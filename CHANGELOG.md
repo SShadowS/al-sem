@@ -71,6 +71,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   gains more through derived interfaces stops typing such chains: a precision loss that comes
   with the soundness gain. Typing interface chains from the declared signature whatever the
   implementer count is a separate change (filed).
+- **A name that does not resolve uniquely** (two dependencies declaring it, or none visible)
+  answers the safe way everywhere (review, Fable): the implementer closure and G28 take every
+  interface of the name (`ProgramGraph::interfaces_named_from`); an enum mapping counts for G24
+  and coverage; an interface argument "may bind" (undecided). Dropping it, as the first identity
+  version did, lost implementers, kept sites closed and could pick the wrong overload. Tests:
+  `an_ambiguous_base_name_keeps_the_derived_implementer` (two dependencies declare `IDup`) and
+  `an_unresolved_interface_name_answers_the_safe_way`, each with red proofs.
 - **Still keyed by name, as before (filed).** `implementers_of` answers by interface NAME, so a
   call through one app's `IBase` also lists the implementers of another app's same-named
   `IBase`, as it always did for direct implementers. The inheritance closure resolves by

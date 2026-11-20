@@ -563,3 +563,56 @@ fn a_dependency_interfaces_bases_come_from_its_symbols() {
         "B.Go() reaches the dependency's IDepDer implementer"
     );
 }
+
+/// An interface name the workspace cannot resolve uniquely (review, Fable): two
+/// dependencies each declare `IDup`, and the workspace's `IDer extends IDup`. The
+/// base resolves to neither, so the closure takes every interface of the name,
+/// and a call through `IDup` reaches `IDer`'s implementer (dropping the
+/// unresolved base lost it: a missed edge).
+/// Mutation (2026-11-20): `interfaces_named_from` without the by-name fallback
+/// -> `50101.go` missing (red); restored, green.
+#[test]
+fn an_ambiguous_base_name_keeps_the_derived_implementer() {
+    let dep = |guid: &str, name: &str| {
+        let symbols = r#"{"RuntimeVersion":"15.0","Interfaces":[{"Name":"IDup","Methods":[{"Name":"Go","Parameters":[]}]}]}"#;
+        let manifest = format!(
+            r#"<?xml version="1.0" encoding="utf-8"?><Package xmlns="http://schemas.microsoft.com/navx/2015/manifest"><App Id="{guid}" Name="{name}" Publisher="probe" Version="1.0.0.0" Runtime="15.0" /></Package>"#
+        );
+        crate::engine::deps::app_package_zip::test_apps::build_app(&[
+            ("NavxManifest.xml", manifest.as_bytes()),
+            ("SymbolReference.json", symbols.as_bytes()),
+        ])
+    };
+    let (g1, g2) = (
+        "14214214-0000-0000-0000-0000000000d1",
+        "14214214-0000-0000-0000-0000000000d2",
+    );
+    let app_json = format!(
+        r#"{{"id":"14214214-0000-0000-0000-000000000003","name":"Ws142b","publisher":"probe","version":"1.0.0.0","runtime":"15.0","idRanges":[{{"from":50100,"to":50199}}],"dependencies":[{{"id":"{g1}","name":"DupA","publisher":"probe","version":"1.0.0.0"}},{{"id":"{g2}","name":"DupB","publisher":"probe","version":"1.0.0.0"}}]}}"#
+    );
+    let dir = write(&[
+        ("app.json", app_json),
+        (
+            "src/Der.al",
+            "interface IDer extends IDup\n{\n    procedure Extra();\n}\n".into(),
+        ),
+        (
+            "src/Impl.al",
+            "codeunit 50101 \"C Der\" implements IDer\n{\n    procedure Go()\n    begin\n    end;\n\n    procedure Extra()\n    begin\n    end;\n}\n".into(),
+        ),
+        (
+            "src/Caller.al",
+            "codeunit 50120 \"Caller\"\n{\n    procedure Calls()\n    var\n        B: Interface IDup;\n    begin\n        B.Go();\n    end;\n}\n".into(),
+        ),
+    ]);
+    let pkgs = dir.path().join(".alpackages");
+    std::fs::create_dir_all(&pkgs).unwrap();
+    std::fs::write(pkgs.join("probe_DupA_1.0.0.0.app"), dep(g1, "DupA")).unwrap();
+    std::fs::write(pkgs.join("probe_DupB_1.0.0.0.app"), dep(g2, "DupB")).unwrap();
+    let report = resolve_full_program(dir.path()).expect("resolves");
+    assert!(
+        interface_targets(&report, "go").contains(&"50101.go".to_string()),
+        "{:?}",
+        interface_targets(&report, "go")
+    );
+}

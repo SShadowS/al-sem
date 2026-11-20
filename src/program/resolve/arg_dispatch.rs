@@ -2574,7 +2574,9 @@ pub(crate) fn interface_is_or_derives(
     let find = |n: &str| graph.resolve_object(app, ObjectKind::Interface, n);
     match (find(derived_lc), find(base_lc)) {
         (Some(d), Some(b)) => interface_binds(graph, index, &d.id, &b.id),
-        _ => false,
+        // A name that does not resolve uniquely may be the other's (review,
+        // Fable): counting the mapping can only open a site, never close one.
+        _ => true,
     }
 }
 
@@ -2607,7 +2609,10 @@ pub(crate) fn interface_binds(
                     let Some(base) =
                         graph.resolve_object(o.id.app, ObjectKind::Interface, &b.fold_identifier())
                     else {
-                        continue;
+                        // A base that does not resolve uniquely may be (or lead
+                        // to) the parameter's interface (review, Fable): "may
+                        // bind" leaves the call undecided, never a wrong pick.
+                        return true;
                     };
                     if base.id == *param {
                         return true;

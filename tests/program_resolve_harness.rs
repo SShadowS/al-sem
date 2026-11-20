@@ -8329,22 +8329,22 @@ fn resolve_module_pick_first_base_function_callers_are_a_known_allowlist() {
             "graph.resolve_object(o.id.app, ObjectKind::Interface, &b.fold_identifier())",
         ),
         // ENG-142: the same base lookup for overload picking (`interface_binds`:
-        // does an interface argument derive from an interface parameter).
+        // does an interface argument derive from an interface parameter). An
+        // unresolvable base answers "may bind": undecided, never a wrong pick.
         (
             "arg_dispatch.rs",
             "graph.resolve_object(o.id.app, ObjectKind::Interface, &b.fold_identifier())",
         ),
-        // ENG-142: the implementer index's inheritance closure, by identity: each
-        // base from its declaring interface's app, and each implemented interface
-        // from its implementer's app. Semantic: an unresolvable name adds nothing.
+        // ENG-142: an enum mapping's interface against a site's interface, both
+        // named from the enum's app (`interface_is_or_derives`, G24 and the
+        // closed-enum coverage proof). Unresolvable: the mapping counts.
         (
-            "index.rs",
-            ".filter_map(|b| graph.resolve_object(d.id.app, iface, &b.fold_identifier()))",
+            "arg_dispatch.rs",
+            "let find = |n: &str| graph.resolve_object(app, ObjectKind::Interface, n);",
         ),
-        (
-            "index.rs",
-            "graph.resolve_object(obj.id.app, iface, &name.fold_identifier())",
-        ),
+        // (ENG-142's implementer closure resolves through
+        // `ProgramGraph::interfaces_named_from`, outside this module: a name that
+        // does not resolve uniquely names every interface of that name.)
         // The query-column chain arm (S9.0e): a declared `Query` var's object,
         // the same lookup `resolve_member`'s `Object` arm makes for it; a
         // collision fails closed and the arm declines.

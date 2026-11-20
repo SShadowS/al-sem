@@ -790,9 +790,11 @@ fn closed_internal_interfaces(
             let bases = d
                 .interface_bases
                 .iter()
-                .filter_map(|b| {
+                // Unresolved: every interface of the name (review, Fable: a
+                // dropped base stayed closed).
+                .flat_map(|b| {
                     use al_syntax::IdentifierFoldExt;
-                    graph.resolve_object(d.id.app, ObjectKind::Interface, &b.fold_identifier())
+                    graph.interfaces_named_from(d.id.app, &b.fold_identifier())
                 })
                 .map(|b| b.id.clone())
                 .collect();
