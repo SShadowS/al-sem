@@ -870,7 +870,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     with-scope resolution (ENG-143) gives them back.
     Goldens: `ws-with-receiver` (`with R do begin Insert(); Modify; end;`) moves in r3a2, r3a3
     and the policy-facts oracle, its two writes' temp state going from known physical to
-    unknown (`prove` still `yes`); nothing else moved.
+    unknown (`prove` still `yes`); nothing else moved. On CDO the rule reaches the untrusted
+    bodies (ENG-14's census): the L4 frozen digest moves (956 routines inherit two `Get`s of
+    `CDO E-Mail::SetSendingMethodAndFromAddress` going known physical to unknown; nothing added
+    or removed; README re-freeze log), and RunReportID may write one more table, System App's
+    `Email Account`, whose temporary-record `Delete` in the untrusted Email Accounts page
+    routine is now unknown (412 -> 413 tables in its explain, query and digest renderings);
+    IssueReminder's literal arguments already rule that table out (273 -> 274). No write
+    disappears.
     Write detection keeps the texts, so a call that may write a variable is still seen. An
     explicit `Enum::"E"::Member` keeps its value. Resolving with-scope names as alc does is
     ENG-143. A write
