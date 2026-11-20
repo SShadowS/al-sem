@@ -178,7 +178,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `format_pr_summary` and `format_sarif` take the focus statement as a new last argument
   (`None` gives the old output); `JsonFormatInputs` and `HtmlFormatInputs` gain a field.
 - **Without `--focus`** every output is unchanged; no golden moved.
-- **Measured.** MEASUREMENT
+- **Measured.** On DO (`b3b44591`, clean; the owner's case), release-fast:
+  - Without `--focus` nothing moves against master `41afdd64` (`scripts/cdo-before-after`):
+    2,178 findings at both scopes, no fingerprint added or removed, the primary-scope JSON
+    byte-identical, the call graph unchanged.
+  - `--focus behaviour` (`--scope primary`) shows 438 findings and hides 1,740: 1,476
+    performance (d1 1,177, d3 227, d55 34, d5 23, d18 12, d42 3) and 264 maintainability
+    (d14 103, d19 88, d16 46, d12 23, d32 3, d20 1). `--focus behaviour,maintainability`
+    shows 702 and hides 1,476.
+  - In both, shown plus hidden is the unfocused 2,178, and every shown finding's id and
+    fingerprint is the unfocused run's.
 
 ### Added (TLS-104: a host suspend is labelled in cdo-speed, cdo-gate and cdo-slot)
 
