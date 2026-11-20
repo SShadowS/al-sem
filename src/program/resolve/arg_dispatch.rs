@@ -1897,7 +1897,13 @@ fn call_result_arg_from_routine_node(
     let Some(ty_text) = node.return_type.as_deref() else {
         return ArgDispatchInfo::untyped();
     };
-    let canonical = dispatch_canonical_type_text(ty_text, from, graph, index);
+    // ENG-152: an interface return type binds in the callee's app, as the
+    // receiver path's `declared_in` does.
+    let scope = match classify_type_text(ty_text) {
+        ParsedType::Interface { .. } => &node.id.object,
+        _ => from,
+    };
+    let canonical = dispatch_canonical_type_text(ty_text, scope, graph, index);
     if let Some((_name, id)) = &node.return_type_id {
         match &canonical {
             Some(CanonicalArgType::Object(oid)) => match object_by_id(graph, oid) {

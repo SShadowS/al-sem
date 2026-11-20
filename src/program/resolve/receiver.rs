@@ -912,8 +912,9 @@ pub fn infer_receiver_type(
     // Step 2 miss: the extension's own scope comes first.
     // -----------------------------------------------------------------------
 
-    if let Some(ty) = base_protected_var_type(&lookup_lc, from_object, graph, index) {
-        return parsed_type_to_receiver(classify_type_text(&ty), from_object, graph, index);
+    if let Some((ty, app)) = base_protected_var_type(&lookup_lc, from_object, graph, index) {
+        return parsed_type_to_receiver(classify_type_text(&ty), from_object, graph, index)
+            .declared_in(app);
     }
 
     // -----------------------------------------------------------------------
@@ -1391,18 +1392,18 @@ fn object_scope_has_bare_routine_shadow(
 /// The declared type of `name_lc` among the `protected var` globals of the object
 /// `from_object` extends (Step 2c). `None` when `from_object` is not an extension,
 /// its base does not resolve uniquely in its closure, or the base declares no such
-/// protected variable.
+/// protected variable. With the base's app, where the type binds (ENG-152).
 fn base_protected_var_type(
     name_lc: &str,
     from_object: &ObjectNode,
     graph: &dyn GraphReads,
     index: &dyn IndexReads,
-) -> Option<String> {
-    extension_base_object(from_object, graph, index)??
-        .protected_vars
+) -> Option<(String, crate::program::node::AppRef)> {
+    let base = extension_base_object(from_object, graph, index)??;
+    base.protected_vars
         .iter()
         .find(|(n, _)| n == name_lc)
-        .map(|(_, ty)| ty.to_string())
+        .map(|(_, ty)| (ty.to_string(), base.id.app))
 }
 
 /// The object `from_object` extends, as Step 2c reads it: `None` when

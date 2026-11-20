@@ -178,6 +178,118 @@ fn closed_enum_site(deps: &[(&str, &str)]) -> SetCompleteness {
     sites[0].edge.completeness
 }
 
+/// An interface no loaded app declares: package B implements app A's `IGone`
+/// (`#<A>#IGone`), A's package is absent, and the workspace calls through a
+/// bare `IGone`. Neither reference binds, so which app each means cannot be
+/// checked: the call reaches B's codeunit, as it did by name.
+///
+/// Mutation (2026-11-20, review Fable): the unbound bucket keyed by the
+/// reference's app too -> no route (red); restored, green.
+#[test]
+fn an_unbound_receiver_reaches_every_unbound_implementer_of_its_name() {
+    let a_dashless = A_GUID.replace('-', "");
+    let b_symbols = format!(
+        r##"{{"RuntimeVersion":"15.0","Codeunits":[{{"Id":70201,"Name":"B Impl","ImplementedInterfaces":["#{a_dashless}#IGone"],"Methods":[{{"Id":1,"Name":"Go","Parameters":[]}}]}}]}}"##
+    );
+    let caller = "codeunit 50120 \"Caller\"\n{\n    procedure Calls()\n    var\n        X: Interface IGone;\n    begin\n        X.Go();\n    end;\n}\n";
+    let r = report(
+        &[(B_GUID, "DepB152")],
+        &[("src/Caller.al", caller)],
+        vec![(
+            "probe_DepB152_1.0.0.0.app".into(),
+            app(B_GUID, "DepB152", &b_symbols, &[]),
+        )],
+    );
+    assert_eq!(targets(&r, "calls"), ["70201"]);
+}
+
+/// A base object's protected variable binds in the base's app: A's table
+/// declares `protected var X: Interface IDup` (A's `IDup`); W's table
+/// extension calls `X.Go()` and sees B's `IDup` too. Only A's implementer.
+///
+/// Mutation (2026-11-20, review Fable): Step 2c's receiver not re-scoped
+/// (`declared_in` dropped) -> 70202 reached too (red); restored, green.
+#[test]
+fn a_protected_variable_binds_in_its_base_objects_app() {
+    let dep_src = "interface IDup\n{\n    procedure Go();\n}\n\ntable 70101 \"Dep T\"\n{\n    fields\n    {\n        field(1; \"Code\"; Code[20]) { }\n    }\n\n    protected var\n        X: Interface IDup;\n}\n\ncodeunit 70102 \"Dep Impl\" implements IDup\n{\n    procedure Go()\n    begin\n    end;\n}\n";
+    let a_symbols = r#"{"RuntimeVersion":"15.0","Interfaces":[{"Name":"IDup","Methods":[{"Name":"Go","Parameters":[]}]}],"Tables":[{"Id":70101,"Name":"Dep T","Fields":[{"Id":1,"Name":"Code","TypeDefinition":{"Name":"Code"}}]}],"Codeunits":[{"Id":70102,"Name":"Dep Impl","ImplementedInterfaces":["IDup"],"Methods":[{"Id":1,"Name":"Go","Parameters":[]}]}]}"#;
+    let b_symbols = r#"{"RuntimeVersion":"15.0","Interfaces":[{"Name":"IDup","Methods":[{"Name":"Go","Parameters":[]}]}],"Codeunits":[{"Id":70202,"Name":"B Impl","ImplementedInterfaces":["IDup"],"Methods":[{"Id":1,"Name":"Go","Parameters":[]}]}]}"#;
+    let ext = "tableextension 50130 \"W T Ext\" extends \"Dep T\"\n{\n    procedure Calls()\n    begin\n        X.Go();\n    end;\n}\n";
+    let r = report(
+        &[(A_GUID, "DepA152"), (B_GUID, "DepB152")],
+        &[("src/Ext.al", ext)],
+        vec![
+            (
+                "probe_DepA152_1.0.0.0.app".into(),
+                app(A_GUID, "DepA152", a_symbols, &[("src/Dep.al", dep_src)]),
+            ),
+            (
+                "probe_DepB152_1.0.0.0.app".into(),
+                app(B_GUID, "DepB152", b_symbols, &[]),
+            ),
+        ],
+    );
+    assert_eq!(targets(&r, "calls"), ["70102"]);
+}
+
+/// A call result passed as an argument types the argument from the callee's
+/// app: `F.Take(F.Make())`, with A's `Take` overloaded on `Interface IDup` and
+/// `Interface IOther`, picks the `IDup` overload, since `Make` returns A's
+/// `IDup`. Typed from W (which sees B's `IDup` too) the argument binds no
+/// single interface and both overloads stay.
+///
+/// Mutation (2026-11-20, review Fable): `call_result_arg_from_routine_node`
+/// typing the result from the caller -> two routes (red); restored, green.
+#[test]
+fn a_call_result_argument_binds_in_the_callees_app() {
+    let dep_src = "interface IDup\n{\n    procedure Go();\n}\n\ninterface IOther\n{\n    procedure Go();\n}\n\ncodeunit 70101 \"Factory\"\n{\n    procedure Make(): Interface IDup\n    var\n        I: Codeunit \"Dep Impl\";\n    begin\n        exit(I);\n    end;\n\n    procedure Take(X: Interface IDup)\n    begin\n    end;\n\n    procedure Take(X: Interface IOther)\n    begin\n    end;\n}\n\ncodeunit 70102 \"Dep Impl\" implements IDup\n{\n    procedure Go()\n    begin\n    end;\n}\n";
+    let iface =
+        |n: &str| format!(r#"{{"Name":"{n}","Methods":[{{"Name":"Go","Parameters":[]}}]}}"#);
+    let take = |n: &str| {
+        format!(
+            r#"{{"Name":"Take","Parameters":[{{"Name":"X","TypeDefinition":{{"Name":"Interface","Subtype":{{"Name":"{n}"}}}}}}]}}"#
+        )
+    };
+    let a_symbols = format!(
+        r#"{{"RuntimeVersion":"15.0","Interfaces":[{},{}],"Codeunits":[{{"Id":70101,"Name":"Factory","Methods":[{{"Name":"Make","Parameters":[],"ReturnTypeDefinition":{{"Name":"Interface","Subtype":{{"Name":"IDup"}}}}}},{},{}]}},{{"Id":70102,"Name":"Dep Impl","ImplementedInterfaces":["IDup"],"Methods":[{{"Name":"Go","Parameters":[]}}]}}]}}"#,
+        iface("IDup"),
+        iface("IOther"),
+        take("IDup"),
+        take("IOther")
+    );
+    let b_symbols = format!(
+        r#"{{"RuntimeVersion":"15.0","Interfaces":[{}]}}"#,
+        iface("IDup")
+    );
+    let caller = "codeunit 50120 \"Caller\"\n{\n    procedure Calls()\n    var\n        F: Codeunit Factory;\n    begin\n        F.Take(F.Make());\n    end;\n}\n";
+    let r = report(
+        &[(A_GUID, "DepA152"), (B_GUID, "DepB152")],
+        &[("src/Caller.al", caller)],
+        vec![
+            (
+                "probe_DepA152_1.0.0.0.app".into(),
+                app(A_GUID, "DepA152", &a_symbols, &[("src/Dep.al", dep_src)]),
+            ),
+            (
+                "probe_DepB152_1.0.0.0.app".into(),
+                app(B_GUID, "DepB152", &b_symbols, &[]),
+            ),
+        ],
+    );
+    let takes: Vec<_> = r
+        .edges
+        .iter()
+        .filter(|c| {
+            c.edge.from.name_lc.as_ref() == "calls"
+                && c.edge.routes.iter().any(|rt| {
+                    matches!(&rt.target, RouteTarget::Routine(id) if id.name_lc.as_ref() == "take")
+                })
+        })
+        .collect();
+    assert_eq!(takes.len(), 1, "precondition: one Take site");
+    assert_eq!(takes[0].edge.routes.len(), 1, "{:?}", takes[0].edge.routes);
+}
+
 /// A callee's interface return type binds in the CALLEE's app. Dependency A
 /// declares `IDup`, a `Factory` whose `Make()` returns it, and an implementer;
 /// dependency B (which A does not see) declares its own `IDup` and

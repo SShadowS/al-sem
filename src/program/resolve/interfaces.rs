@@ -7,8 +7,11 @@
 //! base; `interface IBaz extends IBar`: alc 18.0.41 accepts
 //! `B := <codeunit implementing IBaz>` for `B: Interface IBar`). A base binds
 //! from its declaring interface's app. A reference that binds no interface node
-//! goes to the unbound bucket of its `(app, folded name)`, where only a receiver
-//! unbound the same way finds it (two apps' references never pool).
+//! goes to the unbound bucket of its folded name, whatever app it names: an
+//! unbound reference is one whose interface is not loaded, so which app it
+//! means cannot be checked, and an unbound receiver of that name reaches them
+//! all (review, Fable: keyed by app too, a bare unbound receiver missed a
+//! symbol-only implementer of `#<A>#I` with A's package absent).
 //!
 //! `ResolveIndex` keeps one (the resolver's reads, recorded for the session);
 //! the model's dispatch meta and the impact hub build their own from the same
@@ -20,11 +23,11 @@ use al_syntax::IdentifierFoldExt;
 use al_syntax::ir::ObjectKind;
 
 use crate::program::graph::{InterfaceBinding, ProgramGraph};
-use crate::program::node::{ObjectNodeId, SharedStr};
+use crate::program::node::ObjectNodeId;
 use crate::program::node_extract::InterfaceRef;
 
-/// The unbound bucket's key: `(closed enum?, the reference's app, folded name)`.
-type UnboundKey = (bool, Option<SharedStr>, String);
+/// The unbound bucket's key: `(closed enum?, folded name)`.
+type UnboundKey = (bool, String);
 
 /// See the module doc.
 #[derive(Debug, Default, Clone)]
@@ -81,7 +84,7 @@ impl InterfaceImplementers {
                 for r in &obj.implements {
                     let binding = graph.bind_interface(obj.id.app, r);
                     if binding == InterfaceBinding::Unbound {
-                        let key = (obj.closed_enum, r.app.clone(), r.name.fold_identifier());
+                        let key = (obj.closed_enum, r.name.fold_identifier());
                         push(out.unbound.entry(key).or_default(), &obj.id);
                     }
                     direct.extend(binding.ids().iter().cloned());
@@ -135,10 +138,10 @@ impl InterfaceImplementers {
     }
 
     /// The codeunits (`closed_enum: false`) or closed enums (`true`) whose
-    /// reference binds no interface node, filed by `r`'s app and folded name.
+    /// reference binds no interface node, filed by `r`'s folded name.
     pub fn unbound_of(&self, closed_enum: bool, r: &InterfaceRef) -> &[ObjectNodeId] {
         self.unbound
-            .get(&(closed_enum, r.app.clone(), r.name.fold_identifier()))
+            .get(&(closed_enum, r.name.fold_identifier()))
             .map(Vec::as_slice)
             .unwrap_or(&[])
     }
