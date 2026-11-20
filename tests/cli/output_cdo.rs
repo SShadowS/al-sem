@@ -834,7 +834,11 @@ fn ratchet(label: &str, call: &str) -> Budget {
         // ENG-10 (2026-11-12): one `not raised: 12 try calls' write-refusal
         // errors` line, the 12 refusal rows no try call may raise counted
         // apart from the caught errors: IssueReminder 34,585 B (was 34,480).
-        ("IssueReminder", "explain human") => (145, 34_800),
+        // ENG-159 (2026-11-20): the sound rule for records kept elsewhere (owner-approved
+        // precision drop) — IssueReminder may write 422 tables, not 201, and literal arguments
+        // rule none out, so more reach is listed: 144 lines, 37,933 B. ENG-161's escape facts
+        // should win the tables back; bring this down then.
+        ("IssueReminder", "explain human") => (145, 38_200),
         ("RunReportID", "explain human") => (160, 40_200),
         (_, "explain human") => (30, 2_500),
         ("IssueReminder", "query effects human") => (70, 23_000),
@@ -890,9 +894,13 @@ fn ratchet(label: &str, call: &str) -> Budget {
         // Engine limits wave 2 (2026-11-10): report saves now run the report's
         // triggers, so the answer is a real `yes` with two evidence rows sharing
         // a 33-hop route (4,568 B), not `unknown` with folded blockers.
-        ("IssueReminder", "prove writes-table data-exch human") => (30, 4_800),
+        // ENG-159 (2026-11-20): the sound rule (as for explain above): 22 lines, 7,446 B.
+        // ENG-161 should bring it back down.
+        ("IssueReminder", "prove writes-table data-exch human") => (30, 7_600),
         (_, "prove writes-table data-exch human") => (30, 3_000),
-        ("IssueReminder", "digest human") => (125, 40_700),
+        // ENG-159 (2026-11-20): the sound rule (as for explain above): 128 lines, 35,129 B.
+        // ENG-161 should bring it back down.
+        ("IssueReminder", "digest human") => (130, 40_700),
         // ENG-10 (2026-11-12): the same `not raised:` line: 136 lines.
         // ENG-19 (2026-11-14): `Report.RunRequestPage` with a run-time report id
         // (CDOEMailTemplateManagement.Codeunit.al:1434) is an open run, one more

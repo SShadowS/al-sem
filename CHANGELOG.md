@@ -253,7 +253,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a value type (`HttpRetained`), the own-trigger rule for every firing operation
   (`OwnDeleteAll`), shadowed names ignored for call sites (`ShadowKeepRoot`) and for record
   operations (`ShadowOpRetained`).
-- **Re-baseline:** filled in below after the CDO before-after.
+- **Final CDO numbers** (this change's head against master `bd988b97`, cdo-before-after
+  2026-11-20): findings, fingerprints and detectors unchanged at both scopes (2306 / 32429,
+  0 added, 0 removed), unknown 0; IssueReminder may write 201 -> 422 tables and literal
+  arguments rule out 274 -> 0 (108 -> 37 effect rows); RunReportID unchanged (416, 0);
+  one-hop calls with a binding 6802 -> 6757 (the rule alone: 6665), dead sites 5602 -> 5600.
+- **Re-baseline.** Five IssueReminder rendering goldens re-minted from the CDO baseline
+  (`tests/cli-output-goldens/cdo/IssueReminder.{explain.human.txt,query-effects.human.txt,
+  prove-may-commit.human.txt,prove-writes-table-data-exch.human.txt,digest-summary.json}`):
+  the widened reach only (422 tables; 412 beyond dependency calls through 16 dependency
+  routines, new routes through `Import Attachment - Inc. Doc.` and `Sales-Calc. Discount`;
+  24 commit effects, was 17; events 687 -> 7,529). Three IssueReminder size ratchets in
+  `tests/cli/output_cdo.rs` rise to the measured sizes: explain 34,800 -> 38,200 B, prove
+  writes-table data-exch 4,800 -> 7,600 B, digest 125 -> 130 lines. ENG-161's escape facts are
+  to win the tables back and bring the three down. No other golden moved.
 
 ### Fixed (TLS-107: TLS-104's suspend test no longer fails on a loaded machine)
 
