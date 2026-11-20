@@ -3141,3 +3141,141 @@ fn speed_runs_under_load_and_says_so() {
         "{text}"
     );
 }
+
+/// ⟨TLS-108⟩ `ci-steps perf-bounds` with a stand-in test binary (`body`, a bash
+/// script it runs instead of building `perf_bounds`) on a private slot, plus
+/// `extra` environment. Returns (exit code, stdout+stderr).
+#[cfg(target_os = "linux")]
+fn perf_bounds_step(
+    dir: &std::path::Path,
+    body: &str,
+    extra: &[(&str, &std::ffi::OsStr)],
+) -> (Option<i32>, String) {
+    use std::os::unix::fs::PermissionsExt;
+    let bin = dir.join("perf-bounds-stand-in");
+    std::fs::write(&bin, format!("#!/usr/bin/env bash\n{body}\n")).unwrap();
+    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let mut cmd = std::process::Command::new("bash");
+    private_slot(&mut cmd, dir)
+        .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/ci-steps"))
+        .arg("perf-bounds")
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .env("CI_STEPS_PERF_BOUNDS_BIN", &bin)
+        .env_remove("CLAUDE_CODE_SESSION_ID")
+        .env_remove("CLAUDE_PID");
+    for (k, v) in extra {
+        cmd.env(k, v);
+    }
+    let out = cmd.output().expect("spawn ci-steps perf-bounds");
+    (
+        out.status.code(),
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        ),
+    )
+}
+
+/// ⟨TLS-108⟩ The perf-bounds step times its test binary under a TIMED slot hold:
+/// with no hold to share it takes the slot itself, marks it timed, runs the
+/// binary, and prints the timing line. The binary's exit is the step's.
+///
+/// Mutation (2026-11-20): the `cdo-slot acquire ... --timed` call dropped from
+/// `run_perf_bounds` -> no "timed by perf-bounds" (red); restored, green.
+#[cfg(target_os = "linux")]
+#[test]
+fn perf_bounds_runs_under_a_timed_slot_hold() {
+    let dir = tempfile::tempdir().unwrap();
+    let (code, text) = perf_bounds_step(dir.path(), "true", &[]);
+    assert_eq!(code, Some(0), "{text}");
+    assert!(
+        text.contains("cdo-slot: taken by perf-bounds (perf-bounds timing)")
+            && text.contains("cdo-slot: timed by perf-bounds (perf-bounds timing)"),
+        "{text}"
+    );
+    assert!(
+        text.contains("ci-steps: perf-bounds timing: ") && text.contains("exit 0;"),
+        "{text}"
+    );
+    let (code, text) = perf_bounds_step(dir.path(), "exit 3", &[]);
+    assert_eq!(code, Some(3), "the binary's exit is the step's: {text}");
+}
+
+/// ⟨TLS-108⟩ A build still running when the timing is to begin: the step times
+/// nothing (the stand-in binary never runs) and fails. The stand-in build is
+/// bash through a symlink named `t108b<test pid>`, matched by cdo-slot's
+/// `pgrep -x` (CDO_SLOT_BUILD_NAMES).
+///
+/// Mutation (2026-11-20): exit 6 accepted like 0 (the `6)` arm merged into
+/// `0 | 4`) -> the binary runs beside the build (red); restored, green.
+#[cfg(target_os = "linux")]
+#[test]
+fn perf_bounds_times_nothing_beside_a_build() {
+    let dir = tempfile::tempdir().unwrap();
+    let fake_name = format!("t108b{}", std::process::id());
+    let fake = dir.path().join(&fake_name);
+    std::os::unix::fs::symlink("/bin/bash", &fake).unwrap();
+    let build = crate::cdo_slot::Reap(
+        std::process::Command::new(&fake)
+            .args(["-c", "read -t 600 _ || true"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    let ran = dir.path().join("ran");
+    let (code, text) = perf_bounds_step(
+        dir.path(),
+        &format!("touch '{}'", ran.display()),
+        &[
+            ("CDO_SLOT_BUILD_NAMES", fake_name.as_ref()),
+            ("CDO_SLOT_TIMED_WAIT_S", "1".as_ref()),
+        ],
+    );
+    drop(build);
+    assert_eq!(code, Some(1), "{text}");
+    assert!(text.contains("timed nothing"), "{text}");
+    assert!(!ran.exists(), "the binary ran beside a build: {text}");
+}
+
+/// ⟨TLS-108⟩ A run under load or across a suspend is labelled, never hidden and
+/// never excused: the stand-in binary moves the stall total by far more than its
+/// run time (UNDER LOAD) and the suspended reading by 5 s (SUSPENDED); the
+/// binary's exit (0) stays the verdict.
+///
+/// Mutation (2026-11-20): the share compared with `<` instead of `>` -> no
+/// "UNDER LOAD" (red); restored, green.
+#[cfg(target_os = "linux")]
+#[test]
+fn perf_bounds_labels_load_and_a_suspend() {
+    let dir = tempfile::tempdir().unwrap();
+    let pressure = dir.path().join("cpu.pressure");
+    let suspended = dir.path().join("suspended");
+    std::fs::write(
+        &pressure,
+        "some avg10=0.00 avg60=0.00 avg300=0.00 total=1000\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0\n",
+    )
+    .unwrap();
+    std::fs::write(&suspended, "100").unwrap();
+    let body = format!(
+        "sleep 0.2\nprintf 'some avg10=0.00 avg60=0.00 avg300=0.00 total=900000000\\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0\\n' > '{}'\necho 105 > '{}'",
+        pressure.display(),
+        suspended.display()
+    );
+    let (code, text) = perf_bounds_step(
+        dir.path(),
+        &body,
+        &[
+            ("CI_STEPS_CPU_PRESSURE_FILE", pressure.as_os_str()),
+            ("CDO_HOST_SUSPENDED_FILE", suspended.as_os_str()),
+        ],
+    );
+    assert_eq!(code, Some(0), "{text}");
+    assert!(text.contains("exit 0; UNDER LOAD: "), "{text}");
+    assert!(
+        text.contains("SUSPENDED: the host slept 5 s during the timing"),
+        "{text}"
+    );
+}

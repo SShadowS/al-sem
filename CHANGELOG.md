@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (TLS-108: `ci-steps perf-bounds` times its bounds under a timed CDO slot hold)
+
+- **What failed.** `perf_bounds` asserts wall-time bounds. In a landing's `ci-steps all` it ran
+  beside other lanes' builds: on 2026-11-20 two landings failed there while a lane built two
+  release-fast trees. TLS-107, a test-only change, failed `recursive_scc_db_effects` at
+  1.18 s against 650 ms and `compute_summaries_v2` at 355 ms against 230 ms, with host CPU
+  pressure (avg300) near 57 %. The TIMED slot hold (TLS-89) protected cdo-speed, not this step.
+- **The fix.** The step builds the test binary first (untimed), then marks the CDO slot's hold
+  TIMED for the binary's run, as cdo-speed does: `cdo-slot` waits for the builds already
+  running and refuses (exit 6, "timed nothing") when they do not end, and the guard refuses
+  new ones. Inside a hold (land's or cdo-gate's token) it shares it; outside any it takes the
+  slot itself. The mark ends with the step. The binary runs from the repository's top, as
+  `cargo test` runs it.
+- **Labelled, never excused.** The step prints one line after the run: its time, the
+  binary's exit, this cgroup's CPU stall share during the run, `UNDER LOAD` above 15 %, and
+  `SUSPENDED` when the host slept. The bounds still decide.
+- **Not done: instruction counts for these bounds** (the task's "consider"). With builds kept
+  away, the measured cause is gone; the bounds time single operations in-process, where
+  per-operation counters would need `perf_event_open` in the test itself. Left for a task if
+  a bound fails again under the timed hold.
+- **Tests.** Three, each with a red proof, on a private slot with a stand-in test binary
+  (`CI_STEPS_PERF_BOUNDS_BIN`): the step takes the slot timed and passes the binary's exit
+  through (proof: the acquire dropped); beside a running build it times nothing and fails
+  (proof: exit 6 accepted); a load and a suspend during the run are labelled (proof: the share
+  compared the wrong way). Hooks: `CI_STEPS_CPU_PRESSURE_FILE`, `CDO_HOST_SUSPENDED_FILE`.
+- **GitHub CI** does not run `perf-bounds` (`ci.yml`: fmt, clippy, gen-syntax, test, build),
+  so nothing there needs the slot.
+
 ### Fixed (TLS-107: TLS-104's suspend test no longer fails on a loaded machine)
 
 - **What failed.** `cdo_slot_timed_wait_survives_a_host_suspend` failed in task gates under
