@@ -173,6 +173,7 @@ fn analyze_in(
         group_by: None,
         deterministic: true,
         single_app,
+        focus: None,
         with_evidence: true,
     };
     let (out, exit) = match run_analyze_with_exit(

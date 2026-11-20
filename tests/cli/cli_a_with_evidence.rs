@@ -73,6 +73,7 @@ fn args_for(ws: &Path, with_evidence: bool) -> AnalyzeArgs {
         group_by: None,
         deterministic: true,
         single_app: false,
+        focus: None,
         with_evidence,
     }
 }

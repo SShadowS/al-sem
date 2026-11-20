@@ -74,6 +74,7 @@ fn d14_routines_in(ws: &Path, file: &str) -> Vec<String> {
         deterministic: true,
         with_evidence: false,
         single_app: false,
+        focus: None,
     };
     let (out, ..) = run_analyze_with_exit(&args.read_inputs(), &args.read_request(), &args, "test")
         .expect("analyze must not fail");

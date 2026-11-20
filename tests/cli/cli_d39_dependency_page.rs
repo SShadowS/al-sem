@@ -139,14 +139,17 @@ fn analyze(ws: &Path, detector: &str, scope: Scope) -> (serde_json::Value, Optio
         group_by: None,
         deterministic: true,
         single_app: false,
+        focus: None,
         with_evidence: false,
     };
     let (out, _, stderr, _) =
         run_analyze_with_exit(&args.read_inputs(), &args.read_request(), &args, "302-test")
             .unwrap_or_else(|e| panic!("run_analyze failed: {e}"));
+    // Without `--focus` the only warning is the degraded preflight's.
+    assert!(stderr.len() <= 1, "one warning at most: {stderr:?}");
     (
         serde_json::from_str(&out).expect("analyze JSON must parse"),
-        stderr,
+        stderr.into_iter().next(),
     )
 }
 

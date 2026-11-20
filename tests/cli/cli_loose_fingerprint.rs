@@ -167,6 +167,7 @@ fn analyze_json_with(ws: &Path, detector: Option<&str>, with_evidence: bool) -> 
         group_by: None,
         deterministic: true,
         single_app: false,
+        focus: None,
         with_evidence,
     };
     let out =

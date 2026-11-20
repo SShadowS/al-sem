@@ -193,6 +193,7 @@ fn make_args(
         deterministic: false,
         with_evidence: false,
         single_app: false,
+        focus: None,
     }
 }
 
@@ -218,15 +219,17 @@ fn run_prsummary(fixture: &str, preset: Option<&str>, detector: Option<&str>) ->
 }
 
 /// `run_analyze_with_exit` over `args`: `(output, exit_code, stderr_warning)`.
+/// Without `--focus` the only warning is the degraded preflight's.
 fn analyze(args: &AnalyzeArgs) -> (String, u8, Option<String>) {
-    let (out, exit, warning, _) = run_analyze_with_exit(
+    let (out, exit, warnings, _) = run_analyze_with_exit(
         &args.read_inputs(),
         &args.read_request(),
         args,
         "engine-default",
     )
     .expect("run_analyze_with_exit");
-    (out, exit, warning)
+    assert!(warnings.len() <= 1, "one warning at most: {warnings:?}");
+    (out, exit, warnings.into_iter().next())
 }
 
 /// Run the PR-summary path and return `(markdown, exit_code, stderr_warning)`.
@@ -645,7 +648,7 @@ fn oracle_f2_preflight_degraded_warning_without_require_deps() {
         "degraded without --require-dependencies must NOT exit 4 (got {exit_code})"
     );
     let warning_msg = warning.expect(
-        "F2: degraded fixture must return Some(warning) from run_analyze_with_exit, \
+        "F2: degraded fixture must return the degraded warning from run_analyze_with_exit, \
          even without --require-dependencies",
     );
     // The warning text must match the fresh-keyed preflight.rs message format
@@ -723,6 +726,7 @@ fn oracle_parse_fail_on_error_is_err() {
         deterministic: false,
         with_evidence: false,
         single_app: false,
+        focus: None,
     };
     // The pipeline itself does NOT validate fail_on — the bin/CLI does (parse_fail_on).
     // However compute_finding_exit with an unknown severity falls back to sev_rank=0,
@@ -872,6 +876,7 @@ fn run_analyze_path(ws: &Path, require_dependencies: bool) -> (String, u8, Optio
         deterministic: false,
         with_evidence: false,
         single_app: false,
+        focus: None,
     };
     analyze(&args)
 }

@@ -175,6 +175,7 @@ fn run_gate(workspace: &str, preset: Option<&str>, detector: Option<&str>) -> St
         deterministic: false,
         with_evidence: false,
         single_app: false,
+        focus: None,
     };
     run_analyze(
         &args.read_inputs(),

@@ -118,6 +118,9 @@ pub struct AnalyzeArgs {
     /// The default analyses the workspace with the dependencies it requires (the
     /// cross-app model: dependency bodies, events, d13/d16/d17).
     pub single_app: bool,
+    /// `--focus` (ENG-168): keep only these concerns' findings and state the rest
+    /// (`engine::gate::focus`). `None` (no flag) leaves every output as before.
+    pub focus: Option<Vec<crate::engine::l5::registry::Concern>>,
 }
 
 impl AnalyzeArgs {
@@ -627,6 +630,11 @@ pub fn analysis_coverage(
 ///
 /// Backwards-compatible Stage-1 entry: SARIF only, no exit code. Prefer
 /// `run_analyze_with_exit` for the full gate (pr-summary + exit code).
+///
+/// It returns stdout only and DROPS the stderr warnings: the degraded-preflight
+/// warning and a focused SARIF run's partial-report warning (ENG-168). A caller
+/// that shows or forwards the report must use [`run_analyze_with_exit`], which
+/// returns them in order.
 pub fn run_analyze(
     inputs: &Arc<WorkspaceInputs>,
     request: &RequestInputs,
@@ -636,8 +644,10 @@ pub fn run_analyze(
     run_analyze_with_exit(inputs, request, args, default_version).map(|(out, ..)| out)
 }
 
-/// `run_analyze_with_exit`'s output: `(stdout, exit_code, stderr_warning, baseline_bytes)`.
-pub type AnalyzeOutput = (String, u8, Option<String>, Option<Vec<u8>>);
+/// `run_analyze_with_exit`'s output: `(stdout, exit_code, stderr_warnings, baseline_bytes)`.
+/// The warnings print in order, each as `al-sem: warning: {msg}`: the degraded
+/// preflight first, then a focused SARIF run's partial-report warning (ENG-168).
+pub type AnalyzeOutput = (String, u8, Vec<String>, Option<Vec<u8>>);
 
 /// Run the gate `analyze` pipeline, returning `(stdout, exit_code, stderr_warning,
 /// baseline_bytes)`.
@@ -648,8 +658,9 @@ pub type AnalyzeOutput = (String, u8, Option<String>, Option<Vec<u8>>);
 ///   return `Err`, which the bin maps to 3). This fn computes:
 ///   PREFLIGHT_FAILED (4) > FINDINGS (1) > CLEAN (0).
 ///
-/// The third tuple field is the preflight degraded warning message (F2: "no silent
-/// clean" contract). `Some(msg)` when `pf.degraded`, `None` when coverage is complete.
+/// The third tuple field holds the preflight degraded warning message (F2: "no silent
+/// clean" contract) when `pf.degraded`, nothing when coverage is complete; a
+/// focused SARIF run adds its partial-report warning after it.
 /// The bin emits `al-sem: warning: {msg}` to stderr; tests may inspect it directly.
 /// The warning is emitted REGARDLESS of `--require-dependencies` (only the
 /// FAILED→exit-4 path needs that flag).
@@ -698,13 +709,19 @@ pub struct AnalyzeJob<'a> {
 }
 
 impl<'a> AnalyzeJob<'a> {
-    /// `Err`: a detector/preset resolution failure, found before any build.
+    /// `Err`: a refused `--focus` combination or a detector/preset resolution
+    /// failure, found before any build.
     pub fn new(
         inputs: &'a dyn WorkspaceRead,
         request: &'a RequestInputs,
         args: &'a AnalyzeArgs,
         default_version: &str,
     ) -> Result<AnalyzeJob<'a>, String> {
+        crate::engine::gate::focus::check_focus_conflicts(
+            args.focus.as_deref(),
+            args.update_baseline,
+            args.fail_on.as_deref(),
+        )?;
         let detectors =
             resolve_analyze_detectors(args.preset.as_deref(), args.detector.as_deref())?;
         let version = args
@@ -769,7 +786,7 @@ impl Job for AnalyzeJob<'_> {
             // No finding set, so no baseline is written (as before #277).
             ModelFailure::NoModelInstanceId | ModelFailure::AssemblyFailed => {
                 empty_output_result(&view.inputs, self.args, &self.version, fresh)
-                    .map(|(out, exit, warn)| -> AnalyzeOutput { (out, exit, warn, None) })
+                    .map(|(out, exit, warns)| -> AnalyzeOutput { (out, exit, warns, None) })
             }
             ModelFailure::ProgramBuildFailed(why) => Err(format!(
                 "analysis failure — program engine build failed: {why}"
@@ -792,7 +809,8 @@ impl Job for AnalyzeJob<'_> {
                 }
                 // F2: the preflight degraded warning (the "no silent clean"
                 // contract), before the report. Matches al-sem index.ts:263-264.
-                if let Some(msg) = stderr_warning {
+                // Then a focused SARIF run's partial-report warning (ENG-168).
+                for msg in stderr_warning {
                     actions.push(WriteAction::line(&format!("al-sem: warning: {msg}")));
                 }
                 // al-sem appends a trailing newline to the formatted output.
@@ -900,6 +918,13 @@ fn analyze_view(
         paired.retain(|(s, _)| kept_ids.contains(&s.id));
     }
 
+    // --- focus (ENG-168): hide the concerns not named, and count them. Before
+    // --limit: findings are sorted by detector, so a limit taken first would fill
+    // the cap with findings focus then hides. ---
+    let focus = args.focus.as_deref().map(|focus| {
+        crate::engine::gate::focus::apply_focus(&mut paired, |(s, _)| &s.detector, focus)
+    });
+
     // --- limit: first N (after scope). Order-preserving prefix. ---
     if let Some(n) = args.limit {
         paired.truncate(n);
@@ -970,6 +995,8 @@ fn analyze_view(
         analysis_coverage(resolved, inputs, fresh)
     };
     // --- format ---
+    let focus_json = focus.as_ref().map(|f| f.to_json_value());
+    let focus_line = focus.as_ref().map(|f| f.line());
     let output = {
         let _s = pt::span("gate", "gate.format");
         match args.format {
@@ -977,11 +1004,16 @@ fn analyze_view(
                 let summaries: Vec<_> = paired.iter().map(|(s, _)| s.clone()).collect();
                 let raws: Vec<&crate::engine::l5::finding::Finding> =
                     paired.iter().map(|(_, r)| *r).collect();
-                format_sarif(&summaries, &raws, version)
+                format_sarif(&summaries, &raws, version, focus_json)
             }
             OutputFormat::PrSummary => {
                 let apps = read_workspace_apps(inputs);
-                format_pr_summary(&paired, &resolved.workspace.routines, &apps)
+                format_pr_summary(
+                    &paired,
+                    &resolved.workspace.routines,
+                    &apps,
+                    focus_line.as_deref(),
+                )
             }
             OutputFormat::Json => {
                 let summaries: Vec<_> = paired.iter().map(|(s, _)| s.clone()).collect();
@@ -1007,20 +1039,22 @@ fn analyze_view(
                     deterministic: args.deterministic,
                     driver_version: inputs.driver_version.clone(),
                     evidence: evidence.as_deref(),
+                    hidden: focus_json,
                 })
             }
             OutputFormat::Terminal => {
                 let summaries: Vec<_> = paired.iter().map(|(s, _)| s.clone()).collect();
                 // group-by path: only when format==terminal AND group_by is set.
+                let line = focus_line.as_deref();
                 if let Some(ref by_str) = args.group_by {
                     if let Some(by) = GroupBy::parse(by_str) {
-                        format_terminal_grouped(&summaries, &coverage, by)
+                        format_terminal_grouped(&summaries, &coverage, by, line)
                     } else {
                         // Invalid group_by — the CLI validates this, so treat as plain.
-                        format_terminal(&summaries, &coverage, &run_diagnostics)
+                        format_terminal(&summaries, &coverage, &run_diagnostics, line)
                     }
                 } else {
-                    format_terminal(&summaries, &coverage, &run_diagnostics)
+                    format_terminal(&summaries, &coverage, &run_diagnostics, line)
                 }
             }
             OutputFormat::Html => {
@@ -1030,6 +1064,7 @@ fn analyze_view(
                     resolved,
                     coverage: &coverage,
                     primary_app,
+                    focus_line: focus_line.as_deref(),
                 })
             }
         }
@@ -1044,11 +1079,15 @@ fn analyze_view(
 
     // The degraded warning message — None when coverage is complete (pf.degraded false).
     // Matches al-sem: `if (pf.degraded) process.stderr.write(`al-sem: warning: ${pf.message}\n`)`.
-    let stderr_warning: Option<String> = if pf.degraded {
-        Some(pf.message.clone())
-    } else {
-        None
-    };
+    let mut stderr_warning: Vec<String> = Vec::new();
+    if pf.degraded {
+        stderr_warning.push(pf.message.clone());
+    }
+    if args.format == OutputFormat::Sarif
+        && let Some(f) = &focus
+    {
+        stderr_warning.push(f.sarif_warning());
+    }
 
     // --- exit-code gate (precedence: PREFLIGHT_FAILED (4) > FINDINGS (1) > CLEAN (0)). ---
     let exit_code = if pf.failed {
@@ -1112,12 +1151,21 @@ fn analyze_view(
 /// Terminal and Html are NOT stubs: they render a genuine empty-workspace report
 /// (zero findings, zero coverage), the same shape Sarif/PrSummary/Json produce here —
 /// every arm returns `Ok`, never `Err`.
+///
+/// Under `--focus` nothing was counted, so every format says "focus requested,
+/// analysis unavailable" (`FocusStatement::Unavailable`), never a zero count.
 pub(crate) fn empty_output_result(
     inputs: &WorkspaceInputs,
     args: &AnalyzeArgs,
     version: &str,
     fresh: &Result<crate::program::resolve::full::FreshCoverage, String>,
-) -> Result<(String, u8, Option<String>), String> {
+) -> Result<(String, u8, Vec<String>), String> {
+    let focus = args
+        .focus
+        .clone()
+        .map(|focus| crate::engine::gate::focus::FocusStatement::Unavailable { focus });
+    let focus_json = focus.as_ref().map(|f| f.to_json_value());
+    let focus_line = focus.as_ref().map(|f| f.line());
     // Computed ONCE and reused by every arm below (Json/Terminal) AND by the
     // could-not-verify `reason` derivation past the format switch — these are the
     // real provider/index diagnostics for this workspace (spec §3: the fail-closed
@@ -1133,8 +1181,8 @@ pub(crate) fn empty_output_result(
     );
 
     let out = match args.format {
-        OutputFormat::Sarif => format_sarif(&[], &[], version),
-        OutputFormat::PrSummary => format_pr_summary(&[], &[], &[]),
+        OutputFormat::Sarif => format_sarif(&[], &[], version, focus_json),
+        OutputFormat::PrSummary => format_pr_summary(&[], &[], &[], focus_line.as_deref()),
         OutputFormat::Json => {
             // Empty envelope: zero findings, zero stats, zero coverage — but the
             // real provider/index diagnostics (fail-closed reasons) are threaded.
@@ -1167,6 +1215,7 @@ pub(crate) fn empty_output_result(
                 } else {
                     None
                 },
+                hidden: focus_json,
             })
         }
         OutputFormat::Terminal => {
@@ -1181,7 +1230,7 @@ pub(crate) fn empty_output_result(
                 unresolved_callsites: vec![],
                 dynamic_dispatch_sites: vec![],
             };
-            format_terminal(&[], &empty_coverage, &diagnostics)
+            format_terminal(&[], &empty_coverage, &diagnostics, focus_line.as_deref())
         }
         OutputFormat::Html => {
             // Empty workspace → zero findings + zero coverage HTML report.
@@ -1219,6 +1268,7 @@ pub(crate) fn empty_output_result(
                 resolved: &empty_resolved,
                 coverage: &empty_coverage,
                 primary_app: primary_app.as_ref(),
+                focus_line: focus_line.as_deref(),
             })
         }
     };
@@ -1244,7 +1294,13 @@ pub(crate) fn empty_output_result(
     } else {
         exit::CLEAN
     };
-    Ok((out, exit, Some(pf.message)))
+    let mut warnings = vec![pf.message];
+    if args.format == OutputFormat::Sarif
+        && let Some(f) = &focus
+    {
+        warnings.push(f.sarif_warning());
+    }
+    Ok((out, exit, warnings))
 }
 
 /// Build the opt-in `--with-evidence` augmentation for the kept findings, aligned BY

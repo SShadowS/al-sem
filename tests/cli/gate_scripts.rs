@@ -1928,7 +1928,12 @@ fn ci_steps_all_runs_and_judges_the_agentflow_suite() {
     for s in ["tree-stamp", "require-rttime", "nextest-priority-check"] {
         exe(repo.join("scripts").join(s), "echo stub");
     }
-    exe(bin.join("cargo"), "exit 0");
+    // TLS-108: `perf-bounds` asks `cargo test --no-run` for its test binary (the
+    // JSON artifact line); the stub names `/bin/true`.
+    exe(
+        bin.join("cargo"),
+        r#"case " $* " in *" --no-run "*) echo '{"profile":{"test":true},"target":{"name":"perf_bounds"},"executable":"/bin/true"}' ;; esac; exit 0"#,
+    );
     exe(
         bin.join("python3"),
         r#"[ "$3" = --version ] && exit 0; echo "$PWD $*" >> "$PY_LOG"; exit "${PY_RC:-0}""#,
@@ -1947,6 +1952,11 @@ fn ci_steps_all_runs_and_judges_the_agentflow_suite() {
             .env("CARGO_TARGET_DIR", dir.path().join("target"))
             .env("PY_LOG", &log)
             .env("PY_RC", rc)
+            // TLS-108: the temp repo has no cdo-slot; a slot folder that cannot
+            // be made takes perf-bounds' no-slot path (said in its line).
+            .env("CDO_SLOT_DIR", "/proc/no-slot-here")
+            .env_remove("CDO_SLOT_TOKEN")
+            .env_remove("GITHUB_ACTIONS")
             .output()
             .expect("spawn bash scripts/ci-steps all");
         let text = format!(
@@ -3140,4 +3150,439 @@ fn speed_runs_under_load_and_says_so() {
         text.contains("cdo-speed: PASS") || text.contains("cdo-speed: FAIL"),
         "{text}"
     );
+}
+
+/// ⟨TLS-108⟩ `ci-steps perf-bounds` with a stand-in test binary (`body`, a bash
+/// script it runs instead of building `perf_bounds`) on a private slot, plus
+/// `extra` environment. Returns (exit code, stdout+stderr).
+#[cfg(target_os = "linux")]
+fn perf_bounds_step(
+    dir: &std::path::Path,
+    body: &str,
+    extra: &[(&str, &std::ffi::OsStr)],
+) -> (Option<i32>, String) {
+    use std::os::unix::fs::PermissionsExt;
+    let bin = dir.join("perf-bounds-stand-in");
+    std::fs::write(&bin, format!("#!/usr/bin/env bash\n{body}\n")).unwrap();
+    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let mut cmd = std::process::Command::new("bash");
+    private_slot(&mut cmd, dir)
+        .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/ci-steps"))
+        .arg("perf-bounds")
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .env("CI_STEPS_PERF_BOUNDS_BIN", &bin)
+        .env_remove("CLAUDE_CODE_SESSION_ID")
+        .env_remove("CLAUDE_PID")
+        // A caller's owner label (land sets one) and a CI marker change the output.
+        .env_remove("CDO_SLOT_OWNER")
+        .env_remove("GITHUB_ACTIONS");
+    for (k, v) in extra {
+        cmd.env(k, v);
+    }
+    let out = cmd.output().expect("spawn ci-steps perf-bounds");
+    (
+        out.status.code(),
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        ),
+    )
+}
+
+/// The stand-in body that prints the slot's status from inside the timed run.
+#[cfg(target_os = "linux")]
+fn status_from_inside() -> String {
+    // `status` exits 1 while the slot is held; the stand-in's exit is the step's.
+    format!(
+        "bash '{}/scripts/cdo-slot' status || true",
+        env!("CARGO_MANIFEST_DIR")
+    )
+}
+
+/// ⟨TLS-108⟩ The perf-bounds step times its test binary under a TIMED slot hold:
+/// with no hold to share it takes the slot itself, marks it timed, then runs the
+/// binary (which sees the timed mark: the status it prints from inside says
+/// "timed by perf-bounds since"), and prints the timing line. The binary's exit
+/// is the step's.
+///
+/// Mutation (2026-11-20): the `cdo-slot acquire ... --timed` call dropped from
+/// `run_perf_bounds` -> no "timed by perf-bounds" (red); restored, green.
+#[cfg(target_os = "linux")]
+#[test]
+fn perf_bounds_runs_under_a_timed_slot_hold() {
+    let dir = tempfile::tempdir().unwrap();
+    let (code, text) = perf_bounds_step(dir.path(), &status_from_inside(), &[]);
+    assert_eq!(code, Some(0), "{text}");
+    assert!(
+        text.contains("cdo-slot: taken by perf-bounds (perf-bounds timing)")
+            && text.contains("cdo-slot: timed by perf-bounds (perf-bounds timing)"),
+        "{text}"
+    );
+    assert!(
+        text.contains("timed by perf-bounds since"),
+        "the binary ran inside the timed hold: {text}"
+    );
+    assert!(
+        text.contains("ci-steps: perf-bounds timing: ") && text.contains("exit 0;"),
+        "{text}"
+    );
+    let (code, text) = perf_bounds_step(dir.path(), "exit 3", &[]);
+    assert_eq!(code, Some(3), "the binary's exit is the step's: {text}");
+}
+
+/// ⟨TLS-108⟩ A build still running when the timing is to begin: the step times
+/// nothing (the stand-in binary never runs) and fails. The stand-in build is
+/// bash through a symlink named `t108b<test pid>`, matched by cdo-slot's
+/// `pgrep -x` (CDO_SLOT_BUILD_NAMES).
+///
+/// Mutation (2026-11-20): exit 6 accepted like 0 (the `6)` arm merged into
+/// `0 | 4`) -> the binary runs beside the build (red); restored, green.
+#[cfg(target_os = "linux")]
+#[test]
+fn perf_bounds_times_nothing_beside_a_build() {
+    let dir = tempfile::tempdir().unwrap();
+    let fake_name = format!("t108b{}", std::process::id());
+    let fake = dir.path().join(&fake_name);
+    std::os::unix::fs::symlink("/bin/bash", &fake).unwrap();
+    let build = crate::cdo_slot::Reap(
+        std::process::Command::new(&fake)
+            .args(["-c", "read -t 600 _ || true"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    let ran = dir.path().join("ran");
+    let (code, text) = perf_bounds_step(
+        dir.path(),
+        &format!("touch '{}'", ran.display()),
+        &[
+            ("CDO_SLOT_BUILD_NAMES", fake_name.as_ref()),
+            ("CDO_SLOT_TIMED_WAIT_S", "1".as_ref()),
+        ],
+    );
+    drop(build);
+    assert_eq!(code, Some(1), "{text}");
+    assert!(text.contains("timed nothing"), "{text}");
+    assert!(
+        text.contains(&format!("({fake_name})")),
+        "the refusal names the build: {text}"
+    );
+    assert!(!ran.exists(), "the binary ran beside a build: {text}");
+}
+
+/// ⟨TLS-108⟩ Where no slot can be held (a GitHub Actions runner: CI runs this
+/// step), the step runs the binary with no hold and says so (review r1, Fable and
+/// sol: holding it there failed or hung CI).
+///
+/// Mutation (2026-11-20): `perf_bounds_no_slot` always empty -> the hold is
+/// taken on the runner ("taken by perf-bounds", red); restored, green.
+#[cfg(target_os = "linux")]
+#[test]
+fn perf_bounds_holds_no_slot_on_a_ci_runner() {
+    let dir = tempfile::tempdir().unwrap();
+    let ran = dir.path().join("ran");
+    let (code, text) = perf_bounds_step(
+        dir.path(),
+        &format!("touch '{}'", ran.display()),
+        &[("GITHUB_ACTIONS", "true".as_ref())],
+    );
+    assert_eq!(code, Some(0), "{text}");
+    assert!(ran.exists(), "{text}");
+    assert!(
+        text.contains("(no CDO slot held: a GitHub Actions runner)"),
+        "{text}"
+    );
+    assert!(!text.contains("taken by perf-bounds"), "{text}");
+}
+
+/// ⟨TLS-108⟩ Inside a hold (land's token) the step shares it: it marks it timed
+/// without taking the slot, and the binary runs inside the timed mark.
+#[cfg(target_os = "linux")]
+#[test]
+fn perf_bounds_shares_the_hold_it_runs_in() {
+    let dir = tempfile::tempdir().unwrap();
+    let holder = crate::cdo_slot::Reap(
+        std::process::Command::new("sleep")
+            .arg("600")
+            .spawn()
+            .unwrap(),
+    );
+    let mut acquire = std::process::Command::new("bash");
+    let held = private_slot(&mut acquire, dir.path())
+        .args([
+            concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-slot"),
+            "acquire",
+            "land",
+            "test landing",
+            "--bind",
+        ])
+        .arg(holder.0.id().to_string())
+        .env("CDO_SLOT_TOKEN", "tok-108")
+        .env_remove("CLAUDE_CODE_SESSION_ID")
+        .output()
+        .unwrap();
+    assert!(held.status.success(), "{held:?}");
+    let (code, text) = perf_bounds_step(
+        dir.path(),
+        &status_from_inside(),
+        &[("CDO_SLOT_TOKEN", "tok-108".as_ref())],
+    );
+    drop(holder);
+    assert_eq!(code, Some(0), "{text}");
+    assert!(!text.contains("taken by perf-bounds"), "it shares: {text}");
+    assert!(text.contains("timed by perf-bounds since"), "{text}");
+}
+
+/// ⟨TLS-108⟩ A `ci-steps` parked in `acquire --wait` (a lane's own gate queued
+/// behind a landing) is not a running build: the landing's timed step inside its
+/// hold does not wait for it (review r1, Fable and sol: the two waited on each
+/// other until CDO_SLOT_TIMED_WAIT_S, then the landing failed). The parked script
+/// is named `t108p<test pid>` and listed as a build script, so only the fix in
+/// `foreign_builds` (ancestors of a queued waiter are skipped) lets the timing go.
+///
+/// Mutation (2026-11-20): the `parked` skip dropped from `foreign_builds` -> the
+/// step is refused, exit 1, "timed nothing" (red); restored, green.
+#[cfg(target_os = "linux")]
+#[test]
+fn perf_bounds_does_not_wait_for_a_parked_gate() {
+    let dir = tempfile::tempdir().unwrap();
+    let slot = concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-slot");
+    let holder = crate::cdo_slot::Reap(
+        std::process::Command::new("sleep")
+            .arg("600")
+            .spawn()
+            .unwrap(),
+    );
+    let mut acquire = std::process::Command::new("bash");
+    let held = private_slot(&mut acquire, dir.path())
+        .args([slot, "acquire", "land", "test landing", "--bind"])
+        .arg(holder.0.id().to_string())
+        .env("CDO_SLOT_TOKEN", "tok-108p")
+        .env_remove("CLAUDE_CODE_SESSION_ID")
+        .output()
+        .unwrap();
+    assert!(held.status.success(), "{held:?}");
+    let script_name = format!("t108p{}", std::process::id());
+    let script = dir.path().join(&script_name);
+    std::fs::write(
+        &script,
+        format!("bash '{slot}' acquire lane 'queued gate' --wait --bind $$\nsleep 600\n"),
+    )
+    .unwrap();
+    let mut park = std::process::Command::new("bash");
+    let parked = crate::cdo_slot::Reap(
+        private_slot(&mut park, dir.path())
+            .arg(&script)
+            .env_remove("CLAUDE_CODE_SESSION_ID")
+            .env_remove("CLAUDE_PID")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    // Its ticket in the queue: it is parked.
+    let queue = dir.path().join("slot").join("queue");
+    let start = std::time::Instant::now();
+    while std::fs::read_dir(&queue).map_or(true, |mut d| d.next().is_none()) {
+        assert!(start.elapsed().as_secs() < 30, "the waiter never queued");
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    let (code, text) = perf_bounds_step(
+        dir.path(),
+        "true",
+        &[
+            ("CDO_SLOT_TOKEN", "tok-108p".as_ref()),
+            ("CDO_SLOT_BUILD_SCRIPTS", script_name.as_ref()),
+            ("CDO_SLOT_TIMED_WAIT_S", "2".as_ref()),
+        ],
+    );
+    drop(parked);
+    drop(holder);
+    assert_eq!(code, Some(0), "{text}");
+    assert!(text.contains("timed by perf-bounds"), "{text}");
+}
+
+/// The stall-total line of a cpu.pressure file.
+#[cfg(target_os = "linux")]
+fn pressure_line(total: u64) -> String {
+    format!(
+        "some avg10=0.00 avg60=0.00 avg300=0.00 total={total}\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0\n"
+    )
+}
+
+/// ⟨TLS-108⟩ The step's run with the stall total moved by `stalled_us` while the
+/// stand-in sleeps `run_s` s, and the suspended reading moved by `slept_s`.
+#[cfg(target_os = "linux")]
+fn perf_bounds_with_load(stalled_us: u64, slept_s: u64, run_s: u64) -> (Option<i32>, String) {
+    let dir = tempfile::tempdir().unwrap();
+    let pressure = dir.path().join("cpu.pressure");
+    let suspended = dir.path().join("suspended");
+    std::fs::write(&pressure, pressure_line(1000)).unwrap();
+    std::fs::write(&suspended, "100").unwrap();
+    let body = format!(
+        "sleep {run_s}\nprintf '%s' '{}' > '{}'\necho {} > '{}'",
+        pressure_line(1000 + stalled_us),
+        pressure.display(),
+        100 + slept_s,
+        suspended.display()
+    );
+    perf_bounds_step(
+        dir.path(),
+        &body,
+        &[
+            ("CI_STEPS_CPU_PRESSURE_FILE", pressure.as_os_str()),
+            ("CDO_HOST_SUSPENDED_FILE", suspended.as_os_str()),
+        ],
+    )
+}
+
+/// ⟨TLS-108⟩ A run under load is labelled, never hidden and never excused: 600 ms
+/// stalled in about 1 s is above 15 % (UNDER LOAD); 10 ms is below (the share is
+/// printed, no label); the binary's exit (0) stays the verdict either way.
+///
+/// Mutation (2026-11-20): the share compared the wrong way (`<`) -> no "UNDER
+/// LOAD" at 600 ms (red); restored, green.
+#[cfg(target_os = "linux")]
+#[test]
+fn perf_bounds_labels_load() {
+    let (code, text) = perf_bounds_with_load(600_000, 0, 1);
+    assert_eq!(code, Some(0), "{text}");
+    assert!(
+        text.contains("exit 0; UNDER LOAD: this cgroup's CPU stall share was "),
+        "{text}"
+    );
+    let (code, text) = perf_bounds_with_load(10_000, 0, 1);
+    assert_eq!(code, Some(0), "{text}");
+    assert!(!text.contains("UNDER LOAD"), "{text}");
+    assert!(text.contains("(this cgroup's CPU stall share "), "{text}");
+}
+
+/// ⟨TLS-108⟩ A suspend during the run is labelled SUSPENDED (as cdo-speed labels
+/// it), and the stall share is of AWAKE time: 250 ms stalled in a 2 s run with
+/// 1 s asleep is 25 % of the awake second (UNDER LOAD), though only ~12 % of the
+/// wall time. A suspend covering the whole run says so instead of a share.
+///
+/// Mutation (2026-11-20): the share taken over wall time (`awake_us` =
+/// `wall_us`) -> no "UNDER LOAD" (red); restored, green.
+#[cfg(target_os = "linux")]
+#[test]
+fn perf_bounds_labels_a_suspend() {
+    let (code, text) = perf_bounds_with_load(250_000, 1, 2);
+    assert_eq!(code, Some(0), "{text}");
+    assert!(
+        text.contains("SUSPENDED: the host slept 1 s during the timing"),
+        "{text}"
+    );
+    assert!(text.contains("UNDER LOAD: "), "share of awake time: {text}");
+    let (code, text) = perf_bounds_with_load(0, 5, 1);
+    assert_eq!(code, Some(0), "{text}");
+    assert!(
+        text.contains("(load not checked: the host slept through the run)")
+            && text.contains("SUSPENDED: the host slept 5 s during the timing"),
+        "{text}"
+    );
+}
+
+/// ⟨TLS-108⟩ The parked skip cannot hide a real build (review r2, sol and Fable):
+/// - a queue ticket whose PID is alive but whose start time is not that
+///   process's (a dead waiter's reused PID) parks nothing: the build script
+///   under that PID still counts;
+/// - a parked waiter whose own process has an exact build NAME (as cargo or
+///   rustc would) still counts: only build scripts can be parked.
+///
+/// Both refuse the timing (exit 1, "timed nothing").
+///
+/// Mutations (2026-11-20, each restored, green): the ticket's start time not
+/// checked -> the first case times (red); the script-only condition dropped ->
+/// the second case times (red).
+#[cfg(target_os = "linux")]
+#[test]
+fn perf_bounds_parked_skip_hides_no_real_build() {
+    let dir = tempfile::tempdir().unwrap();
+    let slot = concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-slot");
+    let holder = crate::cdo_slot::Reap(
+        std::process::Command::new("sleep")
+            .arg("600")
+            .spawn()
+            .unwrap(),
+    );
+    let mut acquire = std::process::Command::new("bash");
+    let held = private_slot(&mut acquire, dir.path())
+        .args([slot, "acquire", "land", "test landing", "--bind"])
+        .arg(holder.0.id().to_string())
+        .env("CDO_SLOT_TOKEN", "tok-108s")
+        .env_remove("CLAUDE_CODE_SESSION_ID")
+        .output()
+        .unwrap();
+    assert!(held.status.success(), "{held:?}");
+
+    // 1. A live build script under a forged ticket with the wrong start time.
+    let script_name = format!("t108s{}", std::process::id());
+    let script = dir.path().join(&script_name);
+    std::fs::write(&script, "read -t 600 _ || true\n").unwrap();
+    let live = crate::cdo_slot::Reap(
+        std::process::Command::new("bash")
+            .arg(&script)
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .unwrap(),
+    );
+    let queue = dir.path().join("slot").join("queue");
+    std::fs::create_dir_all(&queue).unwrap();
+    let forged = queue.join(format!("00000000000000000001.{}", live.0.id()));
+    std::fs::write(&forged, format!("{} 1 \n", live.0.id())).unwrap();
+    let (code, text) = perf_bounds_step(
+        dir.path(),
+        "true",
+        &[
+            ("CDO_SLOT_TOKEN", "tok-108s".as_ref()),
+            ("CDO_SLOT_BUILD_SCRIPTS", script_name.as_ref()),
+            ("CDO_SLOT_TIMED_WAIT_S", "1".as_ref()),
+        ],
+    );
+    drop(live);
+    let _ = std::fs::remove_file(&forged);
+    assert_eq!(code, Some(1), "a stale ticket parked a live script: {text}");
+    assert!(text.contains(&format!("({script_name})")), "{text}");
+
+    // 2. A parked waiter whose own process has an exact build name.
+    let fake_name = format!("t108n{}", std::process::id());
+    let fake = dir.path().join(&fake_name);
+    std::os::unix::fs::symlink("/bin/bash", &fake).unwrap();
+    let mut park = std::process::Command::new(&fake);
+    let parked = crate::cdo_slot::Reap(
+        private_slot(&mut park, dir.path())
+            .args([
+                "-c",
+                &format!("bash '{slot}' acquire lane 'queued' --wait --bind $$; sleep 600"),
+            ])
+            .env_remove("CLAUDE_CODE_SESSION_ID")
+            .env_remove("CLAUDE_PID")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    // Its ticket in the queue (the forged one is gone): it is parked.
+    let start = std::time::Instant::now();
+    while std::fs::read_dir(&queue).map_or(true, |mut d| d.next().is_none()) {
+        assert!(start.elapsed().as_secs() < 30, "the waiter never queued");
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    let (code, text) = perf_bounds_step(
+        dir.path(),
+        "true",
+        &[
+            ("CDO_SLOT_TOKEN", "tok-108s".as_ref()),
+            ("CDO_SLOT_BUILD_NAMES", fake_name.as_ref()),
+            ("CDO_SLOT_TIMED_WAIT_S", "1".as_ref()),
+        ],
+    );
+    drop(parked);
+    drop(holder);
+    assert_eq!(code, Some(1), "a parked build name was skipped: {text}");
+    assert!(text.contains(&format!("({fake_name})")), "{text}");
 }

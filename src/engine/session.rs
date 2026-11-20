@@ -1948,6 +1948,7 @@ mod tests {
             requires,
             rule_name: "Probe",
             short_description: "test probe",
+            concern: crate::engine::l5::registry::Concern::Behaviour,
         }
     }
 

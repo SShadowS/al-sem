@@ -7,6 +7,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (TLS-108: `ci-steps perf-bounds` times its bounds under a timed CDO slot hold)
+
+- **What failed.** `perf_bounds` asserts wall-time bounds. In a landing's `ci-steps all` it ran
+  beside other lanes' builds: on 2026-11-20 two landings failed there while a lane built two
+  release-fast trees. TLS-107, a test-only change, failed `recursive_scc_db_effects` at
+  1.18 s against 650 ms and `compute_summaries_v2` at 355 ms against 230 ms, with host CPU
+  pressure (avg300) near 57 %. The TIMED slot hold (TLS-89) protected cdo-speed, not this step.
+- **The fix.** The step builds the test binary first (untimed), then marks the CDO slot's hold
+  TIMED for the binary's run, as cdo-speed does: `cdo-slot` waits for the builds already
+  running and refuses (exit 6, "timed nothing") when they do not end, and the guard refuses
+  new ones. Inside a hold (land's or cdo-gate's token) it shares it; outside any it takes the
+  slot itself. The mark ends with the step. The binary runs from the repository's top, as
+  `cargo test` runs it.
+- **Labelled, never excused.** The step prints one line after the run: its time, the
+  binary's exit, this cgroup's CPU stall share during the run, `UNDER LOAD` above 15 %, and
+  `SUSPENDED` when the host slept. The bounds still decide.
+- **Not done: instruction counts for these bounds** (the task's "consider"). With builds kept
+  away, the measured cause is gone; the bounds time single operations in-process, where
+  per-operation counters would need `perf_event_open` in the test itself. Left for a task if
+  a bound fails again under the timed hold.
+- **Where no slot can be held** (GitHub CI runs this step, `ci.yml`; a hosted runner has no
+  `/work`, the Windows machine no `flock`), the step runs with no hold and says so in its line
+  (`no CDO slot held: ...`). Holding it there failed or hung CI (review r1, Fable and sol). It
+  also takes the slot with no memory floor (the step needs none), as `land` does.
+- **A parked gate is not a build** (`scripts/cdo-slot` `foreign_builds`). A timed wait counted
+  every `ci-steps` process as a build, including one parked in `acquire --wait` behind the
+  slot's holder. So a landing's timed step waited for a lane's queued gate while that gate
+  waited for the landing, until the 1,800 s wait ran out and the landing failed (review r1,
+  Fable and sol). A queued waiter's ancestors are now skipped, but only build SCRIPTS: an
+  exact build name (cargo, rustc) always counts, and a ticket counts only when its PID and
+  start time are both alive (a dead waiter's reused PID parks nothing; review r2, sol). Its
+  siblings and children still count. This applies to every timed acquire, cdo-speed's
+  included.
+- **Labels.** The stall share is of awake time (a suspend no longer dilutes it), compared
+  before rounding (15.99 % is above 15 %), and names its source (this cgroup's, or the
+  host's when only `/proc/pressure/cpu` is readable). An unreadable suspend reading is said, and
+  a suspend covering the whole run says "load not checked: the host slept through the run".
+- **Tests.** Eight, on a private slot with a stand-in test binary
+  (`CI_STEPS_PERF_BOUNDS_BIN`), the correctness guards each with a red proof:
+  - the step takes the slot timed, the binary runs inside the timed mark (it prints the
+    slot's status from inside), and its exit is the step's (proof: the acquire dropped);
+  - beside a running build it times nothing and fails, naming the build (proof: exit 6
+    accepted);
+  - on a CI runner it holds no slot and says so (proof: no-slot check always empty);
+  - inside a hold (a landing's token) it shares it;
+  - a parked gate does not stop it (proof: the parked skip dropped);
+  - the parked skip hides no real build: a stale ticket and a parked exact build name both
+    still count (proofs: the start time not checked; the script-only condition dropped);
+  - load above and below 15 % (proof: the share compared the wrong way); a suspend, with the
+    share of awake time (proof: the share over wall time).
+  Hooks: `CI_STEPS_CPU_PRESSURE_FILE`, `CDO_HOST_SUSPENDED_FILE`.
+
 ### Fixed (TLS-107: TLS-104's suspend test no longer fails on a loaded machine)
 
 - **What failed.** `cdo_slot_timed_wait_survives_a_host_suspend` failed in task gates under
@@ -130,6 +182,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Cost: `alsem analyze` on CDO, three alternating runs per side in a timed slot hold, user CPU
   73.2-74.8 s on master and 74.5-75.3 s here (+1.6 % on the means, inside this host's noise),
   peak memory 2.1-2.3 GB on both.
+
+### Added (ENG-168: `alsem analyze --focus`, hiding findings by concern and saying what was hidden)
+
+- **Why.** An agent used `alsem analyze` on DO to see what a change does to data, transactions
+  and events. It got 2,447 findings. Most were performance findings (database calls in loops,
+  missing `SetLoadFields`), and it had to sort them out by hand.
+- **A concern per detector.** Every detector now states one in the registry: performance (13),
+  behaviour (33) or maintainability (9). The field is required, so a new detector cannot be
+  added without one. A test holds the whole table (spec
+  `docs/superpowers/specs/2026-11-20-eng168-analyze-focus-design.md` §3.2).
+- **The option.** `--focus <concern>[,<concern>...]` with `performance`, `behaviour` (or
+  `behavior`) and `maintainability`. The findings of the concerns not named are removed after
+  `--min-severity`, `--detector` and `--scope`, and before `--limit`, the baseline and inline
+  suppression. Focus comes before the limit because findings are sorted by detector: a limit
+  taken first would fill its slots with findings focus then hides. The detectors and their run
+  do not change, so a shown finding's data (id, fingerprint, location, message) is the same
+  with and without `--focus`. What a format builds from the shown findings together is rebuilt
+  from the shown ones only: html's "co-located" list and the terminal's rollups no longer name
+  a hidden detector. A finding from a detector the registry does not know is kept, never hidden.
+- **Nothing disappears silently.** Every format says what was hidden: the focus, the total,
+  and per hidden detector its concern and count. JSON has it in `payload.summary.hidden` (also
+  with `--with-evidence`; no schema change, the key exists only under `--focus`), in one of two
+  shapes: `{"focus", "before", "total", "byDetector"}` when counted, and
+  `{"focus", "status": "focus requested, analysis unavailable"}` when the workspace could not be
+  analysed (no `total`: nothing was counted). SARIF has the same object in
+  `runs[0].properties.hidden` and also prints a stderr warning that the file is a partial
+  report, not to be uploaded as the full scan. Terminal, `--group-by`, pr-summary and html print
+  one line. When focus leaves nothing shown, they say "No findings in this view." (the terminal
+  puts the line directly under it, the pr-summary heading and the html body say it) instead of
+  the plain "No findings" text. When the workspace could not be analysed, every format says
+  "focus requested, analysis unavailable" instead of a count.
+- **Refused.** `--update-baseline --focus` (the new baseline would lose every hidden finding)
+  and `--fail-on --focus` (a focused run could turn a failing gate clean) exit 3 before any
+  analysis or write. The CLI and the library entry (`AnalyzeJob::new`) run the same check; the
+  library entry also refuses an empty focus list. An unknown value exits 3 and names the known
+  ones. The same baseline hazard with the older filters is TLS-106.
+- **Fixed in `alsem batch`.** A refused job still opened its own streams to write its error
+  line, so a refused `analyze --baseline B --update-baseline` whose stdout was also `B` would
+  have emptied `B`. A refused job's named write files are now kept: its own streams may not
+  write them, and the run refuses such a manifest (exit 3) before any job runs. Another job may
+  still write such a file, as before (#277 FR-2): that write is its own.
+- **Changed for library callers.** `AnalyzeOutput`'s third field is now a list of stderr
+  warnings, so a focused SARIF run on a degraded workspace prints both warnings. `run_analyze`
+  (stdout only) drops them; its doc says so.
+- **Changed for formatter callers.** `format_terminal`, `format_terminal_grouped`,
+  `format_pr_summary` and `format_sarif` take the focus statement as a new last argument
+  (`None` gives the old output); `JsonFormatInputs` and `HtmlFormatInputs` gain a field.
+- **Without `--focus`** every output is unchanged; no golden moved.
+- **Measured.** On DO (`b3b44591`, clean; the owner's case), release-fast:
+  - Without `--focus` nothing moves against master `41afdd64` (`scripts/cdo-before-after`):
+    2,178 findings at both scopes, no fingerprint added or removed, the primary-scope JSON
+    byte-identical, the call graph unchanged.
+  - `--focus behaviour` (`--scope primary`) shows 438 findings and hides 1,740: 1,476
+    performance (d1 1,177, d3 227, d55 34, d5 23, d18 12, d42 3) and 264 maintainability
+    (d14 103, d19 88, d16 46, d12 23, d32 3, d20 1). `--focus behaviour,maintainability`
+    shows 702 and hides 1,476.
+  - In both, shown plus hidden is the unfocused 2,178, and every shown finding's id and
+    fingerprint is the unfocused run's.
+
+### Added (TLS-104: a host suspend is labelled in cdo-speed, cdo-gate and cdo-slot)
 
 - **What happened.** During ENG-145's landing, cdo-speed's log jumped 33 minutes between two
   calls while the call itself read 8.2 s. server1 had suspended for 1,965 s

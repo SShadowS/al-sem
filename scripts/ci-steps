@@ -230,7 +230,124 @@ GATE_PROFILE=release-fast
 
 run_build() { require_grammar || return 1; cargo build --profile "$GATE_PROFILE"; }
 
-run_perf_bounds() { require_grammar || return 1; require_rttime || return 1; cargo test --profile "$GATE_PROFILE" --test perf_bounds; }
+# ⟨TLS-108⟩ `perf_bounds` asserts wall-time bounds, so a build beside it fails a
+# correct tree (2026-11-20: two landings failed here while a lane built two
+# release-fast trees; host CPU pressure ~57 %). Like cdo-speed (TLS-89), it builds
+# first, untimed, then marks the CDO slot's hold TIMED for the run of the test
+# binary: cdo-slot waits for the builds already running (and refuses, exit 6, when
+# they do not end), and the guard refuses new ones. Inside a hold (land's or
+# cdo-gate's token, `cdo-slot run`, a hand hold) it shares it; outside any it takes
+# the slot itself, waiting its turn. Bound to this process: the mark ends with it.
+# The verdict is the test's; a suspend or CPU stall during the run is labelled
+# (SUSPENDED, UNDER LOAD), never hidden and never excused (the same bounds judge).
+# Where no slot can be held (GitHub CI runs this step on a hosted runner, which has
+# no `/work`; the Windows machine has no `flock`), it runs with no hold and says
+# so: the slot exists to keep a shared host's other lanes away, and those hosts
+# have none (review r1, Fable and sol: holding it there failed or hung CI).
+# Test hook: CI_STEPS_PERF_BOUNDS_BIN, a binary run instead of the built test
+# (no build); CI_STEPS_CPU_PRESSURE_FILE, a file read instead of the cgroup's
+# cpu.pressure; CDO_HOST_SUSPENDED_FILE as scripts/host-suspended reads it.
+PERF_BOUNDS_LOADED_SHARE=15
+
+# "<stall total, µs> <source>": this cgroup's CPU stall (`some total=`), else the
+# host's; nothing when neither is readable. The source is named in the label.
+cpu_stall_us() {
+    local f src
+    for f in "${CI_STEPS_CPU_PRESSURE_FILE:-}" /sys/fs/cgroup/cpu.pressure /proc/pressure/cpu; do
+        [ -n "$f" ] && [ -r "$f" ] || continue
+        case "$f" in
+            /proc/pressure/cpu) src="the host's" ;;
+            *) src="this cgroup's" ;;
+        esac
+        printf '%s %s\n' "$(sed -n 's/^some .*total=\([0-9]*\).*/\1/p' "$f" | head -n 1)" "$src"
+        return 0
+    done
+}
+
+# Why no slot can be held here, or nothing when one can.
+perf_bounds_no_slot() {
+    if [ "${GITHUB_ACTIONS:-}" = true ]; then
+        echo "a GitHub Actions runner"
+    elif ! command -v flock >/dev/null 2>&1; then
+        echo "no flock on this host"
+    elif ! mkdir -p "${CDO_SLOT_DIR:-/work/.al-sem/cdo-slot}" 2>/dev/null; then
+        echo "no slot folder (${CDO_SLOT_DIR:-/work/.al-sem/cdo-slot})"
+    fi
+}
+
+run_perf_bounds() {
+    local bin="${CI_STEPS_PERF_BOUNDS_BIN:-}"
+    if [ -z "$bin" ]; then
+        require_grammar || return 1
+        require_rttime || return 1
+        bin="$(cargo test --profile "$GATE_PROFILE" --test perf_bounds --no-run \
+            --message-format=json-render-diagnostics \
+            | jq -r 'select(.profile.test == true and .target.name == "perf_bounds") | .executable' \
+            | tail -n 1)" || return 1
+        if [ ! -x "$bin" ]; then
+            echo "ci-steps: perf-bounds: the test binary was not built" >&2
+            return 1
+        fi
+    fi
+    local rc=0 no_slot label=""
+    no_slot="$(perf_bounds_no_slot)"
+    if [ -n "$no_slot" ]; then
+        label+=" (no CDO slot held: ${no_slot})"
+    else
+        # No memory floor: the step needs none, and a floor made it wait for the
+        # slot with no end on a small machine (review r1, Fable; land passes 0 too).
+        CDO_SLOT_MEM_MIN_GB=0 bash "$(dirname "$0")/cdo-slot" acquire \
+            "${CDO_SLOT_OWNER:-perf-bounds}" "perf-bounds timing" \
+            --wait --bind "$$" --timed || rc=$?
+        case "$rc" in
+            0 | 4) ;;
+            6)
+                echo "ci-steps: perf-bounds: the timed hold was refused (scripts/cdo-slot --timed exit 6: builds still ran, or the hold ended): timed nothing" >&2
+                return 1
+                ;;
+            *)
+                echo "ci-steps: perf-bounds: the timed CDO slot hold was not taken (cdo-slot exit $rc)" >&2
+                return 1
+                ;;
+        esac
+    fi
+    local susp0 susp1 stall0 stall1 src t0 t1 prc=0
+    susp0="$("$(dirname "$0")/host-suspended" 2>/dev/null)" || susp0=""
+    read -r stall0 src < <(cpu_stall_us)
+    t0=${EPOCHREALTIME//[!0-9]/}
+    # From the repository's top, as `cargo test` runs a test binary.
+    (cd "$(git rev-parse --show-toplevel)" && "$bin") || prc=$?
+    t1=${EPOCHREALTIME//[!0-9]/}
+    read -r stall1 _ < <(cpu_stall_us)
+    susp1="$("$(dirname "$0")/host-suspended" 2>/dev/null)" || susp1=""
+    local wall_us=$((t1 - t0)) slept_s=0 awake_us
+    if [[ "$susp0" =~ ^[0-9]+$ && "$susp1" =~ ^[0-9]+$ ]]; then
+        slept_s=$((susp1 - susp0))
+    fi
+    # The share is of awake time: a suspend stalls nothing and must not dilute it.
+    awake_us=$((wall_us - slept_s * 1000000))
+    if [[ ! "${stall0:-}" =~ ^[0-9]+$ || ! "${stall1:-}" =~ ^[0-9]+$ ]]; then
+        label+=" (CPU pressure not readable: load not checked)"
+    elif ((awake_us <= 0)); then
+        # Whole seconds of suspend can cover a short run (review r2, Fable).
+        label+=" (load not checked: the host slept through the run)"
+    else
+        local stalled=$((stall1 - stall0))
+        # Compared before rounding: 15.99 % is above 15 % (review r1, sol).
+        if ((stalled * 100 > PERF_BOUNDS_LOADED_SHARE * awake_us)); then
+            label+=" UNDER LOAD: ${src} CPU stall share was $((stalled * 100 / awake_us)) % (above ${PERF_BOUNDS_LOADED_SHARE} %)"
+        else
+            label+=" (${src} CPU stall share $((stalled * 100 / awake_us)) %)"
+        fi
+    fi
+    if ((slept_s >= 1)); then
+        label+=" SUSPENDED: the host slept ${slept_s} s during the timing"
+    elif [[ ! "$susp0" =~ ^[0-9]+$ || ! "$susp1" =~ ^[0-9]+$ ]]; then
+        label+=" (suspend not readable)"
+    fi
+    echo "ci-steps: perf-bounds timing: $((wall_us / 1000)) ms, exit ${prc};${label}"
+    return "$prc"
+}
 
 # ⟨2026-11-07⟩ A record that a WHOLE `task` or `all` run passed, so
 # `scripts/merge-and-push` can skip re-running the task gate when the merge it

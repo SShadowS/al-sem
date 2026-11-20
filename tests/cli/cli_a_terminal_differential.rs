@@ -186,6 +186,7 @@ fn run_terminal(fixture: &str, detector_csv: &str, group_by: Option<&str>) -> St
         deterministic: true,
         with_evidence: false,
         single_app: false,
+        focus: None,
     };
     match run_analyze_with_exit(
         &args.read_inputs(),
