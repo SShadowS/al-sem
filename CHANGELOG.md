@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (ENG-151: d19 no longer flags an unused parameter of a method that implements an interface member)
+
+- **The gap.** `d19-unused-parameter` flagged the parameters of a method implementing an
+  interface member. The interface fixes that signature (alc 18.0.41 refuses an implementer that
+  misses a member, AL0582), so the author cannot drop the parameter: a false positive. ENG-142
+  made 4 more of them visible on CDO (System Application's "Default Email Connector v2" and a
+  Continia `Authorize`, see below).
+- **The rule.** d19 skips a method when its object implements an interface that is, or extends
+  (transitively, ENG-142's bases), one declaring a member of the method's name. It is counted as
+  `interfaceMember` in d19's skip stats. The object is the `#if` arm that declares the method
+  (`DeclaringObjects::of`), so whole-object arms do not borrow each other's `implements`. An
+  interface absent from the model leaves the answer unknown. d19 then skips only a method that
+  could be a member: not a `local` one, which alc never accepts as an implementation. These skips
+  are counted apart as `interfaceUnknown`. `implements` and `extends` entries are unquoted and
+  unescaped (`"I""Q"` names `I"Q`).
+- **Matched by name, not signature.** The model keeps no parameter list for a source interface's
+  members, so a same-named method of another arity (an overload) is skipped too. That is the
+  quiet side for an advisory detector.
+- **New model facts.** `ModelObject::interface_bases` holds an interface's `extends` list (source
+  IR, the symbols' `ExtendedInterfaces`). `ModelObject::interface_members` holds ALL member names
+  of a source interface. The existing `declaration_only_routines` cannot serve: the cross-app model
+  cuts it to the demanded routines, and a dependency interface's bodyless members are never
+  demanded, so System Application's "Email Connector" read as memberless. A symbol-only
+  interface's members are its routines.
+- **Tests.** Real assembly or the real analyze path, each with a flagged control: a direct,
+  inherited and missing interface; a `local` helper beside a missing one; escaped quotes; `#if`
+  arms in both orders; a dependency interface with source; a symbol-only one. One red proof per
+  rule (recorded in each test file's header).
+- **Measured.** release-fast, ENG-142 `d21ff4d9` against this branch, both on master `d0ac21b0`:
+  - CDO (`bc3ccb18`, clean): primary 2,308 -> 2,306 findings, 2 fingerprints removed, 0 added;
+    `--scope all` 32,597 -> 32,429, 168 removed, 0 added, all `d19-unused-parameter` (347 -> 179).
+    d19 skipped 444 methods as `interfaceMember` and 0 as `interfaceUnknown`. All 168 were checked
+    against the packaged or workspace source: each method is declared by an interface its object
+    implements, directly or through a base. 166 are dependency implementers (Base Application's
+    price calculation, invoice posting and transformation rules; System Application's "Default
+    Email Connector v2", including the 4 ENG-142 made visible; Continia's authorization and
+    localized-id codeunits). 2 are the workspace's own ("CDO Essential Module License"
+    `IsModuleActivated`, "CDO Universign eSeal Service" `SealDocument`).
+  - DO (`b3b44591`, clean): 2,180 -> 2,178 findings at both scopes, the same 2 workspace
+    fingerprints removed, 0 added.
+- **Release note.** A baseline holding d19 findings on interface implementations loses them:
+  CDO 2 (primary), 168 (`--scope all`); DO 2.
+
 ### Fixed (ENG-142: interface inheritance; a call through a base interface reaches the implementers of every interface derived from it)
 
 - **The gap.** al-sem never modelled `interface IBaz extends IBar, NS.IQux`. A codeunit that
@@ -93,7 +136,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     Connector v2/v3/v4", which extend "Email Connector", so a call through "Email Connector" now
     reaches it and its bodies enter the model (the Continia one was not traced further). They are
     d19 false positives of an older kind (an interface implementation's parameters are fixed by
-    the interface; d19 has no such exemption): filed, not hidden here. CDO's dependencies hold
+    the interface; d19 had no such exemption): fixed by ENG-151 (above). CDO's dependencies hold
     real inheritance: the System Application's email connectors, Continia Delivery Network's
     four `IeDocCreationBase` interfaces, Base Application's "Cost Adjustment With Params".
   - DO (`b3b4459`, clean): 2,180 findings and 2,172 fingerprints unchanged at both scopes;
