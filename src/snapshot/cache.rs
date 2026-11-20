@@ -41,8 +41,9 @@ pub fn cache_dir() -> PathBuf {
 /// since a negative one made the file `Recovered`; 5: generic types split no
 /// local, and a call keeps its receiver's member path; 6: a property-backed
 /// global `δx` is `x`; 7: an `if` on never-written Boolean parameters and
-/// locals is written out, G51).
-pub const EXTRACTION_SCHEME: u32 = 7;
+/// locals is written out, G51; 8: an interface's `extends` (ENG-142) and a
+/// codeunit's `implements` (ENG-148) are written, every interface name quoted).
+pub const EXTRACTION_SCHEME: u32 = 8;
 
 /// The cache file's layout, in its name and header. 1 (ENG-113): header, JSON index, text.
 /// 2 (sol review): the blake3 also binds the package's content hash (an entry copied under

@@ -7,6 +7,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (ENG-148: a runtime package's codeunit implementers reach interface dispatch)
+
+- **The gap.** A runtime package ships no AL, only BC's transpiled C# (`bin/*.cs`) and its
+  symbols. al-sem reads it from AL it synthesizes from both (`snapshot::transpiled::synth`).
+  That AL wrote `implements` for enums only. A codeunit in such a package that implements an
+  interface was missing from `implementers_of`, so a call through the interface reached none of
+  it: a missed callee, and missed effects.
+- **The fix.** The synthesized header writes `implements` for codeunits too. alc 18.0.41 accepts
+  `implements` on codeunits and enums only: a report, page, table, query or xmlport header with
+  one is syntax error AL0104 (probe `/work/.al-sem/probes/eng148-kinds`), so no other kind needs
+  it.
+- **Enums, which were broken too.** alc 18.0.41 writes the interface references as AL
+  (probed, review Fable): a name with a space or quote arrives quoted and escaped
+  (`"\"Dep Iface\""`), another app's with a dashless `#<guid>#` prefix, and an enum value's
+  `Implementation` (and the enum's `DefaultImplementation`) as codeunit IDS, one per interface in
+  order (`"50103,50103"`). The old enum code joined the raw entries, so an enum implementing
+  another app's interface got `#<guid>#` in its header. It wrote a mapping only for a
+  single-interface enum, and wrote it as `= 50103`, which is no AL (alc AL0107: a name is
+  expected). Every real runtime enum with a mapping therefore lowered `Recovered`, and its
+  mappings were lost (the enum read as open: sound, but imprecise).
+- **The helpers.** Every interface list (an enum's and a codeunit's `implements`, an
+  interface's `extends`) goes through one helper. It drops the `#<guid>#` prefix, as the symbol
+  reader does, keeps a quoted reference as written and quotes a bare one. `q()` now escapes a `"`
+  inside a name (`A"B` -> `"A""B"`) instead of stripping it, so a package's own interface
+  `A"B` and its implementer's reference lower to the same name. `DefaultImplementation` is now
+  written, and an enum value's `Implementation` for every interface. Each id becomes the
+  package's own codeunit name (every namespace searched). An id from another package writes
+  no mapping: the enum then reads as open, which is sound.
+- **Cache.** `EXTRACTION_SCHEME` 7 -> 8, so a package cached before this change (and before
+  ENG-142's synthesized `extends`, which did not bump it) is synthesized again (review, sol).
+- **Tests.** `synth`'s unit test feeds alc's real shapes and reads the lowered result:
+  - codeunit `implements`: bare, quoted, escaped and `#<guid>#` entries;
+  - the package's own `A"B` interface, which matches its implementer's reference;
+  - an enum's two-interface `Implementation` and `DefaultImplementation`, named from codeunits
+    (one in a namespace);
+  - a value mapped to another package's codeunit, which gets no mapping.
+
+  A resolver test builds a synthetic runtime package and checks that a workspace call through
+  its interface reaches the codeunit's routine `Go`.
+
+  Red proofs, one per rule:
+  - the codeunit arm dropped (both tests);
+  - a quoted entry quoted again;
+  - `q()` stripping quotes;
+  - ids written raw;
+  - only a single interface's pair written.
+
+  The resolver test's red also shows that the model reads the synthesized source, not the
+  symbols (which list the implementer too).
+- **Measured.** release-fast, ENG-151 `e6063417` against this branch: CDO (`bc3ccb18`, clean)
+  and DO (`b3b44591`, clean) unchanged. Findings and fingerprints are identical at both scopes.
+  `aldump --program-call-graph-stats` output is byte-identical (CDO 46,688 edges, 0 unknown).
+  Neither workspace holds a runtime package: of CDO's 11 `.alpackages`, 10 ship `.al`
+  (Continia Core included), and none ships `bin/*.cs` (`Microsoft_Application` holds neither).
+  DO has no `.alpackages`. So the change has no input
+  here to move. The resolver test is the evidence of the gain.
+
 ### Fixed (ENG-151: d19 no longer flags an unused parameter of a method that implements an interface member)
 
 - **The gap.** `d19-unused-parameter` flagged the parameters of a method implementing an
@@ -23,8 +80,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   are counted apart as `interfaceUnknown`. `implements` and `extends` entries are unquoted and
   unescaped (`"I""Q"` names `I"Q`).
 - **Matched by name, not signature.** The model keeps no parameter list for a source interface's
-  members, so a same-named method of another arity (an overload) is skipped too. That is the
-  quiet side for an advisory detector.
+  members, so a same-named method of another arity (an overload) is skipped too. ENG-155 matches
+  members by signature, as alc does.
 - **New model facts.** `ModelObject::interface_bases` holds an interface's `extends` list (source
   IR, the symbols' `ExtendedInterfaces`). `ModelObject::interface_members` holds ALL member names
   of a source interface. The existing `declaration_only_routines` cannot serve: the cross-app model
