@@ -66,14 +66,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   removed every finding that run did not show, and later runs reported them as new.
 - **What a filtered update keeps now:** every entry the run did not prove gone. An entry is
   dropped only when its detector ran completely, the run's inputs were whole, the entry is
-  inside the run's scope, and its fingerprint is absent before any filter. Everything kept
-  unchecked is counted on stderr (`al-sem: baseline: kept N entries unchecked: ...`) and in
-  `--format json` (`payload.summary.baselineUpdate`: `written`, `dropped`, `added`,
-  `keptUnchecked` by reason).
+  inside the run's scope, and its fingerprint is absent from everything the detectors
+  emitted: before the primary-scope tail and before any filter. Everything kept unchecked is
+  counted on stderr (`al-sem: baseline: kept N entries unchecked: ...`) and in
+  `--format json` (`payload.summary.baselineUpdate`: `written`, `dropped` and `added` count
+  fingerprints; `keptUnchecked` counts kept entries by reason, a schema-1 fingerprint as
+  one).
 - **Your old (schema 1) baseline moves to schema 2 by itself:** the first `--update-baseline`
   reads it, keeps every fingerprint, records a detector for each one the run sees, and writes
   schema 2. Fingerprints no run sees stay (counted as 'no detector known') until you rebuild.
-  Reading a baseline (`--baseline` alone) works with both schemas. Update every machine that
+  Reading a baseline (`--baseline` alone) works with both schemas. A file with no
+  `schemaVersion`, or a numeric one, is read as schema 1, as before. Update every machine that
   writes the file: an old binary still writes schema 1 with the old, lossy rule.
 - **If an earlier filtered update damaged your baseline,** rebuild it once: delete the file
   and run `alsem analyze <ws> --scope all --baseline <file> --update-baseline` with the
@@ -82,28 +85,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   updates you like: they now keep what they do not see.
 - **Refused now, nothing written:** an update of a malformed file (it used to be overwritten),
   of a file whose `entries` name a fingerprint `fingerprints` does not list, or of an unknown
-  `schemaVersion` (exit 2); an update in another universe (`--single-app` on a cross-app file)
-  or for another primary app (exit 3). A missing file is written, as before.
-- **The file, schema 2.** `universe` and `primaryApp` bind it to its runs. `fingerprints` is
+  `schemaVersion` string (exit 2), checked before any analysis, so even an empty or failing
+  workspace refuses; an update in another universe (`--single-app` on a cross-app file) or for
+  another primary app (exit 3). A missing file is written, as before.
+- **Refused now on a plain read too:** a `schemaVersion` string other than `"1"` and `"2"`
+  (exit 2). A later schema may give `fingerprints` another meaning, so an unknown one is not
+  guessed at (it used to be read).
+- **The file, schema 2.** `universe` and `primaryApp` bind it to its runs; an empty
+  `primaryApp` is not stamped yet, and the first update with an app id stamps it.
+  `opaqueApps` lists the symbol-only dependency apps the file's runs had. `fingerprints` is
   what suppression reads, so a schema-1 reader still works. `entries` holds each
   fingerprint's detector and scope (`primary` or `dependency`), sorted and deduped. A
   fingerprint listed with no entry is a schema-1 entry: kept until a run sees it.
 - **How it works.**
-  - The registry labels each finding primary or dependency by the predicate `--scope
-    primary` drops by (one function, `in_primary_scope`). A primary-scope run never sees
-    dependency findings, so it never prunes a dependency entry; only a cross-app `--scope
-    all` run does.
+  - The registry labels each finding primary or dependency by the one predicate `--scope
+    primary` drops by (`in_primary_scope`, single-app and cross-app alike), and remembers the
+    fingerprints its primary tail drops. A finding that drifted out of the primary scope is
+    still present, so its entry is kept. A dependency entry is dropped only by a cross-app
+    `--scope all` run.
+  - A fingerprint the run saw takes the run's own entries (detector and scope), so a label
+    that drifted is corrected.
   - Each detector's incompleteness signals are listed in one place
     (`registry::incompleteness_signals`; every registered detector states its list, `&[]`
-    for none): d44 and d45 `outputCapped`, d54 `cappedPerTryRoutine`, d65
-    `crossCallTruncated`, d43's substrate warning. A detector that errors has no stats row.
-    Either keeps its entries.
+    for none): d44 `outputCapped`; d45 `outputCapped` and its relay walk's 256-node cap; d2,
+    d46 and d48 their path walker's node-budget cut; d54 `cappedPerTryRoutine`; d65
+    `crossCallTruncated`; d43's substrate warning. The new cut counters are internal
+    (`DetectorStats::cuts`, never serialized). A detector that errors has no stats row, and
+    a summary fixed point that did not converge makes every detector incomplete. Each keeps
+    its entries. Fixed depth limits and d5's and d60's `traversal` skip (a candidate ruled
+    out) are no signal.
   - Inputs are whole (`preflight::inputs_whole`) unless the coverage could not be verified,
     its contract failed, a file was parsed with recovery, or a dependency package was
-    unreadable, unidentified or encrypted. Unknown call edges, symbol-only dependencies and
-    unbound subscriptions do not stop pruning: every real workspace has some.
+    unreadable, unidentified or encrypted. Unknown call edges and unbound subscriptions do not
+    stop pruning: every real workspace has some. Symbol-only dependencies do not either, as
+    long as the file recorded them: an app that is symbol-only now and was not before lost
+    bodies, so that run prunes nothing. The file keeps only the opacity all its runs had.
   - A batch job's plan declares its baseline as read and written.
-- **Unchanged.** Without `--update-baseline` every output is byte for byte as before.
+- **Unchanged.** Without `--update-baseline` every output is byte for byte as before. The
+  `skipped` keys `outputCapped`, `cappedPerTryRoutine` and `crossCallTruncated` were already
+  in `detectorStats` before this change and stay.
 - **Measured.** MEASUREMENT
 
 ### Fixed (TLS-107: TLS-104's suspend test no longer fails on a loaded machine)
