@@ -205,7 +205,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   IssueReminder's tables. Those need ENG-161's escape facts (no store keeps that record): Part B,
   not Part A, is the lever (measured; the owner's question expected Part A to win them back).
   Counting record operations as user code cost nothing beyond calls on these numbers.
-- **Re-baseline and tests:** filled in below after the gate.
+- **Things happen at a call's END** (review, sol and Fable). A call reads its arguments, keeps
+  one, writes one back and runs its user code after its arguments ran, nested calls among them.
+  So an argument reads every binding before the call's end except the call's own
+  (`Check(R, MoveToLog(R))`; a call chained on another at the same start sees both,
+  `recref_flow::arg_reach`), a store keeps an argument at the keeping call's end, and user code
+  rebinds what is kept by the time it runs (`recref_alias::UserCodePoint::runs`: `Go(Keep(R))`'s
+  `Go` runs after `Keep`). The field guard orders operations by their end
+  (`R.Modify(L.Insert(true))` runs the `Insert` first).
+- **More review fixes.**
+  - A callee's write-back reaches every alias of its argument, as an in-place bind does
+    (`A := RR; Mut(RR)`: `A` moved too; a regression of reads at their position).
+  - A table's own procedure (`D.Poke()`) runs user code and may keep its argument: a record
+    method outside `member_catalog`'s built-ins is not a platform method.
+  - `this.G` is the global `G` in the RecordRef flow, and `(RR)` is `RR` in both key functions
+    (`recref_alias::strip_parens`).
+  - `HttpClient` is no value type: in a test codeunit `Send` runs an `[HttpClientHandler]`
+    procedure.
+- **The own-trigger rule, measured further** (P159c, the note): a write's own trigger that moves
+  the kept handle by `Get(RecordId)` or `Close` + `Open` does not move the write either, and
+  `Delete` and `Rename` behave like `Insert` and `Modify`. The field guard keeps a write's own
+  guard for those four (`OWN_TRIGGER_KEEPS`); `DeleteAll`'s and `ModifyAll`'s own user code ends
+  it before them. `Close` through an alias leaves the other aliases on their table, which the
+  flow's "unopened" (added beside each member's value) already allows.
+- **Tests.** `cli_prove_field_guarded_write` gains a store that rebinds only through a handle it
+  hands out (`FG Keeper`, `FG Mover`), so keeping and rebinding are separate calls, and the
+  shapes: `NestedKeepRoot` (and its control), `NestedArgRoot` (and its control), `BoxRoot`,
+  `CopyThenMoveRoot`, `TableProcRetained`, `TableProcKeepRoot` (a table holding the record in
+  its own global), `NestedFiring`, `HttpRetained`, `ParenKeepRoot`, `OwnDelete`/`OwnDeleteAll`.
+  `lflow_tests::a_this_qualified_global_is_the_global` pins `this.` under
+  `KeptElsewhere::Nothing` (under production's input every global may hold anything from entry,
+  which hides the keying). Red proofs, one per rule, each failing on its own shape: user code
+  compared at its start (`NestedKeepRoot`), the keeping call's start (`NestedKeepControl`:
+  precision), arguments read at the call's start (`NestedArgRoot`), `this.` kept (the unit
+  test), a table procedure as no user code (`TableProcRetained`) and as keeping nothing
+  (`TableProcKeepRoot`), `(R)` unstripped (`ParenKeepRoot`), operations ordered by start
+  (`NestedFiring`), the write-back to the named argument only (`CopyThenMoveRoot`), `HttpClient`
+  a value type (`HttpRetained`), the own-trigger rule for every firing operation
+  (`OwnDeleteAll`).
+- **Re-baseline:** filled in below after the CDO before-after.
 
 ### Fixed (TLS-107: TLS-104's suspend test no longer fails on a loaded machine)
 

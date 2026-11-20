@@ -115,7 +115,7 @@ use std::collections::{HashMap, HashSet};
 /// `"this.G"` keys as its whole name (sol round 2 on ENG-145).
 #[must_use]
 pub fn holder_key(raw: &str) -> String {
-    let raw = raw.trim();
+    let raw = strip_parens(raw);
     let raw = match raw.get(..5) {
         Some(p) if p.eq_fold_identifier("this.") => &raw[5..],
         _ => raw,
@@ -138,6 +138,32 @@ pub fn holder_key(raw: &str) -> String {
         .fold_identifier()
 }
 
+/// `raw` trimmed, without parentheses around the whole of it: `S.Keep((RR))` passes `RR`
+/// (Fable on ENG-159). A text whose first `(` closes before its end (`(A) + (B)`) keeps its
+/// parentheses.
+#[must_use]
+pub fn strip_parens(raw: &str) -> &str {
+    let mut s = raw.trim();
+    while s.starts_with('(') && s.ends_with(')') {
+        let mut depth = 0usize;
+        let mut quoted = false;
+        let closes_at_end = s.char_indices().all(|(i, ch)| {
+            match ch {
+                '"' => quoted = !quoted,
+                '(' if !quoted => depth += 1,
+                ')' if !quoted => depth = depth.saturating_sub(1),
+                _ => {}
+            }
+            depth > 0 || i == s.len() - 1
+        });
+        if !closes_at_end {
+            break;
+        }
+        s = s[1..s.len() - 1].trim();
+    }
+    s
+}
+
 /// A DECLARED variable name's key: a declaration's name is already logical (the lowerer strips
 /// its quotes), so nothing in it is syntax; `"R[1]"` declared keys as `r[1]`, as its quoted uses
 /// do through [`holder_key`]. The IR's assignment sides are logical names too.
@@ -156,7 +182,7 @@ pub fn name_key(name: &str) -> String {
 #[must_use]
 pub fn may_keep_argument(r: &ModelRoutine, cs: &crate::program::body::features::PCallSite) -> bool {
     use crate::program::body::features::PCallee;
-    let PCallee::Member { receiver, .. } = &cs.callee else {
+    let PCallee::Member { receiver, method } = &cs.callee else {
         return true;
     };
     let key = holder_key(receiver);
@@ -164,7 +190,8 @@ pub fn may_keep_argument(r: &ModelRoutine, cs: &crate::program::body::features::
         Some(v) => {
             let ty = v.declared_type.trim().fold_identifier();
             let ty = ty.rsplit(" of ").next().unwrap_or(&ty).trim();
-            !(ty == "recordref" || ty == "fieldref" || ty.starts_with("record "))
+            // A table's own procedure may keep it (Fable on ENG-159).
+            record_like_builtin(ty, method).is_none_or(|builtin| !builtin)
         }
         None => !matches!(
             key.as_str(),
@@ -178,6 +205,19 @@ pub fn may_keep_argument(r: &ModelRoutine, cs: &crate::program::body::features::
                 | "system"
         ),
     }
+}
+
+/// For a variable of folded type `ty`: whether `method` is a platform method of a RecordRef,
+/// FieldRef or record (`member_catalog`), not a table's own procedure. `None` for another type.
+fn record_like_builtin(ty: &str, method: &str) -> Option<bool> {
+    use crate::program::resolve::member_catalog::{MemberCatalogKind, member_builtin};
+    let kind = match ty {
+        "recordref" => MemberCatalogKind::RecordRef,
+        "fieldref" => MemberCatalogKind::FieldRef,
+        t if t.starts_with("record ") => MemberCatalogKind::Record,
+        _ => return None,
+    };
+    Some(member_builtin(kind, &method.fold_identifier()))
 }
 
 /// The record methods that may run user code: they fire a table trigger or a table event (the
@@ -198,29 +238,38 @@ const FIRING_METHODS: &[&str] = &[
 /// table event ([`FIRING_METHODS`]). In the IR a record's `Insert`, `Modify`, … is a record
 /// OPERATION, never a call site, so a reader scanning call sites alone missed them (Fable on
 /// ENG-159 Part B; `R.Insert(true)` whose `OnInsert` runs a store's `Rebind`).
+///
+/// Each comes with where it starts (where a fact it makes is anchored) and where it ends: its
+/// user code runs then, after its arguments, so [`AliasClasses::rebinds_at`] takes the end.
 #[must_use]
-pub fn user_code_points(r: &ModelRoutine) -> Vec<(&str, (u32, u32))> {
+pub fn user_code_points<'a>(r: &'a ModelRoutine) -> Vec<UserCodePoint<'a>> {
+    let point = |id: &'a str, a: &crate::program::body::features::PAnchor| UserCodePoint {
+        id,
+        at: (a.start_line, a.start_column),
+        runs: (a.end_line, a.end_column),
+    };
     let calls = r
         .call_sites
         .iter()
         .filter(|cs| may_run_user_code(r, cs))
-        .map(|cs| {
-            (
-                cs.id.as_str(),
-                (cs.source_anchor.start_line, cs.source_anchor.start_column),
-            )
-        });
+        .map(|cs| point(cs.id.as_str(), &cs.source_anchor));
     let ops = r
         .record_operations
         .iter()
         .filter(|op| FIRING_METHODS.contains(&op.op.fold_identifier().as_str()))
-        .map(|op| {
-            (
-                op.id.as_str(),
-                (op.source_anchor.start_line, op.source_anchor.start_column),
-            )
-        });
+        .map(|op| point(op.id.as_str(), &op.source_anchor));
     calls.chain(ops).collect()
+}
+
+/// A place that may run user code ([`user_code_points`]).
+#[derive(Debug, Clone, Copy)]
+pub struct UserCodePoint<'a> {
+    /// The call site's or record operation's id.
+    pub id: &'a str,
+    /// Where it starts.
+    pub at: (u32, u32),
+    /// Where it ends: when its user code runs.
+    pub runs: (u32, u32),
 }
 
 /// Whether call `cs` in `r` may run user code (AL a caller does not see: a procedure, an event
@@ -246,9 +295,10 @@ pub fn may_run_user_code(r: &ModelRoutine, cs: &crate::program::body::features::
         return true;
     };
     let ty = ty.rsplit(" of ").next().unwrap_or(&ty).trim().to_string();
-    let record_like = ty == "recordref" || ty == "fieldref" || ty.starts_with("record ");
-    if record_like {
-        return FIRING_METHODS.contains(&method.fold_identifier().as_str());
+    // A platform method fires user code only when it fires a trigger or a table event; a
+    // table's own procedure (`D.Poke()`) is user code (Fable on ENG-159).
+    if let Some(builtin) = record_like_builtin(&ty, method) {
+        return !builtin || FIRING_METHODS.contains(&method.fold_identifier().as_str());
     }
     const VALUE_TYPES: &[&str] = &[
         "text",
@@ -278,7 +328,8 @@ pub fn may_run_user_code(r: &ModelRoutine, cs: &crate::program::body::features::
         "outstream",
         "secrettext",
         "keyref",
-        "httpclient",
+        // Not `HttpClient`: in a test codeunit its `Send` runs an `[HttpClientHandler]`
+        // procedure (Fable on ENG-159).
         "httpcontent",
         "httpheaders",
         "httprequestmessage",
@@ -384,7 +435,10 @@ impl AliasClasses {
         c.join(&ext);
         // Where each class may first be kept elsewhere: an external member from entry; else the
         // first call that may keep a member (from entry when that call is in a loop, as a later
-        // iteration's calls run after it). Nobody holds it before, so no call can rebind it.
+        // iteration's calls run after it). Nobody holds it before, so no call can rebind it. A
+        // call keeps its argument when it runs, after its own arguments: at its END, so
+        // `O.Go(S.Keep(R))`'s `Go` runs after `Keep` kept R (sol on ENG-159). User code is
+        // compared by its end too ([`user_code_points`]).
         let mut from: HashMap<String, Option<(u32, u32)>> = HashMap::new();
         let earlier = |a: Option<(u32, u32)>, b: Option<(u32, u32)>| match (a, b) {
             (None, _) | (_, None) => None,
@@ -395,7 +449,7 @@ impl AliasClasses {
         }
         for cs in r.call_sites.iter().filter(|cs| may_keep_argument(r, cs)) {
             let at = if cs.loop_stack.is_empty() {
-                Some((cs.source_anchor.start_line, cs.source_anchor.start_column))
+                Some((cs.source_anchor.end_line, cs.source_anchor.end_column))
             } else {
                 None
             };

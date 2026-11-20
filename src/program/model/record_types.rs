@@ -80,7 +80,7 @@ fn may_be_rebound_elsewhere(
         // store, both temp passes read this predicate).
         || crate::program::model::recref_alias::user_code_points(routine)
             .into_iter()
-            .any(|(_, pos)| aliases.rebinds_at(v, pos))
+            .any(|p| aliases.rebinds_at(v, p.runs))
 }
 
 /// An operation's receiver as a variable-name key: the body pass keeps the

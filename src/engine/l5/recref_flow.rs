@@ -87,7 +87,14 @@ type InPlace = HashMap<String, Vec<((u32, u32), Part)>>;
 const MAX_ROUNDS: usize = 64;
 
 fn lc(s: &str) -> String {
-    s.trim().trim_matches('"').fold_identifier()
+    let s = crate::program::model::recref_alias::strip_parens(s);
+    // `this.G` is the global `G` (sol on ENG-159: `this.G.GetTable(Vend)` was no rebinding of
+    // `G`), as `recref_alias::holder_key` reads it.
+    let s = match s.get(..5) {
+        Some(p) if p.eq_fold_identifier("this.") => &s[5..],
+        _ => s,
+    };
+    s.trim_matches('"').fold_identifier()
 }
 
 fn is_tracked_type(t: &str) -> bool {
@@ -704,13 +711,13 @@ impl<'a> RecRefFlow<'a> {
         let entry = self.initial_vals(i, &inputs);
         let (vals, timeline) = self.evaluate(i, inputs, globals.clone())?;
         // ENG-159 Part A: an argument naming a local or parameter is what it holds AT the call,
-        // before the call's own write-back.
+        // before the call's own write-back ([`arg_reach`]).
         if self.positional(i) && self.is_reachable_local(i, arg) && !timeline.is_empty() {
             let w = lc(arg);
-            let p = (cs.source_anchor.start_line, cs.source_anchor.start_column);
+            let seen = arg_reach(&self.routines[i], cs);
             let mut out = entry.get(&w).cloned().unwrap_or_else(empty_val);
             for (u, q, val) in &timeline {
-                if *u == w && reaches(*q, p) {
+                if *u == w && seen(*q) {
                     out = union_val(&out, val);
                 }
             }
@@ -914,7 +921,7 @@ impl<'a> RecRefFlow<'a> {
                                     &passed_vals,
                                     &passed_at,
                                     &lc(w),
-                                    p,
+                                    |q| reaches(q, p),
                                 ),
                                 _ => self.val_of_text(i, &vals, globals, w),
                             },
@@ -931,6 +938,7 @@ impl<'a> RecRefFlow<'a> {
                     // The arguments are what the caller's locals hold AT the call.
                     let at_vals: std::borrow::Cow<'_, HashMap<String, Val>> = if positional {
                         let mut m = vals.clone();
+                        let seen = arg_reach(r, &r.call_sites[*ci]);
                         for (w, kind) in &f.tracked {
                             if matches!(kind, VarKind::Param(_) | VarKind::Local) {
                                 m.insert(
@@ -942,7 +950,7 @@ impl<'a> RecRefFlow<'a> {
                                         &passed_vals,
                                         &passed_at,
                                         w,
-                                        passed_at[n],
+                                        &seen,
                                     ),
                                 );
                             }
@@ -1522,16 +1530,16 @@ impl<'a> RecRefFlow<'a> {
         }
         match cs.argument_texts.get(k as usize) {
             // ENG-159 Part A: a local or parameter is what it holds AT the call, before the
-            // call's own write-back.
+            // call's own write-back ([`arg_reach`]).
             Some(a) if self.positional(i) && self.is_reachable_local(i, a) => {
                 let w = lc(a);
-                let p = (cs.source_anchor.start_line, cs.source_anchor.start_column);
+                let seen = arg_reach(&self.routines[i], cs);
                 let mut out = initial_summary(&self.facts[i])
                     .vars
                     .remove(&w)
                     .unwrap_or_default();
                 for (u, q, atoms) in &self.summaries[i].timeline {
-                    if *u == w && reaches(*q, p) {
+                    if *u == w && seen(*q) {
                         add(&mut out, atoms.iter().cloned());
                     }
                 }
@@ -1792,9 +1800,28 @@ fn reaches(q: Option<(u32, u32)>, p: (u32, u32)) -> bool {
     q.is_none_or(|q| q < p)
 }
 
-/// ENG-159 Part A: what tracked local or parameter `w` of a positional routine holds at `p`
+/// ENG-159: which bindings (by position) an argument of call `cs` may see. The call reads its
+/// arguments once they have all run, nested calls among them (`Check(R, MoveToVendor(R))`, sol),
+/// so every binding before its end, except its own effects (its write-back and its user code,
+/// anchored at its start). A call or operation chained on another (`F(R).G(R)`) shares its
+/// start: the two cannot be told apart there, so both are seen.
+fn arg_reach(r: &ModelRoutine, cs: &PCallSite) -> impl Fn(Option<(u32, u32)>) -> bool + use<> {
+    let start = (cs.source_anchor.start_line, cs.source_anchor.start_column);
+    let end = (cs.source_anchor.end_line, cs.source_anchor.end_column);
+    let starts = r
+        .call_sites
+        .iter()
+        .map(|c| &c.source_anchor)
+        .chain(r.record_operations.iter().map(|o| &o.source_anchor))
+        .filter(|a| (a.start_line, a.start_column) == start)
+        .count();
+    let shared = starts > 1;
+    move |q: Option<(u32, u32)>| q.is_none_or(|q| q < end && (shared || q != start))
+}
+
+/// ENG-159 Part A: what tracked local or parameter `w` of a positional routine holds at a read
 /// under the evaluator's facts: its entry value and every fixed fact or callee write-back of it
-/// that [`reaches`] `p`.
+/// the read sees (`seen`: [`reaches`] for a copy, [`reaches_call`] for an argument).
 fn pos_val(
     f: &Facts,
     entry: &HashMap<String, Val>,
@@ -1802,16 +1829,16 @@ fn pos_val(
     passed_vals: &[Val],
     passed_at: &[(u32, u32)],
     w: &str,
-    p: (u32, u32),
+    seen: impl Fn(Option<(u32, u32)>) -> bool,
 ) -> Val {
     let mut out = entry.get(w).cloned().unwrap_or_else(empty_val);
     for (m, (u, _, q)) in f.fixed.iter().enumerate() {
-        if u == w && reaches(*q, p) {
+        if u == w && seen(*q) {
             out = union_val(&out, &fixed_vals[m]);
         }
     }
     for (m, (_, _, u)) in f.passed.iter().enumerate() {
-        if u == w && reaches(Some(passed_at[m]), p) {
+        if u == w && seen(Some(passed_at[m])) {
             out = union_val(&out, &passed_vals[m]);
         }
     }
@@ -2124,10 +2151,12 @@ pub(crate) fn exit_guards(
             }) || sites
                 .iter()
                 .any(|s| s.call.is_none() && named(s.receiver) && before(s.anchor))
-                || user_code.iter().any(|&(_, pos)| {
-                    pos < (line, col)
-                        && kept
-                            .rebinds_at(&crate::program::model::recref_alias::holder_key(rec), pos)
+                || user_code.iter().any(|p| {
+                    p.at < (line, col)
+                        && kept.rebinds_at(
+                            &crate::program::model::recref_alias::holder_key(rec),
+                            p.runs,
+                        )
                 }));
         if bound_before {
             continue;
@@ -2392,9 +2421,9 @@ fn facts_of(
         KeptElsewhere::AnyExternal => crate::program::model::recref_alias::user_code_points(r),
         KeptElsewhere::Nothing => Vec::new(),
     };
-    for (_, pos) in user_code {
-        let at = Some(pos);
-        for v in classes.rebound_at(pos) {
+    for p in user_code {
+        let at = Some(p.at);
+        for v in classes.rebound_at(p.runs) {
             f.alias_shared.insert(v.clone());
             f.fixed.push((v.clone(), Part::Atoms(top()), at));
         }
@@ -2439,6 +2468,14 @@ fn facts_of(
         for (k, a) in cs.argument_texts.iter().enumerate() {
             let v = lc(a);
             if f.tracked.contains_key(&v) {
+                // A callee's rebinding moves the one handle every alias shares (Fable on
+                // ENG-159: `A := RR; Mut(RR); Guarded(A)`), as an in-place bind does.
+                for m in classes.members(&v) {
+                    if m != v && f.tracked.contains_key(&m) {
+                        f.alias_shared.insert(m.clone());
+                        f.passed.push((ci, k, m));
+                    }
+                }
                 f.passed.push((ci, k, v));
             }
         }

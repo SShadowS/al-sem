@@ -415,6 +415,135 @@ fn a_roots_answer_does_not_depend_on_what_was_asked_before() {
     );
 }
 
+/// ENG-159 (sol): `this.G` is the global `G`. `TB Box`'s `SetLog` rebinds `G` through
+/// `this.G.GetTable(L)`, so `Use`'s insert (only for a `TB Log`) is live from `BoxRoot`;
+/// `TB Box2` binds `G` to a `TB Doc` only, so the same insert is ruled out (the precondition:
+/// the guard can rule it out). Under production's input every global is kept from entry and may
+/// hold anything, which hides the keying, so the test states [`KeptElsewhere::Nothing`] (what
+/// ENG-161's escape facts compute for such a program).
+///
+/// Discrimination (2026-11-20): `lc` keeping a leading `this.` rules `BoxRoot`'s insert out:
+/// fails; restored, passes.
+#[test]
+fn a_this_qualified_global_is_the_global() {
+    use crate::engine::l5::literal_reach::KeptElsewhere;
+    let src = r#"table 50430 "TB Doc" { fields { field(1; K; Integer) { } } keys { key(PK; K) { } } }
+table 50431 "TB Log" { fields { field(1; K; Integer) { } } keys { key(PK; K) { } } }
+table 50432 "TB Other" { fields { field(1; K; Integer) { } } keys { key(PK; K) { } } }
+codeunit 50433 "TB Box"
+{
+    var
+        G: RecordRef;
+
+    procedure SetDoc()
+    var
+        D: Record "TB Doc";
+    begin
+        G.GetTable(D);
+    end;
+
+    procedure SetLog()
+    var
+        L: Record "TB Log";
+    begin
+        this.G.GetTable(L);
+    end;
+
+    procedure Use()
+    var
+        O: Record "TB Other";
+    begin
+        if G.Number <> Database::"TB Log" then
+            exit;
+        O.Insert();
+    end;
+}
+codeunit 50434 "TB Box2"
+{
+    var
+        G: RecordRef;
+
+    procedure SetDoc()
+    var
+        D: Record "TB Doc";
+    begin
+        G.GetTable(D);
+    end;
+
+    procedure Use()
+    var
+        O: Record "TB Other";
+    begin
+        if G.Number <> Database::"TB Log" then
+            exit;
+        O.Insert();
+    end;
+}
+codeunit 50435 "TB Mgt"
+{
+    procedure BoxRoot()
+    var
+        Box: Codeunit "TB Box";
+    begin
+        Box.SetDoc();
+        Box.SetLog();
+        Box.Use();
+    end;
+
+    procedure Box2Root()
+    var
+        Box: Codeunit "TB Box2";
+    begin
+        Box.SetDoc();
+        Box.Use();
+    end;
+}
+"#;
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(tmp.path().join("src")).unwrap();
+    std::fs::write(
+        tmp.path().join("app.json"),
+        r#"{"id":"e159e159-0000-4000-8000-000000000159","name":"ENG159","publisher":"t","version":"1.0.0.0"}"#,
+    )
+    .unwrap();
+    std::fs::write(tmp.path().join("src/Box.al"), src).unwrap();
+    let (base, tree) = crate::engine::l5::digest::wave2_index_tests::tree_over(
+        tmp.path(),
+        crate::engine::l4::cone_derived::WitnessScope::All,
+    );
+    let model = &base.resolved;
+    let id = |name: &str| -> String {
+        model
+            .workspace
+            .routines
+            .iter()
+            .find(|r| r.name == name)
+            .unwrap_or_else(|| panic!("precondition: {name} is a model routine"))
+            .stable_routine_id
+            .clone()
+    };
+    let reach = LiteralReach::with_kept(&tree, model, KeptElsewhere::Nothing);
+    let dead = |root: &str| -> bool {
+        let fx = crate::engine::l5::digest::wave2_index_tests::effects_of(&tree, model, root);
+        let insert = fx
+            .iter()
+            .position(|e| e.effect_type == "DB_INSERT")
+            .expect("precondition: the TB Other insert is in the root's effects");
+        reach
+            .unreachable_effects(root, &fx, &[])
+            .0
+            .contains(&insert)
+    };
+    assert!(
+        dead(&id("Box2Root")),
+        "precondition: a global bound only to a TB Doc rules the insert out"
+    );
+    assert!(
+        !dead(&id("BoxRoot")),
+        "`this.G.GetTable(L)` rebinds the global G"
+    );
+}
+
 /// TLS-22: two workers that both miss one evaluation's key (forced: the hook
 /// holds each after its miss until both have missed) get the serial answer,
 /// and the read keeps one answer per key. A third ask after them reads the

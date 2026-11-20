@@ -29,11 +29,40 @@ table 50401 "FG Doc"
 {
     fields { field(1; K; Integer) { } }
     keys { key(PK; K) { } }
+
+    // Fable on ENG-159: a table's own procedures are user code; one may keep its argument.
+    procedure Poke()
+    var
+        S: Codeunit "FG Store";
+    begin
+        S.Rebind();
+    end;
+
+    // Holds a record in the table variable's own global, and hands its handle out.
+    procedure Hold(var R: RecordRef)
+    begin
+        H := R;
+    end;
+
+    procedure Expose(var X: RecordRef)
+    begin
+        X := H;
+    end;
+
+    var
+        H: RecordRef;
 }
 table 50402 "FG Log"
 {
     fields { field(1; K; Integer) { } }
     keys { key(PK; K) { } }
+
+    trigger OnInsert()
+    var
+        S: Codeunit "FG Store";
+    begin
+        S.Rebind();
+    end;
 }
 codeunit 50404 "FG Store"
 {
@@ -52,6 +81,69 @@ codeunit 50404 "FG Store"
         L: Record "FG Log";
     begin
         H.GetTable(L);
+    end;
+}
+// sol on ENG-159: a store that keeps a record and rebinds it only through a handle it hands out
+// (`FG Store` rebinds its own global in place, so keeping a record there makes it anything at
+// once, and could not tell when a later call rebinds it).
+codeunit 50406 "FG Keeper"
+{
+    SingleInstance = true;
+
+    var
+        H: RecordRef;
+
+    procedure Keep(var R: RecordRef): Integer
+    begin
+        H := R;
+        exit(0);
+    end;
+
+    procedure Expose(var X: RecordRef)
+    begin
+        X := H;
+    end;
+}
+codeunit 50407 "FG Mover"
+{
+    // Rebinds the kept record: `X := H` shares its handle.
+    procedure Go(N: Integer)
+    var
+        K: Codeunit "FG Keeper";
+        X: RecordRef;
+        L: Record "FG Log";
+    begin
+        K.Expose(X);
+        X.GetTable(L);
+    end;
+}
+// sol on ENG-159: `this.G` is the global `G`.
+codeunit 50405 "FG Box"
+{
+    var
+        G: RecordRef;
+
+    procedure SetDoc()
+    var
+        D: Record "FG Doc";
+    begin
+        G.GetTable(D);
+    end;
+
+    procedure SetLog()
+    var
+        L: Record "FG Log";
+    begin
+        this.G.GetTable(L);
+    end;
+
+    procedure Use()
+    var
+        O: Record "FG Other";
+    begin
+        if G.Number <> Database::"FG Log" then
+            exit;
+        O.Insert();
     end;
 }
 codeunit 50403 "FG Mgt"
@@ -325,6 +417,180 @@ codeunit 50403 "FG Mgt"
         O.Insert();
     end;
 
+    // sol on ENG-159: `Keep` keeps R inside `Go`'s arguments, and `Go` runs after it, so its
+    // user code may rebind R. The control keeps R with no user code after it.
+    procedure NestedKeepRoot()
+    var
+        R: RecordRef;
+        D: Record "FG Doc";
+        K: Codeunit "FG Keeper";
+        M: Codeunit "FG Mover";
+    begin
+        R.GetTable(D);
+        M.Go(K.Keep(R));
+        OnlyLog(R);
+    end;
+
+    procedure NestedKeepControl()
+    var
+        R: RecordRef;
+        D: Record "FG Doc";
+        K: Codeunit "FG Keeper";
+        N: Integer;
+    begin
+        R.GetTable(D);
+        N := K.Keep(R);
+        OnlyLog(R);
+    end;
+
+    // sol on ENG-159: `Check` reads its arguments after `MoveToLog(R)` ran.
+    procedure NestedArgRoot()
+    var
+        R: RecordRef;
+        D: Record "FG Doc";
+    begin
+        R.GetTable(D);
+        Check(R, MoveToLog(R));
+    end;
+
+    procedure NestedArgControl()
+    var
+        R: RecordRef;
+        D: Record "FG Doc";
+    begin
+        R.GetTable(D);
+        Check(R, Zero());
+    end;
+
+    local procedure MoveToLog(var R: RecordRef): Integer
+    var
+        L: Record "FG Log";
+    begin
+        R.GetTable(L);
+        exit(0);
+    end;
+
+    local procedure Zero(): Integer
+    begin
+        exit(0);
+    end;
+
+    local procedure Check(X: RecordRef; Dummy: Integer)
+    begin
+        OnlyLog(X);
+    end;
+
+    // Fable on ENG-159: a callee's rebinding moves the handle an earlier copy shares.
+    procedure CopyThenMoveRoot()
+    var
+        R: RecordRef;
+        A: RecordRef;
+        D: Record "FG Doc";
+    begin
+        R.GetTable(D);
+        A := R;
+        MoveToLog(R);
+        OnlyLog(A);
+    end;
+
+    // Fable on ENG-159: a table's own procedure runs user code (the store's `Rebind`).
+    procedure TableProcRetained(var A: RecordRef)
+    var
+        D: Record "FG Doc";
+    begin
+        if not A.FieldExist(50) then
+            exit;
+        D.Poke();
+        A.Modify();
+    end;
+
+    // Fable on ENG-159: a table's own procedure may keep its argument.
+    procedure TableProcKeepRoot()
+    var
+        R: RecordRef;
+        D: Record "FG Doc";
+        Holder: Record "FG Doc";
+    begin
+        R.GetTable(D);
+        Holder.Hold(R);
+        MoveHeld(Holder);
+        OnlyLog(R);
+    end;
+
+    local procedure MoveHeld(var Holder: Record "FG Doc")
+    var
+        X: RecordRef;
+        L: Record "FG Log";
+    begin
+        Holder.Expose(X);
+        X.GetTable(L);
+    end;
+
+    // Fable on ENG-159: `L.Insert(true)` runs (and its `OnInsert` rebinds the store) before
+    // the `Modify` it is an argument of.
+    procedure NestedFiring(var A: RecordRef)
+    var
+        L: Record "FG Log";
+    begin
+        if not A.FieldExist(50) then
+            exit;
+        A.Modify(L.Insert(true));
+    end;
+
+    // Fable on ENG-159: in a test codeunit `HttpClient.Send` runs an `[HttpClientHandler]`
+    // procedure, which is user code.
+    procedure HttpRetained(var A: RecordRef)
+    var
+        Client: HttpClient;
+        Request: HttpRequestMessage;
+        Response: HttpResponseMessage;
+    begin
+        if not A.FieldExist(50) then
+            exit;
+        Client.Send(Request, Response);
+        A.Modify();
+    end;
+
+    // ENG-159: a measured write's own trigger cannot move it (BC 28.4: `Delete` fails), so its
+    // guard holds for it; `DeleteAll`'s was not measured, so its own user code ends the guard.
+    procedure OwnDelete(var A: RecordRef)
+    begin
+        if not A.FieldExist(50) then
+            exit;
+        A.Delete(true);
+    end;
+
+    procedure OwnDeleteAll(var A: RecordRef)
+    begin
+        if not A.FieldExist(50) then
+            exit;
+        A.DeleteAll(true);
+    end;
+
+    // Fable on ENG-159: `(R)` passes R.
+    procedure ParenKeepRoot()
+    var
+        R: RecordRef;
+        D: Record "FG Doc";
+        K: Codeunit "FG Keeper";
+        M: Codeunit "FG Mover";
+    begin
+        R.GetTable(D);
+        K.Keep((R));
+        M.Go(0);
+        OnlyLog(R);
+    end;
+
+    // sol on ENG-159: `SetLog` rebinds `G` through `this.G`.
+    procedure BoxRoot()
+    var
+        Box: Codeunit "FG Box";
+    begin
+        Box.SetDoc();
+        Box.SetLog();
+        Box.Use();
+    end;
+
     local procedure Twice(var A: RecordRef; var B: RecordRef)
     var
         L: Record "FG Log";
@@ -425,6 +691,36 @@ fn a_field_guarded_recordref_write_writes_only_tables_with_the_field() {
     for (routine, want) in [("CopyAfterRoot", "yes"), ("CopyBeforeRoot", "no")] {
         assert_eq!(answer(routine, "FG Other"), want, "{routine}");
     }
+    // sol on ENG-159: things happen at a call's END, after its arguments ran: a store keeps an
+    // argument then (`Go(Keep(R))`: `Go`'s user code runs after it), and an argument is read then
+    // (`Check(R, MoveToLog(R))`). `this.G` is the global `G`. Each control keeps its `no`.
+    for (routine, want) in [
+        ("NestedKeepRoot", "yes"),
+        ("NestedKeepControl", "no"),
+        ("NestedArgRoot", "yes"),
+        ("NestedArgControl", "no"),
+        ("BoxRoot", "yes"),
+        // Fable on ENG-159: a callee's rebinding reaches an earlier copy; a table procedure may
+        // keep its argument; `(R)` is R.
+        ("CopyThenMoveRoot", "yes"),
+        ("TableProcKeepRoot", "yes"),
+        ("ParenKeepRoot", "yes"),
+    ] {
+        assert_eq!(answer(routine, "FG Other"), want, "{routine}");
+    }
+    // Fable on ENG-159: a table procedure runs user code, and a firing operation nested in a
+    // guarded write runs before it: each ends the field guard of a kept record (asked of
+    // `FG Other`, which lacks the field: `NestedFiring` does write `FG Log`, by its `Insert`).
+    for routine in [
+        "TableProcRetained",
+        "NestedFiring",
+        "HttpRetained",
+        "OwnDeleteAll",
+    ] {
+        assert_eq!(answer(routine, "FG Other"), "unknown", "{routine}");
+    }
+    // ENG-159: a measured write (here `Delete`) keeps its own guard.
+    assert_eq!(answer("OwnDelete", "FG Other"), "no");
     assert_eq!(answer("DuplicateControl", "FG Log"), "no");
 }
 

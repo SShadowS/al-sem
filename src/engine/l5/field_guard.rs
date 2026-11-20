@@ -89,27 +89,30 @@ fn guarded_operations(r: &ModelRoutine) -> HashMap<String, i64> {
     // (`recref_alias::user_code_points`). A record operation's own trigger cannot move the
     // record that operation writes (BC 28.4: the write then fails, ENG-159's note), so its
     // rebinding ends the guards only AFTER it (`after_by_op`), unless it is in a loop (a later
-    // iteration runs after it).
-    let in_loop: HashMap<&str, (bool, (u32, u32))> = r
+    // iteration runs after it) or is not a measured write ([`OWN_TRIGGER_KEEPS`]). Each with
+    // where it ends.
+    let ends_before: HashMap<&str, (bool, (u32, u32))> = r
         .record_operations
         .iter()
         .map(|op| {
             (
                 op.id.as_str(),
                 (
-                    !op.loop_stack.is_empty(),
-                    (op.source_anchor.start_line, op.source_anchor.start_column),
+                    !op.loop_stack.is_empty()
+                        || !OWN_TRIGGER_KEEPS.contains(&op.op.fold_identifier().as_str()),
+                    (op.source_anchor.end_line, op.source_anchor.end_column),
                 ),
             )
         })
         .collect();
     let mut after_by_op: HashMap<&str, HashSet<String>> = HashMap::new();
-    for (id, pos) in crate::program::model::recref_alias::user_code_points(r) {
-        let rebound: Vec<String> = aliases.rebound_at(pos).cloned().collect();
+    for p in crate::program::model::recref_alias::user_code_points(r) {
+        let id = p.id;
+        let rebound: Vec<String> = aliases.rebound_at(p.runs).cloned().collect();
         if rebound.is_empty() {
             continue;
         }
-        match in_loop.get(id) {
+        match ends_before.get(id) {
             Some((false, _)) => after_by_op.entry(id).or_default().extend(rebound),
             _ => names_by_site.entry(id).or_default().extend(rebound),
         }
@@ -160,9 +163,10 @@ fn guarded_operations(r: &ModelRoutine) -> HashMap<String, i64> {
                 active.remove(name);
             }
         }
-        // The operations in source order: a write checks the guards still active, then its own
-        // trigger's rebinding (`after_by_op`) ends them for the operations after it.
-        ops.sort_by_key(|op| in_loop.get(op).map(|(_, pos)| *pos));
+        // The operations in the order they run, by where each ends (`R.Modify(L.Insert(true))`
+        // runs `L.Insert` first, Fable on ENG-159): a write checks the guards still active, then
+        // its own trigger's rebinding (`after_by_op`) ends them for the operations after it.
+        ops.sort_by_key(|op| ends_before.get(op).map(|(_, pos)| *pos));
         for op in ops {
             if let Some(rec) = writes.get(op)
                 && let Some(&n) = active.get(rec)
@@ -176,6 +180,13 @@ fn guarded_operations(r: &ModelRoutine) -> HashMap<String, i64> {
     }
     out
 }
+
+/// The writes whose own trigger or table event, rebinding the handle they write through (by
+/// `GetTable`, `Get(RecordId)` or `Close` + `Open`), was measured not to move the write (BC 28.4,
+/// ENG-159's note: it fails, or writes the record it began with). Any other firing operation's
+/// user code (`DeleteAll`, `ModifyAll`, `Validate`, …: unmeasured) ends the guards for its whole
+/// statement.
+const OWN_TRIGGER_KEEPS: &[&str] = &["insert", "modify", "delete", "rename"];
 
 /// The record operations that write.
 const WRITE_OPS: &[&str] = &[
