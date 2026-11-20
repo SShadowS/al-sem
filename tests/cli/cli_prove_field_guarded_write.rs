@@ -275,6 +275,56 @@ codeunit 50403 "FG Mgt"
         A.Modify();
     end;
 
+    // ENG-159 Part A: a copy reads what its source holds at the copy. After a call that may
+    // rebind a record kept elsewhere, the Variant parameter may hold anything; before it, the
+    // caller's Doc.
+    procedure CopyAfterRoot()
+    var
+        R: RecordRef;
+        D: Record "FG Doc";
+    begin
+        R.GetTable(D);
+        CopyAfter(R);
+    end;
+
+    local procedure CopyAfter(V: Variant)
+    var
+        Store: Codeunit "FG Store";
+        RR: RecordRef;
+    begin
+        Store.Rebind();
+        RR.GetTable(V);
+        OnlyLog(RR);
+    end;
+
+    procedure CopyBeforeRoot()
+    var
+        R: RecordRef;
+        D: Record "FG Doc";
+    begin
+        R.GetTable(D);
+        CopyBefore(R);
+    end;
+
+    local procedure CopyBefore(V: Variant)
+    var
+        Store: Codeunit "FG Store";
+        RR: RecordRef;
+    begin
+        RR.GetTable(V);
+        Store.Rebind();
+        OnlyLog(RR);
+    end;
+
+    local procedure OnlyLog(var R: RecordRef)
+    var
+        O: Record "FG Other";
+    begin
+        if R.Number <> Database::"FG Log" then
+            exit;
+        O.Insert();
+    end;
+
     local procedure Twice(var A: RecordRef; var B: RecordRef)
     var
         L: Record "FG Log";
@@ -368,6 +418,12 @@ fn a_field_guarded_recordref_write_writes_only_tables_with_the_field() {
         "RetainedNumberRoot",
     ] {
         assert_eq!(answer(routine, "FG Log"), "unknown", "{routine}");
+    }
+    // ENG-159 Part A: a copy taken after a call that may rebind its kept source may hold
+    // anything (the insert into "FG Other" stays); one taken before holds the caller's Doc
+    // (`OnlyLog`'s guard rules the insert out).
+    for (routine, want) in [("CopyAfterRoot", "yes"), ("CopyBeforeRoot", "no")] {
+        assert_eq!(answer(routine, "FG Other"), want, "{routine}");
     }
     assert_eq!(answer("DuplicateControl", "FG Log"), "no");
 }

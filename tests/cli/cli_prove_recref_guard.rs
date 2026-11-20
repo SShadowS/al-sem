@@ -405,12 +405,13 @@ fn recordref_guard_answers(source: &str) {
     assert_eq!(event["answer"], "yes", "{event}");
 
     // G43: `if not (R.Number in [Database::"RG Doc", Database::"RG Log"]) then
-    // exit;` lets a Doc through and stops an Entry; ENG-145's sound rule loses
-    // the stop as for `PrintEntry` above (ENG-159).
+    // exit;` lets a Doc through and stops an Entry. The RecordRef is taken from the
+    // Variant before any call that may run user code, and the RecordRef flow reads
+    // it at its position (ENG-159 Part A), so the sound rule no longer loses this.
     let set_doc = prove("PrintDocFromSet");
     assert_eq!(set_doc["answer"], "yes", "precondition: {set_doc}");
     let set_entry = prove("PrintEntryFromSet");
-    assert_eq!(set_entry["answer"], "yes", "{set_entry}");
+    assert_eq!(set_entry["answer"], "no", "{set_entry}");
 }
 
 #[test]
