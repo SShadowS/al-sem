@@ -2818,6 +2818,10 @@ fn guard_frames(
     routines_by_id: &HashMap<&str, &ModelRoutine>,
 ) -> HashMap<String, super::param_guard::FrameGuards> {
     let mut out = HashMap::new();
+    let mut rows: HashMap<&str, usize> = HashMap::new();
+    for r in routines {
+        *rows.entry(r.id.as_str()).or_default() += 1;
+    }
     for r in routines {
         let edges: &[TypedOutEdge] = g.outgoing.get(&r.id).map_or(&[], Vec::as_slice);
         let callees_at = |cs_id: &str| -> Vec<&str> {
@@ -2827,7 +2831,11 @@ fn guard_frames(
                 .map(|e| e.to.as_str())
                 .collect()
         };
-        let Some(f) = super::param_guard::frame_guards_over(r, callees_at, routines_by_id) else {
+        // A row with no usable parameter merges as an empty frame, not as no row, or a
+        // parameter only that row writes would stay usable (sol, ENG-135).
+        let Some(f) = super::param_guard::frame_guards_over(r, callees_at, routines_by_id)
+            .or_else(|| (rows[r.id.as_str()] > 1).then(Default::default))
+        else {
             continue;
         };
         // Engine limits B2: a routine declared in two `#if` arms is two rows,
@@ -2846,6 +2854,8 @@ fn guard_frames(
             }
         }
     }
+    // Only routines with a usable guard parameter have a frame.
+    out.retain(|_, f| !f.usable.is_empty());
     out
 }
 
