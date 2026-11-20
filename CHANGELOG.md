@@ -124,7 +124,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Unchanged.** Without `--update-baseline` every output is byte for byte as before. The
   `skipped` keys `outputCapped`, `cappedPerTryRoutine` and `crossCallTruncated` were already
   in `detectorStats` before this change and stay.
-- **Measured.** MEASUREMENT
+- **Measured.** On CDO (`bc3ccb18`, clean), release-fast, master `bd988b97` against this
+  branch `2d53ad52`:
+  - Without `--update-baseline` nothing changes (`scripts/cdo-before-after`): analyze at both
+    scopes and fingerprint byte-identical, 2,306 / 32,429 findings, no fingerprint added or
+    removed, the call graph unchanged.
+  - The update path, the same three updates in a row (an all-scope update, then a default
+    update, then `--min-severity critical`):
+
+    | | after all-scope | after default | after `critical` |
+    |---|---|---|---|
+    | master (old rule) | 32,398 | 2,299 (30,099 dependency fingerprints lost) | 190 (2,109 more lost) |
+    | this branch | 32,398 (30,099 dependency) | 32,398 | 32,398 |
+
+    This branch drops nothing and keeps nothing unchecked there: every fingerprint is
+    present before the filters. A fourth, all-scope update writes the same 32,398.
+  - Master's damaged 190-fingerprint schema-1 file, updated by this branch at the default
+    scope: all 190 kept, the 2,109 shown findings added (2,299), written as schema 2.
 
 ### Fixed (TLS-107: TLS-104's suspend test no longer fails on a loaded machine)
 
