@@ -1928,7 +1928,12 @@ fn ci_steps_all_runs_and_judges_the_agentflow_suite() {
     for s in ["tree-stamp", "require-rttime", "nextest-priority-check"] {
         exe(repo.join("scripts").join(s), "echo stub");
     }
-    exe(bin.join("cargo"), "exit 0");
+    // TLS-108: `perf-bounds` asks `cargo test --no-run` for its test binary (the
+    // JSON artifact line); the stub names `/bin/true`.
+    exe(
+        bin.join("cargo"),
+        r#"case " $* " in *" --no-run "*) echo '{"profile":{"test":true},"target":{"name":"perf_bounds"},"executable":"/bin/true"}' ;; esac; exit 0"#,
+    );
     exe(
         bin.join("python3"),
         r#"[ "$3" = --version ] && exit 0; echo "$PWD $*" >> "$PY_LOG"; exit "${PY_RC:-0}""#,
@@ -1947,6 +1952,11 @@ fn ci_steps_all_runs_and_judges_the_agentflow_suite() {
             .env("CARGO_TARGET_DIR", dir.path().join("target"))
             .env("PY_LOG", &log)
             .env("PY_RC", rc)
+            // TLS-108: the temp repo has no cdo-slot; a slot folder that cannot
+            // be made takes perf-bounds' no-slot path (said in its line).
+            .env("CDO_SLOT_DIR", "/proc/no-slot-here")
+            .env_remove("CDO_SLOT_TOKEN")
+            .env_remove("GITHUB_ACTIONS")
             .output()
             .expect("spawn bash scripts/ci-steps all");
         let text = format!(
