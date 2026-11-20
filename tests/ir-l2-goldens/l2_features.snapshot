@@ -447,7 +447,7 @@ ws-d60/src/Codeunit.al::0::OnUpgradePerCompany	8cb16a0a40ff8222
 ws-d60/src/Codeunit.al::0::UpgradeWithCall	e5675211d9676764
 ws-d60/src/Codeunit.al::0::UpgradeWithOtherRecord	c809fe94606c52b8
 ws-d60/src/Codeunit.al::0::UpgradeWithConditional	40629e5a23d4a811
-ws-d60/src/Codeunit.al::0::UpgradeWithCase	b5e2b0649fc5411c
+ws-d60/src/Codeunit.al::0::UpgradeWithCase	0d813f6585d4cd93
 ws-d60/src/Codeunit.al::0::Compute	acf9e61bc4133da3
 ws-d60/src/Codeunit.al::0::UpgradeMultiStepAdvance	50007cd90c96b624
 ws-d60/src/Codeunit.al::0::UpgradeBodyAdvanceSkipsRows	a5f918b766682e25
@@ -817,7 +817,7 @@ ws-overload-pageext-callresult/src/Ext2A.PageExt.al::0::GetCount	13af989110e96f8
 ws-overload-pageext-callresult/src/Ext2B.PageExt.al::0::GetCount	0f15097cf4760268
 ws-overload-pageext-callresult/src/Target.Codeunit.al::0::P	5e650f167a1a9cf0
 ws-overload-pageext-callresult/src/Target.Codeunit.al::0::P	2bfaf43186f5279d
-ws-overload-with-scope/Caller.Codeunit.al::0::CallInsideWith	3369946ebbabd869
+ws-overload-with-scope/Caller.Codeunit.al::0::CallInsideWith	276bd755e06ab23d
 ws-overload-with-scope/Caller.Codeunit.al::0::CallOutsideWith	9b603c9c0f463688
 ws-overload-with-scope/Target.Codeunit.al::0::Foo	bb6cecf222a8fe47
 ws-overload-with-scope/Target.Codeunit.al::0::Foo	f7d404f8fd6c9616

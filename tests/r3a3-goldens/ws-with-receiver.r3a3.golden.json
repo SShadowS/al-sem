@@ -32,8 +32,7 @@
 						"opSubtype": "Insert",
 						"recordVariableId": "d1eb3098a03f0e41/2630194b98de9d334d473c5f337a11c22510a43e21dd5f67eef355a73c1df14f/rv/r",
 						"tempState": {
-							"kind": "known",
-							"value": false
+							"kind": "unknown"
 						}
 					}
 				},
@@ -50,8 +49,7 @@
 						"opSubtype": "Modify",
 						"recordVariableId": "d1eb3098a03f0e41/2630194b98de9d334d473c5f337a11c22510a43e21dd5f67eef355a73c1df14f/rv/r",
 						"tempState": {
-							"kind": "known",
-							"value": false
+							"kind": "unknown"
 						}
 					}
 				}

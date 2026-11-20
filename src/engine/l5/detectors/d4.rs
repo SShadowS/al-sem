@@ -79,7 +79,7 @@ pub fn detect_d4(resolved: &Model, ctx: &DetectorContext) -> Result<DetectorOutp
                 // `temporary` record (temp_state Known(true)) is in-memory —
                 // no SQL round-trip to hoist (same gate as d1/d3/d33).
                 // Physical/Unknown keep firing (suppression-direction safe).
-                if is_known_temp(op) {
+                if is_known_temp(op, routine) {
                     skipped_temp_record += 1;
                     continue;
                 }

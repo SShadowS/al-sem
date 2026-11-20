@@ -70,11 +70,17 @@ fn object_run_kind(text: &str) -> Option<&'static str> {
 }
 
 /// LHS base name of an assignment target (legacy `lhs_identifier_of`, lowercased):
-/// a bare identifier's name, or a member_expression's member name; else None.
+/// a bare identifier's name, a member_expression's member name, or the variable
+/// an element write indexes (`S[1] := 'X'` writes `S`: ENG-30, a Text parameter
+/// so written holds no literal any more); else None.
 fn lhs_base_name(file: &AlFile, target: ExprId) -> Option<String> {
     match &file.ir.expr(target).kind {
         ExprKind::Identifier(x) | ExprKind::QuotedIdentifier(x) => Some(x.fold_identifier()),
         ExprKind::Member { member, .. } => Some(member.fold_identifier()),
+        ExprKind::Index { base, .. } => match &file.ir.expr(*base).kind {
+            ExprKind::Identifier(x) | ExprKind::QuotedIdentifier(x) => Some(x.fold_identifier()),
+            _ => None,
+        },
         _ => None,
     }
 }
@@ -122,6 +128,9 @@ pub struct IrSpine {
     /// Per call-site, the argument ExprIds (parallel to `call_sites`) — the binding
     /// post-pass needs them to anchor + classify each argument.
     pub cs_arg_exprs: Vec<Vec<ExprId>>,
+    /// Per call-site (parallel to `call_sites`): whether it sits in a `with` body, where an
+    /// unqualified argument name may be the receiver's field, so it binds to no symbol.
+    pub cs_under_with: Vec<bool>,
     /// r3 E1: the value label ([`ValueLabel::of_info`], the same reading as a
     /// call argument's) of every `case` pattern and every operand of an `if`
     /// comparison (`=`, `<>`, `in`) that is a literal or a label. The CFN
@@ -540,6 +549,7 @@ struct SpineCtx<'a> {
     /// #160 §4.2: each site's expression index (see [`IrSpine::site_exprs`]).
     site_exprs: crate::program::site_key::SiteExprs,
     cs_arg_exprs: Vec<Vec<ExprId>>,
+    cs_under_with: Vec<bool>,
     /// Every assignment whose target is a bare variable, `(name lowercased,
     /// value expr)`, in walk order. Read by `exhausting_advance` (#50) to see
     /// how often a `repeat` body assigns its `until` flag.
@@ -1433,8 +1443,38 @@ impl<'a> SpineCtx<'a> {
                     .iter()
                     .map(|&a| self.raw(&self.file.ir.expr(a).origin).to_string())
                     .collect();
-                let argument_infos: Vec<PExpressionInfo> =
-                    args.iter().map(|&a| self.ir_expression_info(a)).collect();
+                // Under `with R do`, an argument that NAMES something (a variable, a quoted
+                // name, a bare `Type::Item` that may be R's option field) may be R's field: its
+                // info keeps the text but no value, so no reader re-reads the name (sol round 3
+                // on ENG-30: the Variant routes looked it up by name). Literals keep their value.
+                let under_with = self.implicit.len() > 1;
+                let argument_infos: Vec<PExpressionInfo> = args
+                    .iter()
+                    .map(|&a| {
+                        let mut info = self.ir_expression_info(a);
+                        // An explicit `Enum::"E"::Member` names its enum outright: no `with`
+                        // lookup can change it, so it keeps its value (sol round 4, P3).
+                        let explicit_enum = info.kind.as_str() == "qualified_enum_value"
+                            && info.qualifier.as_deref().is_some_and(|q| {
+                                q.trim()
+                                    .get(..6)
+                                    .is_some_and(|p| p.eq_ignore_ascii_case("enum::"))
+                            });
+                        if under_with
+                            && !explicit_enum
+                            && matches!(
+                                info.kind.as_str(),
+                                "identifier" | "quoted_identifier" | "qualified_enum_value"
+                            )
+                        {
+                            info.kind = shared_vocab("other");
+                            info.value = None;
+                            info.qualifier = None;
+                            info.member = None;
+                        }
+                        info
+                    })
+                    .collect();
                 let under = if self.assert_depth > 0 {
                     Some(true)
                 } else {
@@ -1500,6 +1540,9 @@ impl<'a> SpineCtx<'a> {
                     try_call: false,
                 });
                 self.cs_arg_exprs.push(args.clone());
+                // `implicit` holds the base `Rec` seed frame (always one, pushed where the
+                // context is built) plus one frame per enclosing `with`.
+                self.cs_under_with.push(self.implicit.len() > 1);
             }
             // Recurse: a member-call RECEIVER is a value ref; a bare callee name is not.
             // Sub-expressions (receiver, args) are EXPRESSION position (consumed).
@@ -1707,6 +1750,7 @@ pub fn walk_spine(
         call_sites: Vec::new(),
         site_exprs: Default::default(),
         cs_arg_exprs: Vec::new(),
+        cs_under_with: Vec::new(),
         bare_assigns: Vec::new(),
         assign_target: None,
         value_labels: HashMap::new(),
@@ -1768,6 +1812,7 @@ pub fn walk_spine(
         call_sites: ctx.call_sites,
         site_exprs: ctx.site_exprs,
         cs_arg_exprs: ctx.cs_arg_exprs,
+        cs_under_with: ctx.cs_under_with,
         value_labels: ctx.value_labels,
         next_base,
     }
@@ -1896,9 +1941,23 @@ pub struct IrCfn<'a> {
     pub cols: &'a Utf16Cols<'a>,
     /// The file's source: r3 E2's condition texts and labels.
     pub source: &'a str,
+    /// How many `with` bodies enclose the statement being built. Inside `with R do`, an
+    /// unqualified name may be one of R's fields rather than the local or parameter of that
+    /// name, so no fact that READS a name as a condition (a guard, a junction, a value test, a
+    /// `case` scrutinee) is emitted there: every frame reader then refuses it at once (sol on
+    /// ENG-30). E2 already builds no program for a routine with a `with`. Facts that record a WRITE (loop variables, assignment
+    /// targets) stay, which only makes the readers more conservative.
+    /// shortcut: refuses every name under `with`; resolving R's fields (bind where R's table
+    /// has no field of that name) is ENG-141's.
+    pub with_depth: std::cell::Cell<usize>,
 }
 
 impl<'a> IrCfn<'a> {
+    /// Whether a name read here may be a `with` receiver's field ([`Self::with_depth`]).
+    fn under_with(&self) -> bool {
+        self.with_depth.get() > 0
+    }
+
     fn ir(&self) -> &al_syntax::ir::Ir {
         &self.file.ir
     }
@@ -1986,6 +2045,8 @@ impl<'a> IrCfn<'a> {
     /// r3 E2: a condition's [`FlowFact::Cond`]: its value and its source text,
     /// whitespace folded and cut at [`FLOW_TEXT_MAX`] characters.
     fn flow_cond(&self, e: ExprId) -> Option<Box<FlowFact>> {
+        // Not gated by `with`: E2 builds no program for a routine with a `with`
+        // (`literal_flow::FlowProgram::build`), and the text is a witness's guard display.
         Some(Box::new(FlowFact::Cond {
             expr: self.flow_expr(e),
             text: flow_text(self.expr_text(e)),
@@ -2426,6 +2487,9 @@ impl<'a> IrCfn<'a> {
     /// parentheses) `N = L` / `L = N`, `N <> L` / `L <> N` or `N in [L, …]`,
     /// `N` a bare identifier and the other side not one.
     fn value_test(&self, cond: ExprId) -> Option<ValueFact> {
+        if self.under_with() {
+            return None;
+        }
         use ExprKind::*;
         let mut e = cond;
         while let Parenthesized(x) = &self.ir().expr(e).kind {
@@ -2464,6 +2528,9 @@ impl<'a> IrCfn<'a> {
     }
 
     fn simple_guard(&self, cond: ExprId) -> Option<PConditionGuard> {
+        if self.under_with() {
+            return None;
+        }
         use ExprKind::*;
         let e = self.ir().expr(cond);
         match &e.kind {
@@ -2525,6 +2592,9 @@ impl<'a> IrCfn<'a> {
     /// expression, is an unknown operand and adds nothing. `None` when no
     /// operand is a simple guard.
     fn junction_guards(&self, cond: ExprId) -> Option<super::features::JunctionGuards> {
+        if self.under_with() {
+            return None;
+        }
         use ExprKind::*;
         let strip = |mut e: ExprId| {
             while let Parenthesized(x) = &self.ir().expr(e).kind {
@@ -2685,7 +2755,11 @@ impl<'a> IrCfn<'a> {
                 if let Some(tc) = on_number.map(super::features::TableCase::On) {
                     n.rare_mut().table_case = Some(tc);
                 }
-                if let Some(v) = self.bare_name(*scrutinee).map(ValueFact::CaseOn) {
+                if let Some(v) = self
+                    .bare_name(*scrutinee)
+                    .filter(|_| !self.under_with())
+                    .map(ValueFact::CaseOn)
+                {
                     n.rare_mut().value_fact = Some(v);
                 }
                 n.flow = self.flow_cond(*scrutinee);
@@ -2766,7 +2840,10 @@ impl<'a> IrCfn<'a> {
             }
             With { body, .. } => {
                 let mut n = cfn_node("other");
-                n.children = Some(vec![self.build_block(*body)]);
+                self.with_depth.set(self.with_depth.get() + 1);
+                let inner = self.build_block(*body);
+                self.with_depth.set(self.with_depth.get() - 1);
+                n.children = Some(vec![inner]);
                 n.flow = Some(Box::new(FlowFact::With));
                 n
             }
@@ -3189,6 +3266,7 @@ pub fn routine_features_partial(
             spine: &spine,
             cols: &cols,
             source,
+            with_depth: std::cell::Cell::new(0),
         };
         cfn.build_block(b)
     });
@@ -3234,7 +3312,11 @@ pub fn routine_features_partial(
     let obj = &file.objects[object_idx];
     let own_record_rec = has_own_record_rec(obj, source_table_name);
     let mut call_sites = spine.call_sites;
-    for (cs, arg_exprs) in call_sites.iter_mut().zip(spine.cs_arg_exprs.iter()) {
+    for ((cs, arg_exprs), &under_with) in call_sites
+        .iter_mut()
+        .zip(spine.cs_arg_exprs.iter())
+        .zip(spine.cs_under_with.iter())
+    {
         // The record the call is made on (a table method's `Rec`): the member
         // receiver, or the implicit `Rec` for a bare call. Object globals are
         // filled at L3 (`workspace.rs`), as for argument bindings.
@@ -3245,7 +3327,11 @@ pub fn routine_features_partial(
             super::features::PCallee::Bare { .. } => Some("rec".to_string()),
             _ => None,
         };
+        // Under `with R do`, a bare table-method call may run on R rather than `Rec`, and a
+        // receiver's name may be one of R's fields: its temp state is unknown (sol r6 on ENG-30;
+        // a temporary `Rec` must not suppress a physical write made on the `with` record).
         cs.receiver_temp_state = receiver_lc
+            .filter(|_| !under_with)
             .and_then(|lc| rv_by_lc.get(&lc))
             .map(|rv| rv.temp_state.clone());
         cs.argument_bindings = arg_exprs
@@ -3255,10 +3341,37 @@ pub fn routine_features_partial(
                 let e = file.ir.expr(a);
                 let argument_anchor = anchor(&e.origin);
                 let parameter_index = parameter_index as u32;
-                // Only bare-identifier args bind to a record/parameter symbol.
+                // Only a bare name binds to a record/parameter symbol, quoted or not: `"I"` is the
+                // parameter `I` (ENG-138, sol on ENG-30: a quoted `var` argument escaped every
+                // reader's write check). The name is folded as the symbol maps' keys are
+                // (`p.name.fold_identifier()`: the inner name, a doubled `""` kept as written), so
+                // `"A""B"` finds the parameter `"A""B"` (sol round 3).
+                // Under `with R do`, the name may be R's field: it binds to no symbol, so no
+                // reader forwards a value through it (sol round 2 on ENG-30). A write through it
+                // is still seen by the text match of `param_guard::passes_param_unsafely`.
                 let lc = match &e.kind {
+                    _ if under_with => {
+                        return PCallArgumentBinding {
+                            parameter_index,
+                            source_kind: shared_vocab("expression"),
+                            source_variable_name: None,
+                            source_record_variable_id: None,
+                            source_parameter_index: None,
+                            caller_source_parameter_is_var: None,
+                            source_temp_state: None,
+                            argument_anchor,
+                        };
+                    }
                     ExprKind::Identifier(n) if e.origin.kind_text() == "identifier" => {
                         n.fold_identifier()
+                    }
+                    ExprKind::QuotedIdentifier(n) => {
+                        let t = n.trim();
+                        let inner = t
+                            .strip_prefix('"')
+                            .and_then(|s| s.strip_suffix('"'))
+                            .unwrap_or(t);
+                        inner.fold_identifier()
                     }
                     _ => {
                         return PCallArgumentBinding {

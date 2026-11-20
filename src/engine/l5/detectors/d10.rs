@@ -91,7 +91,7 @@ pub fn detect_d10(
 
             // G-13: skip Known(true) TEMPORARY records — no SQL cursor to
             // corrupt when the iterating record is in-memory (same gate as d33).
-            if super::is_known_temp(op) {
+            if super::is_known_temp(op, routine) {
                 skipped_temp_record += 1;
                 continue;
             }
@@ -100,7 +100,7 @@ pub fn detect_d10(
             // routine all of whose resolved callers pass a Known(true) temp —
             // is treated exactly like Known(true). Any unproven PD keeps firing.
             if crate::engine::l5::closed_world_temp::pd_state_proven_temp(
-                op.temp_state.as_ref(),
+                op.temp_state.get(routine),
                 &routine.id,
                 &ctx.closed_world_temp_params,
             ) {

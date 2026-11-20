@@ -324,7 +324,7 @@ fn own_write_site(r: &ModelRoutine, table: &str, op: &str) -> Option<(String, u3
         .iter()
         .filter(|o| o.table_id.as_deref() == Some(table))
         .filter(|o| o.op.eq_fold_identifier(op))
-        .filter(|o| !crate::program::body::features::temp_state_suppresses(o.temp_state.as_ref()))
+        .filter(|o| !crate::program::body::features::temp_state_suppresses(o.temp_state.get(r)))
         .min_by_key(|o| (o.source_anchor.start_line, o.source_anchor.start_column))
         .map(|o| {
             (
@@ -1217,7 +1217,7 @@ impl<'a, 'c> Visitor<'a, 'c> {
                 .unwrap_or(ro.op.as_str())
                 .fold_identifier();
             if ["insert", "modify", "delete", "rename"].contains(&op_name.as_str()) {
-                let ts = ro.temp_state.as_ref();
+                let ts = ro.temp_state.get(r);
                 let temp = crate::program::body::features::temp_state_suppresses(ts);
                 let caller_dep = ts.is_some_and(|t| t.kind == "parameter-dependent");
                 if !temp {
@@ -1302,7 +1302,7 @@ impl<'a, 'c> Visitor<'a, 'c> {
                     ]
                     .contains(&o.op.fold_identifier().as_str())
                         && !crate::program::body::features::temp_state_suppresses(
-                            o.temp_state.as_ref(),
+                            o.temp_state.get(r),
                         )
                 })
                 .min_by_key(|o| (o.source_anchor.start_line, o.source_anchor.start_column));

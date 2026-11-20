@@ -110,7 +110,7 @@ pub fn detect_d37(
             candidates_considered += 1;
             let var_key = op.record_variable_name.fold_identifier();
             // op.tempState.kind === "known" && op.tempState.value === true
-            if super::is_known_temp(op) {
+            if super::is_known_temp(op, routine) {
                 skipped_temp_record += 1;
                 continue;
             }

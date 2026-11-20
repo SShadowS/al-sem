@@ -160,6 +160,7 @@ pub fn routine(id: &str, kind: &str) -> ModelRoutine {
         rule_drafts: None,
         card_text: None,
         site_guards: None,
+        names_opaque: false,
     }
 }
 
@@ -376,7 +377,7 @@ pub fn record_op(
         record_variable_name: record_variable_name.to_string(),
         record_variable_id: None,
         table_id: table_id.map(|s| s.to_string()),
-        temp_state: None,
+        temp_state: crate::program::model::workspace::OpTemp::new(None),
         field_arguments: None,
         source_anchor: dummy_anchor(),
         loop_stack,

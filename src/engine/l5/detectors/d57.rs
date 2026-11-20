@@ -165,7 +165,7 @@ pub fn detect_d57(
             }
             // Physical global inserts are transaction detectors' territory —
             // d57 only tracks in-memory growth.
-            if !is_known_temp(op) {
+            if !is_known_temp(op, routine) {
                 continue;
             }
             candidates_considered += 1;

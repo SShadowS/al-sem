@@ -74,7 +74,7 @@ pub fn detect_d52(
 
             // Temp proofs — a proven-temp buffer bulk-op is the pattern's
             // INTENDED use, never flagged.
-            if is_known_temp(op) {
+            if is_known_temp(op, routine) {
                 skipped_known_temp += 1;
                 continue;
             }

@@ -1905,6 +1905,7 @@ pub(crate) mod tests {
             rule_drafts: None,
             card_text: None,
             site_guards: None,
+            names_opaque: false,
         }
     }
 
@@ -1939,7 +1940,7 @@ pub(crate) mod tests {
             record_variable_name: "Rec".to_string(),
             record_variable_id: None,
             table_id: Some(table_id.to_string()),
-            temp_state: Some(temp_state),
+            temp_state: crate::program::model::workspace::OpTemp::new(Some(temp_state)),
             field_arguments: None,
             source_anchor: pd_anchor(),
             loop_stack: Vec::new(),

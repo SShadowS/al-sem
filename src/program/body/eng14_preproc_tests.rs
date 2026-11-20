@@ -1031,6 +1031,51 @@ fn eng14_cdo_untrusted_census() {
         by_app, pinned,
         "untrusted routines per app moved: explain the change, then re-pin"
     );
+    // ENG-30 (sol r7): the opacity invariant on CDO's final model (the `cdo` profile has no
+    // debug assertions, so `attach_program_calls`' own check does not run there). The untrusted
+    // rows above are opaque, so the check is not empty.
+    let (opaque, bad) = crate::program::model::workspace::opaque_binding_violations(m);
+    println!("ENG14-CENSUS opaque routines: {opaque}");
+    assert!(opaque > 0, "CDO has opaque routines (its untrusted bodies)");
+    assert!(bad.is_empty(), "opaque routines with bindings: {bad:?}");
+}
+
+/// ENG-30 (sol r7): on every r0 fixture workspace's final model, a routine opaque to names (a
+/// `with`, or an untrusted body) binds no argument and knows no receiver temp state, whatever
+/// step wrote them (the object-global backfill refilled them).
+#[test]
+fn opaque_routines_bind_nothing() {
+    let corpus = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/r0-corpus");
+    let mut dirs: Vec<_> = std::fs::read_dir(&corpus)
+        .expect("read r0-corpus")
+        .map(|e| e.expect("dir entry").path())
+        .filter(|p| {
+            p.is_dir()
+                && p.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.starts_with("ws-"))
+        })
+        .collect();
+    dirs.sort();
+    let mut opaque_total = 0;
+    for ws in &dirs {
+        let inputs = crate::program::inputs::WorkspaceInputs::read(ws, &Default::default());
+        if inputs.model_instance_id.is_none() {
+            continue;
+        }
+        let Some(m) = crate::program::model::program_calls::assemble_and_resolve_workspace_program(
+            &inputs,
+            false,
+            crate::program::model::workspace::AssemblyNeeds::BASE,
+        ) else {
+            continue;
+        };
+        let (opaque, bad) = crate::program::model::workspace::opaque_binding_violations(&m);
+        opaque_total += opaque;
+        assert!(bad.is_empty(), "{}: {bad:?}", ws.display());
+    }
+    // Precondition: the corpus has `with` routines (ws-overload-with-scope, ws-bare-implicit-rec).
+    assert!(opaque_total > 0, "no opaque routine in the r0 corpus");
 }
 
 /// A6 sources: two routines whose control tree cannot be trusted. `Broken` has a parse

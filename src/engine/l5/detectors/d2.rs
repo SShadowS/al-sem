@@ -118,7 +118,7 @@ impl<'a> WalkPolicy for D2Policy<'a> {
             .filter(|(r, op)| !op_targets_virtual_system_table(op, r, self.table_by_id))
             // Class A: an op provably on a Known(true) temporary record does no
             // physical-db work — mirrors d33's temp gate.
-            .filter(|(_, op)| !is_known_temp(op))
+            .filter(|(r, op)| !is_known_temp(op, r))
             .map(|(_, op)| Terminal {
                 routine_id: node.to_string(),
                 local_loop_depth: op.loop_stack.len() as i64,
