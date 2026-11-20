@@ -35,6 +35,25 @@ table 50402 "FG Log"
     fields { field(1; K; Integer) { } }
     keys { key(PK; K) { } }
 }
+codeunit 50404 "FG Store"
+{
+    SingleInstance = true;
+
+    var
+        H: RecordRef;
+
+    procedure Save(var R: RecordRef)
+    begin
+        H := R;
+    end;
+
+    procedure Rebind()
+    var
+        L: Record "FG Log";
+    begin
+        H.GetTable(L);
+    end;
+}
 codeunit 50403 "FG Mgt"
 {
     var
@@ -197,6 +216,75 @@ codeunit 50403 "FG Mgt"
         R.GetTable(L);
     end;
 
+    // sol round 2 on ENG-145: a function's result hands back the global's record.
+    procedure FunctionResult()
+    var
+        A: RecordRef;
+        L: Record "FG Log";
+    begin
+        if not G.FieldExist(50) then
+            exit;
+        A := GetG();
+        A.GetTable(L);
+        G.Modify();
+    end;
+
+    local procedure GetG(): RecordRef
+    begin
+        exit(G);
+    end;
+
+    // sol round 2: a store elsewhere keeps the caller's record and rebinds it later.
+    procedure Retained(var A: RecordRef)
+    var
+        Store: Codeunit "FG Store";
+    begin
+        if not A.FieldExist(50) then
+            exit;
+        Store.Rebind();
+        A.Modify();
+    end;
+
+    // sol round 2, the RecordRef flow (G34): one record passed twice, rebound through one.
+    procedure TwiceRoot()
+    var
+        R: RecordRef;
+        D: Record "FG Doc";
+    begin
+        R.GetTable(D);
+        Twice(R, R);
+    end;
+
+    // sol round 2, the RecordRef flow (G34): a store rebinds the record before the table guard.
+    procedure RetainedNumberRoot()
+    var
+        R: RecordRef;
+        D: Record "FG Doc";
+    begin
+        R.GetTable(D);
+        RetainedNumber(R);
+    end;
+
+    local procedure RetainedNumber(var A: RecordRef)
+    var
+        Store: Codeunit "FG Store";
+    begin
+        Store.Rebind();
+        if A.Number <> Database::"FG Log" then
+            exit;
+        A.Modify();
+    end;
+
+    local procedure Twice(var A: RecordRef; var B: RecordRef)
+    var
+        L: Record "FG Log";
+    begin
+        B.GetTable(L);
+        if A.Number <> Database::"FG Log" then
+            exit;
+        A.Modify();
+    end;
+
     // Control: a Duplicate() shares nothing, so the guard holds.
     procedure DuplicateControl(var R: RecordRef)
     var
@@ -268,6 +356,16 @@ fn a_field_guarded_recordref_write_writes_only_tables_with_the_field() {
         "ArraySlot",
         // sol round 2: a variable literally named `"R[1]"` (`recref_alias::name_key`).
         "LiteralName",
+    ] {
+        assert_eq!(answer(routine, "FG Log"), "unknown", "{routine}");
+    }
+    // sol round 2: a function's result, a record retained in a store and rebound by a call, and
+    // one record passed twice under a G34 table guard.
+    for routine in [
+        "FunctionResult",
+        "Retained",
+        "TwiceRoot",
+        "RetainedNumberRoot",
     ] {
         assert_eq!(answer(routine, "FG Log"), "unknown", "{routine}");
     }
@@ -442,6 +540,41 @@ const TEMP_ALIAS: &str = r#"table 50420 "TA Buf"
     fields { field(1; K; Integer) { } }
     keys { key(PK; K) { } }
 }
+codeunit 50422 "TA Store"
+{
+    SingleInstance = true;
+
+    var
+        H: RecordRef;
+
+    procedure Save(var R: RecordRef)
+    begin
+        H := R;
+    end;
+
+    procedure Rebind()
+    var
+        Phys: Record "TA Buf";
+    begin
+        H.GetTable(Phys);
+    end;
+}
+// sol round 2: a global the routine never passes on, rebound through a store by a call.
+codeunit 50423 "TA Glob"
+{
+    var
+        TG2: RecordRef;
+
+    procedure RetainedGlobalTemp()
+    var
+        Tmp: Record "TA Buf" temporary;
+        Store: Codeunit "TA Store";
+    begin
+        TG2.GetTable(Tmp);
+        Store.Rebind();
+        TG2.Modify();
+    end;
+}
 codeunit 50421 "TA Mgt"
 {
     var
@@ -566,6 +699,17 @@ codeunit 50421 "TA Mgt"
         A.Modify();
     end;
 
+    // sol round 2: a store elsewhere keeps the caller's record and rebinds it later.
+    procedure RetainedTemp(var A: RecordRef)
+    var
+        Store: Codeunit "TA Store";
+        Tmp: Record "TA Buf" temporary;
+    begin
+        A.GetTable(Tmp);
+        Store.Rebind();
+        A.Modify();
+    end;
+
     procedure ArraySlotTemp()
     var
         Ref: RecordRef;
@@ -626,7 +770,14 @@ fn a_recordref_alias_keeps_no_derived_temp_state() {
         assert_eq!(answer(routine), "unknown", "{routine}");
     }
     // sol on ENG-145: `this.TG`, two parameters a caller may alias, an array slot.
-    for routine in ["ThisGlobalTemp", "VictimTemp", "ArraySlotTemp"] {
+    for routine in [
+        "ThisGlobalTemp",
+        "VictimTemp",
+        "ArraySlotTemp",
+        "RetainedTemp",
+        // A global never passed on: its temp state alone decided `no` (the user-code rule).
+        "RetainedGlobalTemp",
+    ] {
         assert_eq!(answer(routine), "unknown", "{routine}");
     }
     // Controls: no alias, the record stays temporary.

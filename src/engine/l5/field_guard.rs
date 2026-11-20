@@ -83,6 +83,41 @@ fn guarded_operations(r: &ModelRoutine) -> HashMap<String, i64> {
             names_by_site.entry(site.id).or_default().insert(key);
         }
     }
+    // sol round 2 on ENG-145 (ENG-159): a place that may run user code may rebind a record
+    // retained elsewhere (a SingleInstance store, a caller's alias), so it ends every retainable
+    // holder's guard. A call, or a record operation that fires a trigger or a table event
+    // (`recref_alias::user_code_points`). A record operation's own trigger cannot move the
+    // record that operation writes (BC 28.4: the write then fails, ENG-159's note), so its
+    // rebinding ends the guards only AFTER it (`after_by_op`), unless it is in a loop (a later
+    // iteration runs after it).
+    let in_loop: HashMap<&str, (bool, (u32, u32))> = r
+        .record_operations
+        .iter()
+        .map(|op| {
+            (
+                op.id.as_str(),
+                (
+                    !op.loop_stack.is_empty(),
+                    (op.source_anchor.start_line, op.source_anchor.start_column),
+                ),
+            )
+        })
+        .collect();
+    let mut after_by_op: HashMap<&str, HashSet<String>> = HashMap::new();
+    for (id, pos) in crate::program::model::recref_alias::user_code_points(r) {
+        let rebound: Vec<String> = aliases.rebound_at(pos).cloned().collect();
+        if rebound.is_empty() {
+            continue;
+        }
+        match in_loop.get(id) {
+            Some((false, _)) => after_by_op.entry(id).or_default().extend(rebound),
+            _ => names_by_site.entry(id).or_default().extend(rebound),
+        }
+    }
+    let after_by_op: HashMap<&str, HashSet<String>> = after_by_op
+        .into_iter()
+        .map(|(id, names)| (id, names.iter().flat_map(|n| aliases.members(n)).collect()))
+        .collect();
     let rebinds: HashMap<&str, HashSet<String>> = names_by_site
         .into_iter()
         .map(|(id, names)| (id, names.iter().flat_map(|n| aliases.members(n)).collect()))
@@ -125,11 +160,18 @@ fn guarded_operations(r: &ModelRoutine) -> HashMap<String, i64> {
                 active.remove(name);
             }
         }
+        // The operations in source order: a write checks the guards still active, then its own
+        // trigger's rebinding (`after_by_op`) ends them for the operations after it.
+        let mut ops = ops;
+        ops.sort_by_key(|op| in_loop.get(op).map(|(_, pos)| *pos));
         for op in ops {
             if let Some(rec) = writes.get(op)
                 && let Some(&n) = active.get(rec)
             {
                 out.insert(op.to_string(), n);
+            }
+            for name in after_by_op.get(op).into_iter().flatten() {
+                active.remove(name);
             }
         }
     }

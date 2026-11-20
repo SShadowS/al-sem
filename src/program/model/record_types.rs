@@ -69,7 +69,18 @@ fn may_be_rebound_elsewhere(
         || routine
             .call_sites
             .iter()
-            .any(|cs| cs.argument_texts.iter().any(|a| names(a)))
+            .any(|cs| {
+                crate::program::model::recref_alias::may_keep_argument(routine, cs)
+                    && cs.argument_texts.iter().any(|a| names(a))
+            })
+        // sol round 2: a record retained elsewhere (a parameter, a global, a call's result, one
+        // kept by an earlier call) may be rebound by any later place that may run user code: a
+        // call, or a record operation that fires a trigger or a table event (ENG-159; Fable's
+        // N2 on ENG-160: `R.Open(T, true); S.Move(); R.Delete()` on a parameter R kept by a
+        // store, both temp passes read this predicate).
+        || crate::program::model::recref_alias::user_code_points(routine)
+            .into_iter()
+            .any(|(_, pos)| aliases.rebinds_at(v, pos))
 }
 
 /// An operation's receiver as a variable-name key: the body pass keeps the

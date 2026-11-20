@@ -148,6 +148,162 @@ pub fn name_key(name: &str) -> String {
         .fold_identifier()
 }
 
+/// Whether call `cs` in `r` may keep (or rebind) a RecordRef or Variant passed to it, so the
+/// holder escapes (ENG-145). A platform method cannot: a method of a RecordRef, FieldRef or
+/// record variable, or a platform keyword's method (`Report.SaveAs(Id, …, RecRef)`: the report's
+/// triggers get their own record, B6). Anything else may (a procedure, an object's method, a
+/// List or Dictionary storing a Variant, anything unresolved).
+#[must_use]
+pub fn may_keep_argument(r: &ModelRoutine, cs: &crate::program::body::features::PCallSite) -> bool {
+    use crate::program::body::features::PCallee;
+    let PCallee::Member { receiver, .. } = &cs.callee else {
+        return true;
+    };
+    let key = holder_key(receiver);
+    match r.variables.iter().find(|v| name_key(&v.name) == key) {
+        Some(v) => {
+            let ty = v.declared_type.trim().fold_identifier();
+            let ty = ty.rsplit(" of ").next().unwrap_or(&ty).trim();
+            !(ty == "recordref" || ty == "fieldref" || ty.starts_with("record "))
+        }
+        None => !matches!(
+            key.as_str(),
+            "report"
+                | "query"
+                | "xmlport"
+                | "page"
+                | "codeunit"
+                | "database"
+                | "session"
+                | "system"
+        ),
+    }
+}
+
+/// The record methods that may run user code: they fire a table trigger or a table event (the
+/// events fire even with `RunTrigger` false).
+const FIRING_METHODS: &[&str] = &[
+    "insert",
+    "modify",
+    "delete",
+    "rename",
+    "modifyall",
+    "deleteall",
+    "validate",
+    "init",
+];
+
+/// Every place in `r` that may run user code, by id with its position: the call sites
+/// [`may_run_user_code`] says yes for, and the record operations that may fire a trigger or a
+/// table event ([`FIRING_METHODS`]). In the IR a record's `Insert`, `Modify`, … is a record
+/// OPERATION, never a call site, so a reader scanning call sites alone missed them (Fable on
+/// ENG-159 Part B; `R.Insert(true)` whose `OnInsert` runs a store's `Rebind`).
+#[must_use]
+pub fn user_code_points(r: &ModelRoutine) -> Vec<(&str, (u32, u32))> {
+    let calls = r
+        .call_sites
+        .iter()
+        .filter(|cs| may_run_user_code(r, cs))
+        .map(|cs| {
+            (
+                cs.id.as_str(),
+                (cs.source_anchor.start_line, cs.source_anchor.start_column),
+            )
+        });
+    let ops = r
+        .record_operations
+        .iter()
+        .filter(|op| FIRING_METHODS.contains(&op.op.fold_identifier().as_str()))
+        .map(|op| {
+            (
+                op.id.as_str(),
+                (op.source_anchor.start_line, op.source_anchor.start_column),
+            )
+        });
+    calls.chain(ops).collect()
+}
+
+/// Whether call `cs` in `r` may run user code (AL a caller does not see: a procedure, an event
+/// subscriber, a table trigger), which may rebind a RecordRef retained elsewhere (ENG-145, sol
+/// round 2). Only a method of a variable of a type whose methods run no user code says no: a
+/// RecordRef, FieldRef or record method that fires no trigger or table event, or a method of a
+/// value type (Text, List, Json…). A bare call, an object's method, an interface, an implicit
+/// `Rec`, `Insert`/`Modify`/`Delete`/`Rename`/`ModifyAll`/`DeleteAll`/`Validate`/`Init` (triggers
+/// and table events fire even with `RunTrigger` false) and anything unresolved say yes.
+#[must_use]
+pub fn may_run_user_code(r: &ModelRoutine, cs: &crate::program::body::features::PCallSite) -> bool {
+    use crate::program::body::features::PCallee;
+    let PCallee::Member { receiver, method } = &cs.callee else {
+        return true;
+    };
+    let key = holder_key(receiver);
+    let Some(ty) = r
+        .variables
+        .iter()
+        .find(|v| name_key(&v.name) == key)
+        .map(|v| v.declared_type.trim().fold_identifier())
+    else {
+        return true;
+    };
+    let ty = ty.rsplit(" of ").next().unwrap_or(&ty).trim().to_string();
+    let record_like = ty == "recordref" || ty == "fieldref" || ty.starts_with("record ");
+    if record_like {
+        return FIRING_METHODS.contains(&method.fold_identifier().as_str());
+    }
+    const VALUE_TYPES: &[&str] = &[
+        "text",
+        "code",
+        "integer",
+        "biginteger",
+        "decimal",
+        "boolean",
+        "date",
+        "time",
+        "datetime",
+        "duration",
+        "guid",
+        "char",
+        "byte",
+        "option",
+        "label",
+        "list",
+        "dictionary",
+        "textbuilder",
+        "jsonobject",
+        "jsonarray",
+        "jsontoken",
+        "jsonvalue",
+        "bigtext",
+        "instream",
+        "outstream",
+        "secrettext",
+        "keyref",
+        "httpclient",
+        "httpcontent",
+        "httpheaders",
+        "httprequestmessage",
+        "httpresponsemessage",
+        "xmldocument",
+        "xmlelement",
+        "xmlnode",
+        "xmlattribute",
+        "xmlnodelist",
+        "xmlnamespacemanager",
+        "xmltext",
+        "xmlcdata",
+        "xmlcomment",
+        "xmldeclaration",
+        "xmlprocessinginstruction",
+        "xmlreadoptions",
+        "xmlwriteoptions",
+        "xmlattributecollection",
+        "xmldocumenttype",
+        "xmlnametable",
+    ];
+    let base = ty.split(['[', ' ', '(']).next().unwrap_or(&ty);
+    !VALUE_TYPES.contains(&base)
+}
+
 /// The alias classes over the variables `tracked` accepts (folded names), from `A := B`
 /// assignments between two of them. A variable in no assignment is its own class.
 #[derive(Debug, Default)]
@@ -155,8 +311,14 @@ pub struct AliasClasses {
     parent: HashMap<String, String>,
     /// Each alias assignment's target and position (line, column).
     pub assignments: Vec<(String, (u32, u32))>,
-    /// [`Self::for_routine`]'s holders (keys); empty from [`Self::of`].
+    /// [`Self::build`]'s holders (keys); empty from [`Self::of`].
     holders: HashSet<String>,
+    /// Holders already shared with code the routine cannot see, from entry (parameters,
+    /// globals, a call's result): [`Self::build`] joins them.
+    external: HashSet<String>,
+    /// Holders whose record may be retained elsewhere, from where ([`Self::rebinds_at`]): `None`
+    /// from entry, `Some(pos)` from the first call that may keep it.
+    retainable: HashMap<String, Option<(u32, u32)>>,
 }
 
 impl AliasClasses {
@@ -173,24 +335,108 @@ impl AliasClasses {
                 || t.ends_with(" of recordref")
                 || t.ends_with(" of variant")
         };
-        let holders: Vec<&crate::program::model::workspace::ModelVariable> = r
+        let holders: Vec<(String, bool)> = r
             .variables
             .iter()
             .filter(|v| holder_type(&v.declared_type))
+            .map(|v| {
+                (
+                    name_key(&v.name),
+                    v.is_parameter || v.scope.as_deref() != Some("local"),
+                )
+            })
             .collect();
-        let keys: HashSet<String> = holders.iter().map(|v| name_key(&v.name)).collect();
-        let mut c = Self::of(&r.var_assignments, |n| keys.contains(n));
-        let any_array = holders
+        let any_array = r
+            .variables
             .iter()
+            .filter(|v| holder_type(&v.declared_type))
             .any(|v| v.declared_type.trim().fold_identifier().contains(" of "));
-        let joined: Vec<String> = holders
+        Self::build(r, &holders, any_array)
+    }
+
+    /// The classes over `holders` (`(key, external)`): `r`'s own `A := B`, every external
+    /// holder joined with every other (and every holder when `any_array`), and a holder assigned
+    /// a call's or expression's result counted external (`A := GetG()` may hand back another's
+    /// record, sol round 2). A holder is RETAINABLE when its class holds an external one or one
+    /// `r` passes to a call (the callee may keep it): a call that may run user code may rebind
+    /// it ([`may_run_user_code`]).
+    #[must_use]
+    pub fn build(r: &ModelRoutine, holders: &[(String, bool)], any_array: bool) -> Self {
+        let keys: HashSet<String> = holders.iter().map(|(k, _)| k.clone()).collect();
+        let mut c = Self::of(&r.var_assignments, |n| keys.contains(n));
+        let mut external: HashSet<String> = holders
             .iter()
-            .filter(|v| any_array || v.is_parameter || v.scope.as_deref() != Some("local"))
-            .map(|v| name_key(&v.name))
+            .filter(|(_, ext)| any_array || *ext)
+            .map(|(k, _)| k.clone())
             .collect();
-        c.join(&joined);
+        for a in &r.var_assignments {
+            let l = name_key(&a.lhs_name);
+            let copy = a.rhs_identifier.is_some()
+                || a.rhs_member
+                    .as_ref()
+                    .is_some_and(|(_, m)| m.eq_fold_identifier("duplicate"));
+            if keys.contains(&l) && !copy {
+                external.insert(l);
+            }
+        }
+        let mut ext: Vec<String> = external.iter().cloned().collect();
+        ext.sort();
+        c.join(&ext);
+        // Where each class may first be kept elsewhere: an external member from entry; else the
+        // first call that may keep a member (from entry when that call is in a loop, as a later
+        // iteration's calls run after it). Nobody holds it before, so no call can rebind it.
+        let mut from: HashMap<String, Option<(u32, u32)>> = HashMap::new();
+        let earlier = |a: Option<(u32, u32)>, b: Option<(u32, u32)>| match (a, b) {
+            (None, _) | (_, None) => None,
+            (Some(x), Some(y)) => Some(x.min(y)),
+        };
+        for k in &external {
+            from.insert(c.root(k), None);
+        }
+        for cs in r.call_sites.iter().filter(|cs| may_keep_argument(r, cs)) {
+            let at = if cs.loop_stack.is_empty() {
+                Some((cs.source_anchor.start_line, cs.source_anchor.start_column))
+            } else {
+                None
+            };
+            for a in cs.argument_texts.iter().map(|a| holder_key(a)) {
+                if keys.contains(&a) {
+                    let root = c.root(&a);
+                    let cur = from.get(&root).copied();
+                    from.insert(root, cur.map_or(at, |f| earlier(f, at)));
+                }
+            }
+        }
+        c.retainable = keys
+            .iter()
+            .filter_map(|k| from.get(&c.root(k)).map(|f| (k.clone(), *f)))
+            .collect();
+        c.external = external;
         c.holders = keys;
         c
+    }
+
+    /// Whether the record of holder `x` may be retained by code the routine cannot see by the
+    /// time of the call at `pos`, so that call, if it may run user code, may rebind it.
+    #[must_use]
+    pub fn rebinds_at(&self, x: &str, pos: (u32, u32)) -> bool {
+        self.retainable
+            .get(x)
+            .is_some_and(|f| f.is_none_or(|from| from < pos))
+    }
+
+    /// The holders a call at `pos` that may run user code may rebind.
+    pub fn rebound_at(&self, pos: (u32, u32)) -> impl Iterator<Item = &String> {
+        self.retainable
+            .iter()
+            .filter(move |(_, f)| f.is_none_or(|from| from < pos))
+            .map(|(k, _)| k)
+    }
+
+    /// Whether holder `x` is shared with code the routine cannot see from entry.
+    #[must_use]
+    pub fn is_external(&self, x: &str) -> bool {
+        self.external.contains(x)
     }
 
     /// Whether the key `x` names a holder ([`Self::for_routine`] only).

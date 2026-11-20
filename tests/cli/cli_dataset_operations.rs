@@ -590,14 +590,17 @@ fn a_run_by_another_name_runs_the_triggers_and_a_dynamic_one_is_unknown() {
         );
     }
     // A report save is still a platform method for the RecordRef flow: it
-    // cannot rebind the RecordRef passed to it, so `R` still holds "DS Line"
-    // at `OnlyForKept`'s guard, which rules out its insert into "DS Kept".
-    // (Read as a call that may rebind it, the save cost Continia DO's
-    // `IssueReminder` most of its literal pruning: 418 tables, not 198.)
+    // cannot rebind or keep the RecordRef passed to it (B6; ENG-145's
+    // `recref_alias::may_keep_argument`). But the save runs the report's triggers, user code, and
+    // the Variant `V` the RecordRef was taken from is a parameter that code the routine
+    // cannot see may keep: ENG-145's sound rule reads it as "anything" after the save,
+    // and the RecordRef flow reads `RR.GetTable(V)` without positions, so `OnlyForKept`'s
+    // guard no longer rules out the insert into "DS Kept". The loss (Continia DO's
+    // `IssueReminder` pattern) is won back soundly by ENG-159.
     let text = alsem(ws, &["explain", "--routine", "DS Logic::SaveFiltered"]);
     assert!(
-        text.contains("literal arguments rule out: 1 table (2 effect rows)"),
-        "{text}"
+        !text.contains("literal arguments rule out"),
+        "ENG-145's sound rule keeps the DS Kept insert: {text}"
     );
 }
 

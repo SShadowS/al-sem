@@ -1827,6 +1827,11 @@ pub(crate) fn exit_guards(
     let sites = bind_sites(r);
     let aliases =
         crate::program::model::recref_alias::AliasClasses::of(&r.var_assignments, |_| true);
+    // ENG-159 (the sound rule): a record that may be retained elsewhere (a parameter, a global,
+    // one kept by an earlier call) may be rebound by a place that may run user code; its guard
+    // then reads no entry value either (`RetainedNumber`: `Store.Rebind(); if A.Number <> …`).
+    let kept = crate::program::model::recref_alias::AliasClasses::for_routine(r);
+    let user_code = crate::program::model::recref_alias::user_code_points(r);
     for (n, stmt) in top.iter().enumerate() {
         let (Some((rec, tables)), Some((line, col, ..))) =
             (stmt.table_exit_guard(), stmt.source_range)
@@ -1856,7 +1861,12 @@ pub(crate) fn exit_guards(
                             if named(receiver)))
             }) || sites
                 .iter()
-                .any(|s| s.call.is_none() && named(s.receiver) && before(s.anchor)));
+                .any(|s| s.call.is_none() && named(s.receiver) && before(s.anchor))
+                || user_code.iter().any(|&(_, pos)| {
+                    pos < (line, col)
+                        && kept
+                            .rebinds_at(&crate::program::model::recref_alias::holder_key(rec), pos)
+                }));
         if bound_before {
             continue;
         }
@@ -2016,10 +2026,15 @@ fn facts_of(
             }
         }
     }
-    // The alias classes (one source, ENG-145: `program::model::recref_alias`).
-    let classes = crate::program::model::recref_alias::AliasClasses::of(&r.var_assignments, |n| {
-        f.tracked.contains_key(n)
-    });
+    // The alias classes (one source, ENG-145: `program::model::recref_alias`): the routine's own
+    // `A := B`, and every parameter and global joined (a caller may pass one record twice,
+    // `Victim(R, R)`, or have aliased two globals: sol round 2).
+    let holders: Vec<(String, bool)> = f
+        .tracked
+        .iter()
+        .map(|(n, k)| (n.clone(), !matches!(k, VarKind::Local)))
+        .collect();
+    let classes = crate::program::model::recref_alias::AliasClasses::build(r, &holders, false);
     for a in &r.var_assignments {
         let l = lc(&a.lhs_name);
         if !f.tracked.contains_key(&l) {
@@ -2044,7 +2059,7 @@ fn facts_of(
         let at = (a.source_anchor.start_line, a.source_anchor.start_column);
         f.fixed.push((l, part, Some(at)));
     }
-    if !classes.assignments.is_empty() {
+    {
         for root in classes
             .names()
             .map(|n| classes.root(n))
@@ -2058,6 +2073,9 @@ fn facts_of(
                 .filter(|(l, _)| members.contains(&l))
                 .map(|(_, p)| *p)
                 .collect();
+            // A class holding a parameter or global shares from entry: every rebinding of a
+            // member may follow (sol round 2 on ENG-145).
+            let from_entry = members.iter().any(|m| classes.is_external(m));
             // What a rebinding that may run after an alias assignment binds.
             let mut shared: Vec<(Part, Option<(u32, u32)>)> = Vec::new();
             for m in &members {
@@ -2065,11 +2083,12 @@ fn facts_of(
                     shared.push((Part::Atoms(top()), None));
                 }
                 for (s, part) in in_place.get(*m).into_iter().flatten() {
-                    let may_follow = assigns.iter().any(|&p| {
-                        !r.statement_tree
-                            .as_ref()
-                            .is_some_and(|t| exclusive(t, p, *s))
-                    });
+                    let may_follow = from_entry
+                        || assigns.iter().any(|&p| {
+                            !r.statement_tree
+                                .as_ref()
+                                .is_some_and(|t| exclusive(t, p, *s))
+                        });
                     if may_follow {
                         shared.push((part.clone(), Some(*s)));
                     }
@@ -2100,6 +2119,17 @@ fn facts_of(
                 }
                 None => f.fixed.push((v, in_place_part(site), at)),
             }
+        }
+    }
+    // sol round 2 on ENG-145 (ENG-159): a place that may run user code may rebind a record
+    // retained elsewhere (a SingleInstance store, a caller's alias): every retainable variable
+    // may hold anything from there on. A call, or a record operation that fires a trigger or a
+    // table event (`recref_alias::user_code_points`).
+    for (_, pos) in crate::program::model::recref_alias::user_code_points(r) {
+        let at = Some(pos);
+        for v in classes.rebound_at(pos) {
+            f.alias_shared.insert(v.clone());
+            f.fixed.push((v.clone(), Part::Atoms(top()), at));
         }
     }
     for (ci, cs) in r.call_sites.iter().enumerate() {
