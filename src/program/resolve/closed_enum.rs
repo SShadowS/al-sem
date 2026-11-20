@@ -595,6 +595,31 @@ fn declared_type<'a>(cx: &ClosedEnumCx<'a>, name_lc: &str) -> Option<&'a str> {
     }
 }
 
+/// Whether `derived` is `base` or extends it through bases that each bind
+/// exactly from their declaring interface's app (ENG-152): what a proof may
+/// rely on. Each interface visited once (alc refuses an `extends` cycle).
+fn surely_derives(graph: &dyn GraphReads, derived: &ObjectNodeId, base: &ObjectNodeId) -> bool {
+    let mut seen: Vec<ObjectNodeId> = Vec::new();
+    let mut stack = vec![derived.clone()];
+    while let Some(i) = stack.pop() {
+        if &i == base {
+            return true;
+        }
+        if seen.contains(&i) {
+            continue;
+        }
+        if let Some(o) = graph.object(&i) {
+            for b in &o.interface_bases {
+                if let Some(k) = graph.bind_interface(o.id.app, b).exact() {
+                    stack.push(k.clone());
+                }
+            }
+        }
+        seen.push(i);
+    }
+    false
+}
+
 /// Spec §2: every implementation `enum_node` maps for interface `iface`
 /// resolves, from the enum's own app, to exactly one codeunit that is the
 /// object of one of `routes`. The lookup is strict: two same-named codeunits
@@ -624,12 +649,14 @@ pub(crate) fn enum_covered_by_routes(
     };
     // A key that binds no single interface may add a codeunit to check, but
     // never stands in for `iface`'s own mapping (review, sol): `iface` needs
-    // a key that binds to it, or to an interface derived from it.
+    // a key that binds to it, or to an interface derived from it through
+    // bases that each bind exactly (sol r2: a base reached only through a
+    // fallback binding proves nothing either).
     let surely_for_iface = |(i, _): &(InterfaceRef, ObjectRef)| {
         graph
             .bind_interface(enum_node.id.app, i)
             .exact()
-            .is_some_and(|k| index.interface_is_or_derives(k, iface))
+            .is_some_and(|k| surely_derives(graph, k, iface))
     };
     let has_entry = |name: &str| {
         enum_node

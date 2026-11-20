@@ -148,7 +148,8 @@ impl InterfaceImplementers {
 
     /// What a receiver bound `binding` (typed by `r`) dispatches to: the
     /// codeunits (`closed_enum: false`) or closed enums (`true`) of every
-    /// interface it may name, or the unbound bucket of `r` when it names none.
+    /// interface it may name, then the unbound bucket of `r`'s name when the
+    /// interface may be one no loaded app declares (`Unseen`, `Unbound`).
     /// Deduplicated, first occurrence kept, in binding order.
     pub fn for_binding(
         &self,
@@ -161,14 +162,14 @@ impl InterfaceImplementers {
         } else {
             &self.implementers
         };
-        let lists: Vec<&[ObjectNodeId]> = match binding {
-            InterfaceBinding::Unbound => vec![self.unbound_of(closed_enum, r)],
-            b => b
-                .ids()
-                .iter()
-                .map(|i| map.get(i).map(Vec::as_slice).unwrap_or(&[]))
-                .collect(),
-        };
+        let mut lists: Vec<&[ObjectNodeId]> = binding
+            .ids()
+            .iter()
+            .map(|i| map.get(i).map(Vec::as_slice).unwrap_or(&[]))
+            .collect();
+        if binding.may_be_unloaded() {
+            lists.push(self.unbound_of(closed_enum, r));
+        }
         let mut seen: HashSet<&ObjectNodeId> = HashSet::new();
         lists
             .into_iter()

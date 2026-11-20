@@ -33,6 +33,16 @@ fn report(
     files: &[(&str, &str)],
     apps: Vec<(String, Vec<u8>)>,
 ) -> ProgramReport {
+    let dir = write_ws(deps, files, apps);
+    resolve_full_program(dir.path()).expect("resolves")
+}
+
+/// [`report`]'s workspace, written.
+fn write_ws(
+    deps: &[(&str, &str)],
+    files: &[(&str, &str)],
+    apps: Vec<(String, Vec<u8>)>,
+) -> tempfile::TempDir {
     let dir = tempfile::tempdir().expect("tempdir");
     let deps_json: Vec<String> = deps
         .iter()
@@ -58,7 +68,7 @@ fn report(
     for (name, bytes) in apps {
         std::fs::write(pkgs.join(name), bytes).unwrap();
     }
-    resolve_full_program(dir.path()).expect("resolves")
+    dir
 }
 
 /// The object keys every route of the interface (polymorphic) sites in
@@ -201,6 +211,127 @@ fn an_unbound_receiver_reaches_every_unbound_implementer_of_its_name() {
         )],
     );
     assert_eq!(targets(&r, "calls"), ["70201"]);
+}
+
+/// A receiver whose interface is not visible may name one that is not loaded:
+/// W and C were built against A's `IGone`, A's package is absent, and an
+/// unrelated B (loaded, no dependency of W) declares its own `IGone`. W's
+/// `IGone` sees none, so it may name B's or A's: the call reaches C's
+/// implementer of `#<A>#IGone` (unbound) too.
+///
+/// Mutation (2026-11-20, review sol r2): `for_binding` reading the unbound
+/// bucket for `Unbound` only (not `Unseen`) -> no route to 70301 (red);
+/// restored, green.
+#[test]
+fn an_unseen_receiver_reaches_unbound_implementers_too() {
+    let a_dashless = A_GUID.replace('-', "");
+    let c_guid = "15215215-0000-0000-0000-0000000000c1";
+    let b_symbols = r#"{"RuntimeVersion":"15.0","Interfaces":[{"Name":"IGone","Methods":[{"Name":"Go","Parameters":[]}]}]}"#;
+    let c_symbols = format!(
+        r##"{{"RuntimeVersion":"15.0","Codeunits":[{{"Id":70301,"Name":"C Impl","ImplementedInterfaces":["#{a_dashless}#IGone"],"Methods":[{{"Id":1,"Name":"Go","Parameters":[]}}]}}]}}"##
+    );
+    let caller = "codeunit 50120 \"Caller\"\n{\n    procedure Calls()\n    var\n        X: Interface IGone;\n    begin\n        X.Go();\n    end;\n}\n";
+    let r = report(
+        &[(A_GUID, "DepA152"), (c_guid, "DepC152")],
+        &[("src/Caller.al", caller)],
+        vec![
+            (
+                "probe_DepB152_1.0.0.0.app".into(),
+                app(B_GUID, "DepB152", b_symbols, &[]),
+            ),
+            (
+                "probe_DepC152_1.0.0.0.app".into(),
+                app(c_guid, "DepC152", &c_symbols, &[]),
+            ),
+        ],
+    );
+    assert_eq!(targets(&r, "calls"), ["70301"]);
+}
+
+/// A closed enum's coverage proof follows only bases that bind exactly. App C
+/// declares `interface D extends IBase` and sees no `IBase` (its base binds
+/// only through the program-wide fallback); A declares `IBase`; W depends on
+/// both, and W's closed enum maps `IBase` and `D` to W's codeunit. Covered as
+/// built. With the `IBase` key set (by assignment: no producer writes one
+/// today) to an app that is not loaded, only `D`'s key is left, and `D`
+/// derives from A's `IBase` only through the fallback: not covered.
+///
+/// Mutation (2026-11-20, review sol r2): `surely_derives` replaced by the
+/// index's possible ancestry (`interface_is_or_derives`) -> covered (red);
+/// restored, green.
+#[test]
+fn a_mapping_proves_a_base_only_through_exact_bases() {
+    use crate::program::node::ObjectKind;
+    let c_guid = "15215215-0000-0000-0000-0000000000c1";
+    let a_symbols = r#"{"RuntimeVersion":"15.0","Interfaces":[{"Name":"IBase","Methods":[{"Name":"Go","Parameters":[]}]}]}"#;
+    let c_src = "interface D extends IBase\n{\n    procedure Extra();\n}\n";
+    let c_symbols = r#"{"RuntimeVersion":"15.0","Interfaces":[{"Name":"D","ExtendedInterfaces":["IBase"],"Methods":[{"Name":"Extra","Parameters":[]}]}]}"#;
+    let kind = "enum 50110 \"W Kind\" implements IBase, D\n{\n    Extensible = false;\n    value(0; A) { Implementation = IBase = \"W Impl\", D = \"W Impl\"; }\n}\n";
+    let imp = "codeunit 50101 \"W Impl\" implements IBase, D\n{\n    procedure Go()\n    begin\n    end;\n\n    procedure Extra()\n    begin\n    end;\n}\n";
+    let caller = "codeunit 50120 \"Caller\"\n{\n    procedure Calls()\n    var\n        X: Interface IBase;\n    begin\n        X := \"W Kind\"::A;\n        X.Go();\n    end;\n}\n";
+    let dir = write_ws(
+        &[(A_GUID, "DepA152"), (c_guid, "DepC152")],
+        &[
+            ("src/Kind.al", kind),
+            ("src/Impl.al", imp),
+            ("src/Caller.al", caller),
+        ],
+        vec![
+            (
+                "probe_DepA152_1.0.0.0.app".into(),
+                app(A_GUID, "DepA152", a_symbols, &[]),
+            ),
+            (
+                "probe_DepC152_1.0.0.0.app".into(),
+                app(c_guid, "DepC152", c_symbols, &[("src/D.al", c_src)]),
+            ),
+        ],
+    );
+    let ctx = crate::program::resolve::full::build_context_res(dir.path()).expect("context");
+    let graph = ctx.graph();
+    let index = crate::program::resolve::index::ResolveIndex::build(graph);
+    let report = crate::program::resolve::full::resolve_full_program_with(
+        &ctx,
+        crate::program::resolve::abi_check::AbiIntegrity::Skip,
+    );
+    let routes = &report
+        .edges
+        .iter()
+        .find(|c| {
+            c.edge.from.name_lc.as_ref() == "calls" && c.edge.shape == DispatchShape::Polymorphic
+        })
+        .expect("the interface site")
+        .edge
+        .routes;
+    let ibase = graph
+        .objects
+        .iter()
+        .find(|o| o.id.kind == ObjectKind::Interface && o.name.as_ref() == "IBase")
+        .expect("A's IBase")
+        .id
+        .clone();
+    let mut node = graph
+        .objects
+        .iter()
+        .find(|o| o.name.as_ref() == "W Kind")
+        .expect("the enum")
+        .clone();
+    assert!(
+        super::closed_enum::enum_covered_by_routes(graph, &index, &node, &ibase, routes),
+        "precondition: covered as built"
+    );
+    // Mapping keys are stored folded.
+    let mut changed = 0;
+    for (i, _) in &mut node.enum_impls {
+        if i.name.as_ref() == "ibase" {
+            i.app = Some("0badf00d0badf00d0badf00d0badf00d".into());
+            changed += 1;
+        }
+    }
+    assert_eq!(changed, 1, "precondition: the IBase key was changed");
+    assert!(!super::closed_enum::enum_covered_by_routes(
+        graph, &index, &node, &ibase, routes
+    ));
 }
 
 /// A base object's protected variable binds in the base's app: A's table

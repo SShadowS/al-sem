@@ -426,6 +426,45 @@ fn interface_meta_lists_an_unbound_enum_by_name() {
     assert_eq!(metas[0].enum_implementers.len(), 1, "{metas:?}");
 }
 
+/// ENG-152 (review, sol r2): G29 needs the receiver to name the cataloged
+/// interface. Here the workspace depends on nothing, and System Application
+/// (its guid; loaded, not a dependency) declares `Telemetry Logger`: the
+/// workspace's `Telemetry Logger` sees none, so it may name an unloaded app's
+/// interface of that name, and the site is not publisher-scoped.
+/// Mutation (2026-11-20): the `Unseen` exclusion dropped -> publisher-scoped
+/// (red); restored, green.
+#[test]
+fn an_unseen_telemetry_logger_is_not_publisher_scoped() {
+    let dir = tempfile::tempdir().unwrap();
+    let cu = "codeunit 50101 \"W\"\n{\n    procedure Caller()\n    var\n        X: Interface \"Telemetry Logger\";\n    begin\n        X.LogMessage();\n    end;\n}\n";
+    write_workspace(dir.path(), &[("src/w.al", cu)], None);
+    let sys = "63ca2fa4-4f03-4f2b-a480-172fef340d3f";
+    let manifest = test_apps::manifest_xml(sys, "System Application");
+    let symbols = r#"{"Interfaces":[{"Name":"Telemetry Logger","Methods":[{"Name":"LogMessage","Parameters":[]}]}]}"#;
+    let app = test_apps::build_app(&[
+        ("NavxManifest.xml", manifest.as_bytes()),
+        ("SymbolReference.json", symbols.as_bytes()),
+    ]);
+    let pk = dir.path().join(".alpackages");
+    std::fs::create_dir_all(&pk).unwrap();
+    std::fs::write(pk.join("Microsoft_System Application_28.4.app"), app).unwrap();
+    let (ctx, report, l3) = build_models(dir.path()).unwrap();
+    let (calls, census) = resolved_calls_from_rows(report.edge_view(), &ctx, &l3, true, None);
+    let a = Adapted {
+        calls,
+        census,
+        ws: l3.workspace,
+    };
+    let cs = a.site("Caller", "X.LogMessage");
+    let metas: Vec<_> = a
+        .edges(&cs.id)
+        .into_iter()
+        .filter_map(|e| e.dispatch_meta)
+        .collect();
+    assert_eq!(metas.len(), 1, "{metas:?}");
+    assert!(!metas[0].publisher_scoped, "{metas:?}");
+}
+
 /// Row "Polymorphic (interface)", engine-switch S3.2: one `Interface`+`Maybe`
 /// edge to the workspace implementer, `dispatch_meta` on it, and one to-less
 /// `Interface`+`ExternalTarget` edge naming the dependency implementer

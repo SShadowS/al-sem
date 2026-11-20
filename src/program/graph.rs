@@ -110,6 +110,12 @@ pub enum InterfaceBinding {
     Exact(ObjectNodeId),
     /// Several it may name (sorted): reach them all, prove nothing.
     Visible(Vec<ObjectNodeId>),
+    /// None of its name is visible from its scope: every interface of the name
+    /// in the program (sorted), and the one it names may be in an app that is
+    /// not loaded, so the unbound implementers of the name count too (review,
+    /// sol). Reach them all, prove nothing, and never read it as a cataloged
+    /// interface (G29).
+    Unseen(Vec<ObjectNodeId>),
     /// No interface node it can name.
     Unbound,
 }
@@ -119,9 +125,15 @@ impl InterfaceBinding {
     pub fn ids(&self) -> &[ObjectNodeId] {
         match self {
             Self::Exact(id) => std::slice::from_ref(id),
-            Self::Visible(ids) => ids,
+            Self::Visible(ids) | Self::Unseen(ids) => ids,
             Self::Unbound => &[],
         }
+    }
+
+    /// Whether the interface it names may be one no loaded app declares:
+    /// dispatch then reaches the unbound implementers of its name too.
+    pub fn may_be_unloaded(&self) -> bool {
+        matches!(self, Self::Unseen(_) | Self::Unbound)
     }
 
     /// The interface it proves, if any.
@@ -144,8 +156,8 @@ impl ProgramGraph {
     ///   interfaces of the name in `from` and its dependency closure. One:
     ///   `Exact` (alc refuses two without namespaces, AL0275, and the own app
     ///   does not shadow, AL0197). Several: `Visible(all)`. None visible: every
-    ///   interface of the name in the program, `Visible` (a missing topology
-    ///   edge must not lose reach), or `Unbound` when there is none.
+    ///   interface of the name in the program, `Unseen` (a missing topology
+    ///   edge or package must not lose reach), or `Unbound` when there is none.
     pub fn bind_interface(&self, from: AppRef, r: &InterfaceRef) -> InterfaceBinding {
         let kind = ObjectKind::Interface;
         let name_lc = r.name.fold_identifier();
@@ -184,7 +196,7 @@ impl ProgramGraph {
             return if ids.is_empty() {
                 InterfaceBinding::Unbound
             } else {
-                InterfaceBinding::Visible(ids)
+                InterfaceBinding::Unseen(ids)
             };
         }
         ids.sort();

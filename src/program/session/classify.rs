@@ -229,6 +229,10 @@ impl Classify for crate::program::graph::InterfaceBinding {
                 ids.classify(h);
             }
             B::Unbound => h.tag(2),
+            B::Unseen(ids) => {
+                h.tag(3);
+                ids.classify(h);
+            }
         }
     }
 }

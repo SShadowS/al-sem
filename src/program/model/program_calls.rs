@@ -2814,8 +2814,11 @@ impl<'a> Converter<'a> {
             .iter()
             .min_by_key(|o| o.id.app != self.primary)
             .map_or_else(|| name_lc.clone(), |o| o.name.to_string());
-        // G29: every interface the receiver may name is the cataloged one.
+        // G29: every interface the receiver may name is the cataloged one. An
+        // `Unseen` binding may name an interface no loaded app declares (review,
+        // sol), so it never qualifies.
         let publisher_scoped = !bound.is_empty()
+            && !matches!(binding, InterfaceBinding::Unseen(_))
             && bound.iter().all(|o| {
                 let guid = &self.graph.apps.resolve(o.id.app).guid;
                 let n = o.name.fold_identifier();
@@ -2847,7 +2850,7 @@ impl<'a> Converter<'a> {
                         .any(|r| match self.graph.bind_interface(o.id.app, r) {
                             // By name alone, as the unbound bucket (review, sol).
                             InterfaceBinding::Unbound => {
-                                binding == InterfaceBinding::Unbound
+                                binding.may_be_unloaded()
                                     && r.name.fold_identifier() == iref.name.fold_identifier()
                             }
                             b => b.ids().iter().any(|k| {
