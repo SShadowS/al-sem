@@ -290,10 +290,14 @@ const SEV_ORDER: &[&str] = &["critical", "high", "medium", "low", "info"];
 /// Render the full terminal output for an analyze result.
 /// Returns the string WITHOUT the trailing `\n` (the caller appends it,
 /// matching al-sem's `process.stdout.write(`${formatTerminal(...)}\n`)`).
+///
+/// `focus_line` is `--focus`'s statement (ENG-168): under "No findings in this
+/// view." when nothing is shown, else after the findings. `None` changes nothing.
 pub fn format_terminal(
     findings: &[FindingSummary],
     coverage: &AnalysisCoverage,
     diagnostics: &[Diagnostic],
+    focus_line: Option<&str>,
 ) -> String {
     let rolled = rollup_findings(findings);
     let mut lines: Vec<String> = Vec::new();
@@ -323,10 +327,15 @@ pub fn format_terminal(
 
     if findings.is_empty() {
         lines.push(String::new());
-        lines.push(
-            "No findings. (Absence of a finding is not absence of a problem — see coverage above.)"
-                .to_string(),
-        );
+        if let Some(l) = focus_line {
+            lines.push("No findings in this view.".to_string());
+            lines.push(l.to_string());
+        } else {
+            lines.push(
+                "No findings. (Absence of a finding is not absence of a problem — see coverage above.)"
+                    .to_string(),
+            );
+        }
     }
 
     for &sev in SEV_ORDER {
@@ -352,6 +361,10 @@ pub fn format_terminal(
                 } => render_rolled(primary_location, contributors, &mut lines),
             }
         }
+    }
+    if let Some(l) = focus_line.filter(|_| !findings.is_empty()) {
+        lines.push(String::new());
+        lines.push(l.to_string());
     }
 
     if !diagnostics.is_empty() {
@@ -436,10 +449,14 @@ pub fn group_findings(findings: &[FindingSummary], by: GroupBy) -> Vec<(String, 
 
 /// Render the grouped terminal output (mirror of index.ts L331-348).
 /// Returns the string WITHOUT trailing `\n`.
+///
+/// `focus_line`: `--focus`'s statement after the groups, under "No findings in
+/// this view." when nothing is shown (ENG-168).
 pub fn format_terminal_grouped(
     findings: &[FindingSummary],
     coverage: &AnalysisCoverage,
     by: GroupBy,
+    focus_line: Option<&str>,
 ) -> String {
     let groups = group_findings(findings, by);
     let mut lines: Vec<String> = Vec::new();
@@ -466,6 +483,12 @@ pub fn format_terminal_grouped(
     lines.push(format!("Grouped by {} (top {}):", by_str, groups.len()));
     for (key, count) in &groups {
         lines.push(format!("  {}: {}", key, count));
+    }
+    if let Some(l) = focus_line {
+        if findings.is_empty() {
+            lines.push("No findings in this view.".to_string());
+        }
+        lines.push(l.to_string());
     }
 
     lines.join("\n")

@@ -145,22 +145,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `--min-severity`, `--detector` and `--scope`, and before `--limit`, the baseline and inline
   suppression. Focus comes before the limit because findings are sorted by detector: a limit
   taken first would fill its slots with findings focus then hides. The detectors and their run
-  do not change, so a shown finding is the same, byte for byte, with and without `--focus`. A
-  finding from a detector the registry does not know is kept, never hidden.
+  do not change, so a shown finding's data (id, fingerprint, location, message) is the same
+  with and without `--focus`. What a format builds from the shown findings together is rebuilt
+  from the shown ones only: html's "co-located" list and the terminal's rollups no longer name
+  a hidden detector. A finding from a detector the registry does not know is kept, never hidden.
 - **Nothing disappears silently.** Every format says what was hidden: the focus, the total,
   and per hidden detector its concern and count. JSON has it in `payload.summary.hidden` (also
-  with `--with-evidence`; no schema change, the key exists only under `--focus`). SARIF has it
-  in `runs[0].properties.hidden` and also prints a stderr warning that the file is a partial
+  with `--with-evidence`; no schema change, the key exists only under `--focus`), in one of two
+  shapes: `{"focus", "before", "total", "byDetector"}` when counted, and
+  `{"focus", "status": "focus requested, analysis unavailable"}` when the workspace could not be
+  analysed (no `total`: nothing was counted). SARIF has the same object in
+  `runs[0].properties.hidden` and also prints a stderr warning that the file is a partial
   report, not to be uploaded as the full scan. Terminal, `--group-by`, pr-summary and html print
-  one line, also when nothing is shown. When the workspace could not be analysed, every format
-  says "focus requested, analysis unavailable" instead of a count.
+  one line. When focus leaves nothing shown, they say "No findings in this view." (the terminal
+  puts the line directly under it, the pr-summary heading and the html body say it) instead of
+  the plain "No findings" text. When the workspace could not be analysed, every format says
+  "focus requested, analysis unavailable" instead of a count.
 - **Refused.** `--update-baseline --focus` (the new baseline would lose every hidden finding)
   and `--fail-on --focus` (a focused run could turn a failing gate clean) exit 3 before any
-  analysis or write. The CLI and the library entry (`AnalyzeJob::new`) run the same check. An
-  unknown value exits 3 and names the known ones. The same baseline hazard with the older
-  filters is TLS-106.
+  analysis or write. The CLI and the library entry (`AnalyzeJob::new`) run the same check; the
+  library entry also refuses an empty focus list. An unknown value exits 3 and names the known
+  ones. The same baseline hazard with the older filters is TLS-106.
+- **Fixed in `alsem batch`.** A refused job still opened its own streams to write its error
+  line, so a refused `analyze --baseline B --update-baseline` whose stdout was also `B` would
+  have emptied `B`. A refused job's named write files are now kept: its own streams may not
+  write them, and the run refuses such a manifest (exit 3) before any job runs. Another job may
+  still write such a file, as before (#277 FR-2): that write is its own.
 - **Changed for library callers.** `AnalyzeOutput`'s third field is now a list of stderr
-  warnings, so a focused SARIF run on a degraded workspace prints both warnings.
+  warnings, so a focused SARIF run on a degraded workspace prints both warnings. `run_analyze`
+  (stdout only) drops them; its doc says so.
+- **Changed for formatter callers.** `format_terminal`, `format_terminal_grouped`,
+  `format_pr_summary` and `format_sarif` take the focus statement as a new last argument
+  (`None` gives the old output); `JsonFormatInputs` and `HtmlFormatInputs` gain a field.
 - **Without `--focus`** every output is unchanged; no golden moved.
 - **Measured.** MEASUREMENT
 

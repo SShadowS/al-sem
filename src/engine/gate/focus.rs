@@ -48,8 +48,13 @@ pub fn check_focus_conflicts(
     update_baseline: bool,
     fail_on: Option<&str>,
 ) -> Result<(), String> {
-    if focus.is_none() {
+    let Some(focus) = focus else {
         return Ok(());
+    };
+    // The CLI cannot produce it (`parse_focus` refuses ""), but a library caller
+    // could, and it would hide every classified finding.
+    if focus.is_empty() {
+        return Err("--focus names no concern".to_string());
     }
     if update_baseline {
         return Err(
@@ -456,6 +461,21 @@ mod tests {
                 d.concern
             );
         }
+    }
+
+    /// An empty focus list would hide every classified finding: refused.
+    ///
+    /// Mutation (2026-11-20): the `focus.is_empty()` refusal removed -> the
+    /// empty list was accepted, `Ok(())` (red); restored, green.
+    #[test]
+    fn empty_focus_is_refused() {
+        let e = check_focus_conflicts(Some(&[]), false, None).unwrap_err();
+        assert!(e.contains("--focus names no concern"), "{e}");
+        assert_eq!(
+            check_focus_conflicts(Some(&[Concern::Behaviour]), false, None),
+            Ok(())
+        );
+        assert_eq!(check_focus_conflicts(None, true, Some("high")), Ok(()));
     }
 
     #[test]

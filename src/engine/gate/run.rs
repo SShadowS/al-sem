@@ -630,6 +630,11 @@ pub fn analysis_coverage(
 ///
 /// Backwards-compatible Stage-1 entry: SARIF only, no exit code. Prefer
 /// `run_analyze_with_exit` for the full gate (pr-summary + exit code).
+///
+/// It returns stdout only and DROPS the stderr warnings: the degraded-preflight
+/// warning and a focused SARIF run's partial-report warning (ENG-168). A caller
+/// that shows or forwards the report must use [`run_analyze_with_exit`], which
+/// returns them in order.
 pub fn run_analyze(
     inputs: &Arc<WorkspaceInputs>,
     request: &RequestInputs,
@@ -1040,17 +1045,17 @@ fn analyze_view(
             OutputFormat::Terminal => {
                 let summaries: Vec<_> = paired.iter().map(|(s, _)| s.clone()).collect();
                 // group-by path: only when format==terminal AND group_by is set.
-                let out = if let Some(ref by_str) = args.group_by {
+                let line = focus_line.as_deref();
+                if let Some(ref by_str) = args.group_by {
                     if let Some(by) = GroupBy::parse(by_str) {
-                        format_terminal_grouped(&summaries, &coverage, by)
+                        format_terminal_grouped(&summaries, &coverage, by, line)
                     } else {
                         // Invalid group_by — the CLI validates this, so treat as plain.
-                        format_terminal(&summaries, &coverage, &run_diagnostics)
+                        format_terminal(&summaries, &coverage, &run_diagnostics, line)
                     }
                 } else {
-                    format_terminal(&summaries, &coverage, &run_diagnostics)
-                };
-                with_focus_line(out, focus_line.as_deref())
+                    format_terminal(&summaries, &coverage, &run_diagnostics, line)
+                }
             }
             OutputFormat::Html => {
                 let primary_app = resolved.primary_app.as_ref();
@@ -1225,10 +1230,7 @@ pub(crate) fn empty_output_result(
                 unresolved_callsites: vec![],
                 dynamic_dispatch_sites: vec![],
             };
-            with_focus_line(
-                format_terminal(&[], &empty_coverage, &diagnostics),
-                focus_line.as_deref(),
-            )
+            format_terminal(&[], &empty_coverage, &diagnostics, focus_line.as_deref())
         }
         OutputFormat::Html => {
             // Empty workspace → zero findings + zero coverage HTML report.
@@ -1299,16 +1301,6 @@ pub(crate) fn empty_output_result(
         warnings.push(f.sarif_warning());
     }
     Ok((out, exit, warnings))
-}
-
-/// Terminal and `--group-by` output with `--focus`'s line after the findings
-/// (ENG-168); unchanged without it.
-fn with_focus_line(mut out: String, focus_line: Option<&str>) -> String {
-    if let Some(l) = focus_line {
-        out.push_str("\n\n");
-        out.push_str(l);
-    }
-    out
 }
 
 /// Build the opt-in `--with-evidence` augmentation for the kept findings, aligned BY

@@ -648,7 +648,7 @@ fn oracle_f2_preflight_degraded_warning_without_require_deps() {
         "degraded without --require-dependencies must NOT exit 4 (got {exit_code})"
     );
     let warning_msg = warning.expect(
-        "F2: degraded fixture must return Some(warning) from run_analyze_with_exit, \
+        "F2: degraded fixture must return the degraded warning from run_analyze_with_exit, \
          even without --require-dependencies",
     );
     // The warning text must match the fresh-keyed preflight.rs message format

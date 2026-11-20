@@ -912,7 +912,9 @@ pub fn format_html(inputs: &HtmlFormatInputs<'_>) -> String {
         .collect();
 
     // body
-    let body = if findings.is_empty() {
+    let body = if findings.is_empty() && inputs.focus_line.is_some() {
+        r#"<p class="empty">No findings in this view.</p>"#.to_string()
+    } else if findings.is_empty() {
         r#"<p class="empty">No findings. (Absence of a finding is not absence of a problem — see coverage.)</p>"#
             .to_string()
     } else {

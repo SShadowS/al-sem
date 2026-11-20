@@ -88,13 +88,13 @@ pub fn format_pr_summary(
     let mut lines: Vec<String> = Vec::new();
 
     if count_parts.is_empty() {
-        lines.push("### Transaction integrity — no findings".to_string());
-        lines.push(String::new());
         if let Some(l) = focus_line {
-            lines.push("No findings in this view.".to_string());
+            lines.push("### Transaction integrity — No findings in this view.".to_string());
             lines.push(String::new());
             lines.push(format!("_{l}_"));
         } else {
+            lines.push("### Transaction integrity — no findings".to_string());
+            lines.push(String::new());
             lines.push("No transaction-integrity findings detected.".to_string());
         }
         return lines.join("\n");
