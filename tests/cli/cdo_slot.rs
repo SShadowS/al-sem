@@ -1658,11 +1658,16 @@ fn cdo_slot_timed_waits_for_builds_and_refuses_beside_one() {
 /// ⟨TLS-104⟩ A host suspend does not use up `run --timed`'s wait for builds: the
 /// wait is wall-clock time, which keeps counting while a laptop sleeps (review,
 /// Fable). A build runs and the wait is 2 s; once the run says it waits, the
-/// host "sleeps" 5 s (`CDO_HOST_SUSPENDED_FILE` moves from 100 to 105). The run
-/// says so and waits on on awake time; the build is ended only 3 s later, past
+/// host "sleeps" 60 s (`CDO_HOST_SUSPENDED_FILE` moves from 100 to 160). The
+/// run says so and waits on awake time; the build is ended only 3 s later, past
 /// the 2 s wall-clock deadline (ending it at once passed even with the wait on
 /// wall time: a first proof of this test came back green), and the timed
 /// command runs (exit 0).
+///
+/// The sleep is 60 s, not 5 s (ENG-168's task gate, 3 failures in 3 runs): the
+/// awake deadline is then about 62 s of wall time, so a loaded machine that is
+/// slow to print the lines cannot push the kill past it. With 5 s the margin was
+/// about a second.
 ///
 /// Mutation (2026-11-20): the wait on wall time again (`slot_clocks` taking
 /// `EPOCHREALTIME` for the awake clock) -> refused at 2 s, exit 6 (red);
@@ -1702,9 +1707,9 @@ fn cdo_slot_timed_wait_survives_a_host_suspend() {
         for line in lines {
             let line = line.unwrap();
             if line.contains(&format!("waiting for build processes to end: PID {bpid}")) {
-                std::fs::write(&reading, "105").unwrap();
+                std::fs::write(&reading, "160").unwrap();
             }
-            if line.contains("the host slept 5 s during this wait") {
+            if line.contains("the host slept 60 s during this wait") {
                 // Past the 2 s wall-clock deadline, inside the awake one.
                 std::thread::sleep(std::time::Duration::from_secs(3));
                 b.0.kill().unwrap();
@@ -1719,7 +1724,7 @@ fn cdo_slot_timed_wait_survives_a_host_suspend() {
     let code = timed.0.wait().unwrap().code();
     assert_eq!(code, Some(0), "{text}{err}");
     assert!(
-        text.contains("the host slept 5 s during this wait"),
+        text.contains("the host slept 60 s during this wait"),
         "{text}"
     );
     assert!(ran.exists(), "{text}{err}");
