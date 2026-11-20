@@ -137,12 +137,17 @@ fn entries_of(text: &str, scope: &str) -> usize {
 
 /// TLS-106, the case that matters most: a `--scope all` update, then a
 /// default (primary-scope) update, keeps every dependency entry. The registry
-/// drops dependency findings itself at `--scope primary`, so the second run
-/// never sees them; the entry's scope keeps them. Through the binary, on the
-/// file's bytes; the counts on stderr and in the JSON.
+/// drops dependency findings itself at `--scope primary`; the update still
+/// sees them (the scope tail's `scoped_out`), so every live entry is checked
+/// and kept. A dependency entry whose finding is gone is kept by the primary
+/// run (out of scope) and dropped only by a `--scope all` run. Through the
+/// binary, on the file's bytes; the counts on stderr and in the JSON.
 ///
+/// Mutation (2026-11-20): `.chain(run.scoped_out ...)` removed from
+/// `analyze_view`'s `before_filters` -> the live dependency entries read
+/// "out of scope" on stderr and in `keptUnchecked` (red); restored, green.
 /// Mutation (2026-11-20): `prunes_dependency: true` in `analyze_view`'s
-/// `UpdateRun` -> the default update drops the dependency entries (red);
+/// `UpdateRun` -> the default update drops the stale dependency entry (red);
 /// restored, green.
 #[test]
 fn scope_all_then_default_update_keeps_dependency_entries() {
@@ -154,25 +159,312 @@ fn scope_all_then_default_update_keeps_dependency_entries() {
         deps > 0 && primaries > 0,
         "precondition: both scopes: {seed}"
     );
-    let out = update_dep_ws(&path, &["--format", "json"]);
-    assert_eq!(out.status.code(), Some(0));
-    assert_eq!(std::fs::read_to_string(&path).unwrap(), seed);
-    assert_eq!(
-        String::from_utf8_lossy(&out.stderr),
-        format!("al-sem: baseline: kept {deps} entries unchecked: {deps} out of scope\n")
-    );
-    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     let fps = serde_json::from_str::<serde_json::Value>(&seed).unwrap()["fingerprints"]
         .as_array()
         .unwrap()
         .len();
+    let out = update_dep_ws(&path, &["--format", "json"]);
+    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), seed);
+    assert_eq!(String::from_utf8_lossy(&out.stderr), "");
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(
         v["payload"]["summary"]["baselineUpdate"],
-        serde_json::json!({
-            "written": fps, "dropped": 0, "added": 0,
-            "keptUnchecked": {"outOfScope": deps}
-        })
+        serde_json::json!({"written": fps, "dropped": 0, "added": 0, "keptUnchecked": {}})
     );
+
+    // A gone dependency entry: kept by the primary run, dropped by `--scope all`.
+    let stale = with_stale(&seed, "d14-dead-routine", "dependency");
+    std::fs::write(&path, &stale).unwrap();
+    let (code, counts) = update_json(DEP_WS, &path, &[]);
+    assert_eq!(code, Some(0));
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), stale);
+    assert_eq!(
+        counts["keptUnchecked"],
+        serde_json::json!({"outOfScope": 1})
+    );
+    let (code, counts) = update_json(DEP_WS, &path, &["--scope", "all"]);
+    assert_eq!(code, Some(0));
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), seed);
+    assert_eq!(counts["dropped"], 1);
+}
+
+/// TLS-106 (review, sol P1): scope drift. An entry recorded `primary` whose
+/// finding the primary-scope tail now drops is still present (presence is
+/// tested before the scope tail), so a default update keeps it and gives it
+/// the run's own scope.
+///
+/// Mutation (2026-11-20): `.chain(run.scoped_out ...)` removed from
+/// `analyze_view`'s `before_filters` -> the drifted entry is pruned (red);
+/// restored, green.
+#[test]
+fn a_fingerprint_only_the_scope_tail_dropped_keeps_its_entry() {
+    let dir = tempfile::tempdir().unwrap();
+    let (path, seed) = seeded(&dir);
+    let dep = "\"scope\": \"dependency\"";
+    assert!(seed.contains(dep), "precondition: a dependency entry");
+    let drifted = seed.replacen(dep, "\"scope\": \"primary\"", 1);
+    std::fs::write(&path, &drifted).unwrap();
+    let (code, counts) = update_json(DEP_WS, &path, &[]);
+    assert_eq!(code, Some(0));
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), seed);
+    assert_eq!(counts["dropped"], 0);
+}
+
+const STALE: &str = "0000000000000000";
+
+/// `analyze <ws> --deterministic --baseline <base> --update-baseline --format
+/// json <extra>`: its exit and `payload.summary.baselineUpdate`.
+fn update_json(ws: &str, base: &str, extra: &[&str]) -> (Option<i32>, serde_json::Value) {
+    let mut args = vec![
+        "analyze",
+        ws,
+        "--deterministic",
+        "--baseline",
+        base,
+        "--update-baseline",
+        "--format",
+        "json",
+    ];
+    args.extend_from_slice(extra);
+    let out = alsem(&args);
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap_or_else(|_| {
+        panic!(
+            "no JSON (exit {:?}): {}",
+            out.status.code(),
+            String::from_utf8_lossy(&out.stderr)
+        )
+    });
+    (
+        out.status.code(),
+        v["payload"]["summary"]["baselineUpdate"].clone(),
+    )
+}
+
+/// A seeded baseline of `ws` (an update from no file), its path and bytes.
+fn seed_of(dir: &tempfile::TempDir, ws: &str, extra: &[&str]) -> (String, String) {
+    let path = dir.path().join("b.json").to_str().unwrap().to_string();
+    let (code, _) = update_json(ws, &path, extra);
+    assert_eq!(code, Some(0), "seed");
+    let text = std::fs::read_to_string(&path).expect("seeded");
+    (path, text)
+}
+
+/// `text` with a hand-stated entry `{STALE, detector, scope}` added (its
+/// fingerprint sorts first, so both lists take it at their head).
+fn with_stale(text: &str, detector: &str, scope: &str) -> String {
+    let fps = "  \"fingerprints\": [\n";
+    let entries = "  \"entries\": [\n";
+    assert_eq!(text.matches(fps).count(), 1, "precondition: fingerprints");
+    assert_eq!(text.matches(entries).count(), 1, "precondition: entries");
+    text.replacen(fps, &format!("{fps}    \"{STALE}\",\n"), 1)
+        .replacen(
+            entries,
+            &format!(
+                "{entries}    {{\n      \"fingerprint\": \"{STALE}\",\n      \"detector\": \
+                 \"{detector}\",\n      \"scope\": \"{scope}\"\n    }},\n"
+            ),
+            1,
+        )
+}
+
+/// TLS-106 (both reviews): an update prunes. A stale entry of a detector that
+/// ran completely, on whole inputs, is dropped; every live entry is kept;
+/// `--limit 0` adds nothing. The JSON counts say so.
+///
+/// Mutation (2026-11-20): `complete:` given an empty set in `analyze_view`'s
+/// `UpdateRun` -> the stale entry is kept as "detector incomplete" (red);
+/// restored, green.
+#[test]
+fn a_stale_entry_is_dropped_and_live_ones_kept() {
+    let dir = tempfile::tempdir().unwrap();
+    let (path, seed) = seed_of(&dir, DEP_WS, &[]);
+    let fps = serde_json::from_str::<serde_json::Value>(&seed).unwrap()["fingerprints"]
+        .as_array()
+        .unwrap()
+        .len();
+    std::fs::write(&path, with_stale(&seed, "d19-unused-parameter", "primary")).unwrap();
+    let (code, counts) = update_json(DEP_WS, &path, &["--limit", "0"]);
+    assert_eq!(code, Some(0));
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), seed);
+    assert_eq!(
+        counts,
+        serde_json::json!({"written": fps, "dropped": 1, "added": 0, "keptUnchecked": {}})
+    );
+}
+
+/// TLS-106: a detector the run did not select keeps every entry, live or
+/// stale, counted as "detector not run".
+///
+/// Mutation (2026-11-20): `selected:` given every registered detector in
+/// `analyze_view`'s `UpdateRun` -> they read "detector incomplete" (red);
+/// restored, green.
+#[test]
+fn a_detector_not_run_keeps_its_entries() {
+    let dir = tempfile::tempdir().unwrap();
+    let (path, seed) = seed_of(&dir, DEP_WS, &[]);
+    let stale = with_stale(&seed, "d19-unused-parameter", "primary");
+    let d19 = stale.matches("\"d19-unused-parameter\"").count();
+    std::fs::write(&path, &stale).unwrap();
+    let (code, counts) = update_json(DEP_WS, &path, &["--detector", "d33-unfiltered-bulk-write"]);
+    assert_eq!(code, Some(0));
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), stale);
+    assert_eq!(
+        counts["keptUnchecked"],
+        serde_json::json!({"detectorNotRun": d19})
+    );
+}
+
+/// TLS-106 (review, Fable 2 and sol P1): a detector whose walk stopped short
+/// keeps its entries. A real cut: d45's relay walk stops at 256 subscribers,
+/// and this workspace gives its publisher 258.
+///
+/// Mutation (2026-11-20): `complete:` given the selected set (no
+/// `ran_completely`) in `analyze_view`'s `UpdateRun` -> the stale entry is
+/// dropped (red); restored, green.
+/// Mutation (2026-11-20): d45's `relay_caps += 1` made `+= 0` -> the stale
+/// entry is dropped (red); restored, green.
+#[test]
+fn a_cut_detector_keeps_its_entries() {
+    const D45: &str = "d45-event-transitive-table-exposure";
+    let dir = tempfile::tempdir().unwrap();
+    let ws = dir.path().join("ws");
+    crate::copy_dir(
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/r0-corpus/ws-event-d45-deep"),
+        &ws,
+    );
+    let ws = ws.to_str().unwrap().to_string();
+    let (path, seed) = seed_of(&dir, &ws, &["--detector", D45]);
+    std::fs::write(&path, with_stale(&seed, D45, "primary")).unwrap();
+    let subscribers: String = (0..256)
+        .map(|i| {
+            format!(
+                "    [EventSubscriber(ObjectType::Codeunit, Codeunit::SalesMgr, 'OnAfterSales', \
+                 '', false, false)]\n    local procedure H{i}(var S: Record Sales)\n    begin\n    \
+                 end;\n\n"
+            )
+        })
+        .collect();
+    std::fs::write(
+        Path::new(&ws).join("src/Many.al"),
+        format!("codeunit 50050 ManySubscribers\n{{\n{subscribers}}}\n"),
+    )
+    .unwrap();
+    let (code, counts) = update_json(&ws, &path, &["--detector", D45]);
+    assert_eq!(code, Some(0));
+    let written = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        written.contains(STALE),
+        "the stale entry is kept: {written}"
+    );
+    let kept = counts["keptUnchecked"].as_object().unwrap();
+    assert!(
+        kept.keys().all(|k| k == "detectorIncomplete")
+            && kept["detectorIncomplete"].as_u64() >= Some(1),
+        "{counts}"
+    );
+}
+
+/// TLS-106: a run whose inputs are not whole (here a file parsed with
+/// recovery) keeps every entry it did not see.
+///
+/// Mutation (2026-11-20): `inputs_whole: true` in `analyze_view`'s
+/// `UpdateRun` -> the stale entry is dropped (red); restored, green.
+#[test]
+fn inputs_not_whole_keep_entries() {
+    let dir = tempfile::tempdir().unwrap();
+    let ws = dir.path().join("ws");
+    crate::copy_dir(&Path::new(env!("CARGO_MANIFEST_DIR")).join(DEP_WS), &ws);
+    let ws = ws.to_str().unwrap().to_string();
+    let (path, seed) = seed_of(&dir, &ws, &[]);
+    std::fs::write(&path, with_stale(&seed, "d19-unused-parameter", "primary")).unwrap();
+    std::fs::write(
+        Path::new(&ws).join("src/Broken.al"),
+        "codeunit 50999 Broken\n{\n    procedure P()\n    begin\n        if then\n    end;\n}\n",
+    )
+    .unwrap();
+    let (code, counts) = update_json(&ws, &path, &[]);
+    assert_eq!(code, Some(0));
+    assert!(std::fs::read_to_string(&path).unwrap().contains(STALE));
+    assert!(
+        counts["keptUnchecked"]["inputsNotWhole"].as_u64() >= Some(1),
+        "{counts}"
+    );
+}
+
+/// TLS-106 (review, sol P1): an app opaque now that the file did not record
+/// lost bodies, so the run prunes nothing. Opacity the file recorded stays
+/// allowed: the same stale entry is dropped beside it.
+///
+/// Mutation (2026-11-20): the run's opaque apps passed empty
+/// (`.take(0)`) in `analyze_view`'s `UpdateRun` -> the seed records none, the
+/// precondition fails (red); restored, green. The comparison itself is pinned
+/// by `baseline::tests::a_newly_opaque_app_stops_pruning`.
+#[test]
+fn a_newly_opaque_app_keeps_entries() {
+    const WS: &str = "tests/r0-corpus/ws-cross-object-chain";
+    let dir = tempfile::tempdir().unwrap();
+    let (path, seed) = seed_of(&dir, WS, &[]);
+    let recorded = "  \"opaqueApps\": [\n    \"CrossChainDep\",\n    \"CrossChainDep2\"\n  ],\n";
+    assert!(
+        seed.contains(recorded),
+        "precondition: two opaque apps: {seed}"
+    );
+    // Recorded opacity: the stale entry is dropped.
+    std::fs::write(&path, with_stale(&seed, "d19-unused-parameter", "primary")).unwrap();
+    let (code, counts) = update_json(WS, &path, &[]);
+    assert_eq!(code, Some(0));
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), seed);
+    assert_eq!(counts["dropped"], 1);
+    // The file recorded none: the run's opaque apps are new; it keeps.
+    let unrecorded = with_stale(
+        &seed.replace(recorded, "  \"opaqueApps\": [],\n"),
+        "d19-unused-parameter",
+        "primary",
+    );
+    std::fs::write(&path, &unrecorded).unwrap();
+    let (code, counts) = update_json(WS, &path, &[]);
+    assert_eq!(code, Some(0));
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), unrecorded);
+    assert_eq!(
+        counts["keptUnchecked"],
+        serde_json::json!({"inputsNotWhole": 1})
+    );
+}
+
+/// TLS-106 (review, sol P2): the file an update merges into is checked before
+/// any analysis, so a malformed one is refused (exit 2, nothing written) even
+/// when the workspace yields no model.
+///
+/// Mutation (2026-11-20): the `check_update_file` call removed from
+/// `AnalyzeJob::new` -> exit 0 (red); restored, green.
+#[test]
+fn a_malformed_baseline_is_refused_before_analysis() {
+    let dir = tempfile::tempdir().unwrap();
+    let ws = dir.path().join("empty");
+    std::fs::create_dir(&ws).unwrap();
+    let path = dir.path().join("b.json");
+    std::fs::write(&path, "not json").unwrap();
+    let out = alsem(&[
+        "analyze",
+        ws.to_str().unwrap(),
+        "--baseline",
+        path.to_str().unwrap(),
+        "--update-baseline",
+    ]);
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stderr).starts_with("al-sem: analysis failure — baseline"),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(out.stdout.is_empty());
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "not json");
 }
 
 /// TLS-106: an update narrowed by `--min-severity`, `--detector`, `--preset`

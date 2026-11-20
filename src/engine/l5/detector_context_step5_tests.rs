@@ -645,8 +645,9 @@ codeunit 50122 "T9 Sub"
 }
 
 /// What [`t9_run`] returns: the d2 findings' ids, `Wide`'s inherited status,
-/// and each `Ai`'s direct `(status, reasons)`.
-type T9Out = (Vec<String>, String, Vec<(String, Vec<String>)>);
+/// each `Ai`'s direct `(status, reasons)`, and d2's internal `nodeBudgetCut`
+/// count (TLS-106).
+type T9Out = (Vec<String>, String, Vec<(String, Vec<String>)>, u64);
 
 /// Builds T9's workspace with `n` callees under `Wide`, asserts the
 /// preconditions, and returns [`T9Out`].
@@ -705,6 +706,7 @@ fn t9_run(n: usize) -> T9Out {
         );
     }
     let out = crate::engine::l5::detectors::d2::detect_d2(&m, &ctx).expect("d2 runs");
+    let cuts = out.stats.cuts.get("nodeBudgetCut").copied().unwrap_or(0);
     let ids = out.findings.iter().map(|f| f.id.clone()).collect();
     let wide_status = coverage_of(&ctx.summaries, &wide)
         .inherited_status
@@ -719,7 +721,7 @@ fn t9_run(n: usize) -> T9Out {
             )
         })
         .collect();
-    (ids, wide_status, callee_direct)
+    (ids, wide_status, callee_direct, cuts)
 }
 
 /// T9 main variant (spec §5, §3.2): pins d2's use of the fold AND a known
@@ -729,9 +731,15 @@ fn t9_run(n: usize) -> T9Out {
 /// (`NodeBudgetCut`): d2 emits NO finding for `L`'s loop. Break: delete the
 /// fold call in `det_cone_inputs` -> `Wide` is `No`, pruned, and the finding
 /// is emitted. A head loss on CDO is fallback F6.
+///
+/// TLS-106: the cut is counted as d2's internal `nodeBudgetCut` (its
+/// incompleteness signal), which the control does not have.
+/// Mutation (2026-11-20): d2's `budget_cuts +=` statement removed -> the
+/// count reads 0 (red); restored, green.
 #[test]
 fn step5_t9_d2_budget_cost_main() {
-    let (ids, wide_status, callee_direct) = t9_run(500);
+    let (ids, wide_status, callee_direct, cuts) = t9_run(500);
+    assert!(cuts > 0, "the budget cut is counted");
     assert_eq!(
         ids,
         Vec::<String>::new(),
@@ -752,6 +760,7 @@ fn step5_t9_d2_budget_cost_main() {
 /// reaches `Db`, so d2 emits its finding. Green on the base and on the head.
 #[test]
 fn step5_t9_d2_budget_cost_control() {
-    let (ids, _, _) = t9_run(1);
+    let (ids, _, _, cuts) = t9_run(1);
     assert_eq!(ids.len(), 1, "one d2 finding for L's loop: {ids:?}");
+    assert_eq!(cuts, 0, "no budget cut");
 }

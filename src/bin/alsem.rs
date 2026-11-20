@@ -4163,12 +4163,16 @@ fn plan_analyze(a: AnalyzeCli, in_batch: bool) -> Planned {
             let request = args.read_request();
             let version = inputs.get().driver_version.clone();
             let (args, inputs, request, version) = hold(slot, (args, inputs, request, version));
-            // `new` fails only on the focus conflicts and the detector set,
-            // both checked above.
-            Box::new(
-                AnalyzeJob::new(inputs, request, args, version)
-                    .expect("plan_analyze checked the --focus conflicts and the detector set"),
-            )
+            // The focus conflicts and the detector set were checked above; what
+            // is left is an update's baseline that cannot be read (TLS-106):
+            // exit 2, nothing written.
+            match AnalyzeJob::new(inputs, request, args, version) {
+                Ok(job) => Box::new(job),
+                Err(msg) => Box::new(Failed {
+                    output: JobOutput::lines(&[format!("al-sem: {msg}")], exit::ANALYSIS_FAILURE),
+                    write_failure_exit: exit::ANALYSIS_FAILURE,
+                }),
+            }
         },
     )
 }

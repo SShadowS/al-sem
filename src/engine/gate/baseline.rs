@@ -2,8 +2,8 @@
 //! since TLS-106 a schema-2 file that an update merges into instead of replacing.
 //!
 //! Schema 2 (`--update-baseline` writes it):
-//! `{ schemaVersion: "2", generatedAt, universe, primaryApp, fingerprints: string[],
-//! entries: [{ fingerprint, detector, scope }] }`.
+//! `{ schemaVersion: "2", generatedAt, universe, primaryApp, opaqueApps: string[],
+//! fingerprints: string[], entries: [{ fingerprint, detector, scope }] }`.
 //!   - `fingerprints` is what suppression reads ([`load_baseline`]), so a schema-1
 //!     reader still works. A fingerprint listed with no entry is a schema-1 entry (no
 //!     detector known): a schema-1 file, a hand edit, an old binary's rewrite.
@@ -11,10 +11,18 @@
 //!     the primary scope or a dependency's, so an update can tell "fixed" from "not
 //!     looked at" ([`update_baseline`], the rule of TLS-106 §3).
 //!   - `universe` (`cross-app` / `single-app`) and `primaryApp` bind the file to the
-//!     runs that may update it.
+//!     runs that may update it; an empty `primaryApp` is not stamped yet.
+//!   - `opaqueApps` lists the symbol-only dependency apps the file's runs had. A run
+//!     with an opaque app the file does not list lost bodies it may have had: it
+//!     prunes nothing (its inputs are not whole).
+//!
+//! Versions: `"1"`, a missing `schemaVersion` or a numeric one are schema 1 (a file
+//! of fingerprints only); `"2"` is schema 2; any other string is a schema this alsem
+//! does not know, refused by a plain read AND an update (fail closed: a later schema
+//! may give `fingerprints` another meaning).
 //!
 //! Plain reads ([`load_baseline`]): a missing file is an empty set; a file that is
-//! not JSON or has no `fingerprints` array is an error (exit 2), whatever its schema.
+//! not JSON, has no `fingerprints` array or an unknown version is an error (exit 2).
 //!
 //! Byte-stability: `generatedAt` is pinned to the Unix epoch, lists are sorted
 //! (byte order) and deduped, and the text mirrors `JSON.stringify(file, null, 2) +
@@ -61,6 +69,12 @@ pub fn load_baseline_bytes(file: &FileInput) -> Result<BTreeSet<String>, String>
     };
     let v = serde_json::from_str::<serde_json::Value>(text)
         .map_err(|e| format!("baseline '{}' is not valid JSON: {e}", path.display()))?;
+    if let Some(version) = unknown_version(&v) {
+        return Err(format!(
+            "baseline '{}': schemaVersion '{version}' is not one this alsem knows (1 or 2)",
+            path.display()
+        ));
+    }
     let arr = v
         .get("fingerprints")
         .and_then(|f| f.as_array())
@@ -74,6 +88,14 @@ pub fn load_baseline_bytes(file: &FileInput) -> Result<BTreeSet<String>, String>
         .iter()
         .filter_map(|x| x.as_str().map(|s| s.to_string()))
         .collect())
+}
+
+/// A `schemaVersion` string other than `"1"` and `"2"`. A missing or numeric
+/// version is schema 1 (TLS-106: such files were read before).
+fn unknown_version(v: &serde_json::Value) -> Option<&str> {
+    v.get("schemaVersion")
+        .and_then(|x| x.as_str())
+        .filter(|s| *s != "1" && *s != "2")
 }
 
 /// Return only findings whose fingerprint is NOT in the baseline. Order-preserving.
@@ -171,14 +193,17 @@ impl KeptUnchecked {
 pub struct UpdateRun {
     /// `cross-app` or `single-app`.
     pub universe: &'static str,
-    /// The primary app's id.
+    /// The primary app's id (empty: none known).
     pub primary_app: String,
     /// The run saw dependency findings: a cross-app `--scope all` run.
     pub prunes_dependency: bool,
     /// `preflight::inputs_whole`.
     pub inputs_whole: bool,
-    /// Every finding the run made, before the gate's `--min-severity`,
-    /// detector allow-list, scope filter and `--limit`.
+    /// The run's symbol-only dependency apps (`FreshCoverage::opaque_apps`).
+    pub opaque_apps: BTreeSet<String>,
+    /// Every finding the detectors emitted: before the registry's scope tail
+    /// (`RunOutput::scoped_out` included) and before the gate's
+    /// `--min-severity`, detector allow-list, scope filter and `--limit`.
     pub before_filters: Vec<Entry>,
     /// The findings the run shows (after its filters): what an update adds.
     pub shown: Vec<Entry>,
@@ -249,12 +274,31 @@ impl BaselineUpdate {
     }
 }
 
+/// What a schema-2 file binds.
+struct Stamp {
+    universe: String,
+    /// Empty: not stamped yet.
+    primary_app: String,
+    opaque_apps: BTreeSet<String>,
+}
+
 /// The old file, as an update reads it.
 struct OldFile {
-    /// `(universe, primaryApp)`; `None` for schema 1 or no file.
-    stamp: Option<(String, String)>,
+    /// `None` for schema 1 or no file.
+    stamp: Option<Stamp>,
     fingerprints: BTreeSet<String>,
+    /// Sorted and deduped.
     entries: Vec<Entry>,
+}
+
+/// Check the file an update will merge into, before any analysis (TLS-106):
+/// `Err` (exit 2, nothing written) when it is unreadable, not JSON, of an
+/// unknown schema, malformed or inconsistent. A missing file passes.
+pub fn check_update_file(file: &FileInput) -> Result<(), String> {
+    match read_old(file) {
+        Ok(_) => Ok(()),
+        Err(Refusal::Malformed(m) | Refusal::OtherRun(m)) => Err(m),
+    }
 }
 
 fn read_old(file: &FileInput) -> Result<OldFile, Refusal> {
@@ -280,12 +324,21 @@ fn read_old(file: &FileInput) -> Result<OldFile, Refusal> {
             .map(str::to_string)
             .ok_or_else(|| bad(format!("'{key}' is missing or not a string")))
     };
-    let fingerprints: BTreeSet<String> = v
-        .get("fingerprints")
-        .and_then(|a| a.as_array())
-        .and_then(|a| a.iter().map(|x| x.as_str().map(str::to_string)).collect())
-        .ok_or_else(|| bad("'fingerprints' is missing or not an array of strings".to_string()))?;
-    match v.get("schemaVersion").and_then(|x| x.as_str()) {
+    let strings = |key: &str| -> Result<BTreeSet<String>, Refusal> {
+        v.get(key)
+            .and_then(|a| a.as_array())
+            .and_then(|a| a.iter().map(|x| x.as_str().map(str::to_string)).collect())
+            .ok_or_else(|| bad(format!("'{key}' is missing or not an array of strings")))
+    };
+    let fingerprints = strings("fingerprints")?;
+    let version = v.get("schemaVersion");
+    match version.and_then(|x| x.as_str()) {
+        // Missing or numeric: schema 1, as before (TLS-106 review).
+        _ if version.is_none_or(serde_json::Value::is_number) => Ok(OldFile {
+            stamp: None,
+            fingerprints,
+            entries: Vec::new(),
+        }),
         Some("1") => Ok(OldFile {
             stamp: None,
             fingerprints,
@@ -297,6 +350,7 @@ fn read_old(file: &FileInput) -> Result<OldFile, Refusal> {
                 return Err(bad(format!("unknown universe '{universe}'")));
             }
             let primary_app = text_field(&v, "primaryApp")?;
+            let opaque_apps = strings("opaqueApps")?;
             let rows = v
                 .get("entries")
                 .and_then(|e| e.as_array())
@@ -320,22 +374,31 @@ fn read_old(file: &FileInput) -> Result<OldFile, Refusal> {
                     scope,
                 });
             }
+            entries.sort();
+            entries.dedup();
             Ok(OldFile {
-                stamp: Some((universe, primary_app)),
+                stamp: Some(Stamp {
+                    universe,
+                    primary_app,
+                    opaque_apps,
+                }),
                 fingerprints,
                 entries,
             })
         }
-        other => Err(bad(format!(
-            "schemaVersion {} is not one this alsem can update (1 or 2)",
-            other.map_or("(missing)".to_string(), |s| format!("'{s}'"))
+        Some(other) => Err(bad(format!(
+            "schemaVersion '{other}' is not one this alsem knows (1 or 2)"
         ))),
+        None => Err(bad(
+            "'schemaVersion' is neither a string nor a number".to_string()
+        )),
     }
 }
 
 /// Why `entry`, which this run did not report, must be kept unchecked, or
-/// `None` when the run proves it gone.
-fn unchecked_reason(entry: &Entry, run: &UpdateRun) -> Option<KeptUnchecked> {
+/// `None` when the run proves it gone. `inputs_whole` is the run's, also
+/// false when the run has an opaque app the file did not record.
+fn unchecked_reason(entry: &Entry, run: &UpdateRun, inputs_whole: bool) -> Option<KeptUnchecked> {
     if !run.registered.contains(&entry.detector) {
         Some(KeptUnchecked::DetectorNotRegistered)
     } else if !run.selected.contains(&entry.detector) {
@@ -344,7 +407,7 @@ fn unchecked_reason(entry: &Entry, run: &UpdateRun) -> Option<KeptUnchecked> {
         Some(KeptUnchecked::DetectorIncomplete)
     } else if entry.scope == EntryScope::Dependency && !run.prunes_dependency {
         Some(KeptUnchecked::OutOfScope)
-    } else if !run.inputs_whole {
+    } else if !inputs_whole {
         Some(KeptUnchecked::InputsNotWhole)
     } else {
         None
@@ -365,43 +428,65 @@ fn unchecked_reason(entry: &Entry, run: &UpdateRun) -> Option<KeptUnchecked> {
 /// file is a new one.
 pub fn update_baseline(old: &FileInput, run: &UpdateRun) -> Result<BaselineUpdate, Refusal> {
     let old = read_old(old)?;
-    if let Some((universe, primary_app)) = &old.stamp
-        && (universe != run.universe || *primary_app != run.primary_app)
+    // An empty primary app on either side is "not stamped": never a refusal.
+    if let Some(s) = &old.stamp
+        && (s.universe != run.universe
+            || (!s.primary_app.is_empty()
+                && !run.primary_app.is_empty()
+                && s.primary_app != run.primary_app))
     {
         return Err(Refusal::OtherRun(format!(
-            "baseline was written by a {universe} run of app {primary_app}; this is a {} run \
-             of app {}; nothing written",
-            run.universe, run.primary_app
+            "baseline was written by a {} run of app {}; this is a {} run of app {}; \
+             nothing written",
+            s.universe, s.primary_app, run.universe, run.primary_app
         )));
     }
+    let primary_app = match &old.stamp {
+        Some(s) if run.primary_app.is_empty() => s.primary_app.clone(),
+        _ => run.primary_app.clone(),
+    };
+    // Opacity the file already accepted stays allowed; an app opaque now that
+    // the file did not record lost its bodies: nothing absent is proved gone.
+    // The file keeps only the opacity every one of its runs had.
+    let (inputs_whole, opaque_apps) = match &old.stamp {
+        Some(s) => (
+            run.inputs_whole && run.opaque_apps.is_subset(&s.opaque_apps),
+            s.opaque_apps
+                .intersection(&run.opaque_apps)
+                .cloned()
+                .collect(),
+        ),
+        None => (run.inputs_whole, run.opaque_apps.clone()),
+    };
     let mut seen: BTreeMap<&str, Vec<&Entry>> = BTreeMap::new();
     for e in &run.before_filters {
         seen.entry(e.fingerprint.as_str()).or_default().push(e);
     }
+    let mut old_by_fp: BTreeMap<&str, Vec<&Entry>> = BTreeMap::new();
+    for e in &old.entries {
+        old_by_fp.entry(e.fingerprint.as_str()).or_default().push(e);
+    }
     let mut kept_unchecked: BTreeMap<KeptUnchecked, usize> = BTreeMap::new();
     let mut fingerprints: BTreeSet<String> = BTreeSet::new();
     let mut entries: Vec<Entry> = Vec::new();
-    for e in &old.entries {
-        if seen.contains_key(e.fingerprint.as_str()) {
-            entries.push(e.clone());
-        } else if let Some(reason) = unchecked_reason(e, run) {
-            *kept_unchecked.entry(reason).or_default() += 1;
-            entries.push(e.clone());
-        }
-    }
-    let with_entry: BTreeSet<&str> = old.entries.iter().map(|e| e.fingerprint.as_str()).collect();
-    for fp in old
-        .fingerprints
-        .iter()
-        .filter(|f| !with_entry.contains(f.as_str()))
-    {
-        fingerprints.insert(fp.clone());
-        match seen.get(fp.as_str()) {
-            Some(found) => entries.extend(found.iter().map(|e| (*e).clone())),
-            None => {
+    for fp in &old.fingerprints {
+        match (seen.get(fp.as_str()), old_by_fp.get(fp.as_str())) {
+            // Seen: the run's own entries (detector and scope) replace the old.
+            (Some(found), _) => entries.extend(found.iter().map(|e| (*e).clone())),
+            // A schema-1 fingerprint no run has seen.
+            (None, None) => {
+                fingerprints.insert(fp.clone());
                 *kept_unchecked
                     .entry(KeptUnchecked::NoDetectorKnown)
-                    .or_default() += 1
+                    .or_default() += 1;
+            }
+            (None, Some(rows)) => {
+                for e in rows {
+                    if let Some(reason) = unchecked_reason(e, run, inputs_whole) {
+                        *kept_unchecked.entry(reason).or_default() += 1;
+                        entries.push((*e).clone());
+                    }
+                }
             }
         }
     }
@@ -412,8 +497,13 @@ pub fn update_baseline(old: &FileInput, run: &UpdateRun) -> Result<BaselineUpdat
     let written = fingerprints.len();
     let dropped = old.fingerprints.difference(&fingerprints).count();
     let added = fingerprints.difference(&old.fingerprints).count();
+    let header = Header {
+        universe: run.universe,
+        primary_app: &primary_app,
+        opaque_apps: &opaque_apps,
+    };
     Ok(BaselineUpdate {
-        bytes: serialize_v2(run, &fingerprints, &entries).into_bytes(),
+        bytes: serialize_v2(&header, &fingerprints, &entries).into_bytes(),
         written,
         dropped,
         added,
@@ -421,33 +511,40 @@ pub fn update_baseline(old: &FileInput, run: &UpdateRun) -> Result<BaselineUpdat
     })
 }
 
+/// The schema-2 header an update writes.
+struct Header<'a> {
+    universe: &'a str,
+    primary_app: &'a str,
+    opaque_apps: &'a BTreeSet<String>,
+}
+
+/// `  "<key>": [ ... ],` (2-space JSON), a sorted list of strings.
+fn push_string_list<'a>(out: &mut String, key: &str, items: impl Iterator<Item = &'a String>) {
+    let rows: Vec<String> = items.map(|s| format!("    {}", json_str(s))).collect();
+    if rows.is_empty() {
+        out.push_str(&format!("  \"{key}\": [],\n"));
+    } else {
+        out.push_str(&format!("  \"{key}\": [\n{}\n  ],\n", rows.join(",\n")));
+    }
+}
+
 fn json_str(s: &str) -> String {
     serde_json::to_string(s).expect("string encodes")
 }
 
 /// The schema-2 text: `JSON.stringify(file, null, 2) + "\n"`.
-fn serialize_v2(run: &UpdateRun, fingerprints: &BTreeSet<String>, entries: &[Entry]) -> String {
+fn serialize_v2(header: &Header, fingerprints: &BTreeSet<String>, entries: &[Entry]) -> String {
     let mut out = String::new();
     out.push_str("{\n");
     out.push_str("  \"schemaVersion\": \"2\",\n");
     out.push_str(&format!("  \"generatedAt\": \"{EPOCH_GENERATED_AT}\",\n"));
-    out.push_str(&format!("  \"universe\": {},\n", json_str(run.universe)));
+    out.push_str(&format!("  \"universe\": {},\n", json_str(header.universe)));
     out.push_str(&format!(
         "  \"primaryApp\": {},\n",
-        json_str(&run.primary_app)
+        json_str(header.primary_app)
     ));
-    if fingerprints.is_empty() {
-        out.push_str("  \"fingerprints\": [],\n");
-    } else {
-        let rows: Vec<String> = fingerprints
-            .iter()
-            .map(|fp| format!("    {}", json_str(fp)))
-            .collect();
-        out.push_str(&format!(
-            "  \"fingerprints\": [\n{}\n  ],\n",
-            rows.join(",\n")
-        ));
-    }
+    push_string_list(&mut out, "opaqueApps", header.opaque_apps.iter());
+    push_string_list(&mut out, "fingerprints", fingerprints.iter());
     if entries.is_empty() {
         out.push_str("  \"entries\": []\n");
     } else {
@@ -622,6 +719,7 @@ mod tests {
             primary_app: APP.to_string(),
             prunes_dependency: false,
             inputs_whole: true,
+            opaque_apps: set(&["Opaque Dep"]),
             before_filters: vec![],
             shown: vec![],
             selected: set(&[D1, D3]),
@@ -646,7 +744,13 @@ mod tests {
         fps.extend(extra.iter().map(|s| s.to_string()));
         let mut entries = entries.to_vec();
         entries.sort();
-        serialize_v2(&run(), &fps, &entries)
+        let opaque = set(&["Opaque Dep"]);
+        let header = Header {
+            universe: "cross-app",
+            primary_app: APP,
+            opaque_apps: &opaque,
+        };
+        serialize_v2(&header, &fps, &entries)
     }
 
     fn update(old: &str, run: &UpdateRun) -> BaselineUpdate {
@@ -831,8 +935,12 @@ mod tests {
         let good = v2(&[p("aa", D1)], &[]);
         let malformed = [
             ("not json", "nope".to_string()),
-            ("no version", "{\"fingerprints\": []}".to_string()),
             ("unknown version", good.replace("\"2\"", "\"3\"")),
+            ("boolean version", good.replace("\"2\"", "true")),
+            (
+                "no opaqueApps",
+                good.replace("  \"opaqueApps\": [\n    \"Opaque Dep\"\n  ],\n", ""),
+            ),
             (
                 "fingerprint not a string",
                 good.replace(
@@ -911,5 +1019,101 @@ mod tests {
                 "keptUnchecked": {"noDetectorKnown": 1, "detectorNotRun": 2, "outOfScope": 1}
             })
         );
+    }
+
+    /// A seen fingerprint's entries are replaced by the run's own: an old
+    /// `dependency` row whose finding is now primary is written `primary`
+    /// (review, Fable 4), so a later primary run can prune it.
+    ///
+    /// Mutation (2026-11-20): the seen arm pushes the old rows instead of
+    /// `found` -> the `dependency` row is kept (red); restored, green.
+    #[test]
+    fn a_seen_fingerprint_takes_the_runs_entries() {
+        let old = v2(&[e("aa", D1, EntryScope::Dependency)], &[]);
+        let mut r = run();
+        r.before_filters = vec![p("aa", D1)];
+        let u = update(&old, &r);
+        assert_eq!(text(&u), v2(&[p("aa", D1)], &[]));
+    }
+
+    /// An app opaque now that the file did not record lost its bodies: the
+    /// run prunes nothing (inputs not whole), and the file keeps only the
+    /// opacity it had. Opacity the file recorded stays allowed
+    /// (`a_fixed_finding_is_dropped` prunes beside "Opaque Dep").
+    ///
+    /// Mutation (2026-11-20): the `is_subset` test removed from
+    /// `update_baseline` -> the stale entry is dropped (red); restored, green.
+    #[test]
+    fn a_newly_opaque_app_stops_pruning() {
+        let old = v2(&[p("aa", D1)], &[]);
+        let mut r = run();
+        r.opaque_apps = set(&["Opaque Dep", "Newly Opaque"]);
+        let u = update(&old, &r);
+        assert_eq!(text(&u), old, "kept, header unchanged");
+        assert_eq!(reasons(&u), vec![("inputsNotWhole", 1)]);
+    }
+
+    /// Duplicate rows in the old file count once and are written once
+    /// (review, sol P2: the count must equal the entries kept).
+    ///
+    /// Mutation (2026-11-20): `entries.dedup()` in `read_old` removed -> the
+    /// count reads 2 (red); restored, green.
+    #[test]
+    fn duplicate_rows_count_once() {
+        let old = v2(&[p("aa", D3)], &[]);
+        let row = "    {\n      \"fingerprint\": \"aa\",\n      \"detector\": \
+                   \"d3-missing-setloadfields\",\n      \"scope\": \"primary\"\n    }";
+        assert_eq!(old.matches(row).count(), 1, "precondition: the row");
+        let doubled = old.replace(row, &format!("{row},\n{row}"));
+        let mut r = run();
+        r.selected = set(&[D1]);
+        let u = update(&doubled, &r);
+        assert_eq!(text(&u), old);
+        assert_eq!(reasons(&u), vec![("detectorNotRun", 1)]);
+    }
+
+    /// Versions (review, Fable 3): a missing or numeric `schemaVersion` is
+    /// schema 1, for an update and a plain read; an unknown string version is
+    /// refused by both.
+    ///
+    /// Mutation (2026-11-20): the missing-or-numeric arm of `read_old`
+    /// deleted -> the update refuses them (red); restored, green.
+    /// Mutation (2026-11-20): the `unknown_version` check in
+    /// `load_baseline_bytes` deleted -> the plain read of "3" passes (red);
+    /// restored, green.
+    #[test]
+    fn missing_and_numeric_versions_are_schema_1_unknown_strings_refused() {
+        for (case, old) in [
+            ("missing", "{\"fingerprints\": [\"aa\"]}"),
+            (
+                "numeric",
+                "{\"schemaVersion\": 1, \"fingerprints\": [\"aa\"]}",
+            ),
+        ] {
+            assert_eq!(load_baseline_bytes(&file(Some(old))).unwrap(), set(&["aa"]));
+            let u = update(old, &run());
+            assert_eq!(text(&u), v2(&[], &["aa"]), "{case}");
+            assert_eq!(reasons(&u), vec![("noDetectorKnown", 1)], "{case}");
+        }
+        let unknown = "{\"schemaVersion\": \"3\", \"fingerprints\": [\"aa\"]}";
+        assert!(load_baseline_bytes(&file(Some(unknown))).is_err());
+        assert!(check_update_file(&file(Some(unknown))).is_err());
+        assert!(check_update_file(&file(Some("nope"))).is_err());
+        assert!(check_update_file(&file(None)).is_ok());
+    }
+
+    /// An empty `primaryApp` is not stamped: the first update with an id
+    /// stamps it, never a refusal (review, Fable 5).
+    ///
+    /// Mutation (2026-11-20): the two `is_empty()` tests dropped from the
+    /// stamp comparison -> the update is refused (red); restored, green.
+    #[test]
+    fn an_empty_primary_app_is_stamped_by_the_first_update_with_an_id() {
+        let unstamped = v2(&[p("aa", D1)], &[]).replace(APP, "");
+        assert!(unstamped.contains("\"primaryApp\": \"\""), "precondition");
+        let mut r = run();
+        r.before_filters = vec![p("aa", D1)];
+        let u = update(&unstamped, &r);
+        assert_eq!(text(&u), v2(&[p("aa", D1)], &[]));
     }
 }

@@ -715,8 +715,9 @@ pub struct AnalyzeJob<'a> {
 }
 
 impl<'a> AnalyzeJob<'a> {
-    /// `Err`: a refused `--focus` combination or a detector/preset resolution
-    /// failure, found before any build.
+    /// `Err`: a refused `--focus` combination, a detector/preset resolution
+    /// failure, or (`analysis failure — `) a baseline an update cannot read,
+    /// found before any build.
     pub fn new(
         inputs: &'a dyn WorkspaceRead,
         request: &'a RequestInputs,
@@ -730,6 +731,15 @@ impl<'a> AnalyzeJob<'a> {
         )?;
         let detectors =
             resolve_analyze_detectors(args.preset.as_deref(), args.detector.as_deref())?;
+        // TLS-106: the file an update merges into is checked before any build,
+        // so a malformed one is refused (exit 2, nothing written) even when the
+        // workspace yields no model.
+        if args.update_baseline
+            && let Some(file) = &request.baseline
+        {
+            crate::engine::gate::baseline::check_update_file(file)
+                .map_err(|e| format!("analysis failure — {e}"))?;
+        }
         let version = args
             .sarif_version_override
             .clone()
@@ -899,9 +909,16 @@ fn analyze_view(
         .iter()
         .map(|f| (project_finding(f, &idx), f))
         .collect();
-    // `--update-baseline` (TLS-106): every finding before the gate's filters,
-    // each with its scope by the registry's own predicate.
+    // `--update-baseline` (TLS-106): every finding the detectors emitted, each
+    // with its scope by the registry's own predicate: the run's findings, and
+    // those the primary-scope tail dropped (always `dependency`), all before
+    // the gate's filters.
     let updating = args.baseline.is_some() && args.update_baseline;
+    assert_eq!(
+        run.finding_is_primary.len(),
+        run.findings.len(),
+        "a scope label per finding"
+    );
     let before_filters: Vec<Entry> = if updating {
         paired
             .iter()
@@ -911,17 +928,25 @@ fn analyze_view(
                 detector: s.detector.clone(),
                 scope: EntryScope::of(*primary),
             })
+            .chain(run.scoped_out.iter().map(|(detector, fingerprint)| Entry {
+                fingerprint: fingerprint.clone(),
+                detector: detector.clone(),
+                scope: EntryScope::Dependency,
+            }))
             .collect()
     } else {
         Vec::new()
     };
     // A finding's scope by its id, for the shown findings an update adds.
-    let scope_by_id: std::collections::HashMap<&str, EntryScope> = run
-        .findings
-        .iter()
-        .zip(&before_filters)
-        .map(|(f, e)| (f.id.as_str(), e.scope))
-        .collect();
+    let scope_by_id: std::collections::HashMap<&str, EntryScope> = if updating {
+        run.findings
+            .iter()
+            .zip(&run.finding_is_primary)
+            .map(|(f, p)| (f.id.as_str(), EntryScope::of(*p)))
+            .collect()
+    } else {
+        Default::default()
+    };
 
     // --- filter: min-severity, then detector allow-list (only when `--detector` set). ---
     let detector_allow = args.detector.as_ref().map(|d| {
@@ -998,6 +1023,10 @@ fn analyze_view(
                         .unwrap_or_default(),
                     prunes_dependency: !args.single_app && args.scope == Scope::All,
                     inputs_whole: inputs_whole(fresh),
+                    opaque_apps: fresh
+                        .as_ref()
+                        .map(|f| f.opaque_apps.iter().cloned().collect())
+                        .unwrap_or_default(),
                     before_filters,
                     shown: paired
                         .iter()
@@ -1628,6 +1657,7 @@ mod tests {
         let run = RunOutput {
             findings: vec![],
             finding_is_primary: vec![],
+            scoped_out: vec![],
             diagnostics: vec![d("detect")],
             detector_stats: vec![],
             summarize_diagnostics: vec![d("summarize")],

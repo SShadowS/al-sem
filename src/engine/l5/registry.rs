@@ -186,6 +186,11 @@ pub struct DetectorStats {
     /// Skip counters. Insert via the `add_skip` method (present-iff-nonzero). Keys must
     /// match the taxonomy exactly.
     pub skipped: std::collections::BTreeMap<String, u64>,
+    /// Internal cut counters (TLS-106): a walk that stopped short of its whole
+    /// answer (a node budget, a relay cap). Never serialized, so no output
+    /// changes; read by [`RunOutput::ran_completely`] through
+    /// [`Incomplete::Cut`]. Insert via [`DetectorStats::add_cut`].
+    pub cuts: std::collections::BTreeMap<&'static str, u64>,
 }
 
 impl DetectorStats {
@@ -200,6 +205,7 @@ impl DetectorStats {
             candidates_considered,
             findings_emitted,
             skipped: std::collections::BTreeMap::new(),
+            cuts: std::collections::BTreeMap::new(),
         }
     }
 
@@ -207,6 +213,13 @@ impl DetectorStats {
     pub fn add_skip(&mut self, key: &str, n: u64) {
         if n > 0 {
             *self.skipped.entry(key.to_string()).or_insert(0) += n;
+        }
+    }
+
+    /// Add `n` to an internal cut counter (see `cuts`). Only inserts when `n > 0`.
+    pub fn add_cut(&mut self, key: &'static str, n: u64) {
+        if n > 0 {
+            *self.cuts.entry(key).or_insert(0) += n;
         }
     }
 
@@ -402,6 +415,12 @@ pub struct RunOutput {
     /// for a `--scope primary` run, which kept only those (TLS-106: a baseline
     /// entry's scope).
     pub finding_is_primary: Vec<bool>,
+    /// `(detector, fingerprint)` of every finding the primary-scope tail
+    /// dropped (empty at `--scope all`). With `findings` it is the complete
+    /// set the detectors emitted: a baseline update tests presence against
+    /// both, so a finding that drifted out of the primary scope is still
+    /// present (TLS-106).
+    pub scoped_out: Vec<(String, String)>,
     pub diagnostics: Vec<Diagnostic>,
     pub detector_stats: Vec<DetectorStats>,
     /// The L4 "summarizeDiagnostics" source (TS-order slot 3 — see
@@ -435,17 +454,23 @@ impl RunOutput {
     /// baseline update treat a fingerprint it did not report as gone): it has a
     /// stats row (a detector that errors leaves only a diagnostic) and none of
     /// its [`incompleteness_signals`] fired. A detector with no stated signals
-    /// (not registered) never ran completely.
+    /// (not registered) never ran completely, and none did when the L4
+    /// summaries are partial (a non-empty `summarize_diagnostics`: a fixed
+    /// point that did not converge).
     pub fn ran_completely(&self, detector: &str) -> bool {
         let Some(signals) = incompleteness_signals(detector) else {
             return false;
         };
+        if !self.summarize_diagnostics.is_empty() {
+            return false;
+        }
         let Some(stats) = self.detector_stats.iter().find(|s| s.detector == detector) else {
             return false;
         };
         let prefix = format!("{detector}:");
         !signals.iter().any(|s| match s {
             Incomplete::Skip(key) => stats.skipped.get(*key).is_some_and(|n| *n > 0),
+            Incomplete::Cut(key) => stats.cuts.get(key).is_some_and(|n| *n > 0),
             Incomplete::Diagnostic => self
                 .diagnostics
                 .iter()
@@ -458,8 +483,12 @@ impl RunOutput {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Incomplete {
     /// This `skipped` counter of its stats row is non-zero (a cap or a
-    /// truncated walk dropped findings).
+    /// truncated walk dropped findings). Only counters the output already
+    /// carried before TLS-106.
     Skip(&'static str),
+    /// This internal cut counter (`DetectorStats::cuts`, never serialized) is
+    /// non-zero.
+    Cut(&'static str),
     /// It emitted a detect-stage diagnostic starting `<detector>:` (d43's
     /// substrate guard bails with one).
     Diagnostic,
@@ -472,20 +501,30 @@ pub enum Incomplete {
 /// Not listed here because the run's inputs cover them: a routine skipped as
 /// `parseIncomplete` sits in a recovered file, and a recovered file stops all
 /// pruning (`preflight::inputs_whole`). Fixed depth limits (d39's helper
-/// depth) are part of a detector's definition, the same in every run, so they
-/// are no signal.
+/// depth, the path walker's depth 20, a statement tree's depth 256) bound a
+/// finding's own path or routine, the same in every run, so they are no
+/// signal; a node budget is, because what fills it is other code. d5's and
+/// d60's `traversal` skip is a candidate ruled out (no whole-set advance, or
+/// a broken traversal), not a walk that gave up. d1's production walk has no
+/// budget (its `BOUNDS` is test-only).
 pub fn incompleteness_signals(detector: &str) -> Option<&'static [Incomplete]> {
     use crate::engine::l5::detectors::*;
     match detector {
-        // Caps on findings per event / publisher / try routine.
-        d44::DETECTOR | d45::DETECTOR => Some(&[Incomplete::Skip("outputCapped")]),
+        // Caps on findings per event / try routine.
+        d44::DETECTOR => Some(&[Incomplete::Skip("outputCapped")]),
         d54::DETECTOR => Some(&[Incomplete::Skip("cappedPerTryRoutine")]),
+        // The per-publisher cap, and the relay walk's node cap.
+        d45::DETECTOR => Some(&[
+            Incomplete::Skip("outputCapped"),
+            Incomplete::Cut("relayNodeCap"),
+        ]),
+        // The path walker's node budget.
+        d2::DETECTOR | d46::DETECTOR | d48::DETECTOR => Some(&[Incomplete::Cut("nodeBudgetCut")]),
         // The cross-call rules walk stopped at its budget.
         d65::DETECTOR => Some(&[Incomplete::Skip("crossCallTruncated")]),
         // The conditionReferences substrate guard.
         d43::DETECTOR => Some(&[Incomplete::Diagnostic]),
         d1::DETECTOR
-        | d2::DETECTOR
         | d3::DETECTOR
         | d4::DETECTOR
         | d5::DETECTOR
@@ -516,9 +555,7 @@ pub fn incompleteness_signals(detector: &str) -> Option<&'static [Incomplete]> {
         | d40::DETECTOR
         | d41::DETECTOR
         | d42::DETECTOR
-        | d46::DETECTOR
         | d47::DETECTOR
-        | d48::DETECTOR
         | d49::DETECTOR
         | d50::DETECTOR
         | d51::DETECTOR
@@ -627,9 +664,13 @@ pub(crate) fn finish_run(
         summarize.iter().map(from_summarize_diagnostic).collect();
     let (findings, diagnostics, detector_stats, d1_cohort_index) =
         run_each(resolved, ctx, detectors);
-    let (findings, finding_is_primary) = match cross {
+    let Scoped {
+        findings,
+        primary: finding_is_primary,
+        scoped_out,
+    } = match cross {
         None => {
-            // Role-scoping filter (registry.ts:161-172), by THE role rule. A
+            // Role-scoping filter (registry.ts:161-172), by THE predicate. A
             // single-app model holds only the workspace's routines, so every
             // role is "primary" and the predicate keeps everything.
             let _s = pt::span("l4_l5", "l4_l5.role_scope_and_sort");
@@ -639,18 +680,14 @@ pub(crate) fn finish_run(
                 .iter()
                 .map(|r| (r.id.as_str(), resolved.routine_role(r).as_str()))
                 .collect();
-            let findings = role_scope_and_sort(findings, &role_by_routine);
-            let primary = findings
-                .iter()
-                .map(|f| in_primary_scope(f, &role_by_routine))
-                .collect();
-            (findings, primary)
+            scope_and_sort(findings, &role_by_routine, true)
         }
         Some(base) => cross_app_scope(base, findings, scope_primary),
     };
     RunOutput {
         findings,
         finding_is_primary,
+        scoped_out,
         diagnostics,
         detector_stats,
         summarize_diagnostics,
@@ -706,7 +743,7 @@ fn cross_app_scope(
     base: &crate::engine::l4::capability_cone::R3a5CrossAppBase,
     findings: Vec<Finding>,
     scope_primary: bool,
-) -> (Vec<Finding>, Vec<bool>) {
+) -> Scoped {
     // role_by_routine: dep routines → "dependency", else "primary". An
     // object-anchored finding (d64 names its page) carries the OBJECT id there, so
     // objects are roled by their app too (engine-switch S7.4: the cross-app model
@@ -731,18 +768,62 @@ fn cross_app_scope(
     let _s = pt::span("crossapp", "crossapp.role_scope");
     // `--scope all` (alsem analyze) keeps dependency-anchored findings: only
     // the sort applies, and each finding is labelled by the same predicate.
-    let findings = role_scope_and_sort(
-        findings
-            .into_iter()
-            .filter(|f| !scope_primary || in_primary_scope(f, &role_by_routine))
-            .collect(),
-        &std::collections::HashMap::new(),
+    scope_and_sort(findings, &role_by_routine, scope_primary)
+}
+
+/// A run's findings after the scope tail.
+struct Scoped {
+    findings: Vec<Finding>,
+    /// Aligned with `findings`: [`in_primary_scope`].
+    primary: Vec<bool>,
+    /// `(detector, fingerprint)` of each finding the tail dropped.
+    scoped_out: Vec<(String, String)>,
+}
+
+/// The scope tail: with `drop_dependency`, drop every finding outside
+/// [`in_primary_scope`] (remembering its fingerprint); label the rest by the
+/// same predicate; then the stable sort. One predicate for the filter and the
+/// label, single-app and cross-app alike (TLS-106).
+fn scope_and_sort(
+    findings: Vec<Finding>,
+    role_by_routine: &std::collections::HashMap<&str, &str>,
+    drop_dependency: bool,
+) -> Scoped {
+    let mut kept = Vec::with_capacity(findings.len());
+    let mut primary = Vec::with_capacity(findings.len());
+    let mut scoped_out = Vec::new();
+    for f in findings {
+        let p = in_primary_scope(&f, role_by_routine);
+        if p || !drop_dependency {
+            kept.push((p, f));
+        } else {
+            scoped_out.push((f.detector.clone(), finding_fingerprint(&f)));
+        }
+    }
+    sort_by_detector_location_cause(
+        &mut kept,
+        |(_, f)| &f.detector,
+        |(_, f)| primary_location_key(f),
+        |(_, f)| &f.root_cause_key,
     );
-    let primary = findings
-        .iter()
-        .map(|f| in_primary_scope(f, &role_by_routine))
+    let findings = kept
+        .into_iter()
+        .map(|(p, f)| {
+            primary.push(p);
+            f
+        })
         .collect();
-    (findings, primary)
+    Scoped {
+        findings,
+        primary,
+        scoped_out,
+    }
+}
+
+/// A finding's fingerprint as the gate projects it (`finding.fingerprint ??
+/// finding.id`, `projection::project_finding`).
+pub(crate) fn finding_fingerprint(f: &Finding) -> String {
+    f.fingerprint.clone().unwrap_or_else(|| f.id.clone())
 }
 
 thread_local! {
@@ -794,7 +875,7 @@ fn run_each(
     // arguments are immutable shared borrows and no detector writes through
     // them, so the run phase has no shared mutable state at all. What DOES have
     // to stay ordered is the accumulation below: `findings` order survives into
-    // the output through `role_scope_and_sort`, which is a STABLE sort, so two
+    // the output through `scope_and_sort`, which is a STABLE sort, so two
     // findings tying on (detector, primaryLocationKey, rootCauseKey) keep their
     // insertion order; `diagnostics` and `detector_stats` are emitted in
     // detector order into the JSON envelope.
@@ -933,25 +1014,6 @@ fn in_primary_scope(f: &Finding, role_by_routine: &std::collections::HashMap<&st
             .as_ref()
             .is_none_or(|a| a.source_unit_id.starts_with("dep:"));
     !dep_located && has_primary_role(f, role_by_routine)
-}
-
-/// Apply the role-scope filter (drop dep-anchored findings) then the stable sort.
-fn role_scope_and_sort(
-    findings: Vec<Finding>,
-    role_by_routine: &std::collections::HashMap<&str, &str>,
-) -> Vec<Finding> {
-    let mut scoped: Vec<Finding> = findings
-        .into_iter()
-        .filter(|f| has_primary_role(f, role_by_routine))
-        .collect();
-
-    sort_by_detector_location_cause(
-        &mut scoped,
-        |f| &f.detector,
-        primary_location_key,
-        |f| &f.root_cause_key,
-    );
-    scoped
 }
 
 /// Port of al-sem `compareNatural`: split each string into runs of digits and
@@ -1255,6 +1317,18 @@ mod tests {
             l
         };
         assert_eq!(labels(true), vec![("dep-located".to_string(), true)]);
+        // The primary tail remembers what it dropped (TLS-106: presence before
+        // the scope tail).
+        //
+        // Mutation (2026-11-20): `scoped_out.push` removed from
+        // `scope_and_sort` -> `scoped_out` is empty (red); restored, green.
+        let out = run_detectors_cross_app(&base, std::slice::from_ref(&probe), true);
+        assert_eq!(out.scoped_out.len(), 2, "on-dep-object, on-dep-routine");
+        assert!(
+            out.scoped_out
+                .iter()
+                .all(|(d, _)| d == "d13-cross-app-internal-call")
+        );
         assert_eq!(
             labels(false),
             vec![
@@ -1277,6 +1351,7 @@ mod tests {
         RunOutput {
             findings: vec![],
             finding_is_primary: vec![],
+            scoped_out: vec![],
             diagnostics,
             detector_stats: stats,
             summarize_diagnostics: vec![],
@@ -1341,6 +1416,43 @@ mod tests {
             "substrate warning"
         );
         assert!(!incomplete.ran_completely(d1::DETECTOR), "errored: no row");
+    }
+
+    /// TLS-106: an internal cut (d46's node budget, d45's relay cap) makes a
+    /// detector incomplete without touching its serialized stats, and a
+    /// non-empty `summarize_diagnostics` makes every detector incomplete.
+    ///
+    /// Mutation (2026-11-20): the `Incomplete::Cut` arm made `false` -> the
+    /// cut d46 and d45 read complete (red); restored, green.
+    /// Mutation (2026-11-20): the `summarize_diagnostics` test removed from
+    /// `ran_completely` -> d1 reads complete beside a partial summary (red);
+    /// restored, green.
+    #[test]
+    fn internal_cuts_and_partial_summaries_are_incomplete() {
+        use crate::engine::l5::detectors::{d1, d45, d46};
+        let mut d46_cut = stats_with(d46::DETECTOR, None);
+        d46_cut.add_cut("nodeBudgetCut", 1);
+        let mut d45_cut = stats_with(d45::DETECTOR, None);
+        d45_cut.add_cut("relayNodeCap", 1);
+        assert_eq!(
+            d46_cut.to_json_value(),
+            stats_with(d46::DETECTOR, None).to_json_value(),
+            "a cut is never serialized"
+        );
+        let run = run_of(
+            vec![d46_cut, d45_cut, stats_with(d1::DETECTOR, None)],
+            vec![],
+        );
+        assert!(!run.ran_completely(d46::DETECTOR), "node budget");
+        assert!(!run.ran_completely(d45::DETECTOR), "relay cap");
+        assert!(run.ran_completely(d1::DETECTOR));
+        let mut partial = run_of(vec![stats_with(d1::DETECTOR, None)], vec![]);
+        partial.summarize_diagnostics = vec![Diagnostic {
+            severity: "warning".to_string(),
+            stage: "summarize".to_string(),
+            message: "fixed point capped".to_string(),
+        }];
+        assert!(!partial.ran_completely(d1::DETECTOR), "partial summaries");
     }
 
     // -----------------------------------------------------------------------
@@ -1521,7 +1633,7 @@ mod tests {
     /// order are different things. Everything it accumulates is order-bearing:
     /// `detector_stats` and `diagnostics` are serialized into the JSON envelope
     /// in this order, and `findings` order survives into the output through
-    /// `role_scope_and_sort`, which is a STABLE sort (findings tying on
+    /// `scope_and_sort`, which is a STABLE sort (findings tying on
     /// detector + primaryLocationKey + rootCauseKey keep insertion order —
     /// `d55-event-publish-in-loop` is a live example of such ties).
     ///
@@ -1856,7 +1968,40 @@ mod tests {
         f
     }
 
-    /// TLS-27, the production call site: `role_scope_and_sort` orders by the
+    /// TLS-106 (review, sol P1): one predicate filters and labels, on both
+    /// paths. A finding located in dependency source with no workspace anchor
+    /// is dropped by the primary tail (and remembered in `scoped_out`) even
+    /// when no role map marks it, and labelled dependency when kept.
+    ///
+    /// Mutation (2026-11-20): `scope_and_sort`'s filter made
+    /// `has_primary_role(&f, role_by_routine)` -> the `dep:` finding is kept
+    /// at the primary tail (red); restored, green.
+    #[test]
+    fn scope_and_sort_filters_and_labels_by_one_predicate() {
+        let empty = std::collections::HashMap::new();
+        let input = || {
+            vec![
+                located("ws", "d1", "ws:src/A.al", 1, "k"),
+                located("dep", "d1", "dep:abcd:src/B.al", 1, "k"),
+            ]
+        };
+        let primary = scope_and_sort(input(), &empty, true);
+        let ids: Vec<&str> = primary.findings.iter().map(|f| f.id.as_str()).collect();
+        assert_eq!(ids, ["ws"]);
+        assert_eq!(primary.primary, [true]);
+        assert_eq!(primary.scoped_out.len(), 1);
+        let all = scope_and_sort(input(), &empty, false);
+        let labelled: Vec<(&str, bool)> = all
+            .findings
+            .iter()
+            .map(|f| f.id.as_str())
+            .zip(all.primary.iter().copied())
+            .collect();
+        assert_eq!(labelled, [("dep", false), ("ws", true)]);
+        assert!(all.scoped_out.is_empty());
+    }
+
+    /// TLS-27, the production call site: `scope_and_sort` orders by the
     /// detector's natural order, then the location key AS TEXT, then the
     /// root-cause key, and keeps input order on a full tie. The expected
     /// order is stated by hand:
@@ -1888,7 +2033,8 @@ mod tests {
             located("d", "d2", "d", 1, "k"),
             located("t2", "d2", "b", 1, "k"),
         ];
-        let ids: Vec<String> = role_scope_and_sort(input, &std::collections::HashMap::new())
+        let ids: Vec<String> = scope_and_sort(input, &std::collections::HashMap::new(), true)
+            .findings
             .into_iter()
             .map(|f| f.id)
             .collect();

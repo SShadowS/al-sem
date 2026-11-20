@@ -42,6 +42,9 @@ pub fn detect_d45(
 
     let mut findings: Vec<Finding> = Vec::new();
     let mut candidates = 0usize;
+    // Relay walks that may have stopped at `D45_MAX_NODES` (TLS-106: an
+    // internal incompleteness signal; a walk that fills the cap exactly counts).
+    let mut relay_caps = 0u64;
 
     // eventKind per internal eventId.
     let mut event_kind_by_id: HashMap<&str, &'static str> = HashMap::new();
@@ -77,6 +80,9 @@ pub fn detect_d45(
                 max_nodes: D45_MAX_NODES,
             },
         );
+        if subscribers_by_depth.len() >= D45_MAX_NODES {
+            relay_caps += 1;
+        }
 
         // A dependency publisher is a root only when a PRIMARY routine is in its
         // subscriber chain (engine-switch S8.4, owner decision 2026-10-06): the
@@ -278,6 +284,7 @@ pub fn detect_d45(
     // inserts when > 0, so this is additive: byte-identical output whenever no
     // publisher exceeds `D45_MAX_PER_PUBLISHER`.
     stats.add_skip("outputCapped", truncated as u64);
+    stats.add_cut("relayNodeCap", relay_caps);
     Ok(DetectorOutput {
         findings: kept,
         stats,
