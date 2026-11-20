@@ -344,6 +344,54 @@ pub struct Detector {
     pub rule_name: &'static str,
     /// A one-line summary (`tool.driver.rules[].shortDescription.text`).
     pub short_description: &'static str,
+    /// What the detector is about (ENG-168): `alsem analyze --focus` keeps only
+    /// the named concerns' findings and counts the rest. Required, so every
+    /// detector states one; the registry is its one home.
+    pub concern: Concern,
+}
+
+/// What a detector is about (ENG-168, spec
+/// `docs/superpowers/specs/2026-11-20-eng168-analyze-focus-design.md` §3.2).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Concern {
+    /// How fast or how costly: SQL round trips, rows loaded, work repeated in
+    /// loops, memory held.
+    Performance,
+    /// What the code does: data written or lost, transactions and commits,
+    /// events, errors, exposure and permissions, values read wrong.
+    Behaviour,
+    /// How the code is kept: dead or unreachable code, unused parameters,
+    /// obsolete or internal APIs, version drift. A risk for the next build, not
+    /// a change in what runs.
+    Maintainability,
+}
+
+impl Concern {
+    /// Every concern, in `--focus` order.
+    pub const ALL: [Concern; 3] = [
+        Concern::Performance,
+        Concern::Behaviour,
+        Concern::Maintainability,
+    ];
+
+    /// The `--focus` value and the JSON spelling.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Concern::Performance => "performance",
+            Concern::Behaviour => "behaviour",
+            Concern::Maintainability => "maintainability",
+        }
+    }
+
+    /// Parse a `--focus` value (`behavior` is accepted for `behaviour`).
+    pub fn parse(s: &str) -> Option<Concern> {
+        match s.trim() {
+            "performance" => Some(Concern::Performance),
+            "behaviour" | "behavior" => Some(Concern::Behaviour),
+            "maintainability" => Some(Concern::Maintainability),
+            _ => None,
+        }
+    }
 }
 
 /// The combined output of `run_detectors`.
@@ -940,6 +988,7 @@ mod tests {
             requires: d13.requires,
             rule_name: "Probe",
             short_description: "test probe",
+            concern: Concern::Behaviour,
         };
         let out = run_detectors_cross_app(&base, std::slice::from_ref(&probe), true);
         assert_eq!(out.findings.len(), 0);
@@ -1031,6 +1080,7 @@ mod tests {
             requires: d13.requires,
             rule_name: "Probe",
             short_description: "test probe",
+            concern: Concern::Behaviour,
         };
         let keys = |scope_primary: bool| -> Vec<String> {
             let mut k: Vec<String> =
@@ -1114,6 +1164,7 @@ mod tests {
             requires: 0,
             rule_name: "Reader",
             short_description: "test reader",
+            concern: Concern::Behaviour,
         }];
 
         let (_findings, diagnostics, _stats, _idx) = run_each(&resolved, &ctx, &detectors);
@@ -1268,6 +1319,7 @@ mod tests {
                 requires: 0,
                 rule_name: "Slow",
                 short_description: "test slow",
+                concern: Concern::Behaviour,
             },
             Detector {
                 name: "fast".to_string(),
@@ -1275,6 +1327,7 @@ mod tests {
                 requires: 0,
                 rule_name: "Fast",
                 short_description: "test fast",
+                concern: Concern::Behaviour,
             },
         ];
 
@@ -1383,6 +1436,7 @@ mod tests {
                 requires: substrate::ALL,
                 rule_name: "Ok",
                 short_description: "test ok",
+                concern: Concern::Behaviour,
             },
             Detector {
                 name: "d-err".to_string(),
@@ -1390,6 +1444,7 @@ mod tests {
                 requires: substrate::ALL,
                 rule_name: "Err",
                 short_description: "test err",
+                concern: Concern::Behaviour,
             },
         ];
         let out = run_detectors(&resolved, &detectors);
@@ -1426,6 +1481,7 @@ mod tests {
                 requires: substrate::ALL,
                 rule_name: "Ok",
                 short_description: "test ok",
+                concern: Concern::Behaviour,
             },
             Detector {
                 name: "d-panic".to_string(),
@@ -1433,6 +1489,7 @@ mod tests {
                 requires: substrate::ALL,
                 rule_name: "Panic",
                 short_description: "test panic",
+                concern: Concern::Behaviour,
             },
         ];
         let out = run_detectors(&resolved, &detectors);
@@ -1477,6 +1534,7 @@ mod tests {
                 requires: substrate::ALL,
                 rule_name: "Ok",
                 short_description: "test ok",
+                concern: Concern::Behaviour,
             }];
             run_detectors(&m, &detectors).findings.len()
         };

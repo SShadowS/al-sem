@@ -61,6 +61,7 @@ fn args(ws: &Path) -> AnalyzeArgs {
         deterministic: true,
         with_evidence: false,
         single_app: false,
+        focus: None,
     }
 }
 

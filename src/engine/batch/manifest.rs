@@ -66,6 +66,11 @@ pub struct JobPaths {
     pub reads: Vec<PathBuf>,
     /// The workspaces it reads.
     pub workspaces: Vec<PathBuf>,
+    /// Files a refused job's command line names as writes but that it will not
+    /// write (ENG-168): the job's own streams may not write them, or its
+    /// refusal would still truncate, e.g., the baseline it named. Another job's
+    /// write of one is that job's own (#277 final r1 FR-2 keeps it allowed).
+    pub kept: Vec<PathBuf>,
 }
 
 /// The files a workspace read takes under its workspace path
@@ -250,7 +255,8 @@ fn taken_files(cwd: &Path, ws: &Path) -> Taken {
 /// two targets naming one file (across jobs, or one job's stdout and stderr),
 /// a file inside a directory target or two nested directory targets, a file
 /// one job reads that another writes, and a file another job writes that a
-/// workspace read would take. `jobs`: `(name, paths)`, `name` as the error
+/// workspace read would take, and a refused job's named file its own stream
+/// writes (`JobPaths::kept`). `jobs`: `(name, paths)`, `name` as the error
 /// line names the job. `Err`: the one usage line naming both jobs.
 pub fn check_write_sets(jobs: &[(String, JobPaths)], cwd: &Path) -> Result<(), String> {
     let fail = |why: String| Err(format!("al-sem batch: {why}"));
@@ -355,6 +361,22 @@ pub fn check_write_sets(jobs: &[(String, JobPaths)], cwd: &Path) -> Result<(), S
                     name(r),
                     read.display(),
                     name(writes[w].0)
+                ));
+            }
+        }
+        // A refused job's named file: its own streams may not write it.
+        for kept in &paths.kept {
+            let kept = resolve(cwd, kept);
+            let own = files
+                .get(kept.as_path())
+                .into_iter()
+                .flatten()
+                .any(|&w| writes[w].0 == r);
+            if own {
+                return fail(format!(
+                    "{} names {} but is refused, so it must stay as it is; its own stream writes it",
+                    name(r),
+                    kept.display()
                 ));
             }
         }

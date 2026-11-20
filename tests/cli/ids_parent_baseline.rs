@@ -169,6 +169,7 @@ fn analyze_args(ws: &Path, format: OutputFormat, baseline: Option<String>) -> An
         deterministic: true,
         with_evidence: matches!(format, OutputFormat::Json),
         single_app: false,
+        focus: None,
     }
 }
 

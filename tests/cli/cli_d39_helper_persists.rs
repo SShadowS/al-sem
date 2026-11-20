@@ -38,6 +38,7 @@ fn d39_rows() -> Vec<String> {
         group_by: None,
         deterministic: true,
         single_app: false,
+        focus: None,
         with_evidence: false,
     };
     let out =

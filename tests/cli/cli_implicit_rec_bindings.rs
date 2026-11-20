@@ -51,6 +51,7 @@ fn analyze(ws: &Path, detectors: &str) -> Vec<serde_json::Value> {
         group_by: None,
         deterministic: true,
         single_app: false,
+        focus: None,
         with_evidence: false,
     };
     let out =

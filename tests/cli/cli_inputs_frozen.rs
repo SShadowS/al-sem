@@ -51,6 +51,7 @@ fn analyze_args(ws: &Path, format: OutputFormat) -> AnalyzeArgs {
         deterministic: true,
         with_evidence: false,
         single_app: false,
+        focus: None,
     }
 }
 
