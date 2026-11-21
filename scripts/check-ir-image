@@ -3,7 +3,10 @@
 #
 # The IR cache keys on the running image's bytes, which holds only while nothing outside the
 # image changes how a text parses or decodes (spec "The key"). Exit 0 when:
-#   1. `readelf -d` lists exactly the NEEDED set {libc.so.6, libgcc_s.so.1};
+#   1. `readelf -d` lists exactly the NEEDED set {libc.so.6, libgcc_s.so.1}, plus at most
+#      glibc's dynamic loader ld-linux-x86-64.so.2 (al-call-hierarchy needs it for
+#      `__tls_get_addr`; it is part of glibc, loaded in every process, and does no text
+#      processing);
 #   2. `nm -D --undefined-only` shows no locale or wide-character classification symbol
 #      (setlocale, newlocale, uselocale, isw*, tow*, wctype, wctrans);
 #   3. the file holds the IR image marker (src/program/ir_cache/key.rs, IR_IMAGE_MARKER).
@@ -18,8 +21,9 @@ bin=$1
 fail=0
 
 needed=$(readelf -d "$bin" 2>/dev/null | sed -n 's/.*(NEEDED).*\[\(.*\)\]$/\1/p' | sort | tr '\n' ' ')
-if [ "$needed" != "libc.so.6 libgcc_s.so.1 " ]; then
-    echo "check-ir-image: $bin: NEEDED is '${needed% }', want 'libc.so.6 libgcc_s.so.1'"
+if [ "$needed" != "libc.so.6 libgcc_s.so.1 " ] \
+    && [ "$needed" != "ld-linux-x86-64.so.2 libc.so.6 libgcc_s.so.1 " ]; then
+    echo "check-ir-image: $bin: NEEDED is '${needed% }', want 'libc.so.6 libgcc_s.so.1' (and at most ld-linux-x86-64.so.2)"
     fail=1
 fi
 

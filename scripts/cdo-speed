@@ -1852,9 +1852,10 @@ def main():
     try:
         ir_label = ir_build_rows({"base": base_exe, "head": head_exe}, ws, outdir,
                                  args.ir_cold)
-    except (CallFailed, SystemExit) as e:
-        # A server that cannot start or answer here is reported, never the verdict.
-        ir_label = f" IR ROWS NOT RUN ({e.args[0] if e.args else e})"
+    except (Exception, SystemExit) as e:
+        # Anything here (a server that cannot start or answer, a dead pipe) is a label,
+        # never the verdict: the judged timing is done (Fable r1).
+        ir_label = f" IR ROWS NOT RUN ({type(e).__name__}: {e.args[0] if e.args else e})"
 
     round_records = [r for r in records if r["round"] > 0]
     rows, noisy = judge(round_records) if round_records else ([], [])

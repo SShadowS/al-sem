@@ -298,6 +298,12 @@ mod tests {
         assert!(open_envelope(&good, &KEY, &[9; 32], 4).is_err(), "digest");
         assert!(open_envelope(&good, &KEY, &DIGEST, 3).is_err(), "count");
         assert!(open_envelope(&good, &KEY, &DIGEST, 5).is_err(), "count");
+        // Fable r1: the header's count wrong, everything else (index, lengths, hash) right
+        // for the package's 4 files: only the count check sees it.
+        let mut b = good.clone();
+        set_u64(&mut b, index_at() - 16, 5);
+        rehash(&mut b);
+        refused(&b, "header count differs, all else consistent");
         assert!(open(&good).is_ok(), "precondition: the good entry opens");
     }
 

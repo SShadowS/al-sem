@@ -132,6 +132,7 @@ pub(crate) fn parse_package<R: Send>(
 }
 
 /// Decode each stored file (a hit), parse the others.
+#[allow(clippy::too_many_arguments)] // one call site; the arguments are the hit's inputs
 fn hit<R: Send>(
     c: &IrCache,
     unit: &AppUnit,

@@ -111,7 +111,7 @@ impl IrCache {
 
     /// A cache with its key given (tests: hashing the test binary per test is slow, and a
     /// test picks two keys at will).
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) fn with_key(ir_dir: PathBuf, text_dir: PathBuf, verify: bool, key: IrKey) -> Self {
         let c = IrCache::new(true, ir_dir, text_dir, verify, None);
         let _ = c.key.set(Some(key));

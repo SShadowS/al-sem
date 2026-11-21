@@ -228,15 +228,19 @@ run_task_affected() {
 # Note: docs/superpowers/notes/2026-11-12-gate-release-build.md.
 GATE_PROFILE=release-fast
 
-# ⟨ENG-110⟩ The built `alsem` must be a self-contained producer with the IR image
-# marker (scripts/check-ir-image), on Linux, where the IR cache is on.
+# ⟨ENG-110⟩ Every binary that installs the IR cache (alsem, aldump, al-call-hierarchy)
+# must be a self-contained producer with the IR image marker (scripts/check-ir-image),
+# on Linux, where the cache is on.
 run_build() {
     require_grammar || return 1
     cargo build --profile "$GATE_PROFILE" || return 1
     if [[ "$(uname -s)" == Linux ]]; then
-        local top
+        local top b rc=0
         top="${CARGO_TARGET_DIR:-$(git rev-parse --show-toplevel)/target}"
-        "$(dirname "$0")/check-ir-image" "$top/$GATE_PROFILE/alsem"
+        for b in alsem aldump al-call-hierarchy; do
+            "$(dirname "$0")/check-ir-image" "$top/$GATE_PROFILE/$b" || rc=1
+        done
+        return "$rc"
     fi
 }
 

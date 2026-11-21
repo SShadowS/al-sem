@@ -38,6 +38,7 @@ pub(crate) fn image_key() -> Option<IrKey> {
 
 /// The key of `image` read to its end: blake3 over a domain tag, the IR format and every byte;
 /// `None` on a read error or when the bytes hold no [`IR_IMAGE_MARKER`].
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))] // off Linux only its tests call it
 pub(crate) fn key_of(image: &mut impl Read) -> Option<IrKey> {
     let marker: [u8; 16] = *std::hint::black_box(&IR_IMAGE_MARKER);
     let finder = memchr::memmem::Finder::new(&marker);
