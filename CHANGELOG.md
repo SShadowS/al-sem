@@ -134,7 +134,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   as before. The `skipped` keys `outputCapped`, `cappedPerTryRoutine` and
   `crossCallTruncated` were already in `detectorStats` before this change and stay.
 - **Measured.** On CDO (`bc3ccb18`, clean), release-fast, master `bd988b97` against this
-  branch `2d53ad52`:
+  branch `5f3c00c8` (the final rule; the same figures as at `2d53ad52`):
   - Without `--update-baseline` nothing changes (`scripts/cdo-before-after`): analyze at both
     scopes and fingerprint byte-identical, 2,306 / 32,429 findings, no fingerprint added or
     removed, the call graph unchanged.
