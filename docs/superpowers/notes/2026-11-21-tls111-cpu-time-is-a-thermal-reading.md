@@ -39,12 +39,14 @@ kind (`cpu_core` = P, `cpu_atom` = E and LP-E; fixed counters, no multiplexing).
 | 6 | all | 187.8 | 80.1 | 519.6 | 229.5 | 25 % |
 | 6 | pinned | 172.7 | 79.1 | 519.8 | 235.1 | 0 |
 
-- **Pinned to P-cores, CPU seconds still spread 124-173 s (x1.39)** while P cycles stay at
-  231-240e9 (about ±1.7 %). The effective clock (cycles / CPU s) ran from 1.36 to 1.92 GHz,
-  against a 4.8 GHz peak.
+- **Pinned to P-cores, user CPU seconds still spread 95-126 s (x1.33)** while user-mode P
+  cycles stay at 231-240e9 (about ±1.7 %). The effective clock (user cycles / user seconds)
+  ran from 1.86 to 2.50 GHz, against a 4.8 GHz peak. System time was a steady 29-32 s, except
+  46 s in the slowest run.
 - All cores: CPU 148-188 s (x1.27), cycles 227-251e9 (about ±5 %); 20-34 % of the work ran on
   E and LP-E cores. Core placement adds spread, but the larger part is the clock.
-- At the time: `x86_pkg_temp` 101 °C, on mains power, `intel_pstate` active with the
+- Read right after the runs (with the other lanes' load still on): `x86_pkg_temp` 101 °C,
+  not on battery (the batteries read "Not charging"), `intel_pstate` active with the
   `powersave` governor and `balance_performance` preference. The package is at its thermal
   limit, and the thermal and power budget is shared by every core: another lane's load lowers
   our clock without raising our stall share. That is why TLS-76's pressure labels did not fire.
