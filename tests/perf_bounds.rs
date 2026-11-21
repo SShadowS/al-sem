@@ -1460,7 +1460,7 @@ mod release_checks {
                     ],
                     reads: vec![],
                     workspaces: vec![ws.clone()],
-                    kept: vec![],
+                    ..JobPaths::default()
                 };
                 (format!("job {i}"), paths)
             })

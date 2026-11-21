@@ -214,6 +214,14 @@ pub struct Scope {
     /// The folders auto-discovery did not enter because git ignores them
     /// (TLS-49), so "no test app found" can say a test app may sit there.
     pub ignored: usize,
+    /// Every app folder whose `app.json` this discovery read, accepted or
+    /// not (its sources are read when it depends on the workspace): what an
+    /// `alsem batch` run must not write (TLS-109).
+    pub read: Vec<PathBuf>,
+    /// The git ignore files the discovery consults (TLS-109): each walked
+    /// folder's `.gitignore`, those above the search root up to the git top
+    /// level, and its `.git/info/exclude` (whether or not they exist).
+    pub ignore_files: Vec<PathBuf>,
     /// The `.al-sem.json` `testApps` this discovery read
     /// ([`test_config_identity`]), also when the call named its own test
     /// apps: `alsem_status` compares it with the disk (the `test-config`
@@ -288,6 +296,8 @@ pub fn discover(workspace: &Path, req: &ScopeRequest) -> Scope {
         search_root: None,
         searched: 0,
         ignored: 0,
+        read: Vec::new(),
+        ignore_files: Vec::new(),
         test_config: test_config_identity(configured.as_deref()),
     };
     let named = match &req.test_apps {
@@ -336,6 +346,16 @@ pub fn discover(workspace: &Path, req: &ScopeRequest) -> Scope {
     // in an ignored temporary folder): git reports all of it ignored, so
     // ignore rules cannot tell projects apart there.
     let honor_ignore = !root_is_ignored(&root);
+    for a in root.ancestors() {
+        scope.ignore_files.push(a.join(".gitignore"));
+        if a.join(".git").exists() {
+            scope
+                .ignore_files
+                .push(git_common_dir(a).join("info").join("exclude"));
+            break;
+        }
+    }
+    scope.ignore_files.extend(excludes_file(&root));
     walk(&mut scope, &root, &abs, 0, honor_ignore);
     scope.search_root = Some((root, git_top));
     scope
@@ -502,6 +522,7 @@ fn classify(scope: &mut Scope, root: &Path, app: &serde_json::Value, origin: Ori
 }
 
 fn classify_named(scope: &mut Scope, root: &Path, origin: Origin) {
+    scope.read.push(root.to_path_buf());
     match read_app_json(&root.join("app.json")) {
         Ok(app) => classify(scope, root, &app, origin),
         Err(e) => scope.skipped.push(Skipped {
@@ -548,6 +569,7 @@ fn walk(scope: &mut Scope, dir: &Path, workspace: &Path, depth: usize, honor_ign
             return;
         }
         scope.searched += 1;
+        scope.read.push(dir.to_path_buf());
         match read_app_json(&app_json) {
             Ok(app) => classify(scope, dir, &app, Origin::Auto),
             Err(e) => {
@@ -578,6 +600,7 @@ fn walk(scope: &mut Scope, dir: &Path, workspace: &Path, depth: usize, honor_ign
     // Engine limits B8 (TLS-48): a folder the repository's `.gitignore`
     // rules ignore is not a project folder, unless it holds the workspace.
     let ignored = if honor_ignore {
+        scope.ignore_files.push(dir.join(".gitignore"));
         git_ignored(dir, &subdirs)
     } else {
         std::collections::HashSet::new()
@@ -596,6 +619,105 @@ fn walk(scope: &mut Scope, dir: &Path, workspace: &Path, depth: usize, honor_ign
             return;
         }
     }
+}
+
+/// The user's excludes file git consults beside the repository's rules:
+/// `core.excludesFile` as `git config --path` gives it in `root`, else git's
+/// default `$XDG_CONFIG_HOME/git/ignore` (`$HOME/.config/git/ignore` when
+/// that is unset). `None` when there is neither.
+fn excludes_file(root: &Path) -> Option<PathBuf> {
+    let configured = crate::git_env::git_command()
+        .arg("-C")
+        .arg(root)
+        .args(["config", "--path", "core.excludesFile"])
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| {
+            let mut bytes = o.stdout;
+            while bytes.last().is_some_and(|b| *b == b'\n' || *b == b'\r') {
+                bytes.pop();
+            }
+            bytes
+        })
+        .filter(|bytes| !bytes.is_empty());
+    if let Some(bytes) = configured {
+        // A relative value is relative to the worktree root, as git takes
+        // it there (`join` keeps an absolute one).
+        return Some(git_toplevel(root).join(path_from_git(bytes)));
+    }
+    let config = std::env::var_os("XDG_CONFIG_HOME")
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
+    Some(config.join("git").join("ignore"))
+}
+
+/// The worktree root git works in at `dir` (`git rev-parse
+/// --show-toplevel`); `dir` when git cannot answer.
+fn git_toplevel(dir: &Path) -> PathBuf {
+    crate::git_env::git_command()
+        .arg("-C")
+        .arg(dir)
+        .args(["rev-parse", "--show-toplevel"])
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| {
+            let mut bytes = o.stdout;
+            while bytes.last().is_some_and(|b| *b == b'\n' || *b == b'\r') {
+                bytes.pop();
+            }
+            bytes
+        })
+        .filter(|bytes| !bytes.is_empty())
+        .map_or_else(|| dir.to_path_buf(), path_from_git)
+}
+
+/// The repository's common git folder at the git top level `top`, which
+/// holds `info/exclude`: `.git` itself, or for a worktree (whose `.git` is a
+/// file) the main repository's, as `git rev-parse --git-common-dir` gives it.
+/// `top/.git` when git cannot answer.
+fn git_common_dir(top: &Path) -> PathBuf {
+    let answer = crate::git_env::git_command()
+        .arg("-C")
+        .arg(top)
+        .args(["rev-parse", "--git-common-dir"])
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| {
+            let mut bytes = o.stdout;
+            while bytes.last().is_some_and(|b| *b == b'\n' || *b == b'\r') {
+                bytes.pop();
+            }
+            bytes
+        })
+        .filter(|bytes| !bytes.is_empty());
+    match answer {
+        // A relative answer is relative to `top`; `join` keeps an absolute one.
+        Some(bytes) => top.join(path_from_git(bytes)),
+        None => top.join(".git"),
+    }
+}
+
+/// A path git printed: its bytes as they are on unix.
+#[cfg(unix)]
+fn path_from_git(bytes: Vec<u8>) -> PathBuf {
+    use std::os::unix::ffi::OsStringExt;
+    PathBuf::from(std::ffi::OsString::from_vec(bytes))
+}
+
+/// A path git printed: git for Windows prints UTF-8.
+#[cfg(not(unix))]
+fn path_from_git(bytes: Vec<u8>) -> PathBuf {
+    PathBuf::from(String::from_utf8_lossy(&bytes).into_owned())
 }
 
 /// Whether git ignores `root` itself (`git check-ignore -q .`: exit 0). No

@@ -118,6 +118,125 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   refuses perf's output it now logs perf's rows ("perf output not taken as a count"), so the
   next such call says why.
 
+### Fixed (TLS-109, TLS-110: `alsem batch` compares the files a manifest writes, not their paths)
+
+- **What failed (TLS-109).** The write-set check compared path spellings. A stream that was a
+  hard link to another job's `--out`, or to a workspace's file under another name, passed the
+  check and was then truncated. A bind mount had the same hole. And the check could not see
+  everything: a shard file is named only when the job writes it, a path can change after the
+  check, two dangling links to one missing file both pass, and `ALSEM_TRACE_FILE` was emptied
+  before the check even ran.
+- **What the claims protect.** The files a run reads (job inputs, workspace inputs, its
+  manifest), the files a refused job names, and each write's own output. They protect them
+  against every alias that exists when the run's check runs (a link, a hard link, a junction, a
+  bind mount, a `..` spelling) and every alias the run's own writes create (two dangling links
+  the first write resolves, a shard file, a stream, a trace file). The scope is the run's own
+  doing: a file another process replaces during the run is that process's write.
+- **The fix, part 1: every write is claimed when its file is opened.** A batch run makes a
+  private folder and hands it to its workers. A worker started without it refuses to run
+  (exit 3). Every file the run writes for its jobs (streams, `--out`, a baseline update, shard
+  files, in the workers too) and its trace files is opened without truncating it. Its identity
+  is read from the open handle: device and inode on unix, volume serial number and 128-bit file
+  id on Windows (`GetFileInformationByHandleEx`, `FileIdInfo`). A file whose identity cannot be
+  read, or reads as a zero id, is refused, never guessed: at the check this refuses the run
+  (exit 3). When a path's name lookup (`canonicalize`) fails, only absence makes it a file not
+  yet created; for any other failure (a folder that may not be searched, an SMB name that
+  cannot be normalized) the check reads the identity from the path itself, and refuses the run
+  when it cannot. The writer then claims that identity by creating a marker file named after it in
+  the folder. Only then is the file truncated. Every write is its own
+  claim: if the marker exists already, the write is refused, even when the same job wrote that
+  file under the same spelling before. The one exception is below (part 2). A refused write
+  truncates nothing: the job's line has its write-failure exit, stderr says `refused`, and the
+  run exits 1. A claim that cannot be made (an I/O error in the folder, a refused job's list
+  that cannot be read) refuses the write and fails the run the same way. A worker reports it
+  through its exit code, so the parent never needs the folder that failed.
+- **Devices are written as before.** A device, pipe or FIFO (`/dev/null`, `NUL`, `>(cat)`)
+  holds no content a truncation could lose, and truncating one fails: it is written without a
+  claim (on Windows, a handle whose `GetFileType` is a character device or a pipe; a type the
+  call cannot tell refuses the write). Outside a batch every
+  file opens exactly as before TLS-109 (`--out /dev/null` works again).
+- **The engine's caches** (the package cache and the impact-base cache) are not claimed: each
+  writes a temporary file of its own and renames it into place, which replaces a name and never
+  truncates a file that name aliased.
+- **Part 2: the files the run must not write are claimed first.** Before any job runs, the
+  check claims every existing file a job reads and every workspace input. That includes source
+  roots, the folders `tests --part select` and `impact --part main` read (an `impact
+  --source-dep` relative to the workspace, as the loader takes it), and the test scope `tests
+  --part roots` and `impact --part main` read: `.al-sem.json`, every app folder the discovery
+  reads (a candidate it rejects too, with a relative `--test-app` taken against the cwd as the
+  job takes it), and the ignore rules it asks git about: the `.gitignore` files, the
+  repository's `info/exclude` (the main repository's for a worktree, `git rev-parse
+  --git-common-dir`) and the user's excludes file (`core.excludesFile`, a relative value under
+  the worktree root as git takes it, else
+  `$XDG_CONFIG_HOME/git/ignore`). The check runs each discovery once per workspace and test
+  apps: 200 `tests --part roots` jobs on one synthetic workspace with 12 sibling apps ran in
+  2.49 s wall in all (debug build, server1; `/work/.al-sem/tools-notes/tls109/m3-timing.log`). An
+  `impact --package-root` folder is claimed for its packages only.
+  A folder the check cannot list refuses the run (exit 3); a dangling link in it is skipped, as
+  the source walk skips it. The one exception: a job's `--update-baseline` reserves its
+  baseline, and that one write may take the reservation once.
+- **Part 3: the check before the run compares identities too.** It still refuses most bad
+  manifests before anything runs (exit 3): a file's identity is the same device-and-inode (or
+  volume-and-index) pair, or for a file not yet created, its deepest existing folder's identity
+  plus the names below (on Windows compared without case). A dangling link or junction is
+  followed through its text (at most 40 links). On unix a `..` folds only over an existing
+  folder: `missing/../x` and `file/../x` are no longer `x`; Windows folds `..` by spelling, as
+  it opens paths, except in a verbatim (`\\?\`) path, which it takes as written. No write may
+  land on a file a job reads, the job's own writes included (a
+  diff output on its own input is refused), except the job's own `--update-baseline`. No write
+  may land on a file of a workspace a job reads.
+- **The trace files are published at the end.** In a batch, each process (the parent and each
+  worker) writes its trace events as they happen to a spool file of its own in the run's
+  private folder (named `spool-parent` and `spool-w<b>` by batch), which aliases nothing. After
+  every worker has ended and every job write is done, the parent publishes each spool to its
+  trace file (its own, and each worker's `ALSEM_TRACE_FILE.w<b>` or default name, whose path is
+  kept byte for byte, also when it is not UTF-8) through the claim, and removes it. A worker
+  writes that record whole under a temporary name and only then renames it into place, so a
+  write cut short publishes nothing, never a shorter path; a record that is no whole path (an
+  odd number of bytes for Windows' UTF-16) is refused.
+  `ALSEM_TRACE_EXIT_AFTER` publishes the same way before it exits. A trace file that is an
+  output, an input, the manifest or a refused job's named file under any alias is refused
+  there: a stderr line, no trace, the run unharmed and the output kept. A worker that crashes
+  leaves its spool, and the parent still publishes it; a spool cut off in the middle of writing
+  an event ends in that partial event, so its JSON array is not closed. A parent that dies
+  leaves every spool in its claim folder (in the system temporary folder). A run that ends before its jobs
+  run (a bad manifest, a job that does not parse, a refused check, no claim folder) writes no
+  trace, and says so on stderr (`perf_trace: <path>: not written: ...`) unless the check's own
+  line already explains it.
+- **What failed (TLS-110).** A refused `fingerprint --shard bad --out D` whose stdout was `D/x`
+  wrote its error over `D/x`. A refused job's named directory is now kept like its named files:
+  its own streams may not write in it, also not through a hard link to a file in it (the check
+  lists the folder's files; a listing error refuses the run). The check also records, for each
+  refused job, the identities of the files it names and of the files in its directories; the
+  job's own writes check that list when they open a file, whatever other jobs write there.
+  Another job may write there: a refused job writes nothing, so it has nothing to lose. This
+  departs from the task text, which also refused another job's writes; it follows the ENG-168 /
+  #277 FR-2 rule for files.
+- **Windows** gets the same claims and checks through `windows-sys` (already in the tree,
+  through walkdir), now a direct dependency on Windows only. The crate and its tests are
+  checked to compile for `x86_64-pc-windows-gnu`; the tests that need a symlink or the debug
+  test seam (which runs `sh`) are unix-only, the hard-link ones run on both.
+- **Also fixed:** `alsem batch m.json` with a bare relative manifest name failed with "no
+  directory for ..."; the manifest's folder is now `.`.
+- Tests through the binary, each checking the protected file's bytes are unchanged, each with a
+  discrimination proof: a hard link, a hard link to a workspace input, a file and a directory
+  symlink, `..`, two dangling links, a link made after the check (a debug test seam) to a
+  workspace input, to a `--baseline`, to the manifest and to a refused job's named file, a shard
+  file linked to an input, a stream linked into a shard folder (ready and refused), a second
+  open of one spelling, two workers with a late link, the trace file on the manifest and as a
+  hard link to a shard file, `/dev/null` in and outside a batch, a relative
+  `--update-baseline`, a refused job's own stdout in its folder and a late link to its
+  folder's file while another job writes there, a rejected test-scope candidate, a relative
+  `--test-app`, a relative `--source-dep`, a package-only root, `file/../x`, a claim folder that
+  turns read-only, a kept list that turns unreadable, a worker's trace on another worker's
+  shard file (made deterministic by a debug seam that runs one worker at a time), a trace on a
+  refused job's named file, a reservation taken twice (a unit test), a non-UTF-8 worker trace
+  name, the user's git excludes file, a worktree's `info/exclude`, a worker killed mid-run
+  whose trace is still published, `ALSEM_TRACE_EXIT_AFTER` publishing its trace, a path in a
+  folder that may not be searched, a spool record cut short, a relative `core.excludesFile`,
+  and manifests that must still run. A worker without its claim folder is
+  tested too.
+
 ### Fixed (TLS-108: `ci-steps perf-bounds` times its bounds under a timed CDO slot hold)
 
 - **What failed.** `perf_bounds` asserts wall-time bounds. In a landing's `ci-steps all` it ran
