@@ -81,6 +81,14 @@ impl Repo {
         for v in al_sem::git_env::LOCAL_ENV_VARS {
             cmd.env_remove(v);
         }
+        // ⟨TLS-113⟩ Nothing of the caller's land or cdo-gate settings (a landing
+        // runs this suite through `ci-steps all`); a test that is about one sets it.
+        for (k, _) in std::env::vars_os() {
+            let k = k.to_string_lossy();
+            if k.starts_with("LAND_") || k.starts_with("CDO_GATE_") {
+                cmd.env_remove(&*k);
+            }
+        }
         cmd.env("GIT_CONFIG_GLOBAL", "/dev/null")
             .env("GIT_CONFIG_NOSYSTEM", "1")
             .env("GIT_AUTHOR_NAME", "t")
@@ -769,6 +777,107 @@ fn land_refuses_and_leaves_nothing_behind() {
         r.calls().is_empty(),
         "no refusal gated anything: {:?}",
         r.calls()
+    );
+}
+
+/// ⟨TLS-113⟩ `--no-speed <reason>`: cdo-gate gets `--no-speed` on its command
+/// line, the reason is printed, heads cdo.log, is in the verdict and in the
+/// PASS line, and no step sees CDO_GATE_NO_SPEED. A missing, empty or
+/// option-like reason, or a branch taken for the reason, is a usage error
+/// (exit 2) before anything runs. CDO_GATE_NO_SPEED in land's own environment
+/// is refused (exit 2), even set to an empty value: an exported variable
+/// reached every step of ENG-159's landing and failed `ci-steps agentflow`.
+///
+/// Discrimination proofs (2026-11-21, each break made with Edit in
+/// scripts/land, `cargo test --test cli land_script::land_no_speed`, reverted):
+/// - the CDO_GATE_NO_SPEED refusal removed -> FAILED (the run with it set
+///   exited 0 and gated); reverted -> passed.
+/// - the reason check removed -> FAILED (`--no-speed ""` exited 0); reverted
+///   -> passed.
+/// - `"${cdo_flags[@]}"` dropped from the cdo-gate call -> FAILED (calls read
+///   `cdo-gate /cdo-ws`); reverted -> passed.
+/// - the verdict line removed -> FAILED (no `cdo no-speed:` line); reverted
+///   -> passed.
+#[test]
+fn land_no_speed_takes_a_reason_and_passes_the_flag() {
+    let r = repo();
+    let why = "owner-approved: ENG-159 speed skip";
+    for args in [
+        &["--no-speed"][..],
+        &["--no-speed", "", "tools/tls-58-x"],
+        &["--no-speed", "  ", "tools/tls-58-x"],
+        &["--no-speed=--push", "tools/tls-58-x"],
+        &["--no-speed", "a\nb", "tools/tls-58-x"],
+        &["--no-speed", "tools/tls-58-x", "tools/tls-59-x"],
+    ] {
+        let (code, text) = r.land(args, &[]);
+        assert_eq!(code, Some(2), "{args:?}: {text}");
+        assert!(text.contains("--no-speed"), "{args:?}: {text}");
+    }
+    for value in ["1", ""] {
+        let (code, text) = r.land(
+            &["--no-speed", why, "tools/tls-58-x"],
+            &[("CDO_GATE_NO_SPEED", value)],
+        );
+        assert_eq!(code, Some(2), "CDO_GATE_NO_SPEED={value:?}: {text}");
+        assert!(
+            text.contains("CDO_GATE_NO_SPEED is set"),
+            "CDO_GATE_NO_SPEED={value:?}: {text}"
+        );
+    }
+    assert!(
+        r.calls().is_empty(),
+        "a refusal gates nothing: {:?}",
+        r.calls()
+    );
+
+    let (code, text) = r.land(&["--dry-run", "--no-speed", why, "tools/tls-58-x"], &[]);
+    assert_eq!(code, Some(0), "{text}");
+    assert!(text.contains("; cdo-gate --no-speed /"), "{text}");
+
+    // Each stub logs whether it sees the variable: no step may.
+    let seen = "echo \"env ${CDO_GATE_NO_SPEED-unset}\" >> \"$STUB_LOG\"";
+    let (code, text) = r.land(
+        &["--no-speed", why, "tools/tls-58-x"],
+        &[("STUB_CI_STEPS_HOOK", seen), ("STUB_CDO_GATE_HOOK", seen)],
+    );
+    assert_eq!(code, Some(0), "{text}");
+    assert_eq!(
+        r.calls(),
+        [
+            "ci-steps all",
+            "env unset",
+            "cdo-gate --no-speed /cdo-ws",
+            "env unset"
+        ]
+    );
+    assert!(
+        text.contains(&format!(
+            "land: cdo-gate runs with --no-speed (SPEED AND MEMORY NOT CHECKED): {why}"
+        )),
+        "{text}"
+    );
+    assert!(
+        text.contains(&format!(
+            "land: PASS (cdo-gate --no-speed: {why}): landing/tls58 is gated"
+        )),
+        "{text}"
+    );
+    let run = std::fs::read_dir(r.root.join("logs"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let verdict = std::fs::read_to_string(run.join("verdict")).unwrap();
+    assert!(
+        verdict.contains(&format!("\ncdo no-speed: {why}\n")),
+        "{verdict}"
+    );
+    let cdo_log = std::fs::read_to_string(run.join("cdo.log")).unwrap();
+    assert!(
+        cdo_log.starts_with(&format!("land: cdo-gate --no-speed: {why}\n")),
+        "{cdo_log}"
     );
 }
 

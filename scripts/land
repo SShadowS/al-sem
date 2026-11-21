@@ -30,7 +30,16 @@
 #             never runs after a red ci).
 #   mem-wait  MemAvailable >= 35 GB (polls 15 s, gives up after 30 min); no
 #             other gate can run meanwhile, since land holds the CDO slot.
-#   cdo       `bash scripts/cdo-gate <CDO_WS>`.
+#   cdo       `bash scripts/cdo-gate <CDO_WS>`; with `--no-speed <reason>`,
+#             `bash scripts/cdo-gate --no-speed <CDO_WS>` (⟨TLS-113⟩ an
+#             owner-approved skip of the speed phase only: the reason is
+#             required, printed, written at the top of cdo.log and to the
+#             verdict, and repeated in the PASS line). The skip is the flag on
+#             cdo-gate's own command line, never CDO_GATE_NO_SPEED: an exported
+#             variable reaches every step (ENG-159's did, and `ci-steps
+#             agentflow` failed under it), so land refuses to start with
+#             CDO_GATE_NO_SPEED set at all. Refused, not cleared: clearing would
+#             run the speed check the caller asked to skip, silently.
 #   recheck   (after ci and after cdo) the worktree is still on the landing
 #             commit the gates ran on, clean, `landing/<name>` still points
 #             there, and master has not moved: otherwise the gated tree is not
@@ -67,13 +76,15 @@
 set -euo pipefail
 
 usage() {
-    echo "usage: scripts/land [--push] [--dry-run] [--name <x>] [--worktree <dir>] <branch>..."
+    echo "usage: scripts/land [--push] [--dry-run] [--name <x>] [--worktree <dir>] [--no-speed <reason>] <branch>..."
     echo "  Merges the branches (in that order) into landing/<name> in the gate worktree,"
     echo "  runs ci-steps all, then cdo-gate; lands it via merge-and-push only with --push."
     echo "  --name     landing name (default: the task ids in the branch names, e.g. tls58+eng30)"
     echo "  --worktree gate worktree (default \$LAND_WORKTREE or /work/alsem-wt/orchestrator-gate)"
     echo "  --dry-run  check and predict the merges; change nothing"
     echo "  --push     land it on master with scripts/merge-and-push after a PASS"
+    echo "  --no-speed run cdo-gate --no-speed (an approved skip of its speed phase); the"
+    echo "             reason is required and kept in the run's logs and verdict"
 }
 die() {
     echo "land: $*" >&2
@@ -89,13 +100,19 @@ bad_usage() {
 # shellcheck disable=SC2046
 unset $(git rev-parse --local-env-vars)
 
-push=0 dry_run=0 name=""
+push=0 dry_run=0 name="" no_speed="" no_speed_given=0
 worktree="${LAND_WORKTREE:-/work/alsem-wt/orchestrator-gate}"
 branches=()
 while (($#)); do
     case "$1" in
         --push) push=1 ;;
         --dry-run) dry_run=1 ;;
+        --no-speed)
+            (($# >= 2)) || bad_usage "--no-speed needs a reason"
+            no_speed=$2 no_speed_given=1
+            shift
+            ;;
+        --no-speed=*) no_speed=${1#--no-speed=} no_speed_given=1 ;;
         --name)
             (($# >= 2)) || bad_usage "--name needs a value"
             name=$2
@@ -119,6 +136,19 @@ while (($#)); do
 done
 ((${#branches[@]})) || bad_usage "no branch given"
 ((push && dry_run)) && bad_usage "--push and --dry-run exclude each other"
+# ⟨TLS-113⟩ The skip goes on cdo-gate's command line only (see `cdo` above).
+[[ -z "${CDO_GATE_NO_SPEED+set}" ]] \
+    || bad_usage "CDO_GATE_NO_SPEED is set: it would reach every step (ci-steps agentflow fails under it); unset it and give --no-speed <reason>"
+if ((no_speed_given)); then
+    # One line in the verdict and the logs; a branch name taken for the reason
+    # (`--no-speed tools/tls-1-x tools/tls-2-x`) is caught at the check.
+    [[ "$no_speed" =~ [^[:space:]] && "$no_speed" != -* && "$no_speed" != *$'\n'* ]] \
+        || bad_usage "--no-speed needs a reason: one line of text, not an option"
+fi
+cdo_flags=()
+if ((no_speed_given)); then
+    cdo_flags=(--no-speed)
+fi
 
 cdo_ws="${CDO_WS:-/work/src/cdo-baseline/Cloud}"
 logs_root="${LAND_LOGS:-/work/.al-sem/land}"
@@ -154,6 +184,9 @@ union_changelog() {
 # ---- check ---------------------------------------------------------------
 [[ -d "$worktree" ]] || die "no gate worktree at $worktree"
 G rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "$worktree is not a git worktree"
+if ((no_speed_given)) && G show-ref --verify -q "refs/heads/$no_speed"; then
+    bad_usage "--no-speed '$no_speed' names a branch: give the reason first, quoted"
+fi
 if ((!dry_run)); then
     exec 7>&1 8>&2
     # ⟨TLS-60⟩ The CDO slot (scripts/cdo-slot), from here to the end: no second
@@ -240,6 +273,9 @@ for ((i = 0; i < ${#branches[@]}; i++)); do
     echo "land:   $((i + 1)). ${branches[i]} (${tips[i]:0:8}, ${ids[i]})"
 done
 echo "land: landing branch: $landing"
+if ((no_speed_given)); then
+    echo "land: cdo-gate runs with --no-speed (SPEED AND MEMORY NOT CHECKED): $no_speed"
+fi
 
 # ⟨TLS-87⟩ The pre-submit CDO subset, checked rather than remembered: a branch
 # whose diff changes product code (or the subset's own tests and goldens) needs
@@ -377,7 +413,7 @@ if ((dry_run)); then
         fi
         prev=$(G commit-tree "$tree" -p "$prev" -p "${tips[i]}" -m "land dry run")
     done
-    echo "land: then: ci-steps all; wait for ${mem_min_gb} GB free; cdo-gate $cdo_ws; merge-and-push $landing only with --push"
+    echo "land: then: ci-steps all; wait for ${mem_min_gb} GB free; cdo-gate ${cdo_flags[*]}${cdo_flags[*]:+ }$cdo_ws; merge-and-push $landing only with --push"
     if ((refuse)); then
         echo "land: DRY RUN: a real run would refuse"
         exit 1
@@ -542,13 +578,19 @@ verdict mem-wait "$rc" "$start"
 start=$SECONDS
 mark cdo start
 rc=0
-(cd "$worktree" && bash scripts/cdo-gate "$cdo_ws") >"$run/cdo.log" 2>&1 7>&- 8>&- 9>&- || rc=$?
+no_speed_note=""
+if ((no_speed_given)); then
+    no_speed_note=" (cdo-gate --no-speed: $no_speed)"
+    echo "land: cdo-gate --no-speed: $no_speed" >"$run/cdo.log"
+fi
+(cd "$worktree" && bash scripts/cdo-gate "${cdo_flags[@]}" "$cdo_ws") >>"$run/cdo.log" 2>&1 7>&- 8>&- 9>&- || rc=$?
 verdict cdo "$rc" "$start"
+((no_speed_given == 0)) || echo "cdo no-speed: $no_speed" >>"$run/verdict"
 ((rc == 0)) || die "FAIL at cdo: nothing pushed ($landing kept)"
 recheck cdo
 
 if ((!push)); then
-    echo "land: PASS: $landing is gated; to land it: cd $main && scripts/merge-and-push $landing"
+    echo "land: PASS$no_speed_note: $landing is gated; to land it: cd $main && scripts/merge-and-push $landing"
     exit 0
 fi
 
@@ -562,4 +604,4 @@ rc=0
     >"$run/push.log" 2>&1 7>&- 8>&- 9>&- || rc=$?
 verdict push "$rc" "$start"
 ((rc == 0)) || die "FAIL at push: see $run/push.log"
-echo "land: PASS: $landing landed on master"
+echo "land: PASS$no_speed_note: $landing landed on master"
