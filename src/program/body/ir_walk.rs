@@ -73,6 +73,34 @@ fn object_run_kind(text: &str) -> Option<&'static str> {
 /// a bare identifier's name, a member_expression's member name, or the variable
 /// an element write indexes (`S[1] := 'X'` writes `S`: ENG-30, a Text parameter
 /// so written holds no literal any more); else None.
+/// ENG-162: the whole variable an expression names, or `None`: a bare or quoted identifier, read
+/// through parentheses (`(R)`), or the object's own member `this.X` (`this."My G"`). Every
+/// spelling of one variable gives one name, so `A := (R)`, `this.G := R` and `A := this.G` are
+/// copies like `A := R` (Fable r2 on ENG-160: they were no alias for any reader).
+fn plain_variable(file: &AlFile, mut e: ExprId) -> Option<String> {
+    loop {
+        match &file.ir.expr(e).kind {
+            ExprKind::Parenthesized(x) => e = *x,
+            ExprKind::Identifier(x) | ExprKind::QuotedIdentifier(x) => {
+                return Some(x.fold_identifier());
+            }
+            ExprKind::Member { object, member, .. } if is_this(file, *object) => {
+                return Some(
+                    crate::program::body::node_util::strip_quotes(member)
+                        .replace("\"\"", "\"")
+                        .fold_identifier(),
+                );
+            }
+            _ => return None,
+        }
+    }
+}
+
+/// Whether `e` is the `this` keyword (the object instance).
+fn is_this(file: &AlFile, e: ExprId) -> bool {
+    matches!(&file.ir.expr(e).kind, ExprKind::Identifier(t) if t.eq_fold_identifier("this"))
+}
+
 fn lhs_base_name(file: &AlFile, target: ExprId) -> Option<String> {
     match &file.ir.expr(target).kind {
         ExprKind::Identifier(x) | ExprKind::QuotedIdentifier(x) => Some(x.fold_identifier()),
@@ -1097,31 +1125,26 @@ impl<'a> SpineCtx<'a> {
                 // literal rhs, anchored on the assignment statement.
                 if let Some(lhs_name) = lhs_base_name(self.file, *target) {
                     // A whole-variable copy, quoted names included (`"My Ref" := Ref`: ENG-145, an
-                    // alias by a quoted name was no alias). The lowerer strips the quotes.
-                    let rhs_identifier = match (
-                        &self.file.ir.expr(*target).kind,
-                        &self.file.ir.expr(*value).kind,
-                    ) {
-                        (
-                            ExprKind::Identifier(_) | ExprKind::QuotedIdentifier(_),
-                            ExprKind::Identifier(v) | ExprKind::QuotedIdentifier(v),
-                        ) => Some(v.fold_identifier()),
-                        _ => None,
-                    };
+                    // alias by a quoted name was no alias; the lowerer strips the quotes), and
+                    // every spelling of a whole variable (ENG-162: `A := (R)`, `this.G := R`).
+                    let lhs_plain = plain_variable(self.file, *target);
+                    let rhs_identifier = lhs_plain
+                        .as_ref()
+                        .and_then(|_| plain_variable(self.file, *value));
                     let rhs_member = match &self.file.ir.expr(*target).kind {
                         ExprKind::Identifier(_) => self.member_of_identifier(*value),
                         _ => None,
                     };
                     self.var_assignments.push(PVarAssignment {
-                        lhs_name,
+                        // `this."My G"` names `My G` as `"My G"` does.
+                        lhs_name: lhs_plain.clone().unwrap_or(lhs_name),
                         rhs_literal_value: self.lit_text(*value),
                         source_anchor: self.anchor(&st.origin),
                         rhs_identifier,
                         rhs_member,
-                        lhs_is_member: matches!(
-                            self.file.ir.expr(*target).kind,
-                            ExprKind::Member { .. }
-                        ),
+                        // `this.G := …` assigns the variable `G` (ENG-162).
+                        lhs_is_member: lhs_plain.is_none()
+                            && matches!(self.file.ir.expr(*target).kind, ExprKind::Member { .. }),
                     });
                 }
                 use crate::program::body::features::FieldAccessKind;
@@ -4759,6 +4782,68 @@ codeunit 50002 C
             .map(|r| (r.identifier.as_str(), r.condition_kind.as_str()))
             .collect();
         assert_eq!(got, [("plain", "if"), ("paren", "if"), ("name", "if")]);
+    }
+
+    /// ENG-162: every spelling of a whole variable is a copy: parentheses on the right
+    /// (`A := (R)`, `A := ((R))`), `this.` on either side (`this.G := R`, `A := this.G`,
+    /// `this."My G" := R`). A member of anything else, a call or an indexed target is no copy,
+    /// and `this.G := …` is no member assignment.
+    ///
+    /// Discrimination (2026-11-21): `plain_variable` not looking through parentheses fails the
+    /// `(r)` rows; not reading `this.X` as `X` fails the `this.` rows; restored, passes.
+    #[test]
+    fn alias_spellings_are_copies() {
+        const SRC: &str = r#"
+codeunit 50003 C
+{
+    var
+        G: RecordRef;
+        "My G": RecordRef;
+
+    procedure Caller()
+    var
+        R: RecordRef;
+        A: RecordRef;
+        Rec: Record Customer;
+        Slot: array[2] of RecordRef;
+    begin
+        A := (R);
+        A := ((R));
+        this.G := R;
+        A := this.G;
+        this."My G" := R;
+        A := Rec.Name;
+        A := R.Duplicate();
+        Slot[1] := R;
+    end;
+}
+"#;
+        let (features, _, _) =
+            ir_features_for_named_routine(SRC, "Caller", "g", "u").expect("routine");
+        let got: Vec<(&str, Option<&str>, bool)> = features
+            .var_assignments
+            .iter()
+            .map(|a| {
+                (
+                    a.lhs_name.as_str(),
+                    a.rhs_identifier.as_deref(),
+                    a.lhs_is_member,
+                )
+            })
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("a", Some("r"), false),
+                ("a", Some("r"), false),
+                ("g", Some("r"), false),
+                ("a", Some("g"), false),
+                ("my g", Some("r"), false),
+                ("a", None, false),
+                ("a", None, false),
+                ("slot", None, false),
+            ]
+        );
     }
 
     /// MCP output wave 3a (Q4): an operation's receiver is a RecordRef exactly

@@ -686,6 +686,107 @@ codeunit 50434 "GE Mgt"
         F := R.Field(2);
         F.Value := 'x';
     end;
+
+    // ENG-162 (Fable r2 on ENG-160): alias spellings. `this.G := R` and `A := (R)` make an
+    // alias as `G := R` does, for the flow, the table frame and the first temp pass.
+    procedure ThisAliasFlow()
+    var
+        R: RecordRef;
+        E: Record "GE Entry";
+        D: Record "GE Doc";
+    begin
+        R.GetTable(E);
+        this.G := R;
+        D.FindFirst();
+        G.Get(D.RecordId);
+        Guarded(R);
+    end;
+
+    procedure ParenAliasFlow()
+    var
+        R: RecordRef;
+        A: RecordRef;
+        E: Record "GE Entry";
+        D: Record "GE Doc";
+    begin
+        R.GetTable(E);
+        A := (R);
+        D.FindFirst();
+        A.Get(D.RecordId);
+        Guarded(R);
+    end;
+
+    procedure ThisAliasFrameRoot()
+    var
+        E: Record "GE Entry";
+    begin
+        ThisAliasFrame(E);
+    end;
+
+    local procedure ThisAliasFrame(V: Variant)
+    var
+        R: RecordRef;
+        Log: Record "GE Log";
+        D: Record "GE Doc";
+    begin
+        R.GetTable(V);
+        this.G := R;
+        D.FindFirst();
+        G.Get(D.RecordId);
+        case R.Number of
+            Database::"GE Doc":
+                Log.Insert();
+        end;
+    end;
+
+    procedure ParenAliasFrameRoot()
+    var
+        E: Record "GE Entry";
+    begin
+        ParenAliasFrame(E);
+    end;
+
+    local procedure ParenAliasFrame(V: Variant)
+    var
+        R: RecordRef;
+        A: RecordRef;
+        Log: Record "GE Log";
+        D: Record "GE Doc";
+    begin
+        R.GetTable(V);
+        A := (R);
+        D.FindFirst();
+        A.Get(D.RecordId);
+        case R.Number of
+            Database::"GE Doc":
+                Log.Insert();
+        end;
+    end;
+
+    procedure ThisAliasTemp()
+    var
+        R: RecordRef;
+        D: Record "GE Doc";
+    begin
+        R.Open(Database::"GE Other", true);
+        this.G := R;
+        D.FindFirst();
+        G.Get(D.RecordId);
+        R.Delete();
+    end;
+
+    procedure ParenAliasTemp()
+    var
+        R: RecordRef;
+        A: RecordRef;
+        D: Record "GE Doc";
+    begin
+        R.Open(Database::"GE Other", true);
+        A := (R);
+        D.FindFirst();
+        A.Get(D.RecordId);
+        R.Delete();
+    end;
 }
 "#;
 
@@ -784,6 +885,19 @@ fn a_recordref_get_moves_the_table_for_every_reader() {
     // The resolver's RecordRef table: opened on Doc, moved to an Entry.
     assert_eq!(answer("OpenControl", "GE Entry"), "no", "precondition");
     assert_ne!(answer("OpenThenGet", "GE Entry"), "no");
+    // ENG-162: `this.G := R` and `A := (R)` are aliases for the flow, the table frame and the
+    // first temp pass (each was a wrong `no`).
+    for routine in [
+        "ThisAliasFlow",
+        "ParenAliasFlow",
+        "ThisAliasFrameRoot",
+        "ParenAliasFrameRoot",
+    ] {
+        assert_eq!(answer(routine, "GE Log"), "yes", "{routine}");
+    }
+    for routine in ["ThisAliasTemp", "ParenAliasTemp"] {
+        assert_ne!(answer(routine, "GE Doc"), "no", "{routine}");
+    }
 }
 
 #[test]

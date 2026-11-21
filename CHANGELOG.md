@@ -73,6 +73,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   own test hook (a command it runs after its checks, which no child reads); it is not refused,
   as its own tests use it.
 
+### Fixed (ENG-162: `A := (R)`, `this.G := R` and `A := this.G` are RecordRef aliases)
+
+- **The bug** (Fable, review round 2 on ENG-160). The L2 walk recorded a whole-variable copy
+  (`PVarAssignment::rhs_identifier`) only when both sides were bare or quoted identifiers. A
+  parenthesised right side (`A := (R)`) or a `this.`-qualified side (`this.G := R`,
+  `A := this.G`) made no alias for any reader: the RecordRef flow, the literal-pruning table
+  frame and `record_types`' first temp pass. So `R.GetTable(E); A := (R); A.Get(D.RecordId);
+  Guarded(R)` answered a definite `no` where the `Get` moves R too (one handle, BC 28.4,
+  ENG-145's note): `prove` said the routine cannot write `GE Log`; it can.
+- **The fix**, once in the walk (`ir_walk::plain_variable`): a whole variable is a bare or quoted
+  identifier read through parentheses, or the object's own member `this.X`. Both sides of an
+  assignment use it, so every spelling of one variable gives one name; `this.G := …` is no
+  member assignment (`lhs_is_member`), and `this."My G" := …` names `My G` (the walk kept the
+  quotes, so it matched no declaration).
+- **Tests.** `cli_recref_get`: `ThisAliasFlow`, `ParenAliasFlow`, `ThisAliasFrameRoot`,
+  `ParenAliasFrameRoot` answer `yes`; `ThisAliasTemp`, `ParenAliasTemp` no longer `no` (Fable's
+  probes P32-P35c). `ir_walk::tests::alias_spellings_are_copies` pins every spelling, with
+  controls (a member of a record, a call, an indexed target). Red proofs: not looking through
+  parentheses fails `ParenAliasFlow` and the `(R)` rows; not reading `this.X` as `X` fails
+  `ThisAliasFlow` and the `this.` rows (the quoted name kept its quotes there).
+
 ### Added (TLS-111: cdo-speed counts user cycles, labels CLOCK and CPI, and re-measures a contradicted failure)
 
 - **Why.** On server1, CPU seconds measure the clock, core sharing and core kind as much as the
