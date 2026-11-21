@@ -17,16 +17,20 @@ PLENTY_OF_DISK = 500 * 2**30
 # ENG-159's landing ran with CDO_GATE_NO_SPEED=1; `ci-steps agentflow` under it
 # saw `gate --name cdo-gate` refuse and failed two tests that set nothing. Every
 # variable the gate scripts (and agentflow itself) read is cleared before each
-# test: the prefixes below, plus the names read under no gate prefix.
-# `test_gate_env.py` scans scripts/ and fails when a script reads a variable
-# this rule neither clears nor lists in GATE_ENV_KEPT.
+# test: the prefixes below, the names read under no gate prefix, and the build
+# inputs cdo-speed reads by computed key (its BUILD_ENV_* tuples, read from the
+# script). `test_gate_env.py` scans scripts/ and fails when a script reads a
+# variable this rule neither clears nor lists in GATE_ENV_KEPT.
+from agentflow.supervise import script_tuple  # noqa: E402
+
 GATE_ENV_PREFIXES = ("AGENTFLOW_", "ALSEM_SPEED_", "CDO_", "CHECK_GOLDENS_", "CI_STEPS_",
-                     "LAND_", "MERGE_EXPECT_", "PERF_PROBE_")
+                     "LAND_", "MERGE_EXPECT_", "PERF_PROBE_") + script_tuple("cdo-speed", "BUILD_ENV_PREFIXES")
 GATE_ENV_NAMES = ("ALDUMP", "CARGO_TARGET_DIR", "DO_WS", "ENFORCE_CDO_WS", "FLOW_LOG",
-                  "GITHUB_ACTIONS", "REGEN_TEMP_GOLDENS", "SWITCH_BASELINES", "TREE_SITTER_AL_PATH")
+                  "GITHUB_ACTIONS", "REGEN_TEMP_GOLDENS", "SWITCH_BASELINES",
+                  "TREE_SITTER_AL_PATH") + script_tuple("cdo-speed", "BUILD_ENV_EXACT")
 # Read by the scripts, but they say who runs them, not how a gate decides: kept.
 GATE_ENV_KEPT = ("CARGO_HOME", "CLAUDE_CODE_SESSION_ID", "CLAUDE_CONFIG_DIR", "CLAUDE_PID",
-                 "CLAUDE_PROJECT_DIR")
+                 "CLAUDE_PROJECT_DIR", "HOME", "USERPROFILE")
 
 
 def is_gate_env(name):
