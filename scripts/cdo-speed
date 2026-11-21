@@ -615,10 +615,20 @@ def timed_hold(repo):
         sys.exit(2)
 
 
-def child_env():
-    # Nothing that changes the engine's behaviour or adds tracing cost.
-    return {k: v for k, v in os.environ.items()
-            if not k.startswith("ALSEM_") and k != "C1_CONE_CENSUS"}
+# ⟨ENG-110⟩ The dependency IR cache's variables are kept on purpose (every other ALSEM_*
+# is stripped); ALSEM_IR_CACHE_VERIFY is refused at the start (`main`).
+IR_CACHE_VARS = ("ALSEM_IR_CACHE", "ALSEM_IR_CACHE_DIR", "ALSEM_IR_CACHE_REPORT")
+
+
+def child_env(extra=None):
+    """Nothing that changes the engine's behaviour or adds tracing cost. ⟨ENG-110⟩ The
+    judged rows run with the IR cache off on both sides (`ALSEM_IR_CACHE=off`), so
+    dependency parsing stays timed; `extra` turns it on for the reported IR rows."""
+    env = {k: v for k, v in os.environ.items()
+           if (not k.startswith("ALSEM_") or k in IR_CACHE_VARS) and k != "C1_CONE_CENSUS"}
+    env["ALSEM_IR_CACHE"] = "off"
+    env.update(extra or {})
+    return env
 
 
 # ---------------------------------------------------------------------------
@@ -1093,13 +1103,14 @@ def instr_probe():
 class Server:
     """One `alsem mcp` server over stdio (newline-delimited JSON-RPC)."""
 
-    def __init__(self, exe, ws, outdir, name):
+    def __init__(self, exe, ws, outdir, name, env=None):
         self.name = name
         self.root = tempfile.mkdtemp(prefix=f"cdo-speed-{name}-", dir=outdir)
         self.err = open(os.path.join(outdir, f"{name}.server.err"), "wb")
         self.p = subprocess.Popen(
             [exe, "mcp", "--workspace", ws, "--output-root", self.root],
-            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self.err, env=child_env())
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self.err,
+            env=child_env(env))
         self.buf = b""
         self.next_id = 0
         # pid -> the highest VmHWM read for it (kept after the process exits).
@@ -1547,6 +1558,54 @@ def judge(records):
     return rows, noisy
 
 
+def ir_build_rows(exes, ws, outdir, ir_cold):
+    """⟨ENG-110⟩ The reported (never judged) IR cache rows, after the judged timing: per
+    side, an untimed fill of a fresh IR cache folder, then a `build (IR warm)` on it; with
+    `ir_cold`, also a `build (IR cold)` on another fresh folder. Each side's engine report is
+    checked with `ir-cache-report-check --rule warm-build`; a breach labels the verdict and
+    never fails it. A base without a report predates the cache: said, not a breach.
+    Returns the label."""
+    _, b_tool, b_args = WARM_UP[0]
+    checker = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ir-cache-report-check")
+    breaches, times = [], {}
+
+    def build(side, kind, root):
+        rep = os.path.join(outdir, f"ir-{kind}-{side}.jsonl")
+        env = {"ALSEM_IR_CACHE": "on", "ALSEM_IR_CACHE_DIR": root, "ALSEM_IR_CACHE_REPORT": rep}
+        s = Server(exes[side], ws, outdir, f"{side}-ir-{kind}", env)
+        try:
+            wall, cpu, _, code, err = s.call(b_tool, b_args)
+        finally:
+            s.close()
+        if code != 0:
+            raise CallFailed(f"build (IR {kind}) on {side} exited {code}", err)
+        return rep, wall, cpu
+
+    for side in ("base", "head"):
+        root = tempfile.mkdtemp(prefix=f"ir-{side}-", dir=outdir)
+        build(side, "fill", root)
+        rep, wall, cpu = build(side, "warm", root)
+        times[("warm", side)] = (wall, cpu)
+        if not os.path.exists(rep) and side == "base":
+            log(f"  build (IR warm): base wrote no IR cache report (it predates ENG-110)")
+        else:
+            r = subprocess.run([checker, "--rule", "warm-build", rep],
+                               capture_output=True, text=True)
+            if r.returncode != 0:
+                breaches.append(f"{side}: {r.stdout.strip()}")
+        if ir_cold:
+            cold = tempfile.mkdtemp(prefix=f"ir-cold-{side}-", dir=outdir)
+            _, wall, cpu = build(side, "cold", cold)
+            times[("cold", side)] = (wall, cpu)
+    for kind in ("warm", "cold"):
+        if (kind, "base") not in times:
+            continue
+        (bw, bc), (hw, hc) = times[(kind, "base")], times[(kind, "head")]
+        log(f"  {'build (IR ' + kind + ')':<14} cpu {bc:7.2f} -> {hc:7.2f} s x{hc / bc:.3f}"
+            f"   wall {bw:7.2f} -> {hw:7.2f} s x{hw / bw:.3f}  (reported only)")
+    return f" IR WARM REPORT BREACH ({'; '.join(breaches)})" if breaches else ""
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -1564,6 +1623,9 @@ def main():
     ap.add_argument("--max-rounds", type=int, default=len(ROUND_ROUTINES))
     ap.add_argument("--out", help="the folder for outputs and speed.json")
     ap.add_argument("--build-only", action="store_true", help="build both binaries, time nothing")
+    ap.add_argument("--ir-cold", action="store_true",
+                    help="ENG-110: also report a model build on a fresh IR cache folder per side "
+                         "(reported only)")
     ap.add_argument("--no-build", action="store_true",
                     help="the working tree's release-fast alsem is already built "
                          "(in <target>/gate-release, where --build-only builds it)")
@@ -1590,6 +1652,10 @@ def main():
 
     if not sys.platform.startswith("linux"):
         log("this gate reads /proc: Linux only")
+        return 2
+    # ⟨ENG-110⟩ VERIFY parses every hit again: never in a timed run.
+    if os.environ.get("ALSEM_IR_CACHE_VERIFY"):
+        log("ALSEM_IR_CACHE_VERIFY is set: a timed run never verifies (unset it)")
         return 2
     repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if args.warm:
@@ -1782,6 +1848,14 @@ def main():
         for s in servers.values():
             s.close()
 
+    # ⟨ENG-110⟩ The IR cache rows: untimed fills, reported builds; a label, never a failure.
+    try:
+        ir_label = ir_build_rows({"base": base_exe, "head": head_exe}, ws, outdir,
+                                 args.ir_cold)
+    except (CallFailed, SystemExit) as e:
+        # A server that cannot start or answer here is reported, never the verdict.
+        ir_label = f" IR ROWS NOT RUN ({e.args[0] if e.args else e})"
+
     round_records = [r for r in records if r["round"] > 0]
     rows, noisy = judge(round_records) if round_records else ([], [])
     warm_rows = judge_warm(records, kept)
@@ -1868,7 +1942,7 @@ def main():
     elapsed = time.monotonic() - t_start
     load_label = under_load_label(calm, blocks)
     flags = clock_cpi_flags(warm_rows + rows)
-    label = load_label + SUSPENDS.label() + clock_cpi_label(flags)
+    label = load_label + SUSPENDS.label() + clock_cpi_label(flags) + ir_label
     if cpu_advisories:
         label += (f" CPU ADVISORY ({len(cpu_advisories)}: equal instructions, a CPU-only "
                   f"failure that head's lower clock explains, owner decision "
