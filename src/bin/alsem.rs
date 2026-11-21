@@ -72,6 +72,7 @@ const _: () = assert!(
 use std::path::{Path, PathBuf};
 
 use al_sem::engine::batch::admission::{JobKind, admit};
+use al_sem::engine::batch::claim;
 use al_sem::engine::batch::job::{
     Failed, HandOff, Job, ViewUniverse, WorkspaceRead, WorkspaceReader,
 };
@@ -1575,6 +1576,10 @@ fn main() -> ExitCode {
     }
     // The process span; its drop emits `peak.process_mb` / `peak.post_attach_mb`
     // (#160 §4.1.4). Declared before `code`, so it drops after the census report.
+    // A batch opens its trace file only after its write check (TLS-109).
+    if std::env::args_os().nth(1).is_some_and(|a| a == "batch") {
+        al_sem::engine::perf_trace::defer_file();
+    }
     let _run = al_sem::engine::perf_trace::run("alsem");
     // Warnings go to stderr (a dropped dependency was once only a `warn!` that
     // nothing printed); `RUST_LOG` overrides the level. stdout is unchanged.
@@ -1863,6 +1868,59 @@ fn stream_paths(streams: &JobStreams) -> JobPaths {
     }
 }
 
+/// What a test scope read takes (TLS-109): the workspace's `.al-sem.json`
+/// and every app folder the discovery reads, accepted or not, discovered now
+/// as the job will (a relative `--test-app` against the cwd, as the job
+/// takes it: [`absolute_test_apps`]).
+fn test_scope_reads(workspace: &str, test_app: &[String], p: &mut JobPaths) {
+    use al_sem::engine::test_select::scope::{ScopeRequest, discover};
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    /// One discovery per (workspace, test apps) of the run: it walks folders
+    /// and asks git, and a manifest repeats the same scope across jobs.
+    type Found = (Vec<PathBuf>, Vec<PathBuf>);
+    type Discovered = HashMap<(String, Vec<String>), Found>;
+    static FOUND: Mutex<Option<Discovered>> = Mutex::new(None);
+    let ws = Path::new(workspace);
+    p.reads
+        .push(al_sem::state_paths::workspace_config_for_read(ws));
+    let key = (workspace.to_string(), test_app.to_vec());
+    let (folders, ignore_files) = FOUND
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get_or_insert_with(HashMap::new)
+        .entry(key)
+        .or_insert_with(|| {
+            let req = ScopeRequest {
+                test_apps: absolute_test_apps(test_app),
+            };
+            let scope = discover(ws, &req);
+            (scope.read, scope.ignore_files)
+        })
+        .clone();
+    p.workspaces.extend(folders);
+    // The git ignore rules it consulted are read too.
+    p.reads.extend(ignore_files);
+}
+
+/// The `--test-app` folders as a test job names them to its scope: each
+/// against the cwd (`None`: none named).
+fn absolute_test_apps(test_app: &[String]) -> Option<Vec<PathBuf>> {
+    (!test_app.is_empty()).then(|| {
+        test_app
+            .iter()
+            .map(|a| {
+                let p = PathBuf::from(a);
+                if p.is_absolute() {
+                    p
+                } else {
+                    std::path::absolute(&p).unwrap_or(p)
+                }
+            })
+            .collect()
+    })
+}
+
 /// What a manifest job writes and reads (#277 D2.4): its two streams, then
 /// what its command line names.
 fn job_paths(command: &Commands, streams: &JobStreams) -> JobPaths {
@@ -1875,6 +1933,7 @@ fn job_paths(command: &Commands, streams: &JobStreams) -> JobPaths {
             if let Some(b) = &a.baseline {
                 if a.update_baseline {
                     p.writes.push(file(b));
+                    p.update = Some(PathBuf::from(b));
                 }
                 p.reads.push(PathBuf::from(b));
             }
@@ -1933,11 +1992,27 @@ fn job_paths(command: &Commands, streams: &JobStreams) -> JobPaths {
             if let Some(d) = t.diff.as_deref().filter(|d| *d != "-") {
                 p.reads.push(PathBuf::from(d));
             }
+            // `--part select` reads the production app as a source dependency.
+            p.workspaces
+                .extend(t.production_root.iter().map(PathBuf::from));
+            if t.part.as_deref() == Some("roots") {
+                test_scope_reads(&t.workspace, &t.test_app, &mut p);
+            }
             (Some(&t.workspace), t.out.as_ref())
         }
         Commands::Impact(t) => {
             if let Some(d) = t.diff.as_deref().filter(|d| *d != "-") {
                 p.reads.push(PathBuf::from(d));
+            }
+            // `--part main` reads these folders' packages, its source
+            // dependencies (relative to the workspace, as the loader takes
+            // them) and the test scope.
+            p.package_roots
+                .extend(t.package_root.iter().map(PathBuf::from));
+            let ws = Path::new(&t.workspace);
+            p.workspaces.extend(t.source_dep.iter().map(|s| ws.join(s)));
+            if t.part.as_deref() == Some("main") {
+                test_scope_reads(&t.workspace, &t.test_app, &mut p);
             }
             (Some(&t.workspace), t.out.as_ref())
         }
@@ -1965,12 +2040,59 @@ fn usage(line: String) -> ExitCode {
 /// (D2.4), one batch runs in this process, two or more in `W` workers (D2.5,
 /// D12), and the run prints one line per job in manifest order. Exit 0 when
 /// every job ran, whatever its own exit; 1 when a worker died without its
-/// lines (D2.2). `--worker <b>`: run the batch the parent writes on stdin.
+/// lines (D2.2) or a write was refused at its claim (TLS-109). `--worker
+/// <b>`: run the batch the parent writes on stdin.
+///
+/// Every file the run writes is claimed by its identity in a run-private
+/// folder ([`claim`]), the workers' included. Each process spools its trace
+/// in that folder; the parent publishes every spool at the end
+/// ([`publish_traces`]).
 fn run_batch_cmd(b: BatchCli) -> ExitCode {
-    use al_sem::engine::batch::manifest::{check_stream_dirs, load};
+    use al_sem::engine::perf_trace::{drop_file, spool_file};
     if let Some(w) = b.worker {
+        // A worker writes only inside its parent's claims (TLS-109).
+        let Some(dir) = std::env::var_os(claim::ENV) else {
+            drop_file(Some("the worker has no claim folder"));
+            return usage(format!(
+                "al-sem batch: worker {w}: no claim folder ({}): a worker runs only under its parent",
+                claim::ENV
+            ));
+        };
+        claim::set_dir(dir.into());
+        // Its spool stays for the parent to publish, also if it dies.
+        if let Some(spool) = claim::spool_path(&format!("w{w}"))
+            && let Some(trace) = spool_file(&spool)
+            && let Err(e) = claim::record_spool(&spool, &trace)
+        {
+            eprintln!(
+                "perf_trace: {}: cannot record where to publish it ({e}); this worker's trace will not be published",
+                trace.display()
+            );
+        }
         return run_worker(w);
     }
+    let claims = match tempfile::tempdir() {
+        Ok(d) => d,
+        Err(e) => {
+            drop_file(Some("the run has no claim folder"));
+            return usage(format!(
+                "al-sem batch: cannot make the run's claim folder: {e}"
+            ));
+        }
+    };
+    claim::set_dir(claims.path().to_path_buf());
+    if let Some(spool) = claim::spool_path("parent") {
+        spool_file(&spool);
+    }
+    let code = run_batch_parent(b);
+    // A run that ended before its write check passed opens no trace file.
+    drop_file(Some("the batch ended before its write check passed"));
+    code
+}
+
+/// [`run_batch_cmd`]'s parent run.
+fn run_batch_parent(b: BatchCli) -> ExitCode {
+    use al_sem::engine::batch::manifest::{check_stream_dirs, load};
     let manifest_path = Path::new(&b.manifest);
     let out_dir = b.out_dir.as_deref().map(Path::new);
     let manifest = match load(manifest_path, out_dir) {
@@ -2017,19 +2139,12 @@ fn run_batch_cmd(b: BatchCli) -> ExitCode {
             let written = match p {
                 // A refused job writes no file its command names, and its own
                 // streams may not write one either (ENG-168): a refused
-                // `--update-baseline B` with stdout B would empty B.
+                // `--update-baseline B` with stdout B would empty B. Nor may
+                // any write land under a directory it names (TLS-110).
                 // `job_paths` lists the two streams first, then the named targets.
                 Planned::Failed(_) => JobPaths {
                     reads: written.reads,
-                    kept: written
-                        .writes
-                        .into_iter()
-                        .skip(2)
-                        .filter_map(|t| match t {
-                            al_sem::engine::batch::manifest::Target::File(f) => Some(f),
-                            al_sem::engine::batch::manifest::Target::Dir(_) => None,
-                        })
-                        .collect(),
+                    kept: written.writes.into_iter().skip(2).collect(),
                     ..stream_paths(&job.streams)
                 },
                 Planned::Ready { .. } => written,
@@ -2051,13 +2166,22 @@ fn run_batch_cmd(b: BatchCli) -> ExitCode {
     ));
     let cwd = std::env::current_dir().unwrap_or_default();
     if let Err(line) = check_write_sets(&paths, &cwd) {
+        al_sem::engine::perf_trace::drop_file(None);
         return usage(line);
     }
+    // `ALSEM_TRACE_EXIT_AFTER` ends the process early: it publishes the
+    // traces first, as the end below does (only once the check has passed).
+    al_sem::engine::perf_trace::set_exit_hook(publish_traces);
+    #[cfg(debug_assertions)]
+    claim::test_seam_after_preflight();
     let w = admit(&kinds, manifest.batches.len());
+    #[cfg(debug_assertions)]
+    let w = al_sem::engine::batch::worker::test_seam_workers(w);
     if let ([batch], Some(plans)) = (&manifest.batches[..], planned.pop()) {
         let streams: Vec<JobStreams> = batch.jobs.iter().map(|j| j.streams.clone()).collect();
         let lines = run_one_batch(0, &streams, plans);
         report_peak(0);
+        publish_traces();
         return print_lines(&lines);
     }
     drop(planned);
@@ -2097,8 +2221,18 @@ fn run_batch_cmd(b: BatchCli) -> ExitCode {
         manifest: manifest_path,
         w,
     };
-    let (out, whole) = run_workers(&run, &batches);
-    write_run_stdout(out, whole)
+    let (out, whole, claims_failed) = run_workers(&run, &batches);
+    publish_traces();
+    write_run_stdout(out, whole && !claims_failed)
+}
+
+/// After every worker has ended and every job write is done (TLS-109):
+/// publish each worker's spooled trace, then this process's own, to their
+/// trace files through the claim. A trace that is an output's or an input's
+/// alias is refused (a stderr line, no trace), never the output.
+fn publish_traces() {
+    claim::publish_spools();
+    al_sem::engine::perf_trace::publish_file(claim::open_trace);
 }
 
 /// `alsem batch --worker <b>`: the batch its parent wrote on stdin (a
@@ -2138,7 +2272,12 @@ fn run_worker(b: u32) -> ExitCode {
     #[cfg(debug_assertions)]
     al_sem::engine::batch::worker::test_seam_die(b);
     report_peak(b);
-    print_lines(&lines)
+    let code = print_lines(&lines);
+    // A failed claim reaches the parent through this exit, not the folder.
+    if claim::failed() {
+        return ExitCode::from(claim::FAILED_EXIT);
+    }
+    code
 }
 
 /// The run's job lines on stdout (D2.2).
@@ -2151,13 +2290,15 @@ fn print_lines(lines: &[JobLine]) -> ExitCode {
     write_run_stdout(out, true)
 }
 
-/// Write the run's stdout: exit 0, or 1 when the write fails or a worker
-/// died without its lines (`whole` false).
+/// Write the run's stdout: exit 0, or 1 when the write fails, a claim of this
+/// process failed (TLS-109), or `whole` is false (a worker died without its
+/// lines or a worker's claim failed).
 fn write_run_stdout(out: Vec<u8>, whole: bool) -> ExitCode {
+    let failed = !whole || claim::failed();
     let code = replay(
         &JobOutput {
             actions: vec![WriteAction::Stdout(out)],
-            exit: if whole { exit::CLEAN } else { 1 },
+            exit: if failed { 1 } else { exit::CLEAN },
         },
         1,
     );
@@ -2362,19 +2503,7 @@ fn plan_tests(t: TestsCli, cx: &PlanCx) -> Planned {
                 RootsAsk::Diff { text, root }
             };
             let scope = ScopeRequest {
-                test_apps: (!t.test_app.is_empty()).then(|| {
-                    t.test_app
-                        .iter()
-                        .map(|a| {
-                            let p = PathBuf::from(a);
-                            if p.is_absolute() {
-                                p
-                            } else {
-                                std::path::absolute(&p).unwrap_or(p)
-                            }
-                        })
-                        .collect()
-                }),
+                test_apps: absolute_test_apps(&t.test_app),
             };
             let single_app = t.single_app;
             ready(
@@ -2552,19 +2681,7 @@ fn plan_impact(t: ImpactCli, cx: &PlanCx) -> Planned {
                 MainAsk::Diff { text, root }
             };
             let scope = ScopeRequest {
-                test_apps: (!t.test_app.is_empty()).then(|| {
-                    t.test_app
-                        .iter()
-                        .map(|a| {
-                            let p = PathBuf::from(a);
-                            if p.is_absolute() {
-                                p
-                            } else {
-                                std::path::absolute(&p).unwrap_or(p)
-                            }
-                        })
-                        .collect()
-                }),
+                test_apps: absolute_test_apps(&t.test_app),
             };
             let single_app = t.single_app;
             let summaries = t.summaries;

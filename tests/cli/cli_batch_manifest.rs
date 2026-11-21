@@ -52,7 +52,9 @@ fn batch_manifest_errors() {
         let what = format!("{argv}: {stderr:?}");
         assert_eq!(exit, Some(3), "{what}");
         assert_eq!(stdout, "", "{what}");
-        assert_eq!(stderr.lines().count(), 1, "one line: {what}");
+        // The run's own trace (on in this harness) says it was not written.
+        let lines = stderr.lines().filter(|l| !l.starts_with("perf_trace: "));
+        assert_eq!(lines.count(), 1, "one line: {what}");
         assert!(
             stderr.starts_with("al-sem batch: batch 0 job 1: ") && stderr.contains(reason),
             "{what}"
@@ -72,7 +74,8 @@ fn batch_manifest_errors() {
         let what = format!("{manifest}: {stderr:?}");
         assert_eq!(exit, Some(3), "{what}");
         assert_eq!(stdout, "", "{what}");
-        assert_eq!(stderr.lines().count(), 1, "{what}");
+        let lines = stderr.lines().filter(|l| !l.starts_with("perf_trace: "));
+        assert_eq!(lines.count(), 1, "{what}");
         assert!(stderr.contains(reason), "{what}");
         assert_eq!(program, 0, "{what}");
     }

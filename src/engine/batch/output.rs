@@ -164,6 +164,7 @@ pub fn replay(out: &JobOutput, write_failure_exit: u8) -> u8 {
         &mut Streams {
             stdout: Stream(&mut stdout, "stdout"),
             stderr: Stream(&mut stderr, "stderr"),
+            job: "",
         },
     )
     .0
@@ -203,6 +204,9 @@ pub trait Sink {
 pub struct Streams<'a> {
     pub stdout: Stream<'a>,
     pub stderr: Stream<'a>,
+    /// The job whose files these are, as a batch names it ([`super::claim`]);
+    /// empty for a standalone run.
+    pub job: &'a str,
 }
 
 impl Sink for Streams<'_> {
@@ -213,7 +217,7 @@ impl Sink for Streams<'_> {
         self.stderr.write(bytes)
     }
     fn file(&mut self, path: &Path, bytes: &[u8]) -> Result<(), Failure> {
-        write_file(path, bytes)
+        write_file(self.job, path, bytes)
     }
     fn dir(&mut self, path: &Path) -> Result<(), Failure> {
         create_dir(path)
@@ -264,8 +268,14 @@ pub fn write_error(target: &str, e: &std::io::Error) {
     let _ = write_stderr(format!("al-sem: write error: {target}: {e}\n").as_bytes());
 }
 
-fn write_file(path: &Path, bytes: &[u8]) -> Result<(), Failure> {
-    std::fs::write(path, bytes).map_err(|e| (path.display().to_string(), e))
+/// Write `bytes` as `job`'s file `path`, through the run's claim (TLS-109):
+/// a shard child or an `--out` that is another write or an input is refused
+/// before it is truncated.
+fn write_file(job: &str, path: &Path, bytes: &[u8]) -> Result<(), Failure> {
+    let key = super::claim::write_key(job, path);
+    super::claim::open_for_write(path, job, Some(&key))
+        .and_then(|mut f| f.write_all(bytes))
+        .map_err(|e| (path.display().to_string(), e))
 }
 
 fn create_dir(path: &Path) -> Result<(), Failure> {
