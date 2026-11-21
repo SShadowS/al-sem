@@ -23,7 +23,8 @@ PLENTY_OF_DISK = 500 * 2**30
 # variable this rule neither clears nor lists in GATE_ENV_KEPT.
 from agentflow.supervise import script_tuple  # noqa: E402
 
-GATE_ENV_PREFIXES = ("AGENTFLOW_", "ALSEM_SPEED_", "ALSEM_TEST_", "CDO_", "CHECK_GOLDENS_", "CI_STEPS_",
+# ALSEM_IR_CACHE (ENG-110): the IR cache switch, folder, report and VERIFY a gate sets.
+GATE_ENV_PREFIXES = ("AGENTFLOW_", "ALSEM_IR_CACHE", "ALSEM_SPEED_", "ALSEM_TEST_", "CDO_", "CHECK_GOLDENS_", "CI_STEPS_",
                      "LAND_", "MERGE_EXPECT_", "PERF_PROBE_") + script_tuple("cdo-speed", "BUILD_ENV_PREFIXES")
 GATE_ENV_NAMES = ("ALDUMP", "ALSEM_BATCH_CLAIMS", "CARGO_TARGET_DIR", "DO_WS", "ENFORCE_CDO_WS", "FLOW_LOG",
                   "GITHUB_ACTIONS", "REGEN_TEMP_GOLDENS", "RUSTDOCFLAGS", "SWITCH_BASELINES",

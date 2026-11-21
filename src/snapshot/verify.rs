@@ -58,6 +58,7 @@ mod tests {
             files: Default::default(),
             tier: TrustTier::LocalSourceApproximate,
             content_hash: "h".into(),
+            text_digest: None,
         }
     }
 

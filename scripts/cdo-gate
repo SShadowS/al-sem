@@ -454,6 +454,10 @@ summarize() {
         }' "$logs/phases.times" 2>/dev/null
     # ⟨TLS-32⟩ The layout the test phases took.
     [[ -f "$logs/layout" ]] && echo "cdo-gate:   layout: $(cat "$logs/layout")"
+    # ⟨ENG-110⟩ The IR cache verdicts and summed counters of the two output phases.
+    for name in output_cdo output_cdo_impact; do
+        [[ -f "$logs/$name.ir" ]] && echo "cdo-gate:   IR cache $name: $(cat "$logs/$name.ir")"
+    done
     # ⟨TLS-19⟩ The container's peak unreclaimable memory during the test lanes,
     # and the OOM counters the run added (a report, not a verdict).
     if [[ -f "$logs/memory.unreclaimable" ]]; then
@@ -592,6 +596,8 @@ if [[ "$dry_run" == 1 ]]; then
     echo "cdo-gate:   build: cargo test --profile cdo --no-run ${only_build[*]}"
     echo "cdo-gate:   phases, one after another: ${only_phases[*]}"
     echo "cdo-gate:   not run: speed, output_cdo_impact and every phase not named"
+    [[ " ${only_phases[*]} " == *" output_cdo "* ]] &&
+        echo "cdo-gate:   IR cache (ENG-110): ALSEM_IR_CACHE=on and a report file for output_cdo (rule output); every other phase keeps cargo's [env] default, off"
     exit 0
 fi
 
@@ -961,7 +967,28 @@ fi
 # (`phase_output_cdo_impact`): the two phases together run every `output_cdo::`
 # test (`on_the_cdo_gate` and `cdo_gate_run_set_matches_the_script` state it).
 phase_output_cdo() {
-    run_phase output_cdo cargo test "${profile[@]}" --test cli output_cdo:: -- --skip output_cdo::cdo_impact
+    run_phase output_cdo ir_cache_phase output "$logs/output_cdo.ir-cache.jsonl" \
+        cargo test "${profile[@]}" --test cli output_cdo:: -- --skip output_cdo::cdo_impact
+}
+
+# ⟨ENG-110⟩ The dependency IR cache runs in the two output phases only, whose `alsem`
+# processes are real engine processes (every other phase keeps cargo's `[env]`
+# default, off, and the in-process test binaries never install it): `ALSEM_IR_CACHE=on`
+# and a report file per phase, no prefill. After the command, the report is judged
+# (`scripts/ir-cache-report-check`, rule `$1`); a failing report fails the phase, from
+# the start, by the orchestrator's decision (a missing or empty report means the cache
+# path never ran). The verdict goes to the log and to `<phase>.ir` for the summary.
+ir_cache_phase() {
+    local rule="$1" rep="$2" rc=0 verdict
+    shift 2
+    rm -f "$rep"
+    ALSEM_IR_CACHE=on ALSEM_IR_CACHE_REPORT="$rep" "$@" || rc=$?
+    verdict=$("$repo/scripts/ir-cache-report-check" --rule "$rule" "$rep") || {
+        [[ "$rc" -eq 0 ]] && rc=1
+    }
+    echo "cdo-gate: IR cache: $verdict"
+    echo "$verdict" > "${rep%.ir-cache.jsonl}.ir"
+    return "$rc"
 }
 
 # ⟨TLS-19, owner 2026-11-11⟩ `cdo_impact_ratchets` and `cdo_impact_base_ratchets`
@@ -979,7 +1006,9 @@ phase_output_cdo() {
 # ⟨TLS-32, 2026-11-13⟩ It runs after `output_cdo`, with lane 2 beside it when
 # the memory allows (`plan_layout`), else alone with lane 2 after it.
 phase_output_cdo_impact() {
-    run_phase output_cdo_impact cargo test "${profile[@]}" --test cli output_cdo::cdo_impact
+    # ⟨ENG-110⟩ VERIFY here only: every hit is parsed again and compared.
+    run_phase output_cdo_impact ir_cache_phase impact "$logs/output_cdo_impact.ir-cache.jsonl" \
+        env ALSEM_IR_CACHE_VERIFY=1 cargo test "${profile[@]}" --test cli output_cdo::cdo_impact
 }
 
 # ⟨2026-10-20⟩ 4 threads, not 1: measured on CDO, cdo profile, warm, two runs

@@ -6667,6 +6667,7 @@ codeunit 50971 "Compound Overload Subscriber"
         .into(),
         tier: TrustTier::Workspace,
         content_hash: "ws-hash".into(),
+        text_digest: None,
     };
     // Synthetic "embedded dep" copy of the SAME source file — the exact
     // compound scenario `build_program_graph`'s Step 4 comment documents
@@ -6679,6 +6680,7 @@ codeunit 50971 "Compound Overload Subscriber"
         .into(),
         tier: TrustTier::EmbeddedSource,
         content_hash: "dep-hash".into(),
+        text_digest: None,
     };
 
     let ws_unit = AppUnit {
@@ -6890,6 +6892,7 @@ codeunit 50980 "Alias Target"
         .into(),
         tier: TrustTier::Workspace,
         content_hash: "ws-hash".into(),
+        text_digest: None,
     };
 
     let ws_unit = AppUnit {
@@ -7018,6 +7021,7 @@ codeunit 50981 "Dup Target"
         .into(),
         tier: TrustTier::Workspace,
         content_hash: "ws-hash".into(),
+        text_digest: None,
     };
     let dep_source = SourceRoot {
         files: vec![SourceFile {
@@ -7027,6 +7031,7 @@ codeunit 50981 "Dup Target"
         .into(),
         tier: TrustTier::EmbeddedSource,
         content_hash: "dep-hash".into(),
+        text_digest: None,
     };
 
     let ws_unit = AppUnit {
@@ -7137,6 +7142,7 @@ codeunit 50982 "Dual Publisher Target"
         .into(),
         tier: TrustTier::Workspace,
         content_hash: "ws-hash".into(),
+        text_digest: None,
     };
 
     let ws_unit = AppUnit {

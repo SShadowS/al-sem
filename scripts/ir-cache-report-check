@@ -1,0 +1,132 @@
+#!/usr/bin/env python3
+"""ir-cache-report-check: judge an ENG-110 IR cache report file (ALSEM_IR_CACHE_REPORT).
+
+    ir-cache-report-check --rule output|impact|warm-build <report-file>
+    ir-cache-report-check --self-test
+
+Exit 0 or 1, printing one verdict line. The rules are over the set of the file's lines
+(spec "Acceptance" item 5):
+  every rule  the file exists; every `start` pid has an `end`; no `end` has `refused > 0` or
+              `roundtrip_failed > 0`;
+  output      the `end` lines' eligible_files sum to more than 0, and some line has
+              disk_hits > 0 or published_packages > 0;
+  impact      some line has disk_hits > 0, and the verified_hits sum to more than 0;
+  warm-build  some line has disk_hits > 0.
+A file whose lines all say `"ir_cache": "unsupported"` passes with the verdict
+`IR: unsupported` (Windows: the cache is off there in v1).
+"""
+
+import json
+import os
+import sys
+
+RULES = ("output", "impact", "warm-build")
+
+
+def judge(rule, lines):
+    """(ok, verdict) for `rule` over the parsed report lines (None: no file)."""
+    if lines is None:
+        return False, "IR: FAIL no report file (the cache path never ran)"
+    if lines and all(l.get("ir_cache") == "unsupported" for l in lines):
+        return True, "IR: unsupported"
+    starts = {l.get("pid") for l in lines if l.get("event") == "start"}
+    ends = [l for l in lines if l.get("event") == "end"]
+    ended = {l.get("pid") for l in ends}
+    missing = sorted(p for p in starts - ended if p is not None)
+    if missing:
+        return False, f"IR: FAIL start without end (pids {missing})"
+    others = [l for l in lines if l.get("event") not in ("start", "end")]
+    if others:
+        return False, f"IR: FAIL unexpected lines {others[:2]}"
+    c = [l.get("counters", {}) for l in ends]
+
+    def total(k):
+        return sum(int(x.get(k, 0)) for x in c)
+
+    for bad in ("refused", "roundtrip_failed"):
+        if total(bad) > 0:
+            return False, f"IR: FAIL {bad} = {total(bad)}"
+    hits = any(int(x.get("disk_hits", 0)) > 0 for x in c)
+    summary = (
+        f"processes {len(ends)}, eligible {total('eligible_files')}, hits {total('disk_hits')}, "
+        f"verified {total('verified_hits')}, published {total('published_packages')}, "
+        f"busy {total('publish_skipped_busy')}"
+    )
+    if rule == "output":
+        published = any(int(x.get("published_packages", 0)) > 0 for x in c)
+        if total("eligible_files") <= 0:
+            return False, f"IR: FAIL no eligible files ({summary})"
+        if not (hits or published):
+            return False, f"IR: FAIL no hit and no publish ({summary})"
+    elif rule == "impact":
+        if not hits:
+            return False, f"IR: FAIL no disk hit ({summary})"
+        if total("verified_hits") <= 0:
+            return False, f"IR: FAIL no verified hit ({summary})"
+    elif rule == "warm-build":
+        if not hits:
+            return False, f"IR: FAIL no disk hit ({summary})"
+    return True, f"IR: PASS {rule} ({summary})"
+
+
+def read(path):
+    if not os.path.exists(path):
+        return None
+    with open(path, encoding="utf-8") as f:
+        return [json.loads(l) for l in f if l.strip()]
+
+
+def end(pid, **counters):
+    return {"event": "end", "pid": pid, "counters": counters}
+
+
+def start(pid):
+    return {"event": "start", "pid": pid, "command": "alsem analyze", "key": "k"}
+
+
+def self_test():
+    """One passing and one failing sample per clause."""
+    hit = dict(eligible_files=10, disk_hits=10, verified_hits=10, published_packages=0)
+    cases = [
+        # every rule
+        ("output", None, False, "no file"),
+        ("output", [start(1), end(1, **hit)], True, "control"),
+        ("output", [start(1), end(1, **hit), start(2)], False, "start without end"),
+        ("output", [start(1), end(1, refused=1, **hit)], False, "refused"),
+        ("output", [start(1), end(1, roundtrip_failed=1, **hit)], False, "roundtrip_failed"),
+        ("output", [{"pid": 3, "ir_cache": "unsupported"}], True, "unsupported"),
+        # output
+        ("output", [start(1), end(1, eligible_files=0, disk_hits=0)], False, "no eligible"),
+        ("output", [start(1), end(1, eligible_files=5, published_packages=1)], True, "a publish"),
+        ("output", [start(1), end(1, eligible_files=5)], False, "no hit, no publish"),
+        # impact
+        ("impact", [start(1), end(1, **hit)], True, "verified hits"),
+        ("impact", [start(1), end(1, eligible_files=5, published_packages=1)], False, "no hit"),
+        ("impact", [start(1), end(1, eligible_files=5, disk_hits=5)], False, "not verified"),
+        # warm-build
+        ("warm-build", [start(1), end(1, disk_hits=3)], True, "a hit"),
+        ("warm-build", [start(1), end(1, published_packages=1)], False, "no hit"),
+    ]
+    failed = 0
+    for rule, lines, want, name in cases:
+        ok, verdict = judge(rule, lines)
+        mark = "ok" if ok == want else "WRONG"
+        failed += ok != want
+        print(f"{mark:5} {rule:10} {name}: {verdict}")
+    print("self-test:", "PASS" if not failed else f"FAIL ({failed})")
+    return 0 if not failed else 1
+
+
+def main(argv):
+    if argv[1:] == ["--self-test"]:
+        return self_test()
+    if len(argv) != 4 or argv[1] != "--rule" or argv[2] not in RULES:
+        print(__doc__, file=sys.stderr)
+        return 2
+    ok, verdict = judge(argv[2], read(argv[3]))
+    print(verdict)
+    return 0 if ok else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

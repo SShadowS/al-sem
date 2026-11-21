@@ -471,6 +471,7 @@ impl SnapshotBuilder {
                 files: Arc::clone(&d.files),
                 tier: TrustTier::LocalSourceApproximate,
                 content_hash: d.content_hash.clone(),
+                text_digest: None,
             });
             let tier = source.as_ref().map_or(TrustTier::SymbolOnly, |s| s.tier);
             apps.push(AppUnit {

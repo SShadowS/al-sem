@@ -43,6 +43,7 @@ struct WeakSource {
     files: Weak<Vec<SourceFile>>,
     tier: TrustTier,
     content_hash: String,
+    text_digest: Option<crate::snapshot::cache::TextDigest>,
 }
 
 impl WeakSource {
@@ -51,6 +52,7 @@ impl WeakSource {
             files: Arc::downgrade(&root.files),
             tier: root.tier,
             content_hash: root.content_hash.clone(),
+            text_digest: root.text_digest,
         }
     }
 
@@ -59,17 +61,19 @@ impl WeakSource {
             files: self.files.upgrade()?,
             tier: self.tier,
             content_hash: self.content_hash.clone(),
+            text_digest: self.text_digest,
         })
     }
 
-    /// The source without its text: an empty file list, the same tier and
-    /// content hash. No provider loads `Some` with no files, so an empty list
-    /// on a dependency means exactly this.
+    /// The source without its text: an empty file list, the same tier, content
+    /// hash and text digest. No provider loads `Some` with no files, so an empty
+    /// list on a dependency means exactly this.
     fn deferred(&self) -> SourceRoot {
         SourceRoot {
             files: Arc::new(Vec::new()),
             tier: self.tier,
             content_hash: self.content_hash.clone(),
+            text_digest: self.text_digest,
         }
     }
 }
@@ -1171,6 +1175,7 @@ mod tests {
                 }]),
                 tier: TrustTier::EmbeddedSource,
                 content_hash: hash.into(),
+                text_digest: None,
             }))
         };
         let old = cache.source(path, at(1), true, || root("old")).unwrap();
@@ -1188,6 +1193,24 @@ mod tests {
             .unwrap()
             .expect("source");
         assert_eq!(text.content_hash, "reloaded", "the old stamp was replaced");
+    }
+
+    /// ENG-110: the text digest survives the weak tier, through `upgrade` (text still live)
+    /// and `deferred` (served without its text).
+    #[test]
+    fn weak_source_keeps_text_digest() {
+        let root = SourceRoot {
+            files: Arc::new(vec![SourceFile {
+                virtual_path: "a.al".into(),
+                text: "codeunit 1 A { }".into(),
+            }]),
+            tier: TrustTier::EmbeddedSource,
+            content_hash: "h".into(),
+            text_digest: Some([7; 32]),
+        };
+        let weak = WeakSource::of(&root);
+        assert_eq!(weak.upgrade().expect("live").text_digest, Some([7; 32]));
+        assert_eq!(weak.deferred().text_digest, Some([7; 32]));
     }
 
     /// Any live tier is a hit, even one whose LSP products were never

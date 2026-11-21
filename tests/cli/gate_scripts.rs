@@ -429,6 +429,7 @@ fn cdo_gate_only_pass_records_the_tree_it_ran_on() {
         "require-rttime",
         "cdo-speed",
         "host-suspended",
+        "ir-cache-report-check",
     ] {
         let from = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("scripts")
@@ -463,6 +464,10 @@ fn cdo_gate_only_pass_records_the_tree_it_ran_on() {
              echo x > \"$STUB_COMMIT/late.txt\"\n\
              git -C \"$STUB_COMMIT\" add late.txt\n\
              git -C \"$STUB_COMMIT\" -c user.name=t -c user.email=t@t commit -qm late\n\
+           fi\n\
+           if [ -n \"$ALSEM_IR_CACHE_REPORT\" ]; then\n\
+             echo '{\"event\":\"start\",\"pid\":7}' >> \"$ALSEM_IR_CACHE_REPORT\"\n\
+             echo '{\"event\":\"end\",\"pid\":7,\"counters\":{\"eligible_files\":3,\"published_packages\":1}}' >> \"$ALSEM_IR_CACHE_REPORT\"\n\
            fi ;;\n\
          esac\n\
          echo 'test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s'\n",
@@ -646,7 +651,11 @@ fn cdo_gate_only_run_builds_and_runs_just_its_phases() {
                  if grep -qsE '^[0-9]+ [0-9]+ [0-9]+ engines=[1-9][0-9]*' \"$CARGO_TARGET_DIR\"/cdo-gate-logs/*/memory.timeline; then s=' SAMPLED=yes'; break; fi\n\
                  sleep 0.1; i=$((i + 1)); done; kill $a 2>/dev/null; else s=''; fi ;;\n\
              esac\n\
-             echo \"ENFORCE=$ENFORCE_CDO_WS$s $*\" >> '{}'\n\
+             echo \"ENFORCE=$ENFORCE_CDO_WS$s IR=$ALSEM_IR_CACHE $*\" >> '{}'\n\
+             if [ -n \"$ALSEM_IR_CACHE_REPORT\" ]; then\n\
+               echo '{{\"event\":\"start\",\"pid\":7}}' >> \"$ALSEM_IR_CACHE_REPORT\"\n\
+               echo '{{\"event\":\"end\",\"pid\":7,\"counters\":{{\"eligible_files\":3,\"published_packages\":1}}}}' >> \"$ALSEM_IR_CACHE_REPORT\"\n\
+             fi\n\
              CLAUDE_CODE_SESSION_ID=other CDO_SLOT_TOKEN= bash '{}' status >> '{}' 2>&1\n\
              echo 'test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s'\n",
             stub.path().join("alsem").display(),
@@ -701,20 +710,28 @@ fn cdo_gate_only_run_builds_and_runs_just_its_phases() {
     assert_eq!(
         lines,
         [
-            "ENFORCE=1 test --profile cdo --no-run --test program_resolve_harness \
+            // ENG-110: the IR cache on for output_cdo only; the others keep the
+            // test's own (cargo `[env]`) off.
+            "ENFORCE=1 IR=off test --profile cdo --no-run --test program_resolve_harness \
              --test l4_summary_differential --test lsp --test cli"
                 .to_string(),
             format!(
-                "ENFORCE=1{s} test --profile cdo --test program_resolve_harness -- --test-threads=4"
+                "ENFORCE=1{s} IR=off test --profile cdo --test program_resolve_harness -- --test-threads=4"
             ),
-            format!("ENFORCE=1{s} test --profile cdo --test l4_summary_differential"),
+            format!("ENFORCE=1{s} IR=off test --profile cdo --test l4_summary_differential"),
             format!(
-                "ENFORCE=1{s} test --profile cdo --test lsp -- program_graph:: snapshot_robustness::"
+                "ENFORCE=1{s} IR=off test --profile cdo --test lsp -- program_graph:: snapshot_robustness::"
             ),
             format!(
-                "ENFORCE=1{s} test --profile cdo --test cli output_cdo:: -- --skip output_cdo::cdo_impact"
+                "ENFORCE=1{s} IR=on test --profile cdo --test cli output_cdo:: -- --skip output_cdo::cdo_impact"
             ),
         ],
+        "{text}"
+    );
+    // ENG-110: the output phase's report was judged (the stub wrote a start and an end
+    // line) and the summary says so.
+    assert!(
+        text.contains("cdo-gate:   IR cache output_cdo: IR: PASS output"),
         "{text}"
     );
     let runs: Vec<_> = std::fs::read_dir(target.path().join("cdo-gate-logs"))
@@ -1925,7 +1942,13 @@ fn ci_steps_all_runs_and_judges_the_agentflow_suite() {
         repo.join("scripts/ci-steps"),
     )
     .unwrap();
-    for s in ["tree-stamp", "require-rttime", "nextest-priority-check"] {
+    // ENG-110: `build` runs check-ir-image on the binary; the stub build makes none.
+    for s in [
+        "tree-stamp",
+        "require-rttime",
+        "nextest-priority-check",
+        "check-ir-image",
+    ] {
         exe(repo.join("scripts").join(s), "echo stub");
     }
     // TLS-108: `perf-bounds` asks `cargo test --no-run` for its test binary (the
@@ -2191,6 +2214,15 @@ fn cdo_gate_skips_speed_only_when_no_product_code_changed() {
 #[cfg(target_os = "linux")]
 const SPEED_STUB: &str = r#"#!/usr/bin/env python3
 import fcntl, json, os, sys, time
+# ENG-110 r2: STUB_IR_DEAD: a server started for cdo-speed's IR rows (the cache on) reads
+# `initialize`, closes its stdin and answers it, so cdo-speed's next write hits a closed pipe
+# (BrokenPipeError, an OSError that is neither CallFailed nor SystemExit).
+if os.environ.get("STUB_IR_DEAD") and os.environ.get("ALSEM_IR_CACHE") == "on":
+    first = json.loads(sys.stdin.readline())
+    os.close(0)
+    print(json.dumps({"jsonrpc": "2.0", "id": first["id"], "result": {}}), flush=True)
+    time.sleep(5)
+    sys.exit(0)
 calls = 0
 def burn(seconds):
     # User time (TLS-111: the clock is cycles per USER second): a pure loop
@@ -3401,6 +3433,22 @@ fn speed_adds_one_flipped_pair_on_a_contradicted_failure() {
         "{text}"
     );
     assert!(text.contains("warm-up, 2 pass(es))"), "{text}");
+}
+
+/// ENG-110 r2: an `OSError` in cdo-speed's IR rows (a dead pipe: the stub's IR server
+/// closes its stdin), after the judged timing, labels the verdict and never fails or stops
+/// the run. Mutation: the catch narrowed to `(CallFailed, SystemExit)` -> red.
+#[cfg(target_os = "linux")]
+#[test]
+fn speed_ir_rows_never_fail_the_verdict() {
+    let dir = tempfile::tempdir().unwrap();
+    let (code, text) = speed_with_stub(dir.path(), "1.0", &[], &[("STUB_IR_DEAD", "1")]);
+    assert_eq!(code, Some(0), "{text}");
+    let v = speed_verdict(&text);
+    assert!(
+        v.starts_with("cdo-speed: PASS") && v.contains("IR ROWS NOT RUN (BrokenPipeError"),
+        "{text}"
+    );
 }
 
 /// ⟨TLS-111 review r1⟩ The extra pair judges EVERY failure in side order, and

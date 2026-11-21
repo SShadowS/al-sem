@@ -35,7 +35,14 @@ pub fn parse_for_build(
     profile: BuildProfile,
     skip_dependencies: bool,
 ) -> BuildParse {
-    parse_for_build_observed(snap, profile, skip_dependencies, None, None)
+    parse_for_build_observed(
+        snap,
+        profile,
+        skip_dependencies,
+        None,
+        None,
+        crate::program::ir_cache::installed(),
+    )
 }
 
 /// [`parse_for_build`], taking each workspace file's tree from `reuse` when it
@@ -48,7 +55,14 @@ pub fn parse_for_build_reusing(
     skip_dependencies: bool,
     reuse: Option<&crate::snapshot::parse::ParseReuse<'_>>,
 ) -> BuildParse {
-    parse_for_build_observed(snap, profile, skip_dependencies, None, reuse)
+    parse_for_build_observed(
+        snap,
+        profile,
+        skip_dependencies,
+        None,
+        reuse,
+        crate::program::ir_cache::installed(),
+    )
 }
 
 /// Counts dependency trees alive at once, for the bound test. Production
@@ -59,14 +73,17 @@ pub(crate) struct LiveTrees {
     pub(crate) peak: std::sync::atomic::AtomicUsize,
 }
 
+/// [`parse_for_build_reusing`] with the IR cache given (production passes the installed
+/// one, read on the calling thread before the pool: ENG-110 spec Design 7) and an optional
+/// tree counter.
 pub(crate) fn parse_for_build_observed(
     snap: &AppSetSnapshot,
     profile: BuildProfile,
     skip_dependencies: bool,
     observe: Option<&LiveTrees>,
     reuse: Option<&crate::snapshot::parse::ParseReuse<'_>>,
+    ir_cache: Option<&crate::program::ir_cache::IrCache>,
 ) -> BuildParse {
-    use rayon::prelude::*;
     use std::sync::atomic::Ordering::SeqCst;
 
     // `OnDemand` keeps the trees of a parse it makes anyway: the build hands
@@ -104,6 +121,12 @@ pub(crate) fn parse_for_build_observed(
                 continue;
             };
             if skip_dependencies {
+                if let Some(c) = ir_cache {
+                    crate::program::ir_cache::counters::Counters::add(
+                        &c.counters.inproc_reused_packages,
+                        1,
+                    );
+                }
                 continue;
             }
             // A source without its text (deferred, S10.1b) would parse to a
@@ -115,15 +138,9 @@ pub(crate) fn parse_for_build_observed(
             );
             #[cfg(test)]
             crate::snapshot::parse::parse_log::record(unit);
-            let per_file: Vec<(PackedFile, Option<ParsedFile>)> = source
-                .files
-                .par_iter()
-                .map(|f| {
-                    let pf = crate::snapshot::parse::parse_file(unit, f);
-                    if let Some(o) = observe {
-                        let now = o.live.fetch_add(1, SeqCst) + 1;
-                        o.peak.fetch_max(now, SeqCst);
-                    }
+            let per_file: Vec<(PackedFile, Option<ParsedFile>)> =
+                // `parse_package` counts each tree as it is made; this callback its drop.
+                crate::program::ir_cache::parse_package(unit, ir_cache, observe, |pf| {
                     let t = timed.then(std::time::Instant::now);
                     let summary =
                         summarize_file(app_ref, pf.provenance.tier, &pf.virtual_path, &pf.file);
@@ -140,8 +157,7 @@ pub(crate) fn parse_for_build_observed(
                         o.live.fetch_sub(1, SeqCst);
                     }
                     (summary, kept)
-                })
-                .collect();
+                });
             let (files, trees): (Vec<_>, Vec<_>) = per_file.into_iter().unzip();
             dep_summaries.push(DepUnitSummary {
                 app: unit.id.clone(),
@@ -173,7 +189,8 @@ pub(crate) fn parse_for_build_observed(
 /// is summarized: the tier holds the summaries already.
 #[must_use]
 pub fn parse_dep_bodies(snap: &AppSetSnapshot) -> Vec<ParsedUnit> {
-    use rayon::prelude::*;
+    // Read on the calling thread, before the pool (ENG-110 spec Design 7).
+    let ir_cache = crate::program::ir_cache::installed();
     crate::big_stack::big_stack_pool().install(|| {
         snap.apps
             .iter()
@@ -189,11 +206,7 @@ pub fn parse_dep_bodies(snap: &AppSetSnapshot) -> Vec<ParsedUnit> {
                 crate::snapshot::parse::parse_log::record(unit);
                 Some(ParsedUnit {
                     app: unit.id.clone(),
-                    files: source
-                        .files
-                        .par_iter()
-                        .map(|f| crate::snapshot::parse::parse_file(unit, f))
-                        .collect(),
+                    files: crate::program::ir_cache::parse_package(unit, ir_cache, None, |pf| pf),
                 })
             })
             .collect()
@@ -263,6 +276,7 @@ pub(crate) mod tests {
                     .into(),
                 tier,
                 content_hash: String::new(),
+                text_digest: None,
             }),
             compilation: CompilationContext::default(),
             declared_deps: vec![],
@@ -485,7 +499,8 @@ codeunit 60002 "Plain Cu"
         };
 
         let live = LiveTrees::default();
-        let parse = parse_for_build_observed(&snap, BuildProfile::LIGHT, false, Some(&live), None);
+        let parse =
+            parse_for_build_observed(&snap, BuildProfile::LIGHT, false, Some(&live), None, None);
         let peak = live.peak.load(SeqCst);
 
         assert!(parse.dep_bodies.is_none(), "Summary keeps no bodies");

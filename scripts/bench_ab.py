@@ -36,7 +36,10 @@ METRICS = ("wall", "psutil_mb", "process_mb", "post_attach_mb")
 def run_one(exe, args, out, name, side, cmd, rnd):
     import psutil
 
-    env = {k: v for k, v in os.environ.items() if not k.startswith("ALSEM_") and k != "C1_CONE_CENSUS"}
+    # ENG-110: the IR cache's variables are kept on purpose (VERIFY is refused in `main`).
+    keep = ("ALSEM_IR_CACHE", "ALSEM_IR_CACHE_DIR", "ALSEM_IR_CACHE_REPORT")
+    env = {k: v for k, v in os.environ.items()
+           if (not k.startswith("ALSEM_") or k in keep) and k != "C1_CONE_CENSUS"}
     env.update(ALSEM_TRACE="1", ALSEM_TRACE_STDERR="1", ALSEM_TRACE_FILE=f"{out}/{name}.trace.json")
     t0 = time.perf_counter()
     with open(f"{out}/{name}.out", "wb") as so, open(f"{out}/{name}.err", "wb") as se:
@@ -126,6 +129,10 @@ def main():
     s = sub.add_parser("summary")
     s.add_argument("log")
     args = ap.parse_args()
+    if args.mode == "run" and os.environ.get("ALSEM_IR_CACHE_VERIFY"):
+        print("bench_ab: ALSEM_IR_CACHE_VERIFY is set: a timed run never verifies (unset it)",
+              file=sys.stderr)
+        return 2
     return run(args) if args.mode == "run" else summary(args.log)
 
 

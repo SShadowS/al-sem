@@ -91,6 +91,9 @@ struct Args {
 }
 
 fn main() -> Result<()> {
+    // ENG-110: the dependency IR cache, for the whole body (its drop writes the report's end
+    // line).
+    let _ir = al_sem::program::ir_cache::install_from_env();
     let args = Args::parse();
 
     // Initialize logging - suppress for JSON output
