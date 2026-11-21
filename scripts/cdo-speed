@@ -87,18 +87,26 @@ Clock and cycles per instruction (TLS-111, docs/superpowers/notes/2026-11-21-tls
 cpu-seconds-on-server1.md). On server1 CPU seconds measure the work times the clock,
 core sharing and core kind, each able to move x2 between the sides of a pass. So
 each call also counts user-mode cycles beside the instructions (per PMU; both fixed
-counters, nothing else is allowed on a PMU, and a kind whose running shares over the
-PMUs do not sum to 100, less perf's truncation to whole percents, is no count) and
+counters, nothing else is allowed on a PMU, and a PMU whose events did not run
+exactly as long, a sign of multiplexing, gives no count: see `perf_counts`) and
 records user and system seconds apart. Per
 side: the clock (user cycles / user seconds, GHz) and cycles per instruction. A judged
 row whose sides' clocks differ beyond CLOCK_BAND is labelled CLOCK, one whose cycles
 per instruction do beyond CPI_BAND, CPI (core sharing, core kind, or a real cache or
-memory change: the label never says which). Labels only: the same limits judge.
-A judged warm-up row that FAILS while its two passes' ratios differ beyond
-CONTRADICTED_SPREAD gets ONE more flipped pair (passes 3 and 4 on fresh servers, each
-side order once more). If each side order's two passes then agree within the same
-band, the geometric mean of all four judges; otherwise the verdict is HOST UNSTABLE
-and the run exits 2 (cannot run), never a PASS. The verdict says when a pair was added.
+memory change: the label never says which). The labels change one thing (owner
+decision q-20261121T025802-abcd2da8, the owner may overrule): a CPU-time failure whose
+row has equal instructions (within INSTR_LIMIT either way) AND a CLOCK or CPI label is
+ADVISORY, printed with its CPU and instruction ratios and the label. A clean clock with
+equal cycles per instruction stays a failure, as do wall and memory failures.
+A judged warm-up row that FAILS (not advisory) while its two passes' ratios differ
+beyond CONTRADICTED_SPREAD gets ONE more flipped pair (passes 3 and 4 on fresh servers,
+each side order once more; each waits for a calm host as passes 1 and 2 do). Then every
+(row, measure) that failed after pass 2 must agree within each side order (passes 1
+and 3, 2 and 4, within the same band), and the geometric mean of all four passes
+judges; a row judged after pass 2 stays judged. If any of them disagrees, the verdict
+is HOST UNSTABLE: the run exits 2 (cannot run), never a PASS. The verdict says when a
+pair was added. speed.json: `verdict` (PASS, FAIL or HOST UNSTABLE, which is in `failed`
+too), `warm_samples` the passes run and `warm_samples_asked` the passes asked.
 
 Output equality (the answer's hash) is reported (a branch may change answers on
 purpose), never judged here: the CDO goldens do that. A call that exits non-zero
@@ -343,18 +351,58 @@ def under_load_label(calm, blocks):
     return ""
 
 
+def row_labels(row):
+    """⟨TLS-111⟩ {"clock": ratio, "cpi": ratio} for the measures of `row` whose
+    two sides differ beyond CLOCK_BAND or CPI_BAND, either way."""
+    out = {}
+    for m, band in (("clock", CLOCK_BAND), ("cpi", CPI_BAND)):
+        r = row.get(m, {}).get("ratio")
+        if r and max(r, 1 / r) > band:
+            out[m] = r
+    return out
+
+
 def clock_cpi_flags(rows):
     """⟨TLS-111⟩ {"clock": [...], "cpi": [...]}: the judged rows (`call xR`) whose
     sides' clock or cycles per instruction differ beyond CLOCK_BAND or CPI_BAND."""
     flags = {"clock": [], "cpi": []}
     for row in rows:
-        if not row["judged"]:
-            continue
-        for m, band in (("clock", CLOCK_BAND), ("cpi", CPI_BAND)):
-            r = row.get(m, {}).get("ratio")
-            if r and max(r, 1 / r) > band:
+        if row["judged"]:
+            for m, r in row_labels(row).items():
                 flags[m].append(f"{row['call']} x{r:.3f}")
     return flags
+
+
+# ⟨TLS-111⟩ Owner decision (kraken, q-20261121T025802-abcd2da8; the owner may
+# overrule): a CPU-time failure is ADVISORY when the row's instructions are equal
+# (within INSTR_LIMIT either way) AND it carries a CLOCK or CPI label: the same
+# work ran at another clock or on shared or other cores. A clean clock with equal
+# cycles per instruction and more CPU is the stall regression instructions miss:
+# that stays a failure, as do wall and memory failures.
+CPU_ADVISORY_QUESTION = "q-20261121T025802-abcd2da8"
+
+
+def cpu_advisory(row):
+    """The advisory text when `row`'s CPU-time failure is advisory, else None."""
+    i = row.get("instr")
+    labels = row_labels(row)
+    if not (i and labels and 1 / INSTR_LIMIT <= i["ratio"] <= INSTR_LIMIT):
+        return None
+    shown = ", ".join(f"{m.upper()} x{r:.3f}" for m, r in labels.items())
+    return (f"{row['call']}: CPU time x{row['cpu']['ratio']:.2f} with instructions "
+            f"x{i['ratio']:.4f} and {shown} (advisory, owner decision {CPU_ADVISORY_QUESTION})")
+
+
+def warm_failures(row):
+    """The limits a judged warm-up row fails, advisory CPU failures left out:
+    [(metric, ratios)]."""
+    out = []
+    if not row["judged"]:
+        return out
+    for m, lim in (("cpu", WARM_CPU_LIMIT), ("wall", WARM_WALL_LIMIT)):
+        if row[m]["ratio"] > lim and not (m == "cpu" and cpu_advisory(row)):
+            out.append((m, row[m]["ratios"]))
+    return out
 
 
 def clock_cpi_label(flags):
@@ -370,10 +418,12 @@ def clock_cpi_label(flags):
     return label
 
 
-def judge_warm(records):
+def judge_warm(records, keep_judged=()):
     """The warm-up's rows: one sample per pass, paired by pass; each ratio the
     geometric mean over the passes (with the flipped ones, a factor k on one and
-    1/k on the other cancels exactly; an arithmetic mean would lean against head)."""
+    1/k on the other cancels exactly; an arithmetic mean would lean against head).
+    `keep_judged`: calls judged after pass 2 stay judged on the extra pair's
+    samples, whatever their base CPU then (TLS-111 review r1)."""
     warm_records = [r for r in records if r["round"] == 0]
     warm_rows, _ = judge([dict(r, round=r["warm_pass"] + 1) for r in warm_records])
     warm_rows = [r for r in warm_rows if r["call"] != "round-total"]
@@ -387,29 +437,32 @@ def judge_warm(records):
         loads = [r["load"] for r in warm_records if r["call"] == row["call"]]
         row["load"] = dict(min=min(loads), max=max(loads))
         row["warm"] = True
-        row["judged"] = row["cpu"]["base"] >= WARM_MIN_SECONDS
+        row["judged"] = (row["cpu"]["base"] >= WARM_MIN_SECONDS
+                         or row["call"] in keep_judged)
     return warm_rows
 
 
-def contradicted(warm_rows):
-    """⟨TLS-111⟩ The judged warm-up rows that fail a limit while their passes
-    disagree beyond CONTRADICTED_SPREAD: [(call, metric, ratios)]."""
-    out = []
-    for row in warm_rows:
-        if not row["judged"]:
-            continue
-        for m, lim in (("cpu", WARM_CPU_LIMIT), ("wall", WARM_WALL_LIMIT)):
-            if row[m]["ratio"] > lim and row[m]["spread"] > CONTRADICTED_SPREAD:
-                out.append((row["call"], m, row[m]["ratios"]))
-    return out
+def failing(warm_rows):
+    """⟨TLS-111⟩ Every judged warm-up (call, metric) that fails, advisory CPU
+    failures left out: [(call, metric, ratios)]."""
+    return [(row["call"], m, rs) for row in warm_rows for m, rs in warm_failures(row)]
 
 
-def same_order_disagree(warm_rows, trigger):
-    """⟨TLS-111⟩ After the extra pair: the triggering (call, metric)s whose two
-    passes of one side order (passes 1 and 3, or 2 and 4) still differ beyond
+def contradicted(fails):
+    """⟨TLS-111⟩ The failures of `failing` whose passes disagree beyond
+    CONTRADICTED_SPREAD (max/min of the ratios): they add the extra pair."""
+    return [(c, m, rs) for c, m, rs in fails
+            if min(rs) <= 0 or max(rs) / min(rs) > CONTRADICTED_SPREAD]
+
+
+def same_order_disagree(warm_rows, fails):
+    """⟨TLS-111⟩ After the extra pair: of EVERY (call, metric) that failed after
+    pass 2 (not only those that added the pair: review r1, sol and Fable, the
+    four-pass mean may clear a failure only where the passes agree), those whose
+    two passes of one side order (passes 1 and 3, or 2 and 4) differ beyond
     CONTRADICTED_SPREAD, as text; empty when every one agrees."""
     out = []
-    for call, m, _ in trigger:
+    for call, m, _ in fails:
         rs = next(r for r in warm_rows if r["call"] == call)[m]["ratios"]
         for i in (0, 1):
             a, b = rs[i], rs[i + 2]
@@ -874,9 +927,6 @@ HYBRID_EVENTS = ("cpu_core/instructions/u", "cpu_core/cycles/u",
                  "cpu_atom/instructions/u", "cpu_atom/cycles/u")
 PLAIN_EVENTS = ("instructions:u", "cycles:u")
 FIXED_KINDS = ("instructions", "cycles")
-# A kind's running shares over its PMUs must sum to 100, less under 1 point per
-# PMU: perf prints each share truncated to a whole percent (93.73 % as 93.00,
-# measured), so two PMUs that ran 93.7 % and 6.3 % read 99.
 # CDO_SPEED_PERF: a test hook, the perf command to run (a stub in the tests).
 PERF = os.environ.get("CDO_SPEED_PERF", "perf")
 
@@ -909,33 +959,38 @@ def perf_counts(text, events=None):
     """{event: count} from `perf stat -x,` output for `events`, or None. An event
     that never ran (a call that stayed on one core type) reads `<not counted>`:
     0. Any other non-number (`<not supported>`), or an event missing, is None.
-    ⟨TLS-111⟩ The running-% column (perf's 5th) is checked per kind: on a hybrid
-    CPU a core type's event is enabled all along but runs only while the task is
-    on that type (67 % and 33 % in TLS-111's unpinned runs, 58 % and 42 % in
-    TLS-83's), so one PMU's share alone says nothing; but with no multiplexing a
-    kind's shares over its PMUs sum to 100 (on one PMU: that PMU's is 100), less
-    perf's truncation to whole percents (under 1 point a PMU). A kind whose
-    shares do not is no count."""
+    ⟨TLS-111⟩ Multiplexing is checked on the running time (perf's 4th column,
+    exact nanoseconds): every event of one PMU must have run exactly as long. On
+    server1 (perf 7.0.14, 2026-11-21) they did in all 20 attached runs of a
+    process starting threads, and in every unforced run; with 16 extra events
+    forcing multiplexing on cpu_core, its instructions ran 261.7 ms and its cycles
+    241.0 ms. The running-% column (5th) is no check: it is running over a
+    per-PMU enabled time, truncated to a whole percent, and the PMUs' shares of
+    one kind summed to 110-125 % on real calls (and to 99 % on `true`), so a sum
+    rule refused 9 of 64 calls in an A/A run on CDO. Not caught: a PMU whose
+    events lose exactly the same time (they are scheduled one by one, so an
+    exact tie is not expected). A `<not counted>` row runs 0 ns beside its
+    sibling's 0. An event's row given twice is no count."""
     events = events or INSTR_EVENTS
     counts, running = {}, {}
     for line in text.splitlines():
         cols = line.strip().split(",")
         if len(cols) > 4 and cols[2] in events:
+            if cols[2] in counts:
+                return None
             if cols[0].isdigit():
                 counts[cols[2]] = int(cols[0])
             elif cols[0] == "<not counted>":
                 counts[cols[2]] = 0
             else:
                 return None
-            try:
-                running[cols[2]] = float(cols[4])
-            except ValueError:
+            if not cols[3].isdigit():
                 return None
+            running[cols[2]] = int(cols[3])
     if set(counts) != set(events):
         return None
-    for kind in {event_kind(e) for e in events}:
-        shares = [running[e] for e in events if event_kind(e) == kind]
-        if not 100.0 - len(shares) < sum(shares) <= 100.01:
+    for pmu in {event_pmu(e) for e in events}:
+        if len({running[e] for e in events if event_pmu(e) == pmu}) != 1:
             return None
     return counts
 
@@ -1491,7 +1546,7 @@ def main():
     peaks = {"base": 0.0, "head": 0.0}
     # ⟨TLS-111⟩ The contradicted warm-up failures that added a flipped pair
     # (`contradicted`), and what still disagreed after it (HOST UNSTABLE).
-    trigger, unstable = [], []
+    trigger, unstable, kept = [], [], set()
     passes = args.warm_samples
     rnd = 0
     try:
@@ -1545,15 +1600,20 @@ def main():
             # (passes 3 and 4, each side order once more, as passes 1 and 2),
             # never one pass (one order voting twice) and never a second pair.
             if p == passes == 2:
-                trigger = contradicted(judge_warm(records))
+                after2 = judge_warm(records)
+                fails2 = failing(after2)
+                trigger = contradicted(fails2)
                 if trigger:
                     passes = 4
+                    kept = {r["call"] for r in after2 if r["judged"]}
                     log("a warm-up failure the passes contradict ("
                         + "; ".join(f"{c} {m} x{'/x'.join(f'{x:.3f}' for x in rs)}"
                                     for c, m, rs in trigger)
                         + f", beyond x{CONTRADICTED_SPREAD}): one more flipped pair")
         if trigger:
-            unstable = same_order_disagree(judge_warm(records), trigger)
+            # Every failure after pass 2 must agree within each side order, or
+            # the four-pass mean could clear one the host decided.
+            unstable = same_order_disagree(judge_warm(records, kept), fails2)
         # HOST UNSTABLE: nothing the rounds measure changes that verdict.
         if not unstable:
             cur = ("rounds", Stalls())
@@ -1588,8 +1648,13 @@ def main():
 
     round_records = [r for r in records if r["round"] > 0]
     rows, noisy = judge(round_records) if round_records else ([], [])
-    warm_rows = judge_warm(records)
-    failed, advisories = [], []
+    warm_rows = judge_warm(records, kept)
+    # `cpu_advisory`: CPU failures made advisory by the owner's decision (TLS-111).
+    failed, advisories, cpu_advisories = [], [], []
+
+    def cpu_fails(row, text):
+        advisory = cpu_advisory(row)
+        (cpu_advisories if advisory else failed).append(advisory or text)
     log(f"verdict, head/base (limits: rounds cpu {CPU_LIMIT} and wall {WALL_LIMIT} on the "
         f"median ratio, warm-up cpu {WARM_CPU_LIMIT} and wall {WARM_WALL_LIMIT}, memory "
         f"{MEM_LIMIT}; a call is judged "
@@ -1628,15 +1693,15 @@ def main():
                               f"(advisory limit {INSTR_LIMIT}{', warm-up' if warm else ''})")
         if warm:
             if c["ratio"] > WARM_CPU_LIMIT:
-                failed.append(f"{row['call']}: CPU time x{c['ratio']:.2f} "
-                              f"(limit {WARM_CPU_LIMIT}, warm-up, {len(c['ratios'])} pass(es))")
+                cpu_fails(row, f"{row['call']}: CPU time x{c['ratio']:.2f} "
+                               f"(limit {WARM_CPU_LIMIT}, warm-up, {len(c['ratios'])} pass(es))")
             if w["ratio"] > WARM_WALL_LIMIT:
                 failed.append(f"{row['call']}: wall time x{w['ratio']:.2f} "
                               f"(limit {WARM_WALL_LIMIT}, warm-up, {len(c['ratios'])} pass(es); "
                               f"lost parallelism?)")
             continue
         if c["ratio"] > CPU_LIMIT:
-            failed.append(f"{row['call']}: CPU time x{c['ratio']:.2f} (limit {CPU_LIMIT})")
+            cpu_fails(row, f"{row['call']}: CPU time x{c['ratio']:.2f} (limit {CPU_LIMIT})")
         if w["ratio"] > WALL_LIMIT:
             failed.append(f"{row['call']}: wall time x{w['ratio']:.2f} (limit {WALL_LIMIT})")
     mem_ratio = peaks["head"] / peaks["base"] if peaks["base"] else 9.9
@@ -1649,17 +1714,29 @@ def main():
     if INSTR_EVENTS:
         shown = [f"{r['call']} x{r['instr']['ratio']:.4f}"
                  for r in warm_rows + rows if r["call"] in ("build", "round-total") and "instr" in r]
-        instr_text = (f"instructions: {', '.join(shown) or 'no call fully counted'}; "
+        # ⟨TLS-111⟩ A row has a ratio only when every call of it was counted on
+        # both sides: say how many calls were, so one uncounted call does not
+        # read as none (an A/A run counted 55 of 64 and said "no call fully counted").
+        n_counted = sum(1 for r in records if r.get("instr"))
+        none_shown = ("no call fully counted" if not n_counted
+                      else "build and round-total not fully counted")
+        instr_text = (f"instructions: {', '.join(shown) or none_shown}; "
                       f"advisory limit x{INSTR_LIMIT}"
-                      f"{', ADVISORY: ' + str(len(advisories)) + ' over' if advisories else ''}")
+                      f"{', ADVISORY: ' + str(len(advisories)) + ' over' if advisories else ''}"
+                      + (f"; {n_counted} of {len(records)} calls counted"
+                         if 0 < n_counted < len(records) else ""))
     else:
         instr_text = "instructions: not counted, CPU and wall only"
-    for line in advisories:
+    for line in advisories + cpu_advisories:
         log(f"ADVISORY (not failing): {line}")
     elapsed = time.monotonic() - t_start
     load_label = under_load_label(calm, blocks)
     flags = clock_cpi_flags(warm_rows + rows)
     label = load_label + SUSPENDS.label() + clock_cpi_label(flags)
+    if cpu_advisories:
+        label += (f" CPU ADVISORY ({len(cpu_advisories)}: equal instructions with a CLOCK or "
+                  f"CPI label, owner decision {CPU_ADVISORY_QUESTION}): "
+                  + "; ".join(cpu_advisories))
     # ⟨TLS-111⟩ The extra pair, said in the verdict (note §5.2).
     if trigger:
         why = "; ".join(f"{c} {m} x{'/x'.join(f'{x:.3f}' for x in rs[:2])}"
@@ -1670,8 +1747,14 @@ def main():
                      else "the same-order passes agree, judged on 4 passes)"))
     under = [i + 1 for i, (_, loaded) in enumerate(calm) if loaded]
     unknown = any(loaded is None for _, loaded in calm) or any(s is None for _, s in blocks)
+    # ⟨TLS-111 review r1⟩ HOST UNSTABLE is in `failed` too, so a reader that
+    # checks `not failed` never takes it for a pass; `verdict` says which.
+    if unstable:
+        failed.append(f"HOST UNSTABLE: the same-order warm-up passes still disagree beyond "
+                      f"x{CONTRADICTED_SPREAD}: {'; '.join(unstable)} (cannot run, exit 2)")
+    verdict = "HOST UNSTABLE" if unstable else "FAIL" if failed else "PASS"
     with open(os.path.join(outdir, "speed.json"), "w") as f:
-        json.dump(dict(base=base_sha, head=head_label, workspace=ws, rounds=rnd,
+        json.dump(dict(verdict=verdict, base=base_sha, head=head_label, workspace=ws, rounds=rnd,
                        limits=dict(cpu=CPU_LIMIT, wall=WALL_LIMIT, mem=MEM_LIMIT,
                                    warm_cpu=WARM_CPU_LIMIT, warm_wall=WARM_WALL_LIMIT,
                                    min_seconds=MIN_SECONDS, warm_min_seconds=WARM_MIN_SECONDS),
@@ -1683,8 +1766,11 @@ def main():
                        stall_shares=dict(blocks),
                        under_load=bool(load_label.startswith(" UNDER")),
                        suspended=[dict(where=w, seconds=s) for w, s in SUSPENDS.seen],
-                       pressure_unknown=unknown, warm_samples=args.warm_samples,
-                       warm_passes=passes, clock_band=CLOCK_BAND, cpi_band=CPI_BAND,
+                       # The warm-up passes run (4 after an extra pair), and
+                       # the passes asked (--warm-samples).
+                       pressure_unknown=unknown, warm_samples=passes,
+                       warm_samples_asked=args.warm_samples,
+                       advisory=cpu_advisories, clock_band=CLOCK_BAND, cpi_band=CPI_BAND,
                        clock_labels=flags["clock"], cpi_labels=flags["cpi"],
                        contradicted_spread=CONTRADICTED_SPREAD,
                        extra_pair=[dict(call=c, metric=m, ratios=rs) for c, m, rs in trigger],
@@ -1697,12 +1783,13 @@ def main():
         f"CPU stall share of this container: {shares_text(blocks)}")
     # ⟨TLS-111⟩ Still contradicted after the extra pair: the host, not the
     # change, decided the timings. Cannot run (exit 2), never a PASS; no rounds ran.
+    # Every failure is printed, a HOST UNSTABLE run's too (a memory failure stays one).
+    for line in failed:
+        log(f"FAIL: {line}")
     if unstable:
         log(f"HOST UNSTABLE{label}; {instr_text}")
         return 2
     if failed:
-        for line in failed:
-            log(f"FAIL: {line}")
         # After the failures, not in parentheses: it must not read as the reason.
         log(f"FAIL{label}; {instr_text}")
         return 1

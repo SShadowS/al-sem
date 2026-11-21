@@ -2168,8 +2168,10 @@ fn cdo_gate_skips_speed_only_when_no_product_code_changed() {
 /// build (a shared counter in `STUB_DIR`): the "second side builds slower
 /// under load" bias of TLS-65, made deterministic. ⟨TLS-111⟩ It publishes user
 /// cycles beside instructions (3e9 per CPU second burned, at a steady clock);
-/// STUB_SLOW_HEAD, STUB_CPI_HEAD, STUB_SECOND_FACTOR and STUB_TESTS_HEAD_BY_PASS
-/// shape head's cost (see the code).
+/// STUB_SLOW_HEAD, STUB_CPI_HEAD, STUB_SYS_HEAD, STUB_SECOND_FACTOR,
+/// STUB_BUILD_HEAD_BY_PASS, STUB_TESTS_HEAD_BY_PASS and
+/// STUB_TESTS_HEAD_SLEEP_BY_PASS shape head's cost, STUB_SLEEP_S both sides'
+/// (see the code).
 #[cfg(target_os = "linux")]
 const SPEED_STUB: &str = r#"#!/usr/bin/env python3
 import fcntl, json, os, sys, time
@@ -2194,6 +2196,8 @@ head = os.path.basename(sys.argv[0]) == "alsem-head"
 # TLS-111: STUB_SLOW_HEAD: head's clock is lower (more CPU, the same cycles);
 # STUB_CPI_HEAD: head needs more cycles (more CPU and cycles, the same clock).
 slow = float(os.environ.get("STUB_SLOW_HEAD", "1")) if head else 1.0
+# STUB_SYS_HEAD's read buffer, 4 MiB touched in every server (equal peak RSS).
+ballast = bytearray(b"\x01") * (1 << 22)
 cpi = float(os.environ.get("STUB_CPI_HEAD", "1")) if head else 1.0
 live = os.path.join(os.environ["STUB_DIR"], "live")
 os.makedirs(live, exist_ok=True)
@@ -2216,25 +2220,56 @@ for line in sys.stdin:
         # TLS-111: the call's CPU seconds at a steady clock; its user cycles
         # follow them at 3 GHz (1e9 for a call that burns nothing).
         burned = 0.0
+        work = 1.0  # head's extra work this call (instructions and cycles both)
         if calls == 1:
-            burned = float(os.environ["STUB_BUILD_S"]) * (1.5 if another_alive() else 1.0) * cpi
+            # TLS-111: STUB_BUILD_HEAD_BY_PASS=f1,f2,...: head's build does f<pass>
+            # times the work in that warm-up pass (3 builds a pass: two timed,
+            # one again, untimed).
+            n = made_before("build")
+            by_pass = os.environ.get("STUB_BUILD_HEAD_BY_PASS")
+            if head and by_pass:
+                work = float(by_pass.split(",")[n // 3])
+            burned = (float(os.environ["STUB_BUILD_S"]) * (1.5 if another_alive() else 1.0)
+                      * work * cpi)
             burn(burned * slow)
             # STUB_HEAD_SLEEP_S (TLS-103): head's build waits this long, wall time
             # with no CPU, as a loaded host stretches it.
             if head:
                 time.sleep(float(os.environ.get("STUB_HEAD_SLEEP_S", "0")))
+                # TLS-111: STUB_SYS_HEAD=x: head's build also spends x times its
+                # CPU seconds in the kernel (reading /dev/zero: no user time).
+                sys_s = burned * float(os.environ.get("STUB_SYS_HEAD", "0"))
+                if sys_s > 0:
+                    # Into `ballast`, which every server holds: a buffer of
+                    # head's own raised its peak RSS (memory x1.35), and 64 KiB
+                    # reads spent ~15 % in user time (a false CLOCK).
+                    fd = os.open("/dev/zero", os.O_RDONLY)
+                    end = os.times().system + sys_s
+                    while os.times().system < end:
+                        os.readv(fd, [ballast])
+                    os.close(fd)
             open(me, "w").close()
         if calls == 6:
             n = made_before("tests")
             # STUB_SECOND_FACTOR: the positional factor (default 1.5).
             factor = float(os.environ.get("STUB_SECOND_FACTOR", "1.5")) if n % 2 == 1 else 1.0
-            # TLS-111: STUB_TESTS_HEAD_BY_PASS=f1,f2,...: head's warm-tests costs
-            # f<pass> (more CPU and cycles) in that warm-up pass.
+            # TLS-111: STUB_TESTS_HEAD_BY_PASS=f1,f2,...: head's warm-tests does
+            # f<pass> times the work (CPU, cycles AND instructions: a real
+            # slowdown, so no CLOCK/CPI label makes it advisory) in that pass.
             by_pass = os.environ.get("STUB_TESTS_HEAD_BY_PASS")
             if head and by_pass:
-                factor *= float(by_pass.split(",")[n // 2])
-            burned = float(os.environ["STUB_BUILD_S"]) * factor * cpi
+                work = float(by_pass.split(",")[n // 2])
+            burned = float(os.environ["STUB_BUILD_S"]) * factor * work * cpi
             burn(burned * slow)
+            # STUB_TESTS_HEAD_SLEEP_BY_PASS=s1,s2,...: head's warm-tests then
+            # waits s<pass> seconds more (wall time only).
+            sleeps = os.environ.get("STUB_TESTS_HEAD_SLEEP_BY_PASS")
+            if head and sleeps:
+                time.sleep(float(sleeps.split(",")[n // 2]))
+        # STUB_SLEEP_S: both sides' judged calls wait this long (wall time only),
+        # so a wall ratio stays steady when load stretches the short CPU burn.
+        if calls in (1, 6):
+            time.sleep(float(os.environ.get("STUB_SLEEP_S", "0")))
         cyc = os.path.join(os.environ["STUB_DIR"], f"cycles.{os.getpid()}")
         done = int(open(cyc).read()) if os.path.exists(cyc) else 0
         with open(cyc, "w") as f:
@@ -2244,8 +2279,8 @@ for line in sys.stdin:
         factor = 1.0
         if head:
             factor = float(os.environ.get("STUB_INSTR_HEAD", "1"))
-            # STUB_INSTR_ZERO_CALL=N: head's N-th call (per server) retires none.
-            if str(calls) == os.environ.get("STUB_INSTR_ZERO_CALL"):
+            # STUB_INSTR_ZERO_CALL=N[,M...]: head's N-th call (per server) retires none.
+            if str(calls) in os.environ.get("STUB_INSTR_ZERO_CALL", "").split(","):
                 factor = 0.0
             # TLS-104: STUB_SUSPEND_CALL=N: the host "sleeps" STUB_SUSPEND_S
             # during head's N-th call (per server): the reading cdo-speed takes
@@ -2258,7 +2293,7 @@ for line in sys.stdin:
         counter = os.path.join(os.environ["STUB_DIR"], f"instr.{os.getpid()}")
         done = int(open(counter).read()) if os.path.exists(counter) else 0
         with open(counter, "w") as f:
-            f.write(str(done + int(1e9 * factor)))
+            f.write(str(done + int(1e9 * factor * work)))
         result = {"structuredContent": {"exitCode": 0, "stdoutText": "ok"}}
     else:
         result = {}
@@ -2290,20 +2325,24 @@ def total(pids, kind="instr"):
             s += int(open(f).read())
     return s
 def lines(n, c):
-    # TLS-111: instructions and cycles per PMU. Attached (not the probe):
-    # STUB_PERF_SPLIT=<share> puts that share of each count on cpu_atom (perf's
-    # running % split the same way, summing to 100: no multiplexing);
-    # STUB_PERF_RUN=<pct> makes the running shares sum to pct (multiplexed).
+    # TLS-111: instructions and cycles per PMU, with perf's running time (ns,
+    # equal for a PMU's events when nothing multiplexes) and running % (as real
+    # perf on a hybrid split: whole percents whose sum passes 100). Attached
+    # (not the probe): STUB_PERF_SPLIT=<share> puts that share of each count on
+    # cpu_atom; STUB_PERF_MUX: cpu_core's cycles ran 10 % shorter than its
+    # instructions (multiplexed).
     probe = "--" in a
     if os.environ.get("STUB_PERF_NONE") and not probe:
         n = c = "<not counted>"
     split = 0.0 if probe else float(os.environ.get("STUB_PERF_SPLIT", "0"))
-    run = 100.0 if probe else float(os.environ.get("STUB_PERF_RUN", "100"))
+    mux = not probe and os.environ.get("STUB_PERF_MUX")
     out = ""
     for pmu, share in (("cpu_core", 1 - split), ("cpu_atom", split)):
         for kind, v in (("instructions", n), ("cycles", c)):
             val = "<not counted>" if share == 0 or isinstance(v, str) else int(round(v * share))
-            out += f"{val},,{pmu}/{kind}/u,1,{run * share:.2f},,\n"
+            ns = int(1e6 * share * (0.9 if mux and pmu == "cpu_core" and kind == "cycles" else 1))
+            pct = 100 if share == 1 else int(120 * share)
+            out += f"{val},,{pmu}/{kind}/u,{ns},{pct:.2f},,\n"
     return out
 if "--" in a:
     sys.stderr.write(lines(1000, 2000))
@@ -2439,7 +2478,9 @@ fn speed_with_stub(
 /// -> "no call fully counted" under a stand-in perf whose counters come up 0.5 s
 /// after `enable` (red; with the delay BEFORE the FIFO open instead, the break
 /// stayed GREEN: the open itself synchronized, so the stub now lags where real
-/// perf does). Restored, green.
+/// perf does). Restored, green. TLS-111 (2026-11-21): the verdict saying "no
+/// call fully counted" whatever the count -> "...; 37 of 40 calls counted)"
+/// beside it (red); restored, green.
 #[cfg(target_os = "linux")]
 #[test]
 fn speed_reports_instructions_and_their_limit_is_advisory() {
@@ -2585,8 +2626,34 @@ fn speed_reports_instructions_and_their_limit_is_advisory() {
     assert_eq!(code, Some(0), "{text}");
     let v = verdict(&text);
     assert!(
-        v.contains("(instructions: build x1.0000; advisory limit x1.02)"),
-        "the round total took a 0: {text}"
+        v.contains("(instructions: build x1.0000; advisory limit x1.02; ")
+            && v.contains(" calls counted)")
+            && !v.contains(" 0 of "),
+        "the round total took a 0, or the count of counted calls is missing: {text}"
+    );
+
+    // TLS-111 (an A/A run counted 55 of 64 calls and said "no call fully
+    // counted"): with head's builds and a round call uncounted, neither summary
+    // ratio exists, and the verdict says how many calls were counted.
+    let dir = tempfile::tempdir().unwrap();
+    let (code, text) = speed_with_stub(
+        dir.path(),
+        "1.0",
+        &[],
+        &[
+            ("CDO_SPEED_INSTR", "1"),
+            ("CDO_SPEED_PERF", perf),
+            ("STUB_INSTR_ZERO_CALL", "1,9"),
+        ],
+    );
+    assert_eq!(code, Some(0), "{text}");
+    let v = verdict(&text);
+    assert!(
+        v.contains(
+            "(instructions: build and round-total not fully counted; advisory limit x1.02; "
+        ) && v.contains(" calls counted)")
+            && !v.contains("no call fully counted"),
+        "{text}"
     );
 
     // Review r1 (sol): a perf that never acks costs each server at most
@@ -2690,8 +2757,13 @@ fn speed_reports_instructions_and_their_limit_is_advisory() {
         ],
     );
     assert_eq!(code, Some(0), "{text}");
+    // TLS-111: the verdict now says how many calls were counted, and a stub perf
+    // still alive when its call is stopped (it exits right after the ack) is
+    // counted now and then (1 of 40 seen): no summary ratio is the claim.
+    let v = verdict(&text);
     assert!(
-        verdict(&text).contains("(instructions: no call fully counted; advisory limit x1.02)"),
+        v.contains("(instructions: no call fully counted; advisory limit x1.02")
+            || v.contains("(instructions: build and round-total not fully counted;"),
         "a perf that ended early was counted: {text}"
     );
 }
@@ -2751,6 +2823,18 @@ fn speed_counts_instructions_with_the_real_perf() {
             && build["clock"].as_f64().is_some_and(|c| c > 0.0),
         "the real perf's cycles were not counted: {build}"
     );
+    // Every call counted (round 1's share-sum rule refused 9 of 64 real calls
+    // in an A/A run on CDO; shares of a hybrid split sum past 100 %).
+    let records = json["records"].as_array().unwrap();
+    let uncounted: Vec<_> = records
+        .iter()
+        .filter(|r| r["instr"].is_null() || r["cycles"].is_null())
+        .map(|r| format!("{} {} r{}", r["call"], r["side"], r["round"]))
+        .collect();
+    assert!(
+        uncounted.is_empty(),
+        "not counted under the real perf: {uncounted:?}"
+    );
 }
 
 /// A stand-in perf (SPEED_PERF_STUB) in its own folder, executable.
@@ -2787,8 +2871,10 @@ fn speed_json(dir: &std::path::Path) -> serde_json::Value {
 /// instruction differ beyond x1.15, never changing the verdict:
 /// - counts split 70/30 over cpu_core and cpu_atom (running 70 % and 30 %, as
 ///   an unpinned call reads): parsed per PMU and summed, no label;
-/// - the same split with running shares summing to 95 % (multiplexed): no call
-///   counted;
+/// - the same split with cpu_core's cycles running 10 % shorter than its
+///   instructions (multiplexed; real perf, forced: 241.0 against 261.7 ms): no
+///   call counted. The stub's running % sums past 100, as real perf's does on
+///   a hybrid split, and counts;
 /// - head's clock x0.83 (STUB_SLOW_HEAD 1.2: more CPU, the same cycles): PASS
 ///   with `CLOCK` and no `CPI`;
 /// - head's cycles per instruction x1.2 (STUB_CPI_HEAD): PASS with `CPI` and no
@@ -2799,13 +2885,13 @@ fn speed_json(dir: &std::path::Path) -> serde_json::Value {
 /// second) read 9-10 GHz, with false CLOCK labels from the user/system split.
 ///
 /// Mutations (2026-11-21): the running-share check in `perf_counts` disabled ->
-/// the 95 % run counted ("a multiplexed count was taken"; red); the CLOCK flags
+/// the 95 % run counted ("a multiplexed count was taken"; red; round 2 replaced
+/// that rule, see `speed_perf_parsing_and_warm_judging`); the CLOCK flags
 /// appended to `failed` -> "a label failed the run" (red); `clock_cpi_flags`
 /// testing `r > band` instead of either way -> no CLOCK on the x0.83 run (red);
 /// `kind_total` summing `cpu_core` only -> the cycles-sum assertion (red). Each
-/// restored, green. Not proven: the clock's divisor being user (not user +
-/// system) seconds; the stub's calls spend almost no system time, so the two
-/// read alike.
+/// restored, green. The clock's divisor (user, not user + system seconds) is
+/// pinned by `speed_cpu_failure_is_advisory_only_with_equal_instructions_and_a_label`.
 #[cfg(target_os = "linux")]
 #[test]
 fn speed_counts_cycles_and_labels_clock_and_cpi() {
@@ -2869,8 +2955,8 @@ fn speed_counts_cycles_and_labels_clock_and_cpi() {
     assert!(build["cpi"].as_f64().is_some_and(|c| c > 0.0), "{build}");
     assert_eq!(json["clock_band"], 1.15, "{json}");
 
-    // Running shares summing to 95 %: multiplexed, no count.
-    let (_dir, code, text) = run(&[("STUB_PERF_SPLIT", "0.3"), ("STUB_PERF_RUN", "95")]);
+    // cpu_core's cycles ran shorter than its instructions: multiplexed, no count.
+    let (_dir, code, text) = run(&[("STUB_PERF_SPLIT", "0.3"), ("STUB_PERF_MUX", "1")]);
     assert_eq!(code, Some(0), "{text}");
     assert!(
         speed_verdict(&text)
@@ -2905,14 +2991,28 @@ fn speed_counts_cycles_and_labels_clock_and_cpi() {
     assert!(!v.contains(" CLOCK:"), "{text}");
 }
 
-/// ⟨TLS-111⟩ Only `instructions` and `cycles`, once each per PMU, reach perf:
-/// both are fixed counters, so nothing multiplexes. Any other event, or one
-/// twice, is refused.
+/// ⟨TLS-111⟩ cdo-speed's perf parsing and warm-up judging, called directly
+/// (the script imported):
+/// - only `instructions` and `cycles`, once each per PMU, reach perf (both are
+///   fixed counters, so nothing multiplexes); any other event, or one twice, is
+///   refused;
+/// - `perf_counts` on REAL perf output (server1, perf 7.0.14): a hybrid split
+///   whose running shares sum to 116 %, a pinned call whose atom rows are
+///   `<not counted>` (0 ns, 0.00), and `true`'s truncated 93 + 6 count; a
+///   multiplexed run (cpu_core's cycles ran 241.0 ms, its instructions 261.7)
+///   and an event's row given twice do not; on one PMU, equal running times
+///   count and unequal ones do not;
+/// - `judge_warm` keeps a row judged after pass 2 judged when the extra pair's
+///   samples pull its median base CPU under the cutoff (review r1, sol).
 ///
-/// Mutation (2026-11-21): the kind check dropped from `perf_event_args` ->
-/// `cpu_core/cache-misses/u` accepted (red); restored, green.
+/// Mutations (2026-11-21): the kind check dropped from `perf_event_args` ->
+/// `cpu_core/cache-misses/u` accepted (red). Round 2: the equal-running-time
+/// check off -> "multiplexed: counted" (red); the duplicate-row check off -> "a
+/// row twice: counted" (red); `judge_warm` ignoring `keep_judged` -> "a row
+/// judged after pass 2 lost its judgment" (red). Each restored, green.
+#[cfg(target_os = "linux")]
 #[test]
-fn speed_perf_events_are_fixed_counters_only() {
+fn speed_perf_parsing_and_warm_judging() {
     let py = r#"
 import importlib.machinery, importlib.util, sys
 loader = importlib.machinery.SourceFileLoader("cdo_speed", sys.argv[1])
@@ -2928,6 +3028,60 @@ for bad in (m.HYBRID_EVENTS + ("cpu_core/cache-misses/u",),
     except ValueError:
         continue
     sys.exit(f"accepted {bad}")
+
+# Real `perf stat --no-scale -x,` output, perf 7.0.14 on server1 (2026-11-21).
+split = (  # attached (-p) to a process starting threads; shares sum to 116 %
+    "9296421848,,cpu_core/instructions/u,1025384631,85.00,,\n"
+    "2696136676,,cpu_core/cycles/u,1025384631,85.00,,\n"
+    "1784288134,,cpu_atom/instructions/u,240884042,31.00,,\n"
+    "539680691,,cpu_atom/cycles/u,240884042,31.00,,\n")
+pinned = (  # on the P-cores only: the atom rows not counted
+    "519833560432,,cpu_core/instructions/u,134502078026,100.00,,\n"
+    "234607557207,,cpu_core/cycles/u,134502078026,100.00,,\n"
+    "<not counted>,,cpu_atom/instructions/u,0,0.00,,\n"
+    "<not counted>,,cpu_atom/cycles/u,0,0.00,,\n")
+truncated = (  # `true`, 93.7 % and 6.3 % printed 93 and 6 (summing to 99)
+    "145690,,cpu_core/instructions/u,2590713,93.00,,\n"
+    "362574,,cpu_core/cycles/u,2590713,93.00,,\n"
+    "0,,cpu_atom/instructions/u,173406,6.00,,\n"
+    "0,,cpu_atom/cycles/u,173406,6.00,,\n")
+muxed = (  # 16 more events on cpu_core force multiplexing: its two differ
+    "2283271690,,cpu_core/instructions/u,261738976,47.00,,\n"
+    "615183361,,cpu_core/cycles/u,240993765,43.00,,\n"
+    "977709388,,cpu_atom/instructions/u,131670406,27.00,,\n"
+    "298829742,,cpu_atom/cycles/u,131670406,27.00,,\n")
+cases = [
+    ("hybrid split", split, True),
+    ("pinned, atom not counted", pinned, True),
+    ("whole-percent truncation", truncated, True),
+    ("multiplexed", muxed, False),
+    ("a row twice", split + "5,,cpu_core/cycles/u,1025384631,85.00,,\n", False),
+]
+for name, text, ok in cases:
+    got = m.perf_counts(text, m.HYBRID_EVENTS)
+    if (got is not None) != ok:
+        sys.exit(f"{name}: {'refused' if ok else 'counted'}: {text!r}")
+if m.perf_counts(split, m.HYBRID_EVENTS)["cpu_atom/cycles/u"] != 539680691:
+    sys.exit("per-PMU count misread")
+plain = "10,,instructions:u,{a},100.00,,\n20,,cycles:u,{b},100.00,,\n"
+if m.perf_counts(plain.format(a=500, b=500), m.PLAIN_EVENTS) is None:
+    sys.exit("one PMU, equal running times, refused")
+if m.perf_counts(plain.format(a=500, b=450), m.PLAIN_EVENTS) is not None:
+    sys.exit("one PMU, unequal running times, counted")
+
+# judge_warm: base CPU 30, 30, then 5, 5 (median 17.5 under the 20 s cutoff).
+recs = []
+for p, (b, h) in enumerate([(30, 40), (30, 20), (5, 6), (5, 4)]):
+    for side, cpu in (("base", b), ("head", h)):
+        recs.append(dict(call="warm-tests", side=side, round=0, warm_pass=p, wall=cpu,
+                         cpu=cpu, sha="", load=1.0))
+two = m.judge_warm(recs[:4])
+if not two[0]["judged"]:
+    sys.exit("judged after pass 2: precondition")
+if m.judge_warm(recs)[0]["judged"]:
+    sys.exit("precondition: the cutoff unjudges it on four passes")
+if not m.judge_warm(recs, {"warm-tests"})[0]["judged"]:
+    sys.exit("a row judged after pass 2 lost its judgment on the extra samples")
 print("ok")
 "#;
     let out = std::process::Command::new("python3")
@@ -2953,7 +3107,10 @@ print("ok")
 ///   same-order passes agree (x1.0/x1.0, x2.0/x1.7): judged on all four (x1.36),
 ///   FAIL, the verdict saying why the pair was added; never a fifth pass;
 /// - 1.0, 2.0, then 1.0, 1.0: passes 2 and 4 still disagree: HOST UNSTABLE,
-///   exit 2, no rounds; cdo-gate's summary shows it on a FAILED speed row;
+///   exit 2, no rounds; speed.json says `verdict` HOST UNSTABLE and lists it in
+///   `failed` (a `not failed` reader never sees a pass); a `FAIL:` line names
+///   it; cdo-gate's summary shows a FAILED speed row, which alone fails the gate
+///   with every other phase green;
 /// - 1.5, 1.5: a failure both passes agree on adds nothing and fails.
 ///
 /// Mutations (2026-11-21): `contradicted` ignoring the spread -> the agreeing
@@ -2962,7 +3119,10 @@ print("ok")
 /// HOST UNSTABLE, exit 2 (red); HOST UNSTABLE's `return 2` dropped -> the
 /// still-disagreeing run PASSes, exit 0, on its four-pass mean x1.19 (red); the
 /// extra pair allowed after pass 4 too (`p == passes >= 2`, `passes += 2`) ->
-/// "warm-up 5 of 6" (red). Each restored, green.
+/// "warm-up 5 of 6" (red). Round 2: HOST UNSTABLE left out of `failed` -> the
+/// `failed` assertion (red); `verdict` from `failed` alone -> "FAIL" (red); the
+/// `FAIL:` lines printed only after the HOST UNSTABLE return -> no "FAIL: HOST
+/// UNSTABLE:" line (red). Each restored, green.
 #[cfg(target_os = "linux")]
 #[test]
 fn speed_adds_one_flipped_pair_on_a_contradicted_failure() {
@@ -2999,7 +3159,9 @@ fn speed_adds_one_flipped_pair_on_a_contradicted_failure() {
         "exactly one pair added: {text}"
     );
     let json = speed_json(dir.path());
-    assert_eq!(json["warm_passes"], 4, "{json}");
+    assert_eq!(json["warm_samples"], 4, "{json}");
+    assert_eq!(json["warm_samples_asked"], 2, "{json}");
+    assert_eq!(json["verdict"], "FAIL", "{json}");
     let tests = json["warm_rows"]
         .as_array()
         .unwrap()
@@ -3034,17 +3196,42 @@ fn speed_adds_one_flipped_pair_on_a_contradicted_failure() {
         !text.contains("cdo-speed: PASS") && !text.contains("round 1:"),
         "{text}"
     );
+    let json = speed_json(dir.path());
     assert!(
-        !speed_json(dir.path())["host_unstable"]
+        !json["host_unstable"].as_array().unwrap().is_empty(),
+        "{json}"
+    );
+    // Never green to a reader of `failed` (review r1, sol and Fable).
+    assert_eq!(json["verdict"], "HOST UNSTABLE", "{json}");
+    assert!(
+        json["failed"]
             .as_array()
             .unwrap()
-            .is_empty()
+            .iter()
+            .any(|f| f.as_str().unwrap().starts_with("HOST UNSTABLE")),
+        "{json}"
     );
-    // cdo-gate's summary: a failed speed row naming it.
+    assert!(text.contains("cdo-speed: FAIL: HOST UNSTABLE: "), "{text}");
+    // cdo-gate's summary: a failed speed row naming it, with every other phase
+    // green: the speed phase alone fails the gate.
     let logs = dir.path().join("logs");
     std::fs::create_dir_all(&logs).unwrap();
     std::fs::write(logs.join("speed.status"), "2 600\n").unwrap();
     std::fs::write(logs.join("speed.log"), text.as_bytes()).unwrap();
+    for phase in [
+        "program_resolve_harness",
+        "lsp",
+        "l4_summary_differential",
+        "lib_cdo",
+        "output_cdo",
+    ] {
+        std::fs::write(logs.join(format!("{phase}.status")), "0 10\n").unwrap();
+        std::fs::write(
+            logs.join(format!("{phase}.log")),
+            "test result: ok. 3 passed; 0 failed; 0 ignored\n",
+        )
+        .unwrap();
+    }
     let out = std::process::Command::new("bash")
         .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-gate"))
         .arg(format!("--summary={}", logs.display()))
@@ -3059,6 +3246,14 @@ fn speed_adds_one_flipped_pair_on_a_contradicted_failure() {
         speed_row.contains("FAILED (2)") && speed_row.contains("HOST UNSTABLE"),
         "{speed_row}"
     );
+    assert_eq!(
+        summary
+            .lines()
+            .filter(|l| l.starts_with("cdo-gate:   ") && l.contains(" ok "))
+            .count(),
+        5,
+        "precondition: every other phase green: {summary}"
+    );
     assert!(!out.status.success(), "{summary}");
 
     // Both passes agree on the failure: nothing added, FAIL.
@@ -3071,6 +3266,202 @@ fn speed_adds_one_flipped_pair_on_a_contradicted_failure() {
         "{text}"
     );
     assert!(text.contains("warm-up, 2 pass(es))"), "{text}");
+}
+
+/// ⟨TLS-111 review r1⟩ The extra pair judges EVERY failure in side order, and
+/// may clear one:
+/// - cross-row: warm-tests triggers (1.0, 2.0) and settles (0.9, 1.8), while the
+///   build failed after pass 2 with agreeing passes (x1.4, x1.4) and reads x0.9
+///   in the extra pair: its four-pass mean (x1.12) would pass it, but its
+///   same-order passes disagree (x1.4/x0.9): HOST UNSTABLE naming the build;
+/// - side order: the stub's positional factor ON (x1.5 for the second of a
+///   pair), head's warm-tests x1.4 in every pass: per-pass ratios ~x2.1, ~x0.93,
+///   ~x2.1, ~x0.93, so passes 3 and 4 agree with 1 and 2 only in the same side
+///   order: FAIL judged on four passes, never HOST UNSTABLE;
+/// - agree, then PASS: 0.9, 2.0 fails (x1.34) with contradicting passes; 0.8, 1.7
+///   agree with them; the four-pass mean x1.25 PASSes, saying the pair was added.
+///
+/// Mutations (2026-11-21, round 2): the same-order check over the triggering
+/// failures only (round 1's code) -> the cross-row run exits 1, not 2 (red);
+/// passes 3 and 4 in the wrong side order (`first` base in passes 1 and 4, the
+/// flip in passes 2 and 3) -> the side-order run reads HOST UNSTABLE, passes 1
+/// and 3 x0.933/x2.073 (red). Each restored, green.
+#[cfg(target_os = "linux")]
+#[test]
+fn speed_extra_pair_judges_every_failure_in_side_order() {
+    let run = |env: &[(&str, &str)]| {
+        let dir = tempfile::tempdir().unwrap();
+        let (code, text) = speed_with_stub(dir.path(), "1.0", &[], env);
+        (dir, code, text)
+    };
+
+    // Cross-row: the build's failure must agree too.
+    let (_dir, code, text) = run(&[
+        ("STUB_SECOND_FACTOR", "1.0"),
+        ("STUB_TESTS_HEAD_BY_PASS", "1.0,2.0,0.9,1.8"),
+        ("STUB_BUILD_HEAD_BY_PASS", "1.4,1.4,0.9,0.9"),
+    ]);
+    assert_eq!(code, Some(2), "{text}");
+    let v = speed_verdict(&text);
+    assert!(
+        v.starts_with("cdo-speed: HOST UNSTABLE") && v.contains("build cpu passes 1 and 3"),
+        "{text}"
+    );
+
+    // Side order: passes 3 and 4 repeat passes 1 and 2's.
+    let (_dir, code, text) = run(&[("STUB_TESTS_HEAD_BY_PASS", "1.4,1.4,1.4,1.4")]);
+    assert_eq!(code, Some(1), "{text}");
+    let v = speed_verdict(&text);
+    assert!(
+        v.starts_with("cdo-speed: FAIL")
+            && v.contains("the same-order passes agree, judged on 4 passes)"),
+        "{text}"
+    );
+
+    // Agree, then PASS on four passes.
+    let (dir, code, text) = run(&[
+        ("STUB_SECOND_FACTOR", "1.0"),
+        ("STUB_TESTS_HEAD_BY_PASS", "0.9,2.0,0.8,1.7"),
+    ]);
+    assert_eq!(code, Some(0), "{text}");
+    let v = speed_verdict(&text);
+    assert!(
+        v.starts_with("cdo-speed: PASS")
+            && v.contains("a failure its passes contradicted beyond x1.25: warm-tests cpu")
+            && v.contains("the same-order passes agree, judged on 4 passes)"),
+        "{text}"
+    );
+    assert_eq!(speed_json(dir.path())["verdict"], "PASS");
+}
+
+/// ⟨TLS-111 review r1⟩ A wall-time failure adds the pair too, and one warm-up
+/// pass never does:
+/// - wall (the stub clock off: wall is the host's; both sides' judged calls wait
+///   1 s, so load on the 0.4 s burn moves a ratio little): head's warm-tests
+///   waits 4 s more in passes 2 and 4 only, CPU equal: wall ~x3.9 against ~x1
+///   fails with contradicting passes; the pair agrees: FAIL on wall, four passes;
+/// - `--warm-samples 1`, head's warm-tests x2.0: FAIL, no pair (one pass has no
+///   second to contradict it).
+///
+/// Mutations (2026-11-21, round 2): `warm_failures` judging CPU only -> no pair
+/// on the wall failure (red); restored, green. The one-pass case has no proof
+/// of its own: the `p == passes == 2` guard is redundant there (one ratio has
+/// no spread, so `contradicted` adds nothing), so no single break turns it red.
+#[cfg(target_os = "linux")]
+#[test]
+fn speed_extra_pair_on_wall_and_never_with_one_pass() {
+    let dir = tempfile::tempdir().unwrap();
+    let (code, text) = speed_with_stub(
+        dir.path(),
+        "1.0",
+        &[],
+        &[
+            ("STUB_SECOND_FACTOR", "1.0"),
+            ("STUB_SLEEP_S", "1"),
+            ("STUB_TESTS_HEAD_SLEEP_BY_PASS", "0,4,0,4"),
+            ("CDO_SPEED_TEST_WALL_IS_CPU", ""),
+        ],
+    );
+    assert_eq!(code, Some(1), "{text}");
+    let v = speed_verdict(&text);
+    assert!(
+        v.contains("contradicted beyond x1.25: warm-tests wall x")
+            && !v.contains("warm-tests cpu x")
+            && v.contains("the same-order passes agree, judged on 4 passes)"),
+        "{text}"
+    );
+    assert!(
+        text.contains("FAIL: warm-tests: wall time x") && text.contains("warm-up, 4 pass(es); "),
+        "{text}"
+    );
+
+    let dir = tempfile::tempdir().unwrap();
+    let (code, text) = speed_with_stub(
+        dir.path(),
+        "1.0",
+        &["--warm-samples", "1"],
+        &[
+            ("STUB_SECOND_FACTOR", "1.0"),
+            ("STUB_TESTS_HEAD_BY_PASS", "2.0"),
+        ],
+    );
+    assert_eq!(code, Some(1), "{text}");
+    assert!(
+        text.contains("FAIL: warm-tests: CPU time x")
+            && !text.contains("one more flipped")
+            && !text.contains("warm-up 2"),
+        "{text}"
+    );
+}
+
+/// ⟨TLS-111⟩ Owner decision (kraken, q-20261121T025802-abcd2da8): a CPU-time
+/// failure is ADVISORY only when the row's instructions are equal (within
+/// x1.02) AND it carries a CLOCK or CPI label; otherwise it stays a failure.
+/// - head needs x1.5 cycles per instruction (STUB_CPI_HEAD): CPU x1.5 with
+///   instructions x1.0000 and CPI x1.5: PASS, "CPU ADVISORY" printing both
+///   ratios and the label, `advisory` in speed.json;
+/// - the same with x1.1 instructions: FAIL (the work changed);
+/// - a clean clock: head's build spends 0.5x its CPU in the kernel
+///   (STUB_SYS_HEAD; user time, cycles and instructions unchanged): CPU x1.5,
+///   no label: FAIL. This also pins the clock's divisor: user + system seconds
+///   would read its clock x0.67, a CLOCK label, and an advisory PASS.
+///
+/// The kernel time is read into a 4 MiB buffer every stub server holds: a
+/// buffer of head's own raised its peak memory x1.35 (a FAIL whatever the
+/// CPU), and 64 KiB reads spent ~15 % in user time (a false CLOCK, x0.85).
+///
+/// Mutations (2026-11-21, round 2): `cpu_advisory` without the label condition
+/// -> the clean clock reads "CPU ADVISORY" (red); without the instruction band
+/// -> the x1.1-instructions run PASSes, exit 0 (red); the clock divided by user
+/// + system seconds -> the clean clock reads CLOCK x0.661 and PASSes, exit 0
+/// (red). Each restored, green.
+#[cfg(target_os = "linux")]
+#[test]
+fn speed_cpu_failure_is_advisory_only_with_equal_instructions_and_a_label() {
+    let bin = tempfile::tempdir().unwrap();
+    let perf = stub_perf(bin.path());
+    let run = |extra: &[(&str, &str)]| {
+        let dir = tempfile::tempdir().unwrap();
+        let mut env = vec![("CDO_SPEED_INSTR", "1"), ("CDO_SPEED_PERF", perf.as_str())];
+        env.extend_from_slice(extra);
+        let (code, text) = speed_with_stub(dir.path(), "1.0", &[], &env);
+        (dir, code, text)
+    };
+
+    let (dir, code, text) = run(&[("STUB_CPI_HEAD", "1.5")]);
+    assert_eq!(code, Some(0), "{text}");
+    let v = speed_verdict(&text);
+    assert!(
+        v.starts_with("cdo-speed: PASS")
+            && v.contains("CPU ADVISORY (")
+            && v.contains("owner decision q-20261121T025802-abcd2da8")
+            && v.contains("build: CPU time x1.")
+            && v.contains("with instructions x1.0000 and CPI x1.500"),
+        "{text}"
+    );
+    let json = speed_json(dir.path());
+    assert!(
+        !json["advisory"].as_array().unwrap().is_empty() && json["verdict"] == "PASS",
+        "{json}"
+    );
+
+    let (_dir, code, text) = run(&[("STUB_CPI_HEAD", "1.5"), ("STUB_INSTR_HEAD", "1.1")]);
+    assert_eq!(code, Some(1), "unequal instructions stay a failure: {text}");
+    assert!(
+        text.contains("FAIL: build: CPU time x1.") && !text.contains("CPU ADVISORY"),
+        "{text}"
+    );
+
+    let (_dir, code, text) = run(&[("STUB_SYS_HEAD", "0.5")]);
+    assert_eq!(code, Some(1), "a clean clock stays a failure: {text}");
+    let v = speed_verdict(&text);
+    assert!(
+        text.contains("FAIL: build: CPU time x1.")
+            && !text.contains("FAIL: peak memory")
+            && !v.contains("CPU ADVISORY")
+            && !v.contains(" CLOCK:"),
+        "{text}"
+    );
 }
 
 /// ⟨TLS-104⟩ A host suspend during a timed call is labelled, never hidden: the
