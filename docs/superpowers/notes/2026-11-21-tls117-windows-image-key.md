@@ -1,11 +1,19 @@
 # TLS-117: the IR cache on Windows (design note)
 
-Status: **rev 2**, after sol's review r1 (`/work/.al-sem/tools-notes/tls117-design-review-sol-r1.md`,
-"hold; native probe first") and the orchestrator's decisions on it. No product code yet; the
-native probe (`examples/tls117_probe.rs`) is the only code. **The cache stays off on Windows until
-the probe passes on a real machine** (section 9).
+Status: **rev 3**, after sol's reviews r1 and r2 (`/work/.al-sem/tools-notes/tls117-design-review-sol-r{1,2}.md`)
+and the orchestrator's decisions on them. No product code yet; the native probe
+(`examples/tls117_probe.rs`) is the only code. **The cache stays off on Windows until the probe
+passes on a real machine** (section 9).
 
-What rev 2 changes: the scope is written out (section 1); the key requires local NTFS and compares
+What rev 3 changes (sol r2): locality is a fixed drive AND NTFS, ReFS stays off (section 3); the
+producer audit is at the C source level, with the reachability list (section 4); the private check
+walks top-down from the volume root, creates only under a checked parent, and all cache I/O uses
+the walk's rooted spelling (section 6); the probe fails a refused or unverified mutation, verifies
+every replacement by file id before the barrier is released, adds explicit POSIX rename-replace,
+MoveFileEx replace and an ancestor-folder replacement, and fixes the P2 gaps (section 8); W8 starts
+from a fresh impact report (section 9).
+
+What rev 2 changed: the scope is written out (section 1); the key requires local NTFS and compares
 raw UTF-16 (section 3); a producer audit replaces "the static CRT is enough" (section 4; it found
 locale-sensitive imports in the tree-sitter runtime); locks move to `std::fs::File` on both
 systems (section 5); the private check covers the whole path, each opened entry and lock file, and
@@ -70,7 +78,7 @@ Sources read on 2026-11-21. "Probe" means no source settles it and the native pr
 | F5 | `\\?\GLOBALROOT` reaches the object manager's root, and `\\?\` sends the rest "straight to the file system". | [Naming Files, Paths, and Namespaces](https://learn.microsoft.com/en-us/windows/win32/fileio/naming-a-file) | Documented; that `CreateFileW` opens such a name is not. Probe W2. |
 | F6 | `GetModuleFileNameW` (and so `std::env::current_exe()`) returns the name "in the same format that was specified when the module was loaded". | [GetModuleFileNameW](https://learn.microsoft.com/en-us/windows/win32/api/libloaderapi/nf-libloaderapi-getmodulefilenamew) | Load-time name; not used. |
 | F7 | An image with relocations is moved to its load address by applying the base difference to every listed field (`IMAGE_REL_BASED_DIR64`); the import table is filled at load. | [PE Format](https://learn.microsoft.com/en-us/windows/win32/debug/pe-format) | Documented. |
-| F8 | windows-sys 0.61 has `K32GetMappedFileNameW` (`Win32_System_ProcessStatus`), `GetModuleHandleExW` (`Win32_System_LibraryLoader`), `GetVolumeInformationByHandleW`, `GetFileInformationByHandleEx`, `GetSecurityInfo` (`Win32_Security_Authorization`), `GetAce`/`EqualSid`/`IsWellKnownSid` (`Win32_Security`). | the crate source in the cargo registry | Checked; the probe compiles against them. |
+| F8 | windows-sys 0.61 has `K32GetMappedFileNameW` (`Win32_System_ProcessStatus`), `GetModuleHandleExW` (`Win32_System_LibraryLoader`), `GetVolumeInformationByHandleW`, `GetFileInformationByHandleEx`, `GetSecurityInfo` and `ConvertSidToStringSidW` (`Win32_Security_Authorization`), `GetAce` (`Win32_Security`), `GetDriveTypeW`, `GetFinalPathNameByHandleW`, `MoveFileExW`, `SetFileInformationByHandle` + `FILE_RENAME_INFO` (`Win32_Storage_FileSystem`). | the crate source in the cargo registry | Checked; the probe compiles against them. |
 
 ### Rejected alternatives
 
@@ -92,14 +100,17 @@ Sources read on 2026-11-21. "Probe" means no source settles it and the native pr
 3. Open `\\?\GLOBALROOT` + that name: read access, sharing **read only** (no write, no delete),
    not following a reparse point. Any failure, including a sharing violation from a conflicting
    handle: no key.
-4. On the opened handle: a regular file (not a directory, not a reparse point), and
-   `GetVolumeInformationByHandleW` names the file system **`NTFS`**. Anything else (ReFS, FAT,
-   a network redirector, `\Device\Mup\...`): no key.
+4. On the opened handle: a regular file (not a directory, not a reparse point) on a **local
+   NTFS** volume, both established positively: `GetVolumeInformationByHandleW` names the file
+   system `NTFS`, and `GetDriveTypeW` on the handle's volume root (the `\\?\Volume{GUID}\` prefix
+   of `GetFinalPathNameByHandleW(.., VOLUME_NAME_GUID)`) is `DRIVE_FIXED`. Anything else (ReFS,
+   FAT, a removable or network drive, `\Device\Mup\...`): no key. ReFS stays off (orchestrator,
+   rev 3).
 5. Hash through that handle (`key_of`, marker search included).
 6. Ask the mapped name again, still holding the handle; it must equal step 2's name UTF-16 unit
    for unit. Otherwise no key.
 
-The cache root's volume gets the same NTFS rule (section 6).
+The cache root's volume gets the same local-NTFS rule (section 6).
 
 **Why it holds, within scope.** From step 3 until the handle closes, nobody can rename, delete or
 write the opened file F (our handle shares neither write nor delete, F2). At step 6 the image's
@@ -119,12 +130,63 @@ and `al-call-hierarchy.exe`.
 ## 4. The producer audit on Windows
 
 Decision Q3: the static CRT alone is not enough. ENG-110's key is only sound while nothing outside
-the image changes how a text parses or decodes.
-On Linux, `scripts/check-ir-image` pins the shared libraries and finds no locale or wide-character
-symbol. The shipped Windows build (`x86_64-pc-windows-msvc`, `+crt-static`) puts the C runtime
-inside the image, which hides CRT calls from an import list. So the audit was done on a
-**mingw cross build** (`x86_64-pc-windows-gnu`, `release-fast`, built here), where the C runtime is
-`msvcrt.dll` and every CRT call shows as an import:
+the image changes how a text parses or decodes. Orchestrator decision (rev 3): **audit at the C
+source level**, which holds whatever compiler and linker build it.
+
+### 4.1 The source-level audit (authoritative)
+
+The C code on the parse path is tree-sitter's runtime (crate `tree-sitter` 0.27.1, `src/lib.c`,
+which includes every runtime `.c`) and the grammar (`tree-sitter-al` `88bb6871`: `src/parser.c`,
+`src/scanner.c`). The lowerer and the IR codec are Rust; their text handling is `core`/`std`
+(table-based `char` methods, UTF-8 decoding), which calls no OS locale API.
+
+**Method.** GCC builds a call graph from the source: `gcc -O0 -fcallgraph-info -c` on `lib.c`,
+`parser.c` and `scanner.c` (one `.ci` file each). A short script
+(`/work/.al-sem/tools-notes/tls117-closure.py`, run as `python3 tls117-closure.py lib.ci
+parser.ci scanner.ci`; it becomes `scripts/check-parse-path-locale` in the product phase) computes every function reachable from the roots below and lists every external callee
+with its call sites.
+
+**Roots** (what al-syntax reaches, as a superset): every `ts_parser_*`, `ts_tree_*`, `ts_node_*`,
+`ts_tree_cursor_*` and `ts_language_*` function, which covers the API al-syntax calls through the
+Rust binding (`Parser::new`, `set_language`, `parse` → `ts_parser_parse_with_options`,
+`Tree::root_node`, the `Node` accessors `kind`, `kind_id`, `grammar_id`, `is_named`, `is_error`,
+`is_missing`, `has_error`, `start_byte`/`end_byte`, `start_position`/`end_position`, `child_count`,
+`child_by_field_name`/`_id`, `field_name_for_child`, `walk` and the cursor's `goto_*`, and
+`Language::node_kind_for_id`/`node_kind_count`/`id_for_node_kind`); plus every function-pointer
+target, because a call graph cannot follow pointers: the allocator defaults
+(`ts_malloc_default`, ...), the lexer callbacks (`ts_lexer__advance`, `__mark_end`,
+`__get_column`, `__eof`, `__is_at_included_range_start`, `__log`), the grammar's lex functions and
+every `tree_sitter_al_external_scanner_*`. **Excluded** (al-syntax never calls them; checked by
+grep over `crates/al-syntax` and `src`): `ts_parser_set_logger`, `ts_parser_logger`,
+`ts_parser_print_dot_graphs`, `ts_tree_print_dot_graph`, `ts_node_string` (`Node::to_sexp`), the
+wasm store, and the whole `ts_query_*` family (`Query`, `QueryCursor`).
+
+**Result.** 212 roots reach 415 defined functions. Their external callees, all of them:
+
+| External callee | Reached from | Locale-sensitive? |
+|-----------------|--------------|-------------------|
+| `malloc`, `calloc`, `realloc`, `free`, `memcpy`, `memmove`, `memset`, `memcmp`, `strcmp`, `strncmp`, `abort`, `__assert_fail` | allocator defaults, arrays, scanner state, `ts_language_symbol_for_name` / `field_id_for_name`, the scanner's keyword tables | No: byte operations. |
+| `snprintf` (44 sites), `vsnprintf` (1) | `ts_parser__advance`, `__lex`, `__recover`, `__reduce`, `__select_tree`, `ts_parser_parse` and others; `ts_lexer__log` | Formatting can be (the decimal point), but every site is inside tree-sitter's `LOG`/`LOG_LOOKAHEAD` macros, which run only `if (self->lexer.logger.log || self->dot_graph_file)` (`parser.c:21-35`), or in `ts_lexer__log`'s `LOG` (`lexer.c:10`, `if (self->logger.log)`). al-syntax sets neither, so none runs; and what they format goes to the log, never into the tree. |
+| `fprintf` (17), `fputc` (11), `fwrite` (33) | the allocator defaults (only on allocation failure, before `abort`), `ts_parser__log`, `ts_stack_print_dot_graph`, `ts_subtree__print_dot_graph`, `ts_language_write_symbol_as_dot_string`, and `LOG_STACK`/`LOG_TREE` in the parser | Same guards (`dot_graph_file`, logger), or the abort path. |
+| an indirect call (522 sites) | the lexer callbacks, the allocator, the scanner and lex functions (all roots above), the logger (guarded), the input-read callback (Rust) | Covered by the roots. |
+
+No `isw*`, `tow*`, `is*`/`to*` classification, `setlocale`, `localeconv`, `strtod`, `strcoll`,
+`mbstowcs`/`wcstombs` or other locale-sensitive CRT function is reachable. The grammar's
+`scanner.c` (including its case-insensitive word reads) calls only `calloc`, `free` and `strcmp`;
+the generated `parser.c` calls nothing external. **Not reachable**: the 65 functions of the query
+parser (`ts_query__parse_pattern`, `stream_*`, which call `iswspace`/`iswalnum`) and
+`ts_subtree__write_to_string` (`isprint`, behind `ts_node_string`).
+
+Windows-only source: `#ifdef _WIN32` code in tree-sitter is `_ts_dup` (for
+`ts_tree_print_dot_graph`, excluded), the `Interlocked*` atomics, and `_fdopen` in
+`ts_parser_print_dot_graphs` (excluded). None touches text.
+
+### 4.2 Supporting evidence: a mingw cross build
+
+The shipped Windows build (`x86_64-pc-windows-msvc`, `+crt-static`) puts the C runtime inside the
+image, which hides CRT calls from an import list. A **mingw cross build** (`x86_64-pc-windows-gnu`,
+`release-fast`, built here) imports the C runtime from `msvcrt.dll`, so every CRT call shows as an
+import. It agrees with 4.1:
 
 ```
 cargo build --target x86_64-pc-windows-gnu --profile release-fast --bin alsem
@@ -150,19 +212,29 @@ found**, each traced to the functions that use it in a second build with symbols
 
 The grammar's own C code (`libtree-sitter-al.a`) imports only `calloc`, `free` and `strcmp`.
 
-**Conclusion.** The Windows parse, lower and codec path calls nothing locale-sensitive. Two
-functions that would be (the query parser and `ts_node_string`) are present in the image but
-unreachable. The shipped MSVC build (`+crt-static`) has the same source and the same reachability;
-its CRT is inside the image, so even a reachable CRT call would be keyed — except where the static
-UCRT itself calls the OS (`GetStringTypeW` for non-ASCII `iswctype`), which is the query parser,
-unreachable.
+The mingw link kept the unreachable query parser (it was in the image with no caller); the Linux
+link dropped it, which is why the Linux check never saw `iswalnum`. That is a linker difference,
+which is why 4.1, not an import list, is the proof.
 
-**To pin it** (product phase): the Windows CI job lists the shipped `alsem.exe`'s imports
-(`dumpbin /imports`) and fails on any of `setlocale`, `_create_locale`, `GetLocaleInfo*`,
-`LCMapString*`, `CompareStringEx`, `CompareStringW`, `GetStringType*`, `FoldString*`. That catches a
-new direct dependency on OS locale data; CRT calls are inside the static image and covered by the
-reachability above. A tree-sitter update that starts calling `ts_query_new` or a logger from the
-parse path is the risk to watch: the lowerer never needs either.
+### 4.3 Conclusion and pins
+
+The Windows parse, lower and codec path calls nothing locale-sensitive, by source. The shipped MSVC
+build compiles the same source, so the same functions are reachable whatever `/OPT:REF` keeps.
+
+Pins (product phase):
+- **`scripts/check-parse-path-locale`** (Linux, beside `scripts/check-ir-image`, run in CI): the
+  call-graph closure of 4.1 over the tree-sitter version in `Cargo.lock` and the grammar commit in
+  use. It fails if any reachable external callee is outside an allow-list (the byte functions
+  above) other than the guarded logging and dot-graph sites, which it lists by function. A
+  tree-sitter or grammar update that adds a locale-sensitive call on the parse path fails it.
+- **The MSVC map listing** (Windows CI job): build `alsem`, `aldump` and `al-call-hierarchy` with
+  `-C link-arg=/MAP` and list every deny symbol found in each map (`setlocale`, `_create_locale`,
+  `localeconv`, `isw*`, `_isw*_l`, `iswctype`, `isprint`, `tow*`, `GetLocaleInfo*`, `LCMapString*`,
+  `CompareStringEx`, `CompareStringW`, `GetStringType*`, `FoldString*`) with the object that
+  defines it. A map says what was linked, not what is reachable, so this list does not fail the
+  job by itself: a human checks each entry against 4.1 (expected: the static UCRT's own copies, and
+  tree-sitter's `lib.obj` if the link keeps the query parser). A failing pin would need
+  reachability, which 4.1's check already gives.
 
 ## 5. Locks: `std::fs::File` on both systems (decision Q4: yes)
 
@@ -200,9 +272,11 @@ Tests for the product change:
 **The rule.** A folder or file is private when, read on its **opened handle**:
 - it is not a reparse point (any tag: junction, symlink, mount point, cloud file, ...);
 - it has a DACL (an absent or null DACL refuses);
-- its owner is the current user, SYSTEM or Administrators;
-- no allow ACE (that applies to the object itself: inherit-only ACEs are skipped) gives a
-  principal other than those three a right in the refused set; deny ACEs are skipped (they only
+- its owner is trusted: the current user, SYSTEM (`S-1-5-18`), Administrators (`S-1-5-32-544`)
+  or TrustedInstaller (`S-1-5-80-956008885-...`, the owner of system folders such as a volume
+  root); SIDs are compared as strings (`ConvertSidToStringSidW`);
+- no allow ACE (that applies to the object itself: inherit-only ACEs are skipped) gives an
+  untrusted principal a right in the refused set; deny ACEs are skipped (they only
   remove rights); **any other ACE type refuses** (object, callback, conditional ACEs are not
   interpreted).
 
@@ -217,7 +291,18 @@ The refused set depends on the role:
 `FILE_ADD_SUBDIRECTORY` on an ancestor is allowed: it lets others add new names, never replace an
 existing one, and `C:\` grants it to Authenticated Users by default.
 
-The volume of the cache folder must be NTFS (`GetVolumeInformationByHandleW`, as for the image).
+The volume must be local NTFS (fixed drive and `NTFS`, as for the image).
+
+**The walk (rev 3, sol r2 P1-2).** A cache folder is opened by a walk **top-down from the volume
+root**: the path must be a drive-letter path with no `.` or `..`; the walk opens `\\?\X:\`, checks
+locality and the chain rights on that handle, then opens each element in turn under the checked
+one, refusing a reparse point before it descends further, and checks it (the last element with the
+folder rights). Each element is opened sharing read and write but **not delete**, so nothing on
+the path can be renamed while the walk holds it. With `create`, a missing element is made only
+under its just-checked parent, then opened and checked like any other. The walk returns the rooted
+spelling `\\?\X:\...\leaf`, and **all cache I/O uses that spelling** (no second resolution through
+the current directory, a drive-relative path or a different case). Entries and lock files are
+checked on the very handles that read, map or lock them.
 
 **Why the whole path, and why not handle-relative opens.** sol P1-2: a private leaf under a
 parent others can change is not private, because the parent's child can be swapped. Two sound
@@ -248,7 +333,10 @@ Tests (product phase):
 - `snapshot::cache::tests::windows_permissive_existing_entry`: in a private folder, an entry with
   an Everyone modify ACE: the read refuses it (and the text cache falls back to owned text).
 - `snapshot::cache::tests::windows_junction_refused`, `windows_open_leaf_refused`.
-- The probe's W6 runs the same rule on the real default root.
+- `snapshot::cache::tests::windows_walk_creates_only_under_checked_parent`: a missing leaf under
+  a parent that fails the rule is not created.
+- The probe's W6 runs the same walk on the real roots: ENG-113's text root, the IR root, and
+  `ALSEM_IR_CACHE_DIR` (or a probe-made override when it is unset).
 
 ## 7. Prune and publish on Windows
 
@@ -278,16 +366,21 @@ the copies as children it drives over stdin. The key sequence in it is a prototy
 
 | Item | What it checks | PASS when |
 |------|----------------|-----------|
-| W0 | the image's and `%LOCALAPPDATA%`'s volumes | both say `NTFS` |
+| W0 | the image's volume, ENG-113's text root, the IR root, and `ALSEM_IR_CACHE_DIR` (or a probe override); for a root not made yet, its deepest existing folder | each is a fixed drive (`GetDriveTypeW`) formatted `NTFS` |
 | W1 name | a child renamed while running reports its mapped name | the name ends in the new file name |
-| W1 race | the child runs the real sequence with barriers after the query, after the open and after the hash; at one barrier the parent (a) renames the image away and puts another file at its name, or (b) renames another file over the image's name; 6 runs | every run reports the original file's hash or "no key", never another hash |
-| W1 links | launch through a hard link; delete (or rename) the launch link and put another file there while the first link survives; launch through an upper-case path; launch through the 8.3 short name (skipped when the volume has none) | every run gives the original hash or no key |
+| W1 rename away + write, MoveFileEx replace, POSIX rename replace, ancestor folder replaced | the child runs the real sequence with barriers after the query, after the open and after the hash; at one barrier the parent mutates; 3 runs per mutation. The image is `<scratch>\dir\a.exe`. Mutations: rename `a.exe` away and write another file at its name; `MoveFileExW(other, a.exe, MOVEFILE_REPLACE_EXISTING)`; `SetFileInformationByHandle(FileRenameInfoEx)` with `FILE_RENAME_FLAG_REPLACE_IF_EXISTS \| FILE_RENAME_FLAG_POSIX_SEMANTICS`; rename `dir` away (not back), make a new `dir` with another `a.exe` | per run: after a successful mutation, **before the barrier is released**, the old name must open a file with a different `FILE_ID_INFO`, else FAIL ("did not take"); then the key must be the original file's hash or none, never another. A refused mutation **FAILs** ("refused mutation"), except after the open, where a sharing violation or access denied is the key's own handle refusing it and is reported as "blocked while the key's handle is held" (the property F2 claims) |
+| W1 hard link | launch through a hard link; delete the launch link (or, if refused, rename it away: both refused FAILs), write another file there (checked), verify its file id differs, while `a.exe` survives | the original hash or no key, before and after |
+| W1 other case | launch through an upper-case spelling | the original hash or no key |
+| W1 8.3 | launch through the short name of a long-named leaf | the original hash or no key; SKIP only with "8.3 disabled on this volume (no short name was made)" |
 | W2 | the whole sequence in the probe itself | the key equals the hash of the probe's file |
-| W3 | while a child runs: open for write, for write+truncate, for `FILE_WRITE_DATA`; rename; delete (recorded) | all three opens fail and the rename succeeds |
-| W4 | a handle with `DELETE` access on the running image; a handle with `FILE_WRITE_DATA` on a plain file | the child makes no key; our read-only-sharing open of the plain file fails with a sharing violation |
-| W5 | `std::fs::File` locks: two handles conflict both ways, `unlock` frees, a killed child's lock is freed | all hold, and the killed holder's lock frees within 10 s (time printed) |
-| W6 | the private rule of section 6 | `%LOCALAPPDATA%`'s chain passes; refused: a leaf Everyone can modify, a private leaf under a parent giving Everyone `FILE_DELETE_CHILD`, a junction, an entry Everyone can modify |
-| W7 | delete a file another handle holds open (sharing delete) | the delete succeeds (whether the name goes at once and whether its folder can then be removed is printed) |
+| W3 | controls first: an ordinary copy opens for write and for write+truncate; then while a child runs: write, write+truncate, `FILE_WRITE_DATA` opens of the image; rename; delete (recorded) | the controls succeed, the three opens fail, the rename succeeds |
+| W4 | a key; then a handle with `DELETE` access held on the running image; then closed; and a `FILE_WRITE_DATA` handle on a plain file | key before; while held, no key with a sharing violation (`os error 32`) in the reason; key after; our read-only-sharing open of the plain file fails with a sharing violation |
+| W5 | `std::fs::File` locks on three handles: shared and exclusive beside an exclusive, exclusive beside two shared (third handle), each `WouldBlock`; explicit `unlock` frees; a killed child's lock is freed | all hold, and the killed holder's lock frees within 10 s (time printed) |
+| W6 | the walk of section 6 on the real roots, creating missing elements under checked parents; a fresh entry and lock file checked on their own handles | the roots pass (rooted spelling printed); the entry and lock pass; refused: a leaf Everyone can modify, a private leaf (passing alone) under a parent giving Everyone `FILE_DELETE_CHILD`, a path through a junction (as a reparse point), an entry Everyone can modify |
+| W7 | delete a file another handle holds open (sharing delete) | the delete succeeds; printed: whether the name went at once (NotFound), is still there (pending), or cannot be read (an access error), and whether its folder could then be removed |
+
+W6 makes the real text root and `ir` under it when missing (as the product's first writer would),
+and removes its own override folder.
 
 Each line is `PASS`, `FAIL` or `SKIP`, with what was seen. The process exits 1 when any item
 fails. The same items are `#[test]`s in the example (the child half is an ignored test the
@@ -319,7 +412,8 @@ clippy shows no warning in the probe for the Windows target or Linux. It has not
    bash scripts/cdo-gate --only output "$CDO_WS"
    # b) a second run: other processes, hits from disk
    bash scripts/cdo-gate --only output "$CDO_WS"
-   # c) impact with every hit verified
+   # c) impact with every hit verified, from a fresh report
+   rm -f target/tls117-impact.jsonl
    ALSEM_IR_CACHE=on ALSEM_IR_CACHE_VERIFY=1 ALSEM_IR_CACHE_REPORT=target/tls117-impact.jsonl \
      ENFORCE_CDO_WS=1 cargo test --profile cdo --test cli output_cdo::cdo_impact
    python scripts/ir-cache-report-check --rule impact target/tls117-impact.jsonl
@@ -333,8 +427,12 @@ clippy shows no warning in the probe for the Windows target or Linux. It has not
 
 ## 10. Open questions
 
-- **Q6.** The NTFS rule refuses ReFS (Dev Drive). Dev Drive is ReFS and is where Microsoft
-  recommends putting build output; ReFS also calls `MmFlushImageSection`, and TLS-109 already
-  handles its 128-bit file ids. Allow ReFS after the probe runs once on a Dev Drive?
-- **Q7.** The locale findings in section 4: accept them as unreachable with the evidence given,
-  or pin them (a Windows import check in CI that fails on a new locale-sensitive import)?
+- **Q6 (closed, rev 3):** ReFS stays off.
+- **Q7 (closed, rev 3):** the audit is at the source level, pinned by
+  `scripts/check-parse-path-locale`, with the MSVC map listing for a human (section 4.3).
+- **Q8.** The probe's mutations that target the running image's own name (MoveFileEx replace,
+  POSIX rename replace) may be refused by Windows at "after-query" because the image section
+  forbids deleting the target. Under rev 3's rule that is a FAIL ("refused mutation"). If the
+  owner run shows exactly that, is a refusal of a replacement OF the running image an acceptable
+  outcome (the replacement cannot happen, so no wrong key can follow), recorded as a fact rather
+  than a failure?
