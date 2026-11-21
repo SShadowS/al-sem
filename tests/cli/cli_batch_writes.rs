@@ -1627,6 +1627,101 @@ fn batch_publishes_a_killed_workers_trace() {
     assert!(w1.starts_with('['), "the killed worker's trace: {stderr}");
 }
 
+/// TLS-109 (review r6): a worker's spool record cut short is never
+/// published. The debug seam `ALSEM_TEST_RECORD_FAILS` cuts every record's
+/// write after half its bytes; the trace name is long, so half its path is
+/// a shorter path in the same folder, a file holding `KEEP`. That file is
+/// untouched, and no trace is published for the workers.
+///
+/// Discrimination (2026-11-21, r7): the record written straight to its
+/// `.to` name (`write_record(&record, ..)`, no temporary name and rename):
+/// fails (the shorter path holds a trace); restored, passes.
+#[cfg(all(unix, debug_assertions))]
+#[test]
+fn batch_never_publishes_a_cut_record() {
+    use std::os::unix::ffi::OsStrExt;
+    let ws = ws_a();
+    let d = tempfile::tempdir().unwrap();
+    let trace = d.path().join(format!("{}.json", "a".repeat(200)));
+    let w0 = std::path::absolute(trace.with_extension("json.w0")).unwrap();
+    let bytes = w0.as_os_str().as_bytes();
+    let half = Path::new(std::ffi::OsStr::from_bytes(&bytes[..bytes.len() / 2])).to_path_buf();
+    assert_eq!(
+        half.parent(),
+        Some(d.path()),
+        "precondition: half is a name in d"
+    );
+    std::fs::write(&half, "KEEP").unwrap();
+    let one =
+        || json!({ "jobs": [job(&["events", "fanout", &ws, "--format", "bad"], None, None)] });
+    let (out, _) = run_manifest_doc(
+        d.path(),
+        &json!({ "batches": [one(), one()] }),
+        None,
+        &[
+            ("ALSEM_TRACE_FILE", trace.to_str().unwrap()),
+            ("ALSEM_TEST_RECORD_FAILS", "1"),
+        ],
+        None,
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(std::fs::read_to_string(&half).unwrap(), "KEEP", "{stderr}");
+    assert!(!w0.exists(), "no record, no publish: {stderr}");
+}
+
+/// TLS-109 (review r6): a relative `core.excludesFile` names a file under the
+/// worktree root, as git takes it, not under the batch's cwd. The
+/// repository sets `core.excludesFile = myignore`; the run starts in another
+/// folder; a stream on `<repo>/myignore` is refused.
+///
+/// Discrimination (2026-11-21, r7): the configured value taken as given
+/// (relative, so against the cwd; `git_toplevel(root).join(..)` dropped):
+/// fails (exit 0, not 3); restored, passes.
+#[test]
+fn batch_protects_a_relative_git_excludes_file() {
+    let repo = tempfile::tempdir().unwrap();
+    let git = |args: &[&str]| {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(repo.path())
+            .args(args)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?}: {out:?}");
+    };
+    git(&["init", "-q"]);
+    git(&["config", "core.excludesFile", "myignore"]);
+    std::fs::create_dir_all(repo.path().join("ws/src")).unwrap();
+    std::fs::write(repo.path().join("ws/app.json"), APP).unwrap();
+    std::fs::write(repo.path().join("ws/src/A.al"), "codeunit 50100 A { }").unwrap();
+    let ignore = repo.path().join("myignore");
+    std::fs::write(&ignore, "target/\n").unwrap();
+    let ws = repo.path().join("ws").to_string_lossy().into_owned();
+    let d = tempfile::tempdir().unwrap();
+    let (out, _) = run_manifest(
+        d.path(),
+        &[
+            job(
+                &["tests", &ws, "--part", "roots", "--file", "src/A.al"],
+                None,
+                None,
+            ),
+            job(
+                &["events", "fanout", &ws_a(), "--format", "bad"],
+                Some(&ignore),
+                None,
+            ),
+        ],
+        Some(d.path()),
+        &[],
+        None,
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(3), "{stderr}");
+    assert_eq!(std::fs::read_to_string(&ignore).unwrap(), "target/\n");
+}
+
 /// TLS-109 (r6): `ALSEM_TRACE_EXIT_AFTER` ends a batch run early; it
 /// publishes the trace first, as the normal end does.
 ///
