@@ -11571,25 +11571,7 @@ codeunit 50104 I implements A.B."IFoo", IBar { }
         ] {
             let (want, got) = (fresh(src), stale(src));
             assert_eq!(want.parse_status, status);
-            // Every call statement's build context, and every routine's.
-            let ctx = |af: &crate::ir::AlFile| {
-                let calls: Vec<_> = af
-                    .ir
-                    .iter_stmts()
-                    .filter_map(|s| match s.kind {
-                        StmtKind::Call(e) => Some(af.ir.preproc_context(e).to_vec()),
-                        _ => None,
-                    })
-                    .collect();
-                let routines: Vec<_> = af.objects[0]
-                    .routines
-                    .iter()
-                    .map(|r| r.preproc_context().to_vec())
-                    .collect();
-                (calls, routines)
-            };
-            assert!(!ctx(&want).0.is_empty(), "the fixture has calls");
-            assert_eq!(ctx(&got), ctx(&want), "{status:?}");
+            assert_eq!(got, want, "{status:?}");
         }
     }
 }

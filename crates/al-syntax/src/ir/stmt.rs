@@ -12,11 +12,13 @@
 
 use super::{BlockId, ExprId, Origin, StmtId};
 
+#[derive(Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Block {
     pub items: Vec<BlockItem>,
     pub origin: Origin,
 }
 
+#[derive(Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum BlockItem {
     Stmt(StmtId),
     Preproc(PreprocGroup),
@@ -30,6 +32,7 @@ pub enum BlockItem {
 /// The lowerer emits a group only when it is a real choice: two or more live
 /// branches, or one with [`Self::falls_through`]. A chain whose single live branch
 /// every build takes is spliced into the enclosing block as plain statements.
+#[derive(Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PreprocGroup {
     /// One `Block` per live branch (`#if`, each `#elif`, `#else`), in source order.
     /// Each block's origin runs from its directive to the next directive.
@@ -41,11 +44,13 @@ pub struct PreprocGroup {
     pub origin: Origin,
 }
 
+#[derive(Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Stmt {
     pub kind: StmtKind,
     pub origin: Origin,
 }
 
+#[derive(Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum StmtKind {
     Assignment {
         target: ExprId,
@@ -107,6 +112,7 @@ pub enum StmtKind {
     Unknown,
 }
 
+#[derive(Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct CaseBranch {
     /// The match value(s) for this branch (`1, 2:` → two patterns).
     pub patterns: Vec<ExprId>,

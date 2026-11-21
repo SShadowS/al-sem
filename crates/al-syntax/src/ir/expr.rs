@@ -5,11 +5,13 @@
 
 use super::{ExprId, MemberOriginId, Origin};
 
+#[derive(Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Expr {
     pub kind: ExprKind,
     pub origin: Origin,
 }
 
+#[derive(Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum ExprKind {
     Identifier(String),
     QuotedIdentifier(String),
@@ -74,6 +76,7 @@ pub enum ExprKind {
     Unknown,
 }
 
+#[derive(Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum Literal {
     Int(String),
     Decimal(String),
@@ -119,20 +122,20 @@ impl ExprKind {
 }
 
 /// `is` / `as`.
-#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum TypeOp {
     Is,
     As,
 }
 
-#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum UnaryOp {
     Not,
     Neg,
     Plus,
 }
 
-#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum BinaryOp {
     Add,
     Sub,

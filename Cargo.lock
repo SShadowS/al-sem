@@ -93,6 +93,7 @@ name = "al-syntax"
 version = "0.1.0"
 dependencies = [
  "cc",
+ "serde",
  "sha2",
  "tree-sitter",
 ]

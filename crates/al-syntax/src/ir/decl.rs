@@ -6,6 +6,7 @@
 
 use super::{BlockId, Origin};
 
+#[derive(Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ObjectDecl {
     pub kind: ObjectKind,
     /// Object number where the grammar provides one (codeunit/table/page/...).
@@ -89,7 +90,7 @@ pub struct ObjectDecl {
 }
 
 /// What declares a [`DatasetItemDecl`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum DatasetItemKind {
     /// A report or report-extension `dataitem(Name; Table)`.
     ReportDataitem,
@@ -103,6 +104,7 @@ pub enum DatasetItemKind {
 /// property is `Some(value)` when every build gives it that value (the AL default
 /// when it is not written) and `None` when `#if` arms give it different values or
 /// the value is not `true`/`false`.
+#[derive(Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct DatasetItemDecl {
     pub kind: DatasetItemKind,
     /// The item name, unquoted, as written.
@@ -123,12 +125,15 @@ pub struct DatasetItemDecl {
 /// One page action declaration (`action(Name) { … }` and its kin, see
 /// [`ObjectDecl::actions`]): the user gesture, what it says to the user, and the
 /// code it runs.
+#[derive(Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ActionDecl {
     /// The action name, unquoted, as written.
     pub name: String,
     /// The raw grammar keyword: `action`, `systemaction`, `fileuploadaction` or
-    /// `customaction`.
-    pub kind: &'static str,
+    /// `customaction`. Encoded as the text; decoding maps it back into that static set
+    /// and refuses any other value (ENG-110).
+    #[serde(deserialize_with = "action_kind_de")]
+    pub kind: ActionKeyword,
     /// `Caption` text(s), one per textually present `#if` arm (see
     /// [`FieldDecl::caption`] for the text rule).
     pub caption: Vec<String>,
@@ -146,8 +151,21 @@ pub struct ActionDecl {
     pub origin: Origin,
 }
 
+/// `&'static str` under a name: serde's derive reads a written `&'static str` field as
+/// borrowed from the input and would demand `'de: 'static` of every container.
+pub type ActionKeyword = &'static str;
+
+/// [`ActionDecl::kind`]'s decoder: the keyword back into its static set.
+fn action_kind_de<'de, D: serde::Deserializer<'de>>(d: D) -> Result<&'static str, D::Error> {
+    let s = <std::borrow::Cow<'de, str> as serde::Deserialize>::deserialize(d)?;
+    ["action", "systemaction", "fileuploadaction", "customaction"]
+        .into_iter()
+        .find(|k| *k == s)
+        .ok_or_else(|| serde::de::Error::custom(format!("unknown action keyword `{s}`")))
+}
+
 /// One comment in the source file, as written (see [`super::AlFile::comments`]).
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SourceComment {
     /// The comment text with its markers (`// x`, `/// x`, `/* x */`).
     pub text: String,
@@ -161,6 +179,7 @@ pub struct SourceComment {
 }
 
 /// One enum `value(<n>; <Name>) { … }` declaration.
+#[derive(Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct EnumValueDecl {
     /// The value name, unquoted, as written.
     pub name: String,
@@ -175,6 +194,7 @@ pub struct EnumValueDecl {
 }
 
 /// A page control section (`part` / `systempart` / `usercontrol`).
+#[derive(Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PageControl {
     pub name: String,
     /// Raw kind: `"part"` / `"systempart"` / `"usercontrol"`.
@@ -185,6 +205,7 @@ pub struct PageControl {
 /// A table `field(<no>; <Name>; <Type>) { ... }` declaration. `data_type` is the raw
 /// type text; `field_class` is `Normal` / `FlowField` / `FlowFilter` (from the
 /// `FieldClass` property); `is_blob_like` flags Blob/Media/MediaSet.
+#[derive(Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct FieldDecl {
     pub number: i64,
     pub name: String,
@@ -221,6 +242,7 @@ pub struct FieldDecl {
 
 /// A single object-level `property` node (`name = value`). `name` is lowercased;
 /// `value` is the raw value text (quotes preserved — the engine strips as needed).
+#[derive(Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ObjectProperty {
     pub name: String,
     pub value: String,
@@ -238,6 +260,7 @@ pub struct ObjectProperty {
 /// A parsed routine attribute (`[EventSubscriber(ObjectType::Codeunit, …)]`).
 /// `name` is the raw attribute name; `raw` the full `attribute_item` text; `args`
 /// the lowered argument exprs (the engine projects each to kind/text/value/…).
+#[derive(Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct AttributeIr {
     pub name: String,
     pub raw: String,
@@ -270,7 +293,9 @@ pub struct AttributeIr {
     pub another_declaration_lacks: bool,
 }
 
-#[derive(Copy, Clone, PartialEq, Eq, Debug, Hash, Ord, PartialOrd)]
+#[derive(
+    Copy, Clone, PartialEq, Eq, Debug, Hash, Ord, PartialOrd, serde::Serialize, serde::Deserialize,
+)]
 pub enum ObjectKind {
     Codeunit,
     Table,
@@ -322,6 +347,7 @@ impl ObjectKind {
     }
 }
 
+#[derive(Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct RoutineDecl {
     pub kind: RoutineKind,
     pub name: String,
@@ -389,7 +415,7 @@ pub struct RoutineDecl {
 pub const REQUEST_PAGE_MEMBER: &str = "RequestPage";
 
 /// [`RoutineDecl`]'s rarely set fields (see [`RoutineDecl::rare`]).
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct RoutineRare {
     /// The NAMED-return-value binding name (`procedure X() Ret: Record Y` — grammar
     /// `_procedure_named_return`'s `return_value` field), unquoted (outer-quote-
@@ -468,7 +494,7 @@ impl RoutineDecl {
     }
 }
 
-#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum RoutineKind {
     Procedure,
     Trigger,
@@ -503,6 +529,7 @@ pub fn shared_type_text(text: &str) -> TypeText {
     })
 }
 
+#[derive(Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Param {
     pub name: String,
     /// `var` (by-reference) parameter.
@@ -511,6 +538,7 @@ pub struct Param {
     pub origin: Origin,
 }
 
+#[derive(Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct VarDecl {
     pub name: String,
     pub ty: Option<TypeText>,
@@ -528,7 +556,7 @@ pub struct VarDecl {
 /// attributes. A label that is not locked can be translated, so its text at run
 /// time may differ from this one; only a `locked` label's text is a constant
 /// (G52). A `TextConst` is never locked.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct LabelValue {
     /// The literal's text. `None` when the value is not a plain `'…'` string
     /// literal (a verbatim `@'…'` string), so nothing can claim to know it. For a
