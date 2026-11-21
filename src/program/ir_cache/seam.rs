@@ -1078,6 +1078,117 @@ mod tests {
         assert_eq!(count(&c, |c| &c.seam_files), 0, "nothing reached the seam");
     }
 
+    /// CDO's dependency units with their mapped text and digests, as an embedded-source
+    /// snapshot of the pinned workspace loads them (ENG-113's text cache, the real one).
+    fn cdo_dependency_units(ws: &Path) -> Vec<AppUnit> {
+        let builder = crate::snapshot::SnapshotBuilder {
+            workspace_root: ws.to_path_buf(),
+            local_providers: vec![],
+        };
+        let (snap, _) = builder
+            .build_with_options(
+                crate::snapshot::DependencySource::Embedded,
+                &crate::program::dep_cache::DepCache::default(),
+            )
+            .expect("CDO snapshot");
+        let deps: Vec<AppUnit> = snap
+            .apps
+            .into_iter()
+            .filter(|u| u.id != snap.workspace_app && u.source.is_some())
+            .collect();
+        assert!(
+            deps.len() >= 10
+                && deps
+                    .iter()
+                    .all(|u| u.source.as_ref().unwrap().text_digest.is_some()),
+            "precondition: CDO's embedded-source dependencies, each mapped with a digest"
+        );
+        deps
+    }
+
+    /// Plan Task 11 (sol r5: any round-trip failure on CDO fails): every CDO dependency file
+    /// goes through a real fill (owned text, round trip, envelope, publish) and a real hit
+    /// (read, envelope, decode) on a temporary root; each pass gives exactly the fresh
+    /// parse, every file is stored, nothing is refused.
+    #[test]
+    fn ir_cache_cdo_decoded_equals_parsed() {
+        let Some(ws) = crate::cdo::cdo_ws_or_enforce() else {
+            return;
+        };
+        let units = cdo_dependency_units(&ws);
+        let tmp = tempfile::tempdir().unwrap();
+        let ir = tmp.path().join("ir");
+        let text = crate::snapshot::cache::cache_dir_path();
+        let (mut files, mut cached_packages) = (0u64, 0u64);
+        for u in &units {
+            let n = u.source.as_ref().unwrap().files.len();
+            files += n as u64;
+            cached_packages += u64::from(n >= SMALL_PACKAGE_MIN_FILES);
+            let off = run(u, None);
+            let cold = IrCache::with_key(ir.clone(), text.clone(), false, KEY);
+            assert!(run(u, Some(&cold)) == off, "{}: cold differs", u.id.name);
+            let warm = IrCache::with_key(ir.clone(), text.clone(), false, KEY);
+            assert!(run(u, Some(&warm)) == off, "{}: warm differs", u.id.name);
+            for c in [&cold, &warm] {
+                assert_eq!(count(c, |c| &c.roundtrip_failed), 0, "{}", u.id.name);
+                assert_eq!(count(c, |c| &c.refused), 0, "{}", u.id.name);
+                assert_eq!(count(c, |c| &c.fill_text_changed), 0, "{}", u.id.name);
+                assert_eq!(count(c, |c| &c.fill_text_unreadable), 0, "{}", u.id.name);
+                assert!(c.counters.balanced(), "{}", u.id.name);
+            }
+            if n >= SMALL_PACKAGE_MIN_FILES {
+                assert_eq!(count(&cold, |c| &c.published_packages), 1, "{}", u.id.name);
+                assert_eq!(count(&warm, |c| &c.disk_hits), n as u64, "{}", u.id.name);
+                assert_eq!(count(&warm, |c| &c.skipped_unstored), 0, "{}", u.id.name);
+            }
+        }
+        println!(
+            "ir_cache CDO: {} packages ({cached_packages} cached), {files} files: cold and warm \
+             equal the fresh parse, no round-trip failure",
+            units.len()
+        );
+        assert!(
+            files > 10_000,
+            "precondition: CDO's ~10,900 dependency files"
+        );
+    }
+
+    /// The CDO set encoded in two thread orders (forward and reversed `par_iter`) gives the
+    /// same bytes for every file: an entry does not depend on which worker parsed what.
+    #[test]
+    fn ir_cache_cdo_encoding_is_deterministic() {
+        let Some(ws) = crate::cdo::cdo_ws_or_enforce() else {
+            return;
+        };
+        let mut files = 0usize;
+        for u in cdo_dependency_units(&ws) {
+            let src = &u.source.as_ref().unwrap().files;
+            let enc = |order: Vec<usize>| -> Vec<(usize, Vec<u8>)> {
+                let mut v: Vec<(usize, Vec<u8>)> =
+                    crate::big_stack::big_stack_pool().install(|| {
+                        order
+                            .into_par_iter()
+                            .map(|i| (i, encode_file(&al_syntax::parse(&src[i].text))))
+                            .collect()
+                    });
+                v.sort_by_key(|(i, _)| *i);
+                v
+            };
+            let forward = enc((0..src.len()).collect());
+            let reverse = enc((0..src.len()).rev().collect());
+            for ((i, a), (_, b)) in forward.iter().zip(&reverse) {
+                assert!(
+                    a == b,
+                    "{} {}: bytes differ",
+                    u.id.name,
+                    src[*i].virtual_path
+                );
+            }
+            files += src.len();
+        }
+        assert!(files > 10_000, "precondition: CDO's dependency files");
+    }
+
     /// The switch: `on`/`off` in any case; anything else is off and warned (sol/Fable r1).
     #[test]
     fn the_switch_accepts_only_on_and_off() {

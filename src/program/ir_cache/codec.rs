@@ -56,8 +56,14 @@ pub(crate) mod test_hook {
     }
 
     pub(super) fn on_decode(mut f: AlFile) -> AlFile {
-        if f.objects.first().is_some_and(|o| o.name == ALIAS_ON_DECODE)
-            && let Some(r) = f.objects[0].routines.first_mut()
+        if f.objects
+            .first()
+            .is_some_and(|o| o.name == ALIAS_ON_DECODE)
+            // A `procedure` (it has an anonymous alias id); a trigger's kind may have none.
+            && let Some(r) = f.objects[0]
+                .routines
+                .iter_mut()
+                .find(|r| r.origin.kind_text() == "procedure")
         {
             r.origin = alias_of(&r.origin).expect("the routine origin's kind has an alias id");
         }
