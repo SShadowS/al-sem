@@ -247,6 +247,7 @@ run_build() { require_grammar || return 1; cargo build --profile "$GATE_PROFILE"
 # Test hook: CI_STEPS_PERF_BOUNDS_BIN, a binary run instead of the built test
 # (no build); CI_STEPS_CPU_PRESSURE_FILE, a file read instead of the cgroup's
 # cpu.pressure; CDO_HOST_SUSPENDED_FILE as scripts/host-suspended reads it.
+# test-hooks: CI_STEPS_PERF_BOUNDS_BIN CI_STEPS_CPU_PRESSURE_FILE
 PERF_BOUNDS_LOADED_SHARE=15
 
 # "<stall total, µs> <source>": this cgroup's CPU stall (`some total=`), else the

@@ -4,7 +4,8 @@ Refreshes the lock heartbeat every `beat_every` seconds while the child runs,
 enforces a timeout by killing the whole process tree, and writes stdout+stderr
 to a log file whose path is returned with the exit code. The environment is
 sanitized: REGEN_TEMP_GOLDENS is removed (a verification must never
-regenerate), TREE_SITTER_AL_PATH set, and
+regenerate), so are BASH_ENV/ENV, CDO_GATE_NO_SPEED and every declared test
+hook (`declared_test_hooks`), TREE_SITTER_AL_PATH set, and
 CARGO_TARGET_DIR set when the caller names one.
 """
 from __future__ import annotations
@@ -24,7 +25,41 @@ from .state import Ctx
 # BASH_ENV / ENV (TLS-63 review r1, sol): a startup file a non-interactive bash
 # runs before the gate script, so one with `exit 0` would turn any gate green
 # under its exact command. No gate needs one.
-DROP_ENV = ("REGEN_TEMP_GOLDENS", "AGENTFLOW_NOW", "BASH_ENV", "ENV")
+DROP_ENV = ("REGEN_TEMP_GOLDENS", "AGENTFLOW_NOW", "BASH_ENV", "ENV",
+            # ⟨TLS-113⟩ An operator's speed skip is not the gate's: a gate run
+            # here runs the whole of it (cmd_gate refuses the variable outright).
+            "CDO_GATE_NO_SPEED")
+
+SCRIPTS = Path(__file__).resolve().parents[1]
+
+
+def script_tuple(script: str, name: str) -> tuple[str, ...]:
+    """The string tuple `name = (...)` assigned at the top level of the Python
+    script `scripts/<script>`, read with `ast` (the script is not run)."""
+    import ast
+    tree = ast.parse((SCRIPTS / script).read_text(), script)
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and any(getattr(t, "id", None) == name for t in node.targets):
+            return tuple(ast.literal_eval(node.value))
+    raise LookupError(f"scripts/{script} assigns no {name}")
+
+
+def declared_test_hooks() -> tuple[str, ...]:
+    """⟨TLS-113⟩ Every test hook the gate scripts declare: cdo-speed's
+    `TEST_HOOKS`, and each script's `# test-hooks: NAME...` lines. A real gate
+    sets none: scripts/land refuses to start with one set, and a gate run here
+    never passes one on."""
+    names = set(script_tuple("cdo-speed", "TEST_HOOKS"))
+    for path in sorted(SCRIPTS.iterdir()):
+        if path.is_file():
+            try:
+                text = path.read_text()
+            except UnicodeDecodeError:
+                continue
+            for line in text.splitlines():
+                if line.startswith("# test-hooks:"):
+                    names.update(line.split(":", 1)[1].split())
+    return tuple(sorted(names))
 
 
 @dataclass
@@ -57,7 +92,8 @@ def contended(log_text: str) -> bool:
 
 def sanitized_env(base: dict, tree_sitter_path: str | None,
                   cargo_target_dir: str | None = None) -> dict:
-    env = {k: v for k, v in base.items() if k not in DROP_ENV}
+    drop = set(DROP_ENV) | set(declared_test_hooks())
+    env = {k: v for k, v in base.items() if k not in drop}
     if tree_sitter_path:
         env["TREE_SITTER_AL_PATH"] = tree_sitter_path
     if cargo_target_dir:
