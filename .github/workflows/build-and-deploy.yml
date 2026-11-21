@@ -157,6 +157,11 @@ jobs:
           TREE_SITTER_AL_PATH: ${{ github.workspace }}/tree-sitter-al
         run: cargo build --profile release-ship --no-default-features --bin alsem
 
+      # ENG-110: the IR cache keys on the running image; the shipped alsem must carry the
+      # image marker and need only libc and libgcc_s, with no locale symbols.
+      - name: Check IR cache image
+        run: scripts/check-ir-image target/release-ship/alsem
+
       # The shipped Linux binaries must run on glibc 2.34 (e.g. Ubuntu 22.04).
       # A runner-image upgrade can raise the floor silently; fail here instead.
       - name: Check glibc floor

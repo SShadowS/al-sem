@@ -228,7 +228,17 @@ run_task_affected() {
 # Note: docs/superpowers/notes/2026-11-12-gate-release-build.md.
 GATE_PROFILE=release-fast
 
-run_build() { require_grammar || return 1; cargo build --profile "$GATE_PROFILE"; }
+# ⟨ENG-110⟩ The built `alsem` must be a self-contained producer with the IR image
+# marker (scripts/check-ir-image), on Linux, where the IR cache is on.
+run_build() {
+    require_grammar || return 1
+    cargo build --profile "$GATE_PROFILE" || return 1
+    if [[ "$(uname -s)" == Linux ]]; then
+        local top
+        top="${CARGO_TARGET_DIR:-$(git rev-parse --show-toplevel)/target}"
+        "$(dirname "$0")/check-ir-image" "$top/$GATE_PROFILE/alsem"
+    fi
+}
 
 # ⟨TLS-108⟩ `perf_bounds` asserts wall-time bounds, so a build beside it fails a
 # correct tree (2026-11-20: two landings failed here while a lane built two

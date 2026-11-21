@@ -47,6 +47,7 @@ dependencies = [
  "lru",
  "lsp-server",
  "lsp-types",
+ "memchr",
  "memmap2",
  "mimalloc",
  "notify",

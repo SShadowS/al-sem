@@ -80,6 +80,8 @@ postcard = { version = "1", features = ["use-std"] }
 # Hashing (R0 identity encoders and snapshot content identity)
 sha2 = "0.11"
 blake3 = { version = "1" }
+# ENG-110: the IR cache key's marker scan over the running image (already in the lock).
+memchr = "2"
 # Keyed hashing (1B.3b Task 1: domain-separated anonymization of CDO goldens —
 # HMAC over sha2, NOT a fixed salt; see src/program/resolve/anon.rs).
 hmac = "0.13"
