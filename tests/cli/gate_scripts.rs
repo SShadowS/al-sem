@@ -3710,9 +3710,13 @@ fn speed_cpu_advisory_needs_covering_counts_and_a_cpu_only_failure() {
 /// ⟨TLS-111 review r3, S2⟩ A rounds row's CPU failure is advisory only when
 /// EVERY round over the limit is explained by itself: equal instructions, its
 /// counts covering the call, its wall within WALL_LIMIT (1.3) and its own CPU
-/// ratio x clock ratio within CPU_LIMIT (1.2). Every round call burns 0.5 s
-/// (STUB_ROUND_BURN_S), so the round total (3 s a side) is judged; three rounds;
-/// head's factors per round in STUB_ROUND_HEAD (slow:cpi):
+/// ratio at equal clocks within CPU_LIMIT (1.2). Every round call burns 0.4 s
+/// (STUB_ROUND_BURN_S), so the round total (2.4 s a side, over MIN_SECONDS 2)
+/// is judged; three rounds; head's factors per round in STUB_ROUND_HEAD
+/// (slow:cpi). The four runs go in parallel (each its own folder, slot and
+/// stub servers; the stub clock makes wall its CPU, so contention moves no
+/// ratio): 258 s alone (206 s in the suite) became 30 s alone, with burns of
+/// 0.4 s for 0.5 s (0.4 is the smallest that keeps the round total judged).
 /// - all three at a lower clock (1.25:1): CPU x1.25, x1.0 at equal clocks, wall
 ///   x1.25: the round total is advisory, PASS;
 /// - round 1 at more cycles per instruction (1:1.25), rounds 2 and 3 at a lower
@@ -3729,7 +3733,8 @@ fn speed_cpu_advisory_needs_covering_counts_and_a_cpu_only_failure() {
 /// the rounds' advisory wall limit taken as the warm-up's 1.6 -> "CPU
 /// ADVISORY" on the x1.35 wall run (red); the round total's `covered` from
 /// `any` record instead of `all` -> "an uncovered round call let the round
-/// total be advisory" (red). Each restored, green.
+/// total be advisory" (red). Each restored, green. Round 5 (parallel runs, 0.4 s
+/// burns): all three redone, each red again, restored, green.
 #[cfg(target_os = "linux")]
 #[test]
 fn speed_cpu_advisory_judges_every_round_by_itself() {
@@ -3741,7 +3746,7 @@ fn speed_cpu_advisory_judges_every_round_by_itself() {
             ("CDO_SPEED_INSTR", "1"),
             ("CDO_SPEED_PERF", perf.as_str()),
             ("STUB_SECOND_FACTOR", "1.0"),
-            ("STUB_ROUND_BURN_S", "0.5"),
+            ("STUB_ROUND_BURN_S", "0.4"),
             ("STUB_ROUND_HEAD", head),
         ];
         env.extend_from_slice(extra);
@@ -3759,7 +3764,22 @@ fn speed_cpu_advisory_judges_every_round_by_itself() {
             && !text.contains("CPU ADVISORY")
     };
 
-    let (dir, code, text) = run("1.25:1,1.25:1,1.25:1", &[]);
+    let cases: [(&str, &[(&str, &str)]); 4] = [
+        ("1.25:1,1.25:1,1.25:1", &[]),
+        ("1:1.25,1.25:1,1.25:0.8", &[]),
+        ("1.35:1,1.35:1,1.35:1", &[]),
+        ("1.25:1,1.25:1,1.25:1", &[("STUB_UNCOVER_CALL", "9")]),
+    ];
+    let results: Vec<_> = std::thread::scope(|s| {
+        let runs: Vec<_> = cases
+            .iter()
+            .map(|&(head, extra)| s.spawn(move || run(head, extra)))
+            .collect();
+        runs.into_iter().map(|r| r.join().unwrap()).collect()
+    });
+    let mut results = results.into_iter();
+
+    let (dir, code, text) = results.next().unwrap();
     assert_eq!(code, Some(0), "{text}");
     assert!(
         speed_verdict(&text).contains("CPU ADVISORY (1: ")
@@ -3777,23 +3797,89 @@ fn speed_cpu_advisory_judges_every_round_by_itself() {
     .unwrap();
     assert_eq!(json["verdict"], "PASS", "{json}");
 
-    let (_dir, code, text) = run("1:1.25,1.25:1,1.25:0.8", &[]);
+    let (_dir, code, text) = results.next().unwrap();
     assert!(
         fails_with_no_advisory(code, &text),
         "medians of different rounds combined: {text}"
     );
 
-    let (_dir, code, text) = run("1.35:1,1.35:1,1.35:1", &[]);
+    let (_dir, code, text) = results.next().unwrap();
     assert!(
         fails_with_no_advisory(code, &text) && text.contains("FAIL: round-total: wall time x1."),
         "{text}"
     );
 
-    let (_dir, code, text) = run("1.25:1,1.25:1,1.25:1", &[("STUB_UNCOVER_CALL", "9")]);
+    let (_dir, code, text) = results.next().unwrap();
     assert!(
         fails_with_no_advisory(code, &text) && text.contains("NOT COVERED"),
         "an uncovered round call let the round total be advisory: {text}"
     );
+}
+
+/// ⟨TLS-111 review r4⟩ The CPU ratio at equal clocks scales head's USER time
+/// only (the clock is user cycles per user second), and its size matters, not
+/// only its sign. The stub clock is off (both sides' judged calls wait 2 s,
+/// STUB_SLEEP_S, so wall stays far under 1.6 whatever the CPU), positional
+/// factor off; both must FAIL:
+/// - head's clock x0.5 (STUB_SLOW_HEAD 2) plus kernel time of 0.45x its base
+///   work on the build (STUB_SYS_HEAD; sol's case): CPU x2.45; scaling user and
+///   system by the clock would read x1.23 and waive; user only reads x1.45;
+/// - head's clock x0.83 (STUB_SLOW_HEAD 1.2) with x1.4 cycles per instruction:
+///   CPU x1.68, x1.4 at equal clocks: a lower clock that explains only part of
+///   the excess. (Fable suggested 1.17 and 1.35: 1/1.17 is x0.855, under 2 % from
+///   the 15 % CLOCK band, so the label itself could flicker on /proc ticks.)
+///
+/// Mutations (2026-11-21, round 5): head's user and system time both scaled by
+/// the clock (review r4's blocker) -> "user time only: the build was waived",
+/// that case alone (red); a sign-only check (`clock ratio < 1` in place of the
+/// CPU ratio at equal clocks within the limit) -> both cases waived, "the size"
+/// included (red). Each restored, green.
+#[cfg(target_os = "linux")]
+#[test]
+fn speed_cpu_advisory_scales_user_time_only_and_by_size() {
+    let bin = tempfile::tempdir().unwrap();
+    let perf = stub_perf(bin.path());
+    let run = |extra: &[(&str, &str)]| {
+        let dir = tempfile::tempdir().unwrap();
+        let mut env = vec![
+            ("CDO_SPEED_INSTR", "1"),
+            ("CDO_SPEED_PERF", perf.as_str()),
+            ("STUB_SECOND_FACTOR", "1.0"),
+            ("STUB_SLEEP_S", "2"),
+            ("CDO_SPEED_TEST_WALL_IS_CPU", ""),
+        ];
+        env.extend_from_slice(extra);
+        let (code, text) = speed_with_stub(dir.path(), "1.0", &[], &env);
+        (dir, code, text)
+    };
+    let cases: [&[(&str, &str)]; 2] = [
+        &[("STUB_SLOW_HEAD", "2.0"), ("STUB_SYS_HEAD", "0.45")],
+        &[("STUB_SLOW_HEAD", "1.2"), ("STUB_CPI_HEAD", "1.4")],
+    ];
+    let results: Vec<_> = std::thread::scope(|s| {
+        let runs: Vec<_> = cases
+            .iter()
+            .map(|&extra| s.spawn(move || run(extra)))
+            .collect();
+        runs.into_iter().map(|r| r.join().unwrap()).collect()
+    });
+    // Every case is checked before the test fails, so a break shows each one.
+    let waived: Vec<String> = ["user time only", "the size"]
+        .iter()
+        .zip(&results)
+        .filter(|(_, (_dir, code, text))| {
+            let v = speed_verdict(text);
+            !(*code == Some(1)
+                && text.contains("FAIL: build: CPU time x")
+                && !text.contains("FAIL: build: wall")
+                && v.contains(" CLOCK: ")
+                && !v.contains("build: CPU time x"))
+        })
+        .map(|(what, (_dir, _code, text))| {
+            format!("{what}: the build was waived (or the case did not hold): {text}")
+        })
+        .collect();
+    assert!(waived.is_empty(), "{}", waived.join("\n\n"));
 }
 
 /// ⟨TLS-104⟩ A host suspend during a timed call is labelled, never hidden: the

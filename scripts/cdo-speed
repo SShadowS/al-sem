@@ -98,7 +98,8 @@ per instruction on equal instructions is what a cache or memory-stall regression
 like. The CLOCK label changes one thing (owner decision q-20261121T025802-abcd2da8, the
 owner may overrule; narrowed in TLS-111 review r3): a CPU-ONLY failure (the row's wall
 passes) with equal instructions (within INSTR_LIMIT either way) is ADVISORY when head's
-LOWER clock explains it: CPU ratio x clock ratio (head/base) within the CPU limit, and in
+LOWER clock explains it: the CPU ratio at equal clocks, (head user x clock ratio + head
+sys) / base CPU with clock ratio head/base, within the CPU limit, and in
 a rounds row for every round over the limit by itself. It is printed with its CPU ratio,
 the clock-corrected ratio and the instruction ratio. A clock in head's favour never
 waives; wall and memory failures always fail. A count whose counters did not run for
@@ -390,9 +391,13 @@ def clock_cpi_flags(rows):
 # - a CLOCK label on the row, from counts that cover the call (`covers`);
 # - instructions equal (within INSTR_LIMIT either way);
 # - the row's wall passes (a CPU-ONLY failure);
-# - the clock explains the excess: CPU ratio x clock ratio (head/base GHz, below
-#   1 when head ran slower) within the CPU limit. A clock in head's favour (above
-#   1) makes it larger, so it never waives;
+# - the clock explains the excess: the CPU ratio at equal clocks is within the
+#   CPU limit. The clock is user cycles per USER second, so only head's user time
+#   is scaled (review r4, sol): (head user x clock ratio + head sys) / (base user
+#   + base sys), clock ratio = head/base GHz, below 1 when head ran slower. A
+#   clock in head's favour (above 1) makes it larger, so it never waives. Per
+#   pair (`judge`'s `corrected`): a warm-up row takes the geometric mean over its
+#   passes, as its other ratios do;
 # - for a rounds row, every round whose CPU ratio is over the limit meets the
 #   instruction, wall and clock-corrected conditions by itself (medians taken
 #   from different rounds may not combine; review r3, S2).
@@ -404,24 +409,24 @@ CPU_ADVISORY_QUESTION = "q-20261121T025802-abcd2da8"
 
 def cpu_advisory(row):
     """The advisory text when `row`'s CPU-time failure is advisory, else None."""
-    i, c = row.get("instr"), row.get("clock")
+    i, c, k = row.get("instr"), row.get("clock"), row.get("corrected")
     warm = row.get("warm", False)
     cpu_limit = WARM_CPU_LIMIT if warm else CPU_LIMIT
     wall_limit = WARM_WALL_LIMIT if warm else WALL_LIMIT
-    if not (i and c and "clock" in row_labels(row)) or row["wall"]["ratio"] > wall_limit:
+    if not (i and c and k and "clock" in row_labels(row)) or row["wall"]["ratio"] > wall_limit:
         return None
-    # (CPU, instructions, clock, wall) ratios: the warm-up row's judged (geometric
-    # mean) ratios, or each over-limit round of a rounds row.
+    # (CPU, instructions, CPU at equal clocks, wall) ratios: the warm-up row's
+    # judged (geometric mean) ratios, or each over-limit round of a rounds row.
     if warm:
-        samples = [(row["cpu"]["ratio"], i["ratio"], c["ratio"], row["wall"]["ratio"])]
+        samples = [(row["cpu"]["ratio"], i["ratio"], k["ratio"], row["wall"]["ratio"])]
     else:
-        samples = [s for s in zip(row["cpu"]["ratios"], i["ratios"], c["ratios"],
+        samples = [s for s in zip(row["cpu"]["ratios"], i["ratios"], k["ratios"],
                                   row["wall"]["ratios"]) if s[0] > cpu_limit]
-    for cpu, ir, cr, w in samples:
+    for cpu, ir, corrected, w in samples:
         if not (1 / INSTR_LIMIT <= ir <= INSTR_LIMIT and w <= wall_limit
-                and cpu * cr <= cpu_limit):
+                and corrected <= cpu_limit):
             return None
-    corrected = row["cpu"]["ratio"] * c["ratio"]
+    corrected = k["ratio"]
     return (f"{row['call']}: CPU time x{row['cpu']['ratio']:.2f}, x{corrected:.2f} at equal "
             f"clocks (CLOCK x{c['ratio']:.3f}), with instructions x{i['ratio']:.4f} "
             f"(advisory, owner decision {CPU_ADVISORY_QUESTION})")
@@ -463,7 +468,7 @@ def judge_warm(records, keep_judged=()):
     warm_rows, _ = judge([dict(r, round=r["warm_pass"] + 1) for r in warm_records])
     warm_rows = [r for r in warm_rows if r["call"] != "round-total"]
     for row in warm_rows:
-        for m in ("cpu", "wall", "instr", "clock", "cpi"):
+        for m in ("cpu", "wall", "instr", "clock", "cpi", "corrected"):
             if m not in row:
                 continue
             ratios = row[m]["ratios"]
@@ -1411,11 +1416,14 @@ def timed_call(server, side, cid, tool, args, rnd, warm_pass, tag, records):
 #   most 0.6 % apart on 12 s, 0.021 s below 3 s, one 0.009 s tick on 0.05 s;
 # - CDO, an A/A run of f7da9a93 (/work/.al-sem/tools-notes/tls111/aa3): on the
 #   39 calls above 1 s, running minus CPU was -0.5 % to +2.7 %, and every build
-#   and warm-tests call (the multi-threaded ones) read +2.5 to +2.7 % (build
-#   184.41 s running against 179.63 s CPU); calls at or below 1 s were within
-#   -25 to +22 ms. The +2.5-2.7 % is probably /proc's tick sampling against
-#   perf's exact times on many threads: a guess, not a measured cause. A
+#   and warm-tests call (the multi-threaded ones) read +2.2 to +2.7 % (+2.23 to
+#   +2.66 %; build 184.41 s running against 179.63 s CPU); calls at or below 1 s
+#   were within -25 to +22 ms. The excess is probably /proc's tick sampling
+#   against perf's exact times on many threads: a guess, not a measured cause. A
 #   two-sided 2 % band refused all 8 of those calls.
+# The one-sided band's cost: on a multi-threaded call that reads about +2.5 %, a
+# real coverage loss of up to about 4.7 % still passes. That moves its clock by
+# under 5 %, against the 15 % CLOCK band, so it cannot flip an advisory alone.
 # A running time above CPU x COVER_CAP + COVER_ABS is no loss but is odd (perf
 # counting something /proc does not): no count either. The cap is x1.10, about
 # four times the largest excess seen on CDO. An uncovered count only loses its
@@ -1505,6 +1513,16 @@ def judge(records):
                           head=statistics.median(b[k][m] for k in paired),
                           ratio=statistics.median(ratios), ratios=ratios,
                           spread=(max(ratios) / min(ratios)) if min(ratios) > 0 else 9.9)
+        # ⟨TLS-111 review r4, sol⟩ The CPU ratio at equal clocks, per pair: the
+        # clock is user cycles per USER second, so only head's user time is
+        # scaled by the clock ratio (head/base); its system time is not:
+        # (head user x clock ratio + head sys) / (base user + base sys).
+        if "clock" in counted and all(
+                r.get("user") is not None and r.get("sys") is not None and r["cpu"] > 0
+                for k in paired for r in (a[k], b[k])):
+            ratios = [(b[k]["user"] * b[k]["clock"] / a[k]["clock"] + b[k]["sys"])
+                      / (a[k]["user"] + a[k]["sys"]) for k in paired]
+            row["corrected"] = dict(ratio=statistics.median(ratios), ratios=ratios)
         row["judged"] = row["cpu"]["base"] >= MIN_SECONDS
         rows.append(row)
         # Undecided: the rounds disagree about the verdict (some ratios over
