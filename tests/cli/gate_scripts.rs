@@ -1930,9 +1930,25 @@ fn ci_steps_all_runs_and_judges_the_agentflow_suite() {
     }
     // TLS-108: `perf-bounds` asks `cargo test --no-run` for its test binary (the
     // JSON artifact line); the stub names `/bin/true`.
+    // TLS-113: the stand-in lists the one timing test the temp repo's
+    // tests/perf_bounds.rs declares, as `perf-bounds` now checks before it runs.
+    std::fs::create_dir_all(repo.join("tests")).unwrap();
+    std::fs::write(
+        repo.join("tests/perf_bounds.rs"),
+        "mod release_checks {\n    #[test]\n    fn t() {}\n}\n",
+    )
+    .unwrap();
+    let perf = bin.join("perf-bounds-stand-in");
+    exe(
+        perf.clone(),
+        r#"[ "$1" = --list ] && [ "$4" != --ignored ] && echo "release_checks::t: test"; exit 0"#,
+    );
     exe(
         bin.join("cargo"),
-        r#"case " $* " in *" --no-run "*) echo '{"profile":{"test":true},"target":{"name":"perf_bounds"},"executable":"/bin/true"}' ;; esac; exit 0"#,
+        &format!(
+            r#"case " $* " in *" --no-run "*) echo '{{"profile":{{"test":true}},"target":{{"name":"perf_bounds"}},"executable":"{}"}}' ;; esac; exit 0"#,
+            perf.display()
+        ),
     );
     exe(
         bin.join("python3"),
