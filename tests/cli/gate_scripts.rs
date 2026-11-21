@@ -2220,6 +2220,9 @@ for line in sys.stdin:
         # TLS-111: the call's CPU seconds at a steady clock; its user cycles
         # follow them at 3 GHz (1e9 for a call that burns nothing).
         burned = 0.0
+        # Wall-only seconds this call declares (`stubSleptS`): cdo-speed's stub
+        # clock adds them to the call's CPU, so wall is exact under any host load.
+        slept = 0.0
         work = 1.0  # head's extra work this call (instructions and cycles both)
         zero_instr = False
         if calls == 1:
@@ -2240,7 +2243,9 @@ for line in sys.stdin:
             b_sys = float(os.environ.get("STUB_SYS_HEAD", "0"))
             spec = os.environ.get("STUB_BUILD_HEAD_PASS")
             if head and spec:
-                b_slow, b_cpi, b_sys = map(float, spec.split(",")[n // 3].split(":"))
+                # An extra pair (passes 3 and 4) repeats passes 1 and 2.
+                passes = spec.split(",")
+                b_slow, b_cpi, b_sys = map(float, passes[(n // 3) % len(passes)].split(":"))
             burned = (float(os.environ["STUB_BUILD_S"]) * (1.5 if another_alive() else 1.0)
                       * work * b_cpi)
             burn(burned * b_slow)
@@ -2277,7 +2282,7 @@ for line in sys.stdin:
             # waits s<pass> seconds more (wall time only).
             sleeps = os.environ.get("STUB_TESTS_HEAD_SLEEP_BY_PASS")
             if head and sleeps:
-                time.sleep(float(sleeps.split(",")[n // 2]))
+                slept += float(sleeps.split(",")[n // 2])
         # TLS-111 review r3: STUB_ROUND_BURN_S=s: every round call (the 8th call
         # on: both servers of the last pass have made 7) burns s seconds, so the
         # round total (6 calls) is judged; STUB_ROUND_HEAD=slow:cpi,... gives
@@ -2297,7 +2302,7 @@ for line in sys.stdin:
         # STUB_SLEEP_S: both sides' judged calls wait this long (wall time only),
         # so a wall ratio stays steady when load stretches the short CPU burn.
         if calls in (1, 6):
-            time.sleep(float(os.environ.get("STUB_SLEEP_S", "0")))
+            slept += float(os.environ.get("STUB_SLEEP_S", "0"))
         cyc = os.path.join(os.environ["STUB_DIR"], f"cycles.{os.getpid()}")
         done = int(open(cyc).read()) if os.path.exists(cyc) else 0
         with open(cyc, "w") as f:
@@ -2337,7 +2342,7 @@ for line in sys.stdin:
                 if state in ("Z", "X"):
                     break
                 time.sleep(0.01)
-        result = {"structuredContent": {"exitCode": 0, "stdoutText": "ok"}}
+        result = {"structuredContent": {"exitCode": 0, "stdoutText": "ok", "stubSleptS": slept}}
     else:
         result = {}
     print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": result}), flush=True)
@@ -3450,15 +3455,18 @@ fn speed_extra_pair_judges_every_failure_in_side_order() {
 
 /// ⟨TLS-111 review r1⟩ A wall-time failure adds the pair too, and one warm-up
 /// pass never does:
-/// - wall (the stub clock off: wall is the host's; both sides' judged calls wait
-///   1 s, so load on the 0.4 s burn moves a ratio little): head's warm-tests
-///   waits 4 s more in passes 2 and 4 only, CPU equal: wall ~x3.9 against ~x1
-///   fails with contradicting passes; the pair agrees: FAIL on wall, four passes;
+/// - wall (the stub clock: wall is each call's CPU plus the seconds the stub
+///   declares, `stubSleptS`; real sleeps here once read 3.92 s for 1.4 s under a
+///   peer's CDO gate): both sides' judged calls declare 1 s, and head's
+///   warm-tests 4 s more in passes 2 and 4 only, CPU equal: wall x3.9 against
+///   x1 fails with contradicting passes; the pair agrees: FAIL on wall, four
+///   passes;
 /// - `--warm-samples 1`, head's warm-tests x2.0: FAIL, no pair (one pass has no
 ///   second to contradict it).
 ///
 /// Mutations (2026-11-21, round 2): `warm_failures` judging CPU only -> no pair
-/// on the wall failure (red); restored, green. The one-pass case has no proof
+/// on the wall failure (red); restored, green; redone with declared sleeps
+/// (round 6), red again, restored, green. The one-pass case has no proof
 /// of its own: the `p == passes == 2` guard is redundant there (one ratio has
 /// no spread, so `contradicted` adds nothing), so no single break turns it red.
 #[cfg(target_os = "linux")]
@@ -3473,7 +3481,6 @@ fn speed_extra_pair_on_wall_and_never_with_one_pass() {
             ("STUB_SECOND_FACTOR", "1.0"),
             ("STUB_SLEEP_S", "1"),
             ("STUB_TESTS_HEAD_SLEEP_BY_PASS", "0,4,0,4"),
-            ("CDO_SPEED_TEST_WALL_IS_CPU", ""),
         ],
     );
     assert_eq!(code, Some(1), "{text}");
@@ -3826,9 +3833,10 @@ fn speed_cpu_advisory_judges_every_round_by_itself() {
 
 /// ⟨TLS-111 review r4⟩ The CPU ratio at equal clocks scales head's USER time
 /// only (the clock is user cycles per user second), and its size matters, not
-/// only its sign. The stub clock is off (both sides' judged calls wait 2 s,
-/// STUB_SLEEP_S, so wall stays far under 1.6 whatever the CPU), positional
-/// factor off; both must FAIL:
+/// only its sign. Under the stub clock both sides' judged calls declare 2 s of
+/// wall-only time (STUB_SLEEP_S, `stubSleptS`), so wall stays far under 1.6
+/// whatever the CPU and whatever the host's load; positional factor off; all
+/// must FAIL:
 /// - head's clock x0.5 (STUB_SLOW_HEAD 2) plus kernel time of 0.45x its base
 ///   work on the build (STUB_SYS_HEAD; sol's case): CPU x2.45; scaling user and
 ///   system by the clock would read x1.23 and waive; user only reads x1.45;
@@ -3849,7 +3857,8 @@ fn speed_cpu_advisory_judges_every_round_by_itself() {
 /// CPU ratio at equal clocks within the limit) -> both cases waived, "the size"
 /// included (red). Each restored, green. Round 6 (review r5): the `clock ratio
 /// < 1` condition dropped -> "mixed passes: the build was waived" alone, as
-/// "build: CPU time x1.42, x1.21 at equal clocks (CLOCK x1.248)" (red);
+/// "build: CPU time x1.42, x1.21 at equal clocks (CLOCK x1.248)" (red); and
+/// again under the declared-sleep stub clock, x1.41, x1.20, CLOCK x1.295 (red);
 /// restored, green.
 #[cfg(target_os = "linux")]
 #[test]
@@ -3863,7 +3872,6 @@ fn speed_cpu_advisory_scales_user_time_only_and_by_size() {
             ("CDO_SPEED_PERF", perf.as_str()),
             ("STUB_SECOND_FACTOR", "1.0"),
             ("STUB_SLEEP_S", "2"),
-            ("CDO_SPEED_TEST_WALL_IS_CPU", ""),
         ];
         env.extend_from_slice(extra);
         let (code, text) = speed_with_stub(dir.path(), "1.0", &[], &env);

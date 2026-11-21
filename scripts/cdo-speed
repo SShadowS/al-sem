@@ -210,6 +210,9 @@ TEST_HOOKS = ("CDO_SPEED_WARM_MIN_SECONDS", "CDO_SPEED_LOADAVG_FILE", "CDO_SPEED
 # taken to be its CPU time. A stub server burns exact CPU, but its wall time is
 # the host's, so under load a stub run could fail its wall limit (x1.78 against
 # 1.6, TLS-103) whatever the test meant to check. A real gate never sets it.
+# A stub may add wall-only seconds it declares as `stubSleptS` in its answer
+# (TLS-111 review r5: tests of wall-time rules failed when a peer's CDO gate
+# stretched real stub sleeps by seconds); `alsem` never sends that field.
 TEST_WALL_IS_CPU = os.environ.get("CDO_SPEED_TEST_WALL_IS_CPU") == "1"
 
 
@@ -1160,7 +1163,9 @@ class Server:
             self.last_user_sys = (u1 - u0, s1 - s0)
             cpu = (u1 - u0) + (s1 - s0)
             if TEST_WALL_IS_CPU:
-                wall = cpu
+                # Plus the wall-only seconds a stub declares (TLS-111 review r5).
+                stub = r.get("result", {}).get("structuredContent", {})
+                wall = cpu + float(stub.get("stubSleptS", 0) or 0)
         finally:
             parsed = self.instr_stop(perf)
             self.last_counts = parsed and parsed[0]
