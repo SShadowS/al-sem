@@ -381,10 +381,13 @@ fn recordref_guard_answers(source: &str) {
     assert_eq!(doc["answer"], "yes", "precondition: {doc}");
 
     // An entry reaches the guard through the global's Duplicate() and the
-    // Variant's GetTable alike: the write cannot run. `CalcDisc` putting its
-    // own Doc back after the guard adds no table.
+    // Variant's GetTable alike, so the write cannot run in fact. ENG-145's
+    // sound rule loses that: the handler's global and the Variant parameter may
+    // be kept by code the routine cannot see, so a call that may run user code
+    // before the guard may rebind them (`yes`). Winning it back soundly
+    // (interprocedural escape analysis) is ENG-159.
     let entry = prove("PrintEntry");
-    assert_eq!(entry["answer"], "no", "{entry}");
+    assert_eq!(entry["answer"], "yes", "{entry}");
 
     // Rebinding the RecordRef after it went into the global rebinds the
     // global too (`RecRefFilter := RecRef` shares it): it may hold a Doc.
@@ -402,7 +405,9 @@ fn recordref_guard_answers(source: &str) {
     assert_eq!(event["answer"], "yes", "{event}");
 
     // G43: `if not (R.Number in [Database::"RG Doc", Database::"RG Log"]) then
-    // exit;` lets a Doc through and stops an Entry.
+    // exit;` lets a Doc through and stops an Entry. The RecordRef is taken from the
+    // Variant before any call that may run user code, and the RecordRef flow reads
+    // it at its position (ENG-159 Part A), so the sound rule no longer loses this.
     let set_doc = prove("PrintDocFromSet");
     assert_eq!(set_doc["answer"], "yes", "precondition: {set_doc}");
     let set_entry = prove("PrintEntryFromSet");
@@ -446,7 +451,9 @@ fn a_branch_on_the_variants_table_rebinds_it_only_for_that_table() {
     let approval = prove("FromApproval");
     assert_eq!(approval["answer"], "yes", "precondition: {approval}");
 
-    // A batch takes neither branch on any round: the log is not written.
+    // A batch takes neither branch on any round, so the log is not written in
+    // fact; ENG-145's sound rule loses that (a Variant parameter may be kept
+    // elsewhere and rebound by the loop's calls): `yes` until ENG-159.
     let batch = prove("FromBatch");
-    assert_eq!(batch["answer"], "no", "{batch}");
+    assert_eq!(batch["answer"], "yes", "{batch}");
 }

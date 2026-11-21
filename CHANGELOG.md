@@ -262,6 +262,161 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Master's damaged 190-fingerprint schema-1 file, updated by this branch at the default
     scope: all 190 kept, the 2,109 shown findings added (2,299), written as schema 2.
 
+### Fixed (ENG-159: a record kept elsewhere may be rebound by user code — the sound rule, with reads at their position)
+
+- **Release note: this change makes `prove` and `impact` slower, and lands with cdo-speed's
+  failure accepted.** On CDO against master `1d3b08e2` (cdo-speed, 2026-11-21): `prove` costs
+  x2.45 instructions (CPU x2.26; ~260e9 per call against 50-113e9), so cdo-speed fails on
+  `prove` and on the round total (CPU x2.05); every other call stays within x1.07, peak memory
+  x0.97. `alsem impact` costs x1.76 instructions (its JSON 31 -> 60 MB). Why accepted: it is the
+  sound rule's own cost (owner: "a wrong answer is worse than a stated limit"). More values are
+  "anything", so each literal-reach query's search stops less often (measured below:
+  `prove.reach_effects` 2.0 -> 23.4 s on IssueReminder, 12.0 -> 35.2 s on RunReportID, whose
+  answer is unchanged; the RecordRef flow's build is 2-3 s on both sides). The implementation's
+  own waste is removed (measured below). ENG-161's escape facts are to win the precision, and
+  with it this time, back.
+- **The bug.** A RecordRef or Variant shares one record handle with every alias of it (BC 28.4,
+  ENG-145's note), and an alias may live where the routine cannot see it: a SingleInstance store
+  that kept the caller's RecordRef (`G := R`) and rebinds it later (`G.GetTable(L)`). A routine
+  that called anything (or wrote a record whose trigger calls the store) between binding its
+  RecordRef and branching on `R.Number` read a table the record no longer held: a definite `no`
+  that could be wrong (sol, review round 2 on ENG-145: `Store.Rebind(); if A.Number <> … then
+  exit;`).
+- **The rule** (owner decision, q-20261120T060657: "a wrong answer is worse than a stated limit").
+  A holder that may share a record with code the routine cannot see (a parameter, a global, a
+  call's result, a holder already passed to a call that may keep it) may hold anything after a
+  place that may run user code. Those places (`recref_alias::user_code_points`) are the calls
+  `may_run_user_code` says yes for, and the record operations that fire a trigger or a table
+  event (`Insert`, `Modify`, `Delete`, `Rename`, `ModifyAll`, `DeleteAll`, `Validate`, `Init`):
+  record operations in the IR, never call sites, which a call-site scan missed (Fable on
+  ENG-159 Part B). Every reader takes it: the flow's facts, its exit guards (G34), the field
+  guard (G36), and both of `record_types`' temp passes (Fable's N2 on ENG-160).
+- **Measured on BC 28.4** (`docs/superpowers/notes/2026-11-20-eng159-trigger-rebind.md`): a
+  write's own trigger or table-event subscriber cannot move the record the write targets. When it
+  rebinds the handle through a kept alias, `Modify` fails ("The record is not open.") and
+  `Insert` crashes the platform (`ObjectDisposedException`); neither writes another table. So the
+  field guard keeps a guarded write's own guard and ends it only for what runs after it (a write
+  in a loop ends it before: a later iteration runs after it). Without this, G36 would end at every
+  guarded write, its whole purpose, for any parameter or global RecordRef.
+- **Reads at their position** (the former Part A, brought in because the rule alone cost more):
+  in a loop-free routine a copy (`RR.GetTable(V)`, `A := B`) and a call's argument read what
+  reaches them (the source's entry value and the facts before), not the routine's union; an
+  argument does not include its own call's write-back. The G34 exit guards read no entry value
+  once any member of the variable's alias class (every parameter and global it may share a
+  record with: `Twice(R, R)`'s `B.GetTable(L)` rebinds `A`), or a user-code place while it may
+  be kept, binds it before the guard: positional reads made both shapes reachable.
+- **"Kept elsewhere" is an input.** `RecRefFlow::new` takes `KeptElsewhere`: production passes
+  `AnyExternal` (the rule above), and a caller that knows states `Nothing`. ENG-161's escape
+  facts will compute it per holder. ENG-18's depth-cutoff test states `Nothing` for its store-less
+  fixture, and its roots read `V` after the chain (reads at their position no longer nest for an
+  argument read before its call). Its proof: one `EvalState` shared across evaluations (the
+  pre-ENG-18 shape) turns it red.
+- **The cost on CDO** (`/work/src/cdo-baseline/Cloud` at `bc3ccb18`; master `fca2b558`;
+  cdo-before-after and `explain`, 2026-11-20):
+
+  | | master | the rule alone | the rule + reads at their position (this change) |
+  |---|---|---|---|
+  | findings, fingerprints, detectors (both scopes) | 2306 / 32429 | unchanged | unchanged |
+  | IssueReminder: may write | 201 tables | 422 | 422 |
+  | IssueReminder: literal arguments rule out | 274 tables (108 rows) | 0 (37 rows) | 0 (37 rows) |
+  | RunReportID: may write | 416 tables | 416 | 416 |
+  | one-hop calls with a binding | 6802 | 6665 | 6760 |
+  | one-hop dead sites | 5602 | 5600 | 5600 |
+
+  Reads at their position win back 95 of the 137 bindings the rule costs, and none of
+  IssueReminder's tables. Those need ENG-161's escape facts (no store keeps that record): Part B,
+  not Part A, is the lever (measured; the owner's question expected Part A to win them back).
+  Counting record operations as user code cost nothing beyond calls on these numbers.
+- **Things happen at a call's END** (review, sol and Fable). A call reads its arguments, keeps
+  one, writes one back and runs its user code after its arguments ran, nested calls among them.
+  So an argument reads every binding before the call's end except the call's own
+  (`Check(R, MoveToLog(R))`; a call chained on another at the same start sees both,
+  `recref_flow::arg_reach`), a store keeps an argument at the keeping call's end, and user code
+  rebinds what is kept by the time it runs (`recref_alias::UserCodePoint::runs`: `Go(Keep(R))`'s
+  `Go` runs after `Keep`). The field guard orders operations by their end
+  (`R.Modify(L.Insert(true))` runs the `Insert` first).
+- **More review fixes.**
+  - A callee's write-back reaches every alias of its argument, as an in-place bind does
+    (`A := RR; Mut(RR)`: `A` moved too; a regression of reads at their position).
+  - A table's own procedure (`D.Poke()`) runs user code and may keep its argument: a record
+    method outside `member_catalog`'s built-ins is not a platform method.
+  - `this.G` is the global `G` in the RecordRef flow, and `(RR)` is `RR` in both key functions
+    (`recref_alias::strip_parens`).
+  - `HttpClient` is no value type: in a test codeunit `Send` runs an `[HttpClientHandler]`
+    procedure.
+  - A table may declare a procedure named like a record built-in (`SetRecFilter(Really)`,
+    `CopyFilters(var R; Really)`, `Count(Really)`; alc binds the call to it). Round 2, sol and
+    Fable: such a call read as platform code. `recref_alias::ShadowedBuiltins` holds the built-in
+    names some table or table extension of the model declares, dependency routines included; on
+    a record, such a name is user code and may keep its argument, as a call site or as a record
+    operation (the IR lowers `D.Count(true)` as one). Every reader takes the set: the flow, its
+    exit guards, the field guard and both temp passes.
+- **The own-trigger rule, measured further** (P159c, the note): a write's own trigger that moves
+  the kept handle by `Get(RecordId)` or `Close` + `Open` does not move the write either, and
+  `Delete` and `Rename` behave like `Insert` and `Modify`. The field guard keeps a write's own
+  guard for those four (`OWN_TRIGGER_KEEPS`); `DeleteAll`'s and `ModifyAll`'s own user code ends
+  it before them. `Close` through an alias leaves the other aliases on their table, which the
+  flow's "unopened" (added beside each member's value) already allows.
+- **Tests.** `cli_prove_field_guarded_write` gains a store that rebinds only through a handle it
+  hands out (`FG Keeper`, `FG Mover`), so keeping and rebinding are separate calls, and the
+  shapes: `NestedKeepRoot` (and its control), `NestedArgRoot` (and its control), `BoxRoot`,
+  `CopyThenMoveRoot`, `TableProcRetained`, `TableProcKeepRoot` (a table holding the record in
+  its own global), `NestedFiring`, `HttpRetained`, `ParenKeepRoot` (by value: AL passes no
+  `(R)` to a `var`), `OwnDelete`/`OwnDeleteAll`, `ShadowRetained`, `ShadowKeepRoot`,
+  `ShadowOpRetained`. The test's AL compiles with alc 18.0.41.
+  `lflow_tests::a_this_qualified_global_is_the_global` pins `this.` under
+  `KeptElsewhere::Nothing` (under production's input every global may hold anything from entry,
+  which hides the keying). Red proofs, one per rule, each failing on its own shape: user code
+  compared at its start (`NestedKeepRoot`), the keeping call's start (`NestedKeepControl`:
+  precision), arguments read at the call's start (`NestedArgRoot`), `this.` kept (the unit
+  test), a table procedure as no user code (`TableProcRetained`) and as keeping nothing
+  (`TableProcKeepRoot`), `(R)` unstripped (`ParenKeepRoot`), operations ordered by start
+  (`NestedFiring`), the write-back to the named argument only (`CopyThenMoveRoot`), `HttpClient`
+  a value type (`HttpRetained`), the own-trigger rule for every firing operation
+  (`OwnDeleteAll`), shadowed names ignored for call sites (`ShadowKeepRoot`) and for record
+  operations (`ShadowOpRetained`).
+- **Final CDO numbers** (this change's head against master `bd988b97`, cdo-before-after
+  2026-11-20): findings, fingerprints and detectors unchanged at both scopes (2306 / 32429,
+  0 added, 0 removed), unknown 0; IssueReminder may write 201 -> 422 tables and literal
+  arguments rule out 274 -> 0 (108 -> 37 effect rows); RunReportID unchanged (416, 0);
+  one-hop calls with a binding 6802 -> 6757 (the rule alone: 6665), dead sites 5602 -> 5600.
+- **Speed: `alsem impact` on CDO costs more work** (`impact <CDO> --base bc3ccb18~5 --no-tests
+  --format json`, release-fast, the second of two runs (the first fills the base cache), under a
+  timed CDO slot hold, user-mode instructions summed over both core types, 2026-11-21):
+  master instructions 2.88e12 (31 MB of output); the rule alone x1.34 (60 MB: literal arguments
+  rule nothing out, so the base and the change differ in more effect rows); with reads at their
+  position x1.49; this change x1.76. The review fixes first doubled the work for byte-identical
+  output: a callee's write-back was evaluated once per alias-class member (classes join every
+  parameter and global), `arg_reach` scanned every call site per argument read, and the
+  evaluator rebuilt every variable's positional value per write-back. Now a write-back is
+  evaluated once per call and argument and given to every member, shared starts are found once
+  per routine, and only the call's own arguments are rebuilt (instructions 8.90e12 -> 5.07e12,
+  the output unchanged but for its timing field). The rest is the sound rule's larger answer.
+- **Speed: one "anything" fact per kept holder and conditions.** cdo-speed then failed on
+  `prove` (CPU x2.22; ~294e9 instructions on every round's routine against 50-113e9): `prove`
+  builds the RecordRef flow per call, and the rule pushed an "anything" fact for every kept
+  holder at every place that may run user code (U places x H holders per routine), which every
+  summary round and positional read scanned. "Anything" absorbs every other value, so a later
+  place adds nothing once an earlier one under the same conditions (G35) has ended before it;
+  a place nested in another call's arguments is kept (that call's own argument read sees it,
+  `NestedUserCodeRoot`; red proof: dropping every later place answers `no`). That cut `prove`'s
+  per-call cost by ~11 % only. Spans `literal.build`, `literal.recref_flow` and
+  `literal.exit_guards` (`ALSEM_TRACE`) then showed where the rest is: building literal reach
+  takes 2.2-2.9 s on both sides, and `prove.reach_effects` (the per-question pass over the
+  root's effects) takes IssueReminder 2.0 -> 23.4 s and RunReportID 12.0 -> 35.2 s (its answer
+  unchanged). More "anything" lets each query's search stop less often: giving the rule's facts
+  no conditions (a probe, not kept) made it 111 s. That cost is the sound rule's own;
+  ENG-161's escape facts are what win it back, not a cache of the flow.
+- **Re-baseline.** Five IssueReminder rendering goldens re-minted from the CDO baseline
+  (`tests/cli-output-goldens/cdo/IssueReminder.{explain.human.txt,query-effects.human.txt,
+  prove-may-commit.human.txt,prove-writes-table-data-exch.human.txt,digest-summary.json}`):
+  the widened reach only (422 tables; 412 beyond dependency calls through 16 dependency
+  routines, new routes through `Import Attachment - Inc. Doc.` and `Sales-Calc. Discount`;
+  24 commit effects, was 17; events 687 -> 7,529). Three IssueReminder size ratchets in
+  `tests/cli/output_cdo.rs` rise to the measured sizes: explain 34,800 -> 38,200 B, prove
+  writes-table data-exch 4,800 -> 7,600 B, digest 125 -> 130 lines. ENG-161's escape facts are
+  to win the tables back and bring the three down. No other golden moved.
+
 ### Fixed (TLS-107: TLS-104's suspend test no longer fails on a loaded machine)
 
 - **What failed.** `cdo_slot_timed_wait_survives_a_host_suspend` failed in task gates under

@@ -55,6 +55,7 @@
 use crate::engine::l4::param_guard::{FrameGuards, Req, frame_guards_over};
 use crate::engine::l5::commit_scope::CbGraph;
 use crate::engine::l5::digest::{Crossing, CrossingSite, DigestEffectResult};
+pub(crate) use crate::engine::l5::recref_flow::KeptElsewhere;
 use crate::engine::l5::recref_flow::{
     Atom, Atoms, RecRefFlow, RelevantGlobals, RelevantParams, TSet, eval,
 };
@@ -874,8 +875,12 @@ fn contradicts_atoms(reqs: &[AtomReq], b: &Bindings) -> bool {
 fn exit_guards(flow: &RecRefFlow, i: usize) -> HashMap<String, Vec<AtomReq>> {
     let mut out: HashMap<String, Vec<AtomReq>> = HashMap::new();
     let anytime = |n: &str| matches!(flow.initial_atom(i, n), Some(Atom::Global(_)));
-    for (rec, tables, ids) in crate::engine::l5::recref_flow::exit_guards(flow.routine(i), anytime)
-    {
+    for (rec, tables, ids) in crate::engine::l5::recref_flow::exit_guards(
+        flow.routine(i),
+        anytime,
+        flow.kept(),
+        flow.shadowed(),
+    ) {
         let Some(init) = flow.initial_atom(i, &rec) else {
             continue;
         };
@@ -2186,6 +2191,17 @@ impl<'a> EnumImpls<'a> {
 
 impl<'a> LiteralReach<'a> {
     pub(crate) fn new(tree: &'a CapabilitySnapshot, model: &'a Model) -> Self {
+        Self::with_kept(tree, model, KeptElsewhere::AnyExternal)
+    }
+
+    /// [`Self::new`] with the RecordRef flow's "may be kept elsewhere" input stated
+    /// ([`KeptElsewhere`], ENG-159): production's is [`KeptElsewhere::AnyExternal`].
+    pub(crate) fn with_kept(
+        tree: &'a CapabilitySnapshot,
+        model: &'a Model,
+        kept_elsewhere: KeptElsewhere,
+    ) -> Self {
+        let _s = crate::engine::perf_trace::span("literal", "literal.build");
         let edges: &'a [SnapshotGraphEdge] = &tree.typed_edges;
         let facts: &'a [crate::engine::l5::snapshot::SnapshotCapabilityFact] =
             &tree.capability_facts;
@@ -2381,7 +2397,11 @@ impl<'a> LiteralReach<'a> {
         }
         // G34: the exit guards, and what a search must carry to read them
         // (and G33's table parameters).
-        let flow = RecRefFlow::new(model, edges);
+        let flow = {
+            let _f = crate::engine::perf_trace::span("literal", "literal.recref_flow");
+            RecRefFlow::new(model, edges, kept_elsewhere)
+        };
+        let _g = crate::engine::perf_trace::span("literal", "literal.exit_guards");
         let mut guards = FxHashMap::default();
         let mut seeds: Vec<(usize, Atom)> = Vec::new();
         if flow.usable() {

@@ -25,8 +25,11 @@ use al_syntax::IdentifierFoldExt;
 use std::collections::{HashMap, HashSet};
 
 /// The field number each guarded RecordRef write of `r` (by operation id)
-/// is guarded with.
-fn guarded_operations(r: &ModelRoutine) -> HashMap<String, i64> {
+/// is guarded with. `shadowed`: the record built-ins a table declares as a procedure.
+fn guarded_operations(
+    r: &ModelRoutine,
+    shadowed: &crate::program::model::recref_alias::ShadowedBuiltins,
+) -> HashMap<String, i64> {
     let mut out = HashMap::new();
     let Some(tree) = r.statement_tree.as_ref() else {
         return out;
@@ -64,7 +67,7 @@ fn guarded_operations(r: &ModelRoutine) -> HashMap<String, i64> {
     // array holder that may share a record already (`recref_alias::AliasClasses::for_routine`).
     // Names are keyed as the classes key them (`this.G`, `Slot[1]`, quotes).
     use crate::program::model::recref_alias::{AliasClasses, bind_sites, holder_key};
-    let aliases = AliasClasses::for_routine(r);
+    let aliases = AliasClasses::for_routine(r, shadowed);
     // The call sites and record operations (by id) that may rebind a RecordRef, with the ones
     // they may: a call it is passed to, and a bind through it (`recref_alias::RecRefBind`, the
     // one list: `R.Get(Id)` is a record operation, ENG-160).
@@ -83,6 +86,44 @@ fn guarded_operations(r: &ModelRoutine) -> HashMap<String, i64> {
             names_by_site.entry(site.id).or_default().insert(key);
         }
     }
+    // sol round 2 on ENG-145 (ENG-159): a place that may run user code may rebind a record
+    // retained elsewhere (a SingleInstance store, a caller's alias), so it ends every retainable
+    // holder's guard. A call, or a record operation that fires a trigger or a table event
+    // (`recref_alias::user_code_points`). A record operation's own trigger cannot move the
+    // record that operation writes (BC 28.4: the write then fails, ENG-159's note), so its
+    // rebinding ends the guards only AFTER it (`after_by_op`), unless it is in a loop (a later
+    // iteration runs after it) or is not a measured write ([`OWN_TRIGGER_KEEPS`]). Each with
+    // where it ends.
+    let ends_before: HashMap<&str, (bool, (u32, u32))> = r
+        .record_operations
+        .iter()
+        .map(|op| {
+            (
+                op.id.as_str(),
+                (
+                    !op.loop_stack.is_empty()
+                        || !OWN_TRIGGER_KEEPS.contains(&op.op.fold_identifier().as_str()),
+                    (op.source_anchor.end_line, op.source_anchor.end_column),
+                ),
+            )
+        })
+        .collect();
+    let mut after_by_op: HashMap<&str, HashSet<String>> = HashMap::new();
+    for p in crate::program::model::recref_alias::user_code_points(r, shadowed) {
+        let id = p.id;
+        let rebound: Vec<String> = aliases.rebound_at(p.runs).cloned().collect();
+        if rebound.is_empty() {
+            continue;
+        }
+        match ends_before.get(id) {
+            Some((false, _)) => after_by_op.entry(id).or_default().extend(rebound),
+            _ => names_by_site.entry(id).or_default().extend(rebound),
+        }
+    }
+    let after_by_op: HashMap<&str, HashSet<String>> = after_by_op
+        .into_iter()
+        .map(|(id, names)| (id, names.iter().flat_map(|n| aliases.members(n)).collect()))
+        .collect();
     let rebinds: HashMap<&str, HashSet<String>> = names_by_site
         .into_iter()
         .map(|(id, names)| (id, names.iter().flat_map(|n| aliases.members(n)).collect()))
@@ -125,16 +166,30 @@ fn guarded_operations(r: &ModelRoutine) -> HashMap<String, i64> {
                 active.remove(name);
             }
         }
+        // The operations in the order they run, by where each ends (`R.Modify(L.Insert(true))`
+        // runs `L.Insert` first, Fable on ENG-159): a write checks the guards still active, then
+        // its own trigger's rebinding (`after_by_op`) ends them for the operations after it.
+        ops.sort_by_key(|op| ends_before.get(op).map(|(_, pos)| *pos));
         for op in ops {
             if let Some(rec) = writes.get(op)
                 && let Some(&n) = active.get(rec)
             {
                 out.insert(op.to_string(), n);
             }
+            for name in after_by_op.get(op).into_iter().flatten() {
+                active.remove(name);
+            }
         }
     }
     out
 }
+
+/// The writes whose own trigger or table event, rebinding the handle they write through (by
+/// `GetTable`, `Get(RecordId)` or `Close` + `Open`), was measured not to move the write (BC 28.4,
+/// ENG-159's note: it fails, or writes the record it began with). Any other firing operation's
+/// user code (`DeleteAll`, `ModifyAll`, `Validate`, …: unmeasured) ends the guards for its whole
+/// statement.
+const OWN_TRIGGER_KEEPS: &[&str] = &["insert", "modify", "delete", "rename"];
 
 /// The record operations that write.
 const WRITE_OPS: &[&str] = &[
@@ -174,8 +229,10 @@ pub(crate) fn resolve_field_guarded_writes(
 ) -> HashMap<usize, bool> {
     let mut out = HashMap::new();
     let mut guarded: HashMap<String, i64> = HashMap::new();
+    let shadowed =
+        crate::program::model::recref_alias::ShadowedBuiltins::of(&model.workspace.routines);
     for r in &model.workspace.routines {
-        guarded.extend(guarded_operations(r));
+        guarded.extend(guarded_operations(r, &shadowed));
     }
     if guarded.is_empty() {
         return out;
