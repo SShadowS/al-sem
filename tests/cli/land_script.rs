@@ -817,6 +817,8 @@ fn land_refuses_and_leaves_nothing_behind() {
 /// - (r3) the build-override refusal removed -> FAILED (the
 ///   CARGO_PROFILE_RELEASE_FAST_DEBUG_ASSERTIONS run exited 0); reverted ->
 ///   passed.
+/// - (r4) the engine-seam refusal removed -> FAILED (the ALSEM_TEST_WORKERS
+///   run exited 0); reverted -> passed.
 #[test]
 fn land_no_speed_takes_a_reason_and_passes_the_flag() {
     let r = repo();
@@ -890,6 +892,22 @@ fn land_no_speed_takes_a_reason_and_passes_the_flag() {
         assert!(
             text.contains(&format!(
                 "build overrides are set, which no landing may pass to its builds: {}",
+                env.0
+            )),
+            "{env:?}: {text}"
+        );
+    }
+    // (r4) The engine's own test seams, read in Rust by the suite ci-steps runs.
+    for env in [
+        ("ALSEM_TEST_WORKERS", "1"),
+        ("ALSEM_TEST_WORKER_DIES", "1"),
+        ("ALSEM_BATCH_CLAIMS", "/tmp/claims"),
+    ] {
+        let (code, text) = r.land(&["tools/tls-58-x"], &[env]);
+        assert_eq!(code, Some(2), "{env:?}: {text}");
+        assert!(
+            text.contains(&format!(
+                "engine test seams are set, which no landing may pass to its gates: {}",
                 env.0
             )),
             "{env:?}: {text}"

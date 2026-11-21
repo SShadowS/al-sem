@@ -169,6 +169,10 @@ done
 # land itself sets none of these, so none is exempt.
 overrides=$(compgen -e | grep -E '^(CARGO_PROFILE_|CARGO_BUILD_)|^(RUSTFLAGS|RUSTDOCFLAGS|CARGO_ENCODED_RUSTFLAGS|CARGO_TARGET_DIR)$' || true)
 [[ -z "$overrides" ]] || bad_usage "build overrides are set, which no landing may pass to its builds: $(echo $overrides)"
+# Nor the engine's own test seams (read in Rust, by the suite ci-steps runs):
+# ALSEM_TEST_* and ALSEM_BATCH_CLAIMS. land sets none of them.
+seams=$(compgen -e | grep -E '^ALSEM_TEST_|^ALSEM_BATCH_CLAIMS$' || true)
+[[ -z "$seams" ]] || bad_usage "engine test seams are set, which no landing may pass to its gates: $(echo $seams)"
 cdo_flags=()
 if ((no_speed_given)); then
     cdo_flags=(--no-speed)

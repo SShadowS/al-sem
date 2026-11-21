@@ -83,7 +83,8 @@ scripts/land [--push] [--dry-run] <branch>...  # The landing chain (TLS-59): mer
                                # spelling; the reason is required and kept in the log and verdict); land
                                # refuses CDO_GATE_NO_SPEED, any declared test hook and any build override
                                # (CARGO_PROFILE_*, CARGO_BUILD_*, RUSTFLAGS, RUSTDOCFLAGS,
-                               # CARGO_ENCODED_RUSTFLAGS, CARGO_TARGET_DIR) in its environment, and starts
+                               # CARGO_ENCODED_RUSTFLAGS, CARGO_TARGET_DIR) or engine test seam
+                               # (ALSEM_TEST_*, ALSEM_BATCH_CLAIMS) in its environment, and starts
                                # its steps without BASH_ENV/ENV. Logs and verdicts under
                                # /work/.al-sem/land/; timings in flow-timings.jsonl
 scripts/cdo-slot acquire|release|status|run <owner> <reason>  # The one CDO slot (TLS-60): land and

@@ -49,7 +49,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   environment (review r2, sol): `CARGO_PROFILE_*`, `CARGO_BUILD_*`, `RUSTFLAGS`,
   `RUSTDOCFLAGS`, `CARGO_ENCODED_RUSTFLAGS`, `CARGO_TARGET_DIR`. land sets none of them itself,
   so none is exempt; an operator who exports `CARGO_TARGET_DIR` or `CARGO_BUILD_JOBS` must
-  unset it to land.
+  unset it to land. Nor may the engine's own test seams reach the suite: land refuses
+  `ALSEM_TEST_*` and `ALSEM_BATCH_CLAIMS` too (it sets neither), and the agentflow suite
+  clears them.
 - **`ci-steps perf-bounds` fails unless its timing tests are in the binary** (review r2, sol).
   The timing tests (`mod release_checks` in `tests/perf_bounds.rs`) exist only without debug
   assertions, so an inherited `CARGO_PROFILE_RELEASE_FAST_DEBUG_ASSERTIONS=true` compiled them
