@@ -657,6 +657,18 @@ impl RoutineVariables {
         }
     }
 
+    /// ENG-176: the routine's own variables (parameters, then locals), in order.
+    #[must_use]
+    pub fn own(&self) -> &[ModelVariable] {
+        &self.own
+    }
+
+    /// ENG-176: the owning object's globals, every one (shadowed or not), in order.
+    #[must_use]
+    pub fn globals(&self) -> &[ModelVariable] {
+        &self.globals
+    }
+
     /// The routine's full lexical scope, in the L2 order: params → locals → the
     /// object's globals it does not shadow.
     pub fn iter(&self) -> impl Iterator<Item = &ModelVariable> {

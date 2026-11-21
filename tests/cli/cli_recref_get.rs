@@ -865,6 +865,23 @@ codeunit 50442 "GE Shadow"
         Guarded(A);
     end;
 
+    // ENG-176 (sol r3 on ENG-162): a local literally named "this.G" is an ordinary alias: a Get
+    // through it moves R (a false `no` on master since ENG-159: the declaration keyed `g`, its
+    // receiver text `this.g`).
+    procedure QuotedAlias()
+    var
+        "this.G": RecordRef;
+        R: RecordRef;
+        E: Record "GE Entry";
+        D: Record "GE Doc";
+    begin
+        R.GetTable(E);
+        "this.G" := R;
+        D.FindFirst();
+        "this.G".Get(D.RecordId);
+        Guarded(R);
+    end;
+
     // sol, round 2: a local literally named "this.G" is an ordinary alias, not the hidden global.
     procedure QuotedThisName()
     var
@@ -1045,6 +1062,8 @@ fn a_recordref_get_moves_the_table_for_every_reader() {
     // guard on the parameter G.
     assert_eq!(answer("ParamShadowRoot", "GE Log"), "no");
     assert_eq!(answer("QuotedThisName", "GE Log"), "no");
+    // ENG-176: a Get through a local named "this.G" moves R (its alias).
+    assert_eq!(answer("QuotedAlias", "GE Log"), "yes");
 }
 
 #[test]
