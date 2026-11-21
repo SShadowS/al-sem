@@ -132,7 +132,16 @@ Not separated by this run:
    Only the owner can read RAPL limits and throttle counts and try `no_turbo=1` or a
    performance profile; a steady clock at base is better for a gate than a turbo that
    switches.
-5. **Follow-up, to test first:** both sides at once, each on 3 P-cores with both threads,
+   As built: the advisory takes a CLOCK label only, and only when head's lower clock explains
+   the excess (CPU ratio × head/base clock ratio within the limit), with covered counts, equal
+   instructions and wall passing; CPI never waives (a CPI rise is what a real stall regression
+   looks like; Fable, code review r3). So cause 2 (shared cores) stays a failure.
+5. **Not pinning in TLS-111.** CPU affinity limits only where our processes run: another
+   tenant's threads can still land on the sibling of a core we pin to, so pinning cannot fix
+   cause 2; reserving whole cores needs host-side isolation (owner ask
+   q-20261121T052155-5d983934). Pinning to P-cores would remove cause 3 but change what the
+   gate measures (12 threads, not 22), so it is measured first in TLS-112.
+6. **Follow-up, to test first (TLS-112):** both sides at once, each on 3 P-cores with both threads,
    swapping the sets in pass 2 (the only design where both sides see the same host state).
    Test it as one more arm of `warmtests.py` under e-burn and sib-burn before building it;
    every limit would need re-calibrating.
