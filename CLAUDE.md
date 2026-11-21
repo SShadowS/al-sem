@@ -243,7 +243,8 @@ Every test still runs before a merge; the tiers decide HOW OFTEN each one runs.
   and `failed` in speed.json; cdo-gate: FAILED, never a pass). Only then, owner decision
   (q-20261121T025802-abcd2da8, narrowed in review r3): the one advisory CPU failure is a
   covered, CPU-only failure with equal instructions (x1.02) that head's LOWER clock explains
-  (CPU ratio x clock ratio within the limit; in the rounds, each over-limit round by itself).
+  (head user x clock ratio + head sys, over base CPU, within the limit, per pass or round; in
+  the rounds, each over-limit round by itself).
   A `CPI` label never waives: more cycles per instruction is a memory-stall regression's shape.
   **It is Linux only (it reads `/proc`):
   on the Windows machine every full `cdo-gate` run FAILS unless given `--no-speed`**

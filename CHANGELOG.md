@@ -47,12 +47,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     (one 0.009 s tick), both inside the 0.05 s allowance.
   - CDO scale, the coordinator's A/A run of f7da9a93: all 64 calls counted. On the 39 calls
     above 1 s CPU, running minus CPU was -0.5 % to +2.7 %; every build and warm-tests call
-    (the multi-threaded ones) read +2.5 to +2.7 %, for example build 184.41 s running against
-    179.63 s CPU, and warm-tests 136.91 s against 133.38 s. Calls at or below 1 s were within
-    -25 to +22 ms. The excess is probably /proc's tick sampling against perf's exact times on
-    many threads; that is a guess, not a measured cause. A first, two-sided 2 % band marked
-    all 8 of those calls `NOT COVERED`; the one-sided check counts them, and its x1.10 cap is
-    about four times the largest excess seen.
+    (the multi-threaded ones) read +2.2 to +2.7 % (+2.23 to +2.66 %), for example build
+    184.41 s running against 179.63 s CPU, and warm-tests 136.91 s against 133.38 s. Calls at
+    or below 1 s were within -25 to +22 ms. The excess is probably /proc's tick sampling
+    against perf's exact times on many threads; that is a guess, not a measured cause. A
+    first, two-sided 2 % band marked all 8 of those calls `NOT COVERED`; the one-sided check
+    counts them, and its x1.10 cap is about four times the largest excess seen. Its cost: on a
+    multi-threaded call reading about +2.5 %, a real coverage loss of up to about 4.7 % still
+    passes. That moves the clock by under 5 %, against the 15 % `CLOCK` band, so it cannot
+    flip an advisory by itself.
   A count outside the band stays in the record, marked `covered: false` beside its
   `running_s`, but it gives no clock, no `CLOCK` or `CPI` label, and so no advisory. A
   positive count at 0 ns, or a `<not counted>` row at a running time, is no count.
@@ -64,9 +67,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   regression looks like. So a `CPI` label never waives anything. A CPU-time failure becomes
   ADVISORY only when all of these hold: the row has a `CLOCK` label from covering counts; its
   instructions are equal (within x1.02 either way, counted on both sides in every pass); its
-  wall time passes; and the clock explains the excess: the CPU ratio times the clock ratio
-  (head over base, below 1 when head ran slower) is within the CPU limit. A clock in head's
-  favour makes that product larger, so it never waives. In a rounds row, every round over the
+  wall time passes; and the clock explains the excess: the CPU ratio at equal clocks is within
+  the CPU limit. The clock is user cycles per user second, so it rescales head's user time
+  only (review r4): (head user × clock ratio + head system) / (base user + base system), the
+  clock ratio being head over base, below 1 when head ran slower. It is taken per pass (a
+  warm-up row's geometric mean over its passes) and per round. A clock in head's favour makes
+  it larger, so it never waives. In a rounds row, every round over the
   CPU limit must meet these conditions by itself: medians from different rounds may not
   combine. The verdict prints the CPU ratio, the clock-corrected ratio and the instruction
   ratio; `speed.json` lists it under `advisory`. Wall-time and memory failures always fail.
@@ -98,7 +104,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   instruction, a faster head clock, instructions x1.1 or x0.9 and a clean clock all failing;
   one side uncounted in one pass, CPU and wall failing together, counters covering part of
   each call, a contradicted failure that would qualify running the extra pair first; in the
-  rounds, every round judged by itself, the rounds' wall limit, an uncovered round call), the clock's
+  rounds, every round judged by itself, the rounds' wall limit, an uncovered round call; a
+  lower clock plus extra system time, and a lower clock that explains only part of the
+  excess, both failing), the clock's
   divisor (a side that burns kernel time), the extra pair (agree then PASS, agree then FAIL,
   a cross-row disagreement, the side order with the positional factor on, a wall trigger, one
   pass adding nothing), HOST UNSTABLE in `speed.json` and in cdo-gate's summary. The real-perf

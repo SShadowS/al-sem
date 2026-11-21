@@ -133,7 +133,8 @@ Not separated by this run:
    performance profile; a steady clock at base is better for a gate than a turbo that
    switches.
    As built: the advisory takes a CLOCK label only, and only when head's lower clock explains
-   the excess (CPU ratio × head/base clock ratio within the limit), with covered counts, equal
+   the excess (the CPU ratio at equal clocks, head user × head/base clock ratio + head system
+   over base CPU, within the limit; review r4), with covered counts, equal
    instructions and wall passing; CPI never waives (a CPI rise is what a real stall regression
    looks like; Fable, code review r3). So cause 2 (shared cores) stays a failure.
 5. **Not pinning in TLS-111.** CPU affinity limits only where our processes run: another
