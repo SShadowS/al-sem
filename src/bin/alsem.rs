@@ -1879,7 +1879,8 @@ fn test_scope_reads(workspace: &str, test_app: &[String], p: &mut JobPaths) {
     /// One discovery per (workspace, test apps) of the run: it walks folders
     /// and asks git, and a manifest repeats the same scope across jobs.
     type Found = (Vec<PathBuf>, Vec<PathBuf>);
-    static FOUND: Mutex<Option<HashMap<(String, Vec<String>), Found>>> = Mutex::new(None);
+    type Discovered = HashMap<(String, Vec<String>), Found>;
+    static FOUND: Mutex<Option<Discovered>> = Mutex::new(None);
     let ws = Path::new(workspace);
     p.reads
         .push(al_sem::state_paths::workspace_config_for_read(ws));
