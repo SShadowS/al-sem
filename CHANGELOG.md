@@ -16,24 +16,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   truncated a file other engines map (they die of SIGBUS) or left a job output for the cache to
   replace.
 - **Now.** The text cache folder and the IR cache's `ir/` folder (also when `ALSEM_IR_CACHE_DIR`
-  puts it elsewhere) are protected. The batch write check refuses (exit 3, before any job) a write
-  in a cache folder, one that holds one (compared by the folders' identities, so a symlink or bind
-  mount of a folder counts), and an existing file that is a hard link to a cache file. Every
-  claim checks its opened file again, so an alias made after the check is refused at the open
-  (exit 1) before anything is truncated. Cache publishes are not claims: each makes a fresh file
-  in its own folder and links or renames it into place, so with no job writing there a publish
-  cannot land on a job's output.
+  puts it elsewhere) are protected by one snapshot per run (`engine::batch::cache_guard`). The
+  parent's check first makes both folders as the caches make them (so a `missing/..` spelling
+  resolves now as it will later), then records the identity of every directory and file in them
+  (a name a concurrent prune removes is skipped; any other walk error refuses the run), and hands
+  the snapshot to its workers in the claim folder. 258-364 ms on server1's real cache (133,867
+  entries, debug build).
+- **What it refuses.** The batch write check (exit 3, before any job): a write whose folders
+  include a cache folder, a file that is a cache file under any name (a hard link, a bind mount of
+  a file; Windows too, by its file id), and a directory target that holds a cache folder. Every
+  open (streams, `--out`, shard files and directories, traces, the report) checks the path's
+  folders before it creates anything, opens an existing file without creating it and checks the
+  handle's identity: an alias made after the check is refused (exit 1) and nothing is left in a
+  cache folder. Cache publishes are not claims: each makes a fresh file in its own folder and links
+  or renames it into place, so with no job writing there a publish cannot land on a job's output.
 - **The IR cache is on in batch**, in the parent and in every worker: a multi-worker run no longer
   parses each dependency in every worker. `ALSEM_IR_CACHE_REPORT` works in batch too: the report is
-  one of the run's writes (checked against every job write and input), the parent registers it,
-  and every process appends only to that file (a refused append is a warning, never a failed run).
+  one of the run's writes (checked against every job write, input and cache folder); the parent
+  registers it and keeps its handle, and each worker opens it once, without creating it, and
+  appends only when it is the registered file (a refused append is a warning, never a failed run).
   Before, a batch run wrote no report line.
-- **Tests** (`tests/cli/cli_ir_cache.rs`): the old batch-off test is now its opposite (a cold root
-  filled by two workers, a warm one hit from disk by each worker and by one batch in the parent);
-  new refusal tests for a stream in the IR folder, in the text folder and through a link to the IR
-  folder, a shard directory holding the IR folder, a `--out` hard-linked to an entry, a late hard
-  link and a late symlink, a stream on the report, and a report path swapped after registration.
-  One discrimination proof per guard, recorded in each test's doc.
+- **Tests** (`tests/cli/cli_ir_cache.rs`, `claim::tests`): the old batch-off test is now its
+  opposite (a cold root filled by two workers, a warm one hit from disk by each worker and by one
+  batch in the parent, each with its `start` line); refusal tests for a stream in the IR folder,
+  in the text folder and through a link to the IR folder, a shard directory holding the IR folder,
+  a cache folder spelled through `missing/..`, a `--out` hard-linked to an IR entry, a text entry
+  and a file in the default `ir/`, a late hard link, a late symlink and a late shard directory, a
+  trace in a cache folder, a stream on the report, a swapped report, each guard of the report's
+  registration, and a concurrent prune during the walk (which must not refuse). One
+  discrimination proof per guard, recorded in each test's doc.
 
 ### Added (ENG-110: a persistent cache of parsed dependency IR)
 

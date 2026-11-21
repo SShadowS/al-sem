@@ -301,32 +301,50 @@ on in batch: a job's stream or `--out` in the text cache folder, or a hard link 
 have truncated a file other engines map (SIGBUS) or left a job output for the cache to replace.
 
 Now the parent and every worker use the cache, and the cache folders are protected
-(`engine::batch::claim`, `ir_cache::protected_roots`: the text cache folder, and the installed
-`ir/` folder wherever `ALSEM_IR_CACHE_DIR` puts it):
-- **The check** (`manifest::check_write_sets`, exit 3 before any job) refuses a write that is in a
-  cache folder, one that holds a cache folder (a directory target above it, or a cache folder
-  that is a link into a job's directory), by the folders' identities, and an existing file that is
-  a hard link to a cache file (a file with two or more names; the folders are then listed for its
-  inode).
-- **Every claim** (`claim::open_for_write`, `open_trace`) checks the file it opened again: one of
-  its folders is a cache folder, or it is a hard link to a cache file. So an alias made after the
-  check is refused at the open (exit 1), before anything is truncated.
+(`engine::batch::cache_guard`; the text cache folder, and the IR cache's `ir/` folder wherever
+`ALSEM_IR_CACHE_DIR` puts it, when this process uses the IR cache):
+- **One snapshot per run** (`cache_guard::take`, in the parent's check). First it MAKES both
+  folders exactly as the caches make them (an `ALSEM_IR_CACHE_DIR` naming a non-directory leaves the
+  IR cache off and is not protected), so a spelling such as `missing/..` resolves now as it will
+  later. Then it records the identity (unix dev and inode; Windows volume serial and 128-bit file
+  id) of every directory and file inside them, each tree walked once (the default `ir/` lies in the
+  text folder). A name removed during the walk (a concurrent prune) is skipped; any other walk
+  error refuses the run (the caches cannot be protected). The parent writes the snapshot to the
+  claim folder; workers read it, never walk. Measured 2026-11-21 on server1's real
+  `~/.cache/al-ch-snapshot-cache` (133,867 entries), debug build: 258-364 ms over 4 runs.
+- **The check** (`manifest::check_write_sets`, exit 3 before any job) refuses a write whose folders
+  (links followed) include a cache folder, an existing file that is a cache file under any name (a
+  hard link, a bind mount of a file), and a directory target that holds a cache folder.
+- **Every open** (`claim::open_for_write`, `open_trace`, the report's registration and appends)
+  checks first the path's folders against the snapshot's directories, before anything is created;
+  then opens an existing file WITHOUT creating it and checks the handle's identity against the
+  snapshot's files; only a missing file is created, once its folder passed. A shard directory is
+  checked the same way before it is made (`claim::check_dir`). So an alias made after the check is
+  refused at the open (exit 1) and nothing is left in a cache folder. The folder test is
+  path-based: a path another process changes during the run is outside TLS-109's scope. A cache
+  file published during the run is not in the snapshot, but its folder is.
 - **Cache publishes need no claim.** Every cache file is made under its folder with a fresh name
   (`O_EXCL` temp files, then a link or rename through the folder's handle, symlinks never
   followed); a lock file is opened without truncation; a prune only removes names in its folders.
   With no job writing in or above a folder, a publish cannot land on a job's output.
 - **The report** (`ALSEM_IR_CACHE_REPORT`) is one of the run's writes: the check compares it with
-  every job write and input, the parent then registers it in the claim folder (made when missing,
-  never truncated), and every process of the run appends only to that registered file
-  (`claim::open_shared`); a refused append is a warning, never a failed run. The parent writes its
-  `end` line before the claim folder goes.
+  every job write and input; the parent then registers it in the claim folder (through the guarded
+  open, a regular file only, never truncated) and keeps that handle; a worker opens the path once,
+  without creating it, and appends only when the file is the registered one and no cache file
+  (`claim::append_shared`). A refused append is a warning, never a failed run. The parent writes
+  its `end` line before the claim folder goes. Planning (`plan`) builds no model, so no report
+  line comes before the registration; the batch test asserts a `start` line for every process.
 
-Tests (`tests/cli/cli_ir_cache.rs`, Linux): two workers on a cold root publish the entry and
-report, and on the warm root each hits every file from disk (one batch in the parent too); a
-stream in the IR folder, in the text folder and through a link to the IR folder; a shard
-directory holding the IR folder; a `--out` hard-linked to an entry; a late hard link and a late
-symlink made after the check (refused at the open); a stream on the report; and a report path
-swapped after registration. Each guard has a recorded discrimination proof.
+Tests (`tests/cli/cli_ir_cache.rs`, Linux; `claim::tests::registration_refuses_what_it_must`):
+two workers on a cold root publish the entry and report, and on the warm root each hits every
+file from disk (one batch in the parent too); a stream in the IR folder, in the text folder and
+through a link to the IR folder; a shard directory holding the IR folder; a cache folder spelled
+through `missing/..`; a `--out` hard-linked to an IR entry, a text entry and a file in the default
+`ir/` while `ALSEM_IR_CACHE_DIR` points elsewhere (a bind mount of a file is the same identity
+test; making one needs root); a late hard link, a late symlink and a late shard directory; a trace
+in a cache folder; a concurrent prune during the walk; a stream on the report; a report path
+swapped after registration; and each guard of the registration. Each guard has a recorded
+discrimination proof.
 
 ## Correctness checks
 
@@ -483,14 +501,14 @@ cache, the second fills the IR cache, the third is warm. The untimed runs below 
 4. **VERIFY:** `output_cdo_impact`, for good, with `verified_hits`; never timed. In-process test
    binaries and `mint-goldens` get no cache.
 5. **Gain:** the installed binary; a gate gets none.
-6. **`alsem batch`:** off, tested through the real run with a positive control. (TLS-116 turned it
+6. **`alsem batch`:** off (then), tested through the real run with a positive control. (TLS-116 turned it
    on, with the cache folders protected from job writes: see the `alsem batch` section.)
 7. **Cleanup:** best effort, periodic, coordinated per key folder; non-blocking entry locks.
 
 ## Left for the owner
 
 None. The orchestrator confirmed the disk numbers (1 GiB per entry, 4 GiB soft target) and
-batch-off on 2026-11-21.
+batch-off (then) on 2026-11-21.
 
 ## Future (ideas only; ENG-110 does not build them)
 
@@ -528,7 +546,7 @@ From `/coord/owner/design-mantra.md`:
   decision against 4's advisory default, stated where it applies.
 - **6 (say what you don't know):** the gate's lack of gain and the full 4 GiB on lane hosts are said
   plainly.
-- **7 and 8 (tests that fail; real use):** every guard has a stated break; batch-off is tested through
+- **7 and 8 (tests that fail; real use):** every guard has a stated break; batch-off (then) is tested through
   the real parent and workers, with a positive control.
 - **10 (reproducible baselines):** each record pins the workspace, the `.app` closure and the keys.
 - **13 and 14 (right-sized; reuse):** the read side's safety machinery is gone because (a)-(c) leave
@@ -547,7 +565,7 @@ From `/coord/owner/design-mantra.md`:
 - **rev. 3:** Fable r2 folded in (baked-hash trigger test, one home for the test switch, VERIFY labels
   zero hits).
 - **rev. 4:** sol r1 (5 P1, 2 P2) folded in: whole-envelope hash, build-input key, `BUILD_CONTEXT`
-  reset, owned reads, batch off, the one-shot protocol, digest in the path, disk caps.
+  reset, owned reads, batch off (then), the one-shot protocol, digest in the path, disk caps.
 - **rev. 5:** sol r2 and Fable r3 folded in, with the orchestrator's binary key: decode budgets, the
   stmt/block walk, the text re-hash, the batch real-run test, the paired acceptance rule.
 - **rev. 6:** sol r3 and Fable r4 folded in: no sidecar, Linux only, static-link and tool-binary
@@ -572,4 +590,4 @@ From `/coord/owner/design-mantra.md`:
   file decodes exactly its final index range, any `roundtrip_failed` on CDO fails, reports come only
   from head runs. Design 7 states the plan's carrier (a process-level install, as `claim::set_dir`).
   Follow-ups cited as TLS-116 and TLS-117; the orchestrator confirmed the disk numbers and
-  batch-off.
+  batch-off (then).
