@@ -181,7 +181,11 @@ pub(super) fn get(dir: &Path) -> std::io::Result<&'static Snapshot> {
     if let Some(s) = SNAPSHOT.get() {
         return Ok(s);
     }
-    let text = std::fs::read_to_string(dir.join(FILE))?;
+    let text = std::fs::read_to_string(dir.join(FILE)).map_err(|e| {
+        std::io::Error::other(format!(
+            "refused: no cache snapshot from the run's parent ({e}) (TLS-116)"
+        ))
+    })?;
     let mut snap = Snapshot::default();
     for line in text.lines() {
         let bad = || std::io::Error::other(format!("a damaged cache snapshot line: {line}"));

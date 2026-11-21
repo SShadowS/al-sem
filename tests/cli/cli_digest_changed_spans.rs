@@ -3492,8 +3492,10 @@ fn batch_worker_uses_the_carried_decision() {
             "stdin": null,
             "files": {"reads": [], "exists": []},
         });
-        // A worker runs only with its parent's claim folder (TLS-109).
+        // A worker runs only with its parent's claim folder (TLS-109), which
+        // holds the parent's cache snapshot (TLS-116; empty: no cache file).
         let claims = tempfile::tempdir().unwrap();
+        std::fs::write(claims.path().join("cache-snapshot"), "").unwrap();
         let mut child = Command::new(env!("CARGO_BIN_EXE_alsem"))
             .args(["batch", "--worker", "0"])
             .arg(t.path().join("unread-manifest.json"))
