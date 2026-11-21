@@ -76,8 +76,11 @@ fn object_run_kind(text: &str) -> Option<&'static str> {
 /// ENG-162: the whole variable an expression names, or `None`: a bare or quoted identifier, read
 /// through parentheses (`(R)`), or the object's own member `this.X` (`this."My G"`). Every
 /// spelling of one variable gives one name, so `A := (R)`, `this.G := R` and `A := this.G` are
-/// copies like `A := R` (Fable r2 on ENG-160: they were no alias for any reader).
-fn plain_variable(file: &AlFile, mut e: ExprId) -> Option<String> {
+/// copies like `A := R` (Fable r2 on ENG-160: they were no alias for any reader). A `this.X`
+/// whose `X` a parameter, local or return value of the routine also declares (`own`) names the
+/// global, which the bare `x` would not: it is `this.x`, a name no declaration of the routine has
+/// (sol on ENG-162; `extract::this_receivers` reads it the same way).
+fn plain_variable(file: &AlFile, mut e: ExprId, own: &NameSet) -> Option<String> {
     loop {
         match &file.ir.expr(e).kind {
             ExprKind::Parenthesized(x) => e = *x,
@@ -85,11 +88,14 @@ fn plain_variable(file: &AlFile, mut e: ExprId) -> Option<String> {
                 return Some(x.fold_identifier());
             }
             ExprKind::Member { object, member, .. } if is_this(file, *object) => {
-                return Some(
-                    crate::program::body::node_util::strip_quotes(member)
-                        .replace("\"\"", "\"")
-                        .fold_identifier(),
-                );
+                let name = crate::program::body::node_util::strip_quotes(member)
+                    .replace("\"\"", "\"")
+                    .fold_identifier();
+                return Some(if own.contains(&name) {
+                    format!("this.{name}")
+                } else {
+                    name
+                });
             }
             _ => return None,
         }
@@ -101,14 +107,13 @@ fn is_this(file: &AlFile, e: ExprId) -> bool {
     matches!(&file.ir.expr(e).kind, ExprKind::Identifier(t) if t.eq_fold_identifier("this"))
 }
 
-fn lhs_base_name(file: &AlFile, target: ExprId) -> Option<String> {
+fn lhs_base_name(file: &AlFile, target: ExprId, own: &NameSet) -> Option<String> {
     match &file.ir.expr(target).kind {
         ExprKind::Identifier(x) | ExprKind::QuotedIdentifier(x) => Some(x.fold_identifier()),
         ExprKind::Member { member, .. } => Some(member.fold_identifier()),
-        ExprKind::Index { base, .. } => match &file.ir.expr(*base).kind {
-            ExprKind::Identifier(x) | ExprKind::QuotedIdentifier(x) => Some(x.fold_identifier()),
-            _ => None,
-        },
+        // An element of any spelling of an array variable (ENG-162, Fable: `this.Slot[1] := R`
+        // recorded nothing, so no reader saw R shared with a slot).
+        ExprKind::Index { base, .. } => plain_variable(file, *base, own),
         _ => None,
     }
 }
@@ -228,6 +233,9 @@ struct Scope {
     /// variable name and shadows the platform singleton (the compiler probe in
     /// `program::resolve::receiver`'s Step 3c).
     database_shadowed: bool,
+    /// ENG-162: the routine's parameters, locals and named return value (folded). A
+    /// `this.X` whose `X` is among them names the global, which the bare name does not.
+    own_names: NameSet,
 }
 
 /// #155: `name` folds to `database` (quotes stripped, as a declared name is).
@@ -501,6 +509,15 @@ fn build_scope(
         .chain(object_procedure_names.iter().cloned())
         .chain(["rec".to_string(), "xrec".to_string()])
         .collect();
+    // ENG-162 (sol): the routine's own declarations; `this.X` is the global `X` only when none
+    // of them is named `X` (as `extract::this_receivers` reads it).
+    let own_names: NameSet = routine
+        .params
+        .iter()
+        .map(|p| p.name.fold_identifier())
+        .chain(routine.locals.iter().map(|v| v.name.fold_identifier()))
+        .chain(routine.return_name().map(|n| n.fold_identifier()))
+        .collect();
     (
         Scope {
             record_ref_vars: record_ref_names(o, routine),
@@ -509,6 +526,7 @@ fn build_scope(
             frvars,
             object_procedure_names,
             declared_names,
+            own_names,
         },
         implicit_rec,
     )
@@ -1123,14 +1141,15 @@ impl<'a> SpineCtx<'a> {
                 }
                 // PVarAssignment: lhs base name (identifier or member name), optional
                 // literal rhs, anchored on the assignment statement.
-                if let Some(lhs_name) = lhs_base_name(self.file, *target) {
+                let own = &self.scope.own_names;
+                if let Some(lhs_name) = lhs_base_name(self.file, *target, own) {
                     // A whole-variable copy, quoted names included (`"My Ref" := Ref`: ENG-145, an
                     // alias by a quoted name was no alias; the lowerer strips the quotes), and
                     // every spelling of a whole variable (ENG-162: `A := (R)`, `this.G := R`).
-                    let lhs_plain = plain_variable(self.file, *target);
+                    let lhs_plain = plain_variable(self.file, *target, own);
                     let rhs_identifier = lhs_plain
                         .as_ref()
-                        .and_then(|_| plain_variable(self.file, *value));
+                        .and_then(|_| plain_variable(self.file, *value, own));
                     let rhs_member = match &self.file.ir.expr(*target).kind {
                         ExprKind::Identifier(_) => self.member_of_identifier(*value),
                         _ => None,
@@ -4799,6 +4818,7 @@ codeunit 50003 C
     var
         G: RecordRef;
         "My G": RecordRef;
+        GSlot: array[2] of RecordRef;
 
     procedure Caller()
     var
@@ -4815,6 +4835,8 @@ codeunit 50003 C
         A := Rec.Name;
         A := R.Duplicate();
         Slot[1] := R;
+        this.GSlot[1] := R;
+        Rec.Name := 'x';
     end;
 }
 "#;
@@ -4842,6 +4864,45 @@ codeunit 50003 C
                 ("a", None, false),
                 ("a", None, false),
                 ("slot", None, false),
+                // Fable on ENG-162: an element of `this.GSlot` is recorded (it was not).
+                ("gslot", None, false),
+                // A member target stays a member assignment.
+                ("name", None, true),
+            ]
+        );
+        // sol on ENG-162: a local `G` shadows the global, so `this.G` names the global, which
+        // the bare `g` does not: it is `this.g`, and the bare `G` stays the local.
+        const SHADOWED: &str = r#"
+codeunit 50004 C
+{
+    var
+        G: RecordRef;
+
+    procedure Shadowed()
+    var
+        G: RecordRef;
+        R: RecordRef;
+        A: RecordRef;
+    begin
+        this.G := R;
+        A := this.G;
+        G := R;
+    end;
+}
+"#;
+        let (features, _, _) =
+            ir_features_for_named_routine(SHADOWED, "Shadowed", "g", "u").expect("routine");
+        let got: Vec<(&str, Option<&str>)> = features
+            .var_assignments
+            .iter()
+            .map(|a| (a.lhs_name.as_str(), a.rhs_identifier.as_deref()))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("this.g", Some("r")),
+                ("a", Some("this.g")),
+                ("g", Some("r")),
             ]
         );
     }

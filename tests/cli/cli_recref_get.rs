@@ -788,6 +788,35 @@ codeunit 50434 "GE Mgt"
         R.Delete();
     end;
 }
+// Fable on ENG-162: an element of `this.GSlot` shares R's record as `GSlot[1] := R` does. Its own
+// codeunit: a global array of RecordRefs joins every holder of its object's routines.
+codeunit 50441 "GE Slots"
+{
+    var
+        GSlot: array[2] of RecordRef;
+
+    procedure ThisSlotFlow()
+    var
+        R: RecordRef;
+        E: Record "GE Entry";
+        D: Record "GE Doc";
+    begin
+        R.GetTable(E);
+        this.GSlot[1] := R;
+        D.FindFirst();
+        GSlot[1].Get(D.RecordId);
+        Guarded(R);
+    end;
+
+    local procedure Guarded(var R: RecordRef)
+    var
+        Log: Record "GE Log";
+    begin
+        if R.Number <> Database::"GE Doc" then
+            exit;
+        Log.Insert();
+    end;
+}
 "#;
 
 fn alsem(cwd: &Path, args: &[&str]) -> serde_json::Value {
@@ -892,6 +921,7 @@ fn a_recordref_get_moves_the_table_for_every_reader() {
         "ParenAliasFlow",
         "ThisAliasFrameRoot",
         "ParenAliasFrameRoot",
+        "ThisSlotFlow",
     ] {
         assert_eq!(answer(routine, "GE Log"), "yes", "{routine}");
     }
