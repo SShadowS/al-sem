@@ -1874,13 +1874,32 @@ fn stream_paths(streams: &JobStreams) -> JobPaths {
 /// takes it: [`absolute_test_apps`]).
 fn test_scope_reads(workspace: &str, test_app: &[String], p: &mut JobPaths) {
     use al_sem::engine::test_select::scope::{ScopeRequest, discover};
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    /// One discovery per (workspace, test apps) of the run: it walks folders
+    /// and asks git, and a manifest repeats the same scope across jobs.
+    type Found = (Vec<PathBuf>, Vec<PathBuf>);
+    static FOUND: Mutex<Option<HashMap<(String, Vec<String>), Found>>> = Mutex::new(None);
     let ws = Path::new(workspace);
     p.reads
         .push(al_sem::state_paths::workspace_config_for_read(ws));
-    let req = ScopeRequest {
-        test_apps: absolute_test_apps(test_app),
-    };
-    p.workspaces.extend(discover(ws, &req).read);
+    let key = (workspace.to_string(), test_app.to_vec());
+    let (folders, ignore_files) = FOUND
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get_or_insert_with(HashMap::new)
+        .entry(key)
+        .or_insert_with(|| {
+            let req = ScopeRequest {
+                test_apps: absolute_test_apps(test_app),
+            };
+            let scope = discover(ws, &req);
+            (scope.read, scope.ignore_files)
+        })
+        .clone();
+    p.workspaces.extend(folders);
+    // The git ignore rules it consulted are read too.
+    p.reads.extend(ignore_files);
 }
 
 /// The `--test-app` folders as a test job names them to its scope: each
@@ -2024,10 +2043,11 @@ fn usage(line: String) -> ExitCode {
 /// <b>`: run the batch the parent writes on stdin.
 ///
 /// Every file the run writes is claimed by its identity in a run-private
-/// folder ([`claim`]), the workers' included; each process's trace file
-/// last, after its job writes ([`start_trace_last`]).
+/// folder ([`claim`]), the workers' included. Each process spools its trace
+/// in that folder; the parent publishes every spool at the end
+/// ([`publish_traces`]).
 fn run_batch_cmd(b: BatchCli) -> ExitCode {
-    use al_sem::engine::perf_trace::drop_file;
+    use al_sem::engine::perf_trace::{drop_file, spool_file};
     if let Some(w) = b.worker {
         // A worker writes only inside its parent's claims (TLS-109).
         let Some(dir) = std::env::var_os(claim::ENV) else {
@@ -2038,9 +2058,17 @@ fn run_batch_cmd(b: BatchCli) -> ExitCode {
             ));
         };
         claim::set_dir(dir.into());
-        let code = run_worker(w);
-        drop_file(Some("the worker ended before its jobs ran"));
-        return code;
+        // Its spool stays for the parent to publish, also if it dies.
+        if let Some(spool) = claim::spool_path()
+            && let Some(trace) = spool_file(&spool)
+            && let Err(e) = claim::record_spool(&spool, &trace)
+        {
+            eprintln!(
+                "perf_trace: {}: {e}; file tracing disabled",
+                trace.display()
+            );
+        }
+        return run_worker(w);
     }
     let claims = match tempfile::tempdir() {
         Ok(d) => d,
@@ -2052,6 +2080,9 @@ fn run_batch_cmd(b: BatchCli) -> ExitCode {
         }
     };
     claim::set_dir(claims.path().to_path_buf());
+    if let Some(spool) = claim::spool_path() {
+        spool_file(&spool);
+    }
     let code = run_batch_parent(b);
     // A run that ended before its write check passed opens no trace file.
     drop_file(Some("the batch ended before its write check passed"));
@@ -2144,7 +2175,7 @@ fn run_batch_parent(b: BatchCli) -> ExitCode {
         let streams: Vec<JobStreams> = batch.jobs.iter().map(|j| j.streams.clone()).collect();
         let lines = run_one_batch(0, &streams, plans);
         report_peak(0);
-        start_trace_last();
+        publish_traces();
         return print_lines(&lines);
     }
     drop(planned);
@@ -2185,15 +2216,17 @@ fn run_batch_parent(b: BatchCli) -> ExitCode {
         w,
     };
     let (out, whole, claims_failed) = run_workers(&run, &batches);
-    start_trace_last();
+    publish_traces();
     write_run_stdout(out, whole && !claims_failed)
 }
 
-/// Open this process's trace file, held in memory so far, after every job
-/// write of this process has claimed its file (TLS-109): a trace that is an
-/// output's alias is refused (a stderr line, no trace), never the output.
-fn start_trace_last() {
-    al_sem::engine::perf_trace::start_file(claim::open_trace);
+/// After every worker has ended and every job write is done (TLS-109):
+/// publish each worker's spooled trace, then this process's own, to their
+/// trace files through the claim. A trace that is an output's or an input's
+/// alias is refused (a stderr line, no trace), never the output.
+fn publish_traces() {
+    claim::publish_spools();
+    al_sem::engine::perf_trace::publish_file(claim::open_trace);
 }
 
 /// `alsem batch --worker <b>`: the batch its parent wrote on stdin (a
@@ -2233,7 +2266,6 @@ fn run_worker(b: u32) -> ExitCode {
     #[cfg(debug_assertions)]
     al_sem::engine::batch::worker::test_seam_die(b);
     report_peak(b);
-    start_trace_last();
     let code = print_lines(&lines);
     // A failed claim reaches the parent through this exit, not the folder.
     if claim::failed() {

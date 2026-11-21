@@ -134,27 +134,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   doing: a file another process replaces during the run is that process's write.
 - **The fix, part 1: every write is claimed when its file is opened.** A batch run makes a
   private folder and hands it to its workers. A worker started without it refuses to run
-  (exit 3). Every file the run writes (streams, `--out`, a baseline update, shard files, in the
-  workers too) is opened without truncating it. Its identity is read from the open handle:
-  device and inode on unix, volume serial number and file index on Windows
-  (`GetFileInformationByHandle`). The writer then claims that identity by creating a marker
-  file named after it in the folder. Only then is the file truncated. Every write is its own
+  (exit 3). Every file the run writes for its jobs (streams, `--out`, a baseline update, shard
+  files, in the workers too) and its trace files is opened without truncating it. Its identity
+  is read from the open handle: device and inode on unix, volume serial number and 128-bit file
+  id on Windows (`GetFileInformationByHandleEx`, `FileIdInfo`). A file whose identity cannot be
+  read, or reads as a zero id, is refused, never guessed: at the check this refuses the run
+  (exit 3). The writer then claims that identity by creating a marker file named after it in
+  the folder. Only then is the file truncated. Every write is its own
   claim: if the marker exists already, the write is refused, even when the same job wrote that
   file under the same spelling before. The one exception is below (part 2). A refused write
   truncates nothing: the job's line has its write-failure exit, stderr says `refused`, and the
   run exits 1. A claim that cannot be made (an I/O error in the folder, a refused job's list
   that cannot be read) refuses the write and fails the run the same way. A worker reports it
   through its exit code, so the parent never needs the folder that failed.
-- **Devices are written as before.** A device, pipe or FIFO (`/dev/null`, `>(cat)`) holds no
-  content a truncation could lose, and truncating one fails: it is written without a claim.
-  Outside a batch every file opens exactly as before TLS-109 (`--out /dev/null` works again).
+- **Devices are written as before.** A device, pipe or FIFO (`/dev/null`, `NUL`, `>(cat)`)
+  holds no content a truncation could lose, and truncating one fails: it is written without a
+  claim (on Windows, any handle whose `GetFileType` is not a disk file). Outside a batch every
+  file opens exactly as before TLS-109 (`--out /dev/null` works again).
+- **The engine's caches** (the package cache and the impact-base cache) are not claimed: each
+  writes a temporary file of its own and renames it into place, which replaces a name and never
+  truncates a file that name aliased.
 - **Part 2: the files the run must not write are claimed first.** Before any job runs, the
   check claims every existing file a job reads and every workspace input. That includes source
   roots, the folders `tests --part select` and `impact --part main` read (an `impact
   --source-dep` relative to the workspace, as the loader takes it), and the test scope `tests
-  --part roots` and `impact --part main` read: `.al-sem.json` and every app folder the
-  discovery reads, a candidate it rejects too, with a relative `--test-app` taken against the
-  cwd as the job takes it. An `impact --package-root` folder is claimed for its packages only.
+  --part roots` and `impact --part main` read: `.al-sem.json`, every app folder the discovery
+  reads (a candidate it rejects too, with a relative `--test-app` taken against the cwd as the
+  job takes it), and the `.gitignore` files and `.git/info/exclude` it asks git about. The
+  check runs each discovery once per workspace and test apps: 200 `tests --part roots` jobs on
+  one synthetic workspace with 12 sibling apps ran in 0.88 s in all (debug build, server1). An
+  `impact --package-root` folder is claimed for its packages only.
   A folder the check cannot list refuses the run (exit 3); a dangling link in it is skipped, as
   the source walk skips it. The one exception: a job's `--update-baseline` reserves its
   baseline, and that one write may take the reservation once.
@@ -164,16 +173,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   plus the names below (on Windows compared without case). A dangling link or junction is
   followed through its text (at most 40 links). On unix a `..` folds only over an existing
   folder: `missing/../x` and `file/../x` are no longer `x`; Windows folds `..` by spelling, as
-  it opens paths. No write may land on a file a job reads, the job's own writes included (a
+  it opens paths, except in a verbatim (`\\?\`) path, which it takes as written. No write may
+  land on a file a job reads, the job's own writes included (a
   diff output on its own input is refused), except the job's own `--update-baseline`. No write
   may land on a file of a workspace a job reads.
-- **The trace file.** In a batch, each process opens its trace file last, after all its job
-  writes have claimed their files; events until then are held in memory. A trace file that is
-  an output, an input or the manifest under any alias is refused at its open: a stderr line, no
-  trace, the run unharmed and the output kept. A run that ends before its jobs run (a bad
-  manifest, a job that does not parse, a refused check, no claim folder) writes no trace, and
-  says so on stderr (`perf_trace: <path>: not written: ...`) unless the check's own line
-  already explains it.
+- **The trace files are published at the end.** In a batch, each process (the parent and each
+  worker) writes its trace events as they happen to a spool file of its own in the run's
+  private folder, which aliases nothing. After every worker has ended and every job write is
+  done, the parent publishes each spool to its trace file (its own, and each worker's
+  `ALSEM_TRACE_FILE.w<b>` or default name) through the claim, and removes it. A trace file that
+  is an output, an input, the manifest or a refused job's named file under any alias is
+  refused there: a stderr line, no trace, the run unharmed and the output kept. A worker that
+  crashes leaves its spool, and the parent still publishes it; a parent that dies leaves every
+  spool in its claim folder (in the system temporary folder). A run that ends before its jobs
+  run (a bad manifest, a job that does not parse, a refused check, no claim folder) writes no
+  trace, and says so on stderr (`perf_trace: <path>: not written: ...`) unless the check's own
+  line already explains it.
 - **What failed (TLS-110).** A refused `fingerprint --shard bad --out D` whose stdout was `D/x`
   wrote its error over `D/x`. A refused job's named directory is now kept like its named files:
   its own streams may not write in it, also not through a hard link to a file in it (the check
@@ -183,7 +198,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Another job may write there: a refused job writes nothing, so it has nothing to lose. This
   departs from the task text, which also refused another job's writes; it follows the ENG-168 /
   #277 FR-2 rule for files.
-- **Windows** gets the same claims and checks through `winapi-util` (already in the tree,
+- **Windows** gets the same claims and checks through `windows-sys` (already in the tree,
   through walkdir), now a direct dependency on Windows only. The crate and its tests are
   checked to compile for `x86_64-pc-windows-gnu`; the tests that need a symlink or the debug
   test seam (which runs `sh`) are unix-only, the hard-link ones run on both.
@@ -199,7 +214,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `--update-baseline`, a refused job's own stdout in its folder and a late link to its
   folder's file while another job writes there, a rejected test-scope candidate, a relative
   `--test-app`, a relative `--source-dep`, a package-only root, `file/../x`, a claim folder that
-  turns read-only, and manifests that must still run. A worker without its claim folder is
+  turns read-only, a kept list that turns unreadable, a worker's trace on another worker's
+  shard file, a trace on a refused job's named file, a reservation taken twice (a unit test),
+  and manifests that must still run. A worker without its claim folder is
   tested too.
 
 ### Fixed (TLS-108: `ci-steps perf-bounds` times its bounds under a timed CDO slot hold)

@@ -218,6 +218,10 @@ pub struct Scope {
     /// not (its sources are read when it depends on the workspace): what an
     /// `alsem batch` run must not write (TLS-109).
     pub read: Vec<PathBuf>,
+    /// The git ignore files the discovery consults (TLS-109): each walked
+    /// folder's `.gitignore`, those above the search root up to the git top
+    /// level, and its `.git/info/exclude` (whether or not they exist).
+    pub ignore_files: Vec<PathBuf>,
     /// The `.al-sem.json` `testApps` this discovery read
     /// ([`test_config_identity`]), also when the call named its own test
     /// apps: `alsem_status` compares it with the disk (the `test-config`
@@ -293,6 +297,7 @@ pub fn discover(workspace: &Path, req: &ScopeRequest) -> Scope {
         searched: 0,
         ignored: 0,
         read: Vec::new(),
+        ignore_files: Vec::new(),
         test_config: test_config_identity(configured.as_deref()),
     };
     let named = match &req.test_apps {
@@ -341,6 +346,15 @@ pub fn discover(workspace: &Path, req: &ScopeRequest) -> Scope {
     // in an ignored temporary folder): git reports all of it ignored, so
     // ignore rules cannot tell projects apart there.
     let honor_ignore = !root_is_ignored(&root);
+    for a in root.ancestors() {
+        scope.ignore_files.push(a.join(".gitignore"));
+        if a.join(".git").exists() {
+            scope
+                .ignore_files
+                .push(a.join(".git").join("info").join("exclude"));
+            break;
+        }
+    }
     walk(&mut scope, &root, &abs, 0, honor_ignore);
     scope.search_root = Some((root, git_top));
     scope
@@ -585,6 +599,7 @@ fn walk(scope: &mut Scope, dir: &Path, workspace: &Path, depth: usize, honor_ign
     // Engine limits B8 (TLS-48): a folder the repository's `.gitignore`
     // rules ignore is not a project folder, unless it holds the workspace.
     let ignored = if honor_ignore {
+        scope.ignore_files.push(dir.join(".gitignore"));
         git_ignored(dir, &subdirs)
     } else {
         std::collections::HashSet::new()

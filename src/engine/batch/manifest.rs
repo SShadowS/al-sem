@@ -102,15 +102,22 @@ const WORKSPACE_FILES: &[&str] = &[
 /// cannot go through a missing folder or a file, so `missing/../x` and
 /// `file/../x` are not `x`. Windows folds `..` by spelling before it opens a
 /// path (a link's or junction's own parent, `file\..\x` is `x`), so there a
-/// `..` pops as spelled.
+/// `..` pops as spelled; but a verbatim path (`\\?\`) goes to the file system
+/// as written, so its `..` stays.
 fn fold(cwd: &Path, p: &Path) -> PathBuf {
     let mut folded = PathBuf::new();
+    let mut verbatim = false;
     for c in cwd.join(p).components() {
         match c {
+            std::path::Component::Prefix(prefix) => {
+                verbatim = prefix.kind().is_verbatim();
+                folded.push(c);
+            }
             std::path::Component::CurDir => {}
-            std::path::Component::ParentDir if cfg!(windows) => {
+            std::path::Component::ParentDir if cfg!(windows) && !verbatim => {
                 folded.pop();
             }
+            std::path::Component::ParentDir if cfg!(windows) => folded.push(".."),
             std::path::Component::ParentDir => match std::fs::canonicalize(&folded) {
                 Ok(canonical) if canonical.is_dir() => {
                     folded = canonical;
@@ -125,23 +132,67 @@ fn fold(cwd: &Path, p: &Path) -> PathBuf {
 }
 
 /// What one existing file or directory is (TLS-109): its device and inode on
-/// unix, its volume serial number and file index on Windows. A hard link, a
-/// bind mount, a junction or any other spelling of it is the same file.
-pub type FileId = (u64, u64);
+/// unix, its volume serial number and 128-bit file id on Windows
+/// ([`super::claim::handle_id`]). A hard link, a bind mount, a junction or
+/// any other spelling of it is the same file.
+pub type FileId = (u64, u128);
 
-#[cfg(unix)]
-fn file_id(p: &Path) -> Option<FileId> {
-    use std::os::unix::fs::MetadataExt;
-    std::fs::metadata(p).ok().map(|m| (m.dev(), m.ino()))
+thread_local! {
+    /// The first path whose identity [`file_id`] could not read during a
+    /// check: [`check_write_sets`] refuses the run then.
+    static ID_ERROR: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
 }
 
-/// Read from a handle the path opens (`GetFileInformationByHandle`), links
-/// followed as `metadata` follows them; a folder opens too.
-#[cfg(windows)]
+/// `p`'s identity, `None` when nothing is there. Something there whose
+/// identity cannot be read is no file without one: the error is kept for
+/// [`check_write_sets`], which refuses the run, so no check ever takes a
+/// parent's identity for the file's.
 fn file_id(p: &Path) -> Option<FileId> {
-    let h = winapi_util::Handle::from_path_any(p).ok()?;
-    let i = winapi_util::file::information(&h).ok()?;
-    Some((i.volume_serial_number(), i.file_index()))
+    match read_file_id(p) {
+        Ok(id) => id,
+        Err(e) => {
+            ID_ERROR.with(|err| {
+                err.borrow_mut()
+                    .get_or_insert_with(|| format!("{}: {e}", p.display()));
+            });
+            None
+        }
+    }
+}
+
+/// Whether `e` says there is nothing at the path.
+fn absent(e: &std::io::Error) -> bool {
+    matches!(
+        e.kind(),
+        std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+    )
+}
+
+#[cfg(unix)]
+fn read_file_id(p: &Path) -> std::io::Result<Option<FileId>> {
+    use std::os::unix::fs::MetadataExt;
+    match std::fs::metadata(p) {
+        Ok(m) => Ok(Some((m.dev(), u128::from(m.ino())))),
+        Err(e) if absent(&e) => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+/// From a handle the path opens with no access asked (links followed, as
+/// `metadata` follows them; `FILE_FLAG_BACKUP_SEMANTICS` opens a folder too).
+#[cfg(windows)]
+fn read_file_id(p: &Path) -> std::io::Result<Option<FileId>> {
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_BACKUP_SEMANTICS;
+    match std::fs::OpenOptions::new()
+        .access_mode(0)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+        .open(p)
+    {
+        Ok(f) => super::claim::handle_id(&f).map(Some),
+        Err(e) if absent(&e) => Ok(None),
+        Err(e) => Err(e),
+    }
 }
 
 /// A path a check compares by the file it names (TLS-109), not by spelling.
@@ -228,7 +279,9 @@ fn resolve(cwd: &Path, p: &Path) -> Ident {
 }
 
 /// A name that does not exist yet as the file system will match it: lowercased
-/// on Windows, a case-insensitive file system.
+/// on Windows, a case-insensitive file system. In a folder set case-sensitive
+/// this can only make two names one, a refusal of a run with no clash, never
+/// a clash let through; and the claim at the open compares the files.
 fn spelled(name: &std::ffi::OsStr) -> std::ffi::OsString {
     if cfg!(windows) {
         name.to_string_lossy().to_lowercase().into()
@@ -455,8 +508,21 @@ impl Written {
 /// path changed after them, a shard child) still meets them when it opens
 /// its file. `jobs`: `(name, paths)`, `name` as the error line names the job.
 /// `Err`: the one usage line. It runs before any job's file is opened; a
-/// caller opens nothing of its own (the trace file) unless it is `Ok`.
+/// caller opens nothing of its own (the trace file) unless it is `Ok`. A
+/// file whose identity cannot be read refuses the run ([`file_id`]).
 pub fn check_write_sets(jobs: &[(String, JobPaths)], cwd: &Path) -> Result<(), String> {
+    ID_ERROR.with(|e| e.borrow_mut().take());
+    let checked = check_identities(jobs, cwd);
+    match ID_ERROR.with(|e| e.borrow_mut().take()) {
+        Some(e) => Err(format!(
+            "al-sem batch: cannot read the identity of {e}; the run cannot be checked"
+        )),
+        None => checked,
+    }
+}
+
+/// [`check_write_sets`]'s checks.
+fn check_identities(jobs: &[(String, JobPaths)], cwd: &Path) -> Result<(), String> {
     use super::claim::{keep, marker_of, protect, reserve, write_key};
     use std::collections::btree_map::Entry;
     let fail = |why: String| Err(format!("al-sem batch: {why}"));

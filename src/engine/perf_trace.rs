@@ -194,8 +194,11 @@ struct TraceWriter {
     out: Option<BufWriter<File>>,
     first: bool,
     /// A deferred file ([`defer_file`]): its path and the events so far,
-    /// until [`start_file`] opens it.
+    /// until [`spool_file`] or [`start_file`] takes them.
     pending: Option<(PathBuf, Vec<Value>)>,
+    /// While `out` is a spool ([`spool_file`]): the spool's path and the
+    /// trace file's own, which [`publish_file`] writes at the end.
+    spool: Option<(PathBuf, PathBuf)>,
 }
 
 impl TraceWriter {
@@ -211,6 +214,7 @@ impl TraceWriter {
             out: Some(out),
             first: true,
             pending: None,
+            spool: None,
         })
     }
 
@@ -221,6 +225,7 @@ impl TraceWriter {
             out: None,
             first: true,
             pending: None,
+            spool: None,
         }
     }
 
@@ -547,41 +552,88 @@ fn synthetic_tid() -> u32 {
 /// Set by [`defer_file`] before the tracer starts.
 static DEFERRED: AtomicBool = AtomicBool::new(false);
 
-/// TLS-109: the trace file is not opened when the tracer starts, but by
-/// [`start_file`]; events until then are held in memory. `alsem batch` calls
-/// it first thing and opens the file only after every job write of the
-/// process, so a trace file that aliases an input or an output is refused,
-/// never what it aliases. Only before the first event has any effect.
+/// TLS-109: the trace file is not opened when the tracer starts; events are
+/// held in memory, then spooled to a private file ([`spool_file`]), and the
+/// trace file is written only at the end ([`publish_file`]). `alsem batch`
+/// calls it first thing and publishes every process's trace after all job
+/// writes of the run, so a trace file that aliases an input or an output is
+/// refused, never what it aliases. Only before the first event has any
+/// effect.
 pub fn defer_file() {
     DEFERRED.store(true, Ordering::Relaxed);
 }
 
-/// Open a deferred trace file with `open` (the batch's claim) and write the
-/// events held so far. A refused open writes no trace and says why on
-/// stderr. A no-op when tracing is off, not deferred, or already started.
-pub fn start_file(open: impl FnOnce(&std::path::Path) -> std::io::Result<File>) {
-    let Some(t) = tracer() else { return };
-    let Ok(mut w) = t.writer.lock() else { return };
-    let Some((path, held)) = w.pending.take() else {
-        return;
-    };
-    match open(&path).and_then(TraceWriter::from_file) {
+/// TLS-109: write a deferred trace's events, held so far and to come, to
+/// `spool` (a private file of the batch run, which aliases nothing) until
+/// [`publish_file`]. Each event is flushed as it comes, so a process that
+/// dies leaves a whole spool. Returns the trace file's own path, or `None`
+/// when tracing is off or not deferred.
+pub fn spool_file(spool: &std::path::Path) -> Option<PathBuf> {
+    let t = tracer()?;
+    let mut w = t.writer.lock().ok()?;
+    let (path, held) = w.pending.take()?;
+    match File::create(spool).and_then(TraceWriter::from_file) {
         Ok(started) => {
             *w = started;
             for ev in &held {
                 w.append(ev);
             }
+            w.spool = Some((spool.to_path_buf(), path.clone()));
         }
-        Err(e) => eprintln!("perf_trace: {}: {e}; file tracing disabled", path.display()),
+        Err(e) => eprintln!(
+            "perf_trace: {}: {e}; file tracing disabled",
+            spool.display()
+        ),
     }
+    Some(path)
 }
 
-/// Drop a deferred trace file that will not be opened: nothing is written to
-/// its path. `why`, when given, is said on stderr. A no-op once started.
+/// Write the spool ([`spool_file`]) to the trace file's own path, opened
+/// with `open` (the batch's claim), and go on writing there; remove the
+/// spool. A refused open writes no trace and says why on stderr.
+pub fn publish_file(open: impl FnOnce(&std::path::Path) -> std::io::Result<File>) {
+    let Some(t) = tracer() else { return };
+    let Ok(mut w) = t.writer.lock() else { return };
+    let Some((spool, path)) = w.spool.take() else {
+        return;
+    };
+    if let Some(out) = w.out.as_mut() {
+        let _ = out.flush();
+    }
+    let published = std::fs::read(&spool).and_then(|bytes| {
+        let mut f = open(&path)?;
+        f.write_all(&bytes)?;
+        Ok((f, bytes == b"[]"))
+    });
+    match published {
+        Ok((f, first)) => {
+            w.out = Some(BufWriter::new(f));
+            w.first = first;
+        }
+        Err(e) => {
+            w.out = None;
+            eprintln!("perf_trace: {}: {e}; file tracing disabled", path.display());
+        }
+    }
+    let _ = std::fs::remove_file(&spool);
+}
+
+/// Drop a deferred or spooled trace file that will not be published:
+/// nothing is written to its path. `why`, when given, is said on stderr. A
+/// no-op once published.
 pub fn drop_file(why: Option<&str>) {
     let Some(t) = tracer() else { return };
     let Ok(mut w) = t.writer.lock() else { return };
-    if let (Some((path, _)), Some(why)) = (w.pending.take(), why) {
+    let path = match (w.pending.take(), w.spool.take()) {
+        (Some((path, _)), _) => path,
+        (None, Some((spool, path))) => {
+            w.out = None;
+            let _ = std::fs::remove_file(spool);
+            path
+        }
+        (None, None) => return,
+    };
+    if let Some(why) = why {
         eprintln!("perf_trace: {}: not written: {why}", path.display());
     }
 }

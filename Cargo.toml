@@ -152,11 +152,12 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
-# `alsem batch`'s file identity on Windows (TLS-109): volume serial number and
-# file index of an opened handle (`GetFileInformationByHandle`). Already in the
-# tree (walkdir -> same-file).
+# `alsem batch`'s file identity on Windows (TLS-109): the 128-bit file id and
+# volume serial number of an opened handle (`GetFileInformationByHandleEx`,
+# `FileIdInfo`) and its file type (`GetFileType`). Already in the tree
+# (walkdir -> same-file -> winapi-util), with these features.
 [target.'cfg(windows)'.dependencies]
-winapi-util = "0.1"
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }
 
 [features]
 default = ["telemetry"]
