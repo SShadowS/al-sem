@@ -114,7 +114,12 @@ pub fn open_trace(path: &Path, owner: &str) -> std::io::Result<File> {
 }
 
 fn open_claimed(path: &Path, owner: &str, fails_run: bool) -> std::io::Result<File> {
-    let f = OpenOptions::new().write(true).create(true).open(path)?;
+    // Not truncated here: only once the claim holds.
+    let f = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(path)?;
     if let Some(dir) = DIR.get()
         && !claim(dir, &handle_marker(&f, path)?, owner)?
     {
