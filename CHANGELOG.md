@@ -18,29 +18,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   same instructions).
 - **Cycles beside instructions.** Each timed call now counts user-mode cycles too, per PMU
   (`cpu_core`, `cpu_atom`, or plain). Only `instructions` and `cycles` are allowed, once each
-  per PMU: both are fixed counters, so nothing multiplexes. A kind whose perf running shares
-  over its PMUs do not sum to 100 % is no count. One PMU's share alone is no check: an
-  unpinned call reads 67 % and 33 %. perf prints each share cut to a whole percent, so the
-  sum may fall short by under one point per PMU (93.7 % and 6.3 % read 93 and 6: 23 of 300
-  probes on server1). Each record in `speed.json` adds `cycles`,
-  `counts` (per event), `user` and `sys` seconds, `clock` (user cycles / user seconds, GHz)
-  and `cpi` (cycles per instruction). Rows add `clock` and `cpi` ratios. No field was renamed;
-  `cpu` is still user plus system.
-- **Labels, not verdicts.** A judged row whose sides' clocks differ beyond x1.15 is labelled
-  `CLOCK`; one whose cycles per instruction do, `CPI`. Both bands are provisional, to be set
-  after about 20 landings. The labels are on the verdict line and in `speed.json`
-  (`clock_labels`, `cpi_labels`). The same limits judge.
-- **A contradicted failure gets one more flipped pair.** When a judged warm-up row fails and
-  its two passes' ratios differ by more than x1.25, cdo-speed runs two more warm-up passes on
-  fresh servers, each side order once more. If each order's two passes agree within x1.25, the
-  geometric mean of all four judges. If not, the verdict is `HOST UNSTABLE` and cdo-speed exits
-  2 (cannot run); cdo-gate shows the speed phase as FAILED. Never more than one extra pair. The
-  verdict says when a pair was added and why. Rounds keep their rule.
-- **Tests** (`tests/cli/gate_scripts.rs`, stub servers and a stub perf): counts per PMU, a
-  multiplexed count refused, the two labels firing without changing a PASS, the extra pair on
-  a contradicted failure (judged on four passes, never a fifth), HOST UNSTABLE with exit 2,
-  and an agreeing failure that adds nothing. The real-perf test now also checks that cycles
-  are counted.
+  per PMU: both are fixed counters, so our own events never multiplex. Multiplexing caused
+  by another perf user is caught by perf's running time (exact nanoseconds): every event of
+  one PMU must have run exactly as long. On server1 they did in all 20 attached runs of a
+  process starting threads; forcing multiplexing with 16 more events made `cpu_core`'s
+  instructions run 261.7 ms and its cycles 241.0 ms. The one loss not caught is a PMU whose
+  events lose exactly the same time. The running-% column is not used: it is a per-PMU share,
+  cut to whole percents, and the shares of one kind summed to 110-125 % on real calls. A first
+  rule that wanted them to sum to 100 refused 9 of 64 calls in an A/A run on CDO. Each record
+  in `speed.json` adds `cycles`, `counts` (per event), `user` and `sys` seconds, `clock` (user
+  cycles / user seconds, GHz) and `cpi` (cycles per instruction). Rows add `clock` and `cpi`
+  ratios. No field was renamed; `cpu` is still user plus system. When some calls go uncounted,
+  the verdict says how many were counted ("55 of 64 calls counted"). Before, it said "no call
+  fully counted" as soon as the build's or the round total's ratio was missing.
+- **Labels.** A judged row whose sides' clocks differ beyond x1.15 is labelled `CLOCK`; one
+  whose cycles per instruction do, `CPI`. Both bands are provisional, to be set after about
+  20 landings. The labels are on the verdict line and in `speed.json` (`clock_labels`,
+  `cpi_labels`).
+- **A CPU failure with equal work and a label is advisory** (owner decision, kraken's answer
+  to q-20261121T025802-abcd2da8; the owner may overrule). A CPU-time failure becomes ADVISORY
+  when its row's instructions are equal (within x1.02 either way) AND the row has a `CLOCK`
+  or `CPI` label. The verdict prints the CPU ratio, the instruction ratio and the label;
+  `speed.json` lists it under `advisory`. A clean clock with equal cycles per instruction and
+  more CPU is the stall regression instructions miss: it stays a failure. Wall-time and memory
+  failures always fail.
+- **A contradicted failure gets one more flipped pair.** When a judged warm-up row fails (CPU
+  or wall, not advisory) and its two passes' ratios differ by more than x1.25, cdo-speed runs
+  two more warm-up passes on fresh servers, each side order once more. Then every row and
+  measure that failed after pass 2 must agree within each side order (passes 1 and 3, 2 and
+  4, within x1.25), not just the one that added the pair; then the geometric mean of all four
+  passes judges. A row judged after pass 2 stays judged, even when the extra samples pull its
+  base CPU under the 20 s cutoff. If any of them disagrees, the verdict is `HOST UNSTABLE`:
+  cdo-speed exits 2 (cannot run) and cdo-gate shows the speed phase as FAILED. Never more than
+  one extra pair. The verdict says when a pair was added and why. Rounds keep their rule. The
+  pair costs two more passes, and each one first waits for a calm host as passes 1 and 2 do:
+  up to 10 minutes per pass on a loaded host, on top of the passes' own time.
+- **`speed.json` never reads green on HOST UNSTABLE.** It has a new `verdict` field (`PASS`,
+  `FAIL` or `HOST UNSTABLE`), and the instability is also listed in `failed`, so a reader that
+  checks `not failed` sees a failure. Every other `FAIL:` line (a memory failure, say) is still
+  printed on such a run. `warm_samples` is now the number of passes run (4 after an extra
+  pair); `warm_samples_asked` is the number asked for.
+- **Tests** (`tests/cli/gate_scripts.rs`, stub servers and a stub perf, and real perf output
+  as fixtures): counts per PMU, multiplexed and duplicated counts refused, the labels, the
+  advisory rule both ways (equal work with a label, unequal work, a clean clock), the clock's
+  divisor (a side that burns kernel time), the extra pair (agree then PASS, agree then FAIL,
+  a cross-row disagreement, the side order with the positional factor on, a wall trigger, one
+  pass adding nothing), HOST UNSTABLE in `speed.json` and in cdo-gate's summary. The real-perf
+  test now checks that every call is counted, cycles included.
 
 ### Fixed (TLS-108: `ci-steps perf-bounds` times its bounds under a timed CDO slot hold)
 
