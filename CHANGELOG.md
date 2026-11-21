@@ -73,6 +73,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   own test hook (a command it runs after its checks, which no child reads); it is not refused,
   as its own tests use it.
 
+### Fixed (ENG-162: `A := (R)`, `this.G := R` and `A := this.G` are RecordRef aliases)
+
+- **The bug** (Fable, review round 2 on ENG-160). The L2 walk recorded a whole-variable copy
+  (`PVarAssignment::rhs_identifier`) only when both sides were bare or quoted identifiers. A
+  parenthesised right side (`A := (R)`) or a `this.`-qualified side (`this.G := R`,
+  `A := this.G`) made no alias for any reader: the RecordRef flow, the literal-pruning table
+  frame and `record_types`' first temp pass. So `R.GetTable(E); A := (R); A.Get(D.RecordId);
+  Guarded(R)` answered a definite `no` where the `Get` moves R too (one handle, BC 28.4,
+  ENG-145's note): `prove` said the routine cannot write `GE Log`; it can.
+- **The fix**, once in the walk (`ir_walk::plain_variable`): a whole variable is a bare or quoted
+  identifier read through parentheses, or the object's own member `this.X`. Both sides of an
+  assignment use it, so every spelling of one variable gives one name; `this.G := …` is no
+  member assignment (`lhs_is_member`), and `this."My G" := …` names `My G` (the walk kept the
+  quotes, so it matched no declaration).
+- **Tests.** `cli_recref_get`: `ThisAliasFlow`, `ParenAliasFlow`, `ThisAliasFrameRoot`,
+  `ParenAliasFrameRoot` answer `yes`; `ThisAliasTemp`, `ParenAliasTemp` no longer `no` (Fable's
+  probes P32-P35c). `ir_walk::tests::alias_spellings_are_copies` pins every spelling, with
+  controls (a member of a record, a call, an indexed target). Red proofs: not looking through
+  parentheses fails `ParenAliasFlow` and the `(R)` rows; not reading `this.X` as `X` fails
+  `ThisAliasFlow` and the `this.` rows (the quoted name kept its quotes there).
+- **Review round 1** (sol, Fable).
+  - A local or parameter may hide a global of its name (alc accepts it), and `this.G` then names
+    the global. The walk read it as `g`, the local. Now `this.X` is `X` only when no parameter,
+    local or return value of the routine declares `X` (as `extract::this_receivers` reads it);
+    otherwise it is `this.x`, which names nothing the routine declares
+    (`recref_alias::is_shadowed_global`). A holder copied into it may be kept (the alias classes
+    take it as external), and one assigned from it may hold anything (the flow). CLI shapes in
+    codeunit `GE Shadow`: the local's move leaves R alone (`ShadowAliasFlow`: `no`), R kept in
+    the hidden global may be moved by a later call (`ShadowKeepRoot`: `yes`), a copy of the
+    hidden global may hold anything (`ShadowFromRoot`: `yes`); the walk test's shadowed rows.
+  - `this.Slot[1] := R` recorded no assignment (the indexed target read only a bare base); its
+    base now goes through `plain_variable` (`ThisSlotFlow`, `yes`).
+  - The walk test now pins `lhs_is_member` for a member target (`Rec.Name := 'x'`).
+  - Red proofs: `this.X` read as `X` under a shadowing local fails the shadowed rows; an indexed
+    base read bare only fails `ThisSlotFlow`; no "kept" for a copy into the hidden global fails
+    `ShadowKeepRoot`; a copy of it read as the local fails `ShadowFromRoot`.
+  - Filed, older and of another kind: a conditional result and a returned RecordRef as aliases
+    (ENG-175, a BC probe first).
+- **Review round 2** (sol, Fable). The hidden global's name `this.x` was text a name can hold: a
+  local literally named `"this.G"` is legal and keys as `this.g`, so it was taken for a hidden
+  global (its alias lost: a regression of ENG-145's quoted-name alias), and the flow's exit
+  guards, whose key strips `this.`, read `this.G := …` as assigning the shadowing local `G`. The
+  name now starts with a character no AL identifier holds (`features::HIDDEN_GLOBAL_PREFIX`,
+  `"\0this."`). CLI shapes: `QuotedThisName` (`no`: an ordinary alias, kept nowhere),
+  `ParamShadowRoot` (`no`: `this.G := R.Duplicate()` ends no guard on the parameter `G`); the walk
+  test's `"this.G"` row. Red proof: the visible `this.` prefix fails both.
+
 ### Added (TLS-111: cdo-speed counts user cycles, labels CLOCK and CPI, and re-measures a contradicted failure)
 
 - **Why.** On server1, CPU seconds measure the clock, core sharing and core kind as much as the

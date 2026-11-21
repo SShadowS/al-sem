@@ -791,6 +791,12 @@ impl PartialEq for PFieldAccess {
 
 impl Eq for PFieldAccess {}
 
+/// ENG-162: the prefix of a [`PVarAssignment`] side that names a global one of the routine's own
+/// declarations hides (`this.G` with a local `G`): `"\0this.g"`. It starts with a character no AL
+/// identifier holds, so no declared name, quoted or not (`"this.G"` is a legal local), equals it,
+/// and no reader's `this.`-stripping key turns it into the local's name (sol on ENG-162).
+pub const HIDDEN_GLOBAL_PREFIX: &str = "\u{0}this.";
+
 #[derive(Debug, Clone, Serialize, Deserialize, Eq)]
 pub struct PVarAssignment {
     #[serde(rename = "lhsName")]
