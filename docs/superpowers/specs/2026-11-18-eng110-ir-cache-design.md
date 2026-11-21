@@ -55,8 +55,23 @@ with a new head. The CHANGELOG says the same once this lands.
   parse (counting allocator in the probe).
 - **The binary hash:** the `release-fast` `alsem` is 48.6 MB; sha256 over it takes about 0.06 s
   warm (Fable r4). blake3 is measured in step 1.
-- **Measured in step 1:** the blake3 cost of the image, the largest package's entry and text, the
-  publish round trip's cost (Fable r5 estimates ~0.35 CPU-s of 12), the small-package table.
+- **Measured in step 1** (2026-11-21, release-fast, single thread, the probe on the landed IR
+  derives; note `/work/.al-sem/engine-notes/eng110-step1-measures.md`):
+  - parse+lower 12.69 CPU-s; encode 0.31; decode 0.50; 144.1 MiB encoded. Every file's round
+    trip held.
+  - **The publish round trip** (decode + `==` + re-encode + byte compare): 0.84 CPU-s for all of
+    CDO, 6.6 % of parse+lower (Fable r5 estimated ~0.35). A cold miss pays it once per package.
+  - **The largest entry:** Base Application, 128.2 MB encoded (122.3 MiB), under the 1 GiB cap;
+    its text 105.1 MB. The CDO key folder: ~144 MiB.
+  - **The image hash:** blake3 of the 49.7 MB release-fast `alsem`, 1 MiB reads: 0.043 CPU-s
+    (0.061 s wall) with the file out of the page cache, 0.027-0.028 warm.
+  - **The small-package table:** a hit (read + blake3 + decode) costs 0.026-0.046 of the
+    package's parse+lower at every size, down to CDO's smallest package (12 files, 25 KB): the
+    cache wins by more than 20x everywhere. `SMALL_PACKAGE_MIN_FILES = 8`, below every CDO
+    package, keeps only one-to-seven-file packages (not measured) from making tiny entries.
+  - **nextest honours `[env]`** (cargo-nextest 0.9.152): the test and its child saw the
+    `[env]` value, and an explicit environment value won. `ci-steps` and `check-goldens` need no
+    export.
 
 ## The key: the running image, hashed every time
 
@@ -301,9 +316,8 @@ off on Windows).
 - **Tests still exercise the parser:** `.cargo/config.toml` has no `[env]` section today; adding one
   with `ALSEM_IR_CACHE=off` is new work. It covers the `alsem` and `aldump` processes cargo-run tests
   spawn; an explicit value in the environment wins (cargo's documented `[env]` rule without
-  `force`). Whether nextest honours `[env]` is checked in step 1 (not verified); if it does not,
-  `ci-steps` and `check-goldens` export the same value. In-process test binaries are unaffected
-  either way (Design 7).
+  `force`). nextest honours `[env]` (measured in step 1), so `ci-steps` and `check-goldens` export
+  nothing. In-process test binaries are unaffected either way (Design 7).
 - **Counters** per process:
   - `seam_files`: files that reached the seam, counted before any cache decision;
   - `eligible_files`: files of packages with a digest, a cache in use and above the small threshold;
