@@ -234,13 +234,14 @@ Every test still runs before a merge; the tiers decide HOW OFTEN each one runs.
   how much of a hold's age was a suspend, and `run --timed`'s wait for builds runs on awake time.
   **Clock and core sharing are labelled too (TLS-111):** each call also counts user cycles, and a
   judged row whose sides' clocks (user cycles / user s) or cycles per instruction differ beyond
-  x1.15 (provisional bands) is labelled `CLOCK` or `CPI`. Owner decision
-  (q-20261121T025802-abcd2da8): a CPU-time failure with equal instructions (x1.02) AND such a
-  label is ADVISORY; a clean clock with equal CPI, wall and memory still fail. A warm-up failure
-  whose two passes disagree beyond x1.25 gets ONE more flipped pair (two passes, each waiting
-  for a calm host); every row that failed after pass 2 must then agree within each side order,
-  and four passes judge; else `HOST UNSTABLE`, exit 2 (`verdict` and `failed` in speed.json;
-  cdo-gate: FAILED, never a pass).
+  x1.15 (provisional bands) is labelled `CLOCK` or `CPI`, from counts that cover the call
+  (counter running time within 2 % + 0.05 s of its /proc CPU, else `covered: false`, no label).
+  A warm-up failure whose two passes disagree beyond x1.25 gets ONE more flipped pair first
+  (two passes, each waiting for a calm host); every row that failed after pass 2 must then
+  agree within each side order, and four passes judge; else `HOST UNSTABLE`, exit 2 (`verdict`
+  and `failed` in speed.json; cdo-gate: FAILED, never a pass). Only then, owner decision
+  (q-20261121T025802-abcd2da8): a CPU-only failure with equal instructions (x1.02) AND such a
+  label is ADVISORY; a clean clock with equal CPI, wall and memory still fail.
   **It is Linux only (it reads `/proc`):
   on the Windows machine every full `cdo-gate` run FAILS unless given `--no-speed`**
   (an `--only` subset never runs it).

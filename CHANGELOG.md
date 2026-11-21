@@ -35,15 +35,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   whose cycles per instruction do, `CPI`. Both bands are provisional, to be set after about
   20 landings. The labels are on the verdict line and in `speed.json` (`clock_labels`,
   `cpi_labels`).
-- **A CPU failure with equal work and a label is advisory** (owner decision, kraken's answer
-  to q-20261121T025802-abcd2da8; the owner may overrule). A CPU-time failure becomes ADVISORY
-  when its row's instructions are equal (within x1.02 either way) AND the row has a `CLOCK`
-  or `CPI` label. The verdict prints the CPU ratio, the instruction ratio and the label;
-  `speed.json` lists it under `advisory`. A clean clock with equal cycles per instruction and
-  more CPU is the stall regression instructions miss: it stays a failure. Wall-time and memory
-  failures always fail.
+- **Coverage.** Equal running times on a PMU's events do not show that the counters ran for
+  the whole call: both could miss the same stretch. So the instructions events' running time,
+  summed over the PMUs, must match the call's CPU seconds from /proc (user plus system) within
+  2 % plus 0.05 s. Measured on server1 with cdo-speed's own attach, over 40 calls of 0-12 s
+  in threads and in child processes forked during the call: the worst gap was 0.067 s on
+  12 s (0.6 %), and at most 0.021 s below 3 s. A count outside the band stays in the record,
+  marked `covered: false` beside its `running_s`, but it gives no clock, no `CLOCK` or `CPI`
+  label, and so no advisory. A positive count at 0 ns, or a `<not counted>` row at a running
+  time, is no count.
+- **A CPU-only failure with equal work and a label is advisory** (owner decision, kraken's
+  answer to q-20261121T025802-abcd2da8; the owner may overrule). A CPU-time failure becomes
+  ADVISORY when the row's wall time passes, its instructions are equal (within x1.02 either
+  way, counted on both sides in every pass) and it has a `CLOCK` or `CPI` label from covering
+  counts. The verdict prints the CPU ratio, the instruction ratio and the label; `speed.json`
+  lists it under `advisory`. A clean clock with equal cycles per instruction and more CPU is
+  the stall regression instructions miss: it stays a failure. Wall-time and memory failures
+  always fail, and a row that fails wall too has nothing made advisory. Contradiction comes
+  first (review r2, the stricter reading): a failure whose passes disagree gets the extra pair
+  below before any advisory, and the advisory applies only to the final two-pass or four-pass
+  judgment.
 - **A contradicted failure gets one more flipped pair.** When a judged warm-up row fails (CPU
-  or wall, not advisory) and its two passes' ratios differ by more than x1.25, cdo-speed runs
+  or wall, advisory or not) and its two passes' ratios differ by more than x1.25, cdo-speed runs
   two more warm-up passes on fresh servers, each side order once more. Then every row and
   measure that failed after pass 2 must agree within each side order (passes 1 and 3, 2 and
   4, within x1.25), not just the one that added the pair; then the geometric mean of all four
@@ -60,7 +73,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pair); `warm_samples_asked` is the number asked for.
 - **Tests** (`tests/cli/gate_scripts.rs`, stub servers and a stub perf, and real perf output
   as fixtures): counts per PMU, multiplexed and duplicated counts refused, the labels, the
-  advisory rule both ways (equal work with a label, unequal work, a clean clock), the clock's
+  advisory rule both ways (equal work with a label, unequal work, a clean clock, one side
+  uncounted in one pass, CPU and wall failing together, counters covering part of each call,
+  a contradicted failure that would qualify running the extra pair first), the clock's
   divisor (a side that burns kernel time), the extra pair (agree then PASS, agree then FAIL,
   a cross-row disagreement, the side order with the positional factor on, a wall trigger, one
   pass adding nothing), HOST UNSTABLE in `speed.json` and in cdo-gate's summary. The real-perf
