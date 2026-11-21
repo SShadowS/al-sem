@@ -1868,6 +1868,20 @@ fn stream_paths(streams: &JobStreams) -> JobPaths {
     }
 }
 
+/// What a test scope read takes (TLS-109): the workspace's `.al-sem.json`
+/// and every sibling test app it finds, discovered now as the job will.
+fn test_scope_reads(workspace: &str, test_app: &[String], p: &mut JobPaths) {
+    use al_sem::engine::test_select::scope::{ScopeRequest, discover};
+    let ws = Path::new(workspace);
+    p.reads
+        .push(al_sem::state_paths::workspace_config_for_read(ws));
+    let req = ScopeRequest {
+        test_apps: (!test_app.is_empty()).then(|| test_app.iter().map(PathBuf::from).collect()),
+    };
+    p.workspaces
+        .extend(discover(ws, &req).apps.into_iter().map(|a| a.root));
+}
+
 /// What a manifest job writes and reads (#277 D2.4): its two streams, then
 /// what its command line names.
 fn job_paths(command: &Commands, streams: &JobStreams) -> JobPaths {
@@ -1880,6 +1894,7 @@ fn job_paths(command: &Commands, streams: &JobStreams) -> JobPaths {
             if let Some(b) = &a.baseline {
                 if a.update_baseline {
                     p.writes.push(file(b));
+                    p.update = Some(PathBuf::from(b));
                 }
                 p.reads.push(PathBuf::from(b));
             }
@@ -1941,19 +1956,25 @@ fn job_paths(command: &Commands, streams: &JobStreams) -> JobPaths {
             // `--part select` reads the production app as a source dependency.
             p.workspaces
                 .extend(t.production_root.iter().map(PathBuf::from));
+            if t.part.as_deref() == Some("roots") {
+                test_scope_reads(&t.workspace, &t.test_app, &mut p);
+            }
             (Some(&t.workspace), t.out.as_ref())
         }
         Commands::Impact(t) => {
             if let Some(d) = t.diff.as_deref().filter(|d| *d != "-") {
                 p.reads.push(PathBuf::from(d));
             }
-            // `--part main` reads these folders' packages and sources too.
-            p.workspaces.extend(
-                t.package_root
-                    .iter()
-                    .chain(&t.source_dep)
-                    .map(PathBuf::from),
-            );
+            // `--part main` reads these folders' packages, its source
+            // dependencies (relative to the workspace, as the loader takes
+            // them) and the test scope.
+            p.package_roots
+                .extend(t.package_root.iter().map(PathBuf::from));
+            let ws = Path::new(&t.workspace);
+            p.workspaces.extend(t.source_dep.iter().map(|s| ws.join(s)));
+            if t.part.as_deref() == Some("main") {
+                test_scope_reads(&t.workspace, &t.test_app, &mut p);
+            }
             (Some(&t.workspace), t.out.as_ref())
         }
         Commands::Policy(_)
@@ -1987,38 +2008,35 @@ fn usage(line: String) -> ExitCode {
 /// folder ([`claim`]), the workers' included; the trace file too, once the
 /// write check has claimed what the run must not write.
 fn run_batch_cmd(b: BatchCli) -> ExitCode {
+    use al_sem::engine::perf_trace::{drop_file, start_file};
     if let Some(w) = b.worker {
-        if let Some(dir) = std::env::var_os(claim::ENV) {
-            claim::set_dir(dir.into());
-        }
-        start_trace(&format!("trace w{w}"));
+        // A worker writes only inside its parent's claims (TLS-109).
+        let Some(dir) = std::env::var_os(claim::ENV) else {
+            drop_file(Some("the worker has no claim folder"));
+            return usage(format!(
+                "al-sem batch: worker {w}: no claim folder ({}): a worker runs only under its parent",
+                claim::ENV
+            ));
+        };
+        claim::set_dir(dir.into());
+        // Its trace file was a write of the parent's check.
+        start_file(claim::open_trace);
         return run_worker(w);
     }
     let claims = match tempfile::tempdir() {
         Ok(d) => d,
         Err(e) => {
-            start_trace("trace");
+            drop_file(Some("the run has no claim folder"));
             return usage(format!(
                 "al-sem batch: cannot make the run's claim folder: {e}"
             ));
         }
     };
     claim::set_dir(claims.path().to_path_buf());
-    // The manifest first: an exit before the write check still keeps it.
-    let protected = claim::protect_path(Path::new(&b.manifest), claim::READ);
-    let code = match protected {
-        Ok(()) => run_batch_parent(b),
-        Err(e) => usage(format!("al-sem batch: cannot claim the manifest: {e}")),
-    };
-    // A run that ended before its write check starts its trace here.
-    start_trace("trace");
+    let code = run_batch_parent(b);
+    // A run that ended before its write check passed opens no trace file.
+    drop_file(Some("the batch ended before its write check passed"));
     code
-}
-
-/// Open this process's deferred trace file through the run's claim, as
-/// `owner` (TLS-109).
-fn start_trace(owner: &str) {
-    al_sem::engine::perf_trace::start_file(|p| claim::open_trace(p, owner));
 }
 
 /// [`run_batch_cmd`]'s parent run.
@@ -2087,22 +2105,39 @@ fn run_batch_parent(b: BatchCli) -> ExitCode {
         planned.push(plans);
         changed.push(decided);
     }
-    // The run reads its manifest: no job may write it (FR-3).
+    // The run reads its manifest: no job may write it (FR-3). It writes its
+    // trace files (TLS-109): its own and, with workers, each worker's
+    // `<file>.w<b>`, so a job output on one of them is refused here (exit 3).
+    // A worker's derived default name (its pid) is unknown until it starts.
+    use al_sem::engine::batch::manifest::Target;
+    let mut traces = Vec::new();
+    if let Some(trace) = al_sem::engine::perf_trace::pending_path() {
+        if manifest.batches.len() > 1
+            && let Some(file) = std::env::var_os("ALSEM_TRACE_FILE")
+        {
+            traces.extend((0..manifest.batches.len()).map(|b| {
+                let mut w = file.clone();
+                w.push(format!(".w{b}"));
+                Target::File(PathBuf::from(w))
+            }));
+        }
+        traces.insert(0, Target::File(trace));
+    }
     paths.push((
         "the run".to_string(),
         JobPaths {
             reads: vec![manifest_path.to_path_buf()],
+            writes: traces,
             ..JobPaths::default()
         },
     ));
     let cwd = std::env::current_dir().unwrap_or_default();
-    let checked = check_write_sets(&paths, &cwd);
-    // The check claimed the protected files whatever its verdict, so the
-    // trace file can start now.
-    start_trace("trace");
-    if let Err(line) = checked {
+    if let Err(line) = check_write_sets(&paths, &cwd) {
+        al_sem::engine::perf_trace::drop_file(None);
         return usage(line);
     }
+    // Every protection holds: the trace file may open.
+    al_sem::engine::perf_trace::start_file(claim::open_trace);
     #[cfg(debug_assertions)]
     claim::test_seam_after_preflight();
     let w = admit(&kinds, manifest.batches.len());

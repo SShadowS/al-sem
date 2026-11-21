@@ -576,6 +576,22 @@ pub fn start_file(open: impl FnOnce(&std::path::Path) -> std::io::Result<File>) 
     }
 }
 
+/// The deferred trace file's path, while it waits for [`start_file`].
+pub fn pending_path() -> Option<PathBuf> {
+    let w = tracer()?.writer.lock().ok()?;
+    w.pending.as_ref().map(|(p, _)| p.clone())
+}
+
+/// Drop a deferred trace file that will not be opened: nothing is written to
+/// its path. `why`, when given, is said on stderr. A no-op once started.
+pub fn drop_file(why: Option<&str>) {
+    let Some(t) = tracer() else { return };
+    let Ok(mut w) = t.writer.lock() else { return };
+    if let (Some((path, _)), Some(why)) = (w.pending.take(), why) {
+        eprintln!("perf_trace: {}: not written: {why}", path.display());
+    }
+}
+
 fn tracer() -> Option<&'static Tracer> {
     static TRACER: OnceLock<Option<Tracer>> = OnceLock::new();
     TRACER

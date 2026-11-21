@@ -67,6 +67,13 @@ pub struct JobPaths {
     pub reads: Vec<PathBuf>,
     /// The workspaces it reads.
     pub workspaces: Vec<PathBuf>,
+    /// Folders whose packages only it reads (`impact --part main
+    /// --package-root`): their `.alpackages` discovery, no source.
+    pub package_roots: Vec<PathBuf>,
+    /// The one read it rewrites in place: `--update-baseline`'s baseline
+    /// (TLS-106). Its named write of that file is the only write of a file
+    /// a job reads that the check lets through (TLS-109).
+    pub update: Option<PathBuf>,
     /// Targets a refused job's command line names as writes but that it will
     /// not write (ENG-168): the job's own streams may not write a kept file,
     /// or its refusal would still truncate, e.g., the baseline it named.
@@ -91,19 +98,20 @@ const WORKSPACE_FILES: &[&str] = &[
 /// `p` against `cwd` with `.` and `..` folded as the OS takes them: a `..`
 /// goes to the parent of where its prefix leads (a symlink's target), so an
 /// existing prefix is canonicalized before it is popped (R9-3). A `..` after a
-/// prefix that does not exist stays (TLS-109): the OS cannot go through a
-/// missing folder, so `missing/../x` is not `x`.
+/// prefix that is not an existing directory stays (TLS-109): the OS cannot go
+/// through a missing folder or a file, so `missing/../x` and `file/../x` are
+/// not `x`.
 fn fold(cwd: &Path, p: &Path) -> PathBuf {
     let mut folded = PathBuf::new();
     for c in cwd.join(p).components() {
         match c {
             std::path::Component::CurDir => {}
             std::path::Component::ParentDir => match std::fs::canonicalize(&folded) {
-                Ok(canonical) => {
+                Ok(canonical) if canonical.is_dir() => {
                     folded = canonical;
                     folded.pop();
                 }
-                Err(_) => folded.push(".."),
+                _ => folded.push(".."),
             },
             c => folded.push(c),
         }
@@ -282,6 +290,9 @@ fn resolve_hops(cwd: &Path, p: &Path, hops: u32) -> Ident {
 /// cost n² of those calls (G14: 800 jobs 30 s, 5,488 over ten minutes).
 struct WorkspaceRead {
     root: Ident,
+    /// Whether the read takes the folder's sources (`false`: a package root,
+    /// whose `.alpackages` discovery only is read).
+    sources: bool,
     /// The loader's candidate `.alpackages` folders (`package_cache_scope`).
     candidates: Vec<Ident>,
     taken: Taken,
@@ -290,15 +301,24 @@ struct WorkspaceRead {
 }
 
 impl WorkspaceRead {
-    fn new(cwd: &Path, ws: &Path) -> WorkspaceRead {
+    /// `sources`: see the field. `Err`: a folder could not be listed, so the
+    /// check cannot say what the read takes.
+    fn new(cwd: &Path, ws: &Path, sources: bool) -> Result<WorkspaceRead, String> {
         // The loader reads the workspace as spelled, `..` included (TLS-109).
         let spelled = cwd.join(ws);
         let scope = crate::dependencies::package_cache_scope(&spelled);
-        let roots = crate::program::source_deps::configured_roots(&fold(cwd, ws));
-        let mut taken = taken_files(&fold(cwd, ws));
+        let roots = if sources {
+            crate::program::source_deps::configured_roots(&fold(cwd, ws))
+        } else {
+            Vec::new()
+        };
+        let mut taken = Taken::default();
+        if sources {
+            taken = taken_files(&fold(cwd, ws))?;
+        }
         // A source root's files are inputs too, under any name (TLS-109).
         for r in &roots {
-            let t = taken_files(&fold(cwd, r));
+            let t = taken_files(&fold(cwd, r))?;
             taken.files.extend(t.files);
             taken.linked_dirs.extend(t.linked_dirs);
         }
@@ -308,12 +328,13 @@ impl WorkspaceRead {
                 .into_iter()
                 .filter_map(|a| file_id(&a.path)),
         );
-        WorkspaceRead {
+        Ok(WorkspaceRead {
             root: resolve(cwd, ws),
+            sources,
             candidates: scope.candidates.iter().map(|c| resolve(cwd, c)).collect(),
             taken,
             source_roots: roots.iter().map(|r| resolve(cwd, r)).collect(),
-        }
+        })
     }
 
     /// Whether the read takes the file `f`, by identity (TLS-109).
@@ -324,7 +345,7 @@ impl WorkspaceRead {
             .path
             .file_name()
             .is_some_and(crate::dependencies::is_app_file);
-        under(&self.root)
+        (self.sources && under(&self.root))
             || (app && self.candidates.iter().any(|c| f.parent_is(c)))
             || (f.rest.is_empty() && f.chain.last().is_some_and(|i| self.taken.files.contains(i)))
             || (input && self.taken.linked_dirs.iter().any(|d| f.chain.contains(d)))
@@ -342,6 +363,7 @@ fn is_input_name(f: &Path) -> bool {
 }
 
 /// What a workspace read of `ws` takes through links ([`taken_files`]).
+#[derive(Default)]
 struct Taken {
     /// The [`FileId`] of every file it takes that exists now (TLS-109: a
     /// hard link to one, under any name, is that file).
@@ -359,12 +381,14 @@ struct Taken {
 /// file or a directory outside it is read at its target. The walk takes
 /// every [`is_input_name`] file under `ws`, past the folders the source walk
 /// skips, a superset of what a read takes. A linked `.alpackages` is a
-/// package candidate, which [`WorkspaceRead::new`] reads itself.
-fn taken_files(root: &Path) -> Taken {
-    let mut taken = Taken {
-        files: HashSet::new(),
-        linked_dirs: Vec::new(),
-    };
+/// package candidate, which [`WorkspaceRead::new`] reads itself. A folder
+/// that does not exist takes nothing; any other walk error is an `Err`
+/// (TLS-109: a folder it cannot list may hold an input).
+fn taken_files(root: &Path) -> Result<Taken, String> {
+    let mut taken = Taken::default();
+    if !root.exists() {
+        return Ok(taken);
+    }
     let walked = walkdir::WalkDir::new(root)
         .follow_links(true)
         .into_iter()
@@ -372,16 +396,16 @@ fn taken_files(root: &Path) -> Taken {
             e.depth() == 0
                 || !e.file_type().is_dir()
                 || !crate::source_text::is_skipped_dir_name(e.file_name())
-        })
-        .flatten();
+        });
     for e in walked {
+        let e = e.map_err(|e| format!("cannot list the workspace {}: {e}", root.display()))?;
         if e.file_type().is_dir() && e.path_is_symlink() {
             taken.linked_dirs.extend(file_id(e.path()));
         } else if e.file_type().is_file() && is_input_name(e.path()) {
             taken.files.extend(file_id(e.path()));
         }
     }
-    taken
+    Ok(taken)
 }
 
 /// A [`Target`] by identity (TLS-109).
@@ -398,31 +422,26 @@ impl Written {
     }
 }
 
-/// The owner a job's write of `path` claims ([`super::claim`]): the job's
-/// name and the path as its command line or manifest spells it.
-pub fn owner(job: &str, path: &Path) -> String {
-    format!("{job}:{}", path.display())
-}
-
 /// Every write target of the run checked before any build (D2.4, 12A-10):
 /// two targets naming one file (across jobs, or one job's stdout and stderr),
 /// a file inside a directory target or two nested directory targets, a file
-/// one job reads that another job or its own stream writes (its own named
-/// target may: an `--update-baseline` writes the baseline it read), a file
-/// any job writes that a workspace read would take, and a refused job's named
-/// file or directory its own stream writes (`JobPaths::kept`, TLS-110).
-/// Every comparison is by file identity (TLS-109, see [`Ident`]): a hard
-/// link, symlink, bind mount or `..` spelling of a file is that file.
+/// one job reads that any write but its own `--update-baseline` writes
+/// (`JobPaths::update`), a file any job writes that a workspace read would
+/// take, and a refused job's named file or directory its own stream writes
+/// (`JobPaths::kept`, TLS-110). Every comparison is by file identity
+/// (TLS-109, see [`Ident`]): a hard link, symlink, bind mount or `..`
+/// spelling of a file is that file.
 ///
-/// Before the checks, whatever their verdict, it claims every existing file
-/// the run must not write ([`super::claim::protect`]): the files jobs read,
-/// workspace inputs, and a refused job's named files no other job writes.
-/// So a write that gets past the checks (a path changed after them, a shard
-/// child) still meets them when it opens its file. `jobs`: `(name, paths)`,
-/// `name` as the error line names the job. `Err`: the one usage line naming
-/// both jobs. It runs before any job's file is opened.
+/// Before the checks it claims every existing file the run must not write
+/// ([`super::claim`]): the files jobs read and workspace inputs (a baseline
+/// an update rewrites is reserved for that one write), and lists per refused
+/// job the existing files it names. So a write that gets past the checks (a
+/// path changed after them, a shard child) still meets them when it opens
+/// its file. `jobs`: `(name, paths)`, `name` as the error line names the job.
+/// `Err`: the one usage line. It runs before any job's file is opened; a
+/// caller opens nothing of its own (the trace file) unless it is `Ok`.
 pub fn check_write_sets(jobs: &[(String, JobPaths)], cwd: &Path) -> Result<(), String> {
-    use super::claim::{READ, marker_of, protect};
+    use super::claim::{keep, marker_of, protect, reserve, write_key};
     let fail = |why: String| Err(format!("al-sem batch: {why}"));
     // Every write: its job, whether it is one of the job's two streams
     // (`JobPaths::writes` lists them first), its spelling, and what it is.
@@ -457,76 +476,67 @@ pub fn check_write_sets(jobs: &[(String, JobPaths)], cwd: &Path) -> Result<(), S
             .unwrap_or_default()
             .into_iter()
     };
-    // Each distinct workspace read and kept directory, built once (G14).
-    let mut ws_reads: BTreeMap<&PathBuf, WorkspaceRead> = BTreeMap::new();
+    let to_err = |e: String| format!("al-sem batch: {e}");
+    // Each distinct workspace read (sources too, or packages only) and kept
+    // directory, built once (G14).
+    let mut ws_reads: BTreeMap<(&PathBuf, bool), WorkspaceRead> = BTreeMap::new();
     let mut kept_dirs: BTreeMap<&PathBuf, KeptDir> = BTreeMap::new();
     for (_, p) in jobs {
-        for ws in &p.workspaces {
-            ws_reads
-                .entry(ws)
-                .or_insert_with(|| WorkspaceRead::new(cwd, ws));
+        let folders = p.workspaces.iter().map(|w| (w, true));
+        for (ws, sources) in folders.chain(p.package_roots.iter().map(|w| (w, false))) {
+            if !ws_reads.contains_key(&(ws, sources)) {
+                let read = WorkspaceRead::new(cwd, ws, sources).map_err(to_err)?;
+                ws_reads.insert((ws, sources), read);
+            }
         }
         for k in &p.kept {
             if let Target::Dir(d) = k
                 && !kept_dirs.contains_key(d)
             {
-                kept_dirs.insert(
-                    d,
-                    KeptDir::new(resolve(cwd, d)).map_err(|e| format!("al-sem batch: {e}"))?,
-                );
+                kept_dirs.insert(d, KeptDir::new(resolve(cwd, d)).map_err(to_err)?);
             }
         }
     }
+    // Each job's `--update-baseline` write: its position in `writes`, when
+    // the job names one (the one exemption of the reads check).
+    let updates: Vec<Option<(Ident, usize)>> = jobs
+        .iter()
+        .enumerate()
+        .map(|(r, (_, p))| {
+            let u = resolve(cwd, p.update.as_deref()?);
+            let w = same(&u).find(|&w| writes[w].0 == r && !writes[w].1)?;
+            Some((u, w))
+        })
+        .collect();
     // The claims (see the doc), whatever the checks then say.
-    let claim = |fid: &FileId, owner: &str| {
-        protect(&marker_of(fid), owner)
-            .map_err(|e| format!("al-sem batch: cannot claim an input: {e}"))
-    };
+    let claimed = |e: std::io::Error| format!("al-sem batch: cannot claim an input: {e}");
     let existing = |id: &Ident| id.chain.last().filter(|_| id.rest.is_empty()).cloned();
     for (r, (_, p)) in jobs.iter().enumerate() {
         for read in &p.reads {
             let read = resolve(cwd, read);
             let Some(fid) = existing(&read) else { continue };
-            // Its own named target of the same file is the intended write.
-            let mine = same(&read).find(|&w| writes[w].0 == r && !writes[w].1);
-            match mine {
-                Some(w) => claim(&fid, &owner(name(r), writes[w].2))?,
-                None => claim(&fid, READ)?,
+            match &updates[r] {
+                Some((u, w)) if u.key() == read.key() => {
+                    reserve(&marker_of(&fid), &write_key(name(r), writes[*w].2))
+                }
+                _ => protect(&marker_of(&fid)),
             }
+            .map_err(claimed)?;
         }
-        let others = |hit: &dyn Fn(&Ident) -> bool| {
-            writes.iter().any(|(j, _, _, t)| {
-                *j != r
-                    && hit(match t {
-                        Written::File(f) | Written::Dir(f) => f,
-                    })
-            })
-        };
-        let kept_owner = format!("kept:{}", name(r));
+        // What a refused job names: its own writes may not open it (TLS-110),
+        // another job's may. Per job, so another writer lifts nothing.
+        let mut kept = Vec::new();
         for k in &p.kept {
             match k {
-                Target::File(f) => {
-                    let id = resolve(cwd, f);
-                    if let Some(fid) = existing(&id)
-                        && !others(&|w| w.key() == id.key())
-                    {
-                        claim(&fid, &kept_owner)?;
-                    }
-                }
-                Target::Dir(d) => {
-                    let kd = &kept_dirs[d];
-                    if !others(&|w| kd.holds(w)) {
-                        for fid in &kd.files {
-                            claim(fid, &kept_owner)?;
-                        }
-                    }
-                }
+                Target::File(f) => kept.extend(existing(&resolve(cwd, f)).map(|i| marker_of(&i))),
+                Target::Dir(d) => kept.extend(kept_dirs[d].files.iter().map(marker_of)),
             }
         }
+        keep(name(r), &kept).map_err(claimed)?;
     }
     for read in ws_reads.values() {
         for fid in &read.taken.files {
-            claim(fid, READ)?;
+            protect(&marker_of(fid)).map_err(claimed)?;
         }
     }
     // Two targets that clash: the first write with a later partner, then its
@@ -582,7 +592,7 @@ pub fn check_write_sets(jobs: &[(String, JobPaths)], cwd: &Path) -> Result<(), S
     // Per distinct workspace: the writes (positions in `writes`, in order) its
     // read takes. Whether a read takes a file does not depend on which job
     // reads, so each pair of a workspace and a write is asked once.
-    let mut taken: BTreeMap<&PathBuf, Vec<usize>> = BTreeMap::new();
+    let mut taken: BTreeMap<(&PathBuf, bool), Vec<usize>> = BTreeMap::new();
     for (r, (_, paths)) in jobs.iter().enumerate() {
         for kept in &paths.kept {
             match kept {
@@ -626,11 +636,15 @@ pub fn check_write_sets(jobs: &[(String, JobPaths)], cwd: &Path) -> Result<(), S
                 .iter()
                 .copied()
                 .filter(|&j| matches!(&writes[j].3, Written::Dir(d) if read.under(d)));
-            // Another job's write, or its own stream (TLS-109): only its own
-            // named target of the file is the intended write.
+            // Any write but the job's own `--update-baseline` of this file
+            // (TLS-109): a diff output on its own input would destroy it.
+            let update = updates[r]
+                .as_ref()
+                .filter(|(u, _)| u.key() == read.key())
+                .map(|(_, w)| *w);
             let hit = same(&read)
                 .chain(in_dir)
-                .filter(|&w| writes[w].0 != r || writes[w].1)
+                .filter(|&w| Some(w) != update)
                 .min();
             if let Some(w) = hit {
                 return fail(format!(
@@ -641,9 +655,10 @@ pub fn check_write_sets(jobs: &[(String, JobPaths)], cwd: &Path) -> Result<(), S
                 ));
             }
         }
-        for ws in &paths.workspaces {
-            let read = &ws_reads[ws];
-            let hits = taken.entry(ws).or_insert_with(|| {
+        let folders = paths.workspaces.iter().map(|w| (w, true));
+        for key in folders.chain(paths.package_roots.iter().map(|w| (w, false))) {
+            let read = &ws_reads[&key];
+            let hits = taken.entry(key).or_insert_with(|| {
                 writes
                     .iter()
                     .enumerate()
@@ -710,7 +725,9 @@ pub fn load(path: &Path, out_dir: Option<&Path>) -> Result<Manifest, String> {
         return Err(fail("no batch".to_string()));
     }
     let absolute = |p: &Path| std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf());
-    let base = absolute(path.parent().unwrap_or(Path::new("")));
+    // A bare `m.json` has the parent "", which `absolute` refuses: it is ".".
+    let parent = path.parent().filter(|p| !p.as_os_str().is_empty());
+    let base = absolute(parent.unwrap_or(Path::new(".")));
     let dir = out_dir.map_or_else(|| base.clone(), absolute);
     batches
         .into_iter()

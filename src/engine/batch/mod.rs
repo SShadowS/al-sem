@@ -151,12 +151,11 @@ pub(crate) fn serialize(j: usize, job: &dyn Job, doc: Doc, lines: Vec<String>) -
 /// own files where they name. A failure ends them (D2.2): the write error
 /// line on the process's stderr, the job's write-failure exit. Every file is
 /// opened through [`claim::open_for_write`] (TLS-109): it is truncated only
-/// once its identity is claimed for this job.
+/// once its identity is claimed for this one write.
 fn write_job(b: u32, i: usize, job: &dyn Job, streams: &JobStreams, out: &JobOutput) -> JobLine {
     let name = format!("batch {b} job {i}");
     let create = |p: &Path| {
-        claim::open_for_write(p, &manifest::owner(&name, p))
-            .map_err(|e| write_error(&p.display().to_string(), &e))
+        claim::open_for_write(p, &name, None).map_err(|e| write_error(&p.display().to_string(), &e))
     };
     // A failed stdout file stops the job before its stderr file (D2.2).
     let streams_open = create(&streams.stdout).and_then(|o| Ok((o, create(&streams.stderr)?)));

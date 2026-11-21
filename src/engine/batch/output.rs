@@ -272,7 +272,8 @@ pub fn write_error(target: &str, e: &std::io::Error) {
 /// a shard child or an `--out` that is another write or an input is refused
 /// before it is truncated.
 fn write_file(job: &str, path: &Path, bytes: &[u8]) -> Result<(), Failure> {
-    super::claim::open_for_write(path, &super::manifest::owner(job, path))
+    let key = super::claim::write_key(job, path);
+    super::claim::open_for_write(path, job, Some(&key))
         .and_then(|mut f| f.write_all(bytes))
         .map_err(|e| (path.display().to_string(), e))
 }

@@ -5,25 +5,28 @@
 //! after the preflight, a dangling link two writes share, a shard child).
 //!
 //! A run makes one private folder ([`set_dir`], handed to its workers in
-//! [`ENV`]). A claim is a marker file named after the file's identity
-//! ([`Marker`]), created with `create_new`, holding its owner. A writer opens
-//! its file WITHOUT truncating it, reads the handle's identity, claims it, and
-//! only then truncates. A marker held by another owner refuses the write:
-//! nothing is truncated, and the run fails ([`any_refused`]). The preflight claims
-//! the files the run must not write (inputs, a refused job's named files)
-//! before any job runs. Outside a batch (no folder) a write truncates as it
-//! always did.
+//! [`ENV`]; a worker refuses to run without it). A claim is a marker file
+//! named after the file's identity ([`Marker`]), created with `create_new`. A
+//! writer opens its file WITHOUT truncating it, reads the handle's identity,
+//! claims it, and only then truncates. Every write is its own claim: an
+//! existing marker refuses the open, whoever made it, with one exception:
+//! the preflight's reservation of a baseline for the one `--update-baseline`
+//! write that rewrites it ([`reserve`]), which that write takes once. A
+//! refused open truncates nothing and fails the run ([`any_refused`]).
+//!
+//! The preflight claims the files the run must not write (what jobs read,
+//! workspace inputs) before any job runs, and lists per refused job the
+//! files it names ([`keep`]): its own streams may not write them, whoever
+//! else may. Outside a batch (no folder) a write opens as it always did.
 
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// The environment variable that hands the run's folder to its workers.
 pub const ENV: &str = "ALSEM_BATCH_CLAIMS";
-
-/// The owner of a protected input: no writer is ever its owner.
-pub const READ: &str = "read";
 
 /// A refused claim leaves this file in the run's folder, so the parent sees
 /// a worker's refusal too.
@@ -36,9 +39,15 @@ pub fn set_dir(dir: PathBuf) {
     let _ = DIR.set(dir);
 }
 
+/// The run's folder, when this process is in a batch run.
+pub fn dir() -> Option<&'static Path> {
+    DIR.get().map(PathBuf::as_path)
+}
+
 /// What a marker is named: the file's device and inode on unix. Elsewhere
-/// (Windows) a hash of its canonical path: the claim is then the path
-/// comparison of before TLS-109, and a hard link is not caught there.
+/// (Windows) a hash of its canonical path, read after the open: the claim is
+/// then the path comparison of before TLS-109, and neither a hard link nor a
+/// path changed between the open and that read is caught there.
 pub type Marker = String;
 
 #[cfg(unix)]
@@ -66,72 +75,137 @@ fn handle_marker(_f: &File, path: &Path) -> std::io::Result<Marker> {
     Ok(marker_of(&std::fs::canonicalize(path)?))
 }
 
-/// Claim `marker` for `owner`. `Ok(false)`: another owner holds it.
-fn claim(dir: &Path, marker: &str, owner: &str) -> std::io::Result<bool> {
-    let path = dir.join(marker);
-    match OpenOptions::new().write(true).create_new(true).open(&path) {
-        Ok(mut m) => m.write_all(owner.as_bytes()).map(|()| true),
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-            Ok(std::fs::read_to_string(&path)? == owner)
-        }
+/// Create `marker` holding `text`. `Ok(false)`: it exists.
+fn create(dir: &Path, marker: &str, text: &str) -> std::io::Result<bool> {
+    match OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(dir.join(marker))
+    {
+        Ok(mut m) => m.write_all(text.as_bytes()).map(|()| true),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
         Err(e) => Err(e),
     }
 }
 
-/// The preflight's protection of an existing file: the first owner stays
-/// (two readers of one file both read). Nothing happens outside a batch.
-pub fn protect(marker: &str, owner: &str) -> std::io::Result<()> {
+/// The preflight's claim on an existing file no write may take. An existing
+/// marker is fine (two jobs read one file). Nothing happens outside a batch.
+pub fn protect(marker: &str) -> std::io::Result<()> {
     match DIR.get() {
-        Some(dir) => claim(dir, marker, owner).map(|_| ()),
+        Some(dir) => create(dir, marker, "read").map(|_| ()),
         None => Ok(()),
     }
 }
 
-/// [`protect`] the file at `path` when it exists.
-pub fn protect_path(path: &Path, owner: &str) -> std::io::Result<()> {
-    match File::open(path) {
-        Ok(f) => protect(&handle_marker(&f, path)?, owner),
-        Err(_) => Ok(()),
+/// The preflight's claim on a baseline for the one write `key` names
+/// ([`write_key`]): that write may take it once ([`open_for_write`]).
+pub fn reserve(marker: &str, key: &str) -> std::io::Result<()> {
+    match DIR.get() {
+        Some(dir) => create(dir, marker, &format!("reserve:{key}")).map(|_| ()),
+        None => Ok(()),
     }
 }
 
-/// The run's folder, when this process is in a batch run.
-pub fn dir() -> Option<&'static Path> {
-    DIR.get().map(PathBuf::as_path)
+/// The key of a job's file write: its name and the path as spelled.
+pub fn write_key(job: &str, path: &Path) -> String {
+    format!("{job}:{}", path.display())
 }
 
-/// Open `path` for `owner`'s write: created when missing, claimed by its
-/// identity, then truncated. A claim held by another owner is an error
-/// naming why, and the file is left as it was.
-pub fn open_for_write(path: &Path, owner: &str) -> std::io::Result<File> {
-    open_claimed(path, owner, true)
+/// The file listing `job`'s kept identities.
+fn kept_file(dir: &Path, job: &str) -> PathBuf {
+    dir.join(format!("kept-{}", job.replace(' ', "_")))
+}
+
+/// The preflight's list of the files a refused `job` names (TLS-110): its
+/// own writes may not open one of them.
+pub fn keep(job: &str, markers: &[Marker]) -> std::io::Result<()> {
+    match DIR.get() {
+        Some(dir) if !markers.is_empty() => std::fs::write(kept_file(dir, job), markers.join("\n")),
+        _ => Ok(()),
+    }
+}
+
+/// A unique token per claim, across the run's processes.
+fn token() -> String {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    format!(
+        "write:{}:{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    )
+}
+
+/// Open `path` for one write of `job`: created when missing, claimed by its
+/// identity, then truncated. `key`: the write's [`write_key`] when it may
+/// take a [`reserve`]d baseline (a job's file action), `None` for a stream.
+/// A refused claim, or one that cannot be made, is an error naming why, the
+/// file is left as it was, and the run fails.
+pub fn open_for_write(path: &Path, job: &str, key: Option<&str>) -> std::io::Result<File> {
+    let Some(dir) = DIR.get() else {
+        // Outside a batch: exactly as before TLS-109.
+        return File::create(path);
+    };
+    let f = open_kept(path)?;
+    if f.metadata()?.is_file() {
+        // The claim refused, or could not be made: the run fails.
+        claim(dir, &f, path, Some(job), key).inspect_err(|_| {
+            let _ = File::create(dir.join(REFUSED));
+        })?;
+        f.set_len(0)?;
+    }
+    Ok(f)
 }
 
 /// [`open_for_write`] for a trace file: a refusal writes no trace but does
 /// not fail the run.
-pub fn open_trace(path: &Path, owner: &str) -> std::io::Result<File> {
-    open_claimed(path, owner, false)
+pub fn open_trace(path: &Path) -> std::io::Result<File> {
+    let Some(dir) = DIR.get() else {
+        return File::create(path);
+    };
+    let f = open_kept(path)?;
+    if f.metadata()?.is_file() {
+        claim(dir, &f, path, None, None)?;
+        f.set_len(0)?;
+    }
+    Ok(f)
 }
 
-fn open_claimed(path: &Path, owner: &str, fails_run: bool) -> std::io::Result<File> {
-    // Not truncated here: only once the claim holds.
-    let f = OpenOptions::new()
+/// Open `path` to write, created when missing, NOT truncated: only once the
+/// claim holds. A device, pipe or FIFO (`/dev/null`, `>(cat)`) is not a
+/// regular file: it holds no content a truncation could lose and `set_len`
+/// fails on it, so its writers neither claim nor truncate it, as before.
+fn open_kept(path: &Path) -> std::io::Result<File> {
+    OpenOptions::new()
         .write(true)
         .create(true)
         .truncate(false)
-        .open(path)?;
-    if let Some(dir) = DIR.get()
-        && !claim(dir, &handle_marker(&f, path)?, owner)?
+        .open(path)
+}
+
+/// Claim the opened `f` for one write ([`open_for_write`]'s rules).
+fn claim(
+    dir: &Path,
+    f: &File,
+    path: &Path,
+    job: Option<&str>,
+    key: Option<&str>,
+) -> std::io::Result<()> {
+    let refused = |why: &str| Err(std::io::Error::other(format!("refused: {why} (TLS-109)")));
+    let marker = handle_marker(f, path)?;
+    if let Some(job) = job
+        && let Ok(kept) = std::fs::read_to_string(kept_file(dir, job))
+        && kept.lines().any(|m| m == marker)
     {
-        if fails_run {
-            let _ = File::create(dir.join(REFUSED));
-        }
-        return Err(std::io::Error::other(
-            "refused: this file is another write or an input of this batch run (TLS-109)",
-        ));
+        return refused("this job is refused and names this file, which must stay as it is");
     }
-    f.set_len(0)?;
-    Ok(f)
+    if !create(dir, &marker, &token())? {
+        let held = std::fs::read_to_string(dir.join(&marker))?;
+        let reserved = key.is_some_and(|k| held == format!("reserve:{k}"));
+        if !(reserved && create(dir, &format!("{marker}.taken"), "")?) {
+            return refused("this file is another write or an input of this batch run");
+        }
+    }
+    Ok(())
 }
 
 /// Whether any claim of this run, in any of its processes, was refused.
