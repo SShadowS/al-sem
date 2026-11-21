@@ -7,6 +7,117 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (TLS-111: cdo-speed counts user cycles, labels CLOCK and CPI, and re-measures a contradicted failure)
+
+- **Why.** On server1, CPU seconds measure the clock, core sharing and core kind as much as the
+  work. ENG-168's first landing failed warm-tests at CPU x1.44 with instructions x0.9997 and no
+  engine change. The note `docs/superpowers/notes/2026-11-21-tls111-cpu-seconds-on-server1.md`
+  has the experiments: 12 `fingerprint` runs, all cores against P-cores only (user CPU spread
+  x1.33 with cycles within about ±1.7 %), and the warm-tests call alone, beside busy E-cores,
+  and beside busy sibling threads (each of the last two roughly doubled CPU and wall on the
+  same instructions).
+- **Cycles beside instructions.** Each timed call now counts user-mode cycles too, per PMU
+  (`cpu_core`, `cpu_atom`, or plain). Only `instructions` and `cycles` are allowed, once each
+  per PMU: both are fixed counters, so our own events never multiplex. Multiplexing caused
+  by another perf user is caught by perf's running time (exact nanoseconds): every event of
+  one PMU must have run exactly as long. On server1 they did in all 20 attached runs of a
+  process starting threads; forcing multiplexing with 16 more events made `cpu_core`'s
+  instructions run 261.7 ms and its cycles 241.0 ms. The one loss not caught is a PMU whose
+  events lose exactly the same time. The running-% column is not used: it is a per-PMU share,
+  cut to whole percents, and the shares of one kind summed to 110-125 % on real calls. A first
+  rule that wanted them to sum to 100 refused 9 of 64 calls in an A/A run on CDO. Each record
+  in `speed.json` adds `cycles`, `counts` (per event), `user` and `sys` seconds, `clock` (user
+  cycles / user seconds, GHz) and `cpi` (cycles per instruction). Rows add `clock` and `cpi`
+  ratios. No field was renamed; `cpu` is still user plus system. When some calls go uncounted,
+  the verdict says how many were counted ("55 of 64 calls counted"). Before, it said "no call
+  fully counted" as soon as the build's or the round total's ratio was missing.
+- **Labels.** A judged row whose sides' clocks differ beyond x1.15 is labelled `CLOCK`; one
+  whose cycles per instruction do, `CPI`. Both bands are provisional, to be set after about
+  20 landings. The labels are on the verdict line and in `speed.json` (`clock_labels`,
+  `cpi_labels`).
+- **Coverage.** Equal running times on a PMU's events do not show that the counters ran for
+  the whole call: both could miss the same stretch. So the instructions events' running time,
+  summed over the PMUs, is compared with the call's CPU seconds from /proc (user plus system).
+  A coverage loss can only make the running time shorter, so the check is one-sided: a count
+  covers its call unless it ran less than the CPU less 2 % less 0.05 s. A running time over
+  1.10 times the CPU plus 0.05 s is no loss but odd, and is no count either.
+  - Synthetic calls on server1, with cdo-speed's own attach (40 calls of 0-12 s, in threads
+    and in child processes forked during the call): the worst relative gap on the 12 s calls
+    was 0.6 % (0.067 s); on 0.5 s calls up to +2.4 % (0.012 s), and on a 0.05 s call -15.5 %
+    (one 0.009 s tick), both inside the 0.05 s allowance.
+  - CDO scale, the coordinator's A/A run of f7da9a93: all 64 calls counted. On the 39 calls
+    above 1 s CPU, running minus CPU was -0.5 % to +2.7 %; every build and warm-tests call
+    (the multi-threaded ones) read +2.2 to +2.7 % (+2.23 to +2.66 %), for example build
+    184.41 s running against 179.63 s CPU, and warm-tests 136.91 s against 133.38 s. Calls at
+    or below 1 s were within -25 to +22 ms. The excess is probably /proc's tick sampling
+    against perf's exact times on many threads; that is a guess, not a measured cause. A
+    first, two-sided 2 % band marked all 8 of those calls `NOT COVERED`; the one-sided check
+    counts them, and its x1.10 cap is about four times the largest excess seen. The A/A run of
+    4eb73bb5 (one-sided check) read all 64 calls counted and covered, PASS, no label. Its cost: on a
+    multi-threaded call reading about +2.5 %, a real coverage loss of up to about 4.7 % still
+    passes. That moves the clock by under 5 %, against the 15 % `CLOCK` band, so it cannot
+    flip an advisory by itself.
+  A count outside the band stays in the record, marked `covered: false` beside its
+  `running_s`, but it gives no clock, no `CLOCK` or `CPI` label, and so no advisory. A
+  positive count at 0 ns, or a `<not counted>` row at a running time, is no count.
+- **A CPU-only failure that head's lower clock explains is advisory** (owner decision,
+  kraken's answer to q-20261121T025802-abcd2da8; the owner may overrule; narrowed in review
+  r3). User CPU is about instructions times cycles per instruction divided by the clock. With
+  equal instructions, more CPU comes either from a lower clock or from more cycles per
+  instruction, and more cycles per instruction is exactly what a cache or memory-stall
+  regression looks like. So a `CPI` label never waives anything. A CPU-time failure becomes
+  ADVISORY only when all of these hold: the row has a `CLOCK` label from covering counts; its
+  instructions are equal (within x1.02 either way, counted on both sides in every pass); its
+  wall time passes; and the clock explains the excess: the CPU ratio at equal clocks is within
+  the CPU limit. The clock is user cycles per user second, so it rescales head's user time
+  only (review r4): (head user × clock ratio + head system) / (base user + base system), the
+  clock ratio being head over base, below 1 when head ran slower. It is taken per pass (a
+  warm-up row's geometric mean over its passes) and per round. A clock in head's favour makes
+  it larger, so it never waives, and the row's clock ratio itself must be below 1 (head
+  slower; review r5): passes that mix a slower clock with a faster one could otherwise read a
+  waivable corrected CPU under an aggregate clock in head's favour. In a rounds row, every round over the
+  CPU limit must meet these conditions by itself: medians from different rounds may not
+  combine. The verdict prints the CPU ratio, the clock-corrected ratio and the instruction
+  ratio; `speed.json` lists it under `advisory`. Wall-time and memory failures always fail.
+  Contradiction comes first (review r2, the stricter reading): a failure whose passes disagree
+  gets the extra pair below before any advisory, and the advisory applies only to the final
+  two-pass or four-pass judgment.
+- **A contradicted failure gets one more flipped pair.** When a judged warm-up row fails (CPU
+  or wall, advisory or not) and its two passes' ratios differ by more than x1.25, cdo-speed runs
+  two more warm-up passes on fresh servers, each side order once more. Then every row and
+  measure that failed after pass 2 must agree within each side order (passes 1 and 3, 2 and
+  4, within x1.25), not just the one that added the pair; then the geometric mean of all four
+  passes judges. A row judged after pass 2 stays judged, even when the extra samples pull its
+  base CPU under the 20 s cutoff. If any of them disagrees, the verdict is `HOST UNSTABLE`:
+  cdo-speed exits 2 (cannot run) and cdo-gate shows the speed phase as FAILED. Never more than
+  one extra pair. The verdict says when a pair was added and why. Rounds keep their rule. The
+  pair costs two more passes, and each one first waits for a calm host as passes 1 and 2 do:
+  up to 10 minutes per pass on a loaded host, on top of the passes' own time. A live example
+  of the rule on a row that does not fail: in the A/A run of f7da9a93, warm-tests' passes read
+  x0.676 and x1.721 (spread 2.54), and their geometric mean x1.079 PASSed with no extra pair.
+  A position or host effect showed as disagreeing passes and was judged correctly.
+- **`speed.json` never reads green on HOST UNSTABLE.** It has a new `verdict` field (`PASS`,
+  `FAIL` or `HOST UNSTABLE`), and the instability is also listed in `failed`, so a reader that
+  checks `not failed` sees a failure. Every other `FAIL:` line (a memory failure, say) is still
+  printed on such a run. `warm_samples` is now the number of passes run (4 after an extra
+  pair); `warm_samples_asked` is the number asked for.
+- **Tests** (`tests/cli/gate_scripts.rs`, stub servers and a stub perf, and real perf output
+  as fixtures): counts per PMU, multiplexed and duplicated counts refused, the labels, the
+  advisory rule both ways (a lower clock that explains the excess; more cycles per
+  instruction, a faster head clock, instructions x1.1 or x0.9 and a clean clock all failing;
+  one side uncounted in one pass, CPU and wall failing together, counters covering part of
+  each call, a contradicted failure that would qualify running the extra pair first; in the
+  rounds, every round judged by itself, the rounds' wall limit, an uncovered round call; a
+  lower clock plus extra system time, and a lower clock that explains only part of the
+  excess, both failing), the clock's
+  divisor (a side that burns kernel time), the extra pair (agree then PASS, agree then FAIL,
+  a cross-row disagreement, the side order with the positional factor on, a wall trigger, one
+  pass adding nothing), HOST UNSTABLE in `speed.json` and in cdo-gate's summary. The real-perf
+  test now checks that every call but at most one is counted, cycles included: under the whole
+  suite's load one call went uncounted in 1 of 9 runs, reason not caught. When cdo-speed
+  refuses perf's output it now logs perf's rows ("perf output not taken as a count"), so the
+  next such call says why.
+
 ### Fixed (TLS-108: `ci-steps perf-bounds` times its bounds under a timed CDO slot hold)
 
 - **What failed.** `perf_bounds` asserts wall-time bounds. In a landing's `ci-steps all` it ran
