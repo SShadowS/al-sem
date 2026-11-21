@@ -437,7 +437,8 @@ impl Ir {
 pub enum ParseStatus {
     /// No `ERROR`/`MISSING` nodes anywhere.
     Clean,
-    /// Recovery nodes present — the IR is partial; do not cache as authoritative.
+    /// Recovery nodes present — the IR is partial. The dependency IR cache (ENG-110) stores
+    /// it like any other IR and replays it exactly: the status is part of the cached `AlFile`.
     Recovered,
 }
 

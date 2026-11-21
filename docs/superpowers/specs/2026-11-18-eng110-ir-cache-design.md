@@ -91,9 +91,14 @@ the one said above: a gate gets no gain.
 - **The producer is self-contained** (sol r4 P2). The image key covers what is in the image; it
   holds only while nothing outside it changes how a text parses or decodes. Two tests pin that on
   the `release-fast` `alsem`:
-  - **shared libraries:** `readelf -d` lists exactly the allowed `NEEDED` set. Today that is
-    `libgcc_s.so.1` and `libc.so.6` (checked on this host's `release-fast` build). Any other
-    library fails the test. Proof: link a crate that pulls in another shared library, red;
+  - **shared libraries:** `readelf -d` lists exactly an allowed `NEEDED` set:
+    `{libc.so.6, libgcc_s.so.1}`, or `{ld-linux-x86-64.so.2, libc.so.6, libgcc_s.so.1}`. The
+    loader is allowed because the release-fast `al-call-hierarchy`, which installs the cache too,
+    needs it for one symbol (`__tls_get_addr`); it is glibc's dynamic loader, mapped in every
+    process, and does no text processing (orchestrator decision after review r1, 2026-11-21).
+    `alsem` and `aldump` need only the first set. Any other library fails the check. It runs on
+    all three binaries (`scripts/check-ir-image`). Proof: `/usr/bin/python3` (extra libraries)
+    fails it;
   - **symbols:** `nm -D --undefined-only` shows no locale or wide-character classification symbol
     (`setlocale`, `newlocale`, `isw*`, `tow*` and their kin); Fable r4 found none. Proof: add a call
     to `iswalpha` through `libc`, red.
@@ -257,15 +262,19 @@ and a `Recovered` fixture (proof: remove the clear, red).
    - **Per-entry publish lock, non-blocking** (orchestrator, rev. 7): a writer takes the entry's lock
      without waiting; if it is busy, another process is publishing the same entry, so this one
      publishes nothing, keeps its parsed IR and counts `publish_skipped_busy`.
-   - **Key-folder lock:** every publisher holds a SHARED `flock` on `<key folder>/folder.lock` from
-     before it creates its temp file until its publish ends. A prune removes a key folder only while
-     holding that lock EXCLUSIVE, taken without blocking, and re-reads `last-used` under it; if busy,
-     it skips the folder this round.
+   - **Key-folder lock** (review r1, sol and Fable): `<root>/ir/<key>.lock`, BESIDE the key folder,
+     never inside it and never removed, so removing a folder never unlinks a held lock. Every
+     publisher holds it SHARED from before it creates the key folder until its publish ends, and a
+     `last-used` writer while it writes. A prune removes a key folder (with or without `last-used`)
+     only while holding that lock EXCLUSIVE, taken without blocking, and reads `last-used` under it;
+     the size pass reads it again under the lock; if busy, it skips the folder this round. The lock
+     files accumulate: one empty file per binary (key) that ever used the cache on the host
+     (orchestrator decision, 2026-11-21).
    - **`last-used`:** published by rename (never written in place) at a process's first hit or
      write, and again when older than a day.
-   - **A key folder without `last-used` or `folder.lock`** (a writer that died between `mkdirat` and
-     its first publish, or a folder from elsewhere) is aged by the folder's own mtime instead, and
-     removed only when that is older than 7 days; it is never removed by the size rule.
+   - **A key folder without `last-used`** (a writer that died between `mkdirat` and its first
+     publish, or a folder from elsewhere) is aged by the folder's own mtime instead, and removed
+     only when that is older than 7 days, under its lock; it is never removed by the size rule.
    - **Throttle, checked periodically:** at a process's first cache use AND at each publish, if
      `<root>/ir/last-prune` is older than an hour, the process takes `<root>/ir/prune.lock` without
      blocking, re-reads `last-prune` under it, and only if still older publishes a new one and
