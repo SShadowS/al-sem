@@ -3978,9 +3978,11 @@ pub fn resolve(workspace: &mut ModelEntities) {
     // ENG-99: each object declaration's shared global rows resolved once (pass 1's table id),
     // so the per-routine passes below find them resolved and copy only a row they change.
     super::record_types::share_resolved_globals(&mut workspace.routines, &symbols);
+    // ENG-159 (sol): the record built-ins a table of the program declares as a procedure.
+    let shadowed = super::recref_alias::ShadowedBuiltins::of(&workspace.routines);
     for routine in &mut workspace.routines {
         let object = declaring.of(routine);
-        resolve_routine_record_types(routine, object, &symbols);
+        resolve_routine_record_types(routine, object, &symbols, &shadowed);
     }
 
     merge_extension_fields(workspace);
