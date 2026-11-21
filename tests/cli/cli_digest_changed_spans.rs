@@ -3492,9 +3492,12 @@ fn batch_worker_uses_the_carried_decision() {
             "stdin": null,
             "files": {"reads": [], "exists": []},
         });
+        // A worker runs only with its parent's claim folder (TLS-109).
+        let claims = tempfile::tempdir().unwrap();
         let mut child = Command::new(env!("CARGO_BIN_EXE_alsem"))
             .args(["batch", "--worker", "0"])
             .arg(t.path().join("unread-manifest.json"))
+            .env("ALSEM_BATCH_CLAIMS", claims.path())
             .env("RUST_LOG", "off")
             .env_remove("ALSEM_TRACE")
             .stdin(std::process::Stdio::piped())

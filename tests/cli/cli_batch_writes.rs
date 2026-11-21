@@ -40,6 +40,8 @@ pub(crate) fn run_manifest_doc(
     let manifest = dir.join("m.json");
     std::fs::write(&manifest, doc.to_string()).unwrap();
     let trace = dir.join("trace.json");
+    // A refused run writes no trace (TLS-109): no earlier run's may be read.
+    let _ = std::fs::remove_file(&trace);
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_alsem"));
     cmd.arg("batch")
         .arg(&manifest)
@@ -1145,9 +1147,9 @@ fn batch_refuses_a_hard_link_to_a_workspace_input() {
 /// hard link to the other job's workspace's app.json: its open is refused,
 /// the run exits 1, and app.json is untouched.
 ///
-/// Discrimination (2026-11-21, r2): `claim::open_claimed` without its claim
-/// (`DIR.get().filter(|_| false)`): fails "(race) a link made after the
-/// check" (exit 0, not 1); restored, passes.
+/// Discrimination (2026-11-21, r3): `claim::open_for_write` ignoring its
+/// claim's refusal (`.or_else(|_| Ok(()))` on the claim): fails "(race) a
+/// link made after the check" (exit 0, not 1); restored, passes.
 #[cfg(unix)]
 #[test]
 fn batch_claims_the_file_it_opens() {
@@ -1208,6 +1210,8 @@ fn batch_refuses_two_dangling_links_to_one_file() {
 ///
 /// Discrimination (2026-11-21, r2): `output::write_file` back to
 /// `std::fs::write` (no claim): fails (exit 0, not 1); restored, passes.
+/// Again on r3's claim (`.or_else(|_| Ok(()))` on the claim in
+/// `open_for_write`): fails (exit 0, not 1).
 #[cfg(unix)]
 #[test]
 fn batch_claims_a_shard_child() {
@@ -1237,10 +1241,11 @@ fn batch_claims_a_shard_child() {
 /// the stream is refused. A refused job's directory is walked: refused
 /// before any job.
 ///
-/// Discrimination (2026-11-21, r2): `claim::open_claimed` without its claim
-/// (`DIR.get().filter(|_| false)`) fails "(ready dir)" (exit 0, not 1). `KeptDir::holds` without its file
-/// test fails "(refused dir)" (exit 1, not 3: the stream then met the kept
-/// file's claim); restored, both pass.
+/// Discrimination: (2026-11-21, r3) `claim::open_for_write` ignoring its
+/// claim's refusal (`.or_else(|_| Ok(()))`) fails "(ready dir)" (exit 0, not
+/// 1); (r2) `KeptDir::holds` without its file test fails "(refused dir)"
+/// (exit 1, not 3: the stream then met the kept file's claim); restored,
+/// both pass.
 #[cfg(unix)]
 #[test]
 fn batch_refuses_a_stream_linked_into_a_shard_directory() {
@@ -1293,13 +1298,14 @@ fn batch_refuses_a_stream_linked_into_a_shard_directory() {
     );
 }
 
-/// TLS-109: the trace file is a write of the run. `ALSEM_TRACE_FILE` naming
-/// the manifest is refused at its claim: no trace, a stderr line, the
-/// manifest untouched, the run itself unharmed.
+/// TLS-109: the trace file is a write of the run, checked with the jobs'
+/// writes. `ALSEM_TRACE_FILE` naming the manifest is refused before anything
+/// runs (exit 3), no trace is written, and the manifest is untouched.
 ///
-/// Discrimination (2026-11-21, r2): `perf_trace::defer_file` a no-op: fails
-/// (the trace truncated the manifest before it was read: exit 3, not 0);
-/// restored, passes.
+/// Discrimination (2026-11-21, r3): `perf_trace::defer_file` storing
+/// `false` (the trace opened at start): fails (the manifest no longer the
+/// one written: the trace truncated it before it was read); restored,
+/// passes.
 #[test]
 fn batch_refuses_a_trace_file_on_the_manifest() {
     let ws = ws_a();
@@ -1314,14 +1320,290 @@ fn batch_refuses_a_trace_file_on_the_manifest() {
         None,
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert_eq!(out.status.code(), Some(0), "{stderr}");
-    assert!(
-        stderr.contains("perf_trace: ") && stderr.contains("refused"),
-        "{stderr}"
-    );
     assert_eq!(
         std::fs::read_to_string(&manifest).unwrap(),
-        json!({ "jobs": jobs }).to_string()
+        json!({ "jobs": jobs }).to_string(),
+        "{stderr}"
+    );
+    assert_eq!(out.status.code(), Some(3), "{stderr}");
+    assert!(stderr.contains("which the run writes"), "{stderr}");
+}
+
+/// TLS-109 (review r2): a device is not a file a truncation could lose.
+/// `--out /dev/null` standalone, and a batch stream `/dev/null`, write as
+/// they always did (exit 0).
+///
+/// Discrimination (2026-11-21, r3): outside a batch, `open_for_write`
+/// truncating with `set_len` as in a batch: fails "standalone" (exit 1,
+/// EINVAL); in a batch, the regular-file test made `true`: fails "batch"
+/// (exit 1, not 0); restored, both pass.
+#[cfg(unix)]
+#[test]
+fn batch_and_standalone_write_to_a_device() {
+    let ws = ws_a();
+    let out = Command::new(env!("CARGO_BIN_EXE_alsem"))
+        .args(["fingerprint", &ws, "--format", "json", "--out", "/dev/null"])
+        .env("RUST_LOG", "off")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(0), "standalone: {stderr}");
+    let d = tempfile::tempdir().unwrap();
+    let (out, _) = run_manifest(
+        d.path(),
+        &[job(
+            &["events", "fanout", &ws, "--single-app"],
+            Some(Path::new("/dev/null")),
+            None,
+        )],
+        None,
+        &[],
+        None,
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(0), "batch: {stderr}");
+    assert_eq!(lines(&out)[0]["exit"].as_i64(), Some(0), "batch: {stderr}");
+}
+
+/// TLS-109 (review r2): every write is its own claim. A shard job whose
+/// stdout is spelled `D/manifest.json`, a link to a file outside `D` (so the
+/// check sees no clash), writes that file twice: its stream, then its shard
+/// child of the same spelling. The second open is refused (exit 1).
+///
+/// Discrimination (2026-11-21, r3): an existing marker no longer refusing
+/// (`if !(reserved && ...)` made `if false`): fails (exit 0, not 1);
+/// restored, passes.
+#[cfg(unix)]
+#[test]
+fn batch_refuses_a_second_open_of_one_spelling() {
+    let ws = ws_a();
+    let d = tempfile::tempdir().unwrap();
+    let shards = d.path().join("shards");
+    std::fs::create_dir(&shards).unwrap();
+    let outside = d.path().join("outside.json");
+    std::fs::write(&outside, "KEEP").unwrap();
+    let spelled = shards.join("manifest.json");
+    std::os::unix::fs::symlink(&outside, &spelled).unwrap();
+    let s = shards.to_string_lossy().into_owned();
+    let (out, _) = run_manifest(
+        d.path(),
+        &[job(
+            &["fingerprint", &ws, "--shard", "all", "--out", &s],
+            Some(&spelled),
+            None,
+        )],
+        None,
+        &[],
+        None,
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("refused"), "{stderr}");
+}
+
+/// A two-job run whose job 1 (refused, `--format bad`) has its stdout at
+/// `late`, which the seam then makes a hard link to `target` after the check.
+/// `job0`: job 0's argv. Returns the run.
+#[cfg(unix)]
+fn late_link_run(d: &Path, job0: &[&str], ws: &str, target: &Path) -> Output {
+    let late = d.join("late.out");
+    let seam = format!("ln '{}' '{}'", target.display(), late.display());
+    run_manifest(
+        d,
+        &[
+            job(job0, None, None),
+            job(
+                &["events", "fanout", ws, "--format", "bad"],
+                Some(&late),
+                None,
+            ),
+        ],
+        None,
+        &[("ALSEM_TEST_AFTER_PREFLIGHT", &seam)],
+        None,
+    )
+    .0
+}
+
+/// TLS-109 (review r2): an explicit read is claimed by the check. Job 0
+/// reads `--baseline B`; after the check job 1's stdout becomes a link to
+/// `B`: its open is refused, `B` is untouched.
+///
+/// Discrimination (2026-11-21, r3): the check's claim of a job's reads
+/// skipped (`existing(&read).filter(|_| false)`): fails (exit 0, not 1);
+/// restored, passes.
+#[cfg(unix)]
+#[test]
+fn batch_claims_an_explicit_read() {
+    let ws = ws_a();
+    let d = tempfile::tempdir().unwrap();
+    let base = d.path().join("base.json");
+    let text = r#"{"schemaVersion":"1","fingerprints":[]}"#;
+    std::fs::write(&base, text).unwrap();
+    let b = base.to_string_lossy().into_owned();
+    let out = late_link_run(
+        d.path(),
+        &["analyze", &ws, "--single-app", "--baseline", &b],
+        &ws,
+        &base,
+    );
+    assert_claim_refused("(late link) a --baseline", &out, &base, text);
+}
+
+/// TLS-109/TLS-110 (review r2): a refused job's named file is kept from its
+/// own streams at their open. Job 1 is refused and names `--out K`; after
+/// the check its stdout becomes a link to `K`: refused, `K` untouched.
+///
+/// Discrimination (2026-11-21, r3): `claim::keep` writing nothing: fails
+/// (exit 0, not 1); restored, passes.
+#[cfg(unix)]
+#[test]
+fn batch_keeps_a_refused_jobs_file_at_its_open() {
+    let ws = ws_a();
+    let d = tempfile::tempdir().unwrap();
+    let kept = d.path().join("kept.json");
+    std::fs::write(&kept, "KEEP").unwrap();
+    let k = kept.to_string_lossy().into_owned();
+    let late = d.path().join("late.out");
+    let seam = format!("ln '{}' '{}'", kept.display(), late.display());
+    let (out, _) = run_manifest(
+        d.path(),
+        &[job(
+            &["events", "fanout", &ws, "--format", "bad", "--out", &k],
+            Some(&late),
+            None,
+        )],
+        None,
+        &[("ALSEM_TEST_AFTER_PREFLIGHT", &seam)],
+        None,
+    );
+    assert_claim_refused("(late link) a refused job's --out", &out, &kept, "KEEP");
+}
+
+/// TLS-109 (review r2): the manifest is claimed by the check, apart from any
+/// trace file. After the check job 1's stdout becomes a link to the
+/// manifest: refused, the manifest untouched.
+///
+/// Discrimination (2026-11-21, r3): the run's read of its manifest dropped
+/// (`reads: vec![]` for "the run"): fails (exit 0, not 1); restored, passes.
+#[cfg(unix)]
+#[test]
+fn batch_claims_its_manifest() {
+    let ws = ws_a();
+    let d = tempfile::tempdir().unwrap();
+    let manifest = d.path().join("m.json");
+    let late = d.path().join("late.out");
+    let seam = format!("ln '{}' '{}'", manifest.display(), late.display());
+    let jobs = [
+        job(&["events", "fanout", &ws, "--single-app"], None, None),
+        job(
+            &["events", "fanout", &ws, "--format", "bad"],
+            Some(&late),
+            None,
+        ),
+    ];
+    let (out, _) = run_manifest(
+        d.path(),
+        &jobs,
+        None,
+        &[("ALSEM_TEST_AFTER_PREFLIGHT", &seam)],
+        None,
+    );
+    let text = json!({ "jobs": jobs }).to_string();
+    assert_claim_refused("(late link) the manifest", &out, &manifest, &text);
+}
+
+/// TLS-109 (review r2): workers claim in their parent's folder. Two
+/// batches (two workers); after the check, batch 1's stdout becomes a link
+/// to batch 0's workspace's app.json: its open in its worker is refused,
+/// the parent exits 1, app.json is untouched, and batch 0's job ran.
+///
+/// Discrimination (2026-11-21, r3): the hand-off (`cmd.env(claim::ENV,
+/// ...)` in `worker::spawn`) deleted: fails "batch 0's line" (each worker
+/// refused to run: no job line, exit null); restored, passes.
+#[cfg(unix)]
+#[test]
+fn batch_workers_claim_in_the_parents_folder() {
+    let (_ws, w, app) = tmp_ws();
+    let d = tempfile::tempdir().unwrap();
+    let late = d.path().join("late.out");
+    let seam = format!("ln '{}' '{}'", app.display(), late.display());
+    let doc = json!({ "batches": [
+        { "jobs": [job(&["events", "fanout", &w, "--single-app"], None, None)] },
+        { "jobs": [job(&["events", "fanout", &w, "--format", "bad"], Some(&late), None)] },
+    ]});
+    let (out, _) = run_manifest_doc(
+        d.path(),
+        &doc,
+        None,
+        &[("ALSEM_TEST_AFTER_PREFLIGHT", &seam)],
+        None,
+    );
+    let got = lines(&out);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(got[0]["exit"].as_i64(), Some(0), "batch 0's line: {stderr}");
+    assert_eq!(got[1]["exit"].as_i64(), Some(1), "batch 1's line: {stderr}");
+    assert_claim_refused("(workers) a late link", &out, &app, APP);
+}
+
+/// TLS-109 (review r2): a worker started without its parent's claim folder
+/// refuses to run (exit 3) and writes nothing.
+#[test]
+fn batch_worker_needs_its_claim_folder() {
+    let d = tempfile::tempdir().unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_alsem"))
+        .args(["batch", "--worker", "0"])
+        .arg(d.path().join("m.json"))
+        .env_remove("ALSEM_BATCH_CLAIMS")
+        .env("RUST_LOG", "off")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(3), "{stderr}");
+    assert!(stderr.contains("no claim folder"), "{stderr}");
+    assert!(out.stdout.is_empty());
+}
+
+/// TLS-109 (review r2): a relative `--update-baseline` from the run's cwd
+/// rewrites its baseline: the check's reservation and the write name it by
+/// the same spelling.
+///
+/// Discrimination (2026-11-21, r3): the reservation's key spelled
+/// differently from the write's (`write_key` given the resolved path):
+/// fails (exit 1, not 0: the write met the reservation as a foreign claim);
+/// restored, passes.
+#[test]
+fn batch_updates_a_relative_baseline() {
+    let ws = ws_a();
+    let d = tempfile::tempdir().unwrap();
+    let text = r#"{"schemaVersion":"1","fingerprints":[]}"#;
+    std::fs::write(d.path().join("base.json"), text).unwrap();
+    let (out, _) = run_manifest(
+        d.path(),
+        &[job(
+            &[
+                "analyze",
+                &ws,
+                "--single-app",
+                "--baseline",
+                "base.json",
+                "--update-baseline",
+            ],
+            None,
+            None,
+        )],
+        Some(d.path()),
+        &[],
+        None,
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(0), "{stderr}");
+    assert_eq!(lines(&out)[0]["exit"].as_i64(), Some(0), "{stderr}");
+    assert_ne!(
+        std::fs::read_to_string(d.path().join("base.json")).unwrap(),
+        text,
+        "updated"
     );
 }
 
@@ -1329,9 +1611,9 @@ fn batch_refuses_a_trace_file_on_the_manifest() {
 /// writing the baseline it read, two disjoint `--out`s, and a ready job
 /// writing in a refused job's directory: exit 0, each written.
 ///
-/// Discrimination (2026-11-21, r2): the reads check refusing a job's own
-/// named target too (`writes[w].0 != r || writes[w].1` made `true`): fails
-/// (exit 3, not 0); restored, passes.
+/// Discrimination (2026-11-21, r3): the reads check refusing a job's own
+/// `--update-baseline` too (`Some(w) != update || true`): fails (exit 3, not
+/// 0); restored, passes.
 #[test]
 fn batch_legitimate_manifests_still_run() {
     let ws = ws_a();
