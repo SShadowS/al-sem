@@ -219,6 +219,10 @@ fn spawn(run: &Workers<'_>, b: usize) -> std::io::Result<Child> {
         file.push(format!(".w{b}"));
         cmd.env("ALSEM_TRACE_FILE", file);
     }
+    // The run's claims (TLS-109): the child claims in the parent's folder.
+    if let Some(dir) = super::claim::dir() {
+        cmd.env(super::claim::ENV, dir);
+    }
     cmd.spawn()
 }
 

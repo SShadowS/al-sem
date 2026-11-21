@@ -193,17 +193,24 @@ struct TraceWriter {
     /// `None` once the writer has failed (fail-open) or was never opened.
     out: Option<BufWriter<File>>,
     first: bool,
+    /// A deferred file ([`defer_file`]): its path and the events so far,
+    /// until [`start_file`] opens it.
+    pending: Option<(PathBuf, Vec<Value>)>,
 }
 
 impl TraceWriter {
     fn create(path: &std::path::Path) -> std::io::Result<TraceWriter> {
-        let file = File::create(path)?;
+        TraceWriter::from_file(File::create(path)?)
+    }
+
+    fn from_file(file: File) -> std::io::Result<TraceWriter> {
         let mut out = BufWriter::new(file);
         out.write_all(b"[]")?;
         out.flush()?;
         Ok(TraceWriter {
             out: Some(out),
             first: true,
+            pending: None,
         })
     }
 
@@ -213,6 +220,7 @@ impl TraceWriter {
         TraceWriter {
             out: None,
             first: true,
+            pending: None,
         }
     }
 
@@ -220,6 +228,10 @@ impl TraceWriter {
     /// times. Seeks over the trailing `]`, writes `[,]event]`, flushes. Any I/O
     /// error fails OPEN: the underlying file is dropped and later events no-op.
     fn append(&mut self, ev: &Value) {
+        if let Some((_, held)) = self.pending.as_mut() {
+            held.push(ev.clone());
+            return;
+        }
         let Some(out) = self.out.as_mut() else {
             return;
         };
@@ -360,15 +372,19 @@ impl Tracer {
             .file
             .clone()
             .unwrap_or_else(|| PathBuf::from(format!("alsem-trace-{pid}.json")));
-        let writer = match TraceWriter::create(&path) {
-            Ok(w) => w,
-            Err(e) => {
+        let writer = if DEFERRED.load(Ordering::Relaxed) {
+            TraceWriter {
+                pending: Some((path, Vec::new())),
+                ..TraceWriter::dead()
+            }
+        } else {
+            TraceWriter::create(&path).unwrap_or_else(|e| {
                 eprintln!(
                     "perf_trace: cannot create {}: {e}; file tracing disabled",
                     path.display()
                 );
                 TraceWriter::dead()
-            }
+            })
         };
         Tracer {
             config,
@@ -526,6 +542,38 @@ thread_local! {
 }
 fn synthetic_tid() -> u32 {
     TID.with(|t| *t)
+}
+
+/// Set by [`defer_file`] before the tracer starts.
+static DEFERRED: AtomicBool = AtomicBool::new(false);
+
+/// TLS-109: the trace file is not opened when the tracer starts, but by
+/// [`start_file`]; events until then are held in memory. `alsem batch` calls
+/// it first thing, so `ALSEM_TRACE_FILE` is never truncated before the
+/// batch's write check has claimed what the run must not write. Only before
+/// the first event has any effect.
+pub fn defer_file() {
+    DEFERRED.store(true, Ordering::Relaxed);
+}
+
+/// Open a deferred trace file with `open` (the batch's claim) and write the
+/// events held so far. A refused open writes no trace and says why on
+/// stderr. A no-op when tracing is off, not deferred, or already started.
+pub fn start_file(open: impl FnOnce(&std::path::Path) -> std::io::Result<File>) {
+    let Some(t) = tracer() else { return };
+    let Ok(mut w) = t.writer.lock() else { return };
+    let Some((path, held)) = w.pending.take() else {
+        return;
+    };
+    match open(&path).and_then(TraceWriter::from_file) {
+        Ok(started) => {
+            *w = started;
+            for ev in &held {
+                w.append(ev);
+            }
+        }
+        Err(e) => eprintln!("perf_trace: {}: {e}; file tracing disabled", path.display()),
+    }
 }
 
 fn tracer() -> Option<&'static Tracer> {

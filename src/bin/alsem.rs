@@ -72,6 +72,7 @@ const _: () = assert!(
 use std::path::{Path, PathBuf};
 
 use al_sem::engine::batch::admission::{JobKind, admit};
+use al_sem::engine::batch::claim;
 use al_sem::engine::batch::job::{
     Failed, HandOff, Job, ViewUniverse, WorkspaceRead, WorkspaceReader,
 };
@@ -1575,6 +1576,10 @@ fn main() -> ExitCode {
     }
     // The process span; its drop emits `peak.process_mb` / `peak.post_attach_mb`
     // (#160 §4.1.4). Declared before `code`, so it drops after the census report.
+    // A batch opens its trace file only after its write check (TLS-109).
+    if std::env::args_os().nth(1).is_some_and(|a| a == "batch") {
+        al_sem::engine::perf_trace::defer_file();
+    }
     let _run = al_sem::engine::perf_trace::run("alsem");
     // Warnings go to stderr (a dropped dependency was once only a `warn!` that
     // nothing printed); `RUST_LOG` overrides the level. stdout is unchanged.
@@ -1933,12 +1938,22 @@ fn job_paths(command: &Commands, streams: &JobStreams) -> JobPaths {
             if let Some(d) = t.diff.as_deref().filter(|d| *d != "-") {
                 p.reads.push(PathBuf::from(d));
             }
+            // `--part select` reads the production app as a source dependency.
+            p.workspaces
+                .extend(t.production_root.iter().map(PathBuf::from));
             (Some(&t.workspace), t.out.as_ref())
         }
         Commands::Impact(t) => {
             if let Some(d) = t.diff.as_deref().filter(|d| *d != "-") {
                 p.reads.push(PathBuf::from(d));
             }
+            // `--part main` reads these folders' packages and sources too.
+            p.workspaces.extend(
+                t.package_root
+                    .iter()
+                    .chain(&t.source_dep)
+                    .map(PathBuf::from),
+            );
             (Some(&t.workspace), t.out.as_ref())
         }
         Commands::Policy(_)
@@ -1965,12 +1980,50 @@ fn usage(line: String) -> ExitCode {
 /// (D2.4), one batch runs in this process, two or more in `W` workers (D2.5,
 /// D12), and the run prints one line per job in manifest order. Exit 0 when
 /// every job ran, whatever its own exit; 1 when a worker died without its
-/// lines (D2.2). `--worker <b>`: run the batch the parent writes on stdin.
+/// lines (D2.2) or a write was refused at its claim (TLS-109). `--worker
+/// <b>`: run the batch the parent writes on stdin.
+///
+/// Every file the run writes is claimed by its identity in a run-private
+/// folder ([`claim`]), the workers' included; the trace file too, once the
+/// write check has claimed what the run must not write.
 fn run_batch_cmd(b: BatchCli) -> ExitCode {
-    use al_sem::engine::batch::manifest::{check_stream_dirs, load};
     if let Some(w) = b.worker {
+        if let Some(dir) = std::env::var_os(claim::ENV) {
+            claim::set_dir(dir.into());
+        }
+        start_trace(&format!("trace w{w}"));
         return run_worker(w);
     }
+    let claims = match tempfile::tempdir() {
+        Ok(d) => d,
+        Err(e) => {
+            start_trace("trace");
+            return usage(format!(
+                "al-sem batch: cannot make the run's claim folder: {e}"
+            ));
+        }
+    };
+    claim::set_dir(claims.path().to_path_buf());
+    // The manifest first: an exit before the write check still keeps it.
+    let protected = claim::protect_path(Path::new(&b.manifest), claim::READ);
+    let code = match protected {
+        Ok(()) => run_batch_parent(b),
+        Err(e) => usage(format!("al-sem batch: cannot claim the manifest: {e}")),
+    };
+    // A run that ended before its write check starts its trace here.
+    start_trace("trace");
+    code
+}
+
+/// Open this process's deferred trace file through the run's claim, as
+/// `owner` (TLS-109).
+fn start_trace(owner: &str) {
+    al_sem::engine::perf_trace::start_file(|p| claim::open_trace(p, owner));
+}
+
+/// [`run_batch_cmd`]'s parent run.
+fn run_batch_parent(b: BatchCli) -> ExitCode {
+    use al_sem::engine::batch::manifest::{check_stream_dirs, load};
     let manifest_path = Path::new(&b.manifest);
     let out_dir = b.out_dir.as_deref().map(Path::new);
     let manifest = match load(manifest_path, out_dir) {
@@ -2043,9 +2096,15 @@ fn run_batch_cmd(b: BatchCli) -> ExitCode {
         },
     ));
     let cwd = std::env::current_dir().unwrap_or_default();
-    if let Err(line) = check_write_sets(&paths, &cwd) {
+    let checked = check_write_sets(&paths, &cwd);
+    // The check claimed the protected files whatever its verdict, so the
+    // trace file can start now.
+    start_trace("trace");
+    if let Err(line) = checked {
         return usage(line);
     }
+    #[cfg(debug_assertions)]
+    claim::test_seam_after_preflight();
     let w = admit(&kinds, manifest.batches.len());
     if let ([batch], Some(plans)) = (&manifest.batches[..], planned.pop()) {
         let streams: Vec<JobStreams> = batch.jobs.iter().map(|j| j.streams.clone()).collect();
@@ -2144,13 +2203,16 @@ fn print_lines(lines: &[JobLine]) -> ExitCode {
     write_run_stdout(out, true)
 }
 
-/// Write the run's stdout: exit 0, or 1 when the write fails or a worker
+/// Write the run's stdout: exit 0, or 1 when the write fails, a write was
+/// refused at its claim (TLS-109), or a worker
 /// died without its lines (`whole` false).
 fn write_run_stdout(out: Vec<u8>, whole: bool) -> ExitCode {
+    // A write refused at its claim fails the run too (TLS-109).
+    let failed = !whole || claim::any_refused();
     let code = replay(
         &JobOutput {
             actions: vec![WriteAction::Stdout(out)],
-            exit: if whole { exit::CLEAN } else { 1 },
+            exit: if failed { 1 } else { exit::CLEAN },
         },
         1,
     );

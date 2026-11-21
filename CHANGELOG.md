@@ -121,26 +121,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed (TLS-109, TLS-110: `alsem batch` compares the files a manifest writes, not their paths)
 
 - **What failed (TLS-109).** The write-set check compared path spellings. A stream that was a
-  hard link to another job's `--out`, or to a workspace's `.al` file under another name, passed
-  the check and was then truncated. A bind mount had the same hole.
-- **The fix.** Every write-set check now compares file identity: device and inode of an existing
-  file, and for a file not yet created, the identity of its deepest existing directory plus the
-  names below it. This covers streams, job targets, directory targets, the files jobs read and
-  the workspace inputs a job reads. "Inside a directory target" means the file's own identity,
-  or one of its directories', is the directory or something under it (links followed), so a hard
-  link to a file in that directory counts too. Symlinks and `..` were already folded; they now
-  meet the same identity test.
-- **Windows.** There is no inode in the standard library there, so the identity is the
-  canonical path: the check is the path comparison it was before. A hard link is not caught on
-  Windows.
-- **What failed (TLS-110).** A refused job's directory target was not protected: a refused
-  `fingerprint --shard bad --out D` whose stdout was `D/x` wrote its error over `D/x`. A refused
-  job's named directory is now kept: any write under it, by its own streams or by another job,
-  refuses the manifest (exit 3) before any file is opened. A refused job's named file keeps the
-  ENG-168 rule (only its own streams are refused).
-- Tests through the binary for a hard link, a file symlink, a directory symlink, `..` and the
-  refused directory, each checking the file's bytes are unchanged, each with a discrimination
-  proof.
+  hard link to another job's `--out`, or to a workspace's file under another name, passed the
+  check and was then truncated. A bind mount had the same hole. And the check could not see
+  everything: a shard file is named only when the job writes it, a path can change after the
+  check, two dangling links to one missing file both pass, and `ALSEM_TRACE_FILE` was emptied
+  before the check even ran.
+- **The fix, part 1: every write is claimed when its file is opened.** A batch run makes a
+  private folder. Every file the run writes (streams, `--out`, a baseline update, shard files,
+  in the workers too) is opened without truncating it. Its identity is read from the open
+  handle (device and inode). The writer then claims that identity by creating a marker file
+  named after it in the folder. Only then is the file truncated. If another writer, or a
+  protected input, already holds the marker, the write is refused: nothing is truncated, the
+  job's line has its write-failure exit, stderr says `refused`, and the run exits 1.
+- **Part 2: the files the run must not write are claimed first.** Before any job runs, the
+  check claims every existing file a job reads, every workspace input (source roots and the
+  folders `tests --part select` and `impact --part main` read included), and a refused job's
+  named files that no other job writes. A job's own named target of a file it reads (an
+  `--update-baseline` on its baseline) is claimed for that one write.
+- **Part 3: the check before the run compares identities too.** It still refuses most bad
+  manifests before anything runs (exit 3): a file's identity is its device and inode, or for a
+  file not yet created, its deepest existing folder's identity plus the names below. A dangling
+  link is followed through its text (at most 40 links). `missing/../x` is no longer `x` when
+  `missing` does not exist. A job's own streams may not write a file it reads, nor any job a
+  file of a workspace it reads.
+- **The trace file.** In a batch, the trace file is opened only after the check, through the
+  same claim; events until then are held in memory. A trace file on a protected file or another
+  write is refused with a stderr line and no trace; the run itself goes on.
+- **What failed (TLS-110).** A refused `fingerprint --shard bad --out D` whose stdout was `D/x`
+  wrote its error over `D/x`. A refused job's named directory is now kept like its named files:
+  its own streams may not write in it, also not through a hard link to a file in it (the check
+  lists the folder's files; a listing error refuses the run). Another job may write there: a
+  refused job writes nothing, so it has nothing to lose. This departs from the task text, which
+  also refused another job's writes; it follows the ENG-168 / #277 FR-2 rule for files.
+- **Windows.** There is no inode there in the standard library, so a file's identity is its
+  canonical path, and both the check and the claims compare paths as before. A hard link is not
+  caught on Windows.
+- Tests through the binary, each checking the protected file's bytes are unchanged, each with a
+  discrimination proof: a hard link, a hard link to a workspace input, a file and a directory
+  symlink, `..`, two dangling links, a link made after the check (a debug test seam), a shard
+  file linked to an input, a stream linked into a shard folder (ready and refused), the trace
+  file on the manifest, a refused job's own stdout in its folder, and manifests that must still
+  run.
 
 ### Fixed (TLS-108: `ci-steps perf-bounds` times its bounds under a timed CDO slot hold)
 
