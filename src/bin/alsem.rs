@@ -2060,12 +2060,12 @@ fn run_batch_cmd(b: BatchCli) -> ExitCode {
         };
         claim::set_dir(dir.into());
         // Its spool stays for the parent to publish, also if it dies.
-        if let Some(spool) = claim::spool_path()
+        if let Some(spool) = claim::spool_path(&format!("w{w}"))
             && let Some(trace) = spool_file(&spool)
             && let Err(e) = claim::record_spool(&spool, &trace)
         {
             eprintln!(
-                "perf_trace: {}: {e}; file tracing disabled",
+                "perf_trace: {}: cannot record where to publish it ({e}); this worker's trace will not be published",
                 trace.display()
             );
         }
@@ -2081,7 +2081,7 @@ fn run_batch_cmd(b: BatchCli) -> ExitCode {
         }
     };
     claim::set_dir(claims.path().to_path_buf());
-    if let Some(spool) = claim::spool_path() {
+    if let Some(spool) = claim::spool_path("parent") {
         spool_file(&spool);
     }
     let code = run_batch_parent(b);
@@ -2169,9 +2169,14 @@ fn run_batch_parent(b: BatchCli) -> ExitCode {
         al_sem::engine::perf_trace::drop_file(None);
         return usage(line);
     }
+    // `ALSEM_TRACE_EXIT_AFTER` ends the process early: it publishes the
+    // traces first, as the end below does (only once the check has passed).
+    al_sem::engine::perf_trace::set_exit_hook(publish_traces);
     #[cfg(debug_assertions)]
     claim::test_seam_after_preflight();
     let w = admit(&kinds, manifest.batches.len());
+    #[cfg(debug_assertions)]
+    let w = al_sem::engine::batch::worker::test_seam_workers(w);
     if let ([batch], Some(plans)) = (&manifest.batches[..], planned.pop()) {
         let streams: Vec<JobStreams> = batch.jobs.iter().map(|j| j.streams.clone()).collect();
         let lines = run_one_batch(0, &streams, plans);

@@ -141,13 +141,27 @@ fn is_disk(f: &File) -> std::io::Result<bool> {
     Ok(f.metadata()?.is_file())
 }
 
-/// `GetFileType` is `FILE_TYPE_DISK` (`NUL` and a console are not).
+/// By `GetFileType`: a character device (`NUL`, a console) or a pipe is not
+/// claimed; `FILE_TYPE_UNKNOWN` is the call's error return, which refuses
+/// the write; anything else (a disk file) is claimed.
 #[cfg(windows)]
 fn is_disk(f: &File) -> std::io::Result<bool> {
     use std::os::windows::io::AsRawHandle;
-    use windows_sys::Win32::Storage::FileSystem::{FILE_TYPE_DISK, GetFileType};
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_TYPE_CHAR, FILE_TYPE_PIPE, FILE_TYPE_UNKNOWN, GetFileType,
+    };
     // SAFETY: the handle is `f`'s, open for the whole call.
-    Ok(unsafe { GetFileType(f.as_raw_handle()) } == FILE_TYPE_DISK)
+    match unsafe { GetFileType(f.as_raw_handle()) } {
+        FILE_TYPE_CHAR | FILE_TYPE_PIPE => Ok(false),
+        FILE_TYPE_UNKNOWN => {
+            let e = std::io::Error::last_os_error();
+            Err(match e.raw_os_error() {
+                Some(0) | None => std::io::Error::other("the file system gives this file no type"),
+                Some(_) => e,
+            })
+        }
+        _ => Ok(true),
+    }
 }
 
 /// Create `marker` holding `text`. `Ok(false)`: it exists.
@@ -291,50 +305,84 @@ fn claim(dir: &Path, f: &File, job: Option<&str>, key: Option<&str>) -> std::io:
     Ok(())
 }
 
-/// Where this process spools its trace
+/// Where a process spools its trace
 /// ([`crate::engine::perf_trace::spool_file`]): a file of its own in the
-/// run's folder, which aliases nothing.
-pub fn spool_path() -> Option<PathBuf> {
-    DIR.get()
-        .map(|d| d.join(format!("spool-{}", std::process::id())))
+/// run's folder, which aliases nothing, named by `who` (`parent`, or `w<b>`
+/// for worker `b`: a batch has one worker, a process id may come again).
+pub fn spool_path(who: &str) -> Option<PathBuf> {
+    DIR.get().map(|d| d.join(format!("spool-{who}")))
 }
 
 /// Record beside a spool the trace file it is for, so the parent publishes
-/// it ([`publish_spools`]), also when this process dies.
+/// it ([`publish_spools`]), also when this process dies. The path is kept
+/// exactly ([`path_bytes`]), whatever its encoding.
 pub fn record_spool(spool: &Path, trace: &Path) -> std::io::Result<()> {
     let trace = std::path::absolute(trace)?;
-    std::fs::write(
-        spool.with_extension("to"),
-        trace.to_string_lossy().as_bytes(),
-    )
+    std::fs::write(spool.with_extension("to"), path_bytes(&trace))
+}
+
+/// A path as bytes, losslessly: its raw bytes on unix.
+#[cfg(unix)]
+fn path_bytes(p: &Path) -> Vec<u8> {
+    use std::os::unix::ffi::OsStrExt;
+    p.as_os_str().as_bytes().to_vec()
+}
+
+/// [`path_bytes`] read back.
+#[cfg(unix)]
+fn path_from(bytes: Vec<u8>) -> PathBuf {
+    use std::os::unix::ffi::OsStringExt;
+    PathBuf::from(std::ffi::OsString::from_vec(bytes))
+}
+
+/// A path as bytes, losslessly: its UTF-16 units, little-endian, on Windows
+/// (a path there may hold unpaired surrogates, which UTF-8 cannot).
+#[cfg(windows)]
+fn path_bytes(p: &Path) -> Vec<u8> {
+    use std::os::windows::ffi::OsStrExt;
+    p.as_os_str()
+        .encode_wide()
+        .flat_map(u16::to_le_bytes)
+        .collect()
+}
+
+/// [`path_bytes`] read back.
+#[cfg(windows)]
+fn path_from(bytes: Vec<u8>) -> PathBuf {
+    use std::os::windows::ffi::OsStringExt;
+    let wide: Vec<u16> = bytes
+        .chunks_exact(2)
+        .map(|c| u16::from_le_bytes([c[0], c[1]]))
+        .collect();
+    PathBuf::from(std::ffi::OsString::from_wide(&wide))
 }
 
 /// The parent, after every worker has ended and every job write is done:
-/// publish each other process's spool to its trace file through
-/// [`open_trace`] and remove it. A refused publish costs that trace only:
-/// one stderr line.
+/// publish each worker's spool (the ones with a [`record_spool`] record) to
+/// its trace file through [`open_trace`] and remove it. A refused publish
+/// costs that trace only: one stderr line.
 pub fn publish_spools() {
     let Some(dir) = DIR.get() else { return };
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
-    let own = format!("spool-{}.to", std::process::id());
     let mut records: Vec<PathBuf> = entries
         .flatten()
         .map(|e| e.path())
         .filter(|p| {
             let name = p.file_name().unwrap_or_default().to_string_lossy();
-            name.starts_with("spool-") && name.ends_with(".to") && name != own
+            name.starts_with("spool-") && name.ends_with(".to")
         })
         .collect();
     records.sort();
     for record in records {
         let spool = record.with_extension("");
-        let published = std::fs::read_to_string(&record).and_then(|trace| {
+        let published = std::fs::read(&record).and_then(|trace| {
+            let trace = path_from(trace);
             let bytes = std::fs::read(&spool)?;
-            open_trace(Path::new(&trace))
+            open_trace(&trace)
                 .and_then(|mut f| f.write_all(&bytes))
-                .map_err(|e| std::io::Error::other(format!("{trace}: {e}")))
+                .map_err(|e| std::io::Error::other(format!("{}: {e}", trace.display())))
         });
         if let Err(e) = published {
             eprintln!("perf_trace: {e}; file tracing disabled");

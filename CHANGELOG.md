@@ -139,7 +139,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is read from the open handle: device and inode on unix, volume serial number and 128-bit file
   id on Windows (`GetFileInformationByHandleEx`, `FileIdInfo`). A file whose identity cannot be
   read, or reads as a zero id, is refused, never guessed: at the check this refuses the run
-  (exit 3). The writer then claims that identity by creating a marker file named after it in
+  (exit 3). When a path's name lookup (`canonicalize`) fails, only absence makes it a file not
+  yet created; for any other failure (a folder that may not be searched, an SMB name that
+  cannot be normalized) the check reads the identity from the path itself, and refuses the run
+  when it cannot. The writer then claims that identity by creating a marker file named after it in
   the folder. Only then is the file truncated. Every write is its own
   claim: if the marker exists already, the write is refused, even when the same job wrote that
   file under the same spelling before. The one exception is below (part 2). A refused write
@@ -149,7 +152,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   through its exit code, so the parent never needs the folder that failed.
 - **Devices are written as before.** A device, pipe or FIFO (`/dev/null`, `NUL`, `>(cat)`)
   holds no content a truncation could lose, and truncating one fails: it is written without a
-  claim (on Windows, any handle whose `GetFileType` is not a disk file). Outside a batch every
+  claim (on Windows, a handle whose `GetFileType` is a character device or a pipe; a type the
+  call cannot tell refuses the write). Outside a batch every
   file opens exactly as before TLS-109 (`--out /dev/null` works again).
 - **The engine's caches** (the package cache and the impact-base cache) are not claimed: each
   writes a temporary file of its own and renames it into place, which replaces a name and never
@@ -160,9 +164,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   --source-dep` relative to the workspace, as the loader takes it), and the test scope `tests
   --part roots` and `impact --part main` read: `.al-sem.json`, every app folder the discovery
   reads (a candidate it rejects too, with a relative `--test-app` taken against the cwd as the
-  job takes it), and the `.gitignore` files and `.git/info/exclude` it asks git about. The
-  check runs each discovery once per workspace and test apps: 200 `tests --part roots` jobs on
-  one synthetic workspace with 12 sibling apps ran in 0.88 s in all (debug build, server1). An
+  job takes it), and the ignore rules it asks git about: the `.gitignore` files, the
+  repository's `info/exclude` (the main repository's for a worktree, `git rev-parse
+  --git-common-dir`) and the user's excludes file (`core.excludesFile`, else
+  `$XDG_CONFIG_HOME/git/ignore`). The check runs each discovery once per workspace and test
+  apps: 200 `tests --part roots` jobs on one synthetic workspace with 12 sibling apps ran in
+  2.49 s wall in all (debug build, server1; `/work/.al-sem/tools-notes/tls109/m3-timing.log`). An
   `impact --package-root` folder is claimed for its packages only.
   A folder the check cannot list refuses the run (exit 3); a dangling link in it is skipped, as
   the source walk skips it. The one exception: a job's `--update-baseline` reserves its
@@ -179,13 +186,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   may land on a file of a workspace a job reads.
 - **The trace files are published at the end.** In a batch, each process (the parent and each
   worker) writes its trace events as they happen to a spool file of its own in the run's
-  private folder, which aliases nothing. After every worker has ended and every job write is
-  done, the parent publishes each spool to its trace file (its own, and each worker's
-  `ALSEM_TRACE_FILE.w<b>` or default name) through the claim, and removes it. A trace file that
-  is an output, an input, the manifest or a refused job's named file under any alias is
-  refused there: a stderr line, no trace, the run unharmed and the output kept. A worker that
-  crashes leaves its spool, and the parent still publishes it; a parent that dies leaves every
-  spool in its claim folder (in the system temporary folder). A run that ends before its jobs
+  private folder (named `spool-parent` and `spool-w<b>` by batch), which aliases nothing. After
+  every worker has ended and every job write is done, the parent publishes each spool to its
+  trace file (its own, and each worker's `ALSEM_TRACE_FILE.w<b>` or default name, whose path is
+  kept byte for byte, also when it is not UTF-8) through the claim, and removes it.
+  `ALSEM_TRACE_EXIT_AFTER` publishes the same way before it exits. A trace file that is an
+  output, an input, the manifest or a refused job's named file under any alias is refused
+  there: a stderr line, no trace, the run unharmed and the output kept. A worker that crashes
+  leaves its spool, and the parent still publishes it; a spool cut off in the middle of writing
+  an event ends in that partial event, so its JSON array is not closed. A parent that dies
+  leaves every spool in its claim folder (in the system temporary folder). A run that ends before its jobs
   run (a bad manifest, a job that does not parse, a refused check, no claim folder) writes no
   trace, and says so on stderr (`perf_trace: <path>: not written: ...`) unless the check's own
   line already explains it.
@@ -215,8 +225,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   folder's file while another job writes there, a rejected test-scope candidate, a relative
   `--test-app`, a relative `--source-dep`, a package-only root, `file/../x`, a claim folder that
   turns read-only, a kept list that turns unreadable, a worker's trace on another worker's
-  shard file, a trace on a refused job's named file, a reservation taken twice (a unit test),
-  and manifests that must still run. A worker without its claim folder is
+  shard file (made deterministic by a debug seam that runs one worker at a time), a trace on a
+  refused job's named file, a reservation taken twice (a unit test), a non-UTF-8 worker trace
+  name, the user's git excludes file, a worktree's `info/exclude`, a worker killed mid-run
+  whose trace is still published, `ALSEM_TRACE_EXIT_AFTER` publishing its trace, a path in a
+  folder that may not be searched, and manifests that must still run. A worker without its claim folder is
   tested too.
 
 ### Fixed (TLS-108: `ci-steps perf-bounds` times its bounds under a timed CDO slot hold)

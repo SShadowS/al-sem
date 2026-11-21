@@ -581,7 +581,8 @@ pub fn spool_file(spool: &std::path::Path) -> Option<PathBuf> {
             w.spool = Some((spool.to_path_buf(), path.clone()));
         }
         Err(e) => eprintln!(
-            "perf_trace: {}: {e}; file tracing disabled",
+            "perf_trace: {}: cannot spool to {}: {e}; file tracing disabled",
+            path.display(),
             spool.display()
         ),
     }
@@ -641,7 +642,16 @@ pub fn drop_file(why: Option<&str>) {
 fn tracer() -> Option<&'static Tracer> {
     static TRACER: OnceLock<Option<Tracer>> = OnceLock::new();
     TRACER
-        .get_or_init(|| Config::from_reader(|k| std::env::var(k).ok()).map(Tracer::init))
+        .get_or_init(|| {
+            Config::from_reader(|k| std::env::var(k).ok()).map(|mut config| {
+                // The file name as the OS gives it: not every path is UTF-8
+                // (`std::env::var` would drop such a name as unset).
+                config.file = std::env::var_os("ALSEM_TRACE_FILE")
+                    .filter(|s| !s.to_string_lossy().trim().is_empty())
+                    .map(PathBuf::from);
+                Tracer::init(config)
+            })
+        })
         .as_ref()
 }
 
@@ -884,6 +894,15 @@ pub fn instant_lazy(
     t.emit_instant(cat, name, val);
 }
 
+/// What [`maybe_exit_after`] runs before it exits ([`set_exit_hook`]).
+static EXIT_HOOK: OnceLock<fn()> = OnceLock::new();
+
+/// TLS-109: `hook` runs before an `ALSEM_TRACE_EXIT_AFTER` exit, so a batch
+/// run publishes its spooled traces as its normal end would.
+pub fn set_exit_hook(hook: fn()) {
+    let _ = EXIT_HOOK.set(hook);
+}
+
 /// Generalizes the old throwaway early-exit: if `ALSEM_TRACE_EXIT_AFTER` names
 /// `span_name`, flush the trace and exit the process cleanly (0). Called from
 /// `SpanGuard::drop`, and available as an explicit checkpoint.
@@ -893,6 +912,10 @@ pub fn maybe_exit_after(span_name: &str) {
     {
         // This exit skips the run guard's drop, which reports the peaks.
         t.report_peaks();
+        // And the end of a batch run, which publishes its trace (TLS-109).
+        if let Some(hook) = EXIT_HOOK.get() {
+            hook();
+        }
         if let Ok(mut w) = t.writer.lock() {
             w.flush();
         }

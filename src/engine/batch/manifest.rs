@@ -295,24 +295,41 @@ fn resolve_hops(cwd: &Path, p: &Path, hops: u32) -> Ident {
     let mut rest: Vec<std::ffi::OsString> = Vec::new();
     let mut base = lexical.as_path();
     loop {
-        // A dangling link (or junction): where its text leads.
-        if hops < 40
-            && std::fs::canonicalize(base).is_err()
-            && let Ok(target) = std::fs::read_link(base)
-        {
-            let mut id = resolve_hops(base.parent().unwrap_or(cwd), &target, hops + 1);
-            for name in rest.into_iter().rev() {
-                id.path.push(&name);
-                id.rest.push(name);
+        match std::fs::canonicalize(base) {
+            Ok(canonical) => {
+                let mut chain: Vec<FileId> = canonical.ancestors().filter_map(file_id).collect();
+                chain.reverse();
+                rest.reverse();
+                let path = rest.iter().fold(canonical, |p, name| p.join(name));
+                return Ident { path, chain, rest };
             }
-            return id;
-        }
-        if let Ok(canonical) = std::fs::canonicalize(base) {
-            let mut chain: Vec<FileId> = canonical.ancestors().filter_map(file_id).collect();
-            chain.reverse();
-            rest.reverse();
-            let path = rest.iter().fold(canonical, |p, name| p.join(name));
-            return Ident { path, chain, rest };
+            // A dangling link (or junction): where its text leads.
+            Err(e)
+                if absent(&e)
+                    && hops < 40
+                    && let Ok(target) = std::fs::read_link(base) =>
+            {
+                let mut id = resolve_hops(base.parent().unwrap_or(cwd), &target, hops + 1);
+                for name in rest.into_iter().rev() {
+                    id.path.push(&name);
+                    id.rest.push(name);
+                }
+                return id;
+            }
+            Err(e) if absent(&e) => {}
+            // Something there that the name lookup could not normalize (a
+            // folder it may not list, an SMB name it cannot normalize): its
+            // identity from the path itself, and every ancestor's. One that
+            // cannot be read refuses the run ([`file_id`]); only absence
+            // counts as missing.
+            Err(_) if file_id(base).is_some() => {
+                let mut chain: Vec<FileId> = base.ancestors().filter_map(file_id).collect();
+                chain.reverse();
+                rest.reverse();
+                let path = rest.iter().fold(base.to_path_buf(), |p, name| p.join(name));
+                return Ident { path, chain, rest };
+            }
+            Err(_) => {}
         }
         match (base.parent(), base.file_name()) {
             (Some(parent), Some(name)) => {

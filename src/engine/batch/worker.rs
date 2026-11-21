@@ -293,6 +293,17 @@ pub fn report_peak(b: u32) {
     }
 }
 
+/// Test seam, compiled into debug builds only (TLS-109):
+/// `ALSEM_TEST_WORKERS=<n>` runs the workers `n` at a time, so a test can
+/// make one worker end before the next starts.
+#[cfg(debug_assertions)]
+pub fn test_seam_workers(w: usize) -> usize {
+    std::env::var("ALSEM_TEST_WORKERS")
+        .ok()
+        .and_then(|n| n.parse().ok())
+        .unwrap_or(w)
+}
+
 /// Test seam, compiled into debug builds only (#277 R10-1):
 /// `ALSEM_TEST_WORKER_DIES=<b>` kills worker `b` after its jobs ran, before
 /// it prints its lines (`batch_worker_killed`).

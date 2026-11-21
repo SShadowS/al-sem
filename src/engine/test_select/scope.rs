@@ -351,10 +351,11 @@ pub fn discover(workspace: &Path, req: &ScopeRequest) -> Scope {
         if a.join(".git").exists() {
             scope
                 .ignore_files
-                .push(a.join(".git").join("info").join("exclude"));
+                .push(git_common_dir(a).join("info").join("exclude"));
             break;
         }
     }
+    scope.ignore_files.extend(excludes_file(&root));
     walk(&mut scope, &root, &abs, 0, honor_ignore);
     scope.search_root = Some((root, git_top));
     scope
@@ -618,6 +619,80 @@ fn walk(scope: &mut Scope, dir: &Path, workspace: &Path, depth: usize, honor_ign
             return;
         }
     }
+}
+
+/// The user's excludes file git consults beside the repository's rules:
+/// `core.excludesFile` as `git config --path` gives it in `root`, else git's
+/// default `$XDG_CONFIG_HOME/git/ignore` (`$HOME/.config/git/ignore` when
+/// that is unset). `None` when there is neither.
+fn excludes_file(root: &Path) -> Option<PathBuf> {
+    let configured = crate::git_env::git_command()
+        .arg("-C")
+        .arg(root)
+        .args(["config", "--path", "core.excludesFile"])
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| {
+            let mut bytes = o.stdout;
+            while bytes.last().is_some_and(|b| *b == b'\n' || *b == b'\r') {
+                bytes.pop();
+            }
+            bytes
+        })
+        .filter(|bytes| !bytes.is_empty());
+    if let Some(bytes) = configured {
+        return Some(path_from_git(bytes));
+    }
+    let config = std::env::var_os("XDG_CONFIG_HOME")
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
+    Some(config.join("git").join("ignore"))
+}
+
+/// The repository's common git folder at the git top level `top`, which
+/// holds `info/exclude`: `.git` itself, or for a worktree (whose `.git` is a
+/// file) the main repository's, as `git rev-parse --git-common-dir` gives it.
+/// `top/.git` when git cannot answer.
+fn git_common_dir(top: &Path) -> PathBuf {
+    let answer = crate::git_env::git_command()
+        .arg("-C")
+        .arg(top)
+        .args(["rev-parse", "--git-common-dir"])
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| {
+            let mut bytes = o.stdout;
+            while bytes.last().is_some_and(|b| *b == b'\n' || *b == b'\r') {
+                bytes.pop();
+            }
+            bytes
+        })
+        .filter(|bytes| !bytes.is_empty());
+    match answer {
+        // A relative answer is relative to `top`; `join` keeps an absolute one.
+        Some(bytes) => top.join(path_from_git(bytes)),
+        None => top.join(".git"),
+    }
+}
+
+/// A path git printed: its bytes as they are on unix.
+#[cfg(unix)]
+fn path_from_git(bytes: Vec<u8>) -> PathBuf {
+    use std::os::unix::ffi::OsStringExt;
+    PathBuf::from(std::ffi::OsString::from_vec(bytes))
+}
+
+/// A path git printed: git for Windows prints UTF-8.
+#[cfg(not(unix))]
+fn path_from_git(bytes: Vec<u8>) -> PathBuf {
+    PathBuf::from(String::from_utf8_lossy(&bytes).into_owned())
 }
 
 /// Whether git ignores `root` itself (`git check-ignore -q .`: exit 0). No
