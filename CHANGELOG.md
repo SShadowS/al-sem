@@ -45,7 +45,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cdo-speed's `TEST_HOOKS` and new `# test-hooks:` lines in ci-steps (`CI_STEPS_PERF_BOUNDS_BIN`
   ran a stand-in binary instead of the perf test), cdo-gate, cdo-slot and host-suspended, read
   by `agentflow.supervise.declared_test_hooks`. It unsets `BASH_ENV` and `ENV` before its
-  first child, so no step runs a startup file.
+  first child, so no step runs a startup file. It also refuses build-shape overrides in its
+  environment (review r2, sol): `CARGO_PROFILE_*`, `CARGO_BUILD_*`, `RUSTFLAGS`,
+  `RUSTDOCFLAGS`, `CARGO_ENCODED_RUSTFLAGS`, `CARGO_TARGET_DIR`. land sets none of them itself,
+  so none is exempt; an operator who exports `CARGO_TARGET_DIR` or `CARGO_BUILD_JOBS` must
+  unset it to land.
+- **`ci-steps perf-bounds` fails unless its timing tests are in the binary** (review r2, sol).
+  The timing tests (`mod release_checks` in `tests/perf_bounds.rs`) exist only without debug
+  assertions, so an inherited `CARGO_PROFILE_RELEASE_FAST_DEBUG_ASSERTIONS=true` compiled them
+  all out and the step passed on the two tests left. Before it takes the slot, the step lists
+  the binary's tests (`--list`): it must hold exactly as many `release_checks::` tests as the
+  source declares (12 today) and no ignored test, or the step fails and runs nothing. A real
+  dev-profile binary lists 0 of 12; a real release-fast one, all 12.
 - **agentflow's gates strip them too.** `supervise.sanitized_env` (every `_run_gate`, so the
   post-merge fallback and the revert's checks too) now also drops `CDO_GATE_NO_SPEED` and every
   declared test hook, besides `BASH_ENV`/`ENV`/`REGEN_TEMP_GOLDENS`.
