@@ -139,12 +139,13 @@ pub fn holder_key(raw: &str) -> String {
 }
 
 /// ENG-162: whether an assignment side the IR names `name` is a global that one of the routine's
-/// own declarations hides (`this.G` with a local `G`: the walk names it `this.g`, never `g`). No
+/// own declarations hides (`this.G` with a local `G`: the walk names it with
+/// [`HIDDEN_GLOBAL_PREFIX`](crate::program::body::features::HIDDEN_GLOBAL_PREFIX), never `g`). No
 /// holder of the routine is that name: a holder copied into it may be kept by the object
 /// (another routine, a later call), and one assigned from it may hold anything.
 #[must_use]
 pub fn is_shadowed_global(name: &str) -> bool {
-    name.starts_with("this.")
+    name.starts_with(crate::program::body::features::HIDDEN_GLOBAL_PREFIX)
 }
 
 /// `raw` trimmed, without parentheses around the whole of it: `S.Keep((RR))` passes `RR`

@@ -111,6 +111,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `ShadowKeepRoot`; a copy of it read as the local fails `ShadowFromRoot`.
   - Filed, older and of another kind: a conditional result and a returned RecordRef as aliases
     (ENG-175, a BC probe first).
+- **Review round 2** (sol, Fable). The hidden global's name `this.x` was text a name can hold: a
+  local literally named `"this.G"` is legal and keys as `this.g`, so it was taken for a hidden
+  global (its alias lost: a regression of ENG-145's quoted-name alias), and the flow's exit
+  guards, whose key strips `this.`, read `this.G := …` as assigning the shadowing local `G`. The
+  name now starts with a character no AL identifier holds (`features::HIDDEN_GLOBAL_PREFIX`,
+  `"\0this."`). CLI shapes: `QuotedThisName` (`no`: an ordinary alias, kept nowhere),
+  `ParamShadowRoot` (`no`: `this.G := R.Duplicate()` ends no guard on the parameter `G`); the walk
+  test's `"this.G"` row. Red proof: the visible `this.` prefix fails both.
 
 ### Added (TLS-111: cdo-speed counts user cycles, labels CLOCK and CPI, and re-measures a contradicted failure)
 

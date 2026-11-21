@@ -78,8 +78,10 @@ fn object_run_kind(text: &str) -> Option<&'static str> {
 /// spelling of one variable gives one name, so `A := (R)`, `this.G := R` and `A := this.G` are
 /// copies like `A := R` (Fable r2 on ENG-160: they were no alias for any reader). A `this.X`
 /// whose `X` a parameter, local or return value of the routine also declares (`own`) names the
-/// global, which the bare `x` would not: it is `this.x`, a name no declaration of the routine has
-/// (sol on ENG-162; `extract::this_receivers` reads it the same way).
+/// global, which the bare `x` would not: it is [`HIDDEN_GLOBAL_PREFIX`] + `x`, a name no
+/// declaration can have (sol on ENG-162; `extract::this_receivers` reads it the same way).
+///
+/// [`HIDDEN_GLOBAL_PREFIX`]: crate::program::body::features::HIDDEN_GLOBAL_PREFIX
 fn plain_variable(file: &AlFile, mut e: ExprId, own: &NameSet) -> Option<String> {
     loop {
         match &file.ir.expr(e).kind {
@@ -92,7 +94,10 @@ fn plain_variable(file: &AlFile, mut e: ExprId, own: &NameSet) -> Option<String>
                     .replace("\"\"", "\"")
                     .fold_identifier();
                 return Some(if own.contains(&name) {
-                    format!("this.{name}")
+                    format!(
+                        "{}{name}",
+                        crate::program::body::features::HIDDEN_GLOBAL_PREFIX
+                    )
                 } else {
                     name
                 });
@@ -4871,7 +4876,8 @@ codeunit 50003 C
             ]
         );
         // sol on ENG-162: a local `G` shadows the global, so `this.G` names the global, which
-        // the bare `g` does not: it is `this.g`, and the bare `G` stays the local.
+        // the bare `g` does not: it is `HIDDEN_GLOBAL_PREFIX` + `g`, and the bare `G` stays the
+        // local. A local literally named `"this.G"` is an ordinary name (sol, round 2).
         const SHADOWED: &str = r#"
 codeunit 50004 C
 {
@@ -4883,10 +4889,12 @@ codeunit 50004 C
         G: RecordRef;
         R: RecordRef;
         A: RecordRef;
+        "this.G": RecordRef;
     begin
         this.G := R;
         A := this.G;
         G := R;
+        "this.G" := R;
     end;
 }
 "#;
@@ -4897,13 +4905,19 @@ codeunit 50004 C
             .iter()
             .map(|a| (a.lhs_name.as_str(), a.rhs_identifier.as_deref()))
             .collect();
+        let hidden = format!("{}g", crate::program::body::features::HIDDEN_GLOBAL_PREFIX);
         assert_eq!(
             got,
             [
-                ("this.g", Some("r")),
-                ("a", Some("this.g")),
+                (hidden.as_str(), Some("r")),
+                ("a", Some(hidden.as_str())),
                 ("g", Some("r")),
+                ("this.g", Some("r")),
             ]
+        );
+        assert!(
+            !crate::program::model::recref_alias::is_shadowed_global("this.g"),
+            "a declared name is never a hidden global"
         );
     }
 

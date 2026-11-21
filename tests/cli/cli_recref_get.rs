@@ -865,6 +865,48 @@ codeunit 50442 "GE Shadow"
         Guarded(A);
     end;
 
+    // sol, round 2: a local literally named "this.G" is an ordinary alias, not the hidden global.
+    procedure QuotedThisName()
+    var
+        "this.G": RecordRef;
+        R: RecordRef;
+        E: Record "GE Entry";
+    begin
+        R.GetTable(E);
+        "this.G" := R;
+        Noop();
+        Guarded(R);
+    end;
+
+    // sol, round 2: `this.G := …` assigns the hidden global, not the parameter G, so it does not
+    // end the guard on G. (A `Duplicate` shares no record, so nothing becomes kept: with a plain
+    // `R`, R would be kept and ENG-159's classes join every kept holder with the parameters.)
+    procedure ParamShadowRoot()
+    var
+        X: RecordRef;
+        E: Record "GE Entry";
+    begin
+        X.GetTable(E);
+        ParamShadow(X);
+    end;
+
+    local procedure ParamShadow(G: RecordRef)
+    var
+        R: RecordRef;
+        D: Record "GE Doc";
+        Log: Record "GE Log";
+    begin
+        R.GetTable(D);
+        this.G := R.Duplicate();
+        if G.Number <> Database::"GE Doc" then
+            exit;
+        Log.Insert();
+    end;
+
+    local procedure Noop()
+    begin
+    end;
+
     local procedure MoveGlobal()
     var
         D: Record "GE Doc";
@@ -999,6 +1041,10 @@ fn a_recordref_get_moves_the_table_for_every_reader() {
     assert_eq!(answer("ShadowAliasFlow", "GE Log"), "no");
     assert_eq!(answer("ShadowKeepRoot", "GE Log"), "yes");
     assert_eq!(answer("ShadowFromRoot", "GE Log"), "yes");
+    // sol, round 2: a local named "this.G" is no hidden global, and `this.G := R` does not end a
+    // guard on the parameter G.
+    assert_eq!(answer("ParamShadowRoot", "GE Log"), "no");
+    assert_eq!(answer("QuotedThisName", "GE Log"), "no");
 }
 
 #[test]
