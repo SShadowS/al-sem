@@ -83,6 +83,23 @@ ADVISORY and never fails the run: it becomes a failing limit only by an owner's
 decision on data from real landings. Without perf (or CDO_SPEED_INSTR=0) the run
 says "instructions: NOT counted" and judges CPU and wall alone.
 
+Clock and cycles per instruction (TLS-111, docs/superpowers/notes/2026-11-21-tls111-
+cpu-seconds-on-server1.md). On server1 CPU seconds measure the work times the clock,
+core sharing and core kind, each able to move x2 between the sides of a pass. So
+each call also counts user-mode cycles beside the instructions (per PMU; both fixed
+counters, nothing else is allowed on a PMU, and a kind whose running shares over the
+PMUs do not sum to 100, less perf's truncation to whole percents, is no count) and
+records user and system seconds apart. Per
+side: the clock (user cycles / user seconds, GHz) and cycles per instruction. A judged
+row whose sides' clocks differ beyond CLOCK_BAND is labelled CLOCK, one whose cycles
+per instruction do beyond CPI_BAND, CPI (core sharing, core kind, or a real cache or
+memory change: the label never says which). Labels only: the same limits judge.
+A judged warm-up row that FAILS while its two passes' ratios differ beyond
+CONTRADICTED_SPREAD gets ONE more flipped pair (passes 3 and 4 on fresh servers, each
+side order once more). If each side order's two passes then agree within the same
+band, the geometric mean of all four judges; otherwise the verdict is HOST UNSTABLE
+and the run exits 2 (cannot run), never a PASS. The verdict says when a pair was added.
+
 Output equality (the answer's hash) is reported (a branch may change answers on
 purpose), never judged here: the CDO goldens do that. A call that exits non-zero
 or fails in the engine, on either side, fails the run at once, naming the call,
@@ -91,7 +108,7 @@ a ratio of failed calls (a wrong workspace answers in 0.01 s) measures nothing
 (TLS-10: a run on a wrong workspace once printed PASS).
 
 Exit: 0 pass, 1 fail (slower or larger, or a call failed), 2 cannot run (usage,
-build, an MCP request that failed or timed out). A run under load exits as any other,
+build, an MCP request that failed or timed out, HOST UNSTABLE). A run under load exits as any other,
 labelled. Linux only (/proc).
 """
 import argparse
@@ -133,6 +150,19 @@ WARM_MIN_SECONDS = float(os.environ.get("CDO_SPEED_WARM_MIN_SECONDS", "20.0"))
 # ~9 (ENG-81; not reproduced in TLS-65's own loaded run, x1.02), and one quiet
 # TLS-65 run read x1.096 with head second against x1.004 flipped.
 WARM_SAMPLES = 2
+# ⟨TLS-111⟩ A judged row whose sides' clocks (user cycles / user seconds) or
+# cycles per instruction differ beyond these bands (either way) is labelled CLOCK
+# or CPI; the verdict does not change. Provisional: set after ~20 landings
+# (docs/superpowers/notes/2026-11-21-tls111-cpu-seconds-on-server1.md §5.1).
+CLOCK_BAND = 1.15
+CPI_BAND = 1.15
+# ⟨TLS-111⟩ A judged warm-up row that FAILS with its two passes disagreeing
+# beyond this (max/min of the ratios) gets one more flipped pair (note §5.2).
+# History (150 speed.json files, note §4): pass-to-pass disagreement median
+# x1.06, p90 x1.23, p95 x1.80, max x2.67; an unchanged tree cannot fail the
+# x1.30 mean below x1.69. The same band decides whether the extra pair's
+# same-order passes agree.
+CONTRADICTED_SPREAD = 1.25
 # ⟨TLS-76⟩ CPU pressure, not the 1-min load average (TLS-65's signal), which
 # counts other projects' runnable work on this shared host: it read 50-230 while
 # the CPU was ~78 % idle and stopped every gate (owner q-20261115T181612-b2891501).
@@ -311,6 +341,81 @@ def under_load_label(calm, blocks):
     if any(loaded is None for _, loaded in calm) or any(s is None for _, s in blocks):
         return f" (CPU pressure not fully readable: shares {shares_text(blocks)})"
     return ""
+
+
+def clock_cpi_flags(rows):
+    """⟨TLS-111⟩ {"clock": [...], "cpi": [...]}: the judged rows (`call xR`) whose
+    sides' clock or cycles per instruction differ beyond CLOCK_BAND or CPI_BAND."""
+    flags = {"clock": [], "cpi": []}
+    for row in rows:
+        if not row["judged"]:
+            continue
+        for m, band in (("clock", CLOCK_BAND), ("cpi", CPI_BAND)):
+            r = row.get(m, {}).get("ratio")
+            if r and max(r, 1 / r) > band:
+                flags[m].append(f"{row['call']} x{r:.3f}")
+    return flags
+
+
+def clock_cpi_label(flags):
+    """The verdict's ` CLOCK: ...` / ` CPI: ...` labels (TLS-111), else ``."""
+    label = ""
+    if flags["clock"]:
+        label += (f" CLOCK: the sides' clocks (user cycles / user s) differ beyond "
+                  f"x{CLOCK_BAND} on {', '.join(flags['clock'])}")
+    if flags["cpi"]:
+        label += (f" CPI: the sides' cycles per instruction differ beyond x{CPI_BAND} on "
+                  f"{', '.join(flags['cpi'])} (core sharing, core kind, or a real cache or "
+                  "memory change)")
+    return label
+
+
+def judge_warm(records):
+    """The warm-up's rows: one sample per pass, paired by pass; each ratio the
+    geometric mean over the passes (with the flipped ones, a factor k on one and
+    1/k on the other cancels exactly; an arithmetic mean would lean against head)."""
+    warm_records = [r for r in records if r["round"] == 0]
+    warm_rows, _ = judge([dict(r, round=r["warm_pass"] + 1) for r in warm_records])
+    warm_rows = [r for r in warm_rows if r["call"] != "round-total"]
+    for row in warm_rows:
+        for m in ("cpu", "wall", "instr", "clock", "cpi"):
+            if m not in row:
+                continue
+            ratios = row[m]["ratios"]
+            if ratios and min(ratios) > 0:
+                row[m]["ratio"] = statistics.geometric_mean(ratios)
+        loads = [r["load"] for r in warm_records if r["call"] == row["call"]]
+        row["load"] = dict(min=min(loads), max=max(loads))
+        row["warm"] = True
+        row["judged"] = row["cpu"]["base"] >= WARM_MIN_SECONDS
+    return warm_rows
+
+
+def contradicted(warm_rows):
+    """⟨TLS-111⟩ The judged warm-up rows that fail a limit while their passes
+    disagree beyond CONTRADICTED_SPREAD: [(call, metric, ratios)]."""
+    out = []
+    for row in warm_rows:
+        if not row["judged"]:
+            continue
+        for m, lim in (("cpu", WARM_CPU_LIMIT), ("wall", WARM_WALL_LIMIT)):
+            if row[m]["ratio"] > lim and row[m]["spread"] > CONTRADICTED_SPREAD:
+                out.append((row["call"], m, row[m]["ratios"]))
+    return out
+
+
+def same_order_disagree(warm_rows, trigger):
+    """⟨TLS-111⟩ After the extra pair: the triggering (call, metric)s whose two
+    passes of one side order (passes 1 and 3, or 2 and 4) still differ beyond
+    CONTRADICTED_SPREAD, as text; empty when every one agrees."""
+    out = []
+    for call, m, _ in trigger:
+        rs = next(r for r in warm_rows if r["call"] == call)[m]["ratios"]
+        for i in (0, 1):
+            a, b = rs[i], rs[i + 2]
+            if min(a, b) <= 0 or max(a, b) / min(a, b) > CONTRADICTED_SPREAD:
+                out.append(f"{call} {m} passes {i + 1} and {i + 3} x{a:.3f}/x{b:.3f}")
+    return out
 
 
 def wait_calm(what):
@@ -711,16 +816,17 @@ def proc_status_kib(pid, key):
     return 0
 
 
-def proc_cpu_seconds(pid):
-    """User + system time of `pid` and of its children it has waited for."""
+def proc_user_sys(pid):
+    """(user, system) seconds of `pid` and of its children it has waited for."""
     try:
         with open(f"/proc/{pid}/stat") as f:
             stat = f.read()
         fields = stat[stat.rindex(")") + 2:].split()
         # utime, stime, cutime, cstime (fields 14-17 of proc(5)).
-        return sum(int(x) for x in fields[11:15]) / TICK
+        utime, stime, cutime, cstime = (int(x) for x in fields[11:15])
+        return (utime + cutime) / TICK, (stime + cstime) / TICK
     except (OSError, ValueError, IndexError):
-        return 0.0
+        return 0.0, 0.0
 
 
 def descendants(pid):
@@ -762,53 +868,99 @@ INSTR_ATTACH_S = float(os.environ.get("CDO_SPEED_INSTR_ATTACH_S", "5"))  # env: 
 INSTR_GIVE_UP = 3
 # How long perf may take to stop after SIGINT; longer ends the server's counting.
 INSTR_STOP_S = float(os.environ.get("CDO_SPEED_INSTR_STOP_S", "30"))  # env: tests
-HYBRID_EVENTS = ("cpu_core/instructions/u", "cpu_atom/instructions/u")
+# ⟨TLS-111⟩ User cycles beside the instructions, per PMU: both are fixed counters
+# (Intel's fixed counters 0 and 1), so the pair leaves nothing to multiplex.
+HYBRID_EVENTS = ("cpu_core/instructions/u", "cpu_core/cycles/u",
+                 "cpu_atom/instructions/u", "cpu_atom/cycles/u")
+PLAIN_EVENTS = ("instructions:u", "cycles:u")
+FIXED_KINDS = ("instructions", "cycles")
+# A kind's running shares over its PMUs must sum to 100, less under 1 point per
+# PMU: perf prints each share truncated to a whole percent (93.73 % as 93.00,
+# measured), so two PMUs that ran 93.7 % and 6.3 % read 99.
 # CDO_SPEED_PERF: a test hook, the perf command to run (a stub in the tests).
 PERF = os.environ.get("CDO_SPEED_PERF", "perf")
 
 
+def event_pmu(event):
+    """`cpu_core` of `cpu_core/cycles/u`; "" for a plain event (`cycles:u`)."""
+    return event.split("/", 1)[0] if "/" in event else ""
+
+
+def event_kind(event):
+    """`cycles` of `cpu_core/cycles/u` or `cycles:u`."""
+    return event.split("/")[1] if "/" in event else event.split(":", 1)[0]
+
+
 def perf_event_args(events=None):
-    """`-e` arguments for `events`: at most ONE event per PMU (`cpu_core/...`,
-    `cpu_atom/...`, or the plain `instructions:u`). Instructions use the fixed
-    counter, so one event a PMU leaves nothing in this perf run to multiplex: a
-    count never comes out short because of our own events (review r1, sol). A
-    second event on a PMU is refused here, not added."""
+    """`-e` arguments for `events`: per PMU (`cpu_core/...`, `cpu_atom/...`, or
+    plain), at most one `instructions` and one `cycles` event and nothing else.
+    Both are fixed counters, so this perf run leaves nothing to multiplex: a
+    count never comes out short because of our own events (review r1, sol;
+    TLS-111 added cycles). Any other event, or one twice, is refused here."""
     events = events or INSTR_EVENTS
-    pmus = [e.split("/", 1)[0] if "/" in e else "" for e in events]
-    if len(pmus) != len(set(pmus)):
-        raise ValueError(f"cdo-speed: one perf event per PMU only (no multiplexing): {events}")
+    pairs = [(event_pmu(e), event_kind(e)) for e in events]
+    if len(pairs) != len(set(pairs)) or any(k not in FIXED_KINDS for _, k in pairs):
+        raise ValueError("cdo-speed: per PMU only `instructions` and `cycles`, once each "
+                         f"(fixed counters, no multiplexing): {events}")
     return [a for e in events for a in ("-e", e)]
 
 
-def instr_total(text, events=None):
-    """The summed count of `perf stat -x,` output for `events`, or None. An event
+def perf_counts(text, events=None):
+    """{event: count} from `perf stat -x,` output for `events`, or None. An event
     that never ran (a call that stayed on one core type) reads `<not counted>`:
     0. Any other non-number (`<not supported>`), or an event missing, is None.
-    One event per PMU (`perf_event_args`) leaves nothing in this run to
-    multiplex. perf's time-share column is no self-check here: on a hybrid CPU a
-    core type's event is enabled all along but runs only while the task is on
-    that type, so enabled and running differ with no multiplexing at all (58 %
-    and 42 % for 4 threads, measured)."""
+    ⟨TLS-111⟩ The running-% column (perf's 5th) is checked per kind: on a hybrid
+    CPU a core type's event is enabled all along but runs only while the task is
+    on that type (67 % and 33 % in TLS-111's unpinned runs, 58 % and 42 % in
+    TLS-83's), so one PMU's share alone says nothing; but with no multiplexing a
+    kind's shares over its PMUs sum to 100 (on one PMU: that PMU's is 100), less
+    perf's truncation to whole percents (under 1 point a PMU). A kind whose
+    shares do not is no count."""
     events = events or INSTR_EVENTS
-    seen, total = set(), 0
+    counts, running = {}, {}
     for line in text.splitlines():
         cols = line.strip().split(",")
-        if len(cols) > 2 and cols[2] in events:
+        if len(cols) > 4 and cols[2] in events:
             if cols[0].isdigit():
-                total += int(cols[0])
-            elif cols[0] != "<not counted>":
+                counts[cols[2]] = int(cols[0])
+            elif cols[0] == "<not counted>":
+                counts[cols[2]] = 0
+            else:
                 return None
-            seen.add(cols[2])
-    return total if seen == set(events) else None
+            try:
+                running[cols[2]] = float(cols[4])
+            except ValueError:
+                return None
+    if set(counts) != set(events):
+        return None
+    for kind in {event_kind(e) for e in events}:
+        shares = [running[e] for e in events if event_kind(e) == kind]
+        if not 100.0 - len(shares) < sum(shares) <= 100.01:
+            return None
+    return counts
+
+
+def kind_total(counts, kind):
+    """The summed count of `kind` over the PMUs, or None (no count, or no event
+    of that kind)."""
+    if counts is None:
+        return None
+    values = [n for e, n in counts.items() if event_kind(e) == kind]
+    return sum(values) if values else None
+
+
+def instr_total(text, events=None):
+    """The summed user-mode instructions of `perf stat -x,` output, or None."""
+    return kind_total(perf_counts(text, events), "instructions")
 
 
 def instr_probe():
-    """(events, why): the events that count user-mode instructions here, or ((),
-    the reason none can). CDO_SPEED_INSTR=0 turns counting off."""
+    """(events, why): the events that count user-mode instructions and cycles
+    here, or ((), the reason none can). CDO_SPEED_INSTR=0 turns counting off."""
     if os.environ.get("CDO_SPEED_INSTR") == "0":
         return (), "off (CDO_SPEED_INSTR=0)"
     why = "perf gave no count"
-    for events in (HYBRID_EVENTS, ("instructions:u",)):
+    for events in (HYBRID_EVENTS, PLAIN_EVENTS):
         try:
             r = subprocess.run([PERF, "stat", "--no-scale", "-x,", *perf_event_args(events),
                                 "--", "true"], capture_output=True, text=True, timeout=30)
@@ -868,29 +1020,35 @@ class Server:
             if msg.get("id") == rid:
                 return msg
 
-    def cpu(self):
-        """CPU seconds of the server and every live engine child (with their
-        own waited-for children)."""
-        return sum(proc_cpu_seconds(p) for p in [self.p.pid, *descendants(self.p.pid)])
+    def user_sys(self):
+        """(user, system) seconds of the server and every live engine child
+        (with their own waited-for children)."""
+        pairs = [proc_user_sys(p) for p in [self.p.pid, *descendants(self.p.pid)]]
+        return sum(u for u, _ in pairs), sum(s for _, s in pairs)
 
     def call(self, tool, args):
         """(wall s, CPU s, stdout sha256, exit code, first stderr lines) of one
         tool call; exit code -1 when the engine failed (no CLI exit).
         `self.last_instr` then holds the call's user-mode instructions, or None
-        when they are not counted (TLS-83)."""
+        when they are not counted (TLS-83); `self.last_counts` every counted
+        event's count ({event: n}, or None), and `self.last_user_sys` its user
+        and system seconds (TLS-111)."""
         perf = self.instr_start()
         # instr_stop runs even when the call times out (SystemExit): perf and
         # its FIFOs never outlive the call (review r1, sol).
         try:
-            c0 = self.cpu()
+            u0, s0 = self.user_sys()
             t0 = time.monotonic()
             r = self.request("tools/call", {"name": tool, "arguments": args})
             wall = time.monotonic() - t0
-            cpu = self.cpu() - c0
+            u1, s1 = self.user_sys()
+            self.last_user_sys = (u1 - u0, s1 - s0)
+            cpu = (u1 - u0) + (s1 - s0)
             if TEST_WALL_IS_CPU:
                 wall = cpu
         finally:
-            self.last_instr = self.instr_stop(perf)
+            self.last_counts = self.instr_stop(perf)
+            self.last_instr = kind_total(self.last_counts, "instructions")
         self.sample_hwm()
         if "error" in r:
             raise SystemExit(f"cdo-speed: {self.name}: {tool}: {r['error']}")
@@ -992,8 +1150,8 @@ class Server:
         return perf, out, (ctl_fd, ack_fd)
 
     def instr_stop(self, started):
-        """The call's instruction count, or None when perf could not give it (the
-        call then has no instruction ratio; CPU and wall still judge it)."""
+        """The call's counts ({event: n}), or None when perf could not give them
+        (the call then has no instruction ratio; CPU and wall still judge it)."""
         if started is None:
             return None
         perf, out, fds = started
@@ -1023,7 +1181,7 @@ class Server:
             else:
                 try:
                     with open(out) as f:
-                        total = instr_total(f.read())
+                        total = perf_counts(f.read())
                 except OSError:
                     total = None
         for fd in fds:
@@ -1031,7 +1189,7 @@ class Server:
         shutil.rmtree(os.path.dirname(out), ignore_errors=True)
         # No instruction at all (every event `<not counted>`) is no count: as a 0
         # it would pull the round total down (review r1, Fable).
-        return total or None
+        return total if kind_total(total, "instructions") else None
 
     def sample_hwm(self):
         """Read the VmHWM of the server and every live child. Called after each
@@ -1101,14 +1259,28 @@ def timed_call(server, side, cid, tool, args, rnd, warm_pass, tag, records):
     exit_note = f"  exit {code}" if code != 0 else ""
     shown = "?" if pressure is None else f"{pressure:.1f}"
     instr = getattr(server, "last_instr", None)
+    counts = getattr(server, "last_counts", None)
+    cycles = kind_total(counts, "cycles")
+    user, system = getattr(server, "last_user_sys", (None, None))
     instr_note = "" if instr is None else f"  instr {instr / 1e9:8.3f}e9"
+    if cycles:
+        instr_note += f"  cycles {cycles / 1e9:8.3f}e9"
     log(f"  {tag} {cid:<12} {side:<5} wall {wall:7.2f} s  cpu {cpu:7.2f} s"
         f"  load {load:5.1f}  pressure {shown:>5}{instr_note}{exit_note}")
     if code != 0:
         raise CallFailed(f"{tag} {cid} ({tool}) on {side} exited {code}", err)
     records.append(dict(call=cid, side=side, round=rnd, warm_pass=warm_pass,
                         wall=wall, cpu=cpu, sha=sha, load=load, pressure=pressure,
-                        instr=instr, suspended_before=before, suspended_during=during))
+                        instr=instr, suspended_before=before, suspended_during=during,
+                        user=user, sys=system, cycles=cycles, counts=counts,
+                        **clock_cpi(cycles, user, instr)))
+
+
+def clock_cpi(cycles, user, instr):
+    """⟨TLS-111⟩ The call's clock (user cycles / user seconds, GHz) and cycles
+    per instruction, each None when a part is missing or zero."""
+    return dict(clock=cycles / user / 1e9 if cycles and user else None,
+                cpi=cycles / instr if cycles and instr else None)
 
 
 def run_round(rnd, servers, records, warm_pass=0, skip=0):
@@ -1143,11 +1315,16 @@ def judge(records):
     for side in ("base", "head"):
         for rnd in rounds:
             rs = [r for r in records if r["round"] == rnd and r["side"] == side]
-            instr = [r.get("instr") for r in rs]
+
+            def summed(key):
+                values = [r.get(key) for r in rs]
+                return sum(values) if values and None not in values else None
+            instr, cycles, user = summed("instr"), summed("cycles"), summed("user")
             records.append(dict(call="round-total", side=side, round=rnd, total=True,
                                 wall=sum(r["wall"] for r in rs),
                                 cpu=sum(r["cpu"] for r in rs), sha="",
-                                instr=sum(instr) if instr and None not in instr else None))
+                                instr=instr, cycles=cycles, user=user, sys=summed("sys"),
+                                **clock_cpi(cycles, user, instr)))
     calls.append("round-total")
     for cid in calls:
         rs = [r for r in records if r["call"] == cid]
@@ -1156,10 +1333,11 @@ def judge(records):
         paired = sorted(set(a) & set(b))
         row = dict(call=cid, rounds=paired, same_output=(
             [a[k]["sha"] for k in paired] == [b[k]["sha"] for k in paired]))
-        # ⟨TLS-83⟩ Instructions only where every paired call has a count.
-        counted = paired and all((a[k].get("instr") or 0) > 0 and (b[k].get("instr") or 0) > 0
-                                 for k in paired)
-        for m in ("cpu", "wall", "instr") if counted else ("cpu", "wall"):
+        # ⟨TLS-83⟩ Instructions (and TLS-111's clock and cycles per instruction)
+        # only where every paired call has a value.
+        counted = [m for m in ("instr", "clock", "cpi") if paired and all(
+            (a[k].get(m) or 0) > 0 and (b[k].get(m) or 0) > 0 for k in paired)]
+        for m in ["cpu", "wall", *counted]:
             ratios = [b[k][m] / a[k][m] if a[k][m] > 0 else 1.0 for k in paired]
             row[m] = dict(base=statistics.median(a[k][m] for k in paired),
                           head=statistics.median(b[k][m] for k in paired),
@@ -1311,15 +1489,27 @@ def main():
     cur = None
     # The peak RSS over every server pair (the warm-up passes start fresh ones).
     peaks = {"base": 0.0, "head": 0.0}
+    # ⟨TLS-111⟩ The contradicted warm-up failures that added a flipped pair
+    # (`contradicted`), and what still disagreed after it (HOST UNSTABLE).
+    trigger, unstable = [], []
+    passes = args.warm_samples
+    rnd = 0
     try:
-        for p in range(args.warm_samples):
-            calm.append(wait_calm(f"warm-up {p + 1} of {args.warm_samples}"))
+        p = 0
+        while p < passes:
+            if servers:
+                # The previous pass's pair: a fresh one for this pass.
+                for side, s in servers.items():
+                    peaks[side] = max(peaks[side], s.peak_mib())
+                    s.close()
+                servers = {}
+            calm.append(wait_calm(f"warm-up {p + 1} of {passes}"))
             # The pass's stall share also covers its untimed rebuild (TLS-79).
             cur = (f"warm-up {p + 1}", Stalls())
             exes = {"base": base_exe, "head": head_exe}
             first = "base" if p % 2 == 0 else "head"
             second = "head" if first == "base" else "base"
-            log(f"round 0, warm-up {p + 1} of {args.warm_samples} (fresh servers; "
+            log(f"round 0, warm-up {p + 1} of {passes} (fresh servers; "
                 f"{first} builds first)")
             # ⟨TLS-79⟩ Each side's model build is timed with the other side's
             # server closed: with the first side's model resident (its server
@@ -1349,25 +1539,36 @@ def main():
             run_round(0, servers, records, warm_pass=p, skip=1)
             blocks.append((cur[0], cur[1].share()))
             cur = None
-            if p + 1 < args.warm_samples:
-                for side, s in servers.items():
-                    peaks[side] = max(peaks[side], s.peak_mib())
-                    s.close()
-                servers = {}
-        cur = ("rounds", Stalls())
-        rnd = 0
-        while True:
-            rnd += 1
-            run_round(rnd, servers, records)
-            if rnd < args.rounds:
-                continue
-            _, noisy = judge([dict(r) for r in records if r["round"] > 0])
-            if noisy and rnd < args.max_rounds:
-                log(f"the rounds disagree about {', '.join(noisy)}: one more round")
-                continue
-            break
-        blocks.append((cur[0], cur[1].share()))
-        cur = None
+            p += 1
+            # ⟨TLS-111, note §5.2⟩ A judged warm-up row that fails while its two
+            # passes disagree beyond CONTRADICTED_SPREAD: ONE more flipped pair
+            # (passes 3 and 4, each side order once more, as passes 1 and 2),
+            # never one pass (one order voting twice) and never a second pair.
+            if p == passes == 2:
+                trigger = contradicted(judge_warm(records))
+                if trigger:
+                    passes = 4
+                    log("a warm-up failure the passes contradict ("
+                        + "; ".join(f"{c} {m} x{'/x'.join(f'{x:.3f}' for x in rs)}"
+                                    for c, m, rs in trigger)
+                        + f", beyond x{CONTRADICTED_SPREAD}): one more flipped pair")
+        if trigger:
+            unstable = same_order_disagree(judge_warm(records), trigger)
+        # HOST UNSTABLE: nothing the rounds measure changes that verdict.
+        if not unstable:
+            cur = ("rounds", Stalls())
+            while True:
+                rnd += 1
+                run_round(rnd, servers, records)
+                if rnd < args.rounds:
+                    continue
+                _, noisy = judge([dict(r) for r in records if r["round"] > 0])
+                if noisy and rnd < args.max_rounds:
+                    log(f"the rounds disagree about {', '.join(noisy)}: one more round")
+                    continue
+                break
+            blocks.append((cur[0], cur[1].share()))
+            cur = None
         for side in servers:
             peaks[side] = max(peaks[side], servers[side].peak_mib())
     except CallFailed as e:
@@ -1385,31 +1586,14 @@ def main():
         for s in servers.values():
             s.close()
 
-    warm_records = [r for r in records if r["round"] == 0]
-    rows, noisy = judge([r for r in records if r["round"] > 0])
-    # The warm-up's calls: one sample per pass, paired by pass; the ratio is
-    # the geometric mean over the passes (with the two flipped ones, a factor k
-    # on one and 1/k on the other cancels exactly; an arithmetic mean would
-    # lean against head).
-    warm_rows, _ = judge([dict(r, round=r["warm_pass"] + 1) for r in warm_records])
-    warm_rows = [r for r in warm_rows if r["call"] != "round-total"]
-    for row in warm_rows:
-        for m in ("cpu", "wall", "instr"):
-            if m not in row:
-                continue
-            ratios = row[m]["ratios"]
-            if ratios and min(ratios) > 0:
-                row[m]["ratio"] = statistics.geometric_mean(ratios)
-        loads = [r["load"] for r in warm_records if r["call"] == row["call"]]
-        row["load"] = dict(min=min(loads), max=max(loads))
+    round_records = [r for r in records if r["round"] > 0]
+    rows, noisy = judge(round_records) if round_records else ([], [])
+    warm_rows = judge_warm(records)
     failed, advisories = [], []
     log(f"verdict, head/base (limits: rounds cpu {CPU_LIMIT} and wall {WALL_LIMIT} on the "
         f"median ratio, warm-up cpu {WARM_CPU_LIMIT} and wall {WARM_WALL_LIMIT}, memory "
         f"{MEM_LIMIT}; a call is judged "
         f"alone when its base CPU is at least {MIN_SECONDS} s):")
-    for row in warm_rows:
-        row["warm"] = True
-        row["judged"] = row["cpu"]["base"] >= WARM_MIN_SECONDS
     for row in warm_rows + rows:
         c, w = row["cpu"], row["wall"]
         warm = row.get("warm", False)
@@ -1424,6 +1608,12 @@ def main():
                      f"{row['load']['min']:.1f}-{row['load']['max']:.1f})")
         i = row.get("instr")
         instr_col = f"   instr x{i['ratio']:.4f}" if i else ""
+        # ⟨TLS-111⟩ The sides' clocks (GHz) and their cycles-per-instruction ratio.
+        if "clock" in row:
+            instr_col += (f"   clock {row['clock']['base']:.2f}/{row['clock']['head']:.2f} GHz"
+                          f" x{row['clock']['ratio']:.3f}")
+        if "cpi" in row:
+            instr_col += f"   cpi x{row['cpi']['ratio']:.3f}"
         log(f"  {row['call']:<14} cpu {c['base']:7.2f} -> {c['head']:7.2f} s x{c['ratio']:.3f}"
             f"   wall {w['base']:7.2f} -> {w['head']:7.2f} s x{w['ratio']:.3f}"
             f"{instr_col}   spread {c['spread']:.2f}/{w['spread']:.2f}{note}")
@@ -1468,7 +1658,16 @@ def main():
         log(f"ADVISORY (not failing): {line}")
     elapsed = time.monotonic() - t_start
     load_label = under_load_label(calm, blocks)
-    label = load_label + SUSPENDS.label()
+    flags = clock_cpi_flags(warm_rows + rows)
+    label = load_label + SUSPENDS.label() + clock_cpi_label(flags)
+    # ⟨TLS-111⟩ The extra pair, said in the verdict (note §5.2).
+    if trigger:
+        why = "; ".join(f"{c} {m} x{'/x'.join(f'{x:.3f}' for x in rs[:2])}"
+                        for c, m, rs in trigger)
+        label += (f" (one more flipped warm-up pair: a failure its passes contradicted "
+                  f"beyond x{CONTRADICTED_SPREAD}: {why}; "
+                  + (f"the same-order passes still disagree: {'; '.join(unstable)})" if unstable
+                     else "the same-order passes agree, judged on 4 passes)"))
     under = [i + 1 for i, (_, loaded) in enumerate(calm) if loaded]
     unknown = any(loaded is None for _, loaded in calm) or any(s is None for _, s in blocks)
     with open(os.path.join(outdir, "speed.json"), "w") as f:
@@ -1485,12 +1684,22 @@ def main():
                        under_load=bool(load_label.startswith(" UNDER")),
                        suspended=[dict(where=w, seconds=s) for w, s in SUSPENDS.seen],
                        pressure_unknown=unknown, warm_samples=args.warm_samples,
+                       warm_passes=passes, clock_band=CLOCK_BAND, cpi_band=CPI_BAND,
+                       clock_labels=flags["clock"], cpi_labels=flags["cpi"],
+                       contradicted_spread=CONTRADICTED_SPREAD,
+                       extra_pair=[dict(call=c, metric=m, ratios=rs) for c, m, rs in trigger],
+                       host_unstable=unstable,
                        instructions=dict(events=list(INSTR_EVENTS), why_not=INSTR_WHY,
                                          advisory_limit=INSTR_LIMIT, advisories=advisories)),
                   f, indent=1)
     log(f"build {t_built - t_start:.0f} s, timing {elapsed - (t_built - t_start):.0f} s, "
         f"load average {load0:.1f} at the start, {load_1min():.1f} at the end; "
         f"CPU stall share of this container: {shares_text(blocks)}")
+    # ⟨TLS-111⟩ Still contradicted after the extra pair: the host, not the
+    # change, decided the timings. Cannot run (exit 2), never a PASS; no rounds ran.
+    if unstable:
+        log(f"HOST UNSTABLE{label}; {instr_text}")
+        return 2
     if failed:
         for line in failed:
             log(f"FAIL: {line}")

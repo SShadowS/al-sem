@@ -427,7 +427,7 @@ summarize() {
         passed="$(grep -hoE 'test result: [A-Za-z]+\. [0-9]+ passed' "$logs/$name.log" 2>/dev/null |
             grep -oE '[0-9]+ passed' | awk '{n += $1} END {print n + 0}')"
         if [[ "$name" == "speed" ]]; then
-            counts="$(grep -hE 'cdo-speed: (PASS|FAIL)' "$logs/speed.log" 2>/dev/null |
+            counts="$(grep -hE 'cdo-speed: (PASS|FAIL|HOST UNSTABLE)' "$logs/speed.log" 2>/dev/null |
                 sed -E 's/^ *[0-9]+ cdo-speed: //' | paste -sd '|' -)"
         fi
         if [[ "$rc" != "0" ]]; then

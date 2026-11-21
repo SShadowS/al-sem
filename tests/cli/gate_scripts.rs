@@ -2166,23 +2166,35 @@ fn cdo_gate_skips_speed_only_when_no_product_code_changed() {
 /// except its first (`build`, the model build), which burns `STUB_BUILD_S`
 /// seconds of CPU, 50 % more when it is the second server of its pair to
 /// build (a shared counter in `STUB_DIR`): the "second side builds slower
-/// under load" bias of TLS-65, made deterministic.
+/// under load" bias of TLS-65, made deterministic. ⟨TLS-111⟩ It publishes user
+/// cycles beside instructions (3e9 per CPU second burned, at a steady clock);
+/// STUB_SLOW_HEAD, STUB_CPI_HEAD, STUB_SECOND_FACTOR and STUB_TESTS_HEAD_BY_PASS
+/// shape head's cost (see the code).
 #[cfg(target_os = "linux")]
 const SPEED_STUB: &str = r#"#!/usr/bin/env python3
 import fcntl, json, os, sys, time
 calls = 0
 def burn(seconds):
-    end = time.process_time() + seconds
-    while time.process_time() < end:
-        pass
-def second(name):
-    # Whether this server is the second of its pair to make this call.
+    # User time (TLS-111: the clock is cycles per USER second): a pure loop
+    # between reads, since reading the CPU clock is a system call.
+    end = os.times().user + seconds
+    while os.times().user < end:
+        for _ in range(20000):
+            pass
+def made_before(name):
+    # How many servers made this call before this one (n % 2 == 1: this server
+    # is the second of its pair; n // 2: the warm-up pass, for warm-tests).
     with open(os.path.join(os.environ["STUB_DIR"], name), "a+") as f:
         fcntl.flock(f, fcntl.LOCK_EX)
         f.seek(0)
         n = len(f.read())
         f.write("x")
-    return n % 2 == 1
+    return n
+head = os.path.basename(sys.argv[0]) == "alsem-head"
+# TLS-111: STUB_SLOW_HEAD: head's clock is lower (more CPU, the same cycles);
+# STUB_CPI_HEAD: head needs more cycles (more CPU and cycles, the same clock).
+slow = float(os.environ.get("STUB_SLOW_HEAD", "1")) if head else 1.0
+cpi = float(os.environ.get("STUB_CPI_HEAD", "1")) if head else 1.0
 live = os.path.join(os.environ["STUB_DIR"], "live")
 os.makedirs(live, exist_ok=True)
 me = os.path.join(live, str(os.getpid()))
@@ -2201,19 +2213,36 @@ for line in sys.stdin:
         # while another server is alive (the real cause, TLS-79), and the test
         # universe (6th, `warm-tests`), 50 % slower when it is the second of
         # its pair (a positional factor the flipped passes cancel, TLS-65).
+        # TLS-111: the call's CPU seconds at a steady clock; its user cycles
+        # follow them at 3 GHz (1e9 for a call that burns nothing).
+        burned = 0.0
         if calls == 1:
-            burn(float(os.environ["STUB_BUILD_S"]) * (1.5 if another_alive() else 1.0))
+            burned = float(os.environ["STUB_BUILD_S"]) * (1.5 if another_alive() else 1.0) * cpi
+            burn(burned * slow)
             # STUB_HEAD_SLEEP_S (TLS-103): head's build waits this long, wall time
             # with no CPU, as a loaded host stretches it.
-            if os.path.basename(sys.argv[0]) == "alsem-head":
+            if head:
                 time.sleep(float(os.environ.get("STUB_HEAD_SLEEP_S", "0")))
             open(me, "w").close()
         if calls == 6:
-            burn(float(os.environ["STUB_BUILD_S"]) * (1.5 if second("tests") else 1.0))
+            n = made_before("tests")
+            # STUB_SECOND_FACTOR: the positional factor (default 1.5).
+            factor = float(os.environ.get("STUB_SECOND_FACTOR", "1.5")) if n % 2 == 1 else 1.0
+            # TLS-111: STUB_TESTS_HEAD_BY_PASS=f1,f2,...: head's warm-tests costs
+            # f<pass> (more CPU and cycles) in that warm-up pass.
+            by_pass = os.environ.get("STUB_TESTS_HEAD_BY_PASS")
+            if head and by_pass:
+                factor *= float(by_pass.split(",")[n // 2])
+            burned = float(os.environ["STUB_BUILD_S"]) * factor * cpi
+            burn(burned * slow)
+        cyc = os.path.join(os.environ["STUB_DIR"], f"cycles.{os.getpid()}")
+        done = int(open(cyc).read()) if os.path.exists(cyc) else 0
+        with open(cyc, "w") as f:
+            f.write(str(done + int(burned * 3e9 if burned else 1e9)))
         # TLS-83: this process's user-mode instructions so far, for the stub perf
         # (SPEED_PERF_STUB): 1e9 a call, times STUB_INSTR_HEAD on the head side.
         factor = 1.0
-        if os.path.basename(sys.argv[0]) == "alsem-head":
+        if head:
             factor = float(os.environ.get("STUB_INSTR_HEAD", "1"))
             # STUB_INSTR_ZERO_CALL=N: head's N-th call (per server) retires none.
             if str(calls) == os.environ.get("STUB_INSTR_ZERO_CALL"):
@@ -2241,7 +2270,8 @@ if os.path.exists(me):
 /// ⟨TLS-83⟩ A stand-in `perf` (cdo-speed's CDO_SPEED_PERF test hook): the
 /// probe (`... -- true`) reads a count; attached (`-p <pids> -o <file>`), it
 /// writes, on SIGINT, how far the stub servers' published counters
-/// (`$STUB_DIR/instr.<pid>`) moved since it started, as `perf stat -x,` does on
+/// (`$STUB_DIR/instr.<pid>`, and `cycles.<pid>` since TLS-111) moved since it
+/// started, as `perf stat -x,` does on
 /// a hybrid CPU (one core type `<not counted>`). It speaks perf's control FIFO
 /// (`-D -1 --control fifo:<ctl>,<ack>`): it counts from `enable` and answers
 /// `ack`; STUB_PERF_SLOW=<s> delays its counters between `enable` and `ack`, as
@@ -2252,20 +2282,31 @@ if os.path.exists(me):
 const SPEED_PERF_STUB: &str = r#"#!/usr/bin/env python3
 import os, signal, sys, time
 a = sys.argv[1:]
-def total(pids):
+def total(pids, kind="instr"):
     s = 0
     for p in pids:
-        f = os.path.join(os.environ["STUB_DIR"], f"instr.{p}")
+        f = os.path.join(os.environ["STUB_DIR"], f"{kind}.{p}")
         if os.path.exists(f):
             s += int(open(f).read())
     return s
-def lines(n):
-    if os.environ.get("STUB_PERF_NONE") and "--" not in a:
-        n = "<not counted>"
-    return (f"{n},,cpu_core/instructions/u,1,100.00,,\n"
-            "<not counted>,,cpu_atom/instructions/u,0,0.00,,\n")
+def lines(n, c):
+    # TLS-111: instructions and cycles per PMU. Attached (not the probe):
+    # STUB_PERF_SPLIT=<share> puts that share of each count on cpu_atom (perf's
+    # running % split the same way, summing to 100: no multiplexing);
+    # STUB_PERF_RUN=<pct> makes the running shares sum to pct (multiplexed).
+    probe = "--" in a
+    if os.environ.get("STUB_PERF_NONE") and not probe:
+        n = c = "<not counted>"
+    split = 0.0 if probe else float(os.environ.get("STUB_PERF_SPLIT", "0"))
+    run = 100.0 if probe else float(os.environ.get("STUB_PERF_RUN", "100"))
+    out = ""
+    for pmu, share in (("cpu_core", 1 - split), ("cpu_atom", split)):
+        for kind, v in (("instructions", n), ("cycles", c)):
+            val = "<not counted>" if share == 0 or isinstance(v, str) else int(round(v * share))
+            out += f"{val},,{pmu}/{kind}/u,1,{run * share:.2f},,\n"
+    return out
 if "--" in a:
-    sys.stderr.write(lines(1000))
+    sys.stderr.write(lines(1000, 2000))
     if os.environ.get("STUB_PERF_VANISH"):
         os.remove(sys.argv[0])  # gone after the probe: every attach then fails to start
     sys.exit(0)
@@ -2277,13 +2318,16 @@ with open(os.path.join(os.environ["STUB_DIR"], "perf-attaches"), "a") as f:
 # `ack` (cdo-speed waits for it before the call). STUB_PERF_SLOW: slow counters.
 assert a[a.index("-D") + 1] == "-1", a
 ctl, ack = a[a.index("--control") + 1].split(":", 1)[1].split(",")
-start = 0
+start = cstart = 0
 def stop(*_):
     with open(out, "w") as f:
         # STUB_PERF_EARLY writes a fixed positive count: one measured right
         # after the ack can be 0, which a reader may not take for a count, so a
         # break that reads the early output could pass (TLS-83 r3, sol).
-        f.write(lines(1000000 if os.environ.get("STUB_PERF_EARLY") else total(pids) - start))
+        if os.environ.get("STUB_PERF_EARLY"):
+            f.write(lines(1000000, 2000000))
+        else:
+            f.write(lines(total(pids) - start, total(pids, "cycles") - cstart))
     sys.exit(0)
 # Installed before the `ack` (review r1, sol): a fast call may SIGINT us at once.
 # STUB_PERF_NOSTOP: SIGINT does nothing (a perf hanging at its stop).
@@ -2295,7 +2339,7 @@ with open(ctl) as c:
     time.sleep(float(os.environ.get("STUB_PERF_SLOW", "0")))
     while os.environ.get("STUB_PERF_NOACK"):
         time.sleep(0.05)
-    start = total(pids)
+    start, cstart = total(pids), total(pids, "cycles")
     with open(ack, "w") as k:
         k.write("ack\n")
 # STUB_PERF_EARLY: it ends right after the `ack`, with valid output (a count of
@@ -2689,6 +2733,344 @@ fn speed_counts_instructions_with_the_real_perf() {
         "{text}"
     );
     assert!(text.contains("instructions: counted per call"), "{text}");
+    // TLS-111: user cycles too, under the real perf's running-% columns (the
+    // unpinned stub servers move between core types, so a PMU's share alone is
+    // below 100 while the kind's sum is 100).
+    let json: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(dir.path().join("state-/out/speed.json")).unwrap(),
+    )
+    .unwrap();
+    let build = json["records"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["call"] == "build")
+        .unwrap_or_else(|| panic!("a build record: {json}"));
+    assert!(
+        build["cycles"].as_f64().is_some_and(|c| c > 0.0)
+            && build["clock"].as_f64().is_some_and(|c| c > 0.0),
+        "the real perf's cycles were not counted: {build}"
+    );
+}
+
+/// A stand-in perf (SPEED_PERF_STUB) in its own folder, executable.
+#[cfg(target_os = "linux")]
+fn stub_perf(dir: &std::path::Path) -> String {
+    use std::os::unix::fs::PermissionsExt;
+    let perf = dir.join("perf");
+    std::fs::write(&perf, SPEED_PERF_STUB).unwrap();
+    std::fs::set_permissions(&perf, std::fs::Permissions::from_mode(0o755)).unwrap();
+    perf.to_str().unwrap().to_string()
+}
+
+/// The verdict line (PASS, FAIL or HOST UNSTABLE) of a cdo-speed run.
+#[cfg(target_os = "linux")]
+fn speed_verdict(text: &str) -> String {
+    text.lines()
+        .rfind(|l| {
+            l.contains("cdo-speed: PASS")
+                || l.contains("cdo-speed: FAIL")
+                || l.contains("cdo-speed: HOST UNSTABLE")
+        })
+        .unwrap_or_else(|| panic!("a verdict line: {text}"))
+        .to_string()
+}
+
+#[cfg(target_os = "linux")]
+fn speed_json(dir: &std::path::Path) -> serde_json::Value {
+    serde_json::from_str(&std::fs::read_to_string(dir.join("state-/out/speed.json")).unwrap())
+        .unwrap()
+}
+
+/// ⟨TLS-111⟩ cdo-speed counts user cycles beside instructions, per PMU, and
+/// labels a judged row whose sides' clock (user cycles / user s) or cycles per
+/// instruction differ beyond x1.15, never changing the verdict:
+/// - counts split 70/30 over cpu_core and cpu_atom (running 70 % and 30 %, as
+///   an unpinned call reads): parsed per PMU and summed, no label;
+/// - the same split with running shares summing to 95 % (multiplexed): no call
+///   counted;
+/// - head's clock x0.83 (STUB_SLOW_HEAD 1.2: more CPU, the same cycles): PASS
+///   with `CLOCK` and no `CPI`;
+/// - head's cycles per instruction x1.2 (STUB_CPI_HEAD): PASS with `CPI` and no
+///   `CLOCK`.
+///
+/// The stub burns USER time: its first burn loop read the CPU clock, a system
+/// call, so ~70 % of its CPU was system time and the clock (cycles per user
+/// second) read 9-10 GHz, with false CLOCK labels from the user/system split.
+///
+/// Mutations (2026-11-21): the running-share check in `perf_counts` disabled ->
+/// the 95 % run counted ("a multiplexed count was taken"; red); the CLOCK flags
+/// appended to `failed` -> "a label failed the run" (red); `clock_cpi_flags`
+/// testing `r > band` instead of either way -> no CLOCK on the x0.83 run (red);
+/// `kind_total` summing `cpu_core` only -> the cycles-sum assertion (red). Each
+/// restored, green. Not proven: the clock's divisor being user (not user +
+/// system) seconds; the stub's calls spend almost no system time, so the two
+/// read alike.
+#[cfg(target_os = "linux")]
+#[test]
+fn speed_counts_cycles_and_labels_clock_and_cpi() {
+    let bin = tempfile::tempdir().unwrap();
+    let perf = stub_perf(bin.path());
+    let run = |extra: &[(&str, &str)]| {
+        let dir = tempfile::tempdir().unwrap();
+        let mut env = vec![("CDO_SPEED_INSTR", "1"), ("CDO_SPEED_PERF", perf.as_str())];
+        env.extend_from_slice(extra);
+        let (code, text) = speed_with_stub(dir.path(), "1.0", &[], &env);
+        (dir, code, text)
+    };
+
+    // Counts on both PMUs: parsed per PMU, summed.
+    let (dir, code, text) = run(&[("STUB_PERF_SPLIT", "0.3")]);
+    assert_eq!(code, Some(0), "{text}");
+    let v = speed_verdict(&text);
+    assert!(v.contains("(instructions: build x1.0000"), "{text}");
+    assert!(!v.contains(" CLOCK:") && !v.contains(" CPI:"), "{text}");
+    let json = speed_json(dir.path());
+    let build = json["records"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["call"] == "build" && r["side"] == "base")
+        .unwrap()
+        .clone();
+    let count = |e: &str| build["counts"][e].as_f64().unwrap_or(0.0);
+    assert!(
+        count("cpu_core/instructions/u") > 0.0
+            && count("cpu_atom/instructions/u") > 0.0
+            && count("cpu_core/cycles/u") > 0.0
+            && count("cpu_atom/cycles/u") > 0.0,
+        "per PMU: {build}"
+    );
+    let cycles = build["cycles"].as_f64().unwrap();
+    assert_eq!(
+        cycles,
+        count("cpu_core/cycles/u") + count("cpu_atom/cycles/u"),
+        "{build}"
+    );
+    assert_eq!(
+        build["instr"].as_f64().unwrap(),
+        count("cpu_core/instructions/u") + count("cpu_atom/instructions/u"),
+        "{build}"
+    );
+    let (user, sys) = (
+        build["user"].as_f64().unwrap(),
+        build["sys"].as_f64().unwrap(),
+    );
+    assert!(
+        (user + sys - build["cpu"].as_f64().unwrap()).abs() < 1e-6,
+        "{build}"
+    );
+    let clock = build["clock"].as_f64().unwrap();
+    assert!((cycles / user / 1e9 - clock).abs() < 1e-9, "{build}");
+    assert!(
+        (2.0..4.5).contains(&clock),
+        "the stub's ~3 GHz: {clock} {build}"
+    );
+    assert!(build["cpi"].as_f64().is_some_and(|c| c > 0.0), "{build}");
+    assert_eq!(json["clock_band"], 1.15, "{json}");
+
+    // Running shares summing to 95 %: multiplexed, no count.
+    let (_dir, code, text) = run(&[("STUB_PERF_SPLIT", "0.3"), ("STUB_PERF_RUN", "95")]);
+    assert_eq!(code, Some(0), "{text}");
+    assert!(
+        speed_verdict(&text)
+            .contains("(instructions: no call fully counted; advisory limit x1.02)"),
+        "a multiplexed count was taken: {text}"
+    );
+
+    // A lower clock on head: labelled CLOCK, still a PASS.
+    let (dir, code, text) = run(&[("STUB_SLOW_HEAD", "1.2")]);
+    assert_eq!(code, Some(0), "a label failed the run: {text}");
+    let v = speed_verdict(&text);
+    assert!(
+        v.contains("cdo-speed: PASS CLOCK: the sides' clocks (user cycles / user s) differ beyond x1.15 on build x0.8"),
+        "{text}"
+    );
+    assert!(!v.contains(" CPI:"), "{text}");
+    let json = speed_json(dir.path());
+    assert!(
+        !json["clock_labels"].as_array().unwrap().is_empty()
+            && json["cpi_labels"].as_array().unwrap().is_empty(),
+        "{json}"
+    );
+
+    // More cycles per instruction on head: labelled CPI, still a PASS.
+    let (_dir, code, text) = run(&[("STUB_CPI_HEAD", "1.2")]);
+    assert_eq!(code, Some(0), "a label failed the run: {text}");
+    let v = speed_verdict(&text);
+    assert!(
+        v.contains(" CPI: the sides' cycles per instruction differ beyond x1.15 on build x1.2"),
+        "{text}"
+    );
+    assert!(!v.contains(" CLOCK:"), "{text}");
+}
+
+/// ⟨TLS-111⟩ Only `instructions` and `cycles`, once each per PMU, reach perf:
+/// both are fixed counters, so nothing multiplexes. Any other event, or one
+/// twice, is refused.
+///
+/// Mutation (2026-11-21): the kind check dropped from `perf_event_args` ->
+/// `cpu_core/cache-misses/u` accepted (red); restored, green.
+#[test]
+fn speed_perf_events_are_fixed_counters_only() {
+    let py = r#"
+import importlib.machinery, importlib.util, sys
+loader = importlib.machinery.SourceFileLoader("cdo_speed", sys.argv[1])
+m = importlib.util.module_from_spec(importlib.util.spec_from_loader("cdo_speed", loader))
+loader.exec_module(m)
+m.perf_event_args(m.HYBRID_EVENTS)
+m.perf_event_args(m.PLAIN_EVENTS)
+for bad in (m.HYBRID_EVENTS + ("cpu_core/cache-misses/u",),
+            ("cpu_core/cycles/u", "cpu_core/cycles/u"),
+            ("instructions:u", "cycles:u", "branches:u")):
+    try:
+        m.perf_event_args(bad)
+    except ValueError:
+        continue
+    sys.exit(f"accepted {bad}")
+print("ok")
+"#;
+    let out = std::process::Command::new("python3")
+        .args(["-c", py])
+        .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-speed"))
+        // Only imported (nothing runs), but the rule above holds for every use.
+        .env("ALSEM_SPEED_CACHE", "/nonexistent/cdo-speed-cache")
+        .output()
+        .unwrap();
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(out.status.success() && text.contains("ok"), "{text}");
+}
+
+/// ⟨TLS-111, note §5.2⟩ A judged warm-up row that fails while its two passes
+/// disagree beyond x1.25 gets ONE more flipped pair. The stub's positional
+/// factor is off (STUB_SECOND_FACTOR 1), and head's warm-tests costs a set
+/// factor per pass (STUB_TESTS_HEAD_BY_PASS):
+/// - 1.0, 2.0, then 1.0, 1.7: x1.41 fails with passes x1.0/x2.0; the added pair's
+///   same-order passes agree (x1.0/x1.0, x2.0/x1.7): judged on all four (x1.36),
+///   FAIL, the verdict saying why the pair was added; never a fifth pass;
+/// - 1.0, 2.0, then 1.0, 1.0: passes 2 and 4 still disagree: HOST UNSTABLE,
+///   exit 2, no rounds; cdo-gate's summary shows it on a FAILED speed row;
+/// - 1.5, 1.5: a failure both passes agree on adds nothing and fails.
+///
+/// Mutations (2026-11-21): `contradicted` ignoring the spread -> the agreeing
+/// failure starts "warm-up 3 of 4" (red); `same_order_disagree` comparing
+/// passes i and i + 1 instead of i and i + 2 -> the agreeing re-measure reads
+/// HOST UNSTABLE, exit 2 (red); HOST UNSTABLE's `return 2` dropped -> the
+/// still-disagreeing run PASSes, exit 0, on its four-pass mean x1.19 (red); the
+/// extra pair allowed after pass 4 too (`p == passes >= 2`, `passes += 2`) ->
+/// "warm-up 5 of 6" (red). Each restored, green.
+#[cfg(target_os = "linux")]
+#[test]
+fn speed_adds_one_flipped_pair_on_a_contradicted_failure() {
+    let run = |by_pass: &str| {
+        let dir = tempfile::tempdir().unwrap();
+        let (code, text) = speed_with_stub(
+            dir.path(),
+            "1.0",
+            &[],
+            &[
+                ("STUB_SECOND_FACTOR", "1.0"),
+                ("STUB_TESTS_HEAD_BY_PASS", by_pass),
+            ],
+        );
+        (dir, code, text)
+    };
+
+    // Contradicted, then the same orders agree: judged on four passes.
+    let (dir, code, text) = run("1.0,2.0,1.0,1.7");
+    assert_eq!(code, Some(1), "{text}");
+    let v = speed_verdict(&text);
+    assert!(
+        v.starts_with("cdo-speed: FAIL")
+            && v.contains("(one more flipped warm-up pair: a failure its passes contradicted beyond x1.25: warm-tests cpu x")
+            && v.contains("the same-order passes agree, judged on 4 passes)"),
+        "{text}"
+    );
+    assert!(
+        text.contains("FAIL: warm-tests: CPU time x1.3") && text.contains("warm-up, 4 pass(es))"),
+        "{text}"
+    );
+    assert!(
+        text.contains("warm-up 4 of 4") && !text.contains("warm-up 5"),
+        "exactly one pair added: {text}"
+    );
+    let json = speed_json(dir.path());
+    assert_eq!(json["warm_passes"], 4, "{json}");
+    let tests = json["warm_rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["call"] == "warm-tests")
+        .unwrap()
+        .clone();
+    let rs: Vec<f64> = tests["cpu"]["ratios"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|x| x.as_f64().unwrap())
+        .collect();
+    assert_eq!(rs.len(), 4, "{tests}");
+    let want = rs.iter().product::<f64>().powf(0.25);
+    assert!(
+        (tests["cpu"]["ratio"].as_f64().unwrap() - want).abs() < 1e-9,
+        "the geometric mean of all four: {tests}"
+    );
+    assert!(text.contains("round 1:"), "the rounds ran: {text}");
+
+    // Still contradicted: HOST UNSTABLE, exit 2, never a PASS.
+    let (dir, code, text) = run("1.0,2.0,1.0,1.0");
+    assert_eq!(code, Some(2), "{text}");
+    let v = speed_verdict(&text);
+    assert!(
+        v.starts_with("cdo-speed: HOST UNSTABLE")
+            && v.contains("the same-order passes still disagree: warm-tests cpu passes 2 and 4"),
+        "{text}"
+    );
+    assert!(
+        !text.contains("cdo-speed: PASS") && !text.contains("round 1:"),
+        "{text}"
+    );
+    assert!(
+        !speed_json(dir.path())["host_unstable"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    // cdo-gate's summary: a failed speed row naming it.
+    let logs = dir.path().join("logs");
+    std::fs::create_dir_all(&logs).unwrap();
+    std::fs::write(logs.join("speed.status"), "2 600\n").unwrap();
+    std::fs::write(logs.join("speed.log"), text.as_bytes()).unwrap();
+    let out = std::process::Command::new("bash")
+        .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-gate"))
+        .arg(format!("--summary={}", logs.display()))
+        .output()
+        .unwrap();
+    let summary = String::from_utf8_lossy(&out.stdout);
+    let speed_row = summary
+        .lines()
+        .find(|l| l.starts_with("cdo-gate:   speed "))
+        .unwrap_or_else(|| panic!("a speed row: {summary}"));
+    assert!(
+        speed_row.contains("FAILED (2)") && speed_row.contains("HOST UNSTABLE"),
+        "{speed_row}"
+    );
+    assert!(!out.status.success(), "{summary}");
+
+    // Both passes agree on the failure: nothing added, FAIL.
+    let (_dir, code, text) = run("1.5,1.5");
+    assert_eq!(code, Some(1), "{text}");
+    assert!(
+        speed_verdict(&text).starts_with("cdo-speed: FAIL")
+            && !text.contains("one more flipped")
+            && !text.contains("warm-up 3"),
+        "{text}"
+    );
+    assert!(text.contains("warm-up, 2 pass(es))"), "{text}");
 }
 
 /// ⟨TLS-104⟩ A host suspend during a timed call is labelled, never hidden: the
