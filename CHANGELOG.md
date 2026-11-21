@@ -258,6 +258,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   0 added, 0 removed), unknown 0; IssueReminder may write 201 -> 422 tables and literal
   arguments rule out 274 -> 0 (108 -> 37 effect rows); RunReportID unchanged (416, 0);
   one-hop calls with a binding 6802 -> 6757 (the rule alone: 6665), dead sites 5602 -> 5600.
+- **Speed: `alsem impact` on CDO costs more work** (`impact <CDO> --base bc3ccb18~5 --no-tests
+  --format json`, release-fast, the second of two runs (the first fills the base cache), under a
+  timed CDO slot hold, user-mode instructions summed over both core types, 2026-11-21):
+  master instructions 2.88e12 (31 MB of output); the rule alone x1.34 (60 MB: literal arguments
+  rule nothing out, so the base and the change differ in more effect rows); with reads at their
+  position x1.49; this change x1.76. The review fixes first doubled the work for byte-identical
+  output: a callee's write-back was evaluated once per alias-class member (classes join every
+  parameter and global), `arg_reach` scanned every call site per argument read, and the
+  evaluator rebuilt every variable's positional value per write-back. Now a write-back is
+  evaluated once per call and argument and given to every member, shared starts are found once
+  per routine, and only the call's own arguments are rebuilt (instructions 8.90e12 -> 5.07e12,
+  the output unchanged but for its timing field). The rest is the sound rule's larger answer.
 - **Re-baseline.** Five IssueReminder rendering goldens re-minted from the CDO baseline
   (`tests/cli-output-goldens/cdo/IssueReminder.{explain.human.txt,query-effects.human.txt,
   prove-may-commit.human.txt,prove-writes-table-data-exch.human.txt,digest-summary.json}`):
