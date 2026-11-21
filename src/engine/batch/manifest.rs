@@ -442,6 +442,7 @@ impl Written {
 /// caller opens nothing of its own (the trace file) unless it is `Ok`.
 pub fn check_write_sets(jobs: &[(String, JobPaths)], cwd: &Path) -> Result<(), String> {
     use super::claim::{keep, marker_of, protect, reserve, write_key};
+    use std::collections::btree_map::Entry;
     let fail = |why: String| Err(format!("al-sem batch: {why}"));
     // Every write: its job, whether it is one of the job's two streams
     // (`JobPaths::writes` lists them first), its spelling, and what it is.
@@ -484,16 +485,15 @@ pub fn check_write_sets(jobs: &[(String, JobPaths)], cwd: &Path) -> Result<(), S
     for (_, p) in jobs {
         let folders = p.workspaces.iter().map(|w| (w, true));
         for (ws, sources) in folders.chain(p.package_roots.iter().map(|w| (w, false))) {
-            if !ws_reads.contains_key(&(ws, sources)) {
-                let read = WorkspaceRead::new(cwd, ws, sources).map_err(to_err)?;
-                ws_reads.insert((ws, sources), read);
+            if let Entry::Vacant(e) = ws_reads.entry((ws, sources)) {
+                e.insert(WorkspaceRead::new(cwd, ws, sources).map_err(to_err)?);
             }
         }
         for k in &p.kept {
             if let Target::Dir(d) = k
-                && !kept_dirs.contains_key(d)
+                && let Entry::Vacant(e) = kept_dirs.entry(d)
             {
-                kept_dirs.insert(d, KeptDir::new(resolve(cwd, d)).map_err(to_err)?);
+                e.insert(KeptDir::new(resolve(cwd, d)).map_err(to_err)?);
             }
         }
     }
