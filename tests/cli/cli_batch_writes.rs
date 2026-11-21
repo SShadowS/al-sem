@@ -917,6 +917,203 @@ fn batch_refuses_writing_under_a_linked_directory() {
     }
 }
 
+/// TLS-109/TLS-110: `jobs` run from `d` is refused before anything runs:
+/// exit 3, one stderr line with `why`, nothing built, and every file in
+/// `kept` still holds `KEEP` (no stream or `--out` was opened for writing).
+fn assert_refused_untouched(case: &str, d: &Path, jobs: &[Value], why: &str, kept: &[&Path]) {
+    let (out, events) = run_manifest(d, jobs, None, &[], None);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(3), "{case}: {stderr}");
+    assert!(
+        stderr.lines().count() == 1 && stderr.contains(why),
+        "{case}: {stderr}"
+    );
+    assert_eq!(count(&last_counters(&events), "build.program"), 0, "{case}");
+    for f in kept {
+        assert_eq!(
+            std::fs::read_to_string(f).unwrap(),
+            "KEEP",
+            "{case}: {} untouched",
+            f.display()
+        );
+    }
+}
+
+/// A ready job writing `out` with `--out`, and a refused job whose stdout
+/// is `stream`.
+#[cfg(unix)]
+fn out_and_stream(ws: &str, out: &Path, stream: &Path) -> [Value; 2] {
+    let out = out.to_string_lossy();
+    [
+        job(
+            &["events", "fanout", ws, "--single-app", "--out", &out],
+            None,
+            None,
+        ),
+        job(
+            &["events", "fanout", ws, "--format", "bad"],
+            Some(stream),
+            None,
+        ),
+    ]
+}
+
+/// TLS-109: a hard link is the file it links to. A stream that is a hard
+/// link to another job's `--out`, and a stream that is a hard link (under a
+/// name no workspace read takes) to a workspace's `.al` file, are refused,
+/// and neither file is touched.
+///
+/// Discrimination (2026-11-21): `FileId`/`file_id` switched to the non-unix
+/// (canonical path) fallback by editing their `cfg`s: fails at
+/// "(hard link) another job's --out" (exit 0, not 3); restored, passes.
+#[cfg(unix)]
+#[test]
+fn batch_refuses_writing_through_a_hard_link() {
+    let ws_a = ws_a();
+    let d = tempfile::tempdir().unwrap();
+    let real = d.path().join("real.json");
+    std::fs::write(&real, "KEEP").unwrap();
+    let linked = d.path().join("linked.out");
+    std::fs::hard_link(&real, &linked).unwrap();
+    assert_refused_untouched(
+        "(hard link) another job's --out",
+        d.path(),
+        &out_and_stream(&ws_a, &real, &linked),
+        "both write",
+        &[&real],
+    );
+    let ws = tempfile::tempdir().unwrap();
+    let app = r#"{"id":"11111111-1111-1111-1111-111111111111","name":"A","publisher":"p","version":"1.0.0.0"}"#;
+    std::fs::write(ws.path().join("app.json"), app).unwrap();
+    let source = ws.path().join("A.al");
+    std::fs::write(&source, "KEEP").unwrap();
+    let d = tempfile::tempdir().unwrap();
+    let linked = d.path().join("A.txt");
+    std::fs::hard_link(&source, &linked).unwrap();
+    let w = ws.path().to_string_lossy().into_owned();
+    assert_refused_untouched(
+        "(hard link) a workspace's source file",
+        d.path(),
+        &[
+            job(&["events", "fanout", &w, "--single-app"], None, None),
+            job(
+                &["events", "fanout", &w, "--format", "bad"],
+                Some(&linked),
+                None,
+            ),
+        ],
+        "reads the workspace",
+        &[&source],
+    );
+}
+
+/// TLS-109: a symlink to a file, and a file reached through a symlinked
+/// directory, are the file itself.
+///
+/// Discrimination (2026-11-21): `resolve` taking the path as spelled
+/// (`symlink_metadata(base).map(|_| base.to_path_buf())` for `canonicalize`)
+/// and `file_id` reading the link itself (`symlink_metadata` for
+/// `metadata`): fails at "(symlink) a file link" (exit 0, not 3); restored,
+/// passes.
+#[cfg(unix)]
+#[test]
+fn batch_refuses_writing_through_a_symlink() {
+    let ws_a = ws_a();
+    let d = tempfile::tempdir().unwrap();
+    let real = d.path().join("real.json");
+    std::fs::write(&real, "KEEP").unwrap();
+    let link = d.path().join("link.out");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    assert_refused_untouched(
+        "(symlink) a file link",
+        d.path(),
+        &out_and_stream(&ws_a, &real, &link),
+        "both write",
+        &[&real],
+    );
+    let d = tempfile::tempdir().unwrap();
+    std::fs::create_dir(d.path().join("sub")).unwrap();
+    let real = d.path().join("sub/x.json");
+    std::fs::write(&real, "KEEP").unwrap();
+    std::os::unix::fs::symlink(d.path().join("sub"), d.path().join("ln")).unwrap();
+    assert_refused_untouched(
+        "(symlink) a directory link",
+        d.path(),
+        &out_and_stream(&ws_a, &real, &d.path().join("ln/x.json")),
+        "both write",
+        &[&real],
+    );
+}
+
+/// TLS-109: `sub/../x.json` is `x.json`.
+///
+/// Discrimination (2026-11-21): `fold` dropping a `..` instead of popping
+/// (`folded.pop()` deleted): fails (exit 0, not 3); restored, passes.
+#[cfg(unix)]
+#[test]
+fn batch_refuses_writing_through_dot_dot() {
+    let ws_a = ws_a();
+    let d = tempfile::tempdir().unwrap();
+    std::fs::create_dir(d.path().join("sub")).unwrap();
+    let real = d.path().join("x.json");
+    std::fs::write(&real, "KEEP").unwrap();
+    assert_refused_untouched(
+        "(..) a parent spelling",
+        d.path(),
+        &out_and_stream(&ws_a, &real, &d.path().join("sub/../x.json")),
+        "both write",
+        &[&real],
+    );
+}
+
+/// TLS-110: a refused job's directory target stays as it is. A refused
+/// `fingerprint --shard bad --out D` whose own stdout is `D/x`, or another
+/// job writing `D/y` with `--out`, is refused, and `D`'s files are untouched.
+///
+/// Discrimination (2026-11-21): `check_write_sets` ignoring a kept
+/// `Target::Dir`'s clash (`under.filter(|_| false)`): fails at "(refused
+/// dir) its own stdout" (exit 0, not 3); restored, passes.
+#[test]
+fn batch_refused_job_keeps_its_directory() {
+    let ws = ws_a();
+    let d = tempfile::tempdir().unwrap();
+    let shards = d.path().join("shards");
+    std::fs::create_dir(&shards).unwrap();
+    let (x, y) = (shards.join("x"), shards.join("y"));
+    std::fs::write(&x, "KEEP").unwrap();
+    std::fs::write(&y, "KEEP").unwrap();
+    let s = shards.to_string_lossy().into_owned();
+    let refused = |stdout: Option<&Path>| {
+        job(
+            &["fingerprint", &ws, "--shard", "bad", "--out", &s],
+            stdout,
+            None,
+        )
+    };
+    assert_refused_untouched(
+        "(refused dir) its own stdout",
+        d.path(),
+        &[refused(Some(&x))],
+        "names the directory",
+        &[&x, &y],
+    );
+    let y_out = y.to_string_lossy().into_owned();
+    assert_refused_untouched(
+        "(refused dir) another job's --out",
+        d.path(),
+        &[
+            refused(None),
+            job(
+                &["events", "fanout", &ws, "--single-app", "--out", &y_out],
+                None,
+                None,
+            ),
+        ],
+        "names the directory",
+        &[&x, &y],
+    );
+}
+
 /// #277 final r3 F1 (D2.4): a failed plan keeps every file its planning read
 /// or probed. `policy check WS` auto-detects `WS/al-sem.policy.yaml`, which
 /// does not load, so it fails in planning; a job writing that file clashes
