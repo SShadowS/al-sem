@@ -1119,7 +1119,8 @@ struct AnalyzeCli {
     #[arg(long = "baseline")]
     baseline: Option<String>,
 
-    /// Rewrite the --baseline file from the current findings (the new floor), then apply it.
+    /// Update the --baseline file: add the current findings, drop only the entries this run
+    /// proves fixed (it keeps what its filters did not look at), then apply it.
     #[arg(long = "update-baseline", default_value_t = false)]
     update_baseline: bool,
 
@@ -1870,10 +1871,12 @@ fn job_paths(command: &Commands, streams: &JobStreams) -> JobPaths {
     let file = |s: &String| Target::File(PathBuf::from(s));
     let (workspace, out): (Option<&String>, Option<&String>) = match command {
         Commands::Analyze(a) => {
-            match (&a.baseline, a.update_baseline) {
-                (Some(b), true) => p.writes.push(file(b)),
-                (Some(b), false) => p.reads.push(PathBuf::from(b)),
-                (None, _) => {}
+            // An update reads the old file too: it merges into it (TLS-106).
+            if let Some(b) = &a.baseline {
+                if a.update_baseline {
+                    p.writes.push(file(b));
+                }
+                p.reads.push(PathBuf::from(b));
             }
             (Some(&a.workspace), None)
         }
@@ -4160,12 +4163,16 @@ fn plan_analyze(a: AnalyzeCli, in_batch: bool) -> Planned {
             let request = args.read_request();
             let version = inputs.get().driver_version.clone();
             let (args, inputs, request, version) = hold(slot, (args, inputs, request, version));
-            // `new` fails only on the focus conflicts and the detector set,
-            // both checked above.
-            Box::new(
-                AnalyzeJob::new(inputs, request, args, version)
-                    .expect("plan_analyze checked the --focus conflicts and the detector set"),
-            )
+            // The focus conflicts and the detector set were checked above; what
+            // is left is an update's baseline that cannot be read (TLS-106):
+            // exit 2, nothing written.
+            match AnalyzeJob::new(inputs, request, args, version) {
+                Ok(job) => Box::new(job),
+                Err(msg) => Box::new(Failed {
+                    output: JobOutput::lines(&[format!("al-sem: {msg}")], exit::ANALYSIS_FAILURE),
+                    write_failure_exit: exit::ANALYSIS_FAILURE,
+                }),
+            }
         },
     )
 }
@@ -5126,6 +5133,34 @@ mod engine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// TLS-106: an `analyze --update-baseline` job reads its baseline (it
+    /// merges into the old file) and writes it; a plain `--baseline` job only
+    /// reads it.
+    ///
+    /// Mutation (2026-11-20): the `p.reads.push` moved into an `else` of the
+    /// `update_baseline` test -> the update job declares no read (red);
+    /// restored, green.
+    #[test]
+    fn analyze_job_declares_its_baseline_read_and_write() {
+        use al_sem::engine::batch::manifest::Target;
+        let paths = |args: &[&str]| {
+            let cli =
+                Cli::try_parse_from([&["alsem", "analyze", "ws"][..], args].concat()).unwrap();
+            let streams = JobStreams {
+                stdout: PathBuf::new(),
+                stderr: PathBuf::new(),
+            };
+            job_paths(&cli.command, &streams)
+        };
+        let b = PathBuf::from("b.json");
+        let update = paths(&["--baseline", "b.json", "--update-baseline"]);
+        assert_eq!(update.reads, vec![b.clone()]);
+        assert!(update.writes.contains(&Target::File(b.clone())));
+        let plain = paths(&["--baseline", "b.json"]);
+        assert_eq!(plain.reads, vec![b.clone()]);
+        assert!(!plain.writes.contains(&Target::File(b)));
+    }
 
     /// #246 G-2: a digest's admission kind follows `--include-reads`, so only
     /// a flag-on job takes the raised row.

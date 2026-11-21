@@ -42,6 +42,61 @@ pub struct PreflightResult {
     pub verify_error: Option<String>,
 }
 
+/// A dependency the primary needs whose package could not be read: it looks
+/// empty (or absent) to every other check.
+fn is_unreadable(e: &crate::program::resolve::full::LedgerEntry) -> bool {
+    e.unreadable.is_some() || e.found.as_ref().is_some_and(|f| f.ingest_error.is_some())
+}
+
+/// Whether the run's inputs were whole, so a finding it did not report is gone
+/// rather than unseen (TLS-106, `--update-baseline`): the coverage was
+/// verified, its contract held, no file was parsed with recovery, and no
+/// dependency package was unreadable, unidentified or encrypted. Unknown call
+/// edges, symbol-only dependencies and unbound subscriptions do NOT count: they
+/// are the same in every run, and real workspaces always have some (DO: 1,142
+/// unknown edges), so a rule that stopped on them would never prune.
+pub fn inputs_whole(fresh: &Result<FreshCoverage, String>) -> bool {
+    let Ok(fc) = fresh else {
+        return false;
+    };
+    fc.coverage_holds
+        && fc.recovered_files == 0
+        && fc.unidentified_packages.is_empty()
+        && fc.encrypted_packages.is_empty()
+        && !fc.ledger.iter().any(is_unreadable)
+}
+
+/// A run's declared dependency apps (lowercase guids, from the ledger) by what
+/// it found of them (TLS-106). An unreadable package is in none of the three:
+/// it already makes the inputs not whole.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DependencyBodies {
+    /// Found with source.
+    pub bodied: std::collections::BTreeSet<String>,
+    /// Found symbol-only.
+    pub symbol_only: std::collections::BTreeSet<String>,
+    /// Not found at all (its package moved away or never installed).
+    pub missing: std::collections::BTreeSet<String>,
+}
+
+/// The run's [`DependencyBodies`]. A baseline update compares them with the
+/// apps its file's runs had with source and found at all: a body or an app
+/// lost since then stops pruning. Empty when the coverage could not be
+/// verified (the inputs are then not whole anyway).
+pub fn dependency_bodies(fresh: &Result<FreshCoverage, String>) -> DependencyBodies {
+    let mut deps = DependencyBodies::default();
+    for e in fresh.iter().flat_map(|fc| &fc.ledger) {
+        let into = match &e.found {
+            Some(f) if f.tier != crate::snapshot::TrustTier::SymbolOnly => &mut deps.bodied,
+            Some(_) => &mut deps.symbol_only,
+            None if e.unreadable.is_none() => &mut deps.missing,
+            None => continue,
+        };
+        into.insert(e.guid.clone());
+    }
+    deps
+}
+
 /// `evaluatePreflight(coverage, required)`, rewired onto [`FreshCoverage`].
 ///
 /// `fresh` is the fresh resolver's own coverage status for this run
@@ -88,15 +143,10 @@ pub fn evaluate_preflight(
                     fc.unbound_subscriptions
                 ));
             }
-            // A dependency the primary needs whose package could not be read:
-            // it looks empty (or absent) to every other check.
             let unreadable: Vec<&str> = fc
                 .ledger
                 .iter()
-                .filter(|e| {
-                    e.unreadable.is_some()
-                        || e.found.as_ref().is_some_and(|f| f.ingest_error.is_some())
-                })
+                .filter(|e| is_unreadable(e))
                 .map(|e| e.name.as_str())
                 .collect();
             if !unreadable.is_empty() {
@@ -269,6 +319,110 @@ mod tests {
         let pf = evaluate_preflight(&Ok(broken), true);
         assert!(pf.degraded && pf.failed);
         assert!(pf.message.ends_with("1 unreadable dependency app(s): Bad"));
+    }
+
+    /// TLS-106: which inputs stop a baseline update from pruning. Unknown
+    /// edges, symbol-only apps and unbound subscriptions do not (every real
+    /// workspace has some); an unverified coverage, a broken contract, a
+    /// recovered file, and an unreadable, unidentified or encrypted package do.
+    ///
+    /// Mutation (2026-11-20): `&& fc.unknown == 0` added to `inputs_whole` ->
+    /// the unknown-edges case reads not whole (red); restored, green.
+    /// Mutation (2026-11-20): `fc.recovered_files == 0 &&` removed -> the
+    /// recovered-file case reads whole (red); restored, green.
+    #[test]
+    fn inputs_whole_ignores_stable_gaps_and_stops_on_lost_input() {
+        assert!(inputs_whole(&Ok(clean())));
+        let stable = FreshCoverage {
+            unknown: 1142,
+            opaque_apps: vec!["Base Application".into()],
+            unbound_subscriptions: 3,
+            ..clean()
+        };
+        assert!(inputs_whole(&Ok(stable)), "stable gaps do not block");
+        let found = LedgerApp {
+            version: "1.0.0.0".to_string(),
+            tier: crate::snapshot::TrustTier::SymbolOnly,
+            abi_objects: Some(0),
+            ingest_error: Some("bad zip".to_string()),
+        };
+        let lost = [
+            FreshCoverage {
+                coverage_holds: false,
+                ..clean()
+            },
+            FreshCoverage {
+                recovered_files: 1,
+                ..clean()
+            },
+            FreshCoverage {
+                unidentified_packages: vec!["x.app: no manifest".into()],
+                ..clean()
+            },
+            FreshCoverage {
+                encrypted_packages: vec![".alpackages/x.app".into()],
+                ..clean()
+            },
+            FreshCoverage {
+                ledger: vec![entry("Gone", None, Some("unreadable"))],
+                ..clean()
+            },
+            FreshCoverage {
+                ledger: vec![entry("Bad", Some(found), None)],
+                ..clean()
+            },
+        ];
+        for (i, fc) in lost.into_iter().enumerate() {
+            assert!(!inputs_whole(&Ok(fc)), "case {i} must not be whole");
+        }
+        assert!(!inputs_whole(&Err("boom".into())), "unverified");
+    }
+
+    /// TLS-106 (review r2 and r3, sol): a declared dependency with source is
+    /// bodied, one found symbol-only is symbol-only, one not found at all (the
+    /// package moved away) is missing; an unreadable one is none of them.
+    ///
+    /// Mutation (2026-11-20): the `None if e.unreadable.is_none()` arm made a
+    /// no-op -> the missing app is not unbodied (red); restored, green.
+    /// Mutation (2026-11-20, round 3): that arm filed under `symbol_only` ->
+    /// `missing` is empty (red); restored, green.
+    #[test]
+    fn dependency_bodies_counts_missing_as_unbodied() {
+        let found = |tier| LedgerApp {
+            version: "1.0.0.0".to_string(),
+            tier,
+            abi_objects: Some(1),
+            ingest_error: None,
+        };
+        let mut sourced = entry(
+            "Sourced",
+            Some(found(crate::snapshot::TrustTier::EmbeddedSource)),
+            None,
+        );
+        sourced.guid = "s".into();
+        let mut symbols = entry(
+            "Symbols",
+            Some(found(crate::snapshot::TrustTier::SymbolOnly)),
+            None,
+        );
+        symbols.guid = "y".into();
+        let mut missing = entry("Missing", None, None);
+        missing.guid = "m".into();
+        let mut broken = entry("Broken", None, Some("bad zip"));
+        broken.guid = "b".into();
+        let fc = FreshCoverage {
+            ledger: vec![sourced, symbols, missing, broken],
+            ..clean()
+        };
+        let deps = dependency_bodies(&Ok(fc));
+        let list = |s: &std::collections::BTreeSet<String>| s.iter().cloned().collect::<Vec<_>>();
+        assert_eq!(list(&deps.bodied), ["s"]);
+        assert_eq!(list(&deps.symbol_only), ["y"]);
+        assert_eq!(list(&deps.missing), ["m"]);
+        assert_eq!(
+            dependency_bodies(&Err("boom".into())),
+            DependencyBodies::default()
+        );
     }
 
     #[test]

@@ -61,8 +61,9 @@ pub enum Target {
 #[derive(Clone, Debug, Default)]
 pub struct JobPaths {
     pub writes: Vec<Target>,
-    /// Files the job reads: diff file sides, `--baseline` without
-    /// `--update-baseline`, `--renames`, `--policy`, digest's diff file.
+    /// Files the job reads: diff file sides, `--baseline` (with
+    /// `--update-baseline` too: it merges into the old file, TLS-106),
+    /// `--renames`, `--policy`, digest's diff file.
     pub reads: Vec<PathBuf>,
     /// The workspaces it reads.
     pub workspaces: Vec<PathBuf>,
