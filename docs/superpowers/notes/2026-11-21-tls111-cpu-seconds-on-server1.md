@@ -63,51 +63,76 @@ user and system seconds of the server tree; user instructions, user cycles, user
 (cycles / ref-cycles = the clock against nominal) and kernel cycles. Same output (`ce1c54ed`)
 and 212e9 user instructions in all nine.
 
-| arm | wall s | user s | sys s | user cycles (e9) | clock / nominal | GHz (cycles / user s) | kernel cycles (e9) |
+| arm | wall s | user s | sys s | user cycles (e9) | clock / TSC (3.09 GHz) | GHz (cycles / user s) | kernel cycles (e9) |
 |---|---|---|---|---|---|---|---|
 | alone | 10.9 / 12.5 / 15.3 | 24.9 / 26.8 / 38.7 | 6.6 / 6.5 / 8.9 | 88.7 / 87.6 / 87.9 | 115 / 106 / 74 % | 3.57 / 3.28 / 2.27 | 25.6 / 22.4 / 22.6 |
 | e-burn | 22.8 / 21.3 / 19.5 | 63.8 / 48.9 / 50.8 | 10.9 / 11.4 / 9.9 | 100.0 / 91.9 / 93.2 | 51 / 61 / 60 % | 1.57 / 1.88 / 1.84 | 17.4 / 20.8 / 18.2 |
 | sib-burn | 24.5 / 21.4 / 23.1 | 60.6 / 46.8 / 48.4 | 11.7 / 10.9 / 12.3 | 144.1 / 146.1 / 145.6 | 77 / 101 / 98 % | 2.38 / 3.12 / 3.01 | 29.9 / 38.0 / 38.9 |
 
-Two separate causes each double the call's CPU and wall time on identical work:
+Each of two things can roughly double the call's CPU and wall time on identical work (against
+the same round's alone run: e-burn x2.38 / x1.81 / x1.28 CPU, sib-burn x2.30 / x1.74 / x1.28):
 
-1. **The package's power budget (e-burn).** Load on cores we never touch drops our clock to
-   51-61 % of nominal: user seconds x2.0-2.6 against the fast alone runs, wall x1.8-2.1. User
-   cycles rise only 4-13 % (memory waits cost fewer cycles at a lower clock). Even alone, with
-   no load of ours, the clock ran 74-115 % (other tenants on the host): user seconds x1.56 with
-   user cycles flat (±0.6 %).
-2. **Cores shared with other threads (sib-burn).** The clock stays near nominal (77-101 %), but
-   user cycles rise x1.65: the two threads of a core split its execution units. CPU seconds
-   x1.9-2.4.
+1. **A lower clock (e-burn).** Load on cores we never touch drops our clock to 1.57-1.88 GHz,
+   below the P-cores' 2.3 GHz base, with user cycles up only 4-13 % (memory waits cost fewer
+   cycles at a lower clock). The package read 68-71 °C there, so this is a power or platform
+   cap, not heat; but RAPL limits and throttle counters are not readable in the container, so
+   which cap is not measured.
+2. **Cores shared with other threads (sib-burn).** User cycles rise x1.65 (two threads split a
+   core's execution units); the clock fell too in round 0 (2.38 GHz).
 
-Neither shows in TLS-76's pressure signals: the call's threads are running, not waiting.
-The package temperature (`x86_pkg_temp`) did not track either cause (it read 61-101 °C with no
-relation to the arm), so the cause is the power budget, not heat: the note's first title said
-"thermal", which this corrects.
+Not separated by this run:
+- The alone runs' clock fell 3.57 → 3.28 → 2.27 GHz in run order, and after round 0 every alone
+  run started 20 s after a sib-burn run: carry-over from our own burners explains that as well
+  as other tenants (the arm order was fixed; no host load was recorded).
+- The package read 100-101 °C in the alone and sib-burn runs: heat throttling is not ruled out
+  there.
+- Pressure was not recorded per row. The failing landing's container stall share (3.9-4.0 %)
+  says its threads ran rather than waited, which fits both causes.
+- Which cause hit the landing: cdo-speed pins nothing, so a third one from experiment 1,
+  placement on E cores (20-34 % of the work, ±5 % in cycles), also applies there.
 
 ## 4. What this means for cdo-speed
 
-- On server1, CPU seconds measure the work times the clock times the core sharing, and the
-  last two belong to whatever else runs on the host. Both can move x2 within seconds, between
-  the two sides of a pass. Pressure signals see neither.
-- **User cycles** remove the clock (cause 1) but not core sharing (cause 2: x1.65). They are no
-  replacement for CPU seconds.
-- **Instructions** removed both (212e9 in every run here) but miss memory stalls and lost
-  parallelism (TLS-83).
-- The failing landing's two passes disagreed (x0.962 and x2.154): a disagreement no real code
-  change makes, since both passes run the same two binaries.
+- On server1, CPU seconds measure the work times the clock, the core sharing and the core
+  kind, and the last three belong to whatever else runs on the host. Each can move x2 between
+  the two sides of a pass. Pressure signals see none of them.
+- **User cycles** remove the clock (cause 1) but not core sharing (x1.65), and a lower clock
+  makes them read 3-13 % low. They are no replacement for CPU seconds.
+- **Instructions** held in every run (212e9) but miss memory stalls and lost parallelism
+  (TLS-83).
+- History (Fable, 150 `speed.json` files): warm-tests' second/first CPU in one pass has a tight
+  core (median 1.00, p10-p90 0.94-1.12) and a two-state tail: the call costs about 42-65 s or
+  about 100-127 s, and 4 % of pairs pass x1.3. Pass-to-pass disagreement (max/min of the two
+  ratios): median x1.06, p90 x1.23, p95 x1.80, max x2.67.
+- **Disagreeing passes are not always noise.** A steady position effect k (the second side
+  slower) makes the passes disagree by k² while their geometric mean stays right
+  (`20261119-135052`: ratios 0.630 and 1.683, mean 1.03, a correct PASS). That is why the side
+  order flips, and why a third pass (one order voting twice) would be wrong.
 
 ## 5. Proposal
 
-1. **Record and label (no verdict changes):** per call, the clock against nominal (user cycles /
-   user ref-cycles) and user cycles per instruction, per side. A block whose sides' clocks
-   differ beyond a calibrated band is labelled `CLOCK`; one whose cycles per instruction differ
-   beyond its band while instructions agree, `SHARED` (cores shared or a real stall change:
-   the label says so, never decides). Label, never hide; the same limits judge.
-2. **Rerun a pass that contradicts the other:** when the two passes' CPU ratios for a judged
-   row disagree beyond the calibrated band, run a third pass and judge the median of the
-   three, saying so in the verdict. Real code changes make both passes agree; only noise makes
-   them disagree. Costs one pass (~90 s) only on a contradiction.
-3. **Owner decision (TLS-83's open question):** let equal instructions turn a CPU-only failure
-   into an advisory one, given (1) labels.
-4. Out of scope: the host's power settings and other tenants' load, the owner's to decide.
+1. **Record and label (no verdict changes).** Per call and core kind: user instructions and
+   user cycles (both fixed counters: still no multiplexing). From them, per side, the clock
+   (user cycles / user seconds) and cycles per instruction. A judged block whose sides' clocks
+   differ beyond a band is labelled `CLOCK`; one whose cycles per instruction differ beyond a
+   band, `CPI` (core sharing, core kind, or a real cache or memory change: the label never
+   says which). The bands start from these runs and are set after ~20 landings. Label, never
+   hide; the same limits judge.
+2. **Re-measure a contradicted failure with a flipped pair, never one pass.** When a judged
+   row FAILS and its two passes disagree beyond x1.25 (above the history's p90 of x1.23; an
+   unchanged tree cannot fail the x1.30 mean below x1.69), cdo-speed runs one more flipped pair
+   (two passes, fresh servers, each order once more). If the two ratios of the same order
+   agree within x1.25, the geometric mean of all four judges; if they still disagree, the
+   verdict is `HOST UNSTABLE`, exit 2 (cannot run), never a PASS. It costs two passes (~3 min)
+   only on a contradicted failure, said in the verdict.
+3. **Owner question, narrowed (TLS-83's):** may a CPU-only failure with equal instructions AND
+   a `CLOCK` or `CPI` label be advisory? A clean clock and equal cycles per instruction with
+   more CPU is exactly the stall regression instructions miss: that stays a failure.
+4. **Owner ask, host side:** cause 1 is a host power or platform cap below base clock at 68 °C.
+   Only the owner can read RAPL limits and throttle counts and try `no_turbo=1` or a
+   performance profile; a steady clock at base is better for a gate than a turbo that
+   switches.
+5. **Follow-up, to test first:** both sides at once, each on 3 P-cores with both threads,
+   swapping the sets in pass 2 (the only design where both sides see the same host state).
+   Test it as one more arm of `warmtests.py` under e-burn and sib-burn before building it;
+   every limit would need re-calibrating.
