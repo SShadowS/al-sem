@@ -1142,7 +1142,11 @@ fn batch_refuses_a_hard_link_to_a_workspace_input() {
 ///
 /// Discrimination (2026-11-21, r3): `claim::open_for_write` ignoring its
 /// claim's refusal (`.or_else(|_| Ok(()))` on the claim): fails "(race) a
-/// link made after the check" (exit 0, not 1); restored, passes.
+/// link made after the check" (exit 0, not 1); restored, passes. (r5) The
+/// check's workspace-input claims skipped (`ws_reads.values().take(0)`):
+/// fails (exit 0, not 1). (r5) The run's exit ignoring this process's failed
+/// claim (`!whole || claim::failed()` made `!whole`): fails (exit 0, the
+/// write refused); restored, both pass.
 #[cfg(all(unix, debug_assertions))]
 #[test]
 fn batch_claims_the_file_it_opens() {
@@ -1289,11 +1293,13 @@ fn batch_refuses_a_stream_linked_into_a_shard_directory() {
     );
 }
 
-/// TLS-109: the trace file opens last and is claimed like any write.
+/// TLS-109: the trace file is published last and claimed like any write.
 /// `ALSEM_TRACE_FILE` naming the manifest is refused at its open: no trace,
 /// a stderr line, the manifest untouched, the run itself unharmed (exit 0).
 ///
-/// Discrimination (2026-11-21, r3): `perf_trace::defer_file` storing
+/// Discrimination (2026-11-21, r5): `open_trace` ignoring its claim
+/// (`let _ = claim(..)`): fails (the manifest holds the trace); restored,
+/// passes. (r3) `perf_trace::defer_file` storing
 /// `false` (the trace opened at start): fails (the manifest no longer the
 /// one written: the trace truncated it before it was read); restored,
 /// passes.
@@ -1362,6 +1368,118 @@ fn batch_trace_never_takes_a_shard_output() {
     );
     let shard = std::fs::read_to_string(&manifest_json).unwrap();
     assert!(shard.starts_with('{'), "the shard, not a trace: {shard}");
+}
+
+/// TLS-109 (review r4): a worker's trace never takes another worker's
+/// output. Two batches (two workers); worker 0's trace file `T.w0` is a hard
+/// link to `D/manifest.json`, which worker 1's shard job writes later
+/// (worker 0 runs one refused job, worker 1 builds a model first). Traces are
+/// published by the parent after every worker has ended: the shard is
+/// written, `T.w0` refused (a stderr line), the run exits 0.
+///
+/// Discrimination (2026-11-21, r5): a worker publishing its own trace when
+/// it ends (`perf_trace::publish_file(claim::open_trace)` at the end of
+/// `run_worker`): fails (exit 1, not 0: worker 0's trace took the file and
+/// the shard was refused); restored, passes.
+#[test]
+fn batch_worker_trace_never_takes_another_workers_output() {
+    let ws = ws_a();
+    let d = tempfile::tempdir().unwrap();
+    let trace = d.path().join("t.json");
+    let w0 = d.path().join("t.json.w0");
+    std::fs::write(&w0, "KEEP").unwrap();
+    let shards = d.path().join("shards");
+    std::fs::create_dir(&shards).unwrap();
+    let manifest_json = shards.join("manifest.json");
+    std::fs::hard_link(&w0, &manifest_json).unwrap();
+    let s = shards.to_string_lossy().into_owned();
+    let doc = json!({ "batches": [
+        { "jobs": [job(&["events", "fanout", &ws, "--format", "bad"], None, None)] },
+        { "jobs": [job(&["fingerprint", &ws, "--shard", "all", "--out", &s], None, None)] },
+    ]});
+    let (out, _) = run_manifest_doc(
+        d.path(),
+        &doc,
+        None,
+        &[("ALSEM_TRACE_FILE", trace.to_str().unwrap())],
+        None,
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains("t.json.w0") && stderr.contains("refused"),
+        "{stderr}"
+    );
+    let shard = std::fs::read_to_string(&manifest_json).unwrap();
+    assert!(shard.starts_with('{'), "the shard, not a trace: {shard}");
+    let parent = std::fs::read_to_string(&trace).unwrap();
+    assert!(parent.starts_with('['), "the parent's trace is published");
+}
+
+/// TLS-109 (review r4): a trace file may not truncate a refused job's named
+/// file. Job 0 is refused and names `--out K`; `ALSEM_TRACE_FILE` is `K`:
+/// the trace is refused (a stderr line), `K` untouched.
+///
+/// Discrimination (2026-11-21, r5): `open_trace` without its kept-list scan
+/// (`read_dir(dir)?.take(0)`): fails (`K` holds the trace); restored,
+/// passes.
+#[test]
+fn batch_trace_never_takes_a_kept_file() {
+    let ws = ws_a();
+    let d = tempfile::tempdir().unwrap();
+    let kept = d.path().join("kept.json");
+    std::fs::write(&kept, "KEEP").unwrap();
+    let k = kept.to_string_lossy().into_owned();
+    let (out, _) = run_manifest(
+        d.path(),
+        &[job(
+            &["events", "fanout", &ws, "--format", "bad", "--out", &k],
+            None,
+            None,
+        )],
+        None,
+        &[("ALSEM_TRACE_FILE", &k)],
+        None,
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(std::fs::read_to_string(&kept).unwrap(), "KEEP", "{stderr}");
+    assert_eq!(out.status.code(), Some(0), "{stderr}");
+    assert!(stderr.contains("refused"), "{stderr}");
+}
+
+/// TLS-110 (review r4): a refused job's kept list that cannot be read
+/// refuses its writes (fail closed). After the check the seam makes the kept
+/// list unreadable: the refused job's stream is refused, the run exits 1.
+///
+/// Discrimination (2026-11-21, r5): a kept list read error taken as no list
+/// (`Err(e) => return Err(e)` made `Err(_) => String::new()`): fails (exit
+/// 0, not 1); restored, passes.
+#[cfg(all(unix, debug_assertions))]
+#[test]
+fn batch_refuses_when_a_kept_list_cannot_be_read() {
+    let ws = ws_a();
+    let d = tempfile::tempdir().unwrap();
+    let kept = d.path().join("kept.json");
+    std::fs::write(&kept, "KEEP").unwrap();
+    let k = kept.to_string_lossy().into_owned();
+    let (out, _) = run_manifest(
+        d.path(),
+        &[job(
+            &["events", "fanout", &ws, "--format", "bad", "--out", &k],
+            None,
+            None,
+        )],
+        None,
+        &[(
+            "ALSEM_TEST_AFTER_PREFLIGHT",
+            "chmod a-r \"$ALSEM_BATCH_CLAIMS\"/kept-*",
+        )],
+        None,
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("al-sem: write error: "), "{stderr}");
+    assert_eq!(std::fs::read_to_string(&kept).unwrap(), "KEEP");
 }
 
 /// TLS-109 (review r2): a device is not a file a truncation could lose.
