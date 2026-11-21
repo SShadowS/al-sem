@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (TLS-111: cdo-speed counts user cycles, labels CLOCK and CPI, and re-measures a contradicted failure)
+
+- **Why.** On server1, CPU seconds measure the clock, core sharing and core kind as much as the
+  work. ENG-168's first landing failed warm-tests at CPU x1.44 with instructions x0.9997 and no
+  engine change. The note `docs/superpowers/notes/2026-11-21-tls111-cpu-seconds-on-server1.md`
+  has the experiments: 12 `fingerprint` runs, all cores against P-cores only (user CPU spread
+  x1.33 with cycles within about ±1.7 %), and the warm-tests call alone, beside busy E-cores,
+  and beside busy sibling threads (each of the last two roughly doubled CPU and wall on the
+  same instructions).
+- **Cycles beside instructions.** Each timed call now counts user-mode cycles too, per PMU
+  (`cpu_core`, `cpu_atom`, or plain). Only `instructions` and `cycles` are allowed, once each
+  per PMU: both are fixed counters, so nothing multiplexes. A kind whose perf running shares
+  over its PMUs do not sum to 100 % is no count. One PMU's share alone is no check: an
+  unpinned call reads 67 % and 33 %. perf prints each share cut to a whole percent, so the
+  sum may fall short by under one point per PMU (93.7 % and 6.3 % read 93 and 6: 23 of 300
+  probes on server1). Each record in `speed.json` adds `cycles`,
+  `counts` (per event), `user` and `sys` seconds, `clock` (user cycles / user seconds, GHz)
+  and `cpi` (cycles per instruction). Rows add `clock` and `cpi` ratios. No field was renamed;
+  `cpu` is still user plus system.
+- **Labels, not verdicts.** A judged row whose sides' clocks differ beyond x1.15 is labelled
+  `CLOCK`; one whose cycles per instruction do, `CPI`. Both bands are provisional, to be set
+  after about 20 landings. The labels are on the verdict line and in `speed.json`
+  (`clock_labels`, `cpi_labels`). The same limits judge.
+- **A contradicted failure gets one more flipped pair.** When a judged warm-up row fails and
+  its two passes' ratios differ by more than x1.25, cdo-speed runs two more warm-up passes on
+  fresh servers, each side order once more. If each order's two passes agree within x1.25, the
+  geometric mean of all four judges. If not, the verdict is `HOST UNSTABLE` and cdo-speed exits
+  2 (cannot run); cdo-gate shows the speed phase as FAILED. Never more than one extra pair. The
+  verdict says when a pair was added and why. Rounds keep their rule.
+- **Tests** (`tests/cli/gate_scripts.rs`, stub servers and a stub perf): counts per PMU, a
+  multiplexed count refused, the two labels firing without changing a PASS, the extra pair on
+  a contradicted failure (judged on four passes, never a fifth), HOST UNSTABLE with exit 2,
+  and an agreeing failure that adds nothing. The real-perf test now also checks that cycles
+  are counted.
+
 ### Fixed (TLS-108: `ci-steps perf-bounds` times its bounds under a timed CDO slot hold)
 
 - **What failed.** `perf_bounds` asserts wall-time bounds. In a landing's `ci-steps all` it ran

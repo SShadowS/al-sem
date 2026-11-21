@@ -232,6 +232,11 @@ Every test still runs before a merge; the tiers decide HOW OFTEN each one runs.
   cold after a resume; instruction counts are unaffected), cdo-gate notes one per phase and in
   its summary (its phase seconds are wall time and include the sleep), cdo-slot's `status` says
   how much of a hold's age was a suspend, and `run --timed`'s wait for builds runs on awake time.
+  **Clock and core sharing are labelled too (TLS-111):** each call also counts user cycles, and a
+  judged row whose sides' clocks (user cycles / user s) or cycles per instruction differ beyond
+  x1.15 (provisional bands) is labelled `CLOCK` or `CPI`; the verdict does not change. A warm-up
+  failure whose two passes disagree beyond x1.25 gets ONE more flipped pair: four passes judge
+  when each side order's two agree, else `HOST UNSTABLE`, exit 2 (cdo-gate: FAILED, never a pass).
   **It is Linux only (it reads `/proc`):
   on the Windows machine every full `cdo-gate` run FAILS unless given `--no-speed`**
   (an `--only` subset never runs it).
