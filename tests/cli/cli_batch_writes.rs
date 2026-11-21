@@ -959,9 +959,8 @@ fn out_and_stream(ws: &str, out: &Path, stream: &Path) -> [Value; 2] {
 }
 
 /// TLS-109: a hard link is the file it links to. A stream that is a hard
-/// link to another job's `--out`, and a stream that is a hard link (under a
-/// name no workspace read takes) to a workspace's `.al` file, are refused,
-/// and neither file is touched.
+/// link to another job's `--out` is refused, and the file is untouched (the
+/// workspace case: `batch_refuses_a_hard_link_to_a_workspace_input`).
 ///
 /// Discrimination (2026-11-21): `FileId`/`file_id` switched to the non-unix
 /// (canonical path) fallback by editing their `cfg`s: fails at
@@ -981,29 +980,6 @@ fn batch_refuses_writing_through_a_hard_link() {
         &out_and_stream(&ws_a, &real, &linked),
         "both write",
         &[&real],
-    );
-    let ws = tempfile::tempdir().unwrap();
-    let app = r#"{"id":"11111111-1111-1111-1111-111111111111","name":"A","publisher":"p","version":"1.0.0.0"}"#;
-    std::fs::write(ws.path().join("app.json"), app).unwrap();
-    let source = ws.path().join("A.al");
-    std::fs::write(&source, "KEEP").unwrap();
-    let d = tempfile::tempdir().unwrap();
-    let linked = d.path().join("A.txt");
-    std::fs::hard_link(&source, &linked).unwrap();
-    let w = ws.path().to_string_lossy().into_owned();
-    assert_refused_untouched(
-        "(hard link) a workspace's source file",
-        d.path(),
-        &[
-            job(&["events", "fanout", &w, "--single-app"], None, None),
-            job(
-                &["events", "fanout", &w, "--format", "bad"],
-                Some(&linked),
-                None,
-            ),
-        ],
-        "reads the workspace",
-        &[&source],
     );
 }
 
@@ -1067,50 +1043,361 @@ fn batch_refuses_writing_through_dot_dot() {
 }
 
 /// TLS-110: a refused job's directory target stays as it is. A refused
-/// `fingerprint --shard bad --out D` whose own stdout is `D/x`, or another
-/// job writing `D/y` with `--out`, is refused, and `D`'s files are untouched.
+/// `fingerprint --shard bad --out D` whose own stdout is `D/x` is refused,
+/// and `D`'s files are untouched. (Another job's write in `D` is that job's
+/// own, as for a kept file: `batch_legitimate_manifests_still_run`.)
 ///
-/// Discrimination (2026-11-21): `check_write_sets` ignoring a kept
-/// `Target::Dir`'s clash (`under.filter(|_| false)`): fails at "(refused
-/// dir) its own stdout" (exit 0, not 3); restored, passes.
+/// Discrimination (2026-11-21, r2): the kept directory's own-stream check
+/// skipped (`*j == r` made `*j == r && false`): fails (exit 1, not 3: the write then
+/// met the kept file's claim at its open); restored, passes.
 #[test]
 fn batch_refused_job_keeps_its_directory() {
     let ws = ws_a();
     let d = tempfile::tempdir().unwrap();
     let shards = d.path().join("shards");
     std::fs::create_dir(&shards).unwrap();
-    let (x, y) = (shards.join("x"), shards.join("y"));
+    let x = shards.join("x");
     std::fs::write(&x, "KEEP").unwrap();
-    std::fs::write(&y, "KEEP").unwrap();
     let s = shards.to_string_lossy().into_owned();
-    let refused = |stdout: Option<&Path>| {
-        job(
-            &["fingerprint", &ws, "--shard", "bad", "--out", &s],
-            stdout,
-            None,
-        )
-    };
     assert_refused_untouched(
         "(refused dir) its own stdout",
         d.path(),
-        &[refused(Some(&x))],
+        &[job(
+            &["fingerprint", &ws, "--shard", "bad", "--out", &s],
+            Some(&x),
+            None,
+        )],
         "names the directory",
-        &[&x, &y],
+        &[&x],
     );
-    let y_out = y.to_string_lossy().into_owned();
-    assert_refused_untouched(
-        "(refused dir) another job's --out",
+}
+
+/// The app.json of [`tmp_ws`].
+#[cfg(unix)]
+const APP: &str = r#"{"id":"11111111-1111-1111-1111-111111111111","name":"A","publisher":"p","version":"1.0.0.0"}"#;
+
+/// A workspace of its own: [`APP`] and one codeunit. Returns it, its path,
+/// and its app.json.
+#[cfg(unix)]
+fn tmp_ws() -> (tempfile::TempDir, String, std::path::PathBuf) {
+    let ws = tempfile::tempdir().unwrap();
+    std::fs::write(ws.path().join("app.json"), APP).unwrap();
+    std::fs::write(ws.path().join("A.al"), "codeunit 50100 A { }").unwrap();
+    let app = ws.path().join("app.json");
+    let w = ws.path().to_string_lossy().into_owned();
+    (ws, w, app)
+}
+
+/// A run whose write was refused at its claim (TLS-109): exit 1, a write
+/// error line saying so, and `kept` holds `want`.
+#[cfg(unix)]
+fn assert_claim_refused(case: &str, out: &Output, kept: &Path, want: &str) {
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{case}: {stderr}");
+    assert!(
+        stderr.contains("al-sem: write error: ") && stderr.contains("refused"),
+        "{case}: {stderr}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(kept).unwrap(),
+        want,
+        "{case}: untouched"
+    );
+}
+
+/// TLS-109: a hard link, under a name no workspace read takes, to a
+/// workspace's input is that input. A stream on it is refused before any job.
+///
+/// Discrimination (2026-11-21, r2): `WorkspaceRead::takes` without its
+/// identity test of the existing inputs (the `taken.files` line deleted):
+/// fails (exit 1, not 3: the write then met the input's claim at its open);
+/// restored, passes.
+#[cfg(unix)]
+#[test]
+fn batch_refuses_a_hard_link_to_a_workspace_input() {
+    let (_ws, w, app) = tmp_ws();
+    let d = tempfile::tempdir().unwrap();
+    let linked = d.path().join("app.txt");
+    std::fs::hard_link(&app, &linked).unwrap();
+    let (out, _) = run_manifest(
         d.path(),
         &[
-            refused(None),
+            job(&["events", "fanout", &w, "--single-app"], None, None),
             job(
-                &["events", "fanout", &ws, "--single-app", "--out", &y_out],
-                None,
+                &["events", "fanout", &w, "--format", "bad"],
+                Some(&linked),
                 None,
             ),
         ],
+        None,
+        &[],
+        None,
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(3), "{stderr}");
+    assert!(stderr.contains("reads the workspace"), "{stderr}");
+    assert_eq!(std::fs::read_to_string(&app).unwrap(), APP);
+}
+
+/// TLS-109: a path changed between the write check and the open is still
+/// checked, at the open. After the check (the debug seam
+/// `ALSEM_TEST_AFTER_PREFLIGHT`), the refused job's stdout path becomes a
+/// hard link to the other job's workspace's app.json: its open is refused,
+/// the run exits 1, and app.json is untouched.
+///
+/// Discrimination (2026-11-21, r2): `claim::open_claimed` without its claim
+/// (`DIR.get().filter(|_| false)`): fails "(race) a link made after the
+/// check" (exit 0, not 1); restored, passes.
+#[cfg(unix)]
+#[test]
+fn batch_claims_the_file_it_opens() {
+    let (_ws, w, app) = tmp_ws();
+    let d = tempfile::tempdir().unwrap();
+    let stream = d.path().join("late.out");
+    let seam = format!("ln '{}' '{}'", app.display(), stream.display());
+    let (out, _) = run_manifest(
+        d.path(),
+        &[
+            job(&["events", "fanout", &w, "--single-app"], None, None),
+            job(
+                &["events", "fanout", &w, "--format", "bad"],
+                Some(&stream),
+                None,
+            ),
+        ],
+        None,
+        &[("ALSEM_TEST_AFTER_PREFLIGHT", &seam)],
+        None,
+    );
+    assert_claim_refused("(race) a link made after the check", &out, &app, APP);
+    let got = lines(&out);
+    assert_eq!(got[0]["exit"].as_i64(), Some(0), "the other job ran");
+    assert_eq!(
+        got[1]["exit"].as_i64(),
+        Some(1),
+        "the refused write fails its job"
+    );
+}
+
+/// TLS-109: two dangling links to one missing file are one file: the
+/// preflight follows a dangling link's text.
+///
+/// Discrimination (2026-11-21, r2): `resolve` not following a dangling link
+/// (its `read_link` branch's `hops < 40` made `hops > 40`): fails (exit 1,
+/// not 3: the second open then met the first's claim, so nothing was
+/// lost); restored, passes.
+#[cfg(unix)]
+#[test]
+fn batch_refuses_two_dangling_links_to_one_file() {
+    let ws = ws_a();
+    let d = tempfile::tempdir().unwrap();
+    let target = d.path().join("target.json");
+    let (l1, l2) = (d.path().join("l1.json"), d.path().join("l2.out"));
+    std::os::unix::fs::symlink(&target, &l1).unwrap();
+    std::os::unix::fs::symlink(&target, &l2).unwrap();
+    let (out, _) = run_manifest(d.path(), &out_and_stream(&ws, &l1, &l2), None, &[], None);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(3), "{stderr}");
+    assert!(stderr.contains("both write"), "{stderr}");
+    assert!(!target.exists(), "nothing ran");
+}
+
+/// TLS-109: a shard child is claimed like any write. `D/manifest.json`, a
+/// hard link to the workspace's app.json, is refused at its open (no
+/// preflight sees a shard child), and app.json is untouched.
+///
+/// Discrimination (2026-11-21, r2): `output::write_file` back to
+/// `std::fs::write` (no claim): fails (exit 0, not 1); restored, passes.
+#[cfg(unix)]
+#[test]
+fn batch_claims_a_shard_child() {
+    let (_ws, w, app) = tmp_ws();
+    let d = tempfile::tempdir().unwrap();
+    let shards = d.path().join("shards");
+    std::fs::create_dir(&shards).unwrap();
+    std::fs::hard_link(&app, shards.join("manifest.json")).unwrap();
+    let s = shards.to_string_lossy().into_owned();
+    let (out, _) = run_manifest(
+        d.path(),
+        &[job(
+            &["fingerprint", &w, "--shard", "all", "--out", &s],
+            None,
+            None,
+        )],
+        None,
+        &[],
+        None,
+    );
+    assert_claim_refused("(shard child) a link to an input", &out, &app, APP);
+}
+
+/// TLS-109 (review r1 C): a stream that is a hard link to a file in a shard
+/// directory. A ready job's directory is not walked: the shard child and the
+/// stream meet at their claims, the first writer (job 0) keeps the file and
+/// the stream is refused. A refused job's directory is walked: refused
+/// before any job.
+///
+/// Discrimination (2026-11-21, r2): `claim::open_claimed` without its claim
+/// (`DIR.get().filter(|_| false)`) fails "(ready dir)" (exit 0, not 1). `KeptDir::holds` without its file
+/// test fails "(refused dir)" (exit 1, not 3: the stream then met the kept
+/// file's claim); restored, both pass.
+#[cfg(unix)]
+#[test]
+fn batch_refuses_a_stream_linked_into_a_shard_directory() {
+    let ws = ws_a();
+    let d = tempfile::tempdir().unwrap();
+    let shards = d.path().join("shards");
+    std::fs::create_dir(&shards).unwrap();
+    let inside = shards.join("manifest.json");
+    std::fs::write(&inside, "KEEP").unwrap();
+    let linked = d.path().join("linked.out");
+    std::fs::hard_link(&inside, &linked).unwrap();
+    let s = shards.to_string_lossy().into_owned();
+    let (out, _) = run_manifest(
+        d.path(),
+        &[
+            job(
+                &["fingerprint", &ws, "--shard", "all", "--out", &s],
+                None,
+                None,
+            ),
+            job(
+                &["events", "fanout", &ws, "--format", "bad"],
+                Some(&linked),
+                None,
+            ),
+        ],
+        None,
+        &[],
+        None,
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "(ready dir): {stderr}");
+    assert!(stderr.contains("refused"), "(ready dir): {stderr}");
+    let shard = std::fs::read_to_string(&inside).unwrap();
+    assert!(
+        shard.starts_with('{'),
+        "(ready dir): job 0's shard: {shard}"
+    );
+    std::fs::write(&inside, "KEEP").unwrap();
+    assert_refused_untouched(
+        "(refused dir)",
+        d.path(),
+        &[job(
+            &["fingerprint", &ws, "--shard", "bad", "--out", &s],
+            Some(&linked),
+            None,
+        )],
         "names the directory",
-        &[&x, &y],
+        &[&inside],
+    );
+}
+
+/// TLS-109: the trace file is a write of the run. `ALSEM_TRACE_FILE` naming
+/// the manifest is refused at its claim: no trace, a stderr line, the
+/// manifest untouched, the run itself unharmed.
+///
+/// Discrimination (2026-11-21, r2): `perf_trace::defer_file` a no-op: fails
+/// (the trace truncated the manifest before it was read: exit 3, not 0);
+/// restored, passes.
+#[test]
+fn batch_refuses_a_trace_file_on_the_manifest() {
+    let ws = ws_a();
+    let d = tempfile::tempdir().unwrap();
+    let manifest = d.path().join("m.json");
+    let jobs = [job(&["events", "fanout", &ws, "--single-app"], None, None)];
+    let (out, _) = run_manifest(
+        d.path(),
+        &jobs,
+        None,
+        &[("ALSEM_TRACE_FILE", manifest.to_str().unwrap())],
+        None,
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains("perf_trace: ") && stderr.contains("refused"),
+        "{stderr}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&manifest).unwrap(),
+        json!({ "jobs": jobs }).to_string()
+    );
+}
+
+/// TLS-109/TLS-110: what is not a clash still runs. An `--update-baseline`
+/// writing the baseline it read, two disjoint `--out`s, and a ready job
+/// writing in a refused job's directory: exit 0, each written.
+///
+/// Discrimination (2026-11-21, r2): the reads check refusing a job's own
+/// named target too (`writes[w].0 != r || writes[w].1` made `true`): fails
+/// (exit 3, not 0); restored, passes.
+#[test]
+fn batch_legitimate_manifests_still_run() {
+    let ws = ws_a();
+    let d = tempfile::tempdir().unwrap();
+    let base = d.path().join("base.json");
+    std::fs::write(&base, r#"{"schemaVersion":"1","fingerprints":[]}"#).unwrap();
+    let shards = d.path().join("shards");
+    std::fs::create_dir(&shards).unwrap();
+    let p = |f: &Path| f.to_string_lossy().into_owned();
+    let (a, b, y) = (
+        d.path().join("a.json"),
+        d.path().join("b.json"),
+        shards.join("y.json"),
+    );
+    let jobs = [
+        job(
+            &[
+                "analyze",
+                &ws,
+                "--single-app",
+                "--baseline",
+                &p(&base),
+                "--update-baseline",
+            ],
+            None,
+            None,
+        ),
+        job(
+            &["events", "fanout", &ws, "--single-app", "--out", &p(&a)],
+            None,
+            None,
+        ),
+        job(
+            &["events", "fanout", &ws, "--single-app", "--out", &p(&b)],
+            None,
+            None,
+        ),
+        job(
+            &["fingerprint", &ws, "--shard", "bad", "--out", &p(&shards)],
+            None,
+            None,
+        ),
+        job(
+            &["events", "fanout", &ws, "--single-app", "--out", &p(&y)],
+            None,
+            None,
+        ),
+    ];
+    let (out, _) = run_manifest(d.path(), &jobs, None, &[], None);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(0), "{stderr}");
+    let got = lines(&out);
+    for i in [0, 1, 2, 4] {
+        assert_eq!(got[i]["exit"].as_i64(), Some(0), "job {i}: {stderr}");
+    }
+    for f in [&a, &b, &y] {
+        assert!(
+            std::fs::metadata(f).unwrap().len() > 0,
+            "{} written",
+            f.display()
+        );
+    }
+    assert_ne!(
+        std::fs::read_to_string(&base).unwrap(),
+        r#"{"schemaVersion":"1","fingerprints":[]}"#,
+        "the baseline updated"
     );
 }
 
