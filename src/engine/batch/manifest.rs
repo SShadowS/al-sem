@@ -169,7 +169,7 @@ fn absent(e: &std::io::Error) -> bool {
 }
 
 #[cfg(unix)]
-fn read_file_id(p: &Path) -> std::io::Result<Option<FileId>> {
+pub(super) fn read_file_id(p: &Path) -> std::io::Result<Option<FileId>> {
     use std::os::unix::fs::MetadataExt;
     match std::fs::metadata(p) {
         Ok(m) => Ok(Some((m.dev(), u128::from(m.ino())))),
@@ -181,7 +181,7 @@ fn read_file_id(p: &Path) -> std::io::Result<Option<FileId>> {
 /// From a handle the path opens with no access asked (links followed, as
 /// `metadata` follows them; `FILE_FLAG_BACKUP_SEMANTICS` opens a folder too).
 #[cfg(windows)]
-fn read_file_id(p: &Path) -> std::io::Result<Option<FileId>> {
+pub(super) fn read_file_id(p: &Path) -> std::io::Result<Option<FileId>> {
     use std::os::windows::fs::OpenOptionsExt;
     use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_BACKUP_SEMANTICS;
     match std::fs::OpenOptions::new()
@@ -637,6 +637,33 @@ fn check_identities(jobs: &[(String, JobPaths)], cwd: &Path) -> Result<(), Strin
         for fid in &read.taken.files {
             protect(&marker_of(fid)).map_err(claimed)?;
         }
+    }
+    // TLS-116: no write in a cache folder, none that holds one, and no hard
+    // link to a cache file (each claim checks its opened file again).
+    let roots: Vec<Ident> = crate::program::ir_cache::protected_roots()
+        .iter()
+        .map(|r| resolve(cwd, r))
+        .collect();
+    for (j, _, _, t) in &writes {
+        let (Written::File(w) | Written::Dir(w)) = t;
+        let link = match t {
+            Written::File(f) if f.rest.is_empty() && !f.chain.is_empty() => {
+                std::fs::metadata(&f.path)
+                    .and_then(|m| super::claim::cache_link(&m))
+                    .map_err(|e| to_err(format!("cannot check {}: {e}", f.path.display())))?
+            }
+            _ => false,
+        };
+        let why = match roots.iter().find(|r| w.under(r) || r.under(w)) {
+            Some(r) => format!("is in or holds the cache folder {}", r.path.display()),
+            None if link => "is a hard link to a cache file".to_string(),
+            None => continue,
+        };
+        return fail(format!(
+            "{} writes {}, which {why}: no job may write the engine's caches (TLS-116)",
+            name(*j),
+            w.path.display()
+        ));
     }
     // Two targets that clash: the first write with a later partner, then its
     // first such partner.

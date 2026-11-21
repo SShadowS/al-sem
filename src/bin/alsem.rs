@@ -2088,6 +2088,9 @@ fn run_batch_cmd(b: BatchCli) -> ExitCode {
         spool_file(&spool);
     }
     let code = run_batch_parent(b);
+    // The report's end line goes to the file registered in the claim folder,
+    // so before that folder is removed (TLS-116).
+    al_sem::program::ir_cache::report_end();
     // A run that ended before its write check passed opens no trace file.
     drop_file(Some("the batch ended before its write check passed"));
     code
@@ -2159,11 +2162,17 @@ fn run_batch_parent(b: BatchCli) -> ExitCode {
         planned.push(plans);
         changed.push(decided);
     }
-    // The run reads its manifest: no job may write it (FR-3).
+    // The run reads its manifest: no job may write it (FR-3). Every process
+    // of the run appends to the IR cache's report (TLS-116): a write of the run.
+    let report = al_sem::program::ir_cache::report_path();
     paths.push((
         "the run".to_string(),
         JobPaths {
             reads: vec![manifest_path.to_path_buf()],
+            writes: report
+                .map(|r| al_sem::engine::batch::manifest::Target::File(r.to_path_buf()))
+                .into_iter()
+                .collect(),
             ..JobPaths::default()
         },
     ));
@@ -2171,6 +2180,15 @@ fn run_batch_parent(b: BatchCli) -> ExitCode {
     if let Err(line) = check_write_sets(&paths, &cwd) {
         al_sem::engine::perf_trace::drop_file(None);
         return usage(line);
+    }
+    if let Some(r) = report
+        && let Err(e) = claim::register_shared(r, al_sem::program::ir_cache::REPORT_TAG)
+    {
+        al_sem::engine::perf_trace::drop_file(None);
+        return usage(format!(
+            "al-sem batch: the IR cache report {}: {e}",
+            r.display()
+        ));
     }
     // `ALSEM_TRACE_EXIT_AFTER` ends the process early: it publishes the
     // traces first, as the end below does (only once the check has passed).

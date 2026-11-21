@@ -16,7 +16,7 @@ pub(crate) mod prune;
 pub(crate) mod report;
 pub(crate) mod seam;
 
-pub use report::{ReportGuard, report_end};
+pub use report::{REPORT_TAG, ReportGuard, report_end};
 
 use counters::Counters;
 use key::IrKey;
@@ -152,7 +152,7 @@ pub fn install_from_env() -> ReportGuard {
     let var = |k: &str| std::env::var_os(k).filter(|v| !v.is_empty());
     let (enabled, bad_switch) = switch(var("ALSEM_IR_CACHE").as_deref());
     // Paths only: nothing is made here (sol r1). A writer makes `ir/` at its first publish;
-    // a cache-off, batch or dependency-free run makes nothing.
+    // a cache-off or dependency-free run makes nothing.
     let text_dir = crate::snapshot::cache::cache_dir_path();
     let ir_dir = var("ALSEM_IR_CACHE_DIR").map_or_else(|| text_dir.join("ir"), PathBuf::from);
     let verify = var("ALSEM_IR_CACHE_VERIFY").is_some_and(|v| v == "1");
@@ -163,13 +163,30 @@ pub fn install_from_env() -> ReportGuard {
     ReportGuard::new()
 }
 
-/// The installed cache for the calling thread's seam use: `None` when none is installed,
-/// while a [`Suspend`] lives, or in a batch run (`alsem batch`, TLS-116: off).
+/// The installed cache for the calling thread's seam use: `None` when none is installed, or
+/// while a [`Suspend`] lives. A batch run uses it too (TLS-116): its write claims keep every
+/// job write out of the cache folders ([`protected_roots`]).
 pub(crate) fn installed() -> Option<&'static IrCache> {
-    if SUSPENDED.load(Ordering::SeqCst) > 0 || crate::engine::batch::claim::dir().is_some() {
+    if SUSPENDED.load(Ordering::SeqCst) > 0 {
         return None;
     }
     INSTALLED.get()
+}
+
+/// TLS-116: the folders the engine's caches write in, which no job write of a batch run may
+/// land in or hold (`engine::batch::claim`): ENG-113's text cache folder, and the installed IR
+/// cache's `ir/` folder (also when it is elsewhere, `ALSEM_IR_CACHE_DIR`). Paths only, as the
+/// caches spell them; a missing one is still protected.
+pub fn protected_roots() -> Vec<PathBuf> {
+    let mut roots = vec![crate::snapshot::cache::cache_dir_path()];
+    roots.extend(INSTALLED.get().map(|c| c.ir_dir.clone()));
+    roots
+}
+
+/// TLS-116: the installed cache's report file (`ALSEM_IR_CACHE_REPORT`), which a batch run
+/// registers as one of its writes.
+pub fn report_path() -> Option<&'static std::path::Path> {
+    INSTALLED.get()?.report.as_deref()
 }
 
 /// Turns the installed cache off while it lives (`aldump --session-refresh --verify`'s

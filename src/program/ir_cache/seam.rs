@@ -845,10 +845,10 @@ mod tests {
         );
     }
 
-    /// The child half of [`batch_state_disables_installed_cache`] (process-wide state: the
+    /// The child half of [`batch_state_keeps_installed_cache`] (process-wide state: the
     /// installed cache, the batch folder, a `Suspend`).
     #[test]
-    #[ignore = "run by batch_state_disables_installed_cache as a child"]
+    #[ignore = "run by batch_state_keeps_installed_cache as a child"]
     fn batch_child_mode() {
         if std::env::var_os("ALSEM_IR_BATCH_CHILD").is_none() {
             return;
@@ -868,13 +868,16 @@ mod tests {
             assert!(super::super::installed().is_none(), "suspended");
         }
         assert!(super::super::installed().is_some(), "resumed");
+        // TLS-116: a batch run uses the cache.
         crate::engine::batch::claim::set_dir(std::env::temp_dir());
-        assert!(super::super::installed().is_none(), "batch: off");
+        assert!(super::super::installed().is_some(), "batch: on");
         println!("BATCH-CHILD-OK");
     }
 
+    /// Discrimination (2026-11-21, TLS-116): the batch-off switch put back in `installed`:
+    /// fails ("batch: on"); restored, passes.
     #[test]
-    fn batch_state_disables_installed_cache() {
+    fn batch_state_keeps_installed_cache() {
         let missing = tempfile::tempdir().unwrap();
         let out = std::process::Command::new(std::env::current_exe().unwrap())
             .args([

@@ -1,8 +1,12 @@
 //! The report file (`ALSEM_IR_CACHE_REPORT=<file>`, spec "Correctness checks"): a `start` line
 //! at a process's first seam use and an `end` line with its counters at its exit, each one
 //! `write` on an `O_APPEND` file, so concurrent processes never interleave a line. Off Linux,
-//! or without a key, one `{"pid", "ir_cache": "unsupported" | "no key"}` line instead. A batch
-//! run writes nothing (the seam never sees the cache there).
+//! or without a key, one `{"pid", "ir_cache": "unsupported" | "no key"}` line instead. In a
+//! batch run (TLS-116) the parent registers the file as one of the run's writes and every
+//! process of the run appends only to that file ([`crate::engine::batch::claim::open_shared`]).
+
+/// The report's tag in a batch run's claims.
+pub const REPORT_TAG: &str = "ir-cache-report";
 
 use super::IrCache;
 use super::key::IrKey;
@@ -32,10 +36,7 @@ fn append(c: &IrCache, v: &serde_json::Value) {
     };
     let mut line = v.to_string();
     line.push('\n');
-    let written = std::fs::OpenOptions::new()
-        .append(true)
-        .create(true)
-        .open(path)
+    let written = crate::engine::batch::claim::open_shared(path, REPORT_TAG)
         .and_then(|mut f| f.write_all(line.as_bytes()));
     if let Err(e) = written {
         log::warn!("IR cache report {} not written ({e})", path.display());

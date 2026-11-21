@@ -13,12 +13,25 @@
 //! separate design.
 //!
 //! **What is claimed.** The files the run writes for its jobs (streams,
-//! `--out`, a baseline update, shard files) and its trace files. The
-//! engine's own caches (the package cache, `snapshot::cache`; the
-//! impact-base cache, `engine::impact::cache`) are not claimed: each writes
-//! a fresh temporary file of its own and renames it into place, and a rename
-//! replaces a name in the cache folder, it never truncates a file that name
-//! aliased.
+//! `--out`, a baseline update, shard files), its trace files and the IR
+//! cache's report file ([`open_shared`]). The engine's own caches (the
+//! package text cache, `snapshot::cache`; the dependency IR cache,
+//! `program::ir_cache`; the impact-base cache, `engine::impact::cache`) are
+//! not claimed: each writes a fresh temporary file of its own (created
+//! exclusively, in its own folder) and renames or links it into place, and a
+//! rename replaces a name in the cache folder, it never truncates a file that
+//! name aliased; a prune only removes names in its folder.
+//!
+//! **The cache folders (TLS-116).** The other way round, a job write must not
+//! land on a cache file: a truncated entry another engine maps kills it
+//! (SIGBUS), and a job output in a cache folder is the cache's to replace.
+//! The text and IR cache folders
+//! ([`crate::program::ir_cache::protected_roots`]) are protected: the check
+//! refuses a run with a write in one, one that holds one (a directory target
+//! above it, or a cache folder that is a link to a job's directory), or a
+//! write that is a hard link to a cache file; and every claim refuses a file
+//! it opens under a cache folder (by its folders' identities) or hard-linked
+//! to a cache file ([`refuse_cache`]), so a late alias is caught too.
 //!
 //! **How.** A run makes one private folder ([`set_dir`], handed to its
 //! workers in [`ENV`]; a worker refuses to run without it). A claim is a
@@ -236,7 +249,9 @@ pub fn open_for_write(path: &Path, job: &str, key: Option<&str>) -> std::io::Res
     };
     let f = open_kept(path)?;
     if is_disk(&f)? {
-        claim(dir, &f, Some(job), key).inspect_err(|_| FAILED.store(true, Ordering::Relaxed))?;
+        refuse_cache(path, &f)
+            .and_then(|()| claim(dir, &f, Some(job), key))
+            .inspect_err(|_| FAILED.store(true, Ordering::Relaxed))?;
         f.set_len(0)?;
     }
     Ok(f)
@@ -251,23 +266,144 @@ pub fn open_trace(path: &Path) -> std::io::Result<File> {
     };
     let f = open_kept(path)?;
     if is_disk(&f)? {
-        let marker = marker_of(&handle_id(&f)?);
-        for e in std::fs::read_dir(dir)? {
-            let e = e?;
-            if e.file_name().to_string_lossy().starts_with("kept-")
-                && std::fs::read_to_string(e.path())?
-                    .lines()
-                    .any(|m| m == marker)
-            {
-                return Err(std::io::Error::other(
-                    "refused: a refused job names this file, which must stay as it is (TLS-109)",
-                ));
-            }
-        }
+        refuse_cache(path, &f)?;
+        refuse_kept(dir, &f)?;
         claim(dir, &f, None, None)?;
         f.set_len(0)?;
     }
     Ok(f)
+}
+
+/// Refuse `f` when any refused job names it (every kept list is checked).
+fn refuse_kept(dir: &Path, f: &File) -> std::io::Result<()> {
+    let marker = marker_of(&handle_id(f)?);
+    for e in std::fs::read_dir(dir)? {
+        let e = e?;
+        if e.file_name().to_string_lossy().starts_with("kept-")
+            && std::fs::read_to_string(e.path())?
+                .lines()
+                .any(|m| m == marker)
+        {
+            return Err(std::io::Error::other(
+                "refused: a refused job names this file, which must stay as it is (TLS-109)",
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// The text a [`register_shared`] marker holds.
+fn shared(tag: &str) -> String {
+    format!("shared:{tag}")
+}
+
+/// TLS-116: open `path` to append for the run's one shared file `tag` (the IR
+/// cache report, which every process of the run appends to): it is the file
+/// the parent registered ([`register_shared`]), or the open is refused. A
+/// device or pipe is not claimed. Outside a batch: an append, created when
+/// missing, as before.
+pub fn open_shared(path: &Path, tag: &str) -> std::io::Result<File> {
+    let f = open_append(path)?;
+    if let Some(dir) = DIR.get()
+        && is_disk(&f)?
+    {
+        let held = std::fs::read_to_string(dir.join(marker_of(&handle_id(&f)?)));
+        if !held.is_ok_and(|h| h == shared(tag)) {
+            return Err(std::io::Error::other(
+                "refused: not the file this batch run registered for it (TLS-116)",
+            ));
+        }
+    }
+    Ok(f)
+}
+
+/// TLS-116: the parent, after its check and before any job, registers `path`
+/// as the run's shared file `tag` ([`open_shared`]), created when missing,
+/// never truncated. Refused like any write: when it is a cache file, a file a
+/// refused job names, or another claim's file (an input, a job's write).
+pub fn register_shared(path: &Path, tag: &str) -> std::io::Result<()> {
+    let Some(dir) = DIR.get() else { return Ok(()) };
+    let f = open_append(path)?;
+    if is_disk(&f)? {
+        refuse_cache(path, &f)?;
+        refuse_kept(dir, &f)?;
+        if !create(dir, &marker_of(&handle_id(&f)?), &shared(tag))? {
+            return Err(std::io::Error::other(
+                "refused: this file is another write or an input of this batch run (TLS-109)",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn open_append(path: &Path) -> std::io::Result<File> {
+    OpenOptions::new().append(true).create(true).open(path)
+}
+
+/// TLS-116: refuse the opened `f` (opened at `path`) when it is a cache file:
+/// one of its folders is a cache folder (compared by identity, so a link or a
+/// bind mount of the folder is caught), or it is a hard link to a file in one
+/// ([`cache_link`]).
+fn refuse_cache(path: &Path, f: &File) -> std::io::Result<()> {
+    let mut roots = Vec::new();
+    for r in crate::program::ir_cache::protected_roots() {
+        roots.extend(super::manifest::read_file_id(&r)?);
+    }
+    let canonical = std::fs::canonicalize(path)?;
+    let mut in_root = false;
+    for a in canonical.ancestors() {
+        in_root |= super::manifest::read_file_id(a)?.is_some_and(|id| roots.contains(&id));
+    }
+    if in_root || cache_link(&f.metadata()?)? {
+        return Err(std::io::Error::other(
+            "refused: this file is in a cache folder of the engine (TLS-116)",
+        ));
+    }
+    Ok(())
+}
+
+/// TLS-116: whether the file `m` describes is a hard link to a file in a
+/// cache folder. Only a file with two or more names can be; the folders are
+/// then listed (to depth 3: `<text>/ir/<key>/<entry>`) for its inode, links
+/// not followed. A folder that cannot be listed is an error: it may hold it.
+#[cfg(unix)]
+pub(crate) fn cache_link(m: &std::fs::Metadata) -> std::io::Result<bool> {
+    use std::os::unix::fs::MetadataExt;
+    use walkdir::DirEntryExt;
+    if !m.is_file() || m.nlink() < 2 {
+        return Ok(false);
+    }
+    for root in crate::program::ir_cache::protected_roots() {
+        for e in walkdir::WalkDir::new(&root)
+            .follow_links(false)
+            .max_depth(3)
+        {
+            let e = match e {
+                Ok(e) => e,
+                Err(e)
+                    if e.depth() == 0
+                        && e.io_error()
+                            .is_some_and(|io| io.kind() == std::io::ErrorKind::NotFound) =>
+                {
+                    break;
+                }
+                Err(e) => return Err(e.into()),
+            };
+            if e.ino() == m.ino() && e.file_type().is_file() && e.metadata()?.dev() == m.dev() {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
+/// Off unix no engine maps a cache entry another process can truncate: an
+/// entry is opened sharing read and delete only (`snapshot::cache`), so a
+/// write open of a mapped one fails, and a damaged unmapped one is refused by
+/// its blake3 and replaced by a rename, which leaves the job's file alone.
+#[cfg(not(unix))]
+pub(crate) fn cache_link(_m: &std::fs::Metadata) -> std::io::Result<bool> {
+    Ok(false)
 }
 
 /// Open `path` to write, created when missing, NOT truncated: only once the
