@@ -13,6 +13,34 @@ from agentflow.gitops import Git  # noqa: E402
 
 PLENTY_OF_DISK = 500 * 2**30
 
+# ⟨TLS-113⟩ The gate environment a test must never inherit from its caller.
+# ENG-159's landing ran with CDO_GATE_NO_SPEED=1; `ci-steps agentflow` under it
+# saw `gate --name cdo-gate` refuse and failed two tests that set nothing. Every
+# variable the gate scripts (and agentflow itself) read is cleared before each
+# test: the prefixes below, plus the names read under no gate prefix.
+# `test_gate_env.py` scans scripts/ and fails when a script reads a variable
+# this rule neither clears nor lists in GATE_ENV_KEPT.
+GATE_ENV_PREFIXES = ("AGENTFLOW_", "ALSEM_SPEED_", "CDO_", "CHECK_GOLDENS_", "CI_STEPS_",
+                     "LAND_", "MERGE_EXPECT_", "PERF_PROBE_")
+GATE_ENV_NAMES = ("ALDUMP", "CARGO_TARGET_DIR", "DO_WS", "ENFORCE_CDO_WS", "FLOW_LOG",
+                  "GITHUB_ACTIONS", "REGEN_TEMP_GOLDENS", "SWITCH_BASELINES", "TREE_SITTER_AL_PATH")
+# Read by the scripts, but they say who runs them, not how a gate decides: kept.
+GATE_ENV_KEPT = ("CARGO_HOME", "CLAUDE_CODE_SESSION_ID", "CLAUDE_CONFIG_DIR", "CLAUDE_PID",
+                 "CLAUDE_PROJECT_DIR")
+
+
+def is_gate_env(name):
+    return name.startswith(GATE_ENV_PREFIXES) or name in GATE_ENV_NAMES
+
+
+@pytest.fixture(autouse=True)
+def no_gate_environment(monkeypatch):
+    """Clears every gate variable (above) for each test; a test about one sets
+    it itself (the fixtures that need it run after this one)."""
+    import os
+    for name in [n for n in os.environ if is_gate_env(n)]:
+        monkeypatch.delenv(name)
+
 
 @pytest.fixture(autouse=True)
 def plenty_of_disk(monkeypatch):
@@ -26,7 +54,7 @@ def plenty_of_disk(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def a_cdo_workspace(monkeypatch, tmp_path_factory):
+def a_cdo_workspace(no_gate_environment, monkeypatch, tmp_path_factory):
     """`preflight` and `post-merge` refuse without a CDO workspace (#107: an
     unset CDO_WS once read as a red gate). Every test gets an empty one unless
     it unsets or replaces it to state what it is about."""
