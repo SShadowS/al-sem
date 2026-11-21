@@ -2214,6 +2214,15 @@ fn cdo_gate_skips_speed_only_when_no_product_code_changed() {
 #[cfg(target_os = "linux")]
 const SPEED_STUB: &str = r#"#!/usr/bin/env python3
 import fcntl, json, os, sys, time
+# ENG-110 r2: STUB_IR_DEAD: a server started for cdo-speed's IR rows (the cache on) reads
+# `initialize`, closes its stdin and answers it, so cdo-speed's next write hits a closed pipe
+# (BrokenPipeError, an OSError that is neither CallFailed nor SystemExit).
+if os.environ.get("STUB_IR_DEAD") and os.environ.get("ALSEM_IR_CACHE") == "on":
+    first = json.loads(sys.stdin.readline())
+    os.close(0)
+    print(json.dumps({"jsonrpc": "2.0", "id": first["id"], "result": {}}), flush=True)
+    time.sleep(5)
+    sys.exit(0)
 calls = 0
 def burn(seconds):
     # User time (TLS-111: the clock is cycles per USER second): a pure loop
@@ -3424,6 +3433,22 @@ fn speed_adds_one_flipped_pair_on_a_contradicted_failure() {
         "{text}"
     );
     assert!(text.contains("warm-up, 2 pass(es))"), "{text}");
+}
+
+/// ENG-110 r2: an `OSError` in cdo-speed's IR rows (a dead pipe: the stub's IR server
+/// closes its stdin), after the judged timing, labels the verdict and never fails or stops
+/// the run. Mutation: the catch narrowed to `(CallFailed, SystemExit)` -> red.
+#[cfg(target_os = "linux")]
+#[test]
+fn speed_ir_rows_never_fail_the_verdict() {
+    let dir = tempfile::tempdir().unwrap();
+    let (code, text) = speed_with_stub(dir.path(), "1.0", &[], &[("STUB_IR_DEAD", "1")]);
+    assert_eq!(code, Some(0), "{text}");
+    let v = speed_verdict(&text);
+    assert!(
+        v.starts_with("cdo-speed: PASS") && v.contains("IR ROWS NOT RUN (BrokenPipeError"),
+        "{text}"
+    );
 }
 
 /// ⟨TLS-111 review r1⟩ The extra pair judges EVERY failure in side order, and

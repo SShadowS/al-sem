@@ -319,9 +319,22 @@ fn a_non_utf8_command_line_runs() {
         );
     }
     let lines = report(&rep);
-    assert!(
-        lines.iter().any(|l| l["event"] == "start"),
-        "the start line, its command read lossily: {lines:?}"
+    let start = lines
+        .iter()
+        .find(|l| l["event"] == "start")
+        .unwrap_or_else(|| panic!("a start line: {lines:?}"));
+    // sol/Fable r2: the whole command line, losslessly: the non-UTF-8 arg0 as its bytes, and
+    // every argument after it (five here; a run's mode, `--low-mem` say, is provable).
+    assert_eq!(
+        start["argv"],
+        json!([
+            {"hex": "616c73656d2dff"},
+            "analyze",
+            f.ws.to_str().unwrap(),
+            "--format",
+            "json"
+        ]),
+        "{lines:?}"
     );
 }
 
@@ -434,10 +447,11 @@ fn the_engine_child_reports_start_and_end() {
     let starts: Vec<_> = lines.iter().filter(|l| l["event"] == "start").collect();
     assert_eq!(starts.len(), 1, "one process used the seam: {lines:?}");
     assert!(
-        starts[0]["command"]
-            .as_str()
+        starts[0]["argv"]
+            .as_array()
             .unwrap()
-            .contains("engine-host"),
+            .iter()
+            .any(|a| a == "engine-host"),
         "the engine child: {lines:?}"
     );
     assert!(end_counter(&lines, "eligible_files") > 0, "{lines:?}");
@@ -486,13 +500,15 @@ fn cargo_env_defaults_off() {
 }
 
 /// Fable r1: `aldump --session-refresh --verify`'s cache-off reference builds run under
-/// `ir_cache::Suspend`: with the cache on and warm, `--verify` adds no seam use to the
-/// report (each reference build parses its dependencies, outside the cache).
+/// `ir_cache::Suspend`: with the cache on, `--verify` adds no seam use to the report (each
+/// reference build parses its dependencies, outside the cache).
 #[test]
 fn session_refresh_reference_builds_bypass_the_cache() {
     let f = fixture();
     let rep = f.root.with_extension("jsonl");
-    // Warm the root first.
+    // This analyze fills ENG-113's text cache (shared) and alsem's IR key; aldump has its own
+    // key, so its first run below fills that and the second hits it. The two runs' seam counts
+    // are compared, which a fill or a hit does not change.
     analyze(
         &f,
         &[

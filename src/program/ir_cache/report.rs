@@ -69,21 +69,35 @@ impl IrCache {
             append(self, &serde_json::json!({"pid": pid, "ir_cache": why}));
             return;
         }
-        let command: Vec<String> = std::env::args_os()
-            .take(4)
-            .map(|a| a.to_string_lossy().into_owned())
-            .collect();
         append(
             self,
             &serde_json::json!({
                 "event": "start",
                 "pid": pid,
-                "command": command.join(" "),
+                "argv": argv_json(std::env::args_os()),
                 "enabled": self.enabled,
                 "key": key.map(IrKey::hex),
             }),
         );
     }
+}
+
+/// The whole command line, losslessly (Fable/sol r2: a run's mode, `--low-mem` say, must be
+/// provable from its report): each argument as its string when it is UTF-8, else as
+/// `{"hex": "<its bytes>"}`.
+fn argv_json(args: impl Iterator<Item = std::ffi::OsString>) -> serde_json::Value {
+    args.map(|a| match a.into_string() {
+        Ok(s) => serde_json::Value::String(s),
+        Err(raw) => {
+            #[cfg(unix)]
+            let bytes = std::os::unix::ffi::OsStrExt::as_bytes(raw.as_os_str()).to_vec();
+            #[cfg(not(unix))]
+            let bytes = raw.to_string_lossy().into_owned().into_bytes();
+            let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+            serde_json::json!({ "hex": hex })
+        }
+    })
+    .collect()
 }
 
 /// Write the installed cache's `end` line, once, when its `start` line was written (a
