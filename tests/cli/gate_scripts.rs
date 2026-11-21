@@ -3545,6 +3545,7 @@ fn speed_cpu_failure_is_advisory_only_with_equal_instructions_and_a_label() {
 /// - the counters ran for 0.6 of each call's CPU seconds (STUB_PERF_COVER):
 ///   each burning call's record keeps its counts but reads `covered: false`,
 ///   with no clock, so no label and no advisory: FAIL.
+///
 /// The positional factor is off (STUB_SECOND_FACTOR 1) in the last two, so no
 /// extra pair runs; in the first it runs (its warm-tests is contradicted).
 ///
