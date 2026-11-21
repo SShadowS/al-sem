@@ -52,7 +52,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     or below 1 s were within -25 to +22 ms. The excess is probably /proc's tick sampling
     against perf's exact times on many threads; that is a guess, not a measured cause. A
     first, two-sided 2 % band marked all 8 of those calls `NOT COVERED`; the one-sided check
-    counts them, and its x1.10 cap is about four times the largest excess seen. Its cost: on a
+    counts them, and its x1.10 cap is about four times the largest excess seen. The A/A run of
+    4eb73bb5 (one-sided check) read all 64 calls counted and covered, PASS, no label. Its cost: on a
     multi-threaded call reading about +2.5 %, a real coverage loss of up to about 4.7 % still
     passes. That moves the clock by under 5 %, against the 15 % `CLOCK` band, so it cannot
     flip an advisory by itself.
