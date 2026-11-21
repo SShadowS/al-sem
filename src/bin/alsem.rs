@@ -1581,6 +1581,9 @@ fn main() -> ExitCode {
         al_sem::engine::perf_trace::defer_file();
     }
     let _run = al_sem::engine::perf_trace::run("alsem");
+    // ENG-110: the dependency IR cache, for the whole body (its drop writes the report's end
+    // line); `engine-host` returns through here too. A batch run never uses it.
+    let _ir = al_sem::program::ir_cache::install_from_env();
     // Warnings go to stderr (a dropped dependency was once only a `warn!` that
     // nothing printed); `RUST_LOG` overrides the level. stdout is unchanged.
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();

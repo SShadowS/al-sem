@@ -516,6 +516,8 @@ fn session_refresh_cmd(args: &[String]) -> ExitCode {
                         }
                         None => {
                             let t = std::time::Instant::now();
+                            // ENG-110: the reference build parses, never reads the IR cache.
+                            let _no_ir_cache = al_sem::program::ir_cache::Suspend::new();
                             let cold = al_sem::program::model::program_calls::assemble_and_resolve_cross_app_program(
                                 &inputs,
                                 false,
@@ -1439,6 +1441,9 @@ fn caller_diff_cmd(args: &[String]) -> ExitCode {
 }
 
 fn main() -> ExitCode {
+    // ENG-110: the dependency IR cache, for the whole body (its drop writes the report's end
+    // line).
+    let _ir = al_sem::program::ir_cache::install_from_env();
     let code = run_main();
     // The process-cumulative cone census, once, after every cone the mode
     // composed (#160 §4.1.7). One OnceLock read when off.

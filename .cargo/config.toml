@@ -19,3 +19,9 @@ split-debuginfo = "packed"
 # faster at runtime.
 [profile.dev.package."*"]
 opt-level = 2
+
+# ENG-110: every `alsem`/`aldump` a test spawns (cargo test, cargo nextest) parses its
+# dependencies, so the tests exercise the parser, not the IR cache. A value in the
+# environment wins (no `force`): cdo-gate's output phases turn it on.
+[env]
+ALSEM_IR_CACHE = "off"
