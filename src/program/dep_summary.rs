@@ -66,7 +66,6 @@ pub(crate) fn parse_for_build_observed(
     observe: Option<&LiveTrees>,
     reuse: Option<&crate::snapshot::parse::ParseReuse<'_>>,
 ) -> BuildParse {
-    use rayon::prelude::*;
     use std::sync::atomic::Ordering::SeqCst;
 
     // `OnDemand` keeps the trees of a parse it makes anyway: the build hands
@@ -87,6 +86,8 @@ pub(crate) fn parse_for_build_observed(
     // tracing is on.
     let timed = crate::engine::perf_trace::enabled(crate::engine::perf_trace::Detail::Stages);
     let extract_ns = std::sync::atomic::AtomicU64::new(0);
+    // Read on the calling thread, before the pool (ENG-110 spec Design 7).
+    let ir_cache = crate::program::ir_cache::installed();
     let parsed = crate::big_stack::big_stack_pool().install(|| {
         let mut workspace = None;
         let mut dep_summaries = Vec::new();
@@ -104,6 +105,12 @@ pub(crate) fn parse_for_build_observed(
                 continue;
             };
             if skip_dependencies {
+                if let Some(c) = ir_cache {
+                    crate::program::ir_cache::counters::Counters::add(
+                        &c.counters.inproc_reused_packages,
+                        1,
+                    );
+                }
                 continue;
             }
             // A source without its text (deferred, S10.1b) would parse to a
@@ -115,11 +122,8 @@ pub(crate) fn parse_for_build_observed(
             );
             #[cfg(test)]
             crate::snapshot::parse::parse_log::record(unit);
-            let per_file: Vec<(PackedFile, Option<ParsedFile>)> = source
-                .files
-                .par_iter()
-                .map(|f| {
-                    let pf = crate::snapshot::parse::parse_file(unit, f);
+            let per_file: Vec<(PackedFile, Option<ParsedFile>)> =
+                crate::program::ir_cache::parse_package(unit, ir_cache, |pf| {
                     if let Some(o) = observe {
                         let now = o.live.fetch_add(1, SeqCst) + 1;
                         o.peak.fetch_max(now, SeqCst);
@@ -140,8 +144,7 @@ pub(crate) fn parse_for_build_observed(
                         o.live.fetch_sub(1, SeqCst);
                     }
                     (summary, kept)
-                })
-                .collect();
+                });
             let (files, trees): (Vec<_>, Vec<_>) = per_file.into_iter().unzip();
             dep_summaries.push(DepUnitSummary {
                 app: unit.id.clone(),
@@ -173,7 +176,8 @@ pub(crate) fn parse_for_build_observed(
 /// is summarized: the tier holds the summaries already.
 #[must_use]
 pub fn parse_dep_bodies(snap: &AppSetSnapshot) -> Vec<ParsedUnit> {
-    use rayon::prelude::*;
+    // Read on the calling thread, before the pool (ENG-110 spec Design 7).
+    let ir_cache = crate::program::ir_cache::installed();
     crate::big_stack::big_stack_pool().install(|| {
         snap.apps
             .iter()
@@ -189,11 +193,7 @@ pub fn parse_dep_bodies(snap: &AppSetSnapshot) -> Vec<ParsedUnit> {
                 crate::snapshot::parse::parse_log::record(unit);
                 Some(ParsedUnit {
                     app: unit.id.clone(),
-                    files: source
-                        .files
-                        .par_iter()
-                        .map(|f| crate::snapshot::parse::parse_file(unit, f))
-                        .collect(),
+                    files: crate::program::ir_cache::parse_package(unit, ir_cache, |pf| pf),
                 })
             })
             .collect()

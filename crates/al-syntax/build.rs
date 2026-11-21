@@ -59,6 +59,21 @@ fn main() {
 
     build.compile("tree-sitter-al");
 
+    // ENG-110: the grammar commit, baked for the IR cache entries' diagnosis header (never
+    // compared; `unknown` when the grammar is no git checkout).
+    let commit = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&tree_sitter_al)
+        .args(["rev-parse", "--short=8", "HEAD"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "unknown".to_string());
+    println!("cargo:rustc-env=AL_SYNTAX_GRAMMAR_COMMIT={commit}");
+
     println!("cargo:rerun-if-changed={}", src_dir.display());
     println!("cargo:rerun-if-env-changed=TREE_SITTER_AL_PATH");
 }

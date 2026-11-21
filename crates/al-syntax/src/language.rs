@@ -7,6 +7,10 @@ unsafe extern "C" {
     fn tree_sitter_al() -> Language;
 }
 
+/// The grammar checkout's commit at build time (`unknown` if none), for diagnosis only
+/// (ENG-110's IR cache entry header).
+pub const GRAMMAR_COMMIT: &str = env!("AL_SYNTAX_GRAMMAR_COMMIT");
+
 /// Get the tree-sitter AL language.
 ///
 /// # Safety
