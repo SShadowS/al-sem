@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (TLS-113: a speed skip no longer leaks into a landing's other steps)
+
+- **Why.** ENG-159's landing skipped cdo-gate's speed phase (owner-approved) by exporting
+  `CDO_GATE_NO_SPEED=1`. The variable reached every step `scripts/land` ran. `ci-steps agentflow`
+  inherited it, and two agentflow tests failed (`gate --name cdo-gate` refuses a run with it set)
+  though neither test set anything.
+- **The agentflow suite clears the gate environment.** `scripts/agentflow/tests/conftest.py`'s
+  autouse `no_gate_environment` removes, before each test, every variable the gate scripts and
+  agentflow read: the prefixes `AGENTFLOW_`, `ALSEM_SPEED_`, `CDO_`, `CHECK_GOLDENS_`,
+  `CI_STEPS_`, `LAND_`, `MERGE_EXPECT_`, `PERF_PROBE_`, and the names `ALDUMP`,
+  `CARGO_TARGET_DIR`, `DO_WS`, `ENFORCE_CDO_WS`, `FLOW_LOG`, `GITHUB_ACTIONS`,
+  `REGEN_TEMP_GOLDENS`, `SWITCH_BASELINES`, `TREE_SITTER_AL_PATH`. A test about one sets it
+  itself. The list was derived by scanning `scripts/` for environment reads, and
+  `test_gate_env.py` repeats that scan: a script that reads a new variable the rule neither
+  clears nor keeps on purpose (`CARGO_HOME`, the `CLAUDE_*` session names) fails the suite.
+  Another test runs the ENG-159 test under ENG-159's environment and passes.
+- **`scripts/land --no-speed "<reason>"`** (Changed). The skip is now an option of land's that
+  puts `--no-speed` on cdo-gate's own command line, so no other step sees it. The reason is
+  required (a missing, empty, multi-line or option-like reason, or a branch name taken for one,
+  is a usage error); land prints it, writes it at the top of `cdo.log` and as a `cdo no-speed:`
+  line in the run's `verdict`, and repeats it in the PASS line. **land refuses to start when
+  `CDO_GATE_NO_SPEED` is set in its environment** (any value): clearing it instead would run the
+  speed check the caller meant to skip, without telling them.
+- **Other variables land passes to its steps** (noted, not changed): `CDO_SLOT_TOKEN` is
+  exported on purpose, so the cdo-gate it runs shares its slot hold; `CDO_WS` and the `LAND_*`
+  and `CDO_GATE_*` settings reach `ci-steps all` too. The agentflow suite now clears them;
+  the Rust tests of `scripts/land` now drop every inherited `LAND_*` and `CDO_GATE_*` variable
+  (they removed only some), and `ci-steps test` / `check-goldens` already unset `CDO_WS`.
+
 ### Added (TLS-111: cdo-speed counts user cycles, labels CLOCK and CPI, and re-measures a contradicted failure)
 
 - **Why.** On server1, CPU seconds measure the clock, core sharing and core kind as much as the
