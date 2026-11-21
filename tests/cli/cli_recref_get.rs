@@ -817,6 +817,71 @@ codeunit 50441 "GE Slots"
         Log.Insert();
     end;
 }
+// sol on ENG-162: a local `G` hides the global `G`; `this.G` is the global.
+codeunit 50442 "GE Shadow"
+{
+    var
+        G: RecordRef;
+
+    // The local G moves, not R: `this.G := R` shares R with the global only.
+    procedure ShadowAliasFlow()
+    var
+        G: RecordRef;
+        R: RecordRef;
+        E: Record "GE Entry";
+        D: Record "GE Doc";
+    begin
+        R.GetTable(E);
+        G.Open(Database::"GE Entry");
+        this.G := R;
+        D.FindFirst();
+        G.Get(D.RecordId);
+        Guarded(R);
+    end;
+
+    // R is kept in the global, which a later call rebinds.
+    procedure ShadowKeepRoot()
+    var
+        G: RecordRef;
+        R: RecordRef;
+        E: Record "GE Entry";
+    begin
+        R.GetTable(E);
+        G.Open(Database::"GE Entry");
+        this.G := R;
+        MoveGlobal();
+        Guarded(R);
+    end;
+
+    // A copy of the hidden global may hold anything.
+    procedure ShadowFromRoot()
+    var
+        G: RecordRef;
+        A: RecordRef;
+        E: Record "GE Entry";
+    begin
+        G.GetTable(E);
+        A := this.G;
+        Guarded(A);
+    end;
+
+    local procedure MoveGlobal()
+    var
+        D: Record "GE Doc";
+    begin
+        D.FindFirst();
+        G.Get(D.RecordId);
+    end;
+
+    local procedure Guarded(var R: RecordRef)
+    var
+        Log: Record "GE Log";
+    begin
+        if R.Number <> Database::"GE Doc" then
+            exit;
+        Log.Insert();
+    end;
+}
 "#;
 
 fn alsem(cwd: &Path, args: &[&str]) -> serde_json::Value {
@@ -928,6 +993,12 @@ fn a_recordref_get_moves_the_table_for_every_reader() {
     for routine in ["ThisAliasTemp", "ParenAliasTemp"] {
         assert_ne!(answer(routine, "GE Doc"), "no", "{routine}");
     }
+    // sol on ENG-162: with a local `G` hiding the global, `this.G` is the global only: the
+    // local's move leaves R alone (`no`), R kept in the global may be moved by a later call, and
+    // a copy of the hidden global may hold anything.
+    assert_eq!(answer("ShadowAliasFlow", "GE Log"), "no");
+    assert_eq!(answer("ShadowKeepRoot", "GE Log"), "yes");
+    assert_eq!(answer("ShadowFromRoot", "GE Log"), "yes");
 }
 
 #[test]

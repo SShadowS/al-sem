@@ -93,6 +93,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   controls (a member of a record, a call, an indexed target). Red proofs: not looking through
   parentheses fails `ParenAliasFlow` and the `(R)` rows; not reading `this.X` as `X` fails
   `ThisAliasFlow` and the `this.` rows (the quoted name kept its quotes there).
+- **Review round 1** (sol, Fable).
+  - A local or parameter may hide a global of its name (alc accepts it), and `this.G` then names
+    the global. The walk read it as `g`, the local. Now `this.X` is `X` only when no parameter,
+    local or return value of the routine declares `X` (as `extract::this_receivers` reads it);
+    otherwise it is `this.x`, which names nothing the routine declares
+    (`recref_alias::is_shadowed_global`). A holder copied into it may be kept (the alias classes
+    take it as external), and one assigned from it may hold anything (the flow). CLI shapes in
+    codeunit `GE Shadow`: the local's move leaves R alone (`ShadowAliasFlow`: `no`), R kept in
+    the hidden global may be moved by a later call (`ShadowKeepRoot`: `yes`), a copy of the
+    hidden global may hold anything (`ShadowFromRoot`: `yes`); the walk test's shadowed rows.
+  - `this.Slot[1] := R` recorded no assignment (the indexed target read only a bare base); its
+    base now goes through `plain_variable` (`ThisSlotFlow`, `yes`).
+  - The walk test now pins `lhs_is_member` for a member target (`Rec.Name := 'x'`).
+  - Red proofs: `this.X` read as `X` under a shadowing local fails the shadowed rows; an indexed
+    base read bare only fails `ThisSlotFlow`; no "kept" for a copy into the hidden global fails
+    `ShadowKeepRoot`; a copy of it read as the local fails `ShadowFromRoot`.
+  - Filed, older and of another kind: a conditional result and a returned RecordRef as aliases
+    (ENG-175, a BC probe first).
 
 ### Added (TLS-111: cdo-speed counts user cycles, labels CLOCK and CPI, and re-measures a contradicted failure)
 
