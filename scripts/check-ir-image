@@ -23,7 +23,7 @@ if [ "$needed" != "libc.so.6 libgcc_s.so.1 " ]; then
     fail=1
 fi
 
-bad=$(nm -D --undefined-only "$bin" 2>/dev/null | awk '{print $NF}' | sed 's/@.*//' \
+bad=$(nm -D --undefined-only "$bin" 2>/dev/null | awk '{print $(NF)}' | sed 's/@.*//' \
     | grep -E '^(setlocale|newlocale|uselocale|isw.*|tow.*|wctype|wctrans)$' | tr '\n' ' ')
 if [ -n "$bad" ]; then
     echo "check-ir-image: $bin: locale or wide-character symbols: ${bad% }"
