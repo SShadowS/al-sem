@@ -214,6 +214,10 @@ pub struct Scope {
     /// The folders auto-discovery did not enter because git ignores them
     /// (TLS-49), so "no test app found" can say a test app may sit there.
     pub ignored: usize,
+    /// Every app folder whose `app.json` this discovery read, accepted or
+    /// not (its sources are read when it depends on the workspace): what an
+    /// `alsem batch` run must not write (TLS-109).
+    pub read: Vec<PathBuf>,
     /// The `.al-sem.json` `testApps` this discovery read
     /// ([`test_config_identity`]), also when the call named its own test
     /// apps: `alsem_status` compares it with the disk (the `test-config`
@@ -288,6 +292,7 @@ pub fn discover(workspace: &Path, req: &ScopeRequest) -> Scope {
         search_root: None,
         searched: 0,
         ignored: 0,
+        read: Vec::new(),
         test_config: test_config_identity(configured.as_deref()),
     };
     let named = match &req.test_apps {
@@ -502,6 +507,7 @@ fn classify(scope: &mut Scope, root: &Path, app: &serde_json::Value, origin: Ori
 }
 
 fn classify_named(scope: &mut Scope, root: &Path, origin: Origin) {
+    scope.read.push(root.to_path_buf());
     match read_app_json(&root.join("app.json")) {
         Ok(app) => classify(scope, root, &app, origin),
         Err(e) => scope.skipped.push(Skipped {
@@ -548,6 +554,7 @@ fn walk(scope: &mut Scope, dir: &Path, workspace: &Path, depth: usize, honor_ign
             return;
         }
         scope.searched += 1;
+        scope.read.push(dir.to_path_buf());
         match read_app_json(&app_json) {
             Ok(app) => classify(scope, dir, &app, Origin::Auto),
             Err(e) => {

@@ -1869,17 +1869,36 @@ fn stream_paths(streams: &JobStreams) -> JobPaths {
 }
 
 /// What a test scope read takes (TLS-109): the workspace's `.al-sem.json`
-/// and every sibling test app it finds, discovered now as the job will.
+/// and every app folder the discovery reads, accepted or not, discovered now
+/// as the job will (a relative `--test-app` against the cwd, as the job
+/// takes it: [`absolute_test_apps`]).
 fn test_scope_reads(workspace: &str, test_app: &[String], p: &mut JobPaths) {
     use al_sem::engine::test_select::scope::{ScopeRequest, discover};
     let ws = Path::new(workspace);
     p.reads
         .push(al_sem::state_paths::workspace_config_for_read(ws));
     let req = ScopeRequest {
-        test_apps: (!test_app.is_empty()).then(|| test_app.iter().map(PathBuf::from).collect()),
+        test_apps: absolute_test_apps(test_app),
     };
-    p.workspaces
-        .extend(discover(ws, &req).apps.into_iter().map(|a| a.root));
+    p.workspaces.extend(discover(ws, &req).read);
+}
+
+/// The `--test-app` folders as a test job names them to its scope: each
+/// against the cwd (`None`: none named).
+fn absolute_test_apps(test_app: &[String]) -> Option<Vec<PathBuf>> {
+    (!test_app.is_empty()).then(|| {
+        test_app
+            .iter()
+            .map(|a| {
+                let p = PathBuf::from(a);
+                if p.is_absolute() {
+                    p
+                } else {
+                    std::path::absolute(&p).unwrap_or(p)
+                }
+            })
+            .collect()
+    })
 }
 
 /// What a manifest job writes and reads (#277 D2.4): its two streams, then
@@ -2005,10 +2024,10 @@ fn usage(line: String) -> ExitCode {
 /// <b>`: run the batch the parent writes on stdin.
 ///
 /// Every file the run writes is claimed by its identity in a run-private
-/// folder ([`claim`]), the workers' included; the trace file too, once the
-/// write check has claimed what the run must not write.
+/// folder ([`claim`]), the workers' included; each process's trace file
+/// last, after its job writes ([`start_trace_last`]).
 fn run_batch_cmd(b: BatchCli) -> ExitCode {
-    use al_sem::engine::perf_trace::{drop_file, start_file};
+    use al_sem::engine::perf_trace::drop_file;
     if let Some(w) = b.worker {
         // A worker writes only inside its parent's claims (TLS-109).
         let Some(dir) = std::env::var_os(claim::ENV) else {
@@ -2019,9 +2038,9 @@ fn run_batch_cmd(b: BatchCli) -> ExitCode {
             ));
         };
         claim::set_dir(dir.into());
-        // Its trace file was a write of the parent's check.
-        start_file(claim::open_trace);
-        return run_worker(w);
+        let code = run_worker(w);
+        drop_file(Some("the worker ended before its jobs ran"));
+        return code;
     }
     let claims = match tempfile::tempdir() {
         Ok(d) => d,
@@ -2105,29 +2124,11 @@ fn run_batch_parent(b: BatchCli) -> ExitCode {
         planned.push(plans);
         changed.push(decided);
     }
-    // The run reads its manifest: no job may write it (FR-3). It writes its
-    // trace files (TLS-109): its own and, with workers, each worker's
-    // `<file>.w<b>`, so a job output on one of them is refused here (exit 3).
-    // A worker's derived default name (its pid) is unknown until it starts.
-    use al_sem::engine::batch::manifest::Target;
-    let mut traces = Vec::new();
-    if let Some(trace) = al_sem::engine::perf_trace::pending_path() {
-        if manifest.batches.len() > 1
-            && let Some(file) = std::env::var_os("ALSEM_TRACE_FILE")
-        {
-            traces.extend((0..manifest.batches.len()).map(|b| {
-                let mut w = file.clone();
-                w.push(format!(".w{b}"));
-                Target::File(PathBuf::from(w))
-            }));
-        }
-        traces.insert(0, Target::File(trace));
-    }
+    // The run reads its manifest: no job may write it (FR-3).
     paths.push((
         "the run".to_string(),
         JobPaths {
             reads: vec![manifest_path.to_path_buf()],
-            writes: traces,
             ..JobPaths::default()
         },
     ));
@@ -2136,8 +2137,6 @@ fn run_batch_parent(b: BatchCli) -> ExitCode {
         al_sem::engine::perf_trace::drop_file(None);
         return usage(line);
     }
-    // Every protection holds: the trace file may open.
-    al_sem::engine::perf_trace::start_file(claim::open_trace);
     #[cfg(debug_assertions)]
     claim::test_seam_after_preflight();
     let w = admit(&kinds, manifest.batches.len());
@@ -2145,6 +2144,7 @@ fn run_batch_parent(b: BatchCli) -> ExitCode {
         let streams: Vec<JobStreams> = batch.jobs.iter().map(|j| j.streams.clone()).collect();
         let lines = run_one_batch(0, &streams, plans);
         report_peak(0);
+        start_trace_last();
         return print_lines(&lines);
     }
     drop(planned);
@@ -2184,8 +2184,16 @@ fn run_batch_parent(b: BatchCli) -> ExitCode {
         manifest: manifest_path,
         w,
     };
-    let (out, whole) = run_workers(&run, &batches);
-    write_run_stdout(out, whole)
+    let (out, whole, claims_failed) = run_workers(&run, &batches);
+    start_trace_last();
+    write_run_stdout(out, whole && !claims_failed)
+}
+
+/// Open this process's trace file, held in memory so far, after every job
+/// write of this process has claimed its file (TLS-109): a trace that is an
+/// output's alias is refused (a stderr line, no trace), never the output.
+fn start_trace_last() {
+    al_sem::engine::perf_trace::start_file(claim::open_trace);
 }
 
 /// `alsem batch --worker <b>`: the batch its parent wrote on stdin (a
@@ -2225,7 +2233,13 @@ fn run_worker(b: u32) -> ExitCode {
     #[cfg(debug_assertions)]
     al_sem::engine::batch::worker::test_seam_die(b);
     report_peak(b);
-    print_lines(&lines)
+    start_trace_last();
+    let code = print_lines(&lines);
+    // A failed claim reaches the parent through this exit, not the folder.
+    if claim::failed() {
+        return ExitCode::from(claim::FAILED_EXIT);
+    }
+    code
 }
 
 /// The run's job lines on stdout (D2.2).
@@ -2238,12 +2252,11 @@ fn print_lines(lines: &[JobLine]) -> ExitCode {
     write_run_stdout(out, true)
 }
 
-/// Write the run's stdout: exit 0, or 1 when the write fails, a write was
-/// refused at its claim (TLS-109), or a worker
-/// died without its lines (`whole` false).
+/// Write the run's stdout: exit 0, or 1 when the write fails, a claim of this
+/// process failed (TLS-109), or `whole` is false (a worker died without its
+/// lines or a worker's claim failed).
 fn write_run_stdout(out: Vec<u8>, whole: bool) -> ExitCode {
-    // A write refused at its claim fails the run too (TLS-109).
-    let failed = !whole || claim::any_refused();
+    let failed = !whole || claim::failed();
     let code = replay(
         &JobOutput {
             actions: vec![WriteAction::Stdout(out)],
@@ -2452,19 +2465,7 @@ fn plan_tests(t: TestsCli, cx: &PlanCx) -> Planned {
                 RootsAsk::Diff { text, root }
             };
             let scope = ScopeRequest {
-                test_apps: (!t.test_app.is_empty()).then(|| {
-                    t.test_app
-                        .iter()
-                        .map(|a| {
-                            let p = PathBuf::from(a);
-                            if p.is_absolute() {
-                                p
-                            } else {
-                                std::path::absolute(&p).unwrap_or(p)
-                            }
-                        })
-                        .collect()
-                }),
+                test_apps: absolute_test_apps(&t.test_app),
             };
             let single_app = t.single_app;
             ready(
@@ -2642,19 +2643,7 @@ fn plan_impact(t: ImpactCli, cx: &PlanCx) -> Planned {
                 MainAsk::Diff { text, root }
             };
             let scope = ScopeRequest {
-                test_apps: (!t.test_app.is_empty()).then(|| {
-                    t.test_app
-                        .iter()
-                        .map(|a| {
-                            let p = PathBuf::from(a);
-                            if p.is_absolute() {
-                                p
-                            } else {
-                                std::path::absolute(&p).unwrap_or(p)
-                            }
-                        })
-                        .collect()
-                }),
+                test_apps: absolute_test_apps(&t.test_app),
             };
             let single_app = t.single_app;
             let summaries = t.summaries;

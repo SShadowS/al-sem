@@ -549,9 +549,9 @@ static DEFERRED: AtomicBool = AtomicBool::new(false);
 
 /// TLS-109: the trace file is not opened when the tracer starts, but by
 /// [`start_file`]; events until then are held in memory. `alsem batch` calls
-/// it first thing, so `ALSEM_TRACE_FILE` is never truncated before the
-/// batch's write check has claimed what the run must not write. Only before
-/// the first event has any effect.
+/// it first thing and opens the file only after every job write of the
+/// process, so a trace file that aliases an input or an output is refused,
+/// never what it aliases. Only before the first event has any effect.
 pub fn defer_file() {
     DEFERRED.store(true, Ordering::Relaxed);
 }
@@ -574,12 +574,6 @@ pub fn start_file(open: impl FnOnce(&std::path::Path) -> std::io::Result<File>) 
         }
         Err(e) => eprintln!("perf_trace: {}: {e}; file tracing disabled", path.display()),
     }
-}
-
-/// The deferred trace file's path, while it waits for [`start_file`].
-pub fn pending_path() -> Option<PathBuf> {
-    let w = tracer()?.writer.lock().ok()?;
-    w.pending.as_ref().map(|(p, _)| p.clone())
 }
 
 /// Drop a deferred trace file that will not be opened: nothing is written to

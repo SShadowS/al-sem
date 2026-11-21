@@ -73,6 +73,7 @@ dependencies = [
  "tracing",
  "tracing-opentelemetry",
  "walkdir",
+ "winapi-util",
  "zip",
 ]
 

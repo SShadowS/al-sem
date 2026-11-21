@@ -95,17 +95,22 @@ const WORKSPACE_FILES: &[&str] = &[
     crate::program::source_deps::CONFIG_FILE,
 ];
 
-/// `p` against `cwd` with `.` and `..` folded as the OS takes them: a `..`
-/// goes to the parent of where its prefix leads (a symlink's target), so an
-/// existing prefix is canonicalized before it is popped (R9-3). A `..` after a
-/// prefix that is not an existing directory stays (TLS-109): the OS cannot go
-/// through a missing folder or a file, so `missing/../x` and `file/../x` are
-/// not `x`.
+/// `p` against `cwd` with `.` and `..` folded as the OS takes them. On unix a
+/// `..` goes to the parent of where its prefix leads (a symlink's target), so
+/// an existing prefix is canonicalized before it is popped (R9-3); a `..`
+/// after a prefix that is not an existing directory stays (TLS-109): the OS
+/// cannot go through a missing folder or a file, so `missing/../x` and
+/// `file/../x` are not `x`. Windows folds `..` by spelling before it opens a
+/// path (a link's or junction's own parent, `file\..\x` is `x`), so there a
+/// `..` pops as spelled.
 fn fold(cwd: &Path, p: &Path) -> PathBuf {
     let mut folded = PathBuf::new();
     for c in cwd.join(p).components() {
         match c {
             std::path::Component::CurDir => {}
+            std::path::Component::ParentDir if cfg!(windows) => {
+                folded.pop();
+            }
             std::path::Component::ParentDir => match std::fs::canonicalize(&folded) {
                 Ok(canonical) if canonical.is_dir() => {
                     folded = canonical;
@@ -120,13 +125,9 @@ fn fold(cwd: &Path, p: &Path) -> PathBuf {
 }
 
 /// What one existing file or directory is (TLS-109): its device and inode on
-/// unix, so a hard link, a bind mount or any other spelling of it is the same
-/// file. Elsewhere (Windows) its canonical path, so every check there is the
-/// path comparison it was before TLS-109 (a hard link is not caught there).
-#[cfg(unix)]
+/// unix, its volume serial number and file index on Windows. A hard link, a
+/// bind mount, a junction or any other spelling of it is the same file.
 pub type FileId = (u64, u64);
-#[cfg(not(unix))]
-pub type FileId = PathBuf;
 
 #[cfg(unix)]
 fn file_id(p: &Path) -> Option<FileId> {
@@ -134,9 +135,13 @@ fn file_id(p: &Path) -> Option<FileId> {
     std::fs::metadata(p).ok().map(|m| (m.dev(), m.ino()))
 }
 
-#[cfg(not(unix))]
+/// Read from a handle the path opens (`GetFileInformationByHandle`), links
+/// followed as `metadata` follows them; a folder opens too.
+#[cfg(windows)]
 fn file_id(p: &Path) -> Option<FileId> {
-    std::fs::canonicalize(p).ok()
+    let h = winapi_util::Handle::from_path_any(p).ok()?;
+    let i = winapi_util::file::information(&h).ok()?;
+    Some((i.volume_serial_number(), i.file_index()))
 }
 
 /// A path a check compares by the file it names (TLS-109), not by spelling.
@@ -222,11 +227,22 @@ fn resolve(cwd: &Path, p: &Path) -> Ident {
     resolve_hops(cwd, p, 0)
 }
 
+/// A name that does not exist yet as the file system will match it: lowercased
+/// on Windows, a case-insensitive file system.
+fn spelled(name: &std::ffi::OsStr) -> std::ffi::OsString {
+    if cfg!(windows) {
+        name.to_string_lossy().to_lowercase().into()
+    } else {
+        name.to_os_string()
+    }
+}
+
 fn resolve_hops(cwd: &Path, p: &Path, hops: u32) -> Ident {
     let lexical = fold(cwd, p);
     let mut rest: Vec<std::ffi::OsString> = Vec::new();
     let mut base = lexical.as_path();
     loop {
+        // A dangling link (or junction): where its text leads.
         if hops < 40
             && std::fs::canonicalize(base).is_err()
             && let Ok(target) = std::fs::read_link(base)
@@ -241,27 +257,17 @@ fn resolve_hops(cwd: &Path, p: &Path, hops: u32) -> Ident {
         if let Ok(canonical) = std::fs::canonicalize(base) {
             let mut chain: Vec<FileId> = canonical.ancestors().filter_map(file_id).collect();
             chain.reverse();
-            let rest: Vec<std::ffi::OsString> = rest
-                .into_iter()
-                .rev()
-                .map(|name: std::ffi::OsString| {
-                    if cfg!(windows) {
-                        name.to_string_lossy().to_lowercase().into()
-                    } else {
-                        name
-                    }
-                })
-                .collect();
+            rest.reverse();
             let path = rest.iter().fold(canonical, |p, name| p.join(name));
             return Ident { path, chain, rest };
         }
         match (base.parent(), base.file_name()) {
             (Some(parent), Some(name)) => {
-                rest.push(name.to_os_string());
+                rest.push(spelled(name));
                 base = parent;
             }
             _ => {
-                let rest = lexical.iter().map(|c| c.to_os_string()).collect();
+                let rest = lexical.iter().map(spelled).collect();
                 return Ident {
                     path: lexical,
                     chain: Vec::new(),
@@ -398,7 +404,17 @@ fn taken_files(root: &Path) -> Result<Taken, String> {
                 || !crate::source_text::is_skipped_dir_name(e.file_name())
         });
     for e in walked {
-        let e = e.map_err(|e| format!("cannot list the workspace {}: {e}", root.display()))?;
+        let e = match e {
+            Ok(e) => e,
+            // A dangling link: the source walk skips it too
+            // (`source_text::discover_al_files`), so it is no input.
+            Err(e)
+                if e.io_error().map(std::io::Error::kind) == Some(std::io::ErrorKind::NotFound) =>
+            {
+                continue;
+            }
+            Err(e) => return Err(format!("cannot list the workspace {}: {e}", root.display())),
+        };
         if e.file_type().is_dir() && e.path_is_symlink() {
             taken.linked_dirs.extend(file_id(e.path()));
         } else if e.file_type().is_file() && is_input_name(e.path()) {

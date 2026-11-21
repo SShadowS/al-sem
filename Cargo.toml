@@ -152,6 +152,12 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+# `alsem batch`'s file identity on Windows (TLS-109): volume serial number and
+# file index of an opened handle (`GetFileInformationByHandle`). Already in the
+# tree (walkdir -> same-file).
+[target.'cfg(windows)'.dependencies]
+winapi-util = "0.1"
+
 [features]
 default = ["telemetry"]
 telemetry = [

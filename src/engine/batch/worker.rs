@@ -131,13 +131,16 @@ pub struct Workers<'a> {
     pub w: usize,
 }
 
-/// A child's stdout and how it ended (its status, or why it never ran).
-type Ended = (Vec<u8>, String);
+/// A child's stdout, how it ended (its status, or why it never ran), and its
+/// exit code when it exited.
+type Ended = (Vec<u8>, String, Option<i32>);
 
 /// Run every batch in its own child. Returns the run's job lines, in
-/// manifest order, and whether every worker printed all of its lines.
-/// A worker that exits non-zero but printed all its lines counts as whole.
-pub fn run_workers(run: &Workers<'_>, batches: &[WorkerBatch]) -> (Vec<u8>, bool) {
+/// manifest order, whether every worker printed all of its lines, and
+/// whether a worker's claim failed (it exited [`super::claim::FAILED_EXIT`],
+/// TLS-109). A worker that exits non-zero otherwise but printed all its lines
+/// counts as whole.
+pub fn run_workers(run: &Workers<'_>, batches: &[WorkerBatch]) -> (Vec<u8>, bool, bool) {
     let mut ended: Vec<Option<Ended>> = batches.iter().map(|_| None).collect();
     std::thread::scope(|s| {
         let (tx, rx) = mpsc::channel::<(usize, Ended)>();
@@ -170,7 +173,7 @@ pub fn run_workers(run: &Workers<'_>, batches: &[WorkerBatch]) -> (Vec<u8>, bool
                     });
                 }
                 Err(e) => {
-                    let _ = tx.send((b, (Vec::new(), format!("not started: {e}"))));
+                    let _ = tx.send((b, (Vec::new(), format!("not started: {e}"), None)));
                 }
             }
             alive += 1;
@@ -179,9 +182,10 @@ pub fn run_workers(run: &Workers<'_>, batches: &[WorkerBatch]) -> (Vec<u8>, bool
         rx.into_iter().for_each(reap);
     });
     let mut out = Vec::new();
-    let mut whole = true;
+    let (mut whole, mut claims_failed) = (true, false);
     for (b, (batch, end)) in batches.iter().zip(ended).enumerate() {
-        let (stdout, status) = end.expect("every worker ended");
+        let (stdout, status, code) = end.expect("every worker ended");
+        claims_failed |= code == Some(i32::from(super::claim::FAILED_EXIT));
         let printed: Vec<&[u8]> = stdout
             .split_inclusive(|c| *c == b'\n')
             .filter(|l| l.ends_with(b"\n"))
@@ -203,7 +207,7 @@ pub fn run_workers(run: &Workers<'_>, batches: &[WorkerBatch]) -> (Vec<u8>, bool
             out.push(b'\n');
         }
     }
-    (out, whole)
+    (out, whole, claims_failed)
 }
 
 /// Start batch `b`'s child: the same binary, its batch on its stdin; its
@@ -247,10 +251,10 @@ fn supervise<'s>(
         .expect("a piped stdout")
         .read_to_end(&mut stdout);
     let _ = forward.join();
-    let status = child
-        .wait()
-        .map_or_else(|e| e.to_string(), |s| s.to_string());
-    (stdout, status)
+    match child.wait() {
+        Ok(s) => (stdout, s.to_string(), s.code()),
+        Err(e) => (stdout, e.to_string(), None),
+    }
 }
 
 /// Child `b`'s stderr on ours, one whole line per write, each `[w<b>] `.
