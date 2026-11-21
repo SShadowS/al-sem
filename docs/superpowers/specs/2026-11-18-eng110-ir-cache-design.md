@@ -138,7 +138,10 @@ Within that scope, **an accepted entry decodes to exactly IR a fresh parse produ
   refused (nothing fsyncs, and a crash can leave a renamed file of the right length with zero
   content);
 - **(b) the round trip at publish:** a writer publishes a file's encoding only after decoding it and
-  checking it equals the fresh IR, `decode(encode(ir)) == ir` (Design 3);
+  checking both that it equals the fresh IR (`decode(encode(ir)) == ir`, which sees a dropped
+  field) and that re-encoding it gives the same bytes (`encode(decode(encode(ir))) ==
+  encode(ir)`, which sees the raw `Origin.kind_id`: `Origin::eq` treats two ids with one name as
+  equal; sol r5) (Design 3);
 - **(c) a deterministic decoder:** for given bytes, the decoder of one binary (one key) always gives
   the same IR.
 
@@ -194,7 +197,8 @@ and a `Recovered` fixture (proof: remove the clear, red).
      file count, payload length); an index of `(offset, len, stored)` per file in
      `SourceRoot.files` order; the payload; a trailing blake3 over every byte before it.
    - **Publish gate** (orchestrator, rev. 7): before a package's entry is written, each file's fresh
-     encoding is decoded once and compared with the fresh IR. A file whose round trip differs, or
+     encoding is decoded once, compared with the fresh IR by `==`, and re-encoded and compared with
+     the first encoding byte for byte (both halves of (b)). A file whose round trip differs, or
      whose encoding passes 64 MiB, is not stored (its record says so; a hit parses that file and
      counts it `skipped_unstored`). A round-trip failure is a codec defect: it is warned once and
      counted `roundtrip_failed`. The other files are stored. Cost: one decode per file, on a miss
@@ -202,7 +206,8 @@ and a `Recovered` fixture (proof: remove the clear, red).
    - **A hit requires**, in order: the entry within 1 GiB; magic, format, key, digest; count equal to
      `SourceRoot.files.len()`; exact total length; the blake3; stored ranges that tile the payload
      exactly (a not-stored record has length 0; every sum checked); each stored range within 64 MiB.
-     Then each stored file decodes with no trailing bytes.
+     Then each stored file decodes from exactly the bytes its final index record assigns it, ending
+     at that range's end (no trailing bytes; sol r5).
 4. **Owned, bounded reads**, not a map: the bytes decoded are the bytes hashed. Peak: one package's
    entry during its decode.
 5. **The seam:** `src/program/dep_summary.rs`, `parse_for_build_observed` (line 62, the per-file call
@@ -212,15 +217,22 @@ and a `Recovered` fixture (proof: remove the clear, red).
    `par_iter`, decode in place of `parse_file`. On a fill, the loop parses from the owned copy,
    encodes and round-trips; the package's buffers are published at its end, then freed.
 6. **Small packages are skipped** below one fixed constant, measured once with its table.
-7. **Switches are parameters in library code.** The library takes an `Option<&IrCache>` (root, key,
-   verify flag, report sink), carried beside `BuildProfile` to the seam; `None` is today's behaviour.
-   Only the `main`s of `alsem`, `aldump` and `al-call-hierarchy` build it, from `ALSEM_IR_CACHE`,
-   `ALSEM_IR_CACHE_DIR`, `ALSEM_IR_CACHE_VERIFY`, `ALSEM_IR_CACHE_REPORT` and the batch state
-   (`claim::dir()`, a `OnceLock`). **`None` everywhere else:** `mint-goldens` (Fable r5 P3), and the
-   test binaries that build models in process (`program_resolve_harness`, `lsp`,
-   `l4_summary_differential`, the lib's tests), whatever the environment says. The cache's own tests
-   and `lib_cdo`'s round trip pass an `IrCache` with a temporary root. The carrier struct between the
-   `main`s and the seam is chosen in the plan (not verified which one).
+7. **Who turns it on.** The seam's per-package function takes an `Option<&IrCache>` (root, key,
+   verify flag, report sink); `None` is today's behaviour. The production entries reach the seam
+   from `ProgramContext` through many builder paths, so threading a parameter from each `main`
+   would touch every builder signature. Instead (plan decision, 2026-11-21), the carrier is a
+   process-level installation, the same pattern as `claim::set_dir`: only the `main`s of `alsem`,
+   `aldump` and `al-call-hierarchy` call `ir_cache::install_from_env()`, which reads
+   `ALSEM_IR_CACHE`, `ALSEM_IR_CACHE_DIR`, `ALSEM_IR_CACHE_VERIFY` and `ALSEM_IR_CACHE_REPORT`. The
+   two seam entries read `ir_cache::installed()` on the calling thread before entering the pool and
+   pass it down; the batch state (`claim::dir()`) and the key are resolved there, lazily, so a
+   batch run (whose claim folder is set before any job) never uses the cache. **Not installed
+   anywhere else:** `mint-goldens` (Fable r5 P3), and the test binaries that build models in
+   process (`program_resolve_harness`, `lsp`, `l4_summary_differential`, the lib's tests), whatever
+   the environment says. The cache's own tests and `lib_cdo`'s round trip call the parameterized
+   function with an `IrCache` on a temporary root. `aldump --session-refresh --verify` builds its
+   reference model under `ir_cache::Suspend`, a guard that turns the installed cache off while it
+   lives.
 8. **Disk:** 1 GiB per entry is a cap. The total under `ir/` has a 4 GiB **soft target**; cleanup is
    best effort (next item). If this process's own key folder alone passes 4 GiB it publishes nothing
    more and warns once. **On a lane host the 4 GiB will sit full** (Fable r5): every lane rebuild
@@ -262,7 +274,7 @@ and a `Recovered` fixture (proof: remove the clear, red).
 In a batch run (`claim::dir()` is `Some`: the parent and every worker) the `main` builds no
 `IrCache`: no reads, no writes, no pruning, no report-file lines. The claims do not reserve the
 cache's names; batch already shares one model build across its jobs; no script runs `alsem batch`.
-Multi-worker batch runs keep parsing per worker. Follow-up task (to file): turn it on with the claim
+Multi-worker batch runs keep parsing per worker. Follow-up task TLS-116: turn it on with the claim
 check reserving the cache folder's names, for the ENG-113 text cache too.
 
 **Test, through the real run, with a positive control:** a `tests/cli` test runs, with
@@ -372,6 +384,9 @@ cache, the second fills the IR cache, the third is warm. The untimed runs below 
      the eligible packages, and the entries present on disk in that sample's root;
    - every off sample: `disk_hits = 0`, `published_packages = 0`, `skipped_off = seam_files`.
 
+   Any `roundtrip_failed > 0` on CDO fails (sol r5): it is a codec defect, not an allowed skip.
+   Report lines come only from instrumented head runs; master predates them and is judged on its
+   output bytes and counts only.
    A missing report, a `start` without an `end`, or a sample meant to use the cache with no eligible
    files fails.
 3. **One-shot timing** (bars (a), (c)): `alsem analyze <CDO_WS>`, `release-fast`, in a timed CDO slot
@@ -434,14 +449,14 @@ cache, the second fills the IR cache, the third is warm. The untimed runs below 
 
 ## Left for the owner
 
-None. The disk numbers (1 GiB per entry, 4 GiB soft target) and batch-off are the orchestrator's to
-confirm.
+None. The orchestrator confirmed the disk numbers (1 GiB per entry, 4 GiB soft target) and
+batch-off on 2026-11-21.
 
 ## Future (ideas only; ENG-110 does not build them)
 
-- **Windows:** read the running image natively and prove the handle is the loaded file; then turn
-  the cache on there.
-- **Batch:** the claim check reserving the cache folders (the follow-up task above).
+- **Windows (TLS-117):** read the running image natively and prove the handle is the loaded file;
+  then turn the cache on there.
+- **Batch (TLS-116):** the claim check reserving the cache folders, for the ENG-113 text cache too.
 - **A narrower key.** A later task could key the cache on a build-time hash of exactly what produces
   the cached IR: the `al-syntax` sources, the grammar's compiled inputs and the IR codec's schema,
   computed in a build script. Then a change that touches only the engine would still hit, and a gate
@@ -511,3 +526,9 @@ From `/coord/owner/design-mantra.md`:
   Non-blocking entry locks, folders without markers aged by mtime, a pruned folder reopened (Fable
   P2-2, P3). Fills from `read_owned` plus `check_entry`, parse from the map on a mismatch,
   `mint-goldens` gets `None` (Fable P3).
+- **rev. 7, amended with the plan (2026-11-21):** sol r5 (ready for a plan) and Fable r5 agreed. sol
+  r5's plan notes folded in: the round trip also compares re-encoded bytes (raw `kind_id`), each
+  file decodes exactly its final index range, any `roundtrip_failed` on CDO fails, reports come only
+  from head runs. Design 7 states the plan's carrier (a process-level install, as `claim::set_dir`).
+  Follow-ups cited as TLS-116 and TLS-117; the orchestrator confirmed the disk numbers and
+  batch-off.
