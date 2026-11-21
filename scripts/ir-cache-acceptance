@@ -363,12 +363,18 @@ def identity(args):
     os.makedirs(os.path.join(out, "roots"), exist_ok=True)
     warm_root = os.path.join(out, "roots", "warm")
     bins = {"master": os.path.dirname(base_exe), "head": os.path.dirname(head_exe)}
-    # The warm root, filled untimed (two runs: the text cache, then the IR root).
+    # The warm root, filled untimed (two runs: the text cache, then the IR root), for both
+    # binaries: the key is the running image, so alsem's entries are not aldump's.
     for i in range(2):
         env, _, _ = arm_env("head-warm", out, f"fill-{i}", warm_root)
         subprocess.run([head_exe, "analyze", ws], env=env, stdout=subprocess.DEVNULL,
                        check=True)
-    eligible_packages = len(entries(warm_root))
+    env, _, _ = arm_env("head-warm", out, "fill-aldump", warm_root)
+    subprocess.run([os.path.join(bins["head"], "aldump"), "--program-call-graph-stats", ws],
+                   env=env, stdout=subprocess.DEVNULL, check=True)
+    # Per key folder: one key's entries (the cold rule's eligible packages).
+    eligible_packages = len(entries(warm_root)) // max(1, len(
+        [k for k in os.listdir(warm_root) if os.path.isdir(os.path.join(warm_root, k))]))
     failures = []
 
     def run_arm(arm, run):
