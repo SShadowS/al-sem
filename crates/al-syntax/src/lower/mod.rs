@@ -57,8 +57,10 @@ pub fn lower_file(root: RawNode, source: &str) -> AlFile {
     let mut ir = Ir::new();
     let mut issues = Vec::new();
     let mut objects = Vec::new();
-    // No range from another file (an unwinding lowering) may reach this one.
+    // No range or build context from another file (an unwinding lowering) may reach this
+    // one: the IR is a function of the text alone (ENG-110 caches it).
     CONDITIONAL_VARS.with(|v| v.borrow_mut().clear());
+    BUILD_CONTEXT.with(|s| s.borrow_mut().clear());
     PREPROC_WALK.with(|f| f.set(root.has_error()));
     PREPROC_RANGES.with(|s| *s.borrow_mut() = preproc_ranges(root, source));
     collect_objects(root, source, &mut ir, &mut issues, &mut objects);
@@ -2418,7 +2420,9 @@ thread_local! {
     /// under a non-empty context is recorded with it (`Ir::preproc_context`), so a
     /// call's overload selection sees its build. Empty outside routine bodies.
     /// ponytail: thread-local, not a lowering-context parameter; a lowering pass is
-    /// one file on one thread, and `with_build_context` restores it on exit.
+    /// one file on one thread. `lower_file` clears it at entry, and `with_build_context`
+    /// restores it on exit through a drop guard, an unwind included (ENG-110: scratch
+    /// state, so a file's IR depends on its text alone).
     static BUILD_CONTEXT: std::cell::RefCell<Vec<(String, bool)>> =
         const { std::cell::RefCell::new(Vec::new()) };
     /// ENG-80 (spec §4.2 C): set by `extract_var_body` when a `var` section holds a
@@ -2488,10 +2492,18 @@ fn with_build_context<R>(extra: &[(String, bool)], ir: &mut Ir, f: impl FnOnce(&
         s.extend_from_slice(extra);
         (outer, s.clone())
     });
+    /// Truncates the build context back to the outer length on drop, so an unwind out
+    /// of `f` restores it too (ENG-110).
+    struct Truncate(usize);
+    impl Drop for Truncate {
+        fn drop(&mut self) {
+            BUILD_CONTEXT.with(|s| s.borrow_mut().truncate(self.0));
+        }
+    }
+    let _restore = Truncate(outer);
     let first = ir.expr_count();
     let r = f(ir);
     ir.record_preproc_context(first, &full);
-    BUILD_CONTEXT.with(|s| s.borrow_mut().truncate(outer));
     r
 }
 
@@ -11511,6 +11523,73 @@ codeunit 50104 I implements A.B."IFoo", IBar { }
         assert_eq!(rs.len(), 2);
         for r in rs {
             assert!(call_reachable(&af, r.body.expect("shared body"), "Foo"));
+        }
+    }
+
+    /// ENG-110: an unwind out of `with_build_context` leaves the thread's build context as
+    /// it found it (the drop guard), so the next file this thread lowers starts clean.
+    #[test]
+    fn build_context_restored_after_unwind() {
+        std::thread::spawn(|| {
+            let r = std::panic::catch_unwind(|| {
+                super::with_build_context(
+                    &[("X".to_string(), true)],
+                    &mut crate::ir::Ir::new(),
+                    |_| panic!("unwind out of a lowering"),
+                )
+            });
+            assert!(r.is_err());
+            assert!(super::BUILD_CONTEXT.with(|s| s.borrow().is_empty()));
+        })
+        .join()
+        .expect("test thread");
+    }
+
+    /// ENG-110: a build context left on a thread (by hand here) does not reach the next file
+    /// lowered there, clean or `Recovered`: the IR is a function of the text alone, which a
+    /// cache of parsed IR needs.
+    #[test]
+    fn stale_build_context_does_not_reach_next_file() {
+        const CLEAN: &str = "codeunit 50110 \"Ctx\"\n{\n    procedure P()\n    begin\n#if A\n        InA();\n#endif\n        Always();\n    end;\n}\n";
+        const BROKEN: &str = "codeunit 50111 \"Ctx\"\n{\n    procedure P()\n    begin\n#if A\n        InA();\n#endif\n        Always(;\n    end;\n}\n";
+        let fresh = |src: &'static str| {
+            std::thread::spawn(move || parse(src))
+                .join()
+                .expect("fresh thread")
+        };
+        let stale = |src: &'static str| {
+            std::thread::spawn(move || {
+                super::BUILD_CONTEXT.with(|s| s.borrow_mut().push(("STALE".to_string(), true)));
+                parse(src)
+            })
+            .join()
+            .expect("stale thread")
+        };
+        for (src, status) in [
+            (CLEAN, crate::ir::ParseStatus::Clean),
+            (BROKEN, crate::ir::ParseStatus::Recovered),
+        ] {
+            let (want, got) = (fresh(src), stale(src));
+            assert_eq!(want.parse_status, status);
+            // Every call statement's build context, and every routine's.
+            let ctx = |af: &crate::ir::AlFile| {
+                let calls: Vec<_> = af
+                    .ir
+                    .iter_stmts()
+                    .filter_map(|s| match s.kind {
+                        StmtKind::Call(e) => Some(af.ir.preproc_context(e).to_vec()),
+                        _ => None,
+                    })
+                    .collect();
+                let routines: Vec<_> = af.objects[0]
+                    .routines
+                    .iter()
+                    .map(|r| r.preproc_context().to_vec())
+                    .collect();
+                (calls, routines)
+            };
+            assert!(!ctx(&want).0.is_empty(), "the fixture has calls");
+            assert_eq!(ctx(&got), ctx(&want), "{status:?}");
         }
     }
 }
