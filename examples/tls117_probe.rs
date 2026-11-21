@@ -2,12 +2,12 @@
 //! `docs/superpowers/notes/2026-11-21-tls117-windows-image-key.md`, section "The probe").
 //!
 //! Settles, on a real Windows machine, the facts the IR cache's Windows key and private-folder
-//! check rest on. It prints one `PASS`, `FAIL` or `SKIP` line per W-item and exits 1 when any
-//! item fails. Two ways to run it (both on Windows, from the repository root):
+//! check rest on. It prints one `PASS`, `FAIL` or `SKIP` line per item and exits 1 when any item
+//! fails. Two ways to run it (both on Windows, from the repository root):
 //!
 //! ```text
 //! cargo run --example tls117_probe
-//! cargo test --example tls117_probe -- --test-threads=1
+//! cargo test --example tls117_probe -- --test-threads=1 --nocapture
 //! ```
 //!
 //! The key sequence here is a prototype of the product code, not the product code: it hashes the
@@ -27,29 +27,34 @@ fn main() {
 #[cfg(windows)]
 mod win {
     use std::ffi::{OsStr, OsString, c_void};
-    use std::fs::{File, OpenOptions};
-    use std::io::{BufRead, BufReader, Read, Write};
+    use std::fs::{File, OpenOptions, TryLockError};
+    use std::io::{BufRead, BufReader, ErrorKind, Read, Write};
     use std::os::windows::ffi::{OsStrExt, OsStringExt};
     use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
     use std::os::windows::io::AsRawHandle;
-    use std::path::{Path, PathBuf};
+    use std::path::{Component, Path, PathBuf, Prefix};
     use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
     use std::time::{Duration, Instant};
     use windows_sys::Win32::Foundation::{
-        CloseHandle, ERROR_SHARING_VIOLATION, GENERIC_ALL, GENERIC_WRITE, HANDLE, LocalFree,
+        CloseHandle, GENERIC_ALL, GENERIC_WRITE, HANDLE, LocalFree,
     };
-    use windows_sys::Win32::Security::Authorization::{GetSecurityInfo, SE_FILE_OBJECT};
+    use windows_sys::Win32::Security::Authorization::{
+        ConvertSidToStringSidW, GetSecurityInfo, SE_FILE_OBJECT,
+    };
     use windows_sys::Win32::Security::{
-        ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, DACL_SECURITY_INFORMATION, EqualSid, GetAce,
-        GetTokenInformation, INHERIT_ONLY_ACE, IsWellKnownSid, OWNER_SECURITY_INFORMATION, PSID,
-        TOKEN_QUERY, TOKEN_USER, TokenUser, WinBuiltinAdministratorsSid, WinLocalSystemSid,
+        ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, DACL_SECURITY_INFORMATION, GetAce,
+        GetTokenInformation, INHERIT_ONLY_ACE, OWNER_SECURITY_INFORMATION, PSID, TOKEN_QUERY,
+        TOKEN_USER, TokenUser,
     };
     use windows_sys::Win32::Storage::FileSystem::{
         CreateHardLinkW, DELETE, FILE_ADD_FILE, FILE_ADD_SUBDIRECTORY,
         FILE_ATTRIBUTE_REPARSE_POINT, FILE_DELETE_CHILD, FILE_FLAG_BACKUP_SEMANTICS,
-        FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ,
-        FILE_SHARE_WRITE, FILE_WRITE_DATA, GetShortPathNameW, GetVolumeInformationByHandleW,
-        READ_CONTROL, WRITE_DAC, WRITE_OWNER,
+        FILE_FLAG_OPEN_REPARSE_POINT, FILE_ID_128, FILE_ID_INFO, FILE_READ_ATTRIBUTES,
+        FILE_RENAME_INFO, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_WRITE_DATA,
+        FileIdInfo, FileRenameInfoEx, GetDriveTypeW, GetFileInformationByHandleEx,
+        GetFinalPathNameByHandleW, GetShortPathNameW, GetVolumeInformationByHandleW,
+        MOVEFILE_REPLACE_EXISTING, MoveFileExW, READ_CONTROL, SetFileInformationByHandle,
+        VOLUME_NAME_GUID, WRITE_DAC, WRITE_OWNER,
     };
     use windows_sys::Win32::System::LibraryLoader::{
         GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
@@ -61,12 +66,144 @@ mod win {
     };
     use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
+    // In `Win32_System_WindowsProgramming`, a feature not otherwise needed.
+    const DRIVE_FIXED: u32 = 3;
+    const FILE_RENAME_FLAG_REPLACE_IF_EXISTS: u32 = 1;
+    const FILE_RENAME_FLAG_POSIX_SEMANTICS: u32 = 2;
+    const ERROR_ACCESS_DENIED: i32 = 5;
+    const ERROR_SHARING_VIOLATION: i32 = 32;
+
     /// An address inside this image (as `IR_IMAGE_MARKER` is in the product).
     #[used]
     static ANCHOR: [u8; 16] = *b"TLS117-PROBE-IMG";
 
     // ---------------------------------------------------------------------------------
-    // The key sequence (design note section 2, steps 1-5)
+    // Small helpers
+    // ---------------------------------------------------------------------------------
+
+    fn wide(p: &Path) -> Vec<u16> {
+        p.as_os_str().encode_wide().chain([0]).collect()
+    }
+
+    fn hex(b: &[u8]) -> String {
+        b.iter().map(|x| format!("{x:02x}")).collect()
+    }
+
+    fn hex16(w: &[u16]) -> String {
+        w.iter().map(|x| format!("{x:04x}")).collect()
+    }
+
+    fn lossy(w: &[u16]) -> String {
+        String::from_utf16_lossy(w)
+    }
+
+    fn blake3_of(r: &mut impl Read) -> std::io::Result<[u8; 32]> {
+        let mut h = blake3::Hasher::new();
+        let mut buf = vec![0u8; 1 << 20];
+        loop {
+            let n = r.read(&mut buf)?;
+            if n == 0 {
+                return Ok(*h.finalize().as_bytes());
+            }
+            h.update(&buf[..n]);
+        }
+    }
+
+    /// Volume serial number and 128-bit file id of an open handle (as TLS-109's `handle_id`).
+    fn file_id(f: &File) -> std::io::Result<(u64, u128)> {
+        let mut info = FILE_ID_INFO {
+            VolumeSerialNumber: 0,
+            FileId: FILE_ID_128 {
+                Identifier: [0; 16],
+            },
+        };
+        // SAFETY: `info` is the FILE_ID_INFO the call fills; the handle is live.
+        let ok = unsafe {
+            GetFileInformationByHandleEx(
+                f.as_raw_handle(),
+                FileIdInfo,
+                (&raw mut info).cast(),
+                std::mem::size_of::<FILE_ID_INFO>() as u32,
+            )
+        };
+        if ok == 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok((
+            info.VolumeSerialNumber,
+            u128::from_le_bytes(info.FileId.Identifier),
+        ))
+    }
+
+    /// The file id of whatever `p` names now (attributes access, sharing everything, so an
+    /// open image or a held file does not refuse it).
+    fn file_id_at(p: &Path) -> std::io::Result<(u64, u128)> {
+        let f = OpenOptions::new()
+            .access_mode(FILE_READ_ATTRIBUTES)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(p)?;
+        file_id(&f)
+    }
+
+    /// The file system name of the volume holding `f` ("NTFS", "ReFS", ...).
+    fn fs_name(f: &File) -> Option<String> {
+        let mut name = [0u16; 64];
+        // SAFETY: a live handle; only the file system name buffer is asked for.
+        let ok = unsafe {
+            GetVolumeInformationByHandleW(
+                f.as_raw_handle(),
+                std::ptr::null_mut(),
+                0,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                name.as_mut_ptr(),
+                name.len() as u32,
+            )
+        };
+        let end = name.iter().position(|&c| c == 0).unwrap_or(name.len());
+        (ok != 0).then(|| lossy(&name[..end]))
+    }
+
+    /// The drive type of the volume holding `f`, from its `\\?\Volume{GUID}\` root.
+    fn drive_type(f: &File) -> Option<u32> {
+        let mut buf = vec![0u16; 32768];
+        // SAFETY: a live handle; the buffer and its length match.
+        let n = unsafe {
+            GetFinalPathNameByHandleW(
+                f.as_raw_handle(),
+                buf.as_mut_ptr(),
+                buf.len() as u32,
+                VOLUME_NAME_GUID,
+            )
+        } as usize;
+        if n == 0 || n >= buf.len() {
+            return None;
+        }
+        // `\\?\Volume{...}\rest`: the root ends at the first `\` after the `}`.
+        let close = buf[..n].iter().position(|&c| c == u16::from(b'}'))?;
+        let mut root = buf[..=close + 1].to_vec();
+        if root.last() != Some(&u16::from(b'\\')) {
+            return None;
+        }
+        root.push(0);
+        // SAFETY: a NUL-terminated root path.
+        Some(unsafe { GetDriveTypeW(root.as_ptr()) })
+    }
+
+    /// The locality rule: a fixed drive formatted NTFS.
+    fn local_ntfs(f: &File) -> Result<(), String> {
+        match (fs_name(f).as_deref(), drive_type(f)) {
+            (Some("NTFS"), Some(DRIVE_FIXED)) => Ok(()),
+            (fs, dt) => Err(format!(
+                "not a local NTFS volume (file system {fs:?}, drive type {dt:?})"
+            )),
+        }
+    }
+
+    // ---------------------------------------------------------------------------------
+    // The key sequence (design note section 3, steps 1-6)
     // ---------------------------------------------------------------------------------
 
     /// Step 1: the base of the module holding [`ANCHOR`].
@@ -85,7 +222,7 @@ mod win {
         (ok != 0).then_some(h as *const c_void)
     }
 
-    /// Steps 2 and 5: the mapped file name of the module at `base`, raw UTF-16 (no folding),
+    /// Steps 2 and 6: the mapped file name of the module at `base`, raw UTF-16 (no folding),
     /// in NT device form. `None` on failure or truncation.
     fn mapped_name(base: *const c_void) -> Option<Vec<u16>> {
         let mut buf = vec![0u16; 32768];
@@ -114,38 +251,6 @@ mod win {
             .open(PathBuf::from(OsString::from_wide(&p)))
     }
 
-    /// The file system name of the volume holding `f` ("NTFS", "ReFS", ...).
-    fn fs_name(f: &File) -> Option<String> {
-        let mut name = [0u16; 64];
-        // SAFETY: a live handle; only the file system name buffer is asked for.
-        let ok = unsafe {
-            GetVolumeInformationByHandleW(
-                f.as_raw_handle(),
-                std::ptr::null_mut(),
-                0,
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-                name.as_mut_ptr(),
-                name.len() as u32,
-            )
-        };
-        let end = name.iter().position(|&c| c == 0).unwrap_or(name.len());
-        (ok != 0).then(|| String::from_utf16_lossy(&name[..end]))
-    }
-
-    fn blake3_of(r: &mut impl Read) -> std::io::Result<[u8; 32]> {
-        let mut h = blake3::Hasher::new();
-        let mut buf = vec![0u8; 1 << 20];
-        loop {
-            let n = r.read(&mut buf)?;
-            if n == 0 {
-                return Ok(*h.finalize().as_bytes());
-            }
-            h.update(&buf[..n]);
-        }
-    }
-
     /// The whole sequence. `barrier(tag)` runs between the steps (a child waits there for its
     /// parent). `Err` is "no key", with the reason.
     fn image_key(barrier: &mut dyn FnMut(&str)) -> Result<[u8; 32], String> {
@@ -158,18 +263,15 @@ mod win {
         if !m.is_file() || m.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
             return Err("not a regular file".into());
         }
-        match fs_name(&f).as_deref() {
-            Some("NTFS") => {}
-            other => return Err(format!("volume is not NTFS: {other:?}")),
-        }
+        local_ntfs(&f)?;
         let hash = blake3_of(&mut f).map_err(|e| format!("read: {e}"))?;
         barrier("after-hash");
         let n2 = mapped_name(base).ok_or("second mapped-name query failed")?;
         if n1 != n2 {
             return Err(format!(
                 "mapped name changed: {} -> {}",
-                String::from_utf16_lossy(&n1),
-                String::from_utf16_lossy(&n2)
+                lossy(&n1),
+                lossy(&n2)
             ));
         }
         drop(f);
@@ -193,14 +295,6 @@ mod win {
         let mut l = String::new();
         let _ = std::io::stdin().read_line(&mut l);
         l.trim().to_string()
-    }
-
-    fn hex(b: &[u8]) -> String {
-        b.iter().map(|x| format!("{x:02x}")).collect()
-    }
-
-    fn hex16(w: &[u16]) -> String {
-        w.iter().map(|x| format!("{x:04x}")).collect()
     }
 
     fn key_line(r: Result<[u8; 32], String>) -> String {
@@ -252,7 +346,7 @@ mod win {
     }
 
     impl Kid {
-        fn spawn(exe: &Path) -> std::io::Result<Kid> {
+        fn spawn(exe: &Path) -> Result<Kid, String> {
             let mut cmd = Command::new(exe);
             if cfg!(test) {
                 cmd.args([
@@ -266,15 +360,18 @@ mod win {
             } else {
                 cmd.arg("child");
             }
-            let mut proc = cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).spawn()?;
+            let mut proc = cmd
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .spawn()
+                .map_err(|e| format!("spawn {}: {e}", exe.display()))?;
             let stdin = proc.stdin.take().unwrap();
             let out = BufReader::new(proc.stdout.take().unwrap());
             let mut k = Kid { proc, stdin, out };
-            let r = k.recv();
-            if r != "READY" {
-                return Err(std::io::Error::other(format!("child said {r:?}")));
+            match k.recv().as_str() {
+                "READY" => Ok(k),
+                r => Err(format!("child said {r:?}")),
             }
-            Ok(k)
         }
 
         fn send(&mut self, s: &str) {
@@ -320,7 +417,7 @@ mod win {
     }
 
     // ---------------------------------------------------------------------------------
-    // The W-items
+    // Outcomes and shared setup
     // ---------------------------------------------------------------------------------
 
     pub(crate) enum Outcome {
@@ -330,23 +427,35 @@ mod win {
     }
     use Outcome::{Fail, Pass, Skip};
 
-    fn wide(p: &Path) -> Vec<u16> {
-        p.as_os_str().encode_wide().chain([0]).collect()
+    /// `?` for setup steps: any error fails the item with its context.
+    trait Ctx<T> {
+        fn ctx(self, what: &str) -> Result<T, String>;
+    }
+    impl<T, E: std::fmt::Display> Ctx<T> for Result<T, E> {
+        fn ctx(self, what: &str) -> Result<T, String> {
+            self.map_err(|e| format!("{what}: {e}"))
+        }
     }
 
-    /// A scratch folder with a copy of this executable named `name`, and the copy's hash.
-    fn copy_self(dir: &Path, name: &str) -> std::io::Result<(PathBuf, [u8; 32])> {
-        let exe = dir.join(name);
-        std::fs::copy(std::env::current_exe()?, &exe)?;
-        let h = blake3_of(&mut File::open(&exe)?)?;
-        Ok((exe, h))
+    fn outcome(r: Result<String, String>) -> Outcome {
+        match r {
+            Ok(n) => Pass(n),
+            Err(n) => Fail(n),
+        }
     }
 
-    fn scratch() -> tempfile::TempDir {
+    fn scratch() -> Result<tempfile::TempDir, String> {
         tempfile::Builder::new()
             .prefix("tls117-")
             .tempdir()
-            .expect("a scratch folder")
+            .ctx("scratch folder")
+    }
+
+    /// A copy of this executable at `exe`, its hash and its file id.
+    fn copy_self(exe: &Path) -> Result<([u8; 32], (u64, u128)), String> {
+        std::fs::copy(std::env::current_exe().ctx("current_exe")?, exe).ctx("copy self")?;
+        let h = blake3_of(&mut File::open(exe).ctx("open copy")?).ctx("hash copy")?;
+        Ok((h, file_id_at(exe).ctx("id of copy")?))
     }
 
     fn ends_with(name: &[u16], leaf: &str) -> bool {
@@ -354,7 +463,8 @@ mod win {
         name.ends_with(&tail)
     }
 
-    /// The key a child reports must be the running image's, or none.
+    /// A key reply: `Ok(true)` the running image's key, `Ok(false)` no key, `Err` anything
+    /// else (a WRONG key is the failure the design must never allow).
     fn judge_key(r: &str, orig: &[u8; 32]) -> Result<bool, String> {
         if let Some(k) = r.strip_prefix("KEY ") {
             if k == hex(orig) {
@@ -369,350 +479,598 @@ mod win {
         }
     }
 
-    /// W0: the image's volume and the cache root's volume are NTFS.
-    pub(crate) fn w0_ntfs() -> Outcome {
-        let img = File::open(std::env::current_exe().unwrap()).map(|f| fs_name(&f));
-        let root = dirs_cache().and_then(|d| {
-            OpenOptions::new()
-                .read(true)
-                .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
-                .open(d)
-                .ok()
-        });
-        let root = root.map(|f| fs_name(&f));
-        match (img, root) {
-            (Ok(Some(a)), Some(Some(b))) if a == "NTFS" && b == "NTFS" => {
-                Pass("image and cache root on NTFS".into())
-            }
-            other => Fail(format!("volumes: {other:?}")),
+    fn got(b: bool) -> &'static str {
+        if b { "key" } else { "no key" }
+    }
+
+    // ---------------------------------------------------------------------------------
+    // W0: locality of the image and of the real cache roots
+    // ---------------------------------------------------------------------------------
+
+    /// ENG-113's text root (`dirs::cache_dir()/al-ch-snapshot-cache`), the IR root (`ir` in it,
+    /// or `ALSEM_IR_CACHE_DIR`), and a probe override when no override is set.
+    fn cache_roots() -> Result<Vec<(String, PathBuf)>, String> {
+        let text = dirs::cache_dir()
+            .ok_or("no per-user cache folder")?
+            .join("al-ch-snapshot-cache");
+        let mut v = vec![
+            ("text root".to_string(), text.clone()),
+            ("IR root".to_string(), text.join("ir")),
+        ];
+        match std::env::var_os("ALSEM_IR_CACHE_DIR").filter(|v| !v.is_empty()) {
+            Some(o) => v.push(("ALSEM_IR_CACHE_DIR".to_string(), PathBuf::from(o))),
+            None => v.push((
+                "probe override".to_string(),
+                dirs::cache_dir()
+                    .ok_or("no per-user cache folder")?
+                    .join(format!("tls117-override-{}", std::process::id()))
+                    .join("ir"),
+            )),
         }
+        Ok(v)
     }
 
-    /// `%LOCALAPPDATA%` (the parent of ENG-113's `al-ch-snapshot-cache`).
-    fn dirs_cache() -> Option<PathBuf> {
-        std::env::var_os("LOCALAPPDATA").map(PathBuf::from)
+    pub(crate) fn w0_local() -> Outcome {
+        outcome((|| {
+            let img = File::open(std::env::current_exe().ctx("current_exe")?).ctx("open image")?;
+            local_ntfs(&img).map_err(|e| format!("image: {e}"))?;
+            let mut notes = vec!["image on local NTFS".to_string()];
+            for (what, p) in cache_roots()? {
+                let existing = p
+                    .ancestors()
+                    .find(|a| a.exists())
+                    .ok_or(format!("{what}: no existing ancestor"))?;
+                let f = OpenOptions::new()
+                    .access_mode(FILE_READ_ATTRIBUTES)
+                    .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+                    .open(existing)
+                    .ctx(what.as_str())?;
+                local_ntfs(&f).map_err(|e| format!("{what} ({}): {e}", existing.display()))?;
+                notes.push(format!("{what} {} on local NTFS", p.display()));
+            }
+            Ok(notes.join(" | "))
+        })())
     }
 
-    /// W1: the mapped name follows a rename of the running image.
+    // ---------------------------------------------------------------------------------
+    // W1: the mapped name, and replacement inside the real sequence
+    // ---------------------------------------------------------------------------------
+
     pub(crate) fn w1_name_follows_rename() -> Outcome {
-        let d = scratch();
-        let (exe, _) = copy_self(d.path(), "a.exe").unwrap();
-        let mut k = Kid::spawn(&exe).unwrap();
-        let Some(n1) = k.name() else {
-            return Fail("no mapped name".into());
-        };
-        if let Err(e) = std::fs::rename(&exe, d.path().join("b.exe")) {
-            return Fail(format!("rename of the running image refused: {e}"));
-        }
-        let Some(n2) = k.name() else {
-            return Fail("no mapped name after the rename".into());
-        };
-        match (ends_with(&n1, "a.exe"), ends_with(&n2, "b.exe")) {
-            (true, true) => Pass(format!(
-                "{} -> {}",
-                String::from_utf16_lossy(&n1),
-                String::from_utf16_lossy(&n2)
-            )),
-            _ => Fail(format!(
-                "stale or odd name: {} -> {}",
-                String::from_utf16_lossy(&n1),
-                String::from_utf16_lossy(&n2)
-            )),
-        }
+        outcome((|| {
+            let d = scratch()?;
+            let exe = d.path().join("a.exe");
+            copy_self(&exe)?;
+            let mut k = Kid::spawn(&exe)?;
+            let n1 = k.name().ok_or("no mapped name")?;
+            std::fs::rename(&exe, d.path().join("b.exe"))
+                .ctx("refused mutation: rename of the running image")?;
+            let n2 = k.name().ok_or("no mapped name after the rename")?;
+            let msg = format!("{} -> {}", lossy(&n1), lossy(&n2));
+            if ends_with(&n1, "a.exe") && ends_with(&n2, "b.exe") {
+                Ok(msg)
+            } else {
+                Err(format!("stale or odd name: {msg}"))
+            }
+        })())
     }
 
-    /// What the parent does at the barrier.
+    /// What the parent does at the barrier. The image is `<scratch>/dir/a.exe`.
     #[derive(Clone, Copy, Debug)]
-    enum Replace {
-        /// Rename the image away, then write another file at its old name.
+    pub(crate) enum Mutation {
+        /// Rename the image away, then write another file at its name.
         AwayThenWrite,
-        /// Rename another file over the image's name (replace-if-exists).
-        RenameOver,
+        /// `MoveFileExW(other, a.exe, MOVEFILE_REPLACE_EXISTING)`.
+        MoveFileExOver,
+        /// `SetFileInformationByHandle(FileRenameInfoEx)`, replace-if-exists + POSIX semantics.
+        PosixRenameOver,
+        /// Rename the image's folder away (not back) and make a new folder with another
+        /// `a.exe` at the old spelling.
+        AncestorAwayThenRecreate,
     }
 
-    fn replace(exe: &Path, how: Replace, n: usize) -> String {
-        let other = exe.with_file_name(format!("other-{n}.exe"));
-        let _ = std::fs::write(&other, format!("another build {n}"));
-        match how {
-            Replace::AwayThenWrite => {
-                match std::fs::rename(exe, exe.with_file_name(format!("away-{n}.exe"))) {
-                    Ok(()) => match std::fs::rename(&other, exe) {
-                        Ok(()) => "renamed away, replaced".into(),
-                        Err(e) => format!("renamed away, replace failed: {e}"),
-                    },
-                    Err(e) => format!("rename away refused: {e}"),
-                }
-            }
-            Replace::RenameOver => match std::fs::rename(&other, exe) {
-                Ok(()) => "renamed over".into(),
-                Err(e) => format!("rename over refused: {e}"),
-            },
+    fn posix_rename_over(src: &Path, leaf: &str) -> std::io::Result<()> {
+        let f = OpenOptions::new()
+            .access_mode(DELETE)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+            .open(src)?;
+        let name: Vec<u16> = OsStr::new(leaf).encode_wide().collect();
+        let head = std::mem::offset_of!(FILE_RENAME_INFO, FileName);
+        let size = head + name.len() * 2 + 2;
+        // u64 storage: FILE_RENAME_INFO holds a HANDLE, so it needs pointer alignment.
+        let mut buf = vec![0u64; size.div_ceil(8)];
+        let info = buf.as_mut_ptr().cast::<FILE_RENAME_INFO>();
+        // SAFETY: `buf` is zeroed, aligned and large enough for the header and the name.
+        unsafe {
+            (*info).Anonymous.Flags =
+                FILE_RENAME_FLAG_REPLACE_IF_EXISTS | FILE_RENAME_FLAG_POSIX_SEMANTICS;
+            (*info).RootDirectory = std::ptr::null_mut();
+            (*info).FileNameLength = (name.len() * 2) as u32;
+            std::ptr::copy_nonoverlapping(
+                name.as_ptr(),
+                (&raw mut (*info).FileName).cast::<u16>(),
+                name.len(),
+            );
         }
-    }
-
-    /// W1 (race): replacement at each barrier of the real sequence gives the running image's
-    /// key or none.
-    pub(crate) fn w1_race() -> Outcome {
-        let mut notes = Vec::new();
-        for how in [Replace::AwayThenWrite, Replace::RenameOver] {
-            for (i, at) in ["after-query", "after-open", "after-hash"]
-                .into_iter()
-                .enumerate()
-            {
-                let d = scratch();
-                let (exe, orig) = copy_self(d.path(), "a.exe").unwrap();
-                let mut k = Kid::spawn(&exe).unwrap();
-                k.send("key-barriers");
-                let mut did = String::from("-");
-                let result = loop {
-                    let r = k.recv();
-                    if let Some(tag) = r.strip_prefix("BARRIER ") {
-                        if tag == at {
-                            did = replace(&exe, how, i);
-                        }
-                        k.send("go");
-                    } else {
-                        break r;
-                    }
-                };
-                match judge_key(&result, &orig) {
-                    Ok(got) => notes.push(format!(
-                        "{how:?}@{at}: {did}; {}",
-                        if got { "key" } else { "no key" }
-                    )),
-                    Err(e) => return Fail(format!("{how:?}@{at}: {did}; {e}")),
-                }
-            }
-        }
-        Pass(notes.join(" | "))
-    }
-
-    /// W1 (links, case, 8.3): launch through a hard link; replace the launch link while the
-    /// other survives; launch through another case and through the short name.
-    pub(crate) fn w1_links() -> Outcome {
-        let mut notes = Vec::new();
-        // Launch through a hard link.
-        let d = scratch();
-        let (exe, orig) = copy_self(d.path(), "a.exe").unwrap();
-        let link = d.path().join("l.exe");
-        // SAFETY: NUL-terminated paths.
-        if unsafe { CreateHardLinkW(wide(&link).as_ptr(), wide(&exe).as_ptr(), std::ptr::null()) }
-            == 0
-        {
-            return Fail(format!(
-                "CreateHardLinkW: {}",
-                std::io::Error::last_os_error()
-            ));
-        }
-        let mut k = Kid::spawn(&link).unwrap();
-        let n = k.name().unwrap_or_default();
-        match judge_key(&k.ask("key"), &orig) {
-            Ok(true) => notes.push(format!(
-                "link launch: key, name {}",
-                String::from_utf16_lossy(&n)
-            )),
-            Ok(false) => notes.push("link launch: no key".into()),
-            Err(e) => return Fail(format!("link launch: {e}")),
-        }
-        // Replace the launch link; `a.exe` survives.
-        let did = match std::fs::remove_file(&link) {
-            Ok(()) => "launch link deleted".to_string(),
-            Err(e) => match std::fs::rename(&link, d.path().join("l-away.exe")) {
-                Ok(()) => format!("delete refused ({e}), renamed away"),
-                Err(e2) => format!("delete refused ({e}), rename refused ({e2})"),
-            },
+        // SAFETY: a live handle with DELETE access and the buffer built above.
+        let ok = unsafe {
+            SetFileInformationByHandle(
+                f.as_raw_handle(),
+                FileRenameInfoEx,
+                info.cast(),
+                (buf.len() * 8) as u32,
+            )
         };
-        let _ = std::fs::write(&link, "another build");
-        let n = k.name().unwrap_or_default();
-        match judge_key(&k.ask("key"), &orig) {
-            Ok(got) => notes.push(format!(
-                "{did}: {}, name {}",
-                if got { "key" } else { "no key" },
-                String::from_utf16_lossy(&n)
-            )),
-            Err(e) => return Fail(format!("{did}: {e}")),
-        }
-        drop(k);
-        // Another case.
-        let d = scratch();
-        let (exe, orig) = copy_self(d.path(), "case-probe.exe").unwrap();
-        let upper = exe.with_file_name("CASE-PROBE.EXE");
-        let mut k = Kid::spawn(&upper).unwrap();
-        let n = k.name().unwrap_or_default();
-        match judge_key(&k.ask("key"), &orig) {
-            Ok(got) => notes.push(format!(
-                "case launch: {}, name {}",
-                if got { "key" } else { "no key" },
-                String::from_utf16_lossy(&n)
-            )),
-            Err(e) => return Fail(format!("case launch: {e}")),
-        }
-        drop(k);
-        // The 8.3 name.
-        let d = scratch();
-        let (exe, orig) = copy_self(d.path(), "a-long-file-name-for-the-probe.exe").unwrap();
-        let mut short = vec![0u16; 32768];
-        // SAFETY: NUL-terminated input; the output buffer's length is given.
-        let n = unsafe {
-            GetShortPathNameW(wide(&exe).as_ptr(), short.as_mut_ptr(), short.len() as u32)
-        } as usize;
-        let short = PathBuf::from(OsString::from_wide(&short[..n.min(short.len())]));
-        if n == 0 || short == exe {
-            notes.push("8.3: no short names on this volume (skipped)".into());
+        if ok == 0 {
+            Err(std::io::Error::last_os_error())
         } else {
-            let mut k = Kid::spawn(&short).unwrap();
-            let nm = k.name().unwrap_or_default();
-            match judge_key(&k.ask("key"), &orig) {
-                Ok(got) => notes.push(format!(
-                    "8.3 launch {}: {}, name {}",
-                    short.display(),
-                    if got { "key" } else { "no key" },
-                    String::from_utf16_lossy(&nm)
-                )),
-                Err(e) => return Fail(format!("8.3 launch: {e}")),
-            }
+            Ok(())
         }
-        Pass(notes.join(" | "))
     }
 
-    /// W2: the whole sequence in this process gives this image's key (so `\\?\GLOBALROOT`
-    /// opens a device-form name).
-    pub(crate) fn w2_globalroot() -> Outcome {
-        let want = blake3_of(&mut File::open(std::env::current_exe().unwrap()).unwrap()).unwrap();
-        match image_key(&mut |_| {}) {
-            Ok(k) if k == want => Pass("key equals the file's hash".into()),
-            Ok(_) => Fail("key differs from the file's hash".into()),
+    fn mutate(how: Mutation, dir: &Path, exe: &Path, n: usize) -> std::io::Result<()> {
+        let other_bytes = format!("another build {n}");
+        match how {
+            Mutation::AwayThenWrite => {
+                std::fs::rename(exe, dir.join(format!("away-{n}.exe")))?;
+                std::fs::write(exe, other_bytes)
+            }
+            Mutation::MoveFileExOver => {
+                let other = dir.join(format!("other-{n}.exe"));
+                std::fs::write(&other, other_bytes)?;
+                // SAFETY: NUL-terminated paths.
+                let ok = unsafe {
+                    MoveFileExW(
+                        wide(&other).as_ptr(),
+                        wide(exe).as_ptr(),
+                        MOVEFILE_REPLACE_EXISTING,
+                    )
+                };
+                if ok == 0 {
+                    Err(std::io::Error::last_os_error())
+                } else {
+                    Ok(())
+                }
+            }
+            Mutation::PosixRenameOver => {
+                let other = dir.join(format!("other-{n}.exe"));
+                std::fs::write(&other, other_bytes)?;
+                posix_rename_over(&other, "a.exe")
+            }
+            Mutation::AncestorAwayThenRecreate => {
+                std::fs::rename(dir, dir.with_file_name(format!("dir-away-{n}")))?;
+                std::fs::create_dir(dir)?;
+                std::fs::write(exe, other_bytes)
+            }
+        }
+    }
+
+    /// One run of the real sequence with `how` done at barrier `at`. `Ok(note)` or `Err`.
+    fn race_once(how: Mutation, at: &str, n: usize) -> Result<String, String> {
+        let s = scratch()?;
+        let dir = s.path().join("dir");
+        std::fs::create_dir(&dir).ctx("mkdir")?;
+        let exe = dir.join("a.exe");
+        let (orig, orig_id) = copy_self(&exe)?;
+        let mut k = Kid::spawn(&exe)?;
+        k.send("key-barriers");
+        let mut did: Option<Result<String, String>> = None;
+        let result = loop {
+            let r = k.recv();
+            let Some(tag) = r.strip_prefix("BARRIER ") else {
+                break r;
+            };
+            if tag == at {
+                did = Some(match mutate(how, &dir, &exe, n) {
+                    Ok(()) => match file_id_at(&exe) {
+                        // Verified before the barrier is released: the old name opens
+                        // another file now.
+                        Ok(id) if id != orig_id => Ok("replaced (verified)".into()),
+                        Ok(_) => Err("mutation did not take: same file id at the old name".into()),
+                        Err(e) => Err(format!("mutation unverifiable: {e}")),
+                    },
+                    // Past the open, the key's own handle (no delete sharing) is what refuses:
+                    // the property the design relies on.
+                    Err(e)
+                        if at != "after-query"
+                            && matches!(
+                                e.raw_os_error(),
+                                Some(ERROR_SHARING_VIOLATION | ERROR_ACCESS_DENIED)
+                            ) =>
+                    {
+                        Ok(format!("blocked while the key's handle is held ({e})"))
+                    }
+                    Err(e) => Err(format!("refused mutation: {e}")),
+                });
+            }
+            k.send("go");
+        };
+        let did = did.ok_or("the barrier never came")??;
+        let key = judge_key(&result, &orig).map_err(|e| format!("{did}; {e}"))?;
+        Ok(format!("{did}; {}", got(key)))
+    }
+
+    fn w1_race(how: Mutation) -> Outcome {
+        let mut notes = Vec::new();
+        let mut failed = false;
+        for (i, at) in ["after-query", "after-open", "after-hash"]
+            .into_iter()
+            .enumerate()
+        {
+            match race_once(how, at, i) {
+                Ok(n) => notes.push(format!("{at}: {n}")),
+                Err(e) => {
+                    failed = true;
+                    notes.push(format!("{at}: FAIL {e}"));
+                }
+            }
+        }
+        let note = format!("{how:?}: {}", notes.join(" | "));
+        if failed { Fail(note) } else { Pass(note) }
+    }
+
+    pub(crate) fn w1_away() -> Outcome {
+        w1_race(Mutation::AwayThenWrite)
+    }
+    pub(crate) fn w1_movefileex() -> Outcome {
+        w1_race(Mutation::MoveFileExOver)
+    }
+    pub(crate) fn w1_posix() -> Outcome {
+        w1_race(Mutation::PosixRenameOver)
+    }
+    pub(crate) fn w1_ancestor() -> Outcome {
+        w1_race(Mutation::AncestorAwayThenRecreate)
+    }
+
+    /// Launch through a hard link, then replace that link while `a.exe` survives.
+    pub(crate) fn w1_hard_link() -> Outcome {
+        outcome((|| {
+            let d = scratch()?;
+            let exe = d.path().join("a.exe");
+            let (orig, orig_id) = copy_self(&exe)?;
+            let link = d.path().join("l.exe");
+            // SAFETY: NUL-terminated paths.
+            if unsafe {
+                CreateHardLinkW(wide(&link).as_ptr(), wide(&exe).as_ptr(), std::ptr::null())
+            } == 0
+            {
+                return Err(format!(
+                    "CreateHardLinkW: {}",
+                    std::io::Error::last_os_error()
+                ));
+            }
+            let mut k = Kid::spawn(&link)?;
+            let n = k.name().unwrap_or_default();
+            let first = judge_key(&k.ask("key"), &orig)?;
+            let mut notes = vec![format!("link launch: {}, name {}", got(first), lossy(&n))];
+            let how = match std::fs::remove_file(&link) {
+                Ok(()) => "launch link deleted".to_string(),
+                Err(e) => {
+                    std::fs::rename(&link, d.path().join("l-away.exe")).map_err(|e2| {
+                        format!(
+                            "refused mutation: delete ({e}) and rename ({e2}) of the launch link"
+                        )
+                    })?;
+                    format!("delete refused ({e}), renamed away")
+                }
+            };
+            std::fs::write(&link, "another build").ctx("write a new l.exe")?;
+            if file_id_at(&link).ctx("id at l.exe")? == orig_id {
+                return Err("mutation did not take".into());
+            }
+            let n = k.name().unwrap_or_default();
+            let after = judge_key(&k.ask("key"), &orig).map_err(|e| format!("{how}: {e}"))?;
+            notes.push(format!(
+                "{how}, replaced: {}, name {}",
+                got(after),
+                lossy(&n)
+            ));
+            Ok(notes.join(" | "))
+        })())
+    }
+
+    /// Launch through an upper-case spelling of the path.
+    pub(crate) fn w1_case() -> Outcome {
+        outcome((|| {
+            let d = scratch()?;
+            let exe = d.path().join("case-probe.exe");
+            let (orig, _) = copy_self(&exe)?;
+            let mut k = Kid::spawn(&exe.with_file_name("CASE-PROBE.EXE"))?;
+            let n = k.name().unwrap_or_default();
+            let r = judge_key(&k.ask("key"), &orig)?;
+            Ok(format!("{}, name {}", got(r), lossy(&n)))
+        })())
+    }
+
+    /// Launch through the 8.3 short name of a long-named leaf.
+    pub(crate) fn w1_short_name() -> Outcome {
+        let run = || -> Result<Option<String>, String> {
+            let d = scratch()?;
+            let exe = d.path().join("a-long-file-name-for-the-probe.exe");
+            let (orig, _) = copy_self(&exe)?;
+            let mut short = vec![0u16; 32768];
+            // SAFETY: NUL-terminated input; the output buffer's length is given.
+            let n = unsafe {
+                GetShortPathNameW(wide(&exe).as_ptr(), short.as_mut_ptr(), short.len() as u32)
+            } as usize;
+            if n == 0 || n >= short.len() {
+                return Err(format!(
+                    "GetShortPathNameW: {}",
+                    std::io::Error::last_os_error()
+                ));
+            }
+            let short = PathBuf::from(OsString::from_wide(&short[..n]));
+            if short.file_name() == exe.file_name() {
+                return Ok(None);
+            }
+            let mut k = Kid::spawn(&short)?;
+            let nm = k.name().unwrap_or_default();
+            let r = judge_key(&k.ask("key"), &orig)?;
+            Ok(Some(format!(
+                "launched as {}: {}, name {}",
+                short.display(),
+                got(r),
+                lossy(&nm)
+            )))
+        };
+        match run() {
+            Ok(Some(n)) => Pass(n),
+            Ok(None) => Skip("8.3 disabled on this volume (no short name was made)".into()),
             Err(e) => Fail(e),
         }
     }
 
-    /// W3: the running image refuses write and truncate opens, and allows a rename.
+    // ---------------------------------------------------------------------------------
+    // W2-W5
+    // ---------------------------------------------------------------------------------
+
+    /// W2: the whole sequence in this process gives this image's key.
+    pub(crate) fn w2_globalroot() -> Outcome {
+        outcome((|| {
+            let want = blake3_of(
+                &mut File::open(std::env::current_exe().ctx("current_exe")?).ctx("open self")?,
+            )
+            .ctx("hash self")?;
+            match image_key(&mut |_| {}) {
+                Ok(k) if k == want => Ok("key equals the file's hash".into()),
+                Ok(_) => Err("key differs from the file's hash".into()),
+                Err(e) => Err(e),
+            }
+        })())
+    }
+
+    /// W3: write and truncate opens work on an ordinary copy (controls) and are refused on
+    /// the running image; a rename of the running image works.
     pub(crate) fn w3_write_refused() -> Outcome {
-        let d = scratch();
-        let (exe, _) = copy_self(d.path(), "a.exe").unwrap();
-        let _k = Kid::spawn(&exe).unwrap();
-        let w = OpenOptions::new().write(true).open(&exe);
-        let t = OpenOptions::new().write(true).truncate(true).open(&exe);
-        let wd = OpenOptions::new().access_mode(FILE_WRITE_DATA).open(&exe);
-        let r = std::fs::rename(&exe, d.path().join("moved.exe"));
-        let del = std::fs::remove_file(d.path().join("moved.exe"));
-        let note = format!(
-            "write {:?}, truncate {:?}, write-data {:?}, rename {:?}, delete {:?}",
-            w.as_ref().err().map(|e| e.raw_os_error()),
-            t.as_ref().err().map(|e| e.raw_os_error()),
-            wd.as_ref().err().map(|e| e.raw_os_error()),
-            r.as_ref().err().map(|e| e.raw_os_error()),
-            del.as_ref().err().map(|e| e.raw_os_error()),
-        );
-        if w.is_err() && t.is_err() && wd.is_err() && r.is_ok() {
-            Pass(note)
-        } else {
-            Fail(note)
-        }
+        outcome((|| {
+            let d = scratch()?;
+            let plain = d.path().join("plain.exe");
+            copy_self(&plain)?;
+            OpenOptions::new()
+                .write(true)
+                .open(&plain)
+                .ctx("control: write open of a plain file")?;
+            OpenOptions::new()
+                .write(true)
+                .truncate(true)
+                .open(&plain)
+                .ctx("control: truncate of a plain file")?;
+            let exe = d.path().join("a.exe");
+            copy_self(&exe)?;
+            let _k = Kid::spawn(&exe)?;
+            let w = OpenOptions::new().write(true).open(&exe);
+            let t = OpenOptions::new().write(true).truncate(true).open(&exe);
+            let wd = OpenOptions::new().access_mode(FILE_WRITE_DATA).open(&exe);
+            let r = std::fs::rename(&exe, d.path().join("moved.exe"));
+            let del = std::fs::remove_file(d.path().join("moved.exe"));
+            let note = format!(
+                "running image: write {:?}, truncate {:?}, write-data {:?}, rename {:?}, delete {:?}",
+                w.as_ref().err().map(std::io::Error::raw_os_error),
+                t.as_ref().err().map(std::io::Error::raw_os_error),
+                wd.as_ref().err().map(std::io::Error::raw_os_error),
+                r.as_ref().err().map(std::io::Error::raw_os_error),
+                del.as_ref().err().map(std::io::Error::raw_os_error),
+            );
+            if w.is_err() && t.is_err() && wd.is_err() && r.is_ok() {
+                Ok(format!("controls ok; {note}"))
+            } else {
+                Err(note)
+            }
+        })())
     }
 
-    /// W4: a conflicting access handle (delete access on the image; write access on a plain
-    /// file) makes the deny-write, deny-delete open fail: no key, never a wrong one.
+    /// W4: a key before, no key (a sharing violation) while a DELETE-access handle is held, a
+    /// key after; and a write handle on a plain file refuses our open.
     pub(crate) fn w4_conflicting_access() -> Outcome {
-        let d = scratch();
-        let (exe, orig) = copy_self(d.path(), "a.exe").unwrap();
-        let mut k = Kid::spawn(&exe).unwrap();
-        let held = OpenOptions::new()
-            .access_mode(DELETE)
-            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
-            .open(&exe);
-        let Ok(held) = held else {
-            return Fail(format!(
-                "cannot open the image with DELETE access: {held:?}"
-            ));
-        };
-        let image = match judge_key(&k.ask("key"), &orig) {
-            Ok(false) => "image with a DELETE handle: no key".to_string(),
-            Ok(true) => return Fail("a key was made while a DELETE handle was open".into()),
-            Err(e) => return Fail(e),
-        };
-        drop(held);
-        let plain = d.path().join("plain.bin");
-        std::fs::write(&plain, b"data").unwrap();
-        let _w = OpenOptions::new()
-            .access_mode(FILE_WRITE_DATA)
-            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
-            .open(&plain)
-            .unwrap();
-        let ours = OpenOptions::new()
-            .read(true)
-            .share_mode(FILE_SHARE_READ)
-            .open(&plain);
-        match ours {
-            Err(e) if e.raw_os_error() == Some(ERROR_SHARING_VIOLATION as i32) => Pass(format!(
-                "{image}; plain file with a write handle: sharing violation"
-            )),
-            other => Fail(format!("plain file with a write handle: {other:?}")),
-        }
+        outcome((|| {
+            let d = scratch()?;
+            let exe = d.path().join("a.exe");
+            let (orig, _) = copy_self(&exe)?;
+            let mut k = Kid::spawn(&exe)?;
+            if !judge_key(&k.ask("key"), &orig)? {
+                return Err("no key before the conflicting handle".into());
+            }
+            let held = OpenOptions::new()
+                .access_mode(DELETE)
+                .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+                .open(&exe)
+                .ctx("open the image with DELETE access")?;
+            let during = k.ask("key");
+            if !during.starts_with("NOKEY") || !during.contains("os error 32") {
+                return Err(format!(
+                    "while a DELETE handle is held: {during:?} (want NOKEY, sharing violation)"
+                ));
+            }
+            drop(held);
+            if !judge_key(&k.ask("key"), &orig)? {
+                return Err("no key after the conflicting handle closed".into());
+            }
+            let plain = d.path().join("plain.bin");
+            std::fs::write(&plain, b"data").ctx("write plain")?;
+            let _w = OpenOptions::new()
+                .access_mode(FILE_WRITE_DATA)
+                .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+                .open(&plain)
+                .ctx("write handle on plain")?;
+            match OpenOptions::new()
+                .read(true)
+                .share_mode(FILE_SHARE_READ)
+                .open(&plain)
+            {
+                Err(e) if e.raw_os_error() == Some(ERROR_SHARING_VIOLATION) => Ok(
+                    "image: key, no key (sharing violation), key; plain file with a write handle: sharing violation"
+                        .into(),
+                ),
+                other => Err(format!("plain file with a write handle: {other:?}")),
+            }
+        })())
     }
 
-    /// W5: `std::fs::File` locks (LockFileEx): independent handles conflict, an explicit
-    /// unlock frees, and a killed holder's lock is freed (time measured).
+    fn would_block(r: Result<(), TryLockError>) -> bool {
+        matches!(r, Err(TryLockError::WouldBlock))
+    }
+
+    /// W5: `std::fs::File` locks (LockFileEx) on independent handles, explicit unlock, and a
+    /// killed holder.
     pub(crate) fn w5_locks() -> Outcome {
-        let d = scratch();
-        let p = d.path().join("x.lock");
-        std::fs::write(&p, b"").unwrap();
-        let open = || OpenOptions::new().read(true).write(true).open(&p).unwrap();
-        let (a, b) = (open(), open());
-        let mut bad = Vec::new();
-        if a.try_lock().is_err() {
-            bad.push("first exclusive failed");
-        }
-        if b.try_lock_shared().is_ok() {
-            bad.push("shared granted beside exclusive");
-        }
-        if b.try_lock().is_ok() {
-            bad.push("exclusive granted twice");
-        }
-        a.unlock().unwrap();
-        if b.try_lock_shared().is_err() {
-            bad.push("shared refused after unlock");
-        }
-        if a.try_lock_shared().is_err() {
-            bad.push("two shared refused");
-        }
-        if b.try_lock().is_ok() {
-            bad.push("exclusive granted beside shared");
-        }
-        drop((a, b));
-        // A killed holder.
-        let (exe, _) = copy_self(d.path(), "a.exe").unwrap();
-        let mut k = Kid::spawn(&exe).unwrap();
-        if k.ask(&format!("lock {}", p.display())) != "LOCKED" {
-            return Fail("child could not lock".into());
-        }
-        let c = open();
-        if c.try_lock().is_ok() {
-            bad.push("exclusive granted beside a child's");
-        }
-        let _ = k.proc.kill();
-        let _ = k.proc.wait();
-        let t = Instant::now();
-        let freed = loop {
-            if c.try_lock().is_ok() {
-                break Some(t.elapsed());
+        outcome((|| {
+            let d = scratch()?;
+            let p = d.path().join("x.lock");
+            std::fs::write(&p, b"").ctx("make lock file")?;
+            let open = || OpenOptions::new().read(true).write(true).open(&p);
+            let (a, b, c) = (open().ctx("a")?, open().ctx("b")?, open().ctx("c")?);
+            let mut bad = Vec::new();
+            if a.try_lock().is_err() {
+                bad.push("a: first exclusive failed");
             }
-            if t.elapsed() > Duration::from_secs(10) {
-                break None;
+            if !would_block(b.try_lock_shared()) {
+                bad.push("b: shared beside exclusive is not WouldBlock");
             }
-            std::thread::sleep(Duration::from_millis(20));
-        };
-        match (bad.is_empty(), freed) {
-            (true, Some(e)) => Pass(format!("killed holder's lock freed after {e:?}")),
-            (_, f) => Fail(format!("{bad:?}; killed holder's lock freed: {f:?}")),
-        }
+            if !would_block(b.try_lock()) {
+                bad.push("b: exclusive beside exclusive is not WouldBlock");
+            }
+            a.unlock().ctx("a: unlock")?;
+            if b.try_lock().is_err() {
+                bad.push("b: exclusive refused after a's unlock");
+            }
+            b.unlock().ctx("b: unlock")?;
+            if a.try_lock_shared().is_err() || b.try_lock_shared().is_err() {
+                bad.push("two shared locks refused");
+            }
+            if !would_block(c.try_lock()) {
+                bad.push("c: exclusive beside two shared is not WouldBlock");
+            }
+            drop((a, b));
+            if c.try_lock().is_err() {
+                bad.push("c: exclusive refused after the shared handles closed");
+            }
+            drop(c);
+            let exe = d.path().join("a.exe");
+            copy_self(&exe)?;
+            let mut k = Kid::spawn(&exe)?;
+            if k.ask(&format!("lock {}", p.display())) != "LOCKED" {
+                return Err("child could not lock".into());
+            }
+            let e = open().ctx("e")?;
+            if !would_block(e.try_lock()) {
+                bad.push("e: exclusive beside a child's is not WouldBlock");
+            }
+            let _ = k.proc.kill();
+            let _ = k.proc.wait();
+            let t = Instant::now();
+            let freed = loop {
+                if e.try_lock().is_ok() {
+                    break Some(t.elapsed());
+                }
+                if t.elapsed() > Duration::from_secs(10) {
+                    break None;
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            };
+            match (bad.is_empty(), freed) {
+                (true, Some(el)) => Ok(format!("killed holder's lock freed after {el:?}")),
+                (_, f) => Err(format!("{bad:?}; killed holder's lock freed: {f:?}")),
+            }
+        })())
     }
 
-    // --- W6: the private check (prototype of the product rule, design note section 4) ---
+    // ---------------------------------------------------------------------------------
+    // W6: the private rule (design note section 6), top-down from the volume root
+    // ---------------------------------------------------------------------------------
 
-    const LEAF_BAD: u32 = FILE_ADD_FILE | FILE_ADD_SUBDIRECTORY;
+    /// Rights no one but the trusted may hold on any path element.
     const CHAIN_BAD: u32 =
         DELETE | WRITE_DAC | WRITE_OWNER | FILE_DELETE_CHILD | GENERIC_WRITE | GENERIC_ALL;
+    /// Also refused on cache folders, entries and lock files (`FILE_WRITE_DATA` and
+    /// `FILE_APPEND_DATA` are the same bits).
+    const LEAF_BAD: u32 = CHAIN_BAD | FILE_ADD_FILE | FILE_ADD_SUBDIRECTORY;
+
+    /// The trusted principals as SID strings: the user, SYSTEM, Administrators,
+    /// TrustedInstaller (the owner of system folders such as a volume root).
+    struct Trust(Vec<String>);
+
+    fn sid_string(sid: PSID) -> Option<String> {
+        let mut p: *mut u16 = std::ptr::null_mut();
+        // SAFETY: a valid SID; `p` is freed with LocalFree below.
+        if unsafe { ConvertSidToStringSidW(sid, &mut p) } == 0 {
+            return None;
+        }
+        // SAFETY: a NUL-terminated string from the call above.
+        let s = unsafe {
+            let len = (0..).take_while(|&i| *p.add(i) != 0).count();
+            lossy(std::slice::from_raw_parts(p, len))
+        };
+        // SAFETY: allocated by ConvertSidToStringSidW.
+        unsafe { LocalFree(p.cast()) };
+        Some(s)
+    }
+
+    fn trust() -> Result<Trust, String> {
+        let mut tok: HANDLE = std::ptr::null_mut();
+        // SAFETY: the current process's pseudo-handle; `tok` is closed below.
+        if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut tok) } == 0 {
+            return Err(format!(
+                "OpenProcessToken: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        // u64 storage: TOKEN_USER holds pointers and needs their alignment.
+        let mut buf = vec![0u64; 128];
+        let mut len = 0u32;
+        // SAFETY: the buffer and its length in bytes match.
+        let ok = unsafe {
+            GetTokenInformation(
+                tok,
+                TokenUser,
+                buf.as_mut_ptr().cast(),
+                (buf.len() * 8) as u32,
+                &mut len,
+            )
+        };
+        // SAFETY: opened above.
+        unsafe { CloseHandle(tok) };
+        if ok == 0 {
+            return Err(format!(
+                "GetTokenInformation: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        // SAFETY: the call filled an aligned TOKEN_USER.
+        let user = unsafe { (*buf.as_ptr().cast::<TOKEN_USER>()).User.Sid };
+        let user = sid_string(user).ok_or("the user's SID")?;
+        Ok(Trust(vec![
+            user,
+            "S-1-5-18".into(),
+            "S-1-5-32-544".into(),
+            "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464".into(),
+        ]))
+    }
+
+    impl Trust {
+        fn has(&self, sid: PSID) -> bool {
+            sid_string(sid).is_some_and(|s| self.0.contains(&s))
+        }
+    }
 
     struct Sd(*mut c_void);
     impl Drop for Sd {
@@ -722,58 +1080,20 @@ mod win {
         }
     }
 
-    fn user_sid() -> Vec<u8> {
-        let mut tok: HANDLE = std::ptr::null_mut();
-        // SAFETY: the current process's pseudo-handle; `tok` is closed below.
-        assert!(unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut tok) } != 0);
-        let mut buf = vec![0u8; 512];
-        let mut len = 0u32;
-        // SAFETY: the buffer and its length match.
-        let ok = unsafe {
-            GetTokenInformation(
-                tok,
-                TokenUser,
-                buf.as_mut_ptr().cast(),
-                buf.len() as u32,
-                &mut len,
-            )
-        };
-        // SAFETY: opened above.
-        unsafe { CloseHandle(tok) };
-        assert!(ok != 0);
-        buf
-    }
-
-    fn trusted(sid: PSID, user: &[u8]) -> bool {
-        // SAFETY: `user` holds a TOKEN_USER (from `user_sid`), live for the call; `sid` is valid.
-        unsafe {
-            let tu = &*(user.as_ptr() as *const TOKEN_USER);
-            EqualSid(sid, tu.User.Sid) != 0
-                || IsWellKnownSid(sid, WinLocalSystemSid) != 0
-                || IsWellKnownSid(sid, WinBuiltinAdministratorsSid) != 0
-        }
-    }
-
-    /// One object: no reparse point, a DACL, a trusted owner, and no allow ACE for anyone
-    /// else carrying a right in `bad`. Unknown ACE types refuse.
-    fn check_one(p: &Path, bad: u32, user: &[u8]) -> Result<(), String> {
-        let f = OpenOptions::new()
-            .access_mode(READ_CONTROL | FILE_READ_ATTRIBUTES)
-            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
-            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
-            .open(p)
-            .map_err(|e| format!("{}: open: {e}", p.display()))?;
-        let attrs = f.metadata().map_err(|e| e.to_string())?.file_attributes();
+    /// The rule on an open handle (it needs READ_CONTROL and attribute access): not a reparse
+    /// point, a DACL, a trusted owner, and no allow ACE that applies to the object giving an
+    /// untrusted principal a right in `bad`. Deny ACEs are skipped; other ACE types refuse.
+    fn check_handle(f: &File, bad: u32, t: &Trust) -> Result<(), String> {
+        let attrs = f.metadata().ctx("stat")?.file_attributes();
         if attrs & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-            return Err(format!("{}: a reparse point", p.display()));
+            return Err("a reparse point".into());
         }
         let (mut owner, mut dacl, mut sd): (PSID, *mut ACL, *mut c_void) = (
             std::ptr::null_mut(),
             std::ptr::null_mut(),
             std::ptr::null_mut(),
         );
-        // SAFETY: a live handle opened with READ_CONTROL; out-pointers are valid; `sd` is freed
-        // by `Sd`.
+        // SAFETY: a live handle; the out-pointers are valid; `sd` is freed by `Sd`.
         let err = unsafe {
             GetSecurityInfo(
                 f.as_raw_handle(),
@@ -787,16 +1107,16 @@ mod win {
             )
         };
         if err != 0 {
-            return Err(format!("{}: GetSecurityInfo {err}", p.display()));
+            return Err(format!("GetSecurityInfo error {err}"));
         }
         let _sd = Sd(sd);
         if dacl.is_null() {
-            return Err(format!("{}: a null DACL", p.display()));
+            return Err("an absent or null DACL".into());
         }
-        if owner.is_null() || !trusted(owner, user) {
+        if owner.is_null() || !t.has(owner) {
             return Err(format!(
-                "{}: owner is not the user, SYSTEM or Administrators",
-                p.display()
+                "owner {:?} is not trusted",
+                (!owner.is_null()).then(|| sid_string(owner))
             ));
         }
         // SAFETY: `dacl` points into `sd`, alive until `_sd` drops.
@@ -805,7 +1125,7 @@ mod win {
             let mut ace: *mut c_void = std::ptr::null_mut();
             // SAFETY: i < AceCount.
             if unsafe { GetAce(dacl, u32::from(i), &mut ace) } == 0 {
-                return Err(format!("{}: unreadable ACE {i}", p.display()));
+                return Err(format!("unreadable ACE {i}"));
             }
             // SAFETY: every ACE starts with an ACE_HEADER.
             let h = unsafe { *(ace as *const ACE_HEADER) };
@@ -813,156 +1133,242 @@ mod win {
                 continue; // applies to children only
             }
             match u32::from(h.AceType) {
-                ACCESS_DENIED_ACE_TYPE => continue,
+                ACCESS_DENIED_ACE_TYPE => {}
                 ACCESS_ALLOWED_ACE_TYPE => {
                     // SAFETY: the type says ACCESS_ALLOWED_ACE.
                     let a = unsafe { &*(ace as *const ACCESS_ALLOWED_ACE) };
-                    let sid = (&a.SidStart as *const u32).cast_mut().cast();
-                    if a.Mask & bad != 0 && !trusted(sid, user) {
+                    let sid: PSID = (&raw const a.SidStart).cast_mut().cast();
+                    if a.Mask & bad != 0 && !t.has(sid) {
                         return Err(format!(
-                            "{}: ACE {i} gives another principal {:#x}",
-                            p.display(),
+                            "ACE {i} gives {:?} rights {:#x}",
+                            sid_string(sid),
                             a.Mask & bad
                         ));
                     }
                 }
-                t => {
-                    return Err(format!(
-                        "{}: ACE {i} of a type not interpreted ({t})",
-                        p.display()
-                    ));
-                }
+                other => return Err(format!("ACE {i} of a type not interpreted ({other})")),
             }
         }
         Ok(())
     }
 
-    /// The rule: the leaf with the leaf rights, then the leaf and every ancestor up to the
-    /// volume root with the rights that could replace, rename or re-ACL a path element.
-    fn check_private_dir(dir: &Path, user: &[u8]) -> Result<(), String> {
-        check_one(dir, LEAF_BAD | CHAIN_BAD, user)?;
-        for a in dir.ancestors().skip(1) {
-            check_one(a, CHAIN_BAD, user)?;
-        }
-        Ok(())
+    /// Open one path element for checking: attributes and READ_CONTROL, not following a
+    /// reparse point, sharing read and write but not delete, so it cannot be renamed while
+    /// the walk holds it.
+    fn open_element(p: &Path) -> std::io::Result<File> {
+        OpenOptions::new()
+            .access_mode(READ_CONTROL | FILE_READ_ATTRIBUTES)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(p)
     }
 
-    fn icacls(p: &Path, args: &[&str]) {
+    /// The walk: from `\\?\X:\` down to `dir`, each element opened and checked before the next
+    /// is opened under it (a reparse point is refused before descending), every element with
+    /// [`CHAIN_BAD`], `dir` itself with [`LEAF_BAD`]. With `create`, a missing element is made
+    /// under its checked parent, then checked. Returns the rooted spelling all I/O must use.
+    fn walk(dir: &Path, create: bool, t: &Trust) -> Result<PathBuf, String> {
+        let mut comps = dir.components();
+        let root = match comps.next() {
+            Some(Component::Prefix(p)) => match p.kind() {
+                Prefix::Disk(l) | Prefix::VerbatimDisk(l) => {
+                    PathBuf::from(format!(r"\\?\{}:\", char::from(l)))
+                }
+                other => return Err(format!("not a drive-letter path: {other:?}")),
+            },
+            _ => return Err("not an absolute path".into()),
+        };
+        if comps.next() != Some(Component::RootDir) {
+            return Err("not an absolute path".into());
+        }
+        let names: Vec<&OsStr> = comps
+            .map(|c| match c {
+                Component::Normal(n) => Ok(n),
+                other => Err(format!("a {other:?} component")),
+            })
+            .collect::<Result<_, _>>()?;
+        let mut held = Vec::new();
+        let f = open_element(&root).ctx("open the volume root")?;
+        local_ntfs(&f)?;
+        let bad = if names.is_empty() {
+            LEAF_BAD
+        } else {
+            CHAIN_BAD
+        };
+        check_handle(&f, bad, t).map_err(|e| format!("{}: {e}", root.display()))?;
+        held.push(f);
+        let mut cur = root;
+        for (i, n) in names.iter().enumerate() {
+            cur.push(n);
+            let f = match open_element(&cur) {
+                Err(e) if e.kind() == ErrorKind::NotFound && create => {
+                    std::fs::create_dir(&cur).ctx(&format!("create {}", cur.display()))?;
+                    open_element(&cur).ctx(&format!("open {}", cur.display()))?
+                }
+                r => r.ctx(&format!("open {}", cur.display()))?,
+            };
+            let bad = if i + 1 == names.len() {
+                LEAF_BAD
+            } else {
+                CHAIN_BAD
+            };
+            check_handle(&f, bad, t).map_err(|e| format!("{}: {e}", cur.display()))?;
+            held.push(f);
+        }
+        Ok(cur)
+    }
+
+    fn icacls(p: &Path, args: &[&str]) -> Result<(), String> {
         let st = Command::new("icacls")
             .arg(p)
             .args(args)
             .stdout(Stdio::null())
-            .status();
-        assert!(
-            st.is_ok_and(|s| s.success()),
-            "icacls {} {args:?}",
-            p.display()
-        );
+            .status()
+            .ctx("icacls")?;
+        st.success()
+            .then_some(())
+            .ok_or(format!("icacls {} {args:?}: {st}", p.display()))
     }
 
-    /// W6: the default root passes; a leaf other users can write, a private leaf under a
-    /// parent they can rename, a junction, and a permissive entry are refused.
+    /// W6: the real roots (text, IR, override) pass the walk, made only under checked parents;
+    /// a fresh entry and lock file pass on their own handles; refused: a leaf others can
+    /// modify, a private leaf under a parent others can delete children of, a junction, an
+    /// entry others can modify.
     pub(crate) fn w6_private() -> Outcome {
-        let user = user_sid();
-        let Some(lad) = dirs_cache() else {
-            return Skip("no LOCALAPPDATA".into());
-        };
-        let mut notes = Vec::new();
-        if let Err(e) = check_private_dir(&lad, &user) {
-            return Fail(format!("the default root is refused: {e}"));
-        }
-        notes.push("LOCALAPPDATA chain passes".to_string());
-        let d = tempfile::Builder::new()
-            .prefix("tls117-")
-            .tempdir_in(&lad)
-            .unwrap();
-        // A leaf others can write.
-        let open = d.path().join("open");
-        std::fs::create_dir(&open).unwrap();
-        icacls(&open, &["/grant", "*S-1-1-0:(M)"]);
-        match check_private_dir(&open, &user) {
-            Err(e) => notes.push(format!("open leaf refused ({e})")),
-            Ok(()) => return Fail("a leaf Everyone can modify passed".into()),
-        }
-        // A private leaf under a parent others can rename children of.
-        let parent = d.path().join("parent");
-        let leaf = parent.join("leaf");
-        std::fs::create_dir_all(&leaf).unwrap();
-        icacls(&parent, &["/grant", "*S-1-1-0:(DC)"]);
-        match (
-            check_one(&leaf, LEAF_BAD | CHAIN_BAD, &user),
-            check_private_dir(&leaf, &user),
-        ) {
-            (Ok(()), Err(e)) => notes.push(format!("replaceable parent refused ({e})")),
-            other => return Fail(format!("replaceable parent: {other:?}")),
-        }
-        // A junction.
-        let target = d.path().join("target");
-        std::fs::create_dir(&target).unwrap();
-        let junction = d.path().join("junction");
-        let st = Command::new("cmd")
-            .args(["/C", "mklink", "/J"])
-            .arg(&junction)
-            .arg(&target)
-            .stdout(Stdio::null())
-            .status();
-        if st.is_ok_and(|s| s.success()) {
-            match check_private_dir(&junction, &user) {
-                Err(e) => notes.push(format!("junction refused ({e})")),
-                Ok(()) => return Fail("a junction passed".into()),
+        outcome((|| {
+            let t = trust()?;
+            let mut notes = Vec::new();
+            let mut probe_override = None;
+            for (what, p) in cache_roots()? {
+                if what == "probe override" {
+                    probe_override = p.parent().map(Path::to_path_buf);
+                }
+                let rooted = walk(&p, true, &t).map_err(|e| format!("{what} refused: {e}"))?;
+                notes.push(format!("{what} {} passes", rooted.display()));
             }
-        } else {
-            notes.push("junction not made (skipped)".into());
-        }
-        // A permissive entry in a private folder.
-        let entry = d.path().join("entry.bin");
-        std::fs::write(&entry, b"x").unwrap();
-        icacls(&entry, &["/grant", "*S-1-1-0:(M)"]);
-        match check_one(&entry, LEAF_BAD | CHAIN_BAD, &user) {
-            Err(e) => notes.push(format!("permissive entry refused ({e})")),
-            Ok(()) => return Fail("an entry Everyone can modify passed".into()),
-        }
-        Pass(notes.join(" | "))
+            let lad = dirs::cache_dir().ok_or("no per-user cache folder")?;
+            walk(&lad, false, &t)?;
+            let d = tempfile::Builder::new()
+                .prefix("tls117-")
+                .tempdir_in(&lad)
+                .ctx("scratch under the cache folder")?;
+            // The entry and lock use the walk's rooted spelling; the negative cases below use
+            // the plain spelling, because icacls and mklink do not take `\\?\` paths.
+            let checked = walk(d.path(), false, &t).ctx("scratch folder")?;
+            let plain = d.path();
+            // A fresh entry and a lock file, checked on the handles that read and lock them.
+            let entry = checked.join("entry.bin");
+            std::fs::write(&entry, b"x").ctx("write entry")?;
+            check_handle(&File::open(&entry).ctx("open entry")?, LEAF_BAD, &t)
+                .map_err(|e| format!("a fresh entry refused: {e}"))?;
+            let lock = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .open(checked.join("x.lock"))
+                .ctx("open lock")?;
+            check_handle(&lock, LEAF_BAD, &t).map_err(|e| format!("a fresh lock refused: {e}"))?;
+            notes.push("fresh entry and lock pass".into());
+            // A leaf others can modify.
+            let open = plain.join("open");
+            std::fs::create_dir(&open).ctx("mkdir open")?;
+            icacls(&open, &["/grant", "*S-1-1-0:(M)"])?;
+            match walk(&open, false, &t) {
+                Err(e) => notes.push(format!("open leaf refused ({e})")),
+                Ok(_) => return Err("a leaf Everyone can modify passed".into()),
+            }
+            // A private leaf under a parent others can delete children of.
+            let parent = plain.join("parent");
+            let leaf = parent.join("leaf");
+            std::fs::create_dir_all(&leaf).ctx("mkdir parent/leaf")?;
+            icacls(&parent, &["/grant", "*S-1-1-0:(DC)"])?;
+            let leaf_alone = check_handle(&open_element(&leaf).ctx("open leaf")?, LEAF_BAD, &t);
+            match (leaf_alone, walk(&leaf, false, &t)) {
+                (Ok(()), Err(e)) => notes.push(format!("replaceable parent refused ({e})")),
+                other => return Err(format!("replaceable parent: {other:?}")),
+            }
+            // A junction.
+            let target = plain.join("target");
+            std::fs::create_dir(&target).ctx("mkdir target")?;
+            let junction = plain.join("junction");
+            let st = Command::new("cmd")
+                .args(["/C", "mklink", "/J"])
+                .arg(&junction)
+                .arg(&target)
+                .stdout(Stdio::null())
+                .status()
+                .ctx("mklink")?;
+            if !st.success() {
+                return Err(format!("mklink /J failed: {st}"));
+            }
+            match walk(&junction.join("below"), false, &t) {
+                Err(e) if e.contains("reparse") => notes.push(format!("junction refused ({e})")),
+                other => return Err(format!("junction: {other:?}")),
+            }
+            // An entry others can modify.
+            let loose = plain.join("loose.bin");
+            std::fs::write(&loose, b"x").ctx("write loose")?;
+            icacls(&loose, &["/grant", "*S-1-1-0:(M)"])?;
+            match check_handle(&File::open(&loose).ctx("open loose")?, LEAF_BAD, &t) {
+                Err(e) => notes.push(format!("permissive entry refused ({e})")),
+                Ok(()) => return Err("an entry Everyone can modify passed".into()),
+            }
+            if let Some(o) = probe_override {
+                let _ = std::fs::remove_dir_all(o);
+            }
+            Ok(notes.join(" | "))
+        })())
     }
 
-    /// W7: deleting a file another handle holds open (sharing delete): does the name go at
-    /// once (POSIX semantics), and can its folder then be removed?
+    /// W7: delete a file another handle holds open (sharing delete): the delete succeeds;
+    /// whether its name goes at once and whether its folder can then be removed is recorded,
+    /// with NotFound kept apart from an access error.
     pub(crate) fn w7_delete_open() -> Outcome {
-        let d = scratch();
-        let sub = d.path().join("k");
-        std::fs::create_dir(&sub).unwrap();
-        let f = sub.join("e.bin");
-        std::fs::write(&f, b"x").unwrap();
-        let h = OpenOptions::new()
-            .read(true)
-            .share_mode(FILE_SHARE_READ | FILE_SHARE_DELETE)
-            .open(&f)
-            .unwrap();
-        let del = std::fs::remove_file(&f);
-        let gone = !f.exists();
-        let rmdir = std::fs::remove_dir(&sub);
-        drop(h);
-        let note = format!(
-            "delete {:?}, name gone at once {gone}, folder removed while open {:?}",
-            del.as_ref().map_err(|e| e.raw_os_error()),
-            rmdir.as_ref().map_err(|e| e.raw_os_error())
-        );
-        if del.is_ok() { Pass(note) } else { Fail(note) }
+        outcome((|| {
+            let d = scratch()?;
+            let sub = d.path().join("k");
+            std::fs::create_dir(&sub).ctx("mkdir")?;
+            let f = sub.join("e.bin");
+            std::fs::write(&f, b"x").ctx("write")?;
+            let h = OpenOptions::new()
+                .read(true)
+                .share_mode(FILE_SHARE_READ | FILE_SHARE_DELETE)
+                .open(&f)
+                .ctx("open")?;
+            std::fs::remove_file(&f).ctx("delete while open")?;
+            let name = match std::fs::symlink_metadata(&f) {
+                Err(e) if e.kind() == ErrorKind::NotFound => "name gone at once".to_string(),
+                Ok(_) => "name still there (delete pending)".to_string(),
+                Err(e) => format!("name state unreadable: {e}"),
+            };
+            let folder = match std::fs::remove_dir(&sub) {
+                Ok(()) => "folder removed while the file was open".to_string(),
+                Err(e) => format!("folder not removed while open ({e})"),
+            };
+            drop(h);
+            Ok(format!("delete ok; {name}; {folder}"))
+        })())
     }
 
     type Item = (&'static str, fn() -> Outcome);
 
     pub(crate) fn all() -> Vec<Item> {
         vec![
-            ("W0 NTFS volumes", w0_ntfs),
+            ("W0 local NTFS: image and cache roots", w0_local),
             ("W1 mapped name follows a rename", w1_name_follows_rename),
-            ("W1 race at each step", w1_race),
-            ("W1 links, case, 8.3", w1_links),
+            ("W1 rename away + write", w1_away),
+            ("W1 MoveFileEx replace", w1_movefileex),
+            ("W1 POSIX rename replace", w1_posix),
+            ("W1 ancestor folder replaced", w1_ancestor),
+            ("W1 hard link", w1_hard_link),
+            ("W1 other case", w1_case),
+            ("W1 8.3 short name", w1_short_name),
             ("W2 GLOBALROOT open and key", w2_globalroot),
             ("W3 running image refuses write", w3_write_refused),
             ("W4 conflicting access handle", w4_conflicting_access),
             ("W5 std::fs::File locks", w5_locks),
-            ("W6 private folder check", w6_private),
+            ("W6 private folder walk", w6_private),
             ("W7 delete while open", w7_delete_open),
         ]
     }
@@ -1013,19 +1419,39 @@ mod win {
 
         #[test]
         fn w0() {
-            check(w0_ntfs());
+            check(w0_local());
         }
         #[test]
         fn w1_name() {
             check(w1_name_follows_rename());
         }
         #[test]
-        fn w1_race_each_step() {
-            check(w1_race());
+        fn w1_rename_away() {
+            check(w1_away());
         }
         #[test]
-        fn w1_links_case_short() {
-            check(w1_links());
+        fn w1_move_file_ex() {
+            check(w1_movefileex());
+        }
+        #[test]
+        fn w1_posix_rename() {
+            check(w1_posix());
+        }
+        #[test]
+        fn w1_ancestor_folder() {
+            check(w1_ancestor());
+        }
+        #[test]
+        fn w1_link() {
+            check(w1_hard_link());
+        }
+        #[test]
+        fn w1_other_case() {
+            check(w1_case());
+        }
+        #[test]
+        fn w1_short() {
+            check(w1_short_name());
         }
         #[test]
         fn w2() {
