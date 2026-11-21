@@ -1,10 +1,11 @@
-# ENG-110: persistent cache of parsed dependency IR (design, rev. 4, 2026-11-21)
+# ENG-110: persistent cache of parsed dependency IR (design, rev. 5, 2026-11-21)
 
 Status: a spec for review. No product code. ENG-113 (the package-text cache this one stands on)
-has landed; rev. 4 is written against current master (`c80f1391`) and folds in sol's review r1
-(5 P1, 2 P2), each point checked against the source first. The measurements come from a
-throwaway prototype that never lands: branch `tools/eng-110-proto` (`bf12e42a`), with serde
-derives on `al-syntax`'s IR and `examples/eng110_probe.rs`.
+has landed. Rev. 5 is written against master `c80f1391`. It folds in sol's review r2, Fable's
+review r3 and the orchestrator's decision to key the cache on the running binary. Each point was
+checked against the source first. The measurements come from a throwaway prototype that never
+lands: branch `tools/eng-110-proto` (`bf12e42a`), with serde derives on `al-syntax`'s IR and
+`examples/eng110_probe.rs`.
 
 "Not verified" marks every claim this revision could not check against source or a run.
 
@@ -14,519 +15,467 @@ Every engine process parses and lowers every dependency file again: about 24 CPU
 CDO, and every gate runs several processes. A cache hit should replace that with a read, a check
 and a decode.
 
-**Bar** (how each is measured: Acceptance below):
+**Bar** (how each is measured: Acceptance below; the judgment rule is fixed there before any run):
 - (a) **Warm cache, one-shot `alsem analyze` on CDO:** at least 30 % fewer user-mode instructions
-  than master, from the one-shot protocol (not cdo-speed: cdo-speed times resident `alsem mcp`
-  calls, and its instruction ratio is advisory). The resident model build (cdo-speed's `build`
-  call) and a full `cdo-gate`'s wall time are reported, not judged.
-- (b) **Byte-identical output**, cache off, cold and warm: goldens, the deterministic output files
-  of the CDO commands compared byte for byte, the refresh verify in both modes against a cache-off
-  rebuild, `cdo-gate --only harness,l4,output`. Every warm phase must show the expected hit
-  coverage (a silent fall back to parsing is identical by definition).
-- (c) **A cold miss** costs at most +5 % instructions over master. With the cache off, at most
-  +1 %. Peak RSS of a cold miss, alone and four at once, is reported.
+  than master. The resident model build (cdo-speed) and a full `cdo-gate`'s wall time are
+  reported, not judged by this bar.
+- (b) **Byte-identical output:** master, head with the cache off, cold and warm all give the same
+  bytes; goldens; the refresh verify in both modes against a cache-off rebuild;
+  `cdo-gate --only harness,l4,output`. Every warm run must show full hit coverage over a nonzero
+  count of files that reached the seam.
+- (c) **A cold miss** costs at most +5 % instructions over master; the cache off at most +1 %.
+  Because the key is the binary (below), every new build pays (c) once, so (c) is also the price of
+  each rebuild. Peak RSS of a cold miss, alone and four at once, is reported.
 
 ## Measured ceiling (server1, CDO baseline `bc3ccb18`, master `a73b4bf6`)
 
 - **One-shot `alsem analyze`** spends 25.4-25.5 CPU-s of 57 in `al_syntax::parse` (parse plus
-  lower): 44.7-45.0 % in two samply profiles. With `--single-app` it is 25.4 CPU-s of 30.4:
-  every process parses every package.
+  lower): 44.7-45.0 % in two samply profiles. With `--single-app` it is 25.4 CPU-s of 30.4.
 - **Dependencies** are 96 % of the source bytes: 10,881 of 11,463 files, 115.5 of 120.4 MiB, in
   11 packages (`probe3.log`). So dependency parsing is ≈24 CPU-s a process.
 - **In instructions:** the parser and lowerer symbols' self shares in ENG-112's `perf record` are
-  ≈32 % of P-core and ≈53 % of E-core user instructions, ≈39 % combined. A lower bound: it leaves
-  out the allocator under the parse, and 12,464 samples were lost.
+  ≈32 % of P-core and ≈53 % of E-core user instructions, ≈39 % combined; a lower bound.
 - **The prototype**, single thread, all dependency files, in `/work/.al-sem/profiles/2026-11-18-eng110`
-  (`probe.log`, `probe2.log`, `probe3.log`; a fourth run's log was overwritten):
+  (`probe.log`, `probe2.log`, `probe3.log`):
   - parse+lower: 11.4-12.9 CPU-s;
   - encode: 0.27-0.29 CPU-s;
   - decode: 0.32-0.37 CPU-s, 2.6-3.2 % of parse+lower;
-  - size: 143.9 MiB postcard (78.5 MiB deflated).
+  - size: 143.9 MiB postcard (78.5 MiB deflated), 1.25× the source bytes.
 
-  The engine's parse is ~2× the single-thread figure: its pool runs on all 22 threads. The probe's
-  own parallel parse read ~4.3× (49.64 CPU-s, `probe3.log`) on the system allocator; the engine
-  uses mimalloc. These logs support a codec-cost estimate only. **The 30 % end-to-end claim is
-  unproven until the one-shot protocol measures it** (sol r1).
-- **Not in the probe:** the blake3 pass over each entry (~144 MiB, tens of ms at blake3 speed;
-  not verified on server1), the read into an owned buffer, and the IR check pass. All three are
-  inside the warm measure.
+  The probe's parallel parse read ~4.3× (49.64 CPU-s) on the system allocator; the engine uses
+  mimalloc. These logs support a codec-cost estimate only. **The 30 % end-to-end claim is unproven
+  until the one-shot protocol measures it.**
+- **Not in the probe:** the blake3 over each entry, the owned read, the IR check pass, and the
+  binary-key hash (Key). All are inside the warm measure.
 - **Heap.** The IR held after a decode is 476.5 MiB in 4.66 M allocations, against 498.3 MiB in
-  4.31 M after a parse (counting allocator in the probe). Shared `Arc<str>` type texts decode
-  separately (+8 % allocations), but the total is lower. The engine census confirms it per process.
-  Exact-size arenas after a decode are not guaranteed (serde grows them by doubling); `exact_size`
-  runs on them after decode, as after a parse.
-- **The largest package's entry size is not measured** (no per-package line in the probe). It sets
-  the owned-read peak (Design 4). Measured in the first implementation step.
+  4.31 M after a parse (counting allocator in the probe). `exact_size` runs after decode, as after
+  a parse.
+- **Not measured yet:** the largest package's entry size (it sets the owned-read peak), and the
+  hash cost of the `alsem` binary (48.2-48.9 MB for the `release-fast` builds in this host's
+  worktrees). Both are the first implementation step's measures.
 
-## The key: what the IR depends on
+## The key: the running binary
 
-`al_syntax::parse(source)` is a function of the text, the grammar compiled in, the tree-sitter
-runtime, the lowerer's code and the toolchain. `char::to_lowercase`'s tables feed
-`another_declaration_lacks`. No preprocessor symbols and no app context reach it: `parse(&str)`
-takes the text alone, TLS-67 builds a fresh `tree_sitter::Parser` per file
-(`crates/al-syntax/src/parse.rs`), and `#if` arms are kept in the IR. Lowerer thread-locals are
-scratch only after the change in "Lowerer state" below.
+**Decision (orchestrator, rev. 5; sol r2 P1-1).** Rev. 4 rebuilt the key from build inputs. sol r2
+showed it still open: a cargo `paths` override changes the parser or codec without touching
+`Cargo.lock` or any file a build script sees; root-crate cfgs do not establish dependency cfgs;
+the grammar compiler fingerprint does not cover the tree-sitter runtime's own native build. Any
+list of inputs can miss one. So the key is the producer itself.
 
-An entry is valid only for one text and one `IR_KEY`. A false miss costs a parse; a false hit is a
-wrong answer. The key over-approximates on purpose.
+- **`IR_KEY` = blake3 of the running executable's bytes, plus the IR format number.** Whatever
+  produces or reads the IR (the grammar's C code, the tree-sitter runtime, the lowerer, the codec,
+  features, cfgs, profile, target, `--config` and `paths` overrides, the toolchain) is compiled
+  into those bytes. A change in any of them changes the key. No wrong hit can come through the
+  build.
+- **Read through an opened handle, the image that is running:**
+  - Linux: open `/proc/self/exe`. It is the inode the process runs, even if the path was replaced
+    or unlinked after start (a rebuild while an engine runs).
+  - Windows: the path of the loaded image (`GetMappedFileNameW` on the module's base address,
+    which follows a rename of the running file; then opened denying write sharing). **Not
+    verified on Windows.** If the implementation cannot open the running image itself, the IR
+    cache is off on Windows: it fails closed.
+  - Other Unix: `std::env::current_exe`, opened once. Not a target today.
+- **Computed once per process, and once per binary across processes.** A sidecar entry
+  `<root>/ir/exe/<stamp>` holds the hash, where the stamp is the executable's identity from the
+  same open handle: device, inode, size, mtime and **ctime** in nanoseconds (Linux); volume serial,
+  file id, size, last-write and change time (Windows). ctime is in the stamp because `cp -p` over
+  an existing file keeps its inode, size and mtime, but no user can set ctime. The sidecar is
+  published like an entry (temp file, rename) and checked like one (magic, length, blake3 of its
+  own bytes). A missing or refused sidecar means: hash the binary, publish the sidecar.
+- **Diagnosis only, in each entry's header:** the grammar commit (`88bb6871` today, baked by
+  `al-syntax`'s build script from the grammar checkout, `unknown` if none) and the binary's
+  version string. They are never compared.
+- **What this removes:** rev. 4's `links` key, the hashing build scripts, the crate list and its
+  lockfile rule, the build-configuration partition, the machine-path problem of hashing cargo
+  configs, and the owner question on `--config`. `CACHE_VERSION_GRAMMAR` stays unused here.
 
-### The text: ENG-113's verified digest, carried, never re-derived
-
-- ENG-113's entry header holds a blake3 over the package's content hash, its JSON index (every
-  path, offset and length, in order) and its text (`src/snapshot/cache.rs`, `check_entry`). That
-  value is the **text digest**. It names the exact ordered `SourceRoot.files`, paths included,
-  under the current text format (`s9.f2`).
-- **ENG-110 carries it; it never reopens the text entry by path** (sol r1 P2):
-  - `CacheDir::read` returns the verified header digest with the mapped files.
-    `cached_source_in` returns it as a third value: `Some` only for a mapped, verified entry (a
-    hit, or the read-back after a publish); `None` for the owned fallback.
-  - `SourceRoot` gains `text_digest: Option<[u8; 32]>`. `EmbeddedAppProvider` sets it.
-    `DepCache`'s `WeakSource` keeps it, so `upgrade` and `deferred` carry it. Every other
-    construction (workspace, source folders, tests, LSP) sets `None`.
-  - `None` means no IR cache for that package: owned text, workspace files and source-folder
-    dependencies are never cached.
-- The IR file is named by the digest (Design 2), so builds whose extraction output differs never
-  share a name and never evict each other.
-
-### `IR_KEY`: a build-time hash closed over what produces and reads the IR
-
-sol r1 P1-2: rev. 3 left out the tree-sitter runtime, the C compiler and its flags, features and
-cfgs, the target, local overrides and the codec code outside `al-syntax/src`. `IR_KEY` is a
-sha256 over these parts, in this order, each part length-prefixed:
-
-1. **Grammar part**, computed by `crates/al-syntax/build.rs` (which compiles the grammar today):
-   - every file under the grammar's `src/` (`parser.c`, `scanner.c`, `scanner.cc` if present,
-     `unicode_id.h`, `tree_sitter/*.h`, `node-types.json`), in sorted relative-path order, each
-     path and length hashed. A `scanner.c`-only edit that leaves `node-types.json` unchanged moves
-     it. Not `node-types.sha256`, not `CACHE_VERSION_GRAMMAR`
-     (`src/engine/gate/cache_prune.rs`, `"tree-sitter-al-v5.4.0-88bb6871-native"`): a grammar
-     change can alter how the same text parses with no new node type (v4.0.0 moved dangling
-     `else`), and the constant kept a stale commit once.
-   - the C compiler's identity and flags: `cc::Build::get_compiler()`'s path, its `--version`
-     output and its arguments (these include the C opt level and the `c11` standard).
-   - `al-syntax` gains `links = "tree-sitter-al"` (it compiles a native library, so `links` is
-     allowed) and prints `cargo:grammar_hash=<hex>`. The grammar commit (`88bb6871` today, from
-     `git -C <grammar> rev-parse HEAD` when it is a checkout) is printed beside it for diagnosis
-     only; it is not a key input.
-2. **Lowerer and IR part:** every file under `crates/al-syntax/` (its `src/`, `build.rs` and
-   `Cargo.toml`), sorted, paths and lengths hashed.
-3. **Codec part:** every file of the envelope and check code in `al_sem`
-   (`src/program/ir_cache/`, a new folder holding only that code).
-4. **Dependency part:** the whole `Cargo.lock`. The crates whose code runs between the text and the
-   decoded IR are `tree-sitter`, `serde`, `serde_derive`, `postcard`, `blake3` and `cc`. Each must
-   appear in `Cargo.lock` with a registry source and a checksum (registry content for a version
-   and checksum cannot change). **If any of them does not** (a `[patch]`, a path or git source),
-   the build exports `IR_KEY = None` and the cache is off in that binary, logged once at
-   info. It fails closed instead of guessing.
-5. **Build configuration part:** `rustc -vV` (version, commit, host, LLVM version), and every
-   `CARGO_CFG_*`, `CARGO_FEATURE_*` and `CARGO_PROFILE_*` variable the build script sees, plus
-   `TARGET`, `PROFILE`, `OPT_LEVEL`, `DEBUG` and `CARGO_ENCODED_RUSTFLAGS`, sorted by name. The
-   cfg set holds `target_pointer_width`, `target_endian`, `target_feature` and `debug_assertions`.
-   Also the root `Cargo.toml` (it holds every `[profile]`, including per-package overrides) and
-   every cargo config file cargo reads for this build (`.cargo/config.toml` and `.cargo/config` in
-   the workspace root and its ancestors, and in `$CARGO_HOME`).
-
-   This **partitions by configuration**; it does not prove configurations interchangeable. A
-   `dev` test binary and a `release-fast` `alsem` never share entries. Cost: one cold fill per
-   configuration that runs with the cache on (in practice `release-fast`, `release-ship` and the
-   `cdo` profile).
-
-The root `build.rs` combines parts 2 to 5 with the grammar hash (`DEP_TREE_SITTER_AL_GRAMMAR_HASH`)
-and exports `IR_KEY` (or `None`) as an `al_sem` constant (`cargo:rustc-env` reaches only the crate
-that sets it, so the key lives where it is used). Its `rerun-if-changed` covers
-`crates/al-syntax/`, `src/program/ir_cache/`, `Cargo.lock`, `Cargo.toml` and the config files it
-read; `rerun-if-env-changed` covers the named variables.
+**The cost: every new binary starts cold.**
+- **Installed and shipped binaries** (`~/.al-sem/bin/alsem`, the LSP's engine child, a release)
+  keep one key until replaced: every process after the first hits. This is where the gain lands.
+- **A gate** builds once and runs many processes. Processes of ONE executable share entries:
+  `output_cdo`'s several `alsem` children and the impact ratchets' `alsem impact` calls hit after
+  the first fill. Each test executable (`program_resolve_harness`, `lsp`, `l4_summary_differential`,
+  the lib) is its own binary and fills its own folder once, at cost (c). The next gate on an
+  unchanged build reuses them only if cargo did not relink. So a gate's wall time gains less than
+  the one-shot ratio; bar (a) reports it as measured.
+- **Dev loops:** each relink pays (c) on its first CDO run, then hits.
+- **cdo-speed:** base and head differ in bytes, so they always use separate folders. Its build rows
+  change accordingly (Acceptance 4).
+- **Disk:** every new binary that runs with the cache on adds a key folder (~144 MiB for CDO).
+  The soft target and the hourly prune below handle the churn.
 
 **Tests:**
-- **Key moves:** in a temporary copy of the inputs, a byte changed in each part (a lowerer file, a
-  codec file, `scanner.c` alone, `Cargo.lock`, one cfg value) moves the key. Discrimination proof:
-  drop the folder or variable from the hash, the test goes red.
-- **The build trigger is pinned (kept from rev. 3, Fable r2 N1):** the root `build.rs` also exports
-  the hash of parts 2 and 3 (`IR_KEY_SOURCES`). A `ci-steps test` test re-hashes those folders at
-  run time and asserts it equals the baked value, so a key that did not rebuild fails the task
-  gate. Discrimination proof: drop a `rerun-if-changed` line, edit a lowerer file, rebuild, red.
-- **Real rebuilds miss:** two binaries built from trees that differ only in a lowerer file, and two
-  that differ only in profile, get different key folders; a test runs both on one fixture package
-  in one cache root and sees two entries and no cross hits.
-- **Fail closed:** a `Cargo.lock` copy with `tree-sitter` given a path source yields `None`.
+- Two binaries that differ in any byte use different key folders; one fixture package in one root
+  gives two entries and no cross hits. Proof: key on the format number alone, red.
+- The sidecar: a stamp change (touching the binary's ctime by rewriting one byte in place in a
+  copy) refuses the old sidecar and rehashes. Proof: leave ctime out of the stamp, red.
+- Linux: an engine whose executable path is replaced by another file while it runs still keys on
+  its own image. Proof: key through `current_exe()`'s path, red.
+
+## The text: ENG-113's verified digest, carried
+
+(Kept from rev. 4, sol r1 P2; checked in `src/snapshot/cache.rs`.)
+- ENG-113's entry header holds a blake3 over the package's content hash, its JSON index (every
+  path, offset and length, in order) and its text (`check_entry`). That value is the **text
+  digest**: it names the exact ordered `SourceRoot.files` under the text format `s9.f2`.
+- `CacheDir::read` returns the verified digest with the mapped files; `cached_source_in` returns
+  it as a third value, `Some` only for a mapped, verified entry. `SourceRoot` gains
+  `text_digest: Option<[u8; 32]>`, set by `EmbeddedAppProvider`, kept by `DepCache`'s `WeakSource`
+  through `upgrade` and `deferred`, `None` in every other construction. `None` means no IR cache
+  for that package.
+- **Before a miss publishes, the text is re-hashed** (Fable r3 P1-1). The IR was parsed from the
+  mapped text; an outside in-place rewrite of the text entry during the parse (ENG-113's stated
+  risk) would give IR of other text under the old digest. After the package's parse loop, the
+  writer recomputes ENG-113's digest over the package hash, the index it was given and the mapped
+  texts, and publishes only if it equals the carried digest; on a mismatch it publishes nothing and
+  warns. This costs one blake3 over the package's text on a miss only. The hit path does not need
+  it: a decoded tree attached to a changed text is ENG-113's existing risk, unchanged.
 
 ## The codec
 
-1. **serde derives on the IR types**, always on (Fable r1 P3: a feature would be a second build
-   shape nobody tests). `al-syntax` gains a `serde` dependency (already in the workspace's lock).
-2. **`Origin`** stores the grammar's symbol id (`kind_id: u16`; `crates/al-syntax/src/ir/mod.rs`),
-   with `u16::MAX` for tree-sitter's builtin `ERROR`. The declaration pack's positional
-   `RawKind::ALL` codec (`src/program/pack/mod.rs`) covers named kinds only and is not reused
-   (sol r1 P1-2). The id is encoded as is and **validated on decode**: it must be `u16::MAX`, or
-   below the grammar's `node_kind_count` with a non-empty name. That set is total: named and
-   anonymous kinds and `ERROR` all pass, and any other value refuses the file. Ids are stable
-   within one key because the grammar part covers `parser.c`. Decoding keeps the exact id, so the
-   alias case (two ids, one name; `Origin`'s `PartialEq` compares names) round-trips exactly too.
-3. **`ActionDecl.kind`** (`&'static str`, the only one in the IR) gets a hand-written pair: write
-   the keyword, read it back into its static set (`action`, `systemaction`, `fileuploadaction`,
-   `customaction`), refuse any other. The prototype's `#[serde(skip)]` there is NOT the design.
-4. **Bounded decode** (sol r1 P1-1): each file decodes from its own index range of the verified
-   buffer, never past it, with no trailing bytes (`postcard::take_from_bytes`, empty rest). serde's
-   derived sequence decoding caps its preallocation (`size_hint::cautious`; not verified for the
-   pinned serde/postcard versions, checked in the implementation), so a length claim cannot
-   allocate more than the bytes behind it can fill. A test asserts the IR has no `Vec` of a
-   zero-sized type (whose elements cost no bytes).
-5. **IR check before use** (sol r1 P1-1): `AlFile::check(text_len)` in `al-syntax` (the arenas are
-   private there) runs on every decoded file before it reaches a consumer:
+1. **serde derives on the IR types**, always on (Fable r1 P3). `al-syntax` adds `serde` with the
+   `derive` and **`rc`** features itself (Fable r3 P3): `TypeText` is `Arc<str>`, and `al-syntax`
+   must not rely on `al_sem`'s feature unification.
+2. **`Origin`** stores the grammar symbol id (`kind_id: u16`; `u16::MAX` is `ERROR`). It is encoded
+   as is and validated on decode: `u16::MAX`, or below `node_kind_count` with a non-empty name.
+   That set is total over named and anonymous kinds and `ERROR`. The pack's `RawKind::ALL` codec
+   covers named kinds only and is not reused. Ids are stable within one key (one binary).
+3. **`ActionDecl.kind`** (the IR's only `&'static str`) gets a hand-written pair over its keyword
+   set; any other value refuses the file.
+4. **Bounded decode: real budgets** (sol r2 P1-2; serde's cautious size hint caps only the first
+   reservation):
+   - **Encoded bytes per file:** at most `max(64 KiB, 16 × text length)` and at most 64 MiB. CDO
+     averages 1.25×; the per-file maximum is measured and written beside the constant. A file past
+     it is refused before decoding.
+   - **Decoded heap per file follows from it.** Every element the decoder creates consumes at least
+     one encoded byte (strings consume their length; there is no zero-sized element type in the
+     IR, asserted by a test). So a file creates at most `encoded length` elements, and its heap is
+     at most `2 × S × encoded length`, where `S` is the size of the largest IR element type and 2
+     is `Vec`'s growth. `S` is a `const` computed from `size_of` and asserted in a test.
+   - **Test:** a payload whose sequence lengths claim far more elements than its bytes holds fails
+     at end of input, and a counting allocator shows the peak below the bound. Proof: remove the
+     encoded-length cap and feed a 64 MiB claim inside a large slice, the bound is exceeded, red.
+5. **IR check before use** (`AlFile::check(text)` in `al-syntax`, where the arenas are private; sol
+   r2 P1-2, Fable r3 P1-2). It runs on every decoded file before any consumer sees it:
    - every `ExprId`, `StmtId`, `BlockId` and `MemberOriginId` held anywhere (decls, nodes, side
-     tables such as `tainted_calls`, `locals_incomplete`, `signature_varies`, `preproc_ranges`) is
-     inside its arena;
-   - every node's child ids are lower than its own id, so no walk can loop. This holds for
-     expressions (children are pushed first); **for statements and blocks it is not verified**.
-     If the lowerer does not push them in that order, the check walks from the roots with a depth
-     bound of `MAX_LOWER_DEPTH` and a visited set instead.
-   - every `Origin` has `byte_start <= byte_end <= text_len` and `start <= end`, and a valid kind id;
-     every `VarWrapper` byte range and arm range is inside the text;
-   - sorted side tables (`tainted_calls`, `preproc_ranges` starts) are sorted.
-
-   A failed check refuses that file (Failure cases). The check's cost is inside the warm measure.
-6. **Structural equality** (kept from rev. 3, Fable r1 P1-2): byte equality of re-encodings cannot
-   see a skipped or defaulted field. `PartialEq` and `Debug` are derived on `AlFile` and every IR
-   type that lacks them, and the checks assert `decoded == fresh`. A test reads
-   `crates/al-syntax/src/ir/` and fails on any `serde(skip` or `serde(default`.
+     tables) is inside its arena;
+   - **expressions:** each child id is below its own. This holds by construction: an `Expr` holds
+     its children's ids, which exist only once `Ir::add_expr` has returned them (checked in
+     `ir/mod.rs`). **Direct block → block** references (a `PreprocGroup` inside `Block.items`,
+     if it holds blocks; not verified) follow the same rule. A flat pass, no traversal;
+   - **statements and blocks:** an iterative three-colour depth-first walk over the WHOLE stmt and
+     block arenas (an explicit stack, no recursion, no depth bound) finds any cycle. Each node is
+     entered once, so the walk is linear in the arena sizes. It also checks that each stmt and
+     block has at most one parent and is reachable from a routine body or trigger root, so no
+     shared subgraph can make a consumer's walk repeat work. **Not verified that fresh IR obeys the
+     one-parent and reachability rules:** the CDO round-trip test checks both rules on all 10,881
+     files before they are adopted; a rule fresh IR breaks is dropped from the check and named in
+     the spec;
+   - every `Origin`: `byte_start <= byte_end <= text.len()`, **both on `char` boundaries of the
+     text** (`str::is_char_boundary`), `start <= end`, and a valid kind id; the same for every
+     `VarWrapper` byte range and arm range;
+   - `tainted_calls` is strictly ascending (`call_is_tainted` binary-searches it; `mark_tainted`
+     keeps it so). **`preproc_ranges` is not checked for order**: `with_build_context` records an
+     inner range before its enclosing one, and `Ir::preproc_context` scans all ranges for the
+     smallest that contains the id (checked in `crates/al-syntax/src/ir/mod.rs`). Rev. 4's sorted
+     check would have refused fresh IR.
+   - **Tests:** one hand-built malformed payload per rule (out-of-arena id, an expr child above its
+     parent, a stmt cycle, a block with two parents, an unreachable stmt, a range past the text, a
+     range inside a multi-byte character, an invalid kind id, an unsorted `tainted_calls`), each
+     refused, each with a discrimination proof; and valid round trips of a fixture with nested
+     `#if` blocks inside a routine body (inner `preproc_ranges` first), a recovered file and a file
+     with non-ASCII identifiers, each equal to a fresh parse and accepted by the check.
+6. **Structural equality** (kept): `PartialEq` and `Debug` derived on `AlFile` and every IR type
+   that lacks them; checks assert `decoded == fresh`. A test fails on any `serde(skip` or
+   `serde(default` under `crates/al-syntax/src/ir/`.
 
 ## Lowerer state: scratch, proven (a small product change ENG-110 makes)
 
-sol r1 P1-3, checked in `crates/al-syntax/src/lower/mod.rs`. The lowerer keeps six thread-locals:
-- `CONDITIONAL_VARS` is cleared, and `PREPROC_WALK` and `PREPROC_RANGES` are set, at the top of
-  `lower_file`. `VARS_INCOMPLETE` is set false before each read. `shared_type_text`'s `TEXTS`
-  (`ir/decl.rs`) decides sharing only, never a value.
-- **`BUILD_CONTEXT` is the hole.** `with_build_context` extends it, runs the body, and truncates it
-  only on a normal return. `lower_file` never clears it. A panic inside a body (caught by an
-  engine `catch_unwind`, or a rayon worker that survives a panicking job) leaves stale symbols on
-  that thread. The next file lowered there records them as its expressions' build context: a wrong
-  IR. Without a cache that wrong IR lives one process. With a cache it would be written to disk
-  and served to every later run.
+(Kept from rev. 4; sol r2 P1-3 accepts it.) The lowerer's six thread-locals: `CONDITIONAL_VARS`,
+`PREPROC_WALK` and `PREPROC_RANGES` are reset at the top of `lower_file`; `VARS_INCOMPLETE` is set
+before each read; `shared_type_text`'s `TEXTS` decides sharing only. `BUILD_CONTEXT` was the hole:
+`with_build_context` truncates it only on a normal return, and `lower_file` never clears it.
 
-**The change** (part of ENG-110, in `al-syntax`):
-- `lower_file` clears `BUILD_CONTEXT` at its top, beside `CONDITIONAL_VARS`.
-- `with_build_context` truncates through a drop guard, so an unwind restores the outer length too.
-- The thread-local's doc comment says both.
+**The change** (in `al-syntax`): `lower_file` clears `BUILD_CONTEXT` at its top;
+`with_build_context` truncates through a drop guard, so an unwind restores it too.
 
-**Tests** (hand-stated preconditions; one discrimination proof per guard):
-- **Unwind restore:** on a one-thread pool, `catch_unwind` around `with_build_context` with a body
-  that panics; then assert `BUILD_CONTEXT` is empty on that thread. Proof: remove the guard, red.
-- **Entry reset:** seed `BUILD_CONTEXT` on a thread with a stale `("STALE", true)` by hand, then
-  lower a fixture whose routine body has `#if` code, once clean and once `Recovered`, on that
-  thread; each must equal the same file lowered on a fresh thread. Proof: remove the clear at the
-  top of `lower_file`, red.
-- **Purity on real data** (kept, `probe3.log`): all 10,881 dependency files lowered in parallel in
-  reverse order equal the sequential lowering (0 differed). It shows no order effect on clean runs;
-  it cannot show unwind safety, which the two tests above do.
+**Tests:** unwind restore (a panicking body under `catch_unwind` on a one-thread pool leaves the
+thread-local empty; proof: remove the guard, red); entry reset (a hand-seeded stale context, then a
+clean and a `Recovered` fixture with `#if` code lowered on that thread equal a fresh thread; proof:
+remove the clear, red). The reverse-order purity run (`probe3.log`, 0 of 10,881 differ) stays as
+evidence of no order effect; it does not prove unwind safety.
 
 ## Design
 
-1. **Built on ENG-113 as shipped** (`src/snapshot/cache.rs`; note
-   `docs/superpowers/notes/2026-11-18-eng113-mapped-dependency-text.md`). ENG-110 reuses its
-   `CacheDir`, made `pub(crate)` and given an owned read, not a second scheme:
-   - the directory is opened once and checked on the handle (Unix: this user's, no group or other
-     write bit; else the IR cache is not used, no read and no write);
-   - entries are opened relative to that handle without following a symlink or blocking, and
-     must be regular files private to this user;
-   - writes go to a unique owner-only temp file (`O_CREAT | O_EXCL`, 0600, pid/counter/time name);
-   - publication is no-clobber (`linkat`) for a missing entry and replace (`renameat`) only for an
-     entry this process refused, both through the directory handle;
-   - every publish holds the per-entry `flock` (`<digest>.lock`, a private regular file) and reads
-     the entry again under it: an entry another process published meanwhile is used and nothing is
-     written. Without the lock nothing is published. Windows: no lock; a no-clobber persist, and a
-     replace only of a refused entry.
+1. **Built on ENG-113's `CacheDir`, refactored, not copied** (Fable r3 P2-10). The refactor, in
+   `src/snapshot/cache.rs`, keeps ENG-113's behaviour:
+   - `CacheDir` becomes `pub(crate)`.
+   - **`write(name, replace, writer)`**: today's unique-temp, `O_EXCL` 0600, `linkat`/`renameat`
+     publish, with the entry's bytes produced by a writer closure. ENG-113's `write_entry` becomes
+     one such closure; the IR envelope is another.
+   - **`read_owned(name, cap) -> Result<Option<Vec<u8>>>`**: the same open (relative to the
+     handle, no symlink, no blocking, regular and private), refusing a file longer than `cap`
+     before reading, then reading exactly its length.
+   - **`subdir(name, create)`**: opens a child directory through the handle and checks it private;
+     with `create`, makes it first (`mkdirat`, 0700). **Only a writer creates** `ir/` and
+     `ir/<key>/` (and `ir/exe/`), on its first publish; a reader never creates a folder.
+   - `lock(name)` keeps its per-name `flock` and gains a non-blocking form for pruning.
+2. **Layout:** `<root>/ir/<IR_KEY, 64 hex>/<text digest, 64 hex>.bin`, plus `<root>/ir/exe/` for
+   sidecars. `<root>` is ENG-113's cache directory. `ALSEM_IR_CACHE_DIR` overrides it for the
+   acceptance's fresh cold roots and the cache's own tests. **On Windows the override is refused**
+   (sol r2 P1-4): ENG-113's Windows safety rests on the per-user profile location, which an
+   arbitrary path does not have, and no privacy check is specified there. The process logs it once
+   and runs with the cache off. Windows tests use the default location under a test-only profile
+   variable instead (not verified that this is feasible; else Windows keeps only the default-path
+   tests).
+3. **Envelope** (kept from rev. 4): header (magic `ALSEMIR\0`, format, full key, text digest, the
+   diagnosis fields, file count, payload length); index of `(offset, len)` per file in
+   `SourceRoot.files` order; payload; trailing blake3 over every byte before it. A hit requires,
+   in order: the entry within the per-entry cap; magic, format, key, digest; count equal to
+   `SourceRoot.files.len()`; exact total length; the blake3; ranges that tile the payload exactly
+   (every sum checked). Then per file: the encoded-length budget, decode with no trailing bytes,
+   `AlFile::check` against that file's own text.
+4. **Owned, bounded reads, not a map** (kept from rev. 4, accepted by sol r2): the bytes decoded are
+   the bytes hashed, so outside damage is always a refusal, never a SIGBUS. Peak: one package's
+   entry during its decode (packages are taken one at a time).
+5. **Disk** (sol r2 P2):
+   - **Per entry:** 1 GiB, written and read (CDO's whole set is 143.9 MiB).
+   - **Total: 4 GiB is a soft target, not a cap.** A prune brings `<root>/ir/` under it. Between
+     prunes writers can exceed it. **Overshoot bound:** a prune runs at most an hour after the last
+     one, at the first cache use after that hour; until then the overshoot is the entries published
+     in that time, each at most 1 GiB, so at most (packages published in an hour) × 1 GiB; in
+     practice one CDO set (~144 MiB) per new binary run in that hour. If this process's own key
+     folder alone passes 4 GiB, it publishes nothing more and warns once.
+6. **The seam** (lines re-checked on `c80f1391`): `src/program/dep_summary.rs`,
+   `parse_for_build_observed` (line 62, the per-file call at 122) and `parse_dep_bodies` (line 175,
+   the call at 195), each calling `snapshot::parse::parse_file` per file inside a `par_iter` on the
+   big-stack pool. One function serves both: per package, once, the owned read and envelope checks;
+   per file inside the existing `par_iter`, decode and check in place of `parse_file`. `LiveTrees`'
+   bound holds. On a miss the loop parses and encodes; the package's encoded buffers are published
+   at its end (after the text re-hash), then freed.
+7. **Switches are parameters in library code** (Fable r3 P3). The library takes an
+   `Option<&IrCache>` (the root, the key, the report sink), carried beside `BuildProfile` to the
+   seam; `None` is today's behaviour. **Only the binaries' `main`s** (`alsem`, `aldump`,
+   `al-call-hierarchy`) build it, from `ALSEM_IR_CACHE`, `ALSEM_IR_CACHE_DIR`,
+   `ALSEM_IR_CACHE_VERIFY` and `ALSEM_IR_CACHE_REPORT`, and from the batch state (`claim::dir()`, a
+   `OnceLock` set by `alsem batch` before any job runs). The exact carrier between the `main`s and
+   the seam is chosen in the plan (not verified which builder struct carries it best). Library
+   tests pass their own `IrCache` with a temporary root.
+8. **Small packages are skipped** (kept): below one fixed constant, measured once on the prototype
+   with its table, no IR file is written.
+9. **Maintenance** (sol r2 P2):
+   - **`last-used`**: `<key folder>/last-used`, never written in place; published by rename at a
+     process's first hit or write, and again when older than one day.
+   - **Throttle:** at the first cache use of a process, if `<root>/ir/last-prune` is older than an
+     hour, take the prune lock without blocking, **re-read `last-prune` under the lock** (another
+     process may have just pruned), and only if still older, publish a new `last-prune` and prune.
+   - **Prune lock:** Unix, `flock` on `<root>/ir/prune.lock`. Windows: `prune.lock` opened with no
+     sharing (share mode 0), which no second process can open while it is held; a failed open skips
+     the prune.
+   - **Respects live publishes:** before removing a key folder, the prune takes every
+     `<digest>.lock` in it without blocking; if any is held, the folder is skipped this round. With
+     the locks held it re-reads `last-used`; a fresh one keeps the folder. Windows has no publish
+     lock: a delete of a file another process has open fails and the folder is skipped; a publish
+     into a folder just deleted fails, and that process keeps its parsed IR.
+   - **What it removes:** key folders whose `last-used` is older than 7 days; then, oldest
+     `last-used` first, key folders until under the soft target, never this process's own; sidecars
+     older than 7 days; temp files of this cache's name shape older than a day. Only names of these
+     exact shapes, through the checked handle, never following a symlink (mantra 24).
+   - `alsem cache prune` maintains a different cache and is not changed.
+10. **`parse_snapshot` stays uncached** (kept): its callers outside `dep_summary` are test modules.
 
-   So rev. 3's "last rename wins with identical bytes" is gone: the first valid entry is kept, as
-   for the text.
-2. **Layout:** `<root>/ir/<IR_KEY, 64 hex>/<text digest, 64 hex>.bin`, where `<root>` is ENG-113's
-   cache directory unless `ALSEM_IR_CACHE_DIR` names another (the acceptance's fresh cold roots
-   and the cache's own tests use it; the text cache stays where it is). The full key and the full
-   digest are in the path (sol r1 P2), so binaries with different keys and texts with different
-   extraction output never touch each other's entries.
-3. **Envelope** (sol r1 P1-1; all integers little-endian):
-   - header: magic `ALSEMIR\0`; format (`u32`, starts at 1); the full `IR_KEY` (32 bytes); the text
-     digest (32 bytes); the file count (`u64`); the payload length (`u64`);
-   - index: `count` records of `(offset u64, len u64)`, in `SourceRoot.files` order;
-   - payload: every file's postcard bytes, concatenated;
-   - trailer: a blake3 over every byte before it (header, index and payload).
+## `alsem batch` (TLS-109): off, tested through the real run
 
-   **A hit requires, in this order:** the entry no longer than the per-entry cap (Design 5); the
-   magic and format; the key equal to this binary's; the digest equal to the `SourceRoot`'s; the
-   count equal to `SourceRoot.files.len()`; the length exactly header + `16 × count` + payload +
-   32; the blake3; ranges that tile the payload exactly (the first at 0, each starting where the
-   previous ended, the last ending at the payload's end, every sum checked before use). Then, per
-   file: decode with no trailing bytes, then `AlFile::check(text_len)` against that file's own
-   text. Two index records pointing at each other's blobs are refused by the hash (it covers the
-   index) and by the tiling rule, and a decoded tree is checked against the text it is attached
-   to.
-4. **Owned, bounded reads, not a map** (decision, sol r1 P1-4). The entry is read into one owned
-   buffer (capped), hashed, decoded from that buffer, and the buffer is dropped after the package.
-   - Why not mmap: ENG-113 maps its text because the page cache then holds one copy for every
-     engine (the point of ENG-113). The IR is decoded into owned heap anyway; a map saves one copy
-     of a buffer that lives for one package's decode. Against that, a map cannot turn an in-place
-     truncate or rewrite (an outside `cp`, `rsync --inplace`, a restore) into a miss: it raises
-     SIGBUS, or changes bytes between the hash and the decode, so the decoded IR is not what was
-     verified. With an owned buffer the bytes decoded are the bytes hashed, and any damage is a
-     refusal and a rebuild. Correctness wins (mantra 1).
-   - Cost: one package's entry on the heap during its decode. Packages are taken one at a time
-     (the loop over units is sequential; files inside it decode in parallel from the one buffer),
-     so the peak is the largest package's entry (not measured; Ceiling). Reported in the cold and
-     warm peaks.
-5. **Disk bounds** (sol r1 P2):
-   - **Per entry:** 1 GiB, written and read (CDO's whole set is 143.9 MiB). A package past it is
-     never written and its entry never read: a parse, logged once.
-   - **Total:** 4 GiB under `<root>/ir/` (about 25 CDO-sized key folders). When maintenance finds
-     more, it removes whole key folders, the oldest `last-used` first, never this process's own.
-     If this process's key folder alone passes the cap, it writes no new entry and logs once at
-     warn.
-   - Both are constants of my choosing (orchestrator to confirm). Neither has a user setting.
-6. **The seam** (kept from rev. 3, Fable r1 P2-2; lines re-checked on `c80f1391`). Dependency
-   packages are parsed in `src/program/dep_summary.rs`: `parse_for_build_observed` (line 62; the
-   per-file call at 122) and `parse_dep_bodies` (line 175; the call at 195), each calling
-   `snapshot::parse::parse_file` per file inside a `par_iter` on the big-stack pool. One function
-   serves both:
-   - per package, once, before the `par_iter`: the owned read and the envelope checks;
-   - inside the existing `par_iter`, per file: decode and check file `i` in place of `parse_file`
-     (on a refused file: `parse_file`, see Failure cases).
+(Decision kept from rev. 4; sol r2 P1-4 asks for the real path.) In a batch run (`claim::dir()` is
+`Some`: the parent, and every worker, which refuses to run without it) the binary's `main` builds no
+`IrCache`: no reads, no writes, no pruning, and **no report-file append** (the report file would be
+a write the claims do not cover). The claims do not reserve the cache's names, so a job output
+under the cache root could be unlinked by a publish; batch already shares one model build across its
+jobs; no script runs `alsem batch` (its callers are `tests/cli` and `tests/perf_bounds.rs`). Lost:
+multi-worker batch runs keep parsing per worker. A follow-up task (to file) turns it on with the
+claim check reserving the cache folder's names, for the ENG-113 text cache too.
 
-   A profile that summarizes and drops each tree keeps today's bound of about one tree per thread
-   (`LiveTrees`). On a miss the same loop parses and also encodes each file; the encoded buffers
-   of that ONE package are published when its loop ends, then freed. The extra peak on a miss is
-   one package's encoded bytes.
-7. **Small packages are skipped** (kept from rev. 3, Fable r1 P2-3). Below one fixed constant a
-   parse beats a read, a hash and a decode; no IR file is written. It is measured once on the
-   prototype (cost by package size) and written down with its table. A package with zero files
-   writes nothing.
-8. **Maintenance** (sol r1 P2; rev. 3 pruned only on a miss and marked a key once per process):
-   - **`last-used` marker:** `<key folder>/last-used`, an empty file. It is **never written in
-     place**: a process publishes a fresh temp file over it by rename. It does so at its first hit
-     or write, and again at any later use when the marker is older than one day, so a resident
-     engine that lives for weeks keeps its key alive.
-   - **Throttle:** at most one prune per root per hour, decided at the first cache USE of a process
-     (hit or miss, not only a miss): when `<root>/ir/last-prune` is older than an hour, the process
-     takes a non-blocking `flock` on `<root>/ir/prune.lock` (Unix; Windows: none), publishes a new
-     `last-prune` by rename, and prunes. A process that cannot take the lock skips the prune.
-   - **What a prune removes:** key folders whose `last-used` is older than 7 days, as
-     `scripts/sweep-builds` does for build output; then the total cap; temp files with this
-     cache's name shape older than one day (a killed writer leaves up to one package's entry).
-   - **Only what it can prove it made** (mantra 24): names of the exact shapes above (`ir/`, a
-     64-hex folder, `<64 hex>.bin`, `<64 hex>.lock`, `last-used`, the temp name shape), opened
-     through the checked directory handle, never following a symlink. Anything else under `ir/`
-     is left alone.
-   - A prune racing a writer of an old key is safe: the publish fails, and that process keeps its
-     parsed IR.
-   - `alsem cache prune` (`src/engine/gate/cache_prune.rs`) maintains a different cache (JSON
-     dependency artifacts) and is not changed.
-9. **`alsem batch`: the IR cache is off in the batch parent and its workers** (decision, sol r1
-   P1-4). See the next section.
-10. **`parse_snapshot` stays uncached on purpose** (kept from rev. 3). Its callers outside
-    `dep_summary` are test modules (`lsp/custom.rs`, `lsp/handlers.rs`, `dep_summary`'s tests).
-
-## `alsem batch` (TLS-109)
-
-TLS-109 (`src/engine/batch/claim.rs`) claims every file a batch run writes by its identity before
-truncating it, and claims the files the run reads. Its doc exempts the engine's caches because each
-publishes by renaming a fresh temp file. Two gaps for ENG-110, as sol found:
-- the claims do not reserve cache destination names, so a job whose `--out` lies inside the cache
-  folder could have its file replaced by a publish (a rename does not truncate, but it does unlink
-  the job's name);
-- rev. 3's `last-used` was an in-place write (rev. 4 removed that: Design 8).
-
-**Decision: off in batch for the first release.** When `claim::dir()` is `Some` (the batch parent,
-and every worker, which refuses to run without it), the IR cache neither reads, writes nor prunes.
-Weighed:
-- **For off:** it is the only choice that needs no new claim design. A batch run already builds one
-  model per view and shares it across its jobs, so its share of parse time is lower than a
-  one-shot's. No gate and no script runs `alsem batch` today (checked: `scripts/` has no caller;
-  the callers are `tests/cli` and `tests/perf_bounds.rs`, which run with the cache off anyway).
-- **Lost:** a run of two or more batches starts one worker process per batch (`worker.rs`), and
-  each parses every dependency; those runs keep today's cost. How often outside tools run multi-
-  worker batches is not known here.
-- **Later:** a follow-up task (to file) turns it on with the claim check reserving the IR folder's
-  names (a job output under the cache root refused at the check) and a test for direct-path and
-  alias conflicts (a job `--out` equal to, or hard-linked to, an entry path).
-
-The ENG-113 text cache already runs in batch and has the same name gap; that is outside ENG-110 and
-goes in the same follow-up.
-
-**Test:** with `claim::set_dir` set, a build over a fixture package reads and writes nothing under a
-temporary IR root (hit and miss counters zero, the root empty). Proof: drop the check, red.
+**Test, through the real run:** a `tests/cli` test runs `alsem batch` with two batches (so the
+parent starts two workers) over a fixture workspace with an embedded-source dependency, with
+`ALSEM_IR_CACHE=on`, a temporary `ALSEM_IR_CACHE_DIR` and `ALSEM_IR_CACHE_REPORT` set. After the run
+the IR root holds no file and the report file does not exist. Proof: build the `IrCache` regardless
+of the batch state, red.
 
 ## Correctness checks
 
-- **Decoded equals parsed, by structure.** A test decodes every CDO dependency file and compares it
-  with a fresh parse (`decoded == fresh`). It runs in the CDO subset (`lib_cdo`, `cdo` in its name).
-- **Determinism:** a test encodes the CDO set twice, in different thread orders, and gets the same
-  bytes. A refused file's fresh encoding then matches what a cold fill writes (Failure cases).
-- **VERIFY mode, in production shape** (kept from rev. 3). With `ALSEM_IR_CACHE_VERIFY=1` every hit
-  is parsed anyway and compared by structure with the decoded IR. A mismatch fails the process
-  loudly, naming the package, the file and the key; it is never a silent fallback. `cdo-gate` sets
-  it for one phase, `program_resolve_harness`, for good, on the user's real cache (a key hole
-  shows only on an entry an EARLIER build wrote). Zero hits there labels the phase "VERIFY: no
-  hits", a label, not a failure. **VERIFY never runs in a timed run**: cdo-speed and the one-shot
-  protocol unset it and refuse to start when it is set.
-- **Tests still exercise the parser** (kept from rev. 3, Fable r2 N2): `.cargo/config.toml`'s
-  `[env]` sets `ALSEM_IR_CACHE=off` for every process cargo starts, which the spawned `alsem` and
-  `aldump` inherit. An explicit `ALSEM_IR_CACHE=on` in the environment wins (cargo's `[env]` does
-  not override a set variable unless `force = true`; from cargo's documentation, not re-tested
-  here). Binaries started directly (`target/cdo/aldump`, `target/release-fast/alsem`) do not see
-  `[env]`: the cache is on there by default.
-- **Every identity phase sets `ALSEM_IR_CACHE=on` explicitly** (sol r1 P1-5), since the cargo
-  default is off.
-- **Hit coverage, per process:** with `ALSEM_IR_CACHE_REPORT=<file>` each process appends one JSON
-  line at exit: argv[0] and command, key, and counts of files hit, missed, refused, skipped as
-  small, and skipped in batch. The counters also go to the perf trace and the census. `cdo-gate`
-  points every phase at its own report file and prints each phase's sums.
-- **`ParseStatus::Recovered`:** its doc says "do not cache as authoritative". The IR cache replays
-  it exactly, flag included, so consumers see what a parse gives. The doc is fixed to say so.
+- **Decoded equals parsed:** every CDO dependency file decoded equals a fresh parse (`lib_cdo`).
+- **Determinism:** the CDO set encoded twice in different thread orders gives the same bytes.
+- **VERIFY** (kept): with `ALSEM_IR_CACHE_VERIFY=1` every hit is also parsed and compared; a
+  mismatch fails the process loudly. `cdo-gate` sets it for `program_resolve_harness`, for good;
+  zero hits there labels the phase "VERIFY: no hits". **Never in a timed run:** cdo-speed and the
+  one-shot protocol refuse to start with it set.
+- **Tests still exercise the parser:** `.cargo/config.toml`'s `[env]` sets `ALSEM_IR_CACHE=off` for
+  every process cargo starts; an explicit value in the environment wins (cargo's documented `[env]`
+  rule without `force`; not re-tested here). Directly started binaries default to on.
+- **The counters** (sol r2 P1-5, Fable r3 P1-3, P3), per process:
+  - `seam_files`: files that reached the seam: the denominator, counted at the seam before any
+    cache decision, independently of the cache;
+  - `disk_hits` (decoded from an entry), `parsed_miss`, `refused`, `skipped_small`, `skipped_off`
+    (cache off, no digest, or batch), and `published_packages`;
+  - `inproc_reused_packages`: packages served from `DepCache`'s in-process tier, which never reach
+    the seam. Reported apart, so in-process reuse is never mistaken for a disk hit.
+  - Invariant: `seam_files = disk_hits + parsed_miss + refused + skipped_small + skipped_off`,
+    asserted at exit in debug builds and checked by the acceptance.
+  - With `ALSEM_IR_CACHE_REPORT=<file>`, one JSON line per process at exit (command, binary key,
+    counters); also in the perf trace and census.
+- **`ParseStatus::Recovered`** is replayed exactly; its doc is fixed to say the cache stores it.
 
 ## What still needs the source TEXT after an IR hit
 
-(Kept from rev. 3.) The IR stores names and literal text inline, plus byte ranges (`Origin`), but
-not the source. These read the text, so ENG-113's mapped text stays the one copy and the IR cache
-holds none: line and column positions (`LineTable`); source snippets in explain and digest output;
-the row cache's identity fast path (`SourceText::ptr_eq`); `recovered_file_paths` and diagnostics
-that quote source.
+(Kept.) Line and column positions (`LineTable`); snippets in explain and digest; the row cache's
+`SourceText::ptr_eq` fast path; `recovered_file_paths` and diagnostics that quote source. ENG-113's
+mapped text stays the one copy.
 
 ## Many processes filling the cache at once
 
-On a cold cache each gate process misses and parses (today's cost) and encodes. At a package's end
-it takes the entry's lock and reads the entry again: if another process published it meanwhile, it
-writes nothing (Unix). So on Unix the write amplification is one entry per package plus temp
-bytes of processes that lost the race before taking the lock (none: the lock is taken before the
-temp file is created). On Windows (no lock) a loser writes a temp file and its no-clobber persist
-fails; at most one temp per process per package. No lock spans the gate's start: that would
-serialize it for a one-off saving. Measured: Acceptance step 5.
+Each cold process parses and encodes. At a package's end it re-hashes the text, takes the entry's
+lock, reads the entry again, and publishes only if none is there (Unix). Write amplification on
+Unix: one entry per package (the lock is taken before the temp file is made). Windows: a loser
+writes one temp file per package and its no-clobber persist fails. No lock spans a gate's start.
+Measured in Acceptance 5.
 
 ## Failure cases
 
-- **The envelope is refused** (too long, magic, format, key, digest, count, length, hash, ranges):
-  the whole package parses; at its end the entry is replaced under the lock (a refused entry is
-  the one case that replaces). The next run hits.
-- **A file's decode or check fails** under a valid hash (a codec defect, or a hand-built entry):
-  that file parses; the other files keep their decoded IR. At the package's end the entry is
-  replaced: the verified slices of the good files plus the fresh encodings of the refused ones
-  (the codec is deterministic, so this equals a cold fill). Warned once per package, counted as
-  refused.
-- **Truncated or rewritten in place during a read:** the read is short or the hash fails; a refusal.
-  No SIGBUS (owned reads).
-- **The cache is not writable or not private:** no IR cache, logged once at warn.
-- **Every refusal path is tested** with a hand-written broken entry in a temporary root: each
-  envelope field, two index records swapped with the hash left as written (refused by the hash)
-  and with the hash recomputed (refused by the tiling rule: the first record must start at 0 and
-  each where the last ended), a gap, an overlap, a trailing byte, an over-cap length, an invalid
-  kind id, an out-of-arena id, an out-of-text range, an unknown action keyword. Each test asserts
-  that the model built equals the cache-off model, and that a second run hits the repaired entry.
-- **Threat model** (mantra 26): the hash is an integrity check, not a signature. Someone who can
-  write this user's cache can also replace this user's binaries; swapping two equal-length payload
-  blobs and recomputing the hash is not defended beyond the per-file check. Other users are kept
-  out by the private-directory and private-entry rules.
+- **Envelope refused** (any header field, length, hash, ranges): the package parses; at its end the
+  entry is replaced under the lock. The next run hits.
+- **A file's budget, decode or check fails** under a valid hash: that file parses; the others keep
+  their decoded IR. At the package's end the replacement is the good files' verified slices plus
+  the refused files' fresh encodings. **If that replacement equals the stored bytes** (Fable r3 P3:
+  the codec itself writes what it then refuses), nothing is rewritten: a warning names the package,
+  file and key, and `refused` counts it. A rewrite would loop on every run.
+- **Truncated or rewritten during a read:** a refusal (owned reads).
+- **The text changed during a miss's parse:** nothing is published (the text re-hash).
+- **The cache is not writable or not private, or (Windows) the override is set:** no IR cache,
+  logged once.
+- **Tests:** each refusal with a hand-written entry in a temporary root; each asserts the built model
+  equals the cache-off model and that a second run hits the repaired entry (or, for the equal-bytes
+  case, that nothing was rewritten). The text re-hash: a test changes the mapped text's bytes
+  through a test seam between the parse loop and the publish, and sees nothing published. Proof:
+  skip the re-hash, red.
+- **Threat model** (mantra 26): the hash is integrity, not a signature. Someone who can write this
+  user's cache can also replace this user's binaries. Other users are kept out by the private
+  directory and entry rules.
 
-## Acceptance (sol r1 P1-5)
+## Acceptance
 
-Every measurement records the master and head SHAs, the workspace SHA (`bc3ccb18`) and the `.app`
-closure stamp (`dependency_closure_sha256`, `closure-v2:…`); a change in either voids the run.
+The judgment rules below are fixed before any run (mantra 9). Every record carries the master and
+head SHAs, the workspace SHA (`bc3ccb18`), the `.app` closure stamp (`dependency_closure_sha256`)
+and the binary keys; a change in any voids the run.
 
-1. **Identity, cache off / cold / warm** (all with `ALSEM_IR_CACHE=on` set explicitly except "off"):
-   - `scripts/check-goldens` with the cache off (the default) and once with it on and warm;
-   - the deterministic output files of the CDO commands that `cdo-before-after` runs (fingerprint,
-     analyze primary and `--scope all`, the call-graph histogram), plus explain, query and digest
-     outputs from `output_cdo`, compared **byte for byte** between head-off and head-cold, and
-     head-off and head-warm. Not `cdo-before-after`'s summary. A file that differs between two
-     head-off runs is nondeterministic: it is listed, filed as a bug, and left out only of this
-     comparison;
-   - `aldump --session-refresh <copy> --verify` in both modes, with the cache warm, its reference
-     cold build made with the IR cache off (a switch in `aldump`'s verify path);
-   - `cdo-gate --only harness,l4,output`, cache warm, VERIFY on in `harness`.
-2. **Hit coverage:** in every warm identity phase and every warm timed run, each process's files hit
-   equal its dependency files minus the small-package skip, and refused is zero. Checked per command
-   and per phase from the report files, not as one total.
-3. **One-shot timing** (the bar (a) and (c) numbers): `alsem analyze <CDO_WS>` (cross-app, the
-   default), `release-fast`, in a timed CDO slot (`scripts/cdo-slot run … --timed`), pinned to the
-   P-cores (`taskset -c 0-11`), under `perf stat -e instructions:u,cycles:u` over the whole process
-   tree. Counts are kept only when the counter covered the whole run (no multiplexing: 100 %
-   running); others are discarded and repeated.
-   - Four arms, alternated in a rotating order, at least 5 rounds: **master**; **head-off**
-     (`ALSEM_IR_CACHE=off`); **head-cold** (a FRESH, empty `ALSEM_IR_CACHE_DIR` per sample, so only
-     the IR is cold); **head-warm** (one IR root filled once, untimed, before the rounds).
-   - The ENG-113 text cache is the same warm one for every arm: one untimed run of each binary
-     first.
-   - Judged on instructions: head-warm/master ≤ 0.70; head-cold/master ≤ 1.05; head-off/master
-     ≤ 1.01. CPU and wall are reported beside them; a CPU ratio is quoted only as the CLAUDE.md
-     rule allows (two runs agreeing within ±12 %). A suspend or pressure label voids that round.
-4. **Resident build and gate:** cdo-speed twice (its `build` call cold and warm is reported, not
-   judged), and a full `cdo-gate`'s wall time, cache warm.
-5. **Memory and disk:** the engine census, warm against master (the IR bucket); peak RSS of one
-   cold one-shot, and of four cold one-shots started together on one fresh IR root, with the temp
-   bytes seen and the bytes written against the entries' size (write amplification); the key
-   folder's size for CDO; the largest entry; the small-package table.
-
-**cdo-speed after ENG-110 lands.** Its two sides can have different keys (any `al-syntax` edit). If
-one side's IR is warm and the other's cold, its build ratio reads a ~40 % swing that is not the
-change. So cdo-speed fills each side's key folder in one untimed call before its warm-up, and prints
-each side's hit count in the verdict; a side with zero hits on a timed call labels the verdict.
+1. **Identity, byte for byte.** The deterministic output files of the CDO commands (fingerprint,
+   analyze primary and `--scope all`, the call-graph histogram, and the explain, query and digest
+   outputs `output_cdo` produces) from four arms: **master**, **head-off**, **head-cold**,
+   **head-warm**. All four must be equal byte for byte (sol r2 P1-5: master against head-off too).
+   A file that differs between two runs of one arm is nondeterministic: listed, filed as a bug, and
+   left out only of this comparison. Plus: goldens with the cache off and once on and warm; the
+   refresh verify in both modes, its reference build made with the IR cache off;
+   `cdo-gate --only harness,l4,output` warm.
+2. **Coverage, never vacuous.** From the report files, per process, per command and per phase:
+   - every warm run: `seam_files > 0`, `disk_hits = seam_files − skipped_small`, `refused = 0`;
+   - every cold sample: `seam_files > 0`, `disk_hits = 0`, `published_packages` equal to the
+     packages above the small threshold, and the entries present on disk in that sample's root;
+   - every off run: `disk_hits = 0` and `published_packages = 0`.
+   A run whose workload was meant to use the cache and shows `seam_files = 0` fails the acceptance.
+3. **One-shot timing** (bars (a), (c)): `alsem analyze <CDO_WS>`, `release-fast`, in a timed CDO slot
+   (`scripts/cdo-slot run … --timed`), counted the way cdo-speed counts since TLS-83 and TLS-111:
+   user-mode `instructions` and `cycles` per PMU (`cpu_core`, `cpu_atom`), every event of one PMU
+   with exactly equal running time, and the instructions' running time summed over the PMUs at
+   least the call's CPU seconds less 2 % less 0.05 s (else the sample is discarded and repeated).
+   No CPU pinning, as cdo-speed. User and **sys** CPU and wall are recorded beside the counts.
+   - Arms per round: master, head-off (`ALSEM_IR_CACHE=off`), head-cold (a fresh, empty
+     `ALSEM_IR_CACHE_DIR` per sample), head-warm (one root filled once, untimed, before the
+     rounds). The ENG-113 text cache is the same warm one for every arm (one untimed run of each
+     binary first). The arm order rotates each round.
+   - **Judgment, fixed now:** per round, the ratio of each head arm's summed instructions (all PMUs)
+     to that round's master. The verdict is the **median of the per-round ratios over 6 rounds**:
+     head-warm ≤ 0.70, head-cold ≤ 1.05, head-off ≤ 1.01. If a median lies within 0.01 of its
+     limit, 6 more rounds run and the median of all 12 decides; no further rounds. A suspend or
+     "UNDER LOAD" label voids that round, which is re-run. CPU ratios are quoted only as CLAUDE.md
+     allows.
+4. **cdo-speed after ENG-110** (Fable r3 P2-5, P2-6; sol r2 P1-5). Base and head always have separate
+   key folders, so a warm-cache build ratio would compare one fill against another. cdo-speed:
+   - **keeps timing dependency parsing:** the judged `build` row runs with `ALSEM_IR_CACHE=off` on
+     both sides, as today's build;
+   - then fills each side's folder untimed, and adds a **`build (IR warm)`** row, reported with
+     hit counts per side; a side with zero hits labels the verdict;
+   - a `--ir-cold` mode times a build on a fresh IR root per side (the cold resident result),
+     reported;
+   - `child_env` (and `scripts/bench_ab.py`'s copy) **keeps `ALSEM_IR_CACHE` and
+     `ALSEM_IR_CACHE_DIR` on purpose** while still stripping every other `ALSEM_*`, and refuses
+     `ALSEM_IR_CACHE_VERIFY`. Checked: both strip every `ALSEM_*` today (`scripts/cdo-speed`
+     `child_env`, `scripts/bench_ab.py` line 39).
+5. **cdo-gate** exports `ALSEM_IR_CACHE=on` explicitly for every phase (the cargo `[env]` default is
+   off), `ALSEM_IR_CACHE_VERIFY=1` for the harness phase only, and one report file per phase; its
+   summary prints each phase's counters. A full gate's wall time, warm, is reported.
+6. **Memory and disk:** the engine census, warm against master; peak RSS of one cold one-shot and of
+   four started together on one fresh root, with temp bytes and write amplification; the key
+   folder's size for CDO; the largest entry; the per-file encoded-to-text maximum; the
+   small-package table; the binary hash's cost, cold and with the sidecar.
 
 ## Settled in review
 
-1. **`IR_KEY`'s inputs:** closed over the grammar sources, the C compiler and flags, the tree-sitter
-   runtime and codec crates (by lockfile checksum, else off), the lowerer, the envelope code and the
-   build configuration (partitioned). Opt level and target features are in the partition, not
-   argued away. `MAX_LOWER_DEPTH` is a constant 128, not read from the stack.
-2. **VERIFY:** in one gate phase for good; never in a timed run.
-3. **The small-package threshold:** one fixed constant, measured once.
-4. **mmap or owned reads:** owned, bounded reads (Design 4).
-5. **`alsem batch`:** off for the first release (section above).
+1. **The key:** the running binary (orchestrator, rev. 5). Closed by construction.
+2. **VERIFY:** one gate phase for good; never in a timed run.
+3. **Small-package threshold:** one constant, measured once.
+4. **mmap or owned:** owned, bounded reads.
+5. **`alsem batch`:** off for the first release, tested through the real parent and workers.
+6. **Disk:** 4 GiB is a soft target with a stated overshoot; 1 GiB per entry is a cap.
 
 ## Left for the owner
 
-- **Cargo overrides the build cannot see.** A `--config` argument on the cargo command line (for
-  example a `paths` override) is not visible to a build script, and a `paths` override does not
-  change `Cargo.lock`. No repo script uses either. Closing it fully would mean keying on the
-  compiled crates themselves, which a build script cannot read. Ask: accept "the repo's scripts
-  never pass `--config`" as the rule, or ask for another way.
-- **The disk caps** (1 GiB per entry, 4 GiB total) are my choice.
-- **Batch off** loses the gain for multi-worker batch runs until the follow-up lands.
+None. The binary key removed rev. 4's `--config` question. The disk numbers (1 GiB per entry, 4 GiB
+soft target) and batch-off are the orchestrator's to confirm, not open design questions.
 
 ## Builds on ENG-113
 
-- ENG-110 adds the text digest to `CacheDir::read`'s and `cached_source_in`'s results and to
-  `SourceRoot` and `DepCache` (the digest section). ENG-113's behaviour does not change.
-- ENG-110 makes `CacheDir` and its lock reusable by the IR cache and adds an owned, capped read.
+- The text digest added to `CacheDir::read`'s and `cached_source_in`'s results, `SourceRoot` and
+  `DepCache`. ENG-113's behaviour does not change.
+- The `CacheDir` refactor (Design 1).
 
 ## Owner design principles applied
 
 From `/coord/owner/design-mantra.md`:
-- **1 (correct first)** and **5 (unknown is not no):** owned reads over mmap so damage is always a
-  refusal; a key that cannot be closed turns the cache off rather than guessing; a per-file check
-  before any consumer sees decoded IR.
-- **3 (root cause):** the `BUILD_CONTEXT` leak is fixed in the lowerer, not worked around in the
-  cache.
-- **4 (measure, new gates advisory)** and **9 (commit to the expected result):** the one-shot bar
-  is stated before the run and judged on covered instruction counts; the hit-coverage labels in
-  cdo-gate start as labels.
-- **7 and 8 (tests that can fail, real use):** every guard has a stated break; the coverage and
-  identity checks run the real commands on CDO.
-- **10 (reproducible baselines):** each measurement pins the workspace SHA and the `.app` closure.
-- **13 and 14 (right-sized, reuse):** ENG-113's checked directory, lock and publish rules are reused,
-  not copied; no new user setting; batch is switched off instead of growing a claim design now.
-- **16 (clean cutover):** the `off` switch exists for tests and the off arm of the measure only; it
-  is not a user mode.
-- **24 (delete only what you made):** pruning removes only names of this cache's exact shapes.
-- **26 (state the threat model):** the hash is integrity, not a signature; the spec says what it
-  does not defend instead of adding a weak guard.
-- **35 (file work when found):** the batch follow-up is a task to file, not a note.
+- **1 (correct first)** and **5 (unknown is not no):** the binary key closes the build by
+  construction instead of listing inputs; Windows without a verified running-image read, or with an
+  unchecked override, turns the cache off; owned reads; a text change during a miss publishes
+  nothing.
+- **3 (root cause):** the `BUILD_CONTEXT` leak is fixed in the lowerer.
+- **4 and 9 (measure; commit to the result first):** the one-shot judgment rule is written before
+  any run; coverage can never pass on an empty denominator; gate labels start as labels.
+- **7 and 8 (tests that can fail, real use):** every guard has a stated break; batch-off is tested
+  through the real `alsem batch` parent and workers.
+- **10 (reproducible baselines):** each record pins the workspace, the `.app` closure and the keys.
+- **13 and 14 (right-sized, reuse):** ENG-113's `CacheDir` is refactored, not copied; the binary
+  key deletes rev. 4's build-script machinery.
+- **16 (clean cutover):** the off switch exists for tests and measurement only.
+- **24 (delete only what you made):** pruning removes only this cache's exact name shapes and skips
+  folders with live publish locks.
+- **26 (state the threat model):** said, not guarded weakly.
+- **35 (file work when found):** the batch follow-up is a task to file.
 
 ## Review history
 
 - **rev. 1:** written.
 - **rev. 2:** Fable r1 folded in (3 P1, 6 P2, P3s), plus the orchestrator's VERIFY, tests and
   measures additions.
-- **rev. 3:** Fable r2 folded in. N1: the build trigger is pinned by a baked-hash test. N2: one home
-  for the test switch (`[env]`) and its precedence. N3: VERIFY labels zero hits. Plus its P3s.
-- **rev. 4:** sol r1 (blocked rev. 3; 5 P1, 2 P2) folded in, each point checked on `c80f1391`.
-  P1-1: the hash covers the whole envelope, exact count, tiled ranges, bounded decode,
-  `AlFile::check`. P1-2: the key closes over grammar sources, C compiler, runtime and codec crates,
-  codec code and build configuration; validated symbol ids. P1-3: the `BUILD_CONTEXT` reset and
-  unwind-safe restore, with tests. P1-4: ENG-113 as shipped (lock, no-clobber), owned reads, batch
-  off. P1-5: the one-shot protocol, byte comparison, per-phase coverage, closure pin. P2: the
-  digest in the path, disk caps, throttled maintenance, concurrent cold-fill measure.
+- **rev. 3:** Fable r2 folded in (N1 baked-hash trigger test, N2 one home for the test switch, N3
+  VERIFY labels zero hits).
+- **rev. 4:** sol r1 (5 P1, 2 P2) folded in: whole-envelope hash, build-input key, `BUILD_CONTEXT`
+  reset, owned reads, batch off, the one-shot protocol, digest in the path, disk caps.
+- **rev. 5:** sol r2 (4 P1 open, 1 P2) and Fable r3 folded in, plus the orchestrator's decision to
+  key on the running binary (sol P1-1; Fable P2-4, P2-7, P2-8, P2-9 dissolve with it). Decode safety
+  (sol P1-2, Fable P1-2): encoded and heap budgets, a three-colour stmt/block walk, the
+  `preproc_ranges` order check dropped, `char` boundaries. Miss correctness (Fable P1-1): the text
+  re-hash before publish, no rewrite of equal bytes. Batch and Windows (sol P1-4): the real-run
+  test, no report append in batch, the override refused on Windows. Acceptance (sol P1-5, Fable
+  P1-3, P2-5, P2-6): master against head-off, the seam-file denominator, in-process reuse apart,
+  cold-sample checks, the paired median rule, cdo-speed's off build row and environment pass-through,
+  cdo-gate's explicit switch, TLS-111 counting, sys CPU. Disk (sol P2): soft target with overshoot,
+  prune timestamp re-read under the lock, live publish locks respected, Windows coordination.
+  Fable P2-10, P3: the `CacheDir` refactor named, switches as parameters, `al-syntax`'s own `rc`
+  feature.
