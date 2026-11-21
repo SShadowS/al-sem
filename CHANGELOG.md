@@ -7,6 +7,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (ENG-110: a persistent cache of parsed dependency IR)
+
+- **What.** Every engine process parsed and lowered every dependency file again: on CDO 10,881
+  files, ~24 CPU-s a process. Now `alsem`, `aldump` and `al-call-hierarchy` keep each
+  dependency package's lowered IR in `~/.cache/al-ch-snapshot-cache/ir/<key>/<text digest>.bin`
+  (beside ENG-113's text cache; `ALSEM_IR_CACHE_DIR` moves it). The first process of a binary
+  fills it, later processes read, hash and decode it. Spec:
+  `docs/superpowers/specs/2026-11-18-eng110-ir-cache-design.md`; plan:
+  `docs/superpowers/plans/2026-11-21-eng110-ir-cache.md`; acceptance note:
+  `docs/superpowers/notes/2026-11-21-eng110-acceptance.md`.
+- **The key is the running binary.** blake3 of `/proc/self/exe`'s bytes plus the IR format, so
+  whatever produces or reads the IR (grammar, lowerer, codec, toolchain, features) is in the key.
+  A binary without the 16-byte image marker (a tool like valgrind as `/proc/self/exe`) gets no
+  key: the cache is off. `scripts/check-ir-image` checks alsem, aldump and al-call-hierarchy
+  (`ci-steps build`, both Linux release jobs): the marker, no locale symbols, and only libc,
+  libgcc_s and (al-call-hierarchy) glibc's loader as shared libraries.
+- **Where it is off.** On Windows (TLS-117), in `alsem batch` (TLS-116), for a package below 8
+  files, for owned (unmapped) text, with `ALSEM_IR_CACHE=off` (only `on`/`off`, any case; any
+  other value is off, warned), and in every test (`.cargo/config.toml`'s `[env]` sets it off for
+  the engines tests spawn; in-process test binaries never install it).
+- **The guarantee.** In this user's private cache folder, an accepted entry decodes to exactly
+  the IR a fresh parse made: (a) the reader accepts only an entry whose whole-envelope blake3
+  matches; (b) a writer stores a file only after decoding its encoding, comparing it with the
+  fresh IR (`==`) and re-encoding it to the same bytes; (c) the decoder is deterministic. Fills
+  parse an owned copy of the ENG-113 entry whose verified digest names the entry. Deliberate
+  tampering by someone who can write the folder is outside it.
+- **Robustness.** Publishing takes a lock beside the key folder (`ir/<key>.lock`, never removed:
+  one empty file per binary that ever used the cache) and the entry's lock, without waiting.
+  A best-effort prune at most hourly removes key folders unused for 7 days, then the oldest
+  past a 4 GiB soft target (never the running binary's), and day-old temp files. A refused entry
+  counts as `refused` and is refilled.
+- **Measured on CDO** (one-shot `alsem analyze`, median of 6 rounds, user instructions against
+  the merge base): **warm instructions x0.527** (bar <= 0.70), **cold (a new binary's first run)
+  x1.035** (bar <= 1.05), **cache off x1.000** (bar <= 1.01). All 7 deterministic CDO outputs
+  (fingerprint, analyze both scopes, call-graph histogram, explain, query, digest) are byte-equal
+  across master, off, cold and warm; the session refresh verifies equal in both modes with the
+  cache warm. A resident server's model build (cdo-speed's `build (IR warm)` row, two runs that
+  agree): CPU x0.68 ±6 %. Max RSS: analyze cold x1.038, warm x1.002; `aldump
+  --snapshot-memory` warm x0.979.
+  Disk: ~144 MiB per binary for CDO. Four cold processes at once publish each entry once.
+- **A gate gets no speed-up from this change.** A gate builds new binaries, and a new binary
+  starts cold; the in-process test binaries never use the cache. cdo-gate turns it on only in
+  `output_cdo` (and VERIFY, every hit parsed again and compared, in `output_cdo_impact`), and
+  fails a phase whose report shows no cache use or a refusal (`scripts/ir-cache-report-check`).
+  **cdo-speed is slower**: its judged rows run with the cache off, then it fills each side's
+  folder untimed and reports `build (IR warm)` (and with `--ir-cold`, `build (IR cold)`).
+- **Binaries run directly use the cache by default**: `scripts/profile`, `bench_ab.py`, a hand
+  `aldump` or `alsem` probe, the installed `~/.al-sem/bin/alsem`. The first run of a build fills
+  it; the later runs are warm. **A measurement sets `ALSEM_IR_CACHE=off` or states which state it
+  measured.** (`cdo-speed` and `cdo-before-after` judge with it off.) On a lane host the 4 GiB
+  target will sit full: every new binary that runs a CDO one-shot adds ~144 MiB.
+- **Diagnostics.** `ALSEM_IR_CACHE_REPORT=<file>`: a start and an end line per process with its
+  counters (`seam_files`, `disk_hits`, `parsed_miss`, `refused`, `published_packages`, ...);
+  `ALSEM_IR_CACHE_VERIFY=1`.
+- **Also changed.** The lowerer's build context is scratch state (cleared per file, restored on
+  an unwind), so a file's IR depends on its text alone. The IR types derive serde, `PartialEq`
+  and `Debug`. ENG-113's `cached_source` returns the entry's text digest; its `CacheDir` serves
+  both caches.
+- **Pinned by** the lib tests in `src/program/ir_cache/` (codec, key, envelope, seam, prune), two
+  `lib_cdo` tests (every CDO dependency file cold and warm equals a fresh parse; encodings are
+  the same in two thread orders), `tests/cli/cli_ir_cache.rs` (real processes: publish and
+  report, batch with and without workers touches nothing, cache-off counting, the engine child's
+  report, the session refresh's reference builds bypass the cache, a refused entry fails the
+  gate rule), each guard with its discrimination proof in its commit message.
+
 ### Fixed (TLS-113: a speed skip no longer leaks into a landing's other steps)
 
 - **Why.** ENG-159's landing skipped cdo-gate's speed phase (owner-approved) by exporting
