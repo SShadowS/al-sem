@@ -118,6 +118,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   refuses perf's output it now logs perf's rows ("perf output not taken as a count"), so the
   next such call says why.
 
+### Fixed (TLS-109, TLS-110: `alsem batch` compares the files a manifest writes, not their paths)
+
+- **What failed (TLS-109).** The write-set check compared path spellings. A stream that was a
+  hard link to another job's `--out`, or to a workspace's `.al` file under another name, passed
+  the check and was then truncated. A bind mount had the same hole.
+- **The fix.** Every write-set check now compares file identity: device and inode of an existing
+  file, and for a file not yet created, the identity of its deepest existing directory plus the
+  names below it. This covers streams, job targets, directory targets, the files jobs read and
+  the workspace inputs a job reads. "Inside a directory target" means the file's own identity,
+  or one of its directories', is the directory or something under it (links followed), so a hard
+  link to a file in that directory counts too. Symlinks and `..` were already folded; they now
+  meet the same identity test.
+- **Windows.** There is no inode in the standard library there, so the identity is the
+  canonical path: the check is the path comparison it was before. A hard link is not caught on
+  Windows.
+- **What failed (TLS-110).** A refused job's directory target was not protected: a refused
+  `fingerprint --shard bad --out D` whose stdout was `D/x` wrote its error over `D/x`. A refused
+  job's named directory is now kept: any write under it, by its own streams or by another job,
+  refuses the manifest (exit 3) before any file is opened. A refused job's named file keeps the
+  ENG-168 rule (only its own streams are refused).
+- Tests through the binary for a hard link, a file symlink, a directory symlink, `..` and the
+  refused directory, each checking the file's bytes are unchanged, each with a discrimination
+  proof.
+
 ### Fixed (TLS-108: `ci-steps perf-bounds` times its bounds under a timed CDO slot hold)
 
 - **What failed.** `perf_bounds` asserts wall-time bounds. In a landing's `ci-steps all` it ran

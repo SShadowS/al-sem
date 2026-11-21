@@ -67,11 +67,13 @@ pub struct JobPaths {
     pub reads: Vec<PathBuf>,
     /// The workspaces it reads.
     pub workspaces: Vec<PathBuf>,
-    /// Files a refused job's command line names as writes but that it will not
-    /// write (ENG-168): the job's own streams may not write them, or its
-    /// refusal would still truncate, e.g., the baseline it named. Another job's
-    /// write of one is that job's own (#277 final r1 FR-2 keeps it allowed).
-    pub kept: Vec<PathBuf>,
+    /// Targets a refused job's command line names as writes but that it will
+    /// not write (ENG-168): the job's own streams may not write a kept file,
+    /// or its refusal would still truncate, e.g., the baseline it named.
+    /// Another job's write of one is that job's own (#277 final r1 FR-2 keeps
+    /// it allowed). A kept directory (TLS-110: a refused `--shard --out D`)
+    /// takes no write under it at all, from its own streams or another job.
+    pub kept: Vec<Target>,
 }
 
 /// The files a workspace read takes under its workspace path
@@ -107,34 +109,140 @@ fn fold(cwd: &Path, p: &Path) -> PathBuf {
     folded
 }
 
+/// What one existing file or directory is (TLS-109): its device and inode on
+/// unix, so a hard link, a bind mount or any other spelling of it is the same
+/// file. Elsewhere (Windows) its canonical path, so every check there is the
+/// path comparison it was before TLS-109 (a hard link is not caught there).
+#[cfg(unix)]
+type FileId = (u64, u64);
+#[cfg(not(unix))]
+type FileId = PathBuf;
+
+#[cfg(unix)]
+fn file_id(p: &Path) -> Option<FileId> {
+    use std::os::unix::fs::MetadataExt;
+    std::fs::metadata(p).ok().map(|m| (m.dev(), m.ino()))
+}
+
+#[cfg(not(unix))]
+fn file_id(p: &Path) -> Option<FileId> {
+    std::fs::canonicalize(p).ok()
+}
+
+/// A path a check compares by the file it names (TLS-109), not by spelling.
+#[derive(Clone, Debug)]
+struct Ident {
+    /// The [`resolve`]d spelling, for messages and file-name tests.
+    path: PathBuf,
+    /// The [`FileId`] of every existing component, the root first: the last
+    /// is the file itself when it exists, else its deepest existing ancestor.
+    chain: Vec<FileId>,
+    /// The names below `chain`'s last that do not exist yet, as spelled
+    /// (lowercased on Windows, a case-insensitive file system).
+    rest: Vec<std::ffi::OsString>,
+}
+
+impl Ident {
+    /// Equal keys: one file, existing or not.
+    fn key(&self) -> (Option<&FileId>, &[std::ffi::OsString]) {
+        (self.chain.last(), &self.rest)
+    }
+
+    /// Whether this is `d` or lies under it, through its existing ancestors'
+    /// identities (a bind mount or a linked spelling of `d` included).
+    fn under(&self, d: &Ident) -> bool {
+        match d.chain.last() {
+            Some(top) if d.rest.is_empty() => self.chain.contains(top),
+            top => self.chain.last() == top && self.rest.starts_with(&d.rest),
+        }
+    }
+
+    /// Whether this file sits directly in the directory `d`.
+    fn parent_is(&self, d: &Ident) -> bool {
+        match self.rest.split_last() {
+            Some((_, up)) => self.chain.last() == d.chain.last() && up == d.rest,
+            None => {
+                d.rest.is_empty()
+                    && self.chain.len() >= 2
+                    && d.chain.last() == self.chain.get(self.chain.len() - 2)
+            }
+        }
+    }
+}
+
+/// A directory target (TLS-109): its [`Ident`], and when it exists the
+/// [`FileId`] of itself and of everything under it, links followed. A file
+/// whose identity chain meets that set is written inside it, also a hard
+/// link to a file in it or a path through a link out of it.
+struct DirIdent {
+    id: Ident,
+    inside: HashSet<FileId>,
+}
+
+impl DirIdent {
+    fn new(id: Ident) -> DirIdent {
+        let inside = if id.rest.is_empty() {
+            walkdir::WalkDir::new(&id.path)
+                .follow_links(true)
+                .into_iter()
+                .flatten()
+                .filter_map(|e| file_id(e.path()))
+                .collect()
+        } else {
+            HashSet::new()
+        };
+        DirIdent { id, inside }
+    }
+
+    /// Whether `f` is this directory or written under it.
+    fn holds(&self, f: &Ident) -> bool {
+        if self.inside.is_empty() {
+            f.under(&self.id)
+        } else {
+            f.chain.iter().any(|i| self.inside.contains(i))
+        }
+    }
+}
+
 /// `p` [`fold`]ed, then its deepest existing ancestor canonicalized and the
-/// rest appended (R8-1): two spellings of one file through a symlink, a
-/// Windows case difference or an 8.3 name are one path. The part that does
-/// not exist yet is compared as spelled, lowercased on Windows (a
-/// case-insensitive file system).
-fn resolve(cwd: &Path, p: &Path) -> PathBuf {
+/// rest appended (R8-1), with the identity of every existing component
+/// (TLS-109): two spellings of one file through a symlink, a hard link, a
+/// bind mount, a Windows case difference or an 8.3 name are one [`Ident`].
+fn resolve(cwd: &Path, p: &Path) -> Ident {
     let lexical = fold(cwd, p);
     let mut rest = Vec::new();
     let mut base = lexical.as_path();
     loop {
         if let Ok(canonical) = std::fs::canonicalize(base) {
-            return rest
-                .iter()
+            let mut chain: Vec<FileId> = canonical.ancestors().filter_map(file_id).collect();
+            chain.reverse();
+            let rest: Vec<std::ffi::OsString> = rest
+                .into_iter()
                 .rev()
-                .fold(canonical, |p, name: &std::ffi::OsString| {
+                .map(|name: std::ffi::OsString| {
                     if cfg!(windows) {
-                        p.join(name.to_string_lossy().to_lowercase())
+                        name.to_string_lossy().to_lowercase().into()
                     } else {
-                        p.join(name)
+                        name
                     }
-                });
+                })
+                .collect();
+            let path = rest.iter().fold(canonical, |p, name| p.join(name));
+            return Ident { path, chain, rest };
         }
         match (base.parent(), base.file_name()) {
             (Some(parent), Some(name)) => {
                 rest.push(name.to_os_string());
                 base = parent;
             }
-            _ => return lexical,
+            _ => {
+                let rest = lexical.iter().map(|c| c.to_os_string()).collect();
+                return Ident {
+                    path: lexical,
+                    chain: Vec::new(),
+                    rest,
+                };
+            }
         }
     }
 }
@@ -156,23 +264,20 @@ fn resolve(cwd: &Path, p: &Path) -> PathBuf {
 /// redoing it for every pair of a job and a write made a manifest of n jobs
 /// cost n² of those calls (G14: 800 jobs 30 s, 5,488 over ten minutes).
 struct WorkspaceRead {
-    root: PathBuf,
-    scope: crate::dependencies::CacheScope,
+    root: Ident,
+    /// The loader's candidate `.alpackages` folders (`package_cache_scope`).
+    candidates: Vec<Ident>,
     taken: Taken,
     /// The source-folder dependencies the read also takes (G4), resolved.
-    source_roots: Vec<PathBuf>,
+    source_roots: Vec<Ident>,
 }
 
 impl WorkspaceRead {
     fn new(cwd: &Path, ws: &Path) -> WorkspaceRead {
-        use crate::dependencies::{CacheScope, package_cache_scope};
-        let spelled = package_cache_scope(&fold(cwd, ws));
+        let spelled = crate::dependencies::package_cache_scope(&fold(cwd, ws));
         WorkspaceRead {
             root: resolve(cwd, ws),
-            scope: CacheScope {
-                candidates: spelled.candidates.iter().map(|c| resolve(cwd, c)).collect(),
-                walked_dirs: vec![],
-            },
+            candidates: spelled.candidates.iter().map(|c| resolve(cwd, c)).collect(),
             taken: taken_files(cwd, ws),
             source_roots: crate::program::source_deps::configured_roots(&fold(cwd, ws))
                 .iter()
@@ -181,15 +286,19 @@ impl WorkspaceRead {
         }
     }
 
-    /// Whether the read takes the resolved file `f`.
-    fn takes(&self, f: &Path) -> bool {
-        use crate::dependencies::{Role, cache_scope_role};
-        let under = |root: &Path| f.starts_with(root) && is_input_name(f);
+    /// Whether the read takes the file `f`, by identity (TLS-109).
+    fn takes(&self, f: &Ident) -> bool {
+        let input = is_input_name(&f.path);
+        let under = |root: &Ident| input && f.under(root);
+        let app = f
+            .path
+            .file_name()
+            .is_some_and(crate::dependencies::is_app_file);
         under(&self.root)
-            || cache_scope_role(&self.scope, f) == Some(Role::AppFile)
-            || self.taken.files.contains(f)
-            || self.taken.linked_dirs.iter().any(|d| under(d))
-            || self.source_roots.iter().any(|d| under(d))
+            || (app && self.candidates.iter().any(|c| f.parent_is(c)))
+            || (f.rest.is_empty() && f.chain.last().is_some_and(|i| self.taken.files.contains(i)))
+            || (input && self.taken.linked_dirs.iter().any(|d| f.chain.contains(d)))
+            || self.source_roots.iter().any(under)
     }
 }
 
@@ -204,12 +313,13 @@ fn is_input_name(f: &Path) -> bool {
 
 /// What a workspace read of `ws` takes through links ([`taken_files`]).
 struct Taken {
-    /// Every file it takes that exists now, canonicalized.
-    files: HashSet<PathBuf>,
-    /// The canonical target of every linked directory the walk enters: an
+    /// The [`FileId`] of every file it takes that exists now (TLS-109: a
+    /// hard link to one, under any name, is that file).
+    files: HashSet<FileId>,
+    /// The [`FileId`] of every linked directory the walk enters: an
     /// [`is_input_name`] file beneath one is taken, existing or not (#277
     /// final r2 R2-2).
-    linked_dirs: Vec<PathBuf>,
+    linked_dirs: Vec<FileId>,
 }
 
 /// What a workspace read of `ws` takes through links (#277 final r1 FR-5):
@@ -236,20 +346,32 @@ fn taken_files(cwd: &Path, ws: &Path) -> Taken {
         })
         .flatten();
     for e in walked {
-        let canonical = || std::fs::canonicalize(e.path()).ok();
         if e.file_type().is_dir() && e.path_is_symlink() {
-            taken.linked_dirs.extend(canonical());
+            taken.linked_dirs.extend(file_id(e.path()));
         } else if e.file_type().is_file() && is_input_name(e.path()) {
-            taken.files.extend(canonical());
+            taken.files.extend(file_id(e.path()));
         }
     }
     let packages = crate::dependencies::discover_app_files(&root).0;
-    taken.files.extend(
-        packages
-            .into_iter()
-            .filter_map(|a| std::fs::canonicalize(a.path).ok()),
-    );
     taken
+        .files
+        .extend(packages.into_iter().filter_map(|a| file_id(&a.path)));
+    taken
+}
+
+/// A [`Target`] by identity (TLS-109).
+enum Written {
+    File(Ident),
+    Dir(DirIdent),
+}
+
+impl Written {
+    fn path(&self) -> &Path {
+        match self {
+            Written::File(f) => &f.path,
+            Written::Dir(d) => &d.id.path,
+        }
+    }
 }
 
 /// Every write target of the run checked before any build (D2.4, 12A-10):
@@ -257,34 +379,34 @@ fn taken_files(cwd: &Path, ws: &Path) -> Taken {
 /// a file inside a directory target or two nested directory targets, a file
 /// one job reads that another writes, and a file another job writes that a
 /// workspace read would take, and a refused job's named file its own stream
-/// writes (`JobPaths::kept`). `jobs`: `(name, paths)`, `name` as the error
-/// line names the job. `Err`: the one usage line naming both jobs.
+/// writes (`JobPaths::kept`), and any write under a refused job's named
+/// directory (TLS-110). Every comparison is by file identity (TLS-109, see
+/// [`Ident`]): a hard link, symlink, bind mount or `..` spelling of a file is
+/// that file, so no check passes a write that would truncate one. `jobs`:
+/// `(name, paths)`, `name` as the error line names the job. `Err`: the one
+/// usage line naming both jobs. It runs before any file is opened.
 pub fn check_write_sets(jobs: &[(String, JobPaths)], cwd: &Path) -> Result<(), String> {
     let fail = |why: String| Err(format!("al-sem batch: {why}"));
-    let writes: Vec<(usize, Target)> = jobs
+    let ident = |t: &Target| match t {
+        Target::File(f) => Written::File(resolve(cwd, f)),
+        Target::Dir(d) => Written::Dir(DirIdent::new(resolve(cwd, d))),
+    };
+    let writes: Vec<(usize, Written)> = jobs
         .iter()
         .enumerate()
-        .flat_map(|(j, (_, p))| {
-            p.writes.iter().map(move |t| {
-                let t = match t {
-                    Target::File(f) => Target::File(resolve(cwd, f)),
-                    Target::Dir(d) => Target::Dir(resolve(cwd, d)),
-                };
-                (j, t)
-            })
-        })
+        .flat_map(|(j, (_, p))| p.writes.iter().map(move |t| (j, ident(t))))
         .collect();
     let name = |j: usize| &jobs[j].0;
     // Where each written file sits in `writes`, and every directory target
     // (few: `--out-dir`-style targets). Each check below asks these instead of
     // scanning every pair, which made a manifest of n jobs O(n²) (G14). The
     // answers, and the first clash reported, are those of the pair scan.
-    let mut files: HashMap<&Path, Vec<usize>> = HashMap::new();
+    let mut files: HashMap<(Option<&FileId>, &[std::ffi::OsString]), Vec<usize>> = HashMap::new();
     let mut dirs: Vec<usize> = Vec::new();
     for (pos, (_, t)) in writes.iter().enumerate() {
         match t {
-            Target::File(f) => files.entry(f.as_path()).or_default().push(pos),
-            Target::Dir(_) => dirs.push(pos),
+            Written::File(f) => files.entry(f.key()).or_default().push(pos),
+            Written::Dir(_) => dirs.push(pos),
         }
     }
     // Two targets that clash: the first write with a later partner, then its
@@ -297,33 +419,32 @@ pub fn check_write_sets(jobs: &[(String, JobPaths)], cwd: &Path) -> Result<(), S
             }
         };
         match ta {
-            Target::File(x) => {
-                if let Some(&j) = files[x.as_path()].iter().find(|&&j| j > i) {
-                    consider(j, format!("both write {}", x.display()));
+            Written::File(x) => {
+                if let Some(&j) = files[&x.key()].iter().find(|&&j| j > i) {
+                    consider(j, format!("both write {}", x.path.display()));
                 }
                 for &j in &dirs {
-                    if let Target::Dir(d) = &writes[j].1
-                        && x.starts_with(d)
+                    if let Written::Dir(d) = &writes[j].1
+                        && d.holds(x)
                     {
-                        consider(
-                            j,
-                            format!("{} is inside the directory {}", x.display(), d.display()),
-                        );
+                        let (x, d) = (x.path.display(), d.id.path.display());
+                        consider(j, format!("{x} is inside the directory {d}"));
                     }
                 }
             }
-            Target::Dir(x) => {
+            Written::Dir(x) => {
                 let partner = writes
                     .iter()
                     .enumerate()
                     .skip(i + 1)
                     .find_map(|(j, (_, tb))| {
+                        let xp = x.id.path.display();
                         let why = match tb {
-                            Target::File(f) => f.starts_with(x).then(|| {
-                                format!("{} is inside the directory {}", f.display(), x.display())
+                            Written::File(f) => x.holds(f).then(|| {
+                                format!("{} is inside the directory {xp}", f.path.display())
                             }),
-                            Target::Dir(y) => (x.starts_with(y) || y.starts_with(x)).then(|| {
-                                format!("the directories {} and {} nest", x.display(), y.display())
+                            Written::Dir(y) => (y.holds(&x.id) || x.holds(&y.id)).then(|| {
+                                format!("the directories {xp} and {} nest", y.id.path.display())
                             }),
                         };
                         why.map(|why| (j, why))
@@ -347,9 +468,9 @@ pub fn check_write_sets(jobs: &[(String, JobPaths)], cwd: &Path) -> Result<(), S
             let in_dir = dirs
                 .iter()
                 .copied()
-                .filter(|&j| matches!(&writes[j].1, Target::Dir(d) if read.starts_with(d)));
+                .filter(|&j| matches!(&writes[j].1, Written::Dir(d) if d.holds(&read)));
             let hit = files
-                .get(read.as_path())
+                .get(&read.key())
                 .into_iter()
                 .flatten()
                 .copied()
@@ -360,25 +481,47 @@ pub fn check_write_sets(jobs: &[(String, JobPaths)], cwd: &Path) -> Result<(), S
                 return fail(format!(
                     "{} reads {}, which {} writes",
                     name(r),
-                    read.display(),
+                    read.path.display(),
                     name(writes[w].0)
                 ));
             }
         }
-        // A refused job's named file: its own streams may not write it.
         for kept in &paths.kept {
-            let kept = resolve(cwd, kept);
-            let own = files
-                .get(kept.as_path())
-                .into_iter()
-                .flatten()
-                .any(|&w| writes[w].0 == r);
-            if own {
-                return fail(format!(
-                    "{} names {} but is refused, so it must stay as it is; its own stream writes it",
-                    name(r),
-                    kept.display()
-                ));
+            match kept {
+                // A refused job's named file: its own streams may not write it.
+                Target::File(k) => {
+                    let k = resolve(cwd, k);
+                    let own = files
+                        .get(&k.key())
+                        .into_iter()
+                        .flatten()
+                        .any(|&w| writes[w].0 == r);
+                    if own {
+                        return fail(format!(
+                            "{} names {} but is refused, so it must stay as it is; its own stream writes it",
+                            name(r),
+                            k.path.display()
+                        ));
+                    }
+                }
+                // Its named directory (TLS-110): no write under it, its own
+                // streams' or another job's.
+                Target::Dir(k) => {
+                    let k = DirIdent::new(resolve(cwd, k));
+                    let under = writes.iter().find(|(_, t)| match t {
+                        Written::File(f) => k.holds(f),
+                        Written::Dir(y) => k.holds(&y.id) || y.holds(&k.id),
+                    });
+                    if let Some((w, t)) = under {
+                        return fail(format!(
+                            "{} names the directory {} but is refused, so it must stay as it is; {} writes {} inside it",
+                            name(r),
+                            k.id.path.display(),
+                            name(*w),
+                            t.path().display()
+                        ));
+                    }
+                }
             }
         }
         for ws in &paths.workspaces {
@@ -387,20 +530,17 @@ pub fn check_write_sets(jobs: &[(String, JobPaths)], cwd: &Path) -> Result<(), S
                 writes
                     .iter()
                     .enumerate()
-                    .filter(|(_, (_, t))| matches!(t, Target::File(f) if read.takes(f)))
+                    .filter(|(_, (_, t))| matches!(t, Written::File(f) if read.takes(f)))
                     .map(|(w, _)| w)
                     .collect()
             });
             if let Some(&w) = hits.iter().find(|&&w| writes[w].0 != r) {
-                let Target::File(f) = &writes[w].1 else {
-                    unreachable!("only file targets are kept")
-                };
                 return fail(format!(
                     "{} reads the workspace {}, where {} writes {}",
                     name(r),
-                    resolve(cwd, ws).display(),
+                    resolve(cwd, ws).path.display(),
                     name(writes[w].0),
-                    f.display()
+                    writes[w].1.path().display()
                 ));
             }
         }

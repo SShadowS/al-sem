@@ -2017,19 +2017,12 @@ fn run_batch_cmd(b: BatchCli) -> ExitCode {
             let written = match p {
                 // A refused job writes no file its command names, and its own
                 // streams may not write one either (ENG-168): a refused
-                // `--update-baseline B` with stdout B would empty B.
+                // `--update-baseline B` with stdout B would empty B. Nor may
+                // any write land under a directory it names (TLS-110).
                 // `job_paths` lists the two streams first, then the named targets.
                 Planned::Failed(_) => JobPaths {
                     reads: written.reads,
-                    kept: written
-                        .writes
-                        .into_iter()
-                        .skip(2)
-                        .filter_map(|t| match t {
-                            al_sem::engine::batch::manifest::Target::File(f) => Some(f),
-                            al_sem::engine::batch::manifest::Target::Dir(_) => None,
-                        })
-                        .collect(),
+                    kept: written.writes.into_iter().skip(2).collect(),
                     ..stream_paths(&job.streams)
                 },
                 Planned::Ready { .. } => written,
