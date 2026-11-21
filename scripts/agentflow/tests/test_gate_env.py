@@ -75,7 +75,9 @@ COMPUTED_READS = {
     "bench_ab.py": "only drops ALSEM_* and C1_CONE_CENSUS from a child's environment",
     "nextest-priority-check": "only drops CDO_WS and ENFORCE_CDO_WS from a child's environment",
     "land": "the declared test hooks (agentflow.supervise.declared_test_hooks; cleared: "
-            "CDO_ and CI_STEPS_ names), to refuse one set",
+            "CDO_ and CI_STEPS_ names), and with `compgen -e` the build overrides "
+            "CARGO_PROFILE_*, CARGO_BUILD_*, RUSTFLAGS, RUSTDOCFLAGS, CARGO_ENCODED_RUSTFLAGS, "
+            "CARGO_TARGET_DIR (cleared: cdo-speed's build inputs and GATE_ENV_NAMES), to refuse one set",
 }
 
 

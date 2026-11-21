@@ -164,6 +164,11 @@ for v in $hooks; do
     [[ -z "${!v+set}" ]] || set_hooks+=("$v")
 done
 ((${#set_hooks[@]} == 0)) || bad_usage "test hooks are set, which no real landing may pass to its gates: ${set_hooks[*]}"
+# Nor a build-shape override: CARGO_PROFILE_RELEASE_FAST_DEBUG_ASSERTIONS=true
+# compiled perf_bounds' timing tests out, and the step passed (review r2, sol).
+# land itself sets none of these, so none is exempt.
+overrides=$(compgen -e | grep -E '^(CARGO_PROFILE_|CARGO_BUILD_)|^(RUSTFLAGS|RUSTDOCFLAGS|CARGO_ENCODED_RUSTFLAGS|CARGO_TARGET_DIR)$' || true)
+[[ -z "$overrides" ]] || bad_usage "build overrides are set, which no landing may pass to its builds: $(echo $overrides)"
 cdo_flags=()
 if ((no_speed_given)); then
     cdo_flags=(--no-speed)

@@ -26,7 +26,7 @@ from agentflow.supervise import script_tuple  # noqa: E402
 GATE_ENV_PREFIXES = ("AGENTFLOW_", "ALSEM_SPEED_", "CDO_", "CHECK_GOLDENS_", "CI_STEPS_",
                      "LAND_", "MERGE_EXPECT_", "PERF_PROBE_") + script_tuple("cdo-speed", "BUILD_ENV_PREFIXES")
 GATE_ENV_NAMES = ("ALDUMP", "CARGO_TARGET_DIR", "DO_WS", "ENFORCE_CDO_WS", "FLOW_LOG",
-                  "GITHUB_ACTIONS", "REGEN_TEMP_GOLDENS", "SWITCH_BASELINES",
+                  "GITHUB_ACTIONS", "REGEN_TEMP_GOLDENS", "RUSTDOCFLAGS", "SWITCH_BASELINES",
                   "TREE_SITTER_AL_PATH") + script_tuple("cdo-speed", "BUILD_ENV_EXACT")
 # Read by the scripts, but they say who runs them, not how a gate decides: kept.
 GATE_ENV_KEPT = ("CARGO_HOME", "CLAUDE_CODE_SESSION_ID", "CLAUDE_CONFIG_DIR", "CLAUDE_PID",

@@ -814,6 +814,9 @@ fn land_refuses_and_leaves_nothing_behind() {
 ///   exited 0); reverted -> passed.
 /// - (r2) `unset BASH_ENV ENV` removed -> FAILED (the steps logged `startup`
 ///   lines); reverted -> passed.
+/// - (r3) the build-override refusal removed -> FAILED (the
+///   CARGO_PROFILE_RELEASE_FAST_DEBUG_ASSERTIONS run exited 0); reverted ->
+///   passed.
 #[test]
 fn land_no_speed_takes_a_reason_and_passes_the_flag() {
     let r = repo();
@@ -867,6 +870,26 @@ fn land_no_speed_takes_a_reason_and_passes_the_flag() {
         assert!(
             text.contains(&format!(
                 "test hooks are set, which no real landing may pass to its gates: {}",
+                env.0
+            )),
+            "{env:?}: {text}"
+        );
+    }
+    // (r2, sol) Build-shape overrides: one would compile perf_bounds' timing
+    // tests out, or build another tree than the gates think.
+    for env in [
+        ("CARGO_PROFILE_RELEASE_FAST_DEBUG_ASSERTIONS", "true"),
+        ("CARGO_BUILD_JOBS", "1"),
+        ("RUSTFLAGS", "-Cdebug-assertions"),
+        ("RUSTDOCFLAGS", "x"),
+        ("CARGO_ENCODED_RUSTFLAGS", "x"),
+        ("CARGO_TARGET_DIR", "/tmp/elsewhere"),
+    ] {
+        let (code, text) = r.land(&["tools/tls-58-x"], &[env]);
+        assert_eq!(code, Some(2), "{env:?}: {text}");
+        assert!(
+            text.contains(&format!(
+                "build overrides are set, which no landing may pass to its builds: {}",
                 env.0
             )),
             "{env:?}: {text}"
