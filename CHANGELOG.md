@@ -270,6 +270,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   evaluated once per call and argument and given to every member, shared starts are found once
   per routine, and only the call's own arguments are rebuilt (instructions 8.90e12 -> 5.07e12,
   the output unchanged but for its timing field). The rest is the sound rule's larger answer.
+- **Speed: one "anything" fact per kept holder and conditions.** cdo-speed then failed on
+  `prove` (CPU x2.22; ~294e9 instructions on every round's routine against 50-113e9): `prove`
+  builds the RecordRef flow per call, and the rule pushed an "anything" fact for every kept
+  holder at every place that may run user code (U places x H holders per routine), which every
+  summary round and positional read scanned. "Anything" absorbs every other value, so a later
+  place adds nothing once an earlier one under the same conditions (G35) has ended before it;
+  a place nested in another call's arguments is kept (that call's own argument read sees it,
+  `NestedUserCodeRoot`; red proof: dropping every later place answers `no`). Building the flow
+  once per revision in the resident engine, and interned keys, are ENG-174.
 - **Re-baseline.** Five IssueReminder rendering goldens re-minted from the CDO baseline
   (`tests/cli-output-goldens/cdo/IssueReminder.{explain.human.txt,query-effects.human.txt,
   prove-may-commit.human.txt,prove-writes-table-data-exch.human.txt,digest-summary.json}`):

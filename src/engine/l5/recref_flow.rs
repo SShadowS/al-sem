@@ -2476,10 +2476,34 @@ fn facts_of(
         }
         KeptElsewhere::Nothing => Vec::new(),
     };
+    // "Anything" absorbs every other value, so a holder needs one such fact per set of conditions
+    // (G35) for the reads after it: a later place under the same conditions that starts after an
+    // earlier kept one ENDED adds nothing (every read that sees it sees the earlier one too: a
+    // copy before it, an argument of a call it is nested in, `arg_reach`). A place nested in
+    // another's arguments is kept: the outer call's own argument read skips the outer place but
+    // sees the nested one. Without this a routine with U such places and H holders made U x H
+    // facts, which every summary round and positional read scanned (cdo-speed: prove x2.2).
+    let regions_early = cond_regions(r, &f.tracked);
+    let conds_of = |p: (u32, u32)| -> Vec<Cond> {
+        regions_early
+            .iter()
+            .filter(|(from, to, _)| *from <= p && p < *to)
+            .map(|(_, _, c)| c.clone())
+            .collect()
+    };
+    let mut user_code = user_code;
+    user_code.sort_by_key(|p| (p.at, p.runs));
+    let mut kept_until: HashMap<(String, Vec<Cond>), (u32, u32)> = HashMap::new();
     for p in user_code {
         let at = Some(p.at);
+        let conds = conds_of(p.at);
         for v in classes.rebound_at(p.runs) {
             f.alias_shared.insert(v.clone());
+            let key = (v.clone(), conds.clone());
+            if kept_until.get(&key).is_some_and(|&end| end <= p.at) {
+                continue;
+            }
+            kept_until.insert(key, p.runs);
             f.fixed.push((v.clone(), Part::Atoms(top()), at));
         }
     }

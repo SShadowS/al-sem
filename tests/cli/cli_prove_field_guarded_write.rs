@@ -481,6 +481,23 @@ codeunit 50403 "FG Mgt"
         Check(R, MoveToLog(R));
     end;
 
+    // ENG-159 (the flow keeps one "anything" fact per kept holder and conditions): a place that
+    // may run user code nested in another call's arguments still reaches that call's argument
+    // read. `A` is a parameter (kept from entry); `Zero()` runs before `Check` reads `A`.
+    procedure NestedUserCodeRoot()
+    var
+        R: RecordRef;
+        D: Record "FG Doc";
+    begin
+        R.GetTable(D);
+        NestedUserCode(R);
+    end;
+
+    local procedure NestedUserCode(var A: RecordRef)
+    begin
+        Check(A, Zero());
+    end;
+
     procedure NestedArgControl()
     var
         R: RecordRef;
@@ -763,6 +780,7 @@ fn a_field_guarded_recordref_write_writes_only_tables_with_the_field() {
         ("NestedKeepControl", "no"),
         ("NestedArgRoot", "yes"),
         ("NestedArgControl", "no"),
+        ("NestedUserCodeRoot", "yes"),
         ("BoxRoot", "yes"),
         // Fable on ENG-159: a callee's rebinding reaches an earlier copy; a table procedure may
         // keep its argument; `(R)` is R.
