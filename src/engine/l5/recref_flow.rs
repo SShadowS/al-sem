@@ -172,6 +172,10 @@ struct Facts {
     fixed: Vec<FixedFact>,
     /// (call site index, argument position, variable): the variable passed there.
     passed: Vec<(usize, usize, String)>,
+    /// ENG-159: per `passed` fact, the other tracked members of its variable's alias class: a
+    /// callee's rebinding moves the one handle they share, so each takes the write-back too
+    /// (computed once per call and argument, not once per member).
+    passed_members: Vec<Vec<String>>,
     /// G35: the conditions each fact runs under (parallel to `fixed`/`passed`).
     fixed_conds: Vec<Vec<Cond>>,
     passed_conds: Vec<Vec<Cond>>,
@@ -183,6 +187,9 @@ struct Facts {
     /// variable may hold anything, no argument is read by name ([`RecRefFlow::atoms_of`],
     /// [`RecRefFlow::val_of_text`]) and no exit guard is taken (sol on ENG-30).
     opaque: bool,
+    /// ENG-159: the start positions two or more call sites or record operations share (a chained
+    /// call), computed once per routine for [`arg_reach`].
+    shared_starts: HashSet<(u32, u32)>,
 }
 
 /// Per routine: the atoms of each tracked own variable, and of each global it
@@ -719,7 +726,7 @@ impl<'a> RecRefFlow<'a> {
         // before the call's own write-back ([`arg_reach`]).
         if self.positional(i) && self.is_reachable_local(i, arg) && !timeline.is_empty() {
             let w = lc(arg);
-            let seen = arg_reach(&self.routines[i], cs);
+            let seen = arg_reach(&self.facts[i], cs);
             let mut out = entry.get(&w).cloned().unwrap_or_else(empty_val);
             for (u, q, val) in &timeline {
                 if *u == w && seen(*q) {
@@ -940,24 +947,26 @@ impl<'a> RecRefFlow<'a> {
                     if !self.conds_hold(i, &f.passed_conds[n], &vals, globals) {
                         continue;
                     }
-                    // The arguments are what the caller's locals hold AT the call.
+                    // The arguments are what the caller's locals hold AT the call: only the
+                    // call's own argument variables are read there (`callee_out`).
                     let at_vals: std::borrow::Cow<'_, HashMap<String, Val>> = if positional {
+                        let cs = &r.call_sites[*ci];
+                        let seen = arg_reach(f, cs);
                         let mut m = vals.clone();
-                        let seen = arg_reach(r, &r.call_sites[*ci]);
-                        for (w, kind) in &f.tracked {
-                            if matches!(kind, VarKind::Param(_) | VarKind::Local) {
-                                m.insert(
-                                    w.clone(),
-                                    pos_val(
-                                        f,
-                                        &entry_vals,
-                                        &fixed_vals,
-                                        &passed_vals,
-                                        &passed_at,
-                                        w,
-                                        &seen,
-                                    ),
+                        for a in &cs.argument_texts {
+                            let w = lc(a);
+                            if matches!(f.tracked.get(&w), Some(VarKind::Param(_) | VarKind::Local))
+                            {
+                                let v = pos_val(
+                                    f,
+                                    &entry_vals,
+                                    &fixed_vals,
+                                    &passed_vals,
+                                    &passed_at,
+                                    &w,
+                                    &seen,
                                 );
+                                m.insert(w, v);
                             }
                         }
                         std::borrow::Cow::Owned(m)
@@ -968,6 +977,9 @@ impl<'a> RecRefFlow<'a> {
                     if let Some(add) = out {
                         passed_vals[n] = union_val(&passed_vals[n], &add);
                         merge(&mut vals, v, &add);
+                        for m in &f.passed_members[n] {
+                            merge(&mut vals, m, &add);
+                        }
                     }
                 }
                 if !changed {
@@ -983,9 +995,14 @@ impl<'a> RecRefFlow<'a> {
                     .chain(
                         f.passed
                             .iter()
+                            .zip(&f.passed_members)
                             .zip(&passed_vals)
                             .zip(&passed_at)
-                            .map(|(((_, _, v), val), at)| (v.clone(), Some(*at), val.clone())),
+                            .flat_map(|((((_, _, v), members), val), at)| {
+                                std::iter::once(v)
+                                    .chain(members)
+                                    .map(move |w| (w.clone(), Some(*at), val.clone()))
+                            }),
                     )
                     .collect();
                 st.timelines.insert(key.clone(), timeline);
@@ -1399,11 +1416,13 @@ impl<'a> RecRefFlow<'a> {
         // Parts that may read other routines' summaries, resolved once per round, each with
         // where it binds (a callee's write-back at its call site).
         let mut parts: Vec<FixedFact> = f.fixed.clone();
-        for (ci, k, v) in &f.passed {
+        for ((ci, k, v), members) in f.passed.iter().zip(&f.passed_members) {
             let cs = &r.call_sites[*ci];
             if let Some(atoms) = self.passed_atoms(i, &self.summaries[i].vars, cs, *k as u32) {
                 let at = (cs.source_anchor.start_line, cs.source_anchor.start_column);
-                parts.push((v.clone(), Part::Atoms(atoms), Some(at)));
+                for w in std::iter::once(v).chain(members) {
+                    parts.push((w.clone(), Part::Atoms(atoms.clone()), Some(at)));
+                }
             }
         }
         // ENG-159 Part A: each part's own value, so a copy reads what reaches it.
@@ -1543,7 +1562,7 @@ impl<'a> RecRefFlow<'a> {
             // call's own write-back ([`arg_reach`]).
             Some(a) if self.positional(i) && self.is_reachable_local(i, a) => {
                 let w = lc(a);
-                let seen = arg_reach(&self.routines[i], cs);
+                let seen = arg_reach(&self.facts[i], cs);
                 let mut out = initial_summary(&self.facts[i])
                     .vars
                     .remove(&w)
@@ -1814,19 +1833,30 @@ fn reaches(q: Option<(u32, u32)>, p: (u32, u32)) -> bool {
 /// arguments once they have all run, nested calls among them (`Check(R, MoveToVendor(R))`, sol),
 /// so every binding before its end, except its own effects (its write-back and its user code,
 /// anchored at its start). A call or operation chained on another (`F(R).G(R)`) shares its
-/// start: the two cannot be told apart there, so both are seen.
-fn arg_reach(r: &ModelRoutine, cs: &PCallSite) -> impl Fn(Option<(u32, u32)>) -> bool + use<> {
+/// start: the two cannot be told apart there, so both are seen (`f.shared_starts`).
+fn arg_reach(f: &Facts, cs: &PCallSite) -> impl Fn(Option<(u32, u32)>) -> bool + use<> {
     let start = (cs.source_anchor.start_line, cs.source_anchor.start_column);
     let end = (cs.source_anchor.end_line, cs.source_anchor.end_column);
-    let starts = r
+    let shared = f.shared_starts.contains(&start);
+    move |q: Option<(u32, u32)>| q.is_none_or(|q| q < end && (shared || q != start))
+}
+
+/// The start positions two or more of `r`'s call sites or record operations share.
+fn shared_starts(r: &ModelRoutine) -> HashSet<(u32, u32)> {
+    let mut seen: HashSet<(u32, u32)> = HashSet::new();
+    let mut shared = HashSet::new();
+    for a in r
         .call_sites
         .iter()
         .map(|c| &c.source_anchor)
         .chain(r.record_operations.iter().map(|o| &o.source_anchor))
-        .filter(|a| (a.start_line, a.start_column) == start)
-        .count();
-    let shared = starts > 1;
-    move |q: Option<(u32, u32)>| q.is_none_or(|q| q < end && (shared || q != start))
+    {
+        let start = (a.start_line, a.start_column);
+        if !seen.insert(start) {
+            shared.insert(start);
+        }
+    }
+    shared
 }
 
 /// ENG-159 Part A: what tracked local or parameter `w` of a positional routine holds at a read
@@ -1848,7 +1878,7 @@ fn pos_val(
         }
     }
     for (m, (_, _, u)) in f.passed.iter().enumerate() {
-        if u == w && seen(Some(passed_at[m])) {
+        if (u == w || f.passed_members[m].iter().any(|x| x == w)) && seen(Some(passed_at[m])) {
             out = union_val(&out, &passed_vals[m]);
         }
     }
@@ -2276,7 +2306,10 @@ fn facts_of(
     kept: KeptElsewhere,
     shadowed: &crate::program::model::recref_alias::ShadowedBuiltins,
 ) -> Facts {
-    let mut f = Facts::default();
+    let mut f = Facts {
+        shared_starts: shared_starts(r),
+        ..Facts::default()
+    };
     for v in r.variables.iter() {
         if !is_tracked_type(&v.declared_type) {
             continue;
@@ -2492,13 +2525,14 @@ fn facts_of(
             if f.tracked.contains_key(&v) {
                 // A callee's rebinding moves the one handle every alias shares (Fable on
                 // ENG-159: `A := RR; Mut(RR); Guarded(A)`), as an in-place bind does.
-                for m in classes.members(&v) {
-                    if m != v && f.tracked.contains_key(&m) {
-                        f.alias_shared.insert(m.clone());
-                        f.passed.push((ci, k, m));
-                    }
-                }
+                let members: Vec<String> = classes
+                    .members(&v)
+                    .into_iter()
+                    .filter(|m| *m != v && f.tracked.contains_key(m))
+                    .collect();
+                f.alias_shared.extend(members.iter().cloned());
                 f.passed.push((ci, k, v));
+                f.passed_members.push(members);
             }
         }
     }
