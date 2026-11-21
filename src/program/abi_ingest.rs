@@ -1081,6 +1081,7 @@ mod tests {
                 files: Default::default(),
                 tier: TrustTier::Workspace,
                 content_hash: String::new(),
+                text_digest: None,
             }),
             compilation: CompilationContext::default(),
             declared_deps: vec![],
@@ -1444,6 +1445,7 @@ codeunit 50900 "Subscriber CU"
             .into(),
             tier: TrustTier::Workspace,
             content_hash: String::new(),
+            text_digest: None,
         });
         // A dependency edge is required — event-subscriber wiring resolves
         // the publisher object at whole-snapshot scope, but `resolve_object`

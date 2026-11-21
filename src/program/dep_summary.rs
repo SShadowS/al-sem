@@ -263,6 +263,7 @@ pub(crate) mod tests {
                     .into(),
                 tier,
                 content_hash: String::new(),
+                text_digest: None,
             }),
             compilation: CompilationContext::default(),
             declared_deps: vec![],
