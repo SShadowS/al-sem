@@ -93,14 +93,18 @@ records user and system seconds apart. Per
 side: the clock (user cycles / user seconds, GHz) and cycles per instruction. A judged
 row whose sides' clocks differ beyond CLOCK_BAND is labelled CLOCK, one whose cycles
 per instruction do beyond CPI_BAND, CPI (core sharing, core kind, or a real cache or
-memory change: the label never says which). The labels change one thing (owner
-decision q-20261121T025802-abcd2da8, the owner may overrule): a CPU-ONLY failure (the
-row's wall passes) whose row has equal instructions (within INSTR_LIMIT either way) AND
-a CLOCK or CPI label is ADVISORY, printed with its CPU and instruction ratios and the
-label. A clean clock with equal cycles per instruction stays a failure, as do wall and
-memory failures. A count whose counters did not run for the call's CPU seconds
-(`covers`) is recorded (`covered: false`) but gives no clock, no label and so no
-advisory. The advisory applies only in the final judgment, after any extra pair.
+memory change: the label never says which). CPI never waives anything: more cycles
+per instruction on equal instructions is what a cache or memory-stall regression looks
+like. The CLOCK label changes one thing (owner decision q-20261121T025802-abcd2da8, the
+owner may overrule; narrowed in TLS-111 review r3): a CPU-ONLY failure (the row's wall
+passes) with equal instructions (within INSTR_LIMIT either way) is ADVISORY when head's
+LOWER clock explains it: CPU ratio x clock ratio (head/base) within the CPU limit, and in
+a rounds row for every round over the limit by itself. It is printed with its CPU ratio,
+the clock-corrected ratio and the instruction ratio. A clock in head's favour never
+waives; wall and memory failures always fail. A count whose counters did not run for
+the call's CPU seconds (`covers`) is recorded (`covered: false`) but gives no clock, no
+label and so no advisory. The advisory applies only in the final judgment, after any
+extra pair.
 A judged warm-up row that FAILS (advisory or not) while its two passes' ratios differ
 beyond CONTRADICTED_SPREAD gets ONE more flipped pair (passes 3 and 4 on fresh servers,
 each side order once more; each waits for a calm host as passes 1 and 2 do). Then every
@@ -377,29 +381,50 @@ def clock_cpi_flags(rows):
 
 
 # ⟨TLS-111⟩ Owner decision (kraken, q-20261121T025802-abcd2da8; the owner may
-# overrule): a CPU-time failure is ADVISORY when the row's instructions are equal
-# (within INSTR_LIMIT either way) AND it carries a CLOCK or CPI label: the same
-# work ran at another clock or on shared or other cores. A clean clock with equal
-# cycles per instruction and more CPU is the stall regression instructions miss:
-# that stays a failure, as do wall and memory failures. Review r2 (sol), the
-# stricter reading: only a CPU-ONLY failure (the row's wall passes) is advisory,
-# only on counts that cover the call (`covers`: an uncovered count gives no
-# label), and only in the final judgment: a contradicted failure gets the extra
-# pair first (`warm_failures` ignores the advisory).
+# overrule), as narrowed in review r3 (Fable): a CPU-time failure is ADVISORY
+# only when a LOWER CLOCK on head explains it. User CPU is about instructions x
+# cycles per instruction / clock, so with equal instructions the excess comes
+# from the clock or from more cycles per instruction; more cycles per
+# instruction is exactly what a cache or memory-stall regression looks like, so
+# a CPI label never waives anything. The conditions, all of them:
+# - a CLOCK label on the row, from counts that cover the call (`covers`);
+# - instructions equal (within INSTR_LIMIT either way);
+# - the row's wall passes (a CPU-ONLY failure);
+# - the clock explains the excess: CPU ratio x clock ratio (head/base GHz, below
+#   1 when head ran slower) within the CPU limit. A clock in head's favour (above
+#   1) makes it larger, so it never waives;
+# - for a rounds row, every round whose CPU ratio is over the limit meets the
+#   instruction, wall and clock-corrected conditions by itself (medians taken
+#   from different rounds may not combine; review r3, S2).
+# Wall and memory failures always fail. The advisory applies only in the final
+# judgment: a contradicted failure gets the extra pair first (`warm_failures`
+# ignores the advisory).
 CPU_ADVISORY_QUESTION = "q-20261121T025802-abcd2da8"
 
 
 def cpu_advisory(row):
     """The advisory text when `row`'s CPU-time failure is advisory, else None."""
-    i = row.get("instr")
-    labels = row_labels(row)
-    wall_limit = WARM_WALL_LIMIT if row.get("warm") else WALL_LIMIT
-    if not (i and labels and 1 / INSTR_LIMIT <= i["ratio"] <= INSTR_LIMIT
-            and row["wall"]["ratio"] <= wall_limit):
+    i, c = row.get("instr"), row.get("clock")
+    warm = row.get("warm", False)
+    cpu_limit = WARM_CPU_LIMIT if warm else CPU_LIMIT
+    wall_limit = WARM_WALL_LIMIT if warm else WALL_LIMIT
+    if not (i and c and "clock" in row_labels(row)) or row["wall"]["ratio"] > wall_limit:
         return None
-    shown = ", ".join(f"{m.upper()} x{r:.3f}" for m, r in labels.items())
-    return (f"{row['call']}: CPU time x{row['cpu']['ratio']:.2f} with instructions "
-            f"x{i['ratio']:.4f} and {shown} (advisory, owner decision {CPU_ADVISORY_QUESTION})")
+    # (CPU, instructions, clock, wall) ratios: the warm-up row's judged (geometric
+    # mean) ratios, or each over-limit round of a rounds row.
+    if warm:
+        samples = [(row["cpu"]["ratio"], i["ratio"], c["ratio"], row["wall"]["ratio"])]
+    else:
+        samples = [s for s in zip(row["cpu"]["ratios"], i["ratios"], c["ratios"],
+                                  row["wall"]["ratios"]) if s[0] > cpu_limit]
+    for cpu, ir, cr, w in samples:
+        if not (1 / INSTR_LIMIT <= ir <= INSTR_LIMIT and w <= wall_limit
+                and cpu * cr <= cpu_limit):
+            return None
+    corrected = row["cpu"]["ratio"] * c["ratio"]
+    return (f"{row['call']}: CPU time x{row['cpu']['ratio']:.2f}, x{corrected:.2f} at equal "
+            f"clocks (CLOCK x{c['ratio']:.3f}), with instructions x{i['ratio']:.4f} "
+            f"(advisory, owner decision {CPU_ADVISORY_QUESTION})")
 
 
 def warm_failures(row):
@@ -1265,7 +1290,15 @@ class Server:
             else:
                 try:
                     with open(out) as f:
-                        total = perf_parse(f.read())
+                        text = f.read()
+                    total = perf_parse(text)
+                    if total is None:
+                        # Why a call goes uncounted (multiplexing, a malformed
+                        # row): perf's own rows, for the log.
+                        rows = [ln.strip() for ln in text.splitlines()
+                                if ln.strip() and not ln.startswith("#")]
+                        print(f"cdo-speed: {self.name}: perf output not taken as a count: "
+                              f"{' | '.join(rows[:6]) or '(empty)'}", file=sys.stderr)
                 except OSError:
                     total = None
         for fd in fds:
@@ -1367,22 +1400,36 @@ def timed_call(server, side, cid, tool, args, rnd, warm_pass, tag, records):
 
 # ⟨TLS-111 review r2, sol⟩ Coverage: equal running times on a PMU's events do not
 # show that the counters ran for the whole call (both could miss the same
-# interval). The instructions events' running time, summed over the PMUs, must
-# match the call's CPU seconds from /proc (user + system) within COVER_REL of
-# the CPU plus COVER_ABS (/proc's 10 ms ticks, read at both ends, over several
-# processes). Measured on server1 (2026-11-21, perf 7.0.14, cdo-speed's own
-# Server and attach; 40 calls of 0-12 s CPU in threads and in child processes
-# forked during the call; /work/.al-sem/tools-notes/tls111/coverage-probe.log):
-# the worst gap was 0.067 s on 12 s (0.6 %), at most 0.021 s below 3 s, and
-# one tick (0.009 s) on a 0.05 s call. So 2 % (three times the worst relative
-# gap) plus 0.05 s. An uncovered count only loses its clock, label and advisory.
+# interval). The instructions events' running time, summed over the PMUs, is
+# compared with the call's CPU seconds from /proc (user + system). A coverage
+# loss can only make the running time SHORTER, so the check is one-sided: the
+# count covers the call unless running < CPU x (1 - COVER_REL) - COVER_ABS
+# (/proc's 10 ms ticks, read at both ends, over several processes). Measured:
+# - synthetic calls on server1 (2026-11-21, perf 7.0.14, cdo-speed's own Server
+#   and attach; 40 calls of 0-12 s CPU in threads and child processes forked
+#   during the call; /work/.al-sem/tools-notes/tls111/coverage-probe.log): at
+#   most 0.6 % apart on 12 s, 0.021 s below 3 s, one 0.009 s tick on 0.05 s;
+# - CDO, an A/A run of f7da9a93 (/work/.al-sem/tools-notes/tls111/aa3): on the
+#   39 calls above 1 s, running minus CPU was -0.5 % to +2.7 %, and every build
+#   and warm-tests call (the multi-threaded ones) read +2.5 to +2.7 % (build
+#   184.41 s running against 179.63 s CPU); calls at or below 1 s were within
+#   -25 to +22 ms. The +2.5-2.7 % is probably /proc's tick sampling against
+#   perf's exact times on many threads: a guess, not a measured cause. A
+#   two-sided 2 % band refused all 8 of those calls.
+# A running time above CPU x COVER_CAP + COVER_ABS is no loss but is odd (perf
+# counting something /proc does not): no count either. The cap is x1.10, about
+# four times the largest excess seen on CDO. An uncovered count only loses its
+# clock, label and advisory.
 COVER_REL = 0.02
 COVER_ABS = 0.05
+COVER_CAP = 1.10
 
 
 def covers(running_s, cpu):
-    """Whether the counters' running time covers the call's CPU seconds."""
-    return running_s is not None and abs(running_s - cpu) <= COVER_REL * cpu + COVER_ABS
+    """Whether the counters' running time covers the call's CPU seconds: not
+    short of it beyond COVER_REL + COVER_ABS, nor over COVER_CAP of it."""
+    return (running_s is not None
+            and cpu * (1 - COVER_REL) - COVER_ABS <= running_s <= cpu * COVER_CAP + COVER_ABS)
 
 
 def clock_cpi(cycles, user, instr, covered=True):
@@ -1794,8 +1841,9 @@ def main():
     flags = clock_cpi_flags(warm_rows + rows)
     label = load_label + SUSPENDS.label() + clock_cpi_label(flags)
     if cpu_advisories:
-        label += (f" CPU ADVISORY ({len(cpu_advisories)}: equal instructions with a CLOCK or "
-                  f"CPI label, owner decision {CPU_ADVISORY_QUESTION}): "
+        label += (f" CPU ADVISORY ({len(cpu_advisories)}: equal instructions, a CPU-only "
+                  f"failure that head's lower clock explains, owner decision "
+                  f"{CPU_ADVISORY_QUESTION}): "
                   + "; ".join(cpu_advisories))
     # ⟨TLS-111⟩ The extra pair, said in the verdict (note §5.2).
     if trigger:
