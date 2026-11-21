@@ -153,6 +153,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed (ENG-159: a record kept elsewhere may be rebound by user code — the sound rule, with reads at their position)
 
+- **Release note: this change makes `prove` and `impact` slower, and lands with cdo-speed's
+  failure accepted.** On CDO against master `1d3b08e2` (cdo-speed, 2026-11-21): `prove` costs
+  x2.45 instructions (CPU x2.26; ~260e9 per call against 50-113e9), so cdo-speed fails on
+  `prove` and on the round total (CPU x2.05); every other call stays within x1.07, peak memory
+  x0.97. `alsem impact` costs x1.76 instructions (its JSON 31 -> 60 MB). Why accepted: it is the
+  sound rule's own cost (owner: "a wrong answer is worse than a stated limit"). More values are
+  "anything", so each literal-reach query's search stops less often (measured below:
+  `prove.reach_effects` 2.0 -> 23.4 s on IssueReminder, 12.0 -> 35.2 s on RunReportID, whose
+  answer is unchanged; the RecordRef flow's build is 2-3 s on both sides). The implementation's
+  own waste is removed (measured below). ENG-161's escape facts are to win the precision, and
+  with it this time, back.
 - **The bug.** A RecordRef or Variant shares one record handle with every alias of it (BC 28.4,
   ENG-145's note), and an alias may live where the routine cannot see it: a SingleInstance store
   that kept the caller's RecordRef (`G := R`) and rebinds it later (`G.GetTable(L)`). A routine
