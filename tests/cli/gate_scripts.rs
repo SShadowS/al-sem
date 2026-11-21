@@ -2221,6 +2221,7 @@ for line in sys.stdin:
         # follow them at 3 GHz (1e9 for a call that burns nothing).
         burned = 0.0
         work = 1.0  # head's extra work this call (instructions and cycles both)
+        zero_instr = False
         if calls == 1:
             # TLS-111: STUB_BUILD_HEAD_BY_PASS=f1,f2,...: head's build does f<pass>
             # times the work in that warm-up pass (3 builds a pass: two timed,
@@ -2229,6 +2230,9 @@ for line in sys.stdin:
             by_pass = os.environ.get("STUB_BUILD_HEAD_BY_PASS")
             if head and by_pass:
                 work = float(by_pass.split(",")[n // 3])
+            # STUB_INSTR_ZERO_BUILD_PASS=p: head's build in warm-up pass p
+            # (0-based) retires no instruction (that one call goes uncounted).
+            zero_instr = head and str(n // 3) == os.environ.get("STUB_INSTR_ZERO_BUILD_PASS")
             burned = (float(os.environ["STUB_BUILD_S"]) * (1.5 if another_alive() else 1.0)
                       * work * cpi)
             burn(burned * slow)
@@ -2280,7 +2284,7 @@ for line in sys.stdin:
         if head:
             factor = float(os.environ.get("STUB_INSTR_HEAD", "1"))
             # STUB_INSTR_ZERO_CALL=N[,M...]: head's N-th call (per server) retires none.
-            if str(calls) in os.environ.get("STUB_INSTR_ZERO_CALL", "").split(","):
+            if str(calls) in os.environ.get("STUB_INSTR_ZERO_CALL", "").split(",") or zero_instr:
                 factor = 0.0
             # TLS-104: STUB_SUSPEND_CALL=N: the host "sleeps" STUB_SUSPEND_S
             # during head's N-th call (per server): the reading cdo-speed takes
@@ -2294,6 +2298,21 @@ for line in sys.stdin:
         done = int(open(counter).read()) if os.path.exists(counter) else 0
         with open(counter, "w") as f:
             f.write(str(done + int(1e9 * factor * work)))
+        # STUB_PERF_EARLY (TLS-111 review r2): answer only once the stub perf
+        # attached to this call has ended (gone, or a zombie its parent has not
+        # reaped), so cdo-speed always finds it ended at the stop: deterministic.
+        if os.environ.get("STUB_PERF_EARLY"):
+            mark = os.path.join(os.environ["STUB_DIR"], f"perfpid.{os.getpid()}")
+            end = time.monotonic() + 10
+            while time.monotonic() < end and os.path.exists(mark):
+                try:
+                    pid = open(mark).read().strip()
+                    state = open(f"/proc/{pid}/stat").read().rsplit(")", 1)[1].split()[0]
+                except (OSError, IndexError):
+                    break
+                if state in ("Z", "X"):
+                    break
+                time.sleep(0.01)
         result = {"structuredContent": {"exitCode": 0, "stdoutText": "ok"}}
     else:
         result = {}
@@ -2324,11 +2343,22 @@ def total(pids, kind="instr"):
         if os.path.exists(f):
             s += int(open(f).read())
     return s
-def lines(n, c):
-    # TLS-111: instructions and cycles per PMU, with perf's running time (ns,
-    # equal for a PMU's events when nothing multiplexes) and running % (as real
-    # perf on a hybrid split: whole percents whose sum passes 100). Attached
-    # (not the probe): STUB_PERF_SPLIT=<share> puts that share of each count on
+def cpu_ns(pids):
+    # The attached processes' CPU time (user + system) from /proc, in ns.
+    s = 0
+    for p in pids:
+        try:
+            f = open(f"/proc/{p}/stat").read().rsplit(")", 1)[1].split()
+            s += int(f[11]) + int(f[12])
+        except (OSError, IndexError, ValueError):
+            pass
+    return s * 1e9 / os.sysconf("SC_CLK_TCK")
+def lines(n, c, run_ns=1e6):
+    # TLS-111: instructions and cycles per PMU, with perf's running time (ns:
+    # the attached tasks' CPU time while counted, split over the PMUs, equal for
+    # a PMU's events when nothing multiplexes) and running % (as real perf on a
+    # hybrid split: whole percents whose sum passes 100). Attached (not the
+    # probe): STUB_PERF_SPLIT=<share> puts that share of each count on
     # cpu_atom; STUB_PERF_MUX: cpu_core's cycles ran 10 % shorter than its
     # instructions (multiplexed).
     probe = "--" in a
@@ -2339,8 +2369,10 @@ def lines(n, c):
     out = ""
     for pmu, share in (("cpu_core", 1 - split), ("cpu_atom", split)):
         for kind, v in (("instructions", n), ("cycles", c)):
-            val = "<not counted>" if share == 0 or isinstance(v, str) else int(round(v * share))
-            ns = int(1e6 * share * (0.9 if mux and pmu == "cpu_core" and kind == "cycles" else 1))
+            nc = share == 0 or isinstance(v, str)
+            val = "<not counted>" if nc else int(round(v * share))
+            mux_f = 0.9 if mux and pmu == "cpu_core" and kind == "cycles" else 1
+            ns = 0 if nc else int(run_ns * share * mux_f)
             pct = 100 if share == 1 else int(120 * share)
             out += f"{val},,{pmu}/{kind}/u,{ns},{pct:.2f},,\n"
     return out
@@ -2353,11 +2385,14 @@ out = a[a.index("-o") + 1]
 pids = a[a.index("-p") + 1].split(",")
 with open(os.path.join(os.environ["STUB_DIR"], "perf-attaches"), "a") as f:
     f.write(pids[0] + "\n")  # the server's pid (cdo-speed lists it first)
+# This perf's pid, for the server's STUB_PERF_EARLY wait.
+with open(os.path.join(os.environ["STUB_DIR"], f"perfpid.{pids[0]}"), "w") as f:
+    f.write(str(os.getpid()))
 # perf's `-D -1 --control fifo:<ctl>,<ack>`: counting starts at `enable`, then
 # `ack` (cdo-speed waits for it before the call). STUB_PERF_SLOW: slow counters.
 assert a[a.index("-D") + 1] == "-1", a
 ctl, ack = a[a.index("--control") + 1].split(":", 1)[1].split(",")
-start = cstart = 0
+start = cstart = tstart = 0
 def stop(*_):
     with open(out, "w") as f:
         # STUB_PERF_EARLY writes a fixed positive count: one measured right
@@ -2366,7 +2401,11 @@ def stop(*_):
         if os.environ.get("STUB_PERF_EARLY"):
             f.write(lines(1000000, 2000000))
         else:
-            f.write(lines(total(pids) - start, total(pids, "cycles") - cstart))
+            # TLS-111 review r2: the counters ran for the tasks' CPU time (at
+            # least 1 ms: a count never runs 0 ns); STUB_PERF_COVER=<f>: only f
+            # of it (counters that missed part of the call).
+            ran = (cpu_ns(pids) - tstart) * float(os.environ.get("STUB_PERF_COVER", "1"))
+            f.write(lines(total(pids) - start, total(pids, "cycles") - cstart, max(ran, 1e6)))
     sys.exit(0)
 # Installed before the `ack` (review r1, sol): a fast call may SIGINT us at once.
 # STUB_PERF_NOSTOP: SIGINT does nothing (a perf hanging at its stop).
@@ -2378,7 +2417,7 @@ with open(ctl) as c:
     time.sleep(float(os.environ.get("STUB_PERF_SLOW", "0")))
     while os.environ.get("STUB_PERF_NOACK"):
         time.sleep(0.05)
-    start, cstart = total(pids), total(pids, "cycles")
+    start, cstart, tstart = total(pids), total(pids, "cycles"), cpu_ns(pids)
     with open(ack, "w") as k:
         k.write("ack\n")
 # STUB_PERF_EARLY: it ends right after the `ack`, with valid output (a count of
@@ -2480,7 +2519,10 @@ fn speed_with_stub(
 /// stayed GREEN: the open itself synchronized, so the stub now lags where real
 /// perf does). Restored, green. TLS-111 (2026-11-21): the verdict saying "no
 /// call fully counted" whatever the count -> "...; 37 of 40 calls counted)"
-/// beside it (red); restored, green.
+/// beside it (red); restored, green. Review r2 (sol): the STUB_PERF_EARLY case is
+/// deterministic (each stub server answers once its perf has ended) and checks
+/// every record; `instr_stop` reading an early-ended perf's output anyway ->
+/// "a perf that ended early was counted" (red); restored, green.
 #[cfg(target_os = "linux")]
 #[test]
 fn speed_reports_instructions_and_their_limit_is_advisory() {
@@ -2757,14 +2799,24 @@ fn speed_reports_instructions_and_their_limit_is_advisory() {
         ],
     );
     assert_eq!(code, Some(0), "{text}");
-    // TLS-111: the verdict now says how many calls were counted, and a stub perf
-    // still alive when its call is stopped (it exits right after the ack) is
-    // counted now and then (1 of 40 seen): no summary ratio is the claim.
-    let v = verdict(&text);
+    // TLS-111 review r2 (sol): deterministic now (each stub server answers only
+    // once its perf has ended), and checked per call: no record holds a count,
+    // not only no summary ratio (a count can make a CPU failure advisory).
     assert!(
-        v.contains("(instructions: no call fully counted; advisory limit x1.02")
-            || v.contains("(instructions: build and round-total not fully counted;"),
+        verdict(&text).contains("(instructions: no call fully counted; advisory limit x1.02)"),
         "a perf that ended early was counted: {text}"
+    );
+    let json = speed_json(dir.path());
+    let counted: Vec<_> = json["records"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|r| !r["instr"].is_null() || !r["counts"].is_null())
+        .map(|r| format!("{} {} r{}", r["call"], r["side"], r["round"]))
+        .collect();
+    assert!(
+        counted.is_empty(),
+        "early-ended calls with a count: {counted:?}"
     );
 }
 
@@ -3000,8 +3052,9 @@ fn speed_counts_cycles_and_labels_clock_and_cpi() {
 ///   whose running shares sum to 116 %, a pinned call whose atom rows are
 ///   `<not counted>` (0 ns, 0.00), and `true`'s truncated 93 + 6 count; a
 ///   multiplexed run (cpu_core's cycles ran 241.0 ms, its instructions 261.7)
-///   and an event's row given twice do not; on one PMU, equal running times
-///   count and unequal ones do not;
+///   and an event's row given twice do not, nor (review r2, sol) a positive
+///   count at 0 ns or a `<not counted>` row at a running time; on one PMU, equal
+///   running times count and unequal ones do not;
 /// - `judge_warm` keeps a row judged after pass 2 judged when the extra pair's
 ///   samples pull its median base CPU under the cutoff (review r1, sol).
 ///
@@ -3009,7 +3062,10 @@ fn speed_counts_cycles_and_labels_clock_and_cpi() {
 /// `cpu_core/cache-misses/u` accepted (red). Round 2: the equal-running-time
 /// check off -> "multiplexed: counted" (red); the duplicate-row check off -> "a
 /// row twice: counted" (red); `judge_warm` ignoring `keep_judged` -> "a row
-/// judged after pass 2 lost its judgment" (red). Each restored, green.
+/// judged after pass 2 lost its judgment" (red). Each restored, green. Round 3:
+/// the 0-ns check off -> "a count at 0 ns: counted" (red); the `<not counted>`
+/// check off -> "<not counted> at a running time: counted" (red). Each
+/// restored, green.
 #[cfg(target_os = "linux")]
 #[test]
 fn speed_perf_parsing_and_warm_judging() {
@@ -3056,6 +3112,10 @@ cases = [
     ("whole-percent truncation", truncated, True),
     ("multiplexed", muxed, False),
     ("a row twice", split + "5,,cpu_core/cycles/u,1025384631,85.00,,\n", False),
+    ("a count at 0 ns", split.replace(",1025384631,", ",0,"), False),
+    ("<not counted> at a running time",
+     pinned.replace("<not counted>,,cpu_atom/instructions/u,0,", "<not counted>,,cpu_atom/instructions/u,5,")
+           .replace("<not counted>,,cpu_atom/cycles/u,0,", "<not counted>,,cpu_atom/cycles/u,5,"), False),
 ]
 for name, text, ok in cases:
     got = m.perf_counts(text, m.HYBRID_EVENTS)
@@ -3414,7 +3474,10 @@ fn speed_extra_pair_on_wall_and_never_with_one_pass() {
 /// -> the clean clock reads "CPU ADVISORY" (red); without the instruction band
 /// -> the x1.1-instructions run PASSes, exit 0 (red); the clock divided by the
 /// user and system seconds together -> the clean clock reads CLOCK x0.661 and
-/// PASSes, exit 0 (red). Each restored, green.
+/// PASSes, exit 0 (red). Each restored, green. Round 3 (review r2, sol:
+/// contradiction first): `warm_failures` leaving out a CPU failure the
+/// advisory would waive -> the first run's contradicted warm-tests adds no
+/// pair (red); restored, green.
 #[cfg(target_os = "linux")]
 #[test]
 fn speed_cpu_failure_is_advisory_only_with_equal_instructions_and_a_label() {
@@ -3439,6 +3502,14 @@ fn speed_cpu_failure_is_advisory_only_with_equal_instructions_and_a_label() {
             && v.contains("with instructions x1.0000 and CPI x1.500"),
         "{text}"
     );
+    // Review r2 (sol): contradiction first. warm-tests' CPU failure would
+    // qualify for the advisory, but the stub's positional factor makes its
+    // passes disagree (x2.25/x1.0): the extra pair runs before any advisory.
+    assert!(
+        v.contains("(one more flipped warm-up pair: a failure its passes contradicted beyond x1.25: warm-tests cpu x")
+            && text.contains("warm-up 4 of 4"),
+        "a qualifying contradicted failure skipped the extra pair: {text}"
+    );
     let json = speed_json(dir.path());
     assert!(
         !json["advisory"].as_array().unwrap().is_empty() && json["verdict"] == "PASS",
@@ -3461,6 +3532,89 @@ fn speed_cpu_failure_is_advisory_only_with_equal_instructions_and_a_label() {
             && !v.contains("CPU ADVISORY")
             && !v.contains(" CLOCK:"),
         "{text}"
+    );
+}
+
+/// ⟨TLS-111 review r2, sol⟩ The advisory needs counts that cover the call on
+/// both sides in every pass, and a CPU-ONLY failure. Each case has head at x1.5
+/// cycles per instruction with equal instructions (the advisory's case), and:
+/// - head's build uncounted in pass 1 only (STUB_INSTR_ZERO_BUILD_PASS 0): the
+///   build row has no instruction ratio: its CPU failure stays a failure;
+/// - CPU x1.8 (STUB_CPI_HEAD 1.8) under the stub clock: wall x1.8 fails too
+///   (limit 1.6): nothing is made advisory;
+/// - the counters ran for 0.6 of each call's CPU seconds (STUB_PERF_COVER):
+///   each burning call's record keeps its counts but reads `covered: false`,
+///   with no clock, so no label and no advisory: FAIL.
+/// The positional factor is off (STUB_SECOND_FACTOR 1) in the last two, so no
+/// extra pair runs; in the first it runs (its warm-tests is contradicted).
+///
+/// Mutations (2026-11-21, round 3): `covers` always true -> the partly covered
+/// run PASSes, exit 0 (red); `cpu_advisory` without its wall guard -> "CPU
+/// ADVISORY" on the CPU-and-wall run (red); `judge` taking the clock, CPI and
+/// instruction ratios from the passes that were counted (`any` pass, not
+/// `all`) -> the build is made advisory from pass 2 alone and the run PASSes,
+/// exit 0 (red). Each restored, green.
+#[cfg(target_os = "linux")]
+#[test]
+fn speed_cpu_advisory_needs_covering_counts_and_a_cpu_only_failure() {
+    let bin = tempfile::tempdir().unwrap();
+    let perf = stub_perf(bin.path());
+    let run = |extra: &[(&str, &str)]| {
+        let dir = tempfile::tempdir().unwrap();
+        let mut env = vec![("CDO_SPEED_INSTR", "1"), ("CDO_SPEED_PERF", perf.as_str())];
+        env.extend_from_slice(extra);
+        let (code, text) = speed_with_stub(dir.path(), "1.0", &[], &env);
+        (dir, code, text)
+    };
+    // The build's CPU failure is a FAIL line, and no advisory names it (the
+    // verdict line carries the advisories).
+    let no_build_advisory = |text: &str| {
+        text.contains("FAIL: build: CPU time x1.")
+            && !speed_verdict(text).contains("build: CPU time x")
+    };
+
+    // One side uncounted in one pass.
+    let (_dir, code, text) = run(&[
+        ("STUB_CPI_HEAD", "1.5"),
+        ("STUB_INSTR_ZERO_BUILD_PASS", "0"),
+    ]);
+    assert_eq!(code, Some(1), "{text}");
+    assert!(no_build_advisory(&text), "{text}");
+
+    // CPU and wall fail on one row.
+    let (_dir, code, text) = run(&[("STUB_CPI_HEAD", "1.8"), ("STUB_SECOND_FACTOR", "1.0")]);
+    assert_eq!(code, Some(1), "{text}");
+    assert!(
+        text.contains("FAIL: build: CPU time x1.")
+            && text.contains("FAIL: build: wall time x1.")
+            && !text.contains("CPU ADVISORY"),
+        "{text}"
+    );
+
+    // Counters that cover only part of each call.
+    let (dir, code, text) = run(&[
+        ("STUB_CPI_HEAD", "1.5"),
+        ("STUB_SECOND_FACTOR", "1.0"),
+        ("STUB_PERF_COVER", "0.6"),
+    ]);
+    assert_eq!(code, Some(1), "{text}");
+    assert!(
+        text.contains("FAIL: build: CPU time x1.") && !text.contains("CPU ADVISORY"),
+        "{text}"
+    );
+    let json = speed_json(dir.path());
+    let builds: Vec<_> = json["records"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|r| r["call"] == "build")
+        .collect();
+    assert!(
+        !builds.is_empty()
+            && builds.iter().all(|r| r["covered"] == false
+                && r["instr"].as_f64().is_some_and(|i| i > 0.0)
+                && r["clock"].is_null()),
+        "uncovered counts kept for diagnostics, with no clock: {builds:?}"
     );
 }
 
