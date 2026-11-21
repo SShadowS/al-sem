@@ -644,13 +644,38 @@ fn excludes_file(root: &Path) -> Option<PathBuf> {
         })
         .filter(|bytes| !bytes.is_empty());
     if let Some(bytes) = configured {
-        return Some(path_from_git(bytes));
+        // A relative value is relative to the worktree root, as git takes
+        // it there (`join` keeps an absolute one).
+        return Some(git_toplevel(root).join(path_from_git(bytes)));
     }
     let config = std::env::var_os("XDG_CONFIG_HOME")
         .filter(|s| !s.is_empty())
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
     Some(config.join("git").join("ignore"))
+}
+
+/// The worktree root git works in at `dir` (`git rev-parse
+/// --show-toplevel`); `dir` when git cannot answer.
+fn git_toplevel(dir: &Path) -> PathBuf {
+    crate::git_env::git_command()
+        .arg("-C")
+        .arg(dir)
+        .args(["rev-parse", "--show-toplevel"])
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| {
+            let mut bytes = o.stdout;
+            while bytes.last().is_some_and(|b| *b == b'\n' || *b == b'\r') {
+                bytes.pop();
+            }
+            bytes
+        })
+        .filter(|bytes| !bytes.is_empty())
+        .map_or_else(|| dir.to_path_buf(), path_from_git)
 }
 
 /// The repository's common git folder at the git top level `top`, which

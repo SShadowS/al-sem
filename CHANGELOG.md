@@ -166,7 +166,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reads (a candidate it rejects too, with a relative `--test-app` taken against the cwd as the
   job takes it), and the ignore rules it asks git about: the `.gitignore` files, the
   repository's `info/exclude` (the main repository's for a worktree, `git rev-parse
-  --git-common-dir`) and the user's excludes file (`core.excludesFile`, else
+  --git-common-dir`) and the user's excludes file (`core.excludesFile`, a relative value under
+  the worktree root as git takes it, else
   `$XDG_CONFIG_HOME/git/ignore`). The check runs each discovery once per workspace and test
   apps: 200 `tests --part roots` jobs on one synthetic workspace with 12 sibling apps ran in
   2.49 s wall in all (debug build, server1; `/work/.al-sem/tools-notes/tls109/m3-timing.log`). An
@@ -189,7 +190,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   private folder (named `spool-parent` and `spool-w<b>` by batch), which aliases nothing. After
   every worker has ended and every job write is done, the parent publishes each spool to its
   trace file (its own, and each worker's `ALSEM_TRACE_FILE.w<b>` or default name, whose path is
-  kept byte for byte, also when it is not UTF-8) through the claim, and removes it.
+  kept byte for byte, also when it is not UTF-8) through the claim, and removes it. A worker
+  writes that record whole under a temporary name and only then renames it into place, so a
+  write cut short publishes nothing, never a shorter path; a record that is no whole path (an
+  odd number of bytes for Windows' UTF-16) is refused.
   `ALSEM_TRACE_EXIT_AFTER` publishes the same way before it exits. A trace file that is an
   output, an input, the manifest or a refused job's named file under any alias is refused
   there: a stderr line, no trace, the run unharmed and the output kept. A worker that crashes
@@ -229,7 +233,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   refused job's named file, a reservation taken twice (a unit test), a non-UTF-8 worker trace
   name, the user's git excludes file, a worktree's `info/exclude`, a worker killed mid-run
   whose trace is still published, `ALSEM_TRACE_EXIT_AFTER` publishing its trace, a path in a
-  folder that may not be searched, and manifests that must still run. A worker without its claim folder is
+  folder that may not be searched, a spool record cut short, a relative `core.excludesFile`,
+  and manifests that must still run. A worker without its claim folder is
   tested too.
 
 ### Fixed (TLS-108: `ci-steps perf-bounds` times its bounds under a timed CDO slot hold)

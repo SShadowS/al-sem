@@ -315,10 +315,28 @@ pub fn spool_path(who: &str) -> Option<PathBuf> {
 
 /// Record beside a spool the trace file it is for, so the parent publishes
 /// it ([`publish_spools`]), also when this process dies. The path is kept
-/// exactly ([`path_bytes`]), whatever its encoding.
+/// exactly ([`path_bytes`]), whatever its encoding. The record is written
+/// whole to a temporary name and only then renamed into place, so a write
+/// cut short never leaves a record naming a shorter path.
 pub fn record_spool(spool: &Path, trace: &Path) -> std::io::Result<()> {
     let trace = std::path::absolute(trace)?;
-    std::fs::write(spool.with_extension("to"), path_bytes(&trace))
+    let tmp = spool.with_extension("to.tmp");
+    write_record(&tmp, &path_bytes(&trace))?;
+    std::fs::rename(&tmp, spool.with_extension("to"))
+}
+
+/// Write a spool record's bytes to `path`.
+fn write_record(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    // TLS-109 test seam (debug builds only): `ALSEM_TEST_RECORD_FAILS` cuts
+    // the write short after half the bytes and fails, as an I/O error would.
+    #[cfg(debug_assertions)]
+    if std::env::var_os("ALSEM_TEST_RECORD_FAILS").is_some() {
+        std::fs::write(path, &bytes[..bytes.len() / 2])?;
+        return Err(std::io::Error::other(
+            "test seam: the record's write failed",
+        ));
+    }
+    std::fs::write(path, bytes)
 }
 
 /// A path as bytes, losslessly: its raw bytes on unix.
@@ -330,9 +348,9 @@ fn path_bytes(p: &Path) -> Vec<u8> {
 
 /// [`path_bytes`] read back.
 #[cfg(unix)]
-fn path_from(bytes: Vec<u8>) -> PathBuf {
+fn path_from(bytes: Vec<u8>) -> std::io::Result<PathBuf> {
     use std::os::unix::ffi::OsStringExt;
-    PathBuf::from(std::ffi::OsString::from_vec(bytes))
+    Ok(PathBuf::from(std::ffi::OsString::from_vec(bytes)))
 }
 
 /// A path as bytes, losslessly: its UTF-16 units, little-endian, on Windows
@@ -346,15 +364,19 @@ fn path_bytes(p: &Path) -> Vec<u8> {
         .collect()
 }
 
-/// [`path_bytes`] read back.
+/// [`path_bytes`] read back. An odd number of bytes is no record of whole
+/// UTF-16 units: an error, never a path.
 #[cfg(windows)]
-fn path_from(bytes: Vec<u8>) -> PathBuf {
+fn path_from(bytes: Vec<u8>) -> std::io::Result<PathBuf> {
     use std::os::windows::ffi::OsStringExt;
+    if bytes.len() % 2 != 0 {
+        return Err(std::io::Error::other("a spool record cut in a UTF-16 unit"));
+    }
     let wide: Vec<u16> = bytes
         .chunks_exact(2)
         .map(|c| u16::from_le_bytes([c[0], c[1]]))
         .collect();
-    PathBuf::from(std::ffi::OsString::from_wide(&wide))
+    Ok(PathBuf::from(std::ffi::OsString::from_wide(&wide)))
 }
 
 /// The parent, after every worker has ended and every job write is done:
@@ -378,7 +400,7 @@ pub fn publish_spools() {
     for record in records {
         let spool = record.with_extension("");
         let published = std::fs::read(&record).and_then(|trace| {
-            let trace = path_from(trace);
+            let trace = path_from(trace)?;
             let bytes = std::fs::read(&spool)?;
             open_trace(&trace)
                 .and_then(|mut f| f.write_all(&bytes))
