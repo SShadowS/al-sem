@@ -491,29 +491,45 @@ def concurrent(args):
 
 
 def census(args):
-    """`aldump --snapshot-memory <ws>` under /usr/bin/time -v: master against head with
-    the IR cache warm (the retained memory after a decode against after a parse)."""
+    """Memory under /usr/bin/time -v: `aldump --snapshot-memory <ws>`, master against head
+    with the IR cache warm (the retained memory after a decode against after a parse), and
+    one-shot `alsem analyze <ws>` alone: master, head cold (a fresh root) and head warm."""
     repo, ws, out, base_exe, head_exe, record = setup(args)
     os.makedirs(os.path.join(out, "roots"), exist_ok=True)
     warm_root = os.path.join(out, "roots", "warm")
+    aldump_of = {"master": os.path.join(os.path.dirname(base_exe), "aldump"),
+                 "head": os.path.join(os.path.dirname(head_exe), "aldump")}
+    # Warm for both binaries: the key is the running image.
     for i in range(2):
         env, _, _ = arm_env("head-warm", out, f"fill-{i}", warm_root)
         subprocess.run([head_exe, "analyze", ws], env=env, stdout=subprocess.DEVNULL,
                        check=True)
+    env, _, _ = arm_env("head-warm", out, "fill-aldump", warm_root)
+    subprocess.run([aldump_of["head"], "--program-call-graph-stats", ws], env=env,
+                   stdout=subprocess.DEVNULL, check=True)
+    runs = [("snapshot-memory", "master", [aldump_of["master"], "--snapshot-memory", ws]),
+            ("snapshot-memory", "head-warm", [aldump_of["head"], "--snapshot-memory", ws]),
+            ("analyze", "master", [base_exe, "analyze", ws]),
+            ("analyze", "head-cold", [head_exe, "analyze", ws]),
+            ("analyze", "head-warm", [head_exe, "analyze", ws])]
     res = {}
-    for arm, exe in (("master", base_exe), ("head-warm", head_exe)):
-        env, rep, _ = arm_env(arm, out, f"census-{arm}", warm_root)
-        aldump = os.path.join(os.path.dirname(exe), "aldump")
-        r = subprocess.run(["/usr/bin/time", "-v", aldump, "--snapshot-memory", ws],
-                           env=env, capture_output=True, text=True)
-        with open(os.path.join(out, f"census-{arm}.txt"), "w") as f:
-            f.write(r.stdout + "\n--- stderr ---\n" + r.stderr)
+    for what, arm, cmd in runs:
+        env, rep, root = arm_env(arm, out, f"census-{what}-{arm}", warm_root)
+        r = subprocess.run(["/usr/bin/time", "-v", *cmd], env=env, capture_output=True,
+                           text=True)
+        with open(os.path.join(out, f"census-{what}-{arm}.txt"), "w") as f:
+            f.write(r.stdout[-20000:] + "\n--- stderr ---\n" + r.stderr[-20000:])
         maxrss = next((int(ln.split(":")[1]) for ln in r.stderr.splitlines()
                        if "Maximum resident set size" in ln), None)
-        res[arm] = dict(exit=r.returncode, max_rss_kib=maxrss)
+        key = f"{what}/{arm}"
+        res[key] = dict(exit=r.returncode, max_rss_kib=maxrss)
         if rep:
-            res[arm]["report_ok"] = check_report(arm, rep, warm_root, None)[0]
-        log(f"{arm}: aldump --snapshot-memory exit {r.returncode}, max RSS {maxrss} KiB")
+            ok, why, _ = check_report(arm, rep, root, None)
+            res[key].update(report_ok=ok, report_why=why)
+        if arm == "head-cold" and root:
+            shutil.rmtree(root, ignore_errors=True)
+        log(f"{key}: exit {r.returncode}, max RSS {maxrss} KiB"
+            + ("" if not rep else f", report {'ok' if res[key]['report_ok'] else why}"))
     record["census"] = res
     with open(os.path.join(out, "census.json"), "w") as f:
         json.dump(record, f, indent=1)
