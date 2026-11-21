@@ -17,13 +17,13 @@
 //! Stage 3B — baseline (ws-d8-commit-in-tx, transaction-integrity preset):
 //!   - --baseline full → .baselined.sarif.json (0 results).
 //!   - --baseline partial → .partial-baselined.sarif.json (1 result).
-//!   - --update-baseline → round-trips the committed .baseline.json byte-for-byte.
+//!   - --update-baseline → writes the committed .baseline.json's fingerprints (schema 2
+//!     since TLS-106).
 //!   - the exit-code matrix (no-baseline / full / partial × fail-on) matches
 //!     suppress-baseline-exit.json.
 
 use std::path::PathBuf;
 
-use al_sem::engine::gate::baseline::serialize_baseline;
 use al_sem::engine::gate::filter::Scope;
 use al_sem::engine::gate::run::{AnalyzeArgs, OutputFormat, run_analyze, run_analyze_with_exit};
 use al_sem::engine::l5::detectors::default_detectors;
@@ -379,33 +379,53 @@ fn baseline_partial_one_result_byte_matches() {
     assert_eq!(sarif_result_count(&rust), 1, "partial baseline → 1 result");
 }
 
-/// `--update-baseline` reproduces the committed full baseline byte-for-byte (proves the
-/// edit-stable fingerprints + sorted-dedup + epoch generatedAt). The pipeline returns
-/// the bytes the bin writes (#277 D2.4); the path is never written here.
+/// `--update-baseline` writes exactly the fingerprints the committed full baseline
+/// (schema 1) lists (proves the edit-stable fingerprints + sorted-dedup). Since
+/// TLS-106 the file is schema 2, so the compare is on `fingerprints`, not the bytes
+/// (§7: an unfiltered update of a clean run writes the same `fingerprints` as
+/// before). Updating the committed schema-1 file itself gives every fingerprint an
+/// entry and keeps nothing unchecked. The pipeline returns the bytes the bin writes
+/// (#277 D2.4); the path is never written here.
 #[test]
-fn update_baseline_round_trips_committed_file() {
-    let tmp = std::env::temp_dir().join(format!("alsem-gate-baseline-{}.json", std::process::id()));
-    // --update-baseline writes the current finding set (no baseline applied yet ⇒ both
-    // findings), which is exactly the committed full baseline.
-    let args = d8_args(Some(&tmp.to_string_lossy()), true, None);
-    let (.., bytes) = run_analyze_with_exit(
-        &args.read_inputs(),
-        &args.read_request(),
-        &args,
-        "engine-default",
-    )
-    .expect("run_analyze_with_exit");
-    assert!(!tmp.exists(), "compute writes no file");
-    let written = String::from_utf8(bytes.expect("baseline bytes")).unwrap();
-
+fn update_baseline_writes_the_committed_fingerprints() {
     let committed = read_golden("ws-d8-commit-in-tx.baseline.json");
-    if written != committed {
-        first_diff("ws-d8.baseline.json round-trip", &committed, &written);
+    let fingerprints = |text: &str| -> Vec<String> {
+        let v: serde_json::Value = serde_json::from_str(text).expect("baseline json");
+        v["fingerprints"]
+            .as_array()
+            .expect("fingerprints")
+            .iter()
+            .map(|f| f.as_str().expect("string").to_string())
+            .collect()
+    };
+    assert_eq!(fingerprints(&committed).len(), 2, "precondition");
+    for (case, old) in [("no file", None), ("the committed file", Some(&committed))] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("b.json");
+        if let Some(text) = old {
+            std::fs::write(&path, text).unwrap();
+        }
+        let args = d8_args(Some(&path.to_string_lossy()), true, None);
+        let (.., update) = run_analyze_with_exit(
+            &args.read_inputs(),
+            &args.read_request(),
+            &args,
+            "engine-default",
+        )
+        .expect("run_analyze_with_exit");
+        assert_eq!(
+            std::fs::read_to_string(&path).ok().as_ref(),
+            old,
+            "{case}: compute writes no file"
+        );
+        let update = update.expect("baseline update");
+        let written = String::from_utf8(update.bytes.clone()).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&written).unwrap();
+        assert_eq!(v["schemaVersion"], "2", "{case}");
+        assert_eq!(fingerprints(&written), fingerprints(&committed), "{case}");
+        assert_eq!(v["entries"].as_array().unwrap().len(), 2, "{case}");
+        assert!(update.kept_unchecked.is_empty(), "{case}");
     }
-    assert_eq!(
-        written, committed,
-        "--update-baseline did not reproduce the committed baseline byte-for-byte"
-    );
 }
 
 /// The exit-code matrix matches suppress-baseline-exit.json:
@@ -500,58 +520,4 @@ fn anti_degenerate_baseline_zero_vs_partial_and_exit() {
         "partial baseline → 1 result"
     );
     assert_eq!(partial_exit, 1, "partial baseline → exit FINDINGS");
-}
-
-/// The Rust `serialize_baseline` over the no-baseline finding set reproduces the
-/// committed full baseline file byte-for-byte (a pure-function cross-check of the
-/// sorted-dedup + epoch, independent of the file-write path).
-#[test]
-fn serialize_baseline_matches_committed_fingerprints() {
-    // The committed full baseline lists both fingerprints, sorted; the partial lists one.
-    let committed_full = read_golden("ws-d8-commit-in-tx.baseline.json");
-    let parsed: serde_json::Value = serde_json::from_str(&committed_full).unwrap();
-    let fps: Vec<&str> = parsed["fingerprints"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|x| x.as_str().unwrap())
-        .collect();
-    assert_eq!(fps.len(), 2, "full baseline has 2 fingerprints");
-
-    // Re-serialize from FindingSummary-like inputs (reuse the unit-tested helper path):
-    // build summaries that only carry the fingerprints, in REVERSE order + a dup, to
-    // prove the sort+dedup. We reach through the public serialize_baseline.
-    use al_sem::engine::gate::projection::{FindingLocation, FindingSummary};
-    let mk = |fp: &str| FindingSummary {
-        id: fp.to_string(),
-        fingerprint: fp.to_string(),
-        loose_fingerprint: String::new(),
-        detector: "d8-commit-in-transaction".to_string(),
-        title: String::new(),
-        root_cause: String::new(),
-        severity: "high".to_string(),
-        confidence_level: "high".to_string(),
-        confidence_capped_by: None,
-        primary_location: FindingLocation {
-            file: "ws:src/A.al".to_string(),
-            line: 1,
-            column: 1,
-            object_id: None,
-            object_name: None,
-            routine_id: None,
-            routine_name: None,
-        },
-        terminal_location: None,
-        affected_objects: vec![],
-        affected_tables: vec![],
-        path_count: 1,
-        fix_hint: None,
-    };
-    // Reverse order + duplicate to exercise sort+dedup.
-    let findings = vec![mk(fps[1]), mk(fps[0]), mk(fps[1])];
-    let serialized = serialize_baseline(&findings);
-    assert_eq!(
-        serialized, committed_full,
-        "serialize_baseline did not reproduce the committed baseline (sort/dedup/epoch)"
-    );
 }

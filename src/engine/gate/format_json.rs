@@ -331,6 +331,10 @@ pub struct JsonFormatInputs<'a> {
     /// `--focus`'s statement, emitted as `payload.summary.hidden` (ENG-168). `None`
     /// (no `--focus`) emits no key, byte-identical to before.
     pub hidden: Option<serde_json::Value>,
+    /// `--update-baseline`'s counts (`BaselineUpdate::to_json`), emitted as
+    /// `payload.summary.baselineUpdate` (TLS-106). `None` without the flag, so
+    /// every other output is byte-identical.
+    pub baseline_update: Option<serde_json::Value>,
 }
 
 /// Build the `DocumentEnvelope<"analyze-report", _>` as a `serde_json::Value`,
@@ -405,6 +409,9 @@ pub fn build_analyze_json(inputs: &JsonFormatInputs<'_>) -> String {
     summary.insert("totalFindings".to_string(), inputs.findings.len().into());
     if let Some(hidden) = &inputs.hidden {
         summary.insert("hidden".to_string(), hidden.clone());
+    }
+    if let Some(update) = &inputs.baseline_update {
+        summary.insert("baselineUpdate".to_string(), update.clone());
     }
 
     // --- payload.findings ---

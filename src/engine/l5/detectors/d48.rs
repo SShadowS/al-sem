@@ -353,6 +353,8 @@ pub fn detect_d48(
 
     let mut findings: Vec<Finding> = Vec::new();
     let mut candidates_considered = 0usize;
+    // Walks the node budget cut short (TLS-106: an internal incompleteness signal).
+    let mut budget_cuts = 0u64;
     let mut skipped_parse_incomplete = 0u64;
     let mut skipped_opaque_callee = 0u64;
     let mut skipped_dynamic_dispatch = 0u64;
@@ -522,6 +524,10 @@ pub fn detect_d48(
                 // Hot-tier walk stats are a d1-only concern for now.
                 None,
             );
+            budget_cuts += results
+                .iter()
+                .filter(|r| r.stop == WalkStop::NodeBudgetCut)
+                .count() as u64;
 
             for result in &results {
                 if result.stop != WalkStop::Complete {
@@ -624,6 +630,7 @@ pub fn detect_d48(
     stats.add_skip("parseIncomplete", skipped_parse_incomplete);
     stats.add_skip("opaqueCallee", skipped_opaque_callee);
     stats.add_skip("dynamicDispatch", skipped_dynamic_dispatch);
+    stats.add_cut("nodeBudgetCut", budget_cuts);
     Ok(DetectorOutput {
         findings: emitted,
         stats,

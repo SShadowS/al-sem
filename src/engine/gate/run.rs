@@ -30,7 +30,10 @@ use crate::engine::batch::job::{
 };
 use crate::engine::batch::output::{JobOutput, WriteAction};
 use crate::engine::gate::app_attribution::App;
-use crate::engine::gate::baseline::{apply_baseline, load_baseline_bytes, serialize_baseline};
+use crate::engine::gate::baseline::{
+    BaselineUpdate, Entry, EntryScope, Refusal, UpdateRun, apply_baseline, load_baseline_bytes,
+    update_baseline,
+};
 use crate::engine::gate::exit_code::{compute_finding_exit, exit};
 use crate::engine::gate::filter::{FilterOptions, Scope, filter_findings, scope_filter};
 use crate::engine::gate::format_html::{HtmlFormatInputs, format_html};
@@ -39,7 +42,7 @@ use crate::engine::gate::format_pr_summary::format_pr_summary;
 use crate::engine::gate::format_sarif::format_sarif;
 use crate::engine::gate::format_terminal::{GroupBy, format_terminal, format_terminal_grouped};
 use crate::engine::gate::inline_suppression::{apply_inline_suppressions, build_suppression_map};
-use crate::engine::gate::preflight::evaluate_preflight;
+use crate::engine::gate::preflight::{evaluate_preflight, inputs_whole};
 use crate::engine::gate::presets::resolve_analyze_detectors;
 use crate::engine::gate::projection::{ProjectionIndex, project_finding};
 use crate::engine::l5::registry::run_detectors;
@@ -90,8 +93,9 @@ pub struct AnalyzeArgs {
     /// `--baseline <path>` — when `Some`, load the baseline fingerprint set and drop any
     /// finding whose fingerprint is in it BEFORE inline suppression (Stage 3b).
     pub baseline: Option<String>,
-    /// `--update-baseline` — when set together with `baseline`, write the current
-    /// post-filter/scope/limit finding set to the baseline file (the new floor).
+    /// `--update-baseline` — when set together with `baseline`, add the current
+    /// post-filter/scope/limit finding set to the baseline file, keeping every old
+    /// entry the run did not prove gone (TLS-106, `baseline::update_baseline`).
     pub update_baseline: bool,
     /// Disable inline `// al-sem-ignore` suppression. al-sem applies inline suppression
     /// unconditionally (default-ON, like a compiler pragma); this flag exists ONLY so the
@@ -644,13 +648,14 @@ pub fn run_analyze(
     run_analyze_with_exit(inputs, request, args, default_version).map(|(out, ..)| out)
 }
 
-/// `run_analyze_with_exit`'s output: `(stdout, exit_code, stderr_warnings, baseline_bytes)`.
+/// `run_analyze_with_exit`'s output: `(stdout, exit_code, stderr_warnings, baseline_update)`.
 /// The warnings print in order, each as `al-sem: warning: {msg}`: the degraded
 /// preflight first, then a focused SARIF run's partial-report warning (ENG-168).
-pub type AnalyzeOutput = (String, u8, Vec<String>, Option<Vec<u8>>);
+/// `baseline_update` (TLS-106) carries the bytes to write and the counts.
+pub type AnalyzeOutput = (String, u8, Vec<String>, Option<BaselineUpdate>);
 
 /// Run the gate `analyze` pipeline, returning `(stdout, exit_code, stderr_warning,
-/// baseline_bytes)`.
+/// baseline_update)`.
 ///
 /// The exit code follows the al-sem precedence:
 ///   CONFIG_ERROR (3) and ANALYSIS_FAILURE (2) are the CALLER's responsibility (bad
@@ -667,10 +672,11 @@ pub type AnalyzeOutput = (String, u8, Vec<String>, Option<Vec<u8>>);
 ///
 /// `default_version` is the engine's real version, used when no SARIF override is given.
 ///
-/// The fourth is the baseline `--update-baseline` writes (`Some` only with
-/// `--baseline` and `--update-baseline`). Compute writes nothing (#277 D2.4): the
-/// caller writes these bytes to `args.baseline` BEFORE the output, and a failed
-/// write is its write failure, never an error of this function.
+/// The fourth is the baseline `--update-baseline` writes, with its counts (`Some`
+/// only with `--baseline` and `--update-baseline`; TLS-106 merges it into the old
+/// file). Compute writes nothing (#277 D2.4): the caller writes its bytes to
+/// `args.baseline` BEFORE the output, and a failed write is its write failure,
+/// never an error of this function.
 ///
 /// `inputs` is the command's one read of the workspace (#160 §4.2.6): every reader
 /// below reads it, never the disk. `inputs.workspace` is `args.workspace`.
@@ -709,8 +715,9 @@ pub struct AnalyzeJob<'a> {
 }
 
 impl<'a> AnalyzeJob<'a> {
-    /// `Err`: a refused `--focus` combination or a detector/preset resolution
-    /// failure, found before any build.
+    /// `Err`: a refused `--focus` combination, a detector/preset resolution
+    /// failure, or (`analysis failure — `) a baseline an update cannot read,
+    /// found before any build.
     pub fn new(
         inputs: &'a dyn WorkspaceRead,
         request: &'a RequestInputs,
@@ -724,6 +731,15 @@ impl<'a> AnalyzeJob<'a> {
         )?;
         let detectors =
             resolve_analyze_detectors(args.preset.as_deref(), args.detector.as_deref())?;
+        // TLS-106: the file an update merges into is checked before any build,
+        // so a malformed one is refused (exit 2, nothing written) even when the
+        // workspace yields no model.
+        if args.update_baseline
+            && let Some(file) = &request.baseline
+        {
+            crate::engine::gate::baseline::check_update_file(file)
+                .map_err(|e| format!("analysis failure — {e}"))?;
+        }
         let version = args
             .sarif_version_override
             .clone()
@@ -772,6 +788,7 @@ impl Job for AnalyzeJob<'_> {
             self.request,
             self.args,
             &self.version,
+            &self.detectors,
         )))
     }
 
@@ -799,13 +816,18 @@ impl Job for AnalyzeJob<'_> {
             .one::<Result<AnalyzeOutput, String>>()
             .unwrap_or_else(|f| unreachable!("analyze fails no side: {f:?}"));
         match doc {
-            Ok((mut out, exit_code, stderr_warning, baseline_bytes)) => {
+            Ok((mut out, exit_code, stderr_warning, baseline_update)) => {
                 let mut actions = Vec::new();
                 // `--update-baseline`: the baseline is the first write, before any
                 // stderr line or stdout; a failure is a write error (exit 2) and
-                // stdout stays unwritten (#277 D2.4, S17).
-                if let (Some(path), Some(bytes)) = (&self.args.baseline, baseline_bytes) {
-                    actions.push(WriteAction::File(path.into(), bytes));
+                // stdout stays unwritten (#277 D2.4, S17). Then what it kept
+                // unchecked (TLS-106).
+                if let (Some(path), Some(update)) = (&self.args.baseline, baseline_update) {
+                    let line = update.stderr_line();
+                    actions.push(WriteAction::File(path.into(), update.bytes));
+                    if let Some(line) = line {
+                        actions.push(WriteAction::line(&line));
+                    }
                 }
                 // F2: the preflight degraded warning (the "no silent clean"
                 // contract), before the report. Matches al-sem index.ts:263-264.
@@ -847,6 +869,7 @@ fn analyze_view(
     request: &RequestInputs,
     args: &AnalyzeArgs,
     version: &str,
+    detectors: &[crate::engine::l5::registry::Detector],
 ) -> Result<AnalyzeOutput, String> {
     let inputs = Arc::clone(cx.inputs());
     let inputs = &inputs;
@@ -886,6 +909,44 @@ fn analyze_view(
         .iter()
         .map(|f| (project_finding(f, &idx), f))
         .collect();
+    // `--update-baseline` (TLS-106): every finding the detectors emitted, each
+    // with its scope by the registry's own predicate: the run's findings, and
+    // those the primary-scope tail dropped (always `dependency`), all before
+    // the gate's filters.
+    let updating = args.baseline.is_some() && args.update_baseline;
+    assert_eq!(
+        run.finding_is_primary.len(),
+        run.findings.len(),
+        "a scope label per finding"
+    );
+    let before_filters: Vec<Entry> = if updating {
+        paired
+            .iter()
+            .zip(&run.finding_is_primary)
+            .map(|((s, _), primary)| Entry {
+                fingerprint: s.fingerprint.clone(),
+                detector: s.detector.clone(),
+                scope: EntryScope::of(*primary),
+            })
+            .chain(run.scoped_out.iter().map(|(detector, fingerprint)| Entry {
+                fingerprint: fingerprint.clone(),
+                detector: detector.clone(),
+                scope: EntryScope::Dependency,
+            }))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    // A finding's scope by its id, for the shown findings an update adds.
+    let scope_by_id: std::collections::HashMap<&str, EntryScope> = if updating {
+        run.findings
+            .iter()
+            .zip(&run.finding_is_primary)
+            .map(|(f, p)| (f.id.as_str(), EntryScope::of(*p)))
+            .collect()
+    } else {
+        Default::default()
+    };
 
     // --- filter: min-severity, then detector allow-list (only when `--detector` set). ---
     let detector_allow = args.detector.as_ref().map(|d| {
@@ -932,17 +993,63 @@ fn analyze_view(
 
     // --- baseline suppression (al-sem index.ts:296-302) ---
     // Load the baseline fingerprint set (empty when no --baseline). Drop any finding
-    // whose fingerprint is in it. --update-baseline saves the CURRENT (post-limit) set —
-    // the new floor — BEFORE the drop, matching al-sem (`saveBaseline(path, limited)`).
-    // The bytes are returned, never written here (#277 D2.4): the caller writes them.
-    let mut baseline_bytes = None;
+    // whose fingerprint is in it. --update-baseline adds the CURRENT (post-limit) set
+    // to the old file BEFORE the drop, keeping what the run did not prove gone
+    // (TLS-106). The bytes are returned, never written here (#277 D2.4): the caller
+    // writes them.
+    let mut baseline_update = None;
     if args.baseline.is_some() {
         let summaries: Vec<_> = paired.iter().map(|(s, _)| s.clone()).collect();
+        let file = request.baseline.as_ref().expect(
+            "--baseline set but the RequestInputs was read without it (AnalyzeArgs::read_request)",
+        );
         let baseline = if args.update_baseline {
-            // The set applied is the set to be written: every current finding. The
-            // old file (`request.baseline`) is never read, so a malformed one never
-            // errors, as when the file was overwritten before being read back (#160).
-            baseline_bytes = Some(serialize_baseline(&summaries).into_bytes());
+            // TLS-106: merge into the old file, dropping only what this run proves
+            // gone. A malformed, inconsistent or foreign file is refused before
+            // anything is written. The set applied is every current finding: the
+            // entries kept besides them are findings this run did not make.
+            let update = update_baseline(
+                file,
+                &UpdateRun {
+                    universe: if args.single_app {
+                        "single-app"
+                    } else {
+                        "cross-app"
+                    },
+                    primary_app: resolved
+                        .primary_app
+                        .as_ref()
+                        .map(|a| a.app_guid.clone())
+                        .unwrap_or_default(),
+                    prunes_dependency: !args.single_app && args.scope == Scope::All,
+                    inputs_whole: inputs_whole(fresh),
+                    dependencies: crate::engine::gate::preflight::dependency_bodies(fresh),
+                    before_filters,
+                    shown: paired
+                        .iter()
+                        .map(|(s, f)| Entry {
+                            fingerprint: s.fingerprint.clone(),
+                            detector: s.detector.clone(),
+                            scope: scope_by_id[f.id.as_str()],
+                        })
+                        .collect(),
+                    selected: detectors.iter().map(|d| d.name.clone()).collect(),
+                    complete: detectors
+                        .iter()
+                        .filter(|d| run.ran_completely(&d.name))
+                        .map(|d| d.name.clone())
+                        .collect(),
+                    registered: crate::engine::l5::detectors::registered_detectors()
+                        .into_iter()
+                        .map(|d| d.name)
+                        .collect(),
+                },
+            )
+            .map_err(|r| match r {
+                Refusal::Malformed(m) => format!("analysis failure — {m}"),
+                Refusal::OtherRun(m) => m,
+            })?;
+            baseline_update = Some(update);
             summaries.iter().map(|s| s.fingerprint.clone()).collect()
         } else {
             // A malformed baseline (exists but not valid JSON / non-array
@@ -952,9 +1059,6 @@ fn analyze_view(
             // failure — " prefix so the bin can distinguish it from config errors
             // (exit 3) and use exit 2 instead. The bytes are the ones the command's
             // `RequestInputs` read (#160, #277).
-            let file = request.baseline.as_ref().expect(
-                "--baseline set but the RequestInputs was read without it (AnalyzeArgs::read_request)",
-            );
             load_baseline_bytes(file).map_err(|e| format!("analysis failure — {e}"))?
         };
         let kept_ids: std::collections::HashSet<String> = apply_baseline(&summaries, &baseline)
@@ -1040,6 +1144,7 @@ fn analyze_view(
                     driver_version: inputs.driver_version.clone(),
                     evidence: evidence.as_deref(),
                     hidden: focus_json,
+                    baseline_update: baseline_update.as_ref().map(BaselineUpdate::to_json),
                 })
             }
             OutputFormat::Terminal => {
@@ -1123,7 +1228,7 @@ fn analyze_view(
         drop(run);
     }
 
-    Ok((output, exit_code, stderr_warning, baseline_bytes))
+    Ok((output, exit_code, stderr_warning, baseline_update))
 }
 
 /// The empty-output path for a fail-closed / unreadable workspace: empty findings ⇒
@@ -1216,6 +1321,7 @@ pub(crate) fn empty_output_result(
                     None
                 },
                 hidden: focus_json,
+                baseline_update: None,
             })
         }
         OutputFormat::Terminal => {
@@ -1547,6 +1653,8 @@ mod tests {
         };
         let run = RunOutput {
             findings: vec![],
+            finding_is_primary: vec![],
+            scoped_out: vec![],
             diagnostics: vec![d("detect")],
             detector_stats: vec![],
             summarize_diagnostics: vec![d("summarize")],
@@ -1659,7 +1767,7 @@ mod tests {
         // An anchor from the function's last statement proves the cut did not
         // stop early.
         assert!(
-            body.contains("Ok((output, exit_code, stderr_warning, baseline_bytes))"),
+            body.contains("Ok((output, exit_code, stderr_warning, baseline_update))"),
             "the cut must reach analyze_view's later code"
         );
         assert!(

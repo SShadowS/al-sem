@@ -222,6 +222,8 @@ pub fn detect_d46(
 
     let mut findings: Vec<Finding> = Vec::new();
     let mut candidates_considered = 0usize;
+    // Walks the node budget cut short (TLS-106: an internal incompleteness signal).
+    let mut budget_cuts = 0u64;
     let mut skipped_parse_incomplete = 0u64;
 
     for routine in &ws.routines {
@@ -277,6 +279,10 @@ pub fn detect_d46(
             // Hot-tier walk stats are a d1-only concern for now.
             None,
         );
+        budget_cuts += results
+            .iter()
+            .filter(|r| r.stop == WalkStop::NodeBudgetCut)
+            .count() as u64;
 
         for result in &results {
             if result.stop != WalkStop::Complete {
@@ -346,6 +352,7 @@ pub fn detect_d46(
     let count = emitted.len();
     let mut stats = DetectorStats::new(DETECTOR, candidates_considered, count);
     stats.add_skip("parseIncomplete", skipped_parse_incomplete);
+    stats.add_cut("nodeBudgetCut", budget_cuts);
     Ok(DetectorOutput {
         findings: emitted,
         stats,
