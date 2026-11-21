@@ -18,6 +18,7 @@
 # Test hook: CDO_HOST_SUSPENDED_FILE, a file whose first number is the suspended
 # seconds instead (a real run sets none); `--clocks` then derives the other two
 # from the wall clock (boot = now, awake = now less the suspended seconds).
+# test-hooks: CDO_HOST_SUSPENDED_FILE
 set -u
 if [[ -n "${CDO_HOST_SUSPENDED_FILE:-}" ]]; then
     # `read` fails at a missing final newline even when it read the line.

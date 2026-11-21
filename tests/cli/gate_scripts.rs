@@ -1930,9 +1930,25 @@ fn ci_steps_all_runs_and_judges_the_agentflow_suite() {
     }
     // TLS-108: `perf-bounds` asks `cargo test --no-run` for its test binary (the
     // JSON artifact line); the stub names `/bin/true`.
+    // TLS-113: the stand-in lists the one timing test the temp repo's
+    // tests/perf_bounds.rs declares, as `perf-bounds` now checks before it runs.
+    std::fs::create_dir_all(repo.join("tests")).unwrap();
+    std::fs::write(
+        repo.join("tests/perf_bounds.rs"),
+        "mod release_checks {\n    #[test]\n    fn t() {}\n}\n",
+    )
+    .unwrap();
+    let perf = bin.join("perf-bounds-stand-in");
+    exe(
+        perf.clone(),
+        r#"[ "$1" = --list ] && [ "$4" != --ignored ] && echo "release_checks::t: test"; exit 0"#,
+    );
     exe(
         bin.join("cargo"),
-        r#"case " $* " in *" --no-run "*) echo '{"profile":{"test":true},"target":{"name":"perf_bounds"},"executable":"/bin/true"}' ;; esac; exit 0"#,
+        &format!(
+            r#"case " $* " in *" --no-run "*) echo '{{"profile":{{"test":true}},"target":{{"name":"perf_bounds"}},"executable":"{}"}}' ;; esac; exit 0"#,
+            perf.display()
+        ),
     );
     exe(
         bin.join("python3"),
@@ -4389,7 +4405,29 @@ fn perf_bounds_step(
 ) -> (Option<i32>, String) {
     use std::os::unix::fs::PermissionsExt;
     let bin = dir.join("perf-bounds-stand-in");
-    std::fs::write(&bin, format!("#!/usr/bin/env bash\n{body}\n")).unwrap();
+    // ⟨TLS-113⟩ The step first asks the binary for its tests (`--list`): the
+    // stand-in lists as many `release_checks::` tests as tests/perf_bounds.rs
+    // declares (STUB_LISTED overrides it) and STUB_IGNORED ignored ones.
+    let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/perf_bounds.rs"))
+        .unwrap();
+    let declared = src
+        .split_once("\nmod release_checks")
+        .expect("tests/perf_bounds.rs has `mod release_checks`")
+        .1
+        .lines()
+        .filter(|l| l.trim() == "#[test]")
+        .count();
+    std::fs::write(
+        &bin,
+        format!(
+            "#!/usr/bin/env bash\n\
+             if [ \"$1\" = --list ]; then\n\
+             case \" $* \" in *\" --ignored \"*) n=${{STUB_IGNORED:-0}} ;; *) n=${{STUB_LISTED:-{declared}}} ;; esac\n\
+             for ((i = 0; i < n; i++)); do echo \"release_checks::t$i: test\"; done; exit 0\n\
+             fi\n{body}\n"
+        ),
+    )
+    .unwrap();
     std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
     let mut cmd = std::process::Command::new("bash");
     private_slot(&mut cmd, dir)
@@ -4455,6 +4493,41 @@ fn perf_bounds_runs_under_a_timed_slot_hold() {
     );
     let (code, text) = perf_bounds_step(dir.path(), "exit 3", &[]);
     assert_eq!(code, Some(3), "the binary's exit is the step's: {text}");
+}
+
+/// ⟨TLS-113⟩ The step fails, before it takes the slot or runs anything, when
+/// the binary does not hold every timing test: built with debug assertions
+/// (an inherited `CARGO_PROFILE_RELEASE_FAST_DEBUG_ASSERTIONS=true` compiles
+/// `release_checks` out, and the two tests left passed; review r2, sol), one
+/// short, or a test ignored. A real dev-profile binary lists 0 of the 12 and a
+/// real release-fast one all 12
+/// (`/work/.al-sem/tools-notes/tls113/r3-perf-bounds-real-binaries.log`).
+///
+/// Proof (2026-11-21): the `perf_bounds_incomplete` call removed from
+/// `run_perf_bounds` -> FAILED (the stand-in listing 0 ran and passed);
+/// restored -> passed.
+#[cfg(target_os = "linux")]
+#[test]
+fn perf_bounds_refuses_a_binary_without_its_timing_tests() {
+    let dir = tempfile::tempdir().unwrap();
+    for (env, says) in [
+        (
+            ("STUB_LISTED", "0"),
+            "the timing tests would not run: the binary has 0 of the ",
+        ),
+        (("STUB_LISTED", "11"), "the binary has 11 of the "),
+        (("STUB_IGNORED", "1"), "1 of its tests are ignored"),
+    ] {
+        let (code, text) = perf_bounds_step(
+            dir.path(),
+            "echo stand-in ran",
+            &[(env.0, std::ffi::OsStr::new(env.1))],
+        );
+        assert_eq!(code, Some(1), "{env:?}: {text}");
+        assert!(text.contains(says), "{env:?}: {text}");
+        assert!(!text.contains("stand-in ran"), "{env:?}: {text}");
+        assert!(!text.contains("cdo-slot: taken"), "{env:?}: {text}");
+    }
 }
 
 /// ⟨TLS-108⟩ A build still running when the timing is to begin: the step times

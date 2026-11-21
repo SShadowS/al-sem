@@ -78,7 +78,14 @@ scripts/land [--push] [--dry-run] <branch>...  # The landing chain (TLS-59): mer
                                # (scripts/cdo-slot) from the start (a CHANGELOG conflict of
                                # additions keeps both sides, any other conflict stops), `ci-steps all`, wait
                                # for 35 GB free, `cdo-gate`, a recheck that master and the worktree did not
-                               # move, then `merge-and-push` only with --push. Logs and verdicts under
+                               # move, then `merge-and-push` only with --push. An approved skip of
+                               # cdo-gate's speed phase is `--no-speed="<reason>"` (TLS-113: only this
+                               # spelling; the reason is required and kept in the log and verdict); land
+                               # refuses CDO_GATE_NO_SPEED, any declared test hook and any build override
+                               # (CARGO_PROFILE_*, CARGO_BUILD_*, RUSTFLAGS, RUSTDOCFLAGS,
+                               # CARGO_ENCODED_RUSTFLAGS, CARGO_TARGET_DIR) or engine test seam
+                               # (ALSEM_TEST_*, ALSEM_BATCH_CLAIMS) in its environment, and starts
+                               # its steps without BASH_ENV/ENV. Logs and verdicts under
                                # /work/.al-sem/land/; timings in flow-timings.jsonl
 scripts/cdo-slot acquire|release|status|run <owner> <reason>  # The one CDO slot (TLS-60): land and
                                # cdo-gate hold it for their whole run; a lane's CDO measurement or timed run

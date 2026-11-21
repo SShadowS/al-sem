@@ -30,7 +30,19 @@
 #             never runs after a red ci).
 #   mem-wait  MemAvailable >= 35 GB (polls 15 s, gives up after 30 min); no
 #             other gate can run meanwhile, since land holds the CDO slot.
-#   cdo       `bash scripts/cdo-gate <CDO_WS>`.
+#   cdo       `bash scripts/cdo-gate <CDO_WS>`; with `--no-speed=<reason>`,
+#             `bash scripts/cdo-gate --no-speed <CDO_WS>` (⟨TLS-113⟩ an
+#             owner-approved skip of the speed phase only: the reason is
+#             required, printed, written at the top of cdo.log and to the
+#             verdict, and repeated in the PASS line; given once, one line of
+#             text, neither a path nor a branch). The skip is the flag on
+#             cdo-gate's own command line, never CDO_GATE_NO_SPEED: an exported
+#             variable reaches every step (ENG-159's did, and `ci-steps
+#             agentflow` failed under it), so land refuses to start with
+#             CDO_GATE_NO_SPEED set at all. Refused, not cleared: clearing would
+#             run the speed check the caller asked to skip, silently. land also
+#             refuses any declared test hook, and starts its steps without
+#             BASH_ENV or ENV.
 #   recheck   (after ci and after cdo) the worktree is still on the landing
 #             commit the gates ran on, clean, `landing/<name>` still points
 #             there, and master has not moved: otherwise the gated tree is not
@@ -67,13 +79,16 @@
 set -euo pipefail
 
 usage() {
-    echo "usage: scripts/land [--push] [--dry-run] [--name <x>] [--worktree <dir>] <branch>..."
+    echo "usage: scripts/land [--push] [--dry-run] [--name <x>] [--worktree <dir>] [--no-speed=<reason>] <branch>..."
     echo "  Merges the branches (in that order) into landing/<name> in the gate worktree,"
     echo "  runs ci-steps all, then cdo-gate; lands it via merge-and-push only with --push."
     echo "  --name     landing name (default: the task ids in the branch names, e.g. tls58+eng30)"
     echo "  --worktree gate worktree (default \$LAND_WORKTREE or /work/alsem-wt/orchestrator-gate)"
     echo "  --dry-run  check and predict the merges; change nothing"
     echo "  --push     land it on master with scripts/merge-and-push after a PASS"
+    echo "  --no-speed=<reason>"
+    echo "             run cdo-gate --no-speed (an approved skip of its speed phase); the"
+    echo "             reason is required (this spelling only) and kept in the logs and verdict"
 }
 die() {
     echo "land: $*" >&2
@@ -88,14 +103,30 @@ bad_usage() {
 # A git hook exports GIT_DIR and friends, which beat `git -C` (src/git_env.rs).
 # shellcheck disable=SC2046
 unset $(git rev-parse --local-env-vars)
+# ⟨TLS-113⟩ A startup file every child bash would run before its gate script
+# (one setting CDO_GATE_NO_SPEED, or exiting 0, would change a verdict after
+# every check here; review r1, sol). land's own bash has run it already.
+unset BASH_ENV ENV
 
-push=0 dry_run=0 name=""
+push=0 dry_run=0 name="" no_speed="" no_speed_given=0
 worktree="${LAND_WORKTREE:-/work/alsem-wt/orchestrator-gate}"
 branches=()
 while (($#)); do
     case "$1" in
         --push) push=1 ;;
         --dry-run) dry_run=1 ;;
+        # ⟨TLS-113⟩ One spelling only: with `--no-speed <reason>` a forgotten
+        # reason took the first branch for one and landed the rest (review r1, sol).
+        --no-speed) bad_usage "--no-speed needs a reason: --no-speed=<reason>" ;;
+        --no-speed=*)
+            ((!no_speed_given)) || bad_usage "--no-speed given twice"
+            no_speed=${1#--no-speed=} no_speed_given=1
+            [[ "$no_speed" =~ [^[:space:]] && "$no_speed" != -* ]] \
+                || bad_usage "--no-speed=<reason> needs a reason: text, not empty and not an option"
+            # Kept on one line in the verdict and the logs: no newline, CR, escape.
+            [[ "$no_speed" != *[[:cntrl:]]* ]] || bad_usage "--no-speed=<reason>: the reason has a control character"
+            [[ ! -e "$no_speed" ]] || bad_usage "--no-speed=<reason>: '$no_speed' names an existing path, not a reason"
+            ;;
         --name)
             (($# >= 2)) || bad_usage "--name needs a value"
             name=$2
@@ -119,6 +150,33 @@ while (($#)); do
 done
 ((${#branches[@]})) || bad_usage "no branch given"
 ((push && dry_run)) && bad_usage "--push and --dry-run exclude each other"
+# ⟨TLS-113⟩ The skip goes on cdo-gate's command line only (see `cdo` above).
+[[ -z "${CDO_GATE_NO_SPEED+set}" ]] \
+    || bad_usage "CDO_GATE_NO_SPEED is set: it would reach every step (ci-steps agentflow fails under it); unset it and give --no-speed=<reason>"
+# A test hook makes a gate read a stand-in (a perf-bounds binary, a meminfo, a
+# clock) and pass on it: none belongs in a real landing (review r1, sol). The
+# names are the ones the gate scripts declare (cdo-speed's TEST_HOOKS, the
+# `# test-hooks:` lines), read by the same code agentflow strips them with.
+hooks=$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); from agentflow.supervise import declared_test_hooks; print(*declared_test_hooks())' \
+    "$(dirname "$0")") && [[ -n "$hooks" ]] || die "cannot read the gate scripts' declared test hooks"
+set_hooks=()
+for v in $hooks; do
+    [[ -z "${!v+set}" ]] || set_hooks+=("$v")
+done
+((${#set_hooks[@]} == 0)) || bad_usage "test hooks are set, which no real landing may pass to its gates: ${set_hooks[*]}"
+# Nor a build-shape override: CARGO_PROFILE_RELEASE_FAST_DEBUG_ASSERTIONS=true
+# compiled perf_bounds' timing tests out, and the step passed (review r2, sol).
+# land itself sets none of these, so none is exempt.
+overrides=$(compgen -e | grep -E '^(CARGO_PROFILE_|CARGO_BUILD_)|^(RUSTFLAGS|RUSTDOCFLAGS|CARGO_ENCODED_RUSTFLAGS|CARGO_TARGET_DIR)$' || true)
+[[ -z "$overrides" ]] || bad_usage "build overrides are set, which no landing may pass to its builds: $(echo $overrides)"
+# Nor the engine's own test seams (read in Rust, by the suite ci-steps runs):
+# ALSEM_TEST_* and ALSEM_BATCH_CLAIMS. land sets none of them.
+seams=$(compgen -e | grep -E '^ALSEM_TEST_|^ALSEM_BATCH_CLAIMS$' || true)
+[[ -z "$seams" ]] || bad_usage "engine test seams are set, which no landing may pass to its gates: $(echo $seams)"
+cdo_flags=()
+if ((no_speed_given)); then
+    cdo_flags=(--no-speed)
+fi
 
 cdo_ws="${CDO_WS:-/work/src/cdo-baseline/Cloud}"
 logs_root="${LAND_LOGS:-/work/.al-sem/land}"
@@ -154,6 +212,9 @@ union_changelog() {
 # ---- check ---------------------------------------------------------------
 [[ -d "$worktree" ]] || die "no gate worktree at $worktree"
 G rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "$worktree is not a git worktree"
+if ((no_speed_given)) && G show-ref --verify -q "refs/heads/$no_speed"; then
+    bad_usage "--no-speed=<reason>: '$no_speed' names a branch, not a reason"
+fi
 if ((!dry_run)); then
     exec 7>&1 8>&2
     # ⟨TLS-60⟩ The CDO slot (scripts/cdo-slot), from here to the end: no second
@@ -240,6 +301,9 @@ for ((i = 0; i < ${#branches[@]}; i++)); do
     echo "land:   $((i + 1)). ${branches[i]} (${tips[i]:0:8}, ${ids[i]})"
 done
 echo "land: landing branch: $landing"
+if ((no_speed_given)); then
+    echo "land: cdo-gate runs with --no-speed (SPEED AND MEMORY NOT CHECKED): $no_speed"
+fi
 
 # ⟨TLS-87⟩ The pre-submit CDO subset, checked rather than remembered: a branch
 # whose diff changes product code (or the subset's own tests and goldens) needs
@@ -377,7 +441,7 @@ if ((dry_run)); then
         fi
         prev=$(G commit-tree "$tree" -p "$prev" -p "${tips[i]}" -m "land dry run")
     done
-    echo "land: then: ci-steps all; wait for ${mem_min_gb} GB free; cdo-gate $cdo_ws; merge-and-push $landing only with --push"
+    echo "land: then: ci-steps all; wait for ${mem_min_gb} GB free; cdo-gate ${cdo_flags[*]}${cdo_flags[*]:+ }$cdo_ws; merge-and-push $landing only with --push"
     if ((refuse)); then
         echo "land: DRY RUN: a real run would refuse"
         exit 1
@@ -542,13 +606,19 @@ verdict mem-wait "$rc" "$start"
 start=$SECONDS
 mark cdo start
 rc=0
-(cd "$worktree" && bash scripts/cdo-gate "$cdo_ws") >"$run/cdo.log" 2>&1 7>&- 8>&- 9>&- || rc=$?
+no_speed_note=""
+if ((no_speed_given)); then
+    no_speed_note=" (cdo-gate --no-speed: $no_speed)"
+    echo "land: cdo-gate --no-speed: $no_speed" >"$run/cdo.log"
+fi
+(cd "$worktree" && bash scripts/cdo-gate "${cdo_flags[@]}" "$cdo_ws") >>"$run/cdo.log" 2>&1 7>&- 8>&- 9>&- || rc=$?
 verdict cdo "$rc" "$start"
+((no_speed_given == 0)) || echo "cdo no-speed: $no_speed" >>"$run/verdict"
 ((rc == 0)) || die "FAIL at cdo: nothing pushed ($landing kept)"
 recheck cdo
 
 if ((!push)); then
-    echo "land: PASS: $landing is gated; to land it: cd $main && scripts/merge-and-push $landing"
+    echo "land: PASS$no_speed_note: $landing is gated; to land it: cd $main && scripts/merge-and-push $landing"
     exit 0
 fi
 
@@ -562,4 +632,4 @@ rc=0
     >"$run/push.log" 2>&1 7>&- 8>&- 9>&- || rc=$?
 verdict push "$rc" "$start"
 ((rc == 0)) || die "FAIL at push: see $run/push.log"
-echo "land: PASS: $landing landed on master"
+echo "land: PASS$no_speed_note: $landing landed on master"
