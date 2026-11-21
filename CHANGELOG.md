@@ -37,24 +37,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `cpi_labels`).
 - **Coverage.** Equal running times on a PMU's events do not show that the counters ran for
   the whole call: both could miss the same stretch. So the instructions events' running time,
-  summed over the PMUs, must match the call's CPU seconds from /proc (user plus system) within
-  2 % plus 0.05 s. Measured on server1 with cdo-speed's own attach, over 40 calls of 0-12 s
-  in threads and in child processes forked during the call: the worst gap was 0.067 s on
-  12 s (0.6 %), and at most 0.021 s below 3 s. A count outside the band stays in the record,
-  marked `covered: false` beside its `running_s`, but it gives no clock, no `CLOCK` or `CPI`
-  label, and so no advisory. A positive count at 0 ns, or a `<not counted>` row at a running
-  time, is no count.
-- **A CPU-only failure with equal work and a label is advisory** (owner decision, kraken's
-  answer to q-20261121T025802-abcd2da8; the owner may overrule). A CPU-time failure becomes
-  ADVISORY when the row's wall time passes, its instructions are equal (within x1.02 either
-  way, counted on both sides in every pass) and it has a `CLOCK` or `CPI` label from covering
-  counts. The verdict prints the CPU ratio, the instruction ratio and the label; `speed.json`
-  lists it under `advisory`. A clean clock with equal cycles per instruction and more CPU is
-  the stall regression instructions miss: it stays a failure. Wall-time and memory failures
-  always fail, and a row that fails wall too has nothing made advisory. Contradiction comes
-  first (review r2, the stricter reading): a failure whose passes disagree gets the extra pair
-  below before any advisory, and the advisory applies only to the final two-pass or four-pass
-  judgment.
+  summed over the PMUs, is compared with the call's CPU seconds from /proc (user plus system).
+  A coverage loss can only make the running time shorter, so the check is one-sided: a count
+  covers its call unless it ran less than the CPU less 2 % less 0.05 s. A running time over
+  1.10 times the CPU plus 0.05 s is no loss but odd, and is no count either.
+  - Synthetic calls on server1, with cdo-speed's own attach (40 calls of 0-12 s, in threads
+    and in child processes forked during the call): the worst relative gap on the 12 s calls
+    was 0.6 % (0.067 s); on 0.5 s calls up to +2.4 % (0.012 s), and on a 0.05 s call -15.5 %
+    (one 0.009 s tick), both inside the 0.05 s allowance.
+  - CDO scale, the coordinator's A/A run of f7da9a93: all 64 calls counted. On the 39 calls
+    above 1 s CPU, running minus CPU was -0.5 % to +2.7 %; every build and warm-tests call
+    (the multi-threaded ones) read +2.5 to +2.7 %, for example build 184.41 s running against
+    179.63 s CPU, and warm-tests 136.91 s against 133.38 s. Calls at or below 1 s were within
+    -25 to +22 ms. The excess is probably /proc's tick sampling against perf's exact times on
+    many threads; that is a guess, not a measured cause. A first, two-sided 2 % band marked
+    all 8 of those calls `NOT COVERED`; the one-sided check counts them, and its x1.10 cap is
+    about four times the largest excess seen.
+  A count outside the band stays in the record, marked `covered: false` beside its
+  `running_s`, but it gives no clock, no `CLOCK` or `CPI` label, and so no advisory. A
+  positive count at 0 ns, or a `<not counted>` row at a running time, is no count.
+- **A CPU-only failure that head's lower clock explains is advisory** (owner decision,
+  kraken's answer to q-20261121T025802-abcd2da8; the owner may overrule; narrowed in review
+  r3). User CPU is about instructions times cycles per instruction divided by the clock. With
+  equal instructions, more CPU comes either from a lower clock or from more cycles per
+  instruction, and more cycles per instruction is exactly what a cache or memory-stall
+  regression looks like. So a `CPI` label never waives anything. A CPU-time failure becomes
+  ADVISORY only when all of these hold: the row has a `CLOCK` label from covering counts; its
+  instructions are equal (within x1.02 either way, counted on both sides in every pass); its
+  wall time passes; and the clock explains the excess: the CPU ratio times the clock ratio
+  (head over base, below 1 when head ran slower) is within the CPU limit. A clock in head's
+  favour makes that product larger, so it never waives. In a rounds row, every round over the
+  CPU limit must meet these conditions by itself: medians from different rounds may not
+  combine. The verdict prints the CPU ratio, the clock-corrected ratio and the instruction
+  ratio; `speed.json` lists it under `advisory`. Wall-time and memory failures always fail.
+  Contradiction comes first (review r2, the stricter reading): a failure whose passes disagree
+  gets the extra pair below before any advisory, and the advisory applies only to the final
+  two-pass or four-pass judgment.
 - **A contradicted failure gets one more flipped pair.** When a judged warm-up row fails (CPU
   or wall, advisory or not) and its two passes' ratios differ by more than x1.25, cdo-speed runs
   two more warm-up passes on fresh servers, each side order once more. Then every row and
@@ -65,7 +83,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cdo-speed exits 2 (cannot run) and cdo-gate shows the speed phase as FAILED. Never more than
   one extra pair. The verdict says when a pair was added and why. Rounds keep their rule. The
   pair costs two more passes, and each one first waits for a calm host as passes 1 and 2 do:
-  up to 10 minutes per pass on a loaded host, on top of the passes' own time.
+  up to 10 minutes per pass on a loaded host, on top of the passes' own time. A live example
+  of the rule on a row that does not fail: in the A/A run of f7da9a93, warm-tests' passes read
+  x0.676 and x1.721 (spread 2.54), and their geometric mean x1.079 PASSed with no extra pair.
+  A position or host effect showed as disagreeing passes and was judged correctly.
 - **`speed.json` never reads green on HOST UNSTABLE.** It has a new `verdict` field (`PASS`,
   `FAIL` or `HOST UNSTABLE`), and the instability is also listed in `failed`, so a reader that
   checks `not failed` sees a failure. Every other `FAIL:` line (a memory failure, say) is still
@@ -73,9 +94,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pair); `warm_samples_asked` is the number asked for.
 - **Tests** (`tests/cli/gate_scripts.rs`, stub servers and a stub perf, and real perf output
   as fixtures): counts per PMU, multiplexed and duplicated counts refused, the labels, the
-  advisory rule both ways (equal work with a label, unequal work, a clean clock, one side
-  uncounted in one pass, CPU and wall failing together, counters covering part of each call,
-  a contradicted failure that would qualify running the extra pair first), the clock's
+  advisory rule both ways (a lower clock that explains the excess; more cycles per
+  instruction, a faster head clock, instructions x1.1 or x0.9 and a clean clock all failing;
+  one side uncounted in one pass, CPU and wall failing together, counters covering part of
+  each call, a contradicted failure that would qualify running the extra pair first; in the
+  rounds, every round judged by itself, the rounds' wall limit, an uncovered round call), the clock's
   divisor (a side that burns kernel time), the extra pair (agree then PASS, agree then FAIL,
   a cross-row disagreement, the side order with the positional factor on, a wall trigger, one
   pass adding nothing), HOST UNSTABLE in `speed.json` and in cdo-gate's summary. The real-perf

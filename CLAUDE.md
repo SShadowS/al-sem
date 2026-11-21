@@ -235,13 +235,16 @@ Every test still runs before a merge; the tiers decide HOW OFTEN each one runs.
   **Clock and core sharing are labelled too (TLS-111):** each call also counts user cycles, and a
   judged row whose sides' clocks (user cycles / user s) or cycles per instruction differ beyond
   x1.15 (provisional bands) is labelled `CLOCK` or `CPI`, from counts that cover the call
-  (counter running time within 2 % + 0.05 s of its /proc CPU, else `covered: false`, no label).
+  (counter running time not short of its /proc CPU by over 2 % + 0.05 s, nor over x1.10 of it;
+  else `covered: false`, no label).
   A warm-up failure whose two passes disagree beyond x1.25 gets ONE more flipped pair first
   (two passes, each waiting for a calm host); every row that failed after pass 2 must then
   agree within each side order, and four passes judge; else `HOST UNSTABLE`, exit 2 (`verdict`
   and `failed` in speed.json; cdo-gate: FAILED, never a pass). Only then, owner decision
-  (q-20261121T025802-abcd2da8): a CPU-only failure with equal instructions (x1.02) AND such a
-  label is ADVISORY; a clean clock with equal CPI, wall and memory still fail.
+  (q-20261121T025802-abcd2da8, narrowed in review r3): the one advisory CPU failure is a
+  covered, CPU-only failure with equal instructions (x1.02) that head's LOWER clock explains
+  (CPU ratio x clock ratio within the limit; in the rounds, each over-limit round by itself).
+  A `CPI` label never waives: more cycles per instruction is a memory-stall regression's shape.
   **It is Linux only (it reads `/proc`):
   on the Windows machine every full `cdo-gate` run FAILS unless given `--no-speed`**
   (an `--only` subset never runs it).
@@ -254,7 +257,8 @@ Every test still runs before a merge; the tiers decide HOW OFTEN each one runs.
   ADVISORY, never a failure. Making it
   fail is an open owner question (note `docs/superpowers/notes/2026-11-18-tls83-speed-
   resolution.md`). They miss memory stalls and lost parallelism, so CPU and wall keep their
-  limits. **A CHANGELOG quotes** an instruction ratio as work ("instructions x0.93"), never
+  limits; equal instructions waive a CPU failure only in the one TLS-111 case above (covered,
+  CPU-only, explained by head's lower clock), never wall or memory. **A CHANGELOG quotes** an instruction ratio as work ("instructions x0.93"), never
   as "N % faster"; a CPU or build ratio only when two independent runs agree within ±12 %,
   quoted as their combined value ±6 %.
   `--no-speed` skips it and prints that speed was not checked; a tree that lands without
