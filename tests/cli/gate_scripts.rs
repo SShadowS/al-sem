@@ -3644,7 +3644,10 @@ fn speed_stub_verdicts_ignore_the_hosts_wall_time() {
             ("CDO_SPEED_TEST_WALL_IS_CPU", ""),
         ],
     );
-    assert_eq!(code, Some(1), "{text}");
+    // TLS-111: the host's wall time makes the two passes' ratios differ (x7.97
+    // against x5.70 under load), so an extra pair may follow and still disagree:
+    // HOST UNSTABLE, exit 2, which prints the wall failure too. Never a pass.
+    assert!(code == Some(1) || code == Some(2), "{text}");
     assert!(text.contains("FAIL: build: wall time"), "{text}");
 
     // Never a real run: a value but `1`, or no stub binaries.
