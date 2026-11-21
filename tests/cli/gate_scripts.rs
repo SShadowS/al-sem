@@ -3412,9 +3412,9 @@ fn speed_extra_pair_on_wall_and_never_with_one_pass() {
 ///
 /// Mutations (2026-11-21, round 2): `cpu_advisory` without the label condition
 /// -> the clean clock reads "CPU ADVISORY" (red); without the instruction band
-/// -> the x1.1-instructions run PASSes, exit 0 (red); the clock divided by user
-/// + system seconds -> the clean clock reads CLOCK x0.661 and PASSes, exit 0
-/// (red). Each restored, green.
+/// -> the x1.1-instructions run PASSes, exit 0 (red); the clock divided by the
+/// user and system seconds together -> the clean clock reads CLOCK x0.661 and
+/// PASSes, exit 0 (red). Each restored, green.
 #[cfg(target_os = "linux")]
 #[test]
 fn speed_cpu_failure_is_advisory_only_with_equal_instructions_and_a_label() {
