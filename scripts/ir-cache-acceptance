@@ -106,6 +106,21 @@ def alpackages_sha256(ws):
     return h.hexdigest()
 
 
+def void_if_moved(record, ws, failures):
+    """The workspace read again after the run: its commit, its dirty-path count and its
+    `.alpackages` stamp must equal the ones recorded at the start, else the run is VOID
+    (not a pass, whatever it measured)."""
+    after = {"workspace_sha": git(ws, "rev-parse", "HEAD"),
+             "workspace_dirty_paths": len(git(ws, "status", "--porcelain").splitlines()),
+             "alpackages_sha256": alpackages_sha256(ws)}
+    moved = [k for k, v in after.items() if record[k] != v]
+    record.update({f"{k}_after": v for k, v in after.items()})
+    if moved:
+        record["void"] = f"the workspace moved during the run ({', '.join(moved)})"
+        record["passed"] = False
+        failures.append(f"VOID: {record['void']}")
+
+
 def setup(args):
     repo = os.path.dirname(HERE)
     if os.environ.get("ALSEM_IR_CACHE_VERIFY"):
@@ -324,11 +339,9 @@ def timing(args):
     passed = all(v["passed"] for v in verdict.values()) and not failures
     record.update(rounds=rounds, samples=samples, verdict=verdict,
                   coverage_failures=failures, passed=passed,
-                  workspace_sha_after=git(ws, "rev-parse", "HEAD"),
-                  alpackages_sha256_after=alpackages_sha256(ws))
-    if record["alpackages_sha256_after"] != record["alpackages_sha256"]:
-        passed = record["passed"] = False
-        failures.append("the workspace's .alpackages moved: VOID")
+                  void=None)
+    void_if_moved(record, ws, failures)
+    passed = record["passed"]
     with open(os.path.join(out, "timing.json"), "w") as f:
         json.dump(record, f, indent=1)
     for a, v in verdict.items():
@@ -418,10 +431,9 @@ def identity(args):
                   differs=[n for n, _ in real], nondeterministic=nondeterministic,
                   coverage_failures=failures, passed=passed,
                   eligible_packages=eligible_packages,
-                  key_folders=sorted(os.listdir(warm_root)),
-                  alpackages_sha256_after=alpackages_sha256(ws))
-    if record["alpackages_sha256_after"] != record["alpackages_sha256"]:
-        passed = record["passed"] = False
+                  key_folders=sorted(os.listdir(warm_root)), void=None)
+    void_if_moved(record, ws, failures)
+    passed = record["passed"]
     with open(os.path.join(out, "identity.json"), "w") as f:
         json.dump(record, f, indent=1)
     for n in nondeterministic:

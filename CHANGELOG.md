@@ -44,9 +44,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (fingerprint, analyze both scopes, call-graph histogram, explain, query, digest) are byte-equal
   across master, off, cold and warm; the session refresh verifies equal in both modes with the
   cache warm. A resident server's model build (cdo-speed's `build (IR warm)` row, two runs that
-  agree): CPU x0.68 ±6 %. Max RSS: analyze cold x1.038, warm x1.002; `aldump
-  --snapshot-memory` warm x0.979.
-  Disk: ~144 MiB per binary for CDO. Four cold processes at once publish each entry once.
+  agree): CPU x0.68 ±6 %. Max RSS, one run each (no noise band): analyze cold x1.038, warm
+  x1.002; `aldump --snapshot-memory` warm x0.979.
+  Disk: ~144 MiB per binary for CDO. Four cold processes at once (one run) published each entry
+  once.
 - **A gate gets no speed-up from this change.** A gate builds new binaries, and a new binary
   starts cold; the in-process test binaries never use the cache. cdo-gate turns it on only in
   `output_cdo` (and VERIFY, every hit parsed again and compared, in `output_cdo_impact`), and

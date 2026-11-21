@@ -6,10 +6,10 @@ server1 with `scripts/ir-cache-acceptance` and the other tools named below. Arti
 `/work/.al-sem/engine-notes/eng110-acceptance-*.log`.
 
 **Pins.** master = the merge base `bbec5165`; head = `bcc94da4` (timing), `1213df68`
-(identity, refresh), `5b1e0023` (concurrent), `f35f13a6` (census). The head commits differ only
-in `scripts/`, `CLAUDE.md` and docs: their release-fast `alsem` and `aldump` are byte-identical
-(sha256 `47ea5684…` and `53bf2e43…`, checked for `bcc94da4` against `1213df68`), so every head
-run used one key. Workspace `bc3ccb18` (0 dirty paths); the driver's `.alpackages` stamp
+(identity, refresh), `5b1e0023` (concurrent), `f35f13a6` (census and both cdo-speed runs). The
+head commits differ only in `scripts/`, `CLAUDE.md` and docs: their release-fast `alsem` (50.0 MB,
+50,031,776 bytes) and `aldump` are byte-identical (sha256 `47ea5684…` and `53bf2e43…`, checked
+for `bcc94da4` against `1213df68` and `f35f13a6`), so every head run used one key. Workspace `bc3ccb18` (0 dirty paths); the driver's `.alpackages` stamp
 `b720cdd1…` was the same before and after each run. Linux, release-fast.
 
 ## 1. Identity, byte for byte: PASS
@@ -53,7 +53,7 @@ none void (container stall share 4.0-5.0 %, no suspend).
 | head-cold | **x1.0354** | 1.05 | 70.84 | 19.58 |
 | head-warm | **x0.5273** | 0.70 | 43.85 | 16.74 |
 
-Per-round ratios: warm x0.5272-0.5273, cold x1.0352-1.0357, off x0.9997-1.0002. No median was
+Per-round ratios: warm x0.5272-0.5274, cold x1.0352-1.0357, off x0.9997-1.0002. No median was
 within 0.01 of its limit (off: 0.0101 below), so 6 rounds decided. Wall time gains little
 (-9 % warm): the parse was parallel, and the rest of `analyze` is not.
 
@@ -73,7 +73,9 @@ Two runs, `--ir-cold` (`cdo-speed-1/`, `cdo-speed-2/`). The judged rows run with
 
 Not run in full (the orchestrator's landing measures its wall time; a gate gains nothing: its
 binaries are new). `cdo-gate --only lib` PASS (Task 11). `cdo-gate --only harness,l4,output` on
-the final head: see the CHANGELOG entry's landing note.
+the pre-rebase head `acc3d68e`: PASS, `output_cdo`'s report rule PASS (2 processes, 21,762
+eligible files, 10,881 disk hits, 10 published). `output_cdo_impact`, where VERIFY runs, is not in
+that subset: its `verified_hits` are shown by the landing's full gate.
 
 ## 6. Memory and disk
 
@@ -87,7 +89,8 @@ the final head: see the CHANGELOG entry's landing note.
 - **Disk:** the CDO key folder is 144.3 MiB (151,276,500 bytes, 10 entries); the largest entry
   is Base Application's, 122.3 MiB of encodings (step 1).
 - **Round trip** (step 1): 0.84 CPU-s single-thread for all of CDO, paid by a cold fill.
-- **Image hash** (step 1): blake3 of the 49.7 MB release-fast `alsem`, 0.043 CPU-s cold, 0.027
+- **Image hash** (step 1): blake3 of the prototype's 49.7 MB release-fast `alsem`
+  (the head's is 50.0 MB), 0.043 CPU-s cold, 0.027
   warm; the marker scan rides on the same read (its cost is inside the warm and cold ratios).
 - **Small packages** (step 1): a hit costs 0.026-0.046 of a parse at every CDO size;
   `SMALL_PACKAGE_MIN_FILES = 8`, so all 10 CDO packages are cached.
