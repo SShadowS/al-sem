@@ -7,6 +7,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (TLS-113: a speed skip no longer leaks into a landing's other steps)
+
+- **Why.** ENG-159's landing skipped cdo-gate's speed phase (owner-approved) by exporting
+  `CDO_GATE_NO_SPEED=1`. The variable reached every step `scripts/land` ran. `ci-steps agentflow`
+  inherited it, and two agentflow tests failed (`gate --name cdo-gate` refuses a run with it set)
+  though neither test set anything.
+- **The agentflow suite clears the gate environment.** `scripts/agentflow/tests/conftest.py`'s
+  autouse `no_gate_environment` removes, before each test, every variable the gate scripts and
+  agentflow read: the prefixes `AGENTFLOW_`, `ALSEM_SPEED_`, `CDO_`, `CHECK_GOLDENS_`,
+  `CI_STEPS_`, `LAND_`, `MERGE_EXPECT_`, `PERF_PROBE_`, and the names `ALDUMP`,
+  `CARGO_TARGET_DIR`, `DO_WS`, `ENFORCE_CDO_WS`, `FLOW_LOG`, `GITHUB_ACTIONS`,
+  `REGEN_TEMP_GOLDENS`, `SWITCH_BASELINES`, `TREE_SITTER_AL_PATH`, and the build inputs
+  cdo-speed reads by computed key (its `BUILD_ENV_EXACT` / `BUILD_ENV_PREFIXES`, read from the
+  script). A test about one sets it itself. The list was derived by scanning `scripts/` for
+  environment reads, and `test_gate_env.py` repeats that scan: a script that reads a new
+  variable the rule neither clears nor keeps on purpose (`CARGO_HOME`, `HOME`, `USERPROFILE`,
+  the `CLAUDE_*` session names) fails the suite. The scan sees literal names only: in bash and
+  sh scripts `${NAME...}`, bare `$NAME` (unless the file assigns it, or it is a bash variable),
+  `[[ -v NAME ]]` and `printenv NAME`; in Python `environ[...]`, `environ.get/pop/setdefault`,
+  `getenv` and `in environ`, either quote. A file that reads by computed key must be listed,
+  with what it reads, in its `COMPUTED_READS` (a test fails otherwise). Lowercase names and the
+  Rust test helpers are outside it. Another test runs the ENG-159 test under ENG-159's
+  environment and passes.
+- **`scripts/land --no-speed=<reason>`** (Changed). The skip is now an option of land's that
+  puts `--no-speed` on cdo-gate's own command line, so no other step sees it. Only the `=`
+  spelling is accepted: with `--no-speed <reason>` a forgotten reason took the first branch for
+  one and landed the rest. A bare `--no-speed`, an empty, blank or option-like reason, one given
+  twice, one with a control character (newline, CR, ...), one naming an existing path or a
+  local branch is a usage error, each with its own message. land prints the reason, writes it
+  at the top of `cdo.log` and as a `cdo no-speed:` line in the run's `verdict`, and repeats it
+  in the PASS line. **land refuses to start when `CDO_GATE_NO_SPEED` is set in its
+  environment** (any value): clearing it instead would run the speed check the caller meant to
+  skip, without telling them.
+- **land refuses test hooks and startup files** (review r1, sol: an inherited override could
+  give a false green). It refuses to start when any test hook the gate scripts declare is set:
+  cdo-speed's `TEST_HOOKS` and new `# test-hooks:` lines in ci-steps (`CI_STEPS_PERF_BOUNDS_BIN`
+  ran a stand-in binary instead of the perf test), cdo-gate, cdo-slot and host-suspended, read
+  by `agentflow.supervise.declared_test_hooks`. It unsets `BASH_ENV` and `ENV` before its
+  first child, so no step runs a startup file. It also refuses build-shape overrides in its
+  environment (review r2, sol): `CARGO_PROFILE_*`, `CARGO_BUILD_*`, `RUSTFLAGS`,
+  `RUSTDOCFLAGS`, `CARGO_ENCODED_RUSTFLAGS`, `CARGO_TARGET_DIR`. land sets none of them itself,
+  so none is exempt; an operator who exports `CARGO_TARGET_DIR` or `CARGO_BUILD_JOBS` must
+  unset it to land. Nor may the engine's own test seams reach the suite: land refuses
+  `ALSEM_TEST_*` and `ALSEM_BATCH_CLAIMS` too (it sets neither), and the agentflow suite
+  clears them.
+- **`ci-steps perf-bounds` fails unless its timing tests are in the binary** (review r2, sol).
+  The timing tests (`mod release_checks` in `tests/perf_bounds.rs`) exist only without debug
+  assertions, so an inherited `CARGO_PROFILE_RELEASE_FAST_DEBUG_ASSERTIONS=true` compiled them
+  all out and the step passed on the two tests left. Before it takes the slot, the step lists
+  the binary's tests (`--list`): it must hold exactly as many `release_checks::` tests as the
+  source declares (12 today) and no ignored test, or the step fails and runs nothing. A real
+  dev-profile binary lists 0 of 12; a real release-fast one, all 12.
+- **agentflow's gates strip them too.** `supervise.sanitized_env` (every `_run_gate`, so the
+  post-merge fallback and the revert's checks too) now also drops `CDO_GATE_NO_SPEED` and every
+  declared test hook, besides `BASH_ENV`/`ENV`/`REGEN_TEMP_GOLDENS`.
+- **The Rust tests of `scripts/land` start each child from an empty environment** (`PATH`,
+  `HOME`, `TMPDIR`, `LANG` and git's test identity, then the test's own settings): an
+  inherited `CDO_SLOT_OWNER` changed the slot holder a test expects. `tests/cli/gate_scripts.rs`
+  still inherits (48 call sites; left for its own task).
+- **Other variables land passes to its steps** (noted, not changed): `CDO_SLOT_TOKEN` is
+  exported on purpose, so the cdo-gate it runs shares its slot hold; `CDO_WS` and the `LAND_*`
+  and `CDO_GATE_*` settings reach `ci-steps all` too. The agentflow suite clears them, and
+  `ci-steps test` / `check-goldens` already unset `CDO_WS`. `LAND_TEST_AFTER_CHECK` is land's
+  own test hook (a command it runs after its checks, which no child reads); it is not refused,
+  as its own tests use it.
+
 ### Added (TLS-111: cdo-speed counts user cycles, labels CLOCK and CPI, and re-measures a contradicted failure)
 
 - **Why.** On server1, CPU seconds measure the clock, core sharing and core kind as much as the

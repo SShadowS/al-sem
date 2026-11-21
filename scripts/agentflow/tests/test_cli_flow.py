@@ -2747,6 +2747,12 @@ def test_the_revert_rerun_gates_share_the_build_cache_and_never_regenerate_golde
     monkeypatch.setenv("AGENTFLOW_VERIFY_TARGET_DIR", str(shared))
     monkeypatch.delenv("CARGO_TARGET_DIR", raising=False)
     monkeypatch.setenv("REGEN_TEMP_GOLDENS", "1")
+    # ⟨TLS-113⟩ An operator's speed skip and a gate script's test hook, exported
+    # here: the revert's checks must run the whole gates, the real way. Proof
+    # (2026-11-21): "CDO_GATE_NO_SPEED" out of DROP_ENV -> FAILED; the
+    # declared hooks out of `sanitized_env`'s drop set -> FAILED; reverted: passed.
+    monkeypatch.setenv("CDO_GATE_NO_SPEED", "1")
+    monkeypatch.setenv("CI_STEPS_PERF_BOUNDS_BIN", "/bin/true")
     expected_cache = cli._verify_target_dir(Ctx(Paths(clone)))
     assert expected_cache == str(shared) != str(clone / "target")
     merge_sha = commit_file(clone, "src/thing.rs", "fn main() {}\n", "code change")
@@ -2796,6 +2802,8 @@ def test_the_revert_rerun_gates_share_the_build_cache_and_never_regenerate_golde
         # A validation must never be allowed to regenerate the goldens it is
         # being judged by.
         assert "REGEN_TEMP_GOLDENS" not in c["env"], c
+        assert "CDO_GATE_NO_SPEED" not in c["env"], c
+        assert "CI_STEPS_PERF_BOUNDS_BIN" not in c["env"], c
         # CORROBORATION, not this test's pin: the discriminating witness for
         # "validated in the tree it was built in" is
         # `test_the_revert_is_validated_in_the_revert_worktree_not_the_shared_

@@ -122,6 +122,8 @@ lane2_before_lib_mib=8400
 headroom_mib=4096
 lib_threads=4
 lane2_beside=0
+# Hand-written stand-ins for the machine's files, for tests (a real gate sets none):
+# test-hooks: CDO_GATE_CGROUP CDO_GATE_MEMINFO CDO_GATE_PROC_STATUS CDO_GATE_SYS_CPU
 cgroup_dir="${CDO_GATE_CGROUP:-/sys/fs/cgroup}"
 host_available_mib() {
     awk '/^MemAvailable:/ { print int($2 / 1024) }' "${CDO_GATE_MEMINFO:-/proc/meminfo}"

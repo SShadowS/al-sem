@@ -247,7 +247,31 @@ run_build() { require_grammar || return 1; cargo build --profile "$GATE_PROFILE"
 # Test hook: CI_STEPS_PERF_BOUNDS_BIN, a binary run instead of the built test
 # (no build); CI_STEPS_CPU_PRESSURE_FILE, a file read instead of the cgroup's
 # cpu.pressure; CDO_HOST_SUSPENDED_FILE as scripts/host-suspended reads it.
+# test-hooks: CI_STEPS_PERF_BOUNDS_BIN CI_STEPS_CPU_PRESSURE_FILE
 PERF_BOUNDS_LOADED_SHARE=15
+
+# ⟨TLS-113⟩ The timing tests (`mod release_checks`) exist only without debug
+# assertions: an inherited CARGO_PROFILE_RELEASE_FAST_DEBUG_ASSERTIONS=true (or
+# any build-shape override) compiled every one out, and the step passed on the
+# two tests left (review r2, sol). The binary must list exactly as many
+# `release_checks::` tests as the source declares (`#[test]` lines after `mod
+# release_checks`), and none of its tests may be ignored; the run has no filter.
+perf_bounds_incomplete() { # <binary>; prints why, or nothing when complete
+    local src want listed ignored
+    src="$(git rev-parse --show-toplevel)/tests/perf_bounds.rs"
+    want="$(awk '/^mod release_checks/ { m = 1 } m && /^[[:space:]]*#\[test\]$/ { n++ } END { print n + 0 }' "$src")"
+    listed="$("$1" --list --format terse)" || { echo "the binary's --list failed"; return; }
+    ignored="$("$1" --list --format terse --ignored)" || { echo "the binary's --list --ignored failed"; return; }
+    listed="$(grep -c '^release_checks::.*: test$' <<<"$listed" || true)"
+    ignored="$(grep -c ': test$' <<<"$ignored" || true)"
+    if ((want == 0)); then
+        echo "tests/perf_bounds.rs declares no timing test"
+    elif ((listed != want)); then
+        echo "the binary has ${listed} of the ${want} timing tests (release_checks): built with debug assertions, or another build override?"
+    elif ((ignored != 0)); then
+        echo "${ignored} of its tests are ignored"
+    fi
+}
 
 # "<stall total, µs> <source>": this cgroup's CPU stall (`some total=`), else the
 # host's; nothing when neither is readable. The source is named in the label.
@@ -288,6 +312,12 @@ run_perf_bounds() {
             echo "ci-steps: perf-bounds: the test binary was not built" >&2
             return 1
         fi
+    fi
+    local incomplete
+    incomplete="$(perf_bounds_incomplete "$bin")"
+    if [ -n "$incomplete" ]; then
+        echo "ci-steps: perf-bounds: the timing tests would not run: ${incomplete}" >&2
+        return 1
     fi
     local rc=0 no_slot label=""
     no_slot="$(perf_bounds_no_slot)"

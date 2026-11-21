@@ -137,6 +137,10 @@ new_id() { od -An -N8 -tx8 /dev/urandom | tr -d ' '; }
 # test waits for it), then waits until the test makes `$dir/resume`, at most
 # <seconds>. A fixed sleep could end before the test's steps in the window did
 # under load (TLS-89's gates).
+# test-hooks: CDO_SLOT_TEST_KEEPER_FORK CDO_SLOT_TEST_PAUSE_ACQUIRED_S CDO_SLOT_TEST_PAUSE_GO_S
+# test-hooks: CDO_SLOT_TEST_PAUSE_GRACE_S CDO_SLOT_TEST_PAUSE_HOLDGO_S CDO_SLOT_TEST_PAUSE_PUBLISH_S
+# test-hooks: CDO_SLOT_TEST_PAUSE_REFUSE_S CDO_SLOT_TEST_PAUSE_S CDO_SLOT_TEST_PAUSE_SPAWN_S
+# test-hooks: CDO_SLOT_TEST_PAUSE_TAKE_S CDO_SLOT_TEST_SCAN_ONCE CDO_SLOT_TEST_WRITE_PAUSE_S
 test_pause() {
     : >"$dir/paused.$$"
     local w

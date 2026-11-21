@@ -78,15 +78,7 @@ impl Repo {
     fn land(&self, args: &[&str], env: &[(&str, &str)]) -> (Option<i32>, String) {
         let mut cmd = std::process::Command::new("bash");
         cmd.arg(LAND).arg("--worktree").arg(&self.gate).args(args);
-        for v in al_sem::git_env::LOCAL_ENV_VARS {
-            cmd.env_remove(v);
-        }
-        cmd.env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .env("GIT_AUTHOR_NAME", "t")
-            .env("GIT_AUTHOR_EMAIL", "t@t")
-            .env("GIT_COMMITTER_NAME", "t")
-            .env("GIT_COMMITTER_EMAIL", "t@t")
+        clean_env(&mut cmd)
             .env("LAND_LOGS", self.root.join("logs"))
             .env("FLOW_LOG", self.root.join("flow.jsonl"))
             .env("LAND_MEM_MIN_GB", "0")
@@ -95,10 +87,6 @@ impl Repo {
             .env("CDO_SLOT_MEM_MIN_GB", "0")
             .env("CDO_SLOT_POLL_S", "1")
             .env("CLAUDE_CODE_SESSION_ID", "land-test")
-            .env_remove("CLAUDE_PID")
-            .env_remove("CDO_SLOT_TOKEN")
-            .env_remove("CDO_PRESUBMIT_DIR")
-            .env_remove("LAND_REQUIRE_PRESUBMIT")
             .env("CDO_WS", self.root.join("cdo-ws"))
             .env("STUB_LOG", self.root.join("calls"));
         for (k, v) in env {
@@ -115,14 +103,13 @@ impl Repo {
     /// `scripts/cdo-slot <args>` on this repo's slot, as Claude session
     /// `session` (no Claude PID: never stale); (exit, stdout + stderr).
     fn slot(&self, session: &str, args: &[&str]) -> (Option<i32>, String) {
-        let out = std::process::Command::new("bash")
-            .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-slot"))
-            .args(args)
+        let mut cmd = std::process::Command::new("bash");
+        cmd.arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-slot"))
+            .args(args);
+        let out = clean_env(&mut cmd)
             .env("CDO_SLOT_DIR", self.root.join("slot"))
             .env("CDO_SLOT_MEM_MIN_GB", "0")
             .env("CLAUDE_CODE_SESSION_ID", session)
-            .env_remove("CLAUDE_PID")
-            .env_remove("CDO_SLOT_TOKEN")
             .output()
             .unwrap();
         let text = format!(
@@ -145,6 +132,30 @@ impl Repo {
         git::run(&self.main, &["commit", "-qm", name]);
         git::run(&self.main, &["switch", "-q", "master"]);
     }
+}
+
+/// ⟨TLS-113⟩ A child of these tests starts from an empty environment: none of
+/// the caller's land, slot, gate or test-hook settings (a landing runs this
+/// suite through `ci-steps all`; an inherited `CDO_SLOT_OWNER` renamed the
+/// slot's holder, review r1, sol), no BASH_ENV, no git variables. Only what a
+/// shell and git need, then git's test identity; each test adds its own.
+///
+/// Proof (2026-11-21): `env_clear()` removed and the land tests run with
+/// `CDO_SLOT_OWNER=leaked` exported -> `land_holds_the_cdo_slot_from_start_to_end`
+/// FAILED (the holder read `leaked`); restored -> passed.
+fn clean_env(cmd: &mut std::process::Command) -> &mut std::process::Command {
+    cmd.env_clear();
+    for k in ["PATH", "HOME", "TMPDIR", "LANG"] {
+        if let Some(v) = std::env::var_os(k) {
+            cmd.env(k, v);
+        }
+    }
+    cmd.env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_AUTHOR_NAME", "t")
+        .env("GIT_AUTHOR_EMAIL", "t@t")
+        .env("GIT_COMMITTER_NAME", "t")
+        .env("GIT_COMMITTER_EMAIL", "t@t")
 }
 
 fn changelog(entries: &str, old: &str) -> String {
@@ -772,6 +783,205 @@ fn land_refuses_and_leaves_nothing_behind() {
     );
 }
 
+/// ⟨TLS-113⟩ `--no-speed=<reason>`: cdo-gate gets `--no-speed` on its command
+/// line, the reason is printed, heads cdo.log, is in the verdict and in the
+/// PASS line, and no step sees CDO_GATE_NO_SPEED. Each bad reason is a usage
+/// error (exit 2) with its own message before anything runs: a bare
+/// `--no-speed` (the spelling that let a forgotten reason swallow a branch),
+/// an empty, blank or option-like reason, one given twice, one with a control
+/// character, one naming an existing path or a branch. CDO_GATE_NO_SPEED in
+/// land's own environment is refused (exit 2), even empty: an exported
+/// variable reached every step of ENG-159's landing and failed `ci-steps
+/// agentflow`. A declared test hook (ci-steps', cdo-speed's) is refused the
+/// same way, and no step runs a BASH_ENV or ENV startup file (review r1, sol).
+///
+/// Discrimination proofs (2026-11-21, each break made with Edit in
+/// scripts/land, `cargo test --test cli land_script::land_no_speed`, reverted):
+/// - the CDO_GATE_NO_SPEED refusal removed -> FAILED (the run with it set
+///   exited 0 and gated); reverted -> passed.
+/// - the reason check removed -> FAILED (an empty reason exited 0); reverted
+///   -> passed.
+/// - `"${cdo_flags[@]}"` dropped from the cdo-gate call -> FAILED (calls read
+///   `cdo-gate /cdo-ws`); reverted -> passed.
+/// - the verdict line removed -> FAILED (no `cdo no-speed:` line); reverted
+///   -> passed.
+/// - (r2) the branch check removed -> FAILED (the branch taken for a reason
+///   exited 0); reverted -> passed.
+/// - (r2) the twice check removed -> FAILED; the control-character check
+///   removed -> FAILED; the path check removed -> FAILED; each reverted ->
+///   passed.
+/// - (r2) the test-hook refusal removed -> FAILED (CI_STEPS_PERF_BOUNDS_BIN
+///   exited 0); reverted -> passed.
+/// - (r2) `unset BASH_ENV ENV` removed -> FAILED (the steps logged `startup`
+///   lines); reverted -> passed.
+/// - (r3) the build-override refusal removed -> FAILED (the
+///   CARGO_PROFILE_RELEASE_FAST_DEBUG_ASSERTIONS run exited 0); reverted ->
+///   passed.
+/// - (r4) the engine-seam refusal removed -> FAILED (the ALSEM_TEST_WORKERS
+///   run exited 0); reverted -> passed.
+#[test]
+fn land_no_speed_takes_a_reason_and_passes_the_flag() {
+    let r = repo();
+    let why = "owner-approved: ENG-159 speed skip";
+    let reason: &str = &format!("--no-speed={why}");
+    let a_path: &str = &format!("--no-speed={}", r.root.display());
+    for (args, says) in [
+        (
+            &["--no-speed", why, "tools/tls-58-x"][..],
+            "--no-speed needs a reason: --no-speed=<reason>",
+        ),
+        (&["--no-speed=", "tools/tls-58-x"], "needs a reason"),
+        (&["--no-speed=  ", "tools/tls-58-x"], "needs a reason"),
+        (&["--no-speed=--push", "tools/tls-58-x"], "needs a reason"),
+        (
+            &[reason, "--no-speed=other", "tools/tls-58-x"],
+            "--no-speed given twice",
+        ),
+        (
+            &["--no-speed=a\rb", "tools/tls-58-x"],
+            "the reason has a control character",
+        ),
+        (
+            &["--no-speed=a\nb", "tools/tls-58-x"],
+            "the reason has a control character",
+        ),
+        (
+            &[a_path, "tools/tls-58-x"],
+            "names an existing path, not a reason",
+        ),
+        (
+            &["--no-speed=tools/tls-58-x", "tools/tls-59-x"],
+            "'tools/tls-58-x' names a branch, not a reason",
+        ),
+    ] {
+        let (code, text) = r.land(args, &[]);
+        assert_eq!(code, Some(2), "{args:?}: {text}");
+        assert!(text.contains(says), "{args:?}: {says}: {text}");
+    }
+    for env in [("CDO_GATE_NO_SPEED", "1"), ("CDO_GATE_NO_SPEED", "")] {
+        let (code, text) = r.land(&[reason, "tools/tls-58-x"], &[env]);
+        assert_eq!(code, Some(2), "{env:?}: {text}");
+        assert!(text.contains("CDO_GATE_NO_SPEED is set"), "{env:?}: {text}");
+    }
+    for env in [
+        ("CI_STEPS_PERF_BOUNDS_BIN", "/bin/true"),
+        ("CDO_SPEED_PERF", "/bin/true"),
+    ] {
+        let (code, text) = r.land(&["tools/tls-58-x"], &[env]);
+        assert_eq!(code, Some(2), "{env:?}: {text}");
+        assert!(
+            text.contains(&format!(
+                "test hooks are set, which no real landing may pass to its gates: {}",
+                env.0
+            )),
+            "{env:?}: {text}"
+        );
+    }
+    // (r2, sol) Build-shape overrides: one would compile perf_bounds' timing
+    // tests out, or build another tree than the gates think.
+    for env in [
+        ("CARGO_PROFILE_RELEASE_FAST_DEBUG_ASSERTIONS", "true"),
+        ("CARGO_BUILD_JOBS", "1"),
+        ("RUSTFLAGS", "-Cdebug-assertions"),
+        ("RUSTDOCFLAGS", "x"),
+        ("CARGO_ENCODED_RUSTFLAGS", "x"),
+        ("CARGO_TARGET_DIR", "/tmp/elsewhere"),
+    ] {
+        let (code, text) = r.land(&["tools/tls-58-x"], &[env]);
+        assert_eq!(code, Some(2), "{env:?}: {text}");
+        assert!(
+            text.contains(&format!(
+                "build overrides are set, which no landing may pass to its builds: {}",
+                env.0
+            )),
+            "{env:?}: {text}"
+        );
+    }
+    // (r4) The engine's own test seams, read in Rust by the suite ci-steps runs.
+    for env in [
+        ("ALSEM_TEST_WORKERS", "1"),
+        ("ALSEM_TEST_WORKER_DIES", "1"),
+        ("ALSEM_BATCH_CLAIMS", "/tmp/claims"),
+    ] {
+        let (code, text) = r.land(&["tools/tls-58-x"], &[env]);
+        assert_eq!(code, Some(2), "{env:?}: {text}");
+        assert!(
+            text.contains(&format!(
+                "engine test seams are set, which no landing may pass to its gates: {}",
+                env.0
+            )),
+            "{env:?}: {text}"
+        );
+    }
+    assert!(
+        r.calls().is_empty(),
+        "a refusal gates nothing: {:?}",
+        r.calls()
+    );
+
+    let (code, text) = r.land(&["--dry-run", reason, "tools/tls-58-x"], &[]);
+    assert_eq!(code, Some(0), "{text}");
+    assert!(text.contains("; cdo-gate --no-speed /"), "{text}");
+
+    // Each stub logs whether it sees the variable: no step may. A startup
+    // file logs every bash but land's own (its bash ran it before line 1).
+    let seen = "echo \"env ${CDO_GATE_NO_SPEED-unset}\" >> \"$STUB_LOG\"";
+    let startup = r.root.join("startup.sh");
+    std::fs::write(
+        &startup,
+        "case \"$0\" in */land) ;; *) echo \"startup $0\" >> \"$STUB_LOG\" ;; esac\n",
+    )
+    .unwrap();
+    let startup = startup.to_str().unwrap();
+    let (code, text) = r.land(
+        &[reason, "tools/tls-58-x"],
+        &[
+            ("STUB_CI_STEPS_HOOK", seen),
+            ("STUB_CDO_GATE_HOOK", seen),
+            ("BASH_ENV", startup),
+            ("ENV", startup),
+        ],
+    );
+    assert_eq!(code, Some(0), "{text}");
+    assert_eq!(
+        r.calls(),
+        [
+            "ci-steps all",
+            "env unset",
+            "cdo-gate --no-speed /cdo-ws",
+            "env unset"
+        ]
+    );
+    assert!(
+        text.contains(&format!(
+            "land: cdo-gate runs with --no-speed (SPEED AND MEMORY NOT CHECKED): {why}"
+        )),
+        "{text}"
+    );
+    assert!(
+        text.contains(&format!(
+            "land: PASS (cdo-gate --no-speed: {why}): landing/tls58 is gated"
+        )),
+        "{text}"
+    );
+    let run = std::fs::read_dir(r.root.join("logs"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let verdict = std::fs::read_to_string(run.join("verdict")).unwrap();
+    assert!(
+        verdict.contains(&format!("\ncdo no-speed: {why}\n")),
+        "{verdict}"
+    );
+    let cdo_log = std::fs::read_to_string(run.join("cdo.log")).unwrap();
+    assert!(
+        cdo_log.starts_with(&format!("land: cdo-gate --no-speed: {why}\n")),
+        "{cdo_log}"
+    );
+}
+
 /// The real `scripts/merge-and-push`, with a bare origin and the landing
 /// branch `scripts/land` built (stub gates). Told what the gates saw
 /// (`MERGE_EXPECT_MASTER`, `MERGE_EXPECT_SOURCE`), it merges and pushes
@@ -813,16 +1023,7 @@ fn merge_and_push_lands_only_what_the_gates_saw() {
         ))
         .arg(branch)
         .current_dir(&r.main);
-        for v in al_sem::git_env::LOCAL_ENV_VARS {
-            cmd.env_remove(v);
-        }
-        let out = cmd
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .env("GIT_AUTHOR_NAME", "t")
-            .env("GIT_AUTHOR_EMAIL", "t@t")
-            .env("GIT_COMMITTER_NAME", "t")
-            .env("GIT_COMMITTER_EMAIL", "t@t")
+        let out = clean_env(&mut cmd)
             .env("STUB_LOG", r.root.join("calls"))
             .env("TMPDIR", &tmp)
             .env("MERGE_EXPECT_MASTER", master)
