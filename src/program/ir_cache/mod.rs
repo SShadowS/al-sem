@@ -2,6 +2,7 @@
 //! `docs/superpowers/specs/2026-11-18-eng110-ir-cache-design.md`).
 
 pub(crate) mod codec;
+pub(crate) mod envelope;
 pub(crate) mod key;
 
 /// The IR format, in every key and entry header. Bump it when the codec's bytes for an
