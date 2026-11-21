@@ -669,6 +669,17 @@ mod win {
                         Ok(_) => Err("mutation did not take: same file id at the old name".into()),
                         Err(e) => Err(format!("mutation unverifiable: {e}")),
                     },
+                    // A replacement OF the running image refused by the OS: a fact about
+                    // Windows, and no wrong key can follow (orchestrator decision Q8).
+                    Err(e)
+                        if matches!(how, Mutation::MoveFileExOver | Mutation::PosixRenameOver)
+                            && matches!(
+                                e.raw_os_error(),
+                                Some(ERROR_SHARING_VIOLATION | ERROR_ACCESS_DENIED)
+                            ) =>
+                    {
+                        Ok(format!("HELD (the OS protects the running image: {e})"))
+                    }
                     // Past the open, the key's own handle (no delete sharing) is what refuses:
                     // the property the design relies on.
                     Err(e)

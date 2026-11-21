@@ -368,7 +368,7 @@ the copies as children it drives over stdin. The key sequence in it is a prototy
 |------|----------------|-----------|
 | W0 | the image's volume, ENG-113's text root, the IR root, and `ALSEM_IR_CACHE_DIR` (or a probe override); for a root not made yet, its deepest existing folder | each is a fixed drive (`GetDriveTypeW`) formatted `NTFS` |
 | W1 name | a child renamed while running reports its mapped name | the name ends in the new file name |
-| W1 rename away + write, MoveFileEx replace, POSIX rename replace, ancestor folder replaced | the child runs the real sequence with barriers after the query, after the open and after the hash; at one barrier the parent mutates; 3 runs per mutation. The image is `<scratch>\dir\a.exe`. Mutations: rename `a.exe` away and write another file at its name; `MoveFileExW(other, a.exe, MOVEFILE_REPLACE_EXISTING)`; `SetFileInformationByHandle(FileRenameInfoEx)` with `FILE_RENAME_FLAG_REPLACE_IF_EXISTS \| FILE_RENAME_FLAG_POSIX_SEMANTICS`; rename `dir` away (not back), make a new `dir` with another `a.exe` | per run: after a successful mutation, **before the barrier is released**, the old name must open a file with a different `FILE_ID_INFO`, else FAIL ("did not take"); then the key must be the original file's hash or none, never another. A refused mutation **FAILs** ("refused mutation"), except after the open, where a sharing violation or access denied is the key's own handle refusing it and is reported as "blocked while the key's handle is held" (the property F2 claims) |
+| W1 rename away + write, MoveFileEx replace, POSIX rename replace, ancestor folder replaced | the child runs the real sequence with barriers after the query, after the open and after the hash; at one barrier the parent mutates; 3 runs per mutation. The image is `<scratch>\dir\a.exe`. Mutations: rename `a.exe` away and write another file at its name; `MoveFileExW(other, a.exe, MOVEFILE_REPLACE_EXISTING)`; `SetFileInformationByHandle(FileRenameInfoEx)` with `FILE_RENAME_FLAG_REPLACE_IF_EXISTS \| FILE_RENAME_FLAG_POSIX_SEMANTICS`; rename `dir` away (not back), make a new `dir` with another `a.exe` | per run: after a successful mutation, **before the barrier is released**, the old name must open a file with a different `FILE_ID_INFO`, else FAIL ("did not take"); then the key must be the original file's hash or none, never another. A refused MoveFileEx or POSIX rename-replace (a replacement OF the running image itself) with access denied or a sharing violation prints `HELD (the OS protects the running image: <error>)` and passes (decision Q8). For rename-away and the folder swap, the ordinary installer paths, a refused mutation **FAILs** ("refused mutation"), except after the open, where a sharing violation or access denied is the key's own handle refusing it and is reported as "blocked while the key's handle is held" (the property F2 claims) |
 | W1 hard link | launch through a hard link; delete the launch link (or, if refused, rename it away: both refused FAILs), write another file there (checked), verify its file id differs, while `a.exe` survives | the original hash or no key, before and after |
 | W1 other case | launch through an upper-case spelling | the original hash or no key |
 | W1 8.3 | launch through the short name of a long-named leaf | the original hash or no key; SKIP only with "8.3 disabled on this volume (no short name was made)" |
@@ -430,9 +430,8 @@ clippy shows no warning in the probe for the Windows target or Linux. It has not
 - **Q6 (closed, rev 3):** ReFS stays off.
 - **Q7 (closed, rev 3):** the audit is at the source level, pinned by
   `scripts/check-parse-path-locale`, with the MSVC map listing for a human (section 4.3).
-- **Q8.** The probe's mutations that target the running image's own name (MoveFileEx replace,
-  POSIX rename replace) may be refused by Windows at "after-query" because the image section
-  forbids deleting the target. Under rev 3's rule that is a FAIL ("refused mutation"). If the
-  owner run shows exactly that, is a refusal of a replacement OF the running image an acceptable
-  outcome (the replacement cannot happen, so no wrong key can follow), recorded as a fact rather
-  than a failure?
+- **Q8 (closed):** an OS refusal to replace or overwrite the running image itself (MoveFileEx
+  replace, POSIX rename-replace, a write or delete of the mapped image) is a fact about Windows
+  from which no wrong key can follow. The probe prints it as `HELD (the OS protects the running
+  image: <error>)`, a pass. Rename-away then a new file, and the folder swap, still FAIL when
+  refused or unverified: they are the ordinary installer paths and must be shown to happen.
