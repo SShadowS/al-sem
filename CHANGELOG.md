@@ -277,8 +277,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   summary round and positional read scanned. "Anything" absorbs every other value, so a later
   place adds nothing once an earlier one under the same conditions (G35) has ended before it;
   a place nested in another call's arguments is kept (that call's own argument read sees it,
-  `NestedUserCodeRoot`; red proof: dropping every later place answers `no`). Building the flow
-  once per revision in the resident engine, and interned keys, are ENG-174.
+  `NestedUserCodeRoot`; red proof: dropping every later place answers `no`). That cut `prove`'s
+  per-call cost by ~11 % only. Spans `literal.build`, `literal.recref_flow` and
+  `literal.exit_guards` (`ALSEM_TRACE`) then showed where the rest is: building literal reach
+  takes 2.2-2.9 s on both sides, and `prove.reach_effects` (the per-question pass over the
+  root's effects) takes IssueReminder 2.0 -> 23.4 s and RunReportID 12.0 -> 35.2 s (its answer
+  unchanged). More "anything" lets each query's search stop less often: giving the rule's facts
+  no conditions (a probe, not kept) made it 111 s. That cost is the sound rule's own;
+  ENG-161's escape facts are what win it back, not a cache of the flow.
 - **Re-baseline.** Five IssueReminder rendering goldens re-minted from the CDO baseline
   (`tests/cli-output-goldens/cdo/IssueReminder.{explain.human.txt,query-effects.human.txt,
   prove-may-commit.human.txt,prove-writes-table-data-exch.human.txt,digest-summary.json}`):

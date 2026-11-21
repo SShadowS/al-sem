@@ -2201,6 +2201,7 @@ impl<'a> LiteralReach<'a> {
         model: &'a Model,
         kept_elsewhere: KeptElsewhere,
     ) -> Self {
+        let _s = crate::engine::perf_trace::span("literal", "literal.build");
         let edges: &'a [SnapshotGraphEdge] = &tree.typed_edges;
         let facts: &'a [crate::engine::l5::snapshot::SnapshotCapabilityFact] =
             &tree.capability_facts;
@@ -2396,7 +2397,11 @@ impl<'a> LiteralReach<'a> {
         }
         // G34: the exit guards, and what a search must carry to read them
         // (and G33's table parameters).
-        let flow = RecRefFlow::new(model, edges, kept_elsewhere);
+        let flow = {
+            let _f = crate::engine::perf_trace::span("literal", "literal.recref_flow");
+            RecRefFlow::new(model, edges, kept_elsewhere)
+        };
+        let _g = crate::engine::perf_trace::span("literal", "literal.exit_guards");
         let mut guards = FxHashMap::default();
         let mut seeds: Vec<(usize, Atom)> = Vec::new();
         if flow.usable() {
