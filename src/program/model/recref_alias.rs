@@ -138,6 +138,16 @@ pub fn holder_key(raw: &str) -> String {
         .fold_identifier()
 }
 
+/// ENG-162: whether an assignment side the IR names `name` is a global that one of the routine's
+/// own declarations hides (`this.G` with a local `G`: the walk names it with
+/// [`HIDDEN_GLOBAL_PREFIX`](crate::program::body::features::HIDDEN_GLOBAL_PREFIX), never `g`). No
+/// holder of the routine is that name: a holder copied into it may be kept by the object
+/// (another routine, a later call), and one assigned from it may hold anything.
+#[must_use]
+pub fn is_shadowed_global(name: &str) -> bool {
+    name.starts_with(crate::program::body::features::HIDDEN_GLOBAL_PREFIX)
+}
+
 /// `raw` trimmed, without parentheses around the whole of it: `S.Keep((RR))` passes `RR`
 /// (Fable on ENG-159). A text whose first `(` closes before its end (`(A) + (B)`) keeps its
 /// parentheses.
@@ -485,12 +495,24 @@ impl AliasClasses {
             .collect();
         for a in &r.var_assignments {
             let l = name_key(&a.lhs_name);
-            let copy = a.rhs_identifier.is_some()
+            // ENG-162: `A := this.G` with a local `G` copies the hidden global: no copy of a
+            // holder of the routine, so `A` may share a record with code it cannot see.
+            let copy = a
+                .rhs_identifier
+                .as_deref()
+                .is_some_and(|w| !is_shadowed_global(w))
                 || a.rhs_member
                     .as_ref()
                     .is_some_and(|(_, m)| m.eq_fold_identifier("duplicate"));
             if keys.contains(&l) && !copy {
                 external.insert(l);
+            }
+            // ENG-162: `this.G := R` with a local `G` puts R's record in the hidden global.
+            if is_shadowed_global(&a.lhs_name)
+                && let Some(w) = a.rhs_identifier.as_deref()
+                && keys.contains(&name_key(w))
+            {
+                external.insert(name_key(w));
             }
         }
         let mut ext: Vec<String> = external.iter().cloned().collect();

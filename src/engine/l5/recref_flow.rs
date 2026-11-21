@@ -2381,6 +2381,11 @@ fn facts_of(
     let classes =
         crate::program::model::recref_alias::AliasClasses::build(r, &holders, false, shadowed);
     for a in &r.var_assignments {
+        // ENG-162: a global a local hides (`this.G := R` with a local `G`) is no tracked variable
+        // (`lc` would read it as the local); the alias classes take R as kept.
+        if crate::program::model::recref_alias::is_shadowed_global(&a.lhs_name) {
+            continue;
+        }
         let l = lc(&a.lhs_name);
         if !f.tracked.contains_key(&l) {
             // ENG-160 (sol): `Slot[1] := R` shares R's record with an array slot, which the flow
@@ -2397,6 +2402,10 @@ fn facts_of(
             continue;
         }
         let part = match (&a.rhs_identifier, &a.rhs_member) {
+            // ENG-162: a copy of a global a local hides may hold anything.
+            (Some(w), _) if crate::program::model::recref_alias::is_shadowed_global(w) => {
+                Part::Atoms(top())
+            }
             (Some(w), _) => Part::Copy(lc(w)),
             (None, Some((w, m))) if m == "duplicate" => Part::Copy(lc(w)),
             _ => Part::Atoms(top()),
