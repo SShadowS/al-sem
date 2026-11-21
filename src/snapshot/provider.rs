@@ -20,6 +20,11 @@ pub struct SourceRoot {
     pub files: Arc<Vec<SourceFile>>,
     pub tier: TrustTier,
     pub content_hash: String,
+    /// The verified text digest of the ENG-113 cache entry these files are mapped from
+    /// ([`crate::snapshot::cache::TextDigest`]): set only by [`EmbeddedAppProvider`] for a
+    /// mapped entry, `None` everywhere else. `None` means no dependency IR cache (ENG-110) for
+    /// this package.
+    pub text_digest: Option<crate::snapshot::cache::TextDigest>,
 }
 
 /// Acquires source for an app. Returns `Ok(None)` when this provider cannot
@@ -81,6 +86,7 @@ fn source_root(files: Vec<SourceFile>, tier: TrustTier) -> Option<SourceRoot> {
         files: Arc::new(files),
         tier,
         content_hash,
+        text_digest: None,
     })
 }
 
@@ -143,7 +149,7 @@ impl SourceProvider for EmbeddedAppProvider<'_> {
             .source(path, Some(self.image.stamp()), self.defer_text, || {
                 #[cfg(test)]
                 extract_log::record(path);
-                let (files, content_hash) = cached_source(&self.image)?;
+                let (files, content_hash, text_digest) = cached_source(&self.image)?;
                 if files.is_empty() {
                     return Ok(None); // symbol-only app
                 }
@@ -151,6 +157,7 @@ impl SourceProvider for EmbeddedAppProvider<'_> {
                     files: Arc::new(files),
                     tier: TrustTier::EmbeddedSource,
                     content_hash,
+                    text_digest,
                 }))
             })
     }

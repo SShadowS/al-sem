@@ -283,6 +283,8 @@ mod cli_implicit_rec_bindings;
 mod cli_implicit_trigger_cone;
 mod cli_inputs_frozen;
 mod cli_inventory_cross_app;
+#[cfg(target_os = "linux")]
+mod cli_ir_cache;
 mod cli_literal_pruning_stats;
 mod cli_lookup_page_run;
 mod cli_loose_fingerprint;

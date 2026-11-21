@@ -690,10 +690,12 @@ mod tests {
             build_app(&[("a.al", b"codeunit 1 A { }"), ("b.al", b"codeunit 2 B { }")]),
         );
         let dir = tempfile::tempdir().unwrap();
-        let (mapped_files, _) = crate::snapshot::cache::cached_source_in(dir.path(), &img).unwrap();
+        let (mapped_files, _, _) =
+            crate::snapshot::cache::cached_source_in(dir.path(), &img).unwrap();
         let not_a_dir = dir.path().join("file");
         std::fs::write(&not_a_dir, "").unwrap();
-        let (owned_files, _) = crate::snapshot::cache::cached_source_in(&not_a_dir, &img).unwrap();
+        let (owned_files, _, _) =
+            crate::snapshot::cache::cached_source_in(&not_a_dir, &img).unwrap();
         assert!(
             mapped_files.iter().all(|f| f.text.is_mapped())
                 && owned_files.iter().all(|f| !f.text.is_mapped()),

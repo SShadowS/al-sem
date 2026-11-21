@@ -310,6 +310,29 @@ server). `--analyze` without `--project` is a hard error. Other flags: `--no-wat
 watcher; rely on LSP change notifications instead), `--no-telemetry` (see `docs/telemetry.md`).
 See `src/main.rs`'s `Args` (clap derive) for the authoritative flag list.
 
+### The dependency IR cache (ENG-110) and measurements
+
+`alsem`, `aldump` and `al-call-hierarchy` keep the parsed IR of every dependency package in
+`~/.cache/al-ch-snapshot-cache/ir/<binary key>/` (Linux only; off on Windows and in `alsem
+batch`). **The key is the running binary's bytes**, so each new build starts cold: its first
+CDO run fills ~144 MiB (one-shot `analyze`: ~x1.035 instructions of a cache-off run), every
+later run of the same binary is warm (~x0.53). Spec:
+`docs/superpowers/specs/2026-11-18-eng110-ir-cache-design.md`.
+- **Binaries run directly use the cache by default**: `scripts/profile`, `bench_ab.py`, a
+  hand `aldump`/`alsem` probe, the installed `~/.al-sem/bin/alsem`. So the first run of a
+  build measures a cold fill and the later runs a warm cache. **A measurement sets
+  `ALSEM_IR_CACHE=off`, or states which state it measured** (cold: a fresh
+  `ALSEM_IR_CACHE_DIR`; warm: one filled first). `cdo-speed` (and `cdo-before-after`, through
+  its `child_env`) judges with the cache off and reports IR rows apart; `scripts/ir-cache-
+  acceptance` measures all four states.
+- Tests never use it: `.cargo/config.toml`'s `[env]` sets `ALSEM_IR_CACHE=off` for every engine
+  a test spawns (an explicit value wins), and in-process test binaries never install it.
+  cdo-gate turns it on in `output_cdo` (and VERIFY in `output_cdo_impact`) and fails a phase
+  whose report shows no cache use or a refusal (`scripts/ir-cache-report-check`).
+- Switch and diagnostics: `ALSEM_IR_CACHE=on|off`, `ALSEM_IR_CACHE_DIR`, `ALSEM_IR_CACHE_VERIFY=1`
+  (every hit parsed again and compared), `ALSEM_IR_CACHE_REPORT=<file>` (a start and an end line
+  per process, with counters).
+
 ## Prerequisites
 
 - Rust 1.75+

@@ -28,7 +28,7 @@ use std::ops::Range;
 /// A source position. Our own type — `tree_sitter::Point` never crosses the IR
 /// boundary. `column` is a UTF-8 byte column within the line (matches the engine's
 /// existing anchor column semantics).
-#[derive(Copy, Clone, PartialEq, Eq, Debug, Hash)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug, Hash, serde::Serialize, serde::Deserialize)]
 pub struct Point {
     pub row: u32,
     pub column: u32,
@@ -45,7 +45,7 @@ pub struct Point {
 /// kind is the grammar's symbol id, read back through the same table `RawNode::kind_str` uses,
 /// and the byte range is two `u32`s; [`Origin::kind_text`] and [`Origin::byte`] give the old
 /// values. `PartialEq` and `Debug` read through them, so both behave as before.
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct Origin {
     kind_id: u16,
     byte_start: u32,
@@ -163,7 +163,7 @@ impl std::fmt::Debug for Origin {
 
 macro_rules! id_type {
     ($name:ident) => {
-        #[derive(Copy, Clone, PartialEq, Eq, Debug, Hash)]
+        #[derive(Copy, Clone, PartialEq, Eq, Debug, Hash, serde::Serialize, serde::Deserialize)]
         pub struct $name(u32);
         impl $name {
             #[inline]
@@ -211,7 +211,7 @@ pub fn exact_size<T>(v: &mut Vec<T>) {
 
 /// One `#if` wrapper around variable declarations ([`Ir::var_wrappers`]): inside a `var`
 /// section, around whole sections, a split section tail, or a conditional name list.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct VarWrapper {
     pub byte: Range<usize>,
     /// Each arm's byte range (between its directive and the next). Empty for a wrapper no
@@ -235,7 +235,7 @@ impl VarWrapper {
 }
 
 /// Push-only arena holding the `Expr`/`Stmt`/`Block` pools an `AlFile` references.
-#[derive(Default)]
+#[derive(Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Ir {
     exprs: Vec<Expr>,
     stmts: Vec<Stmt>,
@@ -433,23 +433,25 @@ impl Ir {
 }
 
 /// Whether the parse was clean or hit tree-sitter error recovery.
-#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum ParseStatus {
     /// No `ERROR`/`MISSING` nodes anywhere.
     Clean,
-    /// Recovery nodes present — the IR is partial; do not cache as authoritative.
+    /// Recovery nodes present — the IR is partial. The dependency IR cache (ENG-110) stores
+    /// it like any other IR and replays it exactly: the status is part of the cached `AlFile`.
     Recovered,
 }
 
 /// A syntactic problem the lowerer recorded (recovery node, or an `Unknown` it
 /// could not classify). Never silently dropped — surfaced as data.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SyntaxIssue {
     pub message: String,
     pub origin: Origin,
 }
 
 /// The lowered representation of one AL source file.
+#[derive(Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct AlFile {
     pub objects: Vec<ObjectDecl>,
     pub ir: Ir,

@@ -934,6 +934,7 @@ mod tests {
                 .into(),
                 tier: TrustTier::Workspace,
                 content_hash: String::new(),
+                text_digest: None,
             }),
             compilation: CompilationContext::default(),
             declared_deps: vec![],

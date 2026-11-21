@@ -26,12 +26,18 @@ use std::sync::Arc;
 /// `al-ch-snapshot-cache` appended.  Falls back to
 /// `<temp_dir>/al-ch-snapshot-cache` when the OS cache dir is unavailable.
 pub fn cache_dir() -> PathBuf {
-    let base = dirs::cache_dir().unwrap_or_else(std::env::temp_dir);
-    let dir = base.join("al-ch-snapshot-cache");
+    let dir = cache_dir_path();
     if let Err(e) = std::fs::create_dir_all(&dir) {
         log::warn!("Failed to create snapshot cache dir {}: {e}", dir.display());
     }
     dir
+}
+
+/// [`cache_dir`]'s path, made nowhere (ENG-110: installing the IR cache must not create it).
+pub fn cache_dir_path() -> PathBuf {
+    dirs::cache_dir()
+        .unwrap_or_else(std::env::temp_dir)
+        .join("al-ch-snapshot-cache")
 }
 
 /// The version of what extraction produces for a package, in the cache file's
@@ -77,26 +83,43 @@ struct IndexEntry {
 /// on a hit it is read from that file. Either way the texts are ranges of a mapping of the
 /// file.
 ///
-/// Returns `(files, content_hash)`.  `files` is empty for symbol-only apps
+/// Returns `(files, content_hash, text_digest)`.  `files` is empty for symbol-only apps
 /// (same semantics as [`extract_embedded_source`]).  The hash is the image's
 /// blake3 hex ([`AppImage::content_hash`]): the key and the extraction come
 /// from the SAME bytes, so a package rewritten after its hash was taken can
 /// never be extracted under the old key (context-server design r5 §5.2).
+/// `text_digest` is the mapped entry's verified header blake3 ([`TextDigest`]), `None` when
+/// the texts are owned.
 ///
 /// Cache I/O failures are **non-fatal** and logged at warn: a corrupt entry is extracted
 /// again and rewritten; a cache that cannot be written or read back (unwritable dir, locked
 /// file) leaves the extraction as owned text.
-pub fn cached_source(image: &Arc<AppImage>) -> Result<(Vec<SourceFile>, String)> {
+pub fn cached_source(
+    image: &Arc<AppImage>,
+) -> Result<(Vec<SourceFile>, String, Option<TextDigest>)> {
     cached_source_in(&cache_dir(), image)
 }
 
+/// The blake3 an entry's header holds over the package hash, its index and its text
+/// ([`check_entry`]): it names the exact ordered files of the package under this text format,
+/// so the dependency IR cache (ENG-110) names its entries by it.
+pub type TextDigest = [u8; 32];
+
+/// The entry file name of package `package_hash`. The extraction scheme and the cache format
+/// are part of the name, not the hash (the hash stays the app's identity): a package with only
+/// transpiled C# extracts to synthesized AL since scheme 2, so an older entry must not be read
+/// for it.
+pub(crate) fn text_entry_name(package_hash: &str) -> String {
+    format!("{package_hash}.s{EXTRACTION_SCHEME}.f{CACHE_FORMAT}.bin")
+}
+
 /// [`cached_source`] with the cache directory given (tests write a temporary one).
-pub fn cached_source_in(dir: &Path, image: &Arc<AppImage>) -> Result<(Vec<SourceFile>, String)> {
+pub fn cached_source_in(
+    dir: &Path,
+    image: &Arc<AppImage>,
+) -> Result<(Vec<SourceFile>, String, Option<TextDigest>)> {
     let hash = image.content_hash().to_string();
-    // The extraction scheme and the cache format are part of the name, not the hash (the hash
-    // stays the app's identity): a package with only transpiled C# extracts to synthesized AL
-    // since scheme 2, so an older entry must not be read for it.
-    let name = format!("{hash}.s{EXTRACTION_SCHEME}.f{CACHE_FORMAT}.bin");
+    let name = text_entry_name(&hash);
 
     // A cache directory another user could write is not used at all: its entries could change
     // under a map, and writing into it would hand them our source (sol review).
@@ -107,12 +130,12 @@ pub fn cached_source_in(dir: &Path, image: &Arc<AppImage>) -> Result<(Vec<Source
             dir.display(),
             image.path().display()
         );
-        return Ok((extract_embedded_source(image)?, hash));
+        return Ok((extract_embedded_source(image)?, hash, None));
     };
 
     // Cache hit; fall through to re-extract on a missing or refused entry.
     match d.read(&name, &hash) {
-        Ok(Some(files)) => return Ok((files, hash)),
+        Ok(Some((files, digest))) => return Ok((files, hash, Some(digest))),
         Ok(None) => {}
         Err(e) => log::warn!(
             "snapshot cache entry {} refused ({e:#}); re-extracting",
@@ -123,34 +146,40 @@ pub fn cached_source_in(dir: &Path, image: &Arc<AppImage>) -> Result<(Vec<Source
     // Cache miss (or a refused entry): extract, publish, then read the published file, so the
     // text is the mapped form.
     let files = extract_embedded_source(image)?;
-    let files = publish(&d, &name, &hash, files);
-    Ok((files, hash))
+    let (files, digest) = publish(&d, &name, &hash, files);
+    Ok((files, hash, digest))
 }
 
 /// Publish package `hash`'s extracted `files` as entry `name` of `d` and return the entry's
-/// mapped texts, or `files` (owned) when the cache cannot be used. Every publish holds the
+/// mapped texts and digest, or `files` (owned, no digest) when the cache cannot be used. Every
+/// publish holds the
 /// package's lock and reads the entry again under it, so no two writers decide on the same
 /// entry at once: an entry another process published meanwhile is used (every engine then maps
 /// the one file); a missing one is published without replacing; a refused one is replaced.
 /// Without the lock nothing is published (sol): an entry another process published is still
 /// used, otherwise the text stays owned.
-fn publish(d: &CacheDir<'_>, name: &str, hash: &str, files: Vec<SourceFile>) -> Vec<SourceFile> {
+fn publish(
+    d: &CacheDir<'_>,
+    name: &str,
+    hash: &str,
+    files: Vec<SourceFile>,
+) -> (Vec<SourceFile>, Option<TextDigest>) {
     let path = d.path.join(name);
-    let lock = d.lock(hash);
+    let lock = d.lock(&format!("{hash}.lock"), LockKind::Exclusive);
     let replace = match d.read(name, hash) {
-        Ok(Some(theirs)) => return theirs,
+        Ok(Some((theirs, digest))) => return (theirs, Some(digest)),
         _ if lock.is_none() => {
             log::warn!(
                 "snapshot cache lock for {} not taken: nothing published, source kept as owned \
                  text",
                 path.display()
             );
-            return files;
+            return (files, None);
         }
         Ok(None) => false,
         Err(_) => true,
     };
-    if let Err(e) = d.write(name, hash, &files, replace) {
+    if let Err(e) = d.write(name, replace, |out| write_entry(out, hash, &files)) {
         log::warn!(
             "snapshot source cache write failed for {} ({e:#})",
             path.display()
@@ -159,7 +188,7 @@ fn publish(d: &CacheDir<'_>, name: &str, hash: &str, files: Vec<SourceFile>) -> 
     // Read back even when this write failed: another process may have just written the same
     // entry (on Windows a rename over a mapped file fails).
     match d.read(name, hash) {
-        Ok(Some(mapped)) => return mapped,
+        Ok(Some((mapped, digest))) => return (mapped, Some(digest)),
         Ok(None) => {}
         Err(e) => log::warn!(
             "snapshot cache entry {} refused after writing ({e:#})",
@@ -171,7 +200,7 @@ fn publish(d: &CacheDir<'_>, name: &str, hash: &str, files: Vec<SourceFile>) -> 
         path.display()
     );
     drop(lock);
-    files
+    (files, None)
 }
 
 /// Whether `m` is this user's and writable by nobody else (Unix): a mapping is only sound while
@@ -185,34 +214,117 @@ fn private(m: &std::fs::Metadata) -> bool {
 
 /// An open cache directory. On Unix it holds the directory open, checked [`private`] on the
 /// opened handle, and every entry is opened relative to it, so the directory checked is the
-/// one read.
-struct CacheDir<'a> {
-    path: &'a Path,
+/// one read. Shared with the dependency IR cache (ENG-110), which keeps its entries in
+/// checked subdirectories ([`CacheDir::subdir`]).
+pub(crate) struct CacheDir<'a> {
+    path: std::borrow::Cow<'a, Path>,
     #[cfg(unix)]
     fd: std::fs::File,
 }
 
+/// How [`CacheDir::lock`] takes its `flock`: `Exclusive` waits; the `Now` kinds never wait
+/// (busy: `None`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LockKind {
+    Exclusive,
+    ExclusiveNow,
+    SharedNow,
+}
+
 impl<'a> CacheDir<'a> {
-    /// `None` when `path` is not a directory, or (Unix) not [`private`].
-    fn open(path: &'a Path) -> Option<CacheDir<'a>> {
+    /// `None` when `path` is not a directory, or (Unix) not [`private`]. A borrowed or an
+    /// owned path (`CacheDir<'static>`).
+    pub(crate) fn open(path: impl Into<std::borrow::Cow<'a, Path>>) -> Option<CacheDir<'a>> {
+        let path = path.into();
         #[cfg(unix)]
         {
             use std::os::unix::fs::OpenOptionsExt;
             let fd = std::fs::OpenOptions::new()
                 .read(true)
                 .custom_flags(libc::O_DIRECTORY)
-                .open(path)
+                .open(&path)
                 .ok()?;
             let m = fd.metadata().ok()?;
             (m.is_dir() && private(&m)).then_some(CacheDir { path, fd })
         }
         #[cfg(not(unix))]
         {
-            std::fs::metadata(path)
+            std::fs::metadata(&path)
                 .ok()?
                 .is_dir()
                 .then_some(CacheDir { path })
         }
+    }
+
+    /// The directory's path (for messages; every access goes through the handle).
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Child directory `name`, opened through this handle without following a symlink and
+    /// checked a [`private`] directory on the opened handle. With `create`, it is made first
+    /// (`mkdirat`, mode 0700) when missing. `None` when it is missing (without `create`), not a
+    /// private directory, or cannot be made.
+    #[cfg(unix)]
+    pub(crate) fn subdir(&self, name: &str, create: bool) -> Option<CacheDir<'static>> {
+        if create {
+            let made = self.at2(name, name, |d, a, _| {
+                // SAFETY: a valid directory fd and a NUL-terminated name.
+                unsafe { libc::mkdirat(d, a, 0o700) }
+            });
+            if let Err(e) = made
+                && e.kind() != std::io::ErrorKind::AlreadyExists
+            {
+                return None;
+            }
+        }
+        let fd = self
+            .openat(name, libc::O_RDONLY | libc::O_DIRECTORY, 0)
+            .ok()?;
+        let m = fd.metadata().ok()?;
+        (m.is_dir() && private(&m)).then(|| CacheDir {
+            path: self.path.join(name).into(),
+            fd,
+        })
+    }
+
+    /// No child directories off Unix (the IR cache is off there in v1).
+    #[cfg(not(unix))]
+    pub(crate) fn subdir(&self, _name: &str, _create: bool) -> Option<CacheDir<'static>> {
+        None
+    }
+
+    /// Entry `name` read whole into memory (owned, not mapped: the bytes a caller checks are
+    /// the bytes it uses). `None` when there is none; an error (refused) for anything but a
+    /// regular file (a symlink is not followed), on Unix one that is not [`private`], or one
+    /// longer than `cap` bytes.
+    pub(crate) fn read_owned(&self, name: &str, cap: u64) -> Result<Option<Vec<u8>>> {
+        use std::io::Read;
+        let file = match self.open_entry(name) {
+            Ok(f) => f,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(e).with_context(|| format!("open cache entry {name}")),
+        };
+        let meta = file.metadata().context("stat cache entry")?;
+        if !meta.file_type().is_file() {
+            bail!("not a regular file");
+        }
+        #[cfg(unix)]
+        if !private(&meta) {
+            bail!("not private to this user");
+        }
+        if meta.len() > cap {
+            bail!("cache entry longer than {cap} bytes");
+        }
+        let mut out = Vec::with_capacity(meta.len() as usize);
+        // Bounded again by the read itself: the file may have grown since the stat.
+        file.take(cap + 1)
+            .read_to_end(&mut out)
+            .context("read cache entry")?;
+        if out.len() as u64 > cap {
+            bail!("cache entry longer than {cap} bytes");
+        }
+        Ok(Some(out))
     }
 
     /// `openat` of `name` in the open directory, never following a symlink or blocking (a FIFO
@@ -251,10 +363,19 @@ impl<'a> CacheDir<'a> {
 
     /// Remove `name` from the open directory (best effort: a leftover temp file).
     #[cfg(unix)]
-    fn unlink(&self, name: &str) {
+    pub(crate) fn unlink(&self, name: &str) {
         let _ = self.at2(name, name, |d, a, _| {
             // SAFETY: a valid directory fd and a NUL-terminated name.
             unsafe { libc::unlinkat(d, a, 0) }
+        });
+    }
+
+    /// Remove the empty child directory `name` (best effort; a non-empty one stays).
+    #[cfg(unix)]
+    pub(crate) fn remove_dir(&self, name: &str) {
+        let _ = self.at2(name, name, |d, a, _| {
+            // SAFETY: a valid directory fd and a NUL-terminated name.
+            unsafe { libc::unlinkat(d, a, libc::AT_REMOVEDIR) }
         });
     }
 
@@ -286,7 +407,11 @@ impl<'a> CacheDir<'a> {
     /// (refused) for anything but a regular file (checked on the OPENED file), on Unix one that
     /// is not [`private`], or one [`check_entry`] refuses. Else the texts are ranges of a
     /// read-only map of it.
-    fn read(&self, name: &str, package_hash: &str) -> Result<Option<Vec<SourceFile>>> {
+    fn read(
+        &self,
+        name: &str,
+        package_hash: &str,
+    ) -> Result<Option<(Vec<SourceFile>, TextDigest)>> {
         let file = match self.open_entry(name) {
             Ok(f) => f,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -312,7 +437,8 @@ impl<'a> CacheDir<'a> {
             .context("map cache entry")?
             .context("cache entry is empty")?;
         let map = Arc::new(map);
-        let files = check_entry(&map, package_hash)?
+        let (digest, ranges) = check_entry(&map, package_hash)?;
+        let files = ranges
             .into_iter()
             .map(|(path, r)| {
                 let text =
@@ -323,47 +449,59 @@ impl<'a> CacheDir<'a> {
                 })
             })
             .collect::<Result<Vec<_>>>()?;
-        Ok(Some(files))
+        Ok(Some((files, digest)))
     }
 
-    /// The publish lock of package `hash`, held while the returned value lives, so no two
-    /// processes decide on one entry at once ([`publish`]). Unix: an exclusive `flock` on
-    /// `<hash>.lock` in the open directory, which must be a regular, [`private`] file (`None`
-    /// otherwise, or when the lock fails). Windows: no file lock (`Some` with nothing held): a
-    /// rename over an entry another engine maps fails, so a replacement cannot remove an entry
-    /// in use.
-    fn lock(&self, hash: &str) -> Option<RepairLock> {
+    /// Lock file `name` (a package's `<hash>.lock`), held while the returned value lives, so
+    /// no two processes decide on one entry at once ([`publish`]). Unix: a `flock` of `kind` on
+    /// `name` in the open directory, which must be a regular, [`private`] file (`None`
+    /// otherwise, when the lock fails, or for a `Now` kind when it is busy). Windows: no file
+    /// lock (`Some` with nothing held): a rename over an entry another engine maps fails, so a
+    /// replacement cannot remove an entry in use.
+    pub(crate) fn lock(&self, name: &str, kind: LockKind) -> Option<RepairLock> {
         #[cfg(unix)]
         {
             use std::os::fd::AsRawFd;
             let f = self
-                .openat(&format!("{hash}.lock"), libc::O_RDWR | libc::O_CREAT, 0o600)
+                .openat(name, libc::O_RDWR | libc::O_CREAT, 0o600)
                 .ok()?;
             let m = f.metadata().ok()?;
             if !(m.is_file() && private(&m)) {
                 return None;
             }
+            let op = match kind {
+                LockKind::Exclusive => libc::LOCK_EX,
+                LockKind::ExclusiveNow => libc::LOCK_EX | libc::LOCK_NB,
+                LockKind::SharedNow => libc::LOCK_SH | libc::LOCK_NB,
+            };
             // SAFETY: a valid fd.
-            (unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX) } == 0)
-                .then_some(RepairLock(Some(f)))
+            (unsafe { libc::flock(f.as_raw_fd(), op) } == 0).then_some(RepairLock(Some(f)))
         }
         #[cfg(not(unix))]
         {
-            let _ = hash;
+            let _ = (name, kind);
             Some(RepairLock(None))
         }
     }
 
-    /// Write `files` as entry `name`: the whole entry ([`write_entry`]) goes to a unique temp
-    /// file in the directory (owner-only, created exclusively), which is then renamed into
+    /// Write entry `name` from `writer` (which writes the whole entry): it goes to a unique
+    /// temp file in the directory (owner-only, created exclusively), which is then renamed into
     /// place. Two writers never share a temp file, so a rename only ever installs a complete
-    /// file. Unless `replace`, an entry already there is kept (a no-clobber publish): another
-    /// process published it, and every engine then maps the one file. On Unix every step goes
-    /// through the open directory handle, so the entry lands in the directory that was checked.
+    /// file, and a writer that fails leaves nothing (its temp file is removed). Unless
+    /// `replace`, an entry already there is kept (a no-clobber publish): another process
+    /// published it, and every engine then maps the one file. On Unix every step goes through
+    /// the open directory handle, so the entry lands in the directory that was checked. The
+    /// temp file is `<name up to its first dot>-<pid>-<n>-<nanos>.tmp`.
     #[cfg(unix)]
-    fn write(&self, name: &str, hash: &str, files: &[SourceFile], replace: bool) -> Result<()> {
+    pub(crate) fn write(
+        &self,
+        name: &str,
+        replace: bool,
+        writer: impl FnOnce(&mut dyn Write) -> Result<()>,
+    ) -> Result<()> {
         use std::sync::atomic::{AtomicU64, Ordering};
         static NEXT: AtomicU64 = AtomicU64::new(0);
+        let stem = name.split('.').next().unwrap_or(name);
         // A name taken (a crash's leftover, the same pid in another pid namespace) is skipped:
         // the exclusive create refuses it, and the next name differs in its counter and time.
         let (tmp, file) = (0..16)
@@ -372,7 +510,7 @@ impl<'a> CacheDir<'a> {
                     .duration_since(std::time::UNIX_EPOCH)
                     .map_or(0, |d| d.subsec_nanos());
                 let tmp = format!(
-                    "{hash}-{}-{}-{nanos}.tmp",
+                    "{stem}-{}-{}-{nanos}.tmp",
                     std::process::id(),
                     NEXT.fetch_add(1, Ordering::Relaxed)
                 );
@@ -383,25 +521,27 @@ impl<'a> CacheDir<'a> {
                 }
             })
             .context("no free cache temp name")??;
-        let published =
-            write_entry(&mut std::io::BufWriter::new(&file), hash, files).and_then(|()| {
-                if replace {
-                    self.at2(&tmp, name, |d, a, b| {
-                        // SAFETY: a valid directory fd and NUL-terminated names.
-                        unsafe { libc::renameat(d, a, d, b) }
-                    })
-                } else {
-                    // A hard link fails when `name` exists: the no-clobber publish.
-                    match self.at2(&tmp, name, |d, a, b| {
-                        // SAFETY: a valid directory fd and NUL-terminated names.
-                        unsafe { libc::linkat(d, a, d, b, 0) }
-                    }) {
-                        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
-                        r => r,
-                    }
+        let mut out = std::io::BufWriter::new(&file);
+        let written = writer(&mut out).and_then(|()| Ok(out.flush()?));
+        drop(out);
+        let published = written.and_then(|()| {
+            if replace {
+                self.at2(&tmp, name, |d, a, b| {
+                    // SAFETY: a valid directory fd and NUL-terminated names.
+                    unsafe { libc::renameat(d, a, d, b) }
+                })
+            } else {
+                // A hard link fails when `name` exists: the no-clobber publish.
+                match self.at2(&tmp, name, |d, a, b| {
+                    // SAFETY: a valid directory fd and NUL-terminated names.
+                    unsafe { libc::linkat(d, a, d, b, 0) }
+                }) {
+                    Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+                    r => r,
                 }
-                .with_context(|| format!("publish cache temp {tmp} as {name}"))
-            });
+            }
+            .with_context(|| format!("publish cache temp {tmp} as {name}"))
+        });
         // After a rename the temp name is gone; after a link (or a failure) it is removed.
         if !(replace && published.is_ok()) {
             self.unlink(&tmp);
@@ -410,14 +550,24 @@ impl<'a> CacheDir<'a> {
     }
 
     #[cfg(windows)]
-    fn write(&self, name: &str, hash: &str, files: &[SourceFile], replace: bool) -> Result<()> {
+    pub(crate) fn write(
+        &self,
+        name: &str,
+        replace: bool,
+        writer: impl FnOnce(&mut dyn Write) -> Result<()>,
+    ) -> Result<()> {
         let path = self.path.join(name);
+        let stem = name.split('.').next().unwrap_or(name);
         let mut tmp = tempfile::Builder::new()
-            .prefix(&format!("{hash}-"))
+            .prefix(&format!("{stem}-"))
             .suffix(".tmp")
-            .tempfile_in(self.path)
+            .tempfile_in(&*self.path)
             .with_context(|| format!("create cache temp in {}", self.path.display()))?;
-        write_entry(&mut std::io::BufWriter::new(tmp.as_file_mut()), hash, files)?;
+        {
+            let mut out = std::io::BufWriter::new(tmp.as_file_mut());
+            writer(&mut out)?;
+            out.flush()?;
+        }
         if replace {
             tmp.persist(&path)
                 .map_err(|e| e.error)
@@ -437,20 +587,25 @@ impl<'a> CacheDir<'a> {
     }
 }
 
-/// A held repair lock ([`CacheDir::lock`]); released when dropped.
-struct RepairLock(#[allow(dead_code)] Option<File>);
+/// A held lock ([`CacheDir::lock`]); released when dropped.
+pub(crate) struct RepairLock(#[allow(dead_code)] Option<File>);
 
 /// A cache entry's index, checked against `bytes` (the whole entry) and the package
 /// `package_hash`: the header, the format and scheme, the lengths (the index capped at
 /// [`MAX_INDEX_LEN`]), the blake3 of the package hash, the index and the text, then the index
-/// entries, which must tile the text exactly in order. Returns `[(path, range)]` with ranges
-/// into `bytes`; each range's UTF-8 is checked when its text is made.
+/// entries, which must tile the text exactly in order. Returns the verified header blake3 (the
+/// [`TextDigest`]) and `[(path, range)]` with ranges into `bytes`; each range's UTF-8 is
+/// checked when its text is made.
 ///
 /// The blake3 check is NOT optional: nothing fsyncs, so after a crash a renamed file can have
 /// the right length and zero content, which the length and UTF-8 checks both accept. It
 /// covers the index and binds the package, so a damaged offset or path that is still valid
 /// JSON, or a valid entry copied under another package's name, is refused.
-fn check_entry(bytes: &[u8], package_hash: &str) -> Result<Vec<(String, std::ops::Range<usize>)>> {
+#[allow(clippy::type_complexity)]
+pub(crate) fn check_entry(
+    bytes: &[u8],
+    package_hash: &str,
+) -> Result<(TextDigest, Vec<(String, std::ops::Range<usize>)>)> {
     if bytes.len() < HEADER_LEN || &bytes[..8] != MAGIC {
         bail!("not a cache file (header)");
     }
@@ -496,12 +651,12 @@ fn check_entry(bytes: &[u8], package_hash: &str) -> Result<Vec<(String, std::ops
     if next != text_len as u64 {
         bail!("cache index does not cover the text");
     }
-    Ok(out)
+    Ok((hash, out))
 }
 
 /// Write package `hash`'s `files` to `out` as one whole cache entry (header, index, text) and
 /// flush it.
-fn write_entry(out: &mut impl Write, hash: &str, files: &[SourceFile]) -> Result<()> {
+pub(crate) fn write_entry(out: &mut dyn Write, hash: &str, files: &[SourceFile]) -> Result<()> {
     let mut index = Vec::with_capacity(files.len());
     let mut text_len = 0u64;
     for f in files {
@@ -576,13 +731,13 @@ mod tests {
     fn a_miss_writes_and_a_hit_maps() {
         let dir = tempfile::tempdir().unwrap();
         let img = two_files();
-        let (cold, hash) = cached_source_in(dir.path(), &img).unwrap();
+        let (cold, hash, _) = cached_source_in(dir.path(), &img).unwrap();
         assert_eq!(hash, img.content_hash());
         assert_eq!(texts(&cold), [("src/A.al", A), ("src/B.al", B)]);
         assert!(cold.iter().all(|f| f.text.is_mapped()), "a miss maps too");
         assert!(entry(dir.path(), &img).is_file());
 
-        let (warm, _) = cached_source_in(dir.path(), &img).unwrap();
+        let (warm, _, _) = cached_source_in(dir.path(), &img).unwrap();
         assert_eq!(texts(&warm), texts(&cold));
         let map = warm[0].text.mapping().expect("mapped");
         assert!(
@@ -608,7 +763,7 @@ mod tests {
             text.as_bytes(),
             None,
         );
-        let (files, _) = cached_source_in(dir.path(), &img).unwrap();
+        let (files, _, _) = cached_source_in(dir.path(), &img).unwrap();
         assert_eq!(texts(&files), [("src/K.al", text)]);
         assert!(files.iter().all(|f| f.text.is_mapped()));
     }
@@ -620,7 +775,7 @@ mod tests {
     fn read_cache(dir: &Path, path: &Path, pkg: &str) -> Result<Vec<SourceFile>> {
         let d = CacheDir::open(dir).expect("a private test dir");
         let name = path.file_name().unwrap().to_str().unwrap();
-        d.read(name, pkg)?.context("no entry")
+        Ok(d.read(name, pkg)?.context("no entry")?.0)
     }
 
     /// An entry of `index` and `text` for package `pkg` with a correct header (or the given
@@ -763,7 +918,7 @@ mod tests {
         );
         std::os::unix::fs::symlink(&elsewhere, &path).unwrap();
         assert!(read_cache(dir.path(), &path, img.content_hash()).is_err());
-        let (files, _) = cached_source_in(dir.path(), &img).unwrap();
+        let (files, _, _) = cached_source_in(dir.path(), &img).unwrap();
         assert_eq!(texts(&files), [("src/A.al", A), ("src/B.al", B)]);
         assert!(std::fs::symlink_metadata(&path).unwrap().is_file());
 
@@ -771,7 +926,7 @@ mod tests {
         let c = std::ffi::CString::new(path.as_os_str().as_encoded_bytes()).unwrap();
         // SAFETY: a valid NUL-terminated path.
         assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
-        let (files, _) = cached_source_in(dir.path(), &img).unwrap();
+        let (files, _, _) = cached_source_in(dir.path(), &img).unwrap();
         assert_eq!(texts(&files), [("src/A.al", A), ("src/B.al", B)]);
         assert!(std::fs::symlink_metadata(&path).unwrap().is_file());
     }
@@ -794,7 +949,7 @@ mod tests {
         mode(&path, 0o600);
         let before = std::fs::read(&path).unwrap();
         mode(dir.path(), 0o777);
-        let (files, _) = cached_source_in(dir.path(), &img).unwrap();
+        let (files, _, _) = cached_source_in(dir.path(), &img).unwrap();
         assert_eq!(
             texts(&files),
             [("src/A.al", A), ("src/B.al", B)],
@@ -804,7 +959,7 @@ mod tests {
         assert_eq!(std::fs::read(&path).unwrap(), before, "not rewritten");
 
         mode(dir.path(), 0o700);
-        let (files, _) = cached_source_in(dir.path(), &img).unwrap();
+        let (files, _, _) = cached_source_in(dir.path(), &img).unwrap();
         assert_eq!(
             texts(&files),
             [("src/K.al", "k")],
@@ -812,7 +967,7 @@ mod tests {
         );
 
         mode(&path, 0o666);
-        let (files, _) = cached_source_in(dir.path(), &img).unwrap();
+        let (files, _, _) = cached_source_in(dir.path(), &img).unwrap();
         assert_eq!(texts(&files), [("src/A.al", A), ("src/B.al", B)], "refused");
         assert!(files.iter().all(|f| f.text.is_mapped()), "the replacement");
         let m = std::fs::metadata(&path).unwrap().permissions().mode();
@@ -832,7 +987,7 @@ mod tests {
         let before = std::fs::read(&path).unwrap();
         let d = CacheDir::open(dir.path()).unwrap();
         let name = path.file_name().unwrap().to_str().unwrap();
-        let files = publish(&d, name, hash, extract_embedded_source(&img).unwrap());
+        let (files, _) = publish(&d, name, hash, extract_embedded_source(&img).unwrap());
         assert_eq!(texts(&files), [("src/K.al", "k")]);
         assert_eq!(std::fs::read(&path).unwrap(), before, "not replaced");
     }
@@ -851,7 +1006,7 @@ mod tests {
         std::fs::write(&path, b"refused").unwrap();
         let held = CacheDir::open(dir.path())
             .unwrap()
-            .lock(&hash)
+            .lock(&format!("{hash}.lock"), LockKind::Exclusive)
             .expect("lock");
         let (done_tx, done_rx) = std::sync::mpsc::channel();
         let (dir_path, name) = (
@@ -863,7 +1018,7 @@ mod tests {
         let repair = std::thread::spawn(move || {
             let d = CacheDir::open(&dir_path).unwrap();
             started_tx.send(()).unwrap();
-            let out = texts(&publish(&d, &name, &hash, files))
+            let out = texts(&publish(&d, &name, &hash, files).0)
                 .into_iter()
                 .map(|(p, t)| (p.to_string(), t.to_string()))
                 .collect::<Vec<_>>();
@@ -907,13 +1062,13 @@ mod tests {
         let c = std::ffi::CString::new(lock.as_os_str().as_encoded_bytes()).unwrap();
         // SAFETY: a valid NUL-terminated path.
         assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
-        let (files, _) = cached_source_in(dir.path(), &img).unwrap();
+        let (files, _, _) = cached_source_in(dir.path(), &img).unwrap();
         assert_eq!(texts(&files), [("src/A.al", A), ("src/B.al", B)]);
         assert!(files.iter().all(|f| !f.text.is_mapped()), "owned");
         assert_eq!(std::fs::read(&path).unwrap(), b"refused", "not replaced");
 
         std::fs::remove_file(&path).unwrap();
-        let (files, _) = cached_source_in(dir.path(), &img).unwrap();
+        let (files, _, _) = cached_source_in(dir.path(), &img).unwrap();
         assert!(files.iter().all(|f| !f.text.is_mapped()), "owned on a miss");
         assert!(
             std::fs::symlink_metadata(&path).is_err(),
@@ -928,7 +1083,7 @@ mod tests {
     fn a_mapped_entry_cannot_be_opened_for_writing() {
         let dir = tempfile::tempdir().unwrap();
         let img = two_files();
-        let (files, _) = cached_source_in(dir.path(), &img).unwrap();
+        let (files, _, _) = cached_source_in(dir.path(), &img).unwrap();
         assert!(files.iter().all(|f| f.text.is_mapped()));
         let path = entry(dir.path(), &img);
         assert!(
@@ -956,9 +1111,11 @@ mod tests {
         let before = std::fs::read(&path).unwrap();
         let d = CacheDir::open(dir.path()).unwrap();
         let name = path.file_name().unwrap().to_str().unwrap();
-        d.write(name, hash, &files, false).unwrap();
+        d.write(name, false, |o| write_entry(o, hash, &files))
+            .unwrap();
         assert_eq!(std::fs::read(&path).unwrap(), before, "kept");
-        d.write(name, hash, &files, true).unwrap();
+        d.write(name, true, |o| write_entry(o, hash, &files))
+            .unwrap();
         assert_ne!(std::fs::read(&path).unwrap(), before, "replaced");
         assert_eq!(
             texts(&read_cache(dir.path(), &path, hash).unwrap()),
@@ -989,7 +1146,7 @@ mod tests {
         bytes[at] = b'X';
         std::fs::write(&path, &bytes).unwrap();
 
-        let (files, _) = cached_source_in(dir.path(), &img).unwrap();
+        let (files, _, _) = cached_source_in(dir.path(), &img).unwrap();
         assert_eq!(texts(&files), [("src/A.al", A), ("src/B.al", B)]);
         assert!(files.iter().all(|f| f.text.is_mapped()));
         assert_ne!(
@@ -1016,7 +1173,7 @@ mod tests {
         bytes[at] = b'Z';
         std::fs::write(&path, &bytes).unwrap();
 
-        let (files, _) = cached_source_in(dir.path(), &img).unwrap();
+        let (files, _, _) = cached_source_in(dir.path(), &img).unwrap();
         assert_eq!(texts(&files), [("src/A.al", A), ("src/B.al", B)]);
         assert!(files.iter().all(|f| f.text.is_mapped()), "served mapped");
         assert_ne!(
@@ -1035,7 +1192,7 @@ mod tests {
             .path()
             .join(format!("{}.s{EXTRACTION_SCHEME}.json", img.content_hash()));
         std::fs::write(&old, r#"[{"virtual_path":"src/Old.al","text":"old"}]"#).unwrap();
-        let (files, _) = cached_source_in(dir.path(), &img).unwrap();
+        let (files, _, _) = cached_source_in(dir.path(), &img).unwrap();
         assert_eq!(texts(&files), [("src/A.al", A), ("src/B.al", B)]);
     }
 
@@ -1048,7 +1205,7 @@ mod tests {
         use std::os::unix::fs::MetadataExt;
         let dir = tempfile::tempdir().unwrap();
         let img = image(&[("SymbolReference.json", b"{}")]);
-        let (files, _) = cached_source_in(dir.path(), &img).unwrap();
+        let (files, _, _) = cached_source_in(dir.path(), &img).unwrap();
         assert!(files.is_empty());
         let path = entry(dir.path(), &img);
         assert!(
@@ -1056,7 +1213,7 @@ mod tests {
             "a valid empty entry"
         );
         let ino = std::fs::metadata(&path).unwrap().ino();
-        let (files, _) = cached_source_in(dir.path(), &img).unwrap();
+        let (files, _, _) = cached_source_in(dir.path(), &img).unwrap();
         assert!(files.is_empty());
         assert_eq!(
             std::fs::metadata(&path).unwrap().ino(),
@@ -1072,8 +1229,124 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let not_a_dir = dir.path().join("file");
         std::fs::write(&not_a_dir, "").unwrap();
-        let (files, _) = cached_source_in(&not_a_dir, &two_files()).unwrap();
+        let (files, _, _) = cached_source_in(&not_a_dir, &two_files()).unwrap();
         assert_eq!(texts(&files), [("src/A.al", A), ("src/B.al", B)]);
         assert!(files.iter().all(|f| !f.text.is_mapped()));
+    }
+
+    /// ENG-110: a miss (publish, read back) and a hit both return the entry's header blake3,
+    /// the digest the IR cache names its entries by.
+    #[test]
+    fn a_hit_and_a_publish_carry_the_header_digest() {
+        let dir = tempfile::tempdir().unwrap();
+        let img = two_files();
+        let (_, _, cold) = cached_source_in(dir.path(), &img).unwrap();
+        let header: TextDigest = std::fs::read(entry(dir.path(), &img)).unwrap()[32..64]
+            .try_into()
+            .unwrap();
+        assert_eq!(cold, Some(header), "the publish");
+        let (_, _, warm) = cached_source_in(dir.path(), &img).unwrap();
+        assert_eq!(warm, Some(header), "the hit");
+    }
+
+    /// ENG-110: owned text (an unusable cache) carries no digest, so no IR cache entry is
+    /// named for it.
+    #[test]
+    fn owned_text_has_no_digest() {
+        let dir = tempfile::tempdir().unwrap();
+        let not_a_dir = dir.path().join("file");
+        std::fs::write(&not_a_dir, "").unwrap();
+        let (files, _, digest) = cached_source_in(&not_a_dir, &two_files()).unwrap();
+        assert!(!files.is_empty() && digest.is_none());
+    }
+
+    #[test]
+    fn read_owned_refuses_over_cap() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("e.bin"), [7u8; 10]).unwrap();
+        let d = CacheDir::open(dir.path()).unwrap();
+        assert_eq!(d.read_owned("e.bin", 10).unwrap(), Some(vec![7u8; 10]));
+        assert!(d.read_owned("e.bin", 9).is_err());
+        assert_eq!(d.read_owned("missing.bin", 10).unwrap(), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_owned_refuses_symlink() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("real.bin"), b"x").unwrap();
+        std::os::unix::fs::symlink(dir.path().join("real.bin"), dir.path().join("e.bin")).unwrap();
+        let d = CacheDir::open(dir.path()).unwrap();
+        assert!(d.read_owned("e.bin", 10).is_err());
+    }
+
+    /// Review Focus 1 (ENG-110): a writer that fails halfway (a full disk) publishes no entry
+    /// and leaves no temp file.
+    #[test]
+    fn a_failed_writer_publishes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = CacheDir::open(dir.path()).unwrap();
+        for replace in [false, true] {
+            let r = d.write("e.bin", replace, |out| {
+                out.write_all(b"half an entry")?;
+                bail!("no space left on device")
+            });
+            assert!(r.is_err());
+            let left: Vec<_> = std::fs::read_dir(dir.path())
+                .unwrap()
+                .map(|e| e.unwrap().file_name())
+                .collect();
+            assert!(left.is_empty(), "nothing left: {left:?}");
+        }
+    }
+
+    /// ENG-110: only a writer (`create`) makes a child directory, owner-only; a reader sees
+    /// none, and a child other users can write is refused.
+    #[cfg(unix)]
+    #[test]
+    fn subdir_is_created_private_only_by_writers() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let d = CacheDir::open(dir.path()).unwrap();
+        assert!(d.subdir("ir", false).is_none());
+        assert!(!dir.path().join("ir").exists(), "a reader makes nothing");
+        let ir = d.subdir("ir", true).expect("made");
+        let mode = std::fs::metadata(dir.path().join("ir"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o700);
+        assert!(ir.subdir("k", true).is_some(), "nested");
+        assert!(d.subdir("ir", false).is_some(), "now there");
+        std::fs::set_permissions(
+            dir.path().join("ir"),
+            std::fs::Permissions::from_mode(0o770),
+        )
+        .unwrap();
+        assert!(d.subdir("ir", false).is_none(), "not private");
+        assert!(d.subdir("ir", true).is_none(), "not private");
+    }
+
+    /// ENG-110: the non-blocking lock kinds refuse while another holder conflicts.
+    #[cfg(unix)]
+    #[test]
+    fn shared_now_lock_fails_while_exclusive_held() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = CacheDir::open(dir.path()).unwrap();
+        let ex = d.lock("x.lock", LockKind::Exclusive).expect("exclusive");
+        assert!(d.lock("x.lock", LockKind::SharedNow).is_none());
+        assert!(d.lock("x.lock", LockKind::ExclusiveNow).is_none());
+        drop(ex);
+        let sh = d.lock("x.lock", LockKind::SharedNow).expect("shared");
+        assert!(
+            d.lock("x.lock", LockKind::SharedNow).is_some(),
+            "shared with shared"
+        );
+        assert!(
+            d.lock("x.lock", LockKind::ExclusiveNow).is_none(),
+            "the reverse: exclusive refused while shared is held"
+        );
+        drop(sh);
+        assert!(d.lock("x.lock", LockKind::ExclusiveNow).is_some());
     }
 }

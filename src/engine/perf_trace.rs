@@ -921,6 +921,8 @@ pub fn maybe_exit_after(span_name: &str) {
         }
         // This exit skips `main`'s own census print (#160 §4.1.7).
         crate::engine::l5::detector_context::report_cones_census();
+        // And the IR cache report's end line (ENG-110).
+        crate::program::ir_cache::report_end();
         std::process::exit(0);
     }
 }

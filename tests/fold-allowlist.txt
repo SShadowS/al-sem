@@ -87,6 +87,7 @@
 4 src/program/impact_graph/facts.rs
 4 src/program/impact_graph/mod.rs
 1 src/program/integration_report.rs
+1 src/program/ir_cache/mod.rs
 2 src/program/model/events.rs
 2 src/program/model/platform_natives.rs
 7 src/program/model/program_calls.rs

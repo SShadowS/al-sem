@@ -12,6 +12,7 @@ pub mod graphify_export;
 pub mod impact_graph;
 pub mod inputs;
 pub mod integration_report;
+pub mod ir_cache;
 pub mod model;
 pub mod node;
 pub mod node_extract;

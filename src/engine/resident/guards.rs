@@ -148,7 +148,7 @@ fn pinned_texts(
             let Ok(image) = inputs.closure.image(i) else {
                 continue;
             };
-            if let Ok((files, _)) = crate::snapshot::cache::cached_source(&image) {
+            if let Ok((files, _, _)) = crate::snapshot::cache::cached_source(&image) {
                 all.extend(files.into_iter().map(|f| (f.virtual_path, f.text)));
             }
         }
