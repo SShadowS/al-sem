@@ -1,0 +1,531 @@
+#!/usr/bin/env python3
+"""ir-cache-acceptance: ENG-110's acceptance on CDO, as the spec fixes it before any run
+(docs/superpowers/specs/2026-11-18-eng110-ir-cache-design.md, "Acceptance").
+
+    ir-cache-acceptance timing     <ws> [--rounds 6] [--out DIR]   # items 2 and 3
+    ir-cache-acceptance identity   <ws> [--out DIR]                # items 1 and 2
+    ir-cache-acceptance concurrent <ws> [--n 4] [--out DIR]        # item 6
+    ir-cache-acceptance census     <ws> [--out DIR]                # item 6
+
+Arms: master (the merge base of HEAD and master, ENG-110's base), head-off
+(ALSEM_IR_CACHE=off), head-cold (a fresh, empty ALSEM_IR_CACHE_DIR per process),
+head-warm (one root filled untimed before). Binaries: release-fast alsem and aldump of
+each commit, built once and cached by scripts/cdo-speed (`cached_binary`); HEAD must be
+committed and clean.
+
+timing: `alsem analyze <ws>`, counted as cdo-speed counts (its own functions: user
+instructions and cycles per PMU, equal running time per PMU, coverage of the call's CPU),
+in rounds of the four arms with the order rotating. Judgment, fixed in the spec: per
+round each head arm's instructions over that round's master; the median over 6 rounds:
+head-warm <= 0.70, head-cold <= 1.05, head-off <= 1.01; a median within 0.01 of its
+limit runs 6 more rounds and the median of all 12 decides. A round with a host suspend or
+a container CPU stall share over 15 % is void and repeated. Run it inside a timed CDO slot
+(`scripts/cdo-slot run <owner> <reason> --timed -- ...`).
+
+Every head process's report (ALSEM_IR_CACHE_REPORT) is checked against spec Acceptance 2:
+warm: eligible_files > 0, disk_hits > 0, disk_hits = eligible_files - skipped_unstored,
+refused = 0; cold: eligible_files > 0, disk_hits = 0, published_packages = the eligible
+packages (the warm root's entries) and that many entries on disk; off: disk_hits = 0,
+published_packages = 0, skipped_off = seam_files; any roundtrip_failed > 0 fails; a start
+without an end fails. master writes no report (it predates the cache).
+
+identity: the deterministic output of fingerprint, analyze (primary and --scope all),
+`aldump --program-call-graph-stats`, explain, query effects and digest, per arm, compared
+byte for byte across the four arms; a file that differs is run again on master, and one
+that differs between master's two runs is listed as nondeterministic (left out of the
+comparison, to be filed).
+
+Refuses to run with ALSEM_IR_CACHE_VERIFY set (never in a timed run). Records the master
+and head SHAs, the workspace commit and dirty state, a sha256 over the workspace's
+`.alpackages` (path and bytes of each `.app`) and the head key folder's name.
+"""
+import argparse
+import hashlib
+import importlib.machinery
+import importlib.util
+import json
+import os
+import resource
+import shutil
+import statistics
+import subprocess
+import sys
+import tempfile
+import time
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+LIMITS = {"head-warm": 0.70, "head-cold": 1.05, "head-off": 1.01}
+ARMS = ["master", "head-off", "head-cold", "head-warm"]
+STALL_LIMIT = 15.0
+
+
+def load_speed():
+    """scripts/cdo-speed as a module: its binary cache and its counting functions."""
+    loader = importlib.machinery.SourceFileLoader("cdo_speed", os.path.join(HERE, "cdo-speed"))
+    mod = importlib.util.module_from_spec(importlib.util.spec_from_loader("cdo_speed", loader))
+    loader.exec_module(mod)
+    return mod
+
+
+speed = load_speed()
+# cdo-speed's warm-up routine: the explain, query and digest identity outputs read it.
+TELEMETRY = speed.TELEMETRY
+
+
+def log(msg):
+    print(f"ir-cache-acceptance: {msg}", flush=True)
+
+
+def fail(msg):
+    log(f"FAIL: {msg}")
+    sys.exit(1)
+
+
+def git(repo, *args):
+    return speed.git(repo, *args)
+
+
+def sha256_file(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def alpackages_sha256(ws):
+    """sha256 over each `.app` under the workspace's `.alpackages`: relative path and the
+    file's sha256, sorted by path (the driver's own stamp of the dependency closure)."""
+    h = hashlib.sha256()
+    root = os.path.join(ws, ".alpackages")
+    for dirpath, _, names in sorted(os.walk(root)):
+        for n in sorted(names):
+            if n.lower().endswith(".app"):
+                p = os.path.join(dirpath, n)
+                h.update(f"{os.path.relpath(p, root)}\0{sha256_file(p)}\n".encode())
+    return h.hexdigest()
+
+
+def setup(args):
+    repo = os.path.dirname(HERE)
+    if os.environ.get("ALSEM_IR_CACHE_VERIFY"):
+        fail("ALSEM_IR_CACHE_VERIFY is set: the acceptance never verifies (unset it)")
+    if git(repo, "status", "--porcelain", "--untracked-files=no"):
+        fail("HEAD has uncommitted edits: commit first (the head arm is a commit)")
+    ws = os.path.abspath(args.ws)
+    head = git(repo, "rev-parse", "HEAD")
+    base = git(repo, "merge-base", "HEAD", "master")
+    out = os.path.abspath(args.out or os.path.join(
+        "/work/.al-sem/engine-notes/eng110-acceptance",
+        time.strftime("%Y%m%d-%H%M%S") + f"-{args.mode}"))
+    os.makedirs(out, exist_ok=True)
+    with open(os.path.join(out, "build.log"), "a") as logf:
+        base_exe, _ = speed.cached_binary(repo, base, logf, extra=("aldump",))
+        head_exe, _ = speed.cached_binary(repo, head, logf, extra=("aldump",))
+    record = {
+        "mode": args.mode, "master": base, "head": head, "workspace": ws,
+        "workspace_sha": git(ws, "rev-parse", "HEAD"),
+        "workspace_dirty_paths": len(git(ws, "status", "--porcelain").splitlines()),
+        "alpackages_sha256": alpackages_sha256(ws),
+        "binaries": {"master": base_exe, "head": head_exe,
+                     "master_sha256": sha256_file(base_exe),
+                     "head_sha256": sha256_file(head_exe)},
+    }
+    log(f"master {base[:10]}, head {head[:10]}, workspace {record['workspace_sha'][:10]} "
+        f"({record['workspace_dirty_paths']} dirty), out {out}")
+    return repo, ws, out, base_exe, head_exe, record
+
+
+def clean_env():
+    """cdo-speed's child environment (ALSEM_* stripped but the IR cache's), with the IR
+    cache's own variables cleared: each arm sets them."""
+    env = speed.child_env()
+    for k in ("ALSEM_IR_CACHE", "ALSEM_IR_CACHE_DIR", "ALSEM_IR_CACHE_REPORT"):
+        env.pop(k, None)
+    env["RUST_LOG"] = "off"
+    return env
+
+
+def arm_env(arm, out, tag, warm_root):
+    """(env, report path or None, root or None) for one process of `arm`."""
+    env = clean_env()
+    if arm == "master":
+        return env, None, None
+    rep = os.path.join(out, "reports", f"{tag}.jsonl")
+    os.makedirs(os.path.dirname(rep), exist_ok=True)
+    if os.path.exists(rep):
+        os.remove(rep)
+    env["ALSEM_IR_CACHE_REPORT"] = rep
+    if arm == "head-off":
+        env["ALSEM_IR_CACHE"] = "off"
+        root = None
+    elif arm == "head-cold":
+        env["ALSEM_IR_CACHE"] = "on"
+        root = tempfile.mkdtemp(prefix=f"cold-{tag}-", dir=os.path.join(out, "roots"))
+        env["ALSEM_IR_CACHE_DIR"] = root
+    else:
+        env["ALSEM_IR_CACHE"] = "on"
+        root = warm_root
+        env["ALSEM_IR_CACHE_DIR"] = root
+    return env, rep, root
+
+
+def entries(root):
+    out = []
+    for kd in sorted(os.listdir(root)) if root and os.path.isdir(root) else []:
+        p = os.path.join(root, kd)
+        if os.path.isdir(p):
+            out += [os.path.join(p, n) for n in os.listdir(p) if n.endswith(".bin")]
+    return out
+
+
+def check_report(arm, rep, root, eligible_packages):
+    """Spec Acceptance 2 over one process's report lines; returns (ok, why, end counters)."""
+    if not os.path.exists(rep):
+        return False, "no report", None
+    with open(rep) as f:
+        lines = [json.loads(ln) for ln in f if ln.strip()]
+    starts = {ln["pid"] for ln in lines if ln.get("event") == "start"}
+    ends = [ln for ln in lines if ln.get("event") == "end"]
+    if not starts or starts - {ln["pid"] for ln in ends}:
+        return False, f"a start without an end: {lines}", None
+    c = {}
+    for e in ends:
+        for k, v in e["counters"].items():
+            c[k] = c.get(k, 0) + v
+    if c.get("roundtrip_failed", 0) > 0:
+        return False, "roundtrip_failed > 0", c
+    if arm == "head-off":
+        ok = (c["disk_hits"] == 0 and c["published_packages"] == 0
+              and c["skipped_off"] == c["seam_files"] and c["seam_files"] > 0)
+    elif arm == "head-cold":
+        ok = (c["eligible_files"] > 0 and c["disk_hits"] == 0
+              and (eligible_packages is None or c["published_packages"] == eligible_packages)
+              and len(entries(root)) == c["published_packages"] > 0)
+    else:
+        ok = (c["eligible_files"] > 0 and c["disk_hits"] > 0 and c["refused"] == 0
+              and c["disk_hits"] == c["eligible_files"] - c["skipped_unstored"])
+    return ok, "" if ok else f"counters break the {arm} rule: {c}", c
+
+
+def run_counted(cmd, env, events):
+    """One process under `perf stat`: (instructions, cycles, cpu s, wall s, covered)."""
+    fd, pfile = tempfile.mkstemp(suffix=".perf")
+    os.close(fd)
+    r0 = resource.getrusage(resource.RUSAGE_CHILDREN)
+    t0 = time.monotonic()
+    p = subprocess.run([speed.PERF, "stat", "--no-scale", "-x,", "-o", pfile,
+                        *speed.perf_event_args(events), "--", *cmd],
+                       env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    wall = time.monotonic() - t0
+    r1 = resource.getrusage(resource.RUSAGE_CHILDREN)
+    cpu = (r1.ru_utime - r0.ru_utime) + (r1.ru_stime - r0.ru_stime)
+    with open(pfile) as f:
+        text = f.read()
+    os.remove(pfile)
+    if p.returncode != 0:
+        fail(f"{' '.join(cmd)} exited {p.returncode}: {p.stderr.decode()[-1500:]}")
+    parsed = speed.perf_parse(text, events)
+    if parsed is None:
+        return None, None, cpu, wall, False
+    counts, running = parsed
+    instr = speed.kind_total(counts, "instructions")
+    cycles = speed.kind_total(counts, "cycles")
+    running_s = sum(ns for e, ns in running.items()
+                    if speed.event_kind(e) == "instructions") / 1e9
+    return instr, cycles, cpu, wall, speed.covers(running_s, cpu)
+
+
+def timing(args):
+    repo, ws, out, base_exe, head_exe, record = setup(args)
+    events, why = speed.instr_probe()
+    if not events:
+        fail(f"no instruction count: {why}")
+    speed.INSTR_EVENTS = events
+    record["events"] = list(events)
+    os.makedirs(os.path.join(out, "roots"), exist_ok=True)
+    warm_root = os.path.join(out, "roots", "warm")
+    cmd = {"master": [base_exe, "analyze", ws]}
+    for a in ("head-off", "head-cold", "head-warm"):
+        cmd[a] = [head_exe, "analyze", ws]
+    # A first-ever run on a host: ENG-113's text cache, then the IR root, then warm
+    # (spec Acceptance): untimed.
+    log("untimed warm-up: master once, head-warm twice (text cache, IR root)")
+    subprocess.run(cmd["master"], env=clean_env(), stdout=subprocess.DEVNULL, check=True)
+    for i in range(2):
+        env, rep, _ = arm_env("head-warm", out, f"warmup-{i}", warm_root)
+        subprocess.run(cmd["head-warm"], env=env, stdout=subprocess.DEVNULL, check=True)
+    eligible_packages = len(entries(warm_root))
+    record["eligible_packages"] = eligible_packages
+    record["key_folders"] = sorted(os.listdir(warm_root))
+    log(f"warm root: {eligible_packages} entries in {record['key_folders']}")
+    samples, rounds, failures = [], [], []
+
+    def one_round(rnd):
+        stalls = speed.Stalls()
+        s0 = speed.host_suspended()
+        order = ARMS[rnd % 4:] + ARMS[:rnd % 4]
+        got = {}
+        for arm in order:
+            for attempt in range(3):
+                tag = f"r{rnd}-{arm}-{attempt}"
+                env, rep, root = arm_env(arm, out, tag, warm_root)
+                instr, cycles, cpu, wall, covered = run_counted(cmd[arm], env, events)
+                rec = dict(round=rnd, arm=arm, attempt=attempt, instr=instr, cycles=cycles,
+                           cpu=cpu, wall=wall, covered=covered)
+                if rep:
+                    ok, why, counters = check_report(arm, rep, root, eligible_packages)
+                    rec.update(report_ok=ok, report_why=why, counters=counters)
+                    if not ok:
+                        failures.append(f"{tag}: {why}")
+                if arm == "head-cold" and root:
+                    rec["cold_root_bytes"] = sum(os.path.getsize(e) for e in entries(root))
+                    shutil.rmtree(root, ignore_errors=True)
+                samples.append(rec)
+                log(f"  r{rnd} {arm:<9} instr {instr or 0:>16,} cpu {cpu:7.2f} s "
+                    f"wall {wall:7.2f} s{'' if covered else '  NOT COVERED: repeated'}")
+                if instr and covered:
+                    got[arm] = instr
+                    break
+            else:
+                fail(f"r{rnd} {arm}: no covered count in 3 attempts")
+        share = stalls.share()
+        s1 = speed.host_suspended()
+        slept = (s1 or 0) - (s0 or 0) >= speed.SUSPEND_MIN_S
+        void = slept or (share is not None and share > STALL_LIMIT)
+        ratios = {a: got[a] / got["master"] for a in LIMITS}
+        rounds.append(dict(round=rnd, ratios=ratios, stall_share=share, suspended=slept,
+                           void=void))
+        log(f"r{rnd}: " + ", ".join(f"{a} x{r:.4f}" for a, r in ratios.items())
+            + f"  stall {share if share is None else round(share, 1)} %"
+            + ("  VOID (repeated)" if void else ""))
+        return not void
+
+    rnd, good = 0, 0
+    target = args.rounds
+    while True:
+        rnd += 1
+        if one_round(rnd):
+            good += 1
+        if good < target:
+            if rnd > 3 * target:
+                fail("too many void rounds")
+            continue
+        valid = [r for r in rounds if not r["void"]]
+        med = {a: statistics.median(r["ratios"][a] for r in valid) for a in LIMITS}
+        near = [a for a in LIMITS if abs(med[a] - LIMITS[a]) <= 0.01]
+        if near and target == args.rounds:
+            log(f"median within 0.01 of its limit ({', '.join(near)}): {args.rounds} more rounds")
+            target = 2 * args.rounds
+            continue
+        break
+    verdict = {a: dict(median=med[a], limit=LIMITS[a], passed=med[a] <= LIMITS[a])
+               for a in LIMITS}
+    passed = all(v["passed"] for v in verdict.values()) and not failures
+    record.update(rounds=rounds, samples=samples, verdict=verdict,
+                  coverage_failures=failures, passed=passed,
+                  workspace_sha_after=git(ws, "rev-parse", "HEAD"),
+                  alpackages_sha256_after=alpackages_sha256(ws))
+    if record["alpackages_sha256_after"] != record["alpackages_sha256"]:
+        passed = record["passed"] = False
+        failures.append("the workspace's .alpackages moved: VOID")
+    with open(os.path.join(out, "timing.json"), "w") as f:
+        json.dump(record, f, indent=1)
+    for a, v in verdict.items():
+        log(f"{a}: median x{v['median']:.4f} over {len([r for r in rounds if not r['void']])} "
+            f"rounds (limit {v['limit']}): {'PASS' if v['passed'] else 'FAIL'}")
+    for line in failures:
+        log(f"coverage: {line}")
+    log(("PASS" if passed else "FAIL") + f" (record {os.path.join(out, 'timing.json')})")
+    return 0 if passed else 1
+
+
+IDENTITY = [
+    ("fingerprint", "alsem", lambda ws, f: ["fingerprint", ws, "--format", "json",
+                                            "--deterministic", "--out", f], False),
+    ("analyze-primary", "alsem", lambda ws, f: ["analyze", ws, "--format", "json",
+                                                "--deterministic"], True),
+    ("analyze-all", "alsem", lambda ws, f: ["analyze", ws, "--format", "json",
+                                            "--deterministic", "--scope", "all"], True),
+    ("callgraph-stats", "aldump", lambda ws, f: ["--program-call-graph-stats", ws], True),
+    ("explain", "alsem", lambda ws, f: ["explain", ws, "--routine", TELEMETRY,
+                                        "--format", "json"], True),
+    ("query-effects", "alsem", lambda ws, f: ["query", "effects", ws, "--routine",
+                                              TELEMETRY.replace("::", "."),
+                                              "--deterministic"], True),
+    ("digest", "alsem", lambda ws, f: ["digest", ws, "--routine", TELEMETRY,
+                                       "--deterministic"], True),
+]
+
+
+def identity(args):
+    repo, ws, out, base_exe, head_exe, record = setup(args)
+    os.makedirs(os.path.join(out, "roots"), exist_ok=True)
+    warm_root = os.path.join(out, "roots", "warm")
+    bins = {"master": os.path.dirname(base_exe), "head": os.path.dirname(head_exe)}
+    # The warm root, filled untimed (two runs: the text cache, then the IR root).
+    for i in range(2):
+        env, _, _ = arm_env("head-warm", out, f"fill-{i}", warm_root)
+        subprocess.run([head_exe, "analyze", ws], env=env, stdout=subprocess.DEVNULL,
+                       check=True)
+    eligible_packages = len(entries(warm_root))
+    failures = []
+
+    def run_arm(arm, run):
+        d = os.path.join(out, f"{arm}-{run}")
+        os.makedirs(d, exist_ok=True)
+        side = "master" if arm == "master" else "head"
+        for name, binary, argv, to_stdout in IDENTITY:
+            f = os.path.join(d, f"{name}.json")
+            tag = f"id-{arm}-{run}-{name}"
+            env, rep, root = arm_env(arm, out, tag, warm_root)
+            cmd = [os.path.join(bins[side], binary), *argv(ws, f)]
+            with open(f if to_stdout else os.path.join(d, f"{name}.stdout"), "w") as so, \
+                    open(os.path.join(d, f"{name}.stderr"), "w") as se:
+                rc = subprocess.run(cmd, env=env, stdout=so, stderr=se).returncode
+            if rc not in (0, 1):
+                fail(f"{tag}: exit {rc} (stderr {os.path.join(d, name + '.stderr')})")
+            if rep:
+                ok, why, _ = check_report(arm, rep, root, eligible_packages)
+                if not ok:
+                    failures.append(f"{tag}: {why}")
+            if arm == "head-cold" and root:
+                shutil.rmtree(root, ignore_errors=True)
+            log(f"  {arm} run {run}: {name} (exit {rc})")
+        return d
+
+    dirs = {arm: run_arm(arm, 1) for arm in ARMS}
+    differs, nondeterministic = [], []
+    for name, *_ in IDENTITY:
+        digests = {arm: sha256_file(os.path.join(d, f"{name}.json")) for arm, d in dirs.items()}
+        if len(set(digests.values())) > 1:
+            differs.append((name, digests))
+    if differs:
+        again = run_arm("master", 2)
+        for name, digests in differs:
+            if sha256_file(os.path.join(again, f"{name}.json")) != digests["master"]:
+                nondeterministic.append(name)
+    real = [(n, d) for n, d in differs if n not in nondeterministic]
+    passed = not real and not failures
+    record.update(files={n: {a: sha256_file(os.path.join(d, f"{n}.json"))
+                             for a, d in dirs.items()} for n, *_ in IDENTITY},
+                  differs=[n for n, _ in real], nondeterministic=nondeterministic,
+                  coverage_failures=failures, passed=passed,
+                  eligible_packages=eligible_packages,
+                  key_folders=sorted(os.listdir(warm_root)),
+                  alpackages_sha256_after=alpackages_sha256(ws))
+    if record["alpackages_sha256_after"] != record["alpackages_sha256"]:
+        passed = record["passed"] = False
+    with open(os.path.join(out, "identity.json"), "w") as f:
+        json.dump(record, f, indent=1)
+    for n in nondeterministic:
+        log(f"nondeterministic (differs between two master runs; left out, to file): {n}")
+    for n, d in real:
+        log(f"DIFFERS across arms: {n}: {d}")
+    for line in failures:
+        log(f"coverage: {line}")
+    log(("PASS" if passed else "FAIL") + f": {len(IDENTITY) - len(nondeterministic)} outputs "
+        f"compared across {', '.join(ARMS)} (record {os.path.join(out, 'identity.json')})")
+    return 0 if passed else 1
+
+
+def concurrent(args):
+    """Four (or --n) cold one-shots on one fresh root at once: peak RSS each, the most
+    temp bytes seen, published entries against processes' publishes (write
+    amplification), publish_skipped_busy, the final key folder size."""
+    repo, ws, out, base_exe, head_exe, record = setup(args)
+    os.makedirs(os.path.join(out, "roots"), exist_ok=True)
+    root = tempfile.mkdtemp(prefix="concurrent-", dir=os.path.join(out, "roots"))
+    procs = []
+    for i in range(args.n):
+        env = clean_env()
+        rep = os.path.join(out, f"concurrent-{i}.jsonl")
+        env.update(ALSEM_IR_CACHE="on", ALSEM_IR_CACHE_DIR=root, ALSEM_IR_CACHE_REPORT=rep)
+        procs.append((subprocess.Popen([head_exe, "analyze", ws], env=env,
+                                       stdout=subprocess.DEVNULL), rep))
+    peak_tmp, rss = 0, {}
+    while len(rss) < len(procs):
+        tmp = 0
+        for dirpath, _, names in os.walk(root):
+            for n in names:
+                if n.endswith(".tmp"):
+                    try:
+                        tmp += os.path.getsize(os.path.join(dirpath, n))
+                    except OSError:
+                        pass
+        peak_tmp = max(peak_tmp, tmp)
+        for p, _ in procs:
+            if p.pid not in rss:
+                pid, status, ru = os.wait4(p.pid, os.WNOHANG)
+                if pid:
+                    p.returncode = os.waitstatus_to_exitcode(status)
+                    rss[p.pid] = ru.ru_maxrss  # KiB on Linux
+        time.sleep(0.05)
+    counters = []
+    for p, rep in procs:
+        if p.returncode != 0:
+            fail(f"a concurrent run exited {p.returncode}")
+        ok, why, c = check_report("head-warm", rep, root, None)
+        counters.append(c)
+    published = sum(c["published_packages"] for c in counters)
+    busy = sum(c["publish_skipped_busy"] for c in counters)
+    final = entries(root)
+    key_bytes = sum(os.path.getsize(e) for e in final)
+    record.update(n=args.n, peak_rss_kib=sorted(rss.values()), peak_temp_bytes=peak_tmp,
+                  published_by_processes=published, entries=len(final),
+                  write_amplification=published / len(final) if final else None,
+                  publish_skipped_busy=busy, key_folder_bytes=key_bytes, counters=counters)
+    with open(os.path.join(out, "concurrent.json"), "w") as f:
+        json.dump(record, f, indent=1)
+    log(f"{args.n} cold one-shots on one root: peak RSS {sorted(rss.values())} KiB, peak temp "
+        f"{peak_tmp / 1048576:.1f} MiB, {published} publishes for {len(final)} entries "
+        f"(x{record['write_amplification']}), busy skips {busy}, key folder "
+        f"{key_bytes / 1048576:.1f} MiB")
+    return 0
+
+
+def census(args):
+    """`aldump --snapshot-memory <ws>` under /usr/bin/time -v: master against head with
+    the IR cache warm (the retained memory after a decode against after a parse)."""
+    repo, ws, out, base_exe, head_exe, record = setup(args)
+    os.makedirs(os.path.join(out, "roots"), exist_ok=True)
+    warm_root = os.path.join(out, "roots", "warm")
+    for i in range(2):
+        env, _, _ = arm_env("head-warm", out, f"fill-{i}", warm_root)
+        subprocess.run([head_exe, "analyze", ws], env=env, stdout=subprocess.DEVNULL,
+                       check=True)
+    res = {}
+    for arm, exe in (("master", base_exe), ("head-warm", head_exe)):
+        env, rep, _ = arm_env(arm, out, f"census-{arm}", warm_root)
+        aldump = os.path.join(os.path.dirname(exe), "aldump")
+        r = subprocess.run(["/usr/bin/time", "-v", aldump, "--snapshot-memory", ws],
+                           env=env, capture_output=True, text=True)
+        with open(os.path.join(out, f"census-{arm}.txt"), "w") as f:
+            f.write(r.stdout + "\n--- stderr ---\n" + r.stderr)
+        maxrss = next((int(ln.split(":")[1]) for ln in r.stderr.splitlines()
+                       if "Maximum resident set size" in ln), None)
+        res[arm] = dict(exit=r.returncode, max_rss_kib=maxrss)
+        if rep:
+            res[arm]["report_ok"] = check_report(arm, rep, warm_root, None)[0]
+        log(f"{arm}: aldump --snapshot-memory exit {r.returncode}, max RSS {maxrss} KiB")
+    record["census"] = res
+    with open(os.path.join(out, "census.json"), "w") as f:
+        json.dump(record, f, indent=1)
+    return 0
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("mode", choices=["timing", "identity", "concurrent", "census"])
+    ap.add_argument("ws")
+    ap.add_argument("--rounds", type=int, default=6)
+    ap.add_argument("--n", type=int, default=4)
+    ap.add_argument("--out")
+    args = ap.parse_args()
+    return {"timing": timing, "identity": identity, "concurrent": concurrent,
+            "census": census}[args.mode](args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
