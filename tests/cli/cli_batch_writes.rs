@@ -1371,16 +1371,18 @@ fn batch_trace_never_takes_a_shard_output() {
 }
 
 /// TLS-109 (review r4): a worker's trace never takes another worker's
-/// output. Two batches (two workers); worker 0's trace file `T.w0` is a hard
-/// link to `D/manifest.json`, which worker 1's shard job writes later
-/// (worker 0 runs one refused job, worker 1 builds a model first). Traces are
-/// published by the parent after every worker has ended: the shard is
-/// written, `T.w0` refused (a stderr line), the run exits 0.
+/// output. Two batches (two workers, one at a time by the debug seam
+/// `ALSEM_TEST_WORKERS=1`, so worker 0 has exited before worker 1 starts);
+/// worker 0's trace file `T.w0` is a hard link to `D/manifest.json`, which
+/// worker 1's shard job writes. Traces are published by the parent after
+/// every worker has ended: the shard is written, `T.w0` refused (a stderr
+/// line), the run exits 0.
 ///
-/// Discrimination (2026-11-21, r5): a worker publishing its own trace when
-/// it ends (`perf_trace::publish_file(claim::open_trace)` at the end of
-/// `run_worker`): fails (exit 1, not 0: worker 0's trace took the file and
-/// the shard was refused); restored, passes.
+/// Discrimination (2026-11-21, r6, with the seam): a worker publishing its
+/// own trace when it ends (`perf_trace::publish_file(claim::open_trace)` at
+/// the end of `run_worker`): fails (exit 1, not 0: worker 0's trace took the
+/// file and the shard was refused); restored, passes.
+#[cfg(debug_assertions)]
 #[test]
 fn batch_worker_trace_never_takes_another_workers_output() {
     let ws = ws_a();
@@ -1401,7 +1403,10 @@ fn batch_worker_trace_never_takes_another_workers_output() {
         d.path(),
         &doc,
         None,
-        &[("ALSEM_TRACE_FILE", trace.to_str().unwrap())],
+        &[
+            ("ALSEM_TRACE_FILE", trace.to_str().unwrap()),
+            ("ALSEM_TEST_WORKERS", "1"),
+        ],
         None,
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
@@ -1414,6 +1419,243 @@ fn batch_worker_trace_never_takes_another_workers_output() {
     assert!(shard.starts_with('{'), "the shard, not a trace: {shard}");
     let parent = std::fs::read_to_string(&trace).unwrap();
     assert!(parent.starts_with('['), "the parent's trace is published");
+}
+
+/// TLS-109 (r6): a worker's trace file name is kept exactly, also one that
+/// is not UTF-8: `T\xff.json.w0` and `.w1` are published.
+///
+/// Discrimination (2026-11-21, r6): the spool record written with
+/// `to_string_lossy` (as before): fails (no `T\xff.json.w0`: it went to
+/// `T\u{fffd}.json.w0`); restored, passes.
+#[cfg(unix)]
+#[test]
+fn batch_publishes_a_non_utf8_worker_trace_name() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+    let ws = ws_a();
+    let d = tempfile::tempdir().unwrap();
+    let trace = d.path().join(OsStr::from_bytes(b"t\xff.json"));
+    let one =
+        || json!({ "jobs": [job(&["events", "fanout", &ws, "--format", "bad"], None, None)] });
+    let manifest = d.path().join("m.json");
+    std::fs::write(&manifest, json!({ "batches": [one(), one()] }).to_string()).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_alsem"))
+        .arg("batch")
+        .arg(&manifest)
+        .env("RUST_LOG", "off")
+        .env("ALSEM_TRACE", "1")
+        .env("ALSEM_TRACE_FILE", &trace)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(0), "{stderr}");
+    for w in [b".w0", b".w1"] {
+        let mut name = b"t\xff.json".to_vec();
+        name.extend_from_slice(w);
+        let path = d.path().join(OsStr::from_bytes(&name));
+        let text = std::fs::read_to_string(&path).unwrap_or_default();
+        assert!(text.starts_with('['), "{}: {stderr}", path.display());
+    }
+}
+
+/// TLS-109 (r6, review r5): a path whose name lookup fails for a reason
+/// other than absence (here a folder it may not search) is no missing file:
+/// its identity cannot be read, so the run is refused (exit 3) before any
+/// job, instead of being taken for a file not yet created.
+///
+/// Discrimination (2026-11-21, r6): `resolve_hops` treating every lookup
+/// failure as absence (the `Err(_) if file_id(base).is_some()` arm deleted):
+/// fails (exit 0, not 3: the stream's own open failed later); restored,
+/// passes.
+#[cfg(unix)]
+#[test]
+fn batch_refuses_a_path_it_cannot_identify() {
+    use std::os::unix::fs::PermissionsExt;
+    let ws = ws_a();
+    let d = tempfile::tempdir().unwrap();
+    let locked = d.path().join("locked");
+    std::fs::create_dir(&locked).unwrap();
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let (out, _) = run_manifest(
+        d.path(),
+        &[job(
+            &["events", "fanout", &ws, "--format", "bad"],
+            Some(&locked.join("x.out")),
+            None,
+        )],
+        None,
+        &[],
+        None,
+    );
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(3), "{stderr}");
+    assert!(stderr.contains("cannot read the identity"), "{stderr}");
+}
+
+/// TLS-109 (r6): the user's git excludes file, which test discovery asks git
+/// about, is read: a stream on it is refused. With no `core.excludesFile` it
+/// is git's default `$XDG_CONFIG_HOME/git/ignore`.
+///
+/// Discrimination (2026-11-21, r6): discovery not recording it
+/// (`excludes_file` not added to `ignore_files`): fails (exit 0, not 3);
+/// restored, passes.
+#[test]
+fn batch_protects_the_users_git_excludes_file() {
+    let r = project();
+    let ws = r.path().join("ws").to_string_lossy().into_owned();
+    let xdg = tempfile::tempdir().unwrap();
+    std::fs::create_dir(xdg.path().join("git")).unwrap();
+    let ignore = xdg.path().join("git/ignore");
+    std::fs::write(&ignore, "target/\n").unwrap();
+    let global = xdg.path().join("gitconfig");
+    std::fs::write(&global, "").unwrap();
+    let d = tempfile::tempdir().unwrap();
+    let (out, _) = run_manifest(
+        d.path(),
+        &[
+            job(
+                &["tests", &ws, "--part", "roots", "--file", "src/A.al"],
+                None,
+                None,
+            ),
+            job(
+                &["events", "fanout", &ws_a(), "--format", "bad"],
+                Some(&ignore),
+                None,
+            ),
+        ],
+        None,
+        &[
+            ("XDG_CONFIG_HOME", xdg.path().to_str().unwrap()),
+            ("GIT_CONFIG_GLOBAL", global.to_str().unwrap()),
+            ("GIT_CONFIG_NOSYSTEM", "1"),
+        ],
+        None,
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(3), "{stderr}");
+    assert_eq!(std::fs::read_to_string(&ignore).unwrap(), "target/\n");
+}
+
+/// TLS-109 (r6): in a git worktree, whose `.git` is a file, the
+/// `info/exclude` test discovery asks git about is the main repository's
+/// (`git rev-parse --git-common-dir`): a stream on it is refused.
+///
+/// Discrimination (2026-11-21, r6): `git_common_dir` always `top/.git`:
+/// fails (exit 0, not 3); restored, passes.
+#[test]
+fn batch_protects_a_worktrees_git_exclude() {
+    let git = |dir: &Path, args: &[&str]| {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+            .args(args)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?}: {out:?}");
+    };
+    let main = tempfile::tempdir().unwrap();
+    git(main.path(), &["init", "-q"]);
+    git(main.path(), &["commit", "-q", "--allow-empty", "-m", "x"]);
+    let wt = main.path().join("wt");
+    git(
+        main.path(),
+        &["worktree", "add", "-q", wt.to_str().unwrap()],
+    );
+    std::fs::create_dir_all(wt.join("ws/src")).unwrap();
+    std::fs::write(wt.join("ws/app.json"), APP).unwrap();
+    std::fs::write(wt.join("ws/src/A.al"), "codeunit 50100 A { }").unwrap();
+    let exclude = main.path().join(".git/info/exclude");
+    std::fs::create_dir_all(exclude.parent().unwrap()).unwrap();
+    std::fs::write(&exclude, "# kept\n").unwrap();
+    let ws = wt.join("ws").to_string_lossy().into_owned();
+    let d = tempfile::tempdir().unwrap();
+    let (out, _) = run_manifest(
+        d.path(),
+        &[
+            job(
+                &["tests", &ws, "--part", "roots", "--file", "src/A.al"],
+                None,
+                None,
+            ),
+            job(
+                &["events", "fanout", &ws_a(), "--format", "bad"],
+                Some(&exclude),
+                None,
+            ),
+        ],
+        None,
+        &[],
+        None,
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(3), "{stderr}");
+    assert_eq!(std::fs::read_to_string(&exclude).unwrap(), "# kept\n");
+}
+
+/// TLS-109 (r6): a worker killed mid-run (the debug seam
+/// `ALSEM_TEST_WORKER_DIES=1`, after its jobs, before its lines) leaves its
+/// spool, and the parent still publishes it: `T.w1` holds a trace.
+///
+/// Discrimination (2026-11-21, r6): the parent publishing no worker's spool
+/// (`publish_spools` returning at once): fails (no `T.w1`); restored,
+/// passes.
+#[cfg(debug_assertions)]
+#[test]
+fn batch_publishes_a_killed_workers_trace() {
+    let ws = ws_a();
+    let d = tempfile::tempdir().unwrap();
+    let trace = d.path().join("t.json");
+    let one =
+        || json!({ "jobs": [job(&["events", "fanout", &ws, "--format", "bad"], None, None)] });
+    let (out, _) = run_manifest_doc(
+        d.path(),
+        &json!({ "batches": [one(), one()] }),
+        None,
+        &[
+            ("ALSEM_TRACE_FILE", trace.to_str().unwrap()),
+            ("ALSEM_TEST_WORKER_DIES", "1"),
+        ],
+        None,
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "worker 1 died: {stderr}");
+    let w1 = std::fs::read_to_string(d.path().join("t.json.w1")).unwrap_or_default();
+    assert!(w1.starts_with('['), "the killed worker's trace: {stderr}");
+}
+
+/// TLS-109 (r6): `ALSEM_TRACE_EXIT_AFTER` ends a batch run early; it
+/// publishes the trace first, as the normal end does.
+///
+/// Discrimination (2026-11-21, r6): the exit hook not set
+/// (`set_exit_hook(publish_traces)` deleted): fails (no trace file);
+/// restored, passes.
+#[test]
+fn batch_trace_exit_after_publishes_the_trace() {
+    let ws = ws_a();
+    let d = tempfile::tempdir().unwrap();
+    let trace = d.path().join("t.json");
+    let (out, _) = run_manifest(
+        d.path(),
+        &[job(
+            &["events", "fanout", &ws, "--format", "bad"],
+            None,
+            None,
+        )],
+        None,
+        &[
+            ("ALSEM_TRACE_FILE", trace.to_str().unwrap()),
+            ("ALSEM_TRACE_EXIT_AFTER", "job.0.failed"),
+        ],
+        None,
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(0), "{stderr}");
+    let text = std::fs::read_to_string(&trace).unwrap_or_default();
+    assert!(text.contains("job.0.failed"), "published: {stderr}");
 }
 
 /// TLS-109 (review r4): a trace file may not truncate a refused job's named
