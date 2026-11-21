@@ -197,6 +197,21 @@ walkdir = "2"
 # crate in the tree.
 sha2 = "0.11"
 
+# TLS-117's native probe (`examples/tls117_probe.rs`) only: the calls that find the running
+# image's file, its volume and a folder's owner and ACL. A dev-dependency, so the shipped
+# binaries' windows-sys features do not change until the product code needs them.
+[target.'cfg(windows)'.dev-dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Storage_FileSystem",
+    "Win32_System_LibraryLoader",
+    "Win32_System_ProcessStatus",
+    "Win32_System_SystemServices",
+    "Win32_System_Threading",
+] }
+
 [[bin]]
 name = "telemetry-spike"
 path = "tools/telemetry-spike/main.rs"
