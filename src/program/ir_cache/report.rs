@@ -50,6 +50,14 @@ impl IrCache {
         if self.started.swap(true, Ordering::SeqCst) {
             return;
         }
+        if let Some(w) = &self.bad_switch {
+            log::warn!("{w}");
+        }
+        // No sink: nothing to format (sol r1: reading the command line here once panicked on
+        // a non-UTF-8 argument, cache off or not).
+        if self.report.is_none() {
+            return;
+        }
         let pid = std::process::id();
         if self.enabled && key.is_none() {
             let why = if cfg!(target_os = "linux") {
@@ -61,7 +69,10 @@ impl IrCache {
             append(self, &serde_json::json!({"pid": pid, "ir_cache": why}));
             return;
         }
-        let command: Vec<String> = std::env::args().take(4).collect();
+        let command: Vec<String> = std::env::args_os()
+            .take(4)
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
         append(
             self,
             &serde_json::json!({
@@ -85,8 +96,10 @@ pub fn report_end() {
     if !c.started.load(Ordering::SeqCst) || c.ended.swap(true, Ordering::SeqCst) {
         return;
     }
+    // Not while unwinding: a panic in `Drop` during an unwind aborts the process (Fable r1),
+    // and the counts of an interrupted run need not balance.
     debug_assert!(
-        c.counters.balanced(),
+        std::thread::panicking() || c.counters.balanced(),
         "IR cache counters do not balance: {}",
         c.counters.snapshot()
     );

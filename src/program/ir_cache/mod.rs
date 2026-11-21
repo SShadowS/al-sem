@@ -47,8 +47,32 @@ pub struct IrCache {
     /// The report's last line for this process is written (`end`, or `no key`).
     ended: AtomicBool,
     /// Set at the first `last-used` publish of this process.
+    #[cfg(unix)]
     touched: AtomicBool,
     warned: [AtomicBool; 4],
+    /// An `ALSEM_IR_CACHE` value that is neither `on` nor `off`, warned at the first use (the
+    /// logger is not up yet when a `main` installs the cache).
+    bad_switch: Option<String>,
+}
+
+/// `ALSEM_IR_CACHE`: `on` (the default, also when unset or empty) or `off`, in any case.
+/// Anything else is off, with the warning to give (sol/Fable r1: a typo never turns the cache
+/// on).
+pub(crate) fn switch(v: Option<&std::ffi::OsStr>) -> (bool, Option<String>) {
+    let Some(v) = v.filter(|v| !v.is_empty()) else {
+        return (true, None);
+    };
+    match v.to_str().map(str::to_ascii_lowercase).as_deref() {
+        Some("on") => (true, None),
+        Some("off") => (false, None),
+        _ => (
+            false,
+            Some(format!(
+                "ALSEM_IR_CACHE={} is neither `on` nor `off`: the IR cache is off",
+                v.to_string_lossy()
+            )),
+        ),
+    }
 }
 
 /// Which one-time warning ([`IrCache::warn_once`]).
@@ -78,8 +102,10 @@ impl IrCache {
             counters: Counters::default(),
             started: AtomicBool::new(false),
             ended: AtomicBool::new(false),
+            #[cfg(unix)]
             touched: AtomicBool::new(false),
             warned: Default::default(),
+            bad_switch: None,
         }
     }
 
@@ -124,15 +150,16 @@ static SUSPENDED: AtomicUsize = AtomicUsize::new(0);
 /// `end` line.
 pub fn install_from_env() -> ReportGuard {
     let var = |k: &str| std::env::var_os(k).filter(|v| !v.is_empty());
-    let enabled = var("ALSEM_IR_CACHE").is_none_or(|v| v != "off");
-    let ir_dir = var("ALSEM_IR_CACHE_DIR").map_or_else(
-        || crate::snapshot::cache::cache_dir().join("ir"),
-        PathBuf::from,
-    );
-    let text_dir = crate::snapshot::cache::cache_dir();
+    let (enabled, bad_switch) = switch(var("ALSEM_IR_CACHE").as_deref());
+    // Paths only: nothing is made here (sol r1). A writer makes `ir/` at its first publish;
+    // a cache-off, batch or dependency-free run makes nothing.
+    let text_dir = crate::snapshot::cache::cache_dir_path();
+    let ir_dir = var("ALSEM_IR_CACHE_DIR").map_or_else(|| text_dir.join("ir"), PathBuf::from);
     let verify = var("ALSEM_IR_CACHE_VERIFY").is_some_and(|v| v == "1");
     let report = var("ALSEM_IR_CACHE_REPORT").map(PathBuf::from);
-    let _ = INSTALLED.set(IrCache::new(enabled, ir_dir, text_dir, verify, report));
+    let mut cache = IrCache::new(enabled, ir_dir, text_dir, verify, report);
+    cache.bad_switch = bad_switch;
+    let _ = INSTALLED.set(cache);
     ReportGuard::new()
 }
 

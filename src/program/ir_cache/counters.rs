@@ -36,6 +36,7 @@ counters!(
     roundtrip_failed,
     publish_skipped_busy,
     fill_text_changed,
+    fill_text_unreadable,
     inproc_reused_packages,
 );
 

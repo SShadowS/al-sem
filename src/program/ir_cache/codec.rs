@@ -41,6 +41,19 @@ pub(crate) mod test_hook {
     use al_syntax::ir::{AlFile, Origin};
 
     pub(crate) const ALIAS_ON_DECODE: &str = "Eng110AliasOnDecode";
+    /// A file whose first object has this name decodes fine in the publish round trip but
+    /// fails to decode on a hit (the seam's decode-failure-under-a-valid-hash path).
+    pub(crate) const FAIL_ON_HIT: &str = "Eng110FailOnHit";
+
+    /// The seam's hit decode, broken for [`FAIL_ON_HIT`] files.
+    pub(crate) fn on_hit(r: anyhow::Result<AlFile>) -> anyhow::Result<AlFile> {
+        match r {
+            Ok(f) if f.objects.first().is_some_and(|o| o.name == FAIL_ON_HIT) => {
+                Err(anyhow::anyhow!("test hook: a decode that fails on a hit"))
+            }
+            r => r,
+        }
+    }
 
     pub(super) fn on_decode(mut f: AlFile) -> AlFile {
         if f.objects.first().is_some_and(|o| o.name == ALIAS_ON_DECODE)

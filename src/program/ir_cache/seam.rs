@@ -6,13 +6,15 @@ use super::counters::Counters;
 use super::envelope::{Diag, MAX_ENTRY, MAX_FILE, Slot, open_envelope, write_envelope};
 use super::key::IrKey;
 use super::{IrCache, Warn};
+use crate::program::dep_summary::LiveTrees;
 use crate::snapshot::cache::{CacheDir, LockKind, TextDigest, check_entry, text_entry_name};
 use crate::snapshot::embedded::SourceFile;
 use crate::snapshot::{AppUnit, ParsedFile};
 use rayon::prelude::*;
 use std::ops::Range;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::Ordering::SeqCst;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 /// Packages with fewer files are parsed, never cached (spec Design 6; step-1 table).
 pub(crate) const SMALL_PACKAGE_MIN_FILES: usize = 8;
@@ -20,13 +22,31 @@ pub(crate) const SMALL_PACKAGE_MIN_FILES: usize = 8;
 /// The soft limit on one key folder: past it, this process publishes nothing more.
 const KEY_FOLDER_LIMIT: u64 = 4 << 30;
 
+/// A tree was just made (parsed or decoded): the bound test's counter (`LiveTrees`), counted
+/// from the tree's creation; the caller's `f` counts its drop.
+fn born(observe: Option<&LiveTrees>) {
+    if let Some(o) = observe {
+        let now = o.live.fetch_add(1, SeqCst) + 1;
+        o.peak.fetch_max(now, SeqCst);
+    }
+}
+
+/// [`crate::snapshot::parse::parse_file`], counted by [`born`].
+fn parse_one(unit: &AppUnit, sf: &SourceFile, observe: Option<&LiveTrees>) -> ParsedFile {
+    let pf = crate::snapshot::parse::parse_file(unit, sf);
+    born(observe);
+    pf
+}
+
 /// `unit`'s files as `f` sees them, in order: decoded from the cache entry of its text digest
 /// when there is a valid one, else parsed (and, on a miss, published). `None`: today's parse.
 /// Call it on [`crate::big_stack::big_stack_pool`]; `f` runs per file inside the `par_iter`,
-/// so a caller that drops each tree in `f` keeps one tree per worker thread.
+/// so a caller that drops each tree in `f` keeps one tree per worker thread. `observe` counts
+/// each tree as it is made (the caller counts its drop).
 pub(crate) fn parse_package<R: Send>(
     unit: &AppUnit,
     cache: Option<&IrCache>,
+    observe: Option<&LiveTrees>,
     f: impl Fn(ParsedFile) -> R + Sync,
 ) -> Vec<R> {
     let Some(source) = unit.source.as_ref() else {
@@ -36,7 +56,7 @@ pub(crate) fn parse_package<R: Send>(
     let parse_all = || -> Vec<R> {
         files
             .par_iter()
-            .map(|sf| f(crate::snapshot::parse::parse_file(unit, sf)))
+            .map(|sf| f(parse_one(unit, sf, observe)))
             .collect()
     };
     let Some(c) = cache else {
@@ -71,10 +91,14 @@ pub(crate) fn parse_package<R: Send>(
     };
     Counters::add(&c.counters.eligible_files, n);
     let name = entry_name(&digest);
+    // A miss charges `parsed_miss`; an entry that is there but refused (unreadable, or its
+    // envelope fails a check) charges `refused`, so a gate sees the repair (sol r1).
+    let mut charge = &c.counters.parsed_miss;
     let stored = match &ir {
         IrDir::Usable(d) => d.subdir(&key.hex(), false).and_then(|kd| {
             kd.read_owned(&name, MAX_ENTRY).unwrap_or_else(|e| {
                 log::warn!("IR cache entry {name} unreadable ({e:#}): refilled");
+                charge = &c.counters.refused;
                 None
             })
         }),
@@ -84,7 +108,7 @@ pub(crate) fn parse_package<R: Send>(
         match open_envelope(&bytes, &key, &digest, n) {
             Ok(slots) => {
                 let refused = AtomicBool::new(false);
-                let out = hit(c, unit, files, &slots, &key, &refused, &f);
+                let out = hit(c, unit, files, &slots, &key, &refused, observe, &f);
                 c.touch(&key);
                 if refused.load(Ordering::Relaxed) {
                     // A defect (spec "Failure cases"): refill, rewriting only changed bytes.
@@ -95,13 +119,16 @@ pub(crate) fn parse_package<R: Send>(
                 return out;
             }
             // Refilled below; `publish` replaces the refused entry under the lock.
-            Err(e) => log::warn!(
-                "IR cache entry {name} of {} refused ({e:#}): refilled",
-                unit.id.name
-            ),
+            Err(e) => {
+                log::warn!(
+                    "IR cache entry {name} of {} refused ({e:#}): refilled",
+                    unit.id.name
+                );
+                charge = &c.counters.refused;
+            }
         }
     }
-    fill(c, unit, &key, &digest, &f)
+    fill(c, unit, &key, &digest, charge, observe, &f)
 }
 
 /// Decode each stored file (a hit), parse the others.
@@ -112,6 +139,7 @@ fn hit<R: Send>(
     slots: &[Option<&[u8]>],
     key: &IrKey,
     refused: &AtomicBool,
+    observe: Option<&LiveTrees>,
     f: &(impl Fn(ParsedFile) -> R + Sync),
 ) -> Vec<R> {
     files
@@ -120,10 +148,14 @@ fn hit<R: Send>(
         .map(|(sf, slot)| {
             let Some(bytes) = slot else {
                 Counters::add(&c.counters.skipped_unstored, 1);
-                return f(crate::snapshot::parse::parse_file(unit, sf));
+                return f(parse_one(unit, sf, observe));
             };
-            match decode_file(bytes) {
+            let decoded = decode_file(bytes);
+            #[cfg(test)]
+            let decoded = super::codec::test_hook::on_hit(decoded);
+            match decoded {
                 Ok(af) => {
+                    born(observe);
                     if c.verify {
                         let fresh = al_syntax::parse(&sf.text);
                         assert!(
@@ -154,7 +186,7 @@ fn hit<R: Send>(
                     );
                     Counters::add(&c.counters.refused, 1);
                     refused.store(true, Ordering::Relaxed);
-                    f(crate::snapshot::parse::parse_file(unit, sf))
+                    f(parse_one(unit, sf, observe))
                 }
             }
         })
@@ -169,27 +201,42 @@ fn fill<R: Send>(
     unit: &AppUnit,
     key: &IrKey,
     digest: &TextDigest,
+    charge: &AtomicU64,
+    observe: Option<&LiveTrees>,
     f: &(impl Fn(ParsedFile) -> R + Sync),
 ) -> Vec<R> {
     let files = &unit.source.as_ref().expect("a package with source").files;
-    Counters::add(&c.counters.parsed_miss, files.len());
-    let Some(owned) = owned_texts(c, unit, digest) else {
-        Counters::add(&c.counters.fill_text_changed, 1);
-        log::warn!(
-            "IR cache: the text cache entry of {} changed since it was mapped: parsed, nothing \
-             published",
-            unit.id.name
-        );
-        return files
-            .par_iter()
-            .map(|sf| f(crate::snapshot::parse::parse_file(unit, sf)))
-            .collect();
+    Counters::add(charge, files.len());
+    let owned = match owned_texts(c, unit, digest) {
+        Ok(owned) => owned,
+        Err(skip) => {
+            let (counter, why) = match skip {
+                FillSkip::Changed => (
+                    &c.counters.fill_text_changed,
+                    "changed since it was mapped".to_string(),
+                ),
+                FillSkip::Unreadable(e) => (
+                    &c.counters.fill_text_unreadable,
+                    format!("cannot be read ({e})"),
+                ),
+            };
+            Counters::add(counter, 1);
+            log::warn!(
+                "IR cache: the text cache entry of {} {why}: parsed, nothing published",
+                unit.id.name
+            );
+            return files
+                .par_iter()
+                .map(|sf| f(parse_one(unit, sf, observe)))
+                .collect();
+        }
     };
     let (out, slots): (Vec<R>, Vec<Slot>) = files
         .par_iter()
         .zip(owned.ranges.par_iter())
         .map(|(sf, r)| {
             let af = al_syntax::parse(owned.text(r));
+            born(observe);
             let slot = encode_slot(c, unit, sf, &af);
             let pf = ParsedFile {
                 virtual_path: sf.virtual_path.clone(),
@@ -208,7 +255,7 @@ fn fill<R: Send>(
 /// A refill's slots: every file parsed again from the owned text (no consumer sees them).
 fn fresh_slots(c: &IrCache, unit: &AppUnit, digest: &TextDigest) -> Option<Vec<Slot>> {
     let files = &unit.source.as_ref()?.files;
-    let owned = owned_texts(c, unit, digest)?;
+    let owned = owned_texts(c, unit, digest).ok()?;
     Some(
         files
             .par_iter()
@@ -253,32 +300,56 @@ impl Owned {
     }
 }
 
+/// Why a fill parses the mapped text and publishes nothing.
+enum FillSkip {
+    /// The entry no longer carries the digest, or no longer lists the unit's files.
+    Changed,
+    /// The text cache directory or entry cannot be read (not private, gone, over the cap).
+    Unreadable(String),
+}
+
 /// The ENG-113 entry of `unit`, read owned and checked by `check_entry`, when it still
-/// carries `digest` and lists exactly the unit's files in order; else `None`.
-fn owned_texts(c: &IrCache, unit: &AppUnit, digest: &TextDigest) -> Option<Owned> {
-    let source = unit.source.as_ref()?;
-    let d = CacheDir::open(c.text_dir.as_path())?;
-    let bytes = d
-        .read_owned(&text_entry_name(&source.content_hash), MAX_ENTRY)
-        .ok()??;
-    let (got, index) = check_entry(&bytes, &source.content_hash).ok()?;
+/// carries `digest` and lists exactly the unit's files in order.
+fn owned_texts(c: &IrCache, unit: &AppUnit, digest: &TextDigest) -> Result<Owned, FillSkip> {
+    let source = unit.source.as_ref().ok_or(FillSkip::Changed)?;
+    let d = CacheDir::open(c.text_dir.as_path()).ok_or_else(|| {
+        FillSkip::Unreadable(format!(
+            "{} is not a private directory",
+            c.text_dir.display()
+        ))
+    })?;
+    let bytes = match d.read_owned(&text_entry_name(&source.content_hash), MAX_ENTRY) {
+        Ok(Some(b)) => b,
+        Ok(None) => return Err(FillSkip::Unreadable("the entry is gone".into())),
+        Err(e) => return Err(FillSkip::Unreadable(format!("{e:#}"))),
+    };
+    let (got, index) = check_entry(&bytes, &source.content_hash).map_err(|_| FillSkip::Changed)?;
     if &got != digest || index.len() != source.files.len() {
-        return None;
+        return Err(FillSkip::Changed);
     }
     let mut ranges = Vec::with_capacity(index.len());
     for ((path, r), sf) in index.into_iter().zip(source.files.iter()) {
         if path != sf.virtual_path || std::str::from_utf8(&bytes[r.clone()]).is_err() {
-            return None;
+            return Err(FillSkip::Changed);
         }
         ranges.push(r);
     }
-    Some(Owned { bytes, ranges })
+    Ok(Owned { bytes, ranges })
 }
 
-/// Publish `slots` as the entry of `digest` (spec Design 9): the key folder's lock shared and
-/// the entry's lock, both without waiting (busy: another process publishes, skip). Under the
-/// locks the entry is read again: a valid one is kept (another process published it), unless
-/// this is a refill (`old`, the stored bytes a decode refused) whose new bytes differ.
+/// The lock of key folder `<key hex>`: a file in `ir/` beside the folder, never inside it and
+/// never removed, so removing a folder never unlinks a held lock (Fable r1, sol r1).
+/// Publishers and `last-used` writers hold it shared, the prune exclusive.
+pub(crate) fn key_lock_name(key_hex: &str) -> String {
+    format!("{key_hex}.lock")
+}
+
+/// Publish `slots` as the entry of `digest` (spec Design 9): the key folder's lock (in `ir/`)
+/// shared and the entry's lock, both without waiting (busy: another process publishes or
+/// prunes, skip). Under the locks the entry is read again: a valid one is kept (another
+/// process published it), unless this is a refill (`old`, the stored bytes a decode refused)
+/// whose new bytes differ. The envelope streams into the temp file (one package's slots and
+/// the writer's buffer in memory, not another whole copy).
 fn publish(c: &IrCache, key: &IrKey, digest: &TextDigest, slots: &[Slot], old: Option<&[u8]>) {
     let IrDir::Usable(ir) = c.open_ir(true) else {
         c.warn_once(
@@ -290,35 +361,42 @@ fn publish(c: &IrCache, key: &IrKey, digest: &TextDigest, slots: &[Slot], old: O
         );
         return;
     };
-    let Some(kd) = ir.subdir(&key.hex(), true) else {
+    let busy = || Counters::add(&c.counters.publish_skipped_busy, 1);
+    let key_hex = key.hex();
+    let Some(_key_lock) = ir.lock(&key_lock_name(&key_hex), LockKind::SharedNow) else {
+        return busy();
+    };
+    let Some(kd) = ir.subdir(&key_hex, true) else {
         c.warn_once(
             Warn::Unwritable,
             &format!("IR cache key folder under {} unusable", c.ir_dir.display()),
         );
         return;
     };
-    let busy = || Counters::add(&c.counters.publish_skipped_busy, 1);
-    let Some(_folder) = kd.lock("folder.lock", LockKind::SharedNow) else {
-        return busy();
-    };
     let name = entry_name(digest);
     let Some(_entry) = kd.lock(&format!("{}.lock", hex(digest)), LockKind::ExclusiveNow) else {
         return busy();
     };
-    let mut buf = Vec::new();
     let diag = Diag {
         grammar_commit: al_syntax::language::GRAMMAR_COMMIT,
         version: env!("CARGO_PKG_VERSION"),
     };
-    if let Err(e) = write_envelope(&mut buf, key, digest, &diag, slots) {
-        log::warn!("IR cache entry {name} not written ({e:#})");
-        return;
-    }
+    // A refill's new bytes, built only on that (defect) path to compare with the old ones.
+    let mut refill_bytes = None;
     let replace = match kd.read_owned(&name, MAX_ENTRY) {
-        Ok(Some(theirs)) if open_envelope(&theirs, key, digest, slots.len()).is_ok() => match old {
-            Some(old) if old == theirs.as_slice() && theirs != buf => true,
-            _ => return,
-        },
+        Ok(Some(theirs)) if open_envelope(&theirs, key, digest, slots.len()).is_ok() => {
+            // A valid entry: another process published it, or (a refill) the one we refused.
+            let Some(old) = old else { return };
+            if old != theirs.as_slice() {
+                return;
+            }
+            let mut buf = Vec::new();
+            if write_envelope(&mut buf, key, digest, &diag, slots).is_err() || buf == theirs {
+                return;
+            }
+            refill_bytes = Some(buf);
+            true
+        }
         Ok(None) => false,
         _ => true,
     };
@@ -332,7 +410,11 @@ fn publish(c: &IrCache, key: &IrKey, digest: &TextDigest, slots: &[Slot], old: O
         );
         return;
     }
-    match kd.write(&name, replace, |out| Ok(out.write_all(&buf)?)) {
+    let written = kd.write(&name, replace, |out| match &refill_bytes {
+        Some(buf) => Ok(out.write_all(buf)?),
+        None => write_envelope(out, key, digest, &diag, slots),
+    });
+    match written {
         Ok(()) => {
             Counters::add(&c.counters.published_packages, 1);
             c.touch(key);
@@ -401,7 +483,12 @@ impl IrCache {
                 return;
             };
             let now = std::time::SystemTime::now();
-            if let Some(kd) = ir.subdir(&key.hex(), false) {
+            let key_hex = key.hex();
+            // Under the key folder's lock (shared): a prune holding it exclusive is removing
+            // the folder, and this `last-used` would only land in a folder going away.
+            if let Some(_held) = ir.lock(&key_lock_name(&key_hex), LockKind::SharedNow)
+                && let Some(kd) = ir.subdir(&key_hex, false)
+            {
                 let first = !self.touched.swap(true, Ordering::Relaxed);
                 super::prune::touch_last_used(&kd, first, now);
             }
@@ -463,7 +550,7 @@ mod tests {
 
     fn run(u: &AppUnit, c: Option<&IrCache>) -> Out {
         crate::big_stack::big_stack_pool()
-            .install(|| parse_package(u, c, |pf| (pf.virtual_path, pf.file)))
+            .install(|| parse_package(u, c, None, |pf| (pf.virtual_path, pf.file)))
     }
 
     fn count(c: &IrCache, f: impl Fn(&Counters) -> &std::sync::atomic::AtomicU64) -> u64 {
@@ -531,8 +618,11 @@ mod tests {
         std::fs::write(&path, &b).unwrap();
         let c2 = cache(&d, false);
         assert_eq!(run(&u, Some(&c2)), off);
-        assert_eq!(count(&c2, |c| &c.parsed_miss), N as u64);
+        // sol r1: a refused envelope counts as refused (a gate fails on it), not as a miss.
+        assert_eq!(count(&c2, |c| &c.refused), N as u64);
+        assert_eq!(count(&c2, |c| &c.parsed_miss), 0);
         assert_eq!(count(&c2, |c| &c.published_packages), 1, "replaced");
+        assert!(c2.counters.balanced());
         let c3 = cache(&d, false);
         assert_eq!(run(&u, Some(&c3)), off);
         assert_eq!(count(&c3, |c| &c.disk_hits), N as u64);
@@ -718,8 +808,10 @@ mod tests {
         assert_eq!(count(&c, |c| &c.published_packages), 2);
     }
 
-    /// The trees `f` holds stay within one per worker thread on a warm hit, as on a parse
-    /// (`dep_summary`'s `LiveTrees` bound).
+    /// The trees alive at once, counted from each tree's creation (decode or parse, inside
+    /// `parse_package`) to its drop (in `f`), stay within one per worker thread on a warm
+    /// hit, as on a parse (`dep_summary`'s `LiveTrees` bound). Counting from creation is what
+    /// lets it fail: a seam that decoded every tree before calling `f` would show `n`.
     #[test]
     fn live_trees_bound_holds_on_hits() {
         let d = dirs();
@@ -727,17 +819,12 @@ mod tests {
         let u = package(&d.text, &texts(n));
         run(&u, Some(&cache(&d, false)));
         let warm = cache(&d, false);
-        let (live, peak) = (
-            std::sync::atomic::AtomicUsize::new(0),
-            std::sync::atomic::AtomicUsize::new(0),
-        );
+        let live = LiveTrees::default();
         let threads = crate::big_stack::big_stack_pool().current_num_threads();
         crate::big_stack::big_stack_pool().install(|| {
-            parse_package(&u, Some(&warm), |pf| {
-                let now = live.fetch_add(1, SeqCst) + 1;
-                peak.fetch_max(now, SeqCst);
+            parse_package(&u, Some(&warm), Some(&live), |pf| {
                 drop(pf);
-                live.fetch_sub(1, SeqCst);
+                live.live.fetch_sub(1, SeqCst);
             })
         });
         assert_eq!(
@@ -745,7 +832,12 @@ mod tests {
             n as u64,
             "precondition: hits"
         );
-        let peak = peak.load(SeqCst);
+        assert_eq!(
+            live.live.load(SeqCst),
+            0,
+            "every tree was counted and dropped"
+        );
+        let peak = live.peak.load(SeqCst);
         assert!(
             peak >= 1 && peak <= threads,
             "{peak} trees, {threads} workers"
@@ -762,6 +854,14 @@ mod tests {
         }
         let _report = super::super::install_from_env();
         assert!(super::super::installed().is_some(), "installed");
+        // sol r1: installing makes no directory (the text cache root nor `ir/`).
+        let xdg = std::env::var_os("XDG_CACHE_HOME").expect("set by the parent");
+        assert!(
+            !std::path::Path::new(&xdg).exists(),
+            "install made the cache root"
+        );
+        let ir = std::env::var_os("ALSEM_IR_CACHE_DIR").expect("set by the parent");
+        assert!(!std::path::Path::new(&ir).exists(), "install made ir/");
         {
             let _s = super::super::Suspend::new();
             assert!(super::super::installed().is_none(), "suspended");
@@ -774,6 +874,7 @@ mod tests {
 
     #[test]
     fn batch_state_disables_installed_cache() {
+        let missing = tempfile::tempdir().unwrap();
         let out = std::process::Command::new(std::env::current_exe().unwrap())
             .args([
                 "--ignored",
@@ -783,7 +884,8 @@ mod tests {
                 "--test-threads=1",
             ])
             .env("ALSEM_IR_BATCH_CHILD", "1")
-            .env("ALSEM_IR_CACHE_DIR", tempfile::tempdir().unwrap().path())
+            .env("ALSEM_IR_CACHE_DIR", missing.path().join("ir"))
+            .env("XDG_CACHE_HOME", missing.path().join("xdg"))
             .output()
             .unwrap();
         let stdout = String::from_utf8_lossy(&out.stdout);
@@ -792,5 +894,247 @@ mod tests {
             "{stdout}\n{}",
             String::from_utf8_lossy(&out.stderr)
         );
+    }
+
+    fn entries_under(ir: &Path) -> Vec<std::path::PathBuf> {
+        let mut out = Vec::new();
+        for kd in std::fs::read_dir(ir).into_iter().flatten().flatten() {
+            for e in std::fs::read_dir(kd.path()).into_iter().flatten().flatten() {
+                if e.path().extension().is_some_and(|x| x == "bin") {
+                    out.push(e.path());
+                }
+            }
+        }
+        out.sort();
+        out
+    }
+
+    /// Spec "The key" test: two keys on one root keep two entries, and no hit crosses.
+    #[test]
+    fn two_keys_one_root_never_cross() {
+        let d = dirs();
+        let u = package(&d.text, &texts(N));
+        let off = run(&u, None);
+        let a = cache(&d, false);
+        assert_eq!(run(&u, Some(&a)), off);
+        let b = IrCache::with_key(d.ir.clone(), d.text.clone(), false, IrKey([4; 32]));
+        assert_eq!(run(&u, Some(&b)), off);
+        assert_eq!(count(&b, |c| &c.disk_hits), 0, "no hit across keys");
+        assert_eq!(count(&b, |c| &c.published_packages), 1);
+        assert_eq!(entries_under(&d.ir).len(), 2, "one entry per key");
+        let a2 = cache(&d, false);
+        assert_eq!(run(&u, Some(&a2)), off);
+        assert_eq!(
+            count(&a2, |c| &c.disk_hits),
+            N as u64,
+            "each key hits its own"
+        );
+    }
+
+    /// A stored file that fails to decode under a valid hash (a defect, the codec hook here):
+    /// refused, parsed, and the refill does not rewrite identical bytes.
+    #[test]
+    fn decode_failure_is_refused_and_identical_bytes_are_not_rewritten() {
+        use std::os::unix::fs::MetadataExt;
+        let d = dirs();
+        let mut t = texts(N);
+        t[1] = format!(
+            "codeunit 70101 \"{}\"\n{{\n    procedure P()\n    begin\n    end;\n}}\n",
+            super::super::codec::test_hook::FAIL_ON_HIT
+        );
+        let u = package(&d.text, &t);
+        let off = run(&u, None);
+        run(&u, Some(&cache(&d, false)));
+        let path = entry_path(&d, &u);
+        let before = std::fs::metadata(&path).unwrap();
+        let c = cache(&d, false);
+        assert_eq!(run(&u, Some(&c)), off);
+        assert_eq!(count(&c, |c| &c.refused), 1);
+        assert_eq!(count(&c, |c| &c.disk_hits), N as u64 - 1);
+        assert_eq!(count(&c, |c| &c.published_packages), 0, "nothing rewritten");
+        let after = std::fs::metadata(&path).unwrap();
+        assert_eq!(
+            (before.ino(), before.mtime_nsec()),
+            (after.ino(), after.mtime_nsec()),
+            "the entry is the same file"
+        );
+        assert!(c.counters.balanced());
+    }
+
+    /// Another process published the entry between this one's miss and its publish: under
+    /// the locks the valid entry is read again and kept.
+    #[test]
+    fn an_entry_published_meanwhile_is_kept() {
+        let d = dirs();
+        let u = package(&d.text, &texts(N));
+        let digest = u.source.as_ref().unwrap().text_digest.unwrap();
+        // Theirs: valid for this key, digest and file count, every file not stored.
+        let theirs_slots: Vec<Slot> = (0..N).map(|_| Slot::NotStored).collect();
+        let mut theirs = Vec::new();
+        let diag = Diag {
+            grammar_commit: "t",
+            version: "t",
+        };
+        write_envelope(&mut theirs, &KEY, &digest, &diag, &theirs_slots).unwrap();
+        let path = entry_path(&d, &u);
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            std::fs::DirBuilder::new()
+                .recursive(true)
+                .mode(0o700)
+                .create(path.parent().unwrap())
+                .unwrap();
+        }
+        std::fs::write(&path, &theirs).unwrap();
+        let c = cache(&d, false);
+        let mine: Vec<Slot> = u
+            .source
+            .as_ref()
+            .unwrap()
+            .files
+            .iter()
+            .map(|f| Slot::Stored(encode_file(&al_syntax::parse(&f.text))))
+            .collect();
+        publish(&c, &KEY, &digest, &mine, None);
+        assert_eq!(std::fs::read(&path).unwrap(), theirs, "theirs kept");
+        assert_eq!(count(&c, |c| &c.published_packages), 0);
+    }
+
+    /// A key folder past [`KEY_FOLDER_LIMIT`] takes no more entries (warned once).
+    #[test]
+    fn a_full_key_folder_publishes_nothing() {
+        use std::os::unix::fs::DirBuilderExt;
+        let d = dirs();
+        let u = package(&d.text, &texts(N));
+        let off = run(&u, None);
+        let kd = d.ir.join(KEY.hex());
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(&kd)
+            .unwrap();
+        // Sparse: counts its length, holds no bytes on disk.
+        std::fs::File::create(kd.join(format!("{}.bin", "b".repeat(64))))
+            .unwrap()
+            .set_len(KEY_FOLDER_LIMIT + 1)
+            .unwrap();
+        let c = cache(&d, false);
+        assert_eq!(run(&u, Some(&c)), off);
+        assert_eq!(count(&c, |c| &c.published_packages), 0);
+        assert!(!entry_path(&d, &u).exists());
+    }
+
+    /// sol r1: damaged stamps (numbers past what `SystemTime` holds) on a real hit's
+    /// maintenance path never panic: they read as absent.
+    #[test]
+    fn damaged_stamps_do_not_break_a_hit() {
+        let d = dirs();
+        let u = package(&d.text, &texts(N));
+        let off = run(&u, None);
+        run(&u, Some(&cache(&d, false)));
+        std::fs::write(d.ir.join(KEY.hex()).join("last-used"), u64::MAX.to_string()).unwrap();
+        std::fs::write(d.ir.join("last-prune"), u64::MAX.to_string()).unwrap();
+        let c = cache(&d, false);
+        assert_eq!(run(&u, Some(&c)), off);
+        assert_eq!(count(&c, |c| &c.disk_hits), N as u64);
+    }
+
+    /// The text cache directory unusable at fill time: its own counter and message, not
+    /// "changed since mapped" (Fable r1).
+    #[test]
+    fn an_unreadable_text_cache_is_counted_apart() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = dirs();
+        let u = package(&d.text, &texts(N));
+        let off = run(&u, None);
+        std::fs::set_permissions(&d.text, std::fs::Permissions::from_mode(0o770)).unwrap();
+        let c = cache(&d, false);
+        let got = run(&u, Some(&c));
+        std::fs::set_permissions(&d.text, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert_eq!(got, off);
+        assert_eq!(count(&c, |c| &c.fill_text_unreadable), 1);
+        assert_eq!(count(&c, |c| &c.fill_text_changed), 0);
+        assert_eq!(count(&c, |c| &c.published_packages), 0);
+    }
+
+    /// A shared-tier hit (`skip_dependencies`) counts each skipped package as
+    /// `inproc_reused_packages`, apart from disk hits.
+    #[test]
+    fn inproc_reuse_is_counted() {
+        use crate::program::dep_summary::parse_for_build_observed;
+        use crate::program::dep_summary::tests::ws_unit;
+        use crate::program::profile::BuildProfile;
+        let d = dirs();
+        let ws = app_id("Ws");
+        let snap = crate::snapshot::AppSetSnapshot {
+            apps: vec![ws_unit(&ws), package(&d.text, &texts(N))],
+            workspace_app: ws,
+            world: crate::snapshot::World::Closed,
+        };
+        let c = cache(&d, false);
+        parse_for_build_observed(&snap, BuildProfile::LIGHT, true, None, None, Some(&c));
+        assert_eq!(count(&c, |c| &c.inproc_reused_packages), 1);
+        assert_eq!(count(&c, |c| &c.seam_files), 0, "nothing reached the seam");
+    }
+
+    /// The switch: `on`/`off` in any case; anything else is off and warned (sol/Fable r1).
+    #[test]
+    fn the_switch_accepts_only_on_and_off() {
+        use std::ffi::OsStr;
+        let s = |v: Option<&str>| super::super::switch(v.map(OsStr::new));
+        assert_eq!(s(None), (true, None));
+        assert_eq!(s(Some("")), (true, None));
+        assert_eq!(s(Some("ON")), (true, None));
+        assert_eq!(s(Some("Off")), (false, None));
+        for typo in ["of", "0", "false", "yes"] {
+            let (on, warn) = s(Some(typo));
+            assert!(!on && warn.is_some(), "{typo}");
+        }
+    }
+
+    /// The child half of [`report_end_does_not_abort_an_unwind`].
+    #[test]
+    #[ignore = "run by report_end_does_not_abort_an_unwind as a child"]
+    fn unwind_child_mode() {
+        if std::env::var_os("ALSEM_IR_UNWIND_CHILD").is_none() {
+            return;
+        }
+        let _report = super::super::install_from_env();
+        let c = super::super::installed().expect("installed");
+        c.first_use(None);
+        // Counts that do not balance, as an interrupted run leaves them.
+        Counters::add(&c.counters.seam_files, 1);
+        panic!("unwinding with the report guard alive");
+    }
+
+    /// Fable r1: `report_end`'s balance assertion, in the guard's `Drop`, must not panic
+    /// during an unwind (a second panic aborts the process): the run ends as a panic, and its
+    /// end line is still written.
+    #[test]
+    fn report_end_does_not_abort_an_unwind() {
+        let tmp = tempfile::tempdir().unwrap();
+        let rep = tmp.path().join("report.jsonl");
+        let out = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--ignored",
+                "--exact",
+                "program::ir_cache::seam::tests::unwind_child_mode",
+                "--test-threads=1",
+            ])
+            .env("ALSEM_IR_UNWIND_CHILD", "1")
+            .env("ALSEM_IR_CACHE", "off")
+            .env("ALSEM_IR_CACHE_REPORT", &rep)
+            .env("ALSEM_IR_CACHE_DIR", tmp.path().join("ir"))
+            .env("XDG_CACHE_HOME", tmp.path().join("xdg"))
+            .output()
+            .unwrap();
+        assert_eq!(
+            out.status.code(),
+            Some(101),
+            "a test panic, not an abort: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let text = std::fs::read_to_string(&rep).unwrap_or_default();
+        assert!(text.contains("\"event\":\"end\""), "{text}");
     }
 }

@@ -26,12 +26,18 @@ use std::sync::Arc;
 /// `al-ch-snapshot-cache` appended.  Falls back to
 /// `<temp_dir>/al-ch-snapshot-cache` when the OS cache dir is unavailable.
 pub fn cache_dir() -> PathBuf {
-    let base = dirs::cache_dir().unwrap_or_else(std::env::temp_dir);
-    let dir = base.join("al-ch-snapshot-cache");
+    let dir = cache_dir_path();
     if let Err(e) = std::fs::create_dir_all(&dir) {
         log::warn!("Failed to create snapshot cache dir {}: {e}", dir.display());
     }
     dir
+}
+
+/// [`cache_dir`]'s path, made nowhere (ENG-110: installing the IR cache must not create it).
+pub fn cache_dir_path() -> PathBuf {
+    dirs::cache_dir()
+        .unwrap_or_else(std::env::temp_dir)
+        .join("al-ch-snapshot-cache")
 }
 
 /// The version of what extraction produces for a package, in the cache file's
