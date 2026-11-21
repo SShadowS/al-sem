@@ -72,7 +72,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   only (review r4): (head user × clock ratio + head system) / (base user + base system), the
   clock ratio being head over base, below 1 when head ran slower. It is taken per pass (a
   warm-up row's geometric mean over its passes) and per round. A clock in head's favour makes
-  it larger, so it never waives. In a rounds row, every round over the
+  it larger, so it never waives, and the row's clock ratio itself must be below 1 (head
+  slower; review r5): passes that mix a slower clock with a faster one could otherwise read a
+  waivable corrected CPU under an aggregate clock in head's favour. In a rounds row, every round over the
   CPU limit must meet these conditions by itself: medians from different rounds may not
   combine. The verdict prints the CPU ratio, the clock-corrected ratio and the instruction
   ratio; `speed.json` lists it under `advisory`. Wall-time and memory failures always fail.

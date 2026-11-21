@@ -398,6 +398,11 @@ def clock_cpi_flags(rows):
 #   clock in head's favour (above 1) makes it larger, so it never waives. Per
 #   pair (`judge`'s `corrected`): a warm-up row takes the geometric mean over its
 #   passes, as its other ratios do;
+# - head's clock is the slower one: the row's clock ratio below 1 (a warm-up
+#   row's geometric mean, or each over-limit round's own). The corrected mean
+#   alone is not enough (review r5, sol): passes at x0.60 (head 95 % user) and
+#   x2.40 (head 10 % user) read an aggregate clock of x1.20 in head's favour
+#   while the corrected CPU reads x1.18 and would waive;
 # - for a rounds row, every round whose CPU ratio is over the limit meets the
 #   instruction, wall and clock-corrected conditions by itself (medians taken
 #   from different rounds may not combine; review r3, S2).
@@ -415,16 +420,17 @@ def cpu_advisory(row):
     wall_limit = WARM_WALL_LIMIT if warm else WALL_LIMIT
     if not (i and c and k and "clock" in row_labels(row)) or row["wall"]["ratio"] > wall_limit:
         return None
-    # (CPU, instructions, CPU at equal clocks, wall) ratios: the warm-up row's
-    # judged (geometric mean) ratios, or each over-limit round of a rounds row.
+    # (CPU, instructions, CPU at equal clocks, wall, clock) ratios: the warm-up
+    # row's judged (geometric mean) ratios, or each over-limit round of a rounds row.
     if warm:
-        samples = [(row["cpu"]["ratio"], i["ratio"], k["ratio"], row["wall"]["ratio"])]
+        samples = [(row["cpu"]["ratio"], i["ratio"], k["ratio"], row["wall"]["ratio"],
+                    c["ratio"])]
     else:
         samples = [s for s in zip(row["cpu"]["ratios"], i["ratios"], k["ratios"],
-                                  row["wall"]["ratios"]) if s[0] > cpu_limit]
-    for cpu, ir, corrected, w in samples:
+                                  row["wall"]["ratios"], c["ratios"]) if s[0] > cpu_limit]
+    for cpu, ir, corrected, w, cr in samples:
         if not (1 / INSTR_LIMIT <= ir <= INSTR_LIMIT and w <= wall_limit
-                and corrected <= cpu_limit):
+                and corrected <= cpu_limit and cr < 1):
             return None
     corrected = k["ratio"]
     return (f"{row['call']}: CPU time x{row['cpu']['ratio']:.2f}, x{corrected:.2f} at equal "

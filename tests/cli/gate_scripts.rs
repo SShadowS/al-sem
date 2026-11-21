@@ -2233,16 +2233,24 @@ for line in sys.stdin:
             # STUB_INSTR_ZERO_BUILD_PASS=p: head's build in warm-up pass p
             # (0-based) retires no instruction (that one call goes uncounted).
             zero_instr = head and str(n // 3) == os.environ.get("STUB_INSTR_ZERO_BUILD_PASS")
+            # TLS-111 review r5: STUB_BUILD_HEAD_PASS=slow:cpi:sys,... sets head's
+            # build factors (as STUB_SLOW_HEAD, STUB_CPI_HEAD and STUB_SYS_HEAD) per
+            # warm-up pass.
+            b_slow, b_cpi = slow, cpi
+            b_sys = float(os.environ.get("STUB_SYS_HEAD", "0"))
+            spec = os.environ.get("STUB_BUILD_HEAD_PASS")
+            if head and spec:
+                b_slow, b_cpi, b_sys = map(float, spec.split(",")[n // 3].split(":"))
             burned = (float(os.environ["STUB_BUILD_S"]) * (1.5 if another_alive() else 1.0)
-                      * work * cpi)
-            burn(burned * slow)
+                      * work * b_cpi)
+            burn(burned * b_slow)
             # STUB_HEAD_SLEEP_S (TLS-103): head's build waits this long, wall time
             # with no CPU, as a loaded host stretches it.
             if head:
                 time.sleep(float(os.environ.get("STUB_HEAD_SLEEP_S", "0")))
                 # TLS-111: STUB_SYS_HEAD=x: head's build also spends x times its
                 # CPU seconds in the kernel (reading /dev/zero: no user time).
-                sys_s = burned * float(os.environ.get("STUB_SYS_HEAD", "0"))
+                sys_s = burned * b_sys
                 if sys_s > 0:
                     # Into `ballast`, which every server holds: a buffer of
                     # head's own raised its peak RSS (memory x1.35), and 64 KiB
@@ -3828,12 +3836,21 @@ fn speed_cpu_advisory_judges_every_round_by_itself() {
 ///   CPU x1.68, x1.4 at equal clocks: a lower clock that explains only part of
 ///   the excess. (Fable suggested 1.17 and 1.35: 1/1.17 is x0.855, under 2 % from
 ///   the 15 % CLOCK band, so the label itself could flicker on /proc ticks.)
+/// - review r5 (sol), passes that mix: head's build at CPU x1.4 in both passes,
+///   its clock x0.6 with 95 % user time in pass 1 and x3.27 with 8 % user time in
+///   pass 2 (STUB_BUILD_HEAD_PASS slow:cpi:sys; a 1 s base build so pass 2's
+///   0.11 s of user time reads its clock to about 10 %): the aggregate clock
+///   reads above 1, in head's FAVOUR (x1.25 measured), while the CPU at equal
+///   clocks reads x1.21 (x1.42 CPU): it must not waive.
 ///
 /// Mutations (2026-11-21, round 5): head's user and system time both scaled by
 /// the clock (review r4's blocker) -> "user time only: the build was waived",
 /// that case alone (red); a sign-only check (`clock ratio < 1` in place of the
 /// CPU ratio at equal clocks within the limit) -> both cases waived, "the size"
-/// included (red). Each restored, green.
+/// included (red). Each restored, green. Round 6 (review r5): the `clock ratio
+/// < 1` condition dropped -> "mixed passes: the build was waived" alone, as
+/// "build: CPU time x1.42, x1.21 at equal clocks (CLOCK x1.248)" (red);
+/// restored, green.
 #[cfg(target_os = "linux")]
 #[test]
 fn speed_cpu_advisory_scales_user_time_only_and_by_size() {
@@ -3852,9 +3869,16 @@ fn speed_cpu_advisory_scales_user_time_only_and_by_size() {
         let (code, text) = speed_with_stub(dir.path(), "1.0", &[], &env);
         (dir, code, text)
     };
-    let cases: [&[(&str, &str)]; 2] = [
+    let cases: [&[(&str, &str)]; 3] = [
         &[("STUB_SLOW_HEAD", "2.0"), ("STUB_SYS_HEAD", "0.45")],
         &[("STUB_SLOW_HEAD", "1.2"), ("STUB_CPI_HEAD", "1.4")],
+        &[
+            ("STUB_BUILD_S", "1.0"),
+            (
+                "STUB_BUILD_HEAD_PASS",
+                "1.667:0.798:0.0877,0.306:0.366:3.52",
+            ),
+        ],
     ];
     let results: Vec<_> = std::thread::scope(|s| {
         let runs: Vec<_> = cases
@@ -3864,7 +3888,7 @@ fn speed_cpu_advisory_scales_user_time_only_and_by_size() {
         runs.into_iter().map(|r| r.join().unwrap()).collect()
     });
     // Every case is checked before the test fails, so a break shows each one.
-    let waived: Vec<String> = ["user time only", "the size"]
+    let waived: Vec<String> = ["user time only", "the size", "mixed passes"]
         .iter()
         .zip(&results)
         .filter(|(_, (_dir, code, text))| {
