@@ -9,7 +9,7 @@ use std::process::{Command, Output};
 
 use serde_json::{Value, json};
 
-use crate::cli_batch_writes::{job, run_manifest, run_manifest_doc};
+use crate::cli_batch_writes::{job, run_manifest_doc};
 use crate::symbol_app;
 
 /// Dependency source files: above `SMALL_PACKAGE_MIN_FILES` (8), so the package is cached.
@@ -235,6 +235,15 @@ fn batch_with_workers_uses_the_cache() {
         let warm = ends(&lines);
         assert_eq!(warm.len(), workers.max(1), "{batches} batches: {lines:?}");
         for e in warm {
+            // Every process's start line reached the registered report too (none came
+            // before the parent registered it).
+            assert!(
+                lines
+                    .iter()
+                    .any(|l| l["event"] == "start" && l["pid"] == e["pid"]),
+                "{batches} batches: a start line for {}: {lines:?}",
+                e["pid"]
+            );
             assert_eq!(
                 e["counters"]["disk_hits"].as_u64(),
                 Some(DEP_FILES as u64),
@@ -248,13 +257,18 @@ fn batch_with_workers_uses_the_cache() {
 /// `alsem batch` of `jobs`, its manifest in `d`, with the cache on at `f`'s roots and `env`
 /// added after them (a later value wins).
 fn batch_jobs(f: &Fixture, d: &Path, jobs: &[Value], env: &[(&str, &str)]) -> Output {
+    batch_jobs_doc(f, d, &json!({ "jobs": jobs }), env)
+}
+
+/// [`batch_jobs`] of a whole manifest document.
+fn batch_jobs_doc(f: &Fixture, d: &Path, doc: &Value, env: &[(&str, &str)]) -> Output {
     let mut all = vec![
         ("ALSEM_IR_CACHE", "on"),
         ("ALSEM_IR_CACHE_DIR", f.root.to_str().unwrap()),
         ("XDG_CACHE_HOME", f.xdg.to_str().unwrap()),
     ];
     all.extend_from_slice(env);
-    run_manifest(d, jobs, None, &all, None).0
+    run_manifest_doc(d, doc, None, &all, None).0
 }
 
 /// A run refused before any job (exit 3) with `why` on its stderr.
@@ -294,9 +308,11 @@ fn warm(f: &Fixture) -> PathBuf {
 /// text cache folder, and one through a symlink to the IR cache folder are each refused
 /// before any job, and nothing is made there.
 ///
-/// Discrimination (2026-11-21): the check's `w.under(r)` dropped (`r.under(w)` alone):
+/// Discrimination (2026-11-21, r1): the check's `w.under(r)` dropped (`r.under(w)` alone):
 /// fails "(ir) a stream in the IR cache folder" (exit 1, not 3: the open then met the
-/// claim's own cache check); restored, passes.
+/// claim's own cache check); restored, passes. (r2, the snapshot) the check's folder test
+/// dropped (`w.chain.iter().any(..)` made `false`): fails "(ir)" the same way; restored,
+/// passes.
 #[test]
 fn batch_refuses_a_write_in_a_cache_folder() {
     let f = fixture();
@@ -317,18 +333,19 @@ fn batch_refuses_a_write_in_a_cache_folder() {
         ),
     ] {
         let out = batch_jobs(&f, d.path(), &[fanout_to(&f, &stream)], &[]);
-        assert_refused(case, &out, "is in or holds the cache folder");
+        assert_refused(case, &out, "is in a cache folder of the engine");
         assert!(!stream.exists(), "{case}: nothing made");
     }
     assert_eq!(entries(&f.root), vec![entry]);
 }
 
 /// TLS-116: no job write holds a cache folder. A `fingerprint --shard all --out D` whose
-/// `D` holds the IR cache folder (`ALSEM_IR_CACHE_DIR=D/ir`, not made yet) is refused before
-/// any job.
+/// `D` holds the IR cache folder (`ALSEM_IR_CACHE_DIR=D/ir`, made by the check as the cache
+/// would make it) is refused before any job; nothing but that folder is in `D`.
 ///
-/// Discrimination (2026-11-21): the check's `r.under(w)` dropped (`w.under(r)` alone):
-/// fails (exit 0, not 3); restored, passes.
+/// Discrimination (2026-11-21, r1): the check's `r.under(w)` dropped: fails (exit 0, not
+/// 3); restored, passes. (r2) Again on the snapshot's check (`roots.iter().find(..)` made
+/// `None`): fails (exit 0, not 3); restored, passes.
 #[test]
 fn batch_refuses_a_directory_holding_a_cache_folder() {
     let f = fixture();
@@ -359,61 +376,122 @@ fn batch_refuses_a_directory_holding_a_cache_folder() {
         &out,
         "holds the cache folder",
     );
-    assert_eq!(
-        std::fs::read_dir(&shards).unwrap().count(),
-        0,
-        "nothing written"
-    );
+    let names: Vec<_> = std::fs::read_dir(&shards)
+        .unwrap()
+        .map(|e| e.unwrap().file_name())
+        .collect();
+    assert_eq!(names, ["ir"], "nothing written but the cache folder");
+    assert_eq!(entries(&ir), Vec::<PathBuf>::new(), "an empty cache folder");
 }
 
-/// TLS-116: a job's `--out` that is a hard link to a cache entry is that entry: refused
-/// before any job, the entry untouched.
+/// TLS-116 (sol r1 2): a cache folder spelled through a missing folder and `..` is made
+/// before any write is resolved, so it is compared as it will be. With
+/// `ALSEM_IR_CACHE_DIR=D/missing/../ir` and a shard `--out D/ir`, both missing, the cache
+/// would make `D/missing` and then `D/ir`, the job's directory: refused before any job.
 ///
-/// Discrimination (2026-11-21): the check's hard-link test skipped (`link` made `false`):
-/// fails (exit 1, not 3: the open then met the claim's own cache check); restored, passes.
+/// Discrimination (2026-11-21, r2): `make_ir_dir` neither making the folder nor requiring
+/// it (`create_ir_dir` call deleted, `.then(..)` made `Some(c.ir_dir.clone())`): fails
+/// (exit 0, not 3); restored, passes.
 #[test]
-fn batch_refuses_a_hard_link_to_a_cache_entry() {
+fn batch_makes_a_cache_folder_before_comparing() {
     let f = fixture();
-    let entry = warm(&f);
-    let bytes = std::fs::read(&entry).unwrap();
     let d = tempfile::tempdir().unwrap();
-    let out_file = d.path().join("out.json");
-    std::fs::hard_link(&entry, &out_file).unwrap();
-    let o = out_file.to_string_lossy().into_owned();
+    let out_dir = d.path().join("ir");
+    let spelled = d.path().join("missing/../ir");
+    let s = out_dir.to_string_lossy().into_owned();
     let out = batch_jobs(
         &f,
         d.path(),
         &[job(
             &[
-                "events",
-                "fanout",
+                "fingerprint",
                 f.ws.to_str().unwrap(),
-                "--single-app",
+                "--shard",
+                "all",
                 "--out",
-                &o,
+                &s,
             ],
             None,
             None,
         )],
-        &[],
+        &[("ALSEM_IR_CACHE_DIR", spelled.to_str().unwrap())],
     );
     assert_refused(
-        "a hard link to an IR entry",
+        "a cache folder through missing/..",
         &out,
-        "a hard link to a cache file",
+        "is in a cache folder of the engine",
     );
-    assert_eq!(std::fs::read(&entry).unwrap(), bytes, "the entry untouched");
+    assert_eq!(entries(&out_dir), Vec::<PathBuf>::new(), "nothing written");
+}
+
+/// TLS-116: a job's `--out` that is a hard link to a cache file is that file, wherever it
+/// lies in a cache folder: an IR entry (`<ir>/<key>/<digest>.bin`), a text entry (depth 1
+/// in the text folder), and a file in the default `<text>/ir/` while `ALSEM_IR_CACHE_DIR`
+/// points elsewhere (walked as part of the text folder). Each is refused before any job,
+/// the file untouched. (A bind mount of a file is the same identity test as a hard link;
+/// making one needs root, which the tests do not have, so the hard link stands for it.)
+///
+/// Discrimination (2026-11-21, r2): the check's file test dropped (`snap.files.contains`
+/// made `false`): fails "(ir entry)" (exit 1, not 3: the open then met the claim's handle
+/// check); restored, passes. The walk not entering folders (`walk(&p, snap)?` deleted):
+/// fails "(ir entry)" (exit 0, not 3: neither the check nor the open knew the file);
+/// restored, passes.
+#[test]
+fn batch_refuses_a_hard_link_to_a_cache_entry() {
+    let f = fixture();
+    let ir_entry = warm(&f);
+    let text = f.xdg.join("al-ch-snapshot-cache");
+    let text_entry = std::fs::read_dir(&text)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .find(|p| p.extension().is_some_and(|x| x == "bin"))
+        .expect("precondition: a text entry");
+    let default_ir = text.join("ir").join("k".repeat(64));
+    std::fs::create_dir_all(&default_ir).unwrap();
+    let default_entry = default_ir.join(format!("{}.bin", "d".repeat(64)));
+    std::fs::write(&default_entry, "ENTRY").unwrap();
+    for (case, entry) in [
+        ("(ir entry)", &ir_entry),
+        ("(text entry)", &text_entry),
+        ("(default ir/ entry)", &default_entry),
+    ] {
+        let bytes = std::fs::read(entry).unwrap();
+        let d = tempfile::tempdir().unwrap();
+        let out_file = d.path().join("out.json");
+        std::fs::hard_link(entry, &out_file).unwrap();
+        let o = out_file.to_string_lossy().into_owned();
+        let out = batch_jobs(
+            &f,
+            d.path(),
+            &[job(
+                &[
+                    "events",
+                    "fanout",
+                    f.ws.to_str().unwrap(),
+                    "--single-app",
+                    "--out",
+                    &o,
+                ],
+                None,
+                None,
+            )],
+            &[],
+        );
+        assert_refused(case, &out, "is a file of the engine's caches");
+        assert_eq!(std::fs::read(entry).unwrap(), bytes, "{case}: untouched");
+    }
 }
 
 /// TLS-116: an alias made after the check is caught at the open. After the check (the
 /// debug seam `ALSEM_TEST_AFTER_PREFLIGHT`) the stream path becomes a hard link to the IR
-/// entry, or a symlink into the IR cache folder: the open is refused (exit 1), the entry
-/// is untouched and nothing is written in the folder.
+/// entry, or a symlink to a missing name in the IR cache folder: the open is refused
+/// (exit 1), the entry is untouched, and nothing is made in the folder (the folder test
+/// runs before any file is created).
 ///
-/// Discrimination (2026-11-21): `refuse_cache`'s folder test dropped (`in_root` left
-/// `false`): fails "(late symlink)" (exit 0, not 1); its hard-link test dropped
-/// (`cache_link(..)? && false`): fails "(late hard link)" (exit 0, not 1); restored, both
-/// pass.
+/// Discrimination (2026-11-21, r2): `open_guarded`'s folder test skipped
+/// (`refuse_cache_path(..)` call deleted): fails "(late symlink)" (exit 0, not 1); its
+/// handle test skipped (`false &&` on `if is_disk(&f)?`): fails "(late hard link)" (exit
+/// 0, not 1); restored, both pass.
 #[cfg(debug_assertions)]
 #[test]
 fn batch_claims_refuse_a_late_cache_alias() {
@@ -443,7 +521,7 @@ fn batch_claims_refuse_a_late_cache_alias() {
         let stderr = String::from_utf8_lossy(&out.stderr);
         assert_eq!(out.status.code(), Some(1), "{case}: {stderr}");
         assert!(
-            stderr.contains("in a cache folder of the engine"),
+            stderr.contains("refused: ") && stderr.contains("(TLS-116)"),
             "{case}: {stderr}"
         );
         assert_eq!(
@@ -451,12 +529,120 @@ fn batch_claims_refuse_a_late_cache_alias() {
             bytes,
             "{case}: entry untouched"
         );
-        assert_eq!(
-            std::fs::metadata(&inside).map(|m| m.len()).unwrap_or(0),
-            0,
-            "{case}: nothing written in the folder"
-        );
+        assert!(!inside.exists(), "{case}: nothing made in the folder");
     }
+}
+
+/// TLS-116: a shard directory is checked at run time before it is made. The shard
+/// `--out D/p/sh` names a missing `D/p`; after the check (the debug seam) `D/p` becomes a
+/// symlink to the IR cache folder: the directory write is refused (exit 1), and nothing is
+/// made in the folder.
+///
+/// Discrimination (2026-11-21, r2): `output::create_dir` without its check
+/// (`claim::check_dir(..)` call deleted): fails "nothing made in the folder" (`sh` made
+/// there; the run still exits 1, its shard files refused at their own opens); restored,
+/// passes.
+#[cfg(debug_assertions)]
+#[test]
+fn batch_refuses_a_late_shard_directory_in_a_cache_folder() {
+    let f = fixture();
+    warm(&f);
+    let d = tempfile::tempdir().unwrap();
+    let out_dir = d.path().join("p/sh");
+    let seam = format!(
+        "ln -s '{}' '{}'",
+        f.root.display(),
+        d.path().join("p").display()
+    );
+    let s = out_dir.to_string_lossy().into_owned();
+    let out = batch_jobs(
+        &f,
+        d.path(),
+        &[job(
+            &[
+                "fingerprint",
+                f.ws.to_str().unwrap(),
+                "--shard",
+                "all",
+                "--out",
+                &s,
+            ],
+            None,
+            None,
+        )],
+        &[("ALSEM_TEST_AFTER_PREFLIGHT", &seam)],
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("(TLS-116)"), "{stderr}");
+    assert!(!f.root.join("sh").exists(), "nothing made in the folder");
+}
+
+/// TLS-116: a trace file is published through the same guard. With `ALSEM_TRACE_FILE` in
+/// the IR cache folder the run's trace is refused (one stderr line; the run itself is not
+/// failed), and no file is made there.
+///
+/// Discrimination (2026-11-21, r2): `open_trace` opening without the guard
+/// (`open_guarded(..)` made `OpenOptions::new().write(true).create(true).open(path)`): fails
+/// (no refusal line: the trace was written in the folder); restored, passes.
+#[test]
+fn batch_refuses_a_trace_in_a_cache_folder() {
+    let f = fixture();
+    warm(&f);
+    let d = tempfile::tempdir().unwrap();
+    let trace = f.root.join("trace.json");
+    let out = batch_jobs(
+        &f,
+        d.path(),
+        &[fanout_to(&f, &d.path().join("x.out"))],
+        &[("ALSEM_TRACE_FILE", trace.to_str().unwrap())],
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains("perf_trace: ") && stderr.contains("(TLS-116)"),
+        "{stderr}"
+    );
+    assert!(!trace.exists(), "no trace in the cache folder");
+}
+
+/// TLS-116: a name a concurrent prune removes during the snapshot's walk is skipped, not a
+/// refusal. The debug seam `ALSEM_TEST_DURING_SNAPSHOT` removes the text entry and a
+/// folder of the text cache after the walk has listed that folder.
+///
+/// Discrimination (2026-11-21, r2): the walk's gone-name skip off (`gone(&e) && false` on
+/// the entry's metadata): fails (exit 3, not 0: "cannot list the cache folder"); restored,
+/// passes.
+#[cfg(debug_assertions)]
+#[test]
+fn batch_snapshot_tolerates_a_concurrent_prune() {
+    let f = fixture();
+    warm(&f);
+    let text = f.xdg.join("al-ch-snapshot-cache");
+    std::fs::create_dir_all(text.join("sub")).unwrap();
+    std::fs::write(text.join("sub/x"), "").unwrap();
+    let entry = std::fs::read_dir(&text)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .find(|p| p.extension().is_some_and(|x| x == "bin"))
+        .expect("precondition: a text entry");
+    let d = tempfile::tempdir().unwrap();
+    let ran = d.path().join("seam-ran");
+    let seam = format!(
+        "rm -rf '{}' '{}' && touch '{}'",
+        entry.display(),
+        text.join("sub").display(),
+        ran.display()
+    );
+    let out = batch_jobs(
+        &f,
+        d.path(),
+        &[fanout_to(&f, &d.path().join("x.out"))],
+        &[("ALSEM_TEST_DURING_SNAPSHOT", &seam)],
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(0), "{stderr}");
+    assert!(ran.exists(), "precondition: the seam removed the entry");
 }
 
 /// TLS-116: the IR cache report is one of the run's writes. A job stream on the report
@@ -481,14 +667,16 @@ fn batch_refuses_a_stream_on_the_report() {
     assert!(stderr.contains("the run: both write"), "{stderr}");
 }
 
-/// TLS-116: every report line goes to the file the parent registered. After the check
-/// (the debug seam), the report path becomes a hard link to the workspace's `app.json`:
-/// the run's report appends are refused (a warning each, the run is not failed), and
-/// `app.json` is untouched.
+/// TLS-116: every report line goes to the file the parent registered. After the
+/// registration (the debug seam), the report path becomes a hard link to the workspace's
+/// `app.json`. The parent appends through the handle it registered; each of the two workers
+/// opens the path, finds another file and refuses its appends (a warning each, the run is
+/// not failed): `app.json` is untouched, and the refusals were attempted.
 ///
-/// Discrimination (2026-11-21): `claim::open_shared`'s marker test dropped (`false &&` on
-/// its `if`): fails "app.json untouched" (the report lines appended to it); restored,
-/// passes.
+/// Discrimination (2026-11-21, r1): the marker test dropped (`false &&` on its `if`):
+/// fails "app.json untouched" (the report lines appended to it). (r2, now in
+/// `claim::open_registered`) the same break: fails "an append attempted and refused" (no
+/// refusal); restored, passes.
 #[cfg(debug_assertions)]
 #[test]
 fn batch_report_appends_only_to_the_registered_file() {
@@ -499,19 +687,22 @@ fn batch_report_appends_only_to_the_registered_file() {
     let rep = d.path().join("report.jsonl");
     let seam = format!("rm '{0}' && ln '{1}' '{0}'", rep.display(), app.display());
     let analyze = ["analyze", f.ws.to_str().unwrap(), "--format", "json"];
-    let out = batch_jobs(
+    let one = json!({ "jobs": [job(&analyze, None, None)] });
+    let out = batch_jobs_doc(
         &f,
         d.path(),
-        &[job(&analyze, None, None)],
+        &json!({ "batches": [one.clone(), one] }),
         &[
             ("ALSEM_IR_CACHE_REPORT", rep.to_str().unwrap()),
             ("ALSEM_TEST_AFTER_PREFLIGHT", &seam),
+            ("RUST_LOG", "warn"),
         ],
     );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{stderr}");
     assert!(
-        out.status.success(),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
+        stderr.contains("IR cache report") && stderr.contains("not the file this batch run"),
+        "an append attempted and refused: {stderr}"
     );
     use std::os::unix::fs::MetadataExt;
     let ino = |p: &Path| std::fs::metadata(p).unwrap().ino();

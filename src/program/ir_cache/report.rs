@@ -3,14 +3,14 @@
 //! `write` on an `O_APPEND` file, so concurrent processes never interleave a line. Off Linux,
 //! or without a key, one `{"pid", "ir_cache": "unsupported" | "no key"}` line instead. In a
 //! batch run (TLS-116) the parent registers the file as one of the run's writes and every
-//! process of the run appends only to that file ([`crate::engine::batch::claim::open_shared`]).
+//! process of the run appends only to that file, through a handle it holds
+//! ([`crate::engine::batch::claim::append_shared`]).
 
 /// The report's tag in a batch run's claims.
 pub const REPORT_TAG: &str = "ir-cache-report";
 
 use super::IrCache;
 use super::key::IrKey;
-use std::io::Write;
 use std::sync::atomic::Ordering;
 
 /// Held for a `main`'s whole body ([`super::install_from_env`]): its drop writes the `end`
@@ -36,8 +36,7 @@ fn append(c: &IrCache, v: &serde_json::Value) {
     };
     let mut line = v.to_string();
     line.push('\n');
-    let written = crate::engine::batch::claim::open_shared(path, REPORT_TAG)
-        .and_then(|mut f| f.write_all(line.as_bytes()));
+    let written = crate::engine::batch::claim::append_shared(path, REPORT_TAG, line.as_bytes());
     if let Err(e) = written {
         log::warn!("IR cache report {} not written ({e})", path.display());
     }

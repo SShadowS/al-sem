@@ -165,7 +165,7 @@ pub fn install_from_env() -> ReportGuard {
 
 /// The installed cache for the calling thread's seam use: `None` when none is installed, or
 /// while a [`Suspend`] lives. A batch run uses it too (TLS-116): its write claims keep every
-/// job write out of the cache folders ([`protected_roots`]).
+/// job write out of the cache folders ([`make_ir_dir`]).
 pub(crate) fn installed() -> Option<&'static IrCache> {
     if SUSPENDED.load(Ordering::SeqCst) > 0 {
         return None;
@@ -173,14 +173,31 @@ pub(crate) fn installed() -> Option<&'static IrCache> {
     INSTALLED.get()
 }
 
-/// TLS-116: the folders the engine's caches write in, which no job write of a batch run may
-/// land in or hold (`engine::batch::claim`): ENG-113's text cache folder, and the installed IR
-/// cache's `ir/` folder (also when it is elsewhere, `ALSEM_IR_CACHE_DIR`). Paths only, as the
-/// caches spell them; a missing one is still protected.
-pub fn protected_roots() -> Vec<PathBuf> {
-    let mut roots = vec![crate::snapshot::cache::cache_dir_path()];
-    roots.extend(INSTALLED.get().map(|c| c.ir_dir.clone()));
-    roots
+/// Make `ir_dir` as a writer makes it: owner-only, its missing parents too. Best effort: a
+/// failure leaves the folder missing or unusable, which a reader sees.
+pub(crate) fn create_ir_dir(ir_dir: &std::path::Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        let _ = std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(ir_dir);
+    }
+    #[cfg(not(unix))]
+    let _ = ir_dir;
+}
+
+/// TLS-116: the installed IR cache's `ir/` folder, made now as its first writer would make it,
+/// when this process can use it (installed, on, Linux) and it is a directory; `None` otherwise
+/// (an `ALSEM_IR_CACHE_DIR` naming a file leaves the cache off, so there is nothing to
+/// protect). A batch run's check makes and protects it (`engine::batch::cache_guard`).
+pub fn make_ir_dir() -> Option<PathBuf> {
+    let c = INSTALLED
+        .get()
+        .filter(|c| c.enabled && cfg!(target_os = "linux"))?;
+    create_ir_dir(&c.ir_dir);
+    c.ir_dir.is_dir().then(|| c.ir_dir.clone())
 }
 
 /// TLS-116: the installed cache's report file (`ALSEM_IR_CACHE_REPORT`), which a batch run

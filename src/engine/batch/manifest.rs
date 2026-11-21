@@ -527,19 +527,49 @@ impl Written {
 /// `Err`: the one usage line. It runs before any job's file is opened; a
 /// caller opens nothing of its own (the trace file) unless it is `Ok`. A
 /// file whose identity cannot be read refuses the run ([`file_id`]).
+///
+/// TLS-116: first it makes the engine's cache folders and takes their
+/// snapshot ([`super::cache_guard`]), before any write is resolved; a write in
+/// a cache folder, one that holds one, or one that is a cache file refuses the
+/// run. Once the check passes, the snapshot goes to the claim folder.
 pub fn check_write_sets(jobs: &[(String, JobPaths)], cwd: &Path) -> Result<(), String> {
+    let snap = super::cache_guard::take()?;
     ID_ERROR.with(|e| e.borrow_mut().take());
-    let checked = check_identities(jobs, cwd);
-    match ID_ERROR.with(|e| e.borrow_mut().take()) {
+    let checked = check_identities(jobs, cwd, &snap);
+    let checked = match ID_ERROR.with(|e| e.borrow_mut().take()) {
         Some(e) => Err(format!(
             "al-sem batch: cannot read the identity of {e}; the run cannot be checked"
         )),
         None => checked,
+    };
+    match super::claim::dir() {
+        Some(dir) if checked.is_ok() => super::cache_guard::publish(snap, dir)
+            .map_err(|e| format!("al-sem batch: cannot keep the cache snapshot: {e}")),
+        _ => checked,
     }
 }
 
+/// `p`'s [`resolve`]d identities (TLS-116, a claim's cache check): every
+/// existing component's, links followed, and whether the last is `p` itself.
+pub(super) fn identity_chain(p: &Path) -> std::io::Result<(Vec<FileId>, bool)> {
+    let cwd = std::env::current_dir()?;
+    ID_ERROR.with(|e| e.borrow_mut().take());
+    let id = resolve(&cwd, p);
+    if let Some(e) = ID_ERROR.with(|e| e.borrow_mut().take()) {
+        return Err(std::io::Error::other(format!(
+            "cannot read the identity of {e}"
+        )));
+    }
+    let exists = id.rest.is_empty() && !id.chain.is_empty();
+    Ok((id.chain, exists))
+}
+
 /// [`check_write_sets`]'s checks.
-fn check_identities(jobs: &[(String, JobPaths)], cwd: &Path) -> Result<(), String> {
+fn check_identities(
+    jobs: &[(String, JobPaths)],
+    cwd: &Path,
+    snap: &super::cache_guard::Snapshot,
+) -> Result<(), String> {
     use super::claim::{keep, marker_of, protect, reserve, write_key};
     use std::collections::btree_map::Entry;
     let fail = |why: String| Err(format!("al-sem batch: {why}"));
@@ -638,26 +668,20 @@ fn check_identities(jobs: &[(String, JobPaths)], cwd: &Path) -> Result<(), Strin
             protect(&marker_of(fid)).map_err(claimed)?;
         }
     }
-    // TLS-116: no write in a cache folder, none that holds one, and no hard
-    // link to a cache file (each claim checks its opened file again).
-    let roots: Vec<Ident> = crate::program::ir_cache::protected_roots()
-        .iter()
-        .map(|r| resolve(cwd, r))
-        .collect();
+    // TLS-116: no write in a cache folder, none that is a cache file under
+    // any name, none that holds a cache folder (each claim checks its file
+    // again at its open).
+    let roots: Vec<Ident> = snap.roots.iter().map(|r| resolve(cwd, r)).collect();
     for (j, _, _, t) in &writes {
         let (Written::File(w) | Written::Dir(w)) = t;
-        let link = match t {
-            Written::File(f) if f.rest.is_empty() && !f.chain.is_empty() => {
-                std::fs::metadata(&f.path)
-                    .and_then(|m| super::claim::cache_link(&m))
-                    .map_err(|e| to_err(format!("cannot check {}: {e}", f.path.display())))?
-            }
-            _ => false,
-        };
-        let why = match roots.iter().find(|r| w.under(r) || r.under(w)) {
-            Some(r) => format!("is in or holds the cache folder {}", r.path.display()),
-            None if link => "is a hard link to a cache file".to_string(),
-            None => continue,
+        let why = if w.chain.iter().any(|id| snap.dirs.contains(id)) {
+            "is in a cache folder of the engine".to_string()
+        } else if existing(w).is_some_and(|id| snap.files.contains(&id)) {
+            "is a file of the engine's caches".to_string()
+        } else if let Some(r) = roots.iter().find(|r| r.under(w)) {
+            format!("holds the cache folder {}", r.path.display())
+        } else {
+            continue;
         };
         return fail(format!(
             "{} writes {}, which {why}: no job may write the engine's caches (TLS-116)",

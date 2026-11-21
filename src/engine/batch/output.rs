@@ -279,6 +279,8 @@ fn write_file(job: &str, path: &Path, bytes: &[u8]) -> Result<(), Failure> {
 }
 
 fn create_dir(path: &Path) -> Result<(), Failure> {
+    // TLS-116: never made in (or as) a cache folder of the engine.
+    super::claim::check_dir(path).map_err(|e| (path.display().to_string(), e))?;
     if path.exists() {
         return Ok(());
     }

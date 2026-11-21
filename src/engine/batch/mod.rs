@@ -11,6 +11,7 @@
 //! view (D8).
 
 pub mod admission;
+pub mod cache_guard;
 pub mod claim;
 pub mod job;
 pub mod manifest;

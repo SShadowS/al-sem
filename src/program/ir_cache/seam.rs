@@ -455,14 +455,7 @@ impl IrCache {
     /// The `ir/` folder; with `create` (a writer), made owner-only first when missing.
     pub(crate) fn open_ir(&self, create: bool) -> IrDir {
         if create {
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::DirBuilderExt;
-                let _ = std::fs::DirBuilder::new()
-                    .recursive(true)
-                    .mode(0o700)
-                    .create(&self.ir_dir);
-            }
+            super::create_ir_dir(&self.ir_dir);
         }
         match std::fs::symlink_metadata(&self.ir_dir) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => IrDir::Missing,
