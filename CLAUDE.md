@@ -313,8 +313,9 @@ See `src/main.rs`'s `Args` (clap derive) for the authoritative flag list.
 ### The dependency IR cache (ENG-110) and measurements
 
 `alsem`, `aldump` and `al-call-hierarchy` keep the parsed IR of every dependency package in
-`~/.cache/al-ch-snapshot-cache/ir/<binary key>/` (Linux only; off on Windows and in `alsem
-batch`). **The key is the running binary's bytes**, so each new build starts cold: its first
+`~/.cache/al-ch-snapshot-cache/ir/<binary key>/` (Linux only; off on Windows). `alsem batch`
+uses it too, its parent and workers (TLS-116): the batch write check refuses any job write in,
+above or hard-linked into the text or IR cache folder. **The key is the running binary's bytes**, so each new build starts cold: its first
 CDO run fills ~144 MiB (one-shot `analyze`: ~x1.035 instructions of a cache-off run), every
 later run of the same binary is warm (~x0.53). Spec:
 `docs/superpowers/specs/2026-11-18-eng110-ir-cache-design.md`.

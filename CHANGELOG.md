@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (TLS-116: `alsem batch` uses the IR cache, and no job write reaches a cache folder)
+
+- **What was wrong.** TLS-109's write claims did not cover the engine's cache folders. ENG-110
+  turned its IR cache off in `alsem batch` for that reason, but ENG-113's text cache was on there
+  with the same gap: a job's stream or `--out` in the text cache folder, a directory target
+  holding it, or a `--out` that is a hard link to an entry was not refused. Its write would have
+  truncated a file other engines map (they die of SIGBUS) or left a job output for the cache to
+  replace.
+- **Now.** The text cache folder and the IR cache's `ir/` folder (also when `ALSEM_IR_CACHE_DIR`
+  puts it elsewhere) are protected. The batch write check refuses (exit 3, before any job) a write
+  in a cache folder, one that holds one (compared by the folders' identities, so a symlink or bind
+  mount of a folder counts), and an existing file that is a hard link to a cache file. Every
+  claim checks its opened file again, so an alias made after the check is refused at the open
+  (exit 1) before anything is truncated. Cache publishes are not claims: each makes a fresh file
+  in its own folder and links or renames it into place, so with no job writing there a publish
+  cannot land on a job's output.
+- **The IR cache is on in batch**, in the parent and in every worker: a multi-worker run no longer
+  parses each dependency in every worker. `ALSEM_IR_CACHE_REPORT` works in batch too: the report is
+  one of the run's writes (checked against every job write and input), the parent registers it,
+  and every process appends only to that file (a refused append is a warning, never a failed run).
+  Before, a batch run wrote no report line.
+- **Tests** (`tests/cli/cli_ir_cache.rs`): the old batch-off test is now its opposite (a cold root
+  filled by two workers, a warm one hit from disk by each worker and by one batch in the parent);
+  new refusal tests for a stream in the IR folder, in the text folder and through a link to the IR
+  folder, a shard directory holding the IR folder, a `--out` hard-linked to an entry, a late hard
+  link and a late symlink, a stream on the report, and a report path swapped after registration.
+  One discrimination proof per guard, recorded in each test's doc.
+
 ### Added (ENG-110: a persistent cache of parsed dependency IR)
 
 - **What.** Every engine process parsed and lowered every dependency file again: on CDO 10,881
