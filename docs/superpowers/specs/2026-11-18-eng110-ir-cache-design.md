@@ -303,33 +303,48 @@ have truncated a file other engines map (SIGBUS) or left a job output for the ca
 Now the parent and every worker use the cache, and the cache folders are protected
 (`engine::batch::cache_guard`; the text cache folder, and the IR cache's `ir/` folder wherever
 `ALSEM_IR_CACHE_DIR` puts it, when this process uses the IR cache):
-- **One snapshot per run** (`cache_guard::take`, in the parent's check). First it MAKES both
-  folders exactly as the caches make them (an `ALSEM_IR_CACHE_DIR` naming a non-directory leaves the
-  IR cache off and is not protected), so a spelling such as `missing/..` resolves now as it will
-  later. Then it records the identity (unix dev and inode; Windows volume serial and 128-bit file
-  id) of every directory and file inside them, each tree walked once (the default `ir/` lies in the
-  text folder). A name removed during the walk (a concurrent prune) is skipped; any other walk
-  error refuses the run (the caches cannot be protected). The parent writes the snapshot to the
-  claim folder; workers read it, never walk. Measured 2026-11-21 on server1's real
-  `~/.cache/al-ch-snapshot-cache` (133,867 entries), debug build: 258-364 ms over 4 runs.
-- **The check** (`manifest::check_write_sets`, exit 3 before any job) refuses a write whose folders
-  (links followed) include a cache folder, an existing file that is a cache file under any name (a
-  hard link, a bind mount of a file), and a directory target that holds a cache folder.
+- **One snapshot per run** (`cache_guard::take`, in the parent's check). First it MAKES the folders
+  the run's caches would use, exactly as the caches make them: the text folder always (every batch
+  run creates it), `ir/` when the IR cache is on and has a key. So a spelling such as `missing/..`
+  resolves now as it will later. A folder that is no directory afterwards (an override naming a
+  file, a dangling symlink) turns its cache OFF for the whole run, parent and workers
+  (`snapshot::cache::disable`, `ir_cache::disable`): no cache ever writes in a folder the snapshot
+  does not hold. Then it records the identity of every directory and file inside the folders, each
+  tree walked once (the default `ir/` lies in the text folder): unix device, inode and birth time
+  (`statx`; a reused inode number gets a new birth time, so it is not taken for a pruned file);
+  Windows volume serial and 128-bit file id. A name removed during the walk (a concurrent prune,
+  or a Windows delete pending) is skipped; any other walk error refuses the run. The parent writes
+  the snapshot (its on/off decisions, a header of counts and a blake3 of the body) to the claim
+  folder through a temporary file and a rename, and claims it so no write can take it; a worker
+  reads it at its start and fails closed (exit 4, no job run) when it is missing or damaged.
+  Workers never walk. Windows: one open per entry (TLS-109's `read_file_id`);
+  `FileIdExtdDirectoryInfo` could give the ids from the listing, not done because no Windows
+  machine runs these tests. Measured 2026-11-22 on server1's real `~/.cache/al-ch-snapshot-cache`
+  (134,395 entries), `release-fast`, 3 runs each: the walk 381-420 ms (`ALSEM_IR_CACHE=off`); with
+  the IR cache on, the span also hashes the binary for the key (once per process anyway): 514-594
+  ms warm, 1,885 ms on the first run after the build.
+- **The check** (`manifest::check_write_sets`, exit 3 before any job) refuses a write whose
+  resolved destination lies in a cache folder; a write whose name, as spelled, lies in one (a
+  symlink `ir/last-prune` pointing outside is still the prune's name, which it would replace); an
+  existing file that is a cache file under any name (a hard link, a bind mount of a file); a
+  directory target that holds a cache folder; and a write into the run's claim folder.
 - **Every open** (`claim::open_for_write`, `open_trace`, the report's registration and appends)
-  checks first the path's folders against the snapshot's directories, before anything is created;
-  then opens an existing file WITHOUT creating it and checks the handle's identity against the
-  snapshot's files; only a missing file is created, once its folder passed. A shard directory is
-  checked the same way before it is made (`claim::check_dir`). So an alias made after the check is
-  refused at the open (exit 1) and nothing is left in a cache folder. The folder test is
-  path-based: a path another process changes during the run is outside TLS-109's scope. A cache
-  file published during the run is not in the snapshot, but its folder is.
+  checks the same paths first, before anything is created; then opens an existing file WITHOUT
+  creating it and checks the handle's identity against the snapshot's files; only a missing file is
+  created, exclusively, once its folder passed, and is not handle-checked (it is new). A dangling
+  symlink outside the caches is still written through. A shard directory is checked the same way
+  before it is made (`claim::check_dir`). So an alias made after the check is refused at the open
+  (exit 1) and nothing is left in a cache folder. The folder tests are path-based: a path another
+  process changes during the run is outside TLS-109's scope. The run's own writes make no links. A
+  cache file published during the run is not in the snapshot, but its folder is.
 - **Cache publishes need no claim.** Every cache file is made under its folder with a fresh name
   (`O_EXCL` temp files, then a link or rename through the folder's handle, symlinks never
   followed); a lock file is opened without truncation; a prune only removes names in its folders.
   With no job writing in or above a folder, a publish cannot land on a job's output.
 - **The report** (`ALSEM_IR_CACHE_REPORT`) is one of the run's writes: the check compares it with
   every job write and input; the parent then registers it in the claim folder (through the guarded
-  open, a regular file only, never truncated) and keeps that handle; a worker opens the path once,
+  open with `O_NONBLOCK`, so a FIFO with no reader is refused instead of hanging the run; a regular
+  file only, never truncated) and keeps that handle; a worker opens the path once, the same way and
   without creating it, and appends only when the file is the registered one and no cache file
   (`claim::append_shared`). A refused append is a warning, never a failed run. The parent writes
   its `end` line before the claim folder goes. Planning (`plan`) builds no model, so no report
@@ -343,8 +358,12 @@ through `missing/..`; a `--out` hard-linked to an IR entry, a text entry and a f
 `ir/` while `ALSEM_IR_CACHE_DIR` points elsewhere (a bind mount of a file is the same identity
 test; making one needs root); a late hard link, a late symlink and a late shard directory; a trace
 in a cache folder; a concurrent prune during the walk; a stream on the report; a report path
-swapped after registration; and each guard of the registration. Each guard has a recorded
-discrimination proof.
+swapped after registration; each guard of the registration; a dangling-symlink cache folder
+whose target a shard job makes (IR and text); a cache name linking outside; a FIFO report; a
+worker with a missing or damaged snapshot; writes into the claim folder; a dangling-symlink
+stream outside the caches; and a reused inode number (`cache_guard::tests`). Each guard has a
+recorded discrimination proof. The shared batch test helper points every run at a temporary
+`XDG_CACHE_HOME`.
 
 ## Correctness checks
 
