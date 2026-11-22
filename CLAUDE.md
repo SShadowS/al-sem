@@ -388,6 +388,16 @@ later run of the same binary is warm (~x0.53). Spec:
   check it with `kraken coord question <id>` at the start of each sweep (`answer` is null while
   open). Do not file it again. Nothing tells you when the owner answers: the answer is only
   written to coord, and `coord questions` / `coord overview` simply stop listing it.
+- **How answers to your kraken requests are marked** (owner, 2026-11-23). kraken, the owner's
+  coordinator, answers some requests itself on the owner's behalf:
+  - `[kraken, from the mantra; owner may overrule] ...` is kraken's design call from
+    `/coord/owner/design-mantra.md`. Act on it as settled. If the owner later overrules it, follow
+    the owner.
+  - `kraken: ...` or `Noted` is kraken's own work, such as a restart, an install or a relay. It is
+    not an owner decision.
+  - `Owner: ...` is the owner's own words.
+
+  Secrets, money, pushes not covered by a standing yes, and new capability always go to the owner.
 - **A stack snapshot of a running process** (a hung or slow engine, where samply cannot attach)
   is taken with `gdb -p <pid> -batch -ex 'thread apply all bt'` (gdb is in the image since
   TLS-85). Frames have names only in a build with symbols: `profiling`, `cdo` or dev.
