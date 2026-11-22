@@ -2143,8 +2143,11 @@ pub(crate) fn exit_guards(
     // ENG-160: the binds (`R.Get(Id)` is a record operation, not a call site), and the aliases
     // a bind may go through (`A := R; A.Get(Id)`: one handle).
     let sites = bind_sites(r);
+    // ENG-176: every name by the routine's scope (`this.G` is the global, a quoted local named
+    // `"this.G"` is that local).
+    let scope = crate::program::model::recref_alias::HolderScope::of(r);
     let aliases =
-        crate::program::model::recref_alias::AliasClasses::of(&r.var_assignments, |_| true);
+        crate::program::model::recref_alias::AliasClasses::of(scope, &r.var_assignments, |_| true);
     // ENG-159: the classes that also join every parameter and global (`for_routine`: a caller
     // may pass one record as two parameters, `Twice(R, R)`), and the sound rule's retainable
     // holders (a record kept elsewhere may be rebound by a place that may run user code;
@@ -2172,19 +2175,20 @@ pub(crate) fn exit_guards(
         // (ENG-159: `Twice(R, R)`'s `B.GetTable(L)` rebinds `A`; exposed once arguments are read
         // at their call), and a place that may run user code while the record may be kept
         // elsewhere binds it too.
-        let members: HashSet<String> = aliases
-            .members(rec)
-            .into_iter()
-            .chain(kept.members(&crate::program::model::recref_alias::holder_key(rec)))
-            .collect();
-        let named = |t: &str| {
-            members.contains(&lc(t))
-                || members.contains(&crate::program::model::recref_alias::holder_key(t))
+        // The guard's record is a logical name (the walk strips its quotes).
+        let Some(rec_key) = scope.logical(rec) else {
+            continue;
         };
+        let members: HashSet<crate::program::model::recref_alias::HolderKey> = aliases
+            .members(rec_key)
+            .into_iter()
+            .chain(kept.members(rec_key))
+            .collect();
+        let named = |t: &str| scope.text(t).is_some_and(|h| members.contains(&h.key));
         let bound_before = !anytime(rec)
             && (r.var_assignments.iter().any(|a| {
                 before(&a.source_anchor)
-                    && (named(&a.lhs_name)
+                    && (named(&a.lhs_text)
                         || crate::program::model::recref_alias::into_holder_array(r, a))
             }) || r.call_sites.iter().any(|cs| {
                 before(&cs.source_anchor)
@@ -2194,13 +2198,9 @@ pub(crate) fn exit_guards(
             }) || sites
                 .iter()
                 .any(|s| s.call.is_none() && named(s.receiver) && before(s.anchor))
-                || user_code.iter().any(|p| {
-                    p.at < (line, col)
-                        && kept.rebinds_at(
-                            &crate::program::model::recref_alias::holder_key(rec),
-                            p.runs,
-                        )
-                }));
+                || user_code
+                    .iter()
+                    .any(|p| p.at < (line, col) && kept.rebinds_at(rec_key, p.runs)));
         if bound_before {
             continue;
         }
@@ -2324,7 +2324,9 @@ fn facts_of(
         } else {
             VarKind::Local
         };
-        f.tracked.insert(lc(&v.name), kind);
+        // ENG-176: the declared name as is (logical, folded): `lc` would strip a `this.` the
+        // name holds (a quoted local `"this.G"` is `this.g`, not `g`).
+        f.tracked.insert(v.name.fold_identifier(), kind);
     }
     f.opaque =
         crate::program::body::features::names_opaque(r.statement_tree.as_deref(), r.body_available);
@@ -2373,21 +2375,31 @@ fn facts_of(
     // The alias classes (one source, ENG-145: `program::model::recref_alias`): the routine's own
     // `A := B`, and every parameter and global joined (a caller may pass one record twice,
     // `Victim(R, R)`, or have aliased two globals: sol round 2).
-    let holders: Vec<(String, bool)> = f
+    // ENG-176: the classes are keyed by `HolderKey`; a tracked name is its variable's declared
+    // name, and a key's name is that name only when the name resolves back to it (a global a
+    // local hides is no tracked variable: its name is the local's).
+    let scope = crate::program::model::recref_alias::HolderScope::of(r);
+    let name_of = |k: crate::program::model::recref_alias::HolderKey| -> Option<String> {
+        let n = &scope.variable(k).name;
+        (scope.logical(n) == Some(k)).then(|| n.clone())
+    };
+    let holders: Vec<(crate::program::model::recref_alias::HolderKey, bool)> = f
         .tracked
         .iter()
-        .map(|(n, k)| (n.clone(), !matches!(k, VarKind::Local)))
+        .filter_map(|(n, k)| Some((scope.logical(n)?, !matches!(k, VarKind::Local))))
         .collect();
     let classes =
         crate::program::model::recref_alias::AliasClasses::build(r, &holders, false, shadowed);
+    // A whole variable's tracked name from source text (`None`: an element, a member, a global a
+    // local hides, an untracked name).
+    let tracked_of = |text: &str| -> Option<String> {
+        scope
+            .text(text)
+            .filter(|h| !h.indexed)
+            .and_then(|h| name_of(h.key))
+    };
     for a in &r.var_assignments {
-        // ENG-162: a global a local hides (`this.G := R` with a local `G`) is no tracked variable
-        // (`lc` would read it as the local); the alias classes take R as kept.
-        if crate::program::model::recref_alias::is_shadowed_global(&a.lhs_name) {
-            continue;
-        }
-        let l = lc(&a.lhs_name);
-        if !f.tracked.contains_key(&l) {
+        let Some(l) = tracked_of(&a.lhs_text).filter(|l| f.tracked.contains_key(l)) else {
             // ENG-160 (sol): `Slot[1] := R` shares R's record with an array slot, which the flow
             // does not track (`recref_alias::into_holder_array`): each holder may hold anything
             // from there on.
@@ -2400,13 +2412,11 @@ fn facts_of(
                 }
             }
             continue;
-        }
-        let part = match (&a.rhs_identifier, &a.rhs_member) {
-            // ENG-162: a copy of a global a local hides may hold anything.
-            (Some(w), _) if crate::program::model::recref_alias::is_shadowed_global(w) => {
-                Part::Atoms(top())
-            }
-            (Some(w), _) => Part::Copy(lc(w)),
+        };
+        // A copy of a tracked variable reads it; a copy of anything else (a global a local hides,
+        // an untracked name) may hold anything.
+        let part = match (&a.rhs_text, &a.rhs_member) {
+            (Some(w), _) => tracked_of(w).map_or_else(|| Part::Atoms(top()), Part::Copy),
             (None, Some((w, m))) if m == "duplicate" => Part::Copy(lc(w)),
             _ => Part::Atoms(top()),
         };
@@ -2419,17 +2429,18 @@ fn facts_of(
             .map(|n| classes.root(n))
             .collect::<HashSet<_>>()
         {
-            let owned = classes.members(&root);
-            let members: Vec<&String> = owned.iter().collect();
+            let keys = classes.members(root);
             let assigns: Vec<(u32, u32)> = classes
                 .assignments
                 .iter()
-                .filter(|(l, _)| members.contains(&l))
+                .filter(|(l, _)| keys.contains(l))
                 .map(|(_, p)| *p)
                 .collect();
             // A class holding a parameter or global shares from entry: every rebinding of a
             // member may follow (sol round 2 on ENG-145).
-            let from_entry = members.iter().any(|m| classes.is_external(m));
+            let from_entry = keys.iter().any(|&m| classes.is_external(m));
+            let owned: Vec<String> = keys.iter().filter_map(|&k| name_of(k)).collect();
+            let members: Vec<&String> = owned.iter().collect();
             // What a rebinding that may run after an alias assignment binds.
             let mut shared: Vec<(Part, Option<(u32, u32)>)> = Vec::new();
             for m in &members {
@@ -2506,7 +2517,7 @@ fn facts_of(
     for p in user_code {
         let at = Some(p.at);
         let conds = conds_of(p.at);
-        for v in classes.rebound_at(p.runs) {
+        for v in classes.rebound_at(p.runs).filter_map(|k| name_of(k)) {
             f.alias_shared.insert(v.clone());
             let key = (v.clone(), conds.clone());
             if kept_until.get(&key).is_some_and(|&end| end <= p.at) {
@@ -2554,13 +2565,18 @@ fn facts_of(
             }
         }
         for (k, a) in cs.argument_texts.iter().enumerate() {
-            let v = lc(a);
-            if f.tracked.contains_key(&v) {
+            let Some(v) = tracked_of(a).filter(|v| f.tracked.contains_key(v)) else {
+                continue;
+            };
+            {
                 // A callee's rebinding moves the one handle every alias shares (Fable on
                 // ENG-159: `A := RR; Mut(RR); Guarded(A)`), as an in-place bind does.
-                let members: Vec<String> = classes
-                    .members(&v)
+                let members: Vec<String> = scope
+                    .logical(&v)
+                    .map(|key| classes.members(key))
+                    .unwrap_or_default()
                     .into_iter()
+                    .filter_map(|m| name_of(m))
                     .filter(|m| *m != v && f.tracked.contains_key(m))
                     .collect();
                 f.alias_shared.extend(members.iter().cloned());
