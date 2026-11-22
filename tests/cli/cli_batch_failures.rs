@@ -111,7 +111,10 @@ fn failed_policy_job_reads_once() {
 
 /// The `log::warn!` lines of a shared view build (the snapshot cache, made
 /// unwritable here) are view lines: printed once on the run's stderr, as a
-/// one-job run prints them, and in no job's stderr file.
+/// one-job run prints them, and in no job's stderr file. The line compared
+/// is the one per package ("kept as owned text"): a batch run turns the
+/// unusable cache off at its check (TLS-116), so it does not also try to
+/// make the folder per package as a one-job run does.
 #[test]
 fn batch_view_log_lines_once() {
     let ws = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -122,7 +125,8 @@ fn batch_view_log_lines_once() {
         ("XDG_CACHE_HOME", "/dev/null/no-cache"),
         ("RUST_LOG", "warn"),
     ];
-    let is_log = |l: &&str| l.contains("al_sem::snapshot::cache");
+    let is_log =
+        |l: &&str| l.contains("al_sem::snapshot::cache") && l.contains("kept as owned text");
     let alone = Command::new(env!("CARGO_BIN_EXE_alsem"))
         .args(["events", "fanout", &ws])
         .envs(env)

@@ -549,19 +549,25 @@ pub fn check_write_sets(jobs: &[(String, JobPaths)], cwd: &Path) -> Result<(), S
     }
 }
 
-/// `p`'s [`resolve`]d identities (TLS-116, a claim's cache check): every
-/// existing component's, links followed, and whether the last is `p` itself.
-pub(super) fn identity_chain(p: &Path) -> std::io::Result<(Vec<FileId>, bool)> {
-    let cwd = std::env::current_dir()?;
-    ID_ERROR.with(|e| e.borrow_mut().take());
-    let id = resolve(&cwd, p);
-    if let Some(e) = ID_ERROR.with(|e| e.borrow_mut().take()) {
-        return Err(std::io::Error::other(format!(
+/// `p` (against `cwd`) [`resolve`]d (TLS-116, the cache checks): where the
+/// write lands, links followed, a dangling link through its text. A part
+/// whose identity cannot be read is an error. A check's own pending error is
+/// kept.
+pub(super) fn resolved_path(cwd: &Path, p: &Path) -> std::io::Result<PathBuf> {
+    let pending = ID_ERROR.with(|e| e.borrow_mut().take());
+    let id = resolve(cwd, p);
+    let mine = ID_ERROR.with(|e| std::mem::replace(&mut *e.borrow_mut(), pending));
+    match mine {
+        Some(e) => Err(std::io::Error::other(format!(
             "cannot read the identity of {e}"
-        )));
+        ))),
+        None => Ok(id.path),
     }
-    let exists = id.rest.is_empty() && !id.chain.is_empty();
-    Ok((id.chain, exists))
+}
+
+/// `p` against `cwd`, as spelled, `..` folded as the OS takes it ([`fold`]).
+pub(super) fn fold_path(cwd: &Path, p: &Path) -> PathBuf {
+    fold(cwd, p)
 }
 
 /// [`check_write_sets`]'s checks.
@@ -668,15 +674,24 @@ fn check_identities(
             protect(&marker_of(fid)).map_err(claimed)?;
         }
     }
-    // TLS-116: no write in a cache folder, none that is a cache file under
-    // any name, none that holds a cache folder (each claim checks its file
-    // again at its open).
+    // TLS-116: no write in a cache folder (its destination or its name),
+    // none that is a cache file under any name, none that holds a cache
+    // folder (each open checks again).
     let roots: Vec<Ident> = snap.roots.iter().map(|r| resolve(cwd, r)).collect();
-    for (j, _, _, t) in &writes {
+    for (j, _, spelled, t) in &writes {
         let (Written::File(w) | Written::Dir(w)) = t;
-        let why = if w.chain.iter().any(|id| snap.dirs.contains(id)) {
-            "is in a cache folder of the engine".to_string()
-        } else if existing(w).is_some_and(|id| snap.files.contains(&id)) {
+        let cannot = |e: std::io::Error| to_err(format!("cannot check {}: {e}", w.path.display()));
+        let cache_file = match existing(w) {
+            Some(id) => std::fs::metadata(&w.path)
+                .map(|m| snap.is_cache_file(&id, &m))
+                .map_err(cannot)?,
+            None => false,
+        };
+        let why = if let Some(why) =
+            super::cache_guard::refuses_path(snap, cwd, spelled).map_err(cannot)?
+        {
+            why.trim_start_matches("this file ").to_string()
+        } else if cache_file {
             "is a file of the engine's caches".to_string()
         } else if let Some(r) = roots.iter().find(|r| r.under(w)) {
             format!("holds the cache folder {}", r.path.display())

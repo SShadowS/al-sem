@@ -59,7 +59,7 @@ impl IrCache {
             return;
         }
         let pid = std::process::id();
-        if self.enabled && key.is_none() {
+        if self.is_on() && key.is_none() {
             let why = if cfg!(target_os = "linux") {
                 "no key"
             } else {
@@ -75,7 +75,7 @@ impl IrCache {
                 "event": "start",
                 "pid": pid,
                 "argv": argv_json(std::env::args_os()),
-                "enabled": self.enabled,
+                "enabled": self.is_on(),
                 "key": key.map(IrKey::hex),
             }),
         );

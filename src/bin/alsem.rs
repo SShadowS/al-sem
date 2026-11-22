@@ -2062,6 +2062,15 @@ fn run_batch_cmd(b: BatchCli) -> ExitCode {
             ));
         };
         claim::set_dir(dir.into());
+        // The parent's cache snapshot, before any job (TLS-116): missing or
+        // damaged, the worker runs nothing and fails the run.
+        if let Some(dir) = claim::dir()
+            && let Err(e) = al_sem::engine::batch::cache_guard::load(dir)
+        {
+            drop_file(Some("the worker has no cache snapshot"));
+            eprintln!("al-sem batch: worker {w}: {e}");
+            return ExitCode::from(claim::FAILED_EXIT);
+        }
         // Its spool stays for the parent to publish, also if it dies.
         if let Some(spool) = claim::spool_path(&format!("w{w}"))
             && let Some(trace) = spool_file(&spool)

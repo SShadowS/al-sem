@@ -42,10 +42,14 @@ pub(crate) fn run_manifest_doc(
     let trace = dir.join("trace.json");
     // A refused run writes no trace (TLS-109): no earlier run's may be read.
     let _ = std::fs::remove_file(&trace);
+    // TLS-116: a batch run snapshots the cache folders; never the developer's
+    // real cache (a caller's `env` may name its own).
+    let xdg = tempfile::tempdir().unwrap();
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_alsem"));
     cmd.arg("batch")
         .arg(&manifest)
         .env_remove("ALSEM_RETAINED_CENSUS")
+        .env("XDG_CACHE_HOME", xdg.path())
         .env("RUST_LOG", "off")
         .env("ALSEM_TRACE", "1")
         .env("ALSEM_TRACE_FILE", &trace)

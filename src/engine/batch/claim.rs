@@ -339,7 +339,7 @@ pub fn append_shared(path: &Path, tag: &str, bytes: &[u8]) -> std::io::Result<()
 fn open_registered(dir: &Path, path: &Path, tag: &str) -> std::io::Result<File> {
     let snap = super::cache_guard::get(dir)?;
     refuse_cache_path(snap, path)?;
-    let f = OpenOptions::new().append(true).open(path)?;
+    let f = options(true).open(path)?;
     refuse_nonregular(&f)?;
     refuse_cache_handle(snap, &f)?;
     let held = std::fs::read_to_string(dir.join(marker_of(&handle_id(&f)?)));
@@ -397,7 +397,9 @@ fn register_in(
 /// snapshot ([`super::cache_guard`]); then an existing file is opened WITHOUT
 /// creating and its handle's identity is checked (a hard link, a bind mount
 /// of a file, any name of a cache file); only a missing file is created, once
-/// its folder has passed. Never
+/// its folder has passed, exclusively (`O_EXCL`), and a file this open made
+/// is new, so its handle is not checked (an inode number a pruned cache file
+/// had is no cache file). Never
 /// truncates. Path-based folder test: a path another process changes during
 /// the run is outside TLS-109's scope (module doc). `refused` runs when the
 /// check refuses (a job write's refusal fails the run), not when the open
@@ -409,15 +411,21 @@ fn open_guarded(
     refused: &dyn Fn(),
 ) -> std::io::Result<File> {
     refuse_cache_path(snap, path).inspect_err(|_| refused())?;
-    let mut o = OpenOptions::new();
-    if append {
-        o.append(true);
-    } else {
-        o.write(true);
-    }
-    let f = match o.open(path) {
+    // A file this open makes is new: no cache file, whatever number it got.
+    let f = match options(append).open(path) {
         Ok(f) => f,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => o.create(true).open(path)?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            match options(append).create_new(true).open(path) {
+                Ok(f) => return Ok(f),
+                // A dangling symlink (`O_EXCL` does not follow it), or a
+                // file made meanwhile: opened (made through the link, as
+                // before TLS-116) and checked as any existing file.
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                    options(append).create(true).open(path)?
+                }
+                Err(e) => return Err(e),
+            }
+        }
         Err(e) => return Err(e),
     };
     // A device or pipe is no cache file, and may give no identity (`NUL`).
@@ -427,21 +435,36 @@ fn open_guarded(
     Ok(f)
 }
 
-/// Refuse `path` when it lies in a cache folder
-/// ([`super::cache_guard::in_cache_folder`]).
-fn refuse_cache_path(snap: &super::cache_guard::Snapshot, path: &Path) -> std::io::Result<()> {
-    if super::cache_guard::in_cache_folder(snap, path)? {
-        return Err(std::io::Error::other(
-            "refused: this file is in a cache folder of the engine (TLS-116)",
-        ));
+/// How [`open_guarded`] opens: to write, or to append. An append (the run's
+/// shared file) never waits: `O_NONBLOCK`, so a FIFO with no reader fails the
+/// open (`ENXIO`) instead of hanging it, and its type is checked before any
+/// write. A job's stream may be a pipe it writes as before (TLS-109).
+fn options(append: bool) -> OpenOptions {
+    let mut o = OpenOptions::new();
+    if append {
+        o.append(true);
+        #[cfg(unix)]
+        std::os::unix::fs::OpenOptionsExt::custom_flags(&mut o, libc::O_NONBLOCK);
+    } else {
+        o.write(true);
     }
-    Ok(())
+    o
+}
+
+/// Refuse `path` when it, or its name, lies in a cache folder or the claim
+/// folder ([`super::cache_guard::refuses_path`]).
+fn refuse_cache_path(snap: &super::cache_guard::Snapshot, path: &Path) -> std::io::Result<()> {
+    let cwd = std::env::current_dir()?;
+    match super::cache_guard::refuses_path(snap, &cwd, path)? {
+        Some(why) => Err(std::io::Error::other(format!("refused: {why} (TLS-116)"))),
+        None => Ok(()),
+    }
 }
 
 /// Refuse the opened `f` when it is a file of the engine's caches, under any
 /// name.
 fn refuse_cache_handle(snap: &super::cache_guard::Snapshot, f: &File) -> std::io::Result<()> {
-    if snap.files.contains(&handle_id(f)?) {
+    if snap.is_cache_file(&handle_id(f)?, &f.metadata()?) {
         return Err(std::io::Error::other(
             "refused: this file is a file of the engine's caches (TLS-116)",
         ));
@@ -627,10 +650,12 @@ mod tests {
         let entry = cache.join("e.bin");
         std::fs::write(&entry, "ENTRY").unwrap();
         let id = |p: &Path| read_file_id(p).unwrap().unwrap();
+        // Birth times unknown (0): matched by number alone.
         let snap = Snapshot {
             roots: vec![cache.clone()],
-            dirs: [id(&cache)].into(),
-            files: [id(&entry)].into(),
+            dirs: [(id(&cache), 0)].into(),
+            files: [(id(&entry), 0)].into(),
+            ..Snapshot::default()
         };
         let markers = || std::fs::read_dir(&claims).unwrap().count();
         let refused = |case: &str, path: &Path| {

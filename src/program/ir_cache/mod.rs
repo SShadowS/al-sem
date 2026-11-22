@@ -151,8 +151,9 @@ static SUSPENDED: AtomicUsize = AtomicUsize::new(0);
 pub fn install_from_env() -> ReportGuard {
     let var = |k: &str| std::env::var_os(k).filter(|v| !v.is_empty());
     let (enabled, bad_switch) = switch(var("ALSEM_IR_CACHE").as_deref());
-    // Paths only: nothing is made here (sol r1). A writer makes `ir/` at its first publish;
-    // a cache-off or dependency-free run makes nothing.
+    // Paths only: nothing is made here (sol r1). A writer makes `ir/` at its first publish; a
+    // cache-off or dependency-free run makes nothing, except `alsem batch`, whose check makes
+    // the folders its caches would use before any job (TLS-116, `engine::batch::cache_guard`).
     let text_dir = crate::snapshot::cache::cache_dir_path();
     let ir_dir = var("ALSEM_IR_CACHE_DIR").map_or_else(|| text_dir.join("ir"), PathBuf::from);
     let verify = var("ALSEM_IR_CACHE_VERIFY").is_some_and(|v| v == "1");
@@ -189,15 +190,31 @@ pub(crate) fn create_ir_dir(ir_dir: &std::path::Path) {
 }
 
 /// TLS-116: the installed IR cache's `ir/` folder, made now as its first writer would make it,
-/// when this process can use it (installed, on, Linux) and it is a directory; `None` otherwise
-/// (an `ALSEM_IR_CACHE_DIR` naming a file leaves the cache off, so there is nothing to
-/// protect). A batch run's check makes and protects it (`engine::batch::cache_guard`).
+/// when this process would use it (installed, on, with a key); `None` otherwise. The caller
+/// decides from what is there afterwards (`engine::batch::cache_guard`: a batch run's check,
+/// which turns the cache off for the run when the folder is no directory).
 pub fn make_ir_dir() -> Option<PathBuf> {
-    let c = INSTALLED
-        .get()
-        .filter(|c| c.enabled && cfg!(target_os = "linux"))?;
+    let c = INSTALLED.get().filter(|c| c.is_on())?;
+    c.key()?;
     create_ir_dir(&c.ir_dir);
-    c.ir_dir.is_dir().then(|| c.ir_dir.clone())
+    Some(c.ir_dir.clone())
+}
+
+/// Set when a batch run's snapshot turned the IR cache off for the run (TLS-116).
+static BATCH_OFF: AtomicBool = AtomicBool::new(false);
+
+/// TLS-116: turn the installed IR cache off for this process, as `ALSEM_IR_CACHE=off` does
+/// (it still counts and reports): a batch run whose `ir/` folder is no directory after its
+/// check made it, so the snapshot does not hold it.
+pub fn disable() {
+    BATCH_OFF.store(true, Ordering::SeqCst);
+}
+
+impl IrCache {
+    /// Whether this cache reads and writes: on, and not turned off by a batch run.
+    pub(crate) fn is_on(&self) -> bool {
+        self.enabled && !BATCH_OFF.load(Ordering::SeqCst)
+    }
 }
 
 /// TLS-116: the installed cache's report file (`ALSEM_IR_CACHE_REPORT`), which a batch run

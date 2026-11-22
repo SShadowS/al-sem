@@ -65,7 +65,7 @@ pub(crate) fn parse_package<R: Send>(
     let n = files.len();
     Counters::add(&c.counters.seam_files, n);
     // Hashed once per process, at its first seam use (spec "The key").
-    let key = if c.enabled { c.key() } else { None };
+    let key = if c.is_on() { c.key() } else { None };
     c.first_use(key.as_ref());
     let (Some(digest), Some(key)) = (source.text_digest, key) else {
         Counters::add(&c.counters.skipped_off, n);
