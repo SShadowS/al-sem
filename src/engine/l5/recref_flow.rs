@@ -86,15 +86,14 @@ type InPlace = HashMap<String, Vec<((u32, u32), Part)>>;
 /// The most rounds the summaries are iterated; past it nothing is tracked.
 const MAX_ROUNDS: usize = 64;
 
+/// A name's fold, for a LOGICAL name (a declaration, a parameter, an assignment side, a method or
+/// table name) or a text that names no variable. Raw source text naming a variable goes through
+/// [`text_key`] (ENG-176): only the scope can tell `this.G` (the global) from `"this.G"` (a
+/// local) or from a local hiding `G`.
 fn lc(s: &str) -> String {
-    let s = crate::program::model::recref_alias::strip_parens(s);
-    // `this.G` is the global `G` (sol on ENG-159: `this.G.GetTable(Vend)` was no rebinding of
-    // `G`), as `recref_alias::holder_key` reads it.
-    let s = match s.get(..5) {
-        Some(p) if p.eq_fold_identifier("this.") => &s[5..],
-        _ => s,
-    };
-    s.trim_matches('"').fold_identifier()
+    crate::program::model::recref_alias::strip_parens(s)
+        .trim_matches('"')
+        .fold_identifier()
 }
 
 fn is_tracked_type(t: &str) -> bool {
@@ -190,6 +189,66 @@ struct Facts {
     /// ENG-159: the start positions two or more call sites or record operations share (a chained
     /// call), computed once per routine for [`arg_reach`].
     shared_starts: HashSet<(u32, u32)>,
+    /// ENG-176: each raw source text of the routine that names a variable (a receiver, an
+    /// argument, an assignment side), resolved once by its scope ([`HolderScope`]) to the tracked
+    /// name it denotes: `this.G` is the global `G`, `"this.G"` the local of that name, and a
+    /// global a local hides, or an element `X[1]`, is `""` (no tracked name). A text that names no
+    /// variable is absent ([`text_key`] folds it).
+    ///
+    /// [`HolderScope`]: crate::program::model::recref_alias::HolderScope
+    text_names: HashMap<String, String>,
+}
+
+/// ENG-176: the tracked name raw source text `raw` of a routine denotes ([`Facts::text_names`]),
+/// else its fold (a text that names no variable).
+fn text_key(f: &Facts, raw: &str) -> String {
+    f.text_names.get(raw).cloned().unwrap_or_else(|| lc(raw))
+}
+
+/// ENG-176: [`Facts::text_names`] for routine `r`: every raw text it holds that names a variable.
+fn text_names_of(r: &ModelRoutine) -> HashMap<String, String> {
+    use crate::program::model::recref_alias::HolderScope;
+    let scope = HolderScope::of(r);
+    let mut out = HashMap::new();
+    let mut add = |raw: &str| {
+        if out.contains_key(raw) {
+            return;
+        }
+        if let Some(h) = scope.text(raw) {
+            let n = &scope.variable(h.key).name;
+            // A whole variable whose name resolves back to it; else no tracked name.
+            let name = if !h.indexed && scope.logical(n) == Some(h.key) {
+                n.clone()
+            } else {
+                String::new()
+            };
+            out.insert(raw.to_string(), name);
+        }
+    };
+    for cs in &r.call_sites {
+        for a in &cs.argument_texts {
+            add(a);
+        }
+        if let PCallee::Member { receiver, .. } = &cs.callee {
+            add(receiver);
+        }
+    }
+    for op in &r.record_operations {
+        add(&op.record_variable_name);
+    }
+    for site in crate::program::model::recref_alias::bind_sites(r) {
+        add(site.receiver);
+        for a in site.args {
+            add(a);
+        }
+    }
+    for a in &r.var_assignments {
+        add(&a.lhs_text);
+        if let Some(w) = &a.rhs_text {
+            add(w);
+        }
+    }
+    out
 }
 
 /// Per routine: the atoms of each tracked own variable, and of each global it
@@ -444,14 +503,21 @@ impl<'a> RecRefFlow<'a> {
         // Per object: the tracked globals some routine rebinds in place.
         let mut in_place: HashMap<&str, HashSet<String>> = HashMap::new();
         for r in routines {
+            // ENG-176: the receiver by the routine's scope: `this.G.GetTable(…)` rebinds the global
+            // `G` even when a local hides it, and the bare `G` then names the local.
+            let scope = crate::program::model::recref_alias::HolderScope::of(r);
             for site in bind_sites(r) {
-                let x = lc(site.receiver);
-                if r.variables.iter().any(|v| {
-                    lc(&v.name) == x
-                        && v.scope.as_deref() == Some("global")
-                        && is_tracked_type(&v.declared_type)
-                }) {
-                    in_place.entry(r.object_id.as_str()).or_default().insert(x);
+                if let Some(h) = scope.text(site.receiver)
+                    && let crate::program::model::recref_alias::HolderKey::Global(_) = h.key
+                    && !h.indexed
+                {
+                    let v = scope.variable(h.key);
+                    if is_tracked_type(&v.declared_type) {
+                        in_place
+                            .entry(r.object_id.as_str())
+                            .or_default()
+                            .insert(v.name.clone());
+                    }
                 }
             }
         }
@@ -724,8 +790,10 @@ impl<'a> RecRefFlow<'a> {
         let (vals, timeline) = self.evaluate(i, inputs, globals.clone())?;
         // ENG-159 Part A: an argument naming a local or parameter is what it holds AT the call,
         // before the call's own write-back ([`arg_reach`]).
+        // ENG-176: the argument's text resolved by the routine's scope to a tracked name.
+        let arg = &text_key(&self.facts[i], arg);
         if self.positional(i) && self.is_reachable_local(i, arg) && !timeline.is_empty() {
-            let w = lc(arg);
+            let w = arg.clone();
             let seen = arg_reach(&self.facts[i], cs);
             let mut out = entry.get(&w).cloned().unwrap_or_else(empty_val);
             for (u, q, val) in &timeline {
@@ -954,7 +1022,7 @@ impl<'a> RecRefFlow<'a> {
                         let seen = arg_reach(f, cs);
                         let mut m = vals.clone();
                         for a in &cs.argument_texts {
-                            let w = lc(a);
+                            let w = text_key(f, a);
                             if matches!(f.tracked.get(&w), Some(VarKind::Param(_) | VarKind::Local))
                             {
                                 let v = pos_val(
@@ -1165,7 +1233,7 @@ impl<'a> RecRefFlow<'a> {
             };
             let v = pos
                 .and_then(|pos| cs.argument_texts.get(pos as usize))
-                .and_then(|a| self.val_of_text(i, vals, globals, a));
+                .and_then(|a| self.val_of_text(i, vals, globals, &text_key(&self.facts[i], a)));
             inputs.push((*j, v));
         }
         inputs.sort();
@@ -1344,7 +1412,8 @@ impl<'a> RecRefFlow<'a> {
                     };
                     match pos.and_then(|pos| cs.argument_texts.get(pos as usize)) {
                         Some(arg) => {
-                            add(&mut out, self.atoms_of(i, vars, arg));
+                            let arg = text_key(&self.facts[i], arg);
+                            add(&mut out, self.atoms_of(i, vars, &arg));
                         }
                         None => return top(),
                     }
@@ -1540,7 +1609,8 @@ impl<'a> RecRefFlow<'a> {
             match a {
                 Atom::Param(j) => match cs.argument_texts.get(*j as usize) {
                     Some(arg) => {
-                        add(&mut out, self.atoms_of(i, &self.summaries[i].vars, arg));
+                        let arg = text_key(&self.facts[i], arg);
+                        add(&mut out, self.atoms_of(i, &self.summaries[i].vars, &arg));
                     }
                     None => return top(),
                 },
@@ -1557,11 +1627,17 @@ impl<'a> RecRefFlow<'a> {
         if self.facts[i].opaque {
             return top();
         }
-        match cs.argument_texts.get(k as usize) {
+        // ENG-176: the argument's text resolved by the routine's scope to a tracked name.
+        match cs
+            .argument_texts
+            .get(k as usize)
+            .map(|a| text_key(&self.facts[i], a))
+            .as_deref()
+        {
             // ENG-159 Part A: a local or parameter is what it holds AT the call, before the
             // call's own write-back ([`arg_reach`]).
             Some(a) if self.positional(i) && self.is_reachable_local(i, a) => {
-                let w = lc(a);
+                let w = a.to_string();
                 let seen = arg_reach(&self.facts[i], cs);
                 let mut out = initial_summary(&self.facts[i])
                     .vars
@@ -1597,7 +1673,8 @@ impl<'a> RecRefFlow<'a> {
         let PCallee::Member { receiver, .. } = &cs.callee else {
             return None;
         };
-        let x = lc(receiver);
+        let f = &self.facts[i];
+        let x = text_key(f, receiver);
         let var = r.variables.iter().find(|v| lc(&v.name) == x)?;
         if var.is_parameter
             || var.scope.as_deref() != Some("local")
@@ -1612,10 +1689,11 @@ impl<'a> RecRefFlow<'a> {
         let escapes = r
             .call_sites
             .iter()
-            .any(|c| c.argument_texts.iter().any(|a| lc(a) == x))
-            || r.var_assignments
-                .iter()
-                .any(|a| lc(&a.lhs_name) == x || a.rhs_identifier.as_deref() == Some(x.as_str()));
+            .any(|c| c.argument_texts.iter().any(|a| text_key(f, a) == x))
+            || r.var_assignments.iter().any(|a| {
+                text_key(f, &a.lhs_text) == x
+                    || a.rhs_text.as_deref().is_some_and(|w| text_key(f, w) == x)
+            });
         (!escapes).then_some(x)
     }
 
@@ -1650,7 +1728,7 @@ impl<'a> RecRefFlow<'a> {
             let PCallee::Member { receiver, .. } = &c.callee else {
                 continue;
             };
-            if lc(receiver) != x {
+            if text_key(&self.facts[i], receiver) != x {
                 continue;
             }
             let ts = self.targets.get(c.id.as_str())?;
@@ -1668,7 +1746,8 @@ impl<'a> RecRefFlow<'a> {
                         match a {
                             Atom::Param(j) => match c.argument_texts.get(*j as usize) {
                                 Some(arg) => {
-                                    add(atoms, self.atoms_of(i, &self.summaries[i].vars, arg));
+                                    let arg = text_key(&self.facts[i], arg);
+                                    add(atoms, self.atoms_of(i, &self.summaries[i].vars, &arg));
                                 }
                                 None => {
                                     add(atoms, top());
@@ -1901,10 +1980,11 @@ fn initial_summary(f: &Facts) -> Summary {
 /// What bind site `site` binds its receiver to ([`recref_alias::RecRefBind`],
 /// the one list, ENG-160): `GetTable(X)` what `X` holds, `Close` no table,
 /// `Open` and `Get(Id)` anything.
-fn in_place_part(site: &BindSite<'_>) -> Part {
+fn in_place_part(site: &BindSite<'_>, f: &Facts) -> Part {
     match site.how {
+        // ENG-176: `X` resolved by the routine's scope (`this.X` is the global).
         RecRefBind::GetTable => match site.args.first() {
-            Some(arg) => Part::Copy(lc(arg)),
+            Some(arg) => Part::Copy(text_key(f, arg)),
             None => Part::Atoms(top()),
         },
         RecRefBind::Open | RecRefBind::Get => Part::Atoms(top()),
@@ -2060,7 +2140,9 @@ fn keeps_unresolved(r: &ModelRoutine, cs: &PCallSite) -> bool {
     match &cs.callee {
         PCallee::Member { receiver, method } => {
             let x = lc(receiver);
-            if let Some(v) = r.variables.iter().find(|v| lc(&v.name) == x) {
+            // ENG-176: the receiver by the routine's scope (`this.X` is the global).
+            let scope = crate::program::model::recref_alias::HolderScope::of(r);
+            if let Some(v) = scope.text(receiver).map(|h| scope.variable(h.key)) {
                 let t = v.declared_type.trim().fold_identifier();
                 // An object variable's unresolved method could do anything.
                 return ![
@@ -2328,6 +2410,7 @@ fn facts_of(
         // name holds (a quoted local `"this.G"` is `this.g`, not `g`).
         f.tracked.insert(v.name.fold_identifier(), kind);
     }
+    f.text_names = text_names_of(r);
     f.opaque =
         crate::program::body::features::names_opaque(r.statement_tree.as_deref(), r.body_available);
     if f.opaque {
@@ -2354,7 +2437,7 @@ fn facts_of(
     let mut in_place: InPlace = HashMap::new();
     let sites = bind_sites(r);
     for site in &sites {
-        let x = lc(site.receiver);
+        let x = text_key(&f, site.receiver);
         if f.tracked.contains_key(&x) {
             let at = (site.anchor.start_line, site.anchor.start_column);
             // A `Get` whose record ID's sources the routine names moves the shared handle to
@@ -2365,7 +2448,7 @@ fn facts_of(
                     .map(|xs| xs.into_iter().map(Part::Copy).collect::<Vec<_>>()),
                 _ => None,
             }
-            .unwrap_or_else(|| vec![in_place_part(site)]);
+            .unwrap_or_else(|| vec![in_place_part(site, &f)]);
             let entry = in_place.entry(x).or_default();
             for part in parts {
                 entry.push((at, part));
@@ -2473,7 +2556,7 @@ fn facts_of(
     // the RecordRef to the record ID's table: what the ID was taken from, when the routine
     // alone says ([`get_id_sources`]), else anything.
     for site in sites.iter().filter(|s| s.call.is_none()) {
-        let v = lc(site.receiver);
+        let v = text_key(&f, site.receiver);
         if f.tracked.contains_key(&v) {
             let at = Some((site.anchor.start_line, site.anchor.start_column));
             match get_id_sources(r, site, own_id_tables) {
@@ -2482,7 +2565,10 @@ fn facts_of(
                         f.fixed.push((v.clone(), Part::Copy(x), at));
                     }
                 }
-                None => f.fixed.push((v, in_place_part(site), at)),
+                None => {
+                    let part = in_place_part(site, &f);
+                    f.fixed.push((v, part, at));
+                }
             }
         }
     }
@@ -2530,10 +2616,10 @@ fn facts_of(
     for (ci, cs) in r.call_sites.iter().enumerate() {
         let at = Some((cs.source_anchor.start_line, cs.source_anchor.start_column));
         if let PCallee::Member { receiver, .. } = &cs.callee {
-            let v = lc(receiver);
+            let v = text_key(&f, receiver);
             if f.tracked.contains_key(&v) {
                 if let Some(site) = sites.iter().find(|s| s.id == cs.id) {
-                    let part = in_place_part(site);
+                    let part = in_place_part(site, &f);
                     if !rebinds_to_guarded(r, &guards, &cs.id, &v, &part) {
                         f.fixed.push((v, part, at));
                     }
@@ -2544,7 +2630,7 @@ fn facts_of(
         if let PCallee::Bare { name } = &cs.callee {
             match lc(name).as_str() {
                 "clear" => {
-                    if let Some(v) = cs.argument_texts.first().map(|a| lc(a))
+                    if let Some(v) = cs.argument_texts.first().map(|a| text_key(&f, a))
                         && f.tracked.contains_key(&v)
                     {
                         f.fixed

@@ -920,6 +920,36 @@ codeunit 50442 "GE Shadow"
         Log.Insert();
     end;
 
+    // ENG-176 (Fable): `this.G.GetTable(…)` and `MutG(this.G)` move the global, not the local G
+    // that hides it, so the local stays on GE Entry.
+    procedure ThisGetShadow()
+    var
+        G: RecordRef;
+        E: Record "GE Entry";
+        D: Record "GE Doc";
+    begin
+        G.GetTable(E);
+        this.G.GetTable(D);
+        Guarded(G);
+    end;
+
+    procedure ThisArgShadow()
+    var
+        G: RecordRef;
+        E: Record "GE Entry";
+    begin
+        G.GetTable(E);
+        MutG(this.G);
+        Guarded(G);
+    end;
+
+    local procedure MutG(var X: RecordRef)
+    var
+        D: Record "GE Doc";
+    begin
+        X.GetTable(D);
+    end;
+
     local procedure Noop()
     begin
     end;
@@ -1064,6 +1094,10 @@ fn a_recordref_get_moves_the_table_for_every_reader() {
     assert_eq!(answer("QuotedThisName", "GE Log"), "no");
     // ENG-176: a Get through a local named "this.G" moves R (its alias).
     assert_eq!(answer("QuotedAlias", "GE Log"), "yes");
+    // ENG-176 (Fable): `this.G` as a receiver or an argument is the global, not the local G that
+    // hides it.
+    assert_eq!(answer("ThisGetShadow", "GE Log"), "no");
+    assert_eq!(answer("ThisArgShadow", "GE Log"), "no");
 }
 
 #[test]
