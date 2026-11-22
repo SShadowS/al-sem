@@ -693,6 +693,8 @@ mod tests {
             rhs_identifier: r.map(str::to_string),
             rhs_member: None,
             lhs_is_member: false,
+            lhs_text: l.to_string(),
+            rhs_text: r.map(str::to_string),
         }
     }
 

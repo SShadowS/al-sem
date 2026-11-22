@@ -1159,6 +1159,11 @@ impl<'a> SpineCtx<'a> {
                         ExprKind::Identifier(_) => self.member_of_identifier(*value),
                         _ => None,
                     };
+                    // ENG-176: the sides as written, for the scoping resolver.
+                    let lhs_text = self.raw(&self.file.ir.expr(*target).origin).to_string();
+                    let rhs_text = rhs_identifier
+                        .as_ref()
+                        .map(|_| self.raw(&self.file.ir.expr(*value).origin).to_string());
                     self.var_assignments.push(PVarAssignment {
                         // `this."My G"` names `My G` as `"My G"` does.
                         lhs_name: lhs_plain.clone().unwrap_or(lhs_name),
@@ -1169,6 +1174,8 @@ impl<'a> SpineCtx<'a> {
                         // `this.G := …` assigns the variable `G` (ENG-162).
                         lhs_is_member: lhs_plain.is_none()
                             && matches!(self.file.ir.expr(*target).kind, ExprKind::Member { .. }),
+                        lhs_text,
+                        rhs_text,
                     });
                 }
                 use crate::program::body::features::FieldAccessKind;
@@ -4918,6 +4925,21 @@ codeunit 50004 C
         assert!(
             !crate::program::model::recref_alias::is_shadowed_global("this.g"),
             "a declared name is never a hidden global"
+        );
+        // ENG-176: each side as written, for the scoping resolver.
+        let texts: Vec<(&str, Option<&str>)> = features
+            .var_assignments
+            .iter()
+            .map(|a| (a.lhs_text.as_str(), a.rhs_text.as_deref()))
+            .collect();
+        assert_eq!(
+            texts,
+            [
+                ("this.G", Some("R")),
+                ("A", Some("this.G")),
+                ("G", Some("R")),
+                ("\"this.G\"", Some("R")),
+            ]
         );
     }
 

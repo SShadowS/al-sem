@@ -827,6 +827,16 @@ pub struct PVarAssignment {
     /// and excluded from `PartialEq` for the same reason.
     #[serde(skip)]
     pub lhs_is_member: bool,
+    /// ENG-176: the target's source text as written (`this.G`, `"My Ref"`, `Slot[1]`), for a
+    /// reader to resolve with `holder_key::HolderScope::text`, which applies AL's scoping
+    /// (`lhs_name` is folded and cannot tell a hidden global from the local hiding it).
+    /// INTERNAL-ONLY like `rhs_identifier`, and excluded from `PartialEq`.
+    #[serde(skip)]
+    pub lhs_text: String,
+    /// ENG-176: the value's source text as written, set exactly when `rhs_identifier` is (a
+    /// whole-variable copy): resolved like `lhs_text`. INTERNAL-ONLY like `rhs_identifier`.
+    #[serde(skip)]
+    pub rhs_text: Option<String>,
 }
 
 /// MANUAL PartialEq: compares exactly the SERIALIZED L2 contract surface.
