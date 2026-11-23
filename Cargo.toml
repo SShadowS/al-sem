@@ -158,8 +158,22 @@ libc = "0.2"
 # volume serial number of an opened handle (`GetFileInformationByHandleEx`,
 # `FileIdInfo`) and its file type (`GetFileType`). Already in the tree
 # (walkdir -> same-file -> winapi-util), with these features.
+# TLS-117 adds what the IR cache's Windows key and private-folder check call: the loaded
+# module and its mapped file name (`GetModuleHandleExW`, `GetModuleFileNameW`,
+# `K32GetMappedFileNameW`), reading it (`ReadProcessMemory`), the token user and a handle's
+# owner and DACL (`GetTokenInformation`, `GetSecurityInfo`, `GetAce`, `ConvertSidToStringSidW`).
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Diagnostics_Debug",
+    "Win32_System_LibraryLoader",
+    "Win32_System_ProcessStatus",
+    "Win32_System_SystemServices",
+    "Win32_System_Threading",
+] }
 
 [features]
 default = ["telemetry"]
@@ -232,6 +246,13 @@ path = "src/bin/alsem.rs"
 [[bin]]
 name = "mint-goldens"
 path = "src/bin/mint-goldens.rs"
+
+# TLS-117: writes the IR cache's data-digest slot into a built Windows binary (`stamp`) and
+# checks a stamped one (`verify`). Run by `scripts/install-windows.ps1` and the release
+# workflows on `alsem.exe`, `aldump.exe` and `al-call-hierarchy.exe`; runs on Linux too.
+[[bin]]
+name = "alsem-stamp"
+path = "src/bin/alsem-stamp.rs"
 
 # The benchmarks live in their own workspace package, `benches/Cargo.toml`
 # (`al-sem-benches`), so `criterion` is not an `al-sem` dev-dependency: its features

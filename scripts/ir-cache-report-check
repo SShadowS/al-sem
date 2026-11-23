@@ -12,8 +12,10 @@ Exit 0 or 1, printing one verdict line. The rules are over the set of the file's
               disk_hits > 0 or published_packages > 0;
   impact      some line has disk_hits > 0, and the verified_hits sum to more than 0;
   warm-build  some line has disk_hits > 0.
-A file whose lines all say `"ir_cache": "unsupported"` passes with the verdict
-`IR: unsupported` (Windows: the cache is off there in v1).
+A file whose lines all say `"ir_cache": "unsupported"` or `"ir_cache": "unstamped"` passes with
+the verdict `IR: unsupported` or `IR: unstamped`: since TLS-117 a Windows binary has a key only
+when stamped (`alsem-stamp`), so cargo-built binaries (the gates' test binaries) report
+`unstamped`. A `"ir_cache": "no key"` line (any other reason) fails.
 """
 
 import json
@@ -29,6 +31,8 @@ def judge(rule, lines):
         return False, "IR: FAIL no report file (the cache path never ran)"
     if lines and all(l.get("ir_cache") == "unsupported" for l in lines):
         return True, "IR: unsupported"
+    if lines and all(l.get("ir_cache") in ("unsupported", "unstamped") for l in lines):
+        return True, "IR: unstamped (an unstamped Windows build has no key)"
     starts = {l.get("pid") for l in lines if l.get("event") == "start"}
     ends = [l for l in lines if l.get("event") == "end"]
     ended = {l.get("pid") for l in ends}
@@ -95,6 +99,8 @@ def self_test():
         ("output", [start(1), end(1, refused=1, **hit)], False, "refused"),
         ("output", [start(1), end(1, roundtrip_failed=1, **hit)], False, "roundtrip_failed"),
         ("output", [{"pid": 3, "ir_cache": "unsupported"}], True, "unsupported"),
+        ("output", [{"pid": 3, "ir_cache": "unstamped", "reason": "r"}], True, "unstamped"),
+        ("output", [{"pid": 3, "ir_cache": "no key", "reason": "r"}], False, "no key"),
         # output
         ("output", [start(1), end(1, eligible_files=0, disk_hits=0)], False, "no eligible"),
         ("output", [start(1), end(1, eligible_files=5, published_packages=1)], True, "a publish"),

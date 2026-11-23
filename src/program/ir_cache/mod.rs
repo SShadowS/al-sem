@@ -11,10 +11,11 @@ pub(crate) mod codec;
 pub(crate) mod counters;
 pub(crate) mod envelope;
 pub(crate) mod key;
-#[cfg(unix)]
+pub(crate) mod pe;
 pub(crate) mod prune;
 pub(crate) mod report;
 pub(crate) mod seam;
+pub mod stamp;
 
 pub use report::{REPORT_TAG, ReportGuard, report_end};
 
@@ -41,13 +42,12 @@ pub struct IrCache {
     /// `ALSEM_IR_CACHE_VERIFY=1`: every hit is also parsed and compared.
     verify: bool,
     report: Option<PathBuf>,
-    key: OnceLock<Option<IrKey>>,
+    key: OnceLock<Result<IrKey, key::NoKey>>,
     pub(crate) counters: Counters,
     started: AtomicBool,
     /// The report's last line for this process is written (`end`, or `no key`).
     ended: AtomicBool,
     /// Set at the first `last-used` publish of this process.
-    #[cfg(unix)]
     touched: AtomicBool,
     warned: [AtomicBool; 4],
     /// An `ALSEM_IR_CACHE` value that is neither `on` nor `off`, warned at the first use (the
@@ -102,7 +102,6 @@ impl IrCache {
             counters: Counters::default(),
             started: AtomicBool::new(false),
             ended: AtomicBool::new(false),
-            #[cfg(unix)]
             touched: AtomicBool::new(false),
             warned: Default::default(),
             bad_switch: None,
@@ -114,19 +113,25 @@ impl IrCache {
     #[cfg(all(test, unix))]
     pub(crate) fn with_key(ir_dir: PathBuf, text_dir: PathBuf, verify: bool, key: IrKey) -> Self {
         let c = IrCache::new(true, ir_dir, text_dir, verify, None);
-        let _ = c.key.set(Some(key));
+        let _ = c.key.set(Ok(key));
         c
     }
 
     /// The running image's key, hashed once, at the first use that needs it.
     pub(crate) fn key(&self) -> Option<IrKey> {
-        *self.key.get_or_init(|| {
+        self.key_result().as_ref().ok().copied()
+    }
+
+    /// Why there is no key (`None` when there is one).
+    pub(crate) fn no_key(&self) -> Option<&key::NoKey> {
+        self.key_result().as_ref().err()
+    }
+
+    fn key_result(&self) -> &Result<IrKey, key::NoKey> {
+        self.key.get_or_init(|| {
             let k = key::image_key();
-            if k.is_none() {
-                self.warn_once(
-                    Warn::NoKey,
-                    "IR cache: no image key (not Linux, unreadable or unmarked image): off",
-                );
+            if let Err(why) = &k {
+                self.warn_once(Warn::NoKey, &format!("IR cache: no image key ({why}): off"));
             }
             k
         })
@@ -185,8 +190,10 @@ pub(crate) fn create_ir_dir(ir_dir: &std::path::Path) {
             .mode(0o700)
             .create(ir_dir);
     }
+    // Windows (TLS-117): made plainly; a reader opens it only through the private walk
+    // (`snapshot::winfs::walk`), which refuses it unless the whole path is private.
     #[cfg(not(unix))]
-    let _ = ir_dir;
+    let _ = std::fs::create_dir_all(ir_dir);
 }
 
 /// TLS-116: the installed IR cache's `ir/` folder, made now as its first writer would make it,

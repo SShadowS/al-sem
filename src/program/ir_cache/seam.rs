@@ -471,25 +471,20 @@ impl IrCache {
     /// when a day old) and the throttled prune (spec Design 9). The key folder is opened again
     /// each time, so a pruned one is not written through a stale handle.
     pub(crate) fn touch(&self, key: &IrKey) {
-        #[cfg(unix)]
+        let IrDir::Usable(ir) = self.open_ir(false) else {
+            return;
+        };
+        let now = std::time::SystemTime::now();
+        let key_hex = key.hex();
+        // Under the key folder's lock (shared): a prune holding it exclusive is removing
+        // the folder, and this `last-used` would only land in a folder going away.
+        if let Some(_held) = ir.lock(&key_lock_name(&key_hex), LockKind::SharedNow)
+            && let Some(kd) = ir.subdir(&key_hex, false)
         {
-            let IrDir::Usable(ir) = self.open_ir(false) else {
-                return;
-            };
-            let now = std::time::SystemTime::now();
-            let key_hex = key.hex();
-            // Under the key folder's lock (shared): a prune holding it exclusive is removing
-            // the folder, and this `last-used` would only land in a folder going away.
-            if let Some(_held) = ir.lock(&key_lock_name(&key_hex), LockKind::SharedNow)
-                && let Some(kd) = ir.subdir(&key_hex, false)
-            {
-                let first = !self.touched.swap(true, Ordering::Relaxed);
-                super::prune::touch_last_used(&kd, first, now);
-            }
-            super::prune::maybe_prune(&ir, key, now);
+            let first = !self.touched.swap(true, Ordering::Relaxed);
+            super::prune::touch_last_used(&kd, first, now);
         }
-        #[cfg(not(unix))]
-        let _ = key;
+        super::prune::maybe_prune(&ir, key, now);
     }
 }
 

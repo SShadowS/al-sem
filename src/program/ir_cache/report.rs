@@ -1,7 +1,9 @@
 //! The report file (`ALSEM_IR_CACHE_REPORT=<file>`, spec "Correctness checks"): a `start` line
 //! at a process's first seam use and an `end` line with its counters at its exit, each one
-//! `write` on an `O_APPEND` file, so concurrent processes never interleave a line. Off Linux,
-//! or without a key, one `{"pid", "ir_cache": "unsupported" | "no key"}` line instead. In a
+//! `write` on an `O_APPEND` file, so concurrent processes never interleave a line. Without a
+//! key, one line instead: `{"pid", "ir_cache": "unstamped", "reason"}` for an unstamped Windows
+//! binary (TLS-117), `{"pid", "ir_cache": "no key", "reason"}` for any other failure, and
+//! `{"pid", "ir_cache": "unsupported"}` on a system other than Linux and Windows. In a
 //! batch run (TLS-116) the parent registers the file as one of the run's writes and every
 //! process of the run appends only to that file, through a handle it holds
 //! ([`crate::engine::batch::claim::append_shared`]).
@@ -60,13 +62,22 @@ impl IrCache {
         }
         let pid = std::process::id();
         if self.is_on() && key.is_none() {
-            let why = if cfg!(target_os = "linux") {
-                "no key"
-            } else {
-                "unsupported"
+            // TLS-117: why, and which kind: an unstamped Windows binary (every cargo build) is
+            // expected to have no key; any other failure is reported as `no key`.
+            let line = match self.no_key() {
+                Some(super::key::NoKey::Unstamped) => serde_json::json!({
+                    "pid": pid, "ir_cache": "unstamped",
+                    "reason": super::key::NoKey::Unstamped.to_string(),
+                }),
+                Some(super::key::NoKey::Unsupported) | None => {
+                    serde_json::json!({"pid": pid, "ir_cache": "unsupported"})
+                }
+                Some(why) => serde_json::json!({
+                    "pid": pid, "ir_cache": "no key", "reason": why.to_string(),
+                }),
             };
             self.ended.store(true, Ordering::SeqCst); // no end line follows this one
-            append(self, &serde_json::json!({"pid": pid, "ir_cache": why}));
+            append(self, &line);
             return;
         }
         append(
