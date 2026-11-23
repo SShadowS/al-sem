@@ -2006,6 +2006,7 @@ pub(crate) mod tests {
             checked_run: false,
             write_txn_query: false,
             try_call: false,
+            ternary_holders: None,
         }
     }
 

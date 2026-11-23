@@ -948,6 +948,10 @@ fn table_frame(r: &ModelRoutine) -> Option<TableFrame> {
             || r.var_assignments.iter().any(|a| {
                 names(&a.lhs_text, k) || a.rhs_text.as_deref().is_some_and(|w| names(w, k))
             })
+            // ENG-175: a ternary receiver or argument may be R (BC 28.4: the chosen branch).
+            || r.call_sites
+                .iter()
+                .any(|cs| cs.ternary_holders().iter().any(|a| names(a, k)))
         {
             continue;
         }

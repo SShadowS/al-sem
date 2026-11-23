@@ -35,6 +35,7 @@
 //!   - `PCallSite.checked_run`
 //!   - `PCallSite.write_txn_query`
 //!   - `PCallSite.try_call`
+//!   - `PCallSite.ternary_holders`
 //!   - `PRecordOperation.in_until_condition`
 //!   - `PRecordOperation.in_statement_position`
 //!   - `PRecordOperation.run_trigger`
@@ -463,6 +464,15 @@ pub struct PCallSite {
     /// `in_statement_position`; deserialized rows default it to `false`.
     #[serde(skip)]
     pub try_call: bool,
+    /// ENG-175: each whole variable (as written) that is a leaf of a conditional expression
+    /// (`c ? X : Y`, nested and parenthesized ones included) used as this call's receiver or one
+    /// of its arguments. BC 28.4: the value is the chosen branch's handle, so the call may rebind
+    /// or keep any of them; `None` when there is none (boxed: almost every call has none).
+    ///
+    /// INTERNAL-ONLY (`serde(skip)`, excluded from PartialEq), as
+    /// `in_statement_position`; deserialized rows default it to `None`.
+    #[serde(skip)]
+    pub ternary_holders: Option<Box<Vec<String>>>,
 }
 
 /// The parameter index a table method's implicit `Rec` depends on: `Rec` is the
@@ -492,6 +502,14 @@ impl PCallSite {
 /// `in_statement_position` is EXCLUDED — derived, serde-skipped internal data
 /// (an L5 input, not part of the L2 shape); baseline vectors deserialize it to
 /// the default `false`.
+impl PCallSite {
+    /// [`Self::ternary_holders`], empty when there is none.
+    #[must_use]
+    pub fn ternary_holders(&self) -> &[String] {
+        self.ternary_holders.as_deref().map_or(&[], Vec::as_slice)
+    }
+}
+
 impl PartialEq for PCallSite {
     fn eq(&self, other: &Self) -> bool {
         self.id == other.id
@@ -1577,7 +1595,7 @@ mod tests {
                 pending = false;
             }
         }
-        assert_eq!(actual.len(), 24, "scanner found {actual:?}");
+        assert_eq!(actual.len(), 25, "scanner found {actual:?}");
         assert_eq!(documented, actual);
     }
 

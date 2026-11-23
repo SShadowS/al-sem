@@ -2965,6 +2965,7 @@ fn rewrite_routine_site_ids(r: &mut ModelRoutine, f: &dyn Fn(&str) -> String) {
             checked_run: _,
             write_txn_query: _,
             try_call: _,
+            ternary_holders: _,
         } = c;
         *id = f(id);
         *operation_id = f(operation_id);

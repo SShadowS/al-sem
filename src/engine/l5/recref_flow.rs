@@ -2287,6 +2287,8 @@ pub(crate) fn exit_guards(
             }) || r.call_sites.iter().any(|cs| {
                 before(&cs.source_anchor)
                     && (cs.argument_texts.iter().any(|a| named(a))
+                        // ENG-175: a ternary leaf may be the receiver or argument.
+                        || cs.ternary_holders().iter().any(|a| named(a))
                         || matches!(&cs.callee, PCallee::Member { receiver, .. }
                             if named(receiver)))
             }) || sites
@@ -2639,6 +2641,38 @@ fn facts_of(
     }
     for (ci, cs) in r.call_sites.iter().enumerate() {
         let at = Some((cs.source_anchor.start_line, cs.source_anchor.start_column));
+        // ENG-175: a leaf of a ternary receiver or argument may be the handle this call rebinds
+        // or hands on (BC 28.4: the chosen branch's), so it and its aliases may hold anything
+        // from here on; a global a local hides is one of the object's global writes.
+        for t in cs.ternary_holders() {
+            if let Some(h) = scope.text(t)
+                && let crate::program::model::recref_alias::HolderKey::Global(_) = h.key
+                && !h.indexed
+            {
+                let g = scope.variable(h.key);
+                if scope.logical(&g.name) != Some(h.key) && is_tracked_type(&g.declared_type) {
+                    f.hidden_global_writes
+                        .push((g.name.fold_identifier(), Part::Atoms(top())));
+                    continue;
+                }
+            }
+            let Some(v) = tracked_of(t).filter(|v| f.tracked.contains_key(v)) else {
+                continue;
+            };
+            let members: Vec<String> = scope
+                .logical(&v)
+                .map(|key| classes.members(key))
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(&name_of)
+                .filter(|m| f.tracked.contains_key(m))
+                .chain(std::iter::once(v))
+                .collect();
+            for w in members {
+                f.alias_shared.insert(w.clone());
+                f.fixed.push((w, Part::Atoms(top()), at));
+            }
+        }
         if let PCallee::Member { receiver, .. } = &cs.callee {
             let v = text_key(&f, receiver);
             if f.tracked.contains_key(&v) {

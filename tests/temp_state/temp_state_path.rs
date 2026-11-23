@@ -147,6 +147,7 @@ fn call_site(id: &str, parameter_index: u32, source_temp_state: Option<PTempStat
         checked_run: false,
         write_txn_query: false,
         try_call: false,
+        ternary_holders: None,
     }
 }
 

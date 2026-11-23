@@ -212,6 +212,7 @@ pub fn object_run_call_site(id: &str, object_kind: &str, return_used: Option<boo
         checked_run: false,
         write_txn_query: false,
         try_call: false,
+        ternary_holders: None,
     }
 }
 
@@ -307,6 +308,7 @@ pub fn call_site(id: &str, callee_name: &str, loop_stack: Vec<String>) -> PCallS
         checked_run: false,
         write_txn_query: false,
         try_call: false,
+        ternary_holders: None,
     }
 }
 
