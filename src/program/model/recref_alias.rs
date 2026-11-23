@@ -202,7 +202,8 @@ impl ShadowedBuiltins {
         Self::default()
     }
 
-    fn contains(&self, name: &str) -> bool {
+    /// Whether a table of the program declares a procedure named `name` (any case).
+    pub(crate) fn contains(&self, name: &str) -> bool {
         self.0.contains(&name.fold_identifier())
     }
 }

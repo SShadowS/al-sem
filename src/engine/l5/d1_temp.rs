@@ -408,6 +408,7 @@ mod tests {
             receiver_is_record_ref: false,
             flow_field_reads: Vec::new(),
             dataset_reason: None,
+            holder_arguments: None,
         }
     }
 

@@ -531,9 +531,21 @@ pub struct ModelRecordOperation {
     /// variable is none; it is added after resolution, at the end of the
     /// routine's list. `None` for every operation written in code.
     pub dataset_reason: Option<String>,
+    /// ENG-173: the arguments (as written) that name a RecordRef or Variant variable of the
+    /// routine. A table procedure named like the operation may take the call and keep or rebind
+    /// them (BC 28.4: it overloads the platform method), which the record-type pass reads before
+    /// the model's calls exist (the procedure's call site comes later, `program_calls`). `None`
+    /// when there is none (boxed: almost every operation has none).
+    pub holder_arguments: Option<Box<Vec<String>>>,
 }
 
 impl ModelRecordOperation {
+    /// [`Self::holder_arguments`], empty when there is none.
+    #[must_use]
+    pub fn holder_arguments(&self) -> &[String] {
+        self.holder_arguments.as_deref().map_or(&[], Vec::as_slice)
+    }
+
     /// The operation as evidence shows it: `Var.Op` (`?.Op` with no variable),
     /// or for a platform dataset operation its reason (B6), which names the
     /// object, the item and the property, since no code at the site says it.
@@ -1946,6 +1958,7 @@ fn project_ir(
                     receiver_is_record_ref: op.receiver_is_record_ref,
                     flow_field_reads: Vec::new(),
                     dataset_reason: None,
+                    holder_arguments: op.holder_arguments.clone(),
                 })
                 .collect();
             let field_accesses = std::mem::take(&mut features.field_accesses);
@@ -3052,6 +3065,7 @@ fn record_operation_ids(o: &mut ModelRecordOperation, f: &dyn Fn(&str) -> String
         receiver_is_record_ref: _,
         flow_field_reads: _,
         dataset_reason: _,
+        holder_arguments: _,
     } = o;
     if let Some(rv) = record_variable_id {
         *rv = f(rv);

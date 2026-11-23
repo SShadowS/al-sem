@@ -3228,6 +3228,7 @@ impl<'a> Converter<'a> {
                 // dataset columns are not read yet (engine limits L19, left 1).
                 flow_field_reads: Vec::new(),
                 dataset_reason: Some(reason),
+                holder_arguments: None,
             };
             edges.extend(self.trigger_edges(ix, r, &op, &e.triggers, c));
             edges.extend(self.table_event_edges(
@@ -3315,6 +3316,7 @@ impl<'a> Converter<'a> {
             receiver_is_record_ref: true,
             flow_field_reads: Vec::new(),
             dataset_reason: None,
+            holder_arguments: None,
         };
         let edges = match frv {
             FieldRefValidate::Decided {
@@ -3423,6 +3425,7 @@ impl<'a> Converter<'a> {
             receiver_is_record_ref: false,
             flow_field_reads: Vec::new(),
             dataset_reason: None,
+            holder_arguments: None,
         };
         let mut edges = self.trigger_edges(ix, r, &op, &cr.triggers, c);
         edges.extend(self.table_event_edges(
