@@ -144,6 +144,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   report, the session refresh's reference builds bypass the cache, a refused entry fails the
   gate rule), each guard with its discrimination proof in its commit message.
 
+### Fixed (ENG-176: one scoping resolver keys every RecordRef holder; a quoted local `"this.G"` is no longer a wrong `no`)
+
+- **The bug** (sol, round 3 on ENG-162; live since ENG-159). Readers of RecordRef and Variant
+  holders keyed a variable by its text, each folding and stripping on its own. The flow's key
+  stripped `this.` from a DECLARED name too, which is already logical: a quoted local `"this.G"`
+  was declared as `g`, while its receiver `"this.G".Get(…)` keyed `this.g`. So `"this.G" := R;
+  "this.G".Get(D.RecordId); Guarded(R)` lost the move: `prove` said the routine cannot write
+  `GE Log`; it can. Text keys also gave a global and the local hiding it one key (ENG-162 needed
+  a NUL sentinel, `HIDDEN_GLOBAL_PREFIX`, to keep them apart), and `this.G.Get(…)` or `F(this.G)`
+  read as the hiding local (Fable: imprecise answers).
+- **The fix: a typed key from one resolver** (`program::model::holder_key`). `HolderKey` is a
+  variable's position (the routine's own variables, or its object's globals), exact by
+  construction. `HolderScope` resolves a logical name (own variable first, then the global) and
+  raw source text the way alc binds it (parentheses, an unquoted `this.` names the global even
+  when hidden, quotes, `X[1]` an element of `X`; a member or expression is no variable). The walk
+  now carries each assignment side's source text (`PVarAssignment::lhs_text` / `rhs_text`,
+  internal). Every holder reader resolves through it:
+  - `recref_alias::AliasClasses` is keyed by `HolderKey` (a holder copied into a global the
+    classes do not hold, one a local hides, is kept by the object);
+  - the field guard, `record_types`' two temp passes and `op_variable_lc`;
+  - the RecordRef flow: its tracked names are the declared names (no `this.`-stripping), and
+    every receiver, argument and assignment side is resolved once per routine
+    (`Facts::text_names`); a global a local hides is no tracked variable;
+  - literal reach's table frame, `into_holder_array`, `may_keep_argument`, `may_run_user_code`,
+    and `explain`'s list of globals a routine sets (Fable on ENG-162: a hidden global was not
+    listed).
+  Retired: `HIDDEN_GLOBAL_PREFIX`, `is_shadowed_global`, `recref_alias::holder_key` and
+  `name_key`, and the `this.`-stripping in the flow's `lc`.
+- **Review round 1.**
+  - Fable: `HolderScope::text` first read text as written, so `this. G`, a line break or comment
+    after `this.`, and `Slot [1]` named no variable: copies were dropped (a wrong `no` where
+    master said yes). It now drops comments and the spacing AL allows around `.`, `[`, `]`, `(`
+    and `)` first; any other spacing stays an expression (`A or B`).
+  - sol: an index must end the text (`Slot[1].Number` and `Slot[1] + X` are no element).
+  - sol: an assignment to a global a local hides (`this.G := R`) was lost from the routine's
+    summary, so another routine of the same instance could read the global as never set. It is
+    now one of the object's global writes (`Facts::hidden_global_writes`).
+  - sol: `record_types`' temp pass resolves a `GetTable`/`Open` receiver and the `GetTable`
+    source by the scope (a quoted or spaced receiver was missed).
+  - `explain`'s target scan moved into the resolver (`HolderScope::target`).
+- **Tests.** `holder_key`'s unit test over every scoping case; CLI shapes in `cli_recref_get`:
+  `QuotedAlias` (`yes`: red on master), `ThisGetShadow` and `ThisArgShadow` (`no`: the global
+  moves, not the hiding local); ENG-162's shadowing shapes stay green. Red proofs: `text`
+  reading `this.X` as a logical name, or stripping quotes before the `this.` test, fails the
+  unit test; the old textual key for raw text fails `ThisGetShadow`. Round 1: CLI shapes
+  `SpacedThisAlias`, `CommentThisAlias` and `SpacedSlotAlias` (`yes`); lib test
+  `a_hidden_globals_write_reaches_the_instance` (assignment and `var`-argument writes to a
+  hidden global, read by another routine of the instance, with no code keeping a record). Red
+  proofs: no canonical form fails the spacing rows and `SpacedThisAlias`; an index not ending
+  the text accepted fails `Slot[1].Number`; the summary skipping hidden-global writes fails the
+  assignment row.
+- **Golden.** `tests/ir-l2-goldens/l2_features.snapshot` (171 routines, every one with an
+  assignment): it hashes each routine's `Debug` repr, which now holds `lhs_text` / `rhs_text`.
+  With those two cleared, the old golden matched exactly; no serialized L2 output moves.
+
 ### Fixed (TLS-113: a speed skip no longer leaks into a landing's other steps)
 
 - **Why.** ENG-159's landing skipped cdo-gate's speed phase (owner-approved) by exporting

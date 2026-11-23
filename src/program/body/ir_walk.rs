@@ -78,10 +78,9 @@ fn object_run_kind(text: &str) -> Option<&'static str> {
 /// spelling of one variable gives one name, so `A := (R)`, `this.G := R` and `A := this.G` are
 /// copies like `A := R` (Fable r2 on ENG-160: they were no alias for any reader). A `this.X`
 /// whose `X` a parameter, local or return value of the routine also declares (`own`) names the
-/// global, which the bare `x` would not: it is [`HIDDEN_GLOBAL_PREFIX`] + `x`, a name no
-/// declaration can have (sol on ENG-162; `extract::this_receivers` reads it the same way).
-///
-/// [`HIDDEN_GLOBAL_PREFIX`]: crate::program::body::features::HIDDEN_GLOBAL_PREFIX
+/// global, which no folded name can say: it is `None` (sol on ENG-162; `extract::this_receivers`
+/// reads it the same way). Readers that need it resolve the side's source text
+/// (`PVarAssignment::lhs_text` / `rhs_text`) with `holder_key::HolderScope` (ENG-176).
 fn plain_variable(file: &AlFile, mut e: ExprId, own: &NameSet) -> Option<String> {
     loop {
         match &file.ir.expr(e).kind {
@@ -93,16 +92,22 @@ fn plain_variable(file: &AlFile, mut e: ExprId, own: &NameSet) -> Option<String>
                 let name = crate::program::body::node_util::strip_quotes(member)
                     .replace("\"\"", "\"")
                     .fold_identifier();
-                return Some(if own.contains(&name) {
-                    format!(
-                        "{}{name}",
-                        crate::program::body::features::HIDDEN_GLOBAL_PREFIX
-                    )
-                } else {
-                    name
-                });
+                return (!own.contains(&name)).then_some(name);
             }
             _ => return None,
+        }
+    }
+}
+
+/// ENG-176: whether `e` spells a whole variable: a bare or quoted identifier, or `this.X`, read
+/// through parentheses (what [`plain_variable`] reads, before any scope says which variable).
+fn is_variable_spelling(file: &AlFile, mut e: ExprId) -> bool {
+    loop {
+        match &file.ir.expr(e).kind {
+            ExprKind::Parenthesized(x) => e = *x,
+            ExprKind::Identifier(_) | ExprKind::QuotedIdentifier(_) => return true,
+            ExprKind::Member { object, .. } => return is_this(file, *object),
+            _ => return false,
         }
     }
 }
@@ -1159,6 +1164,12 @@ impl<'a> SpineCtx<'a> {
                         ExprKind::Identifier(_) => self.member_of_identifier(*value),
                         _ => None,
                     };
+                    // ENG-176: the sides as written, for the scoping resolver.
+                    let lhs_text = self.raw(&self.file.ir.expr(*target).origin).to_string();
+                    // Whenever the value spells a whole variable, whatever the target (`this.G := R`
+                    // with a local `G` hiding the global: R is copied into the global).
+                    let rhs_text = is_variable_spelling(self.file, *value)
+                        .then(|| self.raw(&self.file.ir.expr(*value).origin).to_string());
                     self.var_assignments.push(PVarAssignment {
                         // `this."My G"` names `My G` as `"My G"` does.
                         lhs_name: lhs_plain.clone().unwrap_or(lhs_name),
@@ -1169,6 +1180,8 @@ impl<'a> SpineCtx<'a> {
                         // `this.G := …` assigns the variable `G` (ENG-162).
                         lhs_is_member: lhs_plain.is_none()
                             && matches!(self.file.ir.expr(*target).kind, ExprKind::Member { .. }),
+                        lhs_text,
+                        rhs_text,
                     });
                 }
                 use crate::program::body::features::FieldAccessKind;
@@ -4876,8 +4889,8 @@ codeunit 50003 C
             ]
         );
         // sol on ENG-162: a local `G` shadows the global, so `this.G` names the global, which
-        // the bare `g` does not: it is `HIDDEN_GLOBAL_PREFIX` + `g`, and the bare `G` stays the
-        // local. A local literally named `"this.G"` is an ordinary name (sol, round 2).
+        // the bare `g` does not, and the bare `G` stays the local. A local literally named
+        // `"this.G"` is an ordinary name (sol, round 2 on ENG-162).
         const SHADOWED: &str = r#"
 codeunit 50004 C
 {
@@ -4900,24 +4913,42 @@ codeunit 50004 C
 "#;
         let (features, _, _) =
             ir_features_for_named_routine(SHADOWED, "Shadowed", "g", "u").expect("routine");
-        let got: Vec<(&str, Option<&str>)> = features
+        // ENG-176: no folded name can say the hidden global, so its sides carry none (a member
+        // assignment, no copy); readers resolve `lhs_text` / `rhs_text` by scope.
+        let got: Vec<(&str, Option<&str>, bool)> = features
             .var_assignments
             .iter()
-            .map(|a| (a.lhs_name.as_str(), a.rhs_identifier.as_deref()))
+            .map(|a| {
+                (
+                    a.lhs_name.as_str(),
+                    a.rhs_identifier.as_deref(),
+                    a.lhs_is_member,
+                )
+            })
             .collect();
-        let hidden = format!("{}g", crate::program::body::features::HIDDEN_GLOBAL_PREFIX);
         assert_eq!(
             got,
             [
-                (hidden.as_str(), Some("r")),
-                ("a", Some(hidden.as_str())),
-                ("g", Some("r")),
-                ("this.g", Some("r")),
+                ("g", None, true),
+                ("a", None, false),
+                ("g", Some("r"), false),
+                ("this.g", Some("r"), false),
             ]
         );
-        assert!(
-            !crate::program::model::recref_alias::is_shadowed_global("this.g"),
-            "a declared name is never a hidden global"
+        // ENG-176: each side as written, for the scoping resolver.
+        let texts: Vec<(&str, Option<&str>)> = features
+            .var_assignments
+            .iter()
+            .map(|a| (a.lhs_text.as_str(), a.rhs_text.as_deref()))
+            .collect();
+        assert_eq!(
+            texts,
+            [
+                ("this.G", Some("R")),
+                ("A", Some("this.G")),
+                ("G", Some("R")),
+                ("\"this.G\"", Some("R")),
+            ]
         );
     }
 

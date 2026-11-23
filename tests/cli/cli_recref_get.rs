@@ -865,6 +865,23 @@ codeunit 50442 "GE Shadow"
         Guarded(A);
     end;
 
+    // ENG-176 (sol r3 on ENG-162): a local literally named "this.G" is an ordinary alias: a Get
+    // through it moves R (a false `no` on master since ENG-159: the declaration keyed `g`, its
+    // receiver text `this.g`).
+    procedure QuotedAlias()
+    var
+        "this.G": RecordRef;
+        R: RecordRef;
+        E: Record "GE Entry";
+        D: Record "GE Doc";
+    begin
+        R.GetTable(E);
+        "this.G" := R;
+        D.FindFirst();
+        "this.G".Get(D.RecordId);
+        Guarded(R);
+    end;
+
     // sol, round 2: a local literally named "this.G" is an ordinary alias, not the hidden global.
     procedure QuotedThisName()
     var
@@ -903,6 +920,36 @@ codeunit 50442 "GE Shadow"
         Log.Insert();
     end;
 
+    // ENG-176 (Fable): `this.G.GetTable(…)` and `MutG(this.G)` move the global, not the local G
+    // that hides it, so the local stays on GE Entry.
+    procedure ThisGetShadow()
+    var
+        G: RecordRef;
+        E: Record "GE Entry";
+        D: Record "GE Doc";
+    begin
+        G.GetTable(E);
+        this.G.GetTable(D);
+        Guarded(G);
+    end;
+
+    procedure ThisArgShadow()
+    var
+        G: RecordRef;
+        E: Record "GE Entry";
+    begin
+        G.GetTable(E);
+        MutG(this.G);
+        Guarded(G);
+    end;
+
+    local procedure MutG(var X: RecordRef)
+    var
+        D: Record "GE Doc";
+    begin
+        X.GetTable(D);
+    end;
+
     local procedure Noop()
     begin
     end;
@@ -922,6 +969,46 @@ codeunit 50442 "GE Shadow"
         if R.Number <> Database::"GE Doc" then
             exit;
         Log.Insert();
+    end;
+
+    // Fable on ENG-176: spacing and a comment AL allows inside a variable's text keep it the
+    // variable (an alias of R, then moved).
+    procedure SpacedThisAlias()
+    var
+        R: RecordRef;
+        E: Record "GE Entry";
+        D: Record "GE Doc";
+    begin
+        R.GetTable(E);
+        this. G := R;
+        this. G.GetTable(D);
+        Guarded(R);
+    end;
+
+    procedure CommentThisAlias()
+    var
+        R: RecordRef;
+        E: Record "GE Entry";
+        D: Record "GE Doc";
+    begin
+        R.GetTable(E);
+        this./*c*/G := R;
+        this./*c*/G.GetTable(D);
+        Guarded(R);
+    end;
+
+    procedure SpacedSlotAlias()
+    var
+        Slot: array[2] of RecordRef;
+        R: RecordRef;
+        E: Record "GE Entry";
+        D: Record "GE Doc";
+    begin
+        R.GetTable(E);
+        Slot [1] := R;
+        D.FindFirst();
+        Slot [1].Get(D.RecordId);
+        Guarded(R);
     end;
 }
 "#;
@@ -1045,6 +1132,17 @@ fn a_recordref_get_moves_the_table_for_every_reader() {
     // guard on the parameter G.
     assert_eq!(answer("ParamShadowRoot", "GE Log"), "no");
     assert_eq!(answer("QuotedThisName", "GE Log"), "no");
+    // ENG-176: a Get through a local named "this.G" moves R (its alias).
+    assert_eq!(answer("QuotedAlias", "GE Log"), "yes");
+    // ENG-176 (Fable): `this.G` as a receiver or an argument is the global, not the local G that
+    // hides it.
+    assert_eq!(answer("ThisGetShadow", "GE Log"), "no");
+    assert_eq!(answer("ThisArgShadow", "GE Log"), "no");
+    // Fable on ENG-176: `this. G`, `this./*c*/G` and `Slot [1]` are the variable (each was a
+    // wrong `no` at the first ENG-176 head; master answered yes).
+    for routine in ["SpacedThisAlias", "CommentThisAlias", "SpacedSlotAlias"] {
+        assert_eq!(answer(routine, "GE Log"), "yes", "{routine}");
+    }
 }
 
 #[test]

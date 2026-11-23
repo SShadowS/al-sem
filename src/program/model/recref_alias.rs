@@ -16,6 +16,7 @@
 //! no record of which element holds what (`Slot[1] := R`), so a routine with one joins them all.
 
 use crate::program::body::features::{PAnchor, PCallSite, PCallee, PVarAssignment};
+pub use crate::program::model::holder_key::{HolderKey, HolderScope};
 use crate::program::model::workspace::ModelRoutine;
 use al_syntax::IdentifierFoldExt;
 
@@ -52,14 +53,14 @@ pub fn recref_bind(method: &str) -> Option<RecRefBind> {
 /// Whether assignment `a` of `r` writes into an array of RecordRefs or Variants (`Slot[1] := R`).
 /// The IR keeps no right side for an indexed target, so it may share any holder of `r` with
 /// the slot, and a bind through the slot (`Slot[1].Get(Id)`) then binds it (ENG-160, sol).
+/// The target is resolved from its source text by the routine's scope (ENG-176: `Slot[1]`,
+/// `this.Slot[1]`, a global array a local hides).
 #[must_use]
 pub fn into_holder_array(r: &ModelRoutine, a: &PVarAssignment) -> bool {
-    let l = name_key(&a.lhs_name);
-    r.variables.iter().any(|v| {
-        name_key(&v.name) == l && {
-            let t = v.declared_type.trim().fold_identifier();
-            t.ends_with(" of recordref") || t.ends_with(" of variant")
-        }
+    let scope = HolderScope::of(r);
+    scope.text(&a.lhs_text).is_some_and(|h| {
+        let t = scope.variable(h.key).declared_type.trim().fold_identifier();
+        t.ends_with(" of recordref") || t.ends_with(" of variant")
     })
 }
 
@@ -109,45 +110,6 @@ pub fn bind_sites(r: &ModelRoutine) -> Vec<BindSite<'_>> {
 }
 use std::collections::{HashMap, HashSet};
 
-/// A variable reference's key, as every reader of the classes names it: an array element
-/// `Recs[1]` is its array, `this.X` the global `X`, quotes stripped (`""` one `"`), folded.
-/// `this.` and an index are syntax only OUTSIDE quotes: a variable named `"R[1]"` or
-/// `"this.G"` keys as its whole name (sol round 2 on ENG-145).
-#[must_use]
-pub fn holder_key(raw: &str) -> String {
-    let raw = strip_parens(raw);
-    let raw = match raw.get(..5) {
-        Some(p) if p.eq_fold_identifier("this.") => &raw[5..],
-        _ => raw,
-    };
-    // The first `[` outside quotes starts an index.
-    let mut quoted = false;
-    let mut end = raw.len();
-    for (i, ch) in raw.char_indices() {
-        match ch {
-            '"' => quoted = !quoted,
-            '[' if !quoted => {
-                end = i;
-                break;
-            }
-            _ => {}
-        }
-    }
-    crate::program::body::node_util::strip_quotes(raw[..end].trim())
-        .replace("\"\"", "\"")
-        .fold_identifier()
-}
-
-/// ENG-162: whether an assignment side the IR names `name` is a global that one of the routine's
-/// own declarations hides (`this.G` with a local `G`: the walk names it with
-/// [`HIDDEN_GLOBAL_PREFIX`](crate::program::body::features::HIDDEN_GLOBAL_PREFIX), never `g`). No
-/// holder of the routine is that name: a holder copied into it may be kept by the object
-/// (another routine, a later call), and one assigned from it may hold anything.
-#[must_use]
-pub fn is_shadowed_global(name: &str) -> bool {
-    name.starts_with(crate::program::body::features::HIDDEN_GLOBAL_PREFIX)
-}
-
 /// `raw` trimmed, without parentheses around the whole of it: `S.Keep((RR))` passes `RR`
 /// (Fable on ENG-159). A text whose first `(` closes before its end (`(A) + (B)`) keeps its
 /// parentheses.
@@ -174,16 +136,6 @@ pub fn strip_parens(raw: &str) -> &str {
     s
 }
 
-/// A DECLARED variable name's key: a declaration's name is already logical (the lowerer strips
-/// its quotes), so nothing in it is syntax; `"R[1]"` declared keys as `r[1]`, as its quoted uses
-/// do through [`holder_key`]. The IR's assignment sides are logical names too.
-#[must_use]
-pub fn name_key(name: &str) -> String {
-    crate::program::body::node_util::strip_quotes(name.trim())
-        .replace("\"\"", "\"")
-        .fold_identifier()
-}
-
 /// Whether call `cs` in `r` may keep (or rebind) a RecordRef or Variant passed to it, so the
 /// holder escapes (ENG-145). A platform method cannot: a method of a RecordRef, FieldRef or
 /// record variable, or a platform keyword's method (`Report.SaveAs(Id, …, RecRef)`: the report's
@@ -199,16 +151,21 @@ pub fn may_keep_argument(
     let PCallee::Member { receiver, method } = &cs.callee else {
         return true;
     };
-    let key = holder_key(receiver);
-    match r.variables.iter().find(|v| name_key(&v.name) == key) {
+    // ENG-176: the receiver by the routine's scope (`this.X` is the global).
+    let scope = HolderScope::of(r);
+    match scope.text(receiver).map(|h| scope.variable(h.key)) {
         Some(v) => {
             let ty = v.declared_type.trim().fold_identifier();
             let ty = ty.rsplit(" of ").next().unwrap_or(&ty).trim();
             // A table's own procedure may keep it (Fable on ENG-159).
             record_like_builtin(ty, method, shadowed).is_none_or(|builtin| !builtin)
         }
+        // A platform keyword receiver (`Report.SaveAs(…)`): not a variable.
         None => !matches!(
-            key.as_str(),
+            strip_parens(receiver)
+                .trim_matches('"')
+                .fold_identifier()
+                .as_str(),
             "report"
                 | "query"
                 | "xmlport"
@@ -353,12 +310,11 @@ pub fn may_run_user_code(
     let PCallee::Member { receiver, method } = &cs.callee else {
         return true;
     };
-    let key = holder_key(receiver);
-    let Some(ty) = r
-        .variables
-        .iter()
-        .find(|v| name_key(&v.name) == key)
-        .map(|v| v.declared_type.trim().fold_identifier())
+    // ENG-176: the receiver by the routine's scope (`this.X` is the global).
+    let scope = HolderScope::of(r);
+    let Some(ty) = scope
+        .text(receiver)
+        .map(|h| scope.variable(h.key).declared_type.trim().fold_identifier())
     else {
         return true;
     };
@@ -423,53 +379,67 @@ pub fn may_run_user_code(
     !VALUE_TYPES.contains(&base)
 }
 
-/// The alias classes over the variables `tracked` accepts (folded names), from `A := B`
-/// assignments between two of them. A variable in no assignment is its own class.
+/// Whether a declared type is a RecordRef or Variant holder, an array of them included.
+fn is_holder_type(t: &str) -> bool {
+    let t = t.trim().fold_identifier();
+    t == "recordref" || t == "variant" || t.ends_with(" of recordref") || t.ends_with(" of variant")
+}
+
+/// The alias classes over the holders `tracked` accepts, keyed exactly ([`HolderKey`], ENG-176),
+/// from `A := B` assignments between two of them. A variable in no assignment is its own class.
 #[derive(Debug, Default)]
 pub struct AliasClasses {
-    parent: HashMap<String, String>,
+    parent: HashMap<HolderKey, HolderKey>,
     /// Each alias assignment's target and position (line, column).
-    pub assignments: Vec<(String, (u32, u32))>,
+    pub assignments: Vec<(HolderKey, (u32, u32))>,
     /// [`Self::build`]'s holders (keys); empty from [`Self::of`].
-    holders: HashSet<String>,
+    holders: HashSet<HolderKey>,
     /// Holders already shared with code the routine cannot see, from entry (parameters,
     /// globals, a call's result): [`Self::build`] joins them.
-    external: HashSet<String>,
+    external: HashSet<HolderKey>,
     /// Holders whose record may be retained elsewhere, from where ([`Self::rebinds_at`]): `None`
     /// from entry, `Some(pos)` from the first call that may keep it.
-    retainable: HashMap<String, Option<(u32, u32)>>,
+    retainable: HashMap<HolderKey, Option<(u32, u32)>>,
 }
 
 impl AliasClasses {
     /// The classes `field_guard` and `record_types` read: over the routine's RecordRef and
-    /// Variant holders (arrays of them included), from its own `A := B`, with every parameter
-    /// and global holder joined (a caller or another routine may have aliased them) and, when
-    /// the routine has an array holder, every holder joined.
+    /// Variant holders (arrays of them included), its own and the globals of its object it can
+    /// name bare (one a local hides is left out; a holder copied into it is still kept), from its
+    /// own `A := B`, with every parameter and global holder joined (a caller or another routine
+    /// may have aliased them) and, when the routine has an array holder, every holder joined.
     #[must_use]
     pub fn for_routine(r: &ModelRoutine, shadowed: &ShadowedBuiltins) -> Self {
-        let holder_type = |t: &str| {
-            let t = t.trim().fold_identifier();
-            t == "recordref"
-                || t == "variant"
-                || t.ends_with(" of recordref")
-                || t.ends_with(" of variant")
-        };
-        let holders: Vec<(String, bool)> = r
+        let own = r.variables.own().iter().enumerate().map(|(i, v)| {
+            (
+                HolderKey::Own(i as u32),
+                v,
+                v.is_parameter || v.scope.as_deref() != Some("local"),
+            )
+        });
+        // A global a parameter or local hides is left out: it joins no class (`build` still takes
+        // a holder copied into it as kept), so it cannot end a guard on the variable hiding it.
+        let scope = HolderScope::of(r);
+        let globals = r
             .variables
+            .globals()
             .iter()
-            .filter(|v| holder_type(&v.declared_type))
-            .map(|v| {
+            .enumerate()
+            .map(|(i, v)| (HolderKey::Global(i as u32), v, true))
+            .filter(|(k, v, _)| scope.logical(&v.name) == Some(*k));
+        let decls: Vec<(HolderKey, bool, bool)> = own
+            .chain(globals)
+            .filter(|(_, v, _)| is_holder_type(&v.declared_type))
+            .map(|(k, v, ext)| {
                 (
-                    name_key(&v.name),
-                    v.is_parameter || v.scope.as_deref() != Some("local"),
+                    k,
+                    ext,
+                    v.declared_type.trim().fold_identifier().contains(" of "),
                 )
             })
             .collect();
-        let any_array = r
-            .variables
-            .iter()
-            .filter(|v| holder_type(&v.declared_type))
-            .any(|v| v.declared_type.trim().fold_identifier().contains(" of "));
+        let holders: Vec<(HolderKey, bool)> = decls.iter().map(|&(k, ext, _)| (k, ext)).collect();
+        let any_array = decls.iter().any(|&(_, _, array)| array);
         Self::build(r, &holders, any_array, shadowed)
     }
 
@@ -478,44 +448,49 @@ impl AliasClasses {
     /// a call's or expression's result counted external (`A := GetG()` may hand back another's
     /// record, sol round 2). A holder is RETAINABLE when its class holds an external one or one
     /// `r` passes to a call (the callee may keep it): a call that may run user code may rebind
-    /// it ([`may_run_user_code`]).
+    /// it ([`may_run_user_code`]). Every side and argument is resolved by `r`'s scope
+    /// ([`HolderScope`], ENG-176): `this.G` is the global `G`, hidden or not.
     #[must_use]
     pub fn build(
         r: &ModelRoutine,
-        holders: &[(String, bool)],
+        holders: &[(HolderKey, bool)],
         any_array: bool,
         shadowed: &ShadowedBuiltins,
     ) -> Self {
-        let keys: HashSet<String> = holders.iter().map(|(k, _)| k.clone()).collect();
-        let mut c = Self::of(&r.var_assignments, |n| keys.contains(n));
-        let mut external: HashSet<String> = holders
+        let scope = HolderScope::of(r);
+        let keys: HashSet<HolderKey> = holders.iter().map(|(k, _)| *k).collect();
+        let mut c = Self::of(scope, &r.var_assignments, |k| keys.contains(&k));
+        let mut external: HashSet<HolderKey> = holders
             .iter()
             .filter(|(_, ext)| any_array || *ext)
-            .map(|(k, _)| k.clone())
+            .map(|(k, _)| *k)
             .collect();
         for a in &r.var_assignments {
-            let l = name_key(&a.lhs_name);
-            // ENG-162: `A := this.G` with a local `G` copies the hidden global: no copy of a
-            // holder of the routine, so `A` may share a record with code it cannot see.
+            let Some(l) = whole_variable(scope, &a.lhs_text) else {
+                continue;
+            };
             let copy = a
-                .rhs_identifier
+                .rhs_text
                 .as_deref()
-                .is_some_and(|w| !is_shadowed_global(w))
+                .and_then(|w| whole_variable(scope, w))
+                .is_some_and(|w| keys.contains(&w))
                 || a.rhs_member
                     .as_ref()
                     .is_some_and(|(_, m)| m.eq_fold_identifier("duplicate"));
             if keys.contains(&l) && !copy {
                 external.insert(l);
             }
-            // ENG-162: `this.G := R` with a local `G` puts R's record in the hidden global.
-            if is_shadowed_global(&a.lhs_name)
-                && let Some(w) = a.rhs_identifier.as_deref()
-                && keys.contains(&name_key(w))
+            // A holder copied into a global the classes do not hold (one a local hides: a
+            // caller's tracked set leaves it out) is kept by the object (ENG-162's `this.G := R`).
+            if matches!(l, HolderKey::Global(_))
+                && !keys.contains(&l)
+                && let Some(w) = a.rhs_text.as_deref().and_then(|w| whole_variable(scope, w))
+                && keys.contains(&w)
             {
-                external.insert(name_key(w));
+                external.insert(w);
             }
         }
-        let mut ext: Vec<String> = external.iter().cloned().collect();
+        let mut ext: Vec<HolderKey> = external.iter().copied().collect();
         ext.sort();
         c.join(&ext);
         // Where each class may first be kept elsewhere: an external member from entry; else the
@@ -524,13 +499,13 @@ impl AliasClasses {
         // call keeps its argument when it runs, after its own arguments: at its END, so
         // `O.Go(S.Keep(R))`'s `Go` runs after `Keep` kept R (sol on ENG-159). User code is
         // compared by its end too ([`user_code_points`]).
-        let mut from: HashMap<String, Option<(u32, u32)>> = HashMap::new();
+        let mut from: HashMap<HolderKey, Option<(u32, u32)>> = HashMap::new();
         let earlier = |a: Option<(u32, u32)>, b: Option<(u32, u32)>| match (a, b) {
             (None, _) | (_, None) => None,
             (Some(x), Some(y)) => Some(x.min(y)),
         };
         for k in &external {
-            from.insert(c.root(k), None);
+            from.insert(c.root(*k), None);
         }
         for cs in r
             .call_sites
@@ -542,9 +517,10 @@ impl AliasClasses {
             } else {
                 None
             };
-            for a in cs.argument_texts.iter().map(|a| holder_key(a)) {
-                if keys.contains(&a) {
-                    let root = c.root(&a);
+            // An argument naming a holder or an element of one (`Slot[1]`: the array's record).
+            for a in cs.argument_texts.iter().filter_map(|a| scope.text(a)) {
+                if keys.contains(&a.key) {
+                    let root = c.root(a.key);
                     let cur = from.get(&root).copied();
                     from.insert(root, cur.map_or(at, |f| earlier(f, at)));
                 }
@@ -552,7 +528,7 @@ impl AliasClasses {
         }
         c.retainable = keys
             .iter()
-            .filter_map(|k| from.get(&c.root(k)).map(|f| (k.clone(), *f)))
+            .filter_map(|k| from.get(&c.root(*k)).map(|f| (*k, *f)))
             .collect();
         c.external = external;
         c.holders = keys;
@@ -562,64 +538,69 @@ impl AliasClasses {
     /// Whether the record of holder `x` may be retained by code the routine cannot see by the
     /// time of the call at `pos`, so that call, if it may run user code, may rebind it.
     #[must_use]
-    pub fn rebinds_at(&self, x: &str, pos: (u32, u32)) -> bool {
+    pub fn rebinds_at(&self, x: HolderKey, pos: (u32, u32)) -> bool {
         self.retainable
-            .get(x)
+            .get(&x)
             .is_some_and(|f| f.is_none_or(|from| from < pos))
     }
 
     /// The holders a call at `pos` that may run user code may rebind.
-    pub fn rebound_at(&self, pos: (u32, u32)) -> impl Iterator<Item = &String> {
+    pub fn rebound_at(&self, pos: (u32, u32)) -> impl Iterator<Item = HolderKey> + '_ {
         self.retainable
             .iter()
             .filter(move |(_, f)| f.is_none_or(|from| from < pos))
-            .map(|(k, _)| k)
+            .map(|(k, _)| *k)
     }
 
     /// Whether holder `x` is shared with code the routine cannot see from entry.
     #[must_use]
-    pub fn is_external(&self, x: &str) -> bool {
-        self.external.contains(x)
+    pub fn is_external(&self, x: HolderKey) -> bool {
+        self.external.contains(&x)
     }
 
-    /// Whether the key `x` names a holder ([`Self::for_routine`] only).
+    /// Whether `x` is a holder ([`Self::for_routine`] only).
     #[must_use]
-    pub fn is_holder(&self, x: &str) -> bool {
-        self.holders.contains(x)
+    pub fn is_holder(&self, x: HolderKey) -> bool {
+        self.holders.contains(&x)
     }
 
-    /// Joins every name of `names` into one class.
-    fn join(&mut self, names: &[String]) {
-        let Some((first, rest)) = names.split_first() else {
+    /// Joins every key of `keys` into one class.
+    fn join(&mut self, keys: &[HolderKey]) {
+        let Some((&first, rest)) = keys.split_first() else {
             return;
         };
-        for n in rest {
+        for &n in rest {
             let (ra, rb) = (self.root(first), self.root(n));
-            self.parent
-                .entry(first.clone())
-                .or_insert_with(|| first.clone());
-            self.parent.entry(n.clone()).or_insert_with(|| n.clone());
+            self.parent.entry(first).or_insert(first);
+            self.parent.entry(n).or_insert(n);
             if ra != rb {
                 self.parent.insert(ra, rb);
             }
         }
     }
+
+    /// The classes over the holders `tracked` accepts, from the whole-variable copies among
+    /// `assignments` (each side resolved by `scope` from its source text, ENG-176).
     #[must_use]
-    pub fn of(assignments: &[PVarAssignment], tracked: impl Fn(&str) -> bool) -> Self {
+    pub fn of(
+        scope: HolderScope<'_>,
+        assignments: &[PVarAssignment],
+        tracked: impl Fn(HolderKey) -> bool,
+    ) -> Self {
         let mut c = Self::default();
-        // The IR gives both sides as logical names (`name_key`, not source text).
         for a in assignments {
-            let l = name_key(&a.lhs_name);
-            let Some(w) = a.rhs_identifier.as_deref() else {
+            let Some(l) = whole_variable(scope, &a.lhs_text) else {
                 continue;
             };
-            let w = name_key(w);
-            if !tracked(&l) || !tracked(&w) {
+            let Some(w) = a.rhs_text.as_deref().and_then(|w| whole_variable(scope, w)) else {
+                continue;
+            };
+            if !tracked(l) || !tracked(w) {
                 continue;
             }
-            let (rl, rw) = (c.root(&l), c.root(&w));
-            c.parent.entry(l.clone()).or_insert_with(|| l.clone());
-            c.parent.entry(w.clone()).or_insert_with(|| w.clone());
+            let (rl, rw) = (c.root(l), c.root(w));
+            c.parent.entry(l).or_insert(l);
+            c.parent.entry(w).or_insert(w);
             if rl != rw {
                 c.parent.insert(rl, rw);
             }
@@ -631,31 +612,31 @@ impl AliasClasses {
         c
     }
 
-    /// The class representative of the folded name `x`.
+    /// The class representative of `x`.
     #[must_use]
-    pub fn root(&self, x: &str) -> String {
-        let mut cur = x.to_string();
-        while let Some(p) = self.parent.get(&cur) {
-            if *p == cur {
+    pub fn root(&self, x: HolderKey) -> HolderKey {
+        let mut cur = x;
+        while let Some(&p) = self.parent.get(&cur) {
+            if p == cur {
                 break;
             }
-            cur = p.clone();
+            cur = p;
         }
         cur
     }
 
-    /// Every variable sharing a record with `x` (`x` included), folded.
+    /// Every holder sharing a record with `x` (`x` included), in key order.
     #[must_use]
-    pub fn members(&self, x: &str) -> Vec<String> {
+    pub fn members(&self, x: HolderKey) -> Vec<HolderKey> {
         let r = self.root(x);
-        let mut out: Vec<String> = self
+        let mut out: Vec<HolderKey> = self
             .parent
             .keys()
-            .filter(|n| self.root(n) == r)
-            .cloned()
+            .copied()
+            .filter(|&n| self.root(n) == r)
             .collect();
         if out.is_empty() {
-            out.push(x.to_string());
+            out.push(x);
         }
         out.sort();
         out
@@ -663,14 +644,20 @@ impl AliasClasses {
 
     /// Whether `x` shares its record with another variable.
     #[must_use]
-    pub fn has_alias(&self, x: &str) -> bool {
+    pub fn has_alias(&self, x: HolderKey) -> bool {
         self.members(x).len() > 1
     }
 
-    /// Every folded name in an alias class of two or more.
-    pub fn names(&self) -> impl Iterator<Item = &String> {
-        self.parent.keys()
+    /// Every holder in an alias class of two or more.
+    pub fn names(&self) -> impl Iterator<Item = HolderKey> + '_ {
+        self.parent.keys().copied()
     }
+}
+
+/// ENG-176: the whole variable source text names (`None` for an element `X[1]`, a member, an
+/// expression or a name `scope` does not declare).
+fn whole_variable(scope: HolderScope<'_>, text: &str) -> Option<HolderKey> {
+    scope.text(text).filter(|h| !h.indexed).map(|h| h.key)
 }
 
 #[cfg(test)]
@@ -693,11 +680,28 @@ mod tests {
             rhs_identifier: r.map(str::to_string),
             rhs_member: None,
             lhs_is_member: false,
+            lhs_text: l.to_string(),
+            rhs_text: r.map(str::to_string),
         }
     }
 
     #[test]
     fn classes_join_through_chains_and_ignore_untracked_and_expressions() {
+        let names = ["ref", "a", "b", "c", "other", "d", "e", "notrecref"];
+        let own: Vec<crate::program::model::workspace::ModelVariable> = names
+            .iter()
+            .map(|n| crate::program::model::workspace::ModelVariable {
+                name: (*n).to_string(),
+                declared_type: "RecordRef".to_string(),
+                is_parameter: false,
+                parameter_index: None,
+                initializer: None,
+                scope: Some("local".to_string()),
+                fixed_local: None,
+            })
+            .collect();
+        let scope = HolderScope::new(&own, &[]);
+        let k = |n: &str| scope.logical(n).expect("declared");
         let rows = [
             assign("A", Some("ref"), 1),
             assign("b", Some("a"), 2),
@@ -705,12 +709,12 @@ mod tests {
             assign("D", None, 4),
             assign("e", Some("notrecref"), 5),
         ];
-        let tracked = |n: &str| n != "notrecref";
-        let c = AliasClasses::of(&rows, tracked);
-        assert_eq!(c.members("ref"), ["a", "b", "ref"]);
-        assert_eq!(c.members("c"), ["c", "other"]);
-        assert!(!c.has_alias("d"), "an expression copy is no alias");
-        assert!(!c.has_alias("e"), "an untracked source is no alias");
+        let untracked = k("notrecref");
+        let c = AliasClasses::of(scope, &rows, |x| x != untracked);
+        assert_eq!(c.members(k("ref")), [k("ref"), k("a"), k("b")]);
+        assert_eq!(c.members(k("c")), [k("c"), k("other")]);
+        assert!(!c.has_alias(k("d")), "an expression copy is no alias");
+        assert!(!c.has_alias(k("e")), "an untracked source is no alias");
         assert_eq!(c.assignments.len(), 3);
     }
 }

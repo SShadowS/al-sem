@@ -653,6 +653,8 @@ mod eng14_tests {
                 rhs_identifier: None,
                 rhs_member: None,
                 lhs_is_member: false,
+                lhs_text: "IsHandled".to_string(),
+                rhs_text: None,
             });
         let by_id: HashMap<&str, &ModelRoutine> = HashMap::from([("sub", &r)]);
         assert_eq!(

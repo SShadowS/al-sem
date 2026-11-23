@@ -46,6 +46,8 @@
 //!   - `PVarAssignment.rhs_identifier`
 //!   - `PVarAssignment.rhs_member`
 //!   - `PVarAssignment.lhs_is_member`
+//!   - `PVarAssignment.lhs_text`
+//!   - `PVarAssignment.rhs_text`
 //!   - `PCFNNode.rare`
 //!   - `PCFNNode.source_range`
 //!   - `PCFNNode.flow`
@@ -791,12 +793,6 @@ impl PartialEq for PFieldAccess {
 
 impl Eq for PFieldAccess {}
 
-/// ENG-162: the prefix of a [`PVarAssignment`] side that names a global one of the routine's own
-/// declarations hides (`this.G` with a local `G`): `"\0this.g"`. It starts with a character no AL
-/// identifier holds, so no declared name, quoted or not (`"this.G"` is a legal local), equals it,
-/// and no reader's `this.`-stripping key turns it into the local's name (sol on ENG-162).
-pub const HIDDEN_GLOBAL_PREFIX: &str = "\u{0}this.";
-
 #[derive(Debug, Clone, Serialize, Deserialize, Eq)]
 pub struct PVarAssignment {
     #[serde(rename = "lhsName")]
@@ -827,6 +823,17 @@ pub struct PVarAssignment {
     /// and excluded from `PartialEq` for the same reason.
     #[serde(skip)]
     pub lhs_is_member: bool,
+    /// ENG-176: the target's source text as written (`this.G`, `"My Ref"`, `Slot[1]`), for a
+    /// reader to resolve with `holder_key::HolderScope::text`, which applies AL's scoping
+    /// (`lhs_name` is folded and cannot tell a hidden global from the local hiding it).
+    /// INTERNAL-ONLY like `rhs_identifier`, and excluded from `PartialEq`.
+    #[serde(skip)]
+    pub lhs_text: String,
+    /// ENG-176: the value's source text as written, set whenever the value spells a whole
+    /// variable (an identifier or `this.X`, through parentheses), whatever the target: resolved
+    /// like `lhs_text`. INTERNAL-ONLY like `rhs_identifier`.
+    #[serde(skip)]
+    pub rhs_text: Option<String>,
 }
 
 /// MANUAL PartialEq: compares exactly the SERIALIZED L2 contract surface.
@@ -1570,7 +1577,7 @@ mod tests {
                 pending = false;
             }
         }
-        assert_eq!(actual.len(), 22, "scanner found {actual:?}");
+        assert_eq!(actual.len(), 24, "scanner found {actual:?}");
         assert_eq!(documented, actual);
     }
 

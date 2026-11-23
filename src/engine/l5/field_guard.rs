@@ -39,24 +39,34 @@ fn guarded_operations(
     if crate::program::body::features::names_opaque(Some(tree), r.body_available) {
         return out;
     }
-    let lc = |s: &str| s.trim().trim_matches('"').fold_identifier();
-    let recordrefs: HashSet<String> = r
-        .variables
-        .iter()
-        .filter(|v| v.declared_type.trim().eq_fold_identifier("recordref"))
-        .map(|v| lc(&v.name))
+    // ENG-176: every name is resolved by the routine's scope (`HolderScope`: `this.G` is the
+    // global, quoted names, a local hiding a global), never keyed by its text.
+    use crate::program::model::recref_alias::{AliasClasses, HolderKey, HolderScope, bind_sites};
+    let scope = HolderScope::of(r);
+    let key_of = |text: &str| scope.text(text).map(|h| h.key);
+    let recordrefs: HashSet<HolderKey> = (0..r.variables.own().len())
+        .map(|i| HolderKey::Own(i as u32))
+        .chain((0..r.variables.globals().len()).map(|i| HolderKey::Global(i as u32)))
+        .filter(|&k| {
+            scope
+                .variable(k)
+                .declared_type
+                .trim()
+                .eq_fold_identifier("recordref")
+        })
         .collect();
     if recordrefs.is_empty() {
         return out;
     }
     // Where each RecordRef is assigned (`R := X.Duplicate()`): a guard holds
     // only when every assignment comes before it.
-    let mut assigned_at: HashMap<String, Vec<(u32, u32)>> = HashMap::new();
+    let mut assigned_at: HashMap<HolderKey, Vec<(u32, u32)>> = HashMap::new();
     for a in &r.var_assignments {
-        let name = lc(&a.lhs_name);
-        if recordrefs.contains(&name) {
+        if let Some(k) = key_of(&a.lhs_text)
+            && recordrefs.contains(&k)
+        {
             assigned_at
-                .entry(name)
+                .entry(k)
                 .or_default()
                 .push((a.source_anchor.start_line, a.source_anchor.start_column));
         }
@@ -65,24 +75,23 @@ fn guarded_operations(
     // through any member rebinds every member (measured on BC 28.4), so a rebinding ends the
     // guard of the whole alias class: the routine's own aliases, and every parameter, global and
     // array holder that may share a record already (`recref_alias::AliasClasses::for_routine`).
-    // Names are keyed as the classes key them (`this.G`, `Slot[1]`, quotes).
-    use crate::program::model::recref_alias::{AliasClasses, bind_sites, holder_key};
     let aliases = AliasClasses::for_routine(r, shadowed);
     // The call sites and record operations (by id) that may rebind a RecordRef, with the ones
     // they may: a call it is passed to, and a bind through it (`recref_alias::RecRefBind`, the
     // one list: `R.Get(Id)` is a record operation, ENG-160).
-    let mut names_by_site: HashMap<&str, HashSet<String>> = HashMap::new();
+    let mut names_by_site: HashMap<&str, HashSet<HolderKey>> = HashMap::new();
     for cs in &r.call_sites {
         names_by_site.entry(cs.id.as_str()).or_default().extend(
             cs.argument_texts
                 .iter()
-                .map(|a| holder_key(a))
-                .filter(|a| aliases.is_holder(a)),
+                .filter_map(|a| key_of(a))
+                .filter(|&a| aliases.is_holder(a)),
         );
     }
     for site in bind_sites(r) {
-        let key = holder_key(site.receiver);
-        if aliases.is_holder(&key) {
+        if let Some(key) = key_of(site.receiver)
+            && aliases.is_holder(key)
+        {
             names_by_site.entry(site.id).or_default().insert(key);
         }
     }
@@ -108,10 +117,10 @@ fn guarded_operations(
             )
         })
         .collect();
-    let mut after_by_op: HashMap<&str, HashSet<String>> = HashMap::new();
+    let mut after_by_op: HashMap<&str, HashSet<HolderKey>> = HashMap::new();
     for p in crate::program::model::recref_alias::user_code_points(r, shadowed) {
         let id = p.id;
-        let rebound: Vec<String> = aliases.rebound_at(p.runs).cloned().collect();
+        let rebound: Vec<HolderKey> = aliases.rebound_at(p.runs).collect();
         if rebound.is_empty() {
             continue;
         }
@@ -120,40 +129,42 @@ fn guarded_operations(
             _ => names_by_site.entry(id).or_default().extend(rebound),
         }
     }
-    let after_by_op: HashMap<&str, HashSet<String>> = after_by_op
+    let after_by_op: HashMap<&str, HashSet<HolderKey>> = after_by_op
         .into_iter()
-        .map(|(id, names)| (id, names.iter().flat_map(|n| aliases.members(n)).collect()))
+        .map(|(id, names)| (id, names.iter().flat_map(|&n| aliases.members(n)).collect()))
         .collect();
-    let rebinds: HashMap<&str, HashSet<String>> = names_by_site
+    let rebinds: HashMap<&str, HashSet<HolderKey>> = names_by_site
         .into_iter()
-        .map(|(id, names)| (id, names.iter().flat_map(|n| aliases.members(n)).collect()))
-        .filter(|(_, names): &(&str, HashSet<String>)| !names.is_empty())
+        .map(|(id, names)| (id, names.iter().flat_map(|&n| aliases.members(n)).collect()))
+        .filter(|(_, names): &(&str, HashSet<HolderKey>)| !names.is_empty())
         .collect();
-    let writes: HashMap<&str, String> = r
+    let writes: HashMap<&str, HolderKey> = r
         .record_operations
         .iter()
         .filter(|op| WRITE_OPS.contains(&op.op.fold_identifier().as_str()))
-        .map(|op| (op.id.as_str(), lc(&op.record_variable_name)))
+        .filter_map(|op| Some((op.id.as_str(), key_of(&op.record_variable_name)?)))
         .collect();
     let top: &[PCFNNode] = match tree.kind.as_str() {
         "block" => tree.children.as_deref().unwrap_or_default(),
         _ => std::slice::from_ref(tree),
     };
-    let mut active: HashMap<String, i64> = HashMap::new();
+    let mut active: HashMap<HolderKey, i64> = HashMap::new();
     for stmt in top {
+        // The guard's receiver is a logical name (the walk strips its quotes).
         if let Some((rec, n)) = stmt.field_exit_guard()
-            && recordrefs.contains(rec)
+            && let Some(rec) = scope.logical(rec)
+            && recordrefs.contains(&rec)
         {
             let Some((line, col, ..)) = stmt.source_range else {
                 continue;
             };
             if assigned_at
-                .get(rec)
+                .get(&rec)
                 .into_iter()
                 .flatten()
                 .all(|&at| at < (line, col))
             {
-                active.insert(rec.clone(), *n);
+                active.insert(rec, *n);
             }
             continue;
         }
