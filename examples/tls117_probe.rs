@@ -735,7 +735,11 @@ mod win {
             } else {
                 cmd.arg("child");
             }
+            // Children run in the temp folder, never the checkout (and not in the image's own
+            // folder, whose rename W1's ancestor case needs: a process's current directory is an
+            // open handle on it).
             let mut proc = cmd
+                .current_dir(std::env::temp_dir())
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
                 .spawn()
@@ -1015,12 +1019,28 @@ mod win {
         AncestorAwayThenRecreate,
     }
 
-    fn posix_rename_over(src: &Path, leaf: &str) -> std::io::Result<()> {
+    /// Rename `src` over `target` with `SetFileInformationByHandle(FileRenameInfoEx)`,
+    /// `FILE_RENAME_FLAG_REPLACE_IF_EXISTS | FILE_RENAME_FLAG_POSIX_SEMANTICS`.
+    ///
+    /// `target` must be a **full path**: FILE_RENAME_INFO's documentation says `RootDirectory` is
+    /// NULL "if the FileName member contains the full path", and is a directory handle
+    /// otherwise. Rev 8 passed a bare name with a NULL `RootDirectory`, and the owner's runs at
+    /// 9e8bf18f and 84e9f24a showed the Win32 layer resolving that bare name against the
+    /// process's current directory: the source landed in the checkout as `a.exe` /
+    /// `ctl-target.exe`, so neither the control nor the running case was ever a same-folder
+    /// rename. `FileNameLength` is the name's length in bytes, without the terminator.
+    fn posix_rename_over(src: &Path, target: &Path) -> std::io::Result<()> {
+        if !target.is_absolute() {
+            return Err(std::io::Error::other(format!(
+                "rename target {} is not a full path",
+                target.display()
+            )));
+        }
         let f = OpenOptions::new()
             .access_mode(DELETE)
             .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
             .open(src)?;
-        let name: Vec<u16> = OsStr::new(leaf).encode_wide().collect();
+        let name: Vec<u16> = target.as_os_str().encode_wide().collect();
         let head = std::mem::offset_of!(FILE_RENAME_INFO, FileName);
         let size = head + name.len() * 2 + 2;
         // u64 storage: FILE_RENAME_INFO holds a HANDLE, so it needs pointer alignment.
@@ -1088,7 +1108,7 @@ mod win {
                 let other = dir.join(format!("other-{n}.exe"));
                 std::fs::write(&other, other_bytes)?;
                 *rival_id = file_id_at(&other).ok();
-                posix_rename_over(&other, "a.exe")
+                posix_rename_over(&other, exe)
             }
             Mutation::AncestorAwayThenRecreate => {
                 std::fs::rename(dir, dir.with_file_name(format!("dir-away-{n}")))?;
@@ -1243,7 +1263,7 @@ mod win {
         std::fs::write(&target, b"control target").ctx("write control target")?;
         std::fs::write(&src, rival).ctx("write control source")?;
         let src_id = file_id_at(&src).ctx("control source id")?;
-        posix_rename_over(&src, "ctl-target.exe").ctx("control rename")?;
+        posix_rename_over(&src, &target).ctx("control rename")?;
         if file_id_at(&target).ctx("control target id")? == src_id {
             Ok("control: replaced a non-running target (verified)".into())
         } else {
@@ -2085,6 +2105,13 @@ mod win {
         if std::env::args().nth(1).as_deref() == Some("child") {
             child_loop();
             return 0;
+        }
+        // Everything the probe writes goes under the temp folder; its current directory too, so
+        // a relative path can never land in the checkout (the 9e8bf18f and 84e9f24a runs left
+        // `a.exe` and `ctl-target.exe` there through the rename bug fixed in rev 9).
+        if let Err(e) = std::env::set_current_dir(std::env::temp_dir()) {
+            println!("FAIL setup: cannot enter the temp folder: {e}");
+            return 1;
         }
         let mut failed = false;
         for (name, f) in all() {

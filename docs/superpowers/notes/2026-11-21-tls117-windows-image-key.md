@@ -9,7 +9,27 @@ only code. **The cache stays off on Windows until the probe passes on a real mac
 and a green probe run is diagnostics, not enablement: the product phase must also give positive
 keys on the shipped, stamped MSVC binaries.
 
-What rev 8 changes (the owner's run at `9e8bf18f`, `/work/.al-sem/orchestrator/tls117-windows-9e8bf18f/`):
+What rev 9 changes (the owner's rerun at `84e9f24a`, `/work/.al-sem/orchestrator/tls117-windows-84e9f24a/`):
+W12 and W10 (now also on Windows PowerShell 5.1) PASSed; the only FAIL was W1 POSIX rename,
+where the image kept its name and id and the key was the running image's, but the **control
+failed too**, and the sources turned up in the checkout as `a.exe` and `ctl-target.exe`. Root
+cause: the probe's rename helper passed a **bare file name** with a NULL `RootDirectory`. The
+[FILE_RENAME_INFO](https://learn.microsoft.com/en-us/windows/win32/api/winbase/ns-winbase-file_rename_info)
+documentation gives `RootDirectory` as NULL "if the file is not moved to a different directory,
+or if the FileName member contains the full path", and as a directory handle otherwise; the runs
+show the Win32 layer resolving a bare name against the **process's current directory**, so the
+"same-folder" rename moved the source into the checkout (and the image's name was never the
+target). The rest of the call was right (`FileRenameInfoEx` = 22; the `Flags` union with
+`FILE_RENAME_FLAG_REPLACE_IF_EXISTS | FILE_RENAME_FLAG_POSIX_SEMANTICS`; `FileNameLength` in bytes
+without the terminator). Rev 9 passes the **full path** of the target (and refuses a relative
+one). The control must replace a non-running file, verified by file id, before the running case
+counts; a failed control FAILs the item with its exact error. **The probe writes only under the
+temp folder** (`%TEMP%`, through `tempfile`), sets its own current directory to the temp folder
+at start, and starts every child there too; it never writes into the checkout or the directory it
+was started from. Stray `a.exe` / `ctl-target.exe` in the checkout root from the earlier runs are
+probe leftovers, safe to delete.
+
+What rev 8 changed (the owner's run at `9e8bf18f`, `/work/.al-sem/orchestrator/tls117-windows-9e8bf18f/`):
 - **The run.** Debug and `release-ship` probes: every item PASSed except W1 POSIX rename replace.
   Every rival was refused at the canonical comparison (rename away, ancestor folder, hard link,
   W9's `.text`/`.rdata`), every key was the running image's or absent, W9's `.data` change was
