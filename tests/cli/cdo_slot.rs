@@ -27,16 +27,12 @@ struct Slot(
 // 300 s twice in TLS-102's stress run (that test now runs its calls 8 at once).
 const WATCHDOG: std::time::Duration = std::time::Duration::from_secs(600);
 
-/// `cmd` without any slot or Claude setting this test process inherited (a
-/// landing runs the suite inside its own hold: its token, its tuning, its
+/// `cmd` without any slot, Claude or other setting this test process inherited
+/// (a landing runs the suite inside its own hold: its token, its tuning, its
 /// session), so a slot test gives the same result inside a hold and outside.
+/// TLS-115: `crate::clean_env`, so a `BASH_ENV` or gate knob is gone too.
 fn scrubbed(mut cmd: std::process::Command) -> std::process::Command {
-    for (k, _) in std::env::vars_os() {
-        let k = k.to_string_lossy().into_owned();
-        if k.starts_with("CDO_SLOT_") || k.starts_with("CLAUDE_") || k == "CDO_WS" {
-            cmd.env_remove(k);
-        }
-    }
+    crate::clean_env::clean_env(&mut cmd);
     cmd
 }
 
@@ -128,9 +124,7 @@ impl Slot {
         cmd.arg(script)
             .args(args)
             .env("CDO_SLOT_DIR", self.dir())
-            .env("CLAUDE_CODE_SESSION_ID", session)
-            .env_remove("CLAUDE_PID")
-            .env_remove("CDO_SLOT_TOKEN");
+            .env("CLAUDE_CODE_SESSION_ID", session);
         for (k, v) in BASE_ENV.iter().chain(env) {
             cmd.env(k, v);
         }
@@ -204,8 +198,6 @@ impl Slot {
         }
         let mut child = cmd
             .env("CDO_SLOT_DIR", self.dir())
-            .env_remove("CDO_WS")
-            .env_remove("CDO_SLOT_TOKEN")
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
@@ -1609,9 +1601,7 @@ fn cdo_slot_timed_waits_for_builds_and_refuses_beside_one() {
     under
         .args(["-c", &format!("{inner}; true")])
         .env("CDO_SLOT_DIR", s.dir())
-        .env("CLAUDE_CODE_SESSION_ID", "A")
-        .env_remove("CLAUDE_PID")
-        .env_remove("CDO_SLOT_TOKEN");
+        .env("CLAUDE_CODE_SESSION_ID", "A");
     for (k, v) in BASE_ENV {
         under.env(k, v);
     }

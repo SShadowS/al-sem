@@ -30,6 +30,9 @@ mod unreadable;
 #[path = "../common/git.rs"]
 mod git;
 
+#[path = "../common/clean_env.rs"]
+mod clean_env;
+
 /// A digest 4.0.0 or query 4.0.0 document (output validation V5, §7.2,
 /// §7.3) read back into its 3.x payload shape, through the documents' own
 /// inverses (`digest_v4::to_v3`, `query_v4::to_v3`; exact, checked by
