@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (ENG-175: a conditional expression is the chosen branch's RecordRef handle; five wrong `no`s)
+
+- **Measured on BC 28.4** (the Linux sidecar; alc 18.0.41 compiles every shape;
+  `/work/.al-sem/engine-notes/eng175-probe/RESULTS.md`). After `A := B ? R : S;
+  A.GetTable(Vendor)`, R is a Vendor when B holds and S otherwise: a ternary is the handle of
+  the branch it picks, as an assignment's value, an argument (`F(B ? R : S)`) or a receiver
+  (`(B ? R : S).GetTable(V)`), nested ternaries alike. A returned RecordRef shares too (`exit(X)`
+  by value or `var`, a named return, `exit(G)`, a call result as receiver or argument).
+- **The bug** (Fable F2 on ENG-162, older than it). No reader saw a ternary as a copy, so
+  `A := B ? R : S; A.Get(…); Guarded(R)` answered `no` in the RecordRef flow, the table frame and
+  the temp pass (which kept R temporary), and so did a ternary argument or receiver.
+- **The fix.**
+  - The walk records `A := c ? X : Y` as one assignment row per leaf branch: exactly `if c then
+    A := X else A := Y`, so every reader is right unchanged.
+  - For a ternary receiver or argument, the walk records its whole-variable leaves
+    (`PCallSite::ternary_holders`, internal, boxed: almost every call has none). The flow treats
+    each as holding anything from that call on, its alias class too (a global a local hides is
+    one of the object's global writes). The exit guards, the temp pass and the table frame read
+    each as a binding.
+- **Returns: unchanged here.** Every return shape already answers soundly, because a holder
+  passed to a call counts as possibly kept (ENG-159). A returned parameter is an escape that
+  ENG-161's escape facts must count; the measured rule is in ENG-161's task.
+- **Tests.** `cli_recref_get`'s `GE Ternary` codeunit, with a control (`no`): an assignment
+  (the flow, nested, the table frame, the temp pass), an argument (the flow, the frame, the
+  temp pass, a local exit guard) and a receiver. The lib test
+  `a_hidden_globals_write_reaches_the_instance` adds a global and a hidden-global ternary.
+- **Red proofs.** No per-branch rows fails `TernaryAlias`; no ternary leaves fails `TernaryArg`;
+  each reader's rule turned off fails a row of its own: the flow `TernaryArg`, the frame
+  `TernaryArgFrameRoot`, the exit guards `TernaryLocalGuard`, the temp pass `TernaryArgTemp`,
+  and the hidden-global write `TernaryHiddenRoot`.
+
 ### Changed (TLS-116: `alsem batch` uses the IR cache, and no job write reaches a cache folder)
 
 - **What was wrong.** TLS-109's write claims did not cover the engine's cache folders. ENG-110
