@@ -18,10 +18,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ALSEM_IR_CACHE=off` measurement. A warm-cache run gains almost nothing: the scans were
   0.14-0.28 % of it.
 - **Comments** (`comment_nodes`). They are found from the text, not by a walk. At each `/`
-  followed by `/` or `*`, the lowerer asks for the smallest named node that covers that byte.
-  If it is a `comment` or `multiline_comment` that starts there, it is kept, and the search
-  jumps past its end. Every comment token starts with `//` or `/*`, so none is missed. A `//`
-  inside a string or inside another comment finds that node instead.
+  followed by `/` or `*`, the lowerer asks for the leaf that covers that byte. If it is a
+  `comment` or `multiline_comment` that starts there, it is kept, and the search jumps past
+  its end. Every comment token starts with `//` or `/*`, so none is missed. A `//` inside a
+  string or inside another comment finds that leaf instead.
+  - The bytes are asked in increasing order of one tree cursor that only moves forward
+    (`raw::node::LeafLocator`), so a file costs about one walk.
+  - Review r1 (sol): the first version looked each byte up from the root. Tree-sitter then
+    steps over the root's children from the start every time, so N comment lines before the
+    first declaration cost N² steps.
+  - `comment_lookup_is_linear_in_a_wide_file` pins this with 20,000 such lines: 10.8 ms
+    against the whole-tree walk's 2.3 ms. A lookup from the root per comment took 1.25 s
+    and failed the test.
 - **Preproc ranges** (`has_conditional_directive`). The walk now runs only for a file that
   holds `#if`, `#elif`, `#else` or `#endif`, not for any file with a `#` in it. Every
   build-varying `preproc_*` node belongs to such a group. On CDO's dependencies, 2,587 of
@@ -35,17 +43,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The text checks** use `str::match_indices` (a memchr search). A first version with
   per-byte loops cost back ~1.8 % of what it saved.
 - **The IR is unchanged.** `al_syntax::lower::scan_oracle_disagreements` (test-only) compares
-  each scan with the walk it replaced: the comment nodes, the preproc range list and every
-  object's RunObject values.
-  - It agrees on all 716 `.al` files of the r0 corpus and `tests/fixtures`, plus inline edge
-    shapes: `//` in strings, markers inside comments, adjacent comments, a `#` with no
-    directive, `# IF` with no `#else`, and RunObject spelled three ways
+  each scan with the walk it replaced: the ordered `SourceComment` values (text, block,
+  own line, origin with its kind id), the preproc range list, and every object's RunObject
+  values.
+  - It agrees on all 716 `.al` files of the r0 corpus and `tests/fixtures`
     (`narrowed_scans_match_the_whole_tree_walks`).
+  - It agrees on these inline edge shapes:
+    - `//` inside strings, markers inside comments, and adjacent comments;
+    - a `#` that is no directive, and `# IF` with no `#else`;
+    - the lone-CR directive comment (`#if X // c\r`, review r1 Fable);
+    - a recovered file with a MISSING node (review r1 sol);
+    - RunObject spelled three ways.
+  - The directive check is also tested on each spelling alone (`#if`, `#elif`, `#else`,
+    `#endif`, `# \tIF`), and is false for `#region`, `#endregion`, `#pragma`, `#define`,
+    `#undef` and a `#` in a string.
   - It agrees on all 10,881 CDO dependency files and 582 workspace files
     (`lowerer_scans_match_the_walks_on_cdo`, in `lib_cdo`).
   - `scripts/check-goldens` passes with no regeneration.
-  - `cdo-before-after c3f528f3 a9299095` with the cache off: fingerprint, analyze (both
-    scopes) and the call-graph stats are byte-identical; no finding moved.
+  - `cdo-before-after c3f528f3 df4534e6` (and `a9299095` before review r1) with the cache
+    off: fingerprint, analyze (both scopes) and the call-graph stats are byte-identical; no
+    finding moved.
 - **Discrimination proofs** (`narrowed_scans_match_the_whole_tree_walks`; each break
   failed, then passed again when reverted):
   - Comments: drop `*` as a marker. The block comments go missing.
@@ -57,16 +74,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - RunObject: make the range test exclude a name that starts the range (`h <= r.start`). The
     page's RunObject values go missing.
   - RunObject: search the text without lowercasing it. The values go missing.
+  - Comment cost: look each comment up from the root again. The wide-file test fails.
 - **Measured** on CDO with the cache off: one-shot `alsem analyze --deterministic`, release-fast,
-  master `c3f528f3` against `a9299095`. 5 alternating pairs, pinned to cores 0-11, in the timed
-  CDO slot.
-  - **Instructions x0.927** (user mode, P-cores: 272.37e9 -> 252.41e9 median; every pair
-    x0.9267 ±0.0002). That is above the task's bar of 1.5 % of CPU.
+  5 alternating pairs pinned to cores 0-11, in the timed CDO slot.
+  - Binaries, both from `scripts/cdo-before-after`'s cache:
+    - master `c3f528f3`, sha256 `3cddd5f0…`;
+    - head `df4534e6`, sha256 `6bed0b31…`.
+  - **Instructions x0.926** (user mode, P-cores: 272.45e9 -> 252.25e9 median; pairs
+    x0.9254-x0.9263). That is above the task's bar of 1.5 % of CPU.
+    - Before review r1, `a9299095` (sha256 `9d59145e…`) measured x0.927 the same way.
+  - These are instructions, while the 6.0 % ceiling is samply's share of all CPU time.
+    The two do not measure the same thing, so the saving can exceed the ceiling. A likely
+    reason it does (not checked): the cursor-heavy scans ran more instructions per cycle
+    than the average.
   - CPU time is one run, so no ratio is quoted.
-  - Profile shares (samply, `profiling` build, analyze, cache off). Tree-cursor stepping, self:
-    7.26 % -> 4.84 %. The three scans: `descendants_of_kinds` 2.83 % -> gone,
-    `named_ranges_where` 1.47 % -> 0.75 %, `collect_run_objects` 1.73 % -> 0.22 %. The new
-    descents (`named_descendant_for_byte_range`) cost 0.11 %.
+  - Profile shares at `a9299095` (samply, `profiling` build, analyze, cache off):
+    - tree-cursor stepping, self: 7.26 % -> 4.84 %;
+    - `descendants_of_kinds`: 2.83 % -> gone;
+    - `named_ranges_where`: 1.47 % -> 0.75 %;
+    - `collect_run_objects`: 1.73 % -> 0.22 %.
 
 ### Fixed (TLS-105: three more gate-script deadlines count awake time, not wall time)
 

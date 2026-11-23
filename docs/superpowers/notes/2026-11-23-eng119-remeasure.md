@@ -2,7 +2,8 @@
 
 ENG-119 (the lowerer's scans beside its main walk) was put on hold until ENG-110 landed.
 ENG-110 is the persistent cache of parsed dependency IR, landed at `245e5c43`. This note
-re-measures the scans' cost with that cache warm and with it off. No product code changed.
+re-measures the scans' cost with that cache warm and with it off. Sections 1-4 measure master
+before any change; section 5 reports the change that followed (ENG-119 itself).
 
 - **Binary:** master `c3f528f3` (contains ENG-110), `profiling` build (release-fast's code
   with symbols).
@@ -196,7 +197,19 @@ passed: harness 212, lsp 2, l4 25, lib 21 tests.
 
 ## 5. Implemented
 
-ENG-119 was implemented on this branch (`55be7ee3`, `a9299095`). On a cache-off one-shot
-analyze on CDO it gives instructions x0.927, with byte-identical outputs. The measurements and
-discrimination proofs are in the CHANGELOG entry. The raw after-profiles are
-`/work/.al-sem/tools-notes/eng119/after2-*`, and the instruction pairs are in `perf-ab/`.
+ENG-119 was implemented on this branch: `55be7ee3`, `a9299095`, and review r1's `df4534e6`.
+The measurements and discrimination proofs are in the CHANGELOG entry. Raw data is in
+`/work/.al-sem/tools-notes/eng119/`.
+
+**Instructions, one-shot cache-off `alsem analyze --deterministic` on CDO.** All outputs were
+byte-identical.
+
+| run | base | head | median ratio | pairs |
+|---|---|---|---:|---|
+| `perf-ab/`, `perf-ab.log` | master `c3f528f3`, sha256 `3cddd5f081b4…` | `a9299095`, sha256 `9d59145eb1ea…` | x0.927 | x0.9267 ±0.0002 |
+| `perf-ab2/`, `perf-ab2.log` (`perf-ab2.binaries` has the full hashes) | master `c3f528f3`, sha256 `3cddd5f081b4…` | `df4534e6`, sha256 `6bed0b318912…` | x0.926 | x0.9254-x0.9263 |
+
+- All four binaries are under `~/.cache/al-sem/cdo-speed/bin/<sha>/alsem`.
+- **The 7.4 % is user-mode instructions; the 6.0 % ceiling in §1 is samply's share of all
+  CPU time.** The two do not measure the same thing, so the saving can exceed the ceiling.
+- The after-profiles of `a9299095` are `after2-*`.
