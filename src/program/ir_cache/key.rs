@@ -163,6 +163,7 @@ mod win {
     use std::os::windows::ffi::{OsStrExt, OsStringExt};
     use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
     use std::path::{Path, PathBuf};
+    use windows_sys::Win32::Foundation::ERROR_SHARING_VIOLATION;
     use windows_sys::Win32::Storage::FileSystem::{
         FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ,
     };
@@ -249,26 +250,33 @@ mod win {
         (n != 0 && n < buf.len()).then(|| PathBuf::from(OsString::from_wide(&buf[..n])))
     }
 
-    /// The accepted candidate, held open (sharing read only: no write, no rename, no delete)
-    /// for the process's life, so nothing can replace or rename the keyed file after the key is
-    /// made. The window that stays is from the image's load to the key, milliseconds: the key is
-    /// made at the start of `main` (`install_from_env`).
-    static HELD: std::sync::OnceLock<File> = std::sync::OnceLock::new();
-
-    /// Part B on one candidate: the key and the handle it was read through, or why it was
-    /// refused.
+    /// Part B on one candidate: the key, or why it was refused. The handle shares read only
+    /// (no write, no delete) while the file is read, so the bytes hashed are the bytes checked;
+    /// it is closed when this returns (Fable N1: nothing reads the file again, and a handle held
+    /// for the process's life would stop an installer renaming the running exe away).
     fn check(
         p: &Path,
         a: &pe::Canon,
         slot_rva: u32,
         loaded: &[u8; pe::SLOT_LEN],
-    ) -> Result<(IrKey, File), String> {
-        let mut f: File = OpenOptions::new()
-            .read(true)
-            .share_mode(FILE_SHARE_READ)
-            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
-            .open(p)
-            .map_err(|e| format!("open: {e}"))?;
+    ) -> Result<IrKey, String> {
+        let open = || {
+            OpenOptions::new()
+                .read(true)
+                .share_mode(FILE_SHARE_READ)
+                .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+                .open(p)
+        };
+        // One retry on a sharing violation (a scanner or an installer holding the file for a
+        // moment: Fable N7); anything else, or a second refusal, is no key.
+        let mut f: File = match open() {
+            Err(e) if e.raw_os_error() == Some(ERROR_SHARING_VIOLATION as i32) => {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                open()
+            }
+            r => r,
+        }
+        .map_err(|e| format!("open: {e}"))?;
         let m = f.metadata().map_err(|e| format!("stat: {e}"))?;
         if !m.is_file() || m.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
             return Err("not a regular file".into());
@@ -293,8 +301,7 @@ mod win {
             }
             pe::SlotVerdict::SlotDiffers => return Err("its slot differs".into()),
         }
-        let k = key_of(&mut &bytes[..]).ok_or_else(|| "no IR marker in the file".to_string())?;
-        Ok((k, f))
+        key_of(&mut &bytes[..]).ok_or_else(|| "no IR marker in the file".into())
     }
 
     pub(super) fn image_key() -> Result<IrKey, NoKey> {
@@ -322,10 +329,7 @@ mod win {
                 continue;
             };
             match check(&p, &a, slot_rva, &loaded) {
-                Ok((k, f)) => {
-                    let _ = HELD.set(f);
-                    return Ok(k);
-                }
+                Ok(k) => return Ok(k),
                 Err(e) => why.push(format!("{what} {}: {e}", p.display())),
             }
         }
@@ -415,7 +419,7 @@ mod tests {
             "IRKEY={}",
             image_key().map_or_else(|e| format!("none: {e}"), |k| k.hex())
         );
-        // Windows tests act on the file while this process still runs (and holds it).
+        // Windows tests act on the file while this process still runs, after its key.
         if std::env::var_os("ALSEM_IR_KEY_HOLD").is_some() {
             use std::io::Write;
             std::io::stdout().flush().unwrap();
@@ -512,8 +516,9 @@ mod tests {
     }
 
     /// TLS-117 (Windows; the owner's acceptance run): an unstamped copy of this test binary has
-    /// no key; a stamped copy keys on its own bytes and holds the file (a rename or delete of
-    /// it fails while it runs); and when its folder is renamed away and a rival build put at
+    /// no key; a stamped copy keys on its own bytes, and once it has its key the running exe
+    /// CAN be renamed away (an installer's move; Fable N1: no handle is held past the key)
+    /// while the process runs on; and when its folder is renamed away and a rival build put at
     /// its old spelling before it makes its key (the mapped name keeps the old path, as the
     /// owner's probe run showed), both candidates are refused at the canonical comparison.
     #[cfg(windows)]
@@ -528,23 +533,24 @@ mod tests {
         assert!(k.starts_with("none") && k.contains("unstamped"), "{k}");
         super::super::stamp::stamp_file(&exe, &exe).unwrap();
         let original = key_of(&mut std::fs::File::open(&exe).unwrap()).expect("marked");
-        let held = std::cell::Cell::new(None);
+        let moved = dir.join("moved.exe");
+        let renamed = std::cell::Cell::new(None);
         let k = child_key(
             &exe,
             || {},
             || {
-                held.set(Some((
-                    std::fs::rename(&exe, dir.join("moved.exe")).map_err(|e| e.raw_os_error()),
-                    std::fs::remove_file(&exe).map_err(|e| e.raw_os_error()),
-                )));
+                renamed.set(Some(
+                    std::fs::rename(&exe, &moved).map_err(|e| e.raw_os_error()),
+                ))
             },
         );
         assert_eq!(k, original.hex(), "a stamped copy keys");
         assert_eq!(
-            held.take(),
-            Some((Err(Some(32)), Err(Some(32)))),
-            "rename and delete refused with a sharing violation while the key's handle is held"
+            renamed.take(),
+            Some(Ok(())),
+            "the running exe renamed away after its key (the child then exited cleanly)"
         );
+        std::fs::rename(&moved, &exe).unwrap();
         let stamped = std::fs::read(&exe).unwrap();
         let k = child_key(
             &exe,

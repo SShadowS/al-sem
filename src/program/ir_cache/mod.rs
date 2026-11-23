@@ -172,16 +172,32 @@ pub fn install_from_env() -> ReportGuard {
     let mut cache = IrCache::new(enabled, ir_dir, text_dir, verify, report);
     cache.bad_switch = bad_switch;
     let _ = INSTALLED.set(cache);
-    // TLS-117: on Windows the key is computed EAGERLY, here at the start of `main`, so the time
-    // between the image's load and its verification is milliseconds, not the hours a resident
-    // server could wait before its first dependency parse; the accepted file is then held open
-    // (deny write and delete) for the process's life (`key::win`). On Linux the key stays lazy
-    // (`/proc/self/exe` is the running inode whenever it is read).
+    // TLS-117: on Windows the key is computed EAGERLY, here (aldump's and al-call-hierarchy's
+    // first statement; in alsem's `main` after the perf-trace setup), so the time between the
+    // image's load and its verification is milliseconds, not the hours a resident server could
+    // wait before its first dependency parse. Commands that never use the cache skip it (they
+    // would still get a lazy key at a first use). On Linux the key stays lazy (`/proc/self/exe`
+    // is the running inode whenever it is read).
     #[cfg(windows)]
-    if let Some(c) = INSTALLED.get().filter(|c| c.is_on()) {
+    if let Some(c) = INSTALLED.get().filter(|c| c.is_on())
+        && eager_key_wanted(&std::env::args_os().collect::<Vec<_>>())
+    {
         let _ = c.key();
     }
     ReportGuard::new()
+}
+
+/// Whether a process started with `args` (argv, the program first) may use the IR cache, so
+/// its key is worth making at start (Fable N7): not for help or version output, `alsem batch`
+/// (TLS-116: the cache is off there), the `mcp` front end or `engine-ask` (their engine child
+/// keys itself). A cheap look at argv, never a parse: a miss only makes the key lazy.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) fn eager_key_wanted(args: &[std::ffi::OsString]) -> bool {
+    let sub = args.get(1).and_then(|a| a.to_str());
+    !matches!(sub, Some("batch" | "mcp" | "engine-ask" | "help"))
+        && !args[1.min(args.len())..]
+            .iter()
+            .any(|a| matches!(a.to_str(), Some("--help" | "-h" | "--version" | "-V")))
 }
 
 /// The installed cache for the calling thread's seam use: `None` when none is installed, or

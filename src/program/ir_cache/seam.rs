@@ -1197,6 +1197,35 @@ mod tests {
         }
     }
 
+    /// TLS-117 (Fable N7): the Windows eager key is skipped for commands that never use the
+    /// cache, and made for the rest. Discrimination (2026-11-23): `batch` taken out of
+    /// `eager_key_wanted`'s list: fails on `alsem batch`; restored, passes.
+    #[test]
+    fn the_eager_key_skips_commands_without_the_cache() {
+        let w = |a: &[&str]| {
+            super::super::eager_key_wanted(&a.iter().map(Into::into).collect::<Vec<_>>())
+        };
+        for a in [
+            &["alsem", "analyze", "ws"][..],
+            &["alsem", "engine-host"],
+            &["aldump", "--program-call-graph-stats", "ws"],
+            &["al-call-hierarchy"],
+            &["alsem"],
+        ] {
+            assert!(w(a), "{a:?}");
+        }
+        for a in [
+            &["alsem", "batch", "m.json"][..],
+            &["alsem", "mcp", "--workspace", "ws"],
+            &["alsem", "engine-ask", "--", "x"],
+            &["alsem", "help"],
+            &["alsem", "analyze", "--help"],
+            &["aldump", "-V"],
+        ] {
+            assert!(!w(a), "{a:?}");
+        }
+    }
+
     /// TLS-117: the cache is off by default on Windows until the acceptance passes, on by
     /// default elsewhere. Discrimination (2026-11-23): `DEFAULT_ON` inverted (`cfg!(windows)`):
     /// fails on Linux; restored, passes.
