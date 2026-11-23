@@ -228,6 +228,21 @@ codeunit 50493 "SB Mgt"
         (E).Modify(true);
     end;
 
+    // In the table `Rec` may be temporary (`unknown`); a caller on a physical record decides.
+    procedure CallPlainRec()
+    var
+        L: Record "SB Log";
+    begin
+        L.PlainRecModify();
+    end;
+
+    procedure CallParenRec()
+    var
+        L: Record "SB Log";
+    begin
+        L.ParenRecModify();
+    end;
+
     // No table procedure: the platform's `Modify` runs, on a physical record or a temporary one.
     procedure ParenLogModify()
     var
@@ -309,7 +324,7 @@ fn alsem(cwd: &Path, args: &[&str]) -> serde_json::Value {
 /// adapter census of `tests/r0-corpus/ws-report-dataitem` (`GetFilters()`), which fails with it
 /// off. ENG-178: the zero-parameter-over-optional rule off fails `ZeroDelete`;
 /// `record_ops::receiver_variable` not reading through parentheses fails `ParenModify`;
-/// `record_ops::receiver_key_text` keeping the parentheses fails `ParenRecModify`.
+/// `record_ops::receiver_key_text` keeping the parentheses fails `CallParenRec`.
 #[test]
 fn a_table_procedure_named_like_a_record_builtin_is_called() {
     let t = tempfile::tempdir().unwrap();
@@ -382,8 +397,8 @@ fn a_table_procedure_named_like_a_record_builtin_is_called() {
     // ENG-178: a parenthesised receiver with no table procedure is the platform operation on its
     // record: a physical record writes, a temporary one does not, and the implicit `Rec` keeps its
     // table (Fable r1, F1: the key text `(Rec)` read no table).
-    assert_eq!(answer("PlainRecModify", "SB Log"), "yes", "precondition");
-    assert_eq!(answer("ParenRecModify", "SB Log"), "yes");
+    assert_eq!(answer("CallPlainRec", "SB Log"), "yes", "precondition");
+    assert_eq!(answer("CallParenRec", "SB Log"), "yes");
     assert_eq!(answer("ParenLogModify", "SB Log"), "yes");
     assert_eq!(answer("ParenTempLogModify", "SB Log"), "no");
 }

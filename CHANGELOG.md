@@ -46,7 +46,8 @@ CDO has no site of these shapes, so no CDO answer moves.
     - `ZeroDelete` (no write) against `PlatformDelete`; the zero-over-optional rule off fails
       it.
     - `ParenModify` (no write) against `PlainModify`; no read-through fails it.
-    - `ParenRecModify` (a table's `(Rec).Modify(true)` writes it) against `PlainRecModify`;
+    - `CallParenRec` (a physical record calling the table's `(Rec).Modify(true)` writes it)
+      against `CallPlainRec`;
       `receiver_key_text` keeping the parentheses fails it. `ParenLogModify` writes;
       `ParenTempLogModify` (a temporary record) does not.
   - `record_ops::tests::receiver_key_text_drops_only_enclosing_parentheses`: `(A) + (B)` and a
