@@ -372,6 +372,23 @@ or CI are stamped.
 A green probe run is diagnostics. The cache is turned on for Windows only after, on the owner's
 machine, with the product change built:
 
+**Before you start** (PowerShell, repository root, branch `tools/tls-117-windows-cache` checked out):
+```
+$env:TREE_SITTER_AL_PATH = '<your tree-sitter-al clone>'
+git -C $env:TREE_SITTER_AL_PATH rev-parse HEAD   # must be 88bb6871… (the commit CLAUDE.md names)
+$env:CMAKE_GENERATOR     = 'Visual Studio 17 2022'
+$env:CARGO_TARGET_DIR    = 'C:/atw'      # any short path; the default is too long (MAX_PATH)
+# Step 4's tests first (section 6's list; they need no install):
+cargo test -p al-sem --lib -- winfs key::tests::windows snapshot::cache prune
+# Then build, stamp and install the three binaries (also into each LSP folder you use):
+powershell -ExecutionPolicy Bypass -File scripts\install-windows.ps1 [-LspDir <folder> ...]
+```
+**What PASS looks like, in one place:** every `cargo test` line ends `ok` (0 failed); the install
+script ends with `install-windows: done (stamped and verified)`; each
+`ir-cache-report-check` in step 2 prints `PASS` and exits 0; the `Select-String` line prints
+nothing; the three answers equal their `ALSEM_IR_CACHE=off` runs (`fc /b` reports no differences);
+the LSP check in step 3 prints `PASS`. Send back every output, and the two medians of step 5.
+
 1. **Positive keys on the shipped executables.** The MSVC `release-ship` `alsem.exe`, `aldump.exe`
    and `al-call-hierarchy.exe`, stamped by `scripts/install-windows.ps1` (and, separately, the ones
    the CI step stamped), each make a key: the IR cache report's lines say a key, never `no key`.
