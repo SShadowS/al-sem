@@ -102,7 +102,10 @@ fn run_batch(jobs: &[Vec<String>], cwd: &Path, env: &[(&str, &str)], stdin: &[u8
     let jobs: Vec<Value> = jobs.iter().map(|a| json!({ "argv": a })).collect();
     std::fs::write(&manifest, json!({ "jobs": jobs }).to_string()).unwrap();
     let args = argv(&["batch", &manifest.to_string_lossy()]);
-    let out = alsem(&args, cwd, env, stdin);
+    let (_xdg, xdg) = crate::cli_batch_writes::temp_cache_home();
+    let mut env = env.to_vec();
+    env.insert(0, ("XDG_CACHE_HOME", &xdg));
+    let out = alsem(&args, cwd, &env, stdin);
     assert_eq!(
         out.status.code(),
         Some(0),

@@ -279,10 +279,9 @@ fn write_file(job: &str, path: &Path, bytes: &[u8]) -> Result<(), Failure> {
 }
 
 fn create_dir(path: &Path) -> Result<(), Failure> {
-    if path.exists() {
-        return Ok(());
-    }
-    std::fs::create_dir_all(path).map_err(|e| (path.display().to_string(), e))
+    // TLS-116: never made in (or as) a cache folder of the engine, one
+    // component at a time.
+    super::claim::make_dir(path).map_err(|e| (path.display().to_string(), e))
 }
 
 thread_local! {

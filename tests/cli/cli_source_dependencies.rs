@@ -199,9 +199,11 @@ fn batch_refuses_a_write_into_a_source_folder() {
         serde_json::json!({ "jobs": [reader, writer] }).to_string(),
     )
     .unwrap();
+    let (_xdg, xdg) = crate::cli_batch_writes::temp_cache_home();
     let out = Command::new(env!("CARGO_BIN_EXE_alsem"))
         .arg("batch")
         .arg(&manifest)
+        .env("XDG_CACHE_HOME", &xdg)
         .env("RUST_LOG", "off")
         .output()
         .unwrap();

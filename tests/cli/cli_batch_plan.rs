@@ -49,7 +49,9 @@ pub(crate) fn batch_in(jobs: &[Vec<String>], cwd: Option<&Path>, env: &[(&str, &
         .collect();
     std::fs::write(&manifest, serde_json::json!({ "jobs": jobs }).to_string()).unwrap();
     let manifest = manifest.to_string_lossy().into_owned();
+    let (_xdg, xdg) = crate::cli_batch_writes::temp_cache_home();
     let mut env = env.to_vec();
+    env.insert(0, ("XDG_CACHE_HOME", &xdg));
     env.push(("RUST_LOG", "off"));
     let (out, events) = match cwd {
         None => spawn_trace_events(env!("CARGO_BIN_EXE_alsem"), &["batch", &manifest], &env),

@@ -169,7 +169,7 @@ fn absent(e: &std::io::Error) -> bool {
 }
 
 #[cfg(unix)]
-fn read_file_id(p: &Path) -> std::io::Result<Option<FileId>> {
+pub(super) fn read_file_id(p: &Path) -> std::io::Result<Option<FileId>> {
     use std::os::unix::fs::MetadataExt;
     match std::fs::metadata(p) {
         Ok(m) => Ok(Some((m.dev(), u128::from(m.ino())))),
@@ -181,7 +181,7 @@ fn read_file_id(p: &Path) -> std::io::Result<Option<FileId>> {
 /// From a handle the path opens with no access asked (links followed, as
 /// `metadata` follows them; `FILE_FLAG_BACKUP_SEMANTICS` opens a folder too).
 #[cfg(windows)]
-fn read_file_id(p: &Path) -> std::io::Result<Option<FileId>> {
+pub(super) fn read_file_id(p: &Path) -> std::io::Result<Option<FileId>> {
     use std::os::windows::fs::OpenOptionsExt;
     use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_BACKUP_SEMANTICS;
     match std::fs::OpenOptions::new()
@@ -527,19 +527,55 @@ impl Written {
 /// `Err`: the one usage line. It runs before any job's file is opened; a
 /// caller opens nothing of its own (the trace file) unless it is `Ok`. A
 /// file whose identity cannot be read refuses the run ([`file_id`]).
+///
+/// TLS-116: first it makes the engine's cache folders and takes their
+/// snapshot ([`super::cache_guard`]), before any write is resolved; a write in
+/// a cache folder, one that holds one, or one that is a cache file refuses the
+/// run. Once the check passes, the snapshot goes to the claim folder.
 pub fn check_write_sets(jobs: &[(String, JobPaths)], cwd: &Path) -> Result<(), String> {
+    let snap = super::cache_guard::take()?;
     ID_ERROR.with(|e| e.borrow_mut().take());
-    let checked = check_identities(jobs, cwd);
-    match ID_ERROR.with(|e| e.borrow_mut().take()) {
+    let checked = check_identities(jobs, cwd, &snap);
+    let checked = match ID_ERROR.with(|e| e.borrow_mut().take()) {
         Some(e) => Err(format!(
             "al-sem batch: cannot read the identity of {e}; the run cannot be checked"
         )),
         None => checked,
+    };
+    match super::claim::dir() {
+        Some(dir) if checked.is_ok() => super::cache_guard::publish(snap, dir)
+            .map_err(|e| format!("al-sem batch: cannot keep the cache snapshot: {e}")),
+        _ => checked,
     }
 }
 
+/// `p` (against `cwd`) [`resolve`]d (TLS-116, the cache checks): where the
+/// write lands, links followed, a dangling link through its text. A part
+/// whose identity cannot be read is an error. A check's own pending error is
+/// kept.
+pub(super) fn resolved_path(cwd: &Path, p: &Path) -> std::io::Result<PathBuf> {
+    let pending = ID_ERROR.with(|e| e.borrow_mut().take());
+    let id = resolve(cwd, p);
+    let mine = ID_ERROR.with(|e| std::mem::replace(&mut *e.borrow_mut(), pending));
+    match mine {
+        Some(e) => Err(std::io::Error::other(format!(
+            "cannot read the identity of {e}"
+        ))),
+        None => Ok(id.path),
+    }
+}
+
+/// `p` against `cwd`, as spelled, `..` folded as the OS takes it ([`fold`]).
+pub(super) fn fold_path(cwd: &Path, p: &Path) -> PathBuf {
+    fold(cwd, p)
+}
+
 /// [`check_write_sets`]'s checks.
-fn check_identities(jobs: &[(String, JobPaths)], cwd: &Path) -> Result<(), String> {
+fn check_identities(
+    jobs: &[(String, JobPaths)],
+    cwd: &Path,
+    snap: &super::cache_guard::Snapshot,
+) -> Result<(), String> {
     use super::claim::{keep, marker_of, protect, reserve, write_key};
     use std::collections::btree_map::Entry;
     let fail = |why: String| Err(format!("al-sem batch: {why}"));
@@ -637,6 +673,36 @@ fn check_identities(jobs: &[(String, JobPaths)], cwd: &Path) -> Result<(), Strin
         for fid in &read.taken.files {
             protect(&marker_of(fid)).map_err(claimed)?;
         }
+    }
+    // TLS-116: no write in a cache folder (its destination or its name),
+    // none that is a cache file under any name, none that holds a cache
+    // folder (each open checks again).
+    let roots: Vec<Ident> = snap.roots.iter().map(|r| resolve(cwd, r)).collect();
+    for (j, _, spelled, t) in &writes {
+        let (Written::File(w) | Written::Dir(w)) = t;
+        let cannot = |e: std::io::Error| to_err(format!("cannot check {}: {e}", w.path.display()));
+        let cache_file = match existing(w) {
+            Some(id) => std::fs::metadata(&w.path)
+                .map(|m| snap.is_cache_file(&id, &m))
+                .map_err(cannot)?,
+            None => false,
+        };
+        let why = if let Some(why) =
+            super::cache_guard::refuses_path(snap, cwd, spelled).map_err(cannot)?
+        {
+            why.trim_start_matches("this file ").to_string()
+        } else if cache_file {
+            "is a file of the engine's caches".to_string()
+        } else if let Some(r) = roots.iter().find(|r| r.under(w)) {
+            format!("holds the cache folder {}", r.path.display())
+        } else {
+            continue;
+        };
+        return fail(format!(
+            "{} writes {}, which {why}: no job may write the engine's caches (TLS-116)",
+            name(*j),
+            w.path.display()
+        ));
     }
     // Two targets that clash: the first write with a later partner, then its
     // first such partner.

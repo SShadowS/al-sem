@@ -97,7 +97,26 @@ struct IndexEntry {
 pub fn cached_source(
     image: &Arc<AppImage>,
 ) -> Result<(Vec<SourceFile>, String, Option<TextDigest>)> {
+    if DISABLED.load(std::sync::atomic::Ordering::SeqCst) {
+        log::warn!(
+            "snapshot cache off for this batch run (its folder is no directory): source of {} \
+             kept as owned text",
+            image.path().display()
+        );
+        let hash = image.content_hash().to_string();
+        return Ok((extract_embedded_source(image)?, hash, None));
+    }
     cached_source_in(&cache_dir(), image)
+}
+
+/// Set when a batch run's snapshot turned the text cache off for the run (TLS-116).
+static DISABLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// TLS-116: no cache for this process: every package's text is extracted and owned. A batch
+/// run whose cache folder is no directory after its check made it (the snapshot does not hold
+/// it, `engine::batch::cache_guard`).
+pub fn disable() {
+    DISABLED.store(true, std::sync::atomic::Ordering::SeqCst);
 }
 
 /// The blake3 an entry's header holds over the package hash, its index and its text

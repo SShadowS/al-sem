@@ -65,7 +65,7 @@ pub(crate) fn parse_package<R: Send>(
     let n = files.len();
     Counters::add(&c.counters.seam_files, n);
     // Hashed once per process, at its first seam use (spec "The key").
-    let key = if c.enabled { c.key() } else { None };
+    let key = if c.is_on() { c.key() } else { None };
     c.first_use(key.as_ref());
     let (Some(digest), Some(key)) = (source.text_digest, key) else {
         Counters::add(&c.counters.skipped_off, n);
@@ -455,14 +455,7 @@ impl IrCache {
     /// The `ir/` folder; with `create` (a writer), made owner-only first when missing.
     pub(crate) fn open_ir(&self, create: bool) -> IrDir {
         if create {
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::DirBuilderExt;
-                let _ = std::fs::DirBuilder::new()
-                    .recursive(true)
-                    .mode(0o700)
-                    .create(&self.ir_dir);
-            }
+            super::create_ir_dir(&self.ir_dir);
         }
         match std::fs::symlink_metadata(&self.ir_dir) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => IrDir::Missing,
@@ -845,10 +838,10 @@ mod tests {
         );
     }
 
-    /// The child half of [`batch_state_disables_installed_cache`] (process-wide state: the
+    /// The child half of [`batch_state_keeps_installed_cache`] (process-wide state: the
     /// installed cache, the batch folder, a `Suspend`).
     #[test]
-    #[ignore = "run by batch_state_disables_installed_cache as a child"]
+    #[ignore = "run by batch_state_keeps_installed_cache as a child"]
     fn batch_child_mode() {
         if std::env::var_os("ALSEM_IR_BATCH_CHILD").is_none() {
             return;
@@ -868,13 +861,16 @@ mod tests {
             assert!(super::super::installed().is_none(), "suspended");
         }
         assert!(super::super::installed().is_some(), "resumed");
+        // TLS-116: a batch run uses the cache.
         crate::engine::batch::claim::set_dir(std::env::temp_dir());
-        assert!(super::super::installed().is_none(), "batch: off");
+        assert!(super::super::installed().is_some(), "batch: on");
         println!("BATCH-CHILD-OK");
     }
 
+    /// Discrimination (2026-11-21, TLS-116): the batch-off switch put back in `installed`:
+    /// fails ("batch: on"); restored, passes.
     #[test]
-    fn batch_state_disables_installed_cache() {
+    fn batch_state_keeps_installed_cache() {
         let missing = tempfile::tempdir().unwrap();
         let out = std::process::Command::new(std::env::current_exe().unwrap())
             .args([

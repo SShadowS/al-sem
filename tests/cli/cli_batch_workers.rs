@@ -276,9 +276,13 @@ fn batch_auto_format_is_json_on_a_terminal() {
 fn spawn_manifest(dir: &Path, doc: &Value, stdin: Stdio) -> std::process::Child {
     let manifest = dir.join("m.json");
     std::fs::write(&manifest, doc.to_string()).unwrap();
+    // TLS-116: a cache home of its own, in `dir`: the run outlives this call
+    // (`cli_batch_writes::temp_cache_home` for a run that is waited).
+    let xdg = dir.join("xdg-cache");
     Command::new(env!("CARGO_BIN_EXE_alsem"))
         .arg("batch")
         .arg(&manifest)
+        .env("XDG_CACHE_HOME", &xdg)
         .env("RUST_LOG", "off")
         .env_remove("ALSEM_TRACE")
         .stdin(stdin)
@@ -566,10 +570,12 @@ fn batch_plan_file_under_a_non_utf8_path() {
     ];
     let manifest = d.path().join("m.json");
     std::fs::write(&manifest, batches_doc(&jobs).to_string()).unwrap();
+    let (_xdg, xdg) = crate::cli_batch_writes::temp_cache_home();
     let out = Command::new(env!("CARGO_BIN_EXE_alsem"))
         .arg("batch")
         .arg(&manifest)
         .current_dir(&cwd)
+        .env("XDG_CACHE_HOME", &xdg)
         .env("RUST_LOG", "off")
         .env_remove("ALSEM_TRACE")
         .output()
