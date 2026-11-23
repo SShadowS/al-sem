@@ -21,7 +21,8 @@
 //!   `Init`), loads its record;
 //! - a call may load a record it is handed (`Clear` leaves a well-defined state, as `Init`; a
 //!   by-var out parameter leaves the callee's, unknown) unless every binding of it is a resolved
-//!   by-value parameter, a record it is called ON (a table procedure runs on the caller's record),
+//!   by-value parameter, a record a procedure is called ON (a table procedure runs on the caller's
+//!   record; a platform method, `SetRecFilter`, resolves to no routine and loads nothing),
 //!   and one a loading call loads;
 //! - a whole-variable assignment `A := X` gives `A` the state of `X`; from any other value (a call
 //!   result, an expression) `A` may be loaded. A field write or an element write changes nothing.
@@ -263,6 +264,11 @@ impl<'a> Walk<'a> {
                 None
             }
             "exit" | "error" => {
+                // A terminating `Error(..)` is its own call site: reached, so not "unseen"
+                // (Fable r2).
+                if let Some(cs) = n.callsite_id.as_deref().and_then(|id| self.calls.get(id)) {
+                    self.seen.insert(cs.id.as_str());
+                }
                 self.leaves(n, st, depth);
                 None
             }
@@ -330,8 +336,9 @@ impl<'a> Walk<'a> {
     }
 
     /// Whether the call may leave the record `v` (lowercased) loaded: it loads it
-    /// (`GetBySystemId` on it, a by-var loader), runs on it (a procedure called ON the record: a
-    /// table procedure works on the caller's record, Fable r1), or is handed it other than by a
+    /// (`GetBySystemId` on it, a by-var loader), runs on it (a procedure, a resolved routine,
+    /// called ON the record: a table procedure works on the caller's record, Fable r1; never a
+    /// platform method, Fable r2), or is handed it other than by a
     /// resolved by-value parameter (`Clear` leaves a well-defined state, as `Init`; a by-var out
     /// parameter, `GetCriterion(Edited)`, the callee's, unknown).
     fn call_may_load(&self, cs: &PCallSite, v: &str) -> bool {
@@ -341,8 +348,11 @@ impl<'a> Walk<'a> {
                 .fold_identifier()
                 == v
         };
+        // A procedure (a resolved routine) called ON the record; a platform method such as
+        // `SetRecFilter` resolves to no routine and loads nothing (Fable r2).
         if let PCallee::Member { receiver, .. } = &cs.callee
             && named(receiver)
+            && self.ctx.resolved_call_edge_by_callsite.contains_key(&cs.id)
         {
             return true;
         }

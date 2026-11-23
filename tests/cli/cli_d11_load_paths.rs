@@ -270,6 +270,38 @@ codeunit 50501 "E Mgt"
         A.Modify();
     end;
 
+    // Reported (Fable r2): a platform method called on the record loads nothing.
+    procedure PlatformMethodKeepsKill()
+    var N, A: Record "E Entry";
+    begin
+        A.Get(1);
+        A := N;
+        A.SetRecFilter();
+        A.Modify();
+    end;
+
+    // Reported (Fable r2): a terminating `Error` handed the source record is reached, not unseen.
+    procedure ErrorArgKeepsKill(B: Boolean)
+    var N, A: Record "E Entry";
+    begin
+        if B then
+            Error('x %1', N);
+        A.Get(1);
+        A := N;
+        A.Modify();
+    end;
+
+    // Reported (Fable r2): a load no path reaches (after `exit`) is no unseen load.
+    procedure DeadLoadKeepsKill()
+    var N, A: Record "E Entry";
+    begin
+        A.Get(1);
+        A := N;
+        A.Modify();
+        exit;
+        N.Get(2);
+    end;
+
     // Reported: a resolved by-value argument leaves the caller's record as it was.
     procedure ByValueKeepsKill()
     var N, A: Record "E Entry";
@@ -409,8 +441,10 @@ fn reported(dir: &Path, detector: &str) -> BTreeSet<String> {
 /// possible load fails `ByValueKeepsKill`; a terminating `Error` not ending its path fails
 /// `ErrorKills`; a `case` without `else` not keeping the no-match path fails `NoMatchKeeps`; a
 /// `break` not recorded on its loop fails `BreakCarries`, a `continue` `ContinueCarries`; one loop
-/// round instead of the fixed point fails `LoopThirdPass` and `LoopLaterLoad`. Each restored,
-/// passes. `ClearBuilds` guards the design (a `Clear` that unloaded, as the first draft did,
+/// round instead of the fixed point fails `LoopThirdPass` and `LoopLaterLoad`. Round 3 (Fable
+/// r2): any method called on the record loading it fails `PlatformMethodKeepsKill`; a terminating
+/// `Error` call site left unseen fails `ErrorArgKeepsKill`; unreachable code not marked seen fails
+/// `DeadLoadKeepsKill`. Each restored, passes. `ClearBuilds` guards the design (a `Clear` that unloaded, as the first draft did,
 /// reported it), not a line.
 #[test]
 fn a_load_must_reach_the_operation_on_some_path() {
@@ -431,9 +465,12 @@ fn a_load_must_reach_the_operation_on_some_path() {
             "ChainKilled",
             "CopyKills",
             "CopyKillsLoad",
+            "DeadLoadKeepsKill",
+            "ErrorArgKeepsKill",
             "ErrorKills",
             "ExitKills",
             "ParenlessKill",
+            "PlatformMethodKeepsKill",
         ])
     );
     assert_eq!(

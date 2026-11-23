@@ -1267,8 +1267,9 @@ ran beside the timing).
   - The one thing that unloads a record is a copy of a record no path has loaded. `Clear(A)` and
     `TransferFields` leave a well-defined state (as `Init` and `Copy`). A call may load a record
     it is handed (a by-var out parameter has the callee's state) unless every binding of it is a
-    resolved by-value parameter, and a record it is called ON (a table procedure runs on the
-    caller's record).
+    resolved by-value parameter, and a procedure may load the record it is called ON (a table
+    procedure runs on the caller's record; a platform method such as `SetRecFilter` resolves to
+    no routine and loads nothing).
   - What the walk cannot read answers "may be loaded" (the old answer stands): a load or call on
     a tracked record the tree does not hold (a `case` pattern, `case true of A.Get(1):`; the
     tree gap is ENG-181), an `asserterror` statement (an error inside is caught), a deep tree, a
@@ -1295,19 +1296,21 @@ ran beside the timing).
   Fable's review (r1) found the defects on both sides that ENG-182 holds: one record spelled
   quoted and unquoted, a table procedure that loads the record it runs on, a built-in that takes
   a record by value, `Copy` from an unloaded record.
-- **Tests and red proofs.** `cli_d11_load_paths` runs `alsem analyze` on 32 shapes: silent where
+- **Tests and red proofs.** `cli_d11_load_paths` runs `alsem analyze` on 35 shapes: silent where
   a branch, `case` (with or without a match), conditional expression or loop loads on one path
   (a later pass, `break`, `continue` included), a field write, a call result, a parameter, a
   chain, `Clear`, a by-var fill, a table procedure on the source, `TransferFields`, a parens-less
   load, a `case` pattern, `asserterror`; reported for a later unloaded copy, a broken chain,
-  `exit`, a terminating `Error`, a resolved by-value argument, a parens-less load then copy, and
-  one d21 read. Each break failed it, each restore passed: the walk ignored; a copy always
+  `exit`, a terminating `Error` (one handed the source record too), a resolved by-value
+  argument, a platform method on the record, a load only in unreachable code, a parens-less load
+  then copy, and one d21 read. Each break failed it, each restore passed: the walk ignored; a copy always
   loaded; `exit` not ending its path; an AND join; `harvest` leaving out the parens-less
   operation; a record handed to a call keeping its state; `TransferFields` not loading; the
   unseen-load guard off; `asserterror` as a plain block; a call ON the record not loading it; a
   resolved by-value argument loading; a terminating `Error` going on; a `case` without `else`
   losing the no-match path; `break` and `continue` not recorded on their loop; one loop round
-  instead of the fixed point.
+  instead of the fixed point; any method on the record counted as a load; a terminating `Error`
+  call site left unseen; unreachable code not marked seen.
 - **Goldens.** None moved (`check-goldens`, 2228 tests).
 
 ### Fixed (ENG-178: table procedures named like record built-ins: four follow-ups from ENG-173)
