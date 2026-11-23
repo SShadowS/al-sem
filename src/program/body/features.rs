@@ -46,6 +46,8 @@
 //!   - `PVarAssignment.rhs_identifier`
 //!   - `PVarAssignment.rhs_member`
 //!   - `PVarAssignment.lhs_is_member`
+//!   - `PVarAssignment.lhs_text`
+//!   - `PVarAssignment.rhs_text`
 //!   - `PCFNNode.rare`
 //!   - `PCFNNode.source_range`
 //!   - `PCFNNode.flow`
@@ -1575,7 +1577,7 @@ mod tests {
                 pending = false;
             }
         }
-        assert_eq!(actual.len(), 22, "scanner found {actual:?}");
+        assert_eq!(actual.len(), 24, "scanner found {actual:?}");
         assert_eq!(documented, actual);
     }
 

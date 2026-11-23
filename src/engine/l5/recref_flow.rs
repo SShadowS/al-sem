@@ -2603,7 +2603,7 @@ fn facts_of(
     for p in user_code {
         let at = Some(p.at);
         let conds = conds_of(p.at);
-        for v in classes.rebound_at(p.runs).filter_map(|k| name_of(k)) {
+        for v in classes.rebound_at(p.runs).filter_map(&name_of) {
             f.alias_shared.insert(v.clone());
             let key = (v.clone(), conds.clone());
             if kept_until.get(&key).is_some_and(|&end| end <= p.at) {
@@ -2662,7 +2662,7 @@ fn facts_of(
                     .map(|key| classes.members(key))
                     .unwrap_or_default()
                     .into_iter()
-                    .filter_map(|m| name_of(m))
+                    .filter_map(&name_of)
                     .filter(|m| *m != v && f.tracked.contains_key(m))
                     .collect();
                 f.alias_shared.extend(members.iter().cloned());
