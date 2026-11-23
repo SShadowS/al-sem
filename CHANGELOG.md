@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (TLS-117: the dependency IR cache on Windows, for stamped binaries)
+
+- **What it does.** ENG-110's IR cache was off on Windows: its key is the running binary's bytes,
+  and on Windows no file path reliably names the running image (the owner's probe runs showed
+  `GetMappedFileNameW` keeping a stale path after a folder swap and a deleted hard link, so a
+  name-based key hashed the wrong file). Now a Windows binary has a key when (design B, note
+  `docs/superpowers/notes/2026-11-21-tls117-windows-image-key.md`): the canonical hash of the
+  loaded module's read-only content (read with `ReadProcessMemory`; base relocations normalised,
+  loader-written ranges masked, unmodelled loader patching refused) equals that of a candidate
+  file (the mapped name, then `GetModuleFileNameW`), opened denying write and delete on a local
+  NTFS drive, with equal headers; the candidate's writable sections and masked bytes hash to the
+  digest stamped in the running module's data-digest slot; and its own slot equals the loaded
+  one. The key is then the accepted file's bytes, as on Linux. Anything else: no key, the cache
+  off, the reason in the report.
+- **Stamping.** A new binary, `alsem-stamp` (`stamp <exe> [<out>]`, `verify <exe>`; runs on Linux
+  too), writes the digest into the slot (a marked 48-byte static in `.rdata` of `alsem`, `aldump`
+  and `al-call-hierarchy`), recomputes a non-zero PE checksum, and checks nothing else changed.
+  **Unstamped binaries (every cargo build and test) get no key on Windows**; the report says
+  `"ir_cache": "unstamped"`, which `scripts/ir-cache-report-check` passes. A failing Windows key
+  for any other reason says `"no key"` with the reason, and fails the checker.
+- **Install and CI.** `scripts/install-windows.ps1` (Windows PowerShell 5.1 or pwsh 7) builds the
+  three binaries with `release-ship`, stamps and verifies them, and copies them to
+  `~/.al-sem/bin/` and each `-LspDir`, refusing to overwrite a running binary. Both release
+  workflows stamp and verify the three Windows binaries after the build and before signing; a
+  failure fails the job.
+- **Cache plumbing on Windows.** The cache folders (the IR root, `ALSEM_IR_CACHE_DIR`, and
+  ENG-113's text root) are opened through a private walk from the volume root down: every element
+  owned by this user, SYSTEM, Administrators or TrustedInstaller, no reparse point, and no allow
+  ACE giving anyone else a right to remove, rename or re-ACL it (the cache folders, entries and
+  lock files also none to add or write); each entry and lock file is checked on its own handle.
+  A folder that fails turns the IR cache off and keeps the text cache's owned text. Prune, key
+  folders and `last-used` now work on Windows; the Windows writer's temp files have the Unix name
+  shape, so the prune removes a killed writer's leftovers there too.
+
+### Changed (TLS-117)
+
+- **Cache locks are `std::fs::File` locks on every system.** They are `flock` on Unix (the same lock
+  as before, so an older and a newer engine still exclude each other; pinned by
+  `an_old_flock_holder_blocks_the_file_lock`) and `LockFileEx` on Windows, where ENG-113's text
+  cache took no lock before.
+- `windows-sys` gains the features the Windows key and private check call (security, library
+  loader, process status, debug, threading).
+
 ### Fixed (TLS-105: three more gate-script deadlines count awake time, not wall time)
 
 - **What was wrong.** server1 is a laptop that suspends when moved, and the wall clock keeps

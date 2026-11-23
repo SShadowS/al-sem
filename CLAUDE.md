@@ -319,7 +319,7 @@ See `src/main.rs`'s `Args` (clap derive) for the authoritative flag list.
 ### The dependency IR cache (ENG-110) and measurements
 
 `alsem`, `aldump` and `al-call-hierarchy` keep the parsed IR of every dependency package in
-`~/.cache/al-ch-snapshot-cache/ir/<binary key>/` (Linux only; off on Windows). `alsem batch`
+`~/.cache/al-ch-snapshot-cache/ir/<binary key>/` (Windows: `%LOCALAPPDATA%\al-ch-snapshot-cache\ir\`). `alsem batch`
 uses it too, its parent and workers (TLS-116): the batch write check makes and snapshots the text
 and IR cache folders, then refuses any job write in, above or hard-linked into them. **The key is the running binary's bytes**, so each new build starts cold: its first
 CDO run fills ~144 MiB (one-shot `analyze`: ~x1.035 instructions of a cache-off run), every
@@ -339,6 +339,15 @@ later run of the same binary is warm (~x0.53). Spec:
 - Switch and diagnostics: `ALSEM_IR_CACHE=on|off`, `ALSEM_IR_CACHE_DIR`, `ALSEM_IR_CACHE_VERIFY=1`
   (every hit parsed again and compared), `ALSEM_IR_CACHE_REPORT=<file>` (a start and an end line
   per process, with counters).
+- **Windows (TLS-117): only a STAMPED binary has a key.** No path names the running image
+  reliably there, so the key checks a candidate file against what runs (the loaded module's
+  canonical read-only content, plus a data-digest slot that `alsem-stamp` writes after linking).
+  Every `cargo build`/`cargo test` binary is unstamped: no key, the cache off, the report line
+  `"ir_cache": "unstamped"` (which `ir-cache-report-check` passes). Stamped binaries come from
+  `scripts/install-windows.ps1` (build, stamp, verify, copy to `~/.al-sem/bin/` and `-LspDir`)
+  and from the release workflows' stamp step. The cache folders must be private (owner and DACL
+  rules from the volume root down) on a local NTFS drive; otherwise the IR cache is off and the
+  text cache keeps owned text. Design: `docs/superpowers/notes/2026-11-21-tls117-windows-image-key.md`.
 
 ## Prerequisites
 
@@ -377,6 +386,19 @@ later run of the same binary is warm (~x0.53). Spec:
     copy of the hook, not the worktree's own. A hook edit only takes effect once it
     lands there, so testing an edit from the worktree that authored it does not
     exercise the copy that will actually run.
+
+### Windows build and install
+
+Settings for a native Windows build (TLS-121 is writing this section up in full):
+`TREE_SITTER_AL_PATH` at the commit named above (the build stops on a grammar hash mismatch),
+`CMAKE_GENERATOR = "Visual Studio 17 2022"` (libz-ng-sys's cmake otherwise picks a generator
+cmake 3.29 lacks) and a short `CARGO_TARGET_DIR` such as `C:/atw` (MSBuild's file tracking breaks
+on long paths). **Install with `scripts/install-windows.ps1`** (Windows PowerShell 5.1 or pwsh 7;
+`-LspDir <dir>` for each LSP package folder): it builds `alsem`, `aldump` and `al-call-hierarchy`
+with `release-ship`, stamps them with `alsem-stamp` (TLS-117: an unstamped Windows binary gets no
+IR cache key), verifies each, and copies them to `~/.al-sem/bin/` and the LSP folders, refusing
+to overwrite a running binary. A binary copied by hand from `target\` is unstamped: it works,
+with the IR cache off.
 
 ### In a kraken tentacle (server1)
 
