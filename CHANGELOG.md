@@ -1284,8 +1284,13 @@ ran beside the timing).
   the either-node where a table procedure may run, ENG-173). `explain`'s `conditionality` of
   such an operation moves from `unknown` to what its parenthesised twin already said
   (`loop-body`, `unconditional-on-success`; Fable r1 ran 20 twin shapes: `analyze`,
-  `fingerprint --witness all` and `query effects` byte-equal, `explain` 9 values moved).
-- **CDO (pinned `bc3ccb18`, `cdo-before-after` c6f61f04 against the head):** no finding and no
+  `fingerprint --witness all` and `query effects` byte-equal, `explain` 9 values moved). On CDO
+  it corrects 11 routines' L4 parameter summaries (each loads its own `var` parameter first, as
+  `if Hdr.FIND then` or `if not VendorLedgerEntry.FINDFIRST then exit;`): ten go from
+  `requires_loaded_at_entry` `Unknown` to `No`, one from `Yes` (with `"Vendor No."` required) to
+  `No`. The frozen CDO digest is re-frozen with that attribution
+  (`tests/l4-summary-baseline/README.md`).
+- **CDO (pinned `bc3ccb18`, `cdo-before-after` c6f61f04 against 9300584d):** no finding and no
   fingerprint added or removed at `--scope primary` (2306) or `--scope all` (32429); unknown
   edges 0 → 0. The first draft added 10 (d11 +8, d21 +2): every one was triaged against source
   and was a false positive (a `TransferFields`-built record, the `Clear`-then-insert pattern, a
@@ -1295,7 +1300,9 @@ ran beside the timing).
   138 base findings) and ENG-180 (the textual rule does not count `TransferFields`/`Clear`).
   Fable's review (r1) found the defects on both sides that ENG-182 holds: one record spelled
   quoted and unquoted, a table procedure that loads the record it runs on, a built-in that takes
-  a record by value, `Copy` from an unloaded record.
+  a record by value, `Copy` from an unloaded record. Its r2 found two gaps left by this change,
+  filed as ENG-183: a copy whose source is loaded later in a loop (the text-order rule, on master
+  too), and `asserterror` setting every tracked record to "may be loaded".
 - **Tests and red proofs.** `cli_d11_load_paths` runs `alsem analyze` on 35 shapes: silent where
   a branch, `case` (with or without a match), conditional expression or loop loads on one path
   (a later pass, `break`, `continue` included), a field write, a call result, a parameter, a
@@ -1311,7 +1318,11 @@ ran beside the timing).
   losing the no-match path; `break` and `continue` not recorded on their loop; one loop round
   instead of the fixed point; any method on the record counted as a load; a terminating `Error`
   call site left unseen; unreachable code not marked seen.
-- **Goldens.** None moved (`check-goldens`, 2228 tests).
+- **Goldens.** The CDO whole-program L4 digest (`tests/l4-summary-baseline/cdo-whole-program-digest.txt`,
+  `4041daeb…` -> `28079474…`), attributed above; no other golden moved (`check-goldens`, 2228
+  tests).
+- **Speed (cdo-speed, 9300584d against c6f61f04):** PASS; instructions build x1.0003, round total
+  x0.9991; peak memory x0.979.
 
 ### Fixed (ENG-178: table procedures named like record built-ins: four follow-ups from ENG-173)
 
