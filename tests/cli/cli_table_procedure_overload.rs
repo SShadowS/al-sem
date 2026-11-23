@@ -9,7 +9,22 @@
 use std::path::Path;
 use std::process::Command;
 
-const SOURCE: &str = r#"table 50490 "SB Log" { fields { field(1; K; Integer) { } } keys { key(PK; K) { } } }
+const SOURCE: &str = r#"table 50490 "SB Log"
+{
+    fields { field(1; K; Integer) { } }
+    keys { key(PK; K) { } }
+
+    procedure PlainRecModify()
+    begin
+        Rec.Modify(true);
+    end;
+
+    // Fable r1 on ENG-178 (F1): the implicit `Rec` keeps its table through parentheses.
+    procedure ParenRecModify()
+    begin
+        (Rec).Modify(true);
+    end;
+}
 table 50491 "SB Doc" { fields { field(1; K; Integer) { } } keys { key(PK; K) { } } }
 table 50494 "SB Other" { fields { field(1; K; Integer) { } } keys { key(PK; K) { } } }
 table 50492 "SB Entry"
@@ -63,6 +78,18 @@ table 50492 "SB Entry"
 
     // A6: `E.Get(RR)` ran this on BC, though the platform `Get(Value…)` could take a RecordRef
     // too (alc's ranking): both are kept, the call in one branch of the statement tree.
+    // ENG-178 (Fable r2 on ENG-173, H20): alc binds `E.Delete()` to this, though the platform's
+    // `Delete(RunTrigger?)` could take it too (no AL0524). It deletes nothing.
+    procedure Delete()
+    begin
+    end;
+
+    // ENG-178: exactly the platform's `Modify(RunTrigger: Boolean)` (AL0524): it hides it, for a
+    // parenthesised receiver too. It modifies nothing.
+    procedure Modify(B: Boolean)
+    begin
+    end;
+
     procedure Get(X: RecordRef): Boolean
     var
         D: Record "SB Doc";
@@ -187,6 +214,64 @@ codeunit 50493 "SB Mgt"
         Guarded(R);
     end;
 
+    procedure PlainModify()
+    var
+        E: Record "SB Entry";
+    begin
+        E.Modify(true);
+    end;
+
+    procedure ParenModify()
+    var
+        E: Record "SB Entry";
+    begin
+        (E).Modify(true);
+    end;
+
+    // In the table `Rec` may be temporary (`unknown`); a caller on a physical record decides.
+    procedure CallPlainRec()
+    var
+        L: Record "SB Log";
+    begin
+        L.PlainRecModify();
+    end;
+
+    procedure CallParenRec()
+    var
+        L: Record "SB Log";
+    begin
+        L.ParenRecModify();
+    end;
+
+    // No table procedure: the platform's `Modify` runs, on a physical record or a temporary one.
+    procedure ParenLogModify()
+    var
+        L: Record "SB Log";
+    begin
+        (L).Modify(true);
+    end;
+
+    procedure ParenTempLogModify()
+    var
+        L: Record "SB Log" temporary;
+    begin
+        (L).Modify(true);
+    end;
+
+    procedure ZeroDelete()
+    var
+        E: Record "SB Entry";
+    begin
+        E.Delete();
+    end;
+
+    procedure PlatformDelete()
+    var
+        E: Record "SB Entry";
+    begin
+        E.Delete(true);
+    end;
+
     procedure SystemFieldModifyAll()
     var
         E: Record "SB Entry";
@@ -237,7 +322,9 @@ fn alsem(cwd: &Path, args: &[&str]) -> serde_json::Value {
 /// a name the table scope does not declare read as no field (a system field) fails
 /// `SystemFieldModifyAll`; each restored, passes. The hiding rule (AL0524) is pinned by the
 /// adapter census of `tests/r0-corpus/ws-report-dataitem` (`GetFilters()`), which fails with it
-/// off.
+/// off. ENG-178: the zero-parameter-over-optional rule off fails `ZeroDelete`;
+/// `record_ops::receiver_variable` not reading through parentheses fails `ParenModify`;
+/// `record_ops::receiver_key_text` keeping the parentheses fails `CallParenRec`.
 #[test]
 fn a_table_procedure_named_like_a_record_builtin_is_called() {
     let t = tempfile::tempdir().unwrap();
@@ -299,4 +386,78 @@ fn a_table_procedure_named_like_a_record_builtin_is_called() {
     // operation and the call as alternatives, so the call's rebinding of R reaches the guard.
     assert_eq!(answer("PlatformGet", "SB Other"), "no", "precondition");
     assert_ne!(answer("BothGet", "SB Other"), "no");
+    // ENG-178: a zero-parameter procedure takes the zero-argument call from an all-optional
+    // platform overload (alc binds it): `E.Delete()` deletes nothing; `E.Delete(true)` does.
+    assert_eq!(answer("PlatformDelete", "SB Entry"), "yes", "precondition");
+    assert_eq!(answer("ZeroDelete", "SB Entry"), "no");
+    // ENG-178: `(E).Modify(true)` is `E.Modify(true)`: the table's `Modify(Boolean)` hides the
+    // platform's for both (no write).
+    assert_eq!(answer("PlainModify", "SB Entry"), "no", "precondition");
+    assert_eq!(answer("ParenModify", "SB Entry"), "no");
+    // ENG-178: a parenthesised receiver with no table procedure is the platform operation on its
+    // record: a physical record writes, a temporary one does not, and the implicit `Rec` keeps its
+    // table (Fable r1, F1: the key text `(Rec)` read no table).
+    assert_eq!(answer("CallPlainRec", "SB Log"), "yes", "precondition");
+    assert_eq!(answer("CallParenRec", "SB Log"), "yes");
+    assert_eq!(answer("ParenLogModify", "SB Log"), "yes");
+    assert_eq!(answer("ParenTempLogModify", "SB Log"), "no");
+}
+
+/// ENG-178 (Fable r2 on ENG-173): `alsem graph`, which bc-dev-mcp's test selection walks
+/// backwards, has the caller's edge to the table's procedure: a resolved one where only the
+/// procedure runs (`UserNext` → `Next`), an over-approximate one where the platform operation may
+/// run instead (`BothGet` → `Get`, A6: alc ranks).
+///
+/// Discrimination (2026-11-23): the projection leaving out a both-may site's procedure routes
+/// (no `table_procedure` chain in `engine_edges`) loses `BothGet`'s edge; restored, passes.
+#[test]
+fn the_call_graph_export_reaches_the_table_procedure() {
+    let t = tempfile::tempdir().unwrap();
+    let ws = t.path().join("ws");
+    std::fs::create_dir_all(ws.join("src")).unwrap();
+    std::fs::write(
+        ws.join("app.json"),
+        r#"{"id":"e173e173-0000-4000-8000-000000000173","name":"ENG173","publisher":"t","version":"1.0.0.0"}"#,
+    )
+    .unwrap();
+    std::fs::write(ws.join("src/a.al"), SOURCE).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_alsem"))
+        .arg("graph")
+        .arg(&ws)
+        .env("RUST_LOG", "off")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let rows: Vec<serde_json::Value> = String::from_utf8(out.stdout)
+        .unwrap()
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    let node = |object: &str, member: &str| -> String {
+        rows.iter()
+            .find(|r| {
+                r["t"] == "node" && r["v"]["objectName"] == object && r["v"]["memberName"] == member
+            })
+            .unwrap_or_else(|| panic!("precondition: node {object}.{member}"))["v"]["id"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    let confidence = |caller: &str, callee: &str| -> Option<String> {
+        let (from, to) = (node("SB Mgt", caller), node("SB Entry", callee));
+        rows.iter()
+            .find(|r| r["t"] == "edge" && r["v"]["caller"] == from && r["v"]["callee"] == to)
+            .map(|r| r["v"]["confidence"].as_str().unwrap().to_string())
+    };
+    assert_eq!(confidence("UserNext", "Next").as_deref(), Some("Resolved"));
+    assert_eq!(confidence("PlatformNext", "Next"), None, "precondition");
+    let both = confidence("BothGet", "Get");
+    assert!(
+        both.as_deref().is_some_and(|c| c != "Resolved"),
+        "BothGet -> Get: {both:?}"
+    );
 }
