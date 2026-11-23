@@ -65,6 +65,13 @@ jobs:
           TREE_SITTER_AL_PATH: ${{ github.workspace }}/tree-sitter-al
         run: scripts/ci-steps gen-syntax
 
+      # TLS-117: the parse path's C code reaches no locale-sensitive function (gcc
+      # -fcallgraph-info over tree-sitter's lib.c and the grammar; ubuntu-latest has gcc).
+      - name: Parse path calls nothing locale-sensitive
+        env:
+          TREE_SITTER_AL_PATH: ${{ github.workspace }}/tree-sitter-al
+        run: scripts/ci-steps locale
+
       - name: Install cargo-nextest
         # v2.87.23, pinned by commit
         uses: taiki-e/install-action@861a07ce7084f55488e375df125cdc99bba60eb7

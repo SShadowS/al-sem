@@ -1,0 +1,170 @@
+#!/usr/bin/env python3
+"""check-parse-path-locale: the parse path's C code calls nothing locale-sensitive (TLS-117).
+
+    check-parse-path-locale
+
+The IR cache keys on the binary's bytes, which holds only while nothing outside the image changes
+how a text parses (design note docs/superpowers/notes/2026-11-21-tls117-windows-image-key.md,
+section 4.1). The C code on the parse path is tree-sitter's runtime (`lib.c`, at the version
+Cargo.lock pins) and the grammar (`parser.c`, `scanner.c` under TREE_SITTER_AL_PATH, else
+./tree-sitter-al). This script compiles the three with `gcc -O0 -fcallgraph-info`, walks the call
+graph from the roots al-syntax can reach (every ts_parser_/tree_/node_/tree_cursor_/language_
+function but the logger, dot-graph, ts_node_string and wasm ones, plus the function-pointer
+targets: the allocator defaults, the lexer callbacks, the grammar's lex functions and scanner),
+and fails when a reachable function calls an external function outside ALLOWED.
+
+Every run then proves it can fail: it checks again with a copy of scanner.c whose
+`tree_sitter_al_external_scanner_create` calls `towlower`, and that check must fail.
+
+Exit 0 when the real sources pass and the injected copy fails; 1 otherwise; 2 on a setup error.
+"""
+
+import json
+import os
+import re
+import subprocess
+import sys
+import tempfile
+from collections import defaultdict
+
+# Byte operations, and the allocator's abort path.
+BYTES = {"malloc", "calloc", "realloc", "free", "memcpy", "memmove", "memset", "memcmp",
+         "strcmp", "strncmp", "abort", "__assert_fail"}
+# Formatting, reached only from tree-sitter's LOG / dot-graph code (run only when a logger or a
+# dot-graph file is set, which al-syntax never does) or the allocator's failure message before
+# abort: note section 4.1. Listed with their callers on every run.
+GUARDED = {"snprintf", "vsnprintf", "fprintf", "fputc", "fputs", "fwrite"}
+# A call through a pointer: its targets are roots.
+ALLOWED = BYTES | GUARDED | {"__indirect_call"}
+
+ROOTS = re.compile(r"ts_(parser|tree|node|tree_cursor|language)_")
+EXCLUDED = re.compile(
+    r"^ts_(parser_set_logger|parser_logger|parser_print_dot_graphs|tree_print_dot_graph"
+    r"|node_string|parser_set_wasm_store|parser_take_wasm_store|language_is_wasm)"
+    r"|^ts_tree_cursor_.*dot")
+POINTER_TARGETS = re.compile(r"ts_(malloc|calloc|realloc)_default$|ts_lexer__|ts_lex|tree_sitter_al")
+INJECT_AT = "void *tree_sitter_al_external_scanner_create("
+
+
+def die(msg):
+    print(f"check-parse-path-locale: {msg}", file=sys.stderr)
+    sys.exit(2)
+
+
+def tree_sitter_src():
+    meta = subprocess.run(["cargo", "metadata", "--format-version", "1", "--locked"],
+                          capture_output=True, text=True)
+    if meta.returncode != 0:
+        die(f"cargo metadata failed: {meta.stderr.strip()}")
+    for p in json.loads(meta.stdout)["packages"]:
+        if p["name"] == "tree-sitter" and p["source"]:
+            return os.path.join(os.path.dirname(p["manifest_path"]), "src"), p["version"]
+    die("no tree-sitter package in cargo metadata")
+
+
+def callgraph(src, out_dir, includes):
+    """Compile `src` with -fcallgraph-info into out_dir; return the .ci path."""
+    stem = os.path.splitext(os.path.basename(src))[0]
+    obj = os.path.join(out_dir, stem + ".o")
+    # No stack protector: Ubuntu's gcc adds `__stack_chk_fail` calls, a compiler canary. No
+    # builtins: gcc folds a builtin's call away (a `towlower` on a constant), hiding it.
+    cmd = ["gcc", "-O0", "-fno-stack-protector", "-fno-builtin", "-fcallgraph-info", "-c", src,
+           "-o", obj]
+    for i in includes:
+        cmd += ["-I", i]
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    if r.returncode != 0:
+        die(f"gcc failed on {src}:\n{r.stderr}")
+    return os.path.join(out_dir, stem + ".ci")
+
+
+def short(t):
+    return t.rsplit(":", 1)[-1] if t.startswith("/") else t
+
+
+def check(ci_files):
+    """(ok, report lines) over the .ci files."""
+    defined, edges = set(), defaultdict(list)
+    for f in ci_files:
+        for line in open(f):
+            m = re.match(r'node: \{ title: "([^"]+)" label: "[^"]*"(.*)\}', line)
+            if m:
+                if "ellipse" not in m.group(2):
+                    defined.add(short(m.group(1)))
+                continue
+            m = re.match(r'edge: \{ sourcename: "([^"]+)" targetname: "([^"]+)"', line)
+            if m:
+                edges[short(m.group(1))].append(short(m.group(2)))
+    roots = [n for n in defined if ROOTS.match(n) and not EXCLUDED.match(n)]
+    roots += [n for n in defined if POINTER_TARGETS.match(n)]
+    if not any(n.startswith("tree_sitter_al_external_scanner_") for n in roots):
+        return False, ["no grammar scanner root found: the roots no longer match the sources"]
+    seen, stack = set(), list(roots)
+    while stack:
+        n = stack.pop()
+        if n in seen:
+            continue
+        seen.add(n)
+        stack += [t for t in edges.get(n, []) if t in defined]
+    ext = defaultdict(set)
+    for n in seen:
+        for t in edges.get(n, []):
+            if t not in defined:
+                ext[t].add(n)
+    lines = [f"{len(roots)} roots reach {len(seen)} functions; external callees: {len(ext)}"]
+    bad = sorted(t for t in ext if t not in ALLOWED)
+    for t in sorted(ext.keys() & GUARDED):
+        lines.append(f"  guarded {t}: from {', '.join(sorted(ext[t]))}")
+    for t in bad:
+        lines.append(f"  NOT ALLOWED {t}: from {', '.join(sorted(ext[t]))}")
+    return not bad, lines
+
+
+def main():
+    if len(sys.argv) != 1:
+        print(__doc__, file=sys.stderr)
+        return 2
+    ts_src, ts_version = tree_sitter_src()
+    grammar = os.environ.get("TREE_SITTER_AL_PATH") or os.path.join(
+        subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True,
+                       text=True).stdout.strip(), "tree-sitter-al")
+    g_src = os.path.join(grammar, "src")
+    for f in (os.path.join(ts_src, "lib.c"), os.path.join(g_src, "parser.c"),
+              os.path.join(g_src, "scanner.c")):
+        if not os.path.isfile(f):
+            die(f"missing {f}")
+    ts_inc = [ts_src, os.path.join(os.path.dirname(ts_src), "include")]
+    with tempfile.TemporaryDirectory() as tmp:
+        lib = callgraph(os.path.join(ts_src, "lib.c"), tmp, ts_inc)
+        parser = callgraph(os.path.join(g_src, "parser.c"), tmp, [g_src])
+        scanner = callgraph(os.path.join(g_src, "scanner.c"), tmp, [g_src])
+        ok, lines = check([lib, parser, scanner])
+        print(f"check-parse-path-locale: tree-sitter {ts_version}, grammar {grammar}")
+        print("\n".join(lines))
+        # The discrimination proof, every run: a reachable towlower must fail the check.
+        text = open(os.path.join(g_src, "scanner.c")).read()
+        if text.count(INJECT_AT) != 1:
+            die(f"cannot inject: '{INJECT_AT}' occurs {text.count(INJECT_AT)} times in scanner.c")
+        head, rest = text.split(INJECT_AT)
+        brace = rest.index("{") + 1
+        injected = ("#include <wctype.h>\n" + head + INJECT_AT + rest[:brace]
+                    + " volatile wint_t tls117_probe = towlower((wint_t)L'A'); (void)tls117_probe;"
+                    + rest[brace:])
+        inj_dir = os.path.join(tmp, "injected")
+        os.mkdir(inj_dir)
+        inj_src = os.path.join(inj_dir, "scanner.c")
+        with open(inj_src, "w") as f:
+            f.write(injected)
+        inj_ok, inj_lines = check([lib, parser, callgraph(inj_src, inj_dir, [g_src])])
+        caught = not inj_ok and any("NOT ALLOWED towlower" in l for l in inj_lines)
+    print("check-parse-path-locale: an injected reachable towlower is "
+          + ("refused (the check can fail)" if caught else "NOT refused: the check is broken"))
+    if ok and caught:
+        print("check-parse-path-locale: PASS")
+        return 0
+    print("check-parse-path-locale: FAIL")
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

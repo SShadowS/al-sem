@@ -46,6 +46,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   build and before signing, and after signing verify them again and run the shipped `alsem.exe`
   once with the cache on, on `tests/fixtures/tls117/ws`, requiring a key (`--require-key`); a
   failure fails the job.
+- **The parse path's locale audit is pinned.** `scripts/check-parse-path-locale` compiles
+  tree-sitter's `lib.c` (the `Cargo.lock` version) and the grammar's `parser.c` and `scanner.c`
+  with `gcc -fcallgraph-info`, walks the call graph from the roots al-syntax reaches, and fails
+  when a reachable function calls anything but byte functions and the guarded log and dot-graph
+  formatting (note section 4.1). Each run also proves it can fail: a `scanner.c` copy calling
+  `towlower` must be refused. It runs as `scripts/ci-steps locale` (in `task`, `task-affected`
+  and `all`) and in CI's `test` job, in about 3 s.
 - **Windows-native tests** (the owner runs them: `cargo test -p al-sem --lib -- winfs
   key::tests::windows snapshot::cache prune`): `snapshot::winfs::tests::windows_private_walk`,
   `program::ir_cache::key::tests::windows_stamped_copy_keys_on_its_image` (with the held-handle

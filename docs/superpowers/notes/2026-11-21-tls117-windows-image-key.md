@@ -598,6 +598,16 @@ Pins (product phase):
   use. It fails if any reachable external callee is outside an allow-list (the byte functions
   above) other than the guarded logging and dot-graph sites, which it lists by function. A
   tree-sitter or grammar update that adds a locale-sensitive call on the parse path fails it.
+  **As built (rev 11):** `scripts/check-parse-path-locale`, run by `scripts/ci-steps locale` (in
+  `task`, `task-affected` and `all`) and by CI's `test` job; about 3 s. It compiles with
+  `-fno-stack-protector` (Ubuntu's gcc otherwise adds `__stack_chk_fail`, a compiler canary) and
+  `-fno-builtin` (gcc otherwise folds a builtin's call away, so a `towlower` on a constant left no
+  edge; with it, the dot-graph writes show as `fputs`, which joins the guarded list). The allow
+  list is the byte functions above plus the guarded `snprintf`, `vsnprintf`, `fprintf`, `fputc`,
+  `fputs`, `fwrite`, whose callers it prints. Every run also checks a copy of `scanner.c` whose
+  `tree_sitter_al_external_scanner_create` calls `towlower`, and fails unless that copy is
+  refused; a grammar copy with that call as its real `scanner.c` fails the real check too
+  (2026-11-23).
 - **The MSVC map listing** (Windows CI job): build `alsem`, `aldump` and `al-call-hierarchy` with
   `-C link-arg=/MAP` and list every deny symbol found in each map (`setlocale`, `_create_locale`,
   `localeconv`, `isw*`, `_isw*_l`, `iswctype`, `isprint`, `tow*`, `GetLocaleInfo*`, `LCMapString*`,
