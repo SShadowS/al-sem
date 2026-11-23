@@ -931,16 +931,22 @@ fn table_frame(r: &ModelRoutine) -> Option<TableFrame> {
         .var_assignments
         .iter()
         .any(|a| crate::program::model::recref_alias::into_holder_array(r, a));
-    for v in r.variables.iter().filter(|v| {
+    // ENG-176: every text that names a variable is resolved by the routine's scope (`this.X` is
+    // the global, a quoted `"this.X"` the local of that name), never compared by its text.
+    let scope = crate::program::model::recref_alias::HolderScope::of(r);
+    let names = |text: &str, k: crate::program::model::recref_alias::HolderKey| {
+        scope.text(text).is_some_and(|h| h.key == k)
+    };
+    for (i, v) in r.variables.own().iter().enumerate().filter(|(_, v)| {
         !v.is_parameter
             && v.scope.as_deref() == Some("local")
             && v.declared_type.trim().eq_fold_identifier("recordref")
     }) {
+        let k = crate::program::model::recref_alias::HolderKey::Own(i as u32);
         let r_lc = lc(&v.name);
         if into_holder_array
             || r.var_assignments.iter().any(|a| {
-                lc(&a.lhs_name) == r_lc
-                    || a.rhs_identifier.as_deref().is_some_and(|w| lc(w) == r_lc)
+                names(&a.lhs_text, k) || a.rhs_text.as_deref().is_some_and(|w| names(w, k))
             })
         {
             continue;
@@ -949,23 +955,25 @@ fn table_frame(r: &ModelRoutine) -> Option<TableFrame> {
         let mut ok = true;
         let mut passed: HashSet<String> = HashSet::new();
         for cs in &r.call_sites {
-            if cs.argument_texts.iter().any(|a| lc(a) == r_lc) {
+            if cs.argument_texts.iter().any(|a| names(a, k)) {
                 passed.insert(cs.id.clone());
             }
             let PCallee::Member { receiver, method } = &cs.callee else {
                 continue;
             };
-            if lc(receiver) != r_lc {
+            if !names(receiver, k) {
                 continue;
             }
             match method.fold_identifier().as_str() {
                 "gettable" => {
-                    let p = cs.argument_texts.first().map(|a| lc(a)).and_then(|a| {
-                        r.parameters
-                            .iter()
-                            .find(|p| lc(&p.name) == a)
-                            .map(|p| p.index)
-                    });
+                    // The parameter the argument names (a parameter is the routine's own).
+                    let p = cs
+                        .argument_texts
+                        .first()
+                        .and_then(|a| scope.text(a))
+                        .map(|h| scope.variable(h.key))
+                        .filter(|v| v.is_parameter)
+                        .and_then(|v| v.parameter_index);
                     match (source, p) {
                         (None, Some(p)) => source = Some(p),
                         _ => {
@@ -983,7 +991,7 @@ fn table_frame(r: &ModelRoutine) -> Option<TableFrame> {
         }
         // ENG-160: `R.Get(Id)` binds it too (a record operation, not a call site).
         let got = sites.iter().any(|s| {
-            s.how == crate::program::model::recref_alias::RecRefBind::Get && lc(s.receiver) == r_lc
+            s.how == crate::program::model::recref_alias::RecRefBind::Get && names(s.receiver, k)
         });
         if let (true, false, Some(p)) = (ok, got, source) {
             bound.insert(r_lc.clone(), p);
@@ -996,16 +1004,18 @@ fn table_frame(r: &ModelRoutine) -> Option<TableFrame> {
         let Some(param) = r.parameters.iter().find(|x| x.index == *p) else {
             return false;
         };
-        let name = lc(&param.name);
+        let Some(pk) = scope.logical(&param.name) else {
+            return false;
+        };
         if param.is_var
             || !param.type_text.trim().eq_fold_identifier("variant")
-            || r.var_assignments.iter().any(|a| lc(&a.lhs_name) == name)
+            || r.var_assignments.iter().any(|a| names(&a.lhs_text, pk))
         {
             return false;
         }
         let e = escapes.entry(r_lc.clone()).or_default();
         for cs in &r.call_sites {
-            let passes = cs.argument_texts.iter().any(|a| lc(a) == name);
+            let passes = cs.argument_texts.iter().any(|a| names(a, pk));
             let is_gettable = matches!(&cs.callee, PCallee::Member { method, .. }
                 if method.eq_fold_identifier("gettable"));
             if passes && !is_gettable {
