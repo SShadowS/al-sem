@@ -1,0 +1,50 @@
+# scripts/awake-clock — sourced by the bash gate scripts (cdo-slot, land), not
+# run: a wait whose deadline counts AWAKE time (TLS-104, TLS-105).
+#
+# server1 is a laptop that suspends when it is moved. The wall clock (bash
+# `$SECONDS`, `date`, EPOCHREALTIME) keeps counting through a suspend, so a wait
+# of N s on it can end after a few real seconds: a laptop that slept 33 min
+# "waited" its 1800 s at once. CLOCK_MONOTONIC stops during a suspend: the
+# deadlines here run on it (`host-suspended --clocks`: the suspended reading and
+# the clock from one process, so no suspend falls between them; TLS-104 r3).
+#
+#   awake_start   start a wait: read the clocks and choose the time base.
+#   awake_read    read them again. Sets awake_us (microseconds of awake time
+#                 since awake_start) and awake_new_sleep (seconds the host slept
+#                 since the last report, when 2 or more; else 0): the caller
+#                 says so, once per sleep.
+#   awake_nap <us>  sleep that many microseconds (a sleep runs on CLOCK_MONOTONIC
+#                 too, so a suspend inside it is not counted either).
+#
+# The rules TLS-104's review rounds hardened: the time base is chosen once, by
+# the first read: CLOCK_MONOTONIC when it reads, else the wall clock for the
+# whole wait (as before TLS-104). A later failed read keeps the last awake time
+# (the wait only grows: the safe side). The suspended reading is judged on its
+# own (r4): a bad one costs only the log line, never the time base. A suspend
+# counts from 2 s (the readings are whole seconds; a real one lasts far longer).
+# Only processes that sleep lose time this way: a loop that counts its own
+# iterations (spawn_keeper's 1200 x 0.05 s) is frozen with the host and needs none.
+awake_tool="$(dirname "${BASH_SOURCE[0]}")/host-suspended"
+awake_read() {
+    local _b m=""
+    awake_s=""
+    read -r awake_s _b m < <("$awake_tool" --clocks 2>/dev/null) || true
+    [[ "$awake_s" =~ ^[0-9]+$ ]] || awake_s=""
+    if [[ "$m" =~ ^[0-9]+$ && "$awake_base" != wall ]]; then
+        awake_now=$m awake_base=mono
+    elif [[ "$awake_base" != mono ]]; then
+        awake_now=${EPOCHREALTIME//[!0-9]/} awake_base=wall
+    fi
+    awake_us=$((awake_now - awake_t0))
+    awake_new_sleep=0
+    if [[ -n "$awake_s0" && -n "$awake_s" ]] && ((awake_s - awake_s0 - awake_slept >= 2)); then
+        awake_new_sleep=$((awake_s - awake_s0 - awake_slept))
+        awake_slept=$((awake_s - awake_s0))
+    fi
+}
+awake_start() {
+    awake_base="" awake_t0=0 awake_s0="" awake_slept=0
+    awake_read
+    awake_s0=$awake_s awake_t0=$awake_now awake_us=0
+}
+awake_nap() { sleep "$(($1 / 1000000)).$(printf '%06d' $(($1 % 1000000)))"; }

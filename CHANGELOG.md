@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (TLS-105: three more gate-script deadlines count awake time, not wall time)
+
+- **What was wrong.** server1 is a laptop that suspends when moved, and the wall clock keeps
+  counting through a suspend. TLS-104 moved `cdo-slot run --timed`'s wait for builds to awake
+  time; review (Fable) found three more waits on the wall clock, each of which a suspend could
+  use up at once on resume: cdo-slot's keeper go (`CDO_SLOT_LOCK_WAIT_S`, 30 s: a live keeper's
+  go refused, the acquire failed), `cdo-slot acquire --wait --timeout` (and so
+  `LAND_SLOT_TIMEOUT_S` and `cdo-before-after --slot-timeout`), and `scripts/land`'s mem-wait
+  (`LAND_MEM_TIMEOUT_S`, 1800 s: the landing failed at mem-wait).
+- **Now.** All four waits use one sourced helper, `scripts/awake-clock` (TLS-104's rules moved
+  there unchanged: CLOCK_MONOTONIC from `host-suspended --clocks`, the time base chosen once, a
+  failed later read keeps the last awake time, a bad suspended reading costs only the log line).
+  Each wait says a suspend it waited through (`the host slept N s during this wait: ...`; land
+  also in `mem-wait.log`). `go` reads the clocks only once its wall deadline has passed, then once
+  a second (it polls every 0.05 s, and each read is a process). land's mem-wait now says once
+  that it waits, and its naps stop at the deadline (it slept a fixed 15 s past it).
+  cdo-slot and land now source `scripts/awake-clock`: a copy of either needs it beside it (the
+  two test copies were updated).
+- **The other deadlines, checked.** Python waits (`cdo-speed`'s calm wait, call and perf
+  deadlines; `cdo-before-after`; subprocess timeouts) use `time.monotonic`, CLOCK_MONOTONIC on
+  Linux: awake time already. cdo-slot's keeper start (1200 x 0.05 s), keeper end and test
+  pauses count iterations of `sleep`, which runs on CLOCK_MONOTONIC: frozen with the host, no
+  fix needed. cdo-gate's and ci-steps' `$SECONDS`/EPOCHREALTIME are phase timings TLS-104
+  already labels, and the memory sampler's `date +%s` a timestamp: no deadline. agentflow's
+  24 h wall-clock cap and 30-min lock staleness compare stored wall timestamps across processes
+  (a suspend counts toward both by design or by necessity); not gate scripts, left as they are.
+- **Tests.** One stubbed-clock test per deadline (`cdo_slot_acquire_timeout_survives_a_host_suspend`,
+  `cdo_slot_go_survives_a_host_suspend`, `land_mem_wait_survives_a_host_suspend`): a 10 s
+  simulated suspend during a 2 s wait does not end it at the wall deadline, the wait still ends
+  at its awake deadline, and the log names the suspend. land refuses to run with a test hook
+  set, so its test runs land from a folder of links whose `host-suspended` sets the hook for
+  itself only. Each has a discrimination proof (the check put back on wall time: red; restored:
+  green), recorded in its doc.
+
 ### Changed (TLS-116: `alsem batch` uses the IR cache, and no job write reaches a cache folder)
 
 - **What was wrong.** TLS-109's write claims did not cover the engine's cache folders. ENG-110

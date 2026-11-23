@@ -1672,7 +1672,8 @@ fn cdo_slot_timed_waits_for_builds_and_refuses_beside_one() {
 ///
 /// Mutation (2026-11-20): the wait on wall time again (`slot_clocks` taking
 /// `EPOCHREALTIME` for the awake clock) -> refused at 10 s, exit 6 (red);
-/// restored, green.
+/// restored, green. (TLS-105 moved `slot_clocks` into scripts/awake-clock's
+/// `awake_read`, shared by every awake deadline.)
 #[test]
 fn cdo_slot_timed_wait_survives_a_host_suspend() {
     let s = Slot::new();
@@ -1731,6 +1732,143 @@ fn cdo_slot_timed_wait_survives_a_host_suspend() {
         "{text}"
     );
     assert!(ran.exists(), "{text}{err}");
+}
+
+/// ⟨TLS-105⟩ `acquire --wait --timeout` counts awake time: a host suspend does
+/// not use up the timeout (review of TLS-104, Fable). B waits 2 s for A's hold;
+/// once B says it waits (its clock is started by then), the host "sleeps" 10 s
+/// (`CDO_HOST_SUSPENDED_FILE` 100 -> 110). B says so, still gives up (a real
+/// awake timeout expires), but only about 12 s after it started: not at the 2 s
+/// wall-clock deadline.
+///
+/// Mutation (2026-11-23): the timeout check on wall time again (`awake_us`
+/// plus `awake_slept` seconds) -> gave up 2.2 s after the suspend (red);
+/// restored, green.
+#[test]
+fn cdo_slot_acquire_timeout_survives_a_host_suspend() {
+    let s = Slot::new();
+    assert_eq!(s.run("A", &["acquire", "a", "hold"], &[]).0, Some(0));
+    let reading = s.0.path().join("suspended");
+    std::fs::write(&reading, "100").unwrap();
+    let reading_s = reading.to_str().unwrap();
+    let mut b = Reap(
+        s.cmd(
+            "B",
+            &["acquire", "b", "late", "--wait", "--timeout", "2"],
+            &[("CDO_HOST_SUSPENDED_FILE", reading_s)],
+        )
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap(),
+    );
+    let mut text = String::new();
+    let mut slept_at = None;
+    {
+        use std::io::BufRead;
+        let lines = std::io::BufReader::new(b.0.stdout.take().unwrap()).lines();
+        for line in lines {
+            let line = line.unwrap();
+            if line.contains("waiting: held by a (hold)") && slept_at.is_none() {
+                std::fs::write(&reading, "110").unwrap();
+                slept_at = Some(std::time::Instant::now());
+            }
+            text.push_str(&line);
+            text.push('\n');
+        }
+    }
+    let mut err = String::new();
+    std::io::Read::read_to_string(&mut b.0.stderr.take().unwrap(), &mut err).unwrap();
+    let code = b.0.wait().unwrap().code();
+    let after = slept_at.expect("B never said it waits").elapsed();
+    assert_eq!(code, Some(1), "{text}{err}");
+    assert!(err.contains("not taken after 2 s"), "{text}{err}");
+    assert!(
+        text.contains("the host slept 10 s during this wait"),
+        "{text}{err}"
+    );
+    // The awake deadline is ~12 s out; the wall one passed 2 s after the start.
+    assert!(
+        after >= std::time::Duration::from_secs(8),
+        "gave up {after:?} after the suspend: the suspend used up the timeout"
+    );
+}
+
+/// ⟨TLS-105⟩ `go` (a keeper's go, CDO_SLOT_LOCK_WAIT_S) counts awake time. A
+/// hold keeper is stopped before its go (as in the review r8 case below); once
+/// the go file exists (its clock is started by then), the host "sleeps" 10 s.
+/// The acquire says so once its 2 s wall deadline has passed, is still waiting
+/// 5 s after the suspend, and when the keeper goes on then (SIGCONT) it takes
+/// its go: the hold is taken (exit 0). That a real awake timeout still expires
+/// is the review r8 case in `cdo_slot_acquire_windows_hold_against_a_timing`
+/// (a stopped keeper, given up on after 2 s). (A first version waited for that
+/// expiry here; its break came back only 7.4 s after the suspend, the keeper's
+/// 5 s end included, too close to the 8 s bound to tell apart under load.)
+///
+/// Mutation (2026-11-23): `go`'s check on wall time again (`awake_us` plus
+/// `awake_slept` seconds) -> it had already given up when the keeper went on
+/// (red); restored, green.
+#[test]
+fn cdo_slot_go_survives_a_host_suspend() {
+    let s = Slot::new();
+    let reading = s.0.path().join("suspended");
+    std::fs::write(&reading, "100").unwrap();
+    let reading_s = reading.to_str().unwrap();
+    let mut held = Reap(
+        s.cmd(
+            "A",
+            &["acquire", "lane", "stopped"],
+            &[
+                ("CDO_SLOT_TEST_PAUSE_HOLDGO_S", "60"),
+                ("CDO_SLOT_LOCK_WAIT_S", "2"),
+                ("CDO_HOST_SUSPENDED_FILE", reading_s),
+            ],
+        )
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap(),
+    );
+    s.wait_paused();
+    let k = keepers(&s, b"_keep\0hold\0");
+    assert_eq!(k.len(), 1, "precondition: one hold keeper");
+    // SAFETY: SIGSTOP to this test's own hold keeper.
+    unsafe { libc::kill(k[0], libc::SIGSTOP) };
+    s.resume();
+    until("the go file", &|| {
+        std::fs::read_dir(s.dir())
+            .unwrap()
+            .flatten()
+            .any(|e| e.file_name().to_string_lossy().starts_with("go."))
+    });
+    std::fs::write(&reading, "110").unwrap();
+    let slept_at = std::time::Instant::now();
+    let said = "the host slept 10 s while a keeper was to take its go";
+    let mut err = String::new();
+    let mut waiting_at_5s = None;
+    {
+        use std::io::BufRead;
+        let lines = std::io::BufReader::new(held.0.stderr.take().unwrap()).lines();
+        for line in lines {
+            let line = line.unwrap();
+            if line.contains(said) && waiting_at_5s.is_none() {
+                // Past the 2 s wall deadline, inside the ~12 s awake one.
+                let at = std::time::Duration::from_secs(5);
+                std::thread::sleep(at.saturating_sub(slept_at.elapsed()));
+                waiting_at_5s = Some(held.0.try_wait().unwrap().is_none());
+                // SAFETY: SIGCONT to this test's own hold keeper.
+                unsafe { libc::kill(k[0], libc::SIGCONT) };
+            }
+            err.push_str(&line);
+            err.push('\n');
+        }
+    }
+    let code = held.0.wait().unwrap().code();
+    assert!(err.contains(said), "{err}");
+    assert_eq!(waiting_at_5s, Some(true), "gave up within 5 s: {err}");
+    assert_eq!(code, Some(0), "the go was refused: {err}");
+    assert_eq!(s.probe(), "held=1 own=0 timed=0");
+    assert_eq!(s.run("A", &["release"], &[]).0, Some(0));
 }
 
 /// ⟨TLS-89⟩ The build scripts a timing waits for, and the grace wait:

@@ -76,8 +76,26 @@ impl Repo {
     /// (a stub's exit: `("STUB_CI_STEPS_RC", "1")`; ci's hook:
     /// `("STUB_CI_STEPS_HOOK", "<sh>")`); (exit, stdout + stderr).
     fn land(&self, args: &[&str], env: &[(&str, &str)]) -> (Option<i32>, String) {
+        let out = self
+            .land_cmd(Path::new(LAND), args, env)
+            .output()
+            .expect("run scripts/land");
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        (out.status.code(), text)
+    }
+    /// The command `land` runs, with the land script `script`.
+    fn land_cmd(
+        &self,
+        script: &Path,
+        args: &[&str],
+        env: &[(&str, &str)],
+    ) -> std::process::Command {
         let mut cmd = std::process::Command::new("bash");
-        cmd.arg(LAND).arg("--worktree").arg(&self.gate).args(args);
+        cmd.arg(script).arg("--worktree").arg(&self.gate).args(args);
         clean_env(&mut cmd)
             .env("LAND_LOGS", self.root.join("logs"))
             .env("FLOW_LOG", self.root.join("flow.jsonl"))
@@ -92,13 +110,7 @@ impl Repo {
         for (k, v) in env {
             cmd.env(k, v);
         }
-        let out = cmd.output().expect("run scripts/land");
-        let text = format!(
-            "{}{}",
-            String::from_utf8_lossy(&out.stdout),
-            String::from_utf8_lossy(&out.stderr)
-        );
-        (out.status.code(), text)
+        cmd
     }
     /// `scripts/cdo-slot <args>` on this repo's slot, as Claude session
     /// `session` (no Claude PID: never stale); (exit, stdout + stderr).
@@ -445,6 +457,99 @@ fn land_gates_in_order_and_pushes_only_on_request() {
         }
     }
     assert!(open.is_empty(), "a step with no end: {open:?}");
+}
+
+/// ⟨TLS-105⟩ The mem-wait (LAND_MEM_TIMEOUT_S) counts awake time: a host
+/// suspend does not use it up (review of TLS-104, Fable). The memory is never
+/// enough (999999 GB) and the wait 2 s; once land says it waits (its clock is
+/// started by then), the host "sleeps" 10 s. land says so (on the terminal and
+/// in mem-wait.log) and still gives up (a real awake timeout expires), but only
+/// about 12 s later, not at the 2 s wall-clock deadline.
+///
+/// land refuses to run with a test hook set (CDO_HOST_SUSPENDED_FILE is one),
+/// so land runs from a folder of links to the real scripts whose
+/// `host-suspended` sets the hook for itself only, reading `suspended` there.
+///
+/// Mutation (2026-11-23): the mem-wait on wall time again (`awake_us` plus
+/// `awake_slept` seconds) -> gave up 3.1 s after the suspend (red); restored,
+/// green.
+#[test]
+fn land_mem_wait_survives_a_host_suspend() {
+    use std::os::unix::fs::PermissionsExt;
+    let r = repo();
+    let bin = r.root.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let real = Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts");
+    for f in [
+        "land",
+        "changelog-merge",
+        "cdo-slot",
+        "awake-clock",
+        "agentflow",
+    ] {
+        std::os::unix::fs::symlink(real.join(f), bin.join(f)).unwrap();
+    }
+    let stub = bin.join("host-suspended");
+    std::fs::write(
+        &stub,
+        format!(
+            "#!/bin/sh\nexport CDO_HOST_SUSPENDED_FILE=\"$(dirname \"$0\")/suspended\"\n\
+             exec '{}' \"$@\"\n",
+            real.join("host-suspended").display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let reading = bin.join("suspended");
+    std::fs::write(&reading, "100").unwrap();
+    let mut run = crate::cdo_slot::Reap(
+        r.land_cmd(
+            &bin.join("land"),
+            &["tools/tls-58-x"],
+            &[("LAND_MEM_MIN_GB", "999999"), ("LAND_MEM_TIMEOUT_S", "2")],
+        )
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap(),
+    );
+    let mut text = String::new();
+    let mut slept_at = None;
+    {
+        use std::io::BufRead;
+        let lines = std::io::BufReader::new(run.0.stdout.take().unwrap()).lines();
+        for line in lines {
+            let line = line.unwrap();
+            if line.contains("land: mem-wait: MemAvailable") && slept_at.is_none() {
+                std::fs::write(&reading, "110").unwrap();
+                slept_at = Some(std::time::Instant::now());
+            }
+            text.push_str(&line);
+            text.push('\n');
+        }
+    }
+    let mut err = String::new();
+    std::io::Read::read_to_string(&mut run.0.stderr.take().unwrap(), &mut err).unwrap();
+    let code = run.0.wait().unwrap().code();
+    let after = slept_at.expect("land never said it waits").elapsed();
+    assert_eq!(code, Some(1), "{text}{err}");
+    assert!(err.contains("FAIL at mem-wait"), "{text}{err}");
+    let said = "land: mem-wait: the host slept 10 s during this wait";
+    assert!(text.contains(said), "{text}{err}");
+    let logs: Vec<String> = std::fs::read_dir(r.root.join("logs"))
+        .unwrap()
+        .map(|e| std::fs::read_to_string(e.unwrap().path().join("mem-wait.log")).unwrap())
+        .collect();
+    assert!(
+        logs.len() == 1 && logs[0].contains(said) && logs[0].contains("gave up"),
+        "{logs:?}"
+    );
+    // The awake deadline is ~12 s out; the wall one passed 2 s after the start.
+    assert!(
+        after >= std::time::Duration::from_secs(8),
+        "gave up {after:?} after the suspend: the suspend used up the mem-wait"
+    );
+    assert_eq!(r.calls(), ["ci-steps all"], "no memory, no cdo-gate");
 }
 
 /// What the gates ran on must be what merge-and-push lands (review r1,

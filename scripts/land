@@ -71,7 +71,8 @@
 #
 # Environment: LAND_WORKTREE (default /work/alsem-wt/orchestrator-gate), CDO_WS
 # (default /work/src/cdo-baseline/Cloud), LAND_LOGS, FLOW_LOG, LAND_MEM_MIN_GB
-# (default 35; 0 skips the whole wait, for tests), LAND_MEM_TIMEOUT_S (1800),
+# (default 35; 0 skips the whole wait, for tests), LAND_MEM_TIMEOUT_S (1800 s
+# of awake time: a host suspend does not count, scripts/awake-clock, TLS-105),
 # LAND_SLOT_TIMEOUT_S (how long to wait for the CDO slot; default: no limit),
 # CDO_SLOT_OWNER (the slot's owner label; default "land") and scripts/cdo-slot's
 # own CDO_SLOT_DIR / CDO_SLOT_MEM_MIN_GB.
@@ -99,6 +100,9 @@ bad_usage() {
     usage >&2
     exit 2
 }
+# ⟨TLS-105⟩ The mem-wait's deadline counts awake time.
+# shellcheck source=awake-clock
+source "$(dirname "$0")/awake-clock"
 
 # A git hook exports GIT_DIR and friends, which beat `git -C` (src/git_env.rs).
 # shellcheck disable=SC2046
@@ -581,22 +585,36 @@ start=$SECONDS
 mark mem-wait start
 rc=0
 if ((mem_min_gb > 0)); then
-    deadline=$((SECONDS + mem_timeout))
+    # ⟨TLS-105⟩ LAND_MEM_TIMEOUT_S of AWAKE time (scripts/awake-clock): a laptop
+    # that slept through the wait gave up at once on resume. Each sleep is said
+    # (on the terminal and in mem-wait.log); the naps never pass the deadline.
+    awake_start
+    said=0
     while :; do
         avail_kb=$(awk '/^MemAvailable:/ { print $2 }' /proc/meminfo)
         # No other gate can run: land holds the CDO slot, and cdo-gate takes it
         # (a gate queued behind this landing is no reason to wait: it waits for
         # us, review r1, sol).
         if ((avail_kb >= mem_min_gb * 1048576)); then
-            echo "MemAvailable $((avail_kb >> 20)) GB" >"$run/mem-wait.log"
+            echo "MemAvailable $((avail_kb >> 20)) GB" >>"$run/mem-wait.log"
             break
         fi
-        if ((SECONDS >= deadline)); then
-            echo "gave up: MemAvailable $((avail_kb >> 20)) GB (need $mem_min_gb)" >"$run/mem-wait.log"
+        awake_read
+        if ((awake_new_sleep)); then
+            echo "land: mem-wait: the host slept $awake_new_sleep s during this wait: it goes on that much longer" \
+                | tee -a "$run/mem-wait.log"
+        fi
+        left_us=$((mem_timeout * 1000000 - awake_us))
+        if ((left_us <= 0)); then
+            echo "gave up: MemAvailable $((avail_kb >> 20)) GB (need $mem_min_gb)" >>"$run/mem-wait.log"
             rc=1
             break
         fi
-        sleep 15
+        if ((!said)); then
+            echo "land: mem-wait: MemAvailable $((avail_kb >> 20)) GB, waiting for $mem_min_gb GB (at most $mem_timeout s of awake time)"
+            said=1
+        fi
+        awake_nap $((left_us < 15000000 ? left_us : 15000000))
     done
 fi
 verdict mem-wait "$rc" "$start"

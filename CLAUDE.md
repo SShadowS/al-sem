@@ -239,6 +239,10 @@ Every test still runs before a merge; the tiers decide HOW OFTEN each one runs.
   cold after a resume; instruction counts are unaffected), cdo-gate notes one per phase and in
   its summary (its phase seconds are wall time and include the sleep), cdo-slot's `status` says
   how much of a hold's age was a suspend, and `run --timed`'s wait for builds runs on awake time.
+  So do (TLS-105) cdo-slot's `acquire --wait --timeout` and its keeper go (`CDO_SLOT_LOCK_WAIT_S`,
+  30 s) and land's mem-wait (`LAND_MEM_TIMEOUT_S`, 1800 s): one shared helper,
+  `scripts/awake-clock` (sourced; copy it with any copy of cdo-slot or land). Each says a suspend
+  it waited through. Python deadlines (`time.monotonic`) were awake time already.
   **Clock and core sharing are labelled too (TLS-111):** each call also counts user cycles, and a
   judged row whose sides' clocks (user cycles / user s) or cycles per instruction differ beyond
   x1.15 (provisional bands) is labelled `CLOCK` or `CPI`, from counts that cover the call
