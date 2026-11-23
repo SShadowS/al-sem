@@ -730,6 +730,27 @@ fn locate(h: &Headers, off: usize, len: usize) -> Result<(&Section, u32), String
     Ok((s, s.va + (off - s.raw_ptr as usize) as u32))
 }
 
+/// The slot of `file` found by `magic` (exactly once): its file offset and RVA. The whole slot
+/// must lie inside the file and inside one read-only, non-executable section's mapped raw data,
+/// outside every loader-written range: bytes the canonical hash covers. [`stamp`] and a stamped
+/// file's verification (`stamp::verify_file`) use it alike.
+pub fn find_slot(file: &[u8], magic: &[u8; 16]) -> Result<(usize, u32), String> {
+    let h = Headers::parse(file)?;
+    let off = find_unique(file, magic)?;
+    if off.checked_add(SLOT_LEN).is_none_or(|end| end > file.len()) {
+        return Err("the slot runs past the end of the file".into());
+    }
+    let (s, rva) = locate(&h, off, SLOT_LEN)?;
+    if s.writable() || s.executable() {
+        return Err("the slot is not in a read-only data section".into());
+    }
+    let z = loader_written(&FileView::new(file)?, &h, h.image_base)?;
+    if masked_overlap(rva, SLOT_LEN as u64, &z).is_some() {
+        return Err("the slot overlaps a loader-written range".into());
+    }
+    Ok((off, rva))
+}
+
 /// The PE checksum (the algorithm of `CheckSumMappedFile`): 16-bit one's-complement-style sum of
 /// the file with the CheckSum field taken as zero, folded, plus the file length.
 pub fn pe_checksum(file: &[u8]) -> Result<u32, String> {
@@ -765,15 +786,7 @@ pub struct Stamped {
 pub fn stamp(file: &mut [u8], magic: &[u8; 16]) -> Result<Stamped, String> {
     let before = file.to_vec();
     let h = Headers::parse(file)?;
-    let off = find_unique(file, magic)?;
-    let (s, rva) = locate(&h, off, SLOT_LEN)?;
-    if s.writable() || s.executable() {
-        return Err("the slot is not in a read-only data section".into());
-    }
-    let z = loader_written(&FileView::new(file)?, &h, h.image_base)?;
-    if masked_overlap(rva, SLOT_LEN as u64, &z).is_some() {
-        return Err("the slot overlaps a loader-written range".into());
-    }
+    let (off, rva) = find_slot(file, magic)?;
     let digest = data_digest(file)?;
     file[off + 16..off + SLOT_LEN].copy_from_slice(&digest);
     let at = h.checksum_at;

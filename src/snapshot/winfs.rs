@@ -326,6 +326,13 @@ pub(crate) fn walk(dir: &Path, create: bool) -> Result<PathBuf, String> {
             CHAIN_BAD
         };
         check_handle(&f, bad).map_err(|e| format!("{}: {e}", cur.display()))?;
+        if !f
+            .metadata()
+            .map_err(|e| format!("stat {}: {e}", cur.display()))?
+            .is_dir()
+        {
+            return Err(format!("{}: not a directory", cur.display()));
+        }
         held.push(f);
     }
     Ok(cur)
@@ -366,6 +373,13 @@ mod tests {
         std::fs::create_dir_all(&leaf).unwrap();
         icacls(&parent, &["/grant", "*S-1-1-0:(DC)"]);
         assert!(walk(&leaf, false).is_err(), "a replaceable parent");
+        // A refused parent gets no child: the walk stops before it makes anything under it.
+        let child = parent.join("new-child");
+        assert!(
+            walk(&child, true).is_err(),
+            "a create under a refused parent"
+        );
+        assert!(!child.exists(), "nothing made under a refused parent");
         let target = d.path().join("target");
         std::fs::create_dir(&target).unwrap();
         let junction = d.path().join("junction");

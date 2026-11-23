@@ -27,11 +27,12 @@ pub fn stamp_file(input: &Path, out: &Path) -> Result<String, String> {
     ))
 }
 
-/// Check a stamped binary: the slot occurs once, holds a non-zero digest equal to the digest
+/// Check a stamped binary: the slot occurs once, lies wholly inside the file in a read-only
+/// section outside the masks (as `stamp` requires), holds a non-zero digest equal to the digest
 /// recomputed from the file, and the file carries the IR marker. Returns a one-line summary.
 pub fn verify_file(path: &Path) -> Result<String, String> {
     let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let off = super::pe::find_unique(&bytes, &super::key::slot_magic())?;
+    let (off, _) = super::pe::find_slot(&bytes, &super::key::slot_magic())?;
     let slot = &bytes[off..off + super::pe::SLOT_LEN];
     if slot[16..].iter().all(|&b| b == 0) {
         return Err(format!(
@@ -73,6 +74,27 @@ mod tests {
         let p = dir.join("fixture.exe");
         std::fs::write(&p, f).unwrap();
         p
+    }
+
+    /// A magic near the end of the file (the slot would run past it) or outside a read-only
+    /// section is refused, never a panic. Discrimination (2026-11-23): `find_slot`'s bounds
+    /// check disabled: the first case is refused only later ("not inside a section"), and the
+    /// test fails; restored, passes.
+    #[test]
+    fn verify_refuses_a_slot_out_of_place() {
+        let d = tempfile::tempdir().unwrap();
+        let p = product_fixture(d.path());
+        let mut f = std::fs::read(&p).unwrap();
+        f[0x800..0x810].fill(0); // no magic in .rdata any more
+        f.extend_from_slice(&super::super::key::slot_magic());
+        f.extend_from_slice(&[1u8; 8]); // 24 bytes left after the magic: short of a slot
+        std::fs::write(&p, &f).unwrap();
+        let e = verify_file(&p).unwrap_err();
+        assert!(e.contains("past the end"), "{e}");
+        f.extend_from_slice(&[1u8; 64]); // whole slot in the file, but in no section
+        std::fs::write(&p, &f).unwrap();
+        let e = verify_file(&p).unwrap_err();
+        assert!(e.contains("not inside a section"), "{e}");
     }
 
     /// Stamp, then verify; a changed `.data` byte after stamping and an unstamped file are

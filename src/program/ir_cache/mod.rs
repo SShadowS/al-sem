@@ -55,12 +55,22 @@ pub struct IrCache {
     bad_switch: Option<String>,
 }
 
-/// `ALSEM_IR_CACHE`: `on` (the default, also when unset or empty) or `off`, in any case.
-/// Anything else is off, with the warning to give (sol/Fable r1: a typo never turns the cache
-/// on).
+/// Whether the cache is on when `ALSEM_IR_CACHE` is unset or empty. **TLS-117: off on Windows
+/// until the owner's acceptance of the Windows key passes** (positive keys on the shipped,
+/// stamped binaries; the note's product acceptance); only an explicit `ALSEM_IR_CACHE=on` turns
+/// it on there. One later commit flips this to `true` everywhere once that acceptance passes.
+pub(crate) const DEFAULT_ON: bool = !cfg!(windows);
+
+/// `ALSEM_IR_CACHE`: `on` or `off`, in any case; unset or empty is [`DEFAULT_ON`]. Anything else
+/// is off, with the warning to give (sol/Fable r1: a typo never turns the cache on).
 pub(crate) fn switch(v: Option<&std::ffi::OsStr>) -> (bool, Option<String>) {
+    switch_with(v, DEFAULT_ON)
+}
+
+/// [`switch`] with the default given (tests check both defaults on any system).
+pub(crate) fn switch_with(v: Option<&std::ffi::OsStr>, default_on: bool) -> (bool, Option<String>) {
     let Some(v) = v.filter(|v| !v.is_empty()) else {
-        return (true, None);
+        return (default_on, None);
     };
     match v.to_str().map(str::to_ascii_lowercase).as_deref() {
         Some("on") => (true, None),
@@ -128,13 +138,9 @@ impl IrCache {
     }
 
     fn key_result(&self) -> &Result<IrKey, key::NoKey> {
-        self.key.get_or_init(|| {
-            let k = key::image_key();
-            if let Err(why) = &k {
-                self.warn_once(Warn::NoKey, &format!("IR cache: no image key ({why}): off"));
-            }
-            k
-        })
+        // The warning is given at the first seam use (`first_use`): on Windows the key is made
+        // in `main` before the logger is up.
+        self.key.get_or_init(key::image_key)
     }
 
     pub(crate) fn warn_once(&self, w: Warn, msg: &str) {
@@ -166,6 +172,15 @@ pub fn install_from_env() -> ReportGuard {
     let mut cache = IrCache::new(enabled, ir_dir, text_dir, verify, report);
     cache.bad_switch = bad_switch;
     let _ = INSTALLED.set(cache);
+    // TLS-117: on Windows the key is computed EAGERLY, here at the start of `main`, so the time
+    // between the image's load and its verification is milliseconds, not the hours a resident
+    // server could wait before its first dependency parse; the accepted file is then held open
+    // (deny write and delete) for the process's life (`key::win`). On Linux the key stays lazy
+    // (`/proc/self/exe` is the running inode whenever it is read).
+    #[cfg(windows)]
+    if let Some(c) = INSTALLED.get().filter(|c| c.is_on()) {
+        let _ = c.key();
+    }
     ReportGuard::new()
 }
 
@@ -190,10 +205,10 @@ pub(crate) fn create_ir_dir(ir_dir: &std::path::Path) {
             .mode(0o700)
             .create(ir_dir);
     }
-    // Windows (TLS-117): made plainly; a reader opens it only through the private walk
-    // (`snapshot::winfs::walk`), which refuses it unless the whole path is private.
+    // Windows (TLS-117): through the private walk: each component checked before anything is
+    // made under it, so a refused parent gets no child (sol r1 P1-2).
     #[cfg(not(unix))]
-    let _ = std::fs::create_dir_all(ir_dir);
+    let _ = crate::snapshot::cache::create_cache_dir(ir_dir);
 }
 
 /// TLS-116: the installed IR cache's `ir/` folder, made now as its first writer would make it,

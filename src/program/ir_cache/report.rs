@@ -55,6 +55,15 @@ impl IrCache {
         if let Some(w) = &self.bad_switch {
             log::warn!("{w}");
         }
+        if self.is_on()
+            && key.is_none()
+            && let Some(why) = self.no_key()
+        {
+            self.warn_once(
+                super::Warn::NoKey,
+                &format!("IR cache: no image key ({why}): off"),
+            );
+        }
         // No sink: nothing to format (sol r1: reading the command line here once panicked on
         // a non-UTF-8 argument, cache off or not).
         if self.report.is_none() {

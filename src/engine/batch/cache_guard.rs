@@ -112,7 +112,8 @@ pub(super) fn take() -> Result<Snapshot, String> {
     // As `snapshot::cache::cache_dir` makes it, without its warning: a folder
     // that cannot be made is the cache's to report when it is used.
     let text = crate::snapshot::cache::cache_dir_path();
-    let _ = std::fs::create_dir_all(&text);
+    // TLS-117: on Windows through the private walk (a refused parent gets no child).
+    let _ = crate::snapshot::cache::create_cache_dir(&text);
     let ir = crate::program::ir_cache::make_ir_dir();
     let mut snap = Snapshot {
         text_on: text.is_dir(),

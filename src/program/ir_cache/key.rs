@@ -249,13 +249,20 @@ mod win {
         (n != 0 && n < buf.len()).then(|| PathBuf::from(OsString::from_wide(&buf[..n])))
     }
 
-    /// Part B on one candidate: the key, or why it was refused.
+    /// The accepted candidate, held open (sharing read only: no write, no rename, no delete)
+    /// for the process's life, so nothing can replace or rename the keyed file after the key is
+    /// made. The window that stays is from the image's load to the key, milliseconds: the key is
+    /// made at the start of `main` (`install_from_env`).
+    static HELD: std::sync::OnceLock<File> = std::sync::OnceLock::new();
+
+    /// Part B on one candidate: the key and the handle it was read through, or why it was
+    /// refused.
     fn check(
         p: &Path,
         a: &pe::Canon,
         slot_rva: u32,
         loaded: &[u8; pe::SLOT_LEN],
-    ) -> Result<IrKey, String> {
+    ) -> Result<(IrKey, File), String> {
         let mut f: File = OpenOptions::new()
             .read(true)
             .share_mode(FILE_SHARE_READ)
@@ -286,7 +293,8 @@ mod win {
             }
             pe::SlotVerdict::SlotDiffers => return Err("its slot differs".into()),
         }
-        key_of(&mut &bytes[..]).ok_or_else(|| "no IR marker in the file".into())
+        let k = key_of(&mut &bytes[..]).ok_or_else(|| "no IR marker in the file".to_string())?;
+        Ok((k, f))
     }
 
     pub(super) fn image_key() -> Result<IrKey, NoKey> {
@@ -314,7 +322,10 @@ mod win {
                 continue;
             };
             match check(&p, &a, slot_rva, &loaded) {
-                Ok(k) => return Ok(k),
+                Ok((k, f)) => {
+                    let _ = HELD.set(f);
+                    return Ok(k);
+                }
                 Err(e) => why.push(format!("{what} {}: {e}", p.display())),
             }
         }
@@ -402,8 +413,15 @@ mod tests {
         std::io::stdin().read_line(&mut line).unwrap();
         println!(
             "IRKEY={}",
-            image_key().map_or_else(|_| "none".to_string(), |k| k.hex())
+            image_key().map_or_else(|e| format!("none: {e}"), |k| k.hex())
         );
+        // Windows tests act on the file while this process still runs (and holds it).
+        if std::env::var_os("ALSEM_IR_KEY_HOLD").is_some() {
+            use std::io::Write;
+            std::io::stdout().flush().unwrap();
+            line.clear();
+            std::io::stdin().read_line(&mut line).unwrap();
+        }
     }
 
     /// An engine whose executable path is replaced while it runs (a rebuild) still keys on
@@ -445,10 +463,12 @@ mod tests {
         assert_eq!(key, original.hex());
     }
 
-    /// The key a copy of this test binary reports when started (Windows: design B runs in it).
+    /// Run a copy of this test binary as [`key_child_mode`]: `before` runs before it makes its
+    /// key, `after` after it printed the key while it still runs (it holds the accepted file).
+    /// Returns what it printed after `IRKEY=` (the key's hex, or `none: <reason>`).
     #[cfg(windows)]
-    fn child_key(exe: &std::path::Path, between: impl FnOnce()) -> String {
-        use std::io::Write;
+    fn child_key(exe: &std::path::Path, before: impl FnOnce(), after: impl FnOnce()) -> String {
+        use std::io::{BufRead, Write};
         let mut child = std::process::Command::new(exe)
             .args([
                 "--ignored",
@@ -458,52 +478,88 @@ mod tests {
                 "--test-threads=1",
             ])
             .env("ALSEM_IR_KEY_CHILD", "1")
+            .env("ALSEM_IR_KEY_HOLD", "1")
             .current_dir(std::env::temp_dir())
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .spawn()
             .unwrap();
-        between();
-        writeln!(child.stdin.take().unwrap()).unwrap();
-        let out = child.wait_with_output().unwrap();
-        assert!(out.status.success());
-        String::from_utf8_lossy(&out.stdout)
-            .lines()
-            .find_map(|l| l.split("IRKEY=").nth(1).map(|k| k.trim().to_string()))
-            .expect("the child printed its key")
+        let mut stdin = child.stdin.take().unwrap();
+        let mut out = std::io::BufReader::new(child.stdout.take().unwrap());
+        before();
+        writeln!(stdin).unwrap();
+        let mut key = None;
+        let mut line = String::new();
+        while key.is_none() && out.read_line(&mut line).unwrap() > 0 {
+            key = line.split("IRKEY=").nth(1).map(|k| k.trim().to_string());
+            line.clear();
+        }
+        after();
+        writeln!(stdin).unwrap();
+        assert!(child.wait().unwrap().success());
+        key.expect("the child printed its key")
     }
 
-    /// TLS-117 (Windows, the owner's acceptance run): a stamped copy of this test binary keys
-    /// on its own bytes, even after an installer-style replacement (the running file renamed
-    /// away, a rival build at its old name); an unstamped copy gets no key.
+    /// A `.text` byte of `file` changed (the middle of the section): a rival build with the
+    /// same headers and a valid slot, which design B must refuse at the canonical comparison.
+    #[cfg(windows)]
+    fn rival(file: &[u8]) -> Vec<u8> {
+        let h = super::super::pe::Headers::parse(file).unwrap();
+        let s = h.sections.iter().find(|s| s.named(".text")).unwrap();
+        let mut f = file.to_vec();
+        f[s.raw_ptr as usize + (s.raw_size.min(s.mapped_len()) / 2) as usize] ^= 1;
+        f
+    }
+
+    /// TLS-117 (Windows; the owner's acceptance run): an unstamped copy of this test binary has
+    /// no key; a stamped copy keys on its own bytes and holds the file (a rename or delete of
+    /// it fails while it runs); and when its folder is renamed away and a rival build put at
+    /// its old spelling before it makes its key (the mapped name keeps the old path, as the
+    /// owner's probe run showed), both candidates are refused at the canonical comparison.
     #[cfg(windows)]
     #[test]
     fn windows_stamped_copy_keys_on_its_image() {
-        let dir = tempfile::tempdir().unwrap();
-        let exe = dir.path().join("engine.exe");
+        let top = tempfile::tempdir().unwrap();
+        let dir = top.path().join("dir");
+        std::fs::create_dir(&dir).unwrap();
+        let exe = dir.join("engine.exe");
         std::fs::copy(std::env::current_exe().unwrap(), &exe).unwrap();
-        assert_eq!(
-            child_key(&exe, || {}),
-            "none",
-            "an unstamped copy has no key"
-        );
+        let k = child_key(&exe, || {}, || {});
+        assert!(k.starts_with("none") && k.contains("unstamped"), "{k}");
         super::super::stamp::stamp_file(&exe, &exe).unwrap();
         let original = key_of(&mut std::fs::File::open(&exe).unwrap()).expect("marked");
-        assert_eq!(
-            child_key(&exe, || {}),
-            original.hex(),
-            "a stamped copy keys"
+        let held = std::cell::Cell::new(None);
+        let k = child_key(
+            &exe,
+            || {},
+            || {
+                held.set(Some((
+                    std::fs::rename(&exe, dir.join("moved.exe")).map_err(|e| e.raw_os_error()),
+                    std::fs::remove_file(&exe).map_err(|e| e.raw_os_error()),
+                )));
+            },
         );
-        let key = child_key(&exe, || {
-            std::fs::rename(&exe, dir.path().join("away.exe")).unwrap();
-            let mut rival = std::fs::read(dir.path().join("away.exe")).unwrap();
-            let at = rival.len() / 3; // somewhere in the code or constants
-            rival[at] ^= 1;
-            std::fs::write(&exe, rival).unwrap();
-        });
-        assert!(
-            key == original.hex() || key == "none",
-            "the running image's key or none, never another: {key}"
+        assert_eq!(k, original.hex(), "a stamped copy keys");
+        assert_eq!(
+            held.take(),
+            Some((Err(Some(32)), Err(Some(32)))),
+            "rename and delete refused with a sharing violation while the key's handle is held"
+        );
+        let stamped = std::fs::read(&exe).unwrap();
+        let k = child_key(
+            &exe,
+            || {
+                std::fs::rename(&dir, top.path().join("dir-away")).unwrap();
+                std::fs::create_dir(&dir).unwrap();
+                std::fs::write(&exe, rival(&stamped)).unwrap();
+            },
+            || {},
+        );
+        assert!(k.starts_with("none"), "never a key here: {k}");
+        assert_eq!(
+            k.matches("canonical hash differs").count(),
+            2,
+            "both candidates refused at the canonical comparison: {k}"
         );
     }
 }

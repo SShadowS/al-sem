@@ -1184,15 +1184,33 @@ mod tests {
     #[test]
     fn the_switch_accepts_only_on_and_off() {
         use std::ffi::OsStr;
-        let s = |v: Option<&str>| super::super::switch(v.map(OsStr::new));
-        assert_eq!(s(None), (true, None));
-        assert_eq!(s(Some("")), (true, None));
-        assert_eq!(s(Some("ON")), (true, None));
-        assert_eq!(s(Some("Off")), (false, None));
-        for typo in ["of", "0", "false", "yes"] {
-            let (on, warn) = s(Some(typo));
-            assert!(!on && warn.is_some(), "{typo}");
+        for default_on in [true, false] {
+            let s = |v: Option<&str>| super::super::switch_with(v.map(OsStr::new), default_on);
+            assert_eq!(s(None), (default_on, None));
+            assert_eq!(s(Some("")), (default_on, None));
+            assert_eq!(s(Some("ON")), (true, None));
+            assert_eq!(s(Some("Off")), (false, None));
+            for typo in ["of", "0", "false", "yes"] {
+                let (on, warn) = s(Some(typo));
+                assert!(!on && warn.is_some(), "{typo}");
+            }
         }
+    }
+
+    /// TLS-117: the cache is off by default on Windows until the acceptance passes, on by
+    /// default elsewhere. Discrimination (2026-11-23): `DEFAULT_ON` inverted (`cfg!(windows)`):
+    /// fails on Linux; restored, passes.
+    #[test]
+    fn the_default_is_off_on_windows_only() {
+        let default = !cfg!(windows);
+        assert_eq!(super::super::switch(None).0, default, "unset");
+        let empty = std::ffi::OsStr::new("");
+        assert_eq!(super::super::switch(Some(empty)).0, default, "empty");
+        let on = std::ffi::OsStr::new("on");
+        assert!(
+            super::super::switch(Some(on)).0,
+            "an explicit on, everywhere"
+        );
     }
 
     /// The child half of [`report_end_does_not_abort_an_unwind`].

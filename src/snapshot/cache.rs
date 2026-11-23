@@ -27,10 +27,25 @@ use std::sync::Arc;
 /// `<temp_dir>/al-ch-snapshot-cache` when the OS cache dir is unavailable.
 pub fn cache_dir() -> PathBuf {
     let dir = cache_dir_path();
-    if let Err(e) = std::fs::create_dir_all(&dir) {
+    if let Err(e) = create_cache_dir(&dir) {
         log::warn!("Failed to create snapshot cache dir {}: {e}", dir.display());
     }
     dir
+}
+
+/// Make a cache folder (and its missing parents). Unix: `create_dir_all`; a reader checks it
+/// [`private`] on open. Windows (TLS-117): through the private walk, so each component is checked
+/// before anything is made under it and a refused parent gets no child
+/// (`crate::snapshot::winfs::walk`).
+pub(crate) fn create_cache_dir(dir: &Path) -> std::result::Result<(), String> {
+    #[cfg(windows)]
+    {
+        crate::snapshot::winfs::walk(dir, true).map(|_| ())
+    }
+    #[cfg(not(windows))]
+    {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())
+    }
 }
 
 /// [`cache_dir`]'s path, made nowhere (ENG-110: installing the IR cache must not create it).
@@ -526,7 +541,11 @@ impl<'a> CacheDir<'a> {
     /// when it is busy. TLS-117: `std::fs::File`'s locks, which are `flock` on Unix (the same
     /// lock as before, so an older engine binary and a newer one still exclude each other:
     /// `an_old_flock_holder_blocks_the_file_lock`) and `LockFileEx` on Windows (real locks there
-    /// for the text cache too, which took none before).
+    /// for the text cache too, which took none before). On Unix a child this process is spawning
+    /// shares the lock file's open file description from `fork` to `exec` (the fd is
+    /// close-on-exec), so a `Now` lock can be refused for that moment even after this process
+    /// released it: the caller then skips a prune or a publish, which is benign (the next use
+    /// does it).
     pub(crate) fn lock(&self, name: &str, kind: LockKind) -> Option<RepairLock> {
         #[cfg(unix)]
         let f = {
@@ -572,6 +591,21 @@ impl<'a> CacheDir<'a> {
         locked.then_some(RepairLock(f))
     }
 
+    /// Tests: a `Now` lock that is expected to be granted, tried again for up to 2 s. A child
+    /// another test is spawning can hold a copy of the lock file's description from `fork` to
+    /// `exec` (see [`Self::lock`]), which refuses the lock for that moment (TLS-117, Fable r1).
+    #[cfg(test)]
+    pub(crate) fn lock_soon(&self, name: &str, kind: LockKind) -> Option<RepairLock> {
+        let start = std::time::Instant::now();
+        loop {
+            let l = self.lock(name, kind);
+            if l.is_some() || start.elapsed() > std::time::Duration::from_secs(2) {
+                return l;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
     /// Write entry `name` from `writer` (which writes the whole entry): it goes to a unique
     /// temp file in the directory (owner-only, created exclusively), which is then renamed into
     /// place. Two writers never share a temp file, so a rename only ever installs a complete
@@ -587,21 +621,11 @@ impl<'a> CacheDir<'a> {
         replace: bool,
         writer: impl FnOnce(&mut dyn Write) -> Result<()>,
     ) -> Result<()> {
-        use std::sync::atomic::{AtomicU64, Ordering};
-        static NEXT: AtomicU64 = AtomicU64::new(0);
-        let stem = name.split('.').next().unwrap_or(name);
         // A name taken (a crash's leftover, the same pid in another pid namespace) is skipped:
         // the exclusive create refuses it, and the next name differs in its counter and time.
         let (tmp, file) = (0..16)
             .find_map(|_| {
-                let nanos = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map_or(0, |d| d.subsec_nanos());
-                let tmp = format!(
-                    "{stem}-{}-{}-{nanos}.tmp",
-                    std::process::id(),
-                    NEXT.fetch_add(1, Ordering::Relaxed)
-                );
+                let tmp = temp_name(name);
                 match self.openat(&tmp, libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL, 0o600) {
                     Ok(f) => Some(Ok((tmp, f))),
                     Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => None,
@@ -648,19 +672,9 @@ impl<'a> CacheDir<'a> {
         replace: bool,
         writer: impl FnOnce(&mut dyn Write) -> Result<()>,
     ) -> Result<()> {
-        use std::sync::atomic::{AtomicU64, Ordering};
-        static NEXT: AtomicU64 = AtomicU64::new(0);
-        let stem = name.split('.').next().unwrap_or(name);
         let (tmp, file) = (0..16)
             .find_map(|_| {
-                let nanos = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map_or(0, |d| d.subsec_nanos());
-                let tmp = self.path.join(format!(
-                    "{stem}-{}-{}-{nanos}.tmp",
-                    std::process::id(),
-                    NEXT.fetch_add(1, Ordering::Relaxed)
-                ));
+                let tmp = self.path.join(temp_name(name));
                 match std::fs::OpenOptions::new()
                     .write(true)
                     .create_new(true)
@@ -695,6 +709,23 @@ impl<'a> CacheDir<'a> {
         }
         published
     }
+}
+
+/// A fresh temp file name for entry `name` of [`CacheDir::write`], on every system:
+/// `<name up to its first dot>-<pid>-<n>-<nanos>.tmp` (the IR cache's prune recognises this
+/// shape, `prune::is_temp`; TLS-117 made the Windows writer use it too).
+pub(crate) fn temp_name(name: &str) -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let stem = name.split('.').next().unwrap_or(name);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.subsec_nanos());
+    format!(
+        "{stem}-{}-{}-{nanos}.tmp",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    )
 }
 
 /// A held lock ([`CacheDir::lock`]); released when dropped.
@@ -1207,6 +1238,60 @@ mod tests {
         );
     }
 
+    /// TLS-117 (note section 6): an entry or lock file that another user may write (Everyone
+    /// granted modify) is refused at each call site that opens one: `read` (the mapped
+    /// entry), `read_owned` and `lock`, all through `check_private_file`. The same files with
+    /// this user's rights only are accepted (the control).
+    #[cfg(windows)]
+    #[test]
+    fn a_permissive_entry_is_refused_at_every_open() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = CacheDir::open(dir.path()).unwrap();
+        let img = two_files();
+        let hash = img.content_hash();
+        let files = extract_embedded_source(&img).unwrap();
+        let path = entry(dir.path(), &img);
+        let name = path.file_name().unwrap().to_str().unwrap().to_string();
+        d.write(&name, true, |o| write_entry(o, hash, &files))
+            .unwrap();
+        d.write("stamp", true, |o| Ok(o.write_all(b"1")?)).unwrap();
+        drop(
+            d.lock("x.lock", LockKind::Exclusive)
+                .expect("make the lock file"),
+        );
+        // control: private files are accepted
+        assert!(d.read(&name, hash).unwrap().is_some(), "control: read");
+        assert!(
+            d.read_owned("stamp", 8).unwrap().is_some(),
+            "control: read_owned"
+        );
+        assert!(
+            d.lock_soon("x.lock", LockKind::ExclusiveNow).is_some(),
+            "control: lock"
+        );
+        for f in [name.as_str(), "stamp", "x.lock"] {
+            let st = std::process::Command::new("icacls")
+                .arg(dir.path().join(f))
+                .args(["/grant", "*S-1-1-0:(M)"])
+                .stdout(std::process::Stdio::null())
+                .status()
+                .unwrap();
+            assert!(st.success(), "icacls {f}");
+        }
+        let Err(e) = d.read(&name, hash) else {
+            panic!("read accepted a permissive entry")
+        };
+        assert!(format!("{e:#}").contains("not private"), "{e:#}");
+        let Err(e) = d.read_owned("stamp", 8) else {
+            panic!("read_owned accepted a permissive file")
+        };
+        assert!(format!("{e:#}").contains("not private"), "{e:#}");
+        assert!(
+            d.lock("x.lock", LockKind::Exclusive).is_none(),
+            "lock refuses"
+        );
+    }
+
     /// A writer that finds a valid entry already published keeps it (no-clobber), so every
     /// engine maps the one file; a refused entry is replaced.
     #[test]
@@ -1447,9 +1532,9 @@ mod tests {
         assert!(d.lock("x.lock", LockKind::SharedNow).is_none());
         assert!(d.lock("x.lock", LockKind::ExclusiveNow).is_none());
         drop(ex);
-        let sh = d.lock("x.lock", LockKind::SharedNow).expect("shared");
+        let sh = d.lock_soon("x.lock", LockKind::SharedNow).expect("shared");
         assert!(
-            d.lock("x.lock", LockKind::SharedNow).is_some(),
+            d.lock_soon("x.lock", LockKind::SharedNow).is_some(),
             "shared with shared"
         );
         assert!(
@@ -1457,7 +1542,7 @@ mod tests {
             "the reverse: exclusive refused while shared is held"
         );
         drop(sh);
-        assert!(d.lock("x.lock", LockKind::ExclusiveNow).is_some());
+        assert!(d.lock_soon("x.lock", LockKind::ExclusiveNow).is_some());
     }
 
     /// TLS-117: the locks are `std::fs::File`'s now; on Unix they must still be `flock`, so an
@@ -1481,11 +1566,9 @@ mod tests {
             .write(true)
             .open(dir.path().join("x.lock"))
             .unwrap();
+        // Blocking: a spawning child may hold the dropped lock's description for a moment.
         // SAFETY: a valid fd.
-        assert_eq!(
-            unsafe { libc::flock(old.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
-            0
-        );
+        assert_eq!(unsafe { libc::flock(old.as_raw_fd(), libc::LOCK_EX) }, 0);
         assert!(
             d.lock("x.lock", LockKind::ExclusiveNow).is_none(),
             "exclusive beside old"
@@ -1497,7 +1580,7 @@ mod tests {
         // SAFETY: a valid fd.
         assert_eq!(unsafe { libc::flock(old.as_raw_fd(), libc::LOCK_UN) }, 0);
         assert!(
-            d.lock("x.lock", LockKind::ExclusiveNow).is_some(),
+            d.lock_soon("x.lock", LockKind::ExclusiveNow).is_some(),
             "after the old unlock"
         );
     }
