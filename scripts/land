@@ -100,9 +100,6 @@ bad_usage() {
     usage >&2
     exit 2
 }
-# ⟨TLS-105⟩ The mem-wait's deadline counts awake time.
-# shellcheck source=awake-clock
-source "$(dirname "$0")/awake-clock"
 
 # A git hook exports GIT_DIR and friends, which beat `git -C` (src/git_env.rs).
 # shellcheck disable=SC2046
@@ -195,6 +192,15 @@ mem_timeout="${LAND_MEM_TIMEOUT_S:-1800}"
 # would exit 0 with nothing gated.
 if ((!dry_run)); then
     [[ "$cdo_ws" == /* && -d "$cdo_ws" ]] || bad_usage "CDO_WS '$cdo_ws': an absolute path to an existing folder"
+    # ⟨TLS-105⟩ The mem-wait's deadline counts awake time (scripts/awake-clock).
+    # Loaded only for a run that waits (`--help` and `--dry-run` work without
+    # it; review r1, sol), and before any lock: a run that lacks it stops here.
+    if ((mem_min_gb > 0)); then
+        [[ -r "$(dirname "$0")/awake-clock" ]] \
+            || die "$(dirname "$0")/awake-clock is missing: the mem-wait needs it; nothing was done"
+        # shellcheck source=awake-clock
+        source "$(dirname "$0")/awake-clock"
+    fi
 fi
 command -v jq >/dev/null || die "jq is needed for the timing log"
 
@@ -600,10 +606,7 @@ if ((mem_min_gb > 0)); then
             break
         fi
         awake_read
-        if ((awake_new_sleep)); then
-            echo "land: mem-wait: the host slept $awake_new_sleep s during this wait: it goes on that much longer" \
-                | tee -a "$run/mem-wait.log"
-        fi
+        [[ -z "$awake_msg" ]] || echo "land: mem-wait: $awake_msg" | tee -a "$run/mem-wait.log"
         left_us=$((mem_timeout * 1000000 - awake_us))
         if ((left_us <= 0)); then
             echo "gave up: MemAvailable $((avail_kb >> 20)) GB (need $mem_min_gb)" >>"$run/mem-wait.log"

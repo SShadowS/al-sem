@@ -114,8 +114,18 @@ impl Slot {
     /// A `cdo-slot <args>` command as Claude session `session`, with BASE_ENV
     /// and then `env` (`CLAUDE_PID` and `CDO_SLOT_TOKEN` only when `env` gives them).
     fn cmd(&self, session: &str, args: &[&str], env: &[(&str, &str)]) -> std::process::Command {
+        self.cmd_at(SLOT.as_ref(), session, args, env)
+    }
+    /// [`Slot::cmd`] with the cdo-slot at `script` (one in a [`link_folder`]).
+    fn cmd_at(
+        &self,
+        script: &std::path::Path,
+        session: &str,
+        args: &[&str],
+        env: &[(&str, &str)],
+    ) -> std::process::Command {
         let mut cmd = scrubbed(std::process::Command::new("bash"));
-        cmd.arg(SLOT)
+        cmd.arg(script)
             .args(args)
             .env("CDO_SLOT_DIR", self.dir())
             .env("CLAUDE_CODE_SESSION_ID", session)
@@ -1743,7 +1753,8 @@ fn cdo_slot_timed_wait_survives_a_host_suspend() {
 ///
 /// Mutation (2026-11-23): the timeout check on wall time again (`awake_us`
 /// plus `awake_slept` seconds) -> gave up 2.2 s after the suspend (red);
-/// restored, green.
+/// restored, green. Review r1: `awake_slept` not updated after a report (in
+/// scripts/awake-clock) -> the suspend line said twice (red); restored, green.
 #[test]
 fn cdo_slot_acquire_timeout_survives_a_host_suspend() {
     let s = Slot::new();
@@ -1783,10 +1794,10 @@ fn cdo_slot_acquire_timeout_survives_a_host_suspend() {
     let after = slept_at.expect("B never said it waits").elapsed();
     assert_eq!(code, Some(1), "{text}{err}");
     assert!(err.contains("not taken after 2 s"), "{text}{err}");
-    assert!(
-        text.contains("the host slept 10 s during this wait"),
-        "{text}{err}"
-    );
+    // Said exactly once (review r1, sol): each later read sees the same sleep.
+    let said =
+        "cdo-slot: --timeout: the host slept 10 s during this wait: it goes on that much longer";
+    assert_eq!(text.matches(said).count(), 1, "{text}{err}");
     // The awake deadline is ~12 s out; the wall one passed 2 s after the start.
     assert!(
         after >= std::time::Duration::from_secs(8),
@@ -1843,7 +1854,7 @@ fn cdo_slot_go_survives_a_host_suspend() {
     });
     std::fs::write(&reading, "110").unwrap();
     let slept_at = std::time::Instant::now();
-    let said = "the host slept 10 s while a keeper was to take its go";
+    let said = "cdo-slot: go: the host slept 10 s during this wait: it goes on that much longer";
     let mut err = String::new();
     let mut waiting_at_5s = None;
     {
@@ -1864,11 +1875,241 @@ fn cdo_slot_go_survives_a_host_suspend() {
         }
     }
     let code = held.0.wait().unwrap().code();
-    assert!(err.contains(said), "{err}");
+    assert_eq!(err.matches(said).count(), 1, "said once: {err}");
     assert_eq!(waiting_at_5s, Some(true), "gave up within 5 s: {err}");
     assert_eq!(code, Some(0), "the go was refused: {err}");
     assert_eq!(s.probe(), "held=1 own=0 timed=0");
     assert_eq!(s.run("A", &["release"], &[]).0, Some(0));
+}
+
+/// A folder of links to the real scripts named in `with`, for a cdo-slot run
+/// from there: plus, with `stub`, a bash `host-suspended` of that body (a clock
+/// that fails, a slow one, an old one), so no test hook reaches the run. A
+/// script left out of `with` is missing there (a partial copy).
+fn link_folder(s: &Slot, with: &[&str], stub: Option<&str>) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let bin = s.0.path().join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let real = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts");
+    for f in with {
+        std::os::unix::fs::symlink(real.join(f), bin.join(f)).unwrap();
+    }
+    if let Some(body) = stub {
+        let path = bin.join("host-suspended");
+        std::fs::write(&path, format!("#!/bin/bash\n{body}\n")).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    bin
+}
+
+/// ⟨TLS-105 review r1⟩ cdo-slot loads scripts/awake-clock only for a wait with
+/// a deadline (sol P1, Fable 2). A copy without it still answers `probe` and
+/// `status` (the guard's probe: one that failed would let work run beside a
+/// timing) and `release`; an `acquire` says the helper is missing and takes
+/// nothing.
+///
+/// Mutation (2026-11-23): the helper sourced at the top again (as in e0d333e8)
+/// -> `probe` from the copy fails (red); restored, green.
+#[test]
+fn cdo_slot_without_its_clock_helper_still_probes() {
+    let s = Slot::new();
+    let copy = link_folder(&s, &["cdo-slot", "host-suspended"], None).join("cdo-slot");
+    let run = |session: &str, args: &[&str]| {
+        let out = s.cmd_at(&copy, session, args, &[]).output().unwrap();
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        (out.status.code(), text)
+    };
+    assert_eq!(run("P", &["status"]), (Some(0), "free\n".into()));
+    let (code, text) = run("P", &["probe"]);
+    assert_eq!(
+        (code, text.lines().next()),
+        (Some(0), Some("held=0 own=0 timed=0")),
+        "{text}"
+    );
+    let (code, text) = run("A", &["acquire", "lane", "no helper"]);
+    assert_eq!(code, Some(1), "{text}");
+    assert!(text.contains("awake-clock is missing"), "{text}");
+    assert!(text.contains("nothing was taken"), "{text}");
+    assert_eq!(s.probe(), "held=0 own=0 timed=0", "it took nothing");
+    // A hold taken by the full scripts: the copy sees it and releases it.
+    assert_eq!(s.run("A", &["acquire", "lane", "full"], &[]).0, Some(0));
+    let (code, text) = run("P", &["probe"]);
+    assert_eq!(
+        (code, text.lines().next()),
+        (Some(0), Some("held=1 own=0 timed=0")),
+        "{text}"
+    );
+    let (code, text) = run("A", &["release"]);
+    assert_eq!(code, Some(0), "{text}");
+    until("released", &|| s.probe() == "held=0 own=0 timed=0");
+}
+
+/// ⟨TLS-105 review r1, Fable 1⟩ A clock that stops reading does not make a wait
+/// endless. `host-suspended` reads once (the wait's start), then fails: the
+/// wait keeps the last awake time for two failed reads, falls back to wall time
+/// from the last good reading at the third, says so once, and gives up.
+///
+/// Mutation (2026-11-23): the fall back dropped (the third failure kept the
+/// last awake time like the first two) -> still waiting after 20 s (red);
+/// restored, green.
+#[test]
+fn cdo_slot_a_clock_that_stops_reading_falls_back_to_wall_time() {
+    let s = Slot::new();
+    let real = concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/host-suspended");
+    let bin = link_folder(
+        &s,
+        &["cdo-slot", "awake-clock"],
+        Some(&format!(
+            "d=$(dirname \"$0\")\n[[ -e \"$d/read-once\" ]] && exit 1\n: >\"$d/read-once\"\nexec '{real}' \"$@\""
+        )),
+    );
+    assert_eq!(s.run("A", &["acquire", "a", "hold"], &[]).0, Some(0));
+    let mut b = Reap(
+        s.cmd_at(
+            &bin.join("cdo-slot"),
+            "B",
+            &["acquire", "b", "late", "--wait", "--timeout", "2"],
+            &[],
+        )
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap(),
+    );
+    let started = std::time::Instant::now();
+    let code = loop {
+        if let Some(st) = b.0.try_wait().unwrap() {
+            break st.code();
+        }
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(20),
+            "still waiting after 20 s: a clock that stopped reading made the wait endless"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    };
+    let mut text = String::new();
+    std::io::Read::read_to_string(&mut b.0.stdout.take().unwrap(), &mut text).unwrap();
+    std::io::Read::read_to_string(&mut b.0.stderr.take().unwrap(), &mut text).unwrap();
+    assert_eq!(code, Some(1), "{text}");
+    assert!(text.contains("not taken after 2 s"), "{text}");
+    let said =
+        "cdo-slot: --timeout: the awake clock failed 3 reads in a row: this wait counts wall time";
+    assert_eq!(text.matches(said).count(), 1, "{text}");
+}
+
+/// ⟨TLS-105 review r1⟩ The keeper took its go while the clocks were read at the
+/// deadline (sol P2, Fable 5): that is a go, not a stopped keeper. The keeper
+/// is stopped; at go's first deadline read, the stand-in `host-suspended`
+/// lets it go on and waits until it has taken the go, then answers (real
+/// clocks: past the 1 s deadline). The acquire takes the hold (exit 0).
+///
+/// Mutation (2026-11-23): the go file's second check on expiry dropped -> the
+/// acquire refuses the go and ends the keeper, exit 1 (red); restored, green.
+#[test]
+fn cdo_slot_go_taken_during_the_deadline_read_is_a_go() {
+    let s = Slot::new();
+    let real = concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/host-suspended");
+    let slot = s.dir();
+    let stub = format!(
+        "d=$(dirname \"$0\")\n\
+         if [[ -e \"$d/cont\" ]]; then\n\
+           p=$(<\"$d/cont\"); rm -f \"$d/cont\"; kill -CONT \"$p\"\n\
+           for i in $(seq 400); do compgen -G '{}/go.*' >/dev/null || break; sleep 0.05; done\n\
+         fi\n\
+         exec '{real}' \"$@\"",
+        slot.display()
+    );
+    let bin = link_folder(&s, &["cdo-slot", "awake-clock"], Some(&stub));
+    let mut held = Reap(
+        s.cmd_at(
+            &bin.join("cdo-slot"),
+            "A",
+            &["acquire", "lane", "ack"],
+            &[
+                ("CDO_SLOT_TEST_PAUSE_HOLDGO_S", "60"),
+                ("CDO_SLOT_LOCK_WAIT_S", "1"),
+            ],
+        )
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap(),
+    );
+    s.wait_paused();
+    let k = keepers(&s, b"_keep\0hold\0");
+    assert_eq!(k.len(), 1, "precondition: one hold keeper");
+    // SAFETY: SIGSTOP to this test's own hold keeper.
+    unsafe { libc::kill(k[0], libc::SIGSTOP) };
+    s.resume();
+    // After go's first clock read (its start), before its deadline read.
+    until("the go file", &|| {
+        std::fs::read_dir(&slot)
+            .unwrap()
+            .flatten()
+            .any(|e| e.file_name().to_string_lossy().starts_with("go."))
+    });
+    std::fs::write(bin.join("cont"), k[0].to_string()).unwrap();
+    let mut err = String::new();
+    std::io::Read::read_to_string(&mut held.0.stderr.take().unwrap(), &mut err).unwrap();
+    let code = held.0.wait().unwrap().code();
+    assert!(
+        !bin.join("cont").exists(),
+        "precondition: the deadline read let the keeper go on"
+    );
+    assert_eq!(code, Some(0), "an acknowledged go was refused: {err}");
+    assert_eq!(s.probe(), "held=1 own=0 timed=0");
+    assert_eq!(s.run("A", &["release"], &[]).0, Some(0));
+}
+
+/// ⟨TLS-105 review r1, sol P4⟩ An old `host-suspended` (the suspended seconds
+/// only, no `--clocks` fields) leaves the wait on wall time: a suspend is then
+/// counted in the wait, and the line says so instead of "it goes on that much
+/// longer". (Wording only: no discrimination proof, by the owner's rule.)
+#[test]
+fn cdo_slot_an_old_clock_says_the_wall_clock_counts_the_suspend() {
+    let s = Slot::new();
+    let bin = link_folder(
+        &s,
+        &["cdo-slot", "awake-clock"],
+        Some("cat \"$(dirname \"$0\")/suspended\""),
+    );
+    let reading = bin.join("suspended");
+    std::fs::write(&reading, "100").unwrap();
+    assert_eq!(s.run("A", &["acquire", "a", "hold"], &[]).0, Some(0));
+    let mut b = Reap(
+        s.cmd_at(
+            &bin.join("cdo-slot"),
+            "B",
+            &["acquire", "b", "late", "--wait", "--timeout", "3"],
+            &[],
+        )
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap(),
+    );
+    let mut text = String::new();
+    {
+        use std::io::BufRead;
+        let lines = std::io::BufReader::new(b.0.stdout.take().unwrap()).lines();
+        for line in lines {
+            let line = line.unwrap();
+            if line.contains("waiting: held by a (hold)") {
+                std::fs::write(&reading, "110").unwrap();
+            }
+            text.push_str(&line);
+            text.push('\n');
+        }
+    }
+    std::io::Read::read_to_string(&mut b.0.stderr.take().unwrap(), &mut text).unwrap();
+    assert_eq!(b.0.wait().unwrap().code(), Some(1), "{text}");
+    let said = "cdo-slot: --timeout: the host slept 10 s during this wait: the wall clock counts it in this wait (no awake clock)";
+    assert_eq!(text.matches(said).count(), 1, "{text}");
+    assert!(!text.contains("goes on that much longer"), "{text}");
 }
 
 /// ⟨TLS-89⟩ The build scripts a timing waits for, and the grace wait:

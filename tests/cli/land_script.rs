@@ -470,25 +470,29 @@ fn land_gates_in_order_and_pushes_only_on_request() {
 /// so land runs from a folder of links to the real scripts whose
 /// `host-suspended` sets the hook for itself only, reading `suspended` there.
 ///
+/// Review r1 (sol P4): it gives up within 14 s of the suspend, which pins the
+/// naps' stop at the deadline (a fixed 15 s nap gives up at ~15 s), and each
+/// line is said exactly once.
+///
 /// Mutation (2026-11-23): the mem-wait on wall time again (`awake_us` plus
 /// `awake_slept` seconds) -> gave up 3.1 s after the suspend (red); restored,
-/// green.
+/// green. The nap's cap dropped (a fixed 15 s nap again) -> gave up past 14 s
+/// (red); restored, green.
 #[test]
 fn land_mem_wait_survives_a_host_suspend() {
     use std::os::unix::fs::PermissionsExt;
     let r = repo();
-    let bin = r.root.join("bin");
-    std::fs::create_dir_all(&bin).unwrap();
+    let bin = link_scripts(
+        &r,
+        &[
+            "land",
+            "changelog-merge",
+            "cdo-slot",
+            "awake-clock",
+            "agentflow",
+        ],
+    );
     let real = Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts");
-    for f in [
-        "land",
-        "changelog-merge",
-        "cdo-slot",
-        "awake-clock",
-        "agentflow",
-    ] {
-        std::os::unix::fs::symlink(real.join(f), bin.join(f)).unwrap();
-    }
     let stub = bin.join("host-suspended");
     std::fs::write(
         &stub,
@@ -534,14 +538,19 @@ fn land_mem_wait_survives_a_host_suspend() {
     let after = slept_at.expect("land never said it waits").elapsed();
     assert_eq!(code, Some(1), "{text}{err}");
     assert!(err.contains("FAIL at mem-wait"), "{text}{err}");
-    let said = "land: mem-wait: the host slept 10 s during this wait";
-    assert!(text.contains(said), "{text}{err}");
+    let said = "land: mem-wait: the host slept 10 s during this wait: it goes on that much longer";
+    assert_eq!(text.matches(said).count(), 1, "{text}{err}");
+    assert_eq!(
+        text.matches("land: mem-wait: MemAvailable").count(),
+        1,
+        "{text}{err}"
+    );
     let logs: Vec<String> = std::fs::read_dir(r.root.join("logs"))
         .unwrap()
         .map(|e| std::fs::read_to_string(e.unwrap().path().join("mem-wait.log")).unwrap())
         .collect();
     assert!(
-        logs.len() == 1 && logs[0].contains(said) && logs[0].contains("gave up"),
+        logs.len() == 1 && logs[0].matches(said).count() == 1 && logs[0].contains("gave up"),
         "{logs:?}"
     );
     // The awake deadline is ~12 s out; the wall one passed 2 s after the start.
@@ -549,7 +558,61 @@ fn land_mem_wait_survives_a_host_suspend() {
         after >= std::time::Duration::from_secs(8),
         "gave up {after:?} after the suspend: the suspend used up the mem-wait"
     );
+    assert!(
+        after < std::time::Duration::from_secs(14),
+        "gave up {after:?} after the suspend: a nap went past the deadline"
+    );
     assert_eq!(r.calls(), ["ci-steps all"], "no memory, no cdo-gate");
+}
+
+/// A folder of links to the real scripts named in `with` (land's test copies:
+/// a stand-in `host-suspended` beside them, or a script left out).
+fn link_scripts(r: &Repo, with: &[&str]) -> PathBuf {
+    let bin = r.root.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let real = Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts");
+    for f in with {
+        std::os::unix::fs::symlink(real.join(f), bin.join(f)).unwrap();
+    }
+    bin
+}
+
+/// ⟨TLS-105 review r1⟩ land loads scripts/awake-clock only for a run that waits
+/// for memory (sol P1): `--help` and `--dry-run` work without it, and a run
+/// that needs it says so before it does anything (no landing branch made).
+///
+/// Mutation (2026-11-23): the helper sourced at the top again (as in e0d333e8)
+/// -> `--help` fails (red); restored, green.
+#[test]
+fn land_without_its_clock_helper_still_helps_and_predicts() {
+    let r = repo();
+    let bin = link_scripts(&r, &["land", "changelog-merge", "cdo-slot", "agentflow"]);
+    let land = bin.join("land");
+    let (code, text) = run_out(r.land_cmd(&land, &["--help"], &[]));
+    assert_eq!(code, Some(0), "{text}");
+    assert!(text.contains("usage: scripts/land"), "{text}");
+    let (code, text) = run_out(r.land_cmd(&land, &["--dry-run", "tools/tls-58-x"], &[]));
+    assert_eq!(code, Some(0), "{text}");
+    let (code, text) = run_out(r.land_cmd(&land, &["tools/tls-58-x"], &[("LAND_MEM_MIN_GB", "1")]));
+    assert_eq!(code, Some(1), "{text}");
+    assert!(text.contains("awake-clock is missing"), "{text}");
+    assert!(
+        r.landing_branches().is_empty(),
+        "{:?}",
+        r.landing_branches()
+    );
+    assert!(r.calls().is_empty(), "{:?}", r.calls());
+}
+
+/// A command's (exit, stdout + stderr).
+fn run_out(mut cmd: std::process::Command) -> (Option<i32>, String) {
+    let out = cmd.output().unwrap();
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    (out.status.code(), text)
 }
 
 /// What the gates ran on must be what merge-and-push lands (review r1,
