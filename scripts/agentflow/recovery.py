@@ -516,7 +516,7 @@ def recover_stale(ctx: Ctx, git: Git, gh: Gh, lk: lock.Lock, worktrees_parent: P
         git.worktree_prune()
         found = f"open PR #{pr['number']} ({pr['state']})" if pr else "no PR"
         # Bookkeeping under the OLD run's fence: temporarily adopt its run id.
-        old = Ctx(paths=ctx.paths, run_id=lk.run_id, now=ctx.now)
+        old = Ctx(paths=ctx.paths, run_id=lk.run_id, now=ctx.now, awake=ctx.awake)
         gh_old = Gh(old, gh.repo, run=gh.run, sleep=gh.sleep)
         gh_old.comment(lk.issue, f"Run {lk.run_id} went silent (heartbeat older than 30 min). Found: {found}. "
                                  f"Worktree preserved as {moved or 'none'}. Labeled agent-blocked (crashed).")

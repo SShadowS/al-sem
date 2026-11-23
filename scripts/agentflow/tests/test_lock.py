@@ -328,6 +328,92 @@ def test_the_awake_claim_stamp_is_checksummed(ctx):
         budget.check_deadline(run)
 
 
+def test_a_stolen_lease_survives_a_suspend(ctx):
+    """`steal_for_recovery` stamps the awake clock too: after a 2 h suspend a
+    second recoverer gets `lock-live`, not a second steal.
+    Red proof (TLS-122 r1): `_stamp(ctx, cur, now)` in the steal replaced by
+    `cur.heartbeat = now` failed here (the second steal succeeded)."""
+    c = Clocks()
+    lock.acquire(c.ctx(ctx.paths, "run-dead"), 8, "s", 1)
+    c.run(lock.STALE_SECONDS + 1)
+    first = c.ctx(ctx.paths, "run-rec1")
+    lock.steal_for_recovery(first, lock.for_issue(first, 8))
+    c.run(60)
+    c.suspend(2 * 3600)
+    second = c.ctx(ctx.paths, "run-rec2")
+    with pytest.raises(lock.LockHeld) as e:
+        lock.steal_for_recovery(second, lock.for_issue(second, 8))
+    assert e.value.code == "lock-live:run-dead"
+
+
+def test_a_handed_over_lease_survives_a_suspend(ctx):
+    """`handover`'s new lease is stamped on the awake clock: the recovering
+    run's follow-through stays live across a 2 h suspend.
+    Red proof (TLS-122 r1): `_stamp(ctx, new, new.heartbeat)` in `handover`
+    replaced by `pass` failed here (the lease read stale, and was stolen)."""
+    c = Clocks()
+    lock.acquire(c.ctx(ctx.paths, "run-dead"), 8, "s", 1)
+    c.run(lock.STALE_SECONDS + 1)
+    rec = c.ctx(ctx.paths, "run-rec")
+    lock.steal_for_recovery(rec, lock.for_issue(rec, 8))
+    lock.handover(rec, 8, started=1_000_000.0)
+    c.run(60)
+    c.suspend(2 * 3600)
+    other = c.ctx(ctx.paths, "run-other")
+    with pytest.raises(lock.LockHeld) as e:
+        lock.steal_for_recovery(other, lock.for_issue(other, 8))
+    assert e.value.code == "lock-live:run-rec"
+
+
+def test_a_lease_and_a_budget_with_an_unknown_key_still_load(ctx):
+    """Forward compatibility: a field a newer writer added is ignored.
+    Red proof (TLS-122 r1): `_read_lease` back to `Lock(**data)` failed here
+    (TypeError: unexpected keyword). The budget reader needed no change: it
+    keeps the dict and checksums only the keys it knows."""
+    lock.acquire(ctx, 8, "s", 1)
+    p = ctx.paths.lease(8)
+    data = json.loads(p.read_text(encoding="utf-8"))
+    p.write_text(json.dumps({**data, "from_the_future": 1}), encoding="utf-8")
+    assert lock.for_issue(ctx, 8).run_id == "run-test"
+    budget.init(ctx, claimed_at=ctx.now())
+    b = ctx.run_dir / "budget.json"
+    b.write_text(json.dumps({**json.loads(b.read_text(encoding="utf-8")), "from_the_future": 1}),
+                 encoding="utf-8")
+    budget.check_deadline(ctx)
+
+
+@pytest.mark.parametrize("bad", [["boot-1"], ["boot-1", "x"], ["boot-1", True], "boot-1",
+                                 ["boot-1", 1, 2], [1, 2], {"boot": "boot-1"}])
+def test_a_malformed_awake_stamp_counts_as_none(ctx, bad):
+    """A `beat_awake` that is not `[str, number]` is no stamp: the lease ages
+    on the wall clock, and listing it never crashes.
+    Red proof (TLS-122 r1): `_is_reading(then)` dropped from `awake_elapsed`
+    failed here for 5 of the 7 shapes (IndexError, TypeError, KeyError, or a
+    boolean read as a time); the bare string and `[1, 2]` fell back by chance."""
+    c = Clocks()
+    lock.acquire(c.ctx(ctx.paths, "run-holder"), 8, "s", 1)
+    p = ctx.paths.lease(8)
+    p.write_text(json.dumps({**json.loads(p.read_text(encoding="utf-8")), "beat_awake": bad}),
+                 encoding="utf-8")
+    rd = c.ctx(ctx.paths, "run-rd")
+    assert not lock.is_stale(lock.for_issue(rd, 8), rd.now(), rd.awake_now())
+    c.suspend(lock.STALE_SECONDS + 1)          # wall time only: the wall rule judges
+    assert lock.is_stale(lock.for_issue(rd, 8), rd.now(), rd.awake_now())
+
+
+def test_a_stamped_lease_read_without_an_awake_clock_ages_on_wall_time(ctx):
+    """The documented fall back: a reader with no awake clock (not Linux, or a
+    stubbed wall clock) judges a stamped lease by the wall clock.
+    Red proof (TLS-122 r1): `now_awake and` dropped from `awake_elapsed`
+    failed here (TypeError: None is not subscriptable)."""
+    c = Clocks()
+    lock.acquire(c.ctx(ctx.paths, "run-holder"), 8, "s", 1)
+    c.suspend(lock.STALE_SECONDS + 1)
+    rd = Ctx(paths=ctx.paths, run_id="run-rd", now=lambda: c.wall)
+    assert rd.awake_now() is None
+    assert lock.is_stale(lock.for_issue(rd, 8), rd.now(), rd.awake_now())
+
+
 def test_the_real_awake_clock_reads_on_linux():
     if not Path("/proc/sys/kernel/random/boot_id").exists():
         pytest.skip("no boot id: the awake clock is Linux only")

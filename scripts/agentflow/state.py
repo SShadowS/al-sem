@@ -188,13 +188,21 @@ def host_awake() -> tuple[str, float] | None:
     return (boot, time.clock_gettime(time.CLOCK_MONOTONIC)) if boot else None
 
 
-def awake_elapsed(then, now_awake, wall_elapsed: float) -> float:
-    """Seconds from the reading `then` to `now_awake` on the awake clock when
-    both are from this boot, else `wall_elapsed` (a reading from before a
-    reboot, from another host, or from a writer that had none)."""
-    if then and now_awake and then[0] == now_awake[0]:
-        return now_awake[1] - then[1]
-    return wall_elapsed
+def _is_reading(r) -> bool:
+    """A stored awake reading is `[boot id, seconds]`; anything else (a hand
+    edit, a torn or foreign file) counts as no stamp."""
+    return (isinstance(r, (list, tuple)) and len(r) == 2 and isinstance(r[0], str)
+            and isinstance(r[1], (int, float)) and not isinstance(r[1], bool))
+
+
+def awake_elapsed(then, now_awake, wall_elapsed: float) -> tuple[float, str]:
+    """`(seconds, clock)` from the stored reading `then` to `now_awake`: on the
+    awake clock (`"awake"`) when both are readings from this boot, else
+    `wall_elapsed` (`"wall"`: a reading from before a reboot, from another
+    host, malformed, or from a writer or reader that had none)."""
+    if _is_reading(then) and now_awake and then[0] == now_awake[0]:
+        return now_awake[1] - then[1], "awake"
+    return wall_elapsed, "wall"
 
 
 def new_run_id(now: float) -> str:

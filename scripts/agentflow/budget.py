@@ -88,9 +88,7 @@ def elapsed(ctx: Ctx, data: dict) -> tuple[float, str]:
     """The run's seconds so far and the clock they are on: `awake` (the host's
     suspends left out) or `wall` (a budget from before TLS-122, from before a
     reboot, or no awake clock: the suspends counted, as before)."""
-    wall = ctx.now() - data["claimed_at"]
-    then, now = data.get("claimed_awake"), ctx.awake_now()
-    return awake_elapsed(then, now, wall), "awake" if then and now and then[0] == now[0] else "wall"
+    return awake_elapsed(data.get("claimed_awake"), ctx.awake_now(), ctx.now() - data["claimed_at"])
 
 
 def check_deadline(ctx: Ctx) -> None:

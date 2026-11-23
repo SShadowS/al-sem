@@ -954,6 +954,11 @@ its time rules on the wall clock, which keeps counting through a suspend.
   `agentflow` calls made by a conductor session, so between calls no process holds the lease,
   and a session that stopped working must still lose its lease. A lease is only ever read on
   the host whose checkout holds it (`.agent/` is untracked).
+- **Review r1 (Fable):** a lease file with a field this code does not know still loads (only
+  the known fields are read), and an awake stamp that is not `[boot id, number]` counts as no
+  stamp (wall clock) instead of crashing every lease listing. New tests pin the awake stamp
+  that `recover`'s steal and `handover` write, and the wall-clock fall back of a reader with no
+  awake clock. The orchestrator design spec now says both rules count awake time.
 
 ### Fixed (ENG-178: table procedures named like record built-ins: four follow-ups from ENG-173)
 

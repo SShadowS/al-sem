@@ -176,7 +176,7 @@ instructions to the flow. Concretely:
 | Rebase-driven re-gate | 1 | `blocked` |
 | CI fix attempt | 1, independent of the rebase budget | `blocked` |
 | Discoveries filed per issue | 5 | rest go to the ledger only |
-| Wall-clock per issue | 24 h from claim (4 h until 2026-10-14, when a 5-round spec panel alone took 3-4 h; 10 h until 2026-10-24, when epic steps ran past 10 h and lost a restart plus an overnight wait to the cap) | `blocked` |
+| Wall-clock per issue | 24 h from claim, of awake time since TLS-122 (a host suspend is left out; see Deadline) (4 h until 2026-10-14, when a 5-round spec panel alone took 3-4 h; 10 h until 2026-10-24, when epic steps ran past 10 h and lost a restart plus an overnight wait to the cap) | `blocked` |
 | Subagent dispatches per issue | 60 | `blocked` |
 | pi calls per issue | 20 (2 reviewers × up to 10 rounds; 14 until 2026-10-14) | `blocked` |
 | Per-gate timeout (supervised, below) | 45 min | gate fails |
@@ -209,7 +209,7 @@ was recorded outside the budget.
 Labels are a mirror for humans, not a lock. The lock is local:
 
 - **One lease per issue.** `.agent/locks/issue-<N>.json` in the main checkout:
-  `{issue, run_id, session, started, heartbeat, attempt, recovering_by}`.
+  `{issue, run_id, session, started, heartbeat, attempt, recovering_by, beat_awake}`.
   Taken at claim by create-exclusive on that file, so "one run per issue" holds
   by construction. Both `/orchestrate` and a standalone `/issue N` take it;
   `/issue N` refuses to run without it. Every lease write after the first is
@@ -275,9 +275,17 @@ Labels are a mirror for humans, not a lock. The lock is local:
   (`al-sem-issue-<N>-a<k>`) is fenced by issue N's lease only; of a
   verification worktree, by a LIVE merge-lane holder only.
 - **Deadline.** The executor computes elapsed time since claim on every call and
-  refuses new phases past the 24-hour cap, so the wall-clock budget is enforced by
-  code, not by the conductor remembering it.
-- **Stale** means heartbeat older than 30 minutes. There is no PID check: the
+  refuses new phases past the 24-hour cap, so the time budget is enforced by
+  code, not by the conductor remembering it. Since TLS-122 the elapsed time is
+  AWAKE time: `budget.json` records the awake clock at the claim
+  (`claimed_awake` = `[boot id, CLOCK_MONOTONIC]`, checksummed), and a host
+  suspend (server1 is a laptop) is not counted. A budget from before that, from
+  another boot, or with no awake clock (not Linux) counts wall time.
+- **Stale** means no heartbeat for 30 minutes of AWAKE time (TLS-122): each
+  heartbeat also records `beat_awake` = `[boot id, CLOCK_MONOTONIC]`, which
+  stops while the host sleeps, so a live run's lease does not go stale during a
+  suspend. A lease with no usable stamp, or from another boot, ages on the wall
+  clock. There is no PID check: the
   conductor is a chat session, not a supervisable process, and a 30-minute silence
   with supervision in place means it is gone. Recovery (never under `--dry-run`)
   is per issue: `preflight` lists `stale_locks`, and `recover --issue N` takes ONE
@@ -307,7 +315,7 @@ Labels are a mirror for humans, not a lock. The lock is local:
 - **Attempts.** Every claim gets an attempt number. Branch and worktree are
   `issue/N-<slug>-a<attempt>` and `../al-sem-issue-N-a<attempt>`, so a re-attempt
   after `unblock` never collides with a preserved branch.
-- The wall-clock cap is enforced by the running session on itself, never by another
+- The time cap is enforced by the running session on itself, never by another
   session.
 
 ## `/orchestrate` — one tick

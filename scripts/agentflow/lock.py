@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import json
 import shutil
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 
 from . import budget
@@ -93,6 +93,9 @@ class Lock:
     beat_awake: list | None = None
 
 
+_LOCK_FIELDS = {f.name for f in fields(Lock)}
+
+
 def _stamp(ctx: Ctx, lk: Lock, now: float) -> None:
     """Set the heartbeat, on both clocks."""
     aw = ctx.awake_now()
@@ -101,7 +104,9 @@ def _stamp(ctx: Ctx, lk: Lock, now: float) -> None:
 
 def _read_lease(path: Path) -> Lock | None:
     data = read_json(path)
-    return Lock(**data) if data else None
+    # Only the fields this code knows: a lease written by newer code with a
+    # field added must still load here (forward compatibility, TLS-122 r1).
+    return Lock(**{k: v for k, v in data.items() if k in _LOCK_FIELDS}) if data else None
 
 
 def _entries(ctx: Ctx) -> list[tuple[Path, Lock]]:
@@ -460,7 +465,7 @@ def is_stale(lk: Lock, now: float, awake: tuple[str, float] | None) -> bool:
     Why not "stale only when the holder process is dead": a run is a series of
     short CLI calls from a conductor session, so between calls no process
     holds the lease, and a session that stopped working must still lose it."""
-    return awake_elapsed(lk.beat_awake, awake, now - lk.heartbeat) > STALE_SECONDS
+    return awake_elapsed(lk.beat_awake, awake, now - lk.heartbeat)[0] > STALE_SECONDS
 
 
 def require_human(ctx: Ctx, what: str) -> None:
