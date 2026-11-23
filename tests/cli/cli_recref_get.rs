@@ -970,6 +970,46 @@ codeunit 50442 "GE Shadow"
             exit;
         Log.Insert();
     end;
+
+    // Fable on ENG-176: spacing and a comment AL allows inside a variable's text keep it the
+    // variable (an alias of R, then moved).
+    procedure SpacedThisAlias()
+    var
+        R: RecordRef;
+        E: Record "GE Entry";
+        D: Record "GE Doc";
+    begin
+        R.GetTable(E);
+        this. G := R;
+        this. G.GetTable(D);
+        Guarded(R);
+    end;
+
+    procedure CommentThisAlias()
+    var
+        R: RecordRef;
+        E: Record "GE Entry";
+        D: Record "GE Doc";
+    begin
+        R.GetTable(E);
+        this./*c*/G := R;
+        this./*c*/G.GetTable(D);
+        Guarded(R);
+    end;
+
+    procedure SpacedSlotAlias()
+    var
+        Slot: array[2] of RecordRef;
+        R: RecordRef;
+        E: Record "GE Entry";
+        D: Record "GE Doc";
+    begin
+        R.GetTable(E);
+        Slot [1] := R;
+        D.FindFirst();
+        Slot [1].Get(D.RecordId);
+        Guarded(R);
+    end;
 }
 "#;
 
@@ -1098,6 +1138,11 @@ fn a_recordref_get_moves_the_table_for_every_reader() {
     // hides it.
     assert_eq!(answer("ThisGetShadow", "GE Log"), "no");
     assert_eq!(answer("ThisArgShadow", "GE Log"), "no");
+    // Fable on ENG-176: `this. G`, `this./*c*/G` and `Slot [1]` are the variable (each was a
+    // wrong `no` at the first ENG-176 head; master answered yes).
+    for routine in ["SpacedThisAlias", "CommentThisAlias", "SpacedSlotAlias"] {
+        assert_eq!(answer(routine, "GE Log"), "yes", "{routine}");
+    }
 }
 
 #[test]

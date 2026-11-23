@@ -533,16 +533,19 @@ pub fn resolve_routine_record_types(
                 else {
                     continue;
                 };
-                let receiver_lc = receiver.fold_identifier();
-                if !recordref_var_names.contains(&receiver_lc) {
-                    continue;
-                }
-                // ENG-176: the variable itself, by the routine's scope.
-                let Some(receiver_key) = holder_of(
-                    routine.variables.own(),
-                    routine.variables.globals(),
-                    receiver,
-                ) else {
+                // ENG-176: the variable itself, by the routine's scope (sol: a quoted or spaced
+                // receiver was missed by text): a whole RecordRef parameter or local, never a
+                // global or an element.
+                let scope = crate::program::model::recref_alias::HolderScope::of(routine);
+                let Some(receiver_key) = scope
+                    .text(receiver)
+                    .filter(|h| !h.indexed)
+                    .map(|h| h.key)
+                    .filter(|&k| {
+                        matches!(k, crate::program::model::recref_alias::HolderKey::Own(_))
+                            && recordref_var_names.contains(&scope.variable(k).name)
+                    })
+                else {
                     continue;
                 };
                 let method_lc = method.fold_identifier();
@@ -570,14 +573,17 @@ pub fn resolve_routine_record_types(
                         let Some(source_name) = cs.argument_texts.first() else {
                             continue;
                         };
-                        let source_lc = source_name.trim().fold_identifier();
-                        // Only bare identifiers (no dots, no parens, no spaces after trim).
-                        if source_lc.contains('.')
-                            || source_lc.contains('(')
-                            || source_lc.contains(' ')
-                        {
+                        // ENG-176: a whole variable by the scope, named as its record variable is
+                        // (a global a local hides is the local's name: no match).
+                        let Some(source_lc) = scope
+                            .text(source_name)
+                            .filter(|h| !h.indexed)
+                            .map(|h| h.key)
+                            .filter(|&k| scope.logical(&scope.variable(k).name) == Some(k))
+                            .map(|k| scope.variable(k).name.clone())
+                        else {
                             continue;
-                        }
+                        };
                         let Some(known_val) = record_var_temp.get(&source_lc).copied().flatten()
                         else {
                             continue; // source var absent or not Known → Unknown

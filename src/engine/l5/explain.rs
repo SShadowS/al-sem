@@ -1701,33 +1701,10 @@ fn own_state_changes(model: &crate::program::model::workspace::Model, root: &str
     // `G[1]` and `G.F` set the global `G` unless a local hides it, `this.G` the global whatever
     // hides it (Fable on ENG-162: the folded name could not tell the two apart).
     let scope = crate::program::model::recref_alias::HolderScope::of(r);
-    let base = |text: &str| {
-        let s = text.trim();
-        let (this, rest) = match s.get(..5) {
-            Some(p) if p.eq_fold_identifier("this.") => ("this.", &s[5..]),
-            _ => ("", s),
-        };
-        // The variable before the first member access or index outside quotes.
-        let mut quoted = false;
-        let mut end = rest.len();
-        for (i, ch) in rest.char_indices() {
-            match ch {
-                '"' => quoted = !quoted,
-                '.' | '[' if !quoted => {
-                    end = i;
-                    break;
-                }
-                _ => {}
-            }
-        }
-        scope
-            .text(&format!("{this}{}", &rest[..end]))
-            .map(|h| h.key)
-    };
     let set: Vec<String> = r
         .var_assignments
         .iter()
-        .filter_map(|a| base(&a.lhs_text))
+        .filter_map(|a| scope.target(&a.lhs_text))
         .filter(|k| matches!(k, crate::program::model::recref_alias::HolderKey::Global(_)))
         .map(|k| scope.variable(k).name.fold_identifier())
         .collect::<BTreeSet<String>>()

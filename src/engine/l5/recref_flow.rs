@@ -197,6 +197,10 @@ struct Facts {
     ///
     /// [`HolderScope`]: crate::program::model::recref_alias::HolderScope
     text_names: HashMap<String, String>,
+    /// ENG-176 (sol): assignments to a global a local of the routine hides (`this.G := R` with a
+    /// local `G`), by the global's folded name: the routine tracks no such name, but the write
+    /// is one of the object's global writes ([`Summary::global_writes`]).
+    hidden_global_writes: Vec<(String, Part)>,
 }
 
 /// ENG-176: the tracked name raw source text `raw` of a routine denotes ([`Facts::text_names`]),
@@ -1530,6 +1534,14 @@ impl<'a> RecRefFlow<'a> {
                 break;
             }
         }
+        // ENG-176 (sol): a hidden global's write, read with the routine's settled values.
+        for (g, part) in &f.hidden_global_writes {
+            let atoms = match part {
+                Part::Atoms(a) => a.clone(),
+                Part::Copy(w) => self.atoms_of(i, &s.vars, w),
+            };
+            add(s.global_writes.entry(g.clone()).or_default(), atoms);
+        }
         if positional {
             s.timeline = parts
                 .iter()
@@ -2481,7 +2493,26 @@ fn facts_of(
             .filter(|h| !h.indexed)
             .and_then(|h| name_of(h.key))
     };
+    // A copy of a tracked variable reads it; a copy of anything else (a global a local hides,
+    // an untracked name) may hold anything.
+    let part_of =
+        |a: &crate::program::body::features::PVarAssignment| match (&a.rhs_text, &a.rhs_member) {
+            (Some(w), _) => tracked_of(w).map_or_else(|| Part::Atoms(top()), Part::Copy),
+            (None, Some((w, m))) if m == "duplicate" => Part::Copy(lc(w)),
+            _ => Part::Atoms(top()),
+        };
     for a in &r.var_assignments {
+        if let Some(h) = scope.text(&a.lhs_text)
+            && let crate::program::model::recref_alias::HolderKey::Global(_) = h.key
+            && !h.indexed
+        {
+            let v = scope.variable(h.key);
+            if scope.logical(&v.name) != Some(h.key) && is_tracked_type(&v.declared_type) {
+                f.hidden_global_writes
+                    .push((v.name.fold_identifier(), part_of(a)));
+                continue;
+            }
+        }
         let Some(l) = tracked_of(&a.lhs_text).filter(|l| f.tracked.contains_key(l)) else {
             // ENG-160 (sol): `Slot[1] := R` shares R's record with an array slot, which the flow
             // does not track (`recref_alias::into_holder_array`): each holder may hold anything
@@ -2496,15 +2527,8 @@ fn facts_of(
             }
             continue;
         };
-        // A copy of a tracked variable reads it; a copy of anything else (a global a local hides,
-        // an untracked name) may hold anything.
-        let part = match (&a.rhs_text, &a.rhs_member) {
-            (Some(w), _) => tracked_of(w).map_or_else(|| Part::Atoms(top()), Part::Copy),
-            (None, Some((w, m))) if m == "duplicate" => Part::Copy(lc(w)),
-            _ => Part::Atoms(top()),
-        };
         let at = (a.source_anchor.start_line, a.source_anchor.start_column);
-        f.fixed.push((l, part, Some(at)));
+        f.fixed.push((l, part_of(a), Some(at)));
     }
     {
         for root in classes

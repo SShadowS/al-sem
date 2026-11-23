@@ -87,12 +87,15 @@ impl<'a> HolderScope<'a> {
     /// The variable raw source text names, or `None` when the text is not a variable (module doc).
     #[must_use]
     pub fn text(&self, raw: &str) -> Option<HolderRef> {
-        let s = crate::program::model::recref_alias::strip_parens(raw);
+        let canon = canonical(raw);
+        let s = crate::program::model::recref_alias::strip_parens(&canon);
         let (s, this) = match s.get(..5) {
             Some(p) if p.eq_fold_identifier("this.") => (&s[5..], true),
             _ => (s, false),
         };
-        // The first `[` outside quotes starts an index; a `.` outside quotes is a member.
+        // The first `[` outside quotes starts an index, which must close at the very end (sol on
+        // ENG-176: `Slot[1].Number` or `Slot[1] + X` is no element); a `.`, `(` or space outside
+        // quotes is a member, a call or an expression.
         let mut quoted = false;
         let mut end = s.len();
         for (i, ch) in s.char_indices() {
@@ -107,6 +110,9 @@ impl<'a> HolderScope<'a> {
             }
         }
         let indexed = end < s.len();
+        if indexed && closing_bracket(&s[end..]) != Some(s.len() - end - 1) {
+            return None;
+        }
         let base = s[..end].trim();
         if base.is_empty() {
             return None;
@@ -122,6 +128,32 @@ impl<'a> HolderScope<'a> {
         Some(HolderRef { key, indexed })
     }
 
+    /// The variable an assignment target writes into: `G`, `G[1]` and `G.F` write `G` (by the
+    /// scope, as [`Self::text`]), `this.G…` the global `G`.
+    #[must_use]
+    pub fn target(&self, raw: &str) -> Option<HolderKey> {
+        let canon = canonical(raw);
+        let s = canon.trim();
+        let skip = match s.get(..5) {
+            Some(p) if p.eq_fold_identifier("this.") => 5,
+            _ => 0,
+        };
+        // The variable before the first member access or index outside quotes.
+        let mut quoted = false;
+        let mut end = s.len();
+        for (i, ch) in s.char_indices().skip(skip) {
+            match ch {
+                '"' => quoted = !quoted,
+                '.' | '[' if !quoted => {
+                    end = i;
+                    break;
+                }
+                _ => {}
+            }
+        }
+        self.text(&s[..end]).map(|h| h.key)
+    }
+
     /// The variable a key names.
     #[must_use]
     pub fn variable(&self, key: HolderKey) -> &'a ModelVariable {
@@ -130,6 +162,84 @@ impl<'a> HolderScope<'a> {
             HolderKey::Global(i) => &self.globals[i as usize],
         }
     }
+}
+
+/// Raw source text with its comments (`//`, `/* */`) dropped and the spacing AL allows around
+/// `.`, `[`, `]`, `(` and `)` removed, so `this. G`, `this./*c*/G`, `Slot [1]` and `( G )` read as
+/// written without it (Fable on ENG-176). Spacing between two other characters stays one space,
+/// so `A or B` remains an expression. Quoted names and text literals are kept as they are.
+fn canonical(raw: &str) -> String {
+    let punct = |c: char| matches!(c, '.' | '[' | ']' | '(' | ')');
+    let mut out = String::with_capacity(raw.len());
+    let mut space = false;
+    let mut chars = raw.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' | '\'' => {
+                // A quoted name or a text literal, to its closing quote (`""` / `''` reopen it).
+                if space && out.chars().last().is_some_and(|p| !punct(p)) {
+                    out.push(' ');
+                }
+                space = false;
+                out.push(c);
+                for d in chars.by_ref() {
+                    out.push(d);
+                    if d == c {
+                        break;
+                    }
+                }
+            }
+            '/' if chars.peek() == Some(&'/') => {
+                for d in chars.by_ref() {
+                    if d == '\n' {
+                        break;
+                    }
+                }
+                space = true;
+            }
+            '/' if chars.peek() == Some(&'*') => {
+                chars.next();
+                let mut prev = ' ';
+                for d in chars.by_ref() {
+                    if prev == '*' && d == '/' {
+                        break;
+                    }
+                    prev = d;
+                }
+                space = true;
+            }
+            c if c.is_whitespace() => space = true,
+            c => {
+                if space && !punct(c) && out.chars().last().is_some_and(|p| !punct(p)) {
+                    out.push(' ');
+                }
+                space = false;
+                out.push(c);
+            }
+        }
+    }
+    out
+}
+
+/// The byte offset of the `]` that closes the `[` starting `s`, outside quotes.
+fn closing_bracket(s: &str) -> Option<usize> {
+    let (mut depth, mut quote) = (0u32, None::<char>);
+    for (i, c) in s.char_indices() {
+        match (quote, c) {
+            (Some(q), c) if c == q => quote = None,
+            (Some(_), _) => {}
+            (None, '"' | '\'') => quote = Some(c),
+            (None, '[') => depth += 1,
+            (None, ']') => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(i);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -154,7 +264,9 @@ mod tests {
     ///
     /// Discrimination (2026-11-21): `text` stripping `this.` like the old keys (reading `this.G`
     /// through `logical`) fails the `this.G` rows; stripping quotes before the `this.` test fails
-    /// the quoted `"this.G"` rows; restored, passes.
+    /// the quoted `"this.G"` rows; restored, passes. 2026-11-23 (review): `canonical` returning its
+    /// input fails the spacing and comment rows (and `cli_recref_get`'s `SpacedThisAlias`); an index
+    /// accepted when its `]` does not end the text fails the `Slot[1].Number` row; restored, pass.
     #[test]
     fn one_resolver_names_every_spelling_exactly() {
         let own = [
@@ -200,6 +312,35 @@ mod tests {
         assert_eq!(s.text("Slot[1]"), elem(own_k(3)));
         assert_eq!(s.text("this.Arr[2]"), elem(glob(2)));
         assert_eq!(s.text("this.Slot[1]"), None, "no global Slot");
+        // Fable on ENG-176: spacing and comments AL allows inside a variable's text.
+        assert_eq!(s.text("this. G"), plain(glob(0)));
+        assert_eq!(s.text("this.\n    G"), plain(glob(0)));
+        assert_eq!(s.text("this./*c*/G"), plain(glob(0)));
+        assert_eq!(s.text("this. // c\nG"), plain(glob(0)));
+        assert_eq!(s.text("Slot [1]"), elem(own_k(3)));
+        assert_eq!(s.text("( G )"), plain(own_k(1)));
+        assert_eq!(
+            s.text("Slot[ 'a]' ]"),
+            elem(own_k(3)),
+            "a literal's bracket"
+        );
+        assert_eq!(
+            s.text("\"this. G\""),
+            None,
+            "a quoted name keeps its spacing"
+        );
+        assert_eq!(s.text("A or B"), None);
+        // sol on ENG-176: an index that does not end the text is an element's member or an
+        // expression, not the element.
+        assert_eq!(s.text("Slot[1].Number"), None);
+        assert_eq!(s.text("Slot[1] + P"), None);
+        assert_eq!(s.text("Slot[1][2]"), None);
+        // An assignment target's variable.
+        assert_eq!(s.target("G.Field"), own_k(1));
+        assert_eq!(s.target("this. G.Field"), glob(0));
+        assert_eq!(s.target("Slot [1]"), own_k(3));
+        assert_eq!(s.target("\"this.G\".X"), own_k(2));
+        assert_eq!(s.target("Rec.\"A.B\""), None);
         // Not a variable: a member, a call, an expression, an unknown name.
         assert_eq!(s.text("Rec.Field"), None);
         assert_eq!(s.text("G.Duplicate()"), None);

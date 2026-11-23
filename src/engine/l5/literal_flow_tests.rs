@@ -544,6 +544,139 @@ codeunit 50435 "TB Mgt"
     );
 }
 
+/// ENG-176 (sol, Fable): a routine whose local `G` hides the global still writes the global
+/// through `this.G`, by assignment (`this.G := R`) or by passing it to a `var` parameter
+/// (`MutLog(this.G)`): another routine of the instance reads that. The routine tracks no name
+/// for the hidden global, so the write was lost and `Use` read `G` as only a `HB Doc`.
+/// [`KeptElsewhere::Nothing`] as in [`a_this_qualified_global_is_the_global`].
+///
+/// Discrimination (2026-11-23): `summarize` skipping `Facts::hidden_global_writes` rules
+/// `AssignRoot`'s insert out: fails; restored, passes. `PassRoot` is kept by a rule older than
+/// this fix (not traced); with `PassHidden`'s call removed it is ruled
+/// out (the row can fail).
+#[test]
+fn a_hidden_globals_write_reaches_the_instance() {
+    use crate::engine::l5::literal_reach::KeptElsewhere;
+    let src = r#"table 50440 "HB Doc" { fields { field(1; K; Integer) { } } keys { key(PK; K) { } } }
+table 50441 "HB Log" { fields { field(1; K; Integer) { } } keys { key(PK; K) { } } }
+table 50442 "HB Other" { fields { field(1; K; Integer) { } } keys { key(PK; K) { } } }
+codeunit 50443 "HB Box"
+{
+    var
+        G: RecordRef;
+
+    procedure SetDoc()
+    var
+        D: Record "HB Doc";
+    begin
+        G.GetTable(D);
+    end;
+
+    procedure SetHidden(R: RecordRef)
+    var
+        G: RecordRef;
+    begin
+        this.G := R;
+    end;
+
+    procedure PassHidden()
+    var
+        G: RecordRef;
+    begin
+        MutLog(this.G);
+    end;
+
+    local procedure MutLog(var X: RecordRef)
+    var
+        L: Record "HB Log";
+    begin
+        X.GetTable(L);
+    end;
+
+    procedure Use()
+    var
+        O: Record "HB Other";
+    begin
+        if G.Number <> Database::"HB Log" then
+            exit;
+        O.Insert();
+    end;
+}
+codeunit 50444 "HB Mgt"
+{
+    procedure ControlRoot()
+    var
+        Box: Codeunit "HB Box";
+    begin
+        Box.SetDoc();
+        Box.Use();
+    end;
+
+    procedure AssignRoot()
+    var
+        Box: Codeunit "HB Box";
+        R: RecordRef;
+        L: Record "HB Log";
+    begin
+        R.GetTable(L);
+        Box.SetDoc();
+        Box.SetHidden(R);
+        Box.Use();
+    end;
+
+    procedure PassRoot()
+    var
+        Box: Codeunit "HB Box";
+    begin
+        Box.SetDoc();
+        Box.PassHidden();
+        Box.Use();
+    end;
+}
+"#;
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(tmp.path().join("src")).unwrap();
+    std::fs::write(
+        tmp.path().join("app.json"),
+        r#"{"id":"e176e176-0000-4000-8000-000000000176","name":"ENG176","publisher":"t","version":"1.0.0.0"}"#,
+    )
+    .unwrap();
+    std::fs::write(tmp.path().join("src/Box.al"), src).unwrap();
+    let (base, tree) = crate::engine::l5::digest::wave2_index_tests::tree_over(
+        tmp.path(),
+        crate::engine::l4::cone_derived::WitnessScope::All,
+    );
+    let model = &base.resolved;
+    let id = |name: &str| -> String {
+        model
+            .workspace
+            .routines
+            .iter()
+            .find(|r| r.name == name)
+            .unwrap_or_else(|| panic!("precondition: {name} is a model routine"))
+            .stable_routine_id
+            .clone()
+    };
+    let reach = LiteralReach::with_kept(&tree, model, KeptElsewhere::Nothing);
+    let dead = |root: &str| -> bool {
+        let fx = crate::engine::l5::digest::wave2_index_tests::effects_of(&tree, model, root);
+        let insert = fx
+            .iter()
+            .position(|e| e.effect_type == "DB_INSERT")
+            .expect("precondition: the HB Other insert is in the root's effects");
+        reach
+            .unreachable_effects(root, &fx, &[])
+            .0
+            .contains(&insert)
+    };
+    assert!(
+        dead(&id("ControlRoot")),
+        "precondition: a global bound only to a HB Doc rules the insert out"
+    );
+    assert!(!dead(&id("AssignRoot")), "`this.G := R` writes the global");
+    assert!(!dead(&id("PassRoot")), "`MutLog(this.G)` writes the global");
+}
+
 /// TLS-22: two workers that both miss one evaluation's key (forced: the hook
 /// holds each after its miss until both have missed) get the serial answer,
 /// and the read keeps one answer per key. A third ask after them reads the

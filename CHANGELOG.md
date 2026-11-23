@@ -101,11 +101,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     listed).
   Retired: `HIDDEN_GLOBAL_PREFIX`, `is_shadowed_global`, `recref_alias::holder_key` and
   `name_key`, and the `this.`-stripping in the flow's `lc`.
+- **Review round 1.**
+  - Fable: `HolderScope::text` first read text as written, so `this. G`, a line break or comment
+    after `this.`, and `Slot [1]` named no variable: copies were dropped (a wrong `no` where
+    master said yes). It now drops comments and the spacing AL allows around `.`, `[`, `]`, `(`
+    and `)` first; any other spacing stays an expression (`A or B`).
+  - sol: an index must end the text (`Slot[1].Number` and `Slot[1] + X` are no element).
+  - sol: an assignment to a global a local hides (`this.G := R`) was lost from the routine's
+    summary, so another routine of the same instance could read the global as never set. It is
+    now one of the object's global writes (`Facts::hidden_global_writes`).
+  - sol: `record_types`' temp pass resolves a `GetTable`/`Open` receiver and the `GetTable`
+    source by the scope (a quoted or spaced receiver was missed).
+  - `explain`'s target scan moved into the resolver (`HolderScope::target`).
 - **Tests.** `holder_key`'s unit test over every scoping case; CLI shapes in `cli_recref_get`:
   `QuotedAlias` (`yes`: red on master), `ThisGetShadow` and `ThisArgShadow` (`no`: the global
   moves, not the hiding local); ENG-162's shadowing shapes stay green. Red proofs: `text`
   reading `this.X` as a logical name, or stripping quotes before the `this.` test, fails the
-  unit test; the old textual key for raw text fails `ThisGetShadow`.
+  unit test; the old textual key for raw text fails `ThisGetShadow`. Round 1: CLI shapes
+  `SpacedThisAlias`, `CommentThisAlias` and `SpacedSlotAlias` (`yes`); lib test
+  `a_hidden_globals_write_reaches_the_instance` (assignment and `var`-argument writes to a
+  hidden global, read by another routine of the instance, with no code keeping a record). Red
+  proofs: no canonical form fails the spacing rows and `SpacedThisAlias`; an index not ending
+  the text accepted fails `Slot[1].Number`; the summary skipping hidden-global writes fails the
+  assignment row.
 - **Golden.** `tests/ir-l2-goldens/l2_features.snapshot` (171 routines, every one with an
   assignment): it hashes each routine's `Debug` repr, which now holds `lhs_text` / `rhs_text`.
   With those two cleared, the old golden matched exactly; no serialized L2 output moves.
