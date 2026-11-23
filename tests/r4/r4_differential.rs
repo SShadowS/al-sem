@@ -1458,6 +1458,7 @@ fn run_cross_app_entry(
 
     let source_dir = smoke.corpus_dir.unwrap_or(smoke.fixture);
     let rust = run_rust_cross_app(smoke.fixture, source_dir, smoke.detectors);
+    assert_distinct_fingerprints(smoke.fixture, &rust);
 
     if maybe_regen_r4(&golden_path, &rust) {
         return Some((true, rust.finding_count));
@@ -1520,7 +1521,6 @@ fn finding_subset(golden: &Value, names: &BTreeSet<String>) -> Vec<Value> {
         .unwrap_or_default()
 }
 
-/// Run a single smoke entry through the acceptance gate or deferred path.
 /// ⟨ENG-101⟩ Two DIFFERENT findings never share a fingerprint: a baseline or a
 /// suppression keyed by fingerprint would treat them as one (suppressing one
 /// suppressed all; a new member was invisible). On CDO d54 (one TryFunction's 5
@@ -1529,10 +1529,13 @@ fn finding_subset(golden: &Value, names: &BTreeSet<String>) -> Vec<Value> {
 /// shapes. Checked on every fixture's real output, for every detector, before
 /// any regen.
 ///
-/// Mutations (2026-11-19): d54's key without the publisher -> `ws-d54`'s
-/// `TryTwo` findings share one (red); d55's key without the event and `#n` ->
-/// `ws-d55`'s loop publishes share one (red); d22 without `merge_reads` ->
-/// `ws-d22`'s three reads share one (red). Each restored, green.
+/// Discrimination (2026-11-23), each break made alone: d54's key without the
+/// publisher (`d54/{routine}`) -> `ws-d54`'s two `TryTwo` findings share one (red);
+/// d55's key with `#1` for every publish -> `ws-d55`'s two `OnRowProcessed`
+/// publishes in `PublishSeveralInLoop` share one (red); d55's key without the event
+/// (`#n` kept) -> `OnRowChecked#1` and `OnRowProcessed#1` share one (red); d22
+/// without `merge_reads` -> `ws-d22`'s three `ReadFlowFieldThrice` reads share one
+/// (red, and `d22_merges_the_reads_of_one_flowfield` counts 3). Each restored, green.
 fn assert_distinct_fingerprints(fixture: &str, rust: &R4FindingsProjection) {
     let json = serde_json::to_value(rust).expect("rust → value");
     let mut seen: std::collections::BTreeMap<String, String> = Default::default();
@@ -1546,6 +1549,7 @@ fn assert_distinct_fingerprints(fixture: &str, rust: &R4FindingsProjection) {
     }
 }
 
+/// Run a single smoke entry through the acceptance gate or deferred path.
 fn run_smoke_entry(
     smoke: &Smoke,
     registered_names: &BTreeSet<String>,
@@ -2005,4 +2009,74 @@ fn nordic_identifiers_meet_one_fold() {
         .flat_map(|c| c.argument_bindings.iter().map(|b| b.source_kind.as_str()))
         .collect();
     assert_eq!(kinds, ["global"], "Ålcust is the object global");
+}
+
+/// ⟨ENG-101⟩ d22 reports the reads of one FlowField on one record variable in one
+/// routine as ONE finding: anchored on the FIRST read in source order, with every
+/// uncovered read in its evidence, in source order. Precondition, stated in the
+/// fixture `ws-d22`: `ReadFlowFieldThrice` reads `Customer."Balance (LCY)"` on
+/// lines 21, 22 and 23 (0-based 20-22) with no CalcFields.
+///
+/// Discrimination (2026-11-23), each break made alone in `d22.rs`: no
+/// `merge_reads` -> "one finding for the three reads" (3 != 1); the merge's sort
+/// reversed (last read first) -> "anchored on the first read" (22 != 20); the other
+/// reads' evidence dropped instead of appended -> "every read, in source order"
+/// ([20] != [20, 21, 22]). Each restored, green.
+#[test]
+fn d22_merges_the_reads_of_one_flowfield() {
+    let p = run_rust("ws-d22", "ws-d22", &["d22-flowfield-without-calcfields"]);
+    let json = serde_json::to_value(&p).expect("rust → value");
+    let thrice: Vec<&Value> = json["findings"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|f| {
+            f["rootCause"]
+                .as_str()
+                .is_some_and(|t| t.starts_with("ReadFlowFieldThrice "))
+        })
+        .collect();
+    assert_eq!(
+        thrice.len(),
+        1,
+        "one finding for the three reads: {thrice:#?}"
+    );
+    let f = thrice[0];
+    let line = |a: &Value| a["range"]["startLine"].as_u64().expect("a start line");
+    assert_eq!(
+        line(&f["primaryLocation"]),
+        20,
+        "anchored on the first read"
+    );
+    let reads: Vec<u64> = f["evidencePath"]
+        .as_array()
+        .expect("an evidence path")
+        .iter()
+        .map(|s| line(&s["sourceAnchor"]))
+        .collect();
+    assert_eq!(reads, [20, 21, 22], "every read, in source order");
+}
+
+/// ⟨ENG-101⟩ d54's cap stays 5 findings per TRY ROUTINE although each publisher now
+/// has its own `rootCauseKey`. Precondition, stated in the fixture `ws-d54`: the
+/// TryFunction `TrySix` calls six publishers (`OnE1`..`OnE6`) directly.
+///
+/// Discrimination (2026-11-23): `detect_d54`'s `group_and_cap` keyed on
+/// `f.root_cause_key` (one group per publisher) instead of the anchor routine:
+/// `TrySix` gave 6 findings (red). Restored, green.
+#[test]
+fn d54_caps_per_try_routine() {
+    let p = run_rust("ws-d54", "ws-d54", &["d54-publish-in-tryfunction-cone"]);
+    let six: Vec<&str> = p
+        .findings
+        .iter()
+        .filter(|f| f.root_cause.starts_with("TrySix "))
+        .filter_map(|f| f.fingerprint.as_deref())
+        .collect();
+    assert_eq!(six.len(), 5, "TrySix is capped at 5: {six:?}");
+    assert_eq!(
+        six.iter().collect::<BTreeSet<_>>().len(),
+        5,
+        "one fingerprint per publisher: {six:?}"
+    );
 }

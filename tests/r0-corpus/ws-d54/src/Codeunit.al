@@ -53,3 +53,49 @@ codeunit 50923 "D54 Demo"
         Helper();
     end;
 }
+
+codeunit 50924 "D54 Many Events"
+{
+    // FLAGGED five times, not six (ENG-101): the cap is 5 findings per
+    // TryFunction, though each publisher has its own key.
+    [TryFunction]
+    procedure TrySix()
+    begin
+        OnE1();
+        OnE2();
+        OnE3();
+        OnE4();
+        OnE5();
+        OnE6();
+    end;
+
+    [IntegrationEvent(false, false)]
+    procedure OnE1()
+    begin
+    end;
+
+    [IntegrationEvent(false, false)]
+    procedure OnE2()
+    begin
+    end;
+
+    [IntegrationEvent(false, false)]
+    procedure OnE3()
+    begin
+    end;
+
+    [IntegrationEvent(false, false)]
+    procedure OnE4()
+    begin
+    end;
+
+    [IntegrationEvent(false, false)]
+    procedure OnE5()
+    begin
+    end;
+
+    [IntegrationEvent(false, false)]
+    procedure OnE6()
+    begin
+    end;
+}

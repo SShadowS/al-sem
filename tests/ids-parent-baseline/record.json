@@ -301,10 +301,10 @@
     "fixtures/ws-d2": {
       "findings": [
         "d2-event-fanout-in-loop|al-sem/v1=79b06650b904d850",
-        "d55-event-publish-in-loop|al-sem/v1=1609238e8ca62287",
-        "d55-event-publish-in-loop|al-sem/v1=39d414e9370cdfbc",
-        "d55-event-publish-in-loop|al-sem/v1=64596d9ecb2a4aba",
-        "d55-event-publish-in-loop|al-sem/v1=64596d9ecb2a4aba"
+        "d55-event-publish-in-loop|al-sem/v1=1f831a1bedd5f4ba",
+        "d55-event-publish-in-loop|al-sem/v1=41bce85fbdee4b39",
+        "d55-event-publish-in-loop|al-sem/v1=832baf02446906ca",
+        "d55-event-publish-in-loop|al-sem/v1=e220bd4c783d834a"
       ],
       "stableIds": [
         "22222222-d200-0000-0000-000000000002:Codeunit:64101#299663ee14d29f43470da2f218237c42dc9923d39062c86dbc2982a454f2e0ac",
@@ -323,7 +323,7 @@
         "22222222-d200-0000-0000-000000000002:Codeunit:64102#4d03e01dd65f3dc7bc13cc1c58f845ff3b6497d6cd06c9382ee206d2d4997b7b/op0",
         "22222222-d200-0000-0000-000000000002:Codeunit:64102#f8154584e1e27f484e40a75672dc34f9d2cebf5d71845a7949c25f6d646b2b7e"
       ],
-      "baseline": "{\n  \"schemaVersion\": \"1\",\n  \"generatedAt\": \"1970-01-01T00:00:00.000Z\",\n  \"fingerprints\": [\n    \"1609238e8ca62287\",\n    \"39d414e9370cdfbc\",\n    \"64596d9ecb2a4aba\",\n    \"79b06650b904d850\"\n  ]\n}\n"
+      "baseline": "{\n  \"schemaVersion\": \"1\",\n  \"generatedAt\": \"1970-01-01T00:00:00.000Z\",\n  \"fingerprints\": [\n    \"1f831a1bedd5f4ba\",\n    \"41bce85fbdee4b39\",\n    \"79b06650b904d850\",\n    \"832baf02446906ca\",\n    \"e220bd4c783d834a\"\n  ]\n}\n"
     },
     "r0-corpus/ws-api-page": {
       "findings": [
@@ -906,10 +906,10 @@
     "r0-corpus/ws-d2": {
       "findings": [
         "d2-event-fanout-in-loop|al-sem/v1=79b06650b904d850",
-        "d55-event-publish-in-loop|al-sem/v1=1609238e8ca62287",
-        "d55-event-publish-in-loop|al-sem/v1=39d414e9370cdfbc",
-        "d55-event-publish-in-loop|al-sem/v1=64596d9ecb2a4aba",
-        "d55-event-publish-in-loop|al-sem/v1=64596d9ecb2a4aba"
+        "d55-event-publish-in-loop|al-sem/v1=1f831a1bedd5f4ba",
+        "d55-event-publish-in-loop|al-sem/v1=41bce85fbdee4b39",
+        "d55-event-publish-in-loop|al-sem/v1=832baf02446906ca",
+        "d55-event-publish-in-loop|al-sem/v1=e220bd4c783d834a"
       ],
       "stableIds": [
         "22222222-d200-0000-0000-000000000002:Codeunit:64101#299663ee14d29f43470da2f218237c42dc9923d39062c86dbc2982a454f2e0ac",
@@ -928,13 +928,13 @@
         "22222222-d200-0000-0000-000000000002:Codeunit:64102#4d03e01dd65f3dc7bc13cc1c58f845ff3b6497d6cd06c9382ee206d2d4997b7b/op0",
         "22222222-d200-0000-0000-000000000002:Codeunit:64102#f8154584e1e27f484e40a75672dc34f9d2cebf5d71845a7949c25f6d646b2b7e"
       ],
-      "baseline": "{\n  \"schemaVersion\": \"1\",\n  \"generatedAt\": \"1970-01-01T00:00:00.000Z\",\n  \"fingerprints\": [\n    \"1609238e8ca62287\",\n    \"39d414e9370cdfbc\",\n    \"64596d9ecb2a4aba\",\n    \"79b06650b904d850\"\n  ]\n}\n"
+      "baseline": "{\n  \"schemaVersion\": \"1\",\n  \"generatedAt\": \"1970-01-01T00:00:00.000Z\",\n  \"fingerprints\": [\n    \"1f831a1bedd5f4ba\",\n    \"41bce85fbdee4b39\",\n    \"79b06650b904d850\",\n    \"832baf02446906ca\",\n    \"e220bd4c783d834a\"\n  ]\n}\n"
     },
     "r0-corpus/ws-d2-uncertain": {
       "findings": [
         "d2-event-fanout-in-loop|al-sem/v1=1c8bb4597e43668a",
         "d35-commit-in-event-subscriber|al-sem/v1=7f188a7a7dcdfd58",
-        "d55-event-publish-in-loop|al-sem/v1=151e4058ed129abd"
+        "d55-event-publish-in-loop|al-sem/v1=bb4572f07332fd69"
       ],
       "stableIds": [
         "22222222-d200-0000-0000-00000000d2c1:Codeunit:64201#299663ee14d29f43470da2f218237c42dc9923d39062c86dbc2982a454f2e0ac",
@@ -946,7 +946,7 @@
         "22222222-d200-0000-0000-00000000d2c1:Codeunit:64203#1f62d15246fbd6d22664eda49b388f517138804532ab3754f1293e95f1af8e0e",
         "22222222-d200-0000-0000-00000000d2c1:Interface:@d2u%20ialpha#1f62d15246fbd6d22664eda49b388f517138804532ab3754f1293e95f1af8e0e"
       ],
-      "baseline": "{\n  \"schemaVersion\": \"1\",\n  \"generatedAt\": \"1970-01-01T00:00:00.000Z\",\n  \"fingerprints\": [\n    \"151e4058ed129abd\",\n    \"1c8bb4597e43668a\",\n    \"7f188a7a7dcdfd58\"\n  ]\n}\n"
+      "baseline": "{\n  \"schemaVersion\": \"1\",\n  \"generatedAt\": \"1970-01-01T00:00:00.000Z\",\n  \"fingerprints\": [\n    \"1c8bb4597e43668a\",\n    \"7f188a7a7dcdfd58\",\n    \"bb4572f07332fd69\"\n  ]\n}\n"
     },
     "r0-corpus/ws-d20": {
       "findings": [
@@ -978,14 +978,16 @@
     },
     "r0-corpus/ws-d22": {
       "findings": [
-        "d22-flowfield-without-calcfields|al-sem/v1=b6ec729f708325e2"
+        "d22-flowfield-without-calcfields|al-sem/v1=b6ec729f708325e2",
+        "d22-flowfield-without-calcfields|al-sem/v1=f4782989c8c86957"
       ],
       "stableIds": [
         "11111111-0000-0000-0000-00000000d220:Codeunit:50800#1c770c02d93c8675f81ecdca501bfa726e636597a58dc33f476dc3cb2b71d4eb",
         "11111111-0000-0000-0000-00000000d220:Codeunit:50800#35921933367579e8f7bd10aaf743fc787e5629b61262fb6a92b7a801a72174c3",
-        "11111111-0000-0000-0000-00000000d220:Codeunit:50800#b0a37a5e282ed0a6539e462070e7e4488ba29159ac07a06be9ea941079ae843c"
+        "11111111-0000-0000-0000-00000000d220:Codeunit:50800#b0a37a5e282ed0a6539e462070e7e4488ba29159ac07a06be9ea941079ae843c",
+        "11111111-0000-0000-0000-00000000d220:Codeunit:50800#f2f4eca61ff0459a2d5ba3eebb4120504c59e1e07caf8526b403622818d6f45c"
       ],
-      "baseline": "{\n  \"schemaVersion\": \"1\",\n  \"generatedAt\": \"1970-01-01T00:00:00.000Z\",\n  \"fingerprints\": [\n    \"b6ec729f708325e2\"\n  ]\n}\n"
+      "baseline": "{\n  \"schemaVersion\": \"1\",\n  \"generatedAt\": \"1970-01-01T00:00:00.000Z\",\n  \"fingerprints\": [\n    \"b6ec729f708325e2\",\n    \"f4782989c8c86957\"\n  ]\n}\n"
     },
     "r0-corpus/ws-d29": {
       "findings": [
@@ -1529,32 +1531,65 @@
     },
     "r0-corpus/ws-d54": {
       "findings": [
+        "d12-dead-integration-event|al-sem/v1=050b06fc2cc1f1f2",
+        "d12-dead-integration-event|al-sem/v1=06f65a7207b6b22b",
+        "d12-dead-integration-event|al-sem/v1=44fe558e4f3d899e",
+        "d12-dead-integration-event|al-sem/v1=5aecfe4f935227c6",
+        "d12-dead-integration-event|al-sem/v1=613afc279fcdfb63",
         "d12-dead-integration-event|al-sem/v1=7069b2eb0111103c",
-        "d54-publish-in-tryfunction-cone|al-sem/v1=8b34dd27efaa00fd",
-        "d54-publish-in-tryfunction-cone|al-sem/v1=b225646fd65a5290"
+        "d12-dead-integration-event|al-sem/v1=a8d8409c7d7d64a6",
+        "d12-dead-integration-event|al-sem/v1=b3f737aa596aba39",
+        "d54-publish-in-tryfunction-cone|al-sem/v1=170843cba645b8f2",
+        "d54-publish-in-tryfunction-cone|al-sem/v1=35a5369e35ff6909",
+        "d54-publish-in-tryfunction-cone|al-sem/v1=67768275bd851e19",
+        "d54-publish-in-tryfunction-cone|al-sem/v1=6af98d8f02354235",
+        "d54-publish-in-tryfunction-cone|al-sem/v1=8280e3e206ed0d49",
+        "d54-publish-in-tryfunction-cone|al-sem/v1=8bd4f8172c521c25",
+        "d54-publish-in-tryfunction-cone|al-sem/v1=bdb94bf96595923b",
+        "d54-publish-in-tryfunction-cone|al-sem/v1=c25b302857cd81f3",
+        "d54-publish-in-tryfunction-cone|al-sem/v1=fb3e1b8a9a6c2e3c"
       ],
       "stableIds": [
         "11111111-0000-0000-0000-00000000d540:Codeunit:50922#0f2242c5cbed16b79e258da0d09b1fa1b331c04f0bfdaae315b5c4cd188d0cea",
+        "11111111-0000-0000-0000-00000000d540:Codeunit:50922#b857b58d30164f5d66c260f5c06e637931ae8232099bfa2c43ac97a8e3dcad91",
         "11111111-0000-0000-0000-00000000d540:Codeunit:50923#2e04657daba9a2349c213f57986375f17467a2631ed80a27d6d6a169c8933a41",
         "11111111-0000-0000-0000-00000000d540:Codeunit:50923#8f7b85551ac1a748ee89ede026f7ff1bb615dbcb9d46cb5ef36a221de43ba15c",
         "11111111-0000-0000-0000-00000000d540:Codeunit:50923#90e8a4a80dbaebb8a37f9ddca447caa91c874b74ccd564932824e8cd7775a1ea",
-        "11111111-0000-0000-0000-00000000d540:Codeunit:50923#f04a218325b329b6c07ec901786e4259ddfadabfec48b28e55b6f06034e337e5"
+        "11111111-0000-0000-0000-00000000d540:Codeunit:50923#f04a218325b329b6c07ec901786e4259ddfadabfec48b28e55b6f06034e337e5",
+        "11111111-0000-0000-0000-00000000d540:Codeunit:50923#fe2e586b43589ca2b106291677b3b0a101ccf25f4d66d9dff27e166f03f17a02",
+        "11111111-0000-0000-0000-00000000d540:Codeunit:50924#223afda06e56ed8dc4c810d1aa8ea33b4681998007f9ea4ba264ef6a38142f12",
+        "11111111-0000-0000-0000-00000000d540:Codeunit:50924#54df5db3f47953b91125aad48b26cf8ca54f7236812cebc48270d72d757240f3",
+        "11111111-0000-0000-0000-00000000d540:Codeunit:50924#68125d51b76312ab5ccad70d143d89e76b1cea679d3e6f8e2f0e6ca9f87d056d",
+        "11111111-0000-0000-0000-00000000d540:Codeunit:50924#7aad910b0ee85f97a4c4cd866a0801d13cc45af7875af61c1d92f4d1d1409a0e",
+        "11111111-0000-0000-0000-00000000d540:Codeunit:50924#7f5383bd098872afe4c4a9dacaef7af979a80fdf7dda4542a6540616f315d1f1",
+        "11111111-0000-0000-0000-00000000d540:Codeunit:50924#e5d40089a7299028f38f43b9361f98f9b43b629441f5a72625224aa51bf32360",
+        "11111111-0000-0000-0000-00000000d540:Codeunit:50924#fb884fbe2c54b50353992dbf3f6da2823759114c4f74337a3dafc43dd7e0b30b"
       ],
-      "baseline": "{\n  \"schemaVersion\": \"1\",\n  \"generatedAt\": \"1970-01-01T00:00:00.000Z\",\n  \"fingerprints\": [\n    \"7069b2eb0111103c\",\n    \"8b34dd27efaa00fd\",\n    \"b225646fd65a5290\"\n  ]\n}\n"
+      "baseline": "{\n  \"schemaVersion\": \"1\",\n  \"generatedAt\": \"1970-01-01T00:00:00.000Z\",\n  \"fingerprints\": [\n    \"050b06fc2cc1f1f2\",\n    \"06f65a7207b6b22b\",\n    \"170843cba645b8f2\",\n    \"35a5369e35ff6909\",\n    \"44fe558e4f3d899e\",\n    \"5aecfe4f935227c6\",\n    \"613afc279fcdfb63\",\n    \"67768275bd851e19\",\n    \"6af98d8f02354235\",\n    \"7069b2eb0111103c\",\n    \"8280e3e206ed0d49\",\n    \"8bd4f8172c521c25\",\n    \"a8d8409c7d7d64a6\",\n    \"b3f737aa596aba39\",\n    \"bdb94bf96595923b\",\n    \"c25b302857cd81f3\",\n    \"fb3e1b8a9a6c2e3c\"\n  ]\n}\n"
     },
     "r0-corpus/ws-d55": {
       "findings": [
         "d12-dead-integration-event|al-sem/v1=017d02abc5c6dc92",
-        "d55-event-publish-in-loop|al-sem/v1=d77ffd168a728ba9"
+        "d12-dead-integration-event|al-sem/v1=a0c1b94c3c699d72",
+        "d55-event-publish-in-loop|al-sem/v1=01c2eb2c18429675",
+        "d55-event-publish-in-loop|al-sem/v1=933413473b853aac",
+        "d55-event-publish-in-loop|al-sem/v1=dad96e8eded2cb76",
+        "d55-event-publish-in-loop|al-sem/v1=e51da580d1c94712"
       ],
       "stableIds": [
         "11111111-0000-0000-0000-00000000d550:Codeunit:50924#20596a2956b161875bbe939c343d06e017f04b2607d336fe4570d4bcfd692c9a",
+        "11111111-0000-0000-0000-00000000d550:Codeunit:50924#4b8410d37ae8c4c6f34cc4f58d5bb59f28ee38b3eee96dc9eacb4005aa3800de",
+        "11111111-0000-0000-0000-00000000d550:Codeunit:50925#0634f9e142b12365dc0facec2f2c4da785b03408a61d9f38a3792300ab03570f",
+        "11111111-0000-0000-0000-00000000d550:Codeunit:50925#0634f9e142b12365dc0facec2f2c4da785b03408a61d9f38a3792300ab03570f/cs0",
+        "11111111-0000-0000-0000-00000000d550:Codeunit:50925#0634f9e142b12365dc0facec2f2c4da785b03408a61d9f38a3792300ab03570f/cs1",
+        "11111111-0000-0000-0000-00000000d550:Codeunit:50925#0634f9e142b12365dc0facec2f2c4da785b03408a61d9f38a3792300ab03570f/cs2",
+        "11111111-0000-0000-0000-00000000d550:Codeunit:50925#0634f9e142b12365dc0facec2f2c4da785b03408a61d9f38a3792300ab03570f/loop0",
         "11111111-0000-0000-0000-00000000d550:Codeunit:50925#b586846aa4290f5824cdfe27069b1b093eefadb89926cf50b75c5cda513851e7",
         "11111111-0000-0000-0000-00000000d550:Codeunit:50925#ccc4c23533bfa61fcf503f45ac505010d2e943828e3bfcf778c7ccfb3e18bdaf",
         "11111111-0000-0000-0000-00000000d550:Codeunit:50925#ccc4c23533bfa61fcf503f45ac505010d2e943828e3bfcf778c7ccfb3e18bdaf/cs0",
         "11111111-0000-0000-0000-00000000d550:Codeunit:50925#ccc4c23533bfa61fcf503f45ac505010d2e943828e3bfcf778c7ccfb3e18bdaf/loop0"
       ],
-      "baseline": "{\n  \"schemaVersion\": \"1\",\n  \"generatedAt\": \"1970-01-01T00:00:00.000Z\",\n  \"fingerprints\": [\n    \"017d02abc5c6dc92\",\n    \"d77ffd168a728ba9\"\n  ]\n}\n"
+      "baseline": "{\n  \"schemaVersion\": \"1\",\n  \"generatedAt\": \"1970-01-01T00:00:00.000Z\",\n  \"fingerprints\": [\n    \"017d02abc5c6dc92\",\n    \"01c2eb2c18429675\",\n    \"933413473b853aac\",\n    \"a0c1b94c3c699d72\",\n    \"dad96e8eded2cb76\",\n    \"e51da580d1c94712\"\n  ]\n}\n"
     },
     "r0-corpus/ws-d56": {
       "findings": [
@@ -1887,7 +1922,7 @@
         "d2-event-fanout-in-loop|al-sem/v1=0dfb929ccde779c9",
         "d3-missing-setloadfields|al-sem/v1=673773bfa76513a8",
         "d40-transitive-load-missing|al-sem/v1=45c94dbf3c7ee199",
-        "d55-event-publish-in-loop|al-sem/v1=ed677b1b619bc610"
+        "d55-event-publish-in-loop|al-sem/v1=a26ec5b7b9338489"
       ],
       "stableIds": [
         "ee2eee2e-0000-0000-0000-00000000e2e2:Codeunit:50990#289070bbfbe78fa3c2fbf9f7ee780124680b5324738fb1a4f8c5252d68941163",
@@ -1908,7 +1943,7 @@
         "ee2eee2e-0000-0000-0000-00000000e2e2:Codeunit:66102#da57b1541781f8c20c098c6e7dbd0eeb7506d4cac67358df94731723e13e06ac",
         "ee2eee2e-0000-0000-0000-00000000e2e2:Codeunit:66102#da57b1541781f8c20c098c6e7dbd0eeb7506d4cac67358df94731723e13e06ac/op0"
       ],
-      "baseline": "{\n  \"schemaVersion\": \"1\",\n  \"generatedAt\": \"1970-01-01T00:00:00.000Z\",\n  \"fingerprints\": [\n    \"0dfb929ccde779c9\",\n    \"45c94dbf3c7ee199\",\n    \"673773bfa76513a8\",\n    \"ed677b1b619bc610\",\n    \"fea938adcf2a8f6a\"\n  ]\n}\n"
+      "baseline": "{\n  \"schemaVersion\": \"1\",\n  \"generatedAt\": \"1970-01-01T00:00:00.000Z\",\n  \"fingerprints\": [\n    \"0dfb929ccde779c9\",\n    \"45c94dbf3c7ee199\",\n    \"673773bfa76513a8\",\n    \"a26ec5b7b9338489\",\n    \"fea938adcf2a8f6a\"\n  ]\n}\n"
     },
     "r0-corpus/ws-empty-abi-dep": {
       "findings": [],

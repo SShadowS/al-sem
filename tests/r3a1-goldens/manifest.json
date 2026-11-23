@@ -39,7 +39,7 @@
     "eventDispatchEdgeCount": 41,
     "typedEdgeCount": 217,
     "typedEventDispatchCount": 41,
-    "sccCount": 574,
+    "sccCount": 575,
     "recursiveSccCount": 5,
     "multiMemberSccCount": 3
   },
@@ -668,7 +668,7 @@
         "eventDispatchEdgeCount": 0,
         "typedEdgeCount": 0,
         "typedEventDispatchCount": 0,
-        "sccCount": 3,
+        "sccCount": 4,
         "recursiveSccCount": 0,
         "multiMemberSccCount": 0
       },

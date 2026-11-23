@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (ENG-101: distinct findings no longer share a fingerprint; d22, d54, d55)
+
+Owner decision 2026-11-18: two different findings must never share a fingerprint. A baseline
+or a suppression keyed by fingerprint treated a shared one as ONE finding: suppressing one
+suppressed all of them, and a new member of the group was invisible to it.
+- **d54 (publish in a TryFunction cone):** the event publisher joins the `rootCauseKey`. A
+  TryFunction that reaches five publishers gave five findings under one fingerprint; now each
+  publisher has its own. The cap stays 5 findings per TryFunction.
+- **d55 (event published in a loop):** the published event, and its repeat number in that
+  loop (`#1`, `#2`, in source order), join the `rootCauseKey`. Every publish in one loop
+  shared the loop's fingerprint before.
+- **d22 (FlowField read without CalcFields):** the reads of one FlowField on one record
+  variable in one routine are now ONE finding (one cause, one fix: a CalcFields before the
+  first read). It sits on the first read in source order, and its evidence lists every
+  uncovered read in source order. Its key and fingerprint are unchanged.
+- CDO (pinned baseline): CDO_COUNTS
+- **Release note: re-baseline d54 and d55.** Every d54 and d55 fingerprint changes (the loose
+  fingerprint too). An existing `--baseline` file or fingerprint suppression for a d54 or d55
+  finding no longer matches it: run `alsem analyze --update-baseline` again, and re-create
+  fingerprint suppressions for those two detectors. d22 fingerprints do not move; only the
+  extra findings of a merged group (the second and later reads) disappear.
+- Tests: `r4_differential`'s fixtures `ws-d22`, `ws-d54` and `ws-d55` hold the three shapes;
+  every r4 fixture run now checks that no two findings share a fingerprint; and
+  `d22_merges_the_reads_of_one_flowfield` pins the merge. The `ids-parent-baseline` record
+  was updated by hand for the moved d54/d55 fingerprints (see its module doc).
+
 ### Fixed (ENG-178: table procedures named like record built-ins: four follow-ups from ENG-173)
 
 From Fable's second review of ENG-173 (`/work/.al-sem/engine-notes/eng173/fable-eng173-r2.md`).

@@ -22,10 +22,10 @@
   ],
   "fixtureCount": 158,
   "matrix": {
-    "routineCount": 584,
+    "routineCount": 585,
     "routinesWithInheritedEffects": 57,
     "viaKinds": {
-      "direct": 329,
+      "direct": 330,
       "event-subscriber": 15,
       "implicit-trigger": 1,
       "inherited": 55
@@ -748,10 +748,10 @@
       "fixture": "ws-d22",
       "goldenFile": "ws-d22.r3a2.golden.json",
       "matrix": {
-        "routineCount": 3,
+        "routineCount": 4,
         "routinesWithInheritedEffects": 0,
         "viaKinds": {
-          "direct": 4
+          "direct": 5
         },
         "recursiveCycleRoutines": 0,
         "unresolvedCallRoutines": 0,
