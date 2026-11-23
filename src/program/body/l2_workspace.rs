@@ -258,6 +258,8 @@ fn workspace_bare_verdicts(workspace: &Path) -> std::collections::HashMap<String
                 FileBindings {
                     parenless: Default::default(),
                     bare: b.bare.clone(),
+                    // ENG-173: a table procedure's call is a call site, as in the Model.
+                    table_procedure: b.table_procedure.clone(),
                 },
             )
         })

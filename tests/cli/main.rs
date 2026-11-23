@@ -351,6 +351,7 @@ mod cli_step5_coverage_fold;
 mod cli_strict_events_policy;
 mod cli_table_event_guards;
 mod cli_table_event_subscribers;
+mod cli_table_procedure_overload;
 mod cli_temp_blob_not_file;
 mod cli_tests_selection;
 mod cli_this_argument;
