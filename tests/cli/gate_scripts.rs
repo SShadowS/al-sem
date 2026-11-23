@@ -4978,13 +4978,17 @@ fn env_probe_child() {
     if std::env::var_os(ENV_PROBE).is_none() {
         return;
     }
-    let mut marker = std::env::var_os("BASH_ENV").expect("the parent sets BASH_ENV");
+    let bash_env = std::env::var_os("BASH_ENV").expect("the parent sets BASH_ENV");
+    let mut marker = bash_env.clone();
     marker.push(".ran");
     let marker = std::path::PathBuf::from(marker);
     let dir = tempfile::tempdir().unwrap();
 
-    // Positive control: bash with the inherited environment writes the marker.
-    let control = std::process::Command::new("bash")
+    // Positive control: bash with the fixture's BASH_ENV writes the marker. A
+    // clean environment plus that one variable: an inherited POSIXLY_CORRECT
+    // makes bash skip BASH_ENV (review r2, sol).
+    let control = crate::clean_env::command("bash")
+        .env("BASH_ENV", &bash_env)
         .args(["-c", "true"])
         .status()
         .unwrap();
