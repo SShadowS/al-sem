@@ -29,10 +29,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the first version took that trigger from `$SECONDS`, wall time, which a backward clock step
   postpones. On expiry it looks at the go file once more: a keeper that took its go while the
   clocks were read went on, and that is a go (review r1, sol and Fable: it was refused and the
-  valid hold torn down).
+  valid hold torn down). Review r2 (sol): the trigger's clock is chosen once per wait
+  (`/proc/uptime`, or the wall clock when it cannot be read) and never mixed; a later failed
+  `/proc/uptime` read keeps its last value (no proof: no test can make `/proc/uptime` fail).
 - **No endless wait (review r1, Fable).** A failed clock read keeps the last awake time, so a
   clock that stopped reading would make a wait endless. The third failed read in a row now
-  counts wall time from the last good reading on, and the wait says so. When the clock was never
+  counts wall time from the last good reading on, and the wait says so. Review r2 (sol): that
+  fall back is anchored to the wall clock read right AFTER the last good reading (it was read
+  before it, so a suspend between the two was charged to the wait after a fall back), and each
+  clock read is cut after 5 s (`timeout 5`), so a read that hangs is a failed read, not a hung
+  wait. The read is now a command substitution, which waits for it to end: a `< <(...)` read
+  outlived its caller with the caller's lock descriptors (cdo-slot's refused-run test failed once
+  under a suite's load: the slot still held just after the refused run). When the clock was never
   readable (an old `host-suspended` that prints only the suspended seconds), the wait is on wall
   time and its suspend line says `the wall clock counts it in this wait (no awake clock)`, not
   `it goes on that much longer`.
@@ -69,7 +77,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `cdo_slot_a_clock_that_stops_reading_falls_back_to_wall_time`,
   `cdo_slot_go_taken_during_the_deadline_read_is_a_go` (each with its proof) and
   `cdo_slot_an_old_clock_says_the_wall_clock_counts_the_suspend` (wording: no proof). `go`'s
-  boot-time trigger has no proof: no test can step the host's wall clock.
+  boot-time trigger has no proof: no test can step the host's wall clock. Review r2 added
+  `cdo_slot_fall_back_does_not_charge_a_suspend_in_the_last_good_read` and
+  `cdo_slot_a_clock_read_that_hangs_is_a_failed_read`, each with its proof.
 
 ### Changed (TLS-116: `alsem batch` uses the IR cache, and no job write reaches a cache folder)
 
