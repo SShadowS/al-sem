@@ -273,6 +273,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
       no "killed" line appears;
     - the start-time check.
 
+### Fixed (ENG-189: a wrong `no` — an in-place bind through a kept RecordRef holder rebinds the other kept holders)
+
+- **The bug.** ENG-159's sound rule ends what is known about a RecordRef or Variant that may share
+  its record with code the routine cannot see only at places that may run user code. A plain
+  in-place bind (`GetTable`, `Open`, `Close`, `Get`) through such a holder is no such place, and a
+  local made retainable by a call is not joined into one alias class with the call's result or a
+  parameter it was joined to. So `L := Same(R); L.GetTable(Doc); Guarded(R)` (`Same` returns its
+  argument: one handle, ENG-175), `Join(L, R); L.GetTable(Doc)` (`Join(var A; B) begin A := B end`)
+  and the same through a `var Variant` out parameter left `R` on its old table: `prove
+  writes-table` answered `no` where a run writes (found by Fable's review of the ENG-161 design,
+  measured on master).
+- **The fix.** An in-place bind through a holder RETAINABLE at that point
+  (`recref_alias::kept_bind_points`) counts as a place that may rebind every OTHER retainable
+  holder (its own alias class is bound to the bind's table, as before), in the RecordRef flow's
+  facts and in G36 (`field_guard`). G34 (`exit_guards`) needs nothing: an exit guard's holder is
+  passed to no call before the guard, so only an external holder (already in its class) can share
+  it, and binds after the guard do not move the exit.
+- **Measured on BC 28.4 first** (`/work/.al-sem/engine-notes/eng189-probe/RESULTS.md`):
+  `FieldRef.Record()` and `KeyRef.Record()` are COPIES (rebinding them leaves `R` alone), so
+  `F := R.Field(1); L := F.Record(); L.GetTable(D)` correctly answers `no` and is not modelled. A
+  `List of [RecordRef]` element (`Get`, `foreach`) and a var-parameter copy share the handle (for
+  ENG-161).
+- **CDO (pinned `bc3ccb18`, c6f61f04 against the head):** no finding or fingerprint moved at either
+  scope; unknown edges 0 -> 0. cdo-speed PASS: instructions build x0.9989, round total x0.9979.
+- **Tests and red proofs.** `cli_recref_inplace_kept` (new): the three shapes `yes`, with
+  controls (`RootControlNo`, `RootBindFirst`, `RootFieldRecord` `no`, `RootControlYes` `yes`) and a
+  G36 pair. The flow's facts without the kept binds fail `RootSame`; G36 without them fails
+  `FieldAfterBind`; a kept bind rebinding its own receiver too fails `cli_recref_get`'s
+  `ShadowAliasFlow`.
+- **Goldens.** None moved.
+
 ### Fixed (ENG-178: table procedures named like record built-ins: four follow-ups from ENG-173)
 
 From Fable's second review of ENG-173 (`/work/.al-sem/engine-notes/eng173/fable-eng173-r2.md`).
