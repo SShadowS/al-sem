@@ -7,6 +7,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (ENG-173: a table procedure named like a record built-in is called; the call graph reaches it)
+
+- **Measured on BC 28.4 with alc 18.0.41** (`/work/.al-sem/engine-notes/eng173/alc-bind/
+  RESULTS.md` A1-A9, `joker/RESULTS.md` J1-J9). A table procedure named like a record built-in
+  OVERLOADS it, with no warning. Each call binds by its arguments:
+  - `E.Next(RR, true)`, `E.Count(RR)`, `E.Get(RR)`, `E.FieldNo('K')`, `E.FieldNo(S)`,
+    `E.SetRange(RR)` and `E.Validate(1, 2)` run the table's procedure;
+  - `E.Next()`, `E.Next(1)`, `E.Count()`, `E.Get('X')`, `E.FieldNo(K)`, `E.SetRange(K)` and
+    `E.Validate(K, 2)` run the platform method.
+
+  When both can take the call, alc ranks the conversions: `E.Find('-')` runs the platform over
+  a user `Find(Text)`, while `E.Get(I: Integer)` runs a user `Get(Variant)`.
+- **The bugs.**
+  - The resolver took every record-operation name as the platform operation. So the call graph
+    never reached the table's procedure: a table `Next` that inserts a Log gave `prove …
+    writes-table:Log` = `no`.
+  - A RecordRef the procedure rebinds stayed bound in every RecordRef reader (Fable r3 on
+    ENG-159, Fable r1 on ENG-175).
+  - The model kept a record operation the platform never runs (`E.Insert(RR)` "wrote" the
+    table).
+  - A member call (`E.FieldNo(…)`) always took the table's procedure at equal arity, even
+    where the platform takes the call.
+- **The fix: one decision.**
+  - `platform_record_fit` drops the platform method only when it certainly cannot take the
+    call. That is: no overload has the call's arity; a `Field` parameter gets something that is
+    no field of the record (a literal, a variable, an expression); a value parameter gets a
+    RecordRef; or a scalar or record parameter gets a kind no conversion reaches.
+  - The platform Record signatures are generated from the compiler's own symbols:
+    `tools/gen-al-var-params` writes `src/program/resolve/platform_record_sigs.rs` (113
+    overloads, 82 names).
+  - The table's procedure is taken when its table scope resolves the call (arity exact, no
+    certain type clash). When both may run, both routes are kept: alc's conversion ranking is
+    not modelled.
+  - Record operation path: the resolver records the procedure (`RareSiteFacts::
+    table_procedure`, `platform_cannot`, `table_procedure_args`). The model gives the operation
+    a call site of its own (the operation's id, which the statement tree names) carrying the
+    procedure's edges. When the platform certainly cannot take the call, it removes the
+    operation and its triggers and table events.
+  - Member path: the catalog route is kept beside the table's procedure when the platform may
+    take the call.
+  - The record-type pass runs before the model's calls exist, so record operations now keep
+    the arguments that name a RecordRef or Variant (`holder_arguments`), and the pass reads
+    them as possibly rebound when a table procedure shares the operation's name.
+- **CDO.** No site of either kind on the pinned workspace and its dependencies: a census of
+  `aldump --program-call-graph-stats` (temporary, not shipped) found no record operation a
+  table procedure may take and no member call where both routes are kept. So the
+  conversion-ranking follow-up is not needed for this corpus.
+- **Tests.**
+  - `platform_record_fit`: one row per measured call (A1-A9, J1-J9), with what BC ran.
+  - `cli_table_procedure_overload`: a write through the table's `Next`, a RecordRef its
+    `Count` rebinds, a temp RecordRef its `Find` moves (Fable's TP7), and no phantom `Insert`.
+    Each has the platform shape as its control.
+- **Red proofs.**
+  - In the fit check: a `Field` parameter taking anything fails J1; a value parameter taking a
+    RecordRef fails A6; no arity check fails A1.
+  - No procedure call site fails `UserNext`; the record-type pass ignoring holder arguments
+    fails `UserFindTemp`; keeping the phantom operation fails `UserInsert`.
+  - A `/tableproc` call-site id, which the statement tree never names, failed the field guard's
+    `ShadowOpRetained`.
+- **Golden.** `tests/ir-l2-goldens/l2_features.snapshot` changes for 335 routines (Debug text of
+  `holder_arguments`). With it normalized, the old golden matched; no serialized output moves.
+
 ### Fixed (TLS-105: three more gate-script deadlines count awake time, not wall time)
 
 - **What was wrong.** server1 is a laptop that suspends when moved, and the wall clock keeps
