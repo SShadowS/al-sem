@@ -554,6 +554,12 @@ codeunit 50435 "TB Mgt"
 /// `AssignRoot`'s insert out: fails; restored, passes. `PassRoot` is kept by a rule older than
 /// this fix (not traced); with `PassHidden`'s call removed it is ruled
 /// out (the row can fail).
+///
+/// ENG-175 rows: a ternary that may be the global, as a receiver (`TernaryReceiver`) or an
+/// argument naming the hidden global (`TernaryHidden`, through another codeunit: a self-call
+/// there is kept by the same older rule as `PassRoot`). Discrimination (2026-11-23): the flow's
+/// ternary rule skipping a hidden global's write rules `TernaryHiddenRoot`'s insert out: fails;
+/// restored, passes (with no ternary, `Util.LogByValue(S)`, it is ruled out: the row can fail).
 #[test]
 fn a_hidden_globals_write_reaches_the_instance() {
     use crate::engine::l5::literal_reach::KeptElsewhere;
@@ -586,6 +592,24 @@ codeunit 50443 "HB Box"
         MutLog(this.G);
     end;
 
+    // ENG-175: a ternary receiver or argument may be the global (BC 28.4: the chosen branch).
+    procedure TernaryReceiver(B: Boolean)
+    var
+        S: RecordRef;
+        L: Record "HB Log";
+    begin
+        (B ? G : S).GetTable(L);
+    end;
+
+    procedure TernaryHidden(B: Boolean)
+    var
+        G: RecordRef;
+        S: RecordRef;
+        Util: Codeunit "HB Util";
+    begin
+        Util.LogByValue(B ? this.G : S);
+    end;
+
     local procedure MutLog(var X: RecordRef)
     var
         L: Record "HB Log";
@@ -600,6 +624,15 @@ codeunit 50443 "HB Box"
         if G.Number <> Database::"HB Log" then
             exit;
         O.Insert();
+    end;
+}
+codeunit 50445 "HB Util"
+{
+    procedure LogByValue(X: RecordRef)
+    var
+        L: Record "HB Log";
+    begin
+        X.GetTable(L);
     end;
 }
 codeunit 50444 "HB Mgt"
@@ -630,6 +663,24 @@ codeunit 50444 "HB Mgt"
     begin
         Box.SetDoc();
         Box.PassHidden();
+        Box.Use();
+    end;
+
+    procedure TernaryReceiverRoot()
+    var
+        Box: Codeunit "HB Box";
+    begin
+        Box.SetDoc();
+        Box.TernaryReceiver(true);
+        Box.Use();
+    end;
+
+    procedure TernaryHiddenRoot()
+    var
+        Box: Codeunit "HB Box";
+    begin
+        Box.SetDoc();
+        Box.TernaryHidden(true);
         Box.Use();
     end;
 }
@@ -675,6 +726,16 @@ codeunit 50444 "HB Mgt"
     );
     assert!(!dead(&id("AssignRoot")), "`this.G := R` writes the global");
     assert!(!dead(&id("PassRoot")), "`MutLog(this.G)` writes the global");
+    // ENG-175: a ternary that may be the global, as a receiver (in place) or an argument naming
+    // the hidden global.
+    assert!(
+        !dead(&id("TernaryReceiverRoot")),
+        "`(B ? G : S).GetTable(L)` may rebind the global"
+    );
+    assert!(
+        !dead(&id("TernaryHiddenRoot")),
+        "`LogByValue(B ? this.G : S)` may rebind the hidden global"
+    );
 }
 
 /// TLS-22: two workers that both miss one evaluation's key (forced: the hook

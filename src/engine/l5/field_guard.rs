@@ -84,6 +84,9 @@ fn guarded_operations(
         names_by_site.entry(cs.id.as_str()).or_default().extend(
             cs.argument_texts
                 .iter()
+                // ENG-175 (sol): a leaf of a ternary receiver or argument may be the handle passed
+                // or rebound (BC 28.4: the chosen branch's).
+                .chain(cs.ternary_holders())
                 .filter_map(|a| key_of(a))
                 .filter(|&a| aliases.is_holder(a)),
         );

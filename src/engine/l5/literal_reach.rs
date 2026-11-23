@@ -948,6 +948,10 @@ fn table_frame(r: &ModelRoutine) -> Option<TableFrame> {
             || r.var_assignments.iter().any(|a| {
                 names(&a.lhs_text, k) || a.rhs_text.as_deref().is_some_and(|w| names(w, k))
             })
+            // ENG-175: a ternary receiver or argument may be R (BC 28.4: the chosen branch).
+            || r.call_sites
+                .iter()
+                .any(|cs| cs.ternary_holders().iter().any(|a| names(a, k)))
         {
             continue;
         }
@@ -1015,7 +1019,12 @@ fn table_frame(r: &ModelRoutine) -> Option<TableFrame> {
         }
         let e = escapes.entry(r_lc.clone()).or_default();
         for cs in &r.call_sites {
-            let passes = cs.argument_texts.iter().any(|a| names(a, pk));
+            // ENG-175 (sol): a ternary leaf may be the value passed.
+            let passes = cs
+                .argument_texts
+                .iter()
+                .chain(cs.ternary_holders())
+                .any(|a| names(a, pk));
             let is_gettable = matches!(&cs.callee, PCallee::Member { method, .. }
                 if method.eq_fold_identifier("gettable"));
             if passes && !is_gettable {
