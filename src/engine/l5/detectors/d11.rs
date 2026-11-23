@@ -121,7 +121,7 @@ pub fn detect_d11(
                     &op.source_anchor,
                 );
             // ENG-177: and that load reaches the op on some path (no later
-            // unloaded copy, `Clear` or `exit` cut every such path).
+            // copy of an unloaded record, and no `exit`, cut every such path).
             if loaded_textually && record_may_be_loaded_at(routine, ctx, op) {
                 continue;
             }

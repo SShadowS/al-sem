@@ -16,24 +16,31 @@
 //! every other variable (a parameter, a global, the implicit `Rec`, an unknown scope) may be,
 //! because its state is the caller's or another routine's ("unknown is not no").
 //!
-//! Effects: a recognised load operation, `TransferFields` (a well-defined state, as `Copy` and
-//! `Init`) or a loading call textually before the operation loads its record (the same position
-//! rule as the detectors' own signals: a load later in a loop body does not count). A record handed
-//! to any call may be loaded after it: `Clear(A)` leaves it in a well-defined state (as `Init`),
-//! any other call (a by-var out parameter) in the callee's, unknown. A whole-variable assignment
-//! `A := X` gives `A` the state of `X`; from any other value (a call result, an expression) `A`
-//! may be loaded. A field write or an element write changes nothing. So the one thing that
-//! unloads a record is a copy of a record no path has loaded. Anything the walk cannot read (no
-//! statement tree, the operation not in it, a `try`, a pathologically deep tree, a loop that does
-//! not settle) answers "may be loaded": the detectors' textual answer stands.
+//! Effects, wherever they stand on the path (a load later in a loop body reaches the next pass):
+//! - a recognised load operation, or `TransferFields` (a well-defined state, as `Copy` and
+//!   `Init`), loads its record;
+//! - a call may load a record it is handed (`Clear` leaves a well-defined state, as `Init`; a
+//!   by-var out parameter leaves the callee's, unknown) unless every binding of it is a resolved
+//!   by-value parameter, a record it is called ON (a table procedure runs on the caller's record),
+//!   and one a loading call loads;
+//! - a whole-variable assignment `A := X` gives `A` the state of `X`; from any other value (a call
+//!   result, an expression) `A` may be loaded. A field write or an element write changes nothing.
+//!
+//! So the one thing that unloads a record is a copy of a record no path has loaded. Anything the
+//! walk cannot read answers "may be loaded", and the detectors' textual answer stands: no
+//! statement tree, the operation not in it, a load or call on a tracked record the tree does not
+//! hold (a `case` pattern: `case true of A.Get(1): ...`), an `asserterror` or `try` statement (an
+//! error inside is caught), a pathologically deep tree, a loop that does not settle.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use al_syntax::IdentifierFoldExt;
 
 use crate::engine::l5::detector_context::DetectorContext;
-use crate::engine::l5::detectors::{RECORD_LOAD_OPS, before_anchor, call_site_loads};
-use crate::program::body::features::{FlowFact, PAnchor, PCFNNode, PCallSite, PVarAssignment};
+use crate::engine::l5::detectors::{RECORD_LOAD_OPS, call_site_loads};
+use crate::program::body::features::{
+    FlowFact, PCFNNode, PCallSite, PCallee, PVarAssignment, PathHint,
+};
 use crate::program::model::workspace::{ModelRecordOperation, ModelRoutine};
 
 /// Deeper than any real routine; a deeper tree answers "may be loaded".
@@ -107,7 +114,6 @@ pub(crate) fn record_may_be_loaded_at(
         ctx,
         vars,
         target_id: &op.id,
-        target_anchor: &op.source_anchor,
         ops: routine
             .record_operations
             .iter()
@@ -121,10 +127,24 @@ pub(crate) fn record_may_be_loaded_at(
         rows,
         at_target: None,
         loops: Vec::new(),
+        seen: HashSet::new(),
         gave_up: false,
     };
     w.node(tree, Some(entry), 0);
     if w.gave_up {
+        return true;
+    }
+    // A load or call on a tracked record the tree does not hold: the walk saw only part of the
+    // routine (Fable r1: a `case` pattern is no leaf).
+    let unseen_op = routine
+        .record_operations
+        .iter()
+        .any(|o| !w.seen.contains(o.id.as_str()) && w.op_effect(o).is_some());
+    let unseen_call = routine
+        .call_sites
+        .iter()
+        .any(|c| !w.seen.contains(c.id.as_str()) && w.vars.iter().any(|v| w.call_may_load(c, v)));
+    if unseen_op || unseen_call {
         return true;
     }
     // Not reached: the operation is not in the tree, or only on a path that has ended.
@@ -141,16 +161,17 @@ struct Walk<'a> {
     ctx: &'a DetectorContext<'a>,
     vars: Vec<String>,
     target_id: &'a str,
-    target_anchor: &'a PAnchor,
     ops: HashMap<&'a str, &'a ModelRecordOperation>,
     calls: HashMap<&'a str, &'a PCallSite>,
     rows: HashMap<(u32, u32), Vec<&'a PVarAssignment>>,
     at_target: State,
     loops: Vec<LoopFrame>,
+    /// The operation and call-site ids the walk reached.
+    seen: HashSet<&'a str>,
     gave_up: bool,
 }
 
-impl Walk<'_> {
+impl<'a> Walk<'a> {
     fn index(&self, v: &str) -> Option<usize> {
         self.vars.iter().position(|x| x == v)
     }
@@ -166,8 +187,32 @@ impl Walk<'_> {
         self.seq(n.condition_leaves.as_ref(), st, depth)
     }
 
+    /// Code no path reaches loads nothing: its operations and calls count as seen.
+    fn mark_seen(&mut self, n: &PCFNNode) {
+        for id in [&n.operation_id, &n.callsite_id].into_iter().flatten() {
+            if let Some(o) = self.ops.get(id.as_str()) {
+                self.seen.insert(o.id.as_str());
+            }
+            if let Some(c) = self.calls.get(id.as_str()) {
+                self.seen.insert(c.id.as_str());
+            }
+        }
+        for group in [&n.condition_leaves, &n.children, &n.else_children]
+            .into_iter()
+            .flatten()
+        {
+            for c in group {
+                self.mark_seen(c);
+            }
+        }
+    }
+
     fn node(&mut self, n: &PCFNNode, st: State, depth: usize) -> State {
-        if st.is_none() || self.gave_up {
+        if st.is_none() {
+            self.mark_seen(n);
+            return None;
+        }
+        if self.gave_up {
             return None;
         }
         if depth > MAX_DEPTH {
@@ -222,6 +267,8 @@ impl Walk<'_> {
                 None
             }
             "try" => st.map(|s| vec![true; s.len()]),
+            // An error inside `asserterror` is caught and the routine goes on (Fable r1).
+            _ if n.path_hint() == Some(PathHint::AssertError) => st.map(|s| vec![true; s.len()]),
             "op" => {
                 let mut st = self.leaves(n, st, depth);
                 if let Some(op) = n
@@ -229,7 +276,15 @@ impl Walk<'_> {
                     .as_deref()
                     .and_then(|id| self.ops.get(id).copied())
                 {
-                    self.op(op, &mut st);
+                    self.seen.insert(op.id.as_str());
+                    if op.id == self.target_id {
+                        self.at_target = join(self.at_target.take(), &st);
+                    }
+                    if let Some(i) = self.op_effect(op)
+                        && let Some(s) = st.as_mut()
+                    {
+                        s[i] = true;
+                    }
                 }
                 self.seq(n.children.as_ref(), st, depth)
             }
@@ -239,23 +294,20 @@ impl Walk<'_> {
                     .callsite_id
                     .as_deref()
                     .and_then(|id| self.calls.get(id).copied())
-                    && let Some(s) = st.as_mut()
                 {
-                    let before = before_anchor(&cs.source_anchor, self.target_anchor);
-                    for (i, v) in self.vars.iter().enumerate() {
-                        // A loading call (`GetBySystemId` on it, a by-var loader), or the record
-                        // handed to any call: `Clear` leaves it in a well-defined state (as
-                        // `Init`), any other call (`GetCriterion(Edited)`, a by-var out
-                        // parameter) leaves the callee's state, unknown.
-                        if passes(cs, v) || (before && call_site_loads(self.ctx, cs, v)) {
-                            s[i] = true;
+                    self.seen.insert(cs.id.as_str());
+                    if let Some(s) = st.as_mut() {
+                        for (i, v) in self.vars.iter().enumerate() {
+                            if self.call_may_load(cs, v) {
+                                s[i] = true;
+                            }
                         }
                     }
                 }
                 self.seq(n.children.as_ref(), st, depth)
             }
-            // `other` (an assignment, `with`, `asserterror`, an unknown statement) and any
-            // unrecognised kind: its leaves, its own effect, then its children.
+            // `other` (an assignment, `with`, an unknown statement) and any unrecognised kind:
+            // its leaves, its own effect, then its children.
             _ => {
                 let mut st = self.leaves(n, st, depth);
                 if let Some(FlowFact::Assign { target, .. }) = n.flow.as_deref()
@@ -269,20 +321,50 @@ impl Walk<'_> {
         }
     }
 
-    /// A record operation: the target's state is recorded before it runs; a recognised load, or
-    /// `TransferFields` (a well-defined state, as `Copy` and `Init`), textually before the target
-    /// loads its record.
-    fn op(&mut self, op: &ModelRecordOperation, st: &mut State) {
-        if op.id == self.target_id {
-            self.at_target = join(self.at_target.take(), st);
-        }
-        if (RECORD_LOAD_OPS.contains(&op.op.as_str()) || op.op == "TransferFields")
-            && before_anchor(&op.source_anchor, self.target_anchor)
-            && let Some(i) = self.index(&op.record_variable_name.fold_identifier())
-            && let Some(s) = st.as_mut()
+    /// The tracked variable a record operation loads: a recognised load, or `TransferFields` (a
+    /// well-defined state, as `Copy` and `Init`).
+    fn op_effect(&self, op: &ModelRecordOperation) -> Option<usize> {
+        (RECORD_LOAD_OPS.contains(&op.op.as_str()) || op.op == "TransferFields")
+            .then(|| self.index(&op.record_variable_name.fold_identifier()))
+            .flatten()
+    }
+
+    /// Whether the call may leave the record `v` (lowercased) loaded: it loads it
+    /// (`GetBySystemId` on it, a by-var loader), runs on it (a procedure called ON the record: a
+    /// table procedure works on the caller's record, Fable r1), or is handed it other than by a
+    /// resolved by-value parameter (`Clear` leaves a well-defined state, as `Init`; a by-var out
+    /// parameter, `GetCriterion(Edited)`, the callee's, unknown).
+    fn call_may_load(&self, cs: &PCallSite, v: &str) -> bool {
+        let named = |t: &str| {
+            crate::record_ops::receiver_key_text(t)
+                .trim_matches('"')
+                .fold_identifier()
+                == v
+        };
+        if let PCallee::Member { receiver, .. } = &cs.callee
+            && named(receiver)
         {
-            s[i] = true;
+            return true;
         }
+        if cs.argument_texts.iter().any(|a| named(a)) {
+            let upgraded = self.ctx.upgraded_bindings_by_callsite.get(&cs.id);
+            let mut bound = false;
+            for (i, b) in cs.argument_bindings.iter().enumerate() {
+                if b.source_variable_name.as_deref() != Some(v) {
+                    continue;
+                }
+                bound = true;
+                match upgraded.and_then(|u| u.get(i)) {
+                    Some(up)
+                        if up.binding_resolution == "resolved" && !up.callee_parameter_is_var => {}
+                    _ => return true,
+                }
+            }
+            if !bound {
+                return true;
+            }
+        }
+        call_site_loads(self.ctx, cs, v)
     }
 
     /// The assignment at `pos` (one row per value it may take: ENG-175's conditional leaves).
@@ -359,14 +441,4 @@ impl Walk<'_> {
         }
         join(after, &frame.breaks)
     }
-}
-
-/// Whether the call passes the variable `v` (lowercased) itself as an argument.
-fn passes(cs: &PCallSite, v: &str) -> bool {
-    cs.argument_texts.iter().any(|a| {
-        crate::record_ops::receiver_key_text(a)
-            .trim_matches('"')
-            .fold_identifier()
-            == v
-    })
 }

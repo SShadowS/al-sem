@@ -1,6 +1,6 @@
 //! ENG-177: d11 (Modify without Get) and d21 (read without load) report an operation whose
-//! record no path reaching it leaves loaded: a later unloaded copy, `Clear` or `exit` cuts the
-//! load. A load on SOME path still silences them (their "never loaded" rule), so the if/else,
+//! record no path reaching it leaves loaded: a later copy of an unloaded record, or `exit`, cuts
+//! the load. A load on SOME path still silences them (their "never loaded" rule), so the if/else,
 //! `case`, conditional-expression and loop shapes that load on one branch stay silent.
 
 use std::collections::BTreeSet;
@@ -11,6 +11,11 @@ const SOURCE: &str = r#"table 50500 "E Entry"
 {
     fields { field(1; K; Integer) { } field(2; V; Integer) { } }
     keys { key(PK; K) { } }
+
+    procedure LoadMe()
+    begin
+        Rec.Get(1);
+    end;
 }
 
 codeunit 50501 "E Mgt"
@@ -165,7 +170,131 @@ codeunit 50501 "E Mgt"
             until L.NEXT = 0;
     end;
 
+    // Silent (Fable r1): a load the tree does not hold (a `case` pattern) leaves the walk unsure.
+    procedure CasePattern()
+    var A: Record "E Entry";
+    begin
+        case true of
+            A.Get(1):
+                A.Modify();
+        end;
+    end;
+
+    // Silent (Fable r1): `asserterror` catches the error, the path goes on.
+    procedure AssertCaught(B: Boolean)
+    var A: Record "E Entry";
+    begin
+        if B then
+            asserterror begin
+                A.Get(1);
+                Error('x');
+            end;
+        A.Modify();
+    end;
+
+    // Silent (Fable r1): a table procedure called ON a record may load it.
+    procedure ReceiverLoads()
+    var A, L2: Record "E Entry";
+    begin
+        A.Get(1);
+        L2.LoadMe();
+        A := L2;
+        A.Modify();
+    end;
+
+    // Silent (Fable r1): a load later in the loop reaches the next pass.
+    procedure LoopLaterLoad()
+    var L, L2, A: Record "E Entry";
+        I: Integer;
+    begin
+        L.Get(1);
+        A := L;
+        for I := 1 to 3 do begin
+            A := L2;
+            A.Modify();
+            L2.FindFirst();
+        end;
+    end;
+
+    // Silent: a `case` with no `else` may match no branch, keeping the load.
+    procedure NoMatchKeeps(I: Integer)
+    var N, A: Record "E Entry";
+    begin
+        A.Get(1);
+        case I of
+            1: A := N;
+        end;
+        A.Modify();
+    end;
+
+    // Silent: the path that breaks out carries the load.
+    procedure BreakCarries()
+    var N, A: Record "E Entry";
+        I: Integer;
+    begin
+        while I < 3 do begin
+            if I = 1 then begin
+                A.Get(1);
+                break;
+            end;
+            A := N;
+            I += 1;
+        end;
+        A.Modify();
+    end;
+
+    // Silent: the path that continues carries the load to the loop's exit.
+    procedure ContinueCarries()
+    var N, A: Record "E Entry";
+        I: Integer;
+    begin
+        while I < 3 do begin
+            I += 1;
+            if I = 1 then begin
+                A.Get(1);
+                continue;
+            end;
+            A := N;
+        end;
+        A.Modify();
+    end;
+
     // Reported: the load reaches the operation on no path.
+    procedure ErrorKills(B: Boolean)
+    var A: Record "E Entry";
+    begin
+        if B then begin
+            A.Get(1);
+            Error('x');
+        end;
+        A.Modify();
+    end;
+
+    // Reported: a resolved by-value argument leaves the caller's record as it was.
+    procedure ByValueKeepsKill()
+    var N, A: Record "E Entry";
+    begin
+        A.Get(1);
+        A := N;
+        Log(A);
+        A.Modify();
+    end;
+
+    // Silent: A is loaded from the third pass on; only the loop's fixed point (three rounds) sees it.
+    procedure LoopThirdPass()
+    var L, N, A: Record "E Entry";
+        I: Integer;
+    begin
+        A.Get(1);
+        A := N;
+        while I < 3 do begin
+            A.Modify();
+            A := L;
+            L.FindFirst();
+            I += 1;
+        end;
+    end;
+
     procedure ParenlessKill()
     var N, A: Record "E Entry";
     begin
@@ -227,6 +356,11 @@ codeunit 50501 "E Mgt"
         A.TestField(V);
     end;
 
+    local procedure Log(R: Record "E Entry")
+    begin
+        Message('%1', R.K);
+    end;
+
     local procedure Fill(var R: Record "E Entry")
     begin
         R.K := 7;
@@ -269,8 +403,15 @@ fn reported(dir: &Path, detector: &str) -> BTreeSet<String> {
 /// fails `ExitKills`; a branch join taking AND instead of OR fails `IfElseCopy`; the statement
 /// tree leaving out a parens-less record operation in a condition (`ir_walk::harvest`) fails
 /// `ParenlessLoad`; a record handed to a call keeping its state fails `FilledByCall`;
-/// `TransferFields` not loading fails `TransferredOn`. Each restored, passes. `ClearBuilds`
-/// guards the design (a `Clear` that unloaded, as the first draft did, reported it), not a line.
+/// `TransferFields` not loading fails `TransferredOn`. Round 2 (Fable r1): the unseen-load guard
+/// off fails `CasePattern`; `asserterror` read as a plain block fails `AssertCaught`; a call ON
+/// the record not loading it fails `ReceiverLoads`; a resolved by-value argument counted as a
+/// possible load fails `ByValueKeepsKill`; a terminating `Error` not ending its path fails
+/// `ErrorKills`; a `case` without `else` not keeping the no-match path fails `NoMatchKeeps`; a
+/// `break` not recorded on its loop fails `BreakCarries`, a `continue` `ContinueCarries`; one loop
+/// round instead of the fixed point fails `LoopThirdPass` and `LoopLaterLoad`. Each restored,
+/// passes. `ClearBuilds` guards the design (a `Clear` that unloaded, as the first draft did,
+/// reported it), not a line.
 #[test]
 fn a_load_must_reach_the_operation_on_some_path() {
     let t = tempfile::tempdir().unwrap();
@@ -286,11 +427,13 @@ fn a_load_must_reach_the_operation_on_some_path() {
     assert_eq!(
         reported(t.path(), "d11-modify-without-get"),
         set(&[
+            "ByValueKeepsKill",
             "ChainKilled",
-            "ParenlessKill",
             "CopyKills",
             "CopyKillsLoad",
+            "ErrorKills",
             "ExitKills",
+            "ParenlessKill",
         ])
     );
     assert_eq!(

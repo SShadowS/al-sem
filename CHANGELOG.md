@@ -1262,9 +1262,17 @@ ran beside the timing).
     terminating `Error`. A local record starts unloaded; a parameter, a global or `Rec` may be
     loaded (its state is the caller's). A whole-record copy `A := X` gives A X's state (each
     value of a conditional expression, ENG-175); a call result or an expression may be loaded.
+    Inside the walk a load counts wherever it stands on the path: one later in a loop body
+    reaches the next pass (the text-order rule stays in the old signals).
   - The one thing that unloads a record is a copy of a record no path has loaded. `Clear(A)` and
-    `TransferFields` leave a well-defined state (as `Init` and `Copy`); a record handed to any
-    call has the callee's state (a by-var out parameter), so it may be loaded.
+    `TransferFields` leave a well-defined state (as `Init` and `Copy`). A call may load a record
+    it is handed (a by-var out parameter has the callee's state) unless every binding of it is a
+    resolved by-value parameter, and a record it is called ON (a table procedure runs on the
+    caller's record).
+  - What the walk cannot read answers "may be loaded" (the old answer stands): a load or call on
+    a tracked record the tree does not hold (a `case` pattern, `case true of A.Get(1):`; the
+    tree gap is ENG-181), an `asserterror` statement (an error inside is caught), a deep tree, a
+    loop that does not settle.
   - The task asked instead for "loaded only when EVERY reaching assignment is loaded". Measured
     first: on CDO that rule moved no finding, and it would have made only the copy case strict
     while the direct case (`if B then A.Get(1)`) stays a "some path" rule.
@@ -1272,7 +1280,10 @@ ran beside the timing).
   `ir_walk::harvest` gave a parens-less read a leaf only when it had a call-site id, so
   `if L.FINDSET then` and `until L.NEXT = 0` were no leaf at all: every reader of the statement
   tree (the L4 walker, this walk) missed those operations. It now emits the operation leaf (or
-  the either-node where a table procedure may run, ENG-173).
+  the either-node where a table procedure may run, ENG-173). `explain`'s `conditionality` of
+  such an operation moves from `unknown` to what its parenthesised twin already said
+  (`loop-body`, `unconditional-on-success`; Fable r1 ran 20 twin shapes: `analyze`,
+  `fingerprint --witness all` and `query effects` byte-equal, `explain` 9 values moved).
 - **CDO (pinned `bc3ccb18`, `cdo-before-after` c6f61f04 against the head):** no finding and no
   fingerprint added or removed at `--scope primary` (2306) or `--scope all` (32429); unknown
   edges 0 → 0. The first draft added 10 (d11 +8, d21 +2): every one was triaged against source
@@ -1281,13 +1292,22 @@ ran beside the timing).
   on a record handed to an event), which the rules above fix. Two older false-positive classes
   that triage showed are filed: ENG-179 (d21 reports `CalcSums`, which needs no loaded record;
   138 base findings) and ENG-180 (the textual rule does not count `TransferFields`/`Clear`).
-- **Tests and red proofs.** `cli_d11_load_paths` runs `alsem analyze` on 22 shapes: silent where
-  a branch, `case`, conditional expression or loop loads on one path, a field write, a call
-  result, a parameter, a chain, `Clear`, a by-var fill, `TransferFields`, a parens-less load;
-  reported for a later unloaded copy, a broken chain, `exit`, a parens-less load then copy, and
+  Fable's review (r1) found the defects on both sides that ENG-182 holds: one record spelled
+  quoted and unquoted, a table procedure that loads the record it runs on, a built-in that takes
+  a record by value, `Copy` from an unloaded record.
+- **Tests and red proofs.** `cli_d11_load_paths` runs `alsem analyze` on 32 shapes: silent where
+  a branch, `case` (with or without a match), conditional expression or loop loads on one path
+  (a later pass, `break`, `continue` included), a field write, a call result, a parameter, a
+  chain, `Clear`, a by-var fill, a table procedure on the source, `TransferFields`, a parens-less
+  load, a `case` pattern, `asserterror`; reported for a later unloaded copy, a broken chain,
+  `exit`, a terminating `Error`, a resolved by-value argument, a parens-less load then copy, and
   one d21 read. Each break failed it, each restore passed: the walk ignored; a copy always
   loaded; `exit` not ending its path; an AND join; `harvest` leaving out the parens-less
-  operation; a record handed to a call keeping its state; `TransferFields` not loading.
+  operation; a record handed to a call keeping its state; `TransferFields` not loading; the
+  unseen-load guard off; `asserterror` as a plain block; a call ON the record not loading it; a
+  resolved by-value argument loading; a terminating `Error` going on; a `case` without `else`
+  losing the no-match path; `break` and `continue` not recorded on their loop; one loop round
+  instead of the fixed point.
 - **Goldens.** None moved (`check-goldens`, 2228 tests).
 
 ### Fixed (ENG-178: table procedures named like record built-ins: four follow-ups from ENG-173)
