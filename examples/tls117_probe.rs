@@ -14,20 +14,134 @@
 //! key is the whole file's blake3, without the IR marker search. The PE canonicaliser (`pe`,
 //! `examples/tls117/pe.rs`) has unit tests that run on any system:
 //! `cargo test --example tls117_probe pe::`.
+//!
+//! W10 (`examples/tls117_w10.ps1`) builds the probe several times and compares the outputs with
+//! `tls117_probe w10-compare <label> <a.exe> <b.exe>`, a mode that works on any system.
 
 #[cfg_attr(not(windows), allow(dead_code))]
 #[path = "tls117/pe.rs"]
 mod pe;
 
-#[cfg(not(windows))]
-fn main() {
-    eprintln!("tls117_probe: Windows only");
-    std::process::exit(2);
+/// W10: a writable static (it lands in `.data`) whose initial value is the only difference of the
+/// `w10-variant` build. `main` reads it, so it is kept.
+static W10_VALUE: std::sync::atomic::AtomicU32 =
+    std::sync::atomic::AtomicU32::new(if cfg!(feature = "w10-variant") {
+        0x5157_0002
+    } else {
+        0x5157_0001
+    });
+
+/// `w10-compare <label> <a> <b>`: canonicalise two builds and judge them (design note section 8,
+/// W10). Label `variant`: two builds differing only in [`W10_VALUE`]'s initial value must
+/// canonicalise differently. Label `relink`: two links of the same source must canonicalise
+/// equal with equal writable sections, or differently; never equal with different writable
+/// sections. Prints the TimeDateStamp, the REPRO (/Brepro) debug entry and the PDB GUID of each.
+fn w10_compare(label: &str, a: &str, b: &str) -> i32 {
+    let run = || -> Result<(bool, String), String> {
+        let (fa, fb) = (
+            std::fs::read(a).map_err(|e| format!("{a}: {e}"))?,
+            std::fs::read(b).map_err(|e| format!("{b}: {e}"))?,
+        );
+        let (ca, cb) = (pe::canonical_file(&fa)?, pe::canonical_file(&fb)?);
+        let (da, db) = (pe::writable_bytes(&fa)?, pe::writable_bytes(&fb)?);
+        let (ia, ib) = (pe::debug_info(&fa)?, pe::debug_info(&fb)?);
+        let same_canon = ca.hash == cb.hash;
+        let same_data = da == db;
+        // Where W10_VALUE's initial value sits in each file: it must be in a writable section,
+        // or the variant test would only show a constant change.
+        let place = |f: &[u8], v: u32| -> String {
+            let pat = v.to_le_bytes();
+            let Some(off) = f.windows(4).position(|w| w == pat) else {
+                return "not found".into();
+            };
+            let h = match pe::Headers::parse(f) {
+                Ok(h) => h,
+                Err(e) => return e,
+            };
+            h.sections
+                .iter()
+                .find(|s| off >= s.raw_ptr as usize && off < (s.raw_ptr + s.raw_size) as usize)
+                .map_or("outside every section".into(), |s| {
+                    format!(
+                        "{} ({})",
+                        String::from_utf8_lossy(&s.name).trim_end_matches('\0'),
+                        if s.writable() {
+                            "writable"
+                        } else {
+                            "READ-ONLY"
+                        }
+                    )
+                })
+        };
+        let vb = if label == "variant" {
+            0x5157_0002
+        } else {
+            0x5157_0001
+        };
+        let (pa, pb) = (place(&fa, 0x5157_0001), place(&fb, vb));
+        if label == "variant" && !(pa.ends_with("(writable)") && pb.ends_with("(writable)")) {
+            return Ok((
+                false,
+                format!("W10_VALUE is not in a writable section in both builds: a {pa}, b {pb}"),
+            ));
+        }
+        let pass = match label {
+            "variant" => !same_canon,
+            "relink" => !same_canon || same_data,
+            other => return Err(format!("unknown label {other}")),
+        };
+        Ok((
+            pass,
+            format!(
+                "canonical {} | writable sections {} | files {} | W10_VALUE a {pa}, b {pb} | a: \
+                 TimeDateStamp {:#010x}, REPRO entry {}, PDB {:?} | b: TimeDateStamp {:#010x}, \
+                 REPRO entry {}, PDB {:?}",
+                if same_canon { "EQUAL" } else { "different" },
+                if same_data { "equal" } else { "DIFFERENT" },
+                if fa == fb { "identical" } else { "differ" },
+                ia.time_date_stamp,
+                ia.repro,
+                ia.pdb_guid,
+                ib.time_date_stamp,
+                ib.repro,
+                ib.pdb_guid,
+            ),
+        ))
+    };
+    match run() {
+        Ok((true, n)) => {
+            println!("PASS W10 {label}: {n}");
+            0
+        }
+        Ok((false, n)) => {
+            println!("FAIL W10 {label}: {n}");
+            1
+        }
+        Err(e) => {
+            println!("FAIL W10 {label}: {e}");
+            1
+        }
+    }
 }
 
-#[cfg(windows)]
 fn main() {
+    // A store the optimiser cannot prove harmless, so the static stays writable (in `.data`, not
+    // folded into a constant in `.rdata`); `w10-compare variant` checks where it landed.
+    W10_VALUE.fetch_add(
+        std::hint::black_box(0),
+        std::sync::atomic::Ordering::Relaxed,
+    );
+    let args: Vec<String> = std::env::args().collect();
+    if args.get(1).map(String::as_str) == Some("w10-compare") && args.len() == 5 {
+        std::process::exit(w10_compare(&args[2], &args[3], &args[4]));
+    }
+    #[cfg(windows)]
     std::process::exit(win::main());
+    #[cfg(not(windows))]
+    {
+        eprintln!("tls117_probe: Windows only (except `w10-compare`)");
+        std::process::exit(2);
+    }
 }
 
 #[cfg(windows)]
@@ -63,6 +177,7 @@ mod win {
         MOVEFILE_REPLACE_EXISTING, MoveFileExW, READ_CONTROL, SetFileInformationByHandle,
         VOLUME_NAME_GUID, WRITE_DAC, WRITE_OWNER,
     };
+    use windows_sys::Win32::System::Diagnostics::Debug::ReadProcessMemory;
     use windows_sys::Win32::System::LibraryLoader::{
         GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
         GetModuleFileNameW, GetModuleHandleExW,
@@ -256,41 +371,75 @@ mod win {
             .open(p)
     }
 
-    /// The loaded module as a [`pe::View`]: reads copy bytes out of the mapped image.
+    /// The loaded module as a [`pe::View`], read with `ReadProcessMemory` on this process, so an
+    /// unreadable page is a failed read (no key), never a fault. Every range the canonicaliser
+    /// asks for is bounded by the image's own `SizeOfImage`; this caps it at `pe::MAX_IMAGE` too.
     struct MemView {
-        base: *const u8,
-        size: usize,
+        base: usize,
     }
 
     impl pe::View for MemView {
         fn read(&self, rva: u32, len: usize) -> Option<Vec<u8>> {
-            let end = (rva as usize).checked_add(len)?;
-            if end > self.size {
+            if (rva as usize).checked_add(len)? > pe::MAX_IMAGE as usize {
                 return None;
             }
             let mut out = vec![0u8; len];
-            // SAFETY: [base, base + size) is the loaded image (SizeOfImage from its own
-            // headers), mapped for the life of the process; `end <= size`.
-            unsafe {
-                std::ptr::copy_nonoverlapping(self.base.add(rva as usize), out.as_mut_ptr(), len)
+            let mut got = 0usize;
+            // SAFETY: the buffer holds `len` bytes; ReadProcessMemory checks the source range
+            // and fails (rather than faulting) on a page that cannot be read.
+            let ok = unsafe {
+                ReadProcessMemory(
+                    GetCurrentProcess(),
+                    (self.base + rva as usize) as *const c_void,
+                    out.as_mut_ptr().cast(),
+                    len,
+                    &mut got,
+                )
             };
-            Some(out)
+            (ok != 0 && got == len).then_some(out)
         }
     }
 
     /// Part A: the canonical hash of the module in memory.
     fn memory_canon(base: *const c_void) -> Result<pe::Canon, String> {
-        let first = MemView {
-            base: base.cast(),
-            size: 0x1000, // the header page is always mapped
-        };
-        let page = pe::View::read(&first, 0, 0x1000).ok_or("header page")?;
-        let h = pe::Headers::parse(&page)?;
-        let v = MemView {
-            base: base.cast(),
-            size: h.size_of_image as usize,
-        };
-        pe::canonical(&v, base as u64)
+        pe::canonical(
+            &MemView {
+                base: base as usize,
+            },
+            base as u64,
+        )
+    }
+
+    /// Part B on one candidate path: open it denying write and delete sharing, require a
+    /// regular file on local NTFS, read it whole through that handle (bounded), and check it
+    /// against A (headers first, then the canonical hash). `Ok((Some(key), verdict))` when
+    /// accepted; the key is the blake3 of the bytes read through that handle.
+    fn check_path(
+        p: &Path,
+        a: &pe::Canon,
+        step: &mut dyn FnMut(&str),
+    ) -> Result<(Option<[u8; 32]>, &'static str), String> {
+        let f = open_candidate(p);
+        step("after-open");
+        let mut f = f.map_err(|e| format!("open: {e}"))?;
+        let m = f.metadata().map_err(|e| format!("stat: {e}"))?;
+        if !m.is_file() || m.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return Err("not a regular file".into());
+        }
+        if m.len() > 2 * u64::from(pe::MAX_IMAGE) {
+            return Err("file too large".into());
+        }
+        local_ntfs(&f)?;
+        let mut bytes = Vec::new();
+        f.read_to_end(&mut bytes)
+            .map_err(|e| format!("read: {e}"))?;
+        let v = pe::check_candidate(&bytes, a);
+        step("after-hash");
+        Ok(match v.map_err(|e| format!("part B: {e}"))? {
+            pe::Verdict::Accepted => (Some(*blake3::hash(&bytes).as_bytes()), "accepted"),
+            pe::Verdict::HeadersDiffer => (None, "refused (headers differ)"),
+            pe::Verdict::HashDiffers => (None, "refused (canonical hash differs)"),
+        })
     }
 
     /// The module's load-time file name (`GetModuleFileNameW`).
@@ -329,36 +478,24 @@ mod win {
             let (mut opened, mut hashed) = (false, false);
             let mut key = None;
             for (what, p) in &cands {
-                let verdict = (|| -> Result<Option<[u8; 32]>, String> {
-                    let f = open_candidate(p);
-                    if !opened {
-                        opened = true;
-                        barrier("after-open");
+                let mut step = |tag: &str| {
+                    let seen = if tag == "after-open" {
+                        &mut opened
+                    } else {
+                        &mut hashed
+                    };
+                    if !*seen {
+                        *seen = true;
+                        barrier(tag);
                     }
-                    let mut f = f.map_err(|e| format!("open: {e}"))?;
-                    let m = f.metadata().map_err(|e| format!("stat: {e}"))?;
-                    if !m.is_file() || m.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-                        return Err("not a regular file".into());
-                    }
-                    local_ntfs(&f)?;
-                    let mut bytes = Vec::new();
-                    f.read_to_end(&mut bytes)
-                        .map_err(|e| format!("read: {e}"))?;
-                    let b = pe::canonical_file(&bytes);
-                    if !hashed {
-                        hashed = true;
-                        barrier("after-hash");
-                    }
-                    let b = b.map_err(|e| format!("part B: {e}"))?;
-                    Ok((b.hash == a.hash).then(|| *blake3::hash(&bytes).as_bytes()))
-                })();
-                match verdict {
-                    Ok(Some(k)) => {
-                        report.push(format!("{what}: accepted"));
+                };
+                match check_path(p, &a, &mut step) {
+                    Ok((Some(k), v)) => {
+                        report.push(format!("{what}: {v}"));
                         key = Some(k);
                         break;
                     }
-                    Ok(None) => report.push(format!("{what}: refused (canonical hash differs)")),
+                    Ok((None, v)) => report.push(format!("{what}: {v}")),
                     Err(e) => report.push(format!("{what}: refused ({e})")),
                 }
             }
@@ -555,6 +692,29 @@ mod win {
         Ok((h, file_id_at(exe).ctx("id of copy")?))
     }
 
+    /// A competing valid build: this executable with one `.text` byte changed (the middle of the
+    /// section; executable sections are never masked). It has the same headers, so part B
+    /// reaches the canonical comparison and must refuse it there.
+    fn rival_pe() -> Result<Vec<u8>, String> {
+        let mut f = std::fs::read(std::env::current_exe().ctx("current_exe")?).ctx("read self")?;
+        let h = pe::Headers::parse(&f)?;
+        let s = h
+            .sections
+            .iter()
+            .find(|s| s.named(".text"))
+            .ok_or("no .text section")?;
+        let at = s.raw_ptr as usize + (s.raw_size.min(s.mapped_len()) / 2) as usize;
+        *f.get_mut(at).ok_or(".text past the file")? ^= 1;
+        Ok(f)
+    }
+
+    /// Both candidates reached the canonical comparison and were refused there.
+    fn both_refused_by_hash(reply: &str) -> bool {
+        ["mapped", "module-name"]
+            .iter()
+            .all(|c| reply.contains(&format!("{c}: refused (canonical hash differs)")))
+    }
+
     fn ends_with(name: &[u16], leaf: &str) -> bool {
         let tail: Vec<u16> = OsStr::new(&format!("\\{leaf}")).encode_wide().collect();
         name.ends_with(&tail)
@@ -709,8 +869,13 @@ mod win {
         }
     }
 
-    fn mutate(how: Mutation, dir: &Path, exe: &Path, n: usize) -> std::io::Result<()> {
-        let other_bytes = format!("another build {n}");
+    fn mutate(
+        how: Mutation,
+        dir: &Path,
+        exe: &Path,
+        n: usize,
+        other_bytes: &[u8],
+    ) -> std::io::Result<()> {
         match how {
             Mutation::AwayThenWrite => {
                 std::fs::rename(exe, dir.join(format!("away-{n}.exe")))?;
@@ -753,31 +918,45 @@ mod win {
         std::fs::create_dir(&dir).ctx("mkdir")?;
         let exe = dir.join("a.exe");
         let (orig, orig_id) = copy_self(&exe)?;
+        let rival = rival_pe()?;
+        // The POSIX control: the same rename helper must replace a target that is not running
+        // (verified by file id) before an image-side "moved nothing" can count as HELD.
+        let control = match how {
+            Mutation::PosixRenameOver => Some(posix_control(s.path(), &rival)),
+            _ => None,
+        };
         let mut k = Kid::spawn(&exe)?;
         k.send("key-barriers");
         let mut did: Option<Result<String, String>> = None;
+        let mut replaced = false;
         let result = loop {
             let r = k.recv();
             let Some(tag) = r.strip_prefix("BARRIER ") else {
                 break r;
             };
             if tag == at {
-                did = Some(match mutate(how, &dir, &exe, n) {
+                did = Some(match mutate(how, &dir, &exe, n, &rival) {
                     Ok(()) => match file_id_at(&exe) {
                         // Verified before the barrier is released: the old name opens
                         // another file now.
-                        Ok(id) if id != orig_id => Ok("replaced (verified)".into()),
+                        Ok(id) if id != orig_id => {
+                            replaced = true;
+                            Ok("replaced by a rival build (verified)".into())
+                        }
                         // The call reported success but the image kept its name: HELD only when
-                        // the other file also stayed where it was (nothing moved at all).
+                        // the control replaced a non-running target and the other file also
+                        // stayed where it was (nothing moved at all).
                         Ok(_) if matches!(how, Mutation::PosixRenameOver) => {
                             let other = dir.join(format!("other-{n}.exe"));
-                            match file_id_at(&other) {
-                                Ok(oid) if oid != orig_id => {
-                                    Ok("HELD (the OS kept the running image: the POSIX rename \
-                                     reported success and moved nothing)"
-                                        .into())
-                                }
-                                r => Err(format!(
+                            match (control.clone().unwrap(), file_id_at(&other)) {
+                                (Ok(c), Ok(oid)) if oid != orig_id => Ok(format!(
+                                    "HELD (the OS kept the running image: the POSIX rename \
+                                     reported success and moved nothing; {c})"
+                                )),
+                                (Err(c), _) => Err(format!(
+                                    "the rename did not take, and the control failed: {c}"
+                                )),
+                                (_, r) => Err(format!(
                                     "mutation did not take, and the other file is not where it \
                                      was ({r:?})"
                                 )),
@@ -815,7 +994,30 @@ mod win {
         };
         let did = did.ok_or("the barrier never came")??;
         let (_, said) = judge(&result, &orig).map_err(|e| format!("{did}; {e}"))?;
+        // A replaced name must have been refused at the canonical comparison, by both candidates,
+        // when the replacement happened before either was opened.
+        if replaced && at == "after-query" && !both_refused_by_hash(&result) {
+            return Err(format!(
+                "{did}; {said}; not both candidates were refused at the canonical comparison"
+            ));
+        }
         Ok(format!("{did}; {said}"))
+    }
+
+    /// The POSIX rename helper on a target nobody runs: it must replace it (the target's name
+    /// then opens the source's file id).
+    fn posix_control(scratch: &Path, rival: &[u8]) -> Result<String, String> {
+        let target = scratch.join("ctl-target.exe");
+        let src = scratch.join("ctl-src.exe");
+        std::fs::write(&target, b"control target").ctx("write control target")?;
+        std::fs::write(&src, rival).ctx("write control source")?;
+        let src_id = file_id_at(&src).ctx("control source id")?;
+        posix_rename_over(&src, "ctl-target.exe").ctx("control rename")?;
+        if file_id_at(&target).ctx("control target id")? == src_id {
+            Ok("control: replaced a non-running target (verified)".into())
+        } else {
+            Err("control: the POSIX rename did not replace a non-running target".into())
+        }
     }
 
     fn w1_race(how: Mutation) -> Outcome {
@@ -882,13 +1084,23 @@ mod win {
                     format!("delete refused ({e}), renamed away")
                 }
             };
-            std::fs::write(&link, "another build").ctx("write a new l.exe")?;
+            std::fs::write(&link, rival_pe()?).ctx("write a rival build at l.exe")?;
             if file_id_at(&link).ctx("id at l.exe")? == orig_id {
                 return Err("mutation did not take".into());
             }
             let n = k.name().unwrap_or_default();
-            let (_, after) = judge(&k.ask("key"), &orig).map_err(|e| format!("{how}: {e}"))?;
-            notes.push(format!("{how}, replaced: {after}, name {}", lossy(&n)));
+            let reply = k.ask("key");
+            let (_, after) = judge(&reply, &orig).map_err(|e| format!("{how}: {e}"))?;
+            if !both_refused_by_hash(&reply) {
+                return Err(format!(
+                    "{how}, replaced: {after}; not both candidates were refused at the canonical \
+                     comparison"
+                ));
+            }
+            notes.push(format!(
+                "{how}, replaced by a rival build: {after}, name {}",
+                lossy(&n)
+            ));
             Ok(notes.join(" | "))
         })())
     }
@@ -969,47 +1181,78 @@ mod win {
     pub(crate) fn w9_altered_candidates() -> Outcome {
         outcome((|| {
             let base = module_base().ok_or("GetModuleHandleExW failed")?;
-            let a = memory_canon(base)?;
+            let a = memory_canon(base).map_err(|e| format!("part A: {e}"))?;
             let file = std::fs::read(std::env::current_exe().ctx("current_exe")?).ctx("read")?;
-            let b = pe::canonical_file(&file)?;
-            if b.hash != a.hash {
-                return Err(format!(
-                    "the unaltered file is refused: A {} vs B {} (zeroed A {:?}, B {:?})",
-                    &hex(&a.hash)[..16],
-                    &hex(&b.hash)[..16],
-                    a.zeroed,
-                    b.zeroed
-                ));
-            }
             let h = pe::Headers::parse(&file)?;
-            let flipped = |name: &str| -> Result<Option<bool>, String> {
-                let Some(s) = h
+            let d = scratch()?;
+            // Every case goes through the full candidate path: a file, opened denying write and
+            // delete sharing, checked for local NTFS, read through that handle, checked against A.
+            let run = |name: &str, bytes: &[u8]| -> Result<&'static str, String> {
+                let p = d.path().join(format!("w9-{name}.exe"));
+                std::fs::write(&p, bytes).ctx("write candidate")?;
+                check_path(&p, &a, &mut |_| {}).map(|(_, v)| v)
+            };
+            // A byte inside section `name`, outside every range A zeroed (the IAT sits at the
+            // start of .rdata on MSVC), searched outward from the middle.
+            let flip = |name: &str| -> Result<Vec<u8>, String> {
+                let s = h
                     .sections
                     .iter()
-                    .find(|s| s.name.starts_with(name.as_bytes()) && s.raw_size > 64)
-                else {
-                    return Ok(None);
+                    .find(|s| s.named(name))
+                    .ok_or(format!("required section {name} is missing"))?;
+                let len = s.raw_size.min(s.mapped_len());
+                let masked = |o: u32| {
+                    let rva = s.va + o;
+                    a.zeroed.iter().any(|&(r, l)| {
+                        u64::from(rva) >= u64::from(r)
+                            && u64::from(rva) < u64::from(r) + u64::from(l)
+                    })
                 };
+                let o = (0..len)
+                    .map(|k| (len / 2 + k) % len)
+                    .find(|&o| !masked(o))
+                    .ok_or(format!("{name} is masked everywhere"))?;
                 let mut f = file.clone();
-                f[s.raw_ptr as usize + 32] ^= 1;
-                Ok(Some(pe::canonical_file(&f)?.hash == a.hash))
+                f[s.raw_ptr as usize + o as usize] ^= 1;
+                Ok(f)
             };
-            let mut notes = vec![format!(
-                "unaltered: accepted (A = B = {})",
-                &hex(&a.hash)[..16]
-            )];
-            for name in [".text", ".rdata"] {
-                match flipped(name)? {
-                    Some(false) => notes.push(format!("{name} byte changed: refused")),
-                    Some(true) => return Err(format!("a changed {name} byte was accepted")),
-                    None => notes.push(format!("{name}: no such section")),
+            let mut notes = Vec::new();
+            match run("unaltered", &file)? {
+                "accepted" => {
+                    notes.push(format!("unaltered: accepted (A {})", &hex(&a.hash)[..16]))
+                }
+                v => {
+                    return Err(format!(
+                        "the unaltered file is {v} (A zeroed {:?})",
+                        a.zeroed
+                    ));
                 }
             }
-            match flipped(".data")? {
-                Some(true) => notes.push(".data byte changed: accepted (stated scope)".into()),
-                Some(false) => notes.push(".data byte changed: refused".into()),
-                None => notes.push(".data: no such section".into()),
+            for name in [".text", ".rdata"] {
+                match run(name, &flip(name)?)? {
+                    "refused (canonical hash differs)" => notes.push(format!(
+                        "{name} byte changed: refused at the canonical hash"
+                    )),
+                    v => return Err(format!("a changed {name} byte: {v}")),
+                }
             }
+            // A candidate missing a section: the section table one entry shorter.
+            let mut short = file.clone();
+            let nsec_at = u32::from_le_bytes(file[0x3c..0x40].try_into().unwrap()) as usize + 6;
+            let nsec = u16::from_le_bytes([file[nsec_at], file[nsec_at + 1]]);
+            short[nsec_at..nsec_at + 2].copy_from_slice(&(nsec - 1).to_le_bytes());
+            match run("missing-section", &short) {
+                Ok("refused (headers differ)") => {
+                    notes.push("a section missing: refused at the headers".into())
+                }
+                Ok(v) => return Err(format!("a candidate missing a section: {v}")),
+                Err(e) => notes.push(format!("a section missing: refused ({e})")),
+            }
+            // Printed, not judged: W10 decides whether a .data-only difference is caught.
+            notes.push(format!(
+                ".data byte changed: {}",
+                run(".data", &flip(".data")?)?
+            ));
             Ok(notes.join(" | "))
         })())
     }

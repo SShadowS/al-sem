@@ -184,6 +184,9 @@ test-runtime = ["telemetry"]
 # optimized build only with this feature, so the crash/frame/hello tests can
 # run against an abort-on-panic (`release-ship`) binary. Never in a shipped one.
 engine-test-hooks = []
+# TLS-117 probe W10 only (`examples/tls117_probe.rs`): changes one writable static's initial
+# value and nothing else, so two probe builds differ only in `.data`. Never in a shipped build.
+w10-variant = []
 
 [dev-dependencies]
 # No `criterion` here: the benches are their own package (`benches/Cargo.toml`).
@@ -206,6 +209,7 @@ windows-sys = { version = "0.61", features = [
     "Win32_Security",
     "Win32_Security_Authorization",
     "Win32_Storage_FileSystem",
+    "Win32_System_Diagnostics_Debug",
     "Win32_System_LibraryLoader",
     "Win32_System_ProcessStatus",
     "Win32_System_SystemServices",
