@@ -1940,6 +1940,8 @@ fn ci_steps_all_runs_and_judges_the_agentflow_suite() {
         "require-rttime",
         "nextest-priority-check",
         "check-ir-image",
+        // TLS-117: `locale` runs it (gcc over the real grammar).
+        "check-parse-path-locale",
     ] {
         exe(repo.join("scripts").join(s), "echo stub");
     }
