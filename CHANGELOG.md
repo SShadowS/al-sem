@@ -30,6 +30,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `comment_lookup_is_linear_in_a_wide_file` pins this with 20,000 such lines: 10.8 ms
     against the whole-tree walk's 2.3 ms. A lookup from the root per comment took 1.25 s
     and failed the test.
+  - Review r2 (sol): an offset after a node's last child (in its trailing gap) walked that
+    node's children again for every such offset. The locator now remembers the gap's end
+    and answers the later offsets there at once.
+  - `leaf_locator_skips_a_trailing_gap_once` pins this. A file that ends in 2,000 spaces
+    gives the root such a gap, and 1,000 offsets in it start 1 descent. Without the check
+    they start 1,000.
 - **Preproc ranges** (`has_conditional_directive`). The walk now runs only for a file that
   holds `#if`, `#elif`, `#else` or `#endif`, not for any file with a `#` in it. Every
   build-varying `preproc_*` node belongs to such a group. On CDO's dependencies, 2,587 of
@@ -44,8 +50,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   per-byte loops cost back ~1.8 % of what it saved.
 - **The IR is unchanged.** `al_syntax::lower::scan_oracle_disagreements` (test-only) compares
   each scan with the walk it replaced: the ordered `SourceComment` values (text, block,
-  own line, origin with its kind id), the preproc range list, and every object's RunObject
-  values.
+  own line, origin), the comments' raw kind ids, the preproc range list, and every object's
+  RunObject values.
+  - The kind ids are compared on their own. `Origin`'s `==` compares kind names, and two ids
+    can share a name (review r2, sol).
   - It agrees on all 716 `.al` files of the r0 corpus and `tests/fixtures`
     (`narrowed_scans_match_the_whole_tree_walks`).
   - It agrees on these inline edge shapes:
@@ -75,6 +83,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     page's RunObject values go missing.
   - RunObject: search the text without lowercasing it. The values go missing.
   - Comment cost: look each comment up from the root again. The wide-file test fails.
+  - Trailing gap: drop the `gap_end` check. The gap test counts 1,000 descents instead of 1.
 - **Measured** on CDO with the cache off: one-shot `alsem analyze --deterministic`, release-fast,
   5 alternating pairs pinned to cores 0-11, in the timed CDO slot.
   - Binaries, both from `scripts/cdo-before-after`'s cache:

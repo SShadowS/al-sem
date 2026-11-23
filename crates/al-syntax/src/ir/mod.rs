@@ -93,6 +93,13 @@ impl Origin {
         }
     }
 
+    /// The grammar kind id itself ([`PartialEq`] compares the names, which two ids can
+    /// share; ENG-119's oracle compares the ids).
+    #[must_use]
+    pub(crate) fn kind_id(&self) -> u16 {
+        self.kind_id
+    }
+
     /// The node's byte range in its source.
     #[must_use]
     pub fn byte(&self) -> Range<usize> {

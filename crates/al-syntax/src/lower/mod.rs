@@ -178,7 +178,8 @@ pub fn scan_oracle_disagreements(source: &str) -> Vec<String> {
         source_comments(comment_nodes(root, source), source),
         source_comments(root.descendants_of_kinds(&COMMENT_KINDS), source),
     );
-    if new != old {
+    let ids = |v: &[SourceComment]| v.iter().map(|c| c.origin.kind_id()).collect::<Vec<_>>();
+    if new != old || ids(&new) != ids(&old) {
         bad.push(format!("comments: new {new:?}, old {old:?}"));
     }
     let (new, old) = (
@@ -5838,6 +5839,37 @@ page 50100 \"Run Shapes\"
             files > 600 && with_comments > 100 && with_runs > 0 && with_ranges > 0,
             "precondition: the corpus exercises every scan"
         );
+    }
+
+    /// ENG-119 review r2 (sol): offsets after a node's last child (its trailing gap) do not
+    /// walk its children again. The root of a file that ends in white space has such a gap:
+    /// the parse covers the trailing white space, its last child does not. 1,000 offsets in
+    /// it start one descent, not 1,000. Break: drop the `gap_end` check -> 1,000.
+    #[test]
+    fn leaf_locator_skips_a_trailing_gap_once() {
+        let mut src = String::new();
+        for i in 0..200 {
+            src.push_str(&format!("codeunit {} \"C{i}\" {{ }}\n", 50000 + i));
+        }
+        let decls_end = src.len();
+        src.push_str(&" ".repeat(2000));
+        let tree = {
+            let mut p = tree_sitter::Parser::new();
+            p.set_language(&crate::language::language()).unwrap();
+            p.parse(&src, None).unwrap()
+        };
+        let top = tree.root_node();
+        let last_child_end = top.child(top.child_count() - 1).unwrap().end_byte();
+        assert!(
+            last_child_end <= decls_end && top.end_byte() > decls_end + 1000,
+            "precondition: the root's trailing gap ({last_child_end}, {:?})",
+            top.byte_range()
+        );
+        let mut leaves = super::RawNode::new(top).leaf_locator();
+        for p in decls_end + 1..decls_end + 1001 {
+            assert!(leaves.leaf_at(p).is_none(), "{p} lies in the gap");
+        }
+        assert_eq!(leaves.descents, 1, "descents for 1,000 offsets in one gap");
     }
 
     /// ENG-119 review r1 (sol): finding the comments of a wide file costs about one walk.

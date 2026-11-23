@@ -85,6 +85,12 @@ impl<'t> Iterator for NamedChildren<'t> {
 /// root's children from the start each time (quadratic in a wide file, ENG-119 review).
 pub(crate) struct LeafLocator<'t> {
     cursor: TreeCursor<'t>,
+    /// The end of the node the cursor is on when the last offset fell after its last
+    /// child; offsets below it fall there too.
+    gap_end: usize,
+    /// Descents started (a test's work count).
+    #[cfg(test)]
+    pub(crate) descents: usize,
 }
 
 impl<'t> LeafLocator<'t> {
@@ -102,12 +108,25 @@ impl<'t> LeafLocator<'t> {
         if c.node().start_byte() > p {
             return None; // `p` lies before this node: in a gap
         }
+        if p < self.gap_end {
+            return None; // still after the last child of the node the cursor is on
+        }
         // Down to the leaf. The cursor stays on a child that starts after `p`, so a
         // later offset never walks this node's children from the start again.
+        #[cfg(test)]
+        {
+            self.descents += 1;
+        }
         loop {
             let here = c.node();
             if c.goto_first_child_for_byte(p).is_none() {
-                return (here.child_count() == 0).then(|| RawNode::new(here));
+                if here.child_count() == 0 {
+                    return Some(RawNode::new(here));
+                }
+                // `p` is after `here`'s last child, and so is every later offset below
+                // its end (review r2, sol: each one walked those children again).
+                self.gap_end = here.end_byte();
+                return None;
             }
             if c.node().start_byte() > p {
                 return None;
@@ -207,6 +226,9 @@ impl<'t> RawNode<'t> {
     pub(crate) fn leaf_locator(self) -> LeafLocator<'t> {
         LeafLocator {
             cursor: self.node.walk(),
+            gap_end: 0,
+            #[cfg(test)]
+            descents: 0,
         }
     }
 
