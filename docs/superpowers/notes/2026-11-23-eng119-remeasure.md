@@ -193,3 +193,10 @@ passed: harness 212, lsp 2, l4 25, lib 21 tests.
 - **The gate's wall-time saving** is a scaling estimate, not a measurement.
 - **Windows** (TLS-117) was not measured. Its cold path should match the "off" column, but
   that was not checked.
+
+## 5. Implemented
+
+ENG-119 was implemented on this branch (`55be7ee3`, `a9299095`). On a cache-off one-shot
+analyze on CDO it gives instructions x0.927, with byte-identical outputs. The measurements and
+discrimination proofs are in the CHANGELOG entry. The raw after-profiles are
+`/work/.al-sem/tools-notes/eng119/after2-*`, and the instruction pairs are in `perf-ab/`.
