@@ -27,16 +27,12 @@ struct Slot(
 // 300 s twice in TLS-102's stress run (that test now runs its calls 8 at once).
 const WATCHDOG: std::time::Duration = std::time::Duration::from_secs(600);
 
-/// `cmd` without any slot or Claude setting this test process inherited (a
-/// landing runs the suite inside its own hold: its token, its tuning, its
+/// `cmd` without any slot, Claude or other setting this test process inherited
+/// (a landing runs the suite inside its own hold: its token, its tuning, its
 /// session), so a slot test gives the same result inside a hold and outside.
+/// TLS-115: `crate::clean_env`, so a `BASH_ENV` or gate knob is gone too.
 fn scrubbed(mut cmd: std::process::Command) -> std::process::Command {
-    for (k, _) in std::env::vars_os() {
-        let k = k.to_string_lossy().into_owned();
-        if k.starts_with("CDO_SLOT_") || k.starts_with("CLAUDE_") || k == "CDO_WS" {
-            cmd.env_remove(k);
-        }
-    }
+    crate::clean_env::clean_env(&mut cmd);
     cmd
 }
 

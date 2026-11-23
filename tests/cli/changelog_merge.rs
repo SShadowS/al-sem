@@ -17,7 +17,7 @@ const SCRIPT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/changelog-mer
 /// which shows land's CHANGELOG cases run through this script.
 #[test]
 fn changelog_merge_self_test_passes() {
-    let out = std::process::Command::new("bash")
+    let out = crate::clean_env::command("bash")
         .args([SCRIPT, "--self-test"])
         .output()
         .unwrap();

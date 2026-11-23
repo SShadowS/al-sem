@@ -3,6 +3,7 @@
 //! `scripts/ci-steps`, `scripts/cdo-gate` and `scripts/merge-and-push` that log
 //! their calls (and, for ci, run a hook), so nothing real is gated, merged or
 //! pushed.
+use crate::clean_env::clean_env;
 use crate::git;
 use std::path::{Path, PathBuf};
 
@@ -132,30 +133,6 @@ impl Repo {
         git::run(&self.main, &["commit", "-qm", name]);
         git::run(&self.main, &["switch", "-q", "master"]);
     }
-}
-
-/// ⟨TLS-113⟩ A child of these tests starts from an empty environment: none of
-/// the caller's land, slot, gate or test-hook settings (a landing runs this
-/// suite through `ci-steps all`; an inherited `CDO_SLOT_OWNER` renamed the
-/// slot's holder, review r1, sol), no BASH_ENV, no git variables. Only what a
-/// shell and git need, then git's test identity; each test adds its own.
-///
-/// Proof (2026-11-21): `env_clear()` removed and the land tests run with
-/// `CDO_SLOT_OWNER=leaked` exported -> `land_holds_the_cdo_slot_from_start_to_end`
-/// FAILED (the holder read `leaked`); restored -> passed.
-fn clean_env(cmd: &mut std::process::Command) -> &mut std::process::Command {
-    cmd.env_clear();
-    for k in ["PATH", "HOME", "TMPDIR", "LANG"] {
-        if let Some(v) = std::env::var_os(k) {
-            cmd.env(k, v);
-        }
-    }
-    cmd.env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_AUTHOR_NAME", "t")
-        .env("GIT_AUTHOR_EMAIL", "t@t")
-        .env("GIT_COMMITTER_NAME", "t")
-        .env("GIT_COMMITTER_EMAIL", "t@t")
 }
 
 fn changelog(entries: &str, old: &str) -> String {

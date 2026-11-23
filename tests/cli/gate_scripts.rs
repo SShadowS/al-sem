@@ -16,7 +16,6 @@ fn private_slot<'a>(
         .env("CDO_SLOT_POLL_S", "1")
         .env("CDO_SLOT_BUILD_NAMES", "tls89-none")
         .env("CDO_SLOT_BUILD_SCRIPTS", "tls89-none")
-        .env_remove("CDO_SLOT_TOKEN")
         // TLS-83: no instruction counting unless a test asks for it (a real
         // perf on the stub servers adds 0.2 s a call and reads nothing useful).
         .env("CDO_SPEED_INSTR", "0")
@@ -39,7 +38,7 @@ fn speed_gate_fails_when_a_timed_call_fails() {
     let ws = tempfile::tempdir().unwrap();
     let out = tempfile::tempdir().unwrap();
     let exe = env!("CARGO_BIN_EXE_alsem");
-    let run = private_slot(&mut std::process::Command::new("python3"), out.path())
+    let run = private_slot(&mut crate::clean_env::command("python3"), out.path())
         .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-speed"))
         .arg(ws.path())
         .args(["--base-exe", exe, "--head-exe", exe, "--out"])
@@ -108,16 +107,15 @@ fn speed_gate_times_nothing_beside_a_build() {
             .spawn()
             .unwrap(),
     );
-    let held = std::process::Command::new("bash")
+    let held = crate::clean_env::command("bash")
         .args([slot, "acquire", "gate", "test hold", "--bind"])
         .arg(holder.0.id().to_string())
         .env("CDO_SLOT_DIR", out.path().join("slot"))
         .env("CDO_SLOT_MEM_MIN_GB", "0")
         .env("CDO_SLOT_TOKEN", "tok-speed")
-        .env_remove("CLAUDE_CODE_SESSION_ID")
         .output()
         .unwrap();
-    let run = std::process::Command::new("python3")
+    let run = crate::clean_env::command("python3")
         .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-speed"))
         .arg(ws.path())
         .args(["--base-exe", exe, "--head-exe", exe, "--out"])
@@ -162,7 +160,7 @@ fn speed_gate_refuses_more_rounds_than_routines() {
     let out = tempfile::tempdir().unwrap();
     let exe = env!("CARGO_BIN_EXE_alsem");
     let run = |rounds: &str| {
-        let r = private_slot(&mut std::process::Command::new("python3"), out.path())
+        let r = private_slot(&mut crate::clean_env::command("python3"), out.path())
             .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-speed"))
             .arg(ws.path())
             .args([
@@ -234,7 +232,7 @@ fn cdo_gate_fails_a_phase_that_ran_no_test() {
             )
             .unwrap();
         }
-        let out = std::process::Command::new("bash")
+        let out = crate::clean_env::command("bash")
             .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-gate"))
             .arg(format!("--summary={}", run.path().display()))
             .output()
@@ -276,10 +274,9 @@ fn cdo_gate_fails_a_phase_that_ran_no_test() {
 fn cdo_gate_only_runs_and_judges_just_its_subset() {
     let gate = concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-gate");
     let run = |args: &[&str]| {
-        let out = std::process::Command::new("bash")
+        let out = crate::clean_env::command("bash")
             .arg(gate)
             .args(args)
-            .env_remove("CDO_WS")
             .output()
             .expect("spawn bash scripts/cdo-gate");
         let text = format!(
@@ -383,7 +380,7 @@ fn cdo_gate_only_runs_and_judges_just_its_subset() {
         assert!(text.contains("cdo-gate: FAIL (SUBSET"), "{text}");
     }
     // `--help` goes to stdout, so `cdo-gate --help | less` shows it.
-    let help = std::process::Command::new("bash")
+    let help = crate::clean_env::command("bash")
         .args([gate, "--help"])
         .output()
         .unwrap();
@@ -487,7 +484,7 @@ fn cdo_gate_only_pass_records_the_tree_it_ran_on() {
     crate::git::run(other.path(), &["init", "-q", "-b", "master"]);
     // <subset>, the folder it runs from, extra environment, the exit it must give.
     let gate = |only: &str, cwd: &std::path::Path, env: &[(&str, &str)], rc: i32| {
-        let mut cmd = std::process::Command::new("bash");
+        let mut cmd = crate::clean_env::command("bash");
         for (k, v) in env {
             cmd.env(k, v);
         }
@@ -500,12 +497,6 @@ fn cdo_gate_only_pass_records_the_tree_it_ran_on() {
             .env("CARGO_TARGET_DIR", target.path())
             .env("CDO_SLOT_DIR", target.path().join("slot"))
             .env("CDO_SLOT_MEM_MIN_GB", "0")
-            .env_remove("CDO_PRESUBMIT_DIR")
-            .env_remove("CDO_SLOT_TOKEN")
-            .env_remove("CDO_WS")
-            .env_remove("CDO_GATE_SERIAL")
-            .env_remove("CDO_GATE_LAYOUT")
-            .env_remove("CDO_GATE_NO_SPEED")
             .output()
             .expect("spawn bash scripts/cdo-gate");
         let text = format!(
@@ -675,7 +666,7 @@ fn cdo_gate_only_run_builds_and_runs_just_its_phases() {
         stub.path().display(),
         std::env::var("PATH").unwrap_or_default()
     );
-    let out = std::process::Command::new("bash")
+    let out = crate::clean_env::command("bash")
         .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-gate"))
         .args(["--only", "harness,l4,lsp,output"])
         .arg(ws.path())
@@ -687,11 +678,9 @@ fn cdo_gate_only_run_builds_and_runs_just_its_phases() {
         // TLS-87: a stubbed pass must never record a pre-submit pass for the
         // real tree (it would on a clean checkout).
         .env("CDO_PRESUBMIT_DIR", target.path().join("presubmit"))
-        .env_remove("CDO_SLOT_TOKEN")
-        .env_remove("CDO_WS")
-        .env_remove("CDO_GATE_SERIAL")
-        .env_remove("CDO_GATE_LAYOUT")
-        .env_remove("CDO_GATE_NO_SPEED")
+        // The `.cargo/config.toml` `[env]` default a real cargo gives each test;
+        // the stub cargo does not apply it (TLS-115: no longer inherited).
+        .env("ALSEM_IR_CACHE", "off")
         .output()
         .expect("spawn bash scripts/cdo-gate");
     let text = format!(
@@ -794,7 +783,7 @@ fn speed_warm_reads_the_gates_own_cache_entry() {
         stub.path().display(),
         std::env::var("PATH").unwrap_or_default()
     );
-    let run = std::process::Command::new("python3")
+    let run = crate::clean_env::command("python3")
         .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-speed"))
         .args(["--warm", &head])
         .env("ALSEM_SPEED_CACHE", cache.path())
@@ -849,7 +838,7 @@ fn speed_build_uses_the_gate_release_folder() {
         stub.path().display(),
         std::env::var("PATH").unwrap_or_default()
     );
-    let run = std::process::Command::new("python3")
+    let run = crate::clean_env::command("python3")
         .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-speed"))
         .arg(ws.path())
         .args(["--build-only", "--base-exe"])
@@ -918,7 +907,7 @@ fn profile_script_builds_symbols_and_passes_the_exit_code() {
     }
     let run = |args: &[&str], rc: &str| {
         let _ = std::fs::remove_file(&log);
-        let out = std::process::Command::new("bash")
+        let out = crate::clean_env::command("bash")
             .arg(format!("{root}/scripts/profile"))
             .args(args)
             .current_dir(stub.path())
@@ -1052,7 +1041,7 @@ fn cdo_gate_summary_names_each_phases_peak_memory() {
     for name in ["a", "b", "c"] {
         std::fs::write(logs.join(format!("{name}.status")), "0 10\n").unwrap();
     }
-    let out = std::process::Command::new("bash")
+    let out = crate::clean_env::command("bash")
         .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-gate"))
         .arg(format!("--summary={}", logs.display()))
         .output()
@@ -1136,13 +1125,12 @@ fn cdo_gate_runs_lane_two_beside_impact_only_with_the_memory() {
             ),
         )
         .unwrap();
-        let mut cmd = std::process::Command::new("bash");
+        let mut cmd = crate::clean_env::command("bash");
         cmd.arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-gate"))
             .arg("--layout")
             .env("CDO_GATE_MEMINFO", case.join("meminfo"))
             .env("CDO_GATE_CGROUP", &case)
-            .env("CDO_GATE_LAYOUT", "parallel")
-            .env_remove("CDO_GATE_SERIAL");
+            .env("CDO_GATE_LAYOUT", "parallel");
         if serial {
             cmd.env("CDO_GATE_SERIAL", "1");
         }
@@ -1177,13 +1165,12 @@ fn cdo_gate_runs_lane_two_beside_impact_only_with_the_memory() {
     let meminfo = broken.join("meminfo");
     std::fs::write(&meminfo, "MemAvailable: 62914560 kB\n").unwrap();
     let unknown = |dir: &std::path::Path| {
-        let out = std::process::Command::new("bash")
+        let out = crate::clean_env::command("bash")
             .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-gate"))
             .arg("--layout")
             .env("CDO_GATE_MEMINFO", &meminfo)
             .env("CDO_GATE_CGROUP", dir)
             .env("CDO_GATE_LAYOUT", "parallel")
-            .env_remove("CDO_GATE_SERIAL")
             .output()
             .expect("spawn bash scripts/cdo-gate --layout");
         String::from_utf8_lossy(&out.stdout).into_owned()
@@ -1253,7 +1240,7 @@ fn cdo_gate_stops_at_once_on_term_during_its_build() {
         std::env::var("PATH").unwrap_or_default()
     );
     use std::os::unix::process::CommandExt;
-    let mut gate = std::process::Command::new("bash")
+    let mut gate = crate::clean_env::command("bash")
         .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-gate"))
         .arg("--no-speed")
         .arg(ws.path())
@@ -1262,8 +1249,6 @@ fn cdo_gate_stops_at_once_on_term_during_its_build() {
         // A slot of its own (TLS-60): never the tentacle's real one.
         .env("CDO_SLOT_DIR", target.path().join("slot"))
         .env("CDO_SLOT_MEM_MIN_GB", "0")
-        .env_remove("CDO_SLOT_TOKEN")
-        .env_remove("CDO_GATE_SERIAL")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         // Its own process group, so the guard below can end all of it.
@@ -1461,6 +1446,7 @@ impl Throwaway {
         let mut cmd = std::process::Command::new("python3");
         // A clean environment: an inherited build override (RUSTFLAGS, a
         // profile override, CFLAGS) would make every key `None` (review r2, sol).
+        // Stricter than `crate::clean_env` (its own HOME, no toolchain homes).
         cmd.arg(self.path("repo/scripts/cdo-speed"))
             .args(args)
             // From the throwaway folder: a relative `TREE_SITTER_AL_PATH` of
@@ -1702,16 +1688,14 @@ fn cdo_gate_pins_lane_two_by_core_type() {
         sys
     };
     let layout = |sys: &std::path::Path, want: Option<&str>| {
-        let mut cmd = std::process::Command::new("bash");
+        let mut cmd = crate::clean_env::command("bash");
         cmd.arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-gate"))
             .arg("--layout")
             .env("CDO_GATE_MEMINFO", dir.path().join("meminfo"))
             .env("CDO_GATE_CGROUP", dir.path())
             .env("CDO_GATE_LAYOUT", "parallel")
             .env("CDO_GATE_PROC_STATUS", sys.join("status"))
-            .env("CDO_GATE_SYS_CPU", sys)
-            .env_remove("CDO_GATE_SERIAL")
-            .env_remove("CDO_GATE_LANE2_CPUS");
+            .env("CDO_GATE_SYS_CPU", sys);
         if let Some(w) = want {
             cmd.env("CDO_GATE_LANE2_CPUS", w);
         }
@@ -1831,7 +1815,7 @@ fn lib_cdo_fails_when_a_long_test_is_not_found_by_name() {
     .unwrap();
     // `extra`: "", "SIBLING" (the listing names a sibling) or "LIST_FAILS".
     let run = |found: &str, extra: &str| {
-        let out = std::process::Command::new("bash")
+        let out = crate::clean_env::command("bash")
             .arg("-c")
             .arg(concat!(
                 "logs=\"$1\"; profile=(); lane2_nice=(); lane2_pin=(); lib_threads=2; ",
@@ -1888,13 +1872,11 @@ fn cdo_gate_is_serial_unless_parallel_is_asked() {
     std::fs::write(dir.path().join("meminfo"), "MemAvailable: 94371840 kB\n").unwrap();
     std::fs::write(dir.path().join("memory.max"), "max\n").unwrap();
     let layout = |asked: Option<&str>| {
-        let mut cmd = std::process::Command::new("bash");
+        let mut cmd = crate::clean_env::command("bash");
         cmd.arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-gate"))
             .arg("--layout")
             .env("CDO_GATE_MEMINFO", dir.path().join("meminfo"))
-            .env("CDO_GATE_CGROUP", dir.path())
-            .env_remove("CDO_GATE_SERIAL")
-            .env_remove("CDO_GATE_LAYOUT");
+            .env("CDO_GATE_CGROUP", dir.path());
         if let Some(a) = asked {
             cmd.env("CDO_GATE_LAYOUT", a);
         }
@@ -1982,7 +1964,7 @@ fn ci_steps_all_runs_and_judges_the_agentflow_suite() {
     let log = dir.path().join("py.log");
     let run = |rc: &str| {
         let _ = std::fs::remove_file(&log);
-        let out = std::process::Command::new("bash")
+        let out = crate::clean_env::command("bash")
             .arg(repo.join("scripts/ci-steps"))
             .arg("all")
             .current_dir(&repo)
@@ -1994,8 +1976,6 @@ fn ci_steps_all_runs_and_judges_the_agentflow_suite() {
             // TLS-108: the temp repo has no cdo-slot; a slot folder that cannot
             // be made takes perf-bounds' no-slot path (said in its line).
             .env("CDO_SLOT_DIR", "/proc/no-slot-here")
-            .env_remove("CDO_SLOT_TOKEN")
-            .env_remove("GITHUB_ACTIONS")
             .output()
             .expect("spawn bash scripts/ci-steps all");
         let text = format!(
@@ -2033,7 +2013,7 @@ fn warm_target(src: &tempfile::TempDir) {
 }
 
 fn seed_target(wt: &std::path::Path, src: &std::path::Path) -> std::process::Output {
-    std::process::Command::new("bash")
+    crate::clean_env::command("bash")
         .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/seed-target"))
         .arg(wt)
         .arg("--from")
@@ -2095,7 +2075,7 @@ fn seed_target_copies_all_or_nothing() {
 /// reach the `alsem` binary.
 fn product_paths(paths: &[&str]) -> Vec<String> {
     use std::io::Write;
-    let mut child = std::process::Command::new("bash")
+    let mut child = crate::clean_env::command("bash")
         .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-gate"))
         .arg("--product-paths")
         .stdin(std::process::Stdio::piped())
@@ -2180,7 +2160,7 @@ fn cdo_gate_skips_speed_only_when_no_product_code_changed() {
         )
         .unwrap();
     }
-    let out = std::process::Command::new("bash")
+    let out = crate::clean_env::command("bash")
         .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-gate"))
         .arg(format!("--summary={}", run.path().display()))
         .output()
@@ -2536,7 +2516,7 @@ fn speed_with_stub(
     .unwrap();
     let ws = dir.join("ws");
     std::fs::create_dir_all(&ws).unwrap();
-    let mut cmd = std::process::Command::new("python3");
+    let mut cmd = crate::clean_env::command("python3");
     private_slot(&mut cmd, dir);
     cmd.arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-speed"))
         .arg(&ws)
@@ -3251,7 +3231,7 @@ for running, cpu, ok in [
         sys.exit(f"covers({running}, {cpu}) is {not ok}")
 print("ok")
 "#;
-    let out = std::process::Command::new("python3")
+    let out = crate::clean_env::command("python3")
         .args(["-c", py])
         .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-speed"))
         // Only imported (nothing runs), but the rule above holds for every use.
@@ -3399,7 +3379,7 @@ fn speed_adds_one_flipped_pair_on_a_contradicted_failure() {
         )
         .unwrap();
     }
-    let out = std::process::Command::new("bash")
+    let out = crate::clean_env::command("bash")
         .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-gate"))
         .arg(format!("--summary={}", logs.display()))
         .output()
@@ -4059,9 +4039,8 @@ fn speed_labels_a_host_suspend() {
 #[test]
 fn host_suspend_reading_and_slot_status() {
     let script = concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/host-suspended");
-    let real = std::process::Command::new("bash")
+    let real = crate::clean_env::command("bash")
         .arg(script)
-        .env_remove("CDO_HOST_SUSPENDED_FILE")
         .output()
         .unwrap();
     assert!(real.status.success(), "{real:?}");
@@ -4069,7 +4048,7 @@ fn host_suspend_reading_and_slot_status() {
     assert!(text.trim().parse::<u64>().is_ok(), "{text:?}");
     let dir = tempfile::tempdir().unwrap();
     let reading = dir.path().join("suspended");
-    let missing = std::process::Command::new("bash")
+    let missing = crate::clean_env::command("bash")
         .arg(script)
         .env("CDO_HOST_SUSPENDED_FILE", &reading)
         .output()
@@ -4085,13 +4064,12 @@ fn host_suspend_reading_and_slot_status() {
             .unwrap(),
     );
     let cmd = |args: &[&str]| {
-        std::process::Command::new("bash")
+        crate::clean_env::command("bash")
             .arg(slot)
             .args(args)
             .env("CDO_SLOT_DIR", dir.path().join("slot"))
             .env("CDO_SLOT_MEM_MIN_GB", "0")
             .env("CDO_HOST_SUSPENDED_FILE", &reading)
-            .env_remove("CLAUDE_CODE_SESSION_ID")
             .output()
             .unwrap()
     };
@@ -4179,7 +4157,7 @@ fn speed_stub_verdicts_ignore_the_hosts_wall_time() {
     );
     // One stub binary only (both are needed), and `--no-build` into a private
     // target: a refusal that regressed ends at "no binary at", never in cargo.
-    let out = std::process::Command::new("python3")
+    let out = crate::clean_env::command("python3")
         .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-speed"))
         .arg(dir.path().join("ws"))
         .arg("--base-exe")
@@ -4381,7 +4359,7 @@ fn speed_runs_under_load_and_says_so() {
     std::fs::create_dir_all(&logs).unwrap();
     std::fs::write(logs.join("speed.status"), "0 600\n").unwrap();
     std::fs::write(logs.join("speed.log"), text.as_bytes()).unwrap();
-    let out = std::process::Command::new("bash")
+    let out = crate::clean_env::command("bash")
         .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-gate"))
         .arg(format!("--summary={}", logs.display()))
         .output()
@@ -4477,17 +4455,12 @@ fn perf_bounds_step(
     )
     .unwrap();
     std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
-    let mut cmd = std::process::Command::new("bash");
+    let mut cmd = crate::clean_env::command("bash");
     private_slot(&mut cmd, dir)
         .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/ci-steps"))
         .arg("perf-bounds")
         .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .env("CI_STEPS_PERF_BOUNDS_BIN", &bin)
-        .env_remove("CLAUDE_CODE_SESSION_ID")
-        .env_remove("CLAUDE_PID")
-        // A caller's owner label (land sets one) and a CI marker change the output.
-        .env_remove("CDO_SLOT_OWNER")
-        .env_remove("GITHUB_ACTIONS");
+        .env("CI_STEPS_PERF_BOUNDS_BIN", &bin);
     for (k, v) in extra {
         cmd.env(k, v);
     }
@@ -4657,7 +4630,7 @@ fn perf_bounds_shares_the_hold_it_runs_in() {
             .spawn()
             .unwrap(),
     );
-    let mut acquire = std::process::Command::new("bash");
+    let mut acquire = crate::clean_env::command("bash");
     let held = private_slot(&mut acquire, dir.path())
         .args([
             concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-slot"),
@@ -4668,7 +4641,6 @@ fn perf_bounds_shares_the_hold_it_runs_in() {
         ])
         .arg(holder.0.id().to_string())
         .env("CDO_SLOT_TOKEN", "tok-108")
-        .env_remove("CLAUDE_CODE_SESSION_ID")
         .output()
         .unwrap();
     assert!(held.status.success(), "{held:?}");
@@ -4703,12 +4675,11 @@ fn perf_bounds_does_not_wait_for_a_parked_gate() {
             .spawn()
             .unwrap(),
     );
-    let mut acquire = std::process::Command::new("bash");
+    let mut acquire = crate::clean_env::command("bash");
     let held = private_slot(&mut acquire, dir.path())
         .args([slot, "acquire", "land", "test landing", "--bind"])
         .arg(holder.0.id().to_string())
         .env("CDO_SLOT_TOKEN", "tok-108p")
-        .env_remove("CLAUDE_CODE_SESSION_ID")
         .output()
         .unwrap();
     assert!(held.status.success(), "{held:?}");
@@ -4719,12 +4690,10 @@ fn perf_bounds_does_not_wait_for_a_parked_gate() {
         format!("bash '{slot}' acquire lane 'queued gate' --wait --bind $$\nsleep 600\n"),
     )
     .unwrap();
-    let mut park = std::process::Command::new("bash");
+    let mut park = crate::clean_env::command("bash");
     let parked = crate::cdo_slot::Reap(
         private_slot(&mut park, dir.path())
             .arg(&script)
-            .env_remove("CLAUDE_CODE_SESSION_ID")
-            .env_remove("CLAUDE_PID")
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .spawn()
@@ -4856,12 +4825,11 @@ fn perf_bounds_parked_skip_hides_no_real_build() {
             .spawn()
             .unwrap(),
     );
-    let mut acquire = std::process::Command::new("bash");
+    let mut acquire = crate::clean_env::command("bash");
     let held = private_slot(&mut acquire, dir.path())
         .args([slot, "acquire", "land", "test landing", "--bind"])
         .arg(holder.0.id().to_string())
         .env("CDO_SLOT_TOKEN", "tok-108s")
-        .env_remove("CLAUDE_CODE_SESSION_ID")
         .output()
         .unwrap();
     assert!(held.status.success(), "{held:?}");
@@ -4871,7 +4839,7 @@ fn perf_bounds_parked_skip_hides_no_real_build() {
     let script = dir.path().join(&script_name);
     std::fs::write(&script, "read -t 600 _ || true\n").unwrap();
     let live = crate::cdo_slot::Reap(
-        std::process::Command::new("bash")
+        crate::clean_env::command("bash")
             .arg(&script)
             .stdin(std::process::Stdio::piped())
             .spawn()
@@ -4899,15 +4867,13 @@ fn perf_bounds_parked_skip_hides_no_real_build() {
     let fake_name = format!("t108n{}", std::process::id());
     let fake = dir.path().join(&fake_name);
     std::os::unix::fs::symlink("/bin/bash", &fake).unwrap();
-    let mut park = std::process::Command::new(&fake);
+    let mut park = crate::clean_env::command(&fake);
     let parked = crate::cdo_slot::Reap(
         private_slot(&mut park, dir.path())
             .args([
                 "-c",
                 &format!("bash '{slot}' acquire lane 'queued' --wait --bind $$; sleep 600"),
             ])
-            .env_remove("CLAUDE_CODE_SESSION_ID")
-            .env_remove("CLAUDE_PID")
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .spawn()
@@ -4932,4 +4898,120 @@ fn perf_bounds_parked_skip_hides_no_real_build() {
     drop(holder);
     assert_eq!(code, Some(1), "a parked build name was skipped: {text}");
     assert!(text.contains(&format!("({fake_name})")), "{text}");
+}
+
+/// Set in the child `scripts_see_none_of_the_callers_environment` starts.
+const ENV_PROBE: &str = "TLS115_ENV_PROBE";
+
+/// ⟨TLS-115⟩ The scripts these tests run see none of the caller's environment
+/// (`crate::clean_env`): this test runs `env_probe_child` again in a child of
+/// this test binary with a polluted environment (as a landing's or a
+/// developer's shell would be): `CDO_SLOT_OWNER=leaked`,
+/// `CDO_GATE_LANE2_CPUS=99` and a `BASH_ENV` that writes a marker file.
+/// The child runs two script calls the way the tests here do: `ci-steps
+/// perf-bounds` (its slot owner must be its own `perf-bounds`) and `cdo-gate
+/// --layout` on a fake host of 22 equal CPUs (lane 2 must get the default last
+/// 6, not "any" from a count of 99); no bash may have read the `BASH_ENV`.
+///
+/// Proof (2026-11-23): the `cdo-gate --layout` call below made with
+/// `std::process::Command::new("bash")` instead of `crate::clean_env::command`
+/// -> FAILED ("the caller's CDO_GATE_LANE2_CPUS reached cdo-gate: ... lane 2
+/// on CPUs any"); restored -> passed. With `crate::clean_env::command("python3")`
+/// in `speed_gate_fails_when_a_timed_call_fails` made a plain `Command::new`
+/// (its form before TLS-115) and `CDO_SLOT_OWNER=leaked` exported, that test
+/// FAILED ("cdo-slot: taken by leaked (cdo-speed timing)"); restored, it passes.
+#[cfg(target_os = "linux")]
+#[test]
+fn scripts_see_none_of_the_callers_environment() {
+    let dir = tempfile::tempdir().unwrap();
+    let marker = dir.path().join("bash-env-ran");
+    let bash_env = dir.path().join("bash-env");
+    std::fs::write(
+        &bash_env,
+        format!("echo leaked >> '{}'\n", marker.display()),
+    )
+    .unwrap();
+    let out = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "gate_scripts::env_probe_child",
+            "--exact",
+            "--nocapture",
+            "--test-threads",
+            "1",
+        ])
+        .env(ENV_PROBE, &marker)
+        .env("CDO_SLOT_OWNER", "leaked")
+        .env("CDO_GATE_LANE2_CPUS", "99")
+        .env("BASH_ENV", &bash_env)
+        .output()
+        .expect("spawn the test binary");
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(out.status.success(), "{text}");
+    assert!(text.contains("1 passed"), "the child ran the probe: {text}");
+    assert!(text.contains("env probe: ran"), "{text}");
+}
+
+/// The child half of `scripts_see_none_of_the_callers_environment`; nothing
+/// outside it (no `TLS115_ENV_PROBE`).
+#[cfg(target_os = "linux")]
+#[test]
+fn env_probe_child() {
+    let Some(marker) = std::env::var_os(ENV_PROBE) else {
+        return;
+    };
+    let marker = std::path::PathBuf::from(marker);
+    let dir = tempfile::tempdir().unwrap();
+
+    let (code, text) = perf_bounds_step(dir.path(), &status_from_inside(), &[]);
+    assert_eq!(code, Some(0), "{text}");
+    assert!(
+        text.contains("cdo-slot: taken by perf-bounds (perf-bounds timing)"),
+        "the caller's CDO_SLOT_OWNER reached ci-steps: {text}"
+    );
+
+    let has_taskset = std::process::Command::new("sh")
+        .args(["-c", "command -v taskset"])
+        .output()
+        .is_ok_and(|o| o.status.success());
+    if has_taskset {
+        let sys = dir.path().join("sys");
+        for c in 0..22 {
+            let f = sys.join(format!("cpu{c}/cpufreq"));
+            std::fs::create_dir_all(&f).unwrap();
+            std::fs::write(f.join("cpuinfo_max_freq"), "4800000\n").unwrap();
+        }
+        std::fs::write(sys.join("online"), "0-21\n").unwrap();
+        std::fs::write(
+            sys.join("status"),
+            "Name:\tbash\nCpus_allowed_list:\t0-21\n",
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("meminfo"), "MemAvailable: 62914560 kB\n").unwrap();
+        std::fs::write(dir.path().join("memory.max"), "max\n").unwrap();
+        let out = crate::clean_env::command("bash")
+            .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-gate"))
+            .arg("--layout")
+            .env("CDO_GATE_MEMINFO", dir.path().join("meminfo"))
+            .env("CDO_GATE_CGROUP", dir.path())
+            .env("CDO_GATE_LAYOUT", "parallel")
+            .env("CDO_GATE_PROC_STATUS", sys.join("status"))
+            .env("CDO_GATE_SYS_CPU", &sys)
+            .output()
+            .expect("spawn bash scripts/cdo-gate --layout");
+        let got = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            got.contains("lane 2 on CPUs 16,17,18,19,20,21 "),
+            "the caller's CDO_GATE_LANE2_CPUS reached cdo-gate: {got}"
+        );
+    }
+    assert!(
+        !marker.exists(),
+        "a script's bash read the caller's BASH_ENV: {:?}",
+        std::fs::read_to_string(&marker)
+    );
+    println!("env probe: ran");
 }
