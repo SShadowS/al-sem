@@ -109,10 +109,23 @@ class Git:
         names them. Not `_run`: text mode turns a CR in a name into LF, and
         without `-z` git quotes a name with a CR, LF or `"` in it. Reads only:
         no mutex."""
+        return [os.fsdecode(p) for p in self._bytes(*args).split(b"\0") if p]
+
+    def _bytes(self, *args: str) -> bytes:
+        """`git <args>`'s stdout as bytes (a read: no mutex)."""
         r = self.run(["git", "-C", self.cwd, *args], capture_output=True)
         if r.returncode != 0:
             raise GitError(f"git {' '.join(args)}: {os.fsdecode(r.stderr).strip()}")
-        return [os.fsdecode(p) for p in r.stdout.split(b"\0") if p]
+        return r.stdout
+
+    def file_diffs(self, a: str, b: str, files: list[str]) -> dict[str, str]:
+        """Each of `files`' own patch `a..b`, by path (TLS-114): the file is
+        known by construction, never parsed from a header git may quote. Read
+        as bytes and decoded with `replace` (the checks look for ASCII), so a
+        CR stays inside its line. `:(literal)`: a name is never a pattern."""
+        return {f: self._bytes("diff", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames",
+                               f"{a}..{b}", "--", f":(literal){f}").decode("utf-8", "replace")
+                for f in files}
 
     def ok(self, *args: str) -> bool:
         return self._run(*args, check=False).returncode == 0
@@ -193,9 +206,6 @@ class Git:
         # -z (TLS-114): a quoted `"scripts/x\r"` escaped the protected-path
         # prefix check, and splitlines() cut names at CR and other breaks.
         return self.paths("diff", "-z", "--name-only", "--no-renames", f"{a}..{b}")
-
-    def diff(self, a: str, b: str) -> str:
-        return self._run("diff", f"{a}..{b}").stdout
 
     def worktree_add(self, path: Path, branch: str, base: str) -> None:
         self._run("worktree", "add", "-q", str(path), "-b", branch, base)

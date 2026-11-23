@@ -17,8 +17,7 @@ FORBIDDEN = (
     (re.compile(r"--no-verify"), "no-verify"),
     (re.compile(r"#!?\[allow\("), "allow-attribute"),
 )
-_FILE_HDR = re.compile(r"^\+\+\+ b/(.+)$")
-_VERSION = re.compile(r'^\+\s*version\s*=\s*"')
+_VERSION = re.compile(r'^\s*version\s*=\s*"')
 
 
 def evidence_files(issue: int) -> set[str]:
@@ -58,15 +57,21 @@ def protected_violations(changed_files: list[str], issue: int) -> list[str]:
     return out
 
 
-def _added_lines(diff_text: str):
-    current = None
-    for line in diff_text.splitlines():
-        m = _FILE_HDR.match(line)
-        if m:
-            current = m.group(1)
-            continue
-        if line.startswith("+") and not line.startswith("+++") and current:
-            yield current, line[1:]
+def _added_lines(diffs: dict[str, str]):
+    """(path, added text) for each file's own patch (`Git.file_diffs`, TLS-114).
+    The path is the key, never read from a `+++ b/` header: git quotes a
+    header whose name holds a non-ASCII byte, a CR, an LF, a `"` or a
+    backslash, and a header parser then charged that file's lines to the file
+    before it. Lines split at LF only, so a CR inside an added line does not
+    start a new one. Everything before the first `@@` is the patch's header,
+    so an added line whose text starts with `++` is still read."""
+    for path, text in diffs.items():
+        in_hunks = False
+        for line in text.split("\n"):
+            if line.startswith("@@"):
+                in_hunks = True
+            elif in_hunks and line.startswith("+"):
+                yield path, line[1:]
 
 
 _SLASH_COMMENT = (".rs", ".js")
@@ -97,9 +102,9 @@ def _code_part(path: str, text: str) -> str:
     return text
 
 
-def forbidden_additions(diff_text: str) -> list[tuple[str, str, str]]:
+def forbidden_additions(diffs: dict[str, str]) -> list[tuple[str, str, str]]:
     out = []
-    for f, text in _added_lines(diff_text):
+    for f, text in _added_lines(diffs):
         if not f.endswith(CODE_SUFFIXES):
             continue
         code = _code_part(f, text)
@@ -109,21 +114,14 @@ def forbidden_additions(diff_text: str) -> list[tuple[str, str, str]]:
     return out
 
 
-def cargo_version_changed(diff_text: str) -> bool:
-    current = None
-    for line in diff_text.splitlines():
-        m = _FILE_HDR.match(line)
-        if m:
-            current = m.group(1)
-            continue
-        if current and current.endswith("Cargo.toml") and _VERSION.match(line):
-            return True
-    return False
+def cargo_version_changed(diffs: dict[str, str]) -> bool:
+    return any(f.endswith("Cargo.toml") and _VERSION.match(text) for f, text in _added_lines(diffs))
 
 
-def check_diff(changed_files: list[str], diff_text: str, issue: int) -> list[str]:
+def check_diff(changed_files: list[str], diffs: dict[str, str], issue: int) -> list[str]:
+    """`diffs`: each changed file's own patch, by path (`Git.file_diffs`)."""
     reasons = [f"protected-path:{f}" for f in protected_violations(changed_files, issue)]
-    reasons += [f"forbidden:{kind}:{f}:{text}" for f, kind, text in forbidden_additions(diff_text)]
-    if cargo_version_changed(diff_text):
+    reasons += [f"forbidden:{kind}:{f}:{text}" for f, kind, text in forbidden_additions(diffs)]
+    if cargo_version_changed(diffs):
         reasons.append("cargo-version-changed")
     return reasons

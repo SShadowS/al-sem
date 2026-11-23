@@ -807,7 +807,8 @@ def cmd_charge(args, ctx, gh, git):
 
 def cmd_check_diff(args, ctx, gh, git):
     g = Git(args.cwd) if args.cwd else git
-    reasons = protect.check_diff(g.changed_files(args.base, args.head), g.diff(args.base, args.head), args.issue)
+    files = g.changed_files(args.base, args.head)
+    reasons = protect.check_diff(files, g.file_diffs(args.base, args.head, files), args.issue)
     return _emit({"reasons": reasons}, 0 if not reasons else 1)
 
 

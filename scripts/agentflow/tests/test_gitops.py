@@ -16,7 +16,7 @@ def test_basic_queries(repo_pair):
     a = g.rev("HEAD")
     b = commit_file(clone, "src/x.rs", "fn x(){}\n", "add x")
     assert g.changed_files(a, b) == ["src/x.rs"]
-    assert "+fn x(){}" in g.diff(a, b)
+    assert "+fn x(){}" in g.file_diffs(a, b, ["src/x.rs"])["src/x.rs"]
     assert g.is_ancestor(a, b) and not g.is_ancestor(b, a)
 
 
