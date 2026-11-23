@@ -36,7 +36,8 @@ What rev 8 changes (the owner's run at `9e8bf18f`, `/work/.al-sem/orchestrator/t
   fixture (`include_bytes!`) and the test constant both spelled `TLS117-DATA-SLOT`. Both now use a
   test-only magic (`TLS117-FIXT-SLOT`, fixture rebuilt; layout unchanged, checksum now 0x416a). New
   item **W12** checks, in every build, that the binary holds the magic exactly once;
-  `examples/tls117/check-magic.sh` cross-builds the example and its test build and counts.
+  `examples/tls117/check-magic.sh` cross-builds the example and its test build and counts. Run
+  here at rev 8 (`x86_64-pc-windows-gnu`, debug): the example **1**, its test build **1**.
 - **W10** hashes through .NET (works in Windows PowerShell 5.1 and pwsh 7). **§9** says the
   grammar clone must be at the commit CLAUDE.md names.
 
