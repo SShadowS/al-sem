@@ -16,8 +16,8 @@ an explicit `ALSEM_IR_CACHE=on` turns it on (`ir_cache::DEFAULT_ON`); one later 
 default once the product acceptance (section 3) passes, and every acceptance step sets
 `ALSEM_IR_CACHE=on` itself. The Windows key is computed **eagerly**, in `install_from_env`: the
 first statement of `aldump`'s and `al-call-hierarchy`'s `main`, and in `alsem`'s `main` after the
-perf-trace setup (skipped for commands that never use the cache: help and version, `batch`, the
-`mcp` front end, `engine-ask`). The candidate's handle denies write and delete while its bytes are
+perf-trace setup (skipped for commands that never use the cache: help and version, the `mcp`
+front end, `engine-ask`; `batch` uses it in the parent and every worker, TLS-116, so it keys). The candidate's handle denies write and delete while its bytes are
 read and is closed after the check (Fable N1: nothing reads the file again, and a handle held for
 the process's life would stop an installer renaming the running exe away); section 1 states what
 the few milliseconds before the key leave. On Windows the cache roots are created through the private walk
@@ -426,8 +426,15 @@ machine, with the product change built:
 6. **The release workflow on the branch** (Fable N6), before landing: `gh workflow run
    release.yml --ref tools/tls-117-windows-cache`. It builds, stamps, (signs when configured),
    runs the cold, warm and aldump key checks, the static-CRT check and the map listing, and
-   publishes nothing (the `release` job runs only for a tag). If the `release` environment
-   restricts branches, the owner allows this branch once or runs it after landing.
+   publishes nothing (the `release` job runs only for a tag). Before running it (Fable F3):
+   - `build-windows` runs in `environment: release` and, when signing is configured, **signs
+     branch code with the real certificate**;
+   - it fails if the `release` environment restricts branches (allow this branch once, or run
+     it after landing);
+   - `--ref <tag>` would publish a release: use the branch, never a tag;
+   - `gh workflow run` may refuse a ref until the `workflow_dispatch` trigger is on `master`;
+     then the dispatch run waits until after landing, which is safe because the Windows cache
+     is still off by default there.
 
 **Why `.data` is not compared in memory.** The engine computes the key in `main` (rev 11; it was
 lazy, at the first IR cache use, before), still after the runtimes have started: the C runtime, Rust's runtime, mimalloc, `std`'s statics and the program itself
@@ -629,9 +636,9 @@ Pins (product phase):
   It is a **closed world** (Fable N3): the pointer-only callbacks are roots too
   (`pop_*_callback`, `summarize_stack_callback`, `ts_decode_utf8`/`_utf16_le`/`_utf16_be`,
   `ts_string_input_read`: 221 roots reach 426 of 562 defined functions), and a defined function
-  neither reached nor on its off-path list (the query engine and its helpers, the lookahead
-  iterator, wasm, the logger and dot graphs, `ts_node_string` and the subtree printer,
-  `ts_set_allocator`) fails. gcc on Linux compiles the `#ifdef _WIN32` branches out (the
+  neither reached nor on its off-path list fails. That list names 136 functions exactly, no
+  wildcard (Fable F2): the query engine and its helpers, the lookahead iterator, wasm, the
+  logger and dot graphs, `ts_node_string` and the subtree printer, `ts_set_allocator`. gcc on Linux compiles the `#ifdef _WIN32` branches out (the
   Windows-only source listed in 4.1). Without gcc it fails on Linux and skips with one line
   elsewhere (Git Bash). Every run also checks two copies of `scanner.c`, one whose
   `tree_sitter_al_external_scanner_create` calls `towlower` and one with an added unlisted

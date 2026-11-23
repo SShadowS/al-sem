@@ -75,15 +75,62 @@ POINTER_TARGETS = re.compile(
     r"|^ts_string_input_read$")
 # Defined functions off the parse path (nothing in al-syntax or src/ reaches them): the query
 # engine and its helpers (query.c), the lookahead iterator, wasm, the logger and dot graphs,
-# ts_node_string and the subtree printer, and the allocator setter.
-OFF_PATH = re.compile(
-    r"^(ts_query\w*|query_\w+|stream_\w+|analysis_\w+|capture_\w+|quantifier_\w+"
-    r"|finished_state_\w+|state_predecessor_map_\w+|symbol_table_\w+|range_intersects"
-    r"|range_within|point_gte|ts_subtree_is_repetition"
-    r"|ts_lookahead_iterator_\w+"
-    r"|ts_wasm_\w+|ts_parser_set_wasm_store|ts_parser_take_wasm_store"
-    r"|ts_parser_logger|ts_parser_set_logger|ts_parser_print_dot_graphs|ts_tree_print_dot_graph"
-    r"|_ts_dup|ts_node_string|ts_subtree_string|ts_subtree__write\w*|ts_set_allocator)$")
+# ts_node_string and the subtree printer, and the allocator setter. Exact names, no wildcard
+# (Fable F2): a new function, or a new pointer-only target, is never excused silently. A
+# tree-sitter update that adds or renames one fails here until it is classified.
+OFF_PATH = frozenset({
+    "_ts_dup", "analysis_state__compare", "analysis_state__has_supertype",
+    "analysis_state__recursion_depth", "analysis_state__top",
+    "analysis_state_pool__clone_or_reuse", "analysis_state_set__clear",
+    "analysis_state_set__delete", "analysis_state_set__insert_sorted",
+    "analysis_state_set__push", "analysis_subgraph_node__compare", "capture_list_pool_acquire",
+    "capture_list_pool_delete", "capture_list_pool_get", "capture_list_pool_get_mut",
+    "capture_list_pool_is_empty", "capture_list_pool_new", "capture_list_pool_release",
+    "capture_list_pool_reset", "capture_quantifier_for_id", "capture_quantifiers_add_all",
+    "capture_quantifiers_add_for_id", "capture_quantifiers_clear", "capture_quantifiers_delete",
+    "capture_quantifiers_join_all", "capture_quantifiers_mul", "capture_quantifiers_new",
+    "capture_quantifiers_replace", "finished_state_erase", "finished_state_pop",
+    "finished_state_precedes", "finished_state_sift_down", "finished_state_sift_up",
+    "finished_state_swap", "point_gte", "quantifier_add", "quantifier_join", "quantifier_mul",
+    "query_analysis__delete", "query_analysis__new", "query_step__add_capture",
+    "query_step__new", "query_step__remove_capture", "range_intersects", "range_within",
+    "state_predecessor_map_add", "state_predecessor_map_delete", "state_predecessor_map_get",
+    "state_predecessor_map_new", "stream_advance", "stream_is_ident_start", "stream_new",
+    "stream_offset", "stream_reset", "stream_scan_identifier", "stream_skip_whitespace",
+    "symbol_table_delete", "symbol_table_id_for_name", "symbol_table_insert_name",
+    "symbol_table_name_for_id", "symbol_table_new", "ts_lookahead_iterator_current_symbol",
+    "ts_lookahead_iterator_current_symbol_name", "ts_lookahead_iterator_delete",
+    "ts_lookahead_iterator_language", "ts_lookahead_iterator_new", "ts_lookahead_iterator_next",
+    "ts_lookahead_iterator_reset", "ts_lookahead_iterator_reset_state", "ts_node_string",
+    "ts_parser_logger", "ts_parser_print_dot_graphs", "ts_parser_set_logger",
+    "ts_parser_set_wasm_store", "ts_parser_take_wasm_store", "ts_query__add_negated_fields",
+    "ts_query__analyze_patterns", "ts_query__parse_pattern", "ts_query__parse_predicate",
+    "ts_query__parse_string_literal", "ts_query__pattern_map_insert",
+    "ts_query__pattern_map_search", "ts_query__perform_analysis", "ts_query__step_is_fallible",
+    "ts_query_capture_count", "ts_query_capture_name_for_id",
+    "ts_query_capture_quantifier_for_id", "ts_query_copy", "ts_query_cursor__add_state",
+    "ts_query_cursor__advance", "ts_query_cursor__capture", "ts_query_cursor__compare_captures",
+    "ts_query_cursor__compare_nodes", "ts_query_cursor__copy_state",
+    "ts_query_cursor__first_in_progress_capture", "ts_query_cursor__heapify_finished_states",
+    "ts_query_cursor__prepare_to_capture", "ts_query_cursor__push_finished_state",
+    "ts_query_cursor__should_descend", "ts_query_cursor__sort_states_by_capture",
+    "ts_query_cursor__state_precedes", "ts_query_cursor_delete",
+    "ts_query_cursor_did_exceed_match_limit", "ts_query_cursor_exec",
+    "ts_query_cursor_exec_with_options", "ts_query_cursor_match_limit", "ts_query_cursor_new",
+    "ts_query_cursor_next_capture", "ts_query_cursor_next_match",
+    "ts_query_cursor_remove_match", "ts_query_cursor_set_byte_range",
+    "ts_query_cursor_set_containing_byte_range", "ts_query_cursor_set_containing_point_range",
+    "ts_query_cursor_set_match_limit", "ts_query_cursor_set_max_start_depth",
+    "ts_query_cursor_set_point_range", "ts_query_delete", "ts_query_disable_capture",
+    "ts_query_disable_pattern", "ts_query_end_byte_for_pattern",
+    "ts_query_is_pattern_guaranteed_at_step", "ts_query_is_pattern_non_local",
+    "ts_query_is_pattern_rooted", "ts_query_new", "ts_query_pattern_count",
+    "ts_query_predicates_for_pattern", "ts_query_start_byte_for_pattern",
+    "ts_query_string_count", "ts_query_string_value_for_id", "ts_set_allocator",
+    "ts_subtree__write_char_to_string", "ts_subtree__write_to_string",
+    "ts_subtree_is_repetition", "ts_subtree_string", "ts_tree_print_dot_graph",
+    "ts_wasm_store_call_scanner_destroy",
+})
 INJECT_AT = "void *tree_sitter_al_external_scanner_create("
 UNLISTED = "tls117_unlisted_probe"
 
@@ -153,7 +200,7 @@ def check(ci_files):
         for t in edges.get(n, []):
             if t not in defined:
                 ext[t].add(n)
-    unreached = sorted(n for n in defined - seen if not OFF_PATH.match(n))
+    unreached = sorted(defined - seen - OFF_PATH)
     lines = [f"{len(roots)} roots reach {len(seen)} of {len(defined)} defined functions; "
              f"external callees: {len(ext)}"]
     bad = False

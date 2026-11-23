@@ -65,7 +65,8 @@ jobs:
     # Federated credential matches subject repo:...:environment:release
     environment: release
     # TLS-117 (note section 4.3): every link writes a map file next to its output (lld-link
-    # /MAP: <deps>\<name>-<hash>.map); /MAP only writes that file, the image is unchanged.
+    # /MAP: deps\<name>.map, an MSVC bin having no hash suffix); /MAP only writes that file,
+    # the image is unchanged.
     # The per-target variable is MERGED with .cargo/config.toml's target rustflags
     # (+crt-static stays); a plain RUSTFLAGS would replace them.
     env:

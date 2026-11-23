@@ -188,13 +188,14 @@ pub fn install_from_env() -> ReportGuard {
 }
 
 /// Whether a process started with `args` (argv, the program first) may use the IR cache, so
-/// its key is worth making at start (Fable N7): not for help or version output, `alsem batch`
-/// (TLS-116: the cache is off there), the `mcp` front end or `engine-ask` (their engine child
-/// keys itself). A cheap look at argv, never a parse: a miss only makes the key lazy.
+/// its key is worth making at start (Fable N7): not for help or version output, the `mcp`
+/// front end or `engine-ask` (their engine child keys itself). `alsem batch` uses the cache, in
+/// the parent and every worker (TLS-116), so it keys. A cheap look at argv, never a parse: a
+/// miss only makes the key lazy.
 #[cfg_attr(not(windows), allow(dead_code))]
 pub(crate) fn eager_key_wanted(args: &[std::ffi::OsString]) -> bool {
     let sub = args.get(1).and_then(|a| a.to_str());
-    !matches!(sub, Some("batch" | "mcp" | "engine-ask" | "help"))
+    !matches!(sub, Some("mcp" | "engine-ask" | "help"))
         && !args[1.min(args.len())..]
             .iter()
             .any(|a| matches!(a.to_str(), Some("--help" | "-h" | "--version" | "-V")))

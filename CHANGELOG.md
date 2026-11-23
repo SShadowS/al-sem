@@ -26,7 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one. The key is then the accepted file's bytes, as on Linux. Anything else: no key, the cache
   off, the reason in the report. The key is computed at start, in `install_from_env` (aldump's
   and al-call-hierarchy's first statement, alsem's after its perf-trace setup; skipped for help
-  and version, `batch`, the `mcp` front end and `engine-ask`, which never use the cache). The
+  and version, the `mcp` front end and `engine-ask`, which never use the cache). The
   candidate is read through a handle that denies write and delete (one retry after 50 ms on a
   sharing violation), closed after the check: the running exe can be renamed away afterwards.
   The key is over the accepted file's bytes, not an exact identity of the running file (bytes the

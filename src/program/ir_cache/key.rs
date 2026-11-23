@@ -468,7 +468,7 @@ mod tests {
     }
 
     /// Run a copy of this test binary as [`key_child_mode`]: `before` runs before it makes its
-    /// key, `after` after it printed the key while it still runs (it holds the accepted file).
+    /// key, `after` after it printed the key while it still runs (no file is held by then).
     /// Returns what it printed after `IRKEY=` (the key's hex, or `none: <reason>`).
     #[cfg(windows)]
     fn child_key(exe: &std::path::Path, before: impl FnOnce(), after: impl FnOnce()) -> String {

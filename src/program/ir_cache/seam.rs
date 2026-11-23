@@ -1198,8 +1198,8 @@ mod tests {
     }
 
     /// TLS-117 (Fable N7): the Windows eager key is skipped for commands that never use the
-    /// cache, and made for the rest. Discrimination (2026-11-23): `batch` taken out of
-    /// `eager_key_wanted`'s list: fails on `alsem batch`; restored, passes.
+    /// cache, and made for the rest (`batch` uses it: TLS-116). Discrimination (2026-11-23):
+    /// `mcp` taken out of `eager_key_wanted`'s list: fails on `alsem mcp`; restored, passes.
     #[test]
     fn the_eager_key_skips_commands_without_the_cache() {
         let w = |a: &[&str]| {
@@ -1208,6 +1208,8 @@ mod tests {
         for a in [
             &["alsem", "analyze", "ws"][..],
             &["alsem", "engine-host"],
+            &["alsem", "batch", "m.json"],
+            &["alsem", "batch", "--worker", "0", "m.json"],
             &["aldump", "--program-call-graph-stats", "ws"],
             &["al-call-hierarchy"],
             &["alsem"],
@@ -1215,8 +1217,7 @@ mod tests {
             assert!(w(a), "{a:?}");
         }
         for a in [
-            &["alsem", "batch", "m.json"][..],
-            &["alsem", "mcp", "--workspace", "ws"],
+            &["alsem", "mcp", "--workspace", "ws"][..],
             &["alsem", "engine-ask", "--", "x"],
             &["alsem", "help"],
             &["alsem", "analyze", "--help"],

@@ -1582,7 +1582,8 @@ fn main() -> ExitCode {
     }
     let _run = al_sem::engine::perf_trace::run("alsem");
     // ENG-110: the dependency IR cache, for the whole body (its drop writes the report's end
-    // line); `engine-host` returns through here too. A batch run never uses it.
+    // line); `engine-host` returns through here too, and so does a batch run, which uses it in
+    // the parent and every worker (TLS-116). On Windows the image key is made here (TLS-117).
     let _ir = al_sem::program::ir_cache::install_from_env();
     // Warnings go to stderr (a dropped dependency was once only a `warn!` that
     // nothing printed); `RUST_LOG` overrides the level. stdout is unchanged.
