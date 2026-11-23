@@ -1,12 +1,24 @@
 # TLS-117: the IR cache on Windows (design note)
 
-Status: **rev 4**, after the owner's probe run at `e98e1bf0`
-(`/work/.al-sem/orchestrator/tls117-windows-e98e1bf0.txt`) and the orchestrator's choice of
-**design B**. No product code yet; the native probe (`examples/tls117_probe.rs`, with the PE
+Status: **rev 5**, after sol's review r3 (`/work/.al-sem/tools-notes/tls117-design-review-sol-r3.md`)
+and Fable's review of design B; the orchestrator approved probe fixes for every reviewer item plus
+W10, then an owner rerun. (Rev 4 followed the owner's probe run at `e98e1bf0`,
+`/work/.al-sem/orchestrator/tls117-windows-e98e1bf0.txt`, and the choice of **design B**.) No product code yet; the native probe (`examples/tls117_probe.rs`, with the PE
 canonicaliser `examples/tls117/pe.rs`) is the only code. **The cache stays off on Windows until the
 probe passes on a real machine** (section 9).
 
-What rev 4 changes: the owner run showed that `GetMappedFileNameW` keeps the old path after an
+What rev 5 changes: part A reads the module through `ReadProcessMemory`; headers are found by
+`e_lfanew`/`SizeOfHeaders` and compared with the module's before any section work; checked
+arithmetic and size bounds throughout; imports without a lookup table refuse; masks never touch
+executable sections nor come from skipped sections; the load config refuses more unmodelled forms
+and masks `CastGuardOsDeterminedFailureMode`; ARM64 gets no key (section 3). The probe's W1
+replacements are rival valid PEs that both candidates must refuse at the canonical comparison;
+POSIX HELD needs a control that replaces a non-running target; W9 is mandatory and runs through the
+full candidate path; W2 is also run on a `release-ship` build; **W10** (new) checks whether the
+shipped profile makes a `.data`-only change visible, with a post-link `.data`-hash slot as the
+fallback (sections 1, 8, 9). The scope lists never-mapped bytes.
+
+What rev 4 changed: the owner run showed that `GetMappedFileNameW` keeps the old path after an
 ancestor folder is renamed away and recreated, and after the launch hard link is deleted, so the
 rev 1-3 key (trust the mapped name, re-check it) hashed the wrong file: two WRONG KEYs. Design B
 (section 3) takes identity from what runs: the canonical hash of the loaded module's read-only
@@ -64,10 +76,18 @@ module's. Two kinds of difference stay invisible to that check:
   accepted, and its key used for IR the running code produced. Section 3 explains why `.data`
   cannot be compared reliably. Accidental reach: a rebuild that changes only the initial value of
   a mutable static and nothing else, at the running image's path, while it runs; and the IR differs
-  only if the parse path reads that static. The probe's W9 and the `pe` unit tests pin this
-  behaviour (a `.data`-only change is accepted);
+  only if the parse path reads that static. The `pe` unit test `a_data_only_change_is_not_covered`
+  states this behaviour. **W10** (section 8) measures whether the shipped build profile makes such a
+  change visible anyway (through the TimeDateStamp or the debug directory, both hashed). If W10
+  fails, the fallback (orchestrator decision, shipped builds only) is a post-link `.data`-hash slot:
+  a build step writes a hash of the initialised writable sections into a reserved read-only slot,
+  which part A and part B then both cover;
 - the bytes inside the loader-written ranges (IAT, delay-load IAT and module handle, TLS index,
-  load-config pointer targets), which are zeroed on both sides.
+  load-config pointer targets), which are zeroed on both sides;
+- **bytes the loader never maps**: anything past the last section's raw data (an overlay, the
+  Authenticode signature, which the security directory points to by file offset), and the file
+  padding between `SizeOfHeaders` and the first section and between sections' raw data. The key
+  (the full-file blake3) covers them; the identity check does not.
 
 **Out of scope:** another process changing files on purpose mid-run (ENG-110's spec), raw disk
 writes, a network peer; the local-NTFS rule (section 3) keeps network volumes out entirely.
@@ -133,16 +153,20 @@ anything moved at all).
 `image_key()` on Windows:
 
 1. **The module.** `GetModuleHandleExW(FROM_ADDRESS | UNCHANGED_REFCOUNT, &IR_IMAGE_MARKER)`.
-2. **Part A, the canonical memory hash.** Read the module's headers from its first page, then
-   compute `pe::canonical` (below) over the loaded image, relative to the module's load address.
-   Any parse error, unhandled relocation type or unmodelled loader patching: no key.
+2. **Part A, the canonical memory hash.** Read the module with `ReadProcessMemory` on our own
+   process (an unreadable page is a failed read, so no key, never a fault): the headers by
+   `e_lfanew` and `SizeOfHeaders`, then `pe::canonical` (below) over the loaded image, relative to
+   the module's load address. Any parse error, unhandled relocation type or unmodelled loader
+   patching: no key.
 3. **Candidates**, in order: the mapped name (`K32GetMappedFileNameW`, opened as `\\?\GLOBALROOT` +
    the device name), then `GetModuleFileNameW`. A truncated name is skipped.
 4. **Part B, for each candidate:** open it with read access, sharing **read only** (no write, no
    delete), not following a reparse point; require a regular file on a **local NTFS** volume
    (`GetVolumeInformationByHandleW` says `NTFS` and `GetDriveTypeW` on the handle's
    `\\?\Volume{GUID}\` root, from `GetFinalPathNameByHandleW(.., VOLUME_NAME_GUID)`, is
-   `DRIVE_FIXED`; ReFS stays off); read the whole file through that handle; compute
+   `DRIVE_FIXED`; ReFS stays off); read the whole file through that handle (at most
+   2 × `MAX_IMAGE`); compare its header block, `ImageBase` zeroed, with the module's **before any
+   section work**, so every size used afterwards is the running image's own; then compute
    `pe::canonical` over the file's bytes laid out by section, relative to the file's `ImageBase`.
 5. **Accept** the first candidate whose hash equals A's. The key is the blake3 of the bytes read
    through that same handle (and the IR marker search over them, as on Linux). No candidate
@@ -170,10 +194,14 @@ Input: a view of the image laid out as the loader maps it (memory: the module; f
 RVA 0, each section's raw data at its `VirtualAddress`, zero past `SizeOfRawData` up to
 `VirtualSize`) and a `base` (memory: the load address; file: `OptionalHeader.ImageBase`).
 
-- **Headers.** PE32+ only (`Machine` 0x8664, optional-header magic 0x20b). The bytes
-  `[0, SizeOfHeaders)` are hashed with `OptionalHeader.ImageBase` (offset 24 of the optional
+- **Headers.** PE32+ x64 only (`Machine` 0x8664, optional-header magic 0x20b): **an ARM64 image
+  (0xAA64) gets no key**, and an AMD64 header alone is not taken as proof of native x64 (see the
+  CHPE rule below). The header block is found by `e_lfanew` and `SizeOfHeaders` (never a fixed
+  size; `SizeOfImage` ≤ 1 GiB, `SizeOfHeaders` ≤ 1 MiB, every section inside `SizeOfImage`). The
+  bytes `[0, SizeOfHeaders)` are hashed with `OptionalHeader.ImageBase` (offset 24 of the optional
   header) zeroed, because the loader may rewrite it with the load address. Every other header
-  byte, the data directories and the section table included, must match.
+  byte, the data directories and the section table included, must match. All arithmetic on
+  values from the image is checked; a malformed image is a refusal, never a panic.
 - **Sections.** Every section whose `Characteristics` lacks `IMAGE_SCN_MEM_WRITE` (0x80000000)
   and whose mapped length (`VirtualSize`, or `SizeOfRawData` when that is 0) is not zero, in table
   order, over its mapped length. Writable sections are skipped. `IMAGE_SCN_MEM_DISCARDABLE`
@@ -188,29 +216,46 @@ RVA 0, each section's raw data at its `VirtualAddress`, zero past `SizeOfRawData
 - **Loader-written ranges, zeroed after normalising:**
   - the IAT (data directory 12);
   - each import descriptor's (directory 1, 20-byte entries up to an all-zero one) `FirstThunk`
-    array, its length taken from `OriginalFirstThunk` (unchanged by the loader) or, if that is 0,
-    from `FirstThunk` itself, terminator included;
+    array, its length taken from `OriginalFirstThunk` (unchanged by the loader), terminator
+    included. **A descriptor with `OriginalFirstThunk` 0 refuses**: without a separate lookup
+    table, masking the IAT would mask the only record of which imports the slots select, and two
+    files importing different functions would compare equal;
   - each delay-load descriptor's (directory 13, 32-byte entries) module-handle slot (8 bytes) and
-    IAT (counted from its name table); VA-based descriptors (`Attributes` bit 0 clear) are
-    converted with `base`;
+    IAT (counted from its name table; a descriptor without one refuses); VA-based descriptors
+    (`Attributes` bit 0 clear) are converted with `base`;
   - the TLS directory's (9) `AddressOfIndex` target (4 bytes: the loader writes `_tls_index`);
-  - from the load config (10, read up to its `Size`): the targets of `SecurityCookie` (0x58),
-    `GuardCFCheckFunctionPointer` (0x70), `GuardCFDispatchFunctionPointer` (0x78),
-    `GuardRFFailureRoutineFunctionPointer` (0xD8), `GuardRFVerifyStackPointerFunctionPointer`
-    (0xE8), the three `GuardXFG*FunctionPointer`s (0x118, 0x120, 0x128) and
-    `GuardMemcpyFunctionPointer` (0x138), 8 bytes each, when non-zero. A non-zero
-    `DynamicValueRelocTable` (0xC0), `CHPEMetadataPointer` (0xC8) or
-    `DynamicValueRelocTableOffset` (0xE0) refuses: dynamic value relocations (import-call
-    optimisation, retpoline) and hybrid ARM64EC images are loader patching this code does not
-    model.
+  - from the load config (10, read up to its `Size`, at most 0x1000): the targets of
+    `SecurityCookie` (0x58), `GuardCFCheckFunctionPointer` (0x70), `GuardCFDispatchFunctionPointer`
+    (0x78), `GuardRFFailureRoutineFunctionPointer` (0xD8), `GuardRFVerifyStackPointerFunctionPointer`
+    (0xE8), the three `GuardXFG*FunctionPointer`s (0x118, 0x120, 0x128),
+    `CastGuardOsDeterminedFailureMode` (0x130) and `GuardMemcpyFunctionPointer` (0x138), 8 bytes
+    each, when non-zero. These offsets match windows-sys 0.61.2's `IMAGE_LOAD_CONFIG_DIRECTORY64`
+    (checked by sol, review r3).
   - TLS callbacks are not loader-written: the callback array holds VAs, normalised as relocation
-    sites like any other pointer.
+    sites like any other pointer. Ordinary x64 unwind data (`.pdata`) and the CFG target tables
+    stay compared: they are not guard pointer slots.
+- **Refused as loader patching this code does not model** (no key): a non-zero
+  `DynamicValueRelocTable` (0xC0), `DynamicValueRelocTableOffset` (0xE0) or
+  `DynamicValueRelocTableSection` (0xE4) (dynamic value relocations: import-call optimisation,
+  retpoline); a non-zero `CHPEMetadataPointer` (0xC8): an ARM64EC or ARM64X image, which also has
+  an AMD64 header; a load config too short (< 0xD0) to show that field; a non-zero
+  `HotPatchTableOffset` (0xF0); any non-zero byte past the known fields (0x140) up to `Size`.
+  (An image with no load config at all cannot be ARM64EC, which requires one.)
+- **Masking rules:** a loader-written range may never overlap an executable section
+  (`IMAGE_SCN_MEM_EXECUTE` or `IMAGE_SCN_CNT_CODE`): refused. The metadata each mask comes from
+  (import descriptors and lookup tables, delay-load descriptors, the TLS directory, the load
+  config) must itself lie in hashed bytes (the headers or a non-writable section), so mask
+  metadata from a skipped (writable) section is never trusted: refused.
 - **Hash:** blake3 over a domain tag, the header bytes, then each hashed section's index, length
   and bytes.
 
 If the loader writes anything else into a read-only section of our binaries, A differs from the
-true file and the key is never made: the probe's W2 (and W9's "unaltered: accepted") is the native
-check that the model is complete for the shipped build.
+true file and the key is never made. The probe's W2 and W9 ("unaltered: accepted"), run on a
+`--profile release-ship` build, are evidence that the model is complete **for that build on that
+Windows version**, not a proof for every Windows build: a later Windows may patch more. So the
+product must make "no key" visible (the IR cache report's `no key` line and the one-time warning,
+as on Linux), and the shipped MSVC binaries must give positive keys on the owner's machine before
+the cache is turned on.
 
 **The marker** is unchanged: `key_of` searches the hashed bytes for it. The Windows `release-ship`
 jobs (`build-and-deploy.yml`, `release.yml`) gain the marker search for `alsem.exe`, `aldump.exe`
@@ -454,6 +499,20 @@ the copies as children it drives over stdin. The key sequence in it is a prototy
 windows-sys features are a `[target.'cfg(windows)'.dev-dependencies]` entry, so the shipped
 binaries do not change.
 
+**Rev 5 changes to the probe.** Every replacement file in W1 is a **rival valid build**: a copy of
+the running image with one `.text` byte changed (same headers), so part B reaches the canonical
+comparison. In the folder swap (when it happens at "after-query") and after the launch hard link
+is replaced, both candidates must be refused there (`mapped: refused (canonical hash differs)` and
+`module-name: refused (canonical hash differs)`), else the item fails. The POSIX rename-replace
+runs a **control** first: the same `FileRenameInfoEx` call over a non-running target, which must
+replace it (verified by file id); HELD is reported only when the control replaced and the image's
+own rename moved nothing (the image kept its name and the other file stayed where it was). W9
+runs every case through the full candidate path (written to a file, opened denying write and
+delete, local-NTFS checked, read through the handle, headers then hash), picks flip offsets
+outside every zeroed range (the IAT sits at the start of `.rdata` on MSVC), fails when a required
+section (`.text`, `.rdata`, `.data`) is missing, adds a candidate with one section missing from its
+table (refused at the headers), and prints the `.data` verdict without judging it (W10 judges).
+
 **Rev 4 report.** Every key a child makes prints, after the verdict, A's hash (first 16 hex
 digits, with the number of sections and relocation sites it covered) and each candidate's verdict
 (`mapped: accepted`, `module-name: refused (canonical hash differs)`, or the open/read error). The
@@ -472,8 +531,9 @@ when the image kept its name **and** the other file is still where it was, and a
 | W1 hard link | launch through a hard link; delete the launch link (or, if refused, rename it away: both refused FAILs), write another file there (checked), verify its file id differs, while `a.exe` survives | the original hash or no key, before and after |
 | W1 other case | launch through an upper-case spelling | the original hash or no key |
 | W1 8.3 | launch through the short name of a long-named leaf | the original hash or no key; SKIP only with "8.3 disabled on this volume (no short name was made)" |
-| W2 | design B in the probe itself, unchanged image | the key equals the hash of the probe's file (so A equals B for the true file: the loader model is complete for this build) |
-| W9 | part B on copies of the probe's own file against part A of the running probe: unaltered; one byte changed in `.text`; in `.rdata`; in `.data` | unaltered accepted (A = B), `.text` and `.rdata` changes refused; the `.data` change is printed (accepted = the stated scope of section 1); on a mismatch of the unaltered file, both sides' zeroed ranges are printed |
+| W2 | design B in the probe itself, unchanged image; run on the default (dev) build and on a `--profile release-ship` build | the key equals the hash of the probe's file. Evidence that the loader model is complete for that build on that Windows version, not more |
+| W9 | part B, through the full candidate path, on copies of the probe's own file against part A of the running probe: unaltered; one byte changed in `.text`; in `.rdata` (offsets outside every zeroed range); one section missing from the table; one byte changed in `.data` | unaltered accepted; `.text` and `.rdata` refused at the canonical hash; the missing section refused (at the headers); a missing required section FAILs; the `.data` verdict printed, not judged |
+| W10 | `examples/tls117_w10.ps1`: three `--profile release-ship` builds of the probe: base; `--features w10-variant` (only `W10_VALUE`'s initial value differs); base again after touching the probe's source (a relink of the same source). `tls117_probe w10-compare` canonicalises each pair | **variant**: `W10_VALUE` sits in a writable section in both builds, and the two canonicalise **differently** (else a `.data`-only change is invisible: fallback = the post-link `.data`-hash slot). **relink**: equal canonical hashes only with equal writable sections; never equal with different `.data`. Each build's TimeDateStamp, REPRO (`/Brepro`) debug entry and PDB GUID are printed, which shows where the difference (if any) comes from |
 | W3 | controls first: an ordinary copy opens for write and for write+truncate; then while a child runs: write, write+truncate, `FILE_WRITE_DATA` opens of the image; rename; delete (recorded) | the controls succeed, the three opens fail, the rename succeeds |
 | W4 | a key; then a handle with `DELETE` access held on the running image; then closed; and a `FILE_WRITE_DATA` handle on a plain file | key before; while held, no key with a sharing violation (`os error 32`) in the reason; key after; our read-only-sharing open of the plain file fails with a sharing violation |
 | W5 | `std::fs::File` locks on three handles: shared and exclusive beside an exclusive, exclusive beside two shared (third handle), each `WouldBlock`; explicit `unlock` frees; a killed child's lock is freed | all hold, and the killed holder's lock frees within 10 s (time printed) |
@@ -486,6 +546,16 @@ and removes its own override folder.
 Each line is `PASS`, `FAIL` or `SKIP`, with what was seen. The process exits 1 when any item
 fails. The same items are `#[test]`s in the example (the child half is an ignored test the
 parent starts, as `key_is_the_running_image_not_the_path` does on Linux).
+
+**Rev 5 unit tests** (10 in all): the five DIR64 site RVAs (0x3010, 0x3018, 0x3020, 0x3028,
+0x3030) and the IAT (0x6038, 0x10) are pinned literally, read off `objdump -p` once; the code and
+constant flips pick offsets outside every zeroed range and go through `check_candidate` (refused
+at the hash, `.idata` included); a header change (the TimeDateStamp) is refused at the headers,
+while `ImageBase` alone is not a header difference; an import whose `OriginalFirstThunk` is 0
+refuses; a file cut inside `.rdata` refuses; `debug_info` reads a build without a debug
+directory. `w10-compare` was checked here on the fixture: identical files PASS `relink`, and the
+fixture with one `.data` byte changed FAILs it (equal canonical hash, different writable
+sections).
 
 **The canonicaliser's unit tests** (`pe::tests`, any system: `cargo test --example tls117_probe
 pe::`) use `examples/tls117/fixture.exe`, a 4.6 KB PE built by mingw-w64 GCC 13 from
@@ -502,24 +572,33 @@ restored, all 7 pass.
 
 Checked here: `cargo check --target x86_64-pc-windows-gnu --examples --tests` is clean, and
 clippy shows no warning in the probe for the Windows target or Linux. The Windows items have not
-run on rev 4.
+run on rev 5.
 
-## 9. Order of the owner run (Windows, Git Bash, repository root, `TREE_SITTER_AL_PATH` set)
+## 9. Order of the owner run (Windows, repository root, `TREE_SITTER_AL_PATH` set)
 
-1. **The probe.**
+1. **The probe, W0-W9** (Git Bash or PowerShell):
    ```
    cargo run --example tls117_probe
    cargo test --example tls117_probe -- --test-threads=1 --nocapture
+   cargo run --profile release-ship --example tls117_probe
    ```
-   Send both outputs back. Any `FAIL` stops here: the design is revised (a W1 failure keeps the
-   cache off on Windows). The test run includes the `pe::` unit tests.
-2. **The cache tests** (after the product change, on its branch):
+   The third line is W2 and W9 (and every item) on the shipped profile (`panic = "abort"`, so a
+   panicking item ends the run instead of printing FAIL). Send all three outputs back. Any `FAIL`
+   stops here: the design is revised (a W1 failure keeps the cache off on Windows). The test run
+   includes the `pe::` unit tests.
+2. **W10** (PowerShell; three full-LTO `release-ship` builds, several minutes each):
+   ```
+   powershell -ExecutionPolicy Bypass -File examples\tls117_w10.ps1
+   ```
+   It prints `PASS`/`FAIL W10 variant` and `PASS`/`FAIL W10 relink`. A `variant` FAIL turns on the
+   fallback: the post-link `.data`-hash slot for shipped builds.
+3. **The cache tests** (after the product change, on its branch):
    ```
    cargo test -p al-sem --lib program::ir_cache
    cargo test -p al-sem --lib snapshot::cache
    cargo test --test cli cli_ir_cache::
    ```
-3. **The CDO steps (W8)**, with a fresh cache root that passes the private rule:
+4. **The CDO steps (W8)**, with a fresh cache root that passes the private rule:
    ```
    export CDO_WS=U:/Git/DO-cdo-baseline/Cloud
    export ALSEM_IR_CACHE_DIR="$LOCALAPPDATA/al-ch-snapshot-cache/ir-tls117-$(date +%s)"
