@@ -10,8 +10,14 @@
 //! cargo test --example tls117_probe -- --test-threads=1 --nocapture
 //! ```
 //!
-//! The key sequence here is a prototype of the product code, not the product code: it hashes the
-//! whole file with blake3 and does not look for the IR marker.
+//! The key sequence here is a prototype of the product code (design B), not the product code: the
+//! key is the whole file's blake3, without the IR marker search. The PE canonicaliser (`pe`,
+//! `examples/tls117/pe.rs`) has unit tests that run on any system:
+//! `cargo test --example tls117_probe pe::`.
+
+#[cfg_attr(not(windows), allow(dead_code))]
+#[path = "tls117/pe.rs"]
+mod pe;
 
 #[cfg(not(windows))]
 fn main() {
@@ -26,6 +32,7 @@ fn main() {
 
 #[cfg(windows)]
 mod win {
+    use super::pe;
     use std::ffi::{OsStr, OsString, c_void};
     use std::fs::{File, OpenOptions, TryLockError};
     use std::io::{BufRead, BufReader, ErrorKind, Read, Write};
@@ -58,7 +65,7 @@ mod win {
     };
     use windows_sys::Win32::System::LibraryLoader::{
         GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-        GetModuleHandleExW,
+        GetModuleFileNameW, GetModuleHandleExW,
     };
     use windows_sys::Win32::System::ProcessStatus::K32GetMappedFileNameW;
     use windows_sys::Win32::System::SystemServices::{
@@ -239,43 +246,132 @@ mod win {
         (n != 0 && n < buf.len()).then(|| buf[..n].to_vec())
     }
 
-    /// Step 3: open a device-form name through `\\?\GLOBALROOT`, read access, sharing read
-    /// only, not following a reparse point.
-    fn open_device_name(name: &[u16]) -> std::io::Result<File> {
-        let mut p: Vec<u16> = OsStr::new(r"\\?\GLOBALROOT").encode_wide().collect();
-        p.extend_from_slice(name);
+    /// Open a path for the key: read access, sharing read only (no write, no delete), not
+    /// following a reparse point.
+    fn open_candidate(p: &Path) -> std::io::Result<File> {
         OpenOptions::new()
             .read(true)
             .share_mode(FILE_SHARE_READ)
             .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
-            .open(PathBuf::from(OsString::from_wide(&p)))
+            .open(p)
     }
 
-    /// The whole sequence. `barrier(tag)` runs between the steps (a child waits there for its
-    /// parent). `Err` is "no key", with the reason.
-    fn image_key(barrier: &mut dyn FnMut(&str)) -> Result<[u8; 32], String> {
-        let base = module_base().ok_or("GetModuleHandleExW failed")?;
-        let n1 = mapped_name(base).ok_or("first mapped-name query failed")?;
-        barrier("after-query");
-        let mut f = open_device_name(&n1).map_err(|e| format!("open: {e}"))?;
-        barrier("after-open");
-        let m = f.metadata().map_err(|e| format!("stat: {e}"))?;
-        if !m.is_file() || m.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-            return Err("not a regular file".into());
+    /// The loaded module as a [`pe::View`]: reads copy bytes out of the mapped image.
+    struct MemView {
+        base: *const u8,
+        size: usize,
+    }
+
+    impl pe::View for MemView {
+        fn read(&self, rva: u32, len: usize) -> Option<Vec<u8>> {
+            let end = (rva as usize).checked_add(len)?;
+            if end > self.size {
+                return None;
+            }
+            let mut out = vec![0u8; len];
+            // SAFETY: [base, base + size) is the loaded image (SizeOfImage from its own
+            // headers), mapped for the life of the process; `end <= size`.
+            unsafe {
+                std::ptr::copy_nonoverlapping(self.base.add(rva as usize), out.as_mut_ptr(), len)
+            };
+            Some(out)
         }
-        local_ntfs(&f)?;
-        let hash = blake3_of(&mut f).map_err(|e| format!("read: {e}"))?;
-        barrier("after-hash");
-        let n2 = mapped_name(base).ok_or("second mapped-name query failed")?;
-        if n1 != n2 {
-            return Err(format!(
-                "mapped name changed: {} -> {}",
-                lossy(&n1),
-                lossy(&n2)
+    }
+
+    /// Part A: the canonical hash of the module in memory.
+    fn memory_canon(base: *const c_void) -> Result<pe::Canon, String> {
+        let first = MemView {
+            base: base.cast(),
+            size: 0x1000, // the header page is always mapped
+        };
+        let page = pe::View::read(&first, 0, 0x1000).ok_or("header page")?;
+        let h = pe::Headers::parse(&page)?;
+        let v = MemView {
+            base: base.cast(),
+            size: h.size_of_image as usize,
+        };
+        pe::canonical(&v, base as u64)
+    }
+
+    /// The module's load-time file name (`GetModuleFileNameW`).
+    fn module_file_name(base: *const c_void) -> Option<PathBuf> {
+        let mut buf = vec![0u16; 32768];
+        // SAFETY: `base` is this process's module handle; the buffer and its length match.
+        let n =
+            unsafe { GetModuleFileNameW(base as _, buf.as_mut_ptr(), buf.len() as u32) } as usize;
+        (n != 0 && n < buf.len()).then(|| PathBuf::from(OsString::from_wide(&buf[..n])))
+    }
+
+    /// Design B (design note section 3). `barrier(tag)` runs once at each of "after-query",
+    /// "after-open" and "after-hash" (around the first candidate). Returns the key (or the reason
+    /// for none) and a report: A's hash and each candidate's verdict.
+    fn image_key(barrier: &mut dyn FnMut(&str)) -> (Result<[u8; 32], String>, String) {
+        let mut report = Vec::new();
+        let r = (|| {
+            let base = module_base().ok_or("GetModuleHandleExW failed")?;
+            let a = memory_canon(base).map_err(|e| format!("part A: {e}"))?;
+            report.push(format!(
+                "A {} ({} sections, {} reloc sites)",
+                &hex(&a.hash)[..16],
+                a.sections,
+                a.reloc_sites
             ));
-        }
-        drop(f);
-        Ok(hash)
+            let mut cands: Vec<(&str, PathBuf)> = Vec::new();
+            if let Some(n) = mapped_name(base) {
+                let mut p: Vec<u16> = OsStr::new(r"\\?\GLOBALROOT").encode_wide().collect();
+                p.extend_from_slice(&n);
+                cands.push(("mapped", PathBuf::from(OsString::from_wide(&p))));
+            }
+            if let Some(p) = module_file_name(base) {
+                cands.push(("module-name", p));
+            }
+            barrier("after-query");
+            let (mut opened, mut hashed) = (false, false);
+            let mut key = None;
+            for (what, p) in &cands {
+                let verdict = (|| -> Result<Option<[u8; 32]>, String> {
+                    let f = open_candidate(p);
+                    if !opened {
+                        opened = true;
+                        barrier("after-open");
+                    }
+                    let mut f = f.map_err(|e| format!("open: {e}"))?;
+                    let m = f.metadata().map_err(|e| format!("stat: {e}"))?;
+                    if !m.is_file() || m.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+                        return Err("not a regular file".into());
+                    }
+                    local_ntfs(&f)?;
+                    let mut bytes = Vec::new();
+                    f.read_to_end(&mut bytes)
+                        .map_err(|e| format!("read: {e}"))?;
+                    let b = pe::canonical_file(&bytes);
+                    if !hashed {
+                        hashed = true;
+                        barrier("after-hash");
+                    }
+                    let b = b.map_err(|e| format!("part B: {e}"))?;
+                    Ok((b.hash == a.hash).then(|| *blake3::hash(&bytes).as_bytes()))
+                })();
+                match verdict {
+                    Ok(Some(k)) => {
+                        report.push(format!("{what}: accepted"));
+                        key = Some(k);
+                        break;
+                    }
+                    Ok(None) => report.push(format!("{what}: refused (canonical hash differs)")),
+                    Err(e) => report.push(format!("{what}: refused ({e})")),
+                }
+            }
+            // The parent waits for every barrier: give the ones no candidate reached.
+            if !opened {
+                barrier("after-open");
+            }
+            if !hashed {
+                barrier("after-hash");
+            }
+            key.ok_or_else(|| "no candidate file matches the running image".to_string())
+        })();
+        (r, report.join("; "))
     }
 
     // ---------------------------------------------------------------------------------
@@ -297,10 +393,11 @@ mod win {
         l.trim().to_string()
     }
 
-    fn key_line(r: Result<[u8; 32], String>) -> String {
+    /// `KEY <hex> | <report>` or `NOKEY <reason> | <report>`.
+    fn key_line((r, report): (Result<[u8; 32], String>, String)) -> String {
         match r {
-            Ok(k) => format!("KEY {}", hex(&k)),
-            Err(e) => format!("NOKEY {e}"),
+            Ok(k) => format!("KEY {} | {report}", hex(&k)),
+            Err(e) => format!("NOKEY {e} | {report}"),
         }
     }
 
@@ -466,21 +563,25 @@ mod win {
     /// A key reply: `Ok(true)` the running image's key, `Ok(false)` no key, `Err` anything
     /// else (a WRONG key is the failure the design must never allow).
     fn judge_key(r: &str, orig: &[u8; 32]) -> Result<bool, String> {
-        if let Some(k) = r.strip_prefix("KEY ") {
+        judge(r, orig).map(|(k, _)| k)
+    }
+
+    /// [`judge_key`] with a printable summary: whether the key equals the running image's true
+    /// key (`orig`, the copy's file hash), and the child's report (A's hash, each candidate's
+    /// verdict).
+    fn judge(r: &str, orig: &[u8; 32]) -> Result<(bool, String), String> {
+        let (head, report) = r.split_once(" | ").unwrap_or((r, ""));
+        if let Some(k) = head.strip_prefix("KEY ") {
             if k == hex(orig) {
-                Ok(true)
+                Ok((true, format!("key = the running image's key [{report}]")))
             } else {
-                Err(format!("WRONG KEY {k}"))
+                Err(format!("WRONG KEY {k} [{report}]"))
             }
-        } else if r.starts_with("NOKEY") {
-            Ok(false)
+        } else if let Some(why) = head.strip_prefix("NOKEY ") {
+            Ok((false, format!("no key ({why}) [{report}]")))
         } else {
             Err(format!("unexpected reply {r:?}"))
         }
-    }
-
-    fn got(b: bool) -> &'static str {
-        if b { "key" } else { "no key" }
     }
 
     // ---------------------------------------------------------------------------------
@@ -666,6 +767,22 @@ mod win {
                         // Verified before the barrier is released: the old name opens
                         // another file now.
                         Ok(id) if id != orig_id => Ok("replaced (verified)".into()),
+                        // The call reported success but the image kept its name: HELD only when
+                        // the other file also stayed where it was (nothing moved at all).
+                        Ok(_) if matches!(how, Mutation::PosixRenameOver) => {
+                            let other = dir.join(format!("other-{n}.exe"));
+                            match file_id_at(&other) {
+                                Ok(oid) if oid != orig_id => {
+                                    Ok("HELD (the OS kept the running image: the POSIX rename \
+                                     reported success and moved nothing)"
+                                        .into())
+                                }
+                                r => Err(format!(
+                                    "mutation did not take, and the other file is not where it \
+                                     was ({r:?})"
+                                )),
+                            }
+                        }
                         Ok(_) => Err("mutation did not take: same file id at the old name".into()),
                         Err(e) => Err(format!("mutation unverifiable: {e}")),
                     },
@@ -697,8 +814,8 @@ mod win {
             k.send("go");
         };
         let did = did.ok_or("the barrier never came")??;
-        let key = judge_key(&result, &orig).map_err(|e| format!("{did}; {e}"))?;
-        Ok(format!("{did}; {}", got(key)))
+        let (_, said) = judge(&result, &orig).map_err(|e| format!("{did}; {e}"))?;
+        Ok(format!("{did}; {said}"))
     }
 
     fn w1_race(how: Mutation) -> Outcome {
@@ -752,8 +869,8 @@ mod win {
             }
             let mut k = Kid::spawn(&link)?;
             let n = k.name().unwrap_or_default();
-            let first = judge_key(&k.ask("key"), &orig)?;
-            let mut notes = vec![format!("link launch: {}, name {}", got(first), lossy(&n))];
+            let (_, first) = judge(&k.ask("key"), &orig)?;
+            let mut notes = vec![format!("link launch: {first}, name {}", lossy(&n))];
             let how = match std::fs::remove_file(&link) {
                 Ok(()) => "launch link deleted".to_string(),
                 Err(e) => {
@@ -770,12 +887,8 @@ mod win {
                 return Err("mutation did not take".into());
             }
             let n = k.name().unwrap_or_default();
-            let after = judge_key(&k.ask("key"), &orig).map_err(|e| format!("{how}: {e}"))?;
-            notes.push(format!(
-                "{how}, replaced: {}, name {}",
-                got(after),
-                lossy(&n)
-            ));
+            let (_, after) = judge(&k.ask("key"), &orig).map_err(|e| format!("{how}: {e}"))?;
+            notes.push(format!("{how}, replaced: {after}, name {}", lossy(&n)));
             Ok(notes.join(" | "))
         })())
     }
@@ -788,8 +901,8 @@ mod win {
             let (orig, _) = copy_self(&exe)?;
             let mut k = Kid::spawn(&exe.with_file_name("CASE-PROBE.EXE"))?;
             let n = k.name().unwrap_or_default();
-            let r = judge_key(&k.ask("key"), &orig)?;
-            Ok(format!("{}, name {}", got(r), lossy(&n)))
+            let (_, r) = judge(&k.ask("key"), &orig)?;
+            Ok(format!("{r}, name {}", lossy(&n)))
         })())
     }
 
@@ -816,11 +929,10 @@ mod win {
             }
             let mut k = Kid::spawn(&short)?;
             let nm = k.name().unwrap_or_default();
-            let r = judge_key(&k.ask("key"), &orig)?;
+            let (_, r) = judge(&k.ask("key"), &orig)?;
             Ok(Some(format!(
-                "launched as {}: {}, name {}",
+                "launched as {}: {r}, name {}",
                 short.display(),
-                got(r),
                 lossy(&nm)
             )))
         };
@@ -843,10 +955,62 @@ mod win {
             )
             .ctx("hash self")?;
             match image_key(&mut |_| {}) {
-                Ok(k) if k == want => Ok("key equals the file's hash".into()),
-                Ok(_) => Err("key differs from the file's hash".into()),
-                Err(e) => Err(e),
+                (Ok(k), rep) if k == want => Ok(format!("key equals the file's hash [{rep}]")),
+                (Ok(_), rep) => Err(format!("key differs from the file's hash [{rep}]")),
+                (Err(e), rep) => Err(format!("{e} [{rep}]")),
             }
+        })())
+    }
+
+    /// W9: part B on altered copies of this executable, against part A of the running image:
+    /// the unaltered file is accepted; a changed byte in a read-only section (`.text`, `.rdata`)
+    /// is refused; a changed byte in `.data` is accepted, which is the stated scope (design note
+    /// section 3: initial mutable data is not covered).
+    pub(crate) fn w9_altered_candidates() -> Outcome {
+        outcome((|| {
+            let base = module_base().ok_or("GetModuleHandleExW failed")?;
+            let a = memory_canon(base)?;
+            let file = std::fs::read(std::env::current_exe().ctx("current_exe")?).ctx("read")?;
+            let b = pe::canonical_file(&file)?;
+            if b.hash != a.hash {
+                return Err(format!(
+                    "the unaltered file is refused: A {} vs B {} (zeroed A {:?}, B {:?})",
+                    &hex(&a.hash)[..16],
+                    &hex(&b.hash)[..16],
+                    a.zeroed,
+                    b.zeroed
+                ));
+            }
+            let h = pe::Headers::parse(&file)?;
+            let flipped = |name: &str| -> Result<Option<bool>, String> {
+                let Some(s) = h
+                    .sections
+                    .iter()
+                    .find(|s| s.name.starts_with(name.as_bytes()) && s.raw_size > 64)
+                else {
+                    return Ok(None);
+                };
+                let mut f = file.clone();
+                f[s.raw_ptr as usize + 32] ^= 1;
+                Ok(Some(pe::canonical_file(&f)?.hash == a.hash))
+            };
+            let mut notes = vec![format!(
+                "unaltered: accepted (A = B = {})",
+                &hex(&a.hash)[..16]
+            )];
+            for name in [".text", ".rdata"] {
+                match flipped(name)? {
+                    Some(false) => notes.push(format!("{name} byte changed: refused")),
+                    Some(true) => return Err(format!("a changed {name} byte was accepted")),
+                    None => notes.push(format!("{name}: no such section")),
+                }
+            }
+            match flipped(".data")? {
+                Some(true) => notes.push(".data byte changed: accepted (stated scope)".into()),
+                Some(false) => notes.push(".data byte changed: refused".into()),
+                None => notes.push(".data: no such section".into()),
+            }
+            Ok(notes.join(" | "))
         })())
     }
 
@@ -1375,7 +1539,8 @@ mod win {
             ("W1 hard link", w1_hard_link),
             ("W1 other case", w1_case),
             ("W1 8.3 short name", w1_short_name),
-            ("W2 GLOBALROOT open and key", w2_globalroot),
+            ("W2 key of the unchanged image", w2_globalroot),
+            ("W9 part B on altered copies", w9_altered_candidates),
             ("W3 running image refuses write", w3_write_refused),
             ("W4 conflicting access handle", w4_conflicting_access),
             ("W5 std::fs::File locks", w5_locks),
@@ -1467,6 +1632,10 @@ mod win {
         #[test]
         fn w2() {
             check(w2_globalroot());
+        }
+        #[test]
+        fn w9() {
+            check(w9_altered_candidates());
         }
         #[test]
         fn w3() {
