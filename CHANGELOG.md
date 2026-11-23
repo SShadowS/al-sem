@@ -24,9 +24,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   NTFS drive, with equal headers; the candidate's writable sections and masked bytes hash to the
   digest stamped in the running module's data-digest slot; and its own slot equals the loaded
   one. The key is then the accepted file's bytes, as on Linux. Anything else: no key, the cache
-  off, the reason in the report. The key is computed at start (the last step of
-  `install_from_env` in each `main`) and the accepted file's handle stays open, denying write and
-  delete, until the process ends: the file cannot be renamed, replaced or deleted while it runs.
+  off, the reason in the report. The key is computed at start, in `install_from_env` (aldump's
+  and al-call-hierarchy's first statement, alsem's after its perf-trace setup; skipped for help
+  and version, `batch`, the `mcp` front end and `engine-ask`, which never use the cache). The
+  candidate is read through a handle that denies write and delete (one retry after 50 ms on a
+  sharing violation), closed after the check: the running exe can be renamed away afterwards.
   The key is over the accepted file's bytes, not an exact identity of the running file (bytes the
   loader never maps, such as a signature or an overlay, change the key, not the code: a miss,
   never a wrong answer); the note's section 1 states the few milliseconds before the key.
@@ -43,24 +45,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `~/.al-sem/bin/` and each `-LspDir`. It refuses before building or copying anything (and again
   just before copying) when any target is running, so an install never leaves some targets new
   and some old. Both release workflows stamp and verify the three Windows binaries after the
-  build and before signing, and after signing verify them again and run the shipped `alsem.exe`
-  once with the cache on, on `tests/fixtures/tls117/ws`, requiring a key (`--require-key`); a
-  failure fails the job.
+  build and before signing, and after signing verify them again and, with the cache on in a
+  fresh root on `tests/fixtures/tls117/ws`, run a cold `alsem.exe analyze` (`--rule output`), a
+  warm one (`--rule warm-build`) and `aldump.exe --program-call-graph-stats` (`--rule output`),
+  each `--require-key`; a failure fails the job. `release.yml` also runs by `workflow_dispatch`
+  (on a branch, before landing), and then publishes nothing.
 - **The Windows link-map listing.** `release.yml`'s Windows job links with `/MAP` (through
   `CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS`, which keeps `+crt-static`; a plain
   `RUSTFLAGS` would drop it) and lists every locale deny symbol in the maps of `alsem`, `aldump`
-  and `al-call-hierarchy` for a human to check (note section 4.3); it never fails the job.
+  and `al-call-hierarchy` for a human to check (note section 4.3); it never fails the job. A
+  step there fails the job when a shipped exe imports the dynamic C runtime (`dumpbin
+  /dependents`: `vcruntime*.dll`, `msvcp*.dll`, `api-ms-win-crt-*`).
 - **The parse path's locale audit is pinned.** `scripts/check-parse-path-locale` compiles
   tree-sitter's `lib.c` (the `Cargo.lock` version) and the grammar's `parser.c` and `scanner.c`
   with `gcc -fcallgraph-info`, walks the call graph from the roots al-syntax reaches, and fails
   when a reachable function calls anything but byte functions and the guarded log and dot-graph
-  formatting (note section 4.1). Each run also proves it can fail: a `scanner.c` copy calling
-  `towlower` must be refused. It runs as `scripts/ci-steps locale` (in `task`, `task-affected`
+  formatting (note section 4.1), when a guarded function gains a caller outside its pinned set,
+  or when a defined function is neither reached nor on its off-path list (a closed world; the
+  pointer-only callbacks and decoders are roots). Without gcc it fails on Linux and skips with
+  one line elsewhere. Each run also proves it can fail: a `scanner.c` copy calling `towlower`
+  and one with an added unlisted function must both be refused. It runs as `scripts/ci-steps locale` (in `task`, `task-affected`
   and `all`) and in CI's `test` job, in about 3 s.
 - **Windows-native tests** (the owner runs them: `cargo test -p al-sem --lib -- winfs
   key::tests::windows snapshot::cache prune`): `snapshot::winfs::tests::windows_private_walk`,
-  `program::ir_cache::key::tests::windows_stamped_copy_keys_on_its_image` (with the held-handle
-  check: a rename or delete of the running file fails with a sharing violation),
+  `program::ir_cache::key::tests::windows_stamped_copy_keys_on_its_image` (the running exe can
+  be renamed away after its key),
   `snapshot::cache::tests::a_permissive_entry_is_refused_at_every_open`,
   `a_mapped_entry_cannot_be_opened_for_writing`, `shared_now_lock_fails_while_exclusive_held`,
   and `program::ir_cache::prune::tests` (all but the two size-rule tests).

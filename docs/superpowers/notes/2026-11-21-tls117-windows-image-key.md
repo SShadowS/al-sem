@@ -14,11 +14,13 @@ rule are `src/snapshot/winfs.rs`; an unstamped binary's report line is `"ir_cach
 **Rev 11 (product review r1, sol and Fable).** On Windows the cache is **off by default**: only
 an explicit `ALSEM_IR_CACHE=on` turns it on (`ir_cache::DEFAULT_ON`); one later commit flips the
 default once the product acceptance (section 3) passes, and every acceptance step sets
-`ALSEM_IR_CACHE=on` itself. The Windows key is computed **eagerly**, as the last step of
-`install_from_env` in each binary's `main`, and the accepted candidate's handle (read sharing
-only: no write, no delete) stays open for the whole process, so the file the key names cannot be
-renamed, replaced or deleted while the process runs (section 1 states what the few milliseconds
-before the key still leave). On Windows the cache roots are created through the private walk
+`ALSEM_IR_CACHE=on` itself. The Windows key is computed **eagerly**, in `install_from_env`: the
+first statement of `aldump`'s and `al-call-hierarchy`'s `main`, and in `alsem`'s `main` after the
+perf-trace setup (skipped for commands that never use the cache: help and version, `batch`, the
+`mcp` front end, `engine-ask`). The candidate's handle denies write and delete while its bytes are
+read and is closed after the check (Fable N1: nothing reads the file again, and a handle held for
+the process's life would stop an installer renaming the running exe away); section 1 states what
+the few milliseconds before the key leave. On Windows the cache roots are created through the private walk
 (`winfs::walk(.., true)`): the IR root, ENG-113's text root and the batch guard's root. A run
 that makes no key fails `scripts/ir-cache-report-check --require-key`, which the acceptance and
 both release workflows use (the release workflows run the shipped, signed `alsem.exe` once on
@@ -188,11 +190,12 @@ What stays unseen:
   only there (an overlay, a different signature) run the same code but get different keys. That
   costs cache misses, never a wrong answer.
 
-**The window before the key (rev 11, product review r1).** The key is computed at start, as the
-last step of `install_from_env` in each `main`, and the accepted candidate's handle stays open
-(denying write and delete) until the process ends. So from the key on, the accepted file cannot
-change or move while the process runs. What remains is the few milliseconds between the launch
-and the key, and one case in it: a binary **damaged after it was stamped** in its writable
+**The window before the key (rev 11, product review r1).** The key is computed at start (in
+`install_from_env`: aldump's and al-call-hierarchy's first statement, alsem's after its
+perf-trace setup), from bytes read through a handle that denies write and delete while it reads.
+The key is then fixed for the process; the file is not held afterwards (an installer may rename
+the running exe away, which changes nothing the process uses). What remains is the few
+milliseconds between the launch and the key, and one case in it: a binary **damaged after it was stamped** in its writable
 sections (so its own slot no longer matches them), launched damaged, and replaced at its path by
 a pristine copy within those milliseconds. The pristine copy's read-only content equals the
 running image's and its writable sections match the slot the running image carries, so it is
@@ -287,10 +290,10 @@ anything moved at all).
    equal the loaded digest, and require its own slot bytes to equal the loaded slot.
 6. **Accept** the first candidate that passes both. The key is the blake3 of the bytes read
    through that same handle (and the IR marker search over them, as on Linux). No candidate
-   accepted: no key. **As built (rev 11):** the key is computed at start (the last step of
-   `install_from_env`), and the accepted handle is kept open for the process's life (`key::win`'s
-   `HELD`), so a rename or delete of the accepted file fails with a sharing violation while the
-   process runs (`key::tests::windows_stamped_copy_keys_on_its_image` checks both).
+   accepted: no key. **As built (rev 11):** the key is computed at start (`install_from_env`;
+   see the rev 11 header), a candidate whose open meets a sharing violation is tried once more
+   after 50 ms, and the handle is closed after the check, so the running exe can be renamed away
+   after the key (`key::tests::windows_stamped_copy_keys_on_its_image` checks it).
 
 **Why it holds.** The accepted file's read-only content equals what is running, by construction,
 whatever names point where, and its writable sections hash to the digest the running image
@@ -407,6 +410,24 @@ machine, with the product change built:
    key check (start the LSP server once with `ALSEM_IR_CACHE=on` and `ALSEM_IR_CACHE_REPORT` set,
    open the workspace, then `ir-cache-report-check --require-key <report>`).
 4. The Windows-native tests (section 6's list) pass.
+5. **The eager key's start-up cost** (Fable N7): every process with the cache on now reads and
+   hashes its own exe in `main`. Measure it on the installed `alsem.exe` with a command that
+   starts, makes its key and does little else, cache on against off, and report both medians:
+   ```
+   $ws = 'tests\fixtures\tls117\ws'
+   foreach ($mode in 'off', 'on') {
+     $env:ALSEM_IR_CACHE = $mode
+     $ms = 1..7 | ForEach-Object { (Measure-Command { & $bin analyze $ws --format json | Out-Null }).TotalMilliseconds }
+     "$mode median ms: $(($ms | Sort-Object)[3])"
+   }
+   ```
+   The difference is the key's cost per process start (expected: tens of milliseconds for a
+   ~30 MB exe; a resident server pays it once).
+6. **The release workflow on the branch** (Fable N6), before landing: `gh workflow run
+   release.yml --ref tools/tls-117-windows-cache`. It builds, stamps, (signs when configured),
+   runs the cold, warm and aldump key checks, the static-CRT check and the map listing, and
+   publishes nothing (the `release` job runs only for a tag). If the `release` environment
+   restricts branches, the owner allows this branch once or runs it after landing.
 
 **Why `.data` is not compared in memory.** The engine computes the key in `main` (rev 11; it was
 lazy, at the first IR cache use, before), still after the runtimes have started: the C runtime, Rust's runtime, mimalloc, `std`'s statics and the program itself
@@ -603,11 +624,20 @@ Pins (product phase):
   `-fno-stack-protector` (Ubuntu's gcc otherwise adds `__stack_chk_fail`, a compiler canary) and
   `-fno-builtin` (gcc otherwise folds a builtin's call away, so a `towlower` on a constant left no
   edge; with it, the dot-graph writes show as `fputs`, which joins the guarded list). The allow
-  list is the byte functions above plus the guarded `snprintf`, `vsnprintf`, `fprintf`, `fputc`,
-  `fputs`, `fwrite`, whose callers it prints. Every run also checks a copy of `scanner.c` whose
-  `tree_sitter_al_external_scanner_create` calls `towlower`, and fails unless that copy is
-  refused; a grammar copy with that call as its real `scanner.c` fails the real check too
-  (2026-11-23).
+  list is the byte functions above plus the guarded `snprintf`, `vsnprintf`, `fprintf`, `fputc`
+  and `fputs`, each with its **pinned caller set** (a new caller fails: it may be unguarded).
+  It is a **closed world** (Fable N3): the pointer-only callbacks are roots too
+  (`pop_*_callback`, `summarize_stack_callback`, `ts_decode_utf8`/`_utf16_le`/`_utf16_be`,
+  `ts_string_input_read`: 221 roots reach 426 of 562 defined functions), and a defined function
+  neither reached nor on its off-path list (the query engine and its helpers, the lookahead
+  iterator, wasm, the logger and dot graphs, `ts_node_string` and the subtree printer,
+  `ts_set_allocator`) fails. gcc on Linux compiles the `#ifdef _WIN32` branches out (the
+  Windows-only source listed in 4.1). Without gcc it fails on Linux and skips with one line
+  elsewhere (Git Bash). Every run also checks two copies of `scanner.c`, one whose
+  `tree_sitter_al_external_scanner_create` calls `towlower` and one with an added unlisted
+  function, and fails unless both are refused; a grammar copy with the `towlower` call as its
+  real `scanner.c` fails the real check too, and `ts_parser_parse` dropped from `snprintf`'s pin
+  gives `NEW CALLER` and a failure (2026-11-23).
 - **The MSVC map listing** (Windows CI job): build `alsem`, `aldump` and `al-call-hierarchy` with
   `-C link-arg=/MAP` and list every deny symbol found in each map (`setlocale`, `_create_locale`,
   `localeconv`, `isw*`, `_isw*_l`, `iswctype`, `isprint`, `tow*`, `GetLocaleInfo*`, `LCMapString*`,
@@ -618,10 +648,13 @@ Pins (product phase):
   reachability, which 4.1's check already gives.
   **As built (rev 11):** `release.yml`'s `build-windows` job sets
   `CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS=-C link-arg=/MAP`, so every lld-link run writes
-  `<deps>\<name>-<hash>.map` next to its output; the step "List locale symbols in the link maps
-  (for a human)" prints, for the newest map of `alsem`, `aldump` and `al_call_hierarchy`, each
-  map line naming a deny symbol (up to 200), and warns when a map is missing; it never fails the
-  job. The per-target variable is used because Cargo **merges** it with `.cargo/config.toml`'s
+  a map next to its output (`deps\<name>.map`: an MSVC bin has no hash suffix there; the step
+  also takes `<name>-<hash>.map`, never `alsem_stamp`'s); the step "List locale symbols in the
+  link maps (for a human)" prints, for the newest map of `alsem`, `aldump` and
+  `al_call_hierarchy`, each map line naming a deny symbol (up to 200; no leading word boundary,
+  so `__acrt_LCMapStringW`, `_o_towlower` and `__imp_...` match), and warns when a map is
+  missing; it never fails the job. A separate step fails the job when a shipped exe imports the
+  dynamic C runtime (`dumpbin /dependents`), so a lost `+crt-static` cannot ship. The per-target variable is used because Cargo **merges** it with `.cargo/config.toml`'s
   `target.x86_64-pc-windows-msvc.rustflags` (`+crt-static` stays), while a plain `RUSTFLAGS`
   **replaces** them (checked 2026-11-23 with cargo 1.96 on the Linux target: the merged run kept
   `+crt-static`, the `RUSTFLAGS` run dropped it). `/MAP` only writes the map; the extra flag may
@@ -734,8 +767,8 @@ Tests (as built, rev 11; Windows-native, run by the owner with
 - `snapshot::cache::tests::a_mapped_entry_cannot_be_opened_for_writing` and
   `shared_now_lock_fails_while_exclusive_held` (both systems).
 - `program::ir_cache::key::tests::windows_stamped_copy_keys_on_its_image`: an unstamped copy
-  gets no key (`unstamped`); a stamped copy keys on its image, and while it runs its file cannot be
-  renamed or deleted (sharing violation, the held handle); a folder swap to a rival whose `.text`
+  gets no key (`unstamped`); a stamped copy keys on its image, and after its key the running exe
+  can be renamed away while the process runs on (no handle held); a folder swap to a rival whose `.text`
   differs by one known byte gives no key, refused at the canonical comparison for both candidates.
 - `program::ir_cache::prune::tests` run on Windows too (through the Windows `write`, `unlink` and
   `remove_dir`), except the two size-rule tests (sparse files) and the symlink part of
