@@ -30,12 +30,11 @@
 //!   - `PCallSite.in_statement_position`
 //!   - `PCallSite.result_tested`
 //!   - `PCallSite.receiver_temp_state`
-//!   - `PCallSite.implicit_receiver`
+//!   - `PCallSite.rare`
 //!   - `PCallSite.start_may_fail`
 //!   - `PCallSite.checked_run`
 //!   - `PCallSite.write_txn_query`
 //!   - `PCallSite.try_call`
-//!   - `PCallSite.ternary_holders`
 //!   - `PRecordOperation.in_until_condition`
 //!   - `PRecordOperation.in_statement_position`
 //!   - `PRecordOperation.run_trigger`
@@ -393,23 +392,14 @@ pub struct PCallSite {
     /// `in_statement_position`.
     #[serde(skip)]
     pub receiver_temp_state: Option<PTempState>,
-    /// For a BARE `SetAutoCalcFields` call, the record it is made on: the
-    /// receiver text of the innermost implicit frame that
-    /// is a record, `with X do`'s `X` or the object's implicit `Rec`, the same
-    /// frame a bare record operation takes its `record_variable_name` from.
-    /// AL looks a bare name up among the `with` record's members first, then
-    /// outward, so a `with` on a non-record does not hide the outer `Rec`.
-    /// `None` for every other call (only this name is recorded, so the other
-    /// bare calls allocate nothing), for a `SetAutoCalcFields` that is one of
-    /// the object's own routines, and where no record frame is in scope. Read
-    /// by the FlowField rule for a bare `SetAutoCalcFields`
-    /// (`program::model::flow_fields`, engine limits B5).
+    /// The facts almost no call has ([`PCallSiteRare`]), boxed so the rest pay one pointer
+    /// (ENG-96: a byte here is 0.7 MiB on CDO; ENG-175 shares this box). Read them through
+    /// [`Self::implicit_receiver`] and [`Self::ternary_holders`].
     ///
     /// INTERNAL-ONLY (`serde(skip)`, excluded from PartialEq), as
-    /// `in_statement_position`.
-    /// ENG-96: boxed (CDO: set on 4 of 160,213 call sites).
+    /// `in_statement_position`; deserialized rows default it to `None`.
     #[serde(skip)]
-    pub implicit_receiver: Option<Box<String>>,
+    pub rare: Option<Box<PCallSiteRare>>,
     /// True iff the resolver decided this call starts an XmlPort in a way that
     /// may fail (ENG-08, measured on BC 28): an IMPORT (an `XmlPort.Import`, or
     /// an `XmlPort.Run` whose `Direction` allows one, `dataset::import_export`),
@@ -465,15 +455,28 @@ pub struct PCallSite {
     /// `in_statement_position`; deserialized rows default it to `false`.
     #[serde(skip)]
     pub try_call: bool,
+}
+
+/// [`PCallSite::rare`]: the facts almost no call site has (CDO: `implicit_receiver` on 4 of
+/// 160,213 call sites).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PCallSiteRare {
+    /// For a BARE `SetAutoCalcFields` call, the record it is made on: the
+    /// receiver text of the innermost implicit frame that
+    /// is a record, `with X do`'s `X` or the object's implicit `Rec`, the same
+    /// frame a bare record operation takes its `record_variable_name` from.
+    /// AL looks a bare name up among the `with` record's members first, then
+    /// outward, so a `with` on a non-record does not hide the outer `Rec`.
+    /// `None` for every other call, for a `SetAutoCalcFields` that is one of
+    /// the object's own routines, and where no record frame is in scope. Read
+    /// by the FlowField rule for a bare `SetAutoCalcFields`
+    /// (`program::model::flow_fields`, engine limits B5).
+    pub implicit_receiver: Option<String>,
     /// ENG-175: each whole variable (as written) that is a leaf of a conditional expression
-    /// (`c ? X : Y`, nested and parenthesized ones included) used as this call's receiver or one
-    /// of its arguments. BC 28.4: the value is the chosen branch's handle, so the call may rebind
-    /// or keep any of them; `None` when there is none (boxed: almost every call has none).
-    ///
-    /// INTERNAL-ONLY (`serde(skip)`, excluded from PartialEq), as
-    /// `in_statement_position`; deserialized rows default it to `None`.
-    #[serde(skip)]
-    pub ternary_holders: Option<Box<Vec<String>>>,
+    /// (`c ? X : Y`, nested and parenthesized ones included) used as one of the call's arguments
+    /// or as the receiver of a method that binds it (`recref_bind`). BC 28.4: the value is the
+    /// chosen branch's handle, so the call may rebind or keep any of them.
+    pub ternary_holders: Vec<String>,
 }
 
 /// The parameter index a table method's implicit `Rec` depends on: `Rec` is the
@@ -534,10 +537,18 @@ pub fn recref_bind(method: &str) -> Option<RecRefBind> {
 }
 
 impl PCallSite {
-    /// [`Self::ternary_holders`], empty when there is none.
+    /// [`PCallSiteRare::implicit_receiver`].
+    #[must_use]
+    pub fn implicit_receiver(&self) -> Option<&str> {
+        self.rare.as_deref()?.implicit_receiver.as_deref()
+    }
+
+    /// [`PCallSiteRare::ternary_holders`], empty when there is none.
     #[must_use]
     pub fn ternary_holders(&self) -> &[String] {
-        self.ternary_holders.as_deref().map_or(&[], Vec::as_slice)
+        self.rare
+            .as_deref()
+            .map_or(&[], |r| r.ternary_holders.as_slice())
     }
 }
 
@@ -1633,7 +1644,7 @@ mod tests {
                 pending = false;
             }
         }
-        assert_eq!(actual.len(), 26, "scanner found {actual:?}");
+        assert_eq!(actual.len(), 25, "scanner found {actual:?}");
         assert_eq!(documented, actual);
     }
 

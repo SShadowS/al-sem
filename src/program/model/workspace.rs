@@ -2960,12 +2960,11 @@ fn rewrite_routine_site_ids(r: &mut ModelRoutine, f: &dyn Fn(&str) -> String) {
             in_statement_position: _,
             result_tested: _,
             receiver_temp_state: _,
-            implicit_receiver: _,
+            rare: _,
             start_may_fail: _,
             checked_run: _,
             write_txn_query: _,
             try_call: _,
-            ternary_holders: _,
         } = c;
         *id = f(id);
         *operation_id = f(operation_id);

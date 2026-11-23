@@ -207,12 +207,11 @@ pub fn object_run_call_site(id: &str, object_kind: &str, return_used: Option<boo
         in_statement_position: false,
         result_tested: false,
         receiver_temp_state: None,
-        implicit_receiver: None,
+        rare: None,
         start_may_fail: false,
         checked_run: false,
         write_txn_query: false,
         try_call: false,
-        ternary_holders: None,
     }
 }
 
@@ -303,12 +302,11 @@ pub fn call_site(id: &str, callee_name: &str, loop_stack: Vec<String>) -> PCallS
         in_statement_position: false,
         result_tested: false,
         receiver_temp_state: None,
-        implicit_receiver: None,
+        rare: None,
         start_may_fail: false,
         checked_run: false,
         write_txn_query: false,
         try_call: false,
-        ternary_holders: None,
     }
 }
 

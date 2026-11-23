@@ -1445,12 +1445,11 @@ mod fixtures {
             in_statement_position: false,
             result_tested: false,
             receiver_temp_state: None,
-            implicit_receiver: None,
+            rare: None,
             start_may_fail: false,
             checked_run: false,
             write_txn_query: false,
             try_call: false,
-            ternary_holders: None,
         }
     }
 

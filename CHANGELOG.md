@@ -29,7 +29,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
       it named one branch. A statement now leaves every origin at its last position.
   - For a ternary argument, or the receiver of a method that binds (`recref_bind`: Open,
     GetTable, Get, Close, the plain receiver's rule), the walk records its whole-variable leaves
-    (`PCallSite::ternary_holders`, internal, boxed: almost every call has none). The flow treats
+    (`PCallSite::ternary_holders()`, internal). It shares one box with `implicit_receiver`
+    (`PCallSite::rare`, a `PCallSiteRare`), so the row stays 344 bytes (ENG-96's pin). The flow treats
     each, and its alias class, as holding anything from that call on; a global a local hides
     becomes one of the object's global writes. The exit guards, the temp pass, the table frame
     (the variable itself, and a source Variant passed on) and the field guard (sol) read each as

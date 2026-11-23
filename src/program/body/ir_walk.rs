@@ -1605,7 +1605,7 @@ impl<'a> SpineCtx<'a> {
                             .iter()
                             .rev()
                             .find(|f| f.is_record)
-                            .map(|f| Box::new(f.text.clone()))
+                            .map(|f| f.text.clone())
                     }
                     _ => None,
                 };
@@ -1628,8 +1628,13 @@ impl<'a> SpineCtx<'a> {
                     .filter(|&leaf| is_variable_spelling(self.file, leaf))
                     .map(|leaf| self.raw(&self.file.ir.expr(leaf).origin).to_string())
                     .collect();
-                let ternary_holders =
-                    (!ternary_holders.is_empty()).then(|| Box::new(ternary_holders));
+                let rare =
+                    (implicit_receiver.is_some() || !ternary_holders.is_empty()).then(|| {
+                        Box::new(crate::program::body::features::PCallSiteRare {
+                            implicit_receiver,
+                            ternary_holders,
+                        })
+                    });
                 self.site_exprs.calls.push(expr_ix);
                 self.call_sites.push(PCallSite {
                     id: cs_id,
@@ -1649,13 +1654,12 @@ impl<'a> SpineCtx<'a> {
                     in_statement_position: self.in_stmt_position,
                     result_tested: self.tested_calls.contains(&eid),
                     receiver_temp_state: None,
-                    implicit_receiver,
+                    rare,
                     // Set after resolution (`program_calls`), never here.
                     start_may_fail: false,
                     checked_run: false,
                     write_txn_query: false,
                     try_call: false,
-                    ternary_holders,
                 });
                 self.cs_arg_exprs.push(args.clone());
                 // `implicit` holds the base `Rec` seed frame (always one, pushed where the
