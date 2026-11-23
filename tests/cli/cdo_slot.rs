@@ -2002,13 +2002,15 @@ fn cdo_slot_a_clock_that_stops_reading_falls_back_to_wall_time() {
 }
 
 /// `acquire <args>` from the cdo-slot at `script` as session B, run to its end
-/// or killed after `limit`; (exit, stdout + stderr, ended in time).
+/// or killed after `limit`; (exit, stdout + stderr, ended in time, seconds from
+/// before its start to its end).
 fn run_bounded(
     s: &Slot,
     script: &std::path::Path,
     args: &[&str],
     limit: std::time::Duration,
-) -> (Option<i32>, String, bool) {
+) -> (Option<i32>, String, bool, std::time::Duration) {
+    let spawned = std::time::Instant::now();
     let mut b = Reap(
         s.cmd_at(script, "B", args, &[])
             .stdout(std::process::Stdio::piped())
@@ -2029,10 +2031,11 @@ fn run_bounded(
         }
         std::thread::sleep(std::time::Duration::from_millis(100));
     };
+    let took = spawned.elapsed();
     let mut text = String::new();
     std::io::Read::read_to_string(&mut b.0.stdout.take().unwrap(), &mut text).unwrap();
     std::io::Read::read_to_string(&mut b.0.stderr.take().unwrap(), &mut text).unwrap();
-    (code, text, in_time)
+    (code, text, in_time, took)
 }
 
 /// ⟨TLS-105 review r2, sol⟩ The fall back to wall time is anchored to the wall
@@ -2041,11 +2044,16 @@ fn run_bounded(
 /// 4 s (under the reads' 5 s cut) in which the host "sleeps" (the suspended
 /// reading 100 -> 104, so awake time does not move), then every read fails.
 /// With a 6 s timeout the wait falls back at the fifth read, about 7 s of wall
-/// time in, of which 4 s were the suspend: it must go on (more reads), not give
-/// up there.
+/// time in, of which 4 s were the suspend: it must give up only after 6 s of
+/// awake time, so at least 10 s of wall time after its start (the bug gave up
+/// at the fifth read, ~7 s). A first version counted reads (at least 6), which
+/// a loaded host broke: its slow iterations rightly used up the awake time by
+/// the fifth read (a full suite's run). Load only makes this wait longer.
 ///
 /// Mutation (2026-11-23): the wall clock read before the clocks again (as in
-/// 4b059aa6) -> gave up at the fifth read (red); restored, green.
+/// 4b059aa6) -> gave up at the fifth read (red); restored, green. Measure
+/// changed to the time: re-proved, red (gave up 7.6 s after its start);
+/// restored, green.
 #[test]
 fn cdo_slot_fall_back_does_not_charge_a_suspend_in_the_last_good_read() {
     let s = Slot::new();
@@ -2064,7 +2072,7 @@ fn cdo_slot_fall_back_does_not_charge_a_suspend_in_the_last_good_read() {
     );
     std::fs::write(bin.join("suspended"), "100").unwrap();
     assert_eq!(s.run("A", &["acquire", "a", "hold"], &[]).0, Some(0));
-    let (code, text, in_time) = run_bounded(
+    let (code, text, in_time, took) = run_bounded(
         &s,
         &bin.join("cdo-slot"),
         &["acquire", "b", "late", "--wait", "--timeout", "6"],
@@ -2077,14 +2085,13 @@ fn cdo_slot_fall_back_does_not_charge_a_suspend_in_the_last_good_read() {
         text.contains("the host slept 4 s during this wait: it goes on that much longer"),
         "precondition: the suspend was in the last good read: {text}"
     );
-    let reads: u32 = std::fs::read_to_string(bin.join("n"))
-        .unwrap()
-        .trim()
-        .parse()
-        .unwrap();
     assert!(
-        reads >= 6,
-        "gave up at read {reads}: the suspend in the last good read was charged to the wait: {text}"
+        text.contains("the awake clock failed 3 reads in a row"),
+        "precondition: it fell back: {text}"
+    );
+    assert!(
+        took >= std::time::Duration::from_millis(9500),
+        "gave up {took:?} after its start: the suspend in the last good read was charged to the wait: {text}"
     );
 }
 
@@ -2109,7 +2116,7 @@ fn cdo_slot_a_clock_read_that_hangs_is_a_failed_read() {
         )),
     );
     assert_eq!(s.run("A", &["acquire", "a", "hold"], &[]).0, Some(0));
-    let (code, text, in_time) = run_bounded(
+    let (code, text, in_time, _) = run_bounded(
         &s,
         &bin.join("cdo-slot"),
         &["acquire", "b", "late", "--wait", "--timeout", "2"],
