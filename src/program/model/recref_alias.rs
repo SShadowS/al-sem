@@ -255,6 +255,31 @@ pub fn user_code_points<'a>(
     calls.chain(ops).collect()
 }
 
+/// The in-place binds ([`bind_sites`]: `GetTable`, `Open`, `Close`, `Get`, …) made through a holder
+/// that is RETAINABLE at that point ([`AliasClasses::rebinds_at`]): the record that holder holds may
+/// be shared with any other retainable holder the classes cannot join (a local passed to a call
+/// that returned it, `L := Same(R)`; a call that joined two of them, `Join(L, R)`; a `var` Variant
+/// out parameter), so the bind may rebind them all, as a place that may run user code may
+/// (ENG-189, Fable's review of ENG-161: `L := Same(R); L.GetTable(Doc); Guarded(R)` answered `no`;
+/// BC 28.4: a returned RecordRef is its argument's handle, ENG-175). Each as a [`UserCodePoint`],
+/// the readers treat it as one.
+#[must_use]
+pub fn kept_bind_points<'a>(r: &'a ModelRoutine, classes: &AliasClasses) -> Vec<UserCodePoint<'a>> {
+    let scope = HolderScope::of(r);
+    bind_sites(r)
+        .into_iter()
+        .filter_map(|s| {
+            let key = scope.text(s.receiver)?.key;
+            let at = (s.anchor.start_line, s.anchor.start_column);
+            classes.rebinds_at(key, at).then_some(UserCodePoint {
+                id: s.id,
+                at,
+                runs: (s.anchor.end_line, s.anchor.end_column),
+            })
+        })
+        .collect()
+}
+
 /// A place that may run user code ([`user_code_points`]).
 #[derive(Debug, Clone, Copy)]
 pub struct UserCodePoint<'a> {

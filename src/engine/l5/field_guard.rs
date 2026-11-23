@@ -121,7 +121,13 @@ fn guarded_operations(
         })
         .collect();
     let mut after_by_op: HashMap<&str, HashSet<HolderKey>> = HashMap::new();
-    for p in crate::program::model::recref_alias::user_code_points(r, shadowed) {
+    // ENG-189: an in-place bind through a holder retainable there may rebind every other one.
+    let points = crate::program::model::recref_alias::user_code_points(r, shadowed)
+        .into_iter()
+        .chain(crate::program::model::recref_alias::kept_bind_points(
+            r, &aliases,
+        ));
+    for p in points {
         let id = p.id;
         let rebound: Vec<HolderKey> = aliases.rebound_at(p.runs).collect();
         if rebound.is_empty() {

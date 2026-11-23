@@ -2247,6 +2247,9 @@ pub(crate) fn exit_guards(
     // holders (a record kept elsewhere may be rebound by a place that may run user code;
     // `RetainedNumber`: `Store.Rebind(); if A.Number <> …`).
     let kept = crate::program::model::recref_alias::AliasClasses::for_routine(r, shadowed);
+    // ENG-189 needs nothing here: an exit guard's holder is passed on before it by no call
+    // (`bound_before` below), so only an EXTERNAL holder (joined into its class) can share its
+    // record, and binds after the guard do not move the exit.
     let user_code = match kept_elsewhere {
         KeptElsewhere::AnyExternal => {
             crate::program::model::recref_alias::user_code_points(r, shadowed)
@@ -2602,9 +2605,15 @@ fn facts_of(
     // retained elsewhere (a SingleInstance store, a caller's alias): every retainable variable
     // may hold anything from there on. A call, or a record operation that fires a trigger or a
     // table event (`recref_alias::user_code_points`). Only for records `kept` says may be kept.
+    // ENG-189: an in-place bind through a holder retainable there too (it may share the record
+    // of any other retainable holder: `L := Same(R); L.GetTable(Doc)`).
     let user_code = match kept {
         KeptElsewhere::AnyExternal => {
-            crate::program::model::recref_alias::user_code_points(r, shadowed)
+            let mut v = crate::program::model::recref_alias::user_code_points(r, shadowed);
+            v.extend(crate::program::model::recref_alias::kept_bind_points(
+                r, &classes,
+            ));
+            v
         }
         KeptElsewhere::Nothing => Vec::new(),
     };
