@@ -36,9 +36,21 @@
 # iterations (spawn_keeper's 1200 x 0.05 s) is frozen with the host and needs none.
 awake_tool="$(dirname "${BASH_SOURCE[0]}")/host-suspended"
 awake_read() {
-    local _b m="" w=${EPOCHREALTIME//[!0-9]/} tail
+    local _b m="" w tail clocks
     awake_s="" awake_msg=""
-    read -r awake_s _b m < <("$awake_tool" --clocks 2>/dev/null) || true
+    # At most 5 s (review r2, sol): a clock read that hangs is a failed read,
+    # never a wait that hangs with it. A command substitution, which waits for
+    # the read to end (a `< <(...)` does not): the read inherits the caller's
+    # lock descriptors (cdo-slot's hold and timing), and one still ending after
+    # its caller exited held them past it (the refused-run test, once, under a
+    # suite's load).
+    clocks=$(timeout 5 "$awake_tool" --clocks 2>/dev/null) || true
+    read -r awake_s _b m <<<"$clocks" || true
+    # The wall clock read AFTER the clocks (review r2, sol): a suspend between
+    # the two then makes awake_off smaller, so a later fall back counts less
+    # time, never more. (Read before them, a suspend there was charged to the
+    # wait once it fell back.)
+    w=${EPOCHREALTIME//[!0-9]/}
     [[ "$awake_s" =~ ^[0-9]+$ ]] || awake_s=""
     if [[ "$awake_base" != wall && "$m" =~ ^[0-9]+$ ]]; then
         # awake_off maps the wall clock onto awake time as of this reading.
@@ -66,16 +78,24 @@ awake_read() {
 }
 awake_start() {
     awake_base="" awake_t0=0 awake_s0="" awake_slept=0 awake_fails=0 awake_off=0
+    awake_boot_src=""
     awake_read
     awake_s0=$awake_s awake_t0=$awake_now awake_us=0 awake_msg=""
 }
 awake_nap() { sleep "$(($1 / 1000000)).$(printf '%06d' $(($1 % 1000000)))"; }
+# One clock per wait (review r2, sol): the first call after awake_start chooses
+# /proc/uptime, or the wall clock when it cannot be read, and the wait keeps it;
+# a later failed /proc/uptime read keeps its last value (mixing the two would
+# compare seconds since boot with seconds since 1970).
 awake_boot_cs() {
     local up="" _i
-    read -r up _i 2>/dev/null </proc/uptime || true
-    if [[ "$up" =~ ^[0-9]+\.[0-9][0-9]$ ]]; then
-        awake_boot=$((10#${up/./}))
-    else
-        awake_boot=$((${EPOCHREALTIME//[!0-9]/} / 10000))
+    if [[ "$awake_boot_src" != wall ]]; then
+        read -r up _i 2>/dev/null </proc/uptime || true
+        if [[ "$up" =~ ^[0-9]+\.[0-9][0-9]$ ]]; then
+            awake_boot=$((10#${up/./})) awake_boot_src=uptime
+            return 0
+        fi
+        [[ "$awake_boot_src" != uptime ]] || return 0
     fi
+    awake_boot=$((${EPOCHREALTIME//[!0-9]/} / 10000)) awake_boot_src=wall
 }

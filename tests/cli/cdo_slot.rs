@@ -2001,6 +2001,130 @@ fn cdo_slot_a_clock_that_stops_reading_falls_back_to_wall_time() {
     assert_eq!(text.matches(said).count(), 1, "{text}");
 }
 
+/// `acquire <args>` from the cdo-slot at `script` as session B, run to its end
+/// or killed after `limit`; (exit, stdout + stderr, ended in time).
+fn run_bounded(
+    s: &Slot,
+    script: &std::path::Path,
+    args: &[&str],
+    limit: std::time::Duration,
+) -> (Option<i32>, String, bool) {
+    let mut b = Reap(
+        s.cmd_at(script, "B", args, &[])
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap(),
+    );
+    let started = std::time::Instant::now();
+    let (code, in_time) = loop {
+        if let Some(st) = b.0.try_wait().unwrap() {
+            break (st.code(), true);
+        }
+        if started.elapsed() >= limit {
+            b.0.kill().unwrap();
+            // Its children too (a hung stand-in clock keeps the output open).
+            kill_users(&s.dir());
+            break (b.0.wait().unwrap().code(), false);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    };
+    let mut text = String::new();
+    std::io::Read::read_to_string(&mut b.0.stdout.take().unwrap(), &mut text).unwrap();
+    std::io::Read::read_to_string(&mut b.0.stderr.take().unwrap(), &mut text).unwrap();
+    (code, text, in_time)
+}
+
+/// ⟨TLS-105 review r2, sol⟩ The fall back to wall time is anchored to the wall
+/// clock read AFTER the last good clock reading, so a suspend inside that
+/// reading is not charged to the wait. The stand-in clock's second read takes
+/// 4 s (under the reads' 5 s cut) in which the host "sleeps" (the suspended
+/// reading 100 -> 104, so awake time does not move), then every read fails.
+/// With a 6 s timeout the wait falls back at the fifth read, about 7 s of wall
+/// time in, of which 4 s were the suspend: it must go on (more reads), not give
+/// up there.
+///
+/// Mutation (2026-11-23): the wall clock read before the clocks again (as in
+/// 4b059aa6) -> gave up at the fifth read (red); restored, green.
+#[test]
+fn cdo_slot_fall_back_does_not_charge_a_suspend_in_the_last_good_read() {
+    let s = Slot::new();
+    let real = concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/host-suspended");
+    let bin = link_folder(
+        &s,
+        &["cdo-slot", "awake-clock"],
+        Some(&format!(
+            "d=$(dirname \"$0\")\nexport CDO_HOST_SUSPENDED_FILE=\"$d/suspended\"\n\
+             if [[ \"$1\" == --clocks ]]; then\n\
+               n=$(( $(cat \"$d/n\" 2>/dev/null || echo 0) + 1 )); echo $n > \"$d/n\"\n\
+               case $n in 1) ;; 2) sleep 4; echo 104 >\"$d/suspended\" ;; *) exit 1 ;; esac\n\
+             fi\n\
+             exec '{real}' \"$@\""
+        )),
+    );
+    std::fs::write(bin.join("suspended"), "100").unwrap();
+    assert_eq!(s.run("A", &["acquire", "a", "hold"], &[]).0, Some(0));
+    let (code, text, in_time) = run_bounded(
+        &s,
+        &bin.join("cdo-slot"),
+        &["acquire", "b", "late", "--wait", "--timeout", "6"],
+        std::time::Duration::from_secs(60),
+    );
+    assert!(in_time, "never gave up: {text}");
+    assert_eq!(code, Some(1), "{text}");
+    assert!(text.contains("not taken after 6 s"), "{text}");
+    assert!(
+        text.contains("the host slept 4 s during this wait: it goes on that much longer"),
+        "precondition: the suspend was in the last good read: {text}"
+    );
+    let reads: u32 = std::fs::read_to_string(bin.join("n"))
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    assert!(
+        reads >= 6,
+        "gave up at read {reads}: the suspend in the last good read was charged to the wait: {text}"
+    );
+}
+
+/// ⟨TLS-105 review r2, sol⟩ A clock read that hangs is a failed read: each is
+/// cut after 5 s (`timeout 5`), so after three the wait falls back to wall time
+/// and gives up, instead of hanging with the clock.
+///
+/// Mutation (2026-11-23): the `timeout 5` dropped -> still waiting after 40 s
+/// (red); restored, green.
+#[test]
+fn cdo_slot_a_clock_read_that_hangs_is_a_failed_read() {
+    let s = Slot::new();
+    let real = concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/host-suspended");
+    let bin = link_folder(
+        &s,
+        &["cdo-slot", "awake-clock"],
+        Some(&format!(
+            "d=$(dirname \"$0\")\n\
+             if [[ \"$1\" == --clocks && -e \"$d/read-once\" ]]; then exec sleep 600; fi\n\
+             [[ \"$1\" == --clocks ]] && : >\"$d/read-once\"\n\
+             exec '{real}' \"$@\""
+        )),
+    );
+    assert_eq!(s.run("A", &["acquire", "a", "hold"], &[]).0, Some(0));
+    let (code, text, in_time) = run_bounded(
+        &s,
+        &bin.join("cdo-slot"),
+        &["acquire", "b", "late", "--wait", "--timeout", "2"],
+        std::time::Duration::from_secs(40),
+    );
+    assert!(
+        in_time,
+        "still waiting after 40 s: a hung clock read hung the wait: {text}"
+    );
+    assert_eq!(code, Some(1), "{text}");
+    assert!(text.contains("not taken after 2 s"), "{text}");
+    let said = "the awake clock failed 3 reads in a row";
+    assert_eq!(text.matches(said).count(), 1, "{text}");
+}
+
 /// ⟨TLS-105 review r1⟩ The keeper took its go while the clocks were read at the
 /// deadline (sol P2, Fable 5): that is a go, not a stopped keeper. The keeper
 /// is stopped; at go's first deadline read, the stand-in `host-suspended`
