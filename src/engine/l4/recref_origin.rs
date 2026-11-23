@@ -228,7 +228,9 @@ impl Walk<'_> {
             _ if !kids.is_empty() => self.seq(kids, input),
             _ => {
                 // A statement: the site sees what reaches it; the last
-                // origin inside it is what it leaves.
+                // origin inside it is what it leaves, every origin at that
+                // position (ENG-175, Fable: `A := B ? R : S` is one origin per
+                // branch, either of which it may leave).
                 if contains(n.source_range, self.site) {
                     self.record(&input);
                 }
@@ -237,7 +239,10 @@ impl Walk<'_> {
                     .iter()
                     .rposition(|o| contains(n.source_range, o.at))
                 {
-                    Some(i) => BTreeSet::from([i]),
+                    Some(i) => {
+                        let at = self.origins[i].at;
+                        (0..=i).filter(|&j| self.origins[j].at == at).collect()
+                    }
                     None => input,
                 }
             }
@@ -486,6 +491,37 @@ mod tests {
         assert_eq!(
             at(21),
             format!("RecordRef RecRef: {dup}; or {get_table}; or {get}")
+        );
+    }
+
+    /// ENG-175 (Fable): `A := B ? R : S` gives one origin per branch at one position, and the
+    /// statement may leave either: both reach the operation after it, as with the `if` form.
+    ///
+    /// Discrimination (2026-11-23): the statement leaving only its last origin (`rposition`
+    /// alone) names `S` only: fails; restored, passes.
+    #[test]
+    fn a_ternary_assignment_leaves_every_branch() {
+        let src = "codeunit 50102 T
+{
+    procedure Tern(B: Boolean; var R: RecordRef; var S: RecordRef)
+    var
+        A: RecordRef;
+    begin
+        A := B ? R : S;
+        A.FindFirst();
+    end;
+}
+";
+        let got = reasons(src, "Tern");
+        assert_eq!(
+            got.len(),
+            1,
+            "precondition: one RecordRef operation: {got:?}"
+        );
+        let reason = al_syntax::IdentifierFoldExt::fold_identifier(got[0].1.as_str());
+        assert!(
+            reason.contains("assigned from r") && reason.contains("assigned from s"),
+            "{reason}"
         );
     }
 

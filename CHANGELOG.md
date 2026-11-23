@@ -88,6 +88,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `cdo_slot_a_plain_suspended_read_that_hangs_is_cut` (proof: cdo-slot's plain read uncut,
   `probe` still running after 20 s, red).
 
+### Fixed (ENG-175: a conditional expression is the chosen branch's RecordRef handle; five wrong `no`s)
+
+- **Measured on BC 28.4** (the Linux sidecar; alc 18.0.41 compiles every shape;
+  `/work/.al-sem/engine-notes/eng175-probe/RESULTS.md`). After `A := B ? R : S;
+  A.GetTable(Vendor)`, R is a Vendor when B holds and S otherwise: a ternary is the handle of
+  the branch it picks, as an assignment's value, an argument (`F(B ? R : S)`) or a receiver
+  (`(B ? R : S).GetTable(V)`), nested ternaries alike. A returned RecordRef shares too (`exit(X)`
+  by value or `var`, a named return, `exit(G)`, a call result as receiver or argument).
+- **The bug** (Fable F2 on ENG-162, older than it). No reader saw a ternary as a copy, so
+  `A := B ? R : S; A.Get(…); Guarded(R)` answered `no` in the RecordRef flow, the table frame and
+  the temp pass (which kept R temporary), and so did a ternary argument or receiver.
+- **The fix.**
+  - The walk records `A := c ? X : Y` as one assignment row per leaf branch, all at the
+    statement's anchor, each marked `PVarAssignment::ternary_leaf` (internal). Readers that take
+    rows as writes that may happen are right unchanged. Two readers needed the mark or the
+    shared anchor (Fable):
+    - d43 took a `true` leaf as a setter that runs for certain, so `IsHandled := C ? true :
+      false` said "confirmed". A leaf now may set true, as the `if` form does.
+    - `recref_origin` (a RecordRef operation's reason) kept only a statement's last origin, so
+      it named one branch. A statement now leaves every origin at its last position.
+  - For a ternary argument, or the receiver of a method that binds (`recref_bind`: Open,
+    GetTable, Get, Close, the plain receiver's rule), the walk records its whole-variable leaves
+    (`PCallSite::ternary_holders()`, internal). It shares one box with `implicit_receiver`
+    (`PCallSite::rare`, a `PCallSiteRare`), so the row stays 344 bytes (ENG-96's pin). The flow treats
+    each, and its alias class, as holding anything from that call on; a global a local hides
+    becomes one of the object's global writes. The exit guards, the temp pass, the table frame
+    (the variable itself, and a source Variant passed on) and the field guard (sol) read each as
+    a binding. `RecRefBind` / `recref_bind` moved to `program::body::features` for the walk;
+    `recref_alias` re-exports them.
+- **Returns: unchanged here.** Every return shape already answers soundly, because a holder
+  passed to a call counts as possibly kept (ENG-159). A returned parameter is an escape that
+  ENG-161's escape facts must count; the measured rule is in ENG-161's task.
+- **Tests.**
+  - `cli_recref_get`'s `GE Ternary` codeunit, with controls (`no`): an assignment (the flow,
+    nested, the table frame, the temp pass); an argument (the flow, the frame, a source Variant
+    passed on, the temp pass, a local exit guard); a receiver; a receiver of `Count()` (not
+    `yes`; base answers `unknown`, as it does for any operation on an unresolved receiver).
+  - `cli_prove_field_guarded_write`: a ternary argument rebinding past a field guard, and one
+    kept by a store and rebound by a later call, with a control.
+  - Unit tests: d43's `a_ternary_leaf_setter_only_may_set_is_handled`; `recref_origin`'s
+    `a_ternary_assignment_leaves_every_branch`; and the lib test
+    `a_hidden_globals_write_reaches_the_instance`, which gains a global and a hidden-global
+    ternary.
+- **Red proofs.** Each break below fails its test:
+  - no per-branch rows: `TernaryAlias`;
+  - no ternary leaves: `TernaryArg`;
+  - receivers of any method: `TernaryReadReceiver`;
+  - each reader's rule turned off fails a row of its own: the flow `TernaryArg`, the frame
+    `TernaryArgFrameRoot` and `VariantFrameRoot`, the exit guards `TernaryLocalGuard`, the temp
+    pass `TernaryArgTemp`, the field guard `TernaryRebound`, the hidden-global write
+    `TernaryHiddenRoot`;
+  - d43 and `recref_origin`: their unit tests.
+
+  A rule for the alias classes (a ternary leaf retainable) changed no answer when broken, since
+  every reader above already binds at the passing call, so it is not in the change.
+- **Golden.** `tests/ir-l2-goldens/l2_features.snapshot` changes for 610 routines, because each
+  routine's `Debug` repr now holds `ternary_leaf` and `rare`; the r0 corpus has no ternary. With
+  those two normalized back to the old text, the old golden matched exactly. No serialized L2
+  output moves.
+
 ### Changed (TLS-116: `alsem batch` uses the IR cache, and no job write reaches a cache folder)
 
 - **What was wrong.** TLS-109's write claims did not cover the engine's cache folders. ENG-110

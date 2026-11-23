@@ -77,6 +77,12 @@ fn may_be_rebound_elsewhere(
                 crate::program::model::recref_alias::may_keep_argument(routine, cs, shadowed)
                     && cs.argument_texts.iter().any(|a| names(a))
             })
+        // ENG-175: a leaf of a ternary receiver or argument may be the handle a call rebinds
+        // (`(B ? R : S).Open(T)`) or hands on (BC 28.4: the chosen branch's handle).
+        || routine
+            .call_sites
+            .iter()
+            .any(|cs| cs.ternary_holders().iter().any(|a| names(a)))
         // sol round 2: a record retained elsewhere (a parameter, a global, a call's result, one
         // kept by an earlier call) may be rebound by any later place that may run user code: a
         // call, or a record operation that fires a trigger or a table event (ENG-159; Fable's

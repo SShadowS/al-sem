@@ -1011,6 +1011,284 @@ codeunit 50442 "GE Shadow"
         Guarded(R);
     end;
 }
+// ENG-175 (Fable F2 on ENG-162): a conditional expression is the chosen branch's handle (BC 28.4:
+// `A := B ? R : S; A.GetTable(V)` moves R when B, S otherwise), as an assignment's value, an
+// argument or a receiver, nested or not. Each was a wrong `no`.
+codeunit 50443 "GE Ternary"
+{
+    procedure TernaryControl(B: Boolean)
+    var
+        R: RecordRef;
+        S: RecordRef;
+        T: RecordRef;
+        A: RecordRef;
+        E: Record "GE Entry";
+        D: Record "GE Doc";
+    begin
+        R.GetTable(E);
+        S.GetTable(E);
+        A := B ? S : T;
+        D.FindFirst();
+        A.Get(D.RecordId);
+        MutByValue(B ? S : T);
+        Guarded(R);
+    end;
+
+    procedure TernaryAlias(B: Boolean)
+    var
+        R: RecordRef;
+        S: RecordRef;
+        A: RecordRef;
+        E: Record "GE Entry";
+        D: Record "GE Doc";
+    begin
+        R.GetTable(E);
+        S.GetTable(E);
+        A := B ? R : S;
+        D.FindFirst();
+        A.Get(D.RecordId);
+        Guarded(R);
+    end;
+
+    procedure NestedTernaryAlias(B: Boolean; C: Boolean)
+    var
+        R: RecordRef;
+        S: RecordRef;
+        T: RecordRef;
+        A: RecordRef;
+        E: Record "GE Entry";
+        D: Record "GE Doc";
+    begin
+        R.GetTable(E);
+        A := B ? S : (C ? T : R);
+        D.FindFirst();
+        A.Get(D.RecordId);
+        Guarded(R);
+    end;
+
+    procedure TernaryTemp(B: Boolean)
+    var
+        R: RecordRef;
+        S: RecordRef;
+        A: RecordRef;
+        D: Record "GE Doc";
+    begin
+        R.Open(Database::"GE Other", true);
+        S.Open(Database::"GE Other", true);
+        A := B ? R : S;
+        D.FindFirst();
+        A.Get(D.RecordId);
+        R.Delete();
+    end;
+
+    procedure TernaryFrameRoot()
+    var
+        E: Record "GE Entry";
+    begin
+        TernaryFrame(E, true);
+    end;
+
+    local procedure TernaryFrame(V: Variant; B: Boolean)
+    var
+        R: RecordRef;
+        S: RecordRef;
+        A: RecordRef;
+        Log: Record "GE Log";
+        D: Record "GE Doc";
+    begin
+        R.GetTable(V);
+        S.GetTable(V);
+        A := B ? R : S;
+        D.FindFirst();
+        A.Get(D.RecordId);
+        case R.Number of
+            Database::"GE Doc":
+                Log.Insert();
+        end;
+    end;
+
+    procedure TernaryArg(B: Boolean)
+    var
+        R: RecordRef;
+        S: RecordRef;
+        E: Record "GE Entry";
+    begin
+        R.GetTable(E);
+        S.GetTable(E);
+        MutByValue(B ? R : S);
+        Guarded(R);
+    end;
+
+    procedure TernaryReceiver(B: Boolean)
+    var
+        R: RecordRef;
+        S: RecordRef;
+        E: Record "GE Entry";
+        D: Record "GE Doc";
+    begin
+        R.GetTable(E);
+        S.GetTable(E);
+        (B ? S : R).GetTable(D);
+        Guarded(R);
+    end;
+
+    procedure TernaryArgFrameRoot()
+    var
+        E: Record "GE Entry";
+    begin
+        TernaryArgFrame(E, true);
+    end;
+
+    local procedure TernaryArgFrame(V: Variant; B: Boolean)
+    var
+        R: RecordRef;
+        S: RecordRef;
+        Log: Record "GE Log";
+    begin
+        R.GetTable(V);
+        S.GetTable(V);
+        MutByValue(B ? R : S);
+        case R.Number of
+            Database::"GE Doc":
+                Log.Insert();
+        end;
+    end;
+
+    // A ternary receiver of a method that binds nothing moves nothing (Fable: precision).
+    procedure TernaryReadReceiver(B: Boolean)
+    var
+        R: RecordRef;
+        S: RecordRef;
+        E: Record "GE Entry";
+        N: Integer;
+    begin
+        R.GetTable(E);
+        S.GetTable(E);
+        N := (B ? R : S).Count();
+        Guarded(R);
+    end;
+
+    // The table frame drops its rule when the source Variant is passed on outside the `case`
+    // (as `PassOn(V)` does): through a ternary too (sol). The control passes nothing.
+    procedure VariantFrameControlRoot()
+    var
+        E: Record "GE Entry";
+    begin
+        VariantFrameControl(E, E, true);
+    end;
+
+    local procedure VariantFrameControl(V: Variant; W: Variant; B: Boolean)
+    var
+        R: RecordRef;
+        Log: Record "GE Log";
+    begin
+        R.GetTable(V);
+        PassOn(B ? W : W);
+        case R.Number of
+            Database::"GE Doc":
+                Log.Insert();
+        end;
+    end;
+
+    procedure VariantFrameRoot()
+    var
+        E: Record "GE Entry";
+    begin
+        VariantFrame(E, E, true);
+    end;
+
+    local procedure VariantFrame(V: Variant; W: Variant; B: Boolean)
+    var
+        R: RecordRef;
+        Log: Record "GE Log";
+    begin
+        R.GetTable(V);
+        PassOn(B ? V : W);
+        case R.Number of
+            Database::"GE Doc":
+                Log.Insert();
+        end;
+    end;
+
+    local procedure PassOn(X: Variant)
+    begin
+    end;
+
+    // The temp pass: a ternary argument may hand R to a callee that moves it to a physical Doc.
+    // (A ternary RECEIVER of `Get` already leaves the answer unknown, R named or not.)
+    procedure TernaryArgTempControl(B: Boolean)
+    var
+        R: RecordRef;
+        S: RecordRef;
+        T: RecordRef;
+    begin
+        R.Open(Database::"GE Other", true);
+        GetDoc(B ? S : T);
+        R.Delete();
+    end;
+
+    procedure TernaryArgTemp(B: Boolean)
+    var
+        R: RecordRef;
+        S: RecordRef;
+    begin
+        R.Open(Database::"GE Other", true);
+        GetDoc(B ? R : S);
+        R.Delete();
+    end;
+
+    local procedure GetDoc(X: RecordRef)
+    var
+        D: Record "GE Doc";
+    begin
+        D.FindFirst();
+        X.Get(D.RecordId);
+    end;
+
+    procedure TernaryArgOwnGuard(B: Boolean)
+    var
+        R: RecordRef;
+        S: RecordRef;
+        E: Record "GE Entry";
+        Log: Record "GE Log";
+    begin
+        R.GetTable(E);
+        S.GetTable(E);
+        MutByValue(B ? R : S);
+        if R.Number <> Database::"GE Doc" then
+            exit;
+        Log.Insert();
+    end;
+
+    // The exit guard on a local only the ternary argument binds (else it reads its `Unset` entry).
+    procedure TernaryLocalGuard(B: Boolean)
+    var
+        R: RecordRef;
+        S: RecordRef;
+        Log: Record "GE Log";
+    begin
+        MutByValue(B ? R : S);
+        if R.Number <> Database::"GE Doc" then
+            exit;
+        Log.Insert();
+    end;
+
+    local procedure MutByValue(X: RecordRef)
+    var
+        D: Record "GE Doc";
+    begin
+        X.GetTable(D);
+    end;
+
+    local procedure Guarded(var R: RecordRef)
+    var
+        Log: Record "GE Log";
+    begin
+        if R.Number <> Database::"GE Doc" then
+            exit;
+        Log.Insert();
+    end;
+}
 "#;
 
 fn alsem(cwd: &Path, args: &[&str]) -> serde_json::Value {
@@ -1143,6 +1421,39 @@ fn a_recordref_get_moves_the_table_for_every_reader() {
     for routine in ["SpacedThisAlias", "CommentThisAlias", "SpacedSlotAlias"] {
         assert_eq!(answer(routine, "GE Log"), "yes", "{routine}");
     }
+    // ENG-175: a ternary is the chosen branch's handle, as an assignment's value (the flow, the
+    // table frame, nested), an argument or a receiver; the temp pass may not keep R temporary.
+    // The control's ternaries name only S and T, so R stays an Entry.
+    assert_eq!(answer("TernaryControl", "GE Log"), "no", "precondition");
+    // Not `yes`: the ternary binds nothing. (Base answers `unknown` too: an operation on a
+    // receiver the model cannot name leaves it open, an older matter than this rule.)
+    assert_ne!(answer("TernaryReadReceiver", "GE Log"), "yes");
+    for routine in [
+        "TernaryAlias",
+        "NestedTernaryAlias",
+        "TernaryFrameRoot",
+        "TernaryArg",
+        "TernaryReceiver",
+        "TernaryArgFrameRoot",
+        "TernaryArgOwnGuard",
+        "TernaryLocalGuard",
+    ] {
+        assert_eq!(answer(routine, "GE Log"), "yes", "{routine}");
+    }
+    assert_ne!(answer("TernaryTemp", "GE Doc"), "no");
+    assert_eq!(
+        answer("TernaryArgTempControl", "GE Doc"),
+        "no",
+        "precondition"
+    );
+    assert_ne!(answer("TernaryArgTemp", "GE Doc"), "no");
+    // The table frame: the source Variant passed on through a ternary drops the frame's rule.
+    assert_eq!(
+        answer("VariantFrameControlRoot", "GE Log"),
+        "no",
+        "precondition"
+    );
+    assert_eq!(answer("VariantFrameRoot", "GE Log"), "yes");
 }
 
 #[test]

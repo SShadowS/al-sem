@@ -577,7 +577,7 @@ fn auto_calc_calls(routine: &ModelRoutine) -> Vec<(String, String, bool)> {
                 (receiver_key(receiver), through_this(receiver))
             }
             PCallee::Bare { name } if name.eq_fold_identifier("setautocalcfields") => {
-                match &cs.implicit_receiver {
+                match cs.implicit_receiver() {
                     Some(r) => (receiver_key(r), false),
                     None => continue,
                 }

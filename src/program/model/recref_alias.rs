@@ -20,35 +20,8 @@ pub use crate::program::model::holder_key::{HolderKey, HolderScope};
 use crate::program::model::workspace::ModelRoutine;
 use al_syntax::IdentifierFoldExt;
 
-/// How a RecordRef method binds the RecordRef it runs on: the one list (ENG-160), measured on
-/// BC 28.4 (`docs/superpowers/notes/2026-11-20-eng160-recordref-table-moves.md` and ENG-145's
-/// note). Through every alias of it, as `GetTable` (one handle). `Copy` moves neither the table
-/// (another table is a runtime error) nor the temporary state; `GetBySystemId` looks only in its
-/// own table; neither is here.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RecRefBind {
-    /// `Open(No[, Temp])`: the table its first argument names.
-    Open,
-    /// `GetTable(Rec)`: its argument's table and temporary state.
-    GetTable,
-    /// `Get(RecordId)`: the RecordId's table when it finds the record (a different table is
-    /// physical, the same table keeps its state), else nothing: any table, state unknown.
-    Get,
-    /// `Close`: no table.
-    Close,
-}
-
-/// [`RecRefBind`] of a method name (any case).
-#[must_use]
-pub fn recref_bind(method: &str) -> Option<RecRefBind> {
-    Some(match method.trim().fold_identifier().as_str() {
-        "open" => RecRefBind::Open,
-        "gettable" => RecRefBind::GetTable,
-        "get" => RecRefBind::Get,
-        "close" => RecRefBind::Close,
-        _ => return None,
-    })
-}
+// The one list of RecordRef binds lives with the body facts (ENG-175: the walk reads it too).
+pub use crate::program::body::features::{RecRefBind, recref_bind};
 
 /// Whether assignment `a` of `r` writes into an array of RecordRefs or Variants (`Slot[1] := R`).
 /// The IR keeps no right side for an indexed target, so it may share any holder of `r` with
@@ -682,6 +655,7 @@ mod tests {
             lhs_is_member: false,
             lhs_text: l.to_string(),
             rhs_text: r.map(str::to_string),
+            ternary_leaf: false,
         }
     }
 

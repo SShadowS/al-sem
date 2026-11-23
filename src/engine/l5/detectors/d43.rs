@@ -314,6 +314,12 @@ fn classify_subscriber(
     if sets.is_empty() {
         return SetterClassification::NoSetTrue;
     }
+    // ENG-175 (Fable): a leaf of a conditional expression (`IsHandled := C ? true : false`) sets
+    // true only when its branch is chosen, as `if C then IsHandled := true` does.
+    if sets.iter().all(|a| a.ternary_leaf) {
+        return SetterClassification::MaySetTrue;
+    }
+    let sets: Vec<_> = sets.into_iter().filter(|a| !a.ternary_leaf).collect();
     // ENG-14 (§4.2 D): a body with no control tree is untrusted (it may have lost a
     // branch or an `exit`), so no setter is proven to run.
     if r.body_available && r.statement_tree.is_none() {
@@ -655,11 +661,48 @@ mod eng14_tests {
                 lhs_is_member: false,
                 lhs_text: "IsHandled".to_string(),
                 rhs_text: None,
+                ternary_leaf: false,
             });
         let by_id: HashMap<&str, &ModelRoutine> = HashMap::from([("sub", &r)]);
         assert_eq!(
             classify_subscriber("sub", &by_id),
             SetterClassification::MaySetTrue
         );
+    }
+
+    /// ENG-175 (Fable): `IsHandled := C ? true : false` gives a `true` row only as one leaf of a
+    /// conditional expression, so it may set true, as the `if` form does; a plain top-level
+    /// setter in the same routine shape must. The routine has no branching and a trusted body
+    /// (no tree to read), so only the leaf flag can tell the two apart.
+    ///
+    /// Discrimination (2026-11-23): `classify_subscriber` ignoring `ternary_leaf` answers
+    /// MustSetTrue for the leaf row: fails; restored, passes.
+    #[test]
+    fn a_ternary_leaf_setter_only_may_set_is_handled() {
+        let setter = |ternary_leaf| {
+            let mut r = crate::engine::l5::test_support::routine("sub", "procedure");
+            r.body_available = false;
+            assert!(!r.has_branching, "precondition: the fast path applies");
+            r.var_assignments
+                .push(crate::program::body::features::PVarAssignment {
+                    lhs_name: "IsHandled".to_string(),
+                    rhs_literal_value: Some("true".to_string()),
+                    source_anchor: crate::engine::l5::test_support::dummy_anchor(),
+                    rhs_identifier: None,
+                    rhs_member: None,
+                    lhs_is_member: false,
+                    lhs_text: "IsHandled".to_string(),
+                    rhs_text: None,
+                    ternary_leaf,
+                });
+            let by_id: HashMap<&str, &ModelRoutine> = HashMap::from([("sub", &r)]);
+            classify_subscriber("sub", &by_id)
+        };
+        assert_eq!(
+            setter(false),
+            SetterClassification::MustSetTrue,
+            "precondition"
+        );
+        assert_eq!(setter(true), SetterClassification::MaySetTrue);
     }
 }

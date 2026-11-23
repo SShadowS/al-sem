@@ -112,6 +112,27 @@ fn is_variable_spelling(file: &AlFile, mut e: ExprId) -> bool {
     }
 }
 
+/// ENG-175: the values a conditional expression may take, looking through parentheses and nested
+/// ternaries (`c ? X : (d ? Y : Z)` gives X, Y, Z); any other expression is its own one leaf.
+fn ternary_leaves(file: &AlFile, e: ExprId) -> Vec<ExprId> {
+    let mut x = e;
+    while let ExprKind::Parenthesized(inner) = &file.ir.expr(x).kind {
+        x = *inner;
+    }
+    match &file.ir.expr(x).kind {
+        ExprKind::Ternary {
+            then_value,
+            else_value,
+            ..
+        } => {
+            let mut out = ternary_leaves(file, *then_value);
+            out.extend(ternary_leaves(file, *else_value));
+            out
+        }
+        _ => vec![e],
+    }
+}
+
 /// Whether `e` is the `this` keyword (the object instance).
 fn is_this(file: &AlFile, e: ExprId) -> bool {
     matches!(&file.ir.expr(e).kind, ExprKind::Identifier(t) if t.eq_fold_identifier("this"))
@@ -1157,32 +1178,44 @@ impl<'a> SpineCtx<'a> {
                     // alias by a quoted name was no alias; the lowerer strips the quotes), and
                     // every spelling of a whole variable (ENG-162: `A := (R)`, `this.G := R`).
                     let lhs_plain = plain_variable(self.file, *target, own);
-                    let rhs_identifier = lhs_plain
-                        .as_ref()
-                        .and_then(|_| plain_variable(self.file, *value, own));
-                    let rhs_member = match &self.file.ir.expr(*target).kind {
-                        ExprKind::Identifier(_) => self.member_of_identifier(*value),
-                        _ => None,
-                    };
-                    // ENG-176: the sides as written, for the scoping resolver.
-                    let lhs_text = self.raw(&self.file.ir.expr(*target).origin).to_string();
-                    // Whenever the value spells a whole variable, whatever the target (`this.G := R`
-                    // with a local `G` hiding the global: R is copied into the global).
-                    let rhs_text = is_variable_spelling(self.file, *value)
-                        .then(|| self.raw(&self.file.ir.expr(*value).origin).to_string());
-                    self.var_assignments.push(PVarAssignment {
-                        // `this."My G"` names `My G` as `"My G"` does.
-                        lhs_name: lhs_plain.clone().unwrap_or(lhs_name),
-                        rhs_literal_value: self.lit_text(*value),
-                        source_anchor: self.anchor(&st.origin),
-                        rhs_identifier,
-                        rhs_member,
-                        // `this.G := …` assigns the variable `G` (ENG-162).
-                        lhs_is_member: lhs_plain.is_none()
-                            && matches!(self.file.ir.expr(*target).kind, ExprKind::Member { .. }),
-                        lhs_text,
-                        rhs_text,
-                    });
+                    // ENG-175: `A := c ? X : Y` is `if c then A := X else A := Y` (BC 28.4: A is
+                    // the chosen branch's handle), so one row per leaf branch, each as that branch
+                    // alone would give; every reader reads rows as writes that may happen.
+                    let leaves = ternary_leaves(self.file, *value);
+                    let ternary_leaf = leaves != [*value];
+                    for leaf in leaves {
+                        let rhs_identifier = lhs_plain
+                            .as_ref()
+                            .and_then(|_| plain_variable(self.file, leaf, own));
+                        let rhs_member = match &self.file.ir.expr(*target).kind {
+                            ExprKind::Identifier(_) => self.member_of_identifier(leaf),
+                            _ => None,
+                        };
+                        // ENG-176: the sides as written, for the scoping resolver.
+                        let lhs_text = self.raw(&self.file.ir.expr(*target).origin).to_string();
+                        // Whenever the value spells a whole variable, whatever the target
+                        // (`this.G := R` with a local `G` hiding the global: R is copied into the
+                        // global).
+                        let rhs_text = is_variable_spelling(self.file, leaf)
+                            .then(|| self.raw(&self.file.ir.expr(leaf).origin).to_string());
+                        self.var_assignments.push(PVarAssignment {
+                            // `this."My G"` names `My G` as `"My G"` does.
+                            lhs_name: lhs_plain.clone().unwrap_or_else(|| lhs_name.clone()),
+                            rhs_literal_value: self.lit_text(leaf),
+                            source_anchor: self.anchor(&st.origin),
+                            rhs_identifier,
+                            rhs_member,
+                            // `this.G := …` assigns the variable `G` (ENG-162).
+                            lhs_is_member: lhs_plain.is_none()
+                                && matches!(
+                                    self.file.ir.expr(*target).kind,
+                                    ExprKind::Member { .. }
+                                ),
+                            lhs_text,
+                            rhs_text,
+                            ternary_leaf,
+                        });
+                    }
                 }
                 use crate::program::body::features::FieldAccessKind;
                 let kind = if *compound {
@@ -1572,10 +1605,36 @@ impl<'a> SpineCtx<'a> {
                             .iter()
                             .rev()
                             .find(|f| f.is_record)
-                            .map(|f| Box::new(f.text.clone()))
+                            .map(|f| f.text.clone())
                     }
                     _ => None,
                 };
+                // ENG-175: the whole variables a ternary receiver or argument may be.
+                // A receiver only through a method that binds it, as a plain receiver (Fable: a
+                // ternary receiver of `Count()` or `Field(1)` moves nothing).
+                let receiver_expr = match &self.file.ir.expr(function).kind {
+                    Member { object, member, .. }
+                        if crate::program::body::features::recref_bind(member).is_some() =>
+                    {
+                        Some(*object)
+                    }
+                    _ => None,
+                };
+                let ternary_holders: Vec<String> = receiver_expr
+                    .into_iter()
+                    .chain(args.iter().copied())
+                    .filter(|&x| ternary_leaves(self.file, x) != [x])
+                    .flat_map(|x| ternary_leaves(self.file, x))
+                    .filter(|&leaf| is_variable_spelling(self.file, leaf))
+                    .map(|leaf| self.raw(&self.file.ir.expr(leaf).origin).to_string())
+                    .collect();
+                let rare =
+                    (implicit_receiver.is_some() || !ternary_holders.is_empty()).then(|| {
+                        Box::new(crate::program::body::features::PCallSiteRare {
+                            implicit_receiver,
+                            ternary_holders,
+                        })
+                    });
                 self.site_exprs.calls.push(expr_ix);
                 self.call_sites.push(PCallSite {
                     id: cs_id,
@@ -1595,7 +1654,7 @@ impl<'a> SpineCtx<'a> {
                     in_statement_position: self.in_stmt_position,
                     result_tested: self.tested_calls.contains(&eid),
                     receiver_temp_state: None,
-                    implicit_receiver,
+                    rare,
                     // Set after resolution (`program_calls`), never here.
                     start_may_fail: false,
                     checked_run: false,

@@ -459,6 +459,61 @@ codeunit 50403 "FG Mgt"
         OnlyLog(R);
     end;
 
+    // ENG-175 (sol): a ternary argument may be R (BC 28.4: the chosen branch's handle): rebound
+    // past the guard by the callee, or kept by the store and rebound by a later call. R is a
+    // local on an unknown table, kept by nothing else (a parameter's guard ends at any call). The
+    // control's ternaries name only S and T.
+    procedure TernaryControl(TableNo: Integer; B: Boolean)
+    var
+        R: RecordRef;
+        S: RecordRef;
+        T: RecordRef;
+        K: Codeunit "FG Keeper";
+        M: Codeunit "FG Mover";
+    begin
+        R.Open(TableNo);
+        if not R.FieldExist(50) then
+            exit;
+        RebindLogByVal(B ? S : T);
+        K.KeepByVal(B ? S : T);
+        M.Go(0);
+        R.Modify();
+    end;
+
+    procedure TernaryRebound(TableNo: Integer; B: Boolean)
+    var
+        R: RecordRef;
+        S: RecordRef;
+    begin
+        R.Open(TableNo);
+        if not R.FieldExist(50) then
+            exit;
+        RebindLogByVal(B ? R : S);
+        R.Modify();
+    end;
+
+    procedure TernaryRetained(TableNo: Integer; B: Boolean)
+    var
+        R: RecordRef;
+        S: RecordRef;
+        K: Codeunit "FG Keeper";
+        M: Codeunit "FG Mover";
+    begin
+        R.Open(TableNo);
+        if not R.FieldExist(50) then
+            exit;
+        K.KeepByVal(B ? R : S);
+        M.Go(0);
+        R.Modify();
+    end;
+
+    local procedure RebindLogByVal(X: RecordRef)
+    var
+        L: Record "FG Log";
+    begin
+        X.GetTable(L);
+    end;
+
     procedure NestedKeepControl()
     var
         R: RecordRef;
@@ -739,6 +794,11 @@ fn a_field_guarded_recordref_write_writes_only_tables_with_the_field() {
     assert_eq!(answer("Rebound", "FG Log"), "unknown");
     // ENG-160: `R.Get(Id)` past the guard rebinds R too.
     assert_eq!(answer("ReboundByGet", "FG Log"), "unknown");
+    // ENG-175 (sol): a ternary argument may be R: rebound past the guard, or kept and rebound by
+    // a later call. The control's ternary does not name R, so its guard holds.
+    assert_eq!(answer("TernaryControl", "FG Log"), "no", "precondition");
+    assert_eq!(answer("TernaryRebound", "FG Log"), "unknown");
+    assert_eq!(answer("TernaryRetained", "FG Log"), "unknown");
     // sol r6 on ENG-30: a routine with a `with` takes no field guard.
     assert_eq!(answer("AliasWith", "FG Log"), "unknown");
     // ENG-145: a rebinding through an alias (plain, quoted, through a Variant) ends the guard;
