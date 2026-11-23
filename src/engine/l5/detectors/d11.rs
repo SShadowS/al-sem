@@ -24,6 +24,7 @@
 
 use crate::engine::l5::confidence::to_confidence;
 use crate::engine::l5::detector_context::DetectorContext;
+use crate::engine::l5::detectors::may_load::record_may_be_loaded_at;
 use crate::engine::l5::detectors::{
     RECORD_LOAD_OPS, anchor_of, bare_rec_assignments, before_anchor,
     is_platform_loaded_trigger_rec, is_table_receiver_rec, record_loaded_by_assignment_before,
@@ -100,29 +101,28 @@ pub fn detect_d11(
                     && other.record_variable_name.fold_identifier() == var_key
                     && before_anchor(&other.source_anchor, &op.source_anchor)
             });
-            if loaded_before {
-                continue;
-            }
             // G-10/G-16(a): the record was loaded by a CALL strictly before
             // this op — a platform built-in (`GetBySystemId`) or a resolved
             // callee chain that loads the by-var argument (bounded multi-hop
             // callee summary).
-            if record_loaded_by_call_before(
-                routine,
-                ctx,
-                &op.record_variable_name,
-                &op.source_anchor,
-            ) {
-                continue;
-            }
             // G-16(b): the record was ASSIGNED from a provably-loaded record
             // var strictly before this op (`RecB := RecA` with RecA loaded).
-            if record_loaded_by_assignment_before(
-                routine,
-                ctx,
-                &op.record_variable_name,
-                &op.source_anchor,
-            ) {
+            let loaded_textually = loaded_before
+                || record_loaded_by_call_before(
+                    routine,
+                    ctx,
+                    &op.record_variable_name,
+                    &op.source_anchor,
+                )
+                || record_loaded_by_assignment_before(
+                    routine,
+                    ctx,
+                    &op.record_variable_name,
+                    &op.source_anchor,
+                );
+            // ENG-177: and that load reaches the op on some path (no later
+            // unloaded copy, `Clear` or `exit` cut every such path).
+            if loaded_textually && record_may_be_loaded_at(routine, ctx, op) {
                 continue;
             }
             // #299: the receiver `Rec` of a Table / TableExtension routine is the

@@ -220,6 +220,7 @@ mod cli_c_events_differential;
 mod cli_c_policy_differential;
 mod cli_caller_owned_rec;
 mod cli_commit_sites_up_chain;
+mod cli_d11_load_paths;
 mod cli_d19_dependency_interface;
 mod cli_d22_inline_suppression;
 mod cli_d35_unknown_commit;
