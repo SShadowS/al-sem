@@ -674,7 +674,15 @@ pub fn write_program(p: &ResolvedProgram, w: &mut dyn std::fmt::Write) -> std::f
                 .map(|(e, b)| (e.index(), format!("{b:?}")))
                 .collect();
             bare.sort_unstable();
-            (k.clone(), ids, bare)
+            // ENG-178: so do the table-procedure decisions (ENG-173: the body walk makes such a
+            // call a call site), which a change to the table's procedures moves.
+            let mut table_procedure: Vec<(usize, bool)> = v
+                .table_procedure
+                .iter()
+                .map(|(e, only)| (e.index(), *only))
+                .collect();
+            table_procedure.sort_unstable();
+            (k.clone(), ids, bare, table_procedure)
         })
         .collect();
     parenless.sort();
@@ -954,6 +962,7 @@ fn tally_parenless(t: &mut crate::engine::census::Tally, d: &DependencyBodyResol
             al_syntax::ir::ExprId,
             crate::program::resolve::full::BareVerdict,
         )>(ids.bare.len());
+        t.buf::<(al_syntax::ir::ExprId, bool)>(ids.table_procedure.len());
     }
 }
 
