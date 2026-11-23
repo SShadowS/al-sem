@@ -78,6 +78,44 @@ impl<'t> Iterator for NamedChildren<'t> {
     }
 }
 
+/// The leaf that covers each byte offset of a subtree, for offsets asked in
+/// nondecreasing order, with one cursor that only moves forward
+/// ([`RawNode::leaf_locator`]). Every node is passed at most once, so a whole file's
+/// lookups cost about one walk; a fresh lookup from the root per offset walks the
+/// root's children from the start each time (quadratic in a wide file, ENG-119 review).
+pub(crate) struct LeafLocator<'t> {
+    cursor: TreeCursor<'t>,
+}
+
+impl<'t> LeafLocator<'t> {
+    /// The childless node with `start <= p < end`, or `None` when no leaf covers `p`
+    /// (white space between a node's children, or past the subtree's end). `p` must not
+    /// be below an offset asked before.
+    pub(crate) fn leaf_at(&mut self, p: usize) -> Option<RawNode<'t>> {
+        let c = &mut self.cursor;
+        // Forward to the first node, here or after, that ends past `p`.
+        while c.node().end_byte() <= p {
+            if !c.goto_next_sibling() && !c.goto_parent() {
+                return None;
+            }
+        }
+        if c.node().start_byte() > p {
+            return None; // `p` lies before this node: in a gap
+        }
+        // Down to the leaf. The cursor stays on a child that starts after `p`, so a
+        // later offset never walks this node's children from the start again.
+        loop {
+            let here = c.node();
+            if c.goto_first_child_for_byte(p).is_none() {
+                return (here.child_count() == 0).then(|| RawNode::new(here));
+            }
+            if c.node().start_byte() > p {
+                return None;
+            }
+        }
+    }
+}
+
 #[derive(Copy, Clone)]
 pub struct RawNode<'t> {
     node: Node<'t>,
@@ -165,16 +203,11 @@ impl<'t> RawNode<'t> {
         self.node.is_named()
     }
 
-    /// The smallest named node at or below this one that spans `start..end` (tree-sitter's
-    /// `ts_node_named_descendant_for_byte_range`), found by one descent, not a walk.
-    pub(crate) fn named_descendant_for_byte_range(
-        self,
-        start: usize,
-        end: usize,
-    ) -> Option<RawNode<'t>> {
-        self.node
-            .named_descendant_for_byte_range(start, end)
-            .map(RawNode::new)
+    /// A [`LeafLocator`] over this node's subtree.
+    pub(crate) fn leaf_locator(self) -> LeafLocator<'t> {
+        LeafLocator {
+            cursor: self.node.walk(),
+        }
     }
 
     /// All children held in `field` (for `multiple: true` fields), document order.
