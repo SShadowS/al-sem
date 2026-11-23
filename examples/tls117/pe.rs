@@ -647,12 +647,36 @@ pub fn check_candidate(file: &[u8], a: &Canon) -> Result<Verdict, String> {
 /// The slot: a 16-byte magic, then the 32-byte data digest (zero until stamped).
 pub const SLOT_LEN: usize = 48;
 
-/// The data digest: blake3 over a domain tag and, for every writable section in table order,
-/// its name, virtual address, virtual size, raw size and raw bytes (lengths as u32 LE).
+/// The data digest: blake3 over a domain tag and, for every writable section in table order, its
+/// name, virtual address, virtual size, raw size and raw bytes (lengths as u32 LE); then, after a
+/// separator, every range canonicalisation masks (the file's loader-written ranges, sorted by RVA
+/// and length, duplicates dropped) as a record of the holding section's name (8 zero bytes for
+/// the headers), the RVA, the length and the range's initial file bytes (zero past the raw data,
+/// as the loader maps them). So the bytes the canonical hash cannot see, writable sections and
+/// masked ranges alike (a delay-load IAT pointing at a linker thunk, say), are bound by the digest.
 pub fn data_digest(file: &[u8]) -> Result<[u8; 32], String> {
     let h = Headers::parse(file)?;
     let mut d = blake3::Hasher::new();
-    d.update(b"tls117-data-digest-1");
+    d.update(b"tls117-data-digest-2");
+    let masked = {
+        let fv = FileView::new(file)?;
+        let mut z = loader_written(&fv, &h, h.image_base)?;
+        z.sort_unstable();
+        z.dedup();
+        z.into_iter()
+            .map(|(r, l)| {
+                let name = h
+                    .sections
+                    .iter()
+                    .find(|s| r >= s.va && u64::from(r) < s.end())
+                    .map_or([0u8; 8], |s| s.name);
+                let bytes = fv
+                    .read(r, l as usize)
+                    .ok_or_else(|| format!("masked range {r:#x}+{l:#x} cannot be read"))?;
+                Ok((name, r, l, bytes))
+            })
+            .collect::<Result<Vec<_>, String>>()?
+    };
     for s in h.sections.iter().filter(|s| s.writable()) {
         let start = s.raw_ptr as usize;
         let end = start
@@ -666,6 +690,13 @@ pub fn data_digest(file: &[u8]) -> Result<[u8; 32], String> {
         d.update(&s.vsize.to_le_bytes());
         d.update(&s.raw_size.to_le_bytes());
         d.update(raw);
+    }
+    d.update(b"masked ranges");
+    for (name, r, l, bytes) in masked {
+        d.update(&name);
+        d.update(&r.to_le_bytes());
+        d.update(&l.to_le_bytes());
+        d.update(&bytes);
     }
     Ok(*d.finalize().as_bytes())
 }
@@ -737,6 +768,10 @@ pub fn stamp(file: &mut [u8], magic: &[u8; 16]) -> Result<Stamped, String> {
     let (s, rva) = locate(&h, off, SLOT_LEN)?;
     if s.writable() || s.executable() {
         return Err("the slot is not in a read-only data section".into());
+    }
+    let z = loader_written(&FileView::new(file)?, &h, h.image_base)?;
+    if masked_overlap(rva, SLOT_LEN as u64, &z).is_some() {
+        return Err("the slot overlaps a loader-written range".into());
     }
     let digest = data_digest(file)?;
     file[off + 16..off + SLOT_LEN].copy_from_slice(&digest);
@@ -1098,6 +1133,30 @@ mod tests {
         f[data] ^= 1;
         // The canonical hash cannot see it; the slot does.
         assert_eq!(check_candidate(&f, &a), Ok(Verdict::Accepted));
+        assert_eq!(
+            check_slot(&f, st.slot_rva, &slot, &a.zeroed),
+            Ok(SlotVerdict::DataDiffers)
+        );
+    }
+
+    /// A masked range's initial file bytes are bound by the digest: an IAT entry changed after
+    /// stamping passes the canonical comparison (the IAT is masked) but fails the slot.
+    #[test]
+    fn a_masked_iat_change_after_stamping_fails_the_slot() {
+        let mut f = FIXTURE.to_vec();
+        let st = stamp(&mut f, MAGIC).unwrap();
+        let (slot, a) = loaded_slot(&f, st.slot_rva);
+        let h = Headers::parse(&f).unwrap();
+        let (iat, _) = h.dir(12);
+        let s = section(&h, ".idata");
+        assert_eq!(iat, 0x6038, "precondition: the IAT, read off objdump -p");
+        let at = (s.raw_ptr + (iat - s.va)) as usize;
+        f[at] ^= 1;
+        assert_eq!(
+            check_candidate(&f, &a),
+            Ok(Verdict::Accepted),
+            "masked from the hash"
+        );
         assert_eq!(
             check_slot(&f, st.slot_rva, &slot, &a.zeroed),
             Ok(SlotVerdict::DataDiffers)

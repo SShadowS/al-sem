@@ -79,29 +79,36 @@ fn w10_compare(label: &str, a: &str, b: &str) -> i32 {
         let same_data = da == db;
         // Where W10_VALUE's initial value sits in each file: it must be in a writable section,
         // or the variant test would only show a constant change.
+        // The value also appears as an immediate in code, so every occurrence is looked at and a
+        // writable section is reported when any occurrence lies in one.
         let place = |f: &[u8], v: u32| -> String {
             let pat = v.to_le_bytes();
-            let Some(off) = f.windows(4).position(|w| w == pat) else {
-                return "not found".into();
-            };
             let h = match pe::Headers::parse(f) {
                 Ok(h) => h,
                 Err(e) => return e,
             };
-            h.sections
-                .iter()
-                .find(|s| off >= s.raw_ptr as usize && off < (s.raw_ptr + s.raw_size) as usize)
-                .map_or("outside every section".into(), |s| {
-                    format!(
-                        "{} ({})",
-                        String::from_utf8_lossy(&s.name).trim_end_matches('\0'),
-                        if s.writable() {
-                            "writable"
-                        } else {
-                            "READ-ONLY"
-                        }
-                    )
+            let mut found: Vec<&pe::Section> = f
+                .windows(4)
+                .enumerate()
+                .filter(|(_, w)| *w == pat)
+                .filter_map(|(off, _)| {
+                    h.sections.iter().find(|s| {
+                        off >= s.raw_ptr as usize && off < (s.raw_ptr + s.raw_size) as usize
+                    })
                 })
+                .collect();
+            found.sort_by_key(|s| !s.writable());
+            found.first().map_or("not found in a section".into(), |s| {
+                format!(
+                    "{} ({})",
+                    String::from_utf8_lossy(&s.name).trim_end_matches('\0'),
+                    if s.writable() {
+                        "writable"
+                    } else {
+                        "READ-ONLY"
+                    }
+                )
+            })
         };
         let vb = if label == "variant" {
             0x5157_0002
@@ -585,7 +592,11 @@ mod win {
             let ls = loaded_slot(base)?;
             if ls.bytes[16..].iter().all(|&b| b == 0) {
                 // Still give the barriers the parent waits for.
-                for t in ["after-query", "after-open failed", "after-hash"] {
+                for t in [
+                    "after-query synthetic",
+                    "after-open synthetic",
+                    "after-hash synthetic",
+                ] {
                     barrier(t);
                 }
                 return Err("unstamped build: the loaded slot holds no data digest".into());
@@ -624,12 +635,13 @@ mod win {
                     break;
                 }
             }
-            // The parent waits for every barrier: give the ones no candidate reached.
+            // The parent waits for every barrier: give the ones no candidate reached, marked
+            // synthetic (the step they name never ran, so the parent credits no race there).
             if !opened {
-                barrier("after-open failed");
+                barrier("after-open synthetic");
             }
             if !hashed {
-                barrier("after-hash");
+                barrier("after-hash synthetic");
             }
             key.ok_or_else(|| "no candidate file matches the running image".to_string())
         })();
@@ -851,9 +863,13 @@ mod win {
 
     /// Every candidate in a child's key reply, judged by identity first: one whose file id is
     /// the original's (a surviving alias) may be accepted; any other must have opened and been
-    /// refused at the canonical comparison. `Err` names the first that was not.
-    fn candidates_ok(reply: &str, orig_id: (u64, u128)) -> Result<(), String> {
+    /// refused at the canonical comparison. `Err` names the first that was not. A reply naming
+    /// no candidate is refused; with `require_rival` (the stale-name reproductions), at least one
+    /// candidate must be an observed rival: opened, a file id other than the original's, refused
+    /// at the canonical comparison.
+    fn candidates_ok(reply: &str, orig_id: (u64, u128), require_rival: bool) -> Result<(), String> {
         let orig = format!("id {:x}:{:x}", orig_id.0, orig_id.1);
+        let (mut seen, mut rivals) = (0, 0);
         for c in ["mapped", "module-name"] {
             let Some(seg) = reply
                 .split("; ")
@@ -862,14 +878,24 @@ mod win {
             else {
                 continue; // not a candidate in this run (e.g. a truncated name)
             };
+            seen += 1;
             if seg.contains(&format!("({orig})")) {
                 continue;
             }
-            if !seg.ends_with(": refused (canonical hash differs)") {
+            if !seg.contains("(id ") || !seg.ends_with(": refused (canonical hash differs)") {
                 return Err(format!(
                     "{seg}: a rival must be opened and refused at the canonical comparison"
                 ));
             }
+            rivals += 1;
+        }
+        if seen == 0 {
+            return Err("the reply names no candidate".into());
+        }
+        if require_rival && rivals == 0 {
+            return Err(
+                "no rival file id was observed and refused at the canonical comparison".into(),
+            );
         }
         Ok(())
     }
@@ -1104,7 +1130,12 @@ mod win {
             // after a successful open.
             let (tag, open_state) = full.split_once(' ').unwrap_or((full, ""));
             let handle_held = at == "after-hash" || (at == "after-open" && open_state == "opened");
-            if tag == at {
+            if tag == at && open_state == "synthetic" {
+                // The step this barrier names never ran (no candidate reached it): not a race.
+                did = Some(Err(format!(
+                    "barrier {at} (synthetic): the step never ran, not credited as a race test"
+                )));
+            } else if tag == at {
                 did = Some(match mutate(how, &dir, &exe, n, &rival) {
                     Ok(()) => match file_id_at(&exe) {
                         // Verified before the barrier is released: the old name opens
@@ -1165,7 +1196,9 @@ mod win {
         // When a name was replaced before any candidate was opened, every candidate that is not
         // the original file (by identity) must be a rival refused at the canonical comparison.
         if replaced && at == "after-query" {
-            candidates_ok(&result, orig_id).map_err(|e| format!("{did}; {said}; {e}"))?;
+            // The folder swap is a stale-name reproduction: a rival must have been observed.
+            let stale = matches!(how, Mutation::AncestorAwayThenRecreate);
+            candidates_ok(&result, orig_id, stale).map_err(|e| format!("{did}; {said}; {e}"))?;
         }
         Ok(format!("{did}; {said}"))
     }
@@ -1257,7 +1290,8 @@ mod win {
             let n = k.name().unwrap_or_default();
             let reply = k.ask("key");
             let (_, after) = judge(&reply, &orig).map_err(|e| format!("{how}: {e}"))?;
-            candidates_ok(&reply, orig_id).map_err(|e| format!("{how}, replaced: {after}; {e}"))?;
+            candidates_ok(&reply, orig_id, true)
+                .map_err(|e| format!("{how}, replaced: {after}; {e}"))?;
             notes.push(format!(
                 "{how}, replaced by a rival build: {after}, name {}",
                 lossy(&n)
@@ -1330,7 +1364,7 @@ mod win {
             let r = k.ask("key");
             match judge(&r, &orig)? {
                 (true, said) => {
-                    candidates_ok(&r, orig_id)?;
+                    candidates_ok(&r, orig_id, false)?;
                     Ok(said)
                 }
                 (false, said) => Err(format!("the unchanged stamped copy: {said}")),
