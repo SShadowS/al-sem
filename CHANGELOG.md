@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (TLS-114: a path git prints is read exactly, even when it ends in CR or LF)
+
+- **What was wrong.** Several readers of git's output removed more than git's own line end.
+  Test-scope discovery (`src/engine/test_select/scope.rs`) removed every trailing CR and LF from
+  `git config --path core.excludesFile`, `git rev-parse --show-toplevel` and `--git-common-dir`.
+  So an excludes file, a top level or a common git folder whose name ends in CR was read as
+  another path, and TLS-109's batch claim registered the wrong file as a read. `alsem impact`'s
+  base side removed all trailing whitespace from `--show-toplevel` (`git archive` then ran in a
+  folder that does not exist) and all surrounding whitespace from `--show-prefix` (a workspace
+  folder starting with a space lost it). agentflow's `changed_files` and rebase conflicts read
+  `git diff --name-only` without `-z`: git quotes a name holding a CR, LF or `"`, so
+  `"scripts/x\r"` did not start with `scripts/` and slipped past the protected-path check. Its
+  `-z` tree probe ran in Python text mode, which turns a CR into LF.
+- **The fix.** `git config` now runs with `-z` and only its final NUL is removed. `rev-parse`
+  has no `-z`, so only its one final LF is removed, nothing else. agentflow reads paths through
+  one new helper, `Git.paths`: `-z`, raw bytes split at NUL, decoded with `os.fsdecode`.
+  `git check-ignore` already used `-z`; it is unchanged.
+- **Tests** (unix; each with a discrimination proof): scope discovery with an excludes file
+  ending in CR (an LF inside it too), a top level ending in CR and a bare clone's common folder
+  ending in CR; an `impact` base materialized under a top level ending in CR; a workspace
+  prefix starting with a space; agentflow's changed and dirty paths with a CR at the end and an
+  LF inside.
+- **Left as they are, and why.** Some readers still parse git's paths line by line:
+  `impact --base`'s changed-file lists and the unified-diff headers its parser reads, which git
+  also quotes. Those are a different bug (git's quoting, not cut line ends). The gate scripts'
+  path lists (`ci-steps task-affected`, `cdo-gate`'s product-path check, `land`'s conflict
+  check) read a quoted name as unmapped or product code, which runs more checks, never fewer.
+  Their checkout roots (`rev-parse --show-toplevel`, `worktree list`, `--git-common-dir`) are
+  folders the operator chooses.
+
 ### Fixed (ENG-178: table procedures named like record built-ins: four follow-ups from ENG-173)
 
 From Fable's second review of ENG-173 (`/work/.al-sem/engine-notes/eng173/fable-eng173-r2.md`).

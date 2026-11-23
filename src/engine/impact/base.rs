@@ -39,7 +39,10 @@ fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
             String::from_utf8_lossy(&out.stderr).trim()
         ));
     }
-    Ok(String::from_utf8_lossy(&out.stdout).trim_end().to_string())
+    // Only git's one final LF: a path (`--show-toplevel`) may end in a space
+    // or CR (TLS-114).
+    let s = String::from_utf8_lossy(&out.stdout);
+    Ok(s.strip_suffix('\n').unwrap_or(&s).to_string())
 }
 
 /// The base workspace, materialized.

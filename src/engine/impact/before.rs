@@ -77,8 +77,10 @@ fn rel_below_root(workspace: &Path, diff_root: Option<&str>) -> Result<String, S
             if !out.status.success() {
                 return Err("the workspace is not in a git repository".into());
             }
-            Ok(String::from_utf8_lossy(&out.stdout)
-                .trim()
+            // Only git's final LF: a folder may start with a space (TLS-114).
+            let s = String::from_utf8_lossy(&out.stdout);
+            Ok(s.strip_suffix('\n')
+                .unwrap_or(&s)
                 .trim_end_matches('/')
                 .to_string())
         }
@@ -131,7 +133,10 @@ fn base_source_deps(workspace: &Path, commit: &str) -> Vec<(String, String)> {
         .args(["rev-parse", "--show-prefix"])
         .output()
         .ok()
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .map(|o| {
+            let s = String::from_utf8_lossy(&o.stdout);
+            s.strip_suffix('\n').unwrap_or(&s).to_string()
+        })
         .unwrap_or_default();
     let spec = format!(
         "{commit}:{}{}",
@@ -460,6 +465,43 @@ fn block(
 #[cfg(test)]
 mod tests {
     use super::base_diff_key;
+
+    /// TLS-114: `rev-parse --show-prefix` is read less its final LF only, so
+    /// a workspace folder that starts with a space keeps it: in the folder
+    /// below the top (`rel_below_root`) and in the `git show` spelling of the
+    /// base's dependency config (`base_source_deps`).
+    ///
+    /// DISCRIMINATION (2026-11-23): the old `.trim()` in `rel_below_root`
+    /// fails at "rel" (`ws`); in `base_source_deps`, at "deps" (none read);
+    /// restored, passes.
+    #[cfg(unix)]
+    #[test]
+    fn a_workspace_prefix_starting_with_a_space_is_kept() {
+        let t = tempfile::tempdir().unwrap();
+        let r = t.path();
+        let sh = |args: &[&str]| {
+            let ok = crate::git_env::scratch_git_command()
+                .arg("-C")
+                .arg(r)
+                .args(args)
+                .status()
+                .is_ok_and(|s| s.success());
+            assert!(ok, "git {args:?} failed");
+        };
+        let ws = r.join(" ws");
+        std::fs::create_dir_all(&ws).unwrap();
+        std::fs::create_dir_all(r.join("dep")).unwrap();
+        std::fs::write(
+            ws.join(crate::program::source_deps::CONFIG_FILE),
+            r#"{"sources": ["../dep"]}"#,
+        )
+        .unwrap();
+        sh(&["init", "-q"]);
+        sh(&["add", "."]);
+        sh(&["commit", "-q", "-m", "A"]);
+        assert_eq!(super::rel_below_root(&ws, None).unwrap(), " ws", "rel");
+        assert_eq!(super::base_source_deps(&ws, "HEAD").len(), 1, "deps");
+    }
 
     const REL: &str = "--- a/src/x.al\n+++ b/src/x.al\n@@ -1 +1 @@\n-a\n+b\n";
     const ABS: &str =

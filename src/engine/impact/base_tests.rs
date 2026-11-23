@@ -63,3 +63,33 @@ fn dependency_changes_names_each_difference() {
     );
     assert!(dependency_changes(&base, &base).is_empty());
 }
+
+/// TLS-114: a base is materialized from a repository whose top level ends in
+/// CR: `git archive` runs in the top `rev-parse --show-toplevel` printed,
+/// less its final LF only.
+///
+/// DISCRIMINATION (2026-11-23): `git` trimming all trailing whitespace (the
+/// old `trim_end`) fails (git archive runs in `…/repo`, which does not
+/// exist); restored, passes.
+#[cfg(unix)]
+#[test]
+fn a_base_is_materialized_under_a_top_level_ending_in_cr() {
+    let t = tempfile::tempdir().unwrap();
+    let r = t.path().join("repo\r");
+    let sh = |args: &[&str]| {
+        let ok = crate::git_env::scratch_git_command()
+            .arg("-C")
+            .arg(&r)
+            .args(args)
+            .status()
+            .is_ok_and(|s| s.success());
+        assert!(ok, "git {args:?} failed");
+    };
+    std::fs::create_dir_all(r.join("ws")).unwrap();
+    std::fs::write(r.join("ws/app.json"), "{}").unwrap();
+    sh(&["init", "-q"]);
+    sh(&["add", "."]);
+    sh(&["commit", "-q", "-m", "A"]);
+    let m = materialize(&r.join("ws"), "HEAD", &t.path().join("out"), "ws").unwrap();
+    assert!(m.workspace.join("app.json").is_file(), "{m:?}");
+}

@@ -626,23 +626,8 @@ fn walk(scope: &mut Scope, dir: &Path, workspace: &Path, depth: usize, honor_ign
 /// default `$XDG_CONFIG_HOME/git/ignore` (`$HOME/.config/git/ignore` when
 /// that is unset). `None` when there is neither.
 fn excludes_file(root: &Path) -> Option<PathBuf> {
-    let configured = crate::git_env::git_command()
-        .arg("-C")
-        .arg(root)
-        .args(["config", "--path", "core.excludesFile"])
-        .stdin(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| {
-            let mut bytes = o.stdout;
-            while bytes.last().is_some_and(|b| *b == b'\n' || *b == b'\r') {
-                bytes.pop();
-            }
-            bytes
-        })
-        .filter(|bytes| !bytes.is_empty());
+    // `-z`: the value ends in NUL, so one ending in CR or LF is kept.
+    let configured = git_value(root, &["config", "-z", "--path", "core.excludesFile"], 0);
     if let Some(bytes) = configured {
         // A relative value is relative to the worktree root, as git takes
         // it there (`join` keeps an absolute one).
@@ -658,24 +643,29 @@ fn excludes_file(root: &Path) -> Option<PathBuf> {
 /// The worktree root git works in at `dir` (`git rev-parse
 /// --show-toplevel`); `dir` when git cannot answer.
 fn git_toplevel(dir: &Path) -> PathBuf {
-    crate::git_env::git_command()
+    git_value(dir, &["rev-parse", "--show-toplevel"], b'\n')
+        .map_or_else(|| dir.to_path_buf(), path_from_git)
+}
+
+/// `git -C dir <args>`'s one value: its stdout less ONE trailing `end` (NUL
+/// for `-z`; `rev-parse`, which has no `-z`, ends with one LF) and nothing
+/// else, so a path ending in CR or LF is read exactly (TLS-114). `None` when
+/// git fails or prints nothing.
+fn git_value(dir: &Path, args: &[&str], end: u8) -> Option<Vec<u8>> {
+    let mut bytes = crate::git_env::git_command()
         .arg("-C")
         .arg(dir)
-        .args(["rev-parse", "--show-toplevel"])
+        .args(args)
         .stdin(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .output()
         .ok()
-        .filter(|o| o.status.success())
-        .map(|o| {
-            let mut bytes = o.stdout;
-            while bytes.last().is_some_and(|b| *b == b'\n' || *b == b'\r') {
-                bytes.pop();
-            }
-            bytes
-        })
-        .filter(|bytes| !bytes.is_empty())
-        .map_or_else(|| dir.to_path_buf(), path_from_git)
+        .filter(|o| o.status.success())?
+        .stdout;
+    if bytes.last() == Some(&end) {
+        bytes.pop();
+    }
+    (!bytes.is_empty()).then_some(bytes)
 }
 
 /// The repository's common git folder at the git top level `top`, which
@@ -683,24 +673,7 @@ fn git_toplevel(dir: &Path) -> PathBuf {
 /// file) the main repository's, as `git rev-parse --git-common-dir` gives it.
 /// `top/.git` when git cannot answer.
 fn git_common_dir(top: &Path) -> PathBuf {
-    let answer = crate::git_env::git_command()
-        .arg("-C")
-        .arg(top)
-        .args(["rev-parse", "--git-common-dir"])
-        .stdin(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| {
-            let mut bytes = o.stdout;
-            while bytes.last().is_some_and(|b| *b == b'\n' || *b == b'\r') {
-                bytes.pop();
-            }
-            bytes
-        })
-        .filter(|bytes| !bytes.is_empty());
-    match answer {
+    match git_value(top, &["rev-parse", "--git-common-dir"], b'\n') {
         // A relative answer is relative to `top`; `join` keeps an absolute one.
         Some(bytes) => top.join(path_from_git(bytes)),
         None => top.join(".git"),
