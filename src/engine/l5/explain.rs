@@ -1697,27 +1697,42 @@ fn own_state_changes(model: &crate::program::model::workspace::Model, root: &str
     else {
         return "own state changes: not known (no body in the model)".to_string();
     };
-    let globals: BTreeSet<String> = r
-        .variables
-        .iter()
-        .filter(|v| v.scope.as_deref() == Some("global"))
-        .map(|v| v.name.fold_identifier())
-        .collect();
-    // The global as the assignment writes it (the model folds names).
-    let mut set: BTreeMap<String, String> = BTreeMap::new();
-    for a in &r.var_assignments {
-        let head = a
-            .lhs_name
-            .split(['.', '['])
-            .next()
-            .unwrap_or("")
-            .trim_matches('"');
-        if globals.contains(&head.fold_identifier()) {
-            set.entry(head.fold_identifier())
-                .or_insert_with(|| head.to_string());
+    // ENG-176: the variable an assignment's target writes into, by the routine's scope: `G`,
+    // `G[1]` and `G.F` set the global `G` unless a local hides it, `this.G` the global whatever
+    // hides it (Fable on ENG-162: the folded name could not tell the two apart).
+    let scope = crate::program::model::recref_alias::HolderScope::of(r);
+    let base = |text: &str| {
+        let s = text.trim();
+        let (this, rest) = match s.get(..5) {
+            Some(p) if p.eq_fold_identifier("this.") => ("this.", &s[5..]),
+            _ => ("", s),
+        };
+        // The variable before the first member access or index outside quotes.
+        let mut quoted = false;
+        let mut end = rest.len();
+        for (i, ch) in rest.char_indices() {
+            match ch {
+                '"' => quoted = !quoted,
+                '.' | '[' if !quoted => {
+                    end = i;
+                    break;
+                }
+                _ => {}
+            }
         }
-    }
-    let set: Vec<String> = set.into_values().collect();
+        scope
+            .text(&format!("{this}{}", &rest[..end]))
+            .map(|h| h.key)
+    };
+    let set: Vec<String> = r
+        .var_assignments
+        .iter()
+        .filter_map(|a| base(&a.lhs_text))
+        .filter(|k| matches!(k, crate::program::model::recref_alias::HolderKey::Global(_)))
+        .map(|k| scope.variable(k).name.fold_identifier())
+        .collect::<BTreeSet<String>>()
+        .into_iter()
+        .collect();
     let kind = model
         .workspace
         .objects

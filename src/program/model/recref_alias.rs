@@ -53,14 +53,14 @@ pub fn recref_bind(method: &str) -> Option<RecRefBind> {
 /// Whether assignment `a` of `r` writes into an array of RecordRefs or Variants (`Slot[1] := R`).
 /// The IR keeps no right side for an indexed target, so it may share any holder of `r` with
 /// the slot, and a bind through the slot (`Slot[1].Get(Id)`) then binds it (ENG-160, sol).
+/// The target is resolved from its source text by the routine's scope (ENG-176: `Slot[1]`,
+/// `this.Slot[1]`, a global array a local hides).
 #[must_use]
 pub fn into_holder_array(r: &ModelRoutine, a: &PVarAssignment) -> bool {
-    let l = name_key(&a.lhs_name);
-    r.variables.iter().any(|v| {
-        name_key(&v.name) == l && {
-            let t = v.declared_type.trim().fold_identifier();
-            t.ends_with(" of recordref") || t.ends_with(" of variant")
-        }
+    let scope = HolderScope::of(r);
+    scope.text(&a.lhs_text).is_some_and(|h| {
+        let t = scope.variable(h.key).declared_type.trim().fold_identifier();
+        t.ends_with(" of recordref") || t.ends_with(" of variant")
     })
 }
 
@@ -110,45 +110,6 @@ pub fn bind_sites(r: &ModelRoutine) -> Vec<BindSite<'_>> {
 }
 use std::collections::{HashMap, HashSet};
 
-/// A variable reference's key, as every reader of the classes names it: an array element
-/// `Recs[1]` is its array, `this.X` the global `X`, quotes stripped (`""` one `"`), folded.
-/// `this.` and an index are syntax only OUTSIDE quotes: a variable named `"R[1]"` or
-/// `"this.G"` keys as its whole name (sol round 2 on ENG-145).
-#[must_use]
-pub fn holder_key(raw: &str) -> String {
-    let raw = strip_parens(raw);
-    let raw = match raw.get(..5) {
-        Some(p) if p.eq_fold_identifier("this.") => &raw[5..],
-        _ => raw,
-    };
-    // The first `[` outside quotes starts an index.
-    let mut quoted = false;
-    let mut end = raw.len();
-    for (i, ch) in raw.char_indices() {
-        match ch {
-            '"' => quoted = !quoted,
-            '[' if !quoted => {
-                end = i;
-                break;
-            }
-            _ => {}
-        }
-    }
-    crate::program::body::node_util::strip_quotes(raw[..end].trim())
-        .replace("\"\"", "\"")
-        .fold_identifier()
-}
-
-/// ENG-162: whether an assignment side the IR names `name` is a global that one of the routine's
-/// own declarations hides (`this.G` with a local `G`: the walk names it with
-/// [`HIDDEN_GLOBAL_PREFIX`](crate::program::body::features::HIDDEN_GLOBAL_PREFIX), never `g`). No
-/// holder of the routine is that name: a holder copied into it may be kept by the object
-/// (another routine, a later call), and one assigned from it may hold anything.
-#[must_use]
-pub fn is_shadowed_global(name: &str) -> bool {
-    name.starts_with(crate::program::body::features::HIDDEN_GLOBAL_PREFIX)
-}
-
 /// `raw` trimmed, without parentheses around the whole of it: `S.Keep((RR))` passes `RR`
 /// (Fable on ENG-159). A text whose first `(` closes before its end (`(A) + (B)`) keeps its
 /// parentheses.
@@ -175,16 +136,6 @@ pub fn strip_parens(raw: &str) -> &str {
     s
 }
 
-/// A DECLARED variable name's key: a declaration's name is already logical (the lowerer strips
-/// its quotes), so nothing in it is syntax; `"R[1]"` declared keys as `r[1]`, as its quoted uses
-/// do through [`holder_key`]. The IR's assignment sides are logical names too.
-#[must_use]
-pub fn name_key(name: &str) -> String {
-    crate::program::body::node_util::strip_quotes(name.trim())
-        .replace("\"\"", "\"")
-        .fold_identifier()
-}
-
 /// Whether call `cs` in `r` may keep (or rebind) a RecordRef or Variant passed to it, so the
 /// holder escapes (ENG-145). A platform method cannot: a method of a RecordRef, FieldRef or
 /// record variable, or a platform keyword's method (`Report.SaveAs(Id, …, RecRef)`: the report's
@@ -200,16 +151,21 @@ pub fn may_keep_argument(
     let PCallee::Member { receiver, method } = &cs.callee else {
         return true;
     };
-    let key = holder_key(receiver);
-    match r.variables.iter().find(|v| name_key(&v.name) == key) {
+    // ENG-176: the receiver by the routine's scope (`this.X` is the global).
+    let scope = HolderScope::of(r);
+    match scope.text(receiver).map(|h| scope.variable(h.key)) {
         Some(v) => {
             let ty = v.declared_type.trim().fold_identifier();
             let ty = ty.rsplit(" of ").next().unwrap_or(&ty).trim();
             // A table's own procedure may keep it (Fable on ENG-159).
             record_like_builtin(ty, method, shadowed).is_none_or(|builtin| !builtin)
         }
+        // A platform keyword receiver (`Report.SaveAs(…)`): not a variable.
         None => !matches!(
-            key.as_str(),
+            strip_parens(receiver)
+                .trim_matches('"')
+                .fold_identifier()
+                .as_str(),
             "report"
                 | "query"
                 | "xmlport"
@@ -354,12 +310,11 @@ pub fn may_run_user_code(
     let PCallee::Member { receiver, method } = &cs.callee else {
         return true;
     };
-    let key = holder_key(receiver);
-    let Some(ty) = r
-        .variables
-        .iter()
-        .find(|v| name_key(&v.name) == key)
-        .map(|v| v.declared_type.trim().fold_identifier())
+    // ENG-176: the receiver by the routine's scope (`this.X` is the global).
+    let scope = HolderScope::of(r);
+    let Some(ty) = scope
+        .text(receiver)
+        .map(|h| scope.variable(h.key).declared_type.trim().fold_identifier())
     else {
         return true;
     };

@@ -104,10 +104,32 @@ fn holder_of(
 /// matched LOGICAL (quotes stripped, `""` one `"`), lowercased, as variable
 /// names are stored. A quoted receiver missed its variable, so its table and
 /// temp state stayed unknown. An array element `Recs[1]` is an op on the array
-/// variable (ENG-12, L36), and `this.X` on the global `X` (ENG-12). The same key the
-/// RecordRef alias classes use (`recref_alias::holder_key`, ENG-145).
-fn op_variable_lc(raw: &str) -> String {
-    crate::program::model::recref_alias::holder_key(raw)
+/// variable (ENG-12, L36), and `this.X` on the global `X` (ENG-12). ENG-176: resolved by the
+/// routine's scope (`own`, `globals`: `RoutineVariables`' lists): the variable's own folded name,
+/// or `""` (no variable's name) for a global a local hides, whose name is the local's, or a text
+/// that names no variable but a plain name.
+fn op_variable_lc(
+    own: &[crate::program::model::workspace::ModelVariable],
+    globals: &[crate::program::model::workspace::ModelVariable],
+    raw: &str,
+) -> String {
+    let scope = crate::program::model::recref_alias::HolderScope::new(own, globals);
+    match scope.text(raw) {
+        Some(h) => {
+            let n = &scope.variable(h.key).name;
+            if scope.logical(n) == Some(h.key) {
+                n.clone()
+            } else {
+                String::new()
+            }
+        }
+        // Not a declared variable (an implicit `Rec`, a record the variables list leaves out):
+        // its plain name, as before.
+        None => crate::program::model::recref_alias::strip_parens(raw)
+            .trim_matches('"')
+            .replace("\"\"", "\"")
+            .fold_identifier(),
+    }
 }
 
 /// Extract the TABLE NAME from a record variable's `declaredType` string.
@@ -290,8 +312,11 @@ pub fn resolve_routine_record_types(
     // `var_index_by_name` map above resolves each name to its single (innermost,
     // because shadowed globals were never added) record var — honoring AL
     // shadowing without needing first-wins.
+    let (own, globals) = (routine.variables.own(), routine.variables.globals());
     for op in routine.record_operations.iter_mut() {
-        if let Some(&vi) = var_index_by_name.get(&op_variable_lc(&op.record_variable_name)) {
+        if let Some(&vi) =
+            var_index_by_name.get(&op_variable_lc(own, globals, &op.record_variable_name))
+        {
             let variable = &routine.record_variables[vi];
             op.record_variable_id = Some(variable.id.to_string());
             if let Some(tid) = &variable.table_id {
@@ -320,8 +345,11 @@ pub fn resolve_routine_record_types(
         if op.table_id.is_some() {
             continue;
         }
-        let Some(decl) = variable_decl_by_name.get(&op_variable_lc(&op.record_variable_name))
-        else {
+        let Some(decl) = variable_decl_by_name.get(&op_variable_lc(
+            routine.variables.own(),
+            routine.variables.globals(),
+            &op.record_variable_name,
+        )) else {
             continue;
         };
         // An array of records: its element type (ENG-12, L36). An element of a
@@ -439,7 +467,11 @@ pub fn resolve_routine_record_types(
         }
         for op in routine.record_operations.iter_mut() {
             if op.table_id.is_none()
-                && let Some(t) = resolved.get(&op_variable_lc(&op.record_variable_name))
+                && let Some(t) = resolved.get(&op_variable_lc(
+                    routine.variables.own(),
+                    routine.variables.globals(),
+                    &op.record_variable_name,
+                ))
             {
                 op.table_id = Some(t.clone());
             }
