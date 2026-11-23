@@ -62,6 +62,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   A rule for the alias classes (a ternary leaf retainable) changed no answer when broken, since
   every reader above already binds at the passing call, so it is not in the change.
+- **Golden.** `tests/ir-l2-goldens/l2_features.snapshot` changes for 610 routines, because each
+  routine's `Debug` repr now holds `ternary_leaf` and `rare`; the r0 corpus has no ternary. With
+  those two normalized back to the old text, the old golden matched exactly. No serialized L2
+  output moves.
 
 ### Changed (TLS-116: `alsem batch` uses the IR cache, and no job write reaches a cache folder)
 
