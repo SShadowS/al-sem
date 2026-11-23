@@ -12,10 +12,11 @@ fn run(manifest: &Value) -> (Option<i32>, String, String, u64) {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("m.json");
     std::fs::write(&path, manifest.to_string()).unwrap();
+    let (_xdg, xdg) = crate::cli_batch_writes::temp_cache_home();
     let (out, events) = spawn_trace_events(
         env!("CARGO_BIN_EXE_alsem"),
         &["batch", path.to_str().unwrap()],
-        &[("RUST_LOG", "off")],
+        &[("RUST_LOG", "off"), ("XDG_CACHE_HOME", &xdg)],
     );
     (
         out.status.code(),

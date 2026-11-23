@@ -256,14 +256,35 @@ pub fn open_for_write(path: &Path, job: &str, key: Option<&str>) -> std::io::Res
     Ok(f)
 }
 
-/// TLS-116: a job's directory write (a shard `--out`) is checked against the
-/// engine's cache folders before it is made; refused, nothing is made and the
-/// run fails ([`failed`]). Outside a batch: nothing to check.
-pub fn check_dir(path: &Path) -> std::io::Result<()> {
-    let Some(dir) = DIR.get() else { return Ok(()) };
-    super::cache_guard::get(dir)
-        .and_then(|snap| refuse_cache_path(snap, path))
-        .inspect_err(|_| FAILED.store(true, Ordering::Relaxed))
+/// TLS-116: make a job's directory (a shard `--out`) and its missing parents,
+/// one component at a time, each checked against the engine's cache folders
+/// just before it is made: a component made earlier can make a later spelling
+/// reach a cache folder (`missing/../alias/new`, `alias` a link to one, passes
+/// while `missing` is absent). Refused, nothing more is made and the run fails
+/// ([`failed`]). Outside a batch: `create_dir_all`, as before.
+pub fn make_dir(path: &Path) -> std::io::Result<()> {
+    let Some(dir) = DIR.get() else {
+        return std::fs::create_dir_all(path);
+    };
+    let fail = |e: std::io::Error| {
+        FAILED.store(true, Ordering::Relaxed);
+        e
+    };
+    let snap = super::cache_guard::get(dir).map_err(fail)?;
+    let mut cur = PathBuf::new();
+    for c in std::env::current_dir()?.join(path).components() {
+        cur.push(c);
+        if !matches!(c, std::path::Component::Normal(_)) {
+            continue;
+        }
+        refuse_cache_path(snap, &cur).map_err(fail)?;
+        match std::fs::create_dir(&cur) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && cur.is_dir() => {}
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(())
 }
 
 /// [`open_for_write`] for a trace file, published after every job write: a

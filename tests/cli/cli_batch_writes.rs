@@ -29,6 +29,30 @@ pub(crate) fn run_manifest(
     run_manifest_doc(dir, &json!({ "jobs": jobs }), cwd, env, stdin)
 }
 
+/// TLS-116: a batch run makes and snapshots the engine's cache folders, so
+/// every test's batch run gets a temporary `XDG_CACHE_HOME` (held while the run
+/// lives), never the developer's real cache: the folder and its path for an
+/// `env` list.
+pub(crate) fn temp_cache_home() -> (tempfile::TempDir, String) {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().to_string_lossy().into_owned();
+    (d, p)
+}
+
+/// TLS-116: a batch parent's cache snapshot file as `cache_guard::publish`
+/// writes it (flags, counts, `body`, the blake3 over them), for a worker run by
+/// hand. `fields` is written as given: `text=0 ir=0 dirs=0 files=0`.
+pub(crate) fn snapshot_file(fields: &str, body: &str) -> String {
+    let mut h = blake3::Hasher::new();
+    h.update(fields.as_bytes());
+    h.update(b"\n");
+    h.update(body.as_bytes());
+    format!(
+        "alsem-cache-snapshot 1 {fields} blake3={}\n{body}",
+        h.finalize().to_hex()
+    )
+}
+
 /// [`run_manifest`] of a whole manifest document (`{"batches": …}`).
 pub(crate) fn run_manifest_doc(
     dir: &Path,
@@ -42,14 +66,13 @@ pub(crate) fn run_manifest_doc(
     let trace = dir.join("trace.json");
     // A refused run writes no trace (TLS-109): no earlier run's may be read.
     let _ = std::fs::remove_file(&trace);
-    // TLS-116: a batch run snapshots the cache folders; never the developer's
-    // real cache (a caller's `env` may name its own).
-    let xdg = tempfile::tempdir().unwrap();
+    // A caller's `env` may name its own cache home.
+    let (_xdg, xdg) = temp_cache_home();
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_alsem"));
     cmd.arg("batch")
         .arg(&manifest)
         .env_remove("ALSEM_RETAINED_CENSUS")
-        .env("XDG_CACHE_HOME", xdg.path())
+        .env("XDG_CACHE_HOME", &xdg)
         .env("RUST_LOG", "off")
         .env("ALSEM_TRACE", "1")
         .env("ALSEM_TRACE_FILE", &trace)

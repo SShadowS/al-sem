@@ -769,6 +769,93 @@ fn batch_refuses_a_cache_name_that_links_outside() {
     assert_eq!(std::fs::read_to_string(&outside).unwrap(), "KEEP");
 }
 
+/// TLS-116 (sol r3 1): every symlink met on the way is a name a cache could replace. With
+/// `report → <ir>/last-prune → outside.jsonl` the report is refused before any job (its
+/// spelling and its destination are both outside the cache; only the middle hop is not);
+/// so is a job's stream of the same shape. The middle link and its target stay.
+///
+/// Discrimination (2026-11-23, r4): `refuses_path` without its hop walk (`link_hops(..)`
+/// replaced by `Ok(None)`): fails "(report)" (exit 0, not 3); restored, passes.
+#[test]
+fn batch_refuses_a_symlink_hop_in_a_cache_folder() {
+    let f = fixture();
+    warm(&f);
+    let d = tempfile::tempdir().unwrap();
+    let outside = d.path().join("outside.jsonl");
+    std::fs::write(&outside, "KEEP").unwrap();
+    let middle = f.root.join("last-prune");
+    let _ = std::fs::remove_file(&middle);
+    std::os::unix::fs::symlink(&outside, &middle).unwrap();
+    let report_link = d.path().join("report.jsonl");
+    let stream_link = d.path().join("stream.out");
+    std::os::unix::fs::symlink(&middle, &report_link).unwrap();
+    std::os::unix::fs::symlink(&middle, &stream_link).unwrap();
+    let x = d.path().join("x.out");
+    for (case, stream, env) in [
+        (
+            "(report)",
+            &x,
+            vec![("ALSEM_IR_CACHE_REPORT", report_link.to_str().unwrap())],
+        ),
+        ("(stream)", &stream_link, vec![]),
+    ] {
+        let out = batch_jobs(&f, d.path(), &[fanout_to(&f, stream)], &env);
+        assert_refused(case, &out, "is in a cache folder");
+        assert!(
+            std::fs::symlink_metadata(&middle)
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "{case}: the middle link stays"
+        );
+        assert_eq!(std::fs::read_to_string(&outside).unwrap(), "KEEP", "{case}");
+    }
+}
+
+/// TLS-116 (sol r3 2): a shard directory is made one component at a time, each checked
+/// just before it is made. With `alias → <ir>`, the shard `--out D/missing/../alias/new`
+/// passes the check while `missing` is absent; making `missing` makes the rest reach the
+/// IR cache folder, so the run stops there (exit 1, a write error on that path) and makes
+/// nothing inside the cache.
+///
+/// Discrimination (2026-11-23, r4): `claim::make_dir` as `create_dir_all` in a batch too
+/// (`DIR.get().filter(|_| false)`): fails "nothing made in the cache" (`new` made there;
+/// the run still exited 1, its shard files refused at their opens); restored, passes.
+#[test]
+fn batch_makes_a_shard_directory_one_step_at_a_time() {
+    let f = fixture();
+    warm(&f);
+    let d = tempfile::tempdir().unwrap();
+    std::os::unix::fs::symlink(&f.root, d.path().join("alias")).unwrap();
+    let spelled = d.path().join("missing/../alias/new");
+    let s = spelled.to_string_lossy().into_owned();
+    let out = batch_jobs(
+        &f,
+        d.path(),
+        &[job(
+            &[
+                "fingerprint",
+                f.ws.to_str().unwrap(),
+                "--single-app",
+                "--shard",
+                "all",
+                "--out",
+                &s,
+            ],
+            None,
+            None,
+        )],
+        &[],
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{stderr}");
+    assert!(
+        stderr.contains("al-sem: write error: ") && stderr.contains("(TLS-116)"),
+        "{stderr}"
+    );
+    assert!(!f.root.join("new").exists(), "nothing made in the cache");
+}
+
 /// TLS-116 (sol r2 3): the report's open never waits. A report path that is a FIFO with no
 /// reader is refused at its registration (exit 3) instead of hanging the run.
 ///
@@ -837,42 +924,61 @@ fn hand_worker(f: &Fixture, snapshot: Option<&str>, out: &Path) -> Output {
     child.wait_with_output().unwrap()
 }
 
-/// An empty snapshot (caches off): its blake3 is that of the empty body.
-const EMPTY_SNAPSHOT: &str = "alsem-cache-snapshot 1 text=0 ir=0 dirs=0 files=0 \
-    blake3=af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262\n";
-
-/// TLS-116 (Fable r2 M1, M2): a worker whose parent's snapshot is missing or damaged (no
-/// header, a body that is not the one its blake3 names, counts that do not match) fails
-/// closed: it runs no job, writes nothing, and exits 4 (its claims failed). A valid empty
-/// snapshot runs the job (the positive control).
+/// TLS-116 (Fable r2 M1, M2; sol r3): a worker whose parent's snapshot is missing or
+/// damaged fails closed: it runs no job, writes nothing, and exits 4 (its claims failed).
+/// Damaged: no header; a body that is not the one its blake3 names; flags changed after
+/// the blake3 was taken (it covers flags and counts too); a flag that is neither `0` nor
+/// `1`; counts that do not match the body (hashed as written); a cache on with no folder.
+/// A valid empty snapshot runs the job (the positive control).
 ///
 /// Discrimination (2026-11-22, r3): an empty-snapshot fallback (the worker's start ignoring
 /// `load`'s error, and `get` turning it into an empty snapshot): fails "(missing)" (exit 0,
-/// the job ran); restored, passes. The blake3 test skipped (`false &&` on its `if`): fails
-/// "(another body)" (exit 0); restored, passes.
+/// the job ran); the blake3 test skipped (`false &&` on its `if`): fails "(another body)"
+/// (exit 0). (2026-11-23, r4) the blake3 over the body alone (`hashed` ignoring `fields`,
+/// and `snapshot_file` with it, so the control still loads): fails "(flags changed)"; the
+/// flag test accepting anything (`_ => Ok(false)`): fails "(a flag of 2)"; the count test's
+/// dirs half off (`false &&` before it): fails "(wrong counts)"; the cache-on-with-no-folder
+/// test off (`false &&`): fails "(on, no folder)"; each exit 0, the job ran; restored,
+/// passes. "(no header)" has no break of its own: it is refused by the magic
+/// test and, without it, by the missing fields (each a refusal on its own).
 #[test]
 fn a_worker_without_a_good_snapshot_fails_closed() {
+    use crate::cli_batch_writes::snapshot_file;
     let f = fixture();
     let d = tempfile::tempdir().unwrap();
     let out = d.path().join("ok.out");
-    let ok = hand_worker(&f, Some(EMPTY_SNAPSHOT), &out);
+    let ok = hand_worker(
+        &f,
+        Some(&snapshot_file("text=0 ir=0 dirs=0 files=0", "")),
+        &out,
+    );
     assert!(
         out.exists(),
         "control: {}",
         String::from_utf8_lossy(&ok.stderr)
     );
     let body = "d 1 2 0\n";
-    let counted = |dirs: usize| {
-        format!(
-            "alsem-cache-snapshot 1 text=0 ir=0 dirs={dirs} files=0 blake3={}\n{body}",
-            blake3::hash(body.as_bytes()).to_hex()
-        )
-    };
+    let good = snapshot_file("text=0 ir=0 dirs=1 files=0", body);
     for (case, snapshot) in [
         ("(missing)", None),
         ("(no header)", Some(body.to_string())),
-        ("(another body)", Some(counted(1).replace("d 1 2", "d 1 3"))),
-        ("(wrong counts)", Some(counted(2))),
+        ("(another body)", Some(good.replace("d 1 2", "d 1 3"))),
+        (
+            "(flags changed)",
+            Some(snapshot_file("text=1 ir=0 dirs=1 files=0", body).replace("text=1", "text=0")),
+        ),
+        (
+            "(a flag of 2)",
+            Some(snapshot_file("text=2 ir=0 dirs=1 files=0", body)),
+        ),
+        (
+            "(wrong counts)",
+            Some(snapshot_file("text=0 ir=0 dirs=2 files=0", body)),
+        ),
+        (
+            "(on, no folder)",
+            Some(snapshot_file("text=1 ir=0 dirs=0 files=0", "")),
+        ),
     ] {
         let out = d.path().join("refused.out");
         let run = hand_worker(&f, snapshot.as_deref(), &out);

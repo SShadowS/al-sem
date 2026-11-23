@@ -3495,11 +3495,9 @@ fn batch_worker_uses_the_carried_decision() {
         // A worker runs only with its parent's claim folder (TLS-109), which
         // holds the parent's cache snapshot (TLS-116; empty, caches off).
         let claims = tempfile::tempdir().unwrap();
-        // Its blake3 is that of the empty body.
         std::fs::write(
             claims.path().join("cache-snapshot"),
-            "alsem-cache-snapshot 1 text=0 ir=0 dirs=0 files=0 \
-             blake3=af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262\n",
+            crate::cli_batch_writes::snapshot_file("text=0 ir=0 dirs=0 files=0", ""),
         )
         .unwrap();
         let mut child = Command::new(env!("CARGO_BIN_EXE_alsem"))

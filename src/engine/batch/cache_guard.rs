@@ -22,9 +22,10 @@
 //! every directory and file inside the folders ([`Snapshot`]; a name removed
 //! during the walk, a concurrent prune, is skipped; any other error refuses
 //! the run: the caches cannot be protected). The parent writes it, with those
-//! decisions, a header of counts and a blake3 of the body, to the claim folder
-//! ([`publish`]); a worker reads it at its start ([`load`]) and fails closed
-//! when it is missing or damaged, so no worker walks again.
+//! decisions (flags, `0` or `1` only), its counts and a blake3 over flags,
+//! counts and body, to the claim folder ([`publish`]); a worker reads it at
+//! its start ([`load`]) and fails closed when it is missing or damaged (also
+//! a cache on with no folder), so no worker walks again.
 //!
 //! **Identities.** Unix: device, inode and birth time (`statx`'s btime, on
 //! ext4, xfs and btrfs; 0 where the file system gives none). A link keeps the
@@ -35,7 +36,8 @@
 //! **What it refuses** (the check, exit 3; every open again, `super::claim`):
 //! a write whose resolved destination lies in a cache folder; a write whose
 //! NAME, as spelled, lies in one (a cache could replace that name: a symlink
-//! `ir/last-prune` pointing outside is still the prune's name); a write that
+//! `ir/last-prune` pointing outside is still the prune's name), and so does
+//! the name of any symlink met while resolving it ([`link_hops`]); a write that
 //! is a cache file under any name (a hard link, a bind mount of a file: the
 //! handle's identity); a directory target that holds a cache folder; and a
 //! write into the run's claim folder. A cache file published during the run is
@@ -254,6 +256,16 @@ fn test_seam_during_snapshot() {
 
 static SNAPSHOT: OnceLock<Snapshot> = OnceLock::new();
 
+/// The header's blake3: over its flags and counts (`fields`, as written) and
+/// the body, so neither can change without the other.
+fn hashed(fields: &str, body: &str) -> String {
+    let mut h = blake3::Hasher::new();
+    h.update(fields.as_bytes());
+    h.update(b"\n");
+    h.update(body.as_bytes());
+    h.finalize().to_hex().to_string()
+}
+
 /// The snapshot's body: one line per directory and file.
 fn body(snap: &Snapshot) -> String {
     use std::fmt::Write as _;
@@ -271,14 +283,14 @@ fn body(snap: &Snapshot) -> String {
 /// renamed into place), then claim it as a file no write may take.
 pub(super) fn publish(snap: Snapshot, dir: &Path) -> std::io::Result<()> {
     let body = body(&snap);
-    let header = format!(
-        "{MAGIC} text={} ir={} dirs={} files={} blake3={}\n",
+    let fields = format!(
+        "text={} ir={} dirs={} files={}",
         u8::from(snap.text_on),
         u8::from(snap.ir_on),
         snap.dirs.len(),
         snap.files.len(),
-        blake3::hash(body.as_bytes()).to_hex()
     );
+    let header = format!("{MAGIC} {fields} blake3={}\n", hashed(&fields, &body));
     let tmp = dir.join(format!("{FILE}.tmp"));
     std::fs::write(&tmp, header + &body)?;
     std::fs::rename(&tmp, dir.join(FILE))?;
@@ -320,12 +332,24 @@ pub fn load(dir: &Path) -> std::io::Result<&'static Snapshot> {
             .find_map(|f| f.strip_prefix(k)?.strip_prefix('='))
             .ok_or_else(|| bad(format!("no {k}")))
     };
-    if blake3::hash(body.as_bytes()).to_hex().as_str() != field("blake3")? {
+    let (text_on, ir_on, dirs, files) = (
+        field("text")?,
+        field("ir")?,
+        field("dirs")?,
+        field("files")?,
+    );
+    let covered = format!("text={text_on} ir={ir_on} dirs={dirs} files={files}");
+    if hashed(&covered, body) != field("blake3")? {
         return Err(bad("its blake3 does not match".into()));
     }
+    let flag = |v: &str| match v {
+        "0" => Ok(false),
+        "1" => Ok(true),
+        _ => Err(bad(format!("a flag that is neither 0 nor 1: {v}"))),
+    };
     let mut snap = Snapshot {
-        text_on: field("text")? == "1",
-        ir_on: field("ir")? == "1",
+        text_on: flag(text_on)?,
+        ir_on: flag(ir_on)?,
         claims: super::manifest::read_file_id(dir).map_err(|e| bad(e.to_string()))?,
         ..Snapshot::default()
     };
@@ -357,15 +381,21 @@ pub fn load(dir: &Path) -> std::io::Result<&'static Snapshot> {
     {
         return Err(bad("its counts do not match".into()));
     }
+    // A cache on holds at least its own folder.
+    if (snap.text_on || snap.ir_on) && snap.dirs.is_empty() {
+        return Err(bad("a cache on with no folder".into()));
+    }
     apply(&snap);
     Ok(SNAPSHOT.get_or_init(|| snap))
 }
 
 /// Why the write `spelled` (against `cwd`) must not be made, `None` when it
 /// may: its resolved destination lies in a cache folder, or its name as
-/// spelled does (a cache could replace that name), or either lies in the run's
-/// claim folder. Checked before anything is created; the file itself, once
-/// open, is checked by its handle (`super::claim`).
+/// spelled does, or the name of any symlink met on the way does (a cache could
+/// replace that name: `report → ir/last-prune → outside` is the prune's), or
+/// any of them lies in the run's claim folder. Checked before anything is
+/// created; the file itself, once open, is checked by its handle
+/// (`super::claim`).
 pub(super) fn refuses_path(
     snap: &Snapshot,
     cwd: &Path,
@@ -377,7 +407,52 @@ pub(super) fn refuses_path(
     }
     // Each name of the spelling: the folder that holds it.
     let folded = super::manifest::fold_path(cwd, spelled);
-    folder_hit(snap, folded.ancestors().skip(1))
+    if let Some(why) = folder_hit(snap, folded.ancestors().skip(1))? {
+        return Ok(Some(why));
+    }
+    link_hops(snap, cwd.join(spelled), 0)
+}
+
+/// Follow `path` as the OS does, one component at a time; at each symlink met,
+/// the folder holding the link's own name is checked ([`folder_hit`]), then
+/// the walk goes on through the link's text. A missing component ends it (no
+/// link lies beyond); 40 hops end it as the OS would (`ELOOP`).
+fn link_hops(snap: &Snapshot, path: PathBuf, hops: u32) -> std::io::Result<Option<&'static str>> {
+    use std::path::Component;
+    let parts: Vec<Component> = path.components().collect();
+    let mut cur = PathBuf::new();
+    for (i, c) in parts.iter().enumerate() {
+        match c {
+            Component::CurDir => continue,
+            // `cur` holds no link here (each was replaced by its text).
+            Component::ParentDir => {
+                cur.pop();
+                continue;
+            }
+            c => cur.push(c),
+        }
+        let m = match std::fs::symlink_metadata(&cur) {
+            Ok(m) => m,
+            Err(e) if gone(&e) => return Ok(None),
+            Err(e) => return Err(e),
+        };
+        if !m.file_type().is_symlink() {
+            continue;
+        }
+        let parent = cur.parent().unwrap_or(Path::new("")).to_path_buf();
+        if let Some(why) = folder_hit(snap, std::iter::once(parent.as_path()))? {
+            return Ok(Some(why));
+        }
+        if hops >= 40 {
+            return Ok(None);
+        }
+        let mut next = parent.join(std::fs::read_link(&cur)?);
+        for rest in &parts[i + 1..] {
+            next.push(rest);
+        }
+        return link_hops(snap, next, hops + 1);
+    }
+    Ok(None)
 }
 
 /// The first of `dirs` (existing folders only) that is a cache folder or the
