@@ -7,21 +7,34 @@ The IR cache keys on the binary's bytes, which holds only while nothing outside 
 how a text parses (design note docs/superpowers/notes/2026-11-21-tls117-windows-image-key.md,
 section 4.1). The C code on the parse path is tree-sitter's runtime (`lib.c`, at the version
 Cargo.lock pins) and the grammar (`parser.c`, `scanner.c` under TREE_SITTER_AL_PATH, else
-./tree-sitter-al). This script compiles the three with `gcc -O0 -fcallgraph-info`, walks the call
-graph from the roots al-syntax can reach (every ts_parser_/tree_/node_/tree_cursor_/language_
+./tree-sitter-al). This script compiles the three with `gcc -O0 -fcallgraph-info` and walks the
+call graph from the roots al-syntax can reach: every ts_parser_/tree_/node_/tree_cursor_/language_
 function but the logger, dot-graph, ts_node_string and wasm ones, plus the function-pointer
-targets: the allocator defaults, the lexer callbacks, the grammar's lex functions and scanner),
-and fails when a reachable function calls an external function outside ALLOWED.
+targets (the allocator defaults, the lexer callbacks and decoders, the stack's pop and summarize
+callbacks, the string input reader, the grammar's lex functions and scanner). It is a closed
+world. It fails when:
+  - a reachable function calls an external function outside ALLOWED;
+  - a GUARDED function (formatting, run only for the logger and dot graphs) gains a caller
+    outside its pinned set: a new caller may be unguarded;
+  - a defined function is neither reached nor on OFF_PATH (a new function nothing accounts for).
 
-Every run then proves it can fail: it checks again with a copy of scanner.c whose
-`tree_sitter_al_external_scanner_create` calls `towlower`, and that check must fail.
+gcc on Linux compiles the `#ifdef _WIN32` branches out (note section 4.1 lists them: `_ts_dup`,
+the Interlocked atomics, `_fdopen`; none touches text).
 
-Exit 0 when the real sources pass and the injected copy fails; 1 otherwise; 2 on a setup error.
+Every run then proves it can fail, on two copies of scanner.c: one whose
+`tree_sitter_al_external_scanner_create` calls `towlower` must be refused for that call, and one
+with an added unlisted function must be refused for it.
+
+Without gcc: on Linux a failure (CI's ubuntu runner is the pin); elsewhere (Windows Git Bash) one
+loud skip line and exit 0.
+
+Exit 0 when the real sources pass and both copies fail; 1 otherwise; 2 on a setup error.
 """
 
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -32,18 +45,47 @@ BYTES = {"malloc", "calloc", "realloc", "free", "memcpy", "memmove", "memset", "
          "strcmp", "strncmp", "abort", "__assert_fail"}
 # Formatting, reached only from tree-sitter's LOG / dot-graph code (run only when a logger or a
 # dot-graph file is set, which al-syntax never does) or the allocator's failure message before
-# abort: note section 4.1. Listed with their callers on every run.
-GUARDED = {"snprintf", "vsnprintf", "fprintf", "fputc", "fputs", "fwrite"}
+# abort (note section 4.1), each with its pinned callers.
+GUARDED = {
+    "snprintf": {"ts_lexer__advance", "ts_parser__advance", "ts_parser__breakdown_lookahead",
+                 "ts_parser__breakdown_top_of_stack", "ts_parser__condense_stack",
+                 "ts_parser__handle_error", "ts_parser__lex", "ts_parser__recover",
+                 "ts_parser__reduce", "ts_parser__reuse_node", "ts_parser__select_tree",
+                 "ts_parser_parse"},
+    "vsnprintf": {"ts_lexer__log"},
+    "fprintf": {"ts_calloc_default", "ts_malloc_default", "ts_parser__log", "ts_realloc_default",
+                "ts_stack_print_dot_graph", "ts_subtree__print_dot_graph",
+                "ts_subtree_print_dot_graph"},
+    "fputc": {"ts_language_write_symbol_as_dot_string", "ts_parser__log"},
+    "fputs": {"ts_language_write_symbol_as_dot_string", "ts_parser__advance",
+              "ts_parser__breakdown_top_of_stack", "ts_parser__condense_stack",
+              "ts_parser__handle_error", "ts_parser__recover", "ts_parser_parse"},
+}
 # A call through a pointer: its targets are roots.
-ALLOWED = BYTES | GUARDED | {"__indirect_call"}
+ALLOWED = BYTES | set(GUARDED) | {"__indirect_call"}
 
 ROOTS = re.compile(r"ts_(parser|tree|node|tree_cursor|language)_")
 EXCLUDED = re.compile(
     r"^ts_(parser_set_logger|parser_logger|parser_print_dot_graphs|tree_print_dot_graph"
     r"|node_string|parser_set_wasm_store|parser_take_wasm_store|language_is_wasm)"
     r"|^ts_tree_cursor_.*dot")
-POINTER_TARGETS = re.compile(r"ts_(malloc|calloc|realloc)_default$|ts_lexer__|ts_lex|tree_sitter_al")
+POINTER_TARGETS = re.compile(
+    r"ts_(malloc|calloc|realloc)_default$|ts_lexer__|ts_lex|tree_sitter_al"
+    r"|^pop_\w+_callback$|^summarize_stack_callback$|^ts_decode_utf(8|16_le|16_be)$"
+    r"|^ts_string_input_read$")
+# Defined functions off the parse path (nothing in al-syntax or src/ reaches them): the query
+# engine and its helpers (query.c), the lookahead iterator, wasm, the logger and dot graphs,
+# ts_node_string and the subtree printer, and the allocator setter.
+OFF_PATH = re.compile(
+    r"^(ts_query\w*|query_\w+|stream_\w+|analysis_\w+|capture_\w+|quantifier_\w+"
+    r"|finished_state_\w+|state_predecessor_map_\w+|symbol_table_\w+|range_intersects"
+    r"|range_within|point_gte|ts_subtree_is_repetition"
+    r"|ts_lookahead_iterator_\w+"
+    r"|ts_wasm_\w+|ts_parser_set_wasm_store|ts_parser_take_wasm_store"
+    r"|ts_parser_logger|ts_parser_set_logger|ts_parser_print_dot_graphs|ts_tree_print_dot_graph"
+    r"|_ts_dup|ts_node_string|ts_subtree_string|ts_subtree__write\w*|ts_set_allocator)$")
 INJECT_AT = "void *tree_sitter_al_external_scanner_create("
+UNLISTED = "tls117_unlisted_probe"
 
 
 def die(msg):
@@ -96,7 +138,7 @@ def check(ci_files):
             if m:
                 edges[short(m.group(1))].append(short(m.group(2)))
     roots = [n for n in defined if ROOTS.match(n) and not EXCLUDED.match(n)]
-    roots += [n for n in defined if POINTER_TARGETS.match(n)]
+    roots += [n for n in defined if POINTER_TARGETS.search(n)]
     if not any(n.startswith("tree_sitter_al_external_scanner_") for n in roots):
         return False, ["no grammar scanner root found: the roots no longer match the sources"]
     seen, stack = set(), list(roots)
@@ -111,19 +153,47 @@ def check(ci_files):
         for t in edges.get(n, []):
             if t not in defined:
                 ext[t].add(n)
-    lines = [f"{len(roots)} roots reach {len(seen)} functions; external callees: {len(ext)}"]
-    bad = sorted(t for t in ext if t not in ALLOWED)
-    for t in sorted(ext.keys() & GUARDED):
-        lines.append(f"  guarded {t}: from {', '.join(sorted(ext[t]))}")
-    for t in bad:
-        lines.append(f"  NOT ALLOWED {t}: from {', '.join(sorted(ext[t]))}")
+    unreached = sorted(n for n in defined - seen if not OFF_PATH.match(n))
+    lines = [f"{len(roots)} roots reach {len(seen)} of {len(defined)} defined functions; "
+             f"external callees: {len(ext)}"]
+    bad = False
+    for t in sorted(ext):
+        if t not in ALLOWED:
+            lines.append(f"  NOT ALLOWED {t}: from {', '.join(sorted(ext[t]))}")
+            bad = True
+        elif t in GUARDED and ext[t] - GUARDED[t]:
+            lines.append(f"  NEW CALLER of guarded {t}: {', '.join(sorted(ext[t] - GUARDED[t]))}"
+                         " (check it is under the logger or dot-graph guard, then pin it)")
+            bad = True
+    for n in unreached:
+        lines.append(f"  UNACCOUNTED {n}: defined, not reached, not on OFF_PATH")
+        bad = True
     return not bad, lines
+
+
+def injected(scanner, dst_dir, edit):
+    """A copy of scanner.c in dst_dir with `edit(head, rest)` applied around INJECT_AT."""
+    if scanner.count(INJECT_AT) != 1:
+        die(f"cannot inject: '{INJECT_AT}' occurs {scanner.count(INJECT_AT)} times in scanner.c")
+    head, rest = scanner.split(INJECT_AT)
+    os.mkdir(dst_dir)
+    path = os.path.join(dst_dir, "scanner.c")
+    with open(path, "w") as f:
+        f.write(edit(head, rest))
+    return path
 
 
 def main():
     if len(sys.argv) != 1:
         print(__doc__, file=sys.stderr)
         return 2
+    if shutil.which("gcc") is None:
+        if sys.platform.startswith("linux"):
+            print("check-parse-path-locale: FAIL: gcc not found (on Linux it is required: "
+                  "Linux CI is the pin)", file=sys.stderr)
+            return 1
+        print("check-parse-path-locale: locale audit skipped: gcc not found; Linux CI is the pin")
+        return 0
     ts_src, ts_version = tree_sitter_src()
     grammar = os.environ.get("TREE_SITTER_AL_PATH") or os.path.join(
         subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True,
@@ -141,25 +211,30 @@ def main():
         ok, lines = check([lib, parser, scanner])
         print(f"check-parse-path-locale: tree-sitter {ts_version}, grammar {grammar}")
         print("\n".join(lines))
-        # The discrimination proof, every run: a reachable towlower must fail the check.
+        # The discrimination proofs, every run.
         text = open(os.path.join(g_src, "scanner.c")).read()
-        if text.count(INJECT_AT) != 1:
-            die(f"cannot inject: '{INJECT_AT}' occurs {text.count(INJECT_AT)} times in scanner.c")
-        head, rest = text.split(INJECT_AT)
-        brace = rest.index("{") + 1
-        injected = ("#include <wctype.h>\n" + head + INJECT_AT + rest[:brace]
-                    + " volatile wint_t tls117_probe = towlower((wint_t)L'A'); (void)tls117_probe;"
-                    + rest[brace:])
-        inj_dir = os.path.join(tmp, "injected")
-        os.mkdir(inj_dir)
-        inj_src = os.path.join(inj_dir, "scanner.c")
-        with open(inj_src, "w") as f:
-            f.write(injected)
-        inj_ok, inj_lines = check([lib, parser, callgraph(inj_src, inj_dir, [g_src])])
-        caught = not inj_ok and any("NOT ALLOWED towlower" in l for l in inj_lines)
-    print("check-parse-path-locale: an injected reachable towlower is "
-          + ("refused (the check can fail)" if caught else "NOT refused: the check is broken"))
-    if ok and caught:
+
+        def towlower(head, rest):
+            brace = rest.index("{") + 1
+            return ("#include <wctype.h>\n" + head + INJECT_AT + rest[:brace]
+                    + " volatile wint_t tls117_probe = towlower((wint_t)L'A');"
+                    + " (void)tls117_probe;" + rest[brace:])
+
+        def unlisted(head, rest):
+            return head + f"int {UNLISTED}(void) {{ return 0; }}\n" + INJECT_AT + rest
+
+        proofs = [("an injected reachable towlower", towlower, "NOT ALLOWED towlower"),
+                  ("an added unlisted function", unlisted, f"UNACCOUNTED {UNLISTED}")]
+        caught_all = True
+        for i, (what, edit, want) in enumerate(proofs):
+            d = os.path.join(tmp, f"proof{i}")
+            src = injected(text, d, edit)
+            p_ok, p_lines = check([lib, parser, callgraph(src, d, [g_src])])
+            caught = not p_ok and any(want in l for l in p_lines)
+            caught_all &= caught
+            print(f"check-parse-path-locale: {what} is "
+                  + ("refused (the check can fail)" if caught else "NOT refused: the check is broken"))
+    if ok and caught_all:
         print("check-parse-path-locale: PASS")
         return 0
     print("check-parse-path-locale: FAIL")
