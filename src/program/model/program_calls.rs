@@ -132,8 +132,8 @@ use crate::program::node::{AppRef, ObjKey, ObjectNodeId, RoutineNodeId};
 use crate::program::node_extract::{AbiParams, ObjectNode};
 use crate::program::resolve::decl_surface::DeclSurface;
 use crate::program::resolve::edge::{
-    CanonicalSpan, DispatchShape, EdgeKind, Evidence, Route, RouteTarget, UnknownReason as PReason,
-    callee_fp,
+    CanonicalSpan, DispatchShape, EdgeKind, Evidence, Route, RouteTarget, SetCompleteness,
+    UnknownReason as PReason, callee_fp,
 };
 use crate::program::resolve::full::{
     ClassifiedEdge, ObligationKind, ProgramContext, ProgramReport, can_fire_trigger,
@@ -1471,7 +1471,17 @@ fn key_join<'a>(
                 );
                 continue;
             };
-            consumed.insert(k);
+            // ENG-173: a record operation's call a table procedure may take is a call site of the
+            // walk at the operation's key; where the platform may run too, the operation pairs
+            // with the same edge (its triggers), so the call does not consume it.
+            let table_procedure = ce.edge.kind == EdgeKind::ImplicitTrigger
+                && view
+                    .site_facts
+                    .get(&ce.obligation_id())
+                    .is_some_and(|f| !f.rare().table_procedure.is_empty());
+            if !table_procedure {
+                consumed.insert(k);
+            }
             // A paired row always has a node (#160 step 11b §4.2, R1-20): only a
             // dependency row of an app the graph does not know has none, and no
             // program site keys to its file, so the key join cannot pair it.
@@ -1480,7 +1490,7 @@ fn key_join<'a>(
                 "call site {} is paired, but its row has no node",
                 cs.id
             );
-            if is_operation(ce) {
+            if is_operation(ce) && !table_procedure {
                 shape += 1;
                 unmatched(
                     "shape_mismatch",
@@ -2287,6 +2297,52 @@ impl<'a> Converter<'a> {
         ce: &ClassifiedEdge,
         c: &mut SiteCensus,
     ) -> Option<(Vec<CallEdge>, Vec<UpgradedBinding>)> {
+        // ENG-173: where the platform operation may run instead (both can take the call; alc's
+        // ranking is not modelled), the call to the table's procedure may not run: `Maybe`, never
+        // `Resolved` (sol r2: `Find('-')` runs the platform on BC over a user `Find(Text)`).
+        let both = ce.edge.kind == EdgeKind::ImplicitTrigger
+            && self
+                .site_facts
+                .get(&ce.obligation_id())
+                .is_some_and(|f| !f.rare().table_procedure.is_empty());
+        let (mut edges, bindings) = self.call_edges(ix, r, cs, ce, c)?;
+        if both {
+            for e in &mut edges {
+                if e.resolution == Resolution::Resolved {
+                    e.resolution = Resolution::Maybe;
+                }
+            }
+        }
+        Some((edges, bindings))
+    }
+
+    fn call_edges(
+        &self,
+        ix: RoutineIx,
+        r: &ModelRoutine,
+        cs: &PCallSite,
+        ce: &ClassifiedEdge,
+        c: &mut SiteCensus,
+    ) -> Option<(Vec<CallEdge>, Vec<UpgradedBinding>)> {
+        // ENG-173: the walk's call site of a record operation a table procedure may take pairs
+        // with the operation's own edge (its triggers); the call reaches the procedure's routes
+        // (`RareSiteFacts::table_procedure`), as an ordinary method call.
+        let as_call;
+        let ce = match self.site_facts.get(&ce.obligation_id()) {
+            Some(f)
+                if ce.edge.kind == EdgeKind::ImplicitTrigger
+                    && !f.rare().table_procedure.is_empty() =>
+            {
+                let mut x = ce.clone();
+                x.edge.kind = EdgeKind::Call;
+                x.edge.shape = DispatchShape::Exact;
+                x.edge.completeness = SetCompleteness::Complete;
+                x.edge.routes = f.rare().table_procedure.clone();
+                as_call = x;
+                &as_call
+            }
+            _ => ce,
+        };
         let edge = &ce.edge;
         let mut state = initial_binding_state(cs);
         let is_run = edge.kind == EdgeKind::Run;

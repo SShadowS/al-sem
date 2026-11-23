@@ -413,6 +413,7 @@ impl Assembly {
         let bindings = crate::program::resolve::full::FileBindings {
             parenless: r.parenless.into_iter().collect(),
             bare: r.bare_verdicts.into_iter().collect(),
+            table_procedure: r.table_procedure.into_iter().collect(),
         };
         if !bindings.is_empty() {
             self.parenless.insert((app, path.to_string()), bindings);

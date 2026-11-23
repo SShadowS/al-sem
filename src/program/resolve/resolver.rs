@@ -3267,6 +3267,44 @@ pub fn resolve_table_events(
 // Member-call resolution (Phase 3 Task 2)
 // ---------------------------------------------------------------------------
 
+/// ENG-173: the routes of the procedure of `name_lc` the table scope of `table_id` (the table
+/// and its visible extensions) declares and that may take a call of `arity` with `args`, as
+/// seen from `from_object`: the one candidate's routes; `None` for no candidate or several (an
+/// ambiguous overload set stays the caller's open question).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn table_procedure_routes(
+    from_object: &ObjectNode,
+    table_id: ObjectNodeId,
+    name_lc: &str,
+    arity: usize,
+    graph: &dyn GraphReads,
+    index: &dyn IndexReads,
+    surface: &dyn SurfaceReads,
+    args: &[ArgDispatchInfo],
+    build: &[(String, bool)],
+) -> Option<Vec<Route>> {
+    match resolve_in_table_scope(
+        from_object,
+        table_id,
+        name_lc,
+        arity,
+        graph,
+        index,
+        surface,
+        args,
+        build,
+    ) {
+        TableScopeOutcome::Resolved(_, routes) => Some(routes),
+        TableScopeOutcome::Ambiguous | TableScopeOutcome::NotVisible { .. } => None,
+    }
+}
+
+/// ENG-173: the catalog route of the platform Record method `method_lc`, if it is one.
+pub(crate) fn record_catalog_route(method_lc: &str) -> Option<Route> {
+    member_builtin_id(MemberCatalogKind::Record, method_lc)
+        .map(|bid| member_catalog_route(bid).1.remove(0))
+}
+
 /// Build a `(Exact, [Catalog route])` outcome for a recognized member builtin.
 fn member_catalog_route(bid: BuiltinId) -> (DispatchShape, Vec<Route>) {
     (

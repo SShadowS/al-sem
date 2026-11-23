@@ -31,6 +31,7 @@ mod interface_identity_tests;
 pub mod interfaces;
 pub mod member_catalog;
 pub mod method_id;
+pub(crate) mod platform_record_fit;
 pub mod platform_writes;
 pub mod reads;
 pub mod receiver;
