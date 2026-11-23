@@ -39,7 +39,6 @@
 //!   - `PRecordOperation.in_statement_position`
 //!   - `PRecordOperation.run_trigger`
 //!   - `PRecordOperation.receiver_is_record_ref`
-//!   - `PRecordOperation.holder_arguments`
 //!   - `PLoop.exhausting_advance`
 //!   - `PRecordVariable.is_receiver`
 //!   - `PVariableSymbol.fixed_local`
@@ -659,14 +658,6 @@ pub struct PRecordOperation {
     /// `run_trigger`; the `Debug`-printed ir-l2 snapshot shows it.
     #[serde(skip)]
     pub receiver_is_record_ref: bool,
-    /// ENG-173: the arguments (as written) that name a RecordRef or Variant variable in the
-    /// routine's scope; `None` when there is none (boxed: almost every operation has none). A
-    /// table procedure named like the operation may take the call (BC 28.4: it overloads the
-    /// platform method) and keep or rebind them (`ModelRecordOperation::holder_arguments`).
-    ///
-    /// INTERNAL-ONLY (`serde(skip)`, excluded from `PartialEq`), like `run_trigger`.
-    #[serde(skip)]
-    pub holder_arguments: Option<Box<Vec<String>>>,
 }
 
 /// MANUAL PartialEq: compares exactly the SERIALIZED L2 contract surface.
@@ -1653,7 +1644,7 @@ mod tests {
                 pending = false;
             }
         }
-        assert_eq!(actual.len(), 26, "scanner found {actual:?}");
+        assert_eq!(actual.len(), 25, "scanner found {actual:?}");
         assert_eq!(documented, actual);
     }
 

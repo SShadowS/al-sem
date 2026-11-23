@@ -288,6 +288,10 @@ pub(crate) struct FileResolution {
     pub parenless: Vec<al_syntax::ir::ExprId>,
     /// ENG-80: the bare calls to a [`BARE_VERDICT_NAMES`] name, with what they bind to.
     pub bare_verdicts: Vec<(al_syntax::ir::ExprId, BareVerdict)>,
+    /// ENG-173: the record-operation calls a table procedure of their name may take
+    /// ([`RareSiteFacts::table_procedure`]), with whether only it runs
+    /// ([`RareSiteFacts::platform_cannot`]).
+    pub table_procedure: Vec<(al_syntax::ir::ExprId, bool)>,
 }
 
 /// What the resolver decided about one file's call sites that its body walk reads,
@@ -299,11 +303,17 @@ pub(crate) struct FileResolution {
 pub struct FileBindings {
     pub parenless: HashSet<al_syntax::ir::ExprId>,
     pub bare: HashMap<al_syntax::ir::ExprId, BareVerdict>,
+    /// ENG-173: a record operation's call a table procedure of its name may take (BC 28.4: the
+    /// procedure overloads, or with exactly a platform overload's types hides, the platform
+    /// method), with whether only the procedure runs. The body walk makes it an ordinary call
+    /// site (and, when only the procedure runs, no record operation), so every reader of call
+    /// sites reads it: bindings, the statement tree, the operation order.
+    pub table_procedure: HashMap<al_syntax::ir::ExprId, bool>,
 }
 
 impl FileBindings {
     pub fn is_empty(&self) -> bool {
-        self.parenless.is_empty() && self.bare.is_empty()
+        self.parenless.is_empty() && self.bare.is_empty() && self.table_procedure.is_empty()
     }
 }
 
@@ -527,7 +537,6 @@ impl std::fmt::Debug for SiteFacts {
             record_table_unresolved,
             table_procedure,
             platform_cannot,
-            table_procedure_args,
         } = self.rare();
         f.debug_struct("SiteFacts")
             .field("interface", interface)
@@ -556,7 +565,6 @@ impl std::fmt::Debug for SiteFacts {
             .field("record_table_unresolved", record_table_unresolved)
             .field("table_procedure", table_procedure)
             .field("platform_cannot", platform_cannot)
-            .field("table_procedure_args", table_procedure_args)
             .finish()
     }
 }
@@ -666,9 +674,6 @@ pub struct RareSiteFacts {
     /// ([`crate::program::resolve::platform_record_fit::Fit::Cannot`]), so only
     /// [`Self::table_procedure`] runs: no trigger, no table event, no database operation.
     pub platform_cannot: bool,
-    /// ENG-173: with [`Self::table_procedure`], the call's arguments as written: the model gives
-    /// the operation a call site of its own with them (a procedure call is no record operation).
-    pub table_procedure_args: Vec<String>,
 }
 
 /// The per-site facts keyed by obligation, hashed with FxHash (TLS-66: one of
@@ -1450,8 +1455,14 @@ fn record_arg_facts(
             // A field reference is a name; a literal or an operator expression never is. A member,
             // a call, an index or anything else is left open.
             let field = match &file.ir.expr(x).kind {
-                ExprKind::Identifier(n) | ExprKind::QuotedIdentifier(n) => (!index
-                    .table_scope_may_have_field(graph, from, table, &n.fold_identifier()))
+                // No field only when the name is a declared variable of the caller and no field
+                // of the table scope: a system field (`SystemId`, `SystemModifiedAt`, …) is in
+                // no table's declarations (Fable on ENG-173), so a name the scope does not
+                // declare either may still be one.
+                ExprKind::Identifier(n) | ExprKind::QuotedIdentifier(n) => (args_info
+                    .get(k)
+                    .is_some_and(|i| i.var_passable)
+                    && !index.table_scope_may_have_field(graph, from, table, &n.fold_identifier()))
                 .then_some(false),
                 ExprKind::Literal(_)
                 | ExprKind::Unary { .. }
@@ -1490,6 +1501,11 @@ fn record_arg_facts(
                 Some(CanonicalArgType::Object(id)) if id.kind == ObjectKind::Table => {
                     ArgClass::Record
                 }
+                // An enum value may go to an `AnyEnum` or a `Joker` parameter (sol on ENG-173):
+                // never a certain clash.
+                Some(CanonicalArgType::Object(id)) if id.kind == ObjectKind::Enum => {
+                    ArgClass::Unknown
+                }
                 Some(CanonicalArgType::Object(_)) => ArgClass::Object,
                 _ if info.is_some_and(|i| i.literal_kind.is_some()) => ArgClass::Scalar,
                 _ => ArgClass::Unknown,
@@ -1497,6 +1513,29 @@ fn record_arg_facts(
             ArgFacts { field, class }
         })
         .collect()
+}
+
+/// ENG-173: whether the table procedure(s) `routes` resolved for a call of the record method
+/// `method_lc` HIDE the platform method ([`platform_record_fit::platform_hidden_by`]: exactly an
+/// overload's parameter types, alc AL0524). A symbol-only routine carries no parameter types, so
+/// only its parameter count can tell, and only zero parameters are certain.
+///
+/// [`platform_record_fit::platform_hidden_by`]: crate::program::resolve::platform_record_fit::platform_hidden_by
+fn table_procedure_hides(routes: &[Route], method_lc: &str, graph: &dyn GraphReads) -> bool {
+    !routes.is_empty()
+        && routes.iter().all(|r| {
+            let RouteTarget::Routine(id) = &r.target else {
+                return false;
+            };
+            let types: Vec<String> = match graph.routine(id) {
+                Some(node) if !node.param_sig_key.is_empty() => {
+                    node.param_sig_key.split('|').map(str::to_string).collect()
+                }
+                _ if id.params_count == 0 => Vec::new(),
+                _ => return false,
+            };
+            crate::program::resolve::platform_record_fit::platform_hidden_by(method_lc, &types)
+        })
 }
 
 fn completeness_for_shape(shape: DispatchShape) -> SetCompleteness {
@@ -1822,9 +1861,12 @@ fn resolve_call_site_obligation(
                 {
                     let facts =
                         record_arg_facts(call_args, &args_info, file, obj_node, tid, graph, index);
+                    // Not when the table's procedure has exactly an overload's types: it hides
+                    // the platform method (alc AL0524; BC 28.4 ran a table's `GetFilters()`).
                     if crate::program::resolve::platform_record_fit::platform_can_take(
                         &method_lc, &facts,
                     ) == Some(crate::program::resolve::platform_record_fit::Fit::May)
+                        && !table_procedure_hides(&r, &method_lc, graph)
                     {
                         r.push(platform);
                     }
@@ -2337,21 +2379,24 @@ fn resolve_call_site_obligation(
                     graph,
                     index,
                 );
+                // Only the table's procedure runs when the platform cannot take the call, or when
+                // the procedure has exactly a platform overload's types and so hides it (AL0524).
                 let cannot =
                     crate::program::resolve::platform_record_fit::platform_can_take(&op_lc, &facts)
-                        == Some(crate::program::resolve::platform_record_fit::Fit::Cannot);
+                        == Some(crate::program::resolve::platform_record_fit::Fit::Cannot)
+                        || table_procedure_hides(&user, &op_lc, graph);
                 facts_out.rare_mut().table_procedure = user;
-                facts_out.rare_mut().table_procedure_args = call_args
-                    .iter()
-                    .map(|&e| text[file.ir.expr(e).origin.byte()].trim().to_string())
-                    .collect();
                 if cannot {
+                    // Only the procedure runs: the site is an ordinary call to it (its edge holds
+                    // the routes, so the call graph, `alsem graph` and the histogram see a
+                    // resolved call; Fable on ENG-173: an empty trigger edge counted `unknown`).
                     facts_out.rare_mut().platform_cannot = true;
+                    let routes = facts_out.rare().table_procedure.clone();
                     return (
-                        EdgeKind::ImplicitTrigger,
+                        EdgeKind::Call,
                         DispatchShape::Exact,
                         SetCompleteness::Complete,
-                        vec![],
+                        routes,
                         None,
                     );
                 }
@@ -2529,6 +2574,7 @@ pub(crate) fn resolve_file_obligations(
     let mut site_facts: Vec<(ObligationId, SiteFacts)> = Vec::new();
     let mut parenless: Vec<al_syntax::ir::ExprId> = Vec::new();
     let mut bare_verdicts: Vec<(al_syntax::ir::ExprId, BareVerdict)> = Vec::new();
+    let mut table_procedure: Vec<(al_syntax::ir::ExprId, bool)> = Vec::new();
     // Each declaration's own node (a split subscriber's declarations have
     // one each, `program::split_decls`).
     let decl_nodes = crate::program::split_decls::file_declaration_nodes(
@@ -2765,6 +2811,9 @@ pub(crate) fn resolve_file_obligations(
                 if site.parenless {
                     parenless.push(site.expr);
                 }
+                if !facts.rare().table_procedure.is_empty() {
+                    table_procedure.push((site.expr, facts.rare().platform_cannot));
+                }
                 // ENG-80: what a bare call to a name the `Error` rule reads binds to.
                 if let CalleeShape::Bare { name } = &site.shape
                     && BARE_VERDICT_NAMES
@@ -2961,6 +3010,7 @@ pub(crate) fn resolve_file_obligations(
         site_facts,
         parenless,
         bare_verdicts,
+        table_procedure,
     }
 }
 
@@ -3362,6 +3412,7 @@ fn resolve_full_program_from_parts(
         let bindings = FileBindings {
             parenless: file_res.parenless.into_iter().collect(),
             bare: file_res.bare_verdicts.into_iter().collect(),
+            table_procedure: file_res.table_procedure.into_iter().collect(),
         };
         if !bindings.is_empty() {
             parenless_calls.insert((primary_app_ref, path), bindings);
@@ -3956,6 +4007,7 @@ impl ProgramContext {
             let bindings = FileBindings {
                 parenless: r.parenless.into_iter().collect(),
                 bare: r.bare_verdicts.into_iter().collect(),
+                table_procedure: r.table_procedure.into_iter().collect(),
             };
             if !bindings.is_empty() {
                 parenless_calls.insert((*app, pf.virtual_path.clone()), bindings);

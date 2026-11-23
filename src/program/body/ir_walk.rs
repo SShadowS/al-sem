@@ -112,24 +112,6 @@ fn is_variable_spelling(file: &AlFile, mut e: ExprId) -> bool {
     }
 }
 
-/// ENG-173: the folded name of the variable `e` spells as a whole or as an element (`X`, `"X"`,
-/// `(X)`, `this.X`, `X[1]`); `None` for any other expression.
-fn spelled_variable_name(file: &AlFile, mut e: ExprId) -> Option<String> {
-    loop {
-        match &file.ir.expr(e).kind {
-            ExprKind::Parenthesized(x) => e = *x,
-            ExprKind::Index { base, .. } => e = *base,
-            ExprKind::Identifier(n) | ExprKind::QuotedIdentifier(n) => {
-                return Some(n.fold_identifier());
-            }
-            ExprKind::Member { object, member, .. } if is_this(file, *object) => {
-                return Some(member.fold_identifier());
-            }
-            _ => return None,
-        }
-    }
-}
-
 /// ENG-175: the values a conditional expression may take, looking through parentheses and nested
 /// ternaries (`c ? X : (d ? Y : Z)` gives X, Y, Z); any other expression is its own one leaf.
 fn ternary_leaves(file: &AlFile, e: ExprId) -> Vec<ExprId> {
@@ -268,8 +250,6 @@ struct Scope {
     /// (parameters and locals before the object's globals), to a variable
     /// declared `RecordRef`. A subset of `rvars`.
     record_ref_vars: NameSet,
-    /// ENG-173: the names of RecordRef or Variant declarations in scope ([`holder_names`]).
-    holder_vars: NameSet,
     /// Lowercased names of the object's procedures/triggers. A bare implicit-receiver
     /// call whose method name collides with one of these is a CALL to that procedure,
     /// not a record op (legacy `object_procedure_names` collision check).
@@ -397,36 +377,6 @@ fn record_ref_names(o: &al_syntax::ir::ObjectDecl, routine: &RoutineDecl) -> Nam
     by_name
         .into_iter()
         .filter_map(|(n, is_ref)| is_ref.then_some(n))
-        .collect()
-}
-
-/// ENG-173: the lowercased names some declaration in a routine's scope (the object's globals,
-/// the routine's locals, parameters and named return) gives a RecordRef or Variant type: a
-/// superset of what a name may resolve to, so a reader resolves the text itself
-/// (`recref_alias::HolderScope`).
-fn holder_names(o: &al_syntax::ir::ObjectDecl, routine: &RoutineDecl) -> NameSet {
-    let holder = |ty: Option<&str>| {
-        is_record_ref_ty(ty)
-            || ty.is_some_and(|t| {
-                crate::record_ops::receiver_type_of(t)
-                    .trim()
-                    .eq_fold_identifier("variant")
-            })
-    };
-    let named_return = named_return_var(routine).map(|(n, ty)| (n, Some(ty)));
-    o.globals
-        .iter()
-        .chain(routine.locals.iter())
-        .map(|v| (v.name.as_str(), v.ty.as_deref()))
-        .chain(
-            routine
-                .params
-                .iter()
-                .map(|p| (p.name.as_str(), p.ty.as_deref())),
-        )
-        .chain(named_return)
-        .filter(|(_, ty)| holder(*ty))
-        .map(|(n, _)| n.fold_identifier())
         .collect()
 }
 
@@ -602,7 +552,6 @@ fn build_scope(
     (
         Scope {
             record_ref_vars: record_ref_names(o, routine),
-            holder_vars: holder_names(o, routine),
             database_shadowed: database_shadowed(o, routine),
             rvars,
             frvars,
@@ -1489,6 +1438,18 @@ impl<'a> SpineCtx<'a> {
                 }
                 _ => None,
             };
+            // ENG-173: a table procedure of the operation's name may take this call (the
+            // resolver's decision, `FileBindings::table_procedure`): it is an ordinary call site,
+            // and no record operation when only the procedure runs (BC 28.4: the platform cannot
+            // take the call, or the procedure has exactly its types and hides it).
+            let table_procedure = record_op
+                .as_ref()
+                .and(self.parenless_calls.table_procedure.get(&eid).copied());
+            let record_op = if table_procedure == Some(true) {
+                None
+            } else {
+                record_op
+            };
             let is_record_op = record_op.is_some();
             let fname = match &fe.kind {
                 Identifier(m) | QuotedIdentifier(m) => Some(m.fold_identifier()),
@@ -1547,17 +1508,6 @@ impl<'a> SpineCtx<'a> {
                             })
                         },
                         receiver_is_record_ref,
-                        holder_arguments: {
-                            let held: Vec<String> = args
-                                .iter()
-                                .filter(|&&a| {
-                                    spelled_variable_name(self.file, a)
-                                        .is_some_and(|n| self.scope.holder_vars.contains(&n))
-                                })
-                                .map(|&a| self.raw(&self.file.ir.expr(a).origin).to_string())
-                                .collect();
-                            (!held.is_empty()).then(|| Box::new(held))
-                        },
                     });
                     let k = if *op_type == "LockTable" {
                         "lock"
@@ -1589,7 +1539,7 @@ impl<'a> SpineCtx<'a> {
                 });
                 self.op_index += 1;
             }
-            if !is_record_op && !is_commit {
+            if (!is_record_op || table_procedure.is_some()) && !is_commit {
                 // Site-id tag: keep in sync with `l5::fingerprint::ROUTINE_SITE_TAGS`.
                 let cs_id = format!("{}/cs{}", self.routine_id, self.cs_index);
                 self.cs_index += 1;

@@ -69,6 +69,24 @@ class Program
         }
     }
 
+    // ENG-173: the AL type keyword a declared parameter spells for this platform type, when one
+    // does (a table procedure with exactly an overload's types HIDES it, alc AL0524, BC 28.4);
+    // null for a type no declaration spells the same way (`String`, `Joker`, `Table`, ...).
+    static string AlKeyword(IParameterSymbol p)
+    {
+        switch (p.ParameterType.NavTypeKind.ToString())
+        {
+            case "Boolean": return "boolean";
+            case "Integer": return "integer";
+            case "BigInteger": return "biginteger";
+            case "Decimal": return "decimal";
+            case "Text": return "text";
+            case "Code": return "code";
+            case "Guid": return "guid";
+            default: return null;
+        }
+    }
+
     static int WriteRecordSigs(string dir, string output)
     {
         var asm = typeof(Compilation).Assembly;
@@ -81,7 +99,7 @@ class Program
         {
             n++;
             var ps = m.Parameters.OrderBy(p => p.Ordinal).Select(p =>
-                $"P {{ kind: K::{Kind(p)}, optional: {(p.IsOptional ? "true" : "false")}, variadic: {(IsParams(p) ? "true" : "false")} }}");
+                $"P {{ kind: K::{Kind(p)}, optional: {(p.IsOptional ? "true" : "false")}, variadic: {(IsParams(p) ? "true" : "false")}, al: {(AlKeyword(p) is string k ? $"Some({Quote(k)})" : "None")} }}");
             var name = m.Name.ToLowerInvariant();
             if (!byName.TryGetValue(name, out var list)) byName[name] = list = new List<string>();
             list.Add("&[" + string.Join(", ", ps) + "]");

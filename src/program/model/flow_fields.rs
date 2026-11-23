@@ -935,7 +935,6 @@ fn field_ref_operations(routine: &ModelRoutine, tables: &Tables<'_>) -> Vec<Mode
             receiver_is_record_ref: true,
             flow_field_reads: reads,
             dataset_reason: None,
-            holder_arguments: None,
         });
     }
     out

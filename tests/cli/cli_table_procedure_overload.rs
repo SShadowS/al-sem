@@ -47,6 +47,19 @@ table 50492 "SB Entry"
     procedure Insert(X: RecordRef)
     begin
     end;
+
+    // sol on ENG-173: `FindLast()` takes no argument, so `E.FindLast(Doc)` runs this; its write
+    // goes through the caller's record (a `var` binding), temporary or not.
+    procedure FindLast(var X: Record "SB Doc")
+    begin
+        X.Insert();
+    end;
+
+    // Fable on ENG-173 (F1): writes nothing. `ModifyAll(Field, NewValue, RunTrigger?)` takes a
+    // field first: a system field is one though no table declares it; a Variant variable is not.
+    procedure ModifyAll(A: Variant; B: Variant)
+    begin
+    end;
 }
 codeunit 50493 "SB Mgt"
 {
@@ -127,6 +140,39 @@ codeunit 50493 "SB Mgt"
         E.Insert();
     end;
 
+    procedure UserFindLastPhysical()
+    var
+        E: Record "SB Entry";
+        Doc: Record "SB Doc";
+    begin
+        E.FindLast(Doc);
+    end;
+
+    procedure UserFindLastTemp()
+    var
+        E: Record "SB Entry";
+        Doc: Record "SB Doc" temporary;
+    begin
+        E.FindLast(Doc);
+    end;
+
+    procedure SystemFieldModifyAll()
+    var
+        E: Record "SB Entry";
+        DT: DateTime;
+    begin
+        E.ModifyAll(SystemModifiedAt, DT);
+    end;
+
+    procedure VariantModifyAll()
+    var
+        E: Record "SB Entry";
+        V: Variant;
+        DT: DateTime;
+    begin
+        E.ModifyAll(V, DT);
+    end;
+
     local procedure Guarded(var R: RecordRef)
     var
         O: Record "SB Other";
@@ -155,10 +201,12 @@ fn alsem(cwd: &Path, args: &[&str]) -> serde_json::Value {
 
 /// Each routine against its platform control (the same code calling the platform method).
 ///
-/// Discrimination (2026-11-23): the model not appending the procedure's call site fails
-/// `UserNext`; the record-type pass ignoring a shadowed operation's holder arguments fails
-/// `UserFindTemp`; the platform-cannot operation kept as a record operation fails `UserInsert`;
-/// each restored, passes.
+/// Discrimination (2026-11-23): the body walk ignoring the resolver's decision
+/// (`FileBindings::table_procedure`: no call site, the platform operation kept) fails `UserNext`;
+/// a name the table scope does not declare read as no field (a system field) fails
+/// `SystemFieldModifyAll`; each restored, passes. The hiding rule (AL0524) is pinned by the
+/// adapter census of `tests/r0-corpus/ws-report-dataitem` (`GetFilters()`), which fails with it
+/// off.
 #[test]
 fn a_table_procedure_named_like_a_record_builtin_is_called() {
     let t = tempfile::tempdir().unwrap();
@@ -203,4 +251,17 @@ fn a_table_procedure_named_like_a_record_builtin_is_called() {
     // No phantom operation: `E.Insert(RR)` runs only the table's empty `Insert`.
     assert_eq!(answer("PlatformInsert", "SB Entry"), "yes", "precondition");
     assert_eq!(answer("UserInsert", "SB Entry"), "no");
+    // sol on ENG-173: the call site carries its argument bindings, so the procedure's write
+    // through a `var` record is the caller's record: physical writes, temporary does not.
+    assert_eq!(
+        answer("UserFindLastPhysical", "SB Doc"),
+        "yes",
+        "precondition"
+    );
+    assert_eq!(answer("UserFindLastTemp", "SB Doc"), "no");
+    // Fable on ENG-173 (F1): a system field may be the platform's field argument (the platform
+    // `ModifyAll` may run: written); a Variant variable is no field (only the table's empty
+    // `ModifyAll` runs: not written).
+    assert_eq!(answer("VariantModifyAll", "SB Entry"), "no", "precondition");
+    assert_ne!(answer("SystemFieldModifyAll", "SB Entry"), "no");
 }

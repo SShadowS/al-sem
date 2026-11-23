@@ -83,13 +83,6 @@ fn may_be_rebound_elsewhere(
             .call_sites
             .iter()
             .any(|cs| cs.ternary_holders().iter().any(|a| names(a)))
-        // ENG-173: a record operation a table procedure of its name may take
-        // (`E.Find(RR, true)` with the table's `Find(var R: RecordRef; …)`; BC 28.4: it overloads
-        // the platform method) may rebind or keep its holder arguments. This pass runs before the
-        // model's calls exist (the procedure's call site comes from `program_calls`).
-        || routine.record_operations.iter().any(|op| {
-            shadowed.contains(&op.op) && op.holder_arguments().iter().any(|a| names(a))
-        })
         // sol round 2: a record retained elsewhere (a parameter, a global, a call's result, one
         // kept by an earlier call) may be rebound by any later place that may run user code: a
         // call, or a record operation that fires a trigger or a table event (ENG-159; Fable's
@@ -936,7 +929,6 @@ mod tests {
             receiver_is_record_ref: false,
             flow_field_reads: Vec::new(),
             dataset_reason: None,
-            holder_arguments: None,
         };
         let temp = Some(ts_known(true));
         // (is_implicit_rec, expected: Rec row temp, Rec op temp, xRec op temp)
