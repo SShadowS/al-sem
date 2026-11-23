@@ -61,6 +61,12 @@ jobs:
       id-token: write  # OIDC for azure/login (signing)
     # Federated credential matches subject repo:...:environment:release
     environment: release
+    # TLS-117 (note section 4.3): every link writes a map file next to its output (lld-link
+    # /MAP: <deps>\<name>-<hash>.map); /MAP only writes that file, the image is unchanged.
+    # The per-target variable is MERGED with .cargo/config.toml's target rustflags
+    # (+crt-static stays); a plain RUSTFLAGS would replace them.
+    env:
+      CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS: "-C link-arg=/MAP"
     steps:
       - name: Checkout al-call-hierarchy
         uses: actions/checkout@v4
@@ -150,6 +156,23 @@ jobs:
           if ($LASTEXITCODE -notin 0, 1) { throw "alsem analyze failed (exit $LASTEXITCODE)" }
           python scripts/ir-cache-report-check --require-key --rule output $rep
           if ($LASTEXITCODE -ne 0) { throw 'the shipped alsem.exe made no IR cache key' }
+
+      # TLS-117 (note section 4.3): list every locale deny symbol each shipped binary's map
+      # names, for a human to check against section 4.1 (expected: the static UCRT's own
+      # copies, and tree-sitter's query parser if the link keeps it). A map says what was
+      # linked, not what is reachable, so this never fails the job; a missing map warns.
+      - name: List locale symbols in the link maps (for a human)
+        shell: pwsh
+        run: |
+          $deny = '\b(setlocale|_create_locale|localeconv|_?isw[a-z_]*|iswctype|isprint|_?tow[a-z_]*|GetLocaleInfo\w*|LCMapString\w*|CompareStringEx|CompareStringW|GetStringType\w*|FoldString\w*)\b'
+          foreach ($b in 'alsem', 'aldump', 'al_call_hierarchy') {
+            $map = Get-ChildItem "target\release-ship\deps\$b-*.map" -ErrorAction SilentlyContinue |
+              Sort-Object LastWriteTime | Select-Object -Last 1
+            if (-not $map) { Write-Output "::warning::no link map for $b (lld-link /MAP)"; continue }
+            $hits = @(Select-String -Path $map.FullName -Pattern $deny)
+            Write-Output "== $b ($($map.Name)): $($hits.Count) deny-listed symbol lines"
+            $hits | Select-Object -First 200 | ForEach-Object { $_.Line.Trim() }
+          }
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

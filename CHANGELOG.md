@@ -46,6 +46,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   build and before signing, and after signing verify them again and run the shipped `alsem.exe`
   once with the cache on, on `tests/fixtures/tls117/ws`, requiring a key (`--require-key`); a
   failure fails the job.
+- **The Windows link-map listing.** `release.yml`'s Windows job links with `/MAP` (through
+  `CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS`, which keeps `+crt-static`; a plain
+  `RUSTFLAGS` would drop it) and lists every locale deny symbol in the maps of `alsem`, `aldump`
+  and `al-call-hierarchy` for a human to check (note section 4.3); it never fails the job.
 - **The parse path's locale audit is pinned.** `scripts/check-parse-path-locale` compiles
   tree-sitter's `lib.c` (the `Cargo.lock` version) and the grammar's `parser.c` and `scanner.c`
   with `gcc -fcallgraph-info`, walks the call graph from the roots al-syntax reaches, and fails

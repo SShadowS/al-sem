@@ -616,6 +616,18 @@ Pins (product phase):
   job by itself: a human checks each entry against 4.1 (expected: the static UCRT's own copies, and
   tree-sitter's `lib.obj` if the link keeps the query parser). A failing pin would need
   reachability, which 4.1's check already gives.
+  **As built (rev 11):** `release.yml`'s `build-windows` job sets
+  `CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS=-C link-arg=/MAP`, so every lld-link run writes
+  `<deps>\<name>-<hash>.map` next to its output; the step "List locale symbols in the link maps
+  (for a human)" prints, for the newest map of `alsem`, `aldump` and `al_call_hierarchy`, each
+  map line naming a deny symbol (up to 200), and warns when a map is missing; it never fails the
+  job. The per-target variable is used because Cargo **merges** it with `.cargo/config.toml`'s
+  `target.x86_64-pc-windows-msvc.rustflags` (`+crt-static` stays), while a plain `RUSTFLAGS`
+  **replaces** them (checked 2026-11-23 with cargo 1.96 on the Linux target: the merged run kept
+  `+crt-static`, the `RUSTFLAGS` run dropped it). `/MAP` only writes the map; the extra flag may
+  change Cargo's hashed crate metadata (symbol name suffixes), not what the code does. Not yet
+  run: the first release after this change is the check. `build-and-deploy.yml` has no map step
+  (one listing is enough for a human).
 
 ## 5. Locks: `std::fs::File` on both systems (decision Q4: yes)
 
