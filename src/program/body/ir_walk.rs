@@ -2287,15 +2287,31 @@ impl<'a> IrCfn<'a> {
     fn harvest(&self, eid: ExprId, out: &mut Vec<PCFNNode>) {
         use ExprKind::*;
         let e = self.ir().expr(eid);
-        // A parens-less call: the walk gave the read itself a call-site id.
-        if !matches!(e.kind, Call { .. })
-            && let Some(cs) = self.spine.cs_id_by_expr.get(&eid)
-        {
-            self.harvest_receiver(eid, out);
-            let mut leaf = cfn_node("call");
-            leaf.callsite_id = Some(cs.clone());
-            out.push(leaf);
-            return;
+        // A parens-less call: the walk gave the read itself a call-site id, an operation id (a
+        // record operation: `if L.FINDSET then`, `until L.NEXT = 0`; ENG-177: it was no leaf at
+        // all, so every reader of the tree missed it), or both (a table procedure may run).
+        if !matches!(e.kind, Call { .. }) {
+            let op = self.spine.op_id_by_expr.get(&eid);
+            let cs = self.spine.cs_id_by_expr.get(&eid);
+            let leaf = match (op, cs) {
+                (Some(op), Some(cs)) => Some(self.either_op_or_call(op, cs, &[], &e.origin)),
+                (Some(op), None) => {
+                    let mut leaf = cfn_node("op");
+                    leaf.operation_id = Some(op.clone());
+                    Some(leaf)
+                }
+                (None, Some(cs)) => {
+                    let mut leaf = cfn_node("call");
+                    leaf.callsite_id = Some(cs.clone());
+                    Some(leaf)
+                }
+                (None, None) => None,
+            };
+            if let Some(leaf) = leaf {
+                self.harvest_receiver(eid, out);
+                out.push(leaf);
+                return;
+            }
         }
         match &e.kind {
             Call { function, args } => {

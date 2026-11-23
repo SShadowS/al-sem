@@ -16,13 +16,16 @@
 //! every other variable (a parameter, a global, the implicit `Rec`, an unknown scope) may be,
 //! because its state is the caller's or another routine's ("unknown is not no").
 //!
-//! Effects: a recognised load operation or loading call textually before the operation loads its
-//! record (the same position rule as the detectors' own signals: a load later in a loop body
-//! does not count). A whole-variable assignment `A := X` gives `A` the state of `X`; from any
-//! other value (a call result, an expression) `A` may be loaded. `Clear(A)` unloads `A`. A field
-//! write or an element write changes nothing. Anything the walk cannot read (no statement tree,
-//! the operation not in it, a `try`, a pathologically deep tree, a loop that does not settle)
-//! answers "may be loaded": the detectors' textual answer stands.
+//! Effects: a recognised load operation, `TransferFields` (a well-defined state, as `Copy` and
+//! `Init`) or a loading call textually before the operation loads its record (the same position
+//! rule as the detectors' own signals: a load later in a loop body does not count). A record handed
+//! to any call may be loaded after it: `Clear(A)` leaves it in a well-defined state (as `Init`),
+//! any other call (a by-var out parameter) in the callee's, unknown. A whole-variable assignment
+//! `A := X` gives `A` the state of `X`; from any other value (a call result, an expression) `A`
+//! may be loaded. A field write or an element write changes nothing. So the one thing that
+//! unloads a record is a copy of a record no path has loaded. Anything the walk cannot read (no
+//! statement tree, the operation not in it, a `try`, a pathologically deep tree, a loop that does
+//! not settle) answers "may be loaded": the detectors' textual answer stands.
 
 use std::collections::HashMap;
 
@@ -30,9 +33,7 @@ use al_syntax::IdentifierFoldExt;
 
 use crate::engine::l5::detector_context::DetectorContext;
 use crate::engine::l5::detectors::{RECORD_LOAD_OPS, before_anchor, call_site_loads};
-use crate::program::body::features::{
-    FlowFact, PAnchor, PCFNNode, PCallSite, PCallee, PVarAssignment,
-};
+use crate::program::body::features::{FlowFact, PAnchor, PCFNNode, PCallSite, PVarAssignment};
 use crate::program::model::workspace::{ModelRecordOperation, ModelRoutine};
 
 /// Deeper than any real routine; a deeper tree answers "may be loaded".
@@ -223,31 +224,32 @@ impl Walk<'_> {
             "try" => st.map(|s| vec![true; s.len()]),
             "op" => {
                 let mut st = self.leaves(n, st, depth);
-                if let Some(op) = n.operation_id.as_deref().and_then(|id| self.ops.get(id)) {
-                    if op.id == self.target_id {
-                        self.at_target = join(self.at_target.take(), &st);
-                    }
-                    if RECORD_LOAD_OPS.contains(&op.op.as_str())
-                        && before_anchor(&op.source_anchor, self.target_anchor)
-                        && let Some(i) = self.index(&op.record_variable_name.fold_identifier())
-                        && let Some(s) = st.as_mut()
-                    {
-                        s[i] = true;
-                    }
+                if let Some(op) = n
+                    .operation_id
+                    .as_deref()
+                    .and_then(|id| self.ops.get(id).copied())
+                {
+                    self.op(op, &mut st);
                 }
                 self.seq(n.children.as_ref(), st, depth)
             }
             "call" => {
                 let mut st = self.leaves(n, st, depth);
-                if let Some(cs) = n.callsite_id.as_deref().and_then(|id| self.calls.get(id))
-                    && let Some(s) = st.as_mut()
+                if let Some(cs) = n
+                    .callsite_id
+                    .as_deref()
+                    .and_then(|id| self.calls.get(id).copied())
                 {
-                    let before = before_anchor(&cs.source_anchor, self.target_anchor);
-                    for (i, v) in self.vars.iter().enumerate() {
-                        if is_clear_of(cs, v) {
-                            s[i] = false;
-                        } else if before && call_site_loads(self.ctx, cs, v) {
-                            s[i] = true;
+                    if let Some(s) = st.as_mut() {
+                        let before = before_anchor(&cs.source_anchor, self.target_anchor);
+                        for (i, v) in self.vars.iter().enumerate() {
+                            // A loading call (`GetBySystemId` on it, a by-var loader), or the
+                            // record handed to any call: `Clear` leaves it in a well-defined state
+                            // (as `Init`), any other call (`GetCriterion(Edited)`, a by-var out
+                            // parameter) leaves the callee's state, unknown.
+                            if passes(cs, v) || (before && call_site_loads(self.ctx, cs, v)) {
+                                s[i] = true;
+                            }
                         }
                     }
                 }
@@ -265,6 +267,22 @@ impl Walk<'_> {
                 }
                 self.seq(n.children.as_ref(), st, depth)
             }
+        }
+    }
+
+    /// A record operation: the target's state is recorded before it runs; a recognised load, or
+    /// `TransferFields` (a well-defined state, as `Copy` and `Init`), textually before the target
+    /// loads its record.
+    fn op(&mut self, op: &ModelRecordOperation, st: &mut State) {
+        if op.id == self.target_id {
+            self.at_target = join(self.at_target.take(), st);
+        }
+        if (RECORD_LOAD_OPS.contains(&op.op.as_str()) || op.op == "TransferFields")
+            && before_anchor(&op.source_anchor, self.target_anchor)
+            && let Some(i) = self.index(&op.record_variable_name.fold_identifier())
+            && let Some(s) = st.as_mut()
+        {
+            s[i] = true;
         }
     }
 
@@ -344,12 +362,12 @@ impl Walk<'_> {
     }
 }
 
-/// `Clear(V)`: the platform's `Clear` on the variable `v` (lowercased) alone.
-fn is_clear_of(cs: &PCallSite, v: &str) -> bool {
-    matches!(&cs.callee, PCallee::Bare { name } if name.eq_fold_identifier("clear"))
-        && cs.argument_texts.len() == 1
-        && crate::record_ops::receiver_key_text(&cs.argument_texts[0])
+/// Whether the call passes the variable `v` (lowercased) itself as an argument.
+fn passes(cs: &PCallSite, v: &str) -> bool {
+    cs.argument_texts.iter().any(|a| {
+        crate::record_ops::receiver_key_text(a)
             .trim_matches('"')
             .fold_identifier()
             == v
+    })
 }

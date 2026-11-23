@@ -119,7 +119,61 @@ codeunit 50501 "E Mgt"
         C.Modify();
     end;
 
+    // Silent (CDO triage): `Clear` leaves a well-defined state, as `Init` (the build-then-insert
+    // pattern `Clear(R); R.TransferFields(Src); R.Validate(..); R.Insert()`).
+    procedure ClearBuilds()
+    var A: Record "E Entry";
+    begin
+        if A.FindLast() then;
+        Clear(A);
+        A.Validate(V, 1);
+        A.Insert();
+    end;
+
+    // Silent (CDO triage): a record a call fills through a var argument has the callee's state.
+    procedure FilledByCall()
+    var Edited: Record "E Entry";
+        A: Record "E Entry";
+    begin
+        A.FindFirst();
+        Fill(Edited);
+        A := Edited;
+        A.Modify();
+    end;
+
+    // Silent (CDO triage): `TransferFields` from a loaded record, as `Copy`, on the branch
+    // without the `Insert`.
+    procedure TransferredOn(B: Boolean)
+    var Src, A: Record "E Entry";
+    begin
+        Src.Get(1);
+        A.TransferFields(Src, false);
+        if B then
+            A.Insert()
+        else
+            A.Modify();
+    end;
+
+    // Silent (CDO triage): a parens-less load in a condition is an op leaf of the tree.
+    procedure ParenlessLoad()
+    var L, A: Record "E Entry";
+    begin
+        if L.FINDSET then
+            repeat
+                A := L;
+                A.MODIFY;
+            until L.NEXT = 0;
+    end;
+
     // Reported: the load reaches the operation on no path.
+    procedure ParenlessKill()
+    var N, A: Record "E Entry";
+    begin
+        A.FINDFIRST;
+        A := N;
+        A.MODIFY;
+    end;
+
     procedure CopyKills()
     var L, N, A: Record "E Entry";
     begin
@@ -134,14 +188,6 @@ codeunit 50501 "E Mgt"
     begin
         A.Get(1);
         A := N;
-        A.Modify();
-    end;
-
-    procedure ClearKills()
-    var A: Record "E Entry";
-    begin
-        A.Get(1);
-        Clear(A);
         A.Modify();
     end;
 
@@ -181,6 +227,11 @@ codeunit 50501 "E Mgt"
         A.TestField(V);
     end;
 
+    local procedure Fill(var R: Record "E Entry")
+    begin
+        R.K := 7;
+    end;
+
     local procedure Make(): Record "E Entry"
     var R: Record "E Entry";
     begin
@@ -213,10 +264,13 @@ fn reported(dir: &Path, detector: &str) -> BTreeSet<String> {
 }
 
 /// Discrimination (2026-11-23): the detectors ignoring the walk (`record_may_be_loaded_at`
-/// answering `true`) fail it (no `CopyKills`, `ClearKills`, `ExitKills`, ...); the walk's
-/// assignment not copying its value's state (a copy always loads) fails `CopyKills`; `exit` not
-/// ending its path fails `ExitKills`; `Clear` not unloading fails `ClearKills`; a branch join
-/// taking AND instead of OR fails `IfElseCopy`. Each restored, passes.
+/// answering `true`) fail it (no `CopyKills`, `ExitKills`, ...); the walk's assignment not
+/// copying its value's state (a copy always loads) fails `CopyKills`; `exit` not ending its path
+/// fails `ExitKills`; a branch join taking AND instead of OR fails `IfElseCopy`; the statement
+/// tree leaving out a parens-less record operation in a condition (`ir_walk::harvest`) fails
+/// `ParenlessLoad`; a record handed to a call keeping its state fails `FilledByCall`;
+/// `TransferFields` not loading fails `TransferredOn`. Each restored, passes. `ClearBuilds`
+/// guards the design (a `Clear` that unloaded, as the first draft did, reported it), not a line.
 #[test]
 fn a_load_must_reach_the_operation_on_some_path() {
     let t = tempfile::tempdir().unwrap();
@@ -233,7 +287,7 @@ fn a_load_must_reach_the_operation_on_some_path() {
         reported(t.path(), "d11-modify-without-get"),
         set(&[
             "ChainKilled",
-            "ClearKills",
+            "ParenlessKill",
             "CopyKills",
             "CopyKillsLoad",
             "ExitKills",
