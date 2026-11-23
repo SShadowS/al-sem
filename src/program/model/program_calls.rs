@@ -2016,8 +2016,9 @@ struct DatasetOps {
 
 /// ENG-173: the call site of a record operation `op` that may run a table procedure of its name
 /// (`E.Next(RR, true)` with the table's `Next(var R: RecordRef; B: Boolean)`), with the call's
-/// arguments as the resolver read them. Its id is the operation's with `/tableproc`, so the
-/// fingerprint's site-anchor stripping (`/opN`) keeps it stable.
+/// arguments as the resolver read them. Its id is the operation's: the statement tree names the
+/// site by it, so every reader that walks the tree finds the call (the field guard ended no guard
+/// at a `…/tableproc` id the tree never names); a removed operation leaves the id to it alone.
 fn table_procedure_call_site(
     op: &ModelRecordOperation,
     rare: &crate::program::resolve::full::RareSiteFacts,
@@ -2025,7 +2026,7 @@ fn table_procedure_call_site(
     let receiver = op.record_variable_name.to_string();
     let method = op.op.to_string();
     PCallSite {
-        id: format!("{}/tableproc", op.id),
+        id: op.id.clone(),
         operation_id: String::new(),
         callee_text: format!("{receiver}.{method}"),
         callee: PCallee::Member { receiver, method },
