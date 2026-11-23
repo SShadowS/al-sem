@@ -20,6 +20,44 @@ def test_basic_queries(repo_pair):
     assert g.is_ancestor(a, b) and not g.is_ancestor(b, a)
 
 
+def test_file_diffs_gives_each_file_its_own_whole_patch(repo_pair):
+    """TLS-114 (Fable r2): each name is one file, never a pattern
+    (`src/[a].rs` would also select `src/a.rs`, `:!x.rs` would exclude); it is
+    read from the top from any cwd (`:(literal)` alone is cwd-relative, so
+    from a subfolder every patch was empty and nothing was reported); a NUL
+    byte still shows the added lines; and an empty patch raises.
+
+    DISCRIMINATION (2026-11-23): `literal` dropped fails at `src/[a].rs`
+    (its patch holds `src/a.rs`'s line); `top,` dropped fails from the
+    `src/sub` cwd (raises: no patch for `:!x.rs`); `--text` dropped fails at
+    `src/nul.rs` ("Binary files ... differ"); the empty-patch raise removed
+    fails the last `pytest.raises` (DID NOT RAISE); restored, passes."""
+    _, clone = repo_pair
+    a = Git(clone).rev("HEAD")
+    names = {"src/a.rs": "fn plain(){}\n", "src/[a].rs": "fn bracket(){}\n",
+             "src/nul.rs": "fn n(){}\0\n#[ignore]\n"}
+    if sys.platform != "win32":
+        names[":!x.rs"] = "fn colon(){}\n"
+    for n, text in names.items():
+        (clone / n).parent.mkdir(parents=True, exist_ok=True)
+        (clone / n).write_text(text)
+        # `git add` reads its arguments as pathspecs too.
+        assert _raw(clone, "add", "--", f":(literal){n}").returncode == 0
+    assert _raw(clone, "commit", "-q", "-m", "odd names").returncode == 0
+    b = Git(clone).rev("HEAD")
+    (clone / "src" / "sub").mkdir()
+    for g in (Git(clone), Git(clone / "src" / "sub")):
+        files = g.changed_files(a, b)
+        d = g.file_diffs(a, b, files)
+        assert "fn bracket" in d["src/[a].rs"] and "fn plain" not in d["src/[a].rs"]
+        assert sorted(files) == sorted(names)
+        if ":!x.rs" in names:
+            assert "fn colon" in d[":!x.rs"]
+        assert "+#[ignore]" in d["src/nul.rs"]
+        with pytest.raises(GitError, match="no patch"):
+            g.file_diffs(a, b, ["README.md"])
+
+
 @pytest.mark.skipif(sys.platform == "win32", reason="Windows forbids CR and LF in names")
 def test_changed_and_dirty_paths_keep_cr_and_lf(repo_pair):
     """TLS-114: a name ending in CR, or holding an LF, is listed exactly: not

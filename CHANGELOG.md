@@ -30,6 +30,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     attribute), and every added line whose text starts with `++` was skipped as a header.
   - The rebase conflict list read the same quoted names, and the `-z` tree probe ran in Python
     text mode, which turns a CR into LF.
+  - Now each file's own patch is read by its known name (`:(top,literal)`: never a glob such as
+    `src/[a].rs`, and the same from any folder), with `--text` (a `.rs` file holding a NUL byte
+    gave "Binary files differ" and its additions were never scanned, before this change too).
+    A changed file with an empty patch is an error, not "nothing added".
 - **The pre-commit hook could skip fmt and the goldens.** It matched
   `git diff --cached --name-only` against `\.rs$` and `^src/…`. A quoted name matched neither,
   so a commit of `src/é.rs` alone ran no fmt check and no golden check.

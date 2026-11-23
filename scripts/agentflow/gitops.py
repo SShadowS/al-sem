@@ -122,10 +122,19 @@ class Git:
         """Each of `files`' own patch `a..b`, by path (TLS-114): the file is
         known by construction, never parsed from a header git may quote. Read
         as bytes and decoded with `replace` (the checks look for ASCII), so a
-        CR stays inside its line. `:(literal)`: a name is never a pattern."""
-        return {f: self._bytes("diff", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames",
-                               f"{a}..{b}", "--", f":(literal){f}").decode("utf-8", "replace")
-                for f in files}
+        CR stays inside its line. `:(top,literal)`: a name is never a pattern
+        and is read from the top, as `changed_files` gives it, whatever the
+        cwd. `--text`: a NUL byte does not turn the additions into "Binary
+        files differ". A changed file never has an empty patch, so an empty
+        one raises rather than read as "nothing added"."""
+        out = {}
+        for f in files:
+            p = self._bytes("diff", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames",
+                            "--text", f"{a}..{b}", "--", f":(top,literal){f}")
+            if not p:
+                raise GitError(f"git diff {a}..{b}: no patch for changed file {f!r}")
+            out[f] = p.decode("utf-8", "replace")
+        return out
 
     def ok(self, *args: str) -> bool:
         return self._run(*args, check=False).returncode == 0
