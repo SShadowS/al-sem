@@ -100,6 +100,23 @@ codeunit 50010 "PA"
         Guarded(R);
     end;
 
+    // Control (BC 28.4, /work/.al-sem/engine-notes/eng189-probe): `FieldRef.Record()` is a COPY,
+    // so rebinding it leaves R on its table.
+    procedure RootFieldRecord()
+    var
+        R: RecordRef;
+        L: RecordRef;
+        F: FieldRef;
+        E: Record "PA Entry";
+        D: Record "PA Doc";
+    begin
+        R.GetTable(E);
+        F := R.Field(1);
+        L := F.Record();
+        L.GetTable(D);
+        Guarded(R);
+    end;
+
     // G36: the write behind `FieldExist(2)` reaches only a table with field 2, unless the
     // record is rebound after the guard through an alias (`L` shares it since `Same(R)`).
     procedure FieldAfterBind(TableNo: Integer)
@@ -172,7 +189,8 @@ fn alsem(cwd: &Path, args: &[&str]) -> serde_json::Value {
 /// Discrimination (2026-11-23): the RecordRef flow's facts without the kept binds
 /// (`recref_alias::kept_bind_points` not added to its user-code places) fail `RootSame`,
 /// `RootJoin` and `RootJoinVar` (`no` again); G36 (`field_guard`) without them fails
-/// `FieldAfterBind` (`no`). Each restored, passes.
+/// `FieldAfterBind` (`no`). Each restored, passes. A kept bind rebinding its own receiver's class
+/// too (no `UserCodePoint::except`) fails `cli_recref_get`'s `ShadowAliasFlow`.
 #[test]
 fn an_in_place_bind_through_a_kept_holder_rebinds_every_kept_holder() {
     let t = tempfile::tempdir().unwrap();
@@ -210,6 +228,7 @@ fn an_in_place_bind_through_a_kept_holder_rebinds_every_kept_holder() {
     assert_eq!(answer("RootControlNo"), "no", "precondition");
     assert_eq!(answer("RootControlYes"), "yes", "precondition");
     assert_eq!(answer("RootBindFirst"), "no", "control");
+    assert_eq!(answer("RootFieldRecord"), "no", "control (BC: a copy)");
     for root in ["RootSame", "RootJoin", "RootJoinVar"] {
         assert_eq!(answer(root), "yes", "{root}");
     }

@@ -239,6 +239,7 @@ pub fn user_code_points<'a>(
         id,
         at: (a.start_line, a.start_column),
         runs: (a.end_line, a.end_column),
+        except: None,
     };
     let calls = r
         .call_sites
@@ -275,6 +276,9 @@ pub fn kept_bind_points<'a>(r: &'a ModelRoutine, classes: &AliasClasses) -> Vec<
                 id: s.id,
                 at,
                 runs: (s.anchor.end_line, s.anchor.end_column),
+                // Its own class is the bind's (`ShadowAliasFlow`: `R.GetTable(E)` with R copied
+                // into a global later binds R to E, not to anything).
+                except: Some(key),
             })
         })
         .collect()
@@ -289,6 +293,21 @@ pub struct UserCodePoint<'a> {
     pub at: (u32, u32),
     /// Where it ends: when its user code runs.
     pub runs: (u32, u32),
+    /// A kept bind's own receiver ([`kept_bind_points`]): its alias class is bound to the bind's
+    /// table by the reader's in-place rule, so the point rebinds only the OTHER retainable
+    /// holders. `None` for a place that may run user code.
+    pub except: Option<HolderKey>,
+}
+
+impl UserCodePoint<'_> {
+    /// The holders this point may rebind: those `classes` says are retainable when it runs,
+    /// leaving out its own receiver's class ([`Self::except`]).
+    pub fn rebinds<'c>(&self, classes: &'c AliasClasses) -> impl Iterator<Item = HolderKey> + 'c {
+        let own: Vec<HolderKey> = self.except.map(|k| classes.members(k)).unwrap_or_default();
+        classes
+            .rebound_at(self.runs)
+            .filter(move |h| !own.contains(h))
+    }
 }
 
 /// Whether call `cs` in `r` may run user code (AL a caller does not see: a procedure, an event

@@ -2638,7 +2638,7 @@ fn facts_of(
     for p in user_code {
         let at = Some(p.at);
         let conds = conds_of(p.at);
-        for v in classes.rebound_at(p.runs).filter_map(&name_of) {
+        for v in p.rebinds(&classes).filter_map(&name_of) {
             f.alias_shared.insert(v.clone());
             let key = (v.clone(), conds.clone());
             if kept_until.get(&key).is_some_and(|&end| end <= p.at) {

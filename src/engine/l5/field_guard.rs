@@ -129,7 +129,7 @@ fn guarded_operations(
         ));
     for p in points {
         let id = p.id;
-        let rebound: Vec<HolderKey> = aliases.rebound_at(p.runs).collect();
+        let rebound: Vec<HolderKey> = p.rebinds(&aliases).collect();
         if rebound.is_empty() {
             continue;
         }
