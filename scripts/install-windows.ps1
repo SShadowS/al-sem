@@ -41,29 +41,56 @@ function FileSha256([string] $path) {
     }
 }
 
-# Copy $src over $dst unless a running process has $dst loaded (the copy would fail midway or,
-# worse, be refused only on some files).
-function SafeCopy([string] $src, [string] $dst) {
-    $dir = Split-Path -Parent $dst
-    New-Item -ItemType Directory -Force $dir | Out-Null
-    if (Test-Path $dst) {
-        $full = (Resolve-Path $dst).Path
-        $running = Get-Process -ErrorAction SilentlyContinue |
-            Where-Object { try { $_.Path -eq $full } catch { $false } }
-        if ($running) {
-            throw "refusing to overwrite running $full (pid $($running.Id -join ', ')): stop it first"
-        }
-    }
+# The processes running $dst, if any.
+function RunningAt([string] $dst) {
+    if (-not (Test-Path $dst)) { return @() }
+    $full = (Resolve-Path $dst).Path
+    return @(Get-Process -ErrorAction SilentlyContinue |
+        Where-Object { try { $_.Path -eq $full } catch { $false } })
+}
+
+# Copy $src over $dst and check the copy (running targets were refused before any copy).
+function CopyChecked([string] $src, [string] $dst) {
+    New-Item -ItemType Directory -Force (Split-Path -Parent $dst) | Out-Null
     Copy-Item $src $dst -Force
     if ((FileSha256 $src) -ne (FileSha256 $dst)) { throw "copy of $src to $dst differs" }
     Write-Output "installed $dst"
 }
 
+# Run a native command with $ErrorActionPreference = 'Continue': Windows PowerShell 5.1 turns
+# a native command's stderr lines (cargo's progress) into errors that 'Stop' throws on. The
+# exit code decides.
+function Native([string] $what, [scriptblock] $cmd) {
+    $saved = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try { & $cmd 2>&1 | ForEach-Object { "$_" } } finally { $ErrorActionPreference = $saved }
+    if ($LASTEXITCODE -ne 0) { throw "$what failed (exit $LASTEXITCODE)" }
+}
+
+# Every target as (staged source name, destination).
+$bin = Join-Path $HOME '.al-sem\bin'
+$targets = @(@('alsem.exe', (Join-Path $bin 'alsem.exe')), @('aldump.exe', (Join-Path $bin 'aldump.exe')))
+foreach ($d in $LspDir) {
+    $targets += , @('al-call-hierarchy.exe', (Join-Path $d 'al-call-hierarchy.exe'))
+    $targets += , @('alsem.exe', (Join-Path $d 'alsem.exe'))
+}
+
+# Refuse before building or copying anything when a target is running: a refusal midway would
+# leave some targets new and some old (sol r1).
+function RefuseRunning {
+    $busy = @()
+    foreach ($t in $targets) {
+        $p = RunningAt $t[1]
+        if ($p.Count -gt 0) { $busy += "$($t[1]) (pid $($p.Id -join ', '))" }
+    }
+    if ($busy.Count -gt 0) { throw "refusing to install: running $($busy -join '; '): stop them first" }
+}
+RefuseRunning
+
 if (-not $NoBuild) {
     $bins = @()
     foreach ($b in $engines + 'alsem-stamp') { $bins += @('--bin', $b) }
-    & cargo build --profile release-ship @bins
-    if ($LASTEXITCODE -ne 0) { throw 'cargo build failed' }
+    Native 'cargo build' { cargo build --profile release-ship @bins }
 }
 
 $stamp = Join-Path $out 'alsem-stamp.exe'
@@ -72,18 +99,14 @@ foreach ($b in $engines) {
     $built = Join-Path $out "$b.exe"
     $staged = Join-Path $stage "$b.exe"
     Copy-Item $built $staged -Force
-    & $stamp stamp $staged
-    if ($LASTEXITCODE -ne 0) { throw "stamping $b.exe failed" }
-    & $stamp verify $staged
-    if ($LASTEXITCODE -ne 0) { throw "verifying $b.exe failed" }
+    Native "stamping $b.exe" { & $stamp stamp $staged }
+    Native "verifying $b.exe" { & $stamp verify $staged }
 }
 
-$bin = Join-Path $HOME '.al-sem\bin'
-SafeCopy (Join-Path $stage 'alsem.exe') (Join-Path $bin 'alsem.exe')
-SafeCopy (Join-Path $stage 'aldump.exe') (Join-Path $bin 'aldump.exe')
-foreach ($d in $LspDir) {
-    SafeCopy (Join-Path $stage 'al-call-hierarchy.exe') (Join-Path $d 'al-call-hierarchy.exe')
-    SafeCopy (Join-Path $stage 'alsem.exe') (Join-Path $d 'alsem.exe')
+# Again just before copying: the build takes minutes, and a target may have started since.
+RefuseRunning
+foreach ($t in $targets) {
+    CopyChecked (Join-Path $stage $t[0]) $t[1]
 }
 Write-Output 'install-windows: done (stamped and verified)'
 exit 0

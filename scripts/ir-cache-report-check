@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
 """ir-cache-report-check: judge an ENG-110 IR cache report file (ALSEM_IR_CACHE_REPORT).
 
-    ir-cache-report-check --rule output|impact|warm-build <report-file>
+    ir-cache-report-check [--require-key] --rule output|impact|warm-build <report-file>
+    ir-cache-report-check --require-key <report-file>
     ir-cache-report-check --self-test
+
+--require-key (TLS-117: the Windows acceptance and the release workflows' check of the signed
+binaries) fails a missing file, any `unsupported`, `unstamped` or `no key` line, and a file with
+no `start` line carrying a key; with --rule, the rule is judged too.
 
 Exit 0 or 1, printing one verdict line. The rules are over the set of the file's lines
 (spec "Acceptance" item 5):
@@ -73,6 +78,21 @@ def judge(rule, lines):
     return True, f"IR: PASS {rule} ({summary})"
 
 
+def require_key(lines):
+    """(ok, verdict) for --require-key (TLS-117, acceptance and release): every process made a
+    key. Fails a missing file, any `unsupported` / `unstamped` / `no key` line, and a file with
+    no `start` line carrying a key."""
+    if lines is None:
+        return False, "IR: FAIL no report file (the cache path never ran)"
+    nokey = [l for l in lines if "ir_cache" in l]
+    if nokey:
+        return False, f"IR: FAIL a process has no key: {nokey[:2]}"
+    keyed = [l for l in lines if l.get("event") == "start" and l.get("key")]
+    if not keyed:
+        return False, "IR: FAIL no process made a key (no start line with a key)"
+    return True, f"IR: key ({len(keyed)} processes)"
+
+
 def read(path):
     if not os.path.exists(path):
         return None
@@ -119,6 +139,20 @@ def self_test():
         mark = "ok" if ok == want else "WRONG"
         failed += ok != want
         print(f"{mark:5} {rule:10} {name}: {verdict}")
+    keyed = [
+        (None, False, "no file"),
+        ([start(1), end(1, **hit)], True, "a key"),
+        ([{"pid": 3, "ir_cache": "unstamped", "reason": "r"}], False, "unstamped"),
+        ([{"pid": 3, "ir_cache": "unsupported"}], False, "unsupported"),
+        ([{"pid": 3, "ir_cache": "no key", "reason": "r"}], False, "no key"),
+        ([start(1), end(1, **hit), {"pid": 2, "ir_cache": "unstamped"}], False, "one unstamped"),
+        ([dict(start(1), key=None), end(1, **hit)], False, "a start without a key"),
+    ]
+    for lines, want, name in keyed:
+        ok, verdict = require_key(lines)
+        mark = "ok" if ok == want else "WRONG"
+        failed += ok != want
+        print(f"{mark:5} {'require-key':10} {name}: {verdict}")
     print("self-test:", "PASS" if not failed else f"FAIL ({failed})")
     return 0 if not failed else 1
 
@@ -126,10 +160,24 @@ def self_test():
 def main(argv):
     if argv[1:] == ["--self-test"]:
         return self_test()
-    if len(argv) != 4 or argv[1] != "--rule" or argv[2] not in RULES:
+    args = argv[1:]
+    need_key = "--require-key" in args
+    args = [a for a in args if a != "--require-key"]
+    rule = None
+    if len(args) == 3 and args[0] == "--rule" and args[1] in RULES:
+        rule, path = args[1], args[2]
+    elif len(args) == 1 and need_key:
+        path = args[0]
+    else:
         print(__doc__, file=sys.stderr)
         return 2
-    ok, verdict = judge(argv[2], read(argv[3]))
+    lines = read(path)
+    if need_key:
+        ok, verdict = require_key(lines)
+        if not ok or rule is None:
+            print(verdict)
+            return 0 if ok else 1
+    ok, verdict = judge(rule, lines)
     print(verdict)
     return 0 if ok else 1
 

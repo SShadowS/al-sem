@@ -127,6 +127,28 @@ fn end_counter(lines: &[Value], name: &str) -> u64 {
     ends[0]["counters"][name].as_u64().unwrap()
 }
 
+/// TLS-117: writes this module's fixture workspace to `$ALSEM_TLS117_MINT`. Run once by hand;
+/// the output is committed as `tests/fixtures/tls117/ws`, the workspace the release workflows'
+/// key check analyzes with the signed Windows `alsem.exe`.
+#[test]
+#[ignore = "mints tests/fixtures/tls117/ws by hand"]
+fn mint_tls117_release_fixture() {
+    let Some(out) = std::env::var_os("ALSEM_TLS117_MINT") else {
+        return;
+    };
+    let f = fixture();
+    let out = PathBuf::from(out);
+    for e in walkdir::WalkDir::new(&f.ws) {
+        let e = e.unwrap();
+        let to = out.join(e.path().strip_prefix(&f.ws).unwrap());
+        if e.file_type().is_dir() {
+            std::fs::create_dir_all(&to).unwrap();
+        } else {
+            std::fs::copy(e.path(), &to).unwrap();
+        }
+    }
+}
+
 /// The positive control: the cache on, a fresh root: one entry published, a `start` and an
 /// `end` line; the next run hits it.
 #[test]

@@ -132,6 +132,25 @@ jobs:
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
           timestamp-digest: SHA256
 
+      # TLS-117 (sol r1 P1-3): the binaries as shipped (signed, when signing is configured)
+      # still verify, and the shipped alsem.exe makes an IR cache key at run time: one analyze
+      # of a tiny committed workspace with the cache on, judged by `--require-key` (an
+      # `unstamped`, `unsupported` or `no key` line fails the job).
+      - name: Check the shipped binaries' IR cache key
+        shell: pwsh
+        run: |
+          foreach ($b in 'alsem', 'aldump', 'al-call-hierarchy') {
+            & target\release-ship\alsem-stamp.exe verify "target\release-ship\$b.exe"
+            if ($LASTEXITCODE -ne 0) { throw "verifying the shipped $b.exe failed" }
+          }
+          $rep = Join-Path $env:RUNNER_TEMP 'ir-key.jsonl'
+          $env:ALSEM_IR_CACHE = 'on'
+          $env:ALSEM_IR_CACHE_REPORT = $rep
+          & target\release-ship\alsem.exe analyze tests\fixtures\tls117\ws --format json | Out-Null
+          if ($LASTEXITCODE -notin 0, 1) { throw "alsem analyze failed (exit $LASTEXITCODE)" }
+          python scripts/ir-cache-report-check --require-key --rule output $rep
+          if ($LASTEXITCODE -ne 0) { throw 'the shipped alsem.exe made no IR cache key' }
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
