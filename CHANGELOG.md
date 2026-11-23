@@ -13,6 +13,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   there (`ir_cache::DEFAULT_ON`; Linux and macOS keep it on by default). One later commit flips the
   Windows default once the owner's acceptance (note section 3) passes; every acceptance step sets
   `ALSEM_IR_CACHE=on` itself.
+- **The owner's acceptance passed** (at `1e882726`, on the owner's Windows machine): the
+  Windows-native tests (43 passed, 0 failed); the install stamped and verified all three
+  binaries; through the installed `alsem.exe` a cold run published, a warm run hit 10,881
+  entries, an impact run verified 21,762 of 21,762 hits, and every answer was byte-identical to
+  the cache-off run; the LSP made a key. For the LSP check, a `didOpen` alone writes no report:
+  the report's first line is written at the cache's first use, so the check makes one real
+  request (a call-hierarchy request, for example).
+- **The eager key's start-up cost, measured** (the same acceptance, median of 7 runs of a small
+  `analyze`): 32.8 ms with the cache off against 77.9 ms with it on, so about 45 ms per process
+  start. That is acceptable for the long-lived processes that gain the most (the LSP server,
+  `mcp`'s engine, `engine-host`). With the cache off no key is made: the eager key, the seam,
+  `make_ir_dir` and the report's no-key line each run only when the cache is on.
 - **What it does.** ENG-110's IR cache was off on Windows: its key is the running binary's bytes,
   and on Windows no file path reliably names the running image (the owner's probe runs showed
   `GetMappedFileNameW` keeping a stale path after a folder swap and a deleted hard link, so a

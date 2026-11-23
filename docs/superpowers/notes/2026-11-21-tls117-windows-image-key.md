@@ -385,9 +385,11 @@ powershell -ExecutionPolicy Bypass -File scripts\install-windows.ps1 [-LspDir <f
 ```
 **What PASS looks like, in one place:** every `cargo test` line ends `ok` (0 failed); the install
 script ends with `install-windows: done (stamped and verified)`; each
-`ir-cache-report-check` in step 2 prints `PASS` and exits 0; the `Select-String` line prints
-nothing; the three answers equal their `ALSEM_IR_CACHE=off` runs (`fc /b` reports no differences);
-the LSP check in step 3 prints `PASS`. Send back every output, and the two medians of step 5.
+`ir-cache-report-check` in step 2 (`--require-key` with `--rule`) prints `IR: PASS <rule> (...)`
+and exits 0; the `Select-String` line prints nothing; the three answers equal their
+`ALSEM_IR_CACHE=off` runs (`fc /b` reports no differences); the LSP check in step 3
+(`--require-key` alone, no rule) prints `IR: key (N processes)` and exits 0. (`--require-key`
+without `--rule` judges only the key; it prints `PASS` only together with a rule.) Send back every output, and the two medians of step 5.
 
 1. **Positive keys on the shipped executables.** The MSVC `release-ship` `alsem.exe`, `aldump.exe`
    and `al-call-hierarchy.exe`, stamped by `scripts/install-windows.ps1` (and, separately, the ones
@@ -424,8 +426,11 @@ the LSP check in step 3 prints `PASS`. Send back every output, and the two media
    `roundtrip_failed`, and the last line finds nothing. The three outputs must equal the same commands run with
    `ALSEM_IR_CACHE=off` (the cache never changes an answer).
 3. The same as step 2 with `aldump.exe` is not needed; `al-call-hierarchy.exe` gets one positive
-   key check (start the LSP server once with `ALSEM_IR_CACHE=on` and `ALSEM_IR_CACHE_REPORT` set,
-   open the workspace, then `ir-cache-report-check --require-key <report>`).
+   key check: start the LSP server once with `ALSEM_IR_CACHE=on` and `ALSEM_IR_CACHE_REPORT` set,
+   open the workspace **and make one real request** (a call-hierarchy request, for example: a
+   `didOpen` alone writes no report, since the report's first line is written at the cache's
+   first use), then `ir-cache-report-check --require-key <report>`, which prints
+   `IR: key (N processes)`.
 4. The Windows-native tests (section 6's list) pass.
 5. **The eager key's start-up cost** (Fable N7): every process with the cache on now reads and
    hashes its own exe in `main`. Measure it on the installed `alsem.exe` with a command that
@@ -439,7 +444,9 @@ the LSP check in step 3 prints `PASS`. Send back every output, and the two media
    }
    ```
    The difference is the key's cost per process start (expected: tens of milliseconds for a
-   ~30 MB exe; a resident server pays it once).
+   ~30 MB exe; a resident server pays it once). **Measured at `1e882726`:** off 32.8 ms, on
+   77.9 ms (medians), about 45 ms per start. A cache-off process makes no key (every key path
+   runs only when the cache is on).
 6. **The release workflow on the branch** (Fable N6), before landing: `gh workflow run
    release.yml --ref tools/tls-117-windows-cache`. It builds, stamps, (signs when configured),
    runs the cold, warm and aldump key checks, the static-CRT check and the map listing, and
