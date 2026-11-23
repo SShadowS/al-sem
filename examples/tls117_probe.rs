@@ -18,9 +18,37 @@
 //! W10 (`examples/tls117_w10.ps1`) builds the probe several times and compares the outputs with
 //! `tls117_probe w10-compare <label> <a.exe> <b.exe>`, a mode that works on any system.
 
-#[cfg_attr(not(windows), allow(dead_code))]
+// Shared with `tls117_stamp`: each binary uses part of it.
+#[allow(dead_code)]
 #[path = "tls117/pe.rs"]
 mod pe;
+
+/// The data-digest slot (design note section 3): a 16-byte magic, then 32 digest bytes, zero
+/// until `tls117_stamp` (or the probe, on its copies) writes them. Immutable, so it lands in
+/// `.rdata`, which part A hashes; `#[used]` and every read going through [`slot`] keep it intact
+/// through LTO (the IR marker's pattern). The magic is spelled only here, so it occurs once.
+#[used]
+static TLS117_SLOT: [u8; pe::SLOT_LEN] = {
+    let magic = *b"TLS117-DATA-SLOT";
+    let mut s = [0u8; pe::SLOT_LEN];
+    let mut i = 0;
+    while i < 16 {
+        s[i] = magic[i];
+        i += 1;
+    }
+    s
+};
+
+/// The slot as this process sees it (through `black_box`, so the optimiser cannot assume the
+/// build-time zeros).
+fn slot() -> &'static [u8; pe::SLOT_LEN] {
+    std::hint::black_box(&TLS117_SLOT)
+}
+
+/// The slot's magic, read from this binary's own slot (never a second literal).
+fn magic() -> [u8; 16] {
+    slot()[..16].try_into().unwrap()
+}
 
 /// W10: a writable static (it lands in `.data`) whose initial value is the only difference of the
 /// `w10-variant` build. `main` reads it, so it is kept.
@@ -32,10 +60,12 @@ static W10_VALUE: std::sync::atomic::AtomicU32 =
     });
 
 /// `w10-compare <label> <a> <b>`: canonicalise two builds and judge them (design note section 8,
-/// W10). Label `variant`: two builds differing only in [`W10_VALUE`]'s initial value must
-/// canonicalise differently. Label `relink`: two links of the same source must canonicalise
-/// equal with equal writable sections, or differently; never equal with different writable
-/// sections. Prints the TimeDateStamp, the REPRO (/Brepro) debug entry and the PDB GUID of each.
+/// W10, a diagnostic since the slot is mandatory). Both builds are stamped in memory, and their
+/// slots must differ exactly when their writable sections differ. Label `variant`: two builds
+/// differing only in [`W10_VALUE`]'s initial value must have different writable sections (the
+/// value in a writable section in both). Label `relink`: two links of the same source must
+/// canonicalise equal with equal writable sections, or differently. Prints whether the canonical
+/// hashes differ, and each build's TimeDateStamp, REPRO (/Brepro) debug entry and PDB GUID.
 fn w10_compare(label: &str, a: &str, b: &str) -> i32 {
     let run = || -> Result<(bool, String), String> {
         let (fa, fb) = (
@@ -85,17 +115,35 @@ fn w10_compare(label: &str, a: &str, b: &str) -> i32 {
                 format!("W10_VALUE is not in a writable section in both builds: a {pa}, b {pb}"),
             ));
         }
+        // Both builds stamped (in memory): their slots must differ exactly when .data differs.
+        let digest = |f: &[u8]| -> Result<[u8; 32], String> {
+            let mut g = f.to_vec();
+            Ok(pe::stamp(&mut g, &magic())?.digest)
+        };
+        let same_slot = digest(&fa)? == digest(&fb)?;
+        if same_slot != same_data {
+            return Ok((
+                false,
+                format!(
+                    "stamped slots {} while writable sections {}",
+                    if same_slot { "equal" } else { "differ" },
+                    if same_data { "are equal" } else { "differ" }
+                ),
+            ));
+        }
         let pass = match label {
-            "variant" => !same_canon,
+            "variant" => !same_data,
             "relink" => !same_canon || same_data,
             other => return Err(format!("unknown label {other}")),
         };
         Ok((
             pass,
             format!(
-                "canonical {} | writable sections {} | files {} | W10_VALUE a {pa}, b {pb} | a: \
+                "stamped slots {} | canonical {} | writable sections {} | files {} | W10_VALUE a \
+                 {pa}, b {pb} | a: \
                  TimeDateStamp {:#010x}, REPRO entry {}, PDB {:?} | b: TimeDateStamp {:#010x}, \
                  REPRO entry {}, PDB {:?}",
+                if same_slot { "equal" } else { "different" },
                 if same_canon { "EQUAL" } else { "different" },
                 if same_data { "equal" } else { "DIFFERENT" },
                 if fa == fb { "identical" } else { "differ" },
@@ -131,6 +179,7 @@ fn main() {
         std::hint::black_box(0),
         std::sync::atomic::Ordering::Relaxed,
     );
+    std::hint::black_box(slot());
     let args: Vec<String> = std::env::args().collect();
     if args.get(1).map(String::as_str) == Some("w10-compare") && args.len() == 5 {
         std::process::exit(w10_compare(&args[2], &args[3], &args[4]));
@@ -146,7 +195,7 @@ fn main() {
 
 #[cfg(windows)]
 mod win {
-    use super::pe;
+    use super::{magic, pe, slot};
     use std::ffi::{OsStr, OsString, c_void};
     use std::fs::{File, OpenOptions, TryLockError};
     use std::io::{BufRead, BufReader, ErrorKind, Read, Write};
@@ -410,36 +459,104 @@ mod win {
         )
     }
 
-    /// Part B on one candidate path: open it denying write and delete sharing, require a
-    /// regular file on local NTFS, read it whole through that handle (bounded), and check it
-    /// against A (headers first, then the canonical hash). `Ok((Some(key), verdict))` when
-    /// accepted; the key is the blake3 of the bytes read through that handle.
-    fn check_path(
-        p: &Path,
-        a: &pe::Canon,
-        step: &mut dyn FnMut(&str),
-    ) -> Result<(Option<[u8; 32]>, &'static str), String> {
-        let f = open_candidate(p);
-        step("after-open");
-        let mut f = f.map_err(|e| format!("open: {e}"))?;
-        let m = f.metadata().map_err(|e| format!("stat: {e}"))?;
-        if !m.is_file() || m.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-            return Err("not a regular file".into());
-        }
-        if m.len() > 2 * u64::from(pe::MAX_IMAGE) {
-            return Err("file too large".into());
-        }
-        local_ntfs(&f)?;
-        let mut bytes = Vec::new();
-        f.read_to_end(&mut bytes)
-            .map_err(|e| format!("read: {e}"))?;
-        let v = pe::check_candidate(&bytes, a);
-        step("after-hash");
-        Ok(match v.map_err(|e| format!("part B: {e}"))? {
-            pe::Verdict::Accepted => (Some(*blake3::hash(&bytes).as_bytes()), "accepted"),
-            pe::Verdict::HeadersDiffer => (None, "refused (headers differ)"),
-            pe::Verdict::HashDiffers => (None, "refused (canonical hash differs)"),
+    /// The running module's slot: where it is and what it holds (read from memory, inside the
+    /// bytes part A hashed).
+    struct LoadedSlot {
+        rva: u32,
+        bytes: [u8; pe::SLOT_LEN],
+    }
+
+    fn loaded_slot(base: *const c_void) -> Result<LoadedSlot, String> {
+        let addr = slot().as_ptr() as usize;
+        let rva = u32::try_from(addr.wrapping_sub(base as usize))
+            .map_err(|_| "the slot is not in this module")?;
+        let bytes = pe::View::read(
+            &MemView {
+                base: base as usize,
+            },
+            rva,
+            pe::SLOT_LEN,
+        )
+        .ok_or("the slot cannot be read")?;
+        Ok(LoadedSlot {
+            rva,
+            bytes: bytes.try_into().unwrap(),
         })
+    }
+
+    /// One candidate's outcome: its file id (when it opened), the verdict, and the key when
+    /// accepted.
+    struct Cand {
+        id: Option<(u64, u128)>,
+        verdict: String,
+        key: Option<[u8; 32]>,
+    }
+
+    /// Part B on one candidate path: open it denying write and delete sharing, require a
+    /// regular file on local NTFS, read it whole through that handle (bounded), check it against
+    /// A (headers first, then the canonical hash), then against the loaded slot (its writable
+    /// sections recomputed to the loaded digest, its own slot equal). The key is the blake3 of
+    /// the bytes read through that handle. `step` gets "after-open opened" or "after-open
+    /// failed", then "after-hash".
+    fn check_path(p: &Path, a: &pe::Canon, ls: &LoadedSlot, step: &mut dyn FnMut(&str)) -> Cand {
+        let f = open_candidate(p);
+        step(if f.is_ok() {
+            "after-open opened"
+        } else {
+            "after-open failed"
+        });
+        let mut cand = Cand {
+            id: None,
+            verdict: String::new(),
+            key: None,
+        };
+        let r = (|| -> Result<(Option<[u8; 32]>, &'static str), String> {
+            let mut f = f.map_err(|e| format!("open: {e}"))?;
+            cand.id = file_id(&f).ok();
+            let m = f.metadata().map_err(|e| format!("stat: {e}"))?;
+            if !m.is_file() || m.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+                return Err("not a regular file".into());
+            }
+            if m.len() > 2 * u64::from(pe::MAX_IMAGE) {
+                return Err("file too large".into());
+            }
+            local_ntfs(&f)?;
+            let mut bytes = Vec::new();
+            f.read_to_end(&mut bytes)
+                .map_err(|e| format!("read: {e}"))?;
+            let v = pe::check_candidate(&bytes, a);
+            step("after-hash");
+            match v.map_err(|e| format!("part B: {e}"))? {
+                pe::Verdict::HeadersDiffer => return Ok((None, "refused (headers differ)")),
+                pe::Verdict::HashDiffers => {
+                    return Ok((None, "refused (canonical hash differs)"));
+                }
+                pe::Verdict::Accepted => {}
+            }
+            Ok(
+                match pe::check_slot(&bytes, ls.rva, &ls.bytes, &a.zeroed)
+                    .map_err(|e| format!("slot: {e}"))?
+                {
+                    pe::SlotVerdict::Matches => {
+                        (Some(*blake3::hash(&bytes).as_bytes()), "accepted")
+                    }
+                    pe::SlotVerdict::Unstamped => (None, "refused (unstamped: no data digest)"),
+                    pe::SlotVerdict::DataDiffers => (
+                        None,
+                        "refused (writable sections do not match the loaded digest)",
+                    ),
+                    pe::SlotVerdict::SlotDiffers => (None, "refused (its slot differs)"),
+                },
+            )
+        })();
+        match r {
+            Ok((k, v)) => {
+                cand.key = k;
+                cand.verdict = v.to_string();
+            }
+            Err(e) => cand.verdict = format!("refused ({e})"),
+        }
+        cand
     }
 
     /// The module's load-time file name (`GetModuleFileNameW`).
@@ -465,6 +582,15 @@ mod win {
                 a.sections,
                 a.reloc_sites
             ));
+            let ls = loaded_slot(base)?;
+            if ls.bytes[16..].iter().all(|&b| b == 0) {
+                // Still give the barriers the parent waits for.
+                for t in ["after-query", "after-open failed", "after-hash"] {
+                    barrier(t);
+                }
+                return Err("unstamped build: the loaded slot holds no data digest".into());
+            }
+            report.push(format!("slot {}", &hex(&ls.bytes[16..])[..16]));
             let mut cands: Vec<(&str, PathBuf)> = Vec::new();
             if let Some(n) = mapped_name(base) {
                 let mut p: Vec<u16> = OsStr::new(r"\\?\GLOBALROOT").encode_wide().collect();
@@ -479,7 +605,7 @@ mod win {
             let mut key = None;
             for (what, p) in &cands {
                 let mut step = |tag: &str| {
-                    let seen = if tag == "after-open" {
+                    let seen = if tag.starts_with("after-open") {
                         &mut opened
                     } else {
                         &mut hashed
@@ -489,19 +615,18 @@ mod win {
                         barrier(tag);
                     }
                 };
-                match check_path(p, &a, &mut step) {
-                    Ok((Some(k), v)) => {
-                        report.push(format!("{what}: {v}"));
-                        key = Some(k);
-                        break;
-                    }
-                    Ok((None, v)) => report.push(format!("{what}: {v}")),
-                    Err(e) => report.push(format!("{what}: refused ({e})")),
+                let c = check_path(p, &a, &ls, &mut step);
+                let id =
+                    c.id.map_or("not opened".to_string(), |(v, i)| format!("id {v:x}:{i:x}"));
+                report.push(format!("{what} ({id}): {}", c.verdict));
+                if let Some(k) = c.key {
+                    key = Some(k);
+                    break;
                 }
             }
             // The parent waits for every barrier: give the ones no candidate reached.
             if !opened {
-                barrier("after-open");
+                barrier("after-open failed");
             }
             if !hashed {
                 barrier("after-hash");
@@ -538,7 +663,7 @@ mod win {
         }
     }
 
-    /// Commands: `name`, `key`, `key-barriers`, `lock <path>`, `exit`.
+    /// Commands: `name`, `key`, `key-barriers`, `w9`, `lock <path>`, `exit`.
     pub(crate) fn child_loop() {
         reply("READY");
         loop {
@@ -549,6 +674,10 @@ mod win {
                     None => reply("NAME -"),
                 },
                 ("key", _) => reply(&key_line(image_key(&mut |_| {}))),
+                ("w9", _) => reply(&match w9_in_child() {
+                    Ok(n) => format!("PASS {n}"),
+                    Err(e) => format!("FAIL {e}"),
+                }),
                 ("key-barriers", _) => {
                     let r = image_key(&mut |tag| {
                         reply(&format!("BARRIER {tag}"));
@@ -686,17 +815,29 @@ mod win {
     }
 
     /// A copy of this executable at `exe`, its hash and its file id.
+    /// A **stamped** copy of this executable at `exe` (the W-items launch stamped copies: an
+    /// unstamped build gets no key), its hash (the true key) and its file id.
     fn copy_self(exe: &Path) -> Result<([u8; 32], (u64, u128)), String> {
+        let mut bytes =
+            std::fs::read(std::env::current_exe().ctx("current_exe")?).ctx("read self")?;
+        pe::stamp(&mut bytes, &magic()).map_err(|e| format!("stamp the copy: {e}"))?;
+        std::fs::write(exe, &bytes).ctx("write the stamped copy")?;
+        let h = blake3_of(&mut File::open(exe).ctx("open copy")?).ctx("hash copy")?;
+        Ok((h, file_id_at(exe).ctx("id of copy")?))
+    }
+
+    /// An unstamped copy (W11).
+    fn copy_unstamped(exe: &Path) -> Result<([u8; 32], (u64, u128)), String> {
         std::fs::copy(std::env::current_exe().ctx("current_exe")?, exe).ctx("copy self")?;
         let h = blake3_of(&mut File::open(exe).ctx("open copy")?).ctx("hash copy")?;
         Ok((h, file_id_at(exe).ctx("id of copy")?))
     }
 
-    /// A competing valid build: this executable with one `.text` byte changed (the middle of the
-    /// section; executable sections are never masked). It has the same headers, so part B
-    /// reaches the canonical comparison and must refuse it there.
-    fn rival_pe() -> Result<Vec<u8>, String> {
-        let mut f = std::fs::read(std::env::current_exe().ctx("current_exe")?).ctx("read self")?;
+    /// A competing valid build: the stamped copy at `src` with one `.text` byte changed (the
+    /// middle of the section; executable sections are never masked). Same headers and a valid
+    /// slot, so part B reaches the canonical comparison and must refuse it there.
+    fn rival_pe(src: &Path) -> Result<Vec<u8>, String> {
+        let mut f = std::fs::read(src).ctx("read the stamped copy")?;
         let h = pe::Headers::parse(&f)?;
         let s = h
             .sections
@@ -708,11 +849,29 @@ mod win {
         Ok(f)
     }
 
-    /// Both candidates reached the canonical comparison and were refused there.
-    fn both_refused_by_hash(reply: &str) -> bool {
-        ["mapped", "module-name"]
-            .iter()
-            .all(|c| reply.contains(&format!("{c}: refused (canonical hash differs)")))
+    /// Every candidate in a child's key reply, judged by identity first: one whose file id is
+    /// the original's (a surviving alias) may be accepted; any other must have opened and been
+    /// refused at the canonical comparison. `Err` names the first that was not.
+    fn candidates_ok(reply: &str, orig_id: (u64, u128)) -> Result<(), String> {
+        let orig = format!("id {:x}:{:x}", orig_id.0, orig_id.1);
+        for c in ["mapped", "module-name"] {
+            let Some(seg) = reply
+                .split("; ")
+                .map(str::trim)
+                .find(|s| s.starts_with(&format!("{c} (")))
+            else {
+                continue; // not a candidate in this run (e.g. a truncated name)
+            };
+            if seg.contains(&format!("({orig})")) {
+                continue;
+            }
+            if !seg.ends_with(": refused (canonical hash differs)") {
+                return Err(format!(
+                    "{seg}: a rival must be opened and refused at the canonical comparison"
+                ));
+            }
+        }
+        Ok(())
     }
 
     fn ends_with(name: &[u16], leaf: &str) -> bool {
@@ -918,12 +1077,19 @@ mod win {
         std::fs::create_dir(&dir).ctx("mkdir")?;
         let exe = dir.join("a.exe");
         let (orig, orig_id) = copy_self(&exe)?;
-        let rival = rival_pe()?;
+        let rival = rival_pe(&exe)?;
         // The POSIX control: the same rename helper must replace a target that is not running
-        // (verified by file id) before an image-side "moved nothing" can count as HELD.
+        // (verified by file id); every POSIX HELD path below requires it.
         let control = match how {
             Mutation::PosixRenameOver => Some(posix_control(s.path(), &rival)),
             _ => None,
+        };
+        let posix_held = |what: String| -> Result<String, String> {
+            match control.clone() {
+                Some(Ok(c)) => Ok(format!("HELD ({what}; {c})")),
+                Some(Err(c)) => Err(format!("{what}, but the control failed: {c}")),
+                None => Ok(format!("HELD ({what})")),
+            }
         };
         let mut k = Kid::spawn(&exe)?;
         k.send("key-barriers");
@@ -931,9 +1097,13 @@ mod win {
         let mut replaced = false;
         let result = loop {
             let r = k.recv();
-            let Some(tag) = r.strip_prefix("BARRIER ") else {
+            let Some(full) = r.strip_prefix("BARRIER ") else {
                 break r;
             };
+            // "after-open opened" / "after-open failed": the key's handle protects the file only
+            // after a successful open.
+            let (tag, open_state) = full.split_once(' ').unwrap_or((full, ""));
+            let handle_held = at == "after-hash" || (at == "after-open" && open_state == "opened");
             if tag == at {
                 did = Some(match mutate(how, &dir, &exe, n, &rival) {
                     Ok(()) => match file_id_at(&exe) {
@@ -948,15 +1118,13 @@ mod win {
                         // stayed where it was (nothing moved at all).
                         Ok(_) if matches!(how, Mutation::PosixRenameOver) => {
                             let other = dir.join(format!("other-{n}.exe"));
-                            match (control.clone().unwrap(), file_id_at(&other)) {
-                                (Ok(c), Ok(oid)) if oid != orig_id => Ok(format!(
-                                    "HELD (the OS kept the running image: the POSIX rename \
-                                     reported success and moved nothing; {c})"
-                                )),
-                                (Err(c), _) => Err(format!(
-                                    "the rename did not take, and the control failed: {c}"
-                                )),
-                                (_, r) => Err(format!(
+                            match file_id_at(&other) {
+                                Ok(oid) if oid != orig_id => posix_held(
+                                    "the OS kept the running image: the POSIX rename reported \
+                                     success and moved nothing"
+                                        .into(),
+                                ),
+                                r => Err(format!(
                                     "mutation did not take, and the other file is not where it \
                                      was ({r:?})"
                                 )),
@@ -974,12 +1142,12 @@ mod win {
                                 Some(ERROR_SHARING_VIOLATION | ERROR_ACCESS_DENIED)
                             ) =>
                     {
-                        Ok(format!("HELD (the OS protects the running image: {e})"))
+                        posix_held(format!("the OS protects the running image: {e}"))
                     }
-                    // Past the open, the key's own handle (no delete sharing) is what refuses:
-                    // the property the design relies on.
+                    // After a successful open, the key's own handle (no delete sharing) is what
+                    // refuses: the property the design relies on.
                     Err(e)
-                        if at != "after-query"
+                        if handle_held
                             && matches!(
                                 e.raw_os_error(),
                                 Some(ERROR_SHARING_VIOLATION | ERROR_ACCESS_DENIED)
@@ -994,12 +1162,10 @@ mod win {
         };
         let did = did.ok_or("the barrier never came")??;
         let (_, said) = judge(&result, &orig).map_err(|e| format!("{did}; {e}"))?;
-        // A replaced name must have been refused at the canonical comparison, by both candidates,
-        // when the replacement happened before either was opened.
-        if replaced && at == "after-query" && !both_refused_by_hash(&result) {
-            return Err(format!(
-                "{did}; {said}; not both candidates were refused at the canonical comparison"
-            ));
+        // When a name was replaced before any candidate was opened, every candidate that is not
+        // the original file (by identity) must be a rival refused at the canonical comparison.
+        if replaced && at == "after-query" {
+            candidates_ok(&result, orig_id).map_err(|e| format!("{did}; {said}; {e}"))?;
         }
         Ok(format!("{did}; {said}"))
     }
@@ -1084,19 +1250,14 @@ mod win {
                     format!("delete refused ({e}), renamed away")
                 }
             };
-            std::fs::write(&link, rival_pe()?).ctx("write a rival build at l.exe")?;
+            std::fs::write(&link, rival_pe(&exe)?).ctx("write a rival build at l.exe")?;
             if file_id_at(&link).ctx("id at l.exe")? == orig_id {
                 return Err("mutation did not take".into());
             }
             let n = k.name().unwrap_or_default();
             let reply = k.ask("key");
             let (_, after) = judge(&reply, &orig).map_err(|e| format!("{how}: {e}"))?;
-            if !both_refused_by_hash(&reply) {
-                return Err(format!(
-                    "{how}, replaced: {after}; not both candidates were refused at the canonical \
-                     comparison"
-                ));
-            }
+            candidates_ok(&reply, orig_id).map_err(|e| format!("{how}, replaced: {after}; {e}"))?;
             notes.push(format!(
                 "{how}, replaced by a rival build: {after}, name {}",
                 lossy(&n)
@@ -1162,35 +1323,61 @@ mod win {
     /// W2: the whole sequence in this process gives this image's key.
     pub(crate) fn w2_globalroot() -> Outcome {
         outcome((|| {
-            let want = blake3_of(
-                &mut File::open(std::env::current_exe().ctx("current_exe")?).ctx("open self")?,
-            )
-            .ctx("hash self")?;
-            match image_key(&mut |_| {}) {
-                (Ok(k), rep) if k == want => Ok(format!("key equals the file's hash [{rep}]")),
-                (Ok(_), rep) => Err(format!("key differs from the file's hash [{rep}]")),
-                (Err(e), rep) => Err(format!("{e} [{rep}]")),
+            let d = scratch()?;
+            let exe = d.path().join("a.exe");
+            let (orig, orig_id) = copy_self(&exe)?;
+            let mut k = Kid::spawn(&exe)?;
+            let r = k.ask("key");
+            match judge(&r, &orig)? {
+                (true, said) => {
+                    candidates_ok(&r, orig_id)?;
+                    Ok(said)
+                }
+                (false, said) => Err(format!("the unchanged stamped copy: {said}")),
             }
         })())
     }
 
-    /// W9: part B on altered copies of this executable, against part A of the running image:
-    /// the unaltered file is accepted; a changed byte in a read-only section (`.text`, `.rdata`)
-    /// is refused; a changed byte in `.data` is accepted, which is the stated scope (design note
-    /// section 3: initial mutable data is not covered).
+    /// W9 (the parent's half): run [`w9_in_child`] in a stamped copy.
     pub(crate) fn w9_altered_candidates() -> Outcome {
-        outcome((|| {
+        let run = || -> Result<String, String> {
+            let d = scratch()?;
+            let exe = d.path().join("a.exe");
+            copy_self(&exe)?;
+            let mut k = Kid::spawn(&exe)?;
+            Ok(k.ask("w9"))
+        };
+        match run() {
+            Ok(r) => match r.split_once(' ') {
+                Some(("PASS", n)) => Pass(n.to_string()),
+                Some(("FAIL", n)) => Fail(n.to_string()),
+                _ => Fail(format!("unexpected reply {r:?}")),
+            },
+            Err(e) => Fail(e),
+        }
+    }
+
+    /// W9, run inside a stamped copy: part B on altered copies of this executable, through the
+    /// full candidate path, against part A and the loaded slot of this running copy. The
+    /// unaltered file is accepted; a changed byte in `.text` or `.rdata` is refused at the
+    /// canonical hash; a candidate missing a section is refused at the headers; a changed byte
+    /// in `.data` is refused by the slot (its writable sections no longer match the loaded
+    /// digest).
+    fn w9_in_child() -> Result<String, String> {
+        {
             let base = module_base().ok_or("GetModuleHandleExW failed")?;
             let a = memory_canon(base).map_err(|e| format!("part A: {e}"))?;
+            let ls = loaded_slot(base)?;
             let file = std::fs::read(std::env::current_exe().ctx("current_exe")?).ctx("read")?;
             let h = pe::Headers::parse(&file)?;
             let d = scratch()?;
             // Every case goes through the full candidate path: a file, opened denying write and
-            // delete sharing, checked for local NTFS, read through that handle, checked against A.
-            let run = |name: &str, bytes: &[u8]| -> Result<&'static str, String> {
+            // delete sharing, checked for local NTFS, read through that handle, checked against A
+            // and the slot.
+            let run = |name: &str, bytes: &[u8]| -> Result<String, String> {
                 let p = d.path().join(format!("w9-{name}.exe"));
                 std::fs::write(&p, bytes).ctx("write candidate")?;
-                check_path(&p, &a, &mut |_| {}).map(|(_, v)| v)
+                Ok(check_path(&p, &a, &ls, &mut |_| {}).verdict)
             };
             // A byte inside section `name`, outside every range A zeroed (the IAT sits at the
             // start of .rdata on MSVC), searched outward from the middle.
@@ -1217,43 +1404,54 @@ mod win {
                 Ok(f)
             };
             let mut notes = Vec::new();
-            match run("unaltered", &file)? {
-                "accepted" => {
-                    notes.push(format!("unaltered: accepted (A {})", &hex(&a.hash)[..16]))
-                }
-                v => {
-                    return Err(format!(
-                        "the unaltered file is {v} (A zeroed {:?})",
-                        a.zeroed
-                    ));
-                }
+            let v = run("unaltered", &file)?;
+            if v != "accepted" {
+                return Err(format!(
+                    "the unaltered file is {v} (A zeroed {:?})",
+                    a.zeroed
+                ));
             }
+            notes.push(format!("unaltered: accepted (A {})", &hex(&a.hash)[..16]));
             for name in [".text", ".rdata"] {
-                match run(name, &flip(name)?)? {
-                    "refused (canonical hash differs)" => notes.push(format!(
-                        "{name} byte changed: refused at the canonical hash"
-                    )),
-                    v => return Err(format!("a changed {name} byte: {v}")),
+                let v = run(name, &flip(name)?)?;
+                if v != "refused (canonical hash differs)" {
+                    return Err(format!("a changed {name} byte: {v}"));
                 }
+                notes.push(format!(
+                    "{name} byte changed: refused at the canonical hash"
+                ));
             }
             // A candidate missing a section: the section table one entry shorter.
             let mut short = file.clone();
             let nsec_at = u32::from_le_bytes(file[0x3c..0x40].try_into().unwrap()) as usize + 6;
             let nsec = u16::from_le_bytes([file[nsec_at], file[nsec_at + 1]]);
             short[nsec_at..nsec_at + 2].copy_from_slice(&(nsec - 1).to_le_bytes());
-            match run("missing-section", &short) {
-                Ok("refused (headers differ)") => {
-                    notes.push("a section missing: refused at the headers".into())
-                }
-                Ok(v) => return Err(format!("a candidate missing a section: {v}")),
-                Err(e) => notes.push(format!("a section missing: refused ({e})")),
+            let v = run("missing-section", &short)?;
+            if v != "refused (headers differ)" {
+                return Err(format!("a candidate missing a section: {v}"));
             }
-            // Printed, not judged: W10 decides whether a .data-only difference is caught.
-            notes.push(format!(
-                ".data byte changed: {}",
-                run(".data", &flip(".data")?)?
-            ));
+            notes.push("a section missing: refused at the headers".into());
+            let v = run(".data", &flip(".data")?)?;
+            if v != "refused (writable sections do not match the loaded digest)" {
+                return Err(format!("a changed .data byte: {v}"));
+            }
+            notes.push(".data byte changed: refused by the slot".into());
             Ok(notes.join(" | "))
+        }
+    }
+
+    /// W11: an unstamped copy gives no key (and says why).
+    pub(crate) fn w11_unstamped() -> Outcome {
+        outcome((|| {
+            let d = scratch()?;
+            let exe = d.path().join("a.exe");
+            let (orig, _) = copy_unstamped(&exe)?;
+            let mut k = Kid::spawn(&exe)?;
+            let r = k.ask("key");
+            match judge(&r, &orig)? {
+                (false, said) if said.contains("unstamped") => Ok(said),
+                (_, said) => Err(format!("an unstamped copy: {said}")),
+            }
         })())
     }
 
@@ -1784,6 +1982,7 @@ mod win {
             ("W1 8.3 short name", w1_short_name),
             ("W2 key of the unchanged image", w2_globalroot),
             ("W9 part B on altered copies", w9_altered_candidates),
+            ("W11 an unstamped copy gives no key", w11_unstamped),
             ("W3 running image refuses write", w3_write_refused),
             ("W4 conflicting access handle", w4_conflicting_access),
             ("W5 std::fs::File locks", w5_locks),
@@ -1879,6 +2078,10 @@ mod win {
         #[test]
         fn w9() {
             check(w9_altered_candidates());
+        }
+        #[test]
+        fn w11() {
+            check(w11_unstamped());
         }
         #[test]
         fn w3() {

@@ -1,7 +1,8 @@
-# TLS-117 W10 (design note docs/superpowers/notes/2026-11-21-tls117-windows-image-key.md,
-# section 8): does the shipped build profile make a .data-only difference visible to the
-# canonical hash (through the TimeDateStamp / debug directory), and do two links of the same
-# source never canonicalise equal while their writable sections differ?
+# TLS-117 W10, a diagnostic (design note docs/superpowers/notes/2026-11-21-tls117-windows-image-key.md,
+# section 8): with the data-digest slot mandatory, it shows that stamped slots differ exactly
+# when writable sections differ, reports whether the shipped profile also makes a .data-only
+# difference visible to the canonical hash (TimeDateStamp / debug directory), and checks that
+# two links of the same source never canonicalise equal while their writable sections differ.
 #
 # Run from the repository root, in PowerShell, with TREE_SITTER_AL_PATH set:
 #   powershell -ExecutionPolicy Bypass -File examples\tls117_w10.ps1
@@ -29,9 +30,21 @@ Copy-Item $exe (Join-Path $out 'base.exe') -Force
 Build @('--features', 'w10-variant')
 Copy-Item $exe (Join-Path $out 'variant.exe') -Force
 # 3. The base source again, relinked: touching the probe's source forces a rebuild and link.
+$before = Get-Item $exe
+$beforeTime = $before.LastWriteTimeUtc
+$beforeHash = (Get-FileHash $exe -Algorithm SHA256).Hash
+Start-Sleep -Seconds 2
 (Get-Item 'examples\tls117_probe.rs').LastWriteTime = Get-Date
 Build @()
 Copy-Item $exe (Join-Path $out 'relink.exe') -Force
+# The linker must have run: the output's modification time moved. Its hash is reported; an
+# unchanged hash with a moved time means the link is reproducible.
+$afterTime = (Get-Item $exe).LastWriteTimeUtc
+$afterHash = (Get-FileHash $exe -Algorithm SHA256).Hash
+$linked = $afterTime -gt $beforeTime
+Write-Output ("W10 relink: linker ran: {0} (mtime {1:o} -> {2:o}); output hash changed: {3}" -f `
+    $linked, $beforeTime, $afterTime, ($afterHash -ne $beforeHash))
+if (-not $linked) { Write-Output 'FAIL W10 relink: the touch did not relink the probe'; exit 1 }
 
 $probe = Join-Path $out 'base.exe'
 & $probe w10-compare variant (Join-Path $out 'base.exe') (Join-Path $out 'variant.exe')

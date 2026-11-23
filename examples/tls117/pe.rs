@@ -136,6 +136,8 @@ impl Section {
 pub struct Headers {
     /// Offset of `OptionalHeader.ImageBase` (zeroed before hashing and comparing).
     image_base_at: usize,
+    /// Offset of `OptionalHeader.CheckSum`.
+    checksum_at: usize,
     pub image_base: u64,
     pub time_date_stamp: u32,
     pub size_of_image: u32,
@@ -225,6 +227,7 @@ impl Headers {
             .collect::<Result<Vec<_>, String>>()?;
         Ok(Headers {
             image_base_at: opt + 24,
+            checksum_at: opt + 64,
             image_base: u64_at(b, opt + 24)?,
             time_date_stamp,
             size_of_image,
@@ -326,7 +329,11 @@ pub fn loader_written(v: &dyn View, h: &Headers, base: u64) -> Result<Vec<(u32, 
             .filter(|&r| r < h.size_of_image)
             .ok_or_else(|| format!("address {va:#x} outside the image"))
     };
+    // Every metadata range a mask is derived from: it must be in hashed bytes, and (checked at
+    // the end, once every mask is known) no mask may zero any of it.
+    let meta: std::cell::RefCell<Vec<(u32, u64, String)>> = Default::default();
     let hashed = |rva: u32, len: u64, what: &str| -> Result<(), String> {
+        meta.borrow_mut().push((rva, len, what.to_string()));
         if h.in_hashed(rva, len) {
             Ok(())
         } else {
@@ -506,14 +513,41 @@ pub fn loader_written(v: &dyn View, h: &Headers, base: u64) -> Result<Vec<(u32, 
             ));
         }
     }
+    // "In a hashed section" is not "hashed": metadata a mask zeroes would be unseen.
+    for (rva, len, what) in meta.into_inner() {
+        if let Some(&(r, l)) = masked_overlap(rva, len, &z) {
+            return Err(format!(
+                "a loader-written range {r:#x}+{l:#x} overlaps {what} at {rva:#x}"
+            ));
+        }
+    }
     Ok(z)
+}
+
+/// The first mask in `z` that overlaps `[rva, rva + len)`.
+pub fn masked_overlap(rva: u32, len: u64, z: &[(u32, u32)]) -> Option<&(u32, u32)> {
+    let (a, b) = (u64::from(rva), u64::from(rva) + len);
+    z.iter()
+        .find(|&&(r, l)| a < u64::from(r) + u64::from(l) && u64::from(r) < b)
 }
 
 /// The canonical hash of the image `v` (whose header block is `hdr`), relative to `base`.
 fn canonical_with(v: &dyn View, hdr: Vec<u8>, base: u64) -> Result<Canon, String> {
     let h = Headers::parse(&hdr)?;
+    if let Some(s) = h.sections.iter().find(|s| s.writable() && s.executable()) {
+        return Err(format!(
+            "section {:?} is writable and executable",
+            String::from_utf8_lossy(&s.name)
+        ));
+    }
     let sites = reloc_sites(v, &h)?;
     let zeroed = loader_written(v, &h, base)?;
+    let (rr, rl) = h.dir(5);
+    if rl != 0
+        && (!h.in_hashed(rr, u64::from(rl)) || masked_overlap(rr, u64::from(rl), &zeroed).is_some())
+    {
+        return Err("the relocation table is not in hashed, unmasked bytes".into());
+    }
     let mut hb = hdr;
     hb[h.image_base_at..h.image_base_at + 8].fill(0);
     let mut hasher = blake3::Hasher::new();
@@ -600,6 +634,185 @@ pub fn check_candidate(file: &[u8], a: &Canon) -> Result<Verdict, String> {
         Verdict::Accepted
     } else {
         Verdict::HashDiffers
+    })
+}
+
+// ---------------------------------------------------------------------------------------------
+// The data-digest slot (design note section 3, rev 6). The product and the probe share this code:
+// `examples/tls117_stamp.rs` writes the slot, the probe stamps its copies with it, and the key
+// checks it. The magic is never a literal here: the caller passes it (the probe reads it from its
+// own slot), so stamped binaries carry it exactly once.
+// ---------------------------------------------------------------------------------------------
+
+/// The slot: a 16-byte magic, then the 32-byte data digest (zero until stamped).
+pub const SLOT_LEN: usize = 48;
+
+/// The data digest: blake3 over a domain tag and, for every writable section in table order,
+/// its name, virtual address, virtual size, raw size and raw bytes (lengths as u32 LE).
+pub fn data_digest(file: &[u8]) -> Result<[u8; 32], String> {
+    let h = Headers::parse(file)?;
+    let mut d = blake3::Hasher::new();
+    d.update(b"tls117-data-digest-1");
+    for s in h.sections.iter().filter(|s| s.writable()) {
+        let start = s.raw_ptr as usize;
+        let end = start
+            .checked_add(s.raw_size as usize)
+            .ok_or("section overflows")?;
+        let raw = file
+            .get(start..end)
+            .ok_or("writable section past the file")?;
+        d.update(&s.name);
+        d.update(&s.va.to_le_bytes());
+        d.update(&s.vsize.to_le_bytes());
+        d.update(&s.raw_size.to_le_bytes());
+        d.update(raw);
+    }
+    Ok(*d.finalize().as_bytes())
+}
+
+/// The file offset of `magic`, which must occur exactly once.
+pub fn find_unique(file: &[u8], magic: &[u8; 16]) -> Result<usize, String> {
+    let mut hits = file
+        .windows(16)
+        .enumerate()
+        .filter(|(_, w)| *w == magic)
+        .map(|(i, _)| i);
+    let first = hits.next().ok_or("no slot magic in the file")?;
+    if hits.next().is_some() {
+        return Err("the slot magic occurs more than once".into());
+    }
+    Ok(first)
+}
+
+/// The section and RVA holding file offset range `[off, off + len)`, which must lie in one
+/// section's raw data.
+fn locate(h: &Headers, off: usize, len: usize) -> Result<(&Section, u32), String> {
+    let s = h
+        .sections
+        .iter()
+        .find(|s| {
+            off >= s.raw_ptr as usize
+                && off + len <= s.raw_ptr as usize + s.raw_size.min(s.mapped_len()) as usize
+        })
+        .ok_or("the slot is not inside a section's mapped raw data")?;
+    Ok((s, s.va + (off - s.raw_ptr as usize) as u32))
+}
+
+/// The PE checksum (the algorithm of `CheckSumMappedFile`): 16-bit one's-complement-style sum of
+/// the file with the CheckSum field taken as zero, folded, plus the file length.
+pub fn pe_checksum(file: &[u8]) -> Result<u32, String> {
+    let at = Headers::parse(file)?.checksum_at;
+    let mut sum: u64 = 0;
+    for (i, c) in file.chunks(2).enumerate() {
+        let o = 2 * i;
+        if o == at || o == at + 2 {
+            continue;
+        }
+        let w = u64::from(c[0]) | (u64::from(*c.get(1).unwrap_or(&0)) << 8);
+        sum += w;
+        sum = (sum & 0xffff) + (sum >> 16);
+    }
+    sum = (sum & 0xffff) + (sum >> 16);
+    Ok((sum as u32).wrapping_add(file.len() as u32))
+}
+
+/// What [`stamp`] did.
+#[derive(Debug)]
+pub struct Stamped {
+    pub slot_offset: usize,
+    pub slot_rva: u32,
+    pub digest: [u8; 32],
+    /// `Some((old, new))` when the file carried a PE checksum (non-zero), recomputed; `None` when
+    /// it was 0 (not used: Windows checks it only for drivers and boot images).
+    pub checksum: Option<(u32, u32)>,
+}
+
+/// Stamp `file`: find the slot by `magic` (exactly once, in a non-writable, non-executable
+/// section), write the data digest into it, fix a non-zero PE checksum, and check that nothing
+/// but the 32 digest bytes and the checksum field changed.
+pub fn stamp(file: &mut [u8], magic: &[u8; 16]) -> Result<Stamped, String> {
+    let before = file.to_vec();
+    let h = Headers::parse(file)?;
+    let off = find_unique(file, magic)?;
+    let (s, rva) = locate(&h, off, SLOT_LEN)?;
+    if s.writable() || s.executable() {
+        return Err("the slot is not in a read-only data section".into());
+    }
+    let digest = data_digest(file)?;
+    file[off + 16..off + SLOT_LEN].copy_from_slice(&digest);
+    let at = h.checksum_at;
+    let old = u32_at(file, at)?;
+    let checksum = if old != 0 {
+        let new = pe_checksum(file)?;
+        file[at..at + 4].copy_from_slice(&new.to_le_bytes());
+        Some((old, new))
+    } else {
+        None
+    };
+    let changed = before
+        .iter()
+        .zip(file.iter())
+        .enumerate()
+        .filter(|(_, (a, b))| a != b)
+        .map(|(i, _)| i)
+        .find(|&i| !((off + 16..off + SLOT_LEN).contains(&i) || (at..at + 4).contains(&i)));
+    if let Some(i) = changed {
+        return Err(format!(
+            "stamping changed byte {i:#x} outside the slot and checksum"
+        ));
+    }
+    if data_digest(file)? != digest {
+        return Err("stamping changed a writable section".into());
+    }
+    Ok(Stamped {
+        slot_offset: off,
+        slot_rva: rva,
+        digest,
+        checksum,
+    })
+}
+
+/// The slot check at key time.
+#[derive(Debug, PartialEq, Eq)]
+pub enum SlotVerdict {
+    Matches,
+    /// The loaded slot's digest is all zero: an unstamped build.
+    Unstamped,
+    /// The candidate's writable sections do not hash to the loaded digest.
+    DataDiffers,
+    /// The candidate's own slot differs from the loaded one.
+    SlotDiffers,
+}
+
+/// Check candidate `file` against the running module's slot (`loaded`, read from memory at
+/// `slot_rva`, with the module's masks `zeroed`). The slot must lie in a non-writable section and
+/// outside every mask, so part A's hash covers it.
+pub fn check_slot(
+    file: &[u8],
+    slot_rva: u32,
+    loaded: &[u8; SLOT_LEN],
+    zeroed: &[(u32, u32)],
+) -> Result<SlotVerdict, String> {
+    let h = Headers::parse(file)?;
+    let in_ro = h.sections.iter().any(|s| {
+        !s.writable() && slot_rva >= s.va && u64::from(slot_rva) + SLOT_LEN as u64 <= s.end()
+    });
+    if !in_ro || masked_overlap(slot_rva, SLOT_LEN as u64, zeroed).is_some() {
+        return Err("the slot is not in hashed, unmasked bytes".into());
+    }
+    if loaded[16..].iter().all(|&b| b == 0) {
+        return Ok(SlotVerdict::Unstamped);
+    }
+    if data_digest(file)? != loaded[16..] {
+        return Ok(SlotVerdict::DataDiffers);
+    }
+    let own = FileView::new(file)?
+        .read(slot_rva, SLOT_LEN)
+        .ok_or("the candidate's slot cannot be read")?;
+    Ok(if own == loaded[..] {
+        SlotVerdict::Matches
+    } else {
+        SlotVerdict::SlotDiffers
     })
 }
 
@@ -725,7 +938,7 @@ mod tests {
         // Read off `objdump -p` once (2026-11-23), not from the code under test.
         assert_eq!(
             reloc_sites(&fv, &h).unwrap(),
-            vec![0x3010, 0x3018, 0x3020, 0x3028, 0x3030]
+            vec![0x3040, 0x3048, 0x3050, 0x3058, 0x3060]
         );
         assert_eq!(h.dir(12), (0x6038, 0x10), "the IAT");
         let c = canonical_file(FIXTURE).unwrap();
@@ -845,6 +1058,95 @@ mod tests {
         assert!(canonical_file(&FIXTURE[..0x80]).is_err());
         // Cut inside .rdata's raw data (file offset 0x800).
         assert!(canonical_file(&FIXTURE[..0x810]).is_err());
+    }
+
+    const MAGIC: &[u8; 16] = b"TLS117-DATA-SLOT";
+    const BASE: u64 = 0x7ff6_1234_0000;
+
+    /// The slot as part A reads it from a simulated load of `file` at [`BASE`].
+    fn loaded_slot(file: &[u8], slot_rva: u32) -> ([u8; SLOT_LEN], Canon) {
+        let img = load(file, BASE);
+        let a = canonical(&SliceView(&img), BASE).unwrap();
+        let s = slot_rva as usize;
+        (img[s..s + SLOT_LEN].try_into().unwrap(), a)
+    }
+
+    #[test]
+    fn a_stamped_file_verifies() {
+        let mut f = FIXTURE.to_vec();
+        let st = stamp(&mut f, MAGIC).unwrap();
+        // Read off the fixture once (2026-11-23): the slot is the start of .rdata.
+        assert_eq!((st.slot_offset, st.slot_rva), (0x800, 0x3000));
+        assert_ne!(st.digest, [0; 32]);
+        let (slot, a) = loaded_slot(&f, st.slot_rva);
+        assert_eq!(check_candidate(&f, &a), Ok(Verdict::Accepted));
+        assert_eq!(
+            check_slot(&f, st.slot_rva, &slot, &a.zeroed),
+            Ok(SlotVerdict::Matches)
+        );
+        // The stamp changed .rdata and the checksum, so the unstamped file no longer matches
+        // part A (here at the headers, through the checksum field).
+        assert_eq!(check_candidate(FIXTURE, &a), Ok(Verdict::HeadersDiffer));
+    }
+
+    #[test]
+    fn a_data_change_after_stamping_fails_the_slot() {
+        let mut f = FIXTURE.to_vec();
+        let st = stamp(&mut f, MAGIC).unwrap();
+        let (slot, a) = loaded_slot(&f, st.slot_rva);
+        let data = section(&Headers::parse(&f).unwrap(), ".data").raw_ptr as usize;
+        f[data] ^= 1;
+        // The canonical hash cannot see it; the slot does.
+        assert_eq!(check_candidate(&f, &a), Ok(Verdict::Accepted));
+        assert_eq!(
+            check_slot(&f, st.slot_rva, &slot, &a.zeroed),
+            Ok(SlotVerdict::DataDiffers)
+        );
+    }
+
+    #[test]
+    fn an_unstamped_build_gives_no_key() {
+        let (slot, a) = loaded_slot(FIXTURE, 0x3000);
+        assert_eq!(&slot[..16], MAGIC, "precondition: the slot is at 0x3000");
+        assert_eq!(
+            check_slot(FIXTURE, 0x3000, &slot, &a.zeroed),
+            Ok(SlotVerdict::Unstamped)
+        );
+    }
+
+    #[test]
+    fn stamping_refuses_a_missing_or_repeated_magic() {
+        let mut f = FIXTURE.to_vec();
+        assert!(stamp(&mut f, b"NOT-IN-THE-FILE!").is_err());
+        let mut g = FIXTURE.to_vec();
+        g[0x900..0x910].copy_from_slice(MAGIC); // a second copy, in .rdata padding
+        assert!(stamp(&mut g, MAGIC).unwrap_err().contains("more than once"));
+    }
+
+    /// The independent check of the checksum code: on the unstamped fixture it reproduces the
+    /// value the linker wrote (0xe3a3, read off `objdump -p`).
+    #[test]
+    fn pe_checksum_matches_the_linker() {
+        assert_eq!(pe_checksum(FIXTURE).unwrap(), 0xe3a3);
+        let mut f = FIXTURE.to_vec();
+        let st = stamp(&mut f, MAGIC).unwrap();
+        let (old, new) = st.checksum.unwrap();
+        assert_eq!(old, 0xe3a3);
+        assert_eq!(pe_checksum(&f).unwrap(), new);
+    }
+
+    /// A mask over mask-deriving metadata refuses: here the IAT directory is widened to cover
+    /// the import descriptors.
+    #[test]
+    fn a_mask_over_import_metadata_refuses() {
+        let h = Headers::parse(FIXTURE).unwrap();
+        let (imp, _) = h.dir(1);
+        let mut f = FIXTURE.to_vec();
+        let iat_dir = h.image_base_at - 24 + 112 + 8 * 12;
+        f[iat_dir..iat_dir + 4].copy_from_slice(&imp.to_le_bytes());
+        f[iat_dir + 4..iat_dir + 8].copy_from_slice(&0x48u32.to_le_bytes());
+        let err = canonical_file(&f).unwrap_err();
+        assert!(err.contains("overlaps import descriptor"), "{err}");
     }
 
     #[test]
