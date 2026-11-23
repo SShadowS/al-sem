@@ -270,15 +270,21 @@ pub fn kept_bind_points<'a>(r: &'a ModelRoutine, classes: &AliasClasses) -> Vec<
     bind_sites(r)
         .into_iter()
         .filter_map(|s| {
-            let key = scope.text(s.receiver)?.key;
+            let h = scope.text(s.receiver)?;
             let at = (s.anchor.start_line, s.anchor.start_column);
-            classes.rebinds_at(key, at).then_some(UserCodePoint {
+            let runs = (s.anchor.end_line, s.anchor.end_column);
+            // Retainable when the bind RUNS, after its own arguments (`L.Get(JoinId(L, R))`:
+            // Fable r1 on ENG-189). An array element may be any handle the array was given
+            // (`Join(Slot[1], R)`): the classes hold no array slots, so it always counts.
+            (h.indexed || classes.rebinds_at(h.key, runs)).then_some(UserCodePoint {
                 id: s.id,
                 at,
-                runs: (s.anchor.end_line, s.anchor.end_column),
-                // Its own class is the bind's (`ShadowAliasFlow`: `R.GetTable(E)` with R copied
-                // into a global later binds R to E, not to anything).
-                except: Some(key),
+                runs,
+                // The receiver itself is the bind's (`ShadowAliasFlow`: `R.GetTable(E)` with R
+                // copied into a global later binds R to E, not to anything). Not its whole class:
+                // the in-place rule may leave a member out (an alias made only in the other
+                // branch, Fable r1), so the other members are rebound like any kept holder.
+                except: (!h.indexed).then_some(h.key),
             })
         })
         .collect()
@@ -293,20 +299,21 @@ pub struct UserCodePoint<'a> {
     pub at: (u32, u32),
     /// Where it ends: when its user code runs.
     pub runs: (u32, u32),
-    /// A kept bind's own receiver ([`kept_bind_points`]): its alias class is bound to the bind's
-    /// table by the reader's in-place rule, so the point rebinds only the OTHER retainable
-    /// holders. `None` for a place that may run user code.
+    /// A kept bind's own receiver ([`kept_bind_points`]): the reader's in-place rule binds it to
+    /// the bind's table, so the point rebinds every OTHER retainable holder, the rest of its
+    /// alias class included. `None` for a place that may run user code, and for an array
+    /// element receiver (its slot is not a holder the classes know).
     pub except: Option<HolderKey>,
 }
 
 impl UserCodePoint<'_> {
     /// The holders this point may rebind: those `classes` says are retainable when it runs,
-    /// leaving out its own receiver's class ([`Self::except`]).
+    /// leaving out its own receiver ([`Self::except`]).
     pub fn rebinds<'c>(&self, classes: &'c AliasClasses) -> impl Iterator<Item = HolderKey> + 'c {
-        let own: Vec<HolderKey> = self.except.map(|k| classes.members(k)).unwrap_or_default();
+        let own = self.except;
         classes
             .rebound_at(self.runs)
-            .filter(move |h| !own.contains(h))
+            .filter(move |h| Some(*h) != own)
     }
 }
 

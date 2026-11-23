@@ -286,10 +286,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   measured on master).
 - **The fix.** An in-place bind through a holder RETAINABLE at that point
   (`recref_alias::kept_bind_points`) counts as a place that may rebind every OTHER retainable
-  holder (its own alias class is bound to the bind's table, as before), in the RecordRef flow's
-  facts and in G36 (`field_guard`). G34 (`exit_guards`) needs nothing: an exit guard's holder is
-  passed to no call before the guard, so only an external holder (already in its class) can share
-  it, and binds after the guard do not move the exit.
+  holder, the rest of its alias class included (only the receiver itself is bound to the bind's
+  table, as before), in the RecordRef flow's facts and in G36 (`field_guard`). Retainability is
+  read where the bind RUNS, after its own arguments (`L.Get(JoinId(L, R))`), and an array element
+  receiver always counts (the classes hold no array slots: `Join(Slot[1], R);
+  Slot[1].GetTable(D)`). G34 (`exit_guards`) takes no kept binds: a holder joined to the guard's
+  by a call is bound before the guard by that call. A `foreach` element of a holder list shares
+  the guard's record with no call (BC 28.4) and still answers `no` there and in G36; holder
+  containers are ENG-161's, and its task carries the two repros.
 - **Measured on BC 28.4 first** (`/work/.al-sem/engine-notes/eng189-probe/RESULTS.md`):
   `FieldRef.Record()` and `KeyRef.Record()` are COPIES (rebinding them leaves `R` alone), so
   `F := R.Field(1); L := F.Record(); L.GetTable(D)` correctly answers `no` and is not modelled. A
@@ -298,10 +302,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **CDO (pinned `bc3ccb18`, c6f61f04 against the head):** no finding or fingerprint moved at either
   scope; unknown edges 0 -> 0. cdo-speed PASS: instructions build x0.9989, round total x0.9979.
 - **Tests and red proofs.** `cli_recref_inplace_kept` (new): the three shapes `yes`, with
-  controls (`RootControlNo`, `RootBindFirst`, `RootFieldRecord` `no`, `RootControlYes` `yes`) and a
-  G36 pair. The flow's facts without the kept binds fail `RootSame`; G36 without them fails
-  `FieldAfterBind`; a kept bind rebinding its own receiver too fails `cli_recref_get`'s
-  `ShadowAliasFlow`.
+  the branch-alias, array-slot, bind-argument and `Get` rows `yes`, controls (`RootControlNo`,
+  `RootBindFirst`, `RootFieldRecord`, `RootReceiverNotKept` `no`, `RootControlYes` `yes`) and a
+  G36 pair (`FieldAfterBind`: a bind to `PA Entry`, which has no field 2). The flow's facts
+  without the kept binds fail `RootSame`; G36 without them fails `FieldAfterBind`; a kept bind
+  rebinding its own receiver too fails `cli_recref_get`'s `ShadowAliasFlow`; leaving out the
+  receiver's whole class fails `RootExceptExclusive`; an array element not always counting fails
+  `RootSlot`; retainability at the bind's start fails `RootJoinInArgs`; no receiver check fails
+  `RootReceiverNotKept`.
 - **Goldens.** None moved.
 
 ### Fixed (ENG-178: table procedures named like record built-ins: four follow-ups from ENG-173)

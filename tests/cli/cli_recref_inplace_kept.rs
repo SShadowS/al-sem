@@ -117,19 +117,91 @@ codeunit 50010 "PA"
         Guarded(R);
     end;
 
+    // The only alias the classes see (`A := R`) is in the other branch, so the in-place rule
+    // leaves R out; the bind through A (joined to R by `Join`) still rebinds R (Fable r1, F1).
+    procedure RootExceptExclusive(C: Boolean)
+    var
+        R: RecordRef;
+        A: RecordRef;
+        E: Record "PA Entry";
+        D: Record "PA Doc";
+    begin
+        R.GetTable(E);
+        Join(A, R);
+        if C then
+            A := R
+        else
+            A.GetTable(D);
+        Guarded(R);
+    end;
+
+    // An array element joined to R by a call: the classes hold no array slots (F2).
+    procedure RootSlot()
+    var
+        R: RecordRef;
+        Slot: array[2] of RecordRef;
+        E: Record "PA Entry";
+        D: Record "PA Doc";
+    begin
+        R.GetTable(E);
+        Join(Slot[1], R);
+        Slot[1].GetTable(D);
+        Guarded(R);
+    end;
+
+    // The receiver joined inside the bind's own arguments (F4).
+    procedure RootJoinInArgs()
+    var
+        R: RecordRef;
+        L: RecordRef;
+        E: Record "PA Entry";
+    begin
+        R.GetTable(E);
+        L.Get(JoinId(L, R));
+        Guarded(R);
+    end;
+
+    // A `Get` bind (a record operation, not a call site).
+    procedure RootGet(Id: RecordId)
+    var
+        R: RecordRef;
+        L: RecordRef;
+        E: Record "PA Entry";
+    begin
+        R.GetTable(E);
+        L := Same(R);
+        L.Get(Id);
+        Guarded(R);
+    end;
+
+    // Control: R is retainable at the bind, L never is, so binding L moves nothing.
+    procedure RootReceiverNotKept()
+    var
+        R: RecordRef;
+        L: RecordRef;
+        E: Record "PA Entry";
+        D: Record "PA Doc";
+    begin
+        R.GetTable(E);
+        Nop(R);
+        L.GetTable(D);
+        Guarded(R);
+    end;
+
     // G36: the write behind `FieldExist(2)` reaches only a table with field 2, unless the
-    // record is rebound after the guard through an alias (`L` shares it since `Same(R)`).
+    // record is rebound after the guard through an alias (`L` shares it since `Same(R)`);
+    // PA Entry has no field 2.
     procedure FieldAfterBind(TableNo: Integer)
     var
         R: RecordRef;
         L: RecordRef;
-        D: Record "PA Doc";
+        E: Record "PA Entry";
     begin
         R.Open(TableNo);
         L := Same(R);
         if not R.FieldExist(2) then
             exit;
-        L.GetTable(D);
+        L.GetTable(E);
         R.Modify();
     end;
 
@@ -158,6 +230,16 @@ codeunit 50010 "PA"
     local procedure Same(X: RecordRef): RecordRef
     begin
         exit(X);
+    end;
+
+    local procedure JoinId(var A: RecordRef; B: RecordRef): RecordId
+    begin
+        A := B;
+        exit(B.RecordId);
+    end;
+
+    local procedure Nop(X: RecordRef)
+    begin
     end;
 
     local procedure Guarded(var R: RecordRef)
@@ -191,6 +273,10 @@ fn alsem(cwd: &Path, args: &[&str]) -> serde_json::Value {
 /// `RootJoin` and `RootJoinVar` (`no` again); G36 (`field_guard`) without them fails
 /// `FieldAfterBind` (`no`). Each restored, passes. A kept bind rebinding its own receiver's class
 /// too (no `UserCodePoint::except`) fails `cli_recref_get`'s `ShadowAliasFlow`.
+/// Fable r1 rows (2026-11-23, each break then restored, green): `rebinds` leaving out the
+/// receiver's whole class fails `RootExceptExclusive`; an array element not always counting fails
+/// `RootSlot`; retainability read at the bind's start fails `RootJoinInArgs`; no retainability
+/// check on the receiver at all fails `RootReceiverNotKept` (`yes`).
 #[test]
 fn an_in_place_bind_through_a_kept_holder_rebinds_every_kept_holder() {
     let t = tempfile::tempdir().unwrap();
@@ -206,7 +292,7 @@ fn an_in_place_bind_through_a_kept_holder_rebinds_every_kept_holder() {
         t.path(),
         &["fingerprint", "ws", "--inventory-only", "--format", "json"],
     );
-    let answer = |name: &str| -> String {
+    let answer_for = |name: &str, query: &str| -> String {
         let id = inv["payload"]["routineInventory"]
             .as_array()
             .unwrap()
@@ -219,19 +305,30 @@ fn an_in_place_bind_through_a_kept_holder_rebinds_every_kept_holder() {
             .to_string();
         alsem(
             t.path(),
-            &["prove", "ws", &id, "writes-table:PA Log", "--deterministic"],
+            &["prove", "ws", &id, query, "--deterministic"],
         )["payload"]["result"]["answer"]
             .as_str()
             .unwrap()
             .to_string()
     };
+    let answer = |name: &str| answer_for(name, "writes-table:PA Log");
     assert_eq!(answer("RootControlNo"), "no", "precondition");
     assert_eq!(answer("RootControlYes"), "yes", "precondition");
     assert_eq!(answer("RootBindFirst"), "no", "control");
     assert_eq!(answer("RootFieldRecord"), "no", "control (BC: a copy)");
-    for root in ["RootSame", "RootJoin", "RootJoinVar"] {
+    assert_eq!(answer("RootReceiverNotKept"), "no", "control");
+    for root in [
+        "RootSame",
+        "RootJoin",
+        "RootJoinVar",
+        "RootExceptExclusive",
+        "RootSlot",
+        "RootJoinInArgs",
+        "RootGet",
+    ] {
         assert_eq!(answer(root), "yes", "{root}");
     }
-    assert_eq!(answer("FieldNoBind"), "no", "precondition");
-    assert_ne!(answer("FieldAfterBind"), "no");
+    let entry = |name: &str| answer_for(name, "writes-table:PA Entry");
+    assert_eq!(entry("FieldNoBind"), "no", "precondition");
+    assert_ne!(entry("FieldAfterBind"), "no");
 }

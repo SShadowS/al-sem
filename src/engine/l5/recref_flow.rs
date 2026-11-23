@@ -2247,9 +2247,10 @@ pub(crate) fn exit_guards(
     // holders (a record kept elsewhere may be rebound by a place that may run user code;
     // `RetainedNumber`: `Store.Rebind(); if A.Number <> …`).
     let kept = crate::program::model::recref_alias::AliasClasses::for_routine(r, shadowed);
-    // ENG-189 needs nothing here: an exit guard's holder is passed on before it by no call
-    // (`bound_before` below), so only an EXTERNAL holder (joined into its class) can share its
-    // record, and binds after the guard do not move the exit.
+    // ENG-189's kept binds are not added here: a holder joined to the guard's by a call is bound
+    // before the guard by that call (`bound_before` below). A `foreach` element of a holder list
+    // shares the guard's record without any call (BC 28.4); holder containers are ENG-161's
+    // (Fable r1 on ENG-189: `foreach L in Refs do L.GetTable(D)` before the guard).
     let user_code = match kept_elsewhere {
         KeptElsewhere::AnyExternal => {
             crate::program::model::recref_alias::user_code_points(r, shadowed)
