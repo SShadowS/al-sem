@@ -2297,6 +2297,33 @@ impl<'a> Converter<'a> {
         ce: &ClassifiedEdge,
         c: &mut SiteCensus,
     ) -> Option<(Vec<CallEdge>, Vec<UpgradedBinding>)> {
+        // ENG-173: where the platform operation may run instead (both can take the call; alc's
+        // ranking is not modelled), the call to the table's procedure may not run: `Maybe`, never
+        // `Resolved` (sol r2: `Find('-')` runs the platform on BC over a user `Find(Text)`).
+        let both = ce.edge.kind == EdgeKind::ImplicitTrigger
+            && self
+                .site_facts
+                .get(&ce.obligation_id())
+                .is_some_and(|f| !f.rare().table_procedure.is_empty());
+        let (mut edges, bindings) = self.call_edges(ix, r, cs, ce, c)?;
+        if both {
+            for e in &mut edges {
+                if e.resolution == Resolution::Resolved {
+                    e.resolution = Resolution::Maybe;
+                }
+            }
+        }
+        Some((edges, bindings))
+    }
+
+    fn call_edges(
+        &self,
+        ix: RoutineIx,
+        r: &ModelRoutine,
+        cs: &PCallSite,
+        ce: &ClassifiedEdge,
+        c: &mut SiteCensus,
+    ) -> Option<(Vec<CallEdge>, Vec<UpgradedBinding>)> {
         // ENG-173: the walk's call site of a record operation a table procedure may take pairs
         // with the operation's own edge (its triggers); the call reaches the procedure's routes
         // (`RareSiteFacts::table_procedure`), as an ordinary method call.

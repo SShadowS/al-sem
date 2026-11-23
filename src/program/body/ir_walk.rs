@@ -2299,6 +2299,22 @@ impl<'a> IrCfn<'a> {
         }
         match &e.kind {
             Call { function, args } => {
+                if let (Some(op), Some(cs)) = (
+                    self.spine.op_id_by_expr.get(&eid),
+                    self.spine.cs_id_by_expr.get(&eid),
+                ) {
+                    let mut inner = Vec::new();
+                    for a in args {
+                        self.harvest(*a, &mut inner);
+                    }
+                    self.harvest_receiver(*function, out);
+                    let mut either = self.either_op_or_call(op, cs, args, &e.origin);
+                    if !inner.is_empty() {
+                        either.condition_leaves = Some(inner);
+                    }
+                    out.push(either);
+                    return;
+                }
                 if let Some(op) = self.spine.op_id_by_expr.get(&eid) {
                     let mut inner = Vec::new();
                     for a in args {
@@ -2387,7 +2403,12 @@ impl<'a> IrCfn<'a> {
         for a in args {
             self.harvest(*a, &mut pre);
         }
-        let mut leaf = if let Some(op) = self.spine.op_id_by_expr.get(&eid) {
+        let mut leaf = if let (Some(op), Some(cs)) = (
+            self.spine.op_id_by_expr.get(&eid),
+            self.spine.cs_id_by_expr.get(&eid),
+        ) {
+            self.either_op_or_call(op, cs, args, &e.origin)
+        } else if let Some(op) = self.spine.op_id_by_expr.get(&eid) {
             let mut l = cfn_node("op");
             l.operation_id = Some(op.clone());
             l
@@ -2425,6 +2446,32 @@ impl<'a> IrCfn<'a> {
     /// path. The synthetic nodes take a zero-width range at the call's end, so a
     /// source-order sort puts them after the call and before the next statement, and
     /// they hold no field access.
+    /// ENG-173: a call that may run the platform record operation `op` or the table procedure of
+    /// its name at call site `cs` (both can take it; alc ranks the conversions, which is not
+    /// modelled): either runs, never both. An `if` with no condition of its own (its arguments,
+    /// read first, are the caller's to attach as the node's condition leaves), the operation in
+    /// one branch and the call in the other, so every walker joins the two (sol r2 on ENG-173:
+    /// the operation alone hid the call from the L4 walker and the operation order).
+    fn either_op_or_call(&self, op: &str, cs: &str, args: &[ExprId], origin: &Origin) -> PCFNNode {
+        let range = self.range_of(origin);
+        let branch = |leaf: PCFNNode| {
+            let mut b = cfn_node("block");
+            b.source_range = range;
+            b.children = Some(vec![leaf]);
+            b
+        };
+        let mut op_leaf = cfn_node("op");
+        op_leaf.operation_id = Some(op.to_string());
+        let mut call_leaf = cfn_node("call");
+        call_leaf.callsite_id = Some(cs.to_string());
+        call_leaf.flow = self.flow_args(args);
+        let mut either = cfn_node("if");
+        either.source_range = range;
+        either.children = Some(vec![branch(op_leaf)]);
+        either.else_children = Some(vec![branch(call_leaf)]);
+        either
+    }
+
     fn call_then_may_raise(&self, mut call: PCFNNode, origin: &Origin) -> PCFNNode {
         call.source_range = self.range_of(origin);
         let end = call.source_range.map(|(_, _, el, ec)| (el, ec, el, ec));
@@ -4854,6 +4901,105 @@ codeunit 50101 C
             ]
         );
         assert_eq!(implicit("P"), []);
+    }
+
+    /// ENG-173 (sol r2): a record operation's call the resolver says a table procedure may take
+    /// (`FileBindings::table_procedure`) is an ordinary call site too. When only the procedure
+    /// runs, there is no operation and the statement tree holds the call; when both may run, the
+    /// tree holds the two as alternatives: an `if` with the operation in one branch and the call
+    /// in the other, so a walker never runs both nor misses the call.
+    ///
+    /// Discrimination (2026-11-23): the walk ignoring the decision (no call site) fails both
+    /// rows; the both-may node built as the operation alone fails the second; restored, passes.
+    #[test]
+    fn a_table_procedure_call_is_a_call_site_in_the_statement_tree() {
+        const SRC: &str = r#"
+table 50100 T
+{
+    fields { field(1; K; Integer) { } }
+    procedure Next(var R: RecordRef; B: Boolean) begin end;
+}
+codeunit 50101 C
+{
+    procedure P()
+    var
+        E: Record T;
+        RR: RecordRef;
+    begin
+        E.Next(RR, true);
+    end;
+}
+"#;
+        let tree = |user_only: bool| {
+            let f = al_syntax::parse(SRC);
+            let call =
+                f.ir.iter_stmts()
+                    .find_map(|s| match s.kind {
+                        al_syntax::ir::StmtKind::Call(x) => Some(x),
+                        _ => None,
+                    })
+                    .expect("precondition: the call statement");
+            let mut bindings = crate::program::resolve::full::FileBindings::default();
+            bindings.table_procedure.insert(call, user_only);
+            let (oi, r) = f
+                .objects
+                .iter()
+                .enumerate()
+                .find_map(|(oi, o)| o.routines.iter().find(|r| r.name == "P").map(|r| (oi, r)))
+                .expect("precondition: P");
+            let feats = super::project_routine_features_ir_with(
+                &f,
+                oi,
+                r,
+                "id",
+                SRC,
+                "u",
+                None,
+                &bindings,
+                super::SiteIdBase::default(),
+            )
+            .0;
+            let mut kinds = Vec::new();
+            fn walk(n: &crate::program::body::features::PCFNNode, out: &mut Vec<String>) {
+                let tag = match (&n.operation_id, &n.callsite_id) {
+                    (Some(_), _) => format!("{}(op)", n.kind),
+                    (_, Some(_)) => format!("{}(cs)", n.kind),
+                    _ => n.kind.clone(),
+                };
+                out.push(tag);
+                for c in [&n.children, &n.else_children, &n.condition_leaves]
+                    .into_iter()
+                    .flatten()
+                    .flatten()
+                {
+                    walk(c, out);
+                }
+            }
+            walk(feats.statement_tree.as_ref().expect("a tree"), &mut kinds);
+            (feats.record_operations.len(), feats.call_sites.len(), kinds)
+        };
+        let (ops, calls, kinds) = tree(true);
+        assert_eq!(
+            (ops, calls),
+            (0, 1),
+            "only the procedure: a call site, no operation"
+        );
+        assert!(kinds.contains(&"call(cs)".to_string()), "{kinds:?}");
+        let (ops, calls, kinds) = tree(false);
+        assert_eq!(
+            (ops, calls),
+            (1, 1),
+            "both: the operation and the call site"
+        );
+        let at = kinds
+            .iter()
+            .position(|k| k == "if")
+            .expect("an alternative node");
+        assert_eq!(
+            kinds[at + 1..at + 5],
+            ["block", "op(op)", "block", "call(cs)"],
+            "{kinds:?}"
+        );
     }
 
     /// Which condition shapes `condition_references` records (#24, and the

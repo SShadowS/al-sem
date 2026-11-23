@@ -1524,14 +1524,17 @@ fn record_arg_facts(
 fn table_procedure_hides(routes: &[Route], method_lc: &str, graph: &dyn GraphReads) -> bool {
     !routes.is_empty()
         && routes.iter().all(|r| {
-            let RouteTarget::Routine(id) = &r.target else {
-                return false;
-            };
-            let types: Vec<String> = match graph.routine(id) {
-                Some(node) if !node.param_sig_key.is_empty() => {
-                    node.param_sig_key.split('|').map(str::to_string).collect()
-                }
-                _ if id.params_count == 0 => Vec::new(),
+            let types: Vec<String> = match &r.target {
+                RouteTarget::Routine(id) => match graph.routine(id) {
+                    Some(node) if !node.param_sig_key.is_empty() => {
+                        node.param_sig_key.split('|').map(str::to_string).collect()
+                    }
+                    _ if id.params_count == 0 => Vec::new(),
+                    _ => return false,
+                },
+                // A symbol-only procedure is an `AbiSymbol` route with no parameter types (sol
+                // r2 on ENG-173): only zero parameters are certain.
+                RouteTarget::AbiSymbol { key } if key.params_count == 0 => Vec::new(),
                 _ => return false,
             };
             crate::program::resolve::platform_record_fit::platform_hidden_by(method_lc, &types)

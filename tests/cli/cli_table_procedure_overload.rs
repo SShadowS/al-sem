@@ -60,6 +60,15 @@ table 50492 "SB Entry"
     procedure ModifyAll(A: Variant; B: Variant)
     begin
     end;
+
+    // A6: `E.Get(RR)` ran this on BC, though the platform `Get(Value…)` could take a RecordRef
+    // too (alc's ranking): both are kept, the call in one branch of the statement tree.
+    procedure Get(X: RecordRef): Boolean
+    var
+        D: Record "SB Doc";
+    begin
+        X.GetTable(D);
+    end;
 }
 codeunit 50493 "SB Mgt"
 {
@@ -154,6 +163,28 @@ codeunit 50493 "SB Mgt"
         Doc: Record "SB Doc" temporary;
     begin
         E.FindLast(Doc);
+    end;
+
+    procedure BothGet()
+    var
+        E: Record "SB Entry";
+        E2: Record "SB Entry";
+        R: RecordRef;
+    begin
+        R.GetTable(E2);
+        if E.Get(R) then;
+        Guarded(R);
+    end;
+
+    procedure PlatformGet()
+    var
+        E: Record "SB Entry";
+        E2: Record "SB Entry";
+        R: RecordRef;
+    begin
+        R.GetTable(E2);
+        if E.FindFirst() then;
+        Guarded(R);
     end;
 
     procedure SystemFieldModifyAll()
@@ -264,4 +295,8 @@ fn a_table_procedure_named_like_a_record_builtin_is_called() {
     // `ModifyAll` runs: not written).
     assert_eq!(answer("VariantModifyAll", "SB Entry"), "no", "precondition");
     assert_ne!(answer("SystemFieldModifyAll", "SB Entry"), "no");
+    // sol r2 on ENG-173: where both may run (A6: alc ranks), the statement tree holds the
+    // operation and the call as alternatives, so the call's rebinding of R reaches the guard.
+    assert_eq!(answer("PlatformGet", "SB Other"), "no", "precondition");
+    assert_ne!(answer("BothGet", "SB Other"), "no");
 }

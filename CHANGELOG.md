@@ -52,7 +52,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     so every reader of call sites reads it unchanged. When only the procedure runs, the walk
     emits no record operation, and the site's edge is an ordinary call with the procedure's
     routes (the histogram and `alsem graph` see a resolved call). When both may run, the
-    operation keeps its trigger edge, and the call pairs with it without consuming it.
+    operation keeps its trigger edge, and the call pairs with it without consuming it. The
+    call's edges are then `Maybe`, and the statement tree holds the two as alternatives: an
+    `if` with the operation in one branch and the call in the other. So no walker runs both,
+    and none misses the call (sol r2).
+  - The hiding rule reads a symbol-only procedure (an `AbiSymbol` route, no parameter types)
+    at zero parameters only (sol r2).
   - Member path: the catalog route is kept beside the table's procedure when the platform may
     take the call and is not hidden.
 - **CDO.** No site of either kind on the pinned workspace and its dependencies: a census of
@@ -71,6 +76,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - The body walk ignoring the resolver's decision fails `UserNext`; a name the scope does not
     declare read as no field fails `SystemFieldModifyAll`; the hiding rule off fails the r0
     adapter census.
+  - The both-may node built as the operation alone fails the walk test
+    `a_table_procedure_call_is_a_call_site_in_the_statement_tree`.
 - **How it was built (review).** A first cut made the call site in the model after the walk.
   sol found it invisible to the L4 CFG walker, which reads the walk's statement tree, and
   without argument bindings. Fable found a decided call counted `unknown`, a system field read
