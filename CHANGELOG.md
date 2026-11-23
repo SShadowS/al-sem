@@ -7,8 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added (TLS-117: the dependency IR cache on Windows, for stamped binaries)
+### Added (TLS-117: the dependency IR cache on Windows, for stamped binaries, opt-in)
 
+- **Off by default on Windows for now.** Only an explicit `ALSEM_IR_CACHE=on` turns the cache on
+  there (`ir_cache::DEFAULT_ON`; Linux and macOS keep it on by default). One later commit flips the
+  Windows default once the owner's acceptance (note section 3) passes; every acceptance step sets
+  `ALSEM_IR_CACHE=on` itself.
 - **What it does.** ENG-110's IR cache was off on Windows: its key is the running binary's bytes,
   and on Windows no file path reliably names the running image (the owner's probe runs showed
   `GetMappedFileNameW` keeping a stale path after a folder swap and a deleted hard link, so a
@@ -20,20 +24,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   NTFS drive, with equal headers; the candidate's writable sections and masked bytes hash to the
   digest stamped in the running module's data-digest slot; and its own slot equals the loaded
   one. The key is then the accepted file's bytes, as on Linux. Anything else: no key, the cache
-  off, the reason in the report.
+  off, the reason in the report. The key is computed at start (the last step of
+  `install_from_env` in each `main`) and the accepted file's handle stays open, denying write and
+  delete, until the process ends: the file cannot be renamed, replaced or deleted while it runs.
+  The key is over the accepted file's bytes, not an exact identity of the running file (bytes the
+  loader never maps, such as a signature or an overlay, change the key, not the code: a miss,
+  never a wrong answer); the note's section 1 states the few milliseconds before the key.
 - **Stamping.** A new binary, `alsem-stamp` (`stamp <exe> [<out>]`, `verify <exe>`; runs on Linux
   too), writes the digest into the slot (a marked 48-byte static in `.rdata` of `alsem`, `aldump`
   and `al-call-hierarchy`), recomputes a non-zero PE checksum, and checks nothing else changed.
   **Unstamped binaries (every cargo build and test) get no key on Windows**; the report says
   `"ir_cache": "unstamped"`, which `scripts/ir-cache-report-check` passes. A failing Windows key
   for any other reason says `"no key"` with the reason, and fails the checker.
+  `ir-cache-report-check --require-key` fails `unstamped`, `unsupported` and `no key` lines and a
+  report with no keyed `start` line; the acceptance and the release workflows use it.
 - **Install and CI.** `scripts/install-windows.ps1` (Windows PowerShell 5.1 or pwsh 7) builds the
   three binaries with `release-ship`, stamps and verifies them, and copies them to
-  `~/.al-sem/bin/` and each `-LspDir`, refusing to overwrite a running binary. Both release
-  workflows stamp and verify the three Windows binaries after the build and before signing; a
+  `~/.al-sem/bin/` and each `-LspDir`. It refuses before building or copying anything (and again
+  just before copying) when any target is running, so an install never leaves some targets new
+  and some old. Both release workflows stamp and verify the three Windows binaries after the
+  build and before signing, and after signing verify them again and run the shipped `alsem.exe`
+  once with the cache on, on `tests/fixtures/tls117/ws`, requiring a key (`--require-key`); a
   failure fails the job.
-- **Cache plumbing on Windows.** The cache folders (the IR root, `ALSEM_IR_CACHE_DIR`, and
-  ENG-113's text root) are opened through a private walk from the volume root down: every element
+- **Windows-native tests** (the owner runs them: `cargo test -p al-sem --lib -- winfs
+  key::tests::windows snapshot::cache prune`): `snapshot::winfs::tests::windows_private_walk`,
+  `program::ir_cache::key::tests::windows_stamped_copy_keys_on_its_image` (with the held-handle
+  check: a rename or delete of the running file fails with a sharing violation),
+  `snapshot::cache::tests::a_permissive_entry_is_refused_at_every_open`,
+  `a_mapped_entry_cannot_be_opened_for_writing`, `shared_now_lock_fails_while_exclusive_held`,
+  and `program::ir_cache::prune::tests` (all but the two size-rule tests).
+- **Cache plumbing on Windows.** The cache folders (the IR root, `ALSEM_IR_CACHE_DIR`, ENG-113's
+  text root and the batch guard's root) are created and opened through a private walk from the
+  volume root down (a folder is made only under an element that passed): every element
   owned by this user, SYSTEM, Administrators or TrustedInstaller, no reparse point, and no allow
   ACE giving anyone else a right to remove, rename or re-ACL it (the cache folders, entries and
   lock files also none to add or write); each entry and lock file is checked on its own handle.

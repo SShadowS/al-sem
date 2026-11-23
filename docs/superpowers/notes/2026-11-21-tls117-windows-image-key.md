@@ -9,10 +9,22 @@ product magic `ALSEM-IR-SLOT-v1` (the fixture, `tests/fixtures/tls117/`, keeps t
 `TLS117-FIXT-SLOT`); the Windows key is `key::win`; the private walk, handle check and locality
 rule are `src/snapshot/winfs.rs`; an unstamped binary's report line is `"ir_cache": "unstamped"`
 (passed by `scripts/ir-cache-report-check`), any other failure `"no key"` with its reason;
-`scripts/install-windows.ps1` and both release workflows stamp. Enablement still waits for the
-product acceptance in section 3 (positive keys on the shipped stamped MSVC binaries, W8 through
-the installed binaries) and the Windows-native tests listed in the CHANGELOG entry's branch
-report: `cargo test -p al-sem --lib -- winfs key::tests::windows snapshot::cache`.
+`scripts/install-windows.ps1` and both release workflows stamp.
+
+**Rev 11 (product review r1, sol and Fable).** On Windows the cache is **off by default**: only
+an explicit `ALSEM_IR_CACHE=on` turns it on (`ir_cache::DEFAULT_ON`); one later commit flips the
+default once the product acceptance (section 3) passes, and every acceptance step sets
+`ALSEM_IR_CACHE=on` itself. The Windows key is computed **eagerly**, as the last step of
+`install_from_env` in each binary's `main`, and the accepted candidate's handle (read sharing
+only: no write, no delete) stays open for the whole process, so the file the key names cannot be
+renamed, replaced or deleted while the process runs (section 1 states what the few milliseconds
+before the key still leave). On Windows the cache roots are created through the private walk
+(`winfs::walk(.., true)`): the IR root, ENG-113's text root and the batch guard's root. A run
+that makes no key fails `scripts/ir-cache-report-check --require-key`, which the acceptance and
+both release workflows use (the release workflows run the shipped, signed `alsem.exe` once on
+`tests/fixtures/tls117/ws`). The Windows-native tests are listed in section 6 and in the
+CHANGELOG's TLS-117 entry: `cargo test -p al-sem --lib -- winfs key::tests::windows
+snapshot::cache prune`.
 
 Status (probe phase): **rev 6**, after sol's review r4 (`/work/.al-sem/tools-notes/tls117-design-review-sol-r4.md`):
 the coordinator made the post-link **data-digest slot mandatory**; the orchestrator agreed on the
@@ -171,7 +183,23 @@ What stays unseen:
 - **bytes the loader never maps**: anything past the last section's raw data (an overlay, the
   Authenticode signature, which the security directory points to by file offset), and the file
   padding between `SizeOfHeaders` and the first section and between sections' raw data. The key
-  (the full-file blake3) covers them; the identity check does not.
+  (the full-file blake3) covers them; the identity check does not. So the key is a key **over
+  the accepted file's bytes**, not an exact identity of the running file: two files that differ
+  only there (an overlay, a different signature) run the same code but get different keys. That
+  costs cache misses, never a wrong answer.
+
+**The window before the key (rev 11, product review r1).** The key is computed at start, as the
+last step of `install_from_env` in each `main`, and the accepted candidate's handle stays open
+(denying write and delete) until the process ends. So from the key on, the accepted file cannot
+change or move while the process runs. What remains is the few milliseconds between the launch
+and the key, and one case in it: a binary **damaged after it was stamped** in its writable
+sections (so its own slot no longer matches them), launched damaged, and replaced at its path by
+a pristine copy within those milliseconds. The pristine copy's read-only content equals the
+running image's and its writable sections match the slot the running image carries, so it is
+accepted and the key names the pristine file while the damaged initial data runs (the writable
+sections are checked in the candidate file, never in memory; the reason is under "Why `.data` is
+not compared in memory"). Damage in the read-only content gives no key. This case is in the
+guarantee's scope as stated.
 
 **Out of scope:** another process changing files on purpose mid-run (ENG-110's spec), raw disk
 writes, a network peer; the local-NTFS rule (section 3) keeps network volumes out entirely.
@@ -259,7 +287,10 @@ anything moved at all).
    equal the loaded digest, and require its own slot bytes to equal the loaded slot.
 6. **Accept** the first candidate that passes both. The key is the blake3 of the bytes read
    through that same handle (and the IR marker search over them, as on Linux). No candidate
-   accepted: no key.
+   accepted: no key. **As built (rev 11):** the key is computed at start (the last step of
+   `install_from_env`), and the accepted handle is kept open for the process's life (`key::win`'s
+   `HELD`), so a rename or delete of the accepted file fails with a sharing violation while the
+   process runs (`key::tests::windows_stamped_copy_keys_on_its_image` checks both).
 
 **Why it holds.** The accepted file's read-only content equals what is running, by construction,
 whatever names point where, and its writable sections hash to the digest the running image
@@ -360,21 +391,25 @@ machine, with the product change built:
    $env:ALSEM_IR_CACHE_VERIFY = '1'; $env:ALSEM_IR_CACHE_REPORT = "$r\impact.jsonl"
    & $bin impact $env:CDO_WS --routine 'CDO Telemetry::UpdateLastUpload' --format json > "$r\impact.out"
    Remove-Item Env:ALSEM_IR_CACHE_VERIFY
-   python scripts\ir-cache-report-check --rule output "$r\cold.jsonl"
-   python scripts\ir-cache-report-check --rule warm-build "$r\warm.jsonl"
-   python scripts\ir-cache-report-check --rule impact "$r\impact.jsonl"
-   Select-String -Path "$r\*.jsonl" -Pattern 'no key|unsupported'
+   python scripts\ir-cache-report-check --require-key --rule output "$r\cold.jsonl"
+   python scripts\ir-cache-report-check --require-key --rule warm-build "$r\warm.jsonl"
+   python scripts\ir-cache-report-check --require-key --rule impact "$r\impact.jsonl"
+   Select-String -Path "$r\*.jsonl" -Pattern 'no key|unsupported|unstamped'
    ```
    Pass when: `cold.jsonl` has `published_packages > 0` (and passes `--rule output`), `warm.jsonl`
    passes `--rule warm-build` (`disk_hits > 0`), `impact.jsonl` passes `--rule impact`
-   (`verified_hits > 0`), no report has `refused` or `roundtrip_failed`, and the last line finds
-   nothing (no `no key`, no `unsupported`). The three outputs must equal the same commands run with
+   (`verified_hits > 0`), every check passes `--require-key` (an `unstamped`, `unsupported` or
+   `no key` line fails it; without the flag the checker passes an all-`unstamped` file, which is
+   right for the cargo-built test binaries and wrong here), no report has `refused` or
+   `roundtrip_failed`, and the last line finds nothing. The three outputs must equal the same commands run with
    `ALSEM_IR_CACHE=off` (the cache never changes an answer).
 3. The same as step 2 with `aldump.exe` is not needed; `al-call-hierarchy.exe` gets one positive
-   key check (start the LSP server once with `ALSEM_IR_CACHE_REPORT` set and open the workspace).
+   key check (start the LSP server once with `ALSEM_IR_CACHE=on` and `ALSEM_IR_CACHE_REPORT` set,
+   open the workspace, then `ir-cache-report-check --require-key <report>`).
+4. The Windows-native tests (section 6's list) pass.
 
-**Why `.data` is not compared in memory.** The engine computes the key lazily, at its first IR cache use,
-long after start: the C runtime, Rust's runtime, mimalloc, `std`'s statics and the program itself
+**Why `.data` is not compared in memory.** The engine computes the key in `main` (rev 11; it was
+lazy, at the first IR cache use, before), still after the runtimes have started: the C runtime, Rust's runtime, mimalloc, `std`'s statics and the program itself
 have written writable sections by then, and there is no way to know which bytes. The one earlier
 point we could control is a TLS callback (`.CRT$XL*`), which runs after the loader (relocations,
 `__security_cookie`, `_tls_index`) but before the C runtime's initialisers. Capturing `.data` there
@@ -663,15 +698,28 @@ and `lock` on Windows, so both caches: the IR cache, and ENG-113's text folder (
 that fails falls back to owned text, as a non-private folder does on Unix today. Folders the cache
 makes are created inside a checked folder and inherit its DACL; they are checked again on open.
 
-Tests (product phase):
-- `snapshot::cache::tests::windows_private_leaf_under_replaceable_parent`: a leaf whose own DACL
-  passes, under a parent granting Everyone `FILE_DELETE_CHILD`: refused.
-- `snapshot::cache::tests::windows_permissive_existing_entry`: in a private folder, an entry with
-  an Everyone modify ACE: the read refuses it (and the text cache falls back to owned text).
-- `snapshot::cache::tests::windows_junction_refused`, `windows_open_leaf_refused`.
-- `snapshot::cache::tests::windows_walk_creates_only_under_checked_parent`: a missing leaf under
-  a parent that fails the rule is not created.
-- The probe's W6 runs the same walk on the real roots: ENG-113's text root, the IR root, and
+Tests (as built, rev 11; Windows-native, run by the owner with
+`cargo test -p al-sem --lib -- winfs key::tests::windows snapshot::cache prune`):
+- `snapshot::winfs::tests::windows_private_walk`: the per-user cache folder passes; a leaf
+  Everyone can modify, a private leaf under a parent granting Everyone `FILE_DELETE_CHILD`, and a
+  path through a junction are refused; a create under that refused parent fails and makes nothing
+  (`walk(.., true)`, the path every cache root is created by); an entry Everyone can modify fails
+  the handle check, a fresh one passes.
+- `snapshot::cache::tests::a_permissive_entry_is_refused_at_every_open`: in a private folder, a
+  text entry, a stamp file and a lock file granted Everyone modify are refused at each call site
+  that opens one, `read`, `read_owned` and `lock` (all through `check_private_file`); the same
+  files before the grant are accepted.
+- `snapshot::cache::tests::a_mapped_entry_cannot_be_opened_for_writing` and
+  `shared_now_lock_fails_while_exclusive_held` (both systems).
+- `program::ir_cache::key::tests::windows_stamped_copy_keys_on_its_image`: an unstamped copy
+  gets no key (`unstamped`); a stamped copy keys on its image, and while it runs its file cannot be
+  renamed or deleted (sharing violation, the held handle); a folder swap to a rival whose `.text`
+  differs by one known byte gives no key, refused at the canonical comparison for both candidates.
+- `program::ir_cache::prune::tests` run on Windows too (through the Windows `write`, `unlink` and
+  `remove_dir`), except the two size-rule tests (sparse files) and the symlink part of
+  `foreign_names_left_alone`; `the_writers_temp_names_are_prunable` and
+  `prune_removes_what_the_writer_wrote` are new.
+- The probe's W6 ran the same walk on the real roots: ENG-113's text root, the IR root, and
   `ALSEM_IR_CACHE_DIR` (or a probe-made override when it is unset).
 
 ## 7. Prune and publish on Windows
@@ -681,16 +729,20 @@ Tests (product phase):
   suffix `.tmp`, which makes `<stem>-XXXXXX.tmp` (6 random characters, tempfile 3.27's
   `NUM_RAND_CHARS`), so the prune would never remove a killed writer's leftovers. Fix: the Windows
   `write` makes its temp file with the same name shape (`OpenOptions::create_new`, the same 16
-  tries) instead of `tempfile`, so one pattern covers both systems. Test:
-  `program::ir_cache::prune::tests::killed_writer_temp_pruned_after_a_day`, un-gated from `unix`,
-  with a temp file made by the real Windows `write` failing mid-way (proof: keep `tempfile`'s
-  naming, red).
+  tries) instead of `tempfile`, so one pattern covers both systems. As built, both writers name
+  their temp file with one function, `snapshot::cache::temp_name`. Tests:
+  `program::ir_cache::prune::tests::the_writers_temp_names_are_prunable` (`is_temp` accepts
+  `temp_name`'s output for every stem the cache writes) and `prune_removes_what_the_writer_wrote`
+  (a key folder written through `CacheDir::write`, then pruned through `unlink` and `remove_dir`,
+  and a stale temp of `temp_name`'s shape removed), both on Windows too.
 - **Deletes.** IR entries are read whole and closed; `open_entry` shares delete, so a delete
   normally succeeds while another process reads. Whether the name goes at once (POSIX delete
   semantics) depends on the Windows build; the probe records it (W7). A folder that cannot be
   removed yet goes at the next prune; a virus scanner holding a file is the same case.
-- **Publish.** ENG-113's rename-into-place stays (`persist`, `persist_noclobber`, with the new temp
-  naming). A rename over an entry another process is reading can fail: a failed publish, a miss.
+- **Publish.** ENG-113's publish into place stays, as built with `std::fs::rename` (replace) and
+  `std::fs::hard_link` (no-clobber: it fails when the name exists) from the temp file, not
+  `tempfile`'s `persist` / `persist_noclobber`. A rename over an entry another process is reading
+  can fail: a failed publish, a miss.
 
 ## 8. The probe
 
