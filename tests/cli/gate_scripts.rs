@@ -93,7 +93,7 @@ fn speed_gate_times_nothing_beside_a_build() {
     // One process: the builtin `read` waits on a pipe nobody writes, so killing
     // it leaves no `sleep` child holding the test's output (a nextest leak).
     let build = crate::cdo_slot::Reap(
-        std::process::Command::new(&fake)
+        crate::clean_env::command(&fake)
             .args(["-c", "read -t 600 _ || true"])
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::null())
@@ -494,6 +494,8 @@ fn cdo_gate_only_pass_records_the_tree_it_ran_on() {
             .args(["--only", only])
             .arg(ws.path())
             .env("PATH", &path)
+            // Stub tools: a HOME of its own (TLS-115).
+            .env("HOME", stub.path())
             .env("CARGO_TARGET_DIR", target.path())
             .env("CDO_SLOT_DIR", target.path().join("slot"))
             .env("CDO_SLOT_MEM_MIN_GB", "0")
@@ -671,6 +673,7 @@ fn cdo_gate_only_run_builds_and_runs_just_its_phases() {
         .args(["--only", "harness,l4,lsp,output"])
         .arg(ws.path())
         .env("PATH", path)
+        .env("HOME", stub.path())
         .env("CARGO_TARGET_DIR", target.path())
         // A slot of its own (TLS-60): never the tentacle's real one.
         .env("CDO_SLOT_DIR", target.path().join("slot"))
@@ -788,6 +791,7 @@ fn speed_warm_reads_the_gates_own_cache_entry() {
         .args(["--warm", &head])
         .env("ALSEM_SPEED_CACHE", cache.path())
         .env("PATH", path)
+        .env("HOME", stub.path())
         .output()
         .expect("spawn python3 scripts/cdo-speed");
     let text = format!(
@@ -848,6 +852,7 @@ fn speed_build_uses_the_gate_release_folder() {
         .env("CARGO_TARGET_DIR", target.path())
         .env("ALSEM_SPEED_CACHE", target.path().join("speed-cache"))
         .env("PATH", path)
+        .env("HOME", stub.path())
         .output()
         .expect("spawn python3 scripts/cdo-speed");
     let text = format!(
@@ -919,6 +924,7 @@ fn profile_script_builds_symbols_and_passes_the_exit_code() {
                     std::env::var("PATH").unwrap()
                 ),
             )
+            .env("HOME", stub.path())
             .env("STUB_LOG", &log)
             .env("STUB_RC", rc)
             // "norun": samply exits 0 without running the command.
@@ -1245,6 +1251,7 @@ fn cdo_gate_stops_at_once_on_term_during_its_build() {
         .arg("--no-speed")
         .arg(ws.path())
         .env("PATH", path)
+        .env("HOME", stub.path())
         .env("CARGO_TARGET_DIR", target.path())
         // A slot of its own (TLS-60): never the tentacle's real one.
         .env("CDO_SLOT_DIR", target.path().join("slot"))
@@ -1660,7 +1667,7 @@ fn speed_warm_seeds_a_commit_from_its_trees_gate_binary() {
 #[test]
 fn cdo_gate_pins_lane_two_by_core_type() {
     // Without taskset the gate pins nothing (review r2, Opus): nothing to test.
-    let has_taskset = std::process::Command::new("sh")
+    let has_taskset = crate::clean_env::command("sh")
         .args(["-c", "command -v taskset"])
         .output()
         .is_ok_and(|o| o.status.success());
@@ -1825,6 +1832,7 @@ fn lib_cdo_fails_when_a_long_test_is_not_found_by_name() {
             .arg("bash")
             .arg(dir.path())
             .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-gate"))
+            .env("HOME", dir.path())
             .env("LONG_FOUND", found)
             .env("SIBLING", if extra == "SIBLING" { "1" } else { "" })
             .env("LIST_FAILS", if extra == "LIST_FAILS" { "1" } else { "" })
@@ -1969,6 +1977,7 @@ fn ci_steps_all_runs_and_judges_the_agentflow_suite() {
             .arg("all")
             .current_dir(&repo)
             .env("PATH", &path)
+            .env("HOME", dir.path())
             .env("TREE_SITTER_AL_PATH", &grammar)
             .env("CARGO_TARGET_DIR", dir.path().join("target"))
             .env("PY_LOG", &log)
@@ -2889,7 +2898,7 @@ fn speed_reports_instructions_and_their_limit_is_advisory() {
 #[cfg(target_os = "linux")]
 #[test]
 fn speed_counts_instructions_with_the_real_perf() {
-    let can = std::process::Command::new("perf")
+    let can = crate::clean_env::command("perf")
         .args(["stat", "-x,", "-e", "instructions:u", "--", "true"])
         .output()
         .map(|o| {
@@ -4566,7 +4575,7 @@ fn perf_bounds_times_nothing_beside_a_build() {
     let fake = dir.path().join(&fake_name);
     std::os::unix::fs::symlink("/bin/bash", &fake).unwrap();
     let build = crate::cdo_slot::Reap(
-        std::process::Command::new(&fake)
+        crate::clean_env::command(&fake)
             .args(["-c", "read -t 600 _ || true"])
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::null())
@@ -4901,36 +4910,42 @@ fn perf_bounds_parked_skip_hides_no_real_build() {
 }
 
 /// Set in the child `scripts_see_none_of_the_callers_environment` starts.
+#[cfg(target_os = "linux")]
 const ENV_PROBE: &str = "TLS115_ENV_PROBE";
 
 /// ⟨TLS-115⟩ The scripts these tests run see none of the caller's environment
 /// (`crate::clean_env`): this test runs `env_probe_child` again in a child of
 /// this test binary with a polluted environment (as a landing's or a
 /// developer's shell would be): `CDO_SLOT_OWNER=leaked`,
-/// `CDO_GATE_LANE2_CPUS=99` and a `BASH_ENV` that writes a marker file.
-/// The child runs two script calls the way the tests here do: `ci-steps
-/// perf-bounds` (its slot owner must be its own `perf-bounds`) and `cdo-gate
-/// --layout` on a fake host of 22 equal CPUs (lane 2 must get the default last
-/// 6, not "any" from a count of 99); no bash may have read the `BASH_ENV`.
+/// `CDO_GATE_LANE2_CPUS=99` and a `BASH_ENV` that appends to `<itself>.ran`
+/// (its own path from `BASH_SOURCE`: no path written into shell source).
+/// The child first shows the marker works (a plain `bash -c true` with the
+/// inherited environment writes it: the positive control), removes it, then
+/// runs two script calls the way the tests here do: `ci-steps perf-bounds`
+/// (its slot owner must be its own `perf-bounds`) and `cdo-gate --layout` on a
+/// fake host of 22 equal CPUs with a stub `taskset` first on PATH (so it runs
+/// on any host; lane 2 must get the default last 6, not "any" from a count of
+/// 99). Last, no bash may have read the `BASH_ENV`.
 ///
-/// Proof (2026-11-23): the `cdo-gate --layout` call below made with
-/// `std::process::Command::new("bash")` instead of `crate::clean_env::command`
-/// -> FAILED ("the caller's CDO_GATE_LANE2_CPUS reached cdo-gate: ... lane 2
-/// on CPUs any"); restored -> passed. With `crate::clean_env::command("python3")`
-/// in `speed_gate_fails_when_a_timed_call_fails` made a plain `Command::new`
-/// (its form before TLS-115) and `CDO_SLOT_OWNER=leaked` exported, that test
-/// FAILED ("cdo-slot: taken by leaked (cdo-speed timing)"); restored, it passes.
+/// Proofs (2026-11-23), each one name added to `crate::clean_env`'s pass list
+/// so only its own assert can go red, restored -> passed:
+/// - `"BASH_ENV"` -> FAILED only at the marker assert ("a script's bash read
+///   the caller's BASH_ENV");
+/// - `"CDO_SLOT_OWNER"` -> FAILED at "the caller's CDO_SLOT_OWNER reached
+///   ci-steps" (taken by leaked);
+/// - `"CDO_GATE_LANE2_CPUS"` -> FAILED at "the caller's CDO_GATE_LANE2_CPUS
+///   reached cdo-gate" (lane 2 on CPUs any).
+///
+/// And a real test: `speed_gate_fails_when_a_timed_call_fails` with its
+/// `crate::clean_env::command("python3")` made a plain `Command::new` (its form
+/// before TLS-115) and `CDO_SLOT_OWNER=leaked` exported -> FAILED ("cdo-slot:
+/// taken by leaked (cdo-speed timing)"); restored, it passes.
 #[cfg(target_os = "linux")]
 #[test]
 fn scripts_see_none_of_the_callers_environment() {
     let dir = tempfile::tempdir().unwrap();
-    let marker = dir.path().join("bash-env-ran");
     let bash_env = dir.path().join("bash-env");
-    std::fs::write(
-        &bash_env,
-        format!("echo leaked >> '{}'\n", marker.display()),
-    )
-    .unwrap();
+    std::fs::write(&bash_env, "echo leaked >> \"${BASH_SOURCE[0]}.ran\"\n").unwrap();
     let out = std::process::Command::new(std::env::current_exe().unwrap())
         .args([
             "gate_scripts::env_probe_child",
@@ -4939,7 +4954,7 @@ fn scripts_see_none_of_the_callers_environment() {
             "--test-threads",
             "1",
         ])
-        .env(ENV_PROBE, &marker)
+        .env(ENV_PROBE, "1")
         .env("CDO_SLOT_OWNER", "leaked")
         .env("CDO_GATE_LANE2_CPUS", "99")
         .env("BASH_ENV", &bash_env)
@@ -4960,11 +4975,22 @@ fn scripts_see_none_of_the_callers_environment() {
 #[cfg(target_os = "linux")]
 #[test]
 fn env_probe_child() {
-    let Some(marker) = std::env::var_os(ENV_PROBE) else {
+    if std::env::var_os(ENV_PROBE).is_none() {
         return;
-    };
+    }
+    let mut marker = std::env::var_os("BASH_ENV").expect("the parent sets BASH_ENV");
+    marker.push(".ran");
     let marker = std::path::PathBuf::from(marker);
     let dir = tempfile::tempdir().unwrap();
+
+    // Positive control: bash with the inherited environment writes the marker.
+    let control = std::process::Command::new("bash")
+        .args(["-c", "true"])
+        .status()
+        .unwrap();
+    assert!(control.success());
+    assert!(marker.exists(), "control: the BASH_ENV wrote no marker");
+    std::fs::remove_file(&marker).unwrap();
 
     let (code, text) = perf_bounds_step(dir.path(), &status_from_inside(), &[]);
     assert_eq!(code, Some(0), "{text}");
@@ -4973,41 +4999,51 @@ fn env_probe_child() {
         "the caller's CDO_SLOT_OWNER reached ci-steps: {text}"
     );
 
-    let has_taskset = std::process::Command::new("sh")
-        .args(["-c", "command -v taskset"])
-        .output()
-        .is_ok_and(|o| o.status.success());
-    if has_taskset {
-        let sys = dir.path().join("sys");
-        for c in 0..22 {
-            let f = sys.join(format!("cpu{c}/cpufreq"));
-            std::fs::create_dir_all(&f).unwrap();
-            std::fs::write(f.join("cpuinfo_max_freq"), "4800000\n").unwrap();
-        }
-        std::fs::write(sys.join("online"), "0-21\n").unwrap();
-        std::fs::write(
-            sys.join("status"),
-            "Name:\tbash\nCpus_allowed_list:\t0-21\n",
-        )
-        .unwrap();
-        std::fs::write(dir.path().join("meminfo"), "MemAvailable: 62914560 kB\n").unwrap();
-        std::fs::write(dir.path().join("memory.max"), "max\n").unwrap();
-        let out = crate::clean_env::command("bash")
-            .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-gate"))
-            .arg("--layout")
-            .env("CDO_GATE_MEMINFO", dir.path().join("meminfo"))
-            .env("CDO_GATE_CGROUP", dir.path())
-            .env("CDO_GATE_LAYOUT", "parallel")
-            .env("CDO_GATE_PROC_STATUS", sys.join("status"))
-            .env("CDO_GATE_SYS_CPU", &sys)
-            .output()
-            .expect("spawn bash scripts/cdo-gate --layout");
-        let got = String::from_utf8_lossy(&out.stdout);
-        assert!(
-            got.contains("lane 2 on CPUs 16,17,18,19,20,21 "),
-            "the caller's CDO_GATE_LANE2_CPUS reached cdo-gate: {got}"
-        );
+    // `--layout` only asks whether `taskset` exists (`command -v`): a stub
+    // makes the layout half run on a host without one.
+    use std::os::unix::fs::PermissionsExt;
+    let bin = dir.path().join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    std::fs::write(bin.join("taskset"), "#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::set_permissions(bin.join("taskset"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    let sys = dir.path().join("sys");
+    for c in 0..22 {
+        let f = sys.join(format!("cpu{c}/cpufreq"));
+        std::fs::create_dir_all(&f).unwrap();
+        std::fs::write(f.join("cpuinfo_max_freq"), "4800000\n").unwrap();
     }
+    std::fs::write(sys.join("online"), "0-21\n").unwrap();
+    std::fs::write(
+        sys.join("status"),
+        "Name:\tbash\nCpus_allowed_list:\t0-21\n",
+    )
+    .unwrap();
+    std::fs::write(dir.path().join("meminfo"), "MemAvailable: 62914560 kB\n").unwrap();
+    std::fs::write(dir.path().join("memory.max"), "max\n").unwrap();
+    let out = crate::clean_env::command("bash")
+        .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-gate"))
+        .arg("--layout")
+        .env(
+            "PATH",
+            format!(
+                "{}:{}",
+                bin.display(),
+                std::env::var("PATH").unwrap_or_default()
+            ),
+        )
+        .env("HOME", dir.path())
+        .env("CDO_GATE_MEMINFO", dir.path().join("meminfo"))
+        .env("CDO_GATE_CGROUP", dir.path())
+        .env("CDO_GATE_LAYOUT", "parallel")
+        .env("CDO_GATE_PROC_STATUS", sys.join("status"))
+        .env("CDO_GATE_SYS_CPU", &sys)
+        .output()
+        .expect("spawn bash scripts/cdo-gate --layout");
+    let got = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        got.contains("lane 2 on CPUs 16,17,18,19,20,21 "),
+        "the caller's CDO_GATE_LANE2_CPUS reached cdo-gate: {got}"
+    );
     assert!(
         !marker.exists(),
         "a script's bash read the caller's BASH_ENV: {:?}",

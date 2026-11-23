@@ -76,7 +76,8 @@ fn merge_case(ours: &str, theirs: &str, configured: bool) -> (tempfile::TempDir,
             &format!("bash {SCRIPT} --driver %O %A %B"),
         ]);
     }
-    let ok = crate::git::scratch(p)
+    // The merge runs the driver script: a clean environment (TLS-115).
+    let ok = crate::clean_env::clean_env(&mut crate::git::scratch(p))
         .args(["merge", "-q", "--no-edit", "b"])
         .output()
         .unwrap()
@@ -148,7 +149,7 @@ fn a_rebase_merges_new_entries_and_stops_on_a_carried_one() {
         std::fs::write(p.join("CHANGELOG.md"), master_text).unwrap();
         git(&["commit", "-q", "-am", "master"]);
         git(&["checkout", "-q", "lane"]);
-        let ok = crate::git::scratch(p)
+        let ok = crate::clean_env::clean_env(&mut crate::git::scratch(p))
             .args(["rebase", "-q", "master"])
             .output()
             .unwrap()

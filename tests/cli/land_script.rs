@@ -80,6 +80,8 @@ impl Repo {
         let mut cmd = std::process::Command::new("bash");
         cmd.arg(LAND).arg("--worktree").arg(&self.gate).args(args);
         clean_env(&mut cmd)
+            // Stub scripts: a HOME of its own (TLS-115).
+            .env("HOME", &self.root)
             .env("LAND_LOGS", self.root.join("logs"))
             .env("FLOW_LOG", self.root.join("flow.jsonl"))
             .env("LAND_MEM_MIN_GB", "0")
@@ -600,7 +602,7 @@ fn land_needs_the_slot_to_itself_and_waits_only_for_memory() {
     }
     use std::os::unix::process::CommandExt;
     let gate = Group(
-        std::process::Command::new("bash")
+        crate::clean_env::command("bash")
             .arg(fake.join("cdo-gate"))
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())

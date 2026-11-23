@@ -843,7 +843,7 @@ fn before_after_measures_nothing_beside_a_build() {
     // One process: the builtin `read` waits on a pipe nobody writes, so killing
     // it leaves no `sleep` child holding the test's output (a nextest leak).
     let build = crate::cdo_slot::Reap(
-        std::process::Command::new(&fake)
+        crate::clean_env::command(&fake)
             .args(["-c", "read -t 600 _ || true"])
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::null())

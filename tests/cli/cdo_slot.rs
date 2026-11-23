@@ -114,9 +114,7 @@ impl Slot {
         cmd.arg(SLOT)
             .args(args)
             .env("CDO_SLOT_DIR", self.dir())
-            .env("CLAUDE_CODE_SESSION_ID", session)
-            .env_remove("CLAUDE_PID")
-            .env_remove("CDO_SLOT_TOKEN");
+            .env("CLAUDE_CODE_SESSION_ID", session);
         for (k, v) in BASE_ENV.iter().chain(env) {
             cmd.env(k, v);
         }
@@ -190,8 +188,6 @@ impl Slot {
         }
         let mut child = cmd
             .env("CDO_SLOT_DIR", self.dir())
-            .env_remove("CDO_WS")
-            .env_remove("CDO_SLOT_TOKEN")
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
@@ -1595,9 +1591,7 @@ fn cdo_slot_timed_waits_for_builds_and_refuses_beside_one() {
     under
         .args(["-c", &format!("{inner}; true")])
         .env("CDO_SLOT_DIR", s.dir())
-        .env("CLAUDE_CODE_SESSION_ID", "A")
-        .env_remove("CLAUDE_PID")
-        .env_remove("CDO_SLOT_TOKEN");
+        .env("CLAUDE_CODE_SESSION_ID", "A");
     for (k, v) in BASE_ENV {
         under.env(k, v);
     }
