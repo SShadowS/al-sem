@@ -16,20 +16,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   another path, and TLS-109's batch claim registered the wrong file as a read. `alsem impact`'s
   base side removed all trailing whitespace from `--show-toplevel` (`git archive` then ran in a
   folder that does not exist) and all surrounding whitespace from `--show-prefix` (a workspace
-  folder starting with a space lost it). agentflow's `changed_files` and rebase conflicts read
-  `git diff --name-only` without `-z`: git quotes a name holding a CR, LF or `"`, so
-  `"scripts/x\r"` did not start with `scripts/` and slipped past the protected-path check. Its
-  `-z` tree probe ran in Python text mode, which turns a CR into LF.
-- **The fix.** `git config` now runs with `-z` and only its final NUL is removed. `rev-parse`
-  has no `-z`, so only its one final LF is removed, nothing else. agentflow reads paths through
-  one new helper, `Git.paths`: `-z`, raw bytes split at NUL, decoded with `os.fsdecode`.
-  `git check-ignore` already used `-z`; it is unchanged.
-- **Tests** (unix; each with a discrimination proof): scope discovery with an excludes file
-  ending in CR (an LF inside it too), a top level ending in CR and a bare clone's common folder
-  ending in CR; an `impact` base materialized under a top level ending in CR; a workspace
-  prefix starting with a space; agentflow's changed and dirty paths with a CR at the end and an
-  LF inside.
-- **Left as they are, and why.** Some readers still parse git's paths line by line:
+  folder starting with a space lost it). Its top level was also decoded lossily, so a non-UTF-8
+  folder name was another folder.
+- **agentflow's `check-diff` could be passed.** Without `-z`, git writes a name that holds a
+  non-ASCII byte, a control character (CR, LF, tab), a `"` or a backslash in C-style quotes:
+  `"scripts/x\r"`, `"src/\303\251.rs"`. Three readers took that text as the name.
+  - The protected-path check read `git diff --name-only` (`changed_files`), and a quoted
+    `"scripts/…"` does not start with `scripts/`, so a change there was not refused.
+  - The forbidden-additions and Cargo-version checks matched `+++ b/<name>` headers in one
+    joined diff. A quoted header did not match, so a file's added lines were charged to the
+    file before it, or dropped: an `#[ignore]` added in `src/é.rs` was not refused.
+    `splitlines()` also split an added line at a lone CR (`fn f(){}\r#[ignore]` hid the
+    attribute), and every added line whose text starts with `++` was skipped as a header.
+  - The rebase conflict list read the same quoted names, and the `-z` tree probe ran in Python
+    text mode, which turns a CR into LF.
+- **The pre-commit hook could skip fmt and the goldens.** It matched
+  `git diff --cached --name-only` against `\.rs$` and `^src/…`. A quoted name matched neither,
+  so a commit of `src/é.rs` alone ran no fmt check and no golden check.
+- **The fix.**
+  - `git config` now runs with `-z`, and only its final NUL is removed. `rev-parse` has no
+    `-z`, so only its one final LF is removed, nothing else. `impact` keeps the top level's
+    bytes (`git_env::path_from_git`, moved there from `scope.rs`). `git check-ignore` already
+    used `-z`; it is unchanged.
+  - agentflow reads paths through one new helper, `Git.paths`: `-z`, raw bytes split at NUL,
+    decoded with `os.fsdecode`. `check-diff` now reads each changed file's own patch
+    (`Git.file_diffs`, `git diff -- ':(literal)<path>'`, as bytes), so the file is known by
+    construction and no header is parsed. Lines split at LF only, and only lines after the
+    first `@@` count. `Git.diff`, which nothing else used, is removed.
+  - The hook reads `git diff --cached --name-only -z` and matches with `grep -z`. It sends the
+    output to `/dev/null` instead of using `-q`, so git never dies of SIGPIPE, which `pipefail`
+    would read as "no match".
+- **Tests** (unix; each with a discrimination proof):
+  - scope discovery: an excludes file ending in CR or LF (an LF inside too), a top level ending
+    in CR or LF, and a bare clone's common folder ending in CR or LF;
+  - `impact`: a base materialized under a top level ending in CR, ending in LF, and (Linux) not
+    UTF-8; a workspace prefix starting with a space;
+  - agentflow: changed and dirty paths with a CR at the end and an LF inside, and `check-diff`
+    through real git on `src/é.rs`, `src/x\r.rs`, a CR inside an added line and an added `++`
+    line;
+  - the hook, run on a staged `src/é` + LF + `x.rs`: it runs fmt and both golden checks.
+  - The LF fixtures pin "remove one LF" against "remove every LF". `--show-prefix` always ends
+    in `/`, so `impact`'s prefix reader cannot tell those apart, and no fixture claims to.
+- **Left as they are, and why.** `impact`'s `--show-prefix` is still decoded lossily: it flows
+  on as text (the folder below the top, `materialize`'s `rel`, the `git show` spec, cache keys),
+  so keeping its bytes is a larger change (TLS-124). Some readers still parse git's paths line
+  by line:
   `impact --base`'s changed-file lists and the unified-diff headers its parser reads, which git
   also quotes. Those are a different bug (git's quoting, not cut line ends). The gate scripts'
   path lists (`ci-steps task-affected`, `cdo-gate`'s product-path check, `land`'s conflict

@@ -5057,3 +5057,53 @@ fn env_probe_child() {
     );
     println!("env probe: ran");
 }
+
+/// TLS-114: the pre-commit hook sees a staged Rust file whose name git would
+/// quote (`src/é` + LF + `x.rs`): it runs fmt (`ci-steps fmt`) and the goldens
+/// (`check-goldens --verify-coverage`, then `check-goldens`), stubbed here.
+///
+/// DISCRIMINATION (2026-11-23): the hook's old `git diff --cached --name-only
+/// | grep -qE` (no `-z`) at the fmt test fails (no `ci-steps fmt`: the quoted
+/// name does not match `\.rs$`); at the golden test, fails (no
+/// `check-goldens`: it does not match `^src/`); restored, passes.
+#[cfg(unix)]
+#[test]
+fn pre_commit_runs_fmt_and_goldens_for_a_quoted_name() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo");
+    let calls = dir.path().join("calls");
+    std::fs::create_dir_all(repo.join("scripts")).unwrap();
+    std::fs::create_dir_all(repo.join("src")).unwrap();
+    for name in ["ci-steps", "check-goldens"] {
+        let p = repo.join("scripts").join(name);
+        std::fs::write(
+            &p,
+            format!("#!/bin/sh\necho \"{name} $*\" >> '{}'\n", calls.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    std::fs::write(repo.join("src/é\nx.rs"), "fn a() {}\n").unwrap();
+    crate::git::run(&repo, &["init", "-q"]);
+    crate::git::run(&repo, &["add", "src"]);
+    let out = crate::clean_env::command("bash")
+        .arg(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts/git-hooks/pre-commit"))
+        .current_dir(&repo)
+        .env("HOME", dir.path())
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .output()
+        .expect("spawn the pre-commit hook");
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(out.status.code(), Some(0), "{text}");
+    assert_eq!(
+        std::fs::read_to_string(&calls).unwrap_or_default(),
+        "ci-steps fmt\ncheck-goldens --verify-coverage\ncheck-goldens \n",
+        "{text}"
+    );
+}
