@@ -764,6 +764,14 @@ have not run on rev 7.
 
 ## 9. Order of the owner run (Windows, repository root, `TREE_SITTER_AL_PATH` set)
 
+Environment for every step (the TLS-121 Windows build settings):
+```
+$env:TREE_SITTER_AL_PATH = "<your tree-sitter-al clone>"
+$env:CMAKE_GENERATOR     = "Visual Studio 17 2022"
+$env:CARGO_TARGET_DIR    = "C:/atw"    # any short path; the default target path is too long (MAX_PATH)
+```
+Save each step's whole output to a file and send the files back.
+
 1. **The probe, W0-W9 and W11** (Git Bash or PowerShell):
    ```
    cargo run --example tls117_probe
