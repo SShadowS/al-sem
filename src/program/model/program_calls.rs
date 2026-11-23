@@ -1520,7 +1520,13 @@ fn key_join<'a>(
         (0, 0, 0, 0, 0);
     for (k, ce) in program.iter().filter(|(k, _)| !consumed.contains(*k)) {
         if ce.edge.kind == EdgeKind::ImplicitTrigger {
-            if !ce.site.is_some_and(|s| s.fires) {
+            // ENG-173: an operation that may run a table procedure of its name pairs too (a `Next`
+            // fires no trigger, but `E.Next(RR, true)` may call the table's `Next`).
+            let table_procedure = view
+                .site_facts
+                .get(&ce.obligation_id())
+                .is_some_and(|f| !f.rare().table_procedure.is_empty());
+            if !ce.site.is_some_and(|s| s.fires) && !table_procedure {
                 op_site += 1;
             } else if let Some(at) = model_record_ops.get(k) {
                 it_matched += 1;
@@ -1917,6 +1923,18 @@ fn convert<'a>(
                     }
                 }
                 edges.extend(conv.triggers(RoutineIx::of(ri), r, op, ce, &mut c));
+                // ENG-173: the table's procedure of the operation's name, when it may run.
+                if let Some(f) = conv.site_facts.get(&ce.obligation_id())
+                    && !f.rare().table_procedure.is_empty()
+                {
+                    edges.extend(conv.table_procedure_edges(
+                        RoutineIx::of(ri),
+                        r,
+                        op,
+                        f.rare(),
+                        &mut c,
+                    ));
+                }
                 edges.extend(conv.table_events(
                     RoutineIx::of(ri),
                     r,
@@ -2967,6 +2985,47 @@ impl<'a> Converter<'a> {
         c: &mut SiteCensus,
     ) -> Vec<CallEdge> {
         self.trigger_edges(ix, r, op, &ce.edge.routes, c)
+    }
+
+    /// ENG-173: the call edges of a record operation whose table scope declares a procedure of
+    /// its name that may take the call (`RareSiteFacts::table_procedure`): one `Method` edge per
+    /// route, from the operation (BC 28.4: a table procedure overloads the platform method and
+    /// alc binds by the arguments). A model routine is `Resolved` when the platform certainly
+    /// cannot take the call, else `Maybe`; a routine outside the model is an external target.
+    fn table_procedure_edges(
+        &self,
+        ix: RoutineIx,
+        r: &ModelRoutine,
+        op: &ModelRecordOperation,
+        rare: &crate::program::resolve::full::RareSiteFacts,
+        c: &mut SiteCensus,
+    ) -> Vec<CallEdge> {
+        let mut out = Vec::new();
+        for route in &rare.table_procedure {
+            let mut e = CallEdge::base(ix, &r.id, &op.id, &op.id);
+            e.dispatch_kind = DispatchKind::Method;
+            match (self.target(route), &route.target) {
+                (Target::Model(callee), _) => {
+                    e.to = Some(callee.id.clone());
+                    e.resolution = if rare.platform_cannot {
+                        Resolution::Resolved
+                    } else {
+                        Resolution::Maybe
+                    };
+                }
+                (Target::Outside, RouteTarget::Routine(_) | RouteTarget::AbiSymbol { .. }) => {
+                    e.resolution = Resolution::ExternalTarget;
+                    e.external_type_ref = self.dependency_ref(route).flatten();
+                    self.record_target(&op.id, route);
+                }
+                _ => {
+                    c.adapter_routes_dropped += 1;
+                    continue;
+                }
+            }
+            out.push(e);
+        }
+        out
     }
 
     /// B6 (engine limits L20): the record operations the platform performs
