@@ -812,6 +812,38 @@ fn batch_refuses_a_symlink_hop_in_a_cache_folder() {
     }
 }
 
+/// TLS-116 (sol r4): a spelling that passes through a cache folder is refused even when a
+/// later `..` leaves it: `<ir>/<key>/../../report.jsonl` lands outside the cache, but the
+/// run's own prune can remove `<key>` and leave the configured path unreachable. Refused
+/// before any job, for the report and for a job's stream; nothing is written.
+///
+/// Discrimination (2026-11-23, r5): `link_hops` without its entered-folder test (`false &&`
+/// before `m.is_dir()`): fails "(report)" (exit 0, not 3); restored, passes.
+#[test]
+fn batch_refuses_a_spelling_through_a_cache_folder() {
+    let f = fixture();
+    let entry = warm(&f);
+    let key = entry.parent().unwrap();
+    let d = tempfile::tempdir().unwrap();
+    let x = d.path().join("x.out");
+    let report = key.join("../../report.jsonl");
+    let stream = key.join("../../stream.out");
+    let landed = f.root.parent().unwrap();
+    for (case, s, env) in [
+        (
+            "(report)",
+            &x,
+            vec![("ALSEM_IR_CACHE_REPORT", report.to_str().unwrap())],
+        ),
+        ("(stream)", &stream, vec![]),
+    ] {
+        let out = batch_jobs(&f, d.path(), &[fanout_to(&f, s)], &env);
+        assert_refused(case, &out, "is in a cache folder");
+        assert!(!landed.join("report.jsonl").exists(), "{case}: no report");
+        assert!(!landed.join("stream.out").exists(), "{case}: no stream");
+    }
+}
+
 /// TLS-116 (sol r3 2): a shard directory is made one component at a time, each checked
 /// just before it is made. With `alias → <ir>`, the shard `--out D/missing/../alias/new`
 /// passes the check while `missing` is absent; making `missing` makes the rest reach the

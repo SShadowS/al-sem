@@ -36,7 +36,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   destination lies in a cache folder; a write whose name as spelled lies in one (a symlink
   `ir/last-prune` pointing outside is still a name the prune replaces); a write that reaches its
   destination through a symlink whose own name lies in one (`report → ir/last-prune → outside`:
-  every hop is checked); a file that is a cache
+  every hop is checked); a write whose spelling enters a cache folder, even one a later `..`
+  leaves (`ir/<key>/../../report.jsonl`: a prune can remove `<key>`); a file that is a cache
   file under any name (a hard link, a bind mount of a file; Windows too, by its file id); a
   directory target that holds a cache folder; and a write into the run's claim folder. Every open
   (streams, `--out`, shard files and directories, traces, the report) checks those before it

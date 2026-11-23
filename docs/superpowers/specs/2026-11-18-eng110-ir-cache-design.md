@@ -328,7 +328,10 @@ Now the parent and every worker use the cache, and the cache folders are protect
   resolved destination lies in a cache folder; a write whose name, as spelled, lies in one (a
   symlink `ir/last-prune` pointing outside is still the prune's name, which it would replace); a
   write that passes through a symlink whose own name lies in one (every hop of the resolution is
-  checked: `report → ir/last-prune → outside`, `cache_guard::link_hops`); an existing file that is a cache file under any name (a hard link, a bind mount of a file); a
+  checked: `report → ir/last-prune → outside`, `cache_guard::link_hops`); a write whose spelling
+  enters a cache folder, even one a later `..` leaves (`ir/<key>/../../report.jsonl`: a prune can
+  remove `<key>` and leave the path unreachable); an existing file that is a cache file under any
+  name (a hard link, a bind mount of a file); a
   directory target that holds a cache folder; and a write into the run's claim folder.
 - **Every open** (`claim::open_for_write`, `open_trace`, the report's registration and appends)
   checks the same paths first, before anything is created; then opens an existing file WITHOUT

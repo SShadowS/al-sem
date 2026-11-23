@@ -413,8 +413,9 @@ pub(super) fn refuses_path(
     link_hops(snap, cwd.join(spelled), 0)
 }
 
-/// Follow `path` as the OS does, one component at a time; at each symlink met,
-/// the folder holding the link's own name is checked ([`folder_hit`]), then
+/// Follow `path` as the OS does, one component at a time; every folder it
+/// enters is checked ([`folder_hit`]), also one a later `..` leaves, and at
+/// each symlink met the folder holding the link's own name is checked, then
 /// the walk goes on through the link's text. A missing component ends it (no
 /// link lies beyond); 40 hops end it as the OS would (`ELOOP`).
 fn link_hops(snap: &Snapshot, path: PathBuf, hops: u32) -> std::io::Result<Option<&'static str>> {
@@ -437,6 +438,13 @@ fn link_hops(snap: &Snapshot, path: PathBuf, hops: u32) -> std::io::Result<Optio
             Err(e) => return Err(e),
         };
         if !m.file_type().is_symlink() {
+            // A folder the spelling enters, even one a later `..` leaves: a
+            // prune can remove it and make the path unreachable (sol r4).
+            if m.is_dir()
+                && let Some(why) = folder_hit(snap, std::iter::once(cur.as_path()))?
+            {
+                return Ok(Some(why));
+            }
             continue;
         }
         let parent = cur.parent().unwrap_or(Path::new("")).to_path_buf();
