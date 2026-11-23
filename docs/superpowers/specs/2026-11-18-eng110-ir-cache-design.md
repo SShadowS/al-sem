@@ -314,9 +314,10 @@ Now the parent and every worker use the cache, and the cache folders are protect
   (`statx`; a reused inode number gets a new birth time, so it is not taken for a pruned file);
   Windows volume serial and 128-bit file id. A name removed during the walk (a concurrent prune,
   or a Windows delete pending) is skipped; any other walk error refuses the run. The parent writes
-  the snapshot (its on/off decisions, a header of counts and a blake3 of the body) to the claim
-  folder through a temporary file and a rename, and claims it so no write can take it; a worker
-  reads it at its start and fails closed (exit 4, no job run) when it is missing or damaged.
+  the snapshot (its on/off flags, `0` or `1` only; its counts; a blake3 over flags, counts and
+  body) to the claim folder through a temporary file and a rename, and claims it so no write can
+  take it; a worker reads it at its start and fails closed (exit 4, no job run) when it is missing
+  or damaged, or says a cache is on with no folder.
   Workers never walk. Windows: one open per entry (TLS-109's `read_file_id`);
   `FileIdExtdDirectoryInfo` could give the ids from the listing, not done because no Windows
   machine runs these tests. Measured 2026-11-22 on server1's real `~/.cache/al-ch-snapshot-cache`
@@ -325,15 +326,17 @@ Now the parent and every worker use the cache, and the cache folders are protect
   ms warm, 1,885 ms on the first run after the build.
 - **The check** (`manifest::check_write_sets`, exit 3 before any job) refuses a write whose
   resolved destination lies in a cache folder; a write whose name, as spelled, lies in one (a
-  symlink `ir/last-prune` pointing outside is still the prune's name, which it would replace); an
-  existing file that is a cache file under any name (a hard link, a bind mount of a file); a
+  symlink `ir/last-prune` pointing outside is still the prune's name, which it would replace); a
+  write that passes through a symlink whose own name lies in one (every hop of the resolution is
+  checked: `report → ir/last-prune → outside`, `cache_guard::link_hops`); an existing file that is a cache file under any name (a hard link, a bind mount of a file); a
   directory target that holds a cache folder; and a write into the run's claim folder.
 - **Every open** (`claim::open_for_write`, `open_trace`, the report's registration and appends)
   checks the same paths first, before anything is created; then opens an existing file WITHOUT
   creating it and checks the handle's identity against the snapshot's files; only a missing file is
   created, exclusively, once its folder passed, and is not handle-checked (it is new). A dangling
-  symlink outside the caches is still written through. A shard directory is checked the same way
-  before it is made (`claim::check_dir`). So an alias made after the check is refused at the open
+  symlink outside the caches is still written through. A shard directory is made one component at
+  a time, each checked just before it is made (`claim::make_dir`): a component made earlier can
+  make a later spelling reach a cache folder (`missing/../alias/new`). So an alias made after the check is refused at the open
   (exit 1) and nothing is left in a cache folder. The folder tests are path-based: a path another
   process changes during the run is outside TLS-109's scope. The run's own writes make no links. A
   cache file published during the run is not in the snapshot, but its folder is.
@@ -361,9 +364,15 @@ in a cache folder; a concurrent prune during the walk; a stream on the report; a
 swapped after registration; each guard of the registration; a dangling-symlink cache folder
 whose target a shard job makes (IR and text); a cache name linking outside; a FIFO report; a
 worker with a missing or damaged snapshot; writes into the claim folder; a dangling-symlink
-stream outside the caches; and a reused inode number (`cache_guard::tests`). Each guard has a
-recorded discrimination proof. The shared batch test helper points every run at a temporary
-`XDG_CACHE_HOME`.
+stream outside the caches; a reused inode number (`cache_guard::tests`); a symlink hop in a
+cache folder (report and stream); and a shard directory that becomes reachable only once its
+first component is made. Each guard has a recorded discrimination proof, with one exception:
+skipping the handle check for a file the open itself created (`O_EXCL`). It is sound by
+construction (a file that did not exist a moment ago is no cache file) and only matters on a file
+system without birth times, where a new file could reuse a pruned cache file's inode number; a
+test would have to predict that number. The snapshot's "(no header)" case shares its refusal with
+the magic and field tests (each refuses it alone), so it has no break of its own. Every batch test
+helper points its runs at a temporary `XDG_CACHE_HOME` (`cli_batch_writes::temp_cache_home`).
 
 ## Correctness checks
 
