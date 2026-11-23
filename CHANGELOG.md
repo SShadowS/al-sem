@@ -22,13 +22,22 @@ CDO has no site of these shapes, so no CDO answer moves.
   `E.Delete()`, `E.Next()`, `E.Modify()` or `E.FindSet()` with a table procedure of that name
   and no parameters, alc gives no AL0524 but binds the procedure: `D := O.Delete()` compiles
   only so, the procedure returning a record (Fable's H20-H23). The hiding rule
-  (`platform_record_fit::platform_hidden_by`) now takes that case; it was measured for zero
-  parameters only.
-- **`(X)` is `X` for a record operation's receiver.** `record_ops::receiver_variable`, which
-  both engines share, now reads through parentheses. `(E).Modify(true)` with a table's
-  `Modify(Boolean)` (which hides the platform's) wrote the table; `E.Modify(true)` did not.
+  (`platform_record_fit::platform_hidden_by`) now takes that case. Measured for zero parameters,
+  against all 23 methods with an all-optional or variadic overload, `Get(Value…)` and
+  `LockTable(Wait?, VersionCheck?)` among them: alc binds the procedure for every one, and two
+  controls that must bind the platform fail to compile (sol r1;
+  `/work/.al-sem/engine-notes/eng178/alloptional/RESULTS.md`).
+- **`(X)` is `X` for a record operation's receiver.** This moves every parenthesised record
+  receiver, with or without a table procedure. `record_ops::receiver_variable`, which both
+  engines share, now reads through parentheses, and `record_ops::receiver_key_text` drops
+  parentheses around the whole receiver, so `(Rec)` keys as the implicit `Rec` and keeps its
+  table (Fable r1, F1: it read as an unknown table). Before, a parenthesised receiver was no
+  record operation at all: `(E).Modify(true)` with a table's `Modify(Boolean)` (which hides the
+  platform's) wrote the table; `E.Modify(true)` did not. `(L).Modify(true)` on a temporary record
+  wrote; now it does not. `with (E) do Modify(true)` wrote nothing; now it writes.
 - **The session's refresh comparison shows the table-procedure decisions**
-  (`FileBindings::table_procedure`). Row reuse already compared them.
+  (`FileBindings::table_procedure`). Row reuse already compared them. A cloned session's memory
+  tally now counts that map too.
 - **Tests and red proofs.**
   - `cli_table_procedure_overload`:
     - `the_call_graph_export_reaches_the_table_procedure`: `BothGet` → `Get` over-approximate,
@@ -37,6 +46,11 @@ CDO has no site of these shapes, so no CDO answer moves.
     - `ZeroDelete` (no write) against `PlatformDelete`; the zero-over-optional rule off fails
       it.
     - `ParenModify` (no write) against `PlainModify`; no read-through fails it.
+    - `ParenRecModify` (a table's `(Rec).Modify(true)` writes it) against `PlainRecModify`;
+      `receiver_key_text` keeping the parentheses fails it. `ParenLogModify` writes;
+      `ParenTempLogModify` (a temporary record) does not.
+  - `record_ops::tests::receiver_key_text_drops_only_enclosing_parentheses`: `(A) + (B)` and a
+    `)` inside quotes keep their text.
   - `table_procedure_of_an_unchanged_file_changes_under_s`, in both memory modes: renaming the
     table's `Next` leaves the caller's text unchanged, and each step must equal a cold build.
     Row reuse ignoring `table_procedure` fails it.

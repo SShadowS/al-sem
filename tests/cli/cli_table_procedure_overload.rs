@@ -9,7 +9,22 @@
 use std::path::Path;
 use std::process::Command;
 
-const SOURCE: &str = r#"table 50490 "SB Log" { fields { field(1; K; Integer) { } } keys { key(PK; K) { } } }
+const SOURCE: &str = r#"table 50490 "SB Log"
+{
+    fields { field(1; K; Integer) { } }
+    keys { key(PK; K) { } }
+
+    procedure PlainRecModify()
+    begin
+        Rec.Modify(true);
+    end;
+
+    // Fable r1 on ENG-178 (F1): the implicit `Rec` keeps its table through parentheses.
+    procedure ParenRecModify()
+    begin
+        (Rec).Modify(true);
+    end;
+}
 table 50491 "SB Doc" { fields { field(1; K; Integer) { } } keys { key(PK; K) { } } }
 table 50494 "SB Other" { fields { field(1; K; Integer) { } } keys { key(PK; K) { } } }
 table 50492 "SB Entry"
@@ -213,6 +228,21 @@ codeunit 50493 "SB Mgt"
         (E).Modify(true);
     end;
 
+    // No table procedure: the platform's `Modify` runs, on a physical record or a temporary one.
+    procedure ParenLogModify()
+    var
+        L: Record "SB Log";
+    begin
+        (L).Modify(true);
+    end;
+
+    procedure ParenTempLogModify()
+    var
+        L: Record "SB Log" temporary;
+    begin
+        (L).Modify(true);
+    end;
+
     procedure ZeroDelete()
     var
         E: Record "SB Entry";
@@ -278,7 +308,8 @@ fn alsem(cwd: &Path, args: &[&str]) -> serde_json::Value {
 /// `SystemFieldModifyAll`; each restored, passes. The hiding rule (AL0524) is pinned by the
 /// adapter census of `tests/r0-corpus/ws-report-dataitem` (`GetFilters()`), which fails with it
 /// off. ENG-178: the zero-parameter-over-optional rule off fails `ZeroDelete`;
-/// `record_ops::receiver_variable` not reading through parentheses fails `ParenModify`.
+/// `record_ops::receiver_variable` not reading through parentheses fails `ParenModify`;
+/// `record_ops::receiver_key_text` keeping the parentheses fails `ParenRecModify`.
 #[test]
 fn a_table_procedure_named_like_a_record_builtin_is_called() {
     let t = tempfile::tempdir().unwrap();
@@ -348,6 +379,13 @@ fn a_table_procedure_named_like_a_record_builtin_is_called() {
     // platform's for both (no write).
     assert_eq!(answer("PlainModify", "SB Entry"), "no", "precondition");
     assert_eq!(answer("ParenModify", "SB Entry"), "no");
+    // ENG-178: a parenthesised receiver with no table procedure is the platform operation on its
+    // record: a physical record writes, a temporary one does not, and the implicit `Rec` keeps its
+    // table (Fable r1, F1: the key text `(Rec)` read no table).
+    assert_eq!(answer("PlainRecModify", "SB Log"), "yes", "precondition");
+    assert_eq!(answer("ParenRecModify", "SB Log"), "yes");
+    assert_eq!(answer("ParenLogModify", "SB Log"), "yes");
+    assert_eq!(answer("ParenTempLogModify", "SB Log"), "no");
 }
 
 /// ENG-178 (Fable r2 on ENG-173): `alsem graph`, which bc-dev-mcp's test selection walks

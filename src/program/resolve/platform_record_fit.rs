@@ -73,7 +73,9 @@ pub(crate) fn platform_hidden_by(method_lc: &str, user: &[String]) -> bool {
         // arguments from an overload whose parameters are all optional (`Delete(RunTrigger?)`,
         // `Next(Steps?)`, `Modify(RunTrigger?)`, `FindSet(ForUpdate?)`): alc gives no AL0524 but
         // binds the table's procedure (`D := O.Delete()` compiles only so, the procedure
-        // returning a record). Measured for zero parameters only.
+        // returning a record). Measured for zero parameters, against every all-optional
+        // overload in the table (23 methods, `Get(Value…)` and `LockTable(Wait?, …)` among them;
+        // engine-notes/eng178/alloptional, sol r1).
         let zero_over_optional = user.is_empty() && params.iter().all(|p| p.optional || p.variadic);
         same_types || zero_over_optional
     })

@@ -962,6 +962,7 @@ fn tally_parenless(t: &mut crate::engine::census::Tally, d: &DependencyBodyResol
             al_syntax::ir::ExprId,
             crate::program::resolve::full::BareVerdict,
         )>(ids.bare.len());
+        t.buf::<(al_syntax::ir::ExprId, bool)>(ids.table_procedure.len());
     }
 }
 

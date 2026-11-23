@@ -110,9 +110,19 @@ pub fn touches_table(method_lc: &str) -> bool {
 /// through `this` without the `this.` (`this.G` and `G` are one record: a
 /// `this.X` receiver is classified only when no local shadows `X`, ENG-12
 /// review); an indexed receiver without whitespace outside quotes
-/// (`Recs[ 1 ]` and `Recs[1]` are one element); any other text unchanged.
+/// (`Recs[ 1 ]` and `Recs[1]` are one element); parentheses around the whole
+/// text dropped (`(Rec)` is `Rec`, as [`receiver_variable`] reads it, ENG-178);
+/// any other text unchanged.
 pub fn receiver_key_text(t: &str) -> String {
-    let t = t.trim_start();
+    let mut t = t.trim_start();
+    while let Some(inner) = t
+        .trim_end()
+        .strip_prefix('(')
+        .and_then(|s| s.strip_suffix(')'))
+        && encloses_all(inner)
+    {
+        t = inner.trim();
+    }
     let t = match t.get(..5) {
         Some(p) if p.eq_ignore_ascii_case("this.") => t[5..].trim_start(),
         _ => t,
@@ -131,6 +141,27 @@ pub fn receiver_key_text(t: &str) -> String {
         out.push(c);
     }
     out
+}
+
+/// Whether `s` (the text inside an outer `(`…`)`) never closes that outer
+/// parenthesis early: `A) + (B` does, so `(A) + (B)` is not one parenthesised
+/// whole. Parentheses inside quotes do not count.
+fn encloses_all(s: &str) -> bool {
+    let (mut depth, mut quoted) = (0i32, false);
+    for c in s.chars() {
+        match c {
+            '"' => quoted = !quoted,
+            '(' if !quoted => depth += 1,
+            ')' if !quoted => {
+                depth -= 1;
+                if depth < 0 {
+                    return false;
+                }
+            }
+            _ => {}
+        }
+    }
+    depth == 0
 }
 
 /// Canonical record-op name (lowercase) → properly-cased RecordOpType.
@@ -171,4 +202,20 @@ pub fn record_op_type(method_lc: &str) -> Option<&'static str> {
         "locktable" => "LockTable",
         _ => return None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::receiver_key_text;
+
+    /// ENG-178: parentheses around the whole receiver go; any other parentheses stay.
+    #[test]
+    fn receiver_key_text_drops_only_enclosing_parentheses() {
+        assert_eq!(receiver_key_text("(Rec)"), "Rec");
+        assert_eq!(receiver_key_text("( (this.G) )"), "G");
+        assert_eq!(receiver_key_text("(Recs[ 1 ])"), "Recs[1]");
+        assert_eq!(receiver_key_text("(\"A)B\")"), "\"A)B\"");
+        assert_eq!(receiver_key_text("(A) + (B)"), "(A) + (B)");
+        assert_eq!(receiver_key_text("Rec"), "Rec");
+    }
 }
