@@ -122,8 +122,11 @@ fn comment_nodes<'t>(root: RawNode<'t>, source: &str) -> Vec<RawNode<'t>> {
     let bytes = source.as_bytes();
     let mut out = Vec::new();
     let mut at = 0;
-    while let Some(off) = bytes[at..].iter().position(|&b| b == b'/') {
-        let p = at + off;
+    // `match_indices` with a char pattern is a memchr search.
+    for (p, _) in source.match_indices('/') {
+        if p < at {
+            continue;
+        }
         at = p + 1;
         if !matches!(bytes.get(p + 1), Some(b'/' | b'*')) {
             continue;
@@ -825,14 +828,14 @@ fn collect_enum_values(node: RawNode, source: &str, out: &mut Vec<crate::ir::Enu
 /// CDO's dependencies 895 of 10,881 files say `runobject`). The full walk was ~1.7 % of
 /// a cache-off one-shot `analyze` on CDO.
 fn collect_run_objects(node: RawNode, source: &str, out: &mut Vec<String>) {
-    const NAME: &[u8] = b"runobject";
-    let range = node.byte_range();
-    let text = &source.as_bytes()[range.clone()];
-    let hits: Vec<usize> = text
-        .windows(NAME.len())
-        .enumerate()
-        .filter(|(_, w)| w.eq_ignore_ascii_case(NAME))
-        .map(|(i, _)| range.start + i)
+    const NAME: &str = "runobject";
+    let start = node.byte_range().start;
+    // ASCII lowercasing keeps every byte offset; `match_indices` is a fast substring search.
+    let hits: Vec<usize> = node
+        .text(source)
+        .to_ascii_lowercase()
+        .match_indices(NAME)
+        .map(|(i, _)| start + i)
         .collect();
     if hits.is_empty() {
         return;
@@ -4774,9 +4777,9 @@ fn preproc_ranges(root: RawNode, source: &str) -> Vec<(usize, usize)> {
 /// with parse errors never reads the ranges (`PREPROC_WALK`).
 fn has_conditional_directive(source: &str) -> bool {
     let bytes = source.as_bytes();
-    let mut at = 0;
-    while let Some(off) = bytes[at..].iter().position(|&b| b == b'#') {
-        let mut i = at + off + 1;
+    // `match_indices` with a char pattern is a memchr search.
+    source.match_indices('#').any(|(p, _)| {
+        let mut i = p + 1;
         while matches!(bytes.get(i), Some(b' ' | b'\t')) {
             i += 1;
         }
@@ -4785,12 +4788,8 @@ fn has_conditional_directive(source: &str) -> bool {
                 .get(i..i + w.len())
                 .is_some_and(|s| s.eq_ignore_ascii_case(w))
         };
-        if word(b"if") || word(b"el") || word(b"endif") {
-            return true;
-        }
-        at = at + off + 1;
-    }
-    false
+        word(b"if") || word(b"el") || word(b"endif")
+    })
 }
 
 /// A preprocessor node that makes code vary by build: any `preproc_*` kind but the
