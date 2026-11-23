@@ -9,7 +9,38 @@ only code. **The cache stays off on Windows until the probe passes on a real mac
 and a green probe run is diagnostics, not enablement: the product phase must also give positive
 keys on the shipped, stamped MSVC binaries.
 
-What rev 7 changes (sol r5): the slot's digest also binds the initial file bytes of every range
+What rev 8 changes (the owner's run at `9e8bf18f`, `/work/.al-sem/orchestrator/tls117-windows-9e8bf18f/`):
+- **The run.** Debug and `release-ship` probes: every item PASSed except W1 POSIX rename replace.
+  Every rival was refused at the canonical comparison (rename away, ancestor folder, hard link,
+  W9's `.text`/`.rdata`), every key was the running image's or absent, W9's `.data` change was
+  refused by the slot, W11's unstamped copy got no key, the stamp verified. W10 PASSed (variant
+  and relink, linker ran) under pwsh 7. The test build (`cargo test --example`) failed 13 items at
+  "stamp the copy: the slot magic occurs more than once".
+- **W1 POSIX, analysed.** At all three barriers: the `FileRenameInfoEx` call reported success, the
+  running image's name `a.exe` still opened the **original file id** (verified), and the source
+  `other-N.exe` was **gone from its name** (os error 2). So the replacement did not land at
+  `a.exe`; the image kept its name and id. The probe's verdict code returned "did not take" before
+  judging the key, so the run printed no key verdict for these three runs. A wrong key was not
+  possible there: every candidate opens `a.exe`, which is the original file (by id); and a rival,
+  wherever it went, is refused by content (W9 and the other W1 items show it). This was a
+  classification issue in the probe: rev 8 reports it as HELD (the OS kept the running image)
+  when the control replaced a non-running target, says **where the source went** (scanning the
+  image's folder, the scratch folder and the current directory for its file id), always prints
+  the key verdict even when classification fails, and checks every run's candidates by identity.
+  One open question the next run answers: where the source went. If the control also fails and
+  the source turns up in the current directory, the bare-name rename was resolved against the
+  process's current directory, not the source's folder (the owner may find stray `a.exe` or
+  `ctl-target.exe` files in the checkout root from the 9e8bf18f run; they are probe leftovers,
+  safe to delete).
+- **The test-build magic bug.** The test binary carried the probe's magic twice: the embedded
+  fixture (`include_bytes!`) and the test constant both spelled `TLS117-DATA-SLOT`. Both now use a
+  test-only magic (`TLS117-FIXT-SLOT`, fixture rebuilt; layout unchanged, checksum now 0x416a). New
+  item **W12** checks, in every build, that the binary holds the magic exactly once;
+  `examples/tls117/check-magic.sh` cross-builds the example and its test build and counts.
+- **W10** hashes through .NET (works in Windows PowerShell 5.1 and pwsh 7). **§9** says the
+  grammar clone must be at the commit CLAUDE.md names.
+
+What rev 7 changed (sol r5): the slot's digest also binds the initial file bytes of every range
 canonicalisation masks (section 3, "The digest"), so nothing the canonical hash skips is unbound;
 the probe refuses a key reply naming no candidate, requires an observed rival refused at the
 canonical comparison in the stale-name reproductions (folder swap, deleted launch link), and marks
@@ -770,9 +801,16 @@ $env:TREE_SITTER_AL_PATH = "<your tree-sitter-al clone>"
 $env:CMAKE_GENERATOR     = "Visual Studio 17 2022"
 $env:CARGO_TARGET_DIR    = "C:/atw"    # any short path; the default target path is too long (MAX_PATH)
 ```
+**The grammar clone must be at the commit CLAUDE.md names** (today `88bb6871`, the tree-sitter-al
+commit whose `node-types.json` hash equals the committed `crates/al-syntax/node-types.sha256`):
+`al-syntax`'s build script compares the two and stops the build on a mismatch, as it did on the
+owner's first try of a feature-branch checkout before the run at 9e8bf18f. Check with
+`git -C $env:TREE_SITTER_AL_PATH rev-parse --short HEAD`, and move it with
+`git -C $env:TREE_SITTER_AL_PATH checkout 88bb6871` (or the commit CLAUDE.md names then).
+
 Save each step's whole output to a file and send the files back.
 
-1. **The probe, W0-W9 and W11** (Git Bash or PowerShell):
+1. **The probe, W0-W12** (Git Bash or PowerShell):
    ```
    cargo run --example tls117_probe
    cargo test --example tls117_probe -- --test-threads=1 --nocapture
@@ -786,6 +824,8 @@ Save each step's whole output to a file and send the files back.
    ```
    powershell -ExecutionPolicy Bypass -File examples\tls117_w10.ps1
    ```
+   (Rev 8: the script hashes through .NET instead of `Get-FileHash`, which Windows PowerShell 5.1
+   could not load on the owner's PC; it runs in 5.1 and in pwsh 7.)
    It prints whether the linker ran, then `PASS`/`FAIL W10 variant` and `PASS`/`FAIL W10 relink`.
    It no longer decides the design (the slot is mandatory); a FAIL is reported to the orchestrator.
 3. **Optional, the stamp tool by hand** (any system; e.g. on a `release-ship` `alsem.exe`, which has
