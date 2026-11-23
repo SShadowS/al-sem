@@ -1154,6 +1154,66 @@ codeunit 50443 "GE Ternary"
         end;
     end;
 
+    // A ternary receiver of a method that binds nothing moves nothing (Fable: precision).
+    procedure TernaryReadReceiver(B: Boolean)
+    var
+        R: RecordRef;
+        S: RecordRef;
+        E: Record "GE Entry";
+        N: Integer;
+    begin
+        R.GetTable(E);
+        S.GetTable(E);
+        N := (B ? R : S).Count();
+        Guarded(R);
+    end;
+
+    // The table frame drops its rule when the source Variant is passed on outside the `case`
+    // (as `PassOn(V)` does): through a ternary too (sol). The control passes nothing.
+    procedure VariantFrameControlRoot()
+    var
+        E: Record "GE Entry";
+    begin
+        VariantFrameControl(E, E, true);
+    end;
+
+    local procedure VariantFrameControl(V: Variant; W: Variant; B: Boolean)
+    var
+        R: RecordRef;
+        Log: Record "GE Log";
+    begin
+        R.GetTable(V);
+        PassOn(B ? W : W);
+        case R.Number of
+            Database::"GE Doc":
+                Log.Insert();
+        end;
+    end;
+
+    procedure VariantFrameRoot()
+    var
+        E: Record "GE Entry";
+    begin
+        VariantFrame(E, E, true);
+    end;
+
+    local procedure VariantFrame(V: Variant; W: Variant; B: Boolean)
+    var
+        R: RecordRef;
+        Log: Record "GE Log";
+    begin
+        R.GetTable(V);
+        PassOn(B ? V : W);
+        case R.Number of
+            Database::"GE Doc":
+                Log.Insert();
+        end;
+    end;
+
+    local procedure PassOn(X: Variant)
+    begin
+    end;
+
     // The temp pass: a ternary argument may hand R to a callee that moves it to a physical Doc.
     // (A ternary RECEIVER of `Get` already leaves the answer unknown, R named or not.)
     procedure TernaryArgTempControl(B: Boolean)
@@ -1365,6 +1425,9 @@ fn a_recordref_get_moves_the_table_for_every_reader() {
     // table frame, nested), an argument or a receiver; the temp pass may not keep R temporary.
     // The control's ternaries name only S and T, so R stays an Entry.
     assert_eq!(answer("TernaryControl", "GE Log"), "no", "precondition");
+    // Not `yes`: the ternary binds nothing. (Base answers `unknown` too: an operation on a
+    // receiver the model cannot name leaves it open, an older matter than this rule.)
+    assert_ne!(answer("TernaryReadReceiver", "GE Log"), "yes");
     for routine in [
         "TernaryAlias",
         "NestedTernaryAlias",
@@ -1384,6 +1447,13 @@ fn a_recordref_get_moves_the_table_for_every_reader() {
         "precondition"
     );
     assert_ne!(answer("TernaryArgTemp", "GE Doc"), "no");
+    // The table frame: the source Variant passed on through a ternary drops the frame's rule.
+    assert_eq!(
+        answer("VariantFrameControlRoot", "GE Log"),
+        "no",
+        "precondition"
+    );
+    assert_eq!(answer("VariantFrameRoot", "GE Log"), "yes");
 }
 
 #[test]

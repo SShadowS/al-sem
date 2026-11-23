@@ -19,24 +19,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `A := B ? R : S; A.Get(…); Guarded(R)` answered `no` in the RecordRef flow, the table frame and
   the temp pass (which kept R temporary), and so did a ternary argument or receiver.
 - **The fix.**
-  - The walk records `A := c ? X : Y` as one assignment row per leaf branch: exactly `if c then
-    A := X else A := Y`, so every reader is right unchanged.
-  - For a ternary receiver or argument, the walk records its whole-variable leaves
+  - The walk records `A := c ? X : Y` as one assignment row per leaf branch, all at the
+    statement's anchor, each marked `PVarAssignment::ternary_leaf` (internal). Readers that take
+    rows as writes that may happen are right unchanged. Two readers needed the mark or the
+    shared anchor (Fable):
+    - d43 took a `true` leaf as a setter that runs for certain, so `IsHandled := C ? true :
+      false` said "confirmed". A leaf now may set true, as the `if` form does.
+    - `recref_origin` (a RecordRef operation's reason) kept only a statement's last origin, so
+      it named one branch. A statement now leaves every origin at its last position.
+  - For a ternary argument, or the receiver of a method that binds (`recref_bind`: Open,
+    GetTable, Get, Close, the plain receiver's rule), the walk records its whole-variable leaves
     (`PCallSite::ternary_holders`, internal, boxed: almost every call has none). The flow treats
-    each as holding anything from that call on, its alias class too (a global a local hides is
-    one of the object's global writes). The exit guards, the temp pass and the table frame read
-    each as a binding.
+    each, and its alias class, as holding anything from that call on; a global a local hides
+    becomes one of the object's global writes. The exit guards, the temp pass, the table frame
+    (the variable itself, and a source Variant passed on) and the field guard (sol) read each as
+    a binding. `RecRefBind` / `recref_bind` moved to `program::body::features` for the walk;
+    `recref_alias` re-exports them.
 - **Returns: unchanged here.** Every return shape already answers soundly, because a holder
   passed to a call counts as possibly kept (ENG-159). A returned parameter is an escape that
   ENG-161's escape facts must count; the measured rule is in ENG-161's task.
-- **Tests.** `cli_recref_get`'s `GE Ternary` codeunit, with a control (`no`): an assignment
-  (the flow, nested, the table frame, the temp pass), an argument (the flow, the frame, the
-  temp pass, a local exit guard) and a receiver. The lib test
-  `a_hidden_globals_write_reaches_the_instance` adds a global and a hidden-global ternary.
-- **Red proofs.** No per-branch rows fails `TernaryAlias`; no ternary leaves fails `TernaryArg`;
-  each reader's rule turned off fails a row of its own: the flow `TernaryArg`, the frame
-  `TernaryArgFrameRoot`, the exit guards `TernaryLocalGuard`, the temp pass `TernaryArgTemp`,
-  and the hidden-global write `TernaryHiddenRoot`.
+- **Tests.**
+  - `cli_recref_get`'s `GE Ternary` codeunit, with controls (`no`): an assignment (the flow,
+    nested, the table frame, the temp pass); an argument (the flow, the frame, a source Variant
+    passed on, the temp pass, a local exit guard); a receiver; a receiver of `Count()` (not
+    `yes`; base answers `unknown`, as it does for any operation on an unresolved receiver).
+  - `cli_prove_field_guarded_write`: a ternary argument rebinding past a field guard, and one
+    kept by a store and rebound by a later call, with a control.
+  - Unit tests: d43's `a_ternary_leaf_setter_only_may_set_is_handled`; `recref_origin`'s
+    `a_ternary_assignment_leaves_every_branch`; and the lib test
+    `a_hidden_globals_write_reaches_the_instance`, which gains a global and a hidden-global
+    ternary.
+- **Red proofs.** Each break below fails its test:
+  - no per-branch rows: `TernaryAlias`;
+  - no ternary leaves: `TernaryArg`;
+  - receivers of any method: `TernaryReadReceiver`;
+  - each reader's rule turned off fails a row of its own: the flow `TernaryArg`, the frame
+    `TernaryArgFrameRoot` and `VariantFrameRoot`, the exit guards `TernaryLocalGuard`, the temp
+    pass `TernaryArgTemp`, the field guard `TernaryRebound`, the hidden-global write
+    `TernaryHiddenRoot`;
+  - d43 and `recref_origin`: their unit tests.
+
+  A rule for the alias classes (a ternary leaf retainable) changed no answer when broken, since
+  every reader above already binds at the passing call, so it is not in the change.
 
 ### Changed (TLS-116: `alsem batch` uses the IR cache, and no job write reaches a cache folder)
 

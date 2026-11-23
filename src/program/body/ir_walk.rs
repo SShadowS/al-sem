@@ -1181,7 +1181,9 @@ impl<'a> SpineCtx<'a> {
                     // ENG-175: `A := c ? X : Y` is `if c then A := X else A := Y` (BC 28.4: A is
                     // the chosen branch's handle), so one row per leaf branch, each as that branch
                     // alone would give; every reader reads rows as writes that may happen.
-                    for leaf in ternary_leaves(self.file, *value) {
+                    let leaves = ternary_leaves(self.file, *value);
+                    let ternary_leaf = leaves != [*value];
+                    for leaf in leaves {
                         let rhs_identifier = lhs_plain
                             .as_ref()
                             .and_then(|_| plain_variable(self.file, leaf, own));
@@ -1211,6 +1213,7 @@ impl<'a> SpineCtx<'a> {
                                 ),
                             lhs_text,
                             rhs_text,
+                            ternary_leaf,
                         });
                     }
                 }
@@ -1607,8 +1610,14 @@ impl<'a> SpineCtx<'a> {
                     _ => None,
                 };
                 // ENG-175: the whole variables a ternary receiver or argument may be.
+                // A receiver only through a method that binds it, as a plain receiver (Fable: a
+                // ternary receiver of `Count()` or `Field(1)` moves nothing).
                 let receiver_expr = match &self.file.ir.expr(function).kind {
-                    Member { object, .. } => Some(*object),
+                    Member { object, member, .. }
+                        if crate::program::body::features::recref_bind(member).is_some() =>
+                    {
+                        Some(*object)
+                    }
                     _ => None,
                 };
                 let ternary_holders: Vec<String> = receiver_expr

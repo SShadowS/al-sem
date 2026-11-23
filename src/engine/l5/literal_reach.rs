@@ -1019,7 +1019,12 @@ fn table_frame(r: &ModelRoutine) -> Option<TableFrame> {
         }
         let e = escapes.entry(r_lc.clone()).or_default();
         for cs in &r.call_sites {
-            let passes = cs.argument_texts.iter().any(|a| names(a, pk));
+            // ENG-175 (sol): a ternary leaf may be the value passed.
+            let passes = cs
+                .argument_texts
+                .iter()
+                .chain(cs.ternary_holders())
+                .any(|a| names(a, pk));
             let is_gettable = matches!(&cs.callee, PCallee::Member { method, .. }
                 if method.eq_fold_identifier("gettable"));
             if passes && !is_gettable {

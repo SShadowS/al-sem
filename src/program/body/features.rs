@@ -49,6 +49,7 @@
 //!   - `PVarAssignment.lhs_is_member`
 //!   - `PVarAssignment.lhs_text`
 //!   - `PVarAssignment.rhs_text`
+//!   - `PVarAssignment.ternary_leaf`
 //!   - `PCFNNode.rare`
 //!   - `PCFNNode.source_range`
 //!   - `PCFNNode.flow`
@@ -502,6 +503,36 @@ impl PCallSite {
 /// `in_statement_position` is EXCLUDED — derived, serde-skipped internal data
 /// (an L5 input, not part of the L2 shape); baseline vectors deserialize it to
 /// the default `false`.
+/// How a RecordRef method binds the RecordRef it runs on: the one list (ENG-160), measured on
+/// BC 28.4 (`docs/superpowers/notes/2026-11-20-eng160-recordref-table-moves.md` and ENG-145's
+/// note). Through every alias of it, as `GetTable` (one handle). `Copy` moves neither the table
+/// (another table is a runtime error) nor the temporary state; `GetBySystemId` looks only in its
+/// own table; neither is here. Re-exported by `program::model::recref_alias`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecRefBind {
+    /// `Open(No[, Temp])`: the table its first argument names.
+    Open,
+    /// `GetTable(Rec)`: its argument's table and temporary state.
+    GetTable,
+    /// `Get(RecordId)`: the RecordId's table when it finds the record (a different table is
+    /// physical, the same table keeps its state), else nothing: any table, state unknown.
+    Get,
+    /// `Close`: no table.
+    Close,
+}
+
+/// [`RecRefBind`] of a method name (any case).
+#[must_use]
+pub fn recref_bind(method: &str) -> Option<RecRefBind> {
+    Some(match method.trim().fold_identifier().as_str() {
+        "open" => RecRefBind::Open,
+        "gettable" => RecRefBind::GetTable,
+        "get" => RecRefBind::Get,
+        "close" => RecRefBind::Close,
+        _ => return None,
+    })
+}
+
 impl PCallSite {
     /// [`Self::ternary_holders`], empty when there is none.
     #[must_use]
@@ -852,6 +883,13 @@ pub struct PVarAssignment {
     /// like `lhs_text`. INTERNAL-ONLY like `rhs_identifier`.
     #[serde(skip)]
     pub rhs_text: Option<String>,
+    /// ENG-175: the row is one leaf of a conditional expression (`A := c ? X : Y` gives a row per
+    /// leaf, all at the statement's anchor): it runs only when its branch is chosen, so a reader
+    /// that needs an assignment to run for certain (d43's "must set") reads it as conditional.
+    ///
+    /// INTERNAL-ONLY (`serde(skip)`, excluded from PartialEq).
+    #[serde(skip)]
+    pub ternary_leaf: bool,
 }
 
 /// MANUAL PartialEq: compares exactly the SERIALIZED L2 contract surface.
@@ -1595,7 +1633,7 @@ mod tests {
                 pending = false;
             }
         }
-        assert_eq!(actual.len(), 25, "scanner found {actual:?}");
+        assert_eq!(actual.len(), 26, "scanner found {actual:?}");
         assert_eq!(documented, actual);
     }
 
