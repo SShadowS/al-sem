@@ -18,6 +18,18 @@ $exe = Join-Path $target 'release-ship\examples\tls117_probe.exe'
 $out = Join-Path $target 'tls117-w10'
 New-Item -ItemType Directory -Force $out | Out-Null
 
+# SHA-256 of a file through .NET, not Get-FileHash: on the owner's PC Windows PowerShell 5.1 could
+# not load Get-FileHash (run at 9e8bf18f); this works in 5.1 and in pwsh 7 alike.
+function FileSha256([string] $path) {
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $bytes = $sha.ComputeHash([System.IO.File]::ReadAllBytes($path))
+        return [System.BitConverter]::ToString($bytes).Replace('-', '')
+    } finally {
+        $sha.Dispose()
+    }
+}
+
 function Build([string[]] $extra) {
     & cargo build --profile release-ship --example tls117_probe @extra
     if ($LASTEXITCODE -ne 0) { throw "cargo build failed: $extra" }
@@ -32,7 +44,7 @@ Copy-Item $exe (Join-Path $out 'variant.exe') -Force
 # 3. The base source again, relinked: touching the probe's source forces a rebuild and link.
 $before = Get-Item $exe
 $beforeTime = $before.LastWriteTimeUtc
-$beforeHash = (Get-FileHash $exe -Algorithm SHA256).Hash
+$beforeHash = FileSha256 $exe
 Start-Sleep -Seconds 2
 (Get-Item 'examples\tls117_probe.rs').LastWriteTime = Get-Date
 Build @()
@@ -40,7 +52,7 @@ Copy-Item $exe (Join-Path $out 'relink.exe') -Force
 # The linker must have run: the output's modification time moved. Its hash is reported; an
 # unchanged hash with a moved time means the link is reproducible.
 $afterTime = (Get-Item $exe).LastWriteTimeUtc
-$afterHash = (Get-FileHash $exe -Algorithm SHA256).Hash
+$afterHash = FileSha256 $exe
 $linked = $afterTime -gt $beforeTime
 Write-Output ("W10 relink: linker ran: {0} (mtime {1:o} -> {2:o}); output hash changed: {3}" -f `
     $linked, $beforeTime, $afterTime, ($afterHash -ne $beforeHash))

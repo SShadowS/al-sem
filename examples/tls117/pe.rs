@@ -1095,7 +1095,10 @@ mod tests {
         assert!(canonical_file(&FIXTURE[..0x810]).is_err());
     }
 
-    const MAGIC: &[u8; 16] = b"TLS117-DATA-SLOT";
+    /// The fixture's own magic: a test-only spelling, so neither this constant nor the embedded
+    /// fixture puts the probe's magic into the test binary a second time (the probe's own slot
+    /// must stay its only copy; the owner's run at 9e8bf18f caught both).
+    const MAGIC: &[u8; 16] = b"TLS117-FIXT-SLOT";
     const BASE: u64 = 0x7ff6_1234_0000;
 
     /// The slot as part A reads it from a simulated load of `file` at [`BASE`].
@@ -1183,14 +1186,14 @@ mod tests {
     }
 
     /// The independent check of the checksum code: on the unstamped fixture it reproduces the
-    /// value the linker wrote (0xe3a3, read off `objdump -p`).
+    /// value the linker wrote (0x416a, read off `objdump -p`).
     #[test]
     fn pe_checksum_matches_the_linker() {
-        assert_eq!(pe_checksum(FIXTURE).unwrap(), 0xe3a3);
+        assert_eq!(pe_checksum(FIXTURE).unwrap(), 0x416a);
         let mut f = FIXTURE.to_vec();
         let st = stamp(&mut f, MAGIC).unwrap();
         let (old, new) = st.checksum.unwrap();
-        assert_eq!(old, 0xe3a3);
+        assert_eq!(old, 0x416a);
         assert_eq!(pe_checksum(&f).unwrap(), new);
     }
 

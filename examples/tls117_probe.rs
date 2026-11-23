@@ -1060,6 +1060,7 @@ mod win {
         exe: &Path,
         n: usize,
         other_bytes: &[u8],
+        rival_id: &mut Option<(u64, u128)>,
     ) -> std::io::Result<()> {
         match how {
             Mutation::AwayThenWrite => {
@@ -1086,6 +1087,7 @@ mod win {
             Mutation::PosixRenameOver => {
                 let other = dir.join(format!("other-{n}.exe"));
                 std::fs::write(&other, other_bytes)?;
+                *rival_id = file_id_at(&other).ok();
                 posix_rename_over(&other, "a.exe")
             }
             Mutation::AncestorAwayThenRecreate => {
@@ -1121,6 +1123,7 @@ mod win {
         k.send("key-barriers");
         let mut did: Option<Result<String, String>> = None;
         let mut replaced = false;
+        let mut rival_id = None;
         let result = loop {
             let r = k.recv();
             let Some(full) = r.strip_prefix("BARRIER ") else {
@@ -1136,7 +1139,7 @@ mod win {
                     "barrier {at} (synthetic): the step never ran, not credited as a race test"
                 )));
             } else if tag == at {
-                did = Some(match mutate(how, &dir, &exe, n, &rival) {
+                did = Some(match mutate(how, &dir, &exe, n, &rival, &mut rival_id) {
                     Ok(()) => match file_id_at(&exe) {
                         // Verified before the barrier is released: the old name opens
                         // another file now.
@@ -1144,22 +1147,20 @@ mod win {
                             replaced = true;
                             Ok("replaced by a rival build (verified)".into())
                         }
-                        // The call reported success but the image kept its name: HELD only when
-                        // the control replaced a non-running target and the other file also
-                        // stayed where it was (nothing moved at all).
+                        // The call reported success but the image kept its name and id (owner
+                        // run 9e8bf18f: and the source left its name). Whatever happened to the
+                        // source, the name the candidates open still names the running image,
+                        // so no rival can be offered: HELD, provided the control replaced a
+                        // non-running target. Where the source went is reported (evidence).
                         Ok(_) if matches!(how, Mutation::PosixRenameOver) => {
-                            let other = dir.join(format!("other-{n}.exe"));
-                            match file_id_at(&other) {
-                                Ok(oid) if oid != orig_id => posix_held(
-                                    "the OS kept the running image: the POSIX rename reported \
-                                     success and moved nothing"
-                                        .into(),
-                                ),
-                                r => Err(format!(
-                                    "mutation did not take, and the other file is not where it \
-                                     was ({r:?})"
-                                )),
-                            }
+                            let cwd = std::env::current_dir().unwrap_or_default();
+                            let went = rival_id.map_or("source id unknown".to_string(), |id| {
+                                locate_id(id, &[&dir, s.path(), &cwd])
+                            });
+                            posix_held(format!(
+                                "the OS kept the running image (same name, same id): the POSIX \
+                                 rename reported success; the source: {went}"
+                            ))
                         }
                         Ok(_) => Err("mutation did not take: same file id at the old name".into()),
                         Err(e) => Err(format!("mutation unverifiable: {e}")),
@@ -1191,20 +1192,51 @@ mod win {
             }
             k.send("go");
         };
-        let did = did.ok_or("the barrier never came")??;
-        let (_, said) = judge(&result, &orig).map_err(|e| format!("{did}; {e}"))?;
-        // When a name was replaced before any candidate was opened, every candidate that is not
-        // the original file (by identity) must be a rival refused at the canonical comparison.
-        if replaced && at == "after-query" {
-            // The folder swap is a stale-name reproduction: a rival must have been observed.
-            let stale = matches!(how, Mutation::AncestorAwayThenRecreate);
-            candidates_ok(&result, orig_id, stale).map_err(|e| format!("{did}; {said}; {e}"))?;
-        }
+        let did = did.ok_or("the barrier never came")?;
+        // The key verdict is always printed, also when the mutation's classification failed.
+        let key = judge(&result, &orig);
+        let did = did.map_err(|e| {
+            let k = match &key {
+                Ok((_, s)) => s.clone(),
+                Err(k) => k.clone(),
+            };
+            format!("{e}; key: {k}")
+        })?;
+        let (_, said) = key.map_err(|e| format!("{did}; {e}"))?;
+        // Every run: each candidate that is not the original file (by identity) must be a rival
+        // refused at the canonical comparison. The folder swap before any candidate was opened is
+        // a stale-name reproduction: there a rival must actually have been observed.
+        let stale =
+            replaced && at == "after-query" && matches!(how, Mutation::AncestorAwayThenRecreate);
+        candidates_ok(&result, orig_id, stale).map_err(|e| format!("{did}; {said}; {e}"))?;
         Ok(format!("{did}; {said}"))
     }
 
+    /// Where a file with id `id` is now: the first entry of `dirs` (read non-recursively) whose
+    /// file id matches, or "not found".
+    fn locate_id(id: (u64, u128), dirs: &[&Path]) -> String {
+        for d in dirs {
+            let Ok(rd) = std::fs::read_dir(d) else {
+                continue;
+            };
+            for e in rd.flatten() {
+                if file_id_at(&e.path()).ok() == Some(id) {
+                    return format!("now at {}", e.path().display());
+                }
+            }
+        }
+        format!(
+            "not found in {}",
+            dirs.iter()
+                .map(|d| d.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    }
+
     /// The POSIX rename helper on a target nobody runs: it must replace it (the target's name
-    /// then opens the source's file id).
+    /// then opens the source's file id). On failure, says where the source went (the scratch
+    /// folder, or the current directory, should a bare name have been resolved there).
     fn posix_control(scratch: &Path, rival: &[u8]) -> Result<String, String> {
         let target = scratch.join("ctl-target.exe");
         let src = scratch.join("ctl-src.exe");
@@ -1215,7 +1247,11 @@ mod win {
         if file_id_at(&target).ctx("control target id")? == src_id {
             Ok("control: replaced a non-running target (verified)".into())
         } else {
-            Err("control: the POSIX rename did not replace a non-running target".into())
+            let cwd = std::env::current_dir().unwrap_or_default();
+            Err(format!(
+                "control: the POSIX rename did not replace a non-running target; the source: {}",
+                locate_id(src_id, &[scratch, &cwd])
+            ))
         }
     }
 
@@ -1472,6 +1508,22 @@ mod win {
             notes.push(".data byte changed: refused by the slot".into());
             Ok(notes.join(" | "))
         }
+    }
+
+    /// W12: this binary (the probe, or its test build) holds the slot magic exactly once, so its
+    /// copies can be stamped. The owner's run at 9e8bf18f found the test build holding it twice
+    /// (the embedded fixture and a test constant); both now use a test-only magic.
+    pub(crate) fn w12_magic_once() -> Outcome {
+        outcome((|| {
+            let f = std::fs::read(std::env::current_exe().ctx("current_exe")?).ctx("read self")?;
+            let m = magic();
+            let n = f.windows(16).filter(|w| *w == m).count();
+            if n == 1 {
+                Ok("the slot magic occurs once".into())
+            } else {
+                Err(format!("the slot magic occurs {n} times"))
+            }
+        })())
     }
 
     /// W11: an unstamped copy gives no key (and says why).
@@ -2005,6 +2057,10 @@ mod win {
 
     pub(crate) fn all() -> Vec<Item> {
         vec![
+            (
+                "W12 the slot magic occurs once in this binary",
+                w12_magic_once,
+            ),
             ("W0 local NTFS: image and cache roots", w0_local),
             ("W1 mapped name follows a rename", w1_name_follows_rename),
             ("W1 rename away + write", w1_away),
@@ -2072,6 +2128,10 @@ mod win {
         #[test]
         fn w0() {
             check(w0_local());
+        }
+        #[test]
+        fn w12() {
+            check(w12_magic_once());
         }
         #[test]
         fn w1_name() {
