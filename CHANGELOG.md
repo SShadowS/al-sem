@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (ENG-178: table procedures named like record built-ins: four follow-ups from ENG-173)
+
+From Fable's second review of ENG-173 (`/work/.al-sem/engine-notes/eng173/fable-eng173-r2.md`).
+CDO has no site of these shapes, so no CDO answer moves.
+- **`alsem graph` reaches the table's procedure where both may run.** Where the platform
+  operation may run instead of the table's procedure (alc ranks the conversions), the resolver
+  edge keeps the operation's triggers and the procedure's routes stay a site fact. The export
+  (`impact_graph::project::engine_edges`) now adds the caller's edge to the procedure too, as
+  over-approximate (`confidence` not `Resolved`). bc-dev-mcp's test selection reaches that
+  caller. No schema change: an over-approximate `Direct` edge is a shape the parser already
+  reads.
+- **A zero-parameter procedure takes a zero-argument call from an all-optional overload.** For
+  `E.Delete()`, `E.Next()`, `E.Modify()` or `E.FindSet()` with a table procedure of that name
+  and no parameters, alc gives no AL0524 but binds the procedure: `D := O.Delete()` compiles
+  only so, the procedure returning a record (Fable's H20-H23). The hiding rule
+  (`platform_record_fit::platform_hidden_by`) now takes that case; it was measured for zero
+  parameters only.
+- **`(X)` is `X` for a record operation's receiver.** `record_ops::receiver_variable`, which
+  both engines share, now reads through parentheses. `(E).Modify(true)` with a table's
+  `Modify(Boolean)` (which hides the platform's) wrote the table; `E.Modify(true)` did not.
+- **The session's refresh comparison shows the table-procedure decisions**
+  (`FileBindings::table_procedure`). Row reuse already compared them.
+- **Tests and red proofs.**
+  - `cli_table_procedure_overload`:
+    - `the_call_graph_export_reaches_the_table_procedure`: `BothGet` → `Get` over-approximate,
+      `UserNext` → `Next` resolved, no edge from `PlatformNext`. Leaving the procedure routes
+      out of the projection fails it.
+    - `ZeroDelete` (no write) against `PlatformDelete`; the zero-over-optional rule off fails
+      it.
+    - `ParenModify` (no write) against `PlainModify`; no read-through fails it.
+  - `table_procedure_of_an_unchanged_file_changes_under_s`, in both memory modes: renaming the
+    table's `Next` leaves the caller's text unchanged, and each step must equal a cold build.
+    Row reuse ignoring `table_procedure` fails it.
+- **Goldens.** None moved.
+
 ### Fixed (ENG-173: a table procedure named like a record built-in is called; the call graph reaches it)
 
 - **Measured on BC 28.4 with alc 18.0.41** (`/work/.al-sem/engine-notes/eng173/alc-bind/
