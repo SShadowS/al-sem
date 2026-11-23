@@ -239,17 +239,16 @@ impl Walk<'_> {
                     .callsite_id
                     .as_deref()
                     .and_then(|id| self.calls.get(id).copied())
+                    && let Some(s) = st.as_mut()
                 {
-                    if let Some(s) = st.as_mut() {
-                        let before = before_anchor(&cs.source_anchor, self.target_anchor);
-                        for (i, v) in self.vars.iter().enumerate() {
-                            // A loading call (`GetBySystemId` on it, a by-var loader), or the
-                            // record handed to any call: `Clear` leaves it in a well-defined state
-                            // (as `Init`), any other call (`GetCriterion(Edited)`, a by-var out
-                            // parameter) leaves the callee's state, unknown.
-                            if passes(cs, v) || (before && call_site_loads(self.ctx, cs, v)) {
-                                s[i] = true;
-                            }
+                    let before = before_anchor(&cs.source_anchor, self.target_anchor);
+                    for (i, v) in self.vars.iter().enumerate() {
+                        // A loading call (`GetBySystemId` on it, a by-var loader), or the record
+                        // handed to any call: `Clear` leaves it in a well-defined state (as
+                        // `Init`), any other call (`GetCriterion(Edited)`, a by-var out
+                        // parameter) leaves the callee's state, unknown.
+                        if passes(cs, v) || (before && call_site_loads(self.ctx, cs, v)) {
+                            s[i] = true;
                         }
                     }
                 }

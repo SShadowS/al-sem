@@ -1247,6 +1247,49 @@ ran beside the timing).
 - Still open: a bare `cargo` started by a command queued before a timing is not checked; that
   is TLS-98's cargo wrapper.
 
+### Fixed (ENG-177: d11 and d21 need a load that reaches the operation; parens-less record operations in the statement tree)
+
+- **d11 (Modify without Get) and d21 (read without load) now follow paths.** Both report an
+  operation on a record never loaded before it, and stay silent when a load happens on SOME path
+  (their rule since they were written: `if B then A.Get(1); A.Modify()` is silent). They read
+  "before" as text order, so a load that no path carries to the operation still silenced them:
+  `A.Get(1); A := N; A.Modify()` (N never loaded), a chain `B := L; B := N; C := B`, or
+  `if B then begin A.Get(1); exit; end; A.Modify()`. A walk over the statement tree
+  (`l5::detectors::may_load`) now answers whether some path reaching the operation ends with the
+  record loaded, and the detectors stay silent only when both the old signals and the walk say
+  so: the change can add findings, never drop one.
+  - The walk follows `if`, `case`, loops (to a fixed point), `break`, `continue`, `exit` and a
+    terminating `Error`. A local record starts unloaded; a parameter, a global or `Rec` may be
+    loaded (its state is the caller's). A whole-record copy `A := X` gives A X's state (each
+    value of a conditional expression, ENG-175); a call result or an expression may be loaded.
+  - The one thing that unloads a record is a copy of a record no path has loaded. `Clear(A)` and
+    `TransferFields` leave a well-defined state (as `Init` and `Copy`); a record handed to any
+    call has the callee's state (a by-var out parameter), so it may be loaded.
+  - The task asked instead for "loaded only when EVERY reaching assignment is loaded". Measured
+    first: on CDO that rule moved no finding, and it would have made only the copy case strict
+    while the direct case (`if B then A.Get(1)`) stays a "some path" rule.
+- **A parens-less record operation in a condition is in the statement tree.**
+  `ir_walk::harvest` gave a parens-less read a leaf only when it had a call-site id, so
+  `if L.FINDSET then` and `until L.NEXT = 0` were no leaf at all: every reader of the statement
+  tree (the L4 walker, this walk) missed those operations. It now emits the operation leaf (or
+  the either-node where a table procedure may run, ENG-173).
+- **CDO (pinned `bc3ccb18`, `cdo-before-after` c6f61f04 against the head):** no finding and no
+  fingerprint added or removed at `--scope primary` (2306) or `--scope all` (32429); unknown
+  edges 0 → 0. The first draft added 10 (d11 +8, d21 +2): every one was triaged against source
+  and was a false positive (a `TransferFields`-built record, the `Clear`-then-insert pattern, a
+  record filled through a by-var argument, a parens-less `FINDSET` the tree left out, and `CalcSums`
+  on a record handed to an event), which the rules above fix. Two older false-positive classes
+  that triage showed are filed: ENG-179 (d21 reports `CalcSums`, which needs no loaded record;
+  138 base findings) and ENG-180 (the textual rule does not count `TransferFields`/`Clear`).
+- **Tests and red proofs.** `cli_d11_load_paths` runs `alsem analyze` on 22 shapes: silent where
+  a branch, `case`, conditional expression or loop loads on one path, a field write, a call
+  result, a parameter, a chain, `Clear`, a by-var fill, `TransferFields`, a parens-less load;
+  reported for a later unloaded copy, a broken chain, `exit`, a parens-less load then copy, and
+  one d21 read. Each break failed it, each restore passed: the walk ignored; a copy always
+  loaded; `exit` not ending its path; an AND join; `harvest` leaving out the parens-less
+  operation; a record handed to a call keeping its state; `TransferFields` not loading.
+- **Goldens.** None moved (`check-goldens`, 2228 tests).
+
 ### Fixed (ENG-178: table procedures named like record built-ins: four follow-ups from ENG-173)
 
 From Fable's second review of ENG-173 (`/work/.al-sem/engine-notes/eng173/fable-eng173-r2.md`).
