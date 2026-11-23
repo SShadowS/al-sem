@@ -1,11 +1,23 @@
 # TLS-117: the IR cache on Windows (design note)
 
-Status: **rev 3**, after sol's reviews r1 and r2 (`/work/.al-sem/tools-notes/tls117-design-review-sol-r{1,2}.md`)
-and the orchestrator's decisions on them. No product code yet; the native probe
-(`examples/tls117_probe.rs`) is the only code. **The cache stays off on Windows until the probe
-passes on a real machine** (section 9).
+Status: **rev 4**, after the owner's probe run at `e98e1bf0`
+(`/work/.al-sem/orchestrator/tls117-windows-e98e1bf0.txt`) and the orchestrator's choice of
+**design B**. No product code yet; the native probe (`examples/tls117_probe.rs`, with the PE
+canonicaliser `examples/tls117/pe.rs`) is the only code. **The cache stays off on Windows until the
+probe passes on a real machine** (section 9).
 
-What rev 3 changes (sol r2): locality is a fixed drive AND NTFS, ReFS stays off (section 3); the
+What rev 4 changes: the owner run showed that `GetMappedFileNameW` keeps the old path after an
+ancestor folder is renamed away and recreated, and after the launch hard link is deleted, so the
+rev 1-3 key (trust the mapped name, re-check it) hashed the wrong file: two WRONG KEYs. Design B
+(section 3) takes identity from what runs: the canonical hash of the loaded module's read-only
+content (part A), and a candidate file is accepted only if the same canonical hash of its bytes
+matches (part B); the key is then the accepted file's full blake3. The scope (section 1) now
+names what B cannot see: initial mutable data. The probe reports A, B's verdict and whether the
+key is the running image's for every W1 case, gains W9 (altered candidates), and tells a POSIX
+rename that moved nothing (HELD) from one that did not take. The canonicaliser has unit tests that
+run on Linux against a small checked-in PE (`examples/tls117/fixture.exe`, source beside it).
+
+What rev 3 changed (sol r2): locality is a fixed drive AND NTFS, ReFS stays off (section 3); the
 producer audit is at the C source level, with the reachability list (section 4); the private check
 walks top-down from the volume root, creates only under a checked parent, and all cache I/O uses
 the walk's rooted spelling (section 6); the probe fails a refused or unverified mutation, verifies
@@ -40,11 +52,27 @@ changing files on purpose while the run is going.
 - a launch through a path in another letter case, or through its 8.3 short name;
 - someone holding the image open with an access that conflicts (write or delete access).
 
-**Out of scope:** a process that deliberately redirects an ancestor folder of the image's path
-(a rename, junction or mount swap) exactly inside the window between the first name query and
-the second, and restores it before the second. That is "another process changing files mid-run";
-ENG-110's spec already excludes it. Raw disk writes and a network peer changing a file are out of
-scope too; the NTFS rule (section 3) keeps network volumes out entirely.
+- an ancestor folder of the image renamed away and a new folder made at its old spelling (the
+  owner run showed the mapped name does not follow it; design B gives no key there).
+
+**The guarantee's scope (design B).** A key is the full blake3 of a file whose read-only content
+(every section without `IMAGE_SCN_MEM_WRITE`, after relocation normalising and with the
+loader-written ranges zeroed, plus the headers with `ImageBase` zeroed) equals the running
+module's. Two kinds of difference stay invisible to that check:
+- **initial mutable data**: a different file whose code and constants are byte-identical to the
+  running image but whose initialised writable sections (`.data`, `.tls`) differ. It would be
+  accepted, and its key used for IR the running code produced. Section 3 explains why `.data`
+  cannot be compared reliably. Accidental reach: a rebuild that changes only the initial value of
+  a mutable static and nothing else, at the running image's path, while it runs; and the IR differs
+  only if the parse path reads that static. The probe's W9 and the `pe` unit tests pin this
+  behaviour (a `.data`-only change is accepted);
+- the bytes inside the loader-written ranges (IAT, delay-load IAT and module handle, TLS index,
+  load-config pointer targets), which are zeroed on both sides.
+
+**Out of scope:** another process changing files on purpose mid-run (ENG-110's spec), raw disk
+writes, a network peer; the local-NTFS rule (section 3) keeps network volumes out entirely.
+Code patched in memory after load (an inline hook by security software) makes A differ from every
+file: no key, fail closed.
 
 ## 2. What is off on Windows today (more than the key)
 
@@ -80,48 +108,109 @@ Sources read on 2026-11-21. "Probe" means no source settles it and the native pr
 | F7 | An image with relocations is moved to its load address by applying the base difference to every listed field (`IMAGE_REL_BASED_DIR64`); the import table is filled at load. | [PE Format](https://learn.microsoft.com/en-us/windows/win32/debug/pe-format) | Documented. |
 | F8 | windows-sys 0.61 has `K32GetMappedFileNameW` (`Win32_System_ProcessStatus`), `GetModuleHandleExW` (`Win32_System_LibraryLoader`), `GetVolumeInformationByHandleW`, `GetFileInformationByHandleEx`, `GetSecurityInfo` and `ConvertSidToStringSidW` (`Win32_Security_Authorization`), `GetAce` (`Win32_Security`), `GetDriveTypeW`, `GetFinalPathNameByHandleW`, `MoveFileExW`, `SetFileInformationByHandle` + `FILE_RENAME_INFO` (`Win32_Storage_FileSystem`). | the crate source in the cargo registry | Checked; the probe compiles against them. |
 
+**What the owner run at `e98e1bf0` established** (F3, F5 settled natively): the mapped name
+follows a rename of the image file itself, and `\\?\GLOBALROOT` + the device name opens it; but
+the mapped name **keeps the old path** after an ancestor folder is renamed away and recreated, and
+after the launch hard link is deleted. Trusting a name, even re-checked, is therefore unsound
+(two WRONG KEYs). MoveFileEx replace of the running image is refused by the OS (access denied);
+the POSIX rename-replace reported success and the image kept its name (rev 4's probe tells whether
+anything moved at all).
+
 ### Rejected alternatives
 
-- **Hash the image in memory.** Not stable: relocations (F7) change with the load address, the
-  import table holds per-boot DLL addresses, and `.data` changes as the program runs.
-- **`current_exe()` / `GetModuleFileNameW`.** The load-time name (F6): after an installer's
-  rename it names the new file, so the key would be the new binary's.
+- **The rev 1-3 design** (hash the file at the mapped name, re-query the name): refuted by the
+  owner run, above.
+- **Hash the image in memory as the key.** Not stable: relocations (F7) change with the load
+  address, the import table holds per-boot DLL addresses, and `.data` changes as the program runs.
+  Design B uses a *canonical* memory hash for identity only, never as the key.
+- **`current_exe()` / `GetModuleFileNameW` alone.** The load-time name (F6). Design B uses it only
+  as a second candidate, accepted by content, never by name.
 - **A file id for the image itself.** No documented user-mode call gives a handle or file id for
-  the file behind our own image section, so identity is proven through the name.
+  the file behind our own image section.
 
-### Design
+### Design B
 
 `image_key()` on Windows:
 
-1. `GetModuleHandleExW(FROM_ADDRESS | UNCHANGED_REFCOUNT, &IR_IMAGE_MARKER)`: the module that
-   holds the IR code.
-2. `K32GetMappedFileNameW` on its base, buffer 32,768 characters. 0 or a full buffer (truncated,
-   F3): no key. The name is kept as **raw UTF-16, never folded or converted**.
-3. Open `\\?\GLOBALROOT` + that name: read access, sharing **read only** (no write, no delete),
-   not following a reparse point. Any failure, including a sharing violation from a conflicting
-   handle: no key.
-4. On the opened handle: a regular file (not a directory, not a reparse point) on a **local
-   NTFS** volume, both established positively: `GetVolumeInformationByHandleW` names the file
-   system `NTFS`, and `GetDriveTypeW` on the handle's volume root (the `\\?\Volume{GUID}\` prefix
-   of `GetFinalPathNameByHandleW(.., VOLUME_NAME_GUID)`) is `DRIVE_FIXED`. Anything else (ReFS,
-   FAT, a removable or network drive, `\Device\Mup\...`): no key. ReFS stays off (orchestrator,
-   rev 3).
-5. Hash through that handle (`key_of`, marker search included).
-6. Ask the mapped name again, still holding the handle; it must equal step 2's name UTF-16 unit
-   for unit. Otherwise no key.
+1. **The module.** `GetModuleHandleExW(FROM_ADDRESS | UNCHANGED_REFCOUNT, &IR_IMAGE_MARKER)`.
+2. **Part A, the canonical memory hash.** Read the module's headers from its first page, then
+   compute `pe::canonical` (below) over the loaded image, relative to the module's load address.
+   Any parse error, unhandled relocation type or unmodelled loader patching: no key.
+3. **Candidates**, in order: the mapped name (`K32GetMappedFileNameW`, opened as `\\?\GLOBALROOT` +
+   the device name), then `GetModuleFileNameW`. A truncated name is skipped.
+4. **Part B, for each candidate:** open it with read access, sharing **read only** (no write, no
+   delete), not following a reparse point; require a regular file on a **local NTFS** volume
+   (`GetVolumeInformationByHandleW` says `NTFS` and `GetDriveTypeW` on the handle's
+   `\\?\Volume{GUID}\` root, from `GetFinalPathNameByHandleW(.., VOLUME_NAME_GUID)`, is
+   `DRIVE_FIXED`; ReFS stays off); read the whole file through that handle; compute
+   `pe::canonical` over the file's bytes laid out by section, relative to the file's `ImageBase`.
+5. **Accept** the first candidate whose hash equals A's. The key is the blake3 of the bytes read
+   through that same handle (and the IR marker search over them, as on Linux). No candidate
+   accepted: no key.
 
-The cache root's volume gets the same local-NTFS rule (section 6).
+**Why it holds.** The accepted file's read-only content equals what is running, by construction,
+whatever names point where; the handle denies write and delete sharing while the bytes are read,
+so the key is of exactly those bytes. A replaced name, a swapped folder or a deleted link can only
+make the candidates differ from A, which gives no key. What stays unseen is the scope in section 1.
 
-**Why it holds, within scope.** From step 3 until the handle closes, nobody can rename, delete or
-write the opened file F (our handle shares neither write nor delete, F2). At step 6 the image's
-file has the name N we opened. One name names one file at a time, so the image's file is F, and
-nobody could change F's bytes while we hashed them (F2; F1 for the image itself). The re-check is
-what catches an image renamed away between steps 2 and 3 with a new file put at N. It does not
-catch an ancestor folder swapped and swapped back inside the window: out of scope (section 1).
+**Why `.data` is not compared.** The engine computes the key lazily, at its first IR cache use,
+long after start: the C runtime, Rust's runtime, mimalloc, `std`'s statics and the program itself
+have written writable sections by then, and there is no way to know which bytes. The one earlier
+point we could control is a TLS callback (`.CRT$XL*`), which runs after the loader (relocations,
+`__security_cookie`, `_tls_index`) but before the C runtime's initialisers. Capturing `.data` there
+would mean a copy at every process start of every binary that installs the cache, kept for the
+process's life, and it would still not be reliable: a statically imported DLL's `DllMain` (or
+injected security software) runs before the exe's TLS callbacks and may write the exe's memory; the
+order among `.CRT$XL*` callbacks is by section name only. So no `.data` comparison; the remaining
+case is written as the guarantee's scope (section 1) and pinned by tests.
 
-**The whole argument rests on W1:** the mapped name must be the file's current name after a
-rename. If the probe shows the load-time name, step 6 sees nothing and the design fails; the cache
-then stays off on Windows (orchestrator decision Q1).
+### The canonical hash (`examples/tls117/pe.rs`)
+
+Input: a view of the image laid out as the loader maps it (memory: the module; file: headers at
+RVA 0, each section's raw data at its `VirtualAddress`, zero past `SizeOfRawData` up to
+`VirtualSize`) and a `base` (memory: the load address; file: `OptionalHeader.ImageBase`).
+
+- **Headers.** PE32+ only (`Machine` 0x8664, optional-header magic 0x20b). The bytes
+  `[0, SizeOfHeaders)` are hashed with `OptionalHeader.ImageBase` (offset 24 of the optional
+  header) zeroed, because the loader may rewrite it with the load address. Every other header
+  byte, the data directories and the section table included, must match.
+- **Sections.** Every section whose `Characteristics` lacks `IMAGE_SCN_MEM_WRITE` (0x80000000)
+  and whose mapped length (`VirtualSize`, or `SizeOfRawData` when that is 0) is not zero, in table
+  order, over its mapped length. Writable sections are skipped. `IMAGE_SCN_MEM_DISCARDABLE`
+  sections (`.reloc`) are hashed: the loader maps them in a user-mode image and does not change
+  them.
+- **Base relocations** (data directory 5): blocks of `{u32 PageRVA, u32 BlockSize, u16 entries}`,
+  `BlockSize` ≥ 8, even, inside the table; an entry is `type = e >> 12`, `offset = e & 0xfff`. On
+  x64 a linker emits `IMAGE_REL_BASED_DIR64` (10, a 64-bit field) and `IMAGE_REL_BASED_ABSOLUTE`
+  (0, padding). Each DIR64 site inside a hashed section is replaced by `value - base` (wrapping),
+  which is the same in memory and in the file. **Any other type** (HIGHLOW 3, HIGH 1, LOW 2,
+  HIGHADJ 4, the ARM/MIPS/RISC-V types 5, 7, 8, 9) refuses: no key.
+- **Loader-written ranges, zeroed after normalising:**
+  - the IAT (data directory 12);
+  - each import descriptor's (directory 1, 20-byte entries up to an all-zero one) `FirstThunk`
+    array, its length taken from `OriginalFirstThunk` (unchanged by the loader) or, if that is 0,
+    from `FirstThunk` itself, terminator included;
+  - each delay-load descriptor's (directory 13, 32-byte entries) module-handle slot (8 bytes) and
+    IAT (counted from its name table); VA-based descriptors (`Attributes` bit 0 clear) are
+    converted with `base`;
+  - the TLS directory's (9) `AddressOfIndex` target (4 bytes: the loader writes `_tls_index`);
+  - from the load config (10, read up to its `Size`): the targets of `SecurityCookie` (0x58),
+    `GuardCFCheckFunctionPointer` (0x70), `GuardCFDispatchFunctionPointer` (0x78),
+    `GuardRFFailureRoutineFunctionPointer` (0xD8), `GuardRFVerifyStackPointerFunctionPointer`
+    (0xE8), the three `GuardXFG*FunctionPointer`s (0x118, 0x120, 0x128) and
+    `GuardMemcpyFunctionPointer` (0x138), 8 bytes each, when non-zero. A non-zero
+    `DynamicValueRelocTable` (0xC0), `CHPEMetadataPointer` (0xC8) or
+    `DynamicValueRelocTableOffset` (0xE0) refuses: dynamic value relocations (import-call
+    optimisation, retpoline) and hybrid ARM64EC images are loader patching this code does not
+    model.
+  - TLS callbacks are not loader-written: the callback array holds VAs, normalised as relocation
+    sites like any other pointer.
+- **Hash:** blake3 over a domain tag, the header bytes, then each hashed section's index, length
+  and bytes.
+
+If the loader writes anything else into a read-only section of our binaries, A differs from the
+true file and the key is never made: the probe's W2 (and W9's "unaltered: accepted") is the native
+check that the model is complete for the shipped build.
 
 **The marker** is unchanged: `key_of` searches the hashed bytes for it. The Windows `release-ship`
 jobs (`build-and-deploy.yml`, `release.yml`) gain the marker search for `alsem.exe`, `aldump.exe`
@@ -360,9 +449,20 @@ Tests (product phase):
 
 `examples/tls117_probe.rs`. Windows only (on other systems it prints "Windows only" and exits 2).
 It needs nothing but the repository: it copies its own executable into scratch folders and starts
-the copies as children it drives over stdin. The key sequence in it is a prototype of section 3
-(blake3 of the whole file, no marker search). Its extra windows-sys features are a
-`[target.'cfg(windows)'.dev-dependencies]` entry, so the shipped binaries do not change.
+the copies as children it drives over stdin. The key sequence in it is a prototype of design B
+(section 3; the key is the accepted file's blake3, without the marker search). Its extra
+windows-sys features are a `[target.'cfg(windows)'.dev-dependencies]` entry, so the shipped
+binaries do not change.
+
+**Rev 4 report.** Every key a child makes prints, after the verdict, A's hash (first 16 hex
+digits, with the number of sections and relocation sites it covered) and each candidate's verdict
+(`mapped: accepted`, `module-name: refused (canonical hash differs)`, or the open/read error). The
+verdict says whether the key equals the running image's true key, which the parent knows: the
+blake3 of the copy it launched, taken before launch. The rev 3 run's three failures must become
+"key = the running image's key" or "no key": the folder swap and the deleted launch link (both
+candidates then name another file, so B refuses both), and the POSIX rename-replace, which is
+now `HELD (the OS kept the running image: the POSIX rename reported success and moved nothing)`
+when the image kept its name **and** the other file is still where it was, and a FAIL otherwise.
 
 | Item | What it checks | PASS when |
 |------|----------------|-----------|
@@ -372,7 +472,8 @@ the copies as children it drives over stdin. The key sequence in it is a prototy
 | W1 hard link | launch through a hard link; delete the launch link (or, if refused, rename it away: both refused FAILs), write another file there (checked), verify its file id differs, while `a.exe` survives | the original hash or no key, before and after |
 | W1 other case | launch through an upper-case spelling | the original hash or no key |
 | W1 8.3 | launch through the short name of a long-named leaf | the original hash or no key; SKIP only with "8.3 disabled on this volume (no short name was made)" |
-| W2 | the whole sequence in the probe itself | the key equals the hash of the probe's file |
+| W2 | design B in the probe itself, unchanged image | the key equals the hash of the probe's file (so A equals B for the true file: the loader model is complete for this build) |
+| W9 | part B on copies of the probe's own file against part A of the running probe: unaltered; one byte changed in `.text`; in `.rdata`; in `.data` | unaltered accepted (A = B), `.text` and `.rdata` changes refused; the `.data` change is printed (accepted = the stated scope of section 1); on a mismatch of the unaltered file, both sides' zeroed ranges are printed |
 | W3 | controls first: an ordinary copy opens for write and for write+truncate; then while a child runs: write, write+truncate, `FILE_WRITE_DATA` opens of the image; rename; delete (recorded) | the controls succeed, the three opens fail, the rename succeeds |
 | W4 | a key; then a handle with `DELETE` access held on the running image; then closed; and a `FILE_WRITE_DATA` handle on a plain file | key before; while held, no key with a sharing violation (`os error 32`) in the reason; key after; our read-only-sharing open of the plain file fails with a sharing violation |
 | W5 | `std::fs::File` locks on three handles: shared and exclusive beside an exclusive, exclusive beside two shared (third handle), each `WouldBlock`; explicit `unlock` frees; a killed child's lock is freed | all hold, and the killed holder's lock frees within 10 s (time printed) |
@@ -386,8 +487,22 @@ Each line is `PASS`, `FAIL` or `SKIP`, with what was seen. The process exits 1 w
 fails. The same items are `#[test]`s in the example (the child half is an ignored test the
 parent starts, as `key_is_the_running_image_not_the_path` does on Linux).
 
+**The canonicaliser's unit tests** (`pe::tests`, any system: `cargo test --example tls117_probe
+pe::`) use `examples/tls117/fixture.exe`, a 4.6 KB PE built by mingw-w64 GCC 13 from
+`examples/tls117/fixture.c` (command in the source): five DIR64 sites in `.rdata`, an IAT in the
+read-only `.idata`, and `counter` in `.data`. They pin: two simulated loads at different bases
+(every DIR64 site relocated, `ImageBase` rewritten, the loader-written ranges filled with
+per-load bytes) canonicalise to the file's hash; the wrong base changes it; a changed `.text` or
+`.rdata` byte changes it; a `.data`-only change does not (the stated scope); a HIGHLOW (type 3)
+entry refuses; a truncated or non-PE input refuses. Discrimination proofs (2026-11-23): with the
+normalising disabled (`value - 0`), `relocated_loads_canonicalise_like_the_file` and
+`the_wrong_base_changes_the_hash` fail; with no ranges zeroed,
+`relocated_loads_canonicalise_like_the_file` and `fixture_has_what_the_tests_need` fail; both
+restored, all 7 pass.
+
 Checked here: `cargo check --target x86_64-pc-windows-gnu --examples --tests` is clean, and
-clippy shows no warning in the probe for the Windows target or Linux. It has not run.
+clippy shows no warning in the probe for the Windows target or Linux. The Windows items have not
+run on rev 4.
 
 ## 9. Order of the owner run (Windows, Git Bash, repository root, `TREE_SITTER_AL_PATH` set)
 
@@ -397,7 +512,7 @@ clippy shows no warning in the probe for the Windows target or Linux. It has not
    cargo test --example tls117_probe -- --test-threads=1 --nocapture
    ```
    Send both outputs back. Any `FAIL` stops here: the design is revised (a W1 failure keeps the
-   cache off on Windows).
+   cache off on Windows). The test run includes the `pe::` unit tests.
 2. **The cache tests** (after the product change, on its branch):
    ```
    cargo test -p al-sem --lib program::ir_cache
