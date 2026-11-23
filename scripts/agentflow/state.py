@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import time
 import uuid
@@ -190,9 +191,11 @@ def host_awake() -> tuple[str, float] | None:
 
 def _is_reading(r) -> bool:
     """A stored awake reading is `[boot id, seconds]`; anything else (a hand
-    edit, a torn or foreign file) counts as no stamp."""
+    edit, a torn or foreign file) counts as no stamp. Finite only: JSON reads
+    `NaN`, and a NaN age is never stale."""
     return (isinstance(r, (list, tuple)) and len(r) == 2 and isinstance(r[0], str)
-            and isinstance(r[1], (int, float)) and not isinstance(r[1], bool))
+            and isinstance(r[1], (int, float)) and not isinstance(r[1], bool)
+            and math.isfinite(r[1]))
 
 
 def awake_elapsed(then, now_awake, wall_elapsed: float) -> tuple[float, str]:

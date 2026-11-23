@@ -383,13 +383,16 @@ def test_a_lease_and_a_budget_with_an_unknown_key_still_load(ctx):
 
 
 @pytest.mark.parametrize("bad", [["boot-1"], ["boot-1", "x"], ["boot-1", True], "boot-1",
-                                 ["boot-1", 1, 2], [1, 2], {"boot": "boot-1"}])
+                                 ["boot-1", 1, 2], [1, 2], {"boot": "boot-1"},
+                                 ["boot-1", float("nan")], ["boot-1", float("-inf")]])
 def test_a_malformed_awake_stamp_counts_as_none(ctx, bad):
     """A `beat_awake` that is not `[str, number]` is no stamp: the lease ages
     on the wall clock, and listing it never crashes.
     Red proof (TLS-122 r1): `_is_reading(then)` dropped from `awake_elapsed`
     failed here for 5 of the 7 shapes (IndexError, TypeError, KeyError, or a
-    boolean read as a time); the bare string and `[1, 2]` fell back by chance."""
+    boolean read as a time); the bare string and `[1, 2]` fell back by chance.
+    Red proof (Fable r2 nit): `math.isfinite` dropped failed the NaN shape
+    (never stale) and the -inf one (stale at once); restored, passes."""
     c = Clocks()
     lock.acquire(c.ctx(ctx.paths, "run-holder"), 8, "s", 1)
     p = ctx.paths.lease(8)

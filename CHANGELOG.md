@@ -959,6 +959,8 @@ its time rules on the wall clock, which keeps counting through a suspend.
   stamp (wall clock) instead of crashing every lease listing. New tests pin the awake stamp
   that `recover`'s steal and `handover` write, and the wall-clock fall back of a reader with no
   awake clock. The orchestrator design spec now says both rules count awake time.
+- **Review r2 (Fable):** the stamp's seconds must be finite. JSON reads `NaN`, and a lease
+  stamped `NaN` was never stale.
 
 ### Fixed (ENG-178: table procedures named like record built-ins: four follow-ups from ENG-173)
 
