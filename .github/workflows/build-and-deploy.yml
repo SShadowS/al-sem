@@ -140,13 +140,26 @@ jobs:
             & target\release-ship\alsem-stamp.exe verify "target\release-ship\$b.exe"
             if ($LASTEXITCODE -ne 0) { throw "verifying the shipped $b.exe failed" }
           }
-          $rep = Join-Path $env:RUNNER_TEMP 'ir-key.jsonl'
+          # As in release.yml: cold (publish), warm (hits), and aldump.exe's own key.
           $env:ALSEM_IR_CACHE = 'on'
-          $env:ALSEM_IR_CACHE_REPORT = $rep
-          & target\release-ship\alsem.exe analyze tests\fixtures\tls117\ws --format json | Out-Null
+          $env:ALSEM_IR_CACHE_DIR = Join-Path $env:RUNNER_TEMP 'ir-root'
+          function judge($rep, $rule) {
+            python scripts/ir-cache-report-check --require-key --rule $rule $rep
+            if ($LASTEXITCODE -ne 0) { throw "IR cache check failed: $rep ($rule)" }
+          }
+          $ws = 'tests\fixtures\tls117\ws'
+          $env:ALSEM_IR_CACHE_REPORT = Join-Path $env:RUNNER_TEMP 'ir-cold.jsonl'
+          & target\release-ship\alsem.exe analyze $ws --format json | Out-Null
           if ($LASTEXITCODE -notin 0, 1) { throw "alsem analyze failed (exit $LASTEXITCODE)" }
-          python scripts/ir-cache-report-check --require-key --rule output $rep
-          if ($LASTEXITCODE -ne 0) { throw 'the shipped alsem.exe made no IR cache key' }
+          judge $env:ALSEM_IR_CACHE_REPORT output
+          $env:ALSEM_IR_CACHE_REPORT = Join-Path $env:RUNNER_TEMP 'ir-warm.jsonl'
+          & target\release-ship\alsem.exe analyze $ws --format json | Out-Null
+          if ($LASTEXITCODE -notin 0, 1) { throw "alsem analyze (warm) failed (exit $LASTEXITCODE)" }
+          judge $env:ALSEM_IR_CACHE_REPORT warm-build
+          $env:ALSEM_IR_CACHE_REPORT = Join-Path $env:RUNNER_TEMP 'ir-aldump.jsonl'
+          & target\release-ship\aldump.exe --program-call-graph-stats $ws | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "aldump failed (exit $LASTEXITCODE)" }
+          judge $env:ALSEM_IR_CACHE_REPORT output
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
