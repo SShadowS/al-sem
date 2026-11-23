@@ -844,7 +844,7 @@ fn before_after_measures_nothing_beside_a_build() {
     // One process: the builtin `read` waits on a pipe nobody writes, so killing
     // it leaves no `sleep` child holding the test's output (a nextest leak).
     let build = crate::cdo_slot::Reap(
-        std::process::Command::new(&fake)
+        crate::clean_env::command(&fake)
             .args(["-c", "read -t 600 _ || true"])
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::null())
@@ -867,7 +867,7 @@ fn before_after_measures_nothing_beside_a_build() {
         "{text}"
     );
     assert!(!t.log().contains("fingerprint"), "{}", t.log());
-    let status = std::process::Command::new("bash")
+    let status = crate::clean_env::command("bash")
         .arg(t.path("repo/scripts/cdo-slot"))
         .arg("status")
         .env("CDO_SLOT_DIR", t.path("slot"))
@@ -894,7 +894,7 @@ fn before_after_keeps_a_hold_it_shares() {
         &["--out", &out, &t.c1, &t.c2],
         &[("CDO_SLOT_TOKEN", "tok-ba")],
     );
-    let status = std::process::Command::new("bash")
+    let status = crate::clean_env::command("bash")
         .arg(t.path("repo/scripts/cdo-slot"))
         .arg("status")
         .env("CDO_SLOT_DIR", t.path("slot"))
@@ -916,15 +916,12 @@ impl Hold {
             .arg("120")
             .spawn()
             .unwrap();
-        let mut cmd = std::process::Command::new("bash");
+        let mut cmd = crate::clean_env::command("bash");
         cmd.arg(t.path("repo/scripts/cdo-slot"))
             .args(["acquire", "other", "test hold", "--bind"])
             .arg(sleeper.id().to_string())
             .env("CDO_SLOT_DIR", t.path("slot"))
-            .env("CDO_SLOT_MEM_MIN_GB", "0")
-            .env_remove("CLAUDE_CODE_SESSION_ID")
-            .env_remove("CLAUDE_PID")
-            .env_remove("CDO_SLOT_TOKEN");
+            .env("CDO_SLOT_MEM_MIN_GB", "0");
         if !token.is_empty() {
             cmd.env("CDO_SLOT_TOKEN", token);
         }

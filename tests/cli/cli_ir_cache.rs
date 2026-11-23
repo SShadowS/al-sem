@@ -1236,7 +1236,7 @@ fn a_refused_entry_fails_the_gate_rule() {
     ];
     analyze(&f, &on);
     let check = || {
-        Command::new(concat!(
+        crate::clean_env::command(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/scripts/ir-cache-report-check"
         ))

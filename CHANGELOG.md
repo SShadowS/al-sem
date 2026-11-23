@@ -148,6 +148,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   those two normalized back to the old text, the old golden matched exactly. No serialized L2
   output moves.
 
+### Fixed (TLS-115: the gate-script tests run every script in a clean environment)
+
+- **What was wrong.** `tests/cli/gate_scripts.rs` started `cdo-gate`, `cdo-speed`, `cdo-slot`,
+  `ci-steps` and the other scripts with the test process's own environment, and removed gate
+  variables one by one at some of its call sites. A variable it did not remove reached the script:
+  an inherited `CDO_SLOT_OWNER` (a landing sets one) renamed the slot holder, and
+  `speed_gate_fails_when_a_timed_call_fails` failed under it; a `CDO_GATE_LANE2_CPUS`, a
+  `CDO_SPEED_*` hook or a `BASH_ENV` could change other results the same way.
+- **Now.** TLS-113's `clean_env()` moved from `land_script.rs` to `tests/common/clean_env.rs`
+  (the `cli` umbrella includes it). It clears the environment, pins `LANG=C.UTF-8`, sets git's
+  test identity, and passes on only these host dependencies, kept on purpose and documented in the
+  helper: `PATH` (where bash, python3, git, flock, taskset, perf and cargo are; a stub folder goes
+  first), `TMPDIR` (where the test made its fixtures), `HOME`, and the toolchain's `RUSTUP_HOME`
+  and `CARGO_HOME`. A test with stub tools gives its own `HOME`.
+- **Where.** Every subprocess of the cli tests that runs a script, or bash at all, starts from it:
+  each script call in `gate_scripts.rs`, `land_script.rs`, `cdo_slot.rs`, `before_after.rs`,
+  `changelog_merge.rs` (also the `git merge`/`rebase` whose merge driver is the script),
+  `perf_probe.rs` (also its preflight, whose broken parse would skip the test green) and
+  `cli_ir_cache.rs`, the bash stand-ins for a build or a gate, and the `taskset` and `perf`
+  availability checks. Each test sets only what it needs. The one-by-one removals are gone.
+  `cdo_gate_only_run_builds_and_runs_just_its_phases` now sets `ALSEM_IR_CACHE=off` itself: it had
+  read the value from `.cargo/config.toml`'s `[env]`, which its stub cargo does not apply.
+- **Guard.** `gate_scripts::scripts_see_none_of_the_callers_environment` runs a `ci-steps
+  perf-bounds` and a `cdo-gate --layout` call (a stub `taskset`, so it runs on any host) in a child
+  of the test binary whose environment holds `CDO_SLOT_OWNER=leaked`, `CDO_GATE_LANE2_CPUS=99` and
+  a `BASH_ENV` that writes a marker; a positive control first shows the marker works. Proofs: each
+  of `BASH_ENV`, `CDO_SLOT_OWNER` and `CDO_GATE_LANE2_CPUS` added to the helper's pass list turns
+  exactly its own assert red. And `speed_gate_fails_when_a_timed_call_fails`, in its form before
+  this change, failed with `CDO_SLOT_OWNER=leaked` exported ("taken by leaked"); now it passes.
+
 ### Changed (TLS-116: `alsem batch` uses the IR cache, and no job write reaches a cache folder)
 
 - **What was wrong.** TLS-109's write claims did not cover the engine's cache folders. ENG-110

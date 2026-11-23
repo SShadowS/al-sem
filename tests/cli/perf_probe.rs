@@ -3,7 +3,7 @@
 //! event, a 16-page buffer) while a real `samply record` failed with "mmap failed".
 
 fn probe(pages: &str) -> (Option<i32>, String) {
-    let out = std::process::Command::new("bash")
+    let out = crate::clean_env::command("bash")
         .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/perf-probe"))
         .env("PERF_PROBE_PAGES", pages)
         // One CPU: one buffer, whatever the machine's CPU count.
@@ -65,7 +65,8 @@ fn mlock_budget_kb() -> Option<u64> {
         .parse()
         .ok()?;
     let sh = |c: &str| {
-        let out = std::process::Command::new("bash")
+        // Clean (TLS-115): a BASH_ENV's output would break the parse and skip the test.
+        let out = crate::clean_env::command("bash")
             .args(["-c", c])
             .output()
             .ok()?;
