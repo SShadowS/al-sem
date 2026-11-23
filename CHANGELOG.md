@@ -19,20 +19,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Now.** All four waits use one sourced helper, `scripts/awake-clock` (TLS-104's rules moved
   there unchanged: CLOCK_MONOTONIC from `host-suspended --clocks`, the time base chosen once, a
   failed later read keeps the last awake time, a bad suspended reading costs only the log line).
-  Each wait says a suspend it waited through (`the host slept N s during this wait: ...`; land
-  also in `mem-wait.log`). `go` reads the clocks only once its wall deadline has passed, then once
-  a second (it polls every 0.05 s, and each read is a process). land's mem-wait now says once
-  that it waits, and its naps stop at the deadline (it slept a fixed 15 s past it).
-  cdo-slot and land now source `scripts/awake-clock`: a copy of either needs it beside it (the
-  two test copies were updated).
+  Each wait says a suspend it waited through, exactly once (`<prefix>: the host slept N s during
+  this wait: it goes on that much longer`; land also in `mem-wait.log`). land's mem-wait now says
+  once that it waits, and its naps stop at the deadline (it slept a fixed 15 s past it).
+- **`go`.** It reads the clocks once at its start (one more `python3` per acquire) and then only
+  once its deadline has passed on the time since boot (`/proc/uptime`, CLOCK_BOOTTIME: it counts
+  suspends, never steps back, and is read with no process; awake time never runs ahead of it),
+  then once a second: it polls every 0.05 s, and each clock read is a process. Review r1 (sol):
+  the first version took that trigger from `$SECONDS`, wall time, which a backward clock step
+  postpones. On expiry it looks at the go file once more: a keeper that took its go while the
+  clocks were read went on, and that is a go (review r1, sol and Fable: it was refused and the
+  valid hold torn down).
+- **No endless wait (review r1, Fable).** A failed clock read keeps the last awake time, so a
+  clock that stopped reading would make a wait endless. The third failed read in a row now
+  counts wall time from the last good reading on, and the wait says so. When the clock was never
+  readable (an old `host-suspended` that prints only the suspended seconds), the wait is on wall
+  time and its suspend line says `the wall clock counts it in this wait (no awake clock)`, not
+  `it goes on that much longer`.
+- **Loaded only where needed (review r1, sol and Fable).** The first version sourced
+  `scripts/awake-clock` at the top of cdo-slot and land, so a copy without it failed every
+  command: `probe` too, and the guard lets work run when the probe fails (beside a timing).
+  Now cdo-slot loads it only for `acquire` (each may give a keeper its go) and for a `run` with
+  `--timed` or `--timeout`; land only for a real run with a mem-wait. `probe`, `status`,
+  `release`, a keeper, and land's `--help` and `--dry-run` work without it; a command that needs
+  it and lacks it says so before it takes any lock. Copies that need it: the before-after and
+  cdo-gate test copies of cdo-slot, and the link folders of the land and cdo-slot tests.
 - **The other deadlines, checked.** Python waits (`cdo-speed`'s calm wait, call and perf
   deadlines; `cdo-before-after`; subprocess timeouts) use `time.monotonic`, CLOCK_MONOTONIC on
-  Linux: awake time already. cdo-slot's keeper start (1200 x 0.05 s), keeper end and test
-  pauses count iterations of `sleep`, which runs on CLOCK_MONOTONIC: frozen with the host, no
-  fix needed. cdo-gate's and ci-steps' `$SECONDS`/EPOCHREALTIME are phase timings TLS-104
-  already labels, and the memory sampler's `date +%s` a timestamp: no deadline. agentflow's
-  24 h wall-clock cap and 30-min lock staleness compare stored wall timestamps across processes
-  (a suspend counts toward both by design or by necessity); not gate scripts, left as they are.
+  Linux: awake time already. cdo-slot's `flock -w` waits (the probe's 0.1 s, `take_hold`'s 1 s,
+  `take_timed`'s `CDO_SLOT_LOCK_WAIT_S`): util-linux 2.41's `flock` times them with
+  `timer_create` on CLOCK_MONOTONIC (lib/timer.c): awake time already. cdo-slot's keeper start
+  (1200 x 0.05 s), keeper end and test pauses count iterations of `sleep`, which runs on
+  CLOCK_MONOTONIC: frozen with the host, no fix needed. `describe`'s 5 s window (a hold whose
+  status is still being written) only chooses what `status` prints. cdo-gate's and ci-steps'
+  `$SECONDS`/EPOCHREALTIME are phase timings TLS-104 already labels, and the memory sampler's
+  `date +%s` a timestamp: no deadline. agentflow's 24 h wall-clock cap compares stored wall
+  timestamps by design; its 30-min lock staleness is TLS-122's.
 - **Tests.** One stubbed-clock test per deadline (`cdo_slot_acquire_timeout_survives_a_host_suspend`,
   `cdo_slot_go_survives_a_host_suspend`, `land_mem_wait_survives_a_host_suspend`): a 10 s
   simulated suspend during a 2 s wait does not end it at the wall deadline, and the log names
@@ -41,7 +63,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   r8 stopped-keeper test). land refuses to run with a test hook
   set, so its test runs land from a folder of links whose `host-suspended` sets the hook for
   itself only. Each has a discrimination proof (the check put back on wall time: red; restored:
-  green), recorded in its doc.
+  green), recorded in its doc. Review r1 added: land's test bounds the give-up under 14 s (it
+  pins the naps' stop at the deadline), each suspend line is checked to occur once, and
+  `cdo_slot_without_its_clock_helper_still_probes`, `land_without_its_clock_helper_still_helps_and_predicts`,
+  `cdo_slot_a_clock_that_stops_reading_falls_back_to_wall_time`,
+  `cdo_slot_go_taken_during_the_deadline_read_is_a_go` (each with its proof) and
+  `cdo_slot_an_old_clock_says_the_wall_clock_counts_the_suspend` (wording: no proof). `go`'s
+  boot-time trigger has no proof: no test can step the host's wall clock.
 
 ### Changed (TLS-116: `alsem batch` uses the IR cache, and no job write reaches a cache folder)
 
