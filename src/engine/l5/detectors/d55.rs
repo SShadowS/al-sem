@@ -90,7 +90,7 @@ pub fn detect_d55(
             // its own hazard; keyed by the loop alone, every publish in one loop
             // shared one fingerprint (suppressing one suppressed all, and a new
             // event in the loop was invisible to a baseline). `#n` tells apart two
-            // publishes of the SAME event in one loop (`CDO E-Mail Job::Run`).
+            // publishes of the SAME event in one loop (CDO has one such loop).
             let n = nth
                 .entry((loop_info.id.as_str(), callee.id.as_str()))
                 .or_insert(0);

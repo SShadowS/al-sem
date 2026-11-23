@@ -22,7 +22,14 @@ suppressed all of them, and a new member of the group was invisible to it.
   variable in one routine are now ONE finding (one cause, one fix: a CalcFields before the
   first read). It sits on the first read in source order, and its evidence lists every
   uncovered read in source order. Its key and fingerprint are unchanged.
-- CDO (pinned baseline): CDO_COUNTS
+- CDO (pinned baseline, `scripts/cdo-before-after c6f61f04 .`): findings sharing a
+  fingerprint go from 3 groups (10 findings) to 0 at `--scope primary` (one d54 group of 5
+  publishers; two d55 groups, one of them a loop that publishes one event twice) and from 13
+  groups (44 findings) to 0 at `--scope all` (those three plus 10 d22 groups). d22 at
+  `--scope all`: 99 -> 75 findings (two groups of 9 reads, eight of 2); no d22 fingerprint is
+  added or removed. d54 (6 findings) and d55 (31) keep their counts, and all their
+  fingerprints are new (in both scopes 30 removed and 37 added, every one d54 or d55).
+  Findings: primary 2306 -> 2306, all 32429 -> 32405. The call graph does not move.
 - **Release note: re-baseline d54 and d55.** Every d54 and d55 fingerprint changes (the loose
   fingerprint too). An existing `--baseline` file or fingerprint suppression for a d54 or d55
   finding no longer matches it: run `alsem analyze --update-baseline` again, and re-create
