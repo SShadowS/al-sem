@@ -188,6 +188,19 @@ codeunit 50010 "PA"
         Guarded(R);
     end;
 
+    // Control: a `Get` on an element of a RECORD array binds no RecordRef (Fable r2).
+    procedure RootRecArrayGet()
+    var
+        R: RecordRef;
+        Recs: array[2] of Record "PA Doc";
+        E: Record "PA Entry";
+    begin
+        R.GetTable(E);
+        Nop(R);
+        if Recs[1].Get('X') then;
+        Guarded(R);
+    end;
+
     // G36: the write behind `FieldExist(2)` reaches only a table with field 2, unless the
     // record is rebound after the guard through an alias (`L` shares it since `Same(R)`);
     // PA Entry has no field 2.
@@ -271,12 +284,13 @@ fn alsem(cwd: &Path, args: &[&str]) -> serde_json::Value {
 /// Discrimination (2026-11-23): the RecordRef flow's facts without the kept binds
 /// (`recref_alias::kept_bind_points` not added to its user-code places) fail `RootSame`,
 /// `RootJoin` and `RootJoinVar` (`no` again); G36 (`field_guard`) without them fails
-/// `FieldAfterBind` (`no`). Each restored, passes. A kept bind rebinding its own receiver's class
-/// too (no `UserCodePoint::except`) fails `cli_recref_get`'s `ShadowAliasFlow`.
+/// `FieldAfterBind` (`no`). Each restored, passes. A kept bind rebinding its own receiver too
+/// (no `UserCodePoint::except`) fails `cli_recref_get`'s `ShadowAliasFlow`.
 /// Fable r1 rows (2026-11-23, each break then restored, green): `rebinds` leaving out the
-/// receiver's whole class fails `RootExceptExclusive`; an array element not always counting fails
-/// `RootSlot`; retainability read at the bind's start fails `RootJoinInArgs`; no retainability
-/// check on the receiver at all fails `RootReceiverNotKept` (`yes`).
+/// receiver's whole class fails `RootExceptExclusive`; a holder-array element not always counting
+/// fails `RootSlot`; retainability read at the bind's start fails `RootJoinInArgs`; no
+/// retainability check on the receiver at all fails `RootReceiverNotKept` (`yes`). Fable r2: any
+/// array element counting, whatever its type, fails `RootRecArrayGet` (`yes`).
 #[test]
 fn an_in_place_bind_through_a_kept_holder_rebinds_every_kept_holder() {
     let t = tempfile::tempdir().unwrap();
@@ -317,6 +331,7 @@ fn an_in_place_bind_through_a_kept_holder_rebinds_every_kept_holder() {
     assert_eq!(answer("RootBindFirst"), "no", "control");
     assert_eq!(answer("RootFieldRecord"), "no", "control (BC: a copy)");
     assert_eq!(answer("RootReceiverNotKept"), "no", "control");
+    assert_eq!(answer("RootRecArrayGet"), "no", "control");
     for root in [
         "RootSame",
         "RootJoin",

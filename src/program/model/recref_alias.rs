@@ -31,10 +31,15 @@ pub use crate::program::body::features::{RecRefBind, recref_bind};
 #[must_use]
 pub fn into_holder_array(r: &ModelRoutine, a: &PVarAssignment) -> bool {
     let scope = HolderScope::of(r);
-    scope.text(&a.lhs_text).is_some_and(|h| {
-        let t = scope.variable(h.key).declared_type.trim().fold_identifier();
-        t.ends_with(" of recordref") || t.ends_with(" of variant")
-    })
+    scope
+        .text(&a.lhs_text)
+        .is_some_and(|h| is_holder_array(scope, h.key))
+}
+
+/// `key` is declared an array of RecordRef or Variant.
+fn is_holder_array(scope: HolderScope<'_>, key: HolderKey) -> bool {
+    let t = scope.variable(key).declared_type.trim().fold_identifier();
+    t.ends_with(" of recordref") || t.ends_with(" of variant")
 }
 
 /// One place a routine binds a variable in place through a [`RecRefBind`] method.
@@ -275,8 +280,10 @@ pub fn kept_bind_points<'a>(r: &'a ModelRoutine, classes: &AliasClasses) -> Vec<
             let runs = (s.anchor.end_line, s.anchor.end_column);
             // Retainable when the bind RUNS, after its own arguments (`L.Get(JoinId(L, R))`:
             // Fable r1 on ENG-189). An array element may be any handle the array was given
-            // (`Join(Slot[1], R)`): the classes hold no array slots, so it always counts.
-            (h.indexed || classes.rebinds_at(h.key, runs)).then_some(UserCodePoint {
+            // (`Join(Slot[1], R)`): the classes hold no array slots, so an element of a holder
+            // array always counts (not of a record array: `Recs[1].Get('X')`, Fable r2).
+            let holder_array = h.indexed && is_holder_array(scope, h.key);
+            (holder_array || classes.rebinds_at(h.key, runs)).then_some(UserCodePoint {
                 id: s.id,
                 at,
                 runs,
