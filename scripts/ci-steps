@@ -356,14 +356,15 @@ run_perf_bounds() {
         esac
     fi
     local susp0 susp1 stall0 stall1 src t0 t1 prc=0
-    susp0="$("$(dirname "$0")/host-suspended" 2>/dev/null)" || susp0=""
+    # Each read cut after 5 s, KILL 1 s later (TLS-105 review r3): never a stall.
+    susp0="$(timeout -k 1 5 "$(dirname "$0")/host-suspended" 2>/dev/null)" || susp0=""
     read -r stall0 src < <(cpu_stall_us)
     t0=${EPOCHREALTIME//[!0-9]/}
     # From the repository's top, as `cargo test` runs a test binary.
     (cd "$(git rev-parse --show-toplevel)" && "$bin") || prc=$?
     t1=${EPOCHREALTIME//[!0-9]/}
     read -r stall1 _ < <(cpu_stall_us)
-    susp1="$("$(dirname "$0")/host-suspended" 2>/dev/null)" || susp1=""
+    susp1="$(timeout -k 1 5 "$(dirname "$0")/host-suspended" 2>/dev/null)" || susp1=""
     local wall_us=$((t1 - t0)) slept_s=0 awake_us
     if [[ "$susp0" =~ ^[0-9]+$ && "$susp1" =~ ^[0-9]+$ ]]; then
         slept_s=$((susp1 - susp0))

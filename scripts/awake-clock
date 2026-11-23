@@ -1,0 +1,102 @@
+# scripts/awake-clock — sourced by the bash gate scripts (cdo-slot, land), not
+# run: a wait whose deadline counts AWAKE time (TLS-104, TLS-105).
+#
+# server1 is a laptop that suspends when it is moved. The wall clock (bash
+# `$SECONDS`, `date`, EPOCHREALTIME) keeps counting through a suspend, so a wait
+# of N s on it can end after a few real seconds: a laptop that slept 33 min
+# "waited" its 1800 s at once. CLOCK_MONOTONIC stops during a suspend: the
+# deadlines here run on it (`host-suspended --clocks`: the suspended reading and
+# the clock from one process, so no suspend falls between them; TLS-104 r3).
+#
+#   awake_start   start a wait: read the clocks and choose the time base.
+#   awake_read    read them again. Sets awake_us (microseconds of awake time
+#                 since awake_start) and awake_msg: empty, or what the caller
+#                 says (once per event): a suspend the wait went through, the
+#                 fall back to wall time.
+#   awake_nap <us>  sleep that many microseconds (a sleep runs on CLOCK_MONOTONIC
+#                 too, so a suspend inside it is not counted either).
+#   awake_boot_cs  sets awake_boot: centiseconds since boot (/proc/uptime,
+#                 CLOCK_BOOTTIME: counts suspends, never steps back; read with
+#                 no process), else wall time. Awake time never runs ahead of it.
+#
+# The state (awake_*) is GLOBAL: one wait at a time per process. Successive
+# waits share it, and each awake_start begins it anew (cdo-slot's acquire, its
+# timed wait and its go's run one after another, never nested).
+#
+# The rules TLS-104's review rounds hardened: the time base is chosen once, by
+# the first read: CLOCK_MONOTONIC when it reads, else the wall clock for the
+# whole wait (as before TLS-104). A later failed read keeps the last awake time
+# (the wait grows: the safe side), but only for two reads: the third failure
+# in a row (TLS-105 review r1, Fable: a clock that stopped reading would make the
+# wait endless) counts wall time from the last good reading on, and says so. The
+# suspended reading is judged on its own (r4): a bad one costs only the log line,
+# never the time base. A suspend counts from 2 s (the readings are whole seconds;
+# a real one lasts far longer).
+# Only processes that sleep lose time this way: a loop that counts its own
+# iterations (spawn_keeper's 1200 x 0.05 s) is frozen with the host and needs none.
+awake_tool="$(dirname "${BASH_SOURCE[0]}")/host-suspended"
+awake_read() {
+    local _b m="" w tail clocks
+    awake_s="" awake_msg=""
+    # At most 5 s (review r2, sol), then KILL 1 s later for a read that ignores
+    # TERM (r3): a clock read that hangs is a failed read, never a wait that
+    # hangs with it. A command substitution, which waits for
+    # the read to end (a `< <(...)` does not): the read inherits the caller's
+    # lock descriptors (cdo-slot's hold and timing), and one still ending after
+    # its caller exited held them past it (the refused-run test, once, under a
+    # suite's load).
+    clocks=$(timeout -k 1 5 "$awake_tool" --clocks 2>/dev/null) || true
+    read -r awake_s _b m <<<"$clocks" || true
+    # The wall clock read AFTER the clocks (review r2, sol): a suspend between
+    # the two then makes awake_off smaller, so a later fall back counts less
+    # time, never more. (Read before them, a suspend there was charged to the
+    # wait once it fell back.)
+    w=${EPOCHREALTIME//[!0-9]/}
+    [[ "$awake_s" =~ ^[0-9]+$ ]] || awake_s=""
+    if [[ "$awake_base" != wall && "$m" =~ ^[0-9]+$ ]]; then
+        # awake_off maps the wall clock onto awake time as of this reading.
+        awake_now=$m awake_base=mono awake_fails=0 awake_off=$((m - w))
+    elif [[ "$awake_base" == mono ]]; then
+        awake_fails=$((awake_fails + 1))
+        if ((awake_fails >= 3)); then
+            awake_base=wall awake_now=$((w + awake_off))
+            awake_msg="the awake clock failed $awake_fails reads in a row: this wait counts wall time from its last good reading on"
+        fi
+    else
+        awake_base=wall awake_now=$((w + awake_off))
+    fi
+    awake_us=$((awake_now - awake_t0))
+    if [[ -n "$awake_s0" && -n "$awake_s" ]] && ((awake_s - awake_s0 - awake_slept >= 2)); then
+        if [[ "$awake_base" == mono ]]; then
+            tail="it goes on that much longer"
+        else
+            # An old host-suspended (the suspended seconds only), or no clock.
+            tail="the wall clock counts it in this wait (no awake clock)"
+        fi
+        awake_msg="${awake_msg:+$awake_msg; }the host slept $((awake_s - awake_s0 - awake_slept)) s during this wait: $tail"
+        awake_slept=$((awake_s - awake_s0))
+    fi
+}
+awake_start() {
+    awake_base="" awake_t0=0 awake_s0="" awake_slept=0 awake_fails=0 awake_off=0
+    awake_boot_src=""
+    awake_read
+    awake_s0=$awake_s awake_t0=$awake_now awake_us=0 awake_msg=""
+}
+awake_nap() { sleep "$(($1 / 1000000)).$(printf '%06d' $(($1 % 1000000)))"; }
+# One clock per wait (review r2, sol): the first call after awake_start chooses
+# /proc/uptime, or the wall clock when it cannot be read, and the wait keeps it;
+# a later failed /proc/uptime read keeps its last value (mixing the two would
+# compare seconds since boot with seconds since 1970).
+awake_boot_cs() {
+    local up="" _i
+    if [[ "$awake_boot_src" != wall ]]; then
+        read -r up _i 2>/dev/null </proc/uptime || true
+        if [[ "$up" =~ ^[0-9]+\.[0-9][0-9]$ ]]; then
+            awake_boot=$((10#${up/./})) awake_boot_src=uptime
+            return 0
+        fi
+        [[ "$awake_boot_src" != uptime ]] || return 0
+    fi
+    awake_boot=$((${EPOCHREALTIME//[!0-9]/} / 10000)) awake_boot_src=wall
+}
