@@ -518,7 +518,7 @@ mod tests {
             1,
             "precondition: one RecordRef operation: {got:?}"
         );
-        let reason = got[0].1.to_lowercase();
+        let reason = al_syntax::IdentifierFoldExt::fold_identifier(got[0].1.as_str());
         assert!(
             reason.contains("assigned from r") && reason.contains("assigned from s"),
             "{reason}"
