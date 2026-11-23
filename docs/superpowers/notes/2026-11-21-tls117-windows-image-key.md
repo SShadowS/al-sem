@@ -9,7 +9,15 @@ only code. **The cache stays off on Windows until the probe passes on a real mac
 and a green probe run is diagnostics, not enablement: the product phase must also give positive
 keys on the shipped, stamped MSVC binaries.
 
-What rev 6 changes: the **data-digest slot** (section 3): a 48-byte marked static in `.rdata`
+What rev 7 changes (sol r5): the slot's digest also binds the initial file bytes of every range
+canonicalisation masks (section 3, "The digest"), so nothing the canonical hash skips is unbound;
+the probe refuses a key reply naming no candidate, requires an observed rival refused at the
+canonical comparison in the stale-name reproductions (folder swap, deleted launch link), and marks
+barriers the child only fakes as `synthetic`, never crediting one as a race; and section 3 gains
+**Product acceptance before enablement**: positive keys on the shipped, stamped MSVC executables
+and W8 through the installed stamped binaries, with the exact owner steps.
+
+What rev 6 changed: the **data-digest slot** (section 3): a 48-byte marked static in `.rdata`
 (16-byte magic, 32 digest bytes, zero at build), stamped after linking by `tls117_stamp` with the
 blake3 of every writable section; at key time the loaded slot (covered by part A) must be
 non-zero, the candidate's writable sections must hash to it, and the candidate's own slot must
@@ -202,10 +210,20 @@ scope in section 1.
   keep the optimiser from assuming its build-time zeros. The magic is spelled only in that static's
   initialiser (and in the stamp tool, which is never stamped); code that needs it reads it back
   from the static, so a stamped binary carries the magic exactly once.
-- **The digest.** blake3 over the tag `tls117-data-digest-1` and, for every writable section in
-  table order: its 8-byte name, virtual address, virtual size and raw size (u32 LE), then its raw
-  bytes (`[PointerToRawData, +SizeOfRawData)`). Raw file bytes, never memory: by key time the
-  process has written its writable sections.
+- **The digest** (rev 7: `tls117-data-digest-2`). blake3 over the tag, then for every writable
+  section in table order: its 8-byte name, virtual address, virtual size and raw size (u32 LE),
+  then its raw bytes (`[PointerToRawData, +SizeOfRawData)`); then the separator `masked ranges`,
+  then **every range canonicalisation masks** (the file's loader-written ranges: the IAT and every
+  `FirstThunk` array, the delay-load IATs and module handles, the TLS index target, the load-config
+  pointer targets), sorted by RVA then length, duplicates dropped, each as the record (holding
+  section's 8-byte name, or 8 zero bytes in the headers; RVA u32 LE; length u32 LE; the range's
+  initial file bytes, zero past the raw data as the loader maps them). Raw file bytes, never
+  memory: by key time the process has written its writable sections and the loader its masked
+  ranges. So every byte the canonical hash cannot see is bound to the slot: a delay-load IAT
+  whose initial entries point at a linker thunk, an IAT's initial hint/name RVAs, a security
+  cookie's initial value. At key time the same digest is recomputed from the candidate file (its
+  own masks) and compared with the loaded slot. The stamp refuses a slot that overlaps a masked
+  range.
 - **The stamp tool** (`examples/tls117_stamp.rs`, runs on Linux and Windows on any x64 PE):
   finds the magic, refusing unless it occurs exactly once and lies in a read-only, non-executable
   section's mapped raw data; writes the digest into the 32 bytes after it; recomputes the PE
@@ -248,6 +266,46 @@ or CI are stamped.
   binaries copied into the LSP packages are stamped.
 - **Linux** is unchanged: its key is `/proc/self/exe`'s bytes, and no stamp is needed there (the
   static exists on every target; an unstamped slot means nothing on Linux).
+
+### Product acceptance before enablement (rev 7, sol r5)
+
+A green probe run is diagnostics. The cache is turned on for Windows only after, on the owner's
+machine, with the product change built:
+
+1. **Positive keys on the shipped executables.** The MSVC `release-ship` `alsem.exe`, `aldump.exe`
+   and `al-call-hierarchy.exe`, stamped by `scripts/install-windows.ps1` (and, separately, the ones
+   the CI step stamped), each make a key: the IR cache report's lines say a key, never `no key`.
+2. **W8 through the installed, stamped binaries**, not cargo-built test artifacts (`cdo-gate` and
+   the cargo tests run `CARGO_BIN_EXE_*` builds, which are unstamped and so get no key): cold
+   publication, warm disk hits, impact with every hit verified. Exact owner steps (PowerShell,
+   after `scripts/install-windows.ps1` installed to `~/.al-sem/bin/`):
+   ```
+   $env:CDO_WS = 'U:\Git\DO-cdo-baseline\Cloud'
+   $bin = "$HOME\.al-sem\bin\alsem.exe"
+   $env:ALSEM_IR_CACHE = 'on'
+   $env:ALSEM_IR_CACHE_DIR = "$env:LOCALAPPDATA\al-ch-snapshot-cache\ir-accept-$(Get-Date -Format yyyyMMddHHmmss)"
+   $r = "$env:TEMP\tls117-accept"; New-Item -ItemType Directory -Force $r | Out-Null
+   Remove-Item "$r\*.jsonl" -ErrorAction SilentlyContinue
+   # a) cold: a fresh cache root; this process publishes
+   $env:ALSEM_IR_CACHE_REPORT = "$r\cold.jsonl"; & $bin analyze $env:CDO_WS > "$r\cold.out"
+   # b) warm: a second process reads what (a) published
+   $env:ALSEM_IR_CACHE_REPORT = "$r\warm.jsonl"; & $bin analyze $env:CDO_WS > "$r\warm.out"
+   # c) impact, every hit parsed again and compared
+   $env:ALSEM_IR_CACHE_VERIFY = '1'; $env:ALSEM_IR_CACHE_REPORT = "$r\impact.jsonl"
+   & $bin impact $env:CDO_WS --routine 'CDO Telemetry::UpdateLastUpload' --format json > "$r\impact.out"
+   Remove-Item Env:ALSEM_IR_CACHE_VERIFY
+   python scripts\ir-cache-report-check --rule output "$r\cold.jsonl"
+   python scripts\ir-cache-report-check --rule warm-build "$r\warm.jsonl"
+   python scripts\ir-cache-report-check --rule impact "$r\impact.jsonl"
+   Select-String -Path "$r\*.jsonl" -Pattern 'no key|unsupported'
+   ```
+   Pass when: `cold.jsonl` has `published_packages > 0` (and passes `--rule output`), `warm.jsonl`
+   passes `--rule warm-build` (`disk_hits > 0`), `impact.jsonl` passes `--rule impact`
+   (`verified_hits > 0`), no report has `refused` or `roundtrip_failed`, and the last line finds
+   nothing (no `no key`, no `unsupported`). The three outputs must equal the same commands run with
+   `ALSEM_IR_CACHE=off` (the cache never changes an answer).
+3. The same as step 2 with `aldump.exe` is not needed; `al-call-hierarchy.exe` gets one positive
+   key check (start the LSP server once with `ALSEM_IR_CACHE_REPORT` set and open the workspace).
 
 **Why `.data` is not compared in memory.** The engine computes the key lazily, at its first IR cache use,
 long after start: the C runtime, Rust's runtime, mimalloc, `std`'s statics and the program itself
@@ -577,6 +635,14 @@ the copies as children it drives over stdin. The key sequence in it is a prototy
 windows-sys features are a `[target.'cfg(windows)'.dev-dependencies]` entry, so the shipped
 binaries do not change.
 
+**Rev 7 changes to the probe.** `candidates_ok` refuses a reply that names no candidate. In the
+stale-name reproductions (the folder swap at "after-query", and the hard link after the launch
+link is replaced) at least one candidate must be an observed rival: opened, a file id other than
+the original's, refused at the canonical comparison. Barriers the child sends without having run
+the step they name (no candidate opened or read, or an unstamped build) say `synthetic`
+(`BARRIER after-hash synthetic`); a W1 run whose target barrier is synthetic FAILs ("not
+credited as a race test") instead of counting.
+
 **Rev 6 changes to the probe.** The probe's own binary is never stamped (it is a dev or
 `release-ship` build); every W-item that needs a key copies it, **stamps the copy** (`pe::stamp`,
 the stamp tool's code, with the magic read from the probe's own slot), and launches the copy; the
@@ -642,6 +708,11 @@ Each line is `PASS`, `FAIL` or `SKIP`, with what was seen. The process exits 1 w
 fails. The same items are `#[test]`s in the example (the child half is an ignored test the
 parent starts, as `key_is_the_running_image_not_the_path` does on Linux).
 
+**Rev 7 unit test** (17 in all): `a_masked_iat_change_after_stamping_fails_the_slot`: after
+stamping, one byte of the fixture's IAT (RVA 0x6038, in the read-only `.idata`) is changed; part
+B still accepts the file at the canonical comparison (the IAT is masked), and the slot check
+gives `DataDiffers`. Red proof below.
+
 **Rev 6 unit tests** (16 in all). The fixture was rebuilt with the slot (`tls117_slot` at the start
 of `.rdata`, file offset 0x800, RVA 0x3000), so the DIR64 sites moved to 0x3040, 0x3048, 0x3050,
 0x3058, 0x3060 (pinned literally, read off `objdump -p`). New: a stamped fixture verifies (slot at
@@ -681,11 +752,15 @@ restored, all 7 pass.
 
 Checked here: `cargo check --target x86_64-pc-windows-gnu --examples --tests` is clean, and
 clippy shows no warning in the examples for the Windows target or Linux (`-D warnings` on Linux,
-tests included). **Not checked here:** that a Windows build of the probe carries the magic
-exactly once (a Windows cross build was not run for rev 6: the CDO slot was held by a peer's gate).
-If the compiler ever emitted a second copy, every stamp would refuse ("occurs more than once") and
-the probe's W1/W2/W9 would FAIL loudly at "stamp the copy", never pass wrongly. The Windows items
-have not run on rev 6.
+tests included). **Rev 7, checked on a cross build** (`x86_64-pc-windows-gnu`, `release-fast`,
+mingw-w64 GCC 13 + lld, at the final rev 7 code): `grep -c -a TLS117-DATA-SLOT tls117_probe.exe`
+is **1**; the stamp tool stamps it (slot in `.rdata`, a non-zero checksum recomputed); and
+`w10-compare relink` on that build finds `W10_VALUE` in `.data` (writable). That run also showed
+the value appears as an immediate in `.text`, so `w10-compare` now reports a writable section
+when any occurrence lies in one (it reported `.text` before). The shipped MSVC build was not
+checked here; if it ever carried a second copy, every stamp would refuse ("occurs more than
+once") and W1/W2/W9 would FAIL loudly at "stamp the copy", never pass wrongly. The Windows items
+have not run on rev 7.
 
 ## 9. Order of the owner run (Windows, repository root, `TREE_SITTER_AL_PATH` set)
 
@@ -716,8 +791,10 @@ have not run on rev 6.
    cargo test -p al-sem --lib snapshot::cache
    cargo test --test cli cli_ir_cache::
    ```
-5. **The CDO steps (W8)**, with stamped binaries from `scripts/install-windows.ps1` (product phase)
-   and a fresh cache root that passes the private rule:
+5. **Product acceptance (W8 on the installed, stamped binaries)**: the steps in section 3,
+   "Product acceptance before enablement". The `cdo-gate` steps below remain a gate run of the
+   product's own tests, but they run unstamped cargo builds, which get no key on Windows, so they
+   do not count as acceptance. The older gate steps, for reference:
    ```
    export CDO_WS=U:/Git/DO-cdo-baseline/Cloud
    export ALSEM_IR_CACHE_DIR="$LOCALAPPDATA/al-ch-snapshot-cache/ir-tls117-$(date +%s)"
