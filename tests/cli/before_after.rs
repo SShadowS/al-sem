@@ -8,7 +8,8 @@
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 
-const SCRIPTS: [&str; 3] = ["cdo-before-after", "cdo-speed", "cdo-slot"];
+// cdo-slot sources awake-clock (TLS-105).
+const SCRIPTS: [&str; 4] = ["cdo-before-after", "cdo-speed", "cdo-slot", "awake-clock"];
 
 /// A stub cargo. `build`: one stub per `--bin`, with the source's `side.txt`
 /// baked in (so two sides' binaries differ exactly when their `side.txt` does).

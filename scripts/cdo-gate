@@ -815,7 +815,8 @@ stamp() {
 
 # ⟨TLS-104⟩ `<suspended s> <boot s> <awake us>` in one read (`host-suspended
 # --clocks`), or nothing when the clocks cannot be read.
-host_clocks() { "$(dirname "$0")/host-suspended" --clocks 2>/dev/null; }
+# Cut after 5 s, KILL 1 s later (TLS-105 review r3): a hung read never stalls the gate.
+host_clocks() { timeout -k 1 5 "$(dirname "$0")/host-suspended" --clocks 2>/dev/null; }
 # suspend_note <before> <after> <what>: when the host was suspended between the
 # two readings, say so: wall seconds over `what` (bash `$SECONDS`) then include
 # time in which nothing ran (server1 is a laptop that suspends when moved).

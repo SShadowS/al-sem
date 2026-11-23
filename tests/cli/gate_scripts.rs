@@ -426,6 +426,8 @@ fn cdo_gate_only_pass_records_the_tree_it_ran_on() {
     for f in [
         "cdo-gate",
         "cdo-slot",
+        // cdo-slot sources it (TLS-105).
+        "awake-clock",
         "require-rttime",
         "cdo-speed",
         "host-suspended",

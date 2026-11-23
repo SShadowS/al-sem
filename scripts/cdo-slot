@@ -14,8 +14,9 @@
 #       MemAvailable >= 35 GB (CDO_SLOT_MEM_MIN_GB), and no earlier waiter that
 #       can run now is waiting (see the queue below). Without --wait it refuses at
 #       once (exit 1, naming the holder); with --wait it polls every 15 s, prints
-#       the holder about every 60 s, and gives up after --timeout seconds
-#       (default: never) or when the bound process ends. Waiters are served in
+#       the holder about every 60 s, and gives up after --timeout seconds of
+#       awake time (TLS-105: a host suspend does not count; default: never) or
+#       when the bound process ends. Waiters are served in
 #       arrival order (TLS-88): a free slot goes to the oldest waiter still alive,
 #       and an acquire without --wait refuses while anyone waits. A waiter short
 #       of memory steps aside until it has it, keeping its place.
@@ -304,8 +305,22 @@ describe() {
 # ⟨TLS-104⟩ `, N s of it with the host suspended)` when the host was suspended
 # since the record was written (its `suspended=` reading), else `)`: an old hold
 # can be a laptop that slept, not a hung holder (server1 suspends when moved).
-host_suspended() { "$(dirname "$0")/host-suspended" 2>/dev/null; }
-host_clocks() { "$(dirname "$0")/host-suspended" --clocks 2>/dev/null; }
+# ⟨TLS-105 review r3, sol⟩ Cut after 5 s (KILL 1 s later, for a read that
+# ignores TERM): `status` and `probe` print it, and a hung read there stalled
+# the guard's probe (which then lets work run) and a waiting acquire.
+host_suspended() { timeout -k 1 5 "$(dirname "$0")/host-suspended" 2>/dev/null; }
+# ⟨TLS-105⟩ The awake-time deadlines (the timed wait, `go`, acquire's --timeout)
+# come from scripts/awake-clock, loaded only for the commands that wait with a
+# deadline (review r1, sol): `probe`, `status`, `release` and a keeper must work
+# without it, or the guard, whose probe would fail, lets work run beside a
+# timing. A command that needs it and lacks it stops before it takes any lock.
+load_awake() {
+    local lib
+    lib="$(dirname "$0")/awake-clock"
+    [[ -r "$lib" ]] || die "$lib is missing: a wait with a deadline needs it; nothing was taken"
+    # shellcheck source=awake-clock
+    source "$lib"
+}
 # At least 2 s: the readings are whole seconds (one that crossed a second
 # boundary moves by 1; review, sol), and a real suspend lasts far longer.
 # `$1`: the words after the seconds (default `of it with the host suspended`).
@@ -536,9 +551,16 @@ spawn_keeper() {
 # it was gone before it took the go (killed: TLS-89 review r7, sol).
 # A keeper that does not take it within CDO_SLOT_LOCK_WAIT_S (stopped): 1 too,
 # and a go file that cannot be made is no go (review r8, sol).
+# ⟨TLS-105⟩ CDO_SLOT_LOCK_WAIT_S of AWAKE time (scripts/awake-clock): a host
+# suspend in it refused a live keeper's go. The clock is started before the go
+# file is made (a test that sees the file knows it runs): one clock read (a
+# process) per go.
 go() {
+    awake_start
     : >"$dir/go.$1" || return 1
-    local until_s=$((SECONDS + lock_wait))
+    local boot0 read_at=""
+    awake_boot_cs
+    boot0=$awake_boot
     while [[ -e "$dir/go.$1" ]]; do
         if ! probe s "$2"; then
             # It may have taken the go and ended just after the check above.
@@ -546,9 +568,25 @@ go() {
             rm -f "$dir/go.$1"
             return 1
         fi
-        if ((SECONDS >= until_s)); then
-            rm -f "$dir/go.$1"
-            return 1
+        # Time since boot counts awake time and suspends, and never steps back
+        # (review r1, sol: `$SECONDS` is wall time, which a clock step moves):
+        # awake time never runs ahead of it. So the clocks (a process; this
+        # loop polls every 0.05 s) are read only once that deadline passed,
+        # then once a second.
+        awake_boot_cs
+        if ((awake_boot - boot0 >= lock_wait * 100)) && [[ "$read_at" != "$((awake_boot / 100))" ]]; then
+            read_at=$((awake_boot / 100))
+            awake_read
+            [[ -z "$awake_msg" ]] || echo "cdo-slot: go: $awake_msg" >&2
+            if ((awake_us >= lock_wait * 1000000)); then
+                # The keeper may have taken the go while the clocks were read
+                # (review r1, sol and Fable): that is a go. (One that takes it
+                # between this check and the removal went on anyway; the caller
+                # then ends it, so no hold is left that nobody knows of.)
+                [[ -e "$dir/go.$1" ]] || return 0
+                rm -f "$dir/go.$1"
+                return 1
+            fi
         fi
         sleep 0.05
     done
@@ -739,40 +777,20 @@ timed_start() {
     # that slept 33 min would "wait" its 1800 s in a few real seconds and refuse
     # falsely (review, Fable), and its grace would end with no build given the
     # chance to start (review r2, sol). So the wait and the grace run on AWAKE
-    # time, CLOCK_MONOTONIC (`host-suspended --clocks`: the reading and the clock
-    # from one process, so no suspend falls between them; review r3, sol). Each
-    # new sleep is said once. With the clocks unreadable, the wall clock (as before).
-    local now start last=-60 b list left_us nap_us quiet="" susp0="" susp mono="" slept=0 awake=""
-    # The time base is chosen once: awake time if the first read works. A later
-    # failed read keeps the last awake time (the wait only grows: the safe side).
-    # The awake clock is judged on its own (review r4, sol): a bad suspended
-    # field costs only the log line, never the time base.
-    slot_clocks() {
-        local s="" _b m=""
-        read -r s _b m < <(host_clocks) || true
-        [[ "$s" =~ ^[0-9]+$ ]] && susp=$s || susp=""
-        if [[ "$m" =~ ^[0-9]+$ && "$awake" != 0 ]]; then
-            mono=$m awake=1
-        elif [[ "$awake" != 1 ]]; then
-            mono=${EPOCHREALTIME//[!0-9]/} awake=0
-        fi
-    }
-    slot_clocks
-    susp0=$susp
-    start=$mono
+    # time (scripts/awake-clock, shared since TLS-105). Each new sleep is said
+    # once. With the clocks unreadable, the wall clock (as before).
+    local now last=-60 b list left_us nap_us quiet=""
+    awake_start
     local wait_us=$((timed_wait * 1000000)) grace_us=$((timed_grace * 1000000))
     while :; do
         b=$(foreign_builds "$3")
-        slot_clocks
-        if [[ "$susp0" =~ ^[0-9]+$ && "$susp" =~ ^[0-9]+$ ]] && ((susp - susp0 - slept >= 2)); then
-            echo "cdo-slot: timed: the host slept $((susp - susp0 - slept)) s during this wait: it goes on that much longer"
-            slept=$((susp - susp0))
-        fi
-        now=$mono
+        awake_read
+        [[ -z "$awake_msg" ]] || echo "cdo-slot: timed: $awake_msg"
+        now=$awake_us
         if [[ -n "$b" ]]; then
             quiet=""
             list=$(awk '{ printf "%sPID %s (%s)", (NR > 1 ? ", " : ""), $1, $2 }' <<<"$b")
-            left_us=$((wait_us - (now - start)))
+            left_us=$((wait_us - now))
             # A build seen at (or past) the deadline refuses; the sleeps below
             # never pass the deadline, so a scan always lands on it.
             ((left_us > 0)) || { refuse "build processes still running after ${timed_wait} s: $list"; return; }
@@ -794,7 +812,7 @@ timed_start() {
             nap_us=$((grace_us - (now - quiet)))
             ((nap_us < 500000)) || nap_us=500000
         fi
-        sleep "$((nap_us / 1000000)).$(printf '%06d' $((nap_us % 1000000)))"
+        awake_nap "$nap_us"
     done
     # The hold it was to run in must still be there (released, or ended, while
     # it waited: review r1, sol): one probe of its id lock.
@@ -876,7 +894,7 @@ mem_ok() {
 # taken_hid: the hold taken or shared.
 taken_holder="" taken_hid=""
 acquire() {
-    local owner=$1 reason=$2 wait=$3 timeout=$4 here=$5 start=$SECONDS last=-60 why
+    local owner=$1 reason=$2 wait=$3 timeout=$4 here=$5 last=-60 why
     [[ "$owner" =~ ^[A-Za-z0-9._-]{1,40}$ ]] || die "owner '$owner': a short name (letters, digits, . _ -)"
     # No CR either: a reader that turns CR into a line break (Python's text mode)
     # would see a second status line, which a timing uses (TLS-89 review r1, sol).
@@ -890,6 +908,10 @@ acquire() {
         enqueue
         trap dequeue EXIT
     fi
+    # ⟨TLS-105⟩ --timeout counts AWAKE time (scripts/awake-clock): a laptop that
+    # slept through it gave up at once on resume. Started before the first
+    # `waiting:` line (a test that sees the line knows it runs).
+    [[ -z "$timeout" ]] || awake_start
     while :; do
         why=""
         if [[ -n "$ticket" ]]; then
@@ -951,8 +973,10 @@ acquire() {
         if [[ -n "$bind" ]] && ! alive "$bind" "$bind_start"; then
             die "the process to bind ($bind) ended while waiting: $why"
         fi
-        if [[ -n "$timeout" ]] && ((SECONDS - start >= timeout)); then
-            die "not taken after ${timeout} s: $why"
+        if [[ -n "$timeout" ]]; then
+            awake_read
+            [[ -z "$awake_msg" ]] || echo "cdo-slot: --timeout: $awake_msg"
+            ((awake_us < timeout * 1000000)) || die "not taken after ${timeout} s: $why"
         fi
         sleep "$poll"
     done
@@ -1020,6 +1044,11 @@ case "$cmd" in
             esac
             shift
         done
+        # Every acquire may give a keeper its go; a run waits with a deadline
+        # only with --timed or --timeout.
+        if [[ "$cmd" == acquire ]] || ((timed)) || [[ -n "$timeout" ]]; then
+            load_awake
+        fi
         if [[ "$cmd" == acquire ]]; then
             (($# == 0)) || { echo "cdo-slot: acquire takes no command" >&2; exit 2; }
             ((!timed)) || [[ -n "$bind" ]] || { echo "cdo-slot: --timed needs --bind PID (the timing process)" >&2; exit 2; }
