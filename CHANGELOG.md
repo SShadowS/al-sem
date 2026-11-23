@@ -35,8 +35,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (a suspend counts toward both by design or by necessity); not gate scripts, left as they are.
 - **Tests.** One stubbed-clock test per deadline (`cdo_slot_acquire_timeout_survives_a_host_suspend`,
   `cdo_slot_go_survives_a_host_suspend`, `land_mem_wait_survives_a_host_suspend`): a 10 s
-  simulated suspend during a 2 s wait does not end it at the wall deadline, the wait still ends
-  at its awake deadline, and the log names the suspend. land refuses to run with a test hook
+  simulated suspend during a 2 s wait does not end it at the wall deadline, and the log names
+  the suspend. The timeout and the mem-wait still end at their awake deadline (about 12 s); the
+  go takes a keeper that goes on 5 s after the suspend (its awake expiry is the existing review
+  r8 stopped-keeper test). land refuses to run with a test hook
   set, so its test runs land from a folder of links whose `host-suspended` sets the hook for
   itself only. Each has a discrimination proof (the check put back on wall time: red; restored:
   green), recorded in its doc.
