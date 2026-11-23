@@ -18,7 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `E.Validate(K, 2)` run the platform method.
 
   When both can take the call, alc ranks the conversions: `E.Find('-')` runs the platform over
-  a user `Find(Text)`, while `E.Get(I: Integer)` runs a user `Get(Variant)`.
+  a user `Find(Text)`, while `E.Get(I: Integer)` runs a user `Get(Variant)`. A procedure with
+  exactly a platform overload's parameter types HIDES it (alc warns AL0524; BC ran a table's
+  `GetFilters()` and `Insert()`, `zeroarg/RESULTS.md`).
 - **The bugs.**
   - The resolver took every record-operation name as the platform operation. So the call graph
     never reached the table's procedure: a table `Next` that inserts a Log gave `prove …
@@ -29,45 +31,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     table).
   - A member call (`E.FieldNo(…)`) always took the table's procedure at equal arity, even
     where the platform takes the call.
-- **The fix: one decision.**
+- **The fix: the resolver decides once, the body walk emits an ordinary call site.**
   - `platform_record_fit` drops the platform method only when it certainly cannot take the
-    call. That is: no overload has the call's arity; a `Field` parameter gets something that is
-    no field of the record (a literal, a variable, an expression); a value parameter gets a
-    RecordRef; or a scalar or record parameter gets a kind no conversion reaches.
-  - The platform Record signatures are generated from the compiler's own symbols:
-    `tools/gen-al-var-params` writes `src/program/resolve/platform_record_sigs.rs` (113
-    overloads, 82 names).
+    call. That is: no overload has the call's arity; a `Field` parameter gets a literal, an
+    expression or a declared variable that is no field of the table scope (a name the scope
+    does not declare may be a system field such as `SystemModifiedAt`); or a scalar or record
+    parameter gets a kind no conversion reaches. A value `Joker` takes a RecordRef too; an enum
+    is never a certain clash.
+  - The platform also yields when the table's procedure has exactly one of its overloads'
+    parameter types (AL0524), on both paths.
+  - The platform Record signatures, with each parameter's AL type keyword, are generated from
+    the compiler's own symbols: `tools/gen-al-var-params` writes
+    `src/program/resolve/platform_record_sigs.rs` (113 overloads, 82 names).
   - The table's procedure is taken when its table scope resolves the call (arity exact, no
-    certain type clash). When both may run, both routes are kept: alc's conversion ranking is
-    not modelled.
-  - Record operation path: the resolver records the procedure (`RareSiteFacts::
-    table_procedure`, `platform_cannot`, `table_procedure_args`). The model gives the operation
-    a call site of its own (the operation's id, which the statement tree names) carrying the
-    procedure's edges. When the platform certainly cannot take the call, it removes the
-    operation and its triggers and table events.
+    certain type clash). When both may run, both are kept: alc's conversion ranking is not
+    modelled.
+  - Record operation path: the resolver hands the body walk its decision by expression
+    (`FileBindings::table_procedure`, beside `parenless` and `bare`). The walk emits an
+    ordinary call site for the call, with its argument bindings, statement-tree node and order,
+    so every reader of call sites reads it unchanged. When only the procedure runs, the walk
+    emits no record operation, and the site's edge is an ordinary call with the procedure's
+    routes (the histogram and `alsem graph` see a resolved call). When both may run, the
+    operation keeps its trigger edge, and the call pairs with it without consuming it.
   - Member path: the catalog route is kept beside the table's procedure when the platform may
-    take the call.
-  - The record-type pass runs before the model's calls exist, so record operations now keep
-    the arguments that name a RecordRef or Variant (`holder_arguments`), and the pass reads
-    them as possibly rebound when a table procedure shares the operation's name.
+    take the call and is not hidden.
 - **CDO.** No site of either kind on the pinned workspace and its dependencies: a census of
   `aldump --program-call-graph-stats` (temporary, not shipped) found no record operation a
   table procedure may take and no member call where both routes are kept. So the
   conversion-ranking follow-up is not needed for this corpus.
 - **Tests.**
   - `platform_record_fit`: one row per measured call (A1-A9, J1-J9), with what BC ran.
-  - `cli_table_procedure_overload`: a write through the table's `Next`, a RecordRef its
-    `Count` rebinds, a temp RecordRef its `Find` moves (Fable's TP7), and no phantom `Insert`.
-    Each has the platform shape as its control.
+  - `cli_table_procedure_overload`: a write through the table's `Next`; a RecordRef its `Count`
+    rebinds; a temp RecordRef its `Find` moves (Fable's TP7); no phantom `Insert`; a `var`
+    record bound through the call (temporary: not written); and a system field against a
+    declared Variant (Fable F1). Each has its control.
+  - The r0 adapter census (`ws-report-dataitem`'s table `GetFilters()`, an AL0524 duplicate).
 - **Red proofs.**
-  - In the fit check: a `Field` parameter taking anything fails J1; a value parameter taking a
-    RecordRef fails A6; no arity check fails A1.
-  - No procedure call site fails `UserNext`; the record-type pass ignoring holder arguments
-    fails `UserFindTemp`; keeping the phantom operation fails `UserInsert`.
-  - A `/tableproc` call-site id, which the statement tree never names, failed the field guard's
-    `ShadowOpRetained`.
-- **Golden.** `tests/ir-l2-goldens/l2_features.snapshot` changes for 335 routines (Debug text of
-  `holder_arguments`). With it normalized, the old golden matched; no serialized output moves.
+  - In the fit check: a `Field` parameter taking anything fails J1; no arity check fails A1.
+  - The body walk ignoring the resolver's decision fails `UserNext`; a name the scope does not
+    declare read as no field fails `SystemFieldModifyAll`; the hiding rule off fails the r0
+    adapter census.
+- **How it was built (review).** A first cut made the call site in the model after the walk.
+  sol found it invisible to the L4 CFG walker, which reads the walk's statement tree, and
+  without argument bindings. Fable found a decided call counted `unknown`, a system field read
+  as no field, and a value `Joker` refusing a RecordRef was a ranking fact, not a refusal. The
+  decision moved to the resolver and the call site to the walk.
+- **Goldens.** None moved.
 
 ### Fixed (TLS-105: three more gate-script deadlines count awake time, not wall time)
 
