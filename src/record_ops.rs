@@ -36,9 +36,9 @@ pub fn receiver_type_of(ty: &str) -> &str {
 /// unquoted) for an object global through `this` (`this.X`, `this."X"`,
 /// `this.X[i]`; ENG-12 gate: CDO's dependencies use it), which the receiver
 /// sets hold only for a record global no parameter, local or return value of
-/// the routine shadows ([`this_key`]). `None` for any other shape (a call
-/// result, another member). Shared by both engines so they classify the same
-/// calls.
+/// the routine shadows ([`this_key`]). Parentheses around the receiver are read
+/// through (`(X)` is `X`, ENG-178). `None` for any other shape (a call result,
+/// another member). Shared by both engines so they classify the same calls.
 pub fn receiver_variable(
     ir: &al_syntax::ir::Ir,
     e: al_syntax::ir::ExprId,
@@ -57,6 +57,12 @@ pub fn receiver_variable(
         }
         _ => None,
     };
+    // ENG-178 (Fable r2 on ENG-173): `(X).Modify()` is `X.Modify()`: parentheses around the
+    // receiver change nothing, so both engines read through them.
+    let mut e = e;
+    while let ExprKind::Parenthesized(inner) = &ir.expr(e).kind {
+        e = *inner;
+    }
     match &ir.expr(e).kind {
         ExprKind::Index { base, .. } => named(*base),
         _ => named(e),

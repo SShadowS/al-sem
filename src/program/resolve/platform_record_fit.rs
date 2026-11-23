@@ -64,11 +64,18 @@ pub(crate) fn platform_hidden_by(method_lc: &str, user: &[String]) -> bool {
     };
     let keyword = |t: &str| t.split(['[', ' ']).next().unwrap_or("").to_string();
     sigs[i].1.iter().any(|params| {
-        params.len() == user.len()
+        let same_types = params.len() == user.len()
             && params
                 .iter()
                 .zip(user)
-                .all(|(p, u)| p.al.is_some_and(|al| al == keyword(u)))
+                .all(|(p, u)| p.al.is_some_and(|al| al == keyword(u)));
+        // ENG-178 (Fable r2 on ENG-173): a procedure with no parameters takes the call with no
+        // arguments from an overload whose parameters are all optional (`Delete(RunTrigger?)`,
+        // `Next(Steps?)`, `Modify(RunTrigger?)`, `FindSet(ForUpdate?)`): alc gives no AL0524 but
+        // binds the table's procedure (`D := O.Delete()` compiles only so, the procedure
+        // returning a record). Measured for zero parameters only.
+        let zero_over_optional = user.is_empty() && params.iter().all(|p| p.optional || p.variadic);
+        same_types || zero_over_optional
     })
 }
 

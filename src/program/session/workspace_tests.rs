@@ -1513,6 +1513,54 @@ fn parenless_calls_of_an_unchanged_file_change_under_s(mode: MemoryMode) {
     assert_eq!(rows(&r).workspace_projected, 2);
 }
 
+/// ENG-178 (Fable r2 on ENG-173): a record operation's call a table procedure of its name takes
+/// is a call site of the body walk (`FileBindings::table_procedure`), which the table's file
+/// decides. Renaming the table's `Next(var R: RecordRef; B: Boolean)` (S) leaves the caller's text
+/// unchanged but makes `E.Next(RR, true)` the platform's (no call site); restoring it makes it
+/// the procedure's again. The caller's kept rows must not be reused either way, and each step
+/// equals a cold build (`refresh_and_compare`, whose text now shows the decisions).
+///
+/// Discrimination (2026-11-23): `CachedFile::matches` comparing the bindings without
+/// `table_procedure` reuses the caller's stale row (no record operation where a cold build has
+/// one): fails in both modes; restored, passes.
+fn table_procedure_of_an_unchanged_file_changes_under_s(mode: MemoryMode) {
+    let table = "table 50110 \"TP T\"\n{\n    fields { field(1; K; Integer) { } }\n    keys { key(PK; K) { } }\n    procedure Next(var R: RecordRef; B: Boolean)\n    begin\n    end;\n}\n";
+    let caller = "codeunit 50111 \"TP Use\"\n{\n    procedure Go()\n    var\n        E: Record \"TP T\";\n        RR: RecordRef;\n    begin\n        E.Next(RR, true);\n    end;\n}\n";
+    let ws = Ws::new(&[("T.Table.al", table), ("Use.Codeunit.al", caller)]);
+    let decided = |ws: &Ws| {
+        let p = ResolvedProgram::build(&ws.inputs(), ProgramScope::CrossApp).unwrap();
+        p.body()
+            .parenless_calls
+            .iter()
+            .filter(|((_, path), _)| path == "src/Use.Codeunit.al")
+            .map(|(_, b)| b.table_procedure.len())
+            .sum::<usize>()
+    };
+    assert_eq!(
+        decided(&ws),
+        1,
+        "precondition: the table's `Next` takes the call"
+    );
+    let mut s = WorkspaceSession::with_mode(mode);
+    refresh_and_compare(&mut s, &ws, "cold");
+    ws.edit("T.Table.al", "    procedure Next(", "    procedure Next2(");
+    assert_eq!(
+        decided(&ws),
+        0,
+        "precondition: the rename leaves it the platform's"
+    );
+    let r = refresh_and_compare(&mut s, &ws, "table procedure renamed");
+    assert_eq!(r.class, ChangeClass::Declaration);
+    assert!(
+        !r.changed.contains(&"src/Use.Codeunit.al".to_string()),
+        "precondition: the caller's text is unchanged"
+    );
+    assert_eq!(rows(&r).workspace_projected, 2, "table and caller");
+    ws.edit("T.Table.al", "    procedure Next2(", "    procedure Next(");
+    let r = refresh_and_compare(&mut s, &ws, "table procedure restored");
+    assert_eq!(rows(&r).workspace_projected, 2);
+}
+
 /// ENG-80 C2: a bare `Error` reads the resolver's verdict (`FileBindings::bare`), which a
 /// declaration elsewhere decides. Adding a `procedure Error` to the base table (S) leaves the
 /// extension's text and parse unchanged but makes its `Error('x')` a User call (`Next` live);
@@ -1830,6 +1878,7 @@ in_both_modes!(
     abi_block_is_reused_while_its_inputs_hold,
     symbol_only_package_change_rebuilds_the_abi_block,
     parenless_calls_of_an_unchanged_file_change_under_s,
+    table_procedure_of_an_unchanged_file_changes_under_s,
     bare_error_verdict_of_an_unchanged_file_changes_under_s,
     file_ix_shift_restamps_later_files,
     low_mem_retains_no_dependency_tree,

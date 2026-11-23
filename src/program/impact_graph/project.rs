@@ -218,6 +218,9 @@ struct Builder<'a> {
     /// The [`Site::guard`] bits of the sites being added (set around one
     /// engine route in [`Self::engine_edges`]; 0 otherwise).
     site_guard: u8,
+    /// ENG-178: the route being added may not run at all (a table procedure a record operation's
+    /// call may bind where the platform operation may run instead): over-approximate.
+    site_over_approx: bool,
     /// What each page blocks a user from doing to its source table's records
     /// through it ([`crate::program::page_ui`]); pages blocking nothing are
     /// absent.
@@ -280,6 +283,7 @@ impl<'a> Builder<'a> {
             cancelled: false,
             added: 0,
             site_guard: 0,
+            site_over_approx: false,
             page_ui: crate::program::page_ui::page_ui_blocks(g),
         }
     }
@@ -466,12 +470,34 @@ impl<'a> Builder<'a> {
                 _ => None,
             };
             let mut unknown = false;
-            for r in e.may_reachable_routes() {
+            // ENG-178: a record operation's call a table procedure of its name may take while the
+            // platform operation may run instead keeps the operation's trigger edge; its call to
+            // the procedure (`RareSiteFacts::table_procedure`) is a call edge too, over-
+            // approximate (Fable r2 on ENG-173: test selection missed the caller).
+            let table_procedure: &[crate::program::resolve::edge::Route] =
+                match ce.obligation_kind() {
+                    ObligationKind::CallSite if e.kind == EdgeKind::ImplicitTrigger => inp
+                        .edges
+                        .site_facts
+                        .get(&ce.obligation_id())
+                        .map_or(&[], |f| f.rare().table_procedure.as_slice()),
+                    _ => &[],
+                };
+            let routes = e
+                .may_reachable_routes()
+                .map(|r| (e.kind, e.shape, false, r))
+                .chain(
+                    table_procedure
+                        .iter()
+                        .map(|r| (EdgeKind::Call, DispatchShape::Exact, true, r)),
+                );
+            for (ekind, eshape, over_approx, r) in routes {
                 if r.evidence.kind() == EvidenceKind::Unknown || r.target == RouteTarget::Unresolved
                 {
                     unknown = true;
                     continue;
                 }
+                self.site_over_approx = over_approx;
                 let conditions: BTreeSet<&'static str> =
                     r.conditions.iter().map(|c| condition_str(*c)).collect();
                 match &r.target {
@@ -483,7 +509,7 @@ impl<'a> Builder<'a> {
                             ObligationKind::CallSite | ObligationKind::Background => 0,
                             _ => self.table_event_guard(&ce.obligation_id(), rid),
                         };
-                        self.engine_route(&from, e.kind, e.shape, rid, line, conditions);
+                        self.engine_route(&from, ekind, eshape, rid, line, conditions);
                         self.site_guard = 0;
                     }
                     RouteTarget::AbiSymbol { key } => {
@@ -501,19 +527,19 @@ impl<'a> Builder<'a> {
                             request_page: false,
                         };
                         if self.rtn_by_id.contains_key(&rid) {
-                            self.engine_route(&from, e.kind, e.shape, &rid, line, conditions);
+                            self.engine_route(&from, ekind, eshape, &rid, line, conditions);
                         } else {
                             // A symbol-only object's entry trigger (no routine node:
                             // the ABI lists no triggers) or another unlisted symbol:
                             // its object stands for it.
-                            let (kind, via) = match e.kind {
+                            let (kind, via) = match ekind {
                                 EdgeKind::Run | EdgeKind::Call => (Kind::Run, "run"),
                                 EdgeKind::ImplicitTrigger => (Kind::Trigger, "run"),
                                 EdgeKind::EventFlow => (Kind::Event, "run"),
                                 EdgeKind::BackgroundStart => (Kind::Run, "backgroundStart"),
                                 EdgeKind::TableEvent => (Kind::Event, "tableEvent"),
                             };
-                            let to = match e.kind {
+                            let to = match ekind {
                                 EdgeKind::Run | EdgeKind::Call => self.run_key(&oid),
                                 _ => Key::Object(self.run_object(&oid)),
                             };
@@ -530,6 +556,7 @@ impl<'a> Builder<'a> {
                     }
                 }
             }
+            self.site_over_approx = false;
             // A run of an object that declares no entry trigger still runs it.
             if ce.obligation_kind() == ObligationKind::CallSite
                 && let Some(t) = inp
@@ -736,7 +763,7 @@ impl<'a> Builder<'a> {
         conditions: BTreeSet<&'static str>,
     ) {
         let to_trigger = self.rtn_by_id.get(rid).is_some_and(|r| r.is_trigger);
-        let conf = if conditions.is_empty() {
+        let conf = if conditions.is_empty() && !self.site_over_approx {
             Conf::Resolved
         } else {
             Conf::OverApprox
