@@ -75,6 +75,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use crate::file_stamp::FileStamp;
+use crate::git_env::path_from_git;
 use crate::source_text::{NestedApps, discover_al_files, parse_app_json, read_al_source};
 
 /// How deep under the search root auto-discovery looks for an `app.json`
@@ -678,19 +679,6 @@ fn git_common_dir(top: &Path) -> PathBuf {
         Some(bytes) => top.join(path_from_git(bytes)),
         None => top.join(".git"),
     }
-}
-
-/// A path git printed: its bytes as they are on unix.
-#[cfg(unix)]
-fn path_from_git(bytes: Vec<u8>) -> PathBuf {
-    use std::os::unix::ffi::OsStringExt;
-    PathBuf::from(std::ffi::OsString::from_vec(bytes))
-}
-
-/// A path git printed: git for Windows prints UTF-8.
-#[cfg(not(unix))]
-fn path_from_git(bytes: Vec<u8>) -> PathBuf {
-    PathBuf::from(String::from_utf8_lossy(&bytes).into_owned())
 }
 
 /// Whether git ignores `root` itself (`git check-ignore -q .`: exit 0). No

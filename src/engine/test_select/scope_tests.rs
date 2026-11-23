@@ -540,64 +540,71 @@ fn sh(dir: &Path, args: &[&str]) {
 
 /// TLS-114: the ignore files discovery reports (TLS-109's batch claim reads
 /// them) keep a path git prints exactly, CR and LF included: an absolute
-/// `core.excludesFile` ending in CR with an LF inside, and a relative one
-/// joined to a git top level (`rev-parse --show-toplevel`) that ends in CR.
+/// `core.excludesFile` ending in CR or LF with an LF inside, and a relative
+/// one joined to a git top level (`rev-parse --show-toplevel`) that ends in
+/// the same.
 ///
 /// DISCRIMINATION (2026-11-23): `git_value` also popping trailing CRs (the
 /// old rule) for the `config` call only fails at "absolute" (`…/ig\nn`); for
 /// the `--show-toplevel` call only, at "relative" (`…/repo/myignore\r`);
-/// restored, passes.
+/// popping every trailing LF (not just one) fails at "relative" for
+/// `repo\n`; restored, passes.
 #[cfg(unix)]
 #[test]
-fn ignore_files_keep_a_git_path_ending_in_cr() {
-    let t = tempfile::tempdir().unwrap();
-    let r = t.path().join("repo\r");
-    std::fs::create_dir(&r).unwrap();
-    sh(&r, &["init", "-q"]);
-    app(&r.join("App"), PROD, "Prod", &[]);
-    let abs = t.path().join("ig\nn\r");
-    sh(&r, &["config", "core.excludesFile", abs.to_str().unwrap()]);
-    let s = discover(&r.join("App"), &ScopeRequest::default());
-    assert!(
-        s.ignore_files.contains(&abs),
-        "absolute: {:?}",
-        s.ignore_files
-    );
+fn ignore_files_keep_a_git_path_ending_in_cr_or_lf() {
+    for end in ["\r", "\n"] {
+        let t = tempfile::tempdir().unwrap();
+        let r = t.path().join(format!("repo{end}"));
+        std::fs::create_dir(&r).unwrap();
+        sh(&r, &["init", "-q"]);
+        app(&r.join("App"), PROD, "Prod", &[]);
+        let abs = t.path().join(format!("ig\nn{end}"));
+        sh(&r, &["config", "core.excludesFile", abs.to_str().unwrap()]);
+        let s = discover(&r.join("App"), &ScopeRequest::default());
+        assert!(
+            s.ignore_files.contains(&abs),
+            "absolute: {:?}",
+            s.ignore_files
+        );
 
-    sh(&r, &["config", "core.excludesFile", "myignore\r"]);
-    let s = discover(&r.join("App"), &ScopeRequest::default());
-    let rel = r.join("myignore\r");
-    assert!(
-        s.ignore_files.contains(&rel),
-        "relative: {:?}",
-        s.ignore_files
-    );
+        let name = format!("myignore{end}");
+        sh(&r, &["config", "core.excludesFile", &name]);
+        let s = discover(&r.join("App"), &ScopeRequest::default());
+        let rel = r.join(&name);
+        assert!(
+            s.ignore_files.contains(&rel),
+            "relative: {:?}",
+            s.ignore_files
+        );
+    }
 }
 
 /// TLS-114: a worktree's `info/exclude` sits in the repository's common git
 /// folder (`rev-parse --git-common-dir`), here a bare clone whose name ends
-/// in CR; discovery names that file exactly.
+/// in CR or LF; discovery names that file exactly.
 ///
 /// DISCRIMINATION (2026-11-23): `git_value` also popping trailing CRs for
-/// the `--git-common-dir` call only fails (`…/b/info/exclude`); restored,
-/// passes.
+/// the `--git-common-dir` call only fails (`…/b/info/exclude`); popping every
+/// trailing LF fails for `b\n`; restored, passes.
 #[cfg(unix)]
 #[test]
-fn a_common_git_dir_ending_in_cr_is_read_exactly() {
-    let t = tempfile::tempdir().unwrap();
-    let src = t.path().join("src");
-    std::fs::create_dir(&src).unwrap();
-    sh(&src, &["init", "-q"]);
-    sh(&src, &["commit", "-q", "--allow-empty", "-m", "A"]);
-    let bare = t.path().join("b\r");
-    sh(
-        t.path(),
-        &["clone", "-q", "--bare", "src", bare.to_str().unwrap()],
-    );
-    let wt = t.path().join("wt");
-    sh(&bare, &["worktree", "add", "-q", wt.to_str().unwrap()]);
-    app(&wt.join("App"), PROD, "Prod", &[]);
-    let s = discover(&wt.join("App"), &ScopeRequest::default());
-    let exclude = bare.join("info").join("exclude");
-    assert!(s.ignore_files.contains(&exclude), "{:?}", s.ignore_files);
+fn a_common_git_dir_ending_in_cr_or_lf_is_read_exactly() {
+    for end in ["\r", "\n"] {
+        let t = tempfile::tempdir().unwrap();
+        let src = t.path().join("src");
+        std::fs::create_dir(&src).unwrap();
+        sh(&src, &["init", "-q"]);
+        sh(&src, &["commit", "-q", "--allow-empty", "-m", "A"]);
+        let bare = t.path().join(format!("b{end}"));
+        sh(
+            t.path(),
+            &["clone", "-q", "--bare", "src", bare.to_str().unwrap()],
+        );
+        let wt = t.path().join("wt");
+        sh(&bare, &["worktree", "add", "-q", wt.to_str().unwrap()]);
+        app(&wt.join("App"), PROD, "Prod", &[]);
+        let s = discover(&wt.join("App"), &ScopeRequest::default());
+        let exclude = bare.join("info").join("exclude");
+        assert!(s.ignore_files.contains(&exclude), "{:?}", s.ignore_files);
+    }
 }

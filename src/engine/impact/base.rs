@@ -23,9 +23,21 @@ use std::process::{Command, Stdio};
 
 use serde_json::{Value, json};
 
-/// `git <args>` in `dir`, its stdout. `dir` alone picks the repository: a
-/// hook's `GIT_DIR` and friends are dropped ([`crate::git_env`]).
+/// `git <args>` in `dir`, its stdout as text (an id, a prefix).
 fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
+    git_bytes(dir, args).map(|b| String::from_utf8_lossy(&b).into_owned())
+}
+
+/// `git <args>` in `dir`, its stdout as a path, bytes kept (TLS-114).
+fn git_path(dir: &Path, args: &[&str]) -> Result<PathBuf, String> {
+    git_bytes(dir, args).map(crate::git_env::path_from_git)
+}
+
+/// `git <args>` in `dir`, its stdout less git's one final LF only: a path
+/// (`--show-toplevel`) may end in a space, a CR or an LF (TLS-114). `dir`
+/// alone picks the repository: a hook's `GIT_DIR` and friends are dropped
+/// ([`crate::git_env`]).
+fn git_bytes(dir: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
     let out = crate::git_env::git_command()
         .arg("-C")
         .arg(dir)
@@ -39,10 +51,11 @@ fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
             String::from_utf8_lossy(&out.stderr).trim()
         ));
     }
-    // Only git's one final LF: a path (`--show-toplevel`) may end in a space
-    // or CR (TLS-114).
-    let s = String::from_utf8_lossy(&out.stdout);
-    Ok(s.strip_suffix('\n').unwrap_or(&s).to_string())
+    let mut b = out.stdout;
+    if b.last() == Some(&b'\n') {
+        b.pop();
+    }
+    Ok(b)
 }
 
 /// The base workspace, materialized.
@@ -113,7 +126,7 @@ pub fn materialize(
     };
     // `git archive` run in a subfolder keeps only that subfolder's paths
     // (of a tree that is already the subfolder: nothing): run it at the top.
-    let top = git(workspace, &["rev-parse", "--show-toplevel"])?;
+    let top = git_path(workspace, &["rev-parse", "--show-toplevel"])?;
     let made = (|| {
         std::fs::create_dir_all(&ws).map_err(|e| e.to_string())?;
         let mut archive = crate::git_env::git_command()
