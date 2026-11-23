@@ -1,13 +1,27 @@
 # TLS-117: the IR cache on Windows (design note)
 
-Status: **rev 5**, after sol's review r3 (`/work/.al-sem/tools-notes/tls117-design-review-sol-r3.md`)
-and Fable's review of design B; the orchestrator approved probe fixes for every reviewer item plus
-W10, then an owner rerun. (Rev 4 followed the owner's probe run at `e98e1bf0`,
-`/work/.al-sem/orchestrator/tls117-windows-e98e1bf0.txt`, and the choice of **design B**.) No product code yet; the native probe (`examples/tls117_probe.rs`, with the PE
-canonicaliser `examples/tls117/pe.rs`) is the only code. **The cache stays off on Windows until the
-probe passes on a real machine** (section 9).
+Status: **rev 6**, after sol's review r4 (`/work/.al-sem/tools-notes/tls117-design-review-sol-r4.md`):
+the coordinator made the post-link **data-digest slot mandatory**; the orchestrator agreed on the
+condition that the owner's local Windows install path stamps the binaries (section 3, "Building
+and installing stamped binaries"). No product code yet; the native probe (`examples/tls117_probe.rs`),
+the stamp tool (`examples/tls117_stamp.rs`) and the shared PE code (`examples/tls117/pe.rs`) are the
+only code. **The cache stays off on Windows until the probe passes on a real machine** (section 9),
+and a green probe run is diagnostics, not enablement: the product phase must also give positive
+keys on the shipped, stamped MSVC binaries.
 
-What rev 5 changes: part A reads the module through `ReadProcessMemory`; headers are found by
+What rev 6 changes: the **data-digest slot** (section 3): a 48-byte marked static in `.rdata`
+(16-byte magic, 32 digest bytes, zero at build), stamped after linking by `tls117_stamp` with the
+blake3 of every writable section; at key time the loaded slot (covered by part A) must be
+non-zero, the candidate's writable sections must hash to it, and the candidate's own slot must
+equal it. Initial mutable data is no longer outside the guarantee. `in_hashed` no longer means
+"hashed": metadata a mask zeroes refuses, the relocation table must lie in hashed, unmasked bytes,
+and a writable and executable section refuses. The probe stamps the copies it launches; W2 and W9
+run in a stamped child; W11 (new) shows an unstamped copy gets no key; every POSIX HELD path needs
+the control; `after-open` protection is credited only after a successful open; each W1 candidate
+is judged by identity first; W9's missing-section case must be refused at the headers; W10 stays a
+diagnostic, now comparing stamped slots and checking the linker ran.
+
+What rev 5 changed: part A reads the module through `ReadProcessMemory`; headers are found by
 `e_lfanew`/`SizeOfHeaders` and compared with the module's before any section work; checked
 arithmetic and size bounds throughout; imports without a lookup table refuse; masks never touch
 executable sections nor come from skipped sections; the load config refuses more unmodelled forms
@@ -67,23 +81,19 @@ changing files on purpose while the run is going.
 - an ancestor folder of the image renamed away and a new folder made at its old spelling (the
   owner run showed the mapped name does not follow it; design B gives no key there).
 
-**The guarantee's scope (design B).** A key is the full blake3 of a file whose read-only content
-(every section without `IMAGE_SCN_MEM_WRITE`, after relocation normalising and with the
-loader-written ranges zeroed, plus the headers with `ImageBase` zeroed) equals the running
-module's. Two kinds of difference stay invisible to that check:
-- **initial mutable data**: a different file whose code and constants are byte-identical to the
-  running image but whose initialised writable sections (`.data`, `.tls`) differ. It would be
-  accepted, and its key used for IR the running code produced. Section 3 explains why `.data`
-  cannot be compared reliably. Accidental reach: a rebuild that changes only the initial value of
-  a mutable static and nothing else, at the running image's path, while it runs; and the IR differs
-  only if the parse path reads that static. The `pe` unit test `a_data_only_change_is_not_covered`
-  states this behaviour. **W10** (section 8) measures whether the shipped build profile makes such a
-  change visible anyway (through the TimeDateStamp or the debug directory, both hashed). If W10
-  fails, the fallback (orchestrator decision, shipped builds only) is a post-link `.data`-hash slot:
-  a build step writes a hash of the initialised writable sections into a reserved read-only slot,
-  which part A and part B then both cover;
+**The guarantee's scope (design B with the slot, rev 6).** A key is the full blake3 of a file
+whose read-only content (every section without `IMAGE_SCN_MEM_WRITE`, after relocation normalising
+and with the loader-written ranges zeroed, plus the headers with `ImageBase` zeroed) equals the
+running module's, **and** whose writable sections (raw bytes, with each section's name, virtual
+address and sizes) hash to the digest stamped in the running module's slot. The slot lies in
+`.rdata`, so part A covers the digest the running image carries; the candidate's writable sections
+are recomputed, never trusted from its own slot. So initial mutable data (`.data`, `.tls`) is
+covered: a rebuild that changes only a mutable static's initial value gives a different digest
+and no key. An **unstamped** binary (every dev build) has an all-zero slot and gets no key.
+What stays unseen:
 - the bytes inside the loader-written ranges (IAT, delay-load IAT and module handle, TLS index,
-  load-config pointer targets), which are zeroed on both sides;
+  load-config pointer targets), which are zeroed on both sides of the canonical comparison (the
+  slot digest covers them where they lie in writable sections, as raw file bytes);
 - **bytes the loader never maps**: anything past the last section's raw data (an overlay, the
   Authenticode signature, which the security directory points to by file offset), and the file
   padding between `SizeOfHeaders` and the first section and between sections' raw data. The key
@@ -168,16 +178,78 @@ anything moved at all).
    2 × `MAX_IMAGE`); compare its header block, `ImageBase` zeroed, with the module's **before any
    section work**, so every size used afterwards is the running image's own; then compute
    `pe::canonical` over the file's bytes laid out by section, relative to the file's `ImageBase`.
-5. **Accept** the first candidate whose hash equals A's. The key is the blake3 of the bytes read
+5. **The slot.** Read the running module's slot from memory (its address is the static's; it must
+   lie in a non-writable section, outside every mask, so part A covers it). An all-zero digest
+   (an unstamped build) gives no key before any candidate is opened. For a candidate whose
+   canonical hash equals A's: recompute the digest of **its** writable sections and require it to
+   equal the loaded digest, and require its own slot bytes to equal the loaded slot.
+6. **Accept** the first candidate that passes both. The key is the blake3 of the bytes read
    through that same handle (and the IR marker search over them, as on Linux). No candidate
    accepted: no key.
 
 **Why it holds.** The accepted file's read-only content equals what is running, by construction,
-whatever names point where; the handle denies write and delete sharing while the bytes are read,
+whatever names point where, and its writable sections hash to the digest the running image
+carries in its (hashed) slot; the handle denies write and delete sharing while the bytes are read,
 so the key is of exactly those bytes. A replaced name, a swapped folder or a deleted link can only
-make the candidates differ from A, which gives no key. What stays unseen is the scope in section 1.
+make the candidates differ from A or from the slot, which gives no key. What stays unseen is the
+scope in section 1.
 
-**Why `.data` is not compared.** The engine computes the key lazily, at its first IR cache use,
+### The data-digest slot (rev 6, mandatory)
+
+- **The static.** `TLS117_SLOT: [u8; 48]` (in the product: next to `IR_IMAGE_MARKER`): the 16-byte
+  magic `TLS117-DATA-SLOT`, then 32 zero bytes. Immutable, so the linker puts it in `.rdata`;
+  `#[used]` and every read through `std::hint::black_box` (the IR marker's pattern) keep it, and
+  keep the optimiser from assuming its build-time zeros. The magic is spelled only in that static's
+  initialiser (and in the stamp tool, which is never stamped); code that needs it reads it back
+  from the static, so a stamped binary carries the magic exactly once.
+- **The digest.** blake3 over the tag `tls117-data-digest-1` and, for every writable section in
+  table order: its 8-byte name, virtual address, virtual size and raw size (u32 LE), then its raw
+  bytes (`[PointerToRawData, +SizeOfRawData)`). Raw file bytes, never memory: by key time the
+  process has written its writable sections.
+- **The stamp tool** (`examples/tls117_stamp.rs`, runs on Linux and Windows on any x64 PE):
+  finds the magic, refusing unless it occurs exactly once and lies in a read-only, non-executable
+  section's mapped raw data; writes the digest into the 32 bytes after it; recomputes the PE
+  checksum when the file carries a non-zero one (the `CheckSumMappedFile` algorithm; the loader
+  checks it only for drivers and boot images, and lld/MSVC executables usually carry 0, which is
+  left 0); then verifies that no byte outside the 32 digest bytes and the 4 checksum bytes changed
+  and that the writable sections are unchanged. Stamping is idempotent. Stamp **before**
+  Authenticode signing (signing appends the certificate and rewrites the checksum, but changes no
+  section and not the slot). The stamping code is `pe::stamp` in `examples/tls117/pe.rs`, shared
+  by the tool and the probe; the product phase moves that file into the crate unchanged in
+  substance, so the tool the product uses is this code.
+- **Why stamping keeps A and B consistent:** the stamp changes `.rdata` (and maybe the checksum in
+  the headers), so a stamped file's canonical hash differs from the unstamped one's; part A of a
+  process started from the stamped file sees the stamped bytes, and part B reads the same stamped
+  file. Only stamped files can match a stamped process.
+
+### Building and installing stamped binaries (product phase; plan)
+
+Unstamped builds (every `cargo build`, `cargo run`, test or bench) get **no key**: the cache is
+simply off for them on Windows, and that is fine. Only binaries that went through the install path
+or CI are stamped.
+
+- **The owner's local install path** — one script, `scripts/install-windows.ps1` (PowerShell, the
+  owner's shell for native Windows work), documented next to TLS-121's Windows build notes
+  (TLS-121 is adding a Windows build section to the docs and to CLAUDE.md's Prerequisites: the
+  libz-ng-sys `CMAKE_GENERATOR='Visual Studio 17 2022'` workaround and a short `CARGO_TARGET_DIR`
+  against MSBuild's MAX_PATH file tracking; the install script inherits both). It:
+  1. builds `alsem`, `aldump` and `al-call-hierarchy` with `cargo build --profile release-ship`
+     (the three binaries that install the IR cache);
+  2. stamps each with the stamp tool (in the product, a small bin over the same `pe` code), and
+     stops on any stamp error;
+  3. checks each stamped file: the slot verifies (digest recomputed equals the slot) and the IR
+     marker is present;
+  4. copies them to `~/.al-sem/bin/` (`alsem.exe`, `aldump.exe`) and to each LSP package location
+     given (`-LspDir <dir>`, repeatable: the `claude-code-lsps/al-language-server-go*/bin/`
+     folders, or wherever the owner's installed plugin keeps `al-call-hierarchy.exe` and
+     `alsem.exe`), never over a running binary (the copy fails while it runs; the script says so).
+- **CI** (`build-and-deploy.yml`, `release.yml`, the Windows `release-ship` job): stamps the three
+  binaries right after the build and before signing, then runs the same verification, so the
+  binaries copied into the LSP packages are stamped.
+- **Linux** is unchanged: its key is `/proc/self/exe`'s bytes, and no stamp is needed there (the
+  static exists on every target; an unstamped slot means nothing on Linux).
+
+**Why `.data` is not compared in memory.** The engine computes the key lazily, at its first IR cache use,
 long after start: the C runtime, Rust's runtime, mimalloc, `std`'s statics and the program itself
 have written writable sections by then, and there is no way to know which bytes. The one earlier
 point we could control is a TLS callback (`.CRT$XL*`), which runs after the loader (relocations,
@@ -185,8 +257,9 @@ point we could control is a TLS callback (`.CRT$XL*`), which runs after the load
 would mean a copy at every process start of every binary that installs the cache, kept for the
 process's life, and it would still not be reliable: a statically imported DLL's `DllMain` (or
 injected security software) runs before the exe's TLS callbacks and may write the exe's memory; the
-order among `.CRT$XL*` callbacks is by section name only. So no `.data` comparison; the remaining
-case is written as the guarantee's scope (section 1) and pinned by tests.
+order among `.CRT$XL*` callbacks is by section name only. So the writable sections are bound
+through the stamped digest instead: computed from the file at build time, carried in hashed
+read-only bytes, and recomputed from the candidate file at key time.
 
 ### The canonical hash (`examples/tls117/pe.rs`)
 
@@ -245,7 +318,12 @@ RVA 0, each section's raw data at its `VirtualAddress`, zero past `SizeOfRawData
   (`IMAGE_SCN_MEM_EXECUTE` or `IMAGE_SCN_CNT_CODE`): refused. The metadata each mask comes from
   (import descriptors and lookup tables, delay-load descriptors, the TLS directory, the load
   config) must itself lie in hashed bytes (the headers or a non-writable section), so mask
-  metadata from a skipped (writable) section is never trusted: refused.
+  metadata from a skipped (writable) section is never trusted: refused. **"In a hashed section"
+  is not "hashed" (rev 6):** once every mask is known, any mask that overlaps any of that metadata
+  refuses, so no mask can zero the bytes it was derived from. The relocation table (directory 5)
+  must lie in hashed bytes and outside every mask. A section that is both writable and executable
+  refuses (rather than being skipped as writable). The slot must lie in a non-writable section
+  outside every mask.
 - **Hash:** blake3 over a domain tag, the header bytes, then each hashed section's index, length
   and bytes.
 
@@ -499,6 +577,22 @@ the copies as children it drives over stdin. The key sequence in it is a prototy
 windows-sys features are a `[target.'cfg(windows)'.dev-dependencies]` entry, so the shipped
 binaries do not change.
 
+**Rev 6 changes to the probe.** The probe's own binary is never stamped (it is a dev or
+`release-ship` build); every W-item that needs a key copies it, **stamps the copy** (`pe::stamp`,
+the stamp tool's code, with the magic read from the probe's own slot), and launches the copy; the
+true key is the stamped copy's hash. Rivals are made from the stamped copy (one `.text` byte
+changed, slot still valid), so they are refused at the canonical comparison alone. Every child key
+report gives, per candidate, its file id and verdict (`mapped (id <vol>:<id>): ...`); the parent
+judges each candidate **by identity first**: a candidate that is the original file (a surviving
+alias) may be accepted; any other must have opened and been refused at the canonical comparison.
+Barrier lines say whether the child's first open succeeded (`after-open opened` / `after-open
+failed`); "blocked while the key's handle is held" is credited at `after-open` only after a
+successful open (at `after-hash` the handle is always held). Every POSIX HELD outcome, from a
+reported success that moved nothing or from an OS refusal, requires the control. W2 and W9 run
+in a stamped child (W9 through the `w9` child command); W9's `.data` flip must now be refused by
+the slot, and its missing-section case must be refused exactly at the headers. **W11** (new): an
+unstamped copy gives no key, with "unstamped" in the reason.
+
 **Rev 5 changes to the probe.** Every replacement file in W1 is a **rival valid build**: a copy of
 the running image with one `.text` byte changed (same headers), so part B reaches the canonical
 comparison. In the folder swap (when it happens at "after-query") and after the launch hard link
@@ -531,9 +625,10 @@ when the image kept its name **and** the other file is still where it was, and a
 | W1 hard link | launch through a hard link; delete the launch link (or, if refused, rename it away: both refused FAILs), write another file there (checked), verify its file id differs, while `a.exe` survives | the original hash or no key, before and after |
 | W1 other case | launch through an upper-case spelling | the original hash or no key |
 | W1 8.3 | launch through the short name of a long-named leaf | the original hash or no key; SKIP only with "8.3 disabled on this volume (no short name was made)" |
-| W2 | design B in the probe itself, unchanged image; run on the default (dev) build and on a `--profile release-ship` build | the key equals the hash of the probe's file. Evidence that the loader model is complete for that build on that Windows version, not more |
-| W9 | part B, through the full candidate path, on copies of the probe's own file against part A of the running probe: unaltered; one byte changed in `.text`; in `.rdata` (offsets outside every zeroed range); one section missing from the table; one byte changed in `.data` | unaltered accepted; `.text` and `.rdata` refused at the canonical hash; the missing section refused (at the headers); a missing required section FAILs; the `.data` verdict printed, not judged |
-| W10 | `examples/tls117_w10.ps1`: three `--profile release-ship` builds of the probe: base; `--features w10-variant` (only `W10_VALUE`'s initial value differs); base again after touching the probe's source (a relink of the same source). `tls117_probe w10-compare` canonicalises each pair | **variant**: `W10_VALUE` sits in a writable section in both builds, and the two canonicalise **differently** (else a `.data`-only change is invisible: fallback = the post-link `.data`-hash slot). **relink**: equal canonical hashes only with equal writable sections; never equal with different `.data`. Each build's TimeDateStamp, REPRO (`/Brepro`) debug entry and PDB GUID are printed, which shows where the difference (if any) comes from |
+| W2 | design B in a stamped copy, unchanged; run on the default (dev) build and on a `--profile release-ship` build | the key equals the stamped copy's hash, and every candidate is judged by identity. Evidence that the loader model is complete for that build on that Windows version, not more |
+| W9 | in a stamped child, part B through the full candidate path on copies of its own (stamped) file against its part A and loaded slot: unaltered; one byte changed in `.text`; in `.rdata` (offsets outside every zeroed range); one section missing from the table; one byte changed in `.data` | unaltered accepted; `.text` and `.rdata` refused at the canonical hash; the missing section refused exactly at the headers; the `.data` change refused by the slot ("writable sections do not match the loaded digest"); a missing required section FAILs |
+| W10 (diagnostic) | `examples/tls117_w10.ps1`: three `--profile release-ship` builds of the probe: base; `--features w10-variant` (only `W10_VALUE`'s initial value differs); base again after touching the probe's source. The script checks the linker ran (the output's mtime moved; its hash change is printed). `tls117_probe w10-compare` stamps both builds in memory and compares | always: the stamped slots differ exactly when the writable sections differ. **variant**: `W10_VALUE` in a writable section in both, and the writable sections differ. **relink**: equal canonical hashes only with equal writable sections. Printed: whether the canonical hashes differ, and each build's TimeDateStamp, REPRO (`/Brepro`) entry and PDB GUID |
+| W11 | an unstamped copy asked for its key | no key, with "unstamped" in the reason |
 | W3 | controls first: an ordinary copy opens for write and for write+truncate; then while a child runs: write, write+truncate, `FILE_WRITE_DATA` opens of the image; rename; delete (recorded) | the controls succeed, the three opens fail, the rename succeeds |
 | W4 | a key; then a handle with `DELETE` access held on the running image; then closed; and a `FILE_WRITE_DATA` handle on a plain file | key before; while held, no key with a sharing violation (`os error 32`) in the reason; key after; our read-only-sharing open of the plain file fails with a sharing violation |
 | W5 | `std::fs::File` locks on three handles: shared and exclusive beside an exclusive, exclusive beside two shared (third handle), each `WouldBlock`; explicit `unlock` frees; a killed child's lock is freed | all hold, and the killed holder's lock frees within 10 s (time printed) |
@@ -546,6 +641,20 @@ and removes its own override folder.
 Each line is `PASS`, `FAIL` or `SKIP`, with what was seen. The process exits 1 when any item
 fails. The same items are `#[test]`s in the example (the child half is an ignored test the
 parent starts, as `key_is_the_running_image_not_the_path` does on Linux).
+
+**Rev 6 unit tests** (16 in all). The fixture was rebuilt with the slot (`tls117_slot` at the start
+of `.rdata`, file offset 0x800, RVA 0x3000), so the DIR64 sites moved to 0x3040, 0x3048, 0x3050,
+0x3058, 0x3060 (pinned literally, read off `objdump -p`). New: a stamped fixture verifies (slot at
+0x800/0x3000, part B accepts it, the slot check matches, and the unstamped fixture no longer matches
+part A); one `.data` byte changed after stamping passes the canonical comparison but fails the slot
+(`DataDiffers`); an unstamped fixture gives `Unstamped`; stamping refuses a missing or repeated
+magic; the checksum code reproduces the linker's value on the unstamped fixture (0xe3a3, from
+`objdump -p`: the independent check) and the stamp rewrites it consistently; widening the IAT
+directory over the import descriptors refuses ("overlaps import descriptor"). **Red proofs**
+(2026-11-23): with the slot's digest comparison disabled, `a_data_change_after_stamping_fails_the_slot`
+fails; with the mask-over-metadata check disabled, `a_mask_over_import_metadata_refuses` fails;
+both restored, all 16 pass. The stamp tool, run here on the fixture, stamps it (checksum 0xe3a3 →
+0x5ea3) and is idempotent.
 
 **Rev 5 unit tests** (10 in all): the five DIR64 site RVAs (0x3010, 0x3018, 0x3020, 0x3028,
 0x3030) and the IAT (0x6038, 0x10) are pinned literally, read off `objdump -p` once; the code and
@@ -571,34 +680,44 @@ normalising disabled (`value - 0`), `relocated_loads_canonicalise_like_the_file`
 restored, all 7 pass.
 
 Checked here: `cargo check --target x86_64-pc-windows-gnu --examples --tests` is clean, and
-clippy shows no warning in the probe for the Windows target or Linux. The Windows items have not
-run on rev 5.
+clippy shows no warning in the examples for the Windows target or Linux (`-D warnings` on Linux,
+tests included). **Not checked here:** that a Windows build of the probe carries the magic
+exactly once (a Windows cross build was not run for rev 6: the CDO slot was held by a peer's gate).
+If the compiler ever emitted a second copy, every stamp would refuse ("occurs more than once") and
+the probe's W1/W2/W9 would FAIL loudly at "stamp the copy", never pass wrongly. The Windows items
+have not run on rev 6.
 
 ## 9. Order of the owner run (Windows, repository root, `TREE_SITTER_AL_PATH` set)
 
-1. **The probe, W0-W9** (Git Bash or PowerShell):
+1. **The probe, W0-W9 and W11** (Git Bash or PowerShell):
    ```
    cargo run --example tls117_probe
    cargo test --example tls117_probe -- --test-threads=1 --nocapture
    cargo run --profile release-ship --example tls117_probe
    ```
-   The third line is W2 and W9 (and every item) on the shipped profile (`panic = "abort"`, so a
-   panicking item ends the run instead of printing FAIL). Send all three outputs back. Any `FAIL`
-   stops here: the design is revised (a W1 failure keeps the cache off on Windows). The test run
-   includes the `pe::` unit tests.
-2. **W10** (PowerShell; three full-LTO `release-ship` builds, several minutes each):
+   The probe stamps the copies it launches itself; nothing needs stamping by hand. The third line
+   runs every item on the shipped profile (`panic = "abort"`, so a panicking item ends the run
+   instead of printing FAIL). Send all three outputs back. Any `FAIL` stops here: the design is
+   revised. The test run includes the `pe::` unit tests.
+2. **W10, a diagnostic** (PowerShell; three full-LTO `release-ship` builds, several minutes each):
    ```
    powershell -ExecutionPolicy Bypass -File examples\tls117_w10.ps1
    ```
-   It prints `PASS`/`FAIL W10 variant` and `PASS`/`FAIL W10 relink`. A `variant` FAIL turns on the
-   fallback: the post-link `.data`-hash slot for shipped builds.
-3. **The cache tests** (after the product change, on its branch):
+   It prints whether the linker ran, then `PASS`/`FAIL W10 variant` and `PASS`/`FAIL W10 relink`.
+   It no longer decides the design (the slot is mandatory); a FAIL is reported to the orchestrator.
+3. **Optional, the stamp tool by hand** (any system; e.g. on a `release-ship` `alsem.exe`, which has
+   no slot until the product adds it, so it refuses with "no slot magic"):
+   ```
+   cargo run --example tls117_stamp -- <file.exe> [<out.exe>]
+   ```
+4. **The cache tests** (after the product change, on its branch):
    ```
    cargo test -p al-sem --lib program::ir_cache
    cargo test -p al-sem --lib snapshot::cache
    cargo test --test cli cli_ir_cache::
    ```
-4. **The CDO steps (W8)**, with a fresh cache root that passes the private rule:
+5. **The CDO steps (W8)**, with stamped binaries from `scripts/install-windows.ps1` (product phase)
+   and a fresh cache root that passes the private rule:
    ```
    export CDO_WS=U:/Git/DO-cdo-baseline/Cloud
    export ALSEM_IR_CACHE_DIR="$LOCALAPPDATA/al-ch-snapshot-cache/ir-tls117-$(date +%s)"
