@@ -527,6 +527,7 @@ impl std::fmt::Debug for SiteFacts {
             record_table_unresolved,
             table_procedure,
             platform_cannot,
+            table_procedure_args,
         } = self.rare();
         f.debug_struct("SiteFacts")
             .field("interface", interface)
@@ -555,6 +556,7 @@ impl std::fmt::Debug for SiteFacts {
             .field("record_table_unresolved", record_table_unresolved)
             .field("table_procedure", table_procedure)
             .field("platform_cannot", platform_cannot)
+            .field("table_procedure_args", table_procedure_args)
             .finish()
     }
 }
@@ -664,6 +666,9 @@ pub struct RareSiteFacts {
     /// ([`crate::program::resolve::platform_record_fit::Fit::Cannot`]), so only
     /// [`Self::table_procedure`] runs: no trigger, no table event, no database operation.
     pub platform_cannot: bool,
+    /// ENG-173: with [`Self::table_procedure`], the call's arguments as written: the model gives
+    /// the operation a call site of its own with them (a procedure call is no record operation).
+    pub table_procedure_args: Vec<String>,
 }
 
 /// The per-site facts keyed by obligation, hashed with FxHash (TLS-66: one of
@@ -2336,6 +2341,10 @@ fn resolve_call_site_obligation(
                     crate::program::resolve::platform_record_fit::platform_can_take(&op_lc, &facts)
                         == Some(crate::program::resolve::platform_record_fit::Fit::Cannot);
                 facts_out.rare_mut().table_procedure = user;
+                facts_out.rare_mut().table_procedure_args = call_args
+                    .iter()
+                    .map(|&e| text[file.ir.expr(e).origin.byte()].trim().to_string())
+                    .collect();
                 if cannot {
                     facts_out.rare_mut().platform_cannot = true;
                     return (

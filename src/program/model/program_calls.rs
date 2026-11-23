@@ -625,6 +625,17 @@ fn attach_program_calls_with(
     for (ri, ci) in dataset_ops.try_call_sites {
         rows.workspace.routines[ri].call_sites[ci].try_call = true;
     }
+    // ENG-173: a record operation that may run a table procedure of its name gets a call site of
+    // its own (after the code's call sites, as the dataset operations above); one the platform
+    // certainly cannot run is no record operation (BC 28.4: only the table's procedure runs).
+    for (ri, cs) in dataset_ops.table_procedure_calls {
+        rows.workspace.routines[ri].call_sites.push(cs);
+    }
+    for (ri, op_id) in dataset_ops.phantom_ops {
+        let r = &mut rows.workspace.routines[ri];
+        r.record_operations.retain(|o| o.id != op_id);
+        r.operation_sites.retain(|o| o.id != op_id);
+    }
     // The pages that block a user's record operation, from the graph (the
     // sited graph's page lifecycle reads the same function).
     let page_ui_blocked = {
@@ -1923,17 +1934,24 @@ fn convert<'a>(
                     }
                 }
                 edges.extend(conv.triggers(RoutineIx::of(ri), r, op, ce, &mut c));
-                // ENG-173: the table's procedure of the operation's name, when it may run.
+                // ENG-173: the table's procedure of the operation's name, when it may run: a
+                // call site of its own (an edge keyed by an operation id reaches no reader), and
+                // no operation at all when the platform certainly cannot run it.
                 if let Some(f) = conv.site_facts.get(&ce.obligation_id())
                     && !f.rare().table_procedure.is_empty()
                 {
+                    let cs = table_procedure_call_site(op, f.rare());
                     edges.extend(conv.table_procedure_edges(
                         RoutineIx::of(ri),
                         r,
-                        op,
+                        &cs,
                         f.rare(),
                         &mut c,
                     ));
+                    dataset_ops.table_procedure_calls.push((ri, cs));
+                    if f.rare().platform_cannot {
+                        dataset_ops.phantom_ops.push((ri, op.id.clone()));
+                    }
                 }
                 edges.extend(conv.table_events(
                     RoutineIx::of(ri),
@@ -1988,6 +2006,58 @@ struct DatasetOps {
     /// ENG-10: the sites that may start a `[TryFunction]` with the value used
     /// (`PCallSite::try_call`).
     try_call_sites: Vec<(usize, usize)>,
+    /// ENG-173: per row index, the call sites of record operations that may run a table
+    /// procedure of their name ([`table_procedure_call_site`]), appended to `call_sites`.
+    table_procedure_calls: Vec<(usize, PCallSite)>,
+    /// ENG-173: the (row, operation id) of record operations the platform certainly cannot run
+    /// (only the table's procedure does): no record operation, removed from the row.
+    phantom_ops: Vec<(usize, String)>,
+}
+
+/// ENG-173: the call site of a record operation `op` that may run a table procedure of its name
+/// (`E.Next(RR, true)` with the table's `Next(var R: RecordRef; B: Boolean)`), with the call's
+/// arguments as the resolver read them. Its id is the operation's with `/tableproc`, so the
+/// fingerprint's site-anchor stripping (`/opN`) keeps it stable.
+fn table_procedure_call_site(
+    op: &ModelRecordOperation,
+    rare: &crate::program::resolve::full::RareSiteFacts,
+) -> PCallSite {
+    let receiver = op.record_variable_name.to_string();
+    let method = op.op.to_string();
+    PCallSite {
+        id: format!("{}/tableproc", op.id),
+        operation_id: String::new(),
+        callee_text: format!("{receiver}.{method}"),
+        callee: PCallee::Member { receiver, method },
+        argument_texts: rare.table_procedure_args.clone(),
+        argument_infos: rare
+            .table_procedure_args
+            .iter()
+            .map(|t| crate::program::body::features::PExpressionInfo {
+                kind: crate::program::body::features::shared_vocab("other"),
+                text: t.as_str().into(),
+                value: None,
+                qualifier: None,
+                member: None,
+            })
+            .collect(),
+        argument_bindings: Vec::new(),
+        loop_stack: op.loop_stack.clone(),
+        source_anchor: op.source_anchor.clone(),
+        result_consumed: None,
+        object_run_return_used: None,
+        under_asserterror: None,
+        control_context: None,
+        order: None,
+        in_statement_position: false,
+        result_tested: false,
+        receiver_temp_state: None,
+        rare: None,
+        start_may_fail: false,
+        checked_run: false,
+        write_txn_query: false,
+        try_call: false,
+    }
 }
 
 /// Where a route's target lives relative to the model (engine-switch S7.3).
@@ -2989,20 +3059,21 @@ impl<'a> Converter<'a> {
 
     /// ENG-173: the call edges of a record operation whose table scope declares a procedure of
     /// its name that may take the call (`RareSiteFacts::table_procedure`): one `Method` edge per
-    /// route, from the operation (BC 28.4: a table procedure overloads the platform method and
+    /// route, from its call site `cs` ([`table_procedure_call_site`]; BC 28.4: a table procedure
+    /// overloads the platform method and
     /// alc binds by the arguments). A model routine is `Resolved` when the platform certainly
     /// cannot take the call, else `Maybe`; a routine outside the model is an external target.
     fn table_procedure_edges(
         &self,
         ix: RoutineIx,
         r: &ModelRoutine,
-        op: &ModelRecordOperation,
+        cs: &PCallSite,
         rare: &crate::program::resolve::full::RareSiteFacts,
         c: &mut SiteCensus,
     ) -> Vec<CallEdge> {
         let mut out = Vec::new();
         for route in &rare.table_procedure {
-            let mut e = CallEdge::base(ix, &r.id, &op.id, &op.id);
+            let mut e = CallEdge::base(ix, &r.id, &cs.id, &cs.operation_id);
             e.dispatch_kind = DispatchKind::Method;
             match (self.target(route), &route.target) {
                 (Target::Model(callee), _) => {
@@ -3016,7 +3087,7 @@ impl<'a> Converter<'a> {
                 (Target::Outside, RouteTarget::Routine(_) | RouteTarget::AbiSymbol { .. }) => {
                     e.resolution = Resolution::ExternalTarget;
                     e.external_type_ref = self.dependency_ref(route).flatten();
-                    self.record_target(&op.id, route);
+                    self.record_target(&cs.id, route);
                 }
                 _ => {
                     c.adapter_routes_dropped += 1;
