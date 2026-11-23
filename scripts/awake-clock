@@ -38,13 +38,14 @@ awake_tool="$(dirname "${BASH_SOURCE[0]}")/host-suspended"
 awake_read() {
     local _b m="" w tail clocks
     awake_s="" awake_msg=""
-    # At most 5 s (review r2, sol): a clock read that hangs is a failed read,
-    # never a wait that hangs with it. A command substitution, which waits for
+    # At most 5 s (review r2, sol), then KILL 1 s later for a read that ignores
+    # TERM (r3): a clock read that hangs is a failed read, never a wait that
+    # hangs with it. A command substitution, which waits for
     # the read to end (a `< <(...)` does not): the read inherits the caller's
     # lock descriptors (cdo-slot's hold and timing), and one still ending after
     # its caller exited held them past it (the refused-run test, once, under a
     # suite's load).
-    clocks=$(timeout 5 "$awake_tool" --clocks 2>/dev/null) || true
+    clocks=$(timeout -k 1 5 "$awake_tool" --clocks 2>/dev/null) || true
     read -r awake_s _b m <<<"$clocks" || true
     # The wall clock read AFTER the clocks (review r2, sol): a suspend between
     # the two then makes awake_off smaller, so a later fall back counts less

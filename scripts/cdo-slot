@@ -305,7 +305,10 @@ describe() {
 # ⟨TLS-104⟩ `, N s of it with the host suspended)` when the host was suspended
 # since the record was written (its `suspended=` reading), else `)`: an old hold
 # can be a laptop that slept, not a hung holder (server1 suspends when moved).
-host_suspended() { "$(dirname "$0")/host-suspended" 2>/dev/null; }
+# ⟨TLS-105 review r3, sol⟩ Cut after 5 s (KILL 1 s later, for a read that
+# ignores TERM): `status` and `probe` print it, and a hung read there stalled
+# the guard's probe (which then lets work run) and a waiting acquire.
+host_suspended() { timeout -k 1 5 "$(dirname "$0")/host-suspended" 2>/dev/null; }
 # ⟨TLS-105⟩ The awake-time deadlines (the timed wait, `go`, acquire's --timeout)
 # come from scripts/awake-clock, loaded only for the commands that wait with a
 # deadline (review r1, sol): `probe`, `status`, `release` and a keeper must work

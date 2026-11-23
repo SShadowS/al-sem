@@ -2010,9 +2010,20 @@ fn run_bounded(
     args: &[&str],
     limit: std::time::Duration,
 ) -> (Option<i32>, String, bool, std::time::Duration) {
+    run_bounded_as(s, script, "B", args, limit)
+}
+
+/// [`run_bounded`] as session `session`.
+fn run_bounded_as(
+    s: &Slot,
+    script: &std::path::Path,
+    session: &str,
+    args: &[&str],
+    limit: std::time::Duration,
+) -> (Option<i32>, String, bool, std::time::Duration) {
     let spawned = std::time::Instant::now();
     let mut b = Reap(
-        s.cmd_at(script, "B", args, &[])
+        s.cmd_at(script, session, args, &[])
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .spawn()
@@ -2096,11 +2107,13 @@ fn cdo_slot_fall_back_does_not_charge_a_suspend_in_the_last_good_read() {
 }
 
 /// ⟨TLS-105 review r2, sol⟩ A clock read that hangs is a failed read: each is
-/// cut after 5 s (`timeout 5`), so after three the wait falls back to wall time
-/// and gives up, instead of hanging with the clock.
+/// cut after 5 s (`timeout -k 1 5`), so after three the wait falls back to wall
+/// time and gives up, instead of hanging with the clock. Review r3 (sol): the
+/// hung read ignores TERM, so only the KILL a second later ends it.
 ///
 /// Mutation (2026-11-23): the `timeout 5` dropped -> still waiting after 40 s
-/// (red); restored, green.
+/// (red); restored, green. Review r3: the `-k 1` dropped (TERM only, which
+/// the read ignores) -> still waiting after 40 s (red); restored, green.
 #[test]
 fn cdo_slot_a_clock_read_that_hangs_is_a_failed_read() {
     let s = Slot::new();
@@ -2110,7 +2123,7 @@ fn cdo_slot_a_clock_read_that_hangs_is_a_failed_read() {
         &["cdo-slot", "awake-clock"],
         Some(&format!(
             "d=$(dirname \"$0\")\n\
-             if [[ \"$1\" == --clocks && -e \"$d/read-once\" ]]; then exec sleep 600; fi\n\
+             if [[ \"$1\" == --clocks && -e \"$d/read-once\" ]]; then trap '' TERM; exec sleep 600; fi\n\
              [[ \"$1\" == --clocks ]] && : >\"$d/read-once\"\n\
              exec '{real}' \"$@\""
         )),
@@ -2130,6 +2143,50 @@ fn cdo_slot_a_clock_read_that_hangs_is_a_failed_read() {
     assert!(text.contains("not taken after 2 s"), "{text}");
     let said = "the awake clock failed 3 reads in a row";
     assert_eq!(text.matches(said).count(), 1, "{text}");
+}
+
+/// ⟨TLS-105 review r3, sol⟩ cdo-slot's plain suspended reading (`status` and
+/// `probe` print it for a hold; an acquire's waiting line too) is cut like the
+/// clock reads: a stand-in whose plain read hangs and ignores TERM (its
+/// `--clocks` read works) leaves `probe` and `status` answering within 20 s
+/// (the guard's probe: one that hung would let work run), and `acquire
+/// --timeout 2` giving up within 20 s.
+///
+/// Mutation (2026-11-23): `host_suspended` without its `timeout -k 1 5` ->
+/// `probe` still running after 20 s (red); restored, green.
+#[test]
+fn cdo_slot_a_plain_suspended_read_that_hangs_is_cut() {
+    let s = Slot::new();
+    let real = concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/host-suspended");
+    let bin = link_folder(
+        &s,
+        &["cdo-slot", "awake-clock"],
+        Some(&format!(
+            "[[ \"$1\" == --clocks ]] || {{ trap '' TERM; exec sleep 600; }}\nexec '{real}' \"$@\""
+        )),
+    );
+    let copy = bin.join("cdo-slot");
+    // A hold whose description reads the suspended seconds.
+    assert_eq!(s.run("A", &["acquire", "a", "hold"], &[]).0, Some(0));
+    let limit = std::time::Duration::from_secs(20);
+    let (code, text, in_time, _) = run_bounded_as(&s, &copy, "P", &["probe"], limit);
+    assert!(in_time, "probe still running after 20 s: {text}");
+    assert_eq!(code, Some(0), "{text}");
+    assert!(text.starts_with("held=1 own=0 timed=0"), "{text}");
+    let (code, text, in_time, _) = run_bounded_as(&s, &copy, "P", &["status"], limit);
+    assert!(in_time, "status still running after 20 s: {text}");
+    assert_eq!(code, Some(1), "{text}");
+    assert!(text.contains("held by a (hold)"), "{text}");
+    let (code, text, in_time, _) = run_bounded_as(
+        &s,
+        &copy,
+        "B",
+        &["acquire", "b", "late", "--wait", "--timeout", "2"],
+        limit,
+    );
+    assert!(in_time, "acquire still waiting after 20 s: {text}");
+    assert_eq!(code, Some(1), "{text}");
+    assert!(text.contains("not taken after 2 s"), "{text}");
 }
 
 /// ⟨TLS-105 review r1⟩ The keeper took its go while the clocks were read at the

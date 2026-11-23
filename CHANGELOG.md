@@ -37,8 +37,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   counts wall time from the last good reading on, and the wait says so. Review r2 (sol): that
   fall back is anchored to the wall clock read right AFTER the last good reading (it was read
   before it, so a suspend between the two was charged to the wait after a fall back), and each
-  clock read is cut after 5 s (`timeout 5`), so a read that hangs is a failed read, not a hung
-  wait. The read is now a command substitution, which waits for it to end: a `< <(...)` read
+  clock read is cut after 5 s, so a read that hangs is a failed read, not a hung wait. Review r3
+  (sol): every bash call of `host-suspended` is cut the same way, `timeout -k 1 5` (KILL a second
+  after the TERM, for a read that ignores TERM): the clock read here, cdo-slot's plain reading
+  (which `status` and `probe` print: one that hung stalled the guard's probe, which then lets
+  work run, and a waiting acquire before its deadline check), cdo-gate's phase clocks and
+  ci-steps' perf-bounds readings. land calls none; cdo-speed reads the clocks in Python. The read is now a command substitution, which waits for it to end: a `< <(...)` read
   outlived its caller with the caller's lock descriptors (cdo-slot's refused-run test failed once
   under a suite's load: the slot still held just after the refused run). When the clock was never
   readable (an old `host-suspended` that prints only the suspended seconds), the wait is on wall
@@ -79,7 +83,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `cdo_slot_an_old_clock_says_the_wall_clock_counts_the_suspend` (wording: no proof). `go`'s
   boot-time trigger has no proof: no test can step the host's wall clock. Review r2 added
   `cdo_slot_fall_back_does_not_charge_a_suspend_in_the_last_good_read` and
-  `cdo_slot_a_clock_read_that_hangs_is_a_failed_read`, each with its proof.
+  `cdo_slot_a_clock_read_that_hangs_is_a_failed_read`, each with its proof. Review r3: that
+  test's hung read ignores TERM (proof: `-k 1` dropped, red), and
+  `cdo_slot_a_plain_suspended_read_that_hangs_is_cut` (proof: cdo-slot's plain read uncut,
+  `probe` still running after 20 s, red).
 
 ### Changed (TLS-116: `alsem batch` uses the IR cache, and no job write reaches a cache folder)
 
