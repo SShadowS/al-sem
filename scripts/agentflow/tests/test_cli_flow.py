@@ -3770,13 +3770,13 @@ def test_a_recovery_follow_through_that_dies_mid_gates_is_recoverable_again(
     # alone, so a lock born stale is one any concurrent tick's preflight would
     # report as recoverable while the follow-through is still running.
     assert follow.heartbeat == first_tick, follow
-    assert not lock.is_stale(follow, first_tick)
+    assert not lock.is_stale(follow, first_tick, None)
 
     # POST-MERGE DIES MID-GATES. That leaves exactly this: the follow-through
     # lock still on disk, no HALT, no terminal incident. Nothing to simulate
     # beyond letting the clock run past the heartbeat.
     second_tick = first_tick + lock.STALE_SECONDS + 1.0
-    assert lock.is_stale(follow, second_tick)
+    assert lock.is_stale(follow, second_tick, None)
     monkeypatch.setenv("AGENTFLOW_NOW", str(second_tick))
     # The blocked-crashed gh calls are stubbed so a REGRESSION fails on the
     # assertion below rather than on a missing fake -- a 404 from FakeRunner
@@ -3872,7 +3872,7 @@ from agentflow import lock
 from agentflow.state import Ctx, Paths
 ctx = Ctx(Paths(ROOT), run_id=f"rec-{TAG}", now=lambda: 1_000_000.0)
 stale = lock.for_issue(ctx, 8)          # both sessions see it stale, BEFORE the barrier
-assert lock.is_stale(stale, ctx.now())
+assert lock.is_stale(stale, ctx.now(), ctx.awake_now())
 slow_reads("issue-8.json")
 barrier()
 try:

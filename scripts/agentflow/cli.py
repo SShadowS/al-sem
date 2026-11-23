@@ -154,8 +154,8 @@ def _beat_if_owner(ctx: Ctx):
 
 def _lease_rows(ctx: Ctx) -> list[dict]:
     """Every lease, with whether it is stale, for `preflight` and `status`."""
-    now = ctx.now()
-    return [{**asdict(lk), "stale": lock.is_stale(lk, now)} for lk in lock.all_locks(ctx)]
+    now, aw = ctx.now(), ctx.awake_now()
+    return [{**asdict(lk), "stale": lock.is_stale(lk, now, aw)} for lk in lock.all_locks(ctx)]
 
 
 def _docs_only(git: Git, base: str, head: str) -> bool:
@@ -464,17 +464,17 @@ def cmd_fetch(args, ctx, gh, git):
 
 
 def cmd_recover(args, ctx, gh, git):
-    now = ctx.now()
+    now, aw = ctx.now(), ctx.awake_now()
     if args.issue is not None:
         lk = lock.for_issue(ctx, args.issue)
         if lk is None:
             raise Fail({"error": "no stale lock", "issue": args.issue})
-        if not lock.is_stale(lk, now):
+        if not lock.is_stale(lk, now, aw):
             raise Fail({"error": f"lock-live:{lk.run_id}", "issue": args.issue})
     else:
         # Today's call shape still works when there is one stale lease. With
         # more, guessing would recover the wrong issue: name one.
-        stale = [x for x in lock.all_locks(ctx) if lock.is_stale(x, now)]
+        stale = [x for x in lock.all_locks(ctx) if lock.is_stale(x, now, aw)]
         if not stale:
             raise Fail({"error": "no stale lock"})
         if len(stale) > 1:

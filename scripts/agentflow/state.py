@@ -153,6 +153,15 @@ class Ctx:
     dry_run: bool = False
     run_id: str | None = None
     now: Callable[[], float] = field(default=time.time)
+    # The awake clock (TLS-122): `(boot id, seconds)` or None. None here means
+    # `host_awake` with the real wall clock, and no awake clock with a stubbed one.
+    awake: Callable[[], "tuple[str, float] | None"] | None = None
+
+    def awake_now(self) -> "tuple[str, float] | None":
+        if self.awake is not None:
+            return self.awake()
+        # A test that stubs only `now` steers time by the wall clock alone.
+        return host_awake() if self.now is time.time else None
 
     def write_guard(self, what: str) -> None:
         if self.dry_run:
@@ -163,6 +172,29 @@ class Ctx:
         if not self.run_id:
             raise RuntimeError("no run_id in context")
         return self.paths.run_dir(self.run_id)
+
+
+def host_awake() -> tuple[str, float] | None:
+    """`(boot id, CLOCK_MONOTONIC seconds)`, or None where they cannot be read
+    (not Linux). CLOCK_MONOTONIC is one clock for every process on the host and
+    stops while the host is suspended (server1 is a laptop that suspends when
+    moved: TLS-104), so a difference of two readings with the same boot id is
+    the time the host was awake between them. A different boot id means a
+    reboot in between, and the readings cannot be compared."""
+    try:
+        boot = Path("/proc/sys/kernel/random/boot_id").read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    return (boot, time.clock_gettime(time.CLOCK_MONOTONIC)) if boot else None
+
+
+def awake_elapsed(then, now_awake, wall_elapsed: float) -> float:
+    """Seconds from the reading `then` to `now_awake` on the awake clock when
+    both are from this boot, else `wall_elapsed` (a reading from before a
+    reboot, from another host, or from a writer that had none)."""
+    if then and now_awake and then[0] == now_awake[0]:
+        return now_awake[1] - then[1]
+    return wall_elapsed
 
 
 def new_run_id(now: float) -> str:

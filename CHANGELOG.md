@@ -934,6 +934,27 @@ suppressed all of them, and a new member of the group was invisible to it.
   refuses the real "pinned group without counters" output.
   Discrimination proofs are in the tests' docs.
 
+### Fixed (TLS-122: agentflow's lease age and run cap leave a host suspend out)
+
+server1 is a laptop that suspends when it is moved (TLS-104). agentflow measured both of
+its time rules on the wall clock, which keeps counting through a suspend.
+- **A live lease no longer looks stale after a suspend.** A lease was stale after 30 min of
+  wall time without a heartbeat, so after a long suspend another session's `recover` could
+  take a run's lease before the run's next `beat`. Each heartbeat now also records the host's
+  awake clock (`CLOCK_MONOTONIC`, which stops while the host sleeps, with the boot id), and
+  `lock.is_stale` counts the 30 min on it. A lease from before this change, from before a
+  reboot (another boot id), or from a host with no awake clock (not Linux) ages on the wall
+  clock, as before. `is_stale` now takes the awake reading as a required argument, so no
+  caller can leave it out by accident.
+- **The 24 h run cap counts awake time.** `budget.json` records the awake clock at the claim
+  (`claimed_awake`, covered by its checksum), and `check_deadline` and `charge` measure the
+  run on it, with the same fall back to wall time. `status`'s budget shows `elapsed_s` and
+  `elapsed_clock` (`awake` or `wall`).
+- **Why not "stale only when the holder process is dead":** a run is a series of short
+  `agentflow` calls made by a conductor session, so between calls no process holds the lease,
+  and a session that stopped working must still lose its lease. A lease is only ever read on
+  the host whose checkout holds it (`.agent/` is untracked).
+
 ### Fixed (ENG-178: table procedures named like record built-ins: four follow-ups from ENG-173)
 
 From Fable's second review of ENG-173 (`/work/.al-sem/engine-notes/eng173/fable-eng173-r2.md`).

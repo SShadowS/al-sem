@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from agentflow import lock
+from agentflow import budget, lock
 from agentflow.state import Ctx, DryRunViolation, Paths, tree_snapshot
 
 
@@ -39,7 +39,7 @@ def test_two_slots_take_two_issues_and_a_stale_lease_still_counts(ctx):
     assert (a.issue, b.issue) == (8, 9)
     later = lambda: 1_000_000.0 + lock.STALE_SECONDS + 1          # noqa: E731 -- both leases stale now
     third = Ctx(paths=ctx.paths, run_id="run-c", now=later)
-    assert all(lock.is_stale(lk, later()) for lk in lock.all_locks(ctx))
+    assert all(lock.is_stale(lk, later(), None) for lk in lock.all_locks(ctx))
     with pytest.raises(lock.LockHeld) as e:
         lock.acquire(third, 10, "s", 1)
     assert e.value.code == "slots-full"
@@ -145,7 +145,7 @@ def test_acquire_carries_started_but_never_the_heartbeat(ctx):
     lk = lock.acquire(ctx, 8, "recover", 1, started=12.0)
     assert lk.started == 12.0
     assert lk.heartbeat == 1_000_000.0          # `ctx.now()`, not the carried date
-    assert not lock.is_stale(lk, 1_000_000.0)
+    assert not lock.is_stale(lk, 1_000_000.0, None)
     on_disk = json.loads(ctx.paths.lease(8).read_text(encoding="utf-8"))
     assert on_disk["started"] == 12.0 and on_disk["heartbeat"] == 1_000_000.0
     # ...and the default is unchanged: an ordinary claim dates itself `now`.
@@ -232,8 +232,107 @@ def test_fence_refuses_foreign_run(ctx):
 
 def test_stale_is_heartbeat_age_not_start_age(ctx):
     got = lock.acquire(ctx, 8, "s1", 1)
-    assert not lock.is_stale(got, now=got.heartbeat + lock.STALE_SECONDS - 1)
-    assert lock.is_stale(got, now=got.heartbeat + lock.STALE_SECONDS + 1)
+    assert not lock.is_stale(got, got.heartbeat + lock.STALE_SECONDS - 1, None)
+    assert lock.is_stale(got, got.heartbeat + lock.STALE_SECONDS + 1, None)
+
+
+# ---- TLS-122: a host suspend is not lease age, nor run time ------------------
+# Both clocks are stubbed: `now` (wall) and `awake` ((boot id, seconds), what
+# `state.host_awake` reads). A suspend moves the wall clock and not the awake one.
+
+class Clocks:
+    def __init__(self):
+        self.wall, self.up, self.boot = 1_000_000.0, 500.0, "boot-1"
+
+    def ctx(self, paths, run_id):
+        return Ctx(paths=paths, run_id=run_id, now=lambda: self.wall,
+                   awake=lambda: (self.boot, self.up))
+
+    def run(self, s):
+        self.wall += s
+        self.up += s
+
+    def suspend(self, s):
+        self.wall += s
+
+
+def test_a_live_lease_across_a_2h_suspend_is_not_stolen(ctx):
+    """The holder's heartbeat is 2 h old by the wall clock, but the host slept
+    through it: the lease is live, and `recover`'s steal refuses `lock-live`.
+    The same lease after 30 min AWAKE with no beat is stale, and stolen."""
+    c = Clocks()
+    lock.acquire(c.ctx(ctx.paths, "run-holder"), 8, "s", 1)
+    c.run(60)
+    c.suspend(2 * 3600)
+    rec = c.ctx(ctx.paths, "run-rec")
+    lk = lock.for_issue(rec, 8)
+    assert not lock.is_stale(lk, rec.now(), rec.awake_now())
+    with pytest.raises(lock.LockHeld) as e:
+        lock.steal_for_recovery(rec, lk)
+    assert e.value.code == "lock-live:run-holder"
+    c.run(lock.STALE_SECONDS)
+    assert lock.steal_for_recovery(rec, lock.for_issue(rec, 8)).recovering_by == "run-rec"
+
+
+def test_beat_refreshes_the_awake_stamp(ctx):
+    """A run beating every 20 awake minutes stays live: `beat` must move the
+    awake stamp, not only the wall heartbeat."""
+    c = Clocks()
+    holder = c.ctx(ctx.paths, "run-holder")
+    lock.acquire(holder, 8, "s", 1)
+    for _ in range(3):
+        c.run(20 * 60)
+        lock.beat(holder)
+    assert not lock.is_stale(lock.for_issue(holder, 8), holder.now(), holder.awake_now())
+
+
+def test_a_lease_from_another_boot_ages_on_the_wall_clock(ctx):
+    """After a reboot (another boot id) the awake readings cannot be compared:
+    the wall clock judges, as before TLS-122."""
+    c = Clocks()
+    lock.acquire(c.ctx(ctx.paths, "run-holder"), 8, "s", 1)
+    c.run(60)
+    c.boot, c.up = "boot-2", 10.0      # rebooted: the awake clock restarted
+    c.wall += lock.STALE_SECONDS
+    rec = c.ctx(ctx.paths, "run-rec")
+    assert lock.is_stale(lock.for_issue(rec, 8), rec.now(), rec.awake_now())
+
+
+def test_the_budget_leaves_a_3h_suspend_out(ctx):
+    """Claimed, then 22 h of work and a 3 h suspend: 25 h of wall time, 22 h of
+    run time, so no deadline. 2 h and 1 s more awake pass the 24 h cap."""
+    c = Clocks()
+    run = c.ctx(ctx.paths, ctx.run_id)
+    budget.init(run, claimed_at=run.now())
+    c.run(22 * 3600)
+    c.suspend(3 * 3600)
+    budget.check_deadline(run)
+    assert budget.charge(run, "subagents") == budget.CAPS["subagents"] - 1
+    snap = budget.snapshot(run)
+    assert (snap["elapsed_s"], snap["elapsed_clock"]) == (22 * 3600, "awake")
+    c.run(2 * 3600 + 1)
+    with pytest.raises(budget.DeadlineExceeded):
+        budget.check_deadline(run)
+
+
+def test_the_awake_claim_stamp_is_checksummed(ctx):
+    """Moving `claimed_awake` forward would extend the cap: `_load` refuses it."""
+    c = Clocks()
+    run = c.ctx(ctx.paths, ctx.run_id)
+    budget.init(run, claimed_at=run.now())
+    p = run.run_dir / "budget.json"
+    data = json.loads(p.read_text(encoding="utf-8"))
+    data["claimed_awake"][1] += 3600
+    p.write_text(json.dumps(data), encoding="utf-8")
+    with pytest.raises(RuntimeError, match="does not match"):
+        budget.check_deadline(run)
+
+
+def test_the_real_awake_clock_reads_on_linux():
+    if not Path("/proc/sys/kernel/random/boot_id").exists():
+        pytest.skip("no boot id: the awake clock is Linux only")
+    boot, up = Ctx(paths=None).awake_now()
+    assert boot and up > 0
 
 
 def test_halt_blocks_unless_terminal(ctx):

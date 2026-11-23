@@ -4,9 +4,10 @@ Labels on GitHub are a mirror for humans. The lease files are the lock. Each
 claimed issue has ONE lease, `.agent/locks/issue-<N>.json`, naming the run
 that owns it; create-exclusive on that file makes "one run per issue" true by
 construction. A lease is stale when its HEARTBEAT (not its start) is older
-than STALE_SECONDS; a live run refreshes it via `beat` (the supervisor does
-this every 60 s while a gate runs). Every mutation checks the fence: the
-run's OWN lease must exist, so a superseded run cannot act after losing it.
+than STALE_SECONDS of awake time (`is_stale`); a live run refreshes it via
+`beat` (the supervisor does this every 60 s while a gate runs). Every
+mutation checks the fence: the run's OWN lease must exist, so a superseded
+run cannot act after losing it.
 
 `.agent/lock.json` is the LEGACY lease (one lock for the whole checkout,
 before the parallel-issues design). It is read as one more lease, and
@@ -25,7 +26,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from . import budget
-from .state import Ctx, MutexTimeout, append_audit, config, mutex, read_json, write_json
+from .state import (Ctx, MutexTimeout, append_audit, awake_elapsed, config, mutex, read_json,
+                    write_json)
 
 STALE_SECONDS = 30 * 60
 
@@ -86,6 +88,15 @@ class Lock:
     # The run recovering this lease (`steal_for_recovery`). A legacy
     # `lock.json` has no such key, hence the default.
     recovering_by: str | None = None
+    # `[boot id, seconds]` of the awake clock at `heartbeat` (TLS-122,
+    # `state.host_awake`); None in a lease written before it or off Linux.
+    beat_awake: list | None = None
+
+
+def _stamp(ctx: Ctx, lk: Lock, now: float) -> None:
+    """Set the heartbeat, on both clocks."""
+    aw = ctx.awake_now()
+    lk.heartbeat, lk.beat_awake = now, list(aw) if aw else None
 
 
 def _read_lease(path: Path) -> Lock | None:
@@ -234,7 +245,8 @@ def _acquire_held(ctx: Ctx, issue: int, session: str, attempt: int,
         raise LockHeld(SLOTS_FULL, entries[0] if entries else None)
     now = ctx.now()
     if count_slot:
-        live = sum(not is_stale(lk, now) for lk in entries)
+        aw = ctx.awake_now()
+        live = sum(not is_stale(lk, now, aw) for lk in entries)
         free, need = disk_free_gb(ctx), disk_required_gb(ctx, live)
         if free < need:
             raise LockHeld(f"{DISK_LOW}:{free}GB<{need}GB")
@@ -242,6 +254,7 @@ def _acquire_held(ctx: Ctx, issue: int, session: str, attempt: int,
             raise LockHeld(f"{DISK_LOW}:targets:{t[0]}GB<{t[1]}GB")
     lk = Lock(issue=issue, run_id=ctx.run_id, session=session,
               started=now if started is None else started, heartbeat=now, attempt=attempt)
+    _stamp(ctx, lk, now)
     path = ctx.paths.lease(issue)
     path.parent.mkdir(parents=True, exist_ok=True)
     for retried in (False, True):
@@ -291,7 +304,7 @@ def _fenced_entry(ctx: Ctx) -> tuple[Path, Lock]:
 def beat(ctx: Ctx) -> None:
     ctx.write_guard("beat")
     path, lk = _fenced_entry(ctx)
-    lk.heartbeat = ctx.now()
+    _stamp(ctx, lk, ctx.now())
     _write(ctx, path, lk)
 
 
@@ -326,9 +339,10 @@ def steal_for_recovery(ctx: Ctx, stale: Lock) -> Lock:
             raise LockHeld("lock-gone", e[1] if e else None)
         path, cur = e
         now = ctx.now()
-        if not is_stale(cur, now):
+        if not is_stale(cur, now, ctx.awake_now()):
             raise LockHeld("lock-live", cur)
-        cur.heartbeat, cur.recovering_by = now, ctx.run_id
+        _stamp(ctx, cur, now)
+        cur.recovering_by = ctx.run_id
         _write(ctx, path, cur)
         return cur
 
@@ -351,6 +365,7 @@ def handover(ctx: Ctx, issue: int, *, started: float) -> Lock:
         path, old = e
         new = Lock(issue=issue, run_id=ctx.run_id, session="recover", started=started,
                    heartbeat=ctx.now(), attempt=old.attempt)
+        _stamp(ctx, new, new.heartbeat)
         target = ctx.paths.lease(issue)
         _write(ctx, target, new)
         if path != target:
@@ -387,7 +402,7 @@ def _lane_state_held(ctx: Ctx) -> tuple[dict | None, str]:
         return lane, "free"          # the owner's lease is gone: nothing holds it
     if lane["run_id"] == ctx.run_id:
         return lane, "mine"
-    return lane, "orphaned" if is_stale(owner, ctx.now()) else "busy"
+    return lane, "orphaned" if is_stale(owner, ctx.now(), ctx.awake_now()) else "busy"
 
 
 def lane_state(ctx: Ctx) -> tuple[dict | None, str]:
@@ -434,8 +449,18 @@ def drop(ctx: Ctx, issue: int, expect_run_id: str) -> bool:
     return False
 
 
-def is_stale(lk: Lock, now: float) -> bool:
-    return (now - lk.heartbeat) > STALE_SECONDS
+def is_stale(lk: Lock, now: float, awake: tuple[str, float] | None) -> bool:
+    """No heartbeat for STALE_SECONDS of AWAKE time (TLS-122). The wall clock
+    counts a host suspend, so after a long one a live run's lease read as stale
+    and another session could recover it before the run's next beat. With
+    `awake` (`Ctx.awake_now()`) and a lease stamped on the same boot, the age is
+    the awake clock's; otherwise (a lease from before this rule, from before a
+    reboot, or no awake clock) it is the wall clock's, as before.
+
+    Why not "stale only when the holder process is dead": a run is a series of
+    short CLI calls from a conductor session, so between calls no process
+    holds the lease, and a session that stopped working must still lose it."""
+    return awake_elapsed(lk.beat_awake, awake, now - lk.heartbeat) > STALE_SECONDS
 
 
 def require_human(ctx: Ctx, what: str) -> None:
@@ -471,8 +496,8 @@ def require_operator(ctx: Ctx, what: str) -> None:
     run is enough to make a clear unsafe.
     """
     require_human(ctx, what)
-    now = ctx.now()
-    lk = next((x for x in all_locks(ctx) if not is_stale(x, now)), None)
+    now, aw = ctx.now(), ctx.awake_now()
+    lk = next((x for x in all_locks(ctx) if not is_stale(x, now, aw)), None)
     if lk is not None:
         raise OperatorOnly(
             f"{what} is refused while run {lk.run_id} still holds the lock for issue "
