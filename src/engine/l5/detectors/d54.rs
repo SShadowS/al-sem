@@ -10,14 +10,15 @@
 //! traversed THROUGH (their bodies are empty declarations).
 //!
 //! Severity: medium. Confidence: likely when the publisher is called directly
-//! from the try body (2-node chain), possible otherwise. Capped at 5 findings
-//! per try routine via group_and_cap (skip bucket `cappedPerTryRoutine`).
+//! from the try body (2-node chain), possible otherwise. One finding per
+//! (try routine, publisher), uncapped (ENG-101: until then capped at 5 per try
+//! routine, skip bucket `cappedPerTryRoutine`).
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::engine::l5::confidence::to_confidence;
 use crate::engine::l5::detector_context::DetectorContext;
-use crate::engine::l5::detectors::{anchor_of, group_and_cap};
+use crate::engine::l5::detectors::anchor_of;
 use crate::engine::l5::finding::{
     Evidence, EvidenceStep, Finding, FindingConfidence, FixOption, id_list,
 };
@@ -26,7 +27,6 @@ use crate::program::attributes::has_attribute;
 use crate::program::model::workspace::Model;
 
 pub(crate) const DETECTOR: &str = "d54-publish-in-tryfunction-cone";
-const MAX_PER_TRY_ROUTINE: usize = 5;
 
 pub fn detect_d54(
     resolved: &Model,
@@ -179,17 +179,12 @@ pub fn detect_d54(
         }
     }
 
-    // The cap is per TRY ROUTINE (the anchor), not per key: the key holds the
-    // publisher since ENG-101.
-    let (mut findings, truncated) = group_and_cap(
-        findings,
-        |f| f.primary_location.enclosing_routine_id.clone(),
-        MAX_PER_TRY_ROUTINE,
-    );
+    // No cap (ENG-101 review r1): each publisher is its own finding with its own
+    // fingerprint, so a cap would decide which fingerprints exist (a new publisher
+    // could evict a baselined one, or stay invisible to the baseline).
     findings.sort_by(|a, b| a.id.cmp(&b.id));
     let emitted = findings.len();
     let mut stats = DetectorStats::new(DETECTOR, candidates_considered, emitted);
     stats.add_skip("noPublisherReached", skipped_no_publisher_reached);
-    stats.add_skip("cappedPerTryRoutine", truncated as u64);
     Ok(DetectorOutput::no_diag(findings, stats))
 }

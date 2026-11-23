@@ -14,14 +14,21 @@ or a suppression keyed by fingerprint treated a shared one as ONE finding: suppr
 suppressed all of them, and a new member of the group was invisible to it.
 - **d54 (publish in a TryFunction cone):** the event publisher joins the `rootCauseKey`. A
   TryFunction that reaches five publishers gave five findings under one fingerprint; now each
-  publisher has its own. The cap stays 5 findings per TryFunction.
+  publisher has its own. The cap of 5 findings per TryFunction is gone (review r1): with one
+  fingerprint per publisher, a cap decided which fingerprints existed, so a new publisher
+  could push a baselined one out, or be cut and stay invisible to the baseline. The
+  `cappedPerTryRoutine` skip count goes with it, and d54 no longer counts as possibly
+  incomplete for baseline pruning. CDO had no TryFunction over the cap (the count was 0 in
+  both scopes), so no CDO finding is added.
 - **d55 (event published in a loop):** the published event, and its repeat number in that
   loop (`#1`, `#2`, in source order), join the `rootCauseKey`. Every publish in one loop
   shared the loop's fingerprint before.
 - **d22 (FlowField read without CalcFields):** the reads of one FlowField on one record
-  variable in one routine are now ONE finding (one cause, one fix: a CalcFields before the
-  first read). It sits on the first read in source order, and its evidence lists every
-  uncovered read in source order. Its key and fingerprint are unchanged.
+  variable in one routine are now ONE finding (they always shared one key). It sits on the
+  first read in source order, and its evidence lists every uncovered read in source order.
+  Its key and fingerprint are unchanged. The fix is usually one CalcFields before the first
+  read, but a record reloaded between reads (a `Get`, a `Next`) needs another one: check each
+  read in the evidence.
 - CDO (pinned baseline, `scripts/cdo-before-after c6f61f04 .`): findings sharing a
   fingerprint go from 3 groups (10 findings) to 0 at `--scope primary` (one d54 group of 5
   publishers; two d55 groups, one of them a loop that publishes one event twice) and from 13
@@ -35,9 +42,18 @@ suppressed all of them, and a new member of the group was invisible to it.
   finding no longer matches it: run `alsem analyze --update-baseline` again, and re-create
   fingerprint suppressions for those two detectors. d22 fingerprints do not move; only the
   extra findings of a merged group (the second and later reads) disappear.
+- **Release note: inline `// al-sem-ignore d22-flowfield-without-calcfields` and merged
+  reads.** An inline directive
+  matches a finding's primary line only (the directive's line or the next). A merged d22
+  finding sits on its first read, so a directive above the first read now hides every read
+  of that group, and a directive above a later read matches nothing (it used to hide that
+  read's own finding). Move such a directive to the first read. Matching on evidence lines
+  was not added: inline suppression is defined on the primary location for every detector.
 - Tests: `r4_differential`'s fixtures `ws-d22`, `ws-d54` and `ws-d55` hold the three shapes;
   every r4 fixture run now checks that no two findings share a fingerprint; and
-  `d22_merges_the_reads_of_one_flowfield` pins the merge. The `ids-parent-baseline` record
+  `d22_merges_the_reads_of_one_flowfield` pins the merge, `d54_reports_every_publisher` the
+  uncapped d54 and d55's `repeat_number_follows_source_order` the `#n` order. The
+  `ids-parent-baseline` record
   was updated by hand for the moved d54/d55 fingerprints (see its module doc).
 
 ### Fixed (ENG-178: table procedures named like record built-ins: four follow-ups from ENG-173)

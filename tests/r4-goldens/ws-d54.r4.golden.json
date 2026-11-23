@@ -3,7 +3,7 @@
   "detectors": [
     "d54-publish-in-tryfunction-cone"
   ],
-  "findingCount": 9,
+  "findingCount": 10,
   "findings": [
     {
       "detector": "d54-publish-in-tryfunction-cone",
@@ -523,6 +523,78 @@
         }
       ],
       "fingerprint": "8bd4f8172c521c25"
+    },
+    {
+      "detector": "d54-publish-in-tryfunction-cone",
+      "id": "d54/11111111-0000-0000-0000-00000000d540:Codeunit:50924#fb884fbe2c54b50353992dbf3f6da2823759114c4f74337a3dafc43dd7e0b30b/11111111-0000-0000-0000-00000000d540:Codeunit:50924#7aad910b0ee85f97a4c4cd866a0801d13cc45af7875af61c1d92f4d1d1409a0e",
+      "rootCauseKey": "d54/11111111-0000-0000-0000-00000000d540:Codeunit:50924#fb884fbe2c54b50353992dbf3f6da2823759114c4f74337a3dafc43dd7e0b30b/11111111-0000-0000-0000-00000000d540:Codeunit:50924#7aad910b0ee85f97a4c4cd866a0801d13cc45af7875af61c1d92f4d1d1409a0e",
+      "title": "Event published inside TryFunction cone",
+      "rootCause": "TrySix is a TryFunction that directly calls the event publisher OnE6 — errors raised by subscribers are swallowed by the try boundary, silencing third-party failures.",
+      "severity": "medium",
+      "confidence": {
+        "level": "likely",
+        "evidence": []
+      },
+      "primaryLocation": {
+        "sourceUnitId": "ws:src/Codeunit.al",
+        "range": {
+          "startLine": 61,
+          "startColumn": 4,
+          "endLine": 69,
+          "endColumn": 8
+        },
+        "enclosingRoutineId": "11111111-0000-0000-0000-00000000d540:Codeunit:50924#fb884fbe2c54b50353992dbf3f6da2823759114c4f74337a3dafc43dd7e0b30b",
+        "syntaxKind": "procedure"
+      },
+      "evidencePath": [
+        {
+          "routineId": "11111111-0000-0000-0000-00000000d540:Codeunit:50924#fb884fbe2c54b50353992dbf3f6da2823759114c4f74337a3dafc43dd7e0b30b",
+          "sourceAnchor": {
+            "sourceUnitId": "ws:src/Codeunit.al",
+            "range": {
+              "startLine": 61,
+              "startColumn": 4,
+              "endLine": 69,
+              "endColumn": 8
+            },
+            "enclosingRoutineId": "11111111-0000-0000-0000-00000000d540:Codeunit:50924#fb884fbe2c54b50353992dbf3f6da2823759114c4f74337a3dafc43dd7e0b30b",
+            "syntaxKind": "procedure"
+          },
+          "note": "[TryFunction] TrySix"
+        },
+        {
+          "routineId": "11111111-0000-0000-0000-00000000d540:Codeunit:50924#7aad910b0ee85f97a4c4cd866a0801d13cc45af7875af61c1d92f4d1d1409a0e",
+          "sourceAnchor": {
+            "sourceUnitId": "ws:src/Codeunit.al",
+            "range": {
+              "startLine": 97,
+              "startColumn": 4,
+              "endLine": 99,
+              "endColumn": 8
+            },
+            "enclosingRoutineId": "11111111-0000-0000-0000-00000000d540:Codeunit:50924#7aad910b0ee85f97a4c4cd866a0801d13cc45af7875af61c1d92f4d1d1409a0e",
+            "syntaxKind": "procedure"
+          },
+          "note": "event publisher OnE6"
+        }
+      ],
+      "affectedObjects": [
+        "11111111-0000-0000-0000-00000000d540:Codeunit:50924",
+        "11111111-0000-0000-0000-00000000d540:Codeunit:50924"
+      ],
+      "affectedTables": [],
+      "fixOptions": [
+        {
+          "description": "Move the event publish outside the TryFunction boundary, or document that subscriber errors are intentionally suppressed on this path.",
+          "safety": "medium"
+        }
+      ],
+      "provenance": [
+        {
+          "source": "tree-sitter"
+        }
+      ],
+      "fingerprint": "f5ce9754042d28af"
     },
     {
       "detector": "d54-publish-in-tryfunction-cone",

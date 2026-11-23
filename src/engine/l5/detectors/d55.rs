@@ -40,6 +40,9 @@ pub fn detect_d55(
         let loop_by_id: HashMap<&str, &PLoop> =
             routine.loops.iter().map(|l| (l.id.as_str(), l)).collect();
         // ENG-101: the n-th publish of one event in one loop, in source order.
+        // `call_sites` come in the body walk's order, which is source order for
+        // the statement calls a publish is (a publisher returns nothing, so it is
+        // never an argument); the sort makes `#n` not depend on that walk.
         let mut sites: Vec<_> = routine.call_sites.iter().collect();
         sites.sort_by(|a, b| {
             (
@@ -157,4 +160,84 @@ pub fn detect_d55(
     let mut stats = DetectorStats::new(DETECTOR, candidates_considered, emitted);
     stats.add_skip("notInLoop", skipped_not_in_loop);
     Ok(DetectorOutput::no_diag(findings, stats))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use super::*;
+    use crate::engine::l4::combined_graph::PrimaryGraph;
+    use crate::engine::l5::detector_context::{DetectorArtifacts, detector_context};
+    use crate::engine::l5::test_support::{call_site, empty_artifacts, loop_def, routine};
+    use crate::program::model::calls::CallEdge;
+    use crate::program::model::ix::RoutineIx;
+    use crate::program::model::workspace::ModelEntities;
+
+    /// ENG-101: `#n` counts the publishes of one event in one loop in SOURCE
+    /// order, not in `call_sites` order. Precondition, by assignment: `call_sites`
+    /// lists `caller/cs0` (line 10) before `caller/cs1` (line 5), both publishing
+    /// `pub` in `caller/loop0`. So `cs1` is `#1` and `cs0` is `#2`.
+    ///
+    /// Discrimination (2026-11-23): the `sites.sort_by` removed (walk order) ->
+    /// "cs1, first in source, is #1" fails (`cs1` got `#2`). Restored, green.
+    #[test]
+    fn repeat_number_follows_source_order() {
+        let mut caller = routine("caller", "procedure");
+        caller.loops = vec![loop_def("caller/loop0")];
+        let site = |id: &str, line: u32| {
+            let mut cs = call_site(id, "Pub", vec!["caller/loop0".to_string()]);
+            cs.source_anchor.start_line = line;
+            cs
+        };
+        caller.call_sites = vec![site("caller/cs0", 10), site("caller/cs1", 5)];
+        let routines = vec![caller, routine("pub", "event-publisher")];
+        let edge = |cs: &str| {
+            let mut e = CallEdge::base(RoutineIx(0), "caller", cs, &format!("{cs}/op"));
+            e.to = Some("pub".to_string());
+            (cs.to_string(), e)
+        };
+        let art = DetectorArtifacts {
+            resolved_call_edge_by_callsite: HashMap::from([edge("caller/cs0"), edge("caller/cs1")]),
+            ..empty_artifacts(
+                PrimaryGraph {
+                    nodes: vec![],
+                    edges_by_from: HashMap::new(),
+                    edges_from_order: vec![],
+                    uncertainty_edges: vec![],
+                    collided_site_callee: HashMap::new(),
+                },
+                HashMap::new(),
+            )
+        };
+        let resolved = Model {
+            workspace: ModelEntities {
+                objects: vec![],
+                tables: vec![],
+                routines,
+            },
+            root_classifications: vec![],
+            primary_app: None,
+            infra_diagnostics: Vec::new(),
+            workspace_diagnostics: Vec::new(),
+            dependency_diagnostics: Vec::new(),
+            calls: Default::default(),
+            events: Default::default(),
+            page_ui_blocked: Default::default(),
+        };
+        let ctx = detector_context(&resolved, &art, None, None);
+        let out = detect_d55(&resolved, &ctx).unwrap();
+        let key_of = |cs: &str| {
+            out.findings
+                .iter()
+                .find(|f| f.id.ends_with(&format!("/{cs}")))
+                .map(|f| f.root_cause_key.clone())
+                .unwrap_or_else(|| panic!("no finding for {cs}: {:#?}", out.findings))
+        };
+        assert!(
+            key_of("caller/cs1").ends_with("#1"),
+            "cs1, first in source, is #1"
+        );
+        assert!(key_of("caller/cs0").ends_with("#2"), "cs0 is #2");
+    }
 }

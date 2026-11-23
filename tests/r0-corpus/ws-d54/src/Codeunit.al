@@ -56,8 +56,8 @@ codeunit 50923 "D54 Demo"
 
 codeunit 50924 "D54 Many Events"
 {
-    // FLAGGED five times, not six (ENG-101): the cap is 5 findings per
-    // TryFunction, though each publisher has its own key.
+    // FLAGGED six times (ENG-101): every publisher is its own finding; no
+    // cap per TryFunction (it was 5).
     [TryFunction]
     procedure TrySix()
     begin

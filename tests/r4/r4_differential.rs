@@ -1540,8 +1540,9 @@ fn assert_distinct_fingerprints(fixture: &str, rust: &R4FindingsProjection) {
     let json = serde_json::to_value(rust).expect("rust → value");
     let mut seen: std::collections::BTreeMap<String, String> = Default::default();
     for f in json["findings"].as_array().into_iter().flatten() {
-        let (Some(fp), Some(id)) = (f["fingerprint"].as_str(), f["id"].as_str()) else {
-            continue;
+        let id = f["id"].as_str().unwrap_or("<no id>");
+        let Some(fp) = f["fingerprint"].as_str() else {
+            panic!("{fixture}: finding {id} has no fingerprint");
         };
         if let Some(prev) = seen.insert(fp.to_string(), id.to_string()) {
             panic!("{fixture}: two findings share fingerprint {fp}:\n  {prev}\n  {id}");
@@ -2057,26 +2058,27 @@ fn d22_merges_the_reads_of_one_flowfield() {
     assert_eq!(reads, [20, 21, 22], "every read, in source order");
 }
 
-/// ⟨ENG-101⟩ d54's cap stays 5 findings per TRY ROUTINE although each publisher now
-/// has its own `rootCauseKey`. Precondition, stated in the fixture `ws-d54`: the
-/// TryFunction `TrySix` calls six publishers (`OnE1`..`OnE6`) directly.
+/// ⟨ENG-101⟩ d54 gives EVERY publisher a TryFunction reaches its own finding: no
+/// cap decides which fingerprints exist (review r1: a cap let a new publisher evict
+/// a baselined finding, or stay invisible to the baseline). Precondition, stated in
+/// the fixture `ws-d54`: the TryFunction `TrySix` calls six publishers
+/// (`OnE1`..`OnE6`) directly, one more than the old cap of 5.
 ///
-/// Discrimination (2026-11-23): `detect_d54`'s `group_and_cap` keyed on
-/// `f.root_cause_key` (one group per publisher) instead of the anchor routine:
-/// `TrySix` gave 6 findings (red). Restored, green.
+/// Discrimination (2026-11-23): the old cap restored in `detect_d54`
+/// (`group_and_cap` by the anchor routine, 5 per try routine) -> "every publisher
+/// of TrySix" fails (5 != 6). Restored, green.
 #[test]
-fn d54_caps_per_try_routine() {
+fn d54_reports_every_publisher() {
     let p = run_rust("ws-d54", "ws-d54", &["d54-publish-in-tryfunction-cone"]);
-    let six: Vec<&str> = p
+    let six: BTreeSet<&str> = p
         .findings
         .iter()
         .filter(|f| f.root_cause.starts_with("TrySix "))
-        .filter_map(|f| f.fingerprint.as_deref())
+        .map(|f| f.fingerprint.as_deref().expect("a fingerprint"))
         .collect();
-    assert_eq!(six.len(), 5, "TrySix is capped at 5: {six:?}");
     assert_eq!(
-        six.iter().collect::<BTreeSet<_>>().len(),
-        5,
-        "one fingerprint per publisher: {six:?}"
+        six.len(),
+        6,
+        "every publisher of TrySix, each its own fingerprint: {six:?}"
     );
 }

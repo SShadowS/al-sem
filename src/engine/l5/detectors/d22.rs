@@ -208,10 +208,11 @@ pub fn detect_d22(
 }
 
 /// ENG-101 (owner decision 2026-11-18): ONE finding per routine, record variable
-/// and FlowField. A FlowField read without CalcFields has one cause and one fix
-/// (a CalcFields before the first read), so the nine reads of one field in one
-/// routine were nine findings under ONE fingerprint (their `rootCauseKey` never
-/// held the read). The merged finding is the FIRST read in source order (its
+/// and FlowField. The reads share one key (it never held the read), so the nine
+/// reads of one field in one routine were nine findings under ONE fingerprint.
+/// The fix is usually one CalcFields before the first read, but not always: a
+/// record reloaded between reads (a `Get`, a `Next`) needs another one, and the
+/// evidence lists every read so each can be checked. The merged finding is the FIRST read in source order (its
 /// id, location and text), and its evidence lists every uncovered read in
 /// source order. Key and fingerprint are unchanged.
 fn merge_reads(findings: Vec<Finding>) -> Vec<Finding> {
