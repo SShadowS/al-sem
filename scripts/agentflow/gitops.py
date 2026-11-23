@@ -4,6 +4,7 @@ the tree is always left clean.
 """
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 from dataclasses import dataclass, field
@@ -102,6 +103,17 @@ class Git:
     def out(self, *args: str) -> str:
         return self._run(*args).stdout.strip()
 
+    def paths(self, *args: str) -> list[str]:
+        """The paths `git <args>` prints with `-z` (the caller passes it), each
+        exactly (TLS-114): bytes split at NUL, decoded as the file system
+        names them. Not `_run`: text mode turns a CR in a name into LF, and
+        without `-z` git quotes a name with a CR, LF or `"` in it. Reads only:
+        no mutex."""
+        r = self.run(["git", "-C", self.cwd, *args], capture_output=True)
+        if r.returncode != 0:
+            raise GitError(f"git {' '.join(args)}: {os.fsdecode(r.stderr).strip()}")
+        return [os.fsdecode(p) for p in r.stdout.split(b"\0") if p]
+
     def ok(self, *args: str) -> bool:
         return self._run(*args, check=False).returncode == 0
 
@@ -150,8 +162,7 @@ class Git:
         """
         if refresh:
             self._run("update-index", "-q", "--refresh", check=False)
-        raw = self._run("diff", "-z", "--name-only", self._IGNORE_SUB, "HEAD", "--").stdout
-        semantic = [p for p in raw.split("\0") if p]
+        semantic = self.paths("diff", "-z", "--name-only", self._IGNORE_SUB, "HEAD", "--")
         status = [l for l in self._run("status", "--porcelain", "--untracked-files=no",
                                        self._IGNORE_SUB).stdout.splitlines() if l]
         return TreeState(semantic_paths=semantic, status_lines=status)
@@ -179,8 +190,9 @@ class Git:
         # --no-renames: with rename detection a `git mv src/x.rs docs/x.md`
         # lists only the NEW path, so a moved code file read as prose to the
         # freeze check, the protected-path check and the P3 prose check.
-        s = self.out("diff", "--name-only", "--no-renames", f"{a}..{b}")
-        return [l for l in s.splitlines() if l]
+        # -z (TLS-114): a quoted `"scripts/x\r"` escaped the protected-path
+        # prefix check, and splitlines() cut names at CR and other breaks.
+        return self.paths("diff", "-z", "--name-only", "--no-renames", f"{a}..{b}")
 
     def diff(self, a: str, b: str) -> str:
         return self._run("diff", f"{a}..{b}").stdout
@@ -216,7 +228,7 @@ class Git:
         r = self._run("rebase", onto, check=False)
         if r.returncode == 0:
             return RebaseResult(True)
-        conflicts = [l for l in self.out("diff", "--name-only", "--diff-filter=U").splitlines() if l]
+        conflicts = self.paths("diff", "-z", "--name-only", "--diff-filter=U")
         self._run("rebase", "--abort", check=False)
         return RebaseResult(False, conflicts)
 

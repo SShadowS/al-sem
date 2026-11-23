@@ -1,5 +1,6 @@
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -17,6 +18,26 @@ def test_basic_queries(repo_pair):
     assert g.changed_files(a, b) == ["src/x.rs"]
     assert "+fn x(){}" in g.diff(a, b)
     assert g.is_ancestor(a, b) and not g.is_ancestor(b, a)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows forbids CR and LF in names")
+def test_changed_and_dirty_paths_keep_cr_and_lf(repo_pair):
+    """TLS-114: a name ending in CR, or holding an LF, is listed exactly: not
+    quoted (`"scripts/x\\r"` escaped the protected-path prefix check), not cut
+    at the CR, not turned into LF by text mode.
+
+    DISCRIMINATION (2026-11-23): `changed_files` back on `out()` +
+    `splitlines()` fails the first assert (the names come back quoted);
+    `paths` decoding with text=True fails it too (`scripts/x\\n`: both lists
+    read through `paths`); restored, passes."""
+    _, clone = repo_pair
+    g = Git(clone)
+    a = g.rev("HEAD")
+    commit_file(clone, "scripts/x\r", "x\n", "cr")
+    b = commit_file(clone, "a\nb.txt", "y\n", "lf")
+    assert g.changed_files(a, b) == ["a\nb.txt", "scripts/x\r"]
+    (clone / "scripts/x\r").write_text("changed\n")
+    assert g.tree_state().semantic_paths == ["scripts/x\r"]
 
 
 def test_tracked_dirty_ignores_untracked_but_sees_content_changed_tracked_files(repo_pair):
