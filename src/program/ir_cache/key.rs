@@ -21,6 +21,7 @@ use std::io::Read;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum NoKey {
     /// A Windows binary whose slot holds no digest: not stamped (every dev build).
+    #[cfg_attr(not(windows), allow(dead_code))]
     Unstamped,
     /// A system the cache does not support (made only off Linux and Windows).
     #[cfg_attr(any(target_os = "linux", windows), allow(dead_code))]
