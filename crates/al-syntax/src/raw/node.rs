@@ -165,6 +165,18 @@ impl<'t> RawNode<'t> {
         self.node.is_named()
     }
 
+    /// The smallest named node at or below this one that spans `start..end` (tree-sitter's
+    /// `ts_node_named_descendant_for_byte_range`), found by one descent, not a walk.
+    pub(crate) fn named_descendant_for_byte_range(
+        self,
+        start: usize,
+        end: usize,
+    ) -> Option<RawNode<'t>> {
+        self.node
+            .named_descendant_for_byte_range(start, end)
+            .map(RawNode::new)
+    }
+
     /// All children held in `field` (for `multiple: true` fields), document order.
     pub(crate) fn children_by_field(self, f: FieldName) -> Vec<RawNode<'t>> {
         let Some(id) = field_id(f) else {
