@@ -88,6 +88,20 @@ jobs:
           TREE_SITTER_AL_PATH: ${{ github.workspace }}/tree-sitter-al
         run: cargo build --profile release-ship --no-default-features --bin alsem
 
+      # TLS-117: write the IR cache's data-digest slot into the three binaries that install the
+      # cache (an unstamped Windows binary gets no key: the cache is off for it), then verify
+      # each. After the last build of each binary and before signing (signing changes no
+      # section); a failure fails the job.
+      - name: Stamp Windows binaries (IR cache data-digest slot)
+        shell: pwsh
+        run: |
+          foreach ($b in 'alsem', 'aldump', 'al-call-hierarchy') {
+            & target\release-ship\alsem-stamp.exe stamp "target\release-ship\$b.exe"
+            if ($LASTEXITCODE -ne 0) { throw "stamping $b.exe failed" }
+            & target\release-ship\alsem-stamp.exe verify "target\release-ship\$b.exe"
+            if ($LASTEXITCODE -ne 0) { throw "verifying $b.exe failed" }
+          }
+
       # Authenticode-sign via Azure Artifact Signing (Trusted Signing).
       # Steps SKIP cleanly until configured: repo vars AZURE_SIGNING_ENDPOINT /
       # AZURE_SIGNING_ACCOUNT / AZURE_SIGNING_PROFILE, secrets AZURE_TENANT_ID /
