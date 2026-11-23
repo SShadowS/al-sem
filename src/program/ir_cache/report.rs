@@ -1,12 +1,16 @@
 //! The report file (`ALSEM_IR_CACHE_REPORT=<file>`, spec "Correctness checks"): a `start` line
 //! at a process's first seam use and an `end` line with its counters at its exit, each one
 //! `write` on an `O_APPEND` file, so concurrent processes never interleave a line. Off Linux,
-//! or without a key, one `{"pid", "ir_cache": "unsupported" | "no key"}` line instead. A batch
-//! run writes nothing (the seam never sees the cache there).
+//! or without a key, one `{"pid", "ir_cache": "unsupported" | "no key"}` line instead. In a
+//! batch run (TLS-116) the parent registers the file as one of the run's writes and every
+//! process of the run appends only to that file, through a handle it holds
+//! ([`crate::engine::batch::claim::append_shared`]).
+
+/// The report's tag in a batch run's claims.
+pub const REPORT_TAG: &str = "ir-cache-report";
 
 use super::IrCache;
 use super::key::IrKey;
-use std::io::Write;
 use std::sync::atomic::Ordering;
 
 /// Held for a `main`'s whole body ([`super::install_from_env`]): its drop writes the `end`
@@ -32,11 +36,7 @@ fn append(c: &IrCache, v: &serde_json::Value) {
     };
     let mut line = v.to_string();
     line.push('\n');
-    let written = std::fs::OpenOptions::new()
-        .append(true)
-        .create(true)
-        .open(path)
-        .and_then(|mut f| f.write_all(line.as_bytes()));
+    let written = crate::engine::batch::claim::append_shared(path, REPORT_TAG, line.as_bytes());
     if let Err(e) = written {
         log::warn!("IR cache report {} not written ({e})", path.display());
     }
@@ -59,7 +59,7 @@ impl IrCache {
             return;
         }
         let pid = std::process::id();
-        if self.enabled && key.is_none() {
+        if self.is_on() && key.is_none() {
             let why = if cfg!(target_os = "linux") {
                 "no key"
             } else {
@@ -75,7 +75,7 @@ impl IrCache {
                 "event": "start",
                 "pid": pid,
                 "argv": argv_json(std::env::args_os()),
-                "enabled": self.enabled,
+                "enabled": self.is_on(),
                 "key": key.map(IrKey::hex),
             }),
         );

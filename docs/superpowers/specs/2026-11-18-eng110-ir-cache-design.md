@@ -245,8 +245,8 @@ and a `Recovered` fixture (proof: remove the clear, red).
    `aldump` and `al-call-hierarchy` call `ir_cache::install_from_env()`, which reads
    `ALSEM_IR_CACHE`, `ALSEM_IR_CACHE_DIR`, `ALSEM_IR_CACHE_VERIFY` and `ALSEM_IR_CACHE_REPORT`. The
    two seam entries read `ir_cache::installed()` on the calling thread before entering the pool and
-   pass it down; the batch state (`claim::dir()`) and the key are resolved there, lazily, so a
-   batch run (whose claim folder is set before any job) never uses the cache. **Not installed
+   pass it down; the key is resolved there, lazily. (Until TLS-116 the batch state
+   `claim::dir()` was resolved there too, so a batch run never used the cache.) **Not installed
    anywhere else:** `mint-goldens` (Fable r5 P3), and the test binaries that build models in
    process (`program_resolve_harness`, `lsp`, `l4_summary_differential`, the lib's tests), whatever
    the environment says. The cache's own tests and `lib_cdo`'s round trip call the parameterized
@@ -293,24 +293,89 @@ and a `Recovered` fixture (proof: remove the clear, red).
    - `alsem cache prune` maintains a different cache and is not changed.
 10. **`parse_snapshot` stays uncached**: its callers outside `dep_summary` are test modules.
 
-## `alsem batch` (TLS-109): off, tested through the real run
+## `alsem batch` (TLS-116): on, the cache folders protected from job writes
 
-In a batch run (`claim::dir()` is `Some`: the parent and every worker) the `main` builds no
-`IrCache`: no reads, no writes, no pruning, no report-file lines. The claims do not reserve the
-cache's names; batch already shares one model build across its jobs; no script runs `alsem batch`.
-Multi-worker batch runs keep parsing per worker. Follow-up task TLS-116: turn it on with the claim
-check reserving the cache folder's names, for the ENG-113 text cache too.
+Until TLS-116 a batch run (the parent and every worker) never used the cache, because TLS-109's
+write claims did not cover the cache folders. ENG-113's text cache had the same gap, though it was
+on in batch: a job's stream or `--out` in the text cache folder, or a hard link to an entry, would
+have truncated a file other engines map (SIGBUS) or left a job output for the cache to replace.
 
-**Test, through the real run, with a positive control:** a `tests/cli` test runs, with
-`ALSEM_IR_CACHE=on`, a fresh `ALSEM_IR_CACHE_DIR` and `ALSEM_IR_CACHE_REPORT` set, over a fixture
-workspace with one embedded-source dependency above the small-package threshold:
-- **control:** a plain `alsem analyze` on it publishes an entry under its root and writes a report
-  `end` line with `published_packages = 1`;
-- **batch:** `alsem batch` with two batches (the parent starts two workers), on a second fresh root
-  and report path, leaves that root empty and writes no report file.
+Now the parent and every worker use the cache, and the cache folders are protected
+(`engine::batch::cache_guard`; the text cache folder, and the IR cache's `ir/` folder wherever
+`ALSEM_IR_CACHE_DIR` puts it, when this process uses the IR cache):
+- **One snapshot per run** (`cache_guard::take`, in the parent's check). First it MAKES the folders
+  the run's caches would use, exactly as the caches make them: the text folder always (every batch
+  run creates it), `ir/` when the IR cache is on and has a key. So a spelling such as `missing/..`
+  resolves now as it will later. A folder that is no directory afterwards (an override naming a
+  file, a dangling symlink) turns its cache OFF for the whole run, parent and workers
+  (`snapshot::cache::disable`, `ir_cache::disable`): no cache ever writes in a folder the snapshot
+  does not hold. Then it records the identity of every directory and file inside the folders, each
+  tree walked once (the default `ir/` lies in the text folder): unix device, inode and birth time
+  (`statx`; a reused inode number gets a new birth time, so it is not taken for a pruned file);
+  Windows volume serial and 128-bit file id. A name removed during the walk (a concurrent prune,
+  or a Windows delete pending) is skipped; any other walk error refuses the run. The parent writes
+  the snapshot (its on/off flags, `0` or `1` only; its counts; a blake3 over flags, counts and
+  body) to the claim folder through a temporary file and a rename, and claims it so no write can
+  take it; a worker reads it at its start and fails closed (exit 4, no job run) when it is missing
+  or damaged, or says a cache is on with no folder.
+  Workers never walk. Windows: one open per entry (TLS-109's `read_file_id`);
+  `FileIdExtdDirectoryInfo` could give the ids from the listing, not done because no Windows
+  machine runs these tests. Measured 2026-11-22 on server1's real `~/.cache/al-ch-snapshot-cache`
+  (134,395 entries), `release-fast`, 3 runs each: the walk 381-420 ms (`ALSEM_IR_CACHE=off`); with
+  the IR cache on, the span also hashes the binary for the key (once per process anyway): 514-594
+  ms warm, 1,885 ms on the first run after the build.
+- **The check** (`manifest::check_write_sets`, exit 3 before any job) refuses a write whose
+  resolved destination lies in a cache folder; a write whose name, as spelled, lies in one (a
+  symlink `ir/last-prune` pointing outside is still the prune's name, which it would replace); a
+  write that passes through a symlink whose own name lies in one (every hop of the resolution is
+  checked: `report → ir/last-prune → outside`, `cache_guard::link_hops`); a write whose spelling
+  enters a cache folder, even one a later `..` leaves (`ir/<key>/../../report.jsonl`: a prune can
+  remove `<key>` and leave the path unreachable); an existing file that is a cache file under any
+  name (a hard link, a bind mount of a file); a
+  directory target that holds a cache folder; and a write into the run's claim folder.
+- **Every open** (`claim::open_for_write`, `open_trace`, the report's registration and appends)
+  checks the same paths first, before anything is created; then opens an existing file WITHOUT
+  creating it and checks the handle's identity against the snapshot's files; only a missing file is
+  created, exclusively, once its folder passed, and is not handle-checked (it is new). A dangling
+  symlink outside the caches is still written through. A shard directory is made one component at
+  a time, each checked just before it is made (`claim::make_dir`): a component made earlier can
+  make a later spelling reach a cache folder (`missing/../alias/new`). So an alias made after the check is refused at the open
+  (exit 1) and nothing is left in a cache folder. The folder tests are path-based: a path another
+  process changes during the run is outside TLS-109's scope. The run's own writes make no links. A
+  cache file published during the run is not in the snapshot, but its folder is.
+- **Cache publishes need no claim.** Every cache file is made under its folder with a fresh name
+  (`O_EXCL` temp files, then a link or rename through the folder's handle, symlinks never
+  followed); a lock file is opened without truncation; a prune only removes names in its folders.
+  With no job writing in or above a folder, a publish cannot land on a job's output.
+- **The report** (`ALSEM_IR_CACHE_REPORT`) is one of the run's writes: the check compares it with
+  every job write and input; the parent then registers it in the claim folder (through the guarded
+  open with `O_NONBLOCK`, so a FIFO with no reader is refused instead of hanging the run; a regular
+  file only, never truncated) and keeps that handle; a worker opens the path once, the same way and
+  without creating it, and appends only when the file is the registered one and no cache file
+  (`claim::append_shared`). A refused append is a warning, never a failed run. The parent writes
+  its `end` line before the claim folder goes. Planning (`plan`) builds no model, so no report
+  line comes before the registration; the batch test asserts a `start` line for every process.
 
-Proof: build the `IrCache` regardless of the batch state, red. The test is Linux only (the cache is
-off on Windows).
+Tests (`tests/cli/cli_ir_cache.rs`, Linux; `claim::tests::registration_refuses_what_it_must`):
+two workers on a cold root publish the entry and report, and on the warm root each hits every
+file from disk (one batch in the parent too); a stream in the IR folder, in the text folder and
+through a link to the IR folder; a shard directory holding the IR folder; a cache folder spelled
+through `missing/..`; a `--out` hard-linked to an IR entry, a text entry and a file in the default
+`ir/` while `ALSEM_IR_CACHE_DIR` points elsewhere (a bind mount of a file is the same identity
+test; making one needs root); a late hard link, a late symlink and a late shard directory; a trace
+in a cache folder; a concurrent prune during the walk; a stream on the report; a report path
+swapped after registration; each guard of the registration; a dangling-symlink cache folder
+whose target a shard job makes (IR and text); a cache name linking outside; a FIFO report; a
+worker with a missing or damaged snapshot; writes into the claim folder; a dangling-symlink
+stream outside the caches; a reused inode number (`cache_guard::tests`); a symlink hop in a
+cache folder (report and stream); and a shard directory that becomes reachable only once its
+first component is made. Each guard has a recorded discrimination proof, with one exception:
+skipping the handle check for a file the open itself created (`O_EXCL`). It is sound by
+construction (a file that did not exist a moment ago is no cache file) and only matters on a file
+system without birth times, where a new file could reuse a pruned cache file's inode number; a
+test would have to predict that number. The snapshot's "(no header)" case shares its refusal with
+the magic and field tests (each refuses it alone), so it has no break of its own. Every batch test
+helper points its runs at a temporary `XDG_CACHE_HOME` (`cli_batch_writes::temp_cache_home`).
 
 ## Correctness checks
 
@@ -331,7 +396,7 @@ off on Windows).
   - `seam_files`: files that reached the seam, counted before any cache decision;
   - `eligible_files`: files of packages with a digest, a cache in use and above the small threshold;
   - `disk_hits`, `verified_hits`, `parsed_miss`, `refused`, `skipped_small`, `skipped_unstored`,
-    `skipped_off` (cache off, no digest, batch, no key);
+    `skipped_off` (cache off, no digest, no key);
   - `published_packages`, `roundtrip_failed`, `publish_skipped_busy`, `fill_text_changed`;
   - `inproc_reused_packages`: packages served from `DepCache`'s in-process tier (they never reach
     the seam), reported apart from disk hits;
@@ -467,19 +532,21 @@ cache, the second fills the IR cache, the third is warm. The untimed runs below 
 4. **VERIFY:** `output_cdo_impact`, for good, with `verified_hits`; never timed. In-process test
    binaries and `mint-goldens` get no cache.
 5. **Gain:** the installed binary; a gate gets none.
-6. **`alsem batch`:** off, tested through the real run with a positive control.
+6. **`alsem batch`:** off (then), tested through the real run with a positive control. (TLS-116 turned it
+   on, with the cache folders protected from job writes: see the `alsem batch` section.)
 7. **Cleanup:** best effort, periodic, coordinated per key folder; non-blocking entry locks.
 
 ## Left for the owner
 
 None. The orchestrator confirmed the disk numbers (1 GiB per entry, 4 GiB soft target) and
-batch-off on 2026-11-21.
+batch-off (then) on 2026-11-21.
 
 ## Future (ideas only; ENG-110 does not build them)
 
 - **Windows (TLS-117):** read the running image natively and prove the handle is the loaded file;
   then turn the cache on there.
 - **Batch (TLS-116):** the claim check reserving the cache folders, for the ENG-113 text cache too.
+  Done: see the `alsem batch` section.
 - **A narrower key.** A later task could key the cache on a build-time hash of exactly what produces
   the cached IR: the `al-syntax` sources, the grammar's compiled inputs and the IR codec's schema,
   computed in a build script. Then a change that touches only the engine would still hit, and a gate
@@ -510,7 +577,7 @@ From `/coord/owner/design-mantra.md`:
   decision against 4's advisory default, stated where it applies.
 - **6 (say what you don't know):** the gate's lack of gain and the full 4 GiB on lane hosts are said
   plainly.
-- **7 and 8 (tests that fail; real use):** every guard has a stated break; batch-off is tested through
+- **7 and 8 (tests that fail; real use):** every guard has a stated break; batch-off (then) is tested through
   the real parent and workers, with a positive control.
 - **10 (reproducible baselines):** each record pins the workspace, the `.app` closure and the keys.
 - **13 and 14 (right-sized; reuse):** the read side's safety machinery is gone because (a)-(c) leave
@@ -529,7 +596,7 @@ From `/coord/owner/design-mantra.md`:
 - **rev. 3:** Fable r2 folded in (baked-hash trigger test, one home for the test switch, VERIFY labels
   zero hits).
 - **rev. 4:** sol r1 (5 P1, 2 P2) folded in: whole-envelope hash, build-input key, `BUILD_CONTEXT`
-  reset, owned reads, batch off, the one-shot protocol, digest in the path, disk caps.
+  reset, owned reads, batch off (then), the one-shot protocol, digest in the path, disk caps.
 - **rev. 5:** sol r2 and Fable r3 folded in, with the orchestrator's binary key: decode budgets, the
   stmt/block walk, the text re-hash, the batch real-run test, the paired acceptance rule.
 - **rev. 6:** sol r3 and Fable r4 folded in: no sidecar, Linux only, static-link and tool-binary
@@ -554,4 +621,4 @@ From `/coord/owner/design-mantra.md`:
   file decodes exactly its final index range, any `roundtrip_failed` on CDO fails, reports come only
   from head runs. Design 7 states the plan's carrier (a process-level install, as `claim::set_dir`).
   Follow-ups cited as TLS-116 and TLS-117; the orchestrator confirmed the disk numbers and
-  batch-off.
+  batch-off (then).

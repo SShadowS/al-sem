@@ -7,6 +7,77 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (TLS-116: `alsem batch` uses the IR cache, and no job write reaches a cache folder)
+
+- **What was wrong.** TLS-109's write claims did not cover the engine's cache folders. ENG-110
+  turned its IR cache off in `alsem batch` for that reason, but ENG-113's text cache was on there
+  with the same gap: a job's stream or `--out` in the text cache folder, a directory target
+  holding it, or a `--out` that is a hard link to an entry was not refused. Its write would have
+  truncated a file other engines map (they die of SIGBUS) or left a job output for the cache to
+  replace.
+- **Now.** The text cache folder and the IR cache's `ir/` folder (also when `ALSEM_IR_CACHE_DIR`
+  puts it elsewhere) are protected by one snapshot per run (`engine::batch::cache_guard`). The
+  parent's check first makes the folders the run's caches would use, as the caches make them:
+  **every batch run now creates the text cache folder** (`~/.cache/al-ch-snapshot-cache`), and
+  the `ir/` folder when the IR cache is on and has a key; so a `missing/..` spelling resolves now
+  as it will later. A folder that is no directory after that (an override naming a file, a
+  dangling symlink) turns its cache off for the whole run, in the parent and every worker. Then
+  the check records the identity of every directory and file in the folders (device, inode and
+  birth time on unix, so a reused inode number is not taken for a pruned file; volume serial and
+  file id on Windows; a name a concurrent prune removes is skipped; any other walk error refuses
+  the run). The parent writes the snapshot, with a header of its flags (`0` or `1` only), its
+  counts and a blake3 over flags, counts and body, to the claim folder (a temporary file renamed into place, then claimed so no write can take it); a
+  worker reads it at its start and fails closed (exit 4, no job run) when it is missing or
+  damaged (also a cache on with no folder). On server1's real cache (134,395 entries), `release-fast`, 3 runs each: the walk
+  381-420 ms (`ALSEM_IR_CACHE=off`); with the IR cache on the snapshot span also hashes the
+  binary for the IR key (once per process anyway, now before the jobs): 514-594 ms warm, 1,885
+  ms on the first run after the build.
+- **What it refuses.** The batch write check (exit 3, before any job): a write whose resolved
+  destination lies in a cache folder; a write whose name as spelled lies in one (a symlink
+  `ir/last-prune` pointing outside is still a name the prune replaces); a write that reaches its
+  destination through a symlink whose own name lies in one (`report → ir/last-prune → outside`:
+  every hop is checked); a write whose spelling enters a cache folder, even one a later `..`
+  leaves (`ir/<key>/../../report.jsonl`: a prune can remove `<key>`); a file that is a cache
+  file under any name (a hard link, a bind mount of a file; Windows too, by its file id); a
+  directory target that holds a cache folder; and a write into the run's claim folder. Every open
+  (streams, `--out`, shard files and directories, traces, the report) checks those before it
+  creates anything, opens an existing file without creating it and checks the handle's identity;
+  a file it creates itself (exclusively) is new and not checked. A shard directory is made one
+  component at a time, each checked just before it is made (a component made earlier can make
+  `missing/../alias/new` reach a cache folder). An alias made after the check is refused (exit 1)
+  and nothing is left in a cache folder. Cache publishes are not claims: each
+  makes a fresh file in its own folder and links or renames it into place, so with no job writing
+  there a publish cannot land on a job's output.
+- **The IR cache is on in batch**, in the parent and in every worker: a multi-worker run no longer
+  parses each dependency in every worker. `ALSEM_IR_CACHE_REPORT` works in batch too: the report is
+  one of the run's writes (checked against every job write, input and cache folder); the parent
+  registers it (opened without waiting, `O_NONBLOCK`, so a FIFO with no reader is refused instead
+  of hanging the run; a regular file only) and keeps its handle, and each worker opens it once,
+  the same way and without creating it, and appends only when it is the registered file (a
+  refused append is a warning, never a failed run). Before, a batch run wrote no report line.
+- **Tests** (`tests/cli/cli_ir_cache.rs`, `claim::tests`): the old batch-off test is now its
+  opposite (a cold root filled by two workers, a warm one hit from disk by each worker and by one
+  batch in the parent, each with its `start` line); refusal tests for a stream in the IR folder,
+  in the text folder and through a link to the IR folder, a shard directory holding the IR folder,
+  a cache folder spelled through `missing/..`, a `--out` hard-linked to an IR entry, a text entry
+  and a file in the default `ir/`, a late hard link, a late symlink and a late shard directory, a
+  trace in a cache folder, a stream on the report, a swapped report, each guard of the report's
+  registration, a concurrent prune during the walk (which must not refuse), a dangling-symlink
+  cache folder whose target a shard job makes (IR and text), a cache name linking outside, a FIFO
+  report, a worker with a missing or damaged snapshot, writes into the claim folder, a dangling
+  symlink stream outside the caches (still written through the link), and a reused inode number
+  (`cache_guard::tests`), a symlink hop in a cache folder (report and stream), and a shard
+  directory that becomes reachable only once its first component is made. One discrimination
+  proof per guard, recorded in each test's doc, with one exception: skipping the handle check for
+  a file the open itself created (`O_EXCL`) has none. It is sound by construction (a file that
+  did not exist a moment ago is no cache file), and it only matters on a file system without
+  birth times, where a new file could get a pruned cache file's inode number; a test would have
+  to predict that number. The snapshot's "(no header)" case has no break of its own either: the
+  magic test and, without it, the missing fields each refuse it. Every batch test helper
+  (`cli_batch_writes::temp_cache_home`; the contract, manifest, plan, workers and source
+  dependency tests included) points its runs at a temporary `XDG_CACHE_HOME`, so no test walks a
+  developer's real cache.
+
 ### Added (ENG-110: a persistent cache of parsed dependency IR)
 
 - **What.** Every engine process parsed and lowered every dependency file again: on CDO 10,881
