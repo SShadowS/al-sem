@@ -349,7 +349,9 @@ later run of the same binary is warm (~x0.53). Spec:
   zlib-ng's cmake build: cmake 3.29 has no `Visual Studio 18 2026` generator (an older tree
   builds with `CMAKE_GENERATOR="Visual Studio 17 2022"`), and MSBuild's file tracking fails
   with `FTK1011` on a long checkout path. If any Windows build step fails on a path that is
-  too long, a short target folder fixes it: `CARGO_TARGET_DIR=C:\t`.
+  too long, a short target folder fixes it: `CARGO_TARGET_DIR=C:\t`. git's own checkout of
+  the repo fails on a long path ("Filename too long": 169 characters did, 82 did not) unless
+  `git config --global core.longpaths true` is set (or the checkout path is kept short).
 - tree-sitter-al grammar (currently **v5.4.0, `main` at `88bb6871`**, see the Grammar
   section — the package version did not move for 463 commits before v4.5.0, many of them shape changes): a plain, gitignored clone of
   `SShadowS/tree-sitter-al` at `tree-sitter-al/`, on its `main` branch. **It is NOT pinned

@@ -23,8 +23,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   run time (without it a default build takes the plain ones; speed only). `Cargo.lock` and
   `tools/census-probe/Cargo.lock` drop `libz-ng-sys` and `cmake`. CLAUDE.md's Prerequisites now
   states the Windows toolchain, both old snags with their workarounds for older trees, and
-  `CARGO_TARGET_DIR=C:\t` for any path-too-long failure. Not yet run on Windows: the owner's
-  next native build confirms it.
+  `CARGO_TARGET_DIR=C:\t` for any path-too-long failure, and `git config --global
+  core.longpaths true` (git's own checkout failed on a 169-character path).
+  Checked on the owner's Windows PC (2026-11-24, at `a5ff11044`, rustc and cargo 1.96.0, VS
+  Build Tools 2022 17.14.45 with VS 2026 18.12.1 also installed): a fresh checkout at an
+  82-character path with no `CMAKE_GENERATOR` or `CARGO_TARGET_DIR` set; `cargo tree` finds
+  neither `libz-ng-sys` nor `cmake`; the `release-fast` build of `alsem` and
+  `al-call-hierarchy` finished in 3 min 50 s with `Compiling zlib-rs v0.6.8` and no cmake,
+  MSBuild or `FTK1011` line; `alsem.exe --version` ran (exit 0); `cli_b_` 109 passed, 0 failed.
 
 ### Fixed (ENG-178: table procedures named like record built-ins: four follow-ups from ENG-173)
 
