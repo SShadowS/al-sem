@@ -107,4 +107,15 @@ fn the_workspace_object_does_not_shadow_a_dependency_object_of_its_name() {
         !edge(&g, &own_x_f),
         "X is declared by the workspace (W) and the dependency (A): no Source edge to the own W.X"
     );
+    // Nor a guessed edge to the dependency's: the call stays open, on the name hub.
+    let dep_x_f = recs.iter().find(|r| {
+        r["t"] == "node"
+            && r["v"]["objectName"] == "X"
+            && r["v"]["memberName"] == "F"
+            && r["v"]["appId"] == DEP_GUID
+    });
+    if let Some(d) = dep_x_f {
+        assert!(!edge(&g, d["v"]["id"].as_str().unwrap()), "no edge to A.X");
+    }
+    assert!(edge(&g, "h:name:f/0"), "the call is open, on the name hub");
 }

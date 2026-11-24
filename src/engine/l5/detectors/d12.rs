@@ -27,17 +27,42 @@ use super::anchor_of;
 pub(crate) const DETECTOR: &str = "d12-dead-integration-event";
 
 pub fn detect_d12(
-    _resolved: &crate::program::model::workspace::Model,
+    resolved: &crate::program::model::workspace::Model,
     ctx: &DetectorContext,
 ) -> Result<DetectorOutput, DetectorError> {
+    use al_syntax::IdentifierFoldExt as _;
     let fp_index = &ctx.fingerprint_index;
     let mut findings: Vec<Finding> = Vec::new();
 
     // subsByEvent: count of edges per internal eventId.
     let mut subs_by_event: HashMap<&str, usize> = HashMap::new();
+    // A subscription whose publisher object did not resolve (a name several apps'
+    // objects carry, ENG-193) sits on a stand-in event `unknown/{type}/0:{name or
+    // number}/event/{event}` (`model::events`): it may subscribe to any event of
+    // that type, object reference and name, so such an event is not dead.
+    let mut maybe_subscribed: std::collections::HashSet<(String, String, String)> =
+        std::collections::HashSet::new();
     for edge in &ctx.event_graph.edges {
         *subs_by_event.entry(edge.event_id.as_str()).or_insert(0) += 1;
+        if let Some((object, event)) = edge
+            .event_id
+            .strip_prefix("unknown/")
+            .and_then(|rest| rest.rsplit_once("/event/"))
+            && let Some((kind, reference)) = object.split_once("/0:")
+        {
+            maybe_subscribed.insert((
+                kind.fold_identifier(),
+                reference.fold_identifier(),
+                event.fold_identifier(),
+            ));
+        }
     }
+    let objects: HashMap<&str, &crate::program::model::workspace::ModelObject> = resolved
+        .workspace
+        .objects
+        .iter()
+        .map(|o| (o.id.as_str(), o))
+        .collect();
 
     let mut candidates_considered = 0usize;
     let mut skipped_other = 0u64;
@@ -65,6 +90,29 @@ pub fn detect_d12(
         }
         candidates_considered += 1;
         if subs_by_event.get(ev.id.as_str()).copied().unwrap_or(0) > 0 {
+            skipped_other += 1;
+            continue;
+        }
+        let event = ev.event_name.fold_identifier();
+        let kind = pub_routine.object_type.fold_identifier();
+        let object = objects.get(pub_routine.object_id.as_str());
+        // How a subscription may name the publisher: its object by name or number,
+        // or, for an event an extension publishes, the base object by name
+        // (`ObjectType::Table, Database::T` for a tableextension's event).
+        let mut refs: Vec<(String, String)> =
+            vec![(kind.clone(), pub_routine.object_number.to_string())];
+        if let Some(o) = object {
+            refs.push((kind.clone(), o.name.fold_identifier()));
+            if let (Some(base_kind), Some(base)) =
+                (kind.strip_suffix("extension"), &o.extends_target_name)
+            {
+                refs.push((base_kind.to_string(), base.fold_identifier()));
+            }
+        }
+        if refs
+            .into_iter()
+            .any(|(k, r)| maybe_subscribed.contains(&(k, r, event.clone())))
+        {
             skipped_other += 1;
             continue;
         }

@@ -1,0 +1,159 @@
+//! ENG-193 (Fable r1): readers of an object name that two visible apps share (the workspace's `W`
+//! objects beside a dependency's `KA` objects of the same names, each binding the own object in
+//! alc 18.0.41 since every workspace file is `namespace W;`) must not lose reach once the name no
+//! longer binds the own object by default:
+//! - B1: the workspace's `pageextension PE extends P` still runs with page `P`, and `P`'s
+//!   `SourceTable = T` still reaches `T`'s triggers (`alsem graph`);
+//! - B2: an integration event whose subscriber names its publisher by a shared name (`Codeunit::X`,
+//!   and `Database::T` for a tableextension's event) is not "dead" (d12).
+
+use std::path::Path;
+use std::process::Command;
+
+const DEP_GUID: &str = "19319319-0000-4000-8000-0000000000b1";
+const WS_GUID: &str = "19319319-0000-4000-8000-000000000002";
+
+const DEP_SYMBOLS: &str = r#"{"RuntimeVersion":"15.0","Namespaces":[{"Name":"KA","Codeunits":[{"Id":61001,"Name":"X","Methods":[{"Name":"F","Parameters":[]}]}],"Tables":[{"Id":61001,"Name":"T","Fields":[{"Id":1,"Name":"Code","TypeDefinition":{"Name":"Code"}}]}],"Pages":[{"Id":61001,"Name":"P"}]}]}"#;
+
+const DEP_SOURCE: &str = "namespace KA;\n\ncodeunit 61001 X\n{\n    procedure F() begin end;\n}\ntable 61001 T\n{\n    fields { field(1; Code; Code[20]) { } }\n    keys { key(PK; Code) { } }\n}\npage 61001 P\n{\n    SourceTable = T;\n    layout { area(Content) { field(Code; Rec.Code) { } } }\n}\n";
+
+const WS_SOURCE: &str = r#"namespace W;
+
+table 50030 T
+{
+    fields { field(1; Code; Code[20]) { } }
+    keys { key(PK; Code) { } }
+    trigger OnInsert() begin end;
+}
+tableextension 50040 TE extends T
+{
+    trigger OnBeforeInsert() begin end;
+    [IntegrationEvent(false, false)]
+    procedure OnExt() begin end;
+    procedure RaiseExt() begin OnExt(); end;
+}
+page 50030 P
+{
+    SourceTable = T;
+    layout { area(Content) { field(Code; Rec.Code) { } } }
+    trigger OnOpenPage() begin end;
+}
+pageextension 50041 PE extends P
+{
+    trigger OnOpenPage() begin end;
+}
+codeunit 50032 X
+{
+    [IntegrationEvent(false, false)]
+    procedure OnE() begin end;
+    procedure Raise() begin OnE(); end;
+}
+codeunit 50031 Sub
+{
+    [EventSubscriber(ObjectType::Table, Database::T, 'OnExt', '', false, false)]
+    local procedure H1() begin end;
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::X, 'OnE', '', false, false)]
+    local procedure H2() begin end;
+}
+codeunit 50010 U
+{
+    procedure G() begin Page.Run(Page::P); end;
+}
+"#;
+
+fn workspace(root: &Path) -> std::path::PathBuf {
+    let ws = root.join("ws");
+    std::fs::create_dir_all(ws.join("src")).unwrap();
+    std::fs::write(
+        ws.join("app.json"),
+        format!(
+            r#"{{"id":"{WS_GUID}","name":"Ws193b","publisher":"t","version":"1.0.0.0","runtime":"15.0",
+            "dependencies":[{{"id":"{DEP_GUID}","name":"Dep193b","publisher":"probe","version":"1.0.0.0"}}]}}"#
+        ),
+    )
+    .unwrap();
+    std::fs::write(ws.join("src/W.al"), WS_SOURCE).unwrap();
+    crate::symbol_app::write_source_app(
+        &ws.join(".alpackages/probe_Dep193b_1.0.0.0.app"),
+        DEP_GUID,
+        "Dep193b",
+        "1.0.0.0",
+        DEP_SYMBOLS,
+        &[("src/KA.al", DEP_SOURCE)],
+        "",
+    );
+    ws
+}
+
+fn alsem(ws: &Path, args: &[&str]) -> String {
+    let out = Command::new(env!("CARGO_BIN_EXE_alsem"))
+        .args(args)
+        .arg(ws)
+        .env("RUST_LOG", "off")
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+/// Discrimination (2026-11-24, each break then restored, green): the extension indices built
+/// from `resolve_object` (one base or none) instead of `visible_objects` fail the `PE` edge; the
+/// page's ambiguous source table dropped (no `AnyOf` branch) fails the `T::OnInsert` edge.
+#[test]
+fn an_extension_and_a_source_table_of_a_shared_name_keep_their_edges() {
+    let t = tempfile::tempdir().unwrap();
+    let ws = workspace(t.path());
+    let recs: Vec<serde_json::Value> = alsem(&ws, &["graph"])
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    let node = |kind: &str, object_type: &str, object: &str, member: Option<&str>| -> String {
+        recs.iter()
+            .find(|r| {
+                r["t"] == "node"
+                    && r["v"]["kind"] == kind
+                    && r["v"]["objectType"] == object_type
+                    && r["v"]["objectName"] == object
+                    && r["v"]["appId"] == WS_GUID
+                    && member.is_none_or(|m| r["v"]["memberName"] == m)
+            })
+            .unwrap_or_else(|| panic!("precondition: {object_type} {object} {member:?} is a node"))
+            ["v"]["id"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    let edge = |from: &str, to: &str| {
+        recs.iter()
+            .any(|r| r["t"] == "edge" && r["v"]["caller"] == from && r["v"]["callee"] == to)
+    };
+    let page = node("Object", "Page", "P", None);
+    let pe_open = node("Trigger", "PageExtension", "PE", Some("OnOpenPage"));
+    let t_insert = node("Trigger", "Table", "T", Some("OnInsert"));
+    assert!(
+        edge(&page, &pe_open),
+        "the page runs its extension's OnOpenPage"
+    );
+    assert!(
+        edge(&page, &t_insert),
+        "the page's source table's OnInsert is reachable"
+    );
+}
+
+/// Discrimination (2026-11-24): d12 without the `maybe_subscribed` check reports both `OnE` and
+/// `OnExt` dead; with it but without the base-object reference, `OnExt` (a tableextension's event,
+/// subscribed by `Database::T`).
+#[test]
+fn an_event_subscribed_through_a_shared_name_is_not_dead() {
+    let t = tempfile::tempdir().unwrap();
+    let ws = workspace(t.path());
+    let out = alsem(&ws, &["analyze", "--scope", "all", "--format", "json"]);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap_or_else(|e| panic!("{e}: {out}"));
+    let d12: Vec<String> = v["payload"]["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|f| f["detector"] == "d12-dead-integration-event")
+        .map(|f| f["primaryLocation"]["routineName"].to_string())
+        .collect();
+    assert!(d12.is_empty(), "no event is dead: {d12:?}");
+}

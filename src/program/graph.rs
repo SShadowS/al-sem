@@ -248,11 +248,23 @@ impl ProgramGraph {
         kind: ObjectKind,
         name: &str,
     ) -> Option<&ObjectNode> {
+        match self.visible_objects(from, kind, name).as_slice() {
+            [o] => Some(o),
+            _ => None,
+        }
+    }
+
+    /// Every object `(kind, name)` may name as seen FROM `from`: one per app of
+    /// `from`'s closure (`from` included), an `obsolete_gone` one only when no
+    /// live one is visible. [`Self::resolve_object`] is the case of exactly one;
+    /// a reader that must not lose reach when the name is shared (an extension's
+    /// base: Fable r1 on ENG-193) takes them all.
+    pub fn visible_objects(&self, from: AppRef, kind: ObjectKind, name: &str) -> Vec<&ObjectNode> {
         let name_lc = name.fold_identifier();
         // `by_app_kind_name` holds at most one entry per `(app, kind, name_lc)`
         // (first/lowest-id wins on a same-app duplicate — `ObjectIndex::build`),
         // so at most one match comes from any single app.
-        let mut found: Vec<usize> = self
+        let mut found: Vec<&ObjectNode> = self
             .topology
             .closure(from)
             .into_iter()
@@ -260,52 +272,53 @@ impl ProgramGraph {
                 self.obj_index
                     .by_app_kind_name
                     .get(&(app, kind, name_lc.clone()))
-                    .copied()
+                    .map(|&i| &self.objects[i])
             })
             .collect();
-        if found.iter().any(|&i| !self.objects[i].obsolete_gone) {
-            found.retain(|&i| !self.objects[i].obsolete_gone);
+        if found.iter().any(|o| !o.obsolete_gone) {
+            found.retain(|o| !o.obsolete_gone);
         }
-        match found.as_slice() {
-            [i] => Some(&self.objects[*i]),
-            _ => None,
-        }
+        found
     }
 
     /// [`Self::resolve_object`] for an object named by NUMBER (an
     /// `[EventSubscriber(ObjectType::Codeunit, 50, …)]`; engine-switch S4.3b):
-    /// `from`'s own object wins, else exactly one app in `from`'s dependency
-    /// closure; more than one declines.
+    /// `from`'s own object wins (object numbers are unique across installed apps),
+    /// else exactly one app in `from`'s dependency closure; more than one
+    /// declines. An `obsolete_gone` object counts only when no live one of the
+    /// number is visible (ENG-193, Fable r1: Base Application's `Moved` stub of
+    /// table 308 keeps the number Business Foundation's table has), as
+    /// `ResolveIndex::build` prunes by number.
     pub fn resolve_object_by_number(
         &self,
         from: AppRef,
         kind: ObjectKind,
         number: i64,
     ) -> Option<&ObjectNode> {
-        let find = |app: AppRef| {
-            let id = ObjectNodeId {
-                app,
-                kind,
-                key: ObjKey::Id(number),
-            };
-            self.objects.find(&id)
-        };
-        if let Some(i) = find(from) {
-            return Some(&self.objects[i]);
+        let mut found: Vec<&ObjectNode> = self
+            .topology
+            .closure(from)
+            .into_iter()
+            .filter_map(|app| {
+                self.objects
+                    .find(&ObjectNodeId {
+                        app,
+                        kind,
+                        key: ObjKey::Id(number),
+                    })
+                    .map(|i| &self.objects[i])
+            })
+            .collect();
+        if found.iter().any(|o| !o.obsolete_gone) {
+            found.retain(|o| !o.obsolete_gone);
         }
-        let mut found: Option<usize> = None;
-        for &app in &self.topology.closure(from) {
-            if app == from {
-                continue;
-            }
-            if let Some(i) = find(app) {
-                if found.is_some() {
-                    return None; // >1 dependency declares this (kind, number) — decline.
-                }
-                found = Some(i);
-            }
+        if let Some(own) = found.iter().find(|o| o.id.app == from) {
+            return Some(own);
         }
-        found.map(|i| &self.objects[i])
+        match found.as_slice() {
+            [o] => Some(o),
+            _ => None, // >1 dependency declares this (kind, number) — decline.
+        }
     }
 
     /// Look up an interned `AppRef` by name (case-insensitive).
@@ -585,5 +598,35 @@ mod tests {
         assert_eq!(by(201), Some(b), "one dependency declares 201");
         assert_eq!(by(300), None, "two dependencies declare 300: decline");
         assert_eq!(by(999), None);
+    }
+
+    /// ENG-193 (Fable r1, S1): an own `Moved` stub keeps the number of the table it
+    /// moved to, so by number too it gives way to the live dependency table.
+    /// Discrimination: dropping the `obsolete_gone` filter in
+    /// `resolve_object_by_number` binds the own stub.
+    #[test]
+    fn resolve_object_by_number_a_moved_own_stub_gives_way_to_the_live_object() {
+        let mut g = build_three_app_ambiguous_fixture();
+        let a = g.app_ref_by_name("AppA");
+        let b = g.app_ref_by_name("AppB");
+        let objects: Vec<ObjectNode> = g
+            .objects
+            .iter()
+            .cloned()
+            .map(|mut o| {
+                if o.id.app == a && o.id.key == ObjKey::Id(301) {
+                    o.obsolete_gone = true;
+                }
+                o
+            })
+            .collect();
+        g.obj_index = ObjectIndex::build(&objects);
+        g.objects = objects.into();
+        let resolved = g.resolve_object_by_number(a, ObjectKind::Table, 301);
+        assert_eq!(
+            resolved.map(|o| o.id.app),
+            Some(b),
+            "the live dependency table binds"
+        );
     }
 }
