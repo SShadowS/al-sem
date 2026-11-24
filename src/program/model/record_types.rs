@@ -30,6 +30,39 @@ use al_syntax::IdentifierFoldExt;
 
 use crate::program::body::node_util::strip_quotes;
 
+/// ENG-192: the source ranges (start, end) of the `asserterror` statements in `tree`, or `None`
+/// when one has no range. A statement inside one may never run (an error before it), though
+/// nothing branches.
+fn assert_error_ranges(
+    tree: Option<&crate::program::body::features::PCFNNode>,
+) -> Option<Vec<((u32, u32), (u32, u32))>> {
+    fn walk(
+        n: &crate::program::body::features::PCFNNode,
+        out: &mut Vec<((u32, u32), (u32, u32))>,
+    ) -> Option<()> {
+        if matches!(
+            n.path_hint(),
+            Some(crate::program::body::features::PathHint::AssertError)
+        ) {
+            let (sl, sc, el, ec) = n.source_range?;
+            out.push(((sl, sc), (el, ec)));
+        }
+        for c in [&n.condition_leaves, &n.children, &n.else_children]
+            .into_iter()
+            .flatten()
+            .flatten()
+        {
+            walk(c, out)?;
+        }
+        Some(())
+    }
+    let mut out = Vec::new();
+    if let Some(t) = tree {
+        walk(t, &mut out)?;
+    }
+    Some(out)
+}
+
 /// The RecordRefs (as [`op_variable_lc`] keys them) a `R.Get(Id)` binds in `routine`: a record
 /// operation, not a call site, so the call-site scan of the first pass does not see it (ENG-160).
 /// It may move the RecordRef to the RecordId's table, physical or not: no derived temp state
@@ -542,6 +575,9 @@ pub fn resolve_routine_record_types(
                 crate::program::model::recref_alias::HolderKey,
             > = std::collections::HashSet::new();
             let scope = crate::program::model::recref_alias::HolderScope::of(routine);
+            // The `asserterror` blocks' source ranges (`None`: one without a range, so any bind
+            // may be in one).
+            let assert_errors = assert_error_ranges(routine.statement_tree.as_deref());
             // ENG-176: the variable itself, by the routine's scope (sol: a quoted or spaced
             // receiver was missed by text): a whole RecordRef parameter or local, never a global
             // or an element.
@@ -556,7 +592,9 @@ pub fn resolve_routine_record_types(
                     })
             };
             for cs in &routine.call_sites {
-                let at = (cs.source_anchor.start_line, cs.source_anchor.start_column);
+                // A bind takes effect when the call ENDS: its own arguments run before it
+                // (`R.Open(T, true, F(R.Insert()))`'s Insert reads the bind before; Fable r1).
+                let at = (cs.source_anchor.end_line, cs.source_anchor.end_column);
                 let crate::program::body::features::PCallee::Member { receiver, method } =
                     &cs.callee
                 else {
@@ -566,7 +604,15 @@ pub fn resolve_routine_record_types(
                     continue;
                 };
                 let method_lc = method.fold_identifier();
-                if matches!(method_lc.as_str(), "open" | "gettable") && !cs.loop_stack.is_empty() {
+                // In a loop it reaches the operations before it on the next iteration; under
+                // `asserterror` it may never run (an error before it in the block; `asserterror`
+                // is no branching to this pass; Fable r1): either way, positions say nothing.
+                if matches!(method_lc.as_str(), "open" | "gettable")
+                    && (!cs.loop_stack.is_empty()
+                        || assert_errors
+                            .as_ref()
+                            .is_none_or(|rs| rs.iter().any(|&(s, e)| s <= at && at <= e)))
+                {
                     in_loop.insert(receiver_key);
                 }
                 match method_lc.as_str() {

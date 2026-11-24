@@ -101,27 +101,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **The bug.** record_types' temp pass (a local or parameter RecordRef in a routine without
   `if`/`case`/`try`) kept ONE temp state per variable, from the last `Open`/`GetTable` it saw, and
-  gave it to every operation of that variable. Four wrong `no` for `prove writes-table` on master
-  (c6f61f04), found by Fable's reviews of ENG-191:
+  gave it to every operation of that variable. Six wrong `no` for `prove writes-table` on master
+  (c6f61f04), found by Fable's reviews of ENG-191 and ENG-192:
   - `R.Open(T); R.Insert(); R.Close(); R.Open(T, true)`: the later temporary `Open` reached the
     physical `Insert` before it;
   - the same with `System.Clear(R)` in place of `Close`;
   - `R.Open(T, true); R.Close(); R.Open(T, Flag); R.Insert()`: an `Open` whose flag is not a
     literal was skipped, so the earlier temporary state carried on;
   - `R.Open(T, true); for … do begin R.Insert(); R.Close(); R.Open(T); end`: an `Open` inside a
-    loop was skipped, though the next iteration's `Insert` runs on it.
+    loop was skipped, though the next iteration's `Insert` runs on it;
+  - `R.Open(T, true); R.Close(); R.GetTable(P); R.Insert()` with `P` a record parameter: a
+    `GetTable` of a record of unknown temp state was skipped;
+  - `R.GetTable(Phys); R.Insert(); R.GetTable(Temp)`: the later temporary `GetTable` reached the
+    physical `Insert`.
 - **The fix.** Each `Open`/`GetTable` of the variable is a bind with the state it leaves (unknown
-  for a non-literal flag or an unknown `GetTable` source); an operation reads the last bind before
-  it, none before the first. A variable bound inside a loop derives nothing. `Close`/`Clear` add
-  no bind: an operation after one and before the next bind runs on an unbound RecordRef, a
-  runtime error, never a write.
-- **CDO (pinned `bc3ccb18`, c6f61f04 against 44c976ba):** nothing moved. No finding or
-  fingerprint at either scope, unknown edges 0 -> 0. cdo-speed PASS: instructions build x0.9983.
+  for a non-literal flag or an unknown `GetTable` source), placed where the call ENDS (its own
+  arguments run before it: `R.Open(T, true, F(R.Insert()))`'s `Insert` reads the bind before). An
+  operation reads the last bind before it, none before the first. A variable with a bind inside a
+  loop or inside an `asserterror` block (it may never run: an error before it; `asserterror` is
+  no branching to this pass) derives nothing. `Close`/`Clear` add no bind: measured on BC 28.4
+  (`/work/.al-sem/engine-notes/eng192-probe/RESULTS.md`), `Insert`, `Modify` and `Delete` after
+  `Close`, `Clear(R)` or `System.Clear(R)` each raise "The record is not open.", so an operation
+  between an unbind and the next bind writes nothing.
+- **Answers that move to `no` (right).** An operation now reads only the binds before it, so
+  `R.Open(T, true); R.Insert(); R.Close(); R.Open(T)` answers `no` (master `yes`: the later
+  physical `Open` reached the temporary `Insert`), and an operation before an `exit` that skips a
+  later physical `Open` is no physical write.
+- **CDO (pinned `bc3ccb18`, c6f61f04 against 44c976ba, the first cut):** nothing moved. No
+  finding or fingerprint at either scope, unknown edges 0 -> 0. cdo-speed PASS: instructions build
+  x0.9983.
 - **Tests and red proofs.** `cli_recref_temp_position` (new; its AL compiles clean on alc
-  18.0.41): the four shapes answer not `no` (master: `no`), a `Clear(R)` row and the controls (one
-  physical `Open`: `yes`; one temporary `Open`: `no`). Each break then restored: every operation
-  reading the variable's last bind fails `RootClose`; an `Open` with an unknown flag pushing no
-  bind fails `RootUnknownFlag`; a variable bound inside a loop kept fails `RootLoop`.
+  18.0.41): the six shapes, a `Clear(R)` row, an `Insert` in a bind's own arguments and a bind
+  after an error under `asserterror` answer not `no`; the temporary-then-physical row answers
+  `no`; controls (one physical `Open`: `yes`; one temporary `Open`: `no`). Each break then
+  restored: every operation reading the variable's last bind fails `RootClose`; an `Open` with an
+  unknown flag pushing no bind fails `RootUnknownFlag`; a variable bound inside a loop kept fails
+  `RootLoop`; a bind placed where its call starts fails `RootArgBind`; a bind under `asserterror`
+  kept fails `RootAssertError`; a `GetTable` of an unknown source pushing no bind fails
+  `RootGetTableUnknown`.
 - **Goldens.** None moved.
 
 ### Fixed (ENG-178: table procedures named like record built-ins: four follow-ups from ENG-173)

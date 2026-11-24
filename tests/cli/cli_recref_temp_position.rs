@@ -75,6 +75,72 @@ codeunit 50010 "PA"
         R.Insert();
     end;
 
+    // A bind's own arguments run before it: the Insert runs on the physical Open (Fable r1).
+    procedure RootArgBind()
+    var
+        R: RecordRef;
+    begin
+        R.Open(Database::"PA Log");
+        R.Open(Database::"PA Log", true, Co(R.Insert()));
+        R.Close();
+        R.Open(Database::"PA Log");
+    end;
+
+    // The temporary Open after the error never runs (Fable r1).
+    procedure RootAssertError()
+    var
+        R: RecordRef;
+    begin
+        R.Open(Database::"PA Log");
+        asserterror begin
+            Error('x');
+            R.Close();
+            R.Open(Database::"PA Log", true);
+        end;
+        R.Insert();
+        R.Close();
+        R.Open(Database::"PA Log");
+    end;
+
+    // A GetTable of a record whose temp state is unknown (a parameter).
+    procedure RootGetTableUnknown(var P: Record "PA Log")
+    var
+        R: RecordRef;
+    begin
+        R.Open(Database::"PA Log", true);
+        R.Close();
+        R.GetTable(P);
+        R.Insert();
+    end;
+
+    // The Insert runs on the physical record's table, before the temporary GetTable.
+    procedure RootGetTableFlip()
+    var
+        R: RecordRef;
+        T: Record "PA Log" temporary;
+        P: Record "PA Log";
+    begin
+        R.GetTable(P);
+        R.Insert();
+        R.GetTable(T);
+    end;
+
+    // The Insert runs on the temporary Open before the physical one: no write (master: yes).
+    procedure RootTempFirst()
+    var
+        R: RecordRef;
+    begin
+        R.Open(Database::"PA Log", true);
+        R.Insert();
+        R.Close();
+        R.Open(Database::"PA Log");
+    end;
+
+    procedure Co(B: Boolean): Text[30]
+    begin
+        exit(CompanyName());
+    end;
+
     // The second iteration's Insert runs on the physical table the loop opened.
     procedure RootLoop()
     var
@@ -147,12 +213,17 @@ fn a_record_operation_reads_the_last_bind_before_it() {
     };
     assert_eq!(answer("RootTempOnly"), "no", "precondition: the pass runs");
     assert_ne!(answer("RootPhysical"), "no", "control");
+    assert_eq!(answer("RootTempFirst"), "no", "the Insert is temporary");
     for root in [
         "RootClose",
         "RootClear",
         "RootSysClear",
         "RootUnknownFlag",
         "RootLoop",
+        "RootArgBind",
+        "RootAssertError",
+        "RootGetTableUnknown",
+        "RootGetTableFlip",
     ] {
         assert_ne!(answer(root), "no", "{root}: a physical write is reachable");
     }
