@@ -8314,15 +8314,10 @@ fn resolve_module_pick_first_base_function_callers_are_a_known_allowlist() {
             "index.rs",
             "None => graph.resolve_object(from, kind, &args.publisher_name),",
         ),
-        // `PublisherExtensions::build` (fix/unbound-subscriptions): the base
-        // object of a table/page/report extension, from the extension's own
-        // app, so an event the extension declares is found under its base. The
-        // same lookup as the first `resolver.rs` entry; a collision fails
-        // closed and the extension is listed under no base.
-        (
-            "index.rs",
-            "if let Some(base) = graph.resolve_object(obj.id.app, base_kind, target) {",
-        ),
+        // (ENG-193: `PublisherExtensions::build` lists an extension under every
+        // base its app sees by that name, through `ProgramGraph::visible_objects`,
+        // never `resolve_object`: a subscriber naming any of them by number may
+        // bind the extension's event.)
         // (ENG-152: every interface name binds through
         // `ProgramGraph::bind_interface`, outside this module, never
         // `resolve_object`: own-app-first is not alc's rule for interfaces, and a
