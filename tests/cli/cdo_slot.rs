@@ -1381,6 +1381,52 @@ fn cdo_slot_a_take_that_finishes_mid_read_is_named() {
     assert_eq!(s.run("A", &["release"], &[]).0, Some(0));
 }
 
+/// ⟨TLS-127 review r1, Fable⟩ A hold released after a reader saw the hold lock
+/// held, and before it read the status, leaves no live id and no publish lock.
+/// The reader probes the hold lock once more and reads the slot as free: a
+/// `status` says "free", and an `acquire` without --wait takes it, instead of
+/// "held by an unknown holder" with an empty holder list. The HELD hook holds
+/// each reader in that window while the test releases.
+///
+/// Mutation (2026-11-24): the hold-lock re-probe in `state` dropped -> "a
+/// released hold read as: held by an unknown holder (no status names it)"
+/// (red); restored, green.
+#[test]
+fn cdo_slot_a_release_during_a_read_reads_free() {
+    let s = Slot::new();
+    let held = [("CDO_SLOT_TEST_PAUSE_HELD_S", "60")];
+    for args in [&["status"][..], &["acquire", "lane", "next"][..]] {
+        assert_eq!(s.run("A", &["acquire", "lane", "first"], &[]).0, Some(0));
+        let reader = s
+            .cmd("B", args, &held)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        s.wait_paused();
+        assert_eq!(s.run("A", &["release"], &[]).0, Some(0));
+        s.resume();
+        let out = reader.wait_with_output().unwrap();
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "a released hold read as: {text}"
+        );
+        if args[0] == "status" {
+            assert_eq!(text.trim_end(), "free", "a released hold read as: {text}");
+        } else {
+            let (_, now) = s.run("B", &["status"], &[]);
+            assert!(now.starts_with("held by lane (next) since"), "{now}");
+            assert_eq!(s.run("B", &["release"], &[]).0, Some(0));
+        }
+    }
+}
+
 /// ⟨TLS-89⟩ Concurrent takers: six sessions at once run timed and untimed
 /// `run`s, bound timed acquires whose process then ends, and `status`, while a
 /// checker reads `status` throughout:

@@ -145,7 +145,8 @@ new_id() { od -An -N8 -tx8 /dev/urandom | tr -d ' '; }
 # under load (TLS-89's gates). [name]: wait for `$dir/<name>` instead, so a test
 # can end one of two pauses (TLS-127).
 # test-hooks: CDO_SLOT_TEST_KEEPER_FORK CDO_SLOT_TEST_PAUSE_ACQUIRED_S CDO_SLOT_TEST_PAUSE_GO_S
-# test-hooks: CDO_SLOT_TEST_PAUSE_GRACE_S CDO_SLOT_TEST_PAUSE_HOLDGO_S CDO_SLOT_TEST_PAUSE_PUBLISH_S
+# test-hooks: CDO_SLOT_TEST_PAUSE_GRACE_S CDO_SLOT_TEST_PAUSE_HELD_S CDO_SLOT_TEST_PAUSE_HOLDGO_S
+# test-hooks: CDO_SLOT_TEST_PAUSE_PUBLISH_S
 # test-hooks: CDO_SLOT_TEST_PAUSE_READ_S CDO_SLOT_TEST_PAUSE_REFUSE_S CDO_SLOT_TEST_PAUSE_S
 # test-hooks: CDO_SLOT_TEST_PAUSE_SPAWN_S CDO_SLOT_TEST_PAUSE_TAKE_S CDO_SLOT_TEST_SCAN_ONCE
 # test-hooks: CDO_SLOT_TEST_WRITE_PAUSE_S
@@ -261,7 +262,8 @@ nap() {
 # the id lock it names. st = free | mine | held; own = this Claude session's
 # hold (bound or not, the guard's question); hid, holder_pid, bound: the hold's,
 # only when its id lock is held (the status describes it); writing = 1: held, no
-# live id in the status, and a take holds the publish lock (still writing).
+# live id in the status, and a take holds the publish lock (still writing). A
+# hold released during the read reads free (TLS-127 review r1, Fable).
 #   mine: our token, or our Claude session holding unbound (shareable); a hold of
 #   our own session bound to a process (a land, a run) is not shareable: it ends
 #   with that process, and a second land of the same session waits for it.
@@ -272,6 +274,12 @@ state() {
         return
     fi
     st=held
+    # Test hook: the window after the hold lock was seen held, in which a test
+    # releases the hold. Once per process (an acquire calls `state` again).
+    if [[ -n "${CDO_SLOT_TEST_PAUSE_HELD_S:-}" ]]; then
+        test_pause "$CDO_SLOT_TEST_PAUSE_HELD_S"
+        unset CDO_SLOT_TEST_PAUSE_HELD_S
+    fi
     load "$status_file"
     local h session token
     h=$(field hid)
@@ -280,16 +288,28 @@ state() {
         # Test hook: the window between this read and the publish probe, in
         # which a test lets a take finish (it waits for `resume-read`).
         [[ -z "${CDO_SLOT_TEST_PAUSE_READ_S:-}" ]] || test_pause "$CDO_SLOT_TEST_PAUSE_READ_S" resume-read
-        # ⟨TLS-127⟩ A take keeps the publish lock until its status is in.
+        # ⟨TLS-127⟩ A take keeps the publish lock until its status is in. (A
+        # stranger's hold can read "still writing" while another reader's
+        # exclusive probe of the publish lock is slow: display only.)
         if probe x "$publish_lock"; then
             writing=1
             return 0
         fi
         # Free: a take that finished since the read wrote its status before it
-        # let go, so one more read sees it; still no live id = an unknown holder.
+        # let go, so one more read sees it.
         load "$status_file"
         h=$(field hid)
-        [[ "$h" =~ ^[0-9a-f]{16}$ ]] && probe s "$ids/hold.$h" || return 0
+        if ! { [[ "$h" =~ ^[0-9a-f]{16}$ ]] && probe s "$ids/hold.$h"; }; then
+            # Still no live id: the hold may have been released since the first
+            # probe (the slot is free), or a new take may have begun since the
+            # publish probe (still writing). Only past both is it unknown.
+            if ! probe s "$lock"; then
+                st=free
+            elif probe x "$publish_lock"; then
+                writing=1
+            fi
+            return 0
+        fi
     fi
     hid=$h
     holder_pid=$(field holder_pid)
@@ -386,8 +406,11 @@ take_hold() {
     # that sees the hold lock taken and no status naming it asks this lock.
     # Only a reader's probe takes it exclusive, for an instant.
     exec {pfd}>>"$publish_lock"
-    flock -s -w "$lock_wait" "$pfd" \
-        || die "the publish lock $publish_lock was held for ${lock_wait} s by $(holders_of "$publish_lock"); refusing (a stopped or hung cdo-slot reader: end it)"
+    if ! flock -s -w "$lock_wait" "$pfd"; then
+        # Closed first, or the holder list names this process too.
+        exec {pfd}>&-
+        die "the publish lock $publish_lock was held for ${lock_wait} s by $(holders_of "$publish_lock"); refusing (a stopped or hung cdo-slot reader: end it)"
+    fi
     exec {lfd}>"$lock"
     # Up to 1 s: a probe has the lock for an instant.
     if ! flock -x -w 1 "$lfd"; then

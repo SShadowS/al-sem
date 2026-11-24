@@ -21,9 +21,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`$CDO_SLOT_DIR/publish.lock`, shared) from before it takes the hold lock until
   its status is renamed in. A reader that finds the hold lock held and no live hold
   id in the status asks that lock: held means "still writing"; free means read the
-  status once more (a take that just finished wrote it before letting go), and
-  only a status that still names no live hold is an unknown holder (a process that
-  took the lock without being a cdo-slot take). No waits, no retries.
+  status once more (a take that just finished wrote it before letting go). If that
+  read still names no live hold, it probes the hold lock again (free: the hold was
+  released during the read, so the slot reads free) and then the publish lock
+  (held: a new take began, "still writing"). Only past all of these is the holder
+  unknown (a process that took the lock without being a cdo-slot take). No waits,
+  no retries.
+- A release during a read is fixed too (review r1, Fable). The reader saw the hold
+  lock held, then the hold was released before it read the status. It then printed
+  "held by an unknown holder" with an empty holder list (exit 1) while the slot was
+  free, and an `acquire` without --wait died with "not taken: held by an unknown
+  holder". New test `cdo_slot_a_release_during_a_read_reads_free` (new test hook
+  `CDO_SLOT_TEST_PAUSE_HELD_S`, after the hold lock is seen held): `status` says
+  "free" and `acquire` takes the slot. Discrimination proof in its doc.
+- A new bounded refusal, like the timing lock's: a process that keeps
+  `publish.lock` exclusive (only a reader's probe takes it so, for an instant: a
+  stopped or hung one) makes a take fail after `CDO_SLOT_LOCK_WAIT_S` (30 s), and
+  the message names the holders. An acquire takes the hold through a keeper, and
+  the keeper's end makes even `acquire --wait` stop with "not taken: its keeper
+  ended (exit 1)". So `land` and `cdo-gate`, which acquire with --wait, exit 1. A
+  `run` takes the hold in its own process and exits 1.
+- What is left, display only: a whole new take that writes its status in the
+  moment between the reader's last two probes (a few milliseconds) still reads as
+  "held by an unknown holder" for that one read. No decision reads `describe`'s
+  text, and the next read names the hold. A stranger's hold can also read "still
+  writing" while another reader's exclusive probe of the publish lock is slow.
 - New test `cdo_slot_a_slow_take_is_still_writing_not_unknown`: a take paused
   before its status, with the lock file aged by 60 s, reads "still writing"; a
   stranger's lock reads "unknown holder". Discrimination proof in its doc. The
@@ -33,13 +55,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   probe): a take that finishes in that window is named, not called unknown. It
   pins the second read. `test_pause` takes an optional file name to wait for, so
   a test can end one of two pauses.
-- Release had no window to fix: the status is never removed, and a keeper's death
-  drops its locks at once.
-- During a mixed install, a keeper started by the old script takes no publish
-  lock. While that keeper is writing its status, readers on the new script say
-  "held by an unknown holder" (the old script said "still writing" for the first
-  5 s). This is short and only cosmetic, because every decision is a lock probe.
-  It ends when that keeper writes its status, so it cannot outlast one take.
+- Mixed versions: each worktree runs its own `scripts/cdo-slot` against the one
+  shared slot folder, so old and new copies run side by side until every lane has
+  rebased. A take by an old copy holds no publish lock: while it writes its
+  status, a new reader says "held by an unknown holder". An old reader of a new
+  take still uses the 5 s age rule, as before. Both are display only (every
+  decision is a lock probe), and each lasts no longer than that one take's write.
+- Relation to TLS-99: no shared root. TLS-99 item 1 is about integrity: a copied
+  live hold id vouches for edited fields in the status. This task is about a
+  window in time: a live hold whose status is not readable yet. The publish lock
+  does nothing for TLS-99 item 1.
 
 ### Fixed (ENG-178: table procedures named like record built-ins: four follow-ups from ENG-173)
 
