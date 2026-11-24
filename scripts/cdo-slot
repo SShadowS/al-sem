@@ -142,19 +142,21 @@ new_id() { od -An -N8 -tx8 /dev/urandom | tr -d ' '; }
 # test_pause <seconds>: the test hooks' window. It writes `paused.<pid>` (the
 # test waits for it), then waits until the test makes `$dir/resume`, at most
 # <seconds>. A fixed sleep could end before the test's steps in the window did
-# under load (TLS-89's gates).
+# under load (TLS-89's gates). [name]: wait for `$dir/<name>` instead, so a test
+# can end one of two pauses (TLS-127).
 # test-hooks: CDO_SLOT_TEST_KEEPER_FORK CDO_SLOT_TEST_PAUSE_ACQUIRED_S CDO_SLOT_TEST_PAUSE_GO_S
 # test-hooks: CDO_SLOT_TEST_PAUSE_GRACE_S CDO_SLOT_TEST_PAUSE_HOLDGO_S CDO_SLOT_TEST_PAUSE_PUBLISH_S
-# test-hooks: CDO_SLOT_TEST_PAUSE_REFUSE_S CDO_SLOT_TEST_PAUSE_S CDO_SLOT_TEST_PAUSE_SPAWN_S
-# test-hooks: CDO_SLOT_TEST_PAUSE_TAKE_S CDO_SLOT_TEST_SCAN_ONCE CDO_SLOT_TEST_WRITE_PAUSE_S
+# test-hooks: CDO_SLOT_TEST_PAUSE_READ_S CDO_SLOT_TEST_PAUSE_REFUSE_S CDO_SLOT_TEST_PAUSE_S
+# test-hooks: CDO_SLOT_TEST_PAUSE_SPAWN_S CDO_SLOT_TEST_PAUSE_TAKE_S CDO_SLOT_TEST_SCAN_ONCE
+# test-hooks: CDO_SLOT_TEST_WRITE_PAUSE_S
 test_pause() {
     : >"$dir/paused.$$"
-    local w
+    local w go="$dir/${2:-resume}"
     for ((w = 0; w < ${1%.*} * 20 + 20; w++)); do
-        [[ -e "$dir/resume" ]] && break
+        [[ -e "$go" ]] && break
         sleep 0.05
     done
-    rm -f "$dir/resume"
+    rm -f "$go"
 }
 
 # probe <s|x> <lock file>: 0 when some process holds the lock against a probe of
@@ -275,6 +277,9 @@ state() {
     h=$(field hid)
     # A status of an older hold names a dead id: say "held", trust nothing in it.
     if ! { [[ "$h" =~ ^[0-9a-f]{16}$ ]] && probe s "$ids/hold.$h"; }; then
+        # Test hook: the window between this read and the publish probe, in
+        # which a test lets a take finish (it waits for `resume-read`).
+        [[ -z "${CDO_SLOT_TEST_PAUSE_READ_S:-}" ]] || test_pause "$CDO_SLOT_TEST_PAUSE_READ_S" resume-read
         # ⟨TLS-127⟩ A take keeps the publish lock until its status is in.
         if probe x "$publish_lock"; then
             writing=1

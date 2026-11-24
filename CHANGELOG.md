@@ -28,8 +28,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   before its status, with the lock file aged by 60 s, reads "still writing"; a
   stranger's lock reads "unknown holder". Discrimination proof in its doc. The
   half-written-status test no longer depends on timing.
+- New test `cdo_slot_a_take_that_finishes_mid_read_is_named` (new test hook
+  `CDO_SLOT_TEST_PAUSE_READ_S`, between the reader's first read and its publish
+  probe): a take that finishes in that window is named, not called unknown. It
+  pins the second read. `test_pause` takes an optional file name to wait for, so
+  a test can end one of two pauses.
 - Release had no window to fix: the status is never removed, and a keeper's death
   drops its locks at once.
+- During a mixed install, a keeper started by the old script takes no publish
+  lock. While that keeper is writing its status, readers on the new script say
+  "held by an unknown holder" (the old script said "still writing" for the first
+  5 s). This is short and only cosmetic, because every decision is a lock probe.
+  It ends when that keeper writes its status, so it cannot outlast one take.
 
 ### Fixed (ENG-178: table procedures named like record built-ins: four follow-ups from ENG-173)
 

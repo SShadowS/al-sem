@@ -1340,6 +1340,47 @@ fn cdo_slot_a_slow_take_is_still_writing_not_unknown() {
     );
 }
 
+/// ⟨TLS-127⟩ A reader whose first status read came before a take renamed its
+/// status in, and whose publish probe comes after the take let the publish lock
+/// go, reads the status once more and names the new holder. The READ hook holds
+/// the reader between the two steps while the take finishes in that window.
+///
+/// Mutation (2026-11-24): the second read in `state` dropped -> "the finished
+/// take read as: held by an unknown holder (no status names it)" (red);
+/// restored, green.
+#[test]
+fn cdo_slot_a_take_that_finishes_mid_read_is_named() {
+    let s = Slot::new();
+    // A status of an older hold, naming a dead id: the reader's first read.
+    assert_eq!(s.run("A", &["acquire", "lane", "first"], &[]).0, Some(0));
+    assert_eq!(s.run("A", &["release"], &[]).0, Some(0));
+    let mut taker = s.bg(
+        "A",
+        &["acquire", "lane", "late"],
+        &[("CDO_SLOT_TEST_PAUSE_PUBLISH_S", "60")],
+    );
+    s.wait_paused();
+    let reader = s
+        .cmd("B", &["status"], &[("CDO_SLOT_TEST_PAUSE_READ_S", "60")])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    s.wait_paused();
+    // The take finishes: status renamed in, publish lock let go.
+    s.resume();
+    assert_eq!(taker.0.wait().unwrap().code(), Some(0));
+    std::fs::write(s.dir().join("resume-read"), "").unwrap();
+    let out = reader.wait_with_output().unwrap();
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        text.starts_with("held by lane (late) since"),
+        "the finished take read as: {text}{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(s.run("A", &["release"], &[]).0, Some(0));
+}
+
 /// ⟨TLS-89⟩ Concurrent takers: six sessions at once run timed and untimed
 /// `run`s, bound timed acquires whose process then ends, and `status`, while a
 /// checker reads `status` throughout:
