@@ -47,7 +47,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     that name, so a subscriber that names the base by NUMBER (`ObjectType::Table, 50030`) still
     binds the extension's event, and d12 does not call it dead (Fable r2). When several objects
     carry the name, which one the extension extends is not known: its events are candidates only
-    when the named object and its certain extensions offer none (Fable r3). Otherwise a
+    when the named object and its certain extensions declare no publisher of that name at all, of
+    any arity (Fable r3, r4; alc rejects a subscriber whose arity fits no declared one, AL0282). Otherwise a
     subscriber naming the dependency's `T` by number turned ambiguous, or bound the workspace
     extension's same-named event by exact arity, a false edge. The independent event checker
     (`semantic_golden`) accepts every object such an extension may extend.

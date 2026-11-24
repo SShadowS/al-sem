@@ -390,7 +390,20 @@ impl SubscriberIndex {
                             sub_app,
                             false,
                         )));
-                    if candidates.is_empty() {
+                    // Only when no publisher of that name is declared there at
+                    // all: one that fails the arity bound is a mismatch alc
+                    // rejects (AL0282), not room for a shared extension.
+                    let declared_in_certain = std::iter::once(&pub_obj_id)
+                        .chain(extensions.visible(graph, &pub_obj_id, sub_app, false))
+                        .any(|obj| {
+                            routine_indices_by_obj_name
+                                .get(&(obj.clone(), event_key.clone()))
+                                .is_some_and(|is| {
+                                    is.iter()
+                                        .any(|&i| graph.routines[i].publisher_kind.is_some())
+                                })
+                        });
+                    if candidates.is_empty() && !declared_in_certain {
                         candidates = candidates_in(&mut extensions.visible(
                             graph,
                             &pub_obj_id,
@@ -1705,17 +1718,14 @@ pub fn count_unknown_include_sender_plus1_subscribers(graph: &ProgramGraph) -> u
             let mut objects: Vec<&ObjectNodeId> = std::iter::once(&pub_obj.id)
                 .chain(extensions.visible(graph, &pub_obj.id, sub_app, false))
                 .collect();
-            // As the binding does: the shared extensions only when these offer
-            // no candidate.
-            let offers_a_candidate = graph.routines.iter().any(|pr| {
+            // As the binding does: the shared extensions only when these
+            // declare no publisher of that name.
+            let declared_in_certain = graph.routines.iter().any(|pr| {
                 objects.contains(&&pr.id.object)
                     && pr.id.name_lc == event_name_lc
                     && pr.publisher_kind.is_some()
-                    && sub_params <= subscriber_arity_bound(pr.id.params_count, pr.include_sender)
             });
-            if !offers_a_candidate {
-                // Added, not replacing: the publishers counted here are the
-                // ones the binding rejected, in either set.
+            if !declared_in_certain {
                 objects.extend(extensions.visible(graph, &pub_obj.id, sub_app, true));
             }
 
@@ -3854,6 +3864,178 @@ mod tests {
             )],
         );
         assert_eq!(count_unknown_include_sender_plus1_subscribers(&graph), 0);
+    }
+
+    // -- ENG-193: a SHARED extension (its base name carried by several visible
+    //    objects) is a fallback candidate only --------------------------------
+
+    /// App W (AppRef 0) depends on app D (AppRef 1). D has `Table 61001 T`; W has
+    /// its own `Table 50030 T`, `TableExtension 50040 TE extends T` (a shared
+    /// extension: W sees two `T`s) and `Codeunit 50031 Sub`. The subscriber
+    /// names `Table 50030` by number (W's own `T`).
+    fn build_shared_base_fixture(
+        routines: impl FnOnce(&ObjectNodeId, &ObjectNodeId, &ObjectNodeId) -> Vec<RoutineNode>,
+    ) -> (ProgramGraph, ObjectNodeId, ObjectNodeId) {
+        let mut apps = AppRegistry::default();
+        let w = apps.intern(&make_app_id("W"));
+        let d = apps.intern(&make_app_id("D"));
+        let mut topology = DependencyGraph::default();
+        topology.add_dependency(w, d);
+        let id = |app, kind, n| ObjectNodeId {
+            app,
+            kind,
+            key: ObjKey::Id(n),
+        };
+        let w_t = id(w, ObjectKind::Table, 50030);
+        let te = id(w, ObjectKind::TableExtension, 50040);
+        let sub = id(w, ObjectKind::Codeunit, 50031);
+        let mut objects = vec![
+            make_obj(d, ObjectKind::Table, Some(61001), "T", None, vec![]),
+            make_obj(w, ObjectKind::Table, Some(50030), "T", None, vec![]),
+            make_obj(
+                w,
+                ObjectKind::TableExtension,
+                Some(50040),
+                "TE",
+                Some("T"),
+                vec![],
+            ),
+            make_obj(w, ObjectKind::Codeunit, Some(50031), "Sub", None, vec![]),
+        ];
+        objects.sort_by(|x, y| x.id.cmp(&y.id));
+        let mut routines = routines(&w_t, &te, &sub);
+        routines.sort_by(|x, y| x.id.cmp(&y.id));
+        let obj_index = ObjectIndex::build(&objects);
+        (
+            ProgramGraph {
+                apps,
+                topology,
+                objects: objects.into(),
+                routines: routines.into(),
+                obj_index,
+                ..Default::default()
+            },
+            w_t,
+            te,
+        )
+    }
+
+    fn table_50030_args(event: &str) -> ParsedSubscriberArgs {
+        ParsedSubscriberArgs {
+            publisher_object_type: "table".into(),
+            publisher_name: String::new().into(),
+            publisher_id: Some(50030),
+            event_name: event.into(),
+            element: None,
+            skip_on_missing_license: false,
+            skip_on_missing_permission: false,
+        }
+    }
+
+    /// S7: a shared extension's publisher with an UNKNOWN IncludeSender, whose
+    /// subscriber names the base by number with one extra (`Sender`) parameter,
+    /// is counted: the base declares no `OnX`, so the binding falls back to it.
+    /// Discrimination (2026-11-24): the count without the shared fallback -> 0
+    /// (red); restored, green.
+    #[test]
+    fn count_unknown_include_sender_plus1_subscribers_counts_a_shared_extensions_publisher() {
+        let (graph, _, _) = build_shared_base_fixture(|_, te, sub| {
+            vec![
+                make_publisher(te.clone(), "OnX", 0, PublisherKind::Integration, None),
+                make_subscriber(sub.clone(), "H", 1, vec![table_50030_args("onx")], false),
+            ]
+        });
+        assert_eq!(count_unknown_include_sender_plus1_subscribers(&graph), 1);
+    }
+
+    /// S6 (count): the base declares `OnX` itself (with an arity the subscriber
+    /// fails), so the shared extension's `OnX` is not consulted and not counted.
+    /// Discrimination (2026-11-24): the gate on "offers a candidate" (arity
+    /// filter) instead of "declares a publisher" -> 1 (red); restored, green.
+    #[test]
+    fn count_unknown_include_sender_plus1_subscribers_skips_a_shared_extension_the_base_shadows() {
+        let (graph, _, _) = build_shared_base_fixture(|w_t, te, sub| {
+            vec![
+                make_publisher(
+                    w_t.clone(),
+                    "OnX",
+                    0,
+                    PublisherKind::Integration,
+                    Some(false),
+                ),
+                make_publisher(te.clone(), "OnX", 0, PublisherKind::Integration, None),
+                make_subscriber(sub.clone(), "H", 1, vec![table_50030_args("onx")], false),
+            ]
+        });
+        assert_eq!(count_unknown_include_sender_plus1_subscribers(&graph), 0);
+    }
+
+    /// S6 (binding, Fable r4's r10): the base declares `OnX()`, the shared
+    /// extension `OnX(A)`, and the subscriber has one parameter. alc rejects it
+    /// (AL0282): the subscription is Orphaned, never bound to the extension.
+    /// Discrimination (2026-11-24): the fallback gated on "no candidate" alone
+    /// binds `TE::OnX` (red); restored, green.
+    #[test]
+    fn subscribers_of_a_shared_extension_is_no_fallback_when_the_base_declares_the_event() {
+        let (graph, _, te) = build_shared_base_fixture(|w_t, te, sub| {
+            vec![
+                make_publisher(
+                    w_t.clone(),
+                    "OnX",
+                    0,
+                    PublisherKind::Integration,
+                    Some(false),
+                ),
+                make_publisher(
+                    te.clone(),
+                    "OnX",
+                    1,
+                    PublisherKind::Integration,
+                    Some(false),
+                ),
+                make_subscriber(sub.clone(), "H", 1, vec![table_50030_args("onx")], false),
+            ]
+        });
+        let te_onx = graph
+            .routines
+            .iter()
+            .find(|r| r.id.object == te)
+            .unwrap()
+            .id
+            .clone();
+        let idx = SubscriberIndex::build(&graph);
+        assert!(
+            idx.subscribers_of(&te_onx).is_empty(),
+            "not bound to TE::OnX"
+        );
+        assert_eq!(idx.orphaned_subscriptions().len(), 1);
+    }
+
+    /// The fallback itself: the base declares no `OnX`, so the shared
+    /// extension's `OnX` binds (r5's shape at unit level).
+    #[test]
+    fn subscribers_of_a_shared_extension_binds_when_the_base_declares_no_event() {
+        let (graph, _, te) = build_shared_base_fixture(|_, te, sub| {
+            vec![
+                make_publisher(
+                    te.clone(),
+                    "OnX",
+                    0,
+                    PublisherKind::Integration,
+                    Some(false),
+                ),
+                make_subscriber(sub.clone(), "H", 0, vec![table_50030_args("onx")], false),
+            ]
+        });
+        let te_onx = graph
+            .routines
+            .iter()
+            .find(|r| r.id.object == te)
+            .unwrap()
+            .id
+            .clone();
+        let idx = SubscriberIndex::build(&graph);
+        assert_eq!(idx.subscribers_of(&te_onx).len(), 1);
     }
 
     // (e) Unresolvable publisher — no panic ----------------------------------

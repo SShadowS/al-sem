@@ -1309,7 +1309,10 @@ pub fn route_applicability(
                 if let Some(declaring) = graph.objects.iter().find(|o| o.id == edge.from.object) {
                     // The objects a subscriber may name: the declaring object,
                     // and each object an extension that declares the event may
-                    // extend (several when their name is shared, ENG-193).
+                    // extend (several when their name is shared, ENG-193). So this
+                    // cannot tell a shared extension's fallback binding from a
+                    // false one; `index::PublisherExtensions`'s fallback rule is
+                    // guarded by its own tests instead.
                     let named: Vec<(String, String, Option<i64>)> = std::iter::once(declaring)
                         .chain(
                             publisher_extensions
