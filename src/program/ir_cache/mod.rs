@@ -154,6 +154,7 @@ pub fn install_from_env() -> ReportGuard {
     // Paths only: nothing is made here (sol r1). A writer makes `ir/` at its first publish; a
     // cache-off or dependency-free run makes nothing, except `alsem batch`, whose check makes
     // the folders its caches would use before any job (TLS-116, `engine::batch::cache_guard`).
+    // A standalone run's write guard makes nothing (TLS-120, `cache_guard::standalone`).
     let text_dir = crate::snapshot::cache::cache_dir_path();
     let ir_dir = ir_dir_from_env(&text_dir);
     let verify = var("ALSEM_IR_CACHE_VERIFY").is_some_and(|v| v == "1");
@@ -207,30 +208,14 @@ fn ir_dir_from_env(text_dir: &std::path::Path) -> PathBuf {
         .map_or_else(|| text_dir.join("ir"), PathBuf::from)
 }
 
-/// TLS-120: the IR cache's `ir/` folder for a process outside a batch run, made now when the
-/// cache is on (no key needed: the folder is protected whether or not this process publishes
-/// in it). The installed cache's, else (a write before [`install_from_env`]: the trace file)
-/// the environment's.
-pub fn make_ir_root() -> PathBuf {
-    let (dir, on) = match INSTALLED.get() {
-        Some(c) => (c.ir_dir.clone(), c.is_on()),
-        None => {
-            let on = switch(
-                std::env::var_os("ALSEM_IR_CACHE")
-                    .filter(|v| !v.is_empty())
-                    .as_deref(),
-            )
-            .0;
-            (
-                ir_dir_from_env(&crate::snapshot::cache::cache_dir_path()),
-                on,
-            )
-        }
-    };
-    if on {
-        create_ir_dir(&dir);
-    }
-    dir
+/// TLS-120: the IR cache's `ir/` folder for a process outside a batch run, made nowhere (the
+/// folder is protected whether or not the cache is on): the installed cache's, else (a write
+/// before [`install_from_env`]: the trace file) the environment's.
+pub fn ir_root() -> PathBuf {
+    INSTALLED.get().map_or_else(
+        || ir_dir_from_env(&crate::snapshot::cache::cache_dir_path()),
+        |c| c.ir_dir.clone(),
+    )
 }
 
 /// Set when a batch run's snapshot turned the IR cache off for the run (TLS-116).

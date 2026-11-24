@@ -432,6 +432,41 @@ fn open_guarded(
     append: bool,
     refused: &dyn Fn(),
 ) -> std::io::Result<File> {
+    let f = open_checked(snap, path, append, refused)?;
+    if append {
+        blocking(&f)?;
+    }
+    Ok(f)
+}
+
+/// TLS-120: clear the `O_NONBLOCK` an append opened with ([`options`]), so
+/// its writes wait as a plain append's do and never drop a line with
+/// `WouldBlock`.
+#[cfg(unix)]
+fn blocking(f: &File) -> std::io::Result<()> {
+    use std::os::fd::AsRawFd;
+    let fd = f.as_raw_fd();
+    // SAFETY: `fd` is `f`'s, open for both calls; F_GETFL/F_SETFL take no
+    // pointer.
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    if flags < 0 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags & !libc::O_NONBLOCK) } < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn blocking(_f: &File) -> std::io::Result<()> {
+    Ok(())
+}
+
+/// [`open_guarded`]'s checks and open.
+fn open_checked(
+    snap: &super::cache_guard::Snapshot,
+    path: &Path,
+    append: bool,
+    refused: &dyn Fn(),
+) -> std::io::Result<File> {
     refuse_cache_path(snap, path).inspect_err(|_| refused())?;
     // A file this open makes is new: no cache file, whatever number it got.
     let f = match options(append).open(path) {
@@ -492,7 +527,8 @@ pub fn open_append(path: &Path) -> std::io::Result<File> {
 /// How [`open_guarded`] opens: to write, or to append. An append (the run's
 /// shared file) never waits: `O_NONBLOCK`, so a FIFO with no reader fails the
 /// open (`ENXIO`) instead of hanging it, and its type is checked before any
-/// write. A job's stream may be a pipe it writes as before (TLS-109).
+/// write; [`open_guarded`] then clears the flag, so its writes wait (TLS-120).
+/// A job's stream may be a pipe it writes as before (TLS-109).
 fn options(append: bool) -> OpenOptions {
     let mut o = OpenOptions::new();
     if append {
@@ -679,6 +715,46 @@ pub fn test_seam_after_preflight() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// TLS-120 r1: an append opens without waiting (`O_NONBLOCK`), then waits on its writes
+    /// as a plain append does: the open file's flags hold no `O_NONBLOCK`. A FIFO with a
+    /// reader (opened on another thread, so neither open waits for good) is the case where
+    /// it would matter.
+    ///
+    /// Discrimination (2026-11-24, r1): the `blocking(&f)?` call deleted: fails "blocking
+    /// writes"; restored, passes.
+    #[cfg(unix)]
+    #[test]
+    fn an_append_writes_blocking() {
+        use std::os::fd::AsRawFd;
+        let t = tempfile::tempdir().unwrap();
+        let fifo = t.path().join("fifo");
+        let c = std::ffi::CString::new(fifo.to_str().unwrap()).unwrap();
+        // SAFETY: a valid C string for the call's whole length.
+        assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0, "mkfifo");
+        let reader = {
+            let fifo = fifo.clone();
+            std::thread::spawn(move || {
+                let mut s = String::new();
+                std::io::Read::read_to_string(&mut File::open(fifo).unwrap(), &mut s).unwrap();
+                s
+            })
+        };
+        let snap = super::super::cache_guard::Snapshot::default();
+        let f = loop {
+            match open_guarded(&snap, &fifo, true, &|| {}) {
+                Ok(f) => break f,
+                // ENXIO: the reader has not opened yet.
+                Err(_) => std::thread::sleep(std::time::Duration::from_millis(5)),
+            }
+        };
+        // SAFETY: the fd is `f`'s, open for the call.
+        let flags = unsafe { libc::fcntl(f.as_raw_fd(), libc::F_GETFL) };
+        assert_eq!(flags & libc::O_NONBLOCK, 0, "blocking writes");
+        (&f).write_all(b"line\n").unwrap();
+        drop(f);
+        assert_eq!(reader.join().unwrap(), "line\n");
+    }
 
     /// TLS-116: the guards of the shared file's registration ([`register_in`]),
     /// each against a hand-made snapshot of a cache folder holding one entry.

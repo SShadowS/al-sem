@@ -4132,6 +4132,22 @@ fn plan_events_chains(c: EventsChainsCli) -> Planned {
 // ── cache prune command ─────────────────────────────────────────────────────
 
 fn run_cache_prune_cmd(c: CachePruneCli) -> ExitCode {
+    // TLS-120: prune deletes files it does not recognise, so it never runs in a cache folder
+    // of the engine (a mapped text entry would be unlinked under its readers).
+    if let Some(dir) = &c.dep_cache_dir {
+        let why = match al_sem::engine::batch::cache_guard::refuses_dir(std::path::Path::new(dir)) {
+            Ok(None) => None,
+            Ok(Some(why)) => Some(why.to_string()),
+            Err(e) => Some(e.to_string()),
+        };
+        if let Some(why) = why {
+            let _ = al_sem::engine::batch::output::write_stderr(
+                format!("al-sem: cache prune: refused: --dep-cache-dir {dir}: {why} (TLS-120)\n")
+                    .as_bytes(),
+            );
+            return ExitCode::from(1);
+        }
+    }
     let result = prune_cache(c.dep_cache_dir.as_deref(), c.dry_run);
     let report = format_prune_report(&result, c.dry_run);
     match write_stdout(report, 1) {

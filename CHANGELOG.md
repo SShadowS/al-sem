@@ -23,27 +23,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that enters one, a cache file under any name). The file is opened without truncation and
   truncated only after its handle has passed. A refused write is the command's usual write error
   (`al-sem: write error: <path>: refused: ... (TLS-116)`, exit 1; 2 for analyze).
-- **Cost.** A standalone process takes its own snapshot at its first write: the same folders,
-  made the same way (the text folder always, the IR folder when the IR cache is on), but it
-  records only their directories, so no file is stat'ed. A file is looked up in the cache folders
-  only when its open finds it may have another name: more than one link, or a mount of its own
-  (`statx` `STATX_ATTR_MOUNT_ROOT`; every existing file on Windows). A batch run's whole walk
-  costs 0.4 s on server1's real cache. A common `--out` (one link) skips the lookup.
-- **Not protected, on purpose.** The impact-base cache (`~/.al-sem/cache/impact-base/v2`) reads
-  each entry whole and checks its blake3. A clobbered entry is deleted and rebuilt, and nothing
-  maps it. Its prune removes only `.ib` and `.tmp.` names. The dependency-artifact cache that
-  `cache prune --dep-cache-dir` reads (`~/.al-sem/cache/`) is no longer written by the engine.
-  `cache prune` checks each artifact's content hash before keeping it.
-- **Races.** These are TLS-116's: the folder tests go by path, and an alias another process
-  makes between the checks and the open is not caught. The identity test is on the open handle,
-  before truncation.
-- **Tests** (`tests/cli/cli_ir_cache.rs`, real `alsem`/`aldump` processes;
-  `cache_guard::tests`): a standalone `--out` that is the IR entry, the text entry, a hard link
-  to either, a new name through a symlinked parent, or a spelling through the IR folder is
-  refused with the entries untouched (and a plain and a second-link `--out` are written); shard
-  directories in either folder; a trace file linked to the text entry; `aldump --switch-dump`
-  into the IR folder; and a bind-mounted file counted as may-have-another-name. Each has a
-  discrimination proof in its doc.
+- **Which folders.** The text cache folder, the IR cache's folder (also an `ALSEM_IR_CACHE_DIR`
+  outside it), and the impact-base cache's `work/` (live copies of base workspaces, which a
+  running impact reads). A standalone run makes none of them (`alsem batch` still makes the
+  first two, as before). A folder that does not exist holds nothing to alias. But a path under
+  where it would be (its existing part resolved) is refused, so no shard directory makes a cache
+  folder that the cache would later adopt.
+- **Cost.** A standalone process takes its own snapshot at its first write. It lists every
+  entry of the folders but stats only the directories (the listing's own file type; a file
+  system without `d_type` stats every entry). A file is looked up in the folders only when its
+  open finds it may have another name: more than one link, or a mount of its own (`statx`
+  `STATX_ATTR_MOUNT_ROOT`; on Windows, `nNumberOfLinks` above 1). That lookup walks the files once
+  per process. Measured on server1's real caches (153,575 entries, `release-fast`, 5 runs each,
+  a busy host): the snapshot added 34-48 ms to a `cache prune` run (54, 53, 41, 43, 40 ms
+  against 6 ms with no cache); an `--out` with a second link took 268-405 ms against 53-68 ms
+  for an `--out` with one link (the files walk).
+- **An unreadable part of a cache blocks only the writes that need it.** The snapshot skips a
+  folder it cannot list; the folder test still knows every cache folder. Only a lookup (a file
+  with another name) that cannot list a folder refuses its write, naming that folder.
+- **Appends wait.** An append (the IR report, the cones schedule, and the batch run's shared
+  report) still opens with `O_NONBLOCK`, so a FIFO with no reader fails at once. The flag is then
+  cleared, so its writes wait and never drop a line.
+- **`cache prune --dep-cache-dir`** refuses a folder that is, or lies in, a cache folder (exit 1):
+  prune deletes every file it does not recognise, a mapped text entry and the `.lock` files
+  included. A folder that contains one is not refused: prune touches only the files at its top
+  level and skips folders, and the default `~/.al-sem/cache/` contains the impact-base cache.
+- **Not protected, on purpose.** The impact-base cache's entries (`~/.al-sem/cache/impact-base/v2`,
+  outside `work/`) are read whole and their blake3 checked. A clobbered entry is deleted and
+  rebuilt, and nothing maps it. Its prune removes only `.ib` and `.tmp.` names. The
+  dependency-artifact cache that `cache prune` reads (`~/.al-sem/cache/`) is no longer written by
+  the engine. `cache prune` checks each artifact's content hash before keeping it.
+- **Races and what stays open.** The races are TLS-116's: the folder tests go by path, and an
+  alias another process makes between the checks and the open is not caught. The identity test is
+  on the open handle, before truncation. Not caught, each needing a walk at every write or
+  outside knowledge:
+  - a cache entry moved out of its folder by hand while mapped (one link, no longer in a cache
+    folder);
+  - a deleted entry still mapped, opened through a `/proc/<pid>/fd` link (no name left);
+  - in a long-lived process, a cache folder deleted and made again after its snapshot (new
+    identities);
+  - a file on an overlayfs lower layer that a cache entry shares.
+- **Tests** (`tests/cli/cli_ir_cache.rs`, real `alsem`/`aldump` processes; `cache_guard::tests`,
+  `claim::tests`). Each has a discrimination proof in its doc.
+  - A standalone `--out` that is the IR entry, the text entry, a hard link to either, a new name
+    through a symlinked parent, or a spelling through the IR folder is refused with the entries
+    untouched. A plain `--out` and a second-link `--out` are written.
+  - Shard directories in either folder.
+  - The trace file, the IR report and the cones schedule linked to the text entry.
+  - Every `aldump` mode that writes: `--switch-dump` (its folder and its files), `--pd-dump`,
+    `--dump-dependency-source`, and `--session-refresh` (its source edits and its `app.json`
+    edit).
+  - An unlistable cache subfolder, with one-link and two-link `--out`s.
+  - A missing IR folder that no write makes.
+  - `cache prune` in the text folder and in the IR folder.
+  - An `--out` in, and linked into, the impact-base `work/`.
+  - A bind-mounted file counted as may-have-another-name (each half skipped where the host
+    cannot show it).
+  - An append that waits.
+  - Windows: `cargo check --target x86_64-pc-windows-gnu --lib --bins` passes; nothing ran there.
 
 ### Fixed (ENG-178: table procedures named like record built-ins: four follow-ups from ENG-173)
 

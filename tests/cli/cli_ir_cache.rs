@@ -1586,37 +1586,414 @@ fn standalone_trace_is_never_a_cache_file() {
         stderr.contains("perf_trace: cannot create") && stderr.contains("(TLS-116)"),
         "{stderr}"
     );
-    assert_eq!(std::fs::read(&text_entry).unwrap(), before, "untouched");
+    assert!(std::fs::read(&text_entry).unwrap() == before, "untouched");
 }
 
 /// TLS-120: `aldump`'s outputs take the same guard. `aldump --switch-dump <ws> <dir>` with
-/// `<dir>` in the IR folder fails and makes nothing there.
+/// `<dir>` in the IR folder fails and makes nothing there ("(folder)"); a dump folder outside
+/// the caches whose `<name>.txt` is a hard link to the text entry fails and leaves the entry
+/// as it was ("(file)").
 ///
 /// Discrimination (2026-11-24): `switch_dump::write_dump`'s `claim::make_dir(dir)` back to
-/// `create_dir_all(dir)` (its files still through `write_outside`): fails (the folder was
-/// made); restored, passes.
+/// `create_dir_all(dir)` (its files still through `write_outside`): fails "(folder)" (the
+/// folder was made); restored, passes. (r1) Its file write back to `std::fs::write`: fails
+/// "(file)" (exit 0); restored, passes.
 #[test]
 fn aldump_switch_dump_stays_out_of_cache_folders() {
     let f = fixture();
-    warm(&f);
+    let (_, text_entry) = warm_entries(&f);
+    let ws = f.ws.to_str().unwrap();
     let dir = f.root.join("dump");
-    let out = Command::new(env!("CARGO_BIN_EXE_aldump"))
-        .args([
-            "--switch-dump",
-            f.ws.to_str().unwrap(),
-            dir.to_str().unwrap(),
-        ])
+    let out = aldump(&f, &["--switch-dump", ws, dir.to_str().unwrap()], &[]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "(folder): {stderr}");
+    assert!(
+        stderr.contains("is in a cache folder of the engine (TLS-116)"),
+        "(folder): {stderr}"
+    );
+    assert!(!dir.exists(), "(folder): nothing made");
+    let d = tempfile::tempdir().unwrap();
+    let plain = d.path().join("plain");
+    let out = aldump(&f, &["--switch-dump", ws, plain.to_str().unwrap()], &[]);
+    assert!(out.status.success(), "precondition: a plain dump: {out:?}");
+    let name = std::fs::read_dir(&plain)
+        .unwrap()
+        .map(|e| e.unwrap().file_name())
+        .min()
+        .expect("precondition: a dump file");
+    let linked = d.path().join("linked");
+    std::fs::create_dir(&linked).unwrap();
+    std::fs::hard_link(&text_entry, linked.join(&name)).unwrap();
+    let before = std::fs::read(&text_entry).unwrap();
+    let out = aldump(&f, &["--switch-dump", ws, linked.to_str().unwrap()], &[]);
+    assert_aldump_refused("(file)", &out, "is a file of the engine's caches");
+    assert!(
+        std::fs::read(&text_entry).unwrap() == before,
+        "(file): untouched"
+    );
+}
+
+/// TLS-120 r1: a standalone `aldump <args>` with `f`'s caches and `env` added.
+fn aldump(f: &Fixture, args: &[&str], env: &[(&str, &str)]) -> Output {
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_aldump"));
+    cmd.args(args)
         .env("RUST_LOG", "off")
         .env("XDG_CACHE_HOME", &f.xdg)
         .env("ALSEM_IR_CACHE", "on")
-        .env("ALSEM_IR_CACHE_DIR", &f.root)
-        .output()
-        .unwrap();
+        .env("ALSEM_IR_CACHE_DIR", &f.root);
+    for (k, v) in env {
+        cmd.env(k, v);
+    }
+    cmd.output().unwrap()
+}
+
+/// An `aldump` run that failed with `why` and TLS-116 on its stderr.
+fn assert_aldump_refused(case: &str, out: &Output, why: &str) {
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(!out.status.success(), "{stderr}");
+    assert!(!out.status.success(), "{case}: {stderr}");
     assert!(
-        stderr.contains("is in a cache folder of the engine (TLS-116)"),
+        stderr.contains(why) && stderr.contains("(TLS-116)"),
+        "{case}: {stderr}"
+    );
+}
+
+/// TLS-120 r1: `aldump --snapshot-memory <ws> --pd-dump <file>` with `<file>` a hard link to
+/// the text entry fails and leaves the entry as it was.
+///
+/// Discrimination (2026-11-24, r1): the `--pd-dump` write back to `std::fs::write`: fails
+/// (exit 0); restored, passes.
+#[test]
+fn aldump_pd_dump_is_never_a_cache_file() {
+    let f = fixture();
+    let (_, text_entry) = warm_entries(&f);
+    let d = tempfile::tempdir().unwrap();
+    let dump = d.path().join("pd.txt");
+    std::fs::hard_link(&text_entry, &dump).unwrap();
+    let before = std::fs::read(&text_entry).unwrap();
+    let args = [
+        "--snapshot-memory",
+        f.ws.to_str().unwrap(),
+        "--pd-dump",
+        dump.to_str().unwrap(),
+    ];
+    let out = aldump(&f, &args, &[]);
+    assert_aldump_refused("(pd-dump)", &out, "is a file of the engine's caches");
+    assert!(std::fs::read(&text_entry).unwrap() == before, "untouched");
+}
+
+/// TLS-120 r1: `aldump --dump-dependency-source <ws> <out>` whose first source file's name
+/// under `<out>` is a hard link to the text entry fails and leaves the entry as it was (its
+/// folders, outside the caches, pass).
+///
+/// Discrimination (2026-11-24, r1): the source write back to `std::fs::write`: fails (exit
+/// 0); restored, passes.
+#[test]
+fn aldump_dependency_source_is_never_a_cache_file() {
+    let f = fixture();
+    let (_, text_entry) = warm_entries(&f);
+    let ws = f.ws.to_str().unwrap();
+    let d = tempfile::tempdir().unwrap();
+    let plain = d.path().join("plain");
+    let out = aldump(
+        &f,
+        &["--dump-dependency-source", ws, plain.to_str().unwrap()],
+        &[],
+    );
+    assert!(out.status.success(), "precondition: a plain dump: {out:?}");
+    let mut files: Vec<PathBuf> = walkdir::WalkDir::new(&plain)
+        .into_iter()
+        .map(|e| e.unwrap().into_path())
+        .filter(|p| p.is_file())
+        .collect();
+    files.sort();
+    let first = files.first().expect("precondition: a dumped file");
+    let linked = d
+        .path()
+        .join("linked")
+        .join(first.strip_prefix(&plain).unwrap());
+    std::fs::create_dir_all(linked.parent().unwrap()).unwrap();
+    std::fs::hard_link(&text_entry, &linked).unwrap();
+    let before = std::fs::read(&text_entry).unwrap();
+    let out_dir = d.path().join("linked");
+    let out = aldump(
+        &f,
+        &["--dump-dependency-source", ws, out_dir.to_str().unwrap()],
+        &[],
+    );
+    assert_aldump_refused("(source)", &out, "is a file of the engine's caches");
+    assert!(std::fs::read(&text_entry).unwrap() == before, "untouched");
+}
+
+/// TLS-120 r1: `aldump --session-refresh` edits its workspace copy through the guard. "(source
+/// edit)": a copy inside the IR folder is refused at its first edit of the source file.
+/// "(app.json)": a copy outside the caches whose `app.json` is a hard link to a file in the
+/// impact-base cache's `work/` is refused at its `app.json` edit (the source edits before it
+/// pass), and that file is as it was.
+///
+/// Discrimination (2026-11-24, r1): the copy's source `write` back to `std::fs::write`: fails
+/// "(source edit)" (the refusal came at `write app.json` instead); restored, passes. The
+/// `app.json` edit back to `std::fs::write`: fails "(app.json)" (the refusal came at its
+/// restore instead); restored, passes.
+#[test]
+fn aldump_session_refresh_edits_stay_out_of_cache_folders() {
+    let f = fixture();
+    warm(&f);
+    let copy_to = |copy: &Path| {
+        std::fs::create_dir_all(copy.join("src")).unwrap();
+        std::fs::create_dir_all(copy.join(".alpackages")).unwrap();
+        std::fs::copy(f.ws.join("src/Ws.al"), copy.join("src/Ws.al")).unwrap();
+        for e in std::fs::read_dir(f.ws.join(".alpackages")).unwrap() {
+            let p = e.unwrap().path();
+            std::fs::copy(&p, copy.join(".alpackages").join(p.file_name().unwrap())).unwrap();
+        }
+    };
+    let copy = f.root.join("ws-copy");
+    copy_to(&copy);
+    std::fs::copy(f.ws.join("app.json"), copy.join("app.json")).unwrap();
+    let out = aldump(&f, &["--session-refresh", copy.to_str().unwrap()], &[]);
+    assert_aldump_refused("(source edit)", &out, "is in a cache folder of the engine");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("write the workspace copy"),
+        "(source edit): {stderr}"
+    );
+    let d = tempfile::tempdir().unwrap();
+    let ib = d.path().join("ib");
+    std::fs::create_dir_all(ib.join("work/base")).unwrap();
+    let held = ib.join("work/base/app.json");
+    std::fs::copy(f.ws.join("app.json"), &held).unwrap();
+    let before = std::fs::read(&held).unwrap();
+    let copy = d.path().join("ws-copy");
+    copy_to(&copy);
+    std::fs::hard_link(&held, copy.join("app.json")).unwrap();
+    let out = aldump(
+        &f,
+        &["--session-refresh", copy.to_str().unwrap()],
+        &[("AL_SEM_IMPACT_BASE_CACHE", ib.to_str().unwrap())],
+    );
+    assert_aldump_refused("(app.json)", &out, "is a file of the engine's caches");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("write app.json"), "(app.json): {stderr}");
+    assert!(
+        std::fs::read(&held).unwrap() == before,
+        "(app.json): untouched"
+    );
+}
+
+/// TLS-120 r1: the IR cache report of a standalone run never lands on a cache file. With
+/// `ALSEM_IR_CACHE_REPORT` a hard link to the text entry, `analyze` succeeds and the entry is
+/// as it was (the refused report is a warning).
+///
+/// Discrimination (2026-11-24, r1): `append_shared` outside a batch back to a plain append
+/// (`OpenOptions::new().append(true).create(true).open(path)`): fails "untouched" (the lines
+/// were appended to the entry); restored, passes.
+#[test]
+fn standalone_ir_report_is_never_a_cache_file() {
+    let f = fixture();
+    let (_, text_entry) = warm_entries(&f);
+    let d = tempfile::tempdir().unwrap();
+    let rep = d.path().join("report.jsonl");
+    std::fs::hard_link(&text_entry, &rep).unwrap();
+    let before = std::fs::read(&text_entry).unwrap();
+    let ws = f.ws.to_str().unwrap();
+    let out = alone(
+        &f,
+        &["analyze", ws, "--format", "json"],
+        &[("ALSEM_IR_CACHE_REPORT", rep.to_str().unwrap())],
+    );
+    assert!(out.status.code().is_some(), "{out:?}");
+    assert!(std::fs::read(&text_entry).unwrap() == before, "untouched");
+}
+
+/// TLS-120 r1: the cones census's schedule file is never a cache file. With
+/// `ALSEM_CONES_CENSUS=1`, a plain `ALSEM_CONES_SCHEDULE_FILE` is written (the positive
+/// control: the walk reaches it); one that is a hard link to the text entry is refused (its
+/// stderr line) and the entry is as it was.
+///
+/// Discrimination (2026-11-24, r1): the schedule's open back to a plain append: fails (no
+/// refusal line); restored, passes.
+#[test]
+fn standalone_cones_schedule_is_never_a_cache_file() {
+    let f = fixture();
+    let (_, text_entry) = warm_entries(&f);
+    let d = tempfile::tempdir().unwrap();
+    let ws = f.ws.to_str().unwrap();
+    let run = |file: &Path| {
+        alone(
+            &f,
+            &["analyze", ws, "--format", "json"],
+            &[
+                ("ALSEM_CONES_CENSUS", "1"),
+                ("ALSEM_CONES_SCHEDULE_FILE", file.to_str().unwrap()),
+            ],
+        )
+    };
+    let plain = d.path().join("plain.txt");
+    run(&plain);
+    assert!(
+        std::fs::read_to_string(&plain).is_ok_and(|s| s.starts_with("walk ")),
+        "precondition: the schedule is written"
+    );
+    let linked = d.path().join("linked.txt");
+    std::fs::hard_link(&text_entry, &linked).unwrap();
+    let before = std::fs::read(&text_entry).unwrap();
+    let out = run(&linked);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("[cones-census] schedule file") && stderr.contains("(TLS-116)"),
         "{stderr}"
     );
-    assert!(!dir.exists(), "nothing made");
+    assert!(std::fs::read(&text_entry).unwrap() == before, "untouched");
+}
+
+/// TLS-120 r1: a cache subfolder that cannot be listed (mode 000) blocks no write that needs
+/// no lookup: a plain `--out` (one link) is written. A write that needs the lookup (an
+/// `--out` with a second link) cannot be checked and is refused, naming the folder.
+///
+/// Discrimination (2026-11-24, r1): the folders-only walk strict again (`|| !files` dropped
+/// from `walk`'s listing error): fails "(one link)" (exit 1, not 0); restored, passes. A
+/// failed lookup taken as "no cache file" (`holds_file` returning `false` on `whole`'s
+/// error): fails "(two links)" (exit 0); restored, passes.
+#[test]
+fn standalone_unlistable_folder_blocks_only_a_lookup() {
+    use std::os::unix::fs::PermissionsExt;
+    let f = fixture();
+    warm(&f);
+    let locked = f.xdg.join("al-ch-snapshot-cache/locked");
+    std::fs::create_dir(&locked).unwrap();
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+    assert!(
+        std::fs::read_dir(&locked).is_err(),
+        "precondition: the folder cannot be listed"
+    );
+    let d = tempfile::tempdir().unwrap();
+    let one = d.path().join("one.json");
+    let out_one = fanout_out(&f, &one);
+    let two = d.path().join("two.json");
+    std::fs::write(&two, "OLD").unwrap();
+    std::fs::hard_link(&two, d.path().join("two-link.json")).unwrap();
+    let out_two = fanout_out(&f, &two);
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!(out_one.status.code(), Some(0), "(one link): {out_one:?}");
+    assert!(
+        std::fs::metadata(&one).unwrap().len() > 0,
+        "(one link): written"
+    );
+    let stderr = String::from_utf8_lossy(&out_two.stderr);
+    assert_eq!(out_two.status.code(), Some(1), "(two links): {stderr}");
+    assert!(
+        stderr.contains("cannot list the cache folder") && stderr.contains("locked"),
+        "(two links): {stderr}"
+    );
+    assert_eq!(
+        std::fs::read(&two).unwrap(),
+        b"OLD",
+        "(two links): untouched"
+    );
+}
+
+/// TLS-120 r1: a missing cache folder is made by no write. With the IR folder missing (the
+/// cache off, so nothing makes it), a plain `--out` makes no folder there, and a shard
+/// directory spelled inside it (or as it) is refused and not made.
+///
+/// Discrimination (2026-11-24, r1): the missing-folder test off (`.any(..)` made `false` in
+/// `link_hops`): fails "(inside)" (the folder was made); restored, passes.
+#[test]
+fn standalone_write_makes_no_missing_cache_folder() {
+    let f = fixture();
+    let d = tempfile::tempdir().unwrap();
+    let ir = d.path().join("ir-missing");
+    let env = [
+        ("ALSEM_IR_CACHE", "off"),
+        ("ALSEM_IR_CACHE_DIR", ir.to_str().unwrap()),
+    ];
+    let ws = f.ws.to_str().unwrap();
+    let ok = d.path().join("ok.json");
+    let o = ok.to_str().unwrap();
+    let out = alone(
+        &f,
+        &["events", "fanout", ws, "--single-app", "--out", o],
+        &env,
+    );
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    assert!(!ir.exists(), "a plain --out makes no cache folder");
+    for (case, dir) in [("(inside)", ir.join("sh")), ("(as it)", ir.clone())] {
+        let o = dir.to_str().unwrap();
+        let out = alone(&f, &["fingerprint", ws, "--shard", "all", "--out", o], &env);
+        assert_write_refused(case, &out, "is in a cache folder of the engine");
+        assert!(!ir.exists(), "{case}: nothing made");
+    }
+}
+
+/// TLS-120 r1: `cache prune --dep-cache-dir` never runs in a cache folder: the text folder,
+/// or a folder inside the IR folder, is refused (exit 1) and every entry stays; an ordinary
+/// folder is pruned as before.
+///
+/// Discrimination (2026-11-24, r1): the refusal skipped (`if let Some(dir)` made `if false`
+/// in `run_cache_prune_cmd`): fails "(text)" (exit 0, entries removed); restored, passes.
+#[test]
+fn cache_prune_refuses_a_cache_folder() {
+    let f = fixture();
+    let (ir_entry, text_entry) = warm_entries(&f);
+    let d = tempfile::tempdir().unwrap();
+    let prune = |dir: &Path| {
+        alone(
+            &f,
+            &["cache", "prune", "--dep-cache-dir", dir.to_str().unwrap()],
+            &[],
+        )
+    };
+    let out = prune(d.path());
+    assert_eq!(out.status.code(), Some(0), "an ordinary folder: {out:?}");
+    for (case, dir) in [
+        ("(text)", text_entry.parent().unwrap()),
+        ("(inside ir)", ir_entry.parent().unwrap()),
+    ] {
+        let out = prune(dir);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(1), "{case}: {stderr}");
+        assert!(stderr.contains("(TLS-120)"), "{case}: {stderr}");
+        assert!(
+            ir_entry.exists() && text_entry.exists(),
+            "{case}: entries kept"
+        );
+    }
+}
+
+/// TLS-120 r1: the impact-base cache's `work/` (live base-workspace copies) takes the same
+/// guard: an `--out` inside it, or a hard link to a file in it, is refused and the file is as
+/// it was.
+///
+/// Discrimination (2026-11-24, r1): `work/` left out of the standalone roots: fails
+/// "(inside)" (exit 0); restored, passes.
+#[test]
+fn standalone_out_stays_out_of_impact_work() {
+    let f = fixture();
+    let d = tempfile::tempdir().unwrap();
+    let ib = d.path().join("ib");
+    let copy = ib.join("work/base-1");
+    std::fs::create_dir_all(&copy).unwrap();
+    let held = copy.join("A.al");
+    std::fs::write(&held, "codeunit 1 A { }").unwrap();
+    let link = d.path().join("link.json");
+    std::fs::hard_link(&held, &link).unwrap();
+    let ws = f.ws.to_str().unwrap();
+    for (case, path, why) in [
+        (
+            "(inside)",
+            copy.join("x.json"),
+            "is in a cache folder of the engine",
+        ),
+        ("(a hard link)", link, "is a file of the engine's caches"),
+    ] {
+        let o = path.to_str().unwrap();
+        let out = alone(
+            &f,
+            &["events", "fanout", ws, "--single-app", "--out", o],
+            &[("AL_SEM_IMPACT_BASE_CACHE", ib.to_str().unwrap())],
+        );
+        assert_write_refused(case, &out, why);
+        assert_eq!(std::fs::read(&held).unwrap(), b"codeunit 1 A { }", "{case}");
+    }
+    assert!(!copy.join("x.json").exists());
 }
