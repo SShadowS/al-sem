@@ -229,14 +229,16 @@ impl ProgramGraph {
 
     /// Resolve `(kind, name)` as seen FROM `from` — fail-closed (I1).
     ///
-    /// Search order:
-    /// 1. An object declared in `from` itself always wins (own-app shadow) —
-    ///    short-circuits before any cross-app ambiguity check.
-    /// 2. Otherwise, exactly ONE match among `from`'s dependency closure
-    ///    resolves; more than one VISIBLE dependency match is an unprovable
-    ///    cross-app collision and this DECLINES (`None`) rather than guessing
-    ///    — a confident WRONG pick (the old lowest-`ObjectNodeId` tiebreak) is
-    ///    the cardinal sin (I1: a false `Source` route).
+    /// Exactly ONE match among `from`'s dependency closure, `from` itself
+    /// included and NOT preferred (ENG-193: alc ranks no app first by name; an
+    /// own-app shadow bound the workspace's `W.X` where `namespace C; using A;`
+    /// binds a dependency's `A.X`, a false `Source` route). More than one
+    /// visible match is an unprovable collision and this DECLINES (`None`)
+    /// rather than guessing — a confident WRONG pick is the cardinal sin (I1).
+    /// An object declared `ObsoleteState = Moved`/`Removed`
+    /// ([`ObjectNode::obsolete_gone`]) counts only when no other match is
+    /// visible, as in `ResolveIndex::build` (Base Application's `Moved` stub of
+    /// `No. Series` gives way to Business Foundation's table).
     ///
     /// An app that is **not** in `from`'s transitive dependency closure is
     /// never matched — topology-scoped, never flat-global.
@@ -247,40 +249,27 @@ impl ProgramGraph {
         name: &str,
     ) -> Option<&ObjectNode> {
         let name_lc = name.fold_identifier();
-
-        // Prefer `from` itself — short-circuit before building the full closure.
-        if let Some(&idx) = self
-            .obj_index
-            .by_app_kind_name
-            .get(&(from, kind, name_lc.clone()))
-        {
-            return Some(&self.objects[idx]);
+        // `by_app_kind_name` holds at most one entry per `(app, kind, name_lc)`
+        // (first/lowest-id wins on a same-app duplicate — `ObjectIndex::build`),
+        // so at most one match comes from any single app.
+        let mut found: Vec<usize> = self
+            .topology
+            .closure(from)
+            .into_iter()
+            .filter_map(|app| {
+                self.obj_index
+                    .by_app_kind_name
+                    .get(&(app, kind, name_lc.clone()))
+                    .copied()
+            })
+            .collect();
+        if found.iter().any(|&i| !self.objects[i].obsolete_gone) {
+            found.retain(|&i| !self.objects[i].obsolete_gone);
         }
-
-        // No own-app declaration: search the rest of the closure. More than
-        // one VISIBLE dependency match is ambiguous — decline rather than
-        // pick the lowest `ObjectNodeId`. `by_app_kind_name` already holds at
-        // most one entry per `(app, kind, name_lc)` (first/lowest-id wins on
-        // a same-app duplicate — see `ObjectIndex::build`), so at most one
-        // match can come from any single app in the closure.
-        let closure = self.topology.closure(from);
-        let mut found: Option<usize> = None;
-        for &app in &closure {
-            if app == from {
-                continue;
-            }
-            if let Some(&idx) = self
-                .obj_index
-                .by_app_kind_name
-                .get(&(app, kind, name_lc.clone()))
-            {
-                if found.is_some() {
-                    return None; // >1 dependency declares this (kind, name) — decline.
-                }
-                found = Some(idx);
-            }
+        match found.as_slice() {
+            [i] => Some(&self.objects[*i]),
+            _ => None,
         }
-        found.map(|i| &self.objects[i])
     }
 
     /// [`Self::resolve_object`] for an object named by NUMBER (an
@@ -420,14 +409,17 @@ mod tests {
 
     #[test]
     fn resolve_object_is_topology_scoped_not_global() {
-        // App A depends on B. Both define codeunit "Util". A call from A must
-        // resolve to A's own Util (nearest), and B cannot see A's Util at all.
+        // App A depends on B. Both define codeunit "Util". From A both are
+        // visible and neither is preferred (ENG-193: no own-app shadow), so A
+        // declines; B cannot see A's Util at all, so B resolves its own.
         let g = build_two_app_fixture();
         let a = g.app_ref_by_name("AppA");
         let b = g.app_ref_by_name("AppB");
 
-        let from_a = g.resolve_object(a, ObjectKind::Codeunit, "Util").unwrap();
-        assert_eq!(from_a.id.app, a, "A resolves its own Util");
+        assert!(
+            g.resolve_object(a, ObjectKind::Codeunit, "Util").is_none(),
+            "A sees two Utils: declines"
+        );
 
         let from_b = g.resolve_object(b, ObjectKind::Codeunit, "Util").unwrap();
         assert_eq!(from_b.id.app, b, "B resolves its own Util, never A's");
@@ -538,21 +530,46 @@ mod tests {
         );
     }
 
+    /// ENG-193: AppA declares its own "OwnShadow" and its dependency AppB a
+    /// same-name table. alc ranks no app first (a file's `namespace`/`using`
+    /// may bind B's), so A declines. Discrimination: the old own-app shortcut
+    /// restored resolves A's.
     #[test]
-    fn resolve_object_own_app_shadow_survives_dependency_collision() {
-        // AppA declares its own "OwnShadow"; AppB ALSO declares a same-name
-        // table — A's own declaration must still win outright (own-app
-        // shadow preserved even though a dependency collision exists too).
+    fn resolve_object_own_and_dependency_of_one_name_decline() {
         let g = build_three_app_ambiguous_fixture();
         let a = g.app_ref_by_name("AppA");
-        let b = g.app_ref_by_name("AppB");
-
-        let resolved = g.resolve_object(a, ObjectKind::Table, "OwnShadow").unwrap();
-        assert_eq!(
-            resolved.id.app, a,
-            "own-app declaration must shadow a colliding dependency"
+        assert!(
+            g.resolve_object(a, ObjectKind::Table, "OwnShadow")
+                .is_none(),
+            "an own and a dependency object of one name: decline"
         );
-        assert_ne!(resolved.id.app, b);
+    }
+
+    /// ENG-193: an own object declared `ObsoleteState = Moved`
+    /// (`obsolete_gone`) gives way to the dependency's live object of its name
+    /// (Base Application's `No. Series` stub and Business Foundation's table).
+    /// Discrimination: dropping the `obsolete_gone` filter in `resolve_object`
+    /// makes it decline.
+    #[test]
+    fn resolve_object_a_moved_own_stub_gives_way_to_the_live_object() {
+        let mut g = build_three_app_ambiguous_fixture();
+        let a = g.app_ref_by_name("AppA");
+        let b = g.app_ref_by_name("AppB");
+        let objects: Vec<ObjectNode> = g
+            .objects
+            .iter()
+            .cloned()
+            .map(|mut o| {
+                if o.id.app == a && o.name.eq_ignore_ascii_case("OwnShadow") {
+                    o.obsolete_gone = true;
+                }
+                o
+            })
+            .collect();
+        g.obj_index = ObjectIndex::build(&objects);
+        g.objects = objects.into();
+        let resolved = g.resolve_object(a, ObjectKind::Table, "OwnShadow").unwrap();
+        assert_eq!(resolved.id.app, b, "the live dependency table binds");
     }
 
     #[test]

@@ -637,7 +637,7 @@ impl ResolveIndex {
         // reference while another of its name or number exists
         // (`ObjectNode::obsolete_gone`): Base Application's `Moved` stub of
         // `No. Series` gives way to Business Foundation's table, for its own
-        // code (the own-app shadow) and for every app that sees both.
+        // code and for every app that sees both.
         let gone: HashSet<&ObjectNodeId> = graph
             .objects
             .iter()
@@ -731,7 +731,8 @@ impl ResolveIndex {
     /// Resolve an object by its **numeric AL id** as seen from `from`
     /// ([`WorldMode::CallerClosure`]) — fail-closed (I1).
     ///
-    /// Search order mirrors [`ProgramGraph::resolve_object`]:
+    /// Search order (by NUMBER: object ids are unique across installed apps, so
+    /// the own app may win here, unlike a name, ENG-193):
     /// 1. `from` itself always wins (own-app shadow), short-circuiting before
     ///    computing the closure.
     /// 2. Otherwise, exactly ONE `(kind, declared_id)` match among `from`'s
@@ -801,11 +802,13 @@ impl ResolveIndex {
     ///   surface even though a real compile never would — is `Ambiguous` only
     ///   when NEITHER is `from` itself.
     /// - [`ObjectRef::Name`] matches by `kind` + lowercased name within the
-    ///   closure via [`Self::objects_by_name`]. An object declared in `from`'s
-    ///   OWN app always wins over any dependency's same-named object (AL's
-    ///   own-app lookup priority — mirrors the self-preference already applied
-    ///   by `object_by_number`/`resolve_object`), so two dependencies sharing a
-    ///   name is `Ambiguous` only when NEITHER is `from` itself.
+    ///   closure via [`Self::objects_by_name`], `from`'s own app included and NOT
+    ///   preferred (ENG-193): alc ranks no app first by name. Without namespaces
+    ///   an own and a dependency object of one name never compile together
+    ///   unqualified (AL0275 at the reference), and with namespaces the file's
+    ///   `namespace`/`using` decide, so the own app's object may be the wrong one
+    ///   (`namespace C; using A;` binds the dependency's `A.X` over the own
+    ///   `W.X`). One visible candidate is `Unique`, more `Ambiguous`.
     /// - When the ref matches no declared object anywhere in the whole
     ///   snapshot, the result is [`ObjectRefResolution::Unresolved`]. When it
     ///   matches a declared object whose app is outside `from`'s closure, the
@@ -865,12 +868,8 @@ impl ResolveIndex {
                 if candidates.is_empty() {
                     return ObjectRefResolution::Unresolved;
                 }
-                // Own-app shadow: `from`'s own declaration always wins over any
-                // dependency's same-named object — short-circuits before
-                // ambiguity among dependencies is even considered.
-                if let Some(own) = candidates.iter().find(|oid| oid.app == from.app) {
-                    return ObjectRefResolution::Unique(own.clone());
-                }
+                // No own-app shadow (ENG-193): the own app's object competes with
+                // every other visible one.
                 let in_closure: Vec<&ObjectNodeId> = candidates
                     .iter()
                     .filter(|oid| closure.contains(&oid.app))
@@ -2443,22 +2442,17 @@ mod tests {
         assert_eq!(res, ObjectRefResolution::Ambiguous);
     }
 
+    /// ENG-193: "Shared" is declared in BOTH A (id 500, `from`'s own app) and
+    /// its dependency B (id 501). alc ranks no app first: with namespaces the
+    /// file's `namespace`/`using` may bind B's (`namespace C; using B;`), so
+    /// the own app must not shadow. Discrimination: the old own-app shortcut
+    /// restored answers `Unique(500)`.
     #[test]
-    fn resolve_object_ref_name_own_app_shadows_dependency() {
+    fn resolve_object_ref_name_own_and_dependency_of_one_name_are_ambiguous() {
         let (graph, from) = build_ref_fixture();
         let idx = ResolveIndex::build(&graph);
-        let from_app = from.app;
-
-        // "Shared" is declared in BOTH A (id 500) and B (id 501) — A's own
-        // declaration must win outright, never Ambiguous.
         let res = idx.resolve_object_ref(&graph, from, ObjectKind::Table, &name_ref("Shared"));
-        match res {
-            ObjectRefResolution::Unique(oid) => {
-                assert!(oid.id_equals_number(500), "A's own Shared must win");
-                assert_eq!(oid.app, from_app);
-            }
-            other => panic!("expected Unique(A's Shared), got {other:?}"),
-        }
+        assert_eq!(res, ObjectRefResolution::Ambiguous);
     }
 
     #[test]
