@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (TLS-121: Windows builds need no cmake)
+
+- **gzip moved from zlib-ng to zlib-rs** (`flate2` feature `zlib-rs`, pure Rust). zlib-ng's
+  C library was built with cmake, the only cmake user in the build, and on Windows that broke
+  twice for the owner: cmake 3.29 picked a `Visual Studio 18 2026` generator it does not have,
+  and MSBuild's file tracking failed on a long checkout path (`FTK1011`). With zlib-rs neither
+  cmake nor MSBuild runs. The output is byte-identical: all 43 `.cbor.gz` goldens
+  (`cli_b_snapshot_differential` and `cli_b_fingerprint_differential`, byte-compared) pass
+  unchanged. `Cargo.lock` drops `libz-ng-sys` and `cmake`. CLAUDE.md's Prerequisites now
+  states the Windows toolchain, both old snags with their workarounds for older trees, and
+  `CARGO_TARGET_DIR=C:\t` for any path-too-long failure. Not yet run on Windows: the owner's
+  next native build confirms it.
+
 ### Fixed (ENG-178: table procedures named like record built-ins: four follow-ups from ENG-173)
 
 From Fable's second review of ENG-173 (`/work/.al-sem/engine-notes/eng173/fable-eng173-r2.md`).

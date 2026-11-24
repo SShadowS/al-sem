@@ -343,6 +343,13 @@ later run of the same binary is warm (~x0.53). Spec:
 ## Prerequisites
 
 - Rust 1.75+
+- **Windows:** the MSVC toolchain (`x86_64-pc-windows-msvc`) with its C compiler (the grammar
+  is compiled by the `cc` crate). No cmake and no MSBuild are needed since TLS-121 (gzip moved
+  from zlib-ng to the pure-Rust zlib-rs). Two snags the owner hit on older trees, both from
+  zlib-ng's cmake build: cmake 3.29 has no `Visual Studio 18 2026` generator (an older tree
+  builds with `CMAKE_GENERATOR="Visual Studio 17 2022"`), and MSBuild's file tracking fails
+  with `FTK1011` on a long checkout path. If any Windows build step fails on a path that is
+  too long, a short target folder fixes it: `CARGO_TARGET_DIR=C:\t`.
 - tree-sitter-al grammar (currently **v5.4.0, `main` at `88bb6871`**, see the Grammar
   section — the package version did not move for 463 commits before v4.5.0, many of them shape changes): a plain, gitignored clone of
   `SShadowS/tree-sitter-al` at `tree-sitter-al/`, on its `main` branch. **It is NOT pinned

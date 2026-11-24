@@ -116,10 +116,13 @@ percent-encoding = "2"
 # encoder's insertion-ordered value model).
 indexmap = "2"
 
-# gzip for the cli-b `.cbor.gz` snapshot serializer. zlib-ng (vendored) so the
-# DEFLATE stream is byte-stable across hosts and matches Bun's gzip output at
-# level 6. The gzip OS header byte is normalized to 0x03 by the serializer.
-flate2 = { version = "1", default-features = false, features = ["zlib-ng"] }
+# gzip for the cli-b `.cbor.gz` snapshot serializer. zlib-rs (pure Rust, TLS-121):
+# the DEFLATE stream is byte-stable across hosts and byte-identical to the zlib-ng
+# backend it replaced (all 43 `.cbor.gz` goldens unchanged). zlib-ng's C build needed
+# cmake, whose Visual Studio generator broke Windows builds (wrong generator name,
+# MSBuild path-length limit). The gzip OS header byte is normalized to 0x03 by the
+# serializer.
+flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
 
 # Error handling
 anyhow = "1"
