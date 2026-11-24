@@ -43,6 +43,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     stand-in event; d12 now counts it for every event of that object type, name or number and event
     name, and for an extension's event by its base object (`Database::T` for a tableextension's
     event), so it no longer calls such an event dead.
+  - Event binding (`PublisherExtensions`): an extension is listed under every base its app sees by
+    that name, so a subscriber that names the base by NUMBER (`ObjectType::Table, 50030`) still
+    binds the extension's event, and d12 does not call it dead (Fable r2).
 - **Measured first:** no CDO workspace object (392) shares a kind and name with a package object.
   DO (`/work/src/DO/Cloud`, b3b4459) has no `.alpackages` in this container, so no cross-app DO
   model can be built here; its 395 workspace objects share no kind and name with CDO's package set.

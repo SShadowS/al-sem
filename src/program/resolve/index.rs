@@ -796,8 +796,8 @@ impl ResolveIndex {
     ///   `kind` only, via [`Self::objects_by_id`] filtered to `from`'s
     ///   dependency closure (self included). An object declared in `from`'s
     ///   OWN app always wins over any dependency's same-`(kind, id)` object
-    ///   (own-app shadow — mirrors the Name arm below and matches
-    ///   `object_by_number`'s existing self-shortcut), so two DEPENDENCIES
+    ///   (own-app shadow by NUMBER only — matches `object_by_number`'s
+    ///   self-shortcut; the Name arm below has none since ENG-193), so two DEPENDENCIES
     ///   sharing an id — an anomaly that a merged whole-program snapshot can
     ///   surface even though a real compile never would — is `Ambiguous` only
     ///   when NEITHER is `from` itself.
@@ -1528,9 +1528,10 @@ pub(crate) fn resolve_subscription_publisher<'g>(
 /// alternatives (#264 N2-1) are not listed: which table they extend is not
 /// known. Enum extensions are left out: enums publish no events.
 pub(crate) struct PublisherExtensions {
-    /// Base object → its extensions, in `graph.objects` order.
+    /// Base object → its extensions, in `graph.objects` order. An extension whose
+    /// base name is shared by several visible objects is listed under each.
     by_base: HashMap<ObjectNodeId, Vec<ObjectNodeId>>,
-    /// Extension → its base (the reverse of `by_base`).
+    /// Extension → its base, when exactly one visible object carries the name.
     base_of: HashMap<ObjectNodeId, ObjectNodeId>,
 }
 
@@ -1553,12 +1554,19 @@ impl PublisherExtensions {
             ) else {
                 continue;
             };
-            if let Some(base) = graph.resolve_object(obj.id.app, base_kind, target) {
+            // Every base the extension's app sees by that name (ENG-193): when the
+            // name is shared, a subscriber that names any of them may bind the
+            // extension's event, so it is listed under each. `base_of` keeps one
+            // base only.
+            let bases = graph.visible_objects(obj.id.app, base_kind, target);
+            if let [base] = bases.as_slice() {
+                base_of.insert(obj.id.clone(), base.id.clone());
+            }
+            for base in bases {
                 by_base
                     .entry(base.id.clone())
                     .or_default()
                     .push(obj.id.clone());
-                base_of.insert(obj.id.clone(), base.id.clone());
             }
         }
         PublisherExtensions { by_base, base_of }

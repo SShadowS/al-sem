@@ -5,7 +5,10 @@
 //! - B1: the workspace's `pageextension PE extends P` still runs with page `P`, and `P`'s
 //!   `SourceTable = T` still reaches `T`'s triggers (`alsem graph`);
 //! - B2: an integration event whose subscriber names its publisher by a shared name (`Codeunit::X`,
-//!   and `Database::T` for a tableextension's event) is not "dead" (d12).
+//!   and `Database::T` for a tableextension's event) is not "dead" (d12);
+//! - B3 (Fable r2): nor is an extension's event whose subscriber names the base by number
+//!   (`ObjectType::Table, 50030` for `TE`'s, `ObjectType::Page, 50030` for `PE`'s); the unsubscribed
+//!   `X::OnDead` and `TE::OnExtDead` are the control and stay dead.
 
 use std::path::Path;
 use std::process::Command;
@@ -30,7 +33,11 @@ tableextension 50040 TE extends T
     trigger OnBeforeInsert() begin end;
     [IntegrationEvent(false, false)]
     procedure OnExt() begin end;
-    procedure RaiseExt() begin OnExt(); end;
+    [IntegrationEvent(false, false)]
+    procedure OnExtByNumber() begin end;
+    [IntegrationEvent(false, false)]
+    procedure OnExtDead() begin end;
+    procedure RaiseExt() begin OnExt(); OnExtByNumber(); OnExtDead(); end;
 }
 page 50030 P
 {
@@ -41,12 +48,17 @@ page 50030 P
 pageextension 50041 PE extends P
 {
     trigger OnOpenPage() begin end;
+    [IntegrationEvent(false, false)]
+    procedure OnPExtByNumber() begin end;
+    procedure RaisePE() begin OnPExtByNumber(); end;
 }
 codeunit 50032 X
 {
     [IntegrationEvent(false, false)]
     procedure OnE() begin end;
-    procedure Raise() begin OnE(); end;
+    [IntegrationEvent(false, false)]
+    procedure OnDead() begin end;
+    procedure Raise() begin OnE(); OnDead(); end;
 }
 codeunit 50031 Sub
 {
@@ -54,6 +66,10 @@ codeunit 50031 Sub
     local procedure H1() begin end;
     [EventSubscriber(ObjectType::Codeunit, Codeunit::X, 'OnE', '', false, false)]
     local procedure H2() begin end;
+    [EventSubscriber(ObjectType::Table, 50030, 'OnExtByNumber', '', false, false)]
+    local procedure H3() begin end;
+    [EventSubscriber(ObjectType::Page, 50030, 'OnPExtByNumber', '', false, false)]
+    local procedure H4() begin end;
 }
 codeunit 50010 U
 {
@@ -141,7 +157,8 @@ fn an_extension_and_a_source_table_of_a_shared_name_keep_their_edges() {
 
 /// Discrimination (2026-11-24): d12 without the `maybe_subscribed` check reports both `OnE` and
 /// `OnExt` dead; with it but without the base-object reference, `OnExt` (a tableextension's event,
-/// subscribed by `Database::T`).
+/// subscribed by `Database::T`). `PublisherExtensions::build` from `resolve_object` (an extension
+/// listed under a unique base only) adds `OnExtByNumber` and `OnPExtByNumber`.
 #[test]
 fn an_event_subscribed_through_a_shared_name_is_not_dead() {
     let t = tempfile::tempdir().unwrap();
@@ -155,5 +172,11 @@ fn an_event_subscribed_through_a_shared_name_is_not_dead() {
         .filter(|f| f["detector"] == "d12-dead-integration-event")
         .map(|f| f["primaryLocation"]["routineName"].to_string())
         .collect();
-    assert!(d12.is_empty(), "no event is dead: {d12:?}");
+    let mut d12 = d12;
+    d12.sort();
+    assert_eq!(
+        d12,
+        [r#""OnDead""#, r#""OnExtDead""#],
+        "only the unsubscribed events are dead"
+    );
 }
