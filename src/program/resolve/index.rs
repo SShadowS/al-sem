@@ -1714,9 +1714,9 @@ pub fn count_unknown_include_sender_plus1_subscribers(graph: &ProgramGraph) -> u
                     && sub_params <= subscriber_arity_bound(pr.id.params_count, pr.include_sender)
             });
             if !offers_a_candidate {
-                objects = extensions
-                    .visible(graph, &pub_obj.id, sub_app, true)
-                    .collect();
+                // Added, not replacing: the publishers counted here are the
+                // ones the binding rejected, in either set.
+                objects.extend(extensions.visible(graph, &pub_obj.id, sub_app, true));
             }
 
             for pr in &graph.routines {
