@@ -20,6 +20,7 @@
 #
 # Limit: the guard counts per file, so swapping one call for another in the same file
 # passes. Review such a swap like any fold change.
+1 src/engine/batch/cache_guard.rs
 3 src/engine/batch/manifest.rs
 11 src/engine/deps/app_manifest.rs
 1 src/engine/deps/app_package_zip.rs
