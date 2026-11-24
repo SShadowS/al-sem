@@ -2072,3 +2072,48 @@ fn standalone_protects_a_cache_folder_made_after_its_snapshot() {
         "(link): untouched"
     );
 }
+
+/// TLS-120 r3: a cache folder deleted and made again after the snapshot is protected again.
+/// The text folder exists at the snapshot (made before the run); the debug seam
+/// `ALSEM_TEST_DURING_SNAPSHOT` deletes it after the walk listed it and makes it again with
+/// an entry in it (new identities). An `--out` that is that entry is refused and the entry is
+/// as it was.
+///
+/// Discrimination (2026-11-24, r3): the identity re-check of present folders off (`!holds(..)`
+/// made `false` in `standalone`): fails (exit 0: the entry clobbered); restored, passes.
+#[cfg(debug_assertions)]
+#[test]
+fn standalone_protects_a_cache_folder_made_again() {
+    let f = fixture();
+    let d = tempfile::tempdir().unwrap();
+    let text = f.xdg.join("al-ch-snapshot-cache");
+    std::fs::create_dir_all(&text).unwrap();
+    let entry = text.join("e.bin");
+    let seam = format!(
+        "rm -rf '{t}' && mkdir -p '{t}' && printf ENTRY > '{e}'",
+        t = text.display(),
+        e = entry.display()
+    );
+    let ws = f.ws.to_str().unwrap();
+    let out = alone(
+        &f,
+        &[
+            "events",
+            "fanout",
+            ws,
+            "--single-app",
+            "--out",
+            entry.to_str().unwrap(),
+        ],
+        &[
+            (
+                "AL_SEM_IMPACT_BASE_CACHE",
+                d.path().join("ib").to_str().unwrap(),
+            ),
+            ("ALSEM_TEST_DURING_SNAPSHOT", &seam),
+        ],
+    );
+    assert!(entry.exists(), "precondition: the seam made the entry");
+    assert_write_refused("(made again)", &out, "is in a cache folder of the engine");
+    assert_eq!(std::fs::read(&entry).unwrap(), b"ENTRY", "untouched");
+}

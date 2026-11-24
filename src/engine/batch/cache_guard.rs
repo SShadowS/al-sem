@@ -258,11 +258,13 @@ fn walk_roots(roots: &[PathBuf], snap: &mut Snapshot, files: bool) -> Result<(),
 /// folder: the text cache folder, the IR cache's folder, and the impact-base
 /// cache's `work/` (live copies of base workspaces) when they exist, their
 /// directories only; the missing ones by path ([`Snapshot::missing`]). At every
-/// check after that, each missing folder is looked at again (at most three
-/// stats): one made since (the engine's first run fills its caches during the
-/// run) is walked, folders-only, and protected from then on (r2). A file is
-/// looked up when an open needs it ([`Snapshot::holds_file`]). No cache is
-/// turned off: an outside run's caches are as they were.
+/// check after that, each folder is looked at again (at most three stats). A
+/// missing one made since (the engine's first run fills its caches during the
+/// run), or a present one whose identity changed (deleted and made again), is
+/// walked, folders-only, and protected from then on (r2, r3); a present one
+/// deleted since is missing again. A file is looked up when an open needs it
+/// ([`Snapshot::holds_file`]). No cache is turned off: an outside run's caches
+/// are as they were.
 pub(super) fn standalone() -> std::io::Result<std::sync::Arc<Snapshot>> {
     use std::sync::{Arc, Mutex};
     static STANDALONE: Mutex<Option<Arc<Snapshot>>> = Mutex::new(None);
@@ -270,12 +272,37 @@ pub(super) fn standalone() -> std::io::Result<std::sync::Arc<Snapshot>> {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let snap = held.get_or_insert_with(|| Arc::new(first_standalone()));
-    if snap.missing.iter().any(|m| m.is_dir()) {
+    let mut gone = Vec::new();
+    let mut again: Vec<PathBuf> = Vec::new();
+    for root in &snap.roots {
+        match std::fs::metadata(root) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => gone.push(root.clone()),
+            Ok(m) => {
+                // A folder whose identity cannot be read is skipped, as the first walk skips it.
+                if let Ok(Some(id)) = super::manifest::read_file_id(root)
+                    && !holds(&snap.dirs, &id, born(&m))
+                {
+                    again.push(root.clone());
+                }
+            }
+            Err(_) => {}
+        }
+    }
+    let made: Vec<PathBuf> = snap
+        .missing
+        .iter()
+        .filter(|m| m.is_dir())
+        .cloned()
+        .collect();
+    if !(gone.is_empty() && again.is_empty() && made.is_empty()) {
         let mut next = Snapshot::clone(snap);
-        let (made, still): (Vec<_>, Vec<_>) = next.missing.drain(..).partition(|m| m.is_dir());
-        next.missing = still;
-        // Folders-only: a folder that cannot be listed is skipped, never an error.
-        let _ = walk_roots(&made, &mut next, false);
+        next.roots.retain(|r| !gone.contains(r));
+        next.missing.retain(|m| !made.contains(m));
+        next.missing.extend(gone.iter().map(|g| anchored(g)));
+        // Folders-only: a folder that cannot be listed is skipped, never an error. The old
+        // identities stay (a reused number with another birth time is not taken for them).
+        again.extend(made.iter().cloned());
+        let _ = walk_roots(&again, &mut next, false);
         next.roots.extend(made);
         *snap = Arc::new(next);
     }
