@@ -17,7 +17,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   leaves at most ~4.5 % margin (the pair's mean over the limit, the four-pass mean
   under it, the same-order passes within x1.25). The verdict's `IR WARM REPORT BREACH
   (head: ... no report file)` label shows in every run of this stub, passing runs
-  too, because the speed stub writes no IR report. It never changes a verdict.
+  too, because the speed stub wrote no IR report. It never changes a verdict.
+- The speed stub now writes the IR cache report the way the engine does
+  (`src/program/ir_cache/report.rs`): a `start` line at the first build and an `end`
+  line with counters at exit. A cache folder it filled before gives disk hits, and an
+  empty one gives a publish. So stub speed runs no longer carry the breach label.
+  `speed_agree_then_pass` asserts the label is absent. The side-order run of the
+  extra-pair test sets `STUB_IR_NO_REPORT` and asserts that the label shows.
 - Reproduced: a new stub knob `STUB_TESTS_EXTRA_S=<base>,<head>` burns extra CPU on
   warm-tests. With base at +0.05 s, the old run gives the failing gate's verdict
   (x0.822/x1.822 by pass, no extra pair).

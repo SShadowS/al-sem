@@ -2215,6 +2215,15 @@ if os.environ.get("STUB_IR_DEAD") and os.environ.get("ALSEM_IR_CACHE") == "on":
     time.sleep(5)
     sys.exit(0)
 calls = 0
+# TLS-126: the IR cache report (ALSEM_IR_CACHE_REPORT), as the engine writes it
+# (src/program/ir_cache/report.rs): a `start` line at the first build, an `end`
+# line with counters at exit. A cache folder this stub filled before gives disk
+# hits (a warm build); an empty one gets a publish. STUB_IR_NO_REPORT: none.
+report = None if os.environ.get("STUB_IR_NO_REPORT") else os.environ.get("ALSEM_IR_CACHE_REPORT")
+ir_counters = None
+def report_line(v):
+    with open(report, "a") as f:
+        f.write(json.dumps(v) + "\n")
 def burn(seconds):
     # User time (TLS-111: the clock is cycles per USER second): a pure loop
     # between reads, since reading the CPU clock is a system call.
@@ -2264,6 +2273,14 @@ for line in sys.stdin:
         slept = 0.0
         work = 1.0  # head's extra work this call (instructions and cycles both)
         zero_instr = False
+        if calls == 1 and report:
+            mark = os.path.join(os.environ["ALSEM_IR_CACHE_DIR"], "stub-entry")
+            if os.path.exists(mark):
+                ir_counters = {"eligible_files": 3, "disk_hits": 3, "verified_hits": 0}
+            else:
+                open(mark, "w").close()
+                ir_counters = {"eligible_files": 3, "published_packages": 1}
+            report_line({"event": "start", "pid": os.getpid()})
         if calls == 1:
             # TLS-111: STUB_BUILD_HEAD_BY_PASS=f1,f2,...: head's build does f<pass>
             # times the work in that warm-up pass (3 builds a pass: two timed,
@@ -2393,6 +2410,8 @@ for line in sys.stdin:
     print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": result}), flush=True)
 if os.path.exists(me):
     os.remove(me)
+if ir_counters is not None:
+    report_line({"event": "end", "pid": os.getpid(), "counters": ir_counters})
 "#;
 
 /// ⟨TLS-83⟩ A stand-in `perf` (cdo-speed's CDO_SPEED_PERF test hook): the
@@ -3490,12 +3509,20 @@ fn speed_extra_pair_judges_every_failure_in_side_order() {
     );
 
     // Side order: passes 3 and 4 repeat passes 1 and 2's.
-    let (_dir, code, text) = run(&[("STUB_TESTS_HEAD_BY_PASS", "1.4,1.4,1.4,1.4")]);
+    // TLS-126: the stub writes no IR report here, so the IR rows' label shows
+    // (the control of `speed_agree_then_pass`'s "no label").
+    let (_dir, code, text) = run(&[
+        ("STUB_TESTS_HEAD_BY_PASS", "1.4,1.4,1.4,1.4"),
+        ("STUB_IR_NO_REPORT", "1"),
+    ]);
     assert_eq!(code, Some(1), "{text}");
     let v = speed_verdict(&text);
     assert!(
         v.starts_with("cdo-speed: FAIL")
-            && v.contains("the same-order passes agree, judged on 4 passes)"),
+            && v.contains("the same-order passes agree, judged on 4 passes)")
+            && v.contains(
+                "IR WARM REPORT BREACH (head: IR: FAIL no report file (the cache path never ran))"
+            ),
         "{text}"
     );
 
@@ -3535,6 +3562,8 @@ fn speed_agree_then_pass(extra: &str) {
     assert!(
         v.starts_with("cdo-speed: PASS")
             && v.contains("a failure its passes contradicted beyond x1.25: warm-tests wall")
+            // TLS-126: the stub writes the IR report as the engine does.
+            && !v.contains("IR WARM REPORT BREACH")
             && v.contains("the same-order passes agree, judged on 4 passes)"),
         "{text}"
     );
@@ -3548,7 +3577,14 @@ fn speed_agree_then_pass(extra: &str) {
 /// Discrimination (2026-11-24): the run on CPU as before (head 0.9, 2.0, 0.8,
 /// 1.7, no declared seconds), base +0.05 s -> warm-tests x1.224 (x0.822/x1.822
 /// by pass), no extra pair, `cdo-speed: PASS` without it: the failing gate's
-/// verdict (red); on declared wall, green.
+/// verdict (red); on declared wall, green. Redone by Edit on the finished
+/// helper (old values and `cpu` put back) -> x1.203 (x0.822/x1.761), plain
+/// PASS (red); restored, green.
+///
+/// The IR report (TLS-126): the stub's `report_line` made a no-op by Edit ->
+/// `PASS IR WARM REPORT BREACH (head: IR: FAIL no report file ...)` here (red);
+/// restored, green. The side-order run of the test above keeps the label
+/// pinned (STUB_IR_NO_REPORT).
 #[cfg(target_os = "linux")]
 #[test]
 fn speed_agree_then_pass_survives_tick_error() {
