@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (TLS-126: a cdo-speed stub test failed under load, from CPU ticks, not a race)
+
+- `gate_scripts::speed_extra_pair_judges_every_failure_in_side_order` failed 2 times
+  in 5 full `ci-steps task` runs. It failed on its "agree, then PASS" run: warm-tests
+  read x1.293, just under the 1.3 limit, so the extra flipped pair never ran.
+- The cause is the test's margin, not the IR report. The stub's 0.4 s CPU burn is read
+  in 10 ms ticks, and base read 2 ticks (5 %) high. By its own geometry the scenario
+  leaves at most ~4.5 % margin (the pair's mean over the limit, the four-pass mean
+  under it, the same-order passes within x1.25). The verdict's `IR WARM REPORT BREACH
+  (head: ... no report file)` label shows in every run of this stub, passing runs
+  too, because the speed stub writes no IR report. It never changes a verdict.
+- Reproduced: a new stub knob `STUB_TESTS_EXTRA_S=<base>,<head>` burns extra CPU on
+  warm-tests. With base at +0.05 s, the old run gives the failing gate's verdict
+  (x0.822/x1.822 by pass, no extra pair).
+- Fix: that run is now judged on wall time from seconds the stub declares, which are
+  exact. Both sides declare 8 s; head's warm-tests declares 4, 8, 2 and 5.4 s more, so
+  a tick moves a ratio by about 0.1 %. The new test
+  `speed_agree_then_pass_survives_tick_error` runs it with base +0.05 s, then head
+  +0.05 s. It fails on the old CPU run and passes now. Tests only; no script changed.
+
 ### Fixed (ENG-178: table procedures named like record built-ins: four follow-ups from ENG-173)
 
 From Fable's second review of ENG-173 (`/work/.al-sem/engine-notes/eng173/fable-eng173-r2.md`).

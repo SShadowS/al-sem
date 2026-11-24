@@ -2200,8 +2200,8 @@ fn cdo_gate_skips_speed_only_when_no_product_code_changed() {
 /// cycles beside instructions (3e9 per CPU second burned, at a steady clock);
 /// STUB_SLOW_HEAD, STUB_CPI_HEAD, STUB_SYS_HEAD, STUB_SECOND_FACTOR,
 /// STUB_BUILD_HEAD_BY_PASS, STUB_TESTS_HEAD_BY_PASS and
-/// STUB_TESTS_HEAD_SLEEP_BY_PASS shape head's cost, STUB_SLEEP_S both sides'
-/// (see the code).
+/// STUB_TESTS_HEAD_SLEEP_BY_PASS shape head's cost, STUB_SLEEP_S and
+/// STUB_TESTS_EXTRA_S both sides' (see the code).
 #[cfg(target_os = "linux")]
 const SPEED_STUB: &str = r#"#!/usr/bin/env python3
 import fcntl, json, os, sys, time
@@ -2316,6 +2316,12 @@ for line in sys.stdin:
             if head and by_pass:
                 work = float(by_pass.split(",")[n // 2])
             burned = float(os.environ["STUB_BUILD_S"]) * factor * work * cpi
+            # STUB_TESTS_EXTRA_S=b,h (TLS-126): base's and head's warm-tests burn
+            # b and h seconds more in every pass: the 10 ms ticks a CPU reading
+            # can be off by, made deterministic.
+            extra = os.environ.get("STUB_TESTS_EXTRA_S")
+            if extra:
+                burned += float(extra.split(",")[1 if head else 0])
             burn(burned * slow)
             # STUB_TESTS_HEAD_SLEEP_BY_PASS=s1,s2,...: head's warm-tests then
             # waits s<pass> seconds more (wall time only).
@@ -3452,8 +3458,9 @@ fn speed_ir_rows_never_fail_the_verdict() {
 ///   pair), head's warm-tests x1.4 in every pass: per-pass ratios ~x2.1, ~x0.93,
 ///   ~x2.1, ~x0.93, so passes 3 and 4 agree with 1 and 2 only in the same side
 ///   order: FAIL judged on four passes, never HOST UNSTABLE;
-/// - agree, then PASS: 0.9, 2.0 fails (x1.34) with contradicting passes; 0.8, 1.7
-///   agree with them; the four-pass mean x1.25 PASSes, saying the pair was added.
+/// - agree, then PASS (`speed_agree_then_pass`, on declared wall time since
+///   TLS-126): the pair fails with contradicting passes; passes 3 and 4 agree
+///   with them; the four-pass mean PASSes, saying the pair was added.
 ///
 /// Mutations (2026-11-21, round 2): the same-order check over the triggering
 /// failures only (round 1's code) -> the cross-row run exits 1, not 2 (red);
@@ -3492,20 +3499,61 @@ fn speed_extra_pair_judges_every_failure_in_side_order() {
         "{text}"
     );
 
-    // Agree, then PASS on four passes.
-    let (dir, code, text) = run(&[
-        ("STUB_SECOND_FACTOR", "1.0"),
-        ("STUB_TESTS_HEAD_BY_PASS", "0.9,2.0,0.8,1.7"),
-    ]);
+    speed_agree_then_pass("0,0");
+}
+
+/// The "agree, then PASS" run of the test above, with STUB_TESTS_EXTRA_S
+/// `extra` (base's and head's warm-tests burn that many seconds more).
+///
+/// ⟨TLS-126⟩ Judged on WALL time, from seconds the stub declares (exact), not
+/// on CPU. The scenario's window is narrow by its own geometry: the pair's
+/// mean over the limit, the four-pass mean under it, and passes 1/3 and 2/4
+/// within x1.25 leave at most ~4.5 % on any of them (m^5 <= 1.25). A CPU
+/// reading comes in 10 ms ticks, and a 0.4 s burn read 2 ticks (5 %) high
+/// under load: with head 0.9, 2.0, 0.8, 1.7 on CPU the pair read x1.293
+/// against the 1.3 limit and never added the extra pair (the flake). Here both
+/// sides' judged calls declare 8 s (STUB_SLEEP_S) and head's warm-tests 4, 8, 2
+/// and 5.4 s more: wall x1.48, x1.95, x1.24, x1.64 by pass; the pair x1.70
+/// FAILs (limit 1.6) with contradicting passes (x1.32), the four-pass mean
+/// x1.56 PASSes, the same-order spreads are x1.19; a tick moves a ratio 0.1 %.
+#[cfg(target_os = "linux")]
+fn speed_agree_then_pass(extra: &str) {
+    let dir = tempfile::tempdir().unwrap();
+    let (code, text) = speed_with_stub(
+        dir.path(),
+        "1.0",
+        &[],
+        &[
+            ("STUB_SECOND_FACTOR", "1.0"),
+            ("STUB_SLEEP_S", "8"),
+            ("STUB_TESTS_HEAD_SLEEP_BY_PASS", "4,8,2,5.4"),
+            ("STUB_TESTS_EXTRA_S", extra),
+        ],
+    );
     assert_eq!(code, Some(0), "{text}");
     let v = speed_verdict(&text);
     assert!(
         v.starts_with("cdo-speed: PASS")
-            && v.contains("a failure its passes contradicted beyond x1.25: warm-tests cpu")
+            && v.contains("a failure its passes contradicted beyond x1.25: warm-tests wall")
             && v.contains("the same-order passes agree, judged on 4 passes)"),
         "{text}"
     );
     assert_eq!(speed_json(dir.path())["verdict"], "PASS");
+}
+
+/// ⟨TLS-126⟩ The "agree, then PASS" run holds when a CPU reading is off by
+/// the 2 ticks (0.02 s) the failing run showed, or more: base's warm-tests
+/// burns 0.05 s more in every pass, then head's.
+///
+/// Discrimination (2026-11-24): the run on CPU as before (head 0.9, 2.0, 0.8,
+/// 1.7, no declared seconds), base +0.05 s -> warm-tests x1.224 (x0.822/x1.822
+/// by pass), no extra pair, `cdo-speed: PASS` without it: the failing gate's
+/// verdict (red); on declared wall, green.
+#[cfg(target_os = "linux")]
+#[test]
+fn speed_agree_then_pass_survives_tick_error() {
+    speed_agree_then_pass("0.05,0");
+    speed_agree_then_pass("0,0.05");
 }
 
 /// ⟨TLS-111 review r1⟩ A wall-time failure adds the pair too, and one warm-up
