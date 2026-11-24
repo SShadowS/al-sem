@@ -45,7 +45,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     event), so it no longer calls such an event dead.
   - Event binding (`PublisherExtensions`): an extension is listed under every base its app sees by
     that name, so a subscriber that names the base by NUMBER (`ObjectType::Table, 50030`) still
-    binds the extension's event, and d12 does not call it dead (Fable r2).
+    binds the extension's event, and d12 does not call it dead (Fable r2). When several objects
+    carry the name, which one the extension extends is not known: its events are candidates only
+    when the named object and its certain extensions offer none (Fable r3). Otherwise a
+    subscriber naming the dependency's `T` by number turned ambiguous, or bound the workspace
+    extension's same-named event by exact arity, a false edge. The independent event checker
+    (`semantic_golden`) accepts every object such an extension may extend.
 - **Measured first:** no CDO workspace object (392) shares a kind and name with a package object.
   DO (`/work/src/DO/Cloud`, b3b4459) has no `.alpackages` in this container, so no cross-app DO
   model can be built here; its 395 workspace objects share no kind and name with CDO's package set.

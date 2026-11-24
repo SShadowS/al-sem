@@ -340,10 +340,13 @@ impl SubscriberIndex {
                     //     The object's own routines come first, then those of
                     //     each extension the subscriber's app can see (see
                     //     `PublisherExtensions`).
+                    //     A shared extension (several objects carry its base's name,
+                    //     ENG-193) is consulted only when these offer no candidate:
+                    //     it may extend another object, whose subscribers its
+                    //     events must not take.
                     let event_key: SharedStr = event_name_lc.as_str().into();
-                    let candidates: Vec<(RoutineNodeId, bool)> = std::iter::once(&pub_obj_id)
-                        .chain(extensions.visible(graph, &pub_obj_id, sub_app))
-                        .flat_map(|obj| {
+                    let candidates_in = |objs: &mut dyn Iterator<Item = &ObjectNodeId>| {
+                        objs.flat_map(|obj| {
                             routine_indices_by_obj_name
                                 .get(&(obj.clone(), event_key.clone()))
                                 .map(Vec::as_slice)
@@ -378,7 +381,23 @@ impl SubscriberIndex {
                                 )
                             })
                         })
-                        .collect();
+                        .collect::<Vec<(RoutineNodeId, bool)>>()
+                    };
+                    let mut candidates =
+                        candidates_in(&mut std::iter::once(&pub_obj_id).chain(extensions.visible(
+                            graph,
+                            &pub_obj_id,
+                            sub_app,
+                            false,
+                        )));
+                    if candidates.is_empty() {
+                        candidates = candidates_in(&mut extensions.visible(
+                            graph,
+                            &pub_obj_id,
+                            sub_app,
+                            true,
+                        ));
+                    }
 
                     // (d) Dispatch on candidate count.
                     let chosen: Option<(RoutineNodeId, bool)> = match candidates.len() {
@@ -1522,23 +1541,29 @@ pub(crate) fn resolve_subscription_publisher<'g>(
 /// `tableextension "Error Message Extension"` declares). Without this the
 /// subscription was `Orphaned` and its event-flow edge was missing.
 ///
-/// An extension is listed under its base only when its `extends_target`
-/// resolves, from the extension's own app, to exactly that object
-/// ([`ProgramGraph::resolve_object`] fails closed). Untargeted `#if`
-/// alternatives (#264 N2-1) are not listed: which table they extend is not
-/// known. Enum extensions are left out: enums publish no events.
+/// An extension is listed under the objects its app sees by its
+/// `extends_target` name ([`ProgramGraph::visible_objects`]). When that is one
+/// object, the extension is a CERTAIN extension of it. When several apps'
+/// objects share the name (ENG-193), it is a SHARED extension of each: which
+/// one it extends is not known, so a binding consults it only when the named
+/// object and its certain extensions offer no candidate
+/// ([`Self::visible`]). Untargeted `#if` alternatives (#264 N2-1) are not
+/// listed: which table they extend is not known. Enum extensions are left
+/// out: enums publish no events.
 pub(crate) struct PublisherExtensions {
-    /// Base object → its extensions, in `graph.objects` order. An extension whose
-    /// base name is shared by several visible objects is listed under each.
+    /// Base object → its certain extensions, in `graph.objects` order.
     by_base: HashMap<ObjectNodeId, Vec<ObjectNodeId>>,
-    /// Extension → its base, when exactly one visible object carries the name.
-    base_of: HashMap<ObjectNodeId, ObjectNodeId>,
+    /// Base object → its shared extensions, in `graph.objects` order.
+    shared_by_base: HashMap<ObjectNodeId, Vec<ObjectNodeId>>,
+    /// Extension → every object it may extend, in closure order.
+    bases_of: HashMap<ObjectNodeId, Vec<ObjectNodeId>>,
 }
 
 impl PublisherExtensions {
     pub(crate) fn build(graph: &ProgramGraph) -> Self {
         let mut by_base: HashMap<ObjectNodeId, Vec<ObjectNodeId>> = HashMap::new();
-        let mut base_of: HashMap<ObjectNodeId, ObjectNodeId> = HashMap::new();
+        let mut shared_by_base: HashMap<ObjectNodeId, Vec<ObjectNodeId>> = HashMap::new();
+        let mut bases_of: HashMap<ObjectNodeId, Vec<ObjectNodeId>> = HashMap::new();
         for obj in &graph.objects {
             if !matches!(
                 obj.id.kind,
@@ -1554,34 +1579,47 @@ impl PublisherExtensions {
             ) else {
                 continue;
             };
-            // Every base the extension's app sees by that name (ENG-193): when the
-            // name is shared, a subscriber that names any of them may bind the
-            // extension's event, so it is listed under each. `base_of` keeps one
-            // base only.
+            // Every base the extension's app sees by that name (ENG-193).
             let bases = graph.visible_objects(obj.id.app, base_kind, target);
-            if let [base] = bases.as_slice() {
-                base_of.insert(obj.id.clone(), base.id.clone());
-            }
-            for base in bases {
-                by_base
+            let index = if bases.len() == 1 {
+                &mut by_base
+            } else {
+                &mut shared_by_base
+            };
+            for base in &bases {
+                index
                     .entry(base.id.clone())
                     .or_default()
                     .push(obj.id.clone());
             }
+            if !bases.is_empty() {
+                bases_of.insert(obj.id.clone(), bases.iter().map(|b| b.id.clone()).collect());
+            }
         }
-        PublisherExtensions { by_base, base_of }
+        PublisherExtensions {
+            by_base,
+            shared_by_base,
+            bases_of,
+        }
     }
 
     /// The extensions of `base` that an `[EventSubscriber]` in app `from` can
     /// see: those declared in `from`'s dependency closure (itself included),
-    /// in `graph.objects` order.
+    /// in `graph.objects` order. `shared` picks the shared extensions (a
+    /// fallback, see the type's doc) instead of the certain ones.
     pub(crate) fn visible<'a>(
         &'a self,
         graph: &ProgramGraph,
         base: &ObjectNodeId,
         from: AppRef,
+        shared: bool,
     ) -> impl Iterator<Item = &'a ObjectNodeId> + use<'a> {
-        let exts = self.by_base.get(base).map(Vec::as_slice).unwrap_or(&[]);
+        let index = if shared {
+            &self.shared_by_base
+        } else {
+            &self.by_base
+        };
+        let exts = index.get(base).map(Vec::as_slice).unwrap_or(&[]);
         let closure = if exts.is_empty() {
             Default::default()
         } else {
@@ -1590,9 +1628,10 @@ impl PublisherExtensions {
         exts.iter().filter(move |e| closure.contains(&e.app))
     }
 
-    /// The base object `ext` extends, when it is listed under one.
-    pub(crate) fn base_of(&self, ext: &ObjectNodeId) -> Option<&ObjectNodeId> {
-        self.base_of.get(ext)
+    /// Every object `ext` may extend: one for a certain extension, several for
+    /// a shared one, none when it is listed under no base.
+    pub(crate) fn bases_of(&self, ext: &ObjectNodeId) -> &[ObjectNodeId] {
+        self.bases_of.get(ext).map(Vec::as_slice).unwrap_or(&[])
     }
 }
 
@@ -1663,9 +1702,22 @@ pub fn count_unknown_include_sender_plus1_subscribers(graph: &ProgramGraph) -> u
                 continue;
             };
             let event_name_lc = args.event_name.fold_identifier();
-            let objects: Vec<&ObjectNodeId> = std::iter::once(&pub_obj.id)
-                .chain(extensions.visible(graph, &pub_obj.id, sub_app))
+            let mut objects: Vec<&ObjectNodeId> = std::iter::once(&pub_obj.id)
+                .chain(extensions.visible(graph, &pub_obj.id, sub_app, false))
                 .collect();
+            // As the binding does: the shared extensions only when these offer
+            // no candidate.
+            let offers_a_candidate = graph.routines.iter().any(|pr| {
+                objects.contains(&&pr.id.object)
+                    && pr.id.name_lc == event_name_lc
+                    && pr.publisher_kind.is_some()
+                    && sub_params <= subscriber_arity_bound(pr.id.params_count, pr.include_sender)
+            });
+            if !offers_a_candidate {
+                objects = extensions
+                    .visible(graph, &pub_obj.id, sub_app, true)
+                    .collect();
+            }
 
             for pr in &graph.routines {
                 if objects.contains(&&pr.id.object)

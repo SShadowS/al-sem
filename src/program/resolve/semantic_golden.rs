@@ -1308,12 +1308,14 @@ pub fn route_applicability(
                 // meaningless check, not a sound one.
                 if let Some(declaring) = graph.objects.iter().find(|o| o.id == edge.from.object) {
                     // The objects a subscriber may name: the declaring object,
-                    // and the base of an extension that declares the event.
+                    // and each object an extension that declares the event may
+                    // extend (several when their name is shared, ENG-193).
                     let named: Vec<(String, String, Option<i64>)> = std::iter::once(declaring)
                         .chain(
                             publisher_extensions
-                                .base_of(&declaring.id)
-                                .and_then(|b| graph.objects.iter().find(|o| &o.id == b)),
+                                .bases_of(&declaring.id)
+                                .iter()
+                                .filter_map(|b| graph.objects.iter().find(|o| &o.id == b)),
                         )
                         .map(|o| {
                             (

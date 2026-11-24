@@ -8,7 +8,10 @@
 //!   and `Database::T` for a tableextension's event) is not "dead" (d12);
 //! - B3 (Fable r2): nor is an extension's event whose subscriber names the base by number
 //!   (`ObjectType::Table, 50030` for `TE`'s, `ObjectType::Page, 50030` for `PE`'s); the unsubscribed
-//!   `X::OnDead` and `TE::OnExtDead` are the control and stay dead.
+//!   `X::OnDead` and `TE::OnExtDead` are the control and stay dead;
+//! - B4 (Fable r3): a subscriber naming the DEPENDENCY's `T`/`P` by number (61001) binds the
+//!   dependency's event, never the workspace extension's event of the same name, so `TE`'s
+//!   `OnShared`/`OnSharedArg` and `PE`'s `OnPShared` stay dead and the subscribers stay bound.
 
 use std::path::Path;
 use std::process::Command;
@@ -18,7 +21,7 @@ const WS_GUID: &str = "19319319-0000-4000-8000-000000000002";
 
 const DEP_SYMBOLS: &str = r#"{"RuntimeVersion":"15.0","Namespaces":[{"Name":"KA","Codeunits":[{"Id":61001,"Name":"X","Methods":[{"Name":"F","Parameters":[]}]}],"Tables":[{"Id":61001,"Name":"T","Fields":[{"Id":1,"Name":"Code","TypeDefinition":{"Name":"Code"}}]}],"Pages":[{"Id":61001,"Name":"P"}]}]}"#;
 
-const DEP_SOURCE: &str = "namespace KA;\n\ncodeunit 61001 X\n{\n    procedure F() begin end;\n}\ntable 61001 T\n{\n    fields { field(1; Code; Code[20]) { } }\n    keys { key(PK; Code) { } }\n}\npage 61001 P\n{\n    SourceTable = T;\n    layout { area(Content) { field(Code; Rec.Code) { } } }\n}\n";
+const DEP_SOURCE: &str = "namespace KA;\n\ncodeunit 61001 X\n{\n    procedure F() begin end;\n}\ntable 61001 T\n{\n    fields { field(1; Code; Code[20]) { } }\n    keys { key(PK; Code) { } }\n    [IntegrationEvent(false, false)]\n    procedure OnShared() begin end;\n    [IntegrationEvent(false, false)]\n    procedure OnSharedArg(A: Integer) begin end;\n    procedure RaiseT() begin OnShared(); OnSharedArg(1); end;\n}\npage 61001 P\n{\n    SourceTable = T;\n    layout { area(Content) { field(Code; Rec.Code) { } } }\n    [IntegrationEvent(false, false)]\n    procedure OnPShared() begin end;\n    procedure RaiseP() begin OnPShared(); end;\n}\n";
 
 const WS_SOURCE: &str = r#"namespace W;
 
@@ -37,7 +40,11 @@ tableextension 50040 TE extends T
     procedure OnExtByNumber() begin end;
     [IntegrationEvent(false, false)]
     procedure OnExtDead() begin end;
-    procedure RaiseExt() begin OnExt(); OnExtByNumber(); OnExtDead(); end;
+    [IntegrationEvent(false, false)]
+    procedure OnShared() begin end;
+    [IntegrationEvent(false, false)]
+    procedure OnSharedArg() begin end;
+    procedure RaiseExt() begin OnExt(); OnExtByNumber(); OnExtDead(); OnShared(); OnSharedArg(); end;
 }
 page 50030 P
 {
@@ -50,7 +57,9 @@ pageextension 50041 PE extends P
     trigger OnOpenPage() begin end;
     [IntegrationEvent(false, false)]
     procedure OnPExtByNumber() begin end;
-    procedure RaisePE() begin OnPExtByNumber(); end;
+    [IntegrationEvent(false, false)]
+    procedure OnPShared() begin end;
+    procedure RaisePE() begin OnPExtByNumber(); OnPShared(); end;
 }
 codeunit 50032 X
 {
@@ -70,6 +79,12 @@ codeunit 50031 Sub
     local procedure H3() begin end;
     [EventSubscriber(ObjectType::Page, 50030, 'OnPExtByNumber', '', false, false)]
     local procedure H4() begin end;
+    [EventSubscriber(ObjectType::Table, 61001, 'OnShared', '', false, false)]
+    local procedure H5() begin end;
+    [EventSubscriber(ObjectType::Table, 61001, 'OnSharedArg', '', false, false)]
+    local procedure H6() begin end;
+    [EventSubscriber(ObjectType::Page, 61001, 'OnPShared', '', false, false)]
+    local procedure H7() begin end;
 }
 codeunit 50010 U
 {
@@ -153,12 +168,33 @@ fn an_extension_and_a_source_table_of_a_shared_name_keep_their_edges() {
         edge(&page, &t_insert),
         "the page's source table's OnInsert is reachable"
     );
+    // B4: a subscriber naming the DEPENDENCY's `T`/`P` by number binds its event; the
+    // workspace's `TE`/`PE` (whose base name the dependency shares) declare events of the same
+    // name and must not make the binding ambiguous.
+    for sub in ["H5", "H7"] {
+        let hidden = &recs
+            .iter()
+            .find(|r| {
+                r["t"] == "node"
+                    && r["v"]["objectName"] == "Sub"
+                    && r["v"]["memberName"] == sub
+                    && r["v"]["appId"] == WS_GUID
+            })
+            .unwrap_or_else(|| panic!("precondition: Sub.{sub} is a node"))["v"]["hiddenCallers"];
+        assert!(
+            !hidden.to_string().contains("unboundSubscriber"),
+            "Sub.{sub} is bound: {hidden}"
+        );
+    }
 }
 
 /// Discrimination (2026-11-24): d12 without the `maybe_subscribed` check reports both `OnE` and
 /// `OnExt` dead; with it but without the base-object reference, `OnExt` (a tableextension's event,
 /// subscribed by `Database::T`). `PublisherExtensions::build` from `resolve_object` (an extension
-/// listed under a unique base only) adds `OnExtByNumber` and `OnPExtByNumber`.
+/// listed under a unique base only) adds `OnExtByNumber` and `OnPExtByNumber`. B4 (Fable r3): with
+/// the shared extensions joined to the first candidate set instead of a fallback, `H6` binds
+/// `TE::OnSharedArg` (exact arity beats the dependency's `OnSharedArg(A)`) and drops it from
+/// this list; the other test's `H5` then reads `unboundSubscriber` (ambiguous).
 #[test]
 fn an_event_subscribed_through_a_shared_name_is_not_dead() {
     let t = tempfile::tempdir().unwrap();
@@ -176,7 +212,13 @@ fn an_event_subscribed_through_a_shared_name_is_not_dead() {
     d12.sort();
     assert_eq!(
         d12,
-        [r#""OnDead""#, r#""OnExtDead""#],
+        [
+            r#""OnDead""#,
+            r#""OnExtDead""#,
+            r#""OnPShared""#,
+            r#""OnShared""#,
+            r#""OnSharedArg""#
+        ],
         "only the unsubscribed events are dead"
     );
 }
