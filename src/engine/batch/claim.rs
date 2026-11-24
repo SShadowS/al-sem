@@ -271,11 +271,14 @@ pub fn make_dir(path: &Path) -> std::io::Result<()> {
         }
         e
     };
+    let held;
     let snap = match DIR.get() {
-        Some(dir) => super::cache_guard::get(dir),
-        None => super::cache_guard::standalone(),
-    }
-    .map_err(fail)?;
+        Some(dir) => super::cache_guard::get(dir).map_err(fail)?,
+        None => {
+            held = super::cache_guard::standalone()?;
+            &*held
+        }
+    };
     let mut cur = PathBuf::new();
     for c in std::env::current_dir()?.join(path).components() {
         cur.push(c);
@@ -500,7 +503,7 @@ fn open_checked(
 /// any name (a hard link, a bind mount), is refused and left as it was. No
 /// claim: one process's writes are its own.
 pub fn open_outside(path: &Path) -> std::io::Result<File> {
-    let f = open_guarded(super::cache_guard::standalone()?, path, false, &|| {})?;
+    let f = open_guarded(&*super::cache_guard::standalone()?, path, false, &|| {})?;
     if is_disk(&f)? {
         f.set_len(0)?;
     }
@@ -517,11 +520,10 @@ pub fn write_outside(path: &Path, bytes: impl AsRef<[u8]>) -> std::io::Result<()
 /// claim): a diagnostic file an environment variable names
 /// (`ALSEM_IR_CACHE_REPORT` outside a batch, `ALSEM_CONES_SCHEDULE_FILE`).
 pub fn open_append(path: &Path) -> std::io::Result<File> {
-    let snap = match DIR.get() {
-        Some(dir) => super::cache_guard::get(dir)?,
-        None => super::cache_guard::standalone()?,
-    };
-    open_guarded(snap, path, true, &|| {})
+    match DIR.get() {
+        Some(dir) => open_guarded(super::cache_guard::get(dir)?, path, true, &|| {}),
+        None => open_guarded(&*super::cache_guard::standalone()?, path, true, &|| {}),
+    }
 }
 
 /// How [`open_guarded`] opens: to write, or to append. An append (the run's

@@ -1997,3 +1997,78 @@ fn standalone_out_stays_out_of_impact_work() {
     }
     assert!(!copy.join("x.json").exists());
 }
+
+/// TLS-120 r2: a cache folder missing at the snapshot and made later is protected from then
+/// on. The trace file (`ALSEM_TRACE_FILE`) takes the snapshot at the process's start, with an
+/// empty cache home.
+/// The debug seam `ALSEM_TEST_DURING_SNAPSHOT` makes the folder while that first snapshot
+/// walks (the impact-base `work/` is the folder it walks), as a first run's engine makes its
+/// caches after the trace file opened. (In this fixture the engine itself makes the text
+/// folder only after the `--out` write, which the missing-folder test covers.)
+/// - "(entry)": the seam makes the text folder and an entry in it; an `--out` that is the entry
+///   is refused and the entry is as it was. (A NEW name there is refused even without the
+///   re-check: the missing-folder test meets the missing file under the remembered path.)
+/// - "(link)": the seam makes the text folder, an entry in it and an outside hard link to the
+///   entry; an `--out` on the link is refused and the entry is as it was.
+///
+/// Discrimination (2026-11-24, r2): the re-check of missing folders off (`.any(|m|
+/// m.is_dir())` made `false` in `standalone`): fails "(entry)" (exit 0: the entry clobbered);
+/// restored, passes.
+#[cfg(debug_assertions)]
+#[test]
+fn standalone_protects_a_cache_folder_made_after_its_snapshot() {
+    let f = fixture();
+    let d = tempfile::tempdir().unwrap();
+    let ib = d.path().join("ib");
+    std::fs::create_dir_all(ib.join("work")).unwrap();
+    let text = f.xdg.join("al-ch-snapshot-cache");
+    assert!(!text.exists(), "precondition: an empty cache home");
+    let trace = d.path().join("trace.json");
+    let ws = f.ws.to_str().unwrap();
+    let run = |out: &Path, seam: &str| {
+        let o = out.to_str().unwrap();
+        alone(
+            &f,
+            &["events", "fanout", ws, "--out", o],
+            &[
+                ("ALSEM_TRACE", "1"),
+                ("ALSEM_TRACE_FILE", trace.to_str().unwrap()),
+                ("AL_SEM_IMPACT_BASE_CACHE", ib.to_str().unwrap()),
+                ("ALSEM_TEST_DURING_SNAPSHOT", seam),
+            ],
+        )
+    };
+    let (entry, link) = (text.join("e.bin"), d.path().join("link.json"));
+    let made = format!(
+        "mkdir -p '{}' && printf ENTRY > '{}'",
+        text.display(),
+        entry.display()
+    );
+    let out = run(&entry, &made);
+    assert!(entry.exists(), "(entry): precondition: the seam made it");
+    assert_write_refused("(entry)", &out, "is in a cache folder of the engine");
+    assert_eq!(
+        std::fs::read(&entry).unwrap(),
+        b"ENTRY",
+        "(entry): untouched"
+    );
+    std::fs::remove_dir_all(&f.xdg).unwrap();
+    let seam = format!(
+        "mkdir -p '{}' && printf ENTRY > '{}' && ln '{}' '{}'",
+        text.display(),
+        entry.display(),
+        entry.display(),
+        link.display()
+    );
+    let out = run(&link, &seam);
+    assert!(
+        link.exists(),
+        "(link): precondition: the seam made the link"
+    );
+    assert_write_refused("(link)", &out, "is a file of the engine's caches");
+    assert_eq!(
+        std::fs::read(&entry).unwrap(),
+        b"ENTRY",
+        "(link): untouched"
+    );
+}

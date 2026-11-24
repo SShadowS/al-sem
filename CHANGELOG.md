@@ -26,21 +26,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Which folders.** The text cache folder, the IR cache's folder (also an `ALSEM_IR_CACHE_DIR`
   outside it), and the impact-base cache's `work/` (live copies of base workspaces, which a
   running impact reads). A standalone run makes none of them (`alsem batch` still makes the
-  first two, as before). A folder that does not exist holds nothing to alias. But a path under
-  where it would be (its existing part resolved) is refused, so no shard directory makes a cache
+  first two, as before). A folder missing at the snapshot is checked again at every write (at
+  most three stats). Once it exists (the engine's first run makes and fills its caches during
+  the run, after a trace file took the snapshot) it is walked and protected like the others.
+  While it is missing, a path under where it would be (its existing part resolved; on Windows
+  without the `\\?\` prefix and ignoring case) is refused. So no shard directory makes a cache
   folder that the cache would later adopt.
 - **Cost.** A standalone process takes its own snapshot at its first write. It lists every
   entry of the folders but stats only the directories (the listing's own file type; a file
   system without `d_type` stats every entry). A file is looked up in the folders only when its
   open finds it may have another name: more than one link, or a mount of its own (`statx`
-  `STATX_ATTR_MOUNT_ROOT`; on Windows, `nNumberOfLinks` above 1). That lookup walks the files once
-  per process. Measured on server1's real caches (153,575 entries, `release-fast`, 5 runs each,
+  `STATX_ATTR_MOUNT_ROOT`; on Windows, `nNumberOfLinks` above 1). Each such lookup walks the
+  files afresh, so an entry published since an earlier lookup is found. Measured on server1's real caches (153,575 entries, `release-fast`, 5 runs each,
   a busy host): the snapshot added 34-48 ms to a `cache prune` run (54, 53, 41, 43, 40 ms
   against 6 ms with no cache); an `--out` with a second link took 268-405 ms against 53-68 ms
   for an `--out` with one link (the files walk).
 - **An unreadable part of a cache blocks only the writes that need it.** The snapshot skips a
-  folder it cannot list; the folder test still knows every cache folder. Only a lookup (a file
-  with another name) that cannot list a folder refuses its write, naming that folder.
+  folder it cannot list. The folder test still knows every cache folder whose own identity it
+  could read; a cache folder that cannot even be looked at is skipped too. Only a lookup (a
+  file with another name) that cannot list a folder refuses its write, naming that folder.
 - **Appends wait.** An append (the IR report, the cones schedule, and the batch run's shared
   report) still opens with `O_NONBLOCK`, so a FIFO with no reader fails at once. The flag is then
   cleared, so its writes wait and never drop a line.
@@ -60,8 +64,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - a cache entry moved out of its folder by hand while mapped (one link, no longer in a cache
     folder);
   - a deleted entry still mapped, opened through a `/proc/<pid>/fd` link (no name left);
-  - in a long-lived process, a cache folder deleted and made again after its snapshot (new
-    identities);
+  - in a long-lived process, a cache folder that existed at its snapshot, then was deleted and
+    made again (new identities; a folder missing at the snapshot is checked again);
   - a file on an overlayfs lower layer that a cache entry shares.
 - **Tests** (`tests/cli/cli_ir_cache.rs`, real `alsem`/`aldump` processes; `cache_guard::tests`,
   `claim::tests`). Each has a discrimination proof in its doc.
@@ -75,6 +79,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     edit).
   - An unlistable cache subfolder, with one-link and two-link `--out`s.
   - A missing IR folder that no write makes.
+  - A text folder missing at the snapshot and made later: an `--out` in it, and one on an outside
+    hard link to an entry in it.
   - `cache prune` in the text folder and in the IR folder.
   - An `--out` in, and linked into, the impact-base `work/`.
   - A bind-mounted file counted as may-have-another-name (each half skipped where the host

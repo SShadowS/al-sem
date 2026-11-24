@@ -66,7 +66,7 @@ use super::manifest::FileId;
 type Born = u64;
 
 /// The identities of the cache folders and everything in them, at the check.
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct Snapshot {
     /// The cache folders, as made, for the check's messages and its "holds"
     /// test (the parent's only).
@@ -107,8 +107,9 @@ impl Snapshot {
     /// snapshot ([`standalone`]) looks the file up only when it may have
     /// another name ([`may_alias`]): a file with one name, no mount of its own,
     /// is the name the folder test already checked. The lookup walks the
-    /// folders' files once per process ([`whole`]); a walk that cannot finish
-    /// refuses the write, naming the folder it could not list.
+    /// folders' files at every lookup (r2: kept walks missed an entry
+    /// published after them; a lookup is rare, ~0.3 s on server1); a walk that
+    /// cannot finish refuses the write, naming the folder it could not list.
     pub(super) fn holds_file(&self, f: &std::fs::File) -> std::io::Result<bool> {
         let (id, m) = (super::claim::handle_id(f)?, f.metadata()?);
         if !self.dirs_only {
@@ -117,23 +118,11 @@ impl Snapshot {
         if !may_alias(f, &m) {
             return Ok(false);
         }
-        Ok(whole(&self.roots)?.is_cache_file(&id, &m))
+        let mut now = Snapshot::default();
+        walk_roots(&self.roots, &mut now, true)
+            .map_err(|e| std::io::Error::other(format!("refused: {e}")))?;
+        Ok(now.is_cache_file(&id, &m))
     }
-}
-
-/// TLS-120: the files of the folders-only snapshot's `roots`, walked at the
-/// first lookup and kept for the process (as [`standalone`] is). A cache file
-/// published later is in a folder the folder test refuses; only another
-/// process's link to it is missed, which is outside the scope (module doc).
-fn whole(roots: &[PathBuf]) -> std::io::Result<&'static Snapshot> {
-    static WHOLE: OnceLock<Result<Snapshot, String>> = OnceLock::new();
-    WHOLE
-        .get_or_init(|| {
-            let mut snap = Snapshot::default();
-            walk_roots(roots, &mut snap, true).map(|()| snap)
-        })
-        .as_ref()
-        .map_err(|e| std::io::Error::other(format!("refused: {e}")))
 }
 
 /// Whether the file `f` may have a name besides the one it was opened by: more
@@ -268,55 +257,98 @@ fn walk_roots(roots: &[PathBuf], snap: &mut Snapshot, files: bool) -> Result<(),
 /// `alsem` or `aldump`), taken at its first write and kept. It makes no
 /// folder: the text cache folder, the IR cache's folder, and the impact-base
 /// cache's `work/` (live copies of base workspaces) when they exist, their
-/// directories only; the missing ones by path ([`Snapshot::missing`]). A file
-/// is looked up when an open needs it ([`Snapshot::holds_file`]). No cache is
+/// directories only; the missing ones by path ([`Snapshot::missing`]). At every
+/// check after that, each missing folder is looked at again (at most three
+/// stats): one made since (the engine's first run fills its caches during the
+/// run) is walked, folders-only, and protected from then on (r2). A file is
+/// looked up when an open needs it ([`Snapshot::holds_file`]). No cache is
 /// turned off: an outside run's caches are as they were.
-pub(super) fn standalone() -> std::io::Result<&'static Snapshot> {
-    static STANDALONE: OnceLock<Result<Snapshot, String>> = OnceLock::new();
-    STANDALONE
-        .get_or_init(|| {
-            let mut snap = Snapshot {
-                dirs_only: true,
-                ..Snapshot::default()
-            };
-            let impact = crate::engine::impact::cache::Cache::default_dir().map(|d| d.join("work"));
-            let all = [
-                Some(crate::snapshot::cache::cache_dir_path()),
-                Some(crate::program::ir_cache::ir_root()),
-                impact,
-            ];
-            for root in all.into_iter().flatten() {
-                match std::fs::symlink_metadata(&root) {
-                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                        snap.missing.push(anchored(&root));
-                    }
-                    _ if root.is_dir() => snap.roots.push(root),
-                    _ => {}
-                }
+pub(super) fn standalone() -> std::io::Result<std::sync::Arc<Snapshot>> {
+    use std::sync::{Arc, Mutex};
+    static STANDALONE: Mutex<Option<Arc<Snapshot>>> = Mutex::new(None);
+    let mut held = STANDALONE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let snap = held.get_or_insert_with(|| Arc::new(first_standalone()));
+    if snap.missing.iter().any(|m| m.is_dir()) {
+        let mut next = Snapshot::clone(snap);
+        let (made, still): (Vec<_>, Vec<_>) = next.missing.drain(..).partition(|m| m.is_dir());
+        next.missing = still;
+        // Folders-only: a folder that cannot be listed is skipped, never an error.
+        let _ = walk_roots(&made, &mut next, false);
+        next.roots.extend(made);
+        *snap = Arc::new(next);
+    }
+    Ok(Arc::clone(snap))
+}
+
+/// [`standalone`]'s first snapshot.
+fn first_standalone() -> Snapshot {
+    let mut snap = Snapshot {
+        dirs_only: true,
+        ..Snapshot::default()
+    };
+    let impact = crate::engine::impact::cache::Cache::default_dir().map(|d| d.join("work"));
+    let all = [
+        Some(crate::snapshot::cache::cache_dir_path()),
+        Some(crate::program::ir_cache::ir_root()),
+        impact,
+    ];
+    for root in all.into_iter().flatten() {
+        match std::fs::symlink_metadata(&root) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                snap.missing.push(anchored(&root));
             }
-            walk_roots(&snap.roots.clone(), &mut snap, false).map(|()| snap)
-        })
-        .as_ref()
-        .map_err(|e| std::io::Error::other(format!("refused: {e}")))
+            _ if root.is_dir() => snap.roots.push(root),
+            _ => {}
+        }
+    }
+    // Folders-only: a folder that cannot be listed is skipped, never an error.
+    let _ = walk_roots(&snap.roots.clone(), &mut snap, false);
+    snap
 }
 
 /// `p` absolute, its longest existing part resolved (links followed), the
-/// rest as written.
+/// rest as written. Windows: without the verbatim `\\?\` prefix
+/// `canonicalize` adds, so it compares with the paths [`link_hops`] builds.
 fn anchored(p: &Path) -> PathBuf {
     let p = std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf());
     for base in p.ancestors().skip(1) {
         if let Ok(real) = std::fs::canonicalize(base) {
-            return real.join(p.strip_prefix(base).unwrap_or(&p));
+            return plain(real).join(p.strip_prefix(base).unwrap_or(&p));
         }
     }
     p
+}
+
+/// `p` without a verbatim prefix: `\\?\C:\x` is `C:\x`, `\\?\UNC\h\s` is
+/// `\\h\s`. Elsewhere `p` as it is.
+fn plain(p: PathBuf) -> PathBuf {
+    let s = p.to_string_lossy();
+    if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
+        return PathBuf::from(format!(r"\\{rest}"));
+    }
+    match s.strip_prefix(r"\\?\") {
+        Some(rest) if cfg!(windows) => PathBuf::from(rest),
+        _ => p,
+    }
+}
+
+/// Whether `p` lies in (or is) `root`, by name. Windows names ignore case.
+fn under(p: &Path, root: &Path) -> bool {
+    if cfg!(windows) {
+        let low = |x: &Path| PathBuf::from(x.to_string_lossy().to_lowercase());
+        low(p).starts_with(low(root))
+    } else {
+        p.starts_with(root)
+    }
 }
 
 /// TLS-120: why `dir` must not be used as a folder a command deletes files in
 /// (`cache prune --dep-cache-dir`): it is, or lies in, a cache folder of the
 /// engine. `None`: it may.
 pub fn refuses_dir(dir: &Path) -> std::io::Result<Option<&'static str>> {
-    refuses_path(standalone()?, &std::env::current_dir()?, dir)
+    refuses_path(&*standalone()?, &std::env::current_dir()?, dir)
 }
 
 /// The identity of this process's claim folder, when it is in a batch run.
@@ -636,7 +668,7 @@ fn link_hops(snap: &Snapshot, path: PathBuf, hops: u32) -> std::io::Result<Optio
                 return Ok(snap
                     .missing
                     .iter()
-                    .any(|m| rest.starts_with(m))
+                    .any(|m| under(&rest, m))
                     .then_some("this file is in a cache folder of the engine"));
             }
             Err(e) => return Err(e),
