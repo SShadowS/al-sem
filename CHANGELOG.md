@@ -27,11 +27,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   outside it), and the impact-base cache's `work/` (live copies of base workspaces, which a
   running impact reads). A standalone run makes none of them (`alsem batch` still makes the
   first two, as before). Every folder is checked again at every write (at most three stats).
-  One missing at the snapshot is walked and protected like the others once it exists: the
-  engine's first run makes and fills its caches during the run, after a trace file took the
-  snapshot. So is one whose identity changed (deleted and made again). One deleted since counts
-  as missing.
-  While it is missing, a path under where it would be (its existing part resolved; on Windows
+  One missing at the snapshot (or no folder then: a file or a dangling symlink at its path) is
+  walked and protected like the others once it is a folder: the engine's first run makes and
+  fills its caches during the run, after a trace file took the snapshot. So is one whose
+  identity changed (deleted and made again). One deleted since counts as missing. While it is
+  missing, a path under where it would be (its existing part resolved; on Windows
   without the `\\?\` prefix and ignoring case) is refused. So no shard directory makes a cache
   folder that the cache would later adopt.
 - **Cost.** A standalone process takes its own snapshot at its first write. It lists every
@@ -81,7 +81,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - A missing IR folder that no write makes.
   - A text folder missing at the snapshot and made later: an `--out` that is an entry in it, and
     one on an outside hard link to that entry. A text folder deleted and made again after the
-    snapshot: an `--out` that is an entry in it.
+    snapshot: an `--out` that is an entry in it. A text cache path that was a file, or a
+    dangling symlink, at the snapshot and became a folder: the same.
   - `cache prune` in the text folder and in the IR folder.
   - An `--out` in, and linked into, the impact-base `work/`.
   - A bind-mounted file counted as may-have-another-name (each half skipped where the host

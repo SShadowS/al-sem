@@ -2117,3 +2117,67 @@ fn standalone_protects_a_cache_folder_made_again() {
     assert_write_refused("(made again)", &out, "is in a cache folder of the engine");
     assert_eq!(std::fs::read(&entry).unwrap(), b"ENTRY", "untouched");
 }
+
+/// TLS-120 r4: a cache path that is no folder at the snapshot (a file, or a dangling symlink)
+/// is watched like a missing one: the debug seam `ALSEM_TEST_DURING_SNAPSHOT` (run while the
+/// snapshot walks the impact-base `work/`) makes it a folder with an entry in it, and an
+/// `--out` that is that entry is refused, the entry as it was.
+///
+/// Discrimination (2026-11-24, r4): `first_standalone` dropping such a path again (only a
+/// path whose `symlink_metadata` fails taken as missing): fails "(a file)" (exit 0: the entry
+/// clobbered); restored, passes.
+#[cfg(debug_assertions)]
+#[test]
+fn standalone_protects_a_cache_path_that_was_no_folder() {
+    for case in ["(a file)", "(a dangling link)"] {
+        let f = fixture();
+        let d = tempfile::tempdir().unwrap();
+        let ib = d.path().join("ib");
+        std::fs::create_dir_all(ib.join("work")).unwrap();
+        std::fs::create_dir_all(&f.xdg).unwrap();
+        let text = f.xdg.join("al-ch-snapshot-cache");
+        let target = d.path().join("target");
+        let entry = text.join("e.bin");
+        let seam = if case == "(a file)" {
+            std::fs::write(&text, "not a folder").unwrap();
+            format!(
+                "rm '{t}' && mkdir '{t}' && printf ENTRY > '{e}'",
+                t = text.display(),
+                e = entry.display()
+            )
+        } else {
+            std::os::unix::fs::symlink(&target, &text).unwrap();
+            format!(
+                "mkdir '{g}' && printf ENTRY > '{e}'",
+                g = target.display(),
+                e = entry.display()
+            )
+        };
+        let ws = f.ws.to_str().unwrap();
+        let out = alone(
+            &f,
+            &[
+                "events",
+                "fanout",
+                ws,
+                "--single-app",
+                "--out",
+                entry.to_str().unwrap(),
+            ],
+            &[
+                ("AL_SEM_IMPACT_BASE_CACHE", ib.to_str().unwrap()),
+                ("ALSEM_TEST_DURING_SNAPSHOT", &seam),
+            ],
+        );
+        assert!(
+            entry.exists(),
+            "{case}: precondition: the seam made the entry"
+        );
+        assert_write_refused(case, &out, "is in a cache folder of the engine");
+        assert_eq!(
+            std::fs::read(&entry).unwrap(),
+            b"ENTRY",
+            "{case}: untouched"
+        );
+    }
+}

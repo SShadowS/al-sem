@@ -322,12 +322,12 @@ fn first_standalone() -> Snapshot {
         impact,
     ];
     for root in all.into_iter().flatten() {
-        match std::fs::symlink_metadata(&root) {
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                snap.missing.push(anchored(&root));
-            }
-            _ if root.is_dir() => snap.roots.push(root),
-            _ => {}
+        if root.is_dir() {
+            snap.roots.push(root);
+        } else {
+            // Missing, a dangling link or no folder (a file at the path): watched as missing,
+            // so it is protected once it is a folder (r4).
+            snap.missing.push(anchored(&root));
         }
     }
     // Folders-only: a folder that cannot be listed is skipped, never an error.
