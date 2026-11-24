@@ -97,6 +97,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   base-object reference the tableextension's.
 - **Goldens.** None moved.
 
+### Fixed (ENG-192: the RecordRef temp pass reads the `Open` before each operation)
+
+- **The bug.** record_types' temp pass (a local or parameter RecordRef in a routine without
+  `if`/`case`/`try`) kept ONE temp state per variable, from the last `Open`/`GetTable` it saw, and
+  gave it to every operation of that variable. Four wrong `no` for `prove writes-table` on master
+  (c6f61f04), found by Fable's reviews of ENG-191:
+  - `R.Open(T); R.Insert(); R.Close(); R.Open(T, true)`: the later temporary `Open` reached the
+    physical `Insert` before it;
+  - the same with `System.Clear(R)` in place of `Close`;
+  - `R.Open(T, true); R.Close(); R.Open(T, Flag); R.Insert()`: an `Open` whose flag is not a
+    literal was skipped, so the earlier temporary state carried on;
+  - `R.Open(T, true); for … do begin R.Insert(); R.Close(); R.Open(T); end`: an `Open` inside a
+    loop was skipped, though the next iteration's `Insert` runs on it.
+- **The fix.** Each `Open`/`GetTable` of the variable is a bind with the state it leaves (unknown
+  for a non-literal flag or an unknown `GetTable` source); an operation reads the last bind before
+  it, none before the first. A variable bound inside a loop derives nothing. `Close`/`Clear` add
+  no bind: an operation after one and before the next bind runs on an unbound RecordRef, a
+  runtime error, never a write.
+- **CDO (pinned `bc3ccb18`, c6f61f04 against 44c976ba):** nothing moved. No finding or
+  fingerprint at either scope, unknown edges 0 -> 0. cdo-speed PASS: instructions build x0.9983.
+- **Tests and red proofs.** `cli_recref_temp_position` (new; its AL compiles clean on alc
+  18.0.41): the four shapes answer not `no` (master: `no`), a `Clear(R)` row and the controls (one
+  physical `Open`: `yes`; one temporary `Open`: `no`). Each break then restored: every operation
+  reading the variable's last bind fails `RootClose`; an `Open` with an unknown flag pushing no
+  bind fails `RootUnknownFlag`; a variable bound inside a loop kept fails `RootLoop`.
+- **Goldens.** None moved.
+
 ### Fixed (ENG-178: table procedures named like record built-ins: four follow-ups from ENG-173)
 
 From Fable's second review of ENG-173 (`/work/.al-sem/engine-notes/eng173/fable-eng173-r2.md`).
