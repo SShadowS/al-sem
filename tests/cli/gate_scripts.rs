@@ -2201,7 +2201,7 @@ fn cdo_gate_skips_speed_only_when_no_product_code_changed() {
 /// STUB_SLOW_HEAD, STUB_CPI_HEAD, STUB_SYS_HEAD, STUB_SECOND_FACTOR,
 /// STUB_BUILD_HEAD_BY_PASS, STUB_TESTS_HEAD_BY_PASS and
 /// STUB_TESTS_HEAD_SLEEP_BY_PASS shape head's cost, STUB_SLEEP_S and
-/// STUB_TESTS_EXTRA_S both sides' (see the code).
+/// STUB_EXTRA_S both sides' (see the code).
 #[cfg(target_os = "linux")]
 const SPEED_STUB: &str = r#"#!/usr/bin/env python3
 import fcntl, json, os, sys, time
@@ -2217,13 +2217,40 @@ if os.environ.get("STUB_IR_DEAD") and os.environ.get("ALSEM_IR_CACHE") == "on":
 calls = 0
 # TLS-126: the IR cache report (ALSEM_IR_CACHE_REPORT), as the engine writes it
 # (src/program/ir_cache/report.rs): a `start` line at the first build, an `end`
-# line with counters at exit. A cache folder this stub filled before gives disk
-# hits (a warm build); an empty one gets a publish. STUB_IR_NO_REPORT: none.
+# line with counters when the process holding the cache exits. That is the
+# engine CHILD, a descendant of the server: here a child forked at the first
+# build, whose pid both lines carry; it writes `end` 0.5 s after the server is
+# gone (cdo-speed's close must wait for the server's descendants). A cache
+# folder this stub filled before gives disk hits (a warm build); an empty one
+# gets a publish. STUB_IR_NO_REPORT: no report.
 report = None if os.environ.get("STUB_IR_NO_REPORT") else os.environ.get("ALSEM_IR_CACHE_REPORT")
-ir_counters = None
 def report_line(v):
     with open(report, "a") as f:
         f.write(json.dumps(v) + "\n")
+def report_child(counters):
+    r, w = os.pipe()
+    pid = os.fork()
+    if pid == 0:
+        os.close(w)
+        os.close(0)
+        os.close(1)
+        while os.read(r, 1):  # EOF: the server exited (it held `w`)
+            pass
+        time.sleep(0.5)
+        report_line({"event": "end", "pid": os.getpid(), "counters": counters})
+        os._exit(0)
+    os.close(r)
+    report_line({"event": "start", "pid": pid})
+    return w
+def extra_s(n):
+    # STUB_EXTRA_S=b:h[,b:h...] (TLS-126): the judged calls (build, warm-tests)
+    # of base and head burn b and h seconds more in warm-up pass n (one entry:
+    # every pass): the 10 ms ticks a CPU reading can be off by, made deterministic.
+    spec = os.environ.get("STUB_EXTRA_S")
+    if not spec:
+        return 0.0
+    passes = spec.split(",")
+    return float(passes[n % len(passes)].split(":")[1 if head else 0])
 def burn(seconds):
     # User time (TLS-111: the clock is cycles per USER second): a pure loop
     # between reads, since reading the CPU clock is a system call.
@@ -2280,7 +2307,8 @@ for line in sys.stdin:
             else:
                 open(mark, "w").close()
                 ir_counters = {"eligible_files": 3, "published_packages": 1}
-            report_line({"event": "start", "pid": os.getpid()})
+            # Held until this server exits: the child's signal to write `end`.
+            ir_end_fd = report_child(ir_counters)
         if calls == 1:
             # TLS-111: STUB_BUILD_HEAD_BY_PASS=f1,f2,...: head's build does f<pass>
             # times the work in that warm-up pass (3 builds a pass: two timed,
@@ -2303,7 +2331,7 @@ for line in sys.stdin:
                 passes = spec.split(",")
                 b_slow, b_cpi, b_sys = map(float, passes[(n // 3) % len(passes)].split(":"))
             burned = (float(os.environ["STUB_BUILD_S"]) * (1.5 if another_alive() else 1.0)
-                      * work * b_cpi)
+                      * work * b_cpi) + extra_s(n // 3)
             burn(burned * b_slow)
             # STUB_HEAD_SLEEP_S (TLS-103): head's build waits this long, wall time
             # with no CPU, as a loaded host stretches it.
@@ -2332,13 +2360,7 @@ for line in sys.stdin:
             by_pass = os.environ.get("STUB_TESTS_HEAD_BY_PASS")
             if head and by_pass:
                 work = float(by_pass.split(",")[n // 2])
-            burned = float(os.environ["STUB_BUILD_S"]) * factor * work * cpi
-            # STUB_TESTS_EXTRA_S=b,h (TLS-126): base's and head's warm-tests burn
-            # b and h seconds more in every pass: the 10 ms ticks a CPU reading
-            # can be off by, made deterministic.
-            extra = os.environ.get("STUB_TESTS_EXTRA_S")
-            if extra:
-                burned += float(extra.split(",")[1 if head else 0])
+            burned = float(os.environ["STUB_BUILD_S"]) * factor * work * cpi + extra_s(n // 2)
             burn(burned * slow)
             # STUB_TESTS_HEAD_SLEEP_BY_PASS=s1,s2,...: head's warm-tests then
             # waits s<pass> seconds more (wall time only).
@@ -2410,8 +2432,6 @@ for line in sys.stdin:
     print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": result}), flush=True)
 if os.path.exists(me):
     os.remove(me)
-if ir_counters is not None:
-    report_line({"event": "end", "pid": os.getpid(), "counters": ir_counters})
 "#;
 
 /// ⟨TLS-83⟩ A stand-in `perf` (cdo-speed's CDO_SPEED_PERF test hook): the
@@ -3286,17 +3306,27 @@ print("ok")
 /// disagree beyond x1.25 gets ONE more flipped pair. The stub's positional
 /// factor is off (STUB_SECOND_FACTOR 1), and head's warm-tests costs a set
 /// factor per pass (STUB_TESTS_HEAD_BY_PASS):
-/// - 1.0, 2.0, then 1.0, 1.7: x1.41 fails with passes x1.0/x2.0; the added pair's
-///   same-order passes agree (x1.0/x1.0, x2.0/x1.7): judged on all four (x1.36),
-///   FAIL, the verdict saying why the pair was added; never a fifth pass;
-/// - 1.0, 2.0, then 1.0, 1.0: passes 2 and 4 still disagree: HOST UNSTABLE,
+/// - 1.0, 2.4, then 1.0, 2.4: x1.55 fails with passes x1.0/x2.4; the added pair's
+///   same-order passes agree: judged on all four, FAIL, the verdict saying why
+///   the pair was added; never a fifth pass;
+/// - 1.0, 3.0, then 1.0, 1.0: passes 2 and 4 still disagree: HOST UNSTABLE,
 ///   exit 2, no rounds; speed.json says `verdict` HOST UNSTABLE and lists it in
 ///   `failed` (a `not failed` reader never sees a pass); a `FAIL:` line names
 ///   it; cdo-gate's summary shows a FAILED speed row, which alone fails the gate
 ///   with every other phase green;
-/// - 1.5, 1.5: a failure both passes agree on adds nothing and fails.
+/// - 2.0, 2.0: a failure both passes agree on adds nothing and fails.
 ///
-/// Mutations (2026-11-21): `contradicted` ignoring the spread -> the agreeing
+/// ⟨TLS-126⟩ Robust to CPU ticks: every run's base burns 0.05 s (5 ticks) more
+/// in both judged calls (STUB_EXTRA_S), the direction that failed a gate, and
+/// each margin below still holds with a further -1..+4 ticks on every one of
+/// the 8 readings (worst cases): the first run (STUB_BUILD_S 0.8) pair x1.38
+/// against 1.3, same-order spread x1.13 against 1.25; the second pair x1.39;
+/// the third x1.61. Proof (2026-11-24): the first run back on 1.0, 2.0, 1.0,
+/// 1.7 at 0.4 s -> warm-tests x1.259 (x0.891/x1.778), no extra pair, PASS
+/// (red); restored, green.
+///
+/// Mutations (2026-11-21, on the values then: 1.0, 2.0, 1.0, 1.7 / 1.0 / 1.5):
+/// `contradicted` ignoring the spread -> the agreeing
 /// failure starts "warm-up 3 of 4" (red); `same_order_disagree` comparing
 /// passes i and i + 1 instead of i and i + 2 -> the agreeing re-measure reads
 /// HOST UNSTABLE, exit 2 (red); HOST UNSTABLE's `return 2` dropped -> the
@@ -3309,7 +3339,7 @@ print("ok")
 #[cfg(target_os = "linux")]
 #[test]
 fn speed_adds_one_flipped_pair_on_a_contradicted_failure() {
-    let run = |by_pass: &str| {
+    let run = |by_pass: &str, build_s: &str| {
         let dir = tempfile::tempdir().unwrap();
         let (code, text) = speed_with_stub(
             dir.path(),
@@ -3318,13 +3348,15 @@ fn speed_adds_one_flipped_pair_on_a_contradicted_failure() {
             &[
                 ("STUB_SECOND_FACTOR", "1.0"),
                 ("STUB_TESTS_HEAD_BY_PASS", by_pass),
+                ("STUB_BUILD_S", build_s),
+                ("STUB_EXTRA_S", "0.05:0"),
             ],
         );
         (dir, code, text)
     };
 
     // Contradicted, then the same orders agree: judged on four passes.
-    let (dir, code, text) = run("1.0,2.0,1.0,1.7");
+    let (dir, code, text) = run("1.0,2.4,1.0,2.4", "0.8");
     assert_eq!(code, Some(1), "{text}");
     let v = speed_verdict(&text);
     assert!(
@@ -3334,7 +3366,7 @@ fn speed_adds_one_flipped_pair_on_a_contradicted_failure() {
         "{text}"
     );
     assert!(
-        text.contains("FAIL: warm-tests: CPU time x1.3") && text.contains("warm-up, 4 pass(es))"),
+        text.contains("FAIL: warm-tests: CPU time x1.") && text.contains("warm-up, 4 pass(es))"),
         "{text}"
     );
     assert!(
@@ -3367,7 +3399,7 @@ fn speed_adds_one_flipped_pair_on_a_contradicted_failure() {
     assert!(text.contains("round 1:"), "the rounds ran: {text}");
 
     // Still contradicted: HOST UNSTABLE, exit 2, never a PASS.
-    let (dir, code, text) = run("1.0,2.0,1.0,1.0");
+    let (dir, code, text) = run("1.0,3.0,1.0,1.0", "0.4");
     assert_eq!(code, Some(2), "{text}");
     let v = speed_verdict(&text);
     assert!(
@@ -3440,7 +3472,7 @@ fn speed_adds_one_flipped_pair_on_a_contradicted_failure() {
     assert!(!out.status.success(), "{summary}");
 
     // Both passes agree on the failure: nothing added, FAIL.
-    let (_dir, code, text) = run("1.5,1.5");
+    let (_dir, code, text) = run("2.0,2.0", "0.4");
     assert_eq!(code, Some(1), "{text}");
     assert!(
         speed_verdict(&text).starts_with("cdo-speed: FAIL")
@@ -3469,23 +3501,37 @@ fn speed_ir_rows_never_fail_the_verdict() {
 
 /// ⟨TLS-111 review r1⟩ The extra pair judges EVERY failure in side order, and
 /// may clear one:
-/// - cross-row: warm-tests triggers (1.0, 2.0) and settles (0.9, 1.8), while the
-///   build failed after pass 2 with agreeing passes (x1.4, x1.4) and reads x0.9
-///   in the extra pair: its four-pass mean (x1.12) would pass it, but its
-///   same-order passes disagree (x1.4/x0.9): HOST UNSTABLE naming the build;
+/// - cross-row: warm-tests triggers (1.0, 2.4) and settles (1.0, 2.4), while the
+///   build failed after pass 2 with agreeing passes (x1.8, x1.8) and reads x0.9
+///   in the extra pair: its four-pass mean (x1.27) would pass it, but its
+///   same-order passes disagree (x1.8/x0.9): HOST UNSTABLE naming the build;
 /// - side order: the stub's positional factor ON (x1.5 for the second of a
-///   pair), head's warm-tests x1.4 in every pass: per-pass ratios ~x2.1, ~x0.93,
-///   ~x2.1, ~x0.93, so passes 3 and 4 agree with 1 and 2 only in the same side
+///   pair), head's warm-tests x2.0 in every pass: per-pass ratios ~x1.33, ~x3.0,
+///   ~x1.33, ~x3.0, so passes 3 and 4 agree with 1 and 2 only in the same side
 ///   order: FAIL judged on four passes, never HOST UNSTABLE;
-/// - agree, then PASS (`speed_agree_then_pass`, on declared wall time since
-///   TLS-126): the pair fails with contradicting passes; passes 3 and 4 agree
-///   with them; the four-pass mean PASSes, saying the pair was added.
+/// - agree, then PASS (`speed_agree_then_pass`): the pair fails with
+///   contradicting passes; passes 3 and 4 agree with them; the four-pass mean
+///   PASSes, saying the pair was added.
 ///
-/// Mutations (2026-11-21, round 2): the same-order check over the triggering
-/// failures only (round 1's code) -> the cross-row run exits 1, not 2 (red);
-/// passes 3 and 4 in the wrong side order (`first` base in passes 1 and 4, the
-/// flip in passes 2 and 3) -> the side-order run reads HOST UNSTABLE, passes 1
-/// and 3 x0.933/x2.073 (red). Each restored, green.
+/// ⟨TLS-126⟩ Robust to CPU ticks (10 ms; a 0.4 s burn read 1 and 2 ticks high
+/// in a failing gate). The cross-row and side-order runs stay on CPU, the
+/// extra pair's CPU path; base burns 0.05 s (5 ticks) more in both judged calls
+/// of every pass (STUB_EXTRA_S), the direction that failed the gate, and each
+/// margin still holds with a further -1..+4 ticks on every one of the 8
+/// readings (worst cases): cross-row (STUB_BUILD_S 0.8) warm-tests' pair x1.38
+/// against 1.3, its same-order spread x1.13 against 1.25, the build's pair
+/// x1.61 and its same-order spread x1.78 (it must pass 1.25); side order (0.4 s)
+/// the pair x1.67, the same-order spread x1.16. Proofs (2026-11-24): cross-row
+/// back on its old values (1.0, 2.0, 0.9, 1.8; build 1.4, 1.4, 0.9, 0.9; 0.4 s)
+/// -> warm-tests x1.289 and the build x1.267, both under 1.3: no extra pair,
+/// PASS, exit 0 (red); side order back on x1.4 -> x1.270 (x0.864/x1.867), no
+/// extra pair, PASS (red); each restored, green.
+///
+/// Mutations (2026-11-21, round 2, on the values then): the same-order check
+/// over the triggering failures only (round 1's code) -> the cross-row run
+/// exits 1, not 2 (red); passes 3 and 4 in the wrong side order (`first` base
+/// in passes 1 and 4, the flip in passes 2 and 3) -> the side-order run reads
+/// HOST UNSTABLE, passes 1 and 3 x0.933/x2.073 (red). Each restored, green.
 #[cfg(target_os = "linux")]
 #[test]
 fn speed_extra_pair_judges_every_failure_in_side_order() {
@@ -3498,8 +3544,10 @@ fn speed_extra_pair_judges_every_failure_in_side_order() {
     // Cross-row: the build's failure must agree too.
     let (_dir, code, text) = run(&[
         ("STUB_SECOND_FACTOR", "1.0"),
-        ("STUB_TESTS_HEAD_BY_PASS", "1.0,2.0,0.9,1.8"),
-        ("STUB_BUILD_HEAD_BY_PASS", "1.4,1.4,0.9,0.9"),
+        ("STUB_TESTS_HEAD_BY_PASS", "1.0,2.4,1.0,2.4"),
+        ("STUB_BUILD_HEAD_BY_PASS", "1.8,1.8,0.9,0.9"),
+        ("STUB_BUILD_S", "0.8"),
+        ("STUB_EXTRA_S", "0.05:0"),
     ]);
     assert_eq!(code, Some(2), "{text}");
     let v = speed_verdict(&text);
@@ -3512,7 +3560,8 @@ fn speed_extra_pair_judges_every_failure_in_side_order() {
     // TLS-126: the stub writes no IR report here, so the IR rows' label shows
     // (the control of `speed_agree_then_pass`'s "no label").
     let (_dir, code, text) = run(&[
-        ("STUB_TESTS_HEAD_BY_PASS", "1.4,1.4,1.4,1.4"),
+        ("STUB_TESTS_HEAD_BY_PASS", "2.0,2.0,2.0,2.0"),
+        ("STUB_EXTRA_S", "0.05:0"),
         ("STUB_IR_NO_REPORT", "1"),
     ]);
     assert_eq!(code, Some(1), "{text}");
@@ -3526,11 +3575,10 @@ fn speed_extra_pair_judges_every_failure_in_side_order() {
         "{text}"
     );
 
-    speed_agree_then_pass("0,0");
+    speed_agree_then_pass();
 }
 
-/// The "agree, then PASS" run of the test above, with STUB_TESTS_EXTRA_S
-/// `extra` (base's and head's warm-tests burn that many seconds more).
+/// The "agree, then PASS" run of the test above.
 ///
 /// ⟨TLS-126⟩ Judged on WALL time, from seconds the stub declares (exact), not
 /// on CPU. The scenario's window is narrow by its own geometry: the pair's
@@ -3543,8 +3591,28 @@ fn speed_extra_pair_judges_every_failure_in_side_order() {
 /// and 5.4 s more: wall x1.48, x1.95, x1.24, x1.64 by pass; the pair x1.70
 /// FAILs (limit 1.6) with contradicting passes (x1.32), the four-pass mean
 /// x1.56 PASSes, the same-order spreads are x1.19; a tick moves a ratio 0.1 %.
+/// The run carries the worst tick errors itself (STUB_EXTRA_S): base burns
+/// 0.05 s more in passes 1 and 2 (lowering the pair), head in passes 3 and 4
+/// (raising the four-pass mean). With a further -2..+3 ticks on every reading
+/// the worst cases are: the pair x1.68 against 1.6, the four-pass mean x1.57,
+/// the same-order spread x1.22 against 1.25, the contradiction x1.30.
+///
+/// Proofs (2026-11-24): the run on CPU as before (head 0.9, 2.0, 0.8, 1.7, no
+/// declared seconds), base +0.05 s -> warm-tests x1.224 (x0.822/x1.822 by
+/// pass), no extra pair, plain PASS: the failing gate's verdict shape (its own
+/// numbers were x0.878/x1.905) (red); on declared wall, green. Redone by Edit
+/// on the finished helper (old values and `cpu` put back) -> x1.203, plain PASS
+/// (red); restored, green.
+///
+/// The IR report: the stub's `report_line` made a no-op by Edit -> `PASS IR
+/// WARM REPORT BREACH (head: IR: FAIL no report file ...)` (red); restored,
+/// green. The side-order run above keeps the label pinned (STUB_IR_NO_REPORT).
+/// The `end` line comes from the stub's child after the server exits, as the
+/// engine child's does: `Server.close()`'s wait for the server's descendants
+/// deleted (scripts/cdo-speed) -> each child killed, `IR WARM REPORT BREACH
+/// (base: IR: FAIL start without end ...; head: ...)` (red); restored, green.
 #[cfg(target_os = "linux")]
-fn speed_agree_then_pass(extra: &str) {
+fn speed_agree_then_pass() {
     let dir = tempfile::tempdir().unwrap();
     let (code, text) = speed_with_stub(
         dir.path(),
@@ -3554,7 +3622,7 @@ fn speed_agree_then_pass(extra: &str) {
             ("STUB_SECOND_FACTOR", "1.0"),
             ("STUB_SLEEP_S", "8"),
             ("STUB_TESTS_HEAD_SLEEP_BY_PASS", "4,8,2,5.4"),
-            ("STUB_TESTS_EXTRA_S", extra),
+            ("STUB_EXTRA_S", "0.05:0,0.05:0,0:0.05,0:0.05"),
         ],
     );
     assert_eq!(code, Some(0), "{text}");
@@ -3568,28 +3636,6 @@ fn speed_agree_then_pass(extra: &str) {
         "{text}"
     );
     assert_eq!(speed_json(dir.path())["verdict"], "PASS");
-}
-
-/// ⟨TLS-126⟩ The "agree, then PASS" run holds when a CPU reading is off by
-/// the 2 ticks (0.02 s) the failing run showed, or more: base's warm-tests
-/// burns 0.05 s more in every pass, then head's.
-///
-/// Discrimination (2026-11-24): the run on CPU as before (head 0.9, 2.0, 0.8,
-/// 1.7, no declared seconds), base +0.05 s -> warm-tests x1.224 (x0.822/x1.822
-/// by pass), no extra pair, `cdo-speed: PASS` without it: the failing gate's
-/// verdict (red); on declared wall, green. Redone by Edit on the finished
-/// helper (old values and `cpu` put back) -> x1.203 (x0.822/x1.761), plain
-/// PASS (red); restored, green.
-///
-/// The IR report (TLS-126): the stub's `report_line` made a no-op by Edit ->
-/// `PASS IR WARM REPORT BREACH (head: IR: FAIL no report file ...)` here (red);
-/// restored, green. The side-order run of the test above keeps the label
-/// pinned (STUB_IR_NO_REPORT).
-#[cfg(target_os = "linux")]
-#[test]
-fn speed_agree_then_pass_survives_tick_error() {
-    speed_agree_then_pass("0.05,0");
-    speed_agree_then_pass("0,0.05");
 }
 
 /// ⟨TLS-111 review r1⟩ A wall-time failure adds the pair too, and one warm-up

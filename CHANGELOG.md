@@ -9,29 +9,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed (TLS-126: a cdo-speed stub test failed under load, from CPU ticks, not a race)
 
-- `gate_scripts::speed_extra_pair_judges_every_failure_in_side_order` failed 2 times
-  in 5 full `ci-steps task` runs. It failed on its "agree, then PASS" run: warm-tests
-  read x1.293, just under the 1.3 limit, so the extra flipped pair never ran.
-- The cause is the test's margin, not the IR report. The stub's 0.4 s CPU burn is read
-  in 10 ms ticks, and base read 2 ticks (5 %) high. By its own geometry the scenario
-  leaves at most ~4.5 % margin (the pair's mean over the limit, the four-pass mean
-  under it, the same-order passes within x1.25). The verdict's `IR WARM REPORT BREACH
-  (head: ... no report file)` label shows in every run of this stub, passing runs
-  too, because the speed stub wrote no IR report. It never changes a verdict.
+- `gate_scripts::speed_extra_pair_judges_every_failure_in_side_order` flaked under
+  load. Lane engine reported it failing in 2 of 5 full `ci-steps task` runs; the one
+  kept log (`engine-notes/scratch-evidence-2026-11-24/task-33ed.log`) shows the
+  "agree, then PASS" run reading warm-tests x1.293 (x0.878/x1.905 by pass), just
+  under the 1.3 limit, so the extra flipped pair never ran.
+- The cause is the test's margin, not the IR report. cdo-speed reads CPU in 10 ms
+  ticks, and the stub's 0.4 s burn on base read 1 tick high in one pass and 2 in the
+  other. By its own geometry that scenario leaves at most ~4.5 % margin (the pair's
+  mean over the limit, the four-pass mean under it, the same-order passes within
+  x1.25). The verdict's `IR WARM REPORT BREACH (head: ... no report file)` label
+  showed in every run of this stub, passing runs too, because the speed stub wrote
+  no IR report. It never changes a verdict.
+- Reproduced: a new stub knob, `STUB_EXTRA_S=<base>:<head>[,...]`, makes base's and
+  head's judged calls (build, warm-tests) burn extra CPU, per warm-up pass. With base
+  at +0.05 s, the old run gives the same verdict shape as the failing gate (x0.822 /
+  x1.822 by pass, no extra pair, plain PASS).
+- Fix, "agree, then PASS": the run is judged on wall time from seconds the stub
+  declares, which are exact. Both sides declare 8 s, and head's warm-tests 4, 8, 2 and
+  5.4 s more, so a tick moves a ratio by about 0.1 %.
+- Fix, the sibling CPU runs had the same weakness (one tick = 2.5 % of 0.4 s). They
+  now have wider margins: cross-row (and the first run of
+  `speed_adds_one_flipped_pair_on_a_contradicted_failure`) on 0.8 s burns with head
+  1.0, 2.4, 1.0, 2.4 and the build 1.8, 1.8, 0.9, 0.9; side order on x2.0; the
+  other runs on 1.0, 3.0, 1.0, 1.0 and 2.0, 2.0. The cross-row and side-order runs
+  stay on CPU, so the extra pair's CPU path stays covered.
+- Every changed run carries the tick error itself through `STUB_EXTRA_S`, so no
+  separate test is needed. The CPU runs give base 0.05 s (5 ticks) more in every
+  pass. The agree run gives base the extra in passes 1 and 2 and head in passes 3
+  and 4. Each test's doc states its worst-case margins, with a further -1..+4 ticks
+  on every reading. Each run fails on its old values (proofs in the test docs).
 - The speed stub now writes the IR cache report the way the engine does
-  (`src/program/ir_cache/report.rs`): a `start` line at the first build and an `end`
-  line with counters at exit. A cache folder it filled before gives disk hits, and an
-  empty one gives a publish. So stub speed runs no longer carry the breach label.
-  `speed_agree_then_pass` asserts the label is absent. The side-order run of the
-  extra-pair test sets `STUB_IR_NO_REPORT` and asserts that the label shows.
-- Reproduced: a new stub knob `STUB_TESTS_EXTRA_S=<base>,<head>` burns extra CPU on
-  warm-tests. With base at +0.05 s, the old run gives the failing gate's verdict
-  (x0.822/x1.822 by pass, no extra pair).
-- Fix: that run is now judged on wall time from seconds the stub declares, which are
-  exact. Both sides declare 8 s; head's warm-tests declares 4, 8, 2 and 5.4 s more, so
-  a tick moves a ratio by about 0.1 %. The new test
-  `speed_agree_then_pass_survives_tick_error` runs it with base +0.05 s, then head
-  +0.05 s. It fails on the old CPU run and passes now. Tests only; no script changed.
+  (`src/program/ir_cache/report.rs`), from a child process like the engine child. The
+  `start` line comes at the first build, and the `end` line, with counters, comes
+  0.5 s after the server exits. Both lines carry the child's pid. A cache folder the
+  stub filled before gives disk hits, and an empty one gives a publish. So stub speed
+  runs no longer carry the breach label. `speed_agree_then_pass` asserts the label is
+  absent. The side-order run sets `STUB_IR_NO_REPORT` and asserts that it shows.
+  Because the `end` line comes from a descendant, deleting `Server.close()`'s wait for
+  the server's descendants now fails a test (TLS-128 covers the real engine's side).
+  Tests only; no script changed.
 
 ### Fixed (ENG-178: table procedures named like record built-ins: four follow-ups from ENG-173)
 
