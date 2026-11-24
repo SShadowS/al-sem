@@ -524,43 +524,57 @@ pub fn resolve_routine_record_types(
                 .map(|rv| (rv.name.fold_identifier(), rv.temp_state_known_value()))
                 .collect();
 
-            // Scan call sites for GetTable / Open on RecordRef vars (unconditional only).
-            let mut recref_temp: HashMap<
+            // ENG-192: every `Open`/`GetTable` of a RecordRef var, each with the temp state it
+            // leaves (`None`: unknown). An operation reads the LAST of them before it: one temp
+            // state per variable gave a later `Open`'s state to the operations before it
+            // (`Open(T); Insert(); Close(); Open(T, true)` answered `no` for the physical write;
+            // Fable on ENG-191) and kept an earlier state past an `Open` it could not read. One
+            // inside a loop reaches the operations before it on the next iteration: such a
+            // variable derives nothing. `Close`/`Clear` need no entry: an operation after one and
+            // before the next bind runs on an unbound RecordRef, a runtime error, never a write.
+            type Bind = (
+                (u32, u32),
+                Option<crate::program::body::features::PTempState>,
+            );
+            let mut binds: HashMap<crate::program::model::recref_alias::HolderKey, Vec<Bind>> =
+                HashMap::new();
+            let mut in_loop: std::collections::HashSet<
                 crate::program::model::recref_alias::HolderKey,
-                crate::program::body::features::PTempState,
-            > = HashMap::new();
-            for cs in &routine.call_sites {
-                // Must not be inside a loop.
-                if !cs.loop_stack.is_empty() {
-                    continue;
-                }
-                let crate::program::body::features::PCallee::Member { receiver, method } =
-                    &cs.callee
-                else {
-                    continue;
-                };
-                // ENG-176: the variable itself, by the routine's scope (sol: a quoted or spaced
-                // receiver was missed by text): a whole RecordRef parameter or local, never a
-                // global or an element.
-                let scope = crate::program::model::recref_alias::HolderScope::of(routine);
-                let Some(receiver_key) = scope
-                    .text(receiver)
+            > = std::collections::HashSet::new();
+            let scope = crate::program::model::recref_alias::HolderScope::of(routine);
+            // ENG-176: the variable itself, by the routine's scope (sol: a quoted or spaced
+            // receiver was missed by text): a whole RecordRef parameter or local, never a global
+            // or an element.
+            let own_recordref = |text: &str| {
+                scope
+                    .text(text)
                     .filter(|h| !h.indexed)
                     .map(|h| h.key)
                     .filter(|&k| {
                         matches!(k, crate::program::model::recref_alias::HolderKey::Own(_))
                             && recordref_var_names.contains(&scope.variable(k).name)
                     })
+            };
+            for cs in &routine.call_sites {
+                let at = (cs.source_anchor.start_line, cs.source_anchor.start_column);
+                let crate::program::body::features::PCallee::Member { receiver, method } =
+                    &cs.callee
                 else {
                     continue;
                 };
+                let Some(receiver_key) = own_recordref(receiver) else {
+                    continue;
+                };
                 let method_lc = method.fold_identifier();
+                if matches!(method_lc.as_str(), "open" | "gettable") && !cs.loop_stack.is_empty() {
+                    in_loop.insert(receiver_key);
+                }
                 match method_lc.as_str() {
                     "open" => {
                         // RecRef.Open(no)        → Known(false)
                         // RecRef.Open(no, false) → Known(false)
                         // RecRef.Open(no, true)  → Known(true)
-                        // RecRef.Open(no, <other>) → skip (Unknown, conservative)
+                        // RecRef.Open(no, <other>) → Unknown from here on (conservative)
                         let second_arg =
                             cs.argument_texts.get(1).map(|t| t.trim().fold_identifier());
                         let ts = match second_arg.as_deref() {
@@ -569,35 +583,32 @@ pub fn resolve_routine_record_types(
                             Some("true") => Some(crate::program::body::scope::ts_known(true)),
                             Some(_) => None, // non-literal second arg → conservative Unknown
                         };
-                        if let Some(ts) = ts {
-                            recref_temp.insert(receiver_key, ts);
-                        }
+                        binds.entry(receiver_key).or_default().push((at, ts));
                     }
                     "gettable" => {
                         // RecRef.GetTable(SomeRec) → inherit SomeRec's tempState.
-                        // First arg must be a bare identifier naming a known record var.
-                        let Some(source_name) = cs.argument_texts.first() else {
-                            continue;
-                        };
+                        // First arg must be a bare identifier naming a known record var; any
+                        // other GetTable leaves the state Unknown from here on.
                         // ENG-176: a whole variable by the scope, named as its record variable is
                         // (a global a local hides is the local's name: no match).
-                        let Some(source_lc) = scope
-                            .text(source_name)
-                            .filter(|h| !h.indexed)
-                            .map(|h| h.key)
-                            .filter(|&k| scope.logical(&scope.variable(k).name) == Some(k))
-                            .map(|k| scope.variable(k).name.clone())
-                        else {
-                            continue;
-                        };
-                        let Some(known_val) = record_var_temp.get(&source_lc).copied().flatten()
-                        else {
-                            continue; // source var absent or not Known → Unknown
-                        };
-                        recref_temp.insert(
-                            receiver_key,
-                            crate::program::body::scope::ts_known(known_val),
-                        );
+                        let known_val = cs
+                            .argument_texts
+                            .first()
+                            .and_then(|source_name| {
+                                scope
+                                    .text(source_name)
+                                    .filter(|h| !h.indexed)
+                                    .map(|h| h.key)
+                                    .filter(|&k| scope.logical(&scope.variable(k).name) == Some(k))
+                                    .map(|k| scope.variable(k).name.clone())
+                            })
+                            .and_then(|source_lc| {
+                                record_var_temp.get(&source_lc).copied().flatten()
+                            });
+                        binds
+                            .entry(receiver_key)
+                            .or_default()
+                            .push((at, known_val.map(crate::program::body::scope::ts_known)));
                     }
                     _ => {}
                 }
@@ -608,9 +619,22 @@ pub fn resolve_routine_record_types(
             let aliases =
                 crate::program::model::recref_alias::AliasClasses::for_routine(routine, shadowed);
             let moved = moved_by_get(routine);
-            recref_temp.retain(|&v, _| {
-                !may_be_rebound_elsewhere(routine, &aliases, v, shadowed) && !moved.contains(&v)
+            binds.retain(|&v, _| {
+                !in_loop.contains(&v)
+                    && !may_be_rebound_elsewhere(routine, &aliases, v, shadowed)
+                    && !moved.contains(&v)
             });
+            // The state an operation at `at` reads: the last bind before it; nothing before the
+            // first.
+            let state_at = |k: crate::program::model::recref_alias::HolderKey, at: (u32, u32)| {
+                binds
+                    .get(&k)?
+                    .iter()
+                    .filter(|(p, _)| *p < at)
+                    .max_by_key(|(p, _)| *p)?
+                    .1
+                    .clone()
+            };
 
             // Apply derived temp states to matching record ops.
             let targets: Vec<Option<crate::program::model::recref_alias::HolderKey>> = routine
@@ -624,9 +648,18 @@ pub fn resolve_routine_record_types(
                     )
                 })
                 .collect();
-            for (op, key) in routine.record_operations.iter_mut().zip(targets) {
-                if let Some(ts) = key.and_then(|k| recref_temp.get(&k)) {
-                    op.temp_state.set(Some(ts.clone()));
+            let states: Vec<Option<crate::program::body::features::PTempState>> = routine
+                .record_operations
+                .iter()
+                .zip(&targets)
+                .map(|(op, key)| {
+                    let at = (op.source_anchor.start_line, op.source_anchor.start_column);
+                    key.and_then(|k| state_at(k, at))
+                })
+                .collect();
+            for (op, ts) in routine.record_operations.iter_mut().zip(states) {
+                if let Some(ts) = ts {
+                    op.temp_state.set(Some(ts));
                 }
             }
         }
