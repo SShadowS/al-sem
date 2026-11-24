@@ -122,7 +122,10 @@ indexmap = "2"
 # cmake, whose Visual Studio generator broke Windows builds (wrong generator name,
 # MSBuild path-length limit). The gzip OS header byte is normalized to 0x03 by the
 # serializer.
-flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
+# `runtime_detection`: zlib-rs picks its SIMD paths (AVX2, PCLMULQDQ, SSE4.2) at run time;
+# without it a default x86_64 build takes the plain ones. Speed only: zlib-rs's hash does
+# not depend on the CPU, so the output is the same either way.
+flate2 = { version = "1", default-features = false, features = ["zlib-rs", "runtime_detection"] }
 
 # Error handling
 anyhow = "1"

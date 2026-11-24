@@ -13,9 +13,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   C library was built with cmake, the only cmake user in the build, and on Windows that broke
   twice for the owner: cmake 3.29 picked a `Visual Studio 18 2026` generator it does not have,
   and MSBuild's file tracking failed on a long checkout path (`FTK1011`). With zlib-rs neither
-  cmake nor MSBuild runs. The output is byte-identical: all 43 `.cbor.gz` goldens
-  (`cli_b_snapshot_differential` and `cli_b_fingerprint_differential`, byte-compared) pass
-  unchanged. `Cargo.lock` drops `libz-ng-sys` and `cmake`. CLAUDE.md's Prerequisites now
+  cmake nor MSBuild runs. The output is byte-identical where measured: all 43 `.cbor.gz`
+  goldens (`cli_b_snapshot_differential` and `cli_b_fingerprint_differential`, byte-compared,
+  each under 32 KB decoded) pass unchanged, and `alsem fingerprint --format cbor.gz
+  --deterministic` on the pinned CDO baseline (146 MB decoded, 10,162,583 bytes compressed:
+  past the deflate window) gives the same bytes from master's zlib-ng binary and this one
+  (x86_64, server1). zlib-rs does not promise zlib-ng's bytes in writing; its hash does not
+  depend on the CPU. flate2's `runtime_detection` is on, so zlib-rs picks its SIMD paths at
+  run time (without it a default build takes the plain ones; speed only). `Cargo.lock` and
+  `tools/census-probe/Cargo.lock` drop `libz-ng-sys` and `cmake`. CLAUDE.md's Prerequisites now
   states the Windows toolchain, both old snags with their workarounds for older trees, and
   `CARGO_TARGET_DIR=C:\t` for any path-too-long failure. Not yet run on Windows: the owner's
   next native build confirms it.

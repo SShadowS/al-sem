@@ -344,7 +344,7 @@ later run of the same binary is warm (~x0.53). Spec:
 
 - Rust 1.75+
 - **Windows:** the MSVC toolchain (`x86_64-pc-windows-msvc`) with its C compiler (the grammar
-  is compiled by the `cc` crate). No cmake and no MSBuild are needed since TLS-121 (gzip moved
+  and a few C dependencies are compiled by the `cc` crate, which calls `cl.exe` directly). No cmake and no MSBuild are needed since TLS-121 (gzip moved
   from zlib-ng to the pure-Rust zlib-rs). Two snags the owner hit on older trees, both from
   zlib-ng's cmake build: cmake 3.29 has no `Visual Studio 18 2026` generator (an older tree
   builds with `CMAKE_GENERATOR="Visual Studio 17 2022"`), and MSBuild's file tracking fails
