@@ -68,7 +68,11 @@
 # session, bound PID, holder PID, token, hid) is written once, whole, by the
 # hold's own holder; a reader trusts it only for the hold whose id lock it then
 # probes as held (a file of an older hold names a dead id). A timing's own file
-# (`timed/<tid>`) is read the same way. Five review rounds found race windows
+# (`timed/<tid>`) is read the same way. ⟨TLS-127⟩ A holder keeps
+# `publish.lock` (shared) from before its hold lock until its status is renamed
+# in, so a reader asks that lock whether a hold with no status yet is still
+# being written, instead of guessing from the lock file's age (a take slowed past
+# 5 s by load or a suspend read as an unknown holder). Five review rounds found race windows
 # in the earlier file-and-liveness design (TLS-89 CHANGELOG); a lock probe has
 # no window: the kernel answers for that instant.
 set -euo pipefail
@@ -95,6 +99,7 @@ ids="$dir/id"
 tdir="$dir/timings"
 timed_lock="$dir/timed.lock"
 status_file="$dir/status"
+publish_lock="$dir/publish.lock"
 mem_min="${CDO_SLOT_MEM_MIN_GB:-35}"
 poll="${CDO_SLOT_POLL_S:-15}"
 timed_wait="${CDO_SLOT_TIMED_WAIT_S:-1800}"
@@ -184,7 +189,8 @@ probe() {
 holders_of() {
     local p
     for p in $(find /proc/[0-9]*/fd -lname "$1" 2>/dev/null | cut -d/ -f3 | sort -un); do
-        printf 'PID %s (%s, state %s) ' "$p" "$(tr '\0' ' ' <"/proc/$p/cmdline" 2>/dev/null | cut -c1-80)" \
+        # `2>` before `<`: a process gone since the scan must not print an error.
+        printf 'PID %s (%s, state %s) ' "$p" "$(tr '\0' ' ' 2>/dev/null <"/proc/$p/cmdline" | cut -c1-80)" \
             "$(awk '{ print $3 }' "/proc/$p/stat" 2>/dev/null)"
     done
 }
@@ -252,12 +258,13 @@ nap() {
 # state: from one probe of the hold lock, one read of the status, one probe of
 # the id lock it names. st = free | mine | held; own = this Claude session's
 # hold (bound or not, the guard's question); hid, holder_pid, bound: the hold's,
-# only when its id lock is held (the status describes it).
+# only when its id lock is held (the status describes it); writing = 1: held, no
+# live id in the status, and a take holds the publish lock (still writing).
 #   mine: our token, or our Claude session holding unbound (shareable); a hold of
 #   our own session bound to a process (a land, a run) is not shareable: it ends
 #   with that process, and a second land of the same session waits for it.
 state() {
-    holder_pid="" bound="" hid="" own=0
+    holder_pid="" bound="" hid="" own=0 writing=0
     if ! probe s "$lock"; then
         st=free
         return
@@ -267,7 +274,18 @@ state() {
     local h session token
     h=$(field hid)
     # A status of an older hold names a dead id: say "held", trust nothing in it.
-    [[ "$h" =~ ^[0-9a-f]{16}$ ]] && probe s "$ids/hold.$h" || return 0
+    if ! { [[ "$h" =~ ^[0-9a-f]{16}$ ]] && probe s "$ids/hold.$h"; }; then
+        # ⟨TLS-127⟩ A take keeps the publish lock until its status is in.
+        if probe x "$publish_lock"; then
+            writing=1
+            return 0
+        fi
+        # Free: a take that finished since the read wrote its status before it
+        # let go, so one more read sees it; still no live id = an unknown holder.
+        load "$status_file"
+        h=$(field hid)
+        [[ "$h" =~ ^[0-9a-f]{16}$ ]] && probe s "$ids/hold.$h" || return 0
+    fi
     hid=$h
     holder_pid=$(field holder_pid)
     session=$(field session)
@@ -287,7 +305,7 @@ describe() {
         # The holder truncates the lock file as it takes it: its mtime is when.
         local taken
         taken=$(stat -c %Y "$lock" 2>/dev/null || date +%s)
-        if (($(date +%s) - taken < 5)); then
+        if ((writing)); then
             echo "held (its holder is still writing its status)"
         else
             echo "held by an unknown holder (no status names it) since $(date -u -d "@$taken" +%FT%TZ): $(holders_of "$lock")"
@@ -352,16 +370,23 @@ timed_describe() {
 }
 
 # take_hold <owner> <reason> <token> <kind>: take the hold in THIS process: the
-# hold lock, then a fresh id lock, then the status. 0: taken (hid set); 1: held.
+# publish lock (shared), the hold lock, a fresh id lock, the status, then the
+# publish lock goes. 0: taken (hid set); 1: held.
 take_hold() {
     mkdir -p "$ids" || die "cannot make the folder $ids (something else has the name?)"
-    local lfd hfd
+    local lfd hfd pfd
     # Test hook: the window between the acquire's checks and the hold lock.
     [[ -z "${CDO_SLOT_TEST_PAUSE_TAKE_S:-}" ]] || test_pause "$CDO_SLOT_TEST_PAUSE_TAKE_S"
+    # ⟨TLS-127⟩ Held from before the hold lock until the status is in: a reader
+    # that sees the hold lock taken and no status naming it asks this lock.
+    # Only a reader's probe takes it exclusive, for an instant.
+    exec {pfd}>>"$publish_lock"
+    flock -s -w "$lock_wait" "$pfd" \
+        || die "the publish lock $publish_lock was held for ${lock_wait} s by $(holders_of "$publish_lock"); refusing (a stopped or hung cdo-slot reader: end it)"
     exec {lfd}>"$lock"
     # Up to 1 s: a probe has the lock for an instant.
     if ! flock -x -w 1 "$lfd"; then
-        exec {lfd}>&-
+        exec {lfd}>&- {pfd}>&-
         return 1
     fi
     # A timing that began after this acquire's check (its own hold released
@@ -369,7 +394,7 @@ take_hold() {
     # lock (TLS-89 review r7, sol). A timing that starts after this needs a hold
     # it can probe at its end, and the only one is this one.
     if timed_now; then
-        exec {lfd}>&-
+        exec {lfd}>&- {pfd}>&-
         return 1
     fi
     held_fds+=("$lfd")
@@ -394,6 +419,7 @@ holder_pid=$$
 holder_kind=$4
 token=$3
 hid=$hid" || die "cannot write the status $status_file (exiting drops the hold)"
+    exec {pfd}>&-
 }
 # take_timed <owner> <reason> <pid>: take a timing in THIS process: the timing
 # lock (shared), a fresh id lock, then its file. 0: taken (tid set); 5: the

@@ -1238,6 +1238,12 @@ fn cdo_slot_a_stuck_lock_fails_loudly_and_readers_go_on() {
 /// `hid` moved to the first line) -> "held by  () since" (red). Breaking only
 /// one stays green, recorded as a property: a part without the id line names
 /// no hold the reader can trust, and a renamed file is never partial.
+///
+/// ⟨TLS-127⟩ "Still writing" once ended 5 s after the lock was taken, and this
+/// test's pause plus reads passed that on a loaded host ("held by an unknown
+/// holder"). The writer now keeps the publish lock until its status is in, so
+/// "still writing" lasts exactly as long as the write; see
+/// `cdo_slot_a_slow_take_is_still_writing_not_unknown`.
 #[test]
 fn cdo_slot_a_reader_never_sees_a_half_written_status() {
     let s = Slot::new();
@@ -1266,6 +1272,72 @@ fn cdo_slot_a_reader_never_sees_a_half_written_status() {
     let (_, text) = s.run("B", &["status"], &[]);
     assert!(text.starts_with("held by lane (halfway) since"), "{text}");
     assert_eq!(s.run("A", &["release"], &[]).0, Some(0));
+}
+
+/// ⟨TLS-127⟩ A holder between its hold lock and its status is "still writing"
+/// however long that takes. It used to be judged by the lock file's age (under
+/// 5 s), so a take slowed past 5 s (host load 150, a suspend, or the test
+/// above, whose 3 s write pause and 2 s of reads start after the lock is taken)
+/// read as "held by an unknown holder". Now the holder keeps the publish lock
+/// (shared) from before its hold lock until its status is renamed in, and a
+/// reader asks that lock. Here the lock file is aged by 60 s to stand for the
+/// slow take. A lock held by a process that never writes a status is still an
+/// unknown holder.
+///
+/// Mutation (2026-11-24): `describe` without the publish-lock check (the old
+/// age rule back) -> "a slow take read as: held by an unknown holder (no status
+/// names it) since" (red); restored, green.
+#[test]
+fn cdo_slot_a_slow_take_is_still_writing_not_unknown() {
+    let s = Slot::new();
+    let age_lock = || {
+        let aged = std::time::SystemTime::now() - std::time::Duration::from_secs(60);
+        std::fs::File::options()
+            .write(true)
+            .open(s.dir().join("lock"))
+            .unwrap()
+            .set_modified(aged)
+            .unwrap();
+    };
+    // A status of an older hold, naming a dead id, as on every real take.
+    assert_eq!(s.run("A", &["acquire", "lane", "first"], &[]).0, Some(0));
+    assert_eq!(s.run("A", &["release"], &[]).0, Some(0));
+    let mut taker = s.bg(
+        "A",
+        &["acquire", "lane", "slow"],
+        &[("CDO_SLOT_TEST_PAUSE_PUBLISH_S", "60")],
+    );
+    s.wait_paused();
+    age_lock();
+    let (_, text) = s.run("B", &["status"], &[]);
+    assert!(
+        text.starts_with("held (its holder is still writing its status)"),
+        "a slow take read as: {text}"
+    );
+    s.resume();
+    assert_eq!(taker.0.wait().unwrap().code(), Some(0));
+    let (_, text) = s.run("B", &["status"], &[]);
+    assert!(text.starts_with("held by lane (slow) since"), "{text}");
+    assert_eq!(s.run("A", &["release"], &[]).0, Some(0));
+
+    // A holder that never writes a status (not a cdo-slot take) stays unknown.
+    let _stranger = Reap(
+        std::process::Command::new("flock")
+            .arg("-x")
+            .arg(s.dir().join("lock"))
+            .args(["sleep", "600"])
+            .spawn()
+            .unwrap(),
+    );
+    until("the stranger holds the lock", &|| {
+        s.probe().starts_with("held=1")
+    });
+    age_lock();
+    let (_, text) = s.run("B", &["status"], &[]);
+    assert!(
+        text.starts_with("held by an unknown holder (no status names it)"),
+        "{text}"
+    );
 }
 
 /// ⟨TLS-89⟩ Concurrent takers: six sessions at once run timed and untimed

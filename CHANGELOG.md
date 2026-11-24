@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (TLS-127: a slow take of the CDO slot no longer reads as "held by an unknown holder")
+
+- `scripts/cdo-slot status` (and every refusal that describes the hold) judged a
+  hold whose status was not written yet by the lock file's age: under 5 s it said
+  "still writing", after that "held by an unknown holder". A take slowed past 5 s
+  (host load 127-156, a host suspend, the `host-suspended` read of up to 6 s it
+  makes before the write) read as an unknown holder. That is how
+  `cdo_slot_a_reader_never_sees_a_half_written_status` failed on ENG-193's gate:
+  its 3 s write pause and 2 s of reads start after the lock is taken, so on a
+  loaded host they passed 5 s.
+- Now a lock decides, not an age. The holder keeps a new publish lock
+  (`$CDO_SLOT_DIR/publish.lock`, shared) from before it takes the hold lock until
+  its status is renamed in. A reader that finds the hold lock held and no live hold
+  id in the status asks that lock: held means "still writing"; free means read the
+  status once more (a take that just finished wrote it before letting go), and
+  only a status that still names no live hold is an unknown holder (a process that
+  took the lock without being a cdo-slot take). No waits, no retries.
+- New test `cdo_slot_a_slow_take_is_still_writing_not_unknown`: a take paused
+  before its status, with the lock file aged by 60 s, reads "still writing"; a
+  stranger's lock reads "unknown holder". Discrimination proof in its doc. The
+  half-written-status test no longer depends on timing.
+- Release had no window to fix: the status is never removed, and a keeper's death
+  drops its locks at once.
+
 ### Fixed (ENG-178: table procedures named like record built-ins: four follow-ups from ENG-173)
 
 From Fable's second review of ENG-173 (`/work/.al-sem/engine-notes/eng173/fable-eng173-r2.md`).
