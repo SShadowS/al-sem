@@ -127,9 +127,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `R.Open(T, true); R.Insert(); R.Close(); R.Open(T)` answers `no` (master `yes`: the later
   physical `Open` reached the temporary `Insert`), and an operation before an `exit` that skips a
   later physical `Open` is no physical write.
-- **CDO (pinned `bc3ccb18`, c6f61f04 against 44c976ba, the first cut):** nothing moved. No
-  finding or fingerprint at either scope, unknown edges 0 -> 0. cdo-speed PASS: instructions build
-  x0.9983.
+- **CDO (pinned `bc3ccb18`, c6f61f04 against 58cbfcdc):** nothing moved. No finding or
+  fingerprint at either scope, unknown edges 0 -> 0. cdo-speed PASS: instructions build x1.0003,
+  round total x1.0001.
 - **Tests and red proofs.** `cli_recref_temp_position` (new; its AL compiles clean on alc
   18.0.41): the six shapes, a `Clear(R)` row, an `Insert` in a bind's own arguments and a bind
   after an error under `asserterror` answer not `no`; the temporary-then-physical row answers

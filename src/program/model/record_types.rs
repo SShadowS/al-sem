@@ -30,16 +30,15 @@ use al_syntax::IdentifierFoldExt;
 
 use crate::program::body::node_util::strip_quotes;
 
-/// ENG-192: the source ranges (start, end) of the `asserterror` statements in `tree`, or `None`
-/// when one has no range. A statement inside one may never run (an error before it), though
-/// nothing branches.
+/// A source range: (start line, start column), (end line, end column).
+type SourceSpan = ((u32, u32), (u32, u32));
+
+/// ENG-192: the source ranges of the `asserterror` statements in `tree`, or `None` when one has
+/// no range. A statement inside one may never run (an error before it), though nothing branches.
 fn assert_error_ranges(
     tree: Option<&crate::program::body::features::PCFNNode>,
-) -> Option<Vec<((u32, u32), (u32, u32))>> {
-    fn walk(
-        n: &crate::program::body::features::PCFNNode,
-        out: &mut Vec<((u32, u32), (u32, u32))>,
-    ) -> Option<()> {
+) -> Option<Vec<SourceSpan>> {
+    fn walk(n: &crate::program::body::features::PCFNNode, out: &mut Vec<SourceSpan>) -> Option<()> {
         if matches!(
             n.path_hint(),
             Some(crate::program::body::features::PathHint::AssertError)
