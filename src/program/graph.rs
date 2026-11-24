@@ -560,7 +560,7 @@ mod tests {
             .iter()
             .cloned()
             .map(|mut o| {
-                if o.id.app == a && o.name.eq_ignore_ascii_case("OwnShadow") {
+                if o.id.app == a && o.name.eq_fold_identifier("OwnShadow") {
                     o.obsolete_gone = true;
                 }
                 o

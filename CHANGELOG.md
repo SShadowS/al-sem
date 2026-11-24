@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (ENG-193: an object name binds no app first)
+
+- **The bug.** `ResolveIndex::resolve_object_ref` and `ProgramGraph::resolve_object` bound an
+  object NAME to `from`'s own app's object whenever it declared one (an "own-app shadow"). alc
+  ranks no app first: without namespaces an own and a dependency object of one name never compile
+  together unqualified (AL0275 at the reference), and with namespaces the file's `namespace` and
+  `using` decide. So for a workspace declaring `W.X` beside a dependency's `A.X`, a file
+  `namespace C; using A;` calling `X.F()` bound the workspace's `W.X.F`, where alc binds `A.X.F`:
+  a false `Source` edge on a program that compiles (Fable's review of the ENG-158 design, probe q1;
+  measured with master's `aldump`).
+- **The fix.** A name binds over every visible candidate in `from`'s closure, its own app included
+  and not preferred: one is `Unique`, more `Ambiguous` (`resolve_object` declines). An object
+  declared `ObsoleteState = Moved`/`Removed` still gives way to a live object of its name
+  (`resolve_object` now applies `obsolete_gone` as `ResolveIndex::build` does), so Base
+  Application's `No. Series` stub does not make Business Foundation's table ambiguous for Base
+  Application's own code. A NUMBER keeps the own-app rule (object ids are unique across installed
+  apps). ENG-158 models the namespaces that make most of these names unique again.
+- **Measured first:** no CDO workspace object (392) shares a kind and name with a package object.
+- **CDO (pinned `bc3ccb18`, c6f61f04 against 0a7199a9):** nothing moved. No finding or
+  fingerprint at either scope, unknown edges 0 -> 0. cdo-speed PASS: instructions build x0.9990,
+  round total x1.0000.
+- **Tests and red proofs.** `cli_resolve_no_own_app_shadow` (new; its AL compiles on alc 18.0.41):
+  the q1 shape makes no edge to the workspace's `X.F`; control: a name only the workspace declares
+  binds. Unit tests: an own and a dependency object of one name are `Ambiguous` (index) and decline
+  (graph); a Moved own stub gives way to the live dependency table; topology scoping unchanged.
+  Each break then restored: the own-app shortcut restored in both functions fails the CLI test and
+  both unit tests; dropping the `obsolete_gone` filter in `resolve_object` fails the Moved-stub
+  test.
+- **Goldens.** None moved.
+
 ### Fixed (ENG-178: table procedures named like record built-ins: four follow-ups from ENG-173)
 
 From Fable's second review of ENG-173 (`/work/.al-sem/engine-notes/eng173/fable-eng173-r2.md`).
