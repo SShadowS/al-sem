@@ -1434,3 +1434,189 @@ fn session_refresh_reference_builds_bypass_the_cache() {
     assert!(plain > 0, "precondition: the session used the seam");
     assert_eq!(verified, plain, "the reference builds stayed off the cache");
 }
+
+/// TLS-120: a standalone `alsem <args>` (no batch run) with `f`'s caches (the IR cache on in
+/// `f.root`, the text cache under `f.xdg`) and `env` added.
+fn alone(f: &Fixture, args: &[&str], env: &[(&str, &str)]) -> Output {
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_alsem"));
+    cmd.args(args)
+        .env("RUST_LOG", "off")
+        .env("XDG_CACHE_HOME", &f.xdg)
+        .env("ALSEM_IR_CACHE", "on")
+        .env("ALSEM_IR_CACHE_DIR", &f.root);
+    for (k, v) in env {
+        cmd.env(k, v);
+    }
+    cmd.output().unwrap()
+}
+
+/// A standalone `events fanout` of `f`'s workspace to `--out <out>`.
+fn fanout_out(f: &Fixture, out: &Path) -> Output {
+    let (ws, o) = (f.ws.to_str().unwrap(), out.to_str().unwrap());
+    alone(
+        f,
+        &["events", "fanout", ws, "--single-app", "--out", o],
+        &[],
+    )
+}
+
+/// `f`'s warm IR entry and its text cache entry.
+fn warm_entries(f: &Fixture) -> (PathBuf, PathBuf) {
+    let ir = warm(f);
+    let text = std::fs::read_dir(f.xdg.join("al-ch-snapshot-cache"))
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .find(|p| p.extension().is_some_and(|x| x == "bin"))
+        .expect("precondition: a text entry");
+    (ir, text)
+}
+
+/// A standalone write refused with `why`: exit 1, the write error line naming TLS-116.
+fn assert_write_refused(case: &str, out: &Output, why: &str) {
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{case}: {stderr}");
+    assert!(
+        stderr.contains("al-sem: write error: ") && stderr.contains(why),
+        "{case}: {stderr}"
+    );
+    assert!(stderr.contains("(TLS-116)"), "{case}: {stderr}");
+}
+
+/// TLS-120: a standalone `--out` never truncates a cache file. An `--out` that is the IR
+/// entry, the text entry, a hard link to either, a new name through a symlinked parent into
+/// the IR folder, or a spelling through the IR folder and out again (`<key>/../../x`) is
+/// refused (exit 1), each entry is untouched, and nothing is made. The positive controls: a
+/// plain `--out`, and an `--out` with a second link outside the caches (which makes the open
+/// look the file up in the cache folders) are both written.
+///
+/// Discrimination (2026-11-24): `open_for_write` outside a batch back to `File::create(path)`:
+/// fails "(ir entry)" (exit 0, not 1: the entry was truncated and written); `may_alias`
+/// made `false` (no lookup for a file with two links): fails "(a hard link to the ir entry)"
+/// (exit 0); the standalone roots without the IR folder (`[text]` alone): fails "(ir entry)"
+/// (exit 0); restored, all pass.
+#[test]
+fn standalone_out_refuses_a_cache_file() {
+    let f = fixture();
+    let (ir_entry, text_entry) = warm_entries(&f);
+    let d = tempfile::tempdir().unwrap();
+    let ok = d.path().join("ok.json");
+    let out = fanout_out(&f, &ok);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    assert!(std::fs::metadata(&ok).unwrap().len() > 0, "a plain --out");
+    let other = d.path().join("other.json");
+    std::fs::write(&other, "OLD").unwrap();
+    std::fs::hard_link(&other, d.path().join("other-link.json")).unwrap();
+    let out = fanout_out(&f, &d.path().join("other-link.json"));
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    assert_ne!(std::fs::read(&other).unwrap(), b"OLD", "a linked --out");
+    let (ir_link, text_link) = (
+        d.path().join("ir-link.json"),
+        d.path().join("text-link.json"),
+    );
+    std::fs::hard_link(&ir_entry, &ir_link).unwrap();
+    std::fs::hard_link(&text_entry, &text_link).unwrap();
+    std::os::unix::fs::symlink(&f.root, d.path().join("ln")).unwrap();
+    let through = d.path().join("ln/new.json");
+    let spelled = ir_entry.parent().unwrap().join("../../spelled.json");
+    let bytes = |p: &Path| std::fs::read(p).unwrap();
+    let (ir_bytes, text_bytes) = (bytes(&ir_entry), bytes(&text_entry));
+    let folder = "is in a cache folder of the engine";
+    let file = "is a file of the engine's caches";
+    for (case, path, why) in [
+        ("(ir entry)", &ir_entry, folder),
+        ("(text entry)", &text_entry, folder),
+        ("(a hard link to the ir entry)", &ir_link, file),
+        ("(a hard link to the text entry)", &text_link, file),
+        ("(a symlinked parent)", &through, folder),
+        ("(a spelling through the folder)", &spelled, folder),
+    ] {
+        assert_write_refused(case, &fanout_out(&f, path), why);
+        assert_eq!(bytes(&ir_entry), ir_bytes, "{case}: the ir entry");
+        assert_eq!(bytes(&text_entry), text_bytes, "{case}: the text entry");
+    }
+    assert!(!through.exists() && !f.root.join("new.json").exists());
+    assert!(!f.root.parent().unwrap().join("spelled.json").exists());
+}
+
+/// TLS-120: a standalone shard directory is never made in a cache folder. `fingerprint
+/// --shard all --out D` with `D` in the text cache folder or the IR folder is refused, and
+/// `D` is not made.
+///
+/// Discrimination (2026-11-24): `make_dir` outside a batch back to `create_dir_all(path)`:
+/// fails "(text): nothing made" (the folder was made; its files were still refused);
+/// restored, passes.
+#[test]
+fn standalone_shard_directory_stays_out_of_cache_folders() {
+    let f = fixture();
+    warm(&f);
+    for (case, dir) in [
+        ("(text)", f.xdg.join("al-ch-snapshot-cache/shards")),
+        ("(ir)", f.root.join("shards")),
+    ] {
+        let (ws, o) = (f.ws.to_str().unwrap(), dir.to_str().unwrap());
+        let out = alone(&f, &["fingerprint", ws, "--shard", "all", "--out", o], &[]);
+        assert_write_refused(case, &out, "is in a cache folder of the engine");
+        assert!(!dir.exists(), "{case}: nothing made");
+    }
+}
+
+/// TLS-120: a standalone trace file is never a cache file. `ALSEM_TRACE_FILE` a hard link to
+/// the text entry: the trace is refused (one stderr line, the command itself succeeds) and
+/// the entry is untouched.
+///
+/// Discrimination (2026-11-24): `TraceWriter::create` back to `File::create(path)`: fails
+/// (no refusal line); restored, passes.
+#[test]
+fn standalone_trace_is_never_a_cache_file() {
+    let f = fixture();
+    let (_, text_entry) = warm_entries(&f);
+    let d = tempfile::tempdir().unwrap();
+    let trace = d.path().join("trace.json");
+    std::fs::hard_link(&text_entry, &trace).unwrap();
+    let before = std::fs::read(&text_entry).unwrap();
+    let (ws, t) = (f.ws.to_str().unwrap(), trace.to_str().unwrap());
+    let out = alone(
+        &f,
+        &["events", "fanout", ws, "--single-app"],
+        &[("ALSEM_TRACE", "1"), ("ALSEM_TRACE_FILE", t)],
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains("perf_trace: cannot create") && stderr.contains("(TLS-116)"),
+        "{stderr}"
+    );
+    assert_eq!(std::fs::read(&text_entry).unwrap(), before, "untouched");
+}
+
+/// TLS-120: `aldump`'s outputs take the same guard. `aldump --switch-dump <ws> <dir>` with
+/// `<dir>` in the IR folder fails and makes nothing there.
+///
+/// Discrimination (2026-11-24): `switch_dump::write_dump`'s `claim::make_dir(dir)` back to
+/// `create_dir_all(dir)` (its files still through `write_outside`): fails (the folder was
+/// made); restored, passes.
+#[test]
+fn aldump_switch_dump_stays_out_of_cache_folders() {
+    let f = fixture();
+    warm(&f);
+    let dir = f.root.join("dump");
+    let out = Command::new(env!("CARGO_BIN_EXE_aldump"))
+        .args([
+            "--switch-dump",
+            f.ws.to_str().unwrap(),
+            dir.to_str().unwrap(),
+        ])
+        .env("RUST_LOG", "off")
+        .env("XDG_CACHE_HOME", &f.xdg)
+        .env("ALSEM_IR_CACHE", "on")
+        .env("ALSEM_IR_CACHE_DIR", &f.root)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{stderr}");
+    assert!(
+        stderr.contains("is in a cache folder of the engine (TLS-116)"),
+        "{stderr}"
+    );
+    assert!(!dir.exists(), "nothing made");
+}

@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (TLS-120: the engine's caches are protected outside `alsem batch` too)
+
+- **What was wrong.** TLS-116 kept `alsem batch` job writes off the text cache (ENG-113, files
+  other engines memory-map) and the IR cache (ENG-110). A standalone command opened its outputs
+  with a plain `File::create`. So an `--out` that was a text cache entry, or a hard link to one,
+  truncated it under every engine mapping it (they die of SIGBUS). An IR entry was clobbered the
+  same way (refused and repaired on the next read).
+- **Now.** Every file the CLI opens on a path the user gives goes through the batch guard's
+  checks (`engine::batch::claim::open_outside`, `make_dir`, `open_append`): `--out` and shard
+  files and directories of every `alsem` command, the trace file (`ALSEM_TRACE_FILE`), the IR
+  cache report outside a batch, `ALSEM_CONES_SCHEDULE_FILE`, and `aldump`'s outputs
+  (`--switch-dump`, `--pd-dump`, the extracted source, `--session-refresh`'s workspace edits).
+  The same writes are refused as in a batch (a name in a cache folder, a spelling or symlink hop
+  that enters one, a cache file under any name). The file is opened without truncation and
+  truncated only after its handle has passed. A refused write is the command's usual write error
+  (`al-sem: write error: <path>: refused: ... (TLS-116)`, exit 1; 2 for analyze).
+- **Cost.** A standalone process takes its own snapshot at its first write: the same folders,
+  made the same way (the text folder always, the IR folder when the IR cache is on), but it
+  records only their directories, so no file is stat'ed. A file is looked up in the cache folders
+  only when its open finds it may have another name: more than one link, or a mount of its own
+  (`statx` `STATX_ATTR_MOUNT_ROOT`; every existing file on Windows). A batch run's whole walk
+  costs 0.4 s on server1's real cache. A common `--out` (one link) skips the lookup.
+- **Not protected, on purpose.** The impact-base cache (`~/.al-sem/cache/impact-base/v2`) reads
+  each entry whole and checks its blake3. A clobbered entry is deleted and rebuilt, and nothing
+  maps it. Its prune removes only `.ib` and `.tmp.` names. The dependency-artifact cache that
+  `cache prune --dep-cache-dir` reads (`~/.al-sem/cache/`) is no longer written by the engine.
+  `cache prune` checks each artifact's content hash before keeping it.
+- **Races.** These are TLS-116's: the folder tests go by path, and an alias another process
+  makes between the checks and the open is not caught. The identity test is on the open handle,
+  before truncation.
+- **Tests** (`tests/cli/cli_ir_cache.rs`, real `alsem`/`aldump` processes;
+  `cache_guard::tests`): a standalone `--out` that is the IR entry, the text entry, a hard link
+  to either, a new name through a symlinked parent, or a spelling through the IR folder is
+  refused with the entries untouched (and a plain and a second-link `--out` are written); shard
+  directories in either folder; a trace file linked to the text entry; `aldump --switch-dump`
+  into the IR folder; and a bind-mounted file counted as may-have-another-name. Each has a
+  discrimination proof in its doc.
+
 ### Fixed (ENG-178: table procedures named like record built-ins: four follow-ups from ENG-173)
 
 From Fable's second review of ENG-173 (`/work/.al-sem/engine-notes/eng173/fable-eng173-r2.md`).

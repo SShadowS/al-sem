@@ -155,7 +155,7 @@ pub fn install_from_env() -> ReportGuard {
     // cache-off or dependency-free run makes nothing, except `alsem batch`, whose check makes
     // the folders its caches would use before any job (TLS-116, `engine::batch::cache_guard`).
     let text_dir = crate::snapshot::cache::cache_dir_path();
-    let ir_dir = var("ALSEM_IR_CACHE_DIR").map_or_else(|| text_dir.join("ir"), PathBuf::from);
+    let ir_dir = ir_dir_from_env(&text_dir);
     let verify = var("ALSEM_IR_CACHE_VERIFY").is_some_and(|v| v == "1");
     let report = var("ALSEM_IR_CACHE_REPORT").map(PathBuf::from);
     let mut cache = IrCache::new(enabled, ir_dir, text_dir, verify, report);
@@ -198,6 +198,39 @@ pub fn make_ir_dir() -> Option<PathBuf> {
     c.key()?;
     create_ir_dir(&c.ir_dir);
     Some(c.ir_dir.clone())
+}
+
+/// The `ir/` tree's folder: `ALSEM_IR_CACHE_DIR`, else `<text_dir>/ir`.
+fn ir_dir_from_env(text_dir: &std::path::Path) -> PathBuf {
+    std::env::var_os("ALSEM_IR_CACHE_DIR")
+        .filter(|v| !v.is_empty())
+        .map_or_else(|| text_dir.join("ir"), PathBuf::from)
+}
+
+/// TLS-120: the IR cache's `ir/` folder for a process outside a batch run, made now when the
+/// cache is on (no key needed: the folder is protected whether or not this process publishes
+/// in it). The installed cache's, else (a write before [`install_from_env`]: the trace file)
+/// the environment's.
+pub fn make_ir_root() -> PathBuf {
+    let (dir, on) = match INSTALLED.get() {
+        Some(c) => (c.ir_dir.clone(), c.is_on()),
+        None => {
+            let on = switch(
+                std::env::var_os("ALSEM_IR_CACHE")
+                    .filter(|v| !v.is_empty())
+                    .as_deref(),
+            )
+            .0;
+            (
+                ir_dir_from_env(&crate::snapshot::cache::cache_dir_path()),
+                on,
+            )
+        }
+    };
+    if on {
+        create_ir_dir(&dir);
+    }
+    dir
 }
 
 /// Set when a batch run's snapshot turned the IR cache off for the run (TLS-116).

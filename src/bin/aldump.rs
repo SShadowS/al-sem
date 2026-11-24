@@ -24,6 +24,7 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+use al_sem::engine::batch::claim;
 use al_sem::engine::snapshot::snapshot_workspace;
 use al_sem::program::body::l2_workspace::project_workspace;
 
@@ -543,7 +544,7 @@ fn session_refresh_cmd(args: &[String]) -> ExitCode {
         }
         println!("{row}");
     };
-    let write = |p: &Path, t: &str| std::fs::write(p, t).expect("write the workspace copy");
+    let write = |p: &Path, t: &str| claim::write_outside(p, t).expect("write the workspace copy");
     // ENG-93: an edit that leaves the file as it was would verify nothing (the `body`
     // edit matched nothing in a CRLF file for every CDO run before this).
     let edited = |name: &str, new: &str| {
@@ -640,9 +641,9 @@ fn session_refresh_cmd(args: &[String]) -> ExitCode {
     }
     let mut app = app_original.clone();
     app.push(b'\n');
-    std::fs::write(&app_json, &app).expect("write app.json");
+    claim::write_outside(&app_json, &app).expect("write app.json");
     step("appjson", true, &mut session);
-    std::fs::write(&app_json, &app_original).expect("restore app.json");
+    claim::write_outside(&app_json, &app_original).expect("restore app.json");
     step("appjson-restore", true, &mut session);
     if failed {
         ExitCode::FAILURE
@@ -700,8 +701,8 @@ fn dump_dependency_source_cmd(args: &[String]) -> ExitCode {
             let path = dir.join(rel);
             let written = path
                 .parent()
-                .map_or(Ok(()), std::fs::create_dir_all)
-                .and_then(|()| std::fs::write(&path, f.text.as_bytes()));
+                .map_or(Ok(()), claim::make_dir)
+                .and_then(|()| claim::write_outside(&path, f.text.as_bytes()));
             if let Err(e) = written {
                 eprintln!("aldump: error: writing {}: {e}", path.display());
                 return ExitCode::FAILURE;
@@ -980,7 +981,7 @@ fn snapshot_memory_cmd(args: &[String]) -> ExitCode {
         // Untimed and after the timed phases: the dump is an inspection aid.
         let mut text = base.pd_solution.logical_lines().join("\n");
         text.push('\n');
-        if let Err(e) = std::fs::write(path, text) {
+        if let Err(e) = claim::write_outside(path, text) {
             eprintln!("aldump: error: writing {}: {e}", path.display());
             return ExitCode::FAILURE;
         }

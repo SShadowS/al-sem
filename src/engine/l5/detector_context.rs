@@ -577,10 +577,8 @@ pub(crate) mod cones_census {
                 }
                 s.push('\n');
             }
-            let written = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&path)
+            // TLS-120: never a file of the engine's caches.
+            let written = crate::engine::batch::claim::open_append(std::path::Path::new(&path))
                 .and_then(|mut f| std::io::Write::write_all(&mut f, s.as_bytes()));
             if let Err(e) = written {
                 eprintln!("[cones-census] schedule file {}: {e}", path.display());

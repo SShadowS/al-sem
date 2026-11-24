@@ -44,6 +44,15 @@
 //! not in the snapshot, but its folder is, so no job write reaches it. The
 //! folder tests are path-based: a path another process changes during the run
 //! is outside TLS-109's scope.
+//!
+//! **Outside a batch (TLS-120).** A standalone `alsem` or `aldump` refuses
+//! the same writes ([`super::claim::open_outside`]) against a snapshot of its
+//! own ([`standalone`]): the same folders, made the same way, but only their
+//! directories are recorded, once per process. A file is looked up at its
+//! open, and only when it may have another name than the one the folder test
+//! checked ([`may_alias`]: more than one link, or a mount of its own). The
+//! same scope holds: an alias another process makes between the checks and
+//! the open is not caught.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -70,6 +79,9 @@ pub struct Snapshot {
     /// The run's claim folder (never written to the file: each process knows
     /// its own).
     pub(super) claims: Option<FileId>,
+    /// Only the folders were walked ([`standalone`]): `files` is empty, and a
+    /// file is looked up when it is opened ([`Snapshot::holds_file`]).
+    pub(super) dirs_only: bool,
 }
 
 /// Whether `set` holds `id` born at `born` (an unknown birth time on either
@@ -84,6 +96,66 @@ impl Snapshot {
     pub(super) fn is_cache_file(&self, id: &FileId, m: &std::fs::Metadata) -> bool {
         holds(&self.files, id, born(m))
     }
+
+    /// Whether the opened `f` is a cache file under any name. A folders-only
+    /// snapshot ([`standalone`]) walks the folders' files now, and only for a
+    /// file that may have another name ([`may_alias`]): a file with one name,
+    /// no mount of its own, is the name the folder test already checked.
+    pub(super) fn holds_file(&self, f: &std::fs::File) -> std::io::Result<bool> {
+        let (id, m) = (super::claim::handle_id(f)?, f.metadata()?);
+        if !self.dirs_only {
+            return Ok(self.is_cache_file(&id, &m));
+        }
+        if !may_alias(f, &m) {
+            return Ok(false);
+        }
+        let mut now = Snapshot::default();
+        walk_roots(&self.roots, &mut now, true).map_err(std::io::Error::other)?;
+        Ok(now.is_cache_file(&id, &m))
+    }
+}
+
+/// Whether the file `f` may have a name besides the one it was opened by: more
+/// than one link, or a mount of its own (a bind mount of a file keeps its
+/// device and inode). Unknown counts as may.
+#[cfg(unix)]
+fn may_alias(f: &std::fs::File, m: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    m.nlink() > 1 || mount_root(f)
+}
+
+/// Windows (no stable link count in std): every existing file may.
+#[cfg(not(unix))]
+fn may_alias(_f: &std::fs::File, _m: &std::fs::Metadata) -> bool {
+    true
+}
+
+/// Whether `f` is the root of a mount (`statx`'s `STATX_ATTR_MOUNT_ROOT`); an
+/// error, or a kernel that does not report the attribute, says yes.
+#[cfg(target_os = "linux")]
+fn mount_root(f: &std::fs::File) -> bool {
+    use std::os::fd::AsRawFd;
+    // SAFETY: an all-zero `statx` is a valid value of the plain C struct.
+    let mut stx: libc::statx = unsafe { std::mem::zeroed() };
+    // SAFETY: the empty path with `AT_EMPTY_PATH` names `f`'s descriptor, open
+    // for the whole call; `stx` is the buffer the call fills.
+    let r = unsafe {
+        libc::statx(
+            f.as_raw_fd(),
+            c"".as_ptr(),
+            libc::AT_EMPTY_PATH,
+            0,
+            &raw mut stx,
+        )
+    };
+    let bit = libc::STATX_ATTR_MOUNT_ROOT as u64;
+    r != 0 || stx.stx_attributes_mask & bit == 0 || stx.stx_attributes & bit != 0
+}
+
+/// Other unix systems have no bind mount of a file.
+#[cfg(all(unix, not(target_os = "linux")))]
+fn mount_root(_f: &std::fs::File) -> bool {
+    false
 }
 
 /// The claim folder's file holding the parent's snapshot.
@@ -125,25 +197,60 @@ pub(super) fn take() -> Result<Snapshot, String> {
     if snap.ir_on {
         snap.roots.extend(ir);
     }
-    for root in snap.roots.clone() {
+    walk_roots(&snap.roots.clone(), &mut snap, true).map_err(|e| format!("al-sem batch: {e}"))?;
+    snap.claims = claims_id()?;
+    apply(&snap);
+    Ok(snap)
+}
+
+/// Record `roots` and everything under them in `snap`; with `files` false,
+/// the directories only (no file is looked at). `Err`: the message's tail.
+fn walk_roots(roots: &[PathBuf], snap: &mut Snapshot, files: bool) -> Result<(), String> {
+    for root in roots {
         let fail = |e: std::io::Error| {
             format!(
-                "al-sem batch: cannot list the cache folder {} ({e}): the engine's caches cannot be protected from the run's writes (TLS-116)",
+                "cannot list the cache folder {} ({e}): the engine's caches cannot be protected from the writes (TLS-116)",
                 root.display()
             )
         };
-        let m = std::fs::metadata(&root).map_err(fail)?;
-        let Some(id) = super::manifest::read_file_id(&root).map_err(fail)? else {
+        let m = std::fs::metadata(root).map_err(fail)?;
+        let Some(id) = super::manifest::read_file_id(root).map_err(fail)? else {
             continue;
         };
         // The default `ir/` is inside the text folder: walked once.
         if snap.dirs.insert(id, born(&m)).is_none() {
-            walk(&root, &mut snap).map_err(fail)?;
+            walk(root, snap, files).map_err(fail)?;
         }
     }
-    snap.claims = claims_id()?;
-    apply(&snap);
-    Ok(snap)
+    Ok(())
+}
+
+/// TLS-120: the snapshot of a process outside a batch run (a standalone
+/// `alsem` or `aldump`), taken at its first write and kept: the cache folders
+/// made as [`take`] makes them (the text folder always; the IR cache's when it
+/// is on, with or without a key), then their directories only.
+/// A file is looked up when an open needs it ([`Snapshot::holds_file`]): a
+/// whole walk costs 0.4 s on server1's 134,395 entries, the directories alone
+/// do not stat a file. No cache is turned off: an outside run's caches are as
+/// they were. `Err` (a folder that cannot be listed): every write is refused.
+pub(super) fn standalone() -> std::io::Result<&'static Snapshot> {
+    static STANDALONE: OnceLock<Result<Snapshot, String>> = OnceLock::new();
+    STANDALONE
+        .get_or_init(|| {
+            let text = crate::snapshot::cache::cache_dir_path();
+            let _ = std::fs::create_dir_all(&text);
+            let mut snap = Snapshot {
+                dirs_only: true,
+                ..Snapshot::default()
+            };
+            snap.roots = [text, crate::program::ir_cache::make_ir_root()]
+                .into_iter()
+                .filter(|p| p.is_dir())
+                .collect();
+            walk_roots(&snap.roots.clone(), &mut snap, false).map(|()| snap)
+        })
+        .as_ref()
+        .map_err(|e| std::io::Error::other(format!("refused: {e}")))
 }
 
 /// The identity of this process's claim folder, when it is in a batch run.
@@ -175,12 +282,11 @@ fn gone(e: &std::io::Error) -> bool {
     ) || (cfg!(windows) && e.raw_os_error() == Some(303))
 }
 
-/// Record every entry under `dir` (links not followed).
-fn walk(dir: &Path, snap: &mut Snapshot) -> std::io::Result<()> {
+/// Record every entry under `dir` (links not followed); with `files` false,
+/// the directories only.
+fn walk(dir: &Path, snap: &mut Snapshot, files: bool) -> std::io::Result<()> {
     let names = match std::fs::read_dir(dir) {
-        Ok(rd) => rd
-            .map(|e| e.map(|e| e.path()))
-            .collect::<Result<Vec<_>, _>>(),
+        Ok(rd) => rd.collect::<Result<Vec<_>, _>>(),
         Err(e) => Err(e),
     };
     let names = match names {
@@ -190,7 +296,13 @@ fn walk(dir: &Path, snap: &mut Snapshot) -> std::io::Result<()> {
     };
     #[cfg(debug_assertions)]
     test_seam_during_snapshot();
-    for p in names {
+    for e in names {
+        // The listing's own type: a file is not looked at when only the
+        // directories are recorded.
+        if !files && e.file_type().is_ok_and(|t| !t.is_dir()) {
+            continue;
+        }
+        let p = e.path();
         let m = match std::fs::symlink_metadata(&p) {
             Ok(m) => m,
             Err(e) if gone(&e) => continue,
@@ -204,9 +316,9 @@ fn walk(dir: &Path, snap: &mut Snapshot) -> std::io::Result<()> {
         };
         if m.is_dir() {
             if snap.dirs.insert(id, born(&m)).is_none() {
-                walk(&p, snap)?;
+                walk(&p, snap, files)?;
             }
-        } else {
+        } else if files {
             snap.files.insert(id, born(&m));
         }
     }
@@ -512,5 +624,33 @@ mod tests {
         assert!(snap.is_cache_file(&id, &m), "the same file");
         snap.files.insert(id, born(&m) - 1);
         assert!(!snap.is_cache_file(&id, &m), "a reused number");
+    }
+
+    /// TLS-120: a file that is a mount of its own (a bind mount of a file keeps the device and
+    /// inode of the file it shows) may have another name; a plain file with one link may not.
+    /// The bind-mounted file is any regular file `/proc/self/mountinfo` names as a mount point
+    /// (a container's `/etc/hosts`); with none the mount half is skipped, said on stderr.
+    ///
+    /// Discrimination (2026-11-24): `mount_root` made `false`: fails "a mounted file";
+    /// restored, passes.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_mounted_file_may_have_another_name() {
+        let t = tempfile::NamedTempFile::new().unwrap();
+        let plain = std::fs::File::open(t.path()).unwrap();
+        assert!(
+            !may_alias(&plain, &plain.metadata().unwrap()),
+            "a plain file"
+        );
+        let info = std::fs::read_to_string("/proc/self/mountinfo").unwrap();
+        let mounted = info
+            .lines()
+            .filter_map(|l| l.split(' ').nth(4))
+            .filter(|p| std::fs::metadata(p).is_ok_and(|m| m.is_file()))
+            .find_map(|p| std::fs::File::open(p).ok());
+        match mounted {
+            Some(f) => assert!(may_alias(&f, &f.metadata().unwrap()), "a mounted file"),
+            None => eprintln!("no mounted regular file here: the mount half is skipped"),
+        }
     }
 }

@@ -47,8 +47,9 @@
 //! The check claims the files the run must not write (what jobs read,
 //! workspace inputs) before any job runs, and lists per refused job the
 //! files it names ([`keep`]): its own writes and every trace file may not
-//! open them, another job may. Outside a batch (no folder) a write opens as
-//! it always did.
+//! open them, another job may. Outside a batch (no folder) a write makes no
+//! claim, but is still kept off the engine's caches (TLS-120,
+//! [`open_outside`], [`make_dir`], [`open_append`]).
 //!
 //! **Traces.** Each process spools its trace events to a file of its own in
 //! the run's folder ([`spool_path`]). After every worker has ended and every
@@ -240,11 +241,11 @@ fn token() -> String {
 /// identity, then truncated. `key`: the write's [`write_key`] when it may
 /// take a [`reserve`]d baseline (a job's file action), `None` for a stream.
 /// A refused claim, or one that cannot be made, is an error naming why, the
-/// file is left as it was, and the run fails ([`failed`]).
+/// file is left as it was, and the run fails ([`failed`]). Outside a batch:
+/// [`open_outside`].
 pub fn open_for_write(path: &Path, job: &str, key: Option<&str>) -> std::io::Result<File> {
     let Some(dir) = DIR.get() else {
-        // Outside a batch: exactly as before TLS-109.
-        return File::create(path);
+        return open_outside(path);
     };
     let fail = || FAILED.store(true, Ordering::Relaxed);
     let snap = super::cache_guard::get(dir).inspect_err(|_| fail())?;
@@ -261,16 +262,20 @@ pub fn open_for_write(path: &Path, job: &str, key: Option<&str>) -> std::io::Res
 /// just before it is made: a component made earlier can make a later spelling
 /// reach a cache folder (`missing/../alias/new`, `alias` a link to one, passes
 /// while `missing` is absent). Refused, nothing more is made and the run fails
-/// ([`failed`]). Outside a batch: `create_dir_all`, as before.
+/// ([`failed`]). Outside a batch (TLS-120): the same steps against the
+/// process's own snapshot ([`super::cache_guard::standalone`]).
 pub fn make_dir(path: &Path) -> std::io::Result<()> {
-    let Some(dir) = DIR.get() else {
-        return std::fs::create_dir_all(path);
-    };
     let fail = |e: std::io::Error| {
-        FAILED.store(true, Ordering::Relaxed);
+        if DIR.get().is_some() {
+            FAILED.store(true, Ordering::Relaxed);
+        }
         e
     };
-    let snap = super::cache_guard::get(dir).map_err(fail)?;
+    let snap = match DIR.get() {
+        Some(dir) => super::cache_guard::get(dir),
+        None => super::cache_guard::standalone(),
+    }
+    .map_err(fail)?;
     let mut cur = PathBuf::new();
     for c in std::env::current_dir()?.join(path).components() {
         cur.push(c);
@@ -292,7 +297,7 @@ pub fn make_dir(path: &Path) -> std::io::Result<()> {
 /// file is a trace's either: every kept list is checked.
 pub fn open_trace(path: &Path) -> std::io::Result<File> {
     let Some(dir) = DIR.get() else {
-        return File::create(path);
+        return open_outside(path);
     };
     let f = open_guarded(super::cache_guard::get(dir)?, path, false, &|| {})?;
     if is_disk(&f)? {
@@ -337,14 +342,10 @@ static SHARED: OnceLock<File> = OnceLock::new();
 /// of the file the parent registered (never created; refused when it is not
 /// that file, is not a regular file, or is a cache file). A refusal appends
 /// nothing; the next append tries again. Outside a batch: an append, created
-/// when missing, as before.
+/// when missing ([`open_append`]).
 pub fn append_shared(path: &Path, tag: &str, bytes: &[u8]) -> std::io::Result<()> {
     let Some(dir) = DIR.get() else {
-        return OpenOptions::new()
-            .append(true)
-            .create(true)
-            .open(path)?
-            .write_all(bytes);
+        return open_append(path)?.write_all(bytes);
     };
     let f = match SHARED.get() {
         Some(f) => f,
@@ -456,6 +457,38 @@ fn open_guarded(
     Ok(f)
 }
 
+/// TLS-120: open `path` to write outside a batch run (a standalone `alsem`
+/// command's `--out`, shard file or trace; `aldump`'s outputs), as
+/// [`open_guarded`] opens a batch write against the process's own snapshot of
+/// the cache folders ([`super::cache_guard::standalone`]), and truncated only
+/// once its handle has passed: a name in a cache folder, or a cache file under
+/// any name (a hard link, a bind mount), is refused and left as it was. No
+/// claim: one process's writes are its own.
+pub fn open_outside(path: &Path) -> std::io::Result<File> {
+    let f = open_guarded(super::cache_guard::standalone()?, path, false, &|| {})?;
+    if is_disk(&f)? {
+        f.set_len(0)?;
+    }
+    Ok(f)
+}
+
+/// TLS-120: `std::fs::write` through [`open_outside`] (`aldump`'s outputs).
+pub fn write_outside(path: &Path, bytes: impl AsRef<[u8]>) -> std::io::Result<()> {
+    open_outside(path)?.write_all(bytes.as_ref())
+}
+
+/// TLS-120: open `path` to append, created when missing, checked as
+/// [`open_outside`] checks (in a batch run against the run's snapshot, with no
+/// claim): a diagnostic file an environment variable names
+/// (`ALSEM_IR_CACHE_REPORT` outside a batch, `ALSEM_CONES_SCHEDULE_FILE`).
+pub fn open_append(path: &Path) -> std::io::Result<File> {
+    let snap = match DIR.get() {
+        Some(dir) => super::cache_guard::get(dir)?,
+        None => super::cache_guard::standalone()?,
+    };
+    open_guarded(snap, path, true, &|| {})
+}
+
 /// How [`open_guarded`] opens: to write, or to append. An append (the run's
 /// shared file) never waits: `O_NONBLOCK`, so a FIFO with no reader fails the
 /// open (`ENXIO`) instead of hanging it, and its type is checked before any
@@ -485,7 +518,7 @@ fn refuse_cache_path(snap: &super::cache_guard::Snapshot, path: &Path) -> std::i
 /// Refuse the opened `f` when it is a file of the engine's caches, under any
 /// name.
 fn refuse_cache_handle(snap: &super::cache_guard::Snapshot, f: &File) -> std::io::Result<()> {
-    if snap.is_cache_file(&handle_id(f)?, &f.metadata()?) {
+    if snap.holds_file(f)? {
         return Err(std::io::Error::other(
             "refused: this file is a file of the engine's caches (TLS-116)",
         ));
