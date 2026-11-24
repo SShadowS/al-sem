@@ -23,18 +23,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`resolve_object` now applies `obsolete_gone` as `ResolveIndex::build` does), so Base
   Application's `No. Series` stub does not make Business Foundation's table ambiguous for Base
   Application's own code. A NUMBER keeps the own-app rule (object ids are unique across installed
-  apps). ENG-158 models the namespaces that make most of these names unique again.
+  apps, a gone stub excepted: `resolve_object_by_number` also drops an `obsolete_gone` object when a
+  live one of its number is visible, since Base Application's `Moved` table 308 keeps the number
+  Business Foundation's table has). ENG-158 models the namespaces that make most of these names
+  unique again.
+- **The cost, until ENG-158.** Every bare reference to a name an own and a dependency object
+  share is now open (unknown, through the name and run hubs), including the common case where the
+  file's own namespace would bind the own object in alc (Fable's probe r1: a 23-edge graph grows to
+  43,198 edges through hubs). No such name exists on CDO.
+- **Readers that must not lose reach (Fable r1 on ENG-193).** A shared base or table name used to
+  bind the own object; with no shortcut, two readers dropped it:
+  - `alsem graph` (impact_graph::project): an extension now extends every visible base of its name
+    (`ProgramGraph::visible_objects`), so a workspace `pageextension PE extends P` beside a
+    dependency's `P` still runs with the page, and a page whose `SourceTable` name is shared adds
+    every candidate table (its triggers stay reachable; permissions and temporary state still need
+    the one table). A table event whose only subscriber's object name is shared is reported through
+    that subscriber's `hiddenCallers: unboundSubscriber`.
+  - d12 (dead integration event): a subscription whose publisher object did not resolve sits on a
+    stand-in event; d12 now counts it for every event of that object type, name or number and event
+    name, and for an extension's event by its base object (`Database::T` for a tableextension's
+    event), so it no longer calls such an event dead.
 - **Measured first:** no CDO workspace object (392) shares a kind and name with a package object.
-- **CDO (pinned `bc3ccb18`, c6f61f04 against 0a7199a9):** nothing moved. No finding or
-  fingerprint at either scope, unknown edges 0 -> 0. cdo-speed PASS: instructions build x0.9990,
-  round total x1.0000.
+  DO (`/work/src/DO/Cloud`, b3b4459) has no `.alpackages` in this container, so no cross-app DO
+  model can be built here; its 395 workspace objects share no kind and name with CDO's package set.
+- **CDO (pinned `bc3ccb18`, c6f61f04 against a8ab14b7):** nothing moved. No finding or
+  fingerprint at either scope, unknown edges 0 -> 0. cdo-speed PASS: instructions build x0.9980,
+  round total x1.0009.
 - **Tests and red proofs.** `cli_resolve_no_own_app_shadow` (new; its AL compiles on alc 18.0.41):
-  the q1 shape makes no edge to the workspace's `X.F`; control: a name only the workspace declares
-  binds. Unit tests: an own and a dependency object of one name are `Ambiguous` (index) and decline
-  (graph); a Moved own stub gives way to the live dependency table; topology scoping unchanged.
-  Each break then restored: the own-app shortcut restored in both functions fails the CLI test and
-  both unit tests; dropping the `obsolete_gone` filter in `resolve_object` fails the Moved-stub
-  test.
+  the q1 shape makes no edge to the workspace's `X.F` nor the dependency's, and the call is open on
+  the name hub; control: a name only the workspace declares binds. `cli_resolve_shared_name_readers`
+  (new; compiles on alc): the page runs its extension's `OnOpenPage` and reaches its source table's
+  `OnInsert`, and no event is dead. Unit tests: an own and a dependency object of one name are
+  `Ambiguous` (index) and decline (graph); a Moved own stub gives way to the live dependency table,
+  by name and by number; topology scoping unchanged. Each break then restored: the own-app shortcut
+  restored in both functions fails the CLI test and both unit tests; dropping the `obsolete_gone`
+  filter fails the Moved-stub tests (by name, by number); the extension index from
+  `resolve_object` fails the `PE` edge; the ambiguous source table dropped fails the `OnInsert`
+  edge; d12 without the unresolved-subscription check reports both events dead, and without the
+  base-object reference the tableextension's.
 - **Goldens.** None moved.
 
 ### Fixed (ENG-178: table procedures named like record built-ins: four follow-ups from ENG-173)
