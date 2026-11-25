@@ -254,7 +254,9 @@ Every test still runs before a merge; the tiers decide HOW OFTEN each one runs.
   they always run equally long and are never time-sliced; a group that gets no counters
   (another pinned perf user) reads `<not counted>` at 100.00 % and is refused. Left: a pinned
   group that fails after its tasks ran there reads like a PMU never run on; only coverage
-  catches it, so it passes when that PMU had under 2 % + 0.05 s of the call's CPU.
+  catches it, so it passes when that PMU had under 2 % + 0.05 s of the call's CPU. Likewise
+  (unreproduced; needs a CPU-wide pinned rival) an inherited thread or child whose pinned group
+  fails while the parent's holds: expected to read as a normal row with a shorter running time.
   A warm-up failure whose two passes disagree beyond x1.25 gets ONE more flipped pair first
   (two passes, each waiting for a calm host); every row that failed after pass 2 must then
   agree within each side order, and four passes judge; else `HOST UNSTABLE`, exit 2 (`verdict`

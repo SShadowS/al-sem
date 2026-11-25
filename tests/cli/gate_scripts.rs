@@ -3004,7 +3004,8 @@ fn speed_counts_instructions_with_the_real_perf() {
 /// Restored, green. Redone at two stops (review r1): "stop 1 refused",
 /// `cpu_core` instructions 2434296526 ns against cycles 2434751329 (the second
 /// event longer this time; red). Restored, green. Review r1: `:D` dropped ->
-/// "the pinned group was time-sliced", cpu_core at 33.00 % (red). Restored,
+/// "the pinned group was time-sliced" (now "did not run 100.00 %"), cpu_core
+/// at 33.00 % (red). Restored,
 /// green.
 #[cfg(target_os = "linux")]
 #[test]
@@ -3059,7 +3060,11 @@ if events == m.HYBRID_EVENTS:
     ours = [ln for ln in text.splitlines() if ",cpu_core/instructions/u," in ln
             or ",cpu_core/cycles/u," in ln]
     if len(ours) != 2 or any(ln.split(",")[4] != "100.00" for ln in ours):
-        sys.exit(f"the pinned group was time-sliced: {text}")
+        sys.exit("the pinned group did not run 100.00 %: either `:D` is missing, or another "
+                 "CPU-wide pinned perf user on the host holds the P-cores' counters (a real "
+                 "signal, not a flake: cdo-speed would refuse such counts too). Check with "
+                 "`pgrep -a -x perf` and `pgrep -a -x samply` (look for `perf stat -a`/`record -a` "
+                 f"or `:D` events), and the NMI watchdog: /proc/sys/kernel/nmi_watchdog.\n{text}")
 print("ok")
 "#;
     let out = crate::clean_env::command("python3")

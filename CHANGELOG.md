@@ -50,7 +50,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   1.29 s on a process starting threads and children), so no exact rule exists.
   Only `covers` catches it, and it passes when that PMU carried less of the
   call's CPU seconds than the band (2 % + 50 ms), e.g. a call almost wholly on the
-  other core type.
+  other core type. A second shape, not reproduced (it needs a CPU-wide pinned
+  rival): a thread or child started during the call (inherited) whose pinned
+  group fails while the parent's holds is expected to read as a normal row with
+  a shorter running time, not `<not counted>`. Again only `covers` catches it,
+  with the same band.
 - **What changes in real gate verdicts (inferred).** No landing verdict yet
   shows a partly refused count; this is reasoned from the cause. Calls with a
   server thread running at the start or stop are counted instead of refused, so

@@ -1499,6 +1499,10 @@ def timed_call(server, side, cid, tool, args, rnd, warm_pass, tag, records):
 # starting threads and children; enabled_probe.py). Only coverage catches it:
 # it passes when that PMU carried less of the call's CPU seconds than this band
 # (2 % + 0.05 s; e.g. a call almost wholly on the other core type).
+# A second shape, not reproduced (it needs a CPU-wide pinned rival): a thread or
+# child started during the call (inherited) whose pinned group fails while the
+# parent's holds is expected to read as a normal row with a shorter running
+# time, not `<not counted>`; again only coverage catches it, same band.
 COVER_REL = 0.02
 COVER_ABS = 0.05
 COVER_CAP = 1.10
