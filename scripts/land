@@ -593,7 +593,10 @@ rc=0
 if ((mem_min_gb > 0)); then
     # ⟨TLS-105⟩ LAND_MEM_TIMEOUT_S of AWAKE time (scripts/awake-clock): a laptop
     # that slept through the wait gave up at once on resume. Each sleep is said
-    # (on the terminal and in mem-wait.log); the naps never pass the deadline.
+    # (on the terminal and in mem-wait.log); no nap passes the deadline as of
+    # the clock reading just before it. ⟨TLS-129⟩ So land gives up late by the
+    # loop's own work after that reading: awk, a slow clock read, and
+    # awake-clock's failed-read reuse and wall fall back.
     awake_start
     said=0
     while :; do
@@ -617,11 +620,7 @@ if ((mem_min_gb > 0)); then
             echo "land: mem-wait: MemAvailable $((avail_kb >> 20)) GB, waiting for $mem_min_gb GB (at most $mem_timeout s of awake time)"
             said=1
         fi
-        # ⟨TLS-129⟩ Logged, so a test judges the cap from land's own record,
-        # not from the host's wall clock (which load stretches).
-        nap_us=$((left_us < 15000000 ? left_us : 15000000))
-        echo "nap $nap_us us of $left_us us left" >>"$run/mem-wait.log"
-        awake_nap "$nap_us"
+        awake_nap $((left_us < 15000000 ? left_us : 15000000))
     done
 fi
 verdict mem-wait "$rc" "$start"
