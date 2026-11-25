@@ -1274,19 +1274,35 @@ by Fable).
   return or an error before B), `errorsBetween`, `ownTransactionCommits`. Traps are scoped to
   the region: an error a trap below the region catches is left out; one a trap above the meet
   routine catches is kept, `swallowed-above-meet`.
-- **Unknown, not no:** an unresolved call, an open interface call (waived by
-  `--closed-world`), a routine without a control-flow tree, a route cap.
+- **Unknown, not no:** an unresolved call or an open interface call (waived by
+  `--closed-world`) in a region cone, a reached routine whose body is not available (symbols
+  only), a truncated cone or analysis gaps, a routine without a control-flow tree, a site its
+  tree does not place (a call in a `case` label: `site-outside-control-flow`), a route cap.
+- **Review round 1 (Fable) fixes:** a commit in A's tail (or a checked run on A's route) on a
+  path where B never runs is `commitsWithoutB`, not between; a commit in B's head below a checked
+  run is class 2; `[CommitBehavior]` is read per route; a ternary arm may be skipped; only region
+  cones block (an unresolved call inside A does not); A or B in an event subscriber is walked
+  through its publisher; a page run after a direct `Commit()` on every path is no error row.
+- **Output:** the nearest witness per list (cone hops, part, statement, workspace first), counts
+  per class split workspace/dependency, commits grouped by the statement between A and B,
+  error counts by kind with the first workspace errors, conditional facts once; `--detail`
+  expands every group. JSON lists each error once (`errors`), lists hold indices, and each
+  commit carries `errorsAfterCommit {count, workspace, dependency, nearest, ids, sameCone}`.
+- Runtime facts recorded in `docs/engine-limits.md` §5 (BC 28 Linux, Windows confirmation
+  pending).
 - **Measured on BC 28 on Linux (Windows confirmation pending)**, probe app and results in
   `/work/.al-sem/engine-notes/eng165/bcprobe/`: `Page.RunModal` with a write pending raises an
   error (without a test handler; listed as a possible error row, never a commit);
   `Report.RunModal` of a processing-only report neither commits nor errors; a `Commit()` in an
   isolated subscriber commits the caller's pending write; an isolated event with nothing
   pending commits its subscribers' own writes.
-- **DO and CDO.** On the DO workspace the engine finds two places that match the owner's
-  description (engine findings, not confirmed by the owner); public fixture twins of both pin
-  the answers (`tests/cli/cli_eng165_commit_between.rs`, `do1_*`, `do2_*`). No `analyze`
-  finding or fingerprint moves: the question adds output only.
-- `--routes` does not go with `commit-between` yet (each row carries one route).
+- **DO.** On the DO workspace the engine finds two places that match the owner's description
+  (engine findings, not confirmed by the owner); public fixture twins of both pin the answers
+  (`tests/cli/cli_eng165_commit_between.rs`, `do1_*`, `do2_*`). On CDO no `analyze` finding or
+  fingerprint moves (`cdo-before-after`): the question adds output only.
+- Open items are filed: an error after B before B's commit (ENG-206), and the ENG-165
+  leftovers card (`--routes`, per-route literal check, an isolated event's own commit, Windows
+  confirmation, `case` labels in the control-flow tree).
 
 ### Fixed (ENG-178: table procedures named like record built-ins: four follow-ups from ENG-173)
 
