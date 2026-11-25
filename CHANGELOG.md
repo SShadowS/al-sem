@@ -999,6 +999,16 @@ its time rules on the wall clock, which keeps counting through a suspend.
     sidecar's new checksum, besides its run and heartbeat match and the "not ahead of the
     reader" bound.
   - **The clock tests run on any OS:** their fixture deletes the host's clock API and stubs it.
+- **Review r3 (sol):**
+  - **A lease and its sidecar are read as one pair.** After a resume, an unlocked reader
+    could load the pre-suspend lease, then the sidecar of a beat that landed in between. The
+    two did not match, so it fell back to the old lease's wall heartbeat and read a live run
+    as stale. `clear-halt`'s live-run guard and verification `cleanup`'s lane check would have
+    let it through. On a mismatch, `_entries` now reads the lease once more, and gets the beat's
+    pair, or a lease that is fresh on the wall clock. That covers every unlocked reader.
+  - **Deeply nested JSON in a sidecar reads as absent.** The parser's `RecursionError` is
+    caught for the optional files only. A stamp's shape is checked before its checksum, so
+    only a flat `[str, number]` is ever serialized for it.
 
 ### Fixed (ENG-178: table procedures named like record built-ins: four follow-ups from ENG-173)
 

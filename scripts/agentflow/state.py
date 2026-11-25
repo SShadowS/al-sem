@@ -225,9 +225,7 @@ def awake_elapsed(then, now_awake, wall_elapsed: float) -> tuple[float, str]:
     then shorten a valid awake age. A hand-edited (forged early) reading is
     caught by its file's checksum, before it reaches here."""
     try:
-        if not (isinstance(then, (list, tuple)) and len(then) == 2 and isinstance(then[0], str)
-                and isinstance(then[1], (int, float)) and not isinstance(then[1], bool)
-                and now_awake and then[0] == now_awake[0]):
+        if not (is_stamp(then) and now_awake and then[0] == now_awake[0]):
             return wall_elapsed, "wall"
         s = float(then[1])                       # OverflowError for a huge integer
         if not (math.isfinite(s) and 0 <= s <= now_awake[1] + AHEAD_TOLERANCE_S):
@@ -236,6 +234,14 @@ def awake_elapsed(then, now_awake, wall_elapsed: float) -> tuple[float, str]:
     except OverflowError:
         return wall_elapsed, "wall"
     return max(age, 0.0), "awake"
+
+
+def is_stamp(r: Any) -> bool:
+    """The SHAPE of an awake reading, `[str, number]` (booleans refused). Checked
+    before a sidecar's checksum too, so nothing but a flat stamp is ever
+    serialized for it (sol r3: a deeply nested value must not recurse there)."""
+    return (isinstance(r, (list, tuple)) and len(r) == 2 and isinstance(r[0], str)
+            and isinstance(r[1], (int, float)) and not isinstance(r[1], bool))
 
 
 def meta_sum(body: Any) -> str:
@@ -248,10 +254,11 @@ def meta_sum(body: Any) -> str:
 def read_optional(path: Path) -> Any:
     """`read_json` for optional metadata (the awake sidecars): an unreadable,
     truncated or unparsable file reads as absent (None), so it can never break
-    `status`, `recover` or a heartbeat (sol r2). Primary files keep `read_json`."""
+    `status`, `recover` or a heartbeat (sol r2). That includes JSON nested too
+    deep for the parser (`RecursionError`, sol r3). Primary files keep `read_json`."""
     try:
         return read_json(path)
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):
         return None
 
 

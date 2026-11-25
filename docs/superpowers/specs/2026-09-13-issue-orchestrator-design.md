@@ -287,8 +287,11 @@ Labels are a mirror for humans, not a lock. The lock is local:
   (`{run_id, heartbeat, awake, checksum}`), written after the lease and counted
   only while it names the lease's run and heartbeat and its checksum matches.
   Sidecars are optional metadata: a failed write never fails the lease or
-  merge-lane change around it, and an unreadable one reads as absent (wall
-  clock), so neither can break `status`, `recover` or a heartbeat.
+  merge-lane change around it, and an unreadable one (truncated, unparsable,
+  nested too deep) reads as absent (wall clock), so neither can break
+  `status`, `recover` or a heartbeat. A reader takes lease and sidecar as one
+  pair: on a mismatch it reads the lease once more, since a beat between its
+  two reads leaves a newer sidecar beside the old lease (sol r3).
   - **The awake clock** is `[clock id, CLOCK_MONOTONIC]`. CLOCK_MONOTONIC stops
     while the host sleeps. The clock id is the boot id plus the process's time
     namespace offset for CLOCK_MONOTONIC (`/proc/self/timens_offsets`; 0 without

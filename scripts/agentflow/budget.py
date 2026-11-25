@@ -9,8 +9,8 @@ from __future__ import annotations
 import hashlib
 import json
 
-from .state import (Ctx, append_audit, awake_elapsed, meta_sum, mutex, read_json, read_optional,
-                    update_json, write_json)
+from .state import (Ctx, append_audit, awake_elapsed, is_stamp, meta_sum, mutex, read_json,
+                    read_optional, update_json, write_json)
 
 CAPS: dict[str, int] = {
     "spec_rounds": 5,
@@ -82,7 +82,8 @@ def _awake_sum(claimed_at: float, awake) -> str:
 def _claimed_awake(ctx: Ctx, data: dict):
     s = read_optional(_awake_path(ctx))       # unreadable: absent, never an error (sol r2)
     if (isinstance(s, dict) and s.get("claimed_at") == data["claimed_at"]
-            and s.get("checksum") == _awake_sum(s["claimed_at"], s.get("awake"))):
+            and is_stamp(s.get("awake"))                 # the shape first: only a flat stamp is summed
+            and s.get("checksum") == _awake_sum(s["claimed_at"], s["awake"])):
         return s.get("awake")
     return None
 

@@ -419,7 +419,10 @@ def test_a_malformed_awake_stamp_counts_as_none(ctx, bad):
     the same 5 shapes. The `math.isfinite` break now PASSES: sol r1's range
     check (`0 <= s <= now + tolerance`) is false for NaN and both infinities,
     so `math.isfinite` is a redundant, explicit check. (The stamps here are
-    signed, so they reach `awake_elapsed` past the sidecar checksum.)"""
+    signed, so they reach `awake_elapsed` past the sidecar checksum.)
+    Since sol r3 the shape test is `state.is_stamp`, run by `_read_awake`
+    before the checksum and by `awake_elapsed`: loosened, it failed the same
+    5 shapes."""
     c = Clocks()
     lock.acquire(c.ctx(ctx.paths, "run-holder"), 8, "s", 1)
     _put_stamp(ctx.paths, 8, bad)
@@ -684,6 +687,80 @@ def test_an_unreadable_sidecar_reads_as_absent(ctx, junk):
     (ctx.paths.locks_dir / "awake" / "issue-8.json").write_bytes(junk.encode("latin-1"))
     rec = c.ctx(ctx.paths, "run-rec")
     assert lock.steal_for_recovery(rec, lock.for_issue(rec, 8)).recovering_by == "run-rec"
+
+
+def test_a_deeply_nested_sidecar_reads_as_absent(ctx):
+    """JSON nested deeper than the parser allows (RecursionError) in a lease or
+    budget sidecar is no stamp: listing leases, a beat, the deadline and a
+    recover still work, on the wall clock (sol r3).
+    Red proof (sol r3): `RecursionError` dropped from `state.read_optional`
+    failed here (RecursionError out of `all_locks`).
+    The shape check before each checksum (`is_stamp`) is defensive: on Python
+    3.14 the encoder handled every depth the parser accepted (measured to
+    56,000; the parser stops near 58,000), so no parsed value reaches the
+    checksum's recursion, and dropping that check here stays green."""
+    deep = "[" * 100_000 + "]" * 100_000
+    c = Clocks()
+    holder = c.ctx(ctx.paths, "run-a")
+    lock.acquire(holder, 8, "s", 1)
+    budget.init(holder, claimed_at=holder.now())
+    side = ctx.paths.locks_dir / "awake" / "issue-8.json"
+    side.write_text(deep, encoding="utf-8")
+    (holder.run_dir / "budget-awake.json").write_text(deep, encoding="utf-8")
+    assert lock.for_issue(holder, 8).beat_awake is None
+    budget.check_deadline(holder)
+    lock.beat(holder)
+    c.suspend(lock.STALE_SECONDS + 1)
+    side.write_text(deep, encoding="utf-8")
+    rec = c.ctx(ctx.paths, "run-rec")
+    assert lock.steal_for_recovery(rec, lock.for_issue(rec, 8)).recovering_by == "run-rec"
+
+
+def _race_after_suspend(ctx, monkeypatch):
+    """The race (sol r3): after a 2 h suspend, an unlocked reader loads the
+    pre-suspend lease; the holder beats (new lease, then new sidecar); the
+    reader then loads the NEW sidecar. The pair does not match, and the old
+    lease's wall heartbeat (2 h) would read the live run as stale. Returns
+    (clocks, armed): `armed` is empty once the beat has landed in the window."""
+    c = Clocks()
+    holder = c.ctx(ctx.paths, "run-a")
+    lock.acquire(holder, 8, "s", 1)
+    lock.take_lane(holder, 8, pr=5)
+    c.run(60)
+    c.suspend(2 * 3600)
+    real = lock.read_optional
+    armed = [True]
+
+    def beat_first(path):
+        if armed and "awake" in path.parts:
+            armed.pop()
+            lock.beat(holder)                    # lands between the reader's two reads
+        return real(path)
+
+    monkeypatch.setattr(lock, "read_optional", beat_first)
+    return c, armed
+
+
+def test_a_beat_in_the_read_window_still_blocks_clear_halt(ctx, monkeypatch):
+    """`clear-halt`'s live-run guard (`require_operator`) sees the live run:
+    `_entries` reads the lease again on a mismatch, so it gets the beat's pair.
+    Red proof (sol r3): the lease re-read dropped from `lock._entries` failed
+    here (DID NOT RAISE: the guard let `clear-halt` through)."""
+    c, armed = _race_after_suspend(ctx, monkeypatch)
+    op = Ctx(paths=ctx.paths, run_id=None, now=lambda: c.wall, awake=lambda: (c.boot, c.up))
+    with pytest.raises(lock.OperatorOnly):
+        lock.require_operator(op, "clear HALT")
+    assert not armed                             # the beat did land in the window
+
+
+def test_a_beat_in_the_read_window_keeps_the_merge_lane_busy(ctx, monkeypatch):
+    """Verification `cleanup` refuses while the lane is `busy`; read as
+    `orphaned`, it would delete a live run's verification worktree.
+    Red proof (sol r3): the lease re-read dropped from `lock._entries` failed
+    here (the lane read `orphaned`)."""
+    c, armed = _race_after_suspend(ctx, monkeypatch)
+    assert lock.lane_state(c.ctx(ctx.paths, "run-x"))[1] == "busy"
+    assert not armed
 
 
 def test_a_backward_wall_step_does_not_save_a_dead_lease(ctx):

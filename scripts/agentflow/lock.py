@@ -26,8 +26,8 @@ from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 
 from . import budget
-from .state import (Ctx, MutexTimeout, append_audit, awake_elapsed, config, meta_sum, mutex,
-                    read_json, read_optional, write_json)
+from .state import (Ctx, MutexTimeout, append_audit, awake_elapsed, config, is_stamp, meta_sum,
+                    mutex, read_json, read_optional, write_json)
 
 STALE_SECONDS = 30 * 60
 
@@ -140,9 +140,10 @@ def _write_awake(ctx: Ctx, lk: Lock) -> None:
 
 def _read_awake(ctx: Ctx, lk: Lock) -> list | None:
     s = read_optional(_awake_path(ctx, lk.issue))
-    if not (isinstance(s, dict) and s.get("run_id") == lk.run_id and s.get("heartbeat") == lk.heartbeat):
+    if not (isinstance(s, dict) and s.get("run_id") == lk.run_id and s.get("heartbeat") == lk.heartbeat
+            and is_stamp(s.get("awake"))):            # the shape first: only a flat stamp is summed
         return None
-    body = {"run_id": s["run_id"], "heartbeat": s["heartbeat"], "awake": s.get("awake")}
+    body = {"run_id": s["run_id"], "heartbeat": s["heartbeat"], "awake": s["awake"]}
     return body["awake"] if s.get("checksum") == meta_sum(body) else None
 
 
@@ -160,6 +161,16 @@ def _entries(ctx: Ctx) -> list[tuple[Path, Lock]]:
         lk = _read_lease(p)
         if lk is not None:
             lk.beat_awake = _read_awake(ctx, lk)
+            if lk.beat_awake is None:
+                # A consistent pair (sol r3): a beat between the lease read and
+                # the sidecar read leaves a NEWER sidecar beside the old lease,
+                # and the old lease's wall heartbeat would read a live run as
+                # stale after a resume. Read the lease once more: it is now the
+                # beat's, matching its sidecar or fresh on the wall clock.
+                again = _read_lease(p)
+                if again is not None and again.heartbeat != lk.heartbeat:
+                    lk = again
+                    lk.beat_awake = _read_awake(ctx, lk)
             out.append((p, lk))
     return sorted(out, key=lambda e: e[1].issue)
 
