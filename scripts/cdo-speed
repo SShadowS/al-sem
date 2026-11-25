@@ -941,16 +941,36 @@ def proc_user_sys(pid):
         return 0.0, 0.0
 
 
-def running(pid):
-    """`pid` exists and is not a zombie. ⟨TLS-126⟩ A zombie holds no memory, and an
-    orphan's zombie waits for its new parent to reap it, which a host whose init does
-    not reap never does: Server.close() waited 30 + 5 s on one."""
+def proc_stat(pid):
+    """`/proc/<pid>/stat`'s fields after the command name (state first), or None."""
     try:
         with open(f"/proc/{pid}/stat") as f:
             stat = f.read()
-        return stat[stat.rindex(")") + 2:].split()[0] not in ("Z", "X")
-    except (OSError, ValueError, IndexError):
+        return stat[stat.rindex(")") + 2:].split()
+    except (OSError, ValueError):
+        return None
+
+
+def proc_start(pid):
+    """`pid`'s start time (clock ticks after boot, stat field 22), or None."""
+    fields = proc_stat(pid)
+    return fields[19] if fields and len(fields) > 19 else None
+
+
+def running(pid, start=None):
+    """`pid` still holds anything. ⟨TLS-126⟩ Gone: no such pid, another process under
+    it (its start time differs from `start`), or a zombie with no thread left. An
+    orphan's zombie waits for its new parent to reap it, which a host whose init does
+    not reap never does (Server.close() waited 30 + 5 s on one), and it holds no
+    memory. But stat shows the thread-group LEADER's state: a leader that exited
+    reads Z while its other threads still run and hold the address space, so a
+    zombie counts as gone only at one thread (stat field 20)."""
+    fields = proc_stat(pid)
+    if not fields or len(fields) <= 19:
         return False
+    if start is not None and fields[19] != start:
+        return False
+    return not (fields[0] in ("Z", "X") and fields[17] == "1")
 
 
 def descendants(pid):
@@ -1364,18 +1384,19 @@ class Server:
     def close(self):
         # ⟨TLS-79⟩ The whole tree must be gone: an engine child left behind keeps
         # its model resident, which is what made a build beside it slower.
-        kids = descendants(self.p.pid)
+        # Each with its start time: a pid reused after it exits is not it (TLS-126).
+        kids = [(k, proc_start(k)) for k in descendants(self.p.pid)]
         try:
             self.p.stdin.close()
             self.p.wait(timeout=60)
         except (OSError, subprocess.TimeoutExpired):
             self.p.kill()
         deadline = time.monotonic() + 30
-        left = [k for k in kids if running(k)]
+        left = [(k, t) for k, t in kids if running(k, t)]
         while left and time.monotonic() < deadline:
             time.sleep(0.2)
-            left = [k for k in left if running(k)]
-        for k in left:
+            left = [(k, t) for k, t in left if running(k, t)]
+        for k, _ in left:
             log(f"server {self.name}: child {k} still alive 30 s after the close: killed")
             try:
                 os.kill(k, 9)
@@ -1384,8 +1405,8 @@ class Server:
         deadline = time.monotonic() + 5
         while left and time.monotonic() < deadline:
             time.sleep(0.1)
-            left = [k for k in left if running(k)]
-        for k in left:
+            left = [(k, t) for k, t in left if running(k, t)]
+        for k, _ in left:
             log(f"server {self.name}: child {k} survived SIGKILL: its memory may still be "
                 f"resident (the next build's timing may be skewed)")
         self.err.close()

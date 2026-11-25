@@ -3168,18 +3168,28 @@ fn speed_counts_cycles_and_labels_clock_and_cpi() {
     assert!(!v.contains(" CLOCK:"), "{text}");
 }
 
-/// ⟨TLS-126 review r2⟩ `Server.close()` waits for the server's descendants,
-/// but not for a zombie: on a host whose init does not reap, an orphaned engine
-/// child stays a zombie (/proc/<pid> exists) and close() waited 30 + 5 s on it.
-/// Made deterministic: the script is imported into a process that makes itself
-/// a child subreaper (orphans come to it) and never reaps. A server whose child
-/// outlives it by 0.5 s is closed: close() waits that 0.5 s, finds a zombie,
-/// and returns within 10 s; the precondition (the child was listed, and is a
-/// zombie after the close) is asserted.
+/// ⟨TLS-126 review r2, r3⟩ `Server.close()` waits for the server's live
+/// descendants, but not for a finished zombie: on a host whose init does not
+/// reap, an orphaned engine child stays a zombie (/proc/<pid> exists) and
+/// close() waited 30 + 5 s on it. Made deterministic: the script is imported
+/// into a process that makes itself a child subreaper (orphans come to it) and
+/// never reaps. Each server's child waits until the server is gone, then lives
+/// on a moment:
+/// - plain: the child runs 0.5 s more and exits. After close(): the child is a
+///   zombie with one thread, and close() took under 10 s;
+/// - leader gone first: the child's main thread exits (`pthread_exit`) while a
+///   second thread runs 1 s more (stat: Z with 2 threads, asserted before the
+///   close). close() must wait for that thread: after it, the zombie has one
+///   thread; under 10 s;
+/// - `running` with a start time: the live test process counts with its own
+///   start time, not with another (a reused pid is not the child it was).
+/// Each case asserts its precondition (one child listed; the zombie shape).
 ///
-/// Proof (2026-11-25): `running` replaced by `os.path.exists` in close() ->
+/// Proofs: (2026-11-25) `running` replaced by `os.path.exists` in close() ->
 /// "close() waited 35.1 s on a zombie", after "still alive 30 s" and "survived
-/// SIGKILL" (red); restored, green.
+/// SIGKILL" (red); restored, green. (Review r3) the one-thread condition dropped
+/// from `running` -> the leader-gone case (red); the start-time check dropped ->
+/// the start-time case (red); each restored, green.
 #[cfg(target_os = "linux")]
 #[test]
 fn speed_close_does_not_wait_on_a_zombie() {
@@ -3191,27 +3201,51 @@ loader.exec_module(m)
 libc = ctypes.CDLL(None, use_errno=True)
 if libc.prctl(36, 1, 0, 0, 0) != 0:  # PR_SET_CHILD_SUBREAPER
     sys.exit(f"prctl: errno {ctypes.get_errno()}")
-d = tempfile.mkdtemp()
-s = m.Server.__new__(m.Server)
-s.name, s.root = "z", tempfile.mkdtemp(dir=d)
-s.err = open(os.path.join(d, "err"), "wb")
-s.p = subprocess.Popen([sys.executable, "-c",
-    "import os, sys, time\nif os.fork() == 0:\n    sys.stdin.close()\n    time.sleep(0.5)\n"
-    "    os._exit(0)\nsys.stdin.read()"], stdin=subprocess.PIPE)
-end = time.monotonic() + 10
-while not m.descendants(s.p.pid) and time.monotonic() < end:
-    time.sleep(0.01)
-kids = m.descendants(s.p.pid)
-if len(kids) != 1:
-    sys.exit(f"precondition: one child, got {kids}")
-t = time.monotonic()
-s.close()
-took = time.monotonic() - t
-state = open(f"/proc/{kids[0]}/stat").read().rsplit(")", 1)[1].split()[0]
-if state != "Z":
-    sys.exit(f"precondition: the child is a zombie after the close, state {state}")
-if took > 10:
-    sys.exit(f"close() waited {took:.1f} s on a zombie")
+def shape(pid):
+    f = m.proc_stat(pid)
+    return f[0], f[17]  # state, threads
+# The child: wait until the server (its parent) is gone, then live on a moment.
+WAIT = ("import ctypes, os, sys, threading, time\n"
+        "if os.fork() == 0:\n"
+        "    sys.stdin.close()\n"
+        "    ppid = os.getppid()\n"
+        "    def after(s):\n"
+        "        while os.getppid() == ppid:\n"
+        "            time.sleep(0.01)\n"
+        "        time.sleep(s)\n"
+        "        os._exit(0)\n")
+CASES = {
+    "plain": WAIT + "    after(0.5)\nsys.stdin.read()",
+    "leader gone": WAIT + "    threading.Thread(target=after, args=(1.0,)).start()\n"
+                   "    ctypes.CDLL(None).pthread_exit(None)\nsys.stdin.read()",
+}
+for name, code in CASES.items():
+    d = tempfile.mkdtemp()
+    s = m.Server.__new__(m.Server)
+    s.name, s.root = "z", tempfile.mkdtemp(dir=d)
+    s.err = open(os.path.join(d, "err"), "wb")
+    s.p = subprocess.Popen([sys.executable, "-c", code], stdin=subprocess.PIPE)
+    want = ("Z", "2") if name == "leader gone" else ("S", None)
+    end = time.monotonic() + 60
+    while time.monotonic() < end:
+        kids = m.descendants(s.p.pid)
+        if len(kids) == 1 and (want[1] is None or shape(kids[0]) == want):
+            break
+        time.sleep(0.01)
+    else:
+        sys.exit(f"{name}: precondition: one child{' (Z, 2 threads)' * (want[1] is not None)}, "
+                 f"got {[(k, shape(k)) for k in kids]}")
+    t = time.monotonic()
+    s.close()
+    took = time.monotonic() - t
+    if shape(kids[0]) != ("Z", "1"):
+        sys.exit(f"{name}: close() returned with the child at {shape(kids[0])}, not a "
+                 "finished zombie (Z, 1 thread)")
+    if took > 10:
+        sys.exit(f"{name}: close() waited {took:.1f} s on a zombie")
+me = os.getpid()
+if not m.running(me, m.proc_start(me)) or m.running(me, "0"):
+    sys.exit("running: the start time is not checked")
 print("ok")
 "#;
     let out = crate::clean_env::command("python3")

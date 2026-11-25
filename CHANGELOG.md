@@ -50,13 +50,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the server's descendants now fails a test (TLS-128 covers the real engine's side).
   The stub forks once, not twice: a double-forked grandchild is reparented at once,
   so `close()` would never list it and its `end` line would race the report check.
-- `scripts/cdo-speed`: `Server.close()` no longer waits on a zombie descendant. On a
-  host whose init does not reap, an orphaned engine child stays a zombie (its
-  `/proc/<pid>` remains), and `close()` waited 30 s, sent a SIGKILL, waited 5 s more,
-  and warned that its memory "may still be resident". A zombie holds no memory, so
-  the new `running()` treats it as gone. Pinned by
-  `speed_close_does_not_wait_on_a_zombie`: the script runs under a child subreaper
-  that never reaps, so the zombie is deterministic. It took 35.1 s on the old check.
+- `scripts/cdo-speed`: `Server.close()` no longer waits on a finished zombie
+  descendant. On a host whose init does not reap, an orphaned engine child stays a
+  zombie (its `/proc/<pid>` remains), and `close()` waited 30 s, sent a SIGKILL,
+  waited 5 s more, and warned that its memory "may still be resident".
+  - The new `running()` treats a zombie as gone only when one thread is left.
+    `/proc/<pid>/stat` shows the thread-group leader's state, and a leader that has
+    exited reads Z while its other threads still run and hold the memory.
+  - `close()` also records each descendant's start time when it lists them, so a
+    pid reused by another process counts as gone and is never killed.
+  - Pinned by `speed_close_does_not_wait_on_a_zombie`. The script runs under a child
+    subreaper that never reaps, so the zombie is deterministic. It has three cases:
+    a plain zombie (35.1 s on the old check); a leader gone with a second thread
+    still running, which `close()` must wait for; and the start-time check.
 
 ### Fixed (ENG-178: table procedures named like record built-ins: four follow-ups from ENG-173)
 
