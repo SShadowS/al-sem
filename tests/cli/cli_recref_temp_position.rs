@@ -154,6 +154,51 @@ codeunit 50010 "PA"
             R.Open(Database::"PA Log");
         end;
     end;
+
+    // sol r1: the same through every other loop kind (each fills `loop_stack` on its own path).
+    procedure RootWhile()
+    var
+        R: RecordRef;
+        I: Integer;
+    begin
+        R.Open(Database::"PA Log", true);
+        while I < 2 do begin
+            R.Insert();
+            R.Close();
+            R.Open(Database::"PA Log");
+            I := I + 1;
+        end;
+    end;
+
+    procedure RootRepeat()
+    var
+        R: RecordRef;
+        I: Integer;
+    begin
+        R.Open(Database::"PA Log", true);
+        repeat
+            R.Insert();
+            R.Close();
+            R.Open(Database::"PA Log");
+            I := I + 1;
+        until I >= 2;
+    end;
+
+    procedure RootForeach()
+    var
+        R: RecordRef;
+        Items: List of [Integer];
+        I: Integer;
+    begin
+        Items.Add(1);
+        Items.Add(2);
+        R.Open(Database::"PA Log", true);
+        foreach I in Items do begin
+            R.Insert();
+            R.Close();
+            R.Open(Database::"PA Log");
+        end;
+    end;
 }
 "#;
 
@@ -220,6 +265,9 @@ fn a_record_operation_reads_the_last_bind_before_it() {
         "RootSysClear",
         "RootUnknownFlag",
         "RootLoop",
+        "RootWhile",
+        "RootRepeat",
+        "RootForeach",
         "RootArgBind",
         "RootAssertError",
         "RootGetTableUnknown",
