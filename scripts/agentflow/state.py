@@ -218,11 +218,12 @@ def awake_elapsed(then, now_awake, wall_elapsed: float) -> tuple[float, str]:
     The awake clock counts only for a usable reading of the same clock id: a
     `[str, number]` that is finite, not negative, and not ahead of the reader's
     own clock by more than AHEAD_TOLERANCE_S. A reading from another boot or
-    time namespace, malformed or unusable (a hand edit, a torn file; NaN, 1e20,
-    a 400-digit integer), or a writer or reader with no awake clock: wall.
-    Awake time never runs faster than wall time, so an awake age above the wall
-    age is not believed either (a forged early reading would make a fresh lease
-    look stale): the wall age is the most it can be."""
+    time namespace, malformed or unusable (NaN, 1e20, a 400-digit integer), or
+    a writer or reader with no awake clock: wall.
+
+    The wall age is NOT an upper bound (sol r2): a backward wall step would
+    then shorten a valid awake age. A hand-edited (forged early) reading is
+    caught by its file's checksum, before it reaches here."""
     try:
         if not (isinstance(then, (list, tuple)) and len(then) == 2 and isinstance(then[0], str)
                 and isinstance(then[1], (int, float)) and not isinstance(then[1], bool)
@@ -234,7 +235,24 @@ def awake_elapsed(then, now_awake, wall_elapsed: float) -> tuple[float, str]:
         age = now_awake[1] - s
     except OverflowError:
         return wall_elapsed, "wall"
-    return (max(age, 0.0), "awake") if age <= wall_elapsed else (wall_elapsed, "wall")
+    return max(age, 0.0), "awake"
+
+
+def meta_sum(body: Any) -> str:
+    """A checksum for an awake sidecar's content. It catches a hand edit or a
+    stray write, not a determined caller (like budget.json's)."""
+    raw = json.dumps(body, sort_keys=True)
+    return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+
+def read_optional(path: Path) -> Any:
+    """`read_json` for optional metadata (the awake sidecars): an unreadable,
+    truncated or unparsable file reads as absent (None), so it can never break
+    `status`, `recover` or a heartbeat (sol r2). Primary files keep `read_json`."""
+    try:
+        return read_json(path)
+    except (OSError, ValueError):
+        return None
 
 
 def new_run_id(now: float) -> str:

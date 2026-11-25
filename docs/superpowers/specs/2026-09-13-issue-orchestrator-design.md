@@ -284,26 +284,34 @@ Labels are a mirror for humans, not a lock. The lock is local:
   `budget.json`'s and its checksum matches; otherwise the run counts wall time.
 - **Stale** means no heartbeat for 30 minutes of AWAKE time (TLS-122). Each
   heartbeat also writes the sidecar `locks/awake/issue-<N>.json`
-  (`{run_id, heartbeat, awake}`), written after the lease and counted only while
-  it names the lease's run and heartbeat.
+  (`{run_id, heartbeat, awake, checksum}`), written after the lease and counted
+  only while it names the lease's run and heartbeat and its checksum matches.
+  Sidecars are optional metadata: a failed write never fails the lease or
+  merge-lane change around it, and an unreadable one reads as absent (wall
+  clock), so neither can break `status`, `recover` or a heartbeat.
   - **The awake clock** is `[clock id, CLOCK_MONOTONIC]`. CLOCK_MONOTONIC stops
     while the host sleeps. The clock id is the boot id plus the process's time
     namespace offset for CLOCK_MONOTONIC (`/proc/self/timens_offsets`; 0 without
     one), so readings are compared only within one boot and one offset.
   - **The wall clock judges instead** when there is no usable reading. That is:
     another clock id; a malformed reading (not `[str, number]`, not finite,
-    negative, or more than 60 s ahead of the reader's clock); an awake age above
-    the wall age (awake time never runs faster than wall time); or no awake
-    clock at all (not Linux).
+    negative, or more than 60 s ahead of the reader's clock); a sidecar that
+    fails its match or checksum (a hand-edited early stamp); or no awake clock
+    at all (not Linux). The wall age is never an upper bound on the awake age:
+    a backward wall step must not shorten a real one.
   - **Clock-sharing limit:** processes that share one `.agent/` must share the
     host. On another host the clock ids differ and the wall clock judges, which
     is the rule before TLS-122.
-  - **Rollout:** the lease file and `budget.json` keep the pre-TLS-122 schema
-    and checksum. An older executor beside a newer one, or after a rollback,
-    reads them unchanged and ignores the sidecars. Its beats write no sidecar, so
-    its leases age on the wall clock. No drain is needed in either direction.
-  - **`beat` takes mutex `registry`** (TLS-122), so a beat cannot write an old
-    copy of the lease back over `recover`'s steal.
+  - **Rollout: drain first.** The FILES are compatible both ways: the lease
+    file and `budget.json` keep the pre-TLS-122 schema and checksum, so an older
+    executor reads them unchanged and ignores the sidecars. Safe OPERATION is
+    not: an older executor's `recover` judges every lease on the wall clock and
+    can take a live newer run's lease after a suspend, and its `beat` does not
+    take `registry`. So upgrade or roll back only with no live lease (`status`
+    lists none, or only stale ones): let every run finish or be recovered first.
+  - **`beat` and `release` take mutex `registry`** (TLS-122). A beat cannot
+    write an old copy of the lease back over `recover`'s steal. A release cannot
+    delete a newer claim's sidecar at the same path.
 
   There is no PID check: the
   conductor is a chat session, not a supervisable process, and a 30-minute silence

@@ -9,7 +9,8 @@ from __future__ import annotations
 import hashlib
 import json
 
-from .state import Ctx, append_audit, awake_elapsed, mutex, read_json, update_json, write_json
+from .state import (Ctx, append_audit, awake_elapsed, meta_sum, mutex, read_json, read_optional,
+                    update_json, write_json)
 
 CAPS: dict[str, int] = {
     "spec_rounds": 5,
@@ -75,12 +76,11 @@ def _awake_path(ctx: Ctx):
 
 
 def _awake_sum(claimed_at: float, awake) -> str:
-    raw = json.dumps({"claimed_at": claimed_at, "awake": awake}, sort_keys=True)
-    return hashlib.sha256(raw.encode()).hexdigest()[:16]
+    return meta_sum({"claimed_at": claimed_at, "awake": awake})
 
 
 def _claimed_awake(ctx: Ctx, data: dict):
-    s = read_json(_awake_path(ctx))
+    s = read_optional(_awake_path(ctx))       # unreadable: absent, never an error (sol r2)
     if (isinstance(s, dict) and s.get("claimed_at") == data["claimed_at"]
             and s.get("checksum") == _awake_sum(s["claimed_at"], s.get("awake"))):
         return s.get("awake")
@@ -93,13 +93,18 @@ def _cap(data: dict, key: str) -> int:
 
 
 def init(ctx: Ctx, claimed_at: float) -> None:
-    """The sidecar's stamp is the awake clock NOW: both callers init at the claim."""
+    """The sidecar's stamp is the awake clock NOW: both callers init at the claim.
+    Best-effort, like every awake sidecar: a failed write leaves the run timed on
+    the wall clock, never a failed claim."""
     _save(ctx, {"counts": {}, "claimed_at": claimed_at})
-    if aw := ctx.awake_now():
-        write_json(ctx, _awake_path(ctx), {"claimed_at": claimed_at, "awake": list(aw),
-                                           "checksum": _awake_sum(claimed_at, list(aw))})
-    else:
-        _awake_path(ctx).unlink(missing_ok=True)
+    try:
+        if aw := ctx.awake_now():
+            write_json(ctx, _awake_path(ctx), {"claimed_at": claimed_at, "awake": list(aw),
+                                               "checksum": _awake_sum(claimed_at, list(aw))})
+        else:
+            _awake_path(ctx).unlink(missing_ok=True)
+    except OSError:
+        pass
 
 
 def elapsed(ctx: Ctx, data: dict) -> tuple[float, str]:

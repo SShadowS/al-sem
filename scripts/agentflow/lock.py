@@ -26,8 +26,8 @@ from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 
 from . import budget
-from .state import (Ctx, MutexTimeout, append_audit, awake_elapsed, config, mutex, read_json,
-                    write_json)
+from .state import (Ctx, MutexTimeout, append_audit, awake_elapsed, config, meta_sum, mutex,
+                    read_json, read_optional, write_json)
 
 STALE_SECONDS = 30 * 60
 
@@ -118,22 +118,32 @@ def _stamp(ctx: Ctx, lk: Lock, now: float) -> None:
 
 
 def _write_awake(ctx: Ctx, lk: Lock) -> None:
-    """The sidecar, written AFTER its lease: it counts only while it names the
-    lease's run and heartbeat, so a beat by an executor that writes none (one
-    from before TLS-122) leaves it unmatched, and the lease ages on the wall
-    clock. Between the two writes the lease is fresh on the wall clock too."""
+    """The sidecar `{run_id, heartbeat, awake, checksum}`, written AFTER its
+    lease. It counts only while it names the lease's run and heartbeat, and its
+    checksum matches (a hand-edited stamp would make a fresh lease look stale
+    or a dead one live). A beat by an executor that writes none (one from
+    before TLS-122) leaves it unmatched: the lease ages on the wall clock.
+
+    BEST-EFFORT (sol r2): it is optional metadata, so a failed write never
+    interrupts the lease or merge-lane change around it; the old sidecar left
+    behind names an older heartbeat, and the lease ages on the wall clock."""
     p = _awake_path(ctx, lk.issue)
-    if lk.beat_awake:
-        write_json(ctx, p, {"run_id": lk.run_id, "heartbeat": lk.heartbeat, "awake": lk.beat_awake})
-    else:
-        p.unlink(missing_ok=True)
+    try:
+        if lk.beat_awake:
+            body = {"run_id": lk.run_id, "heartbeat": lk.heartbeat, "awake": lk.beat_awake}
+            write_json(ctx, p, {**body, "checksum": meta_sum(body)})
+        else:
+            p.unlink(missing_ok=True)
+    except OSError:
+        pass
 
 
 def _read_awake(ctx: Ctx, lk: Lock) -> list | None:
-    s = read_json(_awake_path(ctx, lk.issue))
-    if isinstance(s, dict) and s.get("run_id") == lk.run_id and s.get("heartbeat") == lk.heartbeat:
-        return s.get("awake")
-    return None
+    s = read_optional(_awake_path(ctx, lk.issue))
+    if not (isinstance(s, dict) and s.get("run_id") == lk.run_id and s.get("heartbeat") == lk.heartbeat):
+        return None
+    body = {"run_id": s["run_id"], "heartbeat": s["heartbeat"], "awake": s.get("awake")}
+    return body["awake"] if s.get("checksum") == meta_sum(body) else None
 
 
 def _read_lease(path: Path) -> Lock | None:
@@ -302,16 +312,16 @@ def _acquire_held(ctx: Ctx, issue: int, session: str, attempt: int,
         try:
             with open(path, "x", encoding="utf-8") as f:
                 f.write(json.dumps(_lease_dict(lk), indent=2))
-            # The loop unit is charged only now that the lease exists. A failed
-            # charge (or sidecar write) takes the lease back: no lease without
-            # its unit, and no unit spent without a lease.
-            try:
-                _write_awake(ctx, lk)
-                if loop_after is not None:
+            if loop_after is not None:
+                # Charged only now that the lease exists. A failed charge takes
+                # the lease back: no lease without its unit, and no unit spent
+                # without a lease.
+                try:
                     write_json(ctx, ctx.paths.loop, loop_after)
-            except BaseException:
-                path.unlink(missing_ok=True)
-                raise
+                except BaseException:
+                    path.unlink(missing_ok=True)
+                    raise
+            _write_awake(ctx, lk)            # best-effort: never fails the claim
             return lk
         except FileExistsError:
             # Only a file the check above could not read gets here (a writer
@@ -355,10 +365,17 @@ def beat(ctx: Ctx) -> None:
 
 
 def release(ctx: Ctx) -> None:
+    """Remove this run's lease and its sidecar, under mutex `registry` (sol r2):
+    unlocked, a claim between the two unlinks would publish a new lease and
+    stamp at the same paths, and this release would delete the new stamp."""
     ctx.write_guard("release lock")
-    path, lk = _fenced_entry(ctx)
-    path.unlink()
-    _awake_path(ctx, lk.issue).unlink(missing_ok=True)
+    with mutex(ctx, "registry"):
+        path, lk = _fenced_entry(ctx)
+        path.unlink()
+        try:
+            _awake_path(ctx, lk.issue).unlink(missing_ok=True)
+        except OSError:
+            pass                             # optional metadata: never fails a release
 
 
 def steal_for_recovery(ctx: Ctx, stale: Lock) -> Lock:
@@ -492,7 +509,10 @@ def drop(ctx: Ctx, issue: int, expect_run_id: str) -> bool:
         for path, lk in _entries(ctx):
             if lk.issue == issue and lk.run_id == expect_run_id:
                 path.unlink(missing_ok=True)
-                _awake_path(ctx, issue).unlink(missing_ok=True)
+                try:
+                    _awake_path(ctx, issue).unlink(missing_ok=True)
+                except OSError:
+                    pass                     # optional metadata
                 return True
     return False
 

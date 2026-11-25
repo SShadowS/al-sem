@@ -962,18 +962,17 @@ its time rules on the wall clock, which keeps counting through a suspend.
 - **Review r2 (Fable):** the stamp's seconds must be finite. JSON reads `NaN`, and a lease
   stamped `NaN` was never stale.
 - **Review r1 (sol):**
-  - **Old and new executors can share one `.agent/`.** The awake stamps moved out of the
+  - **The files stay readable by an older executor.** The awake stamps moved out of the
     lease file and `budget.json` into sidecars: `locks/awake/issue-<N>.json` (it counts only
     while it names the lease's run and heartbeat) and `budget-awake.json`. Both files keep
     the pre-TLS-122 schema and checksum. The executor before TLS-122 builds `Lock(**data)`
     and checks its own checksum, so it failed on the new key. Now it reads both unchanged.
-    It does this beside a newer executor or after a rollback, and its beats leave its leases
-    on the wall clock. No drain is needed. A test runs master's readers on every file written.
+    A test runs master's readers on every file written. (Safe operation still needs a drain:
+    see review r2.)
   - **An unusable stamp falls back to the wall clock.** That covers a stamp that is not
     finite, is negative, or is more than 60 s ahead of the reader's clock (readers may sample
-    before they load), and a 400-digit integer (`OverflowError`). An awake age above the wall
-    age is not believed either. Before, a stamp of `1e20` left a dead run's lease unrecoverable,
-    and `-1e20` or an early stamp made a live lease recoverable.
+    before they load), and a 400-digit integer (`OverflowError`). Before, a stamp of `1e20`
+    left a dead run's lease unrecoverable, and `-1e20` made a live lease recoverable.
   - **The clock id includes the time-namespace offset of CLOCK_MONOTONIC**
     (`/proc/self/timens_offsets`), so two namespaces on one boot are never compared. The
     clock read moved inside the `try`, so a failed read means wall time, not a crash.
@@ -983,6 +982,23 @@ its time rules on the wall clock, which keeps counting through a suspend.
     steal could write the old copy back over it. This race predates TLS-122.
   - New tests pin each guard, and one reaches `host_awake`'s real clock choice: it fails
     with CLOCK_BOOTTIME.
+- **Review r2 (sol):**
+  - **Rollout needs a drain.** The files are compatible both ways, but an older executor's
+    `recover` judges every lease on the wall clock and can take a live newer run's lease after
+    a suspend, and its `beat` does not take `registry`. Upgrade or roll back only with no live
+    lease: let every run finish or be recovered first.
+  - **Sidecars are optional metadata.** An unreadable or truncated sidecar (lease or budget)
+    reads as absent (wall clock) and can no longer break `status`, `recover` or a heartbeat.
+    A failed sidecar write no longer interrupts a claim, beat, steal or `handover`'s lease and
+    merge-lane transfer. The primary files are validated as strictly as before.
+  - **`release` takes mutex `registry`**, so a claim between its two unlinks cannot lose its
+    new sidecar.
+  - **The wall age no longer caps the awake age.** With the cap, a backward wall step defeated
+    a real stamp: 35 min awake with a 10 min step back read as 25 min, and 25 h awake with a 2 h
+    step back passed the 24 h cap. A hand-edited early stamp is caught instead by the lease
+    sidecar's new checksum, besides its run and heartbeat match and the "not ahead of the
+    reader" bound.
+  - **The clock tests run on any OS:** their fixture deletes the host's clock API and stubs it.
 
 ### Fixed (ENG-178: table procedures named like record built-ins: four follow-ups from ENG-173)
 
