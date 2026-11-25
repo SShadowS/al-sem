@@ -5069,9 +5069,55 @@ fn env_probe_child() {
 #[cfg(unix)]
 #[test]
 fn pre_commit_runs_fmt_and_goldens_for_a_quoted_name() {
+    pre_commit_runs_fmt_and_goldens("repo", |repo| {
+        std::fs::write(repo.join("src/é\nx.rs"), "fn a() {}\n").unwrap();
+        crate::git::run(repo, &["add", "src"]);
+    });
+}
+
+/// TLS-114 (sol r1): an unchanged `src/old.rs` moved to `notes/old.txt`
+/// still runs fmt and the goldens: the hook lists the staged names with
+/// `--no-renames`, so the deleted Rust source is seen, not only the new name.
+///
+/// DISCRIMINATION (2026-11-25): `--no-renames` dropped from the hook's
+/// `staged_names` fails (no call at all: only `notes/old.txt` is listed);
+/// restored, passes.
+#[cfg(unix)]
+#[test]
+fn pre_commit_sees_a_rust_file_renamed_away() {
+    pre_commit_runs_fmt_and_goldens("repo", |repo| {
+        std::fs::write(repo.join("src/old.rs"), "fn a() {}\n").unwrap();
+        crate::git::run(repo, &["add", "src"]);
+        crate::git::run(repo, &["commit", "-q", "-m", "base"]);
+        std::fs::create_dir_all(repo.join("notes")).unwrap();
+        crate::git::run(repo, &["mv", "src/old.rs", "notes/old.txt"]);
+    });
+}
+
+/// TLS-114 (sol r1): a checkout whose name ends in LF (`repo` + LF) still
+/// finds its own `scripts/`: the hook reads the top level exactly, where `$(...)`
+/// strips every trailing LF.
+///
+/// DISCRIMINATION (2026-11-25): the hook back on a bare
+/// `repo_root="$(git rev-parse --show-toplevel)"` fails (exit 1, "ci-steps not
+/// found" under `.../repo`); restored, passes.
+#[cfg(unix)]
+#[test]
+fn pre_commit_reads_a_top_level_ending_in_lf() {
+    pre_commit_runs_fmt_and_goldens("repo\n", |repo| {
+        std::fs::write(repo.join("src/a.rs"), "fn a() {}\n").unwrap();
+        crate::git::run(repo, &["add", "src"]);
+    });
+}
+
+/// Runs the pre-commit hook in a new repository `<tmp>/<repo_name>` after
+/// `stage`, with `scripts/ci-steps` and `scripts/check-goldens` stubbed, and
+/// asserts it passed after running fmt and both golden steps.
+#[cfg(unix)]
+fn pre_commit_runs_fmt_and_goldens(repo_name: &str, stage: impl FnOnce(&std::path::Path)) {
     use std::os::unix::fs::PermissionsExt;
     let dir = tempfile::tempdir().unwrap();
-    let repo = dir.path().join("repo");
+    let repo = dir.path().join(repo_name);
     let calls = dir.path().join("calls");
     std::fs::create_dir_all(repo.join("scripts")).unwrap();
     std::fs::create_dir_all(repo.join("src")).unwrap();
@@ -5084,9 +5130,8 @@ fn pre_commit_runs_fmt_and_goldens_for_a_quoted_name() {
         .unwrap();
         std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
-    std::fs::write(repo.join("src/é\nx.rs"), "fn a() {}\n").unwrap();
     crate::git::run(&repo, &["init", "-q"]);
-    crate::git::run(&repo, &["add", "src"]);
+    stage(&repo);
     let out = crate::clean_env::command("bash")
         .arg(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts/git-hooks/pre-commit"))
         .current_dir(&repo)
