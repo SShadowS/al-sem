@@ -3,7 +3,8 @@
 Status: revision 3, spec only (no code). Task card: `/coord/tasks/ENG-165/task.md`.
 
 - Revision 2 decided §10's questions 1, 2, 3 and 6, measured questions 4 and 5 on BC (§2.4), and
-  located the owner's two DO places (§2.5, counts only).
+  found two places in the DO workspace that match the owner's description (§2.5, counts only;
+  engine findings, not confirmed by the owner).
 - Revision 3 answers Fable's review of revision 2: 5 blocking findings, 6 should-fix findings
   and one scope change. Each is fixed below; §11 maps every finding to the section that answers
   it. Two findings needed new BC measurements (§2.4, round 2). Both changed the design: a
@@ -190,10 +191,13 @@ carries the label "BC 28 Linux; Windows confirmation pending" and the probe app'
 the owner can rerun it. The `Page.RunModal` and request-page rows matter most for that check: an
 interactive web client on Windows Cronus is the one setting not measured here.
 
-### 2.5 The owner's DO workspace (counts only)
+### 2.5 The DO workspace (counts only)
 
 A clean DO checkout (`b3b4459`, 2026-10-05) was searched. Its source is private: no names or
-text here. The owner's session was on a later revision; this one holds the same code shapes.
+text here. The owner's 11-20 session was on a later revision, and the owner does not remember
+which two places he found. **The two places below are engine findings: two places the engine
+finds in the DO workspace that match the owner's description. They are not confirmed by the
+owner.** The future CHANGELOG entry uses the same wording.
 - Textual census (§2.3's script): 5,665 routines, 56 with a direct `Commit()`, 0 with send →
   commit → insert in one routine. A second census for "a delivery call, then a log call, in one
   routine" found 8 routines (CDO: 8), 7 with other calls between the two (CDO: 5), **0 with a
@@ -203,12 +207,12 @@ text here. The owner's session was on a later revision; this one holds the same 
   owner's description, `may-commit` answers `yes` with 9 distinct commit sites. Placed by the
   first call on their path in that routine: 6 lie behind the call that sends the document, 3
   behind the calls that finalize and log the delivery, **0** behind the calls between those two.
-- **The first place.** The send goes down into a dependency app. There the routine sets the
+- **The first place (an engine finding).** The send goes down into a dependency app. There the routine sets the
   document's status, commits, makes the delivery call, and **on success commits again**, then
   returns. Back in the workspace routine, two explicit error calls (and the implicit errors of the
-  record operations between) can run before the call that writes the log entry. That is the
-  owner's shape: sent, committed, then an error before the log `Insert`.
-- **The second place.** The mail send goes through System Application's `Email.Send`, which runs
+  record operations between) can run before the call that writes the log entry. That matches the
+  shape the owner described: sent, committed, then an error before the log `Insert`.
+- **The second place (an engine finding).** The mail send goes through System Application's `Email.Send`, which runs
   `Commit()` and then a checked `Codeunit.Run` of its dispatcher (the dispatcher sends, in its own
   transaction). Back in the workspace, a handled-field update (a record `Modify`) runs between the
   send and the log call; its errors can stop the code before the log entry. Engine run on the
@@ -622,10 +626,12 @@ The plan (the DO places of §2.5 are step 3):
    mail send and the eDocument send in the same code are candidates for the commit-inside and
    A's-tail cases. The private note lists their locations. Each answer is triaged by hand against
    the source.
-3. **The DO cases.** The two places in §2.5 are the acceptance cases, with the answers the DO twins
-   in §8 pin. If either does not answer so, that blocks landing. The selectors and lines are in the
-   private note, never in the repo; the owner confirms they are the two he found (one line in
-   coord, numbers only).
+3. **The DO cases.** The two places in §2.5 (engine findings that match the owner's description,
+   not confirmed by the owner) are the acceptance cases, with the answers the DO twins in §8 pin.
+   If either does not answer so, that blocks landing. The selectors and lines are in the private
+   note, never in the repo. The CHANGELOG entry calls them "two places the engine finds in the DO
+   workspace that match the owner's description; not confirmed by the owner", never "the owner's
+   cases".
 4. **No movement elsewhere.** `cdo-before-after` must show no change in `analyze` findings or
    fingerprints. This question adds output, it changes none.
 
@@ -676,7 +682,8 @@ Still open:
   unmeasured constructs give `unknown` with the reason; the cut is made only where it is sound.
 - 4: §2 measured what the commands answer before designing; §2.4 measured the runtime facts on BC
   (two rounds, the second because review showed the first's limits); §2.5 checked the design
-  against the owner's own workspace; §9 measures the population first.
+  against the DO workspace (engine findings, not owner-confirmed); §9 measures the population
+  first.
 - 6 and 17: `commitsInsideA`, `commitsInsideB`, `commitsWithoutB`, `errorsBetween`,
   `ownTransactionCommits` and every label keep facts as labelled classes.
 - 7 and 9: expected answers written first (S8 corrected); one discrimination proof per guard.
