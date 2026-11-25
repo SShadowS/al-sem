@@ -84,11 +84,16 @@ pub fn lower_file(root: RawNode, source: &str) -> AlFile {
     }
 }
 
-/// Every comment in the file, in source order (see [`AlFile::comments`]), from
-/// one walk of the tree. Comments are grammar `extras`: they can sit under any
-/// node, so only a whole-tree walk finds them all.
+/// Every comment in the file, in source order (see [`AlFile::comments`]).
+/// Comments are grammar `extras`: they can sit under any node, so no collector's
+/// walk reaches them all; [`comment_nodes`] finds them from the text.
 fn collect_comments(root: RawNode, source: &str) -> Vec<SourceComment> {
-    root.descendants_of_kinds(&["comment", "multiline_comment"])
+    source_comments(comment_nodes(root, source), source)
+}
+
+/// The [`SourceComment`] of each comment node, in order.
+fn source_comments(nodes: Vec<RawNode>, source: &str) -> Vec<SourceComment> {
+    nodes
         .into_iter()
         .map(|n| {
             let start = n.byte_range().start;
@@ -101,6 +106,106 @@ fn collect_comments(root: RawNode, source: &str) -> Vec<SourceComment> {
             }
         })
         .collect()
+}
+
+/// The kinds [`comment_nodes`] returns.
+const COMMENT_KINDS: [&str; 2] = ["comment", "multiline_comment"];
+
+/// Every named `comment` / `multiline_comment` node of the tree `root`, in document
+/// order: what a walk of the whole tree finds (`descendants_of_kinds`, kept as
+/// [`scan_oracle_disagreements`]'s reference), without the walk (ENG-119: the walk was
+/// ~2.8 % of a cache-off one-shot `analyze` on CDO).
+///
+/// Both kinds are tokens that start with `//` or `/*` (grammar `comment`,
+/// `multiline_comment`, and the scanner's `_directive_cr_comment` aliased to
+/// `comment`), so every comment starts at a `/` followed by `/` or `*`. At each such
+/// byte the leaf covering it is the comment that starts there, if any: a comment is a
+/// leaf (a token). A `//` inside a string or inside another comment finds that leaf
+/// instead, which does not start there. Tokens do not overlap, so byte order is
+/// document order. The bytes are asked in increasing order of one forward
+/// `LeafLocator`, so a file of many comments costs about one walk
+/// (review r1, sol: a lookup from the root per comment was quadratic in a wide file).
+fn comment_nodes<'t>(root: RawNode<'t>, source: &str) -> Vec<RawNode<'t>> {
+    let bytes = source.as_bytes();
+    let mut out = Vec::new();
+    let mut leaves = root.leaf_locator();
+    let mut at = 0;
+    // `match_indices` with a char pattern is a memchr search.
+    for (p, _) in source.match_indices('/') {
+        if p < at {
+            continue;
+        }
+        at = p + 1;
+        if !matches!(bytes.get(p + 1), Some(b'/' | b'*')) {
+            continue;
+        }
+        let Some(n) = leaves.leaf_at(p) else {
+            continue;
+        };
+        if n.is_named() && COMMENT_KINDS.contains(&n.kind_str()) {
+            let r = n.byte_range();
+            // The skip past `r.end` alone keeps a marker inside a comment from adding
+            // it again; the start check is a second guard (proved together: dropping
+            // both lists such comments twice).
+            if r.start == p {
+                out.push(n);
+            }
+            at = at.max(r.end);
+        }
+    }
+    out
+}
+
+/// ENG-119's test oracle: where the lowerer's narrowed scans of `source` disagree with
+/// the whole-tree walks they replaced. Each scan's result is all the IR reads from it,
+/// so no disagreement means the same IR. Compared: the comments ([`comment_nodes`]
+/// against `descendants_of_kinds`), the build-varying preproc ranges
+/// ([`preproc_ranges`] against an unconditional walk), and every object node's
+/// `RunObject` values ([`collect_run_objects`] against the walk that enters every
+/// subtree). Empty when they all agree. Test-only: the r0 corpus and CDO's dependency
+/// files run it (`al_syntax` tests, `lib_cdo`).
+#[doc(hidden)]
+pub fn scan_oracle_disagreements(source: &str) -> Vec<String> {
+    let mut parser = tree_sitter::Parser::new();
+    parser
+        .set_language(&crate::language::language())
+        .expect("load AL grammar");
+    let tree = parser.parse(source, None).expect("a parse");
+    let root = RawNode::new(tree.root_node());
+    let mut bad = Vec::new();
+    // The `SourceComment`s themselves (text, block, own line, origin with its kind id).
+    let (new, old) = (
+        source_comments(comment_nodes(root, source), source),
+        source_comments(root.descendants_of_kinds(&COMMENT_KINDS), source),
+    );
+    let ids = |v: &[SourceComment]| v.iter().map(|c| c.origin.kind_id()).collect::<Vec<_>>();
+    if new != old || ids(&new) != ids(&old) {
+        bad.push(format!("comments: new {new:?}, old {old:?}"));
+    }
+    let (new, old) = (
+        preproc_ranges(root, source),
+        root.named_ranges_where(is_varying_preproc),
+    );
+    if new != old {
+        bad.push(format!("preproc ranges: new {new:?}, old {old:?}"));
+    }
+    let mut stack = vec![root];
+    while let Some(n) = stack.pop() {
+        if n.kind() == RawKind::PreprocSplitDeclaration || object_kind_of(n.kind()).is_some() {
+            let (mut new, mut old) = (Vec::new(), Vec::new());
+            collect_run_objects(n, source, &mut new);
+            run_objects_under(n, source, &|_| true, &mut old);
+            if new != old {
+                bad.push(format!(
+                    "run objects of {} {:?}: new {new:?}, old {old:?}",
+                    n.kind_str(),
+                    n.byte_range()
+                ));
+            }
+        }
+        stack.extend(n.named_children());
+    }
+    bad
 }
 
 /// Fill the `doc` of every routine, field and action from the file's comments
@@ -723,8 +828,48 @@ fn collect_enum_values(node: RawNode, source: &str, out: &mut Vec<crate::ir::Enu
 /// Every `RunObject` property value anywhere under `node`, outside code blocks
 /// (see [`crate::ir::ObjectDecl::run_objects`]). Properties go through
 /// [`lower_property`], so a whole-value `#if` gives one value per arm.
+///
+/// ENG-119: the walk visits only the subtrees whose text holds `runobject` (any ASCII
+/// case). A property is kept when its folded name is `runobject`; the fold maps no
+/// non-ASCII char onto ASCII and every char to one char, so that name's own text is
+/// `runobject` in some ASCII case, and it lies inside the property and every node above
+/// it. Every other subtree holds no such property. Most objects hold none at all (on
+/// CDO's dependencies 895 of 10,881 files say `runobject`). The full walk was ~1.7 % of
+/// a cache-off one-shot `analyze` on CDO.
 fn collect_run_objects(node: RawNode, source: &str, out: &mut Vec<String>) {
+    const NAME: &str = "runobject";
+    let start = node.byte_range().start;
+    // ASCII lowercasing keeps every byte offset; `match_indices` is a fast substring search.
+    let hits: Vec<usize> = node
+        .text(source)
+        .to_ascii_lowercase()
+        .match_indices(NAME)
+        .map(|(i, _)| start + i)
+        .collect();
+    if hits.is_empty() {
+        return;
+    }
+    // Hits are sorted; the first one at or after `r.start` is the one that can fit.
+    let holds_name = |r: std::ops::Range<usize>| {
+        let i = hits.partition_point(|&h| h < r.start);
+        hits.get(i).is_some_and(|&h| h + NAME.len() <= r.end)
+    };
+    run_objects_under(node, source, &holds_name, out);
+}
+
+/// [`collect_run_objects`]'s walk, into the children `enter` accepts (their byte
+/// ranges). The full walk (`enter` always true) is [`scan_oracle_disagreements`]'s
+/// reference.
+fn run_objects_under(
+    node: RawNode,
+    source: &str,
+    enter: &dyn Fn(std::ops::Range<usize>) -> bool,
+    out: &mut Vec<String>,
+) {
     for child in node.named_children() {
+        if !enter(child.byte_range()) {
+            continue;
+        }
         match child.kind() {
             RawKind::CodeBlock => {}
             RawKind::Property => {
@@ -737,7 +882,7 @@ fn collect_run_objects(node: RawNode, source: &str, out: &mut Vec<String>) {
                         .map(|p| p.value),
                 );
             }
-            _ => collect_run_objects(child, source, out),
+            _ => run_objects_under(child, source, enter, out),
         }
     }
 }
@@ -4620,13 +4765,40 @@ fn holds_preproc_walk(node: RawNode) -> bool {
 }
 
 /// The ranges [`holds_preproc`] reads for the file `root` of `source`. A source with no
-/// `#` has no directive, so it skips the walk.
+/// conditional directive has no build-varying node, so it skips the walk (see
+/// [`has_conditional_directive`]).
 fn preproc_ranges(root: RawNode, source: &str) -> Vec<(usize, usize)> {
-    if source.contains('#') {
+    if has_conditional_directive(source) {
         root.named_ranges_where(is_varying_preproc)
     } else {
         Vec::new()
     }
+}
+
+/// Whether `source` holds a `#if`, `#elif`, `#else` or `#endif` (any case, spaces or
+/// tabs after the `#`; anything that starts like one counts too). Every node
+/// [`is_varying_preproc`] accepts belongs to an `#if` group: the group's directives
+/// (the scanner's `#[ \t]*if` opener, grammar `(?i)#[ \t]*(elif|else|endif)`), the
+/// condition expressions inside them, the wrappers and split constructs around them,
+/// and the scanner's split `begin`/`end` tokens, which it emits only before such a
+/// directive. So a source without one has no build-varying node (ENG-119: on CDO's
+/// dependencies 2,587 of 10,881 files hold a `#`, 860 of them such a directive). A file
+/// with parse errors never reads the ranges (`PREPROC_WALK`).
+fn has_conditional_directive(source: &str) -> bool {
+    let bytes = source.as_bytes();
+    // `match_indices` with a char pattern is a memchr search.
+    source.match_indices('#').any(|(p, _)| {
+        let mut i = p + 1;
+        while matches!(bytes.get(i), Some(b' ' | b'\t')) {
+            i += 1;
+        }
+        let word = |w: &[u8]| {
+            bytes
+                .get(i..i + w.len())
+                .is_some_and(|s| s.eq_ignore_ascii_case(w))
+        };
+        word(b"if") || word(b"el") || word(b"endif")
+    })
 }
 
 /// A preprocessor node that makes code vary by build: any `preproc_*` kind but the
@@ -5509,6 +5681,235 @@ mod tests {
         );
         eprintln!("preproc oracle: {files} files agree");
         assert!(failures.is_empty(), "\n{}", failures.join("\n"));
+    }
+
+    /// ENG-119: the narrowed scans (comments from the text, the preproc ranges behind the
+    /// directive check, `RunObject` only under its name) find exactly what the whole-tree
+    /// walks found, on inline edge shapes and every `.al` of the r0 corpus and
+    /// `tests/fixtures` (CDO's dependency files: `lowerer_scans_match_the_walks_on_cdo`).
+    /// Breaks are in the CHANGELOG's ENG-119 entry.
+    #[test]
+    fn narrowed_scans_match_the_whole_tree_walks() {
+        const SHAPES: &str = "/// <summary>Doc.</summary>
+page 50100 \"Run Shapes\"
+{
+    // a line comment // with a second marker /* and a block opener
+    /* a block // with a line marker */
+    Caption = 'http://example.com/* not a comment */'; /*x*/// adjacent
+    actions
+    {
+        area(Processing)
+        {
+            action(A)
+            {
+                RunObject = page \"Customer List\";
+            }
+            group(G)
+            {
+                action(B)
+                {
+                    \"RunObject\" = page \"Vendor List\";
+                }
+                action(C)
+                {
+                    RUNOBJECT = #if CLEAN26
+                        page \"Item List\";
+                    #else
+                        page \"Item Card\";
+                    #endif
+                }
+            }
+        }
+    }
+    var
+        RunObject: Integer; // a variable named like the property
+    trigger OnOpenPage()
+    begin
+        RunObject := 1 / 2; // division, then a comment
+        Message('#if not a directive // nor a comment');
+    end;
+}
+";
+        const NO_DIRECTIVE: &str = "codeunit 50101 \"Hash\"\n{\n    #region R\n    procedure P()\n    begin\n        Message('#1 #2');\n    end;\n    #endregion\n}\n";
+        let bad = super::scan_oracle_disagreements(SHAPES);
+        assert!(bad.is_empty(), "inline shapes:\n{}", bad.join("\n"));
+        let af = parse(SHAPES);
+        assert_eq!(af.comments.len(), 7, "precondition: the comments");
+        assert_eq!(
+            af.objects[0].run_objects,
+            // A quoted name (`"RunObject"`) folds with its quotes: neither path takes it.
+            [
+                "page \"Customer List\"",
+                "page \"Item List\"",
+                "page \"Item Card\""
+            ]
+            .map(String::from)
+            .to_vec(),
+            "precondition: the RunObject spellings"
+        );
+        assert!(super::scan_oracle_disagreements(NO_DIRECTIVE).is_empty());
+        // `#if` with no `#else` (only `#if` / `#endif` name the group).
+        const IF_ONLY: &str = "codeunit 50102 \"If\"\n{\n    procedure P()\n    begin\n# IF CLEAN27\n        Foo();\n#endif\n    end;\n}\n";
+        let bad = super::scan_oracle_disagreements(IF_ONLY);
+        assert!(bad.is_empty(), "if only:\n{}", bad.join("\n"));
+        assert!(
+            !super::has_conditional_directive(NO_DIRECTIVE) && NO_DIRECTIVE.contains('#'),
+            "precondition: a `#` that is no conditional directive"
+        );
+        // Each directive spelling alone opens the walk; the extras that vary nothing do not.
+        for (s, want) in [
+            ("#if X", true),
+            ("#elif X", true),
+            ("#else", true),
+            ("#endif", true),
+            ("# \tIF X", true),
+            ("#ELSE", true),
+            ("#region R", false),
+            ("#endregion", false),
+            ("#pragma warning disable AA0001", false),
+            ("#define X", false),
+            ("#undef X", false),
+            ("Message('#1');", false),
+        ] {
+            assert_eq!(super::has_conditional_directive(s), want, "{s:?}");
+        }
+        // The scanner's lone-CR directive comment (`#if X // c\r`, aliased to `comment`).
+        const CR_LINES: &str = "codeunit 50103 \"Cr\"\r{\r    procedure P()\r    begin\r#if X // c\r        Foo();\r#endif\r    end;\r}\r";
+        let bad = super::scan_oracle_disagreements(CR_LINES);
+        assert!(bad.is_empty(), "lone CR:\n{}", bad.join("\n"));
+        assert!(
+            parse(CR_LINES)
+                .comments
+                .iter()
+                .any(|c| c.text.starts_with("// c")),
+            "precondition: the directive comment"
+        );
+        // A recovered file with a MISSING node (the walks and the scans see one tree).
+        const RECOVERED: &str = "codeunit 50104 \"Missing\"\n{\n    // before\n    procedure P()\n    begin\n#if X\n        Foo(1; // in the call\n#endif\n        RunObject := 2 /* end */\n    end;\n}\n";
+        let bad = super::scan_oracle_disagreements(RECOVERED);
+        assert!(bad.is_empty(), "recovered:\n{}", bad.join("\n"));
+        let tree = {
+            let mut p = tree_sitter::Parser::new();
+            p.set_language(&crate::language::language()).unwrap();
+            p.parse(RECOVERED, None).unwrap()
+        };
+        let mut c = tree.walk();
+        let mut missing = false;
+        'walk: loop {
+            missing |= c.node().is_missing();
+            if c.goto_first_child() {
+                continue;
+            }
+            while !c.goto_next_sibling() {
+                if !c.goto_parent() {
+                    break 'walk;
+                }
+            }
+        }
+        assert!(missing, "precondition: a MISSING node");
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests");
+        let mut dirs = vec![root.join("r0-corpus"), root.join("fixtures")];
+        let (mut files, mut failures) = (0, Vec::new());
+        let (mut with_comments, mut with_runs, mut with_ranges) = (0, 0, 0);
+        while let Some(d) = dirs.pop() {
+            for e in std::fs::read_dir(&d).expect("a readable dir") {
+                let p = e.expect("an entry").path();
+                if p.is_dir() {
+                    dirs.push(p);
+                } else if p.extension().is_some_and(|x| x == "al") {
+                    let Ok(src) = std::fs::read_to_string(&p) else {
+                        continue;
+                    };
+                    files += 1;
+                    let bad = super::scan_oracle_disagreements(&src);
+                    failures.extend(bad.into_iter().map(|b| format!("{}: {b}", p.display())));
+                    let af = parse(&src);
+                    with_comments += usize::from(!af.comments.is_empty());
+                    with_runs += usize::from(af.objects.iter().any(|o| !o.run_objects.is_empty()));
+                    with_ranges += usize::from(super::has_conditional_directive(&src));
+                }
+            }
+        }
+        eprintln!(
+            "scan oracle: {files} files agree ({with_comments} with comments, {with_runs} with \
+             RunObject, {with_ranges} with a conditional directive)"
+        );
+        assert!(failures.is_empty(), "\n{}", failures.join("\n"));
+        assert!(
+            files > 600 && with_comments > 100 && with_runs > 0 && with_ranges > 0,
+            "precondition: the corpus exercises every scan"
+        );
+    }
+
+    /// ENG-119 review r2 (sol): offsets after a node's last child (its trailing gap) do not
+    /// walk its children again. The root of a file that ends in white space has such a gap:
+    /// the parse covers the trailing white space, its last child does not. 1,000 offsets in
+    /// it start one descent, not 1,000. Break: drop the `gap_end` check -> 1,000.
+    #[test]
+    fn leaf_locator_skips_a_trailing_gap_once() {
+        let mut src = String::new();
+        for i in 0..200 {
+            src.push_str(&format!("codeunit {} \"C{i}\" {{ }}\n", 50000 + i));
+        }
+        let decls_end = src.len();
+        src.push_str(&" ".repeat(2000));
+        let tree = {
+            let mut p = tree_sitter::Parser::new();
+            p.set_language(&crate::language::language()).unwrap();
+            p.parse(&src, None).unwrap()
+        };
+        let top = tree.root_node();
+        let last_child_end = top.child(top.child_count() - 1).unwrap().end_byte();
+        assert!(
+            last_child_end <= decls_end && top.end_byte() > decls_end + 1000,
+            "precondition: the root's trailing gap ({last_child_end}, {:?})",
+            top.byte_range()
+        );
+        let mut leaves = super::RawNode::new(top).leaf_locator();
+        for p in decls_end + 1..decls_end + 1001 {
+            assert!(leaves.leaf_at(p).is_none(), "{p} lies in the gap");
+        }
+        assert_eq!(leaves.descents, 1, "descents for 1,000 offsets in one gap");
+    }
+
+    /// ENG-119 review r1 (sol): finding the comments of a wide file costs about one walk.
+    /// 20,000 `//` lines sit before the first declaration, all children of the root; a
+    /// lookup from the root per comment steps over the comments before it each time
+    /// (quadratic: ~2e8 sibling steps here). Timed against the whole-tree walk on the
+    /// same tree, best of 5, with a wide bound. Break: look each comment up from the
+    /// root again -> fails.
+    #[test]
+    fn comment_lookup_is_linear_in_a_wide_file() {
+        let mut src = String::new();
+        for i in 0..20_000 {
+            src.push_str(&format!("// line {i} // and /* more */\n"));
+        }
+        src.push_str(
+            "codeunit 50105 \"Wide\"\n{\n    procedure P() // x\n    begin\n    end;\n}\n",
+        );
+        let tree = {
+            let mut p = tree_sitter::Parser::new();
+            p.set_language(&crate::language::language()).unwrap();
+            p.parse(&src, None).unwrap()
+        };
+        let root = super::RawNode::new(tree.root_node());
+        let best = |f: &dyn Fn() -> usize| {
+            (0..5)
+                .map(|_| {
+                    let t = std::time::Instant::now();
+                    assert_eq!(f(), 20_001, "precondition: every comment");
+                    t.elapsed()
+                })
+                .min()
+                .unwrap()
+        };
+        let walk = best(&|| root.descendants_of_kinds(&super::COMMENT_KINDS).len());
+        let scan = best(&|| super::comment_nodes(root, &src).len());
+        assert!(
+            scan <= walk * 10 + std::time::Duration::from_millis(20),
+            "comment scan {scan:?} against the walk {walk:?}"
+        );
+        eprintln!("comment scan {scan:?} against the walk {walk:?}");
     }
 
     /// Find the first `Case` statement in a parsed file.
