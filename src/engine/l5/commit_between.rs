@@ -1760,7 +1760,20 @@ fn push_commit(v: &mut Vec<CommitRow>, c: CommitRow) {
 
 /// Sort every list by place, deterministically.
 fn finish(out: &mut BetweenOut) {
-    let key = |c: &CommitRow| (c.file.clone(), c.line, c.column, c.op_id.clone(), c.kind);
+    // Workspace rows first (the human answer prints the first few of each
+    // list; dependency code's rows follow), then by place.
+    let dep = |f: &Option<String>| f.as_deref().is_some_and(|f| f.starts_with("dep:"));
+    let key = |c: &CommitRow| {
+        (
+            dep(&c.file),
+            c.file.clone(),
+            c.line,
+            c.column,
+            c.op_id.clone(),
+            c.kind,
+        )
+    };
+    let ekey = |e: &ErrorRow| (dep(&e.file), e.clone());
     for v in [
         &mut out.between,
         &mut out.inside_a,
@@ -1770,14 +1783,14 @@ fn finish(out: &mut BetweenOut) {
     ] {
         v.sort_by(|x, y| key(x).cmp(&key(y)));
         for c in v.iter_mut() {
-            c.errors_after.sort();
+            c.errors_after.sort_by_key(ekey);
             c.labels.sort_unstable();
         }
     }
     for e in &mut out.errors_between {
         e.labels.sort_unstable();
     }
-    out.errors_between.sort();
+    out.errors_between.sort_by_key(ekey);
     out.blockers.sort();
     out.blockers.dedup();
 }
