@@ -220,22 +220,32 @@ pub struct SuppressionOutcome {
 ///   3. its `primary_location.line` (1-based) equals the directive's `directive_line`
 ///      OR `directive_line + 1`.
 ///
+/// ENG-101 sol r1: `sites[i]`, when `Some`, lists the lines of the several sites
+/// finding `i` merges (d22's reads, `d22::merged_read_lines`). Such a finding is
+/// suppressed only when EVERY listed line is covered by a directive, so each read
+/// keeps its own directive and one above the first read no longer hides the rest.
+/// A missing or `None` entry keeps the primary-line rule.
+///
 /// Returns index lists so the caller can keep its `(summary, raw)` pairing intact.
 pub fn apply_inline_suppressions(
     findings: &[FindingSummary],
+    sites: &[Option<Vec<u32>>],
     suppressions: &SuppressionMap,
 ) -> SuppressionOutcome {
     let mut kept = Vec::new();
     let mut suppressed = Vec::new();
     for (i, finding) in findings.iter().enumerate() {
         let file = &finding.primary_location.file;
-        let line = finding.primary_location.line;
-        let matched = match suppressions.get(file) {
+        let covered = |line: u32| match suppressions.get(file) {
             None => false,
             Some(file_suppressions) => file_suppressions.iter().any(|s| {
                 s.detector_id == finding.detector
                     && (line == s.directive_line || line == s.directive_line + 1)
             }),
+        };
+        let matched = match sites.get(i).and_then(|s| s.as_deref()) {
+            Some(lines) => lines.iter().all(|l| covered(*l)),
+            None => covered(finding.primary_location.line),
         };
         if matched {
             suppressed.push(i);
@@ -323,7 +333,7 @@ mod tests {
         };
         // line 14 (same), 15 (+1) suppressed; 13 and 16 kept.
         let findings = vec![mk(13), mk(14), mk(15), mk(16)];
-        let out = apply_inline_suppressions(&findings, &map);
+        let out = apply_inline_suppressions(&findings, &[], &map);
         assert_eq!(out.suppressed, vec![1, 2]);
         assert_eq!(out.kept, vec![0, 3]);
     }
@@ -363,7 +373,7 @@ mod tests {
             path_count: 1,
             fix_hint: None,
         };
-        let out = apply_inline_suppressions(&[finding], &map);
+        let out = apply_inline_suppressions(&[finding], &[], &map);
         assert_eq!(out.kept, vec![0]);
         assert!(out.suppressed.is_empty());
     }

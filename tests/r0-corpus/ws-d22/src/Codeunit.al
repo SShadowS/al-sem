@@ -43,4 +43,27 @@ codeunit 50800 "D22 Demo"
         Customer.Get('C0001');
         N := Customer.Name;
     end;
+
+    // FLAGGED twice (ENG-101 sol r1): one routine declared in both `#if` arms (one
+    // routine id), reading the same field of a DIFFERENT table per arm: two
+    // findings (one per table), never merged into one.
+#if CLEAN
+    procedure ReadBalanceArm()
+    var
+        R: Record Customer;
+        Amount: Decimal;
+    begin
+        R.Get('C0001');
+        Amount := R."Balance (LCY)";
+    end;
+#else
+    procedure ReadBalanceArm()
+    var
+        R: Record Vendor;
+        Amount: Decimal;
+    begin
+        R.Get('V0001');
+        Amount := R."Balance (LCY)";
+    end;
+#endif
 }

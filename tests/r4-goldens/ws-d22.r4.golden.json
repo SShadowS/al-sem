@@ -3,7 +3,7 @@
   "detectors": [
     "d22-flowfield-without-calcfields"
   ],
-  "findingCount": 2,
+  "findingCount": 4,
   "findings": [
     {
       "detector": "d22-flowfield-without-calcfields",
@@ -92,6 +92,122 @@
         }
       ],
       "fingerprint": "f4782989c8c86957"
+    },
+    {
+      "detector": "d22-flowfield-without-calcfields",
+      "id": "d22/11111111-0000-0000-0000-00000000d220:Codeunit:50800#4d8387f30c340483e1995e24a64bc75c0b58c7f9900e1f35690c9f7bbaadde89/r/balance (lcy)/56:18",
+      "rootCauseKey": "d22/11111111-0000-0000-0000-00000000d220:Codeunit:50800#4d8387f30c340483e1995e24a64bc75c0b58c7f9900e1f35690c9f7bbaadde89/r/balance (lcy)",
+      "title": "FlowField read without prior CalcFields",
+      "rootCause": "ReadBalanceArm reads Customer.Balance (LCY) (a FlowField) but never called CalcFields(Balance (LCY)) on R — the read returns the AL default (0 / empty), not the live value.",
+      "severity": "medium",
+      "confidence": {
+        "level": "likely",
+        "evidence": []
+      },
+      "primaryLocation": {
+        "sourceUnitId": "ws:src/Codeunit.al",
+        "range": {
+          "startLine": 56,
+          "startColumn": 18,
+          "endLine": 56,
+          "endColumn": 35
+        },
+        "enclosingRoutineId": "11111111-0000-0000-0000-00000000d220:Codeunit:50800#4d8387f30c340483e1995e24a64bc75c0b58c7f9900e1f35690c9f7bbaadde89",
+        "syntaxKind": "member_expression"
+      },
+      "evidencePath": [
+        {
+          "routineId": "11111111-0000-0000-0000-00000000d220:Codeunit:50800#4d8387f30c340483e1995e24a64bc75c0b58c7f9900e1f35690c9f7bbaadde89",
+          "sourceAnchor": {
+            "sourceUnitId": "ws:src/Codeunit.al",
+            "range": {
+              "startLine": 56,
+              "startColumn": 18,
+              "endLine": 56,
+              "endColumn": 35
+            },
+            "enclosingRoutineId": "11111111-0000-0000-0000-00000000d220:Codeunit:50800#4d8387f30c340483e1995e24a64bc75c0b58c7f9900e1f35690c9f7bbaadde89",
+            "syntaxKind": "member_expression"
+          },
+          "note": "reads FlowField Customer.Balance (LCY) without a prior CalcFields(Balance (LCY)) on R"
+        }
+      ],
+      "affectedObjects": [
+        "11111111-0000-0000-0000-00000000d220:Codeunit:50800"
+      ],
+      "affectedTables": [
+        "11111111-0000-0000-0000-00000000d220:Table:50800"
+      ],
+      "fixOptions": [
+        {
+          "description": "Call `R.CalcFields(Balance (LCY));` before reading the field. Hoist the CalcFields out of any tight loop to avoid an N+1.",
+          "safety": "high"
+        }
+      ],
+      "provenance": [
+        {
+          "source": "tree-sitter"
+        }
+      ],
+      "fingerprint": "fd40bd13736d743b"
+    },
+    {
+      "detector": "d22-flowfield-without-calcfields",
+      "id": "d22/11111111-0000-0000-0000-00000000d220:Codeunit:50800#4d8387f30c340483e1995e24a64bc75c0b58c7f9900e1f35690c9f7bbaadde89/r/balance (lcy)/65:18",
+      "rootCauseKey": "d22/11111111-0000-0000-0000-00000000d220:Codeunit:50800#4d8387f30c340483e1995e24a64bc75c0b58c7f9900e1f35690c9f7bbaadde89/r/balance (lcy)",
+      "title": "FlowField read without prior CalcFields",
+      "rootCause": "ReadBalanceArm reads Vendor.Balance (LCY) (a FlowField) but never called CalcFields(Balance (LCY)) on R — the read returns the AL default (0 / empty), not the live value.",
+      "severity": "medium",
+      "confidence": {
+        "level": "likely",
+        "evidence": []
+      },
+      "primaryLocation": {
+        "sourceUnitId": "ws:src/Codeunit.al",
+        "range": {
+          "startLine": 65,
+          "startColumn": 18,
+          "endLine": 65,
+          "endColumn": 35
+        },
+        "enclosingRoutineId": "11111111-0000-0000-0000-00000000d220:Codeunit:50800#4d8387f30c340483e1995e24a64bc75c0b58c7f9900e1f35690c9f7bbaadde89",
+        "syntaxKind": "member_expression"
+      },
+      "evidencePath": [
+        {
+          "routineId": "11111111-0000-0000-0000-00000000d220:Codeunit:50800#4d8387f30c340483e1995e24a64bc75c0b58c7f9900e1f35690c9f7bbaadde89",
+          "sourceAnchor": {
+            "sourceUnitId": "ws:src/Codeunit.al",
+            "range": {
+              "startLine": 65,
+              "startColumn": 18,
+              "endLine": 65,
+              "endColumn": 35
+            },
+            "enclosingRoutineId": "11111111-0000-0000-0000-00000000d220:Codeunit:50800#4d8387f30c340483e1995e24a64bc75c0b58c7f9900e1f35690c9f7bbaadde89",
+            "syntaxKind": "member_expression"
+          },
+          "note": "reads FlowField Vendor.Balance (LCY) without a prior CalcFields(Balance (LCY)) on R"
+        }
+      ],
+      "affectedObjects": [
+        "11111111-0000-0000-0000-00000000d220:Codeunit:50800"
+      ],
+      "affectedTables": [
+        "11111111-0000-0000-0000-00000000d220:Table:50802"
+      ],
+      "fixOptions": [
+        {
+          "description": "Call `R.CalcFields(Balance (LCY));` before reading the field. Hoist the CalcFields out of any tight loop to avoid an N+1.",
+          "safety": "high"
+        }
+      ],
+      "provenance": [
+        {
+          "source": "tree-sitter"
+        }
+      ],
+      "fingerprint": "c618ecc83ea70c7e"
     },
     {
       "detector": "d22-flowfield-without-calcfields",

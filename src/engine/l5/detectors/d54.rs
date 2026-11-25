@@ -18,7 +18,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::engine::l5::confidence::to_confidence;
 use crate::engine::l5::detector_context::DetectorContext;
-use crate::engine::l5::detectors::anchor_of;
+use crate::engine::l5::detectors::{anchor_of, dedupe_alternate_declarations};
 use crate::engine::l5::finding::{
     Evidence, EvidenceStep, Finding, FindingConfidence, FixOption, id_list,
 };
@@ -98,9 +98,17 @@ pub fn detect_d54(
             chain.reverse();
             let direct = chain.len() == 2;
 
+            // The try routine's own row, not `routine_by_id`'s: a routine declared in
+            // several `#if` arms has one id and one row per arm (sol r1).
             let path: Vec<EvidenceStep> = chain
                 .iter()
-                .filter_map(|rid| ctx.routine_by_id.get(rid))
+                .filter_map(|rid| {
+                    if *rid == routine.id {
+                        Some(routine)
+                    } else {
+                        ctx.routine_by_id.get(rid).copied()
+                    }
+                })
                 .map(|r| EvidenceStep {
                     routine_id: r.id.clone(),
                     operation_id: None,
@@ -181,7 +189,9 @@ pub fn detect_d54(
 
     // No cap (ENG-101 review r1): each publisher is its own finding with its own
     // fingerprint, so a cap would decide which fingerprints exist (a new publisher
-    // could evict a baselined one, or stay invisible to the baseline).
+    // could evict a baselined one, or stay invisible to the baseline). A TryFunction
+    // declared in several `#if` arms (one routine id) emits each pair once per arm.
+    let mut findings = dedupe_alternate_declarations(findings);
     findings.sort_by(|a, b| a.id.cmp(&b.id));
     let emitted = findings.len();
     let mut stats = DetectorStats::new(DETECTOR, candidates_considered, emitted);

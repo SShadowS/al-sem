@@ -155,6 +155,9 @@ pub fn detect_d55(
         }
     }
 
+    // A routine declared in several `#if` arms (one routine id) needs no dedupe
+    // here: its loop ids are minted across the declarations (`/loop0`, `/loop1`),
+    // so each arm's publish has its own key (ENG-101 sol r1, `ws-d55`).
     findings.sort_by(|a, b| a.id.cmp(&b.id));
     let emitted = findings.len();
     let mut stats = DetectorStats::new(DETECTOR, candidates_considered, emitted);
@@ -183,14 +186,53 @@ mod tests {
     /// "cs1, first in source, is #1" fails (`cs1` got `#2`). Restored, green.
     #[test]
     fn repeat_number_follows_source_order() {
+        let key = keys(&[
+            ("caller/cs0", 10, "caller/loop0"),
+            ("caller/cs1", 5, "caller/loop0"),
+        ]);
+        assert!(
+            key["caller/cs1"].ends_with("#1"),
+            "cs1, first in source, is #1"
+        );
+        assert!(key["caller/cs0"].ends_with("#2"), "cs0 is #2");
+    }
+
+    /// ENG-101 sol r1: each loop counts its own repeats. Precondition, by
+    /// assignment: `caller/cs0` publishes `pub` in `caller/loop0` and `caller/cs1`
+    /// publishes it in `caller/loop1`. Both are `#1`, with different keys.
+    ///
+    /// Discrimination (2026-11-25): the counter keyed on the event alone (the loop
+    /// dropped from `nth`'s key) -> "loop1 starts its own count" fails (`cs1` got
+    /// `#2`). Restored, green.
+    #[test]
+    fn each_loop_counts_its_own_repeats() {
+        let key = keys(&[
+            ("caller/cs0", 5, "caller/loop0"),
+            ("caller/cs1", 10, "caller/loop1"),
+        ]);
+        assert!(key["caller/cs0"].ends_with("#1"), "loop0's publish is #1");
+        assert!(
+            key["caller/cs1"].ends_with("#1"),
+            "loop1 starts its own count"
+        );
+        assert_ne!(key["caller/cs0"], key["caller/cs1"]);
+    }
+
+    /// d55's `rootCauseKey` per call site, for one routine `caller` whose sites
+    /// `(id, line, loop)` (in this `call_sites` order) each publish `pub`.
+    fn keys(sites: &[(&str, u32, &str)]) -> HashMap<String, String> {
         let mut caller = routine("caller", "procedure");
-        caller.loops = vec![loop_def("caller/loop0")];
-        let site = |id: &str, line: u32| {
-            let mut cs = call_site(id, "Pub", vec!["caller/loop0".to_string()]);
-            cs.source_anchor.start_line = line;
-            cs
-        };
-        caller.call_sites = vec![site("caller/cs0", 10), site("caller/cs1", 5)];
+        let mut loops: Vec<&str> = sites.iter().map(|s| s.2).collect();
+        loops.dedup();
+        caller.loops = loops.into_iter().map(loop_def).collect();
+        caller.call_sites = sites
+            .iter()
+            .map(|(id, line, lp)| {
+                let mut cs = call_site(id, "Pub", vec![lp.to_string()]);
+                cs.source_anchor.start_line = *line;
+                cs
+            })
+            .collect();
         let routines = vec![caller, routine("pub", "event-publisher")];
         let edge = |cs: &str| {
             let mut e = CallEdge::base(RoutineIx(0), "caller", cs, &format!("{cs}/op"));
@@ -198,7 +240,7 @@ mod tests {
             (cs.to_string(), e)
         };
         let art = DetectorArtifacts {
-            resolved_call_edge_by_callsite: HashMap::from([edge("caller/cs0"), edge("caller/cs1")]),
+            resolved_call_edge_by_callsite: sites.iter().map(|s| edge(s.0)).collect(),
             ..empty_artifacts(
                 PrimaryGraph {
                     nodes: vec![],
@@ -227,17 +269,17 @@ mod tests {
         };
         let ctx = detector_context(&resolved, &art, None, None);
         let out = detect_d55(&resolved, &ctx).unwrap();
-        let key_of = |cs: &str| {
-            out.findings
-                .iter()
-                .find(|f| f.id.ends_with(&format!("/{cs}")))
-                .map(|f| f.root_cause_key.clone())
-                .unwrap_or_else(|| panic!("no finding for {cs}: {:#?}", out.findings))
-        };
-        assert!(
-            key_of("caller/cs1").ends_with("#1"),
-            "cs1, first in source, is #1"
-        );
-        assert!(key_of("caller/cs0").ends_with("#2"), "cs0 is #2");
+        assert_eq!(out.findings.len(), sites.len(), "{:#?}", out.findings);
+        sites
+            .iter()
+            .map(|(cs, ..)| {
+                let f = out
+                    .findings
+                    .iter()
+                    .find(|f| f.id.ends_with(&format!("/{cs}")))
+                    .unwrap_or_else(|| panic!("no finding for {cs}: {:#?}", out.findings));
+                (cs.to_string(), f.root_cause_key.clone())
+            })
+            .collect()
     }
 }

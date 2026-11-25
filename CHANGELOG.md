@@ -21,10 +21,19 @@ suppressed all of them, and a new member of the group was invisible to it.
   incomplete for baseline pruning. CDO had no TryFunction over the cap (the count was 0 in
   both scopes), so no CDO finding is added.
 - **d55 (event published in a loop):** the published event, and its repeat number in that
-  loop (`#1`, `#2`, in source order), join the `rootCauseKey`. Every publish in one loop
-  shared the loop's fingerprint before.
+  loop (`#1`, `#2`, in source order, counted per loop), join the `rootCauseKey`. Every
+  publish in one loop shared the loop's fingerprint before.
+- **d54: a TryFunction declared in several `#if` arms gives one finding per publisher** (sol
+  r1). The arms of one routine share its id and graph node, so each arm emitted the same key,
+  and the copies shared one fingerprint. The finding kept is the first declaration's in
+  source order; each other arm's location is added to its evidence, and each finding's
+  evidence now starts at its own arm's declaration (it used to name the last arm for every
+  copy). d55 needs no such step: the loop ids are minted across the arms (`/loop0`,
+  `/loop1`), so each arm's publish already has its own key.
 - **d22 (FlowField read without CalcFields):** the reads of one FlowField on one record
-  variable in one routine are now ONE finding (they always shared one key). It sits on the
+  variable and one table in one routine are now ONE finding (they always shared one key). The
+  table is part of the group because the `#if` arms of one routine can declare the variable
+  as a different table; those findings, with different fingerprints, stay apart. It sits on the
   first read in source order, and its evidence lists every uncovered read in source order.
   Its key and fingerprint are unchanged. The fix is usually one CalcFields before the first
   read, but a record reloaded between reads (a `Get`, a `Next`) needs another one: check each
@@ -39,20 +48,27 @@ suppressed all of them, and a new member of the group was invisible to it.
   Findings: primary 2306 -> 2306, all 32429 -> 32405. The call graph does not move.
 - **Release note: re-baseline d54 and d55.** Every d54 and d55 fingerprint changes (the loose
   fingerprint too). An existing `--baseline` file or fingerprint suppression for a d54 or d55
-  finding no longer matches it: run `alsem analyze --update-baseline` again, and re-create
-  fingerprint suppressions for those two detectors. d22 fingerprints do not move; only the
-  extra findings of a merged group (the second and later reads) disappear.
-- **Release note: inline `// al-sem-ignore d22-flowfield-without-calcfields` and merged
-  reads.** An inline directive
-  matches a finding's primary line only (the directive's line or the next). A merged d22
-  finding sits on its first read, so a directive above the first read now hides every read
-  of that group, and a directive above a later read matches nothing (it used to hide that
-  read's own finding). Move such a directive to the first read. Matching on evidence lines
-  was not added: inline suppression is defined on the primary location for every detector.
+  finding no longer matches it: run `alsem analyze <workspace> --baseline <file>
+  --update-baseline`, and re-create fingerprint suppressions for those two detectors. The
+  update accepts every current finding, so if your baseline held only selected findings,
+  review what it adds before you commit it. d22 fingerprints do not move; only the extra
+  findings of a merged group (the second and later reads) disappear.
+- **Release note: d55's repeat number follows source order.** Two publishes of one event in
+  one loop are `#1` and `#2` from the top. A new publish of that event inserted above them
+  takes `#1`, so it inherits the first one's baseline entry and the old ones read as `#2`
+  and `#3`: re-baseline that loop after such an edit.
+- **Inline `// al-sem-ignore d22-flowfield-without-calcfields` keeps working per read**
+  (sol r1). A merged d22 finding is suppressed only when a directive covers EVERY read it
+  lists (the directive's line or the next, as before). A directive above some of the reads
+  no longer hides the others: the finding stays, listing all its reads. A single-read
+  finding, and every other detector, keep the primary-line rule
+  (`inline_suppression::apply_inline_suppressions`, `d22::merged_read_lines`).
 - Tests: `r4_differential`'s fixtures `ws-d22`, `ws-d54` and `ws-d55` hold the three shapes;
   every r4 fixture run now checks that no two findings share a fingerprint; and
   `d22_merges_the_reads_of_one_flowfield` pins the merge, `d54_reports_every_publisher` the
-  uncapped d54 and d55's `repeat_number_follows_source_order` the `#n` order. The
+  uncapped d54, d55's `repeat_number_follows_source_order` and `each_loop_counts_its_own_repeats`
+  the `#n` count, `d22_keeps_tables_apart` and `d54_`/`d55_one_finding_per_alternate_declaration`
+  the `#if` arms, and `cli_d22_inline_suppression` the per-read directives. The
   `ids-parent-baseline` record
   was updated by hand for the moved d54/d55 fingerprints (see its module doc).
 

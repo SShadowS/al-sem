@@ -262,6 +262,8 @@ ws-d22/src/Codeunit.al::0::ReadFlowFieldWithoutCalc	fed1710ddba046b4
 ws-d22/src/Codeunit.al::0::ReadFlowFieldThrice	1f1dd88d74e15aa4
 ws-d22/src/Codeunit.al::0::ReadFlowFieldAfterCalc	49d37c3c60913c43
 ws-d22/src/Codeunit.al::0::ReadNormalField	57e392dc21309677
+ws-d22/src/Codeunit.al::0::ReadBalanceArm	4c151f59efb5dbe1
+ws-d22/src/Codeunit.al::0::ReadBalanceArm	6300e309f37c9946
 ws-d29/src/Codeunit.al::0::OnAfterModifyMutates	1fd95be69a94d61d
 ws-d29/src/Codeunit.al::0::OnBeforeDeleteMutates	fd6e06a7cf1dba32
 ws-d29/src/Codeunit.al::0::OnAfterModifyReadOnly	a6e5d710497c447b
@@ -430,11 +432,15 @@ ws-d54/src/Codeunit.al::2::OnE3	965e7b868e01c0ea
 ws-d54/src/Codeunit.al::2::OnE4	e40787c28672e62a
 ws-d54/src/Codeunit.al::2::OnE5	d9e1766ca2c157a4
 ws-d54/src/Codeunit.al::2::OnE6	47ad584e1e8f2e60
+ws-d54/src/Codeunit.al::2::TryPost	a70d94f8f5d0c1c4
+ws-d54/src/Codeunit.al::2::TryPost	c5626abee9bdccb8
 ws-d55/src/Codeunit.al::0::OnRowProcessed	3a343126cb74640a
 ws-d55/src/Codeunit.al::0::OnRowChecked	4442934aa6f4428b
 ws-d55/src/Codeunit.al::1::PublishInLoop	d07e567620ed9f99
 ws-d55/src/Codeunit.al::1::PublishSeveralInLoop	c0e0326a82944bf7
 ws-d55/src/Codeunit.al::1::PublishAfterLoop	da26a0e078dc43b1
+ws-d55/src/Codeunit.al::1::PublishInLoopArm	bcbf792cef73acbf
+ws-d55/src/Codeunit.al::1::PublishInLoopArm	18be11a6d0b41cd1
 ws-d56/src/Codeunit.al::0::CloneAndModify	b5fa6048dad0218c
 ws-d56/src/Codeunit.al::0::DirectModify	8d83621dd6a5966a
 ws-d56/src/Codeunit.al::0::CopyOutsideLoop	8a7d36262e8c7ef4

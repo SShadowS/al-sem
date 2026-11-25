@@ -19,3 +19,13 @@ table 50801 "Ledger Entry"
     }
     keys { key(PK; "Entry No.") { } }
 }
+
+table 50802 Vendor
+{
+    fields
+    {
+        field(1; "No."; Code[20]) { }
+        field(3; "Balance (LCY)"; Decimal) { FieldClass = FlowField; CalcFormula = sum("Ledger Entry".Amount where("Customer No." = field("No."))); }
+    }
+    keys { key(PK; "No.") { } }
+}

@@ -687,18 +687,18 @@
       "sha256": "7470f8d134074a35c1dcbff59f6b8f208fd72d533173358bda5ce91076078edf"
     },
     "r0/ws-d22 cross": {
-      "any": 10,
-      "direct": 10,
+      "any": 14,
+      "direct": 14,
       "inherited": 0,
-      "routines": 4,
-      "sha256": "0680db2969a5a0d8dff096a8691c11564fc3876ae3dc1fbc87ad8a81d88c745d"
+      "routines": 5,
+      "sha256": "fee88b2ae19c3cbc1496618f90d747197634d1a63479efb61ef4557e1b3d43f8"
     },
     "r0/ws-d22 single": {
-      "any": 10,
-      "direct": 10,
+      "any": 14,
+      "direct": 14,
       "inherited": 0,
-      "routines": 4,
-      "sha256": "0680db2969a5a0d8dff096a8691c11564fc3876ae3dc1fbc87ad8a81d88c745d"
+      "routines": 5,
+      "sha256": "fee88b2ae19c3cbc1496618f90d747197634d1a63479efb61ef4557e1b3d43f8"
     },
     "r0/ws-d29 cross": {
       "any": 19,
@@ -1079,32 +1079,32 @@
       "sha256": "8490997d5d43cd05d4720b861738151f5bb899ca4d1840db91aa5e2438211bbf"
     },
     "r0/ws-d54 cross": {
-      "any": 20,
+      "any": 21,
       "direct": 8,
-      "inherited": 12,
-      "routines": 14,
-      "sha256": "df12eb75aa91ef9cc1c0ba97b175d617e1551f45803be569647fe5d1279e5ac6"
+      "inherited": 13,
+      "routines": 15,
+      "sha256": "247d638635433dc8ac031cc34bc71811ca4431731c188ebef8375022b91e0d18"
     },
     "r0/ws-d54 single": {
-      "any": 20,
+      "any": 21,
       "direct": 8,
-      "inherited": 12,
-      "routines": 14,
-      "sha256": "df12eb75aa91ef9cc1c0ba97b175d617e1551f45803be569647fe5d1279e5ac6"
+      "inherited": 13,
+      "routines": 15,
+      "sha256": "247d638635433dc8ac031cc34bc71811ca4431731c188ebef8375022b91e0d18"
     },
     "r0/ws-d55 cross": {
-      "any": 12,
-      "direct": 8,
-      "inherited": 4,
-      "routines": 5,
-      "sha256": "7da13221c43bf99753454123a1f423f71f46c8ae34aa6fc78cd6c5382912901f"
+      "any": 17,
+      "direct": 12,
+      "inherited": 5,
+      "routines": 6,
+      "sha256": "5d60a8f4e79e61b816db7c8a85e52f141c7e1ae6c3fc0a613331e63d765bba75"
     },
     "r0/ws-d55 single": {
-      "any": 12,
-      "direct": 8,
-      "inherited": 4,
-      "routines": 5,
-      "sha256": "7da13221c43bf99753454123a1f423f71f46c8ae34aa6fc78cd6c5382912901f"
+      "any": 17,
+      "direct": 12,
+      "inherited": 5,
+      "routines": 6,
+      "sha256": "5d60a8f4e79e61b816db7c8a85e52f141c7e1ae6c3fc0a613331e63d765bba75"
     },
     "r0/ws-d56 cross": {
       "any": 26,

@@ -2082,3 +2082,109 @@ fn d54_reports_every_publisher() {
         "every publisher of TrySix, each its own fingerprint: {six:?}"
     );
 }
+
+/// The findings of `detector` on `fixture` whose `rootCause` starts with `routine `.
+fn findings_of(fixture: &str, detector: &str, routine: &str) -> Vec<Value> {
+    let p = run_rust(fixture, fixture, &[detector]);
+    let json = serde_json::to_value(&p).expect("rust → value");
+    json["findings"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|f| {
+            f["rootCause"]
+                .as_str()
+                .is_some_and(|t| t.starts_with(&format!("{routine} ")))
+        })
+        .cloned()
+        .collect()
+}
+
+/// The 0-based start line of each evidence step of `f`.
+fn evidence_lines(f: &Value) -> Vec<u64> {
+    f["evidencePath"]
+        .as_array()
+        .expect("an evidence path")
+        .iter()
+        .map(|s| {
+            s["sourceAnchor"]["range"]["startLine"]
+                .as_u64()
+                .expect("a line")
+        })
+        .collect()
+}
+
+/// ⟨ENG-101 sol r1⟩ d22 merges the reads of one field on one record variable only
+/// within ONE table. Precondition, stated in the fixture `ws-d22`: `ReadBalanceArm`
+/// is declared in both arms of an `#if` (one routine id), and `R` is a `Customer` in
+/// one arm and a `Vendor` in the other, each reading `R."Balance (LCY)"`. So: two
+/// findings, one per table, with two fingerprints.
+///
+/// Discrimination (2026-11-25): `merge_reads` grouped by `rootCauseKey` alone (the
+/// table dropped) -> "one finding per table" fails (1 != 2). Restored, green.
+#[test]
+fn d22_keeps_tables_apart() {
+    let arms = findings_of(
+        "ws-d22",
+        "d22-flowfield-without-calcfields",
+        "ReadBalanceArm",
+    );
+    let tables: BTreeSet<String> = arms
+        .iter()
+        .map(|f| f["affectedTables"].to_string())
+        .collect();
+    let fps: BTreeSet<&str> = arms
+        .iter()
+        .map(|f| f["fingerprint"].as_str().expect("a fingerprint"))
+        .collect();
+    assert_eq!(
+        (arms.len(), tables.len(), fps.len()),
+        (2, 2, 2),
+        "one finding per table: {arms:#?}"
+    );
+}
+
+/// ⟨ENG-101 sol r1⟩ d54 gives one (try routine, publisher) pair ONE finding although
+/// the TryFunction is declared in both arms of an `#if` (two model rows, one routine
+/// id, one graph node). Precondition, stated in the fixture `ws-d54`: `TryPost` is
+/// declared in both arms, each calling `OnE1` (the declarations at 0-based lines 106
+/// and 112). The finding sits on the first declaration in source order, its
+/// evidence starts there, and also lists the other one.
+///
+/// Discrimination (2026-11-25), each break alone: `dedupe_alternate_declarations`
+/// not called in d54 -> "one finding" fails (2 != 1); the try routine's evidence
+/// step taken from `routine_by_id` (the last arm's row) instead of its own row ->
+/// "the other declaration is in the evidence" fails (anchor 106, evidence
+/// [112, 72, 112]). Restored, green.
+#[test]
+fn d54_one_finding_per_alternate_declaration() {
+    let post = findings_of("ws-d54", "d54-publish-in-tryfunction-cone", "TryPost");
+    assert_eq!(post.len(), 1, "one finding: {post:#?}");
+    let f = &post[0];
+    let first = f["primaryLocation"]["range"]["startLine"].as_u64().unwrap();
+    let lines = evidence_lines(f);
+    assert!(
+        lines.contains(&first) && lines.iter().any(|l| *l > first + 3),
+        "the other declaration is in the evidence: anchor {first}, evidence {lines:?}"
+    );
+}
+
+/// ⟨ENG-101 sol r1⟩ d55 needs no dedupe for a routine declared in both `#if` arms:
+/// the loop ids are minted across the declarations, so each arm's publish has its
+/// own key. Precondition, stated in the fixture `ws-d55`: `PublishInLoopArm` is
+/// declared in both arms, each publishing `OnRowChecked` once in its loop. Two
+/// findings, two fingerprints (the r4 invariant checks the fingerprints on every
+/// fixture; this states the count, so a dedupe that hid an arm would fail here).
+#[test]
+fn d55_keeps_each_alternate_declaration() {
+    let arm = findings_of("ws-d55", "d55-event-publish-in-loop", "PublishInLoopArm");
+    let fps: BTreeSet<&str> = arm
+        .iter()
+        .map(|f| f["fingerprint"].as_str().expect("a fingerprint"))
+        .collect();
+    assert_eq!(
+        (arm.len(), fps.len()),
+        (2, 2),
+        "one finding per arm: {arm:#?}"
+    );
+}

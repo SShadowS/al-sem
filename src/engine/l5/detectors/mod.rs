@@ -1614,6 +1614,47 @@ pub(crate) fn callee_param_table_subject(
     }
 }
 
+/// ENG-101 sol r1: ONE finding per `rootCauseKey` where a routine is declared more
+/// than once (the `#if` arms of one routine: several model rows, one routine id).
+/// Each row emits the same key, so the copies would share one fingerprint. The
+/// finding kept is the first in source order (file, line, column, then id); each
+/// other copy's primary location is appended to its evidence, so every declaration
+/// stays visible. A key emitted once passes through unchanged.
+pub(crate) fn dedupe_alternate_declarations(
+    findings: Vec<crate::engine::l5::finding::Finding>,
+) -> Vec<crate::engine::l5::finding::Finding> {
+    use crate::engine::l5::finding::{EvidenceStep, Finding};
+    let mut groups: std::collections::BTreeMap<String, Vec<Finding>> = Default::default();
+    for f in findings {
+        groups.entry(f.root_cause_key.clone()).or_default().push(f);
+    }
+    groups
+        .into_values()
+        .map(|mut copies| {
+            copies.sort_by(|a, b| {
+                let at = |f: &Finding| {
+                    let l = &f.primary_location;
+                    (l.source_unit_id.clone(), l.start_line, l.start_column)
+                };
+                at(a).cmp(&at(b)).then_with(|| a.id.cmp(&b.id))
+            });
+            let rest = copies.split_off(1);
+            let mut kept = copies.pop().expect("a group has at least one finding");
+            for other in rest {
+                kept.evidence_path.push(EvidenceStep {
+                    routine_id: other.primary_location.enclosing_routine_id.clone(),
+                    operation_id: None,
+                    callsite_id: None,
+                    loop_id: None,
+                    source_anchor: other.primary_location,
+                    note: "the same in another declaration of this routine (an #if arm)".into(),
+                });
+            }
+            kept
+        })
+        .collect()
+}
+
 /// `groupAndCap` — group findings by `key_of(finding)`, sort each group by
 /// `compareStrings(id)`, then keep the first `max_per_key` of each group (group
 /// iteration in sorted-key order). Returns `(kept, truncated_count)`. Port of

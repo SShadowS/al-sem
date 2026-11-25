@@ -3,8 +3,95 @@
   "detectors": [
     "d54-publish-in-tryfunction-cone"
   ],
-  "findingCount": 10,
+  "findingCount": 11,
   "findings": [
+    {
+      "detector": "d54-publish-in-tryfunction-cone",
+      "id": "d54/11111111-0000-0000-0000-00000000d540:Codeunit:50924#69bafc9dceccd684f46c979dc3d1459d1c2ebc5cf260f51c5e0258a5f940aa5e/11111111-0000-0000-0000-00000000d540:Codeunit:50924#223afda06e56ed8dc4c810d1aa8ea33b4681998007f9ea4ba264ef6a38142f12",
+      "rootCauseKey": "d54/11111111-0000-0000-0000-00000000d540:Codeunit:50924#69bafc9dceccd684f46c979dc3d1459d1c2ebc5cf260f51c5e0258a5f940aa5e/11111111-0000-0000-0000-00000000d540:Codeunit:50924#223afda06e56ed8dc4c810d1aa8ea33b4681998007f9ea4ba264ef6a38142f12",
+      "title": "Event published inside TryFunction cone",
+      "rootCause": "TryPost is a TryFunction that directly calls the event publisher OnE1 — errors raised by subscribers are swallowed by the try boundary, silencing third-party failures.",
+      "severity": "medium",
+      "confidence": {
+        "level": "likely",
+        "evidence": []
+      },
+      "primaryLocation": {
+        "sourceUnitId": "ws:src/Codeunit.al",
+        "range": {
+          "startLine": 106,
+          "startColumn": 4,
+          "endLine": 109,
+          "endColumn": 8
+        },
+        "enclosingRoutineId": "11111111-0000-0000-0000-00000000d540:Codeunit:50924#69bafc9dceccd684f46c979dc3d1459d1c2ebc5cf260f51c5e0258a5f940aa5e",
+        "syntaxKind": "procedure"
+      },
+      "evidencePath": [
+        {
+          "routineId": "11111111-0000-0000-0000-00000000d540:Codeunit:50924#69bafc9dceccd684f46c979dc3d1459d1c2ebc5cf260f51c5e0258a5f940aa5e",
+          "sourceAnchor": {
+            "sourceUnitId": "ws:src/Codeunit.al",
+            "range": {
+              "startLine": 106,
+              "startColumn": 4,
+              "endLine": 109,
+              "endColumn": 8
+            },
+            "enclosingRoutineId": "11111111-0000-0000-0000-00000000d540:Codeunit:50924#69bafc9dceccd684f46c979dc3d1459d1c2ebc5cf260f51c5e0258a5f940aa5e",
+            "syntaxKind": "procedure"
+          },
+          "note": "[TryFunction] TryPost"
+        },
+        {
+          "routineId": "11111111-0000-0000-0000-00000000d540:Codeunit:50924#223afda06e56ed8dc4c810d1aa8ea33b4681998007f9ea4ba264ef6a38142f12",
+          "sourceAnchor": {
+            "sourceUnitId": "ws:src/Codeunit.al",
+            "range": {
+              "startLine": 72,
+              "startColumn": 4,
+              "endLine": 74,
+              "endColumn": 8
+            },
+            "enclosingRoutineId": "11111111-0000-0000-0000-00000000d540:Codeunit:50924#223afda06e56ed8dc4c810d1aa8ea33b4681998007f9ea4ba264ef6a38142f12",
+            "syntaxKind": "procedure"
+          },
+          "note": "event publisher OnE1"
+        },
+        {
+          "routineId": "11111111-0000-0000-0000-00000000d540:Codeunit:50924#69bafc9dceccd684f46c979dc3d1459d1c2ebc5cf260f51c5e0258a5f940aa5e",
+          "sourceAnchor": {
+            "sourceUnitId": "ws:src/Codeunit.al",
+            "range": {
+              "startLine": 112,
+              "startColumn": 4,
+              "endLine": 115,
+              "endColumn": 8
+            },
+            "enclosingRoutineId": "11111111-0000-0000-0000-00000000d540:Codeunit:50924#69bafc9dceccd684f46c979dc3d1459d1c2ebc5cf260f51c5e0258a5f940aa5e",
+            "syntaxKind": "procedure"
+          },
+          "note": "the same in another declaration of this routine (an #if arm)"
+        }
+      ],
+      "affectedObjects": [
+        "11111111-0000-0000-0000-00000000d540:Codeunit:50924",
+        "11111111-0000-0000-0000-00000000d540:Codeunit:50924"
+      ],
+      "affectedTables": [],
+      "fixOptions": [
+        {
+          "description": "Move the event publish outside the TryFunction boundary, or document that subscriber errors are intentionally suppressed on this path.",
+          "safety": "medium"
+        }
+      ],
+      "provenance": [
+        {
+          "source": "tree-sitter"
+        }
+      ],
+      "fingerprint": "34657a46739e1e49"
+    },
     {
       "detector": "d54-publish-in-tryfunction-cone",
       "id": "d54/11111111-0000-0000-0000-00000000d540:Codeunit:50923#8f7b85551ac1a748ee89ede026f7ff1bb615dbcb9d46cb5ef36a221de43ba15c/11111111-0000-0000-0000-00000000d540:Codeunit:50922#0f2242c5cbed16b79e258da0d09b1fa1b331c04f0bfdaae315b5c4cd188d0cea",

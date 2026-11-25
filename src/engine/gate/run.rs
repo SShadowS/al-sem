@@ -1079,7 +1079,12 @@ fn analyze_view(
             .collect();
         let suppression_map = build_suppression_map(inputs, unit_ids.iter().map(|s| s.as_str()));
         let summaries: Vec<_> = paired.iter().map(|(s, _)| s.clone()).collect();
-        let outcome = apply_inline_suppressions(&summaries, &suppression_map);
+        // A merged d22 finding is suppressed only when every read it lists is.
+        let sites: Vec<_> = paired
+            .iter()
+            .map(|(_, r)| crate::engine::l5::detectors::d22::merged_read_lines(r))
+            .collect();
+        let outcome = apply_inline_suppressions(&summaries, &sites, &suppression_map);
         // outcome.kept holds indices into `summaries` (= into `paired`); retain them.
         let keep: std::collections::HashSet<usize> = outcome.kept.into_iter().collect();
         let mut i = 0usize;

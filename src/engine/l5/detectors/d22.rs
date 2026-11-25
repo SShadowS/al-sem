@@ -207,19 +207,40 @@ pub fn detect_d22(
     Ok(DetectorOutput::no_diag(findings, stats))
 }
 
-/// ENG-101 (owner decision 2026-11-18): ONE finding per routine, record variable
-/// and FlowField. The reads share one key (it never held the read), so the nine
-/// reads of one field in one routine were nine findings under ONE fingerprint.
+/// The 1-based lines of a merged d22 finding's reads, for inline suppression
+/// (ENG-101 sol r1): a merged finding is suppressed only when a directive covers
+/// EVERY read it lists. `None` for a single read and for any other detector, which
+/// keep the primary-line rule.
+pub(crate) fn merged_read_lines(f: &Finding) -> Option<Vec<u32>> {
+    (f.detector == DETECTOR && f.evidence_path.len() > 1).then(|| {
+        f.evidence_path
+            .iter()
+            .map(|s| s.source_anchor.start_line + 1)
+            .collect()
+    })
+}
+
+/// ENG-101 (owner decision 2026-11-18): ONE finding per routine, record variable,
+/// table and FlowField. The reads share one key (it never held the read), so the
+/// nine reads of one field in one routine were nine findings under ONE fingerprint.
 /// The fix is usually one CalcFields before the first read, but not always: a
 /// record reloaded between reads (a `Get`, a `Next`) needs another one, and the
-/// evidence lists every read so each can be checked. The merged finding is the FIRST read in source order (its
-/// id, location and text), and its evidence lists every uncovered read in
-/// source order. Key and fingerprint are unchanged.
+/// evidence lists every read so each can be checked. The merged finding is the
+/// FIRST read in source order (its id, location and text), and its evidence lists
+/// every uncovered read in source order. Key and fingerprint are unchanged.
+///
+/// The table is part of the group (sol r1): the `#if` arms of one routine share
+/// its id, and one variable name can be a different table per arm. Their findings
+/// have different fingerprints (the fingerprint hashes the table) and stay apart.
 fn merge_reads(findings: Vec<Finding>) -> Vec<Finding> {
-    let mut groups: std::collections::BTreeMap<String, Vec<Finding>> =
+    type Group = (String, Vec<std::sync::Arc<str>>);
+    let mut groups: std::collections::BTreeMap<Group, Vec<Finding>> =
         std::collections::BTreeMap::new();
     for f in findings {
-        groups.entry(f.root_cause_key.clone()).or_default().push(f);
+        groups
+            .entry((f.root_cause_key.clone(), f.affected_tables.clone()))
+            .or_default()
+            .push(f);
     }
     groups
         .into_values()

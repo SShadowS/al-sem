@@ -51,4 +51,31 @@ codeunit 50925 "D55 Demo"
             until Item.Next() = 0;
         Ev.OnRowProcessed();
     end;
+
+    // FLAGGED twice (ENG-101 sol r1): one routine declared in both `#if` arms (one
+    // routine id), each publishing one event in its loop: the arms' loops get their
+    // own ids, so two findings with two fingerprints.
+#if CLEAN
+    procedure PublishInLoopArm()
+    var
+        Item: Record "D55 Item";
+        Ev: Codeunit "D55 Events";
+    begin
+        if Item.FindSet() then
+            repeat
+                Ev.OnRowChecked();
+            until Item.Next() = 0;
+    end;
+#else
+    procedure PublishInLoopArm()
+    var
+        Item: Record "D55 Item";
+        Ev: Codeunit "D55 Events";
+    begin
+        if Item.FindSet() then
+            repeat
+                Ev.OnRowChecked();
+            until Item.Next() = 0;
+    end;
+#endif
 }

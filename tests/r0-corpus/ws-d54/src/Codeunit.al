@@ -98,4 +98,21 @@ codeunit 50924 "D54 Many Events"
     procedure OnE6()
     begin
     end;
+
+    // FLAGGED once (ENG-101 sol r1): one TryFunction declared in both `#if` arms
+    // (one routine id) reaching one publisher is ONE finding, not two under one
+    // fingerprint; the other arm's declaration is listed in its evidence.
+#if CLEAN
+    [TryFunction]
+    procedure TryPost()
+    begin
+        OnE1();
+    end;
+#else
+    [TryFunction]
+    procedure TryPost()
+    begin
+        OnE1();
+    end;
+#endif
 }
