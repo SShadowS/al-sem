@@ -146,3 +146,12 @@ Not separated by this run:
    swapping the sets in pass 2 (the only design where both sides see the same host state).
    Test it as one more arm of `warmtests.py` under e-burn and sib-burn before building it;
    every limit would need re-calibrating.
+
+## 6. Owner answers (2026-11-21)
+
+- **Power (q-20261121T025805-9ba03286):** server1 now runs the `performance` power profile
+  (energy preference `performance`; about 3.25 GHz average right after the change). Cause 1 is
+  to be re-measured under it (TLS-112) before any conclusion above about the clock is reused.
+- **Core isolation (q-20261121T052155-5d983934):** none. cdo-speed relies on instruction
+  counts and TLS-111's CLOCK and CPI labels; cause 2 (shared cores) stays a failure, labelled
+  CPI. Pinning only if TLS-112's measured arms justify it.
