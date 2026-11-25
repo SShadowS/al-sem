@@ -449,16 +449,45 @@ fn land_gates_in_order_and_pushes_only_on_request() {
 /// so land runs from a folder of links to the real scripts whose
 /// `host-suspended` sets the hook for itself only, reading `suspended` there.
 ///
-/// Review r1 (sol P4): it gives up within 14 s of the suspend, which pins the
-/// naps' stop at the deadline (a fixed 15 s nap gives up at ~15 s), and each
-/// line is said exactly once.
+/// Review r1 (sol P4): the naps stop at the deadline, and each line is said
+/// exactly once. ⟨TLS-129⟩ That stop is judged from land's own mem-wait.log
+/// (each nap and the time left when it began, the awake time at give-up),
+/// never from the host's wall clock: every nap is at most the time left, the
+/// last one is exactly the time left (it ends on the deadline), and land gives
+/// up with at least 2 s of awake time used. So land gives up at the first check
+/// after the deadline; how late that check comes is the loop's own work (awk,
+/// the clock read, at most 6 s), which load sets, not land. The old bound, "at
+/// most 14 s of wall time after the suspend", measured that work: it failed at
+/// host load 381 (14.58 s, TLS-127's task gate), and so did a 3 s delay in
+/// each clock read after the suspend with land's cap intact (15.18 s, red,
+/// 2026-11-25): `land_mem_wait_judges_its_naps_not_the_load` runs that delay.
+/// The wall clock keeps only a lower bound (at least 8 s), which load cannot
+/// break.
 ///
 /// Mutation (2026-11-23): the mem-wait on wall time again (`awake_us` plus
 /// `awake_slept` seconds) -> gave up 3.1 s after the suspend (red); restored,
-/// green. The nap's cap dropped (a fixed 15 s nap again) -> gave up past 14 s
-/// (red); restored, green.
+/// green.
 #[test]
 fn land_mem_wait_survives_a_host_suspend() {
+    land_mem_wait_across_a_suspend(0);
+}
+
+/// ⟨TLS-129⟩ The same wait with each clock read after the suspend 3 s late (a
+/// loaded host, made certain): land's naps still stop on the deadline, and the
+/// test still passes, since it no longer reads the load as a late nap.
+///
+/// Proof (2026-11-25): the 14 s wall bound restored -> red (gave up 15.2 s
+/// after the suspend); removed again, green. The nap's cap dropped in land
+/// (`nap_us=15000000`) -> red (a nap of 15000000 us with less left); restored,
+/// green.
+#[test]
+fn land_mem_wait_judges_its_naps_not_the_load() {
+    land_mem_wait_across_a_suspend(3);
+}
+
+/// The body of the two tests above; each clock read after the suspend comes
+/// `delay_s` seconds late.
+fn land_mem_wait_across_a_suspend(delay_s: u32) {
     use std::os::unix::fs::PermissionsExt;
     let r = repo();
     let bin = link_scripts(
@@ -477,6 +506,7 @@ fn land_mem_wait_survives_a_host_suspend() {
         &stub,
         format!(
             "#!/bin/sh\nexport CDO_HOST_SUSPENDED_FILE=\"$(dirname \"$0\")/suspended\"\n\
+             [ \"$(cat \"$CDO_HOST_SUSPENDED_FILE\")\" != 110 ] || sleep {delay_s}\n\
              exec '{}' \"$@\"\n",
             real.join("host-suspended").display()
         ),
@@ -537,10 +567,28 @@ fn land_mem_wait_survives_a_host_suspend() {
         after >= std::time::Duration::from_secs(8),
         "gave up {after:?} after the suspend: the suspend used up the mem-wait"
     );
+    // land's own record: (nap, left) per nap, then the awake time at give-up.
+    let num = |s: &str| s.parse::<i64>().unwrap_or_else(|_| panic!("{s}: {logs:?}"));
+    let naps: Vec<(i64, i64)> = logs[0]
+        .lines()
+        .filter_map(|l| l.strip_prefix("nap "))
+        .map(|l| {
+            let w: Vec<&str> = l.split(' ').collect();
+            (num(w[0]), num(w[3]))
+        })
+        .collect();
     assert!(
-        after < std::time::Duration::from_secs(14),
-        "gave up {after:?} after the suspend: a nap went past the deadline"
+        naps.len() >= 2 && naps.iter().all(|&(n, left)| 0 < n && n <= left),
+        "a nap went past the deadline: {logs:?}"
     );
+    let (n, left) = naps[naps.len() - 1];
+    assert_eq!(n, left, "the last nap ends on the deadline: {logs:?}");
+    let used = logs[0]
+        .lines()
+        .find_map(|l| l.strip_prefix("gave up after "))
+        .map(|l| num(l.split(' ').next().unwrap()))
+        .unwrap_or_else(|| panic!("no awake time at give-up: {logs:?}"));
+    assert!(used >= 2_000_000, "gave up early in awake time: {logs:?}");
     assert_eq!(r.calls(), ["ci-steps all"], "no memory, no cdo-gate");
 }
 

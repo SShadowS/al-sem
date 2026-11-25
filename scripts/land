@@ -609,7 +609,7 @@ if ((mem_min_gb > 0)); then
         [[ -z "$awake_msg" ]] || echo "land: mem-wait: $awake_msg" | tee -a "$run/mem-wait.log"
         left_us=$((mem_timeout * 1000000 - awake_us))
         if ((left_us <= 0)); then
-            echo "gave up: MemAvailable $((avail_kb >> 20)) GB (need $mem_min_gb)" >>"$run/mem-wait.log"
+            echo "gave up after $awake_us us of awake time: MemAvailable $((avail_kb >> 20)) GB (need $mem_min_gb)" >>"$run/mem-wait.log"
             rc=1
             break
         fi
@@ -617,7 +617,11 @@ if ((mem_min_gb > 0)); then
             echo "land: mem-wait: MemAvailable $((avail_kb >> 20)) GB, waiting for $mem_min_gb GB (at most $mem_timeout s of awake time)"
             said=1
         fi
-        awake_nap $((left_us < 15000000 ? left_us : 15000000))
+        # ⟨TLS-129⟩ Logged, so a test judges the cap from land's own record,
+        # not from the host's wall clock (which load stretches).
+        nap_us=$((left_us < 15000000 ? left_us : 15000000))
+        echo "nap $nap_us us of $left_us us left" >>"$run/mem-wait.log"
+        awake_nap "$nap_us"
     done
 fi
 verdict mem-wait "$rc" "$start"

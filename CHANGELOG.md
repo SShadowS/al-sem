@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (TLS-129: land's mem-wait test no longer fails under load)
+
+- `land_script::land_mem_wait_survives_a_host_suspend` failed at host load 381
+  ("gave up 14.58 s after the suspend: a nap went past the deadline") and passed
+  on a re-run. The cause was the test, not `scripts/land`: its 14 s bound was
+  wall time from the suspend to land's exit, so it also counted the wait loop's
+  own work (awk, the forked clock read) and land's exit, which load stretches.
+  No nap went past the deadline: land caps each nap at the awake time left.
+  Reproduced with land unchanged by making each clock read after the suspend
+  3 s late: the old test failed at 15.18 s.
+- `scripts/land` now writes each nap and the time left to `mem-wait.log`
+  (`nap <us> us of <us> us left`), and the awake time used when it gives up
+  (`gave up after <us> us of awake time: ...`). The test judges the cap from
+  that log: every nap is at most the time left, the last one is exactly the
+  time left, and land gives up after at least 2 s of awake time. The wall clock
+  keeps only its lower bound (at least 8 s after the suspend), which load
+  cannot break. A new test, `land_mem_wait_judges_its_naps_not_the_load`, runs
+  the same wait with the 3 s delay. Proof: the old 14 s bound put back fails
+  it; a fixed 15 s nap in land fails it.
+
 ### Fixed (ENG-178: table procedures named like record built-ins: four follow-ups from ENG-173)
 
 From Fable's second review of ENG-173 (`/work/.al-sem/engine-notes/eng173/fable-eng173-r2.md`).
