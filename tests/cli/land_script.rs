@@ -440,29 +440,32 @@ fn land_gates_in_order_and_pushes_only_on_request() {
 
 /// ⟨TLS-105⟩ The mem-wait (LAND_MEM_TIMEOUT_S) counts awake time: a host
 /// suspend does not use it up (review of TLS-104, Fable). The memory is never
-/// enough (999999 GB) and the wait 2 s; once land says it waits (its clock is
-/// started by then), the host "sleeps" 10 s. land says so (on the terminal and
+/// enough (999999 GB) and the wait 5 s; once land says it waits (its clock is
+/// started by then), the host "sleeps" 20 s. land says so (on the terminal and
 /// in mem-wait.log) and still gives up (a real awake timeout expires), but only
-/// about 12 s later, not at the 2 s wall-clock deadline.
+/// about 25 s later, not at the 5 s wall-clock deadline.
 ///
 /// land refuses to run with a test hook set (CDO_HOST_SUSPENDED_FILE is one),
 /// so land runs from a folder of links to the real scripts whose
 /// `host-suspended` sets the hook for itself only, reading `suspended` there.
 ///
 /// Review r1 (sol P4): the naps stop at the deadline, and each line is said
-/// exactly once. ⟨TLS-129⟩ That stop is judged from land's own mem-wait.log
-/// (each nap and the time left when it began, the awake time at give-up),
-/// never from the host's wall clock: every nap is at most the time left, the
-/// last one is exactly the time left (it ends on the deadline), and land gives
-/// up with at least 2 s of awake time used. So land gives up at the first check
-/// after the deadline; how late that check comes is the loop's own work (awk,
-/// the clock read, at most 6 s), which load sets, not land. The old bound, "at
-/// most 14 s of wall time after the suspend", measured that work: it failed at
-/// host load 381 (14.58 s, TLS-127's task gate), and so did a 3 s delay in
-/// each clock read after the suspend with land's cap intact (15.18 s, red,
-/// 2026-11-25): `land_mem_wait_judges_its_naps_not_the_load` runs that delay.
-/// The wall clock keeps only a lower bound (at least 8 s), which load cannot
-/// break.
+/// exactly once. ⟨TLS-129⟩ That stop is judged from what land SLEPT, never
+/// from the host's wall clock: a `sleep` stand-in first on PATH records each
+/// argument land's shell passes it, and these must equal, in order, the naps
+/// land logs (`nap <us> us of <left> us left`), each `min(left, 15 s)`. The
+/// 20 s suspend leaves 20 s to wait, so one nap is cut to the 15 s cap and the
+/// next one to the time left. So land gives up at the first check after the
+/// deadline; how late that check comes is the loop's own work (awk, the forks,
+/// and the clock read, which alone is cut at 6 s), which load sets, not land.
+/// The old bound, "at most 14 s of wall time after the suspend" (2 s past the
+/// deadline then), measured that work: it failed at host load 381 (14.58 s,
+/// TLS-127's task gate; that run logged no naps, so "no nap went past the
+/// deadline" there is deduced from the code), and so did a 3 s delay in each
+/// clock read after the suspend with land's cap intact (15.18 s, red,
+/// 2026-11-25). `land_mem_wait_judges_its_naps_not_the_load` runs such a
+/// delay. The wall clock keeps only a lower bound (at least 20 s), which load
+/// cannot break.
 ///
 /// Mutation (2026-11-23): the mem-wait on wall time again (`awake_us` plus
 /// `awake_slept` seconds) -> gave up 3.1 s after the suspend (red); restored,
@@ -472,21 +475,28 @@ fn land_mem_wait_survives_a_host_suspend() {
     land_mem_wait_across_a_suspend(0);
 }
 
-/// ⟨TLS-129⟩ The same wait with each clock read after the suspend 3 s late (a
-/// loaded host, made certain): land's naps still stop on the deadline, and the
-/// test still passes, since it no longer reads the load as a late nap.
+/// ⟨TLS-129⟩ The same wait with each MemAvailable read after the suspend 6 s
+/// late (a loaded host, made certain): an `awk` stand-in sleeps first. It is
+/// not the clock read, which `timeout -k 1 5` would cut (review r1, Fable).
+/// land's naps still end on the deadline, and the test still passes, since it
+/// no longer reads the load as a late nap.
 ///
-/// Proof (2026-11-25): the 14 s wall bound restored -> red (gave up 15.2 s
-/// after the suspend); removed again, green. The nap's cap dropped in land
-/// (`nap_us=15000000`) -> red (a nap of 15000000 us with less left); restored,
-/// green.
+/// Proof (2026-11-25, review r1): the old wall bound restored for this wait
+/// (gives up within 27 s of the suspend, 2 s past its deadline, as 14 s was
+/// for the 2 s wait and 10 s suspend) -> red here (gave up 31.2 s after);
+/// removed again, green. land sleeping a fixed 15 s while logging the capped
+/// nap (`awake_nap 15000000`) -> red (the slept arguments differ from the
+/// logged naps); restored, green. A fixed 15 s nap (`nap_us=15000000`) ->
+/// both tests red (nap 15000000 with 4.9 s left); restored, green. No 15 s cap
+/// (`nap_us=$left_us`) -> `land_mem_wait_survives_a_host_suspend` red (a
+/// 19.6 s nap); restored, green.
 #[test]
 fn land_mem_wait_judges_its_naps_not_the_load() {
-    land_mem_wait_across_a_suspend(3);
+    land_mem_wait_across_a_suspend(6);
 }
 
-/// The body of the two tests above; each clock read after the suspend comes
-/// `delay_s` seconds late.
+/// The body of the two tests above; each MemAvailable read after the suspend
+/// comes `delay_s` seconds late.
 fn land_mem_wait_across_a_suspend(delay_s: u32) {
     use std::os::unix::fs::PermissionsExt;
     let r = repo();
@@ -501,31 +511,59 @@ fn land_mem_wait_across_a_suspend(delay_s: u32) {
         ],
     );
     let real = Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts");
-    let stub = bin.join("host-suspended");
-    std::fs::write(
-        &stub,
-        format!(
-            "#!/bin/sh\nexport CDO_HOST_SUSPENDED_FILE=\"$(dirname \"$0\")/suspended\"\n\
-             [ \"$(cat \"$CDO_HOST_SUSPENDED_FILE\")\" != 110 ] || sleep {delay_s}\n\
-             exec '{}' \"$@\"\n",
-            real.join("host-suspended").display()
+    // Stand-ins; `${PATH#*:}` drops `bin` (first on PATH) to reach the real tool.
+    for (name, body) in [
+        (
+            "host-suspended",
+            format!(
+                "export CDO_HOST_SUSPENDED_FILE=\"$(dirname \"$0\")/suspended\"\n\
+                 exec '{}' \"$@\"",
+                real.join("host-suspended").display()
+            ),
         ),
-    )
-    .unwrap();
-    std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+        (
+            "sleep",
+            "echo \"$PPID $*\" >>\"$(dirname \"$0\")/sleeps\"\n\
+             PATH=${PATH#*:} exec sleep \"$@\""
+                .to_string(),
+        ),
+        (
+            "awk",
+            format!(
+                "case \"$*\" in *MemAvailable*)\n\
+                 [ \"$(cat \"$(dirname \"$0\")/suspended\")\" != 120 ] \
+                 || PATH=${{PATH#*:}} sleep {delay_s} ;;\nesac\n\
+                 PATH=${{PATH#*:}} exec awk \"$@\""
+            ),
+        ),
+    ] {
+        let stub = bin.join(name);
+        std::fs::write(&stub, format!("#!/bin/sh\n{body}\n")).unwrap();
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
     let reading = bin.join("suspended");
     std::fs::write(&reading, "100").unwrap();
+    let path = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
     let mut run = crate::cdo_slot::Reap(
         r.land_cmd(
             &bin.join("land"),
             &["tools/tls-58-x"],
-            &[("LAND_MEM_MIN_GB", "999999"), ("LAND_MEM_TIMEOUT_S", "2")],
+            &[
+                ("LAND_MEM_MIN_GB", "999999"),
+                ("LAND_MEM_TIMEOUT_S", "5"),
+                ("PATH", &path),
+            ],
         )
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
         .unwrap(),
     );
+    let land_pid = run.0.id();
     let mut text = String::new();
     let mut slept_at = None;
     {
@@ -534,7 +572,7 @@ fn land_mem_wait_across_a_suspend(delay_s: u32) {
         for line in lines {
             let line = line.unwrap();
             if line.contains("land: mem-wait: MemAvailable") && slept_at.is_none() {
-                std::fs::write(&reading, "110").unwrap();
+                std::fs::write(&reading, "120").unwrap();
                 slept_at = Some(std::time::Instant::now());
             }
             text.push_str(&line);
@@ -547,7 +585,7 @@ fn land_mem_wait_across_a_suspend(delay_s: u32) {
     let after = slept_at.expect("land never said it waits").elapsed();
     assert_eq!(code, Some(1), "{text}{err}");
     assert!(err.contains("FAIL at mem-wait"), "{text}{err}");
-    let said = "land: mem-wait: the host slept 10 s during this wait: it goes on that much longer";
+    let said = "land: mem-wait: the host slept 20 s during this wait: it goes on that much longer";
     assert_eq!(text.matches(said).count(), 1, "{text}{err}");
     assert_eq!(
         text.matches("land: mem-wait: MemAvailable").count(),
@@ -562,33 +600,44 @@ fn land_mem_wait_across_a_suspend(delay_s: u32) {
         logs.len() == 1 && logs[0].matches(said).count() == 1 && logs[0].contains("gave up"),
         "{logs:?}"
     );
-    // The awake deadline is ~12 s out; the wall one passed 2 s after the start.
+    // The awake deadline is ~25 s out; the wall one passed 5 s after the start.
     assert!(
-        after >= std::time::Duration::from_secs(8),
+        after >= std::time::Duration::from_secs(20),
         "gave up {after:?} after the suspend: the suspend used up the mem-wait"
     );
-    // land's own record: (nap, left) per nap, then the awake time at give-up.
-    let num = |s: &str| s.parse::<i64>().unwrap_or_else(|_| panic!("{s}: {logs:?}"));
-    let naps: Vec<(i64, i64)> = logs[0]
+    // The naps land logged, each min(left, 15 s), in microseconds.
+    let num = |s: &str| s.parse::<u64>().unwrap_or_else(|_| panic!("{s}: {logs:?}"));
+    let naps: Vec<u64> = logs[0]
         .lines()
         .filter_map(|l| l.strip_prefix("nap "))
         .map(|l| {
             let w: Vec<&str> = l.split(' ').collect();
-            (num(w[0]), num(w[3]))
+            let (nap, left) = (num(w[0]), num(w[3]));
+            assert_eq!(nap, left.min(15_000_000), "{logs:?}");
+            nap
         })
         .collect();
     assert!(
-        naps.len() >= 2 && naps.iter().all(|&(n, left)| 0 < n && n <= left),
-        "a nap went past the deadline: {logs:?}"
+        naps.len() >= 2,
+        "a nap before and after the suspend: {logs:?}"
     );
-    let (n, left) = naps[naps.len() - 1];
-    assert_eq!(n, left, "the last nap ends on the deadline: {logs:?}");
-    let used = logs[0]
+    // Without the delay, 20 s are left after the suspend: the cap binds.
+    assert!(
+        delay_s > 0 || naps.contains(&15_000_000),
+        "the cap never bound: {logs:?}"
+    );
+    // What land's own shell slept ("S.UUUUUU" seconds), in microseconds.
+    let sleeps = std::fs::read_to_string(bin.join("sleeps")).unwrap_or_default();
+    let slept: Vec<u64> = sleeps
         .lines()
-        .find_map(|l| l.strip_prefix("gave up after "))
-        .map(|l| num(l.split(' ').next().unwrap()))
-        .unwrap_or_else(|| panic!("no awake time at give-up: {logs:?}"));
-    assert!(used >= 2_000_000, "gave up early in awake time: {logs:?}");
+        .filter_map(|l| l.strip_prefix(&format!("{land_pid} ")))
+        .map(|a| {
+            let (s, us) = a.split_once('.').unwrap_or_else(|| panic!("{a}"));
+            assert_eq!(us.len(), 6, "{a}");
+            num(s) * 1_000_000 + num(us)
+        })
+        .collect();
+    assert_eq!(slept, naps, "slept vs logged: {sleeps}{logs:?}");
     assert_eq!(r.calls(), ["ci-steps all"], "no memory, no cdo-gate");
 }
 

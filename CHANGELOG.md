@@ -14,18 +14,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on a re-run. The cause was the test, not `scripts/land`: its 14 s bound was
   wall time from the suspend to land's exit, so it also counted the wait loop's
   own work (awk, the forked clock read) and land's exit, which load stretches.
-  No nap went past the deadline: land caps each nap at the awake time left.
+  That run logged no naps, so "no nap went past the deadline" there is deduced
+  from the code: land caps each nap at the awake time left, on the same clock.
   Reproduced with land unchanged by making each clock read after the suspend
   3 s late: the old test failed at 15.18 s.
 - `scripts/land` now writes each nap and the time left to `mem-wait.log`
   (`nap <us> us of <us> us left`), and the awake time used when it gives up
-  (`gave up after <us> us of awake time: ...`). The test judges the cap from
-  that log: every nap is at most the time left, the last one is exactly the
-  time left, and land gives up after at least 2 s of awake time. The wall clock
-  keeps only its lower bound (at least 8 s after the suspend), which load
-  cannot break. A new test, `land_mem_wait_judges_its_naps_not_the_load`, runs
-  the same wait with the 3 s delay. Proof: the old 14 s bound put back fails
-  it; a fixed 15 s nap in land fails it.
+  (`gave up after <us> us of awake time: ...`). The test judges what land
+  sleeps: a `sleep` stand-in first on PATH records each argument land's shell
+  passes it, and these must equal the logged naps, each `min(left, 15 s)`; the
+  wait is now 5 s and the fake suspend 20 s, so the 15 s cap binds once. The
+  wall clock keeps only its lower bound (at least 20 s after the suspend),
+  which load cannot break. A new test,
+  `land_mem_wait_judges_its_naps_not_the_load`, runs the same wait with each
+  MemAvailable read after the suspend 6 s late (an `awk` stand-in, outside the
+  clock read's 5 s timeout). Proofs: the old bound put back (2 s past the
+  deadline) fails it at 31.2 s; a fixed 15 s sleep behind a correct log line,
+  a fixed 15 s nap, and no 15 s cap each fail a test.
 
 ### Fixed (ENG-178: table procedures named like record built-ins: four follow-ups from ENG-173)
 
