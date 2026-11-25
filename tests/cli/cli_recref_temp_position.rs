@@ -257,12 +257,16 @@ fn a_record_operation_reads_the_last_bind_before_it() {
             .to_string()
     };
     assert_eq!(answer("RootTempOnly"), "no", "precondition: the pass runs");
-    assert_ne!(answer("RootPhysical"), "no", "control");
+    assert_eq!(answer("RootPhysical"), "yes", "control");
     assert_eq!(answer("RootTempFirst"), "no", "the Insert is temporary");
+    // Not `no` (master's wrong answer for `RootSysClear`). Not yet `yes` either: a `Clear` of
+    // the variable makes the pass derive nothing for it, though `Clear` only unbinds (BC 28.4:
+    // a write after it raises "The record is not open."). ENG-211 makes these `yes`.
+    for root in ["RootClear", "RootSysClear"] {
+        assert_eq!(answer(root), "unknown", "{root}");
+    }
     for root in [
         "RootClose",
-        "RootClear",
-        "RootSysClear",
         "RootUnknownFlag",
         "RootLoop",
         "RootWhile",
@@ -273,6 +277,6 @@ fn a_record_operation_reads_the_last_bind_before_it() {
         "RootGetTableUnknown",
         "RootGetTableFlip",
     ] {
-        assert_ne!(answer(root), "no", "{root}: a physical write is reachable");
+        assert_eq!(answer(root), "yes", "{root}: a physical write is reachable");
     }
 }

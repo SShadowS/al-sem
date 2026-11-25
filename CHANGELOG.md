@@ -131,9 +131,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fingerprint at either scope, unknown edges 0 -> 0. cdo-speed PASS: instructions build x1.0003,
   round total x1.0001.
 - **Tests and red proofs.** `cli_recref_temp_position` (new; its AL compiles clean on alc
-  18.0.41): the six shapes, a `Clear(R)` row, an `Insert` in a bind's own arguments and a bind
-  after an error under `asserterror` answer not `no`; the temporary-then-physical row answers
-  `no`; controls (one physical `Open`: `yes`; one temporary `Open`: `no`). Each break then
+  18.0.41): the six shapes, an `Insert` in a bind's own arguments, a bind after an error under
+  `asserterror` and the `while`/`repeat`/`foreach` loops answer `yes`; the `Clear(R)` and
+  `System.Clear(R)` rows answer `unknown` (the pass still gives up on a `Clear`ed variable;
+  ENG-211 makes them `yes`); the temporary-then-physical row answers `no`; controls (one
+  physical `Open`: `yes`; one temporary `Open`: `no`). Each break then
   restored: every operation reading the variable's last bind fails `RootClose`; an `Open` with an
   unknown flag pushing no bind fails `RootUnknownFlag`; a variable bound inside a loop kept fails
   `RootLoop`; a bind placed where its call starts fails `RootArgBind`; a bind under `asserterror`
