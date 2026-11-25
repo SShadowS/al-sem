@@ -2219,8 +2219,11 @@ calls = 0
 # (src/program/ir_cache/report.rs): a `start` line at the first build, an `end`
 # line with counters when the process holding the cache exits. That is the
 # engine CHILD, a descendant of the server: here a child forked at the first
-# build, whose pid both lines carry; it writes `end` 0.5 s after the server is
-# gone (cdo-speed's close must wait for the server's descendants). A cache
+# build, whose pid both lines carry; it writes `end` 0.1 s after the server is
+# gone (cdo-speed's close must wait for the server's descendants). One fork, not
+# two: a double-forked grandchild is reparented at once, so close() would never
+# list it and its `end` would race the report check. Its zombie (on a host whose
+# init does not reap) costs nothing: close() skips zombies (`running`). A cache
 # folder this stub filled before gives disk hits (a warm build); an empty one
 # gets a publish. STUB_IR_NO_REPORT: no report.
 report = None if os.environ.get("STUB_IR_NO_REPORT") else os.environ.get("ALSEM_IR_CACHE_REPORT")
@@ -2236,7 +2239,7 @@ def report_child(counters):
         os.close(1)
         while os.read(r, 1):  # EOF: the server exited (it held `w`)
             pass
-        time.sleep(0.5)
+        time.sleep(0.1)
         report_line({"event": "end", "pid": os.getpid(), "counters": counters})
         os._exit(0)
     os.close(r)
@@ -3165,6 +3168,66 @@ fn speed_counts_cycles_and_labels_clock_and_cpi() {
     assert!(!v.contains(" CLOCK:"), "{text}");
 }
 
+/// ⟨TLS-126 review r2⟩ `Server.close()` waits for the server's descendants,
+/// but not for a zombie: on a host whose init does not reap, an orphaned engine
+/// child stays a zombie (/proc/<pid> exists) and close() waited 30 + 5 s on it.
+/// Made deterministic: the script is imported into a process that makes itself
+/// a child subreaper (orphans come to it) and never reaps. A server whose child
+/// outlives it by 0.5 s is closed: close() waits that 0.5 s, finds a zombie,
+/// and returns within 10 s; the precondition (the child was listed, and is a
+/// zombie after the close) is asserted.
+///
+/// Proof (2026-11-25): `running` replaced by `os.path.exists` in close() ->
+/// "close() waited 35.1 s on a zombie", after "still alive 30 s" and "survived
+/// SIGKILL" (red); restored, green.
+#[cfg(target_os = "linux")]
+#[test]
+fn speed_close_does_not_wait_on_a_zombie() {
+    let py = r#"
+import ctypes, importlib.machinery, importlib.util, os, subprocess, sys, tempfile, time
+loader = importlib.machinery.SourceFileLoader("cdo_speed", sys.argv[1])
+m = importlib.util.module_from_spec(importlib.util.spec_from_loader("cdo_speed", loader))
+loader.exec_module(m)
+libc = ctypes.CDLL(None, use_errno=True)
+if libc.prctl(36, 1, 0, 0, 0) != 0:  # PR_SET_CHILD_SUBREAPER
+    sys.exit(f"prctl: errno {ctypes.get_errno()}")
+d = tempfile.mkdtemp()
+s = m.Server.__new__(m.Server)
+s.name, s.root = "z", tempfile.mkdtemp(dir=d)
+s.err = open(os.path.join(d, "err"), "wb")
+s.p = subprocess.Popen([sys.executable, "-c",
+    "import os, sys, time\nif os.fork() == 0:\n    sys.stdin.close()\n    time.sleep(0.5)\n"
+    "    os._exit(0)\nsys.stdin.read()"], stdin=subprocess.PIPE)
+end = time.monotonic() + 10
+while not m.descendants(s.p.pid) and time.monotonic() < end:
+    time.sleep(0.01)
+kids = m.descendants(s.p.pid)
+if len(kids) != 1:
+    sys.exit(f"precondition: one child, got {kids}")
+t = time.monotonic()
+s.close()
+took = time.monotonic() - t
+state = open(f"/proc/{kids[0]}/stat").read().rsplit(")", 1)[1].split()[0]
+if state != "Z":
+    sys.exit(f"precondition: the child is a zombie after the close, state {state}")
+if took > 10:
+    sys.exit(f"close() waited {took:.1f} s on a zombie")
+print("ok")
+"#;
+    let out = crate::clean_env::command("python3")
+        .args(["-c", py])
+        .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-speed"))
+        .env("ALSEM_SPEED_CACHE", "/nonexistent/cdo-speed-cache")
+        .output()
+        .unwrap();
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(out.status.success() && text.contains("ok"), "{text}");
+}
+
 /// ⟨TLS-111⟩ cdo-speed's perf parsing and warm-up judging, called directly
 /// (the script imported):
 /// - only `instructions` and `cycles`, once each per PMU, reach perf (both are
@@ -3611,6 +3674,8 @@ fn speed_extra_pair_judges_every_failure_in_side_order() {
 /// engine child's does: `Server.close()`'s wait for the server's descendants
 /// deleted (scripts/cdo-speed) -> each child killed, `IR WARM REPORT BREACH
 /// (base: IR: FAIL start without end ...; head: ...)` (red); restored, green.
+/// Re-run 2026-11-25 on the final shape (one fork, `end` 0.1 s after the
+/// server, close() skipping zombies): red the same way; restored, green.
 #[cfg(target_os = "linux")]
 fn speed_agree_then_pass() {
     let dir = tempfile::tempdir().unwrap();

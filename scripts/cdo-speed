@@ -941,6 +941,18 @@ def proc_user_sys(pid):
         return 0.0, 0.0
 
 
+def running(pid):
+    """`pid` exists and is not a zombie. ⟨TLS-126⟩ A zombie holds no memory, and an
+    orphan's zombie waits for its new parent to reap it, which a host whose init does
+    not reap never does: Server.close() waited 30 + 5 s on one."""
+    try:
+        with open(f"/proc/{pid}/stat") as f:
+            stat = f.read()
+        return stat[stat.rindex(")") + 2:].split()[0] not in ("Z", "X")
+    except (OSError, ValueError, IndexError):
+        return False
+
+
 def descendants(pid):
     """Every live descendant of `pid` (from /proc's parent links)."""
     parents = {}
@@ -1359,10 +1371,10 @@ class Server:
         except (OSError, subprocess.TimeoutExpired):
             self.p.kill()
         deadline = time.monotonic() + 30
-        left = [k for k in kids if os.path.exists(f"/proc/{k}")]
+        left = [k for k in kids if running(k)]
         while left and time.monotonic() < deadline:
             time.sleep(0.2)
-            left = [k for k in left if os.path.exists(f"/proc/{k}")]
+            left = [k for k in left if running(k)]
         for k in left:
             log(f"server {self.name}: child {k} still alive 30 s after the close: killed")
             try:
@@ -1372,7 +1384,7 @@ class Server:
         deadline = time.monotonic() + 5
         while left and time.monotonic() < deadline:
             time.sleep(0.1)
-            left = [k for k in left if os.path.exists(f"/proc/{k}")]
+            left = [k for k in left if running(k)]
         for k in left:
             log(f"server {self.name}: child {k} survived SIGKILL: its memory may still be "
                 f"resident (the next build's timing may be skewed)")

@@ -42,13 +42,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The speed stub now writes the IR cache report the way the engine does
   (`src/program/ir_cache/report.rs`), from a child process like the engine child. The
   `start` line comes at the first build, and the `end` line, with counters, comes
-  0.5 s after the server exits. Both lines carry the child's pid. A cache folder the
+  0.1 s after the server exits. Both lines carry the child's pid. A cache folder the
   stub filled before gives disk hits, and an empty one gives a publish. So stub speed
   runs no longer carry the breach label. `speed_agree_then_pass` asserts the label is
   absent. The side-order run sets `STUB_IR_NO_REPORT` and asserts that it shows.
   Because the `end` line comes from a descendant, deleting `Server.close()`'s wait for
   the server's descendants now fails a test (TLS-128 covers the real engine's side).
-  Tests only; no script changed.
+  The stub forks once, not twice: a double-forked grandchild is reparented at once,
+  so `close()` would never list it and its `end` line would race the report check.
+- `scripts/cdo-speed`: `Server.close()` no longer waits on a zombie descendant. On a
+  host whose init does not reap, an orphaned engine child stays a zombie (its
+  `/proc/<pid>` remains), and `close()` waited 30 s, sent a SIGKILL, waited 5 s more,
+  and warned that its memory "may still be resident". A zombie holds no memory, so
+  the new `running()` treats it as gone. Pinned by
+  `speed_close_does_not_wait_on_a_zombie`: the script runs under a child subreaper
+  that never reaps, so the zombie is deterministic. It took 35.1 s on the old check.
 
 ### Fixed (ENG-178: table procedures named like record built-ins: four follow-ups from ENG-173)
 
