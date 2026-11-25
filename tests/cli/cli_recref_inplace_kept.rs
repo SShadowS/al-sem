@@ -100,6 +100,33 @@ codeunit 50010 "PA"
         Guarded(R);
     end;
 
+    // Controls (sol r1; BC 28.4, the module's contract): `Close` detaches only its own variable,
+    // and `Open` needs a closed one, so neither reaches R through the kept alias.
+    procedure RootClose()
+    var
+        R: RecordRef;
+        L: RecordRef;
+        E: Record "PA Entry";
+    begin
+        R.GetTable(E);
+        L := Same(R);
+        L.Close();
+        Guarded(R);
+    end;
+
+    procedure RootCloseOpen()
+    var
+        R: RecordRef;
+        L: RecordRef;
+        E: Record "PA Entry";
+    begin
+        R.GetTable(E);
+        L := Same(R);
+        L.Close();
+        L.Open(Database::"PA Doc");
+        Guarded(R);
+    end;
+
     // Control (BC 28.4, /work/.al-sem/engine-notes/eng189-probe): `FieldRef.Record()` is a COPY,
     // so rebinding it leaves R on its table.
     procedure RootFieldRecord()
@@ -290,7 +317,9 @@ fn alsem(cwd: &Path, args: &[&str]) -> serde_json::Value {
 /// receiver's whole class fails `RootExceptExclusive`; a holder-array element not always counting
 /// fails `RootSlot`; retainability read at the bind's start fails `RootJoinInArgs`; no
 /// retainability check on the receiver at all fails `RootReceiverNotKept` (`yes`). Fable r2: any
-/// array element counting, whatever its type, fails `RootRecArrayGet` (`yes`).
+/// array element counting, whatever its type, fails `RootRecArrayGet` (`yes`). sol r1
+/// (2026-11-25): `kept_bind_points` keeping `Close` and `Open` fails `RootClose` and
+/// `RootCloseOpen` (`unknown`, not `no`).
 #[test]
 fn an_in_place_bind_through_a_kept_holder_rebinds_every_kept_holder() {
     let t = tempfile::tempdir().unwrap();
@@ -329,6 +358,16 @@ fn an_in_place_bind_through_a_kept_holder_rebinds_every_kept_holder() {
     assert_eq!(answer("RootControlNo"), "no", "precondition");
     assert_eq!(answer("RootControlYes"), "yes", "precondition");
     assert_eq!(answer("RootBindFirst"), "no", "control");
+    assert_eq!(
+        answer("RootClose"),
+        "no",
+        "control (BC: Close detaches only L)"
+    );
+    assert_eq!(
+        answer("RootCloseOpen"),
+        "no",
+        "control (BC: Open needs a closed L)"
+    );
     assert_eq!(answer("RootFieldRecord"), "no", "control (BC: a copy)");
     assert_eq!(answer("RootReceiverNotKept"), "no", "control");
     assert_eq!(answer("RootRecArrayGet"), "no", "control");

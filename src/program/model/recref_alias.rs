@@ -261,19 +261,23 @@ pub fn user_code_points<'a>(
     calls.chain(ops).collect()
 }
 
-/// The in-place binds ([`bind_sites`]: `GetTable`, `Open`, `Close`, `Get`, …) made through a holder
-/// that is RETAINABLE at that point ([`AliasClasses::rebinds_at`]): the record that holder holds may
-/// be shared with any other retainable holder the classes cannot join (a local passed to a call
-/// that returned it, `L := Same(R)`; a call that joined two of them, `Join(L, R)`; a `var` Variant
-/// out parameter), so the bind may rebind them all, as a place that may run user code may
-/// (ENG-189, Fable's review of ENG-161: `L := Same(R); L.GetTable(Doc); Guarded(R)` answered `no`;
-/// BC 28.4: a returned RecordRef is its argument's handle, ENG-175). Each as a [`UserCodePoint`],
-/// the readers treat it as one.
+/// The in-place binds ([`bind_sites`]: `GetTable`, `Get`) made through a holder that is
+/// RETAINABLE at that point ([`AliasClasses::rebinds_at`]): the record that holder holds may be
+/// shared with any other retainable holder the classes cannot join (a local passed to a call that
+/// returned it, `L := Same(R)`; a call that joined two of them, `Join(L, R)`; a `var` Variant out
+/// parameter), so the bind may rebind them all, as a place that may run user code may (ENG-189,
+/// Fable's review of ENG-161: `L := Same(R); L.GetTable(Doc); Guarded(R)` answered `no`; BC 28.4:
+/// a returned RecordRef is its argument's handle, ENG-175). Each as a [`UserCodePoint`], the
+/// readers treat it as one. Not `Close` or `Open` (sol r1 on ENG-189): measured on BC 28.4 (module
+/// doc), `Close` detaches only its own variable and `Open` needs a closed one, so neither reaches
+/// another holder; their receiver's own facts handle them.
 #[must_use]
 pub fn kept_bind_points<'a>(r: &'a ModelRoutine, classes: &AliasClasses) -> Vec<UserCodePoint<'a>> {
+    use crate::program::body::features::RecRefBind;
     let scope = HolderScope::of(r);
     bind_sites(r)
         .into_iter()
+        .filter(|s| !matches!(s.how, RecRefBind::Close | RecRefBind::Open))
         .filter_map(|s| {
             let h = scope.text(s.receiver)?;
             let at = (s.anchor.start_line, s.anchor.start_column);

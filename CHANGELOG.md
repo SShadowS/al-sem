@@ -291,7 +291,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   read where the bind RUNS, after its own arguments (`L.Get(JoinId(L, R))`), and an element of a
   RecordRef or Variant array always counts (the classes hold no array slots: `Join(Slot[1], R);
   Slot[1].GetTable(D)`; a slot never joined to R answers `yes` too, a sound over-reach), never an
-  element of a record array (`Recs[1].Get('X')`). G34 (`exit_guards`) takes no kept binds: a
+  element of a record array (`Recs[1].Get('X')`). Only `GetTable` and `Get` count (sol r1):
+  measured on BC 28.4 (`recref_alias`'s module doc), `Close` detaches only its own variable and
+  `Open` needs a closed one, so neither reaches another holder (`L := Same(R); L.Close()` keeps
+  `R`'s `no`: `RootClose`, `RootCloseOpen`). G34 (`exit_guards`) takes no kept binds: a
   holder joined to the guard's by a call is bound before the guard by that call. A `foreach` element of a holder list shares
   the guard's record with no call (BC 28.4) and still answers `no` there and in G36; holder
   containers are ENG-161's, and its task carries the two repros.
