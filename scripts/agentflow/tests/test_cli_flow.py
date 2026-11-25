@@ -3539,8 +3539,8 @@ def test_cleanup_of_a_retained_verification_worktree_survives_the_dead_run_s_sta
 
 
 def _live_lane_holder(clone, g):
-    """A run holding issue 8 and the merge lane, its beats stamped on an awake
-    clock (so it has sidecars), a retained verification worktree, and HALT."""
+    """A run holding issue 8 and the merge lane, its lease stamped on an awake
+    clock, a retained verification worktree, and HALT."""
     kept = worktrees.create(g, worktrees.verify_path(clone), g.rev("master"))
     holder = Ctx(Paths(clone), run_id="live-run", now=lambda: 1_000_000.0, awake=lambda: ("b", 500.0))
     lock.acquire(holder, 8, "s", 1)
@@ -3550,38 +3550,32 @@ def _live_lane_holder(clone, g):
     return kept
 
 
-def test_a_beat_paused_between_its_writes_stops_clear_halt_and_cleanup(capsys, repo_pair, monkeypatch):
-    """sol r4's case: a beat writes its lease, then the host suspends before
-    it writes the sidecar. Only wall time moves (2 h). An unlocked reader sees
-    the new lease beside the old sidecar and falls back to a 2 h wall age, so
-    it takes the live run for a stale one. `clear-halt` and verification
-    `cleanup` decide under `registry`, which the paused beat holds: they wait,
-    and act on nothing (here their wait times out). Cleanup's early, unlocked
-    check does pass here, which is why its delete decides again under the lock.
-    Red proofs (sol r4):
-    - `clear_halt` deciding on the unlocked reporting read (no mutex, and
-      `_entries(held=False)` in `refuse_live_held`) failed here (HALT cleared).
+def test_a_beat_in_progress_stops_clear_halt_and_cleanup(capsys, repo_pair, monkeypatch):
+    """A beat in progress (it holds `registry`) and only wall time moving
+    (2 h, the readers here have no awake clock): an unlocked check would read
+    the live run's lease as stale and act. `clear-halt` and verification
+    `cleanup` decide under `registry`, so they wait for the beat and act on
+    nothing (here their wait times out). Cleanup's early, unlocked check does
+    pass, which is why its delete decides again under the lock (sol r4).
+    Red proofs (sol r4, re-run for sol r6):
+    - `clear_halt`'s live-run check moved out of its `with mutex` failed here
+      (HALT cleared).
     - The locked recheck removed from `cmd_cleanup` (only the unlocked early
-      check left) failed here (the live run's worktree was deleted).
-    Two guards cover this pause, each enough alone: the mutex (the commands
-    wait for the paused beat) and `beat_pending` (an older sidecar of the same
-    run reads as live). With only the mutex removed, or only `beat_pending`
-    dropped, this test stayed green; `beat_pending` is proven on its own in
-    the next test."""
+      check left) failed here (the live run's worktree was deleted)."""
     import threading
     _, clone = repo_pair
     g = Git(clone)
     kept = _live_lane_holder(clone, g)
     beating = Ctx(Paths(clone), run_id="live-run", now=lambda: 1_000_060.0, awake=lambda: ("b", 560.0))
     paused, go = threading.Event(), threading.Event()
-    real_write_awake = lock._write_awake
+    real_write = lock._write
 
-    def pause(cx, lk):
-        paused.set()                                 # the lease is written; the sidecar not yet
+    def pause(cx, path, lk):
+        paused.set()                                 # inside the beat, `registry` held
         go.wait(20)
-        real_write_awake(cx, lk)
+        real_write(cx, path, lk)
 
-    monkeypatch.setattr(lock, "_write_awake", pause)
+    monkeypatch.setattr(lock, "_write", pause)
     t = threading.Thread(target=lock.beat, args=(beating,))
     t.start()
     try:
@@ -3602,38 +3596,6 @@ def test_a_beat_paused_between_its_writes_stops_clear_halt_and_cleanup(capsys, r
     finally:
         go.set()
         t.join(20)
-
-
-def test_a_beat_that_died_between_its_writes_keeps_clear_halt_and_cleanup_off(
-        capsys, repo_pair, monkeypatch):
-    """Under `registry` no beat is half-written, so a sidecar OLDER than its
-    lease (same run) is a beat that did not finish its sidecar write: it died
-    between its two writes, or the write failed (sol r5: that alone does not
-    prove the run dead). The deciding commands treat that lease as live
-    (`beat_pending`), never stale, whatever the wall clock says. Recovery
-    judges it on the earlier beat's awake stamp (`prior_awake`), bounded by
-    the wall age; this reader has no awake clock, so the wall age: it can
-    still take the lease, or a run that died that way could never be
-    recovered.
-    Red proofs (sol r4): `lk.beat_pending or` dropped from `lock._live_held`
-    failed here (HALT cleared); `steal_for_recovery` judging by `_live_held`
-    instead of `is_stale` failed the last step (`lock-live`)."""
-    _, clone = repo_pair
-    g = Git(clone)
-    kept = _live_lane_holder(clone, g)
-    lease = clone / ".agent" / "locks" / "issue-8.json"
-    data = json.loads(lease.read_text(encoding="utf-8"))
-    data["heartbeat"] += 60                          # the lease the dying beat did write
-    lease.write_text(json.dumps(data), encoding="utf-8")
-    monkeypatch.setenv("AGENTFLOW_NOW", str(data["heartbeat"] + 2 * 3600))
-    code, out = run(capsys, clone, "clear-halt", "--reason", "operator", "--by", "me",
-                    gh_run=FakeRunner(), run_id=None)
-    assert code == 1 and out["refused"] == "operator-only", out
-    code, out = run(capsys, clone, "cleanup", "--worktree", str(kept), gh_run=FakeRunner(), run_id=None)
-    assert code == 1 and "FenceError" in out["error"], out
-    assert kept.is_dir()
-    rec = Ctx(Paths(clone), run_id="run-rec", now=lambda: data["heartbeat"] + lock.STALE_SECONDS + 1)
-    assert lock.steal_for_recovery(rec, lock.for_issue(rec, 8)).recovering_by == "run-rec"
 
 
 def test_cleanup_deletes_the_worktree_outside_registry(capsys, repo_pair, monkeypatch):

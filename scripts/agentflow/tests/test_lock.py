@@ -3,13 +3,13 @@ import json
 import os
 import time
 from contextlib import contextmanager
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
 
 from agentflow import budget, lock, state
-from agentflow.state import Ctx, DryRunViolation, MutexTimeout, Paths, tree_snapshot
+from agentflow.state import Ctx, DryRunViolation, Paths, tree_snapshot
 
 
 def test_acquire_creates_lock_and_second_acquire_loses(ctx):
@@ -320,34 +320,26 @@ def test_the_budget_leaves_a_3h_suspend_out(ctx):
 
 
 def test_the_awake_claim_stamp_is_checksummed(ctx):
-    """Moving the sidecar's claim stamp later would extend the cap: its checksum
-    no longer matches, so the run is timed on the wall clock (25 h: past the cap).
-    Red proof (TLS-122 sol r1): the checksum test dropped from
-    `budget._claimed_awake` failed here (the edited stamp gave 15 h, no deadline)."""
+    """`claimed_awake` sits in budget.json under its checksum: moving it later
+    (which would extend the cap) makes `_load` refuse the budget.
+    Red proof (TLS-122 r1, re-run for sol r6): `claimed_awake` left out of
+    `budget._checksum` failed here (no refusal)."""
     c = Clocks()
     run = c.ctx(ctx.paths, ctx.run_id)
     budget.init(run, claimed_at=run.now())
-    c.run(22 * 3600)
-    c.suspend(3 * 3600)
-    p = run.run_dir / "budget-awake.json"
+    p = run.run_dir / "budget.json"
     data = json.loads(p.read_text(encoding="utf-8"))
-    data["awake"][1] += 7 * 3600
+    data["claimed_awake"][1] += 7 * 3600
     p.write_text(json.dumps(data), encoding="utf-8")
-    with pytest.raises(budget.DeadlineExceeded):
+    with pytest.raises(RuntimeError, match="does not match"):
         budget.check_deadline(run)
-    assert budget.snapshot(run)["elapsed_clock"] == "wall"
 
 
-def _put_stamp(paths, issue, stamp, signed=True):
-    """Replace the awake stamp in a lease's sidecar, keeping it matched to the
-    lease. `signed`: with a valid checksum (as a buggy writer would leave it),
-    so the stamp reaches `awake_elapsed`'s own checks; unsigned is a hand edit,
-    which the checksum catches first."""
-    p = paths.locks_dir / "awake" / f"issue-{issue}.json"
-    s = {**json.loads(p.read_text(encoding="utf-8")), "awake": stamp}
-    if signed:
-        s["checksum"] = state.meta_sum({"run_id": s["run_id"], "heartbeat": s["heartbeat"], "awake": stamp})
-    p.write_text(json.dumps(s), encoding="utf-8")
+def _put_stamp(paths, issue, stamp):
+    """Replace the awake stamp in a lease file (a buggy or foreign writer)."""
+    p = paths.lease(issue)
+    p.write_text(json.dumps({**json.loads(p.read_text(encoding="utf-8")), "beat_awake": stamp}),
+                 encoding="utf-8")
 
 
 def test_a_stolen_lease_survives_a_suspend(ctx):
@@ -415,14 +407,11 @@ def test_a_malformed_awake_stamp_counts_as_none(ctx, bad):
     boolean read as a time); the bare string and `[1, 2]` fell back by chance.
     Red proof (Fable r2 nit): `math.isfinite` dropped failed the NaN shape
     (never stale) and the -inf one (stale at once); restored, passes.
-    Re-run on sol r1's code (the stamp in the sidecar): the shape break failed
-    the same 5 shapes. The `math.isfinite` break now PASSES: sol r1's range
-    check (`0 <= s <= now + tolerance`) is false for NaN and both infinities,
-    so `math.isfinite` is a redundant, explicit check. (The stamps here are
-    signed, so they reach `awake_elapsed` past the sidecar checksum.)
-    Since sol r3 the shape test is `state.is_stamp`, run by `_read_awake`
-    before the checksum and by `awake_elapsed`: loosened, it failed the same
-    5 shapes."""
+    Since sol r1 the range check (`0 <= s <= now + tolerance`) is false for
+    NaN and both infinities, so a `math.isfinite` break PASSES: it is a
+    redundant, explicit check.
+    Red proof (sol r6, the stamp back in the lease): `state.is_stamp`
+    loosened failed the same 5 shapes."""
     c = Clocks()
     lock.acquire(c.ctx(ctx.paths, "run-holder"), 8, "s", 1)
     _put_stamp(ctx.paths, 8, bad)
@@ -463,23 +452,19 @@ def test_a_dead_holders_lease_with_a_future_stamp_is_still_recovered(ctx, stamp)
     assert lock.steal_for_recovery(rec, lock.for_issue(rec, 8)).recovering_by == "run-rec"
 
 
-@pytest.mark.parametrize("stamp,signed", [(-1e20, True), (-1.0, True), (1.0, False)])
-def test_a_fresh_lease_with_an_early_stamp_is_not_recovered(ctx, stamp, signed):
-    """A negative stamp, or a hand-edited early one, would make a just-beaten
-    lease look stale and let recovery take a live run's worktree. It is judged
-    on the wall clock instead: live.
-    Since sol r2 the wall age no longer caps the awake age (a backward wall
-    step would defeat a real stamp). A negative stamp is refused by `0 <= s`;
-    an early positive one (1.0) can only come from an edit, and the sidecar's
-    checksum refuses it. A correctly signed early stamp is a real reading: it
-    is believed, by design.
-    Red proof (sol r2): `0 <= s` dropped from `awake_elapsed` failed the two
-    negative cases (stolen); the checksum test dropped from `lock._read_awake`
-    failed the 1.0 case (stolen)."""
+@pytest.mark.parametrize("stamp", [-1e20, -1.0])
+def test_a_fresh_lease_with_a_negative_stamp_is_not_recovered(ctx, stamp):
+    """A negative stamp would make a just-beaten lease look stale and let
+    recovery take a live run's worktree. It is no reading: the wall clock
+    judges, live. (The wall age does not cap the awake age, sol r2. An early
+    POSITIVE stamp is a real-looking reading; in the lease file it is exactly
+    as trusted as the heartbeat beside it, which an edit could move too.)
+    Red proof (sol r2, re-run for sol r6): `0 <= s` dropped from
+    `awake_elapsed` failed both cases (stolen)."""
     c = Clocks()
     c.up = 10 * 3600.0                             # the host has been up 10 h
     lock.acquire(c.ctx(ctx.paths, "run-live"), 8, "s", 1)
-    _put_stamp(ctx.paths, 8, ["boot-1", stamp], signed=signed)
+    _put_stamp(ctx.paths, 8, ["boot-1", stamp])
     c.run(60)
     rec = c.ctx(ctx.paths, "run-rec")
     with pytest.raises(lock.LockHeld) as e:
@@ -523,65 +508,34 @@ def old_checksum(counts, claimed_at, grants=None):
     return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
 
-def test_an_older_executor_reads_what_this_one_writes(ctx):
-    """Coexistence and rollback: every lease file (claimed, beaten, stolen,
-    handed over) loads in the pre-TLS-122 reader, and budget.json passes its
-    checksum, because the awake stamps live in sidecars it never reads.
-    Red proof (sol r1): `_lease_dict` returning `asdict(lk)` (the stamp in the
-    lease) failed here with TypeError in `OldLock(**data)`; a new key in
-    `budget._checksum`'s payload failed the old checksum."""
+def test_an_older_executor_refuses_what_this_one_writes(ctx):
+    """WHY THE DRAIN IS MANDATORY (sol r6): the awake stamps sit in the lease
+    file and in budget.json, so the pre-TLS-122 executor cannot read them: its
+    `Lock(**data)` fails on `beat_awake`, and its checksum rejects a budget
+    with `claimed_awake`. Upgrade or roll back only with no live lease."""
     c = Clocks()
     holder = c.ctx(ctx.paths, "run-a")
     lock.acquire(holder, 8, "s", 1)
     budget.init(holder, claimed_at=holder.now())
-    budget.charge(holder, "subagents")
-    lock.beat(holder)
-    c.run(lock.STALE_SECONDS + 1)
-    rec = c.ctx(ctx.paths, "run-b")
-    lock.steal_for_recovery(rec, lock.for_issue(rec, 8))
-    seen = [old_read_lease(p) for p in ctx.paths.locks_dir.glob("issue-*.json")]   # old code's glob
-    assert [(o.issue, o.run_id, o.recovering_by) for o in seen] == [(8, "run-a", "run-b")]
-    lock.handover(rec, 8, started=1.0)
-    assert old_read_lease(ctx.paths.lease(8)).run_id == "run-b"
+    with pytest.raises(TypeError):
+        old_read_lease(ctx.paths.lease(8))
     b = json.loads((holder.run_dir / "budget.json").read_text(encoding="utf-8"))
-    assert b["checksum"] == old_checksum(b["counts"], b["claimed_at"], b.get("grants"))
+    assert b["checksum"] != old_checksum(b["counts"], b["claimed_at"], b.get("grants"))
 
 
-def test_a_beat_by_an_older_executor_ages_on_the_wall_clock(ctx):
-    """An older executor's beat rewrites the lease (new heartbeat), not the
-    sidecar: the lease is 15 min old on the wall clock, so live, not 35 min
-    on the awake clock since the sidecar's beat.
-    Red proof (sol r2, after the wall-age cap went): the heartbeat match
-    dropped from `lock._read_awake` failed here (stolen) and in
-    `test_a_sidecar_newer_than_the_lease_does_not_count`."""
+def test_a_lease_without_a_stamp_ages_on_the_wall_clock(ctx):
+    """A lease with no `beat_awake` (written before TLS-122, or by a host with
+    no awake clock) ages on the wall clock, as before: 15 min, live; 31, stale."""
     c = Clocks()
     lock.acquire(c.ctx(ctx.paths, "run-a"), 8, "s", 1)
-    c.run(20 * 60)
-    old = old_read_lease(ctx.paths.lease(8))
-    old.heartbeat = c.wall
-    ctx.paths.lease(8).write_text(json.dumps(asdict(old)), encoding="utf-8")
-    c.run(15 * 60)
+    data = json.loads(ctx.paths.lease(8).read_text(encoding="utf-8"))
+    del data["beat_awake"]
+    ctx.paths.lease(8).write_text(json.dumps(data), encoding="utf-8")
+    c.suspend(15 * 60)
     rec = c.ctx(ctx.paths, "run-rec")
     with pytest.raises(lock.LockHeld):
         lock.steal_for_recovery(rec, lock.for_issue(rec, 8))
-
-
-def test_a_sidecar_newer_than_the_lease_does_not_count(ctx):
-    """The lease file is the authority. A sidecar written for a LATER heartbeat
-    than the lease now holds (an older executor wrote back a copy it read
-    before a newer beat) must not make the lease look fresh: it is 35 min old
-    on the wall clock since its own heartbeat, so stale.
-    Red proof (sol r1): the heartbeat match dropped from `lock._read_awake`
-    failed here (the sidecar's 15 min counted: `lock-live`)."""
-    c = Clocks()
-    holder = c.ctx(ctx.paths, "run-a")
-    lock.acquire(holder, 8, "s", 1)
-    copy = ctx.paths.lease(8).read_text(encoding="utf-8")   # read before the beat
-    c.run(20 * 60)
-    lock.beat(holder)
-    ctx.paths.lease(8).write_text(copy, encoding="utf-8")   # written back after it
-    c.run(15 * 60)
-    rec = c.ctx(ctx.paths, "run-rec")
+    c.suspend(16 * 60)
     assert lock.steal_for_recovery(rec, lock.for_issue(rec, 8)).recovering_by == "run-rec"
 
 
@@ -605,255 +559,68 @@ def test_beat_takes_the_registry_mutex(ctx, monkeypatch):
     assert taken == ["registry"]
 
 
-def test_release_takes_the_registry_mutex(ctx, monkeypatch):
-    """The interleaving: `release` unlinks its lease; a sibling claims the
-    same issue (new lease and stamp at the same paths); `release` then
-    unlinks "its" sidecar, which is now the sibling's. Under `registry` the
-    claim cannot land in between (here it times out), and the sibling's stamp
-    survives.
-    Red proof (sol r2): `with mutex(ctx, "registry"):` dropped from `release`
-    failed here (the claim landed in the window and its sidecar was deleted)."""
-    short = lambda c, name, timeout=30.0: real(c, name, timeout=0.3)   # noqa: E731
-    real = lock.mutex
-    monkeypatch.setattr(lock, "mutex", short)
+def test_the_claim_writes_heartbeat_and_stamp_in_one_lease_write(ctx):
+    """sol r6: every acknowledged lease carries its awake stamp, because the
+    stamp is IN the lease file. A run that suspends for 2 h right after its
+    claim (no beat yet) keeps its lease: `recover` refuses.
+    Red proof (sol r6): `_lease_dict` leaving `beat_awake` out of the lease
+    file failed here (the 2 h wall age read stale: the live lease was taken)."""
     c = Clocks()
     lock.acquire(c.ctx(ctx.paths, "run-a"), 8, "s", 1)
-    sib = c.ctx(ctx.paths, "run-b")
-    real_unlink = Path.unlink
-    claimed = []
-
-    def unlink(self, missing_ok=False):
-        real_unlink(self, missing_ok=missing_ok)
-        if self == ctx.paths.lease(8) and not claimed:
-            claimed.append(True)
-            try:
-                lock.acquire(sib, 8, "s", 1)          # the sibling's claim, in the window
-            except MutexTimeout:
-                pass
-
-    monkeypatch.setattr(Path, "unlink", unlink)
-    lock.release(c.ctx(ctx.paths, "run-a"))
-    monkeypatch.setattr(Path, "unlink", real_unlink)
-    assert claimed                                    # the window was reached
-    held = lock.for_issue(sib, 8)
-    assert held is None or held.beat_awake is not None   # no claim, or one that keeps its stamp
-
-
-def test_handover_survives_a_failed_sidecar_write(ctx, monkeypatch):
-    """The awake sidecar is optional: a failed write must not interrupt the
-    lease and merge-lane transfer in `handover` (nor a claim, beat or steal).
-    The handed-over lease names the recovering run, and so does the lane.
-    Red proof (sol r2): the `except OSError` dropped from `lock._write_awake`
-    failed here (OSError out of `handover`, the lane still the dead run's)."""
-    c = Clocks()
-    dead = c.ctx(ctx.paths, "run-dead")
-    lock.acquire(dead, 8, "s", 1)
-    lock.take_lane(dead, 8, pr=5)
-    c.run(lock.STALE_SECONDS + 1)
-    rec = c.ctx(ctx.paths, "run-rec")
-    lock.steal_for_recovery(rec, lock.for_issue(rec, 8))
-    real_write = lock.write_json
-
-    def failing(cx, path, data):
-        if "awake" in path.parts:
-            raise OSError("disk full")
-        real_write(cx, path, data)
-
-    monkeypatch.setattr(lock, "write_json", failing)
-    lock.handover(rec, 8, started=1.0)
-    assert lock.for_issue(rec, 8).run_id == "run-rec"
-    assert lock.lane_state(rec)[0]["run_id"] == "run-rec"
-
-
-@pytest.mark.parametrize("junk", ['{"run_', "", "\xff\xfe"])
-def test_an_unreadable_sidecar_reads_as_absent(ctx, junk):
-    """A truncated or unparsable sidecar (lease or budget) is no stamp: status,
-    recover, beat and the deadline all still work, on the wall clock.
-    Red proof (sol r2): `read_optional` replaced by `read_json` in
-    `lock._read_awake` failed every case here (JSONDecodeError or
-    UnicodeDecodeError out of `all_locks`); in `budget._claimed_awake`, the
-    budget half failed."""
-    c = Clocks()
-    holder = c.ctx(ctx.paths, "run-a")
-    lock.acquire(holder, 8, "s", 1)
-    budget.init(holder, claimed_at=holder.now())
-    (ctx.paths.locks_dir / "awake" / "issue-8.json").write_bytes(junk.encode("latin-1"))
-    (holder.run_dir / "budget-awake.json").write_bytes(junk.encode("latin-1"))
-    assert lock.for_issue(holder, 8).beat_awake is None
-    assert budget.snapshot(holder)["elapsed_clock"] == "wall"
-    budget.check_deadline(holder)
-    lock.beat(holder)
-    c.suspend(lock.STALE_SECONDS + 1)
-    (ctx.paths.locks_dir / "awake" / "issue-8.json").write_bytes(junk.encode("latin-1"))
-    rec = c.ctx(ctx.paths, "run-rec")
-    assert lock.steal_for_recovery(rec, lock.for_issue(rec, 8)).recovering_by == "run-rec"
-
-
-def test_a_deeply_nested_sidecar_reads_as_absent(ctx):
-    """JSON nested deeper than the parser allows (RecursionError) in a lease or
-    budget sidecar is no stamp: listing leases, a beat, the deadline and a
-    recover still work, on the wall clock (sol r3).
-    Red proof (sol r3): `RecursionError` dropped from `state.read_optional`
-    failed here (RecursionError out of `all_locks`).
-    The shape check before each checksum (`is_stamp`) is defensive: on Python
-    3.14 the encoder handled every depth the parser accepted (measured to
-    56,000; the parser stops near 58,000), so no parsed value reaches the
-    checksum's recursion, and dropping that check here stays green."""
-    deep = "[" * 100_000 + "]" * 100_000
-    c = Clocks()
-    holder = c.ctx(ctx.paths, "run-a")
-    lock.acquire(holder, 8, "s", 1)
-    budget.init(holder, claimed_at=holder.now())
-    side = ctx.paths.locks_dir / "awake" / "issue-8.json"
-    side.write_text(deep, encoding="utf-8")
-    (holder.run_dir / "budget-awake.json").write_text(deep, encoding="utf-8")
-    assert lock.for_issue(holder, 8).beat_awake is None
-    budget.check_deadline(holder)
-    lock.beat(holder)
-    c.suspend(lock.STALE_SECONDS + 1)
-    side.write_text(deep, encoding="utf-8")
-    rec = c.ctx(ctx.paths, "run-rec")
-    assert lock.steal_for_recovery(rec, lock.for_issue(rec, 8)).recovering_by == "run-rec"
-
-
-def _race_after_suspend(ctx, monkeypatch):
-    """The race (sol r3): after a 2 h suspend, an unlocked reader loads the
-    pre-suspend lease; the holder beats (new lease, then new sidecar); the
-    reader then loads the NEW sidecar. The pair does not match, and the old
-    lease's wall heartbeat (2 h) would read the live run as stale. Returns
-    (clocks, armed): `armed` is empty once the beat has landed in the window."""
-    c = Clocks()
-    holder = c.ctx(ctx.paths, "run-a")
-    lock.acquire(holder, 8, "s", 1)
-    lock.take_lane(holder, 8, pr=5)
-    c.run(60)
-    c.suspend(2 * 3600)
-    real = lock.read_optional
-    armed = [True]
-
-    def beat_first(path):
-        if armed and "awake" in path.parts:
-            armed.pop()
-            lock.beat(holder)                    # lands between the reader's two reads
-        return real(path)
-
-    monkeypatch.setattr(lock, "read_optional", beat_first)
-    return c, armed
-
-
-def test_a_beat_in_the_read_window_still_reports_the_lease_live(ctx, monkeypatch):
-    """REPORTING (`status`/`preflight` lease rows) sees the live run: unlocked,
-    `_entries` reads the lease again on a mismatch and gets the beat's pair.
-    (Since sol r4, `clear-halt` itself decides under `registry`, where no beat
-    is half-written: see the pause tests in test_cli_flow.)
-    Red proof (sol r3, re-run for r4 on the rows): the lease re-read dropped
-    from `lock._entries` failed here (the row read stale)."""
-    from agentflow import cli
-    c, armed = _race_after_suspend(ctx, monkeypatch)
-    op = Ctx(paths=ctx.paths, run_id=None, now=lambda: c.wall, awake=lambda: (c.boot, c.up))
-    assert [r["stale"] for r in cli._lease_rows(op)] == [False]
-    assert not armed                             # the beat did land in the window
-
-
-def test_a_beat_in_the_read_window_keeps_the_merge_lane_busy(ctx, monkeypatch):
-    """The unlocked `lane_state` (reporting: `merge-gate`, `status`, and
-    cleanup's early refusal) reads the lane `busy`, not `orphaned`. (Since sol
-    r4 cleanup's delete decides again under `registry`: see test_cli_flow.)
-    Red proof (sol r3): the lease re-read dropped from `lock._entries` failed
-    here (the lane read `orphaned`)."""
-    c, armed = _race_after_suspend(ctx, monkeypatch)
-    assert lock.lane_state(c.ctx(ctx.paths, "run-x"))[1] == "busy"
-    assert not armed
-
-
-def _between_the_reads(ctx, monkeypatch, act):
-    """Run `act()` once, between an unlocked reader's lease read and its
-    sidecar read (where the re-read happens), with a mismatched pair."""
-    real = lock.read_optional
-    armed = [True]
-
-    def hook(path):
-        if armed and "awake" in path.parts:
-            armed.pop()
-            act()
-        return real(path)
-
-    monkeypatch.setattr(lock, "read_optional", hook)
-    return armed
-
-
-def test_a_lease_that_vanishes_between_the_reads_is_left_out(ctx, monkeypatch):
-    """Unlocked, a lease released between the reader's two reads has no
-    coherent snapshot: it is left out, never kept as its first read (sol r4).
-    Red proof (sol r4): `continue` replaced by keeping the first read failed
-    here (the released lease was listed)."""
-    lock.acquire(ctx, 8, "s", 1)                   # no awake clock: no sidecar, a mismatch
-    armed = _between_the_reads(ctx, monkeypatch, lambda: lock.release(ctx))
-    assert lock.all_locks(ctx) == []
-    assert not armed
-
-
-def test_a_lease_replaced_between_the_reads_is_read_anew(ctx, monkeypatch):
-    """Unlocked, a lease replaced between the reads by ANOTHER run with the
-    SAME wall heartbeat is the other run's now: the reader reports that run,
-    not the first read (sol r4: the heartbeat alone missed it).
-    Red proof (sol r4): the re-read compared on the heartbeat alone failed
-    here (the released run was still listed)."""
-    lock.acquire(ctx, 8, "s", 1)
-    other = Ctx(paths=ctx.paths, run_id="run-other", now=ctx.now)   # same `now`: same heartbeat
-
-    def replace():
-        lock.release(ctx)
-        lock.acquire(other, 8, "s", 1)
-
-    armed = _between_the_reads(ctx, monkeypatch, replace)
-    assert [lk.run_id for lk in lock.all_locks(ctx)] == ["run-other"]
-    assert not armed
-
-
-def test_a_failed_sidecar_write_then_a_suspend_does_not_lose_a_live_run(ctx, monkeypatch):
-    """sol r5: the sidecar write is best-effort, so a LIVE run's beat can move
-    its lease and leave the sidecar at an earlier beat. Then the host sleeps
-    2 h (one awake clock throughout). `recover` must not take the lease: the
-    earlier beat's stamp (`prior_awake`) still gives an awake age (2 min).
-    After 30 awake minutes with no beat it is truly stale, and is taken.
-    Red proof (sol r5): the `prior_awake` branch dropped from `lock.is_stale`
-    failed here (the first steal took the live run's lease on the 2 h wall
-    age)."""
-    c = Clocks()
-    holder = c.ctx(ctx.paths, "run-a")
-    lock.acquire(holder, 8, "s", 1)
-    c.run(60)
-    real = lock.write_json
-
-    def failing(cx, path, data):
-        if "awake" in path.parts:
-            raise OSError("disk full")
-        real(cx, path, data)
-
-    monkeypatch.setattr(lock, "write_json", failing)
-    lock.beat(holder)                              # the lease moves; the sidecar stays at the claim
-    monkeypatch.setattr(lock, "write_json", real)
-    c.run(60)
+    assert json.loads(ctx.paths.lease(8).read_text(encoding="utf-8"))["beat_awake"] == ["boot-1", 500.0]
     c.suspend(2 * 3600)
     rec = c.ctx(ctx.paths, "run-rec")
     with pytest.raises(lock.LockHeld) as e:
         lock.steal_for_recovery(rec, lock.for_issue(rec, 8))
     assert e.value.code == "lock-live:run-a"
+
+
+def test_a_failed_beat_write_leaves_the_last_lease_whole(ctx, monkeypatch):
+    """A beat whose lease write fails raises (nothing is acknowledged) and
+    leaves the previous lease file whole: the last heartbeat with ITS stamp
+    (the write is a temp file, then `os.replace`). A suspend after it does
+    not let `recover` take the live run; 30 awake minutes without a beat do.
+    No separate guard: this is `write_json`'s atomicity, pinned in test_state."""
+    c = Clocks()
+    holder = c.ctx(ctx.paths, "run-a")
+    lock.acquire(holder, 8, "s", 1)
+    c.run(60)
+
+    def failing(cx, path, data):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(lock, "write_json", failing)
+    with pytest.raises(OSError):
+        lock.beat(holder)
+    monkeypatch.undo()
+    assert lock.for_issue(holder, 8).beat_awake == ["boot-1", 500.0]
+    c.suspend(2 * 3600)
+    rec = c.ctx(ctx.paths, "run-rec")
+    with pytest.raises(lock.LockHeld):
+        lock.steal_for_recovery(rec, lock.for_issue(rec, 8))
     c.run(lock.STALE_SECONDS)
     assert lock.steal_for_recovery(rec, lock.for_issue(rec, 8)).recovering_by == "run-rec"
 
 
-def test_a_backward_wall_step_does_not_save_a_dead_lease(ctx):
-    """35 min awake with no beat, while the wall clock stepped back 10 min
-    (25 min of wall age): the lease is stale on the awake clock, and recovered.
-    Red proof (sol r2): the `age <= wall_elapsed` cap restored in
-    `awake_elapsed` failed here (`lock-live`)."""
+def test_a_backward_wall_step_changes_neither_verdict(ctx):
+    """A backward wall step neither saves a dead lease nor loses a live one:
+    both are judged on the awake stamp in the lease (sol r6).
+    - live: beaten 5 awake minutes ago, wall stepped back 1 h: live.
+    - dead: 35 min awake with no beat, wall stepped back 10 min (25 min of
+      wall age): stale, and recovered.
+    Red proof (sol r2, re-run for sol r6): the `age <= wall_elapsed` cap
+    restored in `awake_elapsed` failed the dead case (`lock-live`)."""
     c = Clocks()
-    lock.acquire(c.ctx(ctx.paths, "run-dead"), 8, "s", 1)
+    holder = c.ctx(ctx.paths, "run-a")
+    lock.acquire(holder, 8, "s", 1)
+    c.run(5 * 60)
+    c.wall -= 3600
+    rec = c.ctx(ctx.paths, "run-rec")
+    with pytest.raises(lock.LockHeld):
+        lock.steal_for_recovery(rec, lock.for_issue(rec, 8))
+    lock.beat(holder)
     c.run(35 * 60)
     c.wall -= 10 * 60
-    rec = c.ctx(ctx.paths, "run-rec")
     assert lock.steal_for_recovery(rec, lock.for_issue(rec, 8)).recovering_by == "run-rec"
 
 

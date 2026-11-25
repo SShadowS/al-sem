@@ -209,8 +209,8 @@ was recorded outside the budget.
 Labels are a mirror for humans, not a lock. The lock is local:
 
 - **One lease per issue.** `.agent/locks/issue-<N>.json` in the main checkout:
-  `{issue, run_id, session, started, heartbeat, attempt, recovering_by}` (its
-  awake-clock stamp is a sidecar: see Stale).
+  `{issue, run_id, session, started, heartbeat, attempt, recovering_by,
+  beat_awake}` (`beat_awake`: the awake clock at `heartbeat`, see Stale).
   Taken at claim by create-exclusive on that file, so "one run per issue" holds
   by construction. Both `/orchestrate` and a standalone `/issue N` take it;
   `/issue N` refuses to run without it. Every lease write after the first is
@@ -278,21 +278,20 @@ Labels are a mirror for humans, not a lock. The lock is local:
 - **Deadline.** The executor computes elapsed time since claim on every call and
   refuses new phases past the 24-hour cap, so the time budget is enforced by
   code, not by the conductor remembering it. Since TLS-122 the elapsed time is
-  AWAKE time, so a host suspend (server1 is a laptop) is not counted: the
-  sidecar `budget-awake.json` records the awake clock at the claim
-  (`{claimed_at, awake, checksum}`). It counts only while its `claimed_at` is
-  `budget.json`'s and its checksum matches; otherwise the run counts wall time.
+  AWAKE time, so a host suspend (server1 is a laptop) is not counted:
+  `budget.json` records the awake clock at the claim (`claimed_awake`), under
+  its checksum, in the same write as `claimed_at`.
 - **Stale** means no heartbeat for 30 minutes of AWAKE time (TLS-122). Each
-  heartbeat also writes the sidecar `locks/awake/issue-<N>.json`
-  (`{run_id, heartbeat, awake, checksum}`), written after the lease and counted
-  only while it names the lease's run and heartbeat and its checksum matches.
-  Sidecars are optional metadata: a failed write never fails the lease or
-  merge-lane change around it, and an unreadable one (truncated, unparsable,
-  nested too deep) reads as absent (wall clock), so neither can break
-  `status`, `recover` or a heartbeat.
+  heartbeat writes the awake clock reading (`beat_awake`) INTO the lease, so
+  one atomic write (a temp file, then `os.replace`; the claim's
+  create-exclusive write) publishes the heartbeat and its stamp together: no
+  lease is ever acknowledged without the stamp it was beaten with, and a
+  failed write leaves the previous lease whole (sol r6). An earlier design kept
+  the stamp in a sidecar file; two files could disagree after one failed or
+  interrupted write, and every repair of that left a gap (sol r2-r6).
   - **Commands that ACT on liveness decide under mutex `registry`** (sol r4).
-    Every lease writer holds it too, so each lease/sidecar pair read under it
-    is complete. These commands are:
+    Every lease writer holds it too (`beat` included), so nothing changes a
+    lease between their check and their action. These commands are:
     - `clear-halt` and `resolve incident`: the live-run guard, held through
       the HALT unlink and the incident write;
     - verification `cleanup`: it re-checks the lane under it and, still under
@@ -301,46 +300,34 @@ Labels are a mirror for humans, not a lock. The lock is local:
       slow delete and `git worktree prune` run after `registry` is released,
       so no beat waits on them (sol r5);
     - `recover`'s steal and `take_lane`.
-  - **A sidecar OLDER than its lease** (same run) is a beat whose sidecar
-    write did not happen: it died, was paused, or the best-effort write failed.
-    Its stamp (`prior_awake`) still gives an awake age, bounded by the wall
-    age since the lease's heartbeat. Both overstate the true age, and the
-    first leaves a suspend out, so a live run is not recovered after a resume
-    and a dead one still goes stale (sol r5). Under the lock, `clear-halt`,
-    `resolve incident`, `cleanup` and `take_lane` count such a lease as live
-    (`beat_pending`); `recover` judges it on `prior_awake`, so it stays
-    recoverable. A periodic beat that times out on `registry` is skipped, not
-    fatal.
-  - **Reporting reads unlocked** (`status`, `preflight`, `merge-gate`). There
-    a beat can land between the lease read and the sidecar read. On a mismatch
-    the reader reads the lease once more: a lease that is gone is left out, and
-    one replaced by another run is reported as that run. This is best-effort
-    (sol r3, r4): a beat suspended between its own two writes still reads as a
-    mismatch, which is why nothing acts on this read.
+
+    Reporting (`status`, `preflight`, `merge-gate`) reads unlocked. A periodic
+    beat that times out on `registry` is skipped, not fatal.
   - **The awake clock** is `[clock id, CLOCK_MONOTONIC]`. CLOCK_MONOTONIC stops
     while the host sleeps. The clock id is the boot id plus the process's time
     namespace offset for CLOCK_MONOTONIC (`/proc/self/timens_offsets`; 0 without
     one), so readings are compared only within one boot and one offset.
   - **The wall clock judges instead** when there is no usable reading. That is:
     another clock id; a malformed reading (not `[str, number]`, not finite,
-    negative, or more than 60 s ahead of the reader's clock); a sidecar that
-    fails its match or checksum (a hand-edited early stamp); or no awake clock
-    at all (not Linux). The wall age is never an upper bound on the awake age:
-    a backward wall step must not shorten a real one.
+    negative, or more than 60 s ahead of the reader's clock); a lease written
+    before TLS-122; or no awake clock at all (not Linux). The wall age is never
+    an upper bound on the awake age: a backward wall step must not shorten a
+    real one. The stamp is exactly as trusted as the heartbeat in the same
+    file.
   - **Clock-sharing limit:** processes that share one `.agent/` must share the
     host. On another host the clock ids differ and the wall clock judges, which
     is the rule before TLS-122.
-  - **Rollout: drain first.** The FILES are compatible both ways: the lease
-    file and `budget.json` keep the pre-TLS-122 schema and checksum, so an older
-    executor reads them unchanged and ignores the sidecars. Safe OPERATION is
-    not: an older executor's `recover` judges every lease on the wall clock and
-    can take a live newer run's lease after a suspend, and its `beat` does not
-    take `registry`. So upgrade or roll back only with no live lease (`status`
-    lists none, or only stale ones): let every run finish or be recovered first.
-  - **`beat` and `release` take mutex `registry`** (TLS-122). A beat cannot
-    write an old copy of the lease back over `recover`'s steal, and is never
-    seen half-written by a locked reader. A release cannot delete a newer
-    claim's sidecar at the same path.
+  - **Rollout: a drain is MANDATORY.** An executor from before TLS-122 cannot
+    share `.agent/` with this one. It builds `Lock(**data)` and fails on
+    `beat_awake`, and its checksum rejects a `budget.json` with
+    `claimed_awake`. Even on its own files it is unsafe beside a newer run: its
+    `recover` judges every lease on the wall clock (it can take a live run's
+    lease after a suspend), and its `beat` does not take `registry`. So upgrade
+    or roll back only with no live lease (`status` lists none, or only stale
+    ones): let every run finish, or recover it, first. A lease or budget left
+    from before TLS-122 still loads here and is timed on the wall clock.
+  - **`beat` takes mutex `registry`** (TLS-122), so it cannot write an old
+    copy of the lease back over `recover`'s steal.
 
   There is no PID check: the
   conductor is a chat session, not a supervisable process, and a 30-minute silence

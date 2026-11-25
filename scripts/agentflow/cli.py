@@ -1916,11 +1916,11 @@ def cmd_cleanup(args, ctx, gh, git):
                                  "checkout's parent directory",
                         "worktree": str(target),
                         "expected_parent": str(ctx.paths.root.parent.resolve())})
-        # The DECISION, under mutex `registry` (sol r4): the unlocked check above
-        # can read a live lane holder as stale, and between a check and the
-        # delete a new run could take the lane. Under `registry` the lease pairs
-        # are complete and the lane cannot change hands. Only the DETACH (one
-        # rename off the fixed path) happens under it; the slow delete and
+        # The DECISION, under mutex `registry` (sol r4): between the unlocked
+        # check above and the delete, the lane holder could beat or a new run
+        # take the lane. Under `registry` neither can happen until the tree is
+        # off its fixed path. Only the DETACH (one rename) happens under it; the
+        # slow delete and
         # `git worktree prune` run after it is released (sol r5), so no other
         # run's beat waits on a recursive delete.
         with mutex(ctx, "registry"):

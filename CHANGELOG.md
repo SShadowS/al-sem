@@ -940,105 +940,43 @@ server1 is a laptop that suspends when it is moved (TLS-104). agentflow measured
 its time rules on the wall clock, which keeps counting through a suspend.
 - **A live lease no longer looks stale after a suspend.** A lease was stale after 30 min of
   wall time without a heartbeat, so after a long suspend another session's `recover` could
-  take a run's lease before the run's next `beat`. Each heartbeat now also records the host's
-  awake clock (`CLOCK_MONOTONIC`, which stops while the host sleeps, with the boot id), and
-  `lock.is_stale` counts the 30 min on it. A lease from before this change, from before a
-  reboot (another boot id), or from a host with no awake clock (not Linux) ages on the wall
-  clock, as before. `is_stale` now takes the awake reading as a required argument, so no
-  caller can leave it out by accident.
-- **The 24 h run cap counts awake time.** The awake clock at the claim is recorded (since
-  sol r1 in the sidecar `budget-awake.json`, with its own checksum), and `check_deadline` and
-  `charge` measure the run on it, with the same fall back to wall time. `status`'s budget
-  shows `elapsed_s` and `elapsed_clock` (`awake` or `wall`).
+  take a run's lease before the run's next `beat`. Each heartbeat now writes the host's awake
+  clock reading (`beat_awake`: a clock id and CLOCK_MONOTONIC, which stops while the host
+  sleeps) INTO the lease, in the same atomic write as the heartbeat, and `lock.is_stale`
+  counts the 30 min on it. No lease is ever published without its stamp, and a failed write
+  leaves the previous lease whole. `is_stale` takes the awake reading as a required argument,
+  so no caller can leave it out.
+- **The 24 h run cap counts awake time.** `budget.json` records the awake clock at the claim
+  (`claimed_awake`, under its checksum), and `check_deadline` and `charge` measure the run on
+  it. `status`'s budget shows `elapsed_s` and `elapsed_clock` (`awake` or `wall`).
+- **When the wall clock still judges:** a lease or budget from before TLS-122; another boot
+  or time namespace (the clock id is the boot id plus CLOCK_MONOTONIC's offset from
+  `/proc/self/timens_offsets`); a reading that is malformed, not finite, negative, a huge
+  integer, or more than 60 s ahead of the reader's clock; or no awake clock at all (not
+  Linux). The wall age never caps a valid awake age, so a backward wall step changes neither
+  verdict. Clock-sharing limit: processes that share one `.agent/` share the host.
+- **Rollout needs a drain (mandatory).** The executor before TLS-122 fails on `beat_awake`
+  (`Lock(**data)`) and rejects a budget with `claimed_awake` (its checksum). Even on its own
+  files it is unsafe beside a newer run: its `recover` judges on the wall clock. Upgrade or
+  roll back only with no live lease. Older leases and budgets still load here.
+- **Decisions on liveness take mutex `registry`**, which every lease writer holds (`beat`
+  now too, which also closes an older race where a beat wrote its copy back over `recover`'s
+  steal):
+  - `clear-halt` keeps it from its live-run check through the HALT unlink.
+  - `resolve incident` keeps it through the incident write.
+  - Verification `cleanup` re-checks the lane under it and moves the tree aside (one rename to
+    `<name>.removing-<id>`). The recursive delete and `git worktree prune` run after the lock
+    is released, so a slow delete starves no beat. An orphaned lane is still `recover`'s.
+  - A periodic beat that times out on `registry` is skipped, not fatal.
 - **Why not "stale only when the holder process is dead":** a run is a series of short
   `agentflow` calls made by a conductor session, so between calls no process holds the lease,
-  and a session that stopped working must still lose its lease. A lease is only ever read on
-  the host whose checkout holds it (`.agent/` is untracked).
-- **Review r1 (Fable):** a lease file with a field this code does not know still loads (only
-  the known fields are read), and an awake stamp that is not `[boot id, number]` counts as no
-  stamp (wall clock) instead of crashing every lease listing. New tests pin the awake stamp
-  that `recover`'s steal and `handover` write, and the wall-clock fall back of a reader with no
-  awake clock. The orchestrator design spec now says both rules count awake time.
-- **Review r2 (Fable):** the stamp's seconds must be finite. JSON reads `NaN`, and a lease
-  stamped `NaN` was never stale.
-- **Review r1 (sol):**
-  - **The files stay readable by an older executor.** The awake stamps moved out of the
-    lease file and `budget.json` into sidecars: `locks/awake/issue-<N>.json` (it counts only
-    while it names the lease's run and heartbeat) and `budget-awake.json`. Both files keep
-    the pre-TLS-122 schema and checksum. The executor before TLS-122 builds `Lock(**data)`
-    and checks its own checksum, so it failed on the new key. Now it reads both unchanged.
-    A test runs master's readers on every file written. (Safe operation still needs a drain:
-    see review r2.)
-  - **An unusable stamp falls back to the wall clock.** That covers a stamp that is not
-    finite, is negative, or is more than 60 s ahead of the reader's clock (readers may sample
-    before they load), and a 400-digit integer (`OverflowError`). Before, a stamp of `1e20`
-    left a dead run's lease unrecoverable, and `-1e20` made a live lease recoverable.
-  - **The clock id includes the time-namespace offset of CLOCK_MONOTONIC**
-    (`/proc/self/timens_offsets`), so two namespaces on one boot are never compared. The
-    clock read moved inside the `try`, so a failed read means wall time, not a crash.
-  - **Clock-sharing limit:** processes sharing one `.agent/` share the host. A lease read on
-    another host, boot or namespace offset ages on the wall clock.
-  - **`beat` takes mutex `registry`.** Before, a beat that read the lease before `recover`'s
-    steal could write the old copy back over it. This race predates TLS-122.
-  - New tests pin each guard, and one reaches `host_awake`'s real clock choice: it fails
-    with CLOCK_BOOTTIME.
-- **Review r2 (sol):**
-  - **Rollout needs a drain.** The files are compatible both ways, but an older executor's
-    `recover` judges every lease on the wall clock and can take a live newer run's lease after
-    a suspend, and its `beat` does not take `registry`. Upgrade or roll back only with no live
-    lease: let every run finish or be recovered first.
-  - **Sidecars are optional metadata.** An unreadable or truncated sidecar (lease or budget)
-    reads as absent (wall clock) and can no longer break `status`, `recover` or a heartbeat.
-    A failed sidecar write no longer interrupts a claim, beat, steal or `handover`'s lease and
-    merge-lane transfer. The primary files are validated as strictly as before.
-  - **`release` takes mutex `registry`**, so a claim between its two unlinks cannot lose its
-    new sidecar.
-  - **The wall age no longer caps the awake age.** With the cap, a backward wall step defeated
-    a real stamp: 35 min awake with a 10 min step back read as 25 min, and 25 h awake with a 2 h
-    step back passed the 24 h cap. A hand-edited early stamp is caught instead by the lease
-    sidecar's new checksum, besides its run and heartbeat match and the "not ahead of the
-    reader" bound.
-  - **The clock tests run on any OS:** their fixture deletes the host's clock API and stubs it.
-- **Review r3 (sol):**
-  - **A lease and its sidecar are read as one pair.** After a resume, an unlocked reader
-    could load the pre-suspend lease, then the sidecar of a beat that landed in between. The
-    two did not match, so it fell back to the old lease's wall heartbeat and read a live run
-    as stale. `clear-halt`'s live-run guard and verification `cleanup`'s lane check would have
-    let it through. On a mismatch, `_entries` now reads the lease once more. (Review r4
-    showed that this is not enough to act on; it now serves reporting only.)
-  - **Deeply nested JSON in a sidecar reads as absent.** The parser's `RecursionError` is
-    caught for the optional files only. A stamp's shape is checked before its checksum, so
-    only a flat `[str, number]` is ever serialized for it.
-- **Review r4 (sol):**
-  - **The commands that act on liveness decide under mutex `registry`.** A beat can write its
-    lease, then the host can suspend before it writes the sidecar. An unlocked reader then sees
-    the same mismatch after any number of re-reads. Since every lease writer holds `registry`,
-    the decisions now take it too:
-    - `clear-halt` decides and unlinks under it, and `resolve incident` checks under it.
-    - Verification `cleanup` re-checks the lane under it, so no new lane owner can come in
-      between (since r5 only the decision and a rename happen under it).
-    - `recover`'s steal reads under it, as before.
-  - **A beat that did not finish its sidecar write reads as live for those commands.** Under
-    the lock, a sidecar older than its lease (same run) comes from such a beat. `clear-halt`,
-    `resolve incident`, `cleanup` and `take_lane` count it as live, never stale. `recover`
-    does not, so such a lease can still be recovered (on what basis: see r5).
-  - **The unlocked re-read is for reporting** (`status`, `preflight`, `merge-gate`). A lease
-    that is gone at the re-read is left out, and one replaced by another run with the same
-    heartbeat is reported as that run. The first read is no longer kept in either case.
-  - **A periodic beat that times out on `registry` is skipped, not fatal**, in the gate
-    supervisor and the gate queue.
-- **Review r5 (sol):**
-  - **A failed sidecar write no longer exposes a live run after a suspend.** The write is
-    best-effort, so a live run's beat can move its lease and leave the sidecar at an earlier
-    beat. `recover` then fell back to the lease's wall age, which a suspend inflates. Now the
-    earlier beat's stamp (`prior_awake`) gives the age, bounded by the wall age: both
-    overstate the true age, and the first leaves the suspend out. A dead run still goes stale.
-  - **`resolve incident` holds `registry` from its live-run check through the incident
-    write**, so a claim or recovery cannot start between them.
-  - **Verification `cleanup` holds `registry` only to decide and to move the tree aside** (one
-    rename to `<name>.removing-<id>`). The recursive delete and `git worktree prune` run after
-    it is released, so a slow delete starves no other run's beat. It does not release the
-    merge lane: an orphaned lane is `recover`'s to move on.
+  and a session that stopped working must still lose its lease.
+- **Review history (Fable r1-r2, sol r1-r6):** a lease file with an unknown field still
+  loads, and the clock tests run on any OS. One intermediate design kept the stamps in
+  sidecar files so that older executors could read the lease. Two files could disagree after
+  one failed or interrupted write, and every repair left a gap. sol r6 showed a failed FIRST
+  sidecar write followed by a suspend reopened the takeover. Since the drain is needed anyway,
+  the stamps went back inside the lease and `budget.json`.
 
 ### Fixed (ENG-178: table procedures named like record built-ins: four follow-ups from ENG-173)
 

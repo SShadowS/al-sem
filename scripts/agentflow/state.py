@@ -222,8 +222,9 @@ def awake_elapsed(then, now_awake, wall_elapsed: float) -> tuple[float, str]:
     a writer or reader with no awake clock: wall.
 
     The wall age is NOT an upper bound (sol r2): a backward wall step would
-    then shorten a valid awake age. A hand-edited (forged early) reading is
-    caught by its file's checksum, before it reaches here."""
+    then shorten a valid awake age. The reading sits in the same file as the
+    heartbeat it was taken with (the lease, budget.json), so it is exactly as
+    trustworthy as that heartbeat: a hand edit could move either."""
     try:
         if not (is_stamp(then) and now_awake and then[0] == now_awake[0]):
             return wall_elapsed, "wall"
@@ -237,29 +238,9 @@ def awake_elapsed(then, now_awake, wall_elapsed: float) -> tuple[float, str]:
 
 
 def is_stamp(r: Any) -> bool:
-    """The SHAPE of an awake reading, `[str, number]` (booleans refused). Checked
-    before a sidecar's checksum too, so nothing but a flat stamp is ever
-    serialized for it (sol r3: a deeply nested value must not recurse there)."""
+    """The SHAPE of an awake reading, `[str, number]` (booleans refused)."""
     return (isinstance(r, (list, tuple)) and len(r) == 2 and isinstance(r[0], str)
             and isinstance(r[1], (int, float)) and not isinstance(r[1], bool))
-
-
-def meta_sum(body: Any) -> str:
-    """A checksum for an awake sidecar's content. It catches a hand edit or a
-    stray write, not a determined caller (like budget.json's)."""
-    raw = json.dumps(body, sort_keys=True)
-    return hashlib.sha256(raw.encode()).hexdigest()[:16]
-
-
-def read_optional(path: Path) -> Any:
-    """`read_json` for optional metadata (the awake sidecars): an unreadable,
-    truncated or unparsable file reads as absent (None), so it can never break
-    `status`, `recover` or a heartbeat (sol r2). That includes JSON nested too
-    deep for the parser (`RecursionError`, sol r3). Primary files keep `read_json`."""
-    try:
-        return read_json(path)
-    except (OSError, ValueError, RecursionError):
-        return None
 
 
 def new_run_id(now: float) -> str:
