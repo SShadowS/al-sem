@@ -1,3 +1,4 @@
+import os
 import re
 import subprocess
 import sys
@@ -76,6 +77,30 @@ def test_changed_and_dirty_paths_keep_cr_and_lf(repo_pair):
     assert g.changed_files(a, b) == ["a\nb.txt", "scripts/x\r"]
     (clone / "scripts/x\r").write_text("changed\n")
     assert g.tree_state().semantic_paths == ["scripts/x\r"]
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"),
+                    reason="Windows forbids `\"`; macOS refuses a non-UTF-8 name")
+def test_a_quote_and_a_non_utf8_byte_round_trip(repo_pair):
+    """TLS-114 (sol r1): a name holding a `"` and one holding the byte 0xFF
+    (not UTF-8; `é` is) are listed exactly and each gets its own patch, so
+    the `#[ignore]` in each is charged to it.
+
+    DISCRIMINATION (2026-11-25): `paths` decoding as UTF-8 with `replace`
+    fails (`src/\\ufffd.rs`, not the file's name); `changed_files` without
+    `-z` fails (both names come back quoted); restored, passes."""
+    from agentflow.protect import forbidden_additions
+
+    _, clone = repo_pair
+    g = Git(clone)
+    a = g.rev("HEAD")
+    quote, ff = 'src/q"x.rs', os.fsdecode(b"src/\xff.rs")
+    commit_file(clone, quote, "#[ignore]\n", "quote")
+    b = commit_file(clone, ff, "#[ignore]\n", "ff")
+    files = g.changed_files(a, b)
+    assert files == [quote, ff]
+    got = sorted(f for f, _, _ in forbidden_additions(g.file_diffs(a, b, files)))
+    assert got == [quote, ff]
 
 
 def test_check_diff_from_a_subfolder_ignores_diff_relative(repo_pair):
