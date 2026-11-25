@@ -1386,17 +1386,48 @@ fn cdo_slot_a_take_that_finishes_mid_read_is_named() {
 /// The reader probes the hold lock once more and reads the slot as free: a
 /// `status` says "free", and an `acquire` without --wait takes it, instead of
 /// "held by an unknown holder" with an empty holder list. The HELD hook holds
-/// each reader in that window while the test releases.
+/// each reader in that window while the test releases. A third case keeps the
+/// publish lock taken (shared, as a take attempt would) during the release: the
+/// reader must still read free, not "still writing" (review r2, Fable).
 ///
 /// Mutation (2026-11-24): the hold-lock re-probe in `state` dropped -> "a
 /// released hold read as: held by an unknown holder (no status names it)"
 /// (red); restored, green.
+/// Mutation (2026-11-24, review r2): the first publish probe's hold-lock
+/// re-probe dropped (`writing=1` at once) -> "a released hold read as: held
+/// (its holder is still writing its status)" (red); restored, green.
 #[test]
 fn cdo_slot_a_release_during_a_read_reads_free() {
     let s = Slot::new();
     let held = [("CDO_SLOT_TEST_PAUSE_HELD_S", "60")];
-    for args in [&["status"][..], &["acquire", "lane", "next"][..]] {
+    for (args, publish_taken) in [
+        (&["status"][..], false),
+        (&["acquire", "lane", "next"][..], false),
+        (&["status"][..], true),
+    ] {
         assert_eq!(s.run("A", &["acquire", "lane", "first"], &[]).0, Some(0));
+        let _publish = publish_taken.then(|| {
+            Reap(
+                std::process::Command::new("flock")
+                    .arg("-s")
+                    .arg(s.dir().join("publish.lock"))
+                    .args(["sleep", "600"])
+                    .spawn()
+                    .unwrap(),
+            )
+        });
+        if publish_taken {
+            until("the publish lock is taken", &|| {
+                std::process::Command::new("flock")
+                    .args(["-x", "-n"])
+                    .arg(s.dir().join("publish.lock"))
+                    .arg("true")
+                    .status()
+                    .unwrap()
+                    .code()
+                    == Some(1)
+            });
+        }
         let reader = s
             .cmd("B", args, &held)
             .stdout(std::process::Stdio::piped())

@@ -292,7 +292,9 @@ state() {
         # stranger's hold can read "still writing" while another reader's
         # exclusive probe of the publish lock is slow: display only.)
         if probe x "$publish_lock"; then
-            writing=1
+            # The hold may have been released since the first probe while
+            # something else has the publish lock (review r2, Fable).
+            if probe s "$lock"; then writing=1; else st=free; fi
             return 0
         fi
         # Free: a take that finished since the read wrote its status before it

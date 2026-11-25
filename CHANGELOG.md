@@ -33,7 +33,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   free, and an `acquire` without --wait died with "not taken: held by an unknown
   holder". New test `cdo_slot_a_release_during_a_read_reads_free` (new test hook
   `CDO_SLOT_TEST_PAUSE_HELD_S`, after the hold lock is seen held): `status` says
-  "free" and `acquire` takes the slot. Discrimination proof in its doc.
+  "free" and `acquire` takes the slot. Discrimination proof in its doc. Review r2
+  (Fable): a held publish lock (a take attempt, or another reader's slow probe)
+  no longer makes such a read say "still writing". The reader probes the hold lock
+  again before it trusts the publish lock. The same test covers it with a third
+  case that keeps the publish lock taken during the release, with its own proof.
 - A new bounded refusal, like the timing lock's: a process that keeps
   `publish.lock` exclusive (only a reader's probe takes it so, for an instant: a
   stopped or hung one) makes a take fail after `CDO_SLOT_LOCK_WAIT_S` (30 s), and
