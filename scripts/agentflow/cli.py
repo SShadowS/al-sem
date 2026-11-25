@@ -285,7 +285,7 @@ def _gate_slot(ctx: Ctx, name: str, halt_aborts: bool, stack: ExitStack) -> floa
                 lock.beat(ctx)
                 last_beat = time.monotonic()
             except MutexTimeout:
-                pass        # `registry` busy (e.g. a cleanup's delete): beat next round
+                pass        # `registry` busy past its timeout: beat next round (30 min slack)
         if halt_aborts:
             if lock.halted(ctx) is not None:
                 raise GateQueued(HALTED_WHILE_QUEUED, waited)
@@ -1916,18 +1916,24 @@ def cmd_cleanup(args, ctx, gh, git):
                                  "checkout's parent directory",
                         "worktree": str(target),
                         "expected_parent": str(ctx.paths.root.parent.resolve())})
-        # The DECISION, under mutex `registry` and held through the delete (sol
-        # r4): the unlocked check above can read a live lane holder as stale
-        # (a beat half-written across a suspend), and between a check and the
+        # The DECISION, under mutex `registry` (sol r4): the unlocked check above
+        # can read a live lane holder as stale, and between a check and the
         # delete a new run could take the lane. Under `registry` the lease pairs
-        # are complete and the lane cannot change hands.
+        # are complete and the lane cannot change hands. Only the DETACH (one
+        # rename off the fixed path) happens under it; the slow delete and
+        # `git worktree prune` run after it is released (sol r5), so no other
+        # run's beat waits on a recursive delete.
         with mutex(ctx, "registry"):
             lane, state = lock.lane_state_locked(ctx)
             if state == "busy":
                 raise lock.FenceError(f"merge lane is held by live run {lane['run_id']}, "
                                       f"context is {ctx.run_id}")
-            if not worktrees.destroy(git, target):
-                raise Fail({"error": f"could not remove {args.worktree}"})
+            try:
+                tomb = worktrees.detach(target)
+            except OSError as e:
+                raise Fail({"error": f"could not move {args.worktree} aside: {e}"})
+        if tomb is not None and not worktrees.destroy(git, tomb):
+            raise Fail({"error": f"could not remove {tomb} (moved aside from {args.worktree})"})
         return _emit({"removed": args.worktree})
     # `is None` -- ABSENT, not empty. `--branch ""` was given and is wrong,
     # and `_validate_branch_name` below is the guard that says so ("not a

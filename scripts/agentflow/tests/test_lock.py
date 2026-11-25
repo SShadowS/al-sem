@@ -811,6 +811,39 @@ def test_a_lease_replaced_between_the_reads_is_read_anew(ctx, monkeypatch):
     assert not armed
 
 
+def test_a_failed_sidecar_write_then_a_suspend_does_not_lose_a_live_run(ctx, monkeypatch):
+    """sol r5: the sidecar write is best-effort, so a LIVE run's beat can move
+    its lease and leave the sidecar at an earlier beat. Then the host sleeps
+    2 h (one awake clock throughout). `recover` must not take the lease: the
+    earlier beat's stamp (`prior_awake`) still gives an awake age (2 min).
+    After 30 awake minutes with no beat it is truly stale, and is taken.
+    Red proof (sol r5): the `prior_awake` branch dropped from `lock.is_stale`
+    failed here (the first steal took the live run's lease on the 2 h wall
+    age)."""
+    c = Clocks()
+    holder = c.ctx(ctx.paths, "run-a")
+    lock.acquire(holder, 8, "s", 1)
+    c.run(60)
+    real = lock.write_json
+
+    def failing(cx, path, data):
+        if "awake" in path.parts:
+            raise OSError("disk full")
+        real(cx, path, data)
+
+    monkeypatch.setattr(lock, "write_json", failing)
+    lock.beat(holder)                              # the lease moves; the sidecar stays at the claim
+    monkeypatch.setattr(lock, "write_json", real)
+    c.run(60)
+    c.suspend(2 * 3600)
+    rec = c.ctx(ctx.paths, "run-rec")
+    with pytest.raises(lock.LockHeld) as e:
+        lock.steal_for_recovery(rec, lock.for_issue(rec, 8))
+    assert e.value.code == "lock-live:run-a"
+    c.run(lock.STALE_SECONDS)
+    assert lock.steal_for_recovery(rec, lock.for_issue(rec, 8)).recovering_by == "run-rec"
+
+
 def test_a_backward_wall_step_does_not_save_a_dead_lease(ctx):
     """35 min awake with no beat, while the wall clock stepped back 10 min
     (25 min of wall age): the lease is stale on the awake clock, and recovered.

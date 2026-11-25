@@ -174,6 +174,24 @@ def create(git: Git, path: Path, commit: str) -> Path:
     return path
 
 
+def detach(path: Path) -> Path | None:
+    """Move a verification worktree off its fixed path, to a sibling named
+    `<name>.removing-<id>` (still under VERIFY_PREFIX, so `destroy` takes it),
+    and return where it went; None when there is nothing at `path`. One
+    rename: fast, so a caller can do it under mutex `registry` and run the slow
+    `destroy` after releasing it (TLS-122 sol r5). The fixed path is free at
+    once, so a new verification can start there; `git worktree prune` in
+    `destroy` drops the registration of the old path. OSError when the
+    rename fails (e.g. Windows holds a file open)."""
+    _guard(path)
+    tomb = path.with_name(f"{path.name}.removing-{os.urandom(4).hex()}")
+    try:
+        path.rename(tomb)
+    except FileNotFoundError:
+        return None
+    return tomb
+
+
 def destroy(git: Git, path: Path) -> bool:
     """Delete the worktree directory and prune the stale registration. Returns
     whether the directory is gone.

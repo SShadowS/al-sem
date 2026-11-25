@@ -292,15 +292,25 @@ Labels are a mirror for humans, not a lock. The lock is local:
   `status`, `recover` or a heartbeat.
   - **Commands that ACT on liveness decide under mutex `registry`** (sol r4).
     Every lease writer holds it too, so each lease/sidecar pair read under it
-    is complete. These commands are `clear-halt` and `resolve incident` (the
-    live-run guard; `clear-halt` holds it through the unlink), verification
-    `cleanup` (it re-checks the lane under it and holds it through the delete,
-    so no new lane owner can come in between), `recover`'s steal and
-    `take_lane`. Under the lock, a sidecar OLDER than its lease (same run) is a
-    beat that died between its writes: `clear-halt`, `resolve incident`,
-    `cleanup` and `take_lane` count that lease as live, never stale. `recover`
-    does not, or such a lease could never be taken. A periodic beat that times
-    out on `registry` (a cleanup's delete) is skipped, not fatal.
+    is complete. These commands are:
+    - `clear-halt` and `resolve incident`: the live-run guard, held through
+      the HALT unlink and the incident write;
+    - verification `cleanup`: it re-checks the lane under it and, still under
+      it, moves the tree off its fixed path (one rename to
+      `<name>.removing-<id>`), so no new lane owner can come in between; the
+      slow delete and `git worktree prune` run after `registry` is released,
+      so no beat waits on them (sol r5);
+    - `recover`'s steal and `take_lane`.
+  - **A sidecar OLDER than its lease** (same run) is a beat whose sidecar
+    write did not happen: it died, was paused, or the best-effort write failed.
+    Its stamp (`prior_awake`) still gives an awake age, bounded by the wall
+    age since the lease's heartbeat. Both overstate the true age, and the
+    first leaves a suspend out, so a live run is not recovered after a resume
+    and a dead one still goes stale (sol r5). Under the lock, `clear-halt`,
+    `resolve incident`, `cleanup` and `take_lane` count such a lease as live
+    (`beat_pending`); `recover` judges it on `prior_awake`, so it stays
+    recoverable. A periodic beat that times out on `registry` is skipped, not
+    fatal.
   - **Reporting reads unlocked** (`status`, `preflight`, `merge-gate`). There
     a beat can land between the lease read and the sidecar read. On a mismatch
     the reader reads the lease once more: a lease that is gone is left out, and

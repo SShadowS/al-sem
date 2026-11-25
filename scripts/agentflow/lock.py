@@ -94,20 +94,30 @@ class Lock:
     # executor before TLS-122 builds `Lock(**data)` and fails on any key it does
     # not know. Old and new executors can share one `.agent/` this way.
     beat_awake: list | None = None
-    # IN MEMORY ONLY, set only on a read under mutex `registry` (sol r4): the
-    # sidecar names this run with an OLDER heartbeat than the lease. A beat
-    # writes both under `registry`, so seen under it this is a beat that died
-    # between its two writes: the deciding commands treat the lease as live.
+    # IN MEMORY ONLY (sol r5): the awake stamp of an EARLIER beat of this run,
+    # when the sidecar names this run with an older heartbeat than the lease:
+    # its sidecar write failed (it is best-effort) or never happened (the
+    # beat died, or was paused, between its two writes). An age measured from
+    # it overstates the true one by at most the time since that beat, so a
+    # suspend still does not count; `is_stale` bounds it by the wall age too.
+    prior_awake: list | None = None
+    # IN MEMORY ONLY, set only on a read under mutex `registry` (sol r4): a
+    # `prior_awake` was found. The deciding commands (`clear-halt`, `resolve
+    # incident`, `cleanup`, `take_lane`) treat that lease as live; `recover`
+    # judges it on `prior_awake` instead (sol r5: it may be a live run whose
+    # sidecar write failed, and a dead one must stay recoverable).
     beat_pending: bool = False
 
 
-_LOCK_FIELDS = {f.name for f in fields(Lock)} - {"beat_awake", "beat_pending"}
+_MEMORY_ONLY = ("beat_awake", "prior_awake", "beat_pending")
+_LOCK_FIELDS = {f.name for f in fields(Lock)} - set(_MEMORY_ONLY)
 
 
 def _lease_dict(lk: Lock) -> dict:
     """The lease file's content: the pre-TLS-122 schema exactly."""
     d = asdict(lk)
-    del d["beat_awake"], d["beat_pending"]
+    for k in _MEMORY_ONLY:
+        del d[k]
     return d
 
 
@@ -130,8 +140,9 @@ def _write_awake(ctx: Ctx, lk: Lock) -> None:
     before TLS-122) leaves it unmatched: the lease ages on the wall clock.
 
     BEST-EFFORT (sol r2): it is optional metadata, so a failed write never
-    interrupts the lease or merge-lane change around it; the old sidecar left
-    behind names an older heartbeat, and the lease ages on the wall clock."""
+    interrupts the lease or merge-lane change around it. The old sidecar left
+    behind names an older heartbeat of the same run: its stamp still gives an
+    awake age (`Lock.prior_awake`, sol r5), so a suspend still does not count."""
     p = _awake_path(ctx, lk.issue)
     try:
         if lk.beat_awake:
@@ -143,13 +154,23 @@ def _write_awake(ctx: Ctx, lk: Lock) -> None:
         pass
 
 
-def _read_awake(ctx: Ctx, lk: Lock) -> list | None:
+def _read_sidecar(ctx: Ctx, lk: Lock) -> tuple[list | None, list | None]:
+    """`(stamp, prior)`: the sidecar's awake stamp when it names this lease's
+    run and heartbeat, or `prior` when it names this run with an OLDER
+    heartbeat (`Lock.prior_awake`). Neither for another run, a NEWER heartbeat
+    (a lease copy written back over a later beat: the lease is the authority),
+    a malformed stamp or a failed checksum."""
     s = read_optional(_awake_path(ctx, lk.issue))
-    if not (isinstance(s, dict) and s.get("run_id") == lk.run_id and s.get("heartbeat") == lk.heartbeat
-            and is_stamp(s.get("awake"))):            # the shape first: only a flat stamp is summed
-        return None
-    body = {"run_id": s["run_id"], "heartbeat": s["heartbeat"], "awake": s["awake"]}
-    return body["awake"] if s.get("checksum") == meta_sum(body) else None
+    hb = s.get("heartbeat") if isinstance(s, dict) else None
+    if not (isinstance(s, dict) and s.get("run_id") == lk.run_id and is_stamp(s.get("awake"))
+            and isinstance(hb, (int, float)) and not isinstance(hb, bool)):
+        return None, None                              # the shape first: only a flat stamp is summed
+    body = {"run_id": s["run_id"], "heartbeat": hb, "awake": s["awake"]}
+    if s.get("checksum") != meta_sum(body):
+        return None, None
+    if hb == lk.heartbeat:
+        return body["awake"], None
+    return (None, body["awake"]) if hb < lk.heartbeat else (None, None)
 
 
 def _read_lease(path: Path) -> Lock | None:
@@ -159,42 +180,33 @@ def _read_lease(path: Path) -> Lock | None:
     return Lock(**{k: v for k, v in data.items() if k in _LOCK_FIELDS}) if data else None
 
 
-def _sidecar_is_older(ctx: Ctx, lk: Lock) -> bool:
-    """The sidecar names this lease's run with an older heartbeat."""
-    s = read_optional(_awake_path(ctx, lk.issue))
-    hb = s.get("heartbeat") if isinstance(s, dict) else None
-    return (isinstance(s, dict) and s.get("run_id") == lk.run_id and isinstance(hb, (int, float))
-            and not isinstance(hb, bool) and hb < lk.heartbeat)
-
-
 def _entries(ctx: Ctx, held: bool = False) -> list[tuple[Path, Lock]]:
     """Every lease with its file: the legacy `lock.json`, then `locks/`.
 
     `held`: the caller holds mutex `registry`. Every writer of a lease and its
     sidecar holds it too, so each pair read is complete; a sidecar older than
-    its lease then means a beat died between its writes (`beat_pending`).
+    its lease (`prior_awake`) then sets `beat_pending`.
 
     Unlocked (reporting: `status`, `preflight`), a beat can land between the
     two reads. On a mismatch the lease is read once more (sol r3): a lease
     that has gone is left out, and a changed one replaces the first read. This
-    is best-effort only (a beat suspended between its own writes still reads
-    as a mismatch, sol r4), so every command that ACTS on liveness decides
-    under `registry` instead."""
+    is best-effort only (sol r4), so every command that ACTS on liveness
+    decides under `registry` instead."""
     out = []
     for p in [ctx.paths.lock, *ctx.paths.locks_dir.glob("issue-*.json")]:
         lk = _read_lease(p)
         if lk is None:
             continue
-        lk.beat_awake = _read_awake(ctx, lk)
-        if lk.beat_awake is None and held:
-            lk.beat_pending = _sidecar_is_older(ctx, lk)
+        lk.beat_awake, lk.prior_awake = _read_sidecar(ctx, lk)
+        if held:
+            lk.beat_pending = lk.prior_awake is not None
         elif lk.beat_awake is None:
             again = _read_lease(p)
             if again is None:
                 continue                         # gone: no coherent snapshot of it
             if (again.run_id, again.heartbeat) != (lk.run_id, lk.heartbeat):
                 lk = again
-                lk.beat_awake = _read_awake(ctx, lk)
+                lk.beat_awake, lk.prior_awake = _read_sidecar(ctx, lk)
         out.append((p, lk))
     return sorted(out, key=lambda e: e[1].issue)
 
@@ -579,8 +591,17 @@ def is_stale(lk: Lock, now: float, awake: tuple[str, float] | None) -> bool:
 
     Why not "stale only when the holder process is dead": a run is a series of
     short CLI calls from a conductor session, so between calls no process
-    holds the lease, and a session that stopped working must still lose it."""
-    return awake_elapsed(lk.beat_awake, awake, now - lk.heartbeat)[0] > STALE_SECONDS
+    holds the lease, and a session that stopped working must still lose it.
+
+    No matching stamp but an earlier beat's (`prior_awake`: a failed or
+    unfinished sidecar write, sol r5): the age is the smaller of the awake age
+    since that earlier beat and the wall age since the lease's heartbeat. Both
+    overstate the true age, and the first leaves a suspend out, so a live run
+    is not taken after a resume, and a dead one still goes stale."""
+    wall = now - lk.heartbeat
+    if lk.beat_awake is None and lk.prior_awake is not None:
+        return min(awake_elapsed(lk.prior_awake, awake, wall)[0], wall) > STALE_SECONDS
+    return awake_elapsed(lk.beat_awake, awake, wall)[0] > STALE_SECONDS
 
 
 def require_human(ctx: Ctx, what: str) -> None:
@@ -617,13 +638,15 @@ def require_operator(ctx: Ctx, what: str) -> None:
     """
     require_human(ctx, what)
     with mutex(ctx, "registry"):
-        _refuse_live_held(ctx, what)
+        refuse_live_held(ctx, what)
 
 
-def _refuse_live_held(ctx: Ctx, what: str) -> None:
+def refuse_live_held(ctx: Ctx, what: str) -> None:
     """`require_operator`'s live-run half. ASSUMES mutex `registry` is held
     (sol r4): an unlocked read can see a beat half-written and take a live
-    run for a stale one; under `registry` no beat is half-written."""
+    run for a stale one; under `registry` no beat is half-written. A caller
+    that ACTS on the answer keeps `registry` until it has acted (`clear_halt`,
+    `incidents.resolve`)."""
     now, aw = ctx.now(), ctx.awake_now()
     lk = next((x for _, x in _entries(ctx, held=True) if _live_held(x, now, aw)), None)
     if lk is not None:
@@ -687,7 +710,7 @@ def clear_halt(ctx: Ctx, expected: str, by: str) -> str:
     ctx.write_guard("clear HALT")
     require_human(ctx, "clear HALT")
     with mutex(ctx, "registry"):
-        _refuse_live_held(ctx, "clear HALT")
+        refuse_live_held(ctx, "clear HALT")
         current = halted(ctx)
         if current is None:
             raise HaltClearRefused("not-halted", "there is no .agent/HALT to clear")

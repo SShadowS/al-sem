@@ -134,7 +134,7 @@ def run(ctx: Ctx, cmd: list[str], *, cwd: Path, log_path: Path, timeout_s: float
                     try:
                         beat(ctx)
                     except MutexTimeout:
-                        pass        # `registry` busy (e.g. a cleanup's delete): beat next round
+                        pass        # `registry` busy past its timeout: beat next round
 
                 if time.monotonic() - start > timeout_s:
                     _kill_tree(proc)

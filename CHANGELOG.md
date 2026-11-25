@@ -1015,18 +1015,30 @@ its time rules on the wall clock, which keeps counting through a suspend.
     the same mismatch after any number of re-reads. Since every lease writer holds `registry`,
     the decisions now take it too:
     - `clear-halt` decides and unlinks under it, and `resolve incident` checks under it.
-    - Verification `cleanup` re-checks the lane under it and holds it through the delete, so
-      no new lane owner can come in between.
+    - Verification `cleanup` re-checks the lane under it, so no new lane owner can come in
+      between (since r5 only the decision and a rename happen under it).
     - `recover`'s steal reads under it, as before.
-  - **A beat that died between its writes reads as live for those commands.** Under the lock,
-    a sidecar older than its lease (same run) can only come from such a beat. `clear-halt`,
+  - **A beat that did not finish its sidecar write reads as live for those commands.** Under
+    the lock, a sidecar older than its lease (same run) comes from such a beat. `clear-halt`,
     `resolve incident`, `cleanup` and `take_lane` count it as live, never stale. `recover`
-    does not, so such a lease can still be recovered.
+    does not, so such a lease can still be recovered (on what basis: see r5).
   - **The unlocked re-read is for reporting** (`status`, `preflight`, `merge-gate`). A lease
     that is gone at the re-read is left out, and one replaced by another run with the same
     heartbeat is reported as that run. The first read is no longer kept in either case.
   - **A periodic beat that times out on `registry` is skipped, not fatal**, in the gate
-    supervisor and the gate queue, since a cleanup can now hold the lock through a delete.
+    supervisor and the gate queue.
+- **Review r5 (sol):**
+  - **A failed sidecar write no longer exposes a live run after a suspend.** The write is
+    best-effort, so a live run's beat can move its lease and leave the sidecar at an earlier
+    beat. `recover` then fell back to the lease's wall age, which a suspend inflates. Now the
+    earlier beat's stamp (`prior_awake`) gives the age, bounded by the wall age: both
+    overstate the true age, and the first leaves the suspend out. A dead run still goes stale.
+  - **`resolve incident` holds `registry` from its live-run check through the incident
+    write**, so a claim or recovery cannot start between them.
+  - **Verification `cleanup` holds `registry` only to decide and to move the tree aside** (one
+    rename to `<name>.removing-<id>`). The recursive delete and `git worktree prune` run after
+    it is released, so a slow delete starves no other run's beat. It does not release the
+    merge lane: an orphaned lane is `recover`'s to move on.
 
 ### Fixed (ENG-178: table procedures named like record built-ins: four follow-ups from ENG-173)
 

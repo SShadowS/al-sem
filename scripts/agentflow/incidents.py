@@ -265,25 +265,30 @@ def resolve(ctx: Ctx, merge_sha: str, *, by: str, note: str) -> dict:
     actually found rather than being described as a close.
     """
     ctx.write_guard("resolve incident")
-    lock.require_operator(ctx, "resolve incident")
-    with mutex(ctx, "incidents"):
-        records = all_records(ctx)
-        rec = records.get(merge_sha)
-        if rec is None:
-            raise IncidentRefused("unknown-merge-sha", f"no incident recorded for {merge_sha}")
-        state = rec.get("state")
-        if state == "resolved":
-            raise IncidentRefused("already-resolved",
-                                  f"{merge_sha[:12]} was closed by {rec.get('resolved_by')!r}")
-        if state not in ("open", "verifying"):
-            # Only reachable through a hand-edited `incidents.json`. Say what was
-            # found; do not invent a closer for it.
-            raise IncidentRefused("unknown-state",
-                                  f"{merge_sha[:12]} is in state {state!r}, which this command "
-                                  f"does not know how to close")
-        append_audit(ctx, {"action": "incident-resolve", "merge_sha": merge_sha,
-                           "by": by, "note": note})
-        rec.update(state="resolved", resolved_at=ctx.now(), resolved_by=by, note=note)
-        records[merge_sha] = rec
-        _save(ctx, records)
+    lock.require_human(ctx, "resolve incident")
+    # Mutex `registry` from the live-run check THROUGH the write (sol r5): a
+    # claim or a recovery cannot start between them. Lock order: `registry`,
+    # then `incidents` (no `incidents` section takes `registry`).
+    with mutex(ctx, "registry"):
+        lock.refuse_live_held(ctx, "resolve incident")
+        with mutex(ctx, "incidents"):
+            records = all_records(ctx)
+            rec = records.get(merge_sha)
+            if rec is None:
+                raise IncidentRefused("unknown-merge-sha", f"no incident recorded for {merge_sha}")
+            state = rec.get("state")
+            if state == "resolved":
+                raise IncidentRefused("already-resolved",
+                                      f"{merge_sha[:12]} was closed by {rec.get('resolved_by')!r}")
+            if state not in ("open", "verifying"):
+                # Only reachable through a hand-edited `incidents.json`. Say what
+                # was found; do not invent a closer for it.
+                raise IncidentRefused("unknown-state",
+                                      f"{merge_sha[:12]} is in state {state!r}, which this command "
+                                      f"does not know how to close")
+            append_audit(ctx, {"action": "incident-resolve", "merge_sha": merge_sha,
+                               "by": by, "note": note})
+            rec.update(state="resolved", resolved_at=ctx.now(), resolved_by=by, note=note)
+            records[merge_sha] = rec
+            _save(ctx, records)
     return rec

@@ -25,8 +25,9 @@ def test_run_captures_exit_code_and_log(ctx, tmp_path):
 
 
 def test_a_beat_that_times_out_does_not_end_the_child(ctx, tmp_path):
-    """A beat can time out on `registry` (a cleanup holds it through a delete,
-    TLS-122 sol r4). The supervisor skips that beat and keeps the gate running.
+    """A beat can time out on `registry` (since TLS-122 `beat` takes it, and
+    another session may hold it past the timeout). The supervisor skips that
+    beat and keeps the gate running.
     Red proof (sol r4): the `except MutexTimeout` dropped from `supervise.run`
     failed here (MutexTimeout out of `run`)."""
     from agentflow.state import MutexTimeout

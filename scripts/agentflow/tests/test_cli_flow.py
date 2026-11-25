@@ -3560,7 +3560,7 @@ def test_a_beat_paused_between_its_writes_stops_clear_halt_and_cleanup(capsys, r
     check does pass here, which is why its delete decides again under the lock.
     Red proofs (sol r4):
     - `clear_halt` deciding on the unlocked reporting read (no mutex, and
-      `_entries(held=False)` in `_refuse_live_held`) failed here (HALT cleared).
+      `_entries(held=False)` in `refuse_live_held`) failed here (HALT cleared).
     - The locked recheck removed from `cmd_cleanup` (only the unlocked early
       check left) failed here (the live run's worktree was deleted).
     Two guards cover this pause, each enough alone: the mutex (the commands
@@ -3607,10 +3607,14 @@ def test_a_beat_paused_between_its_writes_stops_clear_halt_and_cleanup(capsys, r
 def test_a_beat_that_died_between_its_writes_keeps_clear_halt_and_cleanup_off(
         capsys, repo_pair, monkeypatch):
     """Under `registry` no beat is half-written, so a sidecar OLDER than its
-    lease (same run) is a beat that died between its two writes. The deciding
-    commands treat that lease as live (`beat_pending`), never stale, whatever
-    the wall clock says. Recovery does not: it can still take the lease, or a
-    run that died that way could never be recovered.
+    lease (same run) is a beat that did not finish its sidecar write: it died
+    between its two writes, or the write failed (sol r5: that alone does not
+    prove the run dead). The deciding commands treat that lease as live
+    (`beat_pending`), never stale, whatever the wall clock says. Recovery
+    judges it on the earlier beat's awake stamp (`prior_awake`), bounded by
+    the wall age; this reader has no awake clock, so the wall age: it can
+    still take the lease, or a run that died that way could never be
+    recovered.
     Red proofs (sol r4): `lk.beat_pending or` dropped from `lock._live_held`
     failed here (HALT cleared); `steal_for_recovery` judging by `_live_held`
     instead of `is_stale` failed the last step (`lock-live`)."""
@@ -3632,10 +3636,41 @@ def test_a_beat_that_died_between_its_writes_keeps_clear_halt_and_cleanup_off(
     assert lock.steal_for_recovery(rec, lock.for_issue(rec, 8)).recovering_by == "run-rec"
 
 
+def test_cleanup_deletes_the_worktree_outside_registry(capsys, repo_pair, monkeypatch):
+    """A verification `cleanup` decides under `registry` but only DETACHES
+    the tree there (one rename to `<name>.removing-<id>`). The recursive
+    delete and `git worktree prune` run after `registry` is released, so a
+    beat (which takes `registry`) is never starved by a slow delete (sol r5).
+    The tombstone goes too.
+    Red proof (sol r5): `worktrees.destroy` moved back inside the `with
+    mutex(ctx, "registry")` block failed here (`registry` was held during
+    the delete)."""
+    from agentflow.state import MutexTimeout, mutex as real_mutex
+    _, clone = repo_pair
+    g = Git(clone)
+    kept = worktrees.create(g, worktrees.verify_path(clone), g.rev("master"))
+    free_during_delete = []
+    real_rmtree = shutil.rmtree
+
+    def slow_rmtree(path, *a, **kw):
+        try:
+            with real_mutex(Ctx(Paths(clone)), "registry", timeout=0.2):
+                free_during_delete.append(True)
+        except MutexTimeout:
+            free_during_delete.append(False)
+        real_rmtree(path, *a, **kw)
+
+    monkeypatch.setattr(worktrees.shutil, "rmtree", slow_rmtree)
+    code, out = run(capsys, clone, "cleanup", "--worktree", str(kept), gh_run=FakeRunner(), run_id=None)
+    assert code == 0 and out["removed"] == str(kept), out
+    assert free_during_delete == [True]
+    assert not kept.exists() and not list(clone.parent.glob(kept.name + ".removing-*"))
+
+
 def test_a_queued_gate_survives_a_beat_that_times_out(ctx, monkeypatch):
-    """While a cleanup holds `registry` through its delete, a queued gate's
-    beat can time out on it. That beat is skipped, not fatal: the next round
-    beats again (30 min of slack).
+    """A queued gate's beat can still time out on `registry` (a long claim,
+    or another session's held section). That beat is skipped, not fatal: the
+    next round beats again (30 min of slack).
     Red proof (sol r4): the `except MutexTimeout` dropped from `_gate_slot`
     failed here (MutexTimeout instead of the queue's own verdict)."""
     from agentflow import budget
