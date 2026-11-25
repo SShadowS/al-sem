@@ -570,23 +570,226 @@ page 50627 "EB Log Card"
 }
 "#;
 
+/// Review round (Fable, R1-R8; `RV::R6` was not a wrong answer), plus a
+/// call into a symbol-only dependency between A and B (S29), a call in a
+/// `case` label (R4) and `#if` arms (S28).
+const REVIEW: &str = r#"codeunit 50640 "RV"
+{
+    procedure R1()
+    begin
+        L.Insert(); // R1B
+        Deliver();
+    end;
+
+    procedure Deliver()
+    begin
+        Transmit(); // R1A
+        Commit();
+    end;
+
+    procedure R2()
+    begin
+        L.Insert(); // R2B
+        if Codeunit.Run(Codeunit::"RV Sender") then;
+    end;
+
+    procedure R3()
+    begin
+        Transmit(); // R3A
+        if Codeunit.Run(Codeunit::"RV Logger") then;
+    end;
+
+    procedure R4()
+    begin
+        Transmit(); // R4A
+        case true of
+            CommitAndTell():
+                ;
+        end;
+        L.Insert(); // R4B
+    end;
+
+    procedure R5(N: Integer; Flag: Boolean)
+    var
+        I: Integer;
+        X: Integer;
+    begin
+        for I := 1 to N do begin
+            Transmit(); // R5A
+            X := Flag ? LogIt() : 0; // R5B
+            Commit();
+        end;
+    end;
+
+    procedure R7(Id: Integer)
+    begin
+        Dyn(Id); // R7A
+        L.Insert(); // R7B
+    end;
+
+    procedure R8()
+    begin
+        Plain();
+        Scoped();
+    end;
+
+    procedure S33()
+    begin
+        Transmit(); // S33A
+        Commit();
+        Page.RunModal(Page::"EB Log Card");
+        L.Insert(); // S33B
+    end;
+
+    procedure S32()
+    begin
+        OnSend32();
+        Commit();
+        L.Insert(); // S32B
+    end;
+
+    [IntegrationEvent(false, false)]
+    local procedure OnSend32()
+    begin
+    end;
+
+    procedure S29()
+    var
+        P: Codeunit "Dep Post";
+    begin
+        Transmit(); // S29A
+        P.Post();
+        L.Insert(); // S29B
+    end;
+
+#if CLEAN28
+    procedure S28()
+    begin
+        Transmit(); // S28A
+    end;
+#else
+    procedure S28()
+    begin
+        L.Insert(); // S28B
+    end;
+#endif
+
+    local procedure Plain()
+    begin
+        CommitHelper();
+    end;
+
+    [CommitBehavior(CommitBehavior::Ignore)]
+    local procedure Scoped()
+    begin
+        Transmit(); // R8A
+        CommitHelper();
+        L.Insert(); // R8B
+    end;
+
+    local procedure CommitHelper()
+    begin
+        Commit();
+    end;
+
+    local procedure Dyn(Id: Integer)
+    begin
+        Transmit();
+        Codeunit.Run(Id);
+    end;
+
+    procedure Transmit()
+    var
+        O: Record "EB Outbox";
+    begin
+        O.Insert();
+    end;
+
+    local procedure CommitAndTell(): Boolean
+    begin
+        Commit();
+        exit(true);
+    end;
+
+    local procedure LogIt(): Integer
+    begin
+        L.Insert();
+        exit(1);
+    end;
+
+    var
+        L: Record "EB Log";
+}
+
+codeunit 50641 "RV Sender"
+{
+    trigger OnRun()
+    var
+        R: Codeunit "RV";
+    begin
+        R.Transmit(); // R2A
+    end;
+}
+
+codeunit 50643 "RV Subscriber"
+{
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::"RV", 'OnSend32', '', false, false)]
+    local procedure Send32()
+    var
+        R: Codeunit "RV";
+    begin
+        R.Transmit(); // S32A
+    end;
+}
+
+codeunit 50642 "RV Logger"
+{
+    trigger OnRun()
+    var
+        L: Record "EB Log";
+    begin
+        Commit();
+        L.Insert(); // R3B
+    end;
+}
+"#;
+
+const DEP_GUID: &str = "16516516-0000-4000-8000-0000000d0165";
+
+const DEP_SYMBOLS: &str = r#"{"RuntimeVersion":"15.0","Codeunits":[{"Id":50690,"Name":"Dep Post","Methods":[{"Name":"Post","Parameters":[]}]}],"AppId":"16516516-0000-4000-8000-0000000d0165","Name":"DepPost","Publisher":"probe","Version":"1.0.0.0"}"#;
+
 fn workspace(root: &Path) -> std::path::PathBuf {
     let ws = root.join("ws");
     std::fs::create_dir_all(ws.join("src")).unwrap();
     std::fs::write(
         ws.join("app.json"),
-        r#"{"id":"16516516-0000-4000-8000-0000000e0165","name":"EB","publisher":"t","version":"1.0.0.0","runtime":"15.0","idRanges":[{"from":50600,"to":50699}]}"#,
+        format!(
+            r#"{{"id":"16516516-0000-4000-8000-0000000e0165","name":"EB","publisher":"t","version":"1.0.0.0","runtime":"15.0","idRanges":[{{"from":50600,"to":50699}}],
+            "dependencies":[{{"id":"{DEP_GUID}","name":"DepPost","publisher":"probe","version":"1.0.0.0"}}]}}"#
+        ),
     )
     .unwrap();
     std::fs::write(ws.join("src/Tables.al"), TABLES).unwrap();
     std::fs::write(ws.join("src/Shapes.al"), SHAPES).unwrap();
     std::fs::write(ws.join("src/Others.al"), OTHERS).unwrap();
+    std::fs::write(ws.join("src/Review.al"), REVIEW).unwrap();
+    crate::symbol_app::write_symbol_app(
+        &ws.join(".alpackages/probe_DepPost_1.0.0.0.app"),
+        DEP_GUID,
+        "DepPost",
+        "1.0.0.0",
+        DEP_SYMBOLS,
+    );
     ws
 }
 
 /// `file:line` of the line marked `// <tag>` (1-based).
 fn at(tag: &str) -> String {
-    for (file, src) in [("Shapes.al", SHAPES), ("Others.al", OTHERS)] {
+    for (file, src) in [
+        ("Shapes.al", SHAPES),
+        ("Others.al", OTHERS),
+        ("Review.al", REVIEW),
+    ] {
         let marker = format!("// {tag}");
         if let Some(i) = src.lines().position(|l| l.trim_end().ends_with(&marker)) {
             return format!("{file}:{}", i + 1);
@@ -626,9 +829,17 @@ fn prove(
         after.to_string(),
         "--before".to_string(),
         before.to_string(),
-        "--single-app".to_string(),
     ];
-    args.extend(extra.iter().map(|s| s.to_string()));
+    // `@cross-app` (test-only marker): load the dependencies too.
+    if !extra.contains(&"@cross-app") {
+        args.push("--single-app".to_string());
+    }
+    args.extend(
+        extra
+            .iter()
+            .filter(|s| **s != "@cross-app")
+            .map(|s| s.to_string()),
+    );
     let out = Command::new(env!("CARGO_BIN_EXE_alsem"))
         .args(&args)
         .env("RUST_LOG", "off")
@@ -668,10 +879,30 @@ fn ask_with(ws: &Path, routine: &str, a: &str, b: &str, extra: &[&str]) -> Answe
 }
 
 fn rows<'v>(s: &'v Value, list: &str) -> Vec<&'v Value> {
+    if list == "errorsBetween" {
+        // Indices into the error table (each error listed once).
+        return errors_at(s, &s[list]);
+    }
     s[list]
         .as_array()
         .map(|a| a.iter().collect())
         .unwrap_or_default()
+}
+
+/// The error table's rows at the indices in `ids`.
+fn errors_at<'v>(s: &'v Value, ids: &Value) -> Vec<&'v Value> {
+    ids.as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|i| s["errors"].get(i.as_u64()? as usize))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The errors after commit row `c`.
+fn after_of<'v>(s: &'v Value, c: &Value) -> Vec<&'v Value> {
+    errors_at(s, &c["errorsAfterCommit"]["ids"])
 }
 
 fn has_label(row: &Value, label: &str) -> bool {
@@ -789,7 +1020,7 @@ fn s7_the_error_after_the_commit_is_listed() {
     let a = ask(ws(), &r("S7"), &at("S7A"), &at("S7B"));
     assert_eq!(a.answer, "yes", "{}", a.raw);
     let c = rows(&a.slice, "between")[0];
-    let after: Vec<&Value> = c["errorsAfterCommit"].as_array().unwrap().iter().collect();
+    let after: Vec<&Value> = after_of(&a.slice, c);
     assert!(lines_of(&after).contains(&line_of("S7E")), "{}", a.raw);
     assert!(
         a.raw.contains("DANGEROUS") || a.slice.is_object(),
@@ -973,11 +1204,7 @@ fn s23_commit_inside_b() {
 fn s24_an_error_trapped_below_the_region_is_left_out() {
     let a = ask(ws(), &r("S24"), &at("S24A"), &at("S24B"));
     assert_eq!(a.answer, "yes", "{}", a.raw);
-    let after: Vec<&Value> = rows(&a.slice, "between")[0]["errorsAfterCommit"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .collect();
+    let after: Vec<&Value> = after_of(&a.slice, rows(&a.slice, "between")[0]);
     assert!(!lines_of(&after).contains(&line_of("S24E")), "{}", a.raw);
 }
 
@@ -985,11 +1212,7 @@ fn s24_an_error_trapped_below_the_region_is_left_out() {
 fn s25_an_error_trapped_above_the_meet_routine_is_swallowed() {
     let a = ask(ws(), &r("S25"), &at("S25A"), &at("S25B"));
     assert_eq!(a.answer, "yes", "{}", a.raw);
-    let after: Vec<&Value> = rows(&a.slice, "between")[0]["errorsAfterCommit"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .collect();
+    let after: Vec<&Value> = after_of(&a.slice, rows(&a.slice, "between")[0]);
     let e = after
         .iter()
         .find(|e| e["line"].as_u64() == Some(line_of("S25E")))
@@ -1030,7 +1253,7 @@ fn s30_a_checked_run_on_a_route_makes_a_durable() {
         .into_iter()
         .find(|c| c["kind"] == "run-commit-of-A")
         .unwrap_or_else(|| panic!("{}", a.raw));
-    let after: Vec<&Value> = c["errorsAfterCommit"].as_array().unwrap().iter().collect();
+    let after: Vec<&Value> = after_of(&a.slice, c);
     assert!(lines_of(&after).contains(&line_of("S30E")), "{}", a.raw);
 }
 
@@ -1040,7 +1263,7 @@ fn s31_a_trap_on_a_route_catches_the_tail_error() {
     assert_eq!(a.answer, "yes", "{}", a.raw);
     let all: Vec<&Value> = rows(&a.slice, "between")
         .iter()
-        .flat_map(|c| c["errorsAfterCommit"].as_array().unwrap().iter())
+        .flat_map(|c| after_of(&a.slice, c))
         .collect();
     assert!(!lines_of(&all).contains(&line_of("S31E")), "{}", a.raw);
 }
@@ -1051,7 +1274,7 @@ fn do1_twin_commit_in_a_tail_then_an_error() {
     assert_eq!(a.answer, "yes", "{}", a.raw);
     let c = rows(&a.slice, "between")[0];
     assert_eq!(c["part"], "A-tail", "{}", a.raw);
-    let after: Vec<&Value> = c["errorsAfterCommit"].as_array().unwrap().iter().collect();
+    let after: Vec<&Value> = after_of(&a.slice, c);
     assert!(lines_of(&after).contains(&line_of("DO1E")), "{}", a.raw);
 }
 
@@ -1063,7 +1286,7 @@ fn do2_twin_commits_inside_a_then_a_modify() {
     let classes: Vec<u64> = inside.iter().filter_map(|c| c["class"].as_u64()).collect();
     assert!(classes.contains(&1) && classes.contains(&2), "{}", a.raw);
     let c1 = inside.iter().find(|c| c["class"] == 1).unwrap();
-    let after: Vec<&Value> = c1["errorsAfterCommit"].as_array().unwrap().iter().collect();
+    let after: Vec<&Value> = after_of(&a.slice, c1);
     assert!(lines_of(&after).contains(&line_of("DO2M")), "{}", a.raw);
     assert!(
         lines_of(&rows(&a.slice, "errorsBetween")).contains(&line_of("DO2M")),
@@ -1077,8 +1300,110 @@ fn do2_twin_commits_inside_a_then_a_modify() {
         .into_iter()
         .find(|c| c["kind"] == "run-commit-of-A")
         .unwrap_or_else(|| panic!("{}", d.raw));
-    let after: Vec<&Value> = c["errorsAfterCommit"].as_array().unwrap().iter().collect();
+    let after: Vec<&Value> = after_of(&d.slice, c);
     assert!(lines_of(&after).contains(&line_of("DO2M")), "{}", d.raw);
+}
+
+fn rv(name: &str) -> String {
+    format!("RV::{name}")
+}
+
+#[test]
+fn r1_tail_commit_with_b_never_after_a_is_without_b() {
+    // Review B3: `L.Insert (B); Deliver (A; Commit)`: B never runs after A.
+    let a = ask(ws(), &rv("R1"), &at("R1A"), &at("R1B"));
+    assert_eq!(a.answer, "no", "{}", a.raw);
+    assert!(rows(&a.slice, "between").is_empty(), "{}", a.raw);
+    assert!(!rows(&a.slice, "commitsWithoutB").is_empty(), "{}", a.raw);
+}
+
+#[test]
+fn r2_run_commit_of_a_with_b_never_after_a_is_without_b() {
+    // Review B3 for the N1 row: A inside a checked run that comes after B.
+    let a = ask(ws(), &rv("R2"), &at("R2A"), &at("R2B"));
+    assert_eq!(a.answer, "no", "{}", a.raw);
+    assert!(rows(&a.slice, "between").is_empty(), "{}", a.raw);
+}
+
+#[test]
+fn r3_b_head_inside_a_checked_run_is_class_2() {
+    // Review B4: `Transmit (A); if Codeunit.Run(Logger)` with Logger:
+    // Commit; L.Insert (B): the run's own commit, never A's.
+    let a = ask(ws(), &rv("R3"), &at("R3A"), &at("R3B"));
+    assert_eq!(a.answer, "no", "{}", a.raw);
+    assert!(
+        !rows(&a.slice, "ownTransactionCommits").is_empty(),
+        "{}",
+        a.raw
+    );
+}
+
+#[test]
+fn r4_a_call_in_a_case_label_is_not_a_silent_no() {
+    // Review B1: the control-flow tree does not place a call in a case label.
+    let a = ask(ws(), &rv("R4"), &at("R4A"), &at("R4B"));
+    assert_eq!(a.answer, "unknown", "{}", a.raw);
+    assert!(a.raw.contains("site-outside-control-flow"), "{}", a.raw);
+}
+
+#[test]
+fn r5_a_b_in_a_ternary_arm_may_be_skipped() {
+    // Review S2: `X := Flag ? LogIt() : 0` (B) may not run.
+    let a = ask(ws(), &rv("R5"), &at("R5A"), &at("R5B"));
+    assert_eq!(a.answer, "yes", "{}", a.raw);
+}
+
+#[test]
+fn r7_an_unresolved_call_inside_a_does_not_block() {
+    // Review S3: only region cones feed the blockers.
+    let a = ask(ws(), &rv("R7"), &at("R7A"), &at("R7B"));
+    assert_eq!(a.answer, "no", "{}", a.raw);
+}
+
+#[test]
+fn r8_commit_behavior_is_read_per_route() {
+    // Review S1: `Plain` reaches the helper's commit outside `Scoped`'s
+    // `[CommitBehavior(Ignore)]`; between A and B it is ignored.
+    let a = ask(ws(), &rv("R8"), &at("R8A"), &at("R8B"));
+    assert_eq!(a.answer, "no", "{}", a.raw);
+}
+
+#[test]
+fn s28_alternative_declarations_never_run_in_one_build() {
+    let a = ask(ws(), &rv("S28"), &at("S28A"), &at("S28B"));
+    assert_eq!(a.answer, "no", "{}", a.raw);
+    assert_eq!(a.slice["relation"], "not-in-one-build", "{}", a.raw);
+}
+
+#[test]
+fn s33_a_page_run_right_after_a_commit_has_no_pending_write() {
+    // Review N8: every path to the RunModal passes the Commit: no write is
+    // pending there, so no page-run error row.
+    let a = ask(ws(), &rv("S33"), &at("S33A"), &at("S33B"));
+    assert_eq!(a.answer, "yes", "{}", a.raw);
+    assert!(
+        !rows(&a.slice, "errorsBetween")
+            .iter()
+            .any(|e| e["kind"] == "window"),
+        "{}",
+        a.raw
+    );
+}
+
+#[test]
+fn s32_a_inside_an_event_subscriber() {
+    // Review S4: A in a subscriber; the commit after the raise is between.
+    let a = ask(ws(), &rv("S32"), &at("S32A"), &at("S32B"));
+    assert_eq!(a.answer, "yes", "{}", a.raw);
+}
+
+#[test]
+fn s29_a_symbol_only_routine_between_is_unknown() {
+    // Review B2: its body is not available (cross-app: the dependency is
+    // loaded, from symbols only).
+    let a = ask_with(ws(), &rv("S29"), &at("S29A"), &at("S29B"), &["@cross-app"]);
+    assert_eq!(a.answer, "unknown", "{}", a.raw);
+    assert!(a.raw.contains("region-body-not-available"), "{}", a.raw);
 }
 
 #[test]
@@ -1118,6 +1443,49 @@ fn may_commit_contract_every_listed_commit_is_a_may_commit_site() {
             let p = (
                 c["file"].as_str().unwrap().to_string(),
                 c["line"].as_u64().unwrap(),
+            );
+            assert!(places.contains(&p), "{routine}: {p:?} not in {places:?}");
+        }
+    }
+}
+
+#[test]
+fn throws_error_contract_every_error_row_is_a_throws_error_site() {
+    // §5.6: every error row is a `throws-error` site of the root, or one it
+    // leaves out as caught above the meet routine (`swallowed-above-meet`).
+    for (routine, a, b) in [("S7", "S7A", "S7B"), ("Do1", "DO1A", "DO1B")] {
+        let x = ask(ws(), &r(routine), &at(a), &at(b));
+        let out = Command::new(env!("CARGO_BIN_EXE_alsem"))
+            .args([
+                "prove",
+                ws().to_str().unwrap(),
+                &r(routine),
+                "throws-error",
+                "--single-app",
+            ])
+            .output()
+            .unwrap();
+        let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+        let places: Vec<(String, u64)> = v["payload"]["result"]["evidence"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|e| {
+                Some((
+                    e["evidence"]["file"].as_str()?.to_string(),
+                    e["evidence"]["line"].as_u64()?,
+                ))
+            })
+            .collect();
+        let errs = rows(&x.slice, "errorsBetween");
+        assert!(!errs.is_empty(), "{routine}: precondition, error rows");
+        for e in errs {
+            if has_label(e, "swallowed-above-meet") || e["kind"] == "window" {
+                continue;
+            }
+            let p = (
+                e["file"].as_str().unwrap().to_string(),
+                e["line"].as_u64().unwrap(),
             );
             assert!(places.contains(&p), "{routine}: {p:?} not in {places:?}");
         }

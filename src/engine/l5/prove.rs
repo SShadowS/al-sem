@@ -4979,6 +4979,26 @@ pub(crate) fn between_result(
             anchor: None,
         })
         .collect();
+    // Review B2: what the cone could not follow at all (a truncated cone,
+    // analysis gaps) blocks a `no` as it blocks a filtered one.
+    if oblg.cone_truncated {
+        blockers.push(ProveBlocker {
+            kind: "cone-truncated",
+            detail: "the root's cone was truncated; a commit between A and B may lie beyond it"
+                .to_string(),
+            anchor: None,
+        });
+    }
+    if oblg.analysis_gaps > 0 {
+        blockers.push(ProveBlocker {
+            kind: "analysis-gaps",
+            detail: format!(
+                "{} analysis gap(s) in the root's cone (code the engine could not read)",
+                oblg.analysis_gaps
+            ),
+            anchor: None,
+        });
+    }
     // §5.5: the root's unresolved cone, kept to the region.
     for item in &entry.unresolved {
         let in_region = b.region_sites.contains(&item.callsite_id)

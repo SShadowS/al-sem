@@ -51,7 +51,8 @@
 //! itself checked against the literals (a possible over-listing, never a
 //! dropped commit). Upgrade with a state-graph route through the statement.
 
-use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
+use std::rc::Rc;
 
 use crate::engine::l5::group_path::GroupPaths;
 use crate::engine::l5::literal_reach::routes::ROUTE_CAP;
@@ -169,8 +170,13 @@ pub struct SiteDesc {
     pub op: Option<String>,
 }
 
-/// One error row.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+/// The nearest-first key of a row (review output guidance): cone hops from
+/// its region statement, part order (A-tail deepest first, middle, B-head),
+/// the statement's place, workspace before dependency, then the row's place.
+type NearKey = (usize, usize, u32, u32, bool, Option<String>, Option<u32>);
+
+/// One error row, listed once in [`BetweenOut::errors`].
+#[derive(Debug, Clone)]
 pub struct ErrorRow {
     pub file: Option<String>,
     pub line: Option<u32>,
@@ -178,6 +184,14 @@ pub struct ErrorRow {
     pub op_id: String,
     pub op: Option<String>,
     pub labels: Vec<&'static str>,
+    /// `explicit` (an `Error`), `implicit` (a record operation, a check),
+    /// `commit-behavior` (a commit under `[CommitBehavior(Error)]`), `window`
+    /// (a page or report run with a write that may be pending).
+    pub kind: &'static str,
+    /// The region statement whose cone holds it (`file:line`).
+    pub statement: Option<String>,
+    pub hops: usize,
+    near: NearKey,
 }
 
 /// One commit row.
@@ -194,10 +208,19 @@ pub struct CommitRow {
     /// `A-tail`, `middle`, `B-head`, `inside-A`, `inside-B`.
     pub part: &'static str,
     pub labels: Vec<&'static str>,
-    /// `commitsWithoutB`: how the paths end (`exit`, `return`, `error`).
+    /// `commitsWithoutB`: how the paths end (`exit`, `return`, `error`,
+    /// `b-never-after-a`).
     pub ends: Vec<&'static str>,
     pub route: Option<SliceRoute>,
-    pub errors_after: Vec<ErrorRow>,
+    /// Indices into [`BetweenOut::errors`]: errors that may run after this
+    /// commit and before B, nearest first.
+    pub errors_after: Vec<usize>,
+    /// Errors in the commit's own cone, whose order against it is not read.
+    pub errors_same_cone: Vec<usize>,
+    /// The region statement that starts its cone (`file:line`).
+    pub statement: Option<String>,
+    pub hops: usize,
+    near: NearKey,
 }
 
 /// The `commit-between` answer of one root.
@@ -207,12 +230,19 @@ pub struct BetweenOut {
     pub refused: Option<String>,
     pub after: Option<SiteDesc>,
     pub before: Option<SiteDesc>,
+    /// One route from the root to A and to B (the first pair's).
+    pub route_a: Option<SliceRoute>,
+    pub route_b: Option<SliceRoute>,
     pub between: Vec<CommitRow>,
     pub inside_a: Vec<CommitRow>,
     pub inside_b: Vec<CommitRow>,
     pub without_b: Vec<CommitRow>,
     pub own_transaction: Vec<CommitRow>,
-    pub errors_between: Vec<ErrorRow>,
+    /// Every error row, once; the lists hold indices into it.
+    pub errors: Vec<ErrorRow>,
+    err_index: HashMap<String, usize>,
+    /// Errors that may run after A returns and before B (indices).
+    pub errors_between: Vec<usize>,
     /// `b-never-after-a`, `not-in-one-build`, `a-dead-under-literals`,
     /// `b-dead-under-literals` (for a `no`).
     pub relation: Option<&'static str>,
@@ -395,7 +425,16 @@ impl<'t> Builder<'t> {
             }
             _ => self.list(kids(&n.children), next),
         };
-        self.list(leaves, body)
+        let entry = self.list(leaves, body);
+        // A leaf that may not run (a ternary arm, `PathHint::MayRun`): the
+        // path may skip it.
+        if n.path_hint() == Some(PathHint::MayRun) {
+            let j = self.node();
+            self.edge(j, entry);
+            self.edge(j, next);
+            return j;
+        }
+        entry
     }
 }
 
@@ -652,6 +691,8 @@ struct Part<'a> {
     region_no_back: HashSet<usize>,
     /// Nodes after the start that never reach the target.
     without: Vec<usize>,
+    /// Where the part's paths start (after the site toward A, or the entry).
+    starts: Vec<usize>,
     target: HashSet<usize>,
     /// The route from the root to this part's routine.
     prefix: Vec<Step<'a>>,
@@ -659,6 +700,16 @@ struct Part<'a> {
     /// before B behind a trap on B's route.
     caught_by_route_trap: bool,
     swallowed_before_b: bool,
+    /// A-tail: a path from the start returns normally (or ends in an error a
+    /// trap on A's route catches), so control goes back toward M.
+    cont: bool,
+    /// Review B3: a path from this part goes on to B (every shallower A-tail
+    /// part returns, and M's middle reaches B). Commits in a part that does
+    /// not are `commitsWithoutB`.
+    reaches_b: bool,
+    /// Review B4: a B-head part below a checked run on B's route: its
+    /// commits are the run's own (class 2).
+    b_run: bool,
 }
 
 struct Walk<'a, 'w> {
@@ -671,6 +722,8 @@ struct Walk<'a, 'w> {
     errors: ByOwner<'a, 'w>,
     by_fact: HashMap<usize, &'w TerminalRecord<'a>>,
     cfgs: HashMap<usize, Cfg<'a>>,
+    /// Cone walks by (sorted statement ids, routine) (review COST).
+    cones: HashMap<Vec<&'a str>, Rc<Cone<'a>>>,
     commit_scopes: Option<crate::engine::l5::commit_scope::CbGraph<'a>>,
     group_paths: GroupPaths<'a>,
     out: BetweenOut,
@@ -680,9 +733,45 @@ struct Walk<'a, 'w> {
 /// What one cone walk found.
 #[derive(Default)]
 struct Cone<'a> {
-    /// (record, class, labels, steps from the region statement).
-    commits: Vec<(usize, u8, Vec<&'static str>, Vec<Step<'a>>)>,
-    errors: Vec<(usize, Vec<&'static str>)>,
+    /// The walk's tree: per node, its parent, the edge into it and the trap
+    /// that edge is.
+    nodes: Vec<(Option<usize>, Step<'a>, Option<TrapKind>)>,
+    /// (record, class, the walk node it was met at; `None`: the statement's
+    /// own).
+    commits: Vec<(usize, u8, Option<usize>)>,
+    errors: Vec<(usize, Vec<&'static str>, Option<usize>)>,
+    /// Every routine the walk visited.
+    visited: Vec<&'a str>,
+    capped: bool,
+}
+
+impl<'a> Cone<'a> {
+    /// The steps from the region statement to walk node `n`.
+    fn steps(&self, n: Option<usize>) -> Vec<Step<'a>> {
+        let mut out = Vec::new();
+        let mut cur = n;
+        while let Some(i) = cur {
+            out.push(self.nodes[i].1);
+            cur = self.nodes[i].0;
+        }
+        out.reverse();
+        out
+    }
+
+    /// The labels of the path to walk node `n`.
+    fn labels(&self, n: Option<usize>) -> Vec<&'static str> {
+        let mut out: Vec<&'static str> = Vec::new();
+        let mut cur = n;
+        while let Some(i) = cur {
+            let l = label_of(self.nodes[i].1.kind, self.nodes[i].2);
+            if !out.contains(&l) {
+                out.push(l);
+            }
+            cur = self.nodes[i].0;
+        }
+        out.sort_unstable();
+        out
+    }
 }
 
 impl<'a, 'w> Walk<'a, 'w> {
@@ -726,13 +815,29 @@ impl<'a, 'w> Walk<'a, 'w> {
         v
     }
 
-    /// The commit states of `owner` from the root (`commit_scope`): N, I, E bits.
-    fn commit_states(&self, owner: &str) -> u8 {
-        self.commit_scopes
+    /// The behaviors (`commit_scope` N, I, E bits) the commit `op` runs under
+    /// on the route `steps` from the root (review S1: per route, so another
+    /// route's declaration neither invents nor hides one).
+    fn route_states(&self, steps: &[Step<'a>], op: &str) -> u8 {
+        use crate::engine::l5::commit_scope::{N, norm};
+        let Some(cb) = self
+            .commit_scopes
             .as_ref()
             .filter(|cb| !cb.root_unaffected(self.root))
-            .and_then(|cb| cb.states_at(self.root, owner))
-            .unwrap_or(crate::engine::l5::commit_scope::N)
+        else {
+            return N;
+        };
+        let hops = steps.iter().map(|s| {
+            let site = match s.site {
+                Some(EdgeSite::Guarded(x)) => Some(x),
+                _ => None,
+            };
+            (s.to, site)
+        });
+        match norm(cb.route_states(self.root, hops, Some(op))) {
+            0 => N,
+            s => s,
+        }
     }
 
     fn is_run_commit(&self, rec: &TerminalRecord<'_>) -> bool {
@@ -747,20 +852,64 @@ impl<'a, 'w> Walk<'a, 'w> {
 
     /// The cone of the edges leaving `routine` at one of `ids`, and the
     /// statement's own records. `run_side`: A is inside a run here.
-    fn cone(&mut self, routine: &'a str, ids: &[&'a str]) -> Cone<'a> {
+    /// The cone of the statement with `ids` in `routine` (memoized). A
+    /// region cone (`region`) also records the routines it reaches (read
+    /// against the root's unresolved cone) and blocks on a reached routine
+    /// whose body is not available (review B2, S3).
+    fn cone(&mut self, routine: &'a str, ids: &[&'a str], region: bool) -> Rc<Cone<'a>> {
+        let mut key: Vec<&'a str> = ids.to_vec();
+        key.sort_unstable();
+        key.push(routine);
+        let cone = match self.cones.get(&key) {
+            Some(c) => c.clone(),
+            None => {
+                let c = Rc::new(self.walk_cone(routine, ids));
+                self.cones.insert(key, c.clone());
+                c
+            }
+        };
+        if region {
+            if cone.capped {
+                self.out.blockers.push((
+                    "cone-walk-capped",
+                    format!(
+                        "a region statement's cone passed {CONE_STATE_CAP} routine states; the \
+                         walk stopped"
+                    ),
+                ));
+            }
+            for &r in &cone.visited {
+                if self.out.region_routines.insert(r.to_string()) {
+                    let opaque = self.reach.routine(r).is_none_or(|row| !row.body_available);
+                    if opaque {
+                        let d = self.display(r);
+                        self.out.blockers.push((
+                            "region-body-not-available",
+                            format!(
+                                "{d} may run between A and B and its body is not available \
+                                 (symbols only); what it does is not known"
+                            ),
+                        ));
+                    }
+                }
+            }
+        }
+        cone
+    }
+
+    fn walk_cone(&mut self, routine: &'a str, ids: &[&'a str]) -> Cone<'a> {
         let mut cone = Cone::default();
         let idset: HashSet<&str> = ids.iter().copied().collect();
         // The statement's own records.
         for (i, rec) in self.records_of(routine) {
-            if !idset.contains(rec.terminal.id()) {
-                continue;
+            if idset.contains(rec.terminal.id()) {
+                cone_record(self, &mut cone, i, rec, false, None, None);
             }
-            cone_record(self, &mut cone, i, rec, false, None, Vec::new(), Vec::new());
         }
-        // (routine, crossed a checked run, the trap crossed)
+        // (routine, crossed a checked run, the first trap crossed)
         type St<'s> = (&'s str, bool, Option<TrapKind>);
         let mut seen: HashSet<St<'a>> = HashSet::new();
-        let mut q: VecDeque<(St<'a>, Vec<Step<'a>>, Vec<&'static str>)> = VecDeque::new();
+        let mut q: VecDeque<(St<'a>, usize)> = VecDeque::new();
         for (to, site, kind, trap) in self.reach.out_edges(routine) {
             let at = match site {
                 Some(EdgeSite::Guarded(s)) => s,
@@ -770,58 +919,40 @@ impl<'a, 'w> Walk<'a, 'w> {
                 continue;
             }
             let st = (to, trap == Some(TrapKind::CheckedRun), trap);
-            let step = Step {
-                from: routine,
-                to,
-                site,
-                kind,
-            };
             if seen.insert(st) {
-                q.push_back((st, vec![step], vec![label_of(kind, trap)]));
+                let step = Step {
+                    from: routine,
+                    to,
+                    site,
+                    kind,
+                };
+                cone.nodes.push((None, step, trap));
+                q.push_back((st, cone.nodes.len() - 1));
             }
         }
-        while let Some(((r, run, trap), steps, labels)) = q.pop_front() {
+        let mut visited: HashSet<&'a str> = HashSet::new();
+        while let Some(((r, run, trap), n)) = q.pop_front() {
             if seen.len() > CONE_STATE_CAP {
-                self.out.blockers.push((
-                    "cone-walk-capped",
-                    format!(
-                        "a region statement's cone passed {CONE_STATE_CAP} routine states; the \
-                         walk stopped"
-                    ),
-                ));
+                cone.capped = true;
                 break;
             }
-            self.out.region_routines.insert(r.to_string());
+            if visited.insert(r) {
+                cone.visited.push(r);
+            }
             for (i, rec) in self.records_of(r) {
-                cone_record(
-                    self,
-                    &mut cone,
-                    i,
-                    rec,
-                    run,
-                    trap,
-                    steps.clone(),
-                    labels.clone(),
-                );
+                cone_record(self, &mut cone, i, rec, run, trap, Some(n));
             }
             for (to, site, kind, t) in self.reach.out_edges(r) {
-                let run2 = run || t == Some(TrapKind::CheckedRun);
-                let trap2 = trap.or(t);
-                let st = (to, run2, trap2);
+                let st = (to, run || t == Some(TrapKind::CheckedRun), trap.or(t));
                 if seen.insert(st) {
-                    let mut s2 = steps.clone();
-                    s2.push(Step {
+                    let step = Step {
                         from: r,
                         to,
                         site,
                         kind,
-                    });
-                    let mut l2 = labels.clone();
-                    let l = label_of(kind, t);
-                    if !l2.contains(&l) {
-                        l2.push(l);
-                    }
-                    q.push_back((st, s2, l2));
+                    };
+                    cone.nodes.push((Some(n), step, t));
+                    q.push_back((st, cone.nodes.len() - 1));
                 }
             }
         }
@@ -841,22 +972,35 @@ impl<'a, 'w> Walk<'a, 'w> {
         v
     }
 
-    fn error_row(&self, rec: &TerminalRecord<'a>, labels: Vec<&'static str>) -> ErrorRow {
+    fn error_row(
+        &self,
+        rec: &TerminalRecord<'a>,
+        labels: Vec<&'static str>,
+        kind: &'static str,
+        at: &At,
+    ) -> ErrorRow {
         let id = rec.terminal.id();
         let row = self.reach.row_at(rec.owner, id);
         let anchor = row.and_then(|r| anchor_in(r, id));
         let table_names: HashMap<&str, &str> = HashMap::new();
         let op = row.and_then(|r| site_facts(r, id, &table_names).op_name);
+        let file = anchor.map(|a| a.source_unit_id.to_string());
+        let line = anchor.map(|a| a.start_line);
         ErrorRow {
-            file: anchor.map(|a| a.source_unit_id.to_string()),
-            line: anchor.map(|a| a.start_line),
+            near: at.near(&file, line),
+            file,
+            line,
             column: anchor.map(|a| a.start_column),
             op_id: id.to_string(),
             op,
             labels,
+            kind,
+            statement: at.statement.clone(),
+            hops: at.hops,
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn commit_row(
         &self,
         rec: &TerminalRecord<'a>,
@@ -865,15 +1009,19 @@ impl<'a, 'w> Walk<'a, 'w> {
         part: &'static str,
         labels: Vec<&'static str>,
         steps: Vec<Step<'a>>,
+        at: &At,
     ) -> CommitRow {
         let id = rec.terminal.id();
         let row = self.reach.row_at(rec.owner, id);
         let anchor = row.and_then(|r| anchor_in(r, id));
         let path = self.group_paths.path_of(self.reach, &steps, id);
         let sites = route_sites(self.reach, self.root, &path, (row, anchor));
+        let file = anchor.map(|a| a.source_unit_id.to_string());
+        let line = anchor.map(|a| a.start_line);
         CommitRow {
-            file: anchor.map(|a| a.source_unit_id.to_string()),
-            line: anchor.map(|a| a.start_line),
+            near: at.near(&file, line),
+            file,
+            line,
             column: anchor.map(|a| a.start_column),
             op_id: id.to_string(),
             class,
@@ -883,7 +1031,47 @@ impl<'a, 'w> Walk<'a, 'w> {
             ends: Vec::new(),
             route: Some(SliceRoute { path, sites }),
             errors_after: Vec::new(),
+            errors_same_cone: Vec::new(),
+            statement: at.statement.clone(),
+            hops: at.hops,
         }
+    }
+
+    /// Where a region statement sits, for the nearest-first key.
+    fn at(&self, row: &'a ModelRoutine, ids: &[&'a str], part: usize, hops: usize) -> At {
+        let anchor = ids.iter().find_map(|id| anchor_in(row, id));
+        At {
+            statement: anchor.map(|a| format!("{}:{}", a.source_unit_id, a.start_line + 1)),
+            hops,
+            part,
+            line: anchor.map_or(u32::MAX, |a| a.start_line),
+            column: anchor.map_or(u32::MAX, |a| a.start_column),
+        }
+    }
+}
+
+/// A row's region statement and depth (review output guidance).
+#[derive(Clone)]
+struct At {
+    statement: Option<String>,
+    hops: usize,
+    part: usize,
+    line: u32,
+    column: u32,
+}
+
+impl At {
+    fn near(&self, file: &Option<String>, line: Option<u32>) -> NearKey {
+        let dep = file.as_deref().is_some_and(|f| f.starts_with("dep:"));
+        (
+            self.hops,
+            self.part,
+            self.line,
+            self.column,
+            dep,
+            file.clone(),
+            line,
+        )
     }
 }
 
@@ -914,27 +1102,17 @@ fn cone_record<'a>(
     rec: &TerminalRecord<'a>,
     run: bool,
     trap: Option<TrapKind>,
-    steps: Vec<Step<'a>>,
-    labels: Vec<&'static str>,
+    node: Option<usize>,
 ) {
     let id = rec.terminal.id();
     if id.is_empty() || !w.live(id) {
         return;
     }
     if rec.effect_type == "COMMIT" {
-        if w.is_run_commit(rec) {
-            cone.commits.push((i, 2, labels, steps));
-            return;
-        }
-        let states = w.commit_states(rec.owner);
-        if states & crate::engine::l5::commit_scope::E != 0 {
-            cone.errors.push((i, vec!["commit-behavior-error"]));
-        }
-        if states & crate::engine::l5::commit_scope::N == 0 {
-            return;
-        }
-        cone.commits
-            .push((i, if run { 2 } else { 1 }, labels, steps));
+        // `[CommitBehavior]` is read per route where the row is built
+        // (review S1); the class here is the cone's.
+        let class = if run || w.is_run_commit(rec) { 2 } else { 1 };
+        cone.commits.push((i, class, node));
         return;
     }
     // A page or report run with a write pending (design §4.3): a page's
@@ -952,13 +1130,13 @@ fn cone_record<'a>(
         Some(t) if t.definite() => {}
         Some(_) => {
             l.push("trap-may-fail-pending");
-            cone.errors.push((i, l));
+            cone.errors.push((i, l, node));
         }
         None => {
             if w.is_run_error(rec) {
                 l.push("run-error-rolls-back-a");
             }
-            cone.errors.push((i, l));
+            cone.errors.push((i, l, node));
         }
     }
 }
@@ -1111,6 +1289,7 @@ pub(crate) fn compute<'a>(
         errors,
         by_fact,
         cfgs: HashMap::new(),
+        cones: HashMap::new(),
         commit_scopes: crate::engine::l5::commit_scope::CbGraph::of_tree(tree),
         group_paths: GroupPaths::new(&tree.typed_edges, model),
         out,
@@ -1185,6 +1364,19 @@ pub(crate) fn compute<'a>(
     if rb_all.is_empty() {
         w.out.relation = Some("b-dead-under-literals");
         return w.out;
+    }
+    // One route to A and to B (spec §5.1), the first pair's.
+    for (route, s, slot) in [(&ra_all[0], &a, 0), (&rb_all[0], &b, 1)] {
+        let op = s.ids[0];
+        let row = reach.row_at(s.owner, op);
+        let path = w.group_paths.path_of(&reach, route, op);
+        let sites = route_sites(&reach, root, &path, (row, Some(s.anchor)));
+        let r = Some(SliceRoute { path, sites });
+        if slot == 0 {
+            w.out.route_a = r;
+        } else {
+            w.out.route_b = r;
+        }
     }
     let mut never = 0usize;
     let mut other_build = 0usize;
@@ -1266,7 +1458,12 @@ fn pair<'a>(
     for i in (k + 1..=ra.len()).rev() {
         let r = ra[i - 1].to;
         let leave = leave_ids(ra, i, a);
-        let Some(row) = w.reach.row_at(r, leave.first().copied().unwrap_or("")) else {
+        // Review S4: a publisher left by its event (A in a subscriber): the
+        // publisher's body raises the event and returns; nothing runs after.
+        if leave.is_empty() {
+            continue;
+        }
+        let Some(row) = w.reach.row_at(r, leave[0]) else {
             continue;
         };
         let caught = a_route_trap_at.is_some_and(|j| j < i);
@@ -1283,6 +1480,7 @@ fn pair<'a>(
             w.out.blockers.push(t);
             return PairEnd::Judged;
         }
+        check_complete(w, m, row_a);
         let cfg = &w.cfgs[&row_key(row_a)];
         let aset: HashSet<&str> = a_leave.iter().copied().collect();
         let bset: HashSet<&str> = b_leave.iter().copied().collect();
@@ -1310,12 +1508,20 @@ fn pair<'a>(
                 region: Vec::new(),
                 region_no_back: HashSet::new(),
                 without,
+                starts: starts.clone(),
                 target,
                 prefix: ra[..k].to_vec(),
                 caught_by_route_trap: false,
                 swallowed_before_b: false,
+                cont: true,
+                reaches_b: false,
+                b_run: false,
             };
             parts.push(p);
+            // Review B3: B never runs after A, so no A-tail part reaches it.
+            for p in parts.iter_mut() {
+                p.reaches_b = false;
+            }
             judge(w, a, b, &parts, swallowed, ra, k);
             return PairEnd::Never;
         }
@@ -1338,19 +1544,40 @@ fn pair<'a>(
             region,
             region_no_back,
             without,
+            starts,
             target,
             prefix: ra[..k].to_vec(),
             caught_by_route_trap: false,
             swallowed_before_b: false,
+            cont: true,
+            reaches_b: true,
+            b_run: false,
         });
+    }
+    // Review B3: an A-tail part reaches B only when it and every shallower
+    // A-tail part return toward M (parts are deepest first; M's middle,
+    // pushed last, reaches B here).
+    let mut ok = true;
+    for p in parts.iter_mut().rev() {
+        if p.kind == "A-tail" {
+            p.reaches_b = ok && p.cont;
+            ok = p.reaches_b;
+        }
     }
     // B's head, shallowest first.
     let mut b_trap = false;
+    let mut b_run = false;
     for i in k + 1..=rb.len() {
-        b_trap |= trap_of(w, &rb[i - 1]).is_some_and(TrapKind::definite);
+        let t = trap_of(w, &rb[i - 1]);
+        b_trap |= t.is_some_and(TrapKind::definite);
+        b_run |= t == Some(TrapKind::CheckedRun);
         let r = rb[i - 1].to;
         let leave = leave_ids(rb, i, b);
-        let Some(row) = w.reach.row_at(r, leave.first().copied().unwrap_or("")) else {
+        // Review S4: a publisher left by its event (B in a subscriber).
+        if leave.is_empty() {
+            continue;
+        }
+        let Some(row) = w.reach.row_at(r, leave[0]) else {
             continue;
         };
         let sure_here = b_sure(w, rb, i, b);
@@ -1359,6 +1586,7 @@ fn pair<'a>(
             w.out.blockers.push(t);
             return PairEnd::Judged;
         }
+        check_complete(w, r, row);
         let cfg = &w.cfgs[&row_key(row)];
         let lset: HashSet<&str> = leave.iter().copied().collect();
         let ln = cfg.nodes_of(&lset);
@@ -1395,14 +1623,88 @@ fn pair<'a>(
             region,
             region_no_back,
             without: Vec::new(),
+            starts: vec![cfg.entry],
             target,
             prefix: rb[..i].to_vec(),
             caught_by_route_trap: false,
             swallowed_before_b: b_trap,
+            cont: true,
+            reaches_b: true,
+            b_run,
         });
     }
     judge(w, a, b, &parts, swallowed, ra, k);
     PairEnd::Judged
+}
+
+/// Review B1: a site of `row` that may matter (an edge leaves it, or a
+/// commit or error record names it) but that no node of its control-flow
+/// graph holds, e.g. a call in a `case` label, which the control-flow tree
+/// does not harvest. Its order is not known: a blocker, never a silent `no`.
+fn check_complete<'a>(w: &mut Walk<'a, '_>, routine: &'a str, row: &'a ModelRoutine) {
+    let Some(cfg) = w.cfgs.get(&row_key(row)) else {
+        return;
+    };
+    let held: HashSet<&str> = cfg.ids.iter().flatten().copied().collect();
+    let edged: HashSet<&str> = w
+        .reach
+        .out_edges(routine)
+        .into_iter()
+        .filter_map(|(_, s, _, _)| match s {
+            Some(EdgeSite::Guarded(x)) => Some(x),
+            _ => None,
+        })
+        .collect();
+    let recorded: HashSet<&str> = w
+        .records_of(routine)
+        .into_iter()
+        .map(|(_, r)| r.terminal.id())
+        .collect();
+    let matters = |id: &str| edged.contains(id) || recorded.contains(id);
+    let mut missing: Vec<&PAnchor> = Vec::new();
+    for c in &row.call_sites {
+        let ids = [c.id.as_str(), c.operation_id.as_str()];
+        if !ids.iter().any(|i| held.contains(i)) && ids.iter().any(|i| matters(i)) {
+            missing.push(&c.source_anchor);
+        }
+    }
+    for o in &row.record_operations {
+        if !held.contains(o.id.as_str()) && matters(&o.id) {
+            missing.push(&o.source_anchor);
+        }
+    }
+    for o in &row.operation_sites {
+        if !held.contains(o.id.as_str()) && matters(&o.id) {
+            missing.push(&o.source_anchor);
+        }
+    }
+    // A site that shares its place with one the graph holds is held.
+    let held_places: Vec<&PAnchor> = row
+        .call_sites
+        .iter()
+        .filter(|c| held.contains(c.id.as_str()) || held.contains(c.operation_id.as_str()))
+        .map(|c| &c.source_anchor)
+        .chain(
+            row.record_operations
+                .iter()
+                .filter(|o| held.contains(o.id.as_str()))
+                .map(|o| &o.source_anchor),
+        )
+        .collect();
+    missing.retain(|a| !held_places.iter().any(|h| same_place(h, a)));
+    if let Some(a) = missing.first() {
+        let d = w.display(routine);
+        w.out.blockers.push((
+            "site-outside-control-flow",
+            format!(
+                "{d} has {} site(s) its control-flow tree does not place (first at {}:{}, e.g. a \
+                 call in a case label); their order is not known",
+                missing.len(),
+                a.source_unit_id,
+                a.start_line + 1
+            ),
+        ));
+    }
 }
 
 fn no_tree<'a>(w: &Walk<'a, '_>, r: &str) -> (&'static str, String) {
@@ -1430,6 +1732,7 @@ fn tail_part<'a>(
         w.out.blockers.push(b);
         return None;
     }
+    check_complete(w, r, row);
     let cfg = &w.cfgs[&row_key(row)];
     let lset: HashSet<&str> = leave.iter().copied().collect();
     let ln = cfg.nodes_of(&lset);
@@ -1460,6 +1763,7 @@ fn tail_part<'a>(
         .filter(|&n| fnb[n] && bnb[n])
         .collect();
     let without = (0..f.len()).filter(|&n| f[n] && !bk[n]).collect();
+    let cont = targets.iter().any(|&t| f[t]);
     Some(Part {
         routine: r,
         row,
@@ -1467,11 +1771,26 @@ fn tail_part<'a>(
         region,
         region_no_back,
         without,
+        starts,
         target: targets.into_iter().collect(),
         prefix,
         caught_by_route_trap: caught,
         swallowed_before_b: false,
+        cont,
+        reaches_b: true,
+        b_run: false,
     })
+}
+
+/// One region (or without-B) statement's cone, in its part.
+struct NodeCone<'a> {
+    part: usize,
+    node: usize,
+    ids: Vec<&'a str>,
+    cone: Rc<Cone<'a>>,
+    loop_carried: bool,
+    /// On a path that ends before B.
+    without: bool,
 }
 
 /// Fold one pair's parts into the answer.
@@ -1484,68 +1803,85 @@ fn judge<'a>(
     ra: &[Step<'a>],
     k: usize,
 ) {
-    // Per part, per region node: its cone.
-    struct NodeCone<'a> {
-        part: usize,
-        node: usize,
-        cone: Cone<'a>,
-        loop_carried: bool,
-    }
+    use crate::engine::l5::commit_scope::{E, N};
     let mut cones: Vec<NodeCone<'a>> = Vec::new();
-    let mut withouts: Vec<(usize, usize, Cone<'a>)> = Vec::new();
+    // Review N8: per part, the nodes a path reaches from its start without
+    // passing a direct class-1 `Commit()` (a write may still be pending there).
+    let mut pending: Vec<Vec<bool>> = Vec::new();
     for (pi, p) in parts.iter().enumerate() {
-        let node_ids: Vec<(usize, Vec<&'a str>)> = {
-            let Some(cfg) = w.cfg(p.row) else { continue };
+        let node_ids: Vec<(usize, bool, Vec<&'a str>)> = {
+            let Some(cfg) = w.cfg(p.row) else {
+                pending.push(Vec::new());
+                continue;
+            };
             p.region
                 .iter()
-                .map(|&n| (n, cfg.ids[n].clone()))
-                .chain(
-                    p.without
-                        .iter()
-                        .map(|&n| (usize::MAX - n, cfg.ids[n].clone())),
-                )
+                .map(|&n| (n, false, cfg.ids[n].clone()))
+                .chain(p.without.iter().map(|&n| (n, true, cfg.ids[n].clone())))
                 .collect()
         };
-        for (n, ids) in node_ids {
+        let mut commit_nodes: HashSet<usize> = HashSet::new();
+        for (n, without, ids) in node_ids {
             if ids.is_empty() {
                 continue;
             }
             let ids = expand_ids(p.row, &ids);
-            if n > usize::MAX / 2 {
-                let cone = w.cone(p.routine, &ids);
-                withouts.push((pi, usize::MAX - n, cone));
-                continue;
+            if !without {
+                for id in &ids {
+                    w.out.region_sites.insert((*id).to_string());
+                }
+                w.out.region_routines.insert(p.routine.to_string());
             }
-            for id in &ids {
-                w.out.region_sites.insert((*id).to_string());
+            let cone = w.cone(p.routine, &ids, !without);
+            if cone
+                .commits
+                .iter()
+                .any(|(_, c, node)| *c == 1 && node.is_none())
+            {
+                commit_nodes.insert(n);
             }
-            w.out.region_routines.insert(p.routine.to_string());
-            let cone = w.cone(p.routine, &ids);
             cones.push(NodeCone {
                 part: pi,
                 node: n,
+                ids,
                 cone,
-                loop_carried: !p.region_no_back.contains(&n),
+                loop_carried: !without && !p.region_no_back.contains(&n),
+                without,
             });
         }
+        let f = w
+            .cfgs
+            .get(&row_key(p.row))
+            .map(|cfg| cfg.forward(&p.starts, &commit_nodes, false))
+            .unwrap_or_default();
+        // A commit node itself is reached, but what follows it is not.
+        let mut f = f;
+        for &c in &commit_nodes {
+            if let Some(x) = f.get_mut(c) {
+                *x = false;
+            }
+        }
+        pending.push(f);
     }
-    // Errors per (part, node), with labels.
-    let mut errs: Vec<(usize, usize, ErrorRow)> = Vec::new();
-    // The region's errors, and those on paths that end before B (an error
-    // there is what stops the code before B: the dangerous case).
-    let sources: Vec<(usize, usize, &Cone<'a>)> = cones
-        .iter()
-        .map(|nc| (nc.part, nc.node, &nc.cone))
-        .chain(withouts.iter().map(|(pi, n, c)| (*pi, *n, c)))
-        .collect();
-    for (part, node, cone) in sources {
-        let p = &parts[part];
+    // Errors, each once, per (part, node).
+    let mut errs: Vec<(usize, usize, usize)> = Vec::new();
+    for nc in &cones {
+        let p = &parts[nc.part];
         if p.caught_by_route_trap {
             continue;
         }
-        let nc = (part, node);
-        for (i, labels) in &cone.errors {
+        for (i, labels, node) in &nc.cone.errors {
             let Some(rec) = record(w, *i) else { continue };
+            let kind = match rec.effect_type {
+                "ERROR_THROW" => "explicit",
+                "UI_WINDOW_OPEN" => "window",
+                _ => "implicit",
+            };
+            // N8: a page or report run where no write can be pending (every
+            // path to it passes a direct commit) raises no pending-write error.
+            if kind == "window" && !pending[nc.part].get(nc.node).copied().unwrap_or(true) {
+                continue;
+            }
             let mut l = labels.clone();
             if swallowed {
                 l.push("swallowed-above-meet");
@@ -1553,60 +1889,110 @@ fn judge<'a>(
             if p.swallowed_before_b {
                 l.push("swallowed-before-b");
             }
-            let row = w.error_row(rec, l);
-            errs.push((nc.0, nc.1, row));
+            let hops = nc.cone.steps(*node).len();
+            let at = w.at(p.row, &nc.ids, nc.part, hops);
+            let row = w.error_row(rec, l, kind, &at);
+            let idx = push_error(&mut w.out, row);
+            errs.push((nc.part, nc.node, idx));
         }
-    }
-    for (_, _, e) in &errs {
-        push_error(&mut w.out.errors_between, e.clone());
-    }
-    // Errors after a node: in its part, from the nodes it reaches; and every
-    // later part.
-    fn errors_after(
-        cfgs: &HashMap<usize, Cfg<'_>>,
-        parts: &[Part<'_>],
-        errs: &[(usize, usize, ErrorRow)],
-        part: usize,
-        node: usize,
-    ) -> Vec<ErrorRow> {
-        let mut out: Vec<ErrorRow> = Vec::new();
-        let reach_in = cfgs
-            .get(&row_key(parts[part].row))
-            .map(|cfg| cfg.forward(&[node], &parts[part].target, false));
-        for (pi, n, e) in errs {
-            let after = *pi > part
-                || (*pi == part
-                    && reach_in
-                        .as_ref()
-                        .is_none_or(|f| f.get(*n).copied().unwrap_or(false)));
-            if after {
-                push_error(&mut out, e.clone());
-            }
-        }
-        out
-    }
-    // Commits in the region.
-    for nc in &cones {
-        let p = &parts[nc.part];
-        for (i, class, labels, steps) in &nc.cone.commits {
+        // S1: a commit some route runs under `[CommitBehavior(Error)]` is an
+        // error, read per route.
+        for (i, class, node) in &nc.cone.commits {
             let Some(rec) = record(w, *i) else { continue };
-            let mut l = labels.clone();
-            if nc.loop_carried {
-                l.push("loop-carried");
+            if *class != 1 {
+                continue;
             }
             let mut full = p.prefix.clone();
+            full.extend(nc.cone.steps(*node));
+            if w.route_states(&full, rec.terminal.id()) & E != 0 {
+                let hops = nc.cone.steps(*node).len();
+                let at = w.at(p.row, &nc.ids, nc.part, hops);
+                let row = w.error_row(rec, vec!["commit-behavior-error"], "commit-behavior", &at);
+                let idx = push_error(&mut w.out, row);
+                errs.push((nc.part, nc.node, idx));
+            }
+        }
+    }
+    let mut listed: HashSet<usize> = w.out.errors_between.iter().copied().collect();
+    for &(_, _, idx) in &errs {
+        if listed.insert(idx) {
+            w.out.errors_between.push(idx);
+        }
+    }
+    // The errors after node `n` of part `pi`: in later parts, and in the
+    // nodes of its part it reaches; those of its own cone, apart.
+    let after = |w: &Walk<'a, '_>, pi: usize, n: usize| -> (Vec<usize>, Vec<usize>) {
+        let f = w
+            .cfgs
+            .get(&row_key(parts[pi].row))
+            .map(|cfg| cfg.forward(&[n], &parts[pi].target, false));
+        let (mut out, mut same) = (Vec::new(), Vec::new());
+        let (mut seen_out, mut seen_same) = (HashSet::new(), HashSet::new());
+        for &(p2, n2, idx) in &errs {
+            if p2 == pi && n2 == n {
+                if seen_same.insert(idx) {
+                    same.push(idx);
+                }
+            } else if (p2 > pi
+                || (p2 == pi
+                    && f.as_ref()
+                        .is_none_or(|f| f.get(n2).copied().unwrap_or(false))))
+                && seen_out.insert(idx)
+            {
+                out.push(idx);
+            }
+        }
+        out.sort_by(|x, y| w.out.errors[*x].near.cmp(&w.out.errors[*y].near));
+        (out, same)
+    };
+    // Commits.
+    for nc in &cones {
+        let p = &parts[nc.part];
+        for (i, class, node) in &nc.cone.commits {
+            let Some(rec) = record(w, *i) else { continue };
+            let steps = nc.cone.steps(*node);
+            let hops = steps.len();
+            let mut full = p.prefix.clone();
             full.extend(steps.iter().copied());
-            let kind = if *class == 2 && steps.is_empty() {
+            let mut class = *class;
+            if class == 1 {
+                if w.route_states(&full, rec.terminal.id()) & N == 0 {
+                    continue;
+                }
+                if p.b_run {
+                    class = 2;
+                }
+            }
+            let mut labels = nc.cone.labels(*node);
+            if nc.loop_carried {
+                labels.push("loop-carried");
+            }
+            let kind = if class == 2 && steps.is_empty() {
                 "run-commit"
             } else {
                 "commit"
             };
-            let mut row = w.commit_row(rec, *class, kind, p.kind, l, full);
-            if *class == 1 {
-                row.errors_after = errors_after(&w.cfgs, parts, &errs, nc.part, nc.node);
-                push_commit(&mut w.out.between, row);
-            } else {
+            let at = w.at(p.row, &nc.ids, nc.part, hops);
+            let mut row = w.commit_row(rec, class, kind, p.kind, labels, full, &at);
+            if nc.without {
+                if class == 1 {
+                    row.ends = w
+                        .cfgs
+                        .get(&row_key(p.row))
+                        .map(|cfg| cfg.ends(nc.node, &p.target))
+                        .unwrap_or_default();
+                    push_commit(&mut w.out.without_b, row);
+                }
+            } else if class == 2 {
                 push_commit(&mut w.out.own_transaction, row);
+            } else if !p.reaches_b {
+                row.ends = vec!["b-never-after-a"];
+                push_commit(&mut w.out.without_b, row);
+            } else {
+                let (e, s) = after(w, nc.part, nc.node);
+                row.errors_after = e;
+                row.errors_same_cone = s;
+                push_commit(&mut w.out.between, row);
             }
         }
     }
@@ -1619,18 +2005,12 @@ fn judge<'a>(
             TrapKind::IsolatedEvent => "isolated-commit-of-A",
             _ => continue,
         };
-        // The A-tail part of the routine the run is called from (j > k), or
-        // M's middle (j == k), and every later part.
-        let part = parts
+        let Some(part) = parts
             .iter()
             .position(|p| p.routine == routine_at(w.root, ra, j) && p.kind != "B-head")
-            .unwrap_or(0);
-        let mut errors: Vec<ErrorRow> = Vec::new();
-        for (pi, _, e) in &errs {
-            if *pi >= part {
-                push_error(&mut errors, e.clone());
-            }
-        }
+        else {
+            continue;
+        };
         let at = match s.site {
             Some(EdgeSite::Guarded(x)) => x,
             _ => "",
@@ -1643,61 +2023,80 @@ fn judge<'a>(
         if t == TrapKind::IsolatedEvent {
             labels.push("if-nothing-pending-at-the-raise");
         }
-        push_commit(
-            &mut w.out.between,
-            CommitRow {
-                file: anchor.map(|x| x.source_unit_id.to_string()),
-                line: anchor.map(|x| x.start_line),
-                column: anchor.map(|x| x.start_column),
-                op_id: at.to_string(),
-                class: 1,
-                kind,
-                part: "A-tail",
-                labels,
-                ends: Vec::new(),
-                route: Some(SliceRoute { path, sites }),
-                errors_after: errors,
-            },
-        );
-    }
-    // Commits without B.
-    for (pi, n, cone) in withouts {
-        let p = &parts[pi];
-        let ends = match w.cfg(p.row) {
-            Some(cfg) => cfg.ends(n, &p.target),
-            None => Vec::new(),
-        };
-        for (i, class, labels, steps) in &cone.commits {
-            if *class != 1 {
-                continue;
+        let place = row_r.map(|r| w.at(r, &[at], part, 0));
+        let file = anchor.map(|x| x.source_unit_id.to_string());
+        let line = anchor.map(|x| x.start_line);
+        let mut errors: Vec<usize> = Vec::new();
+        let mut seen = HashSet::new();
+        for &(pi, _, idx) in &errs {
+            if pi >= part && seen.insert(idx) {
+                errors.push(idx);
             }
-            let Some(rec) = record(w, *i) else { continue };
-            let mut full = p.prefix.clone();
-            full.extend(steps.iter().copied());
-            let mut row = w.commit_row(rec, 1, "commit", p.kind, labels.clone(), full);
-            row.ends = ends.clone();
+        }
+        errors.sort_by(|x, y| w.out.errors[*x].near.cmp(&w.out.errors[*y].near));
+        let reaches = parts[part].reaches_b;
+        let row = CommitRow {
+            near: place
+                .as_ref()
+                .map_or((0, part, 0, 0, false, None, None), |p| p.near(&file, line)),
+            file,
+            line,
+            column: anchor.map(|x| x.start_column),
+            op_id: at.to_string(),
+            class: 1,
+            kind,
+            part: "A-tail",
+            labels,
+            ends: if reaches {
+                Vec::new()
+            } else {
+                vec!["b-never-after-a"]
+            },
+            route: Some(SliceRoute { path, sites }),
+            errors_after: if reaches { errors } else { Vec::new() },
+            errors_same_cone: Vec::new(),
+            statement: place.and_then(|p| p.statement),
+            hops: 0,
+        };
+        if reaches {
+            push_commit(&mut w.out.between, row);
+        } else {
             push_commit(&mut w.out.without_b, row);
         }
     }
-    // Commits inside A and inside B.
-    for (s, route, inside) in [(a, ra, true), (b, &[][..], false)] {
-        let route = if inside { route.to_vec() } else { Vec::new() };
+    // Commits inside A and inside B (S3: not region cones).
+    let all: Vec<usize> = {
+        let mut v: Vec<usize> = Vec::new();
+        let mut seen = HashSet::new();
+        for &(_, _, idx) in &errs {
+            if seen.insert(idx) {
+                v.push(idx);
+            }
+        }
+        v.sort_by(|x, y| w.out.errors[*x].near.cmp(&w.out.errors[*y].near));
+        v
+    };
+    for (s, inside) in [(a, true), (b, false)] {
         let owner = s.owner;
         let ids = s.ids.clone();
-        let cone = w.cone(owner, &ids);
-        let all_errors: Vec<ErrorRow> = errs.iter().map(|(_, _, e)| e.clone()).collect();
-        for (i, class, labels, steps) in &cone.commits {
+        let cone = w.cone(owner, &ids, false);
+        let Some(row_s) = w.reach.row_at(owner, ids.first().copied().unwrap_or("")) else {
+            continue;
+        };
+        for (i, class, node) in &cone.commits {
             let Some(rec) = record(w, *i) else { continue };
-            if steps.is_empty() && rec.owner == owner && ids.contains(&rec.terminal.id()) {
+            if node.is_none() && rec.owner == owner && ids.contains(&rec.terminal.id()) {
                 // The site itself is a commit statement: it is not inside it.
                 continue;
             }
-            let mut full = route.clone();
+            let steps = cone.steps(*node);
+            let mut full = if inside { ra.to_vec() } else { Vec::new() };
             full.extend(steps.iter().copied());
             let part = if inside { "inside-A" } else { "inside-B" };
-            let mut row = w.commit_row(rec, *class, "commit", part, labels.clone(), full);
+            let at = w.at(row_s, &ids, 0, steps.len());
+            let mut row = w.commit_row(rec, *class, "commit", part, cone.labels(*node), full, &at);
             if inside && *class == 1 {
-                row.errors_after = all_errors.clone();
+                row.errors_after = all.clone();
             }
             if inside {
                 push_commit(&mut w.out.inside_a, row);
@@ -1726,16 +2125,29 @@ fn record<'a, 'w>(w: &Walk<'a, 'w>, fact: usize) -> Option<&'w TerminalRecord<'a
     w.by_fact.get(&fact).copied()
 }
 
-fn push_error(v: &mut Vec<ErrorRow>, e: ErrorRow) {
-    match v.iter_mut().find(|x| x.op_id == e.op_id) {
-        Some(x) => {
+/// Add `e` to the error table once (by operation id, review COST: an index,
+/// not a scan); a repeat merges its labels and keeps the nearer key.
+fn push_error(out: &mut BetweenOut, e: ErrorRow) -> usize {
+    match out.err_index.get(&e.op_id) {
+        Some(&i) => {
+            let x = &mut out.errors[i];
             for l in e.labels {
                 if !x.labels.contains(&l) {
                     x.labels.push(l);
                 }
             }
+            if e.near < x.near {
+                x.near = e.near;
+                x.statement = e.statement;
+                x.hops = e.hops;
+            }
+            i
         }
-        None => v.push(e),
+        None => {
+            out.err_index.insert(e.op_id.clone(), out.errors.len());
+            out.errors.push(e);
+            out.errors.len() - 1
+        }
     }
 }
 
@@ -1750,30 +2162,23 @@ fn push_commit(v: &mut Vec<CommitRow>, c: CommitRow) {
                     x.labels.push(l);
                 }
             }
-            for e in c.errors_after {
-                push_error(&mut x.errors_after, e);
+            let seen: HashSet<usize> = x.errors_after.iter().copied().collect();
+            x.errors_after
+                .extend(c.errors_after.into_iter().filter(|e| !seen.contains(e)));
+            if c.near < x.near {
+                x.near = c.near;
+                x.statement = c.statement;
+                x.hops = c.hops;
+                x.route = c.route;
             }
         }
         None => v.push(c),
     }
 }
 
-/// Sort every list by place, deterministically.
+/// Sort every list nearest first (review output guidance), deterministically.
 fn finish(out: &mut BetweenOut) {
-    // Workspace rows first (the human answer prints the first few of each
-    // list; dependency code's rows follow), then by place.
-    let dep = |f: &Option<String>| f.as_deref().is_some_and(|f| f.starts_with("dep:"));
-    let key = |c: &CommitRow| {
-        (
-            dep(&c.file),
-            c.file.clone(),
-            c.line,
-            c.column,
-            c.op_id.clone(),
-            c.kind,
-        )
-    };
-    let ekey = |e: &ErrorRow| (dep(&e.file), e.clone());
+    let near: Vec<NearKey> = out.errors.iter().map(|e| e.near.clone()).collect();
     for v in [
         &mut out.between,
         &mut out.inside_a,
@@ -1781,16 +2186,16 @@ fn finish(out: &mut BetweenOut) {
         &mut out.without_b,
         &mut out.own_transaction,
     ] {
-        v.sort_by(|x, y| key(x).cmp(&key(y)));
+        v.sort_by(|x, y| (&x.near, &x.op_id, x.kind).cmp(&(&y.near, &y.op_id, y.kind)));
         for c in v.iter_mut() {
-            c.errors_after.sort_by_key(ekey);
+            c.errors_after.sort_by(|a, b| near[*a].cmp(&near[*b]));
             c.labels.sort_unstable();
         }
     }
-    for e in &mut out.errors_between {
+    for e in &mut out.errors {
         e.labels.sort_unstable();
     }
-    out.errors_between.sort_by_key(ekey);
+    out.errors_between.sort_by(|a, b| near[*a].cmp(&near[*b]));
     out.blockers.sort();
     out.blockers.dedup();
 }
@@ -1807,18 +2212,57 @@ fn place(file: &Option<String>, line: Option<u32>) -> String {
     }
 }
 
-fn error_value(e: &ErrorRow) -> serde_json::Value {
+fn is_dep(file: &Option<String>) -> bool {
+    file.as_deref().is_some_and(|f| f.starts_with("dep:"))
+}
+
+/// The labels that depend on runtime state (shown once, as a class).
+const CONDITIONAL: &[&str] = &[
+    "loop-carried",
+    "trap-may-fail-pending",
+    "if-nothing-pending-at-the-raise",
+];
+
+fn conditional(labels: &[&'static str]) -> Vec<&'static str> {
+    labels
+        .iter()
+        .copied()
+        .filter(|l| {
+            CONDITIONAL.contains(l)
+                || l.starts_with("page-run")
+                || l.starts_with("runmodal")
+                || l.starts_with("unmeasured")
+        })
+        .collect()
+}
+
+fn error_value(i: usize, e: &ErrorRow) -> serde_json::Value {
     serde_json::json!({
+        "id": i,
         "file": e.file,
         "line": e.line.map(crate::engine::line_base::shown),
         "column": e.column,
         "op": e.op,
         "operationId": e.op_id,
+        "kind": e.kind,
+        "statement": e.statement,
+        "hops": e.hops,
         "labels": e.labels,
+        "conditional": conditional(&e.labels),
     })
 }
 
-fn commit_value(c: &CommitRow) -> serde_json::Value {
+/// Counts of `ids` (error table indices): total, workspace, dependency.
+fn split(errors: &[ErrorRow], ids: &[usize]) -> serde_json::Value {
+    let dep = ids.iter().filter(|i| is_dep(&errors[**i].file)).count();
+    serde_json::json!({"count": ids.len(), "workspace": ids.len() - dep, "dependency": dep})
+}
+
+fn commit_value(errors: &[ErrorRow], c: &CommitRow) -> serde_json::Value {
+    let mut after = split(errors, &c.errors_after);
+    after["nearest"] = c.errors_after.first().copied().into();
+    after["ids"] = c.errors_after.clone().into();
+    after["sameCone"] = c.errors_same_cone.clone().into();
     serde_json::json!({
         "file": c.file,
         "line": c.line.map(crate::engine::line_base::shown),
@@ -1827,14 +2271,17 @@ fn commit_value(c: &CommitRow) -> serde_json::Value {
         "class": c.class,
         "kind": c.kind,
         "part": c.part,
+        "statement": c.statement,
+        "hops": c.hops,
         "labels": c.labels,
+        "conditional": conditional(&c.labels),
         "ends": c.ends,
         "route": c.route.as_ref().map(route_value),
-        "errorsAfterCommit": c.errors_after.iter().map(error_value).collect::<Vec<_>>(),
+        "errorsAfterCommit": after,
     })
 }
 
-fn site_value(s: &Option<SiteDesc>) -> serde_json::Value {
+fn site_value(s: &Option<SiteDesc>, route: &Option<SliceRoute>) -> serde_json::Value {
     match s {
         Some(s) => serde_json::json!({
             "routine": s.routine,
@@ -1843,28 +2290,98 @@ fn site_value(s: &Option<SiteDesc>) -> serde_json::Value {
             "line": crate::engine::line_base::shown(s.line),
             "column": s.column,
             "op": s.op,
+            "route": route.as_ref().map(route_value),
         }),
         None => serde_json::Value::Null,
     }
+}
+
+/// Per class, workspace and dependency counts of a commit list.
+fn class_counts(v: &[CommitRow]) -> serde_json::Value {
+    let mut m = serde_json::Map::new();
+    for class in [1u8, 2] {
+        let rows: Vec<&CommitRow> = v.iter().filter(|c| c.class == class).collect();
+        if rows.is_empty() {
+            continue;
+        }
+        let dep = rows.iter().filter(|c| is_dep(&c.file)).count();
+        m.insert(
+            format!("class{class}"),
+            serde_json::json!({"count": rows.len(), "workspace": rows.len() - dep, "dependency": dep}),
+        );
+    }
+    serde_json::Value::Object(m)
+}
+
+/// The region statements the `between` rows start from, nearest first:
+/// (statement, part, its first row's key, rows).
+fn statements(v: &[CommitRow]) -> Vec<(String, &'static str, &CommitRow, Vec<&CommitRow>)> {
+    let mut out: Vec<(String, &'static str, &CommitRow, Vec<&CommitRow>)> = Vec::new();
+    for c in v {
+        let s = c
+            .statement
+            .clone()
+            .unwrap_or_else(|| "(no place)".to_string());
+        match out.iter_mut().find(|x| x.0 == s) {
+            Some(x) => x.3.push(c),
+            None => out.push((s, c.part, c, vec![c])),
+        }
+    }
+    out
 }
 
 impl BetweenOut {
     /// The `payload.slice` value of a `commit-between` answer.
     #[must_use]
     pub fn to_value(&self) -> serde_json::Value {
-        let list = |v: &[CommitRow]| v.iter().map(commit_value).collect::<Vec<_>>();
+        let e = &self.errors;
+        let list = |v: &[CommitRow]| v.iter().map(|c| commit_value(e, c)).collect::<Vec<_>>();
+        let stmts: Vec<serde_json::Value> = statements(&self.between)
+            .into_iter()
+            .enumerate()
+            .map(|(order, (s, part, first, rows))| {
+                serde_json::json!({
+                    "site": s,
+                    "part": part,
+                    "order": order,
+                    "commits": class_counts(&rows.iter().map(|c| (*c).clone()).collect::<Vec<_>>()),
+                    "nearestHops": first.hops,
+                })
+            })
+            .collect();
+        let nearest: serde_json::Map<String, serde_json::Value> = [
+            ("between", self.between.first()),
+            ("commitsInsideA", self.inside_a.first()),
+            ("commitsInsideB", self.inside_b.first()),
+            ("commitsWithoutB", self.without_b.first()),
+            ("ownTransactionCommits", self.own_transaction.first()),
+        ]
+        .into_iter()
+        .filter_map(|(k, c)| c.map(|c| (k.to_string(), commit_value(e, c))))
+        .collect();
         serde_json::json!({
             "question": "commit-between",
-            "after": site_value(&self.after),
-            "before": site_value(&self.before),
+            "after": site_value(&self.after, &self.route_a),
+            "before": site_value(&self.before, &self.route_b),
             "verdictBasis": "class-1 commits (ending the caller's transaction) that may run after \
                              A returns and before the next B",
+            "summary": {
+                "between": class_counts(&self.between),
+                "commitsInsideA": class_counts(&self.inside_a),
+                "commitsInsideB": class_counts(&self.inside_b),
+                "commitsWithoutB": class_counts(&self.without_b),
+                "ownTransactionCommits": class_counts(&self.own_transaction),
+                "errorsBetween": split(e, &self.errors_between),
+            },
+            "nearest": nearest,
+            "statements": stmts,
             "between": list(&self.between),
             "commitsInsideA": list(&self.inside_a),
             "commitsInsideB": list(&self.inside_b),
             "commitsWithoutB": list(&self.without_b),
             "ownTransactionCommits": list(&self.own_transaction),
-            "errorsBetween": self.errors_between.iter().map(error_value).collect::<Vec<_>>(),
+            "errors": e.iter().enumerate().map(|(i, x)| error_value(i, x)).collect::<Vec<_>>(),
+            "errorsBetween": self.errors_between,
             "relation": self.relation,
             "blockers": self.blockers.iter().map(|(k, d)| serde_json::json!({"kind": k, "detail": d})).collect::<Vec<_>>(),
             "pairsExamined": self.pairs_examined,
@@ -1872,61 +2389,81 @@ impl BetweenOut {
         })
     }
 
-    fn commit_lines(
-        &self,
-        title: &str,
-        rows: &[&CommitRow],
-        detail: bool,
-        lines: &mut Vec<String>,
-    ) {
+    fn error_line(&self, i: usize) -> String {
+        let e = &self.errors[i];
+        format!(
+            "{} {}{}",
+            place(&e.file, e.line),
+            e.op.as_deref().unwrap_or("error"),
+            if e.labels.is_empty() {
+                String::new()
+            } else {
+                format!(" ({})", e.labels.join(", "))
+            }
+        )
+    }
+
+    /// One witness row: the commit, its route and guards, and its nearest
+    /// error with the counts of the rest.
+    fn witness(&self, c: &CommitRow, lines: &mut Vec<String>) {
+        lines.push(format!(
+            "    nearest: [COMMIT class {}] {} ({}, {} hop{}{})",
+            c.class,
+            place(&c.file, c.line),
+            c.part,
+            c.hops,
+            if c.hops == 1 { "" } else { "s" },
+            if c.labels.is_empty() {
+                String::new()
+            } else {
+                format!("; {}", c.labels.join(", "))
+            }
+        ));
+        if let Some(r) = &c.route {
+            lines.push(format!("      route: {}", r.path.hops.join(" → ")));
+            let guards: Vec<String> = r
+                .sites
+                .iter()
+                .flat_map(|s| s.shown.iter().map(|g| g.describe()))
+                .collect();
+            if !guards.is_empty() {
+                lines.push(format!(
+                    "      guards (selected, not all conditions): {}",
+                    guards.join("; ")
+                ));
+            }
+        }
+        if let Some(&first) = c.errors_after.first() {
+            let dep = c
+                .errors_after
+                .iter()
+                .filter(|i| is_dep(&self.errors[**i].file))
+                .count();
+            lines.push(format!(
+                "      then may fail at {} — {} workspace, {} dependency errors follow (--detail)",
+                self.error_line(first),
+                c.errors_after.len() - dep,
+                dep
+            ));
+        }
+    }
+
+    fn rows(&self, title: &str, rows: &[CommitRow], detail: bool, lines: &mut Vec<String>) {
         if rows.is_empty() {
             return;
         }
-        lines.push(format!("  {title} ({}):", rows.len()));
-        let shown = if detail { rows.len() } else { HUMAN_ROWS };
+        let c1 = rows.iter().filter(|c| c.class == 1).count();
+        lines.push(format!(
+            "  {title}: {} (class 1: {c1}, class 2: {})",
+            rows.len(),
+            rows.len() - c1
+        ));
+        let shown = if detail { rows.len() } else { 1 };
         for c in rows.iter().take(shown) {
-            let mut l = format!(
-                "    [COMMIT class {}] {} ({}{})",
-                c.class,
-                place(&c.file, c.line),
-                c.part,
-                if c.labels.is_empty() {
-                    String::new()
-                } else {
-                    format!("; {}", c.labels.join(", "))
-                }
-            );
+            self.witness(c, lines);
             if !c.ends.is_empty() {
-                l.push_str(&format!("; ends by {}", c.ends.join(" or ")));
+                lines.push(format!("      ends by {}", c.ends.join(" or ")));
             }
-            lines.push(l);
-            if let Some(r) = &c.route {
-                lines.push(format!("      route: {}", r.path.hops.join(" → ")));
-            }
-            for e in c.errors_after.iter().take(shown) {
-                lines.push(format!(
-                    "      then may fail at {} {}{}",
-                    place(&e.file, e.line),
-                    e.op.as_deref().unwrap_or("error"),
-                    if e.labels.is_empty() {
-                        String::new()
-                    } else {
-                        format!(" ({})", e.labels.join(", "))
-                    }
-                ));
-            }
-            if c.errors_after.len() > shown {
-                lines.push(format!(
-                    "      … {} more errors after this commit (--detail lists them)",
-                    c.errors_after.len() - shown
-                ));
-            }
-        }
-        if rows.len() > shown {
-            lines.push(format!(
-                "    … {} more (--detail lists them)",
-                rows.len() - shown
-            ));
         }
     }
 
@@ -1954,83 +2491,151 @@ impl BetweenOut {
         if let Some(r) = self.relation {
             lines.push(format!("  relation: {r}"));
         }
-        let mut dangerous: Vec<&CommitRow> = self
-            .between
-            .iter()
-            .chain(&self.inside_a)
-            .filter(|c| c.class == 1 && !c.errors_after.is_empty())
-            .collect();
-        dangerous.sort_by_key(|c| c.part == "inside-A");
-        self.commit_lines(
-            "DANGEROUS — a class-1 commit, then an error before B",
-            &dangerous,
-            detail,
-            &mut lines,
-        );
-        let rest: Vec<&CommitRow> = self
-            .between
-            .iter()
-            .filter(|c| c.errors_after.is_empty())
-            .collect();
-        self.commit_lines("commits between A and B", &rest, detail, &mut lines);
-        let inside_a: Vec<&CommitRow> = self
-            .inside_a
-            .iter()
-            .filter(|c| c.class != 1 || c.errors_after.is_empty())
-            .collect();
-        self.commit_lines(
-            "commits inside A (they run during A; give a deeper --after to order them)",
-            &inside_a,
-            detail,
-            &mut lines,
-        );
-        let inside_b: Vec<&CommitRow> = self.inside_b.iter().collect();
-        self.commit_lines(
-            "commits inside B (they run during B; give a deeper --before to order them)",
-            &inside_b,
-            detail,
-            &mut lines,
-        );
-        let without: Vec<&CommitRow> = self.without_b.iter().collect();
-        self.commit_lines(
-            "commits after A on paths that end before B",
-            &without,
-            detail,
-            &mut lines,
-        );
-        if !self.errors_between.is_empty() {
-            let shown = if detail {
-                self.errors_between.len()
-            } else {
-                HUMAN_ROWS
-            };
+        // Between: the nearest witness, then per statement between A and B.
+        if !self.between.is_empty() {
+            let direct = self.between.iter().filter(|c| c.hops == 0).count();
+            let stmts = statements(&self.between);
             lines.push(format!(
-                "  errors that may run after A and before B ({}):",
-                self.errors_between.len()
+                "  between A and B: {} commits: {direct} direct, {} through {} statements",
+                self.between.len(),
+                self.between.len() - direct,
+                stmts.len()
             ));
-            for e in self.errors_between.iter().take(shown) {
+            self.witness(&self.between[0], &mut lines);
+            lines.push("  by statement between A and B:".to_string());
+            let shown = if detail { stmts.len() } else { HUMAN_ROWS };
+            for (s, part, first, rows) in stmts.iter().take(shown) {
+                let dep = rows.iter().filter(|c| is_dep(&c.file)).count();
+                let mut kinds: Vec<&str> = rows.iter().flat_map(|c| c.labels.clone()).collect();
+                kinds.sort_unstable();
+                kinds.dedup();
                 lines.push(format!(
-                    "    {} {}{}",
-                    place(&e.file, e.line),
-                    e.op.as_deref().unwrap_or("error"),
-                    if e.labels.is_empty() {
-                        String::new()
+                    "    {s} ({part}): {} commits ({} workspace, {dep} dependency; {}), nearest {} \
+                     at {} hop{}",
+                    rows.len(),
+                    rows.len() - dep,
+                    if kinds.is_empty() {
+                        "direct".to_string()
                     } else {
-                        format!(" ({})", e.labels.join(", "))
-                    }
+                        kinds.join(", ")
+                    },
+                    place(&first.file, first.line),
+                    first.hops,
+                    if first.hops == 1 { "" } else { "s" }
                 ));
+                if detail {
+                    for c in rows {
+                        self.witness(c, &mut lines);
+                    }
+                }
             }
-            if self.errors_between.len() > shown {
+            if stmts.len() > shown {
                 lines.push(format!(
-                    "    … {} more (--detail lists them)",
-                    self.errors_between.len() - shown
+                    "    … {} more statements (--detail lists them)",
+                    stmts.len() - shown
                 ));
             }
         }
-        let own: Vec<&CommitRow> = self.own_transaction.iter().collect();
-        self.commit_lines(
-            "own-transaction commits (class 2: they never make A's pending write durable)",
-            &own,
+        // Errors after A, before B.
+        if !self.errors_between.is_empty() {
+            let count = |kind: &str, dep: bool| {
+                self.errors_between
+                    .iter()
+                    .filter(|i| {
+                        let e = &self.errors[**i];
+                        (e.kind == kind) && is_dep(&e.file) == dep
+                    })
+                    .count()
+            };
+            lines.push(format!(
+                "  errors after A before B: {} — explicit {} workspace / {} dependency; implicit {} \
+                 / {}; other {}",
+                self.errors_between.len(),
+                count("explicit", false),
+                count("explicit", true),
+                count("implicit", false),
+                count("implicit", true),
+                self.errors_between.len()
+                    - count("explicit", false)
+                    - count("explicit", true)
+                    - count("implicit", false)
+                    - count("implicit", true),
+            ));
+            let first: Vec<usize> = self
+                .errors_between
+                .iter()
+                .copied()
+                .filter(|i| {
+                    let e = &self.errors[*i];
+                    e.kind == "explicit" && !is_dep(&e.file)
+                })
+                .take(if detail { usize::MAX } else { HUMAN_ROWS })
+                .collect();
+            for i in first {
+                lines.push(format!("    {}", self.error_line(i)));
+            }
+        }
+        // Conditional facts, shown once.
+        let mut cond: BTreeMap<&str, usize> = BTreeMap::new();
+        for c in self.between.iter().chain(&self.inside_a) {
+            for l in conditional(&c.labels) {
+                *cond.entry(l).or_default() += 1;
+            }
+        }
+        for i in &self.errors_between {
+            for l in conditional(&self.errors[*i].labels) {
+                *cond.entry(l).or_default() += 1;
+            }
+        }
+        if !cond.is_empty() {
+            lines.push(format!(
+                "  conditional (depends on runtime state), shown once: {}",
+                cond.iter()
+                    .map(|(k, n)| format!("{k} {n}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+        // Inside A, inside B: during the call, not between.
+        for (rows, which, flag) in [
+            (&self.inside_a, "A", "--after"),
+            (&self.inside_b, "B", "--before"),
+        ] {
+            if rows.is_empty() {
+                continue;
+            }
+            let c1 = rows.iter().filter(|c| c.class == 1).count();
+            let deeper = rows[0]
+                .route
+                .as_ref()
+                .and_then(|r| r.sites.get(1).or(r.sites.first()))
+                .map(|s| place(&s.file, s.line))
+                .unwrap_or_else(|| "a site inside it".to_string());
+            lines.push(format!(
+                "  inside {which}: {} commits (class 1: {c1}, class 2: {}) — they run during {which}, \
+                 not between; name {deeper} as {flag} to order them",
+                rows.len(),
+                rows.len() - c1
+            ));
+            if let Some(c) = rows
+                .iter()
+                .find(|c| c.class == 1 && !c.errors_after.is_empty())
+            {
+                lines.push(format!(
+                    "    inside {which}: a commit, then an error before B (not between):"
+                ));
+                self.witness(c, &mut lines);
+            }
+        }
+        self.rows(
+            "commits after A on paths that end before B",
+            &self.without_b,
+            detail,
+            &mut lines,
+        );
+        self.rows(
+            "own-transaction commits (class 2: never make A's pending write durable)",
+            &self.own_transaction,
             detail,
             &mut lines,
         );
