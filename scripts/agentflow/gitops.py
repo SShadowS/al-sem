@@ -124,13 +124,14 @@ class Git:
         as bytes and decoded with `replace` (the checks look for ASCII), so a
         CR stays inside its line. `:(top,literal)`: a name is never a pattern
         and is read from the top, as `changed_files` gives it, whatever the
-        cwd. `--text`: a NUL byte does not turn the additions into "Binary
+        cwd. `--no-relative`: `diff.relative=true` would limit the patch to
+        the cwd. `--text`: a NUL byte does not turn the additions into "Binary
         files differ". A changed file never has an empty patch, so an empty
         one raises rather than read as "nothing added"."""
         out = {}
         for f in files:
             p = self._bytes("diff", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames",
-                            "--text", f"{a}..{b}", "--", f":(top,literal){f}")
+                            "--no-relative", "--text", f"{a}..{b}", "--", f":(top,literal){f}")
             if not p:
                 raise GitError(f"git diff {a}..{b}: no patch for changed file {f!r}")
             out[f] = p.decode("utf-8", "replace")
@@ -214,7 +215,9 @@ class Git:
         # freeze check, the protected-path check and the P3 prose check.
         # -z (TLS-114): a quoted `"scripts/x\r"` escaped the protected-path
         # prefix check, and splitlines() cut names at CR and other breaks.
-        return self.paths("diff", "-z", "--name-only", "--no-renames", f"{a}..{b}")
+        # --no-relative: `diff.relative=true` from a subfolder listed only that
+        # folder's files, relative to it, so check-diff scanned nothing.
+        return self.paths("diff", "-z", "--name-only", "--no-renames", "--no-relative", f"{a}..{b}")
 
     def worktree_add(self, path: Path, branch: str, base: str) -> None:
         self._run("worktree", "add", "-q", str(path), "-b", branch, base)

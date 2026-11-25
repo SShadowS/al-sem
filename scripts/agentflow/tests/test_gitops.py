@@ -78,6 +78,33 @@ def test_changed_and_dirty_paths_keep_cr_and_lf(repo_pair):
     assert g.tree_state().semantic_paths == ["scripts/x\r"]
 
 
+def test_check_diff_from_a_subfolder_ignores_diff_relative(repo_pair):
+    """TLS-114 (sol r1): with `diff.relative=true`, a check run from `src/sub`
+    still lists every changed file from the top and reads each one's patch,
+    so the `#[ignore]` added outside the cwd is reported.
+
+    DISCRIMINATION (2026-11-25): `--no-relative` dropped from
+    `changed_files` fails (only `in.rs`, relative to `src/sub`, is listed);
+    dropped from `file_diffs` only, fails (raises: no patch for
+    `src/other.rs`); restored, passes."""
+    from agentflow.protect import check_diff
+
+    _, clone = repo_pair
+    a = Git(clone).rev("HEAD")
+    (clone / "src" / "sub").mkdir(parents=True)
+    (clone / "src/other.rs").write_text("#[ignore]\nfn t(){}\n")
+    (clone / "src/sub/in.rs").write_text("fn i(){}\n")
+    assert _raw(clone, "add", "src").returncode == 0
+    assert _raw(clone, "commit", "-q", "-m", "two").returncode == 0
+    assert _raw(clone, "config", "diff.relative", "true").returncode == 0
+    g = Git(clone / "src" / "sub")
+    files = g.changed_files(a, "HEAD")
+    assert files == ["src/other.rs", "src/sub/in.rs"]
+    reasons = check_diff(files, g.file_diffs(a, "HEAD", files), issue=8)
+    assert [r for r in reasons if r.startswith("forbidden:")] == \
+        ["forbidden:ignore-attribute:src/other.rs:#[ignore]"]
+
+
 def test_tracked_dirty_ignores_untracked_but_sees_content_changed_tracked_files(repo_pair):
     # RENAMED, body unchanged, and it must keep passing byte-for-byte: that is
     # the proof that reimplementing `tracked_dirty()` on `tree_state()` is
