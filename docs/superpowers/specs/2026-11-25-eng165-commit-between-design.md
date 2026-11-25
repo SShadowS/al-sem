@@ -566,7 +566,7 @@ The expected answers are written down before the code runs (principle 9). The fi
 | S28 | A in one `#if` arm of a routine, B in the other arm's row | `no`, `not-in-one-build` |
 | S29 | A's route crosses a symbol-only dependency routine | `unknown`, naming it |
 | DO-1 twin | `Deliver(): SetStatus; Commit; Transmit(); if Ok then Commit;` then back in the caller `if Bad then Error(…); UpdateCounter(); L.Insert` | A = `Transmit` call: `yes` (A's tail), the `Error` and `UpdateCounter`'s implicit errors in `errorsAfterCommit` |
-| DO-2 twin | `SendMail(): Commit; if Codeunit.Run(Dispatcher) then;` then in the caller `Rec.Modify(); L.Insert` | A = the `SendMail` call: `no`; 2 `commitsInsideA` rows (class 1, class 2); the `Modify` in `errorsBetween` |
+| DO-2 twin | `PostMessage(): Commit; if Codeunit.Run(Worker) then;` then in the caller `Rec.Modify(); L.Insert` | A = the `PostMessage` call: `no`; 2 `commitsInsideA` rows (class 1, class 2); the `Modify` in `errorsBetween` |
 
 The DO twins are public fixtures of the two acceptance shapes (the DO runs used a private copy
 that is not pinned). The cap case cannot be reached by a small fixture; it is pinned by a unit
