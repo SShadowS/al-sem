@@ -231,6 +231,40 @@ def test_check_diff_reads_each_file_as_git_writes_it(tmp_path):
     assert got == want
 
 
+def test_check_diff_file_replaced_by_a_directory_of_that_name(tmp_path):
+    """TLS-114 (sol r1): `docs/old.rs` deleted and a directory `docs/old.rs/`
+    holding `notes.md` added. A note naming `#[ignore]` is prose, so the
+    verdict is clean: the deleted file's patch must not take in the note's
+    lines (a literal pathspec also selects a directory's contents).
+
+    DISCRIMINATION (2026-11-25): the `exclude` pathspec dropped from
+    `file_diffs` fails (`forbidden:ignore-attribute:docs/old.rs:#[ignore] is
+    banned`); restored, passes."""
+    import subprocess
+
+    from agentflow.gitops import Git
+
+    def git(*a):
+        subprocess.run(["git", "-C", str(tmp_path), "-c", "user.name=t", "-c", "user.email=t@t",
+                        "-c", "commit.gpgsign=false", *a],
+                       check=True, capture_output=True)
+
+    git("init", "-q")
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs/old.rs").write_text("fn a() {}\n")
+    git("add", "docs")
+    git("commit", "-q", "-m", "base")
+    git("rm", "-q", "docs/old.rs")
+    (tmp_path / "docs/old.rs").mkdir(parents=True)  # `git rm` removed the empty `docs/`
+    (tmp_path / "docs/old.rs/notes.md").write_text("#[ignore] is banned\n")
+    git("add", "docs")
+    git("commit", "-q", "-m", "head")
+    g = Git(tmp_path)
+    files = g.changed_files("HEAD~1", "HEAD")
+    assert files == ["docs/old.rs", "docs/old.rs/notes.md"]
+    assert check_diff(files, g.file_diffs("HEAD~1", "HEAD", files), issue=8) == []
+
+
 def test_forbidden_patterns_in_comments_pass_but_code_still_fails():
     # #46: the guard must see code, not prose. A comment naming a pattern passes;
     # the same pattern as real code -- including code with a trailing comment -- fails.

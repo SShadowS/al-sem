@@ -119,19 +119,24 @@ class Git:
         return r.stdout
 
     def file_diffs(self, a: str, b: str, files: list[str]) -> dict[str, str]:
-        """Each of `files`' own patch `a..b`, by path (TLS-114): the file is
-        known by construction, never parsed from a header git may quote. Read
+        """Each of `files`' own patch `a..b`, by path (TLS-114): the path is
+        the one asked for, never parsed from a header git may quote. Read
         as bytes and decoded with `replace` (the checks look for ASCII), so a
         CR stays inside its line. `:(top,literal)`: a name is never a pattern
         and is read from the top, as `changed_files` gives it, whatever the
-        cwd. `--no-relative`: `diff.relative=true` would limit the patch to
-        the cwd. `--text`: a NUL byte does not turn the additions into "Binary
-        files differ". A changed file never has an empty patch, so an empty
-        one raises rather than read as "nothing added"."""
+        cwd. The `exclude` of `<f>/`: a literal pathspec also selects what is
+        under a directory of that name, so a file replaced by a directory
+        (`docs/old.rs` -> `docs/old.rs/notes.md`) took the new file's lines
+        into the deleted file's patch. `--no-relative`: `diff.relative=true`
+        would limit the patch to the cwd. `--text`: a NUL byte does not turn
+        the additions into "Binary files differ". A changed file never has an
+        empty patch, so an empty one raises rather than read as "nothing
+        added"."""
         out = {}
         for f in files:
             p = self._bytes("diff", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames",
-                            "--no-relative", "--text", f"{a}..{b}", "--", f":(top,literal){f}")
+                            "--no-relative", "--text", f"{a}..{b}", "--", f":(top,literal){f}",
+                            f":(top,literal,exclude){f}/")
             if not p:
                 raise GitError(f"git diff {a}..{b}: no patch for changed file {f!r}")
             out[f] = p.decode("utf-8", "replace")
