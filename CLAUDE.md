@@ -347,8 +347,10 @@ later run of the same binary is warm (~x0.53). Spec:
   `scripts/install-windows.ps1` (build, stamp, verify, copy to `~/.al-sem/bin/` and `-LspDir`)
   and from the release workflows' stamp step. The cache folders must be private (owner and DACL
   rules from the volume root down) on a local NTFS drive; otherwise the IR cache is off and the
-  text cache keeps owned text. **Until the owner's acceptance passes, the Windows default is off**:
-  only `ALSEM_IR_CACHE=on` turns it on (`ir_cache::DEFAULT_ON`). A check that a binary really
+  text cache keeps owned text. **On by default on Windows since 2026-11-25** (the owner's
+  acceptance passed; `ir_cache::DEFAULT_ON`), with the narrower guarantee the owner accepted (a
+  stamped exe damaged in its writable data and swapped for a pristine copy in the milliseconds
+  before the key; the design note's section 1). `ALSEM_IR_CACHE=off` turns it off. A check that a binary really
   makes a key is `ir-cache-report-check --require-key` (it fails `unstamped`). Design:
   `docs/superpowers/notes/2026-11-21-tls117-windows-image-key.md`.
 

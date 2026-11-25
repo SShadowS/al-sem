@@ -11,10 +11,15 @@ rule are `src/snapshot/winfs.rs`; an unstamped binary's report line is `"ir_cach
 (passed by `scripts/ir-cache-report-check`), any other failure `"no key"` with its reason;
 `scripts/install-windows.ps1` and both release workflows stamp.
 
-**Rev 11 (product review r1, sol and Fable).** On Windows the cache is **off by default**: only
-an explicit `ALSEM_IR_CACHE=on` turns it on (`ir_cache::DEFAULT_ON`); one later commit flips the
-default once the product acceptance (section 3) passes, and every acceptance step sets
-`ALSEM_IR_CACHE=on` itself. The Windows key is computed **eagerly**, in `install_from_env`: the
+**Rev 12 (2026-11-25): on by default on Windows.** The owner's acceptance passed at `1e882726`,
+and the owner accepted the narrower guarantee (q-20261125T135240-57cde933; the residual is stated
+in section 1, "The window before the key"). `ir_cache::DEFAULT_ON` is now true on every system;
+`ALSEM_IR_CACHE=off` still turns the cache off. Section 3's acceptance step 7 checks the default
+and the off switch on a stamped binary.
+
+**Rev 11 (product review r1, sol and Fable).** On Windows the cache was **off by default** until
+rev 12: only an explicit `ALSEM_IR_CACHE=on` turned it on, and every acceptance step set it. The
+Windows key is computed **eagerly**, in `install_from_env`: the
 first statement of `aldump`'s and `al-call-hierarchy`'s `main`, and in `alsem`'s `main` after the
 perf-trace setup (skipped for commands that never use the cache: help and version, the `mcp`
 front end, `engine-ask`; `batch` uses it in the parent and every worker, TLS-116, so it keys). The candidate's handle denies write and delete while its bytes are
@@ -201,8 +206,16 @@ a pristine copy within those milliseconds. The pristine copy's read-only content
 running image's and its writable sections match the slot the running image carries, so it is
 accepted and the key names the pristine file while the damaged initial data runs (the writable
 sections are checked in the candidate file, never in memory; the reason is under "Why `.data` is
-not compared in memory"). Damage in the read-only content gives no key. This case is in the
-guarantee's scope as stated.
+not compared in memory"). Damage in the read-only content gives no key.
+
+**The accepted gap (owner, 2026-11-25, q-20261125T135240-57cde933).** sol's final review named
+it: the key compares the candidate's writable sections with the digest stamped in the loaded
+image (`key::win`, `check` and `pe::check_slot`), never with the loaded image's own initial data.
+The exact residual: **a stamped exe damaged in its writable data before it was launched, and
+swapped at its path for a pristine copy within the milliseconds between the launch and the eager
+key, is keyed as the pristine copy while the damaged data runs.** The owner accepted this
+narrower guarantee and the Windows default went on (rev 12); it stays stated here and in the
+CHANGELOG.
 
 **Out of scope:** another process changing files on purpose mid-run (ENG-110's spec), raw disk
 writes, a network peer; the local-NTFS rule (section 3) keeps network volumes out entirely.
@@ -460,8 +473,24 @@ without `--rule` judges only the key; it prints `PASS` only together with a rule
      it after landing);
    - `--ref <tag>` would publish a release: use the branch, never a tag;
    - `gh workflow run` may refuse a ref until the `workflow_dispatch` trigger is on `master`;
-     then the dispatch run waits until after landing, which is safe because the Windows cache
-     is still off by default there.
+     then the dispatch run waits until after landing (with rev 12 the landed Windows default is
+     on, so the first CI release run after landing is the shipped-artifact check).
+7. **Default on, and the off switch** (rev 12; on the installed, stamped `alsem.exe`, no opt-in
+   variable). With no `ALSEM_IR_CACHE` set, the cache is on; `ALSEM_IR_CACHE=off` turns it off:
+   ```
+   Remove-Item Env:ALSEM_IR_CACHE -ErrorAction SilentlyContinue
+   $env:ALSEM_IR_CACHE_DIR = "$env:TEMP\tls117-default-$(Get-Date -Format yyyyMMddHHmmss)"
+   $ws = 'tests\fixtures\tls117\ws'
+   $env:ALSEM_IR_CACHE_REPORT = "$r\default.jsonl"; & $bin analyze $ws --format json | Out-Null
+   python scripts\ir-cache-report-check --require-key --rule output "$r\default.jsonl"
+   $env:ALSEM_IR_CACHE = 'off'
+   $env:ALSEM_IR_CACHE_REPORT = "$r\off.jsonl"; & $bin analyze $ws --format json | Out-Null
+   python scripts\ir-cache-report-check --require-key "$r\off.jsonl"
+   Remove-Item Env:ALSEM_IR_CACHE
+   ```
+   Pass when the first check prints `IR: PASS output (...)` (a key, a publish, with no variable
+   set) and the second prints `IR: FAIL a start line has no key: ...` and exits 1 (the off run's
+   `start` line says `"enabled": false` and makes no key).
 
 **Why `.data` is not compared in memory.** The engine computes the key in `main` (rev 11; it was
 lazy, at the first IR cache use, before), still after the runtimes have started: the C runtime, Rust's runtime, mimalloc, `std`'s statics and the program itself

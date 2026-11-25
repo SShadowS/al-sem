@@ -1227,19 +1227,19 @@ mod tests {
         }
     }
 
-    /// TLS-117: the cache is off by default on Windows until the acceptance passes, on by
-    /// default elsewhere. Discrimination (2026-11-23): `DEFAULT_ON` inverted (`cfg!(windows)`):
-    /// fails on Linux; restored, passes.
+    /// TLS-117: since the owner's acceptance (2026-11-25) the cache is on by default on every
+    /// system, Windows included, and `off` still turns it off. Discrimination (2026-11-25, on
+    /// Linux, where the old `!cfg!(windows)` was already true): `DEFAULT_ON = false`: "unset"
+    /// fails; restored, passes.
     #[test]
-    fn the_default_is_off_on_windows_only() {
-        let default = !cfg!(windows);
-        assert_eq!(super::super::switch(None).0, default, "unset");
+    fn the_default_is_on_everywhere_and_off_still_works() {
+        assert!(super::super::switch(None).0, "unset");
         let empty = std::ffi::OsStr::new("");
-        assert_eq!(super::super::switch(Some(empty)).0, default, "empty");
-        let on = std::ffi::OsStr::new("on");
+        assert!(super::super::switch(Some(empty)).0, "empty");
+        let off = std::ffi::OsStr::new("off");
         assert!(
-            super::super::switch(Some(on)).0,
-            "an explicit on, everywhere"
+            !super::super::switch(Some(off)).0,
+            "an explicit off, everywhere"
         );
     }
 

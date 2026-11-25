@@ -55,11 +55,12 @@ pub struct IrCache {
     bad_switch: Option<String>,
 }
 
-/// Whether the cache is on when `ALSEM_IR_CACHE` is unset or empty. **TLS-117: off on Windows
-/// until the owner's acceptance of the Windows key passes** (positive keys on the shipped,
-/// stamped binaries; the note's product acceptance); only an explicit `ALSEM_IR_CACHE=on` turns
-/// it on there. One later commit flips this to `true` everywhere once that acceptance passes.
-pub(crate) const DEFAULT_ON: bool = !cfg!(windows);
+/// Whether the cache is on when `ALSEM_IR_CACHE` is unset or empty: on, on every system.
+/// TLS-117: Windows was off by default until the owner's acceptance of the Windows key passed
+/// (2026-11-25, at `1e882726`); the owner accepted the narrower guarantee the same day
+/// (q-20261125T135240-57cde933; the residual is stated in the design note's section 1).
+/// `ALSEM_IR_CACHE=off` still turns it off.
+pub(crate) const DEFAULT_ON: bool = true;
 
 /// `ALSEM_IR_CACHE`: `on` or `off`, in any case; unset or empty is [`DEFAULT_ON`]. Anything else
 /// is off, with the warning to give (sol/Fable r1: a typo never turns the cache on).

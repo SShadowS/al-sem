@@ -7,12 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added (TLS-117: the dependency IR cache on Windows, for stamped binaries, opt-in)
+### Added (TLS-117: the dependency IR cache on Windows, for stamped binaries)
 
-- **Off by default on Windows for now.** Only an explicit `ALSEM_IR_CACHE=on` turns the cache on
-  there (`ir_cache::DEFAULT_ON`; Linux and macOS keep it on by default). One later commit flips the
-  Windows default once the owner's acceptance (note section 3) passes; every acceptance step sets
-  `ALSEM_IR_CACHE=on` itself.
+- **On by default on Windows** (`ir_cache::DEFAULT_ON` is true on every system), after the
+  owner's acceptance below; `ALSEM_IR_CACHE=off` still turns it off. Until this change the
+  Windows default was off and only an explicit `ALSEM_IR_CACHE=on` turned it on.
+- **The accepted gap** (owner, 2026-11-25, q-20261125T135240-57cde933): the Windows key compares
+  the candidate file's writable sections with the digest stamped in the **loaded** image, not with
+  the loaded image's own initial data. So a stamped exe **damaged in its writable data before it
+  was launched**, then **swapped at its path for a pristine copy within the milliseconds between
+  the launch and the eager key**, gets the pristine copy's key while the damaged data runs. Damage
+  in the read-only content gives no key. The owner accepted this narrower guarantee (design note,
+  section 1, "The window before the key").
 - **The owner's acceptance passed** (at `1e882726`, on the owner's Windows machine): the
   Windows-native tests (43 passed, 0 failed); the install stamped and verified all three
   binaries; through the installed `alsem.exe` a cold run published, a warm run hit 10,881
@@ -65,7 +71,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   impact`: disk hits, every hit parsed again and compared), `aldump.exe
   --program-call-graph-stats` (`--rule output`), and the shipped LSP server at runtime
   (`scripts/lsp-key-smoke`: `initialize`, one `prepareCallHierarchy`, `shutdown`, on stdio;
-  `--rule output`), each `--require-key`; a failure fails the job. `release.yml` also runs by `workflow_dispatch`
+  `--rule output`), each `--require-key` and each with no `ALSEM_IR_CACHE` set (the default);
+  then one `analyze` with `ALSEM_IR_CACHE=off`, which must make no key. A failure fails the job. `release.yml` also runs by `workflow_dispatch`
   (on a branch, before landing), and then publishes nothing.
 - **The Windows link-map listing.** `release.yml`'s Windows job links with `/MAP` (through
   `CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS`, which keeps `+crt-static`; a plain
@@ -367,8 +374,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   key: the cache is off. `scripts/check-ir-image` checks alsem, aldump and al-call-hierarchy
   (`ci-steps build`, both Linux release jobs): the marker, no locale symbols, and only libc,
   libgcc_s and (al-call-hierarchy) glibc's loader as shared libraries.
-- **Where it is off.** On Windows (TLS-117), in `alsem batch` (TLS-116), for a package below 8
-  files, for owned (unmapped) text, with `ALSEM_IR_CACHE=off` (only `on`/`off`, any case; any
+- **Where it is off.** (Since then TLS-116 turned it on in `alsem batch`, and TLS-117 on Windows
+  for stamped binaries; see their entries.) For a package below 8 files, for owned (unmapped) text, with `ALSEM_IR_CACHE=off` (only `on`/`off`, any case; any
   other value is off, warned), and in every test (`.cargo/config.toml`'s `[env]` sets it off for
   the engines tests spawn; in-process test binaries never install it).
 - **The guarantee.** In this user's private cache folder, an accepted entry decodes to exactly

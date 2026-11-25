@@ -153,7 +153,9 @@ jobs:
             & target\release-ship\alsem-stamp.exe verify "target\release-ship\$b.exe"
             if ($LASTEXITCODE -ne 0) { throw "verifying the shipped $b.exe failed" }
           }
-          $env:ALSEM_IR_CACHE = 'on'
+          # The Windows default is on (TLS-117 rev 12): no ALSEM_IR_CACHE here, so every run
+          # below also checks the default; the off switch is checked last.
+          Remove-Item Env:ALSEM_IR_CACHE -ErrorAction SilentlyContinue
           $env:ALSEM_IR_CACHE_DIR = Join-Path $env:RUNNER_TEMP 'ir-root'
           # judge(<report>, <rule>): the report must carry a key (`--require-key`) and pass <rule>
           function judge($rep, $rule) {
@@ -190,6 +192,16 @@ jobs:
           python scripts/lsp-key-smoke target\release-ship\al-call-hierarchy.exe $ws --no-telemetry
           if ($LASTEXITCODE -ne 0) { throw "the LSP smoke run failed (exit $LASTEXITCODE)" }
           judge $env:ALSEM_IR_CACHE_REPORT output
+          # the off switch: ALSEM_IR_CACHE=off makes no key, so --require-key must refuse
+          $env:ALSEM_IR_CACHE = 'off'
+          $env:ALSEM_IR_CACHE_REPORT = Join-Path $env:RUNNER_TEMP 'ir-off.jsonl'
+          & target\release-ship\alsem.exe analyze $ws --format json | Out-Null
+          if ($LASTEXITCODE -notin 0, 1) { throw "alsem analyze (off) failed (exit $LASTEXITCODE)" }
+          python scripts/ir-cache-report-check --require-key $env:ALSEM_IR_CACHE_REPORT
+          if ($LASTEXITCODE -eq 0) { throw 'ALSEM_IR_CACHE=off still made a key' }
+          Remove-Item Env:ALSEM_IR_CACHE
+          # the expected refusal left LASTEXITCODE at 1; the step ends with it otherwise
+          $global:LASTEXITCODE = 0
 
       # TLS-117 (Fable N5): the shipped alsem.exe links the C runtime statically
       # (`+crt-static`, .cargo/config.toml). The job's map rustflags must merge with it, not

@@ -140,8 +140,8 @@ jobs:
             & target\release-ship\alsem-stamp.exe verify "target\release-ship\$b.exe"
             if ($LASTEXITCODE -ne 0) { throw "verifying the shipped $b.exe failed" }
           }
-          # As in release.yml: cold (publish), warm (hits), and aldump.exe's own key.
-          $env:ALSEM_IR_CACHE = 'on'
+          # As in release.yml: the default (on, no ALSEM_IR_CACHE), then the off switch last.
+          Remove-Item Env:ALSEM_IR_CACHE -ErrorAction SilentlyContinue
           $env:ALSEM_IR_CACHE_DIR = Join-Path $env:RUNNER_TEMP 'ir-root'
           function judge($rep, $rule) {
             python scripts/ir-cache-report-check --require-key --rule $rule $rep
@@ -171,6 +171,14 @@ jobs:
           python scripts/lsp-key-smoke target\release-ship\al-call-hierarchy.exe $ws --no-telemetry
           if ($LASTEXITCODE -ne 0) { throw "the LSP smoke run failed (exit $LASTEXITCODE)" }
           judge $env:ALSEM_IR_CACHE_REPORT output
+          $env:ALSEM_IR_CACHE = 'off'
+          $env:ALSEM_IR_CACHE_REPORT = Join-Path $env:RUNNER_TEMP 'ir-off.jsonl'
+          & target\release-ship\alsem.exe analyze $ws --format json | Out-Null
+          if ($LASTEXITCODE -notin 0, 1) { throw "alsem analyze (off) failed (exit $LASTEXITCODE)" }
+          python scripts/ir-cache-report-check --require-key $env:ALSEM_IR_CACHE_REPORT
+          if ($LASTEXITCODE -eq 0) { throw 'ALSEM_IR_CACHE=off still made a key' }
+          Remove-Item Env:ALSEM_IR_CACHE
+          $global:LASTEXITCODE = 0
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
