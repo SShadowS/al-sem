@@ -117,14 +117,15 @@ percent-encoding = "2"
 indexmap = "2"
 
 # gzip for the cli-b `.cbor.gz` snapshot serializer. zlib-rs (pure Rust, TLS-121):
-# the DEFLATE stream is byte-stable across hosts and byte-identical to the zlib-ng
-# backend it replaced (all 43 `.cbor.gz` goldens unchanged). zlib-ng's C build needed
+# the DEFLATE stream was byte-identical to the zlib-ng backend it replaced on the tested
+# inputs (all 43 `.cbor.gz` goldens unchanged; gzip guarantees the decoded payload, not a
+# unique DEFLATE encoding, so other inputs or versions may differ). zlib-ng's C build needed
 # cmake, whose Visual Studio generator broke Windows builds (wrong generator name,
 # MSBuild path-length limit). The gzip OS header byte is normalized to 0x03 by the
 # serializer.
 # `runtime_detection`: zlib-rs picks its SIMD paths (AVX2, PCLMULQDQ, SSE4.2) at run time;
 # without it a default x86_64 build takes the plain ones. Speed only: zlib-rs's hash does
-# not depend on the CPU, so the output is the same either way.
+# not depend on the CPU, so the output was the same either way on the tested inputs.
 flate2 = { version = "1", default-features = false, features = ["zlib-rs", "runtime_detection"] }
 
 # Error handling

@@ -1344,7 +1344,8 @@ pub fn serialize_cbor(tree: &CborValue) -> Vec<u8> {
 
 /// gzip DEFLATE level for the `.cbor.gz` serializer — Bun's zlib default (6). The
 /// goldens were first produced with `Bun.gzipSync` (level 6) and matched by flate2's
-/// zlib-ng; since TLS-121 flate2 runs on zlib-rs, which writes the same bytes.
+/// zlib-ng; since TLS-121 flate2 runs on zlib-rs, which wrote the same bytes on the tested
+/// inputs (the goldens; gzip fixes the decoded payload, not a unique DEFLATE encoding).
 const GZIP_LEVEL: u32 = 6;
 
 /// CBOR + gzip — `serializeCborGz(snap)` with the gzip OS header byte normalized

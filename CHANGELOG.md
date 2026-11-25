@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **gzip moved from zlib-ng to zlib-rs** (`flate2` feature `zlib-rs`, pure Rust). zlib-ng's
   C library was built with cmake, the only cmake user in the build, and on Windows that broke
-  twice for the owner: cmake 3.29 picked a `Visual Studio 18 2026` generator it does not have,
+  twice for the owner: the Rust `cmake` crate selected a `Visual Studio 18 2026` generator that CMake 3.29 does not support,
   and MSBuild's file tracking failed on a long checkout path (`FTK1011`). With zlib-rs neither
   cmake nor MSBuild runs. The output is byte-identical where measured: all 43 `.cbor.gz`
   goldens (`cli_b_snapshot_differential` and `cli_b_fingerprint_differential`, byte-compared,

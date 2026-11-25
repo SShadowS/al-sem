@@ -81,6 +81,18 @@ cargo build --release
 The second clone is the AL grammar. It is not pinned: the build uses whatever is on its
 `main` branch, the same as CI. Run `git -C tree-sitter-al pull` to update it.
 
+On Windows you need the MSVC C++ build tools and a Windows SDK. cmake and MSBuild are not
+needed. If a path is long, in PowerShell:
+
+```powershell
+git config --global core.longpaths true   # before cloning into a deep path
+$env:CARGO_TARGET_DIR = 'C:\t'            # short build-output path
+$env:CMAKE_GENERATOR = 'Visual Studio 17 2022'   # only for an older tree that still builds zlib-ng
+```
+
+A short target directory fixes long build-output paths only. It cannot fix a failing
+checkout or a long source path: use `core.longpaths` or clone nearer the drive root.
+
 Point any command at the directory containing `app.json`. Dependencies are read from
 `.alpackages/` — embedded source is used when a dependency ships it, and the
 `SymbolReference.json` inside the `.app` otherwise. The highest compatible version wins.

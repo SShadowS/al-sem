@@ -342,7 +342,7 @@ later run of the same binary is warm (~x0.53). Spec:
 
 ## Prerequisites
 
-- Rust 1.75+
+- Rust 1.96.0 (pinned in `rust-toolchain.toml`; rustup installs it on the first build)
 - **Windows:** the MSVC toolchain (`x86_64-pc-windows-msvc`) with its C compiler (the grammar
   and a few C dependencies are compiled by the `cc` crate, which calls `cl.exe` directly). No cmake and no MSBuild are needed since TLS-121 (gzip moved
   from zlib-ng to the pure-Rust zlib-rs). Two snags the owner hit on older trees, both from
