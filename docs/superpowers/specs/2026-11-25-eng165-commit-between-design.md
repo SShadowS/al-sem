@@ -314,6 +314,15 @@ regions. Every pair is checked, up to the route cap. A cap that fires leaves the
 `unknown`, never `no` (principle 5). The answer lists the pairs examined and whether the
 enumeration completed.
 
+**A loop above the meet routine** (revision 3.2, Fable review r2): when a routine on the shared
+prefix can call toward M again (the call site toward M reaches itself in that routine's graph, or
+the prefix is recursive), M runs again and the next B after A may be in a later run of M. That is
+not followed yet: the answer carries the blocker `loop-above-meet` and is `unknown`, never `no`
+(principle 1: a false `no` is the one answer the question cannot give). Judging each shallower
+level as a meet routine with `a = b =` that call site is the full fix (leftovers card). Likewise,
+when a route leaves a publisher by its event, the event's other subscribers run in no defined
+order around the route's: the blocker `sibling-subscribers`.
+
 ### 4.2 Order inside one routine
 
 "May run after X and before Y" is computed on the routine's control-flow tree, as

@@ -1290,6 +1290,13 @@ by Fable).
   commit carries `errorsAfterCommit {count, workspace, dependency, nearest, ids, sameCone}`.
 - Runtime facts recorded in `docs/engine-limits.md` §5 (BC 28 Linux, Windows confirmation
   pending).
+- **Review round 2 (Fable) fixes:** `[CommitBehavior]` is carried down every path of a region
+  cone (a commit reached both under `Ignore` and normally is kept); a route that leaves a
+  publisher by its event blocks when the event has other subscribers (`sibling-subscribers`); a
+  loop above the meet routine blocks (`loop-above-meet`); an unplaced unresolved call (e.g. in a
+  `case` label) is read against the root's unresolved cone; a guarded search stopped at its cap
+  is `unknown` (`route-graph-stopped`), not a usage error. JSON: `errorsAfterCommit` gives counts
+  and the nearest error, not every id.
 - **Measured on BC 28 on Linux (Windows confirmation pending)**, probe app and results in
   `/work/.al-sem/engine-notes/eng165/bcprobe/`: `Page.RunModal` with a write pending raises an
   error (without a test handler; listed as a possible error row, never a commit);
