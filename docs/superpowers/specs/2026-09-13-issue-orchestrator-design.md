@@ -322,12 +322,18 @@ Labels are a mirror for humans, not a lock. The lock is local:
     `beat_awake`, and its checksum rejects a `budget.json` with
     `claimed_awake`. Even on its own files it is unsafe beside a newer run: its
     `recover` judges every lease on the wall clock (it can take a live run's
-    lease after a suspend), and its `beat` does not take `registry`. So upgrade
-    or roll back only with no live lease (`status` lists none, or only stale
-    ones): let every run finish, or recover it, first. A lease or budget left
-    from before TLS-122 still loads here and is timed on the wall clock.
-  - **`beat` takes mutex `registry`** (TLS-122), so it cannot write an old
-    copy of the lease back over `recover`'s steal.
+    lease after a suspend), and its `beat` does not take `registry`.
+    - **Upgrade:** stop new claims; let every run of the old executor finish,
+      or recover it, until no run is live; then switch. A lease or budget left
+      from before TLS-122 still loads here and is timed on the wall clock.
+    - **Rollback:** stop new claims; finish or recover EVERY lease with the
+      new executor until there are ZERO lease files (`status` lists none);
+      then switch. A stale lease is not enough: the old executor fails in
+      `Lock(**data)` on a lease with `beat_awake` before it can even judge
+      staleness, so a stale lease would block its `recover` too (sol r7).
+  - **`beat` and `release` take mutex `registry`** (TLS-122), like every
+    lease writer: a beat cannot write an old copy of the lease back over
+    `recover`'s steal, nor publish a lease again after `release` returned.
 
   There is no PID check: the
   conductor is a chat session, not a supervisable process, and a 30-minute silence

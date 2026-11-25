@@ -328,9 +328,14 @@ def beat(ctx: Ctx) -> None:
 
 
 def release(ctx: Ctx) -> None:
+    """Remove this run's lease, under mutex `registry` like every lease writer
+    (sol r7): unlocked, a beat that read the lease first would publish it
+    again after this returned, and a delayed unlink could remove a newer
+    claim's lease at the same path."""
     ctx.write_guard("release lock")
-    path, _ = _fenced_entry(ctx)
-    path.unlink()
+    with mutex(ctx, "registry"):
+        path, _ = _fenced_entry(ctx)
+        path.unlink()
 
 
 def steal_for_recovery(ctx: Ctx, stale: Lock) -> Lock:

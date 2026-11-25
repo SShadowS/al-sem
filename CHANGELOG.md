@@ -957,11 +957,15 @@ its time rules on the wall clock, which keeps counting through a suspend.
   verdict. Clock-sharing limit: processes that share one `.agent/` share the host.
 - **Rollout needs a drain (mandatory).** The executor before TLS-122 fails on `beat_awake`
   (`Lock(**data)`) and rejects a budget with `claimed_awake` (its checksum). Even on its own
-  files it is unsafe beside a newer run: its `recover` judges on the wall clock. Upgrade or
-  roll back only with no live lease. Older leases and budgets still load here.
-- **Decisions on liveness take mutex `registry`**, which every lease writer holds (`beat`
-  now too, which also closes an older race where a beat wrote its copy back over `recover`'s
-  steal):
+  files it is unsafe beside a newer run: its `recover` judges on the wall clock.
+  - Upgrade: stop new claims, let the old executor's runs finish or recover them, then
+    switch. Older leases and budgets still load here.
+  - Rollback: stop new claims, finish or recover every lease with the new executor until there
+    are ZERO lease files, then switch. A stale lease is not enough: the old executor fails in
+    `Lock(**data)` before it can judge staleness.
+- **Decisions on liveness take mutex `registry`**, which every lease writer holds. `beat` and
+  `release` now take it too, which closes two older races: a beat wrote its copy back over
+  `recover`'s steal, or published a lease again after `release` returned.
   - `clear-halt` keeps it from its live-run check through the HALT unlink.
   - `resolve incident` keeps it through the incident write.
   - Verification `cleanup` re-checks the lane under it and moves the tree aside (one rename to

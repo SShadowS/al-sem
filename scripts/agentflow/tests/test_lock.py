@@ -559,6 +559,37 @@ def test_beat_takes_the_registry_mutex(ctx, monkeypatch):
     assert taken == ["registry"]
 
 
+def test_a_release_during_a_beat_is_not_undone(ctx, monkeypatch):
+    """A beat has read its lease and is about to write it; `release` runs in
+    another thread meanwhile. Under `registry` the release waits for the beat
+    and then removes the lease: once both have returned, no lease is left
+    (sol r7). Unlocked, the release unlinked first and the beat published the
+    lease again after the release had returned.
+    Red proof (sol r7): `with mutex(ctx, "registry"):` dropped from `release`
+    failed here (the lease file was back)."""
+    import threading
+    lock.acquire(ctx, 8, "s", 1)
+    paused, go = threading.Event(), threading.Event()
+    real_write = lock._write
+
+    def pause(cx, path, lk):
+        paused.set()                                 # read, under `registry`, not yet written
+        go.wait(20)
+        real_write(cx, path, lk)
+
+    monkeypatch.setattr(lock, "_write", pause)
+    beat = threading.Thread(target=lock.beat, args=(ctx,))
+    beat.start()
+    assert paused.wait(20)
+    rel = threading.Thread(target=lock.release, args=(ctx,))
+    rel.start()
+    time.sleep(0.3)                                  # an unlocked release would be done by now
+    go.set()
+    beat.join(20)
+    rel.join(20)
+    assert not ctx.paths.lease(8).exists()
+
+
 def test_the_claim_writes_heartbeat_and_stamp_in_one_lease_write(ctx):
     """sol r6: every acknowledged lease carries its awake stamp, because the
     stamp is IN the lease file. A run that suspends for 2 h right after its
