@@ -358,11 +358,16 @@ def summary(path):
                 for m in ("cpu", "wall"):
                     per_pass = [r["ratio"][c][m] for r in sel if c in r["ratio"]]
                     # The pair's geometric mean, what cdo-speed judges.
+                    # Paired by (seed, round) within the arm/load; a pair is exactly
+                    # pass 1 and pass 2 (a re-run shares a round with another seed).
                     pairs = {}
                     for r in sel:
                         if c in r["ratio"] and r["ratio"][c][m]:
-                            pairs.setdefault(r["round"], []).append(r["ratio"][c][m])
-                    gm = [statistics.geometric_mean(v) for v in pairs.values() if len(v) == 2]
+                            pairs.setdefault((r["seed"], r["round"]), {}).setdefault(
+                                r["passno"], []).append(r["ratio"][c][m])
+                    gm = [statistics.geometric_mean([v[1][0], v[2][0]])
+                          for v in pairs.values()
+                          if sorted(v) == [1, 2] and len(v[1]) == len(v[2]) == 1]
                     print(f"  {c:<12} {m:<4} pass {spread(per_pass)}   pair-gm {spread(gm)}")
             skews = [x["skew"] for r in sel for x in r["ratio"].values()]
             skew = f"start skew max {max(skews):.3f} s; " if arm == "both" else ""
