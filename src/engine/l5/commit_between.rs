@@ -2178,6 +2178,15 @@ fn push_commit(v: &mut Vec<CommitRow>, c: CommitRow) {
 
 /// Sort every list nearest first (review output guidance), deterministically.
 fn finish(out: &mut BetweenOut) {
+    // A commit that is between A and B on some route pair is not also listed
+    // as ending before B (another pair's path): one fact, its strongest list.
+    let between: HashSet<(String, &'static str)> = out
+        .between
+        .iter()
+        .map(|c| (c.op_id.clone(), c.kind))
+        .collect();
+    out.without_b
+        .retain(|c| !between.contains(&(c.op_id.clone(), c.kind)));
     let near: Vec<NearKey> = out.errors.iter().map(|e| e.near.clone()).collect();
     for v in [
         &mut out.between,
