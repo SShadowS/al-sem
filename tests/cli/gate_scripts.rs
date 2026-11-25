@@ -3183,6 +3183,7 @@ fn speed_counts_cycles_and_labels_clock_and_cpi() {
 ///   thread; under 10 s;
 /// - `running` with a start time: the live test process counts with its own
 ///   start time, not with another (a reused pid is not the child it was).
+///
 /// Each case asserts its precondition (one child listed; the zombie shape).
 ///
 /// Proofs: (2026-11-25) `running` replaced by `os.path.exists` in close() ->
