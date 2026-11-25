@@ -25,8 +25,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   read still names no live hold, it probes the hold lock again (free: the hold was
   released during the read, so the slot reads free) and then the publish lock
   (held: a new take began, "still writing"). Only past all of these is the holder
-  unknown (a process that took the lock without being a cdo-slot take). No waits,
-  no retries.
+  unknown (a process that took the lock without being a cdo-slot take). There is
+  no age guess and no retry loop. Each busy publish probe looks once more after a
+  0.1 s wait, as every `x` probe does.
+- The publish probe is best effort (review, sol). A publish lock that cannot be
+  probed (an unopenable file) does not end `probe` before its decision line. The
+  reader then trusts only the hold lock: still held reads held, free reads free.
+  Before this, the probe exited 5 and `cdo-slot-guard` let a CDO command run
+  beside a held slot. New test `cdo_slot_an_unprobeable_publish_lock_keeps_the_hold`
+  runs the guard with a held hold lock and a socket as `publish.lock`.
 - A release during a read is fixed too (review r1, Fable). The reader saw the hold
   lock held, then the hold was released before it read the status. It then printed
   "held by an unknown holder" with an empty holder list (exit 1) while the slot was
@@ -41,12 +48,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A new bounded refusal, like the timing lock's: a process that keeps
   `publish.lock` exclusive (only a reader's probe takes it so, for an instant: a
   stopped or hung one) makes a take fail after `CDO_SLOT_LOCK_WAIT_S` (30 s), and
-  the message names the holders. An acquire takes the hold through a keeper, and
-  the keeper's end makes even `acquire --wait` stop with "not taken: its keeper
-  ended (exit 1)". So `land` and `cdo-gate`, which acquire with --wait, exit 1. A
-  `run` takes the hold in its own process and exits 1.
+  the message names the holders. The wait is cut to what is left of an acquire's
+  `--timeout`. The take never holds the hold lock while it waits. An acquire takes
+  the hold through a keeper, and the keeper's end makes even `acquire --wait`
+  (the oldest waiter too) stop with "not taken: its keeper ended (exit 1)". So
+  `land` and `cdo-gate`, which acquire with --wait, exit 1. A `run` takes the
+  hold in its own process and exits 1. New test
+  `cdo_slot_a_stuck_publish_lock_refuses_takes_in_bounds` covers `run`,
+  `acquire --wait` and `acquire --timeout`.
+- The two new tests that hold a lock with `flock` use the `stand_in` helper with
+  `flock --no-fork`. Before, the `sleep` child kept the lock after the test ended
+  (nextest marked the slow-take test LEAK).
 - What is left, display only: a whole new take that writes its status in the
-  moment between the reader's last two probes (a few milliseconds) still reads as
+  moment between the reader's last two probes (short, but scheduling can stretch
+  it) still reads as
   "held by an unknown holder" for that one read. No decision reads `describe`'s
   text, and the next read names the hold. A stranger's hold can also read "still
   writing" while another reader's exclusive probe of the publish lock is slow.

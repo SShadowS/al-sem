@@ -105,6 +105,7 @@ poll="${CDO_SLOT_POLL_S:-15}"
 timed_wait="${CDO_SLOT_TIMED_WAIT_S:-1800}"
 timed_grace="${CDO_SLOT_TIMED_GRACE_S:-3}"
 lock_wait="${CDO_SLOT_LOCK_WAIT_S:-30}"
+pub_wait=$lock_wait
 build_names="${CDO_SLOT_BUILD_NAMES:-cargo cargo-nextest rustc rustdoc}"
 build_scripts="${CDO_SLOT_BUILD_SCRIPTS:-ci-steps check-goldens}"
 [[ "$mem_min" =~ ^(0|[1-9][0-9]{0,5})$ ]] || die "CDO_SLOT_MEM_MIN_GB '$mem_min': whole GB, no leading zero"
@@ -258,6 +259,16 @@ nap() {
     eval "sleep $1$r"
 }
 
+# publish_busy: 0 a take holds the publish lock, 1 not, 2 it cannot be probed.
+# Best effort (TLS-127 review, sol): a failed probe of this file must not end
+# `probe` before its decision line, or the guard lets work run beside a hold.
+publish_busy() {
+    local rc=0
+    (probe x "$publish_lock") 2>/dev/null || rc=$?
+    ((rc <= 1)) && return "$rc"
+    return 2
+}
+
 # state: from one probe of the hold lock, one read of the status, one probe of
 # the id lock it names. st = free | mine | held; own = this Claude session's
 # hold (bound or not, the guard's question); hid, holder_pid, bound: the hold's,
@@ -291,10 +302,17 @@ state() {
         # ⟨TLS-127⟩ A take keeps the publish lock until its status is in. (A
         # stranger's hold can read "still writing" while another reader's
         # exclusive probe of the publish lock is slow: display only.)
-        if probe x "$publish_lock"; then
-            # The hold may have been released since the first probe while
-            # something else has the publish lock (review r2, Fable).
-            if probe s "$lock"; then writing=1; else st=free; fi
+        local pb=0
+        publish_busy || pb=$?
+        if ((pb != 1)); then
+            # Busy, or it cannot be probed: only the hold lock says free. The
+            # hold may have been released since the first probe while something
+            # else has the publish lock (review r2, Fable).
+            if probe s "$lock"; then
+                ((pb)) || writing=1
+            else
+                st=free
+            fi
             return 0
         fi
         # Free: a take that finished since the read wrote its status before it
@@ -307,7 +325,7 @@ state() {
             # publish probe (still writing). Only past both is it unknown.
             if ! probe s "$lock"; then
                 st=free
-            elif probe x "$publish_lock"; then
+            elif publish_busy; then
                 writing=1
             fi
             return 0
@@ -408,10 +426,12 @@ take_hold() {
     # that sees the hold lock taken and no status naming it asks this lock.
     # Only a reader's probe takes it exclusive, for an instant.
     exec {pfd}>>"$publish_lock"
-    if ! flock -s -w "$lock_wait" "$pfd"; then
+    # At most CDO_SLOT_LOCK_WAIT_S, and never past an acquire's --timeout
+    # (pub_wait; TLS-127 review, sol).
+    if ! flock -s -w "$pub_wait" "$pfd"; then
         # Closed first, or the holder list names this process too.
         exec {pfd}>&-
-        die "the publish lock $publish_lock was held for ${lock_wait} s by $(holders_of "$publish_lock"); refusing (a stopped or hung cdo-slot reader: end it)"
+        die "the publish lock $publish_lock was held for ${pub_wait} s by $(holders_of "$publish_lock"); refusing (a stopped or hung cdo-slot reader: end it)"
     fi
     exec {lfd}>"$lock"
     # Up to 1 s: a probe has the lock for an instant.
@@ -511,6 +531,7 @@ keeper() {
         fi
     done
     me_session=$CS_SESSION me_pid=$CS_PID bind=$CS_BIND bind_start=$CS_BIND_START
+    [[ "${CS_PUB_WAIT:-}" =~ ^[1-9][0-9]{0,3}$ ]] && pub_wait=$CS_PUB_WAIT
     local id rc=0
     case "$1" in
         hold)
@@ -562,7 +583,7 @@ spawn_keeper() {
     kpid="" kid=""
     CS_OWNER="$2" CS_REASON="$3" CS_TOKEN="$4" CS_BIND="$bind" CS_BIND_START="$bind_start" \
         CS_SESSION="$me_session" CS_PID="$me_pid" CS_PID_START="$(proc_start "${me_pid:-0}")" \
-        CS_WRITER="$$" CS_WRITER_START="$(proc_start $$)" CS_READY="$ready" \
+        CS_WRITER="$$" CS_WRITER_START="$(proc_start $$)" CS_READY="$ready" CS_PUB_WAIT="$pub_wait" \
         setsid bash "$self" _keep "$1" </dev/null >/dev/null 2>"$ready.err" &
     local child=$!
     for n in $(seq 1200); do
@@ -984,6 +1005,15 @@ acquire() {
                 return 4
                 ;;
             free)
+                # ⟨TLS-127 review, sol⟩ A take's publish wait stays inside
+                # --timeout (the deadline is checked again only after it).
+                if [[ -n "$timeout" ]]; then
+                    awake_read
+                    [[ -z "$awake_msg" ]] || echo "cdo-slot: --timeout: $awake_msg"
+                    pub_wait=$((timeout - awake_us / 1000000))
+                    ((pub_wait >= 1)) || pub_wait=1
+                    ((pub_wait <= lock_wait)) || pub_wait=$lock_wait
+                fi
                 read -r -a line <<<"$(ahead)"
                 if timed_now; then
                     # A timing whose hold has ended still keeps every new hold out.
