@@ -1247,6 +1247,47 @@ ran beside the timing).
 - Still open: a bare `cargo` started by a command queued before a timing is not checked; that
   is TLS-98's cargo wrapper.
 
+### Added (ENG-165: `prove … commit-between --after A --before B`)
+
+A new prove question: can a COMMIT that ends the caller's transaction run after site A
+returns and before the next run of site B? It came from an investigation of mail and
+eDocument bookkeeping, where a send (A), then a commit, then an error before the log `Insert`
+(B) loses the log entry while the send stays. Design:
+`docs/superpowers/specs/2026-11-25-eng165-commit-between-design.md` (revision 3.1, reviewed
+by Fable).
+- **The question.** `alsem prove <ws> <routine> commit-between --after FILE:LINE[:COL]
+  --before FILE:LINE[:COL]` (MCP `alsem_prove`: `after`, `before`). A site is a call or a
+  record operation, in the workspace or a dependency's source; a line with two sites needs
+  the column, and a file tail that names two files is refused with the candidates.
+- **Between** is read off each routine's control-flow graph (`commit_between::Cfg`): A's tail
+  (below the meet routine of the routes to A and B), the meet routine's middle and B's head,
+  for every route pair from the root's state graph. Branches, loops (the next B after A; a B
+  that may be skipped is no cut), `exit`, `break`, `Error`, calls in arguments (left to right,
+  measured) and the cones of calls, events and record triggers count.
+- **Classes.** Only a class-1 commit (a `Commit()` that runs normally, also inside an isolated
+  subscriber) decides `yes`. A checked run's commit, and any commit behind a checked-run edge,
+  commits only the run's own transaction (`ownTransactionCommits`), except when A itself runs
+  inside that run: then its commit is what makes A durable (`run-commit-of-A`).
+- **Lists kept beside the verdict:** `errorsAfterCommit` per commit (the dangerous case, first
+  in the human answer), `commitsInsideA` / `commitsInsideB` (commits during a call A or B: name
+  a deeper site to order them), `commitsWithoutB` (commits on paths that end by `exit`, a
+  return or an error before B), `errorsBetween`, `ownTransactionCommits`. Traps are scoped to
+  the region: an error a trap below the region catches is left out; one a trap above the meet
+  routine catches is kept, `swallowed-above-meet`.
+- **Unknown, not no:** an unresolved call, an open interface call (waived by
+  `--closed-world`), a routine without a control-flow tree, a route cap.
+- **Measured on BC 28 on Linux (Windows confirmation pending)**, probe app and results in
+  `/work/.al-sem/engine-notes/eng165/bcprobe/`: `Page.RunModal` with a write pending raises an
+  error (without a test handler; listed as a possible error row, never a commit);
+  `Report.RunModal` of a processing-only report neither commits nor errors; a `Commit()` in an
+  isolated subscriber commits the caller's pending write; an isolated event with nothing
+  pending commits its subscribers' own writes.
+- **DO and CDO.** On the DO workspace the engine finds two places that match the owner's
+  description (engine findings, not confirmed by the owner); public fixture twins of both pin
+  the answers (`tests/cli/cli_eng165_commit_between.rs`, `do1_*`, `do2_*`). No `analyze`
+  finding or fingerprint moves: the question adds output only.
+- `--routes` does not go with `commit-between` yet (each row carries one route).
+
 ### Fixed (ENG-178: table procedures named like record built-ins: four follow-ups from ENG-173)
 
 From Fable's second review of ENG-173 (`/work/.al-sem/engine-notes/eng173/fable-eng173-r2.md`).
