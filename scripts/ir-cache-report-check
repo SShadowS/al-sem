@@ -6,8 +6,8 @@
     ir-cache-report-check --self-test
 
 --require-key (TLS-117: the Windows acceptance and the release workflows' check of the signed
-binaries) fails a missing file, any `unsupported`, `unstamped` or `no key` line, and a file with
-no `start` line carrying a key; with --rule, the rule is judged too.
+binaries) fails a missing file, any `unsupported`, `unstamped` or `no key` line, a file with no
+`start` line, and any `start` line without a key; with --rule, the rule is judged too.
 
 Exit 0 or 1, printing one verdict line. The rules are over the set of the file's lines
 (spec "Acceptance" item 5):
@@ -80,17 +80,21 @@ def judge(rule, lines):
 
 def require_key(lines):
     """(ok, verdict) for --require-key (TLS-117, acceptance and release): every process made a
-    key. Fails a missing file, any `unsupported` / `unstamped` / `no key` line, and a file with
-    no `start` line carrying a key."""
+    key. Fails a missing file, any `unsupported` / `unstamped` / `no key` line, a file with no
+    `start` line, and any `start` line without a key (sol r-final: one keyed start must not hide
+    another start with `key: null`)."""
     if lines is None:
         return False, "IR: FAIL no report file (the cache path never ran)"
     nokey = [l for l in lines if "ir_cache" in l]
     if nokey:
         return False, f"IR: FAIL a process has no key: {nokey[:2]}"
-    keyed = [l for l in lines if l.get("event") == "start" and l.get("key")]
-    if not keyed:
-        return False, "IR: FAIL no process made a key (no start line with a key)"
-    return True, f"IR: key ({len(keyed)} processes)"
+    starts = [l for l in lines if l.get("event") == "start"]
+    if not starts:
+        return False, "IR: FAIL no process made a key (no start line)"
+    keyless = [l for l in starts if not l.get("key")]
+    if keyless:
+        return False, f"IR: FAIL a start line has no key: {keyless[:2]}"
+    return True, f"IR: key ({len(starts)} processes)"
 
 
 def read(path):
@@ -147,6 +151,10 @@ def self_test():
         ([{"pid": 3, "ir_cache": "no key", "reason": "r"}], False, "no key"),
         ([start(1), end(1, **hit), {"pid": 2, "ir_cache": "unstamped"}], False, "one unstamped"),
         ([dict(start(1), key=None), end(1, **hit)], False, "a start without a key"),
+        ([start(1), end(1, **hit), start(2), end(2, **hit)], True, "two keyed processes"),
+        # sol r-final: one keyed start must not hide a second start with key null
+        ([start(1), end(1, **hit), dict(start(2), key=None), end(2, **hit)], False,
+         "one keyed start, one start without a key"),
     ]
     for lines, want, name in keyed:
         ok, verdict = require_key(lines)

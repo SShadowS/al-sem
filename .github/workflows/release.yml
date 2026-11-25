@@ -171,10 +171,24 @@ jobs:
           & target\release-ship\alsem.exe analyze $ws --format json | Out-Null
           if ($LASTEXITCODE -notin 0, 1) { throw "alsem analyze (warm) failed (exit $LASTEXITCODE)" }
           judge $env:ALSEM_IR_CACHE_REPORT warm-build
+          # impact with every hit parsed again and compared (sol r-final: VERIFY on the
+          # shipped artifacts): disk hits, all verified
+          $env:ALSEM_IR_CACHE_VERIFY = '1'
+          $env:ALSEM_IR_CACHE_REPORT = Join-Path $env:RUNNER_TEMP 'ir-impact.jsonl'
+          & target\release-ship\alsem.exe impact $ws --routine 'Ws Cu::Run' --format json | Out-Null
+          if ($LASTEXITCODE -notin 0, 1) { throw "alsem impact failed (exit $LASTEXITCODE)" }
+          Remove-Item Env:ALSEM_IR_CACHE_VERIFY
+          judge $env:ALSEM_IR_CACHE_REPORT impact
           # aldump.exe has its own key (its own bytes): it publishes into its own key folder
           $env:ALSEM_IR_CACHE_REPORT = Join-Path $env:RUNNER_TEMP 'ir-aldump.jsonl'
           & target\release-ship\aldump.exe --program-call-graph-stats $ws | Out-Null
           if ($LASTEXITCODE -ne 0) { throw "aldump failed (exit $LASTEXITCODE)" }
+          judge $env:ALSEM_IR_CACHE_REPORT output
+          # the shipped LSP server at runtime (sol r-final): one real LSP request on stdio (a
+          # didOpen alone builds nothing), then shutdown; its own key, publishing into its folder
+          $env:ALSEM_IR_CACHE_REPORT = Join-Path $env:RUNNER_TEMP 'ir-lsp.jsonl'
+          python scripts/lsp-key-smoke target\release-ship\al-call-hierarchy.exe $ws --no-telemetry
+          if ($LASTEXITCODE -ne 0) { throw "the LSP smoke run failed (exit $LASTEXITCODE)" }
           judge $env:ALSEM_IR_CACHE_REPORT output
 
       # TLS-117 (Fable N5): the shipped alsem.exe links the C runtime statically

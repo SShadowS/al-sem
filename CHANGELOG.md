@@ -50,8 +50,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **Unstamped binaries (every cargo build and test) get no key on Windows**; the report says
   `"ir_cache": "unstamped"`, which `scripts/ir-cache-report-check` passes. A failing Windows key
   for any other reason says `"no key"` with the reason, and fails the checker.
-  `ir-cache-report-check --require-key` fails `unstamped`, `unsupported` and `no key` lines and a
-  report with no keyed `start` line; the acceptance and the release workflows use it.
+  `ir-cache-report-check --require-key` fails `unstamped`, `unsupported` and `no key` lines, a
+  report with no `start` line, and any `start` line without a key (one keyed process cannot hide
+  another without one); the acceptance and the release workflows use it, and its self-test runs
+  in the suite (`cli_ir_cache::the_report_checker_self_test_passes`).
 - **Install and CI.** `scripts/install-windows.ps1` (Windows PowerShell 5.1 or pwsh 7) builds the
   three binaries with `release-ship`, stamps and verifies them, and copies them to
   `~/.al-sem/bin/` and each `-LspDir`. It refuses before building or copying anything (and again
@@ -59,8 +61,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and some old. Both release workflows stamp and verify the three Windows binaries after the
   build and before signing, and after signing verify them again and, with the cache on in a
   fresh root on `tests/fixtures/tls117/ws`, run a cold `alsem.exe analyze` (`--rule output`), a
-  warm one (`--rule warm-build`) and `aldump.exe --program-call-graph-stats` (`--rule output`),
-  each `--require-key`; a failure fails the job. `release.yml` also runs by `workflow_dispatch`
+  warm one (`--rule warm-build`), an `alsem.exe impact` with `ALSEM_IR_CACHE_VERIFY=1` (`--rule
+  impact`: disk hits, every hit parsed again and compared), `aldump.exe
+  --program-call-graph-stats` (`--rule output`), and the shipped LSP server at runtime
+  (`scripts/lsp-key-smoke`: `initialize`, one `prepareCallHierarchy`, `shutdown`, on stdio;
+  `--rule output`), each `--require-key`; a failure fails the job. `release.yml` also runs by `workflow_dispatch`
   (on a branch, before landing), and then publishes nothing.
 - **The Windows link-map listing.** `release.yml`'s Windows job links with `/MAP` (through
   `CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS`, which keeps `+crt-static`; a plain

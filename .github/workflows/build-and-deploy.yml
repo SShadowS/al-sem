@@ -156,9 +156,20 @@ jobs:
           & target\release-ship\alsem.exe analyze $ws --format json | Out-Null
           if ($LASTEXITCODE -notin 0, 1) { throw "alsem analyze (warm) failed (exit $LASTEXITCODE)" }
           judge $env:ALSEM_IR_CACHE_REPORT warm-build
+          # impact with every hit verified, aldump's own key, the LSP at runtime (as release.yml)
+          $env:ALSEM_IR_CACHE_VERIFY = '1'
+          $env:ALSEM_IR_CACHE_REPORT = Join-Path $env:RUNNER_TEMP 'ir-impact.jsonl'
+          & target\release-ship\alsem.exe impact $ws --routine 'Ws Cu::Run' --format json | Out-Null
+          if ($LASTEXITCODE -notin 0, 1) { throw "alsem impact failed (exit $LASTEXITCODE)" }
+          Remove-Item Env:ALSEM_IR_CACHE_VERIFY
+          judge $env:ALSEM_IR_CACHE_REPORT impact
           $env:ALSEM_IR_CACHE_REPORT = Join-Path $env:RUNNER_TEMP 'ir-aldump.jsonl'
           & target\release-ship\aldump.exe --program-call-graph-stats $ws | Out-Null
           if ($LASTEXITCODE -ne 0) { throw "aldump failed (exit $LASTEXITCODE)" }
+          judge $env:ALSEM_IR_CACHE_REPORT output
+          $env:ALSEM_IR_CACHE_REPORT = Join-Path $env:RUNNER_TEMP 'ir-lsp.jsonl'
+          python scripts/lsp-key-smoke target\release-ship\al-call-hierarchy.exe $ws --no-telemetry
+          if ($LASTEXITCODE -ne 0) { throw "the LSP smoke run failed (exit $LASTEXITCODE)" }
           judge $env:ALSEM_IR_CACHE_REPORT output
 
       - name: Upload artifact

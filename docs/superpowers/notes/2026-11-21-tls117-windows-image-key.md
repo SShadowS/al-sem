@@ -449,7 +449,10 @@ without `--rule` judges only the key; it prints `PASS` only together with a rule
    runs only when the cache is on).
 6. **The release workflow on the branch** (Fable N6), before landing: `gh workflow run
    release.yml --ref tools/tls-117-windows-cache`. It builds, stamps, (signs when configured),
-   runs the cold, warm and aldump key checks, the static-CRT check and the map listing, and
+   runs on the final signed artifacts the cold, warm, impact VERIFY (every hit verified), aldump
+   and LSP-runtime key checks (the LSP through `scripts/lsp-key-smoke`: one real request on
+   stdio; sol r-final), each `--require-key` (every `start` line keyed), the static-CRT check and
+   the map listing, and
    publishes nothing (the `release` job runs only for a tag). Before running it (Fable F3):
    - `build-windows` runs in `environment: release` and, when signing is configured, **signs
      branch code with the real certificate**;

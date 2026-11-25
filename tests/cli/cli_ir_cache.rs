@@ -1245,6 +1245,26 @@ fn a_non_utf8_command_line_runs() {
     );
 }
 
+/// TLS-117: `ir-cache-report-check`'s own cases (the rules, and `--require-key`'s: every
+/// `start` line must carry a key, sol r-final) run in the suite, so a change to the checker the
+/// acceptance and the release workflows judge by cannot drift unseen. Discrimination
+/// (2026-11-25): `require_key` back to "some start has a key": the case "one keyed start, one
+/// start without a key" reads WRONG, the self-test exits 1 and this test fails; restored,
+/// passes.
+#[test]
+fn the_report_checker_self_test_passes() {
+    let out = crate::clean_env::command(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/scripts/ir-cache-report-check"
+    ))
+    .arg("--self-test")
+    .output()
+    .unwrap();
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{text}");
+    assert!(text.contains("self-test: PASS"), "{text}");
+}
+
 /// sol r1: an entry that is there but refused counts as `refused`, and the gate's report
 /// rule fails the phase on it.
 #[test]
