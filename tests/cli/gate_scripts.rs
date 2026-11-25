@@ -2548,6 +2548,44 @@ while True:
     time.sleep(0.05)
 "#;
 
+/// ⟨TLS-126 sol r1⟩ Runs `python3 <argv>` (cdo-speed) as a child subreaper:
+/// the stub's IR report child outlives its server by design, and on a host
+/// whose init does not reap it would stay a zombie. Orphans come here; once
+/// cdo-speed exits, this waits (up to 60 s) for every one left and reaps it,
+/// then says on stderr `stub-reaper: reaped N orphan(s), M left` (M: children
+/// still not reaped, which `speed_with_stub` requires to be 0). It exits with
+/// cdo-speed's code, or by its signal.
+///
+/// Proof (2026-11-25): the reaping loop skipped -> "stub-reaper: reaped 0
+/// orphan(s), 5 left" and the cross-row run red; restored, green.
+#[cfg(target_os = "linux")]
+const STUB_REAPER: &str = r#"
+import ctypes, glob, os, signal, subprocess, sys, time
+if ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0) != 0:  # PR_SET_CHILD_SUBREAPER
+    sys.exit(f"stub-reaper: prctl: errno {ctypes.get_errno()}")
+rc = subprocess.call([sys.executable, *sys.argv[1:]])
+def children():
+    out = []
+    for f in glob.glob(f"/proc/{os.getpid()}/task/*/children"):
+        out += open(f).read().split()
+    return out
+reaped, end = 0, time.monotonic() + 60
+while time.monotonic() < end:
+    try:
+        pid, _ = os.waitpid(-1, os.WNOHANG)
+    except ChildProcessError:
+        break
+    if pid:
+        reaped += 1
+    else:
+        time.sleep(0.05)
+print(f"stub-reaper: reaped {reaped} orphan(s), {len(children())} left", file=sys.stderr)
+if rc < 0:
+    signal.signal(-rc, signal.SIG_DFL)
+    os.kill(os.getpid(), -rc)
+sys.exit(rc)
+"#;
+
 #[cfg(target_os = "linux")]
 fn speed_with_stub(
     dir: &std::path::Path,
@@ -2558,6 +2596,8 @@ fn speed_with_stub(
     use std::os::unix::fs::PermissionsExt;
     let stub = dir.join("alsem");
     std::fs::write(&stub, SPEED_STUB).unwrap();
+    let reaper = dir.join("stub-reaper.py");
+    std::fs::write(&reaper, STUB_REAPER).unwrap();
     std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
     // TLS-83: head runs under its own name, so the stub can tell the sides apart.
     let head = dir.join("alsem-head");
@@ -2577,7 +2617,8 @@ fn speed_with_stub(
     std::fs::create_dir_all(&ws).unwrap();
     let mut cmd = crate::clean_env::command("python3");
     private_slot(&mut cmd, dir);
-    cmd.arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-speed"))
+    cmd.arg(&reaper)
+        .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-speed"))
         .arg(&ws)
         .args(["--base-exe"])
         .arg(&stub)
@@ -2614,6 +2655,9 @@ fn speed_with_stub(
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
+    // TLS-126 sol r1: every orphan of the run (the stub's IR report children)
+    // was reaped; none is left a zombie.
+    assert!(text.contains(" orphan(s), 0 left"), "{text}");
     (out.status.code(), text)
 }
 
@@ -3181,8 +3225,17 @@ fn speed_counts_cycles_and_labels_clock_and_cpi() {
 ///   second thread runs 1 s more (stat: Z with 2 threads, asserted before the
 ///   close). close() must wait for that thread: after it, the zombie has one
 ///   thread; under 10 s;
+/// - kill (sol r1): the child never ends; with `CLOSE_WAIT_S` 0.3 close() kills
+///   it, through the pidfd it took when it listed the child (never `os.kill`,
+///   which the test records): after close(), a finished zombie;
+/// - kill, pid reused (sol r1): no pidfd (`os.pidfd_open` raises), and the
+///   child's pid reads another start time from the moment close() decides to
+///   kill (the "still alive" line): close() must not kill by pid (the child is
+///   still running after it; the test then kills it);
 /// - `running` with a start time: the live test process counts with its own
-///   start time, not with another (a reused pid is not the child it was).
+///   start time, not with another (a reused pid is not the child it was);
+/// - this process adopted every child: it reaps them all at the end, and has
+///   no child left.
 ///
 /// Each case asserts its precondition (one child listed; the zombie shape).
 ///
@@ -3190,7 +3243,12 @@ fn speed_counts_cycles_and_labels_clock_and_cpi() {
 /// "close() waited 35.1 s on a zombie", after "still alive 30 s" and "survived
 /// SIGKILL" (red); restored, green. (Review r3) the one-thread condition dropped
 /// from `running` -> the leader-gone case (red); the start-time check dropped ->
-/// the start-time case (red); each restored, green.
+/// the start-time case (red); each restored, green. (Sol r1) `kill_child` never
+/// using the pidfd -> "kill: close() killed by pid, not through the child's
+/// pidfd" (red); its start-time re-check before `os.kill` dropped -> "kill, pid
+/// reused: close() killed pid ..., by then another process" (red); the final
+/// reaping dropped -> "children left unreaped: [4 pids]" (red); each restored,
+/// green.
 #[cfg(target_os = "linux")]
 #[test]
 fn speed_close_does_not_wait_on_a_zombie() {
@@ -3219,13 +3277,22 @@ CASES = {
     "plain": WAIT + "    after(0.5)\nsys.stdin.read()",
     "leader gone": WAIT + "    threading.Thread(target=after, args=(1.0,)).start()\n"
                    "    ctypes.CDLL(None).pthread_exit(None)\nsys.stdin.read()",
+    # The child never ends by itself: close() kills it after CLOSE_WAIT_S.
+    "kill": WAIT + "    after(3600)\nsys.stdin.read()",
+    "kill, pid reused": WAIT + "    after(3600)\nsys.stdin.read()",
 }
-for name, code in CASES.items():
+real_kill, real_stat = os.kill, m.proc_stat
+pid_kills, adopted = [], []
+os.kill = lambda pid, sig: (pid_kills.append(pid), real_kill(pid, sig))
+def server(code):
     d = tempfile.mkdtemp()
     s = m.Server.__new__(m.Server)
     s.name, s.root = "z", tempfile.mkdtemp(dir=d)
     s.err = open(os.path.join(d, "err"), "wb")
     s.p = subprocess.Popen([sys.executable, "-c", code], stdin=subprocess.PIPE)
+    return s
+for name, code in CASES.items():
+    s = server(code)
     want = ("Z", "2") if name == "leader gone" else ("S", None)
     end = time.monotonic() + 60
     while time.monotonic() < end:
@@ -3236,17 +3303,55 @@ for name, code in CASES.items():
     else:
         sys.exit(f"{name}: precondition: one child{' (Z, 2 threads)' * (want[1] is not None)}, "
                  f"got {[(k, shape(k)) for k in kids]}")
+    kid = kids[0]
+    adopted.append(kid)
+    if name.startswith("kill"):
+        s.CLOSE_WAIT_S = 0.3
+    if name == "kill, pid reused":
+        # No pidfd here, and the pid becomes another process (another start time)
+        # the moment close() decides to kill: it must not kill by pid.
+        real_open, reused = os.pidfd_open, []
+        def no_pidfd(pid):
+            raise AttributeError("pidfd_open")
+        os.pidfd_open = no_pidfd
+        real_log = m.log
+        m.log = lambda msg: (reused.append(1) if "still alive" in msg else None, real_log(msg))
+        def stat(pid):
+            f = real_stat(pid)
+            if f and reused and pid == kid:
+                f = f[:19] + ["1"] + f[20:]
+            return f
+        m.proc_stat = stat
     t = time.monotonic()
-    s.close()
+    try:
+        s.close()
+    finally:
+        if name == "kill, pid reused":
+            os.pidfd_open, m.log, m.proc_stat = real_open, real_log, real_stat
     took = time.monotonic() - t
-    if shape(kids[0]) != ("Z", "1"):
-        sys.exit(f"{name}: close() returned with the child at {shape(kids[0])}, not a "
+    if name == "kill, pid reused":
+        if kid in pid_kills or shape(kid)[0] == "Z":
+            sys.exit(f"{name}: close() killed pid {kid}, by then another process")
+        real_kill(kid, 9)
+        continue
+    if shape(kid) != ("Z", "1"):
+        sys.exit(f"{name}: close() returned with the child at {shape(kid)}, not a "
                  "finished zombie (Z, 1 thread)")
     if took > 10:
         sys.exit(f"{name}: close() waited {took:.1f} s on a zombie")
+    if name == "kill" and kid in pid_kills:
+        sys.exit(f"{name}: close() killed by pid, not through the child's pidfd")
+os.kill = real_kill
 me = os.getpid()
 if not m.running(me, m.proc_start(me)) or m.running(me, "0"):
     sys.exit("running: the start time is not checked")
+# This process adopted every child: reap them all, and leave none behind.
+for kid in adopted:
+    os.waitpid(kid, 0)
+left = [c for f in os.listdir(f"/proc/{me}/task")
+        for c in open(f"/proc/{me}/task/{f}/children").read().split()]
+if left:
+    sys.exit(f"children left unreaped: {left}")
 print("ok")
 "#;
     let out = crate::clean_env::command("python3")
@@ -3711,6 +3816,10 @@ fn speed_extra_pair_judges_every_failure_in_side_order() {
 /// (base: IR: FAIL start without end ...; head: ...)` (red); restored, green.
 /// Re-run 2026-11-25 on the final shape (one fork, `end` 0.1 s after the
 /// server, close() skipping zombies): red the same way; restored, green.
+/// (Sol r1) The label's absence alone passed an IR row that never ran: with
+/// `ir_build_rows` returning "" at once, the verdict read a plain PASS, and the
+/// report check failed ("base's warm IR report ...: No such file") (red, this
+/// run made first for the proof); restored, green.
 #[cfg(target_os = "linux")]
 fn speed_agree_then_pass() {
     let dir = tempfile::tempdir().unwrap();
@@ -3732,10 +3841,40 @@ fn speed_agree_then_pass() {
             && v.contains("a failure its passes contradicted beyond x1.25: warm-tests wall")
             // TLS-126: the stub writes the IR report as the engine does.
             && !v.contains("IR WARM REPORT BREACH")
+            && !v.contains("IR ROWS NOT RUN")
             && v.contains("the same-order passes agree, judged on 4 passes)"),
         "{text}"
     );
     assert_eq!(speed_json(dir.path())["verdict"], "PASS");
+    // TLS-126 sol r1: the label's absence is not enough (an IR row that never
+    // ran writes none either): both warm builds wrote a report with one start
+    // and one end of the same process, and disk hits.
+    for side in ["base", "head"] {
+        let path = dir.path().join(format!("state-/out/ir-warm-{side}.jsonl"));
+        let rep = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("{side}'s warm IR report {}: {e}\n{text}", path.display()));
+        let lines: Vec<serde_json::Value> = rep
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        assert!(
+            lines.len() == 2
+                && lines[0]["event"] == "start"
+                && lines[1]["event"] == "end"
+                && lines[0]["pid"] == lines[1]["pid"]
+                && lines[1]["counters"]["disk_hits"].as_u64().unwrap_or(0) > 0,
+            "{side}: {rep}"
+        );
+    }
+    // The four IR rows' report children (among others: the slot's helpers) came
+    // to the reaper, and it reaped them all (`speed_with_stub`: 0 left).
+    let reaped: u32 = text
+        .split("stub-reaper: reaped ")
+        .nth(1)
+        .and_then(|s| s.split(' ').next())
+        .and_then(|n| n.parse().ok())
+        .unwrap_or_else(|| panic!("the reaper's line: {text}"));
+    assert!(reaped >= 4, "{text}");
 }
 
 /// ⟨TLS-111 review r1⟩ A wall-time failure adds the pair too, and one warm-up

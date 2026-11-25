@@ -128,6 +128,7 @@ build, an MCP request that failed or timed out, HOST UNSTABLE). A run under load
 labelled. Linux only (/proc).
 """
 import argparse
+import errno
 import fcntl
 import hashlib
 import json
@@ -973,16 +974,19 @@ def running(pid, start=None):
     return not (fields[0] in ("Z", "X") and fields[17] == "1")
 
 
-def descendants(pid):
-    """Every live descendant of `pid` (from /proc's parent links)."""
-    parents = {}
+def descendants(pid, starts=None):
+    """Every live descendant of `pid` (from /proc's parent links). With `starts` (a
+    dict), each one's start time too, from the same read as its parent link."""
+    parents, start_of = {}, {}
     for d in os.listdir("/proc"):
         if not d.isdigit():
             continue
         try:
             with open(f"/proc/{d}/stat") as f:
                 stat = f.read()
-            parents.setdefault(int(stat[stat.rindex(")") + 2:].split()[1]), []).append(int(d))
+            fields = stat[stat.rindex(")") + 2:].split()
+            parents.setdefault(int(fields[1]), []).append(int(d))
+            start_of[int(d)] = fields[19]
         except (OSError, ValueError, IndexError):
             continue
     out, todo = [], [pid]
@@ -990,7 +994,40 @@ def descendants(pid):
         kids = parents.get(todo.pop(), [])
         out.extend(kids)
         todo.extend(kids)
+    if starts is not None:
+        starts.update((k, start_of[k]) for k in out)
     return out
+
+
+def pid_handle(pid, start):
+    """⟨TLS-126 sol r1⟩ A pidfd for `pid` while it is still the process that started at
+    `start` (a signal through it can reach no other process, whatever reuses the pid
+    later); None where pidfds are not available; False when `pid` is gone or already
+    another process."""
+    try:
+        fd = os.pidfd_open(pid)
+    except AttributeError:
+        return None
+    except OSError as e:
+        return False if e.errno == errno.ESRCH else None
+    if proc_start(pid) != start:
+        os.close(fd)
+        return False
+    return fd
+
+
+def kill_child(pid, start, handle):
+    """SIGKILL the process `pid` that started at `start`: through its pidfd `handle`,
+    or, without one, only if the start time still matches just before the kill."""
+    try:
+        if type(handle) is int:
+            signal.pidfd_send_signal(handle, signal.SIGKILL)
+        elif running(pid, start):
+            # shortcut: a pid reused between this check and the kill is still hit;
+            # only where pidfds are missing (Linux before 5.3, Python before 3.9).
+            os.kill(pid, signal.SIGKILL)
+    except OSError:
+        pass
 
 
 # ⟨TLS-83⟩ Instructions: user-mode instructions retired per call, next to its
@@ -1381,27 +1418,33 @@ class Server:
         self.sample_hwm()
         return sum(self.hwm_kib.values()) / 1024
 
+    # How long close() waits for the server's descendants before it kills them.
+    CLOSE_WAIT_S = 30
+
     def close(self):
         # ⟨TLS-79⟩ The whole tree must be gone: an engine child left behind keeps
         # its model resident, which is what made a build beside it slower.
-        # Each with its start time: a pid reused after it exits is not it (TLS-126).
-        kids = [(k, proc_start(k)) for k in descendants(self.p.pid)]
+        # ⟨TLS-126⟩ Each with its start time (read with its parent link) and a pidfd
+        # taken while it is still that process: a pid reused later is not it, and
+        # the kill below reaches only it.
+        starts = {}
+        kids = descendants(self.p.pid, starts)
+        handles = {k: pid_handle(k, starts[k]) for k in kids}
+        kids = [(k, starts[k]) for k in kids if handles[k] is not False]
         try:
             self.p.stdin.close()
             self.p.wait(timeout=60)
         except (OSError, subprocess.TimeoutExpired):
             self.p.kill()
-        deadline = time.monotonic() + 30
+        deadline = time.monotonic() + self.CLOSE_WAIT_S
         left = [(k, t) for k, t in kids if running(k, t)]
         while left and time.monotonic() < deadline:
             time.sleep(0.2)
             left = [(k, t) for k, t in left if running(k, t)]
-        for k, _ in left:
-            log(f"server {self.name}: child {k} still alive 30 s after the close: killed")
-            try:
-                os.kill(k, 9)
-            except OSError:
-                pass
+        for k, t in left:
+            log(f"server {self.name}: child {k} still alive {self.CLOSE_WAIT_S} s after the "
+                "close: killed")
+            kill_child(k, t, handles[k])
         deadline = time.monotonic() + 5
         while left and time.monotonic() < deadline:
             time.sleep(0.1)
@@ -1409,6 +1452,9 @@ class Server:
         for k, _ in left:
             log(f"server {self.name}: child {k} survived SIGKILL: its memory may still be "
                 f"resident (the next build's timing may be skewed)")
+        for fd in handles.values():
+            if type(fd) is int:
+                os.close(fd)
         self.err.close()
         shutil.rmtree(self.root, ignore_errors=True)
 

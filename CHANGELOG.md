@@ -44,12 +44,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `start` line comes at the first build, and the `end` line, with counters, comes
   0.1 s after the server exits. Both lines carry the child's pid. A cache folder the
   stub filled before gives disk hits, and an empty one gives a publish. So stub speed
-  runs no longer carry the breach label. `speed_agree_then_pass` asserts the label is
-  absent. The side-order run sets `STUB_IR_NO_REPORT` and asserts that it shows.
+  runs no longer carry the breach label. `speed_agree_then_pass` asserts that the
+  label is absent, that no `IR ROWS NOT RUN` label appears, and that both warm
+  reports hold one `start` and one `end` of the same pid, with disk hits. The
+  side-order run sets `STUB_IR_NO_REPORT` and asserts that the label shows.
   Because the `end` line comes from a descendant, deleting `Server.close()`'s wait for
-  the server's descendants now fails a test (TLS-128 covers the real engine's side).
+  the server's descendants now fails a test. This proves nothing about the real
+  engine: its `EngineFront` has its own 10 s shutdown deadline, and the stub's delayed
+  write does not show that the real IR report survives it (TLS-128).
   The stub forks once, not twice: a double-forked grandchild is reparented at once,
   so `close()` would never list it and its `end` line would race the report check.
+- Every stub speed run goes through a small wrapper (`STUB_REAPER`) that makes
+  itself a child subreaper, so the stub's report children come to it. After
+  cdo-speed exits it reaps every one, and `speed_with_stub` asserts that none is left.
+  On a host whose init does not reap, nothing is left behind as a zombie.
 - `scripts/cdo-speed`: `Server.close()` no longer waits on a finished zombie
   descendant. On a host whose init does not reap, an orphaned engine child stays a
   zombie (its `/proc/<pid>` remains), and `close()` waited 30 s, sent a SIGKILL,
@@ -57,12 +65,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - The new `running()` treats a zombie as gone only when one thread is left.
     `/proc/<pid>/stat` shows the thread-group leader's state, and a leader that has
     exited reads Z while its other threads still run and hold the memory.
-  - `close()` also records each descendant's start time when it lists them, so a
-    pid reused by another process counts as gone and is never killed.
+  - `close()` also records each descendant's start time, from the same `/proc` read
+    that finds it, and takes a pidfd while the pid is still that process. So a pid
+    reused by another process counts as gone, and the kill after the 30 s wait goes
+    through the pidfd: it can reach only the child that was listed. Without pidfds
+    (Linux before 5.3, Python before 3.9), it re-checks the start time just before
+    killing by pid. A reuse in the gap between that check and the kill is still
+    possible there.
   - Pinned by `speed_close_does_not_wait_on_a_zombie`. The script runs under a child
-    subreaper that never reaps, so the zombie is deterministic. It has three cases:
-    a plain zombie (35.1 s on the old check); a leader gone with a second thread
-    still running, which `close()` must wait for; and the start-time check.
+    subreaper, so the zombie is deterministic, and the test reaps every child it
+    adopted at the end. The cases are: a plain zombie (35.1 s on the old check); a
+    leader gone with a second thread still running, which `close()` must wait for;
+    a kill that must go through the pidfd; a kill with no pidfd where the pid turns
+    into another process, which must not be killed; and the start-time check.
 
 ### Fixed (ENG-178: table procedures named like record built-ins: four follow-ups from ENG-173)
 
