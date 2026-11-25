@@ -1,7 +1,11 @@
 # ENG-165: can a COMMIT run between site A and site B?
 
-Status: revision 1, spec only (no code). For review by Fable and sol. Task card:
+Status: revision 2, spec only (no code). For review by Fable and sol. Task card:
 `/coord/tasks/ENG-165/task.md`.
+
+Revision 2: §10's questions 1, 2, 3 and 6 are decided (by the tools lane, principles named in
+§10). Questions 4 and 5 are answered by measurement (§2.4: alc and the BC 28 Linux sidecar),
+which changes §4.2 and §4.3. The owner's DO workspace was searched (§2.5, counts only).
 
 ## 1. The question
 
@@ -109,6 +113,86 @@ None is placed before or after A or B. The right answer to the ordered question 
 (only a status check runs between A and B). Locations are in the private note
 `/work/.al-sem/engine-notes/eng165/cdo-shapes-PRIVATE.md`.
 
+### 2.4 Runtime facts, measured (revision 2)
+
+alc 18.0.41 compiles every shape below without a warning. The runtime facts were measured on the
+**BC 28 Linux sidecar** (`http://bc`, instance `BC`, platform 28.0.54946.56477), 2026-11-25,
+with a test codeunit that raises its results through `Error('MEASURED …')`. Pending-write
+oracle (ENG-09): a checked `Codeunit.Run` inside a `[TryFunction]` fails if and only if a write
+is pending. Probe source and results: `/work/.al-sem/engine-notes/eng165/bcprobe/` (the app was
+unpublished afterwards).
+
+| Test | Shape | Result |
+|---|---|---|
+| T01 / T02 | `Insert`; `Insert; Commit` (controls) | pending / none pending |
+| T03 | caller `Insert`, then `Page.RunModal` (the test's modal handler presses OK) | no error; still pending |
+| T04 | `Page.RunModal` of a page whose `OnOpenPage` inserts | still pending |
+| T05 | caller `Insert`, then `Report.RunModal` (processing-only, no request page) | no error; still pending |
+| T06 | a report that inserts in `OnPreReport` | still pending |
+| T07 | nothing pending, isolated event, the subscriber inserts | none pending; the row is kept (committed) |
+| T08 | nothing pending, isolated subscriber inserts then errors | the caller goes on; the row is gone (rolled back) |
+| T09 | caller `Insert`, then an isolated event whose subscriber inserts | no error; still pending |
+| T10 | nothing pending, plain event, the subscriber inserts (control) | pending |
+| T13 | caller `Insert`, then an isolated subscriber inserts and errors | the error is **not** trapped: it stops the caller |
+| T11 | evaluation order | `Log(Send())`: Send, Log. `Log2(Send(), Send2())`: Send, Send2, Log2. `if Send() then Log`: Send, Log |
+
+Scope of these results: one shape each; pages under the test framework's modal handler, a report
+without a request page, not an interactive client. Not decided: in T09, whether the isolated
+subscriber's own row commits apart from the caller's pending write (the answer does not depend
+on it: the caller's write stays pending either way).
+
+**Windows rule (repo CLAUDE.md).** A fact measured on BC 28 on Linux is confirmed on a Windows
+Cronus before it is recorded as a platform fact. Until then the rules in §4.2 and §4.3 rest on
+the Linux measurement and the spec says so; the engine-limits entry the implementation writes
+carries the label "BC 28 Linux; Windows confirmation pending" and the probe app's location, so
+the owner can rerun it.
+
+### 2.5 The owner's DO workspace (revision 2; counts only)
+
+A clean DO checkout (`b3b4459`, 2026-10-05) was searched. Its source is private: no names or
+text here. The owner's session was on a later revision; this one holds the same code shapes.
+- Textual census (§2.3's script): 5,665 routines, 56 with a direct `Commit()`, 0 with send →
+  commit → insert in one routine. A second census for "a delivery call, then a log call, in one
+  routine" found 8 routines (CDO: 8), 7 with other calls between the two (CDO: 5), **0 with a
+  direct `Commit()` between** (CDO: 0).
+- Engine runs (copy of the workspace with the CDO baseline's dependency packages, same
+  versions; in the CDO slot). On the eDocument dispatch routine of the codeunit that matches the
+  owner's description, `may-commit` answers `yes` with 9 distinct commit sites. Placed by the
+  first call on their path in that routine: 6 lie behind the call that sends the document, 3
+  behind the calls that finalize and log the delivery, **0** behind the calls between those two.
+- **The first place, found.** The send goes down into a dependency app.
+  There the routine sets the document's status, commits, makes the delivery call, and **on
+  success commits again**, then returns. Back in the workspace routine, two explicit error calls
+  (and the implicit errors of the record operations between) can run before the call that
+  writes the log entry. That is the owner's shape: sent, committed, then an error before the
+  log `Insert`.
+- **The second place, found** (by reading the source; the engine run is the next bullet).
+  The mail send goes through System Application's `Email.Send`, which runs `Commit()` and then a
+  checked `Codeunit.Run` of its dispatcher (its own transaction). Back in the workspace, a
+  handled-field update (a record `Modify`) runs between the send and the log call; its errors can
+  stop the code before the log entry.
+- Engine run on the mail routine: `may-commit` answers `yes` with 3 commit rows. Two sit behind
+  the call that sends (both at the `Email.Send` crossing: the explicit commit and the checked-run
+  commit, `resourceId: checked-run`). One sits behind the log call itself. **0** sit behind the
+  record update between them. So both commits that make the send durable run *during* A when A
+  is the workspace's send call, and the danger is the errors of the update between A and B.
+
+**Would the design find them?** Yes, both, with these rules (added in revision 2):
+- A site may sit in dependency source, named by the path the evidence prints (`dep:<app>:<path>`
+  or its tail). The eDocument case names A as the delivery call inside the dependency: the
+  commit after it lies in **A's tail** (§4.1), and the error calls lie in the meet routine's
+  middle, so `yes` with two `errorsAfterCommit` rows.
+- When A is named as a **call** whose own cone commits (the workspace's call to the send
+  routine, or to `Email.Send`), those commits run *during* A, before or after the effect inside
+  it. They are reported as `yes`, labelled `inside-A`, ranked after the plain rows, and the
+  output says which deeper site to name to order them. A may-question's `yes` is a static
+  candidate, and the label says what kind (principle 6). The mail case answers this way: the
+  `Commit()` and the dispatcher's run-commit are inside A, and the record `Modify`'s errors are
+  `errorsAfterCommit`.
+- An error row guarded by a callee's result (in the eDocument case, an error under "if the send
+  reported failure", seen on the path where the send succeeded) is listed with its guard, not
+  evaluated. The literal flow does not follow return values; the row says so.
+
 ## 3. The question form
 
 ```
@@ -121,7 +205,8 @@ alsem prove <ws> <routine> commit-between --after <FILE:LINE[:COL]> --before <FI
 - A site is named as `--site` already names one: a source file or its tail, and a 1-based line
   (`SiteFilter`). Add an optional column for a line that holds two statements.
 - A site may be **any** call site or record operation (not only a fact of the question's kind),
-  in the root routine or in any routine the root reaches.
+  in the root routine or in any routine the root reaches, workspace or dependency source (named
+  by its `dep:<app>:<path>` evidence path or a tail of it).
 - A line that holds no call or operation, or more than one with no column given, is refused.
   The message names the candidates with their columns (principle 5: never guess a site).
 - A or B that the root cannot reach (guards ignored) is refused with the reason. An answer about
@@ -130,7 +215,7 @@ alsem prove <ws> <routine> commit-between --after <FILE:LINE[:COL]> --before <FI
 **Rejected:** an operation selector such as `insert:"Mail Log"` or `call:Send`. One routine can
 hold several, and the owner's question was about one specific send and one specific log line.
 File and line is what an investigation has in hand. Principle 13: no second way to name a site
-until a use needs it (open question 1).
+until a use needs it (decision 10.1).
 
 **Rejected:** `commit-between:<A>..<B>` as one question string. Paths hold `:` already, and a
 site is a filter like `--site`, not part of the question's name.
@@ -177,9 +262,13 @@ cap. A cap that fires leaves the answer `unknown`, never `no` (principle 5).
   the answer is `no`. In `repeat L.Insert; Send; Commit until …` the first B after A is the next
   iteration's, so the answer is `yes`, labelled `loop-carried`. A loop around both A and B
   counts its whole body only through the back edge, and only up to B's first run.
-- **A and B in the same statement.** For example `Log(Send())`: the arguments run first, then
-  the call. That is the platform's evaluation order. The rule must be checked against alc and the
-  BC sidecar before code relies on it (open question 4).
+- **A and B in the same statement.** The arguments run first, left to right, then the call; an
+  `if` condition runs before its branch. Measured (§2.4, T11): `Log(Send())` runs `Send` then
+  `Log`; `Log2(Send(), Send2())` runs `Send`, `Send2`, `Log2`; `if Send() then Log(…)` runs
+  `Send` then `Log`. So a call in an argument or a condition is ordered before the statement's
+  own call. The walk orders a statement's nested calls that way: an argument's callee cone is
+  "before" the call that takes it. A site named by a column picks the nested call. (BC 28 on
+  Linux; see §2.4 for the Windows rule.)
 
 ### 4.3 What counts as a commit
 
@@ -188,8 +277,22 @@ cap. A cap that fires leaves the answer `unknown`, never `no` (principle 5).
 | `Commit()` | direct, or in a callee's or subscriber's cone | `commit`, with `[CommitBehavior]` applied (`Ignore`: not a commit; `Error`: an **error** site, listed under §5.2's errors) |
 | checked `Codeunit.Run` | ENG-09's `run-commit` | `run-commit`: it commits the run's own transaction. If a write may be pending at the run (A wrote, as `Send` does), BC raises an error at the run instead (L28, measured). Then it is listed as an error, not a commit |
 | a commit inside an object a call starts (`Page.RunModal`, `Report.Run`, …) | the existing cone, with `commit_scope`'s "may apply" reading | `commit`, labelled as reached through an object run |
-| a page or report run itself, an isolated event | **not decided** | see open question 5. Until a BC probe decides it, no answer rests on it being a commit or not: if it can matter, the answer is `unknown` and names it |
-| the commit at the end of the transaction | outside the root | out of this question. The root's callers decide it. The answer says "the root's callers are not followed" |
+| `Page.RunModal` / `Report.RunModal` itself | measured (§2.4, T03-T06) | **not a commit and not an error.** The caller's pending write stays pending, and so does a write the page or report makes itself. Only a `Commit()` inside the object counts (row above) |
+| an isolated event (`[IntegrationEvent(…, true)]`) | measured (§2.4, T07-T09, T13) | with **no** write pending at the raise: each subscriber's writes are committed and its error is trapped (rolled back, the caller goes on). With a write pending: the caller's write stays pending, and a subscriber's error is **not** trapped. So it never commits the caller's work: `isolated-commit`, own transaction only (below) |
+| the commit at the end of the transaction | outside the root | out of this question. The root's callers decide it. The answer says "the root's callers are not followed"; the follow-up task covers it (§10.3) |
+
+**Two classes of commit.** Only a commit that ends the **caller's** transaction makes A's pending
+write durable: a `Commit()` that runs normally. A checked `Codeunit.Run` (ENG-09) and an isolated
+event commit only their own transaction; a write pending at them stays pending (L28: the run
+raises an error; T09: the event leaves it pending). So `yes` rests on the first class only. The
+second class is listed as `ownTransactionCommits`, labelled: it matters when A is durable without
+a commit (an external send, an `HttpClient.Send`, a file write), because then any later commit is
+not what makes A durable, and the risk is an error after A in any case. An `errorsAfterA` list
+(errors after A, before B, with no commit needed) is shown when A's kind is such a non-
+transactional effect: one whose cone holds HTTP or FILE, as the digest's
+`IO_BEFORE_ESCAPING_ERROR` already reads them. Whether a mail send through System Application's
+`Email.Send` reaches HTTP in the cone (its connectors are interface implementations) is checked
+on CDO during implementation, not assumed.
 
 ## 5. The answer
 
@@ -205,7 +308,8 @@ Each evidence row holds:
 - `before`: B's site and one route to B.
 - `guards`: the conditions on the way, as `prove_slice` shows them (selected context, not every
   needed condition).
-- `labels`: `loop-carried`, `through-callee`, `through-event`, `through-object-run`.
+- `labels`: `loop-carried`, `through-callee`, `through-event`, `through-object-run`,
+  `inside-A` (§2.5: a commit in A's own cone when A is a call).
 - `errorsAfterCommit`: the error sites that may run **after C and before B**, each with its
   route and guards, and whether a trap catches it. **This is the dangerous case** (S7): the
   commit made A durable, and this error stops the code before B. An error a definite trap
@@ -236,7 +340,8 @@ The blockers say what. Unknown is not no (principle 5):
 - event subscribers beyond the loaded ones (the existing `loaded-subscribers` assumption: the
   answer carries the label, as `may-commit` does);
 - a route or state cap fired;
-- a runtime fact not decided (open question 5).
+- a runtime fact not measured: a construct outside §2.4's shapes whose commit behaviour the
+  answer depends on (named, never guessed).
 
 ### 5.4 Consistency with `may-commit` and `throws-error`
 
@@ -305,7 +410,7 @@ is a `may-commit` site or in the cone of one, and every `errorsAfterCommit` row 
 
 ## 9. CDO check
 
-The owner's two DO cases are not available here. The plan:
+The plan (the DO places of §2.5 are step 3):
 1. **Population first** (principle 4). Before the answer kinds are fixed, count on CDO: workspace
    routines with a record write B and an earlier call site A in the same routine, where some call
    between A and B has a cone that may commit (direct, through a callee or a subscriber). The
@@ -315,39 +420,56 @@ The owner's two DO cases are not available here. The plan:
    mail send and the eDocument send in the same code are candidates for the `yes` case through
    callees and subscribers. The private note lists their locations. Each answer is triaged by hand
    against the source.
-3. **The DO cases.** When the owner's DO workspace is reachable, run the two places he found. Both
-   must answer `yes` with an `errorsAfterCommit` row. If either does not, that blocks landing.
+3. **The DO cases.** The two places in §2.5 are the acceptance cases. The eDocument case, A named
+   as the delivery call inside the dependency, must answer `yes` (A's tail) with the two explicit
+   error calls among its `errorsAfterCommit` rows. The mail case, A named as the call to the send,
+   must answer `yes`, `inside-A`, with the record `Modify`'s errors among its rows. If either does
+   not, that blocks landing. The selectors and lines are in the private note, never in the repo;
+   the owner confirms they are the two he found (one line in coord, numbers only).
 4. **No movement elsewhere.** `cdo-before-after` must show no change in `analyze` findings or
    fingerprints. This question adds output, it changes none.
 
-## 10. Open questions
+## 10. Decisions (revision 2) and what is still open
 
-1. **Site naming.** File and line (with an optional column) only, or also an operation selector
-   (`insert:"<table>"`, `call:<name>`)? Recommendation: file and line only, until a use needs
-   more (principles 13 and 14).
-2. **Loops.** "The next B after A" (recommended, it pairs a send with its own log) or "any later
-   B"? The second says `yes` for S5, where every send already has its log.
-3. **Errors after B.** The risk also exists when B runs but an error rolls it back before B's
-   transaction commits, perhaps in the root's callers. This question covers errors between the
-   commit and B. Recommendation: file a follow-up task for "B committed before any error"; do not
-   record it as a limit.
-4. **Evaluation order inside one statement** (`Log(Send())`, `if Send() then L.Insert`): confirm
-   with alc and the BC sidecar before the walk relies on it.
-5. **Runtime facts to probe on BC, not guess:** does a `Page.RunModal` or `Report.RunModal`
-   inside a write transaction commit, raise an error, or do neither? Does an isolated event's
-   subscriber commit its own writes? Until probed, an answer that depends on them is `unknown`
-   and names the call. The `bc-measure` skill describes the probe.
-6. **The answer when A's write is pending at a checked run** (L28): BC raises an error at the
-   run, so A is rolled back too and the log loss does not happen through that path. Listing it
-   as an error row (as §4.3 says) is correct, but it is not the dangerous kind. Should it get its
-   own label (`run-error-rolls-back-a`)? Recommendation: yes.
+Decided by the tools lane (the owner may overrule):
+1. **Site naming: file and line, with an optional column, only.** No operation selector until a
+   use needs one. Principle 13.
+2. **Loops: the next B after A**, and a commit reached only through the next iteration is
+   labelled `loop-carried`. It pairs a send with its own log; "any later B" would say `yes` for
+   S5, where every send already has its log. Principles 1 and 6.
+3. **Errors after B, before B's transaction commits: a follow-up task**, not a recorded limit.
+   Card: `/work/.al-sem/tools-notes/ENG-165-followup.md`. Principles 3 and 35.
+4. **Evaluation order inside one statement: measured** (§2.4, T11; alc accepts every shape).
+   Arguments left to right, then the call; a condition before its branch. §4.2 uses it.
+   Principle 4.
+5. **Runtime facts: measured** (§2.4). `Page.RunModal` and `Report.RunModal` neither commit nor
+   raise an error with a write pending. An isolated event commits its subscribers' writes and
+   traps their errors only when no write is pending; with one pending it commits nothing of the
+   caller's and traps nothing. §4.3 uses these. They rest on BC 28 on Linux until a Windows Cronus
+   confirms them (§2.4). Principles 4 and 6.
+6. **The L28 error at a checked run gets its own label**, `run-error-rolls-back-a`: BC raises
+   the error at the run, so A's pending write is rolled back with everything else, and the log
+   loss does not happen through that path. It is listed among the errors, never as the dangerous
+   kind. Principles 6 and 17.
+
+Decided by the tools lane in revision 2, for the reviewers to check: commits inside A's own cone,
+when A is a call, answer `yes` labelled `inside-A` (§2.5), not `unknown`. A may-question's `yes`
+is a labelled static candidate, and both DO places are of this shape when A is named at the
+workspace level. Principles 5 and 6.
+
+Still open:
+- The Windows confirmation of §2.4 (owner, `kraken coord ask --kind other`, when the
+  implementation records the facts in `docs/engine-limits.md`).
+- Whether System Application's `Email.Send` reaches HTTP in the cone (decides `errorsAfterA` for
+  the mail case, §4.3); checked on CDO during implementation.
 
 ## 11. Principles applied
 
 - 1 and 5: `no` only when every path was followed; caps, unresolved calls and undecided runtime
   facts give `unknown` with the reason.
-- 4: §2 measured what the commands answer before designing; §9 measures the population first;
-  §10.5 sends runtime questions to a BC probe.
+- 4: §2 measured what the commands answer before designing; §2.4 measured the runtime facts on
+  BC instead of guessing them; §2.5 checked the design against the owner's own workspace; §9
+  measures the population first.
 - 6 and 17: `commitsWithoutB`, `b-never-after-a` and `loop-carried` keep facts as labelled
   classes instead of dropping or hiding them.
 - 7 and 9: expected answers written first; one discrimination proof per guard.
