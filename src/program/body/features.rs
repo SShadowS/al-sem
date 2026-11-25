@@ -1024,6 +1024,10 @@ pub struct PCFNRare {
     /// r3 E1: what the node says about an Integer, Option or Enum value
     /// ([`ValueFact`]).
     pub value_fact: Option<ValueFact>,
+    /// ENG-177 (sol r1): on a [`PathHint::MayRun`] leaf, its ternary (the
+    /// expression's index, unique in the routine) and whether it is from the
+    /// `then` alternative; the innermost ternary for a nested one.
+    pub ternary_arm: Option<(usize, bool)>,
 }
 
 impl std::fmt::Debug for PCFNNode {
@@ -1059,6 +1063,9 @@ impl PCFNNode {
     }
     pub fn path_hint(&self) -> Option<PathHint> {
         self.rare.as_ref().and_then(|r| r.path_hint)
+    }
+    pub fn ternary_arm(&self) -> Option<(usize, bool)> {
+        self.rare.as_ref().and_then(|r| r.ternary_arm)
     }
     pub fn table_case(&self) -> Option<&TableCase> {
         self.rare.as_ref().and_then(|r| r.table_case.as_ref())
@@ -1309,6 +1316,11 @@ pub enum PathHint {
     /// (through parentheses): whether it is negated. The call is the `if`'s
     /// last top-level condition leaf.
     CondCall { negated: bool },
+    /// ENG-177 (sol r1): on an `if` whose whole condition is a record operation
+    /// `A.Get(..)` / `not A.FindFirst()` (through parentheses), with no call site:
+    /// whether it is negated. The operation is the `if`'s last top-level condition
+    /// leaf; its Boolean result says on which branch it found (loaded) a record.
+    CondOp { negated: bool },
     /// On an `exit(true)` / `exit(false)`: the literal value.
     Exit(bool),
     /// On the node of an `asserterror` statement: an error inside is caught.

@@ -1274,6 +1274,12 @@ ran beside the timing).
     a tracked record the tree does not hold (a `case` pattern, `case true of A.Get(1):`; the
     tree gap is ENG-181), an `asserterror` statement (an error inside is caught), a deep tree, a
     loop that does not settle.
+  - A tested load loads only on the branch where it found a record (sol r1):
+    `if A.Get(1) then exit; A.Modify()` is reported, `if not A.Get(1) then exit; A.Modify()` is
+    silent, with or without parentheses (`if A.FindFirst then`). The statement tree marks such a
+    condition with a `CondOp` hint, as it already marked a tested call.
+  - A ternary's two alternatives are exclusive (sol r1): `Ok := B ? A.Get(1) : A.Modify()` is
+    reported. Each side is walked from the state before the ternary and the two are joined.
   - The task asked instead for "loaded only when EVERY reaching assignment is loaded". Measured
     first: on CDO that rule moved no finding, and it would have made only the copy case strict
     while the direct case (`if B then A.Get(1)`) stays a "some path" rule.

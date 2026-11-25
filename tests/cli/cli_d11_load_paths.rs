@@ -388,6 +388,53 @@ codeunit 50501 "E Mgt"
         A.TestField(V);
     end;
 
+    // Reported (sol r1): a tested load loads only on the branch where it found a record; the only
+    // path to the Modify is the failed Get's.
+    procedure TestedGetExit()
+    var A: Record "E Entry";
+    begin
+        if A.Get(1) then
+            exit;
+        A.Modify();
+    end;
+
+    // The same, parens-less.
+    procedure TestedFindExit()
+    var A: Record "E Entry";
+    begin
+        if A.FindFirst then
+            exit;
+        A.Modify();
+    end;
+
+    // Silent: the path that goes on is the one where Get found a record.
+    procedure NotTestedGetExit()
+    var A: Record "E Entry";
+    begin
+        if not A.Get(1) then
+            exit;
+        A.Modify();
+    end;
+
+    // Reported (sol r1): a ternary's alternatives are exclusive; the Modify's has no load.
+    procedure TernaryExclusive(B: Boolean)
+    var
+        A: Record "E Entry";
+        Ok: Boolean;
+    begin
+        Ok := B ? A.Get(1) : A.Modify();
+    end;
+
+    // Silent: after the ternary, the Get's alternative may have run.
+    procedure TernaryLoadThenModify(B: Boolean)
+    var
+        A: Record "E Entry";
+        Ok: Boolean;
+    begin
+        Ok := B ? A.Get(1) : false;
+        A.Modify();
+    end;
+
     local procedure Log(R: Record "E Entry")
     begin
         Message('%1', R.K);
@@ -445,7 +492,11 @@ fn reported(dir: &Path, detector: &str) -> BTreeSet<String> {
 /// r2): any method called on the record loading it fails `PlatformMethodKeepsKill`; a terminating
 /// `Error` call site left unseen fails `ErrorArgKeepsKill`; unreachable code not marked seen fails
 /// `DeadLoadKeepsKill`. Each restored, passes. `ClearBuilds` guards the design (a `Clear` that unloaded, as the first draft did,
-/// reported it), not a line.
+/// reported it), not a line. sol r1 (2026-11-25; red proofs recorded when run): the tested
+/// operation's load kept on both branches fails `TestedGetExit`; `ir_walk::cond_call` setting no
+/// `CondOp` fails `TestedGetExit` and `TestedFindExit`; the ternary run walked in sequence fails
+/// `TernaryExclusive`; each side walked from an empty state instead of the run's entry fails
+/// `TernaryLoadThenModify`.
 #[test]
 fn a_load_must_reach_the_operation_on_some_path() {
     let t = tempfile::tempdir().unwrap();
@@ -471,6 +522,9 @@ fn a_load_must_reach_the_operation_on_some_path() {
             "ExitKills",
             "ParenlessKill",
             "PlatformMethodKeepsKill",
+            "TernaryExclusive",
+            "TestedFindExit",
+            "TestedGetExit",
         ])
     );
     assert_eq!(

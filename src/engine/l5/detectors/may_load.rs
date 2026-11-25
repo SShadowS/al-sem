@@ -130,6 +130,7 @@ pub(crate) fn record_may_be_loaded_at(
         loops: Vec::new(),
         seen: HashSet::new(),
         gave_up: false,
+        no_load: None,
     };
     w.node(tree, Some(entry), 0);
     if w.gave_up {
@@ -170,6 +171,8 @@ struct Walk<'a> {
     /// The operation and call-site ids the walk reached.
     seen: HashSet<&'a str>,
     gave_up: bool,
+    /// The tested operation whose load the "not found" branch of its `if` leaves out.
+    no_load: Option<String>,
 }
 
 impl<'a> Walk<'a> {
@@ -177,9 +180,41 @@ impl<'a> Walk<'a> {
         self.vars.iter().position(|x| x == v)
     }
 
-    fn seq(&mut self, nodes: Option<&Vec<PCFNNode>>, mut st: State, depth: usize) -> State {
-        for n in nodes.map(Vec::as_slice).unwrap_or_default() {
-            st = self.node(n, st, depth + 1);
+    fn seq(&mut self, nodes: Option<&Vec<PCFNNode>>, st: State, depth: usize) -> State {
+        self.seq_slice(nodes.map(Vec::as_slice).unwrap_or_default(), st, depth)
+    }
+
+    /// The nodes in order; a run of one ternary's leaves (`B ? X : Y`) walks each
+    /// alternative from the run's entry state and joins the two, since only one runs (sol r1:
+    /// sequencing them let `X`'s load reach `Y`). A ternary whose leaves are not one run (a
+    /// nested ternary splits it) gives up: "may be loaded".
+    fn seq_slice(&mut self, nodes: &[PCFNNode], mut st: State, depth: usize) -> State {
+        let mut i = 0;
+        while i < nodes.len() {
+            let Some((group, _)) = nodes[i].ternary_arm() else {
+                st = self.node(&nodes[i], st, depth + 1);
+                i += 1;
+                continue;
+            };
+            let in_group = |n: &PCFNNode| n.ternary_arm().is_some_and(|(g, _)| g == group);
+            let end = i + nodes[i..].iter().take_while(|n| in_group(n)).count();
+            if nodes[end..].iter().any(in_group) {
+                self.gave_up = true;
+                return None;
+            }
+            let mut out = None;
+            for side in [true, false] {
+                let mut s = st.clone();
+                for n in nodes[i..end]
+                    .iter()
+                    .filter(|n| n.ternary_arm().is_some_and(|(_, then)| then == side))
+                {
+                    s = self.node(n, s, depth + 1);
+                }
+                out = join(out, &s);
+            }
+            st = out;
+            i = end;
         }
         st
     }
@@ -226,14 +261,42 @@ impl<'a> Walk<'a> {
                 self.seq(n.children.as_ref(), st, depth)
             }
             "if" => {
-                let st = self.leaves(n, st, depth);
+                // sol r1: a condition that is one tested record operation (`if A.Get(1)`,
+                // `if not A.FindFirst()`) loads its record only on the branch where it found
+                // one; on the other the record is as it was before the operation.
+                let leaves = n.condition_leaves.as_deref().unwrap_or_default();
+                let tested = match (n.path_hint(), leaves.split_last()) {
+                    (Some(PathHint::CondOp { negated }), Some((last, before))) => last
+                        .operation_id
+                        .clone()
+                        .map(|op| (op, negated, last, before)),
+                    _ => None,
+                };
+                let (then_in, else_in) = match tested {
+                    Some((op, negated, last, before)) => {
+                        let pre = self.seq_slice(before, st, depth);
+                        let found = self.node(last, pre.clone(), depth + 1);
+                        self.no_load = Some(op);
+                        let missed = self.node(last, pre, depth + 1);
+                        self.no_load = None;
+                        if negated {
+                            (missed, found)
+                        } else {
+                            (found, missed)
+                        }
+                    }
+                    None => {
+                        let st = self.leaves(n, st, depth);
+                        (st.clone(), st)
+                    }
+                };
                 let then = match n.children.as_ref().and_then(|c| c.first()) {
-                    Some(b) => self.node(b, st.clone(), depth + 1),
-                    None => st.clone(),
+                    Some(b) => self.node(b, then_in, depth + 1),
+                    None => then_in,
                 };
                 let other = match n.else_children.as_ref().and_then(|c| c.first()) {
-                    Some(b) => self.node(b, st, depth + 1),
-                    None => st,
+                    Some(b) => self.node(b, else_in, depth + 1),
+                    None => else_in,
                 };
                 join(then, &other)
             }
@@ -330,6 +393,9 @@ impl<'a> Walk<'a> {
     /// The tracked variable a record operation loads: a recognised load, or `TransferFields` (a
     /// well-defined state, as `Copy` and `Init`).
     fn op_effect(&self, op: &ModelRecordOperation) -> Option<usize> {
+        if self.no_load.as_deref() == Some(op.id.as_str()) {
+            return None;
+        }
         (RECORD_LOAD_OPS.contains(&op.op.as_str()) || op.op == "TransferFields")
             .then(|| self.index(&op.record_variable_name.fold_identifier()))
             .flatten()

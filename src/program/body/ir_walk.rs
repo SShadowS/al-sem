@@ -2394,9 +2394,14 @@ impl<'a> IrCfn<'a> {
                 // #343: only one alternative runs.
                 let start = out.len();
                 self.harvest(*then_value, out);
+                let mid = out.len();
                 self.harvest(*else_value, out);
-                for l in &mut out[start..] {
-                    l.rare_mut().path_hint = Some(PathHint::MayRun);
+                for (k, l) in out[start..].iter_mut().enumerate() {
+                    let rare = l.rare_mut();
+                    rare.path_hint = Some(PathHint::MayRun);
+                    // ENG-177 (sol r1): which alternative (a nested ternary keeps its own).
+                    rare.ternary_arm
+                        .get_or_insert((eid.index(), start + k < mid));
                 }
             }
             TypeOp { .. } | List(_) => {
@@ -2839,12 +2844,21 @@ impl<'a> IrCfn<'a> {
     /// top-level leaf of `leaves` (the condition's harvested leaves), where the
     /// path walk looks for it; otherwise no hint.
     fn cond_call(&self, cond: ExprId, leaves: &[PCFNNode]) -> Option<PathHint> {
-        let (cs, negated) = self.cond_call_site(cond)?;
-        (leaves.last().and_then(|l| l.callsite_id.as_ref()) == Some(cs))
-            .then_some(PathHint::CondCall { negated })
+        let (e, negated) = self.cond_whole(cond);
+        let last = leaves.last()?;
+        if let Some(cs) = self.spine.cs_id_by_expr.get(&e) {
+            return (last.callsite_id.as_ref() == Some(cs))
+                .then_some(PathHint::CondCall { negated });
+        }
+        // ENG-177 (sol r1): a record operation with no call site (`A.Get(1)`, `A.FINDSET`).
+        let op = self.spine.op_id_by_expr.get(&e)?;
+        (last.kind == "op" && last.operation_id.as_ref() == Some(op))
+            .then_some(PathHint::CondOp { negated })
     }
 
-    fn cond_call_site(&self, cond: ExprId) -> Option<(&String, bool)> {
+    /// The condition's whole expression through parentheses and one `not`, and
+    /// whether that `not` is there.
+    fn cond_whole(&self, cond: ExprId) -> (ExprId, bool) {
         use ExprKind::*;
         let strip = |mut e: ExprId| {
             while let Parenthesized(x) = &self.ir().expr(e).kind {
@@ -2862,7 +2876,7 @@ impl<'a> IrCfn<'a> {
             e = strip(*operand);
             negated = true;
         }
-        self.spine.cs_id_by_expr.get(&e).map(|cs| (cs, negated))
+        (e, negated)
     }
 
     fn harvest_vec(&self, eid: ExprId) -> Vec<PCFNNode> {
