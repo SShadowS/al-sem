@@ -62,7 +62,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the q1 shape makes no edge to the workspace's `X.F` nor the dependency's, and the call is open on
   the name hub; control: a name only the workspace declares binds. `cli_resolve_shared_name_readers`
   (new; compiles on alc): the page runs its extension's `OnOpenPage` and reaches its source table's
-  `OnInsert`, and no event is dead. Unit tests: an own and a dependency object of one name are
+  `OnInsert`, and no subscribed event is reported dead. Unit tests: an own and a dependency object of one name are
   `Ambiguous` (index) and decline (graph); a Moved own stub gives way to the live dependency table,
   by name and by number; topology scoping unchanged. Each break then restored: the own-app shortcut
   restored in both functions fails the CLI test and both unit tests; dropping the `obsolete_gone`

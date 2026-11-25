@@ -12,22 +12,24 @@ use serde::{Deserialize, Serialize};
 
 /// Index from (app, kind, lowercase-name) to position in `ProgramGraph::objects`.
 ///
-/// Built once after `objects` is sorted; first entry wins on a same-app duplicate.
+/// Built once after `objects` is sorted; a same-app duplicate (two `#if`
+/// alternatives of one name) keeps every entry, in sorted order.
 #[derive(Default)]
 pub struct ObjectIndex {
-    by_app_kind_name: HashMap<(AppRef, ObjectKind, String), usize>,
+    by_app_kind_name: HashMap<(AppRef, ObjectKind, String), Vec<usize>>,
 }
 
 impl ObjectIndex {
     /// Build the index from `objects`, in sorted order. Each entry's position
     /// is its index in that iteration order, so the caller must iterate in the
     /// same order it later indexes by (`ProgramGraph::objects`' merged order).
-    /// On a duplicate `(app, kind, name_lc)` key the first (lowest-`NodeId`) entry wins.
+    /// A duplicate `(app, kind, name_lc)` key keeps every entry (ENG-193, sol
+    /// r1: as `ResolveIndex` retains every candidate before pruning).
     pub fn build<'a>(objects: impl IntoIterator<Item = &'a ObjectNode>) -> Self {
         let mut idx = ObjectIndex::default();
         for (i, obj) in objects.into_iter().enumerate() {
             let key = (obj.id.app, obj.id.kind, obj.name.fold_identifier());
-            idx.by_app_kind_name.entry(key).or_insert(i);
+            idx.by_app_kind_name.entry(key).or_default().push(i);
         }
         idx
     }
@@ -175,9 +177,12 @@ impl ProgramGraph {
         let escaped = name_lc.replace('"', "\"\"");
         let at = |app: AppRef| {
             [&name_lc, &escaped].into_iter().find_map(|n| {
+                // An interface keeps its first same-app entry (its binding
+                // never read the alternatives).
                 self.obj_index
                     .by_app_kind_name
                     .get(&(app, kind, n.clone()))
+                    .and_then(|v| v.first())
                     .map(|&i| self.objects[i].id.clone())
             })
         };
@@ -254,24 +259,24 @@ impl ProgramGraph {
         }
     }
 
-    /// Every object `(kind, name)` may name as seen FROM `from`: one per app of
-    /// `from`'s closure (`from` included), an `obsolete_gone` one only when no
-    /// live one is visible. [`Self::resolve_object`] is the case of exactly one;
-    /// a reader that must not lose reach when the name is shared (an extension's
-    /// base: Fable r1 on ENG-193) takes them all.
+    /// Every object `(kind, name)` may name as seen FROM `from`: each one of
+    /// every app of `from`'s closure (`from` included; a same-app `#if`
+    /// alternative too), an `obsolete_gone` one only when no live one is
+    /// visible. [`Self::resolve_object`] is the case of exactly one; a reader
+    /// that must not lose reach when the name is shared (an extension's base:
+    /// Fable r1 on ENG-193) takes them all.
     pub fn visible_objects(&self, from: AppRef, kind: ObjectKind, name: &str) -> Vec<&ObjectNode> {
         let name_lc = name.fold_identifier();
-        // `by_app_kind_name` holds at most one entry per `(app, kind, name_lc)`
-        // (first/lowest-id wins on a same-app duplicate — `ObjectIndex::build`),
-        // so at most one match comes from any single app.
         let mut found: Vec<&ObjectNode> = self
             .topology
             .closure(from)
             .into_iter()
-            .filter_map(|app| {
+            .flat_map(|app| {
                 self.obj_index
                     .by_app_kind_name
                     .get(&(app, kind, name_lc.clone()))
+                    .into_iter()
+                    .flatten()
                     .map(|&i| &self.objects[i])
             })
             .collect();
@@ -583,6 +588,57 @@ mod tests {
         g.objects = objects.into();
         let resolved = g.resolve_object(a, ObjectKind::Table, "OwnShadow").unwrap();
         assert_eq!(resolved.id.app, b, "the live dependency table binds");
+    }
+
+    /// ENG-193 (sol r1): two objects of one name in ONE app (two `#if`
+    /// alternatives with different numbers) are both visible, and the name
+    /// declines, as `ResolveIndex` retains every candidate; a live one beats a
+    /// gone one of the same app. Hand-stated: the fixture's own "Util" copied
+    /// under a second key.
+    ///
+    /// DISCRIMINATION (2026-11-25, break confirmed applied, then reverted):
+    /// `ObjectIndex::build` keeping only the first entry per key again fails
+    /// "both alternatives are visible".
+    #[test]
+    fn visible_objects_keeps_same_app_alternatives() {
+        let mut g = build_two_app_fixture();
+        let b = g.app_ref_by_name("AppB");
+        let mut objects: Vec<ObjectNode> = g.objects.iter().cloned().collect();
+        let mut twin = objects
+            .iter()
+            .find(|o| o.id.app == b && o.name == "Util")
+            .expect("B's Util")
+            .clone();
+        twin.id.key = ObjKey::Id(2);
+        objects.push(twin);
+        objects.sort_by(|x, y| x.id.cmp(&y.id));
+        g.obj_index = ObjectIndex::build(&objects);
+        g.objects = objects.clone().into();
+        assert_eq!(
+            g.visible_objects(b, ObjectKind::Codeunit, "Util").len(),
+            2,
+            "both alternatives are visible"
+        );
+        assert!(
+            g.resolve_object(b, ObjectKind::Codeunit, "Util").is_none(),
+            "two of one name decline"
+        );
+        // One of them gone: the live one binds.
+        let objects: Vec<ObjectNode> = objects
+            .into_iter()
+            .map(|mut o| {
+                if o.id.app == b && o.id.key == ObjKey::Id(2) {
+                    o.obsolete_gone = true;
+                }
+                o
+            })
+            .collect();
+        g.obj_index = ObjectIndex::build(&objects);
+        g.objects = objects.into();
+        let live = g
+            .resolve_object(b, ObjectKind::Codeunit, "Util")
+            .expect("the live alternative binds");
+        assert_ne!(live.id.key, ObjKey::Id(2));
     }
 
     #[test]

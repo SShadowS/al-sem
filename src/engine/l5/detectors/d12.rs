@@ -39,22 +39,20 @@ pub fn detect_d12(
     // A subscription whose publisher object did not resolve (a name several apps'
     // objects carry, ENG-193) sits on a stand-in event `unknown/{type}/0:{name or
     // number}/event/{event}` (`model::events`): it may subscribe to any event of
-    // that type, object reference and name, so such an event is not dead.
-    let mut maybe_subscribed: std::collections::HashSet<(String, String, String)> =
-        std::collections::HashSet::new();
+    // that type, object reference and name, so such an event is not dead. Only a
+    // WORKSPACE subscriber's stand-in counts: a dependency cannot see the
+    // workspace's objects (sol r1 on ENG-193). The ids are matched whole, as
+    // `model::events` writes them, never parsed (a quoted name may hold
+    // `/event/`).
+    let mut maybe_subscribed: std::collections::HashSet<&str> = std::collections::HashSet::new();
     for edge in &ctx.event_graph.edges {
         *subs_by_event.entry(edge.event_id.as_str()).or_insert(0) += 1;
-        if let Some((object, event)) = edge
-            .event_id
-            .strip_prefix("unknown/")
-            .and_then(|rest| rest.rsplit_once("/event/"))
-            && let Some((kind, reference)) = object.split_once("/0:")
+        if edge.event_id.starts_with("unknown/")
+            && !ctx
+                .dep_routine_ids
+                .contains(edge.subscriber_routine_id.as_str())
         {
-            maybe_subscribed.insert((
-                kind.fold_identifier(),
-                reference.fold_identifier(),
-                event.fold_identifier(),
-            ));
+            maybe_subscribed.insert(edge.event_id.as_str());
         }
     }
     let objects: HashMap<&str, &crate::program::model::workspace::ModelObject> = resolved
@@ -93,7 +91,6 @@ pub fn detect_d12(
             skipped_other += 1;
             continue;
         }
-        let event = ev.event_name.fold_identifier();
         let kind = pub_routine.object_type.fold_identifier();
         let object = objects.get(pub_routine.object_id.as_str());
         // How a subscription may name the publisher: its object by name or number,
@@ -109,10 +106,15 @@ pub fn detect_d12(
                 refs.push((base_kind.to_string(), base.fold_identifier()));
             }
         }
-        if refs
-            .into_iter()
-            .any(|(k, r)| maybe_subscribed.contains(&(k, r, event.clone())))
-        {
+        if refs.into_iter().any(|(k, r)| {
+            maybe_subscribed.contains(
+                crate::program::model::events::encode_event_id(
+                    &format!("unknown/{k}/0:{r}"),
+                    &ev.event_name,
+                )
+                .as_str(),
+            )
+        }) {
             skipped_other += 1;
             continue;
         }
@@ -188,4 +190,113 @@ pub fn detect_d12(
         diagnostics: vec![],
         d1_cohort_index: None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use super::detect_d12;
+    use crate::engine::l4::combined_graph::PrimaryGraph;
+    use crate::engine::l5::detector_context::detector_context;
+    use crate::engine::l5::test_support::{empty_artifacts, empty_resolved, routine};
+    use crate::program::model::events::{EventEdge, EventGraph, EventSymbol, encode_event_id};
+
+    /// The names of the events d12 reports dead, over a workspace codeunit
+    /// (number 50) publishing `event`, subscribed through the stand-in ids
+    /// `subs` (`(subscriber routine id, stand-in object)`); `r_dep` is a
+    /// dependency routine.
+    fn dead(event: &str, subs: &[(&str, &str)]) -> Vec<String> {
+        let mut publisher = routine("r_pub", "procedure");
+        publisher.object_id = "ws/Codeunit/50".to_string();
+        publisher.object_number = 50;
+        publisher.name = event.to_string();
+        let routines = vec![
+            publisher,
+            routine("r_ws", "procedure"),
+            routine("r_dep", "procedure"),
+        ];
+        let symbol = EventSymbol {
+            id: encode_event_id("ws/Codeunit/50", event),
+            publisher_object_id: "ws/Codeunit/50".to_string(),
+            publisher_routine_id: Some("r_pub".to_string()),
+            publisher_stable_routine_id: Some("stable::r_pub".to_string()),
+            event_name: event.to_string(),
+            event_kind: "integration".to_string(),
+            element_name: None,
+            signature_hash: String::new(),
+            parameters: Vec::new(),
+            isolated: None,
+            provenance: Vec::new(),
+            publisher_ref: None,
+        };
+        let edges = subs
+            .iter()
+            .map(|(sub, object)| EventEdge {
+                event_id: encode_event_id(object, event),
+                subscriber_routine_id: (*sub).to_string(),
+                subscriber_stable_routine_id: format!("stable::{sub}"),
+                subscriber_app_id: "app".to_string(),
+                resolution: "unknown".to_string(),
+                provenance: Vec::new(),
+                conditional: false,
+                mixed_readings: false,
+            })
+            .collect();
+        let mut m = empty_resolved();
+        m.workspace.routines = routines.clone();
+        let mut art = empty_artifacts(
+            PrimaryGraph {
+                nodes: Vec::new(),
+                edges_by_from: HashMap::new(),
+                edges_from_order: Vec::new(),
+                uncertainty_edges: Vec::new(),
+                collided_site_callee: HashMap::new(),
+            },
+            HashMap::new(),
+        );
+        art.dep_routine_ids = ["r_dep".to_string()].into();
+        // The context reads the artifacts' event graph (the combined-graph
+        // build's), not the model's.
+        art.event_graph = EventGraph {
+            events: vec![symbol],
+            edges,
+        };
+        let ctx = detector_context(&m, &art, None, None);
+        detect_d12(&m, &ctx)
+            .unwrap()
+            .findings
+            .iter()
+            .map(|f| f.id.clone())
+            .collect()
+    }
+
+    /// ENG-193 (sol r1): a subscription whose publisher object did not resolve
+    /// (a stand-in id) keeps a workspace event alive only when WORKSPACE code
+    /// makes it (a dependency cannot see the workspace's objects), and the id
+    /// is matched whole, so an event name holding `/event/` still matches.
+    /// Hand-stated: the stand-in ids are built as `model::events` writes them.
+    ///
+    /// DISCRIMINATION (2026-11-25, each break confirmed applied, then
+    /// reverted): counting a dependency subscriber's stand-in again fails "a
+    /// dependency's stand-in keeps nothing alive"; dropping the stand-in check
+    /// fails "a workspace stand-in keeps it alive".
+    #[test]
+    fn only_a_workspace_stand_in_keeps_an_event_alive() {
+        let by_number = "unknown/codeunit/0:50";
+        assert_eq!(
+            dead("OnY", &[("r_dep", by_number)]).len(),
+            1,
+            "a dependency's stand-in keeps nothing alive"
+        );
+        assert!(
+            dead("OnY", &[("r_ws", by_number)]).is_empty(),
+            "a workspace stand-in keeps it alive"
+        );
+        assert!(
+            dead("A/event/B", &[("r_ws", by_number)]).is_empty(),
+            "an event name holding /event/ matches whole"
+        );
+        assert_eq!(dead("OnY", &[]).len(), 1, "control: no subscriber, dead");
+    }
 }

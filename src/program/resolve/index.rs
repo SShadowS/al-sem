@@ -872,12 +872,11 @@ impl ResolveIndex {
                 if candidates.is_empty() {
                     return ObjectRefResolution::Unresolved;
                 }
-                // Own-app shadow: `from`'s own declaration always wins over
-                // any dependency's same-`(kind, id)` object — mirrors the
-                // Name arm below, and matches `object_by_number`'s existing
-                // self-shortcut, so numeric-id resolution stays
-                // behavior-preserving for the already-covered self-declared
-                // case.
+                // Own-app shadow, for NUMBERS only: `from`'s own declaration
+                // wins over any dependency's same-`(kind, id)` object (object
+                // numbers are unique across installed apps), as
+                // `object_by_number` does. The Name arm below has no such
+                // shadow since ENG-193.
                 if let Some(own) = candidates.iter().find(|oid| oid.app == from.app) {
                     return ObjectRefResolution::Unique(own.clone());
                 }

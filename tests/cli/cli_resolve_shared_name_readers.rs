@@ -33,6 +33,7 @@ table 50030 T
 }
 tableextension 50040 TE extends T
 {
+    LookupPageId = TELook;
     trigger OnBeforeInsert() begin end;
     [IntegrationEvent(false, false)]
     procedure OnExt() begin end;
@@ -89,6 +90,12 @@ codeunit 50031 Sub
 codeunit 50010 U
 {
     procedure G() begin Page.Run(Page::P); end;
+    procedure H() var R: Record 50030; begin Page.Run(0, R); end;
+}
+page 50033 TELook
+{
+    PageType = List;
+    trigger OnOpenPage() begin end;
 }
 "#;
 
@@ -129,6 +136,8 @@ fn alsem(ws: &Path, args: &[&str]) -> String {
 /// Discrimination (2026-11-24, each break then restored, green): the extension indices built
 /// from `resolve_object` (one base or none) instead of `visible_objects` fail the `PE` edge; the
 /// page's ambiguous source table dropped (no `AnyOf` branch) fails the `T::OnInsert` edge.
+/// (2026-11-25, sol r1) `source_lookup_pages` resolving the extension's base with
+/// `resolve_object` again fails "the extension's lookup page runs".
 #[test]
 fn an_extension_and_a_source_table_of_a_shared_name_keep_their_edges() {
     let t = tempfile::tempdir().unwrap();
@@ -168,6 +177,12 @@ fn an_extension_and_a_source_table_of_a_shared_name_keep_their_edges() {
         edge(&page, &t_insert),
         "the page's source table's OnInsert is reachable"
     );
+    // sol r1 on ENG-193: `TE`'s `LookupPageId` serves its base whatever the
+    // base name's sharing, so `Page.Run(0, R)` on the workspace's `T` (named
+    // by number) runs `TELook`.
+    let h = node("Method", "Codeunit", "U", Some("H"));
+    let telook = node("Object", "Page", "TELook", None);
+    assert!(edge(&h, &telook), "the extension's lookup page runs");
     // B4: a subscriber naming the DEPENDENCY's `T`/`P` by number binds its event; the
     // workspace's `TE`/`PE` (whose base name the dependency shares) declare events of the same
     // name and must not make the binding ambiguous.
