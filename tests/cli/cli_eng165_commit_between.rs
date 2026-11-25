@@ -633,6 +633,116 @@ const REVIEW: &str = r#"codeunit 50640 "RV"
         Scoped();
     end;
 
+    procedure S34()
+    begin
+        Transmit(); // S34A
+        Both34();
+        L.Insert(); // S34B
+    end;
+
+    procedure S34r()
+    begin
+        Transmit(); // S34rA
+        Both34r();
+        L.Insert(); // S34rB
+    end;
+
+    local procedure Both34()
+    begin
+        Scoped34();
+        Plain34();
+    end;
+
+    local procedure Both34r()
+    begin
+        Plain34();
+        Scoped34();
+    end;
+
+    local procedure Plain34()
+    begin
+        CommitHelper();
+    end;
+
+    [CommitBehavior(CommitBehavior::Ignore)]
+    local procedure Scoped34()
+    begin
+        CommitHelper();
+    end;
+
+    procedure S35()
+    begin
+        OnSend35();
+        L.Insert(); // S35B
+    end;
+
+    [IntegrationEvent(false, false)]
+    local procedure OnSend35()
+    begin
+    end;
+
+    procedure S36(N: Integer)
+    begin
+        repeat
+            Step36();
+            N -= 1;
+        until N <= 0;
+    end;
+
+    local procedure Step36()
+    begin
+        L.Insert(); // S36B
+        Transmit(); // S36A
+        Commit();
+    end;
+
+    procedure S37()
+    var
+        P: Codeunit "Dep Post";
+    begin
+        Transmit(); // S37A
+        case true of
+            P.Ok():
+                ;
+        end;
+        L.Insert(); // S37B
+    end;
+
+    procedure S38()
+    begin
+        OnBoth38();
+        Commit();
+    end;
+
+    [IntegrationEvent(false, false)]
+    local procedure OnBoth38()
+    begin
+    end;
+
+    procedure S39()
+    begin
+        case true of
+            TransmitOk(): // S39A
+                ;
+        end;
+        Commit();
+        L.Insert(); // S39B
+    end;
+
+    local procedure TransmitOk(): Boolean
+    begin
+        Transmit();
+        exit(true);
+    end;
+
+    procedure S40()
+    begin
+        Transmit(); // S40A
+        CommitHelper();
+        Commit();
+        L.Insert(); // S40B
+    end;
+
     procedure S33()
     begin
         Transmit(); // S33A
@@ -742,6 +852,39 @@ codeunit 50643 "RV Subscriber"
     end;
 }
 
+codeunit 50644 "RV Subscribers 35"
+{
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::"RV", 'OnSend35', '', false, false)]
+    local procedure Send35()
+    var
+        R: Codeunit "RV";
+    begin
+        R.Transmit(); // S35A
+    end;
+
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::"RV", 'OnSend35', '', false, false)]
+    local procedure Commit35()
+    begin
+        Commit();
+    end;
+
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::"RV", 'OnBoth38', '', false, false)]
+    local procedure Send38()
+    var
+        R: Codeunit "RV";
+    begin
+        R.Transmit(); // S38A
+    end;
+
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::"RV", 'OnBoth38', '', false, false)]
+    local procedure Log38()
+    var
+        L: Record "EB Log";
+    begin
+        L.Insert(); // S38B
+    end;
+}
+
 codeunit 50642 "RV Logger"
 {
     trigger OnRun()
@@ -756,7 +899,7 @@ codeunit 50642 "RV Logger"
 
 const DEP_GUID: &str = "16516516-0000-4000-8000-0000000d0165";
 
-const DEP_SYMBOLS: &str = r#"{"RuntimeVersion":"15.0","Codeunits":[{"Id":50690,"Name":"Dep Post","Methods":[{"Name":"Post","Parameters":[]}]}],"AppId":"16516516-0000-4000-8000-0000000d0165","Name":"DepPost","Publisher":"probe","Version":"1.0.0.0"}"#;
+const DEP_SYMBOLS: &str = r#"{"RuntimeVersion":"15.0","Codeunits":[{"Id":50690,"Name":"Dep Post","Methods":[{"Name":"Post","Parameters":[]},{"Name":"Ok","Parameters":[],"ReturnTypeDefinition":{"Name":"Boolean"}}]}],"AppId":"16516516-0000-4000-8000-0000000d0165","Name":"DepPost","Publisher":"probe","Version":"1.0.0.0"}"#;
 
 fn workspace(root: &Path) -> std::path::PathBuf {
     let ws = root.join("ws");
@@ -900,9 +1043,13 @@ fn errors_at<'v>(s: &'v Value, ids: &Value) -> Vec<&'v Value> {
         .unwrap_or_default()
 }
 
-/// The errors after commit row `c`.
+/// The nearest error after commit row `c` (the JSON gives the counts and the
+/// nearest one, not the whole list: review r2 item 7).
 fn after_of<'v>(s: &'v Value, c: &Value) -> Vec<&'v Value> {
-    errors_at(s, &c["errorsAfterCommit"]["ids"])
+    errors_at(
+        s,
+        &Value::Array(vec![c["errorsAfterCommit"]["nearest"].clone()]),
+    )
 }
 
 fn has_label(row: &Value, label: &str) -> bool {
@@ -1395,6 +1542,82 @@ fn s32_a_inside_an_event_subscriber() {
     // Review S4: A in a subscriber; the commit after the raise is between.
     let a = ask(ws(), &rv("S32"), &at("S32A"), &at("S32B"));
     assert_eq!(a.answer, "yes", "{}", a.raw);
+}
+
+#[test]
+fn s34_a_commit_reached_both_ignored_and_normally_is_kept() {
+    // Review r2 item 1: per route above the statement, every path below it.
+    // Both call orders (the cone walk's edge order must not decide).
+    for (r, a, b) in [("S34", "S34A", "S34B"), ("S34r", "S34rA", "S34rB")] {
+        let x = ask(ws(), &rv(r), &at(a), &at(b));
+        assert_eq!(x.answer, "yes", "{r}: {}", x.raw);
+    }
+}
+
+#[test]
+fn s35_a_sibling_subscriber_of_a_s_event_blocks() {
+    // Review r2 item 2: another subscriber of A's event may commit after A.
+    let a = ask(ws(), &rv("S35"), &at("S35A"), &at("S35B"));
+    assert_eq!(a.answer, "unknown", "{}", a.raw);
+    assert!(a.raw.contains("sibling-subscribers"), "{}", a.raw);
+}
+
+#[test]
+fn s36_a_loop_above_the_meet_routine_blocks() {
+    // Review r2 item 3: the caller's loop runs M again; the next B after A
+    // is in a later run. Not followed: unknown, never a false no.
+    let a = ask(ws(), &rv("S36"), &at("S36A"), &at("S36B"));
+    assert_eq!(a.answer, "unknown", "{}", a.raw);
+    assert!(a.raw.contains("loop-above-meet"), "{}", a.raw);
+}
+
+#[test]
+fn s37_an_unresolved_call_in_a_case_label_blocks() {
+    // Review r2 item 4: no edge, no record, not placed: still read against
+    // the root's unresolved cone (single-app: the dependency is not loaded).
+    let a = ask(ws(), &rv("S37"), &at("S37A"), &at("S37B"));
+    assert_eq!(a.answer, "unknown", "{}", a.raw);
+    assert!(a.raw.contains("region-unresolved-call"), "{}", a.raw);
+}
+
+#[test]
+fn s38_a_and_b_in_two_subscribers_of_one_event_is_unknown() {
+    // The guard `event-subscriber-order`.
+    let a = ask(ws(), &rv("S38"), &at("S38A"), &at("S38B"));
+    assert_eq!(a.answer, "unknown", "{}", a.raw);
+    assert!(a.raw.contains("event-subscriber-order"), "{}", a.raw);
+}
+
+#[test]
+fn s39_a_in_a_case_label_is_unknown() {
+    // The guard `site-not-in-tree`: A's own statement is not placed.
+    let a = ask(ws(), &rv("S39"), &at("S39A"), &at("S39B"));
+    assert_eq!(a.answer, "unknown", "{}", a.raw);
+    assert!(a.raw.contains("site-not-in-tree"), "{}", a.raw);
+}
+
+#[test]
+fn s40_order_nearest_summary_and_statements_are_pinned() {
+    // Review r2 item 7: the direct commit (0 hops) leads; the helper's
+    // (1 hop) follows; summary and statements count both.
+    let a = ask(ws(), &rv("S40"), &at("S40A"), &at("S40B"));
+    assert_eq!(a.answer, "yes", "{}", a.raw);
+    let between = rows(&a.slice, "between");
+    assert_eq!(between.len(), 2, "{}", a.raw);
+    assert_eq!(between[0]["hops"], 0, "{}", a.raw);
+    assert_eq!(between[1]["hops"], 1, "{}", a.raw);
+    assert_eq!(a.slice["nearest"]["between"]["hops"], 0, "{}", a.raw);
+    assert_eq!(
+        a.slice["summary"]["between"]["class1"]["count"], 2,
+        "{}",
+        a.raw
+    );
+    assert_eq!(
+        a.slice["statements"].as_array().map(Vec::len),
+        Some(2),
+        "{}",
+        a.raw
+    );
 }
 
 #[test]

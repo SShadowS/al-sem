@@ -4981,7 +4981,7 @@ pub(crate) fn between_result(
         .collect();
     // Review B2: what the cone could not follow at all (a truncated cone,
     // analysis gaps) blocks a `no` as it blocks a filtered one.
-    if oblg.cone_truncated {
+    if oblg.cone_truncated || b.forced_cone_truncated {
         blockers.push(ProveBlocker {
             kind: "cone-truncated",
             detail: "the root's cone was truncated; a commit between A and B may lie beyond it"
@@ -4989,7 +4989,7 @@ pub(crate) fn between_result(
             anchor: None,
         });
     }
-    if oblg.analysis_gaps > 0 {
+    if oblg.analysis_gaps > 0 || b.forced_analysis_gaps {
         blockers.push(ProveBlocker {
             kind: "analysis-gaps",
             detail: format!(

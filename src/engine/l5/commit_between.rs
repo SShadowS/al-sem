@@ -135,6 +135,29 @@ impl SitePoint {
 pub struct BetweenSites {
     pub after: SitePoint,
     pub before: SitePoint,
+    /// Test knobs (default: off); the CLI never sets them.
+    pub knobs: Knobs,
+}
+
+/// Knobs a test sets to reach a guard whose real precondition needs a huge
+/// graph (a capped walk or search, a truncated cone) or a routine without a
+/// tree: each states the precondition by assignment, so the guard's own
+/// branch is what the test pins. Production leaves every one off.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Knobs {
+    /// The cone walk's state cap (default [`CONE_STATE_CAP`]).
+    pub cone_cap: Option<usize>,
+    /// The route enumeration's edge budget per site (default
+    /// `ROUTE_EDGE_BUDGET`).
+    pub route_budget: Option<usize>,
+    /// The root's guarded search stopped at its cap.
+    pub search_stopped: bool,
+    /// The root's cone was truncated (prove's obligations).
+    pub cone_truncated: bool,
+    /// The root's cone has analysis gaps (prove's obligations).
+    pub analysis_gaps: bool,
+    /// A routine (by name) whose control-flow tree is missing.
+    pub no_tree: Option<String>,
 }
 
 impl BetweenSites {
@@ -241,6 +264,9 @@ pub struct BetweenOut {
     /// Every error row, once; the lists hold indices into it.
     pub errors: Vec<ErrorRow>,
     err_index: HashMap<String, usize>,
+    /// (list, operation id, kind, class) → the row's index in its list,
+    /// while the walk builds; the lists are sorted (and this dropped) last.
+    commit_index: HashMap<(u8, String, &'static str, u8), usize>,
     /// Errors that may run after A returns and before B (indices).
     pub errors_between: Vec<usize>,
     /// `b-never-after-a`, `not-in-one-build`, `a-dead-under-literals`,
@@ -253,6 +279,9 @@ pub struct BetweenOut {
     /// prove against the root's unresolved cone (design §5.5).
     pub region_sites: BTreeSet<String>,
     pub region_routines: BTreeSet<String>,
+    /// Test knobs: the cone's truncation and analysis gaps, stated.
+    pub forced_cone_truncated: bool,
+    pub forced_analysis_gaps: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -693,6 +722,10 @@ struct Part<'a> {
     without: Vec<usize>,
     /// Where the part's paths start (after the site toward A, or the entry).
     starts: Vec<usize>,
+    /// The part's place for the nearest-first key, by kind and depth from M
+    /// (review r2 item 7: comparable across route pairs): A-tail deepest
+    /// first (`1000 - depth`), M's middle `1000`, B-head `1000 + depth`.
+    rank: usize,
     target: HashSet<usize>,
     /// The route from the root to this part's routine.
     prefix: Vec<Step<'a>>,
@@ -723,12 +756,19 @@ struct Walk<'a, 'w> {
     by_fact: HashMap<usize, &'w TerminalRecord<'a>>,
     cfgs: HashMap<usize, Cfg<'a>>,
     /// Cone walks by (sorted statement ids, routine) (review COST).
-    cones: HashMap<Vec<&'a str>, Rc<Cone<'a>>>,
+    cones: HashMap<ConeKey<'a>, Rc<Cone<'a>>>,
+    /// Region cones whose side effects (reached routines, blockers) are in.
+    region_folded: HashSet<ConeKey<'a>>,
+    knobs: Knobs,
     commit_scopes: Option<crate::engine::l5::commit_scope::CbGraph<'a>>,
     group_paths: GroupPaths<'a>,
     out: BetweenOut,
     names: HashMap<&'a str, &'a str>,
 }
+
+/// A cone walk's memo key: (sorted statement ids, then the routine), the
+/// behavior set it starts under, own records only.
+type ConeKey<'a> = (Vec<&'a str>, u8, bool);
 
 /// What one cone walk found.
 #[derive(Default)]
@@ -738,7 +778,9 @@ struct Cone<'a> {
     nodes: Vec<(Option<usize>, Step<'a>, Option<TrapKind>)>,
     /// (record, class, the walk node it was met at; `None`: the statement's
     /// own).
-    commits: Vec<(usize, u8, Option<usize>)>,
+    /// (record, class, the walk node, the `[CommitBehavior]` set it runs
+    /// under on that path, raw bits).
+    commits: Vec<(usize, u8, Option<usize>, u8)>,
     errors: Vec<(usize, Vec<&'static str>, Option<usize>)>,
     /// Every routine the walk visited.
     visited: Vec<&'a str>,
@@ -787,6 +829,9 @@ impl<'a, 'w> Walk<'a, 'w> {
 
     /// Build `row`'s graph once; `false` when the row has no tree.
     fn ensure_cfg(&mut self, row: &'a ModelRoutine) -> bool {
+        if self.knobs.no_tree.as_deref() == Some(row.name.as_str()) {
+            return false;
+        }
         let Some(tree) = row.statement_tree.as_deref() else {
             return false;
         };
@@ -815,26 +860,12 @@ impl<'a, 'w> Walk<'a, 'w> {
         v
     }
 
-    /// The behaviors (`commit_scope` N, I, E bits) the commit `op` runs under
-    /// on the route `steps` from the root (review S1: per route, so another
-    /// route's declaration neither invents nor hides one).
-    fn route_states(&self, steps: &[Step<'a>], op: &str) -> u8 {
+    /// The behaviors (`commit_scope` N, I, E bits) of a commit met with the
+    /// raw set `bits` (review S1, r2 item 1: per route above the region
+    /// statement, over every path below it).
+    fn states_of(bits: u8) -> u8 {
         use crate::engine::l5::commit_scope::{N, norm};
-        let Some(cb) = self
-            .commit_scopes
-            .as_ref()
-            .filter(|cb| !cb.root_unaffected(self.root))
-        else {
-            return N;
-        };
-        let hops = steps.iter().map(|s| {
-            let site = match s.site {
-                Some(EdgeSite::Guarded(x)) => Some(x),
-                _ => None,
-            };
-            (s.to, site)
-        });
-        match norm(cb.route_states(self.root, hops, Some(op))) {
+        match norm(bits) {
             0 => N,
             s => s,
         }
@@ -856,19 +887,35 @@ impl<'a, 'w> Walk<'a, 'w> {
     /// region cone (`region`) also records the routines it reaches (read
     /// against the root's unresolved cone) and blocks on a reached routine
     /// whose body is not available (review B2, S3).
-    fn cone(&mut self, routine: &'a str, ids: &[&'a str], region: bool) -> Rc<Cone<'a>> {
+    ///
+    /// `b0` is the `[CommitBehavior]` set the statement runs under on the
+    /// route above it (`commit_scope` raw bits); the walk carries the set
+    /// down every edge, so a commit reached both under `Ignore` and normally
+    /// keeps both (review r2, item 1). `own_only`: the statement's own
+    /// records, no walk (a statement on a path that ends before B, whose
+    /// cone decides nothing; review r2, cost 5).
+    fn cone(
+        &mut self,
+        routine: &'a str,
+        ids: &[&'a str],
+        region: bool,
+        b0: u8,
+        own_only: bool,
+    ) -> Rc<Cone<'a>> {
         let mut key: Vec<&'a str> = ids.to_vec();
         key.sort_unstable();
         key.push(routine);
+        let key = (key, b0, own_only);
         let cone = match self.cones.get(&key) {
             Some(c) => c.clone(),
             None => {
-                let c = Rc::new(self.walk_cone(routine, ids));
-                self.cones.insert(key, c.clone());
+                let c = Rc::new(self.walk_cone(routine, ids, b0, own_only));
+                self.cones.insert(key.clone(), c.clone());
                 c
             }
         };
-        if region {
+        // Review r2, cost 4: a cone's side effects are folded once.
+        if region && self.region_folded.insert(key) {
             if cone.capped {
                 self.out.blockers.push((
                     "cone-walk-capped",
@@ -897,17 +944,35 @@ impl<'a, 'w> Walk<'a, 'w> {
         cone
     }
 
-    fn walk_cone(&mut self, routine: &'a str, ids: &[&'a str]) -> Cone<'a> {
+    /// The behavior set `to` runs under, entered by an edge at `site` from a
+    /// caller running under `b`.
+    fn enter(&self, b: u8, site: Option<EdgeSite<'a>>, to: &str) -> u8 {
+        match &self.commit_scopes {
+            Some(cb) if !cb.root_unaffected(self.root) => {
+                let s = match site {
+                    Some(EdgeSite::Guarded(x)) => Some(x),
+                    _ => None,
+                };
+                cb.entered(b, cb.step_at(s), to)
+            }
+            _ => b,
+        }
+    }
+
+    fn walk_cone(&mut self, routine: &'a str, ids: &[&'a str], b0: u8, own_only: bool) -> Cone<'a> {
         let mut cone = Cone::default();
         let idset: HashSet<&str> = ids.iter().copied().collect();
         // The statement's own records.
         for (i, rec) in self.records_of(routine) {
             if idset.contains(rec.terminal.id()) {
-                cone_record(self, &mut cone, i, rec, false, None, None);
+                cone_record(self, &mut cone, i, rec, false, None, None, b0);
             }
         }
-        // (routine, crossed a checked run, the first trap crossed)
-        type St<'s> = (&'s str, bool, Option<TrapKind>);
+        if own_only {
+            return cone;
+        }
+        // (routine, crossed a checked run, the first trap crossed, behaviors)
+        type St<'s> = (&'s str, bool, Option<TrapKind>, u8);
         let mut seen: HashSet<St<'a>> = HashSet::new();
         let mut q: VecDeque<(St<'a>, usize)> = VecDeque::new();
         for (to, site, kind, trap) in self.reach.out_edges(routine) {
@@ -918,7 +983,12 @@ impl<'a, 'w> Walk<'a, 'w> {
             if !idset.contains(at) {
                 continue;
             }
-            let st = (to, trap == Some(TrapKind::CheckedRun), trap);
+            let st = (
+                to,
+                trap == Some(TrapKind::CheckedRun),
+                trap,
+                self.enter(b0, site, to),
+            );
             if seen.insert(st) {
                 let step = Step {
                     from: routine,
@@ -931,8 +1001,8 @@ impl<'a, 'w> Walk<'a, 'w> {
             }
         }
         let mut visited: HashSet<&'a str> = HashSet::new();
-        while let Some(((r, run, trap), n)) = q.pop_front() {
-            if seen.len() > CONE_STATE_CAP {
+        while let Some(((r, run, trap, b), n)) = q.pop_front() {
+            if seen.len() > self.knobs.cone_cap.unwrap_or(CONE_STATE_CAP) {
                 cone.capped = true;
                 break;
             }
@@ -940,10 +1010,15 @@ impl<'a, 'w> Walk<'a, 'w> {
                 cone.visited.push(r);
             }
             for (i, rec) in self.records_of(r) {
-                cone_record(self, &mut cone, i, rec, run, trap, Some(n));
+                cone_record(self, &mut cone, i, rec, run, trap, Some(n), b);
             }
             for (to, site, kind, t) in self.reach.out_edges(r) {
-                let st = (to, run || t == Some(TrapKind::CheckedRun), trap.or(t));
+                let st = (
+                    to,
+                    run || t == Some(TrapKind::CheckedRun),
+                    trap.or(t),
+                    self.enter(b, site, to),
+                );
                 if seen.insert(st) {
                     let step = Step {
                         from: r,
@@ -957,6 +1032,27 @@ impl<'a, 'w> Walk<'a, 'w> {
             }
         }
         cone
+    }
+
+    /// The behavior set the routine at the end of `prefix` runs under on that
+    /// route (raw bits; `N` when no `[CommitBehavior]` applies to the root).
+    fn route_start(&self, prefix: &[Step<'a>]) -> u8 {
+        use crate::engine::l5::commit_scope::N;
+        let Some(cb) = self
+            .commit_scopes
+            .as_ref()
+            .filter(|cb| !cb.root_unaffected(self.root))
+        else {
+            return N;
+        };
+        let hops = prefix.iter().map(|s| {
+            let site = match s.site {
+                Some(EdgeSite::Guarded(x)) => Some(x),
+                _ => None,
+            };
+            (s.to, site)
+        });
+        cb.route_states(self.root, hops, None)
     }
 
     /// Every COMMIT and error record `routine` owns, with its index.
@@ -1103,16 +1199,23 @@ fn cone_record<'a>(
     run: bool,
     trap: Option<TrapKind>,
     node: Option<usize>,
+    behaviors: u8,
 ) {
     let id = rec.terminal.id();
     if id.is_empty() || !w.live(id) {
         return;
     }
     if rec.effect_type == "COMMIT" {
-        // `[CommitBehavior]` is read per route where the row is built
-        // (review S1); the class here is the cone's.
+        // `behaviors`: the `[CommitBehavior]` set on this path (review S1,
+        // r2 item 1); a commit met on several paths is recorded per path.
         let class = if run || w.is_run_commit(rec) { 2 } else { 1 };
-        cone.commits.push((i, class, node));
+        if !cone
+            .commits
+            .iter()
+            .any(|c| c.0 == i && c.1 == class && c.3 == behaviors)
+        {
+            cone.commits.push((i, class, node, behaviors));
+        }
         return;
     }
     // A page or report run with a write pending (design §4.3): a page's
@@ -1290,6 +1393,8 @@ pub(crate) fn compute<'a>(
         by_fact,
         cfgs: HashMap::new(),
         cones: HashMap::new(),
+        region_folded: HashSet::new(),
+        knobs: sites.knobs.clone(),
         commit_scopes: crate::engine::l5::commit_scope::CbGraph::of_tree(tree),
         group_paths: GroupPaths::new(&tree.typed_edges, model),
         out,
@@ -1305,6 +1410,19 @@ pub(crate) fn compute<'a>(
     };
     w.out.after = Some(desc(&w, &a));
     w.out.before = Some(desc(&w, &b));
+    // Review r2 item 8: a search that stopped at its cap knows nothing about
+    // reach: unknown with the reason, not a usage error with a wrong one.
+    w.out.forced_cone_truncated = sites.knobs.cone_truncated;
+    w.out.forced_analysis_gaps = sites.knobs.analysis_gaps;
+    if w.live.is_none() || sites.knobs.search_stopped {
+        w.out.blockers.push((
+            "route-graph-stopped",
+            "the root's guarded search stopped at its state cap; whether the root reaches A and B \
+             is not known"
+                .to_string(),
+        ));
+        return w.out;
+    }
     for (s, flag) in [(&a, "--after"), (&b, "--before")] {
         if !w.live.as_ref().is_some_and(|t| reach.reaches(t, s.owner)) {
             w.out.refused = Some(format!(
@@ -1333,7 +1451,8 @@ pub(crate) fn compute<'a>(
             if reach.op_owner(id).is_none() {
                 continue;
             }
-            let found = reach.routes(&graph, id, ROUTE_CAP, ROUTE_EDGE_BUDGET, cancel);
+            let budget = sites.knobs.route_budget.unwrap_or(ROUTE_EDGE_BUDGET);
+            let found = reach.routes(&graph, id, ROUTE_CAP, budget, cancel);
             capped |= found.limit.is_some();
             for r in found.routes {
                 if !all.contains(&r) {
@@ -1447,6 +1566,7 @@ fn pair<'a>(
     let swallowed = ra[..k]
         .iter()
         .any(|s| trap_of(w, s).is_some_and(TrapKind::definite));
+    loop_above_meet(w, ra, k);
     let mut parts: Vec<Part<'a>> = Vec::new();
     // A's tail, deepest first.
     let mut a_route_trap_at: Option<usize> = None;
@@ -1460,14 +1580,17 @@ fn pair<'a>(
         let leave = leave_ids(ra, i, a);
         // Review S4: a publisher left by its event (A in a subscriber): the
         // publisher's body raises the event and returns; nothing runs after.
+        // Review r2 item 2: the event's other subscribers run in no defined
+        // order around A's, so they may commit after A: block.
         if leave.is_empty() {
+            sibling_subscribers(w, r, &ra[i]);
             continue;
         }
         let Some(row) = w.reach.row_at(r, leave[0]) else {
             continue;
         };
         let caught = a_route_trap_at.is_some_and(|j| j < i);
-        match tail_part(w, r, row, &leave, ra[..i].to_vec(), caught) {
+        match tail_part(w, r, row, &leave, ra[..i].to_vec(), caught, 1000 - (i - k)) {
             Some(p) => parts.push(p),
             None => return PairEnd::Judged,
         }
@@ -1509,6 +1632,7 @@ fn pair<'a>(
                 region_no_back: HashSet::new(),
                 without,
                 starts: starts.clone(),
+                rank: 1000,
                 target,
                 prefix: ra[..k].to_vec(),
                 caught_by_route_trap: false,
@@ -1545,6 +1669,7 @@ fn pair<'a>(
             region_no_back,
             without,
             starts,
+            rank: 1000,
             target,
             prefix: ra[..k].to_vec(),
             caught_by_route_trap: false,
@@ -1573,8 +1698,10 @@ fn pair<'a>(
         b_run |= t == Some(TrapKind::CheckedRun);
         let r = rb[i - 1].to;
         let leave = leave_ids(rb, i, b);
-        // Review S4: a publisher left by its event (B in a subscriber).
+        // Review S4: a publisher left by its event (B in a subscriber); its
+        // other subscribers may run before B's (review r2 item 2).
         if leave.is_empty() {
+            sibling_subscribers(w, r, &rb[i]);
             continue;
         }
         let Some(row) = w.reach.row_at(r, leave[0]) else {
@@ -1624,6 +1751,7 @@ fn pair<'a>(
             region_no_back,
             without: Vec::new(),
             starts: vec![cfg.entry],
+            rank: 1000 + (i - k),
             target,
             prefix: rb[..i].to_vec(),
             caught_by_route_trap: false,
@@ -1635,6 +1763,79 @@ fn pair<'a>(
     }
     judge(w, a, b, &parts, swallowed, ra, k);
     PairEnd::Judged
+}
+
+/// Review r2 item 2: when a route leaves `publisher` by its event (step
+/// `s`), the event's other subscribers run in no defined order around the
+/// route's: they may commit between A and B. Not walked yet: a blocker.
+fn sibling_subscribers<'a>(w: &mut Walk<'a, '_>, publisher: &'a str, s: &Step<'a>) {
+    let Some(EdgeSite::Event(ev)) = s.site else {
+        return;
+    };
+    let others = w
+        .reach
+        .out_edges(publisher)
+        .into_iter()
+        .filter(|(to, site, _, _)| *site == Some(EdgeSite::Event(ev)) && *to != s.to)
+        .count();
+    if others > 0 {
+        let d = w.display(publisher);
+        w.out.blockers.push((
+            "sibling-subscribers",
+            format!(
+                "the event raised in {d} has {others} other subscriber(s) that run in no \
+                 defined order around the route's; what they do between A and B is not followed"
+            ),
+        ));
+    }
+}
+
+/// Review r2 item 3: a loop above the meet routine (a call site toward M on
+/// the shared prefix that can reach itself, or a recursive prefix) runs M
+/// again, so the next B after A may be in a later run of M. That is not
+/// followed: a blocker, so a `no` is never given on such a route.
+fn loop_above_meet<'a>(w: &mut Walk<'a, '_>, ra: &[Step<'a>], k: usize) {
+    let root = w.root;
+    let mut seen: HashSet<&'a str> = HashSet::new();
+    for j in 0..k {
+        let r = routine_at(root, ra, j);
+        if !seen.insert(r) {
+            let d = w.display(r);
+            w.out.blockers.push((
+                "loop-above-meet",
+                format!("the route above the meet routine is recursive through {d}"),
+            ));
+            return;
+        }
+        let Some(EdgeSite::Guarded(x)) = ra[j].site else {
+            continue;
+        };
+        let Some(row) = w.reach.row_at(r, x) else {
+            continue;
+        };
+        let looped = if w.ensure_cfg(row) {
+            let cfg = &w.cfgs[&row_key(row)];
+            let set: HashSet<&str> = [x].into_iter().collect();
+            let nodes = cfg.nodes_of(&set);
+            let starts: Vec<usize> = nodes.iter().flat_map(|&n| cfg.succs(n)).collect();
+            let f = cfg.forward(&starts, &HashSet::new(), false);
+            // A node not placed is not known not to loop.
+            nodes.is_empty() || nodes.iter().any(|&n| f[n])
+        } else {
+            true
+        };
+        if looped {
+            let d = w.display(r);
+            w.out.blockers.push((
+                "loop-above-meet",
+                format!(
+                    "{d}, above the meet routine, may call toward it again (a loop); the next B \
+                     after A may be in a later run, which is not followed"
+                ),
+            ));
+            return;
+        }
+    }
 }
 
 /// Review B1: a site of `row` that may matter (an edge leaves it, or a
@@ -1662,8 +1863,15 @@ fn check_complete<'a>(w: &mut Walk<'a, '_>, routine: &'a str, row: &'a ModelRout
         .collect();
     let matters = |id: &str| edged.contains(id) || recorded.contains(id);
     let mut missing: Vec<&PAnchor> = Vec::new();
+    // Review r2 item 4: an unplaced call with no edge and no record (an
+    // unresolved call) is read against the root's unresolved cone like a
+    // region statement: its order is not known either.
+    let mut unplaced: Vec<String> = Vec::new();
     for c in &row.call_sites {
         let ids = [c.id.as_str(), c.operation_id.as_str()];
+        if !ids.iter().any(|i| held.contains(i)) {
+            unplaced.extend(ids.iter().map(|i| (*i).to_string()));
+        }
         if !ids.iter().any(|i| held.contains(i)) && ids.iter().any(|i| matters(i)) {
             missing.push(&c.source_anchor);
         }
@@ -1692,6 +1900,7 @@ fn check_complete<'a>(w: &mut Walk<'a, '_>, routine: &'a str, row: &'a ModelRout
         )
         .collect();
     missing.retain(|a| !held_places.iter().any(|h| same_place(h, a)));
+    w.out.region_sites.extend(unplaced);
     if let Some(a) = missing.first() {
         let d = w.display(routine);
         w.out.blockers.push((
@@ -1726,6 +1935,7 @@ fn tail_part<'a>(
     leave: &[&'a str],
     prefix: Vec<Step<'a>>,
     caught: bool,
+    rank: usize,
 ) -> Option<Part<'a>> {
     if !w.ensure_cfg(row) {
         let b = no_tree(w, r);
@@ -1772,6 +1982,7 @@ fn tail_part<'a>(
         region_no_back,
         without,
         starts,
+        rank,
         target: targets.into_iter().collect(),
         prefix,
         caught_by_route_trap: caught,
@@ -1832,11 +2043,12 @@ fn judge<'a>(
                 }
                 w.out.region_routines.insert(p.routine.to_string());
             }
-            let cone = w.cone(p.routine, &ids, !without);
+            let b0 = w.route_start(&p.prefix);
+            let cone = w.cone(p.routine, &ids, !without, b0, without);
             if cone
                 .commits
                 .iter()
-                .any(|(_, c, node)| *c == 1 && node.is_none())
+                .any(|(_, c, node, b)| *c == 1 && node.is_none() && Walk::states_of(*b) & N != 0)
             {
                 commit_nodes.insert(n);
             }
@@ -1890,23 +2102,21 @@ fn judge<'a>(
                 l.push("swallowed-before-b");
             }
             let hops = nc.cone.steps(*node).len();
-            let at = w.at(p.row, &nc.ids, nc.part, hops);
+            let at = w.at(p.row, &nc.ids, p.rank, hops);
             let row = w.error_row(rec, l, kind, &at);
             let idx = push_error(&mut w.out, row);
             errs.push((nc.part, nc.node, idx));
         }
-        // S1: a commit some route runs under `[CommitBehavior(Error)]` is an
-        // error, read per route.
-        for (i, class, node) in &nc.cone.commits {
+        // S1: a commit some path runs under `[CommitBehavior(Error)]` is an
+        // error (per route above the statement, every path below).
+        for (i, class, node, bits) in &nc.cone.commits {
             let Some(rec) = record(w, *i) else { continue };
             if *class != 1 {
                 continue;
             }
-            let mut full = p.prefix.clone();
-            full.extend(nc.cone.steps(*node));
-            if w.route_states(&full, rec.terminal.id()) & E != 0 {
+            if Walk::states_of(*bits) & E != 0 {
                 let hops = nc.cone.steps(*node).len();
-                let at = w.at(p.row, &nc.ids, nc.part, hops);
+                let at = w.at(p.row, &nc.ids, p.rank, hops);
                 let row = w.error_row(rec, vec!["commit-behavior-error"], "commit-behavior", &at);
                 let idx = push_error(&mut w.out, row);
                 errs.push((nc.part, nc.node, idx));
@@ -1921,6 +2131,8 @@ fn judge<'a>(
     }
     // The errors after node `n` of part `pi`: in later parts, and in the
     // nodes of its part it reaches; those of its own cone, apart.
+    // Review r2 cost 1: memoized per region node.
+    let mut after_memo: HashMap<(usize, usize), (Vec<usize>, Vec<usize>)> = HashMap::new();
     let after = |w: &Walk<'a, '_>, pi: usize, n: usize| -> (Vec<usize>, Vec<usize>) {
         let f = w
             .cfgs
@@ -1948,7 +2160,7 @@ fn judge<'a>(
     // Commits.
     for nc in &cones {
         let p = &parts[nc.part];
-        for (i, class, node) in &nc.cone.commits {
+        for (i, class, node, bits) in &nc.cone.commits {
             let Some(rec) = record(w, *i) else { continue };
             let steps = nc.cone.steps(*node);
             let hops = steps.len();
@@ -1956,7 +2168,7 @@ fn judge<'a>(
             full.extend(steps.iter().copied());
             let mut class = *class;
             if class == 1 {
-                if w.route_states(&full, rec.terminal.id()) & N == 0 {
+                if Walk::states_of(*bits) & N == 0 {
                     continue;
                 }
                 if p.b_run {
@@ -1972,7 +2184,7 @@ fn judge<'a>(
             } else {
                 "commit"
             };
-            let at = w.at(p.row, &nc.ids, nc.part, hops);
+            let at = w.at(p.row, &nc.ids, p.rank, hops);
             let mut row = w.commit_row(rec, class, kind, p.kind, labels, full, &at);
             if nc.without {
                 if class == 1 {
@@ -1981,18 +2193,21 @@ fn judge<'a>(
                         .get(&row_key(p.row))
                         .map(|cfg| cfg.ends(nc.node, &p.target))
                         .unwrap_or_default();
-                    push_commit(&mut w.out.without_b, row);
+                    push_commit(&mut w.out, WITHOUT_B, row);
                 }
             } else if class == 2 {
-                push_commit(&mut w.out.own_transaction, row);
+                push_commit(&mut w.out, OWN, row);
             } else if !p.reaches_b {
                 row.ends = vec!["b-never-after-a"];
-                push_commit(&mut w.out.without_b, row);
+                push_commit(&mut w.out, WITHOUT_B, row);
             } else {
-                let (e, s) = after(w, nc.part, nc.node);
+                let (e, s) = after_memo
+                    .entry((nc.part, nc.node))
+                    .or_insert_with(|| after(w, nc.part, nc.node))
+                    .clone();
                 row.errors_after = e;
                 row.errors_same_cone = s;
-                push_commit(&mut w.out.between, row);
+                push_commit(&mut w.out, BETWEEN, row);
             }
         }
     }
@@ -2023,7 +2238,7 @@ fn judge<'a>(
         if t == TrapKind::IsolatedEvent {
             labels.push("if-nothing-pending-at-the-raise");
         }
-        let place = row_r.map(|r| w.at(r, &[at], part, 0));
+        let place = row_r.map(|r| w.at(r, &[at], parts[part].rank, 0));
         let file = anchor.map(|x| x.source_unit_id.to_string());
         let line = anchor.map(|x| x.start_line);
         let mut errors: Vec<usize> = Vec::new();
@@ -2059,9 +2274,9 @@ fn judge<'a>(
             hops: 0,
         };
         if reaches {
-            push_commit(&mut w.out.between, row);
+            push_commit(&mut w.out, BETWEEN, row);
         } else {
-            push_commit(&mut w.out.without_b, row);
+            push_commit(&mut w.out, WITHOUT_B, row);
         }
     }
     // Commits inside A and inside B (S3: not region cones).
@@ -2079,12 +2294,20 @@ fn judge<'a>(
     for (s, inside) in [(a, true), (b, false)] {
         let owner = s.owner;
         let ids = s.ids.clone();
-        let cone = w.cone(owner, &ids, false);
+        let b0 = if inside {
+            w.route_start(ra)
+        } else {
+            crate::engine::l5::commit_scope::N
+        };
+        let cone = w.cone(owner, &ids, false, b0, false);
         let Some(row_s) = w.reach.row_at(owner, ids.first().copied().unwrap_or("")) else {
             continue;
         };
-        for (i, class, node) in &cone.commits {
+        for (i, class, node, bits) in &cone.commits {
             let Some(rec) = record(w, *i) else { continue };
+            if *class == 1 && Walk::states_of(*bits) & N == 0 {
+                continue;
+            }
             if node.is_none() && rec.owner == owner && ids.contains(&rec.terminal.id()) {
                 // The site itself is a commit statement: it is not inside it.
                 continue;
@@ -2093,15 +2316,21 @@ fn judge<'a>(
             let mut full = if inside { ra.to_vec() } else { Vec::new() };
             full.extend(steps.iter().copied());
             let part = if inside { "inside-A" } else { "inside-B" };
-            let at = w.at(row_s, &ids, 0, steps.len());
+            let at = w.at(
+                row_s,
+                &ids,
+                if inside { 0 } else { usize::MAX },
+                steps.len(),
+            );
             let mut row = w.commit_row(rec, *class, "commit", part, cone.labels(*node), full, &at);
             if inside && *class == 1 {
-                row.errors_after = all.clone();
+                // Review r2 item 7: an index list shared by every inside-A row.
+                row.errors_after.clone_from(&all);
             }
             if inside {
-                push_commit(&mut w.out.inside_a, row);
+                push_commit(&mut w.out, INSIDE_A, row);
             } else {
-                push_commit(&mut w.out.inside_b, row);
+                push_commit(&mut w.out, INSIDE_B, row);
             }
         }
     }
@@ -2151,12 +2380,27 @@ fn push_error(out: &mut BetweenOut, e: ErrorRow) -> usize {
     }
 }
 
-fn push_commit(v: &mut Vec<CommitRow>, c: CommitRow) {
-    match v
-        .iter_mut()
-        .find(|x| x.op_id == c.op_id && x.kind == c.kind && x.class == c.class)
-    {
-        Some(x) => {
+const BETWEEN: u8 = 0;
+const INSIDE_A: u8 = 1;
+const INSIDE_B: u8 = 2;
+const WITHOUT_B: u8 = 3;
+const OWN: u8 = 4;
+
+/// Add `c` to list `list` once per (operation, kind, class), found by an
+/// index (review r2 cost 2), merging labels and errors and keeping the nearer
+/// route.
+fn push_commit(out: &mut BetweenOut, list: u8, c: CommitRow) {
+    let key = (list, c.op_id.clone(), c.kind, c.class);
+    let v = match list {
+        BETWEEN => &mut out.between,
+        INSIDE_A => &mut out.inside_a,
+        INSIDE_B => &mut out.inside_b,
+        WITHOUT_B => &mut out.without_b,
+        _ => &mut out.own_transaction,
+    };
+    match out.commit_index.get(&key).copied() {
+        Some(i) => {
+            let x = &mut v[i];
             for l in c.labels {
                 if !x.labels.contains(&l) {
                     x.labels.push(l);
@@ -2172,12 +2416,17 @@ fn push_commit(v: &mut Vec<CommitRow>, c: CommitRow) {
                 x.route = c.route;
             }
         }
-        None => v.push(c),
+        None => {
+            v.push(c);
+            let i = v.len() - 1;
+            out.commit_index.insert(key, i);
+        }
     }
 }
 
 /// Sort every list nearest first (review output guidance), deterministically.
 fn finish(out: &mut BetweenOut) {
+    out.commit_index.clear();
     // A commit that is between A and B on some route pair is not also listed
     // as ending before B (another pair's path): one fact, its strongest list.
     let between: HashSet<(String, &'static str)> = out
@@ -2270,7 +2519,6 @@ fn split(errors: &[ErrorRow], ids: &[usize]) -> serde_json::Value {
 fn commit_value(errors: &[ErrorRow], c: &CommitRow) -> serde_json::Value {
     let mut after = split(errors, &c.errors_after);
     after["nearest"] = c.errors_after.first().copied().into();
-    after["ids"] = c.errors_after.clone().into();
     after["sameCone"] = c.errors_same_cone.clone().into();
     serde_json::json!({
         "file": c.file,
@@ -2306,10 +2554,10 @@ fn site_value(s: &Option<SiteDesc>, route: &Option<SliceRoute>) -> serde_json::V
 }
 
 /// Per class, workspace and dependency counts of a commit list.
-fn class_counts(v: &[CommitRow]) -> serde_json::Value {
+fn class_counts<'r>(v: impl IntoIterator<Item = &'r CommitRow> + Clone) -> serde_json::Value {
     let mut m = serde_json::Map::new();
     for class in [1u8, 2] {
-        let rows: Vec<&CommitRow> = v.iter().filter(|c| c.class == class).collect();
+        let rows: Vec<&CommitRow> = v.clone().into_iter().filter(|c| c.class == class).collect();
         if rows.is_empty() {
             continue;
         }
@@ -2353,7 +2601,7 @@ impl BetweenOut {
                     "site": s,
                     "part": part,
                     "order": order,
-                    "commits": class_counts(&rows.iter().map(|c| (*c).clone()).collect::<Vec<_>>()),
+                    "commits": class_counts(rows.iter().copied()),
                     "nearestHops": first.hops,
                 })
             })
@@ -2504,11 +2752,18 @@ impl BetweenOut {
         if !self.between.is_empty() {
             let direct = self.between.iter().filter(|c| c.hops == 0).count();
             let stmts = statements(&self.between);
+            // Statements that start a cone (hops > 0), not the direct rows'.
+            let through: BTreeSet<&str> = self
+                .between
+                .iter()
+                .filter(|c| c.hops > 0)
+                .filter_map(|c| c.statement.as_deref())
+                .collect();
             lines.push(format!(
                 "  between A and B: {} commits: {direct} direct, {} through {} statements",
                 self.between.len(),
                 self.between.len() - direct,
-                stmts.len()
+                through.len()
             ));
             self.witness(&self.between[0], &mut lines);
             lines.push("  by statement between A and B:".to_string());

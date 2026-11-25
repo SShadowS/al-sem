@@ -285,6 +285,7 @@ impl SliceRequest {
             between: Some(BetweenSites {
                 after: SitePoint::parse("--after", after)?,
                 before: SitePoint::parse("--before", before)?,
+                knobs: Default::default(),
             }),
         })
     }
