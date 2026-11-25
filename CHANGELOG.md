@@ -44,21 +44,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     used `-z`; it is unchanged.
   - agentflow reads paths through one new helper, `Git.paths`: `-z`, raw bytes split at NUL,
     decoded with `os.fsdecode`. `check-diff` now reads each changed file's own patch
-    (`Git.file_diffs`, `git diff -- ':(literal)<path>'`, as bytes), so the file is known by
-    construction and no header is parsed. Lines split at LF only, and only lines after the
-    first `@@` count. `Git.diff`, which nothing else used, is removed.
-  - The hook reads `git diff --cached --name-only -z` and matches with `grep -z`. It sends the
-    output to `/dev/null` instead of using `-q`, so git never dies of SIGPIPE, which `pipefail`
-    would read as "no match".
+    (`Git.file_diffs`, `git diff -- ':(top,literal)<path>' ':(top,literal,exclude)<path>/'`,
+    as bytes), so no header is parsed. The `exclude`: a literal pathspec also selects what is
+    under a directory of that name, so a file replaced by a directory (`docs/old.rs` ->
+    `docs/old.rs/notes.md`) took the note's lines into the deleted `.rs` file's patch, and a
+    note naming `#[ignore]` was refused (sol r1). Both reads pass `--no-relative`: with
+    `diff.relative=true`, a check run from a subfolder listed only that folder's files,
+    relative to it, and scanned nothing else (sol r1). Lines split at LF only, and only lines
+    after the first `@@` count. `Git.diff`, which nothing else used, is removed.
+  - The hook reads `git diff --cached --name-only -z --no-renames` and matches with `grep -z`.
+    It sends the output to `/dev/null` instead of using `-q`, so git never dies of SIGPIPE,
+    which `pipefail` would read as "no match". `--no-renames` (sol r1): an unchanged
+    `src/old.rs` moved to `notes/old.txt` listed only the new name, so fmt and the goldens
+    were skipped. It reads its top level exactly (a sentinel after `rev-parse`): `$(...)`
+    strips every trailing LF, so a checkout named `repo` + LF looked for `repo/scripts`.
+  - Test-scope discovery sends each folder to `git check-ignore` as `./<name>/` (sol r1): git
+    reads each line as a pathspec, so a sibling folder named `:(unknown)` failed the whole
+    batch, which was read as "nothing ignored".
+  - `impact --base` opens the untracked `.al` files under the top level's exact bytes (sol
+    r1): under a Linux checkout named `repo-\xff`, an untracked `New.al` could not be read.
+    It lists them with `ls-files -z` and opens each by its bytes: without `-z` git quoted
+    `ws/Né.al` as `"ws/N\303\251.al"`, which does not end in `.al`, so the file was silently
+    left out of the change; a non-UTF-8 name was opened by its lossy text.
 - **Tests** (unix; each with a discrimination proof):
   - scope discovery: an excludes file ending in CR or LF (an LF inside too), a top level ending
     in CR or LF, and a bare clone's common folder ending in CR or LF;
   - `impact`: a base materialized under a top level ending in CR, ending in LF, and (Linux) not
-    UTF-8; a workspace prefix starting with a space;
-  - agentflow: changed and dirty paths with a CR at the end and an LF inside, and `check-diff`
-    through real git on `src/é.rs`, `src/x\r.rs`, a CR inside an added line and an added `++`
-    line;
-  - the hook, run on a staged `src/é` + LF + `x.rs`: it runs fmt and both golden checks.
+    UTF-8; a workspace prefix starting with a space; (Linux) an untracked file under a non-UTF-8
+    top level; untracked files named `Né.al` and (Linux) `X\xff.al`;
+  - scope discovery: a sibling folder named `:(unknown)` beside an ignored one;
+  - agentflow: changed and dirty paths with a CR at the end and an LF inside; a `"` and (Linux)
+    the byte 0xFF in a name; `check-diff` through real git on `src/é.rs`, `src/x\r.rs`, a CR
+    inside an added line and an added `++` line; a file replaced by a directory of its name;
+    a check from a subfolder with `diff.relative=true`;
+  - the hook, run on a staged `src/é` + LF + `x.rs`, on a Rust file renamed to a `.txt`, and in
+    a checkout named `repo` + LF: it runs fmt and both golden checks.
   - The LF fixtures pin "remove one LF" against "remove every LF". `--show-prefix` always ends
     in `/`, so `impact`'s prefix reader cannot tell those apart, and no fixture claims to.
 - **Left as they are, and why.** `impact`'s `--show-prefix` is still decoded lossily: it flows

@@ -707,9 +707,12 @@ fn git_ignored(dir: &Path, subdirs: &[PathBuf]) -> std::collections::HashSet<Pat
         return set;
     }
     // A trailing `/`: the names are folders (git also stats a name without it).
+    // A leading `./` (TLS-114): git reads each line as a pathspec, so a folder
+    // named `:(unknown)` failed the whole batch, read as "nothing ignored".
     let mut input = Vec::new();
     for d in subdirs {
         if let Some(name) = d.file_name() {
+            input.extend_from_slice(b"./");
             input.extend_from_slice(name.as_encoded_bytes());
             input.extend_from_slice(b"/\0");
         }
@@ -742,8 +745,10 @@ fn git_ignored(dir: &Path, subdirs: &[PathBuf]) -> std::collections::HashSet<Pat
     }
     // Match git's answer to the submitted folders by their raw name bytes: a
     // lossy decode turned an ignored `tests-\xff` into a sibling `tests-\u{FFFD}`
-    // and skipped that one instead (TLS-48 review sol r1).
+    // and skipped that one instead (TLS-48 review sol r1). Git echoes each
+    // name as given, `./` and `/` included.
     for name in out.stdout.split(|&b| b == 0).filter(|n| !n.is_empty()) {
+        let name = name.strip_prefix(b"./").unwrap_or(name);
         let name = name.strip_suffix(b"/").unwrap_or(name);
         if let Some(d) = subdirs
             .iter()

@@ -474,6 +474,33 @@ fn an_ignored_non_utf8_folder_is_not_its_lossy_sibling() {
     assert_eq!(names, ["Real Tests"]);
 }
 
+/// TLS-114 (sol r1): a sibling folder named like pathspec magic
+/// (`:(unknown)`) does not stop git's ignore check, so the ignored `Out/`
+/// beside it is still skipped.
+///
+/// DISCRIMINATION (2026-11-25): `git_ignored` without the leading `./` fails
+/// (git rejects the batch, "Out Tests" is found); restored, passes. The
+/// ignored folder is the app itself: a first version put it at `build/Copy`
+/// and stayed green under the break, because `build`'s own batch ignored
+/// `Copy` one level down. Unix only: Windows forbids `:` in a name.
+#[cfg(unix)]
+#[test]
+fn a_folder_named_like_pathspec_magic_does_not_stop_the_ignore_check() {
+    let t = git_repo();
+    let r = t.path();
+    std::fs::write(r.join(".gitignore"), "Out/\n").unwrap();
+    std::fs::create_dir_all(r.join(":(unknown)")).unwrap();
+    app(&r.join("App"), PROD, "Prod", &[]);
+    test_app(
+        &r.join("Out"),
+        "33333333-3333-3333-3333-333333333333",
+        "Out Tests",
+    );
+    let s = discover(&r.join("App"), &ScopeRequest::default());
+    assert!(s.apps.is_empty(), "{:?}", s.apps);
+    assert_eq!(s.ignored, 1, "Out");
+}
+
 /// TLS-57: the scan cache (a resident engine asking again) sees a rewrite
 /// that keeps a test file's length and mtime: its stamp's ctime moved, so
 /// the file is scanned again and the `[Test]` count follows the new text.

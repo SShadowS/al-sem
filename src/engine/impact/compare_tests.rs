@@ -114,6 +114,62 @@ fn base_alone_compares_against_the_merge_base_with_every_layer() {
     assert_eq!(new.hunks[0].changes.len(), 3);
 }
 
+/// TLS-114 (sol r1): under a top level that is not UTF-8 (`repo-\xff`), the
+/// untracked `.al` file is opened at the exact top git printed and read in.
+///
+/// DISCRIMINATION (2026-11-25): `top` read through the lossy `git` (the old
+/// code) fails ("untracked file ... could not be read": `repo-\u{FFFD}`);
+/// restored, passes. Linux only: macOS (APFS) refuses a non-UTF-8 name.
+#[cfg(target_os = "linux")]
+#[test]
+fn an_untracked_file_is_read_under_a_non_utf8_top_level() {
+    use std::os::unix::ffi::OsStrExt;
+    let t = tempfile::tempdir().unwrap();
+    let d = t.path().join(std::ffi::OsStr::from_bytes(b"repo-\xff"));
+    std::fs::create_dir_all(&d).unwrap();
+    sh(&d, &["init", "-q", "-b", "main"]);
+    write(&d, "ws/src/A.Codeunit.al", "codeunit 50100 A\n{\n}\n");
+    sh(&d, &["add", "."]);
+    sh(&d, &["commit", "-q", "-m", "A"]);
+    write(&d, "ws/src/New.Codeunit.al", "codeunit 50104 New\n{\n}\n");
+    let (c, text) = for_base(&d.join("ws"), "HEAD").expect("resolves");
+    assert_eq!(c.untracked, vec!["ws/src/New.Codeunit.al".to_string()]);
+    assert!(text.contains("+codeunit 50104 New"), "{text}");
+}
+
+/// TLS-114 (sol r1 follow-up): an untracked `.al` file whose name git would
+/// quote (`é`) is listed by its name and read in; on Linux one whose name is
+/// not UTF-8 (`\xff`) is read too.
+///
+/// DISCRIMINATION (2026-11-25): the list read without `-z`, split at LF,
+/// fails (`untracked` empty: the quoted `"ws/src/N\303\251.Codeunit.al"` does
+/// not end in `.al`, so the file was silently left out); opening the lossy
+/// name instead of `path_from_git(raw)` fails at the `\xff` file ("could not
+/// be read"); restored, passes.
+#[test]
+fn untracked_files_are_read_by_their_exact_names() {
+    let t = tempfile::tempdir().unwrap();
+    let d = t.path();
+    sh(d, &["init", "-q", "-b", "main"]);
+    write(d, "ws/src/A.Codeunit.al", "codeunit 50100 A\n{\n}\n");
+    sh(d, &["add", "."]);
+    sh(d, &["commit", "-q", "-m", "A"]);
+    write(d, "ws/src/Né.Codeunit.al", "codeunit 50104 Ne\n{\n}\n");
+    let mut want = vec!["ws/src/Né.Codeunit.al".to_string()];
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        let p = d.join(std::ffi::OsStr::from_bytes(b"ws/src/X\xff.Codeunit.al"));
+        std::fs::write(p, "codeunit 50105 Xff\n{\n}\n").unwrap();
+        want.push("ws/src/X\u{FFFD}.Codeunit.al".to_string());
+    }
+    let (c, text) = for_base(&d.join("ws"), "HEAD").expect("resolves");
+    assert_eq!(c.untracked, want);
+    assert!(text.contains("+codeunit 50104 Ne"), "{text}");
+    #[cfg(target_os = "linux")]
+    assert!(text.contains("+codeunit 50105 Xff"), "{text}");
+}
+
 /// A ref that names no commit is refused with its name.
 #[test]
 fn an_unknown_base_is_refused() {
