@@ -4698,6 +4698,16 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
     // Agent-tasks E1: a filtered question answers over the slice's sites,
     // under the unfiltered answer's obligations.
     let filtered = slice.as_ref().map(|s| match &s.between {
+        Some(b) if b.knob_cone_truncated || b.knob_analysis_gaps => {
+            // Test knobs (review r3 item 4): set the obligations, the guards'
+            // own inputs.
+            let mut r = prove_result.clone();
+            r.obligations.cone_truncated |= b.knob_cone_truncated;
+            if b.knob_analysis_gaps {
+                r.obligations.analysis_gaps = r.obligations.analysis_gaps.max(1);
+            }
+            between_result(entry, &r, b)
+        }
         Some(b) => between_result(entry, &prove_result, b),
         None => filtered_result(entry, &prove_result, s),
     });
@@ -4981,7 +4991,7 @@ pub(crate) fn between_result(
         .collect();
     // Review B2: what the cone could not follow at all (a truncated cone,
     // analysis gaps) blocks a `no` as it blocks a filtered one.
-    if oblg.cone_truncated || b.forced_cone_truncated {
+    if oblg.cone_truncated {
         blockers.push(ProveBlocker {
             kind: "cone-truncated",
             detail: "the root's cone was truncated; a commit between A and B may lie beyond it"
@@ -4989,7 +4999,7 @@ pub(crate) fn between_result(
             anchor: None,
         });
     }
-    if oblg.analysis_gaps > 0 || b.forced_analysis_gaps {
+    if oblg.analysis_gaps > 0 {
         blockers.push(ProveBlocker {
             kind: "analysis-gaps",
             detail: format!(

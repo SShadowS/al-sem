@@ -11,6 +11,10 @@ confirmation are folded in (§11). Ready to implement. Task card: `/coord/tasks/
   it. Two findings needed new BC measurements (§2.4, round 2). Both changed the design: a
   `Commit()` inside an isolated subscriber commits the caller's work, and `Page.RunModal` with a
   pending write is an error when no test handler stands in.
+- Revisions 3.2 and 3.3 answer Fable's reviews of the implementation (rounds 2 and 3): the
+  blockers for a loop or recursion above the meet routine, sibling subscribers and other edges at
+  a leave site (§4.1); the `route-search-capped` relation and what a path that ends before B
+  leaves out (§5.3).
 
 ## 1. The question
 
@@ -315,13 +319,31 @@ regions. Every pair is checked, up to the route cap. A cap that fires leaves the
 enumeration completed.
 
 **A loop above the meet routine** (revision 3.2, Fable review r2): when a routine on the shared
-prefix can call toward M again (the call site toward M reaches itself in that routine's graph, or
-the prefix is recursive), M runs again and the next B after A may be in a later run of M. That is
-not followed yet: the answer carries the blocker `loop-above-meet` and is `unknown`, never `no`
-(principle 1: a false `no` is the one answer the question cannot give). Judging each shallower
-level as a meet routine with `a = b =` that call site is the full fix (leftovers card). Likewise,
-when a route leaves a publisher by its event, the event's other subscribers run in no defined
-order around the route's: the blocker `sibling-subscribers`.
+prefix can call toward M again (the call site toward M reaches itself in that routine's graph),
+M runs again and the next B after A may be in a later run of M. That is not followed yet: the
+answer carries the blocker `loop-above-meet` and is `unknown`, never `no` (principle 1: a false
+`no` is the one answer the question cannot give). A prefix routine with no model row is not known
+not to loop, so it blocks the same way. Judging each shallower level as a meet routine with
+`a = b =` that call site is the full fix (leftovers card). Likewise, when a route leaves a
+publisher by its event, the event's other subscribers run in no defined order around the route's:
+the blocker `sibling-subscribers`.
+
+**Recursion at or above the meet routine** (revision 3.3, Fable review r3): when any routine at
+route positions 0 to k (the shared prefix and M itself) can reach itself over the edge graph
+(every edge kind, guards ignored), M may run again after A, and its B may then be the next B
+(shape S41: `Outer: B; Inner()`, `Inner: A; if C then begin Commit; Outer(false) end`). No route
+shows this, because the route search never repeats a state. The answer carries the blocker
+`recursion-above-meet` and is `unknown`.
+
+**Other edges at a leave site** (revision 3.3, Fable review r3): a record operation or object
+run that a route leaves by can have several edges at the same site: an implicit trigger, a table
+event's subscribers, an object's several triggers. They all run in one execution of that
+statement, before or after the route's target, and no part walks them (A's tail and M's middle
+start after the leave node; `commitsInsideA` is A's own cone). At every guarded leave site of
+either route from M (index k) down, another edge of those kinds at the same site, with a
+different target, blocks: `site-other-edges` (shape S42: A in a table's `OnInsert`, an
+`OnAfterInsertEvent` subscriber commits, root `Rec.Insert(true); B`). Interface implementers and
+other alternatives (one of them runs instead of the route's) do not count.
 
 ### 4.2 Order inside one routine
 
@@ -362,11 +384,12 @@ order around the route's: the blocker `sibling-subscribers`.
   - **Across routes:** `Send; Helper(); Commit; Log()` where `Helper` may reach B: `Helper`'s B
     is not sure to run, so the path is not cut there, and the commit before `Log`'s B makes the
     answer `yes`. That is the sound reading.
-  - **Recursion:** the route search's states follow recursion only while known values change
-    (`literal_routes`), and the cut rule applies in all three region parts, inside recursive
-    calls too. Revision 3 made no claim that needs recursion to be decided (N5: its S5e shape was
-    `yes` at N = 0 already, so it is dropped); recursion is covered by the general rule and by the
-    route enumeration's existing tests.
+  - **Recursion:** the route search never repeats a state, so a route never shows a routine
+    running again after A. A recursive call inside a region part is a region statement like any
+    other, and its cone holds the routine's commits. Recursion that re-enters M or a routine
+    above it is not followed: it blocks with `recursion-above-meet` (§4.1, revision 3.3).
+    Revision 3's claim that "recursion is covered by the general rule and by the route
+    enumeration's existing tests" was wrong for that case (Fable review r3, shape S41).
   - The "must run" test is a new helper beside `control_flow`: it treats `break`, `continue`,
     `exit`, an error and a maybe-zero loop as ways B can be skipped. **A B inside a trap scope
     that the continuation is outside of** (`if TryLog() then; Commit`, B in TryLog) is never a
@@ -478,13 +501,25 @@ every obligation is clear. A `no` carries:
 - `relation: "b-never-after-a"` when B never runs after A at all (S9);
   `"not-in-one-build"` when A and B sit in alternative declarations of one routine (two rows of
   one routine under `#if`, engine limits B2) and every route pair needs both: they never run in
-  one build; `"a-dead-under-literals"` / `"b-dead-under-literals"` (§3).
+  one build; `"a-dead-under-literals"` / `"b-dead-under-literals"` (§3). When no route was found
+  but the route search stopped at its budget, the relation is `"route-search-capped"` and the
+  answer is `unknown` (blocker `route-cap`): the engine does not know the site is dead.
 - `commitsWithoutB`: class-1 commits after A on paths that end before B, with how they end:
   `exit`, an error, a **return** (the routine runs off its end, so B, deeper or later in a caller,
   does not run on that path), or a `break` that leaves a loop when B is only inside that loop
   (not after it; §4.2, N4). A commit then an error
   that never reaches B is the same risk as S7. These rows appear with every verdict.
 - `errorsBetween` and `ownTransactionCommits`, as always.
+
+**What a path that ends before B leaves out** (revision 3.3, Fable review r3, for cost): a
+statement on such a path is read for its own records only; its callees are not walked. Such a
+statement never decides the verdict or a blocker. But the output lists less:
+- `commitsWithoutB` lists only commits written in the statement itself, not a commit in a callee
+  on such a path;
+- an error raised inside a callee on such a path (for example a cleanup routine called in an arm
+  that then exits) is in neither `errorsBetween` nor any commit's `errorsAfterCommit`.
+
+Walking those callees again is on the leftovers card (item 9), with the cost it adds.
 
 ### 5.4 Commits during A and during B
 

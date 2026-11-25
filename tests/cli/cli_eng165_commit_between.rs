@@ -743,6 +743,34 @@ const REVIEW: &str = r#"codeunit 50640 "RV"
         L.Insert(); // S40B
     end;
 
+    procedure S41(C: Boolean)
+    begin
+        Outer41(C);
+    end;
+
+    local procedure Outer41(C: Boolean)
+    begin
+        L.Insert(); // S41B
+        Inner41(C);
+    end;
+
+    local procedure Inner41(C: Boolean)
+    begin
+        Transmit(); // S41A
+        if C then begin
+            Commit();
+            Outer41(false);
+        end;
+    end;
+
+    procedure S42()
+    var
+        D: Record "RV Doc 42";
+    begin
+        D.Insert(true);
+        L.Insert(); // S42B
+    end;
+
     procedure S33()
     begin
         Transmit(); // S33A
@@ -882,6 +910,25 @@ codeunit 50644 "RV Subscribers 35"
         L: Record "EB Log";
     begin
         L.Insert(); // S38B
+    end;
+
+    [EventSubscriber(ObjectType::Table, Database::"RV Doc 42", 'OnAfterInsertEvent', '', false, false)]
+    local procedure AfterInsert42(var Rec: Record "RV Doc 42"; RunTrigger: Boolean)
+    begin
+        Commit();
+    end;
+}
+
+table 50645 "RV Doc 42"
+{
+    fields { field(1; "No."; Integer) { } }
+    keys { key(PK; "No.") { Clustered = true; } }
+
+    trigger OnInsert()
+    var
+        R: Codeunit "RV";
+    begin
+        R.Transmit(); // S42A
     end;
 }
 
@@ -1618,6 +1665,24 @@ fn s40_order_nearest_summary_and_statements_are_pinned() {
         "{}",
         a.raw
     );
+}
+
+#[test]
+fn s41_recursion_into_the_meet_routine_blocks() {
+    // Review r3 item 1: A, Commit, then the meet routine again, whose B
+    // runs next. No route shows the recursion: unknown, never a false no.
+    let a = ask(ws(), &rv("S41"), &at("S41A"), &at("S41B"));
+    assert_eq!(a.answer, "unknown", "{}", a.raw);
+    assert!(a.raw.contains("recursion-above-meet"), "{}", a.raw);
+}
+
+#[test]
+fn s42_a_table_event_at_the_leave_site_blocks() {
+    // Review r3 item 2: A is in OnInsert; the OnAfterInsertEvent subscriber
+    // commits after it returns, in the same Insert, before B.
+    let a = ask(ws(), &rv("S42"), &at("S42A"), &at("S42B"));
+    assert_eq!(a.answer, "unknown", "{}", a.raw);
+    assert!(a.raw.contains("site-other-edges"), "{}", a.raw);
 }
 
 #[test]

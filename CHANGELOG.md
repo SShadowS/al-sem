@@ -1287,7 +1287,7 @@ by Fable).
   per class split workspace/dependency, commits grouped by the statement between A and B,
   error counts by kind with the first workspace errors, conditional facts once; `--detail`
   expands every group. JSON lists each error once (`errors`), lists hold indices, and each
-  commit carries `errorsAfterCommit {count, workspace, dependency, nearest, ids, sameCone}`.
+  commit carries `errorsAfterCommit {count, workspace, dependency, nearest, sameCone}`.
 - Runtime facts recorded in `docs/engine-limits.md` §5 (BC 28 Linux, Windows confirmation
   pending).
 - **Review round 2 (Fable) fixes:** `[CommitBehavior]` is carried down every path of a region
@@ -1297,6 +1297,18 @@ by Fable).
   `case` label) is read against the root's unresolved cone; a guarded search stopped at its cap
   is `unknown` (`route-graph-stopped`), not a usage error. JSON: `errorsAfterCommit` gives counts
   and the nearest error, not every id.
+- **Review round 3 (Fable) fixes:** recursion through M or a routine above it blocks
+  (`recursion-above-meet`; no route shows it, since the route search never repeats a state); a
+  record operation or object run a route leaves by blocks when it has other triggers or table
+  event subscribers at the same site (`site-other-edges`); a prefix routine with no model row
+  blocks `loop-above-meet`; a route search that found nothing because it stopped at its budget
+  says `relation: route-search-capped`, not "dead under literals"; `commitsInsideB` starts under
+  B's route's `[CommitBehavior]`. CDO count of `no` answers these blockers turn into `unknown`:
+  COUNT-PENDING.
+- **What a path that ends before B leaves out (for cost):** a statement on such a path is read
+  for its own records only. `commitsWithoutB` then misses a commit in a callee on such a path,
+  and an error raised inside such a callee is in neither `errorsBetween` nor any commit's
+  `errorsAfterCommit`. The verdict and the blockers do not change (design §5.3).
 - **Measured on BC 28 on Linux (Windows confirmation pending)**, probe app and results in
   `/work/.al-sem/engine-notes/eng165/bcprobe/`: `Page.RunModal` with a write pending raises an
   error (without a test handler; listed as a possible error row, never a commit);

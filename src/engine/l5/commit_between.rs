@@ -136,28 +136,29 @@ pub struct BetweenSites {
     pub after: SitePoint,
     pub before: SitePoint,
     /// Test knobs (default: off); the CLI never sets them.
-    pub knobs: Knobs,
+    pub(crate) knobs: Knobs,
 }
 
 /// Knobs a test sets to reach a guard whose real precondition needs a huge
 /// graph (a capped walk or search, a truncated cone) or a routine without a
-/// tree: each states the precondition by assignment, so the guard's own
-/// branch is what the test pins. Production leaves every one off.
+/// tree: each sets the guard's INPUT by assignment (review r3 item 4), so the
+/// guard's production condition is what the test pins. Production leaves
+/// every one off; nothing outside the crate can set them.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Knobs {
+pub(crate) struct Knobs {
     /// The cone walk's state cap (default [`CONE_STATE_CAP`]).
-    pub cone_cap: Option<usize>,
+    pub(crate) cone_cap: Option<usize>,
     /// The route enumeration's edge budget per site (default
     /// `ROUTE_EDGE_BUDGET`).
-    pub route_budget: Option<usize>,
-    /// The root's guarded search stopped at its cap.
-    pub search_stopped: bool,
-    /// The root's cone was truncated (prove's obligations).
-    pub cone_truncated: bool,
-    /// The root's cone has analysis gaps (prove's obligations).
-    pub analysis_gaps: bool,
+    pub(crate) route_budget: Option<usize>,
+    /// The root's guarded search stopped at its cap (drops the live tree).
+    pub(crate) search_stopped: bool,
+    /// The root's cone was truncated (sets prove's obligation).
+    pub(crate) cone_truncated: bool,
+    /// The root's cone has analysis gaps (sets prove's obligation).
+    pub(crate) analysis_gaps: bool,
     /// A routine (by name) whose control-flow tree is missing.
-    pub no_tree: Option<String>,
+    pub(crate) no_tree: Option<String>,
 }
 
 impl BetweenSites {
@@ -270,7 +271,8 @@ pub struct BetweenOut {
     /// Errors that may run after A returns and before B (indices).
     pub errors_between: Vec<usize>,
     /// `b-never-after-a`, `not-in-one-build`, `a-dead-under-literals`,
-    /// `b-dead-under-literals` (for a `no`).
+    /// `b-dead-under-literals` (for a `no`); `route-search-capped` when no
+    /// route was found but the search stopped at its budget (an `unknown`).
     pub relation: Option<&'static str>,
     /// What could not be followed: (kind, detail).
     pub blockers: Vec<(&'static str, String)>,
@@ -279,9 +281,11 @@ pub struct BetweenOut {
     /// prove against the root's unresolved cone (design §5.5).
     pub region_sites: BTreeSet<String>,
     pub region_routines: BTreeSet<String>,
-    /// Test knobs: the cone's truncation and analysis gaps, stated.
-    pub forced_cone_truncated: bool,
-    pub forced_analysis_gaps: bool,
+    /// Test knobs that set prove's obligations (the inputs of the
+    /// `cone-truncated` / `analysis-gaps` guards) before the verdict reads
+    /// them; always false in production.
+    pub(crate) knob_cone_truncated: bool,
+    pub(crate) knob_analysis_gaps: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -759,6 +763,9 @@ struct Walk<'a, 'w> {
     cones: HashMap<ConeKey<'a>, Rc<Cone<'a>>>,
     /// Region cones whose side effects (reached routines, blockers) are in.
     region_folded: HashSet<ConeKey<'a>>,
+    /// Whether a routine can reach itself over the edge graph (review r3
+    /// item 1), memoized.
+    self_reach: HashMap<&'a str, bool>,
     knobs: Knobs,
     commit_scopes: Option<crate::engine::l5::commit_scope::CbGraph<'a>>,
     group_paths: GroupPaths<'a>,
@@ -1394,6 +1401,7 @@ pub(crate) fn compute<'a>(
         cfgs: HashMap::new(),
         cones: HashMap::new(),
         region_folded: HashSet::new(),
+        self_reach: HashMap::new(),
         knobs: sites.knobs.clone(),
         commit_scopes: crate::engine::l5::commit_scope::CbGraph::of_tree(tree),
         group_paths: GroupPaths::new(&tree.typed_edges, model),
@@ -1412,9 +1420,12 @@ pub(crate) fn compute<'a>(
     w.out.before = Some(desc(&w, &b));
     // Review r2 item 8: a search that stopped at its cap knows nothing about
     // reach: unknown with the reason, not a usage error with a wrong one.
-    w.out.forced_cone_truncated = sites.knobs.cone_truncated;
-    w.out.forced_analysis_gaps = sites.knobs.analysis_gaps;
-    if w.live.is_none() || sites.knobs.search_stopped {
+    w.out.knob_cone_truncated = sites.knobs.cone_truncated;
+    w.out.knob_analysis_gaps = sites.knobs.analysis_gaps;
+    if sites.knobs.search_stopped {
+        w.live = None;
+    }
+    if w.live.is_none() {
         w.out.blockers.push((
             "route-graph-stopped",
             "the root's guarded search stopped at its state cap; whether the root reaches A and B \
@@ -1476,12 +1487,21 @@ pub(crate) fn compute<'a>(
             ),
         ));
     }
+    // Review r3 item 3: no route found by a capped search is not "dead".
     if ra_all.is_empty() {
-        w.out.relation = Some("a-dead-under-literals");
+        w.out.relation = Some(if ca {
+            "route-search-capped"
+        } else {
+            "a-dead-under-literals"
+        });
         return w.out;
     }
     if rb_all.is_empty() {
-        w.out.relation = Some("b-dead-under-literals");
+        w.out.relation = Some(if cb {
+            "route-search-capped"
+        } else {
+            "b-dead-under-literals"
+        });
         return w.out;
     }
     // One route to A and to B (spec §5.1), the first pair's.
@@ -1567,6 +1587,11 @@ fn pair<'a>(
         .iter()
         .any(|s| trap_of(w, s).is_some_and(TrapKind::definite));
     loop_above_meet(w, ra, k);
+    // Review r3 item 2: other edges at the sites the routes leave by, from M
+    // (index k) down.
+    for s in ra[k..].iter().chain(&rb[k..]) {
+        site_co_edges(w, s);
+    }
     let mut parts: Vec<Part<'a>> = Vec::new();
     // A's tail, deepest first.
     let mut a_route_trap_at: Option<usize> = None;
@@ -1646,7 +1671,7 @@ fn pair<'a>(
             for p in parts.iter_mut() {
                 p.reaches_b = false;
             }
-            judge(w, a, b, &parts, swallowed, ra, k);
+            judge(w, a, b, &parts, swallowed, ra, rb, k);
             return PairEnd::Never;
         }
         let bk = cfg.backward(&bn, &stop);
@@ -1761,7 +1786,7 @@ fn pair<'a>(
             b_run,
         });
     }
-    judge(w, a, b, &parts, swallowed, ra, k);
+    judge(w, a, b, &parts, swallowed, ra, rb, k);
     PairEnd::Judged
 }
 
@@ -1791,27 +1816,40 @@ fn sibling_subscribers<'a>(w: &mut Walk<'a, '_>, publisher: &'a str, s: &Step<'a
 }
 
 /// Review r2 item 3: a loop above the meet routine (a call site toward M on
-/// the shared prefix that can reach itself, or a recursive prefix) runs M
-/// again, so the next B after A may be in a later run of M. That is not
-/// followed: a blocker, so a `no` is never given on such a route.
+/// the shared prefix that can reach itself) runs M again, so the next B after
+/// A may be in a later run of M. Review r3 item 1: so does recursion through
+/// any routine of the prefix or M itself, which no route shows (the route
+/// search never repeats a state). Neither is followed: a blocker, so a `no`
+/// is never given on such a route.
 fn loop_above_meet<'a>(w: &mut Walk<'a, '_>, ra: &[Step<'a>], k: usize) {
     let root = w.root;
-    let mut seen: HashSet<&'a str> = HashSet::new();
-    for j in 0..k {
+    for j in 0..=k {
         let r = routine_at(root, ra, j);
-        if !seen.insert(r) {
+        if reaches_itself(w, r) {
             let d = w.display(r);
             w.out.blockers.push((
-                "loop-above-meet",
-                format!("the route above the meet routine is recursive through {d}"),
+                "recursion-above-meet",
+                format!(
+                    "{d}, on the route at or above the meet routine, can call itself again \
+                     (recursion); the next B after A may be in a later run, which is not followed"
+                ),
             ));
             return;
         }
+    }
+    for j in 0..k {
+        let r = routine_at(root, ra, j);
         let Some(EdgeSite::Guarded(x)) = ra[j].site else {
             continue;
         };
+        // Review r3 item 7: a routine with no row is not known not to loop.
         let Some(row) = w.reach.row_at(r, x) else {
-            continue;
+            let d = w.display(r);
+            w.out.blockers.push((
+                "loop-above-meet",
+                format!("{d}, above the meet routine, has no model row; a loop there is not read"),
+            ));
+            return;
         };
         let looped = if w.ensure_cfg(row) {
             let cfg = &w.cfgs[&row_key(row)];
@@ -1835,6 +1873,66 @@ fn loop_above_meet<'a>(w: &mut Walk<'a, '_>, ra: &[Step<'a>], k: usize) {
             ));
             return;
         }
+    }
+}
+
+/// Whether `r` can reach itself over the edge graph (every edge kind, guards
+/// ignored: wider than the root's live routes, so only ever more `unknown`).
+fn reaches_itself<'a>(w: &mut Walk<'a, '_>, r: &'a str) -> bool {
+    if let Some(&v) = w.self_reach.get(r) {
+        return v;
+    }
+    let mut seen: HashSet<&'a str> = HashSet::new();
+    let mut stack = vec![r];
+    let mut found = false;
+    'dfs: while let Some(x) = stack.pop() {
+        for (to, ..) in w.reach.out_edges(x) {
+            if to == r {
+                found = true;
+                break 'dfs;
+            }
+            if seen.insert(to) {
+                stack.push(to);
+            }
+        }
+    }
+    w.self_reach.insert(r, found);
+    found
+}
+
+/// Review r3 item 2: route step `s` leaves its routine at a record operation
+/// or object run that has other edges at the same site (an implicit trigger,
+/// a table event's subscribers, an object's several triggers). They run in
+/// the same execution of the statement, before or after the route's target,
+/// and no part walks them: a blocker. Interface implementers and other
+/// alternatives (one of them runs, instead of the route's) are not counted.
+fn site_co_edges<'a>(w: &mut Walk<'a, '_>, s: &Step<'a>) {
+    let Some(EdgeSite::Guarded(x)) = s.site else {
+        return;
+    };
+    let others = w
+        .reach
+        .out_edges(s.from)
+        .into_iter()
+        .filter(|(to, site, kind, _)| {
+            *site == Some(EdgeSite::Guarded(x))
+                && *to != s.to
+                && matches!(
+                    *kind,
+                    "implicit-trigger" | "table-event" | "object-run-resolved"
+                )
+        })
+        .count();
+    if others > 0 {
+        let d = w.display(s.from);
+        w.out.blockers.push((
+            "site-other-edges",
+            format!(
+                "the statement where the route leaves {d} also runs {others} other trigger(s) or \
+                 subscriber(s) around the route's target; what they do between A and B is not \
+                 followed"
+            ),
+        ));
     }
 }
 
@@ -2005,6 +2103,7 @@ struct NodeCone<'a> {
 }
 
 /// Fold one pair's parts into the answer.
+#[allow(clippy::too_many_arguments)]
 fn judge<'a>(
     w: &mut Walk<'a, '_>,
     a: &Resolved<'a>,
@@ -2012,6 +2111,7 @@ fn judge<'a>(
     parts: &[Part<'a>],
     swallowed: bool,
     ra: &[Step<'a>],
+    rb: &[Step<'a>],
     k: usize,
 ) {
     use crate::engine::l5::commit_scope::{E, N};
@@ -2294,11 +2394,8 @@ fn judge<'a>(
     for (s, inside) in [(a, true), (b, false)] {
         let owner = s.owner;
         let ids = s.ids.clone();
-        let b0 = if inside {
-            w.route_start(ra)
-        } else {
-            crate::engine::l5::commit_scope::N
-        };
+        // Review r3 item 7: each site's cone starts under its own route.
+        let b0 = w.route_start(if inside { ra } else { rb });
         let cone = w.cone(owner, &ids, false, b0, false);
         let Some(row_s) = w.reach.row_at(owner, ids.first().copied().unwrap_or("")) else {
             continue;
