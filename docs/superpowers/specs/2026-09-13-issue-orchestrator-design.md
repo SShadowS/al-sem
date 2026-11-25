@@ -292,13 +292,16 @@ Labels are a mirror for humans, not a lock. The lock is local:
   - **Commands that ACT on liveness decide under mutex `registry`** (sol r4).
     Every lease writer holds it too (`beat` included), so nothing changes a
     lease between their check and their action. These commands are:
-    - `clear-halt` and `resolve incident`: the live-run guard, held through
-      the HALT unlink and the incident write;
+    - `clear-halt` and `resolve incident`: they act inside
+      `lock.require_operator` (a context manager), whose live-run guard keeps
+      `registry` through the HALT unlink and the incident write;
     - verification `cleanup`: it re-checks the lane under it and, still under
       it, moves the tree off its fixed path (one rename to
       `<name>.removing-<id>`), so no new lane owner can come in between; the
       slow delete and `git worktree prune` run after `registry` is released,
-      so no beat waits on them (sol r5);
+      so no beat waits on them (sol r5). A tombstone a cleanup left (it died
+      between rename and delete) is swept by the next verification cleanup,
+      or removed with `cleanup --worktree <tombstone>`;
     - `recover`'s steal and `take_lane`.
 
     Reporting (`status`, `preflight`, `merge-gate`) reads unlocked. A periodic

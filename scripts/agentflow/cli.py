@@ -805,6 +805,8 @@ def cmd_charge(args, ctx, gh, git):
     except budget.BudgetExceeded as e:
         return _emit({"exhausted": e.key}, 1)
     except budget.DeadlineExceeded:
+        # The cap counts awake time since TLS-122; the value keeps its old name
+        # on purpose, because the conductor branches on it (see WALL_CLOCK_SECONDS).
         return _emit({"exhausted": "wall-clock"}, 1)
 
 
@@ -1860,8 +1862,8 @@ def cmd_cleanup(args, ctx, gh, git):
     # this checkout, and its post-merge may own that very tree. Only
     # staleness opens the carve-out, and only for this one route, which
     # cannot touch a branch or a merge SHA. This mirrors `lock.require_operator`
-    # (lock.py:144-149) and `cmd_preflight`, both of which fail on a LIVE lock
-    # and deliberately let a stale one through.
+    # and `cmd_preflight`, both of which fail on a LIVE lock and deliberately
+    # let a stale one through.
     #
     # With several leases, the fence is per tree. An ISSUE worktree
     # (`al-sem-issue-<N>-a<k>`) is fenced by issue N's lease only: a sibling
@@ -1934,6 +1936,11 @@ def cmd_cleanup(args, ctx, gh, git):
                 raise Fail({"error": f"could not move {args.worktree} aside: {e}"})
         if tomb is not None and not worktrees.destroy(git, tomb):
             raise Fail({"error": f"could not remove {tomb} (moved aside from {args.worktree})"})
+        # Tombstones an earlier cleanup left (it died between its rename and its
+        # delete): detached by construction, so nothing uses them. Best-effort,
+        # like every teardown.
+        for old in target.parent.glob(f"{target.name}.removing-*"):
+            worktrees.destroy(git, old)
         return _emit({"removed": args.worktree})
     # `is None` -- ABSENT, not empty. `--branch ""` was given and is wrong,
     # and `_validate_branch_name` below is the guard that says so ("not a

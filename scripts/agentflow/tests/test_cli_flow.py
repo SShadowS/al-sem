@@ -3558,8 +3558,8 @@ def test_a_beat_in_progress_stops_clear_halt_and_cleanup(capsys, repo_pair, monk
     nothing (here their wait times out). Cleanup's early, unlocked check does
     pass, which is why its delete decides again under the lock (sol r4).
     Red proofs (sol r4, re-run for sol r6):
-    - `clear_halt`'s live-run check moved out of its `with mutex` failed here
-      (HALT cleared).
+    - `clear_halt`'s checks and unlink moved out of `with require_operator`
+      (only `require_human` left in front) failed here (HALT cleared).
     - The locked recheck removed from `cmd_cleanup` (only the unlocked early
       check left) failed here (the live run's worktree was deleted)."""
     import threading
@@ -3627,6 +3627,23 @@ def test_cleanup_deletes_the_worktree_outside_registry(capsys, repo_pair, monkey
     assert code == 0 and out["removed"] == str(kept), out
     assert free_during_delete == [True]
     assert not kept.exists() and not list(clone.parent.glob(kept.name + ".removing-*"))
+
+
+def test_cleanup_sweeps_a_tombstone_an_earlier_cleanup_left(capsys, repo_pair):
+    """A cleanup that died between its rename and its delete leaves
+    `<name>.removing-<id>` behind. The next verification cleanup removes it
+    too (Fable final review, L2), and the tree it was asked for.
+    Red proof (Fable L2): the tombstone sweep removed from `cmd_cleanup`
+    failed here (the old tombstone was still there)."""
+    _, clone = repo_pair
+    g = Git(clone)
+    kept = worktrees.create(g, worktrees.verify_path(clone), g.rev("master"))
+    left = clone.parent / f"{kept.name}.removing-deadbeef"
+    left.mkdir()
+    (left / "evidence.txt").write_text("from a cleanup that died", encoding="utf-8")
+    code, out = run(capsys, clone, "cleanup", "--worktree", str(kept), gh_run=FakeRunner(), run_id=None)
+    assert code == 0 and out["removed"] == str(kept), out
+    assert not kept.exists() and not left.exists()
 
 
 def test_a_queued_gate_survives_a_beat_that_times_out(ctx, monkeypatch):

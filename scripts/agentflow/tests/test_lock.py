@@ -570,20 +570,39 @@ def test_a_release_during_a_beat_is_not_undone(ctx, monkeypatch):
     import threading
     lock.acquire(ctx, 8, "s", 1)
     paused, go = threading.Event(), threading.Event()
-    real_write = lock._write
+    # The release either waits on `registry` (`waiting`) or has finished
+    # (`done`); the beat goes on only after one of the two, so the red
+    # direction cannot be missed on a slow host (no sleep).
+    waiting, done = threading.Event(), threading.Event()
+    real_write, real_mutex = lock._write, lock.mutex
 
     def pause(cx, path, lk):
         paused.set()                                 # read, under `registry`, not yet written
         go.wait(20)
         real_write(cx, path, lk)
 
+    @contextmanager
+    def watched(c, name, **kw):
+        if threading.current_thread().name == "release":
+            waiting.set()                            # about to wait for the beat's hold
+        with real_mutex(c, name, **kw):
+            yield
+
+    def release():
+        try:
+            lock.release(ctx)
+        finally:
+            done.set()
+
     monkeypatch.setattr(lock, "_write", pause)
+    monkeypatch.setattr(lock, "mutex", watched)
     beat = threading.Thread(target=lock.beat, args=(ctx,))
     beat.start()
     assert paused.wait(20)
-    rel = threading.Thread(target=lock.release, args=(ctx,))
+    rel = threading.Thread(target=release, name="release")
     rel.start()
-    time.sleep(0.3)                                  # an unlocked release would be done by now
+    while not (waiting.is_set() or done.is_set()):
+        waiting.wait(0.01)
     go.set()
     beat.join(20)
     rel.join(20)
@@ -594,8 +613,9 @@ def test_the_claim_writes_heartbeat_and_stamp_in_one_lease_write(ctx):
     """sol r6: every acknowledged lease carries its awake stamp, because the
     stamp is IN the lease file. A run that suspends for 2 h right after its
     claim (no beat yet) keeps its lease: `recover` refuses.
-    Red proof (sol r6): `_lease_dict` leaving `beat_awake` out of the lease
-    file failed here (the 2 h wall age read stale: the live lease was taken)."""
+    Red proof (sol r6): the claim's create-exclusive write leaving
+    `beat_awake` out of the lease file failed here (the 2 h wall age read
+    stale: the live lease was taken)."""
     c = Clocks()
     lock.acquire(c.ctx(ctx.paths, "run-a"), 8, "s", 1)
     assert json.loads(ctx.paths.lease(8).read_text(encoding="utf-8"))["beat_awake"] == ["boot-1", 500.0]
@@ -653,6 +673,42 @@ def test_a_backward_wall_step_changes_neither_verdict(ctx):
     c.run(35 * 60)
     c.wall -= 10 * 60
     assert lock.steal_for_recovery(rec, lock.for_issue(rec, 8)).recovering_by == "run-rec"
+
+
+def test_clear_halt_sees_a_live_run_across_a_suspend(ctx):
+    """The operator guard (`require_operator`: `clear-halt`, `resolve
+    incident`) judges leases on the awake clock: a run beaten 1 awake minute
+    before a 2 h suspend is live, so HALT stays (Fable final review, M1). On
+    the wall clock alone it would read stale and HALT would be cleared under
+    a live run.
+    Red proof (Fable M1): `None` instead of `ctx.awake_now()` in
+    `_refuse_live_held` failed here (HALT cleared)."""
+    c = Clocks()
+    lock.acquire(c.ctx(ctx.paths, "run-a"), 8, "s", 1)
+    lock.set_halt(ctx, "operator")
+    c.run(60)
+    c.suspend(2 * 3600)
+    op = c.ctx(ctx.paths, None)
+    with pytest.raises(lock.OperatorOnly):
+        lock.clear_halt(op, "operator", "me")
+    assert lock.halted(ctx) == "operator"
+
+
+def test_the_merge_lane_reads_busy_across_a_suspend(ctx):
+    """The lane state (verification `cleanup`, `take_lane`, `merge-gate`)
+    judges the holder's lease on the awake clock: after a 2 h suspend the lane
+    of a run beaten 1 awake minute earlier is `busy`, not `orphaned` (Fable
+    final review, M1), so `cleanup` does not move its tree aside.
+    Red proof (Fable M1): `None` instead of `ctx.awake_now()` in
+    `_lane_state_held` failed here (`orphaned`)."""
+    c = Clocks()
+    holder = c.ctx(ctx.paths, "run-a")
+    lock.acquire(holder, 8, "s", 1)
+    lock.take_lane(holder, 8, pr=5)
+    c.run(60)
+    c.suspend(2 * 3600)
+    assert lock.lane_state(c.ctx(ctx.paths, "run-x"))[1] == "busy"
+    assert lock.lane_state_locked(c.ctx(ctx.paths, "run-x"))[1] == "busy"
 
 
 def test_a_backward_wall_step_does_not_extend_the_run(ctx):
@@ -809,13 +865,16 @@ def test_require_operator_allows_a_stale_lock_but_not_a_live_one(ctx):
     lock.acquire(ctx, 8, "s", 1)                      # heartbeat at 1_000_000.0
     live = Ctx(paths=ctx.paths, run_id=None, now=lambda: 1_000_000.0)
     with pytest.raises(lock.OperatorOnly):
-        lock.require_operator(live, "clear HALT")
+        with lock.require_operator(live, "clear HALT"):
+            pass
     stale = Ctx(paths=ctx.paths, run_id=None, now=lambda: 1_000_000.0 + lock.STALE_SECONDS + 1)
-    lock.require_operator(stale, "clear HALT")        # allowed, on purpose
+    with lock.require_operator(stale, "clear HALT"):  # allowed, on purpose
+        pass
     # ...and a run id is refused regardless of the lock's age.
     with pytest.raises(lock.OperatorOnly):
-        lock.require_operator(Ctx(paths=ctx.paths, run_id="run-test",
-                                  now=stale.now), "clear HALT")
+        with lock.require_operator(Ctx(paths=ctx.paths, run_id="run-test", now=stale.now),
+                                   "clear HALT"):
+            pass
 
 
 def test_dry_run_never_touches_lock_or_halt(dry_ctx):

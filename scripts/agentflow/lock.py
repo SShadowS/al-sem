@@ -22,8 +22,10 @@ from __future__ import annotations
 
 import json
 import shutil
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, fields
 from pathlib import Path
+from typing import Iterator
 
 from . import budget
 from .state import (Ctx, MutexTimeout, append_audit, awake_elapsed, config, mutex, read_json,
@@ -100,11 +102,6 @@ class Lock:
 _LOCK_FIELDS = {f.name for f in fields(Lock)}
 
 
-def _lease_dict(lk: Lock) -> dict:
-    """The lease file's content: every field, the awake stamp included."""
-    return asdict(lk)
-
-
 def _stamp(ctx: Ctx, lk: Lock, now: float) -> None:
     """Set the heartbeat on both clocks; the next lease write stores both."""
     aw = ctx.awake_now()
@@ -165,7 +162,7 @@ def _write(ctx: Ctx, path: Path, lk: Lock) -> None:
     # supervisor beats) must never see half a lease. Only `acquire`'s FIRST
     # write is not this one, because it must be create-exclusive.
     ctx.write_guard("write lock")
-    write_json(ctx, path, _lease_dict(lk))
+    write_json(ctx, path, asdict(lk))
 
 
 def disk_free_gb(ctx: Ctx) -> int:
@@ -275,7 +272,7 @@ def _acquire_held(ctx: Ctx, issue: int, session: str, attempt: int,
     for retried in (False, True):
         try:
             with open(path, "x", encoding="utf-8") as f:
-                f.write(json.dumps(_lease_dict(lk), indent=2))
+                f.write(json.dumps(asdict(lk), indent=2))
             if loop_after is not None:
                 # Charged only now that the lease exists. A failed charge takes
                 # the lease back: no lease without its unit, and no unit spent
@@ -504,8 +501,13 @@ def require_human(ctx: Ctx, what: str) -> None:
             f"Run it with no --run-id and with AGENTFLOW_RUN_ID unset.")
 
 
-def require_operator(ctx: Ctx, what: str) -> None:
-    """Refuse `what` unless a HUMAN is asking, on a checkout no live run owns.
+@contextmanager
+def require_operator(ctx: Ctx, what: str) -> Iterator[None]:
+    """Refuse `what` unless a HUMAN is asking, on a checkout no live run owns;
+    a context manager: `with require_operator(ctx, what): <act>`. The body runs
+    under mutex `registry`, so no run can claim, beat or be recovered between
+    the live-run check and the action (TLS-122 sol r4/r5). `clear_halt` and
+    `incidents.resolve` act inside it.
 
     Two refusals, and the ASYMMETRY between them is deliberate.
 
@@ -529,14 +531,12 @@ def require_operator(ctx: Ctx, what: str) -> None:
     """
     require_human(ctx, what)
     with mutex(ctx, "registry"):
-        refuse_live_held(ctx, what)
+        _refuse_live_held(ctx, what)
+        yield
 
 
-def refuse_live_held(ctx: Ctx, what: str) -> None:
-    """`require_operator`'s live-run half. ASSUMES mutex `registry` is held
-    (sol r4/r5): a caller that ACTS on the answer keeps `registry` until it
-    has acted (`clear_halt`, `incidents.resolve`), so no claim, beat or steal
-    can land between the check and the action."""
+def _refuse_live_held(ctx: Ctx, what: str) -> None:
+    """`require_operator`'s live-run half. ASSUMES mutex `registry` is held."""
     now, aw = ctx.now(), ctx.awake_now()
     lk = next((x for x in all_locks(ctx) if not is_stale(x, now, aw)), None)
     if lk is not None:
@@ -593,13 +593,12 @@ def clear_halt(ctx: Ctx, expected: str, by: str) -> str:
        is still on the record. A clear with no record is the one outcome that
        must be impossible; this append is NOT best-effort.
 
-    Steps 2-5 run under mutex `registry` (sol r4): no run can claim, beat or
-    be recovered between the live-run check and the unlink.
+    Steps 3-5 run inside step 2's `require_operator`, under mutex `registry`
+    (sol r4): no run can claim, beat or be recovered between the live-run
+    check and the unlink.
     """
     ctx.write_guard("clear HALT")
-    require_human(ctx, "clear HALT")
-    with mutex(ctx, "registry"):
-        refuse_live_held(ctx, "clear HALT")
+    with require_operator(ctx, "clear HALT"):
         current = halted(ctx)
         if current is None:
             raise HaltClearRefused("not-halted", "there is no .agent/HALT to clear")

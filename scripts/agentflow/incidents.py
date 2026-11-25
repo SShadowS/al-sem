@@ -14,8 +14,9 @@ shared bypass flag:
   `mark_verified`  the ONLY automation path -- a post-merge run where every
                    gate returned 0 and the tree came back clean. Stamps
                    `resolved_by="post-merge:<run_id>"`.
-  `resolve`        an operator asserting it by hand. Goes through
-                   `lock.require_operator` first.
+  `resolve`        an operator asserting it by hand. Acts inside
+                   `lock.require_operator` (the check and the write under one
+                   hold of `registry`).
 
 An `automated=True` argument on one function would have been shorter and is
 exactly the shape that rots: the day someone needs "just this once" the
@@ -265,12 +266,11 @@ def resolve(ctx: Ctx, merge_sha: str, *, by: str, note: str) -> dict:
     actually found rather than being described as a close.
     """
     ctx.write_guard("resolve incident")
-    lock.require_human(ctx, "resolve incident")
-    # Mutex `registry` from the live-run check THROUGH the write (sol r5): a
-    # claim or a recovery cannot start between them. Lock order: `registry`,
-    # then `incidents` (no `incidents` section takes `registry`).
-    with mutex(ctx, "registry"):
-        lock.refuse_live_held(ctx, "resolve incident")
+    # Inside `require_operator`: mutex `registry` from the live-run check
+    # THROUGH the write (sol r5), so a claim or a recovery cannot start between
+    # them. Lock order: `registry`, then `incidents` (no `incidents` section
+    # takes `registry`).
+    with lock.require_operator(ctx, "resolve incident"):
         with mutex(ctx, "incidents"):
             records = all_records(ctx)
             rec = records.get(merge_sha)

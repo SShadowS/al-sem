@@ -970,17 +970,29 @@ its time rules on the wall clock, which keeps counting through a suspend.
   - `resolve incident` keeps it through the incident write.
   - Verification `cleanup` re-checks the lane under it and moves the tree aside (one rename to
     `<name>.removing-<id>`). The recursive delete and `git worktree prune` run after the lock
-    is released, so a slow delete starves no beat. An orphaned lane is still `recover`'s.
+    is released, so a slow delete starves no beat. An orphaned lane is still `recover`'s. A
+    tombstone left by a cleanup that died between its rename and its delete is swept by the
+    next verification cleanup (`cleanup --worktree <tombstone>` also removes one by hand).
   - A periodic beat that times out on `registry` is skipped, not fatal.
+  - `require_operator` is now a context manager: `clear-halt` and `resolve incident` act inside
+    it, so its live-run check and their action share one hold of `registry`.
+  - A new failure path: `release` (in `finish`, and `unblock`'s cleanup) can now fail with
+    `MutexTimeout` if `registry` stays busy for 30 s. Every holder is short, so this is
+    unlikely; the lease then stays and goes stale after 30 awake minutes, and `recover`
+    handles it.
 - **Why not "stale only when the holder process is dead":** a run is a series of short
   `agentflow` calls made by a conductor session, so between calls no process holds the lease,
   and a session that stopped working must still lose its lease.
-- **Review history (Fable r1-r2, sol r1-r6):** a lease file with an unknown field still
-  loads, and the clock tests run on any OS. One intermediate design kept the stamps in
+- **Review history (Fable r1, r2 and final; sol r1-r8):** a lease file with an unknown field
+  still loads, and the clock tests run on any OS. One intermediate design kept the stamps in
   sidecar files so that older executors could read the lease. Two files could disagree after
   one failed or interrupted write, and every repair left a gap. sol r6 showed a failed FIRST
   sidecar write followed by a suspend reopened the takeover. Since the drain is needed anyway,
-  the stamps went back inside the lease and `budget.json`.
+  the stamps went back inside the lease and `budget.json`. sol r7 put `release` back under
+  `registry` and required zero lease files for a rollback. sol r8 and Fable's final review
+  passed it; the final review's follow-ups added tests that pin the awake clock at the
+  operator guard and the lane state, the tombstone sweep and the `require_operator` context
+  manager.
 
 ### Fixed (ENG-178: table procedures named like record built-ins: four follow-ups from ENG-173)
 
