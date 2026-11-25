@@ -209,7 +209,8 @@ was recorded outside the budget.
 Labels are a mirror for humans, not a lock. The lock is local:
 
 - **One lease per issue.** `.agent/locks/issue-<N>.json` in the main checkout:
-  `{issue, run_id, session, started, heartbeat, attempt, recovering_by, beat_awake}`.
+  `{issue, run_id, session, started, heartbeat, attempt, recovering_by}` (its
+  awake-clock stamp is a sidecar: see Stale).
   Taken at claim by create-exclusive on that file, so "one run per issue" holds
   by construction. Both `/orchestrate` and a standalone `/issue N` take it;
   `/issue N` refuses to run without it. Every lease write after the first is
@@ -277,15 +278,34 @@ Labels are a mirror for humans, not a lock. The lock is local:
 - **Deadline.** The executor computes elapsed time since claim on every call and
   refuses new phases past the 24-hour cap, so the time budget is enforced by
   code, not by the conductor remembering it. Since TLS-122 the elapsed time is
-  AWAKE time: `budget.json` records the awake clock at the claim
-  (`claimed_awake` = `[boot id, CLOCK_MONOTONIC]`, checksummed), and a host
-  suspend (server1 is a laptop) is not counted. A budget from before that, from
-  another boot, or with no awake clock (not Linux) counts wall time.
-- **Stale** means no heartbeat for 30 minutes of AWAKE time (TLS-122): each
-  heartbeat also records `beat_awake` = `[boot id, CLOCK_MONOTONIC]`, which
-  stops while the host sleeps, so a live run's lease does not go stale during a
-  suspend. A lease with no usable stamp, or from another boot, ages on the wall
-  clock. There is no PID check: the
+  AWAKE time, so a host suspend (server1 is a laptop) is not counted: the
+  sidecar `budget-awake.json` records the awake clock at the claim
+  (`{claimed_at, awake, checksum}`). It counts only while its `claimed_at` is
+  `budget.json`'s and its checksum matches; otherwise the run counts wall time.
+- **Stale** means no heartbeat for 30 minutes of AWAKE time (TLS-122). Each
+  heartbeat also writes the sidecar `locks/awake/issue-<N>.json`
+  (`{run_id, heartbeat, awake}`), written after the lease and counted only while
+  it names the lease's run and heartbeat.
+  - **The awake clock** is `[clock id, CLOCK_MONOTONIC]`. CLOCK_MONOTONIC stops
+    while the host sleeps. The clock id is the boot id plus the process's time
+    namespace offset for CLOCK_MONOTONIC (`/proc/self/timens_offsets`; 0 without
+    one), so readings are compared only within one boot and one offset.
+  - **The wall clock judges instead** when there is no usable reading. That is:
+    another clock id; a malformed reading (not `[str, number]`, not finite,
+    negative, or more than 60 s ahead of the reader's clock); an awake age above
+    the wall age (awake time never runs faster than wall time); or no awake
+    clock at all (not Linux).
+  - **Clock-sharing limit:** processes that share one `.agent/` must share the
+    host. On another host the clock ids differ and the wall clock judges, which
+    is the rule before TLS-122.
+  - **Rollout:** the lease file and `budget.json` keep the pre-TLS-122 schema
+    and checksum. An older executor beside a newer one, or after a rollback,
+    reads them unchanged and ignores the sidecars. Its beats write no sidecar, so
+    its leases age on the wall clock. No drain is needed in either direction.
+  - **`beat` takes mutex `registry`** (TLS-122), so a beat cannot write an old
+    copy of the lease back over `recover`'s steal.
+
+  There is no PID check: the
   conductor is a chat session, not a supervisable process, and a 30-minute silence
   with supervision in place means it is gone. Recovery (never under `--dry-run`)
   is per issue: `preflight` lists `stale_locks`, and `recover --issue N` takes ONE

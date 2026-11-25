@@ -88,18 +88,52 @@ class Lock:
     # The run recovering this lease (`steal_for_recovery`). A legacy
     # `lock.json` has no such key, hence the default.
     recovering_by: str | None = None
-    # `[boot id, seconds]` of the awake clock at `heartbeat` (TLS-122,
-    # `state.host_awake`); None in a lease written before it or off Linux.
+    # `[clock id, seconds]` of the awake clock at `heartbeat` (TLS-122,
+    # `state.host_awake`), or None. IN MEMORY ONLY: it is kept in the sidecar
+    # `locks/awake/issue-<N>.json`, never in the lease file, because the
+    # executor before TLS-122 builds `Lock(**data)` and fails on any key it does
+    # not know. Old and new executors can share one `.agent/` this way.
     beat_awake: list | None = None
 
 
 _LOCK_FIELDS = {f.name for f in fields(Lock)}
 
 
+def _lease_dict(lk: Lock) -> dict:
+    """The lease file's content: the pre-TLS-122 schema exactly."""
+    d = asdict(lk)
+    del d["beat_awake"]
+    return d
+
+
+def _awake_path(ctx: Ctx, issue: int) -> Path:
+    # A subfolder: the lease glob `locks/issue-*.json` (old code's too) never sees it.
+    return ctx.paths.locks_dir / "awake" / f"issue-{issue}.json"
+
+
 def _stamp(ctx: Ctx, lk: Lock, now: float) -> None:
-    """Set the heartbeat, on both clocks."""
+    """Set the heartbeat, on both clocks (the lease write stores both)."""
     aw = ctx.awake_now()
     lk.heartbeat, lk.beat_awake = now, list(aw) if aw else None
+
+
+def _write_awake(ctx: Ctx, lk: Lock) -> None:
+    """The sidecar, written AFTER its lease: it counts only while it names the
+    lease's run and heartbeat, so a beat by an executor that writes none (one
+    from before TLS-122) leaves it unmatched, and the lease ages on the wall
+    clock. Between the two writes the lease is fresh on the wall clock too."""
+    p = _awake_path(ctx, lk.issue)
+    if lk.beat_awake:
+        write_json(ctx, p, {"run_id": lk.run_id, "heartbeat": lk.heartbeat, "awake": lk.beat_awake})
+    else:
+        p.unlink(missing_ok=True)
+
+
+def _read_awake(ctx: Ctx, lk: Lock) -> list | None:
+    s = read_json(_awake_path(ctx, lk.issue))
+    if isinstance(s, dict) and s.get("run_id") == lk.run_id and s.get("heartbeat") == lk.heartbeat:
+        return s.get("awake")
+    return None
 
 
 def _read_lease(path: Path) -> Lock | None:
@@ -115,6 +149,7 @@ def _entries(ctx: Ctx) -> list[tuple[Path, Lock]]:
     for p in [ctx.paths.lock, *ctx.paths.locks_dir.glob("issue-*.json")]:
         lk = _read_lease(p)
         if lk is not None:
+            lk.beat_awake = _read_awake(ctx, lk)
             out.append((p, lk))
     return sorted(out, key=lambda e: e[1].issue)
 
@@ -155,7 +190,8 @@ def _write(ctx: Ctx, path: Path, lk: Lock) -> None:
     # supervisor beats) must never see half a lease. Only `acquire`'s FIRST
     # write is not this one, because it must be create-exclusive.
     ctx.write_guard("write lock")
-    write_json(ctx, path, asdict(lk))
+    write_json(ctx, path, _lease_dict(lk))
+    _write_awake(ctx, lk)
 
 
 def disk_free_gb(ctx: Ctx) -> int:
@@ -265,16 +301,17 @@ def _acquire_held(ctx: Ctx, issue: int, session: str, attempt: int,
     for retried in (False, True):
         try:
             with open(path, "x", encoding="utf-8") as f:
-                f.write(json.dumps(asdict(lk), indent=2))
-            if loop_after is not None:
-                # Charged only now that the lease exists. A failed charge takes
-                # the lease back: no lease without its unit, and no unit spent
-                # without a lease.
-                try:
+                f.write(json.dumps(_lease_dict(lk), indent=2))
+            # The loop unit is charged only now that the lease exists. A failed
+            # charge (or sidecar write) takes the lease back: no lease without
+            # its unit, and no unit spent without a lease.
+            try:
+                _write_awake(ctx, lk)
+                if loop_after is not None:
                     write_json(ctx, ctx.paths.loop, loop_after)
-                except BaseException:
-                    path.unlink(missing_ok=True)
-                    raise
+            except BaseException:
+                path.unlink(missing_ok=True)
+                raise
             return lk
         except FileExistsError:
             # Only a file the check above could not read gets here (a writer
@@ -307,16 +344,21 @@ def _fenced_entry(ctx: Ctx) -> tuple[Path, Lock]:
 
 
 def beat(ctx: Ctx) -> None:
+    """Refresh this run's heartbeat. Under mutex `registry` (TLS-122, sol r1):
+    unlocked, a beat that read the lease before `steal_for_recovery` rewrote
+    it would write its old copy back over the steal."""
     ctx.write_guard("beat")
-    path, lk = _fenced_entry(ctx)
-    _stamp(ctx, lk, ctx.now())
-    _write(ctx, path, lk)
+    with mutex(ctx, "registry"):
+        path, lk = _fenced_entry(ctx)
+        _stamp(ctx, lk, ctx.now())
+        _write(ctx, path, lk)
 
 
 def release(ctx: Ctx) -> None:
     ctx.write_guard("release lock")
-    path, _ = _fenced_entry(ctx)
+    path, lk = _fenced_entry(ctx)
     path.unlink()
+    _awake_path(ctx, lk.issue).unlink(missing_ok=True)
 
 
 def steal_for_recovery(ctx: Ctx, stale: Lock) -> Lock:
@@ -450,6 +492,7 @@ def drop(ctx: Ctx, issue: int, expect_run_id: str) -> bool:
         for path, lk in _entries(ctx):
             if lk.issue == issue and lk.run_id == expect_run_id:
                 path.unlink(missing_ok=True)
+                _awake_path(ctx, issue).unlink(missing_ok=True)
                 return True
     return False
 

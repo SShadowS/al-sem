@@ -175,37 +175,66 @@ class Ctx:
         return self.paths.run_dir(self.run_id)
 
 
+BOOT_ID = Path("/proc/sys/kernel/random/boot_id")
+TIMENS_OFFSETS = Path("/proc/self/timens_offsets")
+
+
 def host_awake() -> tuple[str, float] | None:
-    """`(boot id, CLOCK_MONOTONIC seconds)`, or None where they cannot be read
-    (not Linux). CLOCK_MONOTONIC is one clock for every process on the host and
-    stops while the host is suspended (server1 is a laptop that suspends when
-    moved: TLS-104), so a difference of two readings with the same boot id is
-    the time the host was awake between them. A different boot id means a
-    reboot in between, and the readings cannot be compared."""
+    """`(clock id, CLOCK_MONOTONIC seconds)`, or None where they cannot be read
+    (not Linux). CLOCK_MONOTONIC stops while the host is suspended (server1 is
+    a laptop that suspends when moved: TLS-104), so two readings with the same
+    clock id differ by the time the host was awake between them.
+
+    The clock id is the boot id plus this process's time-namespace offset for
+    CLOCK_MONOTONIC: another boot restarts the clock, and a time namespace
+    (Linux 5.6+) shifts it by its offset (sol r1). Readings with different ids
+    are never compared; the caller falls back to the wall clock. No offsets
+    file (a kernel without time namespaces) means offset 0."""
     try:
-        boot = Path("/proc/sys/kernel/random/boot_id").read_text(encoding="utf-8").strip()
-    except OSError:
+        boot = BOOT_ID.read_text(encoding="utf-8").strip()
+        if not boot:
+            return None
+        try:
+            offsets = TIMENS_OFFSETS.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            offsets = ""
+        mono = next((ln.split()[1:] for ln in offsets.splitlines() if ln.split()[:1] == ["monotonic"]),
+                    ["0", "0"])
+        return f"{boot}/{'.'.join(mono)}", time.clock_gettime(time.CLOCK_MONOTONIC)
+    except (OSError, ValueError, AttributeError):
         return None
-    return (boot, time.clock_gettime(time.CLOCK_MONOTONIC)) if boot else None
 
 
-def _is_reading(r) -> bool:
-    """A stored awake reading is `[boot id, seconds]`; anything else (a hand
-    edit, a torn or foreign file) counts as no stamp. Finite only: JSON reads
-    `NaN`, and a NaN age is never stale."""
-    return (isinstance(r, (list, tuple)) and len(r) == 2 and isinstance(r[0], str)
-            and isinstance(r[1], (int, float)) and not isinstance(r[1], bool)
-            and math.isfinite(r[1]))
+# A stored reading may be at most this far AHEAD of the reader's clock: some
+# readers take their clock reading before they load the lease, and a beat in
+# between stamps a later reading. Further ahead is not a real reading.
+AHEAD_TOLERANCE_S = 60.0
 
 
 def awake_elapsed(then, now_awake, wall_elapsed: float) -> tuple[float, str]:
     """`(seconds, clock)` from the stored reading `then` to `now_awake`: on the
-    awake clock (`"awake"`) when both are readings from this boot, else
-    `wall_elapsed` (`"wall"`: a reading from before a reboot, from another
-    host, malformed, or from a writer or reader that had none)."""
-    if _is_reading(then) and now_awake and then[0] == now_awake[0]:
-        return now_awake[1] - then[1], "awake"
-    return wall_elapsed, "wall"
+    awake clock (`"awake"`), else `wall_elapsed` (`"wall"`).
+
+    The awake clock counts only for a usable reading of the same clock id: a
+    `[str, number]` that is finite, not negative, and not ahead of the reader's
+    own clock by more than AHEAD_TOLERANCE_S. A reading from another boot or
+    time namespace, malformed or unusable (a hand edit, a torn file; NaN, 1e20,
+    a 400-digit integer), or a writer or reader with no awake clock: wall.
+    Awake time never runs faster than wall time, so an awake age above the wall
+    age is not believed either (a forged early reading would make a fresh lease
+    look stale): the wall age is the most it can be."""
+    try:
+        if not (isinstance(then, (list, tuple)) and len(then) == 2 and isinstance(then[0], str)
+                and isinstance(then[1], (int, float)) and not isinstance(then[1], bool)
+                and now_awake and then[0] == now_awake[0]):
+            return wall_elapsed, "wall"
+        s = float(then[1])                       # OverflowError for a huge integer
+        if not (math.isfinite(s) and 0 <= s <= now_awake[1] + AHEAD_TOLERANCE_S):
+            return wall_elapsed, "wall"
+        age = now_awake[1] - s
+    except OverflowError:
+        return wall_elapsed, "wall"
+    return (max(age, 0.0), "awake") if age <= wall_elapsed else (wall_elapsed, "wall")
 
 
 def new_run_id(now: float) -> str:

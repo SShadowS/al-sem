@@ -42,13 +42,10 @@ def _path(ctx: Ctx, run_id: str | None = None):
     return (ctx.paths.run_dir(run_id) if run_id else ctx.run_dir) / "budget.json"
 
 
-def _checksum(counts: dict, claimed_at: float, grants: dict | None = None,
-              claimed_awake: list | None = None) -> str:
+def _checksum(counts: dict, claimed_at: float, grants: dict | None = None) -> str:
     payload = {"counts": counts, "claimed_at": claimed_at}
     if grants:  # absent from every budget written before `grant` existed, so theirs still match
         payload["grants"] = grants
-    if claimed_awake:  # likewise before TLS-122; covered, or an edit would extend the cap
-        payload["claimed_awake"] = claimed_awake
     raw = json.dumps(payload, sort_keys=True)
     return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
@@ -57,18 +54,37 @@ def _load(ctx: Ctx, run_id: str | None = None) -> dict:
     data = read_json(_path(ctx, run_id))
     if not data:
         raise RuntimeError("budget not initialised for this run")
-    if data.get("checksum") != _sum(data):
+    if data.get("checksum") != _checksum(data["counts"], data["claimed_at"], data.get("grants")):
         raise RuntimeError("budget.json does not match executor history")
     return data
 
 
-def _sum(data: dict) -> str:
-    return _checksum(data["counts"], data["claimed_at"], data.get("grants"), data.get("claimed_awake"))
-
-
 def _save(ctx: Ctx, data: dict, run_id: str | None = None) -> None:
-    data["checksum"] = _sum(data)
+    data["checksum"] = _checksum(data["counts"], data["claimed_at"], data.get("grants"))
     write_json(ctx, _path(ctx, run_id), data)
+
+
+# The awake clock at the claim (TLS-122) lives in a SIDECAR, `budget-awake.json`
+# = {claimed_at, awake, checksum}, not in budget.json: the executor before
+# TLS-122 checks budget.json against its own checksum, so a new key there would
+# make it refuse the budget after a rollback. The sidecar counts only while its
+# `claimed_at` is budget.json's and its checksum matches (an edit moving the
+# stamp later would extend the cap); otherwise the run is timed on the wall.
+def _awake_path(ctx: Ctx):
+    return ctx.run_dir / "budget-awake.json"
+
+
+def _awake_sum(claimed_at: float, awake) -> str:
+    raw = json.dumps({"claimed_at": claimed_at, "awake": awake}, sort_keys=True)
+    return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+
+def _claimed_awake(ctx: Ctx, data: dict):
+    s = read_json(_awake_path(ctx))
+    if (isinstance(s, dict) and s.get("claimed_at") == data["claimed_at"]
+            and s.get("checksum") == _awake_sum(s["claimed_at"], s.get("awake"))):
+        return s.get("awake")
+    return None
 
 
 def _cap(data: dict, key: str) -> int:
@@ -77,18 +93,21 @@ def _cap(data: dict, key: str) -> int:
 
 
 def init(ctx: Ctx, claimed_at: float) -> None:
-    """`claimed_awake` is the awake clock NOW: both callers init at the claim."""
-    data = {"counts": {}, "claimed_at": claimed_at}
+    """The sidecar's stamp is the awake clock NOW: both callers init at the claim."""
+    _save(ctx, {"counts": {}, "claimed_at": claimed_at})
     if aw := ctx.awake_now():
-        data["claimed_awake"] = list(aw)
-    _save(ctx, data)
+        write_json(ctx, _awake_path(ctx), {"claimed_at": claimed_at, "awake": list(aw),
+                                           "checksum": _awake_sum(claimed_at, list(aw))})
+    else:
+        _awake_path(ctx).unlink(missing_ok=True)
 
 
 def elapsed(ctx: Ctx, data: dict) -> tuple[float, str]:
     """The run's seconds so far and the clock they are on: `awake` (the host's
-    suspends left out) or `wall` (a budget from before TLS-122, from before a
-    reboot, or no awake clock: the suspends counted, as before)."""
-    return awake_elapsed(data.get("claimed_awake"), ctx.awake_now(), ctx.now() - data["claimed_at"])
+    suspends left out) or `wall` (no usable sidecar: a budget from before
+    TLS-122 or from an older executor, another boot, or no awake clock; the
+    suspends counted, as before)."""
+    return awake_elapsed(_claimed_awake(ctx, data), ctx.awake_now(), ctx.now() - data["claimed_at"])
 
 
 def check_deadline(ctx: Ctx) -> None:
