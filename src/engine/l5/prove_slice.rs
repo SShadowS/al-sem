@@ -151,6 +151,10 @@ pub struct SliceRequest {
     /// The candidate edges one site's enumeration examines at most
     /// ([`ROUTE_EDGE_BUDGET`]; a fixture sets it lower to reach the cap).
     pub route_budget: usize,
+    /// ENG-165: `commit-between --after A --before B`
+    /// ([`crate::engine::l5::commit_between`]); the slice is then that
+    /// question's answer, not a filter over sites.
+    pub between: Option<crate::engine::l5::commit_between::BetweenSites>,
 }
 
 impl SliceRequest {
@@ -238,13 +242,60 @@ impl SliceRequest {
             table: nonempty("--table", table)?,
             routes: routes.unwrap_or(1),
             route_budget: ROUTE_EDGE_BUDGET,
+            between: None,
         }))
+    }
+
+    /// ENG-165: the request of `commit-between --after A --before B`, or the
+    /// usage error. The other filters do not go with it.
+    pub fn commit_between(
+        after: Option<&str>,
+        before: Option<&str>,
+        others: bool,
+        routes: Option<usize>,
+    ) -> Result<SliceRequest, String> {
+        if others {
+            return Err("prove: --match, --site, --op and --table do not go with \
+                        commit-between (it names its sites with --after and --before)"
+                .to_string());
+        }
+        if routes.is_some() {
+            return Err(
+                "prove: --routes does not go with commit-between (each commit row \
+                        carries one route)"
+                    .to_string(),
+            );
+        }
+        let (Some(after), Some(before)) = (after, before) else {
+            return Err(
+                "prove: commit-between needs --after <file:line[:col]> (site A) and \
+                        --before <file:line[:col]> (site B)"
+                    .to_string(),
+            );
+        };
+        use crate::engine::l5::commit_between::{BetweenSites, SitePoint};
+        Ok(SliceRequest {
+            question: SliceQuestion::Commits,
+            match_text: None,
+            site: None,
+            op: None,
+            table: None,
+            routes: 1,
+            route_budget: ROUTE_EDGE_BUDGET,
+            between: Some(BetweenSites {
+                after: SitePoint::parse("--after", after)?,
+                before: SitePoint::parse("--before", before)?,
+            }),
+        })
     }
 
     /// The filter as the answer line names it: `matching "x" at f:3 op
     /// Insert on table T`.
     #[must_use]
     pub fn label(&self) -> String {
+        if let Some(b) = &self.between {
+            return b.label();
+        }
         let mut parts = Vec::new();
         if let Some(m) = &self.match_text {
             parts.push(format!("matching \"{m}\""));
@@ -268,6 +319,9 @@ impl SliceRequest {
     /// The filter as JSON (`payload.filter`).
     #[must_use]
     pub fn to_value(&self) -> serde_json::Value {
+        if let Some(b) = &self.between {
+            return b.to_value();
+        }
         let mut m = serde_json::Map::new();
         if let Some(v) = &self.match_text {
             m.insert("match".into(), v.clone().into());
@@ -511,6 +565,9 @@ pub struct SliceOut {
     /// ENG-10: try calls' write-refusal errors not raised (nothing inside
     /// the call may be refused): no error at all, so not among `caught`.
     pub not_raised: usize,
+    /// ENG-165: the `commit-between` answer, when the request asked it
+    /// (`sites` is then empty).
+    pub between: Option<Box<crate::engine::l5::commit_between::BetweenOut>>,
 }
 
 impl SliceOut {
@@ -552,7 +609,7 @@ fn contains(outer: &PAnchor, inner: &PAnchor) -> bool {
 
 /// The anchor of site `id` in routine `r`: a call site, a record operation
 /// or an operation site.
-fn anchor_in<'m>(r: &'m ModelRoutine, id: &str) -> Option<&'m PAnchor> {
+pub(crate) fn anchor_in<'m>(r: &'m ModelRoutine, id: &str) -> Option<&'m PAnchor> {
     r.call_sites
         .iter()
         .find(|c| c.id == id)
@@ -573,13 +630,13 @@ fn anchor_in<'m>(r: &'m ModelRoutine, id: &str) -> Option<&'m PAnchor> {
 
 /// What a site is, read off its routine: its anchor, its operation as
 /// written and (a record operation's) table.
-struct SiteFacts<'m> {
-    anchor: Option<&'m PAnchor>,
-    op_name: Option<String>,
-    table: Option<String>,
+pub(crate) struct SiteFacts<'m> {
+    pub(crate) anchor: Option<&'m PAnchor>,
+    pub(crate) op_name: Option<String>,
+    pub(crate) table: Option<String>,
 }
 
-fn site_facts<'m>(
+pub(crate) fn site_facts<'m>(
     r: &'m ModelRoutine,
     id: &str,
     table_names: &HashMap<&str, &str>,
@@ -817,7 +874,7 @@ fn outcome(req: &SliceRequest, site: &SliceSite, caller_dependent: bool) -> Outc
 /// step's call site in its caller, then the terminal site `(owner row,
 /// anchor)`. Each site's guards are its own row's (engine limits B2: the
 /// `#if` arm that holds it, [`LiteralReach::row_at`]).
-fn route_sites<'a>(
+pub(crate) fn route_sites<'a>(
     reach: &LiteralReach<'a>,
     root: &str,
     path: &GroupPath,
@@ -899,7 +956,15 @@ pub(crate) fn compute_slice(
         caught_assumes_clean_entry: false,
         caught_assumes_normal_commit: false,
         not_raised: 0,
+        between: None,
     };
+    if let Some(b) = &req.between {
+        out.complete = true;
+        out.between = Some(Box::new(crate::engine::l5::commit_between::compute(
+            tree, model, root, b, cancel,
+        )));
+        return out;
+    }
     // E2: above one route, the state-transition graph, whose tree is the
     // search tree E1 reads (the same search, every transition kept).
     let graph: Option<StateGraph> = if req.routes > 1 {
@@ -1556,6 +1621,9 @@ pub fn human_lines(
     surface: crate::engine::follow_up::Surface,
 ) -> Vec<String> {
     use crate::engine::l5::routine_rollup::plural;
+    if let Some(b) = &slice.between {
+        return b.human_lines(detail);
+    }
     let mut lines = Vec::new();
     if !slice.complete {
         lines.push(
@@ -1772,7 +1840,7 @@ fn message_value(m: &MessageText) -> serde_json::Value {
     }
 }
 
-fn route_value(r: &SliceRoute) -> serde_json::Value {
+pub(crate) fn route_value(r: &SliceRoute) -> serde_json::Value {
     let (k, n) = r.guard_counts();
     let sites: Vec<serde_json::Value> = r
         .sites
@@ -1899,6 +1967,9 @@ pub const UNDECIDED_LISTED: usize = 10;
 /// [`UNDECIDED_LISTED`] undecided sites of each kind, the label.
 #[must_use]
 pub fn slice_value(slice: &SliceOut) -> serde_json::Value {
+    if let Some(b) = &slice.between {
+        return b.to_value();
+    }
     let undecided: Vec<serde_json::Value> = slice
         .undecided()
         .into_iter()

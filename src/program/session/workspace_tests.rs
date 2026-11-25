@@ -1831,6 +1831,50 @@ fn dependency_text_is_extracted_once_per_package(mode: MemoryMode) {
 /// Every session test above, in both memory modes: each step's program and
 /// model equal a cold build of the same inputs whichever mode the session
 /// keeps (`--low-mem` re-parses what the default keeps).
+/// ENG-165 (design §7): `prove … commit-between` walks dependency routines'
+/// control-flow trees (A's tail in a dependency). Every source-bearing
+/// dependency row of the model keeps its `statement_tree` in both memory
+/// modes, cold and after a body edit that reuses the kept rows (`--low-mem`
+/// keeps no syntax tree, but the control-flow tree is a projected fact).
+fn dependency_rows_keep_their_control_flow_trees(mode: MemoryMode) {
+    let ws = base_ws();
+    let mut s = WorkspaceSession::with_mode(mode);
+    let check = |s: &mut WorkspaceSession, what: &str| {
+        let inputs = ws.inputs();
+        let program = s.refresh_program(&inputs);
+        let model = s
+            .refresh_model(program, &inputs, false, AssemblyNeeds::RULES)
+            .expect("session model");
+        let primary = crate::engine::l5::digest_cli::primary_guid_of(&model.resolved)
+            .expect("a primary app")
+            .to_string();
+        let dep: Vec<_> = model
+            .resolved
+            .workspace
+            .routines
+            .iter()
+            .filter(|r| r.app_guid != primary && r.body_available)
+            .collect();
+        assert!(!dep.is_empty(), "{what}: precondition, dependency rows");
+        for r in dep {
+            assert!(
+                r.statement_tree.is_some(),
+                "{what}: {} has no control-flow tree",
+                r.name
+            );
+        }
+    };
+    refresh_and_compare(&mut s, &ws, "cold");
+    check(&mut s, "cold");
+    ws.edit(
+        "Callee.Codeunit.al",
+        "        exit(X);",
+        "        X += 1;\n        exit(X);",
+    );
+    refresh_and_compare(&mut s, &ws, "body edit");
+    check(&mut s, "body edit");
+}
+
 macro_rules! in_both_modes {
     ($($name:ident),* $(,)?) => {
         mod default_mode {
@@ -1882,6 +1926,7 @@ in_both_modes!(
     bare_error_verdict_of_an_unchanged_file_changes_under_s,
     file_ix_shift_restamps_later_files,
     low_mem_retains_no_dependency_tree,
+    dependency_rows_keep_their_control_flow_trees,
     dependency_text_is_extracted_once_per_package,
     background_starts_and_loaded_only_tables_follow_edits,
 );

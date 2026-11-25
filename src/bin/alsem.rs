@@ -1250,6 +1250,17 @@ struct ProveCli {
     #[arg(long, value_name = "TABLE")]
     table: Option<String>,
 
+    /// commit-between only: site A, FILE:LINE[:COL] (a source path or its
+    /// tail, a 1-based line, an optional 1-based column; a call or record
+    /// operation). The question: can a COMMIT that ends the caller's
+    /// transaction run after A returns and before the next run of B?
+    #[arg(long, value_name = "FILE:LINE[:COL]")]
+    after: Option<String>,
+
+    /// commit-between only: site B, FILE:LINE[:COL].
+    #[arg(long, value_name = "FILE:LINE[:COL]")]
+    before: Option<String>,
+
     /// With --match, --site, --op or --table: up to N distinct routes per
     /// matching site (1 to 10; default 1, one route), fewest hops first, each
     /// with its guards. A route is a simple path over (routine, known
@@ -3675,16 +3686,39 @@ fn plan_prove(p: ProveCli) -> Planned {
         );
     }
     // Agent-tasks E1: the filters, and which question each goes with.
-    let slice = match al_sem::engine::l5::prove_slice::SliceRequest::of(
-        &p.question,
-        p.match_text.as_deref(),
-        p.site.as_deref(),
-        p.op.as_deref(),
-        p.table.as_deref(),
-        p.routes,
-    ) {
-        Ok(s) => s,
-        Err(e) => return failed(e, 1, 1),
+    // ENG-165: commit-between takes its two sites instead.
+    let between = p.question == al_sem::engine::l5::prove::COMMIT_BETWEEN;
+    if !between && (p.after.is_some() || p.before.is_some()) {
+        return failed(
+            "prove: --after and --before go with commit-between".to_string(),
+            1,
+            1,
+        );
+    }
+    let slice = if between {
+        let others =
+            p.match_text.is_some() || p.site.is_some() || p.op.is_some() || p.table.is_some();
+        match al_sem::engine::l5::prove_slice::SliceRequest::commit_between(
+            p.after.as_deref(),
+            p.before.as_deref(),
+            others,
+            p.routes,
+        ) {
+            Ok(s) => Some(s),
+            Err(e) => return failed(e, 1, 1),
+        }
+    } else {
+        match al_sem::engine::l5::prove_slice::SliceRequest::of(
+            &p.question,
+            p.match_text.as_deref(),
+            p.site.as_deref(),
+            p.op.as_deref(),
+            p.table.as_deref(),
+            p.routes,
+        ) {
+            Ok(s) => s,
+            Err(e) => return failed(e, 1, 1),
+        }
     };
 
     ready(

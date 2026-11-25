@@ -60,7 +60,10 @@ pub enum ProveQuestion {
 /// Parse a question text string into a ProveQuestion. Returns None for invalid input.
 pub fn parse_question(text: &str) -> Option<ProveQuestion> {
     match text {
-        "may-commit" => Some(ProveQuestion::MayCommit),
+        // ENG-165: `commit-between` is evaluated over may-commit's effects
+        // (its `no` implies commit-between's), then answered by its slice
+        // ([`crate::engine::l5::commit_between`]).
+        "may-commit" | COMMIT_BETWEEN => Some(ProveQuestion::MayCommit),
         "commits-on-success-path" => Some(ProveQuestion::CommitsOnSuccessPath),
         "reaches-ui" => Some(ProveQuestion::ReachesUi),
         "throws-error" => Some(ProveQuestion::ThrowsError),
@@ -88,10 +91,14 @@ pub fn parse_question(text: &str) -> Option<ProveQuestion> {
     }
 }
 
+/// ENG-165: the ordered question `commit-between --after A --before B`.
+pub const COMMIT_BETWEEN: &str = "commit-between";
+
 /// Return all valid question id strings (for error messages).
 pub fn question_ids() -> &'static [&'static str] {
     &[
         "may-commit",
+        "commit-between (with --after <file:line[:col]> --before <file:line[:col]>)",
         "commits-on-success-path",
         "writes-table:<table>",
         "publishes-event:<event>",
@@ -4565,6 +4572,14 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
     // Agent-tasks E1: the slice the plan read off the tree (a filtered
     // question only).
     let slice = effects.slice.take();
+    // ENG-165: a site `commit-between` could not resolve is a usage error.
+    if let Some(msg) = slice
+        .as_ref()
+        .and_then(|s| s.between.as_ref())
+        .and_then(|b| b.refused.clone())
+    {
+        return Err(msg);
+    }
     let cone = effects
         .unresolved
         .get(root_id)
@@ -4682,9 +4697,10 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
     let pointers = ObligationPointers::of(entry, prove_result.obligations.world);
     // Agent-tasks E1: a filtered question answers over the slice's sites,
     // under the unfiltered answer's obligations.
-    let filtered = slice
-        .as_ref()
-        .map(|s| filtered_result(entry, &prove_result, s));
+    let filtered = slice.as_ref().map(|s| match &s.between {
+        Some(b) => between_result(entry, &prove_result, b),
+        None => filtered_result(entry, &prove_result, s),
+    });
     let prove_result = filtered.unwrap_or(prove_result);
 
     // W2-6: the human answer's paths read the model's names (and, W2-7, the
@@ -4923,6 +4939,84 @@ pub(crate) fn filtered_result(
     }
 }
 
+/// ENG-165 (design §5): the answer of `commit-between` from its slice and
+/// may-commit's answer `unfiltered` (whose obligations it keeps).
+///
+/// - `no` when may-commit is `no` (no commit at all), with its obligations;
+/// - `yes` when a class-1 commit may run between A and B;
+/// - `no` when none may, every route pair was judged, and nothing in the
+///   region is unresolved (a region call site no edge leaves, an open-world
+///   interface call in the region's cones, in the answer's world);
+/// - `unknown` otherwise, blocked by what could not be followed.
+pub(crate) fn between_result(
+    entry: &DigestEntryFull,
+    unfiltered: &ProveResult,
+    b: &crate::engine::l5::commit_between::BetweenOut,
+) -> ProveResult {
+    let oblg = unfiltered.obligations.clone();
+    if !b.between.is_empty() {
+        return ProveResult {
+            answer: ProveAnswer::Yes,
+            evidence: None,
+            blocked_by: None,
+            obligations: oblg,
+        };
+    }
+    if unfiltered.answer == ProveAnswer::No {
+        return ProveResult {
+            answer: ProveAnswer::No,
+            evidence: None,
+            blocked_by: None,
+            obligations: oblg,
+        };
+    }
+    let mut blockers: Vec<ProveBlocker> = b
+        .blockers
+        .iter()
+        .map(|(kind, detail)| ProveBlocker {
+            kind,
+            detail: detail.clone(),
+            anchor: None,
+        })
+        .collect();
+    // §5.5: the root's unresolved cone, kept to the region.
+    for item in &entry.unresolved {
+        let in_region = b.region_sites.contains(&item.callsite_id)
+            || b.region_routines.contains(&item.owning_routine);
+        if !in_region || world_waives(item, oblg.world) {
+            continue;
+        }
+        blockers.push(ProveBlocker {
+            kind: if item.open_world == Some(true) {
+                "region-open-world"
+            } else {
+                "region-unresolved-call"
+            },
+            detail: format!(
+                "{} in {} may run between A and B and is not followed",
+                item.callee_display, item.owning_routine_display
+            ),
+            anchor: item.callsite_file.as_ref().map(|f| BlockerAnchor {
+                source_kind: "source".to_string(),
+                file: Some(f.clone()),
+                line: item.callsite_line,
+                column: item.callsite_column,
+                excerpt: None,
+            }),
+        });
+    }
+    ProveResult {
+        answer: if blockers.is_empty() {
+            ProveAnswer::No
+        } else {
+            ProveAnswer::Unknown
+        },
+        evidence: None,
+        blocked_by: (!blockers.is_empty()).then(|| sort_blockers(blockers)),
+        obligations: oblg,
+    }
+}
+
 /// The human answer of a filtered question (agent-tasks E1, design §9.4):
 /// the answer over the slice, each matching site with its message, route and
 /// selected guards, the other sites, then blockers and coverage as for any
@@ -4952,7 +5046,29 @@ fn format_prove_slice_human(
         None => format!("site {}", slice.request.label()),
     };
     let kinds = blocker_kind_counts(result.blocked_by.as_deref().unwrap_or(&[]));
-    lines.push(match result.answer {
+    if let Some(b) = &slice.between {
+        lines.push(match result.answer {
+            ProveAnswer::Yes => format!(
+                "  answer:   yes — {} may run between A and B ({STATIC_LABEL})",
+                plural(
+                    b.between.len(),
+                    "commit that ends the caller's transaction",
+                    "commits that end the caller's transaction"
+                )
+            ),
+            ProveAnswer::No => format!(
+                "  answer:   no — no commit that ends the caller's transaction runs after A \
+                 returns and before the next B{}",
+                b.relation.map(|r| format!(" ({r})")).unwrap_or_default()
+            ),
+            ProveAnswer::Unknown => format!(
+                "  answer:   unknown (blocked by: {}) — no commit was found between A and B, \
+                 and the analysis cannot rule one out ({STATIC_LABEL})",
+                named_kinds(&kinds, 3)
+            ),
+        });
+    } else {
+        lines.push(match result.answer {
         ProveAnswer::Yes => format!(
             "  answer:   yes — {} reachable from {header} ({STATIC_LABEL})",
             plural(matching, "matching site", "matching sites")
@@ -4964,6 +5080,7 @@ fn format_prove_slice_human(
             named_kinds(&kinds, 3)
         ),
     });
+    }
     if result.answer == ProveAnswer::Unknown {
         lines.extend(unknown_lines(
             question,

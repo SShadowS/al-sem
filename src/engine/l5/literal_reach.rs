@@ -4445,6 +4445,26 @@ impl<'a> LiteralReach<'a> {
         self.op_owner.get(op).copied()
     }
 
+    /// ENG-165: routine `from`'s out-edges over the snapshot's own graph, each
+    /// as (callee, the site it leaves from, the edge kind, the trap it is by
+    /// [`crate::engine::l5::traps`]'s one rule, if any).
+    pub(crate) fn out_edges(
+        &self,
+        from: &str,
+    ) -> Vec<(&'a str, Option<EdgeSite<'a>>, &'a str, Option<TrapKind>)> {
+        let traps = self.traps.get(from);
+        self.out.get(from).map_or_else(Vec::new, |outs| {
+            outs.iter()
+                .enumerate()
+                .map(|(j, &(to, site, _, kind))| {
+                    let trap = traps
+                        .and_then(|t| t.iter().find(|(p, _)| *p as usize == j).map(|(_, k)| *k));
+                    (to, site, kind, trap)
+                })
+                .collect()
+        })
+    }
+
     /// The model routine of stable id `stable`.
     pub(crate) fn routine(&self, stable: &str) -> Option<&'a ModelRoutine> {
         self.by_stable.get(stable).copied()
