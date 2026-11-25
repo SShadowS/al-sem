@@ -1,8 +1,8 @@
 FROM kraken/tentacle-base
 USER root
 ARG DEBIAN_FRONTEND=noninteractive
-# build-essential: the tree-sitter grammar's C build (crates/al-syntax/build.rs); cmake: libz-ng-sys
-# (CI's runner has it preinstalled); python3: the bench and trace scripts; python-is-python3: the
+# build-essential: the tree-sitter grammar's C build (crates/al-syntax/build.rs); cmake: kept, no
+# build step needs it since TLS-121 (libz-ng-sys is gone; drop it when the image is next rebuilt); python3: the bench and trace scripts; python-is-python3: the
 # commands and hooks call `python` (agentflow, run-timer); python3-psutil: scripts/bench_ab.py (no pip);
 # python3-pytest: scripts/agentflow/tests (no pip); libicu: .NET aborts without it;
 # time: GNU `/usr/bin/time -v` for peak-memory measurements (CLAUDE.md's `aldump --snapshot-memory`
