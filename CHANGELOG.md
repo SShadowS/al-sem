@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (TLS-130: cdo-speed refused whole instruction counts when a server thread ran at the stop)
+
+- **The cause.** `scripts/cdo-speed` gave perf each event as its own `-e`. perf
+  then reads the events one after another at the stop, and a server thread still
+  running then (rayon workers spinning down, longer under load) gives the later
+  read more running time. `perf_parse` takes unequal running times on one PMU
+  (processor counter unit: `cpu_core` or `cpu_atom`) as multiplexing (counters
+  shared out in time slices) and refuses the count. No multiplexing was needed:
+  on server1 (perf 7.0.14, 2026-11-25, 12 spinning processes attached, no other
+  perf user, only our four fixed-counter events) 10 of 10 such stops were
+  refused, by 0.01-2.9 ms. The flaky test
+  `gate_scripts::speed_counts_instructions_with_the_real_perf` (load avg15 ~190)
+  lost its build ratio this way: two calls refused, each with `cpu_core` equal
+  and `cpu_atom` apart by 26 ms and 3.7 ms.
+- **The fix.** A PMU's two events now go in one perf group
+  (`-e {cpu_core/instructions/u,cpu_core/cycles/u}`, one per PMU; plain CPUs
+  `-e {instructions:u,cycles:u}`). The kernel runs a group's members together, so
+  they report exactly the same running time: 0 of 10 such stops refused. A group
+  hides multiplexing from the equal-time check (both members lose the same time),
+  so a count whose running time does not cover the call's CPU seconds (`covers`,
+  unchanged band: 2 % + 50 ms short, x1.10 over) now gives **no instruction
+  count**; before, it lost only its clock, CPI label and advisory.
+- **What changes in real gate verdicts.** Calls that ended with a server thread
+  still running are counted instead of refused, so under load the build and
+  round-total instruction ratios appear where they went missing. An uncovered
+  call now drops out of the instruction ratios (a round total with one such call
+  has none); in the TLS-111 A/A run on CDO every call was inside the band, so a
+  normal run loses nothing. CPU, wall and memory judging do not change; the
+  instruction limit stays advisory.
+- **Tests.** New `speed_perf_groups_keep_a_pmus_running_times_equal` stops the
+  real perf five times while 12 attached processes spin, with cdo-speed's own
+  events, and needs every output taken as a count (skipped where perf cannot
+  count). `speed_counts_instructions_with_the_real_perf` still allows one
+  uncounted call, but only with its refusal printed and the verdict saying how
+  many calls were counted. `speed_cpu_advisory_needs_covering_counts_and_a_cpu_only_failure`
+  now needs an uncovered count to give no instruction count and no build ratio;
+  `speed_perf_parsing_and_warm_judging` pins the group arguments. Discrimination
+  proofs are in the tests' docs.
+
 ### Fixed (ENG-178: table procedures named like record built-ins: four follow-ups from ENG-173)
 
 From Fable's second review of ENG-173 (`/work/.al-sem/engine-notes/eng173/fable-eng173-r2.md`).

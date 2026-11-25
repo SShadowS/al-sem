@@ -2924,36 +2924,19 @@ fn speed_counts_instructions_with_the_real_perf() {
         .rfind(|l| l.contains("cdo-speed: PASS"))
         .unwrap_or_else(|| panic!("{text}"))
         .to_string();
-    assert!(
-        v.contains("(instructions: build x") && v.contains("round-total x"),
-        "{text}"
-    );
     assert!(text.contains("instructions: counted per call"), "{text}");
-    // TLS-111: user cycles too, under the real perf's running-% columns (the
-    // unpinned stub servers move between core types, so a PMU's share alone is
-    // below 100 while the kind's sum is 100).
     let json: serde_json::Value = serde_json::from_str(
         &std::fs::read_to_string(dir.path().join("state-/out/speed.json")).unwrap(),
     )
     .unwrap();
-    let build = json["records"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|r| r["call"] == "build")
-        .unwrap_or_else(|| panic!("a build record: {json}"));
-    assert!(
-        build["cycles"].as_f64().is_some_and(|c| c > 0.0)
-            && build["clock"].as_f64().is_some_and(|c| c > 0.0),
-        "the real perf's cycles were not counted: {build}"
-    );
     // Every call counted but at most one (round 1's share-sum rule refused 9 of
     // 64 real calls in an A/A run on CDO, systematically; shares of a hybrid
-    // split sum past 100 %). One uncounted call is allowed: under the whole
-    // suite's load, one went uncounted in 1 of 9 runs (2026-11-21, reason not
-    // caught then); an attach timeout or another perf user multiplexing the
-    // counters makes that legitimate. cdo-speed now logs perf's rows when it
-    // refuses them ("perf output not taken as a count"), shown below on a failure.
+    // split sum past 100 %). One uncounted call is allowed (an attach timeout
+    // under the suite's load, another perf user taking the counters), but only
+    // with its refusal printed (TLS-130): the run then says how many calls were
+    // counted instead of a missing ratio. TLS-130's cause (events read apart
+    // while a server thread ran) is pinned by
+    // `speed_perf_groups_keep_a_pmus_running_times_equal`.
     let records = json["records"].as_array().unwrap();
     let uncounted: Vec<_> = records
         .iter()
@@ -2964,6 +2947,106 @@ fn speed_counts_instructions_with_the_real_perf() {
         uncounted.len() <= 1,
         "not counted under the real perf: {uncounted:?}\n{text}"
     );
+    if uncounted.is_empty() {
+        assert!(
+            v.contains("(instructions: build x") && v.contains("round-total x"),
+            "{text}"
+        );
+    } else {
+        let refusals = [
+            "perf output not taken as a count",
+            "perf attach failed",
+            "NOT COVERED",
+            "perf did not stop",
+        ];
+        assert!(
+            v.contains(" calls counted)") && refusals.iter().any(|r| text.contains(r)),
+            "an uncounted call without its refusal: {uncounted:?}\n{text}"
+        );
+    }
+    // TLS-111: user cycles too, under the real perf's running-% columns (the
+    // unpinned stub servers move between core types, so a PMU's share alone is
+    // below 100 while the kind's sum is 100).
+    let build = records
+        .iter()
+        .find(|r| r["call"] == "build" && !r["instr"].is_null())
+        .unwrap_or_else(|| panic!("a counted build record: {json}"));
+    assert!(
+        build["cycles"].as_f64().is_some_and(|c| c > 0.0)
+            && build["clock"].as_f64().is_some_and(|c| c > 0.0),
+        "the real perf's cycles were not counted: {build}"
+    );
+}
+
+/// ⟨TLS-130⟩ The REAL perf, stopped while the attached tasks still run (12
+/// spinning processes, as a server's threads can be at a call's end under
+/// load), with cdo-speed's own events (`perf_event_args`), five times: every
+/// stop's output is taken as a count. A PMU's events apart are read one after
+/// the other, so the later one ran longer: on server1 (perf 7.0.14,
+/// 2026-11-25, no other perf user) 10 of 10 such stops were refused
+/// ("multiplexed"), 0 of 10 grouped. Skipped, saying so, where perf cannot
+/// count.
+///
+/// Mutation (2026-11-25): `perf_event_args` back to one `-e` per event ->
+/// "stop 1 refused" with `cpu_core/instructions/u` at 2968286980 ns against its
+/// cycles at 2968141108, `cpu_atom` 2729111466 against 2729080424 (red; also
+/// "not one perf group per PMU" in `speed_perf_parsing_and_warm_judging`).
+/// Restored, green.
+#[cfg(target_os = "linux")]
+#[test]
+fn speed_perf_groups_keep_a_pmus_running_times_equal() {
+    let py = r#"
+import importlib.machinery, importlib.util, os, select, signal, subprocess, sys, time
+loader = importlib.machinery.SourceFileLoader("cdo_speed", sys.argv[1])
+m = importlib.util.module_from_spec(importlib.util.spec_from_loader("cdo_speed", loader))
+loader.exec_module(m)
+events, why = m.instr_probe()
+if not events:
+    print(f"skipped: {why}")
+    sys.exit(0)
+for stop in range(1, 6):
+    spin = [subprocess.Popen(["sh", "-c", "while :; do :; done"]) for _ in range(12)]
+    try:
+        time.sleep(0.2)
+        # Counting from `enable`'s ack, as cdo-speed does: no stop before perf runs.
+        ctl_r, ctl_w = os.pipe()
+        ack_r, ack_w = os.pipe()
+        perf = subprocess.Popen(["perf", "stat", "--no-scale", "-x,", *m.perf_event_args(events),
+                                 "-D", "-1", "--control", f"fd:{ctl_r},{ack_w}",
+                                 "-p", ",".join(str(p.pid) for p in spin)],
+                                pass_fds=(ctl_r, ack_w), stderr=subprocess.PIPE, text=True)
+        os.write(ctl_w, b"enable\n")
+        if not select.select([ack_r], [], [], 30)[0] or b"ack" not in os.read(ack_r, 64):
+            sys.exit(f"stop {stop}: perf gave no ack")
+        time.sleep(0.5)
+        perf.send_signal(signal.SIGINT)
+        text = perf.communicate(timeout=30)[1]
+        for fd in (ctl_r, ctl_w, ack_r, ack_w):
+            os.close(fd)
+    finally:
+        for p in spin:
+            p.kill()
+            p.wait()
+    if m.perf_parse(text, events) is None:
+        sys.exit(f"stop {stop} refused: {text}")
+print("ok")
+"#;
+    let out = crate::clean_env::command("python3")
+        .args(["-c", py])
+        .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-speed"))
+        .env("ALSEM_SPEED_CACHE", "/nonexistent/cdo-speed-cache")
+        .output()
+        .unwrap();
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        out.status.success() && (text.contains("ok") || text.contains("skipped: ")),
+        "{text}"
+    );
+    eprintln!("{text}");
 }
 
 /// A stand-in perf (SPEED_PERF_STUB) in its own folder, executable.
@@ -3123,8 +3206,8 @@ fn speed_counts_cycles_and_labels_clock_and_cpi() {
 /// ⟨TLS-111⟩ cdo-speed's perf parsing and warm-up judging, called directly
 /// (the script imported):
 /// - only `instructions` and `cycles`, once each per PMU, reach perf (both are
-///   fixed counters, so nothing multiplexes); any other event, or one twice, is
-///   refused;
+///   fixed counters, so nothing multiplexes), as one perf group per PMU
+///   (TLS-130); any other event, or one twice, is refused;
 /// - `perf_counts` on REAL perf output (server1, perf 7.0.14): a hybrid split
 ///   whose running shares sum to 116 %, a pinned call whose atom rows are
 ///   `<not counted>` (0 ns, 0.00), and `true`'s truncated 93 + 6 count; a
@@ -3157,8 +3240,12 @@ import importlib.machinery, importlib.util, sys
 loader = importlib.machinery.SourceFileLoader("cdo_speed", sys.argv[1])
 m = importlib.util.module_from_spec(importlib.util.spec_from_loader("cdo_speed", loader))
 loader.exec_module(m)
-m.perf_event_args(m.HYBRID_EVENTS)
-m.perf_event_args(m.PLAIN_EVENTS)
+if m.perf_event_args(m.HYBRID_EVENTS) != [
+        "-e", "{cpu_core/instructions/u,cpu_core/cycles/u}",
+        "-e", "{cpu_atom/instructions/u,cpu_atom/cycles/u}"]:
+    sys.exit(f"not one perf group per PMU: {m.perf_event_args(m.HYBRID_EVENTS)}")
+if m.perf_event_args(m.PLAIN_EVENTS) != ["-e", "{instructions:u,cycles:u}"]:
+    sys.exit(f"not one perf group: {m.perf_event_args(m.PLAIN_EVENTS)}")
 for bad in (m.HYBRID_EVENTS + ("cpu_core/cache-misses/u",),
             ("cpu_core/cycles/u", "cpu_core/cycles/u"),
             ("instructions:u", "cycles:u", "branches:u")):
@@ -3699,7 +3786,8 @@ fn speed_cpu_failure_is_advisory_only_when_a_lower_clock_explains_it() {
 ///   wall x1.8 fails too (limit 1.6): nothing is made advisory;
 /// - the counters ran for 0.6 of each call's CPU seconds (STUB_PERF_COVER):
 ///   each burning call's record keeps its counts but reads `covered: false`,
-///   with no clock, so no label and no advisory: FAIL.
+///   with no instruction count (TLS-130) and no clock, so no build ratio, no
+///   label and no advisory: FAIL.
 ///
 /// The positional factor is off (STUB_SECOND_FACTOR 1) in the last two, so no
 /// extra pair runs; in the first it runs (its warm-tests is contradicted).
@@ -3713,6 +3801,9 @@ fn speed_cpu_failure_is_advisory_only_when_a_lower_clock_explains_it() {
 /// per instruction to a lower clock): all three proofs redone, each red again
 /// (the partly covered run exit 0; "CPU ADVISORY" on the CPU-and-wall run; the
 /// build advisory from pass 2 alone, x1.47 and x1.00 at equal clocks, exit 0).
+/// TLS-130 (2026-11-25): `timed_call` keeping an uncovered count's `instr` ->
+/// "uncovered counts kept for diagnostics, with no instruction count or clock"
+/// (red). Restored, green.
 #[cfg(target_os = "linux")]
 #[test]
 fn speed_cpu_advisory_needs_covering_counts_and_a_cpu_only_failure() {
@@ -3771,9 +3862,18 @@ fn speed_cpu_advisory_needs_covering_counts_and_a_cpu_only_failure() {
     assert!(
         !builds.is_empty()
             && builds.iter().all(|r| r["covered"] == false
-                && r["instr"].as_f64().is_some_and(|i| i > 0.0)
+                && r["counts"]["cpu_core/instructions/u"]
+                    .as_f64()
+                    .is_some_and(|i| i > 0.0)
+                && r["instr"].is_null()
                 && r["clock"].is_null()),
-        "uncovered counts kept for diagnostics, with no clock: {builds:?}"
+        "uncovered counts kept for diagnostics, with no instruction count or clock: {builds:?}"
+    );
+    // TLS-130: so no instruction ratio either (a multiplexed perf group loses
+    // the same time on both its events; only coverage shows it).
+    assert!(
+        !speed_verdict(&text).contains("build x"),
+        "an uncovered count reached an instruction ratio: {text}"
     );
 }
 

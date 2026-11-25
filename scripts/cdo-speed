@@ -87,8 +87,9 @@ Clock and cycles per instruction (TLS-111, docs/superpowers/notes/2026-11-21-tls
 cpu-seconds-on-server1.md). On server1 CPU seconds measure the work times the clock,
 core sharing and core kind, each able to move x2 between the sides of a pass. So
 each call also counts user-mode cycles beside the instructions (per PMU; both fixed
-counters, nothing else is allowed on a PMU, and a PMU whose events did not run
-exactly as long, a sign of multiplexing, gives no count: see `perf_counts`) and
+counters, nothing else is allowed on a PMU; a PMU's two are one perf group, so they
+run exactly as long, and a PMU whose events did not, or a count whose running time
+does not cover the call's CPU seconds, gives no count: see `perf_counts`, `covers`) and
 records user and system seconds apart. Per
 side: the clock (user cycles / user seconds, GHz) and cycles per instruction. A judged
 row whose sides' clocks differ beyond CLOCK_BAND is labelled CLOCK, one whose cycles
@@ -103,8 +104,8 @@ sys) / base CPU with clock ratio head/base, within the CPU limit, and in
 a rounds row for every round over the limit by itself. It is printed with its CPU ratio,
 the clock-corrected ratio and the instruction ratio. A clock in head's favour never
 waives; wall and memory failures always fail. A count whose counters did not run for
-the call's CPU seconds (`covers`) is recorded (`covered: false`) but gives no clock, no
-label and so no advisory. The advisory applies only in the final judgment, after any
+the call's CPU seconds (`covers`) is recorded (`covered: false`, its counts kept) but
+gives no instruction count (TLS-130), no clock, no label and so no advisory. The advisory applies only in the final judgment, after any
 extra pair.
 A judged warm-up row that FAILS (advisory or not) while its two passes' ratios differ
 beyond CONTRADICTED_SPREAD gets ONE more flipped pair (passes 3 and 4 on fresh servers,
@@ -1005,13 +1006,24 @@ def perf_event_args(events=None):
     plain), at most one `instructions` and one `cycles` event and nothing else.
     Both are fixed counters, so this perf run leaves nothing to multiplex: a
     count never comes out short because of our own events (review r1, sol;
-    TLS-111 added cycles). Any other event, or one twice, is refused here."""
+    TLS-111 added cycles). Any other event, or one twice, is refused here.
+    ⟨TLS-130⟩ A PMU's events go in one group (`-e {a,b}`): the kernel schedules a
+    group's members together, so they run exactly as long. Apart, perf reads
+    each event at its own moment, and a server thread still running at the stop
+    (more so under load) gave the later read more running time: on server1
+    (perf 7.0.14, 2026-11-25, 12 spinning processes attached, no other perf
+    user) apart unequal in 10 of 10 stops (0.01-2.9 ms), grouped 0 of 10; a gate
+    under load refused counts that were whole. A group shows multiplexing as no
+    difference (both members lose the same time), so `covers` refuses such a
+    count instead (`timed_call`)."""
     events = events or INSTR_EVENTS
     pairs = [(event_pmu(e), event_kind(e)) for e in events]
     if len(pairs) != len(set(pairs)) or any(k not in FIXED_KINDS for _, k in pairs):
         raise ValueError("cdo-speed: per PMU only `instructions` and `cycles`, once each "
                          f"(fixed counters, no multiplexing): {events}")
-    return [a for e in events for a in ("-e", e)]
+    pmus = dict.fromkeys(p for p, _ in pairs)
+    return [a for pmu in pmus
+            for a in ("-e", "{" + ",".join(e for e in events if event_pmu(e) == pmu) + "}")]
 
 
 def perf_counts(text, events=None):
@@ -1417,6 +1429,11 @@ def timed_call(server, side, cid, tool, args, rnd, warm_pass, tag, records):
         f"  load {load:5.1f}  pressure {shown:>5}{instr_note}{exit_note}")
     if code != 0:
         raise CallFailed(f"{tag} {cid} ({tool}) on {side} exited {code}", err)
+    # ⟨TLS-130⟩ An uncovered count is partial (a multiplexed group loses the same
+    # time on both members, so only `covers` sees it): no instruction count; its
+    # counts stay for diagnostics.
+    if covered is False:
+        instr = None
     records.append(dict(call=cid, side=side, round=rnd, warm_pass=warm_pass,
                         wall=wall, cpu=cpu, sha=sha, load=load, pressure=pressure,
                         instr=instr, suspended_before=before, suspended_during=during,
@@ -1448,8 +1465,9 @@ def timed_call(server, side, cid, tool, args, rnd, warm_pass, tag, records):
 # under 5 %, against the 15 % CLOCK band, so it cannot flip an advisory alone.
 # A running time above CPU x COVER_CAP + COVER_ABS is no loss but is odd (perf
 # counting something /proc does not): no count either. The cap is x1.10, about
-# four times the largest excess seen on CDO. An uncovered count only loses its
-# clock, label and advisory.
+# four times the largest excess seen on CDO. An uncovered count gives no
+# instruction count (TLS-130: the per-PMU groups make multiplexing invisible to
+# `perf_parse`), so no clock, label or advisory; its counts stay in the record.
 COVER_REL = 0.02
 COVER_ABS = 0.05
 COVER_CAP = 1.10
