@@ -2429,7 +2429,10 @@ def lines(n, c, run_ns=1e6):
     # probe): STUB_PERF_SPLIT=<share> puts that share of each count on
     # cpu_atom; STUB_PERF_MUX: cpu_core's cycles ran 10 % shorter than its
     # instructions (multiplexed); STUB_PERF_MUX_ATTACH=<n>: only on the run's
-    # n-th attach (TLS-130).
+    # n-th attach (TLS-130). A PMU never run on reads `<not counted>` at 0 ns
+    # and 0.00 %; STUB_PERF_PINNED_LOST: cpu_core's pinned group got no
+    # counters (another pinned user): `<not counted>` at 0 ns and 100.00 %, as
+    # the real perf prints it (TLS-130 review r1).
     probe = "--" in a
     if os.environ.get("STUB_PERF_NONE") and not probe:
         n = c = "<not counted>"
@@ -2439,11 +2442,12 @@ def lines(n, c, run_ns=1e6):
     out = ""
     for pmu, share in (("cpu_core", 1 - split), ("cpu_atom", split)):
         for kind, v in (("instructions", n), ("cycles", c)):
-            nc = share == 0 or isinstance(v, str)
+            lost = not probe and os.environ.get("STUB_PERF_PINNED_LOST") and pmu == "cpu_core"
+            nc = share == 0 or isinstance(v, str) or lost
             val = "<not counted>" if nc else int(round(v * share))
             mux_f = 0.9 if mux and pmu == "cpu_core" and kind == "cycles" else 1
             ns = 0 if nc else int(run_ns * share * mux_f)
-            pct = 100 if share == 1 else int(120 * share)
+            pct = 100 if lost else 0 if nc else 100 if share == 1 else int(120 * share)
             out += f"{val},,{pmu}/{kind}/u,{ns},{pct:.2f},,\n"
     return out
 if "--" in a:
@@ -2987,8 +2991,11 @@ fn speed_counts_instructions_with_the_real_perf() {
 /// and read one after the other, so one of them ran longer: on server1 (perf
 /// 7.0.14, 2026-11-25, no other perf user;
 /// /work/.al-sem/tools-notes/tls130/probe-2026-11-25.log) 10 of 10 such stops
-/// were refused ("multiplexed"), 0 of 10 grouped, so two stops pin it. Skipped,
-/// saying so, where perf cannot count.
+/// were refused ("multiplexed"), 0 of 10 grouped, so two stops pin it. Then
+/// (review r1, hybrid only) a third stop with the spinners on the P-cores and
+/// 16 ordinary cpu_core events beside ours: the pinned (`:D`) group must read
+/// 100.00 % running (unpinned it read 49-50 %, probe-pinned-2026-11-25.log).
+/// Skipped, saying so, where perf cannot count.
 ///
 /// Mutation (2026-11-25): `perf_event_args` back to one `-e` per event ->
 /// "stop 1 refused" with `cpu_core/instructions/u` at 2968286980 ns against its
@@ -2996,7 +3003,9 @@ fn speed_counts_instructions_with_the_real_perf() {
 /// "not one perf group per PMU" in `speed_perf_parsing_and_warm_judging`).
 /// Restored, green. Redone at two stops (review r1): "stop 1 refused",
 /// `cpu_core` instructions 2434296526 ns against cycles 2434751329 (the second
-/// event longer this time; red). Restored, green.
+/// event longer this time; red). Restored, green. Review r1: `:D` dropped ->
+/// "the pinned group was time-sliced", cpu_core at 33.00 % (red). Restored,
+/// green.
 #[cfg(target_os = "linux")]
 #[test]
 fn speed_perf_groups_keep_a_pmus_running_times_equal() {
@@ -3009,20 +3018,21 @@ events, why = m.instr_probe()
 if not events:
     print(f"skipped: {why}")
     sys.exit(0)
-for stop in range(1, 3):
-    spin = [subprocess.Popen(["sh", "-c", "while :; do :; done"]) for _ in range(12)]
+def stop_once(pre=(), extra=()):
+    spin = [subprocess.Popen([*pre, "sh", "-c", "while :; do :; done"]) for _ in range(12)]
     try:
         time.sleep(0.2)
         # Counting from `enable`'s ack, as cdo-speed does: no stop before perf runs.
         ctl_r, ctl_w = os.pipe()
         ack_r, ack_w = os.pipe()
-        perf = subprocess.Popen([m.PERF, "stat", "--no-scale", "-x,", *m.perf_event_args(events),
+        perf = subprocess.Popen([m.PERF, "stat", "--no-scale", "-x,", *extra,
+                                 *m.perf_event_args(events),
                                  "-D", "-1", "--control", f"fd:{ctl_r},{ack_w}",
                                  "-p", ",".join(str(p.pid) for p in spin)],
                                 pass_fds=(ctl_r, ack_w), stderr=subprocess.PIPE, text=True)
         os.write(ctl_w, b"enable\n")
         if not select.select([ack_r], [], [], 30)[0] or b"ack" not in os.read(ack_r, 64):
-            sys.exit(f"stop {stop}: perf gave no ack")
+            sys.exit("perf gave no ack")
         time.sleep(0.5)
         perf.send_signal(signal.SIGINT)
         text = perf.communicate(timeout=30)[1]
@@ -3033,7 +3043,23 @@ for stop in range(1, 3):
             p.kill()
             p.wait()
     if m.perf_parse(text, events) is None:
-        sys.exit(f"stop {stop} refused: {text}")
+        sys.exit(f"refused: {text}")
+    return text
+for stop in range(2):
+    stop_once()
+# Pinned (review r1): spinners on the P-cores beside 16 ordinary cpu_core
+# events (two groups of 8; 8 general counters): unpinned, our group would run
+# about half the time; pinned, all of it.
+if events == m.HYBRID_EVENTS:
+    cpus = open("/sys/bus/event_source/devices/cpu_core/cpus").read().strip()
+    eight = ("cpu_core/branches/u,cpu_core/branch-misses/u,cpu_core/cache-misses/u,"
+             "cpu_core/cache-references/u,cpu_core/L1-dcache-loads/u,cpu_core/LLC-loads/u,"
+             "cpu_core/LLC-load-misses/u,cpu_core/dTLB-loads/u")
+    text = stop_once(("taskset", "-c", cpus), ("-e", "{" + eight + "}", "-e", "{" + eight + "}"))
+    ours = [ln for ln in text.splitlines() if ",cpu_core/instructions/u," in ln
+            or ",cpu_core/cycles/u," in ln]
+    if len(ours) != 2 or any(ln.split(",")[4] != "100.00" for ln in ours):
+        sys.exit(f"the pinned group was time-sliced: {text}")
 print("ok")
 "#;
     let out = crate::clean_env::command("python3")
@@ -3082,24 +3108,24 @@ fn speed_refusals(text: &str) -> Vec<&str> {
 /// Mutations (2026-11-25): the "perf output not taken as a count" print
 /// dropped -> "one refusal line for the one uncounted call" (red); the
 /// early-end print dropped -> "an early-ended call without its refusal" (red).
-/// Each restored, green.
+/// Each restored, green. A pinned group without counters (STUB_PERF_PINNED_LOST,
+/// split 70/30) is refused as perf output on every call. Review r1: the
+/// `<not counted>`-at-0.00-% rule dropped from `perf_parse` -> "a pinned group
+/// without counters was counted: 0 of 40 refused" (red). Restored, green.
 #[cfg(target_os = "linux")]
 #[test]
 fn speed_prints_each_uncounted_calls_refusal() {
     let bin = tempfile::tempdir().unwrap();
     let perf = stub_perf(bin.path());
-    let run = |extra: (&str, &str)| {
+    let run = |extra: &[(&str, &str)]| {
         let dir = tempfile::tempdir().unwrap();
-        let env = [
-            ("CDO_SPEED_INSTR", "1"),
-            ("CDO_SPEED_PERF", perf.as_str()),
-            extra,
-        ];
+        let mut env = vec![("CDO_SPEED_INSTR", "1"), ("CDO_SPEED_PERF", perf.as_str())];
+        env.extend_from_slice(extra);
         let (code, text) = speed_with_stub(dir.path(), "1.0", &[], &env);
         (dir, code, text)
     };
 
-    let (dir, code, text) = run(("STUB_PERF_MUX_ATTACH", "1"));
+    let (dir, code, text) = run(&[("STUB_PERF_MUX_ATTACH", "1")]);
     assert_eq!(code, Some(0), "{text}");
     let json = speed_json(dir.path());
     let records = json["records"].as_array().unwrap();
@@ -3127,7 +3153,7 @@ fn speed_prints_each_uncounted_calls_refusal() {
         records.len()
     );
 
-    let (_dir, code, text) = run(("STUB_PERF_EARLY", "1"));
+    let (_dir, code, text) = run(&[("STUB_PERF_EARLY", "1")]);
     assert_eq!(code, Some(0), "{text}");
     assert!(
         text.lines()
@@ -3135,6 +3161,31 @@ fn speed_prints_each_uncounted_calls_refusal() {
             .count()
             >= 2,
         "an early-ended call without its refusal: {text}"
+    );
+
+    // Review r1: cpu_core's pinned group got no counters (`<not counted>` at
+    // 0 ns, 100.00 %) on calls that ran 70/30 over the PMUs: refused as perf
+    // output, before coverage would see it.
+    let (dir, code, text) = run(&[("STUB_PERF_PINNED_LOST", "1"), ("STUB_PERF_SPLIT", "0.3")]);
+    assert_eq!(code, Some(0), "{text}");
+    let records = speed_json(dir.path())["records"]
+        .as_array()
+        .unwrap()
+        .clone();
+    let calls = records.iter().filter(|r| r["total"] != true).count();
+    let lost = text
+        .lines()
+        .filter(|l| {
+            l.contains("perf output not taken as a count")
+                && l.contains("<not counted>,,cpu_core/instructions/u,0,100.00,,")
+        })
+        .count();
+    assert!(
+        calls > 0
+            && lost >= calls
+            && records.iter().all(|r| r["instr"].is_null())
+            && speed_verdict(&text).contains("(instructions: no call fully counted"),
+        "a pinned group without counters was counted: {lost} of {calls} refused\n{text}"
     );
 }
 
@@ -3320,7 +3371,10 @@ fn speed_counts_cycles_and_labels_clock_and_cpi() {
 /// check off -> "<not counted> at a running time: counted" (red). Each
 /// restored, green. Round 4: the old two-sided 2 % band -> "covers(184.41,
 /// 179.63) is False" (red); the cap dropped -> "covers(200.0, 179.63) is True"
-/// (red). Each restored, green.
+/// (red). Each restored, green. TLS-130 review r1 (2026-11-25): `:D` dropped
+/// from `perf_event_args` -> "not one pinned perf group per PMU" (red); the
+/// `<not counted>`-at-0.00-% rule dropped -> "a pinned group without counters:
+/// counted" (red). Each restored, green.
 #[cfg(target_os = "linux")]
 #[test]
 fn speed_perf_parsing_and_warm_judging() {
@@ -3330,11 +3384,11 @@ loader = importlib.machinery.SourceFileLoader("cdo_speed", sys.argv[1])
 m = importlib.util.module_from_spec(importlib.util.spec_from_loader("cdo_speed", loader))
 loader.exec_module(m)
 if m.perf_event_args(m.HYBRID_EVENTS) != [
-        "-e", "{cpu_core/instructions/u,cpu_core/cycles/u}",
-        "-e", "{cpu_atom/instructions/u,cpu_atom/cycles/u}"]:
-    sys.exit(f"not one perf group per PMU: {m.perf_event_args(m.HYBRID_EVENTS)}")
-if m.perf_event_args(m.PLAIN_EVENTS) != ["-e", "{instructions:u,cycles:u}"]:
-    sys.exit(f"not one perf group: {m.perf_event_args(m.PLAIN_EVENTS)}")
+        "-e", "{cpu_core/instructions/u,cpu_core/cycles/u}:D",
+        "-e", "{cpu_atom/instructions/u,cpu_atom/cycles/u}:D"]:
+    sys.exit(f"not one pinned perf group per PMU: {m.perf_event_args(m.HYBRID_EVENTS)}")
+if m.perf_event_args(m.PLAIN_EVENTS) != ["-e", "{instructions:u,cycles:u}:D"]:
+    sys.exit(f"not one pinned perf group: {m.perf_event_args(m.PLAIN_EVENTS)}")
 for bad in (m.HYBRID_EVENTS + ("cpu_core/cache-misses/u",),
             ("cpu_core/cycles/u", "cpu_core/cycles/u"),
             ("instructions:u", "cycles:u", "branches:u")):
@@ -3365,9 +3419,17 @@ muxed = (  # 16 more events on cpu_core force multiplexing: its two differ
     "615183361,,cpu_core/cycles/u,240993765,43.00,,\n"
     "977709388,,cpu_atom/instructions/u,131670406,27.00,,\n"
     "298829742,,cpu_atom/cycles/u,131670406,27.00,,\n")
+# TLS-130 review r1, perf 7.0.14 on server1 (2026-11-25, probe-pinned-2026-11-25.log):
+# attached beside a competing pinned group, cpu_core's pinned group got no counters.
+pinned_lost = (
+    "<not counted>,,cpu_core/instructions/u,0,100.00,,\n"
+    "<not counted>,,cpu_core/cycles/u,0,100.00,,\n"
+    "1841531994,,cpu_atom/instructions/u,669085616,62.00,,\n"
+    "540300573,,cpu_atom/cycles/u,669085616,62.00,,\n")
 cases = [
     ("hybrid split", split, True),
     ("pinned, atom not counted", pinned, True),
+    ("a pinned group without counters", pinned_lost, False),
     ("whole-percent truncation", truncated, True),
     ("multiplexed", muxed, False),
     ("a row twice", split + "5,,cpu_core/cycles/u,1025384631,85.00,,\n", False),

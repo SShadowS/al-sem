@@ -250,8 +250,11 @@ Every test still runs before a merge; the tiers decide HOW OFTEN each one runs.
   x1.15 (provisional bands) is labelled `CLOCK` or `CPI`, from counts that cover the call
   (counter running time not short of its /proc CPU by over 2 % + 0.05 s, nor over x1.10 of it;
   else `covered: false`: no label and, since TLS-130, no instruction count either; the counts
-  stay in `speed.json`). A PMU's two events are one perf group (TLS-130), so they always run
-  equally long; multiplexing then shows only as a coverage loss.
+  stay in `speed.json`). A PMU's two events are one pinned perf group (`{...}:D`, TLS-130):
+  they always run equally long and are never time-sliced; a group that gets no counters
+  (another pinned perf user) reads `<not counted>` at 100.00 % and is refused. Left: a pinned
+  group that fails after its tasks ran there reads like a PMU never run on; only coverage
+  catches it, so it passes when that PMU had under 2 % + 0.05 s of the call's CPU.
   A warm-up failure whose two passes disagree beyond x1.25 gets ONE more flipped pair first
   (two passes, each waiting for a calm host); every row that failed after pass 2 must then
   agree within each side order, and four passes judge; else `HOST UNSTABLE`, exit 2 (`verdict`

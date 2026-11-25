@@ -24,23 +24,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `gate_scripts::speed_counts_instructions_with_the_real_perf` (load avg15 ~190)
   lost its build ratio this way: two calls refused, each with `cpu_core` equal
   and `cpu_atom` apart by 26 µs and 3.7 µs.
-- **The fix.** A PMU's two events now go in one perf group
-  (`-e {cpu_core/instructions/u,cpu_core/cycles/u}`, one per PMU; plain CPUs
-  `-e {instructions:u,cycles:u}`). The kernel runs a group's members together, so
-  they report exactly the same running time: 0 of 10 such stops refused. A group
-  hides multiplexing from the equal-time check (both members lose the same time),
-  so a count whose running time does not cover the call's CPU seconds (`covers`,
-  unchanged band: 2 % + 50 ms short, x1.10 over) now gives **no instruction
-  count**; before, it lost only its clock, CPI label and advisory.
-- **What is weaker.** Before, any multiplexing of a PMU's two events was refused
-  (they ran unequal times). Now a multiplexed group is refused only when the lost
-  time passes `covers`' slack, so light multiplexing (up to about 4.5 % on a
-  judged multi-threaded call) is counted. perf's running-% column cannot close
-  this on server1: an unpinned task's PMUs read their shares of its time (47-67 %
-  and 32-56 % in the probe above, summing to 99 % by whole-percent truncation,
-  and 110-125 % on real CDO calls in TLS-111), so a below-100 % rule refuses
-  every hybrid call. Only a task held on one core type reads 100.00 % (50.00 %
-  under forced multiplexing). Open for a decision.
+- **The fix.** A PMU's two events now go in one **pinned** perf group
+  (`-e {cpu_core/instructions/u,cpu_core/cycles/u}:D`, one per PMU; plain CPUs
+  `-e {instructions:u,cycles:u}:D`). The kernel runs a group's members together,
+  so they report exactly the same running time: 0 of 10 such stops refused. A
+  group's members tie even when it is time-sliced, so the group is pinned: a
+  pinned group is never time-sliced. It holds its counters whenever its tasks
+  run, or it fails outright (another pinned perf user holds them) and counts
+  nothing on that PMU. Measured on server1 (`probe-pinned-2026-11-25.log`,
+  `enabled_probe.py`, beside the skew probe): with 16 ordinary extra cpu_core
+  events and the spinners on the P-cores, the pinned group ran 100.00 % in 3 of 3
+  stops (unpinned 49-50 %); beside a competing pinned group, ours read
+  `<not counted>` at 0 ns and 100.00 % (no enabled time). `perf_parse` now
+  refuses a `<not counted>` row that does not read 0.00 % (a PMU the tasks never
+  ran on reads 0 ns and 0.00 %, on server1 and on real CDO calls), so that
+  failure prints `perf output not taken as a count` and gives no count.
+- **Coverage refuses too.** A count whose running time does not cover the
+  call's CPU seconds (`covers`, unchanged band: 2 % + 50 ms short, x1.10 over) now
+  gives **no instruction count**; before, it lost only its clock, CPI label and
+  advisory.
+- **The one partial count left.** A pinned group that fails AFTER its tasks first
+  ran on that PMU reads like a PMU they never ran on (`<not counted>`, 0 ns,
+  0.00 %). perf's CSV has no enabled time to tell them apart, and perf -v's
+  enabled times differ between the PMUs even when nothing fails (1.93 s against
+  1.29 s on a process starting threads and children), so no exact rule exists.
+  Only `covers` catches it, and it passes when that PMU carried less of the
+  call's CPU seconds than the band (2 % + 50 ms), e.g. a call almost wholly on the
+  other core type.
 - **What changes in real gate verdicts (inferred).** No landing verdict yet
   shows a partly refused count; this is reasoned from the cause. Calls with a
   server thread running at the start or stop are counted instead of refused, so
@@ -48,24 +58,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   missing. An uncovered call now drops out of the instruction ratios (a round
   total with one such call has none). In the one A/A run on CDO behind the band
   (TLS-111, f7da9a93, `/work/.al-sem/tools-notes/tls111/aa3`) every call was
-  inside it, so a normal run should lose nothing. CPU, wall and memory judging do
-  not change; the instruction limit stays advisory.
+  inside it, so a normal run should lose nothing. A call whose pinned group lost
+  its counters to another pinned perf user is now refused (before, ungrouped
+  events were time-sliced and refused only when the two came out unequal). CPU,
+  wall and memory judging do not change; the instruction limit stays advisory.
 - **Every uncounted call says why.** Perf ending before the call, an unreadable
   perf output and a count with no instruction used to drop the count silently;
   each now prints a `call not counted` line, as a refused output, a failed
   attach and an uncovered count already did.
 - **Tests.** New `speed_perf_groups_keep_a_pmus_running_times_equal` starts and
   stops the real perf twice while 12 attached processes spin, with cdo-speed's
-  own events, and needs every output taken as a count (skipped where perf cannot
-  count). New `speed_prints_each_uncounted_calls_refusal`: the stub perf
-  multiplexes one call (`STUB_PERF_MUX_ATTACH`), which gives exactly one refusal
-  line naming its side and the matching "N of M calls counted"; perf ending early
-  prints its line. `speed_counts_instructions_with_the_real_perf` still allows
+  own events, and needs every output taken as a count, then a third stop on the
+  P-cores beside 16 ordinary cpu_core events where the pinned group must run
+  100.00 % (skipped where perf cannot count). New
+  `speed_prints_each_uncounted_calls_refusal`: the stub perf multiplexes one call
+  (`STUB_PERF_MUX_ATTACH`), which gives exactly one refusal line naming its side
+  and the matching "N of M calls counted"; perf ending early prints its line; a
+  pinned group without counters (`STUB_PERF_PINNED_LOST`: `<not counted>` at
+  100.00 % on calls split 70/30) is refused as perf output on every call. `speed_counts_instructions_with_the_real_perf` still allows
   one uncounted call (an attach timeout or a short call's /proc ticks under the
   suite's load), but only with as many refusal lines as uncounted calls.
   `speed_cpu_advisory_needs_covering_counts_and_a_cpu_only_failure` now needs an
   uncovered count to give no instruction count and no build ratio;
-  `speed_perf_parsing_and_warm_judging` pins the group arguments.
+  `speed_perf_parsing_and_warm_judging` pins the pinned-group arguments and
+  refuses the real "pinned group without counters" output.
   Discrimination proofs are in the tests' docs.
 
 ### Fixed (ENG-178: table procedures named like record built-ins: four follow-ups from ENG-173)

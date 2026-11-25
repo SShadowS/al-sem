@@ -87,9 +87,10 @@ Clock and cycles per instruction (TLS-111, docs/superpowers/notes/2026-11-21-tls
 cpu-seconds-on-server1.md). On server1 CPU seconds measure the work times the clock,
 core sharing and core kind, each able to move x2 between the sides of a pass. So
 each call also counts user-mode cycles beside the instructions (per PMU; both fixed
-counters, nothing else is allowed on a PMU; a PMU's two are one perf group, so they
-run exactly as long, and a PMU whose events did not, or a count whose running time
-does not cover the call's CPU seconds, gives no count: see `perf_counts`, `covers`) and
+counters, nothing else is allowed on a PMU; a PMU's two are one pinned perf group, so
+they run exactly as long and are never time-sliced, and a PMU whose events did not, a
+pinned group that got no counters, or a count whose running time does not cover the
+call's CPU seconds, gives no count: see `perf_event_args`, `perf_parse`, `covers`) and
 records user and system seconds apart. Per
 side: the clock (user cycles / user seconds, GHz) and cycles per instruction. A judged
 row whose sides' clocks differ beyond CLOCK_BAND is labelled CLOCK, one whose cycles
@@ -1015,9 +1016,16 @@ def perf_event_args(events=None):
     spinning processes attached, no other perf user;
     /work/.al-sem/tools-notes/tls130/skew_probe.py, probe-2026-11-25.log) apart
     unequal in 10 of 10 stops (14 us to 9.2 ms), grouped 0 of 10; a gate under
-    load refused counts that were whole. A group shows multiplexing as no
-    difference (both members lose the same time), so `covers` refuses such a
-    count instead (`timed_call`)."""
+    load refused counts that were whole.
+    ⟨TLS-130 review r1⟩ Each group is PINNED (`:D`), which a group needs: its two
+    members always tie, so time-slicing would not show in `perf_parse`. A pinned
+    group is never time-sliced: it holds its counters whenever its tasks run, or
+    it fails outright (another pinned user holds the counters) and counts
+    nothing on that PMU. Measured (probe-pinned-2026-11-25.log): 16 ordinary
+    extra cpu_core events, spinners on the P-cores: pinned 100.00 % running in 3
+    of 3 stops, unpinned 49-50 %; attached (-p) beside a competing pinned group,
+    ours read `<not counted>` at 0 ns and 100.00 % (enabled 0), which
+    `perf_parse` refuses. What stays: see `covers`."""
     events = events or INSTR_EVENTS
     pairs = [(event_pmu(e), event_kind(e)) for e in events]
     if len(pairs) != len(set(pairs)) or any(k not in FIXED_KINDS for _, k in pairs):
@@ -1025,7 +1033,7 @@ def perf_event_args(events=None):
                          f"(fixed counters, no multiplexing): {events}")
     pmus = dict.fromkeys(p for p, _ in pairs)
     return [a for pmu in pmus
-            for a in ("-e", "{" + ",".join(e for e in events if event_pmu(e) == pmu) + "}")]
+            for a in ("-e", "{" + ",".join(e for e in events if event_pmu(e) == pmu) + "}:D")]
 
 
 def perf_counts(text, events=None):
@@ -1053,7 +1061,11 @@ def perf_parse(text, events=None):
     that). A `<not counted>` row runs 0 ns beside its sibling's 0; one at a
     non-zero running time, or a positive count at 0 ns, is no count (a count of
     0 at a non-zero time is real: `true` on an E-core for 0.17 ms). An event's
-    row given twice is no count."""
+    row given twice is no count.
+    ⟨TLS-130 review r1⟩ A `<not counted>` row must read 0.00 % running: a PMU the
+    tasks never ran on was enabled for their time and ran 0 ns (0.00 %, on
+    server1 and on real CDO calls). A pinned group that never got its counters
+    has no enabled time either, and perf prints it at 100.00 %: no count."""
     events = events or INSTR_EVENTS
     counts, running = {}, {}
     for line in text.splitlines():
@@ -1071,7 +1083,7 @@ def perf_parse(text, events=None):
                 return None
             running[cols[2]] = int(cols[3])
             not_counted = cols[0] == "<not counted>"
-            if (not_counted and running[cols[2]] > 0) or (
+            if (not_counted and (running[cols[2]] > 0 or cols[4] != "0.00")) or (
                     counts[cols[2]] > 0 and running[cols[2]] == 0):
                 return None
     if set(counts) != set(events):
@@ -1476,8 +1488,17 @@ def timed_call(server, side, cid, tool, args, rnd, warm_pass, tag, records):
 # A running time above CPU x COVER_CAP + COVER_ABS is no loss but is odd (perf
 # counting something /proc does not): no count either. The cap is x1.10, about
 # four times the largest excess seen on CDO. An uncovered count gives no
-# instruction count (TLS-130: the per-PMU groups make multiplexing invisible to
-# `perf_parse`), so no clock, label or advisory; its counts stay in the record.
+# instruction count (TLS-130), so no clock, label or advisory; its counts stay
+# in the record.
+# ⟨TLS-130⟩ The one partial count left: a pinned group (`perf_event_args`) is
+# never time-sliced, and one that never got its counters is refused by
+# `perf_parse` (100.00 %). One that fails AFTER its tasks first ran on that PMU
+# reads like a PMU they never ran on (`<not counted>`, 0 ns, 0.00 %): perf's CSV
+# has no enabled time to tell them apart, and perf -v's enabled times differ
+# between the PMUs even when nothing fails (1.93 s against 1.29 s on a process
+# starting threads and children; enabled_probe.py). Only coverage catches it:
+# it passes when that PMU carried less of the call's CPU seconds than this band
+# (2 % + 0.05 s; e.g. a call almost wholly on the other core type).
 COVER_REL = 0.02
 COVER_ABS = 0.05
 COVER_CAP = 1.10
