@@ -249,7 +249,9 @@ Every test still runs before a merge; the tiers decide HOW OFTEN each one runs.
   judged row whose sides' clocks (user cycles / user s) or cycles per instruction differ beyond
   x1.15 (provisional bands) is labelled `CLOCK` or `CPI`, from counts that cover the call
   (counter running time not short of its /proc CPU by over 2 % + 0.05 s, nor over x1.10 of it;
-  else `covered: false`, no label).
+  else `covered: false`: no label and, since TLS-130, no instruction count either; the counts
+  stay in `speed.json`). A PMU's two events are one perf group (TLS-130), so they always run
+  equally long; multiplexing then shows only as a coverage loss.
   A warm-up failure whose two passes disagree beyond x1.25 gets ONE more flipped pair first
   (two passes, each waiting for a calm host); every row that failed after pass 2 must then
   agree within each side order, and four passes judge; else `HOST UNSTABLE`, exit 2 (`verdict`

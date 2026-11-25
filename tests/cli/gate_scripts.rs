@@ -2428,12 +2428,14 @@ def lines(n, c, run_ns=1e6):
     # hybrid split: whole percents whose sum passes 100). Attached (not the
     # probe): STUB_PERF_SPLIT=<share> puts that share of each count on
     # cpu_atom; STUB_PERF_MUX: cpu_core's cycles ran 10 % shorter than its
-    # instructions (multiplexed).
+    # instructions (multiplexed); STUB_PERF_MUX_ATTACH=<n>: only on the run's
+    # n-th attach (TLS-130).
     probe = "--" in a
     if os.environ.get("STUB_PERF_NONE") and not probe:
         n = c = "<not counted>"
     split = 0.0 if probe else float(os.environ.get("STUB_PERF_SPLIT", "0"))
-    mux = not probe and os.environ.get("STUB_PERF_MUX")
+    mux = not probe and (os.environ.get("STUB_PERF_MUX")
+                         or os.environ.get("STUB_PERF_MUX_ATTACH") == str(attach_no))
     out = ""
     for pmu, share in (("cpu_core", 1 - split), ("cpu_atom", split)):
         for kind, v in (("instructions", n), ("cycles", c)):
@@ -2453,6 +2455,8 @@ out = a[a.index("-o") + 1]
 pids = a[a.index("-p") + 1].split(",")
 with open(os.path.join(os.environ["STUB_DIR"], "perf-attaches"), "a") as f:
     f.write(pids[0] + "\n")  # the server's pid (cdo-speed lists it first)
+with open(os.path.join(os.environ["STUB_DIR"], "perf-attaches")) as f:
+    attach_no = len(f.read().splitlines())
 # This perf's pid, for the server's STUB_PERF_EARLY wait.
 with open(os.path.join(os.environ["STUB_DIR"], f"perfpid.{pids[0]}"), "w") as f:
     f.write(str(os.getpid()))
@@ -2931,21 +2935,28 @@ fn speed_counts_instructions_with_the_real_perf() {
     .unwrap();
     // Every call counted but at most one (round 1's share-sum rule refused 9 of
     // 64 real calls in an A/A run on CDO, systematically; shares of a hybrid
-    // split sum past 100 %). One uncounted call is allowed (an attach timeout
-    // under the suite's load, another perf user taking the counters), but only
-    // with its refusal printed (TLS-130): the run then says how many calls were
-    // counted instead of a missing ratio. TLS-130's cause (events read apart
-    // while a server thread ran) is pinned by
-    // `speed_perf_groups_keep_a_pmus_running_times_equal`.
+    // split sum past 100 %). TLS-130 removed the systematic cause (a PMU's
+    // events enabled and read apart while a server thread ran; pinned by
+    // `speed_perf_groups_keep_a_pmus_running_times_equal`). One uncounted call
+    // stays allowed for causes outside the run's control under the suite's
+    // load: an attach whose ack takes over CDO_SPEED_INSTR_ATTACH_S (5 s), or a
+    // short call whose /proc CPU ticks miss `covers`' band (one 10 ms tick on a
+    // 0.05 s call was seen in TLS-111's probe). Each must print its refusal
+    // (`speed_refusals`, pinned by `speed_prints_each_uncounted_calls_refusal`);
+    // the run then says how many calls were counted.
     let records = json["records"].as_array().unwrap();
     let uncounted: Vec<_> = records
         .iter()
-        .filter(|r| r["instr"].is_null() || r["cycles"].is_null())
+        .filter(|r| r["total"] != true && (r["instr"].is_null() || r["cycles"].is_null()))
         .map(|r| format!("{} {} r{}", r["call"], r["side"], r["round"]))
         .collect();
     assert!(
         uncounted.len() <= 1,
         "not counted under the real perf: {uncounted:?}\n{text}"
+    );
+    assert!(
+        speed_refusals(&text).len() >= uncounted.len(),
+        "an uncounted call without its refusal: {uncounted:?}\n{text}"
     );
     if uncounted.is_empty() {
         assert!(
@@ -2953,16 +2964,7 @@ fn speed_counts_instructions_with_the_real_perf() {
             "{text}"
         );
     } else {
-        let refusals = [
-            "perf output not taken as a count",
-            "perf attach failed",
-            "NOT COVERED",
-            "perf did not stop",
-        ];
-        assert!(
-            v.contains(" calls counted)") && refusals.iter().any(|r| text.contains(r)),
-            "an uncounted call without its refusal: {uncounted:?}\n{text}"
-        );
+        assert!(v.contains(" calls counted)"), "{text}");
     }
     // TLS-111: user cycles too, under the real perf's running-% columns (the
     // unpinned stub servers move between core types, so a PMU's share alone is
@@ -2978,20 +2980,23 @@ fn speed_counts_instructions_with_the_real_perf() {
     );
 }
 
-/// ⟨TLS-130⟩ The REAL perf, stopped while the attached tasks still run (12
-/// spinning processes, as a server's threads can be at a call's end under
-/// load), with cdo-speed's own events (`perf_event_args`), five times: every
-/// stop's output is taken as a count. A PMU's events apart are read one after
-/// the other, so the later one ran longer: on server1 (perf 7.0.14,
-/// 2026-11-25, no other perf user) 10 of 10 such stops were refused
-/// ("multiplexed"), 0 of 10 grouped. Skipped, saying so, where perf cannot
-/// count.
+/// ⟨TLS-130⟩ The REAL perf, started and stopped while the attached tasks run
+/// (12 spinning processes, as a server's threads can be at a call's start or
+/// end under load), with cdo-speed's own events (`perf_event_args`), twice:
+/// every stop's output is taken as a count. A PMU's events apart are enabled
+/// and read one after the other, so one of them ran longer: on server1 (perf
+/// 7.0.14, 2026-11-25, no other perf user;
+/// /work/.al-sem/tools-notes/tls130/probe-2026-11-25.log) 10 of 10 such stops
+/// were refused ("multiplexed"), 0 of 10 grouped, so two stops pin it. Skipped,
+/// saying so, where perf cannot count.
 ///
 /// Mutation (2026-11-25): `perf_event_args` back to one `-e` per event ->
 /// "stop 1 refused" with `cpu_core/instructions/u` at 2968286980 ns against its
 /// cycles at 2968141108, `cpu_atom` 2729111466 against 2729080424 (red; also
 /// "not one perf group per PMU" in `speed_perf_parsing_and_warm_judging`).
-/// Restored, green.
+/// Restored, green. Redone at two stops (review r1): "stop 1 refused",
+/// `cpu_core` instructions 2434296526 ns against cycles 2434751329 (the second
+/// event longer this time; red). Restored, green.
 #[cfg(target_os = "linux")]
 #[test]
 fn speed_perf_groups_keep_a_pmus_running_times_equal() {
@@ -3004,14 +3009,14 @@ events, why = m.instr_probe()
 if not events:
     print(f"skipped: {why}")
     sys.exit(0)
-for stop in range(1, 6):
+for stop in range(1, 3):
     spin = [subprocess.Popen(["sh", "-c", "while :; do :; done"]) for _ in range(12)]
     try:
         time.sleep(0.2)
         # Counting from `enable`'s ack, as cdo-speed does: no stop before perf runs.
         ctl_r, ctl_w = os.pipe()
         ack_r, ack_w = os.pipe()
-        perf = subprocess.Popen(["perf", "stat", "--no-scale", "-x,", *m.perf_event_args(events),
+        perf = subprocess.Popen([m.PERF, "stat", "--no-scale", "-x,", *m.perf_event_args(events),
                                  "-D", "-1", "--control", f"fd:{ctl_r},{ack_w}",
                                  "-p", ",".join(str(p.pid) for p in spin)],
                                 pass_fds=(ctl_r, ack_w), stderr=subprocess.PIPE, text=True)
@@ -3047,6 +3052,90 @@ print("ok")
         "{text}"
     );
     eprintln!("{text}");
+}
+
+/// cdo-speed's lines that say why a call went uncounted (one per call; an
+/// attach give-up then stops printing, after 3 failed attaches).
+#[cfg(target_os = "linux")]
+fn speed_refusals(text: &str) -> Vec<&str> {
+    const WHY: [&str; 5] = [
+        "perf output not taken as a count",
+        "call not counted",
+        "perf attach failed",
+        "NOT COVERED",
+        "perf did not stop",
+    ];
+    text.lines()
+        .filter(|l| WHY.iter().any(|w| l.contains(w)))
+        .collect()
+}
+
+/// ⟨TLS-130⟩ An uncounted call prints why, and the verdict says how many
+/// calls were counted: the stub perf multiplexes only the run's first attach
+/// (STUB_PERF_MUX_ATTACH 1: cpu_core's cycles ran 10 % shorter). Exactly one
+/// call record has no count, exactly one refusal line is printed, naming that
+/// call's side's server with perf's rows, and the verdict's "N of M calls
+/// counted" matches speed.json. The other silent paths (perf ending early, an
+/// unreadable output, no instruction at all) print a refusal too; perf ending
+/// early is checked here as well (STUB_PERF_EARLY: every call).
+///
+/// Mutations (2026-11-25): the "perf output not taken as a count" print
+/// dropped -> "one refusal line for the one uncounted call" (red); the
+/// early-end print dropped -> "an early-ended call without its refusal" (red).
+/// Each restored, green.
+#[cfg(target_os = "linux")]
+#[test]
+fn speed_prints_each_uncounted_calls_refusal() {
+    let bin = tempfile::tempdir().unwrap();
+    let perf = stub_perf(bin.path());
+    let run = |extra: (&str, &str)| {
+        let dir = tempfile::tempdir().unwrap();
+        let env = [
+            ("CDO_SPEED_INSTR", "1"),
+            ("CDO_SPEED_PERF", perf.as_str()),
+            extra,
+        ];
+        let (code, text) = speed_with_stub(dir.path(), "1.0", &[], &env);
+        (dir, code, text)
+    };
+
+    let (dir, code, text) = run(("STUB_PERF_MUX_ATTACH", "1"));
+    assert_eq!(code, Some(0), "{text}");
+    let json = speed_json(dir.path());
+    let records = json["records"].as_array().unwrap();
+    let uncounted: Vec<_> = records
+        .iter()
+        .filter(|r| r["total"] != true && r["instr"].is_null())
+        .collect();
+    assert_eq!(uncounted.len(), 1, "one call muxed: {uncounted:?}\n{text}");
+    let side = uncounted[0]["side"].as_str().unwrap();
+    let refusals = speed_refusals(&text);
+    assert!(
+        refusals.len() == 1
+            && refusals[0].contains(&format!("cdo-speed: {side}"))
+            && refusals[0].contains("perf output not taken as a count")
+            && refusals[0].contains(",cpu_core/cycles/u,"),
+        "one refusal line for the one uncounted call ({side}): {refusals:?}\n{text}"
+    );
+    let counted = records
+        .iter()
+        .filter(|r| r["instr"].as_f64().is_some_and(|i| i > 0.0))
+        .count();
+    assert!(
+        speed_verdict(&text).contains(&format!("; {counted} of {} calls counted)", records.len())),
+        "the verdict's counted calls: {counted} of {}\n{text}",
+        records.len()
+    );
+
+    let (_dir, code, text) = run(("STUB_PERF_EARLY", "1"));
+    assert_eq!(code, Some(0), "{text}");
+    assert!(
+        text.lines()
+            .filter(|l| l.contains("perf ended before the call did; call not counted"))
+            .count()
+            >= 2,
+        "an early-ended call without its refusal: {text}"
+    );
 }
 
 /// A stand-in perf (SPEED_PERF_STUB) in its own folder, executable.

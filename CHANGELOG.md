@@ -7,20 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed (TLS-130: cdo-speed refused whole instruction counts when a server thread ran at the stop)
+### Fixed (TLS-130: cdo-speed refused whole instruction counts when a server thread ran at the start or stop)
 
 - **The cause.** `scripts/cdo-speed` gave perf each event as its own `-e`. perf
-  then reads the events one after another at the stop, and a server thread still
-  running then (rayon workers spinning down, longer under load) gives the later
-  read more running time. `perf_parse` takes unequal running times on one PMU
-  (processor counter unit: `cpu_core` or `cpu_atom`) as multiplexing (counters
-  shared out in time slices) and refuses the count. No multiplexing was needed:
-  on server1 (perf 7.0.14, 2026-11-25, 12 spinning processes attached, no other
-  perf user, only our four fixed-counter events) 10 of 10 such stops were
-  refused, by 0.01-2.9 ms. The flaky test
+  then enables the events one after another at the start of a count and reads
+  them one after another at the stop. A server thread running at either moment
+  (rayon workers, longer under load) gives one event of a PMU (processor counter
+  unit: `cpu_core` or `cpu_atom`) more running time than the other; either one
+  can come out longer. `perf_parse` takes unequal running times on one PMU as
+  multiplexing (counters shared out in time slices) and refuses the count. No
+  multiplexing was needed: on server1 (perf 7.0.14, 2026-11-25, 12 spinning
+  processes attached, no other perf user, only our four fixed-counter events;
+  probe and log kept at `/work/.al-sem/tools-notes/tls130/skew_probe.py` and
+  `probe-2026-11-25.log`) 10 of 10 such stops were refused, the two events
+  apart by 14 µs to 9.2 ms. The flaky test
   `gate_scripts::speed_counts_instructions_with_the_real_perf` (load avg15 ~190)
   lost its build ratio this way: two calls refused, each with `cpu_core` equal
-  and `cpu_atom` apart by 26 ms and 3.7 ms.
+  and `cpu_atom` apart by 26 µs and 3.7 µs.
 - **The fix.** A PMU's two events now go in one perf group
   (`-e {cpu_core/instructions/u,cpu_core/cycles/u}`, one per PMU; plain CPUs
   `-e {instructions:u,cycles:u}`). The kernel runs a group's members together, so
@@ -29,22 +32,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so a count whose running time does not cover the call's CPU seconds (`covers`,
   unchanged band: 2 % + 50 ms short, x1.10 over) now gives **no instruction
   count**; before, it lost only its clock, CPI label and advisory.
-- **What changes in real gate verdicts.** Calls that ended with a server thread
-  still running are counted instead of refused, so under load the build and
-  round-total instruction ratios appear where they went missing. An uncovered
-  call now drops out of the instruction ratios (a round total with one such call
-  has none); in the TLS-111 A/A run on CDO every call was inside the band, so a
-  normal run loses nothing. CPU, wall and memory judging do not change; the
-  instruction limit stays advisory.
-- **Tests.** New `speed_perf_groups_keep_a_pmus_running_times_equal` stops the
-  real perf five times while 12 attached processes spin, with cdo-speed's own
-  events, and needs every output taken as a count (skipped where perf cannot
-  count). `speed_counts_instructions_with_the_real_perf` still allows one
-  uncounted call, but only with its refusal printed and the verdict saying how
-  many calls were counted. `speed_cpu_advisory_needs_covering_counts_and_a_cpu_only_failure`
-  now needs an uncovered count to give no instruction count and no build ratio;
-  `speed_perf_parsing_and_warm_judging` pins the group arguments. Discrimination
-  proofs are in the tests' docs.
+- **What is weaker.** Before, any multiplexing of a PMU's two events was refused
+  (they ran unequal times). Now a multiplexed group is refused only when the lost
+  time passes `covers`' slack, so light multiplexing (up to about 4.5 % on a
+  judged multi-threaded call) is counted. perf's running-% column cannot close
+  this on server1: an unpinned task's PMUs read their shares of its time (47-67 %
+  and 32-56 % in the probe above, summing to 99 % by whole-percent truncation,
+  and 110-125 % on real CDO calls in TLS-111), so a below-100 % rule refuses
+  every hybrid call. Only a task held on one core type reads 100.00 % (50.00 %
+  under forced multiplexing). Open for a decision.
+- **What changes in real gate verdicts (inferred).** No landing verdict yet
+  shows a partly refused count; this is reasoned from the cause. Calls with a
+  server thread running at the start or stop are counted instead of refused, so
+  under load the build and round-total instruction ratios appear where they went
+  missing. An uncovered call now drops out of the instruction ratios (a round
+  total with one such call has none). In the one A/A run on CDO behind the band
+  (TLS-111, f7da9a93, `/work/.al-sem/tools-notes/tls111/aa3`) every call was
+  inside it, so a normal run should lose nothing. CPU, wall and memory judging do
+  not change; the instruction limit stays advisory.
+- **Every uncounted call says why.** Perf ending before the call, an unreadable
+  perf output and a count with no instruction used to drop the count silently;
+  each now prints a `call not counted` line, as a refused output, a failed
+  attach and an uncovered count already did.
+- **Tests.** New `speed_perf_groups_keep_a_pmus_running_times_equal` starts and
+  stops the real perf twice while 12 attached processes spin, with cdo-speed's
+  own events, and needs every output taken as a count (skipped where perf cannot
+  count). New `speed_prints_each_uncounted_calls_refusal`: the stub perf
+  multiplexes one call (`STUB_PERF_MUX_ATTACH`), which gives exactly one refusal
+  line naming its side and the matching "N of M calls counted"; perf ending early
+  prints its line. `speed_counts_instructions_with_the_real_perf` still allows
+  one uncounted call (an attach timeout or a short call's /proc ticks under the
+  suite's load), but only with as many refusal lines as uncounted calls.
+  `speed_cpu_advisory_needs_covering_counts_and_a_cpu_only_failure` now needs an
+  uncovered count to give no instruction count and no build ratio;
+  `speed_perf_parsing_and_warm_judging` pins the group arguments.
+  Discrimination proofs are in the tests' docs.
 
 ### Fixed (ENG-178: table procedures named like record built-ins: four follow-ups from ENG-173)
 

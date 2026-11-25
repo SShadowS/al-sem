@@ -1008,12 +1008,14 @@ def perf_event_args(events=None):
     count never comes out short because of our own events (review r1, sol;
     TLS-111 added cycles). Any other event, or one twice, is refused here.
     ⟨TLS-130⟩ A PMU's events go in one group (`-e {a,b}`): the kernel schedules a
-    group's members together, so they run exactly as long. Apart, perf reads
-    each event at its own moment, and a server thread still running at the stop
-    (more so under load) gave the later read more running time: on server1
-    (perf 7.0.14, 2026-11-25, 12 spinning processes attached, no other perf
-    user) apart unequal in 10 of 10 stops (0.01-2.9 ms), grouped 0 of 10; a gate
-    under load refused counts that were whole. A group shows multiplexing as no
+    group's members together, so they run exactly as long. Apart, perf enables
+    and reads them one after another, so a server thread running at the start
+    or the stop of the count (more so under load) gives one of them more running
+    time than the other, either one: on server1 (perf 7.0.14, 2026-11-25, 12
+    spinning processes attached, no other perf user;
+    /work/.al-sem/tools-notes/tls130/skew_probe.py, probe-2026-11-25.log) apart
+    unequal in 10 of 10 stops (14 us to 9.2 ms), grouped 0 of 10; a gate under
+    load refused counts that were whole. A group shows multiplexing as no
     difference (both members lose the same time), so `covers` refuses such a
     count instead (`timed_call`)."""
     events = events or INSTR_EVENTS
@@ -1326,6 +1328,8 @@ class Server:
         else:
             if early:
                 total = None
+                print(f"cdo-speed: {self.name}: perf ended before the call did; call not counted",
+                      file=sys.stderr)
             else:
                 try:
                     with open(out) as f:
@@ -1338,14 +1342,20 @@ class Server:
                                 if ln.strip() and not ln.startswith("#")]
                         print(f"cdo-speed: {self.name}: perf output not taken as a count: "
                               f"{' | '.join(rows[:6]) or '(empty)'}", file=sys.stderr)
-                except OSError:
+                except OSError as e:
                     total = None
+                    print(f"cdo-speed: {self.name}: perf output unreadable ({e}); "
+                          "call not counted", file=sys.stderr)
         for fd in fds:
             os.close(fd)
         shutil.rmtree(os.path.dirname(out), ignore_errors=True)
         # No instruction at all (every event `<not counted>`) is no count: as a 0
         # it would pull the round total down (review r1, Fable).
-        return total if total and kind_total(total[0], "instructions") else None
+        if total and not kind_total(total[0], "instructions"):
+            print(f"cdo-speed: {self.name}: perf counted no instruction; call not counted",
+                  file=sys.stderr)
+            total = None
+        return total
 
     def sample_hwm(self):
         """Read the VmHWM of the server and every live child. Called after each
