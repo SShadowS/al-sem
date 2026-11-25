@@ -1854,6 +1854,13 @@ fn standalone_cones_schedule_is_never_a_cache_file() {
 /// from `walk`'s listing error): fails "(one link)" (exit 1, not 0); restored, passes. A
 /// failed lookup taken as "no cache file" (`holds_file` returning `false` on `whole`'s
 /// error): fails "(two links)" (exit 0); restored, passes.
+/// (2026-11-25, re-run on the r2 code, sol r1) The strict walk now PASSES: the snapshot
+/// discards a folders-only listing error (`let _ = walk_roots(..)` in `first_standalone` and
+/// `standalone`), so no listing error can refuse a write any more; what `|| !files` still
+/// adds is that the listing goes on past the unreadable folder (the folders after it stay
+/// known), which this test does not show. The failed lookup taken as "no cache file"
+/// (`walk_roots(..).is_err()` returning `Ok(false)` in `holds_file`): fails "(two links)";
+/// restored, passes.
 #[test]
 fn standalone_unlistable_folder_blocks_only_a_lookup() {
     use std::os::unix::fs::PermissionsExt;
@@ -1931,6 +1938,8 @@ fn standalone_write_makes_no_missing_cache_folder() {
 ///
 /// Discrimination (2026-11-24, r1): the refusal skipped (`if let Some(dir)` made `if false`
 /// in `run_cache_prune_cmd`): fails "(text)" (exit 0, entries removed); restored, passes.
+/// (2026-11-25, sol r1, the check now on the resolved folder) the refusal skipped again
+/// (`if let Some(why) = why.filter(|_| false)`): fails "(text)"; restored, passes.
 #[test]
 fn cache_prune_refuses_a_cache_folder() {
     let f = fixture();
@@ -2180,4 +2189,99 @@ fn standalone_protects_a_cache_path_that_was_no_folder() {
             "{case}: untouched"
         );
     }
+}
+
+/// TLS-120 sol r1: plain `cache prune` (no `--dep-cache-dir`) checks the folder it prunes, the
+/// default `~/.al-sem/cache` (`HOME` a temporary folder): "(a link to the text folder)": that
+/// default is a symlink to the text cache folder; "(the IR folder)": `ALSEM_IR_CACHE_DIR`
+/// names that default. Each is refused (exit 1) and every file stays.
+///
+/// Discrimination (2026-11-25, sol r1): the check made for an explicit `--dep-cache-dir` only
+/// (the default not checked): fails "(a link to the text folder)" (exit 0, entries removed);
+/// restored, passes.
+#[test]
+fn cache_prune_refuses_a_default_folder_in_a_cache() {
+    let f = fixture();
+    let (_, text_entry) = warm_entries(&f);
+    for case in ["(a link to the text folder)", "(the IR folder)"] {
+        let home = tempfile::tempdir().unwrap();
+        let default = home.path().join(".al-sem/cache");
+        std::fs::create_dir_all(default.parent().unwrap()).unwrap();
+        let mut env = vec![("HOME", home.path().to_str().unwrap().to_string())];
+        let kept = if case == "(a link to the text folder)" {
+            std::os::unix::fs::symlink(text_entry.parent().unwrap(), &default).unwrap();
+            text_entry.clone()
+        } else {
+            std::fs::create_dir_all(&default).unwrap();
+            let lock = default.join("k.lock");
+            std::fs::write(&lock, "").unwrap();
+            env.push(("ALSEM_IR_CACHE_DIR", default.to_str().unwrap().to_string()));
+            lock
+        };
+        let env: Vec<(&str, &str)> = env.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        let out = alone(&f, &["cache", "prune"], &env);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(1), "{case}: {stderr}");
+        assert!(stderr.contains("(TLS-120)"), "{case}: {stderr}");
+        assert!(kept.exists(), "{case}: kept");
+    }
+}
+
+/// TLS-120 sol r1: a missing cache folder is watched under its configured name. The trace
+/// file takes the snapshot at the start, with `ALSEM_IR_CACHE_DIR=<d>/current/ir`, `current` a
+/// link to `A`, and `A/ir` missing. The debug seam `ALSEM_TEST_DURING_SNAPSHOT` (run while the
+/// snapshot walks the impact-base `work/`) points `current` at `B` and makes `B/ir` with an
+/// entry. An `--out` that is `current/ir/e.bin` is refused, and the entry is as it was.
+///
+/// Discrimination (2026-11-25, sol r1): the re-check by the resolved name the snapshot took
+/// (`A/ir`) instead of the configured one: fails (exit 0: the entry clobbered); restored,
+/// passes.
+#[cfg(debug_assertions)]
+#[test]
+fn standalone_watches_a_missing_folder_by_its_configured_name() {
+    let f = fixture();
+    let d = tempfile::tempdir().unwrap();
+    let ib = d.path().join("ib");
+    std::fs::create_dir_all(ib.join("work")).unwrap();
+    let (a, b, current) = (
+        d.path().join("A"),
+        d.path().join("B"),
+        d.path().join("current"),
+    );
+    std::fs::create_dir_all(&a).unwrap();
+    std::os::unix::fs::symlink(&a, &current).unwrap();
+    let ir = current.join("ir");
+    let entry = ir.join("e.bin");
+    let seam = format!(
+        "ln -sfn '{b}' '{c}' && mkdir -p '{b}/ir' && printf ENTRY > '{b}/ir/e.bin'",
+        b = b.display(),
+        c = current.display()
+    );
+    let trace = d.path().join("trace.json");
+    let ws = f.ws.to_str().unwrap();
+    let out = alone(
+        &f,
+        &[
+            "events",
+            "fanout",
+            ws,
+            "--single-app",
+            "--out",
+            entry.to_str().unwrap(),
+        ],
+        &[
+            ("ALSEM_IR_CACHE_DIR", ir.to_str().unwrap()),
+            ("ALSEM_TRACE", "1"),
+            ("ALSEM_TRACE_FILE", trace.to_str().unwrap()),
+            ("AL_SEM_IMPACT_BASE_CACHE", ib.to_str().unwrap()),
+            ("ALSEM_TEST_DURING_SNAPSHOT", &seam),
+        ],
+    );
+    assert!(entry.exists(), "precondition: the seam made the entry");
+    assert_write_refused(
+        "(configured name)",
+        &out,
+        "is in a cache folder of the engine",
+    );
+    assert_eq!(std::fs::read(&entry).unwrap(), b"ENTRY", "untouched");
 }

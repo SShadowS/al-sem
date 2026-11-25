@@ -249,7 +249,7 @@ pub fn open_for_write(path: &Path, job: &str, key: Option<&str>) -> std::io::Res
     };
     let fail = || FAILED.store(true, Ordering::Relaxed);
     let snap = super::cache_guard::get(dir).inspect_err(|_| fail())?;
-    let f = open_guarded(snap, path, false, &fail)?;
+    let f = open_guarded(snap, path, Mode::Write, &fail)?;
     if is_disk(&f)? {
         claim(dir, &f, Some(job), key).inspect_err(|_| FAILED.store(true, Ordering::Relaxed))?;
         f.set_len(0)?;
@@ -280,7 +280,7 @@ pub fn make_dir(path: &Path) -> std::io::Result<()> {
         }
     };
     let mut cur = PathBuf::new();
-    for c in std::env::current_dir()?.join(path).components() {
+    for c in dir_steps(std::env::current_dir()?.join(path)).components() {
         cur.push(c);
         if !matches!(c, std::path::Component::Normal(_)) {
             continue;
@@ -295,6 +295,60 @@ pub fn make_dir(path: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// The path [`make_dir`] steps through. Windows folds a non-verbatim `..` by
+/// name before it looks at any folder (`marker\..\shards` is `shards` even
+/// when `marker` is a file), so it is folded here first (sol r1); unix takes a
+/// `..` from where its prefix leads, so there the path stays as given.
+fn dir_steps(p: PathBuf) -> PathBuf {
+    if cfg!(windows) {
+        PathBuf::from(fold_windows(&p.to_string_lossy()))
+    } else {
+        p
+    }
+}
+
+/// Windows `.` and `..` folded by name over a path's text: a verbatim path
+/// (`\\?\`, `\\.\`) is taken as written; a `..` never climbs above the drive or
+/// the `\\server\share`. Plain text, so its tests run anywhere.
+fn fold_windows(s: &str) -> String {
+    if s.starts_with(r"\\?\") || s.starts_with(r"\\.\") {
+        return s.to_string();
+    }
+    let s = s.replace('/', "\\");
+    let (head, rest) = if let Some(r) = s.strip_prefix(r"\\") {
+        let mut it = r.splitn(3, '\\');
+        let (server, share) = (it.next().unwrap_or(""), it.next().unwrap_or(""));
+        (
+            format!(r"\\{server}\{share}"),
+            it.next().unwrap_or("").to_string(),
+        )
+    } else if s.as_bytes().get(1) == Some(&b':') {
+        (s[..2].to_string(), s[2..].to_string())
+    } else {
+        (String::new(), s.clone())
+    };
+    let mut parts: Vec<&str> = Vec::new();
+    for part in rest.split('\\') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            p => parts.push(p),
+        }
+    }
+    let mut out = head;
+    for p in &parts {
+        out.push('\\');
+        out.push_str(p);
+    }
+    if parts.is_empty() {
+        // `C:\`, not the drive-relative `C:`.
+        out.push('\\');
+    }
+    out
+}
+
 /// [`open_for_write`] for a trace file, published after every job write: a
 /// refusal writes no trace but does not fail the run. No refused job's named
 /// file is a trace's either: every kept list is checked.
@@ -302,7 +356,7 @@ pub fn open_trace(path: &Path) -> std::io::Result<File> {
     let Some(dir) = DIR.get() else {
         return open_outside(path);
     };
-    let f = open_guarded(super::cache_guard::get(dir)?, path, false, &|| {})?;
+    let f = open_guarded(super::cache_guard::get(dir)?, path, Mode::Write, &|| {})?;
     if is_disk(&f)? {
         refuse_kept(dir, &f)?;
         claim(dir, &f, None, None)?;
@@ -364,7 +418,7 @@ pub fn append_shared(path: &Path, tag: &str, bytes: &[u8]) -> std::io::Result<()
 fn open_registered(dir: &Path, path: &Path, tag: &str) -> std::io::Result<File> {
     let snap = super::cache_guard::get(dir)?;
     refuse_cache_path(snap, path)?;
-    let f = options(true).open(path)?;
+    let f = options(Mode::AppendNoWait).open(path)?;
     refuse_nonregular(&f)?;
     refuse_cache_handle(snap, &f)?;
     let held = std::fs::read_to_string(dir.join(marker_of(&handle_id(&f)?)));
@@ -406,7 +460,7 @@ fn register_in(
     path: &Path,
     tag: &str,
 ) -> std::io::Result<File> {
-    let f = open_guarded(snap, path, true, &|| {})?;
+    let f = open_guarded(snap, path, Mode::AppendNoWait, &|| {})?;
     refuse_nonregular(&f)?;
     refuse_kept(dir, &f)?;
     if !create(dir, &marker_of(&handle_id(&f)?), &shared(tag))? {
@@ -432,14 +486,27 @@ fn register_in(
 fn open_guarded(
     snap: &super::cache_guard::Snapshot,
     path: &Path,
-    append: bool,
+    mode: Mode,
     refused: &dyn Fn(),
 ) -> std::io::Result<File> {
-    let f = open_checked(snap, path, append, refused)?;
-    if append {
+    let f = open_checked(snap, path, mode, refused)?;
+    if mode == Mode::AppendNoWait {
         blocking(&f)?;
     }
     Ok(f)
+}
+
+/// How [`open_guarded`] opens.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Mode {
+    /// To write (the caller truncates once the handle has passed).
+    Write,
+    /// To append, waiting at the open as a plain append does (a FIFO waits for
+    /// its reader): a standalone run's diagnostic file (TLS-120 sol r1).
+    Append,
+    /// To append without waiting at the open (a batch run's files: a FIFO with
+    /// no reader fails at once), then waiting on its writes ([`blocking`]).
+    AppendNoWait,
 }
 
 /// TLS-120: clear the `O_NONBLOCK` an append opened with ([`options`]), so
@@ -467,21 +534,21 @@ fn blocking(_f: &File) -> std::io::Result<()> {
 fn open_checked(
     snap: &super::cache_guard::Snapshot,
     path: &Path,
-    append: bool,
+    mode: Mode,
     refused: &dyn Fn(),
 ) -> std::io::Result<File> {
     refuse_cache_path(snap, path).inspect_err(|_| refused())?;
     // A file this open makes is new: no cache file, whatever number it got.
-    let f = match options(append).open(path) {
+    let f = match options(mode).open(path) {
         Ok(f) => f,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            match options(append).create_new(true).open(path) {
+            match options(mode).create_new(true).open(path) {
                 Ok(f) => return Ok(f),
                 // A dangling symlink (`O_EXCL` does not follow it), or a
                 // file made meanwhile: opened (made through the link, as
                 // before TLS-116) and checked as any existing file.
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                    options(append).create(true).open(path)?
+                    options(mode).create(true).open(path)?
                 }
                 Err(e) => return Err(e),
             }
@@ -503,7 +570,12 @@ fn open_checked(
 /// any name (a hard link, a bind mount), is refused and left as it was. No
 /// claim: one process's writes are its own.
 pub fn open_outside(path: &Path) -> std::io::Result<File> {
-    let f = open_guarded(&*super::cache_guard::standalone()?, path, false, &|| {})?;
+    let f = open_guarded(
+        &*super::cache_guard::standalone()?,
+        path,
+        Mode::Write,
+        &|| {},
+    )?;
     if is_disk(&f)? {
         f.set_len(0)?;
     }
@@ -519,26 +591,44 @@ pub fn write_outside(path: &Path, bytes: impl AsRef<[u8]>) -> std::io::Result<()
 /// [`open_outside`] checks (in a batch run against the run's snapshot, with no
 /// claim): a diagnostic file an environment variable names
 /// (`ALSEM_IR_CACHE_REPORT` outside a batch, `ALSEM_CONES_SCHEDULE_FILE`).
+/// Outside a batch the open waits as a plain append's does (a FIFO for its
+/// reader); in a batch it does not ([`Mode`]).
 pub fn open_append(path: &Path) -> std::io::Result<File> {
     match DIR.get() {
-        Some(dir) => open_guarded(super::cache_guard::get(dir)?, path, true, &|| {}),
-        None => open_guarded(&*super::cache_guard::standalone()?, path, true, &|| {}),
+        Some(dir) => open_guarded(
+            super::cache_guard::get(dir)?,
+            path,
+            Mode::AppendNoWait,
+            &|| {},
+        ),
+        None => open_guarded(
+            &*super::cache_guard::standalone()?,
+            path,
+            Mode::Append,
+            &|| {},
+        ),
     }
 }
 
-/// How [`open_guarded`] opens: to write, or to append. An append (the run's
-/// shared file) never waits: `O_NONBLOCK`, so a FIFO with no reader fails the
-/// open (`ENXIO`) instead of hanging it, and its type is checked before any
-/// write; [`open_guarded`] then clears the flag, so its writes wait (TLS-120).
-/// A job's stream may be a pipe it writes as before (TLS-109).
-fn options(append: bool) -> OpenOptions {
+/// How [`open_guarded`] opens ([`Mode`]). An append without waiting (a batch
+/// run's shared file): `O_NONBLOCK`, so a FIFO with no reader fails the open
+/// (`ENXIO`) instead of hanging it, and its type is checked before any write;
+/// [`open_guarded`] then clears the flag, so its writes wait (TLS-120). A
+/// job's stream may be a pipe it writes as before (TLS-109).
+fn options(mode: Mode) -> OpenOptions {
     let mut o = OpenOptions::new();
-    if append {
-        o.append(true);
-        #[cfg(unix)]
-        std::os::unix::fs::OpenOptionsExt::custom_flags(&mut o, libc::O_NONBLOCK);
-    } else {
-        o.write(true);
+    match mode {
+        Mode::Write => {
+            o.write(true);
+        }
+        Mode::Append => {
+            o.append(true);
+        }
+        Mode::AppendNoWait => {
+            o.append(true);
+            #[cfg(unix)]
+            std::os::unix::fs::OpenOptionsExt::custom_flags(&mut o, libc::O_NONBLOCK);
+        }
     }
     o
 }
@@ -744,7 +834,7 @@ mod tests {
         };
         let snap = super::super::cache_guard::Snapshot::default();
         let f = loop {
-            match open_guarded(&snap, &fifo, true, &|| {}) {
+            match open_guarded(&snap, &fifo, Mode::AppendNoWait, &|| {}) {
                 Ok(f) => break f,
                 // ENXIO: the reader has not opened yet.
                 Err(_) => std::thread::sleep(std::time::Duration::from_millis(5)),
@@ -753,6 +843,70 @@ mod tests {
         // SAFETY: the fd is `f`'s, open for the call.
         let flags = unsafe { libc::fcntl(f.as_raw_fd(), libc::F_GETFL) };
         assert_eq!(flags & libc::O_NONBLOCK, 0, "blocking writes");
+        (&f).write_all(b"line\n").unwrap();
+        drop(f);
+        assert_eq!(reader.join().unwrap(), "line\n");
+    }
+
+    /// TLS-120 sol r1: Windows folds a non-verbatim `..` by name, so [`make_dir`] steps
+    /// through the folded path: `C:\tmp\marker\..\shards` is `C:\tmp\shards` (whatever
+    /// `marker` is); a verbatim path stays as written; a `..` stops at the drive or the
+    /// `\\server\share`; `/` is `\`.
+    ///
+    /// Discrimination (2026-11-25, sol r1): the `..` arm pushing the part instead of popping:
+    /// fails "(marker)"; restored, passes.
+    #[test]
+    fn windows_dot_dot_folds_by_name() {
+        for (case, given, folded) in [
+            ("(marker)", r"C:\tmp\marker\..\shards", r"C:\tmp\shards"),
+            ("(dot)", r"C:\tmp\.\shards", r"C:\tmp\shards"),
+            ("(slash)", "C:/tmp/a/../b", r"C:\tmp\b"),
+            ("(above the drive)", r"C:\..\..\x", r"C:\x"),
+            ("(the drive)", r"C:\tmp\..", r"C:\"),
+            ("(share)", r"\\host\share\a\..\..\b", r"\\host\share\b"),
+            (
+                "(verbatim)",
+                r"\\?\C:\tmp\marker\..\shards",
+                r"\\?\C:\tmp\marker\..\shards",
+            ),
+        ] {
+            assert_eq!(fold_windows(given), folded, "{case}");
+        }
+    }
+
+    /// TLS-120 sol r1: a standalone append (`Mode::Append`, what [`open_append`] opens
+    /// outside a batch) waits at its open as a plain append does: with a FIFO whose reader
+    /// starts 300 ms later, the open succeeds once the reader is there and the line arrives.
+    ///
+    /// Discrimination (2026-11-25, sol r1): `Mode::Append` opened with `O_NONBLOCK` as
+    /// `AppendNoWait` is: fails "the open waits" (ENXIO); restored, passes.
+    #[cfg(unix)]
+    #[test]
+    fn a_standalone_append_waits_for_a_late_reader() {
+        let t = tempfile::tempdir().unwrap();
+        let fifo = t.path().join("fifo");
+        let c = std::ffi::CString::new(fifo.to_str().unwrap()).unwrap();
+        // SAFETY: a valid C string for the call's whole length.
+        assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0, "mkfifo");
+        let reader = {
+            let fifo = fifo.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(300));
+                let mut s = String::new();
+                std::io::Read::read_to_string(&mut File::open(fifo).unwrap(), &mut s).unwrap();
+                s
+            })
+        };
+        let snap = super::super::cache_guard::Snapshot::default();
+        let f = open_guarded(&snap, &fifo, Mode::Append, &|| {});
+        let f = match f {
+            Ok(f) => f,
+            Err(e) => {
+                // Let the reader finish its open, so the test ends.
+                drop(OpenOptions::new().write(true).open(&fifo));
+                panic!("the open waits: {e}");
+            }
+        };
         (&f).write_all(b"line\n").unwrap();
         drop(f);
         assert_eq!(reader.join().unwrap(), "line\n");

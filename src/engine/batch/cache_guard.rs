@@ -84,10 +84,12 @@ pub struct Snapshot {
     /// Only the folders were walked ([`standalone`]): `files` is empty, and a
     /// file is looked up when it is opened ([`Snapshot::holds_file`]).
     pub(super) dirs_only: bool,
-    /// Cache folders that do not exist ([`standalone`]), as absolute paths
-    /// (the existing part resolved): nothing in them can be aliased, but a
-    /// write must not make one ([`link_hops`] refuses a path under one).
-    pub(super) missing: Vec<PathBuf>,
+    /// Cache folders that do not exist ([`standalone`]): each configured name
+    /// (looked at again at every check) and its resolved name (absolute, the
+    /// existing part resolved, taken again at every check): nothing in them
+    /// can be aliased, but a write must not make one ([`link_hops`] refuses a
+    /// path under a resolved name).
+    pub(super) missing: Vec<(PathBuf, PathBuf)>,
 }
 
 /// Whether `set` holds `id` born at `born` (an unknown birth time on either
@@ -115,7 +117,7 @@ impl Snapshot {
         if !self.dirs_only {
             return Ok(self.is_cache_file(&id, &m));
         }
-        if !may_alias(f, &m) {
+        if !needs_lookup(f, &m, &self.roots) {
             return Ok(false);
         }
         let mut now = Snapshot::default();
@@ -123,6 +125,73 @@ impl Snapshot {
             .map_err(|e| std::io::Error::other(format!("refused: {e}")))?;
         Ok(now.is_cache_file(&id, &m))
     }
+}
+
+/// Whether the opened `f` must be looked up in the folders `roots`: it may have
+/// another name ([`may_alias`]), or a file is mounted inside one of them
+/// ([`file_mount_in`]): a file bind-mounted into a cache slot shows its
+/// source's identity there, and the source, opened by its own name, has one
+/// link and no mount of its own (sol r1).
+fn needs_lookup(f: &std::fs::File, m: &std::fs::Metadata, roots: &[PathBuf]) -> bool {
+    may_alias(f, m) || file_mount_in(roots)
+}
+
+/// Whether `/proc/self/mountinfo` lists a mount point inside one of `roots`
+/// (not a root itself) that is a file. A mounted folder needs no lookup: the
+/// folder walk records its identity, so the folder test knows its source too.
+/// Unreadable mountinfo says yes.
+#[cfg(target_os = "linux")]
+fn file_mount_in(roots: &[PathBuf]) -> bool {
+    std::fs::read_to_string("/proc/self/mountinfo")
+        .map_or(true, |info| file_mount_in_info(roots, &info))
+}
+
+#[cfg(not(target_os = "linux"))]
+fn file_mount_in(_roots: &[PathBuf]) -> bool {
+    false
+}
+
+/// [`file_mount_in`] over the text of a mountinfo file.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn file_mount_in_info(roots: &[PathBuf], info: &str) -> bool {
+    let real: Vec<PathBuf> = roots
+        .iter()
+        .filter_map(|r| std::fs::canonicalize(r).ok())
+        .collect();
+    info.lines()
+        .filter_map(|l| l.split(' ').nth(4))
+        .map(|p| PathBuf::from(unescape_mount(p)))
+        .any(|p| {
+            real.iter().any(|r| p != *r && p.starts_with(r))
+                && std::fs::symlink_metadata(&p).is_ok_and(|m| m.is_file())
+        })
+}
+
+/// A mountinfo field with its octal escapes (`\040` for a space, `\011`,
+/// `\012`, `\134`) undone.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn unescape_mount(field: &str) -> String {
+    let b = field.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        let octal = b.get(i + 1..i + 4).and_then(|d| {
+            d.iter()
+                .all(|c| (b'0'..=b'7').contains(c))
+                .then(|| d.iter().fold(0u32, |n, c| n * 8 + u32::from(c - b'0')))
+        });
+        match (b[i], octal) {
+            (b'\\', Some(n)) if n <= 255 => {
+                out.push(n as u8);
+                i += 4;
+            }
+            (c, _) => {
+                out.push(c);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// Whether the file `f` may have a name besides the one it was opened by: more
@@ -288,17 +357,25 @@ pub(super) fn standalone() -> std::io::Result<std::sync::Arc<Snapshot>> {
             Err(_) => {}
         }
     }
-    let made: Vec<PathBuf> = snap
+    // A missing folder is looked at by its configured name, and its resolved name is taken
+    // again (sol r1: a link in the configured name may point elsewhere by now).
+    let (made, still): (Vec<PathBuf>, Vec<PathBuf>) = snap
         .missing
         .iter()
-        .filter(|m| m.is_dir())
-        .cloned()
+        .map(|(name, _)| name.clone())
+        .partition(|name| name.is_dir());
+    let missing: Vec<(PathBuf, PathBuf)> = still
+        .into_iter()
+        .chain(gone.iter().cloned())
+        .map(|name| {
+            let resolved = anchored(&name);
+            (name, resolved)
+        })
         .collect();
-    if !(gone.is_empty() && again.is_empty() && made.is_empty()) {
+    if !(gone.is_empty() && again.is_empty() && made.is_empty()) || missing != snap.missing {
         let mut next = Snapshot::clone(snap);
         next.roots.retain(|r| !gone.contains(r));
-        next.missing.retain(|m| !made.contains(m));
-        next.missing.extend(gone.iter().map(|g| anchored(g)));
+        next.missing = missing;
         // Folders-only: a folder that cannot be listed is skipped, never an error. The old
         // identities stay (a reused number with another birth time is not taken for them).
         again.extend(made.iter().cloned());
@@ -327,7 +404,8 @@ fn first_standalone() -> Snapshot {
         } else {
             // Missing, a dangling link or no folder (a file at the path): watched as missing,
             // so it is protected once it is a folder (r4).
-            snap.missing.push(anchored(&root));
+            let resolved = anchored(&root);
+            snap.missing.push((root, resolved));
         }
     }
     // Folders-only: a folder that cannot be listed is skipped, never an error.
@@ -351,24 +429,41 @@ fn anchored(p: &Path) -> PathBuf {
 /// `p` without a verbatim prefix: `\\?\C:\x` is `C:\x`, `\\?\UNC\h\s` is
 /// `\\h\s`. Elsewhere `p` as it is.
 fn plain(p: PathBuf) -> PathBuf {
-    let s = p.to_string_lossy();
-    if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
-        return PathBuf::from(format!(r"\\{rest}"));
-    }
-    match s.strip_prefix(r"\\?\") {
-        Some(rest) if cfg!(windows) => PathBuf::from(rest),
-        _ => p,
+    if cfg!(windows) {
+        PathBuf::from(plain_windows(&p.to_string_lossy()))
+    } else {
+        p
     }
 }
 
-/// Whether `p` lies in (or is) `root`, by name. Windows names ignore case.
+/// A Windows path's text without a verbatim prefix (r2, sol r1: both sides of
+/// a compare). Plain text, so its tests run anywhere.
+fn plain_windows(s: &str) -> String {
+    if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{rest}")
+    } else {
+        s.strip_prefix(r"\\?\").unwrap_or(s).to_string()
+    }
+}
+
+/// Whether `p` lies in (or is) `root`, by name. Windows: neither side's
+/// verbatim prefix counts, `/` is `\`, and case is ignored.
 fn under(p: &Path, root: &Path) -> bool {
     if cfg!(windows) {
-        let low = |x: &Path| PathBuf::from(x.to_string_lossy().to_lowercase());
-        low(p).starts_with(low(root))
+        under_windows(&p.to_string_lossy(), &root.to_string_lossy())
     } else {
         p.starts_with(root)
     }
+}
+
+/// [`under`]'s Windows rule over the paths' text.
+fn under_windows(p: &str, root: &str) -> bool {
+    let norm = |s: &str| {
+        let s = plain_windows(&s.replace('/', "\\")).to_lowercase();
+        s.trim_end_matches('\\').to_string()
+    };
+    let (p, root) = (norm(p), norm(root));
+    p == root || p.starts_with(&format!("{root}\\"))
 }
 
 /// TLS-120: why `dir` must not be used as a folder a command deletes files in
@@ -695,7 +790,7 @@ fn link_hops(snap: &Snapshot, path: PathBuf, hops: u32) -> std::io::Result<Optio
                 return Ok(snap
                     .missing
                     .iter()
-                    .any(|m| under(&rest, m))
+                    .any(|(_, m)| under(&rest, m))
                     .then_some("this file is in a cache folder of the engine"));
             }
             Err(e) => return Err(e),
@@ -807,6 +902,110 @@ mod tests {
         match mounted {
             Some(f) => assert!(may_alias(&f, &f.metadata().unwrap()), "a mounted file"),
             None => eprintln!("no mounted regular file here: the mount half is skipped"),
+        }
+    }
+
+    /// TLS-120 sol r1: a file mounted inside a cache folder is seen in a mountinfo text (its
+    /// octal escapes undone); a mount outside, the folder itself, or a folder inside is not.
+    ///
+    /// Discrimination (2026-11-25, sol r1): the escapes left as they are (`unescape_mount`
+    /// returning its field): fails "(a file inside)"; restored, passes.
+    #[test]
+    fn a_file_mount_inside_a_cache_folder_is_seen() {
+        let t = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(t.path()).unwrap().join("cache");
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        std::fs::write(root.join("sub/e bin"), "").unwrap();
+        let line = |p: &str| format!("36 35 0:1 / {p} rw,relatime - ext4 /dev/x rw\n");
+        let escaped = root
+            .join("sub/e bin")
+            .to_string_lossy()
+            .replace(' ', "\\040");
+        let roots = [root.clone()];
+        assert!(
+            file_mount_in_info(&roots, &line(&escaped)),
+            "(a file inside)"
+        );
+        assert!(
+            !file_mount_in_info(&roots, &line("/elsewhere")),
+            "(outside)"
+        );
+        let folder = root.to_string_lossy();
+        assert!(
+            !file_mount_in_info(&roots, &line(&folder)),
+            "(the folder itself)"
+        );
+        let sub = root.join("sub");
+        assert!(
+            !file_mount_in_info(&roots, &line(&sub.to_string_lossy())),
+            "(a folder inside)"
+        );
+    }
+
+    /// TLS-120 sol r1: a file bind-mounted INTO a cache slot shows its source's identity there,
+    /// and the source, opened by its own name, has one link and no mount of its own. So a cache
+    /// folder holding a mounted file makes every open look the file up. The real mountinfo:
+    /// a container's `/etc/hosts` is such a mount, so `/etc` taken as a cache folder makes a
+    /// plain file (one link, no mount) need the lookup; a folder holding no mount does not.
+    /// (The whole case through the binary needs a bind mount, which this container cannot
+    /// make: `unshare -Urm` fails with EPERM, no user namespaces; each half here is skipped,
+    /// said on stderr, where the host cannot show it.)
+    ///
+    /// Discrimination (2026-11-25, sol r1): `needs_lookup` without `|| file_mount_in(roots)`:
+    /// fails "(a file mounted under the folder)"; restored, passes.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_cache_folder_holding_a_file_mount_needs_a_lookup() {
+        let t = tempfile::NamedTempFile::new().unwrap();
+        let plain = std::fs::File::open(t.path()).unwrap();
+        let m = plain.metadata().unwrap();
+        let etc = [PathBuf::from("/etc")];
+        if file_mount_in(&etc) {
+            assert!(
+                needs_lookup(&plain, &m, &etc),
+                "(a file mounted under the folder)"
+            );
+        } else {
+            eprintln!("no file mounted under /etc here: that half is skipped");
+        }
+        let empty = tempfile::tempdir().unwrap();
+        if mount_root(&plain).is_some() {
+            assert!(
+                !needs_lookup(&plain, &m, &[empty.path().to_path_buf()]),
+                "(no mount)"
+            );
+        } else {
+            eprintln!("no STATX_ATTR_MOUNT_ROOT here: the no-mount half is skipped");
+        }
+    }
+
+    /// TLS-120 sol r1: the Windows name compare of a missing cache folder: neither side's
+    /// verbatim prefix counts (`\\?\`, `\\?\UNC\`), `/` is `\`, case is ignored, and a sibling
+    /// that only starts with the folder's name is not inside it.
+    ///
+    /// Discrimination (2026-11-25, sol r1): the candidate's prefix kept (`plain_windows` not
+    /// applied in `under_windows`): fails "(verbatim candidate)"; restored, passes.
+    #[test]
+    fn windows_names_compare_without_prefix_and_case() {
+        for (case, p, root, inside) in [
+            (
+                "(verbatim candidate)",
+                r"\\?\C:\Users\x\Cache\ir\k",
+                r"C:\users\X\cache",
+                true,
+            ),
+            (
+                "(verbatim root)",
+                r"C:\Users\x\cache\e.bin",
+                r"\\?\C:\Users\x\Cache",
+                true,
+            ),
+            ("(slash)", "C:/a/b", r"C:\A", true),
+            ("(unc)", r"\\?\UNC\h\s\c\x", r"\\h\s\c", true),
+            ("(the folder)", r"C:\cache\", r"C:\Cache", true),
+            ("(a sibling)", r"C:\cache2\x", r"C:\cache", false),
+        ] {
+            assert_eq!(under_windows(p, root), inside, "{case}");
         }
     }
 }

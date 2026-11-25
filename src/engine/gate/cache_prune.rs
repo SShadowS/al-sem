@@ -376,8 +376,9 @@ pub fn format_prune_report(result: &PruneCacheResult, dry_run: bool) -> String {
 // ---------------------------------------------------------------------------
 
 /// Resolve the cache directory path.
-/// Explicit override → use as-is; else `~/.al-sem/cache/`.
-fn resolve_cache_dir(override_path: Option<&str>) -> String {
+/// Explicit override → use as-is; else `~/.al-sem/cache/`. The CLI resolves it once, checks it
+/// (TLS-120) and prunes that same folder.
+pub fn resolve_cache_dir(override_path: Option<&str>) -> String {
     if let Some(p) = override_path {
         return p.to_string();
     }
