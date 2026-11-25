@@ -1185,6 +1185,67 @@ mod tests {
         assert!(files > 10_000, "precondition: CDO's dependency files");
     }
 
+    /// ENG-119: the lowerer's narrowed scans (comments, preproc ranges, `RunObject`) find
+    /// exactly what its whole-tree walks found, on every CDO dependency file and every
+    /// workspace `.al` file (`al_syntax::lower::scan_oracle_disagreements`; the r0 corpus:
+    /// al-syntax's `narrowed_scans_match_the_whole_tree_walks`). Equal scans give an equal IR.
+    #[test]
+    fn lowerer_scans_match_the_walks_on_cdo() {
+        let Some(ws) = crate::cdo::cdo_ws_or_enforce() else {
+            return;
+        };
+        let mut texts: Vec<(String, String)> = cdo_dependency_units(&ws)
+            .into_iter()
+            .flat_map(|u| {
+                let src = u.source.unwrap();
+                src.files
+                    .iter()
+                    .map(|f| {
+                        let path = format!("{} {}", u.id.name, f.virtual_path);
+                        (path, f.text.to_string())
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        let deps = texts.len();
+        let mut dirs = vec![ws.clone()];
+        while let Some(d) = dirs.pop() {
+            for e in std::fs::read_dir(&d).unwrap() {
+                let p = e.unwrap().path();
+                let hidden = p
+                    .file_name()
+                    .is_some_and(|n| n.to_string_lossy().starts_with('.'));
+                if p.is_dir() && !hidden {
+                    dirs.push(p);
+                } else if p.extension().is_some_and(|x| x == "al") {
+                    texts.push((
+                        p.display().to_string(),
+                        std::fs::read_to_string(&p).unwrap(),
+                    ));
+                }
+            }
+        }
+        let failures: Vec<String> = crate::big_stack::big_stack_pool().install(|| {
+            texts
+                .par_iter()
+                .flat_map_iter(|(name, text)| {
+                    al_syntax::lower::scan_oracle_disagreements(text)
+                        .into_iter()
+                        .map(move |b| format!("{name}: {b}"))
+                })
+                .collect()
+        });
+        println!(
+            "scan oracle CDO: {deps} dependency and {} workspace files",
+            texts.len() - deps
+        );
+        assert!(failures.is_empty(), "\n{}", failures.join("\n"));
+        assert!(
+            deps > 10_000 && texts.len() - deps > 100,
+            "precondition: CDO's dependency and workspace files"
+        );
+    }
+
     /// The switch: `on`/`off` in any case; anything else is off and warned (sol/Fable r1).
     #[test]
     fn the_switch_accepts_only_on_and_off() {

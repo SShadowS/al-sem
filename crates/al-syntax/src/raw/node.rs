@@ -78,6 +78,63 @@ impl<'t> Iterator for NamedChildren<'t> {
     }
 }
 
+/// The leaf that covers each byte offset of a subtree, for offsets asked in
+/// nondecreasing order, with one cursor that only moves forward
+/// ([`RawNode::leaf_locator`]). Every node is passed at most once, so a whole file's
+/// lookups cost about one walk; a fresh lookup from the root per offset walks the
+/// root's children from the start each time (quadratic in a wide file, ENG-119 review).
+pub(crate) struct LeafLocator<'t> {
+    cursor: TreeCursor<'t>,
+    /// The end of the node the cursor is on when the last offset fell after its last
+    /// child; offsets below it fall there too.
+    gap_end: usize,
+    /// Descents started (a test's work count).
+    #[cfg(test)]
+    pub(crate) descents: usize,
+}
+
+impl<'t> LeafLocator<'t> {
+    /// The childless node with `start <= p < end`, or `None` when no leaf covers `p`
+    /// (white space between a node's children, or past the subtree's end). `p` must not
+    /// be below an offset asked before.
+    pub(crate) fn leaf_at(&mut self, p: usize) -> Option<RawNode<'t>> {
+        let c = &mut self.cursor;
+        // Forward to the first node, here or after, that ends past `p`.
+        while c.node().end_byte() <= p {
+            if !c.goto_next_sibling() && !c.goto_parent() {
+                return None;
+            }
+        }
+        if c.node().start_byte() > p {
+            return None; // `p` lies before this node: in a gap
+        }
+        if p < self.gap_end {
+            return None; // still after the last child of the node the cursor is on
+        }
+        // Down to the leaf. The cursor stays on a child that starts after `p`, so a
+        // later offset never walks this node's children from the start again.
+        #[cfg(test)]
+        {
+            self.descents += 1;
+        }
+        loop {
+            let here = c.node();
+            if c.goto_first_child_for_byte(p).is_none() {
+                if here.child_count() == 0 {
+                    return Some(RawNode::new(here));
+                }
+                // `p` is after `here`'s last child, and so is every later offset below
+                // its end (review r2, sol: each one walked those children again).
+                self.gap_end = here.end_byte();
+                return None;
+            }
+            if c.node().start_byte() > p {
+                return None;
+            }
+        }
+    }
+}
+
 #[derive(Copy, Clone)]
 pub struct RawNode<'t> {
     node: Node<'t>,
@@ -163,6 +220,16 @@ impl<'t> RawNode<'t> {
     /// on this before reading [`RawNode::kind`] (which panics on an unknown kind).
     pub(crate) fn is_named(self) -> bool {
         self.node.is_named()
+    }
+
+    /// A [`LeafLocator`] over this node's subtree.
+    pub(crate) fn leaf_locator(self) -> LeafLocator<'t> {
+        LeafLocator {
+            cursor: self.node.walk(),
+            gap_end: 0,
+            #[cfg(test)]
+            descents: 0,
+        }
     }
 
     /// All children held in `field` (for `multiple: true` fields), document order.

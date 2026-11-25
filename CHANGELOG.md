@@ -135,6 +135,102 @@ CDO has no site of these shapes, so no CDO answer moves.
   decision moved to the resolver and the call site to the walk.
 - **Goldens.** None moved.
 
+### Changed (ENG-119: the lowerer's comment, preproc and RunObject scans no longer walk the whole tree)
+
+- **What.** Beside its main walk, the lowerer (`crates/al-syntax/src/lower/mod.rs`) walked
+  the whole parse tree up to three more times per file. With the dependency IR cache off
+  (ENG-110), those walks were 6.0 % of a one-shot `alsem analyze` on CDO and 3.7 % of a
+  one-shot `prove` (notes `docs/superpowers/notes/2026-11-23-eng119-remeasure.md`). That is
+  every run that parses all dependencies: cdo-gate's in-process phases, its `speed` phase and
+  its VERIFY phase, a new binary's first run, Windows (TLS-117), and every
+  `ALSEM_IR_CACHE=off` measurement. A warm-cache run gains almost nothing: the scans were
+  0.14-0.28 % of it.
+- **Comments** (`comment_nodes`). They are found from the text, not by a walk. At each `/`
+  followed by `/` or `*`, the lowerer asks for the leaf that covers that byte. If it is a
+  `comment` or `multiline_comment` that starts there, it is kept, and the search jumps past
+  its end. Every comment token starts with `//` or `/*`, so none is missed. A `//` inside a
+  string or inside another comment finds that leaf instead.
+  - The bytes are asked in increasing order of one tree cursor that only moves forward
+    (`raw::node::LeafLocator`), so a file costs about one walk.
+  - Review r1 (sol): the first version looked each byte up from the root. Tree-sitter then
+    steps over the root's children from the start every time, so N comment lines before the
+    first declaration cost N² steps.
+  - `comment_lookup_is_linear_in_a_wide_file` pins this with 20,000 such lines: 10.8 ms
+    against the whole-tree walk's 2.3 ms. A lookup from the root per comment took 1.25 s
+    and failed the test.
+  - Review r2 (sol): an offset after a node's last child (in its trailing gap) walked that
+    node's children again for every such offset. The locator now remembers the gap's end
+    and answers the later offsets there at once.
+  - `leaf_locator_skips_a_trailing_gap_once` pins this. A file that ends in 2,000 spaces
+    gives the root such a gap, and 1,000 offsets in it start 1 descent. Without the check
+    they start 1,000.
+- **Preproc ranges** (`has_conditional_directive`). The walk now runs only for a file that
+  holds `#if`, `#elif`, `#else` or `#endif`, not for any file with a `#` in it. Every
+  build-varying `preproc_*` node belongs to such a group. On CDO's dependencies, 2,587 of
+  10,881 files hold a `#` and 860 such a directive. A file with parse errors never reads the
+  ranges.
+- **RunObject** (`collect_run_objects`). The walk enters only subtrees whose text holds
+  `runobject` in any ASCII case. A property is kept only when its folded name is `runobject`,
+  and the fold maps no non-ASCII char onto ASCII, so that text is always there. 895 of the
+  10,881 files say `runobject`. The old walk also lowered every property of every object a
+  second time.
+- **The text checks** use `str::match_indices` (a memchr search). A first version with
+  per-byte loops cost back ~1.8 % of what it saved.
+- **The IR is unchanged.** `al_syntax::lower::scan_oracle_disagreements` (test-only) compares
+  each scan with the walk it replaced: the ordered `SourceComment` values (text, block,
+  own line, origin), the comments' raw kind ids, the preproc range list, and every object's
+  RunObject values.
+  - The kind ids are compared on their own. `Origin`'s `==` compares kind names, and two ids
+    can share a name (review r2, sol).
+  - It agrees on all 716 `.al` files of the r0 corpus and `tests/fixtures`
+    (`narrowed_scans_match_the_whole_tree_walks`).
+  - It agrees on these inline edge shapes:
+    - `//` inside strings, markers inside comments, and adjacent comments;
+    - a `#` that is no directive, and `# IF` with no `#else`;
+    - the lone-CR directive comment (`#if X // c\r`, review r1 Fable);
+    - a recovered file with a MISSING node (review r1 sol);
+    - RunObject spelled three ways.
+  - The directive check is also tested on each spelling alone (`#if`, `#elif`, `#else`,
+    `#endif`, `# \tIF`), and is false for `#region`, `#endregion`, `#pragma`, `#define`,
+    `#undef` and a `#` in a string.
+  - It agrees on all 10,881 CDO dependency files and 582 workspace files
+    (`lowerer_scans_match_the_walks_on_cdo`, in `lib_cdo`).
+  - `scripts/check-goldens` passes with no regeneration.
+  - `cdo-before-after c3f528f3 df4534e6` (and `a9299095` before review r1) with the cache
+    off: fingerprint, analyze (both scopes) and the call-graph stats are byte-identical; no
+    finding moved.
+- **Discrimination proofs** (`narrowed_scans_match_the_whole_tree_walks`; each break
+  failed, then passed again when reverted):
+  - Comments: drop `*` as a marker. The block comments go missing.
+  - Comments: drop both the start check and the skip past a found comment. Comments are
+    listed twice. Dropping only the start check passes, because the skip alone already
+    guards this; the start check is a second guard.
+  - Preproc: make the directive check accept `el` only. An `#if` with no `#else` loses its
+    ranges.
+  - RunObject: make the range test exclude a name that starts the range (`h <= r.start`). The
+    page's RunObject values go missing.
+  - RunObject: search the text without lowercasing it. The values go missing.
+  - Comment cost: look each comment up from the root again. The wide-file test fails.
+  - Trailing gap: drop the `gap_end` check. The gap test counts 1,000 descents instead of 1.
+- **Measured** on CDO with the cache off: one-shot `alsem analyze --deterministic`, release-fast,
+  5 alternating pairs pinned to cores 0-11, in the timed CDO slot.
+  - Binaries, both from `scripts/cdo-before-after`'s cache:
+    - master `c3f528f3`, sha256 `3cddd5f0…`;
+    - head `df4534e6`, sha256 `6bed0b31…`.
+  - **Instructions x0.926** (user mode, P-cores: 272.45e9 -> 252.25e9 median; pairs
+    x0.9254-x0.9263). That is above the task's bar of 1.5 % of CPU.
+    - Before review r1, `a9299095` (sha256 `9d59145e…`) measured x0.927 the same way.
+  - These are instructions, while the 6.0 % ceiling is samply's share of all CPU time.
+    The two do not measure the same thing, so the saving can exceed the ceiling. A likely
+    reason it does (not checked): the cursor-heavy scans ran more instructions per cycle
+    than the average.
+  - CPU time is one run, so no ratio is quoted.
+  - Profile shares at `a9299095` (samply, `profiling` build, analyze, cache off):
+    - tree-cursor stepping, self: 7.26 % -> 4.84 %;
+    - `descendants_of_kinds`: 2.83 % -> gone;
+    - `named_ranges_where`: 1.47 % -> 0.75 %;
+    - `collect_run_objects`: 1.73 % -> 0.22 %.
+
 ### Fixed (TLS-105: three more gate-script deadlines count awake time, not wall time)
 
 - **What was wrong.** server1 is a laptop that suspends when moved, and the wall clock keeps
