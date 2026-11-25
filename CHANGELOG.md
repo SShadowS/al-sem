@@ -1273,7 +1273,9 @@ ran beside the timing).
   - What the walk cannot read answers "may be loaded" (the old answer stands): a load or call on
     a tracked record the tree does not hold (a `case` pattern, `case true of A.Get(1):`; the
     tree gap is ENG-181), an `asserterror` statement (an error inside is caught), a deep tree, a
-    loop that does not settle.
+    loop that does not settle, and a named record return value (`procedure F() R: Record X`):
+    the model does not hold the name yet, so `R` is not tracked and never reported until ENG-209
+    adds it (it starts unloaded, like a local).
   - A tested load loads only on the branch where it found a record (sol r1):
     `if A.Get(1) then exit; A.Modify()` is reported, `if not A.Get(1) then exit; A.Modify()` is
     silent, with or without parentheses (`if A.FindFirst then`). The statement tree marks such a
