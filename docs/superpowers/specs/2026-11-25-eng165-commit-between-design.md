@@ -1,6 +1,7 @@
 # ENG-165: can a COMMIT run between site A and site B?
 
-Status: revision 3, spec only (no code). Task card: `/coord/tasks/ENG-165/task.md`.
+Status: revision 3.1, confirmed by Fable (all review findings closed); N1–N8 from the
+confirmation are folded in (§11). Ready to implement. Task card: `/coord/tasks/ENG-165/task.md`.
 
 - Revision 2 decided §10's questions 1, 2, 3 and 6, measured questions 4 and 5 on BC (§2.4), and
   found two places in the DO workspace that match the owner's description (§2.5, counts only;
@@ -325,9 +326,14 @@ enumeration completed.
 - **Branches that leave.** An arm between X and Y that always ends by `exit` or by an error
   (`branch_termination`) never reaches Y. Its commits are not between A and B (S10). They go to
   `commitsWithoutB` (§5.3). `branch_termination` reads `break` and `continue` as falling
-  through. So a commit in an arm that ends in `break`, before a B later in the same loop body, is
-  counted as between: a `yes` that may be false. That is the safe direction (never a wrong `no`),
-  and the row carries the label `through-break`.
+  through; this question does not. An arm that ends in `break` leaves the loop: if B is after the
+  loop, control still reaches B and the arm's commits are between; if B is only inside the loop
+  body (not after the loop), the arm never reaches B and its commits go to `commitsWithoutB`
+  (N4). A `continue` arm goes to the next iteration, so it reaches B only over the back edge.
+- **Traps on the way (N2, N3).** A call toward A that is a trap (a used `[TryFunction]` call, a
+  checked run) catches an error raised in A's tail and control resumes after that call, in the
+  region: B is still reachable, so the error row is left out (§5.2). Shape
+  `if TrySend() then; L.Insert`, TrySend: A, `Commit`, `Error` → `yes`, the error left out.
 - **Nested calls in one statement** follow T11: arguments left to right, then the call; an `if`
   condition before its branch. A commit in an argument's cone that comes after A's argument and
   before the call B (or before B's argument) is between.
@@ -347,13 +353,18 @@ enumeration completed.
   - **Across routes:** `Send; Helper(); Commit; Log()` where `Helper` may reach B: `Helper`'s B
     is not sure to run, so the path is not cut there, and the commit before `Log`'s B makes the
     answer `yes`. That is the sound reading.
-  - **Recursion:** `M: Send; M(); L.Insert`. The route search's states already follow recursion
-    only while known values change (`literal_routes`). The cut rule applies in all three region
-    parts, inside the recursive calls too.
+  - **Recursion:** the route search's states follow recursion only while known values change
+    (`literal_routes`), and the cut rule applies in all three region parts, inside recursive
+    calls too. Revision 3 made no claim that needs recursion to be decided (N5: its S5e shape was
+    `yes` at N = 0 already, so it is dropped); recursion is covered by the general rule and by the
+    route enumeration's existing tests.
   - The "must run" test is a new helper beside `control_flow`: it treats `break`, `continue`,
-    `exit`, an error and a maybe-zero loop as ways B can be skipped. Where it cannot decide, it
-    answers "not sure to run", so the path is not cut (the safe direction: a possible `yes`,
-    never a wrong `no`).
+    `exit`, an error and a maybe-zero loop as ways B can be skipped. **A B inside a trap scope
+    that the continuation is outside of** (`if TryLog() then; Commit`, B in TryLog) is never a
+    cut point: an implicit or explicit error inside the trap skips the rest of B's routine and
+    control resumes after the trap (N3). Where it cannot decide, it answers "not sure to run", so
+    the path is not cut (the safe direction: a possible `yes`, never a wrong `no`); that fallback
+    covers the trap case too, and a shape pins it (S5f).
 
 ### 4.3 What counts as a commit: two classes
 
@@ -372,6 +383,15 @@ commit is classed **by the route from the region statement to C**:
 
 Class-1 commits decide `yes`. Class-2 commits never make A's pending write durable; they are
 listed as `ownTransactionCommits`, labelled.
+
+**The class depends on which side of the run edge A is (N1).** The table above is for a run or an
+isolated event that A is **outside** of. When A's own route crosses a checked-run edge (or an
+isolated event raised with nothing pending) **below the meet routine**, A runs inside that run's
+transaction, and the run's implicit commit at its successful return is exactly what makes A
+durable. So such an edge contributes a **class-1** commit for A, at the run's successful return,
+as part of A's tail (§4.1), labelled `run-commit-of-A`. Shape:
+`if Codeunit.Run(Sender) then; if Bad then Error(…); L.Insert`, with A inside `Sender` → `yes`,
+with the `Error` in `errorsAfterCommit` (S30; the deep-named DO-2 twin, §8).
 
 Some calls between A and B are **errors when a write is pending**. They are listed in the error
 lists (§5.1), each with its label, never as commits:
@@ -408,7 +428,7 @@ Each evidence row holds:
 - `guards`: the conditions on the way, as `prove_slice` shows them (selected context, not every
   needed condition).
 - `labels`: `loop-carried`, `through-callee`, `through-event`, `through-object-run`,
-  `through-break`, `isolated-subscriber`.
+  `isolated-subscriber`, `run-commit-of-A`.
 - `errorsAfterCommit`: the error sites that may run **after C and before B** (§5.2 says which
   traps leave a row out). **This is the dangerous case** (S7): the commit made A durable, and
   this error stops the code before B.
@@ -428,7 +448,12 @@ What matters is whether control still reaches B:
   `swallowed-above-meet`, with the trap's site. In B's head the same holds for a trap above the
   routine that holds B's head.
 - A trap that fails with a write pending (`TrapVerdict::UnlessWritePending`: an isolated event, a
-  checked run with a write pending) does not catch: the row stays.
+  checked run with a write pending) does not catch: the row stays. **Whether a write is pending is
+  read at the commit C, not at the root (N8):** right after a class-1 commit nothing is pending
+  until the next write on the route, so a trap after C and before any later write does catch.
+  Where the walk cannot tell (a write in a callee that may or may not run), it treats the write as
+  possibly pending and keeps the row, labelled `trap-may-fail-pending` (an over-listing, never a
+  dropped row).
 
 The lists:
 - `errorsAfterCommit` (per class-1 commit, §5.1).
@@ -447,7 +472,8 @@ every obligation is clear. A `no` carries:
   one build; `"a-dead-under-literals"` / `"b-dead-under-literals"` (§3).
 - `commitsWithoutB`: class-1 commits after A on paths that end before B, with how they end:
   `exit`, an error, a **return** (the routine runs off its end, so B, deeper or later in a caller,
-  does not run on that path), or a `break` that leaves the loop holding B. A commit then an error
+  does not run on that path), or a `break` that leaves a loop when B is only inside that loop
+  (not after it; §4.2, N4). A commit then an error
   that never reaches B is the same risk as S7. These rows appear with every verdict.
 - `errorsBetween` and `ownTransactionCommits`, as always.
 
@@ -457,10 +483,11 @@ When A is a call or an operation whose own cone commits, those commits run *duri
 after the effect inside it. They are not "between" (§4's definition). They are listed as
 `commitsInsideA`, each with its class and route, and the verdict stays what the region decides.
 The human output says how many there are and names the deeper site to give as `--after` to order
-them (the first call on their route below A). Symmetrically, `commitsInsideB` lists class-1
-commits B's own cone runs before B's write (an `OnInsert` trigger or an `OnBeforeInsert`
-subscriber that commits, when B is `Insert(true)`; a commit in B's callee before its write, when B
-is a call); revision 2 answered those with a silent `no`.
+them (the first call on their route below A). Symmetrically, `commitsInsideB` lists **every**
+class-1 commit in B's own cone (an `OnInsert` trigger or an `OnBeforeInsert` subscriber that
+commits, when B is `Insert(true)`; a commit anywhere in B's callee, when B is a call), and the
+output says "name a deeper `--before` to order them", as for A (N6). Revision 2 answered those
+with a silent `no`.
 
 Why a list and not a `yes` (review finding 5): on DO, 6 of 9 and 2 of 3 commits sit behind A.
 Counting them as `yes` would make the answer nearly always `yes`, and it would contradict the
@@ -549,7 +576,7 @@ The expected answers are written down before the code runs (principle 9). The fi
 | S5b | `repeat L.Insert; Send; Commit until …` | `yes`, `loop-carried` |
 | S5c | `for: Send; if Flag then L.Insert; Commit` | `yes`, `loop-carried` |
 | S5d | `Send; Helper (may insert the log); Commit; Log()` | `yes` (no cut at a maybe-B) |
-| S5e | recursion: `M(N): Send; if N > 0 then M(N - 1); Commit; L.Insert` | `yes` |
+| S5f | `Send; if TryLog() then; Commit; Log()`, B inside `TryLog` (a used `[TryFunction]`) and B again in `Log` | `yes` (no cut at a B inside a trap scope, N3) |
 | S12 | `Send; if X then begin Commit; Error('x') end; L.Insert` | `no`, one `commitsWithoutB` row ending by an error |
 | S13 | `Send; Codeunit.Run(Id); L.Insert` (dynamic id) | `unknown`, naming the site |
 | S13b | `Send; IFace.Run(); L.Insert` (an interface with an implementation that may not be loaded) | `unknown`; `no` under `--closed-world` when the loaded implementations do not commit |
@@ -570,7 +597,9 @@ The expected answers are written down before the code runs (principle 9). The fi
 | S28 | A in one `#if` arm of a routine, B in the other arm's row | `no`, `not-in-one-build` |
 | S29 | A's route crosses a symbol-only dependency routine | `unknown`, naming it |
 | DO-1 twin | `Deliver(): SetStatus; Commit; Transmit(); if Ok then Commit;` then back in the caller `if Bad then Error(…); UpdateCounter(); L.Insert` | A = `Transmit` call: `yes` (A's tail), the `Error` and `UpdateCounter`'s implicit errors in `errorsAfterCommit` |
-| DO-2 twin | `PostMessage(): Commit; if Codeunit.Run(Worker) then;` then in the caller `Rec.Modify(); L.Insert` | A = the `PostMessage` call: `no`; 2 `commitsInsideA` rows (class 1, class 2); the `Modify` in `errorsBetween` |
+| DO-2 twin | `PostMessage(): Commit; if Codeunit.Run(Worker) then;` then in the caller `Rec.Modify(); L.Insert` | A = the `PostMessage` call: `no`; 2 `commitsInsideA` rows (class 1, class 2); the class-1 row carries its own `errorsAfterCommit` (the `Modify`'s implicit error) and leads the output (§5.4, N7); the `Modify` also in `errorsBetween`. A = the deep site inside `Worker`: `yes` through `run-commit-of-A`, the `Modify` in `errorsAfterCommit` (N1) |
+| S30 | `if Codeunit.Run(Sender) then; if Bad then Error('x'); L.Insert`, A inside `Sender` | `yes` (`run-commit-of-A`), the `Error` in `errorsAfterCommit` (N1) |
+| S31 | `if TrySend() then; L.Insert`, TrySend (used `[TryFunction]`): A, `Commit`, `Error('x')` | `yes`; the `Error` is left out (trap on A's route below M, N2) |
 
 The DO twins are public fixtures of the two acceptance shapes (the DO runs used a private copy
 that is not pinned). The cap case cannot be reached by a small fixture; it is pinned by a unit
@@ -605,6 +634,9 @@ is made with Edit, run with the narrowest test filter, and reverted:
 | check only the first route pair | S17 turns `no` |
 | treat a cap as complete | the small-budget unit test turns `no` |
 | fold `commitsInsideA` into the verdict | DO-2 twin turns `yes` |
+| class a run edge on A's own route as class 2 (ignore A's side) | S30 turns `no` |
+| ignore a trap on A's route below M | S31 gains the trapped error |
+| cut at a B inside a trap scope | S5f turns `no` |
 | drop `commitsInsideB` | S23 loses its row |
 | order nested calls right to left | S26 swaps its answers |
 | accept an ambiguous line | S27 answers instead of refusing |
@@ -664,13 +696,14 @@ Still open:
 |---|---|
 | B1 trap scope | §5.2 (trap relative to the region; `swallowed-above-meet`); §5.6 contract weakened as asked; S24, S25 and two proofs |
 | B2 S8 stale; class by route | §2.1 S8 corrected to `no` + `run-error-rolls-back-a`; §4.3 classes by the route's edges; probed: a `Commit()` in an isolated subscriber is class 1 (T14, T16); S18–S20 and four proofs |
-| B3 cut soundness | §4.2: cut only at a B that surely runs; across routes and recursion stated; S5c, S5d, S5e; proof "cut at every B → S5c no" |
+| B3 cut soundness | §4.2: cut only at a B that surely runs; across routes and recursion stated; S5c, S5d (S5e dropped, N5), S5f; proof "cut at every B → S5c no" |
 | B4 RunModal | probed without a handler: an error with a pending write (T18 vs T19); §4.3 lists it as an error row; a request-page report is a possible error labelled unmeasured |
 | B5 inside-A | §5.4: `commitsInsideA` / `commitsInsideB` lists, verdict unchanged; row order fixed; S23, DO-2 twin and proofs |
 | S6 operation edges | §4.1 region includes trigger and table-event edges; S22, S23; proof |
 | S7 no tree, `#if`, symbol-only | §5.5 `unknown` for no tree / site not in tree / symbol-only; §5.3 `not-in-one-build`; S28, S29; proofs |
 | S8 literal bindings, per-route class, dead sites | §5.1 routes from the root's state graph through the region statement; §6 per-route class and `RunCleanCones`; §3 dead under literals |
-| S9 returns, break | §5.3 `commitsWithoutB` includes returns and `break`; §4.2 `through-break` false `yes` noted |
+| S9 returns, break | §5.3 `commitsWithoutB` includes returns and a `break` out of a loop that alone holds B; §4.2 agrees (N4) |
+| Confirmation round (N1–N8) | N1 §4.3 (A's side of the run edge, S30, DO-2 twin deep); N2 §4.2 traps on the way (S31); N3 §4.2 must-run and trap scopes (S5f); N4 §4.2/§5.3; N5 S5e dropped; N6 §5.4; N7 §8 DO-2 twin; N8 §5.2 |
 | S10 site naming | §3: ambiguous tails refused; candidate defined; column base and unit; parser for both forms with tests |
 | S11 missing proofs, DO twins, S5 comment | §8 table and proofs extended; DO twins added; the fixture's S5 comment fixed (outside the repo) |
 | scope: HTTP/FILE gating | dropped; `errorsBetween` is always listed (§5.2) |
