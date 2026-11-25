@@ -289,9 +289,24 @@ Labels are a mirror for humans, not a lock. The lock is local:
   Sidecars are optional metadata: a failed write never fails the lease or
   merge-lane change around it, and an unreadable one (truncated, unparsable,
   nested too deep) reads as absent (wall clock), so neither can break
-  `status`, `recover` or a heartbeat. A reader takes lease and sidecar as one
-  pair: on a mismatch it reads the lease once more, since a beat between its
-  two reads leaves a newer sidecar beside the old lease (sol r3).
+  `status`, `recover` or a heartbeat.
+  - **Commands that ACT on liveness decide under mutex `registry`** (sol r4).
+    Every lease writer holds it too, so each lease/sidecar pair read under it
+    is complete. These commands are `clear-halt` and `resolve incident` (the
+    live-run guard; `clear-halt` holds it through the unlink), verification
+    `cleanup` (it re-checks the lane under it and holds it through the delete,
+    so no new lane owner can come in between), `recover`'s steal and
+    `take_lane`. Under the lock, a sidecar OLDER than its lease (same run) is a
+    beat that died between its writes: `clear-halt`, `resolve incident`,
+    `cleanup` and `take_lane` count that lease as live, never stale. `recover`
+    does not, or such a lease could never be taken. A periodic beat that times
+    out on `registry` (a cleanup's delete) is skipped, not fatal.
+  - **Reporting reads unlocked** (`status`, `preflight`, `merge-gate`). There
+    a beat can land between the lease read and the sidecar read. On a mismatch
+    the reader reads the lease once more: a lease that is gone is left out, and
+    one replaced by another run is reported as that run. This is best-effort
+    (sol r3, r4): a beat suspended between its own two writes still reads as a
+    mismatch, which is why nothing acts on this read.
   - **The awake clock** is `[clock id, CLOCK_MONOTONIC]`. CLOCK_MONOTONIC stops
     while the host sleeps. The clock id is the boot id plus the process's time
     namespace offset for CLOCK_MONOTONIC (`/proc/self/timens_offsets`; 0 without
@@ -313,8 +328,9 @@ Labels are a mirror for humans, not a lock. The lock is local:
     take `registry`. So upgrade or roll back only with no live lease (`status`
     lists none, or only stale ones): let every run finish or be recovered first.
   - **`beat` and `release` take mutex `registry`** (TLS-122). A beat cannot
-    write an old copy of the lease back over `recover`'s steal. A release cannot
-    delete a newer claim's sidecar at the same path.
+    write an old copy of the lease back over `recover`'s steal, and is never
+    seen half-written by a locked reader. A release cannot delete a newer
+    claim's sidecar at the same path.
 
   There is no PID check: the
   conductor is a chat session, not a supervisable process, and a 30-minute silence

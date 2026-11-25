@@ -281,8 +281,11 @@ def _gate_slot(ctx: Ctx, name: str, halt_aborts: bool, stack: ExitStack) -> floa
         waited = time.monotonic() - start
         owner = not ctx.dry_run and lock.own(ctx) is not None
         if owner and time.monotonic() - last_beat >= QUEUE_BEAT_S:
-            lock.beat(ctx)
-            last_beat = time.monotonic()
+            try:
+                lock.beat(ctx)
+                last_beat = time.monotonic()
+            except MutexTimeout:
+                pass        # `registry` busy (e.g. a cleanup's delete): beat next round
         if halt_aborts:
             if lock.halted(ctx) is not None:
                 raise GateQueued(HALTED_WHILE_QUEUED, waited)
@@ -1913,8 +1916,18 @@ def cmd_cleanup(args, ctx, gh, git):
                                  "checkout's parent directory",
                         "worktree": str(target),
                         "expected_parent": str(ctx.paths.root.parent.resolve())})
-        if not worktrees.destroy(git, target):
-            raise Fail({"error": f"could not remove {args.worktree}"})
+        # The DECISION, under mutex `registry` and held through the delete (sol
+        # r4): the unlocked check above can read a live lane holder as stale
+        # (a beat half-written across a suspend), and between a check and the
+        # delete a new run could take the lane. Under `registry` the lease pairs
+        # are complete and the lane cannot change hands.
+        with mutex(ctx, "registry"):
+            lane, state = lock.lane_state_locked(ctx)
+            if state == "busy":
+                raise lock.FenceError(f"merge lane is held by live run {lane['run_id']}, "
+                                      f"context is {ctx.run_id}")
+            if not worktrees.destroy(git, target):
+                raise Fail({"error": f"could not remove {args.worktree}"})
         return _emit({"removed": args.worktree})
     # `is None` -- ABSENT, not empty. `--branch ""` was given and is wrong,
     # and `_validate_branch_name` below is the guard that says so ("not a

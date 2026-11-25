@@ -1004,11 +1004,29 @@ its time rules on the wall clock, which keeps counting through a suspend.
     could load the pre-suspend lease, then the sidecar of a beat that landed in between. The
     two did not match, so it fell back to the old lease's wall heartbeat and read a live run
     as stale. `clear-halt`'s live-run guard and verification `cleanup`'s lane check would have
-    let it through. On a mismatch, `_entries` now reads the lease once more, and gets the beat's
-    pair, or a lease that is fresh on the wall clock. That covers every unlocked reader.
+    let it through. On a mismatch, `_entries` now reads the lease once more. (Review r4
+    showed that this is not enough to act on; it now serves reporting only.)
   - **Deeply nested JSON in a sidecar reads as absent.** The parser's `RecursionError` is
     caught for the optional files only. A stamp's shape is checked before its checksum, so
     only a flat `[str, number]` is ever serialized for it.
+- **Review r4 (sol):**
+  - **The commands that act on liveness decide under mutex `registry`.** A beat can write its
+    lease, then the host can suspend before it writes the sidecar. An unlocked reader then sees
+    the same mismatch after any number of re-reads. Since every lease writer holds `registry`,
+    the decisions now take it too:
+    - `clear-halt` decides and unlinks under it, and `resolve incident` checks under it.
+    - Verification `cleanup` re-checks the lane under it and holds it through the delete, so
+      no new lane owner can come in between.
+    - `recover`'s steal reads under it, as before.
+  - **A beat that died between its writes reads as live for those commands.** Under the lock,
+    a sidecar older than its lease (same run) can only come from such a beat. `clear-halt`,
+    `resolve incident`, `cleanup` and `take_lane` count it as live, never stale. `recover`
+    does not, so such a lease can still be recovered.
+  - **The unlocked re-read is for reporting** (`status`, `preflight`, `merge-gate`). A lease
+    that is gone at the re-read is left out, and one replaced by another run with the same
+    heartbeat is reported as that run. The first read is no longer kept in either case.
+  - **A periodic beat that times out on `registry` is skipped, not fatal**, in the gate
+    supervisor and the gate queue, since a cleanup can now hold the lock through a delete.
 
 ### Fixed (ENG-178: table procedures named like record built-ins: four follow-ups from ENG-173)
 

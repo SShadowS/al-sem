@@ -94,15 +94,20 @@ class Lock:
     # executor before TLS-122 builds `Lock(**data)` and fails on any key it does
     # not know. Old and new executors can share one `.agent/` this way.
     beat_awake: list | None = None
+    # IN MEMORY ONLY, set only on a read under mutex `registry` (sol r4): the
+    # sidecar names this run with an OLDER heartbeat than the lease. A beat
+    # writes both under `registry`, so seen under it this is a beat that died
+    # between its two writes: the deciding commands treat the lease as live.
+    beat_pending: bool = False
 
 
-_LOCK_FIELDS = {f.name for f in fields(Lock)}
+_LOCK_FIELDS = {f.name for f in fields(Lock)} - {"beat_awake", "beat_pending"}
 
 
 def _lease_dict(lk: Lock) -> dict:
     """The lease file's content: the pre-TLS-122 schema exactly."""
     d = asdict(lk)
-    del d["beat_awake"]
+    del d["beat_awake"], d["beat_pending"]
     return d
 
 
@@ -154,24 +159,43 @@ def _read_lease(path: Path) -> Lock | None:
     return Lock(**{k: v for k, v in data.items() if k in _LOCK_FIELDS}) if data else None
 
 
-def _entries(ctx: Ctx) -> list[tuple[Path, Lock]]:
-    """Every lease with its file: the legacy `lock.json`, then `locks/`."""
+def _sidecar_is_older(ctx: Ctx, lk: Lock) -> bool:
+    """The sidecar names this lease's run with an older heartbeat."""
+    s = read_optional(_awake_path(ctx, lk.issue))
+    hb = s.get("heartbeat") if isinstance(s, dict) else None
+    return (isinstance(s, dict) and s.get("run_id") == lk.run_id and isinstance(hb, (int, float))
+            and not isinstance(hb, bool) and hb < lk.heartbeat)
+
+
+def _entries(ctx: Ctx, held: bool = False) -> list[tuple[Path, Lock]]:
+    """Every lease with its file: the legacy `lock.json`, then `locks/`.
+
+    `held`: the caller holds mutex `registry`. Every writer of a lease and its
+    sidecar holds it too, so each pair read is complete; a sidecar older than
+    its lease then means a beat died between its writes (`beat_pending`).
+
+    Unlocked (reporting: `status`, `preflight`), a beat can land between the
+    two reads. On a mismatch the lease is read once more (sol r3): a lease
+    that has gone is left out, and a changed one replaces the first read. This
+    is best-effort only (a beat suspended between its own writes still reads
+    as a mismatch, sol r4), so every command that ACTS on liveness decides
+    under `registry` instead."""
     out = []
     for p in [ctx.paths.lock, *ctx.paths.locks_dir.glob("issue-*.json")]:
         lk = _read_lease(p)
-        if lk is not None:
-            lk.beat_awake = _read_awake(ctx, lk)
-            if lk.beat_awake is None:
-                # A consistent pair (sol r3): a beat between the lease read and
-                # the sidecar read leaves a NEWER sidecar beside the old lease,
-                # and the old lease's wall heartbeat would read a live run as
-                # stale after a resume. Read the lease once more: it is now the
-                # beat's, matching its sidecar or fresh on the wall clock.
-                again = _read_lease(p)
-                if again is not None and again.heartbeat != lk.heartbeat:
-                    lk = again
-                    lk.beat_awake = _read_awake(ctx, lk)
-            out.append((p, lk))
+        if lk is None:
+            continue
+        lk.beat_awake = _read_awake(ctx, lk)
+        if lk.beat_awake is None and held:
+            lk.beat_pending = _sidecar_is_older(ctx, lk)
+        elif lk.beat_awake is None:
+            again = _read_lease(p)
+            if again is None:
+                continue                         # gone: no coherent snapshot of it
+            if (again.run_id, again.heartbeat) != (lk.run_id, lk.heartbeat):
+                lk = again
+                lk.beat_awake = _read_awake(ctx, lk)
+        out.append((p, lk))
     return sorted(out, key=lambda e: e[1].issue)
 
 
@@ -405,7 +429,7 @@ def steal_for_recovery(ctx: Ctx, stale: Lock) -> Lock:
     if not ctx.run_id:
         raise RuntimeError("steal_for_recovery needs a run_id")
     with mutex(ctx, "registry"):
-        entries = _entries(ctx)
+        entries = _entries(ctx, held=True)
         mine = next((lk for _, lk in entries if lk.run_id == ctx.run_id), None)
         if mine is not None:
             raise LockHeld("run-holds-a-lock", mine)
@@ -414,6 +438,8 @@ def steal_for_recovery(ctx: Ctx, stale: Lock) -> Lock:
             raise LockHeld("lock-gone", e[1] if e else None)
         path, cur = e
         now = ctx.now()
+        # `is_stale`, not `_live_held`: a beat that died between its writes
+        # (`beat_pending`) must stay recoverable, or its lease is stuck forever.
         if not is_stale(cur, now, ctx.awake_now()):
             raise LockHeld("lock-live", cur)
         _stamp(ctx, cur, now)
@@ -467,24 +493,39 @@ def _lane_write(ctx: Ctx, lane: dict) -> None:
     write_json(ctx, ctx.paths.merge_lane, lane)
 
 
-def _lane_state_held(ctx: Ctx) -> tuple[dict | None, str]:
+def _live_held(lk: Lock, now: float, awake) -> bool:
+    """Live, for a command that ACTS on it, read under mutex `registry`: not
+    stale, or a beat that died between its two writes (`beat_pending`). Only
+    `clear-halt`, `resolve incident`, verification `cleanup` and `take_lane`
+    judge this way; recovery does not, or such a lease could never be taken."""
+    return lk.beat_pending or not is_stale(lk, now, awake)
+
+
+def _lane_state_held(ctx: Ctx, held: bool = True) -> tuple[dict | None, str]:
     lane = read_json(ctx.paths.merge_lane)
     if not lane:
         return None, "free"
-    owner = next((lk for lk in all_locks(ctx)
+    owner = next((lk for _, lk in _entries(ctx, held)
                   if lk.issue == lane.get("issue") and lk.run_id == lane.get("run_id")), None)
     if owner is None:
         return lane, "free"          # the owner's lease is gone: nothing holds it
     if lane["run_id"] == ctx.run_id:
         return lane, "mine"
-    return lane, "orphaned" if is_stale(owner, ctx.now(), ctx.awake_now()) else "busy"
+    return lane, "busy" if _live_held(owner, ctx.now(), ctx.awake_now()) else "orphaned"
 
 
 def lane_state(ctx: Ctx) -> tuple[dict | None, str]:
     """`(lane, state)`, state one of `free`, `mine`, `busy` (another run with
     a live lease holds it) or `orphaned` (its owner's lease is stale: only
-    `recover` moves it on). A read; takes no mutex."""
-    return _lane_state_held(ctx)
+    `recover` moves it on). A read for REPORTING; takes no mutex. A command
+    that acts on the answer uses `lane_state_locked` under `registry`."""
+    return _lane_state_held(ctx, held=False)
+
+
+def lane_state_locked(ctx: Ctx) -> tuple[dict | None, str]:
+    """`lane_state` for a caller that HOLDS mutex `registry` and acts on the
+    answer before releasing it (verification `cleanup`, sol r4)."""
+    return _lane_state_held(ctx, held=True)
 
 
 def take_lane(ctx: Ctx, issue: int, pr: int | None, merge_sha: str | None = None) -> dict:
@@ -575,8 +616,16 @@ def require_operator(ctx: Ctx, what: str) -> None:
     run is enough to make a clear unsafe.
     """
     require_human(ctx, what)
+    with mutex(ctx, "registry"):
+        _refuse_live_held(ctx, what)
+
+
+def _refuse_live_held(ctx: Ctx, what: str) -> None:
+    """`require_operator`'s live-run half. ASSUMES mutex `registry` is held
+    (sol r4): an unlocked read can see a beat half-written and take a live
+    run for a stale one; under `registry` no beat is half-written."""
     now, aw = ctx.now(), ctx.awake_now()
-    lk = next((x for x in all_locks(ctx) if not is_stale(x, now, aw)), None)
+    lk = next((x for _, x in _entries(ctx, held=True) if _live_held(x, now, aw)), None)
     if lk is not None:
         raise OperatorOnly(
             f"{what} is refused while run {lk.run_id} still holds the lock for issue "
@@ -630,18 +679,24 @@ def clear_halt(ctx: Ctx, expected: str, by: str) -> str:
     5. the audit line lands BEFORE the unlink, so a clear that dies half-way
        is still on the record. A clear with no record is the one outcome that
        must be impossible; this append is NOT best-effort.
+
+    Steps 2-5 run under mutex `registry` (sol r4): the live-run check reads
+    complete lease/sidecar pairs, and no run can change its lease between the
+    check and the unlink.
     """
     ctx.write_guard("clear HALT")
-    require_operator(ctx, "clear HALT")
-    current = halted(ctx)
-    if current is None:
-        raise HaltClearRefused("not-halted", "there is no .agent/HALT to clear")
-    if current != expected.strip():
-        raise HaltClearRefused("reason-mismatch",
-                               f"HALT reads {current!r}, not the {expected.strip()!r} you named")
-    append_audit(ctx, {"action": "halt-clear", "reason": current, "by": by})
-    ctx.paths.halt.unlink()
-    return current
+    require_human(ctx, "clear HALT")
+    with mutex(ctx, "registry"):
+        _refuse_live_held(ctx, "clear HALT")
+        current = halted(ctx)
+        if current is None:
+            raise HaltClearRefused("not-halted", "there is no .agent/HALT to clear")
+        if current != expected.strip():
+            raise HaltClearRefused("reason-mismatch",
+                                   f"HALT reads {current!r}, not the {expected.strip()!r} you named")
+        append_audit(ctx, {"action": "halt-clear", "reason": current, "by": by})
+        ctx.paths.halt.unlink()
+        return current
 
 
 def require_not_halted(ctx: Ctx, terminal: bool = False) -> None:

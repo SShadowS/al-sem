@@ -3538,6 +3538,125 @@ def test_cleanup_of_a_retained_verification_worktree_survives_the_dead_run_s_sta
     assert code == 0 and not again.exists(), out
 
 
+def _live_lane_holder(clone, g):
+    """A run holding issue 8 and the merge lane, its beats stamped on an awake
+    clock (so it has sidecars), a retained verification worktree, and HALT."""
+    kept = worktrees.create(g, worktrees.verify_path(clone), g.rev("master"))
+    holder = Ctx(Paths(clone), run_id="live-run", now=lambda: 1_000_000.0, awake=lambda: ("b", 500.0))
+    lock.acquire(holder, 8, "s", 1)
+    write_json(holder, clone / ".agent" / "merge-lane.json",
+               {"run_id": "live-run", "issue": 8, "pr": 12, "merge_sha": g.rev("master"), "acquired": 1.0})
+    lock.set_halt(Ctx(Paths(clone)), "operator")
+    return kept
+
+
+def test_a_beat_paused_between_its_writes_stops_clear_halt_and_cleanup(capsys, repo_pair, monkeypatch):
+    """sol r4's case: a beat writes its lease, then the host suspends before
+    it writes the sidecar. Only wall time moves (2 h). An unlocked reader sees
+    the new lease beside the old sidecar and falls back to a 2 h wall age, so
+    it takes the live run for a stale one. `clear-halt` and verification
+    `cleanup` decide under `registry`, which the paused beat holds: they wait,
+    and act on nothing (here their wait times out). Cleanup's early, unlocked
+    check does pass here, which is why its delete decides again under the lock.
+    Red proofs (sol r4):
+    - `clear_halt` deciding on the unlocked reporting read (no mutex, and
+      `_entries(held=False)` in `_refuse_live_held`) failed here (HALT cleared).
+    - The locked recheck removed from `cmd_cleanup` (only the unlocked early
+      check left) failed here (the live run's worktree was deleted).
+    Two guards cover this pause, each enough alone: the mutex (the commands
+    wait for the paused beat) and `beat_pending` (an older sidecar of the same
+    run reads as live). With only the mutex removed, or only `beat_pending`
+    dropped, this test stayed green; `beat_pending` is proven on its own in
+    the next test."""
+    import threading
+    _, clone = repo_pair
+    g = Git(clone)
+    kept = _live_lane_holder(clone, g)
+    beating = Ctx(Paths(clone), run_id="live-run", now=lambda: 1_000_060.0, awake=lambda: ("b", 560.0))
+    paused, go = threading.Event(), threading.Event()
+    real_write_awake = lock._write_awake
+
+    def pause(cx, lk):
+        paused.set()                                 # the lease is written; the sidecar not yet
+        go.wait(20)
+        real_write_awake(cx, lk)
+
+    monkeypatch.setattr(lock, "_write_awake", pause)
+    t = threading.Thread(target=lock.beat, args=(beating,))
+    t.start()
+    try:
+        assert paused.wait(20)
+        real_mutex = lock.mutex
+        short = lambda c, name, timeout=30.0: real_mutex(c, name, timeout=0.3)   # noqa: E731
+        monkeypatch.setattr(lock, "mutex", short)
+        monkeypatch.setattr(cli, "mutex", short)
+        monkeypatch.setenv("AGENTFLOW_NOW", str(1_000_060.0 + 2 * 3600))         # wall time only
+        code, out = run(capsys, clone, "clear-halt", "--reason", "operator", "--by", "me",
+                        gh_run=FakeRunner(), run_id=None)
+        assert code != 0, out
+        assert lock.halted(Ctx(Paths(clone))) == "operator"
+        code, out = run(capsys, clone, "cleanup", "--worktree", str(kept),
+                        gh_run=FakeRunner(), run_id=None)
+        assert code != 0, out
+        assert kept.is_dir()
+    finally:
+        go.set()
+        t.join(20)
+
+
+def test_a_beat_that_died_between_its_writes_keeps_clear_halt_and_cleanup_off(
+        capsys, repo_pair, monkeypatch):
+    """Under `registry` no beat is half-written, so a sidecar OLDER than its
+    lease (same run) is a beat that died between its two writes. The deciding
+    commands treat that lease as live (`beat_pending`), never stale, whatever
+    the wall clock says. Recovery does not: it can still take the lease, or a
+    run that died that way could never be recovered.
+    Red proofs (sol r4): `lk.beat_pending or` dropped from `lock._live_held`
+    failed here (HALT cleared); `steal_for_recovery` judging by `_live_held`
+    instead of `is_stale` failed the last step (`lock-live`)."""
+    _, clone = repo_pair
+    g = Git(clone)
+    kept = _live_lane_holder(clone, g)
+    lease = clone / ".agent" / "locks" / "issue-8.json"
+    data = json.loads(lease.read_text(encoding="utf-8"))
+    data["heartbeat"] += 60                          # the lease the dying beat did write
+    lease.write_text(json.dumps(data), encoding="utf-8")
+    monkeypatch.setenv("AGENTFLOW_NOW", str(data["heartbeat"] + 2 * 3600))
+    code, out = run(capsys, clone, "clear-halt", "--reason", "operator", "--by", "me",
+                    gh_run=FakeRunner(), run_id=None)
+    assert code == 1 and out["refused"] == "operator-only", out
+    code, out = run(capsys, clone, "cleanup", "--worktree", str(kept), gh_run=FakeRunner(), run_id=None)
+    assert code == 1 and "FenceError" in out["error"], out
+    assert kept.is_dir()
+    rec = Ctx(Paths(clone), run_id="run-rec", now=lambda: data["heartbeat"] + lock.STALE_SECONDS + 1)
+    assert lock.steal_for_recovery(rec, lock.for_issue(rec, 8)).recovering_by == "run-rec"
+
+
+def test_a_queued_gate_survives_a_beat_that_times_out(ctx, monkeypatch):
+    """While a cleanup holds `registry` through its delete, a queued gate's
+    beat can time out on it. That beat is skipped, not fatal: the next round
+    beats again (30 min of slack).
+    Red proof (sol r4): the `except MutexTimeout` dropped from `_gate_slot`
+    failed here (MutexTimeout instead of the queue's own verdict)."""
+    from agentflow import budget
+    from agentflow.state import MutexTimeout, mutex
+    ticking = Ctx(paths=ctx.paths, run_id="run-test", now=lambda: 1_000_000.0)
+    lock.acquire(ticking, 8, "s", 1)
+    budget.init(ticking, claimed_at=1_000_000.0)
+
+    def busy(c):
+        raise MutexTimeout("mutex 'registry' still held")
+
+    monkeypatch.setattr(lock, "beat", busy)
+    monkeypatch.setattr(cli, "QUEUE_POLL_S", 0.01)
+    monkeypatch.setattr(cli, "QUEUE_BEAT_S", 0)
+    ctx.paths.config.write_text(json.dumps({"gate_wait_minutes": 0}), encoding="utf-8")
+    with mutex(ctx, "gate-0"):
+        with pytest.raises(cli.GateQueued) as e:
+            cli._run_gate(ticking, "check-goldens", [sys.executable, "-c", "pass"], 1, ctx.paths.root)
+    assert e.value.failure == "gate-queue-timeout"
+
+
 def test_cleanup_refuses_a_verify_named_directory_outside_the_checkouts_parent(
         capsys, repo_pair, tmp_path):
     """The name prefix alone is not ownership.

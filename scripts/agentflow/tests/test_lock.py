@@ -741,25 +741,73 @@ def _race_after_suspend(ctx, monkeypatch):
     return c, armed
 
 
-def test_a_beat_in_the_read_window_still_blocks_clear_halt(ctx, monkeypatch):
-    """`clear-halt`'s live-run guard (`require_operator`) sees the live run:
-    `_entries` reads the lease again on a mismatch, so it gets the beat's pair.
-    Red proof (sol r3): the lease re-read dropped from `lock._entries` failed
-    here (DID NOT RAISE: the guard let `clear-halt` through)."""
+def test_a_beat_in_the_read_window_still_reports_the_lease_live(ctx, monkeypatch):
+    """REPORTING (`status`/`preflight` lease rows) sees the live run: unlocked,
+    `_entries` reads the lease again on a mismatch and gets the beat's pair.
+    (Since sol r4, `clear-halt` itself decides under `registry`, where no beat
+    is half-written: see the pause tests in test_cli_flow.)
+    Red proof (sol r3, re-run for r4 on the rows): the lease re-read dropped
+    from `lock._entries` failed here (the row read stale)."""
+    from agentflow import cli
     c, armed = _race_after_suspend(ctx, monkeypatch)
     op = Ctx(paths=ctx.paths, run_id=None, now=lambda: c.wall, awake=lambda: (c.boot, c.up))
-    with pytest.raises(lock.OperatorOnly):
-        lock.require_operator(op, "clear HALT")
+    assert [r["stale"] for r in cli._lease_rows(op)] == [False]
     assert not armed                             # the beat did land in the window
 
 
 def test_a_beat_in_the_read_window_keeps_the_merge_lane_busy(ctx, monkeypatch):
-    """Verification `cleanup` refuses while the lane is `busy`; read as
-    `orphaned`, it would delete a live run's verification worktree.
+    """The unlocked `lane_state` (reporting: `merge-gate`, `status`, and
+    cleanup's early refusal) reads the lane `busy`, not `orphaned`. (Since sol
+    r4 cleanup's delete decides again under `registry`: see test_cli_flow.)
     Red proof (sol r3): the lease re-read dropped from `lock._entries` failed
     here (the lane read `orphaned`)."""
     c, armed = _race_after_suspend(ctx, monkeypatch)
     assert lock.lane_state(c.ctx(ctx.paths, "run-x"))[1] == "busy"
+    assert not armed
+
+
+def _between_the_reads(ctx, monkeypatch, act):
+    """Run `act()` once, between an unlocked reader's lease read and its
+    sidecar read (where the re-read happens), with a mismatched pair."""
+    real = lock.read_optional
+    armed = [True]
+
+    def hook(path):
+        if armed and "awake" in path.parts:
+            armed.pop()
+            act()
+        return real(path)
+
+    monkeypatch.setattr(lock, "read_optional", hook)
+    return armed
+
+
+def test_a_lease_that_vanishes_between_the_reads_is_left_out(ctx, monkeypatch):
+    """Unlocked, a lease released between the reader's two reads has no
+    coherent snapshot: it is left out, never kept as its first read (sol r4).
+    Red proof (sol r4): `continue` replaced by keeping the first read failed
+    here (the released lease was listed)."""
+    lock.acquire(ctx, 8, "s", 1)                   # no awake clock: no sidecar, a mismatch
+    armed = _between_the_reads(ctx, monkeypatch, lambda: lock.release(ctx))
+    assert lock.all_locks(ctx) == []
+    assert not armed
+
+
+def test_a_lease_replaced_between_the_reads_is_read_anew(ctx, monkeypatch):
+    """Unlocked, a lease replaced between the reads by ANOTHER run with the
+    SAME wall heartbeat is the other run's now: the reader reports that run,
+    not the first read (sol r4: the heartbeat alone missed it).
+    Red proof (sol r4): the re-read compared on the heartbeat alone failed
+    here (the released run was still listed)."""
+    lock.acquire(ctx, 8, "s", 1)
+    other = Ctx(paths=ctx.paths, run_id="run-other", now=ctx.now)   # same `now`: same heartbeat
+
+    def replace():
+        lock.release(ctx)
+        lock.acquire(other, 8, "s", 1)
+
+    armed = _between_the_reads(ctx, monkeypatch, replace)
+    assert [lk.run_id for lk in lock.all_locks(ctx)] == ["run-other"]
     assert not armed
 
 
