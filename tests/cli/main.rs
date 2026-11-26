@@ -270,6 +270,7 @@ mod cli_events_policy_dependencies;
 mod cli_explain_differential;
 mod cli_explain_kind_places;
 mod cli_explain_run_by;
+mod cli_field_touches_dependency_depth;
 mod cli_field_writers;
 mod cli_fingerprint_inventory_format;
 mod cli_fingerprint_rights;
