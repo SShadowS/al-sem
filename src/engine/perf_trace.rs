@@ -203,7 +203,8 @@ struct TraceWriter {
 
 impl TraceWriter {
     fn create(path: &std::path::Path) -> std::io::Result<TraceWriter> {
-        TraceWriter::from_file(File::create(path)?)
+        // TLS-120: never a file of the engine's caches.
+        TraceWriter::from_file(crate::engine::batch::claim::open_trace(path)?)
     }
 
     fn from_file(file: File) -> std::io::Result<TraceWriter> {

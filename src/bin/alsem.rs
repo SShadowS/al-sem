@@ -4132,7 +4132,23 @@ fn plan_events_chains(c: EventsChainsCli) -> Planned {
 // ── cache prune command ─────────────────────────────────────────────────────
 
 fn run_cache_prune_cmd(c: CachePruneCli) -> ExitCode {
-    let result = prune_cache(c.dep_cache_dir.as_deref(), c.dry_run);
+    // TLS-120: prune deletes files it does not recognise, so it never runs in a cache folder
+    // of the engine (a mapped text entry would be unlinked under its readers). The folder is
+    // resolved once (the override, else the default), and that same folder is checked and
+    // pruned (sol r1: a default `~/.al-sem/cache` that links to, or is, a cache folder).
+    let dir = al_sem::engine::gate::cache_prune::resolve_cache_dir(c.dep_cache_dir.as_deref());
+    let why = match al_sem::engine::batch::cache_guard::refuses_dir(std::path::Path::new(&dir)) {
+        Ok(None) => None,
+        Ok(Some(why)) => Some(why.to_string()),
+        Err(e) => Some(e.to_string()),
+    };
+    if let Some(why) = why {
+        let _ = al_sem::engine::batch::output::write_stderr(
+            format!("al-sem: cache prune: refused: {dir}: {why} (TLS-120)\n").as_bytes(),
+        );
+        return ExitCode::from(1);
+    }
+    let result = prune_cache(Some(&dir), c.dry_run);
     let report = format_prune_report(&result, c.dry_run);
     match write_stdout(report, 1) {
         Ok(()) => ExitCode::SUCCESS,

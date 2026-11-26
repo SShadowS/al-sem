@@ -154,14 +154,16 @@ pub fn dump_lines(ws: &Path) -> Dump {
 
 /// Write a dump as one `<name>.txt` per file under `dir` (created).
 pub fn write_dump(dump: &Dump, dir: &Path) -> std::io::Result<()> {
-    std::fs::create_dir_all(dir)?;
+    // TLS-120: never in a cache folder of the engine, never a cache file.
+    use crate::engine::batch::claim;
+    claim::make_dir(dir)?;
     for (name, lines) in dump {
         // No rows → empty file (a lone "\n" would read back as one empty row).
         let mut text = lines.join("\n");
         if !lines.is_empty() {
             text.push('\n');
         }
-        std::fs::write(dir.join(format!("{name}.txt")), text)?;
+        claim::write_outside(&dir.join(format!("{name}.txt")), text)?;
     }
     Ok(())
 }

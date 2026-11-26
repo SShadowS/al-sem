@@ -154,8 +154,9 @@ pub fn install_from_env() -> ReportGuard {
     // Paths only: nothing is made here (sol r1). A writer makes `ir/` at its first publish; a
     // cache-off or dependency-free run makes nothing, except `alsem batch`, whose check makes
     // the folders its caches would use before any job (TLS-116, `engine::batch::cache_guard`).
+    // A standalone run's write guard makes nothing (TLS-120, `cache_guard::standalone`).
     let text_dir = crate::snapshot::cache::cache_dir_path();
-    let ir_dir = var("ALSEM_IR_CACHE_DIR").map_or_else(|| text_dir.join("ir"), PathBuf::from);
+    let ir_dir = ir_dir_from_env(&text_dir);
     let verify = var("ALSEM_IR_CACHE_VERIFY").is_some_and(|v| v == "1");
     let report = var("ALSEM_IR_CACHE_REPORT").map(PathBuf::from);
     let mut cache = IrCache::new(enabled, ir_dir, text_dir, verify, report);
@@ -198,6 +199,23 @@ pub fn make_ir_dir() -> Option<PathBuf> {
     c.key()?;
     create_ir_dir(&c.ir_dir);
     Some(c.ir_dir.clone())
+}
+
+/// The `ir/` tree's folder: `ALSEM_IR_CACHE_DIR`, else `<text_dir>/ir`.
+fn ir_dir_from_env(text_dir: &std::path::Path) -> PathBuf {
+    std::env::var_os("ALSEM_IR_CACHE_DIR")
+        .filter(|v| !v.is_empty())
+        .map_or_else(|| text_dir.join("ir"), PathBuf::from)
+}
+
+/// TLS-120: the IR cache's `ir/` folder for a process outside a batch run, made nowhere (the
+/// folder is protected whether or not the cache is on): the installed cache's, else (a write
+/// before [`install_from_env`]: the trace file) the environment's.
+pub fn ir_root() -> PathBuf {
+    INSTALLED.get().map_or_else(
+        || ir_dir_from_env(&crate::snapshot::cache::cache_dir_path()),
+        |c| c.ir_dir.clone(),
+    )
 }
 
 /// Set when a batch run's snapshot turned the IR cache off for the run (TLS-116).
