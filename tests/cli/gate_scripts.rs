@@ -2582,14 +2582,22 @@ while time.monotonic() < end:
         time.sleep(0.05)
 left = children()
 print(f"stub-reaper: reaped {reaped} orphan(s), {len(left)} left", file=sys.stderr)
-# Counted as a failure above; then killed and reaped, so none outlives the test
-# (or holds the pipes it reads).
-for pid in left:
+# Counted as a failure above; then every child this subreaper has, adopted ones
+# included (a grandchild comes here when its parent is killed), is killed and
+# reaped until there is none (ECHILD), so none outlives the test or holds the
+# pipes it reads.
+while True:
+    for pid in children():
+        try:
+            os.kill(int(pid), signal.SIGKILL)
+        except OSError:
+            pass
     try:
-        os.kill(int(pid), signal.SIGKILL)
-        os.waitpid(int(pid), 0)
-    except (OSError, ChildProcessError):
-        pass
+        pid, _ = os.waitpid(-1, os.WNOHANG)
+    except ChildProcessError:
+        break
+    if not pid:
+        time.sleep(0.01)
 if rc < 0:
     signal.signal(-rc, signal.SIG_DFL)
     os.kill(os.getpid(), -rc)
@@ -3242,12 +3250,22 @@ fn speed_counts_cycles_and_labels_clock_and_cpi() {
 /// - no pidfd (sol r2): `os.pidfd_open` fails with EMFILE: close() must never
 ///   kill the child by its numeric pid (the test records `os.kill`), leaves it
 ///   running, and logs "NOT killed: no pidfd (pidfd_open: Too many open files)";
+/// - send fails (sol r3): the pidfd is taken but `pidfd_send_signal` raises
+///   EPERM: close() logs "NOT killed: pidfd_send_signal: Operation not
+///   permitted", never "killed", and the child still runs (skipped with
+///   "kill" where there are no pidfds);
 /// - `running` with a start time: the live test process counts with its own
 ///   start time, not with another (a reused pid is not the child it was);
-/// - this process adopted every child: pass or fail, a `finally` kills and
-///   reaps every fixture process, then (on a pass) it has no child left. The
-///   fixture processes write to /dev/null, never to the pipes this test reads,
-///   so a child that outlived a failure cannot hang the test (sol r2).
+/// - this process adopted every child: pass or fail, a `finally` kills the
+///   servers, then drains every child this subreaper actually has (kill, reap,
+///   until ECHILD; sol r3: not only the ones it recorded), and says
+///   "fixture children left: 0". The fixture processes write to /dev/null,
+///   never to the pipes this test reads, so a child that outlived a failure
+///   cannot hang the test (sol r2);
+/// - forced failure (sol r3, a second run with ZOMBIE_FORCE_FAIL): a case whose
+///   precondition can never hold fails 2 s after its server forked a long-lived
+///   child, before the test recorded that child: the run fails on the
+///   precondition and still leaves no child.
 ///
 /// Each case asserts its precondition (one child listed; the zombie shape).
 ///
@@ -3263,11 +3281,17 @@ fn speed_counts_cycles_and_labels_clock_and_cpi() {
 /// close() killed the child ... with no pidfd" (red, 3.1 s); `kill_child`
 /// never signalling -> "kill: close() returned with the child at ('S', '1')"
 /// (red in 2.6 s, not a hang; no fixture process left); each restored, green.
+/// (Sol r3, 2026-11-26) the `finally` back on reaping only the recorded
+/// children -> the forced run: "fixture children left: 1" (red, 5.7 s);
+/// `kill_child` swallowing the send error again -> "send fails: no warning
+/// that the child was left", the log reading "killed" then "survived SIGKILL"
+/// (red, 8.5 s); each restored, green.
 #[cfg(target_os = "linux")]
 #[test]
 fn speed_close_does_not_wait_on_a_zombie() {
     let py = r#"
-import ctypes, errno, importlib.machinery, importlib.util, os, subprocess, sys, tempfile, time
+import ctypes, errno, importlib.machinery, importlib.util, os, signal, subprocess, sys
+import tempfile, time
 loader = importlib.machinery.SourceFileLoader("cdo_speed", sys.argv[1])
 m = importlib.util.module_from_spec(importlib.util.spec_from_loader("cdo_speed", loader))
 loader.exec_module(m)
@@ -3294,7 +3318,32 @@ CASES = {
     # The child never ends by itself: close() kills it after CLOSE_WAIT_S.
     "kill": WAIT + "    after(3600)\nsys.stdin.read()",
     "no pidfd": WAIT + "    after(3600)\nsys.stdin.read()",
+    "send fails": WAIT + "    after(3600)\nsys.stdin.read()",
 }
+# ZOMBIE_FORCE_FAIL: one case whose precondition can never hold, checked 2 s after
+# its server forked a child that lives on: the failure path must leave nothing.
+FORCED = bool(os.environ.get("ZOMBIE_FORCE_FAIL"))
+if FORCED:
+    CASES = {"forced": WAIT + "    after(3600)\nsys.stdin.read()"}
+def children():
+    me = os.getpid()
+    return [int(c) for f in os.listdir(f"/proc/{me}/task")
+            for c in open(f"/proc/{me}/task/{f}/children").read().split()]
+def drain():
+    # Every child this subreaper has, adopted ones included (a grandchild comes
+    # here when its parent dies): kill it and reap it, until there is none (ECHILD).
+    while True:
+        for c in children():
+            try:
+                real_kill(c, 9)
+            except OSError:
+                pass
+        try:
+            pid, _ = os.waitpid(-1, os.WNOHANG)
+        except ChildProcessError:
+            return
+        if not pid:
+            time.sleep(0.01)
 # The real-pidfd case needs pidfds here; without them it is skipped, said.
 try:
     os.close(os.pidfd_open(os.getpid()))
@@ -3317,12 +3366,14 @@ def server(code):
     return s
 def check():
     for name, code in CASES.items():
-        if name == "kill" and no_pidfds:
-            print(f"skip kill: pidfds unavailable here ({no_pidfds})")
+        if name in ("kill", "send fails") and no_pidfds:
+            print(f"skip {name}: pidfds unavailable here ({no_pidfds})")
             continue
         s = server(code)
         want = ("Z", "2") if name == "leader gone" else ("S", None)
-        end = time.monotonic() + 60
+        if FORCED:
+            want = ("never", "a state")
+        end = time.monotonic() + (2 if FORCED else 60)
         while time.monotonic() < end:
             kids = m.descendants(s.p.pid)
             if len(kids) == 1 and (want[1] is None or shape(kids[0]) == want):
@@ -3334,28 +3385,39 @@ def check():
                      f"got {[(k, shape(k)) for k in kids]}")
         kid = kids[0]
         adopted.append(kid)
-        if name in ("kill", "no pidfd"):
+        if name in ("kill", "no pidfd", "send fails"):
             s.CLOSE_WAIT_S = 0.3
-        logged, real_open, real_log = [], getattr(os, "pidfd_open", None), m.log
+        logged, real_log = [], m.log
+        real_open = getattr(os, "pidfd_open", None)
+        real_send = getattr(signal, "pidfd_send_signal", None)
+        m.log = lambda msg: (logged.append(msg), real_log(msg))
         if name == "no pidfd":
             # pidfd_open fails (EMFILE): close() must never kill by the numeric pid.
             def no_pidfd(pid):
                 raise OSError(errno.EMFILE, "Too many open files")
             os.pidfd_open = no_pidfd
-            m.log = lambda msg: (logged.append(msg), real_log(msg))
+        if name == "send fails":
+            # The pidfd is taken, but the signal is refused: no "killed" claim.
+            def refused(fd, sig):
+                raise PermissionError(errno.EPERM, "Operation not permitted")
+            signal.pidfd_send_signal = refused
         t = time.monotonic()
         try:
             s.close()
         finally:
-            if name == "no pidfd":
-                os.pidfd_open, m.log = real_open, real_log
+            os.pidfd_open, m.log = real_open, real_log
+            if real_send is not None:
+                signal.pidfd_send_signal = real_send
         took = time.monotonic() - t
-        if name == "no pidfd":
+        if name in ("no pidfd", "send fails"):
+            why = {"no pidfd": "no pidfd (pidfd_open: Too many open files)",
+                   "send fails": "pidfd_send_signal: Operation not permitted"}[name]
             if kid in pid_kills or shape(kid)[0] == "Z":
-                sys.exit(f"{name}: close() killed the child {kid} with no pidfd")
-            if not any("NOT killed: no pidfd (pidfd_open: Too many open files)" in l
-                       for l in logged):
-                sys.exit(f"{name}: no warning that the child was left: {logged}")
+                sys.exit(f"{name}: close() killed the child {kid}")
+            if not any(f"NOT killed: {why}" in l for l in logged):
+                sys.exit(f"{name}: no warning that the child was left ({why}): {logged}")
+            if any(l.endswith("the close: killed") for l in logged):
+                sys.exit(f"{name}: close() said it killed a child it did not: {logged}")
             continue
         if shape(kid) != ("Z", "1"):
             sys.exit(f"{name}: close() returned with the child at {shape(kid)}, not a "
@@ -3376,34 +3438,43 @@ finally:
     for p in servers:
         p.kill()
         p.wait()
-    for kid in adopted:
-        try:
-            real_kill(kid, 9)
-        except OSError:
-            pass
-        try:
-            os.waitpid(kid, 0)
-        except ChildProcessError:
-            pass
-me = os.getpid()
-left = [c for f in os.listdir(f"/proc/{me}/task")
-        for c in open(f"/proc/{me}/task/{f}/children").read().split()]
-if left:
-    sys.exit(f"children left unreaped: {left}")
+    drain()
+    left = children()
+    print(f"fixture children left: {len(left)}", flush=True)
+    if left:
+        sys.exit(f"children left unreaped: {left}")
 print("ok")
 "#;
-    let out = crate::clean_env::command("python3")
-        .args(["-c", py])
-        .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-speed"))
-        .env("ALSEM_SPEED_CACHE", "/nonexistent/cdo-speed-cache")
-        .output()
-        .unwrap();
-    let text = format!(
-        "{}{}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
+    let run = |force: bool| {
+        let mut cmd = crate::clean_env::command("python3");
+        if force {
+            cmd.env("ZOMBIE_FORCE_FAIL", "1");
+        }
+        let out = cmd
+            .args(["-c", py])
+            .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-speed"))
+            .env("ALSEM_SPEED_CACHE", "/nonexistent/cdo-speed-cache")
+            .output()
+            .unwrap();
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        (out.status.success(), text)
+    };
+    let (ok, text) = run(false);
+    assert!(
+        ok && text.contains("fixture children left: 0") && text.contains("ok"),
+        "{text}"
     );
-    assert!(out.status.success() && text.contains("ok"), "{text}");
+    // Sol r3: a precondition that fails after the server forked: the failure
+    // path kills and reaps that unrecorded child too.
+    let (ok, text) = run(true);
+    assert!(
+        !ok && text.contains("forced: precondition") && text.contains("fixture children left: 0"),
+        "{text}"
+    );
 }
 
 /// ⟨TLS-111⟩ cdo-speed's perf parsing and warm-up judging, called directly

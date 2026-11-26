@@ -1019,14 +1019,15 @@ def pid_handle(pid, start):
 
 def kill_child(pid, handle):
     """SIGKILL the child `pid` through its pidfd `handle`; with no pidfd (`handle` says
-    why), never by its numeric pid: say so and leave it. Returns whether it signalled."""
+    why), never by its numeric pid. Returns None once the signal is sent, else why it
+    was not (no pidfd, or the send's own error)."""
     if type(handle) is not int:
-        return False
+        return f"no pidfd ({handle})"
     try:
         signal.pidfd_send_signal(handle, signal.SIGKILL)
-    except OSError:
-        pass
-    return True
+    except OSError as e:
+        return f"pidfd_send_signal: {e.strerror}"
+    return None
 
 
 # ⟨TLS-83⟩ Instructions: user-mode instructions retired per call, next to its
@@ -1442,14 +1443,15 @@ class Server:
             left = [(k, t) for k, t in left if running(k, t)]
         signalled = []
         for k, t in left:
-            if kill_child(k, handles[k]):
+            why = kill_child(k, handles[k])
+            if why is None:
                 log(f"server {self.name}: child {k} still alive {self.CLOSE_WAIT_S} s after "
                     "the close: killed")
                 signalled.append((k, t))
             else:
+                # Never by the numeric pid: it may belong to another process by now.
                 log(f"server {self.name}: child {k} still alive {self.CLOSE_WAIT_S} s after "
-                    f"the close, NOT killed: no pidfd ({handles[k]}), and a numeric pid may "
-                    "belong to another process by now; its memory may still be resident "
+                    f"the close, NOT killed: {why}; its memory may still be resident "
                     "(the next build's timing may be skewed)")
         left = signalled
         deadline = time.monotonic() + 5

@@ -57,9 +57,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Every stub speed run goes through a small wrapper (`STUB_REAPER`) that makes
   itself a child subreaper, so the stub's report children come to it. After
   cdo-speed exits it reaps every one, and `speed_with_stub` asserts that none is left.
-  Any still alive after 60 s is counted (and fails the test), then killed and reaped.
-  On a host whose init does not reap, nothing is left behind as a zombie, even when a
-  run fails.
+  Any still alive after 60 s is counted, which fails the test. Then the reaper
+  drains every child it actually has: it kills and reaps them until `waitpid` reports
+  ECHILD, including a grandchild that comes to it when its parent is killed. On a
+  host whose init does not reap, nothing is left behind as a zombie, even when a run
+  fails.
 - `scripts/cdo-speed`: `Server.close()` no longer waits on a finished zombie
   descendant. On a host whose init does not reap, an orphaned engine child stays a
   zombie (its `/proc/<pid>` remains), and `close()` waited 30 s, sent a SIGKILL,
@@ -77,10 +79,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     when `os.pidfd_open` is missing (Python before 3.9) or `pidfd_open` fails for any
     reason other than "no such process": for example EMFILE (too many open files),
     or ENOSYS (Linux before 5.3).
+  - When `pidfd_send_signal` itself fails, `close()` logs `NOT killed:
+    pidfd_send_signal: <error>` and does not claim the child was killed.
   - Pinned by `speed_close_does_not_wait_on_a_zombie`. The script runs under a child
     subreaper, so the zombie is deterministic. Its fixture processes write to
-    /dev/null, not to the pipes the test reads, and a `finally` kills and reaps
-    every one, so a failing case fails and never hangs. The cases are:
+    /dev/null, not to the pipes the test reads. Pass or fail, a `finally` kills the
+    servers and then drains every child the test process actually has, until
+    ECHILD, so a failing case fails, never hangs and leaves nothing. A second run
+    forces a precondition to fail after a server has forked a child the test has not
+    recorded yet, and asserts that no child is left. The cases are:
     - a plain zombie (35.1 s on the old check);
     - a leader gone with a second thread still running, which `close()` must wait
       for;
@@ -88,6 +95,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
       has no pidfds);
     - `pidfd_open` failing with EMFILE, where the child must be left alive with the
       warning;
+    - `pidfd_send_signal` failing with EPERM, where the warning names the error and
+      no "killed" line appears;
     - the start-time check.
 
 ### Fixed (ENG-178: table procedures named like record built-ins: four follow-ups from ENG-173)
