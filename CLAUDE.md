@@ -262,9 +262,11 @@ Every test still runs before a merge; the tiers decide HOW OFTEN each one runs.
   (q-20261121T025802-abcd2da8, narrowed in review r3): the one advisory CPU failure is a
   covered, CPU-only failure with equal instructions (x1.02) that head's LOWER clock explains
   (head user x clock ratio + head sys, over base CPU, within the limit, per pass or round; in
-  the rounds, each over-limit round by itself), and only when every paired count on both sides
-  is whole (TLS-130 review r2: no PMU `<not counted>`, each kind's running % summing to 100
-  over the PMUs). A partial count keeps its CPU failure a failure, saying why.
+  the rounds, each over-limit round by itself), and only when every paired count it judges, on
+  both sides, is whole and covers its call (TLS-130 reviews r2-r3: no PMU `<not counted>`, each
+  kind's running % summed over the PMUs at least 100, no truncation allowance). A partial count
+  keeps its CPU failure a failure, saying why. Not seen: a loss inside a counted row under the
+  coverage band (multi-threaded calls sum their running % to 110-125).
   A `CPI` label never waives: more cycles per instruction is a memory-stall regression's shape.
   **It is Linux only (it reads `/proc`):
   on the Windows machine every full `cdo-gate` run FAILS unless given `--no-speed`**

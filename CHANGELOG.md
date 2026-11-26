@@ -54,7 +54,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reproduced (it needs a CPU-wide pinned rival): a thread or child started
   during the call (inherited) whose pinned group fails while the parent's holds
   is expected to read as a normal row with a shorter running time, not
-  `<not counted>`; `covers` and the running-% rule are what can see it.
+  `<not counted>`. Only `covers` can see it, and only beyond its band (review
+  r3, Fable): real multi-threaded calls sum their running % to 110-125, so a
+  loss of a few percent leaves the sum far over 100.
 - **What changes in real gate verdicts (inferred).** No landing verdict yet
   shows a partly refused count; this is reasoned from the cause. Calls with a
   server thread running at the start or stop are counted instead of refused, so
@@ -66,15 +68,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its counters to another pinned perf user is now refused (before, ungrouped
   events were time-sliced and refused only when the two came out unequal). CPU,
   wall and memory judging do not change; the instruction limit stays advisory.
-- **No CPU advisory on a partial count** (reviews r1 and r2, sol and Fable).
+- **No CPU advisory on a partial count** (reviews r1 to r3, sol and Fable).
   The rule: a CPU failure is made advisory (TLS-111's lower-clock rule) only
-  when every paired count of the row, on both sides, is whole. A count is
-  partial when a PMU's events read `<not counted>`, or when a kind's running %
-  summed over the PMUs is under 100 beyond perf's whole-percent truncation
+  when every paired count it judges (every pass of a warm-up row, every
+  over-limit round of a rounds row), on both sides, is whole and covers its
+  call (`covers`). A count is partial when a PMU's events read `<not counted>`,
+  or when a kind's running % summed over the PMUs is under 100
   (`partial_count`; two sides whose counted PMUs differ always include one such
-  count). A partial row keeps its CPU failure as measured (FAIL stays FAIL),
-  and the failure line says why no advisory was given; speed.json's row and
-  record carry `partial`. Why not bound the error instead: a count that covers
+  count). No allowance for perf's whole-percent truncation (review r3, sol): a
+  real line does truncate under 100 (`true` read 93 + 6 for 93.7 + 6.3), but
+  taking it as partial only withholds an advisory, while an allowance let a
+  really partial 80 + 19 waive a FAIL. A partial row keeps its CPU failure as
+  measured (FAIL stays FAIL); when the partial count is what withheld the
+  advisory, the failure line says so; speed.json's rows (`partial`,
+  `partial_rounds`) and records (`partial`) carry the reasons. What it sees in
+  practice (review r3, Fable): a `<not counted>` PMU always withholds; the
+  running-% rule sees time-slicing only where the shares sum to about 100 (a
+  call on one core type), since multi-threaded calls sum to 110-125; a loss
+  inside a counted row smaller than the coverage band (2 % + 50 ms; the
+  unreproduced inherited-thread shape above) is not seen and can still waive. Why not bound the error instead: a count that covers
   the call can still be short, and both reviews built rows that a bound let
   through. sol: base and head with different normal running-time excess (+2.2
   and +2.7 %) hide a loss entirely. Fable: lost time need not have run at the
@@ -83,12 +95,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that ran on one core type only (its other PMU `<not counted>`) gets no CPU
   advisory either; the CPU advisory is the owner's waiver, so withholding it
   never hides a failure.
+- **`scripts/ir-cache-acceptance` counted runs crashed** (review r3, Fable).
+  Its `run_counted` unpacked `perf_parse`'s result into two names, and
+  `perf_parse` now returns three (counts, running times, running %), so every
+  counted run raised `ValueError`. It now reads them by position; a test runs
+  that path.
 - **Why each call went uncounted.** Perf ending before the call, an unreadable
   perf output and a count with no instruction used to drop the count silently;
   each now prints a line ending in `call not counted`, as a refused output
   (`perf output not taken as a count`), a failed attach (`perf attach failed`,
-  now with its cause: no ack, perf ending first, a server process started first,
-  or the OS error) and an uncovered count (`NOT COVERED`) already printed their
+  now with its cause: no ack, perf ending before its ack or before opening its
+  control FIFO, its FIFO not opened in time, a server process started first, or
+  another OS error) and an uncovered count (`NOT COVERED`) already printed their
   own. One exception: after three failed attaches in a row (or a perf that did
   not stop) a server prints one server-level line and then no line per call.
   Every timed call's record in `speed.json` now carries `uncounted`, the reason
@@ -111,12 +129,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   checks perf through cdo-speed's own pinned-group probe, allows uncounted
   calls (legitimate under the suite's load: an attach timeout, a short call's
   /proc ticks, a pinned group that lost its counters) but each must carry its
-  own `uncounted` reason, needs at least two counted calls and prints how many
+  own `uncounted` reason, needs at least one counted call and prints how many
   were; an untimed rebuild's refusal line no longer counts. New
   `speed_cpu_advisory_never_on_a_partial_count` pins sol's and Fable's r2 rows
-  (and sol's with base partial) through real perf rows, `judge_warm` and
-  `cpu_advisory`: no advisory, with the reason; the same numbers from whole
-  counts are waived. The stub-perf advisory tests now split their counts over
+  (and sol's with base partial; Fable's at 80 + 19 = 99 %), and a head count
+  with every PMU counted that does not cover its call (review r3), through real
+  perf rows, `judge_warm` and `cpu_advisory`: no advisory, with the reason; the
+  same numbers from whole counts are waived. A rounds row keeps its advisory
+  when the partial count is in a round under the limit, and loses it in an
+  over-limit round. End to end (review r3), the stub perf
+  marks one call partial (`STUB_PARTIAL_CALL`): a waivable warm-up build and a
+  waivable round total each FAIL with the reason, and speed.json's record and
+  row (and the round-total record) carry `partial`. New
+  `ir_cache_acceptance_counts_through_cdo_speeds_parse` runs
+  `scripts/ir-cache-acceptance`'s own count path under a stub perf. The
+  stub-perf advisory tests now split their counts over
   both PMUs, so only their own guard withholds. The stress test's P-core stop
   uses only the P-cores in the process's CPU mask (none: skipped, saying so),
   waits until each spinner's mask is the wanted one, starts and registers

@@ -415,11 +415,16 @@ def clock_cpi_flags(rows):
 #   instruction, wall and clock-corrected conditions by itself (medians taken
 #   from different rounds may not combine; review r3, S2);
 # - (TLS-130 reviews r1 and r2, sol and Fable) every paired count of the row,
-#   on both sides, is whole (`partial_count`: no `<not counted>` PMU, a kind's
-#   running % summed to 100). A count that may be partial can move the
-#   instruction ratio, the clock and the CLOCK label by an amount no rule here
-#   can bound (the lost time need not have run at the call's average rate), so
-#   such a row keeps its CPU failure as measured and says why (`row["partial"]`).
+#   on both sides, is whole and covers its call (`judge`'s `partial_rounds`:
+#   `partial_count` finds no `<not counted>` PMU and each kind's running % summed
+#   to at least 100; `covers`; a rounds row checks the rounds it judges). A count
+#   that may be partial can move the instruction ratio, the clock and the CLOCK
+#   label by an amount no rule here can bound (the lost time need not have run
+#   at the call's average rate), so such a row keeps its CPU failure as
+#   measured and says why (`row["partial"]`). Not seen (review r3, Fable): a
+#   loss inside a counted row under the coverage band (the inherited-thread
+#   shape, see `covers`); real multi-threaded calls sum their running % to
+#   110-125, so the running-% rule binds only on a call on one core type.
 # Wall and memory failures always fail. The advisory applies only in the final
 # judgment: a contradicted failure gets the extra pair first (`warm_failures`
 # ignores the advisory).
@@ -432,21 +437,25 @@ def cpu_advisory(row):
     warm = row.get("warm", False)
     cpu_limit = WARM_CPU_LIMIT if warm else CPU_LIMIT
     wall_limit = WARM_WALL_LIMIT if warm else WALL_LIMIT
-    # ⟨TLS-130 review r2⟩ A count that may be partial: never an advisory.
-    if (row.get("partial") or not (i and c and k and "clock" in row_labels(row))
-            or row["wall"]["ratio"] > wall_limit):
+    if not (i and c and k and "clock" in row_labels(row)) or row["wall"]["ratio"] > wall_limit:
         return None
-    # (CPU, instructions, CPU at equal clocks, wall, clock) ratios: the warm-up
-    # row's judged (geometric mean) ratios, or each over-limit round of a rounds row.
+    # ⟨TLS-130 reviews r2 and r3⟩ A count `judge` takes as partial or not
+    # covering (`partial_rounds`) gives no advisory, in every pass a warm-up
+    # row's mean takes and in every round a rounds row judges (over the limit).
+    partial = row.get("partial_rounds") or [row.get("partial")] * len(row["cpu"]["ratios"])
+    # (CPU, instructions, CPU at equal clocks, wall, clock, partial) per sample:
+    # the warm-up row's judged (geometric mean) ratios, or each over-limit round
+    # of a rounds row.
     if warm:
         samples = [(row["cpu"]["ratio"], i["ratio"], k["ratio"], row["wall"]["ratio"],
-                    c["ratio"])]
+                    c["ratio"], "; ".join(p for p in partial if p))]
     else:
         samples = [s for s in zip(row["cpu"]["ratios"], i["ratios"], k["ratios"],
-                                  row["wall"]["ratios"], c["ratios"]) if s[0] > cpu_limit]
-    for cpu, ir, corrected, w, cr in samples:
-        if not (1 / INSTR_LIMIT <= ir <= INSTR_LIMIT and w <= wall_limit
-                and corrected <= cpu_limit and cr < 1):
+                                  row["wall"]["ratios"], c["ratios"], partial)
+                   if s[0] > cpu_limit]
+    for cpu, ir, corrected, w, cr, part in samples:
+        if part or not (1 / INSTR_LIMIT <= ir <= INSTR_LIMIT and w <= wall_limit
+                        and corrected <= cpu_limit and cr < 1):
             return None
     corrected = k["ratio"]
     return (f"{row['call']}: CPU time x{row['cpu']['ratio']:.2f}, x{corrected:.2f} at equal "
@@ -1113,9 +1122,12 @@ def perf_parse(text, events=None):
 def partial_count(parsed):
     """⟨TLS-130 review r2⟩ Why a parsed count (`perf_parse`) may be partial, or
     None when it is whole. Partial: a PMU's events read `<not counted>` (0 ns),
-    or a kind's running % summed over the PMUs is under 100 beyond perf's
-    whole-percent truncation (each PMU's value can drop below 1 %: the sum
-    must be over 100 - number of PMUs). A pinned group that fails after its
+    or a kind's running % summed over the PMUs is under 100 (review r3, sol:
+    no allowance). perf truncates each PMU's % to a whole number, so a whole
+    count can read 99: `true` on server1 read 93.00 + 6.00 for 93.7 + 6.3
+    (perf 7.0.14, 2026-11-21). Such a count is taken as partial too: that
+    only withholds a CPU advisory, never hides a failure, while an allowance
+    let a really partial 80 + 19 count waive one. A pinned group that fails after its
     tasks ran on that PMU reads exactly like a PMU they never ran on, so a
     `<not counted>` PMU is always taken as partial. A partial count still gives
     an instruction count (an advisory ratio), but never a CPU advisory
@@ -1125,10 +1137,9 @@ def partial_count(parsed):
     lost = sorted({event_pmu(e) for e in counts if running[e] == 0})
     if lost:
         return f"{', '.join(p or 'cpu' for p in lost)} not counted"
-    pmus = {event_pmu(e) for e in counts}
     for kind in FIXED_KINDS:
         total = sum(s for e, s in share.items() if event_kind(e) == kind)
-        if total <= 100 - len(pmus):
+        if total < 100:
             return f"{kind} ran {total:.2f} % of the time summed over the PMUs"
     return None
 
@@ -1329,8 +1340,11 @@ class Server:
                 try:
                     ctl_fd = os.open(ctl, os.O_WRONLY | os.O_NONBLOCK)
                 except OSError:  # ENXIO: no reader yet
-                    if time.monotonic() > deadline or perf.poll() is not None:
-                        raise
+                    # A named cause, not ENXIO's text (TLS-130 review r3, Fable).
+                    if perf.poll() is not None:
+                        raise OSError("perf ended before opening its control FIFO")
+                    if time.monotonic() > deadline:
+                        raise OSError("perf did not open its control FIFO in time")
                     time.sleep(0.005)
             os.write(ctl_fd, b"enable\n")
             got = b""
@@ -1570,7 +1584,9 @@ def timed_call(server, side, cid, tool, args, rnd, warm_pass, tag, records):
 # A second shape, not reproduced (it needs a CPU-wide pinned rival): a thread or
 # child started during the call (inherited) whose pinned group fails while the
 # parent's holds is expected to read as a normal row with a shorter running
-# time, not `<not counted>`; again only coverage catches it, same band.
+# time, not `<not counted>`; again only coverage catches it, same band. A loss
+# under the band is not seen and can still make a CPU failure advisory
+# (TLS-130 review r3, Fable).
 COVER_REL = 0.02
 COVER_ABS = 0.05
 COVER_CAP = 1.10
@@ -1669,11 +1685,21 @@ def judge(records):
             ratios = [(b[k]["user"] * b[k]["clock"] / a[k]["clock"] + b[k]["sys"])
                       / (a[k]["user"] + a[k]["sys"]) for k in paired]
             row["corrected"] = dict(ratio=statistics.median(ratios), ratios=ratios)
-        # ⟨TLS-130 review r2⟩ Why some paired count may be partial: the row then
-        # gets no CPU advisory (`cpu_advisory`), and its failure says why.
-        partial = [f"{side} {r['call']} r{k}: {r['partial']}" for k in paired
-                   for side, r in (("base", a[k]), ("head", b[k])) if r.get("partial")]
-        row["partial"] = "; ".join(partial) or None
+        # ⟨TLS-130 reviews r2 and r3⟩ Why a paired count may be partial, per pair
+        # (`partial_rounds`, in `paired` order; `cpu_advisory` reads only the
+        # pairs it judges): `partial_count`'s reason, or a count not shown to
+        # cover its call (`covers`; a counted call always covers, so this
+        # restates `timed_call`'s rule where `cpu_advisory` reads it). The row
+        # then gets no CPU advisory, and its failure says why.
+        def why(r):
+            if r.get("partial"):
+                return r["partial"]
+            return None if r.get("covered") else "count not shown to cover the call"
+        row["partial_rounds"] = ["; ".join(f"{side} {r['call']} r{k}: {why(r)}"
+                                           for side, r in (("base", a[k]), ("head", b[k]))
+                                           if why(r)) or None
+                                 for k in paired]
+        row["partial"] = "; ".join(p for p in row["partial_rounds"] if p) or None
         row["judged"] = row["cpu"]["base"] >= MIN_SECONDS
         rows.append(row)
         # Undecided: the rounds disagree about the verdict (some ratios over
@@ -1994,8 +2020,10 @@ def main():
 
     def cpu_fails(row, text):
         advisory = cpu_advisory(row)
-        if not advisory and row.get("partial"):
-            # ⟨TLS-130 review r2⟩ Why no advisory was considered.
+        if (not advisory and row.get("partial")
+                and cpu_advisory(dict(row, partial=None, partial_rounds=None))):
+            # ⟨TLS-130 reviews r2 and r3⟩ Said only when the partial count is
+            # what withheld an advisory the row would otherwise get.
             text += f" (no CPU advisory: a count may be partial: {row['partial']})"
         (cpu_advisories if advisory else failed).append(advisory or text)
     log(f"verdict, head/base (limits: rounds cpu {CPU_LIMIT} and wall {WALL_LIMIT} on the "
