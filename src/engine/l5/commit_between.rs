@@ -54,6 +54,8 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::rc::Rc;
 
+use al_syntax::IdentifierFoldExt;
+
 use crate::engine::l5::group_path::GroupPaths;
 use crate::engine::l5::literal_reach::routes::ROUTE_CAP;
 use crate::engine::l5::literal_reach::{EdgeSite, LiteralReach, LiveTree, Step};
@@ -1983,7 +1985,7 @@ fn bulk_leave<'a>(w: &mut Walk<'a, '_>, s: &Step<'a>) {
         .and_then(|row| row.record_operations.iter().find(|o| o.id == x))
         .map(|o| o.op.as_str());
     let detail = match op {
-        Some(o) if o.eq_ignore_ascii_case("ModifyAll") || o.eq_ignore_ascii_case("DeleteAll") => {
+        Some(o) if o.eq_fold_identifier("ModifyAll") || o.eq_fold_identifier("DeleteAll") => {
             "by a bulk record operation whose trigger runs once per row; its later runs before A \
              are not followed"
         }
