@@ -20,6 +20,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every caller's, so the calls dependency code makes too (`typed_down`). They are in the relation
   cell the query already reads: nothing more is built. The scope label says so: "…'s cone by the
   call graph, dependency code included (N routines)" (was "…'s cone by the solve graph").
+- **CDO (pinned `bc3ccb18`, master 68c95be6 against 1f55edd9, release-fast, one-shot, IR cache
+  off; `/work/.al-sem/engine-notes/eng213/field-depth-measure.log`).** `--field 1 --from R
+  --direction down` for the three CDO rendering routines: the dependency bodies searched go from
+  111-114 to 20,631-20,728 (interface and event dispatch fan out across the demanded dependency
+  code), with no wall or CPU cost (each head run at or under its base run, one sample each).
+  `IssueReminder` on `Issued Reminder Header`: 5 -> 13 confirmed sites, among them Base
+  Application's `InsertIssuedReminderHeader` writing the table (reached through the Base
+  Application's issue codeunit, two dependency calls down), which master's answer never searched;
+  the other added rows are candidates (a RecordRef table not known, 2 -> 49). On `CDO File` and
+  `CDO E-Mail Log` the confirmed lists are unchanged (18, 16); the added rows are candidates
+  (2 -> 53 each, mostly `by-number` uses reached through event dispatch), each named as one.
 - **Goldens.** The two query goldens that print the label moved in that phrase only
   (`ft.kinds.ft-item.amount.both.{human.txt,json}`; the count stays 2, no site moved).
 - **Tests and red proofs.** `cli_field_touches_dependency_depth` (new): the two-hop site is listed,
