@@ -181,6 +181,98 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `RootGetTableUnknown`.
 - **Goldens.** None moved.
 
+### Fixed (TLS-126: a cdo-speed stub test failed under load, from CPU ticks, not a race)
+
+- `gate_scripts::speed_extra_pair_judges_every_failure_in_side_order` flaked under
+  load. Lane engine reported it failing in 2 of 5 full `ci-steps task` runs; the one
+  kept log (`engine-notes/scratch-evidence-2026-11-24/task-33ed.log`) shows the
+  "agree, then PASS" run reading warm-tests x1.293 (x0.878/x1.905 by pass), just
+  under the 1.3 limit, so the extra flipped pair never ran.
+- The cause is the test's margin, not the IR report. cdo-speed reads CPU in 10 ms
+  ticks, and the stub's 0.4 s burn on base read 1 tick high in one pass and 2 in the
+  other. By its own geometry that scenario leaves at most ~4.5 % margin (the pair's
+  mean over the limit, the four-pass mean under it, the same-order passes within
+  x1.25). The verdict's `IR WARM REPORT BREACH (head: ... no report file)` label
+  showed in every run of this stub, passing runs too, because the speed stub wrote
+  no IR report. It never changes a verdict.
+- Reproduced: a new stub knob, `STUB_EXTRA_S=<base>:<head>[,...]`, makes base's and
+  head's judged calls (build, warm-tests) burn extra CPU, per warm-up pass. With base
+  at +0.05 s, the old run gives the same verdict shape as the failing gate (x0.822 /
+  x1.822 by pass, no extra pair, plain PASS).
+- Fix, "agree, then PASS": the run is judged on wall time from seconds the stub
+  declares, which are exact. Both sides declare 8 s, and head's warm-tests 4, 8, 2 and
+  5.4 s more, so a tick moves a ratio by about 0.1 %.
+- Fix, the sibling CPU runs had the same weakness (one tick = 2.5 % of 0.4 s). They
+  now have wider margins: cross-row (and the first run of
+  `speed_adds_one_flipped_pair_on_a_contradicted_failure`) on 0.8 s burns with head
+  1.0, 2.4, 1.0, 2.4 and the build 1.8, 1.8, 0.9, 0.9; side order on x2.0; the
+  other runs on 1.0, 3.0, 1.0, 1.0 and 2.0, 2.0. The cross-row and side-order runs
+  stay on CPU, so the extra pair's CPU path stays covered.
+- Every changed run carries the tick error itself through `STUB_EXTRA_S`, so no
+  separate test is needed. The CPU runs give base 0.05 s (5 ticks) more in every
+  pass. The agree run gives base the extra in passes 1 and 2 and head in passes 3
+  and 4. Each test's doc states its worst-case margins, with a further -1..+4 ticks
+  on every reading. Each run fails on its old values (proofs in the test docs).
+- The speed stub now writes the IR cache report the way the engine does
+  (`src/program/ir_cache/report.rs`), from a child process like the engine child. The
+  `start` line comes at the first build, and the `end` line, with counters, comes
+  0.1 s after the server exits. Both lines carry the child's pid. A cache folder the
+  stub filled before gives disk hits, and an empty one gives a publish. So stub speed
+  runs no longer carry the breach label. `speed_agree_then_pass` asserts that the
+  label is absent, that no `IR ROWS NOT RUN` label appears, and that both warm
+  reports hold one `start` and one `end` of the same pid, with disk hits. The
+  side-order run sets `STUB_IR_NO_REPORT` and asserts that the label shows.
+  Because the `end` line comes from a descendant, deleting `Server.close()`'s wait for
+  the server's descendants now fails a test. This proves nothing about the real
+  engine: its `EngineFront` has its own 10 s shutdown deadline, and the stub's delayed
+  write does not show that the real IR report survives it (TLS-128).
+  The stub forks once, not twice: a double-forked grandchild is reparented at once,
+  so `close()` would never list it and its `end` line would race the report check.
+- Every stub speed run goes through a small wrapper (`STUB_REAPER`) that makes
+  itself a child subreaper, so the stub's report children come to it. After
+  cdo-speed exits it reaps every one, and `speed_with_stub` asserts that none is left.
+  Any still alive after 60 s is counted, which fails the test. Then the reaper
+  drains every child it actually has: it kills and reaps them until `waitpid` reports
+  ECHILD, including a grandchild that comes to it when its parent is killed. On a
+  host whose init does not reap, nothing is left behind as a zombie, even when a run
+  fails.
+- `scripts/cdo-speed`: `Server.close()` no longer waits on a finished zombie
+  descendant. On a host whose init does not reap, an orphaned engine child stays a
+  zombie (its `/proc/<pid>` remains), and `close()` waited 30 s, sent a SIGKILL,
+  waited 5 s more, and warned that its memory "may still be resident".
+  - The new `running()` treats a zombie as gone only when one thread is left.
+    `/proc/<pid>/stat` shows the thread-group leader's state, and a leader that has
+    exited reads Z while its other threads still run and hold the memory.
+  - `close()` also records each descendant's start time, from the same `/proc` read
+    that finds it, and takes a pidfd while the pid is still that process. So a pid
+    reused by another process counts as gone, and the kill after the 30 s wait goes
+    through the pidfd: it can reach only the child that was listed.
+  - `close()` never kills by numeric pid. When it has no pidfd for a child, it leaves
+    a child that is still alive after the wait and logs `NOT killed: no pidfd
+    (<why>)`, with the warning that its memory may still be resident. This happens
+    when `os.pidfd_open` is missing (Python before 3.9) or `pidfd_open` fails for any
+    reason other than "no such process": for example EMFILE (too many open files),
+    or ENOSYS (Linux before 5.3).
+  - When `pidfd_send_signal` itself fails, `close()` logs `NOT killed:
+    pidfd_send_signal: <error>` and does not claim the child was killed.
+  - Pinned by `speed_close_does_not_wait_on_a_zombie`. The script runs under a child
+    subreaper, so the zombie is deterministic. Its fixture processes write to
+    /dev/null, not to the pipes the test reads. Pass or fail, a `finally` kills the
+    servers and then drains every child the test process actually has, until
+    ECHILD, so a failing case fails, never hangs and leaves nothing. A second run
+    forces a precondition to fail after a server has forked a child the test has not
+    recorded yet, and asserts that no child is left. The cases are:
+    - a plain zombie (35.1 s on the old check);
+    - a leader gone with a second thread still running, which `close()` must wait
+      for;
+    - a kill that must go through the pidfd (skipped, and said so, where this host
+      has no pidfds);
+    - `pidfd_open` failing with EMFILE, where the child must be left alive with the
+      warning;
+    - `pidfd_send_signal` failing with EPERM, where the warning names the error and
+      no "killed" line appears;
+    - the start-time check.
+
 ### Fixed (ENG-178: table procedures named like record built-ins: four follow-ups from ENG-173)
 
 From Fable's second review of ENG-173 (`/work/.al-sem/engine-notes/eng173/fable-eng173-r2.md`).

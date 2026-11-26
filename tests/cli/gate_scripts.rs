@@ -2200,8 +2200,8 @@ fn cdo_gate_skips_speed_only_when_no_product_code_changed() {
 /// cycles beside instructions (3e9 per CPU second burned, at a steady clock);
 /// STUB_SLOW_HEAD, STUB_CPI_HEAD, STUB_SYS_HEAD, STUB_SECOND_FACTOR,
 /// STUB_BUILD_HEAD_BY_PASS, STUB_TESTS_HEAD_BY_PASS and
-/// STUB_TESTS_HEAD_SLEEP_BY_PASS shape head's cost, STUB_SLEEP_S both sides'
-/// (see the code).
+/// STUB_TESTS_HEAD_SLEEP_BY_PASS shape head's cost, STUB_SLEEP_S and
+/// STUB_EXTRA_S both sides' (see the code).
 #[cfg(target_os = "linux")]
 const SPEED_STUB: &str = r#"#!/usr/bin/env python3
 import fcntl, json, os, sys, time
@@ -2215,6 +2215,45 @@ if os.environ.get("STUB_IR_DEAD") and os.environ.get("ALSEM_IR_CACHE") == "on":
     time.sleep(5)
     sys.exit(0)
 calls = 0
+# TLS-126: the IR cache report (ALSEM_IR_CACHE_REPORT), as the engine writes it
+# (src/program/ir_cache/report.rs): a `start` line at the first build, an `end`
+# line with counters when the process holding the cache exits. That is the
+# engine CHILD, a descendant of the server: here a child forked at the first
+# build, whose pid both lines carry; it writes `end` 0.1 s after the server is
+# gone (cdo-speed's close must wait for the server's descendants). One fork, not
+# two: a double-forked grandchild is reparented at once, so close() would never
+# list it and its `end` would race the report check. Its zombie (on a host whose
+# init does not reap) costs nothing: close() skips zombies (`running`). A cache
+# folder this stub filled before gives disk hits (a warm build); an empty one
+# gets a publish. STUB_IR_NO_REPORT: no report.
+report = None if os.environ.get("STUB_IR_NO_REPORT") else os.environ.get("ALSEM_IR_CACHE_REPORT")
+def report_line(v):
+    with open(report, "a") as f:
+        f.write(json.dumps(v) + "\n")
+def report_child(counters):
+    r, w = os.pipe()
+    pid = os.fork()
+    if pid == 0:
+        os.close(w)
+        os.close(0)
+        os.close(1)
+        while os.read(r, 1):  # EOF: the server exited (it held `w`)
+            pass
+        time.sleep(0.1)
+        report_line({"event": "end", "pid": os.getpid(), "counters": counters})
+        os._exit(0)
+    os.close(r)
+    report_line({"event": "start", "pid": pid})
+    return w
+def extra_s(n):
+    # STUB_EXTRA_S=b:h[,b:h...] (TLS-126): the judged calls (build, warm-tests)
+    # of base and head burn b and h seconds more in warm-up pass n (one entry:
+    # every pass): the 10 ms ticks a CPU reading can be off by, made deterministic.
+    spec = os.environ.get("STUB_EXTRA_S")
+    if not spec:
+        return 0.0
+    passes = spec.split(",")
+    return float(passes[n % len(passes)].split(":")[1 if head else 0])
 def burn(seconds):
     # User time (TLS-111: the clock is cycles per USER second): a pure loop
     # between reads, since reading the CPU clock is a system call.
@@ -2264,6 +2303,15 @@ for line in sys.stdin:
         slept = 0.0
         work = 1.0  # head's extra work this call (instructions and cycles both)
         zero_instr = False
+        if calls == 1 and report:
+            mark = os.path.join(os.environ["ALSEM_IR_CACHE_DIR"], "stub-entry")
+            if os.path.exists(mark):
+                ir_counters = {"eligible_files": 3, "disk_hits": 3, "verified_hits": 0}
+            else:
+                open(mark, "w").close()
+                ir_counters = {"eligible_files": 3, "published_packages": 1}
+            # Held until this server exits: the child's signal to write `end`.
+            ir_end_fd = report_child(ir_counters)
         if calls == 1:
             # TLS-111: STUB_BUILD_HEAD_BY_PASS=f1,f2,...: head's build does f<pass>
             # times the work in that warm-up pass (3 builds a pass: two timed,
@@ -2286,7 +2334,7 @@ for line in sys.stdin:
                 passes = spec.split(",")
                 b_slow, b_cpi, b_sys = map(float, passes[(n // 3) % len(passes)].split(":"))
             burned = (float(os.environ["STUB_BUILD_S"]) * (1.5 if another_alive() else 1.0)
-                      * work * b_cpi)
+                      * work * b_cpi) + extra_s(n // 3)
             burn(burned * b_slow)
             # STUB_HEAD_SLEEP_S (TLS-103): head's build waits this long, wall time
             # with no CPU, as a loaded host stretches it.
@@ -2315,7 +2363,7 @@ for line in sys.stdin:
             by_pass = os.environ.get("STUB_TESTS_HEAD_BY_PASS")
             if head and by_pass:
                 work = float(by_pass.split(",")[n // 2])
-            burned = float(os.environ["STUB_BUILD_S"]) * factor * work * cpi
+            burned = float(os.environ["STUB_BUILD_S"]) * factor * work * cpi + extra_s(n // 2)
             burn(burned * slow)
             # STUB_TESTS_HEAD_SLEEP_BY_PASS=s1,s2,...: head's warm-tests then
             # waits s<pass> seconds more (wall time only).
@@ -2500,6 +2548,62 @@ while True:
     time.sleep(0.05)
 "#;
 
+/// ⟨TLS-126 sol r1⟩ Runs `python3 <argv>` (cdo-speed) as a child subreaper:
+/// the stub's IR report child outlives its server by design, and on a host
+/// whose init does not reap it would stay a zombie. Orphans come here; once
+/// cdo-speed exits, this waits (up to 60 s) for every one left and reaps it,
+/// then says on stderr `stub-reaper: reaped N orphan(s), M left` (M: children
+/// still not reaped, which `speed_with_stub` requires to be 0), and kills and
+/// reaps those, so a failing run leaves nothing behind. It exits with
+/// cdo-speed's code, or by its signal.
+///
+/// Proof (2026-11-25): the reaping loop skipped -> "stub-reaper: reaped 0
+/// orphan(s), 5 left" and the cross-row run red; restored, green.
+#[cfg(target_os = "linux")]
+const STUB_REAPER: &str = r#"
+import ctypes, glob, os, signal, subprocess, sys, time
+if ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0) != 0:  # PR_SET_CHILD_SUBREAPER
+    sys.exit(f"stub-reaper: prctl: errno {ctypes.get_errno()}")
+rc = subprocess.call([sys.executable, *sys.argv[1:]])
+def children():
+    out = []
+    for f in glob.glob(f"/proc/{os.getpid()}/task/*/children"):
+        out += open(f).read().split()
+    return out
+reaped, end = 0, time.monotonic() + 60
+while time.monotonic() < end:
+    try:
+        pid, _ = os.waitpid(-1, os.WNOHANG)
+    except ChildProcessError:
+        break
+    if pid:
+        reaped += 1
+    else:
+        time.sleep(0.05)
+left = children()
+print(f"stub-reaper: reaped {reaped} orphan(s), {len(left)} left", file=sys.stderr)
+# Counted as a failure above; then every child this subreaper has, adopted ones
+# included (a grandchild comes here when its parent is killed), is killed and
+# reaped until there is none (ECHILD), so none outlives the test or holds the
+# pipes it reads.
+while True:
+    for pid in children():
+        try:
+            os.kill(int(pid), signal.SIGKILL)
+        except OSError:
+            pass
+    try:
+        pid, _ = os.waitpid(-1, os.WNOHANG)
+    except ChildProcessError:
+        break
+    if not pid:
+        time.sleep(0.01)
+if rc < 0:
+    signal.signal(-rc, signal.SIG_DFL)
+    os.kill(os.getpid(), -rc)
+sys.exit(rc)
+"#;
+
 #[cfg(target_os = "linux")]
 fn speed_with_stub(
     dir: &std::path::Path,
@@ -2510,6 +2614,8 @@ fn speed_with_stub(
     use std::os::unix::fs::PermissionsExt;
     let stub = dir.join("alsem");
     std::fs::write(&stub, SPEED_STUB).unwrap();
+    let reaper = dir.join("stub-reaper.py");
+    std::fs::write(&reaper, STUB_REAPER).unwrap();
     std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
     // TLS-83: head runs under its own name, so the stub can tell the sides apart.
     let head = dir.join("alsem-head");
@@ -2529,7 +2635,8 @@ fn speed_with_stub(
     std::fs::create_dir_all(&ws).unwrap();
     let mut cmd = crate::clean_env::command("python3");
     private_slot(&mut cmd, dir);
-    cmd.arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-speed"))
+    cmd.arg(&reaper)
+        .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-speed"))
         .arg(&ws)
         .args(["--base-exe"])
         .arg(&stub)
@@ -2566,6 +2673,9 @@ fn speed_with_stub(
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
+    // TLS-126 sol r1: every orphan of the run (the stub's IR report children)
+    // was reaped; none is left a zombie.
+    assert!(text.contains(" orphan(s), 0 left"), "{text}");
     (out.status.code(), text)
 }
 
@@ -3120,6 +3230,253 @@ fn speed_counts_cycles_and_labels_clock_and_cpi() {
     assert!(!v.contains(" CLOCK:"), "{text}");
 }
 
+/// ⟨TLS-126 review r2, r3⟩ `Server.close()` waits for the server's live
+/// descendants, but not for a finished zombie: on a host whose init does not
+/// reap, an orphaned engine child stays a zombie (/proc/<pid> exists) and
+/// close() waited 30 + 5 s on it. Made deterministic: the script is imported
+/// into a process that makes itself a child subreaper (orphans come to it) and
+/// never reaps. Each server's child waits until the server is gone, then lives
+/// on a moment:
+/// - plain: the child runs 0.5 s more and exits. After close(): the child is a
+///   zombie with one thread, and close() took under 10 s;
+/// - leader gone first: the child's main thread exits (`pthread_exit`) while a
+///   second thread runs 1 s more (stat: Z with 2 threads, asserted before the
+///   close). close() must wait for that thread: after it, the zombie has one
+///   thread; under 10 s;
+/// - kill (sol r1): the child never ends; with `CLOSE_WAIT_S` 0.3 close() kills
+///   it, through the pidfd it took when it listed the child (never `os.kill`,
+///   which the test records): after close(), a finished zombie. Skipped, said
+///   on stdout, where this host has no pidfds (sol r2);
+/// - no pidfd (sol r2): `os.pidfd_open` fails with EMFILE: close() must never
+///   kill the child by its numeric pid (the test records `os.kill`), leaves it
+///   running, and logs "NOT killed: no pidfd (pidfd_open: Too many open files)";
+/// - send fails (sol r3): the pidfd is taken but `pidfd_send_signal` raises
+///   EPERM: close() logs "NOT killed: pidfd_send_signal: Operation not
+///   permitted", never "killed", and the child still runs (skipped with
+///   "kill" where there are no pidfds);
+/// - `running` with a start time: the live test process counts with its own
+///   start time, not with another (a reused pid is not the child it was);
+/// - this process adopted every child: pass or fail, a `finally` kills the
+///   servers, then drains every child this subreaper actually has (kill, reap,
+///   until ECHILD; sol r3: not only the ones it recorded), and says
+///   "fixture children left: 0". The fixture processes write to /dev/null,
+///   never to the pipes this test reads, so a child that outlived a failure
+///   cannot hang the test (sol r2);
+/// - forced failure (sol r3, a second run with ZOMBIE_FORCE_FAIL): a case whose
+///   precondition can never hold fails 2 s after its server forked a long-lived
+///   child, before the test recorded that child: the run fails on the
+///   precondition and still leaves no child.
+///
+/// Each case asserts its precondition (one child listed; the zombie shape).
+///
+/// Proofs: (2026-11-25) `running` replaced by `os.path.exists` in close() ->
+/// "close() waited 35.1 s on a zombie", after "still alive 30 s" and "survived
+/// SIGKILL" (red); restored, green. (Review r3) the one-thread condition dropped
+/// from `running` -> the leader-gone case (red); the start-time check dropped ->
+/// the start-time case (red); each restored, green. (Sol r1) `kill_child` never
+/// using the pidfd -> "kill: close() killed by pid, not through the child's
+/// pidfd" (red); the final reaping dropped -> "children left unreaped: [4
+/// pids]" (red); each restored, green. (Sol r2, 2026-11-25/26) a numeric
+/// `os.kill` put back in `kill_child` for a child with no pidfd -> "no pidfd:
+/// close() killed the child ... with no pidfd" (red, 3.1 s); `kill_child`
+/// never signalling -> "kill: close() returned with the child at ('S', '1')"
+/// (red in 2.6 s, not a hang; no fixture process left); each restored, green.
+/// (Sol r3, 2026-11-26) the `finally` back on reaping only the recorded
+/// children -> the forced run: "fixture children left: 1" (red, 5.7 s);
+/// `kill_child` swallowing the send error again -> "send fails: no warning
+/// that the child was left", the log reading "killed" then "survived SIGKILL"
+/// (red, 8.5 s); each restored, green.
+#[cfg(target_os = "linux")]
+#[test]
+fn speed_close_does_not_wait_on_a_zombie() {
+    let py = r#"
+import ctypes, errno, importlib.machinery, importlib.util, os, signal, subprocess, sys
+import tempfile, time
+loader = importlib.machinery.SourceFileLoader("cdo_speed", sys.argv[1])
+m = importlib.util.module_from_spec(importlib.util.spec_from_loader("cdo_speed", loader))
+loader.exec_module(m)
+libc = ctypes.CDLL(None, use_errno=True)
+if libc.prctl(36, 1, 0, 0, 0) != 0:  # PR_SET_CHILD_SUBREAPER
+    sys.exit(f"prctl: errno {ctypes.get_errno()}")
+def shape(pid):
+    f = m.proc_stat(pid)
+    return f[0], f[17]  # state, threads
+# The child: wait until the server (its parent) is gone, then live on a moment.
+WAIT = ("import ctypes, os, sys, threading, time\n"
+        "if os.fork() == 0:\n"
+        "    sys.stdin.close()\n"
+        "    ppid = os.getppid()\n"
+        "    def after(s):\n"
+        "        while os.getppid() == ppid:\n"
+        "            time.sleep(0.01)\n"
+        "        time.sleep(s)\n"
+        "        os._exit(0)\n")
+CASES = {
+    "plain": WAIT + "    after(0.5)\nsys.stdin.read()",
+    "leader gone": WAIT + "    threading.Thread(target=after, args=(1.0,)).start()\n"
+                   "    ctypes.CDLL(None).pthread_exit(None)\nsys.stdin.read()",
+    # The child never ends by itself: close() kills it after CLOSE_WAIT_S.
+    "kill": WAIT + "    after(3600)\nsys.stdin.read()",
+    "no pidfd": WAIT + "    after(3600)\nsys.stdin.read()",
+    "send fails": WAIT + "    after(3600)\nsys.stdin.read()",
+}
+# ZOMBIE_FORCE_FAIL: one case whose precondition can never hold, checked 2 s after
+# its server forked a child that lives on: the failure path must leave nothing.
+FORCED = bool(os.environ.get("ZOMBIE_FORCE_FAIL"))
+if FORCED:
+    CASES = {"forced": WAIT + "    after(3600)\nsys.stdin.read()"}
+def children():
+    me = os.getpid()
+    return [int(c) for f in os.listdir(f"/proc/{me}/task")
+            for c in open(f"/proc/{me}/task/{f}/children").read().split()]
+def drain():
+    # Every child this subreaper has, adopted ones included (a grandchild comes
+    # here when its parent dies): kill it and reap it, until there is none (ECHILD).
+    while True:
+        for c in children():
+            try:
+                real_kill(c, 9)
+            except OSError:
+                pass
+        try:
+            pid, _ = os.waitpid(-1, os.WNOHANG)
+        except ChildProcessError:
+            return
+        if not pid:
+            time.sleep(0.01)
+# The real-pidfd case needs pidfds here; without them it is skipped, said.
+try:
+    os.close(os.pidfd_open(os.getpid()))
+    no_pidfds = None
+except (AttributeError, OSError) as e:
+    no_pidfds = f"{type(e).__name__}: {e}"
+real_kill = os.kill
+pid_kills, adopted, servers = [], [], []
+os.kill = lambda pid, sig: (pid_kills.append(pid), real_kill(pid, sig))
+def server(code):
+    d = tempfile.mkdtemp()
+    s = m.Server.__new__(m.Server)
+    s.name, s.root = "z", tempfile.mkdtemp(dir=d)
+    s.err = open(os.path.join(d, "err"), "wb")
+    # Not this process's stdout/stderr: the pipes the test reads to its end, which
+    # a child that outlived a failure would hold open (the test would hang).
+    s.p = subprocess.Popen([sys.executable, "-c", code], stdin=subprocess.PIPE,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    servers.append(s.p)
+    return s
+def check():
+    for name, code in CASES.items():
+        if name in ("kill", "send fails") and no_pidfds:
+            print(f"skip {name}: pidfds unavailable here ({no_pidfds})")
+            continue
+        s = server(code)
+        want = ("Z", "2") if name == "leader gone" else ("S", None)
+        if FORCED:
+            want = ("never", "a state")
+        end = time.monotonic() + (2 if FORCED else 60)
+        while time.monotonic() < end:
+            kids = m.descendants(s.p.pid)
+            if len(kids) == 1 and (want[1] is None or shape(kids[0]) == want):
+                break
+            time.sleep(0.01)
+        else:
+            sys.exit(f"{name}: precondition: one child"
+                     f"{' (Z, 2 threads)' * (want[1] is not None)}, "
+                     f"got {[(k, shape(k)) for k in kids]}")
+        kid = kids[0]
+        adopted.append(kid)
+        if name in ("kill", "no pidfd", "send fails"):
+            s.CLOSE_WAIT_S = 0.3
+        logged, real_log = [], m.log
+        real_open = getattr(os, "pidfd_open", None)
+        real_send = getattr(signal, "pidfd_send_signal", None)
+        m.log = lambda msg: (logged.append(msg), real_log(msg))
+        if name == "no pidfd":
+            # pidfd_open fails (EMFILE): close() must never kill by the numeric pid.
+            def no_pidfd(pid):
+                raise OSError(errno.EMFILE, "Too many open files")
+            os.pidfd_open = no_pidfd
+        if name == "send fails":
+            # The pidfd is taken, but the signal is refused: no "killed" claim.
+            def refused(fd, sig):
+                raise PermissionError(errno.EPERM, "Operation not permitted")
+            signal.pidfd_send_signal = refused
+        t = time.monotonic()
+        try:
+            s.close()
+        finally:
+            os.pidfd_open, m.log = real_open, real_log
+            if real_send is not None:
+                signal.pidfd_send_signal = real_send
+        took = time.monotonic() - t
+        if name in ("no pidfd", "send fails"):
+            why = {"no pidfd": "no pidfd (pidfd_open: Too many open files)",
+                   "send fails": "pidfd_send_signal: Operation not permitted"}[name]
+            if kid in pid_kills or shape(kid)[0] == "Z":
+                sys.exit(f"{name}: close() killed the child {kid}")
+            if not any(f"NOT killed: {why}" in l for l in logged):
+                sys.exit(f"{name}: no warning that the child was left ({why}): {logged}")
+            if any(l.endswith("the close: killed") for l in logged):
+                sys.exit(f"{name}: close() said it killed a child it did not: {logged}")
+            continue
+        if shape(kid) != ("Z", "1"):
+            sys.exit(f"{name}: close() returned with the child at {shape(kid)}, not a "
+                     "finished zombie (Z, 1 thread)")
+        if took > 10:
+            sys.exit(f"{name}: close() waited {took:.1f} s on a zombie")
+        if name == "kill" and kid in pid_kills:
+            sys.exit(f"{name}: close() killed by pid, not through the child's pidfd")
+    me = os.getpid()
+    if not m.running(me, m.proc_start(me)) or m.running(me, "0"):
+        sys.exit("running: the start time is not checked")
+try:
+    check()
+finally:
+    # Pass or fail: every fixture process is killed and reaped (this process
+    # adopted the children), so nothing outlives the test.
+    os.kill = real_kill
+    for p in servers:
+        p.kill()
+        p.wait()
+    drain()
+    left = children()
+    print(f"fixture children left: {len(left)}", flush=True)
+    if left:
+        sys.exit(f"children left unreaped: {left}")
+print("ok")
+"#;
+    let run = |force: bool| {
+        let mut cmd = crate::clean_env::command("python3");
+        if force {
+            cmd.env("ZOMBIE_FORCE_FAIL", "1");
+        }
+        let out = cmd
+            .args(["-c", py])
+            .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-speed"))
+            .env("ALSEM_SPEED_CACHE", "/nonexistent/cdo-speed-cache")
+            .output()
+            .unwrap();
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        (out.status.success(), text)
+    };
+    let (ok, text) = run(false);
+    assert!(
+        ok && text.contains("fixture children left: 0") && text.contains("ok"),
+        "{text}"
+    );
+    // Sol r3: a precondition that fails after the server forked: the failure
+    // path kills and reaps that unrecorded child too.
+    let (ok, text) = run(true);
+    assert!(
+        !ok && text.contains("forced: precondition") && text.contains("fixture children left: 0"),
+        "{text}"
+    );
+}
+
 /// ⟨TLS-111⟩ cdo-speed's perf parsing and warm-up judging, called directly
 /// (the script imported):
 /// - only `instructions` and `cycles`, once each per PMU, reach perf (both are
@@ -3261,17 +3618,27 @@ print("ok")
 /// disagree beyond x1.25 gets ONE more flipped pair. The stub's positional
 /// factor is off (STUB_SECOND_FACTOR 1), and head's warm-tests costs a set
 /// factor per pass (STUB_TESTS_HEAD_BY_PASS):
-/// - 1.0, 2.0, then 1.0, 1.7: x1.41 fails with passes x1.0/x2.0; the added pair's
-///   same-order passes agree (x1.0/x1.0, x2.0/x1.7): judged on all four (x1.36),
-///   FAIL, the verdict saying why the pair was added; never a fifth pass;
-/// - 1.0, 2.0, then 1.0, 1.0: passes 2 and 4 still disagree: HOST UNSTABLE,
+/// - 1.0, 2.4, then 1.0, 2.4: x1.55 fails with passes x1.0/x2.4; the added pair's
+///   same-order passes agree: judged on all four, FAIL, the verdict saying why
+///   the pair was added; never a fifth pass;
+/// - 1.0, 3.0, then 1.0, 1.0: passes 2 and 4 still disagree: HOST UNSTABLE,
 ///   exit 2, no rounds; speed.json says `verdict` HOST UNSTABLE and lists it in
 ///   `failed` (a `not failed` reader never sees a pass); a `FAIL:` line names
 ///   it; cdo-gate's summary shows a FAILED speed row, which alone fails the gate
 ///   with every other phase green;
-/// - 1.5, 1.5: a failure both passes agree on adds nothing and fails.
+/// - 2.0, 2.0: a failure both passes agree on adds nothing and fails.
 ///
-/// Mutations (2026-11-21): `contradicted` ignoring the spread -> the agreeing
+/// ⟨TLS-126⟩ Robust to CPU ticks: every run's base burns 0.05 s (5 ticks) more
+/// in both judged calls (STUB_EXTRA_S), the direction that failed a gate, and
+/// each margin below still holds with a further -1..+4 ticks on every one of
+/// the 8 readings (worst cases): the first run (STUB_BUILD_S 0.8) pair x1.38
+/// against 1.3, same-order spread x1.13 against 1.25; the second pair x1.39;
+/// the third x1.61. Proof (2026-11-24): the first run back on 1.0, 2.0, 1.0,
+/// 1.7 at 0.4 s -> warm-tests x1.259 (x0.891/x1.778), no extra pair, PASS
+/// (red); restored, green.
+///
+/// Mutations (2026-11-21, on the values then: 1.0, 2.0, 1.0, 1.7 / 1.0 / 1.5):
+/// `contradicted` ignoring the spread -> the agreeing
 /// failure starts "warm-up 3 of 4" (red); `same_order_disagree` comparing
 /// passes i and i + 1 instead of i and i + 2 -> the agreeing re-measure reads
 /// HOST UNSTABLE, exit 2 (red); HOST UNSTABLE's `return 2` dropped -> the
@@ -3284,7 +3651,7 @@ print("ok")
 #[cfg(target_os = "linux")]
 #[test]
 fn speed_adds_one_flipped_pair_on_a_contradicted_failure() {
-    let run = |by_pass: &str| {
+    let run = |by_pass: &str, build_s: &str| {
         let dir = tempfile::tempdir().unwrap();
         let (code, text) = speed_with_stub(
             dir.path(),
@@ -3293,13 +3660,15 @@ fn speed_adds_one_flipped_pair_on_a_contradicted_failure() {
             &[
                 ("STUB_SECOND_FACTOR", "1.0"),
                 ("STUB_TESTS_HEAD_BY_PASS", by_pass),
+                ("STUB_BUILD_S", build_s),
+                ("STUB_EXTRA_S", "0.05:0"),
             ],
         );
         (dir, code, text)
     };
 
     // Contradicted, then the same orders agree: judged on four passes.
-    let (dir, code, text) = run("1.0,2.0,1.0,1.7");
+    let (dir, code, text) = run("1.0,2.4,1.0,2.4", "0.8");
     assert_eq!(code, Some(1), "{text}");
     let v = speed_verdict(&text);
     assert!(
@@ -3309,7 +3678,7 @@ fn speed_adds_one_flipped_pair_on_a_contradicted_failure() {
         "{text}"
     );
     assert!(
-        text.contains("FAIL: warm-tests: CPU time x1.3") && text.contains("warm-up, 4 pass(es))"),
+        text.contains("FAIL: warm-tests: CPU time x1.") && text.contains("warm-up, 4 pass(es))"),
         "{text}"
     );
     assert!(
@@ -3342,7 +3711,7 @@ fn speed_adds_one_flipped_pair_on_a_contradicted_failure() {
     assert!(text.contains("round 1:"), "the rounds ran: {text}");
 
     // Still contradicted: HOST UNSTABLE, exit 2, never a PASS.
-    let (dir, code, text) = run("1.0,2.0,1.0,1.0");
+    let (dir, code, text) = run("1.0,3.0,1.0,1.0", "0.4");
     assert_eq!(code, Some(2), "{text}");
     let v = speed_verdict(&text);
     assert!(
@@ -3415,7 +3784,7 @@ fn speed_adds_one_flipped_pair_on_a_contradicted_failure() {
     assert!(!out.status.success(), "{summary}");
 
     // Both passes agree on the failure: nothing added, FAIL.
-    let (_dir, code, text) = run("1.5,1.5");
+    let (_dir, code, text) = run("2.0,2.0", "0.4");
     assert_eq!(code, Some(1), "{text}");
     assert!(
         speed_verdict(&text).starts_with("cdo-speed: FAIL")
@@ -3444,22 +3813,37 @@ fn speed_ir_rows_never_fail_the_verdict() {
 
 /// ⟨TLS-111 review r1⟩ The extra pair judges EVERY failure in side order, and
 /// may clear one:
-/// - cross-row: warm-tests triggers (1.0, 2.0) and settles (0.9, 1.8), while the
-///   build failed after pass 2 with agreeing passes (x1.4, x1.4) and reads x0.9
-///   in the extra pair: its four-pass mean (x1.12) would pass it, but its
-///   same-order passes disagree (x1.4/x0.9): HOST UNSTABLE naming the build;
+/// - cross-row: warm-tests triggers (1.0, 2.4) and settles (1.0, 2.4), while the
+///   build failed after pass 2 with agreeing passes (x1.8, x1.8) and reads x0.9
+///   in the extra pair: its four-pass mean (x1.27) would pass it, but its
+///   same-order passes disagree (x1.8/x0.9): HOST UNSTABLE naming the build;
 /// - side order: the stub's positional factor ON (x1.5 for the second of a
-///   pair), head's warm-tests x1.4 in every pass: per-pass ratios ~x2.1, ~x0.93,
-///   ~x2.1, ~x0.93, so passes 3 and 4 agree with 1 and 2 only in the same side
+///   pair), head's warm-tests x2.0 in every pass: per-pass ratios ~x1.33, ~x3.0,
+///   ~x1.33, ~x3.0, so passes 3 and 4 agree with 1 and 2 only in the same side
 ///   order: FAIL judged on four passes, never HOST UNSTABLE;
-/// - agree, then PASS: 0.9, 2.0 fails (x1.34) with contradicting passes; 0.8, 1.7
-///   agree with them; the four-pass mean x1.25 PASSes, saying the pair was added.
+/// - agree, then PASS (`speed_agree_then_pass`): the pair fails with
+///   contradicting passes; passes 3 and 4 agree with them; the four-pass mean
+///   PASSes, saying the pair was added.
 ///
-/// Mutations (2026-11-21, round 2): the same-order check over the triggering
-/// failures only (round 1's code) -> the cross-row run exits 1, not 2 (red);
-/// passes 3 and 4 in the wrong side order (`first` base in passes 1 and 4, the
-/// flip in passes 2 and 3) -> the side-order run reads HOST UNSTABLE, passes 1
-/// and 3 x0.933/x2.073 (red). Each restored, green.
+/// ⟨TLS-126⟩ Robust to CPU ticks (10 ms; a 0.4 s burn read 1 and 2 ticks high
+/// in a failing gate). The cross-row and side-order runs stay on CPU, the
+/// extra pair's CPU path; base burns 0.05 s (5 ticks) more in both judged calls
+/// of every pass (STUB_EXTRA_S), the direction that failed the gate, and each
+/// margin still holds with a further -1..+4 ticks on every one of the 8
+/// readings (worst cases): cross-row (STUB_BUILD_S 0.8) warm-tests' pair x1.38
+/// against 1.3, its same-order spread x1.13 against 1.25, the build's pair
+/// x1.61 and its same-order spread x1.78 (it must pass 1.25); side order (0.4 s)
+/// the pair x1.67, the same-order spread x1.16. Proofs (2026-11-24): cross-row
+/// back on its old values (1.0, 2.0, 0.9, 1.8; build 1.4, 1.4, 0.9, 0.9; 0.4 s)
+/// -> warm-tests x1.289 and the build x1.267, both under 1.3: no extra pair,
+/// PASS, exit 0 (red); side order back on x1.4 -> x1.270 (x0.864/x1.867), no
+/// extra pair, PASS (red); each restored, green.
+///
+/// Mutations (2026-11-21, round 2, on the values then): the same-order check
+/// over the triggering failures only (round 1's code) -> the cross-row run
+/// exits 1, not 2 (red); passes 3 and 4 in the wrong side order (`first` base
+/// in passes 1 and 4, the flip in passes 2 and 3) -> the side-order run reads
+/// HOST UNSTABLE, passes 1 and 3 x0.933/x2.073 (red). Each restored, green.
 #[cfg(target_os = "linux")]
 #[test]
 fn speed_extra_pair_judges_every_failure_in_side_order() {
@@ -3472,8 +3856,10 @@ fn speed_extra_pair_judges_every_failure_in_side_order() {
     // Cross-row: the build's failure must agree too.
     let (_dir, code, text) = run(&[
         ("STUB_SECOND_FACTOR", "1.0"),
-        ("STUB_TESTS_HEAD_BY_PASS", "1.0,2.0,0.9,1.8"),
-        ("STUB_BUILD_HEAD_BY_PASS", "1.4,1.4,0.9,0.9"),
+        ("STUB_TESTS_HEAD_BY_PASS", "1.0,2.4,1.0,2.4"),
+        ("STUB_BUILD_HEAD_BY_PASS", "1.8,1.8,0.9,0.9"),
+        ("STUB_BUILD_S", "0.8"),
+        ("STUB_EXTRA_S", "0.05:0"),
     ]);
     assert_eq!(code, Some(2), "{text}");
     let v = speed_verdict(&text);
@@ -3483,29 +3869,121 @@ fn speed_extra_pair_judges_every_failure_in_side_order() {
     );
 
     // Side order: passes 3 and 4 repeat passes 1 and 2's.
-    let (_dir, code, text) = run(&[("STUB_TESTS_HEAD_BY_PASS", "1.4,1.4,1.4,1.4")]);
+    // TLS-126: the stub writes no IR report here, so the IR rows' label shows
+    // (the control of `speed_agree_then_pass`'s "no label").
+    let (_dir, code, text) = run(&[
+        ("STUB_TESTS_HEAD_BY_PASS", "2.0,2.0,2.0,2.0"),
+        ("STUB_EXTRA_S", "0.05:0"),
+        ("STUB_IR_NO_REPORT", "1"),
+    ]);
     assert_eq!(code, Some(1), "{text}");
     let v = speed_verdict(&text);
     assert!(
         v.starts_with("cdo-speed: FAIL")
-            && v.contains("the same-order passes agree, judged on 4 passes)"),
+            && v.contains("the same-order passes agree, judged on 4 passes)")
+            && v.contains(
+                "IR WARM REPORT BREACH (head: IR: FAIL no report file (the cache path never ran))"
+            ),
         "{text}"
     );
 
-    // Agree, then PASS on four passes.
-    let (dir, code, text) = run(&[
-        ("STUB_SECOND_FACTOR", "1.0"),
-        ("STUB_TESTS_HEAD_BY_PASS", "0.9,2.0,0.8,1.7"),
-    ]);
+    speed_agree_then_pass();
+}
+
+/// The "agree, then PASS" run of the test above.
+///
+/// ⟨TLS-126⟩ Judged on WALL time, from seconds the stub declares (exact), not
+/// on CPU. The scenario's window is narrow by its own geometry: the pair's
+/// mean over the limit, the four-pass mean under it, and passes 1/3 and 2/4
+/// within x1.25 leave at most ~4.5 % on any of them (m^5 <= 1.25). A CPU
+/// reading comes in 10 ms ticks, and a 0.4 s burn read 2 ticks (5 %) high
+/// under load: with head 0.9, 2.0, 0.8, 1.7 on CPU the pair read x1.293
+/// against the 1.3 limit and never added the extra pair (the flake). Here both
+/// sides' judged calls declare 8 s (STUB_SLEEP_S) and head's warm-tests 4, 8, 2
+/// and 5.4 s more: wall x1.48, x1.95, x1.24, x1.64 by pass; the pair x1.70
+/// FAILs (limit 1.6) with contradicting passes (x1.32), the four-pass mean
+/// x1.56 PASSes, the same-order spreads are x1.19; a tick moves a ratio 0.1 %.
+/// The run carries the worst tick errors itself (STUB_EXTRA_S): base burns
+/// 0.05 s more in passes 1 and 2 (lowering the pair), head in passes 3 and 4
+/// (raising the four-pass mean). With a further -2..+3 ticks on every reading
+/// the worst cases are: the pair x1.68 against 1.6, the four-pass mean x1.57,
+/// the same-order spread x1.22 against 1.25, the contradiction x1.30.
+///
+/// Proofs (2026-11-24): the run on CPU as before (head 0.9, 2.0, 0.8, 1.7, no
+/// declared seconds), base +0.05 s -> warm-tests x1.224 (x0.822/x1.822 by
+/// pass), no extra pair, plain PASS: the failing gate's verdict shape (its own
+/// numbers were x0.878/x1.905) (red); on declared wall, green. Redone by Edit
+/// on the finished helper (old values and `cpu` put back) -> x1.203, plain PASS
+/// (red); restored, green.
+///
+/// The IR report: the stub's `report_line` made a no-op by Edit -> `PASS IR
+/// WARM REPORT BREACH (head: IR: FAIL no report file ...)` (red); restored,
+/// green. The side-order run above keeps the label pinned (STUB_IR_NO_REPORT).
+/// The `end` line comes from the stub's child after the server exits, as the
+/// engine child's does: `Server.close()`'s wait for the server's descendants
+/// deleted (scripts/cdo-speed) -> each child killed, `IR WARM REPORT BREACH
+/// (base: IR: FAIL start without end ...; head: ...)` (red); restored, green.
+/// Re-run 2026-11-25 on the final shape (one fork, `end` 0.1 s after the
+/// server, close() skipping zombies): red the same way; restored, green.
+/// (Sol r1) The label's absence alone passed an IR row that never ran: with
+/// `ir_build_rows` returning "" at once, the verdict read a plain PASS, and the
+/// report check failed ("base's warm IR report ...: No such file") (red, this
+/// run made first for the proof); restored, green.
+#[cfg(target_os = "linux")]
+fn speed_agree_then_pass() {
+    let dir = tempfile::tempdir().unwrap();
+    let (code, text) = speed_with_stub(
+        dir.path(),
+        "1.0",
+        &[],
+        &[
+            ("STUB_SECOND_FACTOR", "1.0"),
+            ("STUB_SLEEP_S", "8"),
+            ("STUB_TESTS_HEAD_SLEEP_BY_PASS", "4,8,2,5.4"),
+            ("STUB_EXTRA_S", "0.05:0,0.05:0,0:0.05,0:0.05"),
+        ],
+    );
     assert_eq!(code, Some(0), "{text}");
     let v = speed_verdict(&text);
     assert!(
         v.starts_with("cdo-speed: PASS")
-            && v.contains("a failure its passes contradicted beyond x1.25: warm-tests cpu")
+            && v.contains("a failure its passes contradicted beyond x1.25: warm-tests wall")
+            // TLS-126: the stub writes the IR report as the engine does.
+            && !v.contains("IR WARM REPORT BREACH")
+            && !v.contains("IR ROWS NOT RUN")
             && v.contains("the same-order passes agree, judged on 4 passes)"),
         "{text}"
     );
     assert_eq!(speed_json(dir.path())["verdict"], "PASS");
+    // TLS-126 sol r1: the label's absence is not enough (an IR row that never
+    // ran writes none either): both warm builds wrote a report with one start
+    // and one end of the same process, and disk hits.
+    for side in ["base", "head"] {
+        let path = dir.path().join(format!("state-/out/ir-warm-{side}.jsonl"));
+        let rep = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("{side}'s warm IR report {}: {e}\n{text}", path.display()));
+        let lines: Vec<serde_json::Value> = rep
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        assert!(
+            lines.len() == 2
+                && lines[0]["event"] == "start"
+                && lines[1]["event"] == "end"
+                && lines[0]["pid"] == lines[1]["pid"]
+                && lines[1]["counters"]["disk_hits"].as_u64().unwrap_or(0) > 0,
+            "{side}: {rep}"
+        );
+    }
+    // The four IR rows' report children (among others: the slot's helpers) came
+    // to the reaper, and it reaped them all (`speed_with_stub`: 0 left).
+    let reaped: u32 = text
+        .split("stub-reaper: reaped ")
+        .nth(1)
+        .and_then(|s| s.split(' ').next())
+        .and_then(|n| n.parse().ok())
+        .unwrap_or_else(|| panic!("the reaper's line: {text}"));
+    assert!(reaped >= 4, "{text}");
 }
 
 /// ⟨TLS-111 review r1⟩ A wall-time failure adds the pair too, and one warm-up
