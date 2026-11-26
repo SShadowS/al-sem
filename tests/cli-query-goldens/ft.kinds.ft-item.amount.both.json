@@ -446,7 +446,8 @@
       },
       {
         "kind": "resolved-call-graph",
-        "noSolveRow": false
+        "noSolveRow": false,
+        "side": "down"
       },
       {
         "kind": "external-callers",
@@ -531,7 +532,7 @@
           "what": "no dependency code is loaded (single-app, or no dependency)"
         }
       ],
-      "scope": "Codeunit \"FT Consumers\"::Kinds's cone by the solve graph (2 routines) and its callers by the reverse walk (4 routines with a body, by tier: local 4, via-dependency 0, via-hub 0; 0 more without a body in the model)",
+      "scope": "Codeunit \"FT Consumers\"::Kinds's cone by the execution graph, dependency code included (2 routines) and its callers by the reverse walk (4 routines with a body, by tier: local 4, via-dependency 0, via-hub 0; 0 more without a body in the model)",
       "workspaceRoutineBodies": 6
     },
     "table": {

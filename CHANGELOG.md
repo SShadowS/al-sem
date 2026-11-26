@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (ENG-213: a wrong "none observed" — `query touches --field --from` down searches dependency code past its first routine)
+
+- **The bug.** `query touches --field F --from R --direction down` searched R's cone over the solve's
+  combined graph, which takes workspace callers only: a dependency routine called from another
+  dependency routine was never searched. So with `CallDep -> D.WriteIt -> D.Inner`, where `Inner`
+  assigns the field, the answer read "consumers: none observed", and its "not searched" note said
+  "dependency code the workspace does not call", which was false (found checking ENG-201's
+  global-trigger sentence on CDO: the field answer's cone held fewer routines than the digest
+  cone). The table answer from the same routine was right: it reads the whole cone.
+- **The fix.** The down cone (`effect_query_cli::field_scope`) also walks the execution relation's
+  typed edges, every caller's, so the calls dependency code makes too, with implicit triggers and
+  event and table-event dispatch (`typed_down`). They are in the relation cell the query already
+  reads; the walk uses an index of the edges by caller (`ExecRelation::cone_callees`, four bytes an
+  edge), built on first use and kept with the relation, so a resident server does not rebuild it
+  per query. The scope label says so: "…'s cone by the execution graph, dependency code included
+  (N routines)" (was "…'s cone by the solve graph"), and the down reason reads "the cone is the
+  resolved execution graph, dependency code included: calls not resolved are not followed"
+  (`resolved-call-graph`, `side: "down"`); callers by the solve graph keep their own reason
+  (`side: "up"`), which is still one dependency routine deep. A routine with no solve row still
+  reads only its own body (a `--from` root is a workspace routine; a dependency routine does not
+  resolve as one).
+- **What it shares with the digest cone (filed).** Both read the same typed edges, so both miss a
+  table procedure that shadows a platform method when dependency code calls it, and a call whose
+  site the model does not hold (ENG-215, from Fable's and sol's reviews). The down cone follows
+  every edge kind alike, with no mark for how a site is reached, and keeps edges from dead call
+  sites the digest cone drops (ENG-216).
+- **CDO (pinned `bc3ccb18`, master 68c95be6 against 1f55edd9, release-fast, one-shot, IR cache
+  off, one run each side; `/work/.al-sem/engine-notes/eng213/field-depth-measure.log`).**
+  `--field 1 --from R --direction down` for the three CDO rendering routines: the dependency bodies
+  searched go from 111-114 to 20,631-20,728 (interface and event dispatch fan out across the
+  demanded dependency code), and the workspace bodies from 799 to 883 for `IssueReminder`. No
+  slowdown was seen in that one sample per side (each head run at or under its base run on a
+  noisy host); the resident server was not measured. `IssueReminder` on `Issued Reminder
+  Header`: 5 -> 13 confirmed sites (reads, writes and a copy-candidate), among them Base
+  Application's `InsertIssuedReminderHeader` writing the table, reached through the Base
+  Application's issue codeunit two dependency calls down, which master's answer never searched;
+  candidates (a RecordRef table not known) 2 -> 49. On `CDO File` and `CDO E-Mail Log` the
+  confirmed lists are unchanged (18, 16); the added rows are candidates (2 -> 53 each, mostly
+  `by-number` uses reached through event dispatch), each named as one.
+- **Goldens.** The two query goldens that print the label moved in that phrase and the reason's
+  `side` only (`ft.kinds.ft-item.amount.both.{human.txt,json}`; the count stays 2, no site moved).
+- **Tests and red proofs.** `cli_field_touches_dependency_depth` (new): the two-hop site is listed,
+  the one-hop control too, each branch lists only its own site, `CallDep`'s cone is its 3 routines,
+  and the down reason is the new one. Committed red first (the two-hop site missing), then green;
+  a cone of every routine (`typed_down` returning all) fails "no site in Inner from CallDirect".
+
 ### Fixed (TLS-121: Windows builds need no cmake)
 
 - **gzip moved from zlib-ng to zlib-rs** (`flate2` feature `zlib-rs`, pure Rust). zlib-ng's
