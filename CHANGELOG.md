@@ -309,8 +309,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ENG-161).
 - **CDO (pinned `bc3ccb18`):** on the final code (master 6218a401 against 4117bee0, with the `Close`
   filter and `Open` kept: `cdo-before-after`, 2026-11-26) no finding or fingerprint moved at either
-  scope (2,306 / 32,429 findings, 0 added, 0 removed), unknown edges 0 -> 0: no CDO answer meets
-  `RootCloseOpen`'s over-reach. Earlier (c6f61f04 against c996d2c8, before the filter) the same, and
+  scope (2,306 / 32,429 findings, 0 added, 0 removed), unknown edges 0 -> 0. That compares findings,
+  fingerprints and the call graph, not `prove` answers routine by routine; the CDO rendering
+  goldens' `prove` answers (the presubmit's `output` phase) did not move either. Earlier (c6f61f04
+  against c996d2c8, before the filter) the same, and
   cdo-speed PASS with an ADVISORY: instructions build x0.9984, prove
   x1.0263, round total x1.0248 (advisory limit x1.02; CPU prove x0.973, round total x0.979, one
   run). The first cut (c0ac760b: a kept bind excepting its receiver's whole class, no array
