@@ -1303,8 +1303,12 @@ by Fable).
   event subscribers at the same site (`site-other-edges`); a prefix routine with no model row
   blocks `loop-above-meet`; a route search that found nothing because it stopped at its budget
   says `relation: route-search-capped`, not "dead under literals"; `commitsInsideB` starts under
-  B's route's `[CommitBehavior]`. CDO count of `no` answers these blockers turn into `unknown`:
-  COUNT-PENDING.
+  B's route's `[CommitBehavior]`. On CDO, over a seeded sample of 120 of the 216 routines
+  where a call is followed by a record `Insert`/`Modify` (A the call, B the write), these
+  blockers turn 1 answer from `no` into `unknown` (`recursion-above-meet`); `loop-above-meet`
+  and `site-other-edges` turn none. The sample's answers: 94 `no`, 8 `yes`, 15 `unknown` (8 an
+  ambiguous routine name, 6 an open-world interface call in the region, 1 recursion), 3 refused
+  (one site the root does not reach, two lines holding two sites).
 - **What a path that ends before B leaves out (for cost):** a statement on such a path is read
   for its own records only. `commitsWithoutB` then misses a commit in a callee on such a path,
   and an error raised inside such a callee is in neither `errorsBetween` nor any commit's
