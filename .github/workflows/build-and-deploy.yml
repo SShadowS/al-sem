@@ -85,6 +85,19 @@ jobs:
           TREE_SITTER_AL_PATH: ${{ github.workspace }}/tree-sitter-al
         run: cargo build --profile release-ship
 
+      # TLS-117: write the IR cache's data-digest slot into the three binaries that install the
+      # cache (an unstamped Windows binary gets no key: the cache is off for it), then verify
+      # each. Before signing (signing changes no section); a failure fails the job.
+      - name: Stamp Windows binaries (IR cache data-digest slot)
+        shell: pwsh
+        run: |
+          foreach ($b in 'alsem', 'aldump', 'al-call-hierarchy') {
+            & target\release-ship\alsem-stamp.exe stamp "target\release-ship\$b.exe"
+            if ($LASTEXITCODE -ne 0) { throw "stamping $b.exe failed" }
+            & target\release-ship\alsem-stamp.exe verify "target\release-ship\$b.exe"
+            if ($LASTEXITCODE -ne 0) { throw "verifying $b.exe failed" }
+          }
+
       # Authenticode-sign via Azure Artifact Signing (Trusted Signing).
       # Same config as release.yml: vars AZURE_SIGNING_ENDPOINT /
       # AZURE_SIGNING_ACCOUNT / AZURE_SIGNING_PROFILE, secrets AZURE_TENANT_ID /
@@ -117,6 +130,60 @@ jobs:
           file-digest: SHA256
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
           timestamp-digest: SHA256
+
+      # TLS-117 (sol r1 P1-3): as in release.yml, the shipped (signed) binaries still verify and
+      # the shipped alsem.exe makes an IR cache key at run time.
+      - name: Check the shipped binaries' IR cache key
+        shell: pwsh
+        run: |
+          foreach ($b in 'alsem', 'aldump', 'al-call-hierarchy') {
+            & target\release-ship\alsem-stamp.exe verify "target\release-ship\$b.exe"
+            if ($LASTEXITCODE -ne 0) { throw "verifying the shipped $b.exe failed" }
+          }
+          # As in release.yml: the default (on, no ALSEM_IR_CACHE), then the off switch last.
+          Remove-Item Env:ALSEM_IR_CACHE -ErrorAction SilentlyContinue
+          $env:ALSEM_IR_CACHE_DIR = Join-Path $env:RUNNER_TEMP 'ir-root'
+          function judge($rep, $rule) {
+            python scripts/ir-cache-report-check --require-key --rule $rule $rep
+            if ($LASTEXITCODE -ne 0) { throw "IR cache check failed: $rep ($rule)" }
+          }
+          $ws = 'tests\fixtures\tls117\ws'
+          $env:ALSEM_IR_CACHE_REPORT = Join-Path $env:RUNNER_TEMP 'ir-cold.jsonl'
+          & target\release-ship\alsem.exe analyze $ws --format json | Out-Null
+          if ($LASTEXITCODE -notin 0, 1) { throw "alsem analyze failed (exit $LASTEXITCODE)" }
+          judge $env:ALSEM_IR_CACHE_REPORT output
+          $env:ALSEM_IR_CACHE_REPORT = Join-Path $env:RUNNER_TEMP 'ir-warm.jsonl'
+          & target\release-ship\alsem.exe analyze $ws --format json | Out-Null
+          if ($LASTEXITCODE -notin 0, 1) { throw "alsem analyze (warm) failed (exit $LASTEXITCODE)" }
+          judge $env:ALSEM_IR_CACHE_REPORT warm-build
+          # impact with every hit verified, aldump's own key, the LSP at runtime (as release.yml)
+          $env:ALSEM_IR_CACHE_VERIFY = '1'
+          $env:ALSEM_IR_CACHE_REPORT = Join-Path $env:RUNNER_TEMP 'ir-impact.jsonl'
+          & target\release-ship\alsem.exe impact $ws --routine 'Ws Cu::Run' --format json | Out-Null
+          if ($LASTEXITCODE -notin 0, 1) { throw "alsem impact failed (exit $LASTEXITCODE)" }
+          Remove-Item Env:ALSEM_IR_CACHE_VERIFY
+          judge $env:ALSEM_IR_CACHE_REPORT impact
+          $env:ALSEM_IR_CACHE_REPORT = Join-Path $env:RUNNER_TEMP 'ir-aldump.jsonl'
+          & target\release-ship\aldump.exe --program-call-graph-stats $ws | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "aldump failed (exit $LASTEXITCODE)" }
+          judge $env:ALSEM_IR_CACHE_REPORT output
+          $env:ALSEM_IR_CACHE_REPORT = Join-Path $env:RUNNER_TEMP 'ir-lsp.jsonl'
+          python scripts/lsp-key-smoke target\release-ship\al-call-hierarchy.exe $ws --no-telemetry
+          if ($LASTEXITCODE -ne 0) { throw "the LSP smoke run failed (exit $LASTEXITCODE)" }
+          judge $env:ALSEM_IR_CACHE_REPORT output
+          $env:ALSEM_IR_CACHE = 'off'
+          $env:ALSEM_IR_CACHE_REPORT = Join-Path $env:RUNNER_TEMP 'ir-off.jsonl'
+          & target\release-ship\alsem.exe analyze $ws --format json | Out-Null
+          if ($LASTEXITCODE -notin 0, 1) { throw "alsem analyze (off) failed (exit $LASTEXITCODE)" }
+          python scripts/ir-cache-report-check --require-key $env:ALSEM_IR_CACHE_REPORT
+          if ($LASTEXITCODE -eq 0) { throw 'ALSEM_IR_CACHE=off still made a key' }
+          $off = @(Get-Content -LiteralPath $env:ALSEM_IR_CACHE_REPORT -ErrorAction Stop |
+            ForEach-Object { $_ | ConvertFrom-Json } |
+            Where-Object { $_.event -eq 'start' -and $_.enabled -eq $false -and
+              $_.PSObject.Properties.Name -contains 'key' -and $null -eq $_.key })
+          if ($off.Count -lt 1) { throw 'the off run wrote no start line with enabled false and key null' }
+          Remove-Item Env:ALSEM_IR_CACHE
+          $global:LASTEXITCODE = 0
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

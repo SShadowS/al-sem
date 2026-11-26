@@ -471,25 +471,20 @@ impl IrCache {
     /// when a day old) and the throttled prune (spec Design 9). The key folder is opened again
     /// each time, so a pruned one is not written through a stale handle.
     pub(crate) fn touch(&self, key: &IrKey) {
-        #[cfg(unix)]
+        let IrDir::Usable(ir) = self.open_ir(false) else {
+            return;
+        };
+        let now = std::time::SystemTime::now();
+        let key_hex = key.hex();
+        // Under the key folder's lock (shared): a prune holding it exclusive is removing
+        // the folder, and this `last-used` would only land in a folder going away.
+        if let Some(_held) = ir.lock(&key_lock_name(&key_hex), LockKind::SharedNow)
+            && let Some(kd) = ir.subdir(&key_hex, false)
         {
-            let IrDir::Usable(ir) = self.open_ir(false) else {
-                return;
-            };
-            let now = std::time::SystemTime::now();
-            let key_hex = key.hex();
-            // Under the key folder's lock (shared): a prune holding it exclusive is removing
-            // the folder, and this `last-used` would only land in a folder going away.
-            if let Some(_held) = ir.lock(&key_lock_name(&key_hex), LockKind::SharedNow)
-                && let Some(kd) = ir.subdir(&key_hex, false)
-            {
-                let first = !self.touched.swap(true, Ordering::Relaxed);
-                super::prune::touch_last_used(&kd, first, now);
-            }
-            super::prune::maybe_prune(&ir, key, now);
+            let first = !self.touched.swap(true, Ordering::Relaxed);
+            super::prune::touch_last_used(&kd, first, now);
         }
-        #[cfg(not(unix))]
-        let _ = key;
+        super::prune::maybe_prune(&ir, key, now);
     }
 }
 
@@ -1250,15 +1245,33 @@ mod tests {
     #[test]
     fn the_switch_accepts_only_on_and_off() {
         use std::ffi::OsStr;
-        let s = |v: Option<&str>| super::super::switch(v.map(OsStr::new));
-        assert_eq!(s(None), (true, None));
-        assert_eq!(s(Some("")), (true, None));
-        assert_eq!(s(Some("ON")), (true, None));
-        assert_eq!(s(Some("Off")), (false, None));
-        for typo in ["of", "0", "false", "yes"] {
-            let (on, warn) = s(Some(typo));
-            assert!(!on && warn.is_some(), "{typo}");
+        for default_on in [true, false] {
+            let s = |v: Option<&str>| super::super::switch_with(v.map(OsStr::new), default_on);
+            assert_eq!(s(None), (default_on, None));
+            assert_eq!(s(Some("")), (default_on, None));
+            assert_eq!(s(Some("ON")), (true, None));
+            assert_eq!(s(Some("Off")), (false, None));
+            for typo in ["of", "0", "false", "yes"] {
+                let (on, warn) = s(Some(typo));
+                assert!(!on && warn.is_some(), "{typo}");
+            }
         }
+    }
+
+    /// TLS-117: since the owner's acceptance (2026-11-25) the cache is on by default on every
+    /// system, Windows included, and `off` still turns it off. Discrimination (2026-11-25, on
+    /// Linux, where the old `!cfg!(windows)` was already true): `DEFAULT_ON = false`: "unset"
+    /// fails; restored, passes.
+    #[test]
+    fn the_default_is_on_everywhere_and_off_still_works() {
+        assert!(super::super::switch(None).0, "unset");
+        let empty = std::ffi::OsStr::new("");
+        assert!(super::super::switch(Some(empty)).0, "empty");
+        let off = std::ffi::OsStr::new("off");
+        assert!(
+            !super::super::switch(Some(off)).0,
+            "an explicit off, everywhere"
+        );
     }
 
     /// The child half of [`report_end_does_not_abort_an_unwind`].

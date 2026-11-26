@@ -1,5 +1,7 @@
+import os
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -15,8 +17,117 @@ def test_basic_queries(repo_pair):
     a = g.rev("HEAD")
     b = commit_file(clone, "src/x.rs", "fn x(){}\n", "add x")
     assert g.changed_files(a, b) == ["src/x.rs"]
-    assert "+fn x(){}" in g.diff(a, b)
+    assert "+fn x(){}" in g.file_diffs(a, b, ["src/x.rs"])["src/x.rs"]
     assert g.is_ancestor(a, b) and not g.is_ancestor(b, a)
+
+
+def test_file_diffs_gives_each_file_its_own_whole_patch(repo_pair):
+    """TLS-114 (Fable r2): each name is one file, never a pattern
+    (`src/[a].rs` would also select `src/a.rs`, `:!x.rs` would exclude); it is
+    read from the top from any cwd (`:(literal)` alone is cwd-relative, so
+    from a subfolder every patch was empty and nothing was reported); a NUL
+    byte still shows the added lines; and an empty patch raises.
+
+    DISCRIMINATION (2026-11-23): `literal` dropped fails at `src/[a].rs`
+    (its patch holds `src/a.rs`'s line); `top,` dropped fails from the
+    `src/sub` cwd (raises: no patch for `:!x.rs`); `--text` dropped fails at
+    `src/nul.rs` ("Binary files ... differ"); the empty-patch raise removed
+    fails the last `pytest.raises` (DID NOT RAISE); restored, passes."""
+    _, clone = repo_pair
+    a = Git(clone).rev("HEAD")
+    names = {"src/a.rs": "fn plain(){}\n", "src/[a].rs": "fn bracket(){}\n",
+             "src/nul.rs": "fn n(){}\0\n#[ignore]\n"}
+    if sys.platform != "win32":
+        names[":!x.rs"] = "fn colon(){}\n"
+    for n, text in names.items():
+        (clone / n).parent.mkdir(parents=True, exist_ok=True)
+        (clone / n).write_text(text)
+        # `git add` reads its arguments as pathspecs too.
+        assert _raw(clone, "add", "--", f":(literal){n}").returncode == 0
+    assert _raw(clone, "commit", "-q", "-m", "odd names").returncode == 0
+    b = Git(clone).rev("HEAD")
+    (clone / "src" / "sub").mkdir()
+    for g in (Git(clone), Git(clone / "src" / "sub")):
+        files = g.changed_files(a, b)
+        d = g.file_diffs(a, b, files)
+        assert "fn bracket" in d["src/[a].rs"] and "fn plain" not in d["src/[a].rs"]
+        assert sorted(files) == sorted(names)
+        if ":!x.rs" in names:
+            assert "fn colon" in d[":!x.rs"]
+        assert "+#[ignore]" in d["src/nul.rs"]
+        with pytest.raises(GitError, match="no patch"):
+            g.file_diffs(a, b, ["README.md"])
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows forbids CR and LF in names")
+def test_changed_and_dirty_paths_keep_cr_and_lf(repo_pair):
+    """TLS-114: a name ending in CR, or holding an LF, is listed exactly: not
+    quoted (`"scripts/x\\r"` escaped the protected-path prefix check), not cut
+    at the CR, not turned into LF by text mode.
+
+    DISCRIMINATION (2026-11-23): `changed_files` back on `out()` +
+    `splitlines()` fails the first assert (the names come back quoted);
+    `paths` decoding with text=True fails it too (`scripts/x\\n`: both lists
+    read through `paths`); restored, passes."""
+    _, clone = repo_pair
+    g = Git(clone)
+    a = g.rev("HEAD")
+    commit_file(clone, "scripts/x\r", "x\n", "cr")
+    b = commit_file(clone, "a\nb.txt", "y\n", "lf")
+    assert g.changed_files(a, b) == ["a\nb.txt", "scripts/x\r"]
+    (clone / "scripts/x\r").write_text("changed\n")
+    assert g.tree_state().semantic_paths == ["scripts/x\r"]
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"),
+                    reason="Windows forbids `\"`; macOS refuses a non-UTF-8 name")
+def test_a_quote_and_a_non_utf8_byte_round_trip(repo_pair):
+    """TLS-114 (sol r1): a name holding a `"` and one holding the byte 0xFF
+    (not UTF-8; `é` is) are listed exactly and each gets its own patch, so
+    the `#[ignore]` in each is charged to it.
+
+    DISCRIMINATION (2026-11-25): `paths` decoding as UTF-8 with `replace`
+    fails (`src/\\ufffd.rs`, not the file's name); `changed_files` without
+    `-z` fails (both names come back quoted); restored, passes."""
+    from agentflow.protect import forbidden_additions
+
+    _, clone = repo_pair
+    g = Git(clone)
+    a = g.rev("HEAD")
+    quote, ff = 'src/q"x.rs', os.fsdecode(b"src/\xff.rs")
+    commit_file(clone, quote, "#[ignore]\n", "quote")
+    b = commit_file(clone, ff, "#[ignore]\n", "ff")
+    files = g.changed_files(a, b)
+    assert files == [quote, ff]
+    got = sorted(f for f, _, _ in forbidden_additions(g.file_diffs(a, b, files)))
+    assert got == [quote, ff]
+
+
+def test_check_diff_from_a_subfolder_ignores_diff_relative(repo_pair):
+    """TLS-114 (sol r1): with `diff.relative=true`, a check run from `src/sub`
+    still lists every changed file from the top and reads each one's patch,
+    so the `#[ignore]` added outside the cwd is reported.
+
+    DISCRIMINATION (2026-11-25): `--no-relative` dropped from
+    `changed_files` fails (only `in.rs`, relative to `src/sub`, is listed);
+    dropped from `file_diffs` only, fails (raises: no patch for
+    `src/other.rs`); restored, passes."""
+    from agentflow.protect import check_diff
+
+    _, clone = repo_pair
+    a = Git(clone).rev("HEAD")
+    (clone / "src" / "sub").mkdir(parents=True)
+    (clone / "src/other.rs").write_text("#[ignore]\nfn t(){}\n")
+    (clone / "src/sub/in.rs").write_text("fn i(){}\n")
+    assert _raw(clone, "add", "src").returncode == 0
+    assert _raw(clone, "commit", "-q", "-m", "two").returncode == 0
+    assert _raw(clone, "config", "diff.relative", "true").returncode == 0
+    g = Git(clone / "src" / "sub")
+    files = g.changed_files(a, "HEAD")
+    assert files == ["src/other.rs", "src/sub/in.rs"]
+    reasons = check_diff(files, g.file_diffs(a, "HEAD", files), issue=8)
+    assert [r for r in reasons if r.startswith("forbidden:")] == \
+        ["forbidden:ignore-attribute:src/other.rs:#[ignore]"]
 
 
 def test_tracked_dirty_ignores_untracked_but_sees_content_changed_tracked_files(repo_pair):

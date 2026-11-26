@@ -474,6 +474,33 @@ fn an_ignored_non_utf8_folder_is_not_its_lossy_sibling() {
     assert_eq!(names, ["Real Tests"]);
 }
 
+/// TLS-114 (sol r1): a sibling folder named like pathspec magic
+/// (`:(unknown)`) does not stop git's ignore check, so the ignored `Out/`
+/// beside it is still skipped.
+///
+/// DISCRIMINATION (2026-11-25): `git_ignored` without the leading `./` fails
+/// (git rejects the batch, "Out Tests" is found); restored, passes. The
+/// ignored folder is the app itself: a first version put it at `build/Copy`
+/// and stayed green under the break, because `build`'s own batch ignored
+/// `Copy` one level down. Unix only: Windows forbids `:` in a name.
+#[cfg(unix)]
+#[test]
+fn a_folder_named_like_pathspec_magic_does_not_stop_the_ignore_check() {
+    let t = git_repo();
+    let r = t.path();
+    std::fs::write(r.join(".gitignore"), "Out/\n").unwrap();
+    std::fs::create_dir_all(r.join(":(unknown)")).unwrap();
+    app(&r.join("App"), PROD, "Prod", &[]);
+    test_app(
+        &r.join("Out"),
+        "33333333-3333-3333-3333-333333333333",
+        "Out Tests",
+    );
+    let s = discover(&r.join("App"), &ScopeRequest::default());
+    assert!(s.apps.is_empty(), "{:?}", s.apps);
+    assert_eq!(s.ignored, 1, "Out");
+}
+
 /// TLS-57: the scan cache (a resident engine asking again) sees a rewrite
 /// that keeps a test file's length and mtime: its stamp's ctime moved, so
 /// the file is scanned again and the `[Test]` count follows the new text.
@@ -524,4 +551,87 @@ fn the_scan_cache_sees_a_rewrite_that_keeps_size_and_mtime() {
     );
     let again = discover(&ws, &ScopeRequest::default());
     assert_eq!(lines(&again), Some(0), "the rewrite is scanned");
+}
+
+/// `git <args>` in `dir` for a test's own repository, asserted to succeed.
+#[cfg(unix)]
+fn sh(dir: &Path, args: &[&str]) {
+    let ok = crate::git_env::scratch_git_command()
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .status()
+        .is_ok_and(|s| s.success());
+    assert!(ok, "git {args:?} failed");
+}
+
+/// TLS-114: the ignore files discovery reports (TLS-109's batch claim reads
+/// them) keep a path git prints exactly, CR and LF included: an absolute
+/// `core.excludesFile` ending in CR or LF with an LF inside, and a relative
+/// one joined to a git top level (`rev-parse --show-toplevel`) that ends in
+/// the same.
+///
+/// DISCRIMINATION (2026-11-23): `git_value` also popping trailing CRs (the
+/// old rule) for the `config` call only fails at "absolute" (`…/ig\nn`); for
+/// the `--show-toplevel` call only, at "relative" (`…/repo/myignore\r`);
+/// popping every trailing LF (not just one) fails at "relative" for
+/// `repo\n`; restored, passes.
+#[cfg(unix)]
+#[test]
+fn ignore_files_keep_a_git_path_ending_in_cr_or_lf() {
+    for end in ["\r", "\n"] {
+        let t = tempfile::tempdir().unwrap();
+        let r = t.path().join(format!("repo{end}"));
+        std::fs::create_dir(&r).unwrap();
+        sh(&r, &["init", "-q"]);
+        app(&r.join("App"), PROD, "Prod", &[]);
+        let abs = t.path().join(format!("ig\nn{end}"));
+        sh(&r, &["config", "core.excludesFile", abs.to_str().unwrap()]);
+        let s = discover(&r.join("App"), &ScopeRequest::default());
+        assert!(
+            s.ignore_files.contains(&abs),
+            "absolute: {:?}",
+            s.ignore_files
+        );
+
+        let name = format!("myignore{end}");
+        sh(&r, &["config", "core.excludesFile", &name]);
+        let s = discover(&r.join("App"), &ScopeRequest::default());
+        let rel = r.join(&name);
+        assert!(
+            s.ignore_files.contains(&rel),
+            "relative: {:?}",
+            s.ignore_files
+        );
+    }
+}
+
+/// TLS-114: a worktree's `info/exclude` sits in the repository's common git
+/// folder (`rev-parse --git-common-dir`), here a bare clone whose name ends
+/// in CR or LF; discovery names that file exactly.
+///
+/// DISCRIMINATION (2026-11-23): `git_value` also popping trailing CRs for
+/// the `--git-common-dir` call only fails (`…/b/info/exclude`); popping every
+/// trailing LF fails for `b\n`; restored, passes.
+#[cfg(unix)]
+#[test]
+fn a_common_git_dir_ending_in_cr_or_lf_is_read_exactly() {
+    for end in ["\r", "\n"] {
+        let t = tempfile::tempdir().unwrap();
+        let src = t.path().join("src");
+        std::fs::create_dir(&src).unwrap();
+        sh(&src, &["init", "-q"]);
+        sh(&src, &["commit", "-q", "--allow-empty", "-m", "A"]);
+        let bare = t.path().join(format!("b{end}"));
+        sh(
+            t.path(),
+            &["clone", "-q", "--bare", "src", bare.to_str().unwrap()],
+        );
+        let wt = t.path().join("wt");
+        sh(&bare, &["worktree", "add", "-q", wt.to_str().unwrap()]);
+        app(&wt.join("App"), PROD, "Prod", &[]);
+        let s = discover(&wt.join("App"), &ScopeRequest::default());
+        let exclude = bare.join("info").join("exclude");
+        assert!(s.ignore_files.contains(&exclude), "{:?}", s.ignore_files);
+    }
 }

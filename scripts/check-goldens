@@ -139,8 +139,13 @@ declared_dirs=(
 )
 
 if [[ "${1:-}" == "--verify-coverage" ]]; then
-    repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-    cd "$repo_root" || exit 1
+    # ⟨TLS-114⟩ No `$(...)` around the path: it strips every trailing LF, so a
+    # checkout named `repo` + LF changed into `repo`. `./` when run by a bare name.
+    # `CDPATH=`: a relative `cd scripts/..` searches an exported CDPATH first and
+    # could check another checkout.
+    self="${BASH_SOURCE[0]}"
+    [[ "$self" == */* ]] || self="./$self"
+    CDPATH= cd -- "${self%/*}/.." || exit 1
     on_disk=$(ls -d tests/*goldens*/ tests/goldens/ tests/l4-summary-baseline/                      tests/*-vectors/ 2>/dev/null | sed 's|/$||' | sort -u)
     declared=$(printf '%s
 ' "${declared_dirs[@]}" | sort -u)

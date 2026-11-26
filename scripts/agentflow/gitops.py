@@ -4,6 +4,7 @@ the tree is always left clean.
 """
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 from dataclasses import dataclass, field
@@ -102,6 +103,45 @@ class Git:
     def out(self, *args: str) -> str:
         return self._run(*args).stdout.strip()
 
+    def paths(self, *args: str) -> list[str]:
+        """The paths `git <args>` prints with `-z` (the caller passes it), each
+        exactly (TLS-114): bytes split at NUL, decoded as the file system
+        names them. Not `_run`: text mode turns a CR in a name into LF, and
+        without `-z` git quotes a name with a CR, LF or `"` in it. Reads only:
+        no mutex."""
+        return [os.fsdecode(p) for p in self._bytes(*args).split(b"\0") if p]
+
+    def _bytes(self, *args: str) -> bytes:
+        """`git <args>`'s stdout as bytes (a read: no mutex)."""
+        r = self.run(["git", "-C", self.cwd, *args], capture_output=True)
+        if r.returncode != 0:
+            raise GitError(f"git {' '.join(args)}: {os.fsdecode(r.stderr).strip()}")
+        return r.stdout
+
+    def file_diffs(self, a: str, b: str, files: list[str]) -> dict[str, str]:
+        """Each of `files`' own patch `a..b`, by path (TLS-114): the path is
+        the one asked for, never parsed from a header git may quote. Read
+        as bytes and decoded with `replace` (the checks look for ASCII), so a
+        CR stays inside its line. `:(top,literal)`: a name is never a pattern
+        and is read from the top, as `changed_files` gives it, whatever the
+        cwd. The `exclude` of `<f>/`: a literal pathspec also selects what is
+        under a directory of that name, so a file replaced by a directory
+        (`docs/old.rs` -> `docs/old.rs/notes.md`) took the new file's lines
+        into the deleted file's patch. `--no-relative`: `diff.relative=true`
+        would limit the patch to the cwd. `--text`: a NUL byte does not turn
+        the additions into "Binary files differ". A changed file never has an
+        empty patch, so an empty one raises rather than read as "nothing
+        added"."""
+        out = {}
+        for f in files:
+            p = self._bytes("diff", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames",
+                            "--no-relative", "--text", f"{a}..{b}", "--", f":(top,literal){f}",
+                            f":(top,literal,exclude){f}/")
+            if not p:
+                raise GitError(f"git diff {a}..{b}: no patch for changed file {f!r}")
+            out[f] = p.decode("utf-8", "replace")
+        return out
+
     def ok(self, *args: str) -> bool:
         return self._run(*args, check=False).returncode == 0
 
@@ -150,8 +190,7 @@ class Git:
         """
         if refresh:
             self._run("update-index", "-q", "--refresh", check=False)
-        raw = self._run("diff", "-z", "--name-only", self._IGNORE_SUB, "HEAD", "--").stdout
-        semantic = [p for p in raw.split("\0") if p]
+        semantic = self.paths("diff", "-z", "--name-only", self._IGNORE_SUB, "HEAD", "--")
         status = [l for l in self._run("status", "--porcelain", "--untracked-files=no",
                                        self._IGNORE_SUB).stdout.splitlines() if l]
         return TreeState(semantic_paths=semantic, status_lines=status)
@@ -179,11 +218,11 @@ class Git:
         # --no-renames: with rename detection a `git mv src/x.rs docs/x.md`
         # lists only the NEW path, so a moved code file read as prose to the
         # freeze check, the protected-path check and the P3 prose check.
-        s = self.out("diff", "--name-only", "--no-renames", f"{a}..{b}")
-        return [l for l in s.splitlines() if l]
-
-    def diff(self, a: str, b: str) -> str:
-        return self._run("diff", f"{a}..{b}").stdout
+        # -z (TLS-114): a quoted `"scripts/x\r"` escaped the protected-path
+        # prefix check, and splitlines() cut names at CR and other breaks.
+        # --no-relative: `diff.relative=true` from a subfolder listed only that
+        # folder's files, relative to it, so check-diff scanned nothing.
+        return self.paths("diff", "-z", "--name-only", "--no-renames", "--no-relative", f"{a}..{b}")
 
     def worktree_add(self, path: Path, branch: str, base: str) -> None:
         self._run("worktree", "add", "-q", str(path), "-b", branch, base)
@@ -216,7 +255,7 @@ class Git:
         r = self._run("rebase", onto, check=False)
         if r.returncode == 0:
             return RebaseResult(True)
-        conflicts = [l for l in self.out("diff", "--name-only", "--diff-filter=U").splitlines() if l]
+        conflicts = self.paths("diff", "-z", "--name-only", "--diff-filter=U")
         self._run("rebase", "--abort", check=False)
         return RebaseResult(False, conflicts)
 

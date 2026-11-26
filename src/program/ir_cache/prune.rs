@@ -235,10 +235,12 @@ fn prune_locked_with(
     remove_stale_temps(ir_dir, now);
 }
 
-#[cfg(all(test, unix))]
+/// TLS-117 (sol r1): these run on Windows too (through the Windows `CacheDir`: the private
+/// walk, `write`'s temp-then-rename, `unlink`, `remove_dir`), except the two size-rule tests
+/// (their files are sparse only on Unix) and the symlink part of `foreign_names_left_alone`.
+#[cfg(test)]
 mod tests {
     use super::*;
-    use std::os::unix::fs::DirBuilderExt;
     use std::path::Path;
 
     const NOW: u64 = 2_000_000_000;
@@ -247,12 +249,19 @@ mod tests {
         SystemTime::UNIX_EPOCH + Duration::from_secs(secs)
     }
 
+    #[cfg(unix)]
     fn mkdir(p: &Path) {
+        use std::os::unix::fs::DirBuilderExt;
         std::fs::DirBuilder::new()
             .recursive(true)
             .mode(0o700)
             .create(p)
             .unwrap();
+    }
+
+    #[cfg(windows)]
+    fn mkdir(p: &Path) {
+        crate::snapshot::cache::create_cache_dir(p).unwrap();
     }
 
     fn key(n: u8) -> IrKey {
@@ -280,6 +289,25 @@ mod tests {
         CacheDir::open(p).unwrap()
     }
 
+    /// A prune at `now` that is expected to act, run until `done()` holds (up to 2 s). TLS-117
+    /// (Fable r1): a child another test of this process is spawning shares a lock file's open
+    /// file description from `fork` to `exec`, so a prune's `Now` lock can be refused for that
+    /// moment and the prune skips (benign in production: the next prune acts). A retry removes
+    /// the `last-prune` the skipped try may have published. Measured 2026-11-23: 50 runs of
+    /// `ir_cache snapshot::cache` at 22 threads beside a test spawning `true` in a loop: 50/50
+    /// pass; with this retry and `CacheDir::lock_soon`'s disabled, 25 of 50 runs failed.
+    fn prune_until(ir: &Path, own: &IrKey, now: SystemTime, done: impl Fn() -> bool) {
+        let start = std::time::Instant::now();
+        loop {
+            maybe_prune(&open(ir), own, now);
+            if done() || start.elapsed() > Duration::from_secs(2) {
+                return;
+            }
+            let _ = std::fs::remove_file(ir.join(LAST_PRUNE));
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
     #[test]
     fn prune_runs_at_most_hourly() {
         let (_t, ir) = ir_dir();
@@ -290,8 +318,9 @@ mod tests {
             ir.join(key(1).hex()).exists(),
             "pruned 10 minutes ago: not now"
         );
-        maybe_prune(&open(&ir), &key(9), at(NOW + 3100));
-        assert!(!ir.join(key(1).hex()).exists(), "over an hour: pruned");
+        let gone = || !ir.join(key(1).hex()).exists();
+        prune_until(&ir, &key(9), at(NOW + 3100), gone);
+        assert!(gone(), "over an hour: pruned");
     }
 
     /// A second caller after the first published `last-prune` does nothing: the stamp is
@@ -321,12 +350,13 @@ mod tests {
         let (_t, ir) = ir_dir();
         key_folder(&ir, &key(1), Some(NOW - 8 * 86400), 10);
         key_folder(&ir, &key(2), Some(NOW - 86400), 10);
-        maybe_prune(&open(&ir), &key(9), at(NOW));
+        prune_until(&ir, &key(9), at(NOW), || !ir.join(key(1).hex()).exists());
         assert!(!ir.join(key(1).hex()).exists());
         assert!(ir.join(key(2).hex()).exists());
     }
 
     /// Over the soft target the oldest folders go first, never this process's own.
+    #[cfg(unix)]
     #[test]
     fn own_key_never_removed_by_size() {
         let (_t, ir) = ir_dir();
@@ -342,7 +372,7 @@ mod tests {
         big(&key(1), NOW - 3 * 86400); // own, oldest
         big(&key(2), NOW - 2 * 86400);
         big(&key(3), NOW - 86400);
-        maybe_prune(&open(&ir), &key(1), at(NOW));
+        prune_until(&ir, &key(1), at(NOW), || !ir.join(key(2).hex()).exists());
         assert!(ir.join(key(1).hex()).exists(), "own key kept");
         assert!(!ir.join(key(2).hex()).exists(), "the oldest other removed");
         assert!(ir.join(key(3).hex()).exists(), "under the target again");
@@ -354,12 +384,12 @@ mod tests {
         key_folder(&ir, &key(1), Some(NOW - 8 * 86400), 10);
         let kd_path = ir.join(key(1).hex());
         let shared = open(&ir)
-            .lock(&key_lock_name(&key(1).hex()), LockKind::SharedNow)
+            .lock_soon(&key_lock_name(&key(1).hex()), LockKind::SharedNow)
             .unwrap();
         maybe_prune(&open(&ir), &key(9), at(NOW));
         assert!(kd_path.exists(), "a publisher holds it");
         drop(shared);
-        maybe_prune(&open(&ir), &key(9), at(NOW + 2 * 3600));
+        prune_until(&ir, &key(9), at(NOW + 2 * 3600), || !kd_path.exists());
         assert!(!kd_path.exists());
         assert!(
             ir.join(key_lock_name(&key(1).hex())).exists(),
@@ -376,19 +406,32 @@ mod tests {
         let kd_path = ir.join(key(1).hex());
         let real_now = SystemTime::now();
         let shared = open(&ir)
-            .lock(&key_lock_name(&key(1).hex()), LockKind::SharedNow)
+            .lock_soon(&key_lock_name(&key(1).hex()), LockKind::SharedNow)
             .unwrap();
         maybe_prune(&open(&ir), &key(9), real_now + KEY_MAX_AGE + 2 * HOUR);
         assert!(kd_path.exists(), "the paused publisher's folder stays");
         drop(shared);
-        maybe_prune(&open(&ir), &key(9), real_now + KEY_MAX_AGE + 4 * HOUR);
+        prune_until(&ir, &key(9), real_now + KEY_MAX_AGE + 4 * HOUR, || {
+            !kd_path.exists()
+        });
         assert!(!kd_path.exists(), "released: aged by its mtime, removed");
     }
 
     /// Over the soft target, a folder used again between the size pass's first look and its
-    /// lock is kept (its `last-used` is read again under the lock).
+    /// lock is kept (its `last-used` is read again under the lock). A try whose locks a
+    /// spawning child refused (see [`prune_until`]) is run again on a fresh tree, up to 2 s.
+    #[cfg(unix)]
     #[test]
     fn size_rule_rereads_last_used_under_the_lock() {
+        let start = std::time::Instant::now();
+        while !size_rule_try() {
+            assert!(start.elapsed() < Duration::from_secs(2), "key 2 never went");
+        }
+    }
+
+    /// One try of [`size_rule_rereads_last_used_under_the_lock`]: whether key 2 went.
+    #[cfg(unix)]
+    fn size_rule_try() -> bool {
         let (_t, ir) = ir_dir();
         let big = |k: &IrKey, used: u64| {
             key_folder(&ir, k, Some(used), 0);
@@ -408,7 +451,7 @@ mod tests {
         });
         assert!(ir.join(key(1).hex()).exists(), "used again: kept");
         // Key 2 goes: once key 1 is skipped, the pass takes the next oldest.
-        assert!(!ir.join(key(2).hex()).exists());
+        !ir.join(key(2).hex()).exists()
     }
 
     /// sol r1: a damaged stamp (a number past what `SystemTime` holds) reads as absent.
@@ -428,7 +471,9 @@ mod tests {
         let real_now = SystemTime::now();
         maybe_prune(&open(&ir), &key(9), real_now);
         assert!(ir.join(key(1).hex()).exists(), "young by mtime");
-        maybe_prune(&open(&ir), &key(9), real_now + KEY_MAX_AGE + 2 * HOUR);
+        prune_until(&ir, &key(9), real_now + KEY_MAX_AGE + 2 * HOUR, || {
+            !ir.join(key(1).hex()).exists()
+        });
         assert!(!ir.join(key(1).hex()).exists(), "old by mtime");
     }
 
@@ -437,11 +482,14 @@ mod tests {
         let (_t, ir) = ir_dir();
         std::fs::write(ir.join("notes.txt"), b"mine").unwrap();
         let elsewhere = tempfile::tempdir().unwrap();
+        #[cfg(unix)]
         std::os::unix::fs::symlink(elsewhere.path(), ir.join(key(4).hex())).unwrap();
         std::fs::write(elsewhere.path().join("keep.bin"), b"x").unwrap();
         key_folder(&ir, &key(1), Some(NOW - 8 * 86400), 10);
         std::fs::write(ir.join(key(1).hex()).join("foreign.txt"), b"x").unwrap();
-        maybe_prune(&open(&ir), &key(9), at(NOW));
+        prune_until(&ir, &key(9), at(NOW), || {
+            !ir.join(key(1).hex()).join(LAST_USED).exists()
+        });
         assert!(ir.join("notes.txt").exists());
         assert!(
             elsewhere.path().join("keep.bin").exists(),
@@ -465,10 +513,29 @@ mod tests {
         let kd = ir.join(key(1).hex());
         let tmp = kd.join(format!("{}-123-0-456.tmp", "b".repeat(64)));
         std::fs::write(&tmp, b"half").unwrap();
-        let real_now = SystemTime::now();
-        maybe_prune(&open(&ir), &key(9), real_now);
+        // sol r1: the temp file's mtime pinned, so the ages below do not ride on wall time.
+        let born = SystemTime::now() - Duration::from_secs(60);
+        std::fs::File::options()
+            .write(true)
+            .open(&tmp)
+            .unwrap()
+            .set_modified(born)
+            .unwrap();
+        let first = born + HOUR;
+        prune_until(&ir, &key(9), first, || {
+            read_stamp(&open(&ir), LAST_PRUNE).is_some()
+        });
         assert!(tmp.exists(), "young");
-        maybe_prune(&open(&ir), &key(9), real_now + DAY + 2 * HOUR);
+        let later = born + DAY + 2 * HOUR;
+        prune_until(&ir, &key(9), later, || !tmp.exists());
+        assert!(
+            read_stamp(&open(&ir), LAST_PRUNE).is_some_and(|t| !older(
+                t,
+                later,
+                Duration::from_secs(1)
+            )),
+            "the second prune ran (its `last-prune` is `later`, not `first`)"
+        );
         assert!(!tmp.exists(), "a day old");
     }
 
@@ -488,6 +555,53 @@ mod tests {
             Some(at(NOW + 3600 + DAY.as_secs() + 1)),
             "a day old: refreshed"
         );
+    }
+
+    /// TLS-117 (sol r1): the temp names `CacheDir::write` makes are the shape the prune
+    /// removes, so a dead writer's leftovers on either platform are pruned. Discrimination
+    /// (2026-11-23): `temp_name`'s last `-` made `_`: this test and
+    /// `prune_removes_what_the_writer_wrote` ("the stale temp went") fail; restored, pass.
+    #[test]
+    fn the_writers_temp_names_are_prunable() {
+        use crate::snapshot::cache::temp_name;
+        assert!(is_temp(&temp_name(&format!("{}.bin", "c".repeat(64)))));
+        assert!(is_temp(&temp_name(LAST_USED)));
+        assert!(is_temp(&temp_name(LAST_PRUNE)));
+    }
+
+    /// TLS-117 (sol r1): a key folder whose files went through `CacheDir::write` (on Windows
+    /// the temp-then-rename writer) is removed by the age rule through `unlink` and
+    /// `remove_dir`, and a stale temp of the writer's own shape goes with the temp rule.
+    #[test]
+    fn prune_removes_what_the_writer_wrote() {
+        let (_t, ir) = ir_dir();
+        let d = open(&ir);
+        let kd = d.subdir(&key(1).hex(), true).unwrap();
+        let entry = format!("{}.bin", "d".repeat(64));
+        kd.write(&entry, false, |o| Ok(std::io::Write::write_all(o, b"x")?))
+            .unwrap();
+        // real time throughout: the young folder below is aged by its real mtime
+        let used = at(SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs())
+            - 8 * DAY;
+        write_stamp(&kd, LAST_USED, used);
+        assert_eq!(read_stamp(&kd, LAST_USED), Some(used));
+        let live = d.subdir(&key(2).hex(), true).unwrap();
+        let tmp = crate::snapshot::cache::temp_name(&entry);
+        std::fs::write(live.path().join(&tmp), b"half").unwrap();
+        drop((kd, live));
+        let kd_path = ir.join(key(1).hex());
+        let tmp_path = ir.join(key(2).hex()).join(&tmp);
+        // the key-2 folder is unmarked and young by mtime; its temp is a day old at `NOW`+2d
+        let now = SystemTime::now() + 2 * DAY;
+        prune_until(&ir, &key(9), now, || {
+            !kd_path.exists() && !tmp_path.exists()
+        });
+        assert!(!kd_path.exists(), "the old folder went");
+        assert!(!tmp_path.exists(), "the stale temp went");
+        assert!(ir.join(key(2).hex()).exists(), "the young folder stays");
     }
 
     #[test]

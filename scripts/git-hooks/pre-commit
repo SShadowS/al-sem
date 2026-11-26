@@ -58,7 +58,11 @@
 # you own the consequence.
 set -uo pipefail
 
-repo_root="$(git rev-parse --show-toplevel)"
+# ⟨TLS-114⟩ Read exactly: `$(...)` strips EVERY trailing LF, so a checkout named
+# `repo` + LF looked for `repo/scripts`. The `x` keeps them; then drop it and the
+# one LF git adds. A failed rev-parse leaves `x`, which finds no `scripts/`.
+repo_root="$(git rev-parse --show-toplevel; printf x)"
+repo_root="${repo_root%?x}"
 
 # ── Nothing this hook starts may see the committer's repository ──────────────
 # ⟨2026-11-05⟩ Git hands a hook `GIT_DIR`, `GIT_INDEX_FILE` and `GIT_PREFIX`
@@ -123,8 +127,17 @@ run_clean() {
 # instead of on the real cause. Check for it explicitly first so the diagnosis
 # is honest; still fails CLOSED either way (a commit this hook cannot verify is
 # not a commit it lets through).
+#
+# ⟨TLS-114⟩ The staged names are read with `-z` and matched with `grep -z`:
+# without it git quotes a name holding a non-ASCII byte, a CR, an LF or a `"`
+# (`"src/\303\251.rs"`), which matched neither `\.rs$` nor `^src/`, so fmt and
+# the goldens were skipped. `>/dev/null`, not `-q`: grep then reads all of
+# git's output, so git never dies of SIGPIPE, which `pipefail` would turn into
+# a "no match". `--no-renames`: with rename detection an unchanged `src/old.rs`
+# moved to `notes/old.txt` listed only the new name, so both checks were skipped.
+staged_names() { git diff --cached --name-only -z --no-renames; }
 fmt_rc=0
-if git diff --cached --name-only | grep -qE '\.rs$'; then
+if staged_names | grep -zE '\.rs$' >/dev/null; then
     if [ ! -x "$repo_root/scripts/ci-steps" ]; then
         echo "pre-commit: $repo_root/scripts/ci-steps not found (or not executable) —" >&2
         echo "  this worktree's branch may predate it. Rebase onto a branch that has it," >&2
@@ -141,7 +154,7 @@ fi
 # Paths whose change can move a golden family.
 golden_paths='^(src/|crates/al-syntax/src/|tests/r0-corpus/|tests/fixtures/|tests/[a-z0-9._-]*goldens/|tests/l4-summary-baseline/|tests/[a-z0-9._-]*-vectors/)'
 
-if ! git diff --cached --name-only | grep -qE "$golden_paths"; then
+if ! staged_names | grep -zE "$golden_paths" >/dev/null; then
     exit "$fmt_rc"
 fi
 

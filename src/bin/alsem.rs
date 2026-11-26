@@ -1582,7 +1582,8 @@ fn main() -> ExitCode {
     }
     let _run = al_sem::engine::perf_trace::run("alsem");
     // ENG-110: the dependency IR cache, for the whole body (its drop writes the report's end
-    // line); `engine-host` returns through here too. A batch run never uses it.
+    // line); `engine-host` returns through here too, and so does a batch run, which uses it in
+    // the parent and every worker (TLS-116). On Windows the image key is made here (TLS-117).
     let _ir = al_sem::program::ir_cache::install_from_env();
     // Warnings go to stderr (a dropped dependency was once only a `warn!` that
     // nothing printed); `RUST_LOG` overrides the level. stdout is unchanged.
@@ -4132,7 +4133,23 @@ fn plan_events_chains(c: EventsChainsCli) -> Planned {
 // ── cache prune command ─────────────────────────────────────────────────────
 
 fn run_cache_prune_cmd(c: CachePruneCli) -> ExitCode {
-    let result = prune_cache(c.dep_cache_dir.as_deref(), c.dry_run);
+    // TLS-120: prune deletes files it does not recognise, so it never runs in a cache folder
+    // of the engine (a mapped text entry would be unlinked under its readers). The folder is
+    // resolved once (the override, else the default), and that same folder is checked and
+    // pruned (sol r1: a default `~/.al-sem/cache` that links to, or is, a cache folder).
+    let dir = al_sem::engine::gate::cache_prune::resolve_cache_dir(c.dep_cache_dir.as_deref());
+    let why = match al_sem::engine::batch::cache_guard::refuses_dir(std::path::Path::new(&dir)) {
+        Ok(None) => None,
+        Ok(Some(why)) => Some(why.to_string()),
+        Err(e) => Some(e.to_string()),
+    };
+    if let Some(why) = why {
+        let _ = al_sem::engine::batch::output::write_stderr(
+            format!("al-sem: cache prune: refused: {dir}: {why} (TLS-120)\n").as_bytes(),
+        );
+        return ExitCode::from(1);
+    }
+    let result = prune_cache(Some(&dir), c.dry_run);
     let report = format_prune_report(&result, c.dry_run);
     match write_stdout(report, 1) {
         Ok(()) => ExitCode::SUCCESS,

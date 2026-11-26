@@ -1113,6 +1113,45 @@ fn a_changed_dependency_declaration_is_named() {
     assert!(changed[0].as_str().unwrap().starts_with("added Dep"));
 }
 
+/// TLS-114 (sol r2): untracked files whose names hold an LF and a TAB are
+/// read under their own names: each one's new routine is a root, and the
+/// accounting names each file exactly. The synthetic diff header quotes such
+/// a name the way git does; written raw, an LF split the header and a TAB
+/// ended the name, so the lines went to another path. Linux: macOS and
+/// Windows refuse such names or the tools around them.
+///
+/// DISCRIMINATION (2026-11-25): `new_file_section` writing the raw name
+/// (`format!("a/{}", lossy)`) instead of `quoted_path` fails (no root
+/// `LfProc`); restored, passes.
+#[cfg(target_os = "linux")]
+#[test]
+fn untracked_names_with_lf_and_tab_resolve_to_their_routines() {
+    let r = repo(BASE_POST);
+    r.write(
+        "src/a\nb.Codeunit.al",
+        "codeunit 50811 \"FX Lf\"\n{\n    procedure LfProc()\n    begin\n        Message('lf');\n    end;\n}\n",
+    );
+    r.write(
+        "src/c\td.Codeunit.al",
+        "codeunit 50812 \"FX Tab\"\n{\n    procedure TabProc()\n    begin\n        Message('tab');\n    end;\n}\n",
+    );
+    let v = impact(&r, &[]);
+    assert_eq!(
+        v["comparison"]["layers"]["untracked"],
+        serde_json::json!(["src/a\nb.Codeunit.al", "src/c\td.Codeunit.al"])
+    );
+    root(&v, "LfProc");
+    root(&v, "TabProc");
+    let files: Vec<&str> = v["input"]["accounting"]["files"]
+        .as_array()
+        .unwrap_or_else(|| panic!("no accounting: {v:#}"))
+        .iter()
+        .map(|f| f["path"].as_str().unwrap())
+        .collect();
+    assert!(files.contains(&"src/a\nb.Codeunit.al"), "{files:?}");
+    assert!(files.contains(&"src/c\td.Codeunit.al"), "{files:?}");
+}
+
 /// B2's CDO acceptance (`scripts/cdo-gate`, via `output_cdo`): `--base
 /// bc3ccb18~5` on the pinned baseline (git is only read; the base copy and
 /// the cache go to a temporary folder). Hand-checked against both commits'

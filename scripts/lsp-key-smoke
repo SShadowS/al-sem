@@ -1,0 +1,109 @@
+#!/usr/bin/env python3
+"""lsp-key-smoke: drive the LSP server through one real request (TLS-117).
+
+    lsp-key-smoke <al-call-hierarchy executable> <workspace> [server argument...]
+
+The server arguments follow the executable (the release workflows pass `--no-telemetry`).
+
+Starts the server on stdio with <workspace> as its root, sends `initialize`, `initialized` and
+one `textDocument/prepareCallHierarchy` on the first `procedure` in the workspace's first `.al`
+file (the server builds a root only at the first request routed to it, so a `didOpen` alone
+writes no IR cache report), then `shutdown` and `exit`, and waits for the process to end. Run it
+with ALSEM_IR_CACHE=on and ALSEM_IR_CACHE_REPORT set, then judge the report with
+`ir-cache-report-check --require-key`: that is the LSP's runtime key check in the release
+workflows (sol r-final: the signed artifacts' LSP makes its key).
+
+Exit 0 when every response arrived and the server exited with code 0; 1 otherwise. A request
+the server sends to the client (a registration, a configuration ask) is answered with null.
+"""
+
+import json
+import pathlib
+import queue
+import subprocess
+import sys
+import threading
+
+TIMEOUT_S = 180
+
+
+def send(proc, msg):
+    body = json.dumps(msg).encode()
+    proc.stdin.write(b"Content-Length: %d\r\n\r\n" % len(body) + body)
+    proc.stdin.flush()
+
+
+def reader(stream, out):
+    """Put every framed message read from `stream` on `out`; None at end of stream."""
+    while True:
+        length = None
+        while True:
+            line = stream.readline()
+            if not line:
+                out.put(None)
+                return
+            line = line.strip()
+            if not line:
+                break
+            if line.lower().startswith(b"content-length:"):
+                length = int(line.split(b":", 1)[1])
+        if length is None:
+            out.put(None)
+            return
+        out.put(json.loads(stream.read(length)))
+
+
+def wait_for(proc, msgs, want_id):
+    """The response to request `want_id`, answering the server's own requests meanwhile."""
+    while True:
+        try:
+            m = msgs.get(timeout=TIMEOUT_S)
+        except queue.Empty:
+            raise SystemExit(f"lsp-key-smoke: no response to request {want_id} in {TIMEOUT_S} s")
+        if m is None:
+            raise SystemExit(f"lsp-key-smoke: the server closed stdout before response {want_id}")
+        if "method" in m and "id" in m:
+            send(proc, {"jsonrpc": "2.0", "id": m["id"], "result": None})
+        elif m.get("id") == want_id and "method" not in m:
+            if "error" in m:
+                raise SystemExit(f"lsp-key-smoke: request {want_id} failed: {m['error']}")
+            return m.get("result")
+
+
+def main():
+    if len(sys.argv) < 3:
+        print(__doc__, file=sys.stderr)
+        return 2
+    exe, ws, extra = sys.argv[1], pathlib.Path(sys.argv[2]).resolve(), sys.argv[3:]
+    src = sorted(ws.rglob("*.al"))[0]
+    lines = src.read_text(encoding="utf-8").splitlines()
+    row = next(i for i, l in enumerate(lines) if "procedure " in l)
+    col = lines[row].index("procedure ") + len("procedure ")
+    proc = subprocess.Popen([exe, *extra], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+    msgs = queue.Queue()
+    threading.Thread(target=reader, args=(proc.stdout, msgs), daemon=True).start()
+    send(proc, {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+        "processId": None, "rootUri": ws.as_uri(), "capabilities": {},
+        "workspaceFolders": [{"uri": ws.as_uri(), "name": ws.name}]}})
+    wait_for(proc, msgs, 1)
+    send(proc, {"jsonrpc": "2.0", "method": "initialized", "params": {}})
+    send(proc, {"jsonrpc": "2.0", "id": 2, "method": "textDocument/prepareCallHierarchy",
+                "params": {"textDocument": {"uri": src.as_uri()},
+                           "position": {"line": row, "character": col}}})
+    items = wait_for(proc, msgs, 2)
+    print(f"lsp-key-smoke: prepareCallHierarchy at {src.name}:{row + 1}:{col + 1}: "
+          f"{len(items or [])} item(s)")
+    send(proc, {"jsonrpc": "2.0", "id": 3, "method": "shutdown", "params": None})
+    wait_for(proc, msgs, 3)
+    send(proc, {"jsonrpc": "2.0", "method": "exit", "params": None})
+    try:
+        code = proc.wait(timeout=60)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        raise SystemExit("lsp-key-smoke: the server did not exit after `exit`")
+    print(f"lsp-key-smoke: server exit code {code}")
+    return 0 if code == 0 else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

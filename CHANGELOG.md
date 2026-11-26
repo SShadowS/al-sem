@@ -443,6 +443,213 @@ suppressed all of them, and a new member of the group was invisible to it.
   `ids-parent-baseline` record
   was updated by hand for the moved d54/d55 fingerprints (see its module doc).
 
+### Fixed (TLS-120: the engine's caches are protected outside `alsem batch` too)
+
+- **What was wrong.** TLS-116 kept `alsem batch` job writes off the text cache (ENG-113, files
+  other engines memory-map) and the IR cache (ENG-110). A standalone command opened its outputs
+  with a plain `File::create`. So an `--out` that was a text cache entry, or a hard link to one,
+  truncated it under every engine mapping it (they die of SIGBUS). An IR entry was clobbered the
+  same way (refused and repaired on the next read).
+- **Now.** Every file the CLI opens on a path the user gives goes through the batch guard's
+  checks (`engine::batch::claim::open_outside`, `make_dir`, `open_append`): `--out` and shard
+  files and directories of every `alsem` command, the trace file (`ALSEM_TRACE_FILE`), the IR
+  cache report outside a batch, `ALSEM_CONES_SCHEDULE_FILE`, and `aldump`'s outputs
+  (`--switch-dump`, `--pd-dump`, the extracted source, `--session-refresh`'s workspace edits).
+  The same writes are refused as in a batch (a name in a cache folder, a spelling or symlink hop
+  that enters one, a cache file under any name). The file is opened without truncation and
+  truncated only after its handle has passed. A refused write is the command's usual write error
+  (`al-sem: write error: <path>: refused: ... (TLS-116)`, exit 1; 2 for analyze).
+- **Which folders.** The text cache folder, the IR cache's folder (also an `ALSEM_IR_CACHE_DIR`
+  outside it), and the impact-base cache's `work/` (live copies of base workspaces, which a
+  running impact reads). A standalone run makes none of them (`alsem batch` still makes the
+  first two, as before). Every folder is checked again at every write (at most three stats).
+  One missing at the snapshot (or no folder then: a file or a dangling symlink at its path) is
+  walked and protected like the others once it is a folder: the engine's first run makes and
+  fills its caches during the run, after a trace file took the snapshot. So is one whose
+  identity changed (deleted and made again). One deleted since counts as missing. A missing
+  folder is looked at again by its configured name, so a link in that name that points
+  elsewhere by now is followed. While it is missing, a path under where it would be is refused:
+  its existing part is resolved again at every check, and on Windows neither side's `\\?\`
+  prefix counts and case is ignored. So no shard directory makes a cache folder that the cache
+  would later adopt. On Windows a shard directory's path is first made absolute by Windows rules
+  (a drive-relative `C:shards` is the drive's current folder's `shards`, not `C:\shards`), and
+  its `..` is folded by name, as the OS folds it (`marker\..\shards` is `shards` even when
+  `marker` is a file).
+- **Cost.** A standalone process takes its own snapshot at its first write. It lists every
+  entry of the folders but stats only the directories (the listing's own file type; a file
+  system without `d_type` stats every entry). A file is looked up in the folders only when its
+  open finds it may have another name: more than one link, or a mount of its own (`statx`
+  `STATX_ATTR_MOUNT_ROOT`; on Windows, `nNumberOfLinks` above 1). It is also looked up while
+  `/proc/self/mountinfo` lists a mount inside a cache folder that is not seen to be a folder: a
+  file bind-mounted into a cache slot shows its source's identity there, while the source,
+  opened by its own name, has one link and no mount of its own. A mount point that cannot be
+  looked at (a folder above it unsearchable) counts too, and the lookup then refuses the write
+  if it cannot list there. Each such lookup walks the files afresh, so an entry published since
+  an earlier lookup is found. Measured on server1's real caches (153,575 entries,
+  `release-fast`, 5 runs each, a busy host): the snapshot added 34-48 ms to a `cache prune` run
+  (54, 53, 41, 43, 40 ms against 6 ms with no cache); an `--out` with a second link took
+  268-405 ms against 53-68 ms for an `--out` with one link (the files walk).
+- **An unreadable part of a cache blocks only the writes that need it.** The snapshot skips a
+  folder inside a cache folder that it cannot list. Only a lookup (a file with another name)
+  that cannot list a folder refuses its write, naming that folder. A cache folder itself that
+  cannot be looked at (a folder above it unsearchable: any error but "not found") is not taken
+  for a missing one: nothing about it can be checked, so every write is refused while it lasts,
+  naming that folder.
+- **Appends wait.** A standalone run's diagnostic append (the IR report, the cones schedule)
+  waits at its open as a plain append does, so a FIFO whose reader starts late gets every line.
+  A batch run's appends (its shared report) still open with `O_NONBLOCK`, so a FIFO with no
+  reader fails at once. The flag is then cleared, so their writes wait and never drop a line.
+- **`cache prune`** refuses a folder that is, or lies in, a cache folder (exit 1): prune
+  deletes every file it does not recognise, a mapped text entry and the `.lock` files included.
+  The folder is resolved once (`--dep-cache-dir`, else the default `~/.al-sem/cache/`), and that
+  same folder is checked and pruned: a default that links to a cache folder, or that
+  `ALSEM_IR_CACHE_DIR` names, is refused too. A folder that contains a cache folder is not
+  refused: prune touches only the files at its top level and skips folders, and the default
+  contains the impact-base cache.
+- **Not protected, on purpose.** The impact-base cache's entries (`~/.al-sem/cache/impact-base/v2`,
+  outside `work/`) are read whole and their blake3 checked. A clobbered entry is deleted and
+  rebuilt, and nothing maps it. Its prune removes only `.ib` and `.tmp.` names. The
+  dependency-artifact cache that `cache prune` reads (`~/.al-sem/cache/`) is no longer written by
+  the engine. `cache prune` checks each artifact's content hash before keeping it.
+- **Races and what stays open.** The races are TLS-116's: the folder tests go by path, and an
+  alias another process makes between the checks and the open is not caught. The identity test is
+  on the open handle, before truncation. Not caught, each needing a walk at every write or
+  outside knowledge:
+  - a cache entry moved out of its folder by hand while mapped (one link, no longer in a cache
+    folder);
+  - a deleted entry still mapped, opened through a `/proc/<pid>/fd` link (no name left);
+  - a file on an overlayfs lower layer that a cache entry shares.
+- **Tests** (`tests/cli/cli_ir_cache.rs`, real `alsem`/`aldump` processes; `cache_guard::tests`,
+  `claim::tests`). Each has a discrimination proof in its doc.
+  - A standalone `--out` that is the IR entry, the text entry, a hard link to either, a new name
+    through a symlinked parent, or a spelling through the IR folder is refused with the entries
+    untouched. A plain `--out` and a second-link `--out` are written.
+  - Shard directories in either folder.
+  - The trace file, the IR report and the cones schedule linked to the text entry.
+  - Every `aldump` mode that writes: `--switch-dump` (its folder and its files), `--pd-dump`,
+    `--dump-dependency-source`, and `--session-refresh` (its source edits and its `app.json`
+    edit).
+  - An unlistable cache subfolder, with one-link and two-link `--out`s.
+  - A missing IR folder that no write makes.
+  - A text folder missing at the snapshot and made later: an `--out` that is an entry in it, and
+    one on an outside hard link to that entry. A text folder deleted and made again after the
+    snapshot: an `--out` that is an entry in it. A text cache path that was a file, or a
+    dangling symlink, at the snapshot and became a folder: the same.
+  - A missing IR folder whose configured name's link points elsewhere by the next check.
+  - A text cache folder that cannot be looked at (the folder above it mode 000): an `--out`
+    outside the caches is refused; a cache folder that cannot be resolved still makes a
+    mounted-file check say yes.
+  - `cache prune` in the text folder and in the IR folder; plain `cache prune` whose default
+    folder links to the text folder, or is the IR folder.
+  - An `--out` in, and linked into, the impact-base `work/`.
+  - A bind-mounted file counted as may-have-another-name, and a cache folder holding a mounted
+    file making a plain file need the lookup (the container's real mountinfo; each half
+    skipped where the host cannot show it), plus the mountinfo reading on a hand-made text (a
+    mount point that cannot be looked at included). A bind mount through the binary cannot run
+    here: no user namespaces (`unshare -Urm` fails with EPERM). Through the binary, a mount
+    listed by the debug seam `ALSEM_TEST_MOUNTINFO` whose folder is mode 000 makes a one-link
+    `--out` refused, naming that folder.
+  - A batch append that waits on its writes; a standalone append that waits for a late reader.
+  - Windows rules as plain-text tests that run on Linux: `..` folded by name for a shard
+    directory (a drive-relative path left as written), and the missing-folder compare (both
+    prefixes, `/`, case); a Windows-only test that a drive-relative shard path is the current
+    folder's.
+  - Windows: `cargo check --target x86_64-pc-windows-gnu --lib --bins` passes; nothing ran there.
+
+### Fixed (TLS-114: a path git prints is read exactly, even when it ends in CR or LF)
+
+- **What was wrong.** Several readers of git's output removed more than git's own line end.
+  Test-scope discovery (`src/engine/test_select/scope.rs`) removed every trailing CR and LF from
+  `git config --path core.excludesFile`, `git rev-parse --show-toplevel` and `--git-common-dir`.
+  So an excludes file, a top level or a common git folder whose name ends in CR was read as
+  another path, and TLS-109's batch claim registered the wrong file as a read. `alsem impact`'s
+  base side removed all trailing whitespace from `--show-toplevel` (`git archive` then ran in a
+  folder that does not exist) and all surrounding whitespace from `--show-prefix` (a workspace
+  folder starting with a space lost it). Its top level was also decoded lossily, so a non-UTF-8
+  folder name was another folder.
+- **agentflow's `check-diff` could be passed.** Without `-z`, git writes a name that holds a
+  non-ASCII byte, a control character (CR, LF, tab), a `"` or a backslash in C-style quotes:
+  `"scripts/x\r"`, `"src/\303\251.rs"`. Three readers took that text as the name.
+  - The protected-path check read `git diff --name-only` (`changed_files`), and a quoted
+    `"scripts/…"` does not start with `scripts/`, so a change there was not refused.
+  - The forbidden-additions and Cargo-version checks matched `+++ b/<name>` headers in one
+    joined diff. A quoted header did not match, so a file's added lines were charged to the
+    file before it, or dropped: an `#[ignore]` added in `src/é.rs` was not refused.
+    `splitlines()` also split an added line at a lone CR (`fn f(){}\r#[ignore]` hid the
+    attribute), and every added line whose text starts with `++` was skipped as a header.
+  - The rebase conflict list read the same quoted names, and the `-z` tree probe ran in Python
+    text mode, which turns a CR into LF.
+  - Now each file's own patch is read by its known name (`:(top,literal)`: never a glob such as
+    `src/[a].rs`, and the same from any folder), with `--text` (a `.rs` file holding a NUL byte
+    gave "Binary files differ" and its additions were never scanned, before this change too).
+    A changed file with an empty patch is an error, not "nothing added".
+- **The pre-commit hook could skip fmt and the goldens.** It matched
+  `git diff --cached --name-only` against `\.rs$` and `^src/…`. A quoted name matched neither,
+  so a commit of `src/é.rs` alone ran no fmt check and no golden check.
+- **The fix.**
+  - `git config` now runs with `-z`, and only its final NUL is removed. `rev-parse` has no
+    `-z`, so only its one final LF is removed, nothing else. `impact` keeps the top level's
+    bytes (`git_env::path_from_git`, moved there from `scope.rs`). `git check-ignore` already
+    used `-z`; it is unchanged.
+  - agentflow reads paths through one new helper, `Git.paths`: `-z`, raw bytes split at NUL,
+    decoded with `os.fsdecode`. `check-diff` now reads each changed file's own patch
+    (`Git.file_diffs`, `git diff -- ':(top,literal)<path>' ':(top,literal,exclude)<path>/'`,
+    as bytes), so no header is parsed. The `exclude`: a literal pathspec also selects what is
+    under a directory of that name, so a file replaced by a directory (`docs/old.rs` ->
+    `docs/old.rs/notes.md`) took the note's lines into the deleted `.rs` file's patch, and a
+    note naming `#[ignore]` was refused (sol r1). Both reads pass `--no-relative`: with
+    `diff.relative=true`, a check run from a subfolder listed only that folder's files,
+    relative to it, and scanned nothing else (sol r1). Lines split at LF only, and only lines
+    after the first `@@` count. `Git.diff`, which nothing else used, is removed.
+  - The hook reads `git diff --cached --name-only -z --no-renames` and matches with `grep -z`.
+    It sends the output to `/dev/null` instead of using `-q`, so git never dies of SIGPIPE,
+    which `pipefail` would read as "no match". `--no-renames` (sol r1): an unchanged
+    `src/old.rs` moved to `notes/old.txt` listed only the new name, so fmt and the goldens
+    were skipped. It reads its top level exactly (a sentinel after `rev-parse`): `$(...)`
+    strips every trailing LF, so a checkout named `repo` + LF looked for `repo/scripts`.
+    `check-goldens --verify-coverage` had the same strip (`cd "$(... && pwd)"`) and so
+    changed into `repo`; it now changes into its own folder's parent directly (sol r2), with
+    `CDPATH` cleared (sol r3): run as `scripts/check-goldens`, a bare `cd scripts/..`
+    searched an exported `CDPATH` first and could check another checkout's goldens.
+  - Test-scope discovery sends each folder to `git check-ignore` as `./<name>/` (sol r1): git
+    reads each line as a pathspec, so a sibling folder named `:(unknown)` failed the whole
+    batch, which was read as "nothing ignored".
+  - `impact --base` opens the untracked `.al` files under the top level's exact bytes (sol
+    r1): under a Linux checkout named `repo-\xff`, an untracked `New.al` could not be read.
+    It lists them with `ls-files -z` and opens each by its bytes: without `-z` git quoted
+    `ws/Né.al` as `"ws/N\303\251.al"`, which does not end in `.al`, so the file was silently
+    left out of the change; a non-UTF-8 name was opened by its lossy text. The diff section
+    it writes for each one quotes the name the way git does (sol r2): written raw, an LF in
+    the name split the header and a TAB ended the name there, so the file's lines went to
+    another path.
+- **Tests** (unix; each with a discrimination proof):
+  - scope discovery: an excludes file ending in CR or LF (an LF inside too), a top level ending
+    in CR or LF, and a bare clone's common folder ending in CR or LF;
+  - `impact`: a base materialized under a top level ending in CR, ending in LF, and (Linux) not
+    UTF-8; a workspace prefix starting with a space; (Linux) an untracked file under a non-UTF-8
+    top level; untracked files named `Né.al` and (Linux) `X\xff.al`; (Linux) `impact --base`
+    end to end on untracked files whose names hold an LF and a TAB (their routines are roots);
+  - scope discovery: a sibling folder named `:(unknown)` beside an ignored one;
+  - agentflow: changed and dirty paths with a CR at the end and an LF inside; a `"` and (Linux)
+    the byte 0xFF in a name; `check-diff` through real git on `src/é.rs`, `src/x\r.rs`, a CR
+    inside an added line and an added `++` line; a file replaced by a directory of its name;
+    a check from a subfolder with `diff.relative=true`;
+  - the hook, run on a staged `src/é` + LF + `x.rs`, on a Rust file renamed to a `.txt`, and in
+    a checkout named `repo` + LF (with the real `check-goldens`, only `cargo` stubbed): it runs
+    fmt and both golden checks.
+  - The LF fixtures pin "remove one LF" against "remove every LF". `--show-prefix` always ends
+    in `/`, so `impact`'s prefix reader cannot tell those apart, and no fixture claims to.
+- **Left as they are, and why.** `impact`'s `--show-prefix` is still decoded lossily: it flows
+  on as text (the folder below the top, `materialize`'s `rel`, the `git show` spec, cache keys),
+  so keeping its bytes is a larger change (TLS-124). Some readers still parse git's paths line
+  by line:
+  `impact --base`'s changed-file lists and the unified-diff headers its parser reads, which git
+  also quotes. Those are a different bug (git's quoting, not cut line ends). The gate scripts'
+  path lists (`ci-steps task-affected`, `cdo-gate`'s product-path check, `land`'s conflict
+  check) read a quoted name as unmapped or product code, which runs more checks, never fewer.
+  Their checkout roots (`rev-parse --show-toplevel`, `worktree list`, `--git-common-dir`) are
+  folders the operator chooses.
+
 ### Fixed (ENG-178: table procedures named like record built-ins: four follow-ups from ENG-173)
 
 From Fable's second review of ENG-173 (`/work/.al-sem/engine-notes/eng173/fable-eng173-r2.md`).
@@ -666,6 +873,122 @@ CDO has no site of these shapes, so no CDO answer moves.
     - `descendants_of_kinds`: 2.83 % -> gone;
     - `named_ranges_where`: 1.47 % -> 0.75 %;
     - `collect_run_objects`: 1.73 % -> 0.22 %.
+
+### Added (TLS-117: the dependency IR cache on Windows, for stamped binaries)
+
+- **On by default on Windows** (`ir_cache::DEFAULT_ON` is true on every system), after the
+  owner's acceptance below; `ALSEM_IR_CACHE=off` still turns it off. Until this change the
+  Windows default was off and only an explicit `ALSEM_IR_CACHE=on` turned it on.
+- **The accepted gap** (owner, 2026-11-25, q-20261125T135240-57cde933): the Windows key compares
+  the candidate file's writable sections with the digest stamped in the **loaded** image, not with
+  the loaded image's own initial data. So a stamped exe **damaged in its writable data before it
+  was launched**, then **swapped at its path for a pristine copy within the milliseconds between
+  the launch and the eager key**, gets the pristine copy's key while the damaged data runs. Damage
+  in the read-only content gives no key. The owner accepted this narrower guarantee (design note,
+  section 1, "The window before the key").
+- **The owner's acceptance passed** (at `1e882726`, on the owner's Windows machine): the
+  Windows-native tests (43 passed, 0 failed); the install stamped and verified all three
+  binaries; through the installed `alsem.exe` a cold run published, a warm run hit 10,881
+  entries, an impact run verified 21,762 of 21,762 hits, and every answer was byte-identical to
+  the cache-off run; the LSP made a key. For the LSP check, a `didOpen` alone writes no report:
+  the report's first line is written at the cache's first use, so the check makes one real
+  request (a call-hierarchy request, for example).
+- **The eager key's start-up cost, measured** (the same acceptance, median of 7 runs of a small
+  `analyze`): 32.8 ms with the cache off against 77.9 ms with it on, so about 45 ms per process
+  start. That is acceptable for the long-lived processes that gain the most (the LSP server,
+  `mcp`'s engine, `engine-host`). With the cache off no key is made: the eager key, the seam,
+  `make_ir_dir` and the report's no-key line each run only when the cache is on.
+- **What it does.** ENG-110's IR cache was off on Windows: its key is the running binary's bytes,
+  and on Windows no file path reliably names the running image (the owner's probe runs showed
+  `GetMappedFileNameW` keeping a stale path after a folder swap and a deleted hard link, so a
+  name-based key hashed the wrong file). Now a Windows binary has a key when (design B, note
+  `docs/superpowers/notes/2026-11-21-tls117-windows-image-key.md`): the canonical hash of the
+  loaded module's read-only content (read with `ReadProcessMemory`; base relocations normalised,
+  loader-written ranges masked, unmodelled loader patching refused) equals that of a candidate
+  file (the mapped name, then `GetModuleFileNameW`), opened denying write and delete on a local
+  NTFS drive, with equal headers; the candidate's writable sections and masked bytes hash to the
+  digest stamped in the running module's data-digest slot; and its own slot equals the loaded
+  one. The key is then the accepted file's bytes, as on Linux. Anything else: no key, the cache
+  off, the reason in the report. The key is computed at start, in `install_from_env` (aldump's
+  and al-call-hierarchy's first statement, alsem's after its perf-trace setup) **whenever the
+  cache is on, for every command**: no argv look decides it, because two argv guesses at which
+  commands use the cache were wrong (sol's final reviews: `alsem batch -- --help` and `aldump
+  --program-call-graph-stats --help`, where `--help` is an operand, would have keyed late). A help
+  or version call pays the ~45 ms key. The
+  candidate is read through a handle that denies write and delete (one retry after 50 ms on a
+  sharing violation), closed after the check: the running exe can be renamed away afterwards.
+  The key is over the accepted file's bytes, not an exact identity of the running file (bytes the
+  loader never maps, such as a signature or an overlay, change the key, not the code: a miss,
+  never a wrong answer); the note's section 1 states the few milliseconds before the key.
+- **Stamping.** A new binary, `alsem-stamp` (`stamp <exe> [<out>]`, `verify <exe>`; runs on Linux
+  too), writes the digest into the slot (a marked 48-byte static in `.rdata` of `alsem`, `aldump`
+  and `al-call-hierarchy`), recomputes a non-zero PE checksum, and checks nothing else changed.
+  **Unstamped binaries (every cargo build and test) get no key on Windows**; the report says
+  `"ir_cache": "unstamped"`, which `scripts/ir-cache-report-check` passes. A failing Windows key
+  for any other reason says `"no key"` with the reason, and fails the checker.
+  `ir-cache-report-check --require-key` fails `unstamped`, `unsupported` and `no key` lines, a
+  report with no `start` line, and any `start` line without a key (one keyed process cannot hide
+  another without one); the acceptance and the release workflows use it, and its self-test runs
+  in the suite (`cli_ir_cache::the_report_checker_self_test_passes`).
+- **Install and CI.** `scripts/install-windows.ps1` (Windows PowerShell 5.1 or pwsh 7) builds the
+  three binaries with `release-ship`, stamps and verifies them, and copies them to
+  `~/.al-sem/bin/` and each `-LspDir`. It refuses before building or copying anything (and again
+  just before copying) when any target is running, so an install never leaves some targets new
+  and some old. Both release workflows stamp and verify the three Windows binaries after the
+  build and before signing, and after signing verify them again and, with the cache on in a
+  fresh root on `tests/fixtures/tls117/ws`, run a cold `alsem.exe analyze` (`--rule output`), a
+  warm one (`--rule warm-build`), an `alsem.exe impact` with `ALSEM_IR_CACHE_VERIFY=1` (`--rule
+  impact`: disk hits, every hit parsed again and compared), `aldump.exe
+  --program-call-graph-stats` (`--rule output`), and the shipped LSP server at runtime
+  (`scripts/lsp-key-smoke`: `initialize`, one `prepareCallHierarchy`, `shutdown`, on stdio;
+  `--rule output`), each `--require-key` and each with no `ALSEM_IR_CACHE` set (the default);
+  then one `analyze` with `ALSEM_IR_CACHE=off`, which must make no key and must write a report
+  whose `start` line says `"enabled": false` and `"key": null`. A failure fails the job. `release.yml` also runs by `workflow_dispatch`
+  (on a branch, before landing), and then publishes nothing.
+- **The Windows link-map listing.** `release.yml`'s Windows job links with `/MAP` (through
+  `CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS`, which keeps `+crt-static`; a plain
+  `RUSTFLAGS` would drop it) and lists every locale deny symbol in the maps of `alsem`, `aldump`
+  and `al-call-hierarchy` for a human to check (note section 4.3); it never fails the job. A
+  step there fails the job when a shipped exe imports the dynamic C runtime (`dumpbin
+  /dependents`: `vcruntime*.dll`, `msvcp*.dll`, `api-ms-win-crt-*`).
+- **The parse path's locale audit is pinned.** `scripts/check-parse-path-locale` compiles
+  tree-sitter's `lib.c` (the `Cargo.lock` version) and the grammar's `parser.c` and `scanner.c`
+  with `gcc -fcallgraph-info`, walks the call graph from the roots al-syntax reaches, and fails
+  when a reachable function calls anything but byte functions and the guarded log and dot-graph
+  formatting (note section 4.1), when a guarded function gains a caller outside its pinned set,
+  or when a defined function is neither reached nor on its off-path list (a closed world; the
+  pointer-only callbacks and decoders are roots). Without gcc it fails on Linux and skips with
+  one line elsewhere. Each run also proves it can fail: a `scanner.c` copy calling `towlower`
+  and one with an added unlisted function must both be refused. It runs as `scripts/ci-steps locale` (in `task`, `task-affected`
+  and `all`) and in CI's `test` job, in about 3 s.
+- **Windows-native tests** (the owner runs them: `cargo test -p al-sem --lib -- winfs
+  key::tests::windows snapshot::cache prune windows_tests`):
+  `snapshot::winfs::tests::windows_private_walk`,
+  `program::ir_cache::key::tests::windows_stamped_copy_keys_on_its_image` (the running exe can
+  be renamed away after its key),
+  `program::ir_cache::windows_tests::the_windows_key_is_attempted_at_install` (with the cache on
+  `install_from_env` attempts the key at once, whatever the command; off, it does not),
+  `snapshot::cache::tests::a_permissive_entry_is_refused_at_every_open`,
+  `a_mapped_entry_cannot_be_opened_for_writing`, `shared_now_lock_fails_while_exclusive_held`,
+  and `program::ir_cache::prune::tests` (all but the two size-rule tests).
+- **Cache plumbing on Windows.** The cache folders (the IR root, `ALSEM_IR_CACHE_DIR`, ENG-113's
+  text root and the batch guard's root) are created and opened through a private walk from the
+  volume root down (a folder is made only under an element that passed): every element
+  owned by this user, SYSTEM, Administrators or TrustedInstaller, no reparse point, and no allow
+  ACE giving anyone else a right to remove, rename or re-ACL it (the cache folders, entries and
+  lock files also none to add or write); each entry and lock file is checked on its own handle.
+  A folder that fails turns the IR cache off and keeps the text cache's owned text. Prune, key
+  folders and `last-used` now work on Windows; the Windows writer's temp files have the Unix name
+  shape, so the prune removes a killed writer's leftovers there too.
+
+### Changed (TLS-117)
+
+- **Cache locks are `std::fs::File` locks on every system.** They are `flock` on Unix (the same lock
+  as before, so an older and a newer engine still exclude each other; pinned by
+  `an_old_flock_holder_blocks_the_file_lock`) and `LockFileEx` on Windows, where ENG-113's text
+  cache took no lock before.
+- `windows-sys` gains the features the Windows key and private check call (security, library
+  loader, process status, debug, threading).
 
 ### Fixed (TLS-105: three more gate-script deadlines count awake time, not wall time)
 
@@ -925,8 +1248,8 @@ CDO has no site of these shapes, so no CDO answer moves.
   key: the cache is off. `scripts/check-ir-image` checks alsem, aldump and al-call-hierarchy
   (`ci-steps build`, both Linux release jobs): the marker, no locale symbols, and only libc,
   libgcc_s and (al-call-hierarchy) glibc's loader as shared libraries.
-- **Where it is off.** On Windows (TLS-117), in `alsem batch` (TLS-116), for a package below 8
-  files, for owned (unmapped) text, with `ALSEM_IR_CACHE=off` (only `on`/`off`, any case; any
+- **Where it is off.** (Since then TLS-116 turned it on in `alsem batch`, and TLS-117 on Windows
+  for stamped binaries; see their entries.) For a package below 8 files, for owned (unmapped) text, with `ALSEM_IR_CACHE=off` (only `on`/`off`, any case; any
   other value is off, warned), and in every test (`.cargo/config.toml`'s `[env]` sets it off for
   the engines tests spawn; in-process test binaries never install it).
 - **The guarantee.** In this user's private cache folder, an accepted entry decodes to exactly

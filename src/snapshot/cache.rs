@@ -27,10 +27,25 @@ use std::sync::Arc;
 /// `<temp_dir>/al-ch-snapshot-cache` when the OS cache dir is unavailable.
 pub fn cache_dir() -> PathBuf {
     let dir = cache_dir_path();
-    if let Err(e) = std::fs::create_dir_all(&dir) {
+    if let Err(e) = create_cache_dir(&dir) {
         log::warn!("Failed to create snapshot cache dir {}: {e}", dir.display());
     }
     dir
+}
+
+/// Make a cache folder (and its missing parents). Unix: `create_dir_all`; a reader checks it
+/// [`private`] on open. Windows (TLS-117): through the private walk, so each component is checked
+/// before anything is made under it and a refused parent gets no child
+/// (`crate::snapshot::winfs::walk`).
+pub(crate) fn create_cache_dir(dir: &Path) -> std::result::Result<(), String> {
+    #[cfg(windows)]
+    {
+        crate::snapshot::winfs::walk(dir, true).map(|_| ())
+    }
+    #[cfg(not(windows))]
+    {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())
+    }
 }
 
 /// [`cache_dir`]'s path, made nowhere (ENG-110: installing the IR cache must not create it).
@@ -266,12 +281,24 @@ impl<'a> CacheDir<'a> {
             let m = fd.metadata().ok()?;
             (m.is_dir() && private(&m)).then_some(CacheDir { path, fd })
         }
-        #[cfg(not(unix))]
+        // Windows (TLS-117): the private walk from the volume root down; every later access uses
+        // the rooted spelling it returns.
+        #[cfg(windows)]
         {
-            std::fs::metadata(&path)
-                .ok()?
-                .is_dir()
-                .then_some(CacheDir { path })
+            match crate::snapshot::winfs::walk(&path, false) {
+                Ok(rooted) => Some(CacheDir {
+                    path: rooted.into(),
+                }),
+                Err(e) => {
+                    log::debug!("cache folder {} refused: {e}", path.display());
+                    None
+                }
+            }
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            let _ = path;
+            None
         }
     }
 
@@ -307,10 +334,28 @@ impl<'a> CacheDir<'a> {
         })
     }
 
-    /// No child directories off Unix (the IR cache is off there in v1).
-    #[cfg(not(unix))]
+    /// Windows (TLS-117): the child through the private walk, made only under this checked
+    /// folder (`create`).
+    #[cfg(windows)]
+    pub(crate) fn subdir(&self, name: &str, create: bool) -> Option<CacheDir<'static>> {
+        crate::snapshot::winfs::walk(&self.path.join(name), create)
+            .ok()
+            .map(|rooted| CacheDir {
+                path: rooted.into(),
+            })
+    }
+
+    #[cfg(not(any(unix, windows)))]
     pub(crate) fn subdir(&self, _name: &str, _create: bool) -> Option<CacheDir<'static>> {
         None
+    }
+
+    /// Windows (TLS-117): an opened entry or lock file must pass the private rule on its own
+    /// handle (an existing file can carry a permissive DACL even in a private folder).
+    #[cfg(windows)]
+    fn check_private_file(file: &File) -> Result<()> {
+        crate::snapshot::winfs::check_handle(file, crate::snapshot::winfs::LEAF_BAD)
+            .map_err(|e| anyhow::anyhow!("not private to this user: {e}"))
     }
 
     /// Entry `name` read whole into memory (owned, not mapped: the bytes a caller checks are
@@ -332,6 +377,8 @@ impl<'a> CacheDir<'a> {
         if !private(&meta) {
             bail!("not private to this user");
         }
+        #[cfg(windows)]
+        Self::check_private_file(&file)?;
         if meta.len() > cap {
             bail!("cache entry longer than {cap} bytes");
         }
@@ -398,6 +445,19 @@ impl<'a> CacheDir<'a> {
         });
     }
 
+    /// Windows (TLS-117): remove `name` through the folder's rooted spelling (best effort; a
+    /// file another process holds open goes at a later prune).
+    #[cfg(windows)]
+    pub(crate) fn unlink(&self, name: &str) {
+        let _ = std::fs::remove_file(self.path.join(name));
+    }
+
+    /// Windows (TLS-117): remove the empty child directory `name` (best effort).
+    #[cfg(windows)]
+    pub(crate) fn remove_dir(&self, name: &str) {
+        let _ = std::fs::remove_dir(self.path.join(name));
+    }
+
     /// Open entry `name` read-only, relative to the open directory.
     #[cfg(unix)]
     fn open_entry(&self, name: &str) -> std::io::Result<File> {
@@ -407,8 +467,8 @@ impl<'a> CacheDir<'a> {
     /// Open entry `name` read-only, not following a reparse point (a symlink), and sharing
     /// read and delete only, so an entry open for writing at that moment (a copy over it in
     /// progress) is refused, and nobody can open it for writing while the map lives (memmap2
-    /// keeps a duplicate of this handle, the same file object, for the map's life). The cache
-    /// directory is under this user's profile, which no other user can write.
+    /// keeps a duplicate of this handle, the same file object, for the map's life). The folder
+    /// passed the private walk, and the entry is checked on this handle by its reader.
     #[cfg(windows)]
     fn open_entry(&self, name: &str) -> std::io::Result<std::fs::File> {
         use std::os::windows::fs::OpenOptionsExt;
@@ -444,9 +504,12 @@ impl<'a> CacheDir<'a> {
         if !private(&meta) {
             bail!("not private to this user");
         }
+        #[cfg(windows)]
+        Self::check_private_file(&file)?;
         // SAFETY: the opened entry is a regular file that no other user can write (Unix: it and
-        // its directory are `private`; Windows: the per-user cache directory, and the map's
-        // handle denies write sharing), and this code only ever replaces an entry whole, by a
+        // its directory are `private`; Windows: the whole path passed the private walk, the entry
+        // passed the rule on this handle, and the map's handle denies write sharing), and this
+        // code only ever replaces an entry whole, by a
         // rename of a unique temp file (`CacheDir::write`), never writes or truncates one in
         // place, so the mapped bytes never change. This user rewriting the cache in
         // place (cp, rsync --inplace, a restore) while an engine maps it still breaks this:
@@ -472,15 +535,20 @@ impl<'a> CacheDir<'a> {
     }
 
     /// Lock file `name` (a package's `<hash>.lock`), held while the returned value lives, so
-    /// no two processes decide on one entry at once ([`publish`]). Unix: a `flock` of `kind` on
-    /// `name` in the open directory, which must be a regular, [`private`] file (`None`
-    /// otherwise, when the lock fails, or for a `Now` kind when it is busy). Windows: no file
-    /// lock (`Some` with nothing held): a rename over an entry another engine maps fails, so a
-    /// replacement cannot remove an entry in use.
+    /// no two processes decide on one entry at once ([`publish`]). The lock file must be a
+    /// regular, private file (Unix: [`private`], opened through the folder's handle; Windows: the
+    /// private rule on its handle); `None` otherwise, when the lock fails, or for a `Now` kind
+    /// when it is busy. TLS-117: `std::fs::File`'s locks, which are `flock` on Unix (the same
+    /// lock as before, so an older engine binary and a newer one still exclude each other:
+    /// `an_old_flock_holder_blocks_the_file_lock`) and `LockFileEx` on Windows (real locks there
+    /// for the text cache too, which took none before). On Unix a child this process is spawning
+    /// shares the lock file's open file description from `fork` to `exec` (the fd is
+    /// close-on-exec), so a `Now` lock can be refused for that moment even after this process
+    /// released it: the caller then skips a prune or a publish, which is benign (the next use
+    /// does it).
     pub(crate) fn lock(&self, name: &str, kind: LockKind) -> Option<RepairLock> {
         #[cfg(unix)]
-        {
-            use std::os::fd::AsRawFd;
+        let f = {
             let f = self
                 .openat(name, libc::O_RDWR | libc::O_CREAT, 0o600)
                 .ok()?;
@@ -488,18 +556,53 @@ impl<'a> CacheDir<'a> {
             if !(m.is_file() && private(&m)) {
                 return None;
             }
-            let op = match kind {
-                LockKind::Exclusive => libc::LOCK_EX,
-                LockKind::ExclusiveNow => libc::LOCK_EX | libc::LOCK_NB,
-                LockKind::SharedNow => libc::LOCK_SH | libc::LOCK_NB,
+            f
+        };
+        #[cfg(windows)]
+        let f = {
+            use std::os::windows::fs::OpenOptionsExt;
+            use windows_sys::Win32::Storage::FileSystem::{
+                FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
             };
-            // SAFETY: a valid fd.
-            (unsafe { libc::flock(f.as_raw_fd(), op) } == 0).then_some(RepairLock(Some(f)))
-        }
-        #[cfg(not(unix))]
-        {
-            let _ = (name, kind);
-            Some(RepairLock(None))
+            let f = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+                .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+                .open(self.path.join(name))
+                .ok()?;
+            if !f.metadata().ok()?.is_file() || Self::check_private_file(&f).is_err() {
+                return None;
+            }
+            f
+        };
+        #[cfg(not(any(unix, windows)))]
+        let f: File = {
+            let _ = name;
+            return None;
+        };
+        let locked = match kind {
+            LockKind::Exclusive => f.lock().is_ok(),
+            LockKind::ExclusiveNow => f.try_lock().is_ok(),
+            LockKind::SharedNow => f.try_lock_shared().is_ok(),
+        };
+        locked.then_some(RepairLock(f))
+    }
+
+    /// Tests: a `Now` lock that is expected to be granted, tried again for up to 2 s. A child
+    /// another test is spawning can hold a copy of the lock file's description from `fork` to
+    /// `exec` (see [`Self::lock`]), which refuses the lock for that moment (TLS-117, Fable r1).
+    #[cfg(test)]
+    pub(crate) fn lock_soon(&self, name: &str, kind: LockKind) -> Option<RepairLock> {
+        let start = std::time::Instant::now();
+        loop {
+            let l = self.lock(name, kind);
+            if l.is_some() || start.elapsed() > std::time::Duration::from_secs(2) {
+                return l;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
         }
     }
 
@@ -518,21 +621,11 @@ impl<'a> CacheDir<'a> {
         replace: bool,
         writer: impl FnOnce(&mut dyn Write) -> Result<()>,
     ) -> Result<()> {
-        use std::sync::atomic::{AtomicU64, Ordering};
-        static NEXT: AtomicU64 = AtomicU64::new(0);
-        let stem = name.split('.').next().unwrap_or(name);
         // A name taken (a crash's leftover, the same pid in another pid namespace) is skipped:
         // the exclusive create refuses it, and the next name differs in its counter and time.
         let (tmp, file) = (0..16)
             .find_map(|_| {
-                let nanos = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map_or(0, |d| d.subsec_nanos());
-                let tmp = format!(
-                    "{stem}-{}-{}-{nanos}.tmp",
-                    std::process::id(),
-                    NEXT.fetch_add(1, Ordering::Relaxed)
-                );
+                let tmp = temp_name(name);
                 match self.openat(&tmp, libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL, 0o600) {
                     Ok(f) => Some(Ok((tmp, f))),
                     Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => None,
@@ -568,6 +661,10 @@ impl<'a> CacheDir<'a> {
         published
     }
 
+    /// Windows: as on Unix, by the folder's rooted spelling. TLS-117: the temp file has the
+    /// Unix shape (`<stem>-<pid>-<n>-<nanos>.tmp`, created exclusively), so the IR cache's prune
+    /// recognises a killed writer's leftover on both systems (`tempfile`'s random names did not
+    /// match its pattern); no-clobber is a hard link, which fails when `name` exists.
     #[cfg(windows)]
     pub(crate) fn write(
         &self,
@@ -575,39 +672,64 @@ impl<'a> CacheDir<'a> {
         replace: bool,
         writer: impl FnOnce(&mut dyn Write) -> Result<()>,
     ) -> Result<()> {
+        let (tmp, file) = (0..16)
+            .find_map(|_| {
+                let tmp = self.path.join(temp_name(name));
+                match std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&tmp)
+                {
+                    Ok(f) => Some(Ok((tmp, f))),
+                    Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => None,
+                    Err(e) => {
+                        Some(Err(e).with_context(|| format!("create cache temp {}", tmp.display())))
+                    }
+                }
+            })
+            .context("no free cache temp name")??;
+        let mut out = std::io::BufWriter::new(&file);
+        let written = writer(&mut out).and_then(|()| Ok(out.flush()?));
+        drop(out);
+        drop(file);
         let path = self.path.join(name);
-        let stem = name.split('.').next().unwrap_or(name);
-        let mut tmp = tempfile::Builder::new()
-            .prefix(&format!("{stem}-"))
-            .suffix(".tmp")
-            .tempfile_in(&*self.path)
-            .with_context(|| format!("create cache temp in {}", self.path.display()))?;
-        {
-            let mut out = std::io::BufWriter::new(tmp.as_file_mut());
-            writer(&mut out)?;
-            out.flush()?;
-        }
-        if replace {
-            tmp.persist(&path)
-                .map_err(|e| e.error)
-                .with_context(|| format!("rename cache temp → {}", path.display()))?;
-        } else {
-            match tmp.persist_noclobber(&path) {
-                Ok(_) => {}
-                // Another process published the entry first: keep theirs (the temp file drops).
-                Err(e) if e.error.kind() == std::io::ErrorKind::AlreadyExists => {}
-                Err(e) => {
-                    return Err(e.error)
-                        .with_context(|| format!("rename cache temp → {}", path.display()));
+        let published = written.and_then(|()| {
+            if replace {
+                std::fs::rename(&tmp, &path)
+            } else {
+                match std::fs::hard_link(&tmp, &path) {
+                    Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+                    r => r,
                 }
             }
+            .with_context(|| format!("publish cache temp {} as {name}", tmp.display()))
+        });
+        if !(replace && published.is_ok()) {
+            let _ = std::fs::remove_file(&tmp);
         }
-        Ok(())
+        published
     }
 }
 
+/// A fresh temp file name for entry `name` of [`CacheDir::write`], on every system:
+/// `<name up to its first dot>-<pid>-<n>-<nanos>.tmp` (the IR cache's prune recognises this
+/// shape, `prune::is_temp`; TLS-117 made the Windows writer use it too).
+pub(crate) fn temp_name(name: &str) -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let stem = name.split('.').next().unwrap_or(name);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.subsec_nanos());
+    format!(
+        "{stem}-{}-{}-{nanos}.tmp",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    )
+}
+
 /// A held lock ([`CacheDir::lock`]); released when dropped.
-pub(crate) struct RepairLock(#[allow(dead_code)] Option<File>);
+pub(crate) struct RepairLock(#[allow(dead_code)] File);
 
 /// A cache entry's index, checked against `bytes` (the whole entry) and the package
 /// `package_hash`: the header, the format and scheme, the lengths (the index capped at
@@ -1116,6 +1238,60 @@ mod tests {
         );
     }
 
+    /// TLS-117 (note section 6): an entry or lock file that another user may write (Everyone
+    /// granted modify) is refused at each call site that opens one: `read` (the mapped
+    /// entry), `read_owned` and `lock`, all through `check_private_file`. The same files with
+    /// this user's rights only are accepted (the control).
+    #[cfg(windows)]
+    #[test]
+    fn a_permissive_entry_is_refused_at_every_open() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = CacheDir::open(dir.path()).unwrap();
+        let img = two_files();
+        let hash = img.content_hash();
+        let files = extract_embedded_source(&img).unwrap();
+        let path = entry(dir.path(), &img);
+        let name = path.file_name().unwrap().to_str().unwrap().to_string();
+        d.write(&name, true, |o| write_entry(o, hash, &files))
+            .unwrap();
+        d.write("stamp", true, |o| Ok(o.write_all(b"1")?)).unwrap();
+        drop(
+            d.lock("x.lock", LockKind::Exclusive)
+                .expect("make the lock file"),
+        );
+        // control: private files are accepted
+        assert!(d.read(&name, hash).unwrap().is_some(), "control: read");
+        assert!(
+            d.read_owned("stamp", 8).unwrap().is_some(),
+            "control: read_owned"
+        );
+        assert!(
+            d.lock_soon("x.lock", LockKind::ExclusiveNow).is_some(),
+            "control: lock"
+        );
+        for f in [name.as_str(), "stamp", "x.lock"] {
+            let st = std::process::Command::new("icacls")
+                .arg(dir.path().join(f))
+                .args(["/grant", "*S-1-1-0:(M)"])
+                .stdout(std::process::Stdio::null())
+                .status()
+                .unwrap();
+            assert!(st.success(), "icacls {f}");
+        }
+        let Err(e) = d.read(&name, hash) else {
+            panic!("read accepted a permissive entry")
+        };
+        assert!(format!("{e:#}").contains("not private"), "{e:#}");
+        let Err(e) = d.read_owned("stamp", 8) else {
+            panic!("read_owned accepted a permissive file")
+        };
+        assert!(format!("{e:#}").contains("not private"), "{e:#}");
+        assert!(
+            d.lock("x.lock", LockKind::Exclusive).is_none(),
+            "lock refuses"
+        );
+    }
+
     /// A writer that finds a valid entry already published keeps it (no-clobber), so every
     /// engine maps the one file; a refused entry is replaced.
     #[test]
@@ -1346,8 +1522,8 @@ mod tests {
         assert!(d.subdir("ir", true).is_none(), "not private");
     }
 
-    /// ENG-110: the non-blocking lock kinds refuse while another holder conflicts.
-    #[cfg(unix)]
+    /// ENG-110: the non-blocking lock kinds refuse while another holder conflicts. TLS-117: on
+    /// Windows too (`LockFileEx` through `std::fs::File`, independent handles).
     #[test]
     fn shared_now_lock_fails_while_exclusive_held() {
         let dir = tempfile::tempdir().unwrap();
@@ -1356,9 +1532,9 @@ mod tests {
         assert!(d.lock("x.lock", LockKind::SharedNow).is_none());
         assert!(d.lock("x.lock", LockKind::ExclusiveNow).is_none());
         drop(ex);
-        let sh = d.lock("x.lock", LockKind::SharedNow).expect("shared");
+        let sh = d.lock_soon("x.lock", LockKind::SharedNow).expect("shared");
         assert!(
-            d.lock("x.lock", LockKind::SharedNow).is_some(),
+            d.lock_soon("x.lock", LockKind::SharedNow).is_some(),
             "shared with shared"
         );
         assert!(
@@ -1366,6 +1542,46 @@ mod tests {
             "the reverse: exclusive refused while shared is held"
         );
         drop(sh);
-        assert!(d.lock("x.lock", LockKind::ExclusiveNow).is_some());
+        assert!(d.lock_soon("x.lock", LockKind::ExclusiveNow).is_some());
+    }
+
+    /// TLS-117: the locks are `std::fs::File`'s now; on Unix they must still be `flock`, so an
+    /// older engine binary (which took `libc::flock`) and a newer one exclude each other while
+    /// both run against one cache. Here the old holder is a `flock` on a second open file
+    /// description of the lock file.
+    /// Discrimination (2026-11-23): the holder taken with `fcntl(F_SETLK)` (a POSIX record lock)
+    /// instead of `flock`: the new lock is granted beside it and the test fails; restored, passes.
+    #[cfg(unix)]
+    #[test]
+    fn an_old_flock_holder_blocks_the_file_lock() {
+        use std::os::fd::AsRawFd;
+        let dir = tempfile::tempdir().unwrap();
+        let d = CacheDir::open(dir.path()).unwrap();
+        drop(
+            d.lock("x.lock", LockKind::Exclusive)
+                .expect("make the lock file"),
+        );
+        let old = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(dir.path().join("x.lock"))
+            .unwrap();
+        // Blocking: a spawning child may hold the dropped lock's description for a moment.
+        // SAFETY: a valid fd.
+        assert_eq!(unsafe { libc::flock(old.as_raw_fd(), libc::LOCK_EX) }, 0);
+        assert!(
+            d.lock("x.lock", LockKind::ExclusiveNow).is_none(),
+            "exclusive beside old"
+        );
+        assert!(
+            d.lock("x.lock", LockKind::SharedNow).is_none(),
+            "shared beside old"
+        );
+        // SAFETY: a valid fd.
+        assert_eq!(unsafe { libc::flock(old.as_raw_fd(), libc::LOCK_UN) }, 0);
+        assert!(
+            d.lock_soon("x.lock", LockKind::ExclusiveNow).is_some(),
+            "after the old unlock"
+        );
     }
 }

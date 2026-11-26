@@ -3,6 +3,9 @@ name: Release
 on:
   push:
     tags: ['v*']
+  # TLS-117 (Fable N6): run by hand on a branch (`gh workflow run release.yml --ref <branch>`)
+  # to see the Windows key checks pass before landing; the `release` job then skips.
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -61,6 +64,13 @@ jobs:
       id-token: write  # OIDC for azure/login (signing)
     # Federated credential matches subject repo:...:environment:release
     environment: release
+    # TLS-117 (note section 4.3): every link writes a map file next to its output (lld-link
+    # /MAP: deps\<name>.map, an MSVC bin having no hash suffix); /MAP only writes that file,
+    # the image is unchanged.
+    # The per-target variable is MERGED with .cargo/config.toml's target rustflags
+    # (+crt-static stays); a plain RUSTFLAGS would replace them.
+    env:
+      CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS: "-C link-arg=/MAP"
     steps:
       - name: Checkout al-call-hierarchy
         uses: actions/checkout@v4
@@ -87,6 +97,20 @@ jobs:
         env:
           TREE_SITTER_AL_PATH: ${{ github.workspace }}/tree-sitter-al
         run: cargo build --profile release-ship --no-default-features --bin alsem
+
+      # TLS-117: write the IR cache's data-digest slot into the three binaries that install the
+      # cache (an unstamped Windows binary gets no key: the cache is off for it), then verify
+      # each. After the last build of each binary and before signing (signing changes no
+      # section); a failure fails the job.
+      - name: Stamp Windows binaries (IR cache data-digest slot)
+        shell: pwsh
+        run: |
+          foreach ($b in 'alsem', 'aldump', 'al-call-hierarchy') {
+            & target\release-ship\alsem-stamp.exe stamp "target\release-ship\$b.exe"
+            if ($LASTEXITCODE -ne 0) { throw "stamping $b.exe failed" }
+            & target\release-ship\alsem-stamp.exe verify "target\release-ship\$b.exe"
+            if ($LASTEXITCODE -ne 0) { throw "verifying $b.exe failed" }
+          }
 
       # Authenticode-sign via Azure Artifact Signing (Trusted Signing).
       # Steps SKIP cleanly until configured: repo vars AZURE_SIGNING_ENDPOINT /
@@ -117,6 +141,114 @@ jobs:
           file-digest: SHA256
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
           timestamp-digest: SHA256
+
+      # TLS-117 (sol r1 P1-3): the binaries as shipped (signed, when signing is configured)
+      # still verify, and the shipped alsem.exe makes an IR cache key at run time: one analyze
+      # of a tiny committed workspace with the cache on, judged by `--require-key` (an
+      # `unstamped`, `unsupported` or `no key` line fails the job).
+      - name: Check the shipped binaries' IR cache key
+        shell: pwsh
+        run: |
+          foreach ($b in 'alsem', 'aldump', 'al-call-hierarchy') {
+            & target\release-ship\alsem-stamp.exe verify "target\release-ship\$b.exe"
+            if ($LASTEXITCODE -ne 0) { throw "verifying the shipped $b.exe failed" }
+          }
+          # The Windows default is on (TLS-117 rev 12): no ALSEM_IR_CACHE here, so every run
+          # below also checks the default; the off switch is checked last.
+          Remove-Item Env:ALSEM_IR_CACHE -ErrorAction SilentlyContinue
+          $env:ALSEM_IR_CACHE_DIR = Join-Path $env:RUNNER_TEMP 'ir-root'
+          # judge(<report>, <rule>): the report must carry a key (`--require-key`) and pass <rule>
+          function judge($rep, $rule) {
+            python scripts/ir-cache-report-check --require-key --rule $rule $rep
+            if ($LASTEXITCODE -ne 0) { throw "IR cache check failed: $rep ($rule)" }
+          }
+          $ws = 'tests\fixtures\tls117\ws'
+          # cold: a fresh root; alsem.exe publishes
+          $env:ALSEM_IR_CACHE_REPORT = Join-Path $env:RUNNER_TEMP 'ir-cold.jsonl'
+          & target\release-ship\alsem.exe analyze $ws --format json | Out-Null
+          if ($LASTEXITCODE -notin 0, 1) { throw "alsem analyze failed (exit $LASTEXITCODE)" }
+          judge $env:ALSEM_IR_CACHE_REPORT output
+          # warm: a second process hits what the first published
+          $env:ALSEM_IR_CACHE_REPORT = Join-Path $env:RUNNER_TEMP 'ir-warm.jsonl'
+          & target\release-ship\alsem.exe analyze $ws --format json | Out-Null
+          if ($LASTEXITCODE -notin 0, 1) { throw "alsem analyze (warm) failed (exit $LASTEXITCODE)" }
+          judge $env:ALSEM_IR_CACHE_REPORT warm-build
+          # impact with every hit parsed again and compared (sol r-final: VERIFY on the
+          # shipped artifacts): disk hits, all verified
+          $env:ALSEM_IR_CACHE_VERIFY = '1'
+          $env:ALSEM_IR_CACHE_REPORT = Join-Path $env:RUNNER_TEMP 'ir-impact.jsonl'
+          & target\release-ship\alsem.exe impact $ws --routine 'Ws Cu::Run' --format json | Out-Null
+          if ($LASTEXITCODE -notin 0, 1) { throw "alsem impact failed (exit $LASTEXITCODE)" }
+          Remove-Item Env:ALSEM_IR_CACHE_VERIFY
+          judge $env:ALSEM_IR_CACHE_REPORT impact
+          # aldump.exe has its own key (its own bytes): it publishes into its own key folder
+          $env:ALSEM_IR_CACHE_REPORT = Join-Path $env:RUNNER_TEMP 'ir-aldump.jsonl'
+          & target\release-ship\aldump.exe --program-call-graph-stats $ws | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "aldump failed (exit $LASTEXITCODE)" }
+          judge $env:ALSEM_IR_CACHE_REPORT output
+          # the shipped LSP server at runtime (sol r-final): one real LSP request on stdio (a
+          # didOpen alone builds nothing), then shutdown; its own key, publishing into its folder
+          $env:ALSEM_IR_CACHE_REPORT = Join-Path $env:RUNNER_TEMP 'ir-lsp.jsonl'
+          python scripts/lsp-key-smoke target\release-ship\al-call-hierarchy.exe $ws --no-telemetry
+          if ($LASTEXITCODE -ne 0) { throw "the LSP smoke run failed (exit $LASTEXITCODE)" }
+          judge $env:ALSEM_IR_CACHE_REPORT output
+          # the off switch: ALSEM_IR_CACHE=off makes no key, so --require-key must refuse
+          $env:ALSEM_IR_CACHE = 'off'
+          $env:ALSEM_IR_CACHE_REPORT = Join-Path $env:RUNNER_TEMP 'ir-off.jsonl'
+          & target\release-ship\alsem.exe analyze $ws --format json | Out-Null
+          if ($LASTEXITCODE -notin 0, 1) { throw "alsem analyze (off) failed (exit $LASTEXITCODE)" }
+          python scripts/ir-cache-report-check --require-key $env:ALSEM_IR_CACHE_REPORT
+          if ($LASTEXITCODE -eq 0) { throw 'ALSEM_IR_CACHE=off still made a key' }
+          # sol final: and the report must exist with a start line saying `"enabled": false` and
+          # `"key": null` (a missing report also fails --require-key, so that alone proves nothing)
+          $off = @(Get-Content -LiteralPath $env:ALSEM_IR_CACHE_REPORT -ErrorAction Stop |
+            ForEach-Object { $_ | ConvertFrom-Json } |
+            Where-Object { $_.event -eq 'start' -and $_.enabled -eq $false -and
+              $_.PSObject.Properties.Name -contains 'key' -and $null -eq $_.key })
+          if ($off.Count -lt 1) { throw 'the off run wrote no start line with enabled false and key null' }
+          Remove-Item Env:ALSEM_IR_CACHE
+          # the expected refusal left LASTEXITCODE at 1; the step ends with it otherwise
+          $global:LASTEXITCODE = 0
+
+      # TLS-117 (Fable N5): the shipped alsem.exe links the C runtime statically
+      # (`+crt-static`, .cargo/config.toml). The job's map rustflags must merge with it, not
+      # replace it: a dynamic CRT import fails the job.
+      - name: Check the static C runtime
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $dumpbin = & $vswhere -latest -products * -find 'VC\Tools\MSVC\**\bin\Hostx64\x64\dumpbin.exe' |
+            Select-Object -First 1
+          if (-not $dumpbin) { throw 'dumpbin.exe not found (vswhere)' }
+          foreach ($b in 'alsem', 'aldump', 'al-call-hierarchy') {
+            $deps = & $dumpbin /nologo /dependents "target\release-ship\$b.exe" | Out-String
+            if ($LASTEXITCODE -ne 0) { throw "dumpbin failed on $b.exe" }
+            Write-Output "== $b.exe"; Write-Output $deps
+            if ($deps -match '(?i)vcruntime\d+\.dll|msvcp\d+\.dll|api-ms-win-crt-') {
+              throw "$b.exe imports the dynamic C runtime: +crt-static was lost"
+            }
+          }
+
+      # TLS-117 (note section 4.3): list every locale deny symbol each shipped binary's map
+      # names, for a human to check against section 4.1 (expected: the static UCRT's own
+      # copies, and tree-sitter's query parser if the link keeps it). A map says what was
+      # linked, not what is reachable, so this never fails the job; a missing map warns.
+      # No leading word boundary: `__acrt_LCMapStringW`, `_o_towlower`, `__imp_...` match.
+      - name: List locale symbols in the link maps (for a human)
+        shell: pwsh
+        run: |
+          $deny = '(setlocale|_create_locale|localeconv|isw[a-z_]*|iswctype|isprint|tow[a-z_]*|GetLocaleInfo\w*|LCMapString\w*|CompareStringEx|CompareStringW|GetStringType\w*|FoldString\w*)\b'
+          foreach ($b in 'alsem', 'aldump', 'al_call_hierarchy') {
+            # MSVC bins have no hash suffix in deps\ (`alsem.map`); keep `<name>-<hash>` too,
+            # and never take `alsem_stamp`'s map for alsem's.
+            $map = Get-ChildItem 'target\release-ship\deps' -Filter '*.map' -ErrorAction SilentlyContinue |
+              Where-Object { $_.BaseName -eq $b -or $_.BaseName -like "$b-*" } |
+              Sort-Object LastWriteTime | Select-Object -Last 1
+            if (-not $map) { Write-Output "::warning::no link map for $b (lld-link /MAP)"; continue }
+            $hits = @(Select-String -Path $map.FullName -Pattern $deny)
+            Write-Output "== $b ($($map.Name)): $($hits.Count) deny-listed symbol lines"
+            $hits | Select-Object -First 200 | ForEach-Object { $_.Line.Trim() }
+          }
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -185,6 +317,9 @@ jobs:
 
   release:
     needs: [build-windows, build-linux]
+    # A manual run (workflow_dispatch, e.g. on a branch before landing) builds and checks
+    # everything but publishes nothing.
+    if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     steps:
       - name: Download Windows binary

@@ -44,6 +44,17 @@
 //! not in the snapshot, but its folder is, so no job write reaches it. The
 //! folder tests are path-based: a path another process changes during the run
 //! is outside TLS-109's scope.
+//!
+//! **Outside a batch (TLS-120).** A standalone `alsem` or `aldump` refuses
+//! the same writes ([`super::claim::open_outside`]) against a snapshot of its
+//! own ([`standalone`]): the same folders plus the impact-base cache's
+//! `work/`, none of them made (a missing one is refused by path), and only
+//! their directories recorded, once per process; a folder it cannot list is
+//! skipped. A file is looked up at its open, and only when it may have another
+//! name than the one the folder test checked ([`may_alias`]: more than one
+//! link, or a mount of its own); a lookup that cannot list a folder refuses.
+//! The same scope holds: an alias another process makes between the checks
+//! and the open is not caught.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -55,7 +66,7 @@ use super::manifest::FileId;
 type Born = u64;
 
 /// The identities of the cache folders and everything in them, at the check.
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct Snapshot {
     /// The cache folders, as made, for the check's messages and its "holds"
     /// test (the parent's only).
@@ -70,6 +81,15 @@ pub struct Snapshot {
     /// The run's claim folder (never written to the file: each process knows
     /// its own).
     pub(super) claims: Option<FileId>,
+    /// Only the folders were walked ([`standalone`]): `files` is empty, and a
+    /// file is looked up when it is opened ([`Snapshot::holds_file`]).
+    pub(super) dirs_only: bool,
+    /// Cache folders that do not exist ([`standalone`]): each configured name
+    /// (looked at again at every check) and its resolved name (absolute, the
+    /// existing part resolved, taken again at every check): nothing in them
+    /// can be aliased, but a write must not make one ([`link_hops`] refuses a
+    /// path under a resolved name).
+    pub(super) missing: Vec<(PathBuf, PathBuf)>,
 }
 
 /// Whether `set` holds `id` born at `born` (an unknown birth time on either
@@ -84,6 +104,162 @@ impl Snapshot {
     pub(super) fn is_cache_file(&self, id: &FileId, m: &std::fs::Metadata) -> bool {
         holds(&self.files, id, born(m))
     }
+
+    /// Whether the opened `f` is a cache file under any name. A folders-only
+    /// snapshot ([`standalone`]) looks the file up only when it may have
+    /// another name ([`may_alias`]): a file with one name, no mount of its own,
+    /// is the name the folder test already checked. The lookup walks the
+    /// folders' files at every lookup (r2: kept walks missed an entry
+    /// published after them; a lookup is rare, ~0.3 s on server1); a walk that
+    /// cannot finish refuses the write, naming the folder it could not list.
+    pub(super) fn holds_file(&self, f: &std::fs::File) -> std::io::Result<bool> {
+        let (id, m) = (super::claim::handle_id(f)?, f.metadata()?);
+        if !self.dirs_only {
+            return Ok(self.is_cache_file(&id, &m));
+        }
+        if !needs_lookup(f, &m, &self.roots) {
+            return Ok(false);
+        }
+        let mut now = Snapshot::default();
+        walk_roots(&self.roots, &mut now, true)
+            .map_err(|e| std::io::Error::other(format!("refused: {e}")))?;
+        Ok(now.is_cache_file(&id, &m))
+    }
+}
+
+/// Whether the opened `f` must be looked up in the folders `roots`: it may have
+/// another name ([`may_alias`]), or a file is mounted inside one of them
+/// ([`file_mount_in`]): a file bind-mounted into a cache slot shows its
+/// source's identity there, and the source, opened by its own name, has one
+/// link and no mount of its own (sol r1).
+fn needs_lookup(f: &std::fs::File, m: &std::fs::Metadata, roots: &[PathBuf]) -> bool {
+    may_alias(f, m) || file_mount_in(roots)
+}
+
+/// Whether `/proc/self/mountinfo` lists a mount point inside one of `roots`
+/// (not a root itself) that may be a file. A mounted folder needs no lookup:
+/// the folder walk records its identity, so the folder test knows its source
+/// too. Unreadable mountinfo says yes.
+#[cfg(target_os = "linux")]
+fn file_mount_in(roots: &[PathBuf]) -> bool {
+    // TLS-120 test seam, debug builds only: `ALSEM_TEST_MOUNTINFO=<file>` is read
+    // in place of `/proc/self/mountinfo`, so a test can list a mount it cannot make.
+    #[cfg(debug_assertions)]
+    let source = std::env::var_os("ALSEM_TEST_MOUNTINFO")
+        .map_or_else(|| PathBuf::from("/proc/self/mountinfo"), PathBuf::from);
+    #[cfg(not(debug_assertions))]
+    let source = PathBuf::from("/proc/self/mountinfo");
+    std::fs::read_to_string(source).map_or(true, |info| file_mount_in_info(roots, &info))
+}
+
+#[cfg(not(target_os = "linux"))]
+fn file_mount_in(_roots: &[PathBuf]) -> bool {
+    false
+}
+
+/// [`file_mount_in`] over the text of a mountinfo file.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn file_mount_in_info(roots: &[PathBuf], info: &str) -> bool {
+    // A root that cannot be resolved is not dropped (sol r3): yes, so the lookup runs and
+    // refuses the write if it cannot list there.
+    let Ok(real) = roots
+        .iter()
+        .map(std::fs::canonicalize)
+        .collect::<std::io::Result<Vec<PathBuf>>>()
+    else {
+        return true;
+    };
+    info.lines()
+        .filter_map(|l| l.split(' ').nth(4))
+        .map(|p| PathBuf::from(unescape_mount(p)))
+        .any(|p| {
+            // Only a mount point seen to be a folder is left out: one that cannot be
+            // looked at (a folder above it unsearchable) may be a file, so it counts
+            // (sol r2), and the lookup then refuses the write if it cannot list there.
+            real.iter().any(|r| p != *r && p.starts_with(r))
+                && !std::fs::symlink_metadata(&p).is_ok_and(|m| m.is_dir())
+        })
+}
+
+/// A mountinfo field with its octal escapes (`\040` for a space, `\011`,
+/// `\012`, `\134`) undone.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn unescape_mount(field: &str) -> String {
+    let b = field.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        let octal = b.get(i + 1..i + 4).and_then(|d| {
+            d.iter()
+                .all(|c| (b'0'..=b'7').contains(c))
+                .then(|| d.iter().fold(0u32, |n, c| n * 8 + u32::from(c - b'0')))
+        });
+        match (b[i], octal) {
+            (b'\\', Some(n)) if n <= 255 => {
+                out.push(n as u8);
+                i += 4;
+            }
+            (c, _) => {
+                out.push(c);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// Whether the file `f` may have a name besides the one it was opened by: more
+/// than one link, or a mount of its own (a bind mount of a file keeps its
+/// device and inode). Unknown counts as may.
+#[cfg(unix)]
+fn may_alias(f: &std::fs::File, m: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    m.nlink() > 1 || mount_root(f).unwrap_or(true)
+}
+
+/// Windows: more than one link (`GetFileInformationByHandle`'s
+/// `nNumberOfLinks`); a failed call says may.
+#[cfg(windows)]
+fn may_alias(f: &std::fs::File, _m: &std::fs::Metadata) -> bool {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle,
+    };
+    // SAFETY: an all-zero BY_HANDLE_FILE_INFORMATION is a valid value of the
+    // plain C struct.
+    let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+    // SAFETY: the handle is `f`'s, open for the whole call; `info` is the
+    // buffer the call fills.
+    let ok = unsafe { GetFileInformationByHandle(f.as_raw_handle(), &raw mut info) };
+    ok == 0 || info.nNumberOfLinks > 1
+}
+
+/// Whether `f` is the root of a mount (`statx`'s `STATX_ATTR_MOUNT_ROOT`);
+/// `None` on an error or a kernel that does not report the attribute.
+#[cfg(target_os = "linux")]
+fn mount_root(f: &std::fs::File) -> Option<bool> {
+    use std::os::fd::AsRawFd;
+    // SAFETY: an all-zero `statx` is a valid value of the plain C struct.
+    let mut stx: libc::statx = unsafe { std::mem::zeroed() };
+    // SAFETY: the empty path with `AT_EMPTY_PATH` names `f`'s descriptor, open
+    // for the whole call; `stx` is the buffer the call fills.
+    let r = unsafe {
+        libc::statx(
+            f.as_raw_fd(),
+            c"".as_ptr(),
+            libc::AT_EMPTY_PATH,
+            0,
+            &raw mut stx,
+        )
+    };
+    let bit = libc::STATX_ATTR_MOUNT_ROOT as u64;
+    (r == 0 && stx.stx_attributes_mask & bit != 0).then_some(stx.stx_attributes & bit != 0)
+}
+
+/// Other unix systems have no bind mount of a file.
+#[cfg(all(unix, not(target_os = "linux")))]
+fn mount_root(_f: &std::fs::File) -> Option<bool> {
+    Some(false)
 }
 
 /// The claim folder's file holding the parent's snapshot.
@@ -112,7 +288,8 @@ pub(super) fn take() -> Result<Snapshot, String> {
     // As `snapshot::cache::cache_dir` makes it, without its warning: a folder
     // that cannot be made is the cache's to report when it is used.
     let text = crate::snapshot::cache::cache_dir_path();
-    let _ = std::fs::create_dir_all(&text);
+    // TLS-117: on Windows through the private walk (a refused parent gets no child).
+    let _ = crate::snapshot::cache::create_cache_dir(&text);
     let ir = crate::program::ir_cache::make_ir_dir();
     let mut snap = Snapshot {
         text_on: text.is_dir(),
@@ -125,25 +302,208 @@ pub(super) fn take() -> Result<Snapshot, String> {
     if snap.ir_on {
         snap.roots.extend(ir);
     }
-    for root in snap.roots.clone() {
-        let fail = |e: std::io::Error| {
-            format!(
-                "al-sem batch: cannot list the cache folder {} ({e}): the engine's caches cannot be protected from the run's writes (TLS-116)",
-                root.display()
-            )
-        };
-        let m = std::fs::metadata(&root).map_err(fail)?;
-        let Some(id) = super::manifest::read_file_id(&root).map_err(fail)? else {
-            continue;
-        };
-        // The default `ir/` is inside the text folder: walked once.
-        if snap.dirs.insert(id, born(&m)).is_none() {
-            walk(&root, &mut snap).map_err(fail)?;
-        }
-    }
+    walk_roots(&snap.roots.clone(), &mut snap, true).map_err(|e| format!("al-sem batch: {e}"))?;
     snap.claims = claims_id()?;
     apply(&snap);
     Ok(snap)
+}
+
+/// Record `roots` and everything under them in `snap`; with `files` false,
+/// the directories only (no file is looked at), skipping what cannot be
+/// listed (TLS-120: the folder test then still knows every root, and a lookup
+/// that needs the files walks again and fails closed). `Err`: the message's
+/// tail, naming the folder that could not be listed.
+fn walk_roots(roots: &[PathBuf], snap: &mut Snapshot, files: bool) -> Result<(), String> {
+    for root in roots {
+        let fail = |e: std::io::Error| {
+            format!(
+                "cannot list the cache folder {} ({e}): the engine's caches cannot be protected from the writes (TLS-116)",
+                root.display()
+            )
+        };
+        let read =
+            std::fs::metadata(root).and_then(|m| Ok((m, super::manifest::read_file_id(root)?)));
+        let (m, id) = match read {
+            Ok((m, Some(id))) => (m, id),
+            Ok((_, None)) => continue,
+            Err(_) if !files => continue,
+            Err(e) => return Err(fail(e)),
+        };
+        // The default `ir/` is inside the text folder: walked once.
+        if snap.dirs.insert(id, born(&m)).is_none() {
+            walk(root, snap, files).map_err(fail)?;
+        }
+    }
+    Ok(())
+}
+
+/// TLS-120: the snapshot of a process outside a batch run (a standalone
+/// `alsem` or `aldump`), taken at its first write and kept. It makes no
+/// folder: the text cache folder, the IR cache's folder, and the impact-base
+/// cache's `work/` (live copies of base workspaces) when they exist, their
+/// directories only; the missing ones by path ([`Snapshot::missing`]). At every
+/// check after that, each folder is looked at again (at most three stats). A
+/// missing one made since (the engine's first run fills its caches during the
+/// run), or a present one whose identity changed (deleted and made again), is
+/// walked, folders-only, and protected from then on (r2, r3); a present one
+/// deleted since is missing again. A file is looked up when an open needs it
+/// ([`Snapshot::holds_file`]). No cache is turned off: an outside run's caches
+/// are as they were.
+pub(super) fn standalone() -> std::io::Result<std::sync::Arc<Snapshot>> {
+    use std::sync::{Arc, Mutex};
+    static STANDALONE: Mutex<Option<Arc<Snapshot>>> = Mutex::new(None);
+    let mut held = STANDALONE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let snap = held.get_or_insert_with(|| Arc::new(first_standalone()));
+    // A cache folder that cannot be looked at (a folder above it unsearchable) is not a
+    // missing one: nothing about it can be checked, so the write is refused (sol r3). Only
+    // a name that is gone (`NotFound`, a file in the path) counts as missing.
+    let names = snap
+        .roots
+        .iter()
+        .chain(snap.missing.iter().map(|(name, _)| name));
+    for name in names {
+        match std::fs::metadata(name) {
+            Err(e) if !gone(&e) => {
+                return Err(std::io::Error::other(format!(
+                    "refused: cannot look at the cache folder {} ({e}): the engine's caches cannot be protected from this write (TLS-120)",
+                    name.display()
+                )));
+            }
+            _ => {}
+        }
+    }
+    let mut gone = Vec::new();
+    let mut again: Vec<PathBuf> = Vec::new();
+    for root in &snap.roots {
+        match std::fs::metadata(root) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => gone.push(root.clone()),
+            Ok(m) => {
+                // A folder whose identity cannot be read is skipped, as the first walk skips it.
+                if let Ok(Some(id)) = super::manifest::read_file_id(root)
+                    && !holds(&snap.dirs, &id, born(&m))
+                {
+                    again.push(root.clone());
+                }
+            }
+            Err(_) => {}
+        }
+    }
+    // A missing folder is looked at by its configured name, and its resolved name is taken
+    // again (sol r1: a link in the configured name may point elsewhere by now).
+    let (made, still): (Vec<PathBuf>, Vec<PathBuf>) = snap
+        .missing
+        .iter()
+        .map(|(name, _)| name.clone())
+        .partition(|name| name.is_dir());
+    let missing: Vec<(PathBuf, PathBuf)> = still
+        .into_iter()
+        .chain(gone.iter().cloned())
+        .map(|name| {
+            let resolved = anchored(&name);
+            (name, resolved)
+        })
+        .collect();
+    if !(gone.is_empty() && again.is_empty() && made.is_empty()) || missing != snap.missing {
+        let mut next = Snapshot::clone(snap);
+        next.roots.retain(|r| !gone.contains(r));
+        next.missing = missing;
+        // Folders-only: a folder that cannot be listed is skipped, never an error. The old
+        // identities stay (a reused number with another birth time is not taken for them).
+        again.extend(made.iter().cloned());
+        let _ = walk_roots(&again, &mut next, false);
+        next.roots.extend(made);
+        *snap = Arc::new(next);
+    }
+    Ok(Arc::clone(snap))
+}
+
+/// [`standalone`]'s first snapshot.
+fn first_standalone() -> Snapshot {
+    let mut snap = Snapshot {
+        dirs_only: true,
+        ..Snapshot::default()
+    };
+    let impact = crate::engine::impact::cache::Cache::default_dir().map(|d| d.join("work"));
+    let all = [
+        Some(crate::snapshot::cache::cache_dir_path()),
+        Some(crate::program::ir_cache::ir_root()),
+        impact,
+    ];
+    for root in all.into_iter().flatten() {
+        if root.is_dir() {
+            snap.roots.push(root);
+        } else {
+            // Missing, a dangling link or no folder (a file at the path): watched as missing,
+            // so it is protected once it is a folder (r4).
+            let resolved = anchored(&root);
+            snap.missing.push((root, resolved));
+        }
+    }
+    // Folders-only: a folder that cannot be listed is skipped, never an error.
+    let _ = walk_roots(&snap.roots.clone(), &mut snap, false);
+    snap
+}
+
+/// `p` absolute, its longest existing part resolved (links followed), the
+/// rest as written. Windows: without the verbatim `\\?\` prefix
+/// `canonicalize` adds, so it compares with the paths [`link_hops`] builds.
+fn anchored(p: &Path) -> PathBuf {
+    let p = std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf());
+    for base in p.ancestors().skip(1) {
+        if let Ok(real) = std::fs::canonicalize(base) {
+            return plain(real).join(p.strip_prefix(base).unwrap_or(&p));
+        }
+    }
+    p
+}
+
+/// `p` without a verbatim prefix: `\\?\C:\x` is `C:\x`, `\\?\UNC\h\s` is
+/// `\\h\s`. Elsewhere `p` as it is.
+fn plain(p: PathBuf) -> PathBuf {
+    if cfg!(windows) {
+        PathBuf::from(plain_windows(&p.to_string_lossy()))
+    } else {
+        p
+    }
+}
+
+/// A Windows path's text without a verbatim prefix (r2, sol r1: both sides of
+/// a compare). Plain text, so its tests run anywhere.
+fn plain_windows(s: &str) -> String {
+    if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{rest}")
+    } else {
+        s.strip_prefix(r"\\?\").unwrap_or(s).to_string()
+    }
+}
+
+/// Whether `p` lies in (or is) `root`, by name. Windows: neither side's
+/// verbatim prefix counts, `/` is `\`, and case is ignored.
+fn under(p: &Path, root: &Path) -> bool {
+    if cfg!(windows) {
+        under_windows(&p.to_string_lossy(), &root.to_string_lossy())
+    } else {
+        p.starts_with(root)
+    }
+}
+
+/// [`under`]'s Windows rule over the paths' text.
+fn under_windows(p: &str, root: &str) -> bool {
+    let norm = |s: &str| {
+        let s = plain_windows(&s.replace('/', "\\")).to_lowercase();
+        s.trim_end_matches('\\').to_string()
+    };
+    let (p, root) = (norm(p), norm(root));
+    p == root || p.starts_with(&format!("{root}\\"))
+}
+
+/// TLS-120: why `dir` must not be used as a folder a command deletes files in
+/// (`cache prune --dep-cache-dir`): it is, or lies in, a cache folder of the
+/// engine. `None`: it may.
+pub fn refuses_dir(dir: &Path) -> std::io::Result<Option<&'static str>> {
+    refuses_path(&*standalone()?, &std::env::current_dir()?, dir)
 }
 
 /// The identity of this process's claim folder, when it is in a batch run.
@@ -175,38 +535,54 @@ fn gone(e: &std::io::Error) -> bool {
     ) || (cfg!(windows) && e.raw_os_error() == Some(303))
 }
 
-/// Record every entry under `dir` (links not followed).
-fn walk(dir: &Path, snap: &mut Snapshot) -> std::io::Result<()> {
+/// Record every entry under `dir` (links not followed); with `files` false,
+/// the directories only, and a folder that cannot be listed is skipped. An
+/// error names the folder it is about.
+fn walk(dir: &Path, snap: &mut Snapshot, files: bool) -> std::io::Result<()> {
     let names = match std::fs::read_dir(dir) {
-        Ok(rd) => rd
-            .map(|e| e.map(|e| e.path()))
-            .collect::<Result<Vec<_>, _>>(),
+        Ok(rd) => rd.collect::<Result<Vec<_>, _>>(),
         Err(e) => Err(e),
     };
     let names = match names {
         Ok(names) => names,
-        Err(e) if gone(&e) => return Ok(()),
-        Err(e) => return Err(e),
+        Err(e) if gone(&e) || !files => return Ok(()),
+        Err(e) => {
+            return Err(std::io::Error::new(
+                e.kind(),
+                format!("{}: {e}", dir.display()),
+            ));
+        }
     };
     #[cfg(debug_assertions)]
     test_seam_during_snapshot();
-    for p in names {
+    for e in names {
+        // The listing's own type: a file is not looked at when only the
+        // directories are recorded.
+        if !files && e.file_type().is_ok_and(|t| !t.is_dir()) {
+            continue;
+        }
+        let p = e.path();
         let m = match std::fs::symlink_metadata(&p) {
             Ok(m) => m,
-            Err(e) if gone(&e) => continue,
+            Err(e) if gone(&e) || !files => continue,
             Err(e) => return Err(e),
         };
         if m.file_type().is_symlink() {
             continue;
         }
-        let Some(id) = entry_id(&p, &m)? else {
+        let id = match entry_id(&p, &m) {
+            Ok(id) => id,
+            Err(_) if !files => None,
+            Err(e) => return Err(e),
+        };
+        let Some(id) = id else {
             continue;
         };
         if m.is_dir() {
             if snap.dirs.insert(id, born(&m)).is_none() {
-                walk(&p, snap)?;
+                walk(&p, snap, files)?;
             }
-        } else {
+        } else if files {
             snap.files.insert(id, born(&m));
         }
     }
@@ -434,7 +810,22 @@ fn link_hops(snap: &Snapshot, path: PathBuf, hops: u32) -> std::io::Result<Optio
         }
         let m = match std::fs::symlink_metadata(&cur) {
             Ok(m) => m,
-            Err(e) if gone(&e) => return Ok(None),
+            // No link lies beyond; but the rest must not make a missing cache
+            // folder (TLS-120). Every `..` after a missing name fails at the
+            // OS, so the rest's names are taken as they are.
+            Err(e) if gone(&e) => {
+                let mut rest = cur.clone();
+                rest.extend(
+                    parts[i + 1..]
+                        .iter()
+                        .filter(|c| matches!(c, Component::Normal(_))),
+                );
+                return Ok(snap
+                    .missing
+                    .iter()
+                    .any(|(_, m)| under(&rest, m))
+                    .then_some("this file is in a cache folder of the engine"));
+            }
             Err(e) => return Err(e),
         };
         if !m.file_type().is_symlink() {
@@ -512,5 +903,167 @@ mod tests {
         assert!(snap.is_cache_file(&id, &m), "the same file");
         snap.files.insert(id, born(&m) - 1);
         assert!(!snap.is_cache_file(&id, &m), "a reused number");
+    }
+
+    /// TLS-120: a file that is a mount of its own (a bind mount of a file keeps the device and
+    /// inode of the file it shows) may have another name; a plain file with one link may not.
+    /// The bind-mounted file is any regular file `/proc/self/mountinfo` names as a mount point
+    /// (a container's `/etc/hosts`); with none the mount half is skipped, said on stderr.
+    ///
+    /// Discrimination (2026-11-24): `mount_root` made `false`: fails "a mounted file";
+    /// restored, passes.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_mounted_file_may_have_another_name() {
+        let t = tempfile::NamedTempFile::new().unwrap();
+        let plain = std::fs::File::open(t.path()).unwrap();
+        // A kernel that does not report the attribute makes every file "may" (r1): the plain
+        // half has nothing to show there.
+        match mount_root(&plain) {
+            Some(_) => assert!(
+                !may_alias(&plain, &plain.metadata().unwrap()),
+                "a plain file"
+            ),
+            None => eprintln!("no STATX_ATTR_MOUNT_ROOT here: the plain half is skipped"),
+        }
+        let info = std::fs::read_to_string("/proc/self/mountinfo").unwrap();
+        let mounted = info
+            .lines()
+            .filter_map(|l| l.split(' ').nth(4))
+            .filter(|p| std::fs::metadata(p).is_ok_and(|m| m.is_file()))
+            .find_map(|p| std::fs::File::open(p).ok());
+        match mounted {
+            Some(f) => assert!(may_alias(&f, &f.metadata().unwrap()), "a mounted file"),
+            None => eprintln!("no mounted regular file here: the mount half is skipped"),
+        }
+    }
+
+    /// TLS-120 sol r1: a file mounted inside a cache folder is seen in a mountinfo text (its
+    /// octal escapes undone); a mount outside, the folder itself, or a folder inside is not.
+    /// (sol r2) A mount point that cannot be looked at (its folder mode 000) counts too.
+    ///
+    /// Discrimination (2026-11-25, sol r1): the escapes left as they are (`unescape_mount`
+    /// returning its field): fails "(a file inside)"; restored, passes. (sol r2) A mount
+    /// point counted only when seen to be a file (`is_ok_and(|m| m.is_file())` again): fails
+    /// "(cannot be looked at)"; restored, passes. (sol r3) A root that cannot be resolved
+    /// dropped again (`filter_map(.. .ok())`): fails "(a root that cannot be resolved)";
+    /// restored, passes. (Run in one build with the other sol r3 break, in `standalone`,
+    /// which this test does not reach.)
+    #[test]
+    fn a_file_mount_inside_a_cache_folder_is_seen() {
+        let t = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(t.path()).unwrap().join("cache");
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        std::fs::write(root.join("sub/e bin"), "").unwrap();
+        let line = |p: &str| format!("36 35 0:1 / {p} rw,relatime - ext4 /dev/x rw\n");
+        let escaped = root
+            .join("sub/e bin")
+            .to_string_lossy()
+            .replace(' ', "\\040");
+        let roots = [root.clone()];
+        assert!(
+            file_mount_in_info(&roots, &line(&escaped)),
+            "(a file inside)"
+        );
+        assert!(
+            !file_mount_in_info(&roots, &line("/elsewhere")),
+            "(outside)"
+        );
+        let folder = root.to_string_lossy();
+        assert!(
+            !file_mount_in_info(&roots, &line(&folder)),
+            "(the folder itself)"
+        );
+        let sub = root.join("sub");
+        assert!(
+            !file_mount_in_info(&roots, &line(&sub.to_string_lossy())),
+            "(a folder inside)"
+        );
+        use std::os::unix::fs::PermissionsExt;
+        let locked = root.join("locked");
+        std::fs::create_dir(&locked).unwrap();
+        std::fs::write(locked.join("e.bin"), "").unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let denied = std::fs::symlink_metadata(locked.join("e.bin")).is_err();
+        let seen = file_mount_in_info(&roots, &line(&locked.join("e.bin").to_string_lossy()));
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(denied, "precondition: the mount point cannot be looked at");
+        assert!(seen, "(cannot be looked at)");
+        // sol r3: a root that cannot be resolved (a folder above it mode 000) is not dropped.
+        let inner = locked.join("root");
+        std::fs::create_dir(&inner).unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let unresolved = std::fs::canonicalize(&inner).is_err();
+        let seen = file_mount_in_info(&[root.clone(), inner.clone()], &line("/elsewhere"));
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(unresolved, "precondition: the root cannot be resolved");
+        assert!(seen, "(a root that cannot be resolved)");
+    }
+
+    /// TLS-120 sol r1: a file bind-mounted INTO a cache slot shows its source's identity there,
+    /// and the source, opened by its own name, has one link and no mount of its own. So a cache
+    /// folder holding a mounted file makes every open look the file up. The real mountinfo:
+    /// a container's `/etc/hosts` is such a mount, so `/etc` taken as a cache folder makes a
+    /// plain file (one link, no mount) need the lookup; a folder holding no mount does not.
+    /// (The whole case through the binary needs a bind mount, which this container cannot
+    /// make: `unshare -Urm` fails with EPERM, no user namespaces; each half here is skipped,
+    /// said on stderr, where the host cannot show it.)
+    ///
+    /// Discrimination (2026-11-25, sol r1): `needs_lookup` without `|| file_mount_in(roots)`:
+    /// fails "(a file mounted under the folder)"; restored, passes.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_cache_folder_holding_a_file_mount_needs_a_lookup() {
+        let t = tempfile::NamedTempFile::new().unwrap();
+        let plain = std::fs::File::open(t.path()).unwrap();
+        let m = plain.metadata().unwrap();
+        let etc = [PathBuf::from("/etc")];
+        if file_mount_in(&etc) {
+            assert!(
+                needs_lookup(&plain, &m, &etc),
+                "(a file mounted under the folder)"
+            );
+        } else {
+            eprintln!("no file mounted under /etc here: that half is skipped");
+        }
+        let empty = tempfile::tempdir().unwrap();
+        if mount_root(&plain).is_some() {
+            assert!(
+                !needs_lookup(&plain, &m, &[empty.path().to_path_buf()]),
+                "(no mount)"
+            );
+        } else {
+            eprintln!("no STATX_ATTR_MOUNT_ROOT here: the no-mount half is skipped");
+        }
+    }
+
+    /// TLS-120 sol r1: the Windows name compare of a missing cache folder: neither side's
+    /// verbatim prefix counts (`\\?\`, `\\?\UNC\`), `/` is `\`, case is ignored, and a sibling
+    /// that only starts with the folder's name is not inside it.
+    ///
+    /// Discrimination (2026-11-25, sol r1): the candidate's prefix kept (`plain_windows` not
+    /// applied in `under_windows`): fails "(verbatim candidate)"; restored, passes.
+    #[test]
+    fn windows_names_compare_without_prefix_and_case() {
+        for (case, p, root, inside) in [
+            (
+                "(verbatim candidate)",
+                r"\\?\C:\Users\x\Cache\ir\k",
+                r"C:\users\X\cache",
+                true,
+            ),
+            (
+                "(verbatim root)",
+                r"C:\Users\x\cache\e.bin",
+                r"\\?\C:\Users\x\Cache",
+                true,
+            ),
+            ("(slash)", "C:/a/b", r"C:\A", true),
+            ("(unc)", r"\\?\UNC\h\s\c\x", r"\\h\s\c", true),
+            ("(the folder)", r"C:\cache\", r"C:\Cache", true),
+            ("(a sibling)", r"C:\cache2\x", r"C:\cache", false),
+        ] {
+            assert_eq!(under_windows(p, root), inside, "{case}");
+        }
     }
 }

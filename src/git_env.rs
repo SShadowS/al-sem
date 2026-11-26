@@ -57,6 +57,21 @@ pub fn git_command() -> Command {
     cmd
 }
 
+/// A path git printed, from its bytes (TLS-114): as they are on unix, where a
+/// name is any bytes; git for Windows prints UTF-8.
+#[must_use]
+pub fn path_from_git(bytes: Vec<u8>) -> std::path::PathBuf {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStringExt;
+        std::ffi::OsString::from_vec(bytes).into()
+    }
+    #[cfg(not(unix))]
+    {
+        String::from_utf8_lossy(&bytes).into_owned().into()
+    }
+}
+
 /// The empty config file a scratch `git` reads as its global config.
 const NO_CONFIG: &str = if cfg!(windows) { "NUL" } else { "/dev/null" };
 

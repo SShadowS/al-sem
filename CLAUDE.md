@@ -156,7 +156,7 @@ Every test still runs before a merge; the tiers decide HOW OFTEN each one runs.
 | Tier | When | Command | What it runs |
 |------|------|---------|--------------|
 | 1. Inner loop | while editing | `cargo test -p al-sem --lib <module>`, `cargo test --test <umbrella> <member>::`; per agent task `scripts/ci-steps task-affected` | only what you touched (`task-affected`: fmt, dev clippy, gen-syntax, the lib tests and the test binaries the changed paths reach; an unmapped path runs the whole suite) |
-| 2. Task gate | before every commit / per task | `scripts/ci-steps task` | `fmt`, clippy in the dev profile (`-D warnings`), `gen-syntax`, the WHOLE suite once — which already includes every `check-goldens` target |
+| 2. Task gate | before every commit / per task | `scripts/ci-steps task` | `fmt`, clippy in the dev profile (`-D warnings`), `gen-syntax`, `locale` (TLS-117: `scripts/check-parse-path-locale`, ~3 s), the WHOLE suite once — which already includes every `check-goldens` target |
 | 2b. Pre-submit CDO subset | once per task, before `coord submit` (in a CDO slot) | `scripts/cdo-gate --only harness,l4[,lsp,lib,output] <CDO_WS>` | the named CDO phases only (`harness` = `program_resolve_harness`, `l4` = `l4_summary_differential`, `lsp` = `lsp`'s `program_graph::` and `snapshot_robustness::`, `lib` = `lib_cdo`, `output` = `output_cdo`), with `ENFORCE_CDO_WS=1` and the memory sampler; no speed check, no impact ratchets; its verdict says SUBSET, never a landing gate. `--dry-run` shows what it would run. `harness,l4` took 77 s warm on 2026-11-14 (harness 55 s, l4 22 s; a cold build of the two targets adds ~140 s) (TLS-58). **Checked, not remembered (TLS-87):** a passing run on a COMMITTED, clean tree, run from that checkout itself, records its phases under that tree in `<git common dir>/cdo-presubmit/<tree>`, best-effort (a dirty tree, a tracked file modified during the run, a failing run or a run from another folder records nothing; a `cp -p` restore is not caught; a rebase makes a new tree, so run it after the last rebase; a full gate's pass records too), and `scripts/land` checks every branch's head tree: product code (anything but docs, scripts, top-level Markdown, `.claude`/`.kraken`/`.github`/`.agent` and tests, test data under `tests/fixtures`/`tests/r0-corpus` included as product) needs `harness,l4,output` (output's rendering goldens are the only pre-landing check of explain/query/digest text; it adds ~160 s); the subset's own tests and goldens need their phases; other tests none. A missing record is a loud warning, said again if a landing step fails (a new gate starts advisory); `LAND_REQUIRE_PRESUBMIT=1` makes it a refusal |
 | 3. Branch gate | once, before a merge | `scripts/ci-steps all` + `scripts/cdo-gate <CDO_WS>` | CI's exact bar (release clippy, the `release-fast` build, `perf_bounds` on it), the agentflow pytest suite (`ci-steps agentflow`, ~2 min; CI cannot run it), plus the CDO suite and the CDO speed and memory check |
 
@@ -319,7 +319,7 @@ See `src/main.rs`'s `Args` (clap derive) for the authoritative flag list.
 ### The dependency IR cache (ENG-110) and measurements
 
 `alsem`, `aldump` and `al-call-hierarchy` keep the parsed IR of every dependency package in
-`~/.cache/al-ch-snapshot-cache/ir/<binary key>/` (Linux only; off on Windows). `alsem batch`
+`~/.cache/al-ch-snapshot-cache/ir/<binary key>/` (Windows: `%LOCALAPPDATA%\al-ch-snapshot-cache\ir\`). `alsem batch`
 uses it too, its parent and workers (TLS-116): the batch write check makes and snapshots the text
 and IR cache folders, then refuses any job write in, above or hard-linked into them. **The key is the running binary's bytes**, so each new build starts cold: its first
 CDO run fills ~144 MiB (one-shot `analyze`: ~x1.035 instructions of a cache-off run), every
@@ -339,6 +339,20 @@ later run of the same binary is warm (~x0.53). Spec:
 - Switch and diagnostics: `ALSEM_IR_CACHE=on|off`, `ALSEM_IR_CACHE_DIR`, `ALSEM_IR_CACHE_VERIFY=1`
   (every hit parsed again and compared), `ALSEM_IR_CACHE_REPORT=<file>` (a start and an end line
   per process, with counters).
+- **Windows (TLS-117): only a STAMPED binary has a key.** No path names the running image
+  reliably there, so the key checks a candidate file against what runs (the loaded module's
+  canonical read-only content, plus a data-digest slot that `alsem-stamp` writes after linking).
+  Every `cargo build`/`cargo test` binary is unstamped: no key, the cache off, the report line
+  `"ir_cache": "unstamped"` (which `ir-cache-report-check` passes). Stamped binaries come from
+  `scripts/install-windows.ps1` (build, stamp, verify, copy to `~/.al-sem/bin/` and `-LspDir`)
+  and from the release workflows' stamp step. The cache folders must be private (owner and DACL
+  rules from the volume root down) on a local NTFS drive; otherwise the IR cache is off and the
+  text cache keeps owned text. **On by default on Windows since 2026-11-25** (the owner's
+  acceptance passed; `ir_cache::DEFAULT_ON`), with the narrower guarantee the owner accepted (a
+  stamped exe damaged in its writable data and swapped for a pristine copy in the milliseconds
+  before the key; the design note's section 1). `ALSEM_IR_CACHE=off` turns it off. A check that a binary really
+  makes a key is `ir-cache-report-check --require-key` (it fails `unstamped`). Design:
+  `docs/superpowers/notes/2026-11-21-tls117-windows-image-key.md`.
 
 ## Prerequisites
 
@@ -386,6 +400,19 @@ later run of the same binary is warm (~x0.53). Spec:
     copy of the hook, not the worktree's own. A hook edit only takes effect once it
     lands there, so testing an edit from the worktree that authored it does not
     exercise the copy that will actually run.
+
+### Windows build and install
+
+Settings for a native Windows build (TLS-121 is writing this section up in full):
+`TREE_SITTER_AL_PATH` at the commit named above (the build stops on a grammar hash mismatch),
+`CMAKE_GENERATOR = "Visual Studio 17 2022"` (libz-ng-sys's cmake otherwise picks a generator
+cmake 3.29 lacks) and a short `CARGO_TARGET_DIR` such as `C:/atw` (MSBuild's file tracking breaks
+on long paths). **Install with `scripts/install-windows.ps1`** (Windows PowerShell 5.1 or pwsh 7;
+`-LspDir <dir>` for each LSP package folder): it builds `alsem`, `aldump` and `al-call-hierarchy`
+with `release-ship`, stamps them with `alsem-stamp` (TLS-117: an unstamped Windows binary gets no
+IR cache key), verifies each, and copies them to `~/.al-sem/bin/` and the LSP folders, refusing
+to overwrite a running binary. A binary copied by hand from `target\` is unstamped: it works,
+with the IR cache off.
 
 ### In a kraken tentacle (server1)
 
