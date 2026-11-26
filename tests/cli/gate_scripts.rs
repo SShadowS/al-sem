@@ -5094,48 +5094,90 @@ fn pre_commit_sees_a_rust_file_renamed_away() {
     });
 }
 
-/// TLS-114 (sol r1): a checkout whose name ends in LF (`repo` + LF) still
+/// TLS-114 (sol r1, r2): a checkout whose name ends in LF (`repo` + LF) still
 /// finds its own `scripts/`: the hook reads the top level exactly, where `$(...)`
-/// strips every trailing LF.
+/// strips every trailing LF, and so does the REAL `check-goldens
+/// --verify-coverage` (only `cargo`, `ci-steps` and `require-rttime` are
+/// stubbed; the golden folders are made from this checkout's names).
 ///
 /// DISCRIMINATION (2026-11-25): the hook back on a bare
 /// `repo_root="$(git rev-parse --show-toplevel)"` fails (exit 1, "ci-steps not
-/// found" under `.../repo`); restored, passes.
+/// found" under `.../repo`); `check-goldens` back on
+/// `repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"` fails (exit
+/// 1, "golden COVERAGE check failed"); restored, passes.
 #[cfg(unix)]
 #[test]
 fn pre_commit_reads_a_top_level_ending_in_lf() {
-    pre_commit_runs_fmt_and_goldens("repo\n", |repo| {
+    run_pre_commit("repo\n", true, |repo| {
         std::fs::write(repo.join("src/a.rs"), "fn a() {}\n").unwrap();
         crate::git::run(repo, &["add", "src"]);
     });
 }
 
-/// Runs the pre-commit hook in a new repository `<tmp>/<repo_name>` after
-/// `stage`, with `scripts/ci-steps` and `scripts/check-goldens` stubbed, and
-/// asserts it passed after running fmt and both golden steps.
+/// [`run_pre_commit`] with `scripts/check-goldens` stubbed.
 #[cfg(unix)]
 fn pre_commit_runs_fmt_and_goldens(repo_name: &str, stage: impl FnOnce(&std::path::Path)) {
+    run_pre_commit(repo_name, false, stage);
+}
+
+/// Runs the pre-commit hook in a new repository `<tmp>/<repo_name>` after
+/// `stage`, with `scripts/ci-steps` stubbed, and asserts it passed after
+/// running fmt and both golden steps. `real_check_goldens`: this checkout's
+/// `scripts/check-goldens` runs, with `cargo` and `require-rttime` stubbed and
+/// this checkout's golden folders made (empty) so its coverage check holds.
+#[cfg(unix)]
+fn run_pre_commit(repo_name: &str, real_check_goldens: bool, stage: impl FnOnce(&std::path::Path)) {
     use std::os::unix::fs::PermissionsExt;
+    let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path().join(repo_name);
+    let bin = dir.path().join("bin");
     let calls = dir.path().join("calls");
     std::fs::create_dir_all(repo.join("scripts")).unwrap();
     std::fs::create_dir_all(repo.join("src")).unwrap();
-    for name in ["ci-steps", "check-goldens"] {
-        let p = repo.join("scripts").join(name);
+    std::fs::create_dir_all(&bin).unwrap();
+    let stub = |p: std::path::PathBuf, name: &str| {
         std::fs::write(
             &p,
             format!("#!/bin/sh\necho \"{name} $*\" >> '{}'\n", calls.display()),
         )
         .unwrap();
         std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+    };
+    stub(repo.join("scripts/ci-steps"), "ci-steps");
+    if real_check_goldens {
+        std::fs::copy(
+            manifest.join("scripts/check-goldens"),
+            repo.join("scripts/check-goldens"),
+        )
+        .unwrap();
+        stub(repo.join("scripts/require-rttime"), "require-rttime");
+        stub(bin.join("cargo"), "cargo");
+        for e in std::fs::read_dir(manifest.join("tests")).unwrap() {
+            let name = e.unwrap().file_name().into_string().unwrap();
+            if name.contains("goldens")
+                || name.ends_with("-vectors")
+                || name == "l4-summary-baseline"
+            {
+                std::fs::create_dir_all(repo.join("tests").join(name)).unwrap();
+            }
+        }
+    } else {
+        stub(repo.join("scripts/check-goldens"), "check-goldens");
     }
     crate::git::run(&repo, &["init", "-q"]);
     stage(&repo);
+    let path = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
     let out = crate::clean_env::command("bash")
-        .arg(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts/git-hooks/pre-commit"))
+        .arg(manifest.join("scripts/git-hooks/pre-commit"))
         .current_dir(&repo)
         .env("HOME", dir.path())
+        .env("PATH", path)
+        .env("CHECK_GOLDENS_FORCE", "1")
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .output()
@@ -5146,9 +5188,20 @@ fn pre_commit_runs_fmt_and_goldens(repo_name: &str, stage: impl FnOnce(&std::pat
         String::from_utf8_lossy(&out.stderr)
     );
     assert_eq!(out.status.code(), Some(0), "{text}");
-    assert_eq!(
-        std::fs::read_to_string(&calls).unwrap_or_default(),
-        "ci-steps fmt\ncheck-goldens --verify-coverage\ncheck-goldens \n",
-        "{text}"
-    );
+    let got = std::fs::read_to_string(&calls).unwrap_or_default();
+    if real_check_goldens {
+        assert!(text.contains("check-goldens: coverage OK"), "{text}");
+        assert!(
+            got.starts_with(
+                "ci-steps fmt\ncargo nextest --version\nrequire-rttime \n\
+                 cargo nextest run --profile goldens --test r4"
+            ),
+            "{got}\n{text}"
+        );
+    } else {
+        assert_eq!(
+            got, "ci-steps fmt\ncheck-goldens --verify-coverage\ncheck-goldens \n",
+            "{text}"
+        );
+    }
 }
