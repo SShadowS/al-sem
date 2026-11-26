@@ -106,8 +106,11 @@ a rounds row for every round over the limit by itself. It is printed with its CP
 the clock-corrected ratio and the instruction ratio. A clock in head's favour never
 waives; wall and memory failures always fail. A count whose counters did not run for
 the call's CPU seconds (`covers`) is recorded (`covered: false`, its counts kept) but
-gives no instruction count (TLS-130), no clock, no label and so no advisory. The advisory applies only in the final judgment, after any
-extra pair.
+gives no instruction count (TLS-130), no clock, no label and so no advisory. A count
+that covers can still be short by the band: the advisory's conditions must hold even
+if the side whose counters ran the smaller share of its CPU seconds lost that share
+(TLS-130 review r1; see `judge`). The advisory applies only in the final judgment,
+after any extra pair.
 A judged warm-up row that FAILS (advisory or not) while its two passes' ratios differ
 beyond CONTRADICTED_SPREAD gets ONE more flipped pair (passes 3 and 4 on fresh servers,
 each side order once more; each waits for a calm host as passes 1 and 2 do). Then every
@@ -410,7 +413,11 @@ def clock_cpi_flags(rows):
 #   while the corrected CPU reads x1.18 and would waive;
 # - for a rounds row, every round whose CPU ratio is over the limit meets the
 #   instruction, wall and clock-corrected conditions by itself (medians taken
-#   from different rounds may not combine; review r3, S2).
+#   from different rounds may not combine; review r3, S2);
+# - (TLS-130 review r1, sol) the instruction, clock and equal-clocks conditions
+#   hold at the worst end of what a covering count can have lost (`judge`'s
+#   `instr_lo`/`instr_hi`/`clock_hi`/`corrected_hi`): a partial count never
+#   turns a CPU FAIL into an advisory.
 # Wall and memory failures always fail. The advisory applies only in the final
 # judgment: a contradicted failure gets the extra pair first (`warm_failures`
 # ignores the advisory).
@@ -420,21 +427,25 @@ CPU_ADVISORY_QUESTION = "q-20261121T025802-abcd2da8"
 def cpu_advisory(row):
     """The advisory text when `row`'s CPU-time failure is advisory, else None."""
     i, c, k = row.get("instr"), row.get("clock"), row.get("corrected")
+    # ⟨TLS-130 review r1, sol⟩ Each condition holds at the worst end of the
+    # coverage error (`judge`'s bounds); no bounds, no advisory.
+    bounds = [row.get(m) for m in ("instr_lo", "instr_hi", "corrected_hi", "clock_hi")]
     warm = row.get("warm", False)
     cpu_limit = WARM_CPU_LIMIT if warm else CPU_LIMIT
     wall_limit = WARM_WALL_LIMIT if warm else WALL_LIMIT
-    if not (i and c and k and "clock" in row_labels(row)) or row["wall"]["ratio"] > wall_limit:
+    if (not (i and c and k and all(bounds) and "clock" in row_labels(row))
+            or row["wall"]["ratio"] > wall_limit):
         return None
-    # (CPU, instructions, CPU at equal clocks, wall, clock) ratios: the warm-up
-    # row's judged (geometric mean) ratios, or each over-limit round of a rounds row.
+    # (CPU, wall, instructions low and high, CPU at equal clocks high, clock
+    # high) ratios: the warm-up row's judged (geometric mean) ratios, or each
+    # over-limit round of a rounds row.
     if warm:
-        samples = [(row["cpu"]["ratio"], i["ratio"], k["ratio"], row["wall"]["ratio"],
-                    c["ratio"])]
+        samples = [(row["cpu"]["ratio"], row["wall"]["ratio"], *(b["ratio"] for b in bounds))]
     else:
-        samples = [s for s in zip(row["cpu"]["ratios"], i["ratios"], k["ratios"],
-                                  row["wall"]["ratios"], c["ratios"]) if s[0] > cpu_limit]
-    for cpu, ir, corrected, w, cr in samples:
-        if not (1 / INSTR_LIMIT <= ir <= INSTR_LIMIT and w <= wall_limit
+        samples = [s for s in zip(row["cpu"]["ratios"], row["wall"]["ratios"],
+                                  *(b["ratios"] for b in bounds)) if s[0] > cpu_limit]
+    for cpu, w, ir_lo, ir_hi, corrected, cr in samples:
+        if not (1 / INSTR_LIMIT <= ir_lo and ir_hi <= INSTR_LIMIT and w <= wall_limit
                 and corrected <= cpu_limit and cr < 1):
             return None
     corrected = k["ratio"]
@@ -479,7 +490,8 @@ def judge_warm(records, keep_judged=()):
     warm_rows, _ = judge([dict(r, round=r["warm_pass"] + 1) for r in warm_records])
     warm_rows = [r for r in warm_rows if r["call"] != "round-total"]
     for row in warm_rows:
-        for m in ("cpu", "wall", "instr", "clock", "cpi", "corrected"):
+        for m in ("cpu", "wall", "instr", "clock", "cpi", "corrected",
+                  "instr_hi", "instr_lo", "clock_hi", "corrected_hi"):
             if m not in row:
                 continue
             ratios = row[m]["ratios"]
@@ -1187,7 +1199,10 @@ class Server:
         `self.last_instr` then holds the call's user-mode instructions, or None
         when they are not counted (TLS-83); `self.last_counts` every counted
         event's count ({event: n}, or None), and `self.last_user_sys` its user
-        and system seconds (TLS-111)."""
+        and system seconds (TLS-111). `self.last_refusal` says why a counting
+        run gave this call no count, else None (TLS-130 review r1: `timed_call`
+        puts it in the call's record, so a reader ties it to that call)."""
+        self.last_refusal = None
         perf = self.instr_start()
         # instr_stop runs even when the call times out (SystemExit): perf and
         # its FIFOs never outlive the call (review r1, sol).
@@ -1235,11 +1250,16 @@ class Server:
         # After INSTR_GIVE_UP attaches in a row fail, this server counts no more:
         # each failure costs up to INSTR_ATTACH_S inside the CDO slot, 66 calls a
         # run (review r1, sol).
-        if not INSTR_EVENTS or getattr(self, "instr_failures", 0) >= INSTR_GIVE_UP:
+        if not INSTR_EVENTS:
+            return None
+        if getattr(self, "instr_failures", 0) >= INSTR_GIVE_UP:
+            # No line per call: the server-level line below said it once.
+            self.last_refusal = "this server's perf gave up"
             return None
         started = self._instr_start()
         self.instr_failures = 0 if started else getattr(self, "instr_failures", 0) + 1
         if not started:
+            self.last_refusal = "perf attach failed"
             # One line per failed attach (at most INSTR_GIVE_UP a server): what the
             # tests count, since a stub perf too slow to start logs nothing (TLS-103).
             print(f"cdo-speed: {self.name} (pid {self.p.pid}): perf attach failed "
@@ -1335,11 +1355,13 @@ class Server:
             # server counts no more (review r2, sol; an ack resets the attach
             # streak, so the attach give-up alone did not catch it).
             self.instr_failures = INSTR_GIVE_UP
+            self.last_refusal = "perf did not stop"
             print(f"cdo-speed: {self.name}: perf did not stop within {INSTR_STOP_S:g} s; "
                   "this server's calls are not counted from here on", file=sys.stderr)
         else:
             if early:
                 total = None
+                self.last_refusal = "perf ended before the call did"
                 print(f"cdo-speed: {self.name}: perf ended before the call did; call not counted",
                       file=sys.stderr)
             else:
@@ -1352,10 +1374,12 @@ class Server:
                         # row): perf's own rows, for the log.
                         rows = [ln.strip() for ln in text.splitlines()
                                 if ln.strip() and not ln.startswith("#")]
+                        self.last_refusal = "perf output not taken as a count"
                         print(f"cdo-speed: {self.name}: perf output not taken as a count: "
                               f"{' | '.join(rows[:6]) or '(empty)'}", file=sys.stderr)
                 except OSError as e:
                     total = None
+                    self.last_refusal = "perf output unreadable"
                     print(f"cdo-speed: {self.name}: perf output unreadable ({e}); "
                           "call not counted", file=sys.stderr)
         for fd in fds:
@@ -1366,6 +1390,7 @@ class Server:
         if total and not kind_total(total[0], "instructions"):
             print(f"cdo-speed: {self.name}: perf counted no instruction; call not counted",
                   file=sys.stderr)
+            self.last_refusal = "perf counted no instruction"
             total = None
         return total
 
@@ -1454,13 +1479,17 @@ def timed_call(server, side, cid, tool, args, rnd, warm_pass, tag, records):
     # ⟨TLS-130⟩ An uncovered count is partial (a multiplexed group loses the same
     # time on both members, so only `covers` sees it): no instruction count; its
     # counts stay for diagnostics.
+    # ⟨TLS-130 review r1⟩ `uncounted`: why this call has no count (None when it
+    # has one, or when the run counts nothing), tied to its own record.
+    refusal = getattr(server, "last_refusal", None)
     if covered is False:
         instr = None
+        refusal = "not covered"
     records.append(dict(call=cid, side=side, round=rnd, warm_pass=warm_pass,
                         wall=wall, cpu=cpu, sha=sha, load=load, pressure=pressure,
                         instr=instr, suspended_before=before, suspended_during=during,
                         user=user, sys=system, cycles=cycles, counts=counts,
-                        running_s=running_s, covered=covered,
+                        running_s=running_s, covered=covered, uncounted=refusal,
                         **clock_cpi(cycles, user, instr, covered)))
 
 
@@ -1569,6 +1598,7 @@ def judge(records):
                                 wall=sum(r["wall"] for r in rs),
                                 cpu=sum(r["cpu"] for r in rs), sha="",
                                 instr=instr, cycles=cycles, user=user, sys=summed("sys"),
+                                running_s=summed("running_s"),
                                 covered=covered, **clock_cpi(cycles, user, instr, covered)))
     calls.append("round-total")
     for cid in calls:
@@ -1598,6 +1628,34 @@ def judge(records):
             ratios = [(b[k]["user"] * b[k]["clock"] / a[k]["clock"] + b[k]["sys"])
                       / (a[k]["user"] + a[k]["sys"]) for k in paired]
             row["corrected"] = dict(ratio=statistics.median(ratios), ratios=ratios)
+            # ⟨TLS-130 review r1, sol⟩ How far a count `covers` passes can be
+            # off, per pair: a side whose counters ran a smaller share of its CPU
+            # seconds than the other side's (or than its CPU seconds, whichever
+            # is more) may have lost that share of its instructions and cycles.
+            # Comparing the sides, not each with its CPU alone, keeps a loss
+            # hidden under a multi-threaded call's normal excess (+2.2 to +2.7 %
+            # on CDO, see `covers`) in sight; a loss both sides share leaves
+            # every ratio as it is. The advisory (`cpu_advisory`) must hold at
+            # the worst end of each ratio: head's lost share raises head's
+            # instructions and clock, base's lowers the instruction ratio.
+            # Before, a head count 1.5 % short in both passes turned x1.025
+            # instructions and x1.31 at equal clocks (a FAIL) into x1.010 and
+            # x1.290, which waived it.
+            if all(r.get("running_s") for k in paired for r in (a[k], b[k])):
+                bounds = {"instr_hi": [], "instr_lo": [], "clock_hi": [], "corrected_hi": []}
+                for k in paired:
+                    share = {s: r["running_s"] / r["cpu"] for s, r in (("b", a[k]), ("h", b[k]))}
+                    lost_h = max(0.0, 1 - share["h"] / max(1.0, share["b"]))
+                    lost_b = max(0.0, 1 - share["b"] / max(1.0, share["h"]))
+                    ir = b[k]["instr"] / a[k]["instr"]
+                    cr = b[k]["clock"] / a[k]["clock"] / (1 - lost_h)
+                    bounds["instr_hi"].append(ir / (1 - lost_h))
+                    bounds["instr_lo"].append(ir * (1 - lost_b))
+                    bounds["clock_hi"].append(cr)
+                    bounds["corrected_hi"].append((b[k]["user"] * cr + b[k]["sys"])
+                                                  / (a[k]["user"] + a[k]["sys"]))
+                for m, rs in bounds.items():
+                    row[m] = dict(ratio=statistics.median(rs), ratios=rs)
         row["judged"] = row["cpu"]["base"] >= MIN_SECONDS
         rows.append(row)
         # Undecided: the rounds disagree about the verdict (some ratios over
