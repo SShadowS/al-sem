@@ -510,9 +510,10 @@ pub enum Incomplete {
 pub fn incompleteness_signals(detector: &str) -> Option<&'static [Incomplete]> {
     use crate::engine::l5::detectors::*;
     match detector {
-        // Caps on findings per event / try routine.
+        // Caps on findings per event.
         d44::DETECTOR => Some(&[Incomplete::Skip("outputCapped")]),
-        d54::DETECTOR => Some(&[Incomplete::Skip("cappedPerTryRoutine")]),
+        // Uncapped since ENG-101 (its `cappedPerTryRoutine` is gone).
+        d54::DETECTOR => Some(&[]),
         // The per-publisher cap, and the relay walk's node cap.
         d45::DETECTOR => Some(&[
             Incomplete::Skip("outputCapped"),

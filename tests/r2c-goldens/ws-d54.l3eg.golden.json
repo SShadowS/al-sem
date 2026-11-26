@@ -13,6 +13,104 @@
         }
       ],
       "publisherRoutineId": "11111111-0000-0000-0000-00000000d540:Codeunit:50922#0f2242c5cbed16b79e258da0d09b1fa1b331c04f0bfdaae315b5c4cd188d0cea"
+    },
+    {
+      "id": "11111111-0000-0000-0000-00000000d540:Codeunit:50922::OnBeforeThing::b857b58d30164f5d66c260f5c06e637931ae8232099bfa2c43ac97a8e3dcad91",
+      "publisherObjectId": "11111111-0000-0000-0000-00000000d540:Codeunit:50922",
+      "eventName": "OnBeforeThing",
+      "eventKind": "integration",
+      "signatureHash": "b857b58d30164f5d66c260f5c06e637931ae8232099bfa2c43ac97a8e3dcad91",
+      "parameters": [],
+      "provenance": [
+        {
+          "source": "tree-sitter"
+        }
+      ],
+      "publisherRoutineId": "11111111-0000-0000-0000-00000000d540:Codeunit:50922#b857b58d30164f5d66c260f5c06e637931ae8232099bfa2c43ac97a8e3dcad91"
+    },
+    {
+      "id": "11111111-0000-0000-0000-00000000d540:Codeunit:50924::OnE1::223afda06e56ed8dc4c810d1aa8ea33b4681998007f9ea4ba264ef6a38142f12",
+      "publisherObjectId": "11111111-0000-0000-0000-00000000d540:Codeunit:50924",
+      "eventName": "OnE1",
+      "eventKind": "integration",
+      "signatureHash": "223afda06e56ed8dc4c810d1aa8ea33b4681998007f9ea4ba264ef6a38142f12",
+      "parameters": [],
+      "provenance": [
+        {
+          "source": "tree-sitter"
+        }
+      ],
+      "publisherRoutineId": "11111111-0000-0000-0000-00000000d540:Codeunit:50924#223afda06e56ed8dc4c810d1aa8ea33b4681998007f9ea4ba264ef6a38142f12"
+    },
+    {
+      "id": "11111111-0000-0000-0000-00000000d540:Codeunit:50924::OnE2::e5d40089a7299028f38f43b9361f98f9b43b629441f5a72625224aa51bf32360",
+      "publisherObjectId": "11111111-0000-0000-0000-00000000d540:Codeunit:50924",
+      "eventName": "OnE2",
+      "eventKind": "integration",
+      "signatureHash": "e5d40089a7299028f38f43b9361f98f9b43b629441f5a72625224aa51bf32360",
+      "parameters": [],
+      "provenance": [
+        {
+          "source": "tree-sitter"
+        }
+      ],
+      "publisherRoutineId": "11111111-0000-0000-0000-00000000d540:Codeunit:50924#e5d40089a7299028f38f43b9361f98f9b43b629441f5a72625224aa51bf32360"
+    },
+    {
+      "id": "11111111-0000-0000-0000-00000000d540:Codeunit:50924::OnE3::68125d51b76312ab5ccad70d143d89e76b1cea679d3e6f8e2f0e6ca9f87d056d",
+      "publisherObjectId": "11111111-0000-0000-0000-00000000d540:Codeunit:50924",
+      "eventName": "OnE3",
+      "eventKind": "integration",
+      "signatureHash": "68125d51b76312ab5ccad70d143d89e76b1cea679d3e6f8e2f0e6ca9f87d056d",
+      "parameters": [],
+      "provenance": [
+        {
+          "source": "tree-sitter"
+        }
+      ],
+      "publisherRoutineId": "11111111-0000-0000-0000-00000000d540:Codeunit:50924#68125d51b76312ab5ccad70d143d89e76b1cea679d3e6f8e2f0e6ca9f87d056d"
+    },
+    {
+      "id": "11111111-0000-0000-0000-00000000d540:Codeunit:50924::OnE4::54df5db3f47953b91125aad48b26cf8ca54f7236812cebc48270d72d757240f3",
+      "publisherObjectId": "11111111-0000-0000-0000-00000000d540:Codeunit:50924",
+      "eventName": "OnE4",
+      "eventKind": "integration",
+      "signatureHash": "54df5db3f47953b91125aad48b26cf8ca54f7236812cebc48270d72d757240f3",
+      "parameters": [],
+      "provenance": [
+        {
+          "source": "tree-sitter"
+        }
+      ],
+      "publisherRoutineId": "11111111-0000-0000-0000-00000000d540:Codeunit:50924#54df5db3f47953b91125aad48b26cf8ca54f7236812cebc48270d72d757240f3"
+    },
+    {
+      "id": "11111111-0000-0000-0000-00000000d540:Codeunit:50924::OnE5::7f5383bd098872afe4c4a9dacaef7af979a80fdf7dda4542a6540616f315d1f1",
+      "publisherObjectId": "11111111-0000-0000-0000-00000000d540:Codeunit:50924",
+      "eventName": "OnE5",
+      "eventKind": "integration",
+      "signatureHash": "7f5383bd098872afe4c4a9dacaef7af979a80fdf7dda4542a6540616f315d1f1",
+      "parameters": [],
+      "provenance": [
+        {
+          "source": "tree-sitter"
+        }
+      ],
+      "publisherRoutineId": "11111111-0000-0000-0000-00000000d540:Codeunit:50924#7f5383bd098872afe4c4a9dacaef7af979a80fdf7dda4542a6540616f315d1f1"
+    },
+    {
+      "id": "11111111-0000-0000-0000-00000000d540:Codeunit:50924::OnE6::7aad910b0ee85f97a4c4cd866a0801d13cc45af7875af61c1d92f4d1d1409a0e",
+      "publisherObjectId": "11111111-0000-0000-0000-00000000d540:Codeunit:50924",
+      "eventName": "OnE6",
+      "eventKind": "integration",
+      "signatureHash": "7aad910b0ee85f97a4c4cd866a0801d13cc45af7875af61c1d92f4d1d1409a0e",
+      "parameters": [],
+      "provenance": [
+        {
+          "source": "tree-sitter"
+        }
+      ],
+      "publisherRoutineId": "11111111-0000-0000-0000-00000000d540:Codeunit:50924#7aad910b0ee85f97a4c4cd866a0801d13cc45af7875af61c1d92f4d1d1409a0e"
     }
   ],
   "edges": []

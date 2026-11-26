@@ -197,6 +197,7 @@ pub fn detect_d22(
         }
     }
 
+    let mut findings = merge_reads(findings);
     findings.sort_by(|a, b| a.id.cmp(&b.id));
 
     let emitted = findings.len();
@@ -204,6 +205,50 @@ pub fn detect_d22(
     stats.add_skip("unresolvedTable", skipped_unresolved_table);
     stats.add_skip("parameter", skipped_parameter);
     Ok(DetectorOutput::no_diag(findings, stats))
+}
+
+/// ENG-101 (owner decision 2026-11-18): ONE finding per routine, record variable,
+/// table and FlowField. The reads share one key (it never held the read), so the
+/// nine reads of one field in one routine were nine findings under ONE fingerprint.
+/// The fix is usually one CalcFields before the first read, but not always: a
+/// record reloaded between reads (a `Get`, a `Next`) needs another one, and the
+/// evidence lists every read so each can be checked. The merged finding is the
+/// FIRST read in source order (its id, location and text), and its evidence lists
+/// every uncovered read in source order. Key and fingerprint are unchanged.
+///
+/// The table is part of the group (sol r1): the `#if` arms of one routine share
+/// its id, and one variable name can be a different table per arm. Their findings
+/// have different fingerprints (the fingerprint hashes the table) and stay apart.
+fn merge_reads(findings: Vec<Finding>) -> Vec<Finding> {
+    type Group = (String, Vec<std::sync::Arc<str>>);
+    let mut groups: std::collections::BTreeMap<Group, Vec<Finding>> =
+        std::collections::BTreeMap::new();
+    for f in findings {
+        groups
+            .entry((f.root_cause_key.clone(), f.affected_tables.clone()))
+            .or_default()
+            .push(f);
+    }
+    groups
+        .into_values()
+        .map(|mut reads| {
+            reads.sort_by(|a, b| {
+                let pos = |f: &Finding| {
+                    (
+                        f.primary_location.start_line,
+                        f.primary_location.start_column,
+                    )
+                };
+                pos(a).cmp(&pos(b)).then_with(|| a.id.cmp(&b.id))
+            });
+            let mut rest = reads.split_off(1);
+            let mut first = reads.pop().expect("a group has at least one read");
+            for r in &mut rest {
+                first.evidence_path.append(&mut r.evidence_path);
+            }
+            first
+        })
+        .collect()
 }
 
 /// Returns true if there is a `CalcFields` op on `record_var_key` strictly

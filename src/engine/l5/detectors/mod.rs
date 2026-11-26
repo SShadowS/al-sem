@@ -1614,6 +1614,89 @@ pub(crate) fn callee_param_table_subject(
     }
 }
 
+/// The note of the evidence step [`dedupe_alternate_declarations`] adds for each
+/// other declaration; [`suppression_sites`] reads it back.
+pub(crate) const ALTERNATE_DECLARATION_NOTE: &str =
+    "the same in another declaration of this routine (an #if arm)";
+
+/// ENG-101 sol r2: the `(source unit, 1-based line)` sites an inline
+/// `// al-sem-ignore` must ALL cover to suppress a finding that merges several
+/// sites, or `None` for a finding with one site (the primary-line rule):
+/// - d22's merged reads: every read in its evidence (one routine's reads, or the
+///   reads of its `#if` declarations, possibly in different files);
+/// - a finding [`dedupe_alternate_declarations`] kept: its primary location and
+///   each other declaration's.
+///
+/// A directive above one of them must not hide the others, which were separate
+/// findings before the merge.
+pub(crate) fn suppression_sites(
+    f: &crate::engine::l5::finding::Finding,
+) -> Option<Vec<(String, u32)>> {
+    let site = |a: &crate::engine::l5::finding::SourceAnchor| {
+        (a.source_unit_id.to_string(), a.start_line + 1)
+    };
+    if f.detector == d22::DETECTOR {
+        return (f.evidence_path.len() > 1).then(|| {
+            f.evidence_path
+                .iter()
+                .map(|s| site(&s.source_anchor))
+                .collect()
+        });
+    }
+    let others: Vec<_> = f
+        .evidence_path
+        .iter()
+        .filter(|s| s.note == ALTERNATE_DECLARATION_NOTE)
+        .map(|s| site(&s.source_anchor))
+        .collect();
+    (!others.is_empty()).then(|| {
+        let mut all = vec![site(&f.primary_location)];
+        all.extend(others);
+        all
+    })
+}
+
+/// ENG-101 sol r1: ONE finding per `rootCauseKey` where a routine is declared more
+/// than once (the `#if` arms of one routine: several model rows, one routine id).
+/// Each row emits the same key, so the copies would share one fingerprint. The
+/// finding kept is the first in source order (file, line, column, then id); each
+/// other copy's primary location is appended to its evidence, so every declaration
+/// stays visible. A key emitted once passes through unchanged.
+pub(crate) fn dedupe_alternate_declarations(
+    findings: Vec<crate::engine::l5::finding::Finding>,
+) -> Vec<crate::engine::l5::finding::Finding> {
+    use crate::engine::l5::finding::{EvidenceStep, Finding};
+    let mut groups: std::collections::BTreeMap<String, Vec<Finding>> = Default::default();
+    for f in findings {
+        groups.entry(f.root_cause_key.clone()).or_default().push(f);
+    }
+    groups
+        .into_values()
+        .map(|mut copies| {
+            copies.sort_by(|a, b| {
+                let at = |f: &Finding| {
+                    let l = &f.primary_location;
+                    (l.source_unit_id.clone(), l.start_line, l.start_column)
+                };
+                at(a).cmp(&at(b)).then_with(|| a.id.cmp(&b.id))
+            });
+            let rest = copies.split_off(1);
+            let mut kept = copies.pop().expect("a group has at least one finding");
+            for other in rest {
+                kept.evidence_path.push(EvidenceStep {
+                    routine_id: other.primary_location.enclosing_routine_id.clone(),
+                    operation_id: None,
+                    callsite_id: None,
+                    loop_id: None,
+                    source_anchor: other.primary_location,
+                    note: ALTERNATE_DECLARATION_NOTE.into(),
+                });
+            }
+            kept
+        })
+        .collect()
+}
+
 /// `groupAndCap` — group findings by `key_of(finding)`, sort each group by
 /// `compareStrings(id)`, then keep the first `max_per_key` of each group (group
 /// iteration in sorted-key order). Returns `(kept, truncated_count)`. Port of

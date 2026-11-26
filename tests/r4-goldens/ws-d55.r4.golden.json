@@ -3,12 +3,12 @@
   "detectors": [
     "d55-event-publish-in-loop"
   ],
-  "findingCount": 1,
+  "findingCount": 6,
   "findings": [
     {
       "detector": "d55-event-publish-in-loop",
       "id": "d55/11111111-0000-0000-0000-00000000d550:Codeunit:50925#ccc4c23533bfa61fcf503f45ac505010d2e943828e3bfcf778c7ccfb3e18bdaf/11111111-0000-0000-0000-00000000d550:Codeunit:50925#ccc4c23533bfa61fcf503f45ac505010d2e943828e3bfcf778c7ccfb3e18bdaf/loop0/11111111-0000-0000-0000-00000000d550:Codeunit:50925#ccc4c23533bfa61fcf503f45ac505010d2e943828e3bfcf778c7ccfb3e18bdaf/cs0",
-      "rootCauseKey": "d55/11111111-0000-0000-0000-00000000d550:Codeunit:50925#ccc4c23533bfa61fcf503f45ac505010d2e943828e3bfcf778c7ccfb3e18bdaf/11111111-0000-0000-0000-00000000d550:Codeunit:50925#ccc4c23533bfa61fcf503f45ac505010d2e943828e3bfcf778c7ccfb3e18bdaf/loop0",
+      "rootCauseKey": "d55/11111111-0000-0000-0000-00000000d550:Codeunit:50925#ccc4c23533bfa61fcf503f45ac505010d2e943828e3bfcf778c7ccfb3e18bdaf/11111111-0000-0000-0000-00000000d550:Codeunit:50925#ccc4c23533bfa61fcf503f45ac505010d2e943828e3bfcf778c7ccfb3e18bdaf/loop0/11111111-0000-0000-0000-00000000d550:Codeunit:50924#20596a2956b161875bbe939c343d06e017f04b2607d336fe4570d4bcfd692c9a#1",
       "title": "Event published inside loop",
       "rootCause": "PublishInLoop publishes OnRowProcessed inside a repeat loop — every subscriber runs once per iteration, and the cost grows as third parties subscribe.",
       "severity": "medium",
@@ -19,9 +19,9 @@
       "primaryLocation": {
         "sourceUnitId": "ws:src/Codeunit.al",
         "range": {
-          "startLine": 18,
+          "startLine": 23,
           "startColumn": 16,
-          "endLine": 18,
+          "endLine": 23,
           "endColumn": 35
         },
         "enclosingRoutineId": "11111111-0000-0000-0000-00000000d550:Codeunit:50925#ccc4c23533bfa61fcf503f45ac505010d2e943828e3bfcf778c7ccfb3e18bdaf",
@@ -33,9 +33,9 @@
           "sourceAnchor": {
             "sourceUnitId": "ws:src/Codeunit.al",
             "range": {
-              "startLine": 17,
+              "startLine": 22,
               "startColumn": 12,
-              "endLine": 19,
+              "endLine": 24,
               "endColumn": 33
             },
             "enclosingRoutineId": "11111111-0000-0000-0000-00000000d550:Codeunit:50925#ccc4c23533bfa61fcf503f45ac505010d2e943828e3bfcf778c7ccfb3e18bdaf",
@@ -49,9 +49,9 @@
           "sourceAnchor": {
             "sourceUnitId": "ws:src/Codeunit.al",
             "range": {
-              "startLine": 18,
+              "startLine": 23,
               "startColumn": 16,
-              "endLine": 18,
+              "endLine": 23,
               "endColumn": 35
             },
             "enclosingRoutineId": "11111111-0000-0000-0000-00000000d550:Codeunit:50925#ccc4c23533bfa61fcf503f45ac505010d2e943828e3bfcf778c7ccfb3e18bdaf",
@@ -78,7 +78,382 @@
           "source": "tree-sitter"
         }
       ],
-      "fingerprint": "d77ffd168a728ba9"
+      "fingerprint": "01c2eb2c18429675"
+    },
+    {
+      "detector": "d55-event-publish-in-loop",
+      "id": "d55/11111111-0000-0000-0000-00000000d550:Codeunit:50925#0634f9e142b12365dc0facec2f2c4da785b03408a61d9f38a3792300ab03570f/11111111-0000-0000-0000-00000000d550:Codeunit:50925#0634f9e142b12365dc0facec2f2c4da785b03408a61d9f38a3792300ab03570f/loop0/11111111-0000-0000-0000-00000000d550:Codeunit:50925#0634f9e142b12365dc0facec2f2c4da785b03408a61d9f38a3792300ab03570f/cs0",
+      "rootCauseKey": "d55/11111111-0000-0000-0000-00000000d550:Codeunit:50925#0634f9e142b12365dc0facec2f2c4da785b03408a61d9f38a3792300ab03570f/11111111-0000-0000-0000-00000000d550:Codeunit:50925#0634f9e142b12365dc0facec2f2c4da785b03408a61d9f38a3792300ab03570f/loop0/11111111-0000-0000-0000-00000000d550:Codeunit:50924#4b8410d37ae8c4c6f34cc4f58d5bb59f28ee38b3eee96dc9eacb4005aa3800de#1",
+      "title": "Event published inside loop",
+      "rootCause": "PublishSeveralInLoop publishes OnRowChecked inside a repeat loop — every subscriber runs once per iteration, and the cost grows as third parties subscribe.",
+      "severity": "medium",
+      "confidence": {
+        "level": "likely",
+        "evidence": []
+      },
+      "primaryLocation": {
+        "sourceUnitId": "ws:src/Codeunit.al",
+        "range": {
+          "startLine": 36,
+          "startColumn": 16,
+          "endLine": 36,
+          "endColumn": 33
+        },
+        "enclosingRoutineId": "11111111-0000-0000-0000-00000000d550:Codeunit:50925#0634f9e142b12365dc0facec2f2c4da785b03408a61d9f38a3792300ab03570f",
+        "syntaxKind": "call_expression"
+      },
+      "evidencePath": [
+        {
+          "routineId": "11111111-0000-0000-0000-00000000d550:Codeunit:50925#0634f9e142b12365dc0facec2f2c4da785b03408a61d9f38a3792300ab03570f",
+          "sourceAnchor": {
+            "sourceUnitId": "ws:src/Codeunit.al",
+            "range": {
+              "startLine": 35,
+              "startColumn": 12,
+              "endLine": 39,
+              "endColumn": 33
+            },
+            "enclosingRoutineId": "11111111-0000-0000-0000-00000000d550:Codeunit:50925#0634f9e142b12365dc0facec2f2c4da785b03408a61d9f38a3792300ab03570f",
+            "syntaxKind": "repeat_statement"
+          },
+          "note": "repeat loop",
+          "loopId": "11111111-0000-0000-0000-00000000d550:Codeunit:50925#0634f9e142b12365dc0facec2f2c4da785b03408a61d9f38a3792300ab03570f/loop0"
+        },
+        {
+          "routineId": "11111111-0000-0000-0000-00000000d550:Codeunit:50925#0634f9e142b12365dc0facec2f2c4da785b03408a61d9f38a3792300ab03570f",
+          "sourceAnchor": {
+            "sourceUnitId": "ws:src/Codeunit.al",
+            "range": {
+              "startLine": 36,
+              "startColumn": 16,
+              "endLine": 36,
+              "endColumn": 33
+            },
+            "enclosingRoutineId": "11111111-0000-0000-0000-00000000d550:Codeunit:50925#0634f9e142b12365dc0facec2f2c4da785b03408a61d9f38a3792300ab03570f",
+            "syntaxKind": "call_expression"
+          },
+          "note": "publishes OnRowChecked",
+          "callsiteId": "11111111-0000-0000-0000-00000000d550:Codeunit:50925#0634f9e142b12365dc0facec2f2c4da785b03408a61d9f38a3792300ab03570f/cs0",
+          "loopId": "11111111-0000-0000-0000-00000000d550:Codeunit:50925#0634f9e142b12365dc0facec2f2c4da785b03408a61d9f38a3792300ab03570f/loop0"
+        }
+      ],
+      "affectedObjects": [
+        "11111111-0000-0000-0000-00000000d550:Codeunit:50925",
+        "11111111-0000-0000-0000-00000000d550:Codeunit:50924"
+      ],
+      "affectedTables": [],
+      "fixOptions": [
+        {
+          "description": "Accumulate the per-row data and publish ONE event after the loop (pass a collection/buffer), or document why per-row dispatch is required.",
+          "safety": "medium"
+        }
+      ],
+      "provenance": [
+        {
+          "source": "tree-sitter"
+        }
+      ],
+      "fingerprint": "e51da580d1c94712"
+    },
+    {
+      "detector": "d55-event-publish-in-loop",
+      "id": "d55/11111111-0000-0000-0000-00000000d550:Codeunit:50925#0634f9e142b12365dc0facec2f2c4da785b03408a61d9f38a3792300ab03570f/11111111-0000-0000-0000-00000000d550:Codeunit:50925#0634f9e142b12365dc0facec2f2c4da785b03408a61d9f38a3792300ab03570f/loop0/11111111-0000-0000-0000-00000000d550:Codeunit:50925#0634f9e142b12365dc0facec2f2c4da785b03408a61d9f38a3792300ab03570f/cs1",
+      "rootCauseKey": "d55/11111111-0000-0000-0000-00000000d550:Codeunit:50925#0634f9e142b12365dc0facec2f2c4da785b03408a61d9f38a3792300ab03570f/11111111-0000-0000-0000-00000000d550:Codeunit:50925#0634f9e142b12365dc0facec2f2c4da785b03408a61d9f38a3792300ab03570f/loop0/11111111-0000-0000-0000-00000000d550:Codeunit:50924#20596a2956b161875bbe939c343d06e017f04b2607d336fe4570d4bcfd692c9a#1",
+      "title": "Event published inside loop",
+      "rootCause": "PublishSeveralInLoop publishes OnRowProcessed inside a repeat loop — every subscriber runs once per iteration, and the cost grows as third parties subscribe.",
+      "severity": "medium",
+      "confidence": {
+        "level": "likely",
+        "evidence": []
+      },
+      "primaryLocation": {
+        "sourceUnitId": "ws:src/Codeunit.al",
+        "range": {
+          "startLine": 37,
+          "startColumn": 16,
+          "endLine": 37,
+          "endColumn": 35
+        },
+        "enclosingRoutineId": "11111111-0000-0000-0000-00000000d550:Codeunit:50925#0634f9e142b12365dc0facec2f2c4da785b03408a61d9f38a3792300ab03570f",
+        "syntaxKind": "call_expression"
+      },
+      "evidencePath": [
+        {
+          "routineId": "11111111-0000-0000-0000-00000000d550:Codeunit:50925#0634f9e142b12365dc0facec2f2c4da785b03408a61d9f38a3792300ab03570f",
+          "sourceAnchor": {
+            "sourceUnitId": "ws:src/Codeunit.al",
+            "range": {
+              "startLine": 35,
+              "startColumn": 12,
+              "endLine": 39,
+              "endColumn": 33
+            },
+            "enclosingRoutineId": "11111111-0000-0000-0000-00000000d550:Codeunit:50925#0634f9e142b12365dc0facec2f2c4da785b03408a61d9f38a3792300ab03570f",
+            "syntaxKind": "repeat_statement"
+          },
+          "note": "repeat loop",
+          "loopId": "11111111-0000-0000-0000-00000000d550:Codeunit:50925#0634f9e142b12365dc0facec2f2c4da785b03408a61d9f38a3792300ab03570f/loop0"
+        },
+        {
+          "routineId": "11111111-0000-0000-0000-00000000d550:Codeunit:50925#0634f9e142b12365dc0facec2f2c4da785b03408a61d9f38a3792300ab03570f",
+          "sourceAnchor": {
+            "sourceUnitId": "ws:src/Codeunit.al",
+            "range": {
+              "startLine": 37,
+              "startColumn": 16,
+              "endLine": 37,
+              "endColumn": 35
+            },
+            "enclosingRoutineId": "11111111-0000-0000-0000-00000000d550:Codeunit:50925#0634f9e142b12365dc0facec2f2c4da785b03408a61d9f38a3792300ab03570f",
+            "syntaxKind": "call_expression"
+          },
+          "note": "publishes OnRowProcessed",
+          "callsiteId": "11111111-0000-0000-0000-00000000d550:Codeunit:50925#0634f9e142b12365dc0facec2f2c4da785b03408a61d9f38a3792300ab03570f/cs1",
+          "loopId": "11111111-0000-0000-0000-00000000d550:Codeunit:50925#0634f9e142b12365dc0facec2f2c4da785b03408a61d9f38a3792300ab03570f/loop0"
+        }
+      ],
+      "affectedObjects": [
+        "11111111-0000-0000-0000-00000000d550:Codeunit:50925",
+        "11111111-0000-0000-0000-00000000d550:Codeunit:50924"
+      ],
+      "affectedTables": [],
+      "fixOptions": [
+        {
+          "description": "Accumulate the per-row data and publish ONE event after the loop (pass a collection/buffer), or document why per-row dispatch is required.",
+          "safety": "medium"
+        }
+      ],
+      "provenance": [
+        {
+          "source": "tree-sitter"
+        }
+      ],
+      "fingerprint": "dad96e8eded2cb76"
+    },
+    {
+      "detector": "d55-event-publish-in-loop",
+      "id": "d55/11111111-0000-0000-0000-00000000d550:Codeunit:50925#0634f9e142b12365dc0facec2f2c4da785b03408a61d9f38a3792300ab03570f/11111111-0000-0000-0000-00000000d550:Codeunit:50925#0634f9e142b12365dc0facec2f2c4da785b03408a61d9f38a3792300ab03570f/loop0/11111111-0000-0000-0000-00000000d550:Codeunit:50925#0634f9e142b12365dc0facec2f2c4da785b03408a61d9f38a3792300ab03570f/cs2",
+      "rootCauseKey": "d55/11111111-0000-0000-0000-00000000d550:Codeunit:50925#0634f9e142b12365dc0facec2f2c4da785b03408a61d9f38a3792300ab03570f/11111111-0000-0000-0000-00000000d550:Codeunit:50925#0634f9e142b12365dc0facec2f2c4da785b03408a61d9f38a3792300ab03570f/loop0/11111111-0000-0000-0000-00000000d550:Codeunit:50924#20596a2956b161875bbe939c343d06e017f04b2607d336fe4570d4bcfd692c9a#2",
+      "title": "Event published inside loop",
+      "rootCause": "PublishSeveralInLoop publishes OnRowProcessed inside a repeat loop — every subscriber runs once per iteration, and the cost grows as third parties subscribe.",
+      "severity": "medium",
+      "confidence": {
+        "level": "likely",
+        "evidence": []
+      },
+      "primaryLocation": {
+        "sourceUnitId": "ws:src/Codeunit.al",
+        "range": {
+          "startLine": 38,
+          "startColumn": 16,
+          "endLine": 38,
+          "endColumn": 35
+        },
+        "enclosingRoutineId": "11111111-0000-0000-0000-00000000d550:Codeunit:50925#0634f9e142b12365dc0facec2f2c4da785b03408a61d9f38a3792300ab03570f",
+        "syntaxKind": "call_expression"
+      },
+      "evidencePath": [
+        {
+          "routineId": "11111111-0000-0000-0000-00000000d550:Codeunit:50925#0634f9e142b12365dc0facec2f2c4da785b03408a61d9f38a3792300ab03570f",
+          "sourceAnchor": {
+            "sourceUnitId": "ws:src/Codeunit.al",
+            "range": {
+              "startLine": 35,
+              "startColumn": 12,
+              "endLine": 39,
+              "endColumn": 33
+            },
+            "enclosingRoutineId": "11111111-0000-0000-0000-00000000d550:Codeunit:50925#0634f9e142b12365dc0facec2f2c4da785b03408a61d9f38a3792300ab03570f",
+            "syntaxKind": "repeat_statement"
+          },
+          "note": "repeat loop",
+          "loopId": "11111111-0000-0000-0000-00000000d550:Codeunit:50925#0634f9e142b12365dc0facec2f2c4da785b03408a61d9f38a3792300ab03570f/loop0"
+        },
+        {
+          "routineId": "11111111-0000-0000-0000-00000000d550:Codeunit:50925#0634f9e142b12365dc0facec2f2c4da785b03408a61d9f38a3792300ab03570f",
+          "sourceAnchor": {
+            "sourceUnitId": "ws:src/Codeunit.al",
+            "range": {
+              "startLine": 38,
+              "startColumn": 16,
+              "endLine": 38,
+              "endColumn": 35
+            },
+            "enclosingRoutineId": "11111111-0000-0000-0000-00000000d550:Codeunit:50925#0634f9e142b12365dc0facec2f2c4da785b03408a61d9f38a3792300ab03570f",
+            "syntaxKind": "call_expression"
+          },
+          "note": "publishes OnRowProcessed",
+          "callsiteId": "11111111-0000-0000-0000-00000000d550:Codeunit:50925#0634f9e142b12365dc0facec2f2c4da785b03408a61d9f38a3792300ab03570f/cs2",
+          "loopId": "11111111-0000-0000-0000-00000000d550:Codeunit:50925#0634f9e142b12365dc0facec2f2c4da785b03408a61d9f38a3792300ab03570f/loop0"
+        }
+      ],
+      "affectedObjects": [
+        "11111111-0000-0000-0000-00000000d550:Codeunit:50925",
+        "11111111-0000-0000-0000-00000000d550:Codeunit:50924"
+      ],
+      "affectedTables": [],
+      "fixOptions": [
+        {
+          "description": "Accumulate the per-row data and publish ONE event after the loop (pass a collection/buffer), or document why per-row dispatch is required.",
+          "safety": "medium"
+        }
+      ],
+      "provenance": [
+        {
+          "source": "tree-sitter"
+        }
+      ],
+      "fingerprint": "933413473b853aac"
+    },
+    {
+      "detector": "d55-event-publish-in-loop",
+      "id": "d55/11111111-0000-0000-0000-00000000d550:Codeunit:50925#d941397c68fa0bd4b924ce274c815f958034f733705546b7fd484337487f6bb6/11111111-0000-0000-0000-00000000d550:Codeunit:50925#d941397c68fa0bd4b924ce274c815f958034f733705546b7fd484337487f6bb6/loop0/11111111-0000-0000-0000-00000000d550:Codeunit:50925#d941397c68fa0bd4b924ce274c815f958034f733705546b7fd484337487f6bb6/cs0",
+      "rootCauseKey": "d55/11111111-0000-0000-0000-00000000d550:Codeunit:50925#d941397c68fa0bd4b924ce274c815f958034f733705546b7fd484337487f6bb6/11111111-0000-0000-0000-00000000d550:Codeunit:50925#d941397c68fa0bd4b924ce274c815f958034f733705546b7fd484337487f6bb6/loop0/11111111-0000-0000-0000-00000000d550:Codeunit:50924#4b8410d37ae8c4c6f34cc4f58d5bb59f28ee38b3eee96dc9eacb4005aa3800de#1",
+      "title": "Event published inside loop",
+      "rootCause": "PublishInLoopArm publishes OnRowChecked inside a repeat loop — every subscriber runs once per iteration, and the cost grows as third parties subscribe.",
+      "severity": "medium",
+      "confidence": {
+        "level": "likely",
+        "evidence": []
+      },
+      "primaryLocation": {
+        "sourceUnitId": "ws:src/Codeunit.al",
+        "range": {
+          "startLine": 65,
+          "startColumn": 16,
+          "endLine": 65,
+          "endColumn": 33
+        },
+        "enclosingRoutineId": "11111111-0000-0000-0000-00000000d550:Codeunit:50925#d941397c68fa0bd4b924ce274c815f958034f733705546b7fd484337487f6bb6",
+        "syntaxKind": "call_expression"
+      },
+      "evidencePath": [
+        {
+          "routineId": "11111111-0000-0000-0000-00000000d550:Codeunit:50925#d941397c68fa0bd4b924ce274c815f958034f733705546b7fd484337487f6bb6",
+          "sourceAnchor": {
+            "sourceUnitId": "ws:src/Codeunit.al",
+            "range": {
+              "startLine": 64,
+              "startColumn": 12,
+              "endLine": 66,
+              "endColumn": 33
+            },
+            "enclosingRoutineId": "11111111-0000-0000-0000-00000000d550:Codeunit:50925#d941397c68fa0bd4b924ce274c815f958034f733705546b7fd484337487f6bb6",
+            "syntaxKind": "repeat_statement"
+          },
+          "note": "repeat loop",
+          "loopId": "11111111-0000-0000-0000-00000000d550:Codeunit:50925#d941397c68fa0bd4b924ce274c815f958034f733705546b7fd484337487f6bb6/loop0"
+        },
+        {
+          "routineId": "11111111-0000-0000-0000-00000000d550:Codeunit:50925#d941397c68fa0bd4b924ce274c815f958034f733705546b7fd484337487f6bb6",
+          "sourceAnchor": {
+            "sourceUnitId": "ws:src/Codeunit.al",
+            "range": {
+              "startLine": 65,
+              "startColumn": 16,
+              "endLine": 65,
+              "endColumn": 33
+            },
+            "enclosingRoutineId": "11111111-0000-0000-0000-00000000d550:Codeunit:50925#d941397c68fa0bd4b924ce274c815f958034f733705546b7fd484337487f6bb6",
+            "syntaxKind": "call_expression"
+          },
+          "note": "publishes OnRowChecked",
+          "callsiteId": "11111111-0000-0000-0000-00000000d550:Codeunit:50925#d941397c68fa0bd4b924ce274c815f958034f733705546b7fd484337487f6bb6/cs0",
+          "loopId": "11111111-0000-0000-0000-00000000d550:Codeunit:50925#d941397c68fa0bd4b924ce274c815f958034f733705546b7fd484337487f6bb6/loop0"
+        }
+      ],
+      "affectedObjects": [
+        "11111111-0000-0000-0000-00000000d550:Codeunit:50925",
+        "11111111-0000-0000-0000-00000000d550:Codeunit:50924"
+      ],
+      "affectedTables": [],
+      "fixOptions": [
+        {
+          "description": "Accumulate the per-row data and publish ONE event after the loop (pass a collection/buffer), or document why per-row dispatch is required.",
+          "safety": "medium"
+        }
+      ],
+      "provenance": [
+        {
+          "source": "tree-sitter"
+        }
+      ],
+      "fingerprint": "6635c56466e6dac4"
+    },
+    {
+      "detector": "d55-event-publish-in-loop",
+      "id": "d55/11111111-0000-0000-0000-00000000d550:Codeunit:50925#d941397c68fa0bd4b924ce274c815f958034f733705546b7fd484337487f6bb6/11111111-0000-0000-0000-00000000d550:Codeunit:50925#d941397c68fa0bd4b924ce274c815f958034f733705546b7fd484337487f6bb6/loop1/11111111-0000-0000-0000-00000000d550:Codeunit:50925#d941397c68fa0bd4b924ce274c815f958034f733705546b7fd484337487f6bb6/cs1",
+      "rootCauseKey": "d55/11111111-0000-0000-0000-00000000d550:Codeunit:50925#d941397c68fa0bd4b924ce274c815f958034f733705546b7fd484337487f6bb6/11111111-0000-0000-0000-00000000d550:Codeunit:50925#d941397c68fa0bd4b924ce274c815f958034f733705546b7fd484337487f6bb6/loop1/11111111-0000-0000-0000-00000000d550:Codeunit:50924#4b8410d37ae8c4c6f34cc4f58d5bb59f28ee38b3eee96dc9eacb4005aa3800de#1",
+      "title": "Event published inside loop",
+      "rootCause": "PublishInLoopArm publishes OnRowChecked inside a repeat loop — every subscriber runs once per iteration, and the cost grows as third parties subscribe.",
+      "severity": "medium",
+      "confidence": {
+        "level": "likely",
+        "evidence": []
+      },
+      "primaryLocation": {
+        "sourceUnitId": "ws:src/Codeunit.al",
+        "range": {
+          "startLine": 76,
+          "startColumn": 16,
+          "endLine": 76,
+          "endColumn": 33
+        },
+        "enclosingRoutineId": "11111111-0000-0000-0000-00000000d550:Codeunit:50925#d941397c68fa0bd4b924ce274c815f958034f733705546b7fd484337487f6bb6",
+        "syntaxKind": "call_expression"
+      },
+      "evidencePath": [
+        {
+          "routineId": "11111111-0000-0000-0000-00000000d550:Codeunit:50925#d941397c68fa0bd4b924ce274c815f958034f733705546b7fd484337487f6bb6",
+          "sourceAnchor": {
+            "sourceUnitId": "ws:src/Codeunit.al",
+            "range": {
+              "startLine": 75,
+              "startColumn": 12,
+              "endLine": 77,
+              "endColumn": 33
+            },
+            "enclosingRoutineId": "11111111-0000-0000-0000-00000000d550:Codeunit:50925#d941397c68fa0bd4b924ce274c815f958034f733705546b7fd484337487f6bb6",
+            "syntaxKind": "repeat_statement"
+          },
+          "note": "repeat loop",
+          "loopId": "11111111-0000-0000-0000-00000000d550:Codeunit:50925#d941397c68fa0bd4b924ce274c815f958034f733705546b7fd484337487f6bb6/loop1"
+        },
+        {
+          "routineId": "11111111-0000-0000-0000-00000000d550:Codeunit:50925#d941397c68fa0bd4b924ce274c815f958034f733705546b7fd484337487f6bb6",
+          "sourceAnchor": {
+            "sourceUnitId": "ws:src/Codeunit.al",
+            "range": {
+              "startLine": 76,
+              "startColumn": 16,
+              "endLine": 76,
+              "endColumn": 33
+            },
+            "enclosingRoutineId": "11111111-0000-0000-0000-00000000d550:Codeunit:50925#d941397c68fa0bd4b924ce274c815f958034f733705546b7fd484337487f6bb6",
+            "syntaxKind": "call_expression"
+          },
+          "note": "publishes OnRowChecked",
+          "callsiteId": "11111111-0000-0000-0000-00000000d550:Codeunit:50925#d941397c68fa0bd4b924ce274c815f958034f733705546b7fd484337487f6bb6/cs1",
+          "loopId": "11111111-0000-0000-0000-00000000d550:Codeunit:50925#d941397c68fa0bd4b924ce274c815f958034f733705546b7fd484337487f6bb6/loop1"
+        }
+      ],
+      "affectedObjects": [
+        "11111111-0000-0000-0000-00000000d550:Codeunit:50925",
+        "11111111-0000-0000-0000-00000000d550:Codeunit:50924"
+      ],
+      "affectedTables": [],
+      "fixOptions": [
+        {
+          "description": "Accumulate the per-row data and publish ONE event after the loop (pass a collection/buffer), or document why per-row dispatch is required.",
+          "safety": "medium"
+        }
+      ],
+      "provenance": [
+        {
+          "source": "tree-sitter"
+        }
+      ],
+      "fingerprint": "a3c3d501d2e99089"
     }
   ]
 }

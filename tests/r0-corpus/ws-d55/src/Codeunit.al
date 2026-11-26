@@ -4,6 +4,11 @@ codeunit 50924 "D55 Events"
     procedure OnRowProcessed()
     begin
     end;
+
+    [IntegrationEvent(false, false)]
+    procedure OnRowChecked()
+    begin
+    end;
 }
 
 codeunit 50925 "D55 Demo"
@@ -20,6 +25,21 @@ codeunit 50925 "D55 Demo"
             until Item.Next() = 0;
     end;
 
+    // FLAGGED three times (ENG-101): two events, one of them published twice,
+    // in ONE loop: three findings with three fingerprints (event + `#n`).
+    procedure PublishSeveralInLoop()
+    var
+        Item: Record "D55 Item";
+        Ev: Codeunit "D55 Events";
+    begin
+        if Item.FindSet() then
+            repeat
+                Ev.OnRowChecked();
+                Ev.OnRowProcessed();
+                Ev.OnRowProcessed();
+            until Item.Next() = 0;
+    end;
+
     // NOT FLAGGED: publish once after the loop.
     procedure PublishAfterLoop()
     var
@@ -31,4 +51,31 @@ codeunit 50925 "D55 Demo"
             until Item.Next() = 0;
         Ev.OnRowProcessed();
     end;
+
+    // FLAGGED twice (ENG-101 sol r1): one routine declared in both `#if` arms (one
+    // routine id), each publishing one event in its loop: the arms' loops get their
+    // own ids, so two findings with two fingerprints.
+#if CLEAN
+    procedure PublishInLoopArm()
+    var
+        Item: Record "D55 Item";
+        Ev: Codeunit "D55 Events";
+    begin
+        if Item.FindSet() then
+            repeat
+                Ev.OnRowChecked();
+            until Item.Next() = 0;
+    end;
+#else
+    procedure PublishInLoopArm()
+    var
+        Item: Record "D55 Item";
+        Ev: Codeunit "D55 Events";
+    begin
+        if Item.FindSet() then
+            repeat
+                Ev.OnRowChecked();
+            until Item.Next() = 0;
+    end;
+#endif
 }

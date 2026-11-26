@@ -1079,8 +1079,11 @@ throughout (deleted in engine-switch S9); the items below note where the code li
   last sibling and the op-site lookup fell back to its declaration anchor). The
   d9 twin now anchors correctly on line 142 with 2 tables instead of the
   union's 5, which is precisely why d8's `>= 3` threshold stops being met.
-- [ ] (TLS-45: the code is now `d55.rs:72/75`; no coord task owns it yet.) **`d55-event-publish-in-loop`'s `rootCauseKey` omits the callsite, so
-  several publish sites in ONE loop share a fingerprint** — `d55.rs:73` builds
+- [x] (TLS-45: the code is now `d55.rs:72/75`; no coord task owns it yet.) **`d55-event-publish-in-loop`'s `rootCauseKey` omits the callsite, so
+  several publish sites in ONE loop share a fingerprint**
+  CLOSED 2026-11-23 (ENG-101): the key now holds the published event and its repeat
+  number in the loop (`#n`); d54 and d22 got the same fix, and CDO has no shared
+  fingerprint left in either scope (CHANGELOG). The original entry: — `d55.rs:73` builds
   `d55/{routine.id}/{loop_info.id}` while the finding `id` additionally carries
   `/cs{n}`. Measured on DO (2026-07-25, after T4 closed every id-collision
   duplicate): this is now the **entire** remaining duplicate-fingerprint

@@ -1,6 +1,20 @@
 {
   "events": [
     {
+      "id": "11111111-0000-0000-0000-00000000d550:Codeunit:50924::OnRowChecked::4b8410d37ae8c4c6f34cc4f58d5bb59f28ee38b3eee96dc9eacb4005aa3800de",
+      "publisherObjectId": "11111111-0000-0000-0000-00000000d550:Codeunit:50924",
+      "eventName": "OnRowChecked",
+      "eventKind": "integration",
+      "signatureHash": "4b8410d37ae8c4c6f34cc4f58d5bb59f28ee38b3eee96dc9eacb4005aa3800de",
+      "parameters": [],
+      "provenance": [
+        {
+          "source": "tree-sitter"
+        }
+      ],
+      "publisherRoutineId": "11111111-0000-0000-0000-00000000d550:Codeunit:50924#4b8410d37ae8c4c6f34cc4f58d5bb59f28ee38b3eee96dc9eacb4005aa3800de"
+    },
+    {
       "id": "11111111-0000-0000-0000-00000000d550:Codeunit:50924::OnRowProcessed::20596a2956b161875bbe939c343d06e017f04b2607d336fe4570d4bcfd692c9a",
       "publisherObjectId": "11111111-0000-0000-0000-00000000d550:Codeunit:50924",
       "eventName": "OnRowProcessed",

@@ -21,30 +21,30 @@
 	],
 	"fixtureCount": 160,
 	"matrix": {
-		"routineCount": 595,
+		"routineCount": 598,
 		"routinesWithInheritedFacts": 145,
 		"factsWithMoreThan1HopWitness": 248,
 		"equalDistanceTies": 5,
 		"coveragesWithNonTrivialInheritedStatus": 36,
 		"provenanceDistribution": {
-			"direct": 856,
+			"direct": 866,
 			"inherited": 322
 		},
 		"confidenceDistribution": {
 			"configDynamic": 1,
-			"static": 1096,
+			"static": 1106,
 			"unresolved": 81
 		},
 		"opDistribution": {
 			"commit": 93,
 			"delete": 7,
-			"error-implicit": 327,
+			"error-implicit": 332,
 			"error-throw": 16,
 			"execute": 15,
 			"insert": 78,
 			"modify": 110,
 			"publish": 96,
-			"read": 213,
+			"read": 218,
 			"send": 42,
 			"store-write": 1,
 			"subscribe": 124,
@@ -58,15 +58,15 @@
 			"call": 248,
 			"event-dispatch": 70,
 			"implicit-trigger": 4,
-			"self": 856
+			"self": 866
 		},
 		"directStatusDistribution": {
-			"complete": 574,
+			"complete": 577,
 			"partial": 20,
 			"unknown": 1
 		},
 		"inheritedStatusDistribution": {
-			"complete": 559,
+			"complete": 562,
 			"partial": 36
 		}
 	},
@@ -1020,28 +1020,29 @@
 			"fixture": "ws-d22",
 			"goldenFile": "ws-d22.r3a3.golden.json",
 			"matrix": {
-				"routineCount": 3,
+				"routineCount": 6,
 				"routinesWithInheritedFacts": 0,
 				"factsWithMoreThan1HopWitness": 0,
 				"equalDistanceTies": 0,
 				"coveragesWithNonTrivialInheritedStatus": 0,
 				"provenanceDistribution": {
-					"direct": 4
+					"direct": 14
 				},
 				"confidenceDistribution": {
-					"static": 4
+					"static": 14
 				},
 				"opDistribution": {
-					"read": 4
+					"error-implicit": 5,
+					"read": 9
 				},
 				"viaDistribution": {
-					"self": 4
+					"self": 14
 				},
 				"directStatusDistribution": {
-					"complete": 3
+					"complete": 6
 				},
 				"inheritedStatusDistribution": {
-					"complete": 3
+					"complete": 6
 				}
 			},
 			"diagnostics": {

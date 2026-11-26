@@ -10,14 +10,15 @@
 //! traversed THROUGH (their bodies are empty declarations).
 //!
 //! Severity: medium. Confidence: likely when the publisher is called directly
-//! from the try body (2-node chain), possible otherwise. Capped at 5 findings
-//! per try routine via group_and_cap (skip bucket `cappedPerTryRoutine`).
+//! from the try body (2-node chain), possible otherwise. One finding per
+//! (try routine, publisher), uncapped (ENG-101: until then capped at 5 per try
+//! routine, skip bucket `cappedPerTryRoutine`).
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::engine::l5::confidence::to_confidence;
 use crate::engine::l5::detector_context::DetectorContext;
-use crate::engine::l5::detectors::{anchor_of, group_and_cap};
+use crate::engine::l5::detectors::{anchor_of, dedupe_alternate_declarations};
 use crate::engine::l5::finding::{
     Evidence, EvidenceStep, Finding, FindingConfidence, FixOption, id_list,
 };
@@ -26,7 +27,6 @@ use crate::program::attributes::has_attribute;
 use crate::program::model::workspace::Model;
 
 pub(crate) const DETECTOR: &str = "d54-publish-in-tryfunction-cone";
-const MAX_PER_TRY_ROUTINE: usize = 5;
 
 pub fn detect_d54(
     resolved: &Model,
@@ -98,9 +98,17 @@ pub fn detect_d54(
             chain.reverse();
             let direct = chain.len() == 2;
 
+            // The try routine's own row, not `routine_by_id`'s: a routine declared in
+            // several `#if` arms has one id and one row per arm (sol r1).
             let path: Vec<EvidenceStep> = chain
                 .iter()
-                .filter_map(|rid| ctx.routine_by_id.get(rid))
+                .filter_map(|rid| {
+                    if *rid == routine.id {
+                        Some(routine)
+                    } else {
+                        ctx.routine_by_id.get(rid).copied()
+                    }
+                })
                 .map(|r| EvidenceStep {
                     routine_id: r.id.clone(),
                     operation_id: None,
@@ -121,7 +129,13 @@ pub fn detect_d54(
                 to_confidence(&[], if direct { "likely" } else { "possible" });
             let mut finding = Finding {
                 id: format!("d54/{}/{}", routine.id, publisher.id),
-                root_cause_key: format!("d54/{}", routine.id),
+                // ENG-101 (owner decision 2026-11-18): the publisher is part of the
+                // root cause. Each publisher is its own hazard (its own subscribers,
+                // its own fix), so it gets its own fingerprint; keyed by the try
+                // routine alone, the five publishers of one TryFunction shared one,
+                // and suppressing one suppressed all. Its internal routine id is
+                // swapped for its stable id before hashing (`fingerprint_of`).
+                root_cause_key: format!("d54/{}/{}", routine.id, publisher.id),
                 detector: DETECTOR.to_string(),
                 title: format!(
                     "Event published inside TryFunction cone{}",
@@ -173,12 +187,14 @@ pub fn detect_d54(
         }
     }
 
-    let (mut findings, truncated) =
-        group_and_cap(findings, |f| f.root_cause_key.clone(), MAX_PER_TRY_ROUTINE);
+    // No cap (ENG-101 review r1): each publisher is its own finding with its own
+    // fingerprint, so a cap would decide which fingerprints exist (a new publisher
+    // could evict a baselined one, or stay invisible to the baseline). A TryFunction
+    // declared in several `#if` arms (one routine id) emits each pair once per arm.
+    let mut findings = dedupe_alternate_declarations(findings);
     findings.sort_by(|a, b| a.id.cmp(&b.id));
     let emitted = findings.len();
     let mut stats = DetectorStats::new(DETECTOR, candidates_considered, emitted);
     stats.add_skip("noPublisherReached", skipped_no_publisher_reached);
-    stats.add_skip("cappedPerTryRoutine", truncated as u64);
     Ok(DetectorOutput::no_diag(findings, stats))
 }

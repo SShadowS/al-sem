@@ -39,8 +39,26 @@ pub fn detect_d55(
         }
         let loop_by_id: HashMap<&str, &PLoop> =
             routine.loops.iter().map(|l| (l.id.as_str(), l)).collect();
+        // ENG-101: the n-th publish of one event in one loop, in source order.
+        // `call_sites` come in the body walk's order, which is source order for
+        // the statement calls a publish is (a publisher returns nothing, so it is
+        // never an argument); the sort makes `#n` not depend on that walk.
+        let mut sites: Vec<_> = routine.call_sites.iter().collect();
+        sites.sort_by(|a, b| {
+            (
+                a.source_anchor.start_line,
+                a.source_anchor.start_column,
+                &a.id,
+            )
+                .cmp(&(
+                    b.source_anchor.start_line,
+                    b.source_anchor.start_column,
+                    &b.id,
+                ))
+        });
+        let mut nth: HashMap<(&str, &str), usize> = HashMap::new();
 
-        for cs in &routine.call_sites {
+        for cs in sites {
             let Some(edge) = ctx.resolved_call_edge_by_callsite.get(&cs.id) else {
                 continue;
             };
@@ -70,9 +88,19 @@ pub fn detect_d55(
             };
             let confidence: FindingConfidence = to_confidence(&[], "likely");
             let id = format!("d55/{}/{}/{}", routine.id, loop_info.id, cs.id);
+            // ENG-101 (owner decision 2026-11-18): the published event, and its
+            // repeat number in this loop, are part of the root cause. Each event is
+            // its own hazard; keyed by the loop alone, every publish in one loop
+            // shared one fingerprint (suppressing one suppressed all, and a new
+            // event in the loop was invisible to a baseline). `#n` tells apart two
+            // publishes of the SAME event in one loop (CDO has one such loop).
+            let n = nth
+                .entry((loop_info.id.as_str(), callee.id.as_str()))
+                .or_insert(0);
+            *n += 1;
             let mut finding = Finding {
                 id: id.clone(),
-                root_cause_key: format!("d55/{}/{}", routine.id, loop_info.id),
+                root_cause_key: format!("d55/{}/{}/{}#{}", routine.id, loop_info.id, callee.id, n),
                 detector: DETECTOR.to_string(),
                 title: "Event published inside loop".into(),
                 root_cause: format!(
@@ -127,9 +155,131 @@ pub fn detect_d55(
         }
     }
 
+    // A routine declared in several `#if` arms (one routine id) needs no dedupe
+    // here: its loop ids are minted across the declarations (`/loop0`, `/loop1`),
+    // so each arm's publish has its own key (ENG-101 sol r1, `ws-d55`).
     findings.sort_by(|a, b| a.id.cmp(&b.id));
     let emitted = findings.len();
     let mut stats = DetectorStats::new(DETECTOR, candidates_considered, emitted);
     stats.add_skip("notInLoop", skipped_not_in_loop);
     Ok(DetectorOutput::no_diag(findings, stats))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use super::*;
+    use crate::engine::l4::combined_graph::PrimaryGraph;
+    use crate::engine::l5::detector_context::{DetectorArtifacts, detector_context};
+    use crate::engine::l5::test_support::{call_site, empty_artifacts, loop_def, routine};
+    use crate::program::model::calls::CallEdge;
+    use crate::program::model::ix::RoutineIx;
+    use crate::program::model::workspace::ModelEntities;
+
+    /// ENG-101: `#n` counts the publishes of one event in one loop in SOURCE
+    /// order, not in `call_sites` order. Precondition, by assignment: `call_sites`
+    /// lists `caller/cs0` (line 10) before `caller/cs1` (line 5), both publishing
+    /// `pub` in `caller/loop0`. So `cs1` is `#1` and `cs0` is `#2`.
+    ///
+    /// Discrimination (2026-11-23): the `sites.sort_by` removed (walk order) ->
+    /// "cs1, first in source, is #1" fails (`cs1` got `#2`). Restored, green.
+    #[test]
+    fn repeat_number_follows_source_order() {
+        let key = keys(&[
+            ("caller/cs0", 10, "caller/loop0"),
+            ("caller/cs1", 5, "caller/loop0"),
+        ]);
+        assert!(
+            key["caller/cs1"].ends_with("#1"),
+            "cs1, first in source, is #1"
+        );
+        assert!(key["caller/cs0"].ends_with("#2"), "cs0 is #2");
+    }
+
+    /// ENG-101 sol r1: each loop counts its own repeats. Precondition, by
+    /// assignment: `caller/cs0` publishes `pub` in `caller/loop0` and `caller/cs1`
+    /// publishes it in `caller/loop1`. Both are `#1`, with different keys.
+    ///
+    /// Discrimination (2026-11-25): the counter keyed on the event alone (the loop
+    /// dropped from `nth`'s key) -> "loop1 starts its own count" fails (`cs1` got
+    /// `#2`). Restored, green.
+    #[test]
+    fn each_loop_counts_its_own_repeats() {
+        let key = keys(&[
+            ("caller/cs0", 5, "caller/loop0"),
+            ("caller/cs1", 10, "caller/loop1"),
+        ]);
+        assert!(key["caller/cs0"].ends_with("#1"), "loop0's publish is #1");
+        assert!(
+            key["caller/cs1"].ends_with("#1"),
+            "loop1 starts its own count"
+        );
+        assert_ne!(key["caller/cs0"], key["caller/cs1"]);
+    }
+
+    /// d55's `rootCauseKey` per call site, for one routine `caller` whose sites
+    /// `(id, line, loop)` (in this `call_sites` order) each publish `pub`.
+    fn keys(sites: &[(&str, u32, &str)]) -> HashMap<String, String> {
+        let mut caller = routine("caller", "procedure");
+        let mut loops: Vec<&str> = sites.iter().map(|s| s.2).collect();
+        loops.dedup();
+        caller.loops = loops.into_iter().map(loop_def).collect();
+        caller.call_sites = sites
+            .iter()
+            .map(|(id, line, lp)| {
+                let mut cs = call_site(id, "Pub", vec![lp.to_string()]);
+                cs.source_anchor.start_line = *line;
+                cs
+            })
+            .collect();
+        let routines = vec![caller, routine("pub", "event-publisher")];
+        let edge = |cs: &str| {
+            let mut e = CallEdge::base(RoutineIx(0), "caller", cs, &format!("{cs}/op"));
+            e.to = Some("pub".to_string());
+            (cs.to_string(), e)
+        };
+        let art = DetectorArtifacts {
+            resolved_call_edge_by_callsite: sites.iter().map(|s| edge(s.0)).collect(),
+            ..empty_artifacts(
+                PrimaryGraph {
+                    nodes: vec![],
+                    edges_by_from: HashMap::new(),
+                    edges_from_order: vec![],
+                    uncertainty_edges: vec![],
+                    collided_site_callee: HashMap::new(),
+                },
+                HashMap::new(),
+            )
+        };
+        let resolved = Model {
+            workspace: ModelEntities {
+                objects: vec![],
+                tables: vec![],
+                routines,
+            },
+            root_classifications: vec![],
+            primary_app: None,
+            infra_diagnostics: Vec::new(),
+            workspace_diagnostics: Vec::new(),
+            dependency_diagnostics: Vec::new(),
+            calls: Default::default(),
+            events: Default::default(),
+            page_ui_blocked: Default::default(),
+        };
+        let ctx = detector_context(&resolved, &art, None, None);
+        let out = detect_d55(&resolved, &ctx).unwrap();
+        assert_eq!(out.findings.len(), sites.len(), "{:#?}", out.findings);
+        sites
+            .iter()
+            .map(|(cs, ..)| {
+                let f = out
+                    .findings
+                    .iter()
+                    .find(|f| f.id.ends_with(&format!("/{cs}")))
+                    .unwrap_or_else(|| panic!("no finding for {cs}: {:#?}", out.findings));
+                (cs.to_string(), f.root_cause_key.clone())
+            })
+            .collect()
+    }
 }

@@ -1073,13 +1073,27 @@ fn analyze_view(
     // scanned. The kept set after this is `newFindings` — the set the exit gate and
     // all formats use.
     if !args.disable_inline_suppression {
+        // A finding that merges several sites (d22's reads, a deduped `#if`
+        // routine's declarations) is suppressed only when every site is, each in
+        // its own file (ENG-101 sol r2), so those files are scanned too.
+        let sites: Vec<_> = paired
+            .iter()
+            .map(|(_, r)| crate::engine::l5::detectors::suppression_sites(r))
+            .collect();
         let unit_ids: std::collections::HashSet<String> = paired
             .iter()
             .map(|(s, _)| s.primary_location.file.clone())
+            .chain(
+                sites
+                    .iter()
+                    .flatten()
+                    .flatten()
+                    .map(|(file, _)| file.clone()),
+            )
             .collect();
         let suppression_map = build_suppression_map(inputs, unit_ids.iter().map(|s| s.as_str()));
         let summaries: Vec<_> = paired.iter().map(|(s, _)| s.clone()).collect();
-        let outcome = apply_inline_suppressions(&summaries, &suppression_map);
+        let outcome = apply_inline_suppressions(&summaries, &sites, &suppression_map);
         // outcome.kept holds indices into `summaries` (= into `paired`); retain them.
         let keep: std::collections::HashSet<usize> = outcome.kept.into_iter().collect();
         let mut i = 0usize;
