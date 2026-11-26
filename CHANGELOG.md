@@ -33,7 +33,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reader then trusts only the hold lock: still held reads held, free reads free.
   Before this, the probe exited 5 and `cdo-slot-guard` let a CDO command run
   beside a held slot. New test `cdo_slot_an_unprobeable_publish_lock_keeps_the_hold`
-  runs the guard with a held hold lock and a socket as `publish.lock`.
+  runs the guard with a held hold lock and an unreadable (mode 000) `publish.lock`.
+- A `publish.lock` that is not a regular file is never opened (review r2, sol).
+  Opening a FIFO with no writer blocks: the guard's probe hung until the guard cut
+  it (30 s) and then let the command run, and a take's open hung too. A reader now
+  treats such a file as "cannot be probed" (only the hold lock decides). A take
+  refuses with "the publish lock … is not a regular file; refusing (remove it)".
+  New test `cdo_slot_a_fifo_publish_lock_is_never_opened`. The check comes before
+  the open, so a file swapped for a FIFO in between could still block one open.
+  Only someone who can write the slot folder can do that.
 - A release during a read is fixed too (review r1, Fable). The reader saw the hold
   lock held, then the hold was released before it read the status. It then printed
   "held by an unknown holder" with an empty holder list (exit 1) while the slot was
@@ -48,8 +56,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A new bounded refusal, like the timing lock's: a process that keeps
   `publish.lock` exclusive (only a reader's probe takes it so, for an instant: a
   stopped or hung one) makes a take fail after `CDO_SLOT_LOCK_WAIT_S` (30 s), and
-  the message names the holders. The wait is cut to what is left of an acquire's
-  `--timeout`. The take never holds the hold lock while it waits. An acquire takes
+  the message names the holders. With `--timeout`, the acquire turns the awake
+  time it has left into a wall-clock deadline. The take (in the acquire or its
+  keeper) waits for the publish lock only what is left of that deadline at the
+  lock attempt, to the microsecond, and not at all once it is used up (review r2,
+  sol). A host suspend during that one wait is not added back, and the acquire's
+  own deadline check still runs after the take returns. The take never holds the
+  hold lock while it waits. An acquire takes
   the hold through a keeper, and the keeper's end makes even `acquire --wait`
   (the oldest waiter too) stop with "not taken: its keeper ended (exit 1)". So
   `land` and `cdo-gate`, which acquire with --wait, exit 1. A `run` takes the
