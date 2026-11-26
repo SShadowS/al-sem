@@ -32,7 +32,9 @@ pub fn merge_extension_fields(
     // ENG-194 (Fable r1): each table extension's base as its own app sees it
     // (`SymbolTable::table_by_name_from`, as the record types bind `Rec`), not
     // the last table of the name. Worked out before the loop mutates the tables.
-    let base_ids: std::collections::HashMap<String, String> = {
+    // Keyed by the object's ROW (Fable r2: an `#if`-split tableextension has a
+    // row per alternative, each with its own target).
+    let base_ids: Vec<Option<String>> = {
         let symbols = super::symbol_table::SymbolTable::build_scoped(
             &workspace.objects,
             &workspace.tables,
@@ -41,14 +43,16 @@ pub fn merge_extension_fields(
         workspace
             .objects
             .iter()
-            .filter(|o| o.object_type == "TableExtension")
-            .filter_map(|o| {
+            .map(|o| {
                 let target = o.extends_target_name.as_deref()?;
+                if o.object_type != "TableExtension" {
+                    return None;
+                }
                 let base = match target.trim().parse::<i64>() {
                     Ok(n) => symbols.table_by_number_from(&o.app_guid, n),
                     Err(_) => symbols.table_by_name_from(&o.app_guid, target),
                 }?;
-                Some((o.id.clone(), base.id.clone()))
+                Some(base.id.clone())
             })
             .collect()
     };
@@ -62,17 +66,19 @@ pub fn merge_extension_fields(
     // `&mut *workspace` destructure into disjoint field borrows — a real
     // (if small, ~4 MB) edit, not a one-liner.
     let objects = workspace.objects.clone();
-    for object in &objects {
+    for (row, object) in objects.iter().enumerate() {
         if object.object_type != "TableExtension" {
             continue;
         }
-        let Some(base_id) = base_ids.get(&object.id) else {
+        let Some(base_id) = &base_ids[row] else {
             continue;
         };
+        // The LAST real row of the id, the row `SymbolTable::table_by_id` keeps
+        // (an `#if`-split table has one per alternative; sol r2 on ENG-194).
         let Some(base_idx) = workspace
             .tables
             .iter()
-            .position(|t| !t.is_extension_stub && &t.id == base_id)
+            .rposition(|t| !t.is_extension_stub && &t.id == base_id)
         else {
             continue;
         };

@@ -38,6 +38,9 @@ pub struct SymbolTable<'a> {
     /// ENG-194: `${name_lc}` → every table of the name, in order
     /// ([`Self::table_by_name_from`]).
     tables_named: HashMap<String, Vec<usize>>,
+    /// ENG-194: table number → every REAL table of the number, in order
+    /// ([`Self::table_by_number_from`]; a stub's number is its extension's).
+    tables_numbered: HashMap<i64, Vec<usize>>,
     /// `${tableId}` → table index.
     tables_by_id: HashMap<String, usize>,
     tables: &'a [ModelTable],
@@ -92,10 +95,14 @@ impl<'a> SymbolTable<'a> {
         // (by id AND by name); within the same kind LAST-wins is preserved.
         let mut tables_by_name: HashMap<String, usize> = HashMap::new();
         let mut tables_named: HashMap<String, Vec<usize>> = HashMap::new();
+        let mut tables_numbered: HashMap<i64, Vec<usize>> = HashMap::new();
         let mut tables_by_id: HashMap<String, usize> = HashMap::new();
         for (i, t) in tables.iter().enumerate() {
             let name_key = t.name.fold_identifier();
             tables_named.entry(name_key.clone()).or_default().push(i);
+            if !t.is_extension_stub {
+                tables_numbered.entry(t.table_number).or_default().push(i);
+            }
             let keep_prev_name = tables_by_name
                 .get(&name_key)
                 .is_some_and(|&p| !tables[p].is_extension_stub && t.is_extension_stub);
@@ -117,6 +124,7 @@ impl<'a> SymbolTable<'a> {
             objects,
             tables_by_name,
             tables_named,
+            tables_numbered,
             tables_by_id,
             tables,
             scope: None,
@@ -159,9 +167,10 @@ impl<'a> SymbolTable<'a> {
     /// when no live one remains, `from`'s own table first, else exactly one.
     pub fn table_by_number_from(&self, from: &str, n: i64) -> Option<&ModelTable> {
         let found = self
-            .tables
+            .tables_numbered
+            .get(&n)?
             .iter()
-            .filter(|t| t.table_number == n && !t.is_extension_stub)
+            .map(|&i| &self.tables[i])
             .filter(|t| self.sees(from, &t.app_guid))
             .collect();
         self.one_live_table(found, Some(from))
@@ -188,6 +197,12 @@ impl<'a> SymbolTable<'a> {
             .map(|&i| &self.objects[i])
             .filter(|o| self.sees(from, &o.app_guid))
             .collect();
+        // A moved/removed object gives way to a live one (sol r2), as in the
+        // resolver.
+        let gone = |o: &ModelObject| self.scope.is_some_and(|s| s.gone.contains(&o.id));
+        if found.iter().any(|o| !gone(o)) {
+            found.retain(|o| !gone(o));
+        }
         // An `#if`-split object has a row per alternative under one id.
         let mut seen = std::collections::HashSet::new();
         found.retain(|o| seen.insert(o.id.as_str()));
@@ -277,7 +292,8 @@ impl<'a> SymbolTable<'a> {
 pub struct TableScope {
     /// app guid → the app guids it can see (itself included).
     visible: HashMap<String, std::collections::HashSet<String>>,
-    /// Model ids (`{guid}/table/{n}`) of the moved or removed tables.
+    /// Model ids of the moved or removed objects: each one's model object id,
+    /// and a table's model table id (`{guid}/table/{n}`) too.
     gone: std::collections::HashSet<String>,
 }
 
@@ -299,15 +315,17 @@ impl TableScope {
             visible.entry(app.guid.clone()).or_default().extend(seen);
             i += 1;
         }
-        let gone = graph
-            .objects
-            .iter()
-            .filter(|o| o.id.kind == al_syntax::ir::ObjectKind::Table && o.obsolete_gone)
-            .filter_map(|o| {
-                let n = o.declared_id?;
-                Some(format!("{}/table/{n}", graph.apps.resolve(o.id.app).guid))
-            })
-            .collect();
+        let mut gone = std::collections::HashSet::new();
+        for o in graph.objects.iter().filter(|o| o.obsolete_gone) {
+            // Its model object id (sol r2: a moved page gives way too), and for
+            // a table its model table id.
+            gone.insert(crate::program::model::model_object_id(graph, &o.id));
+            if o.id.kind == al_syntax::ir::ObjectKind::Table
+                && let Some(n) = o.declared_id
+            {
+                gone.insert(format!("{}/table/{n}", graph.apps.resolve(o.id.app).guid));
+            }
+        }
         TableScope { visible, gone }
     }
 
@@ -469,8 +487,9 @@ pub(crate) mod tests {
     }
 
     /// ENG-194 (sol r1): a page extension's base page, seen from its app.
-    /// DISCRIMINATION (2026-11-26, break then restored, green): no closure
-    /// filter fails the `lone` assertion.
+    /// DISCRIMINATION (2026-11-26, each break then restored, green): no
+    /// closure filter fails the `lone` assertion; no gone filter fails "a
+    /// moved object gives way".
     #[test]
     fn an_object_name_binds_within_the_apps_closure() {
         let mut a = numberless("Base");
@@ -488,6 +507,15 @@ pub(crate) mod tests {
         };
         assert_eq!(id("lone").as_deref(), Some("a/Interface/@Base"));
         assert_eq!(id("w"), None, "two visible objects decline");
+        // sol r2: a moved/removed object gives way to the live one.
+        let gone = TableScope::stated(&[("w", &["w", "a", "b"])], &["a/Interface/@Base"]);
+        let st = SymbolTable::build_scoped(&objects, &[], &gone);
+        assert_eq!(
+            st.object_by_type_name_from("w", "Interface", "base")
+                .map(|o| o.id.as_str()),
+            Some("b/Interface/@Base"),
+            "a moved object gives way"
+        );
     }
 
     /// A numberless Interface `ModelObject` named `name` (#83 tests).

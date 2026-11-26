@@ -356,8 +356,10 @@ fn apply_access_properties(abi_object: &mut AbiObject, properties: &Option<Vec<R
     abi_object.scope = raw_object_property(properties, "Scope").and_then(|v| application_scope(&v));
     abi_object.inherent_permissions = raw_object_property(properties, "InherentPermissions");
     abi_object.inherent_entitlements = raw_object_property(properties, "InherentEntitlements");
-    abi_object.obsolete_gone = raw_object_property(properties, "ObsoleteState")
-        .is_some_and(|v| v.eq_ignore_ascii_case("Moved") || v.eq_ignore_ascii_case("Removed"));
+    abi_object.obsolete_gone = raw_object_property(properties, "ObsoleteState").is_some_and(|v| {
+        let v = v.trim();
+        v.eq_ignore_ascii_case("Moved") || v.eq_ignore_ascii_case("Removed")
+    });
 }
 
 impl AbiRoutine {

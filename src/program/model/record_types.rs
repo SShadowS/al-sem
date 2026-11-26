@@ -892,12 +892,13 @@ pub fn resolve_routine_record_types(
     // interference (both only upgrade → Known(true), never downgrade).
     //
     // A PageExtension's `Rec` is its BASE page's (#302 CR1): read the base page's
-    // flag, found by name like pass 3 (last-wins when several pages share it).
+    // flag, found as pass 3 finds it (ENG-194, sol r2: within the extension's
+    // app's closure, exactly one).
     let page_temp = |o: &ModelObject| match o.object_type.as_str() {
         "PageExtension" => o
             .extends_target_name
             .as_deref()
-            .and_then(|base| symbols.object_by_type_name("Page", base))
+            .and_then(|base| symbols.object_by_type_name_from(&o.app_guid, "Page", base))
             .and_then(|p| p.source_table_temporary),
         _ => o.source_table_temporary,
     };

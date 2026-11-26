@@ -76,14 +76,120 @@ tableextension 51 "Shared Ext" extends "Shared"
     }
 }
 
+#if ONE
+table 55 "Split"
+{
+    fields
+    {
+        field(1; "A"; Integer) { }
+    }
+}
+#else
+table 55 "Split"
+{
+    fields
+    {
+        field(1; "B"; Integer) { }
+    }
+}
+#endif
+
+tableextension 56 "Split Ext" extends "Split"
+{
+    fields
+    {
+        field(56; "Split Flag"; Boolean) { }
+    }
+}
+
+table 57 "New Base"
+{
+    fields
+    {
+        field(1; "Entry No."; Integer) { }
+    }
+}
+
+table 58 "Old Base"
+{
+    fields
+    {
+        field(1; "Entry No."; Integer) { }
+    }
+}
+
+#if NEW
+tableextension 59 "Moving Ext" extends "New Base"
+{
+    fields
+    {
+        field(59; "Moving Flag"; Boolean) { }
+    }
+}
+#else
+tableextension 59 "Moving Ext" extends "Old Base"
+{
+    fields
+    {
+        field(59; "Moving Flag"; Boolean) { }
+    }
+}
+#endif
+
 codeunit 52 "Z Main"
 {
     procedure Work()
     var
         S: Record "Shared";
+        ZP: Page "Z Page";
     begin
         S.FindFirst();
+        ZP.PageTouch();
+        ZP.ExtTouch();
     end;
+}
+
+page 53 "Z Page"
+{
+    SourceTable = 50;
+
+    procedure PageTouch()
+    begin
+        Rec.Modify();
+    end;
+}
+
+pageextension 54 "Z Page Ext" extends "Z Page"
+{
+    procedure ExtTouch()
+    begin
+        Rec.Modify();
+    end;
+}
+"#;
+
+/// `Zz Unrelated`: its own table 50 and a temporary page of ZBase's page's
+/// name, so a LAST-wins number or page lookup from ZBase picks these.
+const UNRELATED_SRC: &str = r#"table 60 "Shared"
+{
+    fields
+    {
+        field(1; "Entry No."; Integer) { }
+    }
+}
+
+table 50 "Other"
+{
+    fields
+    {
+        field(1; "Entry No."; Integer) { }
+    }
+}
+
+page 62 "Z Page"
+{
+    SourceTable = "Shared";
+    SourceTableTemporary = true;
 }
 "#;
 
@@ -125,7 +231,7 @@ fn model() -> ModelEntities {
         );
     }
     let zbase_symbols = format!(
-        r#""Tables":[{}],"TableExtensions":[{{"Id":51,"Name":"Shared Ext","TargetObject":"Shared"}}],"Codeunits":[{{"Id":52,"Name":"Z Main","Methods":[{{"Name":"Work","Parameters":[]}}]}}]"#,
+        r#""Tables":[{}],"TableExtensions":[{{"Id":51,"Name":"Shared Ext","TargetObject":"Shared"}}],"Codeunits":[{{"Id":52,"Name":"Z Main","Methods":[{{"Name":"Work","Parameters":[]}}]}}],"Pages":[{{"Id":53,"Name":"Z Page","Methods":[{{"Name":"PageTouch","Parameters":[]}}]}}],"PageExtensions":[{{"Id":54,"Name":"Z Page Ext","TargetObject":"Z Page","Methods":[{{"Name":"ExtTouch","Parameters":[]}}]}}]"#,
         table(50, "Shared", "")
     );
     crate::symbol_app::write_source_app(
@@ -147,12 +253,13 @@ fn model() -> ModelEntities {
         &symbols(
             UNRELATED,
             "Zz Unrelated",
-            &format!(r#""Tables":[{}]"#, table(60, "Shared", "")),
+            &format!(
+                r#""Tables":[{},{}],"Pages":[{{"Id":62,"Name":"Z Page"}}]"#,
+                table(60, "Shared", ""),
+                table(50, "Other", "")
+            ),
         ),
-        &[(
-            "src/Shared.al",
-            "table 60 \"Shared\"\n{\n    fields\n    {\n        field(1; \"Entry No.\"; Integer) { }\n    }\n}\n",
-        )],
+        &[("src/Unrelated.al", UNRELATED_SRC)],
         "",
     );
     assemble_and_resolve_cross_app_program(
@@ -197,7 +304,12 @@ fn var_table(ws: &ModelEntities, app: &str, routine: &str, var: &str) -> Option<
 /// (`table_by_name`) fails "extension merges into the seen base" (only with
 /// `Zz Unrelated` a source app too: as a symbol-only app its table sat before
 /// ZBase's, and the last-wins pick was right by luck); `sees` always true
-/// fails "closure only".
+/// fails "closure only"; `page_temp` reading the last page of the name fails
+/// "... not the unrelated temporary page"; merging into the FIRST row of a
+/// split base fails "split base: the kept row"; one target per extension id
+/// fails "split extension: both targets"; a number through the last table
+/// object of the number fails "number, own app"; pass 3 picking the base page
+/// unscoped fails "page extension's base page".
 #[test]
 fn a_table_name_binds_as_the_resolver_binds_it_in_the_model() {
     let ws = model();
@@ -246,5 +358,65 @@ fn a_table_name_binds_as_the_resolver_binds_it_in_the_model() {
     assert!(
         !has_flag(format!("{UNRELATED}/table/60")),
         "extension leaves the unseen table alone"
+    );
+    // sol + Fable r2: an `#if`-split base table's extension fields go to the
+    // row the by-id readers keep (the last real row of the id).
+    let last_row_has = |id: String, field: &str| {
+        ws.tables
+            .iter()
+            .rfind(|t| t.id == id && !t.is_extension_stub)
+            .is_some_and(|t| t.fields.iter().any(|f| f.name == field))
+    };
+    assert_eq!(
+        ws.tables
+            .iter()
+            .filter(|t| t.id == format!("{ZBASE}/table/55") && !t.is_extension_stub)
+            .count(),
+        2,
+        "precondition: the split table has two rows"
+    );
+    assert!(
+        last_row_has(format!("{ZBASE}/table/55"), "Split Flag"),
+        "split base: the kept row"
+    );
+    // Fable r2: each row of an `#if`-split tableextension merges into its own
+    // target.
+    assert!(
+        last_row_has(format!("{ZBASE}/table/57"), "Moving Flag")
+            && last_row_has(format!("{ZBASE}/table/58"), "Moving Flag"),
+        "split extension: both targets"
+    );
+    // sol r2: a page's `SourceTable = 50` binds by number from its own app,
+    // though the unrelated app's table 50 comes later.
+    assert_eq!(
+        var_table(&ws, ZBASE, "PageTouch", "Rec").as_deref(),
+        Some(format!("{ZBASE}/table/50").as_str()),
+        "number, own app"
+    );
+    // sol r2: a page extension's base page is the one its app sees: its
+    // table, and its (absent) `SourceTableTemporary`, not the unrelated
+    // temporary page's.
+    assert_eq!(
+        var_table(&ws, ZBASE, "ExtTouch", "Rec").as_deref(),
+        Some(format!("{ZBASE}/table/50").as_str()),
+        "page extension's base page"
+    );
+    let ext_rec = ws
+        .routines
+        .iter()
+        .find(|r| r.app_guid == ZBASE && r.name == "ExtTouch")
+        .and_then(|r| {
+            r.record_variables
+                .iter()
+                .find(|v| v.name.eq_ignore_ascii_case("Rec"))
+        })
+        .expect("ExtTouch's Rec");
+    assert_ne!(
+        (
+            ext_rec.temp_state.kind.to_string(),
+            ext_rec.temp_state.value
+        ),
+        ("known".to_string(), Some(true)),
+        "page extension's base page is not the unrelated temporary page"
     );
 }
