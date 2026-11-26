@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (ENG-213: a wrong "none observed" — `query touches --field --from` down searches dependency code past its first routine)
+
+- **The bug.** `query touches --field F --from R --direction down` searched R's cone over the solve's
+  combined graph, which takes workspace callers only: a dependency routine called from another
+  dependency routine was never searched. So with `CallDep -> D.WriteIt -> D.Inner`, where `Inner`
+  assigns the field, the answer read "consumers: none observed", and its "not searched" note said
+  "dependency code the workspace does not call", which was false (found checking ENG-201's
+  global-trigger sentence on CDO: the field answer's cone held fewer routines than the digest
+  cone). The table answer from the same routine was right: it reads the whole cone.
+- **The fix.** The down cone (`effect_query_cli::field_scope`) also walks the relation's typed edges,
+  every caller's, so the calls dependency code makes too (`typed_down`). They are in the relation
+  cell the query already reads: nothing more is built. The scope label says so: "…'s cone by the
+  call graph, dependency code included (N routines)" (was "…'s cone by the solve graph").
+- **Goldens.** The two query goldens that print the label moved in that phrase only
+  (`ft.kinds.ft-item.amount.both.{human.txt,json}`; the count stays 2, no site moved).
+- **Tests and red proofs.** `cli_field_touches_dependency_depth` (new): the two-hop site is listed,
+  the one-hop control too. Committed red first (the site missing, the control listed), then green
+  with the fix.
+
 ### Fixed (TLS-121: Windows builds need no cmake)
 
 - **gzip moved from zlib-ng to zlib-rs** (`flate2` feature `zlib-rs`, pure Rust). zlib-ng's

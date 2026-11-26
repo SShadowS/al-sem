@@ -535,12 +535,15 @@ impl Job for QueryJob<'_> {
             let body = if from.is_some() {
                 // `Some(None)`: declared, its build did not finish.
                 let sited = self.needs().sited.then(|| cx.sited());
+                // ENG-213: the relation's typed edges, before the substrate
+                // releases the relation cell (shared, not copied).
+                let cone = std::sync::Arc::clone(cx.view().rel().cone_shared());
                 let substrate = released_substrate(cx);
                 let query = substrate.query();
                 render_field_touches(
                     substrate.resolved(),
                     &substrate.dependencies,
-                    Some((&query, sited)),
+                    Some((&query, sited, cone.as_slice())),
                     &ask,
                     self.alsem_ver,
                     self.deterministic,
@@ -6253,16 +6256,49 @@ impl crate::program::impact_graph::reverse::ConeVisitor for UpCollector {
     }
 }
 
-/// The `--from` scope: the routine and its transitive callees over the solve
-/// graph (`down`: dependency code in the solve is a leaf one routine deep,
-/// and a call not resolved has no edge), and its transitive callers (`up`)
-/// by R0's reverse walk over the sited graph when it is given, as `alsem
-/// tests` and impact read them (through dependency code, with tiers), else
-/// over the solve graph.
+/// ENG-213: the model routines `root` reaches over the relation's typed edges
+/// (every caller's, the calls dependency code makes included), `root` among
+/// them, as model indices. An edge with no target (a call not resolved) leads
+/// nowhere.
+fn typed_down(
+    cone: &[crate::engine::l4::combined_graph::TypedEdge],
+    root: &str,
+    ix_of: &HashMap<&str, usize>,
+) -> HashSet<usize> {
+    let mut by_from: HashMap<&str, Vec<&str>> = HashMap::new();
+    for e in cone {
+        if let Some(to) = e.to.as_deref() {
+            by_from.entry(e.from.as_str()).or_default().push(to);
+        }
+    }
+    let mut seen: HashSet<&str> = HashSet::new();
+    let mut stack = vec![root];
+    while let Some(id) = stack.pop() {
+        if !seen.insert(id) {
+            continue;
+        }
+        if let Some(next) = by_from.get(id) {
+            stack.extend(next.iter().copied());
+        }
+    }
+    seen.iter()
+        .filter_map(|id| ix_of.get(id).copied())
+        .collect()
+}
+
+/// The `--from` scope: the routine and its transitive callees (`down`) over the
+/// solve graph and the relation's typed edges (`cone`: every caller's, so
+/// dependency code past its first routine too, ENG-213: the solve takes
+/// workspace callers only and left a site two dependency calls down unsearched;
+/// a call not resolved has no edge), and its transitive callers (`up`) by R0's
+/// reverse walk over the sited graph when it is given, as `alsem tests` and
+/// impact read them (through dependency code, with tiers), else over the solve
+/// graph.
 fn field_scope(
     model: &Model,
     query: &DbEffectQuery<'_>,
     sited: Option<Option<&crate::program::impact_graph::SitedGraph>>,
+    cone: &[crate::engine::l4::combined_graph::TypedEdge],
     r: &ModelRoutine,
     direction: Direction,
     join: &RoutineJoin<'_>,
@@ -6360,9 +6396,20 @@ fn field_scope(
         if let Some(&i) = ix_of.get(r.id.as_str()) {
             sides.insert(i, "down");
         }
+        // ENG-213: what the routine calls is still in the relation's edges.
+        let mut down = 1;
+        if direction.wants_down() {
+            let own = ix_of.get(r.id.as_str()).copied();
+            for i in typed_down(cone, &r.id, &ix_of) {
+                if Some(i) != own {
+                    sides.insert(i, "down");
+                    down += 1;
+                }
+            }
+        }
         return FieldScope {
             sides,
-            down: 1,
+            down,
             up,
             no_solve_row: true,
             ..scope
@@ -6391,7 +6438,18 @@ fn field_scope(
             }
             stack.extend(query.direct_callees(s).iter().copied());
         }
-        down = seen.len();
+        // ENG-213: the solve takes workspace callers only; the relation's
+        // typed edges also hold the calls dependency code makes.
+        let solve_down: HashSet<usize> = sides
+            .iter()
+            .filter(|(_, s)| **s == "down")
+            .map(|(&i, _)| i)
+            .collect();
+        let typed = typed_down(cone, &r.id, &ix_of);
+        for &i in &typed {
+            sides.insert(i, "down");
+        }
+        down = seen.len() + typed.difference(&solve_down).count();
     }
     FieldScope {
         sides,
@@ -6462,11 +6520,13 @@ fn field_use_counts_words(
     out
 }
 
-/// What `--from` walks: the solve, and the sited graph when the demand
-/// declared it (`Some(None)`: declared, not built).
+/// What `--from` walks: the solve, the sited graph when the demand declared
+/// it (`Some(None)`: declared, not built), and (ENG-213) the relation's typed
+/// edges, every caller's (dependency code's included), for the down cone.
 type FromGraphs<'q, 'g> = (
     &'q DbEffectQuery<'q>,
     Option<Option<&'g crate::program::impact_graph::SitedGraph>>,
+    &'g [crate::engine::l4::combined_graph::TypedEdge],
 );
 
 fn render_field_touches(
@@ -6550,8 +6610,9 @@ fn render_field_touches(
         None => None,
         Some(sel) => match resolve_routine_selector(model, &join.declaring, sel) {
             Resolution::Resolved(r) => {
-                let (q, sited) = query.expect("--field --from reads the solve (`query_plan`)");
-                Some(field_scope(model, q, sited, r, ask.direction, &join))
+                let (q, sited, cone) =
+                    query.expect("--field --from reads the solve (`query_plan`)");
+                Some(field_scope(model, q, sited, cone, r, ask.direction, &join))
             }
             other => {
                 return routine_failure_doc(
@@ -6646,7 +6707,7 @@ fn render_field_touches(
             let mut parts = Vec::new();
             if ask.direction.wants_down() {
                 parts.push(format!(
-                    "{}'s cone by the solve graph ({})",
+                    "{}'s cone by the call graph, dependency code included ({})",
                     sc.routine.qualified(),
                     plural(sc.down, "routine", "routines")
                 ));
