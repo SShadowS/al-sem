@@ -2553,7 +2553,8 @@ while True:
 /// whose init does not reap it would stay a zombie. Orphans come here; once
 /// cdo-speed exits, this waits (up to 60 s) for every one left and reaps it,
 /// then says on stderr `stub-reaper: reaped N orphan(s), M left` (M: children
-/// still not reaped, which `speed_with_stub` requires to be 0). It exits with
+/// still not reaped, which `speed_with_stub` requires to be 0), and kills and
+/// reaps those, so a failing run leaves nothing behind. It exits with
 /// cdo-speed's code, or by its signal.
 ///
 /// Proof (2026-11-25): the reaping loop skipped -> "stub-reaper: reaped 0
@@ -2579,7 +2580,16 @@ while time.monotonic() < end:
         reaped += 1
     else:
         time.sleep(0.05)
-print(f"stub-reaper: reaped {reaped} orphan(s), {len(children())} left", file=sys.stderr)
+left = children()
+print(f"stub-reaper: reaped {reaped} orphan(s), {len(left)} left", file=sys.stderr)
+# Counted as a failure above; then killed and reaped, so none outlives the test
+# (or holds the pipes it reads).
+for pid in left:
+    try:
+        os.kill(int(pid), signal.SIGKILL)
+        os.waitpid(int(pid), 0)
+    except (OSError, ChildProcessError):
+        pass
 if rc < 0:
     signal.signal(-rc, signal.SIG_DFL)
     os.kill(os.getpid(), -rc)
@@ -3227,15 +3237,17 @@ fn speed_counts_cycles_and_labels_clock_and_cpi() {
 ///   thread; under 10 s;
 /// - kill (sol r1): the child never ends; with `CLOSE_WAIT_S` 0.3 close() kills
 ///   it, through the pidfd it took when it listed the child (never `os.kill`,
-///   which the test records): after close(), a finished zombie;
-/// - kill, pid reused (sol r1): no pidfd (`os.pidfd_open` raises), and the
-///   child's pid reads another start time from the moment close() decides to
-///   kill (the "still alive" line): close() must not kill by pid (the child is
-///   still running after it; the test then kills it);
+///   which the test records): after close(), a finished zombie. Skipped, said
+///   on stdout, where this host has no pidfds (sol r2);
+/// - no pidfd (sol r2): `os.pidfd_open` fails with EMFILE: close() must never
+///   kill the child by its numeric pid (the test records `os.kill`), leaves it
+///   running, and logs "NOT killed: no pidfd (pidfd_open: Too many open files)";
 /// - `running` with a start time: the live test process counts with its own
 ///   start time, not with another (a reused pid is not the child it was);
-/// - this process adopted every child: it reaps them all at the end, and has
-///   no child left.
+/// - this process adopted every child: pass or fail, a `finally` kills and
+///   reaps every fixture process, then (on a pass) it has no child left. The
+///   fixture processes write to /dev/null, never to the pipes this test reads,
+///   so a child that outlived a failure cannot hang the test (sol r2).
 ///
 /// Each case asserts its precondition (one child listed; the zombie shape).
 ///
@@ -3245,15 +3257,17 @@ fn speed_counts_cycles_and_labels_clock_and_cpi() {
 /// from `running` -> the leader-gone case (red); the start-time check dropped ->
 /// the start-time case (red); each restored, green. (Sol r1) `kill_child` never
 /// using the pidfd -> "kill: close() killed by pid, not through the child's
-/// pidfd" (red); its start-time re-check before `os.kill` dropped -> "kill, pid
-/// reused: close() killed pid ..., by then another process" (red); the final
-/// reaping dropped -> "children left unreaped: [4 pids]" (red); each restored,
-/// green.
+/// pidfd" (red); the final reaping dropped -> "children left unreaped: [4
+/// pids]" (red); each restored, green. (Sol r2, 2026-11-25/26) a numeric
+/// `os.kill` put back in `kill_child` for a child with no pidfd -> "no pidfd:
+/// close() killed the child ... with no pidfd" (red, 3.1 s); `kill_child`
+/// never signalling -> "kill: close() returned with the child at ('S', '1')"
+/// (red in 2.6 s, not a hang; no fixture process left); each restored, green.
 #[cfg(target_os = "linux")]
 #[test]
 fn speed_close_does_not_wait_on_a_zombie() {
     let py = r#"
-import ctypes, importlib.machinery, importlib.util, os, subprocess, sys, tempfile, time
+import ctypes, errno, importlib.machinery, importlib.util, os, subprocess, sys, tempfile, time
 loader = importlib.machinery.SourceFileLoader("cdo_speed", sys.argv[1])
 m = importlib.util.module_from_spec(importlib.util.spec_from_loader("cdo_speed", loader))
 loader.exec_module(m)
@@ -3279,75 +3293,99 @@ CASES = {
                    "    ctypes.CDLL(None).pthread_exit(None)\nsys.stdin.read()",
     # The child never ends by itself: close() kills it after CLOSE_WAIT_S.
     "kill": WAIT + "    after(3600)\nsys.stdin.read()",
-    "kill, pid reused": WAIT + "    after(3600)\nsys.stdin.read()",
+    "no pidfd": WAIT + "    after(3600)\nsys.stdin.read()",
 }
-real_kill, real_stat = os.kill, m.proc_stat
-pid_kills, adopted = [], []
+# The real-pidfd case needs pidfds here; without them it is skipped, said.
+try:
+    os.close(os.pidfd_open(os.getpid()))
+    no_pidfds = None
+except (AttributeError, OSError) as e:
+    no_pidfds = f"{type(e).__name__}: {e}"
+real_kill = os.kill
+pid_kills, adopted, servers = [], [], []
 os.kill = lambda pid, sig: (pid_kills.append(pid), real_kill(pid, sig))
 def server(code):
     d = tempfile.mkdtemp()
     s = m.Server.__new__(m.Server)
     s.name, s.root = "z", tempfile.mkdtemp(dir=d)
     s.err = open(os.path.join(d, "err"), "wb")
-    s.p = subprocess.Popen([sys.executable, "-c", code], stdin=subprocess.PIPE)
+    # Not this process's stdout/stderr: the pipes the test reads to its end, which
+    # a child that outlived a failure would hold open (the test would hang).
+    s.p = subprocess.Popen([sys.executable, "-c", code], stdin=subprocess.PIPE,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    servers.append(s.p)
     return s
-for name, code in CASES.items():
-    s = server(code)
-    want = ("Z", "2") if name == "leader gone" else ("S", None)
-    end = time.monotonic() + 60
-    while time.monotonic() < end:
-        kids = m.descendants(s.p.pid)
-        if len(kids) == 1 and (want[1] is None or shape(kids[0]) == want):
-            break
-        time.sleep(0.01)
-    else:
-        sys.exit(f"{name}: precondition: one child{' (Z, 2 threads)' * (want[1] is not None)}, "
-                 f"got {[(k, shape(k)) for k in kids]}")
-    kid = kids[0]
-    adopted.append(kid)
-    if name.startswith("kill"):
-        s.CLOSE_WAIT_S = 0.3
-    if name == "kill, pid reused":
-        # No pidfd here, and the pid becomes another process (another start time)
-        # the moment close() decides to kill: it must not kill by pid.
-        real_open, reused = os.pidfd_open, []
-        def no_pidfd(pid):
-            raise AttributeError("pidfd_open")
-        os.pidfd_open = no_pidfd
-        real_log = m.log
-        m.log = lambda msg: (reused.append(1) if "still alive" in msg else None, real_log(msg))
-        def stat(pid):
-            f = real_stat(pid)
-            if f and reused and pid == kid:
-                f = f[:19] + ["1"] + f[20:]
-            return f
-        m.proc_stat = stat
-    t = time.monotonic()
-    try:
-        s.close()
-    finally:
-        if name == "kill, pid reused":
-            os.pidfd_open, m.log, m.proc_stat = real_open, real_log, real_stat
-    took = time.monotonic() - t
-    if name == "kill, pid reused":
-        if kid in pid_kills or shape(kid)[0] == "Z":
-            sys.exit(f"{name}: close() killed pid {kid}, by then another process")
-        real_kill(kid, 9)
-        continue
-    if shape(kid) != ("Z", "1"):
-        sys.exit(f"{name}: close() returned with the child at {shape(kid)}, not a "
-                 "finished zombie (Z, 1 thread)")
-    if took > 10:
-        sys.exit(f"{name}: close() waited {took:.1f} s on a zombie")
-    if name == "kill" and kid in pid_kills:
-        sys.exit(f"{name}: close() killed by pid, not through the child's pidfd")
-os.kill = real_kill
+def check():
+    for name, code in CASES.items():
+        if name == "kill" and no_pidfds:
+            print(f"skip kill: pidfds unavailable here ({no_pidfds})")
+            continue
+        s = server(code)
+        want = ("Z", "2") if name == "leader gone" else ("S", None)
+        end = time.monotonic() + 60
+        while time.monotonic() < end:
+            kids = m.descendants(s.p.pid)
+            if len(kids) == 1 and (want[1] is None or shape(kids[0]) == want):
+                break
+            time.sleep(0.01)
+        else:
+            sys.exit(f"{name}: precondition: one child"
+                     f"{' (Z, 2 threads)' * (want[1] is not None)}, "
+                     f"got {[(k, shape(k)) for k in kids]}")
+        kid = kids[0]
+        adopted.append(kid)
+        if name in ("kill", "no pidfd"):
+            s.CLOSE_WAIT_S = 0.3
+        logged, real_open, real_log = [], getattr(os, "pidfd_open", None), m.log
+        if name == "no pidfd":
+            # pidfd_open fails (EMFILE): close() must never kill by the numeric pid.
+            def no_pidfd(pid):
+                raise OSError(errno.EMFILE, "Too many open files")
+            os.pidfd_open = no_pidfd
+            m.log = lambda msg: (logged.append(msg), real_log(msg))
+        t = time.monotonic()
+        try:
+            s.close()
+        finally:
+            if name == "no pidfd":
+                os.pidfd_open, m.log = real_open, real_log
+        took = time.monotonic() - t
+        if name == "no pidfd":
+            if kid in pid_kills or shape(kid)[0] == "Z":
+                sys.exit(f"{name}: close() killed the child {kid} with no pidfd")
+            if not any("NOT killed: no pidfd (pidfd_open: Too many open files)" in l
+                       for l in logged):
+                sys.exit(f"{name}: no warning that the child was left: {logged}")
+            continue
+        if shape(kid) != ("Z", "1"):
+            sys.exit(f"{name}: close() returned with the child at {shape(kid)}, not a "
+                     "finished zombie (Z, 1 thread)")
+        if took > 10:
+            sys.exit(f"{name}: close() waited {took:.1f} s on a zombie")
+        if name == "kill" and kid in pid_kills:
+            sys.exit(f"{name}: close() killed by pid, not through the child's pidfd")
+    me = os.getpid()
+    if not m.running(me, m.proc_start(me)) or m.running(me, "0"):
+        sys.exit("running: the start time is not checked")
+try:
+    check()
+finally:
+    # Pass or fail: every fixture process is killed and reaped (this process
+    # adopted the children), so nothing outlives the test.
+    os.kill = real_kill
+    for p in servers:
+        p.kill()
+        p.wait()
+    for kid in adopted:
+        try:
+            real_kill(kid, 9)
+        except OSError:
+            pass
+        try:
+            os.waitpid(kid, 0)
+        except ChildProcessError:
+            pass
 me = os.getpid()
-if not m.running(me, m.proc_start(me)) or m.running(me, "0"):
-    sys.exit("running: the start time is not checked")
-# This process adopted every child: reap them all, and leave none behind.
-for kid in adopted:
-    os.waitpid(kid, 0)
 left = [c for f in os.listdir(f"/proc/{me}/task")
         for c in open(f"/proc/{me}/task/{f}/children").read().split()]
 if left:

@@ -1000,34 +1000,33 @@ def descendants(pid, starts=None):
 
 
 def pid_handle(pid, start):
-    """⟨TLS-126 sol r1⟩ A pidfd for `pid` while it is still the process that started at
-    `start` (a signal through it can reach no other process, whatever reuses the pid
-    later); None where pidfds are not available; False when `pid` is gone or already
-    another process."""
+    """⟨TLS-126 sol r1, r2⟩ A pidfd for `pid` while it is still the process that
+    started at `start` (a signal through it can reach no other process, whatever
+    reuses the pid later); False when `pid` is gone or already another process; else
+    why there is no pidfd (a string: no `os.pidfd_open`, or its error, such as
+    EMFILE), and then close() never signals it (a numeric pid may be reused)."""
     try:
         fd = os.pidfd_open(pid)
     except AttributeError:
-        return None
+        return "no os.pidfd_open (Python before 3.9)"
     except OSError as e:
-        return False if e.errno == errno.ESRCH else None
+        return False if e.errno == errno.ESRCH else f"pidfd_open: {e.strerror}"
     if proc_start(pid) != start:
         os.close(fd)
         return False
     return fd
 
 
-def kill_child(pid, start, handle):
-    """SIGKILL the process `pid` that started at `start`: through its pidfd `handle`,
-    or, without one, only if the start time still matches just before the kill."""
+def kill_child(pid, handle):
+    """SIGKILL the child `pid` through its pidfd `handle`; with no pidfd (`handle` says
+    why), never by its numeric pid: say so and leave it. Returns whether it signalled."""
+    if type(handle) is not int:
+        return False
     try:
-        if type(handle) is int:
-            signal.pidfd_send_signal(handle, signal.SIGKILL)
-        elif running(pid, start):
-            # shortcut: a pid reused between this check and the kill is still hit;
-            # only where pidfds are missing (Linux before 5.3, Python before 3.9).
-            os.kill(pid, signal.SIGKILL)
+        signal.pidfd_send_signal(handle, signal.SIGKILL)
     except OSError:
         pass
+    return True
 
 
 # ⟨TLS-83⟩ Instructions: user-mode instructions retired per call, next to its
@@ -1441,10 +1440,18 @@ class Server:
         while left and time.monotonic() < deadline:
             time.sleep(0.2)
             left = [(k, t) for k, t in left if running(k, t)]
+        signalled = []
         for k, t in left:
-            log(f"server {self.name}: child {k} still alive {self.CLOSE_WAIT_S} s after the "
-                "close: killed")
-            kill_child(k, t, handles[k])
+            if kill_child(k, handles[k]):
+                log(f"server {self.name}: child {k} still alive {self.CLOSE_WAIT_S} s after "
+                    "the close: killed")
+                signalled.append((k, t))
+            else:
+                log(f"server {self.name}: child {k} still alive {self.CLOSE_WAIT_S} s after "
+                    f"the close, NOT killed: no pidfd ({handles[k]}), and a numeric pid may "
+                    "belong to another process by now; its memory may still be resident "
+                    "(the next build's timing may be skewed)")
+        left = signalled
         deadline = time.monotonic() + 5
         while left and time.monotonic() < deadline:
             time.sleep(0.1)

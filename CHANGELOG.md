@@ -57,7 +57,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Every stub speed run goes through a small wrapper (`STUB_REAPER`) that makes
   itself a child subreaper, so the stub's report children come to it. After
   cdo-speed exits it reaps every one, and `speed_with_stub` asserts that none is left.
-  On a host whose init does not reap, nothing is left behind as a zombie.
+  Any still alive after 60 s is counted (and fails the test), then killed and reaped.
+  On a host whose init does not reap, nothing is left behind as a zombie, even when a
+  run fails.
 - `scripts/cdo-speed`: `Server.close()` no longer waits on a finished zombie
   descendant. On a host whose init does not reap, an orphaned engine child stays a
   zombie (its `/proc/<pid>` remains), and `close()` waited 30 s, sent a SIGKILL,
@@ -68,16 +70,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `close()` also records each descendant's start time, from the same `/proc` read
     that finds it, and takes a pidfd while the pid is still that process. So a pid
     reused by another process counts as gone, and the kill after the 30 s wait goes
-    through the pidfd: it can reach only the child that was listed. Without pidfds
-    (Linux before 5.3, Python before 3.9), it re-checks the start time just before
-    killing by pid. A reuse in the gap between that check and the kill is still
-    possible there.
+    through the pidfd: it can reach only the child that was listed.
+  - `close()` never kills by numeric pid. When it has no pidfd for a child, it leaves
+    a child that is still alive after the wait and logs `NOT killed: no pidfd
+    (<why>)`, with the warning that its memory may still be resident. This happens
+    when `os.pidfd_open` is missing (Python before 3.9) or `pidfd_open` fails for any
+    reason other than "no such process": for example EMFILE (too many open files),
+    or ENOSYS (Linux before 5.3).
   - Pinned by `speed_close_does_not_wait_on_a_zombie`. The script runs under a child
-    subreaper, so the zombie is deterministic, and the test reaps every child it
-    adopted at the end. The cases are: a plain zombie (35.1 s on the old check); a
-    leader gone with a second thread still running, which `close()` must wait for;
-    a kill that must go through the pidfd; a kill with no pidfd where the pid turns
-    into another process, which must not be killed; and the start-time check.
+    subreaper, so the zombie is deterministic. Its fixture processes write to
+    /dev/null, not to the pipes the test reads, and a `finally` kills and reaps
+    every one, so a failing case fails and never hangs. The cases are:
+    - a plain zombie (35.1 s on the old check);
+    - a leader gone with a second thread still running, which `close()` must wait
+      for;
+    - a kill that must go through the pidfd (skipped, and said so, where this host
+      has no pidfds);
+    - `pidfd_open` failing with EMFILE, where the child must be left alive with the
+      warning;
+    - the start-time check.
 
 ### Fixed (ENG-178: table procedures named like record built-ins: four follow-ups from ENG-173)
 
