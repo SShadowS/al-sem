@@ -3053,7 +3053,9 @@ print("can" if events else f"cannot: {why}")
 /// `cpu_core/cpus`, the test run under `taskset -c 12-21` (the E-cores, as a
 /// cpuset without P-cores) -> "a spinner ended or runs outside this process's
 /// CPUs" (red); restored, the same run -> "pinned stop skipped: no P-core",
-/// green.
+/// green. Redone after review r2's wait for the wanted mask (2026-11-26): ->
+/// "a spinner ended, or runs outside this process's CPUs [12, ..., 21] or the
+/// wanted [0, ..., 11]" (red); restored, the same run green (below).
 ///
 /// Mutation (2026-11-25): `perf_event_args` back to one `-e` per event ->
 /// "stop 1 refused" with `cpu_core/instructions/u` at 2968286980 ns against its
