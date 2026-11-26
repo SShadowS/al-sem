@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (ENG-213: a wrong "none observed" — `query touches --field --from` down searches dependency code past its first routine)
+
+- **The bug.** `query touches --field F --from R --direction down` searched R's cone over the solve's
+  combined graph, which takes workspace callers only: a dependency routine called from another
+  dependency routine was never searched. So with `CallDep -> D.WriteIt -> D.Inner`, where `Inner`
+  assigns the field, the answer read "consumers: none observed", and its "not searched" note said
+  "dependency code the workspace does not call", which was false (found checking ENG-201's
+  global-trigger sentence on CDO: the field answer's cone held fewer routines than the digest
+  cone). The table answer from the same routine was right: it reads the whole cone.
+- **The fix.** The down cone (`effect_query_cli::field_scope`) also walks the execution relation's
+  typed edges, every caller's, so the calls dependency code makes too, with implicit triggers and
+  event and table-event dispatch (`typed_down`). They are in the relation cell the query already
+  reads; the walk uses an index of the edges by caller (`ExecRelation::cone_callees`, four bytes an
+  edge), built on first use and kept with the relation, so a resident server does not rebuild it
+  per query. The scope label says so: "…'s cone by the execution graph, dependency code included
+  (N routines)" (was "…'s cone by the solve graph"), and the down reason reads "the cone is the
+  resolved execution graph, dependency code included: calls not resolved are not followed"
+  (`resolved-call-graph`, `side: "down"`); callers by the solve graph keep their own reason
+  (`side: "up"`), which is still one dependency routine deep. A routine with no solve row still
+  reads only its own body (a `--from` root is a workspace routine; a dependency routine does not
+  resolve as one).
+- **What it shares with the digest cone (filed).** Both read the same typed edges, so both miss a
+  table procedure that shadows a platform method when dependency code calls it, and a call whose
+  site the model does not hold (ENG-215, from Fable's and sol's reviews). The down cone follows
+  every edge kind alike, with no mark for how a site is reached, and keeps edges from dead call
+  sites the digest cone drops (ENG-216).
+- **CDO (pinned `bc3ccb18`, master 68c95be6 against 1f55edd9, release-fast, one-shot, IR cache
+  off, one run each side; `/work/.al-sem/engine-notes/eng213/field-depth-measure.log`).**
+  `--field 1 --from R --direction down` for the three CDO rendering routines: the dependency bodies
+  searched go from 111-114 to 20,631-20,728 (interface and event dispatch fan out across the
+  demanded dependency code), and the workspace bodies from 799 to 883 for `IssueReminder`. No
+  slowdown was seen in that one sample per side (each head run at or under its base run on a
+  noisy host); the resident server was not measured. `IssueReminder` on `Issued Reminder
+  Header`: 5 -> 13 confirmed sites (reads, writes and a copy-candidate), among them Base
+  Application's `InsertIssuedReminderHeader` writing the table, reached through the Base
+  Application's issue codeunit two dependency calls down, which master's answer never searched;
+  candidates (a RecordRef table not known) 2 -> 49. On `CDO File` and `CDO E-Mail Log` the
+  confirmed lists are unchanged (18, 16); the added rows are candidates (2 -> 53 each, mostly
+  `by-number` uses reached through event dispatch), each named as one.
+- **Goldens.** The two query goldens that print the label moved in that phrase and the reason's
+  `side` only (`ft.kinds.ft-item.amount.both.{human.txt,json}`; the count stays 2, no site moved).
+- **Tests and red proofs.** `cli_field_touches_dependency_depth` (new): the two-hop site is listed,
+  the one-hop control too, each branch lists only its own site, `CallDep`'s cone is its 3 routines,
+  and the down reason is the new one. Committed red first (the two-hop site missing), then green;
+  a cone of every routine (`typed_down` returning all) fails "no site in Inner from CallDirect".
+
 ### Fixed (TLS-121: Windows builds need no cmake)
 
 - **gzip moved from zlib-ng to zlib-rs** (`flate2` feature `zlib-rs`, pure Rust). zlib-ng's
@@ -329,6 +375,73 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `RootSlot`; retainability at the bind's start fails `RootJoinInArgs`; no receiver check fails
   `RootReceiverNotKept`; any array element counting fails `RootRecArrayGet`.
 - **Goldens.** None moved.
+
+### Changed (ENG-101: distinct findings no longer share a fingerprint; d22, d54, d55)
+
+Owner decision 2026-11-18: two different findings must never share a fingerprint. A baseline
+or a suppression keyed by fingerprint treated a shared one as ONE finding: suppressing one
+suppressed all of them, and a new member of the group was invisible to it.
+- **d54 (publish in a TryFunction cone):** the event publisher joins the `rootCauseKey`. A
+  TryFunction that reaches five publishers gave five findings under one fingerprint; now each
+  publisher has its own. The cap of 5 findings per TryFunction is gone (review r1): with one
+  fingerprint per publisher, a cap decided which fingerprints existed, so a new publisher
+  could push a baselined one out, or be cut and stay invisible to the baseline. The
+  `cappedPerTryRoutine` skip count goes with it, and d54 no longer counts as possibly
+  incomplete for baseline pruning. CDO had no TryFunction over the cap (the count was 0 in
+  both scopes), so no CDO finding is added.
+- **d55 (event published in a loop):** the published event, and its repeat number in that
+  loop (`#1`, `#2`, in source order, counted per loop), join the `rootCauseKey`. Every
+  publish in one loop shared the loop's fingerprint before.
+- **d54: a TryFunction declared in several `#if` arms gives one finding per publisher** (sol
+  r1). The arms of one routine share its id and graph node, so each arm emitted the same key,
+  and the copies shared one fingerprint. The finding kept is the first declaration's in
+  source order; each other arm's location is added to its evidence, and each finding's
+  evidence now starts at its own arm's declaration (it used to name the last arm for every
+  copy). d55 needs no such step: the loop ids are minted across the arms (`/loop0`,
+  `/loop1`), so each arm's publish already has its own key.
+- **d22 (FlowField read without CalcFields):** the reads of one FlowField on one record
+  variable and one table in one routine are now ONE finding (they always shared one key). The
+  table is part of the group because the `#if` arms of one routine can declare the variable
+  as a different table; those findings, with different fingerprints, stay apart. It sits on the
+  first read in source order, and its evidence lists every uncovered read in source order.
+  Its key and fingerprint are unchanged. The fix is usually one CalcFields before the first
+  read, but a record reloaded between reads (a `Get`, a `Next`) needs another one: check each
+  read in the evidence.
+- CDO (pinned baseline, `scripts/cdo-before-after c6f61f04 .`): findings sharing a
+  fingerprint go from 3 groups (10 findings) to 0 at `--scope primary` (one d54 group of 5
+  publishers; two d55 groups, one of them a loop that publishes one event twice) and from 13
+  groups (44 findings) to 0 at `--scope all` (those three plus 10 d22 groups). d22 at
+  `--scope all`: 99 -> 75 findings (two groups of 9 reads, eight of 2); no d22 fingerprint is
+  added or removed. d54 (6 findings) and d55 (31) keep their counts, and all their
+  fingerprints are new (in both scopes 30 removed and 37 added, every one d54 or d55).
+  Findings: primary 2306 -> 2306, all 32429 -> 32405. The call graph does not move.
+- **Release note: re-baseline d54 and d55.** Every d54 and d55 fingerprint changes (the loose
+  fingerprint too). An existing `--baseline` file or fingerprint suppression for a d54 or d55
+  finding no longer matches it: run `alsem analyze <workspace> --baseline <file>
+  --update-baseline`, and re-create fingerprint suppressions for those two detectors. The
+  update accepts every current finding, so if your baseline held only selected findings,
+  review what it adds before you commit it. d22 fingerprints do not move; only the extra
+  findings of a merged group (the second and later reads) disappear.
+- **Release note: d55's repeat number follows source order.** Two publishes of one event in
+  one loop are `#1` and `#2` from the top. A new publish of that event inserted above them
+  takes `#1`, so it inherits the first one's baseline entry and the old ones read as `#2`
+  and `#3`: re-baseline that loop after such an edit.
+- **Inline `// al-sem-ignore` keeps working per site for merged findings** (sol r1, r2). A
+  merged d22 finding (its reads, possibly in the `#if` declarations of one routine in
+  different files) and a d54 finding kept for several `#if` declarations of one
+  TryFunction are suppressed only when a directive covers EVERY site they list, each in its
+  own file (the directive's line or the next, as before). A directive at some sites no
+  longer hides the others: the finding stays, listing all its sites. Every other finding
+  keeps the primary-line rule (`inline_suppression::apply_inline_suppressions`,
+  `detectors::suppression_sites`).
+- Tests: `r4_differential`'s fixtures `ws-d22`, `ws-d54` and `ws-d55` hold the three shapes;
+  every r4 fixture run now checks that no two findings share a fingerprint; and
+  `d22_merges_the_reads_of_one_flowfield` pins the merge, `d54_reports_every_publisher` the
+  uncapped d54, d55's `repeat_number_follows_source_order` and `each_loop_counts_its_own_repeats`
+  the `#n` count, `d22_keeps_tables_apart` and `d54_`/`d55_one_finding_per_alternate_declaration`
+  the `#if` arms, and `cli_d22_inline_suppression` the per-read directives. The
+  `ids-parent-baseline` record
+  was updated by hand for the moved d54/d55 fingerprints (see its module doc).
 
 ### Fixed (ENG-178: table procedures named like record built-ins: four follow-ups from ENG-173)
 

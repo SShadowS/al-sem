@@ -63,6 +63,23 @@
 //! `OnOpenPage` (Report 51700, `#d5b90afe…` -> `#b0e0b330…`); no fingerprint moved, every
 //! other fixture's record is byte-identical (compared with that entry left out).
 //!
+//! Updated 2026-11-23 (ENG-101, owner decision 2026-11-18: distinct findings must not
+//! share a fingerprint) for one licensed move: d54's `rootCauseKey` gained the event
+//! publisher and d55's the published event and its repeat number in the loop, so every
+//! d54/d55 fingerprint moved, on purpose (a baseline of the old, shared key must not
+//! keep suppressing every publish under it). The fixture content ENG-101 added to
+//! `ws-d22`, `ws-d54` and `ws-d55` added findings and stable ids there. A full mint at
+//! `c6f61f04+ENG-101` moved exactly those three fixtures plus the four whose d55
+//! fingerprints moved (`fixtures/ws-d2`, `r0-corpus/ws-d2`, `ws-d2-uncertain`,
+//! `ws-e2e`); every other fixture's findings and stable ids were identical. A full
+//! mint would also rewrite every fixture's baseline into today's schema 2, and this
+//! test would stop proving that a schema-1 baseline still suppresses. So those seven
+//! entries were edited by hand to the mint's findings and stable ids, each baseline
+//! kept in schema 1 with its fingerprint list updated, and `mintedAt` left as it was.
+//! ENG-101's later fixture growth (the d54 cap's `TrySix`, then sol r1's `#if`-arm
+//! routines in `ws-d22`, `ws-d54` and `ws-d55`) was added to those three entries the same
+//! way, each time checked equal to a full mint's findings and stable ids for every fixture.
+//!
 //! A recorded string is a stable id and nothing else (`stable_id_re`), so the
 //! record cannot move for the reason the migration legitimately moves other
 //! output: internal ids and the hashes derived from them.

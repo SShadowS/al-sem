@@ -43,8 +43,9 @@
 //! both still substituted to one stable id here, so their findings hashed to one
 //! fingerprint and a single baseline entry suppressed both. Folding the enclosing
 //! member into the stable id closes that (measured on DO: duplicate-fingerprint
-//! excess 7 → 3, the residual 3 being `d55`'s own callsite-blind `rootCauseKey`,
-//! not an id collision).
+//! excess 7 → 3, the residual 3 being `d55`'s then loop-only `rootCauseKey`, not
+//! an id collision; ENG-101 put the published event and its repeat number in that
+//! key, so no two d55 findings share a fingerprint).
 //! Internal ids are `{appScope}/{64 hex}`, one scope per app
 //! (`ids::encode_routine_id`), so a cross-app model carries several prefixes;
 //! the substitution maps every app's routines to the SAME kind of

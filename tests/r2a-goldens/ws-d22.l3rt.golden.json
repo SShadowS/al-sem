@@ -53,6 +53,26 @@
           "declaringObjectId": "11111111-0000-0000-0000-00000000d220:Table:50801"
         }
       ]
+    },
+    {
+      "stableTableId": "11111111-0000-0000-0000-00000000d220:Table:50802",
+      "name": "Vendor",
+      "fields": [
+        {
+          "fieldNumber": 1,
+          "name": "No.",
+          "dataType": "Code[20]",
+          "fieldClass": "Normal",
+          "declaringObjectId": "11111111-0000-0000-0000-00000000d220:Table:50802"
+        },
+        {
+          "fieldNumber": 3,
+          "name": "Balance (LCY)",
+          "dataType": "Decimal",
+          "fieldClass": "FlowField",
+          "declaringObjectId": "11111111-0000-0000-0000-00000000d220:Table:50802"
+        }
+      ]
     }
   ],
   "routines": [
@@ -95,6 +115,44 @@
       ]
     },
     {
+      "stableRoutineId": "11111111-0000-0000-0000-00000000d220:Codeunit:50800#4d8387f30c340483e1995e24a64bc75c0b58c7f9900e1f35690c9f7bbaadde89",
+      "name": "ReadBalanceArm",
+      "objectType": "Codeunit",
+      "recordVariables": [
+        {
+          "name": "r",
+          "tableId": "11111111-0000-0000-0000-00000000d220:Table:50800"
+        }
+      ],
+      "recordOperations": [
+        {
+          "operationId": "7966a948d97cc685/3d8432afba46a1e708e90156e60f949f85de92a6ff0fdf97b6ea263e66e92bdf/op0",
+          "op": "Get",
+          "recordVariableName": "r",
+          "tableId": "11111111-0000-0000-0000-00000000d220:Table:50800"
+        }
+      ]
+    },
+    {
+      "stableRoutineId": "11111111-0000-0000-0000-00000000d220:Codeunit:50800#4d8387f30c340483e1995e24a64bc75c0b58c7f9900e1f35690c9f7bbaadde89",
+      "name": "ReadBalanceArm",
+      "objectType": "Codeunit",
+      "recordVariables": [
+        {
+          "name": "r",
+          "tableId": "11111111-0000-0000-0000-00000000d220:Table:50802"
+        }
+      ],
+      "recordOperations": [
+        {
+          "operationId": "7966a948d97cc685/3d8432afba46a1e708e90156e60f949f85de92a6ff0fdf97b6ea263e66e92bdf/op1",
+          "op": "Get",
+          "recordVariableName": "r",
+          "tableId": "11111111-0000-0000-0000-00000000d220:Table:50802"
+        }
+      ]
+    },
+    {
       "stableRoutineId": "11111111-0000-0000-0000-00000000d220:Codeunit:50800#b0a37a5e282ed0a6539e462070e7e4488ba29159ac07a06be9ea941079ae843c",
       "name": "ReadFlowFieldAfterCalc",
       "objectType": "Codeunit",
@@ -114,6 +172,25 @@
         {
           "operationId": "7966a948d97cc685/84db990ff2e3d12b3800a1adee0615b12381e892639ccfddd93a0906213f5440/op1",
           "op": "CalcFields",
+          "recordVariableName": "customer",
+          "tableId": "11111111-0000-0000-0000-00000000d220:Table:50800"
+        }
+      ]
+    },
+    {
+      "stableRoutineId": "11111111-0000-0000-0000-00000000d220:Codeunit:50800#f2f4eca61ff0459a2d5ba3eebb4120504c59e1e07caf8526b403622818d6f45c",
+      "name": "ReadFlowFieldThrice",
+      "objectType": "Codeunit",
+      "recordVariables": [
+        {
+          "name": "customer",
+          "tableId": "11111111-0000-0000-0000-00000000d220:Table:50800"
+        }
+      ],
+      "recordOperations": [
+        {
+          "operationId": "7966a948d97cc685/22c6dccfbeb47383714595249a835914c34f5228cfc719d3f90591c59360c53f/op0",
+          "op": "Get",
           "recordVariableName": "customer",
           "tableId": "11111111-0000-0000-0000-00000000d220:Table:50800"
         }

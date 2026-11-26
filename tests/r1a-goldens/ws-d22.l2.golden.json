@@ -14,6 +14,11 @@
       "stableObjectId": "11111111-0000-0000-0000-00000000d220:Table:50801",
       "name": "Ledger Entry",
       "objectType": "Table"
+    },
+    {
+      "stableObjectId": "11111111-0000-0000-0000-00000000d220:Table:50802",
+      "name": "Vendor",
+      "objectType": "Table"
     }
   ],
   "routines": [
@@ -229,9 +234,9 @@
             "loopStack": [],
             "sourceAnchor": {
               "sourceUnitId": "ws:src/Codeunit.al",
-              "startLine": 29,
+              "startLine": 42,
               "startColumn": 8,
-              "endLine": 29,
+              "endLine": 42,
               "endColumn": 29,
               "syntaxKind": "call_expression"
             },
@@ -267,9 +272,9 @@
             "loopStack": [],
             "sourceAnchor": {
               "sourceUnitId": "ws:src/Codeunit.al",
-              "startLine": 29,
+              "startLine": 42,
               "startColumn": 8,
-              "endLine": 29,
+              "endLine": 42,
               "endColumn": 29,
               "syntaxKind": "call_expression"
             }
@@ -282,9 +287,9 @@
             "fieldName": "Name",
             "sourceAnchor": {
               "sourceUnitId": "ws:src/Codeunit.al",
-              "startLine": 30,
+              "startLine": 43,
               "startColumn": 13,
-              "endLine": 30,
+              "endLine": 43,
               "endColumn": 26,
               "syntaxKind": "member_expression"
             }
@@ -317,9 +322,9 @@
             "isParameter": false,
             "sourceAnchor": {
               "sourceUnitId": "ws:src/Codeunit.al",
-              "startLine": 26,
+              "startLine": 39,
               "startColumn": 8,
-              "endLine": 26,
+              "endLine": 39,
               "endColumn": 34,
               "syntaxKind": "variable_declaration"
             }
@@ -334,9 +339,9 @@
             },
             "sourceAnchor": {
               "sourceUnitId": "ws:src/Codeunit.al",
-              "startLine": 27,
+              "startLine": 40,
               "startColumn": 8,
-              "endLine": 27,
+              "endLine": 40,
               "endColumn": 16,
               "syntaxKind": "variable_declaration"
             }
@@ -347,9 +352,9 @@
             "lhsName": "n",
             "sourceAnchor": {
               "sourceUnitId": "ws:src/Codeunit.al",
-              "startLine": 30,
+              "startLine": 43,
               "startColumn": 8,
-              "endLine": 30,
+              "endLine": 43,
               "endColumn": 26,
               "syntaxKind": "assignment_statement"
             }
@@ -408,6 +413,396 @@
       "capabilityDiagnostics": []
     },
     {
+      "stableRoutineId": "11111111-0000-0000-0000-00000000d220:Codeunit:50800#4d8387f30c340483e1995e24a64bc75c0b58c7f9900e1f35690c9f7bbaadde89",
+      "name": "ReadBalanceArm",
+      "kind": "procedure",
+      "attributes": [],
+      "attributesParsed": [],
+      "bodyAvailable": true,
+      "parseIncomplete": false,
+      "features": {
+        "loops": [],
+        "operationSites": [
+          {
+            "id": "7966a948d97cc685/3d8432afba46a1e708e90156e60f949f85de92a6ff0fdf97b6ea263e66e92bdf/op0",
+            "kind": "record-op",
+            "loopStack": [],
+            "sourceAnchor": {
+              "sourceUnitId": "ws:src/Codeunit.al",
+              "startLine": 55,
+              "startColumn": 8,
+              "endLine": 55,
+              "endColumn": 22,
+              "syntaxKind": "call_expression"
+            },
+            "controlContext": "top-level",
+            "order": {
+              "orderId": 0,
+              "frameId": 0,
+              "onSuccessPath": true,
+              "dominatesSuccessReturn": true
+            }
+          }
+        ],
+        "recordOperations": [
+          {
+            "id": "7966a948d97cc685/3d8432afba46a1e708e90156e60f949f85de92a6ff0fdf97b6ea263e66e92bdf/op0",
+            "op": "Get",
+            "recordVariableName": "R",
+            "recordVariableId": "7966a948d97cc685/3d8432afba46a1e708e90156e60f949f85de92a6ff0fdf97b6ea263e66e92bdf/rv/r",
+            "tempState": {
+              "kind": "known",
+              "value": false
+            },
+            "fieldArguments": [
+              "'C0001'"
+            ],
+            "fieldArgumentInfos": [
+              {
+                "kind": "string_literal",
+                "text": "'C0001'",
+                "value": "C0001"
+              }
+            ],
+            "loopStack": [],
+            "sourceAnchor": {
+              "sourceUnitId": "ws:src/Codeunit.al",
+              "startLine": 55,
+              "startColumn": 8,
+              "endLine": 55,
+              "endColumn": 22,
+              "syntaxKind": "call_expression"
+            }
+          }
+        ],
+        "callSites": [],
+        "fieldAccesses": [
+          {
+            "recordVariableName": "R",
+            "fieldName": "Balance (LCY)",
+            "sourceAnchor": {
+              "sourceUnitId": "ws:src/Codeunit.al",
+              "startLine": 56,
+              "startColumn": 18,
+              "endLine": 56,
+              "endColumn": 35,
+              "syntaxKind": "member_expression"
+            }
+          }
+        ],
+        "recordVariables": [
+          {
+            "id": "7966a948d97cc685/3d8432afba46a1e708e90156e60f949f85de92a6ff0fdf97b6ea263e66e92bdf/rv/r",
+            "name": "R",
+            "tableName": "Customer",
+            "tempState": {
+              "kind": "known",
+              "value": false
+            },
+            "isParameter": false
+          }
+        ],
+        "nestingDepth": 0,
+        "hasBranching": false,
+        "unreachableStatements": [],
+        "identifierReferences": [
+          "amount",
+          "r"
+        ],
+        "variables": [
+          {
+            "name": "r",
+            "declaredType": "Record Customer",
+            "scope": "local",
+            "isParameter": false,
+            "sourceAnchor": {
+              "sourceUnitId": "ws:src/Codeunit.al",
+              "startLine": 52,
+              "startColumn": 8,
+              "endLine": 52,
+              "endColumn": 27,
+              "syntaxKind": "variable_declaration"
+            }
+          },
+          {
+            "name": "amount",
+            "declaredType": "Decimal",
+            "scope": "local",
+            "isParameter": false,
+            "initializer": {
+              "kind": "expression"
+            },
+            "sourceAnchor": {
+              "sourceUnitId": "ws:src/Codeunit.al",
+              "startLine": 53,
+              "startColumn": 8,
+              "endLine": 53,
+              "endColumn": 24,
+              "syntaxKind": "variable_declaration"
+            }
+          }
+        ],
+        "varAssignments": [
+          {
+            "lhsName": "amount",
+            "sourceAnchor": {
+              "sourceUnitId": "ws:src/Codeunit.al",
+              "startLine": 56,
+              "startColumn": 8,
+              "endLine": 56,
+              "endColumn": 35,
+              "syntaxKind": "assignment_statement"
+            }
+          }
+        ],
+        "conditionReferences": [],
+        "statementTree": {
+          "kind": "block",
+          "children": [
+            {
+              "kind": "op",
+              "operationId": "7966a948d97cc685/3d8432afba46a1e708e90156e60f949f85de92a6ff0fdf97b6ea263e66e92bdf/op0"
+            },
+            {
+              "kind": "other"
+            }
+          ]
+        },
+        "scopeFrames": [
+          {
+            "frameId": 0,
+            "parentFrameId": -1,
+            "kind": "block"
+          }
+        ]
+      },
+      "capabilityFactsDirect": [
+        {
+          "op": "read",
+          "resourceKind": "table",
+          "confidence": "unresolved",
+          "provenance": "direct",
+          "via": "self",
+          "witnessOperationId": "7966a948d97cc685/3d8432afba46a1e708e90156e60f949f85de92a6ff0fdf97b6ea263e66e92bdf/op0",
+          "extra": {
+            "kind": "table",
+            "recordVariableId": "7966a948d97cc685/3d8432afba46a1e708e90156e60f949f85de92a6ff0fdf97b6ea263e66e92bdf/rv/r",
+            "tempState": {
+              "kind": "known",
+              "value": false
+            },
+            "opSubtype": "Get"
+          }
+        },
+        {
+          "op": "error-implicit",
+          "resourceKind": "error",
+          "confidence": "static",
+          "provenance": "direct",
+          "via": "self",
+          "witnessOperationId": "7966a948d97cc685/3d8432afba46a1e708e90156e60f949f85de92a6ff0fdf97b6ea263e66e92bdf/op0"
+        }
+      ],
+      "capabilityStatus": "complete",
+      "capabilityReasons": [],
+      "capabilityDiagnostics": []
+    },
+    {
+      "stableRoutineId": "11111111-0000-0000-0000-00000000d220:Codeunit:50800#4d8387f30c340483e1995e24a64bc75c0b58c7f9900e1f35690c9f7bbaadde89",
+      "name": "ReadBalanceArm",
+      "kind": "procedure",
+      "attributes": [],
+      "attributesParsed": [],
+      "bodyAvailable": true,
+      "parseIncomplete": false,
+      "features": {
+        "loops": [],
+        "operationSites": [
+          {
+            "id": "7966a948d97cc685/3d8432afba46a1e708e90156e60f949f85de92a6ff0fdf97b6ea263e66e92bdf/op1",
+            "kind": "record-op",
+            "loopStack": [],
+            "sourceAnchor": {
+              "sourceUnitId": "ws:src/Codeunit.al",
+              "startLine": 64,
+              "startColumn": 8,
+              "endLine": 64,
+              "endColumn": 22,
+              "syntaxKind": "call_expression"
+            },
+            "controlContext": "top-level",
+            "order": {
+              "orderId": 0,
+              "frameId": 0,
+              "onSuccessPath": true,
+              "dominatesSuccessReturn": true
+            }
+          }
+        ],
+        "recordOperations": [
+          {
+            "id": "7966a948d97cc685/3d8432afba46a1e708e90156e60f949f85de92a6ff0fdf97b6ea263e66e92bdf/op1",
+            "op": "Get",
+            "recordVariableName": "R",
+            "recordVariableId": "7966a948d97cc685/3d8432afba46a1e708e90156e60f949f85de92a6ff0fdf97b6ea263e66e92bdf/rv/r",
+            "tempState": {
+              "kind": "known",
+              "value": false
+            },
+            "fieldArguments": [
+              "'V0001'"
+            ],
+            "fieldArgumentInfos": [
+              {
+                "kind": "string_literal",
+                "text": "'V0001'",
+                "value": "V0001"
+              }
+            ],
+            "loopStack": [],
+            "sourceAnchor": {
+              "sourceUnitId": "ws:src/Codeunit.al",
+              "startLine": 64,
+              "startColumn": 8,
+              "endLine": 64,
+              "endColumn": 22,
+              "syntaxKind": "call_expression"
+            }
+          }
+        ],
+        "callSites": [],
+        "fieldAccesses": [
+          {
+            "recordVariableName": "R",
+            "fieldName": "Balance (LCY)",
+            "sourceAnchor": {
+              "sourceUnitId": "ws:src/Codeunit.al",
+              "startLine": 65,
+              "startColumn": 18,
+              "endLine": 65,
+              "endColumn": 35,
+              "syntaxKind": "member_expression"
+            }
+          }
+        ],
+        "recordVariables": [
+          {
+            "id": "7966a948d97cc685/3d8432afba46a1e708e90156e60f949f85de92a6ff0fdf97b6ea263e66e92bdf/rv/r",
+            "name": "R",
+            "tableName": "Vendor",
+            "tempState": {
+              "kind": "known",
+              "value": false
+            },
+            "isParameter": false
+          }
+        ],
+        "nestingDepth": 0,
+        "hasBranching": false,
+        "unreachableStatements": [],
+        "identifierReferences": [
+          "amount",
+          "r"
+        ],
+        "variables": [
+          {
+            "name": "r",
+            "declaredType": "Record Vendor",
+            "scope": "local",
+            "isParameter": false,
+            "sourceAnchor": {
+              "sourceUnitId": "ws:src/Codeunit.al",
+              "startLine": 61,
+              "startColumn": 8,
+              "endLine": 61,
+              "endColumn": 25,
+              "syntaxKind": "variable_declaration"
+            }
+          },
+          {
+            "name": "amount",
+            "declaredType": "Decimal",
+            "scope": "local",
+            "isParameter": false,
+            "initializer": {
+              "kind": "expression"
+            },
+            "sourceAnchor": {
+              "sourceUnitId": "ws:src/Codeunit.al",
+              "startLine": 62,
+              "startColumn": 8,
+              "endLine": 62,
+              "endColumn": 24,
+              "syntaxKind": "variable_declaration"
+            }
+          }
+        ],
+        "varAssignments": [
+          {
+            "lhsName": "amount",
+            "sourceAnchor": {
+              "sourceUnitId": "ws:src/Codeunit.al",
+              "startLine": 65,
+              "startColumn": 8,
+              "endLine": 65,
+              "endColumn": 35,
+              "syntaxKind": "assignment_statement"
+            }
+          }
+        ],
+        "conditionReferences": [],
+        "statementTree": {
+          "kind": "block",
+          "children": [
+            {
+              "kind": "op",
+              "operationId": "7966a948d97cc685/3d8432afba46a1e708e90156e60f949f85de92a6ff0fdf97b6ea263e66e92bdf/op1"
+            },
+            {
+              "kind": "other"
+            }
+          ]
+        },
+        "scopeFrames": [
+          {
+            "frameId": 0,
+            "parentFrameId": -1,
+            "kind": "block"
+          }
+        ]
+      },
+      "capabilityFactsDirect": [
+        {
+          "op": "read",
+          "resourceKind": "table",
+          "confidence": "unresolved",
+          "provenance": "direct",
+          "via": "self",
+          "witnessOperationId": "7966a948d97cc685/3d8432afba46a1e708e90156e60f949f85de92a6ff0fdf97b6ea263e66e92bdf/op1",
+          "extra": {
+            "kind": "table",
+            "recordVariableId": "7966a948d97cc685/3d8432afba46a1e708e90156e60f949f85de92a6ff0fdf97b6ea263e66e92bdf/rv/r",
+            "tempState": {
+              "kind": "known",
+              "value": false
+            },
+            "opSubtype": "Get"
+          }
+        },
+        {
+          "op": "error-implicit",
+          "resourceKind": "error",
+          "confidence": "static",
+          "provenance": "direct",
+          "via": "self",
+          "witnessOperationId": "7966a948d97cc685/3d8432afba46a1e708e90156e60f949f85de92a6ff0fdf97b6ea263e66e92bdf/op1"
+        }
+      ],
+      "capabilityStatus": "complete",
+      "capabilityReasons": [],
+      "capabilityDiagnostics": []
+    },
+    {
       "stableRoutineId": "11111111-0000-0000-0000-00000000d220:Codeunit:50800#b0a37a5e282ed0a6539e462070e7e4488ba29159ac07a06be9ea941079ae843c",
       "name": "ReadFlowFieldAfterCalc",
       "kind": "procedure",
@@ -424,9 +819,9 @@
             "loopStack": [],
             "sourceAnchor": {
               "sourceUnitId": "ws:src/Codeunit.al",
-              "startLine": 18,
+              "startLine": 31,
               "startColumn": 8,
-              "endLine": 18,
+              "endLine": 31,
               "endColumn": 29,
               "syntaxKind": "call_expression"
             },
@@ -444,9 +839,9 @@
             "loopStack": [],
             "sourceAnchor": {
               "sourceUnitId": "ws:src/Codeunit.al",
-              "startLine": 19,
+              "startLine": 32,
               "startColumn": 8,
-              "endLine": 19,
+              "endLine": 32,
               "endColumn": 44,
               "syntaxKind": "call_expression"
             },
@@ -482,9 +877,9 @@
             "loopStack": [],
             "sourceAnchor": {
               "sourceUnitId": "ws:src/Codeunit.al",
-              "startLine": 18,
+              "startLine": 31,
               "startColumn": 8,
-              "endLine": 18,
+              "endLine": 31,
               "endColumn": 29,
               "syntaxKind": "call_expression"
             }
@@ -511,9 +906,9 @@
             "loopStack": [],
             "sourceAnchor": {
               "sourceUnitId": "ws:src/Codeunit.al",
-              "startLine": 19,
+              "startLine": 32,
               "startColumn": 8,
-              "endLine": 19,
+              "endLine": 32,
               "endColumn": 44,
               "syntaxKind": "call_expression"
             }
@@ -526,9 +921,9 @@
             "fieldName": "Balance (LCY)",
             "sourceAnchor": {
               "sourceUnitId": "ws:src/Codeunit.al",
-              "startLine": 20,
+              "startLine": 33,
               "startColumn": 18,
-              "endLine": 20,
+              "endLine": 33,
               "endColumn": 42,
               "syntaxKind": "member_expression"
             }
@@ -561,9 +956,9 @@
             "isParameter": false,
             "sourceAnchor": {
               "sourceUnitId": "ws:src/Codeunit.al",
-              "startLine": 15,
+              "startLine": 28,
               "startColumn": 8,
-              "endLine": 15,
+              "endLine": 28,
               "endColumn": 34,
               "syntaxKind": "variable_declaration"
             }
@@ -578,9 +973,9 @@
             },
             "sourceAnchor": {
               "sourceUnitId": "ws:src/Codeunit.al",
-              "startLine": 16,
+              "startLine": 29,
               "startColumn": 8,
-              "endLine": 16,
+              "endLine": 29,
               "endColumn": 24,
               "syntaxKind": "variable_declaration"
             }
@@ -591,9 +986,9 @@
             "lhsName": "amount",
             "sourceAnchor": {
               "sourceUnitId": "ws:src/Codeunit.al",
-              "startLine": 20,
+              "startLine": 33,
               "startColumn": 8,
-              "endLine": 20,
+              "endLine": 33,
               "endColumn": 42,
               "syntaxKind": "assignment_statement"
             }
@@ -666,6 +1061,253 @@
           "provenance": "direct",
           "via": "self",
           "witnessOperationId": "7966a948d97cc685/84db990ff2e3d12b3800a1adee0615b12381e892639ccfddd93a0906213f5440/op0"
+        }
+      ],
+      "capabilityStatus": "complete",
+      "capabilityReasons": [],
+      "capabilityDiagnostics": []
+    },
+    {
+      "stableRoutineId": "11111111-0000-0000-0000-00000000d220:Codeunit:50800#f2f4eca61ff0459a2d5ba3eebb4120504c59e1e07caf8526b403622818d6f45c",
+      "name": "ReadFlowFieldThrice",
+      "kind": "procedure",
+      "attributes": [],
+      "attributesParsed": [],
+      "bodyAvailable": true,
+      "parseIncomplete": false,
+      "features": {
+        "loops": [],
+        "operationSites": [
+          {
+            "id": "7966a948d97cc685/22c6dccfbeb47383714595249a835914c34f5228cfc719d3f90591c59360c53f/op0",
+            "kind": "record-op",
+            "loopStack": [],
+            "sourceAnchor": {
+              "sourceUnitId": "ws:src/Codeunit.al",
+              "startLine": 19,
+              "startColumn": 8,
+              "endLine": 19,
+              "endColumn": 29,
+              "syntaxKind": "call_expression"
+            },
+            "controlContext": "top-level",
+            "order": {
+              "orderId": 0,
+              "frameId": 0,
+              "onSuccessPath": true,
+              "dominatesSuccessReturn": true
+            }
+          }
+        ],
+        "recordOperations": [
+          {
+            "id": "7966a948d97cc685/22c6dccfbeb47383714595249a835914c34f5228cfc719d3f90591c59360c53f/op0",
+            "op": "Get",
+            "recordVariableName": "Customer",
+            "recordVariableId": "7966a948d97cc685/22c6dccfbeb47383714595249a835914c34f5228cfc719d3f90591c59360c53f/rv/customer",
+            "tempState": {
+              "kind": "known",
+              "value": false
+            },
+            "fieldArguments": [
+              "'C0001'"
+            ],
+            "fieldArgumentInfos": [
+              {
+                "kind": "string_literal",
+                "text": "'C0001'",
+                "value": "C0001"
+              }
+            ],
+            "loopStack": [],
+            "sourceAnchor": {
+              "sourceUnitId": "ws:src/Codeunit.al",
+              "startLine": 19,
+              "startColumn": 8,
+              "endLine": 19,
+              "endColumn": 29,
+              "syntaxKind": "call_expression"
+            }
+          }
+        ],
+        "callSites": [],
+        "fieldAccesses": [
+          {
+            "recordVariableName": "Customer",
+            "fieldName": "Balance (LCY)",
+            "sourceAnchor": {
+              "sourceUnitId": "ws:src/Codeunit.al",
+              "startLine": 20,
+              "startColumn": 18,
+              "endLine": 20,
+              "endColumn": 42,
+              "syntaxKind": "member_expression"
+            }
+          },
+          {
+            "recordVariableName": "Customer",
+            "fieldName": "Balance (LCY)",
+            "sourceAnchor": {
+              "sourceUnitId": "ws:src/Codeunit.al",
+              "startLine": 21,
+              "startColumn": 18,
+              "endLine": 21,
+              "endColumn": 42,
+              "syntaxKind": "member_expression"
+            }
+          },
+          {
+            "recordVariableName": "Customer",
+            "fieldName": "Balance (LCY)",
+            "sourceAnchor": {
+              "sourceUnitId": "ws:src/Codeunit.al",
+              "startLine": 22,
+              "startColumn": 18,
+              "endLine": 22,
+              "endColumn": 42,
+              "syntaxKind": "member_expression"
+            }
+          }
+        ],
+        "recordVariables": [
+          {
+            "id": "7966a948d97cc685/22c6dccfbeb47383714595249a835914c34f5228cfc719d3f90591c59360c53f/rv/customer",
+            "name": "Customer",
+            "tableName": "Customer",
+            "tempState": {
+              "kind": "known",
+              "value": false
+            },
+            "isParameter": false
+          }
+        ],
+        "nestingDepth": 0,
+        "hasBranching": false,
+        "unreachableStatements": [],
+        "identifierReferences": [
+          "amount",
+          "customer"
+        ],
+        "variables": [
+          {
+            "name": "customer",
+            "declaredType": "Record Customer",
+            "scope": "local",
+            "isParameter": false,
+            "sourceAnchor": {
+              "sourceUnitId": "ws:src/Codeunit.al",
+              "startLine": 16,
+              "startColumn": 8,
+              "endLine": 16,
+              "endColumn": 34,
+              "syntaxKind": "variable_declaration"
+            }
+          },
+          {
+            "name": "amount",
+            "declaredType": "Decimal",
+            "scope": "local",
+            "isParameter": false,
+            "initializer": {
+              "kind": "expression"
+            },
+            "sourceAnchor": {
+              "sourceUnitId": "ws:src/Codeunit.al",
+              "startLine": 17,
+              "startColumn": 8,
+              "endLine": 17,
+              "endColumn": 24,
+              "syntaxKind": "variable_declaration"
+            }
+          }
+        ],
+        "varAssignments": [
+          {
+            "lhsName": "amount",
+            "sourceAnchor": {
+              "sourceUnitId": "ws:src/Codeunit.al",
+              "startLine": 20,
+              "startColumn": 8,
+              "endLine": 20,
+              "endColumn": 42,
+              "syntaxKind": "assignment_statement"
+            }
+          },
+          {
+            "lhsName": "amount",
+            "sourceAnchor": {
+              "sourceUnitId": "ws:src/Codeunit.al",
+              "startLine": 21,
+              "startColumn": 8,
+              "endLine": 21,
+              "endColumn": 42,
+              "syntaxKind": "assignment_statement"
+            }
+          },
+          {
+            "lhsName": "amount",
+            "sourceAnchor": {
+              "sourceUnitId": "ws:src/Codeunit.al",
+              "startLine": 22,
+              "startColumn": 8,
+              "endLine": 22,
+              "endColumn": 42,
+              "syntaxKind": "assignment_statement"
+            }
+          }
+        ],
+        "conditionReferences": [],
+        "statementTree": {
+          "kind": "block",
+          "children": [
+            {
+              "kind": "op",
+              "operationId": "7966a948d97cc685/22c6dccfbeb47383714595249a835914c34f5228cfc719d3f90591c59360c53f/op0"
+            },
+            {
+              "kind": "other"
+            },
+            {
+              "kind": "other"
+            },
+            {
+              "kind": "other"
+            }
+          ]
+        },
+        "scopeFrames": [
+          {
+            "frameId": 0,
+            "parentFrameId": -1,
+            "kind": "block"
+          }
+        ]
+      },
+      "capabilityFactsDirect": [
+        {
+          "op": "read",
+          "resourceKind": "table",
+          "confidence": "unresolved",
+          "provenance": "direct",
+          "via": "self",
+          "witnessOperationId": "7966a948d97cc685/22c6dccfbeb47383714595249a835914c34f5228cfc719d3f90591c59360c53f/op0",
+          "extra": {
+            "kind": "table",
+            "recordVariableId": "7966a948d97cc685/22c6dccfbeb47383714595249a835914c34f5228cfc719d3f90591c59360c53f/rv/customer",
+            "tempState": {
+              "kind": "known",
+              "value": false
+            },
+            "opSubtype": "Get"
+          }
+        },
+        {
+          "op": "error-implicit",
+          "resourceKind": "error",
+          "confidence": "static",
+          "provenance": "direct",
+          "via": "self",
+          "witnessOperationId": "7966a948d97cc685/22c6dccfbeb47383714595249a835914c34f5228cfc719d3f90591c59360c53f/op0"
         }
       ],
       "capabilityStatus": "complete",

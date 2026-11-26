@@ -100,6 +100,16 @@
 //! `with`, has an unknown temp state) with `REMINT_POLICY_FACTS_ORACLE=1`: only the `sha256` of
 //! `r0/ws-with-receiver` (single and cross) moved, `DoWith`'s `Insert` and `Modify` inside
 //! `with R do` going from known physical to unknown temp state. Every count is unchanged.
+//!
+//! Re-recorded (2026-11-23, ENG-101: new fixture routines in `ws-d22`, `ws-d54`, `ws-d55`)
+//! with `REMINT_POLICY_FACTS_ORACLE=1`: only those three (single and cross) moved, each by its
+//! new routines' facts, no count down: `ws-d22` routines 3 -> 4, `direct`/`any` 8 -> 10;
+//! `ws-d54` routines 5 -> 14, `direct` 1 -> 8, `inherited` 4 -> 12, `any` 5 -> 20; `ws-d55`
+//! routines 3 -> 5, `direct` 5 -> 8, `inherited` 2 -> 4, `any` 7 -> 12.
+//! Re-recorded again (2026-11-25, ENG-101 sol r1: `#if`-arm routines added at the end of
+//! those three fixtures): the same three moved, no count down: `ws-d22` routines 4 -> 5,
+//! `direct`/`any` 10 -> 14; `ws-d54` routines 14 -> 15, `inherited` 12 -> 13, `any` 20 -> 21;
+//! `ws-d55` routines 5 -> 6, `direct` 8 -> 12, `inherited` 4 -> 5, `any` 12 -> 17.
 
 use super::*;
 use crate::engine::gate::policy::policy_loader::{LoadResult, load_policy_from_string};
