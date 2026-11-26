@@ -5114,6 +5114,60 @@ fn pre_commit_reads_a_top_level_ending_in_lf() {
     });
 }
 
+/// Makes this checkout's golden folders (empty) under `root/tests`, so
+/// `check-goldens --verify-coverage` run there passes.
+#[cfg(unix)]
+fn make_golden_dirs(root: &std::path::Path) {
+    let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    for e in std::fs::read_dir(manifest.join("tests")).unwrap() {
+        let name = e.unwrap().file_name().into_string().unwrap();
+        if name.contains("goldens") || name.ends_with("-vectors") || name == "l4-summary-baseline" {
+            std::fs::create_dir_all(root.join("tests").join(name)).unwrap();
+        }
+    }
+}
+
+/// TLS-114 (sol r3): `scripts/check-goldens --verify-coverage` run by a
+/// relative path checks its OWN checkout even when an exported `CDPATH` names
+/// a second checkout holding a passing golden layout (a bare `cd scripts/..`
+/// searches `CDPATH` first). This checkout has no golden folders, so the
+/// check must fail.
+///
+/// DISCRIMINATION (2026-11-26): `check-goldens` back on a bare
+/// `cd "${self%/*}/.."` fails (exit 0: the other checkout's layout passed);
+/// restored, passes.
+#[cfg(unix)]
+#[test]
+fn check_goldens_coverage_ignores_cdpath() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mine, other) = (dir.path().join("mine"), dir.path().join("other"));
+    for root in [&mine, &other] {
+        std::fs::create_dir_all(root.join("scripts")).unwrap();
+        std::fs::copy(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts/check-goldens"),
+            root.join("scripts/check-goldens"),
+        )
+        .unwrap();
+    }
+    make_golden_dirs(&other);
+    let out = crate::clean_env::command("bash")
+        .args(["scripts/check-goldens", "--verify-coverage"])
+        .current_dir(&mine)
+        .env("CDPATH", &other)
+        .output()
+        .expect("spawn check-goldens");
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(out.status.code(), Some(1), "{text}");
+    assert!(
+        text.contains("declared golden directories that no longer exist"),
+        "{text}"
+    );
+}
+
 /// [`run_pre_commit`] with `scripts/check-goldens` stubbed.
 #[cfg(unix)]
 fn pre_commit_runs_fmt_and_goldens(repo_name: &str, stage: impl FnOnce(&std::path::Path)) {
@@ -5153,15 +5207,7 @@ fn run_pre_commit(repo_name: &str, real_check_goldens: bool, stage: impl FnOnce(
         .unwrap();
         stub(repo.join("scripts/require-rttime"), "require-rttime");
         stub(bin.join("cargo"), "cargo");
-        for e in std::fs::read_dir(manifest.join("tests")).unwrap() {
-            let name = e.unwrap().file_name().into_string().unwrap();
-            if name.contains("goldens")
-                || name.ends_with("-vectors")
-                || name == "l4-summary-baseline"
-            {
-                std::fs::create_dir_all(repo.join("tests").join(name)).unwrap();
-            }
-        }
+        make_golden_dirs(&repo);
     } else {
         stub(repo.join("scripts/check-goldens"), "check-goldens");
     }

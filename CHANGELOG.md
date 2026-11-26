@@ -59,7 +59,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     were skipped. It reads its top level exactly (a sentinel after `rev-parse`): `$(...)`
     strips every trailing LF, so a checkout named `repo` + LF looked for `repo/scripts`.
     `check-goldens --verify-coverage` had the same strip (`cd "$(... && pwd)"`) and so
-    changed into `repo`; it now changes into its own folder's parent directly (sol r2).
+    changed into `repo`; it now changes into its own folder's parent directly (sol r2), with
+    `CDPATH` cleared (sol r3): run as `scripts/check-goldens`, a bare `cd scripts/..`
+    searched an exported `CDPATH` first and could check another checkout's goldens.
   - Test-scope discovery sends each folder to `git check-ignore` as `./<name>/` (sol r1): git
     reads each line as a pathspec, so a sibling folder named `:(unknown)` failed the whole
     batch, which was read as "nothing ignored".
