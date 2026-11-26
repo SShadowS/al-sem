@@ -277,7 +277,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **The bug.** ENG-159's sound rule ends what is known about a RecordRef or Variant that may share
   its record with code the routine cannot see only at places that may run user code. A plain
-  in-place bind (`GetTable`, `Open`, `Close`, `Get`) through such a holder is no such place, and a
+  in-place bind (`GetTable`, `Get`, `Open`) through such a holder is no such place, and a
   local made retainable by a call is not joined into one alias class with the call's result or a
   parameter it was joined to. So `L := Same(R); L.GetTable(Doc); Guarded(R)` (`Same` returns its
   argument: one handle, ENG-175), `Join(L, R); L.GetTable(Doc)` (`Join(var A; B) begin A := B end`)

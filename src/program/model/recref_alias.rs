@@ -4,7 +4,8 @@
 //! Measured on BC 28.4 (probe `docs/superpowers/notes/2026-11-20-eng145-recordref-aliasing.md`):
 //! `A := B` makes both variables hold ONE record. `GetTable` through either rebinds both (the
 //! other then holds the new table, and a temporary record's state with it). `Close` detaches
-//! only the variable it is called on, and `Open` on an open variable errors. A copy shares the
+//! only the variable it is called on (it gets a fresh, empty handle; a later copy of it shares
+//! that one), and `Open` on an open variable errors. A copy shares the
 //! one handle whether or not it is open (ENG-189, probe `engine-notes/eng189-probe2`, BC 28.4
 //! 2026-11-26): `A := R` (or `Join(A, R)`, `A := Same(R)`) with R never opened, or closed before
 //! the copy, then `A.Open(T)` opens R on T too. So only an `Open` right after the same variable's
