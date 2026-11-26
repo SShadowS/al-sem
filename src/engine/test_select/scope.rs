@@ -75,6 +75,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use crate::file_stamp::FileStamp;
+use crate::git_env::path_from_git;
 use crate::source_text::{NestedApps, discover_al_files, parse_app_json, read_al_source};
 
 /// How deep under the search root auto-discovery looks for an `app.json`
@@ -626,23 +627,8 @@ fn walk(scope: &mut Scope, dir: &Path, workspace: &Path, depth: usize, honor_ign
 /// default `$XDG_CONFIG_HOME/git/ignore` (`$HOME/.config/git/ignore` when
 /// that is unset). `None` when there is neither.
 fn excludes_file(root: &Path) -> Option<PathBuf> {
-    let configured = crate::git_env::git_command()
-        .arg("-C")
-        .arg(root)
-        .args(["config", "--path", "core.excludesFile"])
-        .stdin(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| {
-            let mut bytes = o.stdout;
-            while bytes.last().is_some_and(|b| *b == b'\n' || *b == b'\r') {
-                bytes.pop();
-            }
-            bytes
-        })
-        .filter(|bytes| !bytes.is_empty());
+    // `-z`: the value ends in NUL, so one ending in CR or LF is kept.
+    let configured = git_value(root, &["config", "-z", "--path", "core.excludesFile"], 0);
     if let Some(bytes) = configured {
         // A relative value is relative to the worktree root, as git takes
         // it there (`join` keeps an absolute one).
@@ -658,24 +644,29 @@ fn excludes_file(root: &Path) -> Option<PathBuf> {
 /// The worktree root git works in at `dir` (`git rev-parse
 /// --show-toplevel`); `dir` when git cannot answer.
 fn git_toplevel(dir: &Path) -> PathBuf {
-    crate::git_env::git_command()
+    git_value(dir, &["rev-parse", "--show-toplevel"], b'\n')
+        .map_or_else(|| dir.to_path_buf(), path_from_git)
+}
+
+/// `git -C dir <args>`'s one value: its stdout less ONE trailing `end` (NUL
+/// for `-z`; `rev-parse`, which has no `-z`, ends with one LF) and nothing
+/// else, so a path ending in CR or LF is read exactly (TLS-114). `None` when
+/// git fails or prints nothing.
+fn git_value(dir: &Path, args: &[&str], end: u8) -> Option<Vec<u8>> {
+    let mut bytes = crate::git_env::git_command()
         .arg("-C")
         .arg(dir)
-        .args(["rev-parse", "--show-toplevel"])
+        .args(args)
         .stdin(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .output()
         .ok()
-        .filter(|o| o.status.success())
-        .map(|o| {
-            let mut bytes = o.stdout;
-            while bytes.last().is_some_and(|b| *b == b'\n' || *b == b'\r') {
-                bytes.pop();
-            }
-            bytes
-        })
-        .filter(|bytes| !bytes.is_empty())
-        .map_or_else(|| dir.to_path_buf(), path_from_git)
+        .filter(|o| o.status.success())?
+        .stdout;
+    if bytes.last() == Some(&end) {
+        bytes.pop();
+    }
+    (!bytes.is_empty()).then_some(bytes)
 }
 
 /// The repository's common git folder at the git top level `top`, which
@@ -683,41 +674,11 @@ fn git_toplevel(dir: &Path) -> PathBuf {
 /// file) the main repository's, as `git rev-parse --git-common-dir` gives it.
 /// `top/.git` when git cannot answer.
 fn git_common_dir(top: &Path) -> PathBuf {
-    let answer = crate::git_env::git_command()
-        .arg("-C")
-        .arg(top)
-        .args(["rev-parse", "--git-common-dir"])
-        .stdin(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| {
-            let mut bytes = o.stdout;
-            while bytes.last().is_some_and(|b| *b == b'\n' || *b == b'\r') {
-                bytes.pop();
-            }
-            bytes
-        })
-        .filter(|bytes| !bytes.is_empty());
-    match answer {
+    match git_value(top, &["rev-parse", "--git-common-dir"], b'\n') {
         // A relative answer is relative to `top`; `join` keeps an absolute one.
         Some(bytes) => top.join(path_from_git(bytes)),
         None => top.join(".git"),
     }
-}
-
-/// A path git printed: its bytes as they are on unix.
-#[cfg(unix)]
-fn path_from_git(bytes: Vec<u8>) -> PathBuf {
-    use std::os::unix::ffi::OsStringExt;
-    PathBuf::from(std::ffi::OsString::from_vec(bytes))
-}
-
-/// A path git printed: git for Windows prints UTF-8.
-#[cfg(not(unix))]
-fn path_from_git(bytes: Vec<u8>) -> PathBuf {
-    PathBuf::from(String::from_utf8_lossy(&bytes).into_owned())
 }
 
 /// Whether git ignores `root` itself (`git check-ignore -q .`: exit 0). No
@@ -746,9 +707,12 @@ fn git_ignored(dir: &Path, subdirs: &[PathBuf]) -> std::collections::HashSet<Pat
         return set;
     }
     // A trailing `/`: the names are folders (git also stats a name without it).
+    // A leading `./` (TLS-114): git reads each line as a pathspec, so a folder
+    // named `:(unknown)` failed the whole batch, read as "nothing ignored".
     let mut input = Vec::new();
     for d in subdirs {
         if let Some(name) = d.file_name() {
+            input.extend_from_slice(b"./");
             input.extend_from_slice(name.as_encoded_bytes());
             input.extend_from_slice(b"/\0");
         }
@@ -781,8 +745,10 @@ fn git_ignored(dir: &Path, subdirs: &[PathBuf]) -> std::collections::HashSet<Pat
     }
     // Match git's answer to the submitted folders by their raw name bytes: a
     // lossy decode turned an ignored `tests-\xff` into a sibling `tests-\u{FFFD}`
-    // and skipped that one instead (TLS-48 review sol r1).
+    // and skipped that one instead (TLS-48 review sol r1). Git echoes each
+    // name as given, `./` and `/` included.
     for name in out.stdout.split(|&b| b == 0).filter(|n| !n.is_empty()) {
+        let name = name.strip_prefix(b"./").unwrap_or(name);
         let name = name.strip_suffix(b"/").unwrap_or(name);
         if let Some(d) = subdirs
             .iter()

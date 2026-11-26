@@ -1,4 +1,5 @@
 import re
+import sys
 from pathlib import Path
 
 from agentflow.protect import (GATE_INERT_DIR, GATE_INERT_EXACT, cargo_version_changed, check_diff,
@@ -114,7 +115,9 @@ def test_every_mentions_only_entry_still_matches_a_line():
     stale = [(f, s) for f, s in _MENTIONS_ONLY if s not in texts.get(f, "")]
     assert stale == []
 
-DIFF = """\
+# Each file's own patch, by path (`Git.file_diffs`).
+DIFF = {
+    "src/lib.rs": """\
 diff --git a/src/lib.rs b/src/lib.rs
 --- a/src/lib.rs
 +++ b/src/lib.rs
@@ -123,12 +126,16 @@ diff --git a/src/lib.rs b/src/lib.rs
 +#[ignore]
 +#[allow(dead_code)]
 +fn b() {}
+""",
+    "docs/x.md": """\
 diff --git a/docs/x.md b/docs/x.md
 --- a/docs/x.md
 +++ b/docs/x.md
 @@ -1 +1,2 @@
  text
 +never use --no-verify
+""",
+    "Cargo.toml": """\
 diff --git a/Cargo.toml b/Cargo.toml
 --- a/Cargo.toml
 +++ b/Cargo.toml
@@ -136,7 +143,8 @@ diff --git a/Cargo.toml b/Cargo.toml
  [package]
 -version = "1.2.0"
 +version = "1.3.0"
-"""
+""",
+}
 
 
 def test_protected_paths_block_but_own_evidence_allowed():
@@ -157,7 +165,8 @@ def test_forbidden_additions_only_in_code_files():
 
 def test_cargo_version_change_detected():
     assert cargo_version_changed(DIFF)
-    assert not cargo_version_changed(DIFF.replace('+version = "1.3.0"', '+name = "x"'))
+    renamed = {**DIFF, "Cargo.toml": DIFF["Cargo.toml"].replace('+version = "1.3.0"', '+name = "x"')}
+    assert not cargo_version_changed(renamed)
 
 
 def test_check_diff_reasons():
@@ -165,12 +174,95 @@ def test_check_diff_reasons():
     assert any(r.startswith("protected-path:scripts/x") for r in reasons)
     assert any(r.startswith("forbidden:ignore-attribute") for r in reasons)
     assert "cargo-version-changed" in reasons
-    assert check_diff(["src/lib.rs"], "diff --git a/src/lib.rs b/src/lib.rs\n+fn ok() {}\n", issue=8) == []
+    assert check_diff(["src/lib.rs"], _one_file_diff("src/lib.rs", "fn ok() {}"), issue=8) == []
 
 
 def _one_file_diff(path, *added):
     body = "\n".join("+" + a for a in added)
-    return f"diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n@@ -1 +1,{len(added)} @@\n{body}\n"
+    return {path: f"diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n@@ -1 +1,{len(added)} @@\n{body}\n"}
+
+
+def test_check_diff_reads_each_file_as_git_writes_it(tmp_path):
+    """TLS-114: through `Git.file_diffs`, a forbidden addition is charged to
+    its own file whatever the name: non-ASCII (`src/é.rs`) and one ending in
+    CR get quoted `+++` headers, which the old header parser read as no file,
+    so their lines went to the file before or nowhere. A CR inside an added
+    line does not split it (`fn f(){}\\r#[ignore]` hid the attribute), and an
+    added line whose text starts with `++` is still read.
+
+    DISCRIMINATION (2026-11-23): `_added_lines` back on the `+++ b/` header
+    parse and `splitlines()` over one joined diff fails (the `#[ignore]`s of
+    `src/é.rs` and `src/x\\r.rs` charged to `src/plus.rs`, `src/crlf.rs`'s
+    lost); `file_diffs` turning CR into LF (what text mode does) fails at
+    `src/crlf.rs`; skipping `+++` lines inside hunks fails at `src/plus.rs`;
+    restored, passes."""
+    import subprocess
+
+    from agentflow.gitops import Git
+
+    def git(*a):
+        subprocess.run(["git", "-C", str(tmp_path), "-c", "user.name=t", "-c", "user.email=t@t",
+                        "-c", "commit.gpgsign=false", *a],
+                       check=True, capture_output=True)
+
+    git("init", "-q")
+    git("commit", "-q", "--allow-empty", "-m", "base")
+    names = ["src/a.rs", "src/é.rs", "src/crlf.rs", "src/plus.rs"]
+    if sys.platform != "win32":
+        names.append("src/x\r.rs")
+    (tmp_path / "src").mkdir()
+    for n in names:
+        (tmp_path / n).write_bytes(b"fn ok() {}\n")
+    (tmp_path / "src/é.rs").write_bytes("#[ignore]\n".encode())
+    (tmp_path / "src/crlf.rs").write_bytes(b"fn f(){}\r#[ignore]\n")
+    (tmp_path / "src/plus.rs").write_bytes(b"++ 1; #[allow(x)]\n")
+    if sys.platform != "win32":
+        (tmp_path / "src/x\r.rs").write_bytes(b"#[ignore]\n")
+    git("add", "src")
+    git("commit", "-q", "-m", "head")
+    g = Git(tmp_path)
+    files = g.changed_files("HEAD~1", "HEAD")
+    assert sorted(files) == sorted(names)
+    got = {(f, k) for f, k, _ in forbidden_additions(g.file_diffs("HEAD~1", "HEAD", files))}
+    want = {("src/é.rs", "ignore-attribute"), ("src/crlf.rs", "ignore-attribute"),
+            ("src/plus.rs", "allow-attribute")}
+    if sys.platform != "win32":
+        want.add(("src/x\r.rs", "ignore-attribute"))
+    assert got == want
+
+
+def test_check_diff_file_replaced_by_a_directory_of_that_name(tmp_path):
+    """TLS-114 (sol r1): `docs/old.rs` deleted and a directory `docs/old.rs/`
+    holding `notes.md` added. A note naming `#[ignore]` is prose, so the
+    verdict is clean: the deleted file's patch must not take in the note's
+    lines (a literal pathspec also selects a directory's contents).
+
+    DISCRIMINATION (2026-11-25): the `exclude` pathspec dropped from
+    `file_diffs` fails (`forbidden:ignore-attribute:docs/old.rs:#[ignore] is
+    banned`); restored, passes."""
+    import subprocess
+
+    from agentflow.gitops import Git
+
+    def git(*a):
+        subprocess.run(["git", "-C", str(tmp_path), "-c", "user.name=t", "-c", "user.email=t@t",
+                        "-c", "commit.gpgsign=false", *a],
+                       check=True, capture_output=True)
+
+    git("init", "-q")
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs/old.rs").write_text("fn a() {}\n")
+    git("add", "docs")
+    git("commit", "-q", "-m", "base")
+    git("rm", "-q", "docs/old.rs")
+    (tmp_path / "docs/old.rs").mkdir(parents=True)  # `git rm` removed the empty `docs/`
+    (tmp_path / "docs/old.rs/notes.md").write_text("#[ignore] is banned\n")
+    git("add", "docs")
+    git("commit", "-q", "-m", "head")
+    g = Git(tmp_path)
+    files = g.changed_files("HEAD~1", "HEAD")
+    assert files == ["docs/old.rs", "docs/old.rs/notes.md"]
+    assert check_diff(files, g.file_diffs("HEAD~1", "HEAD", files), issue=8) == []
 
 
 def test_forbidden_patterns_in_comments_pass_but_code_still_fails():

@@ -107,9 +107,15 @@ pub fn diff_hash(text: &str) -> String {
     format!("blake3:{}", blake3::hash(text.as_bytes()).to_hex())
 }
 
-/// `git <args>` in `dir`: its stdout (trimmed of the final newline), or why
-/// it failed.
+/// `git <args>` in `dir`: its stdout as text (trimmed of the final newline),
+/// or why it failed.
 fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
+    git_bytes(dir, args).map(|b| String::from_utf8_lossy(&b).into_owned())
+}
+
+/// `git <args>` in `dir`: its stdout bytes less one final LF (a path may end
+/// in another), or why it failed.
+fn git_bytes(dir: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
     let out = crate::git_env::git_command()
         .arg("-C")
         .arg(dir)
@@ -123,11 +129,11 @@ fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
             String::from_utf8_lossy(&out.stderr).trim()
         ));
     }
-    let mut s = String::from_utf8_lossy(&out.stdout).into_owned();
-    if s.ends_with('\n') {
-        s.pop();
+    let mut b = out.stdout;
+    if b.last() == Some(&b'\n') {
+        b.pop();
     }
-    Ok(s)
+    Ok(b)
 }
 
 fn lines(s: &str) -> Vec<String> {
@@ -180,20 +186,31 @@ pub fn for_base(workspace: &Path, rev: &str) -> Result<(Comparison, String), Str
     let committed = names(&["diff", &base, &head])?;
     let staged = names(&["diff", "--cached"])?;
     let unstaged = names(&["diff"])?;
-    let untracked: Vec<String> = lines(&git(
+    // `-z`, bytes kept (TLS-114): without it git quotes a name holding a
+    // non-ASCII byte (`"ws/N\303\251.al"`), which then did not end in `.al`
+    // and was dropped; the listed name is text, the file is opened by its bytes.
+    let untracked_raw: Vec<Vec<u8>> = git_bytes(
         workspace,
         &[
             "ls-files",
+            "-z",
             "--others",
             "--exclude-standard",
             "--full-name",
             "--",
             ".",
         ],
-    )?)
-    .into_iter()
-    .filter(|p| crate::engine::l5::digest_cli::is_al_path(p))
+    )?
+    .split(|&b| b == 0)
+    .filter(|p| {
+        !p.is_empty() && crate::engine::l5::digest_cli::is_al_path(&String::from_utf8_lossy(p))
+    })
+    .map(<[u8]>::to_vec)
     .collect();
+    let untracked: Vec<String> = untracked_raw
+        .iter()
+        .map(|p| String::from_utf8_lossy(p).into_owned())
+        .collect();
     let mut text = git(
         workspace,
         // The user's config must not change the text the parser reads
@@ -213,11 +230,13 @@ pub fn for_base(workspace: &Path, rev: &str) -> Result<(Comparison, String), Str
     if !text.is_empty() {
         text.push('\n');
     }
-    let top = git(workspace, &["rev-parse", "--show-toplevel"])?;
-    for p in &untracked {
-        let body = std::fs::read_to_string(Path::new(&top).join(p))
+    // The exact bytes (TLS-114): a lossy top level (`repo-\xff`) opens nothing.
+    let top =
+        crate::git_env::path_from_git(git_bytes(workspace, &["rev-parse", "--show-toplevel"])?);
+    for (p, raw) in untracked.iter().zip(&untracked_raw) {
+        let body = std::fs::read_to_string(top.join(crate::git_env::path_from_git(raw.clone())))
             .map_err(|e| format!("impact: untracked file '{p}' could not be read: {e}"))?;
-        text.push_str(&new_file_section(p, &body));
+        text.push_str(&new_file_section(raw, &body));
     }
     let cmp = Comparison {
         source: "base",
@@ -266,12 +285,12 @@ pub fn for_base_and_diff(workspace: &Path, rev: &str, diff: &str) -> Result<Comp
     })
 }
 
-/// A unified-diff section adding `path` with `body` (an untracked file).
-fn new_file_section(path: &str, body: &str) -> String {
+/// A unified-diff section adding the file named by the bytes `path` with
+/// `body` (an untracked file).
+fn new_file_section(path: &[u8], body: &str) -> String {
     let lines: Vec<&str> = body.lines().collect();
-    let mut s = format!(
-        "diff --git a/{path} b/{path}\nnew file mode 100644\n--- /dev/null\n+++ b/{path}\n"
-    );
+    let (a, b) = (quoted_path("a/", path), quoted_path("b/", path));
+    let mut s = format!("diff --git {a} {b}\nnew file mode 100644\n--- /dev/null\n+++ {b}\n");
     if !lines.is_empty() {
         s.push_str(&format!("@@ -0,0 +1,{} @@\n", lines.len()));
         for l in lines {
@@ -280,6 +299,31 @@ fn new_file_section(path: &str, body: &str) -> String {
             s.push('\n');
         }
     }
+    s
+}
+
+/// `prefix` + `path` as git writes a name in a diff header (TLS-114): bare
+/// when every byte is printable ASCII other than `"` and `\`, else C-quoted
+/// (`"b/a\nb.al"`, a high byte as `\377`), which the diff parser reads back.
+/// A raw LF would split the header and a raw TAB end the name there.
+fn quoted_path(prefix: &str, path: &[u8]) -> String {
+    let plain = |b: u8| (0x20..0x7f).contains(&b) && b != b'"' && b != b'\\';
+    if path.iter().all(|&b| plain(b)) {
+        return format!("{prefix}{}", String::from_utf8_lossy(path));
+    }
+    let mut s = format!("\"{prefix}");
+    for &b in path {
+        match b {
+            b'"' => s.push_str("\\\""),
+            b'\\' => s.push_str("\\\\"),
+            b'\n' => s.push_str("\\n"),
+            b'\t' => s.push_str("\\t"),
+            b'\r' => s.push_str("\\r"),
+            _ if plain(b) => s.push(char::from(b)),
+            _ => s.push_str(&format!("\\{b:03o}")),
+        }
+    }
+    s.push('"');
     s
 }
 

@@ -556,6 +556,100 @@ suppressed all of them, and a new member of the group was invisible to it.
     folder's.
   - Windows: `cargo check --target x86_64-pc-windows-gnu --lib --bins` passes; nothing ran there.
 
+### Fixed (TLS-114: a path git prints is read exactly, even when it ends in CR or LF)
+
+- **What was wrong.** Several readers of git's output removed more than git's own line end.
+  Test-scope discovery (`src/engine/test_select/scope.rs`) removed every trailing CR and LF from
+  `git config --path core.excludesFile`, `git rev-parse --show-toplevel` and `--git-common-dir`.
+  So an excludes file, a top level or a common git folder whose name ends in CR was read as
+  another path, and TLS-109's batch claim registered the wrong file as a read. `alsem impact`'s
+  base side removed all trailing whitespace from `--show-toplevel` (`git archive` then ran in a
+  folder that does not exist) and all surrounding whitespace from `--show-prefix` (a workspace
+  folder starting with a space lost it). Its top level was also decoded lossily, so a non-UTF-8
+  folder name was another folder.
+- **agentflow's `check-diff` could be passed.** Without `-z`, git writes a name that holds a
+  non-ASCII byte, a control character (CR, LF, tab), a `"` or a backslash in C-style quotes:
+  `"scripts/x\r"`, `"src/\303\251.rs"`. Three readers took that text as the name.
+  - The protected-path check read `git diff --name-only` (`changed_files`), and a quoted
+    `"scripts/…"` does not start with `scripts/`, so a change there was not refused.
+  - The forbidden-additions and Cargo-version checks matched `+++ b/<name>` headers in one
+    joined diff. A quoted header did not match, so a file's added lines were charged to the
+    file before it, or dropped: an `#[ignore]` added in `src/é.rs` was not refused.
+    `splitlines()` also split an added line at a lone CR (`fn f(){}\r#[ignore]` hid the
+    attribute), and every added line whose text starts with `++` was skipped as a header.
+  - The rebase conflict list read the same quoted names, and the `-z` tree probe ran in Python
+    text mode, which turns a CR into LF.
+  - Now each file's own patch is read by its known name (`:(top,literal)`: never a glob such as
+    `src/[a].rs`, and the same from any folder), with `--text` (a `.rs` file holding a NUL byte
+    gave "Binary files differ" and its additions were never scanned, before this change too).
+    A changed file with an empty patch is an error, not "nothing added".
+- **The pre-commit hook could skip fmt and the goldens.** It matched
+  `git diff --cached --name-only` against `\.rs$` and `^src/…`. A quoted name matched neither,
+  so a commit of `src/é.rs` alone ran no fmt check and no golden check.
+- **The fix.**
+  - `git config` now runs with `-z`, and only its final NUL is removed. `rev-parse` has no
+    `-z`, so only its one final LF is removed, nothing else. `impact` keeps the top level's
+    bytes (`git_env::path_from_git`, moved there from `scope.rs`). `git check-ignore` already
+    used `-z`; it is unchanged.
+  - agentflow reads paths through one new helper, `Git.paths`: `-z`, raw bytes split at NUL,
+    decoded with `os.fsdecode`. `check-diff` now reads each changed file's own patch
+    (`Git.file_diffs`, `git diff -- ':(top,literal)<path>' ':(top,literal,exclude)<path>/'`,
+    as bytes), so no header is parsed. The `exclude`: a literal pathspec also selects what is
+    under a directory of that name, so a file replaced by a directory (`docs/old.rs` ->
+    `docs/old.rs/notes.md`) took the note's lines into the deleted `.rs` file's patch, and a
+    note naming `#[ignore]` was refused (sol r1). Both reads pass `--no-relative`: with
+    `diff.relative=true`, a check run from a subfolder listed only that folder's files,
+    relative to it, and scanned nothing else (sol r1). Lines split at LF only, and only lines
+    after the first `@@` count. `Git.diff`, which nothing else used, is removed.
+  - The hook reads `git diff --cached --name-only -z --no-renames` and matches with `grep -z`.
+    It sends the output to `/dev/null` instead of using `-q`, so git never dies of SIGPIPE,
+    which `pipefail` would read as "no match". `--no-renames` (sol r1): an unchanged
+    `src/old.rs` moved to `notes/old.txt` listed only the new name, so fmt and the goldens
+    were skipped. It reads its top level exactly (a sentinel after `rev-parse`): `$(...)`
+    strips every trailing LF, so a checkout named `repo` + LF looked for `repo/scripts`.
+    `check-goldens --verify-coverage` had the same strip (`cd "$(... && pwd)"`) and so
+    changed into `repo`; it now changes into its own folder's parent directly (sol r2), with
+    `CDPATH` cleared (sol r3): run as `scripts/check-goldens`, a bare `cd scripts/..`
+    searched an exported `CDPATH` first and could check another checkout's goldens.
+  - Test-scope discovery sends each folder to `git check-ignore` as `./<name>/` (sol r1): git
+    reads each line as a pathspec, so a sibling folder named `:(unknown)` failed the whole
+    batch, which was read as "nothing ignored".
+  - `impact --base` opens the untracked `.al` files under the top level's exact bytes (sol
+    r1): under a Linux checkout named `repo-\xff`, an untracked `New.al` could not be read.
+    It lists them with `ls-files -z` and opens each by its bytes: without `-z` git quoted
+    `ws/Né.al` as `"ws/N\303\251.al"`, which does not end in `.al`, so the file was silently
+    left out of the change; a non-UTF-8 name was opened by its lossy text. The diff section
+    it writes for each one quotes the name the way git does (sol r2): written raw, an LF in
+    the name split the header and a TAB ended the name there, so the file's lines went to
+    another path.
+- **Tests** (unix; each with a discrimination proof):
+  - scope discovery: an excludes file ending in CR or LF (an LF inside too), a top level ending
+    in CR or LF, and a bare clone's common folder ending in CR or LF;
+  - `impact`: a base materialized under a top level ending in CR, ending in LF, and (Linux) not
+    UTF-8; a workspace prefix starting with a space; (Linux) an untracked file under a non-UTF-8
+    top level; untracked files named `Né.al` and (Linux) `X\xff.al`; (Linux) `impact --base`
+    end to end on untracked files whose names hold an LF and a TAB (their routines are roots);
+  - scope discovery: a sibling folder named `:(unknown)` beside an ignored one;
+  - agentflow: changed and dirty paths with a CR at the end and an LF inside; a `"` and (Linux)
+    the byte 0xFF in a name; `check-diff` through real git on `src/é.rs`, `src/x\r.rs`, a CR
+    inside an added line and an added `++` line; a file replaced by a directory of its name;
+    a check from a subfolder with `diff.relative=true`;
+  - the hook, run on a staged `src/é` + LF + `x.rs`, on a Rust file renamed to a `.txt`, and in
+    a checkout named `repo` + LF (with the real `check-goldens`, only `cargo` stubbed): it runs
+    fmt and both golden checks.
+  - The LF fixtures pin "remove one LF" against "remove every LF". `--show-prefix` always ends
+    in `/`, so `impact`'s prefix reader cannot tell those apart, and no fixture claims to.
+- **Left as they are, and why.** `impact`'s `--show-prefix` is still decoded lossily: it flows
+  on as text (the folder below the top, `materialize`'s `rel`, the `git show` spec, cache keys),
+  so keeping its bytes is a larger change (TLS-124). Some readers still parse git's paths line
+  by line:
+  `impact --base`'s changed-file lists and the unified-diff headers its parser reads, which git
+  also quotes. Those are a different bug (git's quoting, not cut line ends). The gate scripts'
+  path lists (`ci-steps task-affected`, `cdo-gate`'s product-path check, `land`'s conflict
+  check) read a quoted name as unmapped or product code, which runs more checks, never fewer.
+  Their checkout roots (`rev-parse --show-toplevel`, `worktree list`, `--git-common-dir`) are
+  folders the operator chooses.
+
 ### Fixed (ENG-178: table procedures named like record built-ins: four follow-ups from ENG-173)
 
 From Fable's second review of ENG-173 (`/work/.al-sem/engine-notes/eng173/fable-eng173-r2.md`).
