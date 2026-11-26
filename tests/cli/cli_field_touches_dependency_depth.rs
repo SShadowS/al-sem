@@ -86,6 +86,23 @@ fn workspace(root: &std::path::Path) -> std::path::PathBuf {
 
 /// The field answer's JSON `fieldTouches[]` routines, from `from`, down.
 fn field_routines(ws: &str, from: &str) -> Vec<String> {
+    let v = field_doc(ws, from);
+    // A row names its routine by reference into `payload.routines`.
+    v["payload"]["fieldTouches"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{from}: fieldTouches: {v}"))
+        .iter()
+        .map(|t| {
+            let r = &t["routine"];
+            r.as_str()
+                .and_then(|k| v["payload"]["routines"][k]["display"].as_str())
+                .map_or_else(|| r.to_string(), str::to_string)
+        })
+        .collect()
+}
+
+/// The field answer's JSON document, from `from`, down.
+fn field_doc(ws: &str, from: &str) -> serde_json::Value {
     let out = Command::new(env!("CARGO_BIN_EXE_alsem"))
         .args([
             "query",
@@ -105,26 +122,22 @@ fn field_routines(ws: &str, from: &str) -> Vec<String> {
         .env("RUST_LOG", "off")
         .output()
         .expect("spawn alsem");
-    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap_or_else(|e| {
+    serde_json::from_slice(&out.stdout).unwrap_or_else(|e| {
         panic!(
             "{from}: not JSON ({e}): {}",
             String::from_utf8_lossy(&out.stdout)
         )
-    });
-    // A row names its routine by reference into `payload.routines`.
-    v["payload"]["fieldTouches"]
-        .as_array()
-        .unwrap_or_else(|| panic!("{from}: fieldTouches: {v}"))
-        .iter()
-        .map(|t| {
-            let r = &t["routine"];
-            r.as_str()
-                .and_then(|k| v["payload"]["routines"][k]["display"].as_str())
-                .map_or_else(|| r.to_string(), str::to_string)
-        })
-        .collect()
+    })
 }
 
+/// Fable r1 S3: the cone is neither too narrow nor too wide: each answer lists
+/// its own branch's site and not the other's, and `CallDep`'s cone is its 3
+/// routines (CallDep, WriteIt, Inner). The reason says what the cone follows
+/// (Fable S1, sol B2).
+/// DISCRIMINATION (2026-11-26, each break then restored, green): no typed-edge
+/// walk (`typed_down` returning nothing, the master behaviour) fails "the site
+/// in Inner" (the red commit); a cone of every routine (`typed_down` returning
+/// every model routine) fails "no site in Inner from CallDirect".
 #[test]
 fn a_field_site_two_dependency_calls_down_is_listed() {
     let dir = tempfile::tempdir().unwrap();
@@ -135,9 +148,30 @@ fn a_field_site_two_dependency_calls_down_is_listed() {
         direct.iter().any(|r| r.contains("Direct")),
         "control (one dependency call down): {direct:?}"
     );
+    assert!(
+        !direct.iter().any(|r| r.contains("Inner")),
+        "no site in Inner from CallDirect: {direct:?}"
+    );
     let deep = field_routines(w, "CallDep");
     assert!(
         deep.iter().any(|r| r.contains("Inner")),
         "the site in Inner (CallDep -> WriteIt -> Inner): {deep:?}"
     );
+    assert!(
+        !deep.iter().any(|r| r.contains("Direct")),
+        "no site in Direct from CallDep: {deep:?}"
+    );
+    let doc = field_doc(w, "CallDep");
+    let scope = doc["payload"]["searched"]["scope"].as_str().unwrap_or("");
+    assert!(
+        scope.contains("by the execution graph, dependency code included (3 routines)"),
+        "{scope}"
+    );
+    let reason = doc["payload"]["reasons"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["kind"] == "resolved-call-graph" && r["side"] == "down")
+        .unwrap_or_else(|| panic!("the down reason: {doc}"));
+    assert_eq!(reason["noSolveRow"], false, "{reason}");
 }

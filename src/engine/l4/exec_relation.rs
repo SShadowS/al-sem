@@ -42,6 +42,11 @@ pub struct ExecRelation {
     /// the detector context, which indexes them in their own map,
     /// `dependency_uncertainty_edges_by_from` (#287).
     dependency_uncertainty: Vec<UncertaintyEdge>,
+    /// ENG-213: the Cone payload's edges with a target, as indices sorted by
+    /// `from`, built on first use ([`ExecRelation::cone_callees`]) and kept with
+    /// the relation, so a resident server's field answers do not rebuild it
+    /// per query. Four bytes an edge.
+    by_from: std::sync::OnceLock<Vec<u32>>,
 }
 
 impl ExecRelation {
@@ -91,7 +96,28 @@ impl ExecRelation {
             typed: Arc::new(typed),
             scc: Arc::new(scc),
             dependency_uncertainty,
+            by_from: std::sync::OnceLock::new(),
         }
+    }
+
+    /// ENG-213: the targets of the Cone payload's edges out of routine `from`
+    /// (every caller's, dependency code's included; an edge with no target is
+    /// left out), through the index built on first use.
+    pub fn cone_callees<'a>(&'a self, from: &'a str) -> impl Iterator<Item = &'a str> + 'a {
+        let typed = &self.typed;
+        let ix = self.by_from.get_or_init(|| {
+            let mut v: Vec<u32> = (0..typed.len() as u32)
+                .filter(|&i| typed[i as usize].to.is_some())
+                .collect();
+            v.sort_by(|&a, &b| typed[a as usize].from.cmp(&typed[b as usize].from));
+            v
+        });
+        let start = ix.partition_point(|&i| typed[i as usize].from.as_str() < from);
+        ix[start..]
+            .iter()
+            .map(move |&i| &typed[i as usize])
+            .take_while(move |e| e.from == from)
+            .filter_map(|e| e.to.as_deref())
     }
 
     /// The `rel.graph` / `rel.scc` / `rel.dependency_uncertainty` census
