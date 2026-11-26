@@ -97,6 +97,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   base-object reference the tableextension's.
 - **Goldens.** None moved.
 
+### Fixed (TLS-129: land's mem-wait test: the wall-clock bound is removed)
+
+- `land_script::land_mem_wait_survives_a_host_suspend` failed at host load 381
+  ("gave up 14.58 s after the suspend: a nap went past the deadline") and passed
+  on a re-run. The cause was the test, not `scripts/land`. Its 14 s bound was
+  wall time from the suspend to land's exit. So it also counted the wait
+  loop's own work (awk, the forked clock read), land's exit, and when the test
+  thread wrote the fake suspend. Load stretches all of these. That run logged
+  no naps, so "no nap went past the deadline" there is deduced from the code:
+  land caps each nap at the awake time left, on the same clock. Reproduced
+  with land unchanged by making each clock read after the suspend 3 s late:
+  the old test failed at 15.18 s.
+- The wall-clock bound is removed. The test now sets the whole timeline on a
+  virtual clock, through stand-ins first on PATH: `host-suspended` reports
+  the clock; land's `sleep` records its argument, moves the clock on by it
+  (no real sleep) and puts a 20 s suspend inside the first nap; land's
+  MemAvailable `awk` can add loop work. The test checks two things against
+  values it works out from that timeline (a 40 s wait, the 15 s cap): what
+  land slept (15, 15, 10 s) and the awake time at which it gave up (40 s).
+  For that, `scripts/land`'s `mem-wait.log` now gives the awake time used
+  when it gives up (`gave up after <us> us of awake time: ...`). A new test,
+  `land_mem_wait_judges_its_naps_not_the_load`, adds 6 s of loop work before
+  each reading. Expected there: naps of 15 and 13 s, give-up at 46 s. Proofs:
+  a deadline 15 s too late, the wait on wall time, a fixed 15 s sleep, and no
+  15 s cap each fail both tests.
+- Stated, not changed: land's cap is relative to its last clock reading.
+  The nap starts right after that reading, so re-reading it first would gain
+  nothing. Land gives up late by the loop's own work after the reading: awk,
+  a slow clock read (cut at 6 s), and awake-clock's existing failed-read
+  reuse and wall-time fall back (`scripts/awake-clock`). The new test pins
+  exactly that lateness (6 s).
+- Review r2 (sol): a land that stopped napping made both tests hang, not
+  fail, because only land's own steps move the virtual clock. The `awk`
+  stand-in now allows 10 memory reads (land needs 4); the 11th says so and
+  reports ample memory, so land leaves the wait and the test fails. A
+  `timeout` stand-in also runs the clock read without its 5 s limit, so a
+  starved host cannot fail the test there.
+
 ### Fixed (ENG-178: table procedures named like record built-ins: four follow-ups from ENG-173)
 
 From Fable's second review of ENG-173 (`/work/.al-sem/engine-notes/eng173/fable-eng173-r2.md`).
