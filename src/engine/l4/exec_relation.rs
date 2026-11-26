@@ -106,9 +106,8 @@ impl ExecRelation {
     pub fn cone_callees<'a>(&'a self, from: &'a str) -> impl Iterator<Item = &'a str> + 'a {
         let typed = &self.typed;
         let ix = self.by_from.get_or_init(|| {
-            let mut v: Vec<u32> = (0..typed.len() as u32)
-                .filter(|&i| typed[i as usize].to.is_some())
-                .collect();
+            let n = u32::try_from(typed.len()).expect("fewer than 2^32 typed edges");
+            let mut v: Vec<u32> = (0..n).filter(|&i| typed[i as usize].to.is_some()).collect();
             v.sort_by(|&a, &b| typed[a as usize].from.cmp(&typed[b as usize].from));
             v
         });

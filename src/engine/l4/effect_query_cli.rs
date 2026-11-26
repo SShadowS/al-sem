@@ -6694,11 +6694,19 @@ fn render_field_touches(
         Some(sc) => {
             let mut parts = Vec::new();
             if ask.direction.wants_down() {
-                parts.push(format!(
-                    "{}'s cone by the execution graph, dependency code included ({})",
-                    sc.routine.qualified(),
-                    plural(sc.down, "routine", "routines")
-                ));
+                parts.push(if sc.no_solve_row {
+                    // Fable r2 N8: only its own body was read.
+                    format!(
+                        "{}'s own body (no row in the solve)",
+                        sc.routine.qualified()
+                    )
+                } else {
+                    format!(
+                        "{}'s cone by the execution graph, dependency code included ({})",
+                        sc.routine.qualified(),
+                        plural(sc.down, "routine", "routines")
+                    )
+                });
             }
             if ask.direction.wants_up() {
                 use crate::program::impact_graph::reverse::Tier;
@@ -6765,7 +6773,7 @@ fn render_field_touches(
         }
         if ask.direction.wants_up() && sc.up_engine == "solve-graph" {
             reasons.push((
-                json!({"kind": "resolved-call-graph", "side": "up", "noSolveRow": false}),
+                json!({"kind": "resolved-call-graph", "side": "up", "noSolveRow": sc.no_solve_row}),
                 "callers by the solve graph, the resolved call graph: calls not resolved, and \
                  dependency code deeper than one routine, are not followed"
                     .to_string(),
