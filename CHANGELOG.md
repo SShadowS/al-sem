@@ -54,9 +54,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (54, 53, 41, 43, 40 ms against 6 ms with no cache); an `--out` with a second link took
   268-405 ms against 53-68 ms for an `--out` with one link (the files walk).
 - **An unreadable part of a cache blocks only the writes that need it.** The snapshot skips a
-  folder it cannot list. The folder test still knows every cache folder whose own identity it
-  could read; a cache folder that cannot even be looked at is skipped too. Only a lookup (a
-  file with another name) that cannot list a folder refuses its write, naming that folder.
+  folder inside a cache folder that it cannot list. Only a lookup (a file with another name)
+  that cannot list a folder refuses its write, naming that folder. A cache folder itself that
+  cannot be looked at (a folder above it unsearchable: any error but "not found") is not taken
+  for a missing one: nothing about it can be checked, so every write is refused while it lasts,
+  naming that folder.
 - **Appends wait.** A standalone run's diagnostic append (the IR report, the cones schedule)
   waits at its open as a plain append does, so a FIFO whose reader starts late gets every line.
   A batch run's appends (its shared report) still open with `O_NONBLOCK`, so a FIFO with no
@@ -98,6 +100,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     snapshot: an `--out` that is an entry in it. A text cache path that was a file, or a
     dangling symlink, at the snapshot and became a folder: the same.
   - A missing IR folder whose configured name's link points elsewhere by the next check.
+  - A text cache folder that cannot be looked at (the folder above it mode 000): an `--out`
+    outside the caches is refused; a cache folder that cannot be resolved still makes a
+    mounted-file check say yes.
   - `cache prune` in the text folder and in the IR folder; plain `cache prune` whose default
     folder links to the text folder, or is the IR folder.
   - An `--out` in, and linked into, the impact-base `work/`.

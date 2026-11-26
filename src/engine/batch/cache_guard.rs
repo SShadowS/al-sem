@@ -160,10 +160,15 @@ fn file_mount_in(_roots: &[PathBuf]) -> bool {
 /// [`file_mount_in`] over the text of a mountinfo file.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn file_mount_in_info(roots: &[PathBuf], info: &str) -> bool {
-    let real: Vec<PathBuf> = roots
+    // A root that cannot be resolved is not dropped (sol r3): yes, so the lookup runs and
+    // refuses the write if it cannot list there.
+    let Ok(real) = roots
         .iter()
-        .filter_map(|r| std::fs::canonicalize(r).ok())
-        .collect();
+        .map(std::fs::canonicalize)
+        .collect::<std::io::Result<Vec<PathBuf>>>()
+    else {
+        return true;
+    };
     info.lines()
         .filter_map(|l| l.split(' ').nth(4))
         .map(|p| PathBuf::from(unescape_mount(p)))
@@ -350,6 +355,24 @@ pub(super) fn standalone() -> std::io::Result<std::sync::Arc<Snapshot>> {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let snap = held.get_or_insert_with(|| Arc::new(first_standalone()));
+    // A cache folder that cannot be looked at (a folder above it unsearchable) is not a
+    // missing one: nothing about it can be checked, so the write is refused (sol r3). Only
+    // a name that is gone (`NotFound`, a file in the path) counts as missing.
+    let names = snap
+        .roots
+        .iter()
+        .chain(snap.missing.iter().map(|(name, _)| name));
+    for name in names {
+        match std::fs::metadata(name) {
+            Err(e) if !gone(&e) => {
+                return Err(std::io::Error::other(format!(
+                    "refused: cannot look at the cache folder {} ({e}): the engine's caches cannot be protected from this write (TLS-120)",
+                    name.display()
+                )));
+            }
+            _ => {}
+        }
+    }
     let mut gone = Vec::new();
     let mut again: Vec<PathBuf> = Vec::new();
     for root in &snap.roots {
@@ -921,7 +944,10 @@ mod tests {
     /// Discrimination (2026-11-25, sol r1): the escapes left as they are (`unescape_mount`
     /// returning its field): fails "(a file inside)"; restored, passes. (sol r2) A mount
     /// point counted only when seen to be a file (`is_ok_and(|m| m.is_file())` again): fails
-    /// "(cannot be looked at)"; restored, passes.
+    /// "(cannot be looked at)"; restored, passes. (sol r3) A root that cannot be resolved
+    /// dropped again (`filter_map(.. .ok())`): fails "(a root that cannot be resolved)";
+    /// restored, passes. (Run in one build with the other sol r3 break, in `standalone`,
+    /// which this test does not reach.)
     #[test]
     fn a_file_mount_inside_a_cache_folder_is_seen() {
         let t = tempfile::tempdir().unwrap();
@@ -962,6 +988,15 @@ mod tests {
         std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o700)).unwrap();
         assert!(denied, "precondition: the mount point cannot be looked at");
         assert!(seen, "(cannot be looked at)");
+        // sol r3: a root that cannot be resolved (a folder above it mode 000) is not dropped.
+        let inner = locked.join("root");
+        std::fs::create_dir(&inner).unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let unresolved = std::fs::canonicalize(&inner).is_err();
+        let seen = file_mount_in_info(&[root.clone(), inner.clone()], &line("/elsewhere"));
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(unresolved, "precondition: the root cannot be resolved");
+        assert!(seen, "(a root that cannot be resolved)");
     }
 
     /// TLS-120 sol r1: a file bind-mounted INTO a cache slot shows its source's identity there,

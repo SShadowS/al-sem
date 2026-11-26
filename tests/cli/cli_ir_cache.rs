@@ -2334,3 +2334,35 @@ fn standalone_an_unclassifiable_mount_needs_a_lookup() {
         "(denied): {stderr}"
     );
 }
+
+/// TLS-120 sol r3: a cache folder that cannot be looked at because a folder ABOVE it is
+/// unsearchable (`XDG_CACHE_HOME` mode 000, so the text cache folder's stat fails with EACCES)
+/// is not taken for a missing one: nothing about it can be checked, so an `--out` outside the
+/// caches is refused, naming that folder. The control: the same `--out` with the folder above
+/// it searchable is written.
+///
+/// Discrimination (2026-11-26, sol r3): the check of each folder's name in `standalone`
+/// skipped (its `Err(e) if !gone(&e)` arm made `Err(e) if false`): fails "(denied above)"
+/// (exit 0); restored, passes. (Run in one build with the other sol r3 break, the mounted-
+/// file check's root resolving, which this run never reaches: no mount is listed.)
+#[test]
+fn standalone_an_unreachable_cache_folder_refuses_writes() {
+    use std::os::unix::fs::PermissionsExt;
+    let f = fixture();
+    warm(&f);
+    let d = tempfile::tempdir().unwrap();
+    let out = d.path().join("out.json");
+    let control = fanout_out(&f, &out);
+    std::fs::set_permissions(&f.xdg, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let denied_stat = std::fs::metadata(f.xdg.join("al-ch-snapshot-cache")).is_err();
+    let denied = fanout_out(&f, &out);
+    std::fs::set_permissions(&f.xdg, std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!(control.status.code(), Some(0), "the control: {control:?}");
+    assert!(denied_stat, "precondition: the folder's stat is denied");
+    let stderr = String::from_utf8_lossy(&denied.stderr);
+    assert_eq!(denied.status.code(), Some(1), "(denied above): {stderr}");
+    assert!(
+        stderr.contains("cannot look at the cache folder") && stderr.contains("(TLS-120)"),
+        "(denied above): {stderr}"
+    );
+}
