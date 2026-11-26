@@ -66,10 +66,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its counters to another pinned perf user is now refused (before, ungrouped
   events were time-sliced and refused only when the two came out unequal). CPU,
   wall and memory judging do not change; the instruction limit stays advisory.
-- **Every uncounted call says why.** Perf ending before the call, an unreadable
+- **A partial count never makes a CPU failure advisory** (review r1, sol). A
+  count `covers` passes can still be short by the band. sol's counterexample: a
+  warm-up row at x1.54 CPU and wall, whole instructions x1.025 and x1.31 at
+  equal clocks fails; with head's counters 1.5 % short in both passes, the
+  measured x1.010 and x1.290 sat inside every limit with a CLOCK label, and the
+  failure was waived. Now `judge` bounds each pair: a side whose counters ran a
+  smaller share of its CPU seconds than the other side's (or than its CPU
+  seconds, whichever is more) may have lost that share. Comparing the sides
+  also sees a loss hidden under a multi-threaded call's normal +2.2 to +2.7 %
+  excess. `cpu_advisory` needs every condition (instructions within x1.02 either
+  way, the CPU at equal clocks within the limit, head's clock the slower one) to
+  hold at the worst end of those bounds. Counts whose two sides cover alike
+  waive as before.
+- **Why each call went uncounted.** Perf ending before the call, an unreadable
   perf output and a count with no instruction used to drop the count silently;
   each now prints a `call not counted` line, as a refused output, a failed
-  attach and an uncovered count already did.
+  attach and an uncovered count already did. One exception: after three failed
+  attaches in a row (or a perf that did not stop) a server prints one
+  server-level line and then no line per call. Every timed call's record in
+  `speed.json` now carries `uncounted`, the reason it has no count (null when
+  counted), so a reader ties each refusal to its own call, the server-level
+  case included (`this server's perf gave up`).
 - **Tests.** New `speed_perf_groups_keep_a_pmus_running_times_equal` starts and
   stops the real perf twice while 12 attached processes spin, with cdo-speed's
   own events, and needs every output taken as a count, then a third stop on the
@@ -79,9 +97,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`STUB_PERF_MUX_ATTACH`), which gives exactly one refusal line naming its side
   and the matching "N of M calls counted"; perf ending early prints its line; a
   pinned group without counters (`STUB_PERF_PINNED_LOST`: `<not counted>` at
-  100.00 % on calls split 70/30) is refused as perf output on every call. `speed_counts_instructions_with_the_real_perf` still allows
-  one uncounted call (an attach timeout or a short call's /proc ticks under the
-  suite's load), but only with as many refusal lines as uncounted calls.
+  100.00 % on calls split 70/30) is refused as perf output on every call. The
+  same test (review r1) needs the muxed call's `uncounted` reason on its own
+  record, a verdict with the round total's ratio and not the build's, and the
+  stub perf's received arguments on every real `-p` attach to hold one pinned
+  group per PMU, spelled out. `speed_counts_instructions_with_the_real_perf`
+  now allows any number of uncounted calls (legitimate under the suite's load:
+  an attach timeout, a short call's /proc ticks, a pinned group that lost its
+  counters), but each must carry its own `uncounted` reason, and at least one
+  call must be counted; an untimed rebuild's refusal line no longer counts.
+  New `speed_cpu_advisory_holds_at_the_coverage_error` runs sol's numbers
+  through `judge_warm` and `cpu_advisory`. The stress test's P-core stop uses
+  only the P-cores in the process's CPU mask (none: skipped, saying so) and
+  reaps perf and the spinners on every exit path.
   `speed_cpu_advisory_needs_covering_counts_and_a_cpu_only_failure` now needs an
   uncovered count to give no instruction count and no build ratio;
   `speed_perf_parsing_and_warm_judging` pins the pinned-group arguments and
