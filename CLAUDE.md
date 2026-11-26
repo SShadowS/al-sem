@@ -252,11 +252,9 @@ Every test still runs before a merge; the tiers decide HOW OFTEN each one runs.
   else `covered: false`: no label and, since TLS-130, no instruction count either; the counts
   stay in `speed.json`). A PMU's two events are one pinned perf group (`{...}:D`, TLS-130):
   they always run equally long and are never time-sliced; a group that gets no counters
-  (another pinned perf user) reads `<not counted>` at 100.00 % and is refused. Left: a pinned
-  group that fails after its tasks ran there reads like a PMU never run on; only coverage
-  catches it, so it passes when that PMU had under 2 % + 0.05 s of the call's CPU. Likewise
-  (unreproduced; needs a CPU-wide pinned rival) an inherited thread or child whose pinned group
-  fails while the parent's holds: expected to read as a normal row with a shorter running time.
+  (another pinned perf user) reads `<not counted>` at 100.00 % and is refused. A pinned group
+  that fails after its tasks ran there reads like a PMU never run on: kept as an instruction
+  count unless coverage drops it, but partial (below).
   A warm-up failure whose two passes disagree beyond x1.25 gets ONE more flipped pair first
   (two passes, each waiting for a calm host); every row that failed after pass 2 must then
   agree within each side order, and four passes judge; else `HOST UNSTABLE`, exit 2 (`verdict`
@@ -264,8 +262,9 @@ Every test still runs before a merge; the tiers decide HOW OFTEN each one runs.
   (q-20261121T025802-abcd2da8, narrowed in review r3): the one advisory CPU failure is a
   covered, CPU-only failure with equal instructions (x1.02) that head's LOWER clock explains
   (head user x clock ratio + head sys, over base CPU, within the limit, per pass or round; in
-  the rounds, each over-limit round by itself), each condition holding even if the side whose
-  counters ran the smaller share of its CPU seconds lost that share (TLS-130 review r1).
+  the rounds, each over-limit round by itself), and only when every paired count on both sides
+  is whole (TLS-130 review r2: no PMU `<not counted>`, each kind's running % summing to 100
+  over the PMUs). A partial count keeps its CPU failure a failure, saying why.
   A `CPI` label never waives: more cycles per instruction is a memory-stall regression's shape.
   **It is Linux only (it reads `/proc`):
   on the Windows machine every full `cdo-gate` run FAILS unless given `--no-speed`**

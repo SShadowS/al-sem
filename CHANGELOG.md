@@ -48,13 +48,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   0.00 %). perf's CSV has no enabled time to tell them apart, and perf -v's
   enabled times differ between the PMUs even when nothing fails (1.93 s against
   1.29 s on a process starting threads and children), so no exact rule exists.
-  Only `covers` catches it, and it passes when that PMU carried less of the
-  call's CPU seconds than the band (2 % + 50 ms), e.g. a call almost wholly on the
-  other core type. A second shape, not reproduced (it needs a CPU-wide pinned
-  rival): a thread or child started during the call (inherited) whose pinned
-  group fails while the parent's holds is expected to read as a normal row with
-  a shorter running time, not `<not counted>`. Again only `covers` catches it,
-  with the same band.
+  `covers` drops it when that PMU carried more of the call's CPU seconds than
+  the band (2 % + 50 ms); below that it stays an instruction count, but it is
+  partial (next items) and gives no CPU advisory. A second shape, not
+  reproduced (it needs a CPU-wide pinned rival): a thread or child started
+  during the call (inherited) whose pinned group fails while the parent's holds
+  is expected to read as a normal row with a shorter running time, not
+  `<not counted>`; `covers` and the running-% rule are what can see it.
 - **What changes in real gate verdicts (inferred).** No landing verdict yet
   shows a partly refused count; this is reasoned from the cause. Calls with a
   server thread running at the start or stop are counted instead of refused, so
@@ -66,28 +66,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its counters to another pinned perf user is now refused (before, ungrouped
   events were time-sliced and refused only when the two came out unequal). CPU,
   wall and memory judging do not change; the instruction limit stays advisory.
-- **A partial count never makes a CPU failure advisory** (review r1, sol). A
-  count `covers` passes can still be short by the band. sol's counterexample: a
-  warm-up row at x1.54 CPU and wall, whole instructions x1.025 and x1.31 at
-  equal clocks fails; with head's counters 1.5 % short in both passes, the
-  measured x1.010 and x1.290 sat inside every limit with a CLOCK label, and the
-  failure was waived. Now `judge` bounds each pair: a side whose counters ran a
-  smaller share of its CPU seconds than the other side's (or than its CPU
-  seconds, whichever is more) may have lost that share. Comparing the sides
-  also sees a loss hidden under a multi-threaded call's normal +2.2 to +2.7 %
-  excess. `cpu_advisory` needs every condition (instructions within x1.02 either
-  way, the CPU at equal clocks within the limit, head's clock the slower one) to
-  hold at the worst end of those bounds. Counts whose two sides cover alike
-  waive as before.
+- **No CPU advisory on a partial count** (reviews r1 and r2, sol and Fable).
+  The rule: a CPU failure is made advisory (TLS-111's lower-clock rule) only
+  when every paired count of the row, on both sides, is whole. A count is
+  partial when a PMU's events read `<not counted>`, or when a kind's running %
+  summed over the PMUs is under 100 beyond perf's whole-percent truncation
+  (`partial_count`; two sides whose counted PMUs differ always include one such
+  count). A partial row keeps its CPU failure as measured (FAIL stays FAIL),
+  and the failure line says why no advisory was given; speed.json's row and
+  record carry `partial`. Why not bound the error instead: a count that covers
+  the call can still be short, and both reviews built rows that a bound let
+  through. sol: base and head with different normal running-time excess (+2.2
+  and +2.7 %) hide a loss entirely. Fable: lost time need not have run at the
+  call's average rate (a lost P-core group carries more instructions per
+  second), and a short count can create the CLOCK label itself. Cost: a call
+  that ran on one core type only (its other PMU `<not counted>`) gets no CPU
+  advisory either; the CPU advisory is the owner's waiver, so withholding it
+  never hides a failure.
 - **Why each call went uncounted.** Perf ending before the call, an unreadable
   perf output and a count with no instruction used to drop the count silently;
-  each now prints a `call not counted` line, as a refused output, a failed
-  attach and an uncovered count already did. One exception: after three failed
-  attaches in a row (or a perf that did not stop) a server prints one
-  server-level line and then no line per call. Every timed call's record in
-  `speed.json` now carries `uncounted`, the reason it has no count (null when
-  counted), so a reader ties each refusal to its own call, the server-level
-  case included (`this server's perf gave up`).
+  each now prints a line ending in `call not counted`, as a refused output
+  (`perf output not taken as a count`), a failed attach (`perf attach failed`,
+  now with its cause: no ack, perf ending first, a server process started first,
+  or the OS error) and an uncovered count (`NOT COVERED`) already printed their
+  own. One exception: after three failed attaches in a row (or a perf that did
+  not stop) a server prints one server-level line and then no line per call.
+  Every timed call's record in `speed.json` now carries `uncounted`, the reason
+  it has no count (null when counted), so a reader ties each refusal to its own
+  call, the server-level case included (`this server's perf gave up`).
 - **Tests.** New `speed_perf_groups_keep_a_pmus_running_times_equal` starts and
   stops the real perf twice while 12 attached processes spin, with cdo-speed's
   own events, and needs every output taken as a count, then a third stop on the
@@ -102,14 +108,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   record, a verdict with the round total's ratio and not the build's, and the
   stub perf's received arguments on every real `-p` attach to hold one pinned
   group per PMU, spelled out. `speed_counts_instructions_with_the_real_perf`
-  now allows any number of uncounted calls (legitimate under the suite's load:
-  an attach timeout, a short call's /proc ticks, a pinned group that lost its
-  counters), but each must carry its own `uncounted` reason, and at least one
-  call must be counted; an untimed rebuild's refusal line no longer counts.
-  New `speed_cpu_advisory_holds_at_the_coverage_error` runs sol's numbers
-  through `judge_warm` and `cpu_advisory`. The stress test's P-core stop uses
-  only the P-cores in the process's CPU mask (none: skipped, saying so) and
-  reaps perf and the spinners on every exit path.
+  checks perf through cdo-speed's own pinned-group probe, allows uncounted
+  calls (legitimate under the suite's load: an attach timeout, a short call's
+  /proc ticks, a pinned group that lost its counters) but each must carry its
+  own `uncounted` reason, needs at least two counted calls and prints how many
+  were; an untimed rebuild's refusal line no longer counts. New
+  `speed_cpu_advisory_never_on_a_partial_count` pins sol's and Fable's r2 rows
+  (and sol's with base partial) through real perf rows, `judge_warm` and
+  `cpu_advisory`: no advisory, with the reason; the same numbers from whole
+  counts are waived. The stub-perf advisory tests now split their counts over
+  both PMUs, so only their own guard withholds. The stress test's P-core stop
+  uses only the P-cores in the process's CPU mask (none: skipped, saying so),
+  waits until each spinner's mask is the wanted one, starts and registers
+  spinners one by one (each ends by itself after 120 s), reaps perf and the
+  spinners on every exit path, and names the cause when perf ends before its
+  ack or a pinned rival holds the counters.
   `speed_cpu_advisory_needs_covering_counts_and_a_cpu_only_failure` now needs an
   uncovered count to give no instruction count and no build ratio;
   `speed_perf_parsing_and_warm_judging` pins the pinned-group arguments and
