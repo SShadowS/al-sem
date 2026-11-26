@@ -2247,6 +2247,10 @@ pub(crate) fn exit_guards(
     // holders (a record kept elsewhere may be rebound by a place that may run user code;
     // `RetainedNumber`: `Store.Rebind(); if A.Number <> …`).
     let kept = crate::program::model::recref_alias::AliasClasses::for_routine(r, shadowed);
+    // ENG-189's kept binds are not added here: a holder joined to the guard's by a call is bound
+    // before the guard by that call (`bound_before` below). A `foreach` element of a holder list
+    // shares the guard's record without any call (BC 28.4); holder containers are ENG-161's
+    // (Fable r1 on ENG-189: `foreach L in Refs do L.GetTable(D)` before the guard).
     let user_code = match kept_elsewhere {
         KeptElsewhere::AnyExternal => {
             crate::program::model::recref_alias::user_code_points(r, shadowed)
@@ -2602,9 +2606,15 @@ fn facts_of(
     // retained elsewhere (a SingleInstance store, a caller's alias): every retainable variable
     // may hold anything from there on. A call, or a record operation that fires a trigger or a
     // table event (`recref_alias::user_code_points`). Only for records `kept` says may be kept.
+    // ENG-189: an in-place bind through a holder retainable there too (it may share the record
+    // of any other retainable holder: `L := Same(R); L.GetTable(Doc)`).
     let user_code = match kept {
         KeptElsewhere::AnyExternal => {
-            crate::program::model::recref_alias::user_code_points(r, shadowed)
+            let mut v = crate::program::model::recref_alias::user_code_points(r, shadowed);
+            v.extend(crate::program::model::recref_alias::kept_bind_points(
+                r, &classes,
+            ));
+            v
         }
         KeptElsewhere::Nothing => Vec::new(),
     };
@@ -2629,7 +2639,7 @@ fn facts_of(
     for p in user_code {
         let at = Some(p.at);
         let conds = conds_of(p.at);
-        for v in classes.rebound_at(p.runs).filter_map(&name_of) {
+        for v in p.rebinds(&classes).filter_map(&name_of) {
             f.alias_shared.insert(v.clone());
             let key = (v.clone(), conds.clone());
             if kept_until.get(&key).is_some_and(|&end| end <= p.at) {
