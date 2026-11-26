@@ -650,6 +650,102 @@ suppressed all of them, and a new member of the group was invisible to it.
   Their checkout roots (`rev-parse --show-toplevel`, `worktree list`, `--git-common-dir`) are
   folders the operator chooses.
 
+### Fixed (TLS-127: a slow take of the CDO slot no longer reads as "held by an unknown holder")
+
+- `scripts/cdo-slot status` (and every refusal that describes the hold) judged a
+  hold whose status was not written yet by the lock file's age: under 5 s it said
+  "still writing", after that "held by an unknown holder". A take slowed past 5 s
+  (host load 127-156, a host suspend, the `host-suspended` read of up to 6 s it
+  makes before the write) read as an unknown holder. That is how
+  `cdo_slot_a_reader_never_sees_a_half_written_status` failed on ENG-193's gate:
+  its 3 s write pause and 2 s of reads start after the lock is taken, so on a
+  loaded host they passed 5 s.
+- Now a lock decides, not an age. The holder keeps a new publish lock
+  (`$CDO_SLOT_DIR/publish.lock`, shared) from before it takes the hold lock until
+  its status is renamed in. A reader that finds the hold lock held and no live hold
+  id in the status asks that lock: held means "still writing"; free means read the
+  status once more (a take that just finished wrote it before letting go). If that
+  read still names no live hold, it probes the hold lock again (free: the hold was
+  released during the read, so the slot reads free) and then the publish lock
+  (held: a new take began, "still writing"). Only past all of these is the holder
+  unknown (a process that took the lock without being a cdo-slot take). There is
+  no age guess and no retry loop. Each busy publish probe looks once more after a
+  0.1 s wait, as every `x` probe does.
+- The publish probe is best effort (review, sol). A publish lock that cannot be
+  probed (an unopenable file) does not end `probe` before its decision line. The
+  reader then trusts only the hold lock: still held reads held, free reads free.
+  Before this, the probe exited 5 and `cdo-slot-guard` let a CDO command run
+  beside a held slot. New test `cdo_slot_an_unprobeable_publish_lock_keeps_the_hold`
+  runs the guard with a held hold lock and an unreadable (mode 000) `publish.lock`.
+- A `publish.lock` that is not a regular file is never opened (review r2, sol).
+  Opening a FIFO with no writer blocks: the guard's probe hung until the guard cut
+  it (30 s) and then let the command run, and a take's open hung too. A reader now
+  treats such a file as "cannot be probed" (only the hold lock decides). A take
+  refuses with "the publish lock … is not a regular file; refusing (remove it)".
+  New test `cdo_slot_a_fifo_publish_lock_is_never_opened`. Both the reader and the
+  take also open the file read-write (review r3, sol). On Linux that never blocks,
+  even on a FIFO, so a file swapped for a FIFO after the check cannot hang either
+  open. The type check is now one of two guards.
+- A release during a read is fixed too (review r1, Fable). The reader saw the hold
+  lock held, then the hold was released before it read the status. It then printed
+  "held by an unknown holder" with an empty holder list (exit 1) while the slot was
+  free, and an `acquire` without --wait died with "not taken: held by an unknown
+  holder". New test `cdo_slot_a_release_during_a_read_reads_free` (new test hook
+  `CDO_SLOT_TEST_PAUSE_HELD_S`, after the hold lock is seen held): `status` says
+  "free" and `acquire` takes the slot. Discrimination proof in its doc. Review r2
+  (Fable): a held publish lock (a take attempt, or another reader's slow probe)
+  no longer makes such a read say "still writing". The reader probes the hold lock
+  again before it trusts the publish lock. The same test covers it with a third
+  case that keeps the publish lock taken during the release, with its own proof.
+- A new bounded refusal, like the timing lock's: a process that keeps
+  `publish.lock` exclusive (only a reader's probe takes it so, for an instant: a
+  stopped or hung one) makes a take fail after `CDO_SLOT_LOCK_WAIT_S` (30 s), and
+  the message names the holders. With `--timeout`, the acquire turns the awake
+  time it has left into a deadline on CLOCK_MONOTONIC, which stops during a
+  suspend and never steps (review r3, sol). The wall clock is only the fall back,
+  used when the monotonic clock cannot be read. The take (in the acquire or its
+  keeper) waits for the publish lock only what is left of that deadline at the
+  lock attempt, to the microsecond, and not at all once it is used up (review r2,
+  sol). So a suspend between the handoff and the keeper's attempt no longer uses
+  up the budget, and a wall-clock step back cannot stretch it. New test
+  `cdo_slot_a_suspend_during_the_handoff_keeps_the_publish_wait`. During the
+  `flock` wait itself the timer is flock's own. The take never holds the hold
+  lock while it waits. An acquire takes
+  the hold through a keeper, and the keeper's end makes even `acquire --wait`
+  (the oldest waiter too) stop with "not taken: its keeper ended (exit 1)". So
+  `land` and `cdo-gate`, which acquire with --wait, exit 1. A `run` takes the
+  hold in its own process and exits 1. New test
+  `cdo_slot_a_stuck_publish_lock_refuses_takes_in_bounds` covers `run`,
+  `acquire --wait` and `acquire --timeout`.
+- The two new tests that hold a lock with `flock` use the `stand_in` helper with
+  `flock --no-fork`. Before, the `sleep` child kept the lock after the test ended
+  (nextest marked the slow-take test LEAK).
+- What is left, display only: a whole new take that writes its status in the
+  moment between the reader's last two probes (short, but scheduling can stretch
+  it) still reads as
+  "held by an unknown holder" for that one read. No decision reads `describe`'s
+  text, and the next read names the hold. A stranger's hold can also read "still
+  writing" while another reader's exclusive probe of the publish lock is slow.
+- New test `cdo_slot_a_slow_take_is_still_writing_not_unknown`: a take paused
+  before its status, with the lock file aged by 60 s, reads "still writing"; a
+  stranger's lock reads "unknown holder". Discrimination proof in its doc. The
+  half-written-status test no longer depends on timing.
+- New test `cdo_slot_a_take_that_finishes_mid_read_is_named` (new test hook
+  `CDO_SLOT_TEST_PAUSE_READ_S`, between the reader's first read and its publish
+  probe): a take that finishes in that window is named, not called unknown. It
+  pins the second read. `test_pause` takes an optional file name to wait for, so
+  a test can end one of two pauses.
+- Mixed versions: each worktree runs its own `scripts/cdo-slot` against the one
+  shared slot folder, so old and new copies run side by side until every lane has
+  rebased. A take by an old copy holds no publish lock: while it writes its
+  status, a new reader says "held by an unknown holder". An old reader of a new
+  take still uses the 5 s age rule, as before. Both are display only (every
+  decision is a lock probe), and each lasts no longer than that one take's write.
+- Relation to TLS-99: no shared root. TLS-99 item 1 is about integrity: a copied
+  live hold id vouches for edited fields in the status. This task is about a
+  window in time: a live hold whose status is not readable yet. The publish lock
+  does nothing for TLS-99 item 1.
+
 ### Fixed (ENG-178: table procedures named like record built-ins: four follow-ups from ENG-173)
 
 From Fable's second review of ENG-173 (`/work/.al-sem/engine-notes/eng173/fable-eng173-r2.md`).
