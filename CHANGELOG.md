@@ -307,9 +307,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `F := R.Field(1); L := F.Record(); L.GetTable(D)` correctly answers `no` and is not modelled. A
   `List of [RecordRef]` element (`Get`, `foreach`) and a var-parameter copy share the handle (for
   ENG-161).
-- **CDO (pinned `bc3ccb18`, c6f61f04 against c996d2c8, before the `Close` filter; re-measured on
-  the final head before submit):** no finding or fingerprint moved at either
-  scope; unknown edges 0 -> 0. cdo-speed PASS with an ADVISORY: instructions build x0.9984, prove
+- **CDO (pinned `bc3ccb18`):** on the final code (master 6218a401 against 4117bee0, with the `Close`
+  filter and `Open` kept: `cdo-before-after`, 2026-11-26) no finding or fingerprint moved at either
+  scope (2,306 / 32,429 findings, 0 added, 0 removed), unknown edges 0 -> 0: no CDO answer meets
+  `RootCloseOpen`'s over-reach. Earlier (c6f61f04 against c996d2c8, before the filter) the same, and
+  cdo-speed PASS with an ADVISORY: instructions build x0.9984, prove
   x1.0263, round total x1.0248 (advisory limit x1.02; CPU prove x0.973, round total x0.979, one
   run). The first cut (c0ac760b: a kept bind excepting its receiver's whole class, no array
   elements) measured round total x0.9979; the review fixes rebind more holders at more binds. Where
