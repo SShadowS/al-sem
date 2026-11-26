@@ -207,19 +207,6 @@ pub fn detect_d22(
     Ok(DetectorOutput::no_diag(findings, stats))
 }
 
-/// The 1-based lines of a merged d22 finding's reads, for inline suppression
-/// (ENG-101 sol r1): a merged finding is suppressed only when a directive covers
-/// EVERY read it lists. `None` for a single read and for any other detector, which
-/// keep the primary-line rule.
-pub(crate) fn merged_read_lines(f: &Finding) -> Option<Vec<u32>> {
-    (f.detector == DETECTOR && f.evidence_path.len() > 1).then(|| {
-        f.evidence_path
-            .iter()
-            .map(|s| s.source_anchor.start_line + 1)
-            .collect()
-    })
-}
-
 /// ENG-101 (owner decision 2026-11-18): ONE finding per routine, record variable,
 /// table and FlowField. The reads share one key (it never held the read), so the
 /// nine reads of one field in one routine were nine findings under ONE fingerprint.

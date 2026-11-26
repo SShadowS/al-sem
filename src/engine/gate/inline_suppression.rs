@@ -220,23 +220,23 @@ pub struct SuppressionOutcome {
 ///   3. its `primary_location.line` (1-based) equals the directive's `directive_line`
 ///      OR `directive_line + 1`.
 ///
-/// ENG-101 sol r1: `sites[i]`, when `Some`, lists the lines of the several sites
-/// finding `i` merges (d22's reads, `d22::merged_read_lines`). Such a finding is
-/// suppressed only when EVERY listed line is covered by a directive, so each read
-/// keeps its own directive and one above the first read no longer hides the rest.
-/// A missing or `None` entry keeps the primary-line rule.
+/// ENG-101 sol r1/r2: `sites[i]`, when `Some`, lists the `(sourceUnitId, 1-based
+/// line)` sites finding `i` merges (`detectors::suppression_sites`: d22's reads, a
+/// deduped `#if` routine's declarations). Such a finding is suppressed only when a
+/// directive covers EVERY listed site, each in its OWN file, so a directive at one
+/// site no longer hides the others. A missing or `None` entry keeps the
+/// primary-line rule.
 ///
 /// Returns index lists so the caller can keep its `(summary, raw)` pairing intact.
 pub fn apply_inline_suppressions(
     findings: &[FindingSummary],
-    sites: &[Option<Vec<u32>>],
+    sites: &[Option<Vec<(String, u32)>>],
     suppressions: &SuppressionMap,
 ) -> SuppressionOutcome {
     let mut kept = Vec::new();
     let mut suppressed = Vec::new();
     for (i, finding) in findings.iter().enumerate() {
-        let file = &finding.primary_location.file;
-        let covered = |line: u32| match suppressions.get(file) {
+        let covered = |file: &str, line: u32| match suppressions.get(file) {
             None => false,
             Some(file_suppressions) => file_suppressions.iter().any(|s| {
                 s.detector_id == finding.detector
@@ -244,8 +244,11 @@ pub fn apply_inline_suppressions(
             }),
         };
         let matched = match sites.get(i).and_then(|s| s.as_deref()) {
-            Some(lines) => lines.iter().all(|l| covered(*l)),
-            None => covered(finding.primary_location.line),
+            Some(sites) => sites.iter().all(|(file, line)| covered(file, *line)),
+            None => covered(
+                &finding.primary_location.file,
+                finding.primary_location.line,
+            ),
         };
         if matched {
             suppressed.push(i);

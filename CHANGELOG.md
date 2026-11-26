@@ -57,12 +57,14 @@ suppressed all of them, and a new member of the group was invisible to it.
   one loop are `#1` and `#2` from the top. A new publish of that event inserted above them
   takes `#1`, so it inherits the first one's baseline entry and the old ones read as `#2`
   and `#3`: re-baseline that loop after such an edit.
-- **Inline `// al-sem-ignore d22-flowfield-without-calcfields` keeps working per read**
-  (sol r1). A merged d22 finding is suppressed only when a directive covers EVERY read it
-  lists (the directive's line or the next, as before). A directive above some of the reads
-  no longer hides the others: the finding stays, listing all its reads. A single-read
-  finding, and every other detector, keep the primary-line rule
-  (`inline_suppression::apply_inline_suppressions`, `d22::merged_read_lines`).
+- **Inline `// al-sem-ignore` keeps working per site for merged findings** (sol r1, r2). A
+  merged d22 finding (its reads, possibly in the `#if` declarations of one routine in
+  different files) and a d54 finding kept for several `#if` declarations of one
+  TryFunction are suppressed only when a directive covers EVERY site they list, each in its
+  own file (the directive's line or the next, as before). A directive at some sites no
+  longer hides the others: the finding stays, listing all its sites. Every other finding
+  keeps the primary-line rule (`inline_suppression::apply_inline_suppressions`,
+  `detectors::suppression_sites`).
 - Tests: `r4_differential`'s fixtures `ws-d22`, `ws-d54` and `ws-d55` hold the three shapes;
   every r4 fixture run now checks that no two findings share a fingerprint; and
   `d22_merges_the_reads_of_one_flowfield` pins the merge, `d54_reports_every_publisher` the
