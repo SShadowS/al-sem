@@ -100,8 +100,9 @@ codeunit 50010 "PA"
         Guarded(R);
     end;
 
-    // Controls (sol r1; BC 28.4, the module's contract): `Close` detaches only its own variable,
-    // and `Open` needs a closed one, so neither reaches R through the kept alias.
+    // sol r1 control (BC 28.4): `Close` detaches only its own variable, so it does not reach R
+    // through the kept alias. `RootCloseOpen`: L's Open after L's own Close fills a detached
+    // handle (BC), but a kept `Open` is taken as reaching R (sound, ENG-212).
     procedure RootClose()
     var
         R: RecordRef;
@@ -123,6 +124,31 @@ codeunit 50010 "PA"
         R.GetTable(E);
         L := Same(R);
         L.Close();
+        L.Open(Database::"PA Doc");
+        Guarded(R);
+    end;
+
+    // Fable r3 (BC 28.4, eng189-probe2 O3): a copy of a never-opened RecordRef shares its
+    // handle, so the copy's Open opens R too.
+    procedure RootOpenNeverOpened()
+    var
+        R: RecordRef;
+        L: RecordRef;
+    begin
+        L := Same(R);
+        L.Open(Database::"PA Doc");
+        Guarded(R);
+    end;
+
+    // Fable r3 (BC 28.4, eng189-probe2 O5): closed before the copy, still one handle.
+    procedure RootOpenAfterClose()
+    var
+        R: RecordRef;
+        L: RecordRef;
+    begin
+        R.Open(Database::"PA Entry");
+        R.Close();
+        Join(L, R);
         L.Open(Database::"PA Doc");
         Guarded(R);
     end;
@@ -318,8 +344,9 @@ fn alsem(cwd: &Path, args: &[&str]) -> serde_json::Value {
 /// fails `RootSlot`; retainability read at the bind's start fails `RootJoinInArgs`; no
 /// retainability check on the receiver at all fails `RootReceiverNotKept` (`yes`). Fable r2: any
 /// array element counting, whatever its type, fails `RootRecArrayGet` (`yes`). sol r1
-/// (2026-11-26, break then restored, green): `kept_bind_points` keeping `Close` and `Open` fails
-/// `RootClose` (`yes`, not `no`), the first of the two controls asserted.
+/// (2026-11-26, break then restored, green): `kept_bind_points` keeping `Close` fails `RootClose`
+/// (`yes`, not `no`). Fable r3 (red proof pending until builds thaw): leaving `Open` out of the
+/// kept binds (sol r1's first filter) must fail `RootOpenNeverOpened`.
 #[test]
 fn an_in_place_bind_through_a_kept_holder_rebinds_every_kept_holder() {
     let t = tempfile::tempdir().unwrap();
@@ -363,11 +390,12 @@ fn an_in_place_bind_through_a_kept_holder_rebinds_every_kept_holder() {
         "no",
         "control (BC: Close detaches only L)"
     );
-    assert_eq!(
-        answer("RootCloseOpen"),
-        "no",
-        "control (BC: Open needs a closed L)"
-    );
+    // BC: L's Close detached L, so its Open reaches R not; a kept Open is still taken as reaching
+    // R (a sound over-reach, ENG-212 refines it).
+    assert_eq!(answer("RootCloseOpen"), "yes", "over-reach, sound");
+    // Fable r3, measured: a copy shares the handle whether or not it is open.
+    assert_eq!(answer("RootOpenNeverOpened"), "yes", "BC: R opened too");
+    assert_eq!(answer("RootOpenAfterClose"), "yes", "BC: R opened too");
     assert_eq!(answer("RootFieldRecord"), "no", "control (BC: a copy)");
     assert_eq!(answer("RootReceiverNotKept"), "no", "control");
     assert_eq!(answer("RootRecArrayGet"), "no", "control");

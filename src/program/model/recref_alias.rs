@@ -4,11 +4,15 @@
 //! Measured on BC 28.4 (probe `docs/superpowers/notes/2026-11-20-eng145-recordref-aliasing.md`):
 //! `A := B` makes both variables hold ONE record. `GetTable` through either rebinds both (the
 //! other then holds the new table, and a temporary record's state with it). `Close` detaches
-//! only the variable it is called on, and `Open` needs a closed (so detached) variable, so
-//! neither reaches the other. `B.Duplicate()` shares nothing.
+//! only the variable it is called on, and `Open` on an open variable errors. A copy shares the
+//! one handle whether or not it is open (ENG-189, probe `engine-notes/eng189-probe2`, BC 28.4
+//! 2026-11-26): `A := R` (or `Join(A, R)`, `A := Same(R)`) with R never opened, or closed before
+//! the copy, then `A.Open(T)` opens R on T too. So only an `Open` right after the same variable's
+//! own `Close` reaches no other holder. `B.Duplicate()` shares nothing.
 //!
 //! Readers treat every rebinding call through a class member as reaching every member, `Open`
-//! and `Close` included: sound, and coarser than the platform (ENG-157 refines it).
+//! and `Close` included: sound, and coarser than the platform (ENG-157 refines it). The kept
+//! binds through a retainable holder ([`kept_bind_points`]) leave `Close` out and keep `Open`.
 //!
 //! A routine sees only its own assignments, so [`AliasClasses::for_routine`] also joins what it
 //! cannot see (sol on ENG-145): every parameter and global holder may share a record with every
@@ -261,23 +265,26 @@ pub fn user_code_points<'a>(
     calls.chain(ops).collect()
 }
 
-/// The in-place binds ([`bind_sites`]: `GetTable`, `Get`) made through a holder that is
+/// The in-place binds ([`bind_sites`]: `GetTable`, `Get`, `Open`) made through a holder that is
 /// RETAINABLE at that point ([`AliasClasses::rebinds_at`]): the record that holder holds may be
 /// shared with any other retainable holder the classes cannot join (a local passed to a call that
 /// returned it, `L := Same(R)`; a call that joined two of them, `Join(L, R)`; a `var` Variant out
 /// parameter), so the bind may rebind them all, as a place that may run user code may (ENG-189,
 /// Fable's review of ENG-161: `L := Same(R); L.GetTable(Doc); Guarded(R)` answered `no`; BC 28.4:
 /// a returned RecordRef is its argument's handle, ENG-175). Each as a [`UserCodePoint`], the
-/// readers treat it as one. Not `Close` or `Open` (sol r1 on ENG-189): measured on BC 28.4 (module
-/// doc), `Close` detaches only its own variable and `Open` needs a closed one, so neither reaches
-/// another holder; their receiver's own facts handle them.
+/// readers treat it as one. Not `Close` (sol r1 on ENG-189; BC 28.4, module doc: `Close` detaches
+/// only its own variable). `Open` is kept (Fable r3 on ENG-189, measured BC 28.4 2026-11-26,
+/// `engine-notes/eng189-probe2`): a copy shares one handle whether or not it is open, so
+/// `L := Same(R); L.Open(Doc)` with R never opened, or closed before the copy, opens R too. An
+/// `Open` right after its own receiver's `Close` fills a detached handle and reaches no other
+/// holder; it is still kept here (a sound over-reach, ENG-212 refines it).
 #[must_use]
 pub fn kept_bind_points<'a>(r: &'a ModelRoutine, classes: &AliasClasses) -> Vec<UserCodePoint<'a>> {
     use crate::program::body::features::RecRefBind;
     let scope = HolderScope::of(r);
     bind_sites(r)
         .into_iter()
-        .filter(|s| !matches!(s.how, RecRefBind::Close | RecRefBind::Open))
+        .filter(|s| s.how != RecRefBind::Close)
         .filter_map(|s| {
             let h = scope.text(s.receiver)?;
             let at = (s.anchor.start_line, s.anchor.start_column);

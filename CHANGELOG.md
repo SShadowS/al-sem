@@ -291,10 +291,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   read where the bind RUNS, after its own arguments (`L.Get(JoinId(L, R))`), and an element of a
   RecordRef or Variant array always counts (the classes hold no array slots: `Join(Slot[1], R);
   Slot[1].GetTable(D)`; a slot never joined to R answers `yes` too, a sound over-reach), never an
-  element of a record array (`Recs[1].Get('X')`). Only `GetTable` and `Get` count (sol r1):
-  measured on BC 28.4 (`recref_alias`'s module doc), `Close` detaches only its own variable and
-  `Open` needs a closed one, so neither reaches another holder (`L := Same(R); L.Close()` keeps
-  `R`'s `no`: `RootClose`, `RootCloseOpen`). G34 (`exit_guards`) takes no kept binds: a
+  element of a record array (`Recs[1].Get('X')`). `GetTable`, `Get` and `Open` count; `Close`
+  does not (sol r1; BC 28.4, `recref_alias`'s module doc: `Close` detaches only its own variable,
+  so `L := Same(R); L.Close()` keeps `R`'s `no`, `RootClose`). `Open` counts (Fable r3, measured
+  on BC 28.4, `/work/.al-sem/engine-notes/eng189-probe2/RESULTS.md`): a copy shares one handle
+  whether or not it is open, so `L := Same(R); L.Open(Doc)` with R never opened, or closed before
+  the copy, opens R too (`RootOpenNeverOpened`, `RootOpenAfterClose` `yes`). An `Open` right after
+  its own receiver's `Close` reaches no other holder on BC but still answers `yes`
+  (`RootCloseOpen`, a sound over-reach; ENG-212). G34 (`exit_guards`) takes no kept binds: a
   holder joined to the guard's by a call is bound before the guard by that call. A `foreach` element of a holder list shares
   the guard's record with no call (BC 28.4) and still answers `no` there and in G36; holder
   containers are ENG-161's, and its task carries the two repros.
@@ -303,7 +307,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `F := R.Field(1); L := F.Record(); L.GetTable(D)` correctly answers `no` and is not modelled. A
   `List of [RecordRef]` element (`Get`, `foreach`) and a var-parameter copy share the handle (for
   ENG-161).
-- **CDO (pinned `bc3ccb18`, c6f61f04 against c996d2c8):** no finding or fingerprint moved at either
+- **CDO (pinned `bc3ccb18`, c6f61f04 against c996d2c8, before the `Close` filter; re-measured on
+  the final head before submit):** no finding or fingerprint moved at either
   scope; unknown edges 0 -> 0. cdo-speed PASS with an ADVISORY: instructions build x0.9984, prove
   x1.0263, round total x1.0248 (advisory limit x1.02; CPU prove x0.973, round total x0.979, one
   run). The first cut (c0ac760b: a kept bind excepting its receiver's whole class, no array
