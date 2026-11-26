@@ -345,8 +345,8 @@ fn alsem(cwd: &Path, args: &[&str]) -> serde_json::Value {
 /// retainability check on the receiver at all fails `RootReceiverNotKept` (`yes`). Fable r2: any
 /// array element counting, whatever its type, fails `RootRecArrayGet` (`yes`). sol r1
 /// (2026-11-26, break then restored, green): `kept_bind_points` keeping `Close` fails `RootClose`
-/// (`yes`, not `no`). Fable r3 (red proof pending until builds thaw): leaving `Open` out of the
-/// kept binds (sol r1's first filter) must fail `RootOpenNeverOpened`.
+/// (`yes`, not `no`). Fable r3 (2026-11-26, break then restored, green): leaving `Open` out of
+/// the kept binds (sol r1's first filter) fails `RootOpenNeverOpened` (`no`, where BC opens R).
 #[test]
 fn an_in_place_bind_through_a_kept_holder_rebinds_every_kept_holder() {
     let t = tempfile::tempdir().unwrap();
@@ -390,12 +390,12 @@ fn an_in_place_bind_through_a_kept_holder_rebinds_every_kept_holder() {
         "no",
         "control (BC: Close detaches only L)"
     );
-    // BC: L's Close detached L, so its Open reaches R not; a kept Open is still taken as reaching
-    // R (a sound over-reach, ENG-212 refines it).
-    assert_eq!(answer("RootCloseOpen"), "yes", "over-reach, sound");
     // Fable r3, measured: a copy shares the handle whether or not it is open.
     assert_eq!(answer("RootOpenNeverOpened"), "yes", "BC: R opened too");
     assert_eq!(answer("RootOpenAfterClose"), "yes", "BC: R opened too");
+    // BC: L's Close detached L, so its Open reaches R not; a kept Open is still taken as reaching
+    // R (a sound over-reach, ENG-212 refines it).
+    assert_eq!(answer("RootCloseOpen"), "yes", "over-reach, sound");
     assert_eq!(answer("RootFieldRecord"), "no", "control (BC: a copy)");
     assert_eq!(answer("RootReceiverNotKept"), "no", "control");
     assert_eq!(answer("RootRecArrayGet"), "no", "control");
