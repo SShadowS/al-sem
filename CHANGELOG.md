@@ -81,12 +81,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   really partial 80 + 19 waive a FAIL. A partial row keeps its CPU failure as
   measured (FAIL stays FAIL); when the partial count is what withheld the
   advisory, the failure line says so; speed.json's rows (`partial`,
-  `partial_rounds`) and records (`partial`) carry the reasons. What it sees in
+  `partial_rounds`) and records (`partial`, and `running_pct`: each kind's
+  running % summed over the PMUs, so the first real gate runs show how often
+  the under-100 rule withholds) carry the reasons. The CLOCK condition the
+  waiver needs is taken from the whole samples only (review r4, sol: a partial
+  round under the limit had supplied the row's label). What it sees in
   practice (review r3, Fable): a `<not counted>` PMU always withholds; the
   running-% rule sees time-slicing only where the shares sum to about 100 (a
-  call on one core type), since multi-threaded calls sum to 110-125; a loss
-  inside a counted row smaller than the coverage band (2 % + 50 ms; the
-  unreproduced inherited-thread shape above) is not seen and can still waive. Why not bound the error instead: a count that covers
+  call on one core type), since multi-threaded calls sum to 110-125. Open: a
+  loss inside a counted row smaller than the coverage band (2 % + 50 ms; the
+  unreproduced inherited-thread shape above) is to be probed with real perf
+  and fixed from that measurement in TLS-143. Why not bound the error instead: a count that covers
   the call can still be short, and both reviews built rows that a bound let
   through. sol: base and head with different normal running-time excess (+2.2
   and +2.7 %) hide a loss entirely. Fable: lost time need not have run at the
@@ -130,7 +135,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   calls (legitimate under the suite's load: an attach timeout, a short call's
   /proc ticks, a pinned group that lost its counters) but each must carry its
   own `uncounted` reason, needs at least one counted call and prints how many
-  were; an untimed rebuild's refusal line no longer counts. New
+  were (review r4: a run where no attach got through skips with the reasons;
+  a refused output on every call still fails); an untimed rebuild's refusal
+  line no longer counts. Its preflight matches the probe's reply exactly
+  (review r4, sol: `cannot: ...` had read as `can`), pinned by
+  `speed_real_perf_probe_says_when_perf_cannot_count` with a perf that fails. New
   `speed_cpu_advisory_never_on_a_partial_count` pins sol's and Fable's r2 rows
   (and sol's with base partial; Fable's at 80 + 19 = 99 %), and a head count
   with every PMU counted that does not cover its call (review r3), through real

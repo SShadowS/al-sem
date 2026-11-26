@@ -106,11 +106,12 @@ a rounds row for every round over the limit by itself. It is printed with its CP
 the clock-corrected ratio and the instruction ratio. A clock in head's favour never
 waives; wall and memory failures always fail. A count whose counters did not run for
 the call's CPU seconds (`covers`) is recorded (`covered: false`, its counts kept) but
-gives no instruction count (TLS-130), no clock, no label and so no advisory. A row
-with any paired count that may be partial (a PMU `<not counted>`, or a kind's running
-% under 100 summed over the PMUs: `partial_count`) gets no advisory either: its CPU
-failure stays a failure, which says why (TLS-130 review r2). The advisory applies only
-in the final judgment, after any extra pair.
+gives no instruction count (TLS-130), no clock, no label and so no advisory. A count
+that may be partial (a PMU `<not counted>`, or a kind's running % under 100 summed
+over the PMUs: `partial_count`) gives no advisory either, in any pass of a warm-up row
+and in any round of a rounds row that is over the limit; the CLOCK condition is taken
+from the whole samples only. Such a CPU failure stays a failure and says why (TLS-130
+reviews r2-r4). The advisory applies only in the final judgment, after any extra pair.
 A judged warm-up row that FAILS (advisory or not) while its two passes' ratios differ
 beyond CONTRADICTED_SPREAD gets ONE more flipped pair (passes 3 and 4 on fresh servers,
 each side order once more; each waits for a calm host as passes 1 and 2 do). Then every
@@ -421,10 +422,12 @@ def clock_cpi_flags(rows):
 #   that may be partial can move the instruction ratio, the clock and the CLOCK
 #   label by an amount no rule here can bound (the lost time need not have run
 #   at the call's average rate), so such a row keeps its CPU failure as
-#   measured and says why (`row["partial"]`). Not seen (review r3, Fable): a
-#   loss inside a counted row under the coverage band (the inherited-thread
-#   shape, see `covers`); real multi-threaded calls sum their running % to
-#   110-125, so the running-% rule binds only on a call on one core type.
+#   measured and says why (`row["partial"]`); the CLOCK condition comes from
+#   the whole samples only (review r4, sol). Real multi-threaded calls sum their
+#   running % to 110-125, so the running-% rule binds only on a call on one
+#   core type (review r3, Fable). Open task TLS-143: probe with real perf, and
+#   fix, a loss inside a counted row under the coverage band (the
+#   inherited-thread shape, see `covers`).
 # Wall and memory failures always fail. The advisory applies only in the final
 # judgment: a contradicted failure gets the extra pair first (`warm_failures`
 # ignores the advisory).
@@ -437,12 +440,25 @@ def cpu_advisory(row):
     warm = row.get("warm", False)
     cpu_limit = WARM_CPU_LIMIT if warm else CPU_LIMIT
     wall_limit = WARM_WALL_LIMIT if warm else WALL_LIMIT
-    if not (i and c and k and "clock" in row_labels(row)) or row["wall"]["ratio"] > wall_limit:
+    if not (i and c and k) or row["wall"]["ratio"] > wall_limit:
         return None
     # ⟨TLS-130 reviews r2 and r3⟩ A count `judge` takes as partial or not
     # covering (`partial_rounds`) gives no advisory, in every pass a warm-up
     # row's mean takes and in every round a rounds row judges (over the limit).
     partial = row.get("partial_rounds") or [row.get("partial")] * len(row["cpu"]["ratios"])
+    if warm and any(partial):
+        return None
+    # ⟨TLS-130 review r4, sol⟩ The CLOCK condition from whole samples only: the
+    # displayed label (`row_labels`) takes the median over every round, so a
+    # partial round under the limit could supply it. sol's case: clocks x0.860,
+    # x0.865 (round 2, partial), x0.890 read a median x0.865 (CLOCK); the two
+    # whole rounds' median x0.875 is inside the band. The other count-derived
+    # values the waiver reads are per sample below (each a whole one), or the
+    # warm-up's means (every pass whole, above).
+    whole = [cr for cr, p in zip(c["ratios"], partial) if not p]
+    clock = c["ratio"] if warm else (statistics.median(whole) if whole else None)
+    if not clock or max(clock, 1 / clock) <= CLOCK_BAND:
+        return None
     # (CPU, instructions, CPU at equal clocks, wall, clock, partial) per sample:
     # the warm-up row's judged (geometric mean) ratios, or each over-limit round
     # of a rounds row.
@@ -1265,6 +1281,11 @@ class Server:
             self.last_running_s = parsed and kind_total(parsed[1], "instructions") / 1e9
             # ⟨TLS-130 review r2⟩ Why the count may be partial (no CPU advisory).
             self.last_partial = parsed and partial_count(parsed)
+            # ⟨TLS-130 review r4, Fable⟩ Each kind's running % summed over the
+            # PMUs, kept in the record: how often the under-100 rule withholds.
+            self.last_running_pct = parsed and {
+                kind: sum(s for e, s in parsed[2].items() if event_kind(e) == kind)
+                for kind in FIXED_KINDS}
         self.sample_hwm()
         if "error" in r:
             raise SystemExit(f"cdo-speed: {self.name}: {tool}: {r['error']}")
@@ -1541,7 +1562,9 @@ def timed_call(server, side, cid, tool, args, rnd, warm_pass, tag, records):
                         instr=instr, suspended_before=before, suspended_during=during,
                         user=user, sys=system, cycles=cycles, counts=counts,
                         running_s=running_s, covered=covered, uncounted=refusal,
-                        partial=partial, **clock_cpi(cycles, user, instr, covered)))
+                        partial=partial,
+                        running_pct=getattr(server, "last_running_pct", None),
+                        **clock_cpi(cycles, user, instr, covered)))
 
 
 # ⟨TLS-111 review r2, sol⟩ Coverage: equal running times on a PMU's events do not
@@ -1585,8 +1608,7 @@ def timed_call(server, side, cid, tool, args, rnd, warm_pass, tag, records):
 # child started during the call (inherited) whose pinned group fails while the
 # parent's holds is expected to read as a normal row with a shorter running
 # time, not `<not counted>`; again only coverage catches it, same band. A loss
-# under the band is not seen and can still make a CPU failure advisory
-# (TLS-130 review r3, Fable).
+# under the band: open task TLS-143 (probe it with real perf, then fix it).
 COVER_REL = 0.02
 COVER_ABS = 0.05
 COVER_CAP = 1.10
@@ -1694,6 +1716,10 @@ def judge(records):
         def why(r):
             if r.get("partial"):
                 return r["partial"]
+            # No count at all: no reason here (the row has no instruction
+            # ratio, so no advisory anyway; review r4, Fable).
+            if r.get("instr") is None:
+                return None
             return None if r.get("covered") else "count not shown to cover the call"
         row["partial_rounds"] = ["; ".join(f"{side} {r['call']} r{k}: {why(r)}"
                                            for side, r in (("base", a[k]), ("head", b[k]))

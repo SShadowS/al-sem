@@ -265,8 +265,9 @@ Every test still runs before a merge; the tiers decide HOW OFTEN each one runs.
   the rounds, each over-limit round by itself), and only when every paired count it judges, on
   both sides, is whole and covers its call (TLS-130 reviews r2-r3: no PMU `<not counted>`, each
   kind's running % summed over the PMUs at least 100, no truncation allowance). A partial count
-  keeps its CPU failure a failure, saying why. Not seen: a loss inside a counted row under the
-  coverage band (multi-threaded calls sum their running % to 110-125).
+  keeps its CPU failure a failure, saying why; the CLOCK condition comes from whole samples
+  only. Open task TLS-143: probe and fix a loss inside a counted row under the coverage band
+  (multi-threaded calls sum their running % to 110-125, so the % rule does not see it).
   A `CPI` label never waives: more cycles per instruction is a memory-stall regression's shape.
   **It is Linux only (it reads `/proc`):
   on the Windows machine every full `cdo-gate` run FAILS unless given `--no-speed`**
