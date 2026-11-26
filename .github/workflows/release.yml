@@ -199,6 +199,13 @@ jobs:
           if ($LASTEXITCODE -notin 0, 1) { throw "alsem analyze (off) failed (exit $LASTEXITCODE)" }
           python scripts/ir-cache-report-check --require-key $env:ALSEM_IR_CACHE_REPORT
           if ($LASTEXITCODE -eq 0) { throw 'ALSEM_IR_CACHE=off still made a key' }
+          # sol final: and the report must exist with a start line saying `"enabled": false` and
+          # `"key": null` (a missing report also fails --require-key, so that alone proves nothing)
+          $off = @(Get-Content -LiteralPath $env:ALSEM_IR_CACHE_REPORT -ErrorAction Stop |
+            ForEach-Object { $_ | ConvertFrom-Json } |
+            Where-Object { $_.event -eq 'start' -and $_.enabled -eq $false -and
+              $_.PSObject.Properties.Name -contains 'key' -and $null -eq $_.key })
+          if ($off.Count -lt 1) { throw 'the off run wrote no start line with enabled false and key null' }
           Remove-Item Env:ALSEM_IR_CACHE
           # the expected refusal left LASTEXITCODE at 1; the step ends with it otherwise
           $global:LASTEXITCODE = 0
