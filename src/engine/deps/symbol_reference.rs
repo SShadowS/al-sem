@@ -314,6 +314,11 @@ pub struct AbiObject {
     pub inherent_entitlements: Option<String>,
     /// A page's write-surface booleans (#302). Default (all `None`) elsewhere.
     pub page_props: AbiPageProps,
+    /// ENG-194 (Fable r1): the object declares `ObsoleteState = Moved` or
+    /// `Removed` (the symbols list Base Application's moved `No. Series` with
+    /// it), so a live object of its name or number takes its place, as for a
+    /// source object (`ObjectNode::obsolete_gone`).
+    pub obsolete_gone: bool,
     /// ENG-26: the object's `protected var` globals, `(name, type text)`.
     pub protected_vars: Vec<(String, String)>,
 }
@@ -351,6 +356,8 @@ fn apply_access_properties(abi_object: &mut AbiObject, properties: &Option<Vec<R
     abi_object.scope = raw_object_property(properties, "Scope").and_then(|v| application_scope(&v));
     abi_object.inherent_permissions = raw_object_property(properties, "InherentPermissions");
     abi_object.inherent_entitlements = raw_object_property(properties, "InherentEntitlements");
+    abi_object.obsolete_gone = raw_object_property(properties, "ObsoleteState")
+        .is_some_and(|v| v.eq_ignore_ascii_case("Moved") || v.eq_ignore_ascii_case("Removed"));
 }
 
 impl AbiRoutine {
@@ -1861,6 +1868,36 @@ mod tests {
             );
         }
         assert_eq!(props("Cu"), AbiPageProps::default());
+    }
+
+    /// ENG-194 (Fable r1): `ObsoleteState = Moved`/`Removed` marks a symbol
+    /// object gone, as BC 28.4's Base Application symbols carry it on
+    /// `No. Series` (308); `Pending` and no state do not.
+    /// DISCRIMINATION (2026-11-26, break then restored, green): reading no
+    /// property fails "moved".
+    #[test]
+    fn obsolete_state_moved_or_removed_marks_a_symbol_object_gone() {
+        let json = r#"{"AppId":"g","Name":"D","Publisher":"p","Version":"1.0.0.0",
+            "Tables":[
+              {"Id":308,"Name":"No. Series","Properties":[{"Name":"ObsoleteReason","Value":"moved"},{"Name":"ObsoleteState","Value":"Moved"}]},
+              {"Id":2,"Name":"Gone","Properties":[{"Name":"ObsoleteState","Value":"removed"}]},
+              {"Id":3,"Name":"Pending","Properties":[{"Name":"ObsoleteState","Value":"Pending"}]},
+              {"Id":4,"Name":"Live"}],
+            "Codeunits":[{"Id":5,"Name":"Cu","Properties":[{"Name":"ObsoleteState","Value":"Moved"}]}]}"#;
+        let abi = parse_symbol_reference(json);
+        assert_eq!(abi.error, None);
+        let gone = |n: &str, t: &str| {
+            abi.objects
+                .iter()
+                .find(|o| o.name == n && o.object_type == t)
+                .unwrap()
+                .obsolete_gone
+        };
+        assert!(gone("No. Series", "Table"), "moved");
+        assert!(gone("Gone", "Table"), "removed, any case");
+        assert!(!gone("Pending", "Table"), "pending is live");
+        assert!(!gone("Live", "Table"), "no state is live");
+        assert!(gone("Cu", "Codeunit"), "any object kind");
     }
 
     #[test]

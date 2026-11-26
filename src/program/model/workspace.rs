@@ -4007,7 +4007,7 @@ pub fn resolve(workspace: &mut ModelEntities, scope: &super::symbol_table::Table
         resolve_routine_record_types(routine, object, &symbols, &shadowed);
     }
 
-    merge_extension_fields(workspace);
+    merge_extension_fields(workspace, scope);
 
     // Engine limits B5: after the merge, so a table extension's FlowField on a
     // dependency table is found.
@@ -4566,8 +4566,9 @@ impl Model {
             .map(|routine| RoutineView { routine })
     }
 
-    /// Find a table by name (case-insensitive, LAST-wins — matching the symbol
-    /// table the resolution queried).
+    /// Find a table by name (case-insensitive, LAST-wins). A test lookup: the
+    /// model's own resolution binds a name as seen from the referencing app
+    /// (ENG-194, `SymbolTable::table_by_name_from`), which this does not.
     pub fn table_by_name(&self, name: &str) -> Option<TableView<'_>> {
         let want = name.fold_identifier();
         let mut found = None;

@@ -13,9 +13,8 @@
 //! walked in al-sem's deterministic ingestion order, two extensions colliding on
 //! a field number resolve identically on both sides: the FIRST-ingested wins.
 
-use super::workspace::{ModelEntities, ModelField, ModelKey, ModelTable};
+use super::workspace::{ModelEntities, ModelField, ModelKey};
 use crate::engine::ids::{encode_field_id, encode_table_id};
-use al_syntax::IdentifierFoldExt;
 use std::collections::HashSet;
 
 /// Merge each TableExtension's fields into its base table's field set, mutating
@@ -26,10 +25,36 @@ use std::collections::HashSet;
 /// Port of the al-sem original `src/resolve/extension-fields.ts`. (Its R2.5a
 /// projected-entity twin in `deps::merged_index` was deleted in engine-switch S9.6;
 /// this is the only copy.)
-pub fn merge_extension_fields(workspace: &mut ModelEntities) {
-    // Resolve table-name → index and table-id → index up front (LAST-wins, to
-    // mirror the symbol table the TS pass queries). We must mutate tables in
-    // place, so we resolve indices, then apply.
+pub fn merge_extension_fields(
+    workspace: &mut ModelEntities,
+    scope: &super::symbol_table::TableScope,
+) {
+    // ENG-194 (Fable r1): each table extension's base as its own app sees it
+    // (`SymbolTable::table_by_name_from`, as the record types bind `Rec`), not
+    // the last table of the name. Worked out before the loop mutates the tables.
+    let base_ids: std::collections::HashMap<String, String> = {
+        let symbols = super::symbol_table::SymbolTable::build_scoped(
+            &workspace.objects,
+            &workspace.tables,
+            scope,
+        );
+        workspace
+            .objects
+            .iter()
+            .filter(|o| o.object_type == "TableExtension")
+            .filter_map(|o| {
+                let target = o.extends_target_name.as_deref()?;
+                let base = match target.trim().parse::<i64>() {
+                    Ok(n) => symbols.table_by_number_from(&o.app_guid, n),
+                    Err(_) => symbols.table_by_name_from(&o.app_guid, target),
+                }?;
+                Some((o.id.clone(), base.id.clone()))
+            })
+            .collect()
+    };
+    // The bases are resolved above; each one's index (and the extension's
+    // stub's) is found per extension below. We must mutate tables in place,
+    // so we resolve indices, then apply.
     //
     // `objects.clone()` is a genuine borrow-conflict clone, not a stylistic
     // choice: the loop below reads `objects` while mutating `workspace.tables`
@@ -41,10 +66,14 @@ pub fn merge_extension_fields(workspace: &mut ModelEntities) {
         if object.object_type != "TableExtension" {
             continue;
         }
-        let Some(extends_target) = &object.extends_target_name else {
+        let Some(base_id) = base_ids.get(&object.id) else {
             continue;
         };
-        let Some(base_idx) = table_index_by_name(&workspace.tables, extends_target) else {
+        let Some(base_idx) = workspace
+            .tables
+            .iter()
+            .position(|t| !t.is_extension_stub && &t.id == base_id)
+        else {
             continue;
         };
         // The extension's own STUB (G-5): its id reuses the extension's object
@@ -133,18 +162,4 @@ pub fn merge_extension_fields(workspace: &mut ModelEntities) {
             });
         }
     }
-}
-
-/// `tableByName` semantics: case-insensitive, LAST-wins on collision, over
-/// real tables only (an extension stub carries the extension's name, never
-/// the base's, but is no base either).
-fn table_index_by_name(tables: &[ModelTable], name: &str) -> Option<usize> {
-    let want = name.fold_identifier();
-    let mut found = None;
-    for (i, t) in tables.iter().enumerate() {
-        if !t.is_extension_stub && t.name.fold_identifier() == want {
-            found = Some(i); // LAST-wins
-        }
-    }
-    found
 }

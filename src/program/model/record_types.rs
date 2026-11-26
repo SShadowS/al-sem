@@ -263,13 +263,13 @@ fn strip_trailing_temporary(s: &str) -> String {
 /// routed through the `Table` object-number index to recover the table name, then
 /// to the `ModelTable`. Returns `None` when nothing resolves (out-of-source table).
 fn resolve_table_ref_to_id(symbols: &SymbolTable, from: &str, table_ref: &str) -> Option<String> {
-    // ENG-194: a name binds as seen from `from` (the referencing app guid):
-    // `SymbolTable::table_by_name_from`.
+    // ENG-194: a name or number binds as seen from `from` (the referencing app
+    // guid): `SymbolTable::table_by_name_from` / `table_by_number_from`.
     if let Ok(number) = table_ref.trim().parse::<i64>() {
-        // Numeric (dep-symbol) form: object-number → table object → name → ModelTable.
-        let obj = symbols.object_by_type_number("Table", number)?;
+        // Numeric (dep-symbol) form, by number as the resolver binds a number
+        // (sol r1: no LAST-wins object-number index first).
         return symbols
-            .table_by_name_from(from, &obj.name)
+            .table_by_number_from(from, number)
             .map(|t| t.id.clone());
     }
     symbols
@@ -445,9 +445,12 @@ pub fn resolve_routine_record_types(
                 .as_deref()
                 .and_then(|et| resolve_table_ref_to_id(symbols, &app, et)),
             "PageExtension" => obj.extends_target_name.as_ref().and_then(|et| {
-                let base_page = symbols.object_by_type_name("Page", et)?;
+                // ENG-194 (sol r1): the base page as the extension's app sees it.
+                let base_page = symbols.object_by_type_name_from(&app, "Page", et)?;
                 let st = base_page.source_table_name.as_deref()?;
-                resolve_table_ref_to_id(symbols, &app, st)
+                // Fable r1 S4: the base page's `SourceTable` is written in the
+                // base page's app, so it binds as that app sees it.
+                resolve_table_ref_to_id(symbols, &base_page.app_guid, st)
             }),
             _ => None,
         },

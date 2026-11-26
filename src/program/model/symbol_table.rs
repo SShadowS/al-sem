@@ -28,6 +28,9 @@ pub struct SymbolTable<'a> {
     by_type_number: HashMap<String, usize>,
     /// `${objectType_lc}/${name_lc}` → object index.
     by_type_name: HashMap<String, usize>,
+    /// ENG-194: `${objectType_lc}/${name_lc}` → every object of the key, in
+    /// order ([`Self::object_by_type_name_from`]).
+    objects_named: HashMap<String, Vec<usize>>,
     objects: &'a [ModelObject],
 
     /// `${name_lc}` → table index.
@@ -63,6 +66,7 @@ impl<'a> SymbolTable<'a> {
         // --- object indexes (LAST-wins) -------------------------------------
         let mut by_type_number = HashMap::new();
         let mut by_type_name = HashMap::new();
+        let mut objects_named: HashMap<String, Vec<usize>> = HashMap::new();
         for (i, o) in objects.iter().enumerate() {
             // An object without a number (`object_number` 0) is not indexed by
             // number: every such object of a kind would share `type/0` (#83).
@@ -72,14 +76,13 @@ impl<'a> SymbolTable<'a> {
                     i,
                 );
             }
-            by_type_name.insert(
-                format!(
-                    "{}/{}",
-                    o.object_type.fold_identifier(),
-                    o.name.fold_identifier()
-                ),
-                i,
+            let name_key = format!(
+                "{}/{}",
+                o.object_type.fold_identifier(),
+                o.name.fold_identifier()
             );
+            objects_named.entry(name_key.clone()).or_default().push(i);
+            by_type_name.insert(name_key, i);
         }
 
         // --- table indexes (LAST-wins, REAL over stub) ----------------------
@@ -110,6 +113,7 @@ impl<'a> SymbolTable<'a> {
         SymbolTable {
             by_type_number,
             by_type_name,
+            objects_named,
             objects,
             tables_by_name,
             tables_named,
@@ -127,29 +131,110 @@ impl<'a> SymbolTable<'a> {
     /// remains. Exactly one table left binds; more than one is a collision this
     /// DECLINES (`None`: the table is not known) rather than taking the last
     /// (Fable on ENG-158: two apps' tables of one name gave every record
-    /// variable the last one's id). With no scope for `from` (an unscoped
-    /// table, or an app the program does not hold), every table counts.
+    /// variable the last one's id). Unscoped (a table built with no program),
+    /// every table counts; scoped, an app the program does not hold sees only
+    /// its own tables (fail closed, as the resolver: an app outside the closure
+    /// never matches; sol r1 on ENG-194).
     pub fn table_by_name_from(&self, from: &str, name: &str) -> Option<&ModelTable> {
-        static NONE: std::sync::LazyLock<TableScope> =
-            std::sync::LazyLock::new(TableScope::default);
-        let scope = self.scope.unwrap_or(&NONE);
         let all = self.tables_named.get(&name.fold_identifier())?;
-        let visible = scope.visible.get(from);
-        let mut found: Vec<&ModelTable> = all
+        // Fable r1 S5: one table of the name (nearly every lookup) needs no
+        // filter but visibility, and no allocation.
+        if let [i] = all.as_slice() {
+            let t = &self.tables[*i];
+            return self.sees(from, &t.app_guid).then_some(t);
+        }
+        let found = all
             .iter()
             .map(|&i| &self.tables[i])
-            .filter(|t| visible.is_none_or(|v| v.contains(&t.app_guid)))
+            .filter(|t| self.sees(from, &t.app_guid))
             .collect();
+        self.one_live_table(found, None)
+    }
+
+    /// ENG-194 (sol r1): the table NUMBER `n` names in code of app `from`
+    /// (dependency symbols give a page's `SourceTable` as a number), as the
+    /// resolver binds a number (`ProgramGraph::resolve_object_by_number`):
+    /// visible tables of that number (a tableextension stub is no table of it:
+    /// its id reuses the extension's own number), a moved/removed one only
+    /// when no live one remains, `from`'s own table first, else exactly one.
+    pub fn table_by_number_from(&self, from: &str, n: i64) -> Option<&ModelTable> {
+        let found = self
+            .tables
+            .iter()
+            .filter(|t| t.table_number == n && !t.is_extension_stub)
+            .filter(|t| self.sees(from, &t.app_guid))
+            .collect();
+        self.one_live_table(found, Some(from))
+    }
+
+    /// ENG-194 (sol r1): the object of `object_type` named `name` seen from
+    /// app `from`, as [`Self::table_by_name_from`] sees tables (a page
+    /// extension's base page): visible ones only, exactly one, else `None`.
+    pub fn object_by_type_name_from(
+        &self,
+        from: &str,
+        object_type: &str,
+        name: &str,
+    ) -> Option<&ModelObject> {
+        let key = format!(
+            "{}/{}",
+            object_type.fold_identifier(),
+            name.fold_identifier()
+        );
+        let mut found: Vec<&ModelObject> = self
+            .objects_named
+            .get(&key)?
+            .iter()
+            .map(|&i| &self.objects[i])
+            .filter(|o| self.sees(from, &o.app_guid))
+            .collect();
+        // An `#if`-split object has a row per alternative under one id.
+        let mut seen = std::collections::HashSet::new();
+        found.retain(|o| seen.insert(o.id.as_str()));
+        match found.as_slice() {
+            [o] => Some(o),
+            _ => None,
+        }
+    }
+
+    /// Whether code of app `from` sees what app `owner` declares: unscoped,
+    /// always; scoped, when `owner` is in `from`'s closure, or is `from` itself
+    /// for an app the program does not hold.
+    fn sees(&self, from: &str, owner: &str) -> bool {
+        match self.scope {
+            None => true,
+            Some(s) => match s.visible.get(from) {
+                Some(v) => v.contains(owner),
+                None => from == owner,
+            },
+        }
+    }
+
+    /// The resolver's pick among `found` (visible tables of one name or
+    /// number): a real table over a tableextension stub, a live one over a
+    /// moved/removed one, then (`own`: a number) `from`'s own, else exactly
+    /// one table id; more decline.
+    fn one_live_table<'t>(
+        &self,
+        mut found: Vec<&'t ModelTable>,
+        own: Option<&str>,
+    ) -> Option<&'t ModelTable> {
+        let gone = |t: &ModelTable| self.scope.is_some_and(|s| s.gone.contains(&t.id));
         if found.iter().any(|t| !t.is_extension_stub) {
             found.retain(|t| !t.is_extension_stub);
         }
-        if found.iter().any(|t| !scope.gone.contains(&t.id)) {
-            found.retain(|t| !scope.gone.contains(&t.id));
+        if found.iter().any(|t| !gone(t)) {
+            found.retain(|t| !gone(t));
         }
         // One table can have several rows (an `#if`-split declaration), not
         // always adjacent: the first row of each id stands for it.
         let mut seen = std::collections::HashSet::new();
         found.retain(|t| seen.insert(t.id.as_str()));
+        if let Some(from) = own
+            && let Some(t) = found.iter().find(|t| t.app_guid == from)
+        {
+            return Some(t);
+        }
         match found.as_slice() {
             [t] => Some(t),
             _ => None,
@@ -204,14 +289,14 @@ impl TableScope {
         let mut visible: HashMap<String, std::collections::HashSet<String>> = HashMap::new();
         let mut i = 0u32;
         while let Some(app) = graph.apps.try_resolve(AppRef(i)) {
+            // `closure` holds the app itself. Two units of one guid (only an
+            // empty guid repeats) see the union of their closures.
             let seen = graph
                 .topology
                 .closure(AppRef(i))
                 .into_iter()
-                .chain(std::iter::once(AppRef(i)))
-                .filter_map(|a| graph.apps.try_resolve(a).map(|x| x.guid.clone()))
-                .collect();
-            visible.insert(app.guid.clone(), seen);
+                .filter_map(|a| graph.apps.try_resolve(a).map(|x| x.guid.clone()));
+            visible.entry(app.guid.clone()).or_default().extend(seen);
             i += 1;
         }
         let gone = graph
@@ -278,7 +363,8 @@ pub(crate) mod tests {
     /// DISCRIMINATION (2026-11-26, each break then restored, green): no
     /// visibility filter fails "lone sees only base's"; no `gone` filter fails
     /// "the Moved stub gives way"; taking the last instead of declining fails
-    /// "two live tables decline".
+    /// "two live tables decline"; an app the scope does not hold seeing every
+    /// table fails "an unknown app is not every app".
     #[test]
     fn a_table_name_binds_as_the_resolver_binds_it() {
         let tables = vec![
@@ -287,6 +373,7 @@ pub(crate) mod tests {
             tab("base", 50, "Shared", false),
             tab("other", 60, "Shared", false),
             tab("ext", 70, "Shared", true),
+            tab("other", 61, "Only Other", false),
         ];
         let scope = TableScope::stated(
             &[
@@ -313,6 +400,94 @@ pub(crate) mod tests {
             st.table_by_name("Shared").map(|t| t.id.as_str()),
             Some("other/table/60")
         );
+        // sol r1: an app the scope does not hold sees only its own tables
+        // (`other`'s lone `Only Other` would bind, failing open).
+        assert_eq!(
+            id("ws", "Only Other").as_deref(),
+            Some("other/table/61"),
+            "precondition: the name binds where seen"
+        );
+        assert_eq!(
+            id("ghost", "Only Other"),
+            None,
+            "an unknown app is not every app"
+        );
+        // sol r1: a number binds by number: the Moved stub gives way, and two
+        // live tables of one number decline unless one is the caller's own.
+        let num = |from: &str, n: i64| st.table_by_number_from(from, n).map(|t| t.id.clone());
+        assert_eq!(
+            num("ws", 308).as_deref(),
+            Some("bf/table/308"),
+            "by number, live"
+        );
+        assert_eq!(
+            num("lone", 308).as_deref(),
+            Some("base/table/308"),
+            "lone sees only the Moved stub: with no live one, it binds"
+        );
+    }
+
+    /// ENG-194 (Fable r1 B1): a real table beats a tableextension stub of its
+    /// name, and an `#if`-split table (two rows, one id, not adjacent) is one
+    /// table, not a collision.
+    /// DISCRIMINATION (2026-11-26, each break then restored, green): no stub
+    /// filter fails "real over stub"; no dedup by id fails "split is one".
+    #[test]
+    fn a_stub_gives_way_and_a_split_table_is_one() {
+        let tables = vec![
+            tab("a", 50, "Split", false),
+            tab("e", 70, "Base", true),
+            tab("a", 51, "Base", false),
+            tab("a", 50, "Split", false),
+        ];
+        let scope = TableScope::stated(&[("w", &["w", "a", "e"])], &[]);
+        let st = SymbolTable::build_scoped(&[], &tables, &scope);
+        let id = |name: &str| st.table_by_name_from("w", name).map(|t| t.id.clone());
+        assert_eq!(id("Base").as_deref(), Some("a/table/51"), "real over stub");
+        assert_eq!(id("Split").as_deref(), Some("a/table/50"), "split is one");
+    }
+
+    /// ENG-194 (sol r1): a number names a table as the resolver binds a
+    /// number: `from`'s own table first, else exactly one visible live table.
+    /// DISCRIMINATION (2026-11-26, break then restored, green): no own-app
+    /// preference fails "own first".
+    #[test]
+    fn a_table_number_binds_own_first_then_exactly_one() {
+        let tables = vec![tab("a", 5992, "X", false), tab("b", 5992, "Y", false)];
+        let scope = TableScope::stated(&[("a", &["a", "b"]), ("w", &["w", "a", "b"])], &[]);
+        let st = SymbolTable::build_scoped(&[], &tables, &scope);
+        assert_eq!(
+            st.table_by_number_from("a", 5992).map(|t| t.id.as_str()),
+            Some("a/table/5992"),
+            "own first"
+        );
+        assert_eq!(
+            st.table_by_number_from("w", 5992).map(|t| t.id.as_str()),
+            None,
+            "two visible, neither its own: decline"
+        );
+    }
+
+    /// ENG-194 (sol r1): a page extension's base page, seen from its app.
+    /// DISCRIMINATION (2026-11-26, break then restored, green): no closure
+    /// filter fails the `lone` assertion.
+    #[test]
+    fn an_object_name_binds_within_the_apps_closure() {
+        let mut a = numberless("Base");
+        a.app_guid = "a".into();
+        a.id = "a/Interface/@Base".into();
+        let mut b = numberless("Base");
+        b.app_guid = "b".into();
+        b.id = "b/Interface/@Base".into();
+        let objects = vec![a, b];
+        let scope = TableScope::stated(&[("lone", &["lone", "a"]), ("w", &["w", "a", "b"])], &[]);
+        let st = SymbolTable::build_scoped(&objects, &[], &scope);
+        let id = |from: &str| {
+            st.object_by_type_name_from(from, "Interface", "base")
+                .map(|o| o.id.clone())
+        };
+        assert_eq!(id("lone").as_deref(), Some("a/Interface/@Base"));
+        assert_eq!(id("w"), None, "two visible objects decline");
     }
 
     /// A numberless Interface `ModelObject` named `name` (#83 tests).

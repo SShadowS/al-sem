@@ -50,21 +50,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tableextension stub, a table declared `ObsoleteState = Moved`/`Removed` counts only when no live
   one remains, and two live tables left DECLINE (the table is not known) instead of the last one
   winning. The scope (`TableScope`: each app's closure, the moved/removed tables' model ids) comes
-  from the program graph the three model assemblies already hold. A `Table` object's own `Rec` takes
-  its own id, not a lookup of its name.
+  from the program graph the three model assemblies already hold; an app the graph does not hold
+  sees only its own tables. A `Table` object's own `Rec` takes its own id, not a lookup of its name.
+- **The same rule for every table reference the model binds** (sol and Fable review): a table
+  NUMBER (a dependency page's `SourceTable = "5992"`) binds by number as the resolver binds a
+  number (`table_by_number_from`: the app's own table first, else exactly one live visible one),
+  not through the last table object of the number; a page extension's base page is picked within
+  its app's closure, and the base page's `SourceTable` binds as the base page's own app sees it; a
+  tableextension's fields are merged into the base table its own app sees
+  (`merge_extension_fields`), not the last table of the name.
+- **Symbol-only objects now carry `ObsoleteState`.** `obsolete_gone` was read from source only, so
+  with a symbol-only Base Application both `No. Series` tables would have been live and the name
+  would decline. BC 28.4's Base Application symbols list `No. Series` (308) and `Reason Code` (231)
+  with `ObsoleteState = Moved`; the symbol reader now marks `Moved`/`Removed` objects gone, for the
+  resolver too.
 - **CDO (pinned `bc3ccb18`), measured first.** Eight table names are declared by two apps: `No.
   Series`, `No. Series Line`, `No. Series Relationship`, `No. Series Tenant`, `Reason Code`,
   `Return Reason`, `Source Code`, `Source Code Setup`, each a Base Application `Moved` stub and the
   Business Foundation table it moved to. The old index picked Business Foundation's for all eight,
-  right only because Business Foundation loads after Base Application; the new rule picks the same
-  table from every app that sees it (System and System Application see neither: not known there,
-  and they name neither). So nothing should move on CDO; the dependence on load order is gone.
-  (`/work/.al-sem/engine-notes/eng194/probe-cdo-shared-names.log`.)
-- **Tests and red proofs.** `symbol_table::tests::a_table_name_binds_as_the_resolver_binds_it`
-  hand-states the three rules (a Moved stub gives way; two live tables decline; an app sees only
-  its closure's) and the old bug's precondition. Each break then restored: no visibility filter
-  fails "lone sees only base's"; no Moved filter fails "the Moved stub gives way"; taking the last
-  table fails "two live tables decline".
+  right only because Business Foundation loads after Base Application. The probe printed only the
+  apps whose pick changed: System and System Application, which see neither table, now get "not
+  known" for the eight names. (`/work/.al-sem/engine-notes/eng194/probe-cdo-shared-names.log`.)
+- **Tests and red proofs.** In `symbol_table::tests`, `a_table_name_binds_as_the_resolver_binds_it`
+  hand-states the rules (a Moved stub gives way; two live tables decline; an app sees only its
+  closure's; an app the scope does not hold sees nothing else) and the old bug's precondition;
+  `a_stub_gives_way_and_a_split_table_is_one`, `a_table_number_binds_own_first_then_exactly_one`
+  and `an_object_name_binds_within_the_apps_closure` cover stubs, `#if`-split tables, numbers and
+  base pages. `r4::r4_table_name_scope` pins the use through the production cross-app model (two
+  symbol-only and two source dependencies): a Moved symbol table gives way, a dependency's code does
+  not see a table outside its closure, a table's own `Rec`, and a tableextension's fields. `symbol_reference`'s
+  `obsolete_state_moved_or_removed_marks_a_symbol_object_gone` pins the symbol read. Each break
+  then restored is recorded in the test's doc.
 
 ### Fixed (ENG-213: a wrong "none observed" — `query touches --field --from` down searches dependency code past its first routine)
 
