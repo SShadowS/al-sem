@@ -11,10 +11,11 @@ pub(crate) mod codec;
 pub(crate) mod counters;
 pub(crate) mod envelope;
 pub(crate) mod key;
-#[cfg(unix)]
+pub(crate) mod pe;
 pub(crate) mod prune;
 pub(crate) mod report;
 pub(crate) mod seam;
+pub mod stamp;
 
 pub use report::{REPORT_TAG, ReportGuard, report_end};
 
@@ -41,13 +42,12 @@ pub struct IrCache {
     /// `ALSEM_IR_CACHE_VERIFY=1`: every hit is also parsed and compared.
     verify: bool,
     report: Option<PathBuf>,
-    key: OnceLock<Option<IrKey>>,
+    key: OnceLock<Result<IrKey, key::NoKey>>,
     pub(crate) counters: Counters,
     started: AtomicBool,
     /// The report's last line for this process is written (`end`, or `no key`).
     ended: AtomicBool,
     /// Set at the first `last-used` publish of this process.
-    #[cfg(unix)]
     touched: AtomicBool,
     warned: [AtomicBool; 4],
     /// An `ALSEM_IR_CACHE` value that is neither `on` nor `off`, warned at the first use (the
@@ -55,12 +55,23 @@ pub struct IrCache {
     bad_switch: Option<String>,
 }
 
-/// `ALSEM_IR_CACHE`: `on` (the default, also when unset or empty) or `off`, in any case.
-/// Anything else is off, with the warning to give (sol/Fable r1: a typo never turns the cache
-/// on).
+/// Whether the cache is on when `ALSEM_IR_CACHE` is unset or empty: on, on every system.
+/// TLS-117: Windows was off by default until the owner's acceptance of the Windows key passed
+/// (2026-11-25, at `1e882726`); the owner accepted the narrower guarantee the same day
+/// (q-20261125T135240-57cde933; the residual is stated in the design note's section 1).
+/// `ALSEM_IR_CACHE=off` still turns it off.
+pub(crate) const DEFAULT_ON: bool = true;
+
+/// `ALSEM_IR_CACHE`: `on` or `off`, in any case; unset or empty is [`DEFAULT_ON`]. Anything else
+/// is off, with the warning to give (sol/Fable r1: a typo never turns the cache on).
 pub(crate) fn switch(v: Option<&std::ffi::OsStr>) -> (bool, Option<String>) {
+    switch_with(v, DEFAULT_ON)
+}
+
+/// [`switch`] with the default given (tests check both defaults on any system).
+pub(crate) fn switch_with(v: Option<&std::ffi::OsStr>, default_on: bool) -> (bool, Option<String>) {
     let Some(v) = v.filter(|v| !v.is_empty()) else {
-        return (true, None);
+        return (default_on, None);
     };
     match v.to_str().map(str::to_ascii_lowercase).as_deref() {
         Some("on") => (true, None),
@@ -102,7 +113,6 @@ impl IrCache {
             counters: Counters::default(),
             started: AtomicBool::new(false),
             ended: AtomicBool::new(false),
-            #[cfg(unix)]
             touched: AtomicBool::new(false),
             warned: Default::default(),
             bad_switch: None,
@@ -114,22 +124,31 @@ impl IrCache {
     #[cfg(all(test, unix))]
     pub(crate) fn with_key(ir_dir: PathBuf, text_dir: PathBuf, verify: bool, key: IrKey) -> Self {
         let c = IrCache::new(true, ir_dir, text_dir, verify, None);
-        let _ = c.key.set(Some(key));
+        let _ = c.key.set(Ok(key));
         c
     }
 
     /// The running image's key, hashed once, at the first use that needs it.
     pub(crate) fn key(&self) -> Option<IrKey> {
-        *self.key.get_or_init(|| {
-            let k = key::image_key();
-            if k.is_none() {
-                self.warn_once(
-                    Warn::NoKey,
-                    "IR cache: no image key (not Linux, unreadable or unmarked image): off",
-                );
-            }
-            k
-        })
+        self.key_result().as_ref().ok().copied()
+    }
+
+    /// Why there is no key (`None` when there is one).
+    pub(crate) fn no_key(&self) -> Option<&key::NoKey> {
+        self.key_result().as_ref().err()
+    }
+
+    /// Tests (Windows): whether the key has been attempted (made, or refused), without making
+    /// it. An unstamped test binary is refused (`Unstamped`), which still counts.
+    #[cfg(all(test, windows))]
+    pub(crate) fn key_attempted(&self) -> bool {
+        self.key.get().is_some()
+    }
+
+    fn key_result(&self) -> &Result<IrKey, key::NoKey> {
+        // The warning is given at the first seam use (`first_use`): on Windows the key is made
+        // in `main` before the logger is up.
+        self.key.get_or_init(key::image_key)
     }
 
     pub(crate) fn warn_once(&self, w: Warn, msg: &str) {
@@ -162,6 +181,18 @@ pub fn install_from_env() -> ReportGuard {
     let mut cache = IrCache::new(enabled, ir_dir, text_dir, verify, report);
     cache.bad_switch = bad_switch;
     let _ = INSTALLED.set(cache);
+    // TLS-117: on Windows the key is computed EAGERLY, here (aldump's and al-call-hierarchy's
+    // first statement; in alsem's `main` after the perf-trace setup), whenever the cache is on,
+    // so the time between the image's load and its verification is milliseconds. No command is
+    // skipped: an argv guess at which commands use the cache was wrong twice (sol final rounds
+    // 1 and 2: `alsem batch -- --help`, `aldump --program-call-graph-stats --help`, where
+    // `--help` is an operand), so the class is closed by not reading argv at all; a help call
+    // pays the ~45 ms key. On Linux the key stays lazy (`/proc/self/exe` is the running inode
+    // whenever it is read).
+    #[cfg(windows)]
+    if let Some(c) = INSTALLED.get().filter(|c| c.is_on()) {
+        let _ = c.key();
+    }
     ReportGuard::new()
 }
 
@@ -186,8 +217,10 @@ pub(crate) fn create_ir_dir(ir_dir: &std::path::Path) {
             .mode(0o700)
             .create(ir_dir);
     }
+    // Windows (TLS-117): through the private walk: each component checked before anything is
+    // made under it, so a refused parent gets no child (sol r1 P1-2).
     #[cfg(not(unix))]
-    let _ = ir_dir;
+    let _ = crate::snapshot::cache::create_cache_dir(ir_dir);
 }
 
 /// TLS-116: the installed IR cache's `ir/` folder, made now as its first writer would make it,
@@ -262,5 +295,71 @@ impl Default for Suspend {
 impl Drop for Suspend {
     fn drop(&mut self) {
         SUSPENDED.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// Windows-native tests of `install_from_env` (the owner's Windows run; the Linux cross-check
+/// only compiles them).
+#[cfg(all(test, windows))]
+mod windows_tests {
+    /// The child half of [`the_windows_key_is_attempted_at_install`]: installs the cache and
+    /// prints whether the key was attempted before any use.
+    #[test]
+    #[ignore = "run by the_windows_key_is_attempted_at_install as a child"]
+    fn eager_key_child_mode() {
+        if std::env::var_os("ALSEM_IR_EAGER_CHILD").is_none() {
+            return;
+        }
+        let _report = super::install_from_env();
+        let attempted = super::INSTALLED.get().is_some_and(|c| c.key_attempted());
+        println!("EAGER={attempted}");
+    }
+
+    /// TLS-117 (sol final round 2): on Windows, `install_from_env` attempts the key at once
+    /// whenever the cache is on, whatever the command (no argv input decides it); with the
+    /// cache off it does not. The child is this test binary, unstamped, so the attempt is a
+    /// refusal (`Unstamped`), which still shows it was made at install. In a child process
+    /// because the installed cache is process-wide. Discrimination (owner's Windows run,
+    /// pending): remove the eager `c.key()` from `install_from_env`: "on" prints EAGER=false
+    /// and the test fails; restored, passes.
+    #[test]
+    fn the_windows_key_is_attempted_at_install() {
+        let tmp = tempfile::tempdir().unwrap();
+        let eager = |switch: &str| {
+            let out = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--ignored",
+                    "--exact",
+                    "program::ir_cache::windows_tests::eager_key_child_mode",
+                    "--test-threads=1",
+                    "--nocapture",
+                ])
+                .env("ALSEM_IR_EAGER_CHILD", "1")
+                .env("ALSEM_IR_CACHE", switch)
+                .env_remove("ALSEM_IR_CACHE_REPORT")
+                .env("ALSEM_IR_CACHE_DIR", tmp.path().join("ir"))
+                .env("XDG_CACHE_HOME", tmp.path().join("xdg"))
+                .output()
+                .unwrap();
+            let text = String::from_utf8_lossy(&out.stdout).into_owned();
+            assert!(out.status.success(), "{text}");
+            // sol final 3: with --nocapture libtest prints `test ... ... EAGER=true` on one
+            // line, so the value is found after `EAGER=` anywhere in a line; only the exact
+            // words true or false count.
+            let value = text
+                .lines()
+                .find_map(|l| {
+                    l.split_once("EAGER=")
+                        .map(|(_, v)| v.split_whitespace().next())
+                })
+                .flatten();
+            match value {
+                Some("true") => true,
+                Some("false") => false,
+                v => panic!("the child printed no EAGER=true|false (got {v:?}): {text}"),
+            }
+        };
+        assert!(eager("on"), "cache on: the key is attempted at install");
+        assert!(!eager("off"), "cache off: no key is attempted");
     }
 }

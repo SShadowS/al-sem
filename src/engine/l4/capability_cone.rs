@@ -8170,7 +8170,8 @@ codeunit 50111 "Cell Calls"
         // 64: + `write-order` (output validation r3 §7 R6, 2026-11-08).
         // 65: + `isolated-events/ws` (engine limits B3, 2026-11-09).
         // 66: + `up-parallel/ws` (TLS-21, 2026-11-12).
-        ("fixtures", 66),
+        // 67: + `tls117/ws` (TLS-117 review r1, 2026-11-23: the release key check's workspace).
+        ("fixtures", 67),
         ("r3a4-fixtures", 1),
         ("r3a5-fixtures", 1),
         ("r2-5b-fixtures", 1),

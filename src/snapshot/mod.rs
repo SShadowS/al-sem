@@ -13,6 +13,8 @@ pub mod provider;
 pub mod snapshot;
 pub mod transpiled;
 pub mod verify;
+#[cfg(windows)]
+pub(crate) mod winfs;
 
 pub use identity::{AppId, Provenance, TrustTier};
 pub use parse::{ParsedFile, ParsedUnit, parse_snapshot};

@@ -780,6 +780,122 @@ CDO has no site of these shapes, so no CDO answer moves.
     - `named_ranges_where`: 1.47 % -> 0.75 %;
     - `collect_run_objects`: 1.73 % -> 0.22 %.
 
+### Added (TLS-117: the dependency IR cache on Windows, for stamped binaries)
+
+- **On by default on Windows** (`ir_cache::DEFAULT_ON` is true on every system), after the
+  owner's acceptance below; `ALSEM_IR_CACHE=off` still turns it off. Until this change the
+  Windows default was off and only an explicit `ALSEM_IR_CACHE=on` turned it on.
+- **The accepted gap** (owner, 2026-11-25, q-20261125T135240-57cde933): the Windows key compares
+  the candidate file's writable sections with the digest stamped in the **loaded** image, not with
+  the loaded image's own initial data. So a stamped exe **damaged in its writable data before it
+  was launched**, then **swapped at its path for a pristine copy within the milliseconds between
+  the launch and the eager key**, gets the pristine copy's key while the damaged data runs. Damage
+  in the read-only content gives no key. The owner accepted this narrower guarantee (design note,
+  section 1, "The window before the key").
+- **The owner's acceptance passed** (at `1e882726`, on the owner's Windows machine): the
+  Windows-native tests (43 passed, 0 failed); the install stamped and verified all three
+  binaries; through the installed `alsem.exe` a cold run published, a warm run hit 10,881
+  entries, an impact run verified 21,762 of 21,762 hits, and every answer was byte-identical to
+  the cache-off run; the LSP made a key. For the LSP check, a `didOpen` alone writes no report:
+  the report's first line is written at the cache's first use, so the check makes one real
+  request (a call-hierarchy request, for example).
+- **The eager key's start-up cost, measured** (the same acceptance, median of 7 runs of a small
+  `analyze`): 32.8 ms with the cache off against 77.9 ms with it on, so about 45 ms per process
+  start. That is acceptable for the long-lived processes that gain the most (the LSP server,
+  `mcp`'s engine, `engine-host`). With the cache off no key is made: the eager key, the seam,
+  `make_ir_dir` and the report's no-key line each run only when the cache is on.
+- **What it does.** ENG-110's IR cache was off on Windows: its key is the running binary's bytes,
+  and on Windows no file path reliably names the running image (the owner's probe runs showed
+  `GetMappedFileNameW` keeping a stale path after a folder swap and a deleted hard link, so a
+  name-based key hashed the wrong file). Now a Windows binary has a key when (design B, note
+  `docs/superpowers/notes/2026-11-21-tls117-windows-image-key.md`): the canonical hash of the
+  loaded module's read-only content (read with `ReadProcessMemory`; base relocations normalised,
+  loader-written ranges masked, unmodelled loader patching refused) equals that of a candidate
+  file (the mapped name, then `GetModuleFileNameW`), opened denying write and delete on a local
+  NTFS drive, with equal headers; the candidate's writable sections and masked bytes hash to the
+  digest stamped in the running module's data-digest slot; and its own slot equals the loaded
+  one. The key is then the accepted file's bytes, as on Linux. Anything else: no key, the cache
+  off, the reason in the report. The key is computed at start, in `install_from_env` (aldump's
+  and al-call-hierarchy's first statement, alsem's after its perf-trace setup) **whenever the
+  cache is on, for every command**: no argv look decides it, because two argv guesses at which
+  commands use the cache were wrong (sol's final reviews: `alsem batch -- --help` and `aldump
+  --program-call-graph-stats --help`, where `--help` is an operand, would have keyed late). A help
+  or version call pays the ~45 ms key. The
+  candidate is read through a handle that denies write and delete (one retry after 50 ms on a
+  sharing violation), closed after the check: the running exe can be renamed away afterwards.
+  The key is over the accepted file's bytes, not an exact identity of the running file (bytes the
+  loader never maps, such as a signature or an overlay, change the key, not the code: a miss,
+  never a wrong answer); the note's section 1 states the few milliseconds before the key.
+- **Stamping.** A new binary, `alsem-stamp` (`stamp <exe> [<out>]`, `verify <exe>`; runs on Linux
+  too), writes the digest into the slot (a marked 48-byte static in `.rdata` of `alsem`, `aldump`
+  and `al-call-hierarchy`), recomputes a non-zero PE checksum, and checks nothing else changed.
+  **Unstamped binaries (every cargo build and test) get no key on Windows**; the report says
+  `"ir_cache": "unstamped"`, which `scripts/ir-cache-report-check` passes. A failing Windows key
+  for any other reason says `"no key"` with the reason, and fails the checker.
+  `ir-cache-report-check --require-key` fails `unstamped`, `unsupported` and `no key` lines, a
+  report with no `start` line, and any `start` line without a key (one keyed process cannot hide
+  another without one); the acceptance and the release workflows use it, and its self-test runs
+  in the suite (`cli_ir_cache::the_report_checker_self_test_passes`).
+- **Install and CI.** `scripts/install-windows.ps1` (Windows PowerShell 5.1 or pwsh 7) builds the
+  three binaries with `release-ship`, stamps and verifies them, and copies them to
+  `~/.al-sem/bin/` and each `-LspDir`. It refuses before building or copying anything (and again
+  just before copying) when any target is running, so an install never leaves some targets new
+  and some old. Both release workflows stamp and verify the three Windows binaries after the
+  build and before signing, and after signing verify them again and, with the cache on in a
+  fresh root on `tests/fixtures/tls117/ws`, run a cold `alsem.exe analyze` (`--rule output`), a
+  warm one (`--rule warm-build`), an `alsem.exe impact` with `ALSEM_IR_CACHE_VERIFY=1` (`--rule
+  impact`: disk hits, every hit parsed again and compared), `aldump.exe
+  --program-call-graph-stats` (`--rule output`), and the shipped LSP server at runtime
+  (`scripts/lsp-key-smoke`: `initialize`, one `prepareCallHierarchy`, `shutdown`, on stdio;
+  `--rule output`), each `--require-key` and each with no `ALSEM_IR_CACHE` set (the default);
+  then one `analyze` with `ALSEM_IR_CACHE=off`, which must make no key and must write a report
+  whose `start` line says `"enabled": false` and `"key": null`. A failure fails the job. `release.yml` also runs by `workflow_dispatch`
+  (on a branch, before landing), and then publishes nothing.
+- **The Windows link-map listing.** `release.yml`'s Windows job links with `/MAP` (through
+  `CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS`, which keeps `+crt-static`; a plain
+  `RUSTFLAGS` would drop it) and lists every locale deny symbol in the maps of `alsem`, `aldump`
+  and `al-call-hierarchy` for a human to check (note section 4.3); it never fails the job. A
+  step there fails the job when a shipped exe imports the dynamic C runtime (`dumpbin
+  /dependents`: `vcruntime*.dll`, `msvcp*.dll`, `api-ms-win-crt-*`).
+- **The parse path's locale audit is pinned.** `scripts/check-parse-path-locale` compiles
+  tree-sitter's `lib.c` (the `Cargo.lock` version) and the grammar's `parser.c` and `scanner.c`
+  with `gcc -fcallgraph-info`, walks the call graph from the roots al-syntax reaches, and fails
+  when a reachable function calls anything but byte functions and the guarded log and dot-graph
+  formatting (note section 4.1), when a guarded function gains a caller outside its pinned set,
+  or when a defined function is neither reached nor on its off-path list (a closed world; the
+  pointer-only callbacks and decoders are roots). Without gcc it fails on Linux and skips with
+  one line elsewhere. Each run also proves it can fail: a `scanner.c` copy calling `towlower`
+  and one with an added unlisted function must both be refused. It runs as `scripts/ci-steps locale` (in `task`, `task-affected`
+  and `all`) and in CI's `test` job, in about 3 s.
+- **Windows-native tests** (the owner runs them: `cargo test -p al-sem --lib -- winfs
+  key::tests::windows snapshot::cache prune windows_tests`):
+  `snapshot::winfs::tests::windows_private_walk`,
+  `program::ir_cache::key::tests::windows_stamped_copy_keys_on_its_image` (the running exe can
+  be renamed away after its key),
+  `program::ir_cache::windows_tests::the_windows_key_is_attempted_at_install` (with the cache on
+  `install_from_env` attempts the key at once, whatever the command; off, it does not),
+  `snapshot::cache::tests::a_permissive_entry_is_refused_at_every_open`,
+  `a_mapped_entry_cannot_be_opened_for_writing`, `shared_now_lock_fails_while_exclusive_held`,
+  and `program::ir_cache::prune::tests` (all but the two size-rule tests).
+- **Cache plumbing on Windows.** The cache folders (the IR root, `ALSEM_IR_CACHE_DIR`, ENG-113's
+  text root and the batch guard's root) are created and opened through a private walk from the
+  volume root down (a folder is made only under an element that passed): every element
+  owned by this user, SYSTEM, Administrators or TrustedInstaller, no reparse point, and no allow
+  ACE giving anyone else a right to remove, rename or re-ACL it (the cache folders, entries and
+  lock files also none to add or write); each entry and lock file is checked on its own handle.
+  A folder that fails turns the IR cache off and keeps the text cache's owned text. Prune, key
+  folders and `last-used` now work on Windows; the Windows writer's temp files have the Unix name
+  shape, so the prune removes a killed writer's leftovers there too.
+
+### Changed (TLS-117)
+
+- **Cache locks are `std::fs::File` locks on every system.** They are `flock` on Unix (the same lock
+  as before, so an older and a newer engine still exclude each other; pinned by
+  `an_old_flock_holder_blocks_the_file_lock`) and `LockFileEx` on Windows, where ENG-113's text
+  cache took no lock before.
+- `windows-sys` gains the features the Windows key and private check call (security, library
+  loader, process status, debug, threading).
+
 ### Fixed (TLS-105: three more gate-script deadlines count awake time, not wall time)
 
 - **What was wrong.** server1 is a laptop that suspends when moved, and the wall clock keeps
@@ -1038,8 +1154,8 @@ CDO has no site of these shapes, so no CDO answer moves.
   key: the cache is off. `scripts/check-ir-image` checks alsem, aldump and al-call-hierarchy
   (`ci-steps build`, both Linux release jobs): the marker, no locale symbols, and only libc,
   libgcc_s and (al-call-hierarchy) glibc's loader as shared libraries.
-- **Where it is off.** On Windows (TLS-117), in `alsem batch` (TLS-116), for a package below 8
-  files, for owned (unmapped) text, with `ALSEM_IR_CACHE=off` (only `on`/`off`, any case; any
+- **Where it is off.** (Since then TLS-116 turned it on in `alsem batch`, and TLS-117 on Windows
+  for stamped binaries; see their entries.) For a package below 8 files, for owned (unmapped) text, with `ALSEM_IR_CACHE=off` (only `on`/`off`, any case; any
   other value is off, warned), and in every test (`.cargo/config.toml`'s `[env]` sets it off for
   the engines tests spawn; in-process test binaries never install it).
 - **The guarantee.** In this user's private cache folder, an accepted entry decodes to exactly

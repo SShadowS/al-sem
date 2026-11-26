@@ -127,6 +127,28 @@ fn end_counter(lines: &[Value], name: &str) -> u64 {
     ends[0]["counters"][name].as_u64().unwrap()
 }
 
+/// TLS-117: writes this module's fixture workspace to `$ALSEM_TLS117_MINT`. Run once by hand;
+/// the output is committed as `tests/fixtures/tls117/ws`, the workspace the release workflows'
+/// key check analyzes with the signed Windows `alsem.exe`.
+#[test]
+#[ignore = "mints tests/fixtures/tls117/ws by hand"]
+fn mint_tls117_release_fixture() {
+    let Some(out) = std::env::var_os("ALSEM_TLS117_MINT") else {
+        return;
+    };
+    let f = fixture();
+    let out = PathBuf::from(out);
+    for e in walkdir::WalkDir::new(&f.ws) {
+        let e = e.unwrap();
+        let to = out.join(e.path().strip_prefix(&f.ws).unwrap());
+        if e.file_type().is_dir() {
+            std::fs::create_dir_all(&to).unwrap();
+        } else {
+            std::fs::copy(e.path(), &to).unwrap();
+        }
+    }
+}
+
 /// The positive control: the cache on, a fresh root: one entry published, a `start` and an
 /// `end` line; the next run hits it.
 #[test]
@@ -1221,6 +1243,26 @@ fn a_non_utf8_command_line_runs() {
         ]),
         "{lines:?}"
     );
+}
+
+/// TLS-117: `ir-cache-report-check`'s own cases (the rules, and `--require-key`'s: every
+/// `start` line must carry a key, sol r-final) run in the suite, so a change to the checker the
+/// acceptance and the release workflows judge by cannot drift unseen. Discrimination
+/// (2026-11-25): `require_key` back to "some start has a key": the case "one keyed start, one
+/// start without a key" reads WRONG, the self-test exits 1 and this test fails; restored,
+/// passes.
+#[test]
+fn the_report_checker_self_test_passes() {
+    let out = crate::clean_env::command(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/scripts/ir-cache-report-check"
+    ))
+    .arg("--self-test")
+    .output()
+    .unwrap();
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{text}");
+    assert!(text.contains("self-test: PASS"), "{text}");
 }
 
 /// sol r1: an entry that is there but refused counts as `refused`, and the gate's report

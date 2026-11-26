@@ -752,7 +752,7 @@ fn path_bytes(p: &Path) -> Vec<u8> {
 #[cfg(windows)]
 fn path_from(bytes: Vec<u8>) -> std::io::Result<PathBuf> {
     use std::os::windows::ffi::OsStringExt;
-    if bytes.len() % 2 != 0 {
+    if !bytes.len().is_multiple_of(2) {
         return Err(std::io::Error::other("a spool record cut in a UTF-16 unit"));
     }
     let wide: Vec<u16> = bytes
