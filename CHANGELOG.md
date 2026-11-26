@@ -1297,18 +1297,15 @@ by Fable).
   `case` label) is read against the root's unresolved cone; a guarded search stopped at its cap
   is `unknown` (`route-graph-stopped`), not a usage error. JSON: `errorsAfterCommit` gives counts
   and the nearest error, not every id.
-- **Review round 3 (Fable) fixes:** recursion through M or a routine above it blocks
-  (`recursion-above-meet`; no route shows it, since the route search never repeats a state); a
-  record operation or object run a route leaves by blocks when it has other triggers or table
-  event subscribers at the same site (`site-other-edges`); a prefix routine with no model row
-  blocks `loop-above-meet`; a route search that found nothing because it stopped at its budget
-  says `relation: route-search-capped`, not "dead under literals"; `commitsInsideB` starts under
-  B's route's `[CommitBehavior]`. On CDO, over a seeded sample of 120 of the 216 routines
-  where a call is followed by a record `Insert`/`Modify` (A the call, B the write), these
-  blockers turn 1 answer from `no` into `unknown` (`recursion-above-meet`); `loop-above-meet`
-  and `site-other-edges` turn none. The sample's answers: 94 `no`, 8 `yes`, 15 `unknown` (8 an
-  ambiguous routine name, 6 an open-world interface call in the region, 1 recursion), 3 refused
-  (one site the root does not reach, two lines holding two sites).
+- **Review rounds 3 and 4 (Fable) fixes:** recursion through any routine on A's or B's route
+  blocks (`recursion-on-route`; no route shows it, since the route search never repeats a
+  state); a record operation or object run a route leaves by blocks when it has other triggers
+  or table event subscribers at the same site (`site-other-edges`); a bulk `ModifyAll`/`DeleteAll`
+  on A's route, whose trigger runs once per row, blocks (`bulk-operation-on-route`); a prefix
+  routine with no model row blocks `loop-above-meet`; every blocker that applies is listed; a
+  route search that found nothing because it stopped at its budget says
+  `relation: route-search-capped`, not "dead under literals"; `commitsInsideB` starts under
+  B's route's `[CommitBehavior]`. COUNT-PENDING-R4
 - **What a path that ends before B leaves out (for cost):** a statement on such a path is read
   for its own records only. `commitsWithoutB` then misses a commit in a callee on such a path,
   and an error raised inside such a callee is in neither `errorsBetween` nor any commit's

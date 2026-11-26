@@ -201,7 +201,7 @@ codeunit 50702 "K"
 }
 "#;
 
-fn knob_answer(knobs: Knobs) -> (String, Vec<String>) {
+fn knob_answer(knobs: Knobs) -> (String, Vec<String>, serde_json::Value) {
     let tmp = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(tmp.path().join("src")).unwrap();
     std::fs::write(
@@ -264,19 +264,20 @@ fn knob_answer(knobs: Knobs) -> (String, Vec<String>) {
                 .collect()
         })
         .unwrap_or_default();
-    (answer, kinds)
+    (answer, kinds, v)
 }
 
-fn assert_blocked(knobs: Knobs, kind: &str) {
-    let (answer, kinds) = knob_answer(knobs);
+fn assert_blocked(knobs: Knobs, kind: &str) -> serde_json::Value {
+    let (answer, kinds, v) = knob_answer(knobs);
     assert_eq!(answer, "unknown", "{kinds:?}");
     assert!(kinds.iter().any(|k| k == kind), "{kind} not in {kinds:?}");
+    v
 }
 
 #[test]
 fn knob_fixture_answers_no_without_knobs() {
     // Precondition of the guard tests below.
-    let (answer, kinds) = knob_answer(Knobs::default());
+    let (answer, kinds, _) = knob_answer(Knobs::default());
     assert_eq!(answer, "no", "{kinds:?}");
 }
 
@@ -293,12 +294,18 @@ fn guard_cone_walk_capped() {
 
 #[test]
 fn guard_route_cap() {
-    assert_blocked(
+    let v = assert_blocked(
         Knobs {
             route_budget: Some(0),
             ..Knobs::default()
         },
         "route-cap",
+    );
+    // Review r4 item 3: a capped search that found nothing is not "dead".
+    assert!(
+        v.to_string()
+            .contains(r#""relation":"route-search-capped""#),
+        "{v}"
     );
 }
 

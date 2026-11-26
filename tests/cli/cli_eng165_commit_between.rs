@@ -771,6 +771,53 @@ const REVIEW: &str = r#"codeunit 50640 "RV"
         L.Insert(); // S42B
     end;
 
+    procedure S43()
+    begin
+        Again := true;
+        Rec43();
+        L.Insert(); // S43B
+    end;
+
+    local procedure Rec43()
+    begin
+        if Again then begin
+            Again := false;
+            Rec43();
+            Commit();
+        end else
+            Transmit(); // S43A
+    end;
+
+    procedure S43b()
+    begin
+        Again := true;
+        Transmit(); // S43bA
+        X43b();
+    end;
+
+    local procedure X43b()
+    begin
+        if Again then begin
+            Again := false;
+            Y43b();
+        end else
+            L.Insert(); // S43bB
+    end;
+
+    local procedure Y43b()
+    begin
+        Commit();
+        X43b();
+    end;
+
+    procedure S44()
+    var
+        D: Record "RV Doc 44";
+    begin
+        D.DeleteAll(true);
+        L.Insert(); // S44B
+    end;
+
     procedure S33()
     begin
         Transmit(); // S33A
@@ -857,6 +904,7 @@ const REVIEW: &str = r#"codeunit 50640 "RV"
 
     var
         L: Record "EB Log";
+        Again: Boolean;
 }
 
 codeunit 50641 "RV Sender"
@@ -929,6 +977,21 @@ table 50645 "RV Doc 42"
         R: Codeunit "RV";
     begin
         R.Transmit(); // S42A
+    end;
+}
+
+table 50646 "RV Doc 44"
+{
+    fields { field(1; "No."; Integer) { } }
+    keys { key(PK; "No.") { Clustered = true; } }
+
+    trigger OnDelete()
+    var
+        R: Codeunit "RV";
+    begin
+        if "No." = 2 then
+            Commit();
+        R.Transmit(); // S44A
     end;
 }
 
@@ -1673,7 +1736,7 @@ fn s41_recursion_into_the_meet_routine_blocks() {
     // runs next. No route shows the recursion: unknown, never a false no.
     let a = ask(ws(), &rv("S41"), &at("S41A"), &at("S41B"));
     assert_eq!(a.answer, "unknown", "{}", a.raw);
-    assert!(a.raw.contains("recursion-above-meet"), "{}", a.raw);
+    assert!(a.raw.contains("recursion-on-route"), "{}", a.raw);
 }
 
 #[test]
@@ -1683,6 +1746,46 @@ fn s42_a_table_event_at_the_leave_site_blocks() {
     let a = ask(ws(), &rv("S42"), &at("S42A"), &at("S42B"));
     assert_eq!(a.answer, "unknown", "{}", a.raw);
     assert!(a.raw.contains("site-other-edges"), "{}", a.raw);
+}
+
+#[test]
+fn s43_recursion_below_the_meet_routine_on_a_s_route_blocks() {
+    // Review r4 item 1: A in the inner run of Rec43; the outer run commits
+    // after it returns, then B. The route lists Rec43 once: unknown.
+    let a = ask(ws(), &rv("S43"), &at("S43A"), &at("S43B"));
+    assert_eq!(a.answer, "unknown", "{}", a.raw);
+    assert!(a.raw.contains("recursion-on-route"), "{}", a.raw);
+}
+
+#[test]
+fn s43b_recursion_below_the_meet_routine_on_b_s_route_is_yes() {
+    // Review r4 item 1, the mirror: X43b's first run calls Y43b, which
+    // commits and runs X43b again, whose B is the next B. Not a false `no`
+    // even without the recursion blocker: B is in a branch, so the call
+    // toward it is no sure cut and its cone (Y43b's commit) is in M's
+    // region. Any recursion before the first B passes through B's head,
+    // which is walked. No shape was found where the B-side range of
+    // `recursion_on_route` turns a false `no`; it is kept as the safe side.
+    let a = ask(ws(), &rv("S43b"), &at("S43bA"), &at("S43bB"));
+    assert_eq!(a.answer, "yes", "{}", a.raw);
+}
+
+#[test]
+fn s44_a_bulk_operation_on_a_s_route_blocks() {
+    // Review r4 item 2: DeleteAll(true) runs OnDelete once per row; a later
+    // row's run commits before its A, after the first row's A. The detail
+    // pins that the operation was found and read as bulk. The other branch
+    // (the operation's row not in the model, which blocks too) has no cheap
+    // fixture: a workspace record operation always has its row, and a
+    // symbol-only dependency routine has no body edges to leave by.
+    let a = ask(ws(), &rv("S44"), &at("S44A"), &at("S44B"));
+    assert_eq!(a.answer, "unknown", "{}", a.raw);
+    assert!(a.raw.contains("bulk-operation-on-route"), "{}", a.raw);
+    assert!(
+        a.raw.contains("whose trigger runs once per row"),
+        "{}",
+        a.raw
+    );
 }
 
 #[test]

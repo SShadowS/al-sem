@@ -11,10 +11,10 @@ confirmation are folded in (§11). Ready to implement. Task card: `/coord/tasks/
   it. Two findings needed new BC measurements (§2.4, round 2). Both changed the design: a
   `Commit()` inside an isolated subscriber commits the caller's work, and `Page.RunModal` with a
   pending write is an error when no test handler stands in.
-- Revisions 3.2 and 3.3 answer Fable's reviews of the implementation (rounds 2 and 3): the
-  blockers for a loop or recursion above the meet routine, sibling subscribers and other edges at
-  a leave site (§4.1); the `route-search-capped` relation and what a path that ends before B
-  leaves out (§5.3).
+- Revisions 3.2 to 3.4 answer Fable's reviews of the implementation (rounds 2 to 4): the
+  blockers for a loop above the meet routine, recursion on a route, sibling subscribers, other
+  edges at a leave site and a bulk operation on A's route (§4.1); the `route-search-capped`
+  relation and what a path that ends before B leaves out (§5.3).
 
 ## 1. The question
 
@@ -328,12 +328,26 @@ not to loop, so it blocks the same way. Judging each shallower level as a meet r
 publisher by its event, the event's other subscribers run in no defined order around the route's:
 the blocker `sibling-subscribers`.
 
-**Recursion at or above the meet routine** (revision 3.3, Fable review r3): when any routine at
-route positions 0 to k (the shared prefix and M itself) can reach itself over the edge graph
-(every edge kind, guards ignored), M may run again after A, and its B may then be the next B
-(shape S41: `Outer: B; Inner()`, `Inner: A; if C then begin Commit; Outer(false) end`). No route
-shows this, because the route search never repeats a state. The answer carries the blocker
-`recursion-above-meet` and is `unknown`.
+**Recursion on a route** (revisions 3.3 and 3.4, Fable reviews r3 and r4): the route search
+never repeats a state, so a real stack `M → X → X → A` is listed as `M → X`, and what the outer
+run of X does after the inner run returns is in no part. When any routine on either route (A's
+route from the root to A's routine, B's route below M to B's routine) can reach itself over the
+edge graph (every edge kind, guards ignored), the answer carries the blocker
+`recursion-on-route` and is `unknown`. Shapes: S41 (M runs again: `Outer: B; Inner()`,
+`Inner: A; if C then begin Commit; Outer(false) end`), S43 (a routine below M on A's route:
+`Rec: if Again then begin Again := false; Rec(); Commit end else A`, root `Rec(); B`). The mirror
+on B's route (S43b) is already `yes` without the blocker: recursion before the first B passes
+through B's head, which is walked; B's route is checked too, as the safe side. Every routine of both routes is checked because any real stack the search
+does not list repeats a routine, and that routine stays on a listed route. Revision 3.3 checked
+only the prefix and M, which Fable's review r4 showed was too narrow.
+
+**A bulk record operation on A's route** (revision 3.4, Fable review r4): `ModifyAll(true)` and
+`DeleteAll(true)` run their trigger (and a table event's subscribers) once per matching row. When
+A's route leaves a routine, from M down, through such an operation, a later row's run of the
+statements before A is in no part. The blocker `bulk-operation-on-route` (shape S44: `OnDelete:
+if "No." = 2 then Commit; A`, root `D.DeleteAll(true); B`). B's side needs no check: the next
+B after A is the first row's, whose head is walked. When a trigger or table-event step's
+record operation cannot be found in the model, it is not known not to be bulk: the same blocker.
 
 **Other edges at a leave site** (revision 3.3, Fable review r3): a record operation or object
 run that a route leaves by can have several edges at the same site: an implicit trigger, a table
@@ -385,11 +399,11 @@ other alternatives (one of them runs instead of the route's) do not count.
     is not sure to run, so the path is not cut there, and the commit before `Log`'s B makes the
     answer `yes`. That is the sound reading.
   - **Recursion:** the route search never repeats a state, so a route never shows a routine
-    running again after A. A recursive call inside a region part is a region statement like any
-    other, and its cone holds the routine's commits. Recursion that re-enters M or a routine
-    above it is not followed: it blocks with `recursion-above-meet` (§4.1, revision 3.3).
-    Revision 3's claim that "recursion is covered by the general rule and by the route
-    enumeration's existing tests" was wrong for that case (Fable review r3, shape S41).
+    running again around A or B. Recursion through any routine on either route is not
+    followed: it blocks with `recursion-on-route` (§4.1, revision 3.4). Revision 3's claim that
+    "recursion is covered by the general rule and by the route enumeration's existing tests"
+    was wrong (Fable review r3, shape S41), and so was revision 3.3's check of the prefix and M
+    only (Fable review r4, shape S43).
   - The "must run" test is a new helper beside `control_flow`: it treats `break`, `continue`,
     `exit`, an error and a maybe-zero loop as ways B can be skipped. **A B inside a trap scope
     that the continuation is outside of** (`if TryLog() then; Commit`, B in TryLog) is never a

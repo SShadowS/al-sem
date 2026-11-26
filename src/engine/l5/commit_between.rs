@@ -1586,11 +1586,19 @@ fn pair<'a>(
     let swallowed = ra[..k]
         .iter()
         .any(|s| trap_of(w, s).is_some_and(TrapKind::definite));
+    // Each check adds its own blocker (review r4 nit: every reason shows).
+    recursion_on_route(w, ra, rb, k);
     loop_above_meet(w, ra, k);
     // Review r3 item 2: other edges at the sites the routes leave by, from M
     // (index k) down.
     for s in ra[k..].iter().chain(&rb[k..]) {
         site_co_edges(w, s);
+    }
+    // Review r4 item 2: a bulk operation on A's route runs its trigger once
+    // per row; the later runs before A are on no part. (On B's side the next
+    // B is the first row's, whose head is walked.)
+    for s in &ra[k..] {
+        bulk_leave(w, s);
     }
     let mut parts: Vec<Part<'a>> = Vec::new();
     // A's tail, deepest first.
@@ -1815,28 +1823,40 @@ fn sibling_subscribers<'a>(w: &mut Walk<'a, '_>, publisher: &'a str, s: &Step<'a
     }
 }
 
-/// Review r2 item 3: a loop above the meet routine (a call site toward M on
-/// the shared prefix that can reach itself) runs M again, so the next B after
-/// A may be in a later run of M. Review r3 item 1: so does recursion through
-/// any routine of the prefix or M itself, which no route shows (the route
-/// search never repeats a state). Neither is followed: a blocker, so a `no`
-/// is never given on such a route.
-fn loop_above_meet<'a>(w: &mut Walk<'a, '_>, ra: &[Step<'a>], k: usize) {
+/// Review r3 item 1, r4 item 1: a routine on either route that can call
+/// itself again may run again around A or B, and what its outer run does after
+/// the inner one returns is on no part: no route shows it (the route search
+/// never repeats a state, so a real stack `M → X → X → A` is listed as
+/// `M → X`). Every routine of both routes is checked, the ones holding A and B
+/// included: any unlisted real stack repeats a routine that stays on a listed
+/// route. Not followed: a blocker, so a `no` is never given on such a route.
+fn recursion_on_route<'a>(w: &mut Walk<'a, '_>, ra: &[Step<'a>], rb: &[Step<'a>], k: usize) {
     let root = w.root;
-    for j in 0..=k {
-        let r = routine_at(root, ra, j);
+    let on_route: Vec<&'a str> = (0..=ra.len())
+        .map(|j| routine_at(root, ra, j))
+        .chain((k + 1..=rb.len()).map(|j| routine_at(root, rb, j)))
+        .collect();
+    for r in on_route {
         if reaches_itself(w, r) {
             let d = w.display(r);
             w.out.blockers.push((
-                "recursion-above-meet",
+                "recursion-on-route",
                 format!(
-                    "{d}, on the route at or above the meet routine, can call itself again \
-                     (recursion); the next B after A may be in a later run, which is not followed"
+                    "{d}, on the route to A or B, can call itself again (recursion); what its \
+                     other runs do between A and B is not followed"
                 ),
             ));
             return;
         }
     }
+}
+
+/// Review r2 item 3: a loop above the meet routine (a call site toward M on
+/// the shared prefix that can reach itself) runs M again, so the next B after
+/// A may be in a later run of M. Not followed: a blocker, so a `no` is never
+/// given on such a route.
+fn loop_above_meet<'a>(w: &mut Walk<'a, '_>, ra: &[Step<'a>], k: usize) {
+    let root = w.root;
     for j in 0..k {
         let r = routine_at(root, ra, j);
         let Some(EdgeSite::Guarded(x)) = ra[j].site else {
@@ -1934,6 +1954,50 @@ fn site_co_edges<'a>(w: &mut Walk<'a, '_>, s: &Step<'a>) {
             ),
         ));
     }
+}
+
+/// Review r4 item 2: route step `s` leaves its routine by a bulk record
+/// operation (`ModifyAll`, `DeleteAll`), whose trigger or table event runs
+/// once per matching row: a loop the control-flow tree does not show. Not
+/// followed: a blocker.
+fn bulk_leave<'a>(w: &mut Walk<'a, '_>, s: &Step<'a>) {
+    let Some(EdgeSite::Guarded(x)) = s.site else {
+        return;
+    };
+    // Only a trigger or table event leaves by a record operation.
+    let by_op = w
+        .reach
+        .out_edges(s.from)
+        .into_iter()
+        .any(|(to, site, kind, _)| {
+            to == s.to && site == s.site && matches!(kind, "implicit-trigger" | "table-event")
+        });
+    if !by_op {
+        return;
+    }
+    // The operation, from the row that holds the site; not found is not
+    // known not to be bulk (coordinator r4: block, never a silent `no`).
+    let op = w
+        .reach
+        .row_at(s.from, x)
+        .and_then(|row| row.record_operations.iter().find(|o| o.id == x))
+        .map(|o| o.op.as_str());
+    let detail = match op {
+        Some(o) if o.eq_ignore_ascii_case("ModifyAll") || o.eq_ignore_ascii_case("DeleteAll") => {
+            "by a bulk record operation whose trigger runs once per row; its later runs before A \
+             are not followed"
+        }
+        Some(_) => return,
+        None => {
+            "by a record operation the model does not hold; whether it is a bulk operation (its \
+             trigger run once per row) is not known"
+        }
+    };
+    let d = w.display(s.from);
+    w.out.blockers.push((
+        "bulk-operation-on-route",
+        format!("the route to A leaves {d} {detail}"),
+    ));
 }
 
 /// Review B1: a site of `row` that may matter (an edge leaves it, or a
