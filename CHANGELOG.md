@@ -273,6 +273,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
       no "killed" line appears;
     - the start-time check.
 
+### Fixed (ENG-189: a wrong `no` — an in-place bind through a kept RecordRef holder rebinds the other kept holders)
+
+- **The bug.** ENG-159's sound rule ends what is known about a RecordRef or Variant that may share
+  its record with code the routine cannot see only at places that may run user code. A plain
+  in-place bind (`GetTable`, `Get`, `Open`) through such a holder is no such place, and a
+  local made retainable by a call is not joined into one alias class with the call's result or a
+  parameter it was joined to. So `L := Same(R); L.GetTable(Doc); Guarded(R)` (`Same` returns its
+  argument: one handle, ENG-175), `Join(L, R); L.GetTable(Doc)` (`Join(var A; B) begin A := B end`)
+  and the same through a `var Variant` out parameter left `R` on its old table: `prove
+  writes-table` answered `no` where a run writes (found by Fable's review of the ENG-161 design,
+  measured on master).
+- **The fix.** An in-place bind through a holder RETAINABLE at that point
+  (`recref_alias::kept_bind_points`) counts as a place that may rebind every OTHER retainable
+  holder, the rest of its alias class included (only the receiver itself is bound to the bind's
+  table, as before), in the RecordRef flow's facts and in G36 (`field_guard`). Retainability is
+  read where the bind RUNS, after its own arguments (`L.Get(JoinId(L, R))`), and an element of a
+  RecordRef or Variant array always counts (the classes hold no array slots: `Join(Slot[1], R);
+  Slot[1].GetTable(D)`; a slot never joined to R answers `yes` too, a sound over-reach), never an
+  element of a record array (`Recs[1].Get('X')`). `GetTable`, `Get` and `Open` count; `Close`
+  does not (sol r1; BC 28.4, `recref_alias`'s module doc: `Close` detaches only its own variable,
+  so `L := Same(R); L.Close()` keeps `R`'s `no`, `RootClose`). `Open` counts (Fable r3, measured
+  on BC 28.4, `/work/.al-sem/engine-notes/eng189-probe2/RESULTS.md`): a copy shares one handle
+  whether or not it is open, so `L := Same(R); L.Open(Doc)` with R never opened, or closed before
+  the copy, opens R too (`RootOpenNeverOpened`, `RootOpenAfterClose` `yes`). An `Open` right after
+  its own receiver's `Close` reaches no other holder on BC but still answers `yes`
+  (`RootCloseOpen`, a sound over-reach; ENG-212). G34 (`exit_guards`) takes no kept binds: a
+  holder joined to the guard's by a call is bound before the guard by that call. A `foreach` element of a holder list shares
+  the guard's record with no call (BC 28.4) and still answers `no` there and in G36; holder
+  containers are ENG-161's, and its task carries the two repros.
+- **Measured on BC 28.4 first** (`/work/.al-sem/engine-notes/eng189-probe/RESULTS.md`):
+  `FieldRef.Record()` and `KeyRef.Record()` are COPIES (rebinding them leaves `R` alone), so
+  `F := R.Field(1); L := F.Record(); L.GetTable(D)` correctly answers `no` and is not modelled. A
+  `List of [RecordRef]` element (`Get`, `foreach`) and a var-parameter copy share the handle (for
+  ENG-161).
+- **CDO (pinned `bc3ccb18`):** on the final code (master 6218a401 against 4117bee0, with the `Close`
+  filter and `Open` kept: `cdo-before-after`, 2026-11-26) no finding or fingerprint moved at either
+  scope (2,306 / 32,429 findings, 0 added, 0 removed), unknown edges 0 -> 0. That compares findings,
+  fingerprints and the call graph, not `prove` answers routine by routine; the CDO rendering
+  goldens' `prove` answers (the presubmit's `output` phase) did not move either. Earlier (c6f61f04
+  against c996d2c8, before the filter) the same, and
+  cdo-speed PASS with an ADVISORY: instructions build x0.9984, prove
+  x1.0263, round total x1.0248 (advisory limit x1.02; CPU prove x0.973, round total x0.979, one
+  run). The first cut (c0ac760b: a kept bind excepting its receiver's whole class, no array
+  elements) measured round total x0.9979; the review fixes rebind more holders at more binds. Where
+  the extra instructions go is not profiled.
+- **Tests and red proofs.** `cli_recref_inplace_kept` (new): the three shapes and the
+  branch-alias, array-slot, bind-argument and `Get` rows `yes`, controls (`RootControlNo`,
+  `RootBindFirst`, `RootFieldRecord`, `RootReceiverNotKept`, `RootRecArrayGet` `no`,
+  `RootControlYes` `yes`) and a G36 pair (`FieldAfterBind`: a bind to `PA Entry`, which has no
+  field 2). The flow's facts
+  without the kept binds fail `RootSame`; G36 without them fails `FieldAfterBind`; a kept bind
+  rebinding its own receiver too fails `cli_recref_get`'s `ShadowAliasFlow`; leaving out the
+  receiver's whole class fails `RootExceptExclusive`; an array element not always counting fails
+  `RootSlot`; retainability at the bind's start fails `RootJoinInArgs`; no receiver check fails
+  `RootReceiverNotKept`; any array element counting fails `RootRecArrayGet`.
+- **Goldens.** None moved.
+
 ### Fixed (ENG-178: table procedures named like record built-ins: four follow-ups from ENG-173)
 
 From Fable's second review of ENG-173 (`/work/.al-sem/engine-notes/eng173/fable-eng173-r2.md`).
