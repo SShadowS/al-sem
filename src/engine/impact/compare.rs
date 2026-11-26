@@ -236,7 +236,7 @@ pub fn for_base(workspace: &Path, rev: &str) -> Result<(Comparison, String), Str
     for (p, raw) in untracked.iter().zip(&untracked_raw) {
         let body = std::fs::read_to_string(top.join(crate::git_env::path_from_git(raw.clone())))
             .map_err(|e| format!("impact: untracked file '{p}' could not be read: {e}"))?;
-        text.push_str(&new_file_section(p, &body));
+        text.push_str(&new_file_section(raw, &body));
     }
     let cmp = Comparison {
         source: "base",
@@ -285,12 +285,12 @@ pub fn for_base_and_diff(workspace: &Path, rev: &str, diff: &str) -> Result<Comp
     })
 }
 
-/// A unified-diff section adding `path` with `body` (an untracked file).
-fn new_file_section(path: &str, body: &str) -> String {
+/// A unified-diff section adding the file named by the bytes `path` with
+/// `body` (an untracked file).
+fn new_file_section(path: &[u8], body: &str) -> String {
     let lines: Vec<&str> = body.lines().collect();
-    let mut s = format!(
-        "diff --git a/{path} b/{path}\nnew file mode 100644\n--- /dev/null\n+++ b/{path}\n"
-    );
+    let (a, b) = (quoted_path("a/", path), quoted_path("b/", path));
+    let mut s = format!("diff --git {a} {b}\nnew file mode 100644\n--- /dev/null\n+++ {b}\n");
     if !lines.is_empty() {
         s.push_str(&format!("@@ -0,0 +1,{} @@\n", lines.len()));
         for l in lines {
@@ -299,6 +299,31 @@ fn new_file_section(path: &str, body: &str) -> String {
             s.push('\n');
         }
     }
+    s
+}
+
+/// `prefix` + `path` as git writes a name in a diff header (TLS-114): bare
+/// when every byte is printable ASCII other than `"` and `\`, else C-quoted
+/// (`"b/a\nb.al"`, a high byte as `\377`), which the diff parser reads back.
+/// A raw LF would split the header and a raw TAB end the name there.
+fn quoted_path(prefix: &str, path: &[u8]) -> String {
+    let plain = |b: u8| (0x20..0x7f).contains(&b) && b != b'"' && b != b'\\';
+    if path.iter().all(|&b| plain(b)) {
+        return format!("{prefix}{}", String::from_utf8_lossy(path));
+    }
+    let mut s = format!("\"{prefix}");
+    for &b in path {
+        match b {
+            b'"' => s.push_str("\\\""),
+            b'\\' => s.push_str("\\\\"),
+            b'\n' => s.push_str("\\n"),
+            b'\t' => s.push_str("\\t"),
+            b'\r' => s.push_str("\\r"),
+            _ if plain(b) => s.push(char::from(b)),
+            _ => s.push_str(&format!("\\{b:03o}")),
+        }
+    }
+    s.push('"');
     s
 }
 

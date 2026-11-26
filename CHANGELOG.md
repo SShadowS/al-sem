@@ -58,6 +58,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `src/old.rs` moved to `notes/old.txt` listed only the new name, so fmt and the goldens
     were skipped. It reads its top level exactly (a sentinel after `rev-parse`): `$(...)`
     strips every trailing LF, so a checkout named `repo` + LF looked for `repo/scripts`.
+    `check-goldens --verify-coverage` had the same strip (`cd "$(... && pwd)"`) and so
+    changed into `repo`; it now changes into its own folder's parent directly (sol r2).
   - Test-scope discovery sends each folder to `git check-ignore` as `./<name>/` (sol r1): git
     reads each line as a pathspec, so a sibling folder named `:(unknown)` failed the whole
     batch, which was read as "nothing ignored".
@@ -65,20 +67,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     r1): under a Linux checkout named `repo-\xff`, an untracked `New.al` could not be read.
     It lists them with `ls-files -z` and opens each by its bytes: without `-z` git quoted
     `ws/Né.al` as `"ws/N\303\251.al"`, which does not end in `.al`, so the file was silently
-    left out of the change; a non-UTF-8 name was opened by its lossy text.
+    left out of the change; a non-UTF-8 name was opened by its lossy text. The diff section
+    it writes for each one quotes the name the way git does (sol r2): written raw, an LF in
+    the name split the header and a TAB ended the name there, so the file's lines went to
+    another path.
 - **Tests** (unix; each with a discrimination proof):
   - scope discovery: an excludes file ending in CR or LF (an LF inside too), a top level ending
     in CR or LF, and a bare clone's common folder ending in CR or LF;
   - `impact`: a base materialized under a top level ending in CR, ending in LF, and (Linux) not
     UTF-8; a workspace prefix starting with a space; (Linux) an untracked file under a non-UTF-8
-    top level; untracked files named `Né.al` and (Linux) `X\xff.al`;
+    top level; untracked files named `Né.al` and (Linux) `X\xff.al`; (Linux) `impact --base`
+    end to end on untracked files whose names hold an LF and a TAB (their routines are roots);
   - scope discovery: a sibling folder named `:(unknown)` beside an ignored one;
   - agentflow: changed and dirty paths with a CR at the end and an LF inside; a `"` and (Linux)
     the byte 0xFF in a name; `check-diff` through real git on `src/é.rs`, `src/x\r.rs`, a CR
     inside an added line and an added `++` line; a file replaced by a directory of its name;
     a check from a subfolder with `diff.relative=true`;
   - the hook, run on a staged `src/é` + LF + `x.rs`, on a Rust file renamed to a `.txt`, and in
-    a checkout named `repo` + LF: it runs fmt and both golden checks.
+    a checkout named `repo` + LF (with the real `check-goldens`, only `cargo` stubbed): it runs
+    fmt and both golden checks.
   - The LF fixtures pin "remove one LF" against "remove every LF". `--show-prefix` always ends
     in `/`, so `impact`'s prefix reader cannot tell those apart, and no fixture claims to.
 - **Left as they are, and why.** `impact`'s `--show-prefix` is still decoded lossily: it flows
