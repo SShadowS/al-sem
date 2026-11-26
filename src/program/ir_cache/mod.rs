@@ -325,9 +325,21 @@ mod windows_tests {
                 .unwrap();
             let text = String::from_utf8_lossy(&out.stdout).into_owned();
             assert!(out.status.success(), "{text}");
-            text.lines()
-                .find_map(|l| l.strip_prefix("EAGER=").map(|v| v.trim() == "true"))
-                .unwrap_or_else(|| panic!("the child printed no EAGER line: {text}"))
+            // sol final 3: with --nocapture libtest prints `test ... ... EAGER=true` on one
+            // line, so the value is found after `EAGER=` anywhere in a line; only the exact
+            // words true or false count.
+            let value = text
+                .lines()
+                .find_map(|l| {
+                    l.split_once("EAGER=")
+                        .map(|(_, v)| v.split_whitespace().next())
+                })
+                .flatten();
+            match value {
+                Some("true") => true,
+                Some("false") => false,
+                v => panic!("the child printed no EAGER=true|false (got {v:?}): {text}"),
+            }
         };
         assert!(eager("on"), "cache on: the key is attempted at install");
         assert!(!eager("off"), "cache off: no key is attempted");

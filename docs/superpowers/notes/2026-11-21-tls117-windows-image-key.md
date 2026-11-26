@@ -34,7 +34,7 @@ that makes no key fails `scripts/ir-cache-report-check --require-key`, which the
 both release workflows use (the release workflows run the shipped, signed `alsem.exe` once on
 `tests/fixtures/tls117/ws`). The Windows-native tests are listed in section 6 and in the
 CHANGELOG's TLS-117 entry: `cargo test -p al-sem --lib -- winfs key::tests::windows
-snapshot::cache prune`.
+snapshot::cache prune windows_tests`.
 
 Status (probe phase): **rev 6**, after sol's review r4 (`/work/.al-sem/tools-notes/tls117-design-review-sol-r4.md`):
 the coordinator made the post-link **data-digest slot mandatory**; the orchestrator agreed on the
@@ -395,7 +395,7 @@ git -C $env:TREE_SITTER_AL_PATH rev-parse HEAD   # must be 88bb6871… (the comm
 $env:CMAKE_GENERATOR     = 'Visual Studio 17 2022'
 $env:CARGO_TARGET_DIR    = 'C:/atw'      # any short path; the default is too long (MAX_PATH)
 # Step 4's tests first (section 6's list; they need no install):
-cargo test -p al-sem --lib -- winfs key::tests::windows snapshot::cache prune
+cargo test -p al-sem --lib -- winfs key::tests::windows snapshot::cache prune windows_tests
 # Then build, stamp and install the three binaries (also into each LSP folder you use):
 powershell -ExecutionPolicy Bypass -File scripts\install-windows.ps1 [-LspDir <folder> ...]
 ```
@@ -819,8 +819,11 @@ and `lock` on Windows, so both caches: the IR cache, and ENG-113's text folder (
 that fails falls back to owned text, as a non-private folder does on Unix today. Folders the cache
 makes are created inside a checked folder and inherit its DACL; they are checked again on open.
 
-Tests (as built, rev 11; Windows-native, run by the owner with
-`cargo test -p al-sem --lib -- winfs key::tests::windows snapshot::cache prune`):
+Tests (as built, rev 11-12; Windows-native, run by the owner with
+`cargo test -p al-sem --lib -- winfs key::tests::windows snapshot::cache prune windows_tests`):
+- `program::ir_cache::windows_tests::the_windows_key_is_attempted_at_install` (rev 12): with the
+  cache on, `install_from_env` attempts the key at once, whatever the command; off, it does not
+  (a child process reports `EAGER=true|false`; its discrimination proof is for the owner's run).
 - `snapshot::winfs::tests::windows_private_walk`: the per-user cache folder passes; a leaf
   Everyone can modify, a private leaf under a parent granting Everyone `FILE_DELETE_CHILD`, and a
   path through a junction are refused; a create under that refused parent fails and makes nothing

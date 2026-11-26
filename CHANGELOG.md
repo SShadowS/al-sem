@@ -95,7 +95,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and one with an added unlisted function must both be refused. It runs as `scripts/ci-steps locale` (in `task`, `task-affected`
   and `all`) and in CI's `test` job, in about 3 s.
 - **Windows-native tests** (the owner runs them: `cargo test -p al-sem --lib -- winfs
-  key::tests::windows snapshot::cache prune the_windows_key_is_attempted`):
+  key::tests::windows snapshot::cache prune windows_tests`):
   `snapshot::winfs::tests::windows_private_walk`,
   `program::ir_cache::key::tests::windows_stamped_copy_keys_on_its_image` (the running exe can
   be renamed away after its key),
