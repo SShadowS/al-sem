@@ -36,6 +36,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   no pytest. Two discrimination proofs: with `gate-env` taken out of `task`'s step list, and then
   out of `task-affected`'s, the test fails each time; restored, it passes.
 
+### Fixed (ENG-194: a table name binds as the resolver binds it, not to the last table of the name)
+
+- **The bug.** The model bound every table NAME in code (a record variable's type, an implicit
+  `Rec`'s source or extended table, a RecordRef `Open` of a named table) through one index per
+  folded name across all apps, LAST wins (`SymbolTable::table_by_name`; only a real table beat a
+  tableextension stub). Two apps' tables of one name gave every record variable of the name the
+  same id, whichever loaded last, whatever the referencing app could see (found by Fable's review
+  of the ENG-158 design). Those ids feed the detectors and the physical-table writes.
+- **The fix.** `SymbolTable::table_by_name_from(app, name)` binds as the program's resolver
+  (`ProgramGraph::resolve_object`) does, seen from the referencing routine's app: only tables of
+  that app's dependency closure count (its own included, not preferred), a real table beats a
+  tableextension stub, a table declared `ObsoleteState = Moved`/`Removed` counts only when no live
+  one remains, and two live tables left DECLINE (the table is not known) instead of the last one
+  winning. The scope (`TableScope`: each app's closure, the moved/removed tables' model ids) comes
+  from the program graph the three model assemblies already hold. A `Table` object's own `Rec` takes
+  its own id, not a lookup of its name.
+- **CDO (pinned `bc3ccb18`), measured first.** Eight table names are declared by two apps: `No.
+  Series`, `No. Series Line`, `No. Series Relationship`, `No. Series Tenant`, `Reason Code`,
+  `Return Reason`, `Source Code`, `Source Code Setup`, each a Base Application `Moved` stub and the
+  Business Foundation table it moved to. The old index picked Business Foundation's for all eight,
+  right only because Business Foundation loads after Base Application; the new rule picks the same
+  table from every app that sees it (System and System Application see neither: not known there,
+  and they name neither). So nothing should move on CDO; the dependence on load order is gone.
+  (`/work/.al-sem/engine-notes/eng194/probe-cdo-shared-names.log`.)
+- **Tests and red proofs.** `symbol_table::tests::a_table_name_binds_as_the_resolver_binds_it`
+  hand-states the three rules (a Moved stub gives way; two live tables decline; an app sees only
+  its closure's) and the old bug's precondition. Each break then restored: no visibility filter
+  fails "lone sees only base's"; no Moved filter fails "the Moved stub gives way"; taking the last
+  table fails "two live tables decline".
+
 ### Fixed (ENG-213: a wrong "none observed" — `query touches --field --from` down searches dependency code past its first routine)
 
 - **The bug.** `query touches --field F --from R --direction down` searched R's cone over the solve's

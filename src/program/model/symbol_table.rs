@@ -32,12 +32,30 @@ pub struct SymbolTable<'a> {
 
     /// `${name_lc}` → table index.
     tables_by_name: HashMap<String, usize>,
+    /// ENG-194: `${name_lc}` → every table of the name, in order
+    /// ([`Self::table_by_name_from`]).
+    tables_named: HashMap<String, Vec<usize>>,
     /// `${tableId}` → table index.
     tables_by_id: HashMap<String, usize>,
     tables: &'a [ModelTable],
+    /// ENG-194: the program's view of who sees which table
+    /// ([`Self::table_by_name_from`]); `None`: unscoped.
+    scope: Option<&'a TableScope>,
 }
 
 impl<'a> SymbolTable<'a> {
+    /// [`Self::build`] whose name lookups from an app follow `scope` (ENG-194).
+    pub fn build_scoped(
+        objects: &'a [ModelObject],
+        tables: &'a [ModelTable],
+        scope: &'a TableScope,
+    ) -> SymbolTable<'a> {
+        SymbolTable {
+            scope: Some(scope),
+            ..SymbolTable::build(objects, tables)
+        }
+    }
+
     /// Build the symbol table over an assembled workspace's objects and tables.
     /// The slices MUST be in the deterministic ingestion order (collision
     /// resolution depends on it).
@@ -70,9 +88,11 @@ impl<'a> SymbolTable<'a> {
         // table sharing that number. A real table always wins the collision
         // (by id AND by name); within the same kind LAST-wins is preserved.
         let mut tables_by_name: HashMap<String, usize> = HashMap::new();
+        let mut tables_named: HashMap<String, Vec<usize>> = HashMap::new();
         let mut tables_by_id: HashMap<String, usize> = HashMap::new();
         for (i, t) in tables.iter().enumerate() {
             let name_key = t.name.fold_identifier();
+            tables_named.entry(name_key.clone()).or_default().push(i);
             let keep_prev_name = tables_by_name
                 .get(&name_key)
                 .is_some_and(|&p| !tables[p].is_extension_stub && t.is_extension_stub);
@@ -92,8 +112,47 @@ impl<'a> SymbolTable<'a> {
             by_type_name,
             objects,
             tables_by_name,
+            tables_named,
             tables_by_id,
             tables,
+            scope: None,
+        }
+    }
+
+    /// ENG-194: the table `name` names in code of app `from` (an app guid), as
+    /// the program's resolver binds it (`ProgramGraph::resolve_object`): only
+    /// tables of `from`'s dependency closure count (`from` itself included and
+    /// not preferred), a real table beats a tableextension stub, and a table
+    /// declared `ObsoleteState = Moved`/`Removed` counts only when no live one
+    /// remains. Exactly one table left binds; more than one is a collision this
+    /// DECLINES (`None`: the table is not known) rather than taking the last
+    /// (Fable on ENG-158: two apps' tables of one name gave every record
+    /// variable the last one's id). With no scope for `from` (an unscoped
+    /// table, or an app the program does not hold), every table counts.
+    pub fn table_by_name_from(&self, from: &str, name: &str) -> Option<&ModelTable> {
+        static NONE: std::sync::LazyLock<TableScope> =
+            std::sync::LazyLock::new(TableScope::default);
+        let scope = self.scope.unwrap_or(&NONE);
+        let all = self.tables_named.get(&name.fold_identifier())?;
+        let visible = scope.visible.get(from);
+        let mut found: Vec<&ModelTable> = all
+            .iter()
+            .map(|&i| &self.tables[i])
+            .filter(|t| visible.is_none_or(|v| v.contains(&t.app_guid)))
+            .collect();
+        if found.iter().any(|t| !t.is_extension_stub) {
+            found.retain(|t| !t.is_extension_stub);
+        }
+        if found.iter().any(|t| !scope.gone.contains(&t.id)) {
+            found.retain(|t| !scope.gone.contains(&t.id));
+        }
+        // One table can have several rows (an `#if`-split declaration), not
+        // always adjacent: the first row of each id stands for it.
+        let mut seen = std::collections::HashSet::new();
+        found.retain(|t| seen.insert(t.id.as_str()));
+        match found.as_slice() {
+            [t] => Some(t),
+            _ => None,
         }
     }
 
@@ -126,9 +185,135 @@ impl<'a> SymbolTable<'a> {
     }
 }
 
+/// ENG-194: what a table name may bind to, from the program graph: each app's
+/// dependency closure (its own guid included) and the model ids of the tables
+/// declared `ObsoleteState = Moved`/`Removed` ([`SymbolTable::table_by_name_from`]).
+#[derive(Debug, Clone, Default)]
+pub struct TableScope {
+    /// app guid → the app guids it can see (itself included).
+    visible: HashMap<String, std::collections::HashSet<String>>,
+    /// Model ids (`{guid}/table/{n}`) of the moved or removed tables.
+    gone: std::collections::HashSet<String>,
+}
+
+impl TableScope {
+    /// The scope of the program `graph` describes.
+    #[must_use]
+    pub fn of(graph: &crate::program::graph::ProgramGraph) -> TableScope {
+        use crate::program::node::AppRef;
+        let mut visible: HashMap<String, std::collections::HashSet<String>> = HashMap::new();
+        let mut i = 0u32;
+        while let Some(app) = graph.apps.try_resolve(AppRef(i)) {
+            let seen = graph
+                .topology
+                .closure(AppRef(i))
+                .into_iter()
+                .chain(std::iter::once(AppRef(i)))
+                .filter_map(|a| graph.apps.try_resolve(a).map(|x| x.guid.clone()))
+                .collect();
+            visible.insert(app.guid.clone(), seen);
+            i += 1;
+        }
+        let gone = graph
+            .objects
+            .iter()
+            .filter(|o| o.id.kind == al_syntax::ir::ObjectKind::Table && o.obsolete_gone)
+            .filter_map(|o| {
+                let n = o.declared_id?;
+                Some(format!("{}/table/{n}", graph.apps.resolve(o.id.app).guid))
+            })
+            .collect();
+        TableScope { visible, gone }
+    }
+
+    /// No scope: every table of a name counts, none is gone (a model built
+    /// without a program graph, as tests and single objects are).
+    #[must_use]
+    pub fn unscoped() -> TableScope {
+        TableScope::default()
+    }
+
+    /// A scope stated by hand (tests): `visible` as (app, apps it sees),
+    /// `gone` as table model ids.
+    #[cfg(test)]
+    pub(crate) fn stated(visible: &[(&str, &[&str])], gone: &[&str]) -> TableScope {
+        TableScope {
+            visible: visible
+                .iter()
+                .map(|(a, vs)| {
+                    (
+                        (*a).to_string(),
+                        vs.iter().map(|s| (*s).to_string()).collect(),
+                    )
+                })
+                .collect(),
+            gone: gone.iter().map(|s| (*s).to_string()).collect(),
+        }
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    /// A field-less table `name` of `app`, number `n`.
+    fn tab(app: &str, n: i64, name: &str, stub: bool) -> ModelTable {
+        ModelTable {
+            id: format!("{app}/table/{n}"),
+            app_guid: app.to_string(),
+            table_number: n,
+            name: name.to_string(),
+            fields: Vec::new(),
+            keys: Vec::new(),
+            is_temporary: false,
+            is_extension_stub: stub,
+        }
+    }
+
+    /// ENG-194: a table name binds as the program's resolver binds it, seen
+    /// from the referencing app. Hand-stated: apps `base` (a `Moved` stub of
+    /// `No. Series`, and `Shared`), `bf` (the live `No. Series`), `other` (its
+    /// own `Shared`), the workspace `ws` seeing all three and `lone` seeing
+    /// `base` only.
+    /// DISCRIMINATION (2026-11-26, each break then restored, green): no
+    /// visibility filter fails "lone sees only base's"; no `gone` filter fails
+    /// "the Moved stub gives way"; taking the last instead of declining fails
+    /// "two live tables decline".
+    #[test]
+    fn a_table_name_binds_as_the_resolver_binds_it() {
+        let tables = vec![
+            tab("base", 308, "No. Series", false),
+            tab("bf", 308, "No. Series", false),
+            tab("base", 50, "Shared", false),
+            tab("other", 60, "Shared", false),
+            tab("ext", 70, "Shared", true),
+        ];
+        let scope = TableScope::stated(
+            &[
+                ("ws", &["ws", "base", "bf", "other", "ext"]),
+                ("lone", &["lone", "base"]),
+            ],
+            &["base/table/308"],
+        );
+        let st = SymbolTable::build_scoped(&[], &tables, &scope);
+        let id = |from: &str, name: &str| st.table_by_name_from(from, name).map(|t| t.id.clone());
+        assert_eq!(
+            id("ws", "no. series").as_deref(),
+            Some("bf/table/308"),
+            "the Moved stub gives way"
+        );
+        assert_eq!(id("ws", "Shared"), None, "two live tables decline");
+        assert_eq!(
+            id("lone", "Shared").as_deref(),
+            Some("base/table/50"),
+            "lone sees only base's"
+        );
+        // Precondition of the old bug: the last table of the name wins.
+        assert_eq!(
+            st.table_by_name("Shared").map(|t| t.id.as_str()),
+            Some("other/table/60")
+        );
+    }
 
     /// A numberless Interface `ModelObject` named `name` (#83 tests).
     pub(crate) fn numberless(name: &str) -> ModelObject {

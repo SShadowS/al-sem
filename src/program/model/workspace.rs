@@ -2730,7 +2730,8 @@ pub fn assemble_and_resolve_workspace_from_program(
         assemble_l3_workspace_from_program(inputs, ctx, parenless, needs, None)?;
     join_alternative_declarations(&mut ws, &node_of, &ctx.graph().workspace_rows.declarations);
     let row_nodes = RowNodes::build(ctx, &ws, node_of);
-    finish_resolved(ws, inputs, skip_roots_config, row_nodes)
+    let scope = super::symbol_table::TableScope::of(ctx.graph());
+    finish_resolved(ws, inputs, skip_roots_config, row_nodes, &scope)
 }
 
 /// #160 step 11b T2 (spec §5.2): [`assemble_and_resolve_workspace_from_program`]
@@ -2788,7 +2789,8 @@ pub fn assemble_and_resolve_workspace_from_program_edited(
     join_alternative_declarations(&mut ws, &node_of, &ctx.graph().workspace_rows.declarations);
     edit(&mut ws, &mut node_of);
     let row_nodes = RowNodes::build(ctx, &ws, node_of);
-    finish_resolved(ws, inputs, skip_roots_config, row_nodes)
+    let scope = super::symbol_table::TableScope::of(ctx.graph());
+    finish_resolved(ws, inputs, skip_roots_config, row_nodes, &scope)
 }
 
 /// The site-id tags a routine's walk mints (`ir_walk::SiteIdBase`), plus the
@@ -3172,7 +3174,13 @@ pub(crate) fn assemble_and_resolve_cross_app_from_program_cached(
     join_alternative_declarations(&mut ws, &node_of, &ctx.graph().workspace_rows.declarations);
     let row_nodes = RowNodes::build(ctx, &ws, node_of);
     Some((
-        finish_resolved(ws, inputs, skip_roots_config, row_nodes)?,
+        finish_resolved(
+            ws,
+            inputs,
+            skip_roots_config,
+            row_nodes,
+            &super::symbol_table::TableScope::of(ctx.graph()),
+        )?,
         abi_rows,
     ))
 }
@@ -3892,13 +3900,14 @@ fn finish_resolved(
     inputs: &crate::program::inputs::WorkspaceInputs,
     skip_roots_config: bool,
     row_nodes: RowNodes,
+    scope: &super::symbol_table::TableScope,
 ) -> Option<ModelRows> {
     // Measured as a whole (context-server design r4 §12 stage 1): the record
     // and field resolution (`l3.resolve`), the root classification and the
     // primary app.
     let _s = pt::span("l3", "l3.finish_resolved");
     let resolved = {
-        resolve(&mut ws);
+        resolve(&mut ws, scope);
         // R4-F: classify AST roots, then overlay `<workspace>/roots.config.json`,
         // from the bytes the command's `WorkspaceInputs` read (mirrors al-sem's
         // index.ts: `loadRootsConfig(workspaceRoot)`).
@@ -3977,11 +3986,12 @@ pub(crate) fn read_primary_app(
 /// the symbol-only dependency rows likewise come from `project_abi_to_index`, which
 /// emits only these structs. DO NOT add an L4 field to these entity structs.
 /// NOTHING in `resolve` reads beyond them.
-pub fn resolve(workspace: &mut ModelEntities) {
+pub fn resolve(workspace: &mut ModelEntities, scope: &super::symbol_table::TableScope) {
     let _s = pt::span("l3", "l3.resolve");
     // The loop below takes `&mut workspace.routines`; the table borrows only
-    // `objects`/`tables`, disjoint fields, so that is fine.
-    let symbols = SymbolTable::build(&workspace.objects, &workspace.tables);
+    // `objects`/`tables`, disjoint fields, so that is fine. ENG-194: a table
+    // name binds as the program's resolver binds it, seen from the routine's app.
+    let symbols = SymbolTable::build_scoped(&workspace.objects, &workspace.tables, scope);
 
     // Each routine's DECLARING object (#279): an `#if`-split object has two rows
     // under one id, each with its own SourceTable / extends target.
