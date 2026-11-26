@@ -1238,6 +1238,12 @@ fn cdo_slot_a_stuck_lock_fails_loudly_and_readers_go_on() {
 /// `hid` moved to the first line) -> "held by  () since" (red). Breaking only
 /// one stays green, recorded as a property: a part without the id line names
 /// no hold the reader can trust, and a renamed file is never partial.
+///
+/// ⟨TLS-127⟩ "Still writing" once ended 5 s after the lock was taken, and this
+/// test's pause plus reads passed that on a loaded host ("held by an unknown
+/// holder"). The writer now keeps the publish lock until its status is in, so
+/// "still writing" lasts exactly as long as the write; see
+/// `cdo_slot_a_slow_take_is_still_writing_not_unknown`.
 #[test]
 fn cdo_slot_a_reader_never_sees_a_half_written_status() {
     let s = Slot::new();
@@ -1266,6 +1272,515 @@ fn cdo_slot_a_reader_never_sees_a_half_written_status() {
     let (_, text) = s.run("B", &["status"], &[]);
     assert!(text.starts_with("held by lane (halfway) since"), "{text}");
     assert_eq!(s.run("A", &["release"], &[]).0, Some(0));
+}
+
+/// ⟨TLS-127⟩ A holder between its hold lock and its status is "still writing"
+/// however long that takes. It used to be judged by the lock file's age (under
+/// 5 s), so a take slowed past 5 s (host load 150, a suspend, or the test
+/// above, whose 3 s write pause and 2 s of reads start after the lock is taken)
+/// read as "held by an unknown holder". Now the holder keeps the publish lock
+/// (shared) from before its hold lock until its status is renamed in, and a
+/// reader asks that lock. Here the lock file is aged by 60 s to stand for the
+/// slow take. A lock held by a process that never writes a status is still an
+/// unknown holder.
+///
+/// Mutation (2026-11-24): `describe` without the publish-lock check (the old
+/// age rule back) -> "a slow take read as: held by an unknown holder (no status
+/// names it) since" (red); restored, green.
+#[test]
+fn cdo_slot_a_slow_take_is_still_writing_not_unknown() {
+    let s = Slot::new();
+    let age_lock = || {
+        let aged = std::time::SystemTime::now() - std::time::Duration::from_secs(60);
+        std::fs::File::options()
+            .write(true)
+            .open(s.dir().join("lock"))
+            .unwrap()
+            .set_modified(aged)
+            .unwrap();
+    };
+    // A status of an older hold, naming a dead id, as on every real take.
+    assert_eq!(s.run("A", &["acquire", "lane", "first"], &[]).0, Some(0));
+    assert_eq!(s.run("A", &["release"], &[]).0, Some(0));
+    let mut taker = s.bg(
+        "A",
+        &["acquire", "lane", "slow"],
+        &[("CDO_SLOT_TEST_PAUSE_PUBLISH_S", "60")],
+    );
+    s.wait_paused();
+    age_lock();
+    let (_, text) = s.run("B", &["status"], &[]);
+    assert!(
+        text.starts_with("held (its holder is still writing its status)"),
+        "a slow take read as: {text}"
+    );
+    s.resume();
+    assert_eq!(taker.0.wait().unwrap().code(), Some(0));
+    let (_, text) = s.run("B", &["status"], &[]);
+    assert!(text.starts_with("held by lane (slow) since"), "{text}");
+    assert_eq!(s.run("A", &["release"], &[]).0, Some(0));
+
+    // A holder that never writes a status (not a cdo-slot take) stays unknown.
+    // --no-fork: the process Reap kills is the one that has the lock.
+    let lock = s.dir().join("lock");
+    let _stranger = stand_in(
+        &s,
+        "flock",
+        &[
+            "--no-fork".as_ref(),
+            "-x".as_ref(),
+            lock.as_os_str(),
+            "sleep".as_ref(),
+            "600".as_ref(),
+        ],
+    );
+    until("the stranger holds the lock", &|| {
+        s.probe().starts_with("held=1")
+    });
+    age_lock();
+    let (_, text) = s.run("B", &["status"], &[]);
+    assert!(
+        text.starts_with("held by an unknown holder (no status names it)"),
+        "{text}"
+    );
+}
+
+/// ⟨TLS-127⟩ A reader whose first status read came before a take renamed its
+/// status in, and whose publish probe comes after the take let the publish lock
+/// go, reads the status once more and names the new holder. The READ hook holds
+/// the reader between the two steps while the take finishes in that window.
+///
+/// Mutation (2026-11-24): the second read in `state` dropped -> "the finished
+/// take read as: held by an unknown holder (no status names it)" (red);
+/// restored, green.
+#[test]
+fn cdo_slot_a_take_that_finishes_mid_read_is_named() {
+    let s = Slot::new();
+    // A status of an older hold, naming a dead id: the reader's first read.
+    assert_eq!(s.run("A", &["acquire", "lane", "first"], &[]).0, Some(0));
+    assert_eq!(s.run("A", &["release"], &[]).0, Some(0));
+    let mut taker = s.bg(
+        "A",
+        &["acquire", "lane", "late"],
+        &[("CDO_SLOT_TEST_PAUSE_PUBLISH_S", "60")],
+    );
+    s.wait_paused();
+    let reader = s
+        .cmd("B", &["status"], &[("CDO_SLOT_TEST_PAUSE_READ_S", "60")])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    s.wait_paused();
+    // The take finishes: status renamed in, publish lock let go.
+    s.resume();
+    assert_eq!(taker.0.wait().unwrap().code(), Some(0));
+    std::fs::write(s.dir().join("resume-read"), "").unwrap();
+    let out = reader.wait_with_output().unwrap();
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        text.starts_with("held by lane (late) since"),
+        "the finished take read as: {text}{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(s.run("A", &["release"], &[]).0, Some(0));
+}
+
+/// ⟨TLS-127 review r1, Fable⟩ A hold released after a reader saw the hold lock
+/// held, and before it read the status, leaves no live id and no publish lock.
+/// The reader probes the hold lock once more and reads the slot as free: a
+/// `status` says "free", and an `acquire` without --wait takes it, instead of
+/// "held by an unknown holder" with an empty holder list. The HELD hook holds
+/// each reader in that window while the test releases. A third case keeps the
+/// publish lock taken (shared, as a take attempt would) during the release: the
+/// reader must still read free, not "still writing" (review r2, Fable).
+///
+/// Mutation (2026-11-24): the hold-lock re-probe in `state` dropped -> "a
+/// released hold read as: held by an unknown holder (no status names it)"
+/// (red); restored, green.
+/// Mutation (2026-11-24, review r2): the first publish probe's hold-lock
+/// re-probe dropped (`writing=1` at once) -> "a released hold read as: held
+/// (its holder is still writing its status)" (red); restored, green.
+#[test]
+fn cdo_slot_a_release_during_a_read_reads_free() {
+    let s = Slot::new();
+    let held = [("CDO_SLOT_TEST_PAUSE_HELD_S", "60")];
+    for (args, publish_taken) in [
+        (&["status"][..], false),
+        (&["acquire", "lane", "next"][..], false),
+        (&["status"][..], true),
+    ] {
+        assert_eq!(s.run("A", &["acquire", "lane", "first"], &[]).0, Some(0));
+        let publish = s.dir().join("publish.lock");
+        let _publish = publish_taken.then(|| {
+            stand_in(
+                &s,
+                "flock",
+                &[
+                    "--no-fork".as_ref(),
+                    "-s".as_ref(),
+                    publish.as_os_str(),
+                    "sleep".as_ref(),
+                    "600".as_ref(),
+                ],
+            )
+        });
+        if publish_taken {
+            until("the publish lock is taken", &|| {
+                std::process::Command::new("flock")
+                    .args(["-x", "-n"])
+                    .arg(s.dir().join("publish.lock"))
+                    .arg("true")
+                    .status()
+                    .unwrap()
+                    .code()
+                    == Some(1)
+            });
+        }
+        let reader = s
+            .cmd("B", args, &held)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        s.wait_paused();
+        assert_eq!(s.run("A", &["release"], &[]).0, Some(0));
+        s.resume();
+        let out = reader.wait_with_output().unwrap();
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "a released hold read as: {text}"
+        );
+        if args[0] == "status" {
+            assert_eq!(text.trim_end(), "free", "a released hold read as: {text}");
+        } else {
+            let (_, now) = s.run("B", &["status"], &[]);
+            assert!(now.starts_with("held by lane (next) since"), "{now}");
+            assert_eq!(s.run("B", &["release"], &[]).0, Some(0));
+        }
+    }
+}
+
+/// ⟨TLS-127 review, sol⟩ A publish lock that cannot be probed does not undo a
+/// confirmed hold: a stranger holds the hold lock, `publish.lock` is a regular
+/// file nobody may read (mode 000: flock cannot open it), and the guard still
+/// refuses another session's CDO command. The publish probe is best effort: a
+/// failed one used to end `probe` (exit 5) before its decision line, and the
+/// guard then let the command run.
+///
+/// Mutation (2026-11-25): `publish_busy` calling `probe` outside its subshell
+/// (its exit 5 ends the script) -> "the guard let it run beside a held slot:
+/// cdo-slot-guard: ... probe failed" (red, exit 0); restored, green. (Then with
+/// a socket as `publish.lock`; since review r2 a socket is refused before any
+/// open, so the test uses an unreadable regular file to keep pinning this.)
+#[test]
+fn cdo_slot_an_unprobeable_publish_lock_keeps_the_hold() {
+    use std::os::unix::fs::PermissionsExt;
+    let s = Slot::new();
+    std::fs::create_dir_all(s.dir()).unwrap();
+    let publish = s.dir().join("publish.lock");
+    std::fs::write(&publish, "").unwrap();
+    std::fs::set_permissions(&publish, std::fs::Permissions::from_mode(0o000)).unwrap();
+    // As root the mode would not stop the open: the test would prove nothing.
+    assert!(
+        std::fs::File::open(&publish).is_err(),
+        "precondition: publish.lock cannot be opened"
+    );
+    let lock = s.dir().join("lock");
+    let _stranger = stand_in(
+        &s,
+        "flock",
+        &[
+            "--no-fork".as_ref(),
+            "-x".as_ref(),
+            lock.as_os_str(),
+            "sleep".as_ref(),
+            "600".as_ref(),
+        ],
+    );
+    // Asked of the lock itself, not of `probe` (the code under test).
+    until("the stranger holds the lock", &|| {
+        lock.exists()
+            && std::process::Command::new("flock")
+                .args(["-s", "-n"])
+                .arg(&lock)
+                .arg("true")
+                .status()
+                .unwrap()
+                .code()
+                == Some(1)
+    });
+    let (code, text) = s.guard("B", "scripts/cdo-gate --only harness");
+    assert_eq!(
+        code,
+        Some(2),
+        "the guard let it run beside a held slot: {text}"
+    );
+}
+
+/// ⟨TLS-127 review r2, sol⟩ A `publish.lock` that is not a regular file is
+/// never opened: opening a FIFO with no writer blocks, so the guard's probe hung
+/// until the guard cut it (30 s) and then let the command run. With a stranger
+/// holding the hold lock and a FIFO as `publish.lock`, the guard refuses at
+/// once, and a take refuses ("not a regular file") instead of blocking.
+///
+/// Mutation (2026-11-26): the regular-file check in `publish_busy` dropped ->
+/// "the guard let it run beside a held slot" after the guard's 30 s cut (red);
+/// restored, green. Since review r3 the reader also opens the file read-write,
+/// which never blocks, so the check is one of two guards: the mutation now drops
+/// the check AND makes the open read-only (`exec 9<`); each alone stays green.
+#[test]
+fn cdo_slot_a_fifo_publish_lock_is_never_opened() {
+    let s = Slot::new();
+    std::fs::create_dir_all(s.dir()).unwrap();
+    let publish = s.dir().join("publish.lock");
+    let status = std::process::Command::new("mkfifo")
+        .arg(&publish)
+        .status()
+        .unwrap();
+    assert!(status.success(), "mkfifo");
+    let lock = s.dir().join("lock");
+    let stranger = stand_in(
+        &s,
+        "flock",
+        &[
+            "--no-fork".as_ref(),
+            "-x".as_ref(),
+            lock.as_os_str(),
+            "sleep".as_ref(),
+            "600".as_ref(),
+        ],
+    );
+    until("the stranger holds the lock", &|| {
+        lock.exists()
+            && std::process::Command::new("flock")
+                .args(["-s", "-n"])
+                .arg(&lock)
+                .arg("true")
+                .status()
+                .unwrap()
+                .code()
+                == Some(1)
+    });
+    let started = std::time::Instant::now();
+    let (code, text) = s.guard("B", "scripts/cdo-gate --only harness");
+    assert_eq!(
+        code,
+        Some(2),
+        "the guard let it run beside a held slot: {text}"
+    );
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(15),
+        "the guard's probe waited on the FIFO: {:?}",
+        started.elapsed()
+    );
+    drop(stranger);
+    until("the stranger let go", &|| s.probe().starts_with("held=0"));
+    let started = std::time::Instant::now();
+    let (code, text) = s.run("A", &["run", "lane", "fifo", "--", "true"], &[]);
+    assert_eq!(code, Some(1), "{text}");
+    assert!(text.contains("is not a regular file"), "{text}");
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(15),
+        "the take waited on the FIFO"
+    );
+}
+
+/// ⟨TLS-127 review, sol⟩ A take waits for the publish lock only so long, and
+/// never holds the hold lock meanwhile: with a stuck exclusive holder of
+/// `publish.lock` (a stopped reader's probe), a `run` and a keeper-backed
+/// `acquire --wait` each fail after CDO_SLOT_LOCK_WAIT_S (2 s) with a message
+/// that names the publish lock, and the hold lock reads free throughout. Under a
+/// 60 s lock wait, an `acquire --timeout 2` waits for the publish lock what is
+/// left of its 2 s at the attempt (the message's "held for X s", X <= 2), and
+/// an `acquire --timeout 0` does not wait at all ("held for 0.000000 s").
+///
+/// Mutations (2026-11-25): the hold lock taken before the publish lock in
+/// `take_hold` -> "the hold lock was taken while waiting for the publish lock"
+/// (red); the publish wait not cut to --timeout -> "the publish wait outlasted
+/// --timeout" (red, after 60 s); each restored, green.
+/// Mutation (2026-11-26, review r2): the wait rounded up to whole seconds with
+/// at least 1 s (the r1 rule) -> "--timeout 0 still waited: ... held for 1 s"
+/// (red); restored, green.
+#[test]
+fn cdo_slot_a_stuck_publish_lock_refuses_takes_in_bounds() {
+    let s = Slot::new();
+    std::fs::create_dir_all(s.dir()).unwrap();
+    let publish = s.dir().join("publish.lock");
+    std::fs::write(&publish, "").unwrap();
+    let _stuck = stand_in(
+        &s,
+        "flock",
+        &[
+            "--no-fork".as_ref(),
+            "-x".as_ref(),
+            publish.as_os_str(),
+            "sleep".as_ref(),
+            "600".as_ref(),
+        ],
+    );
+    until("the stand-in has the publish lock", &|| {
+        std::process::Command::new("flock")
+            .args(["-s", "-n"])
+            .arg(&publish)
+            .arg("true")
+            .status()
+            .unwrap()
+            .code()
+            == Some(1)
+    });
+    // Each take, polled until it ends: (exit, output, seconds, hold lock ever held).
+    let take = |args: &[&str], env: &[(&str, &str)]| {
+        let started = std::time::Instant::now();
+        let mut child = s
+            .cmd("A", args, env)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut held = false;
+        while child.try_wait().unwrap().is_none() {
+            held |= s.probe().starts_with("held=1");
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        let out = child.wait_with_output().unwrap();
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        (out.status.code(), text, started.elapsed(), held)
+    };
+    let two = [("CDO_SLOT_LOCK_WAIT_S", "2")];
+    for args in [
+        &["run", "lane", "ran", "--", "true"][..],
+        &["acquire", "lane", "kept", "--wait"][..],
+    ] {
+        let (code, text, _, held) = take(args, &two);
+        assert_eq!(code, Some(1), "{args:?}: {text}");
+        assert!(
+            text.contains("the publish lock") && text.contains("held for 2 s"),
+            "{args:?}: {text}"
+        );
+        assert!(
+            !held,
+            "{args:?}: the hold lock was taken while waiting for the publish lock"
+        );
+        assert_eq!(s.probe(), "held=0 own=0 timed=0", "{args:?}");
+    }
+    // The seconds the take waited, from its message "held for X s".
+    let waited = |text: &str| -> f64 {
+        let x = text
+            .split("held for ")
+            .nth(1)
+            .and_then(|r| r.split(' ').next())
+            .unwrap_or_else(|| panic!("no wait in: {text}"));
+        x.parse()
+            .unwrap_or_else(|_| panic!("wait {x:?} in: {text}"))
+    };
+    let sixty = [("CDO_SLOT_LOCK_WAIT_S", "60")];
+    let (code, text, took, _) = take(
+        &["acquire", "lane", "timed-out", "--wait", "--timeout", "2"],
+        &sixty,
+    );
+    assert_eq!(code, Some(1), "{text}");
+    assert!(
+        waited(&text) <= 2.0 && took < std::time::Duration::from_secs(20),
+        "the publish wait outlasted --timeout ({took:?}): {text}"
+    );
+    let (code, text, _, _) = take(
+        &["acquire", "lane", "no-time", "--wait", "--timeout", "0"],
+        &sixty,
+    );
+    assert_eq!(code, Some(1), "{text}");
+    assert_eq!(waited(&text), 0.0, "--timeout 0 still waited: {text}");
+}
+
+/// ⟨TLS-127 review r3, sol⟩ A host suspend between an acquire's handoff and its
+/// keeper's publish-lock attempt does not use up the --timeout: the deadline
+/// the keeper gets is on CLOCK_MONOTONIC, which stops in a suspend (the wall
+/// clock is only the fall back). The keeper is held in the TAKE hook for 6 s,
+/// all of them "suspended" (`CDO_HOST_SUSPENDED_FILE` 100 -> 106), so of a
+/// 10 s --timeout it still waits most for the stuck publish lock (over 5 s, at
+/// most 10 s); on the wall clock it would have had at most 4 s left.
+///
+/// Mutation (2026-11-26): the take using the wall-clock deadline only ->
+/// "the suspend used up the publish wait: ... held for 3.9... s" (red);
+/// restored, green.
+#[test]
+fn cdo_slot_a_suspend_during_the_handoff_keeps_the_publish_wait() {
+    let s = Slot::new();
+    std::fs::create_dir_all(s.dir()).unwrap();
+    let publish = s.dir().join("publish.lock");
+    std::fs::write(&publish, "").unwrap();
+    let _stuck = stand_in(
+        &s,
+        "flock",
+        &[
+            "--no-fork".as_ref(),
+            "-x".as_ref(),
+            publish.as_os_str(),
+            "sleep".as_ref(),
+            "600".as_ref(),
+        ],
+    );
+    until("the stand-in has the publish lock", &|| {
+        std::process::Command::new("flock")
+            .args(["-s", "-n"])
+            .arg(&publish)
+            .arg("true")
+            .status()
+            .unwrap()
+            .code()
+            == Some(1)
+    });
+    let reading = s.0.path().join("suspended");
+    std::fs::write(&reading, "100").unwrap();
+    let reading_s = reading.to_str().unwrap();
+    let taker = s
+        .cmd(
+            "A",
+            &["acquire", "lane", "handoff", "--wait", "--timeout", "10"],
+            &[
+                ("CDO_SLOT_LOCK_WAIT_S", "60"),
+                ("CDO_SLOT_TEST_PAUSE_TAKE_S", "60"),
+                ("CDO_HOST_SUSPENDED_FILE", reading_s),
+            ],
+        )
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    s.wait_paused();
+    // Six seconds pass in the keeper's window, all of them suspended.
+    let paused_at = std::time::Instant::now();
+    std::thread::sleep(std::time::Duration::from_secs(6));
+    let slept = paused_at.elapsed().as_secs();
+    std::fs::write(&reading, format!("{}", 100 + slept)).unwrap();
+    s.resume();
+    let out = taker.wait_with_output().unwrap();
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(out.status.code(), Some(1), "{text}");
+    let x: f64 = text
+        .split("held for ")
+        .nth(1)
+        .and_then(|r| r.split(' ').next())
+        .and_then(|x| x.parse().ok())
+        .unwrap_or_else(|| panic!("no wait in: {text}"));
+    assert!(
+        x > 5.0 && x <= 10.0,
+        "the suspend used up the publish wait: {text}"
+    );
 }
 
 /// ⟨TLS-89⟩ Concurrent takers: six sessions at once run timed and untimed
