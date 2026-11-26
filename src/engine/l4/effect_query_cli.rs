@@ -7831,8 +7831,17 @@ tableextension 50101 \"Cust Ext\" extends Cust
             .filter_map(|s| g.stable_id(s.1.node))
             .collect();
         // The answer's callers, by each engine.
-        let by_r0 = field_scope(model, &query, Some(Some(&g)), kinds, Direction::Up, &join);
-        let by_solve = field_scope(model, &query, None, kinds, Direction::Up, &join);
+        // Up only: the down cone's typed edges are not read.
+        let by_r0 = field_scope(
+            model,
+            &query,
+            Some(Some(&g)),
+            &[],
+            kinds,
+            Direction::Up,
+            &join,
+        );
+        let by_solve = field_scope(model, &query, None, &[], kinds, Direction::Up, &join);
         assert_eq!(by_r0.up_engine, "reverse-walk");
         assert_eq!(by_solve.up_engine, "solve-graph");
         assert_eq!(r0.len(), 4, "the fixture's callers: {r0:?}");
