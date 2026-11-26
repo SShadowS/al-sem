@@ -3760,6 +3760,71 @@ fn route_applicability_zero_violations() {
     );
 }
 
+/// ENG-193 (Fable r3 S5): the independent event checker accepts a subscriber that names, by
+/// number, an object a SHARED extension may extend. The workspace's `TE extends T` sees two `T`s
+/// (its own 50030 and the dependency's 61001), so the resolver binds `TE`'s event to a subscriber
+/// of `Table 50030` only as a fallback (`index::PublisherExtensions`); the checker must count every
+/// object `TE` may extend, not only a unique base.
+///
+/// Discrimination (2026-11-24): the checker reading only a unique base (`bases_of` cut to a
+/// one-element slice) counts this route as one `event_violations`.
+#[test]
+fn route_applicability_accepts_a_shared_extensions_event_named_by_its_base() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    std::fs::create_dir_all(tmp.path().join("src")).expect("mkdir src");
+    let dep_guid = "19319319-0000-4000-8000-0000000000c1";
+    std::fs::write(
+        tmp.path().join("app.json"),
+        format!(
+            r#"{{ "id": "19319319-0000-4000-8000-0000000000c2", "name": "Ws193c", "publisher": "t",
+  "version": "1.0.0.0", "runtime": "15.0",
+  "dependencies": [{{ "id": "{dep_guid}", "name": "Dep193c", "publisher": "probe", "version": "1.0.0.0" }}] }}"#
+        ),
+    )
+    .expect("write app.json");
+    let dep_al = "namespace KA;\n\ntable 61001 T\n{\n    fields { field(1; Code; Code[20]) { } }\n    keys { key(PK; Code) { } }\n}\n";
+    let symbols = r#"{"RuntimeVersion":"15.0","Namespaces":[{"Name":"KA","Tables":[{"Id":61001,"Name":"T","Fields":[{"Id":1,"Name":"Code","TypeDefinition":{"Name":"Code"}}]}]}]}"#;
+    symbol_app::write_source_app(
+        &tmp.path().join(".alpackages/probe_Dep193c_1.0.0.0.app"),
+        dep_guid,
+        "Dep193c",
+        "1.0.0.0",
+        symbols,
+        &[("src/KA.al", dep_al)],
+        "",
+    );
+    std::fs::write(
+        tmp.path().join("src/W.al"),
+        r#"namespace W;
+
+table 50030 T
+{
+    fields { field(1; Code; Code[20]) { } }
+    keys { key(PK; Code) { } }
+}
+tableextension 50040 TE extends T
+{
+    [IntegrationEvent(false, false)]
+    procedure OnExtByNumber() begin end;
+    procedure RaiseExt() begin OnExtByNumber(); end;
+}
+codeunit 50031 Sub
+{
+    [EventSubscriber(ObjectType::Table, 50030, 'OnExtByNumber', '', false, false)]
+    local procedure H() begin end;
+}
+"#,
+    )
+    .expect("write W.al");
+    let appl = run_route_applicability(tmp.path());
+    assert!(
+        appl.event_routes_checked >= 1,
+        "precondition: the subscription binds (event routes checked: {})",
+        appl.event_routes_checked
+    );
+    assert_eq!(appl.event_violations, 0, "the checker accepts the binding");
+}
+
 // ---------------------------------------------------------------------------
 // Test 15c (CDO env-gated, IGNORED — one-off diagnostic dump only, no gate):
 // argtype-dispatch-and-page-catalog plan, Task 2 — lists every CDO call site
@@ -8314,15 +8379,10 @@ fn resolve_module_pick_first_base_function_callers_are_a_known_allowlist() {
             "index.rs",
             "None => graph.resolve_object(from, kind, &args.publisher_name),",
         ),
-        // `PublisherExtensions::build` (fix/unbound-subscriptions): the base
-        // object of a table/page/report extension, from the extension's own
-        // app, so an event the extension declares is found under its base. The
-        // same lookup as the first `resolver.rs` entry; a collision fails
-        // closed and the extension is listed under no base.
-        (
-            "index.rs",
-            "if let Some(base) = graph.resolve_object(obj.id.app, base_kind, target) {",
-        ),
+        // (ENG-193: `PublisherExtensions::build` lists an extension under every
+        // base its app sees by that name, through `ProgramGraph::visible_objects`,
+        // never `resolve_object`: a subscriber naming any of them by number may
+        // bind the extension's event.)
         // (ENG-152: every interface name binds through
         // `ProgramGraph::bind_interface`, outside this module, never
         // `resolve_object`: own-app-first is not alc's rule for interfaces, and a

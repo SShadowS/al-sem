@@ -336,6 +336,8 @@ mod cli_receiver_temp_state;
 mod cli_record_integer_builtin_arg;
 mod cli_recordref_open_temporary;
 mod cli_recref_get;
+mod cli_resolve_no_own_app_shadow;
+mod cli_resolve_shared_name_readers;
 mod cli_s6_consumers;
 mod cli_sarif_rule_catalog;
 mod cli_secrettext_arg;
