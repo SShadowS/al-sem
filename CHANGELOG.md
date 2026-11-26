@@ -43,10 +43,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   digest stamped in the running module's data-digest slot; and its own slot equals the loaded
   one. The key is then the accepted file's bytes, as on Linux. Anything else: no key, the cache
   off, the reason in the report. The key is computed at start, in `install_from_env` (aldump's
-  and al-call-hierarchy's first statement, alsem's after its perf-trace setup; skipped for help
-  and version, the `mcp` front end and `engine-ask`, which never use the cache; a help or version
-  word after `--` is an operand, so `alsem batch -- --help`, a manifest named `--help`, keys at
-  start). The
+  and al-call-hierarchy's first statement, alsem's after its perf-trace setup) **whenever the
+  cache is on, for every command**: no argv look decides it, because two argv guesses at which
+  commands use the cache were wrong (sol's final reviews: `alsem batch -- --help` and `aldump
+  --program-call-graph-stats --help`, where `--help` is an operand, would have keyed late). A help
+  or version call pays the ~45 ms key. The
   candidate is read through a handle that denies write and delete (one retry after 50 ms on a
   sharing violation), closed after the check: the running exe can be renamed away afterwards.
   The key is over the accepted file's bytes, not an exact identity of the running file (bytes the
@@ -94,9 +95,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and one with an added unlisted function must both be refused. It runs as `scripts/ci-steps locale` (in `task`, `task-affected`
   and `all`) and in CI's `test` job, in about 3 s.
 - **Windows-native tests** (the owner runs them: `cargo test -p al-sem --lib -- winfs
-  key::tests::windows snapshot::cache prune`): `snapshot::winfs::tests::windows_private_walk`,
+  key::tests::windows snapshot::cache prune the_windows_key_is_attempted`):
+  `snapshot::winfs::tests::windows_private_walk`,
   `program::ir_cache::key::tests::windows_stamped_copy_keys_on_its_image` (the running exe can
   be renamed away after its key),
+  `program::ir_cache::windows_tests::the_windows_key_is_attempted_at_install` (with the cache on
+  `install_from_env` attempts the key at once, whatever the command; off, it does not),
   `snapshot::cache::tests::a_permissive_entry_is_refused_at_every_open`,
   `a_mapped_entry_cannot_be_opened_for_writing`, `shared_now_lock_fails_while_exclusive_held`,
   and `program::ir_cache::prune::tests` (all but the two size-rule tests).

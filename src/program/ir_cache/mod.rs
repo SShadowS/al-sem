@@ -138,6 +138,13 @@ impl IrCache {
         self.key_result().as_ref().err()
     }
 
+    /// Tests (Windows): whether the key has been attempted (made, or refused), without making
+    /// it. An unstamped test binary is refused (`Unstamped`), which still counts.
+    #[cfg(all(test, windows))]
+    pub(crate) fn key_attempted(&self) -> bool {
+        self.key.get().is_some()
+    }
+
     fn key_result(&self) -> &Result<IrKey, key::NoKey> {
         // The warning is given at the first seam use (`first_use`): on Windows the key is made
         // in `main` before the logger is up.
@@ -174,35 +181,18 @@ pub fn install_from_env() -> ReportGuard {
     cache.bad_switch = bad_switch;
     let _ = INSTALLED.set(cache);
     // TLS-117: on Windows the key is computed EAGERLY, here (aldump's and al-call-hierarchy's
-    // first statement; in alsem's `main` after the perf-trace setup), so the time between the
-    // image's load and its verification is milliseconds, not the hours a resident server could
-    // wait before its first dependency parse. Commands that never use the cache skip it (they
-    // would still get a lazy key at a first use). On Linux the key stays lazy (`/proc/self/exe`
-    // is the running inode whenever it is read).
+    // first statement; in alsem's `main` after the perf-trace setup), whenever the cache is on,
+    // so the time between the image's load and its verification is milliseconds. No command is
+    // skipped: an argv guess at which commands use the cache was wrong twice (sol final rounds
+    // 1 and 2: `alsem batch -- --help`, `aldump --program-call-graph-stats --help`, where
+    // `--help` is an operand), so the class is closed by not reading argv at all; a help call
+    // pays the ~45 ms key. On Linux the key stays lazy (`/proc/self/exe` is the running inode
+    // whenever it is read).
     #[cfg(windows)]
-    if let Some(c) = INSTALLED.get().filter(|c| c.is_on())
-        && eager_key_wanted(&std::env::args_os().collect::<Vec<_>>())
-    {
+    if let Some(c) = INSTALLED.get().filter(|c| c.is_on()) {
         let _ = c.key();
     }
     ReportGuard::new()
-}
-
-/// Whether a process started with `args` (argv, the program first) may use the IR cache, so
-/// its key is worth making at start (Fable N7): not for help or version output, the `mcp`
-/// front end or `engine-ask` (their engine child keys itself). `alsem batch` uses the cache, in
-/// the parent and every worker (TLS-116), so it keys. A cheap look at argv, never a parse. A
-/// help or version flag counts only before `--`: after it the word is an operand (sol final:
-/// `alsem batch -- --help` names a manifest, and a skipped eager key could then wait on a
-/// `--diff -` job's stdin, past the window the owner accepted).
-#[cfg_attr(not(windows), allow(dead_code))]
-pub(crate) fn eager_key_wanted(args: &[std::ffi::OsString]) -> bool {
-    let sub = args.get(1).and_then(|a| a.to_str());
-    !matches!(sub, Some("mcp" | "engine-ask" | "help"))
-        && !args[1.min(args.len())..]
-            .iter()
-            .take_while(|a| a.to_str() != Some("--"))
-            .any(|a| matches!(a.to_str(), Some("--help" | "-h" | "--version" | "-V")))
 }
 
 /// The installed cache for the calling thread's seam use: `None` when none is installed, or
@@ -287,5 +277,59 @@ impl Default for Suspend {
 impl Drop for Suspend {
     fn drop(&mut self) {
         SUSPENDED.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// Windows-native tests of `install_from_env` (the owner's Windows run; the Linux cross-check
+/// only compiles them).
+#[cfg(all(test, windows))]
+mod windows_tests {
+    /// The child half of [`the_windows_key_is_attempted_at_install`]: installs the cache and
+    /// prints whether the key was attempted before any use.
+    #[test]
+    #[ignore = "run by the_windows_key_is_attempted_at_install as a child"]
+    fn eager_key_child_mode() {
+        if std::env::var_os("ALSEM_IR_EAGER_CHILD").is_none() {
+            return;
+        }
+        let _report = super::install_from_env();
+        let attempted = super::INSTALLED.get().is_some_and(|c| c.key_attempted());
+        println!("EAGER={attempted}");
+    }
+
+    /// TLS-117 (sol final round 2): on Windows, `install_from_env` attempts the key at once
+    /// whenever the cache is on, whatever the command (no argv input decides it); with the
+    /// cache off it does not. The child is this test binary, unstamped, so the attempt is a
+    /// refusal (`Unstamped`), which still shows it was made at install. In a child process
+    /// because the installed cache is process-wide. Discrimination (owner's Windows run,
+    /// pending): remove the eager `c.key()` from `install_from_env`: "on" prints EAGER=false
+    /// and the test fails; restored, passes.
+    #[test]
+    fn the_windows_key_is_attempted_at_install() {
+        let tmp = tempfile::tempdir().unwrap();
+        let eager = |switch: &str| {
+            let out = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--ignored",
+                    "--exact",
+                    "program::ir_cache::windows_tests::eager_key_child_mode",
+                    "--test-threads=1",
+                    "--nocapture",
+                ])
+                .env("ALSEM_IR_EAGER_CHILD", "1")
+                .env("ALSEM_IR_CACHE", switch)
+                .env_remove("ALSEM_IR_CACHE_REPORT")
+                .env("ALSEM_IR_CACHE_DIR", tmp.path().join("ir"))
+                .env("XDG_CACHE_HOME", tmp.path().join("xdg"))
+                .output()
+                .unwrap();
+            let text = String::from_utf8_lossy(&out.stdout).into_owned();
+            assert!(out.status.success(), "{text}");
+            text.lines()
+                .find_map(|l| l.strip_prefix("EAGER=").map(|v| v.trim() == "true"))
+                .unwrap_or_else(|| panic!("the child printed no EAGER line: {text}"))
+        };
+        assert!(eager("on"), "cache on: the key is attempted at install");
+        assert!(!eager("off"), "cache off: no key is attempted");
     }
 }

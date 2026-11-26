@@ -1197,41 +1197,6 @@ mod tests {
         }
     }
 
-    /// TLS-117 (Fable N7): the Windows eager key is skipped for commands that never use the
-    /// cache, and made for the rest (`batch` uses it: TLS-116). Discrimination (2026-11-23):
-    /// `mcp` taken out of `eager_key_wanted`'s list: fails on `alsem mcp`; restored, passes.
-    /// sol final: a help or version word after `--` is an operand, so `alsem batch -- --help`
-    /// (a manifest named `--help`) keys eagerly. Discrimination (2026-11-26): the scan's
-    /// `take_while` before `--` removed: fails on that row; restored, passes.
-    #[test]
-    fn the_eager_key_skips_commands_without_the_cache() {
-        let w = |a: &[&str]| {
-            super::super::eager_key_wanted(&a.iter().map(Into::into).collect::<Vec<_>>())
-        };
-        for a in [
-            &["alsem", "analyze", "ws"][..],
-            &["alsem", "engine-host"],
-            &["alsem", "batch", "m.json"],
-            &["alsem", "batch", "--worker", "0", "m.json"],
-            &["alsem", "batch", "--", "--help"],
-            &["alsem", "batch", "--", "-V"],
-            &["aldump", "--program-call-graph-stats", "ws"],
-            &["al-call-hierarchy"],
-            &["alsem"],
-        ] {
-            assert!(w(a), "{a:?}");
-        }
-        for a in [
-            &["alsem", "mcp", "--workspace", "ws"][..],
-            &["alsem", "engine-ask", "--", "x"],
-            &["alsem", "help"],
-            &["alsem", "analyze", "--help"],
-            &["aldump", "-V"],
-        ] {
-            assert!(!w(a), "{a:?}");
-        }
-    }
-
     /// TLS-117: since the owner's acceptance (2026-11-25) the cache is on by default on every
     /// system, Windows included, and `off` still turns it off. Discrimination (2026-11-25, on
     /// Linux, where the old `!cfg!(windows)` was already true): `DEFAULT_ON = false`: "unset"

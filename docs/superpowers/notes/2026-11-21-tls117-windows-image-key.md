@@ -21,8 +21,11 @@ and the off switch on a stamped binary.
 rev 12: only an explicit `ALSEM_IR_CACHE=on` turned it on, and every acceptance step set it. The
 Windows key is computed **eagerly**, in `install_from_env`: the
 first statement of `aldump`'s and `al-call-hierarchy`'s `main`, and in `alsem`'s `main` after the
-perf-trace setup (skipped for commands that never use the cache: help and version, the `mcp`
-front end, `engine-ask`; `batch` uses it in the parent and every worker, TLS-116, so it keys). The candidate's handle denies write and delete while its bytes are
+perf-trace setup, **whenever the cache is on, for every command** (rev 12: an argv skip for
+help, version, `mcp` and `engine-ask` was removed after sol's final reviews found two operands
+it misread, `alsem batch -- --help` and `aldump --program-call-graph-stats --help`, each of which
+would have delayed the key past the window the owner accepted; a help call now pays the ~45 ms
+key). The candidate's handle denies write and delete while its bytes are
 read and is closed after the check (Fable N1: nothing reads the file again, and a handle held for
 the process's life would stop an installer renaming the running exe away); section 1 states what
 the few milliseconds before the key leave. On Windows the cache roots are created through the private walk
