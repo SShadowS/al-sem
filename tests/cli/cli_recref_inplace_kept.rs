@@ -318,8 +318,8 @@ fn alsem(cwd: &Path, args: &[&str]) -> serde_json::Value {
 /// fails `RootSlot`; retainability read at the bind's start fails `RootJoinInArgs`; no
 /// retainability check on the receiver at all fails `RootReceiverNotKept` (`yes`). Fable r2: any
 /// array element counting, whatever its type, fails `RootRecArrayGet` (`yes`). sol r1
-/// (2026-11-25): `kept_bind_points` keeping `Close` and `Open` fails `RootClose` and
-/// `RootCloseOpen` (`unknown`, not `no`).
+/// (2026-11-26, break then restored, green): `kept_bind_points` keeping `Close` and `Open` fails
+/// `RootClose` (`yes`, not `no`), the first of the two controls asserted.
 #[test]
 fn an_in_place_bind_through_a_kept_holder_rebinds_every_kept_holder() {
     let t = tempfile::tempdir().unwrap();
