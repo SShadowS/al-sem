@@ -137,13 +137,19 @@ fn needs_lookup(f: &std::fs::File, m: &std::fs::Metadata, roots: &[PathBuf]) -> 
 }
 
 /// Whether `/proc/self/mountinfo` lists a mount point inside one of `roots`
-/// (not a root itself) that is a file. A mounted folder needs no lookup: the
-/// folder walk records its identity, so the folder test knows its source too.
-/// Unreadable mountinfo says yes.
+/// (not a root itself) that may be a file. A mounted folder needs no lookup:
+/// the folder walk records its identity, so the folder test knows its source
+/// too. Unreadable mountinfo says yes.
 #[cfg(target_os = "linux")]
 fn file_mount_in(roots: &[PathBuf]) -> bool {
-    std::fs::read_to_string("/proc/self/mountinfo")
-        .map_or(true, |info| file_mount_in_info(roots, &info))
+    // TLS-120 test seam, debug builds only: `ALSEM_TEST_MOUNTINFO=<file>` is read
+    // in place of `/proc/self/mountinfo`, so a test can list a mount it cannot make.
+    #[cfg(debug_assertions)]
+    let source = std::env::var_os("ALSEM_TEST_MOUNTINFO")
+        .map_or_else(|| PathBuf::from("/proc/self/mountinfo"), PathBuf::from);
+    #[cfg(not(debug_assertions))]
+    let source = PathBuf::from("/proc/self/mountinfo");
+    std::fs::read_to_string(source).map_or(true, |info| file_mount_in_info(roots, &info))
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -162,8 +168,11 @@ fn file_mount_in_info(roots: &[PathBuf], info: &str) -> bool {
         .filter_map(|l| l.split(' ').nth(4))
         .map(|p| PathBuf::from(unescape_mount(p)))
         .any(|p| {
+            // Only a mount point seen to be a folder is left out: one that cannot be
+            // looked at (a folder above it unsearchable) may be a file, so it counts
+            // (sol r2), and the lookup then refuses the write if it cannot list there.
             real.iter().any(|r| p != *r && p.starts_with(r))
-                && std::fs::symlink_metadata(&p).is_ok_and(|m| m.is_file())
+                && !std::fs::symlink_metadata(&p).is_ok_and(|m| m.is_dir())
         })
 }
 
@@ -907,9 +916,12 @@ mod tests {
 
     /// TLS-120 sol r1: a file mounted inside a cache folder is seen in a mountinfo text (its
     /// octal escapes undone); a mount outside, the folder itself, or a folder inside is not.
+    /// (sol r2) A mount point that cannot be looked at (its folder mode 000) counts too.
     ///
     /// Discrimination (2026-11-25, sol r1): the escapes left as they are (`unescape_mount`
-    /// returning its field): fails "(a file inside)"; restored, passes.
+    /// returning its field): fails "(a file inside)"; restored, passes. (sol r2) A mount
+    /// point counted only when seen to be a file (`is_ok_and(|m| m.is_file())` again): fails
+    /// "(cannot be looked at)"; restored, passes.
     #[test]
     fn a_file_mount_inside_a_cache_folder_is_seen() {
         let t = tempfile::tempdir().unwrap();
@@ -940,6 +952,16 @@ mod tests {
             !file_mount_in_info(&roots, &line(&sub.to_string_lossy())),
             "(a folder inside)"
         );
+        use std::os::unix::fs::PermissionsExt;
+        let locked = root.join("locked");
+        std::fs::create_dir(&locked).unwrap();
+        std::fs::write(locked.join("e.bin"), "").unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let denied = std::fs::symlink_metadata(locked.join("e.bin")).is_err();
+        let seen = file_mount_in_info(&roots, &line(&locked.join("e.bin").to_string_lossy()));
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(denied, "precondition: the mount point cannot be looked at");
+        assert!(seen, "(cannot be looked at)");
     }
 
     /// TLS-120 sol r1: a file bind-mounted INTO a cache slot shows its source's identity there,

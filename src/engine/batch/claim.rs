@@ -298,9 +298,13 @@ pub fn make_dir(path: &Path) -> std::io::Result<()> {
 /// The path [`make_dir`] steps through. Windows folds a non-verbatim `..` by
 /// name before it looks at any folder (`marker\..\shards` is `shards` even
 /// when `marker` is a file), so it is folded here first (sol r1); unix takes a
-/// `..` from where its prefix leads, so there the path stays as given.
+/// `..` from where its prefix leads, so there the path stays as given. A
+/// drive-relative path (`C:shards`, which joining to the current folder
+/// leaves as it is) is first made absolute by Windows rules (`std::path::absolute`:
+/// the drive's own current folder, sol r2).
 fn dir_steps(p: PathBuf) -> PathBuf {
     if cfg!(windows) {
+        let p = std::path::absolute(&p).unwrap_or(p);
         PathBuf::from(fold_windows(&p.to_string_lossy()))
     } else {
         p
@@ -309,12 +313,17 @@ fn dir_steps(p: PathBuf) -> PathBuf {
 
 /// Windows `.` and `..` folded by name over a path's text: a verbatim path
 /// (`\\?\`, `\\.\`) is taken as written; a `..` never climbs above the drive or
-/// the `\\server\share`. Plain text, so its tests run anywhere.
+/// the `\\server\share`. A drive-relative path (`C:shards`) is taken as written
+/// too: where it leads is the drive's current folder, which only the OS knows
+/// ([`dir_steps`] makes it absolute first). Plain text, so its tests run anywhere.
 fn fold_windows(s: &str) -> String {
     if s.starts_with(r"\\?\") || s.starts_with(r"\\.\") {
         return s.to_string();
     }
     let s = s.replace('/', "\\");
+    if s.as_bytes().get(1) == Some(&b':') && s.as_bytes().get(2) != Some(&b'\\') {
+        return s;
+    }
     let (head, rest) = if let Some(r) = s.strip_prefix(r"\\") {
         let mut it = r.splitn(3, '\\');
         let (server, share) = (it.next().unwrap_or(""), it.next().unwrap_or(""));
@@ -851,13 +860,18 @@ mod tests {
     /// TLS-120 sol r1: Windows folds a non-verbatim `..` by name, so [`make_dir`] steps
     /// through the folded path: `C:\tmp\marker\..\shards` is `C:\tmp\shards` (whatever
     /// `marker` is); a verbatim path stays as written; a `..` stops at the drive or the
-    /// `\\server\share`; `/` is `\`.
+    /// `\\server\share`; `/` is `\`. (sol r2) A drive-relative path (`C:shards`) is never
+    /// rooted at the drive: the string fold leaves it as written ([`dir_steps`] makes it
+    /// absolute first, `dir_steps_resolves_a_drive_relative_path` on Windows).
     ///
     /// Discrimination (2026-11-25, sol r1): the `..` arm pushing the part instead of popping:
-    /// fails "(marker)"; restored, passes.
+    /// fails "(marker)"; restored, passes. (2026-11-26, sol r2) The drive-relative early
+    /// return deleted: fails "(drive-relative)" (`C:\shards`); restored, passes.
     #[test]
     fn windows_dot_dot_folds_by_name() {
         for (case, given, folded) in [
+            ("(drive-relative)", "C:shards", "C:shards"),
+            ("(drive-relative dot dot)", r"C:a\..\b", r"C:a\..\b"),
             ("(marker)", r"C:\tmp\marker\..\shards", r"C:\tmp\shards"),
             ("(dot)", r"C:\tmp\.\shards", r"C:\tmp\shards"),
             ("(slash)", "C:/tmp/a/../b", r"C:\tmp\b"),
@@ -872,6 +886,25 @@ mod tests {
         ] {
             assert_eq!(fold_windows(given), folded, "{case}");
         }
+    }
+
+    /// TLS-120 sol r2 (Windows only): a drive-relative shard path on the current drive
+    /// (`X:shards`) is the current folder's `shards`, as Windows resolves it, not `X:\shards`.
+    ///
+    /// Discrimination: not run (no Windows host here); the Linux half is
+    /// `windows_dot_dot_folds_by_name`'s "(drive-relative)" case.
+    #[cfg(windows)]
+    #[test]
+    fn dir_steps_resolves_a_drive_relative_path() {
+        let cwd = std::env::current_dir().unwrap();
+        let drive: String = cwd.to_string_lossy().chars().take(2).collect();
+        assert_eq!(
+            drive.as_bytes()[1],
+            b':',
+            "precondition: a drive-letter current folder"
+        );
+        let got = dir_steps(PathBuf::from(format!("{drive}shards")));
+        assert_eq!(got, cwd.join("shards"));
     }
 
     /// TLS-120 sol r1: a standalone append (`Mode::Append`, what [`open_append`] opens

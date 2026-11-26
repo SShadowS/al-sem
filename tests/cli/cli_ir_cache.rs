@@ -2285,3 +2285,52 @@ fn standalone_watches_a_missing_folder_by_its_configured_name() {
     );
     assert_eq!(std::fs::read(&entry).unwrap(), b"ENTRY", "untouched");
 }
+
+/// TLS-120 sol r2: a mount inside a cache folder that cannot be looked at (its folder mode
+/// 000) still makes an `--out` look the file up, and the lookup, which cannot list there,
+/// refuses the write naming that folder. The mount is listed through the debug seam
+/// `ALSEM_TEST_MOUNTINFO` (a mountinfo text naming `<text folder>/locked/e.bin`): this
+/// container cannot make a mount. The control: the same `--out` without the seam is written
+/// (one link, no mount, so no lookup).
+///
+/// Discrimination (2026-11-26, sol r2): a mount point counted only when seen to be a file
+/// (`is_ok_and(|m| m.is_file())` again in `file_mount_in_info`): fails "(denied)" (exit 0);
+/// restored, passes.
+#[cfg(debug_assertions)]
+#[test]
+fn standalone_an_unclassifiable_mount_needs_a_lookup() {
+    use std::os::unix::fs::PermissionsExt;
+    let f = fixture();
+    warm(&f);
+    let text = std::fs::canonicalize(f.xdg.join("al-ch-snapshot-cache")).unwrap();
+    let locked = text.join("locked");
+    std::fs::create_dir(&locked).unwrap();
+    std::fs::write(locked.join("e.bin"), "ENTRY").unwrap();
+    let d = tempfile::tempdir().unwrap();
+    let info = d.path().join("mountinfo");
+    std::fs::write(
+        &info,
+        format!(
+            "36 35 0:1 / {} rw,relatime - ext4 /dev/x rw\n",
+            locked.join("e.bin").display()
+        ),
+    )
+    .unwrap();
+    let out = d.path().join("out.json");
+    let control = fanout_out(&f, &out);
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let (ws, o) = (f.ws.to_str().unwrap(), out.to_str().unwrap());
+    let denied = alone(
+        &f,
+        &["events", "fanout", ws, "--single-app", "--out", o],
+        &[("ALSEM_TEST_MOUNTINFO", info.to_str().unwrap())],
+    );
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!(control.status.code(), Some(0), "the control: {control:?}");
+    let stderr = String::from_utf8_lossy(&denied.stderr);
+    assert_eq!(denied.status.code(), Some(1), "(denied): {stderr}");
+    assert!(
+        stderr.contains("cannot list the cache folder") && stderr.contains("locked"),
+        "(denied): {stderr}"
+    );
+}

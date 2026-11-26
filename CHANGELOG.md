@@ -35,20 +35,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   elsewhere by now is followed. While it is missing, a path under where it would be is refused:
   its existing part is resolved again at every check, and on Windows neither side's `\\?\`
   prefix counts and case is ignored. So no shard directory makes a cache folder that the cache
-  would later adopt. On Windows a shard directory's path has its `..` folded by name first, as
-  the OS folds it (`marker\..\shards` is `shards` even when `marker` is a file).
+  would later adopt. On Windows a shard directory's path is first made absolute by Windows rules
+  (a drive-relative `C:shards` is the drive's current folder's `shards`, not `C:\shards`), and
+  its `..` is folded by name, as the OS folds it (`marker\..\shards` is `shards` even when
+  `marker` is a file).
 - **Cost.** A standalone process takes its own snapshot at its first write. It lists every
   entry of the folders but stats only the directories (the listing's own file type; a file
   system without `d_type` stats every entry). A file is looked up in the folders only when its
   open finds it may have another name: more than one link, or a mount of its own (`statx`
   `STATX_ATTR_MOUNT_ROOT`; on Windows, `nNumberOfLinks` above 1). It is also looked up while
-  `/proc/self/mountinfo` lists a file mounted inside a cache folder: a file bind-mounted into a
-  cache slot shows its source's identity there, while the source, opened by its own name, has
-  one link and no mount of its own. Each such lookup walks the files afresh, so an entry
-  published since an earlier lookup is found. Measured on server1's real caches (153,575
-  entries, `release-fast`, 5 runs each, a busy host): the snapshot added 34-48 ms to a `cache prune` run (54, 53, 41, 43, 40 ms
-  against 6 ms with no cache); an `--out` with a second link took 268-405 ms against 53-68 ms
-  for an `--out` with one link (the files walk).
+  `/proc/self/mountinfo` lists a mount inside a cache folder that is not seen to be a folder: a
+  file bind-mounted into a cache slot shows its source's identity there, while the source,
+  opened by its own name, has one link and no mount of its own. A mount point that cannot be
+  looked at (a folder above it unsearchable) counts too, and the lookup then refuses the write
+  if it cannot list there. Each such lookup walks the files afresh, so an entry published since
+  an earlier lookup is found. Measured on server1's real caches (153,575 entries,
+  `release-fast`, 5 runs each, a busy host): the snapshot added 34-48 ms to a `cache prune` run
+  (54, 53, 41, 43, 40 ms against 6 ms with no cache); an `--out` with a second link took
+  268-405 ms against 53-68 ms for an `--out` with one link (the files walk).
 - **An unreadable part of a cache blocks only the writes that need it.** The snapshot skips a
   folder it cannot list. The folder test still knows every cache folder whose own identity it
   could read; a cache folder that cannot even be looked at is skipped too. Only a lookup (a
@@ -99,12 +103,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - An `--out` in, and linked into, the impact-base `work/`.
   - A bind-mounted file counted as may-have-another-name, and a cache folder holding a mounted
     file making a plain file need the lookup (the container's real mountinfo; each half
-    skipped where the host cannot show it), plus the mountinfo reading on a hand-made text. A
-    bind mount through the binary cannot run here: no user namespaces (`unshare -Urm` fails
-    with EPERM).
+    skipped where the host cannot show it), plus the mountinfo reading on a hand-made text (a
+    mount point that cannot be looked at included). A bind mount through the binary cannot run
+    here: no user namespaces (`unshare -Urm` fails with EPERM). Through the binary, a mount
+    listed by the debug seam `ALSEM_TEST_MOUNTINFO` whose folder is mode 000 makes a one-link
+    `--out` refused, naming that folder.
   - A batch append that waits on its writes; a standalone append that waits for a late reader.
   - Windows rules as plain-text tests that run on Linux: `..` folded by name for a shard
-    directory, and the missing-folder compare (both prefixes, `/`, case).
+    directory (a drive-relative path left as written), and the missing-folder compare (both
+    prefixes, `/`, case); a Windows-only test that a drive-relative shard path is the current
+    folder's.
   - Windows: `cargo check --target x86_64-pc-windows-gnu --lib --bins` passes; nothing ran there.
 
 ### Fixed (ENG-178: table procedures named like record built-ins: four follow-ups from ENG-173)
