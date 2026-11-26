@@ -2016,6 +2016,87 @@ fn ci_steps_all_runs_and_judges_the_agentflow_suite() {
     assert!(text.contains("FAILED at 'agentflow'"), "{text}");
 }
 
+/// TLS-141: `ci-steps task` and `task-affected` run agentflow's
+/// `test_gate_env.py` (real pytest, on a scratch copy of `scripts/`), so a
+/// script that reads a new variable conftest neither clears nor keeps fails the
+/// task gate, not only the landing's `ci-steps all` (TLS-127's two cdo-slot
+/// variables did). `cargo` and the helper scripts are stubbed; the copy as it
+/// is passes `task`, and with one added script reading `TLS141_UNLISTED_KNOB`
+/// both steps fail at `gate-env`, naming it. Skipped only on GitHub CI, whose
+/// runner has no pytest.
+///
+/// Mutation (2026-11-26): `gate-env` taken out of `task`'s step loop -> FAILED
+/// (the `task` run printed no `=== ci-steps: gate-env ===`); restored -> passed.
+#[cfg(unix)]
+#[test]
+fn ci_steps_task_runs_the_gate_env_check() {
+    use std::os::unix::fs::PermissionsExt;
+    let has_pytest = crate::clean_env::command("python3")
+        .args(["-m", "pytest", "--version"])
+        .output()
+        .is_ok_and(|o| o.status.success());
+    if !has_pytest && std::env::var_os("GITHUB_ACTIONS").is_some() {
+        eprintln!("skip: no pytest on this CI runner");
+        return;
+    }
+    assert!(has_pytest, "python3 with pytest is required");
+    let dir = tempfile::tempdir().unwrap();
+    let (repo, bin, grammar) = (
+        dir.path().join("repo"),
+        dir.path().join("bin"),
+        dir.path().join("grammar"),
+    );
+    let exe = |p: std::path::PathBuf, body: &str| {
+        std::fs::write(&p, format!("#!/usr/bin/env bash\n{body}\n")).unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+    };
+    crate::copy_dir(
+        std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts")),
+        &repo.join("scripts"),
+    );
+    std::fs::create_dir_all(&bin).unwrap();
+    std::fs::create_dir_all(grammar.join("src")).unwrap();
+    std::fs::write(grammar.join("src/node-types.json"), "[]").unwrap();
+    // Not nextest-priority-check: a stub would drop it from test_gate_env's
+    // COMPUTED_READS scan; the real one finds no report, and `test` ignores that.
+    for s in ["tree-stamp", "require-rttime", "check-parse-path-locale"] {
+        exe(repo.join("scripts").join(s), "echo stub");
+    }
+    exe(bin.join("cargo"), "exit 0");
+    crate::git::run(&repo, &["init", "-q"]);
+    let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
+    let run = |step: &str| {
+        let out = crate::clean_env::command("bash")
+            .arg(repo.join("scripts/ci-steps"))
+            .arg(step)
+            .current_dir(&repo)
+            .env("PATH", &path)
+            .env("TREE_SITTER_AL_PATH", &grammar)
+            .env("CARGO_TARGET_DIR", dir.path().join("target"))
+            .output()
+            .expect("spawn bash scripts/ci-steps");
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        (out.status.code(), text)
+    };
+    let (code, text) = run("task");
+    assert_eq!(code, Some(0), "the copy as it is passes: {text}");
+    assert!(text.contains("=== ci-steps: gate-env ==="), "{text}");
+    exe(
+        repo.join("scripts/tls141-probe"),
+        r#"echo "${TLS141_UNLISTED_KNOB:-off}""#,
+    );
+    for step in ["task", "task-affected"] {
+        let (code, text) = run(step);
+        assert_eq!(code, Some(1), "{step}: {text}");
+        assert!(text.contains("FAILED at 'gate-env'"), "{step}: {text}");
+        assert!(text.contains("TLS141_UNLISTED_KNOB"), "{step}: {text}");
+    }
+}
+
 /// A warm build folder written by hand: one dependency, plus the two folders
 /// `scripts/seed-target` leaves out.
 fn warm_target(src: &tempfile::TempDir) {
