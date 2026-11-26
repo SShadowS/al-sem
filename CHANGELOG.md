@@ -38,6 +38,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a slow clock read (cut at 6 s), and awake-clock's existing failed-read
   reuse and wall-time fall back (`scripts/awake-clock`). The new test pins
   exactly that lateness (6 s).
+- Review r2 (sol): a land that stopped napping made both tests hang, not
+  fail, because only land's own steps move the virtual clock. The `awk`
+  stand-in now allows 10 memory reads (land needs 4); the 11th says so and
+  reports ample memory, so land leaves the wait and the test fails. A
+  `timeout` stand-in also runs the clock read without its 5 s limit, so a
+  starved host cannot fail the test there.
 
 ### Fixed (ENG-178: table procedures named like record built-ins: four follow-ups from ENG-173)
 

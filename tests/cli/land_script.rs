@@ -455,6 +455,18 @@ fn land_gates_in_order_and_pushes_only_on_request() {
 /// own work, made certain). The test asserts what land slept and the awake
 /// time it gave up at against the values this timeline gives.
 ///
+/// ⟨TLS-129 r2⟩ Only land's own steps move the clock, so a land that stops
+/// napping would poll forever, and nextest only warns about a slow test (sol
+/// r2). The `awk` stand-in has a budget of 10 reads (land needs 4): the 11th
+/// says so on stderr and reports ample memory, so land leaves the wait and the
+/// test fails. A fourth stand-in, `timeout`, runs awake-clock's clock read
+/// with no 5 s limit, so a starved host cannot turn a slow read into a
+/// failed one (sol r2's note; the stand-in clock cannot hang).
+/// Proof (2026-11-25): `awake_nap` removed from land -> both tests fail in
+/// 9-12 s, no hang: this one on the budget ("poll budget (10 reads) used
+/// up"), the 6 s one on its sleeps (it gives up within budget); restored,
+/// green.
+///
 /// History: the old check, "gives up within 14 s of wall time after the
 /// suspend" (a 2 s wait, a 10 s suspend written by the test thread), measured
 /// the loop's work and the host's scheduling: it failed at host load 381
@@ -528,10 +540,21 @@ fn land_mem_wait_across_a_suspend(delay_s: u64, naps_s: &[u64], gave_up_s: u64) 
         (
             "awk",
             format!(
-                "case \"$*\" in *MemAvailable*) \
-                 ! land || echo \"$((m + {delay_s} * 1000000)) $s\" >\"$d/clock\" ;; esac\n\
+                "case \"$*\" in *MemAvailable*) if land; then\n\
+                 echo >>\"$d/reads\"\n\
+                 if [ \"$(wc -l <\"$d/reads\")\" -gt 10 ]; then\n\
+                 echo 'stand-in awk: poll budget (10 reads) used up' >&2\n\
+                 echo 99999999999999; exit 0\nfi\n\
+                 echo \"$((m + {delay_s} * 1000000)) $s\" >\"$d/clock\"\n\
+                 fi ;; esac\n\
                  PATH=${{PATH#*:}} exec awk \"$@\""
             ),
+        ),
+        (
+            "timeout",
+            "if land; then shift 3; exec \"$@\"; fi\n\
+             PATH=${PATH#*:} exec timeout \"$@\""
+                .to_string(),
         ),
     ] {
         let stub = bin.join(name);
