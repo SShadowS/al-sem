@@ -340,10 +340,13 @@ impl SubscriberIndex {
                     //     The object's own routines come first, then those of
                     //     each extension the subscriber's app can see (see
                     //     `PublisherExtensions`).
+                    //     A shared extension (several objects carry its base's name,
+                    //     ENG-193) is consulted only when these offer no candidate:
+                    //     it may extend another object, whose subscribers its
+                    //     events must not take.
                     let event_key: SharedStr = event_name_lc.as_str().into();
-                    let candidates: Vec<(RoutineNodeId, bool)> = std::iter::once(&pub_obj_id)
-                        .chain(extensions.visible(graph, &pub_obj_id, sub_app))
-                        .flat_map(|obj| {
+                    let candidates_in = |objs: &mut dyn Iterator<Item = &ObjectNodeId>| {
+                        objs.flat_map(|obj| {
                             routine_indices_by_obj_name
                                 .get(&(obj.clone(), event_key.clone()))
                                 .map(Vec::as_slice)
@@ -378,7 +381,36 @@ impl SubscriberIndex {
                                 )
                             })
                         })
-                        .collect();
+                        .collect::<Vec<(RoutineNodeId, bool)>>()
+                    };
+                    let mut candidates =
+                        candidates_in(&mut std::iter::once(&pub_obj_id).chain(extensions.visible(
+                            graph,
+                            &pub_obj_id,
+                            sub_app,
+                            false,
+                        )));
+                    // Only when no publisher of that name is declared there at
+                    // all: one that fails the arity bound is a mismatch alc
+                    // rejects (AL0282), not room for a shared extension.
+                    let declared_in_certain = std::iter::once(&pub_obj_id)
+                        .chain(extensions.visible(graph, &pub_obj_id, sub_app, false))
+                        .any(|obj| {
+                            routine_indices_by_obj_name
+                                .get(&(obj.clone(), event_key.clone()))
+                                .is_some_and(|is| {
+                                    is.iter()
+                                        .any(|&i| graph.routines[i].publisher_kind.is_some())
+                                })
+                        });
+                    if candidates.is_empty() && !declared_in_certain {
+                        candidates = candidates_in(&mut extensions.visible(
+                            graph,
+                            &pub_obj_id,
+                            sub_app,
+                            true,
+                        ));
+                    }
 
                     // (d) Dispatch on candidate count.
                     let chosen: Option<(RoutineNodeId, bool)> = match candidates.len() {
@@ -637,7 +669,7 @@ impl ResolveIndex {
         // reference while another of its name or number exists
         // (`ObjectNode::obsolete_gone`): Base Application's `Moved` stub of
         // `No. Series` gives way to Business Foundation's table, for its own
-        // code (the own-app shadow) and for every app that sees both.
+        // code and for every app that sees both.
         let gone: HashSet<&ObjectNodeId> = graph
             .objects
             .iter()
@@ -731,7 +763,8 @@ impl ResolveIndex {
     /// Resolve an object by its **numeric AL id** as seen from `from`
     /// ([`WorldMode::CallerClosure`]) — fail-closed (I1).
     ///
-    /// Search order mirrors [`ProgramGraph::resolve_object`]:
+    /// Search order (by NUMBER: object ids are unique across installed apps, so
+    /// the own app may win here, unlike a name, ENG-193):
     /// 1. `from` itself always wins (own-app shadow), short-circuiting before
     ///    computing the closure.
     /// 2. Otherwise, exactly ONE `(kind, declared_id)` match among `from`'s
@@ -795,17 +828,19 @@ impl ResolveIndex {
     ///   `kind` only, via [`Self::objects_by_id`] filtered to `from`'s
     ///   dependency closure (self included). An object declared in `from`'s
     ///   OWN app always wins over any dependency's same-`(kind, id)` object
-    ///   (own-app shadow — mirrors the Name arm below and matches
-    ///   `object_by_number`'s existing self-shortcut), so two DEPENDENCIES
+    ///   (own-app shadow by NUMBER only — matches `object_by_number`'s
+    ///   self-shortcut; the Name arm below has none since ENG-193), so two DEPENDENCIES
     ///   sharing an id — an anomaly that a merged whole-program snapshot can
     ///   surface even though a real compile never would — is `Ambiguous` only
     ///   when NEITHER is `from` itself.
     /// - [`ObjectRef::Name`] matches by `kind` + lowercased name within the
-    ///   closure via [`Self::objects_by_name`]. An object declared in `from`'s
-    ///   OWN app always wins over any dependency's same-named object (AL's
-    ///   own-app lookup priority — mirrors the self-preference already applied
-    ///   by `object_by_number`/`resolve_object`), so two dependencies sharing a
-    ///   name is `Ambiguous` only when NEITHER is `from` itself.
+    ///   closure via [`Self::objects_by_name`], `from`'s own app included and NOT
+    ///   preferred (ENG-193): alc ranks no app first by name. Without namespaces
+    ///   an own and a dependency object of one name never compile together
+    ///   unqualified (AL0275 at the reference), and with namespaces the file's
+    ///   `namespace`/`using` decide, so the own app's object may be the wrong one
+    ///   (`namespace C; using A;` binds the dependency's `A.X` over the own
+    ///   `W.X`). One visible candidate is `Unique`, more `Ambiguous`.
     /// - When the ref matches no declared object anywhere in the whole
     ///   snapshot, the result is [`ObjectRefResolution::Unresolved`]. When it
     ///   matches a declared object whose app is outside `from`'s closure, the
@@ -837,12 +872,11 @@ impl ResolveIndex {
                 if candidates.is_empty() {
                     return ObjectRefResolution::Unresolved;
                 }
-                // Own-app shadow: `from`'s own declaration always wins over
-                // any dependency's same-`(kind, id)` object — mirrors the
-                // Name arm below, and matches `object_by_number`'s existing
-                // self-shortcut, so numeric-id resolution stays
-                // behavior-preserving for the already-covered self-declared
-                // case.
+                // Own-app shadow, for NUMBERS only: `from`'s own declaration
+                // wins over any dependency's same-`(kind, id)` object (object
+                // numbers are unique across installed apps), as
+                // `object_by_number` does. The Name arm below has no such
+                // shadow since ENG-193.
                 if let Some(own) = candidates.iter().find(|oid| oid.app == from.app) {
                     return ObjectRefResolution::Unique(own.clone());
                 }
@@ -865,12 +899,8 @@ impl ResolveIndex {
                 if candidates.is_empty() {
                     return ObjectRefResolution::Unresolved;
                 }
-                // Own-app shadow: `from`'s own declaration always wins over any
-                // dependency's same-named object — short-circuits before
-                // ambiguity among dependencies is even considered.
-                if let Some(own) = candidates.iter().find(|oid| oid.app == from.app) {
-                    return ObjectRefResolution::Unique(own.clone());
-                }
+                // No own-app shadow (ENG-193): the own app's object competes with
+                // every other visible one.
                 let in_closure: Vec<&ObjectNodeId> = candidates
                     .iter()
                     .filter(|oid| closure.contains(&oid.app))
@@ -1523,22 +1553,29 @@ pub(crate) fn resolve_subscription_publisher<'g>(
 /// `tableextension "Error Message Extension"` declares). Without this the
 /// subscription was `Orphaned` and its event-flow edge was missing.
 ///
-/// An extension is listed under its base only when its `extends_target`
-/// resolves, from the extension's own app, to exactly that object
-/// ([`ProgramGraph::resolve_object`] fails closed). Untargeted `#if`
-/// alternatives (#264 N2-1) are not listed: which table they extend is not
-/// known. Enum extensions are left out: enums publish no events.
+/// An extension is listed under the objects its app sees by its
+/// `extends_target` name ([`ProgramGraph::visible_objects`]). When that is one
+/// object, the extension is a CERTAIN extension of it. When several apps'
+/// objects share the name (ENG-193), it is a SHARED extension of each: which
+/// one it extends is not known, so a binding consults it only when the named
+/// object and its certain extensions offer no candidate
+/// ([`Self::visible`]). Untargeted `#if` alternatives (#264 N2-1) are not
+/// listed: which table they extend is not known. Enum extensions are left
+/// out: enums publish no events.
 pub(crate) struct PublisherExtensions {
-    /// Base object → its extensions, in `graph.objects` order.
+    /// Base object → its certain extensions, in `graph.objects` order.
     by_base: HashMap<ObjectNodeId, Vec<ObjectNodeId>>,
-    /// Extension → its base (the reverse of `by_base`).
-    base_of: HashMap<ObjectNodeId, ObjectNodeId>,
+    /// Base object → its shared extensions, in `graph.objects` order.
+    shared_by_base: HashMap<ObjectNodeId, Vec<ObjectNodeId>>,
+    /// Extension → every object it may extend, in closure order.
+    bases_of: HashMap<ObjectNodeId, Vec<ObjectNodeId>>,
 }
 
 impl PublisherExtensions {
     pub(crate) fn build(graph: &ProgramGraph) -> Self {
         let mut by_base: HashMap<ObjectNodeId, Vec<ObjectNodeId>> = HashMap::new();
-        let mut base_of: HashMap<ObjectNodeId, ObjectNodeId> = HashMap::new();
+        let mut shared_by_base: HashMap<ObjectNodeId, Vec<ObjectNodeId>> = HashMap::new();
+        let mut bases_of: HashMap<ObjectNodeId, Vec<ObjectNodeId>> = HashMap::new();
         for obj in &graph.objects {
             if !matches!(
                 obj.id.kind,
@@ -1554,27 +1591,47 @@ impl PublisherExtensions {
             ) else {
                 continue;
             };
-            if let Some(base) = graph.resolve_object(obj.id.app, base_kind, target) {
-                by_base
+            // Every base the extension's app sees by that name (ENG-193).
+            let bases = graph.visible_objects(obj.id.app, base_kind, target);
+            let index = if bases.len() == 1 {
+                &mut by_base
+            } else {
+                &mut shared_by_base
+            };
+            for base in &bases {
+                index
                     .entry(base.id.clone())
                     .or_default()
                     .push(obj.id.clone());
-                base_of.insert(obj.id.clone(), base.id.clone());
+            }
+            if !bases.is_empty() {
+                bases_of.insert(obj.id.clone(), bases.iter().map(|b| b.id.clone()).collect());
             }
         }
-        PublisherExtensions { by_base, base_of }
+        PublisherExtensions {
+            by_base,
+            shared_by_base,
+            bases_of,
+        }
     }
 
     /// The extensions of `base` that an `[EventSubscriber]` in app `from` can
     /// see: those declared in `from`'s dependency closure (itself included),
-    /// in `graph.objects` order.
+    /// in `graph.objects` order. `shared` picks the shared extensions (a
+    /// fallback, see the type's doc) instead of the certain ones.
     pub(crate) fn visible<'a>(
         &'a self,
         graph: &ProgramGraph,
         base: &ObjectNodeId,
         from: AppRef,
+        shared: bool,
     ) -> impl Iterator<Item = &'a ObjectNodeId> + use<'a> {
-        let exts = self.by_base.get(base).map(Vec::as_slice).unwrap_or(&[]);
+        let index = if shared {
+            &self.shared_by_base
+        } else {
+            &self.by_base
+        };
+        let exts = index.get(base).map(Vec::as_slice).unwrap_or(&[]);
         let closure = if exts.is_empty() {
             Default::default()
         } else {
@@ -1583,9 +1640,10 @@ impl PublisherExtensions {
         exts.iter().filter(move |e| closure.contains(&e.app))
     }
 
-    /// The base object `ext` extends, when it is listed under one.
-    pub(crate) fn base_of(&self, ext: &ObjectNodeId) -> Option<&ObjectNodeId> {
-        self.base_of.get(ext)
+    /// Every object `ext` may extend: one for a certain extension, several for
+    /// a shared one, none when it is listed under no base.
+    pub(crate) fn bases_of(&self, ext: &ObjectNodeId) -> &[ObjectNodeId] {
+        self.bases_of.get(ext).map(Vec::as_slice).unwrap_or(&[])
     }
 }
 
@@ -1656,9 +1714,19 @@ pub fn count_unknown_include_sender_plus1_subscribers(graph: &ProgramGraph) -> u
                 continue;
             };
             let event_name_lc = args.event_name.fold_identifier();
-            let objects: Vec<&ObjectNodeId> = std::iter::once(&pub_obj.id)
-                .chain(extensions.visible(graph, &pub_obj.id, sub_app))
+            let mut objects: Vec<&ObjectNodeId> = std::iter::once(&pub_obj.id)
+                .chain(extensions.visible(graph, &pub_obj.id, sub_app, false))
                 .collect();
+            // As the binding does: the shared extensions only when these
+            // declare no publisher of that name.
+            let declared_in_certain = graph.routines.iter().any(|pr| {
+                objects.contains(&&pr.id.object)
+                    && pr.id.name_lc == event_name_lc
+                    && pr.publisher_kind.is_some()
+            });
+            if !declared_in_certain {
+                objects.extend(extensions.visible(graph, &pub_obj.id, sub_app, true));
+            }
 
             for pr in &graph.routines {
                 if objects.contains(&&pr.id.object)
@@ -2443,22 +2511,17 @@ mod tests {
         assert_eq!(res, ObjectRefResolution::Ambiguous);
     }
 
+    /// ENG-193: "Shared" is declared in BOTH A (id 500, `from`'s own app) and
+    /// its dependency B (id 501). alc ranks no app first: with namespaces the
+    /// file's `namespace`/`using` may bind B's (`namespace C; using B;`), so
+    /// the own app must not shadow. Discrimination: the old own-app shortcut
+    /// restored answers `Unique(500)`.
     #[test]
-    fn resolve_object_ref_name_own_app_shadows_dependency() {
+    fn resolve_object_ref_name_own_and_dependency_of_one_name_are_ambiguous() {
         let (graph, from) = build_ref_fixture();
         let idx = ResolveIndex::build(&graph);
-        let from_app = from.app;
-
-        // "Shared" is declared in BOTH A (id 500) and B (id 501) — A's own
-        // declaration must win outright, never Ambiguous.
         let res = idx.resolve_object_ref(&graph, from, ObjectKind::Table, &name_ref("Shared"));
-        match res {
-            ObjectRefResolution::Unique(oid) => {
-                assert!(oid.id_equals_number(500), "A's own Shared must win");
-                assert_eq!(oid.app, from_app);
-            }
-            other => panic!("expected Unique(A's Shared), got {other:?}"),
-        }
+        assert_eq!(res, ObjectRefResolution::Ambiguous);
     }
 
     #[test]
@@ -3800,6 +3863,178 @@ mod tests {
             )],
         );
         assert_eq!(count_unknown_include_sender_plus1_subscribers(&graph), 0);
+    }
+
+    // -- ENG-193: a SHARED extension (its base name carried by several visible
+    //    objects) is a fallback candidate only --------------------------------
+
+    /// App W (AppRef 0) depends on app D (AppRef 1). D has `Table 61001 T`; W has
+    /// its own `Table 50030 T`, `TableExtension 50040 TE extends T` (a shared
+    /// extension: W sees two `T`s) and `Codeunit 50031 Sub`. The subscriber
+    /// names `Table 50030` by number (W's own `T`).
+    fn build_shared_base_fixture(
+        routines: impl FnOnce(&ObjectNodeId, &ObjectNodeId, &ObjectNodeId) -> Vec<RoutineNode>,
+    ) -> (ProgramGraph, ObjectNodeId, ObjectNodeId) {
+        let mut apps = AppRegistry::default();
+        let w = apps.intern(&make_app_id("W"));
+        let d = apps.intern(&make_app_id("D"));
+        let mut topology = DependencyGraph::default();
+        topology.add_dependency(w, d);
+        let id = |app, kind, n| ObjectNodeId {
+            app,
+            kind,
+            key: ObjKey::Id(n),
+        };
+        let w_t = id(w, ObjectKind::Table, 50030);
+        let te = id(w, ObjectKind::TableExtension, 50040);
+        let sub = id(w, ObjectKind::Codeunit, 50031);
+        let mut objects = vec![
+            make_obj(d, ObjectKind::Table, Some(61001), "T", None, vec![]),
+            make_obj(w, ObjectKind::Table, Some(50030), "T", None, vec![]),
+            make_obj(
+                w,
+                ObjectKind::TableExtension,
+                Some(50040),
+                "TE",
+                Some("T"),
+                vec![],
+            ),
+            make_obj(w, ObjectKind::Codeunit, Some(50031), "Sub", None, vec![]),
+        ];
+        objects.sort_by(|x, y| x.id.cmp(&y.id));
+        let mut routines = routines(&w_t, &te, &sub);
+        routines.sort_by(|x, y| x.id.cmp(&y.id));
+        let obj_index = ObjectIndex::build(&objects);
+        (
+            ProgramGraph {
+                apps,
+                topology,
+                objects: objects.into(),
+                routines: routines.into(),
+                obj_index,
+                ..Default::default()
+            },
+            w_t,
+            te,
+        )
+    }
+
+    fn table_50030_args(event: &str) -> ParsedSubscriberArgs {
+        ParsedSubscriberArgs {
+            publisher_object_type: "table".into(),
+            publisher_name: String::new().into(),
+            publisher_id: Some(50030),
+            event_name: event.into(),
+            element: None,
+            skip_on_missing_license: false,
+            skip_on_missing_permission: false,
+        }
+    }
+
+    /// S7: a shared extension's publisher with an UNKNOWN IncludeSender, whose
+    /// subscriber names the base by number with one extra (`Sender`) parameter,
+    /// is counted: the base declares no `OnX`, so the binding falls back to it.
+    /// Discrimination (2026-11-24): the count without the shared fallback -> 0
+    /// (red); restored, green.
+    #[test]
+    fn count_unknown_include_sender_plus1_subscribers_counts_a_shared_extensions_publisher() {
+        let (graph, _, _) = build_shared_base_fixture(|_, te, sub| {
+            vec![
+                make_publisher(te.clone(), "OnX", 0, PublisherKind::Integration, None),
+                make_subscriber(sub.clone(), "H", 1, vec![table_50030_args("onx")], false),
+            ]
+        });
+        assert_eq!(count_unknown_include_sender_plus1_subscribers(&graph), 1);
+    }
+
+    /// S6 (count): the base declares `OnX` itself (with an arity the subscriber
+    /// fails), so the shared extension's `OnX` is not consulted and not counted.
+    /// Discrimination (2026-11-24): the gate on "offers a candidate" (arity
+    /// filter) instead of "declares a publisher" -> 1 (red); restored, green.
+    #[test]
+    fn count_unknown_include_sender_plus1_subscribers_skips_a_shared_extension_the_base_shadows() {
+        let (graph, _, _) = build_shared_base_fixture(|w_t, te, sub| {
+            vec![
+                make_publisher(
+                    w_t.clone(),
+                    "OnX",
+                    0,
+                    PublisherKind::Integration,
+                    Some(false),
+                ),
+                make_publisher(te.clone(), "OnX", 0, PublisherKind::Integration, None),
+                make_subscriber(sub.clone(), "H", 1, vec![table_50030_args("onx")], false),
+            ]
+        });
+        assert_eq!(count_unknown_include_sender_plus1_subscribers(&graph), 0);
+    }
+
+    /// S6 (binding, Fable r4's r10): the base declares `OnX()`, the shared
+    /// extension `OnX(A)`, and the subscriber has one parameter. alc rejects it
+    /// (AL0282): the subscription is Orphaned, never bound to the extension.
+    /// Discrimination (2026-11-24): the fallback gated on "no candidate" alone
+    /// binds `TE::OnX` (red); restored, green.
+    #[test]
+    fn subscribers_of_a_shared_extension_is_no_fallback_when_the_base_declares_the_event() {
+        let (graph, _, te) = build_shared_base_fixture(|w_t, te, sub| {
+            vec![
+                make_publisher(
+                    w_t.clone(),
+                    "OnX",
+                    0,
+                    PublisherKind::Integration,
+                    Some(false),
+                ),
+                make_publisher(
+                    te.clone(),
+                    "OnX",
+                    1,
+                    PublisherKind::Integration,
+                    Some(false),
+                ),
+                make_subscriber(sub.clone(), "H", 1, vec![table_50030_args("onx")], false),
+            ]
+        });
+        let te_onx = graph
+            .routines
+            .iter()
+            .find(|r| r.id.object == te)
+            .unwrap()
+            .id
+            .clone();
+        let idx = SubscriberIndex::build(&graph);
+        assert!(
+            idx.subscribers_of(&te_onx).is_empty(),
+            "not bound to TE::OnX"
+        );
+        assert_eq!(idx.orphaned_subscriptions().len(), 1);
+    }
+
+    /// The fallback itself: the base declares no `OnX`, so the shared
+    /// extension's `OnX` binds (r5's shape at unit level).
+    #[test]
+    fn subscribers_of_a_shared_extension_binds_when_the_base_declares_no_event() {
+        let (graph, _, te) = build_shared_base_fixture(|_, te, sub| {
+            vec![
+                make_publisher(
+                    te.clone(),
+                    "OnX",
+                    0,
+                    PublisherKind::Integration,
+                    Some(false),
+                ),
+                make_subscriber(sub.clone(), "H", 0, vec![table_50030_args("onx")], false),
+            ]
+        });
+        let te_onx = graph
+            .routines
+            .iter()
+            .find(|r| r.id.object == te)
+            .unwrap()
+            .id
+            .clone();
+        let idx = SubscriberIndex::build(&graph);
+        assert_eq!(idx.subscribers_of(&te_onx).len(), 1);
     }
 
     // (e) Unresolvable publisher — no panic ----------------------------------

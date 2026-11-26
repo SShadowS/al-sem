@@ -2659,7 +2659,8 @@ fn dispatch_entry_trigger(
 }
 
 /// The object a static run (`Page.Run(Page::X)`, `Codeunit.Run(Codeunit::50000)`)
-/// names, from the calling app's closure; `None` when it is in no graph. A
+/// names, from the calling app's closure; `None` when it is in no graph, or
+/// when several objects the caller sees share its name (ENG-193). A
 /// bare positive integer (`Codeunit.Run(50000)`) is the object's id and arrives
 /// here as a number, as `Codeunit::50000` does
 /// (`extract::static_database_reference_target`).
@@ -3060,7 +3061,8 @@ pub fn resolve_object_run(
         object_run_target(from, object_kind, target_ref, target_is_name, graph, index)
     else {
         // Target is named/numbered but absent from the entire graph (not in
-        // workspace source, not in any dep's SymbolReference). We do NOT know
+        // workspace source, not in any dep's SymbolReference), or a name that
+        // several visible objects share (ENG-193). We do NOT know
         // which app owns it, so creating an AbiSymbol with `app = from`
         // (caller's app) would be semantically wrong and would fail the
         // ABI ingestion integrity check. Emit Unknown/Unresolved: honest

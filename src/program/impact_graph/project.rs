@@ -259,11 +259,18 @@ impl<'a> Builder<'a> {
         let mut base_of = HashMap::new();
         let mut exts_of: HashMap<ObjectNodeId, Vec<&ObjectNodeId>> = HashMap::new();
         for o in g.objects.iter() {
-            if let (Some(bk), Some(t)) = (o.id.kind.extension_base_kind(), &o.extends_target)
-                && let Some(base) = g.resolve_object(o.id.app, bk, t)
-            {
-                base_of.insert(&o.id, base.id.clone());
-                exts_of.entry(base.id.clone()).or_default().push(&o.id);
+            if let (Some(bk), Some(t)) = (o.id.kind.extension_base_kind(), &o.extends_target) {
+                // A base name several visible objects carry (an own and a
+                // dependency object, ENG-193): the extension's triggers run with
+                // each, so it extends them all; a run of it stands for its base
+                // only when that base is one object.
+                let bases = g.visible_objects(o.id.app, bk, t);
+                if let [base] = bases.as_slice() {
+                    base_of.insert(&o.id, base.id.clone());
+                }
+                for base in bases {
+                    exts_of.entry(base.id.clone()).or_default().push(&o.id);
+                }
             }
         }
         Builder {
@@ -1024,6 +1031,24 @@ impl<'a> Builder<'a> {
         let mut temporary_source: Option<ObjectNodeId> = None;
         // The page's source table: what its UI permissions apply to.
         let mut page_source: Option<ObjectNodeId> = None;
+        // A source table name several visible tables carry (ENG-193): the page's
+        // record operations may reach any of them, so each is a table of the page
+        // (never dropped); its permissions and temporary state need the one table.
+        if oid.kind == ObjectKind::Page
+            && let Some(st @ ObjectRef::Name { raw, .. }) = &obj.source_table
+            && let Some(RunTarget::AnyOf(_)) = self.resolve_ref(oid, ObjectKind::Table, st)
+        {
+            for table in self
+                .inp
+                .graph
+                .visible_objects(oid.app, ObjectKind::Table, raw)
+            {
+                if let Some(f) = self.inp.facts.objects.get(&table.id) {
+                    opens.extend(f.lookup_pages.iter().map(|t| self.run_target_key(t)));
+                }
+                tables.push(table.id.clone());
+            }
+        }
         if oid.kind == ObjectKind::Page
             && let Some(st) = &obj.source_table
             && let Some(RunTarget::Object(table)) = self.resolve_ref(oid, ObjectKind::Table, st)

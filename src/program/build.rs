@@ -734,15 +734,17 @@ fn source_lookup_pages(graph: &ProgramGraph) -> HashMap<ObjectNodeId, Vec<String
         .iter()
         .filter(|o| o.id.kind == ObjectKind::TableExtension && o.tier != TrustTier::SymbolOnly)
     {
-        let Some(base) = ext
-            .extends_target
-            .as_deref()
-            .and_then(|t| graph.resolve_object(ext.id.app, ObjectKind::Table, t))
-        else {
+        let Some(target) = ext.extends_target.as_deref() else {
             continue;
         };
-        if let Some(found) = out.get_mut(&base.id) {
-            found.extend(pages(ext));
+        // ENG-193 (sol r1): a base name several visible apps declare does not
+        // resolve to one table; the extension's lookup page may then serve any
+        // of them, so it is attached to each (as the impact graph attaches the
+        // extension itself).
+        for base in graph.visible_objects(ext.id.app, ObjectKind::Table, target) {
+            if let Some(found) = out.get_mut(&base.id) {
+                found.extend(pages(ext));
+            }
         }
     }
     out
