@@ -39,9 +39,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it (30 s) and then let the command run, and a take's open hung too. A reader now
   treats such a file as "cannot be probed" (only the hold lock decides). A take
   refuses with "the publish lock … is not a regular file; refusing (remove it)".
-  New test `cdo_slot_a_fifo_publish_lock_is_never_opened`. The check comes before
-  the open, so a file swapped for a FIFO in between could still block one open.
-  Only someone who can write the slot folder can do that.
+  New test `cdo_slot_a_fifo_publish_lock_is_never_opened`. Both the reader and the
+  take also open the file read-write (review r3, sol). On Linux that never blocks,
+  even on a FIFO, so a file swapped for a FIFO after the check cannot hang either
+  open. The type check is now one of two guards.
 - A release during a read is fixed too (review r1, Fable). The reader saw the hold
   lock held, then the hold was released before it read the status. It then printed
   "held by an unknown holder" with an empty holder list (exit 1) while the slot was
@@ -57,12 +58,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `publish.lock` exclusive (only a reader's probe takes it so, for an instant: a
   stopped or hung one) makes a take fail after `CDO_SLOT_LOCK_WAIT_S` (30 s), and
   the message names the holders. With `--timeout`, the acquire turns the awake
-  time it has left into a wall-clock deadline. The take (in the acquire or its
+  time it has left into a deadline on CLOCK_MONOTONIC, which stops during a
+  suspend and never steps (review r3, sol). The wall clock is only the fall back,
+  used when the monotonic clock cannot be read. The take (in the acquire or its
   keeper) waits for the publish lock only what is left of that deadline at the
   lock attempt, to the microsecond, and not at all once it is used up (review r2,
-  sol). A host suspend during that one wait is not added back, and the acquire's
-  own deadline check still runs after the take returns. The take never holds the
-  hold lock while it waits. An acquire takes
+  sol). So a suspend between the handoff and the keeper's attempt no longer uses
+  up the budget, and a wall-clock step back cannot stretch it. New test
+  `cdo_slot_a_suspend_during_the_handoff_keeps_the_publish_wait`. During the
+  `flock` wait itself the timer is flock's own. The take never holds the hold
+  lock while it waits. An acquire takes
   the hold through a keeper, and the keeper's end makes even `acquire --wait`
   (the oldest waiter too) stop with "not taken: its keeper ended (exit 1)". So
   `land` and `cdo-gate`, which acquire with --wait, exit 1. A `run` takes the

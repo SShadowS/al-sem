@@ -105,10 +105,13 @@ poll="${CDO_SLOT_POLL_S:-15}"
 timed_wait="${CDO_SLOT_TIMED_WAIT_S:-1800}"
 timed_grace="${CDO_SLOT_TIMED_GRACE_S:-3}"
 lock_wait="${CDO_SLOT_LOCK_WAIT_S:-30}"
-# An acquire's --timeout as a wall-clock deadline in µs (EPOCHREALTIME), so a
-# take (in this process or its keeper) waits for the publish lock only what is
-# left of it at the lock attempt; empty: no --timeout.
-pub_deadline=""
+# An acquire's --timeout as a deadline in µs, so a take (in this process or its
+# keeper) waits for the publish lock only the awake time left of it at the lock
+# attempt: pub_deadline on CLOCK_MONOTONIC (stops in a suspend, never steps; one
+# boot, which a keeper shares with its acquire), pub_deadline_wall on the wall
+# clock, used only when the monotonic clock cannot be read (review r3, sol).
+# Both empty: no --timeout.
+pub_deadline="" pub_deadline_wall=""
 build_names="${CDO_SLOT_BUILD_NAMES:-cargo cargo-nextest rustc rustdoc}"
 build_scripts="${CDO_SLOT_BUILD_SCRIPTS:-ci-steps check-goldens}"
 [[ "$mem_min" =~ ^(0|[1-9][0-9]{0,5})$ ]] || die "CDO_SLOT_MEM_MIN_GB '$mem_min': whole GB, no leading zero"
@@ -268,10 +271,26 @@ nap() {
 publish_busy() {
     local rc=0
     [[ -e "$publish_lock" ]] || return 1
-    # Only a regular file: opening a FIFO blocks, and a guard's probe that hangs
-    # is cut by the guard, which then lets work run (review r2, sol).
+    # Only a regular file: opening a FIFO read-only blocks, and a guard's probe
+    # that hangs is cut by the guard, which then lets work run (review r2, sol).
     [[ -f "$publish_lock" ]] || return 2
-    (probe x "$publish_lock") 2>/dev/null || rc=$?
+    # `probe x` on our own read-write descriptor: a read-write open never blocks,
+    # even on a FIFO swapped in after the check (review r3, sol). Exit 1: free,
+    # 0: busy (as `probe`), 5: it cannot be probed.
+    (
+        exec 9<>"$publish_lock" || exit 5
+        r=0
+        flock -x -n -E 75 9 || r=$?
+        if [[ "$r" == 75 ]]; then
+            r=0
+            flock -x -E 75 -w 0.1 9 || r=$?
+        fi
+        case "$r" in
+            0) exit 1 ;;
+            75) exit 0 ;;
+            *) exit 5 ;;
+        esac
+    ) 2>/dev/null || rc=$?
     ((rc <= 1)) && return "$rc"
     return 2
 }
@@ -379,6 +398,13 @@ describe() {
 # ignores TERM): `status` and `probe` print it, and a hung read there stalled
 # the guard's probe (which then lets work run) and a waiting acquire.
 host_suspended() { timeout -k 1 5 "$(dirname "$0")/host-suspended" 2>/dev/null; }
+# mono_us: CLOCK_MONOTONIC in µs (`host-suspended --clocks`, cut the same way),
+# or nothing when it cannot be read.
+mono_us() {
+    local _s _b m=""
+    read -r _s _b m <<<"$(timeout -k 1 5 "$(dirname "$0")/host-suspended" --clocks 2>/dev/null)" || true
+    if [[ "$m" =~ ^[0-9]+$ ]]; then echo "$m"; fi
+}
 # ⟨TLS-105⟩ The awake-time deadlines (the timed wait, `go`, acquire's --timeout)
 # come from scripts/awake-clock, loaded only for the commands that wait with a
 # deadline (review r1, sol): `probe`, `status`, `release` and a keeper must work
@@ -432,15 +458,20 @@ take_hold() {
     # ⟨TLS-127⟩ Held from before the hold lock until the status is in: a reader
     # that sees the hold lock taken and no status naming it asks this lock.
     # Only a reader's probe takes it exclusive, for an instant.
-    # Only a regular file (or none yet): opening a FIFO would block (review r2, sol).
+    # Only a regular file (or none yet) (review r2, sol). The open is read-write,
+    # which never blocks, even on a FIFO swapped in after this check (r3).
     [[ ! -e "$publish_lock" || -f "$publish_lock" ]] \
         || die "the publish lock $publish_lock is not a regular file; refusing (remove it)"
-    exec {pfd}>>"$publish_lock"
-    # At most CDO_SLOT_LOCK_WAIT_S, and never past an acquire's --timeout: what
-    # is left of it now, to the µs, and no wait at all once it is used up.
-    local pw=$lock_wait rem
-    if [[ -n "$pub_deadline" ]]; then
-        rem=$((pub_deadline - ${EPOCHREALTIME//[!0-9]/}))
+    exec {pfd}<>"$publish_lock" || die "cannot open the publish lock $publish_lock"
+    # At most CDO_SLOT_LOCK_WAIT_S, and never past an acquire's --timeout: the
+    # awake time left of it now, to the µs, and no wait at all once it is used up.
+    local pw=$lock_wait rem="" m
+    if [[ -n "$pub_deadline" ]] && m=$(mono_us) && [[ -n "$m" ]]; then
+        rem=$((pub_deadline - m))
+    elif [[ -n "$pub_deadline_wall" ]]; then
+        rem=$((pub_deadline_wall - ${EPOCHREALTIME//[!0-9]/}))
+    fi
+    if [[ -n "$rem" ]]; then
         ((rem > 0)) || rem=0
         ((rem >= lock_wait * 1000000)) || pw=$((rem / 1000000)).$(printf '%06d' $((rem % 1000000)))
     fi
@@ -554,6 +585,7 @@ keeper() {
     done
     me_session=$CS_SESSION me_pid=$CS_PID bind=$CS_BIND bind_start=$CS_BIND_START
     [[ "${CS_PUB_DEADLINE:-}" =~ ^[1-9][0-9]{0,20}$ ]] && pub_deadline=$CS_PUB_DEADLINE
+    [[ "${CS_PUB_DEADLINE_WALL:-}" =~ ^[1-9][0-9]{0,20}$ ]] && pub_deadline_wall=$CS_PUB_DEADLINE_WALL
     local id rc=0
     case "$1" in
         hold)
@@ -605,7 +637,7 @@ spawn_keeper() {
     kpid="" kid=""
     CS_OWNER="$2" CS_REASON="$3" CS_TOKEN="$4" CS_BIND="$bind" CS_BIND_START="$bind_start" \
         CS_SESSION="$me_session" CS_PID="$me_pid" CS_PID_START="$(proc_start "${me_pid:-0}")" \
-        CS_WRITER="$$" CS_WRITER_START="$(proc_start $$)" CS_READY="$ready" CS_PUB_DEADLINE="$pub_deadline" \
+        CS_WRITER="$$" CS_WRITER_START="$(proc_start $$)" CS_READY="$ready" CS_PUB_DEADLINE="$pub_deadline" CS_PUB_DEADLINE_WALL="$pub_deadline_wall" \
         setsid bash "$self" _keep "$1" </dev/null >/dev/null 2>"$ready.err" &
     local child=$!
     for n in $(seq 1200); do
@@ -1029,12 +1061,16 @@ acquire() {
             free)
                 # ⟨TLS-127 review, sol⟩ A take's publish wait stays inside
                 # --timeout (the deadline is checked again only after it): the
-                # awake time left, as a wall-clock deadline the take measures
-                # against at its lock attempt.
+                # awake time left, as a deadline the take measures against at
+                # its lock attempt: on CLOCK_MONOTONIC when this wait reads it
+                # (awake_now is then that clock), and on the wall clock as the
+                # take's fall back (review r3, sol).
                 if [[ -n "$timeout" ]]; then
                     awake_read
                     [[ -z "$awake_msg" ]] || echo "cdo-slot: --timeout: $awake_msg"
-                    pub_deadline=$((${EPOCHREALTIME//[!0-9]/} + timeout * 1000000 - awake_us))
+                    pub_deadline=""
+                    [[ "$awake_base" != mono ]] || pub_deadline=$((awake_now + timeout * 1000000 - awake_us))
+                    pub_deadline_wall=$((${EPOCHREALTIME//[!0-9]/} + timeout * 1000000 - awake_us))
                 fi
                 read -r -a line <<<"$(ahead)"
                 if timed_now; then

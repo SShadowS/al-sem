@@ -1532,7 +1532,9 @@ fn cdo_slot_an_unprobeable_publish_lock_keeps_the_hold() {
 ///
 /// Mutation (2026-11-26): the regular-file check in `publish_busy` dropped ->
 /// "the guard let it run beside a held slot" after the guard's 30 s cut (red);
-/// restored, green.
+/// restored, green. Since review r3 the reader also opens the file read-write,
+/// which never blocks, so the check is one of two guards: the mutation now drops
+/// the check AND makes the open read-only (`exec 9<`); each alone stays green.
 #[test]
 fn cdo_slot_a_fifo_publish_lock_is_never_opened() {
     let s = Slot::new();
@@ -1698,6 +1700,87 @@ fn cdo_slot_a_stuck_publish_lock_refuses_takes_in_bounds() {
     );
     assert_eq!(code, Some(1), "{text}");
     assert_eq!(waited(&text), 0.0, "--timeout 0 still waited: {text}");
+}
+
+/// ⟨TLS-127 review r3, sol⟩ A host suspend between an acquire's handoff and its
+/// keeper's publish-lock attempt does not use up the --timeout: the deadline
+/// the keeper gets is on CLOCK_MONOTONIC, which stops in a suspend (the wall
+/// clock is only the fall back). The keeper is held in the TAKE hook for 6 s,
+/// all of them "suspended" (`CDO_HOST_SUSPENDED_FILE` 100 -> 106), so of a
+/// 10 s --timeout it still waits most for the stuck publish lock (over 5 s, at
+/// most 10 s); on the wall clock it would have had at most 4 s left.
+///
+/// Mutation (2026-11-26): the take using the wall-clock deadline only ->
+/// "the suspend used up the publish wait: ... held for 3.9... s" (red);
+/// restored, green.
+#[test]
+fn cdo_slot_a_suspend_during_the_handoff_keeps_the_publish_wait() {
+    let s = Slot::new();
+    std::fs::create_dir_all(s.dir()).unwrap();
+    let publish = s.dir().join("publish.lock");
+    std::fs::write(&publish, "").unwrap();
+    let _stuck = stand_in(
+        &s,
+        "flock",
+        &[
+            "--no-fork".as_ref(),
+            "-x".as_ref(),
+            publish.as_os_str(),
+            "sleep".as_ref(),
+            "600".as_ref(),
+        ],
+    );
+    until("the stand-in has the publish lock", &|| {
+        std::process::Command::new("flock")
+            .args(["-s", "-n"])
+            .arg(&publish)
+            .arg("true")
+            .status()
+            .unwrap()
+            .code()
+            == Some(1)
+    });
+    let reading = s.0.path().join("suspended");
+    std::fs::write(&reading, "100").unwrap();
+    let reading_s = reading.to_str().unwrap();
+    let taker = s
+        .cmd(
+            "A",
+            &["acquire", "lane", "handoff", "--wait", "--timeout", "10"],
+            &[
+                ("CDO_SLOT_LOCK_WAIT_S", "60"),
+                ("CDO_SLOT_TEST_PAUSE_TAKE_S", "60"),
+                ("CDO_HOST_SUSPENDED_FILE", reading_s),
+            ],
+        )
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    s.wait_paused();
+    // Six seconds pass in the keeper's window, all of them suspended.
+    let paused_at = std::time::Instant::now();
+    std::thread::sleep(std::time::Duration::from_secs(6));
+    let slept = paused_at.elapsed().as_secs();
+    std::fs::write(&reading, format!("{}", 100 + slept)).unwrap();
+    s.resume();
+    let out = taker.wait_with_output().unwrap();
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(out.status.code(), Some(1), "{text}");
+    let x: f64 = text
+        .split("held for ")
+        .nth(1)
+        .and_then(|r| r.split(' ').next())
+        .and_then(|x| x.parse().ok())
+        .unwrap_or_else(|| panic!("no wait in: {text}"));
+    assert!(
+        x > 5.0 && x <= 10.0,
+        "the suspend used up the publish wait: {text}"
+    );
 }
 
 /// ⟨TLS-89⟩ Concurrent takers: six sessions at once run timed and untimed
