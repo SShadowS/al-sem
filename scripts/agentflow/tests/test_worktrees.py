@@ -266,13 +266,16 @@ def test_create_cleans_up_after_its_own_postcondition_failure(repo_pair, monkeyp
     assert worktrees.VERIFY_PREFIX not in g.out("worktree", "list")
 
 
-@pytest.mark.parametrize("start", [None, "", 12345, ["1"]])
+@pytest.mark.parametrize("start", [None, "", 12345, ["1"], "invalid", "-1", "12a"])
 def test_a_reservation_without_a_valid_start_time_is_unknown(start):
     """A reservation whose recorded start time is missing or invalid gives
     UNKNOWN, never DEAD: compared with a live process's real start time it
     would read as a reused PID, and its live owner would be reclaimed (sol r15).
+    Valid means a string of ASCII digits only (clock ticks, sol r16).
     Red proof (sol r15): the recorded-start check removed from `_liveness`
-    failed here for every case (DEAD: a live owner reclaimable)."""
+    failed here for every case (DEAD: a live owner reclaimable).
+    Red proof (sol r16): the check back to "any non-empty string" failed the
+    "invalid", "-1" and "12a" cases (DEAD)."""
     if not Path("/proc").is_dir():
         pytest.skip("the /proc branch")
     owner = {**worktrees._ME, "start": start}

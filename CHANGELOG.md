@@ -1004,7 +1004,8 @@ its time rules on the wall clock, which keeps counting through a suspend.
       prune` timing out on the `git` mutex), and its final check, are logged to stderr, never
       raised, so a `finally` keeps its own result. It returns True only when the tree is
       really gone, so a teardown failure is still reported.
-    - A reservation with a missing or invalid start time is UNKNOWN, never DEAD (sol r15).
+    - A reservation with a missing or invalid start time (valid: ASCII digits only) is
+      UNKNOWN, never DEAD (sol r15, r16).
       `create` deletes an old tombstone and prunes stale registrations inside its token's
       rollback; a prune that finds the `git` mutex busy is logged, and the create goes on.
   - A cleanup that dies between its rename and its delete can leave `<tree>.removing-<id>`.

@@ -185,8 +185,10 @@ def _liveness(owner) -> str:
         return UNKNOWN
     if Path("/proc").is_dir():
         recorded = owner.get("start")
-        if not isinstance(recorded, str) or not recorded:
-            return UNKNOWN      # no start time to tell a live owner from a reused PID (sol r15)
+        if not (isinstance(recorded, str) and recorded.isascii() and recorded.isdigit()):
+            # No valid start time (clock ticks: digits only) to tell a live
+            # owner from a reused PID (sol r15, r16).
+            return UNKNOWN
         try:
             start = _stat_start(pid)
         except FileNotFoundError:
