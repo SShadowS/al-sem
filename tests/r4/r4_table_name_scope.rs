@@ -137,6 +137,14 @@ pageextension 50215 "Two Table PE" extends "Two Table Page"
     end;
 }
 
+tableextension 50240 "Moving Ext" extends "New Base"
+{
+    keys
+    {
+        key(WsMovingKey; "Entry No.") { }
+    }
+}
+
 table 50230 "Keyed"
 {
     fields
@@ -158,14 +166,16 @@ tableextension 50231 "Keyed Ext" extends "Keyed"
     }
 }
 #else
-tableextension 50231 "Keyed Ext" extends "Keyed"
+tableextension 50231 "Keyed Ext B" extends "Keyed"
 {
     fields
     {
+        field(50231; "KA"; Integer) { }
         field(50232; "KB"; Integer) { }
     }
     keys
     {
+        key(KeyA; "KA") { }
         key(KeyB; "KB") { }
     }
 }
@@ -236,6 +246,10 @@ tableextension 59 "Moving Ext" extends "New Base"
     fields
     {
         field(59; "New Flag"; Boolean) { }
+    }
+    keys
+    {
+        key(MovingKey; "Entry No.") { }
     }
 }
 #else
@@ -442,7 +456,9 @@ fn var_table(ws: &ModelEntities, app: &str, routine: &str, var: &str) -> Option<
 /// the temporary flag read from the last alternative fails "alternatives that
 /// differ in SourceTableTemporary force no temporary"; every key of a split
 /// tableextension keeping the first alternative's id fails "both
-/// alternatives' keys".
+/// alternatives' keys"; skipping a key whose same-NAMED extension already
+/// added its members fails "two apps' same-named extensions each keep their
+/// key"; no repeat check for a later alternative fails "... once each".
 #[test]
 fn a_table_name_binds_as_the_resolver_binds_it_in_the_model() {
     let ws = model();
@@ -580,19 +596,43 @@ fn a_table_name_binds_as_the_resolver_binds_it_in_the_model() {
         "agreeing alternatives are one page"
     );
     // sol r4: two alternatives of one tableextension on ONE base each add
-    // their key.
+    // their key; sol + Fable r5: the alternative that renames the extension
+    // and repeats `KeyA` adds it once (keys counted by the extension's own id
+    // prefix, not its name).
     let keyed = ws
         .tables
         .iter()
         .rfind(|t| t.id == format!("{WS}/table/50230") && !t.is_extension_stub)
         .expect("Keyed");
+    let own = format!("{WS}/table/50230/key/ext/{WS}/50231/");
     let ext_keys: Vec<&Vec<String>> = keyed
         .keys
         .iter()
-        .filter(|k| k.declared_by.as_deref() == Some("Keyed Ext"))
+        .filter(|k| k.id.starts_with(&own))
         .map(|k| &k.members)
         .collect();
-    assert_eq!(ext_keys.len(), 2, "both alternatives' keys: {ext_keys:?}");
+    assert_eq!(
+        ext_keys.len(),
+        2,
+        "both alternatives' keys, once each: {ext_keys:?}"
+    );
+    // sol + Fable r5: another app's same-named extension with an identical
+    // key on the same base keeps its key.
+    let new_base = ws
+        .tables
+        .iter()
+        .rfind(|t| t.id == format!("{ZBASE}/table/57") && !t.is_extension_stub)
+        .expect("New Base");
+    assert_eq!(
+        new_base
+            .keys
+            .iter()
+            .filter(|k| k.declared_by.as_deref() == Some("Moving Ext"))
+            .count(),
+        2,
+        "two apps' same-named extensions each keep their key: {:?}",
+        new_base.keys.iter().map(|k| &k.id).collect::<Vec<_>>()
+    );
     // sol r2: a page's `SourceTable = 50` binds by number from its own app,
     // though the unrelated app's table 50 comes later.
     assert_eq!(

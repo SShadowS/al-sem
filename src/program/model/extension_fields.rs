@@ -194,12 +194,16 @@ pub fn merge_extension_fields(
                     object.app_guid, object.object_number
                 )
             };
-            // Idempotent, as the field merge is; an alternative repeating a
-            // key another alternative already added (same members) adds none.
+            // Idempotent, as the field merge is; a LATER alternative repeating
+            // a key an earlier alternative of this same extension (its own id
+            // prefix) added, with the same members, adds none (Fable r5: never
+            // for an unsplit extension, never across apps).
+            let own_prefix = format!(
+                "{base_table_id}/key/ext/{}/{}/",
+                object.app_guid, object.object_number
+            );
             if base.keys.iter().any(|b| {
-                b.id == id
-                    || (b.declared_by.as_deref() == Some(object.name.as_str())
-                        && b.members == k.members)
+                b.id == id || (alt > 0 && b.id.starts_with(&own_prefix) && b.members == k.members)
             }) {
                 continue;
             }
