@@ -28,6 +28,7 @@ own (it is gitignored), because `cli._run_gate` derives `TREE_SITTER_AL_PATH` fr
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -190,6 +191,13 @@ _ME = {"pid": os.getpid(), "start": _own_start(), "boot": _boot_id(), "pidns": _
        "nonce": os.urandom(8).hex()}
 
 ALIVE, DEAD, UNKNOWN = "alive", "dead", "unknown"
+_BOOT_ID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+
+
+def _is_boot_id(value) -> bool:
+    """The kernel's boot id form (8-4-4-4-12 lowercase hex); anything else is
+    not a boot id and must never decide DEAD (sol r18)."""
+    return isinstance(value, str) and _BOOT_ID.fullmatch(value) is not None
 
 
 def _liveness(owner) -> str:
@@ -198,9 +206,9 @@ def _liveness(owner) -> str:
     or an explicit cleanup.
     - With /proc, first the frame (Fable r2 L1): a reservation from another
       boot is DEAD (every process of that boot has ended); a boot id missing
-      on either side, or a PID namespace that is missing or not this one, is
-      UNKNOWN (the PID cannot be judged from here). Then: no `/proc/<pid>` is
-      DEAD; a start time that differs is DEAD (the PID was reused); the same
+      or not in the kernel's UUID form on either side, or a PID namespace
+      that is missing or not this one, is UNKNOWN (the PID cannot be judged
+      from here). Then: no `/proc/<pid>` is DEAD; a start time that differs is DEAD (the PID was reused); the same
       start time is ALIVE; a stat that cannot be read is UNKNOWN, never DEAD.
     - Without /proc only the PID can be asked about: gone is DEAD, present is
       UNKNOWN (it may be a reused PID).
@@ -210,8 +218,8 @@ def _liveness(owner) -> str:
         return UNKNOWN
     if Path("/proc").is_dir():
         boot, now_boot = owner.get("boot"), _boot_id()
-        if not (isinstance(boot, str) and boot and now_boot):
-            return UNKNOWN
+        if not (_is_boot_id(boot) and _is_boot_id(now_boot)):
+            return UNKNOWN                      # only two real boot ids may differ into DEAD (sol r18)
         if boot != now_boot:
             return DEAD
         pidns = owner.get("pidns")
@@ -273,18 +281,23 @@ def _take_owned_held(ctx, git: Git, path: Path) -> Path | None:
     reservation cleared, and the tombstone returned (None if nothing was
     there)."""
     res_path = _reservation_path(ctx, path)
+    absent = object()                           # a missing file, told apart from a parsed `null` (sol r18)
     try:
-        owner = read_json(res_path)
+        owner = read_json(res_path, absent)
     except (OSError, ValueError) as e:
         # A damaged reservation (a hand edit, a torn file) is a clear refusal,
         # never a traceback (Fable r2 L4): its owner cannot be told.
         raise NotOurs(f"{path} has a reservation that cannot be read ({e}); refusing to touch "
                       f"it. If no invocation is using the tree, delete {res_path}") from e
-    mine = isinstance(owner, dict) and all(owner.get(k) == _ME[k] for k in ("pid", "start", "nonce"))
-    if owner is not None and not mine:          # this invocation's own reservation is its to take
+    if owner is not absent and not isinstance(owner, dict):
+        # `null`, a list, a string: damaged, never "no reservation" (sol r18).
+        raise NotOurs(f"{path} has a reservation that is not a record ({type(owner).__name__}); "
+                      f"refusing to touch it. If no invocation is using the tree, delete {res_path}")
+    mine = owner is not absent and all(owner.get(k) == _ME[k] for k in ("pid", "start", "nonce"))
+    if owner is not absent and not mine:        # this invocation's own reservation is its to take
         state = _liveness(owner)
         if state != DEAD:
-            pid = owner.get("pid") if isinstance(owner, dict) else None
+            pid = owner.get("pid")
             raise NotOurs(f"{path} is reserved by another invocation (pid {pid}, {state}); "
                           f"refusing to touch it. If that invocation has ended, delete {res_path}")
     tomb = _check_and_detach_held(git, path)

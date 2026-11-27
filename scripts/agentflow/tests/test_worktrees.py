@@ -350,7 +350,12 @@ def test_liveness_is_judged_within_one_boot_and_one_pid_namespace():
         pytest.skip("the /proc branch with a boot id and a pid namespace")
     me = worktrees._ME
     assert worktrees._liveness(me) == worktrees.ALIVE
-    assert worktrees._liveness({**me, "boot": "another-boot"}) == worktrees.DEAD
+    other = "0123abcd-0000-4000-8000-00000000beef"
+    assert other != me["boot"]
+    assert worktrees._liveness({**me, "boot": other}) == worktrees.DEAD
+    # Not the kernel's UUID form: never DEAD (sol r18).
+    for bad in ("another-boot", other.upper(), other + "\n", "", 7):
+        assert worktrees._liveness({**me, "boot": bad}) == worktrees.UNKNOWN, bad
     assert worktrees._liveness({**me, "boot": None}) == worktrees.UNKNOWN
     assert worktrees._liveness({**me, "pidns": "pid:[1]"}) == worktrees.UNKNOWN
     assert worktrees._liveness({**me, "pidns": None}) == worktrees.UNKNOWN
@@ -402,6 +407,46 @@ def test_a_damaged_reservation_is_a_clear_refusal(repo_pair):
         worktrees.create(ctx, g, p, g.rev("master"))
     assert str(res) in str(e.value)
     assert p.exists()
+
+
+@pytest.mark.parametrize("content", ["null", "[]", '"x"', "12"])
+def test_a_reservation_that_is_not_a_record_is_damaged_not_absent(repo_pair, content):
+    """A reservation file that parses to `null` or any non-object is damaged:
+    `NotOurs` naming the file, and the tree and the file stay (sol r18). Only
+    a MISSING file means no reservation."""
+    _, clone = repo_pair
+    g = Git(clone)
+    ctx = Ctx(Paths(clone))
+    p = worktrees.verify_path(clone)
+    worktrees.create(ctx, g, p, g.rev("master"))
+    (p / "marker").write_text("kept", encoding="utf-8")
+    res = ctx.paths.agent / "verify-reservations" / f"{p.name}.json"
+    res.write_text(content, encoding="utf-8")
+    with pytest.raises(worktrees.NotOurs, match="not a record") as e:
+        worktrees.create(ctx, g, p, g.rev("master"))
+    assert str(res) in str(e.value)
+    assert (p / "marker").read_text(encoding="utf-8") == "kept"
+    assert res.read_text(encoding="utf-8") == content
+
+
+def test_a_malformed_boot_id_never_reclaims_the_tree(repo_pair):
+    """Another invocation's reservation whose boot id is not in the kernel's
+    UUID form is UNKNOWN, so `create` refuses and the tree stays (sol r18),
+    even though its PID is gone."""
+    if not Path("/proc").is_dir() or worktrees._ME["boot"] is None:
+        pytest.skip("the /proc branch with a boot id")
+    _, clone = repo_pair
+    g = Git(clone)
+    ctx = Ctx(Paths(clone))
+    p = worktrees.verify_path(clone)
+    worktrees.create(ctx, g, p, g.rev("master"))
+    (p / "marker").write_text("kept", encoding="utf-8")
+    dead_but_bad_boot = {**worktrees._ME, "pid": 2 ** 22 + 12345, "start": "1", "nonce": "f" * 16,
+                         "attempt": "x", "path": str(p), "boot": "another-boot"}
+    _reservation(ctx, p).write_text(json.dumps(dead_but_bad_boot), encoding="utf-8")
+    with pytest.raises(worktrees.NotOurs, match="unknown"):
+        worktrees.create(ctx, g, p, g.rev("master"))
+    assert (p / "marker").read_text(encoding="utf-8") == "kept"
 
 
 def test_the_guarded_step_refuses_a_symlink_at_the_tree_path(repo_pair, tmp_path):

@@ -1057,7 +1057,10 @@ its time rules on the wall clock, which keeps counting through a suspend.
   sol r17 found the verification path keyed by the parent while its lock and reservation
   are keyed by the root, and gave each root its own tree. Fable's second final review then
   added the boot and PID-namespace frame, `GitError`-only failures from `create`, a clear
-  refusal for a damaged reservation, and tests that reach each guard.
+  refusal for a damaged reservation, and tests that reach each guard. sol r18 made
+  malformed reservation data never mean DEAD: a boot id counts only in the kernel's UUID
+  form (anything else is UNKNOWN), and a reservation file that parses to `null` or any
+  non-object is damaged (a refusal naming the file), not absent.
 
 ### Fixed (ENG-178: table procedures named like record built-ins: four follow-ups from ENG-173)
 
