@@ -6813,16 +6813,20 @@ fn perf_bounds_aligns_each_share_to_its_own_readings() {
 /// ⟨TLS-149⟩ A failed clock reading gives no share (review r3, sol; Fable r1).
 /// awake-clock keeps the last time on a failed read (its first two in a row),
 /// so a failed c4 would read as c3: the host's interval would lose the slow
-/// reading while its stall kept it. Here only c4 fails: after a SHARE_RUN_S run
-/// the host's last reading waits ~2 s on a FIFO, the suspended reading (the fake
-/// clock's source) is broken just before that reading returns and mended
-/// before this cgroup's reading (a second FIFO) returns, so c5 is good again.
+/// reading while its stall kept it. Here only c4 fails, ordered by the FIFOs, not
+/// by sleeps (review r4, sol): after a SHARE_RUN_S run the host's last reading
+/// is a FIFO; its writer's open returns only once the step has opened it to
+/// read (past c3), and only then breaks the suspended reading (the fake clock's
+/// source), holds the reading ~2 s (the slow read) and gives it. This cgroup's
+/// last reading is a second FIFO; its writer's open returns only once the step
+/// has passed c4, and only then mends the clock and gives it, so c5 is good.
 /// The host stalled 1.5 s: ~25 % of the run alone. Both shares that use c4 are
 /// not available, there is no UNDER LOAD, and the exit (5) stays the binary's.
 ///
 /// Proof (2026-11-27): the `awake_fails` line dropped from `perf_bounds_clock`
 /// -> FAILED ("the host's CPU stall share was 23 % (above 15 %)", UNDER LOAD);
-/// restored -> passed.
+/// restored -> passed. Again with the FIFO handshakes: FAILED (22 %, UNDER
+/// LOAD); restored -> passed.
 #[cfg(target_os = "linux")]
 #[test]
 fn perf_bounds_gives_no_share_from_a_failed_clock_reading() {
@@ -6835,8 +6839,8 @@ fn perf_bounds_gives_no_share_from_a_failed_clock_reading() {
     std::fs::write(&suspended, "100").unwrap();
     let body = format!(
         "sleep {SHARE_RUN_S}\nrm -f '{h}' '{o}'\nmkfifo '{h}' '{o}'\n\
-         (sleep 2; echo bad > '{s}'; printf '%s' '{host_line}' > '{h}'; \
-          sleep 1; echo 100 > '{s}'; printf '%s' '{own_line}' > '{o}') >/dev/null 2>&1 &\n\
+         (exec 3>'{h}'; echo bad > '{s}'; sleep 2; printf '%s' '{host_line}' >&3; exec 3>&-; \
+          exec 4>'{o}'; echo 100 > '{s}'; printf '%s' '{own_line}' >&4; exec 4>&-) >/dev/null 2>&1 &\n\
          exit 5",
         h = host.display(),
         o = own.display(),
