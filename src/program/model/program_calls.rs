@@ -612,6 +612,8 @@ fn attach_program_calls_with(
     crate::program::model::flow_fields::attach_appended_flow_field_reads(
         &mut rows.workspace,
         &appended,
+        // ENG-218: the table names they read bind as the record types did.
+        &crate::program::model::symbol_table::TableScope::of(program.body().ctx.graph()),
     );
     for (ri, ci) in dataset_ops.may_fail_sites {
         rows.workspace.routines[ri].call_sites[ci].start_may_fail = true;

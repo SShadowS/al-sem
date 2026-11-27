@@ -125,6 +125,9 @@ pub fn merge_extension_fields(
         };
 
         let base_table_id = workspace.tables[base_idx].id.clone();
+        // ENG-218: the stub says which table it extends, for the readers that
+        // ask "the extensions of table T" (never the extended name).
+        workspace.tables[ext_idx].extends_table_id = Some(base_table_id.clone());
         let mut existing: HashSet<i64> = workspace.tables[base_idx]
             .fields
             .iter()
@@ -252,5 +255,104 @@ pub fn merge_extension_fields(
                 declared_by: Some(object.name.clone()),
             });
         }
+    }
+}
+
+/// ENG-218: per object ROW of `objects`, the table a tableextension row
+/// extends: its own `#if` alternative's stub's `extends_table_id` (the k-th
+/// row of an id takes the k-th stub, as [`merge_extension_fields`] pairs
+/// them). Assembly pushes one stub per source tableextension row
+/// (`workspace.rs`, with the object row), and a symbol-only extension has no
+/// stub; so a count that disagrees is not produced, and is "not known" here
+/// (sol r2: no row may answer for another). `None` for every other row and
+/// for an extension whose base is not known. One pass over objects and tables.
+#[must_use]
+pub fn extension_bases<'t>(
+    objects: &[super::workspace::ModelObject],
+    tables: &'t [super::workspace::ModelTable],
+) -> Vec<Option<&'t str>> {
+    let mut stubs_of: std::collections::HashMap<&str, Vec<usize>> =
+        std::collections::HashMap::new();
+    for (i, t) in tables.iter().enumerate() {
+        if t.is_extension_stub {
+            stubs_of.entry(t.id.as_str()).or_default().push(i);
+        }
+    }
+    let mut rows_of: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    let alternative: Vec<usize> = objects
+        .iter()
+        .map(|o| {
+            if o.object_type != "TableExtension" {
+                return 0;
+            }
+            let n = rows_of.entry(o.id.as_str()).or_insert(0);
+            *n += 1;
+            *n - 1
+        })
+        .collect();
+    objects
+        .iter()
+        .enumerate()
+        .map(|(row, o)| {
+            if o.object_type != "TableExtension" {
+                return None;
+            }
+            let stubs = stubs_of.get(encode_table_id(&o.app_guid, o.object_number).as_str())?;
+            if stubs.len() != rows_of[o.id.as_str()] {
+                return None;
+            }
+            tables[stubs[alternative[row]]].extends_table_id.as_deref()
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::symbol_table::TableScope;
+    use super::super::symbol_table::tests::{numberless, tab};
+    use super::super::workspace::{ModelEntities, ModelObject};
+
+    fn ext_row(target: &str) -> ModelObject {
+        let mut o = numberless("E");
+        o.id = "e/TableExtension/10".into();
+        o.app_guid = "e".into();
+        o.object_type = "TableExtension".into();
+        o.object_number = 10;
+        o.extends_target_name = Some(target.into());
+        o
+    }
+
+    /// ENG-218 (sol r2): two rows of one tableextension id over ONE stub (a
+    /// count assembly does not produce) name no base for either row: no row
+    /// answers for another. With a stub per row, each row its own.
+    /// DISCRIMINATION (2026-11-27, break then restored, green): reading the
+    /// shared stub for every row fails "a shared stub answers for no row".
+    #[test]
+    fn each_row_reads_its_own_stub_and_a_shared_one_answers_for_none() {
+        let scope = TableScope::stated(&[("e", &["e", "x"])], &[]);
+        let bases = |stubs: usize| {
+            let mut tables = vec![tab("x", 1, "A", false), tab("x", 2, "B", false)];
+            tables.extend((0..stubs).map(|_| tab("e", 10, "E", true)));
+            let mut ws = ModelEntities {
+                objects: vec![ext_row("A"), ext_row("B")],
+                tables,
+                routines: Vec::new(),
+            };
+            super::merge_extension_fields(&mut ws, &scope);
+            super::extension_bases(&ws.objects, &ws.tables)
+                .into_iter()
+                .map(|b| b.map(str::to_owned))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            bases(2),
+            vec![Some("x/table/1".to_owned()), Some("x/table/2".to_owned())],
+            "each row its own stub's base"
+        );
+        assert_eq!(
+            bases(1),
+            vec![None, None],
+            "a shared stub answers for no row"
+        );
     }
 }

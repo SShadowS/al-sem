@@ -159,6 +159,18 @@ impl<'a> SymbolTable<'a> {
         self.one_live_table(found, None)
     }
 
+    /// ENG-218: whether app `from` sees any table named `name`, so a
+    /// [`Self::table_by_name_from`] that declined can say why (it saw two)
+    /// apart from one that found none.
+    pub fn sees_table_named(&self, from: &str, name: &str) -> bool {
+        self.tables_named
+            .get(&name.fold_identifier())
+            .is_some_and(|all| {
+                all.iter()
+                    .any(|&i| self.sees(from, &self.tables[i].app_guid))
+            })
+    }
+
     /// ENG-194 (sol r1): the table NUMBER `n` names in code of app `from`
     /// (dependency symbols give a page's `SourceTable` as a number), as the
     /// resolver binds a number (`ProgramGraph::resolve_object_by_number`):
@@ -323,7 +335,9 @@ impl<'a> SymbolTable<'a> {
 /// ENG-194: what a table name may bind to, from the program graph: each app's
 /// dependency closure (its own guid included) and the model ids of the tables
 /// declared `ObsoleteState = Moved`/`Removed` ([`SymbolTable::table_by_name_from`]).
-#[derive(Debug, Clone, Default)]
+/// No `Default`: an empty scope sees each app's own tables only (`sees` is
+/// fail-closed), never "every table" (ENG-218, Fable r1).
+#[derive(Debug, Clone)]
 pub struct TableScope {
     /// app guid → the app guids it can see (itself included).
     visible: HashMap<String, std::collections::HashSet<String>>,
@@ -364,13 +378,6 @@ impl TableScope {
         TableScope { visible, gone }
     }
 
-    /// No scope: every table of a name counts, none is gone (a model built
-    /// without a program graph, as tests and single objects are).
-    #[must_use]
-    pub fn unscoped() -> TableScope {
-        TableScope::default()
-    }
-
     /// A scope stated by hand (tests): `visible` as (app, apps it sees),
     /// `gone` as table model ids.
     #[cfg(test)]
@@ -395,7 +402,7 @@ pub(crate) mod tests {
     use super::*;
 
     /// A field-less table `name` of `app`, number `n`.
-    fn tab(app: &str, n: i64, name: &str, stub: bool) -> ModelTable {
+    pub(crate) fn tab(app: &str, n: i64, name: &str, stub: bool) -> ModelTable {
         ModelTable {
             id: format!("{app}/table/{n}"),
             app_guid: app.to_string(),
@@ -405,6 +412,7 @@ pub(crate) mod tests {
             keys: Vec::new(),
             is_temporary: false,
             is_extension_stub: stub,
+            extends_table_id: None,
         }
     }
 

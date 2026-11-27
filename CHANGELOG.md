@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (ENG-218: FlowField and RecordRef tables, and a table's extensions, bind as the resolver binds them, not by name across all apps)
+
+- **The bug.** ENG-194 made record variables bind a table name as the program's resolver does, seen
+  from the referencing app. Other readers kept their own name lookups across every loaded app:
+  - a FlowField's `CalcFormula` table and a RecordRef's `Open(<name | number>)` table
+    (`flow_fields::Tables`): a name two tables share was "ambiguous" even when the app that wrote it
+    sees only one, and a `Moved` Base Application table never gave way to Business Foundation's;
+  - a table's extensions (`cross_rules::table_triggers`, `explain`'s field and table triggers, the
+    FlowField `Rec` sharing groups): every tableextension whose extended NAME matched, so an
+    unrelated app's extension of a same-named table lent this table its triggers or its
+    `SetAutoCalcFields`.
+- **The fix.**
+  - A `CalcFormula` binds from the app that declares the field (an extension field: the extension's
+    app), and a RecordRef `Open` from the routine's app, through ENG-194's scoped lookup: the app's
+    dependency closure, a real table over a stub, a moved/removed table giving way to a live one, a
+    number to the app's own table first, two left declining. "Ambiguous" and "not loaded" are judged
+    from what that app sees.
+  - Every tableextension stub records the table it extends (`ModelTable::extends_table_id`, set by
+    `merge_extension_fields` for each `#if` alternative's row), and
+    `extension_fields::extension_bases` gives each object row its own alternative's base.
+  - `cross_rules` keeps an extension routine only when its own declaring row extends the table;
+    `explain` names a table for a tableextension routine only when every row of the card extends
+    the same one; a table and its extensions share `Rec` by table id, each routine through its own
+    declaring row (pages and reports keep sharing by name).
+  - `TableScope::unscoped()` and `TableScope`'s `Default` are removed: an empty scope is fail-closed
+    (each app sees only its own tables), never "every table".
+- **CDO (pinned `bc3ccb18`).** Nothing moved: findings 2306 and 32405 at both scopes, no fingerprint
+  added or removed, unknown 0 and no call-graph or census number moved
+  (`/work/.al-sem/engine-notes/eng218/ba-09c0d7ce/report.md`). None of the workspace's 101
+  `CalcFormula`s names one of the eight tables Base Application moved to Business Foundation.
+- **Tests and red proofs.** `r4::r4_table_name_scope` (through the production cross-app model, plus
+  two `explain` CLI cases) and unit tests in `extension_fields`, `symbol_table` and `flow_fields`.
+  Each guard was broken, run red and restored; the breaks are in the tests' docs.
+- **Filed.** ENG-223 (`recref_flow`'s tableextension mapping by name; namespaced targets), ENG-224
+  (a dependency's `#if`-split tableextension triggers are not in the cross-app model), ENG-225
+  (explain renders a split routine's card from its first alternative).
+
 ### Fixed (TLS-145: a test that failed when a worker exited before reading its input)
 
 - `cli_ir_cache::a_worker_without_a_good_snapshot_fails_closed` could fail with `BrokenPipe`.

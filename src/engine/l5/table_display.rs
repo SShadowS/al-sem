@@ -87,6 +87,7 @@ mod tests {
             keys: vec![],
             is_temporary: false,
             is_extension_stub: false,
+            extends_table_id: None,
         }
     }
 
