@@ -1279,7 +1279,9 @@ ran beside the timing).
   - A tested load loads only on the branch where it found a record (sol r1):
     `if A.Get(1) then exit; A.Modify()` is reported, `if not A.Get(1) then exit; A.Modify()` is
     silent, with or without parentheses (`if A.FindFirst then`). The statement tree marks such a
-    condition with a `CondOp` hint, as it already marked a tested call.
+    condition with a `CondOp` hint, as it already marked a tested call. The r0 corpus's L2 feature
+    snapshot moves for the 65 routines with such an `if`: each row gains the `CondOp` hint and
+    nothing else (with the hint read as none, every hash equals the old golden).
   - A ternary's two alternatives are exclusive (sol r1): `Ok := B ? A.Get(1) : A.Modify()` is
     reported. Each side is walked from the state before the ternary and the two are joined.
   - The task asked instead for "loaded only when EVERY reaching assignment is loaded". Measured
