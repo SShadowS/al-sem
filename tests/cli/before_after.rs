@@ -844,7 +844,7 @@ fn before_after_measures_nothing_beside_a_build() {
     // One process: the builtin `read` waits on a pipe nobody writes, so killing
     // it leaves no `sleep` child holding the test's output (a nextest leak).
     let build = crate::cdo_slot::Reap(
-        crate::clean_env::command(&fake)
+        crate::cdo_slot::owned(&mut crate::clean_env::command(&fake))
             .args(["-c", "read -t 600 _ || true"])
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::null())
@@ -862,10 +862,7 @@ fn before_after_measures_nothing_beside_a_build() {
     );
     drop(build);
     assert_eq!(code, Some(1), "{text}");
-    assert!(
-        text.contains("builds still ran when the timed hold began"),
-        "{text}"
-    );
+    assert!(text.contains("the timed hold was refused"), "{text}");
     assert!(!t.log().contains("fingerprint"), "{}", t.log());
     let status = crate::clean_env::command("bash")
         .arg(t.path("repo/scripts/cdo-slot"))

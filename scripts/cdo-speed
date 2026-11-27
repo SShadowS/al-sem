@@ -646,8 +646,8 @@ def timed_hold(repo):
                          os.environ.get("CDO_SLOT_OWNER", "cdo-speed"), "cdo-speed timing",
                          "--wait", "--bind", str(os.getpid()), "--timed"]).returncode
     if rc == 6:
-        log("builds still ran when the timing was to begin (scripts/cdo-slot --timed): "
-            "timed nothing")
+        log("the timed hold was refused (scripts/cdo-slot --timed exit 6: see the reason "
+            "above): timed nothing")
         sys.exit(2)
     if rc not in (0, 4):
         log(f"the timed CDO slot hold was not taken (cdo-slot exit {rc})")

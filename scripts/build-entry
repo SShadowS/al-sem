@@ -1,0 +1,128 @@
+# shellcheck shell=bash
+# scripts/build-entry — sourced by the gate entry points (ci-steps,
+# check-goldens), not run: a build never STARTS beside a CDO timing (TLS-135).
+#
+# The guard (scripts/claude-hooks/cdo-slot-guard) sees a Bash command only as it
+# enters. A gate queued before a timing (`flock <lock> bash scripts/ci-steps
+# task`), a long parent that starts steps later, or a session whose worktree has
+# no guard wired, started its build in the middle of a timing (2026-11-25:
+# ENG-119's landing waited its 1800 s and failed at perf-bounds). So each entry
+# point checks for itself, at its own start, with `build_entry <name>`, which
+# asks `cdo-slot enter` (read its doc there):
+#
+#   1. `enter` records this process as a running build entry
+#      (`$CDO_SLOT_DIR/entries/<pid>.<start time>`), THEN decides. A timed
+#      acquire counts every recorded entry that is still alive, outside its own
+#      line, as a build (scripts/cdo-slot `foreign_builds`), unless the entry
+#      said it is quiet (below).
+#   2. Another timing runs: it takes the record back (exit 3), and this waits
+#      (`enter --wait`: logged, parked, then it records and decides again; one
+#      deadline of CDO_SLOT_ENTRY_WAIT_S awake seconds for all its rounds; exit
+#      6 past it: this run refuses).
+#
+# Why the race is closed, not narrowed: the record is written before the
+# decision, and the timing lock is taken before the timer's first scan. If the
+# decision saw no timing, it came before the timing lock, so the record existed
+# before the timer's scans began, and every scan counts it while the entry lives
+# (it lives for its whole run: the scripts wait for their steps). If it saw one,
+# the run waits. Only the entry process itself counts, never what it started: a
+# leaked child of a finished run (an orphan) holds nothing up. A live cargo or
+# rustc it left behind is still a build by name.
+#
+# Every step checks for itself: a step of a run (`ci-steps task` running `"$0"
+# fmt`) is an entry like any other, and no run admits its steps (review r2,
+# sol). A run waits for a foreground step quietly (`build_step`: `cdo-slot quiet
+# on`, the step, `quiet off`), so a timing that began during the run waits only
+# for the step that runs (it counts by itself), never for the run, and the next
+# step waits for the timing: the run pauses between its steps, no deadlock.
+# Quiet is safe only around children that check for themselves (a `ci-steps`
+# step, the slot acquire, a `wait` for such a child): a timing may skip the run
+# while it is quiet, so after its step the run is admitted afresh (it records
+# and decides again, and waits if another timing runs now) before it works on
+# in its own shell (review r3, sol). A run that cannot go quiet does not run the
+# step (review r4, sol). A timing's own line (its command's descendants,
+# perf-bounds' and cdo-speed's builds) passes. Where no slot can be held (GitHub
+# CI, no flock, no slot folder) nothing is checked. Where one can, a check that fails (no record made,
+# cdo-slot broken) refuses the run: it is never an admission.
+
+# Why no slot can be held here, or nothing when one can.
+cdo_slot_unavailable() {
+    if [ "${GITHUB_ACTIONS:-}" = true ]; then
+        echo "a GitHub Actions runner"
+    elif ! command -v flock >/dev/null 2>&1; then
+        echo "no flock on this host"
+    elif ! mkdir -p "${CDO_SLOT_DIR:-/work/.al-sem/cdo-slot}" 2>/dev/null; then
+        echo "no slot folder (${CDO_SLOT_DIR:-/work/.al-sem/cdo-slot})"
+    fi
+}
+
+build_entry_slot="$(dirname "${BASH_SOURCE[0]}")/cdo-slot"
+
+build_entry() { # <name>; 0: go on, 1: refused
+    # Once per process (a second call: check-goldens' regen, then its run). The
+    # PID, not a flag: a subshell or a child that sees the variable is not this
+    # process (review r2, sol).
+    [ "${build_entry_admitted:-}" != "$BASHPID" ] || return 0
+    [ -z "$(cdo_slot_unavailable)" ] || return 0
+    local rc=0
+    bash "$build_entry_slot" enter "$1" || rc=$?
+    if [ "$rc" = 3 ]; then
+        rc=0
+        bash "$build_entry_slot" enter --wait "$1" || rc=$?
+    fi
+    case "$rc" in
+        0) build_entry_admitted=$BASHPID build_entry_name=$1 ;;
+        6) return 1 ;;
+        # On a host that can hold the slot, a check that could not be made is
+        # no admission (review r1, sol).
+        *) echo "$1: the CDO timing check failed (scripts/cdo-slot enter, exit $rc); refusing to start" >&2; return 1 ;;
+    esac
+}
+
+# build_step <command...>: run a foreground step of this admitted entry, quiet
+# while it runs (see above), then admit this entry afresh; the step's exit
+# status. `command` must check for itself (it runs while a timing may skip this
+# run). build_quiet_begin and build_quiet_end are its two halves, for a caller
+# that must act on the step's status before the fresh admission (perf-bounds).
+build_step() {
+    local rc=0
+    build_quiet_begin "$*"
+    "$@" || rc=$?
+    build_quiet_end "$*"
+    return "$rc"
+}
+# build_quiet_begin <what>: go quiet, or end this run (exit 1) before the step:
+# a run counted while it waits for its step can wait on the timing that waits
+# for it (review r4, sol). Nothing when this process is not an admitted entry.
+build_quiet_begin() {
+    [ "${build_entry_admitted:-}" = "$BASHPID" ] || return 0
+    if ! bash "$build_entry_slot" quiet on; then
+        echo "build_step: could not go quiet before: $1; stopping" >&2
+        exit 1
+    fi
+}
+# build_quiet_end <what>: leave the quiet state and admit this entry afresh. A
+# `quiet off` that fails, or a fresh admission refused, ends this run (exit 1):
+# it must not work on while a timing may skip it or runs beside it.
+build_quiet_end() {
+    [ "${build_entry_admitted:-}" = "$BASHPID" ] || return 0
+    if ! bash "$build_entry_slot" quiet off; then
+        echo "build_step: could not leave the quiet state after: $1; stopping" >&2
+        exit 1
+    fi
+    build_entry_admitted=""
+    if ! build_entry "$build_entry_name"; then
+        echo "build_step: not admitted again after: $1; stopping" >&2
+        exit 1
+    fi
+}
+# build_quiet_stop <what>: leave the quiet state and end this run (exit 1) at
+# once, with no fresh admission: for a run that has nothing left to do (a
+# refused perf-bounds; review r7, sol: its admission could wait an hour behind
+# the very timing that refused it).
+build_quiet_stop() {
+    if [ "${build_entry_admitted:-}" = "$BASHPID" ]; then
+        bash "$build_entry_slot" quiet off || echo "build_step: could not leave the quiet state after: $1" >&2
+    fi
+    exit 1
+}

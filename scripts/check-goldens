@@ -177,6 +177,12 @@ if [[ "${1:-}" == "--verify-coverage" ]]; then
     exit $rc
 fi
 
+# ⟨TLS-135⟩ Never start beside a CDO timing (scripts/build-entry): the
+# pre-commit hook and a queued command start this with no guard in between.
+# Called before each build below; a second call is a no-op (admitted once per process).
+# shellcheck source=build-entry
+source "$(dirname "$0")/build-entry" || exit 1
+
 targets=(
     --test r4
     --test l2_ir
@@ -213,6 +219,7 @@ fi
 
 if [[ "${1:-}" == "--regen" ]]; then
     echo "check-goldens: regenerating (REGEN_TEMP_GOLDENS=1) — INSPECT the diff before committing"
+    build_entry check-goldens || exit 1
     REGEN_TEMP_GOLDENS=1 cargo nextest run --profile goldens "${targets[@]}" || exit 1
     echo "check-goldens: re-running WITHOUT regen to confirm green"
 elif [[ "${CHECK_GOLDENS_FORCE:-}" != "1" ]]; then
@@ -231,4 +238,5 @@ elif [[ "${CHECK_GOLDENS_FORCE:-}" != "1" ]]; then
     fi
 fi
 
+build_entry check-goldens || exit 1
 env -u REGEN_TEMP_GOLDENS cargo nextest run --profile goldens "${targets[@]}"
