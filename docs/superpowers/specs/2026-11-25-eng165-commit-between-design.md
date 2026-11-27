@@ -11,11 +11,12 @@ confirmation are folded in (§11). Ready to implement. Task card: `/coord/tasks/
   it. Two findings needed new BC measurements (§2.4, round 2). Both changed the design: a
   `Commit()` inside an isolated subscriber commits the caller's work, and `Page.RunModal` with a
   pending write is an error when no test handler stands in.
-- Revisions 3.2 to 3.5 answer the reviews of the implementation (Fable rounds 2 to 4, sol
-  round 5): the blockers for a loop above the meet routine, recursion on a route, sibling
-  subscribers, other edges at a leave site, a bulk operation or a repeated object trigger on A's
-  route, and a sure-B cut only at edges that surely fire (§4.1); the `route-search-capped`
-  relation and what a path that ends before B leaves out (§5.3).
+- Revisions 3.2 to 3.6 answer the reviews of the implementation (Fable rounds 2 to 6, sol
+  rounds 5 and 6): the blockers for a loop above the meet routine, recursion on a route, sibling
+  subscribers, other edges at a leave site, a step that may run its target more than once (bulk
+  operations, per-row and re-running triggers, manually bound subscribers), a sure-B cut only at
+  edges that surely fire, and a table of every edge kind with the check that covers it (§4.1);
+  the `route-search-capped` relation and what a path that ends before B leaves out (§5.3).
 
 ## 1. The question
 
@@ -370,7 +371,33 @@ marks the edges whose target may not run, or runs once per row, `TriggerFires::M
   run, and the question is about the runs after A.
 
 Neither rule changes a `yes`: the blockers only add reasons, and fewer cuts only widen the
-regions.
+regions. Fewer cuts can turn a `no` into a `yes` (S46, S48, S52, S53): the may-reading of a B
+that is not sure, as S5d.
+
+**Every edge kind, and which check covers it** (revision 3.6, Fable and sol reviews r6). Three
+checks read a route step: `may_repeat` (the step may run its target more than once: a blocker on
+A's route, the prefix included, and on B's route below M), `fires_surely` (the step must run its
+one target: needed for a sure-B cut) and `site_co_edges` (other edges at the step's site that run
+in the same statement: a blocker).
+
+| Edge kind | Runs its target | `may_repeat` | `fires_surely` | `site_co_edges` |
+|---|---|---|---|---|
+| direct call | once; one of several if ambiguous | no | yes, when alone at its site (pinned with the interface arm by S53; the engine resolves a `Variant` argument to one overload, so no direct-call shape with two targets was found) | not counted (alternatives) |
+| variable-typed call, not `Maybe` | once; a run on an object variable fans out to each lifecycle trigger | page trigger other than `OnInit`/`OnOpenPage`/`OnClosePage` | yes, when alone at its site | counted (S50) |
+| variable-typed call, `Maybe` | zero times, once, or once per row | yes (`repeated-trigger-on-route`) | no | counted |
+| interface dispatch | one implementer of several | no | no (S53) | not counted (alternatives) |
+| object run, not `Maybe` | once (a codeunit's `OnRun`, a report's or XmlPort's object triggers, a page's lifecycle triggers) | page trigger other than `OnInit`/`OnOpenPage`/`OnClosePage` (S51) | yes, when alone at its site | counted |
+| object run, `Maybe` (report dataitem, XmlPort element, request page, page record triggers) | zero times, once, or once per row | yes (S47) | no | counted |
+| implicit trigger of a single-row operation, `Always` | once | no | yes, when alone at its site | counted (S42) |
+| implicit trigger, `Maybe` (non-literal RunTrigger) | zero times or once | no | no (S48) | counted |
+| implicit trigger or table event of `ModifyAll`/`DeleteAll`, or of an operation not in the model | once per row, possibly zero | yes (`bulk-operation-on-route`, S44, S45) | no (S46) | counted |
+| table event of a single-row operation | once, or zero when the subscription is skipped | no | no (S52) | counted |
+| event dispatch to a plain subscriber | once per raise | no | no (not a guarded site) | `sibling-subscribers` for the event's other subscribers |
+| event dispatch to a subscriber whose subscription may carry a condition (`Manual`, a skip on a missing license or permission) | once per bound instance, possibly zero | yes (`repeated-subscriber-on-route`, S49) | no | `sibling-subscribers` |
+| unresolved object run (`Codeunit.Run(Id)`) | not known | no route goes through it | n/a | n/a: a region call no edge leaves blocks (`region-unresolved-call`) |
+
+A loop or recursion around a step is control flow, read by `loop_above_meet` and
+`recursion_on_route`, not by these three.
 
 **Other edges at a leave site** (revision 3.3, Fable review r3): a record operation or object
 run that a route leaves by can have several edges at the same site: an implicit trigger, a table

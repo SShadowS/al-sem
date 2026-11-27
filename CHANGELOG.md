@@ -1297,20 +1297,28 @@ by Fable).
   `case` label) is read against the root's unresolved cone; a guarded search stopped at its cap
   is `unknown` (`route-graph-stopped`), not a usage error. JSON: `errorsAfterCommit` gives counts
   and the nearest error, not every id.
-- **Review rounds 3 to 5 (Fable, sol) fixes:** recursion through any routine on A's or B's route
+- **Review rounds 3 to 6 (Fable, sol) fixes:** recursion through any routine on A's or B's route
   blocks (`recursion-on-route`; no route shows it, since the route search never repeats a
-  state); a record operation or object run a route leaves by blocks when it has other triggers
-  or table event subscribers at the same site (`site-other-edges`); a route step that may run its
-  target more than once, anywhere on A's route (the shared prefix included) or on B's route below
-  the meet routine, blocks: a bulk `ModifyAll`/`DeleteAll` trigger or table event, once per row
-  (`bulk-operation-on-route`), or a run into a trigger the graph marks `Maybe`, such as a report
-  dataitem's `OnAfterGetRecord` (`repeated-trigger-on-route`); a sure-B cut stands only on a
-  plain edge that must run its one target (no table event, no interface call, nothing marked
-  `Maybe`, such as a bulk operation that may match no row or a non-literal RunTrigger), so a pass
-  that skips B no longer hides a commit; a prefix routine with no model row blocks
-  `loop-above-meet`; every blocker that applies is listed; a route search that found nothing
-  because it stopped at its budget says `relation: route-search-capped`, not "dead under
-  literals"; `commitsInsideB` starts under B's route's `[CommitBehavior]`. COUNT-PENDING-R5
+  state); a statement a route leaves by blocks when other triggers, table event subscribers or
+  lifecycle triggers of a run on an object variable (`Rep.Run()`) run at the same site
+  (`site-other-edges`); a route step that may run its target more than once, anywhere on A's
+  route (the shared prefix included) or on B's route below the meet routine, blocks: a bulk
+  `ModifyAll`/`DeleteAll` trigger or table event, once per row (`bulk-operation-on-route`); a run
+  into a trigger the graph marks `Maybe`, such as a report dataitem's `OnAfterGetRecord`, or into
+  a page trigger other than `OnInit`/`OnOpenPage`/`OnClosePage`, such as an `OnQueryClosePage`
+  that returns false (`repeated-trigger-on-route`); an event step into a subscriber that may be
+  bound manually, as several instances (`repeated-subscriber-on-route`); a prefix routine with no
+  model row blocks `loop-above-meet`; every blocker that applies is listed; a route search that
+  found nothing because it stopped at its budget says `relation: route-search-capped`, not "dead
+  under literals"; `commitsInsideB` starts under B's route's `[CommitBehavior]`. The design
+  lists every edge kind with the check that covers it (§4.1).
+- **A sure B needs a sure edge (can turn a `no` into a `yes`):** the search for the next B stops
+  at a B only when every step toward it must run its one target: a direct call, or a typed call,
+  trigger or object run the graph does not mark `Maybe`, alone at its site. A table event (its
+  subscription may be skipped), an interface call (one implementer runs), a trigger of a bulk
+  operation that may match no row, or a non-literal RunTrigger is no sure B any more. A pass
+  that skips B then lets a later commit count as between: fixtures S46, S48, S52 and S53
+  answer `yes` where the engine said `no`. COUNT-PENDING-R5
 - **What a path that ends before B leaves out (for cost):** a statement on such a path is read
   for its own records only. `commitsWithoutB` then misses a commit in a callee on such a path,
   and an error raised inside such a callee is in neither `errorsBetween` nor any commit's

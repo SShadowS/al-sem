@@ -856,6 +856,57 @@ const REVIEW: &str = r#"codeunit 50640 "RV"
         end;
     end;
 
+    procedure S49()
+    var
+        M1: Codeunit "RV Manual 49";
+        M2: Codeunit "RV Manual 49";
+    begin
+        BindSubscription(M1);
+        BindSubscription(M2);
+        OnBoth49();
+    end;
+
+    [IntegrationEvent(false, false)]
+    local procedure OnBoth49()
+    begin
+    end;
+
+    procedure S50()
+    var
+        Rep: Report "RV Rep 50";
+    begin
+        Rep.Run();
+    end;
+
+    procedure S51()
+    begin
+        Page.RunModal(Page::"RV Page 51");
+    end;
+
+    procedure S52()
+    var
+        D: Record "RV Doc 52";
+        I: Integer;
+    begin
+        for I := 1 to 2 do begin
+            Transmit(); // S52A
+            D."No." := I;
+            D.Insert(true);
+            Commit();
+        end;
+    end;
+
+    procedure S53(R: Interface "RV Runner 53")
+    var
+        I: Integer;
+    begin
+        for I := 1 to 2 do begin
+            Transmit(); // S53A
+            R.Run53();
+            Commit();
+        end;
+    end;
+
     procedure S33()
     begin
         Transmit(); // S33A
@@ -998,6 +1049,15 @@ codeunit 50644 "RV Subscribers 35"
         L.Insert(); // S38B
     end;
 
+    // SkipOnMissingLicense = true: the subscription may be skipped.
+    [EventSubscriber(ObjectType::Table, Database::"RV Doc 52", 'OnAfterInsertEvent', '', true, false)]
+    local procedure AfterInsert52(var Rec: Record "RV Doc 52"; RunTrigger: Boolean)
+    var
+        L: Record "EB Log";
+    begin
+        L.Insert(); // S52B
+    end;
+
     [EventSubscriber(ObjectType::Table, Database::"RV Doc 42", 'OnAfterInsertEvent', '', false, false)]
     local procedure AfterInsert42(var Rec: Record "RV Doc 42"; RunTrigger: Boolean)
     begin
@@ -1094,6 +1154,94 @@ report 50650 "RV Batch 47"
             end;
         }
     }
+}
+
+codeunit 50651 "RV Manual 49"
+{
+    EventSubscriberInstance = Manual;
+
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::"RV", 'OnBoth49', '', false, false)]
+    local procedure Both49()
+    var
+        R: Codeunit "RV";
+        L: Record "EB Log";
+    begin
+        L.Insert(); // S49B
+        R.Transmit(); // S49A
+        Commit();
+    end;
+}
+
+report 50653 "RV Rep 50"
+{
+    ProcessingOnly = true;
+    UseRequestPage = false;
+
+    trigger OnInitReport()
+    var
+        R: Codeunit "RV";
+    begin
+        R.Transmit(); // S50A
+        Commit();
+    end;
+
+    trigger OnPreReport()
+    var
+        L: Record "EB Log";
+    begin
+        L.Insert(); // S50B
+    end;
+}
+
+page 50654 "RV Page 51"
+{
+    PageType = Card;
+    SourceTable = "EB Log";
+
+    trigger OnQueryClosePage(CloseAction: Action): Boolean
+    var
+        R: Codeunit "RV";
+        L: Record "EB Log";
+    begin
+        L.Insert(); // S51B
+        R.Transmit(); // S51A
+        if not Ok51 then begin
+            Commit();
+            exit(false);
+        end;
+        exit(true);
+    end;
+
+    var
+        Ok51: Boolean;
+}
+
+table 50655 "RV Doc 52"
+{
+    fields { field(1; "No."; Integer) { } }
+    keys { key(PK; "No.") { Clustered = true; } }
+}
+
+interface "RV Runner 53"
+{
+    procedure Run53();
+}
+
+codeunit 50656 "RV Impl 53a" implements "RV Runner 53"
+{
+    procedure Run53()
+    var
+        L: Record "EB Log";
+    begin
+        L.Insert(); // S53B
+    end;
+}
+
+codeunit 50657 "RV Impl 53b" implements "RV Runner 53"
+{
+    procedure Run53()
+    begin
+    end;
 }
 
 codeunit 50642 "RV Logger"
@@ -1921,6 +2069,57 @@ fn s48_a_non_literal_run_trigger_is_no_sure_b() {
     // Reviews r5 (Fable issue 2): `Insert(I = 2)` runs OnInsert (B) only on
     // pass 2; pass 1's Commit runs between A and that B: yes.
     let a = ask(ws(), &rv("S48"), &at("S48A"), &at("S48B"));
+    assert_eq!(a.answer, "yes", "{}", a.raw);
+}
+
+#[test]
+fn s49_a_manual_subscriber_bound_twice_blocks() {
+    // Review r6 (sol item 1): one raise runs both bound instances: the first
+    // instance's A and Commit, then the second instance's B.
+    let a = ask(ws(), &rv("S49"), &at("S49A"), &at("S49B"));
+    assert_eq!(a.answer, "unknown", "{}", a.raw);
+    assert!(a.raw.contains("repeated-subscriber-on-route"), "{}", a.raw);
+}
+
+#[test]
+fn s50_a_report_run_on_a_variable_fans_out_and_blocks() {
+    // Review r6 (sol item 2): `Rep.Run()` runs OnInitReport (A, Commit) then
+    // OnPreReport (B) from one statement. No request page, no per-row
+    // trigger.
+    let a = ask(ws(), &rv("S50"), &at("S50A"), &at("S50B"));
+    assert_eq!(a.answer, "unknown", "{}", a.raw);
+    assert!(a.raw.contains("site-other-edges"), "{}", a.raw);
+}
+
+#[test]
+fn s51_a_page_trigger_that_runs_again_blocks() {
+    // Review r6 (Fable issue 1): OnQueryClosePage returns false after its
+    // Commit, the page stays open, and the next close attempt runs B.
+    let a = ask(ws(), &rv("S51"), &at("S51A"), &at("S51B"));
+    assert_eq!(a.answer, "unknown", "{}", a.raw);
+    assert!(a.raw.contains("repeated-trigger-on-route"), "{}", a.raw);
+}
+
+#[test]
+fn s52_a_table_event_is_no_sure_b() {
+    // Review r6 (Fable item 3): B in an OnAfterInsertEvent subscriber that
+    // may be skipped (SkipOnMissingLicense). Pass 1 may skip it; its Commit
+    // runs before pass 2's B. No cut at the Insert: yes.
+    let a = ask(ws(), &rv("S52"), &at("S52A"), &at("S52B"));
+    assert_eq!(a.answer, "yes", "{}", a.raw);
+}
+
+#[test]
+fn s53_an_interface_call_is_no_sure_b_under_closed_world() {
+    // Review r6 (Fable item 3): only one of two implementers holds B; pass 1
+    // may run the other, then its Commit, then pass 2's B. No cut: yes.
+    let a = ask_with(
+        ws(),
+        &rv("S53"),
+        &at("S53A"),
+        &at("S53B"),
+        &["--closed-world"],
+    );
     assert_eq!(a.answer, "yes", "{}", a.raw);
 }
 

@@ -773,6 +773,10 @@ struct Walk<'a, 'w> {
     /// trigger that may not run or runs once per row (a report dataitem, an
     /// XmlPort element, a page's OnAfterGetRecord) (reviews r5).
     maybe_fire: HashSet<(&'a str, &'a str, &'a str)>,
+    /// Subscribers (stable routine ids) with a subscription that may carry a
+    /// dispatch condition (a `Manual` subscriber, a skip on a missing
+    /// license or permission): reviews r6, may run once per bound instance.
+    conditional_subscribers: HashSet<&'a str>,
     knobs: Knobs,
     commit_scopes: Option<crate::engine::l5::commit_scope::CbGraph<'a>>,
     group_paths: GroupPaths<'a>,
@@ -1367,8 +1371,20 @@ fn fires_surely<'a>(w: &Walk<'a, '_>, s: &Step<'a>) -> bool {
 /// trigger or table event of a bulk record operation (once per row), or of
 /// an operation the model does not hold; or a variable-typed call or object
 /// run the graph marks `Maybe` (a report dataitem's or XmlPort element's
-/// trigger, once per row; a page's `OnAfterGetRecord`).
+/// trigger, once per row; a page's `OnAfterGetRecord`). Reviews r6: an event
+/// step into a subscriber whose subscription may carry a condition (a
+/// `Manual` subscriber can be bound as several instances, each run once per
+/// raise); a run into a page trigger other than `OnInit`, `OnOpenPage` and
+/// `OnClosePage` (`OnQueryClosePage` runs again after it returns false,
+/// `OnFindRecord` on a refresh).
 fn may_repeat<'a>(w: &Walk<'a, '_>, s: &Step<'a>) -> Option<(&'static str, &'static str)> {
+    if let Some(EdgeSite::Event(_)) = s.site {
+        return w.conditional_subscribers.contains(s.to).then_some((
+            "repeated-subscriber-on-route",
+            "by an event whose subscriber may be bound manually, as several instances, each \
+             run once per raise",
+        ));
+    }
     let Some(EdgeSite::Guarded(x)) = s.site else {
         return None;
     };
@@ -1400,8 +1416,27 @@ fn may_repeat<'a>(w: &Walk<'a, '_>, s: &Step<'a>) -> Option<(&'static str, &'sta
                  dataitem, an XmlPort element, a page's record trigger)",
             ))
         }
+        "variable-typed-call" | "object-run-resolved" if page_trigger_may_rerun(w, s.to) => Some((
+            "repeated-trigger-on-route",
+            "into a page trigger that may run again in one run of the page (OnQueryClosePage \
+                 after it returns false, OnFindRecord on a refresh, …)",
+        )),
         _ => None,
     }
+}
+
+/// Whether `routine` is a page trigger that may run more than once in one
+/// run of the page: every page trigger but `OnInit`, `OnOpenPage` and
+/// `OnClosePage` (review r6, the conservative rule).
+fn page_trigger_may_rerun(w: &Walk<'_, '_>, routine: &str) -> bool {
+    w.reach.routine(routine).is_some_and(|r| {
+        r.kind == "trigger"
+            && (r.object_type.eq_fold_identifier("Page")
+                || r.object_type.eq_fold_identifier("PageExtension"))
+            && !["OnInit", "OnOpenPage", "OnClosePage"]
+                .iter()
+                .any(|n| r.name.eq_fold_identifier(n))
+    })
 }
 
 /// The record operation (its name) with id `x` in `routine`'s row.
@@ -1533,6 +1568,14 @@ pub(crate) fn compute<'a>(
         region_folded: HashSet::new(),
         self_reach: HashMap::new(),
         maybe_fire: maybe_fire_edges(tree),
+        conditional_subscribers: model
+            .events
+            .graph
+            .edges
+            .iter()
+            .filter(|e| e.conditional)
+            .map(|e| e.subscriber_stable_routine_id.as_str())
+            .collect(),
         knobs: sites.knobs.clone(),
         commit_scopes: crate::engine::l5::commit_scope::CbGraph::of_tree(tree),
         group_paths: GroupPaths::new(&tree.typed_edges, model),
@@ -2058,8 +2101,11 @@ fn reaches_itself<'a>(w: &mut Walk<'a, '_>, r: &'a str) -> bool {
 /// or object run that has other edges at the same site (an implicit trigger,
 /// a table event's subscribers, an object's several triggers). They run in
 /// the same execution of the statement, before or after the route's target,
-/// and no part walks them: a blocker. Interface implementers and other
-/// alternatives (one of them runs, instead of the route's) are not counted.
+/// and no part walks them: a blocker. Review r6 (sol item 2): a run on a
+/// typed object variable (`Rep.Run()`) leaves as variable-typed calls, one
+/// per lifecycle trigger, so those count too. Interface implementers and
+/// direct-call alternatives (one of them runs, instead of the route's) are
+/// not counted.
 fn site_co_edges<'a>(w: &mut Walk<'a, '_>, s: &Step<'a>) {
     let Some(EdgeSite::Guarded(x)) = s.site else {
         return;
@@ -2073,7 +2119,10 @@ fn site_co_edges<'a>(w: &mut Walk<'a, '_>, s: &Step<'a>) {
                 && *to != s.to
                 && matches!(
                     *kind,
-                    "implicit-trigger" | "table-event" | "object-run-resolved"
+                    "implicit-trigger"
+                        | "table-event"
+                        | "object-run-resolved"
+                        | "variable-typed-call"
                 )
         })
         .count();
