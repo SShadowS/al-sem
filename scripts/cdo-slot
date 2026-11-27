@@ -1273,8 +1273,13 @@ scan_once() {
         load "$f"
         # The kernel's key for its lock, as its taker read it (take_timed).
         key=$(field lock_key)
-        if [[ ! "$key" =~ ^[0-9a-f]+:[0-9a-f]+:[0-9]+$ ]]; then
-            out+="unknown provisional its record names no lock key: timed by $(field owner) since $(field since) ($(field reason))"$'\n'
+        # A record with no key (written by an older cdo-slot, which other
+        # worktrees still run): the kernel's key from /proc/locks, the one
+        # FLOCK write lock on the id file's inode (only `stat`'s device is
+        # unreliable, on btrfs); none or more than one is unknown.
+        [[ "$key" =~ ^[0-9a-f]+:[0-9a-f]+:[0-9]+$ ]] || key=$(locks_key "$ids/timed.$tid") || key=""
+        if [[ -z "$key" ]]; then
+            out+="unknown provisional its lock key cannot be told: timed by $(field owner) since $(field since) ($(field reason))"$'\n'
             continue
         fi
         rel=none unk=""
@@ -1315,6 +1320,27 @@ scan_once() {
         [[ "${fields[19]:-}" == "$st" && "${fields[1]:-}" == "$pp" ]] || return 2
     done
     printf '%s' "$out"
+}
+# locks_key <file>: the kernel's key of the FLOCK write lock on <file>, read
+# from the fdinfo of a descriptor that has the file open and carries a lock
+# (not /proc/locks: it hides a lock whose taker has exited); 1 when none does.
+locks_key() {
+    local d line ino
+    local -a w
+    ino=$(stat -c %i "$1" 2>/dev/null) || return 1
+    local -a ds
+    mapfile -t ds < <(find /proc/[0-9]*/fd -lname "$(glob_quote "$1")" 2>/dev/null)
+    for d in "${ds[@]}"; do
+        while IFS= read -r line; do
+            [[ "$line" == lock:* ]] || continue
+            read -r -a w <<<"$line"
+            if [[ "${w[2]:-}" == FLOCK && "${w[4]:-}" == WRITE && "${w[6]:-}" == *":$ino" ]]; then
+                echo "${w[6]}"
+                return 0
+            fi
+        done 2>/dev/null <"${d/\/fd\///fdinfo/}" || true
+    done
+    return 1
 }
 # holds_lock <pid> <key>: 0 a descriptor of <pid> carries the FLOCK write lock
 # on <key>'s file; 1 none (or <pid> cannot be read and its user is known to

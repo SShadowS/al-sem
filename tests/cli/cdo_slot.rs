@@ -4388,9 +4388,11 @@ fn cdo_slot_gate_entry_waits_one_deadline_in_all() {
 /// where its record cannot be made -> the gate builds; `build_entry` going on
 /// after an `enter` error -> the gate builds; `foreign_timing`'s start-time
 /// comparison dropped -> the gate takes the timing as its own and builds.
-/// (Since TLS-135 r13 the record carries `kept=1` and its lock's real key, so
-/// the case reaches the binding rule's start-time check in `scan_once`; a
-/// record with no key is `unknown` and refuses at once.)
+/// (Since TLS-135 r13 the record carries `kept=1` and, as an older cdo-slot
+/// writes it, no lock key: `scan_once` takes the key from the holder's
+/// fdinfo (`locks_key`) and reaches the binding rule's start-time check.
+/// Mutation (2026-11-27, after the rebase): `locks_key` failing -> the gate
+/// refuses at once ("cannot tell") instead of waiting (red); restored, green.)
 #[test]
 fn cdo_slot_gate_entry_refuses_what_it_cannot_check() {
     let s = Slot::new();
@@ -4415,8 +4417,7 @@ fn cdo_slot_gate_entry_refuses_what_it_cannot_check() {
         "mkdir -p {d}/id {d}/timings; \
          flock -s {d}/timed.lock sleep 600 & l1=$!; flock -x {d}/id/timed.feedfeedfeedfeed sleep 600 & l2=$!; \
          sleep 0.5; \
-         key=$(grep -h '^lock:' /proc/$l2/fdinfo/* | awk '{{print $7}}' | head -n 1); \
-         printf 'owner=old\\nreason=r\\nsince=2026-11-26T00:00:00Z\\npid=%s\\npid_start=1\\nkept=1\\nlock_key=%s\\n' $$ \"$key\" >{d}/timings/feedfeedfeedfeed; \
+         printf 'owner=old\\nreason=r\\nsince=2026-11-26T00:00:00Z\\npid=%s\\npid_start=1\\nkept=1\\n' $$ >{d}/timings/feedfeedfeedfeed; \
          bash '{gate_script}' fmt; rc=$?; pkill -P $l1; pkill -P $l2; kill $l1 $l2; exit $rc"
     );
     let env = gate_cmd(&s, &gate, &script, &[], &[("CDO_SLOT_ENTRY_WAIT_S", "1")]);
