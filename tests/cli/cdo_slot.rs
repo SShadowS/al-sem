@@ -3546,10 +3546,15 @@ fn gate_folder(s: &Slot) -> (std::path::PathBuf, String) {
         // `ci-steps all`'s agentflow step (pytest) and build check.
         ("python3", "exit 0".to_string()),
         ("check-ir-image", "exit 0".to_string()),
+        // `ci-steps task`'s locale step (TLS-141).
+        ("check-parse-path-locale", "exit 0".to_string()),
     ] {
         std::fs::write(bin.join(f), format!("#!/bin/bash\n{body}\n")).unwrap();
         std::fs::set_permissions(bin.join(f), std::fs::Permissions::from_mode(0o755)).unwrap();
     }
+    // `ci-steps task`'s gate-env step runs in the repository's `scripts/`
+    // (its pytest is the python3 stub above), for a test that runs in `repo/`.
+    std::fs::create_dir_all(s.0.path().join("repo/scripts")).unwrap();
     (bin, name)
 }
 

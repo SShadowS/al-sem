@@ -27,7 +27,10 @@ from agentflow.supervise import script_tuple  # noqa: E402
 GATE_ENV_PREFIXES = ("AGENTFLOW_", "ALSEM_IR_CACHE", "ALSEM_SPEED_", "ALSEM_TEST_", "CDO_", "CHECK_GOLDENS_", "CI_STEPS_",
                      "LAND_", "MERGE_EXPECT_", "PERF_PROBE_") + script_tuple("cdo-speed", "BUILD_ENV_PREFIXES")
 # CS_PUB_DEADLINE(_WALL) (TLS-127): cdo-slot's acquire-to-keeper deadline; an inherited one would cut a take's wait.
-GATE_ENV_NAMES = ("ALDUMP", "ALSEM_BATCH_CLAIMS", "CARGO_TARGET_DIR", "CS_PUB_DEADLINE", "CS_PUB_DEADLINE_WALL",
+# CS_COMMIT, CS_TIMED_FDS (TLS-135): a keeper's commit mark and inherited timing descriptors; inherited ones would
+# make a hold keeper wait for a foreign commit, or a keeper keep descriptors it does not own.
+GATE_ENV_NAMES = ("ALDUMP", "ALSEM_BATCH_CLAIMS", "CARGO_TARGET_DIR", "CS_COMMIT", "CS_PUB_DEADLINE",
+                  "CS_PUB_DEADLINE_WALL", "CS_TIMED_FDS",
                   "DO_WS", "ENFORCE_CDO_WS", "FLOW_LOG", "GITHUB_ACTIONS", "REGEN_TEMP_GOLDENS", "RUSTDOCFLAGS",
                   "SWITCH_BASELINES", "TREE_SITTER_AL_PATH") + script_tuple("cdo-speed", "BUILD_ENV_EXACT")
 # Read by the scripts, but they say who runs them, not how a gate decides: kept.

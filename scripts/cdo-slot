@@ -1278,7 +1278,7 @@ scan_once() {
             continue
         fi
         rel=none unk=""
-        for i in "${!line[@]}"; do
+        for ((i = 0; i < ${#line[@]}; i++)); do
             IFS=: read -r q st pp <<<"${line[i]}"
             if [[ "$(field kept)" == 1 && "$(field pid)" == "$q" && "$(field pid_start)" == "$st" ]]; then
                 r=bound
