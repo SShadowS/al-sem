@@ -178,7 +178,8 @@ impl<'a> SymbolTable<'a> {
 
     /// ENG-194 (sol r1): the object of `object_type` named `name` seen from
     /// app `from`, as [`Self::table_by_name_from`] sees tables (a page
-    /// extension's base page): visible ones only, exactly one, else `None`.
+    /// extension's base page): visible ones only, a moved/removed one only when
+    /// no live one remains, exactly one, else `None`.
     pub fn object_by_type_name_from(
         &self,
         from: &str,
@@ -203,9 +204,20 @@ impl<'a> SymbolTable<'a> {
         if found.iter().any(|o| !gone(o)) {
             found.retain(|o| !gone(o));
         }
-        // An `#if`-split object has a row per alternative under one id.
+        // An `#if`-split object has a row per alternative under one id. The
+        // resolver keeps them all and declines (`visible_objects`); here rows
+        // that agree on what a page extension reads (its base's `SourceTable`
+        // and `SourceTableTemporary`) are one, and alternatives that differ
+        // decline (sol r3: the first row's table or temporary flag would be a
+        // guess).
         let mut seen = std::collections::HashSet::new();
-        found.retain(|o| seen.insert(o.id.as_str()));
+        found.retain(|o| {
+            seen.insert((
+                o.id.as_str(),
+                o.source_table_name.as_deref().map(|s| s.fold_identifier()),
+                o.source_table_temporary,
+            ))
+        });
         match found.as_slice() {
             [o] => Some(o),
             _ => None,

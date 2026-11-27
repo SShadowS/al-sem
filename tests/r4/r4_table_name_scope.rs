@@ -58,6 +58,55 @@ table 50200 "Dup"
         Rec.Modify();
     end;
 }
+
+pageextension 50203 "Ws PE" extends "Moved Page"
+{
+    procedure PeTouch()
+    begin
+        Rec.Modify();
+    end;
+}
+
+#if ONE
+page 50210 "Split Page"
+{
+    SourceTable = "No. Series";
+}
+#else
+page 50210 "Split Page"
+{
+    SourceTable = "No. Series";
+    SourceTableTemporary = true;
+}
+#endif
+
+pageextension 50211 "Split PE" extends "Split Page"
+{
+    procedure SplitTouch()
+    begin
+        Rec.Modify();
+    end;
+}
+
+#if ONE
+page 50212 "Same Page"
+{
+    SourceTable = "No. Series";
+}
+#else
+page 50212 "Same Page"
+{
+    SourceTable = "No. Series";
+}
+#endif
+
+pageextension 50213 "Same PE" extends "Same Page"
+{
+    procedure SameTouch()
+    begin
+        Rec.Modify();
+    end;
+}
 "#;
 
 const ZBASE_SRC: &str = r#"table 50 "Shared"
@@ -123,7 +172,7 @@ tableextension 59 "Moving Ext" extends "New Base"
 {
     fields
     {
-        field(59; "Moving Flag"; Boolean) { }
+        field(59; "New Flag"; Boolean) { }
     }
 }
 #else
@@ -131,7 +180,7 @@ tableextension 59 "Moving Ext" extends "Old Base"
 {
     fields
     {
-        field(59; "Moving Flag"; Boolean) { }
+        field(60; "Old Flag"; Boolean) { }
     }
 }
 #endif
@@ -213,21 +262,32 @@ fn model() -> ModelEntities {
     std::fs::write(dir.path().join("Main.al"), WS_MAIN).unwrap();
     let pk = dir.path().join(".alpackages");
     let moved = r#"{"Name":"ObsoleteState","Value":"Moved"}"#;
+    let source_no_series = r#"{"Name":"SourceTable","Value":"No. Series"}"#;
     let symbol_apps = [
         (
             FOUND,
             "Found",
-            [table(308, "No. Series", ""), table(70, "Dup", "")].join(","),
+            format!(
+                r#""Tables":[{}],"Pages":[{{"Id":64,"Name":"Moved Page","Properties":[{source_no_series}]}}]"#,
+                [table(308, "No. Series", ""), table(70, "Dup", "")].join(",")
+            ),
         ),
-        (ZOLD, "ZOld", table(308, "No. Series", moved)),
+        (
+            ZOLD,
+            "ZOld",
+            format!(
+                r#""Tables":[{}],"Pages":[{{"Id":63,"Name":"Moved Page","Properties":[{moved},{source_no_series}]}}]"#,
+                table(308, "No. Series", moved)
+            ),
+        ),
     ];
-    for (guid, name, tables) in &symbol_apps {
+    for (guid, name, objects) in &symbol_apps {
         crate::symbol_app::write_symbol_app(
             &pk.join(format!("probe_{name}_1.0.0.0.app")),
             guid,
             name,
             "1.0.0.0",
-            &symbols(guid, name, &format!(r#""Tables":[{tables}]"#)),
+            &symbols(guid, name, objects),
         );
     }
     let zbase_symbols = format!(
@@ -308,8 +368,14 @@ fn var_table(ws: &ModelEntities, app: &str, routine: &str, var: &str) -> Option<
 /// "... not the unrelated temporary page"; merging into the FIRST row of a
 /// split base fails "split base: the kept row"; one target per extension id
 /// fails "split extension: both targets"; a number through the last table
-/// object of the number fails "number, own app"; pass 3 picking the base page
-/// unscoped fails "page extension's base page".
+/// object of the number fails "number, as its app sees it" (own-first is
+/// proven in `symbol_table`'s unit test: ZBase does not see the other 50);
+/// pass 3 picking the base page unscoped fails "page extension's base page";
+/// every row of a split tableextension taking the LAST stub fails "split
+/// extension: both targets"; no gone object ids in `TableScope::of` fails "a
+/// moved page gives way"; deduplicating base-page rows by id alone fails
+/// "differing alternatives decline"; not deduplicating them at all fails
+/// "agreeing alternatives are one page".
 #[test]
 fn a_table_name_binds_as_the_resolver_binds_it_in_the_model() {
     let ws = model();
@@ -380,18 +446,53 @@ fn a_table_name_binds_as_the_resolver_binds_it_in_the_model() {
         "split base: the kept row"
     );
     // Fable r2: each row of an `#if`-split tableextension merges into its own
-    // target.
+    // target; sol r3: with its own alternative's fields.
     assert!(
-        last_row_has(format!("{ZBASE}/table/57"), "Moving Flag")
-            && last_row_has(format!("{ZBASE}/table/58"), "Moving Flag"),
+        last_row_has(format!("{ZBASE}/table/57"), "New Flag")
+            && last_row_has(format!("{ZBASE}/table/58"), "Old Flag"),
         "split extension: both targets"
+    );
+    assert!(
+        !last_row_has(format!("{ZBASE}/table/57"), "Old Flag")
+            && !last_row_has(format!("{ZBASE}/table/58"), "New Flag"),
+        "split extension: each target its own alternative's fields"
+    );
+    // Fable r3: a Moved symbol page gives way to the live page of its name.
+    let pages_named = |n: &str| {
+        ws.objects
+            .iter()
+            .filter(|o| o.object_type == "Page" && o.name == n)
+            .count()
+    };
+    assert_eq!(pages_named("Moved Page"), 2, "precondition: two Moved Page");
+    assert_eq!(
+        var_table(&ws, WS, "PeTouch", "Rec").as_deref(),
+        Some(format!("{FOUND}/table/308").as_str()),
+        "a moved page gives way"
+    );
+    // sol r3: `#if` alternatives of a base page that differ in what the
+    // extension reads decline; alternatives that agree are one page.
+    assert_eq!(
+        pages_named("Split Page"),
+        2,
+        "precondition: split page rows"
+    );
+    assert_eq!(
+        var_table(&ws, WS, "SplitTouch", "Rec"),
+        None,
+        "differing alternatives decline"
+    );
+    assert_eq!(
+        var_table(&ws, WS, "SameTouch", "Rec").as_deref(),
+        Some(format!("{FOUND}/table/308").as_str()),
+        "agreeing alternatives are one page"
     );
     // sol r2: a page's `SourceTable = 50` binds by number from its own app,
     // though the unrelated app's table 50 comes later.
     assert_eq!(
         var_table(&ws, ZBASE, "PageTouch", "Rec").as_deref(),
         Some(format!("{ZBASE}/table/50").as_str()),
-        "number, own app"
+        "number, as its app sees it"
     );
     // sol r2: a page extension's base page is the one its app sees: its
     // table, and its (absent) `SourceTableTemporary`, not the unrelated

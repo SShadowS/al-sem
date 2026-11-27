@@ -66,6 +66,20 @@ pub fn merge_extension_fields(
     // `&mut *workspace` destructure into disjoint field borrows — a real
     // (if small, ~4 MB) edit, not a one-liner.
     let objects = workspace.objects.clone();
+    // Per tableextension row: which alternative of its id it is (0-based),
+    // and how many rows the id has.
+    let mut rows_of_id: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    let alternative: Vec<usize> = objects
+        .iter()
+        .map(|o| {
+            if o.object_type != "TableExtension" {
+                return 0;
+            }
+            let n = rows_of_id.entry(o.id.as_str()).or_insert(0);
+            *n += 1;
+            *n - 1
+        })
+        .collect();
     for (row, object) in objects.iter().enumerate() {
         if object.object_type != "TableExtension" {
             continue;
@@ -89,11 +103,24 @@ pub fn merge_extension_fields(
         // took the table, so Sales Header got that table's fields and lost the
         // extension's.
         let extension_table_id = encode_table_id(&object.app_guid, object.object_number);
-        let Some(ext_idx) = workspace
+        // An `#if`-split tableextension has an object row and a stub per
+        // alternative, both in declaration order: the k-th row of the id takes
+        // the k-th stub (sol r3: every row took the LAST stub, so each target
+        // got the last alternative's fields). Counts that disagree keep the
+        // last stub, as before.
+        let stubs: Vec<usize> = workspace
             .tables
             .iter()
-            .rposition(|t| t.is_extension_stub && t.id == extension_table_id)
-        else {
+            .enumerate()
+            .filter(|(_, t)| t.is_extension_stub && t.id == extension_table_id)
+            .map(|(i, _)| i)
+            .collect();
+        let (k, rows) = (alternative[row], rows_of_id[object.id.as_str()]);
+        let Some(&ext_idx) = (if stubs.len() == rows {
+            stubs.get(k)
+        } else {
+            stubs.last()
+        }) else {
             continue;
         };
 
