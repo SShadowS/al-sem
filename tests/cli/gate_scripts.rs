@@ -2025,12 +2025,14 @@ fn ci_steps_all_runs_and_judges_the_agentflow_suite() {
 /// both steps fail at `gate-env`, naming it. Skipped only on GitHub CI, whose
 /// runner has no pytest.
 ///
-/// Python runs with a scratch HOME, no user site and no plugin autoload, so
-/// nothing from the developer's home changes the result; a pytest installed
-/// only under the real HOME is found once and passed in by PYTHONPATH
-/// (TLS-141 review r1, sol).
+/// Python runs with a scratch HOME, no user site, no PYTHONPATH and no plugin
+/// autoload, so nothing from the developer's home changes the result (TLS-141
+/// reviews r1 and r2, sol). When `python3` has no pytest that way, the only
+/// other source is a venv named by `ALSEM_TEST_PYTHON` (its `python3`), put
+/// first on PATH; the user site is never added.
 ///
-/// Mutations (2026-11-26, r1 form re-checked 2026-11-27, each made with Edit):
+/// Mutations (2026-11-26, r1 form re-checked 2026-11-27, the second again on
+/// the r2 form; each made with Edit):
 /// - `gate-env` taken out of `task`'s step loop -> FAILED (the clean `task` run
 ///   printed no `=== ci-steps: gate-env ===`); restored -> passed.
 /// - `gate-env` taken out of `task-affected`'s step loop -> FAILED (the same
@@ -2042,36 +2044,36 @@ fn ci_steps_task_runs_the_gate_env_check() {
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path().join("home");
     std::fs::create_dir_all(&home).unwrap();
-    // pytest's site folder, asked of the real environment; passed on only when
-    // it is under the real HOME (a system pytest needs nothing).
-    let real_home = std::env::var("HOME").unwrap_or_default();
-    let pytest_site = crate::clean_env::command("python3")
-        .args([
-            "-c",
-            "import os, pytest; print(os.path.dirname(os.path.dirname(pytest.__file__)))",
-        ])
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-        .filter(|site| !real_home.is_empty() && site.starts_with(&real_home));
+    // clean_env already drops PYTHONPATH.
     let isolated = |cmd: &mut std::process::Command| {
         cmd.env("HOME", &home)
             .env("PYTHONNOUSERSITE", "1")
             .env("PYTEST_DISABLE_PLUGIN_AUTOLOAD", "1");
-        if let Some(site) = &pytest_site {
-            cmd.env("PYTHONPATH", site);
+    };
+    let has_pytest = |python: &std::ffi::OsStr| {
+        let mut probe = crate::clean_env::command(python);
+        probe.args(["-m", "pytest", "--version"]);
+        isolated(&mut probe);
+        probe.output().is_ok_and(|o| o.status.success())
+    };
+    // Some(folder) = a venv's bin folder to put first on PATH; None = python3 as found.
+    let venv_bin = if has_pytest("python3".as_ref()) {
+        None
+    } else {
+        match std::env::var_os("ALSEM_TEST_PYTHON").map(std::path::PathBuf::from) {
+            Some(py) if has_pytest(py.as_os_str()) => {
+                Some(py.parent().expect("a venv's python3").to_path_buf())
+            }
+            _ if std::env::var_os("GITHUB_ACTIONS").is_some() => {
+                eprintln!("skip: no pytest on this CI runner");
+                return;
+            }
+            _ => panic!(
+                "python3 with pytest is required (without the user site): install it \
+                 system-wide, or set ALSEM_TEST_PYTHON to a venv's python3"
+            ),
         }
     };
-    let mut probe = crate::clean_env::command("python3");
-    probe.args(["-m", "pytest", "--version"]);
-    isolated(&mut probe);
-    let has_pytest = probe.output().is_ok_and(|o| o.status.success());
-    if !has_pytest && std::env::var_os("GITHUB_ACTIONS").is_some() {
-        eprintln!("skip: no pytest on this CI runner");
-        return;
-    }
-    assert!(has_pytest, "python3 with pytest is required");
     let (repo, bin, grammar) = (
         dir.path().join("repo"),
         dir.path().join("bin"),
@@ -2095,7 +2097,13 @@ fn ci_steps_task_runs_the_gate_env_check() {
     }
     exe(bin.join("cargo"), "exit 0");
     crate::git::run(&repo, &["init", "-q"]);
-    let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
+    let venv = venv_bin.map(|b| format!("{}:", b.display()));
+    let path = format!(
+        "{}:{}{}",
+        bin.display(),
+        venv.unwrap_or_default(),
+        std::env::var("PATH").unwrap()
+    );
     let run = |step: &str| {
         let mut cmd = crate::clean_env::command("bash");
         cmd.arg(repo.join("scripts/ci-steps"))

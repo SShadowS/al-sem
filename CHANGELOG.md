@@ -18,8 +18,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   call as `ci-steps agentflow` (it takes seconds). `task` and `task-affected` run it after `locale`.
 - **The test.** `gate_scripts::ci_steps_task_runs_the_gate_env_check` runs `task` and
   `task-affected` on a scratch copy of `scripts/` with cargo stubbed: the copy as it is passes, and
-  one added script reading an unlisted variable makes both fail at `gate-env`. It skips only on
-  GitHub CI, whose runner has no pytest.
+  one added script reading an unlisted variable makes both fail at `gate-env`. Python runs with a
+  scratch HOME, no user site, no PYTHONPATH and no pytest plugin autoload, so nothing in the
+  developer's home changes the result. If `python3` has no pytest that way, the test takes a venv
+  named by `ALSEM_TEST_PYTHON`; otherwise it fails, and it skips only on GitHub CI, whose runner has
+  no pytest. Two discrimination proofs: with `gate-env` taken out of `task`'s step list, and then
+  out of `task-affected`'s, the test fails each time; restored, it passes.
 
 ### Fixed (ENG-213: a wrong "none observed" — `query touches --field --from` down searches dependency code past its first routine)
 
