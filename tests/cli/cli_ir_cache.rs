@@ -970,11 +970,15 @@ fn hand_worker(f: &Fixture, snapshot: Option<&str>, out: &Path) -> Output {
         .stderr(std::process::Stdio::piped())
         .spawn()
         .unwrap();
-    std::io::Write::write_all(
+    // A worker that fails closed exits before it reads stdin, so the write can meet a
+    // closed pipe (TLS-145); the exit code and output, read below, are what the tests judge.
+    match std::io::Write::write_all(
         &mut child.stdin.take().unwrap(),
         input.to_string().as_bytes(),
-    )
-    .unwrap();
+    ) {
+        Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => {}
+        other => other.unwrap(),
+    }
     child.wait_with_output().unwrap()
 }
 

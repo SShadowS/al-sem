@@ -243,7 +243,9 @@ def run_counted(cmd, env, events):
     parsed = speed.perf_parse(text, events)
     if parsed is None:
         return None, None, cpu, wall, False
-    counts, running = parsed
+    # By position, not by unpacking (TLS-130 review r3, Fable: `perf_parse`
+    # gained a third value and this line crashed every counted run).
+    counts, running = parsed[0], parsed[1]
     instr = speed.kind_total(counts, "instructions")
     cycles = speed.kind_total(counts, "cycles")
     running_s = sum(ns for e, ns in running.items()

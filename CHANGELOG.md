@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (TLS-145: a test that failed when a worker exited before reading its input)
+
+- `cli_ir_cache::a_worker_without_a_good_snapshot_fails_closed` could fail with `BrokenPipe`.
+  A worker whose cache snapshot is missing or damaged fails closed: it exits before it reads
+  its input from stdin. The test's helper (`hand_worker`) then wrote that input into a closed
+  pipe and stopped on the error. The test failed only when the worker happened to exit before
+  the write landed, which it did in TLS-130's landing on 2026-11-27. The helper now accepts a
+  closed pipe, as `cli_batch_writes`' helper already does. The test still judges the worker
+  by its exit code and output. Tests only; no product change.
+
+### Fixed (TLS-141: the task gate now runs agentflow's gate-env check)
+
+- **The gap.** agentflow's `test_gate_env.py` fails when a gate script reads an environment
+  variable that its conftest neither clears nor keeps (`GATE_ENV_NAMES` / `GATE_ENV_KEPT`). Only
+  `ci-steps all` ran it, so a script change could pass `ci-steps task` and fail at landing. That
+  happened with TLS-127: `scripts/cdo-slot`'s new `CS_PUB_DEADLINE` and `CS_PUB_DEADLINE_WALL` cost
+  a whole landing cycle.
+- **The fix.** A new step, `ci-steps gate-env`, runs that one file with the same Python and pytest
+  call as `ci-steps agentflow` (it takes seconds). `task` and `task-affected` run it after `locale`.
+- **The test.** `gate_scripts::ci_steps_task_runs_the_gate_env_check` runs `task` and
+  `task-affected` on a scratch copy of `scripts/` with cargo stubbed: the copy as it is passes, and
+  one added script reading an unlisted variable makes both fail at `gate-env`. Python runs with a
+  scratch HOME, no user site, no PYTHONPATH and no pytest plugin autoload, so nothing in the
+  developer's home changes the result. If `python3` has no pytest that way, the test takes a venv
+  named by `ALSEM_TEST_PYTHON` (made absolute first, since the gate runs from a scratch folder;
+  refused when its folder holds no `python3`); otherwise it fails, and it skips only on GitHub CI, whose runner has
+  no pytest. Two discrimination proofs: with `gate-env` taken out of `task`'s step list, and then
+  out of `task-affected`'s, the test fails each time; restored, it passes.
+
 ### Fixed (ENG-213: a wrong "none observed" — `query touches --field --from` down searches dependency code past its first routine)
 
 - **The bug.** `query touches --field F --from R --direction down` searched R's cone over the solve's
@@ -745,6 +774,165 @@ suppressed all of them, and a new member of the group was invisible to it.
   live hold id vouches for edited fields in the status. This task is about a
   window in time: a live hold whose status is not readable yet. The publish lock
   does nothing for TLS-99 item 1.
+
+### Fixed (TLS-130: cdo-speed refused whole instruction counts when a server thread ran at the start or stop)
+
+- **The cause.** `scripts/cdo-speed` gave perf each event as its own `-e`. perf
+  then enables the events one after another at the start of a count and reads
+  them one after another at the stop. A server thread running at either moment
+  (rayon workers, longer under load) gives one event of a PMU (processor counter
+  unit: `cpu_core` or `cpu_atom`) more running time than the other; either one
+  can come out longer. `perf_parse` takes unequal running times on one PMU as
+  multiplexing (counters shared out in time slices) and refuses the count. No
+  multiplexing was needed: on server1 (perf 7.0.14, 2026-11-25, 12 spinning
+  processes attached, no other perf user, only our four fixed-counter events;
+  probe and log kept at `/work/.al-sem/tools-notes/tls130/skew_probe.py` and
+  `probe-2026-11-25.log`) 10 of 10 such stops were refused, the two events
+  apart by 14 µs to 9.2 ms. The flaky test
+  `gate_scripts::speed_counts_instructions_with_the_real_perf` (load avg15 ~190)
+  lost its build ratio this way: two calls refused, each with `cpu_core` equal
+  and `cpu_atom` apart by 26 µs and 3.7 µs.
+- **The fix.** A PMU's two events now go in one **pinned** perf group
+  (`-e {cpu_core/instructions/u,cpu_core/cycles/u}:D`, one per PMU; plain CPUs
+  `-e {instructions:u,cycles:u}:D`). The kernel runs a group's members together,
+  so they report exactly the same running time: 0 of 10 such stops refused. A
+  group's members tie even when it is time-sliced, so the group is pinned: a
+  pinned group is never time-sliced. It holds its counters whenever its tasks
+  run, or it fails outright (another pinned perf user holds them) and counts
+  nothing on that PMU. Measured on server1 (`probe-pinned-2026-11-25.log`,
+  `enabled_probe.py`, beside the skew probe): with 16 ordinary extra cpu_core
+  events and the spinners on the P-cores, the pinned group ran 100.00 % in 3 of 3
+  stops (unpinned 49-50 %); beside a competing pinned group, ours read
+  `<not counted>` at 0 ns and 100.00 % (no enabled time). `perf_parse` now
+  refuses a `<not counted>` row that does not read 0.00 % (a PMU the tasks never
+  ran on reads 0 ns and 0.00 %, on server1 and on real CDO calls), so that
+  failure prints `perf output not taken as a count` and gives no count.
+- **Coverage refuses too.** A count whose running time does not cover the
+  call's CPU seconds (`covers`, unchanged band: 2 % + 50 ms short, x1.10 over) now
+  gives **no instruction count**; before, it lost only its clock, CPI label and
+  advisory.
+- **The one partial count left.** A pinned group that fails AFTER its tasks first
+  ran on that PMU reads like a PMU they never ran on (`<not counted>`, 0 ns,
+  0.00 %). perf's CSV has no enabled time to tell them apart, and perf -v's
+  enabled times differ between the PMUs even when nothing fails (1.93 s against
+  1.29 s on a process starting threads and children), so no exact rule exists.
+  `covers` drops it when that PMU carried more of the call's CPU seconds than
+  the band (2 % + 50 ms); below that it stays an instruction count, but it is
+  partial (next items) and gives no CPU advisory. A second shape, not
+  reproduced (it needs a CPU-wide pinned rival): a thread or child started
+  during the call (inherited) whose pinned group fails while the parent's holds
+  is expected to read as a normal row with a shorter running time, not
+  `<not counted>`. Only `covers` can see it, and only beyond its band (review
+  r3, Fable): real multi-threaded calls sum their running % to 110-125, so a
+  loss of a few percent leaves the sum far over 100.
+- **What changes in real gate verdicts (inferred).** No landing verdict yet
+  shows a partly refused count; this is reasoned from the cause. Calls with a
+  server thread running at the start or stop are counted instead of refused, so
+  under load the build and round-total instruction ratios appear where they went
+  missing. An uncovered call now drops out of the instruction ratios (a round
+  total with one such call has none). In the one A/A run on CDO behind the band
+  (TLS-111, f7da9a93, `/work/.al-sem/tools-notes/tls111/aa3`) every call was
+  inside it, so a normal run should lose nothing. A call whose pinned group lost
+  its counters to another pinned perf user is now refused (before, ungrouped
+  events were time-sliced and refused only when the two came out unequal). CPU,
+  wall and memory judging do not change; the instruction limit stays advisory.
+- **No CPU advisory on a partial count** (reviews r1 to r3, sol and Fable).
+  The rule: a CPU failure is made advisory (TLS-111's lower-clock rule) only
+  when every paired count it judges (every pass of a warm-up row, every
+  over-limit round of a rounds row), on both sides, is whole and covers its
+  call (`covers`). A count is partial when a PMU's events read `<not counted>`,
+  or when a kind's running % summed over the PMUs is under 100
+  (`partial_count`; two sides whose counted PMUs differ always include one such
+  count). No allowance for perf's whole-percent truncation (review r3, sol): a
+  real line does truncate under 100 (`true` read 93 + 6 for 93.7 + 6.3), but
+  taking it as partial only withholds an advisory, while an allowance let a
+  really partial 80 + 19 waive a FAIL. A partial row keeps its CPU failure as
+  measured (FAIL stays FAIL); when the partial count is what withheld the
+  advisory, the failure line says so; speed.json's rows (`partial`,
+  `partial_rounds`) and records (`partial`, and `running_pct`: each kind's
+  running % summed over the PMUs, so the first real gate runs show how often
+  the under-100 rule withholds) carry the reasons. The CLOCK condition the
+  waiver needs is taken from the whole samples only (review r4, sol: a partial
+  round under the limit had supplied the row's label). What it sees in
+  practice (review r3, Fable): a `<not counted>` PMU always withholds; the
+  running-% rule sees time-slicing only where the shares sum to about 100 (a
+  call on one core type), since multi-threaded calls sum to 110-125. Open: a
+  loss inside a counted row smaller than the coverage band (2 % + 50 ms; the
+  unreproduced inherited-thread shape above) is to be probed with real perf
+  and fixed from that measurement in TLS-143. Why not bound the error instead: a count that covers
+  the call can still be short, and both reviews built rows that a bound let
+  through. sol: base and head with different normal running-time excess (+2.2
+  and +2.7 %) hide a loss entirely. Fable: lost time need not have run at the
+  call's average rate (a lost P-core group carries more instructions per
+  second), and a short count can create the CLOCK label itself. Cost: a call
+  that ran on one core type only (its other PMU `<not counted>`) gets no CPU
+  advisory either; the CPU advisory is the owner's waiver, so withholding it
+  never hides a failure.
+- **`scripts/ir-cache-acceptance` counted runs crashed** (review r3, Fable).
+  Its `run_counted` unpacked `perf_parse`'s result into two names, and
+  `perf_parse` now returns three (counts, running times, running %), so every
+  counted run raised `ValueError`. It now reads them by position; a test runs
+  that path.
+- **Why each call went uncounted.** Perf ending before the call, an unreadable
+  perf output and a count with no instruction used to drop the count silently;
+  each now prints a line ending in `call not counted`, as a refused output
+  (`perf output not taken as a count`), a failed attach (`perf attach failed`,
+  now with its cause: no ack, perf ending before its ack or before opening its
+  control FIFO, its FIFO not opened in time, a server process started first, or
+  another OS error) and an uncovered count (`NOT COVERED`) already printed their
+  own. One exception: after three failed attaches in a row (or a perf that did
+  not stop) a server prints one server-level line and then no line per call.
+  Every timed call's record in `speed.json` now carries `uncounted`, the reason
+  it has no count (null when counted), so a reader ties each refusal to its own
+  call, the server-level case included (`this server's perf gave up`).
+- **Tests.** New `speed_perf_groups_keep_a_pmus_running_times_equal` starts and
+  stops the real perf twice while 12 attached processes spin, with cdo-speed's
+  own events, and needs every output taken as a count, then a third stop on the
+  P-cores beside 16 ordinary cpu_core events where the pinned group must run
+  100.00 % (skipped where perf cannot count). New
+  `speed_prints_each_uncounted_calls_refusal`: the stub perf multiplexes one call
+  (`STUB_PERF_MUX_ATTACH`), which gives exactly one refusal line naming its side
+  and the matching "N of M calls counted"; perf ending early prints its line; a
+  pinned group without counters (`STUB_PERF_PINNED_LOST`: `<not counted>` at
+  100.00 % on calls split 70/30) is refused as perf output on every call. The
+  same test (review r1) needs the muxed call's `uncounted` reason on its own
+  record, a verdict with the round total's ratio and not the build's, and the
+  stub perf's received arguments on every real `-p` attach to hold one pinned
+  group per PMU, spelled out. `speed_counts_instructions_with_the_real_perf`
+  checks perf through cdo-speed's own pinned-group probe, allows uncounted
+  calls (legitimate under the suite's load: an attach timeout, a short call's
+  /proc ticks, a pinned group that lost its counters) but each must carry its
+  own `uncounted` reason, needs at least one counted call and prints how many
+  were (review r4: a run where no attach got through skips with the reasons;
+  a refused output on every call still fails); an untimed rebuild's refusal
+  line no longer counts. Its preflight matches the probe's reply exactly
+  (review r4, sol: `cannot: ...` had read as `can`), pinned by
+  `speed_real_perf_probe_says_when_perf_cannot_count` with a perf that fails. New
+  `speed_cpu_advisory_never_on_a_partial_count` pins sol's and Fable's r2 rows
+  (and sol's with base partial; Fable's at 80 + 19 = 99 %), and a head count
+  with every PMU counted that does not cover its call (review r3), through real
+  perf rows, `judge_warm` and `cpu_advisory`: no advisory, with the reason; the
+  same numbers from whole counts are waived. A rounds row keeps its advisory
+  when the partial count is in a round under the limit, and loses it in an
+  over-limit round. End to end (review r3), the stub perf
+  marks one call partial (`STUB_PARTIAL_CALL`): a waivable warm-up build and a
+  waivable round total each FAIL with the reason, and speed.json's record and
+  row carry `partial` (the round-total row with the reason joined from its
+  call). New
+  `ir_cache_acceptance_counts_through_cdo_speeds_parse` runs
+  `scripts/ir-cache-acceptance`'s own count path under a stub perf. The
+  stub-perf advisory tests now split their counts over
+  both PMUs, so only their own guard withholds. The stress test's P-core stop
+  uses only the P-cores in the process's CPU mask (none: skipped, saying so),
+  waits until each spinner's mask is the wanted one, starts and registers
+  spinners one by one (each ends by itself after 120 s), reaps perf and the
+  spinners on every exit path, and names the cause when perf ends before its
+  ack or a pinned rival holds the counters.
+  `speed_cpu_advisory_needs_covering_counts_and_a_cpu_only_failure` now needs an
+  uncovered count to give no instruction count and no build ratio;
+  `speed_perf_parsing_and_warm_judging` pins the pinned-group arguments and
+  refuses the real "pinned group without counters" output.
+  Discrimination proofs are in the tests' docs.
 
 ### Fixed (ENG-178: table procedures named like record built-ins: four follow-ups from ENG-173)
 
