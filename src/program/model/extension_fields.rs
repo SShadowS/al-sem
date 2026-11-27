@@ -160,12 +160,26 @@ pub fn merge_extension_fields(
         // fields, the extension's merged in, and the system fields: a key on
         // a base field (`key(K; "No.", "CDO Handled")`) keeps both.
         let ext_keys = workspace.tables[ext_idx].keys.clone();
+        // This alternative's own fields name its keys' members first (sol r9:
+        // an earlier alternative's field of the same name, merged into the
+        // base under another number, must not answer for this one's).
+        let own_fields: Vec<(String, String)> = workspace.tables[ext_idx]
+            .fields
+            .iter()
+            .map(|f| {
+                (
+                    al_syntax::fold_identifier(&f.name),
+                    encode_field_id(&base_table_id, f.field_number),
+                )
+            })
+            .collect();
         let base = &mut workspace.tables[base_idx];
-        let by_name: std::collections::HashMap<String, String> = base
+        let mut by_name: std::collections::HashMap<String, String> = base
             .fields
             .iter()
             .map(|f| (al_syntax::fold_identifier(&f.name), f.id.clone()))
             .collect();
+        by_name.extend(own_fields);
         // The members of the keys EARLIER alternatives of this same extension
         // (its own id prefix) added, taken before this alternative adds any:
         // a later alternative repeating one of them adds none, but two keys of

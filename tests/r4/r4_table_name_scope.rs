@@ -137,6 +137,54 @@ pageextension 50215 "Two Table PE" extends "Two Table Page"
     end;
 }
 
+table 50250 "Tri"
+{
+    fields
+    {
+        field(1; "Entry No."; Integer) { }
+    }
+}
+
+#if A
+tableextension 50251 "Tri Ext" extends "Tri"
+{
+    fields
+    {
+        field(50251; "F"; Integer) { }
+    }
+    keys
+    {
+        key(K1; "F") { }
+    }
+}
+#elif B
+tableextension 50251 "Tri Ext" extends "Tri"
+{
+    fields
+    {
+        field(50252; "F"; Integer) { }
+    }
+    keys
+    {
+        key(K1; "F") { }
+        key(K2; "F") { SumIndexFields = "Entry No."; }
+    }
+}
+#else
+tableextension 50251 "Tri Ext" extends "Tri"
+{
+    fields
+    {
+        field(50251; "F"; Integer) { }
+    }
+    keys
+    {
+        key(K1; "F") { }
+        key(K2; "F") { SumIndexFields = "Entry No."; }
+    }
+}
+#endif
+
 tableextension 50240 "Moving Ext" extends "New Base"
 {
     keys
@@ -469,7 +517,10 @@ fn var_table(ws: &ModelEntities, app: &str, routine: &str, var: &str) -> Option<
 /// earlier ones) drops KeyC and fails "... once each"; a repeat check that
 /// does not count (one earlier `KA` key skipping both later ones) drops KeyD
 /// and fails "... once each"; a repeat matched on members alone (not the
-/// fields they resolve to) drops the 50234 `KeyX` and fails "... once each".
+/// fields they resolve to) drops the 50234 `KeyX` and fails "... once each";
+/// resolving a key's members against the base's merged fields only (not the
+/// alternative's own first) fails "each alternative's keys over its own
+/// field".
 #[test]
 fn a_table_name_binds_as_the_resolver_binds_it_in_the_model() {
     let ws = model();
@@ -648,6 +699,46 @@ fn a_table_name_binds_as_the_resolver_binds_it_in_the_model() {
             pair("kx", "50234"),
         ],
         "both alternatives' keys, once each"
+    );
+    // sol r9: the ids themselves: the first alternative's keep `/{index}`, a
+    // later one's take `/{index}/alt{n}`; KeyA of the second (index 0) is a
+    // repeat and has none.
+    let mut ids: Vec<String> = keyed
+        .keys
+        .iter()
+        .filter_map(|k| k.id.strip_prefix(&own).map(str::to_owned))
+        .collect();
+    ids.sort();
+    assert_eq!(
+        ids,
+        ["0", "1", "1/alt1", "2/alt1", "3/alt1", "4/alt1"],
+        "key ids"
+    );
+    // sol r9: three alternatives, F = 50251, 50252, then 50251 again: the
+    // third's keys resolve through ITS OWN field (50251), not the second's.
+    let tri = ws
+        .tables
+        .iter()
+        .rfind(|t| t.id == format!("{WS}/table/50250") && !t.is_extension_stub)
+        .expect("Tri");
+    let tri_own = format!("{WS}/table/50250/key/ext/{WS}/50251/");
+    let mut tri_keys: Vec<String> = tri
+        .keys
+        .iter()
+        .filter(|k| k.id.starts_with(&tri_own))
+        .map(|k| {
+            k.fields
+                .iter()
+                .map(|f| f.rsplit('/').next().unwrap_or("").to_owned())
+                .collect::<Vec<_>>()
+                .join(",")
+        })
+        .collect();
+    tri_keys.sort();
+    assert_eq!(
+        tri_keys,
+        ["50251", "50251", "50252", "50252"],
+        "each alternative's keys over its own field"
     );
     // sol + Fable r5: another app's same-named extension with an identical
     // key on the same base keeps its key.
