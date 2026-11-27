@@ -201,6 +201,38 @@ def test_resolve_and_mark_verified_are_two_functions_with_no_shared_bypass(ctx):
     assert "require_operator" not in inspect.getsource(incidents.mark_verified)
 
 
+def test_resolve_holds_registry_from_the_live_run_check_through_the_write(ctx, monkeypatch):
+    """No claim or recovery may start between `resolve`'s live-run check and
+    its incident write (sol r5): the write happens INSIDE `require_operator`,
+    in one hold of `registry`.
+    Red proof (sol r5, re-run for the context manager): the `incidents`
+    section moved out of `with lock.require_operator(...)` (the check's hold
+    released before the write) failed here."""
+    from contextlib import contextmanager
+    incidents.open_incident(ctx, merge_sha=SHA_A, issue=8, gate_red=True)
+    events = []
+    real_mutex, real_lock_mutex, real_save = incidents.mutex, lock.mutex, incidents._save
+
+    def spy(real):
+        @contextmanager
+        def m(c, name, **kw):
+            events.append(f"take {name}")
+            with real(c, name, **kw):
+                yield
+            events.append(f"drop {name}")
+        return m
+
+    monkeypatch.setattr(incidents, "mutex", spy(real_mutex))
+    monkeypatch.setattr(lock, "mutex", spy(real_lock_mutex))
+    monkeypatch.setattr(incidents, "_save", lambda c, r: (events.append("write"), real_save(c, r)))
+    monkeypatch.setattr(lock, "_refuse_live_held",
+                        lambda c, what: events.append("check"))
+    incidents.resolve(operator(ctx), SHA_A, by="torben", note="checked")
+    assert events[events.index("check") - 1] == "take registry"
+    assert events.index("check") < events.index("write") < events.index("drop registry")
+    assert "drop registry" not in events[:events.index("write")]
+
+
 def test_resolve_is_operator_only_and_refuses_a_second_close(ctx):
     incidents.open_incident(ctx, merge_sha=SHA_A, issue=8, gate_red=True)
     # (a) automation asking: `ctx` carries run_id="run-test".

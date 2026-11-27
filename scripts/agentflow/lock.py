@@ -4,9 +4,10 @@ Labels on GitHub are a mirror for humans. The lease files are the lock. Each
 claimed issue has ONE lease, `.agent/locks/issue-<N>.json`, naming the run
 that owns it; create-exclusive on that file makes "one run per issue" true by
 construction. A lease is stale when its HEARTBEAT (not its start) is older
-than STALE_SECONDS; a live run refreshes it via `beat` (the supervisor does
-this every 60 s while a gate runs). Every mutation checks the fence: the
-run's OWN lease must exist, so a superseded run cannot act after losing it.
+than STALE_SECONDS of awake time (`is_stale`); a live run refreshes it via
+`beat` (the supervisor does this every 60 s while a gate runs). Every
+mutation checks the fence: the run's OWN lease must exist, so a superseded
+run cannot act after losing it.
 
 `.agent/lock.json` is the LEGACY lease (one lock for the whole checkout,
 before the parallel-issues design). It is read as one more lease, and
@@ -21,11 +22,14 @@ from __future__ import annotations
 
 import json
 import shutil
-from dataclasses import asdict, dataclass
+from contextlib import contextmanager
+from dataclasses import asdict, dataclass, fields
 from pathlib import Path
+from typing import Iterator
 
 from . import budget
-from .state import Ctx, MutexTimeout, append_audit, config, mutex, read_json, write_json
+from .state import (Ctx, MutexTimeout, append_audit, awake_elapsed, config, mutex, read_json,
+                    write_json)
 
 STALE_SECONDS = 30 * 60
 
@@ -86,15 +90,34 @@ class Lock:
     # The run recovering this lease (`steal_for_recovery`). A legacy
     # `lock.json` has no such key, hence the default.
     recovering_by: str | None = None
+    # `[clock id, seconds]` of the awake clock at `heartbeat` (TLS-122,
+    # `state.host_awake`), or None (no awake clock: not Linux). IN THE LEASE
+    # FILE, so one atomic write publishes the heartbeat and its stamp together
+    # (sol r6): no lease is ever acknowledged without the stamp it was beaten
+    # with. The executor before TLS-122 builds `Lock(**data)` and FAILS on this
+    # key, which is why an upgrade or rollback needs a drain (no live lease).
+    beat_awake: list | None = None
+
+
+_LOCK_FIELDS = {f.name for f in fields(Lock)}
+
+
+def _stamp(ctx: Ctx, lk: Lock, now: float) -> None:
+    """Set the heartbeat on both clocks; the next lease write stores both."""
+    aw = ctx.awake_now()
+    lk.heartbeat, lk.beat_awake = now, list(aw) if aw else None
 
 
 def _read_lease(path: Path) -> Lock | None:
     data = read_json(path)
-    return Lock(**data) if data else None
+    # Only the fields this code knows: a lease written by newer code with a
+    # field added must still load here (forward compatibility, TLS-122 r1).
+    return Lock(**{k: v for k, v in data.items() if k in _LOCK_FIELDS}) if data else None
 
 
 def _entries(ctx: Ctx) -> list[tuple[Path, Lock]]:
-    """Every lease with its file: the legacy `lock.json`, then `locks/`."""
+    """Every lease with its file: the legacy `lock.json`, then `locks/`. One
+    file per lease, heartbeat and stamp inside it, so each read is coherent."""
     out = []
     for p in [ctx.paths.lock, *ctx.paths.locks_dir.glob("issue-*.json")]:
         lk = _read_lease(p)
@@ -234,7 +257,8 @@ def _acquire_held(ctx: Ctx, issue: int, session: str, attempt: int,
         raise LockHeld(SLOTS_FULL, entries[0] if entries else None)
     now = ctx.now()
     if count_slot:
-        live = sum(not is_stale(lk, now) for lk in entries)
+        aw = ctx.awake_now()
+        live = sum(not is_stale(lk, now, aw) for lk in entries)
         free, need = disk_free_gb(ctx), disk_required_gb(ctx, live)
         if free < need:
             raise LockHeld(f"{DISK_LOW}:{free}GB<{need}GB")
@@ -242,6 +266,7 @@ def _acquire_held(ctx: Ctx, issue: int, session: str, attempt: int,
             raise LockHeld(f"{DISK_LOW}:targets:{t[0]}GB<{t[1]}GB")
     lk = Lock(issue=issue, run_id=ctx.run_id, session=session,
               started=now if started is None else started, heartbeat=now, attempt=attempt)
+    _stamp(ctx, lk, now)
     path = ctx.paths.lease(issue)
     path.parent.mkdir(parents=True, exist_ok=True)
     for retried in (False, True):
@@ -289,16 +314,25 @@ def _fenced_entry(ctx: Ctx) -> tuple[Path, Lock]:
 
 
 def beat(ctx: Ctx) -> None:
+    """Refresh this run's heartbeat. Under mutex `registry` (TLS-122, sol r1):
+    unlocked, a beat that read the lease before `steal_for_recovery` rewrote
+    it would write its old copy back over the steal."""
     ctx.write_guard("beat")
-    path, lk = _fenced_entry(ctx)
-    lk.heartbeat = ctx.now()
-    _write(ctx, path, lk)
+    with mutex(ctx, "registry"):
+        path, lk = _fenced_entry(ctx)
+        _stamp(ctx, lk, ctx.now())
+        _write(ctx, path, lk)
 
 
 def release(ctx: Ctx) -> None:
+    """Remove this run's lease, under mutex `registry` like every lease writer
+    (sol r7): unlocked, a beat that read the lease first would publish it
+    again after this returned, and a delayed unlink could remove a newer
+    claim's lease at the same path."""
     ctx.write_guard("release lock")
-    path, _ = _fenced_entry(ctx)
-    path.unlink()
+    with mutex(ctx, "registry"):
+        path, _ = _fenced_entry(ctx)
+        path.unlink()
 
 
 def steal_for_recovery(ctx: Ctx, stale: Lock) -> Lock:
@@ -326,9 +360,10 @@ def steal_for_recovery(ctx: Ctx, stale: Lock) -> Lock:
             raise LockHeld("lock-gone", e[1] if e else None)
         path, cur = e
         now = ctx.now()
-        if not is_stale(cur, now):
+        if not is_stale(cur, now, ctx.awake_now()):
             raise LockHeld("lock-live", cur)
-        cur.heartbeat, cur.recovering_by = now, ctx.run_id
+        _stamp(ctx, cur, now)
+        cur.recovering_by = ctx.run_id
         _write(ctx, path, cur)
         return cur
 
@@ -351,6 +386,7 @@ def handover(ctx: Ctx, issue: int, *, started: float) -> Lock:
         path, old = e
         new = Lock(issue=issue, run_id=ctx.run_id, session="recover", started=started,
                    heartbeat=ctx.now(), attempt=old.attempt)
+        _stamp(ctx, new, new.heartbeat)
         target = ctx.paths.lease(issue)
         _write(ctx, target, new)
         if path != target:
@@ -387,13 +423,21 @@ def _lane_state_held(ctx: Ctx) -> tuple[dict | None, str]:
         return lane, "free"          # the owner's lease is gone: nothing holds it
     if lane["run_id"] == ctx.run_id:
         return lane, "mine"
-    return lane, "orphaned" if is_stale(owner, ctx.now()) else "busy"
+    return lane, "orphaned" if is_stale(owner, ctx.now(), ctx.awake_now()) else "busy"
 
 
 def lane_state(ctx: Ctx) -> tuple[dict | None, str]:
     """`(lane, state)`, state one of `free`, `mine`, `busy` (another run with
     a live lease holds it) or `orphaned` (its owner's lease is stale: only
-    `recover` moves it on). A read; takes no mutex."""
+    `recover` moves it on). A read for REPORTING; takes no mutex. A command
+    that acts on the answer uses `lane_state_locked` under `registry`."""
+    return _lane_state_held(ctx)
+
+
+def lane_state_locked(ctx: Ctx) -> tuple[dict | None, str]:
+    """`lane_state` for a caller that HOLDS mutex `registry` and acts on the
+    answer before releasing it (verification `cleanup`, sol r4): no claim,
+    beat, steal or lane change can land between its check and its action."""
     return _lane_state_held(ctx)
 
 
@@ -434,8 +478,18 @@ def drop(ctx: Ctx, issue: int, expect_run_id: str) -> bool:
     return False
 
 
-def is_stale(lk: Lock, now: float) -> bool:
-    return (now - lk.heartbeat) > STALE_SECONDS
+def is_stale(lk: Lock, now: float, awake: tuple[str, float] | None) -> bool:
+    """No heartbeat for STALE_SECONDS of AWAKE time (TLS-122). The wall clock
+    counts a host suspend, so after a long one a live run's lease read as stale
+    and another session could recover it before the run's next beat. With
+    `awake` (`Ctx.awake_now()`) and a lease stamped on the same boot, the age is
+    the awake clock's; otherwise (a lease from before this rule, from before a
+    reboot, or no awake clock) it is the wall clock's, as before.
+
+    Why not "stale only when the holder process is dead": a run is a series of
+    short CLI calls from a conductor session, so between calls no process
+    holds the lease, and a session that stopped working must still lose it."""
+    return awake_elapsed(lk.beat_awake, awake, now - lk.heartbeat)[0] > STALE_SECONDS
 
 
 def require_human(ctx: Ctx, what: str) -> None:
@@ -447,8 +501,13 @@ def require_human(ctx: Ctx, what: str) -> None:
             f"Run it with no --run-id and with AGENTFLOW_RUN_ID unset.")
 
 
-def require_operator(ctx: Ctx, what: str) -> None:
-    """Refuse `what` unless a HUMAN is asking, on a checkout no live run owns.
+@contextmanager
+def require_operator(ctx: Ctx, what: str) -> Iterator[None]:
+    """Refuse `what` unless a HUMAN is asking, on a checkout no live run owns;
+    a context manager: `with require_operator(ctx, what): <act>`. The body runs
+    under mutex `registry`, so no run can claim, beat or be recovered between
+    the live-run check and the action (TLS-122 sol r4/r5). `clear_halt` and
+    `incidents.resolve` act inside it.
 
     Two refusals, and the ASYMMETRY between them is deliberate.
 
@@ -471,8 +530,15 @@ def require_operator(ctx: Ctx, what: str) -> None:
     run is enough to make a clear unsafe.
     """
     require_human(ctx, what)
-    now = ctx.now()
-    lk = next((x for x in all_locks(ctx) if not is_stale(x, now)), None)
+    with mutex(ctx, "registry"):
+        _refuse_live_held(ctx, what)
+        yield
+
+
+def _refuse_live_held(ctx: Ctx, what: str) -> None:
+    """`require_operator`'s live-run half. ASSUMES mutex `registry` is held."""
+    now, aw = ctx.now(), ctx.awake_now()
+    lk = next((x for x in all_locks(ctx) if not is_stale(x, now, aw)), None)
     if lk is not None:
         raise OperatorOnly(
             f"{what} is refused while run {lk.run_id} still holds the lock for issue "
@@ -526,18 +592,22 @@ def clear_halt(ctx: Ctx, expected: str, by: str) -> str:
     5. the audit line lands BEFORE the unlink, so a clear that dies half-way
        is still on the record. A clear with no record is the one outcome that
        must be impossible; this append is NOT best-effort.
+
+    Steps 3-5 run inside step 2's `require_operator`, under mutex `registry`
+    (sol r4): no run can claim, beat or be recovered between the live-run
+    check and the unlink.
     """
     ctx.write_guard("clear HALT")
-    require_operator(ctx, "clear HALT")
-    current = halted(ctx)
-    if current is None:
-        raise HaltClearRefused("not-halted", "there is no .agent/HALT to clear")
-    if current != expected.strip():
-        raise HaltClearRefused("reason-mismatch",
-                               f"HALT reads {current!r}, not the {expected.strip()!r} you named")
-    append_audit(ctx, {"action": "halt-clear", "reason": current, "by": by})
-    ctx.paths.halt.unlink()
-    return current
+    with require_operator(ctx, "clear HALT"):
+        current = halted(ctx)
+        if current is None:
+            raise HaltClearRefused("not-halted", "there is no .agent/HALT to clear")
+        if current != expected.strip():
+            raise HaltClearRefused("reason-mismatch",
+                                   f"HALT reads {current!r}, not the {expected.strip()!r} you named")
+        append_audit(ctx, {"action": "halt-clear", "reason": current, "by": by})
+        ctx.paths.halt.unlink()
+        return current
 
 
 def require_not_halted(ctx: Ctx, terminal: bool = False) -> None:

@@ -934,6 +934,134 @@ suppressed all of them, and a new member of the group was invisible to it.
   refuses the real "pinned group without counters" output.
   Discrimination proofs are in the tests' docs.
 
+### Fixed (TLS-122: agentflow's lease age and run cap leave a host suspend out)
+
+server1 is a laptop that suspends when it is moved (TLS-104). agentflow measured both of
+its time rules on the wall clock, which keeps counting through a suspend.
+- **A live lease no longer looks stale after a suspend.** A lease was stale after 30 min of
+  wall time without a heartbeat, so after a long suspend another session's `recover` could
+  take a run's lease before the run's next `beat`. Each heartbeat now writes the host's awake
+  clock reading (`beat_awake`: a clock id and CLOCK_MONOTONIC, which stops while the host
+  sleeps) INTO the lease, in the same atomic write as the heartbeat, and `lock.is_stale`
+  counts the 30 min on it. No lease is ever published without its stamp, and a failed write
+  leaves the previous lease whole. `is_stale` takes the awake reading as a required argument,
+  so no caller can leave it out.
+- **The 24 h run cap counts awake time.** `budget.json` records the awake clock at the claim
+  (`claimed_awake`, under its checksum), and `check_deadline` and `charge` measure the run on
+  it. `status`'s budget shows `elapsed_s` and `elapsed_clock` (`awake` or `wall`).
+- **When the wall clock still judges:** a lease or budget from before TLS-122; another boot
+  or time namespace (the clock id is the boot id plus CLOCK_MONOTONIC's offset from
+  `/proc/self/timens_offsets`); a reading that is malformed, not finite, negative, a huge
+  integer, or more than 60 s ahead of the reader's clock; or no awake clock at all (not
+  Linux). The wall age never caps a valid awake age, so a backward wall step changes neither
+  verdict. Clock-sharing limit: processes that share one `.agent/` share the host.
+- **Rollout needs a drain (mandatory).** The executor before TLS-122 fails on `beat_awake`
+  (`Lock(**data)`) and rejects a budget with `claimed_awake` (its checksum). Even on its own
+  files it is unsafe beside a newer run: its `recover` judges on the wall clock.
+  - Upgrade: stop new claims, let the old executor's runs finish or recover them, then
+    switch. Older leases and budgets still load here.
+  - Rollback: stop new claims, finish or recover every lease with the new executor until there
+    are ZERO lease files, then switch. A stale lease is not enough: the old executor fails in
+    `Lock(**data)` before it can judge staleness.
+- **Decisions on liveness take mutex `registry`**, which every lease writer holds. `beat` and
+  `release` now take it too, which closes two older races: a beat wrote its copy back over
+  `recover`'s steal, or published a lease again after `release` returned.
+  - `clear-halt` keeps it from its live-run check through the HALT unlink.
+  - `resolve incident` keeps it through the incident write.
+  - Verification `cleanup` re-checks the lane under it and moves the tree aside (one rename to
+    `<name>.removing-<id>`). The recursive delete and `git worktree prune` run after the lock
+    is released, so a slow delete starves no beat. An orphaned lane is still `recover`'s.
+  - Each checkout root has its own verification tree, `<parent>/al-sem-verify-<root name>`
+    (was one `al-sem-verify-tree` per parent folder), because its merge lane, `registry` lock
+    and reservation live in that root's `.agent/` (sol r17). server1's lane worktrees are
+    checkouts of one repository in one parent: they no longer share a tree, and one root's
+    cleanup can no longer move another root's live tree aside. The verify build cache stays
+    per root (`<root>/target-verify` by default). A tree RETAINED as evidence at the old
+    `al-sem-verify-tree` path before this change is no root's tree any more: remove it by
+    hand (`git worktree remove`, or delete it and `git worktree prune`) once looked at.
+  - Explicit `cleanup --worktree` of a verification tree accepts only the root's canonical
+    verification tree path, compared without resolving symlinks, and refuses a symlink there.
+    Before, any verification-prefixed sibling was accepted, and a link could steer the delete
+    to one (sol r10). Before it moves the tree, it also requires evidence from outside the
+    tree that the tree is agentflow's: git's `worktree list` for this repository names it,
+    and its `.git` file points into this repository's `worktrees/` directory. Otherwise it
+    refuses and touches nothing (sol r11). The contract: the verification-tree path, under
+    the checkout's parent, is reserved for agentflow, which writes it only under `registry`;
+    a writer outside that lock is outside the trust model, as a hand edit of `.agent/` is.
+    agentflow keeps that contract itself (sol r12). Every lifecycle operation on the tree
+    (post-merge's create and teardown, the revert worktree in `post_merge_failure`, and
+    cleanup) checks the occupant and moves it aside in one guarded step under `registry`
+    (`worktrees._check_and_detach_held`; `create` and cleanup reach it through
+    `_take_owned_held`, which first settles the reservation). `create` now refuses
+    an occupant git has not registered (`NotOurs`) instead of deleting it. `git worktree list`
+    counts as a read, so this check never waits on the `git` mutex while holding `registry`.
+  - The tree belongs to the create attempt that made it (sol r13, r14). Under `registry`,
+    before `git worktree add`, `create` writes a reservation outside the tree,
+    `.agent/verify-reservations/<tree>.json`. It names this invocation (pid, process start
+    time, a nonce) and this attempt, and `create` returns it as a token.
+    - Teardown (`remove(token)`) acts only while the reservation still equals that token. A
+      refused create returns no token, so its `finally` touches nothing. When two
+      invocations of one run race, the loser leaves the winner's tree intact, even if the
+      winner exits in between.
+    - Reclaiming another invocation's reservation happens only in a new `create` or an
+      explicit cleanup, and only when its owner is provably DEAD. Liveness has three values:
+      with /proc, no process or a different start time (a reused PID) is DEAD, and a stat
+      that cannot be read is UNKNOWN; without /proc, a PID that still exists is UNKNOWN.
+      UNKNOWN is never reclaimed: `create` refuses, and cleanup reports it with the
+      reservation file to delete by hand. The reservation also records the boot id and the
+      PID namespace (Fable r2): another boot is DEAD; a missing boot id, or another or
+      missing PID namespace, is UNKNOWN. A damaged reservation file is a clear refusal
+      naming the file, never a traceback.
+    - Every failure of `create` before its token exists (a busy `registry`, a failed
+      reservation write) is a `GitError`, so post-merge and the revert worktree, which catch
+      `GitError`, keep their records (Fable r2).
+    - `remove` is fully best-effort: a busy `registry` or a failing `destroy` (`git worktree
+      prune` timing out on the `git` mutex), and its final check, are logged to stderr, never
+      raised, so a `finally` keeps its own result. It returns True only when the tree is
+      really gone, so a teardown failure is still reported.
+    - A reservation with a missing or invalid start time (valid: ASCII digits only) is
+      UNKNOWN, never DEAD (sol r15, r16).
+      `create` deletes an old tombstone and prunes stale registrations inside its token's
+      rollback; a prune that finds the `git` mutex busy is logged, and the create goes on.
+  - A cleanup that dies between its rename and its delete can leave `<tree>.removing-<id>`.
+    The next cleanup lists such siblings (plain string operations) as `tombstones_left`, with
+    a hint, and deletes none of them. Nothing on disk can prove agentflow made one, and a
+    check-then-delete could hit whatever replaced it, so removing one is the operator's call
+    (sol r9, r10).
+  - A periodic beat that times out on `registry` is skipped, not fatal.
+  - `require_operator` is now a context manager: `clear-halt` and `resolve incident` act inside
+    it, so its live-run check and their action share one hold of `registry`.
+  - A new failure path: `release` (in `finish`, and `unblock`'s cleanup) can now fail with
+    `MutexTimeout` if `registry` stays busy for 30 s. Every holder is short, so this is
+    unlikely; the lease then stays and goes stale after 30 awake minutes, and `recover`
+    handles it.
+- **Why not "stale only when the holder process is dead":** a run is a series of short
+  `agentflow` calls made by a conductor session, so between calls no process holds the lease,
+  and a session that stopped working must still lose its lease.
+- **Review history (Fable r1, r2, final and second final; sol r1-r17):** a lease file with an unknown field
+  still loads, and the clock tests run on any OS. One intermediate design kept the stamps in
+  sidecar files so that older executors could read the lease. Two files could disagree after
+  one failed or interrupted write, and every repair left a gap. sol r6 showed a failed FIRST
+  sidecar write followed by a suspend reopened the takeover. Since the drain is needed anyway,
+  the stamps went back inside the lease and `budget.json`. sol r7 put `release` back under
+  `registry` and required zero lease files for a rollback. sol r8 and Fable's final review
+  passed it; the final review's follow-ups added tests that pin the awake clock at the
+  operator guard and the lane state, and the `require_operator` context manager. Its
+  automatic tombstone sweep did not survive review: sol r9 found it globbed a caller-chosen
+  name, and sol r10 found that no on-disk marker can prove ownership and that a
+  check-then-delete races. Leftovers are now only reported, and explicit cleanup takes only
+  the canonical tree path. sol r11 then asked for ownership evidence from outside the tree:
+  git's worktree registration for this repository. sol r12-r16 made agentflow keep that
+  contract itself: one guarded lifecycle under `registry`, a per-attempt reservation and
+  token, three-valued liveness, a fully best-effort `remove`, and a strict start-time check.
+  sol r17 found the verification path keyed by the parent while its lock and reservation
+  are keyed by the root, and gave each root its own tree. Fable's second final review then
+  added the boot and PID-namespace frame, `GitError`-only failures from `create`, a clear
+  refusal for a damaged reservation, and tests that reach each guard. sol r18 made
+  malformed reservation data never mean DEAD: a boot id counts only in the kernel's UUID
+  form (anything else is UNKNOWN), and a reservation file that parses to `null` or any
+  non-object is damaged (a refusal naming the file), not absent.
+
 ### Fixed (ENG-178: table procedures named like record built-ins: four follow-ups from ENG-173)
 
 From Fable's second review of ENG-173 (`/work/.al-sem/engine-notes/eng173/fable-eng173-r2.md`).

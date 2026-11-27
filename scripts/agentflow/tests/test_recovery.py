@@ -272,7 +272,7 @@ def test_a_revert_worktree_that_cannot_be_created_refuses_to_push(repo_pair, mon
     ctx = make_ctx(clone)
     reruns = []
 
-    def boom(git, path, commit):
+    def boom(ctx, git, path, commit):
         raise GitError("disk full")
 
     monkeypatch.setattr(recovery.worktrees, "create", boom)

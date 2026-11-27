@@ -32,6 +32,14 @@ def run(capsys, root, *args, gh_run, dry=False, run_id="run-test"):
     return code, json.loads(capsys.readouterr().out)
 
 
+def _verify_tree(clone, g, commit="master"):
+    """A real verification tree at the canonical path, made the production
+    way (`worktrees.create`, which returns a token, not the path)."""
+    p = worktrees.verify_path(clone)
+    worktrees.create(Ctx(Paths(clone)), g, p, g.rev(commit))
+    return p
+
+
 def test_dry_run_fetch_and_preflight_write_nothing(capsys, repo_pair, monkeypatch, tmp_path):
     _, clone = repo_pair
     # The grammar-presence check reads this file, and preflight's own
@@ -2486,7 +2494,7 @@ def test_post_merge_runs_gates_in_a_worktree_with_the_main_checkout_grammar(caps
     assert cwd != clone and cwd.parent == clone.parent and cwd.name.startswith("al-sem-verify-")
     # ONE FIXED PATH, never one per merge: test binaries bake CARGO_MANIFEST_DIR, and a
     # per-SHA path left reused binaries pointing at the previous, deleted tree.
-    assert cwd.name == worktrees.VERIFY_TREE and merge_sha[:12] not in str(cwd), cwd
+    assert cwd.name == worktrees.verify_path(clone).name and merge_sha[:12] not in str(cwd), cwd
     # EVERY gate on the commit this run says it verified, never on whatever
     # `master` names by now -- which the prologue has just moved to `later`.
     assert {c["head"] for c in calls} == {merge_sha}, [c["head"] for c in calls]
@@ -2559,7 +2567,7 @@ def test_a_verification_worktree_that_cannot_be_created_refuses_and_leaves_nothi
     monkeypatch.setattr(cli, "gates", lambda: [("noop", [sys.executable, "-c", "pass"], 1)])
     monkeypatch.setattr(cli, "cdo_gate", lambda: ("noop-cdo", [sys.executable, "-c", "pass"], 1))
 
-    def cannot_create(git, path, commit):
+    def cannot_create(ctx, git, path, commit):
         raise GitError(f"git worktree add --detach -q {path} {commit}: fatal: disk is full")
 
     monkeypatch.setattr(cli.worktrees, "create", cannot_create)
@@ -3433,8 +3441,7 @@ def test_cleanup_of_a_verification_worktree_takes_the_detached_route(capsys, rep
     `master`, created here with the production helper that owns the name."""
     _, clone = repo_pair
     g = Git(clone)
-    kept = worktrees.create(g, worktrees.verify_path(clone),
-                            g.rev("master"))
+    kept = _verify_tree(clone, g)
     assert kept.name.startswith(worktrees.VERIFY_PREFIX) and kept.is_dir()
     # The library refusal that makes the route necessary, stated first.
     with pytest.raises(RuntimeError, match="not an agentflow issue worktree"):
@@ -3495,7 +3502,7 @@ def test_cleanup_of_a_retained_verification_worktree_survives_the_dead_run_s_sta
     refuses (the last arm)."""
     _, clone = repo_pair
     g = Git(clone)
-    kept = worktrees.create(g, worktrees.verify_path(clone), g.rev("master"))
+    kept = _verify_tree(clone, g)
     assert kept.name.startswith(worktrees.VERIFY_PREFIX) and kept.is_dir()
 
     dead = Ctx(Paths(clone), run_id="dead-run", now=lambda: 1_000_000.0)
@@ -3532,10 +3539,247 @@ def test_cleanup_of_a_retained_verification_worktree_survives_the_dead_run_s_sta
     _slots(clone, 2)
     later = lk.heartbeat + lock.STALE_SECONDS + 1
     lock.acquire(Ctx(Paths(clone), run_id="sibling-run", now=lambda: later), 9, "s", 1)
-    again = worktrees.create(g, worktrees.verify_path(clone), g.rev("master"))
+    again = _verify_tree(clone, g)
     code, out = run(capsys, clone, "cleanup", "--worktree", str(again),
                     gh_run=FakeRunner(), run_id=None)
     assert code == 0 and not again.exists(), out
+
+
+def _live_lane_holder(clone, g):
+    """A run holding issue 8 and the merge lane, its lease stamped on an awake
+    clock, a retained verification worktree, and HALT."""
+    kept = _verify_tree(clone, g)
+    holder = Ctx(Paths(clone), run_id="live-run", now=lambda: 1_000_000.0, awake=lambda: ("b", 500.0))
+    lock.acquire(holder, 8, "s", 1)
+    write_json(holder, clone / ".agent" / "merge-lane.json",
+               {"run_id": "live-run", "issue": 8, "pr": 12, "merge_sha": g.rev("master"), "acquired": 1.0})
+    lock.set_halt(Ctx(Paths(clone)), "operator")
+    return kept
+
+
+def test_a_beat_in_progress_stops_clear_halt_and_cleanup(capsys, repo_pair, monkeypatch):
+    """A beat in progress (it holds `registry`) and only wall time moving
+    (2 h, the readers here have no awake clock): an unlocked check would read
+    the live run's lease as stale and act. `clear-halt` and verification
+    `cleanup` decide under `registry`, so they wait for the beat and act on
+    nothing (here their wait times out). Cleanup's early, unlocked check does
+    pass, which is why its delete decides again under the lock (sol r4).
+    Red proofs (sol r4, re-run for sol r6):
+    - `clear_halt`'s checks and unlink moved out of `with require_operator`
+      (only `require_human` left in front) failed here (HALT cleared).
+    - The locked recheck removed from `cmd_cleanup` (only the unlocked early
+      check left) failed here (the live run's worktree was deleted)."""
+    import threading
+    _, clone = repo_pair
+    g = Git(clone)
+    kept = _live_lane_holder(clone, g)
+    beating = Ctx(Paths(clone), run_id="live-run", now=lambda: 1_000_060.0, awake=lambda: ("b", 560.0))
+    paused, go = threading.Event(), threading.Event()
+    real_write = lock._write
+
+    def pause(cx, path, lk):
+        paused.set()                                 # inside the beat, `registry` held
+        go.wait(20)
+        real_write(cx, path, lk)
+
+    monkeypatch.setattr(lock, "_write", pause)
+    t = threading.Thread(target=lock.beat, args=(beating,))
+    t.start()
+    try:
+        assert paused.wait(20)
+        real_mutex = lock.mutex
+        short = lambda c, name, timeout=30.0: real_mutex(c, name, timeout=0.3)   # noqa: E731
+        monkeypatch.setattr(lock, "mutex", short)
+        monkeypatch.setattr(cli, "mutex", short)
+        monkeypatch.setenv("AGENTFLOW_NOW", str(1_000_060.0 + 2 * 3600))         # wall time only
+        code, out = run(capsys, clone, "clear-halt", "--reason", "operator", "--by", "me",
+                        gh_run=FakeRunner(), run_id=None)
+        assert code != 0, out
+        assert lock.halted(Ctx(Paths(clone))) == "operator"
+        code, out = run(capsys, clone, "cleanup", "--worktree", str(kept),
+                        gh_run=FakeRunner(), run_id=None)
+        assert code != 0, out
+        assert kept.is_dir()
+    finally:
+        go.set()
+        t.join(20)
+
+
+def test_cleanup_deletes_the_worktree_outside_registry(capsys, repo_pair, monkeypatch):
+    """A verification `cleanup` decides under `registry` but only DETACHES
+    the tree there (one rename to `<name>.removing-<id>`). The recursive
+    delete and `git worktree prune` run after `registry` is released, so a
+    beat (which takes `registry`) is never starved by a slow delete (sol r5).
+    The tombstone goes too.
+    Red proof (sol r5): `worktrees.destroy` moved back inside the `with
+    mutex(ctx, "registry")` block failed here (`registry` was held during
+    the delete)."""
+    from agentflow.state import MutexTimeout, mutex as real_mutex
+    _, clone = repo_pair
+    g = Git(clone)
+    kept = _verify_tree(clone, g)
+    free_during_delete = []
+    real_rmtree = shutil.rmtree
+
+    def slow_rmtree(path, *a, **kw):
+        try:
+            with real_mutex(Ctx(Paths(clone)), "registry", timeout=0.2):
+                free_during_delete.append(True)
+        except MutexTimeout:
+            free_during_delete.append(False)
+        real_rmtree(path, *a, **kw)
+
+    monkeypatch.setattr(worktrees.shutil, "rmtree", slow_rmtree)
+    code, out = run(capsys, clone, "cleanup", "--worktree", str(kept), gh_run=FakeRunner(), run_id=None)
+    assert code == 0 and out["removed"] == str(kept), out
+    assert free_during_delete == [True]
+    assert not kept.exists() and not list(clone.parent.glob(kept.name + ".removing-*"))
+
+
+def test_cleanup_reports_leftover_tombstones_and_deletes_none(capsys, repo_pair):
+    """A cleanup that died between its rename and its delete can leave a
+    `<tree>.removing-<id>` behind. Nothing on disk proves agentflow made it,
+    so the next verification cleanup only REPORTS such siblings
+    (`tombstones_left` and a hint) and deletes none of them (sol r10). Its
+    own tree goes. Three cases, all kept: a real leftover from `detach`, a
+    lookalike with a hex id, and one the old glob matched with any suffix.
+    Red proof (sol r10): the old `glob(f"{target.name}.removing-*")` +
+    `destroy` loop put back in `cmd_cleanup` failed here (all three deleted)."""
+    _, clone = repo_pair
+    g = Git(clone)
+    home = worktrees.verify_path(clone)
+    home.mkdir()
+    (home / "precious.txt").write_text("from a cleanup that died", encoding="utf-8")
+    real = worktrees.detach(home)                    # the earlier cleanup's rename, then it died
+    assert real is not None
+    lookalike = clone.parent / f"{home.name}.removing-deadbeef"
+    any_suffix = clone.parent / f"{home.name}.removing-keep-me"
+    for d in (lookalike, any_suffix):
+        d.mkdir()
+        (d / "precious.txt").write_text("not agentflow's", encoding="utf-8")
+    kept = _verify_tree(clone, g)
+    code, out = run(capsys, clone, "cleanup", "--worktree", str(kept), gh_run=FakeRunner(), run_id=None)
+    assert code == 0 and out["removed"] == str(kept), out
+    assert not kept.exists()
+    for d in (real, lookalike, any_suffix):
+        assert (d / "precious.txt").exists(), d
+    assert out["tombstones_left"] == sorted(str(d) for d in (real, lookalike, any_suffix)), out
+    assert "by hand" in out["hint"], out
+
+
+def test_explicit_cleanup_refuses_a_symlink_at_the_tree_path(capsys, repo_pair):
+    """A symlink at the verification tree's path is refused: it would steer
+    the delete to whatever it points at (here another verification-prefixed
+    sibling). The path is compared without resolving links (sol r10).
+    Proof (sol r14 run): with `cmd_cleanup`'s own `is_symlink` refusal
+    removed this test STAYED GREEN: the guarded step every lifecycle operation
+    shares (`worktrees._check_and_detach_held`) refuses a symlink too, so the
+    cleanup check is a second, explicit layer. That shared step is proven by
+    the unregistered-directory tests."""
+    _, clone = repo_pair
+    home = worktrees.verify_path(clone)
+    sibling = clone.parent / f"{worktrees.VERIFY_PREFIX}someone-elses"
+    sibling.mkdir()
+    (sibling / "precious.txt").write_text("not agentflow's", encoding="utf-8")
+    home.symlink_to(sibling, target_is_directory=True)
+    code, out = run(capsys, clone, "cleanup", "--worktree", str(home), gh_run=FakeRunner(), run_id=None)
+    assert code == 1 and "symlink" in out["error"], out
+    assert home.is_symlink() and (sibling / "precious.txt").exists()
+
+
+def test_explicit_cleanup_refuses_a_non_canonical_sibling(capsys, repo_pair):
+    """Only the verification tree itself can be removed by `cleanup
+    --worktree`: another verification-prefixed sibling of the checkout is
+    refused, and survives (sol r10).
+    Red proof (sol r14 run): the canonical-path check removed from
+    `cmd_cleanup` failed here, on the refusal's message. The sibling still
+    survived: since sol r11 the registration check refuses it too (it is no
+    worktree of this repository), so the canonical check is the first of two
+    layers."""
+    _, clone = repo_pair
+    sibling = clone.parent / f"{worktrees.VERIFY_PREFIX}merge-deadbeefcafe"
+    sibling.mkdir()
+    (sibling / "precious.txt").write_text("not agentflow's", encoding="utf-8")
+    code, out = run(capsys, clone, "cleanup", "--worktree", str(sibling), gh_run=FakeRunner(), run_id=None)
+    assert code == 1 and "only the verification tree itself" in out["error"], out
+    assert (sibling / "precious.txt").exists()
+
+
+def test_two_checkouts_side_by_side_never_share_a_verification_tree(capsys, repo_pair):
+    """server1's lane worktrees are checkouts of ONE repository that share a
+    parent folder, each with its own `.agent/` (its own merge lane, `registry`
+    lock and reservations). Each root therefore gets its own verification
+    tree (`<parent>/al-sem-verify-<root name>`, sol r17), and a cleanup from
+    one root never touches the other root's live tree.
+    Red proof (sol r17): `verify_path` back to one name per parent
+    (`al-sem-verify-tree`) failed here (root A's cleanup detached and deleted
+    root B's tree: it is a registered worktree of the same repository)."""
+    _, clone = repo_pair
+    g = Git(clone)
+    lane_b = clone.parent / "lane-b"
+    g.worktree_add(lane_b, "lane-b", "master")
+    assert lane_b.parent == clone.parent
+    gb = Git(lane_b)
+    tree_b = worktrees.verify_path(lane_b)
+    worktrees.create(Ctx(Paths(lane_b)), gb, tree_b, gb.rev("HEAD"))
+    (tree_b / "work-in-progress.txt").write_text("lane B's live tree\n", encoding="utf-8")
+    code, out = run(capsys, clone, "cleanup", "--worktree", str(worktrees.verify_path(clone)),
+                    gh_run=FakeRunner(), run_id=None)
+    assert code == 0, out
+    assert (tree_b / "work-in-progress.txt").exists()
+
+
+def test_explicit_cleanup_refuses_an_unregistered_directory_at_the_tree_path(capsys, repo_pair):
+    """A real directory at the canonical path that git has not registered as a
+    worktree of this repository is not agentflow's: refused, untouched (sol
+    r11). A `.git` file pointing elsewhere does not make it one either.
+    Red proof (sol r11, run at sol r14): `cmd_cleanup` bypassing the guarded
+    step (a plain `worktrees.detach` instead of `_take_owned_held`) failed
+    here (the directory was moved aside and deleted)."""
+    _, clone = repo_pair
+    home = worktrees.verify_path(clone)
+    home.mkdir()
+    (home / "precious.txt").write_text("not agentflow's", encoding="utf-8")
+    (home / ".git").write_text(f"gitdir: {clone.parent / 'elsewhere' / '.git'}\n", encoding="utf-8")
+    code, out = run(capsys, clone, "cleanup", "--worktree", str(home), gh_run=FakeRunner(), run_id=None)
+    assert code == 1 and "not a worktree git registered" in out["error"], out
+    assert (home / "precious.txt").exists()
+    assert not list(clone.parent.glob(home.name + ".removing-*"))
+
+
+def test_registered_accepts_a_real_verification_worktree(repo_pair):
+    """The positive side of `worktrees.registered`: a tree `worktrees.create`
+    made is a registered worktree of this repository."""
+    _, clone = repo_pair
+    g = Git(clone)
+    kept = _verify_tree(clone, g)
+    assert worktrees.registered(g, kept)
+    assert not worktrees.registered(g, clone.parent)
+
+
+def test_a_queued_gate_survives_a_beat_that_times_out(ctx, monkeypatch):
+    """A queued gate's beat can still time out on `registry` (a long claim,
+    or another session's held section). That beat is skipped, not fatal: the
+    next round beats again (30 min of slack).
+    Red proof (sol r4): the `except MutexTimeout` dropped from `_gate_slot`
+    failed here (MutexTimeout instead of the queue's own verdict)."""
+    from agentflow import budget
+    from agentflow.state import MutexTimeout, mutex
+    ticking = Ctx(paths=ctx.paths, run_id="run-test", now=lambda: 1_000_000.0)
+    lock.acquire(ticking, 8, "s", 1)
+    budget.init(ticking, claimed_at=1_000_000.0)
+
+    def busy(c):
+        raise MutexTimeout("mutex 'registry' still held")
+
+    monkeypatch.setattr(lock, "beat", busy)
+    monkeypatch.setattr(cli, "QUEUE_POLL_S", 0.01)
+    monkeypatch.setattr(cli, "QUEUE_BEAT_S", 0)
+    ctx.paths.config.write_text(json.dumps({"gate_wait_minutes": 0}), encoding="utf-8")
+    with mutex(ctx, "gate-0"):
+        with pytest.raises(cli.GateQueued) as e:
+            cli._run_gate(ticking, "check-goldens", [sys.executable, "-c", "pass"], 1, ctx.paths.root)
+    assert e.value.failure == "gate-queue-timeout"
 
 
 def test_cleanup_refuses_a_verify_named_directory_outside_the_checkouts_parent(
@@ -3573,8 +3817,7 @@ def test_cleanup_refuses_a_verify_named_directory_outside_the_checkouts_parent(
     # ...and the SAME name inside the checkout's parent is still accepted, so
     # the conjunct narrowed the path rather than closing the documented exit.
     g = Git(clone)
-    kept = worktrees.create(g, worktrees.verify_path(clone),
-                            g.rev("master"))
+    kept = _verify_tree(clone, g)
     code, out = run(capsys, clone, "cleanup", "--worktree", str(kept),
                     gh_run=FakeRunner(), run_id="run-test")
     assert code == 0 and out["removed"] == str(kept), out
@@ -3770,13 +4013,13 @@ def test_a_recovery_follow_through_that_dies_mid_gates_is_recoverable_again(
     # alone, so a lock born stale is one any concurrent tick's preflight would
     # report as recoverable while the follow-through is still running.
     assert follow.heartbeat == first_tick, follow
-    assert not lock.is_stale(follow, first_tick)
+    assert not lock.is_stale(follow, first_tick, None)
 
     # POST-MERGE DIES MID-GATES. That leaves exactly this: the follow-through
     # lock still on disk, no HALT, no terminal incident. Nothing to simulate
     # beyond letting the clock run past the heartbeat.
     second_tick = first_tick + lock.STALE_SECONDS + 1.0
-    assert lock.is_stale(follow, second_tick)
+    assert lock.is_stale(follow, second_tick, None)
     monkeypatch.setenv("AGENTFLOW_NOW", str(second_tick))
     # The blocked-crashed gh calls are stubbed so a REGRESSION fails on the
     # assertion below rather than on a missing fake -- a 404 from FakeRunner
@@ -3872,7 +4115,7 @@ from agentflow import lock
 from agentflow.state import Ctx, Paths
 ctx = Ctx(Paths(ROOT), run_id=f"rec-{TAG}", now=lambda: 1_000_000.0)
 stale = lock.for_issue(ctx, 8)          # both sessions see it stale, BEFORE the barrier
-assert lock.is_stale(stale, ctx.now())
+assert lock.is_stale(stale, ctx.now(), ctx.awake_now())
 slow_reads("issue-8.json")
 barrier()
 try:

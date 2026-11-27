@@ -24,6 +24,22 @@ def test_run_captures_exit_code_and_log(ctx, tmp_path):
     assert "hello" in log.read_text()
 
 
+def test_a_beat_that_times_out_does_not_end_the_child(ctx, tmp_path):
+    """A beat can time out on `registry` (since TLS-122 `beat` takes it, and
+    another session may hold it past the timeout). The supervisor skips that
+    beat and keeps the gate running.
+    Red proof (sol r4): the `except MutexTimeout` dropped from `supervise.run`
+    failed here (MutexTimeout out of `run`)."""
+    from agentflow.state import MutexTimeout
+
+    def busy(c):
+        raise MutexTimeout("mutex 'registry' still held")
+
+    r = supervise.run(ctx, [sys.executable, "-c", "import time; time.sleep(0.6)"], cwd=tmp_path,
+                      log_path=tmp_path / "z.log", timeout_s=30, beat=busy, beat_every=0.2)
+    assert r.exit_code == 0 and not r.timed_out
+
+
 def test_run_beats_while_child_runs(ctx, tmp_path):
     beats = []
     r = supervise.run(ctx, [sys.executable, "-c", "import time; time.sleep(0.6)"], cwd=tmp_path,

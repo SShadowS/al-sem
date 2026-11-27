@@ -154,8 +154,8 @@ def _beat_if_owner(ctx: Ctx):
 
 def _lease_rows(ctx: Ctx) -> list[dict]:
     """Every lease, with whether it is stale, for `preflight` and `status`."""
-    now = ctx.now()
-    return [{**asdict(lk), "stale": lock.is_stale(lk, now)} for lk in lock.all_locks(ctx)]
+    now, aw = ctx.now(), ctx.awake_now()
+    return [{**asdict(lk), "stale": lock.is_stale(lk, now, aw)} for lk in lock.all_locks(ctx)]
 
 
 def _docs_only(git: Git, base: str, head: str) -> bool:
@@ -281,8 +281,11 @@ def _gate_slot(ctx: Ctx, name: str, halt_aborts: bool, stack: ExitStack) -> floa
         waited = time.monotonic() - start
         owner = not ctx.dry_run and lock.own(ctx) is not None
         if owner and time.monotonic() - last_beat >= QUEUE_BEAT_S:
-            lock.beat(ctx)
-            last_beat = time.monotonic()
+            try:
+                lock.beat(ctx)
+                last_beat = time.monotonic()
+            except MutexTimeout:
+                pass        # `registry` busy past its timeout: beat next round (30 min slack)
         if halt_aborts:
             if lock.halted(ctx) is not None:
                 raise GateQueued(HALTED_WHILE_QUEUED, waited)
@@ -464,17 +467,17 @@ def cmd_fetch(args, ctx, gh, git):
 
 
 def cmd_recover(args, ctx, gh, git):
-    now = ctx.now()
+    now, aw = ctx.now(), ctx.awake_now()
     if args.issue is not None:
         lk = lock.for_issue(ctx, args.issue)
         if lk is None:
             raise Fail({"error": "no stale lock", "issue": args.issue})
-        if not lock.is_stale(lk, now):
+        if not lock.is_stale(lk, now, aw):
             raise Fail({"error": f"lock-live:{lk.run_id}", "issue": args.issue})
     else:
         # Today's call shape still works when there is one stale lease. With
         # more, guessing would recover the wrong issue: name one.
-        stale = [x for x in lock.all_locks(ctx) if lock.is_stale(x, now)]
+        stale = [x for x in lock.all_locks(ctx) if lock.is_stale(x, now, aw)]
         if not stale:
             raise Fail({"error": "no stale lock"})
         if len(stale) > 1:
@@ -802,6 +805,8 @@ def cmd_charge(args, ctx, gh, git):
     except budget.BudgetExceeded as e:
         return _emit({"exhausted": e.key}, 1)
     except budget.DeadlineExceeded:
+        # The cap counts awake time since TLS-122; the value keeps its old name
+        # on purpose, because the conductor branches on it (see WALL_CLOCK_SECONDS).
         return _emit({"exhausted": "wall-clock"}, 1)
 
 
@@ -1421,6 +1426,7 @@ def cmd_post_merge(args, ctx, gh, git):
     results: dict = {}
     timeouts: list[str] = []
     verify_wt = worktrees.verify_path(ctx.paths.root)
+    verify_token = None        # this attempt's reservation; teardown needs it (TLS-122 sol r14)
     ok, revert, halt, restore_failed, original_exc = True, None, None, None, None
     tree_anomaly: list[str] = []
     tree_anomaly_total = 0
@@ -1477,7 +1483,7 @@ def cmd_post_merge(args, ctx, gh, git):
             # sibling call site in `recovery.post_merge_failure` has always
             # been arranged this way.
             try:
-                worktrees.create(git, verify_wt, args.merge_sha)
+                verify_token = worktrees.create(ctx, git, verify_wt, args.merge_sha)
             except GitError as e:
                 raise Fail({"error": f"verify-worktree-failed: {e}"})
             for name, cmd, minutes in gate_list:
@@ -1579,15 +1585,16 @@ def cmd_post_merge(args, ctx, gh, git):
             # rides out in `halt.retained_worktree`; `agentflow cleanup
             # --worktree <path>` removes it once a human has looked.
             #
-            # KNOWN LIMIT, stated rather than discovered later: the retained
-            # tree is NOT permanent. `worktrees.verify_path` is ONE fixed
-            # path (see its docstring for why), and `worktrees.create`
-            # destroys whatever sits there before checking out -- so the NEXT
-            # post-merge, of any merge, reclaims it and the evidence is gone.
-            # That can only follow an operator clearing HALT, i.e. someone
-            # who has been told the tree is there; it is pinned at the unit
-            # level by `test_create_replaces_a_leftover_directory_...`.
-            removed = False if retain_verify_wt else worktrees.destroy(git, verify_wt)
+            # BY DESIGN, the retained tree is NOT permanent.
+            # `worktrees.verify_path` is ONE fixed path (see its docstring for
+            # why), and `worktrees.create` moves a leftover verification tree
+            # (a registered worktree, as this one is) aside and deletes it
+            # before checking out -- so the NEXT post-merge, of any merge,
+            # reclaims it and the evidence is gone. That can only follow an
+            # operator clearing HALT, i.e. someone who has been told the tree
+            # is there. (An occupant git has not registered is refused
+            # instead, never deleted: TLS-122 sol r12.)
+            removed = False if retain_verify_wt else worktrees.remove(ctx, git, verify_wt, verify_token)
         if killed is not None:
             # HALT, never revert: the same routing a dirty tree gets, and for
             # the same reason. Automatic revert requires a gate to have
@@ -1857,8 +1864,8 @@ def cmd_cleanup(args, ctx, gh, git):
     # this checkout, and its post-merge may own that very tree. Only
     # staleness opens the carve-out, and only for this one route, which
     # cannot touch a branch or a merge SHA. This mirrors `lock.require_operator`
-    # (lock.py:144-149) and `cmd_preflight`, both of which fail on a LIVE lock
-    # and deliberately let a stale one through.
+    # and `cmd_preflight`, both of which fail on a LIVE lock and deliberately
+    # let a stale one through.
     #
     # With several leases, the fence is per tree. An ISSUE worktree
     # (`al-sem-issue-<N>-a<k>`) is fenced by issue N's lease only: a sibling
@@ -1897,25 +1904,71 @@ def cmd_cleanup(args, ctx, gh, git):
             raise Fail({"error": "a verification worktree is detached: "
                                  "--branch, --merge-sha and --spike do not apply",
                         "worktree": args.worktree}, 2)
-        # THE LOCATION CONJUNCT. `worktrees._guard` proves the NAME, and that
-        # is the only thing standing between this recursive delete and an
-        # arbitrary path -- but this is the one `destroy` call whose path comes
-        # from ARGV. Every other caller passes a path `worktrees.verify_path`
-        # built, so location is guaranteed there by construction and here by
-        # nothing. `recovery._refuse_unowned_path` states the rule this
-        # restores: TWO conjuncts, because either alone is close to nothing --
-        # `U:/Git` holds ~230 sibling directories, nearly all of them git
-        # repositories, so "is a sibling of the checkout" is not ownership, and
-        # a matching name anywhere else on disk is not ownership either.
+        # THE LOCATION CONJUNCT, the first of the checks below. This is the one
+        # removal of the verification tree whose path comes from ARGV; every
+        # other caller passes the path `worktrees.verify_path` built. The path
+        # must sit in this checkout's parent, then be this ROOT's canonical
+        # tree path (compared without resolving links, not a symlink), and
+        # under `registry` the guarded step (`worktrees._take_owned_held`)
+        # also requires this repository's worktree registration and a
+        # reservation it may reclaim. `worktrees._guard` (the name prefix)
+        # alone is close to nothing: `U:/Git` holds ~230 sibling directories,
+        # nearly all of them git repositories.
         target = Path(args.worktree).resolve()
         if target.parent != ctx.paths.root.parent.resolve():
             raise Fail({"error": "refusing a verification worktree outside this "
                                  "checkout's parent directory",
                         "worktree": str(target),
                         "expected_parent": str(ctx.paths.root.parent.resolve())})
-        if not worktrees.destroy(git, target):
-            raise Fail({"error": f"could not remove {args.worktree}"})
-        return _emit({"removed": args.worktree})
+        # ONLY THE CANONICAL TREE, as given, never through a link (sol r10): the
+        # path is compared WITHOUT resolving symlinks, and a symlink is refused,
+        # so a link at the fixed path cannot steer the delete to another
+        # verification-prefixed sibling, and no other sibling is removed here.
+        canonical = worktrees.verify_path(ctx.paths.root)
+        target = Path(os.path.abspath(args.worktree))
+        if target != canonical:
+            raise Fail({"error": "only the verification tree itself can be removed this way",
+                        "worktree": str(target), "expected": str(canonical)})
+        if target.is_symlink():
+            raise Fail({"error": "refusing a symlink at the verification tree's path",
+                        "worktree": str(target)})
+        # The DECISION, under mutex `registry` (sol r4): between the unlocked
+        # check above and the delete, the lane holder could beat or a new run
+        # take the lane. Under `registry` neither can happen until the tree is
+        # off its fixed path. Only the DETACH (one rename) happens under it; the
+        # slow delete and
+        # `git worktree prune` run after it is released (sol r5), so no other
+        # run's beat waits on a recursive delete.
+        with mutex(ctx, "registry"):
+            lane, state = lock.lane_state_locked(ctx)
+            if state == "busy":
+                raise lock.FenceError(f"merge lane is held by live run {lane['run_id']}, "
+                                      f"context is {ctx.run_id}")
+            # OWNERSHIP from outside the tree (sol r11) and the move aside, in the
+            # one guarded step every lifecycle operation on this path shares
+            # (`worktrees._take_owned_held`, sol r12/r13): it also refuses a tree
+            # another running invocation reserved. The contract: the
+            # verification-tree path is reserved for agentflow, and a writer
+            # outside its `registry` lock is outside the trust model.
+            try:
+                tomb = worktrees._take_owned_held(ctx, git, target)
+            except worktrees.NotOurs as e:
+                raise Fail({"error": f"refusing to remove the verification tree: {e}",
+                            "worktree": str(target)})
+            except OSError as e:
+                raise Fail({"error": f"could not move {args.worktree} aside: {e}"})
+        if tomb is not None and not worktrees.destroy(git, tomb):
+            raise Fail({"error": f"could not remove {tomb} (moved aside from {args.worktree})"})
+        # What an earlier cleanup that died between its rename and its delete
+        # may have left: REPORTED, never deleted (sol r10). Nothing on disk
+        # proves agentflow made it, so removing it is the operator's call.
+        out = {"removed": args.worktree}
+        left = worktrees.leftover_tombstones(canonical)
+        if left:
+            out["tombstones_left"] = left
+            out["hint"] = ("not removed: agentflow cannot prove it made these; inspect each "
+                           "and delete it by hand if it is a leftover verification tree")
+        return _emit(out)
     # `is None` -- ABSENT, not empty. `--branch ""` was given and is wrong,
     # and `_validate_branch_name` below is the guard that says so ("not a
     # plain branch name"); turning it into a usage error here would retire
