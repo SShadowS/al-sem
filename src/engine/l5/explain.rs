@@ -3673,7 +3673,7 @@ impl RunBy {
         let field_trigger = matches!(r.object_type.as_str(), "Table" | "TableExtension")
             && r.enclosing_member.is_some()
             && matches!(name.as_str(), "onvalidate" | "onlookup" | "onassistedit");
-        if field_trigger && let Some(rb) = Self::field(ix, r, &name, opts) {
+        if field_trigger && let Some(rb) = Self::field(ix, rows, r, &name, opts) {
             return Some(rb);
         }
         // Round 2 G4 (W3 rows): a table's record trigger and a page trigger.
@@ -3781,8 +3781,16 @@ impl RunBy {
     /// field's table as potential UI surfaces. `None` when the field is not
     /// found in the model's tables.
     /// The table a table or table-extension routine `r` belongs to (the
-    /// table's id is `<app>/table/<number>`, not the object id).
-    fn trigger_table<'m>(ix: &Indexes<'m>, r: &ModelRoutine) -> Option<&'m ModelTable> {
+    /// table's id is `<app>/table/<number>`, not the object id). `rows`: the
+    /// card's routine rows (`r` is the first); for a tableextension, every
+    /// row's own declaring row (its `#if` alternative) must extend the same
+    /// table, else none (ENG-218, sol r2: one card does not list another
+    /// alternative's sites under this one's table).
+    fn trigger_table<'m>(
+        ix: &Indexes<'m>,
+        rows: &[usize],
+        r: &ModelRoutine,
+    ) -> Option<&'m ModelTable> {
         let model = ix.model;
         match r.object_type.as_str() {
             "Table" => model.workspace.tables.iter().find(|t| {
@@ -3791,18 +3799,25 @@ impl RunBy {
                     && t.table_number == r.object_number
             }),
             _ => {
-                // ENG-218: the table the routine's own declaring row (its `#if`
-                // alternative) extends, as its stub records it (the base its
-                // app sees), not a model-wide match of the extended name (sol
-                // r1, Fable r1: another alternative's base is no answer).
+                // ENG-218: the table each row's declaring row extends, as its
+                // stub records it (the base its app sees), not a model-wide
+                // match of the extended name (sol r1, Fable r1: another
+                // alternative's base is no answer).
                 let tables = table_by_id_preferring_real(&model.workspace.tables);
                 let objects = &model.workspace.objects;
-                let declaring = ix.data.declaring.of(objects, r)?;
-                let row = objects.iter().position(|o| std::ptr::eq(o, declaring))?;
-                let base = crate::program::model::extension_fields::extension_bases(
+                let bases = crate::program::model::extension_fields::extension_bases(
                     objects,
                     &model.workspace.tables,
-                )[row]?;
+                );
+                let base_of = |routine: &ModelRoutine| -> Option<&'m str> {
+                    let declaring = ix.data.declaring.of(objects, routine)?;
+                    let row = objects.iter().position(|o| std::ptr::eq(o, declaring))?;
+                    bases[row]
+                };
+                let base = base_of(r)?;
+                if rows.iter().any(|&i| base_of(ix.row(i)) != Some(base)) {
+                    return None;
+                }
                 tables.get(base).copied()
             }
         }
@@ -3859,7 +3874,7 @@ impl RunBy {
     ) -> Option<RunBy> {
         use crate::program::model::taxonomy::DispatchKind;
         let model = ix.model;
-        let table = Self::trigger_table(ix, r)?;
+        let table = Self::trigger_table(ix, rows, r)?;
         let ids: HashSet<&str> = rows.iter().map(|&i| ix.row(i).id.as_str()).collect();
         let mut sites: Vec<(String, u32, String, String)> = Vec::new();
         for e in model.calls.edges.iter().filter(|e| {
@@ -4076,11 +4091,17 @@ impl RunBy {
         }
     }
 
-    fn field(ix: &Indexes<'_>, r: &ModelRoutine, name: &str, opts: RenderOpts) -> Option<RunBy> {
+    fn field(
+        ix: &Indexes<'_>,
+        rows: &[usize],
+        r: &ModelRoutine,
+        name: &str,
+        opts: RenderOpts,
+    ) -> Option<RunBy> {
         use crate::engine::l4::field_touches::{field_key, field_touches};
         use crate::program::body::record_op::FieldUse;
         let model = ix.model;
-        let table = Self::trigger_table(ix, r)?;
+        let table = Self::trigger_table(ix, rows, r)?;
         let member = field_key(r.enclosing_member.as_deref()?);
         let field = table.fields.iter().find(|f| field_key(&f.name) == member)?;
         // Potential UI surfaces: the pages whose source table is the field's

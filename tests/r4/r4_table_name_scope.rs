@@ -127,6 +127,11 @@ table 50220 "Ws Only"
     fields
     {
         field(1; "Entry No."; Integer) { }
+        field(2; "A Count"; Integer)
+        {
+            FieldClass = FlowField;
+            CalcFormula = count("Keyed");
+        }
     }
 }
 
@@ -216,11 +221,40 @@ tableextension 50260 "Ws NS Ext" extends "No. Series"
     }
 }
 
+#if TWO
+tableextension 50290 "Ws Two Base Ext" extends "Ws Only"
+{
+    fields
+    {
+        field(50290; "Ws Two"; Integer)
+        {
+            trigger OnValidate()
+            begin
+            end;
+        }
+    }
+}
+#else
+tableextension 50290 "Ws Two Base Ext" extends "Keyed"
+{
+    fields
+    {
+        field(50290; "Ws Two"; Integer)
+        {
+            trigger OnValidate()
+            begin
+            end;
+        }
+    }
+}
+#endif
+
 #if NEW
 tableextension 50280 "Ws Moving Ext" extends "Ws Only"
 {
     trigger OnBeforeInsert()
     begin
+        Rec.SetAutoCalcFields("A Count");
     end;
 }
 #else
@@ -273,7 +307,17 @@ table 50230 "Keyed"
     fields
     {
         field(1; "Entry No."; Integer) { }
+        field(2; "K Count"; Integer)
+        {
+            FieldClass = FlowField;
+            CalcFormula = count("Ws Only");
+        }
     }
+
+    procedure KeyedFind()
+    begin
+        Rec.FindFirst();
+    end;
 }
 
 #if ONE
@@ -959,7 +1003,10 @@ fn a_table_name_binds_as_the_resolver_binds_it_in_the_model() {
 /// bound from the host table's app instead of the field's declaring app
 /// fails "an extension field's formula binds from its declaring app"; a
 /// table and its extensions sharing `Rec` by NAME again (`object_groups`)
-/// fails "another app's extension of a same-named table shares no Rec".
+/// fails "another app's extension of a same-named table shares no Rec";
+/// sharing through the union of every row of an object id (not the routine's
+/// declaring row) fails "a split extension's alternative shares Rec only
+/// with its own base".
 #[test]
 fn flowfield_and_recordref_tables_bind_as_the_resolver_binds_them() {
     use al_sem::program::model::flow_fields::FlowFieldSource;
@@ -1042,6 +1089,20 @@ fn flowfield_and_recordref_tables_bind_as_the_resolver_binds_them() {
         auto,
         "precondition: Unrelated's SetAutoCalcFields is in the model"
     );
+    // sol r2: the workspace's split "Ws Moving Ext" sets
+    // `SetAutoCalcFields("A Count")` in its "Ws Only" alternative only; the
+    // "Keyed" table's own retrieval shares nothing with it (each routine
+    // shares through its own declaring row, not every row of the id).
+    let keyed_reads: Vec<String> = routine(WS, "KeyedFind")
+        .record_operations
+        .iter()
+        .filter(|op| op.op == "FindFirst")
+        .flat_map(|op| op.flow_field_reads.iter().map(|r| r.field.clone()))
+        .collect();
+    assert!(
+        !keyed_reads.iter().any(|f| f == "A Count"),
+        "a split extension's alternative shares Rec only with its own base: {keyed_reads:?}"
+    );
 }
 
 /// ENG-218: "the triggers of table T" (cross_rules' `table_triggers`) are
@@ -1054,7 +1115,9 @@ fn flowfield_and_recordref_tables_bind_as_the_resolver_binds_them() {
 /// Shared: its own extension's trigger only"; `merge_extension_fields` not
 /// setting `extends_table_id` fails it too (no extension trigger at all);
 /// keeping every routine of a matching object id (not only the declaring
-/// row's) fails "each base its own alternative's trigger".
+/// row's) fails "each base its own alternative's trigger"; pairing an id's
+/// rows with its stubs in reverse fails "each table's trigger is its own
+/// alternative's".
 #[test]
 fn table_triggers_are_those_of_the_extensions_of_this_table() {
     use al_sem::engine::l5::cross_rules::{CrossRules, CrossRulesIndex};
@@ -1114,7 +1177,19 @@ fn table_triggers_are_those_of_the_extensions_of_this_table() {
         (1, 1),
         "each base its own alternative's trigger: {new_rows:?} {old_rows:?}"
     );
-    assert_ne!(new_rows, old_rows, "the two alternatives' rows differ");
+    // Fable r2: and each row is its own base's alternative (the declaring row
+    // extends that table), not merely a different row.
+    let declaring = al_sem::program::model::declaring::DeclaringObjects::new(&ws.objects);
+    let target = |rows: &[usize]| {
+        declaring
+            .of(&ws.routines[rows[0]])
+            .and_then(|d| d.extends_target_name.clone())
+    };
+    assert_eq!(
+        (target(&new_rows), target(&old_rows)),
+        (Some("Ws Only".to_string()), Some("Keyed".to_string())),
+        "each table's trigger is its own alternative's"
+    );
 }
 
 /// ENG-218: `explain` of a tableextension field's `OnValidate` finds the
@@ -1198,5 +1273,22 @@ fn explain_takes_each_alternatives_own_base() {
         v["cards"][0]["runBy"]["kind"].as_str(),
         Some("not-listed"),
         "the unknown alternative names no table: {v:#}"
+    );
+}
+
+/// ENG-218 (sol r2): "Ws Two Base Ext" extends "Ws Only" in one `#if`
+/// alternative and "Keyed" in the other, both known. explain's one card
+/// covers both rows, so it names neither table rather than listing the other
+/// alternative's sites under the first one's.
+/// DISCRIMINATION (2026-11-27, break made with Edit, run red, restored,
+/// green): reading only the card's first row gives "field-validate" on
+/// "Ws Only" and fails "alternatives with different bases name no table".
+#[test]
+fn explain_declines_a_card_whose_alternatives_extend_different_tables() {
+    let v = explain_json(r#"TableExtension "Ws Two Base Ext"."Ws Two"::OnValidate"#);
+    assert_eq!(
+        v["cards"][0]["runBy"]["kind"].as_str(),
+        Some("not-listed"),
+        "alternatives with different bases name no table: {v:#}"
     );
 }

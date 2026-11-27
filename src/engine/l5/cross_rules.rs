@@ -299,6 +299,11 @@ pub struct CrossRules<'m> {
     stack: RefCell<Vec<(usize, Kind)>>,
     expansions: Cell<usize>,
     truncated: Cell<bool>,
+    /// ENG-218 (Fable r2): built on first use by [`Self::table_triggers`],
+    /// once per walk, not per call: each tableextension row's own base, and
+    /// the declaring row of a routine.
+    extension_bases: std::cell::OnceCell<Vec<Option<&'m str>>>,
+    declaring: std::cell::OnceCell<crate::program::model::declaring::DeclaringObjects<'m>>,
 }
 
 fn pos_start(a: &PAnchor) -> (u32, u32) {
@@ -625,6 +630,8 @@ impl<'m> CrossRules<'m> {
             stack: RefCell::new(Vec::new()),
             expansions: Cell::new(0),
             truncated: Cell::new(false),
+            extension_bases: std::cell::OnceCell::new(),
+            declaring: std::cell::OnceCell::new(),
         }
     }
 
@@ -1315,8 +1322,9 @@ impl<'m> CrossRules<'m> {
         // declaring row (its `#if` alternative) is one of them (sol r1: a
         // split extension's other alternative may extend another table).
         let ws = &self.model.workspace;
-        let bases =
-            crate::program::model::extension_fields::extension_bases(&ws.objects, &ws.tables);
+        let bases = self.extension_bases.get_or_init(|| {
+            crate::program::model::extension_fields::extension_bases(&ws.objects, &ws.tables)
+        });
         let mut objects: Vec<&str> = Vec::new();
         let mut extension_rows: Vec<&crate::program::model::workspace::ModelObject> = Vec::new();
         for (row, o) in ws.objects.iter().enumerate() {
@@ -1332,7 +1340,9 @@ impl<'m> CrossRules<'m> {
         }
         objects.sort_unstable();
         objects.dedup();
-        let declaring = crate::program::model::declaring::DeclaringObjects::new(&ws.objects);
+        let declaring = self
+            .declaring
+            .get_or_init(|| crate::program::model::declaring::DeclaringObjects::new(&ws.objects));
         let mut out: Vec<usize> = objects
             .iter()
             .flat_map(|o| self.ix.rows_of_object.get(*o).into_iter().flatten())

@@ -256,52 +256,16 @@ pub fn merge_extension_fields(
             });
         }
     }
-
-    // ENG-218 (sol r1): an extension whose stub count disagrees with its rows
-    // shares a stub between rows; it names a base only when every row
-    // resolved the same one (else the last row's would stand for all).
-    let mut row_bases: std::collections::HashMap<&str, Vec<Option<&str>>> =
-        std::collections::HashMap::new();
-    for (row, o) in objects.iter().enumerate() {
-        if o.object_type == "TableExtension" {
-            row_bases
-                .entry(o.id.as_str())
-                .or_default()
-                .push(base_ids[row].as_deref());
-        }
-    }
-    let mut stubs_of: std::collections::HashMap<String, Vec<usize>> =
-        std::collections::HashMap::new();
-    for (i, t) in workspace.tables.iter().enumerate() {
-        if t.is_extension_stub {
-            stubs_of.entry(t.id.clone()).or_default().push(i);
-        }
-    }
-    for o in objects.iter().filter(|o| o.object_type == "TableExtension") {
-        let bases = &row_bases[o.id.as_str()];
-        let Some(stubs) = stubs_of.get(&encode_table_id(&o.app_guid, o.object_number)) else {
-            continue;
-        };
-        if stubs.len() == bases.len() {
-            continue;
-        }
-        let agreed = bases
-            .first()
-            .copied()
-            .flatten()
-            .filter(|b| bases.iter().all(|x| *x == Some(*b)));
-        for &i in stubs {
-            workspace.tables[i].extends_table_id = agreed.map(str::to_string);
-        }
-    }
 }
 
-/// ENG-218: per object ROW of `ws.objects`, the table a tableextension row
+/// ENG-218: per object ROW of `objects`, the table a tableextension row
 /// extends: its own `#if` alternative's stub's `extends_table_id` (the k-th
 /// row of an id takes the k-th stub, as [`merge_extension_fields`] pairs
-/// them), or, when the stub count disagrees with the rows, the shared stub's
-/// (named only when every row agreed). `None` for every other row and for an
-/// extension whose base is not known. One pass over objects and tables.
+/// them). Assembly pushes one stub per source tableextension row
+/// (`workspace.rs`, with the object row), and a symbol-only extension has no
+/// stub; so a count that disagrees is not produced, and is "not known" here
+/// (sol r2: no row may answer for another). `None` for every other row and
+/// for an extension whose base is not known. One pass over objects and tables.
 #[must_use]
 pub fn extension_bases<'t>(
     objects: &[super::workspace::ModelObject],
@@ -334,12 +298,10 @@ pub fn extension_bases<'t>(
                 return None;
             }
             let stubs = stubs_of.get(encode_table_id(&o.app_guid, o.object_number).as_str())?;
-            let stub = if stubs.len() == rows_of[o.id.as_str()] {
-                stubs[alternative[row]]
-            } else {
-                *stubs.first()?
-            };
-            tables[stub].extends_table_id.as_deref()
+            if stubs.len() != rows_of[o.id.as_str()] {
+                return None;
+            }
+            tables[stubs[alternative[row]]].extends_table_id.as_deref()
         })
         .collect()
 }
@@ -360,33 +322,37 @@ mod tests {
         o
     }
 
-    /// ENG-218 (sol r1): an `#if`-split tableextension whose two rows extend
-    /// different tables but whose stubs did not split (one stub for two rows)
-    /// names no base; its stub would otherwise carry the last row's.
-    /// Hand-stated: two rows of one id, one stub.
-    /// DISCRIMINATION (2026-11-27, break then restored, green): without the
-    /// agreement pass the stub names "x/table/2", failing "rows disagree".
+    /// ENG-218 (sol r2): two rows of one tableextension id over ONE stub (a
+    /// count assembly does not produce) name no base for either row: no row
+    /// answers for another. With a stub per row, each row its own.
+    /// DISCRIMINATION (2026-11-27, break then restored, green): reading the
+    /// shared stub for every row fails "a shared stub answers for no row".
     #[test]
-    fn a_shared_stub_names_a_base_only_when_its_rows_agree() {
+    fn each_row_reads_its_own_stub_and_a_shared_one_answers_for_none() {
         let scope = TableScope::stated(&[("e", &["e", "x"])], &[]);
-        let entities = |targets: [&str; 2]| {
+        let bases = |stubs: usize| {
+            let mut tables = vec![tab("x", 1, "A", false), tab("x", 2, "B", false)];
+            tables.extend((0..stubs).map(|_| tab("e", 10, "E", true)));
             let mut ws = ModelEntities {
-                objects: targets.into_iter().map(ext_row).collect(),
-                tables: vec![
-                    tab("x", 1, "A", false),
-                    tab("x", 2, "B", false),
-                    tab("e", 10, "E", true),
-                ],
+                objects: vec![ext_row("A"), ext_row("B")],
+                tables,
                 routines: Vec::new(),
             };
             super::merge_extension_fields(&mut ws, &scope);
-            ws.tables[2].extends_table_id.clone()
+            super::extension_bases(&ws.objects, &ws.tables)
+                .into_iter()
+                .map(|b| b.map(str::to_owned))
+                .collect::<Vec<_>>()
         };
-        assert_eq!(entities(["A", "B"]), None, "rows disagree");
         assert_eq!(
-            entities(["A", "A"]).as_deref(),
-            Some("x/table/1"),
-            "rows agree"
+            bases(2),
+            vec![Some("x/table/1".to_owned()), Some("x/table/2".to_owned())],
+            "each row its own stub's base"
+        );
+        assert_eq!(
+            bases(1),
+            vec![None, None],
+            "a shared stub answers for no row"
         );
     }
 }

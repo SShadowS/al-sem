@@ -567,6 +567,11 @@ fn auto_calc_calls(routine: &ModelRoutine) -> Vec<(String, String, bool)> {
 /// extensions as `protected var`).
 struct Sharing<'a> {
     by_object: HashMap<&'a str, (Vec<String>, bool)>,
+    /// ENG-218 (sol r2): each object ROW's own groups, read for a routine
+    /// through its declaring row (an `#if` alternative shares only what its
+    /// own build has).
+    by_row: HashMap<*const ModelObject, (Vec<String>, bool)>,
+    declaring: super::declaring::DeclaringObjects<'a>,
 }
 
 impl<'a> Sharing<'a> {
@@ -575,10 +580,12 @@ impl<'a> Sharing<'a> {
         // own alternative's stub says it extends.
         let bases = super::extension_fields::extension_bases(objects, tables);
         let mut by_object: HashMap<&'a str, (Vec<String>, bool)> = HashMap::new();
+        let mut by_row: HashMap<*const ModelObject, (Vec<String>, bool)> = HashMap::new();
         for (row, o) in objects.iter().enumerate() {
             let (groups, base) = object_groups(o, bases[row]);
-            // An `#if`-split object has a row per arm under one id: their
-            // groups add up.
+            by_row.insert(std::ptr::from_ref(o), (groups.clone(), base));
+            // An id's rows' groups add up, for a routine whose declaring row
+            // is not found.
             let entry = by_object.entry(o.id.as_str()).or_default();
             for g in groups {
                 if !entry.0.contains(&g) {
@@ -587,7 +594,11 @@ impl<'a> Sharing<'a> {
             }
             entry.1 |= base;
         }
-        Sharing { by_object }
+        Sharing {
+            by_object,
+            by_row,
+            declaring: super::declaring::DeclaringObjects::new(objects),
+        }
     }
 
     /// The scopes record `key` is shared in, seen from `routine`: none for
@@ -595,7 +606,11 @@ impl<'a> Sharing<'a> {
     /// for a base object's global); the group for a name the routine does
     /// not declare (the implicit `Rec`).
     fn scopes(&self, routine: &ModelRoutine, key: &str, this: bool) -> Vec<String> {
-        let own = self.by_object.get(routine.object_id.as_str());
+        let own = self
+            .declaring
+            .of(routine)
+            .and_then(|d| self.by_row.get(&std::ptr::from_ref(d)))
+            .or_else(|| self.by_object.get(routine.object_id.as_str()));
         let group_scopes = || -> Vec<String> {
             match own {
                 Some((groups, _)) => groups.iter().map(|g| format!("{g}|{key}")).collect(),
