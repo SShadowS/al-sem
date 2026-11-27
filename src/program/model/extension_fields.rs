@@ -125,6 +125,9 @@ pub fn merge_extension_fields(
         };
 
         let base_table_id = workspace.tables[base_idx].id.clone();
+        // ENG-218: the stub says which table it extends, for the readers that
+        // ask "the extensions of table T" (never the extended name).
+        workspace.tables[ext_idx].extends_table_id = Some(base_table_id.clone());
         let mut existing: HashSet<i64> = workspace.tables[base_idx]
             .fields
             .iter()

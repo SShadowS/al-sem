@@ -7471,6 +7471,7 @@ tableextension 50101 \"Cust Ext\" extends Cust
             keys: Vec::new(),
             is_temporary: false,
             is_extension_stub: stub,
+            extends_table_id: None,
         }
     }
 

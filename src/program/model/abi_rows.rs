@@ -110,6 +110,7 @@ pub(crate) fn dep_table_to_l3(t: &ProjectedTable) -> ModelTable {
         // G-5: the ABI projection carries no extension-stub marker; dep tables are
         // treated as real (preserves the pre-G-5 LAST-wins semantics for dep sets).
         is_extension_stub: false,
+        extends_table_id: None,
     }
 }
 

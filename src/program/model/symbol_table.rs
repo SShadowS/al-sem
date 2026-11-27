@@ -159,6 +159,18 @@ impl<'a> SymbolTable<'a> {
         self.one_live_table(found, None)
     }
 
+    /// ENG-218: whether app `from` sees any table named `name`, so a
+    /// [`Self::table_by_name_from`] that declined can say why (it saw two)
+    /// apart from one that found none.
+    pub fn sees_table_named(&self, from: &str, name: &str) -> bool {
+        self.tables_named
+            .get(&name.fold_identifier())
+            .is_some_and(|all| {
+                all.iter()
+                    .any(|&i| self.sees(from, &self.tables[i].app_guid))
+            })
+    }
+
     /// ENG-194 (sol r1): the table NUMBER `n` names in code of app `from`
     /// (dependency symbols give a page's `SourceTable` as a number), as the
     /// resolver binds a number (`ProgramGraph::resolve_object_by_number`):
@@ -364,13 +376,6 @@ impl TableScope {
         TableScope { visible, gone }
     }
 
-    /// No scope: every table of a name counts, none is gone (a model built
-    /// without a program graph, as tests and single objects are).
-    #[must_use]
-    pub fn unscoped() -> TableScope {
-        TableScope::default()
-    }
-
     /// A scope stated by hand (tests): `visible` as (app, apps it sees),
     /// `gone` as table model ids.
     #[cfg(test)]
@@ -405,6 +410,7 @@ pub(crate) mod tests {
             keys: Vec::new(),
             is_temporary: false,
             is_extension_stub: stub,
+            extends_table_id: None,
         }
     }
 

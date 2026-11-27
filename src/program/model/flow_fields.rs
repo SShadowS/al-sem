@@ -360,74 +360,39 @@ fn field_sel(arg: &str) -> FieldSel {
 }
 
 /// The tables of the model, by id (a real table wins over an extension stub,
-/// as `SymbolTable` indexes them) and by name (lowercased). A name is looked up
-/// among real tables first, then among stubs; a name two tables with different
-/// ids share in the same group is `None`: the model keeps no namespace, so the
-/// engine cannot tell which of them a formula names.
+/// as `SymbolTable` indexes them), and by name or number as the program's
+/// resolver binds them, seen from the app the reference is written in
+/// (ENG-218: ENG-194's `SymbolTable::table_by_name_from` /
+/// `table_by_number_from`: the app's dependency closure, a real table over a
+/// stub, a moved/removed table giving way to a live one; two left decline).
 struct Tables<'a> {
     by_id: HashMap<&'a str, &'a ModelTable>,
-    real_by_name: HashMap<String, Option<&'a ModelTable>>,
-    stub_by_name: HashMap<String, Option<&'a ModelTable>>,
-    /// Real tables by number (a RecordRef's `Open(18)`); `None` when two
-    /// apps' tables share the number.
-    real_by_number: HashMap<i64, Option<&'a ModelTable>>,
+    symbols: super::symbol_table::SymbolTable<'a>,
 }
 
 impl<'a> Tables<'a> {
-    fn new(tables: &'a [ModelTable]) -> Self {
+    fn new(tables: &'a [ModelTable], scope: &'a super::symbol_table::TableScope) -> Self {
         let mut by_id: HashMap<&str, &ModelTable> = HashMap::new();
-        let mut real_by_name: HashMap<String, Option<&ModelTable>> = HashMap::new();
-        let mut stub_by_name: HashMap<String, Option<&ModelTable>> = HashMap::new();
-        let mut real_by_number: HashMap<i64, Option<&ModelTable>> = HashMap::new();
         for t in tables {
-            if !t.is_extension_stub {
-                real_by_number
-                    .entry(t.table_number)
-                    .and_modify(|seen| {
-                        if seen.is_some_and(|p| p.id != t.id) {
-                            *seen = None;
-                        }
-                    })
-                    .or_insert(Some(t));
-            }
             let keep_id = by_id
                 .get(t.id.as_str())
                 .is_some_and(|p| !p.is_extension_stub && t.is_extension_stub);
             if !keep_id {
                 by_id.insert(t.id.as_str(), t);
             }
-            let by_name = if t.is_extension_stub {
-                &mut stub_by_name
-            } else {
-                &mut real_by_name
-            };
-            by_name
-                .entry(t.name.fold_identifier())
-                .and_modify(|seen| {
-                    if seen.is_some_and(|p| p.id != t.id) {
-                        *seen = None;
-                    }
-                })
-                .or_insert(Some(t));
         }
         Tables {
             by_id,
-            real_by_name,
-            stub_by_name,
-            real_by_number,
+            symbols: super::symbol_table::SymbolTable::build_scoped(&[], tables, scope),
         }
     }
 
-    /// The table a formula names, or why it is not decided.
-    fn by_name(&self, name: &str) -> Result<&'a ModelTable, &'static str> {
-        let key = name.fold_identifier();
-        match self
-            .real_by_name
-            .get(&key)
-            .or_else(|| self.stub_by_name.get(&key))
-        {
-            Some(Some(t)) => Ok(t),
-            Some(None) => Err(TABLE_AMBIGUOUS),
+    /// The table a formula or RecordRef of app `from` names, or why it is not
+    /// decided: two tables `from` sees decline (ambiguous), none is not loaded.
+    fn by_name(&self, from: &str, name: &str) -> Result<&ModelTable, &'static str> {
+        match self.symbols.table_by_name_from(from, name) {
+            Some(t) => Ok(t),
+            None if self.symbols.sees_table_named(from, name) => Err(TABLE_AMBIGUOUS),
             None => Err(TABLE_NOT_LOADED),
         }
     }
@@ -485,16 +450,18 @@ impl<'a> Tables<'a> {
         }
     }
 
-    /// The table a RecordRef `Open(<literal>)` binding names.
-    fn by_reference(&self, reference: &str, is_name: bool) -> Option<&'a ModelTable> {
+    /// The table a RecordRef `Open(<literal>)` binding in code of app `from`
+    /// names (ENG-218: by number as the resolver binds a number, own app
+    /// first).
+    fn by_reference(&self, from: &str, reference: &str, is_name: bool) -> Option<&ModelTable> {
         if is_name {
-            self.by_name(reference).ok()
+            self.by_name(from, reference).ok()
         } else {
             reference
                 .trim()
                 .parse::<i64>()
                 .ok()
-                .and_then(|n| self.real_by_number.get(&n).copied().flatten())
+                .and_then(|n| self.symbols.table_by_number_from(from, n))
         }
     }
 
@@ -509,7 +476,9 @@ impl<'a> Tables<'a> {
         for formula in &field.calc_formula {
             let source = match calc_formula_table(formula) {
                 None => FlowFieldSource::Undecided(FORMULA_UNREADABLE),
-                Some(table) => match self.by_name(&table) {
+                // ENG-218: the formula is written in the field's declaring app
+                // (an extension field's: the extension's).
+                Some(table) => match self.by_name(&field.declaring_app_id, &table) {
                     Ok(t) => FlowFieldSource::Table {
                         table_id: t.id.clone(),
                         temporary: t.is_temporary,
@@ -726,7 +695,7 @@ fn record_ref_table(
     for b in bindings {
         let t = match b {
             crate::program::recordref_table::Binding::Table { reference, is_name } => tables
-                .by_reference(reference, *is_name)
+                .by_reference(&routine.app_guid, reference, *is_name)
                 .map(|t| t.id.clone()),
             crate::program::recordref_table::Binding::GetTable(v) => routine
                 .record_variables
@@ -943,8 +912,16 @@ fn field_ref_operations(routine: &ModelRoutine, tables: &Tables<'_>) -> Vec<Mode
 /// Write every record operation's [`ModelRecordOperation::flow_field_reads`]
 /// and every routine's [`ModelRoutine::field_ref_operations`] (module doc).
 /// Runs after record types are resolved and extension fields merged.
-pub fn attach_flow_field_reads(workspace: &mut ModelEntities) {
-    let pass = Pass::new(&workspace.tables, &workspace.objects, &workspace.routines);
+pub fn attach_flow_field_reads(
+    workspace: &mut ModelEntities,
+    scope: &super::symbol_table::TableScope,
+) {
+    let pass = Pass::new(
+        &workspace.tables,
+        &workspace.objects,
+        &workspace.routines,
+        scope,
+    );
     for routine in &mut workspace.routines {
         let mut ops = std::mem::take(&mut routine.record_operations);
         pass.attach(routine, &mut ops);
@@ -959,6 +936,7 @@ pub fn attach_flow_field_reads(workspace: &mut ModelEntities) {
 pub fn attach_appended_flow_field_reads(
     workspace: &mut ModelEntities,
     appended: &HashMap<usize, usize>,
+    scope: &super::symbol_table::TableScope,
 ) {
     // A dataset operation's receiver names no variable (no setup reaches it):
     // it alone does not pay for a second pass.
@@ -979,7 +957,12 @@ pub fn attach_appended_flow_field_reads(
     if !any {
         return;
     }
-    let pass = Pass::new(&workspace.tables, &workspace.objects, &workspace.routines);
+    let pass = Pass::new(
+        &workspace.tables,
+        &workspace.objects,
+        &workspace.routines,
+        scope,
+    );
     for (&ri, &from) in appended {
         let routine = &mut workspace.routines[ri];
         let mut ops = routine.record_operations.split_off(from);
@@ -1002,6 +985,7 @@ impl<'a> Pass<'a> {
         tables: &'a [ModelTable],
         objects: &'a [ModelObject],
         routines: &[ModelRoutine],
+        scope: &'a super::symbol_table::TableScope,
     ) -> Self {
         let sharing = Sharing::new(objects);
         let mut shared_auto: HashMap<String, Vec<String>> = HashMap::new();
@@ -1013,7 +997,7 @@ impl<'a> Pass<'a> {
             }
         }
         Pass {
-            tables: Tables::new(tables),
+            tables: Tables::new(tables, scope),
             sharing,
             shared_auto,
         }
@@ -1215,6 +1199,7 @@ codeunit 50102 "C"
             keys: Vec::new(),
             is_temporary: false,
             is_extension_stub: false,
+            extends_table_id: None,
         }
     }
 
@@ -1227,7 +1212,9 @@ codeunit 50102 "C"
             table("flow", vec![(1, "No.", "Normal"), (2, "F", "FlowField")]),
             table("plain", vec![(1, "No.", "Normal")]),
         ];
-        let t = Tables::new(&tables);
+        let scope =
+            crate::program::model::symbol_table::TableScope::stated(&[("app", &["app"])], &[]);
+        let t = Tables::new(&tables, &scope);
         let mut out = Vec::new();
         t.reads_of("flow", "Missing", false, &mut out);
         assert_eq!(

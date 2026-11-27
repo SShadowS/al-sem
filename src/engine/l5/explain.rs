@@ -3791,17 +3791,26 @@ impl RunBy {
                     && t.table_number == r.object_number
             }),
             _ => {
+                // ENG-218: the table the extension's stub says it extends (the
+                // base its own app sees), not a model-wide match of the
+                // extended name; `#if` alternatives that extend different
+                // tables name none.
                 let tables = table_by_id_preferring_real(&model.workspace.tables);
-                let base = ix
-                    .data
-                    .declaring
-                    .of(&model.workspace.objects, r)?
-                    .extends_target_name
-                    .as_deref()?;
-                match resolve_table_selector(model, base) {
-                    Resolution::Resolved(t) => tables.get(t.id.as_str()).copied(),
-                    _ => None,
+                let mut bases = model
+                    .workspace
+                    .tables
+                    .iter()
+                    .filter(|t| {
+                        t.is_extension_stub
+                            && t.app_guid == r.app_guid
+                            && t.table_number == r.object_number
+                    })
+                    .filter_map(|t| t.extends_table_id.as_deref());
+                let base = bases.next()?;
+                if bases.any(|b| b != base) {
+                    return None;
                 }
+                tables.get(base).copied()
             }
         }
     }
