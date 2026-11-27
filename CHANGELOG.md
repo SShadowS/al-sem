@@ -149,7 +149,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   over-limit round. End to end (review r3), the stub perf
   marks one call partial (`STUB_PARTIAL_CALL`): a waivable warm-up build and a
   waivable round total each FAIL with the reason, and speed.json's record and
-  row (and the round-total record) carry `partial`. New
+  row carry `partial` (the round-total row with the reason joined from its
+  call). New
   `ir_cache_acceptance_counts_through_cdo_speeds_parse` runs
   `scripts/ir-cache-acceptance`'s own count path under a stub perf. The
   stub-perf advisory tests now split their counts over

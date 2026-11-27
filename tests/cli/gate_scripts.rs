@@ -4373,8 +4373,9 @@ fn speed_cpu_advisory_needs_covering_counts_and_a_cpu_only_failure() {
 ///   clock: FAIL;
 /// - (TLS-130 review r3, sol) all three at a lower clock, but head's 9th call
 ///   counted partial (STUB_PARTIAL_CALL: its running % summed to 89, counts
-///   whole): no advisory, FAIL saying why; the call's record, head's
-///   round-total record and the round-total row carry `partial`.
+///   whole): no advisory, FAIL saying why; the call's record carries `partial`
+///   and the round-total row the reason joined from it (head's round-total
+///   record is judged in memory, not written to speed.json).
 ///
 /// Mutations (2026-11-21, round 4): the rounds row judged on its medians (one
 /// sample, as a warm-up row) -> "medians of different rounds combined" (red);
@@ -4473,8 +4474,10 @@ fn speed_cpu_advisory_judges_every_round_by_itself() {
 
     // TLS-130 review r3 (sol): the first case's waived round total, with
     // head's 9th call (a round call) counted partial (STUB_PARTIAL_CALL): a
-    // FAIL that says why; the call's record, head's round-total record and the
-    // round-total row carry `partial`.
+    // FAIL that says why; the call's record carries `partial`, and the
+    // round-total row carries the reason joined from that call (head's
+    // round-total record is judged in memory and not written to speed.json,
+    // so the row's text is where the join shows).
     let (dir, code, text) = results.next().unwrap();
     let json: serde_json::Value = serde_json::from_str(
         &std::fs::read_to_string(
@@ -4488,9 +4491,13 @@ fn speed_cpu_advisory_judges_every_round_by_itself() {
     let call = records.iter().any(|r| {
         r["total"] != true && r["side"] == "head" && r["round"] != 0 && r["partial"].is_string()
     });
-    let total = records
-        .iter()
-        .any(|r| r["total"] == true && r["side"] == "head" && r["partial"].is_string());
+    // The joined reason: "head round-total r<k>: <call>: instructions ran 89.00 % ...".
+    let total = json["rows"].as_array().unwrap().iter().any(|r| {
+        r["call"] == "round-total"
+            && r["partial"].as_str().is_some_and(|p| {
+                p.contains("head round-total r") && p.contains(": instructions ran 89.00 %")
+            })
+    });
     let row = json["rows"]
         .as_array()
         .unwrap()
