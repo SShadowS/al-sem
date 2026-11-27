@@ -62,62 +62,204 @@ fn owner_mark() -> &'static str {
     })
 }
 
+/// The start time of `pid` while it runs (not a zombie); `None` when it does
+/// not.
+fn live_start_of(pid: u32) -> Option<String> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let mut f = stat.rsplit_once(") ")?.1.split(' ');
+    let state = f.next()?;
+    let start = f.nth(18)?;
+    (state != "Z").then(|| start.to_string())
+}
+
+/// The environment variable that tells the test binary it runs as a sentinel
+/// ([`slot_test_sentinel`]), with the mark it guards.
+const SENTINEL_VAR: &str = "ALSEM_SLOT_TEST_SENTINEL_FOR";
+
 /// ⟨TLS-135⟩ `cmd` will lead a process group of its own (so [`Reap`] ends its
 /// whole tree) and carries this test process's [`OWNER_VAR`] mark. The first
-/// call starts this process's sentinel: a shell that waits until this test
-/// process is gone (killed outright, as by a stopped landing: no `Drop` runs)
-/// and then kills every process still carrying the mark. On 2026-11-27 killed
-/// test runs left stub gates whose `cargo` waited on a file for ever, and every
-/// real timed acquire waited for that "build".
+/// call starts this process's sentinel: this test binary again, running only
+/// [`slot_test_sentinel`], which waits until this test process is gone (killed
+/// outright, as by a stopped landing: no `Drop` runs) and then kills every
+/// process still carrying the mark. It fails the test loudly when the sentinel
+/// does not start (review r18, sol). On 2026-11-27 killed test runs left stub
+/// gates whose `cargo` waited on a file for ever, and every real timed acquire
+/// waited for that "build".
 pub(crate) fn owned(cmd: &mut std::process::Command) -> &mut std::process::Command {
     use std::os::unix::process::CommandExt;
     static SENTINEL: std::sync::Once = std::sync::Once::new();
     let mark = owner_mark();
     SENTINEL.call_once(|| {
-        let (pid, start) = mark.split_once('.').unwrap();
-        let script = format!(
-            "alive() {{ local f; read -r -a f < <(sed 's/.*) //' /proc/{pid}/stat 2>/dev/null); \
-             [[ \"${{f[19]:-}}\" == {start} && \"${{f[0]:-Z}}\" != Z ]]; }}; \
-             while alive; do sleep 1; done; \
-             for _ in 1 2 3; do \
-               for e in $(grep -lzxF '{OWNER_VAR}={mark}' /proc/[0-9]*/environ 2>/dev/null); do \
-                 p=${{e#/proc/}}; kill -KILL \"${{p%/environ}}\" 2>/dev/null; \
-               done; sleep 0.2; \
-             done"
-        );
-        // A clean environment (TLS-115: no caller's BASH_ENV runs in it).
-        let _ = crate::clean_env::command("bash")
-            .args(["-c", &script])
+        use std::io::BufRead;
+        // A clean environment (TLS-115), unmarked, its own group, so nothing
+        // it guards against can end it.
+        let mut sentinel = crate::clean_env::command(std::env::current_exe().unwrap())
+            .args([
+                "cdo_slot::slot_test_sentinel",
+                "--exact",
+                "--ignored",
+                "--nocapture",
+                "--test-threads=1",
+            ])
             .env_remove(OWNER_VAR)
+            .env(SENTINEL_VAR, mark)
             .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
             .process_group(0)
-            .spawn();
+            .spawn()
+            .expect("start the slot tests' sentinel");
+        // Its ready line, its end without it (EOF), or 60 s: never a hang.
+        let out = sentinel.stdout.take().unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let ready = std::io::BufReader::new(out)
+                .lines()
+                .map_while(Result::ok)
+                // On libtest's "test <name> ... " line: it prints that before
+                // the test runs and ends it with the result.
+                .any(|l| l.ends_with("SENTINEL READY"));
+            let _ = tx.send(ready);
+        });
+        let ready = rx.recv_timeout(std::time::Duration::from_secs(60));
+        assert!(
+            ready == Ok(true),
+            "the slot tests' sentinel did not start: {ready:?}"
+        );
     });
     cmd.process_group(0).env(OWNER_VAR, mark)
 }
 
-/// SIGKILL to every process whose environment names `dir` as CDO_SLOT_DIR.
-fn kill_users(dir: &std::path::Path) -> Vec<u32> {
-    let want = format!("CDO_SLOT_DIR={}", dir.display());
+/// ⟨TLS-135⟩ The sentinel ([`owned`]); run only by it (the test binary with
+/// SENTINEL_VAR set). It says it is ready, waits until the process its mark
+/// names is gone, then kills every process still carrying the mark, three
+/// times over (a process killed while forking may leave a child that the
+/// first sweep missed). Best effort, by design: a descendant that cleared its
+/// environment (`env -i`) carries no mark and is not reached; [`Reap`]'s
+/// group kill covers the processes in a group while the test still runs.
+#[test]
+#[ignore = "the sentinel process, started by owned()"]
+fn slot_test_sentinel() {
+    use std::io::Write;
+    let Ok(mark) = std::env::var(SENTINEL_VAR) else {
+        return;
+    };
+    let (pid, start) = mark.split_once('.').unwrap();
+    let pid: u32 = pid.parse().unwrap();
+    println!("SENTINEL READY");
+    let _ = std::io::stdout().flush();
+    while live_start_of(pid).as_deref() == Some(start) {
+        std::thread::sleep(std::time::Duration::from_secs(1));
+    }
+    for _ in 0..3 {
+        kill_with_env(&format!("{OWNER_VAR}={mark}"));
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+}
+
+/// SIGKILL to every process whose environment holds exactly `want`
+/// (`NAME=value`); the PIDs killed. Verify, then signal, through one pidfd
+/// (review r18, sol): the pidfd is opened FIRST, then the process's
+/// environment is read through /proc, then a null signal through the pidfd
+/// confirms the process the pidfd names still runs (so the PID was not
+/// reused in between, and what was read is its own), and only then the kill
+/// goes through the same pidfd. A process that cannot be verified is skipped.
+fn kill_with_env(want: &str) -> Vec<u32> {
+    let me = std::process::id();
     let mut killed = Vec::new();
     for e in std::fs::read_dir("/proc").into_iter().flatten().flatten() {
-        let name = e.file_name().to_string_lossy().to_string();
-        let Ok(pid) = name.parse::<u32>() else {
+        let Ok(pid) = e.file_name().to_string_lossy().parse::<u32>() else {
             continue;
         };
-        if pid == std::process::id() {
+        if pid == me {
+            continue;
+        }
+        // SAFETY: pidfd_open(2) on a PID read from /proc; -1 when it is gone.
+        let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid as libc::c_int, 0) } as i32;
+        if fd < 0 {
             continue;
         }
         let env = std::fs::read(e.path().join("environ")).unwrap_or_default();
-        if env.split(|b| *b == 0).any(|v| v == want.as_bytes()) {
-            // SAFETY: SIGKILL to a process of this test's own slot folder.
-            unsafe { libc::kill(pid as i32, libc::SIGKILL) };
-            killed.push(pid);
+        let marked = env.split(|b| *b == 0).any(|v| v == want.as_bytes());
+        // SAFETY: pidfd_send_signal(2) on the pidfd opened above; 0 = no signal.
+        let same = marked
+            && unsafe {
+                libc::syscall(
+                    libc::SYS_pidfd_send_signal,
+                    fd,
+                    0,
+                    std::ptr::null::<libc::siginfo_t>(),
+                    0,
+                )
+            } == 0;
+        if same {
+            // SAFETY: SIGKILL through the verified pidfd.
+            let rc = unsafe {
+                libc::syscall(
+                    libc::SYS_pidfd_send_signal,
+                    fd,
+                    libc::SIGKILL,
+                    std::ptr::null::<libc::siginfo_t>(),
+                    0,
+                )
+            };
+            if rc == 0 {
+                killed.push(pid);
+            }
         }
+        // SAFETY: closing the pidfd opened above.
+        unsafe { libc::close(fd) };
     }
     killed
+}
+
+/// SIGKILL to every process whose environment names `dir` as CDO_SLOT_DIR
+/// (verified through a pidfd: [`kill_with_env`]).
+fn kill_users(dir: &std::path::Path) -> Vec<u32> {
+    kill_with_env(&format!("CDO_SLOT_DIR={}", dir.display()))
+}
+
+/// ⟨TLS-135 review r18, sol⟩ [`kill_with_env`] kills a process carrying the
+/// exact `NAME=value`, and none that carries another value of it or none.
+/// The verify-before-signal ORDER (a PID reused between the read and the
+/// kill) cannot be forced by a test: the kernel hands out PIDs, and no test
+/// can place a new process on a given PID between two syscalls. What is
+/// pinned is the selection the order protects.
+///
+/// Mutation (2026-11-27): the value comparison loosened (any process naming
+/// the variable counts; "always true" would kill the host's processes) ->
+/// the other-valued sleeper is killed too (red); restored, green.
+#[test]
+fn kill_with_env_kills_only_the_marked() {
+    let value = format!("t135-{}", std::process::id());
+    let spawn = |v: Option<&str>| {
+        let mut c = crate::clean_env::command("sleep");
+        c.arg("60");
+        if let Some(v) = v {
+            c.env("ALSEM_SLOT_TEST_PROBE", v);
+        }
+        Reap(owned(&mut c).spawn().unwrap())
+    };
+    let marked = spawn(Some(&value));
+    let other = spawn(Some("t135-other"));
+    let plain = spawn(None);
+    // Its environment is readable once it runs (`sleep` exec'd).
+    until("the sleepers run", &|| {
+        [&marked, &other, &plain].iter().all(|r| {
+            std::fs::read_to_string(format!("/proc/{}/comm", r.0.id()))
+                .is_ok_and(|c| c == "sleep\n")
+        })
+    });
+    let killed = kill_with_env(&format!("ALSEM_SLOT_TEST_PROBE={value}"));
+    assert_eq!(killed, vec![marked.0.id()], "killed {killed:?}");
+    assert!(
+        live_start_of(other.0.id()).is_some(),
+        "an other-valued process was killed"
+    );
+    assert!(
+        live_start_of(plain.0.id()).is_some(),
+        "an unmarked process was killed"
+    );
 }
 
 struct Watchdog {
@@ -555,7 +697,8 @@ fn killed_test_child() {
 ///
 /// Mutation (2026-11-27): the sentinel's kill loop dropped (it exits once the
 /// test process is gone) -> the gate and its stub cargo survive (red);
-/// restored, green.
+/// restored, green. Re-proved on the Rust sentinel (review r18): its sweeps
+/// dropped (`0..0`) -> the same (red); restored, green.
 #[test]
 fn killed_test_leaves_no_process_behind() {
     let dir = tempfile::tempdir().unwrap();
@@ -672,8 +815,7 @@ fn cdo_slot_frees_itself() {
     assert_eq!(code, Some(0), "{text}");
     assert!(s.wait_free(), "a dead session's hold stayed");
 
-    let mut bound = std::process::Command::new("sleep")
-        .arg("600")
+    let mut bound = owned(std::process::Command::new("sleep").arg("600"))
         .spawn()
         .unwrap();
     let pid = bound.id().to_string();
@@ -2052,8 +2194,7 @@ fn cdo_slot_state_holds_under_concurrent_takers() {
                             1 => run(&session, &["run", "lane", "u", "--", "true"]),
                             2 => {
                                 let mut t = Reap(
-                                    std::process::Command::new("sleep")
-                                        .arg("1")
+                                    owned(std::process::Command::new("sleep").arg("1"))
                                         .spawn()
                                         .unwrap(),
                                 );
