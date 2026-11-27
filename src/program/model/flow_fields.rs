@@ -35,10 +35,13 @@
 //!   in an action a page extension adds is one record. An object global is
 //!   shared by the routines of its own object; a base object's global also by
 //!   its extensions (a `protected var`). A routine that declares a local or
-//!   parameter of that name is not touched. The sharing is keyed by the base
-//!   object's type and NAME (an extension names its target by name), so two
-//!   same-named pages of different apps share too: a may-read, never a lost
-//!   one;
+//!   parameter of that name is not touched. A table and its extensions share
+//!   by the TABLE ID, each extension through the table its own `#if`
+//!   alternative's stub says it extends (ENG-218: never a same-named table of
+//!   an app the extension cannot see); a routine reads its own declaring
+//!   row's groups. Pages and reports share by the base object's type and NAME
+//!   (an extension names its target by name), so two same-named pages of
+//!   different apps share too: a may-read, never a lost one;
 //! - a RecordRef: `RecRef.SetAutoCalcFields(N, ...)` names fields by NUMBER
 //!   (Learn, `RecordRef.SetAutoCalcFields([Fields: Integer,...])`), looked up
 //!   by number in the RecordRef's table;

@@ -133,6 +133,11 @@ table 50220 "Ws Only"
             CalcFormula = count("Keyed");
         }
     }
+
+    procedure WsFind()
+    begin
+        Rec.FindFirst();
+    end;
 }
 
 #if ONE
@@ -1006,7 +1011,8 @@ fn a_table_name_binds_as_the_resolver_binds_it_in_the_model() {
 /// fails "another app's extension of a same-named table shares no Rec";
 /// sharing through the union of every row of an object id (not the routine's
 /// declaring row) fails "a split extension's alternative shares Rec only
-/// with its own base".
+/// with its own base"; a table extension that never shares fails "the
+/// alternative shares Rec with its own base".
 #[test]
 fn flowfield_and_recordref_tables_bind_as_the_resolver_binds_them() {
     use al_sem::program::model::flow_fields::FlowFieldSource;
@@ -1102,6 +1108,18 @@ fn flowfield_and_recordref_tables_bind_as_the_resolver_binds_them() {
     assert!(
         !keyed_reads.iter().any(|f| f == "A Count"),
         "a split extension's alternative shares Rec only with its own base: {keyed_reads:?}"
+    );
+    // sol r3: and it does share with its own base: "Ws Only"'s own retrieval
+    // gets "A Count".
+    let own_reads: Vec<String> = routine(WS, "WsFind")
+        .record_operations
+        .iter()
+        .filter(|op| op.op == "FindFirst")
+        .flat_map(|op| op.flow_field_reads.iter().map(|r| r.field.clone()))
+        .collect();
+    assert!(
+        own_reads.iter().any(|f| f == "A Count"),
+        "the alternative shares Rec with its own base: {own_reads:?}"
     );
 }
 
