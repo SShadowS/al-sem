@@ -63,6 +63,42 @@ suite's load. Each failure was a test defect: an assumption about how long a ste
   ends (TLS-126's case), with no race on the child's own timing; its precondition is `(Z, 1)`.
   Proof (2026-11-27): `close()`'s `running` replaced by `os.path.exists` -> "plain: close()
   waited 30.2 s on a zombie" (red, 30.5 s); restored, green (5.8 s).
+- **The structural fix (after the batch landing failed in `ci-steps all`, whose test step runs
+  beside the release build).** Two more tests failed there:
+  `cdo_slot_gate_entry_and_a_timing_never_miss_each_other` (its drain's 20 s deadline ran out
+  while the test started a second gate and waited for its line: exit 6, not 4) and
+  `cdo_slot_ci_steps_all_waits_for_its_build_quietly` (its timing's 10 s deadline ran out before
+  the held build parked: "the timing ended without beginning"). The log showed every cdo_slot test
+  starting at once and each taking 40-157 s.
+  - The `cdo_slot` tests, and the `gate_scripts` tests that are not `speed_*`, now run one at a
+    time per module (nextest test groups `cdo-slot` and `gate-scripts`, max-threads 1; the two
+    modules side by side). `ci-steps test`, `task`, `all` and `check-goldens` all read
+    `.config/nextest.toml`'s default overrides. The `speed_*` tests stay outside: they are as long
+    alone as in the suite (29 tests, ~1,640 s), and serial they alone took 27 min.
+  - Drain deadlines that must outlast this test's own next steps or another party's end are now
+    `HANG` (300 s) instead of 10-20 s: the two above and four more (the run that pauses between its
+    steps, the two perf-bounds lanes, perf-bounds under its own timed run, the nested/foreign
+    perf-bounds). A break still ends in a refusal, after the deadline, or fails an `until`.
+  - Measured: both modules, nothing beside, all groups serial (speed tests included): 142 of 142,
+    1,822 s; serial sums cdo_slot 951 s, gate_scripts 1,822 s (speed 1,637 s). Both modules beside a
+    cold `cargo build --profile release-fast` (its own target folder): run 1 142 of 142, 1,037 s;
+    on the final code run A 142 of 142, 2,244 s (the host also ran another lane's check-goldens:
+    CPU pressure avg60 52 %, avg300 65 %).
+  - **The cost:** one cdo_slot test at a time spanned ~17 min on a calm host and ~37 min at 52 %
+    pressure, a floor under `ci-steps test`'s wall time. With the 300 s drains the group runs two
+    at a time (`max-threads = 2`). On the final code beside a cold release-fast build: run B 142
+    of 142, 1,454 s; run C (two at a time) 142 of 142, 714 s.
+  - Sol's review r1: every `rc` result file is written then renamed into place (bash creates the
+    file before `echo` writes it; six sites); the one-deadline test now checks that the gate parked
+    behind timing B (its refusal names it) before judging its bound; and the two "no sleep past the
+    deadline" tests check that a nap was reached (a new test hook, `CDO_SLOT_TEST_SAY_NAP`, prints
+    each nap) before judging theirs. Drain deadlines of 60 s that the test's own steps had to
+    outlast are `HANG` too.
+  - Proofs on the final code (2026-11-27): `awake_start` back in the round loop -> the parked-
+    behind-B check passes, then "the second round waited from zero: 66.9 s (spent 25.3 s of 60
+    s)" (red); `enter_wait`'s nap uncapped -> the nap line is there, then "the wait slept past its
+    deadline: 134.6 s" (red); the drain's nap uncapped -> "slept past the deadline: 129.5 s"
+    (red); each restored, green in runs A, B and C.
 
 ### Fixed (ENG-218: FlowField and RecordRef tables, and a table's extensions, bind as the resolver binds them, not by name across all apps)
 

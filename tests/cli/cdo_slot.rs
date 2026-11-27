@@ -2447,7 +2447,9 @@ fn cdo_slot_timed_waits_for_builds_and_refuses_beside_one() {
     let mut timed = s.cmd(
         "A",
         &["run", "lane", "timing", "--timed", "--", "touch", touch],
-        &[names, ("CDO_SLOT_TIMED_WAIT_S", "60")],
+        // HANG, not 60 s: the run must still wait when the test, reading its
+        // line, ends the build under a gate's load (TLS-150).
+        &[names, ("CDO_SLOT_TIMED_WAIT_S", "300")],
     );
     let mut timed = Reap(
         timed
@@ -2524,10 +2526,16 @@ fn cdo_slot_timed_waits_for_builds_and_refuses_beside_one() {
             names,
             ("CDO_SLOT_TIMED_WAIT_S", "10"),
             ("CDO_SLOT_POLL_S", poll_s.as_str()),
+            ("CDO_SLOT_TEST_SAY_NAP", "1"),
         ],
     );
     drop(b7);
     assert_eq!(code, Some(6), "started beside a build: {text}");
+    // A nap was reached (sol, TLS-150 r1): else the bound below judges nothing.
+    assert!(
+        text.contains(": test: nap "),
+        "the drain never napped: {text}"
+    );
     // The bound is half the poll (TLS-150: derived from the feature, not a
     // guess at host speed): the break sleeps a whole poll.
     assert!(
@@ -3414,7 +3422,8 @@ fn cdo_slot_timings_in_a_hand_hold() {
     let mut waiting = s.bg(
         "A",
         &["acquire", "lane", "drained", "--bind", &t4pid, "--timed"],
-        &[names, ("CDO_SLOT_TIMED_WAIT_S", "60")],
+        // HANG, not 60 s (TLS-150): the drain must outlast the steps below.
+        &[names, ("CDO_SLOT_TIMED_WAIT_S", "300")],
     );
     until("the timing waits", &|| s.probe().ends_with("timed=1"));
     assert_eq!(s.run("A", &["release"], &[]).0, Some(0));
@@ -4214,7 +4223,11 @@ fn cdo_slot_gate_entry_and_a_timing_never_miss_each_other() {
         &[
             ("CDO_SLOT_BUILD_NAMES", fake_name.as_str()),
             ("CDO_SLOT_BUILD_SCRIPTS", script.as_str()),
-            ("CDO_SLOT_TIMED_WAIT_S", "20"),
+            // HANG, not 20 s: the drain runs while this test starts a second
+            // gate and waits for its line, which outlasted 20 s beside a
+            // release build (TLS-150). The break (the parked gate counted)
+            // still ends in a refusal, after the deadline.
+            ("CDO_SLOT_TIMED_WAIT_S", "300"),
         ],
     );
     until("the timing is published", &|| {
@@ -4636,11 +4649,25 @@ fn cdo_slot_gate_entry_waits_one_deadline_in_all() {
         // A 10 s deadline, not 1 s: the gate's first check alone can take
         // over 1 s, so it refused before it ever napped and the break went
         // unseen (TLS-150's proof run: green with the nap uncapped).
-        &[("CDO_SLOT_ENTRY_WAIT_S", "10"), ("CDO_SLOT_POLL_S", "120")],
+        &[
+            ("CDO_SLOT_ENTRY_WAIT_S", "10"),
+            ("CDO_SLOT_POLL_S", "120"),
+            ("CDO_SLOT_TEST_SAY_NAP", "1"),
+        ],
     )
     .output()
     .unwrap();
     assert_eq!(out.status.code(), Some(1));
+    // A nap was reached (sol, TLS-150 r1): else the bound below judges nothing.
+    let said = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        said.contains(": test: nap "),
+        "the wait never napped: {said}"
+    );
     // Half the 120 s poll (TLS-150: derived from the feature, not a guess at
     // host speed): the break sleeps a whole poll; the 10 s deadline stays far
     // below.
@@ -4725,6 +4752,15 @@ fn cdo_slot_gate_entry_waits_one_deadline_in_all() {
     let spent = (resumed - waiting).min(wait);
     s.resume();
     assert_eq!(g.wait().unwrap().code(), Some(1), "the gate under timing B");
+    // It reached round two: it parked behind B and refused there, in its wait
+    // (which names the timing), not at the first round's deadline check right
+    // after the decision ("CDO timings still ran"), which the reset break would
+    // pass (sol, TLS-150 r1).
+    let text = std::fs::read_to_string(&log).unwrap_or_default();
+    assert!(
+        text.contains("refused: a CDO timing still runs after") && text.contains("(b)"),
+        "the gate did not park behind timing B: {text}"
+    );
     // TLS-150: derived, not a guess at host speed. One deadline leaves at most
     // `wait - spent` (spent >= 20 s); the break waits the whole `wait` again.
     // The bound sits half way: `wait - spent / 2`, at least `wait / 2`.
@@ -4863,7 +4899,9 @@ fn cdo_slot_a_run_pauses_between_its_steps_for_a_timing() {
     until("the run's fmt step builds", &|| {
         t.join("fmt-running").exists()
     });
-    let mut timing = test_timing(&s, &[("CDO_SLOT_TIMED_WAIT_S", "15")]);
+    // HANG, not 15 s: the drain must outlast this test's next steps under a
+    // gate's load (TLS-150); a timing that never begins fails `until` below.
+    let mut timing = test_timing(&s, &[("CDO_SLOT_TIMED_WAIT_S", "300")]);
     until("the timing waits for the step", &|| {
         s.run("probe", &["status"], &[])
             .1
@@ -5191,7 +5229,10 @@ fn cdo_slot_ci_steps_all_waits_for_its_build_quietly() {
     until("the run is quiet at its join", &|| {
         s.dir().join("quiet").join(&name).exists()
     });
-    let mut timing = test_timing(&s, &[("CDO_SLOT_TIMED_WAIT_S", "10")]);
+    // HANG, not 10 s: the held build counts until it is resumed and parks,
+    // which outlasted 10 s beside a release build (TLS-150). The deadlock (the
+    // break) never lets the timing begin: `until` below fails it.
+    let mut timing = test_timing(&s, &[("CDO_SLOT_TIMED_WAIT_S", "300")]);
     until("the timing has its lock", &|| {
         s.run("probe", &["status"], &[])
             .1
@@ -5422,7 +5463,10 @@ fn cdo_slot_two_perf_bounds_in_one_hold_one_is_refused() {
                     ("CI_STEPS_PERF_BOUNDS_BIN", bin_s.as_str()),
                     token,
                     ("CDO_SLOT_BUILD_SCRIPTS", script.as_str()),
-                    ("CDO_SLOT_TIMED_WAIT_S", "20"),
+                    // HANG, not 20 s (TLS-150): a drain that must outlast the
+                    // other party's end under a gate's load; a break still ends
+                    // in a refusal, after it.
+                    ("CDO_SLOT_TIMED_WAIT_S", "300"),
                     ("CDO_SLOT_TEST_PAUSE_TIMED_GATE_S", "60"),
                 ],
             )
@@ -5532,7 +5576,10 @@ fn cdo_slot_perf_bounds_under_its_own_timed_run_does_not_wait_for_it() {
             &[
                 ("PATH", &path),
                 ("CI_STEPS_PERF_BOUNDS_BIN", &bin_s),
-                ("CDO_SLOT_TIMED_WAIT_S", "20"),
+                // HANG, not 20 s (TLS-150): a drain that must outlast the
+                // other party's end under a gate's load; a break still ends
+                // in a refusal, after it.
+                ("CDO_SLOT_TIMED_WAIT_S", "300"),
             ],
         )
         .current_dir(env!("CARGO_MANIFEST_DIR"))
@@ -5587,7 +5634,10 @@ fn cdo_slot_a_foreign_entry_timing_keeps_no_turn_from_a_nested_one() {
                 ("CI_STEPS_PERF_BOUNDS_BIN", bin_s.as_str()),
                 token,
                 ("CDO_SLOT_TEST_PAUSE_ACQUIRED_S", "60"),
-                ("CDO_SLOT_TIMED_WAIT_S", "20"),
+                // HANG, not 20 s (TLS-150): a drain that must outlast the
+                // other party's end under a gate's load; a break still ends
+                // in a refusal, after it.
+                ("CDO_SLOT_TIMED_WAIT_S", "300"),
                 // Past the watchdog: a parked F never ends by itself (the
                 // order check below; TLS-150).
                 ("CDO_SLOT_ENTRY_WAIT_S", "900"),
@@ -5625,7 +5675,10 @@ fn cdo_slot_a_foreign_entry_timing_keeps_no_turn_from_a_nested_one() {
                 token,
                 ("PATH", &path),
                 ("CI_STEPS_PERF_BOUNDS_BIN", &bin_s),
-                ("CDO_SLOT_TIMED_WAIT_S", "20"),
+                // HANG, not 20 s (TLS-150): a drain that must outlast the
+                // other party's end under a gate's load; a break still ends
+                // in a refusal, after it.
+                ("CDO_SLOT_TIMED_WAIT_S", "300"),
             ],
         )
         .current_dir(env!("CARGO_MANIFEST_DIR"))
@@ -5933,7 +5986,7 @@ fn cdo_slot_two_sibling_timed_runs_never_wait_on_each_other() {
     let sibling = |i: usize| {
         let body = format!(
             "touch {td}/on{i}; {w_go}; \
-             bash '{gate_script}' fmt; echo $? >{td}/rc{i}",
+             bash '{gate_script}' fmt; echo $? >{td}/rc{i}.w; mv {td}/rc{i}.w {td}/rc{i}",
             w_go = wait_for(&format!("{td}/go"))
         );
         let log = t.join(format!("sib{i}.log"));
@@ -6014,7 +6067,7 @@ fn cdo_slot_a_timed_runs_command_outlives_its_killed_wrapper() {
     let gate_script = gate.join(&script).display().to_string();
     let body = format!(
         "touch {td}/on; {w_go}; \
-         bash '{gate_script}' fmt; echo $? >{td}/rc",
+         bash '{gate_script}' fmt; echo $? >{td}/rc.w; mv {td}/rc.w {td}/rc",
         w_go = wait_for(&format!("{td}/go"))
     );
     let mut wrapper = s.bg(
@@ -6227,7 +6280,7 @@ fn cdo_slot_an_orphan_worker_owns_its_timing() {
     let gate_script = gate.join(&script).display().to_string();
     let worker = format!(
         "( {w_go}; \
-         bash '{gate_script}' fmt >{td}/fmt.log 2>&1; echo $? >{td}/rc ) \
+         bash '{gate_script}' fmt >{td}/fmt.log 2>&1; echo $? >{td}/rc.w; mv {td}/rc.w {td}/rc ) \
          </dev/null >/dev/null 2>&1 & exit 0",
         w_go = wait_for(&format!("{td}/go"))
     );
@@ -6460,7 +6513,7 @@ fn cdo_slot_a_child_of_a_timings_process_cannot_reuse_it() {
     let parent = format!(
         "{w_go}; \
          bash -c 'exec bash \"$0\" acquire lane nested --wait --bind $$ --timed' '{SLOT}' \
-         >{td}/child.log 2>&1; echo $? >{td}/rc; sleep 600",
+         >{td}/child.log 2>&1; echo $? >{td}/rc.w; mv {td}/rc.w {td}/rc; sleep 600",
         w_go = wait_for(&format!("{td}/go"))
     );
     let env_of = s.cmd("B", &["status"], &[("CDO_SLOT_POLL_S", "1")]);
@@ -6957,7 +7010,9 @@ fn cdo_slot_a_timing_is_judged_by_the_process_it_binds() {
     let td = t.display().to_string();
     let other = sleeper();
     let opid = other.id();
-    let body = format!("bash '{SLOT}' acquire lane bound --bind {opid} --timed; echo $? >{td}/rc");
+    let body = format!(
+        "bash '{SLOT}' acquire lane bound --bind {opid} --timed; echo $? >{td}/rc.w; mv {td}/rc.w {td}/rc"
+    );
     let (code, text) = s.run(
         "A",
         &["run", "lane", "outer", "--timed", "--", "bash", "-c", &body],
@@ -7047,7 +7102,7 @@ fn cdo_slot_a_nested_timed_start_runs_under_its_runs_timing() {
     let inner = format!(
         "{{ bash '{gate_script}' perf-bounds >{td}/pb.log 2>&1; echo $? >{td}/pbrc; }} & \
          timeout 20 bash -c 'until grep -qs \"already timed\" {td}/pb.log; do sleep 0.05; done'; \
-         bash '{gate_script}' fmt >{td}/fmt.log 2>&1; echo $? >{td}/rc; wait"
+         bash '{gate_script}' fmt >{td}/fmt.log 2>&1; echo $? >{td}/rc.w; mv {td}/rc.w {td}/rc; wait"
     );
     let out = s
         .cmd(

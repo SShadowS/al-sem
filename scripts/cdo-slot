@@ -205,6 +205,7 @@ glob_quote() { sed 's/[][*?\\]/\\&/g' <<<"$1"; }
 # test-hooks: CDO_SLOT_TEST_PAUSE_ENTER_S CDO_SLOT_TEST_PAUSE_ENTER_NAME CDO_SLOT_TEST_PAUSE_RETRY_S
 # test-hooks: CDO_SLOT_TEST_PAUSE_TIMED_GATE_S CDO_SLOT_TEST_PAUSE_KEEPER_S
 # test-hooks: CDO_SLOT_TEST_KEEPER_STOP CDO_SLOT_TEST_SPAWN_STEPS CDO_SLOT_TEST_COMMIT_FAIL
+# test-hooks: CDO_SLOT_TEST_SAY_NAP
 # test-hooks: CDO_SLOT_TEST_PAUSE_COMMIT_S CDO_SLOT_TEST_PAUSE_COMMITTED_S CDO_SLOT_TEST_UNREADABLE_PID
 # test-hooks: CDO_SLOT_TEST_REFUSE_HOLDER CDO_SLOT_TEST_FDINFO_UNREADABLE
 test_pause() {
@@ -1473,6 +1474,8 @@ enter_wait() {
                 echo "$name: refused: a CDO timing still runs after ${entry_wait} s ($line); started nothing" >&2
                 exit 6
             fi
+            # Test hook: say each nap (a test then knows a nap was reached).
+            [[ -z "${CDO_SLOT_TEST_SAY_NAP:-}" ]] || echo "$name: test: nap $((left_us < poll * 1000000 ? left_us : poll * 1000000)) us"
             awake_nap $((left_us < poll * 1000000 ? left_us : poll * 1000000))
         done
         # Unparked before it records: from here it counts as a build again.
@@ -1715,6 +1718,8 @@ timed_start_now() {
                 last=$SECONDS
             fi
             nap_us=$((left_us < poll * 1000000 ? left_us : poll * 1000000))
+            # Test hook: say each nap for a build (a test then knows one came).
+            [[ -z "${CDO_SLOT_TEST_SAY_NAP:-}" ]] || echo "cdo-slot: timed: test: nap $nap_us us"
         else
             # None seen: start (or go on) counting the grace (a command the
             # guard allowed just before the timing lock was taken may start now).
