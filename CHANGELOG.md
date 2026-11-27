@@ -56,15 +56,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   NUMBER (a dependency page's `SourceTable = "5992"`) binds by number as the resolver binds a
   number (`table_by_number_from`: the app's own table first, else exactly one live visible one),
   not through the last table object of the number; a page extension's base page is picked within
-  its app's closure (a moved/removed page giving way to a live one; `#if` alternatives of the base
-  page that differ in `SourceTable` or `SourceTableTemporary` decline, as the resolver declines
-  them, and alternatives that agree are one page), for its `Rec`'s table and for its
-  `SourceTableTemporary`, and the base page's `SourceTable` binds as the base page's own app sees
-  it; a tableextension's fields are merged into the base table its own app sees
-  (`merge_extension_fields`), not the last table of the name, each `#if` alternative of the
-  extension with ITS OWN fields into its own target (before, every alternative took the last
-  alternative's fields; on master too: this fixes ENG-220), and into the last real row of an
-  `#if`-split base (the row every by-id reader keeps, as before).
+  its app's closure (a moved/removed page giving way to a live one), for its `Rec`'s table and for
+  its `SourceTableTemporary`: `#if` alternatives of the base page that name different tables
+  decline (as the resolver declines them), alternatives naming one table give it, and its
+  temporary flag is known only when every alternative agrees (an absent flag and `false` agree).
+  The base page's `SourceTable` binds as the base page's own app sees it. A tableextension's
+  fields are merged into the base table its own app sees (`merge_extension_fields`), not the last
+  table of the name, each `#if` alternative of the extension with ITS OWN fields and keys into its
+  own target (before, every alternative took the last alternative's fields, on master too: this
+  fixes ENG-220; and two alternatives on one base gave their keys one id, so the second's key was
+  dropped: a later alternative's key ids now end `/alt{n}`, the first alternative's keep their
+  ids), and into the last real row of an `#if`-split base (the row every by-id reader keeps, as
+  before).
 - **Symbol-only objects now carry `ObsoleteState`.** `obsolete_gone` was read from source only, so
   with a symbol-only Base Application both `No. Series` tables would have been live and the name
   would decline. BC 28.4's Base Application symbols list `No. Series` (308) and `Reason Code` (231)
@@ -89,7 +92,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   not see a table outside its closure, a table's own `Rec`, a tableextension's fields (also with an
   `#if`-split base and an `#if`-split extension whose alternatives add different fields), a page's
   numeric `SourceTable`, and a page extension's base page (its temporary flag, a Moved symbol page
-  giving way, `#if` alternatives that differ or agree). `symbol_reference`'s
+  giving way, `#if` alternatives naming different tables, one table with different or agreeing
+  temporary flags), and a split extension's keys on one base. `symbol_reference`'s
   `obsolete_state_moved_or_removed_marks_a_symbol_object_gone` pins the symbol read. Each break
   then restored is recorded in the test's doc.
 

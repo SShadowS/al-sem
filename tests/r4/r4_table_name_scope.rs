@@ -97,6 +97,7 @@ page 50212 "Same Page"
 page 50212 "Same Page"
 {
     SourceTable = "No. Series";
+    SourceTableTemporary = false;
 }
 #endif
 
@@ -107,6 +108,68 @@ pageextension 50213 "Same PE" extends "Same Page"
         Rec.Modify();
     end;
 }
+
+table 50220 "Ws Only"
+{
+    fields
+    {
+        field(1; "Entry No."; Integer) { }
+    }
+}
+
+#if ONE
+page 50214 "Two Table Page"
+{
+    SourceTable = "No. Series";
+}
+#else
+page 50214 "Two Table Page"
+{
+    SourceTable = "Ws Only";
+}
+#endif
+
+pageextension 50215 "Two Table PE" extends "Two Table Page"
+{
+    procedure TwoTouch()
+    begin
+        Rec.Modify();
+    end;
+}
+
+table 50230 "Keyed"
+{
+    fields
+    {
+        field(1; "Entry No."; Integer) { }
+    }
+}
+
+#if ONE
+tableextension 50231 "Keyed Ext" extends "Keyed"
+{
+    fields
+    {
+        field(50231; "KA"; Integer) { }
+    }
+    keys
+    {
+        key(KeyA; "KA") { }
+    }
+}
+#else
+tableextension 50231 "Keyed Ext" extends "Keyed"
+{
+    fields
+    {
+        field(50232; "KB"; Integer) { }
+    }
+    keys
+    {
+        key(KeyB; "KB") { }
+    }
+}
+#endif
 "#;
 
 const ZBASE_SRC: &str = r#"table 50 "Shared"
@@ -374,8 +437,12 @@ fn var_table(ws: &ModelEntities, app: &str, routine: &str, var: &str) -> Option<
 /// every row of a split tableextension taking the LAST stub fails "split
 /// extension: both targets"; no gone object ids in `TableScope::of` fails "a
 /// moved page gives way"; deduplicating base-page rows by id alone fails
-/// "differing alternatives decline"; not deduplicating them at all fails
-/// "agreeing alternatives are one page".
+/// "alternatives naming different tables decline"; deduplicating them by
+/// table AND temporary flag fails "alternatives naming one table give it";
+/// the temporary flag read from the last alternative fails "alternatives that
+/// differ in SourceTableTemporary force no temporary"; every key of a split
+/// tableextension keeping the first alternative's id fails "both
+/// alternatives' keys".
 #[test]
 fn a_table_name_binds_as_the_resolver_binds_it_in_the_model() {
     let ws = model();
@@ -470,23 +537,62 @@ fn a_table_name_binds_as_the_resolver_binds_it_in_the_model() {
         Some(format!("{FOUND}/table/308").as_str()),
         "a moved page gives way"
     );
-    // sol r3: `#if` alternatives of a base page that differ in what the
-    // extension reads decline; alternatives that agree are one page.
+    // sol r3 / Fable r4: `#if` alternatives of a base page that name
+    // different tables decline; alternatives that name one table give it,
+    // and their temporary flag only when they agree on it.
+    let rec = |routine: &str| {
+        ws.routines
+            .iter()
+            .find(|r| r.app_guid == WS && r.name == routine)
+            .and_then(|r| {
+                r.record_variables
+                    .iter()
+                    .find(|v| v.name.eq_ignore_ascii_case("Rec"))
+            })
+            .unwrap_or_else(|| panic!("{routine}'s Rec"))
+    };
+    let forced_temp = |routine: &str| {
+        let v = rec(routine);
+        v.temp_state.kind.to_string() == "known" && v.temp_state.value == Some(true)
+    };
     assert_eq!(
-        pages_named("Split Page"),
+        pages_named("Two Table Page"),
         2,
         "precondition: split page rows"
     );
     assert_eq!(
-        var_table(&ws, WS, "SplitTouch", "Rec"),
+        var_table(&ws, WS, "TwoTouch", "Rec"),
         None,
-        "differing alternatives decline"
+        "alternatives naming different tables decline"
+    );
+    assert_eq!(
+        var_table(&ws, WS, "SplitTouch", "Rec").as_deref(),
+        Some(format!("{FOUND}/table/308").as_str()),
+        "alternatives naming one table give it"
+    );
+    assert!(
+        !forced_temp("SplitTouch"),
+        "alternatives that differ in SourceTableTemporary force no temporary"
     );
     assert_eq!(
         var_table(&ws, WS, "SameTouch", "Rec").as_deref(),
         Some(format!("{FOUND}/table/308").as_str()),
         "agreeing alternatives are one page"
     );
+    // sol r4: two alternatives of one tableextension on ONE base each add
+    // their key.
+    let keyed = ws
+        .tables
+        .iter()
+        .rfind(|t| t.id == format!("{WS}/table/50230") && !t.is_extension_stub)
+        .expect("Keyed");
+    let ext_keys: Vec<&Vec<String>> = keyed
+        .keys
+        .iter()
+        .filter(|k| k.declared_by.as_deref() == Some("Keyed Ext"))
+        .map(|k| &k.members)
+        .collect();
+    assert_eq!(ext_keys.len(), 2, "both alternatives' keys: {ext_keys:?}");
     // sol r2: a page's `SourceTable = 50` binds by number from its own app,
     // though the unrelated app's table 50 comes later.
     assert_eq!(

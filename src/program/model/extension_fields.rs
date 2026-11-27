@@ -115,9 +115,9 @@ pub fn merge_extension_fields(
             .filter(|(_, t)| t.is_extension_stub && t.id == extension_table_id)
             .map(|(i, _)| i)
             .collect();
-        let (k, rows) = (alternative[row], rows_of_id[object.id.as_str()]);
+        let (alt, rows) = (alternative[row], rows_of_id[object.id.as_str()]);
         let Some(&ext_idx) = (if stubs.len() == rows {
-            stubs.get(k)
+            stubs.get(alt)
         } else {
             stubs.last()
         }) else {
@@ -179,12 +179,28 @@ pub fn merge_extension_fields(
                     })
                 })
                 .collect();
-            let id = format!(
-                "{base_table_id}/key/ext/{}/{}/{index}",
-                object.app_guid, object.object_number
-            );
-            // Idempotent, as the field merge is.
-            if base.keys.iter().any(|b| b.id == id) {
+            // sol r4: a later `#if` alternative of the extension names its keys
+            // apart (`.../{index}/alt{k}`), or two alternatives on one base
+            // shared an id and the second's key was dropped. The first (or
+            // only) alternative keeps the id it always had.
+            let id = if alt == 0 {
+                format!(
+                    "{base_table_id}/key/ext/{}/{}/{index}",
+                    object.app_guid, object.object_number
+                )
+            } else {
+                format!(
+                    "{base_table_id}/key/ext/{}/{}/{index}/alt{alt}",
+                    object.app_guid, object.object_number
+                )
+            };
+            // Idempotent, as the field merge is; an alternative repeating a
+            // key another alternative already added (same members) adds none.
+            if base.keys.iter().any(|b| {
+                b.id == id
+                    || (b.declared_by.as_deref() == Some(object.name.as_str())
+                        && b.members == k.members)
+            }) {
                 continue;
             }
             base.keys.push(ModelKey {

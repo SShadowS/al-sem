@@ -176,16 +176,16 @@ impl<'a> SymbolTable<'a> {
         self.one_live_table(found, Some(from))
     }
 
-    /// ENG-194 (sol r1): the object of `object_type` named `name` seen from
-    /// app `from`, as [`Self::table_by_name_from`] sees tables (a page
-    /// extension's base page): visible ones only, a moved/removed one only when
-    /// no live one remains, exactly one, else `None`.
-    pub fn object_by_type_name_from(
+    /// ENG-194: every row of an object of `object_type` named `name` app
+    /// `from` may mean, as the resolver's `visible_objects`: visible ones only
+    /// (sol r1), a moved/removed one only when no live one remains (sol r2),
+    /// each `#if` alternative a row of its own.
+    pub fn objects_by_type_name_from(
         &self,
         from: &str,
         object_type: &str,
         name: &str,
-    ) -> Option<&ModelObject> {
+    ) -> Vec<&ModelObject> {
         let key = format!(
             "{}/{}",
             object_type.fold_identifier(),
@@ -193,35 +193,58 @@ impl<'a> SymbolTable<'a> {
         );
         let mut found: Vec<&ModelObject> = self
             .objects_named
-            .get(&key)?
-            .iter()
+            .get(&key)
+            .into_iter()
+            .flatten()
             .map(|&i| &self.objects[i])
             .filter(|o| self.sees(from, &o.app_guid))
             .collect();
-        // A moved/removed object gives way to a live one (sol r2), as in the
-        // resolver.
         let gone = |o: &ModelObject| self.scope.is_some_and(|s| s.gone.contains(&o.id));
         if found.iter().any(|o| !gone(o)) {
             found.retain(|o| !gone(o));
         }
-        // An `#if`-split object has a row per alternative under one id. The
-        // resolver keeps them all and declines (`visible_objects`); here rows
-        // that agree on what a page extension reads (its base's `SourceTable`
-        // and `SourceTableTemporary`) are one, and alternatives that differ
-        // decline (sol r3: the first row's table or temporary flag would be a
-        // guess).
+        found
+    }
+
+    /// ENG-194: a page extension's base page as its `Rec`'s table reads it:
+    /// [`Self::objects_by_type_name_from`]'s rows, those of one id that agree
+    /// on `SourceTable` counting as one (an `#if`-split page whose
+    /// alternatives name one table has that table in every build); more than
+    /// one left (two pages, or alternatives naming different tables) declines
+    /// (sol r3, Fable r4). Its `SourceTableTemporary` is
+    /// [`Self::page_temporary_from`]'s, not this row's.
+    pub fn object_by_type_name_from(
+        &self,
+        from: &str,
+        object_type: &str,
+        name: &str,
+    ) -> Option<&ModelObject> {
+        let mut found = self.objects_by_type_name_from(from, object_type, name);
         let mut seen = std::collections::HashSet::new();
         found.retain(|o| {
             seen.insert((
                 o.id.as_str(),
                 o.source_table_name.as_deref().map(|s| s.fold_identifier()),
-                o.source_table_temporary,
             ))
         });
         match found.as_slice() {
             [o] => Some(o),
             _ => None,
         }
+    }
+
+    /// ENG-194: the base page's `SourceTableTemporary` for a page extension
+    /// of app `from`: known only when one page id is meant and every `#if`
+    /// alternative of it agrees (absent and `false` both mean not temporary:
+    /// sol r4); else `None` (not known, so never forced temporary).
+    pub fn page_temporary_from(&self, from: &str, name: &str) -> Option<bool> {
+        let found = self.objects_by_type_name_from(from, "Page", name);
+        let first = found.first()?;
+        let temp = |o: &&ModelObject| o.source_table_temporary.unwrap_or(false);
+        found
+            .iter()
+            .all(|o| o.id == first.id && temp(o) == temp(first))
+            .then(|| temp(first))
     }
 
     /// Whether code of app `from` sees what app `owner` declares: unscoped,
