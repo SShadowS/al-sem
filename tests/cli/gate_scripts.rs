@@ -3952,6 +3952,9 @@ fn speed_counts_cycles_and_labels_clock_and_cpi() {
 ///   precondition and still leaves no child.
 ///
 /// Each case asserts its precondition (one child listed; the zombie shape).
+/// The plain case's child is a zombie before close() starts (TLS-150: a child
+/// that had to notice its parent's end once stayed alive past close()'s 30 s
+/// under a landing's suite; why is unproven).
 ///
 /// Proofs: (2026-11-25) `running` replaced by `os.path.exists` in close() ->
 /// "close() waited 35.1 s on a zombie", after "still alive 30 s" and "survived
@@ -3996,7 +3999,10 @@ WAIT = ("import ctypes, os, sys, threading, time\n"
         "        time.sleep(s)\n"
         "        os._exit(0)\n")
 CASES = {
-    "plain": WAIT + "    after(0.5)\nsys.stdin.read()",
+    # TLS-150: the child ends at once, a zombie of the server before close()
+    # starts; the server's end makes it an orphan zombie. Waiting for the child
+    # to notice its parent's end raced close()'s 30 s (it once did not end).
+    "plain": "import os, sys\nif os.fork() == 0:\n    os._exit(0)\nsys.stdin.read()",
     "leader gone": WAIT + "    threading.Thread(target=after, args=(1.0,)).start()\n"
                    "    ctypes.CDLL(None).pthread_exit(None)\nsys.stdin.read()",
     # The child never ends by itself: close() kills it after CLOSE_WAIT_S.
@@ -4054,7 +4060,7 @@ def check():
             print(f"skip {name}: pidfds unavailable here ({no_pidfds})")
             continue
         s = server(code)
-        want = ("Z", "2") if name == "leader gone" else ("S", None)
+        want = {"leader gone": ("Z", "2"), "plain": ("Z", "1")}.get(name, ("S", None))
         if FORCED:
             want = ("never", "a state")
         end = time.monotonic() + (2 if FORCED else 60)

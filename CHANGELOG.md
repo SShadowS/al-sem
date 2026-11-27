@@ -52,6 +52,17 @@ suite's load. Each failure was a test defect: an assumption about how long a ste
     restored, green (17.7 s).
   - Before the proofs: the whole `cdo_slot` module and the two gate_scripts queue tests, 81 of 81
     passed.
+- **Case 7: `speed_close_does_not_wait_on_a_zombie`** failed in ENG-217's task gate: "plain:
+  close() waited 30.2 s on a zombie", after "child ... still alive 30 s after the close: killed".
+  cdo-speed's `close()` was right: `running()` saw a LIVE child, not a one-thread zombie, so it
+  waited its `CLOSE_WAIT_S` and killed it (no "survived SIGKILL", so the child was alive until
+  then). The fixture's child was to notice its parent's end (`getppid()` changing), sleep 0.5 s and
+  exit; it did not within 30 s, though the server had ended (its `wait` returned at once; the test
+  took 30.7 s in all). Why it did not is unproven. The plain case's child now exits right after its
+  fork, so it is a zombie of the server before `close()` starts and an orphan zombie once the server
+  ends (TLS-126's case), with no race on the child's own timing; its precondition is `(Z, 1)`.
+  Proof (2026-11-27): `close()`'s `running` replaced by `os.path.exists` -> "plain: close()
+  waited 30.2 s on a zombie" (red, 30.5 s); restored, green (5.8 s).
 
 ### Fixed (ENG-218: FlowField and RecordRef tables, and a table's extensions, bind as the resolver binds them, not by name across all apps)
 
