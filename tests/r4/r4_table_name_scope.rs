@@ -40,9 +40,12 @@ const WS_MAIN: &str = r#"codeunit 50201 "Ws Main"
     var
         NS: Record "No. Series";
         Z: Codeunit "Z Main";
+        U: Codeunit "U Main";
     begin
         NS.FindFirst();
+        NS.CalcFields("Ws Only Count");
         Z.Work();
+        U.Add();
     end;
 }
 
@@ -51,11 +54,21 @@ table 50200 "Dup"
     fields
     {
         field(1; "Entry No."; Integer) { }
+        field(2; "Series Count"; Integer)
+        {
+            FieldClass = FlowField;
+            CalcFormula = count("No. Series");
+        }
     }
 
     procedure Touch()
     begin
         Rec.Modify();
+    end;
+
+    procedure CountSeries()
+    begin
+        Rec.CalcFields("Series Count");
     end;
 }
 
@@ -114,7 +127,17 @@ table 50220 "Ws Only"
     fields
     {
         field(1; "Entry No."; Integer) { }
+        field(2; "A Count"; Integer)
+        {
+            FieldClass = FlowField;
+            CalcFormula = count("Keyed");
+        }
     }
+
+    procedure WsFind()
+    begin
+        Rec.FindFirst();
+    end;
 }
 
 #if ONE
@@ -185,6 +208,97 @@ tableextension 50251 "Tri Ext" extends "Tri"
 }
 #endif
 
+tableextension 50260 "Ws NS Ext" extends "No. Series"
+{
+    fields
+    {
+        field(50260; "Ws Note"; Integer)
+        {
+            trigger OnValidate()
+            begin
+            end;
+        }
+        field(50261; "Ws Only Count"; Integer)
+        {
+            FieldClass = FlowField;
+            CalcFormula = count("Ws Only");
+        }
+    }
+}
+
+#if TWO
+tableextension 50290 "Ws Two Base Ext" extends "Ws Only"
+{
+    fields
+    {
+        field(50290; "Ws Two"; Integer)
+        {
+            trigger OnValidate()
+            begin
+            end;
+        }
+    }
+}
+#else
+tableextension 50290 "Ws Two Base Ext" extends "Keyed"
+{
+    fields
+    {
+        field(50290; "Ws Two"; Integer)
+        {
+            trigger OnValidate()
+            begin
+            end;
+        }
+    }
+}
+#endif
+
+#if NEW
+tableextension 50280 "Ws Moving Ext" extends "Ws Only"
+{
+    trigger OnBeforeInsert()
+    begin
+        Rec.SetAutoCalcFields("A Count");
+    end;
+}
+#else
+tableextension 50280 "Ws Moving Ext" extends "Keyed"
+{
+    trigger OnBeforeInsert()
+    begin
+    end;
+}
+#endif
+
+#if OPTIONAL
+tableextension 50270 "Ws Split Ext" extends "Not Loaded"
+{
+    fields
+    {
+        field(50270; "Ws Opt"; Integer)
+        {
+            trigger OnValidate()
+            begin
+            end;
+        }
+    }
+}
+#else
+tableextension 50270 "Ws Split Ext" extends "No. Series"
+{
+    fields
+    {
+        field(50270; "Ws Opt"; Integer)
+        {
+            trigger OnValidate()
+            begin
+            end;
+        }
+    }
+}
+#endif
+
 tableextension 50240 "Moving Ext" extends "New Base"
 {
     keys
@@ -198,7 +312,17 @@ table 50230 "Keyed"
     fields
     {
         field(1; "Entry No."; Integer) { }
+        field(2; "K Count"; Integer)
+        {
+            FieldClass = FlowField;
+            CalcFormula = count("Ws Only");
+        }
     }
+
+    procedure KeyedFind()
+    begin
+        Rec.FindFirst();
+    end;
 }
 
 #if ONE
@@ -241,15 +365,35 @@ const ZBASE_SRC: &str = r#"table 50 "Shared"
     fields
     {
         field(1; "Entry No."; Integer) { }
+        field(2; "Shared Count"; Integer)
+        {
+            FieldClass = FlowField;
+            CalcFormula = count("Shared");
+        }
     }
+
+    procedure P()
+    begin
+        Rec.FindFirst();
+    end;
 }
 
 tableextension 51 "Shared Ext" extends "Shared"
 {
     fields
     {
-        field(51; "Z Flag"; Boolean) { }
+        field(51; "Z Flag"; Boolean)
+        {
+            trigger OnValidate()
+            begin
+            end;
+        }
     }
+
+    trigger OnBeforeInsert()
+    begin
+        Rec."Z Flag" := true;
+    end;
 }
 
 #if ONE
@@ -324,8 +468,34 @@ codeunit 52 "Z Main"
         ZP: Page "Z Page";
     begin
         S.FindFirst();
+        S.Insert(true);
+        S.Validate("Z Flag", true);
+        S.CalcFields("Shared Count");
         ZP.PageTouch();
         ZP.ExtTouch();
+        RefCount();
+        RefByName();
+        S.P();
+    end;
+
+    procedure RefCount()
+    var
+        RR: RecordRef;
+        FR: FieldRef;
+    begin
+        RR.Open(50);
+        FR := RR.Field(2);
+        FR.CalcField();
+    end;
+
+    procedure RefByName()
+    var
+        RR: RecordRef;
+        FR: FieldRef;
+    begin
+        RR.Open(Database::"Shared");
+        FR := RR.Field(2);
+        FR.CalcField();
     end;
 }
 
@@ -371,10 +541,53 @@ page 62 "Z Page"
     SourceTable = "Shared";
     SourceTableTemporary = true;
 }
+
+tableextension 63 "U Ext" extends "Shared"
+{
+    fields
+    {
+        field(63; "U Flow"; Integer)
+        {
+            FieldClass = FlowField;
+            CalcFormula = count("Other");
+        }
+    }
+
+    trigger OnBeforeInsert()
+    begin
+        Rec.SetAutoCalcFields("U Flow");
+    end;
+}
+
+codeunit 64 "U Main"
+{
+    procedure Add()
+    var
+        S: Record "Shared";
+    begin
+        S.Insert(true);
+    end;
+}
 "#;
 
 fn model() -> ModelEntities {
+    full_model().workspace
+}
+
+fn full_model() -> al_sem::program::model::workspace::Model {
     use al_sem::program::model::program_calls::assemble_and_resolve_cross_app_program;
+    let dir = fixture();
+    assemble_and_resolve_cross_app_program(
+        &al_sem::program::inputs::WorkspaceInputs::read(dir.path(), &Default::default()),
+        false,
+        al_sem::program::model::workspace::AssemblyNeeds::BASE,
+    )
+    .expect("cross-app model")
+    .resolved
+}
+
+/// The workspace and its four dependencies, written to a fresh folder.
+fn fixture() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
     let dep = |g: &str, n: &str| {
         format!(r#"{{"id":"{g}","name":"{n}","publisher":"probe","version":"1.0.0.0"}}"#)
@@ -445,7 +658,7 @@ fn model() -> ModelEntities {
             UNRELATED,
             "Zz Unrelated",
             &format!(
-                r#""Tables":[{},{}],"Pages":[{{"Id":62,"Name":"Z Page"}}]"#,
+                r#""Tables":[{},{}],"Pages":[{{"Id":62,"Name":"Z Page"}}],"TableExtensions":[{{"Id":63,"Name":"U Ext","TargetObject":"Shared"}}],"Codeunits":[{{"Id":64,"Name":"U Main","Methods":[{{"Name":"Add","Parameters":[]}}]}}]"#,
                 table(60, "Shared", ""),
                 table(50, "Other", "")
             ),
@@ -453,14 +666,7 @@ fn model() -> ModelEntities {
         &[("src/Unrelated.al", UNRELATED_SRC)],
         "",
     );
-    assemble_and_resolve_cross_app_program(
-        &al_sem::program::inputs::WorkspaceInputs::read(dir.path(), &Default::default()),
-        false,
-        al_sem::program::model::workspace::AssemblyNeeds::BASE,
-    )
-    .expect("cross-app model")
-    .resolved
-    .workspace
+    dir
 }
 
 fn var_table(ws: &ModelEntities, app: &str, routine: &str, var: &str) -> Option<String> {
@@ -789,5 +995,318 @@ fn a_table_name_binds_as_the_resolver_binds_it_in_the_model() {
         ),
         ("known".to_string(), Some(true)),
         "page extension's base page is not the unrelated temporary page"
+    );
+}
+
+/// ENG-218: a FlowField's `CalcFormula` table and a RecordRef's `Open` table
+/// bind as ENG-194 binds a record's, seen from the app the formula or the
+/// code is written in (`flow_fields::Tables`).
+/// DISCRIMINATION (2026-11-27, each break made with Edit, run red, restored,
+/// green): `Tables::by_name` ignoring the scope (an unscoped table) fails
+/// "a moved formula table gives way"; the RecordRef number through the
+/// model-wide number index fails "RecordRef number, own app"; the formula
+/// bound from the host table's app instead of the field's declaring app
+/// fails "an extension field's formula binds from its declaring app"; a
+/// table and its extensions sharing `Rec` by NAME again (`object_groups`)
+/// fails "another app's extension of a same-named table shares no Rec";
+/// sharing through the union of every row of an object id (not the routine's
+/// declaring row) fails "a split extension's alternative shares Rec only
+/// with its own base"; a table extension that never shares fails "the
+/// alternative shares Rec with its own base".
+#[test]
+fn flowfield_and_recordref_tables_bind_as_the_resolver_binds_them() {
+    use al_sem::program::model::flow_fields::FlowFieldSource;
+    let ws = model();
+    let routine = |app: &str, name: &str| {
+        ws.routines
+            .iter()
+            .find(|r| r.app_guid == app && r.name == name)
+            .unwrap_or_else(|| panic!("routine {name} of {app}"))
+    };
+    let calc_sources = |app: &str, name: &str| -> Vec<FlowFieldSource> {
+        routine(app, name)
+            .record_operations
+            .iter()
+            .filter(|op| op.op == "CalcFields")
+            .flat_map(|op| op.flow_field_reads.iter().map(|r| r.source.clone()))
+            .collect()
+    };
+    let table = |id: String| FlowFieldSource::Table {
+        table_id: id,
+        temporary: false,
+    };
+    // The workspace's `count("No. Series")`: the Moved symbol table gives way.
+    assert_eq!(
+        calc_sources(WS, "CountSeries"),
+        vec![table(format!("{FOUND}/table/308"))],
+        "a moved formula table gives way"
+    );
+    // Fable r1: the workspace's extension field on Found's `No. Series`
+    // counts the workspace's own "Ws Only": the formula is the workspace's,
+    // seen from it (Found, the host table's app, does not see it).
+    assert_eq!(
+        calc_sources(WS, "Go"),
+        vec![table(format!("{WS}/table/50220"))],
+        "an extension field's formula binds from its declaring app"
+    );
+    // ZBase's `count("Shared")`: the unrelated app's `Shared` is not seen.
+    assert_eq!(
+        calc_sources(ZBASE, "Work"),
+        vec![table(format!("{ZBASE}/table/50"))],
+        "formula table within the closure"
+    );
+    // ZBase's `RR.Open(50)`: its own table 50, not the unrelated app's.
+    let fr = &routine(ZBASE, "RefCount").field_ref_operations;
+    assert_eq!(
+        fr.iter()
+            .map(|op| op.table_id.as_deref())
+            .collect::<Vec<_>>(),
+        vec![Some(format!("{ZBASE}/table/50").as_str())],
+        "RecordRef number, own app"
+    );
+    // Fable r1: `RR.Open(Database::"Shared")` by name, from ZBase.
+    let fr = &routine(ZBASE, "RefByName").field_ref_operations;
+    assert_eq!(
+        fr.iter()
+            .map(|op| op.table_id.as_deref())
+            .collect::<Vec<_>>(),
+        vec![Some(format!("{ZBASE}/table/50").as_str())],
+        "RecordRef name, within the closure"
+    );
+    // Fable r1: Unrelated's "U Ext" (of ITS `Shared`) sets
+    // `SetAutoCalcFields("U Flow")` on its `Rec`; ZBase's own `Shared`
+    // retrieves its `Rec`: the two do not share (a table and its extensions
+    // share by table id), so ZBase's retrieval reads no "U Flow".
+    let p_reads: Vec<String> = routine(ZBASE, "P")
+        .record_operations
+        .iter()
+        .filter(|op| op.op == "FindFirst")
+        .flat_map(|op| op.flow_field_reads.iter().map(|r| r.field.clone()))
+        .collect();
+    assert!(
+        !p_reads.iter().any(|f| f == "U Flow"),
+        "another app's extension of a same-named table shares no Rec: {p_reads:?}"
+    );
+    let auto = routine(UNRELATED, "OnBeforeInsert")
+        .call_sites
+        .iter()
+        .any(|c| c.argument_texts.iter().any(|a| a.contains("U Flow")));
+    assert!(
+        auto,
+        "precondition: Unrelated's SetAutoCalcFields is in the model"
+    );
+    // sol r2: the workspace's split "Ws Moving Ext" sets
+    // `SetAutoCalcFields("A Count")` in its "Ws Only" alternative only; the
+    // "Keyed" table's own retrieval shares nothing with it (each routine
+    // shares through its own declaring row, not every row of the id).
+    let keyed_reads: Vec<String> = routine(WS, "KeyedFind")
+        .record_operations
+        .iter()
+        .filter(|op| op.op == "FindFirst")
+        .flat_map(|op| op.flow_field_reads.iter().map(|r| r.field.clone()))
+        .collect();
+    assert!(
+        !keyed_reads.iter().any(|f| f == "A Count"),
+        "a split extension's alternative shares Rec only with its own base: {keyed_reads:?}"
+    );
+    // sol r3: and it does share with its own base: "Ws Only"'s own retrieval
+    // gets "A Count".
+    let own_reads: Vec<String> = routine(WS, "WsFind")
+        .record_operations
+        .iter()
+        .filter(|op| op.op == "FindFirst")
+        .flat_map(|op| op.flow_field_reads.iter().map(|r| r.field.clone()))
+        .collect();
+    assert!(
+        own_reads.iter().any(|f| f == "A Count"),
+        "the alternative shares Rec with its own base: {own_reads:?}"
+    );
+}
+
+/// ENG-218: "the triggers of table T" (cross_rules' `table_triggers`) are
+/// its own and those of the extensions whose stub says they extend T
+/// (`ModelTable::extends_table_id`), not every tableextension of T's NAME:
+/// ZBase's and Unrelated's `Shared` each have an extension with
+/// `OnBeforeInsert`.
+/// DISCRIMINATION (2026-11-27, each break made with Edit, run red, restored,
+/// green): matching extensions by the extended name again fails "ZBase's
+/// Shared: its own extension's trigger only"; `merge_extension_fields` not
+/// setting `extends_table_id` fails it too (no extension trigger at all);
+/// keeping every routine of a matching object id (not only the declaring
+/// row's) fails "each base its own alternative's trigger"; pairing an id's
+/// rows with its stubs in reverse fails "each table's trigger is its own
+/// alternative's".
+#[test]
+fn table_triggers_are_those_of_the_extensions_of_this_table() {
+    use al_sem::engine::l5::cross_rules::{CrossRules, CrossRulesIndex};
+    let model = full_model();
+    let ws = &model.workspace;
+    let trigger_owner = |object: &str| {
+        ws.routines
+            .iter()
+            .any(|r| r.object_id == object && r.name == "OnBeforeInsert")
+    };
+    let zbase_ext = format!("{ZBASE}/TableExtension/51");
+    let unrelated_ext = format!("{UNRELATED}/TableExtension/63");
+    // Precondition: both extensions' triggers are in the model.
+    assert!(trigger_owner(&zbase_ext), "precondition: ZBase's trigger");
+    assert!(
+        trigger_owner(&unrelated_ext),
+        "precondition: Unrelated's trigger"
+    );
+    let ix = CrossRulesIndex::new(&model);
+    let rules = CrossRules::over(&model, &ix);
+    let owners = |table: String| {
+        let mut o: Vec<String> = rules
+            .table_triggers(&table, None, "Insert")
+            .into_iter()
+            .map(|i| ws.routines[i].object_id.to_string())
+            .collect();
+        o.sort();
+        o.dedup();
+        o
+    };
+    assert_eq!(
+        owners(format!("{ZBASE}/table/50")),
+        vec![zbase_ext.clone()],
+        "ZBase's Shared: its own extension's trigger only"
+    );
+    assert_eq!(
+        owners(format!("{UNRELATED}/table/60")),
+        vec![unrelated_ext.clone()],
+        "Unrelated's Shared: its own extension's trigger only"
+    );
+    // sol r1: the workspace's split "Ws Moving Ext" has an `OnBeforeInsert`
+    // in each `#if` alternative, one on "Ws Only" and one on "Keyed" (one
+    // object id): each table gets its own alternative's trigger row only.
+    let moving = format!("{WS}/TableExtension/50280");
+    assert_eq!(
+        ws.routines
+            .iter()
+            .filter(|r| r.object_id == moving && r.name == "OnBeforeInsert")
+            .count(),
+        2,
+        "precondition: one trigger row per alternative"
+    );
+    let new_rows = rules.table_triggers(&format!("{WS}/table/50220"), None, "Insert");
+    let old_rows = rules.table_triggers(&format!("{WS}/table/50230"), None, "Insert");
+    assert_eq!(
+        (new_rows.len(), old_rows.len()),
+        (1, 1),
+        "each base its own alternative's trigger: {new_rows:?} {old_rows:?}"
+    );
+    // Fable r2: and each row is its own base's alternative (the declaring row
+    // extends that table), not merely a different row.
+    let declaring = al_sem::program::model::declaring::DeclaringObjects::new(&ws.objects);
+    let target = |rows: &[usize]| {
+        declaring
+            .of(&ws.routines[rows[0]])
+            .and_then(|d| d.extends_target_name.clone())
+    };
+    assert_eq!(
+        (target(&new_rows), target(&old_rows)),
+        (Some("Ws Only".to_string()), Some("Keyed".to_string())),
+        "each table's trigger is its own alternative's"
+    );
+}
+
+/// ENG-218: `explain` of a tableextension field's `OnValidate` finds the
+/// field on the table the extension's stub says it extends
+/// (`explain::trigger_table`), not by a model-wide match of the extended
+/// name: the workspace's "Ws NS Ext" extends `No. Series`, of which the model
+/// holds two (Found's live one and ZOld's `Moved` one). `explain` takes only
+/// workspace routines, and the workspace sees every app of the model, so a
+/// moved table is where the stub and the name differ.
+/// DISCRIMINATION (2026-11-27, break made with Edit, run red, restored,
+/// green): `trigger_table` resolving the extended name model-wide again
+/// fails "the field card names Found's table".
+#[test]
+fn explain_finds_an_extension_fields_table_through_its_stub() {
+    let dir = fixture();
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_alsem"))
+        .args([
+            "explain",
+            &dir.path().to_string_lossy(),
+            "--routine",
+            r#"TableExtension "Ws NS Ext"."Ws Note"::OnValidate"#,
+            "--format",
+            "json",
+        ])
+        .env("RUST_LOG", "off")
+        .output()
+        .expect("spawn alsem");
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap_or_else(|e| {
+        panic!(
+            "json ({e}): {}\n{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        )
+    });
+    let run_by = &v["cards"][0]["runBy"];
+    assert_eq!(
+        (run_by["kind"].as_str(), run_by["table"].as_str()),
+        (Some("field-validate"), Some("No. Series")),
+        "the field card names Found's table: {v:#}"
+    );
+}
+
+/// Run `alsem explain --format json` on the fixture for `routine`.
+fn explain_json(routine: &str) -> serde_json::Value {
+    let dir = fixture();
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_alsem"))
+        .args([
+            "explain",
+            &dir.path().to_string_lossy(),
+            "--routine",
+            routine,
+            "--format",
+            "json",
+        ])
+        .env("RUST_LOG", "off")
+        .output()
+        .expect("spawn alsem");
+    serde_json::from_slice(&out.stdout).unwrap_or_else(|e| {
+        panic!(
+            "json ({e}): {}\n{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        )
+    })
+}
+
+/// ENG-218 (sol r1, Fable r1): a field trigger of an `#if`-split
+/// tableextension takes ITS OWN alternative's base: "Ws Split Ext" extends
+/// "Not Loaded" in its first alternative and `No. Series` in the other.
+/// explain's one card for the routine is its first declaring row's, whose
+/// base is not known, so the card names no table (the other alternative's
+/// known base is no answer for it).
+/// DISCRIMINATION (2026-11-27, break made with Edit, run red, restored,
+/// green): taking any alternative's known base (the stubs' first `Some`, as
+/// the first ENG-218 head did) gives "field-validate" on `No. Series` and
+/// fails "the unknown alternative names no table".
+#[test]
+fn explain_takes_each_alternatives_own_base() {
+    let v = explain_json(r#"TableExtension "Ws Split Ext"."Ws Opt"::OnValidate"#);
+    assert_eq!(
+        v["cards"][0]["runBy"]["kind"].as_str(),
+        Some("not-listed"),
+        "the unknown alternative names no table: {v:#}"
+    );
+}
+
+/// ENG-218 (sol r2): "Ws Two Base Ext" extends "Ws Only" in one `#if`
+/// alternative and "Keyed" in the other, both known. explain's one card
+/// covers both rows, so it names neither table rather than listing the other
+/// alternative's sites under the first one's.
+/// DISCRIMINATION (2026-11-27, break made with Edit, run red, restored,
+/// green): reading only the card's first row gives "field-validate" on
+/// "Ws Only" and fails "alternatives with different bases name no table".
+#[test]
+fn explain_declines_a_card_whose_alternatives_extend_different_tables() {
+    let v = explain_json(r#"TableExtension "Ws Two Base Ext"."Ws Two"::OnValidate"#);
+    assert_eq!(
+        v["cards"][0]["runBy"]["kind"].as_str(),
+        Some("not-listed"),
+        "alternatives with different bases name no table: {v:#}"
     );
 }

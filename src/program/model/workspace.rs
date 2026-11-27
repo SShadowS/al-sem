@@ -280,6 +280,12 @@ pub struct ModelTable {
     /// `SymbolTable`), otherwise ops on the real table render the EXTENSION's
     /// name in rootCause text. Additive — ModelTable is not golden-serialized.
     pub is_extension_stub: bool,
+    /// ENG-218: on a tableextension stub, the id of the table it extends as
+    /// its own app sees it (`merge_extension_fields` sets it; ENG-194's
+    /// scoped lookup), one per `#if` alternative's stub; `None` on a real
+    /// table, or when the base is not known. The readers that ask "the
+    /// extensions of table T" match this, never the extended NAME.
+    pub extends_table_id: Option<String>,
 }
 
 /// The system fields the platform adds to every table, as (lowercased name,
@@ -1235,6 +1241,7 @@ fn index_table_ir(
         keys,
         is_temporary,
         is_extension_stub,
+        extends_table_id: None,
     }
 }
 
@@ -4011,7 +4018,7 @@ pub fn resolve(workspace: &mut ModelEntities, scope: &super::symbol_table::Table
 
     // Engine limits B5: after the merge, so a table extension's FlowField on a
     // dependency table is found.
-    super::flow_fields::attach_flow_field_reads(workspace);
+    super::flow_fields::attach_flow_field_reads(workspace, scope);
 }
 
 // ---------------------------------------------------------------------------

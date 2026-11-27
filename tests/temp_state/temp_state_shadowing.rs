@@ -74,6 +74,7 @@ fn make_table(name: &str, number: i64) -> ModelTable {
         keys: Vec::new(),
         is_temporary: false,
         is_extension_stub: false,
+        extends_table_id: None,
     }
 }
 

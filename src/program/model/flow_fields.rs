@@ -35,10 +35,13 @@
 //!   in an action a page extension adds is one record. An object global is
 //!   shared by the routines of its own object; a base object's global also by
 //!   its extensions (a `protected var`). A routine that declares a local or
-//!   parameter of that name is not touched. The sharing is keyed by the base
-//!   object's type and NAME (an extension names its target by name), so two
-//!   same-named pages of different apps share too: a may-read, never a lost
-//!   one;
+//!   parameter of that name is not touched. A table and its extensions share
+//!   by the TABLE ID, each extension through the table its own `#if`
+//!   alternative's stub says it extends (ENG-218: never a same-named table of
+//!   an app the extension cannot see); a routine reads its own declaring
+//!   row's groups. Pages and reports share by the base object's type and NAME
+//!   (an extension names its target by name), so two same-named pages of
+//!   different apps share too: a may-read, never a lost one;
 //! - a RecordRef: `RecRef.SetAutoCalcFields(N, ...)` names fields by NUMBER
 //!   (Learn, `RecordRef.SetAutoCalcFields([Fields: Integer,...])`), looked up
 //!   by number in the RecordRef's table;
@@ -360,74 +363,39 @@ fn field_sel(arg: &str) -> FieldSel {
 }
 
 /// The tables of the model, by id (a real table wins over an extension stub,
-/// as `SymbolTable` indexes them) and by name (lowercased). A name is looked up
-/// among real tables first, then among stubs; a name two tables with different
-/// ids share in the same group is `None`: the model keeps no namespace, so the
-/// engine cannot tell which of them a formula names.
+/// as `SymbolTable` indexes them), and by name or number as the program's
+/// resolver binds them, seen from the app the reference is written in
+/// (ENG-218: ENG-194's `SymbolTable::table_by_name_from` /
+/// `table_by_number_from`: the app's dependency closure, a real table over a
+/// stub, a moved/removed table giving way to a live one; two left decline).
 struct Tables<'a> {
     by_id: HashMap<&'a str, &'a ModelTable>,
-    real_by_name: HashMap<String, Option<&'a ModelTable>>,
-    stub_by_name: HashMap<String, Option<&'a ModelTable>>,
-    /// Real tables by number (a RecordRef's `Open(18)`); `None` when two
-    /// apps' tables share the number.
-    real_by_number: HashMap<i64, Option<&'a ModelTable>>,
+    symbols: super::symbol_table::SymbolTable<'a>,
 }
 
 impl<'a> Tables<'a> {
-    fn new(tables: &'a [ModelTable]) -> Self {
+    fn new(tables: &'a [ModelTable], scope: &'a super::symbol_table::TableScope) -> Self {
         let mut by_id: HashMap<&str, &ModelTable> = HashMap::new();
-        let mut real_by_name: HashMap<String, Option<&ModelTable>> = HashMap::new();
-        let mut stub_by_name: HashMap<String, Option<&ModelTable>> = HashMap::new();
-        let mut real_by_number: HashMap<i64, Option<&ModelTable>> = HashMap::new();
         for t in tables {
-            if !t.is_extension_stub {
-                real_by_number
-                    .entry(t.table_number)
-                    .and_modify(|seen| {
-                        if seen.is_some_and(|p| p.id != t.id) {
-                            *seen = None;
-                        }
-                    })
-                    .or_insert(Some(t));
-            }
             let keep_id = by_id
                 .get(t.id.as_str())
                 .is_some_and(|p| !p.is_extension_stub && t.is_extension_stub);
             if !keep_id {
                 by_id.insert(t.id.as_str(), t);
             }
-            let by_name = if t.is_extension_stub {
-                &mut stub_by_name
-            } else {
-                &mut real_by_name
-            };
-            by_name
-                .entry(t.name.fold_identifier())
-                .and_modify(|seen| {
-                    if seen.is_some_and(|p| p.id != t.id) {
-                        *seen = None;
-                    }
-                })
-                .or_insert(Some(t));
         }
         Tables {
             by_id,
-            real_by_name,
-            stub_by_name,
-            real_by_number,
+            symbols: super::symbol_table::SymbolTable::build_scoped(&[], tables, scope),
         }
     }
 
-    /// The table a formula names, or why it is not decided.
-    fn by_name(&self, name: &str) -> Result<&'a ModelTable, &'static str> {
-        let key = name.fold_identifier();
-        match self
-            .real_by_name
-            .get(&key)
-            .or_else(|| self.stub_by_name.get(&key))
-        {
-            Some(Some(t)) => Ok(t),
-            Some(None) => Err(TABLE_AMBIGUOUS),
+    /// The table a formula or RecordRef of app `from` names, or why it is not
+    /// decided: two tables `from` sees decline (ambiguous), none is not loaded.
+    fn by_name(&self, from: &str, name: &str) -> Result<&ModelTable, &'static str> {
+        match self.symbols.table_by_name_from(from, name) {
+            Some(t) => Ok(t),
+            None if self.symbols.sees_table_named(from, name) => Err(TABLE_AMBIGUOUS),
             None => Err(TABLE_NOT_LOADED),
         }
     }
@@ -485,16 +453,18 @@ impl<'a> Tables<'a> {
         }
     }
 
-    /// The table a RecordRef `Open(<literal>)` binding names.
-    fn by_reference(&self, reference: &str, is_name: bool) -> Option<&'a ModelTable> {
+    /// The table a RecordRef `Open(<literal>)` binding in code of app `from`
+    /// names (ENG-218: by number as the resolver binds a number, own app
+    /// first).
+    fn by_reference(&self, from: &str, reference: &str, is_name: bool) -> Option<&ModelTable> {
         if is_name {
-            self.by_name(reference).ok()
+            self.by_name(from, reference).ok()
         } else {
             reference
                 .trim()
                 .parse::<i64>()
                 .ok()
-                .and_then(|n| self.real_by_number.get(&n).copied().flatten())
+                .and_then(|n| self.symbols.table_by_number_from(from, n))
         }
     }
 
@@ -509,7 +479,9 @@ impl<'a> Tables<'a> {
         for formula in &field.calc_formula {
             let source = match calc_formula_table(formula) {
                 None => FlowFieldSource::Undecided(FORMULA_UNREADABLE),
-                Some(table) => match self.by_name(&table) {
+                // ENG-218: the formula is written in the field's declaring app
+                // (an extension field's: the extension's).
+                Some(table) => match self.by_name(&field.declaring_app_id, &table) {
                     Ok(t) => FlowFieldSource::Table {
                         table_id: t.id.clone(),
                         temporary: t.is_temporary,
@@ -598,15 +570,25 @@ fn auto_calc_calls(routine: &ModelRoutine) -> Vec<(String, String, bool)> {
 /// extensions as `protected var`).
 struct Sharing<'a> {
     by_object: HashMap<&'a str, (Vec<String>, bool)>,
+    /// ENG-218 (sol r2): each object ROW's own groups, read for a routine
+    /// through its declaring row (an `#if` alternative shares only what its
+    /// own build has).
+    by_row: HashMap<*const ModelObject, (Vec<String>, bool)>,
+    declaring: super::declaring::DeclaringObjects<'a>,
 }
 
 impl<'a> Sharing<'a> {
-    fn new(objects: &'a [ModelObject]) -> Self {
+    fn new(objects: &'a [ModelObject], tables: &[ModelTable]) -> Self {
+        // ENG-218 (Fable r1): a table extension row shares with the table its
+        // own alternative's stub says it extends.
+        let bases = super::extension_fields::extension_bases(objects, tables);
         let mut by_object: HashMap<&'a str, (Vec<String>, bool)> = HashMap::new();
-        for o in objects {
-            let (groups, base) = object_groups(o);
-            // An `#if`-split object has a row per arm under one id: their
-            // groups add up.
+        let mut by_row: HashMap<*const ModelObject, (Vec<String>, bool)> = HashMap::new();
+        for (row, o) in objects.iter().enumerate() {
+            let (groups, base) = object_groups(o, bases[row]);
+            by_row.insert(std::ptr::from_ref(o), (groups.clone(), base));
+            // An id's rows' groups add up, for a routine whose declaring row
+            // is not found.
             let entry = by_object.entry(o.id.as_str()).or_default();
             for g in groups {
                 if !entry.0.contains(&g) {
@@ -615,7 +597,11 @@ impl<'a> Sharing<'a> {
             }
             entry.1 |= base;
         }
-        Sharing { by_object }
+        Sharing {
+            by_object,
+            by_row,
+            declaring: super::declaring::DeclaringObjects::new(objects),
+        }
     }
 
     /// The scopes record `key` is shared in, seen from `routine`: none for
@@ -623,7 +609,11 @@ impl<'a> Sharing<'a> {
     /// for a base object's global); the group for a name the routine does
     /// not declare (the implicit `Rec`).
     fn scopes(&self, routine: &ModelRoutine, key: &str, this: bool) -> Vec<String> {
-        let own = self.by_object.get(routine.object_id.as_str());
+        let own = self
+            .declaring
+            .of(routine)
+            .and_then(|d| self.by_row.get(&std::ptr::from_ref(d)))
+            .or_else(|| self.by_object.get(routine.object_id.as_str()));
         let group_scopes = || -> Vec<String> {
             match own {
                 Some((groups, _)) => groups.iter().map(|g| format!("{g}|{key}")).collect(),
@@ -657,10 +647,26 @@ impl<'a> Sharing<'a> {
 }
 
 /// The sharing groups of one object row and whether it is a base object.
-fn object_groups(o: &ModelObject) -> (Vec<String>, bool) {
+/// `table_base`: for a table extension row, the table it extends (its stub's
+/// `extends_table_id`). A table and its extensions share by the TABLE ID
+/// (ENG-218, Fable r1: by name, an unrelated app's extension of a
+/// same-named table shared `Rec` with this one); pages and reports by name.
+fn object_groups(o: &ModelObject, table_base: Option<&str>) -> (Vec<String>, bool) {
+    match o.object_type.as_str() {
+        "Table" => {
+            let id = crate::engine::ids::encode_table_id(&o.app_guid, o.object_number);
+            return (vec![format!("table:{id}")], true);
+        }
+        "TableExtension" => {
+            return match table_base {
+                Some(id) => (vec![format!("table:{id}")], false),
+                None => (vec![format!("id:{}", o.id)], false),
+            };
+        }
+        _ => {}
+    }
     let family = match o.object_type.as_str() {
         "Page" | "PageExtension" => "page",
-        "Table" | "TableExtension" => "table",
         "Report" | "ReportExtension" => "report",
         _ => return (vec![format!("id:{}", o.id)], false),
     };
@@ -726,7 +732,7 @@ fn record_ref_table(
     for b in bindings {
         let t = match b {
             crate::program::recordref_table::Binding::Table { reference, is_name } => tables
-                .by_reference(reference, *is_name)
+                .by_reference(&routine.app_guid, reference, *is_name)
                 .map(|t| t.id.clone()),
             crate::program::recordref_table::Binding::GetTable(v) => routine
                 .record_variables
@@ -943,8 +949,16 @@ fn field_ref_operations(routine: &ModelRoutine, tables: &Tables<'_>) -> Vec<Mode
 /// Write every record operation's [`ModelRecordOperation::flow_field_reads`]
 /// and every routine's [`ModelRoutine::field_ref_operations`] (module doc).
 /// Runs after record types are resolved and extension fields merged.
-pub fn attach_flow_field_reads(workspace: &mut ModelEntities) {
-    let pass = Pass::new(&workspace.tables, &workspace.objects, &workspace.routines);
+pub fn attach_flow_field_reads(
+    workspace: &mut ModelEntities,
+    scope: &super::symbol_table::TableScope,
+) {
+    let pass = Pass::new(
+        &workspace.tables,
+        &workspace.objects,
+        &workspace.routines,
+        scope,
+    );
     for routine in &mut workspace.routines {
         let mut ops = std::mem::take(&mut routine.record_operations);
         pass.attach(routine, &mut ops);
@@ -959,6 +973,7 @@ pub fn attach_flow_field_reads(workspace: &mut ModelEntities) {
 pub fn attach_appended_flow_field_reads(
     workspace: &mut ModelEntities,
     appended: &HashMap<usize, usize>,
+    scope: &super::symbol_table::TableScope,
 ) {
     // A dataset operation's receiver names no variable (no setup reaches it):
     // it alone does not pay for a second pass.
@@ -979,7 +994,12 @@ pub fn attach_appended_flow_field_reads(
     if !any {
         return;
     }
-    let pass = Pass::new(&workspace.tables, &workspace.objects, &workspace.routines);
+    let pass = Pass::new(
+        &workspace.tables,
+        &workspace.objects,
+        &workspace.routines,
+        scope,
+    );
     for (&ri, &from) in appended {
         let routine = &mut workspace.routines[ri];
         let mut ops = routine.record_operations.split_off(from);
@@ -1002,8 +1022,9 @@ impl<'a> Pass<'a> {
         tables: &'a [ModelTable],
         objects: &'a [ModelObject],
         routines: &[ModelRoutine],
+        scope: &'a super::symbol_table::TableScope,
     ) -> Self {
-        let sharing = Sharing::new(objects);
+        let sharing = Sharing::new(objects, tables);
         let mut shared_auto: HashMap<String, Vec<String>> = HashMap::new();
         for routine in routines {
             for (key, arg, this) in auto_calc_calls(routine) {
@@ -1013,7 +1034,7 @@ impl<'a> Pass<'a> {
             }
         }
         Pass {
-            tables: Tables::new(tables),
+            tables: Tables::new(tables, scope),
             sharing,
             shared_auto,
         }
@@ -1215,6 +1236,7 @@ codeunit 50102 "C"
             keys: Vec::new(),
             is_temporary: false,
             is_extension_stub: false,
+            extends_table_id: None,
         }
     }
 
@@ -1227,7 +1249,9 @@ codeunit 50102 "C"
             table("flow", vec![(1, "No.", "Normal"), (2, "F", "FlowField")]),
             table("plain", vec![(1, "No.", "Normal")]),
         ];
-        let t = Tables::new(&tables);
+        let scope =
+            crate::program::model::symbol_table::TableScope::stated(&[("app", &["app"])], &[]);
+        let t = Tables::new(&tables, &scope);
         let mut out = Vec::new();
         t.reads_of("flow", "Missing", false, &mut out);
         assert_eq!(
@@ -1279,20 +1303,23 @@ codeunit 50102 "C"
             enum_impls: None,
         };
         assert_eq!(
-            object_groups(&obj("p", "Page", "Q Card", None)),
+            object_groups(&obj("p", "Page", "Q Card", None), None),
             (vec!["page:q card".to_string()], true)
         );
         assert_eq!(
-            object_groups(&obj("e", "PageExtension", "Q Ext", Some("Q Card"))),
+            object_groups(&obj("e", "PageExtension", "Q Ext", Some("Q Card")), None),
             (vec!["page:q card".to_string()], false)
         );
         assert_eq!(
-            object_groups(&obj(
-                "e",
-                "PageExtension",
-                "Q Ext",
-                Some("Microsoft.Sales.\"Q Card\"")
-            )),
+            object_groups(
+                &obj(
+                    "e",
+                    "PageExtension",
+                    "Q Ext",
+                    Some("Microsoft.Sales.\"Q Card\"")
+                ),
+                None
+            ),
             (
                 vec![
                     "page:microsoft.sales.\"q card\"".to_string(),
@@ -1301,12 +1328,25 @@ codeunit 50102 "C"
                 false
             )
         );
+        // ENG-218: a table and its extensions share by table id, the
+        // extension's from its stub (no stub base: no sharing).
         assert_eq!(
-            object_groups(&obj("t", "TableExtension", "T Ext", Some("Cust."))),
-            (vec!["table:cust.".to_string()], false)
+            object_groups(&obj("t", "Table", "Cust.", None), None),
+            (vec!["table:app/table/1".to_string()], true)
         );
         assert_eq!(
-            object_groups(&obj("c", "Codeunit", "C", None)),
+            object_groups(
+                &obj("t", "TableExtension", "T Ext", Some("Cust.")),
+                Some("app/table/1")
+            ),
+            (vec!["table:app/table/1".to_string()], false)
+        );
+        assert_eq!(
+            object_groups(&obj("t", "TableExtension", "T Ext", Some("Cust.")), None),
+            (vec!["id:t".to_string()], false)
+        );
+        assert_eq!(
+            object_groups(&obj("c", "Codeunit", "C", None), None),
             (vec!["id:c".to_string()], false)
         );
     }
