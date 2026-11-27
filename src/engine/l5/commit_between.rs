@@ -1378,11 +1378,14 @@ fn fires_surely<'a>(w: &Walk<'a, '_>, s: &Step<'a>) -> bool {
 /// `OnClosePage` (`OnQueryClosePage` runs again after it returns false,
 /// `OnFindRecord` on a refresh).
 fn may_repeat<'a>(w: &Walk<'a, '_>, s: &Step<'a>) -> Option<(&'static str, &'static str)> {
-    if let Some(EdgeSite::Event(_)) = s.site {
-        return w.conditional_subscribers.contains(s.to).then_some((
+    // Reviews r6 and r7: first, for every step kind (an event, a table
+    // event): a subscriber that may be bound manually runs once per bound
+    // instance.
+    if w.conditional_subscribers.contains(s.to) {
+        return Some((
             "repeated-subscriber-on-route",
-            "by an event whose subscriber may be bound manually, as several instances, each \
-             run once per raise",
+            "into a subscriber that may be bound manually, as several instances, each run once \
+             per raise",
         ));
     }
     let Some(EdgeSite::Guarded(x)) = s.site else {
@@ -1480,6 +1483,34 @@ fn trap_of<'a>(w: &Walk<'a, '_>, s: &Step<'a>) -> Option<TrapKind> {
         .and_then(|e| e.3)
 }
 
+/// The subscribers (stable routine ids) of a subscription that may carry a
+/// condition, for every edge kind that dispatches to subscribers: an event
+/// (the event graph's edges) and a platform table event (review r7: the
+/// table-event calls' `conditional`).
+fn conditional_subscribers(model: &Model) -> HashSet<&str> {
+    let stable: HashMap<&str, &str> = model
+        .workspace
+        .routines
+        .iter()
+        .map(|r| (r.id.as_str(), r.stable_routine_id.as_str()))
+        .collect();
+    let events = model
+        .events
+        .graph
+        .edges
+        .iter()
+        .filter(|e| e.conditional)
+        .map(|e| e.subscriber_stable_routine_id.as_str());
+    let table_events = model
+        .calls
+        .edges
+        .iter()
+        .filter(|e| e.table_event.as_ref().is_some_and(|t| t.conditional))
+        .filter_map(|e| e.to.as_deref())
+        .map(|to| stable.get(to).copied().unwrap_or(to));
+    events.chain(table_events).collect()
+}
+
 /// The (from, to, site) of every edge marked `TriggerFires::Maybe`.
 fn maybe_fire_edges(tree: &CapabilitySnapshot) -> HashSet<(&str, &str, &str)> {
     use crate::engine::l4::combined_graph::TriggerFires::Maybe;
@@ -1568,14 +1599,7 @@ pub(crate) fn compute<'a>(
         region_folded: HashSet::new(),
         self_reach: HashMap::new(),
         maybe_fire: maybe_fire_edges(tree),
-        conditional_subscribers: model
-            .events
-            .graph
-            .edges
-            .iter()
-            .filter(|e| e.conditional)
-            .map(|e| e.subscriber_stable_routine_id.as_str())
-            .collect(),
+        conditional_subscribers: conditional_subscribers(model),
         knobs: sites.knobs.clone(),
         commit_scopes: crate::engine::l5::commit_scope::CbGraph::of_tree(tree),
         group_paths: GroupPaths::new(&tree.typed_edges, model),

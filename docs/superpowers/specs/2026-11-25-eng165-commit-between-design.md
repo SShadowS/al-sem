@@ -391,9 +391,10 @@ in the same statement: a blocker).
 | implicit trigger of a single-row operation, `Always` | once | no | yes, when alone at its site | counted (S42) |
 | implicit trigger, `Maybe` (non-literal RunTrigger) | zero times or once | no | no (S48) | counted |
 | implicit trigger or table event of `ModifyAll`/`DeleteAll`, or of an operation not in the model | once per row, possibly zero | yes (`bulk-operation-on-route`, S44, S45) | no (S46) | counted |
-| table event of a single-row operation | once, or zero when the subscription is skipped | no | no (S52) | counted |
+| table event of a single-row operation, plain subscriber | once | no | no, the conservative reading (S52) | counted |
+| table event of a single-row operation, subscriber whose subscription may carry a condition (`Manual`, a skip) | once per bound instance, possibly zero | yes (`repeated-subscriber-on-route`, S55; checked first, for every step kind) | no | counted |
 | event dispatch to a plain subscriber | once per raise | no | no (not a guarded site) | `sibling-subscribers` for the event's other subscribers |
-| event dispatch to a subscriber whose subscription may carry a condition (`Manual`, a skip on a missing license or permission) | once per bound instance, possibly zero | yes (`repeated-subscriber-on-route`, S49) | no | `sibling-subscribers` |
+| event dispatch to a subscriber whose subscription may carry a condition (`Manual`, a skip on a missing license or permission) | once per bound instance, possibly zero | yes (`repeated-subscriber-on-route`, S49; checked first, for every step kind) | no | `sibling-subscribers` |
 | unresolved object run (`Codeunit.Run(Id)`) | not known | no route goes through it | n/a | n/a: a region call no edge leaves blocks (`region-unresolved-call`) |
 
 A loop or recursion around a step is control flow, read by `loop_above_meet` and

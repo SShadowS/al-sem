@@ -1306,8 +1306,9 @@ by Fable).
   `ModifyAll`/`DeleteAll` trigger or table event, once per row (`bulk-operation-on-route`); a run
   into a trigger the graph marks `Maybe`, such as a report dataitem's `OnAfterGetRecord`, or into
   a page trigger other than `OnInit`/`OnOpenPage`/`OnClosePage`, such as an `OnQueryClosePage`
-  that returns false (`repeated-trigger-on-route`); an event step into a subscriber that may be
-  bound manually, as several instances (`repeated-subscriber-on-route`); a prefix routine with no
+  that returns false (`repeated-trigger-on-route`); any step into a subscriber that may be
+  bound manually, as several instances, for an event or a table event alike
+  (`repeated-subscriber-on-route`); a prefix routine with no
   model row blocks `loop-above-meet`; every blocker that applies is listed; a route search that
   found nothing because it stopped at its budget says `relation: route-search-capped`, not "dead
   under literals"; `commitsInsideB` starts under B's route's `[CommitBehavior]`. The design

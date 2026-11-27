@@ -907,6 +907,17 @@ const REVIEW: &str = r#"codeunit 50640 "RV"
         end;
     end;
 
+    procedure S55()
+    var
+        D: Record "RV Doc 55";
+        M1: Codeunit "RV Manual 55";
+        M2: Codeunit "RV Manual 55";
+    begin
+        BindSubscription(M1);
+        BindSubscription(M2);
+        D.Insert(true);
+    end;
+
     procedure S33()
     begin
         Transmit(); // S33A
@@ -1049,8 +1060,8 @@ codeunit 50644 "RV Subscribers 35"
         L.Insert(); // S38B
     end;
 
-    // SkipOnMissingLicense = true: the subscription may be skipped.
-    [EventSubscriber(ObjectType::Table, Database::"RV Doc 52", 'OnAfterInsertEvent', '', true, false)]
+    // A plain subscription (no skip, not manual): see s52's doc.
+    [EventSubscriber(ObjectType::Table, Database::"RV Doc 52", 'OnAfterInsertEvent', '', false, false)]
     local procedure AfterInsert52(var Rec: Record "RV Doc 52"; RunTrigger: Boolean)
     var
         L: Record "EB Log";
@@ -1241,6 +1252,28 @@ codeunit 50657 "RV Impl 53b" implements "RV Runner 53"
 {
     procedure Run53()
     begin
+    end;
+}
+
+table 50658 "RV Doc 55"
+{
+    fields { field(1; "No."; Integer) { } }
+    keys { key(PK; "No.") { Clustered = true; } }
+}
+
+codeunit 50659 "RV Manual 55"
+{
+    EventSubscriberInstance = Manual;
+
+    [EventSubscriber(ObjectType::Table, Database::"RV Doc 55", 'OnAfterInsertEvent', '', false, false)]
+    local procedure AfterInsert55(var Rec: Record "RV Doc 55"; RunTrigger: Boolean)
+    var
+        R: Codeunit "RV";
+        L: Record "EB Log";
+    begin
+        L.Insert(); // S55B
+        R.Transmit(); // S55A
+        Commit();
     end;
 }
 
@@ -2102,11 +2135,23 @@ fn s51_a_page_trigger_that_runs_again_blocks() {
 
 #[test]
 fn s52_a_table_event_is_no_sure_b() {
-    // Review r6 (Fable item 3): B in an OnAfterInsertEvent subscriber that
-    // may be skipped (SkipOnMissingLicense). Pass 1 may skip it; its Commit
-    // runs before pass 2's B. No cut at the Insert: yes.
+    // Review r6 (Fable item 3): a table event is never a sure-B cut. Here
+    // the subscriber is plain, so it does run on pass 1 and `no` would also
+    // be right: the `yes` is the conservative may-reading (as S5d). A
+    // subscriber that may be skipped or bound several times is also blocked
+    // by `repeated-subscriber-on-route` (S55), so this plain one is the shape
+    // that reaches the `fires_surely` arm alone.
     let a = ask(ws(), &rv("S52"), &at("S52A"), &at("S52B"));
     assert_eq!(a.answer, "yes", "{}", a.raw);
+}
+
+#[test]
+fn s55_a_manual_table_event_subscriber_bound_twice_blocks() {
+    // Reviews r7 (sol, Fable): one Insert raises OnAfterInsertEvent; both
+    // bound instances run: the first's A and Commit, then the second's B.
+    let a = ask(ws(), &rv("S55"), &at("S55A"), &at("S55B"));
+    assert_ne!(a.answer, "no", "{}", a.raw);
+    assert!(a.raw.contains("repeated-subscriber-on-route"), "{}", a.raw);
 }
 
 #[test]
