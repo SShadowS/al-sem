@@ -1318,7 +1318,17 @@ by Fable).
   subscription may be skipped), an interface call (one implementer runs), a trigger of a bulk
   operation that may match no row, or a non-literal RunTrigger is no sure B any more. A pass
   that skips B then lets a later commit count as between: fixtures S46, S48, S52 and S53
-  answer `yes` where the engine said `no`. COUNT-PENDING-R5
+  answer `yes` where the engine said `no`.
+- **CDO count** (a seeded sample of 120 of the 216 routines where a call is followed by a record
+  `Insert`/`Modify`, A the call, B the write; one resident `alsem mcp`): 94 `no`, 8 `yes`,
+  15 `unknown` (8 an ambiguous routine name, 6 an open-world interface call in the region,
+  1 `recursion-on-route`), 3 refused (one site the root does not reach, two lines holding two
+  sites). Over rounds 3 to 6 the blockers turned 1 answer from `no` into `unknown`
+  (`recursion-on-route`, round 3); `loop-above-meet`, `site-other-edges`,
+  `bulk-operation-on-route`, `repeated-trigger-on-route` and `repeated-subscriber-on-route`
+  turned none. The sure-B change turned no `no` into a `yes`. Rounds 5 and 6 moved no answer and
+  no blocker in the sample: none of its routes passes a bulk operation, a report or page run, a
+  manual subscriber or a may-not-fire edge toward B.
 - **What a path that ends before B leaves out (for cost):** a statement on such a path is read
   for its own records only. `commitsWithoutB` then misses a commit in a callee on such a path,
   and an error raised inside such a callee is in neither `errorsBetween` nor any commit's
