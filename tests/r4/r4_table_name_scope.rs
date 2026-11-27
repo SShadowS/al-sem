@@ -178,6 +178,7 @@ tableextension 50231 "Keyed Ext B" extends "Keyed"
         key(KeyA; "KA") { }
         key(KeyB; "KB") { }
         key(KeyC; "KB") { SumIndexFields = "KA"; }
+        key(KeyD; "KA") { SumIndexFields = "KB"; }
     }
 }
 #endif
@@ -461,7 +462,9 @@ fn var_table(ws: &ModelEntities, app: &str, routine: &str, var: &str) -> Option<
 /// added its members fails "two apps' same-named extensions each keep their
 /// key"; no repeat check for a later alternative fails "... once each"; the
 /// repeat check against the keys this alternative is adding (not only
-/// earlier ones) drops KeyC and fails "... once each".
+/// earlier ones) drops KeyC and fails "... once each"; a repeat check that
+/// does not count (one earlier `KA` key skipping both later ones) drops KeyD
+/// and fails "... once each".
 #[test]
 fn a_table_name_binds_as_the_resolver_binds_it_in_the_model() {
     let ws = model();
@@ -615,10 +618,12 @@ fn a_table_name_binds_as_the_resolver_binds_it_in_the_model() {
         .map(|k| &k.members)
         .collect();
     // sol r6: and the later alternative's own two keys over `KB` (KeyB,
-    // KeyC) are both kept: keys of one alternative never match each other.
+    // KeyC) are both kept: keys of one alternative never match each other;
+    // sol r7: its two keys over `KA` (KeyA, KeyD) against the first
+    // alternative's one: one repeat, one kept. KA, KA, KB, KB.
     assert_eq!(
         ext_keys.len(),
-        3,
+        4,
         "both alternatives' keys, once each: {ext_keys:?}"
     );
     // sol + Fable r5: another app's same-named extension with an identical

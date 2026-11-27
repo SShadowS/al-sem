@@ -174,7 +174,7 @@ pub fn merge_extension_fields(
             "{base_table_id}/key/ext/{}/{}/",
             object.app_guid, object.object_number
         );
-        let earlier: Vec<Vec<String>> = if alt > 0 {
+        let mut earlier: Vec<Vec<String>> = if alt > 0 {
             base.keys
                 .iter()
                 .filter(|b| b.id.starts_with(&own_prefix))
@@ -214,7 +214,15 @@ pub fn merge_extension_fields(
             // Idempotent, as the field merge is; a key repeating one an
             // earlier alternative added (`earlier`) adds none (Fable r5: never
             // by name, never for an unsplit extension, never across apps).
-            if base.keys.iter().any(|b| b.id == id) || earlier.contains(&k.members) {
+            if base.keys.iter().any(|b| b.id == id) {
+                continue;
+            }
+            // Each earlier key stands for ONE repeat (sol r7): an alternative
+            // declaring two keys over fields an earlier one keyed once keeps
+            // the second. Skipped repeats are never added, so the keys under
+            // the prefix hold the most any one alternative declared.
+            if let Some(p) = earlier.iter().position(|m| *m == k.members) {
+                earlier.swap_remove(p);
                 continue;
             }
             base.keys.push(ModelKey {
