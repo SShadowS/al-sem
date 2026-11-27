@@ -553,7 +553,7 @@ fn a_table_name_binds_as_the_resolver_binds_it_in_the_model() {
     };
     let forced_temp = |routine: &str| {
         let v = rec(routine);
-        v.temp_state.kind.to_string() == "known" && v.temp_state.value == Some(true)
+        v.temp_state.kind == "known" && v.temp_state.value == Some(true)
     };
     assert_eq!(
         pages_named("Two Table Page"),
