@@ -1281,8 +1281,12 @@ ran beside the timing).
     silent, with or without parentheses (`if A.FindFirst then`), and inside `and`/`or`: past a
     false `A.Get(1) or B` the Get found nothing (reported), past a false `A.Get(1) and B` it may
     have (silent). A Boolean literal counts (sol r3): `A.Get(1) = false` is `not A.Get(1)`,
-    `A.Get(1) and true` is the Get, and `A.Get(1) or true` says nothing of it (its false branch
-    never runs, so nothing past it is reported). The same holds in loop conditions: a `while`
+    `A.Get(1) and true` is the Get, and `A.Get(1) or true` says nothing of it. A condition with
+    one value whatever runs (`A.Get(1) or true`, `while true`, folded through `not`, `and`, `or`,
+    `xor`, `=`, `<>` over Boolean literals) never takes its other branch: no state from it
+    reaches what follows (sol r4: `if A.Get(1) or true then begin B.Get(1); exit; end;
+    B.Modify()` would otherwise report a Modify that never runs; CDO: 0 such conditions). The
+    same holds in loop conditions: a `while`
     ends where its condition is false, a `repeat` where its `until` is true. The statement tree
     marks such an `if`, `while` or `repeat` with a `CondOp` hint and each tested operation leaf
     with the branch it is known to have missed on (CDO: 28 condition lines mix a record operation

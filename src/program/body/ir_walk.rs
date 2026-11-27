@@ -2935,6 +2935,45 @@ impl<'a> IrCfn<'a> {
         }
     }
 
+    /// ENG-177 (sol r4): the one value a condition has whatever runs, folded through
+    /// parentheses, `not`, `and`, `or`, `xor`, `=`, `<>` over Boolean literals (`X or true`
+    /// is true whatever X is; AL still evaluates X, so its leaves stay).
+    fn const_bool(&self, e: ExprId) -> Option<bool> {
+        use ExprKind::*;
+        match &self.ir().expr(e).kind {
+            Parenthesized(x) => self.const_bool(*x),
+            Literal(al_syntax::ir::Literal::Bool(b)) => Some(*b),
+            Unary {
+                op: UnaryOp::Not,
+                operand,
+            } => self.const_bool(*operand).map(|b| !b),
+            Binary { op, lhs, rhs } => {
+                let (l, r) = (self.const_bool(*lhs), self.const_bool(*rhs));
+                match op {
+                    BinaryOp::And if l == Some(false) || r == Some(false) => Some(false),
+                    BinaryOp::Or if l == Some(true) || r == Some(true) => Some(true),
+                    BinaryOp::And => Some(l? && r?),
+                    BinaryOp::Or => Some(l? || r?),
+                    BinaryOp::Eq => Some(l? == r?),
+                    BinaryOp::Ne | BinaryOp::Xor => Some(l? != r?),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// The condition marks an `if`, `while` or `repeat` node needs: the tested record
+    /// operations ([`PathHint::CondOp`]) and a constant value.
+    fn mark_condition(&self, n: &mut PCFNNode, cond: ExprId, leaves: &mut [PCFNNode]) {
+        if n.path_hint().is_none() && self.mark_tested_ops(cond, leaves) {
+            n.rare_mut().path_hint = Some(PathHint::CondOp);
+        }
+        if let Some(b) = self.const_bool(cond) {
+            n.rare_mut().const_cond = Some(b);
+        }
+    }
+
     /// `true` / `false` (through parentheses).
     fn bool_literal(&self, mut e: ExprId) -> Option<bool> {
         loop {
@@ -2992,9 +3031,8 @@ impl<'a> IrCfn<'a> {
                 let mut leaves = self.harvest_vec(*cond);
                 if let Some(h) = self.cond_call(*cond, &leaves) {
                     n.rare_mut().path_hint = Some(h);
-                } else if self.mark_tested_ops(*cond, &mut leaves) {
-                    n.rare_mut().path_hint = Some(PathHint::CondOp);
                 }
+                self.mark_condition(&mut n, *cond, &mut leaves);
                 n.condition_leaves = some_if(leaves);
                 n.condition_guard = self.simple_guard(*cond).map(Box::new);
                 if n.condition_guard.is_none()
@@ -3073,9 +3111,7 @@ impl<'a> IrCfn<'a> {
                 n.children = Some(vec![self.build_block(*body)]);
                 // sol r3: the body runs where the condition is true, the loop ends where false.
                 let mut leaves = self.harvest_vec(*cond);
-                if self.mark_tested_ops(*cond, &mut leaves) {
-                    n.rare_mut().path_hint = Some(PathHint::CondOp);
-                }
+                self.mark_condition(&mut n, *cond, &mut leaves);
                 n.condition_leaves = some_if(leaves);
                 n.flow = self.flow_cond(*cond);
                 n
@@ -3128,9 +3164,7 @@ impl<'a> IrCfn<'a> {
                 n.children = Some(self.block_items(*body));
                 // sol r3: the loop ends where the condition is true, goes round where false.
                 let mut leaves = self.harvest_vec(*until);
-                if self.mark_tested_ops(*until, &mut leaves) {
-                    n.rare_mut().path_hint = Some(PathHint::CondOp);
-                }
+                self.mark_condition(&mut n, *until, &mut leaves);
                 n.condition_leaves = some_if(leaves);
                 n.flow = Self::flow_loop(self.expr_text(*until));
                 n

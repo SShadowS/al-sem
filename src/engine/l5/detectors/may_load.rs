@@ -228,17 +228,26 @@ impl<'a> Walk<'a> {
     /// record operation in it ([`PathHint::CondOp`]: `if A.Get(1)`, `while not A.FindFirst or
     /// B`) loads its record only where it found one; where its branch says it found nothing,
     /// the record is as it was before it.
+    ///
+    /// sol r4: a condition with one value whatever runs (`if A.Get(1) or true`, `while true`)
+    /// never takes the other branch: its state is "no path".
     fn cond(&mut self, n: &PCFNNode, st: State, depth: usize) -> (State, State) {
-        if n.path_hint() != Some(PathHint::CondOp) {
+        let (on_true, on_false) = if n.path_hint() != Some(PathHint::CondOp) {
             let st = self.leaves(n, st, depth);
-            return (st.clone(), st);
+            (st.clone(), st)
+        } else {
+            let outer = self.branch.replace(true);
+            let on_true = self.leaves(n, st.clone(), depth);
+            self.branch = Some(false);
+            let on_false = self.leaves(n, st, depth);
+            self.branch = outer;
+            (on_true, on_false)
+        };
+        match n.const_cond() {
+            Some(true) => (on_true, None),
+            Some(false) => (None, on_false),
+            None => (on_true, on_false),
         }
-        let outer = self.branch.replace(true);
-        let on_true = self.leaves(n, st.clone(), depth);
-        self.branch = Some(false);
-        let on_false = self.leaves(n, st, depth);
-        self.branch = outer;
-        (on_true, on_false)
     }
 
     /// Code no path reaches loads nothing: its operations and calls count as seen.

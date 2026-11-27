@@ -453,6 +453,32 @@ codeunit 50501 "E Mgt"
         A.Modify();
     end;
 
+    // Silent (sol r4): `A.Get(1) or true` is always true, so the Modify never runs; B's state on
+    // the false branch, which never runs, must not count.
+    procedure ConstTrueSkipsElse()
+    var
+        A: Record "E Entry";
+        B: Record "E Entry";
+    begin
+        if A.Get(1) or true then begin
+            B.Get(1);
+            exit;
+        end;
+        B.Modify();
+    end;
+
+    // Silent: `while true` never ends by its condition, and its body exits, so the Modify never
+    // runs.
+    procedure WhileTrueExits()
+    var B: Record "E Entry";
+    begin
+        while true do begin
+            B.Get(1);
+            exit;
+        end;
+        B.Modify();
+    end;
+
     // Reported (sol r3): `X and true` is X.
     procedure AndTrueExit()
     var A: Record "E Entry";
@@ -605,7 +631,10 @@ fn reported(dir: &Path, detector: &str) -> BTreeSet<String> {
 /// flipping fails `NotInOrExit` and `NotTestedGetExit`. sol r3: `X or true` read as X reports
 /// `OrTrueExit` (a false finding: that Modify never runs); `X = false` not flipped reports
 /// `EqFalseExit`; a `while` condition left unmarked fails `WhileTestedExit`; a `repeat`'s exit and
-/// loop-back states swapped fails `UntilNotTested`. The ternary run walked in sequence fails
+/// loop-back states swapped fails `UntilNotTested`. sol r4: `may_load::cond` ignoring a constant
+/// condition reports `ConstTrueSkipsElse` and `WhileTrueExits` (false findings: neither Modify
+/// runs; a `while true` left by `break` after the Get stayed silent under that break, since the
+/// break path carries the load). The ternary run walked in sequence fails
 /// `TernaryExclusive`; each side walked from an empty state instead of the run's entry fails
 /// `TernaryKeepsEntryLoad` (`TernaryLoadThenModify` alone stayed green under that break: its load
 /// is inside the ternary).

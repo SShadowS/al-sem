@@ -1032,6 +1032,10 @@ pub struct PCFNRare {
     /// Boolean value the branch decides ([`PathHint::CondOp`]): whether the operation
     /// is known to have found nothing on the `then` branch and on the `else` branch.
     pub missed_on: Option<(bool, bool)>,
+    /// ENG-177 (sol r4): on an `if`, `while` or `repeat` whose condition has one value
+    /// whatever runs (`true`, `A.Get(1) or true`, `not false and true`): that value. The
+    /// branch for the other value never runs.
+    pub const_cond: Option<bool>,
 }
 
 impl std::fmt::Debug for PCFNNode {
@@ -1073,6 +1077,9 @@ impl PCFNNode {
     }
     pub fn missed_on(&self) -> Option<(bool, bool)> {
         self.rare.as_ref().and_then(|r| r.missed_on)
+    }
+    pub fn const_cond(&self) -> Option<bool> {
+        self.rare.as_ref().and_then(|r| r.const_cond)
     }
     pub fn table_case(&self) -> Option<&TableCase> {
         self.rare.as_ref().and_then(|r| r.table_case.as_ref())
