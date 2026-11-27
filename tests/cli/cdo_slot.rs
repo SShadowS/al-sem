@@ -7099,9 +7099,14 @@ fn cdo_slot_a_nested_timed_start_runs_under_its_runs_timing() {
         std::env::var("PATH").unwrap_or_default()
     );
     let gate_script = gate.join(&script).display().to_string();
+    // The sibling waits for the "already timed" line or the nested perf-bounds'
+    // end, bounded by HANG (300 s), not 20 s (TLS-150): past 20 s the sibling
+    // started anyway and the test checked a weaker order without failing. A
+    // nested perf-bounds that ends without the line (the break) fails the
+    // `pb.log` assertion below.
     let inner = format!(
         "{{ bash '{gate_script}' perf-bounds >{td}/pb.log 2>&1; echo $? >{td}/pbrc; }} & \
-         timeout 20 bash -c 'until grep -qs \"already timed\" {td}/pb.log; do sleep 0.05; done'; \
+         timeout 300 bash -c 'until grep -qs \"already timed\" {td}/pb.log || [ -e {td}/pbrc ]; do sleep 0.05; done'; \
          bash '{gate_script}' fmt >{td}/fmt.log 2>&1; echo $? >{td}/rc.w; mv {td}/rc.w {td}/rc; wait"
     );
     let out = s

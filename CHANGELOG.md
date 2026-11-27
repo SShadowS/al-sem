@@ -70,9 +70,9 @@ suite's load. Each failure was a test defect: an assumption about how long a ste
   `cdo_slot_ci_steps_all_waits_for_its_build_quietly` (its timing's 10 s deadline ran out before
   the held build parked: "the timing ended without beginning"). The log showed every cdo_slot test
   starting at once and each taking 40-157 s.
-  - The `cdo_slot` tests, and the `gate_scripts` tests that are not `speed_*`, now run one at a
-    time per module (nextest test groups `cdo-slot` and `gate-scripts`, max-threads 1; the two
-    modules side by side). `ci-steps test`, `task`, `all` and `check-goldens` all read
+  - The `cdo_slot` tests now run two at a time and the `gate_scripts` tests that are not
+    `speed_*` one at a time (nextest test groups `cdo-slot`, max-threads 2, and `gate-scripts`,
+    max-threads 1; the two modules side by side; first measured with both at 1, below). `ci-steps test`, `task`, `all` and `check-goldens` all read
     `.config/nextest.toml`'s default overrides. The `speed_*` tests stay outside: they are as long
     alone as in the suite (29 tests, ~1,640 s), and serial they alone took 27 min.
   - Drain deadlines that must outlast this test's own next steps or another party's end are now
@@ -99,6 +99,12 @@ suite's load. Each failure was a test defect: an assumption about how long a ste
     s)" (red); `enter_wait`'s nap uncapped -> the nap line is there, then "the wait slept past its
     deadline: 134.6 s" (red); the drain's nap uncapped -> "slept past the deadline: 129.5 s"
     (red); each restored, green in runs A, B and C.
+  - `cdo_slot_a_nested_timed_start_runs_under_its_runs_timing`'s sibling step waited for the
+    nested perf-bounds' "already timed" line under a shell `timeout 20`; past it the sibling
+    started anyway and the test checked a weaker order without failing. It now waits for the line
+    or the perf-bounds' end, bounded by `HANG`. Proof (2026-11-27): `timing_scan`'s open-file
+    owner check dropped -> the nested perf-bounds is refused, "refused: a CDO timing still runs
+    after 30 s" (red, 103 s); restored, green (13.0 s).
 
 ### Fixed (ENG-218: FlowField and RecordRef tables, and a table's extensions, bind as the resolver binds them, not by name across all apps)
 
