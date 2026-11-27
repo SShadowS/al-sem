@@ -734,8 +734,10 @@ fn ingest_abi_objects(
             enum_impls: Vec::new(),
             // Symbol-only tables' `LookupPageID` is not read (yet).
             lookup_pages: Vec::new(),
-            // Symbol-only objects' `ObsoleteState` is not read (yet).
-            obsolete_gone: false,
+            // ENG-194 (Fable r1): read from the symbols' `ObsoleteState`, so a
+            // symbol-only Base Application's `Moved` `No. Series` gives way to
+            // Business Foundation's, as its source twin does.
+            obsolete_gone: abi_obj.obsolete_gone,
             // A page's UI permissions as the symbol reference carries them;
             // a symbol-only object's code is not read, so no setter.
             page_ui: if obj_id.kind == ObjectKind::Page {

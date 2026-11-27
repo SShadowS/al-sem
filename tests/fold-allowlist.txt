@@ -25,7 +25,7 @@
 11 src/engine/deps/app_manifest.rs
 1 src/engine/deps/app_package_zip.rs
 1 src/engine/deps/dep_artifact_l4.rs
-11 src/engine/deps/symbol_reference.rs
+13 src/engine/deps/symbol_reference.rs
 1 src/engine/follow_up.rs
 2 src/engine/gate/diff/cli.rs
 2 src/engine/gate/diff/passes.rs

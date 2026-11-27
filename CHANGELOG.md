@@ -36,6 +36,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   no pytest. Two discrimination proofs: with `gate-env` taken out of `task`'s step list, and then
   out of `task-affected`'s, the test fails each time; restored, it passes.
 
+### Fixed (ENG-194: a table name binds as the resolver binds it, not to the last table of the name)
+
+- **The bug.** The model bound every table NAME in code (a record variable's type, an implicit
+  `Rec`'s source or extended table, a RecordRef `Open` of a named table) through one index per
+  folded name across all apps, LAST wins (`SymbolTable::table_by_name`; only a real table beat a
+  tableextension stub). Two apps' tables of one name gave every record variable of the name the
+  same id, whichever loaded last, whatever the referencing app could see (found by Fable's review
+  of the ENG-158 design). Those ids feed the detectors and the physical-table writes.
+- **The fix.** `SymbolTable::table_by_name_from(app, name)` binds as the program's resolver
+  (`ProgramGraph::resolve_object`) does, seen from the referencing routine's app: only tables of
+  that app's dependency closure count (its own included, not preferred), a real table beats a
+  tableextension stub, a table declared `ObsoleteState = Moved`/`Removed` counts only when no live
+  one remains, and two live tables left DECLINE (the table is not known) instead of the last one
+  winning. The scope (`TableScope`: each app's closure, the moved/removed tables' model ids) comes
+  from the program graph the three model assemblies already hold; an app the graph does not hold
+  sees only its own tables. A `Table` object's own `Rec` takes its own id, not a lookup of its name.
+- **The same rule for every table reference the model binds** (sol and Fable review): a table
+  NUMBER (a dependency page's `SourceTable = "5992"`) binds by number as the resolver binds a
+  number (`table_by_number_from`: the app's own table first, else exactly one live visible one),
+  not through the last table object of the number; a page extension's base page is picked within
+  its app's closure (a moved/removed page giving way to a live one), for its `Rec`'s table and for
+  its `SourceTableTemporary`: `#if` alternatives of the base page that name different tables
+  decline (as the resolver declines them), alternatives naming one table give it, and its
+  temporary flag is known only when every alternative agrees (an absent flag and `false` agree).
+  The base page's `SourceTable` binds as the base page's own app sees it. A tableextension's
+  fields are merged into the base table its own app sees (`merge_extension_fields`), not the last
+  table of the name, each `#if` alternative of the extension with ITS OWN fields and keys into its
+  own target (before, every alternative took the last alternative's fields, on master too: this
+  fixes ENG-220; and two alternatives on one base gave their keys one id, so the second's key was
+  dropped: a later alternative's key ids now end `/alt{n}`, the first alternative's keep their
+  ids), and into the last real row of an `#if`-split base (the row every by-id reader keeps, as
+  before).
+- **Symbol-only objects now carry `ObsoleteState`.** `obsolete_gone` was read from source only, so
+  with a symbol-only Base Application both `No. Series` tables would have been live and the name
+  would decline. BC 28.4's Base Application symbols list `No. Series` (308) and `Reason Code` (231)
+  with `ObsoleteState = Moved`; the symbol reader now marks `Moved`/`Removed` objects gone. The
+  resolver reads the flag too: `ResolveIndex` (`resolve/index.rs`) prunes a gone object of every
+  kind from its by-name, by-id and by-number indexes while a live one exists, so call edges to a
+  symbol-only app's moved objects now bind the live object.
+- **CDO (pinned `bc3ccb18`), measured first.** Eight table names are declared by two apps: `No.
+  Series`, `No. Series Line`, `No. Series Relationship`, `No. Series Tenant`, `Reason Code`,
+  `Return Reason`, `Source Code`, `Source Code Setup`, each a Base Application `Moved` stub and the
+  Business Foundation table it moved to. The old index picked Business Foundation's for all eight,
+  right only because Business Foundation loads after Base Application. The probe printed only the
+  apps whose pick changed: System and System Application, which see neither table, now get "not
+  known" for the eight names. (`/work/.al-sem/engine-notes/eng194/probe-cdo-shared-names.log`.)
+- **Tests and red proofs.** In `symbol_table::tests`, `a_table_name_binds_as_the_resolver_binds_it`
+  hand-states the rules (a Moved stub gives way; two live tables decline; an app sees only its
+  closure's; an app the scope does not hold sees nothing else) and the old bug's precondition;
+  `a_stub_gives_way_and_a_split_table_is_one`, `a_table_number_binds_own_first_then_exactly_one`
+  and `an_object_name_binds_within_the_apps_closure` cover stubs, `#if`-split tables, numbers and
+  base pages. `r4::r4_table_name_scope` pins the use through the production cross-app model (two
+  symbol-only and two source dependencies): a Moved symbol table gives way, a dependency's code does
+  not see a table outside its closure, a table's own `Rec`, a tableextension's fields (also with an
+  `#if`-split base and an `#if`-split extension whose alternatives add different fields), a page's
+  numeric `SourceTable`, and a page extension's base page (its temporary flag, a Moved symbol page
+  giving way, `#if` alternatives naming different tables, one table with different or agreeing
+  temporary flags), and a split extension's keys on one base. `symbol_reference`'s
+  `obsolete_state_moved_or_removed_marks_a_symbol_object_gone` pins the symbol read. Each break
+  then restored is recorded in the test's doc.
+
 ### Fixed (ENG-213: a wrong "none observed" — `query touches --field --from` down searches dependency code past its first routine)
 
 - **The bug.** `query touches --field F --from R --direction down` searched R's cone over the solve's
